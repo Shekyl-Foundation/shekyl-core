@@ -44,3 +44,6 @@
 pub mod binary;
 pub mod control;
 pub mod service;
+
+#[cfg(test)]
+mod test_support;

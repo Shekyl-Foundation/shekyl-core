@@ -187,6 +187,12 @@ impl std::error::Error for ControlError {}
 ///
 /// `Clone` so the §3c supervisor can hand each incarnation the same long-lived
 /// sink (the consumer's receiver survives restarts; senders are per-incarnation).
+/// **Consequence for consumers:** because the supervisor retains a sender clone
+/// across restarts, the events receiver does *not* observe all-senders-dropped
+/// when an incarnation dies — a supervised consumer must detect incarnation death
+/// via the [`service::TorService`](crate::service::TorService) posture watch, not
+/// via `recv() == None` (which is correct only for a directly-spawned, sole-sender
+/// actor).
 #[derive(Clone)]
 pub struct EventSink(mpsc::UnboundedSender<ControlReply>);
 
@@ -378,7 +384,7 @@ struct TorChild {
 }
 
 /// How a managed `tor` child exited at shutdown (observed via [`ManagedTor::exit_observer`]).
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TorExit {
     /// Exited on its own (`TAKEOWNERSHIP`, or tor dying) or on `SIGTERM` within the
     /// `SHUTDOWN_GRACE` window, and was reaped with this status — the clean path.
@@ -1193,15 +1199,7 @@ mod live_tests {
     use std::time::{Duration, Instant};
     use tokio::sync::{mpsc, oneshot};
 
-    /// The test `tor` binary path (**any** tor works here — these are lifecycle
-    /// tests, not the pin gate; the pinned-binary contract is
-    /// `SHEKYL_TEST_PINNED_TOR_BINARY` in `binary.rs`); **hard-fail** (not skip)
-    /// when the test runs. `var_os`: a non-UTF-8 path is a valid path.
-    fn tor_binary() -> PathBuf {
-        std::env::var_os("SHEKYL_TEST_TOR_BINARY")
-            .map(PathBuf::from)
-            .expect("SHEKYL_TEST_TOR_BINARY must point at a tor binary on the integration lane")
-    }
+    use crate::test_support::tor_binary;
 
     /// A spawned test `tor` + its temp `DataDirectory`. Kills `tor` and cleans up
     /// on drop (TAKEOWNERSHIP usually exits it first; this is belt-and-braces).

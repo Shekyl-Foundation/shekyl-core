@@ -35,9 +35,12 @@
 //!
 //! **The SOCKS endpoint is data on the posture channel.** Production uses
 //! `SocksPort auto` and each incarnation's bound address is discovered via
-//! `GETINFO net/listeners/socks`, published in [`TorPosture::Ready`]. Consumers
-//! read it at use-time and never cache it — which makes every consumer
-//! restart-safe *by construction* (a cached endpoint dies with its incarnation).
+//! `GETINFO net/listeners/socks`, published in [`TorPosture::Ready`]. Because a
+//! silent restart rebinds a fresh port, consumers must read the endpoint at
+//! use-time, not cache it — the [`TorService::current_socks`] accessor is the safe
+//! path (it returns the address only while the *live* posture is `Ready`), so a
+//! caller that uses it cannot hold a stale endpoint. (`TorPosture::Ready` still
+//! carries the address for watch-driven consumers; the discipline is theirs.)
 //!
 //! `DataDirectory` is reused across incarnations, so the entry-guard set
 //! survives supervision — restarting must not decide DQ-T0.7's guard-rotation
@@ -48,13 +51,14 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use kameo::actor::Spawn;
+use kameo::error::SendError;
 use tokio::sync::{oneshot, watch};
 
 use crate::binary::{self, TorBinaryError, VerifiedTorBinary};
 use crate::control::framing::ControlReply;
 use crate::control::{
     BootstrapReadiness, BootstrapState, Command, ControlError, EventSink, ManagedTor, SocksPort,
-    TorControl, TorControlConfig, TorLaunch,
+    TorControl, TorControlConfig, TorExit, TorLaunch,
 };
 
 /// The service-level posture — what the rest of the wallet sees. One long-lived
@@ -92,7 +96,9 @@ pub enum TorPosture {
     /// continue** at the backoff cap; this is the loud operator-alarm hook
     /// (rule 82), not a terminal state. Sticky: intermediate `Starting` /
     /// `Connecting` of retry attempts are *not* published while degraded (the
-    /// alarm must not flap); only a successful `Ready` clears it.
+    /// alarm must not flap). Cleared only when an incarnation holds `Ready` for
+    /// `stable_reset` — a *sustained* recovery, not a brief flap (a genuinely
+    /// flapping tor keeps alarming).
     Degraded {
         /// The most recent failure (updated on each failed retry).
         last: ServiceFailure,
@@ -107,13 +113,21 @@ pub enum TorPosture {
 pub enum ServiceFailure {
     /// The SP-T0c gate refused the binary (or discovery found none).
     Binary(TorBinaryError),
-    /// The control channel failed with a specific cause.
+    /// The control channel failed with a specific cause (the underlying
+    /// [`ControlError`] is preserved, not collapsed into `Exited`).
     Control(ControlError),
+    /// Bootstrap reached 100% but `GETINFO net/listeners/socks` reported **no TCP
+    /// SOCKS listener** — a usable-looking tor with nothing for SP-T1 to dial (a
+    /// misconfiguration, distinct from a malformed command).
+    NoSocksListener,
     /// Tor did not reach bootstrap 100% within
     /// [`SupervisorPolicy::bootstrap_deadline`].
     BootstrapTimeout,
-    /// The incarnation (actor/child) died without a more specific cause.
-    Exited,
+    /// The incarnation (actor/child) died. Carries the reaped [`TorExit`] when the
+    /// death was observed through teardown (`Killed` = tor wedged and was
+    /// `SIGKILL`-ed — the unclean signal an operator wants), or `None` when the
+    /// exit was not observed (e.g. the readiness channel closed first).
+    Exited(Option<TorExit>),
 }
 
 /// The two retry cadences (§3c restart classification).
@@ -133,9 +147,10 @@ pub enum FailureClass {
 pub fn classify(failure: &ServiceFailure) -> FailureClass {
     match failure {
         ServiceFailure::Binary(_) => FailureClass::Trust,
-        ServiceFailure::Control(_) | ServiceFailure::BootstrapTimeout | ServiceFailure::Exited => {
-            FailureClass::Transient
-        }
+        ServiceFailure::Control(_)
+        | ServiceFailure::NoSocksListener
+        | ServiceFailure::BootstrapTimeout
+        | ServiceFailure::Exited(_) => FailureClass::Transient,
     }
 }
 
@@ -202,20 +217,29 @@ pub fn is_degraded(policy: &SupervisorPolicy, class: FailureClass, attempt: u32)
 }
 
 /// Extract the first TCP listener from a `GETINFO net/listeners/socks` reply —
-/// the `SocksPort auto` discovery. The value is a space-separated list of
-/// quoted listener specs (`"127.0.0.1:9050"`, possibly `"unix:/…"` entries);
-/// the quoted segments are taken in order and the first that parses as a socket
-/// address wins. `None` = no TCP SOCKS listener (a tor misconfigured away from
-/// what we launched it with — treated as an incarnation failure, not `Ready`).
+/// the `SocksPort auto` discovery. Tor normally returns a space-separated list of
+/// **quoted** listener specs (`"127.0.0.1:9050"`, possibly `"unix:/…"`), but its
+/// `getsockname()`-fallback path (exactly the auto-port case discovery relies on)
+/// can emit a single **unquoted** address — so parse quoted segments first and, if
+/// there are none, fall back to whitespace-split raw tokens. The first token that
+/// parses as a socket address wins (unix and other non-TCP entries are skipped).
+/// `None` = no TCP SOCKS listener at all (a tor with nothing for SP-T1 to dial —
+/// [`ServiceFailure::NoSocksListener`], not `Ready`).
 pub fn parse_socks_listeners(reply: &ControlReply) -> Option<SocketAddr> {
     let line = reply
         .lines()
         .iter()
         .find_map(|l| l.strip_prefix("net/listeners/socks="))?;
-    line.split('"')
-        .skip(1) // segments alternate outside/inside quotes; odd indices are inside
-        .step_by(2)
-        .find_map(|quoted| quoted.parse::<SocketAddr>().ok())
+    if line.contains('"') {
+        line.split('"')
+            .skip(1) // segments alternate outside/inside quotes; odd indices are inside
+            .step_by(2)
+            .find_map(|quoted| quoted.parse::<SocketAddr>().ok())
+    } else {
+        // Unquoted fallback: raw whitespace-split tokens.
+        line.split_ascii_whitespace()
+            .find_map(|tok| tok.parse::<SocketAddr>().ok())
+    }
 }
 
 /// Where the supervisor gets each incarnation's binary — discovery *inputs*, so
@@ -253,7 +277,7 @@ impl TorBinarySource {
             Ok(Ok(verified)) => Ok(verified),
             Ok(Err(e)) => Err(ServiceFailure::Binary(e)),
             // The blocking task itself died — infrastructure, not a gate verdict.
-            Err(_join) => Err(ServiceFailure::Exited),
+            Err(_join) => Err(ServiceFailure::Exited(None)),
         }
     }
 }
@@ -305,9 +329,24 @@ impl TorService {
         self.posture.clone()
     }
 
-    /// Clean stop: shut the current incarnation down (SIGTERM → bounded wait →
-    /// SIGKILL, via the actor's `on_stop`) and end supervision. Consumers
-    /// observe the posture channel closing.
+    /// The current incarnation's SOCKS endpoint, or `None` when the service is not
+    /// `Ready`. **This is the safe way to reach the endpoint** — it reads the live
+    /// posture at call time, so a caller cannot cache an address that a silent
+    /// restart has invalidated (`SocksPort::Auto` rebinds a fresh port per
+    /// incarnation). Prefer this over destructuring `TorPosture::Ready` and
+    /// stashing the `SocketAddr`.
+    #[must_use]
+    pub fn current_socks(&self) -> Option<SocketAddr> {
+        match &*self.posture.borrow() {
+            TorPosture::Ready { socks_addr } => Some(*socks_addr),
+            _ => None,
+        }
+    }
+
+    /// Clean stop: shut the current incarnation down and **await its child being
+    /// reaped** (SIGTERM → bounded wait → SIGKILL, via the actor's `on_stop`,
+    /// observed through the exit channel) before returning, so no tor lingers
+    /// after `shutdown()` resolves. Consumers observe the posture channel closing.
     pub async fn shutdown(mut self) {
         if let Some(tx) = self.shutdown.take() {
             tx.send(()).ok();
@@ -318,15 +357,24 @@ impl TorService {
 
 /// One incarnation's outcome, as seen by the supervisor loop.
 enum IncarnationEnd {
-    /// Died (before or after `Ready`); `reached_ready_at` carries how long it
-    /// held `Ready`, for the stability reset.
-    Failed {
-        failure: ServiceFailure,
-        held_ready_for: Option<Duration>,
-    },
+    /// The incarnation died (before or after `Ready`) with this cause. For an
+    /// `Exited(None)` the supervisor fills in the reaped [`TorExit`] during
+    /// teardown; other causes ignore it.
+    Failed(ServiceFailure),
     /// The caller asked the service to stop.
     Shutdown,
 }
+
+/// Bound on the post-bootstrap `GETINFO net/listeners/socks` reply — an alive
+/// tor answers this instantly, so a stall means a wedged control port; this
+/// keeps discovery from hanging the supervisor (and thus `shutdown()`) forever.
+const SOCKS_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long teardown waits for the child's reap signal (the actor's own
+/// `SHUTDOWN_GRACE` is 5s; this is comfortably above it). On the rare miss —
+/// `on_stop` never fired the exit channel — the loop proceeds; `kill_on_drop`
+/// and `TAKEOWNERSHIP` remain reap backstops.
+const REAP_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The supervisor loop (§3c). Owns policy only; the incarnation actor owns
 /// detection and fails fast.
@@ -335,9 +383,11 @@ async fn supervise(
     posture: watch::Sender<TorPosture>,
     mut shutdown: oneshot::Receiver<()>,
 ) {
-    // Consecutive-failure count since the last stable Ready period.
+    // Consecutive-failure count since the last sustained `Ready` (see the §3c
+    // while-alive reset in `drive_incarnation`).
     let mut attempt: u32 = 0;
-    // Sticky alarm (§3c): set on threshold/trust, cleared only by Ready.
+    // Sticky alarm (§3c): set on threshold/trust; cleared only when an
+    // incarnation holds `Ready` for `stable_reset` (in `drive_incarnation`).
     let mut degraded = false;
 
     loop {
@@ -345,31 +395,35 @@ async fn supervise(
             posture.send(TorPosture::Starting).ok();
         }
 
-        // 1. The SP-T0c gate, re-run for THIS incarnation.
-        let verified = match config.binary.resolve().await {
+        // 1. The SP-T0c gate, re-run for THIS incarnation (a `VerifiedTorBinary`
+        //    is point-in-time). Shutdown-responsive so a stop during the hash is
+        //    observed promptly (E2).
+        let resolved = tokio::select! {
+            _ = &mut shutdown => return,
+            r = config.binary.resolve() => r,
+        };
+        let verified = match resolved {
             Ok(v) => v,
             Err(failure) => {
-                // Gate refusals (and resolve infrastructure failures) take the
-                // failure path without an incarnation.
-                let end = IncarnationEnd::Failed {
+                let delay = after_failure(
                     failure,
-                    held_ready_for: None,
-                };
-                match after_incarnation(end, &config.policy, &mut attempt, &mut degraded, &posture)
-                {
-                    LoopStep::Retry(delay) => {
-                        if wait_or_shutdown(delay, &mut shutdown).await {
-                            return;
-                        }
-                        continue;
-                    }
-                    LoopStep::Stop => return,
+                    &config.policy,
+                    &mut attempt,
+                    &mut degraded,
+                    &posture,
+                );
+                if wait_or_shutdown(delay, &mut shutdown).await {
+                    return;
                 }
+                continue;
             }
         };
 
-        // 2. Spawn the incarnation. Per-incarnation readiness watch (internal);
-        //    the long-lived events sink is cloned in.
+        // 2. Spawn the incarnation with a wired exit observer — teardown awaits
+        //    it, both to reap the child before the next spawn reuses the
+        //    DataDirectory and to surface the `TorExit` telemetry. Per-incarnation
+        //    readiness watch (internal); the long-lived events sink is cloned in.
+        let (exit_tx, exit_rx) = oneshot::channel();
         let (readiness, ready_rx) = BootstrapReadiness::new();
         let actor = TorControl::spawn(TorControlConfig {
             launch: TorLaunch::Managed(ManagedTor {
@@ -377,7 +431,7 @@ async fn supervise(
                 data_dir: config.data_dir.clone(),
                 socks_port: SocksPort::Auto,
                 disable_network: config.disable_network,
-                exit_observer: None,
+                exit_observer: Some(exit_tx),
             }),
             events: config.events.clone(),
             readiness,
@@ -388,61 +442,71 @@ async fn supervise(
             &actor,
             ready_rx,
             &config.policy,
-            degraded,
+            &mut attempt,
+            &mut degraded,
             &posture,
             &mut shutdown,
         )
         .await;
 
-        // 4. Stop the actor if it is still alive (shutdown / bootstrap-timeout
-        //    paths); a dead actor makes these no-ops.
-        actor.stop_gracefully().await.ok();
-        actor.wait_for_shutdown().await;
+        // 4. Teardown: stop the actor and AWAIT the child's reap (via the exit
+        //    channel) before the loop can respawn into the same DataDirectory —
+        //    otherwise the still-exiting tor holds the lockfile and the next
+        //    incarnation self-conflicts.
+        let exit = stop_and_reap(&actor, exit_rx).await;
 
-        match &end {
+        match end {
             IncarnationEnd::Shutdown => return,
-            IncarnationEnd::Failed { .. } => {
-                match after_incarnation(end, &config.policy, &mut attempt, &mut degraded, &posture)
-                {
-                    LoopStep::Retry(delay) => {
-                        if wait_or_shutdown(delay, &mut shutdown).await {
-                            return;
-                        }
-                    }
-                    LoopStep::Stop => return,
+            IncarnationEnd::Failed(mut failure) => {
+                // Attach the reaped exit to an unqualified death (`Killed` vs
+                // `Reaped` is the operator signal); other causes keep their own.
+                if let ServiceFailure::Exited(slot) = &mut failure {
+                    *slot = exit;
+                }
+                let delay = after_failure(
+                    failure,
+                    &config.policy,
+                    &mut attempt,
+                    &mut degraded,
+                    &posture,
+                );
+                if wait_or_shutdown(delay, &mut shutdown).await {
+                    return;
                 }
             }
         }
     }
 }
 
-/// What the loop does after an incarnation ends.
-enum LoopStep {
-    Retry(Duration),
-    Stop,
+/// Stop the incarnation and **await its child being reaped**, returning the exit
+/// telemetry. The exit channel fires from `on_stop` *after* `TorChild::shutdown`
+/// completes the SIGTERM→wait→SIGKILL→reap, so awaiting it guarantees no tor
+/// lingers to lock the reused `DataDirectory` (and yields `Killed`/`Reaped`).
+/// Bounded by [`REAP_TIMEOUT`] against a teardown that never signals.
+async fn stop_and_reap(
+    actor: &kameo::actor::ActorRef<TorControl>,
+    exit_rx: oneshot::Receiver<TorExit>,
+) -> Option<TorExit> {
+    actor.stop_gracefully().await.ok();
+    match tokio::time::timeout(REAP_TIMEOUT, exit_rx).await {
+        Ok(Ok(exit)) => Some(exit),
+        // Channel dropped (on_stop didn't signal) or timed out — proceed; the
+        // reap backstops still apply.
+        Ok(Err(_)) | Err(_) => None,
+    }
 }
 
-/// Apply §3c policy to a failure: stability reset, classification, backoff,
-/// degraded-sticky posture. Pure bookkeeping (the sleep happens in the loop).
-fn after_incarnation(
-    end: IncarnationEnd,
+/// Apply §3c policy to a failure: bump the counter, classify, set the sticky
+/// alarm, publish `Restarting`/`Degraded`, and return the retry delay. The
+/// stability *reset* is not here — it happens live in `drive_incarnation` when an
+/// incarnation holds `Ready` long enough.
+fn after_failure(
+    failure: ServiceFailure,
     policy: &SupervisorPolicy,
     attempt: &mut u32,
     degraded: &mut bool,
     posture: &watch::Sender<TorPosture>,
-) -> LoopStep {
-    let IncarnationEnd::Failed {
-        failure,
-        held_ready_for,
-    } = end
-    else {
-        return LoopStep::Stop;
-    };
-    // Stability reset: a long-enough Ready period forgives past instability.
-    if held_ready_for.is_some_and(|held| held >= policy.stable_reset) {
-        *attempt = 0;
-        *degraded = false;
-    }
+) -> Duration {
     *attempt += 1;
     let class = classify(&failure);
     *degraded = *degraded || is_degraded(policy, class, *attempt);
@@ -456,7 +520,7 @@ fn after_incarnation(
         }
     };
     posture.send(state).ok();
-    LoopStep::Retry(delay)
+    delay
 }
 
 /// Sleep `delay`, returning `true` if the shutdown signal arrived instead.
@@ -469,12 +533,14 @@ async fn wait_or_shutdown(delay: Duration, shutdown: &mut oneshot::Receiver<()>)
 
 /// Drive one incarnation from spawn to death: forward bootstrap telemetry,
 /// discover the SOCKS endpoint at `Ready`, then hold until the actor dies, the
-/// bootstrap deadline fires, or the caller shuts down.
+/// bootstrap deadline fires, or the caller shuts down. Clears the sticky alarm
+/// in place once this incarnation has held `Ready` for `stable_reset`.
 async fn drive_incarnation(
     actor: &kameo::actor::ActorRef<TorControl>,
     mut ready_rx: watch::Receiver<BootstrapState>,
     policy: &SupervisorPolicy,
-    degraded: bool,
+    attempt: &mut u32,
+    degraded: &mut bool,
     posture: &watch::Sender<TorPosture>,
     shutdown: &mut oneshot::Receiver<()>,
 ) -> IncarnationEnd {
@@ -483,30 +549,28 @@ async fn drive_incarnation(
     loop {
         tokio::select! {
             _ = &mut *shutdown => return IncarnationEnd::Shutdown,
-            () = actor.wait_for_shutdown() => {
-                return IncarnationEnd::Failed { failure: ServiceFailure::Exited, held_ready_for: None };
-            }
+            () = actor.wait_for_shutdown() => return IncarnationEnd::Failed(ServiceFailure::Exited(None)),
             () = tokio::time::sleep_until(deadline) => {
-                return IncarnationEnd::Failed { failure: ServiceFailure::BootstrapTimeout, held_ready_for: None };
+                return IncarnationEnd::Failed(ServiceFailure::BootstrapTimeout);
             }
             changed = ready_rx.changed() => {
                 if changed.is_err() {
                     // Readiness sender gone with no terminal state — the actor is
                     // going down; the wait_for_shutdown arm will normally win, but
                     // don't spin on a closed channel.
-                    return IncarnationEnd::Failed { failure: ServiceFailure::Exited, held_ready_for: None };
+                    return IncarnationEnd::Failed(ServiceFailure::Exited(None));
                 }
-                let state = ready_rx.borrow_and_update().clone();
-                match state {
+                match ready_rx.borrow_and_update().clone() {
                     BootstrapState::Connecting { progress } => {
-                        // Degraded is sticky: retry-attempt telemetry must not
-                        // flap the alarm (§3c).
-                        if !degraded {
+                        // Suppressed while degraded so a retry's bootstrap does not
+                        // flap the alarm; the suppression lifts when a sustained
+                        // Ready clears `degraded` below (§3c).
+                        if !*degraded {
                             posture.send(TorPosture::Connecting { progress }).ok();
                         }
                     }
                     BootstrapState::Failed => {
-                        return IncarnationEnd::Failed { failure: ServiceFailure::Exited, held_ready_for: None };
+                        return IncarnationEnd::Failed(ServiceFailure::Exited(None));
                     }
                     BootstrapState::Ready => break,
                 }
@@ -514,39 +578,49 @@ async fn drive_incarnation(
         }
     }
 
-    // Phase 2: bootstrap done — discover the SocksPort-auto endpoint. A tor
-    // without a TCP SOCKS listener is not usable, whatever bootstrap says.
-    let socks_addr = match actor
-        .ask(Command::GetInfo(vec!["net/listeners/socks".to_owned()]))
-        .await
-    {
+    // Phase 2: bootstrap done — discover the SocksPort-auto endpoint. Bounded and
+    // shutdown-responsive: a wedged-but-alive control port here must not hang the
+    // supervisor (and thus `shutdown()`) forever. A tor with no TCP SOCKS listener
+    // is not usable whatever bootstrap says — a distinct diagnostic, and the
+    // control error is preserved rather than collapsed into a generic exit.
+    let reply = tokio::select! {
+        _ = &mut *shutdown => return IncarnationEnd::Shutdown,
+        () = tokio::time::sleep(SOCKS_DISCOVERY_TIMEOUT) => {
+            return IncarnationEnd::Failed(ServiceFailure::Control(ControlError::Timeout));
+        }
+        r = actor.ask(Command::GetInfo(vec!["net/listeners/socks".to_owned()])) => r,
+    };
+    let socks_addr = match reply {
         Ok(reply) => match parse_socks_listeners(&reply) {
             Some(addr) => addr,
-            None => {
-                return IncarnationEnd::Failed {
-                    failure: ServiceFailure::Control(ControlError::InvalidCommand),
-                    held_ready_for: None,
-                }
-            }
+            None => return IncarnationEnd::Failed(ServiceFailure::NoSocksListener),
         },
-        Err(_) => {
-            return IncarnationEnd::Failed {
-                failure: ServiceFailure::Exited,
-                held_ready_for: None,
+        // Preserve the control-level cause when the command itself errored; an
+        // actor-stopped/not-running send error is a death, not a control fault.
+        Err(SendError::HandlerError(e)) => {
+            return IncarnationEnd::Failed(ServiceFailure::Control(e))
+        }
+        Err(_) => return IncarnationEnd::Failed(ServiceFailure::Exited(None)),
+    };
+    posture.send(TorPosture::Ready { socks_addr }).ok();
+
+    // Phase 3: hold until death or shutdown. Once this incarnation has held
+    // `Ready` for `stable_reset`, forgive prior instability in place (§3c): clear
+    // the sticky alarm and the counter so a later isolated failure restarts fresh
+    // rather than re-firing `Degraded`. A tor that never reaches a sustained Ready
+    // (a genuine flapper) never forgives — it keeps alarming.
+    let reset_deadline = tokio::time::Instant::now() + policy.stable_reset;
+    let mut forgiven = false;
+    loop {
+        tokio::select! {
+            _ = &mut *shutdown => return IncarnationEnd::Shutdown,
+            () = actor.wait_for_shutdown() => return IncarnationEnd::Failed(ServiceFailure::Exited(None)),
+            () = tokio::time::sleep_until(reset_deadline), if !forgiven => {
+                *attempt = 0;
+                *degraded = false;
+                forgiven = true;
             }
         }
-    };
-    // Ready clears the sticky alarm (the only transition that does, §3c).
-    posture.send(TorPosture::Ready { socks_addr }).ok();
-    let ready_at = tokio::time::Instant::now();
-
-    // Phase 3: hold until death or shutdown.
-    tokio::select! {
-        _ = &mut *shutdown => IncarnationEnd::Shutdown,
-        () = actor.wait_for_shutdown() => IncarnationEnd::Failed {
-            failure: ServiceFailure::Exited,
-            held_ready_for: Some(ready_at.elapsed()),
-        },
     }
 }
 
@@ -626,7 +700,14 @@ mod tests {
             classify(&ServiceFailure::BootstrapTimeout),
             FailureClass::Transient
         );
-        assert_eq!(classify(&ServiceFailure::Exited), FailureClass::Transient);
+        assert_eq!(
+            classify(&ServiceFailure::Exited(None)),
+            FailureClass::Transient
+        );
+        assert_eq!(
+            classify(&ServiceFailure::NoSocksListener),
+            FailureClass::Transient
+        );
     }
 
     // --- SOCKS-listener parse KATs (drive a reply through the real framer so
@@ -655,6 +736,18 @@ mod tests {
         let reply = reply_from(
             r#"net/listeners/socks="unix:/run/tor/socks" "127.0.0.1:9050" "127.0.0.1:9051""#,
         );
+        assert_eq!(
+            parse_socks_listeners(&reply),
+            Some("127.0.0.1:9050".parse().unwrap())
+        );
+    }
+
+    /// Tor's getsockname()-fallback (exactly the auto-port path) can emit a
+    /// single UNQUOTED address; discovery must still parse it rather than tear
+    /// down a healthy tor.
+    #[test]
+    fn socks_listener_unquoted_addr_parses() {
+        let reply = reply_from("net/listeners/socks=127.0.0.1:9050");
         assert_eq!(
             parse_socks_listeners(&reply),
             Some("127.0.0.1:9050".parse().unwrap())
@@ -758,14 +851,7 @@ mod tests {
 #[cfg(test)]
 mod live_tests {
     use super::*;
-
-    /// **Any** tor works here (lifecycle, not the pin gate) — same contract as
-    /// the actor live tests.
-    fn tor_binary() -> PathBuf {
-        std::env::var_os("SHEKYL_TEST_TOR_BINARY")
-            .map(PathBuf::from)
-            .expect("SHEKYL_TEST_TOR_BINARY must point at a tor binary on the integration lane")
-    }
+    use crate::test_support::tor_binary;
 
     /// Await a posture state matching `pred`, panicking after `secs`.
     async fn await_posture<F: Fn(&TorPosture) -> bool>(
@@ -827,6 +913,8 @@ mod live_tests {
             first_addr.ip().is_loopback(),
             "SocksPort auto must bind loopback"
         );
+        // The safe accessor returns the same live endpoint while Ready.
+        assert_eq!(service.current_socks(), Some(first_addr));
 
         // Murder the incarnation the way a real crash would: SIGKILL, no
         // SIGTERM, no control-connection close. The unique DataDirectory arg
@@ -859,6 +947,60 @@ mod live_tests {
 
         // Clean shutdown; the posture channel closes and nothing is orphaned
         // (asserted by the lane's zero-orphan check after the run).
+        service.shutdown().await;
+        while posture.changed().await.is_ok() {}
+    }
+
+    /// The reap-race guard: a bootstrap-timeout restart reuses the same
+    /// DataDirectory while the previous (still-alive, network-disabled) tor is
+    /// being torn down. If teardown did not AWAIT the child's reap, the respawn
+    /// would hit the still-held DataDirectory lock and fail to start — never
+    /// reaching `Connecting` on the second incarnation. So: drive at least two
+    /// incarnations through a short bootstrap deadline with `DisableNetwork` (tor
+    /// opens its control port and reports progress but never bootstraps), and
+    /// require both to reach `Connecting` — proof each respawn got a clean,
+    /// unlocked DataDirectory.
+    #[tokio::test]
+    #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (spawns tor repeatedly)"]
+    async fn bootstrap_timeout_restart_does_not_self_lock() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let service = TorService::spawn(TorServiceConfig {
+            binary: TorBinarySource::UncheckedForTest(tor_binary()),
+            data_dir: dir.path().join("data"),
+            events: EventSink::new(tx),
+            policy: SupervisorPolicy {
+                // Short deadline so a network-disabled tor times out fast; short
+                // backoff so a respawn would collide with the exiting child if the
+                // reap were not awaited (SHUTDOWN_GRACE is 5s).
+                bootstrap_deadline: Duration::from_secs(4),
+                backoff_base: Duration::from_millis(200),
+                backoff_cap: Duration::from_secs(1),
+                ..SupervisorPolicy::default()
+            },
+            // Never bootstraps → every incarnation hits the bootstrap deadline →
+            // teardown + respawn into the same DataDirectory.
+            disable_network: true,
+        });
+        let mut posture = service.posture();
+
+        // Two separate incarnations must each reach Connecting — i.e. tor
+        // actually started (control port up), which a self-inflicted lock
+        // conflict would have prevented (that surfaces as an Exited/Spawn
+        // failure with no Connecting).
+        for nth in ["first", "second"] {
+            await_posture(&mut posture, 60, &format!("{nth} Connecting"), |p| {
+                matches!(p, TorPosture::Connecting { .. })
+            })
+            .await;
+            // Then leave Connecting (deadline fires → Restarting), so the next
+            // iteration observes a fresh Connecting rather than the same one.
+            await_posture(&mut posture, 60, &format!("{nth} Restarting"), |p| {
+                matches!(p, TorPosture::Restarting { .. } | TorPosture::Starting)
+            })
+            .await;
+        }
+
         service.shutdown().await;
         while posture.changed().await.is_ok() {}
     }
