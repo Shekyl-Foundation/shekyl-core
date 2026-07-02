@@ -101,13 +101,27 @@ impl fmt::Display for WireError {
     }
 }
 
+/// The only two failure modes of [`ensure_payload_fully_consumed`].
+///
+/// A dedicated 2-variant type (not the module-wide [`WireError`]) so every caller
+/// maps it **exhaustively** — the earlier `Result<(), WireError>` return forced
+/// each wire module into a lossy `_ =>` catch-all that would have silently
+/// swallowed any future variant into a fabricated `InvalidData` error.
+#[derive(Debug)]
+pub enum ExactParseError {
+    /// A byte exists past the canonical field span.
+    TrailingBytes,
+    /// A non-EOF read error while probing.
+    Io(io::Error),
+}
+
 /// Reject length-delimited vin payloads that carry bytes outside the canonical field span.
-pub fn ensure_payload_fully_consumed<R: Read>(r: &mut R) -> Result<(), WireError> {
+pub fn ensure_payload_fully_consumed<R: Read>(r: &mut R) -> Result<(), ExactParseError> {
     let mut extra = [0u8; 1];
     match r.read_exact(&mut extra) {
-        Ok(()) => Err(WireError::TrailingBytes),
+        Ok(()) => Err(ExactParseError::TrailingBytes),
         Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(()),
-        Err(e) => Err(WireError::Io(e)),
+        Err(e) => Err(ExactParseError::Io(e)),
     }
 }
 
@@ -253,7 +267,10 @@ impl ArchivalServeCreditResponse {
     /// Length-delimited parse: reject unread trailing bytes (FFI vin payload).
     pub fn read_payload_exact<R: Read>(r: &mut R) -> Result<Self, WireError> {
         let response = Self::read_payload(r)?;
-        ensure_payload_fully_consumed(r)?;
+        ensure_payload_fully_consumed(r).map_err(|e| match e {
+            ExactParseError::TrailingBytes => WireError::TrailingBytes,
+            ExactParseError::Io(err) => WireError::Io(err),
+        })?;
         Ok(response)
     }
 

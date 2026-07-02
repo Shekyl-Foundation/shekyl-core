@@ -1,0 +1,36 @@
+{
+  "_comment": "EMISSION_AUTH_MSG_V1 — pinned known-answer vectors for the reward-emission vin consensus surfaces: the two role auth digests (emission_wire::auth_msg — the R1.A emission_auth_msg inventory under the Q1 role-distinct cSHAKE256 customizations) and the serialized 0x04 vin wire bytes. Mirrored by rust/shekyl-archival-retention/tests/kat_emission_auth_msg.rs (the fixture is fully deterministic and reproducible from that test's source). A deliberate pre-genesis format change must regenerate this corpus and the test constants in lockstep.",
+  "digest": "cSHAKE256, 64-byte output",
+  "customizations": {
+    "backing": "shekyl/archival-emission-auth-backing-v1",
+    "claim": "shekyl/archival-emission-auth-claim-v1"
+  },
+  "fixture": {
+    "p_pubkey": "0x5A repeated SINGLE_KEY_CANONICAL_LEN (1996) times",
+    "holdings": { "kind": "ShardSetCompact", "shard_ids": [7, 42] },
+    "settlement_epochs": [11, 12, 15],
+    "work_claim": [
+      { "epoch": 11, "shard_entries": [ { "shard_id": 7, "serve_credit_bit": true, "scarcity_milli": 850 }, { "shard_id": 42, "serve_credit_bit": false, "scarcity_milli": 0 } ] },
+      { "epoch": 12, "shard_entries": [ { "shard_id": 7, "serve_credit_bit": true, "scarcity_milli": 1000 } ] },
+      { "epoch": 15, "shard_entries": [] }
+    ],
+    "backing": {
+      "proof": "0xEE repeated 64 times",
+      "pseudo_out": "0x22 repeated 32 times",
+      "pqc_pk_hash": "0x33 repeated 32 times",
+      "backing_pubkey": "0xB2 repeated SINGLE_KEY_CANONICAL_LEN (1996) times",
+      "tree_depth": 3
+    },
+    "reward_amount_plain": [1000000, 2000000, 0],
+    "auth_backing": "0xC3 repeated SINGLE_SIG_CANONICAL_LEN (3385) times",
+    "auth_claim": "0xD4 repeated SINGLE_SIG_CANONICAL_LEN (3385) times",
+    "reward_commits": [ { "commitment": "0x55 repeated 32 times", "amount_plain": 3000000, "one_time_key": "0x66 repeated 32 times" } ],
+    "signable_tx_hash": "0x42 repeated 32 times"
+  },
+  "expected": {
+    "auth_msg_backing": "5ffd5095e5249f59abc299f9d87a1fdb8ed88362dabab6515f91acdb7437691c2ef4fe8e6b73a48eef3a337b3d02712e64e2c552a8a7b76b263f1c47f708e74d",
+    "auth_msg_claim": "c468f442754b1fcd670b65433e445ebae9a82dca6682a7070898dd7279d5975b12369a1a64c6effe676ba0ca8875b498cdc8f249d4a51e9325bf29e8976e2cdf",
+    "wire_len": 10930,
+    "wire_digest_cshake256_32_shekyl_emission_wire_kat_v1": "e70926ece926316a1c9d9663cb856e1a2820e3473bbeaa569de499ff6e590308"
+  }
+}

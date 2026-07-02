@@ -971,6 +971,14 @@ pub fn verify(
     signable_tx_hash: [u8; 32],
 ) -> Result<bool, VerifyError> {
     let num_inputs = proof.num_inputs as usize;
+    // Self-defending arity cap (mirrors `verify_membership_only`): a crafted
+    // `proof.num_inputs` sizes the batch verifiers, so an out-of-range value
+    // drives large allocations/CPU. A valid proof never has 0 inputs nor
+    // exceeds `MAX_INPUTS`; `DeserializationFailed` (code 1) matches the FFI's
+    // existing invalid-parameters mapping, so no error-code surface changes.
+    if num_inputs == 0 || num_inputs > MAX_INPUTS {
+        return Err(VerifyError::DeserializationFailed);
+    }
     if key_images.len() != num_inputs {
         return Err(VerifyError::KeyImageCountMismatch {
             expected: num_inputs,
@@ -1489,6 +1497,25 @@ mod tests {
     /// verifies through `verify_membership_only`, and the transcript domain separation
     /// (`SAL_MEMBERSHIP_ONLY_DST` vs `SAL_FULL_DST`) rejects each proof under the *other*
     /// verifier — the cross-type seam (full <-> membership-only).
+    /// The full verify path shares the membership-only self-defending arity
+    /// cap: out-of-range `num_inputs` rejects before any allocation or
+    /// deserialization (so dummy inputs suffice here — the cap fires first).
+    #[test]
+    fn full_verify_rejects_out_of_range_num_inputs() {
+        for bad in [0usize, MAX_INPUTS + 1] {
+            let proof = ShekylFcmpProof {
+                data: Vec::new(),
+                num_inputs: u32::try_from(bad).expect("test bad-count fits u32"),
+                tree_depth: 1,
+            };
+            let r = verify(&proof, &[], &[], &[], &[0u8; 32], 1, [0u8; 32]);
+            assert!(
+                matches!(r, Err(VerifyError::DeserializationFailed)),
+                "num_inputs={bad} must reject as DeserializationFailed, got {r:?}"
+            );
+        }
+    }
+
     #[test]
     #[allow(non_snake_case)]
     fn membership_only_prove_verify_roundtrip_and_cross_type() {
