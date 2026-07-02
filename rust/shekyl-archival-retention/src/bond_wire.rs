@@ -21,9 +21,12 @@ pub const VIN_TYPE_ARCHIVAL_BOND_POST: u8 = 0x03;
 /// cSHAKE256 customization for bond-post spend-auth preimage (gate-4 §3.4.1).
 pub const BOND_POST_SIG_CUSTOMIZATION: &[u8] = b"shekyl/archival-bond-post-v1";
 
-/// Canonical single [`HybridPublicKey`] encoding bound; matches
-/// `config::PQC_HYBRID_SINGLE_KEY_LEN` in `cryptonote_config.h` (not multisig blob).
-pub const MAX_HYBRID_PUBKEY_BYTES: usize = SINGLE_KEY_CANONICAL_LEN;
+/// Exact canonical single [`HybridPublicKey`] encoding length; matches
+/// `config::PQC_HYBRID_SINGLE_KEY_LEN` in `cryptonote_config.h` (not multisig
+/// blob). The wire demands **equality** — a truncated key is not a shorter
+/// valid key, it is malformed (PR #229 review; the C++ oracle's structural
+/// check was tightened to exact equality in the same change).
+pub const HYBRID_PUBKEY_CANONICAL_BYTES: usize = SINGLE_KEY_CANONICAL_LEN;
 pub const MAX_HOLDINGS_SHARDS: usize = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,7 +88,7 @@ pub struct ArchivalBondPostVin {
 pub enum WireError {
     Io(io::Error),
     UnknownVinType(u8),
-    HybridPubkeyTooLong { got: usize },
+    HybridPubkeyLenNotCanonical { got: usize },
     HoldingsCountExceeded { got: usize },
     ShardListForbiddenForCompleteTree,
     InvalidPostKind(u8),
@@ -98,8 +101,11 @@ impl fmt::Display for WireError {
         match self {
             Self::Io(e) => write!(f, "{e}"),
             Self::UnknownVinType(t) => write!(f, "unknown archival vin type {t}"),
-            Self::HybridPubkeyTooLong { got } => {
-                write!(f, "hybrid pubkey length {got} exceeds bound")
+            Self::HybridPubkeyLenNotCanonical { got } => {
+                write!(
+                    f,
+                    "hybrid pubkey length {got} != canonical single-key length"
+                )
             }
             Self::HoldingsCountExceeded { got } => {
                 write!(f, "holdings shard count {got} exceeds bound")
@@ -195,8 +201,8 @@ impl ArchivalBondPostVin {
     }
 
     pub fn write<W: Write>(&self, w: &mut W) -> Result<(), WireError> {
-        if self.hybrid_public_key.len() > MAX_HYBRID_PUBKEY_BYTES {
-            return Err(WireError::HybridPubkeyTooLong {
+        if self.hybrid_public_key.len() != HYBRID_PUBKEY_CANONICAL_BYTES {
+            return Err(WireError::HybridPubkeyLenNotCanonical {
                 got: self.hybrid_public_key.len(),
             });
         }
@@ -231,8 +237,8 @@ impl ArchivalBondPostVin {
 
     pub fn read_payload<R: Read>(r: &mut R) -> Result<Self, WireError> {
         let pk_len: usize = read_varint(r)?;
-        if pk_len > MAX_HYBRID_PUBKEY_BYTES {
-            return Err(WireError::HybridPubkeyTooLong { got: pk_len });
+        if pk_len != HYBRID_PUBKEY_CANONICAL_BYTES {
+            return Err(WireError::HybridPubkeyLenNotCanonical { got: pk_len });
         }
         let mut hybrid_public_key = vec![0u8; pk_len];
         r.read_exact(&mut hybrid_public_key)?;
@@ -279,7 +285,7 @@ mod tests {
 
     #[test]
     fn bond_post_roundtrip_shard_set() {
-        let hybrid_pk = vec![0xAB; 64];
+        let hybrid_pk = vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES];
         let vin = ArchivalBondPostVin {
             hybrid_public_key: hybrid_pk.clone(),
             p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk).to_bytes(),
@@ -300,7 +306,7 @@ mod tests {
 
     #[test]
     fn bond_post_complete_tree_has_no_shard_list_on_wire() {
-        let hybrid_pk = vec![0x01; 32];
+        let hybrid_pk = vec![0x01; HYBRID_PUBKEY_CANONICAL_BYTES];
         let vin = ArchivalBondPostVin {
             hybrid_public_key: hybrid_pk.clone(),
             p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk).to_bytes(),
@@ -321,7 +327,7 @@ mod tests {
 
     #[test]
     fn signature_preimage_is_stable() {
-        let hybrid_pk = vec![0xCD; 48];
+        let hybrid_pk = vec![0xCD; HYBRID_PUBKEY_CANONICAL_BYTES];
         let vin = ArchivalBondPostVin {
             hybrid_public_key: hybrid_pk.clone(),
             p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk).to_bytes(),
@@ -339,6 +345,43 @@ mod tests {
         let h2 = vin.signature_preimage(&tx_prefix);
         assert_eq!(h1, h2);
         assert_ne!(h1, [0u8; 32]);
+    }
+
+    /// A truncated (or over-long) hybrid pubkey is malformed, not a shorter
+    /// valid key — both write and read demand the exact canonical length
+    /// (mirrors the emission wire; the C++ oracle enforces the same equality).
+    #[test]
+    fn bond_post_rejects_non_canonical_pubkey_length() {
+        let mut vin = ArchivalBondPostVin {
+            hybrid_public_key: vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES - 1],
+            p_canonical_id: [0x11; 32],
+            post_kind: BondPostKind::JoinMarket,
+            holdings: HoldingsDescriptor {
+                kind: HoldingsKind::CompleteTree,
+                shard_ids: Vec::new(),
+            },
+            bonded_total_atomic: 750_000_000,
+            bond_credit: 750_000_000,
+            bond_debit: 0,
+        };
+        assert!(matches!(
+            vin.serialize(),
+            Err(WireError::HybridPubkeyLenNotCanonical { .. })
+        ));
+        vin.hybrid_public_key = vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES + 1];
+        assert!(matches!(
+            vin.serialize(),
+            Err(WireError::HybridPubkeyLenNotCanonical { .. })
+        ));
+
+        // Read side: craft a payload with a truncated pk_len.
+        let mut wire = Vec::new();
+        write_varint(&(HYBRID_PUBKEY_CANONICAL_BYTES - 1), &mut wire).unwrap();
+        wire.extend_from_slice(&vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES - 1]);
+        assert!(matches!(
+            ArchivalBondPostVin::read_payload(&mut wire.as_slice()),
+            Err(WireError::HybridPubkeyLenNotCanonical { .. })
+        ));
     }
 
     /// Golden byte vector for the shared holdings codec.

@@ -10598,16 +10598,15 @@ Retained for citation in review; each links to the canonical record.
   `shekyl_curve_tree_hash_trim_{selene,helios}` for sibling chunks that
   grew since the reference block.
 
-- **Bond-post wire accepts truncated hybrid-pubkey lengths — confirm the C++
-  oracle bound (PR-E2 review, 2026-07-02).** `bond_wire.rs::read_payload`
-  accepts any `pk_len <= SINGLE_KEY_CANONICAL_LEN` (1996) — a truncated or
-  empty key parses — while the emission wire (`emission_wire.rs`) requires
-  exact canonical equality for the same encoding. Nothing in the Rust crate
-  re-checks the bond length (`bond_post.rs` header: "Structural bounds (hybrid
-  pubkey length) … stay in C++ consensus glue"). Action: verify the C++
-  bond-post structural validation rejects `pk_len != PQC_HYBRID_SINGLE_KEY_LEN`;
-  if it also only upper-bounds, tighten both sides to exact equality
-  (pre-genesis wire fix, coordinate with the 0x03 tag freeze).
+- **RESOLVED (PR #229, 2026-07-02): bond-post hybrid-pubkey length tightened to
+  exact canonical equality on both sides.** Verified at source: the C++ oracle
+  also only upper-bounded (`cryptonote_basic.h` serialization guard `> LEN`;
+  `blockchain.cpp check_archival_bond_post_input` `empty() || > LEN`), so a
+  truncated non-empty key was structurally accepted by both parsers. Fixed
+  pre-genesis in the same change: `bond_wire.rs` write+read now demand
+  `== SINGLE_KEY_CANONICAL_LEN` (`HybridPubkeyLenNotCanonical`), and both C++
+  checks demand `== config::PQC_HYBRID_SINGLE_KEY_LEN` — matching the emission
+  wire's strict equality.
 
 - **`shekyl_fcmp_verify` (full path) lacks the arity hardening its
   membership-only sibling got (PR #224 review, 2026-07-02).** The

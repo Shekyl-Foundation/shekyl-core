@@ -67,7 +67,7 @@ fn bond_post_joinmarket_round_trips_with_bond_spend_pk() {
 fn bond_post_non_joinmarket_has_no_bond_spend_pk() {
     // post_kind 3 = HoldingsUpdate: bond_spend_pk is absent on the wire.
     let input = Input::BondPost(Box::new(BondPost {
-        hybrid_public_key: vec![0x01; 64],
+        hybrid_public_key: vec![0x01; 1996],
         p_canonical_id: [0x02; 32],
         kind: BondPostKind::Other(3),
         holdings: Holdings::CompleteTree, // carries no shard list
@@ -86,7 +86,7 @@ fn bond_post_other_must_not_reuse_joinmarket_tag() {
     // residual misuse — `Other` reusing the JoinMarket tag, which would emit a blob
     // that re-reads as a JoinMarket post — is rejected at write.
     let input = Input::BondPost(Box::new(BondPost {
-        hybrid_public_key: vec![0x01; 64],
+        hybrid_public_key: vec![0x01; 1996],
         p_canonical_id: [0x02; 32],
         kind: BondPostKind::Other(BOND_POST_KIND_JOINMARKET),
         holdings: Holdings::CompleteTree,

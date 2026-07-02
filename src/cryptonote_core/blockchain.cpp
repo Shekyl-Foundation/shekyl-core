@@ -4648,10 +4648,9 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
-  if (bond.hybrid_public_key.empty()
-    || bond.hybrid_public_key.size() > config::PQC_HYBRID_SINGLE_KEY_LEN)
+  if (bond.hybrid_public_key.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
   {
-    MERROR_VER("Archival bond-post hybrid pubkey out of bounds");
+    MERROR_VER("Archival bond-post hybrid pubkey length not canonical");
     return false;
   }
 
