@@ -92,6 +92,13 @@ further changes to the interface.
   - [ ] RPC consumer regression testing for larger transactions
 - [ ] CLI reproducible builds validated
 - [ ] Rust/PQC reproducible build inputs documented
+- [ ] **Bundled Tor pin current** (2d-2 archival firewall, SP-T0c — `rust/shekyl-tor/src/binary.rs`)
+  - The wallet launches a hash-pinned `tor`; a stale or unverified pin is a mission-#1 (security-precondition) gap, so this is a **recurring** duty, not a one-time step.
+  - [ ] Watch <https://www.torproject.org/download/tor/> for a new **stable Tor Expert Bundle** or a security advisory since the recorded pin.
+  - [ ] On a new stable / advisory, per supported target: download the Expert Bundle tarball **and** its `.asc`, then `gpg --verify <file>.asc <file>` — require a **Good signature** whose primary key is `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290` (`TOR_SIGNING_KEY_FPR`; the durable pin is *this key*, not any single hash).
+  - [ ] Extract and record `sha256sum` of the **extracted `tor` binary** (not the tarball) into `CURRENT_PIN` for each target `cfg` arm, and bump the version in the `current_target_has_a_recorded_pin` assertion.
+  - [ ] Re-verify: run `SHEKYL_TEST_TOR_BINARY=<new tor> cargo test -p shekyl-tor --lib binary -- --ignored` — `bundled_tor_matches_recorded_pin` must pass against the new binary.
+  - Current pin: **Expert Bundle 15.0.17 (tor 0.4.9.11)**, GPG-verified against the key above and recorded 2026-07-01.
 - [ ] CLI released
   - [ ] Project downloads page updated
   - [ ] Update hashes.txt on website

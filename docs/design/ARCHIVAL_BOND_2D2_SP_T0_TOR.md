@@ -203,15 +203,29 @@ design doc evaporates — SP-T0c's definition of done is "the bundle **and** the
 the bundle. (Per-target Guix coverage for macOS/Windows is a packaging detail to work; reuse-don't-own
 bounds the cost regardless.)
 
-**Dev pin (recorded 2026-06-29 — the seed for that checklist entry):** verified
-`tor-expert-bundle-linux-x86_64-15.0.16.tar.gz` (Tor `0.4.9.9`) — SHA256
-`71c838387ec0019a7c7f9f60a5538f7fcae0521a29924c992b84189c9ec4d7f1`, GPG-signed by the **Tor Browser
+**Current pin (bumped 2026-07-01, SP-T0c):** verified
+`tor-expert-bundle-linux-x86_64-15.0.17.tar.gz` (Tor `0.4.9.11`) — tarball SHA256
+`4621e1573dbd6d5d6f4bb4121b37652a8b7204ae5abea600fb6b9e05e5695696`, GPG-signed by the **Tor Browser
 Developers** key `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290` (signing subkey
 `CAAE408AEBE2288E96FC5D5E157432CF78A65729`). The durable pin is *that signing key*, not just this one
-hash — a version bump re-verifies the new manifest's signature against the same fingerprint, then records
-the new tarball hash. Dev/CI integration KATs discover the launchable binary via the
+hash — a version bump re-verifies the new bundle's signature against the same fingerprint, then records
+the new binary hash. The **runtime gate is the extracted binary's** SHA256
+`660a8c54d0c9341f85f0a7f827b6bde640e7db14dfde44d3856979d4ee6d16fb` (a bare binary carries no signature),
+recorded in `rust/shekyl-tor/src/binary.rs::CURRENT_PIN`. (Superseded pin, recorded 2026-06-29: bundle
+`15.0.16` / Tor `0.4.9.9`.) Dev/CI integration KATs discover the launchable binary via the
 `SHEKYL_TEST_TOR_BINARY` env var (skip-if-unset), so the unit gate and CI-without-Tor stay green; only an
 integration job with a bundled Tor exercises the live path.
+
+**Runtime discovery + verify (SP-T0c, built in `shekyl-tor::binary`).** The chosen posture is
+*discover-and-verify-at-launch*: `discover_and_verify()` selects exactly **one** `tor` candidate —
+`SHEKYL_TOR_BINARY` override, else a binary beside the wallet executable, else `PATH` — and gates it on
+`SHA256 == CURRENT_PIN` before returning the path that feeds `ManagedTor::tor_binary`. Two properties are
+load-bearing: (a) the trust gate lives in the **discovery layer, not the actor** — the actor stays a pure
+mechanism (spawns whatever path it is handed), so verification cannot be skipped on a future spawn path
+and tests can still inject an arbitrary unpinned binary; (b) there is **no fall-through on a hash
+mismatch** — a single candidate is selected, so a tampered bundled binary can never silently defer to a
+different `tor`. A target with no `CURRENT_PIN` arm hard-refuses a managed launch (`Attached` still
+works); a new target is enabled by *pinning* it (checklist + `cfg` arm), never by relaxing the gate.
 
 The Arti reopen-anchor
 (§10) stays on its real trigger — SOCKS-isolation proving unenforceable — which **DQ-T0.4 is what
