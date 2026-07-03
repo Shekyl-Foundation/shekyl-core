@@ -72,15 +72,30 @@ const SOCKS_USER_DIGEST_LEN: usize = 32;
 const SOCKS_PASSWORD: &str = "shekyl-p";
 
 /// Per-`P` request timeouts (§2b, the blocking-pool axis). A `spawn_blocking`
-/// task in a synchronous `ureq` call is **not** a cancellation point: on
-/// shutdown an in-flight fetch drains to completion or its timeout, so an
-/// unbounded read on a stalled/half-built Tor circuit would pin a tokio
-/// blocking-pool thread indefinitely. `GLOBAL_TIMEOUT` is the whole-call hard cap
-/// (the "cannot hang forever" guarantee); `CONNECT_TIMEOUT` bounds the
-/// circuit-build dial separately — Tor circuit setup is slower than a direct
-/// connect, so it gets its own allowance under the global cap.
+/// task in a synchronous `ureq` call is **not** a cancellation point: on shutdown
+/// an in-flight fetch drains to completion or its timeout, so a bounded timeout is
+/// what keeps a stalled fetch from pinning a tokio blocking-pool thread.
+/// `GLOBAL_TIMEOUT` is the whole-call cap (dial + send + response read).
+///
+/// **Caveat on `CONNECT_TIMEOUT`:** ureq's SOCKS connector runs the handshake in a
+/// `thread::scope` that *joins* its worker on exit, so a stalled SOCKS read is not
+/// actually interrupted by `timeout_connect`. The real backstop for a half-built
+/// circuit is **Tor's own `SocksTimeout`** (~120 s), with `GLOBAL_TIMEOUT`
+/// bounding the rest — `CONNECT_TIMEOUT` is a hint, not a hard guarantee on the
+/// circuit-build phase.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const GLOBAL_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Maximum per-request response body size. ureq's default is 10 MiB — *below* the
+/// wallet's own accepted maximum (a `get_block` blob is up to `2×MAX_BLOCK_BLOB_SIZE`
+/// hex ≈ 66 MiB, and a `get_transactions` batch is up to `TXS_PER_REQUEST` pruned
+/// txs), so the default would reject legitimate large blocks the local posture
+/// (unbounded `read_to_end`) syncs fine. This cap sits above the largest legitimate
+/// daemon response while still bounding a runaway/malicious (posture ③) response —
+/// the reference `SimpleRequestRpc` reads unbounded because it dials only the
+/// trusted local daemon; the per-`P` path may dial an untrusted node, so it keeps a
+/// (generous) explicit bound rather than ureq's too-small default.
+const MAX_RESPONSE_BODY_SIZE: u64 = 256 * 1024 * 1024;
 
 /// A per-`P` SOCKS username — the Tor `IsolateSOCKSAuth` isolation key.
 ///
@@ -281,6 +296,13 @@ impl PTorClient {
             // code itself (a non-2xx is a typed `Http(status)`, not an opaque
             // transport error).
             .http_status_as_error(false)
+            // No redirects. The daemon RPC is a fixed endpoint that never
+            // legitimately 3xx-redirects; ureq's default (10) would silently
+            // re-POST the request body to an attacker-chosen `Location` over
+            // `P`'s circuit (a compromised/③ or MITM'd daemon bouncing the query
+            // off the configured endpoint). `max_redirects(0)` surfaces a 3xx as
+            // `Http(3xx)` instead of following it.
+            .max_redirects(0)
             .build()
             .new_agent();
         Ok(Self { agent, username })
@@ -308,8 +330,11 @@ impl PTorClient {
     /// by design — the async bridge (`spawn_blocking`) lives in the engine's
     /// `PRpc`, keeping this a pure transport primitive.
     ///
-    /// `content_type` selects the daemon's body extractor (`application/json` for
-    /// JSON(-RPC) routes, `application/octet-stream` for `.bin`). Errors carry a
+    /// `content_type` is the request `Content-Type` (`application/json` for
+    /// JSON(-RPC) routes, `application/octet-stream` for `.bin`) — sent for
+    /// parity with the reference transport and daemon forward-compat, **not** as a
+    /// validation the daemon enforces (its axum handlers read the body via
+    /// `String`/`Bytes` extractors that ignore `Content-Type`). Errors carry a
     /// **username-free** [`RequestErrorKind`] only (invariant (a)).
     pub fn blocking_post(
         &self,
@@ -327,8 +352,13 @@ impl PTorClient {
         if !(200..300).contains(&status) {
             return Err(PTransportError::Request(RequestErrorKind::Http(status)));
         }
+        // Explicit body cap: ureq's default (10 MiB) is below the wallet's own
+        // accepted block/tx-batch maximum, so it would reject legitimate large
+        // responses (`MAX_RESPONSE_BODY_SIZE`).
         response
             .into_body()
+            .into_with_config()
+            .limit(MAX_RESPONSE_BODY_SIZE)
             .read_to_vec()
             .map_err(|_| PTransportError::Request(RequestErrorKind::Read))
     }

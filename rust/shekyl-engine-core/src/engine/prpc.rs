@@ -28,7 +28,7 @@
 
 use std::future::Future;
 
-use shekyl_p_transport::PTorClient;
+use shekyl_p_transport::{PTorClient, PTransportError, RequestErrorKind};
 use shekyl_rpc_client::{Rpc, RpcError};
 
 /// A per-`P` [`Rpc`] that routes every call over `P`'s Tor circuit.
@@ -46,6 +46,13 @@ pub(crate) struct PRpc {
     client: PTorClient,
     /// The daemon base URL (scheme + host + port, no trailing slash), e.g.
     /// `http://<onion>.onion:18081`. The posture selector supplies it.
+    ///
+    /// **No HTTP authentication is performed.** The remote posture's access
+    /// control is the onion address itself (an unguessable capability), so a
+    /// daemon behind `--rpc-login` (HTTP digest auth) is out of scope — unlike the
+    /// reference `SimpleRequestRpc`, which parses `user:pass@` for digest auth. If
+    /// an authenticated remote is ever needed, it is a change at the choice site
+    /// (the `base_url` carrying credentials) + here, recorded there.
     base_url: String,
 }
 
@@ -63,9 +70,11 @@ impl Rpc for PRpc {
         route: &str,
         body: Vec<u8>,
     ) -> impl Send + Future<Output = Result<Vec<u8>, RpcError>> {
-        // Mirror `SimpleRequestRpc`'s content-type routing: the EPEE `.bin` routes
-        // are `application/octet-stream`, everything else `application/json` — the
-        // daemon's axum extractors reject a request with the wrong (or no) type.
+        // Content-type routing mirrors `SimpleRequestRpc`: the EPEE `.bin` routes
+        // are `application/octet-stream`, everything else `application/json`. This
+        // is sent for parity + daemon forward-compat, **not** a validation the
+        // daemon enforces (its handlers read the body via `String`/`Bytes`
+        // extractors that ignore `Content-Type`).
         let content_type = if route.ends_with(".bin") {
             "application/octet-stream"
         } else {
@@ -80,10 +89,45 @@ impl Rpc for PRpc {
             tokio::task::spawn_blocking(move || client.blocking_post(&url, content_type, &body))
                 .await
                 .map_err(|e| RpcError::InternalError(format!("per-P fetch task failed: {e}")))?
-                // The `PTransportError` `Display` is username-free by construction
-                // (invariant (a)); map every request failure to the retry-eligible
-                // `ConnectionError`, mirroring `SimpleRequestRpc`.
-                .map_err(|e| RpcError::ConnectionError(e.to_string()))
+                .map_err(classify)
+        }
+    }
+}
+
+/// Map a per-`P` transport failure to an [`RpcError`], distinguishing **transient**
+/// (retry-worthwhile) from **permanent** (terminal bad-node) causes so the scan
+/// loop surfaces a real bad-node/protocol problem instead of retrying it as an
+/// endless "connecting…". Never renders the SOCKS username — every
+/// [`RequestErrorKind`] `Display` is username-free (invariant (a)).
+#[allow(dead_code)] // used by PRpc::post; PRpc's consumer is the later wiring slice.
+// Owned `PTransportError` by design: this is a `.map_err(classify)` target, which
+// hands ownership of the error (the by-ref form would force `|e| classify(&e)`).
+#[allow(clippy::needless_pass_by_value)]
+fn classify(e: PTransportError) -> RpcError {
+    match e {
+        // Connect / proxy / timeout — transient, worth a retry.
+        PTransportError::Request(RequestErrorKind::Transport) => {
+            RpcError::ConnectionError("per-P transport failure".to_string())
+        }
+        // 5xx — transient server-side, retry-eligible.
+        PTransportError::Request(RequestErrorKind::Http(status))
+            if (500..600).contains(&status) =>
+        {
+            RpcError::ConnectionError(format!("daemon HTTP {status}"))
+        }
+        // 4xx, or a 3xx surfaced by `max_redirects(0)` — permanent for this
+        // request (a retry re-fetches the identical failure): a bad node/route.
+        PTransportError::Request(kind @ RequestErrorKind::Http(_)) => {
+            RpcError::InvalidNode(format!("daemon {kind}"))
+        }
+        // Body over `MAX_RESPONSE_BODY_SIZE` or unreadable — permanent.
+        PTransportError::Request(RequestErrorKind::Read) => {
+            RpcError::InvalidNode("daemon response too large or unreadable".to_string())
+        }
+        // `blocking_post` never returns `Proxy` (that is a `for_persona`-time
+        // construction error); handled defensively for exhaustiveness.
+        PTransportError::Proxy { .. } => {
+            RpcError::InternalError("per-P proxy misconfiguration".to_string())
         }
     }
 }
