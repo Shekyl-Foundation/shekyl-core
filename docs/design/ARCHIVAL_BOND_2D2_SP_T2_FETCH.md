@@ -82,7 +82,12 @@ per-instance discipline SP-T1 verified for the `ureq::Agent` dialer. If `SimpleR
 guarantee per-instance isolation, the thin `PRpc` over the SP-T1 `Agent` is a **correctness
 requirement**, not a preference. (SP-T1 already chose `ureq` precisely for raw per-`Agent` SOCKS
 binding; the `Agent` is the isolated primitive — reusing it is the safe default unless the source
-check clears `SimpleRequestRpc`.)
+check clears `SimpleRequestRpc`.) The check has **two axes, not one**: (a) the connection pool
+(above), and (b) **the resolver** — some HTTP stacks share a process-wide DNS resolver /
+happy-eyeballs cache across clients, which is a cross-persona correlation point *above* the SOCKS
+proxy, the same class of leak as a shared pool. Almost certainly moot for `.onion`-over-SOCKS
+(Tor resolves, not the client), but the source-check must **confirm** the hostname never reaches a
+client-side resolver, not assume the proxy binding is the only shared-state axis.
 
 ### DQ-T2.3 — posture→impl selector (no conflation)
 
@@ -91,6 +96,29 @@ check clears `SimpleRequestRpc`.)
 **only** constructor — no principal `DaemonClient` path, no `Default` (§416). The selector lives at
 the SP-5 scan-loop wiring, and must make "a local posture routes its fetch over a shared network
 circuit" **unrepresentable**, not merely discouraged.
+
+**The no-silent-③ property (the enforcement that makes "discouraged" real).** "Third-party daemons
+are discouraged" (§5) is a documentation state; the selector is where the code either enforces it or
+doesn't. The wargame: can a user land in posture ③ *without an explicit, informed choice* — a config
+default that points at a public node, an auto-discovery, a "local node unreachable, falling back to
+X" convenience path? If yes, "discouraged" is aspirational and a silent user inherits every §5
+residual without having chosen the posture that carries them. So the selector carries a build-time
+property: **③ is reachable only by explicit selection** — never a default, never a fallback, with
+the §5 residuals surfaced at the point of choice (a friction-carrying opt-in). No posture enum
+exists in code yet, so this is cheap to get right at birth: the posture type has no `Default` impl,
+and no code path constructs ③ from a failure of ①/② (a dead local node is an *error the user sees*,
+not a silent re-posture).
+
+*Audited at source (2026-07-02): the property holds today by absence* — every production default is
+loopback (CLI `--daemon-address` → `localhost:11028`, `main.rs:43`; GUI → `127.0.0.1:{port}` +
+detect-local-else-spawn-local sidecar, `daemon_manager.rs:92-160`; the engine library never picks a
+URL — `DaemonClient::new` wraps what the embedder passes); no public-node default, no
+auto-discovery, no localhost-else-remote fallback anywhere; `WalletPrefs` deliberately carries no
+daemon-address field. Two watch-items the build encodes: (a) the GUI's `DaemonMode
+{Managed, External, Unavailable}` classifies process *ownership*, not remoteness — it is not a
+posture enum and must not be mistaken for one; (b) the inherited C++ carries `get_public_nodes()`
+remote-node-discovery machinery (`wallet2.cpp:13374`) — a **pattern the Rust stack consciously does
+not inherit**; the no-silent-③ property is the standing refusal.
 
 ### DQ-T2.4 — `DaemonBlockSource` local-posture per-`P` connection (its own commit) — **and the enumeration tension**
 
@@ -244,6 +272,35 @@ disposition — the success metric is *what leaks*, never blocks/sec:
        read, or the scanner's cross-height coherence requirement established first*). The comment
        explains; the type enforces.
 
+   **The sequence-coherence keystone (verified at source 2026-07-02 — one bug found).** P-SH alone
+   is *not* the whole correctness story: it makes each **read** atomic, but the scanner processes a
+   *sequence* of single-height reads, and a reorg landing between `fetch(H)` and `fetch(H+1)` hands
+   the sequence H from the old chain and H+1 from the new one. P-SH prevents torn reads; only the
+   consumer's **prev-hash linkage check on append** prevents torn *sequences* — rung 1's correctness
+   rests on the **pair**. "The scanner is straddle-indifferent" was the round's one load-bearing
+   claim established by trace rather than exercised, so it was verified per consumer path:
+   - **P-scan (the path SP-T2 feeds): verified.** `verify_exhaustive`
+     (`pscan/exhaustiveness.rs:276-313`) checks `previous == recomputed-hash` on **every consecutive
+     pair**, anchored at the sealed `frontier_hash` (persisted in the `PScanState` cursor); mismatch
+     = `ContinuityBreak` → **loud task halt, deliberately no rewind** (the verified `(height, hash)`
+     frontier exists to forbid a resume-splice) — never silently wrong. Exposure is additionally
+     structural: the P-scan reads only below the finality horizon (`tip − ARCHIVAL_REORG_DEPTH_BLOCKS
+     = 720`), so a straddle in its range requires a 720-deep reorg.
+   - **`shekyl-scanner`: strictly per-block by design** — it never reads `header.previous`; linkage
+     responsibility lives entirely in the calling loops. Correct placement; no change.
+   - **The principal refresh loop: bug found (fixed as build slice 0).** The reorg check
+     (`local_refresh.rs:640-646`) compares `header.previous` against `snapshot.block_hash_at(h−1)` —
+     but the snapshot is the **pre-attempt persisted window** (≤ `synced_height`), so for every
+     consecutive pair fetched *within* one attempt the lookup returns `None` and the check is
+     **skipped**; the hashes fetched this attempt are accumulated but never consulted. A mid-attempt
+     reorg therefore splices a torn sequence silently (sole backstop: the merge-side curve-tree root
+     verify, which catches the splice *iff* the branches' leaf sets differ). **Path-independent:**
+     the locked `get_block` has the identical exposure — the lock never spanned separate RPC calls —
+     so this is a pre-existing bug the keystone check surfaced, not a rung-1 regression. *Fix:*
+     extend the check to track the running last-fetched hash (covering intra-attempt pairs), reusing
+     the existing `find_fork_point` → `ReorgRewind` rewind arm; prove it with a mid-attempt
+     `replace_chain_from` test (the `TestDaemon` helper exists and is currently only self-tested).
+
 **Why measure *now*, not when the fetch path exists (the sharp reason):** the measurement's *result
 changes the wallet-side design*. If #2's coupling magnitude survives the remote-threat evaluation
 (§3b), the **remote** `PBlockSource` acquires a timing-decorrelation responsibility (a design
@@ -345,6 +402,12 @@ A larger-block / higher-write mainnet is outside this envelope; so is N ≫ 16.
 
 Per the ~10-commit-as-CI-cost-guideline, one reviewable PR, sliced by commit:
 
+0. **The sequence-coherence fix (the keystone bug, first — nothing builds on an unverified
+   keystone):** extend the principal refresh loop's reorg check to cover **intra-attempt**
+   consecutive pairs via the running last-fetched hash (`local_refresh.rs:640` today skips them),
+   reusing the existing `find_fork_point`/`ReorgRewind` arm; proven by a mid-attempt
+   `replace_chain_from` straddle test. Pre-existing, path-independent (the locked read has the same
+   exposure), so it lands regardless of the rest of the PR.
 1. **Framing + docs** — correct §367 (add-not-replace), the §4 posture enumeration read-model,
    this Round-0 doc's decisions.
 2. **`DaemonBlockSource` per-`P` direct connection** (DQ-T2.4) — with the enumeration tension stated.
