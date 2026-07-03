@@ -39,9 +39,18 @@ env:
   # parallel cargos find it already present instead of racing to auto-install it
   # (which corrupts ~/.rustup/downloads — "component download failed ... could not
   # rename"). Keep this version in sync with rust/rust-toolchain.toml on a bump.
+  # Download-then-run, NOT `curl | sh`: in a pipeline the step's fate is
+  # sh's exit status, and when curl fails to connect sh reads empty stdin
+  # and exits 0 — the step goes green with no toolchain installed and the
+  # job dies later at the first `rustc` use with a misattributed exit 127
+  # (observed live on PR #236: `curl: (7) Failed to connect to
+  # sh.rustup.rs` passed this step). With the file form under `-e`, a
+  # failed download fails THIS step; --retry rides through transients
+  # (house precedent: APT_SET_CONF's Acquire::Retries).
   INSTALL_RUST: |
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.94.0 --profile minimal --component rustfmt --component clippy
-    echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+    curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs
+    sh /tmp/rustup-init.sh -y --default-toolchain 1.94.0 --profile minimal --component rustfmt --component clippy
+    echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";

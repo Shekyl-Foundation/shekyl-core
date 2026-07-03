@@ -4,7 +4,7 @@
 
 | Field | Value |
 |-------|-------|
-| Status | Phase 3a + 3b **landed** (2026-06; see §13). Phase 3c and the Phase 4 abstraction deletions remain **deferred** (§15, [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md)). This doc is now the record of the landed cutover plus the deferred-work tracker, not an open design. |
+| Status | Phase 3a + 3b **landed** (2026-06; see §13). The Phase 3c v1-machinery deletion **landed in PR #235** (2026-07: `rx-slow-hash.c` deleted, v1 `randomx` lib unlinked, seed-epoch schedule ported to Rust); `slow-hash.c` (CryptoNight, wallet2/RPC-payment-blocked) and the Phase 4 abstraction deletions remain **deferred** (§15, [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md)). The §7 Hole-1 gate is **CI-wired** (test-regime hardening PR-1, 2026-07: daily/weekly cron + corpus-pin re-check + miner-KAT provenance + `nm` symbol isolation). This doc is now the record of the landed cutover plus the deferred-work tracker, not an open design. |
 | Parent plan | [`docs/design/RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) — Track B Phase 3 (`phase3-*` todos). |
 | Spec authority | [`docs/design/RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) §5 (FFI surface), §6 (no-prewarm), §13 (non-goals), §16 (genesis seedhash), §17 (error taxonomy). This doc **cites**; it does not re-derive. |
 | Sibling plans | [`RANDOMX_V2_PHASE2C_PLAN.md`](../completed/RANDOMX_V2_PHASE2C_PLAN.md) §5.11.6 (typed-array-pointer FFI), §5.11.7 (sticky-eviction DoS), §14 Round 5 (C-header form); [`RANDOMX_V2_PHASE2G_PLAN.md`](../completed/RANDOMX_V2_PHASE2G_PLAN.md) (differential harness — light-vs-light only). |
@@ -12,7 +12,7 @@
 | Fork pin | `external/randomx-v2` at `aaafe71` (v2.0.1) — the library miners run; the byte-for-byte parity target for the Hole-1 gate (§7). `external/randomx` (v1, `102f8acf`) is the **outgoing** consensus path. |
 | Working branch | `feat/randomx-v2-genesis-cutover` (off `dev`). |
 | Scope | Consensus PoW cutover only: v1-C → v2-Rust for verification, CryptoNight removed from the consensus path, genesis flipped to RandomX v2. See §1. |
-| Out of scope (deferred, with reversion clauses) | (a) RPC-payment subsystem deletion — §1.2 #1, [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) item. (b) `rx-slow-hash.c` / `slow-hash.c` physical deletion — Phase 3c (blocked by `wallet2.cpp` + RPC-payment). (c) `IPowSchema` / `pow_registry` abstraction deletion + `RX_BLOCK_VERSION` `#define` deletion — Phase 4. (d) `shekyl_pow_randomx_v2_seedheight` FFI export — §5 disposition, reopens at 3c. (e) Worst-case per-hash latency gate — post-2g round per parent §6. |
+| Out of scope (deferred, with reversion clauses) | (a) RPC-payment subsystem deletion — §1.2 #1, [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) item. (b) `rx-slow-hash.c` **deleted in PR #235** (2026-07, with the whole v1 machinery); `slow-hash.c` physical deletion remains deferred (still blocked by `wallet2.cpp` + RPC-payment). (c) `IPowSchema` / `pow_registry` abstraction deletion + `RX_BLOCK_VERSION` `#define` deletion — Phase 4. (d) `shekyl_pow_randomx_v2_seedheight` FFI export — the §5 reopening criterion **fired and closed in PR #235** (the export + `…_next_seedheight` landed with the Rust seed-epoch port; the C++ schedule half was deleted). (e) Worst-case per-hash latency gate — post-2g round per parent §6. |
 
 ## 0. Why this document exists
 
@@ -472,9 +472,13 @@ which links `external/randomx-v2` @ `aaafe71`):
    as a vector. This closes the in-process-proxy gap — it proves
    "blocks real miners produce validate under the Rust verifier," not
    just "two in-process computations agree."
-   **(Status: deferred.** The landed harness pins an in-process full-dataset
-   KAT (`kFrozenKatHashHex`) instead; the separate-process miner-run KAT is
-   tracked in FOLLOWUPS and targeted before the genesis freeze — see §13.)
+   **(Status: discharged**, test-regime hardening PR-1, 2026-07. The
+   separate-process miner-shaped tool
+   (`tests/randomx_v2_parity/randomx_v2_miner_kat.cpp`) recomputes the
+   canonical-seed KAT under `FULL_MEM|V2` with no harness plumbing, no
+   Rust FFI, and no consensus code linked, and asserts the frozen
+   `kFrozenKatHashHex` on every gate run —
+   `randomx_v2_full_parity_miner_kat`.)
 
 Gating: a ctest label (e.g. `randomx_v2_full_parity`) in the
 release-gate suite, **not** the per-PR fast gate (the full dataset is
@@ -539,13 +543,13 @@ exists.)
 
 | Gate | Cadence | Asserts |
 |------|---------|---------|
-| Hole-1 C-full vs Rust-light parity (§7) | release-gate (`randomx_v2_full_parity`) | the cutover invariant; **halt-on-red** |
+| Hole-1 C-full vs Rust-light parity (§7) | daily/weekly cron (`randomx_v2_full_parity_daily` / `randomx_v2_full_parity`; wired by test-regime hardening PR-1, 2026-07) | the cutover invariant; **halt-on-red** |
 | 2g differential (light-vs-light) | per-PR | Rust verifier ≡ C v2 light |
-| Per-hash average latency ≤3.0× | per-PR (from 3a) | parent §6 line 246 |
+| Per-hash average latency ≤3.0× | **UNWIRED** — T5 runs in no workflow (test-regime audit F1-HIGH, 2026-07); wiring is the runtime-mode change queued after PR-1 | parent §6 line 246 |
 | Build both flag states (3a) | per-PR | legacy v1 path stays buildable in 3a |
 | `cargo fmt` / `clippy -D warnings` / `cargo test` | per-PR | [`45-rust-lint-checks`](../../.cursor/rules/45-rust-lint-checks.mdc) |
 | Genesis identity (§8.3) | 3b | block id / coinbase vectors unchanged |
-| Symbol-isolation `nm` on `shekyld` | Phase 3c | parent §7 (deferred) |
+| Symbol-isolation `nm` on `shekyld` | daily/weekly cron (landed with PR-1: `scripts/ci/check_randomx_symbol_isolation.sh`) | parent §7 |
 
 ## 10. Risks
 
@@ -588,7 +592,9 @@ Per [`91-documentation-after-plans.mdc`](../../.cursor/rules/91-documentation-af
 
 ## 13. Status — landed (2026-06)
 
-The consensus PoW cutover (3a + 3b) is complete. 3c is deferred.
+The consensus PoW cutover (3a + 3b) is complete. The 3c v1-machinery
+deletion landed in PR #235 (2026-07); `slow-hash.c` remains deferred
+(front-matter (b)).
 
 **3a — FFI export + Hole-1 gate (flag-gated):**
 - `shekyl-pow-randomx` dep + `pow_randomx_ffi.rs`; `shekyl_ffi.h` decls
@@ -597,11 +603,13 @@ The consensus PoW cutover (3a + 3b) is complete. 3c is deferred.
   + 4 `set_canonical` sites; legacy v1 path stayed buildable.
 - Hole-1 differential gate (`tests/randomx_v2_parity/randomx_v2_full_parity.cpp`):
   C v2 full-dataset ≡ Rust v2 light-cache over a corpus + an **in-process**
-  full-dataset frozen KAT (`kFrozenKatHashHex`); halt-on-red. The frozen KAT
-  is captured from the harness's own full-dataset computation, **not** from a
-  separate-process mining run; that end-to-end miner-provenance KAT is deferred
-  (tracked in FOLLOWUPS, targeted before the genesis freeze). Worked around the
-  vendored-library teardown double-free (`_Exit`, also tracked in FOLLOWUPS).
+  full-dataset frozen KAT (`kFrozenKatHashHex`); halt-on-red. The
+  in-process-proxy provenance gap was closed by the test-regime hardening PR-1
+  (2026-07): the separate-process miner-shaped tool (`randomx_v2_miner_kat.cpp`)
+  re-derives the frozen KAT on every gate run (§7.2 #3). The vendored-library
+  teardown double-free is worked around (`_Exit`) with a recorded
+  benign-at-teardown, won't-fix disposition (harness header carries the gdb
+  evidence and the reopening criterion).
 
 **3b — collapse to RandomX-only (consensus cutover):**
 - `383b560f1` — `get_pow_for_height` collapsed to RandomX for every
@@ -624,8 +632,15 @@ The consensus PoW cutover (3a + 3b) is complete. 3c is deferred.
   regeneration — the feared frozen-genesis E2E rework was unnecessary.
 
 **Gate status (§9):** Genesis identity — **met** (`6ae9c0643`). Hole-1
-parity — armed (release gate). The Phase-3c-only gates (symbol-isolation
-`nm`, seedheight spec-vector) remain deferred with the C-file deletions.
+parity — **wired** (test-regime hardening PR-1, 2026-07: `full-parity`
+cron job in `.github/workflows/randomx-v2-differential.yml`; daily
+subset + weekly full sweep re-checking all 1024 Phase 2g canonical pins
+under C-full-dataset, plus the miner-KAT provenance test). The
+symbol-isolation `nm` gate **landed in the same job**
+(`scripts/ci/check_randomx_symbol_isolation.sh`: §7.1 banned list +
+DAA-family absence + verifier-presence checks against the linked
+`shekyld`). The seedheight spec-vector remains deferred with the
+`slow-hash.c` deletion.
 
 **3c — deferred** (blocked by RPC-payment subsystem deletion +
 `wallet2.cpp` PoW touchpoints; tracked in `docs/FOLLOWUPS.md`): delete

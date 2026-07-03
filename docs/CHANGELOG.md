@@ -4,6 +4,27 @@
 
 ### Added
 
+- **daemon: `SEEDHASH_EPOCH_*` override now refuses to start on every public
+  network.** The RandomX seed-epoch schedule is consensus; the
+  `SEEDHASH_EPOCH_BLOCKS` / `SEEDHASH_EPOCH_LAG` env overrides are a
+  fakechain-only (regtest) lever. A node started with the lever active
+  computed wrong seedheights and silently rejected every block its peers
+  accepted (warn-only since the #235 port) — self-forking mainnet, or the
+  testnet/stagenet rehearsal infrastructure, if the lever leaked in from a
+  shared environment. Init now fails closed with an actionable error on
+  MAINNET, TESTNET, and STAGENET; FAKECHAIN (regtest daemons and test
+  fixtures — the lever's legitimate fast-epoch use) keeps the warning-only
+  behavior.
+- **pow: the Phase 3a full-dataset parity gate is wired into CI** (RandomX v2
+  test-regime hardening PR-1). New `full-parity` cron job in
+  `randomx-v2-differential.yml`: daily subset / weekly full sweep of the C
+  full-dataset (miner mode) vs Rust light-cache (verifier) parity harness,
+  now widened to re-check all 1024 Phase 2g canonical pins under
+  C-full-dataset (`gen-parity-corpus` + `corpus` harness mode), plus a
+  separate-process miner-shaped KAT provenance test
+  (`randomx-v2-miner-kat`) and a binary `nm` symbol-isolation gate on the
+  linked daemon (`check_randomx_symbol_isolation.sh`).
+
 - **crypto/wallet: real-tree FCMP++ prove→verify roundtrip now works
   (`feat/ct-5-real-tree-verify`).** The first test to verify an FCMP++ membership
   proof over a *real multi-layer* `assemble_path`
