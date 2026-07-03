@@ -36,8 +36,11 @@
 //!
 //! Release-mode only, as a dedicated workflow step (the T2 house
 //! pattern): 1024 interpreted light hashes are minutes in release and
-//! hours in debug, so the default debug `cargo test` step skips this
-//! test by name (`--skip canonical_pins_full_rust_leg`). The
+//! hours in debug, so the default debug `cargo test` step and the
+//! weekly cargo-mutants run both skip it via the shared prefix
+//! (`--skip canonical_pins_full` — a substring of this test's fn name
+//! and exactly the `--test` target name the release steps invoke, so a
+//! rename breaks loudly on both sides). The
 //! `--no-tests=error`-style guard here is the assert on the corpus
 //! sizing itself: if the nightly sizing or the pin table ever change
 //! shape, this test fails loudly rather than walking a subset.

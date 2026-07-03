@@ -21,9 +21,9 @@
   crate tests, the T2 adversarial byte-equality against an arm-built C
   oracle, a new `canonical_pins_full` test re-deriving all 1024 committed
   canonical pins, and the harness's three-leg `--mode=correctness`
-  (Rust ≡ arm-built C ≡ canonical over the same 1024) — the first CI
-  executions the `fpu_rounding` FPCR path and the correctness mode have
-  ever had. The 1024-pin test also runs per-PR on x86_64. The rustup
+  (Rust ≡ arm-built C ≡ canonical over the same 1024) — the first-ever
+  CI executions of the `fpu_rounding` FPCR path and of the correctness
+  mode. The 1024-pin test also runs per-PR on x86_64. The rustup
   install (all four jobs) and the out-of-band C-reference build (the
   three jobs that use it; `full-parity` builds through the parent CMake
   project) are now composite actions (`.github/actions/install-rust`,
