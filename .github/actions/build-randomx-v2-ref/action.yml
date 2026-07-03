@@ -1,0 +1,41 @@
+name: 'build-randomx-v2-ref'
+description: >-
+  Build the fork-pinned external/randomx-v2 C reference out-of-band and
+  stage it in the randomx-v2-sys layout
+  (`$RANDOMX_V2_INSTALL_DIR/lib/librandomx.a` + `include/randomx.h`).
+
+  Builds the submodule's own CMakeLists rather than the parent project's
+  `external/CMakeLists.txt` ExternalProject_Add wrapper: the wrapper is
+  the production wiring (Phase 2g §5.4) but the parent configure needs
+  Boost + OpenSSL + ~a dozen C++ deps the harness build never touches.
+  The harness's audit-against-actual-code discipline (§4.5 T-A11 + §4.3)
+  is independent of which CMake invocation produced the lib so long as
+  it is built from the fork-pinned submodule SHA (verified at runtime by
+  T15: randomx-v2-sys fork-pin-sha == submodule HEAD).
+
+  One definition on purpose: this recipe runs on x86_64 AND aarch64
+  lanes, and the native-arm lane's premise is that every lane builds an
+  identically-configured library — three drifting inline copies is how
+  one lane silently ends up measuring a differently-built oracle.
+
+  Requires: repo checked out (local action), CMake + Ninja installed,
+  and RANDOMX_V2_BUILD_DIR / RANDOMX_V2_INSTALL_DIR in the environment.
+runs:
+  using: 'composite'
+  steps:
+    - name: configure + build randomx-v2 C reference
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "${RANDOMX_V2_INSTALL_DIR}/lib" "${RANDOMX_V2_INSTALL_DIR}/include"
+        cmake -G Ninja \
+          -S external/randomx-v2 \
+          -B "${RANDOMX_V2_BUILD_DIR}" \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+        cmake --build "${RANDOMX_V2_BUILD_DIR}" --target randomx
+        # The submodule's CMakeLists declares no `install` target; copy
+        # the static lib + header manually into the layout
+        # randomx-v2-sys/build.rs expects.
+        cp "${RANDOMX_V2_BUILD_DIR}/librandomx.a" "${RANDOMX_V2_INSTALL_DIR}/lib/"
+        cp external/randomx-v2/src/randomx.h "${RANDOMX_V2_INSTALL_DIR}/include/"

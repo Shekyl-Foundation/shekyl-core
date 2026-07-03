@@ -550,6 +550,7 @@ exists.)
 | `cargo fmt` / `clippy -D warnings` / `cargo test` | per-PR | [`45-rust-lint-checks`](../../.cursor/rules/45-rust-lint-checks.mdc) |
 | Genesis identity (§8.3) | 3b | block id / coinbase vectors unchanged |
 | Symbol-isolation `nm` on `shekyld` | daily/weekly cron (landed with PR-1: `scripts/ci/check_randomx_symbol_isolation.sh`) | parent §7 |
+| Native-aarch64 lane (verifier + T2 + all 1024 pins + three-leg `--mode=correctness` on FPCR silicon) | per-PR + daily cron (landed with test-regime hardening PR-2: `native-arm` job) | both shipping arches reproduce the canonical pins, and the arm-built C reference agrees on every pin; divergence = halt-and-escalate, not flake |
 
 ## 10. Risks
 
