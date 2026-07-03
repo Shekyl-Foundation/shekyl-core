@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include <exception>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -29,7 +31,16 @@ namespace shekyl_parity
 {
   // Initialize `dataset` from `cache` across hardware_concurrency()
   // threads (disjoint item ranges; deterministic result).
-  inline void init_full_dataset(randomx_dataset *dataset, randomx_cache *cache)
+  //
+  // Returns false (with `err` set) instead of throwing: both consumers
+  // (the parity harness and the miner-KAT tool) route failures through a
+  // printed FATAL + `std::_Exit` so nothing can mask the verdict behind
+  // an abort — an exception escaping to an uncaught `main` would
+  // `std::terminate` (SIGABRT), exactly the masking the `_Exit` strategy
+  // exists to avoid. The only realistic throw here is a `std::thread`
+  // constructor failing on resource exhaustion.
+  inline bool init_full_dataset(randomx_dataset *dataset, randomx_cache *cache,
+                                std::string &err)
   {
     const unsigned long item_count = randomx_dataset_item_count();
     unsigned long threads = std::thread::hardware_concurrency();
@@ -52,17 +63,19 @@ namespace shekyl_parity
         start += count;
       }
     }
-    catch (...)
+    catch (const std::exception &e)
     {
-      // A std::thread constructor that throws (resource exhaustion) must
-      // not leave the already-spawned workers joinable: their destructors
-      // would call std::terminate and mask the real error. Let the spawned
-      // ranges finish, then propagate.
+      // Already-spawned workers must be joined before returning: a
+      // joinable thread's destructor calls std::terminate. Their ranges
+      // complete normally; the dataset is simply left partially filled,
+      // which is fine — the caller aborts the run.
       for (std::thread &w : workers)
         w.join();
-      throw;
+      err = std::string("dataset init thread spawn failed: ") + e.what();
+      return false;
     }
     for (std::thread &w : workers)
       w.join();
+    return true;
   }
 } // namespace shekyl_parity

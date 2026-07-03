@@ -594,7 +594,7 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
         MERROR("SEEDHASH_EPOCH_* override active on a public network: the RandomX seed-epoch schedule is consensus-critical and the override is a fakechain-only (regtest) lever; refusing to start. Unset SEEDHASH_EPOCH_BLOCKS / SEEDHASH_EPOCH_LAG to run this node.");
         return false;
       }
-      MWARNING("SEEDHASH_EPOCH_* override active: the RandomX seed-epoch schedule differs from mainnet defaults (fakechain lever) — blocks will fail verification against public-network peers");
+      MWARNING("SEEDHASH_EPOCH_* override active on fakechain: the RandomX seed-epoch schedule differs from mainnet defaults — blocks produced under this schedule validate only among fakechain nodes running the same override, and captured vectors will not match mainnet seedheights");
     }
     const crypto::hash seedhash = get_block_id_by_height(shekyl_pow_randomx_v2_seedheight(m_db->height()));
     if (seedhash != crypto::null_hash)

@@ -217,7 +217,8 @@ namespace
     // Multi-threaded dataset initialization (benchmark.cpp's disjoint-range
     // pattern; see full_dataset_init.h). Dataset init dominates this gate's
     // runtime, and the corpus mode builds up to 32 datasets per cron run.
-    shekyl_parity::init_full_dataset(out.dataset, out.cache);
+    if (!shekyl_parity::init_full_dataset(out.dataset, out.cache, err))
+      return false;
 
     // The cache is no longer needed once the dataset is initialized.
     randomx_release_cache(out.cache);
@@ -355,7 +356,10 @@ namespace
     // 9 bytes cut from the final blob passed every seed<31 invocation).
     in.seekg(0, std::ios::end);
     const std::streamoff file_size = in.tellg();
-    if (!in.seekg(0, std::ios::beg))
+    // tellg() reports failure as -1; without this guard a failed size
+    // probe would surface later as a misleading "structure does not
+    // match the physical file size" verdict.
+    if (file_size < 0 || !in.seekg(0, std::ios::beg))
     {
       err = "cannot determine corpus file size";
       return false;

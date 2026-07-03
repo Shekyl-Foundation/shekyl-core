@@ -108,7 +108,12 @@ int main(int argc, char **argv)
     std::fprintf(stderr, "FATAL: randomx_alloc_dataset failed (~2 080 MiB)\n");
     std::_Exit(EXIT_FAILURE);
   }
-  shekyl_parity::init_full_dataset(dataset, cache);
+  std::string init_err;
+  if (!shekyl_parity::init_full_dataset(dataset, cache, init_err))
+  {
+    std::fprintf(stderr, "FATAL: %s\n", init_err.c_str());
+    std::_Exit(EXIT_FAILURE);
+  }
   randomx_release_cache(cache);
 
   randomx_vm *vm = randomx_create_vm(flags, nullptr, dataset);
