@@ -34,7 +34,21 @@
 //! bundled-Tor harness; this crate is buildable and testable without a running Tor
 //! — constructing a [`PTorClient`] configures the SOCKS proxy but does not dial.
 
-use std::net::{Ipv4Addr, SocketAddr};
+// The per-P circuit isolation is worthless if ureq lacks its SOCKS connector: it
+// then falls OPEN to a proxy-less TCP dial, deanonymizing every persona with no
+// runtime signal. Feature unification means a runtime/CI test in one feature
+// config cannot prove production has the feature — so "SOCKS present" is enforced
+// at COMPILE time here, not hoped for. `tor-socks` is default-on and forwards
+// `ureq/socks-proxy` (see Cargo.toml); its absence fails the build.
+#[cfg(not(feature = "tor-socks"))]
+compile_error!(
+    "shekyl-p-transport requires the `tor-socks` feature (forwards ureq/socks-proxy). \
+     Without ureq's SOCKS connector, every per-P request dials the target DIRECTLY, \
+     bypassing its Tor circuit — a deanonymization leak. This feature is default-on and \
+     load-bearing; do not disable it."
+);
+
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use sha3::digest::core_api::CoreWrapper;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
@@ -182,18 +196,40 @@ impl PTorClient {
         socks: &TorSocksEndpoint,
     ) -> Result<Self, PTransportError> {
         let username = derive_socks_user(id);
-        // `SocketAddr`'s Display brackets IPv6 (`[::1]:9050`), so the URI is always
-        // well-formed. The ureq error is deliberately discarded: it would echo the
-        // proxy URI, which embeds the username (invariant (a)).
-        let proxy_uri = format!(
-            "socks5://{}:{}@{}",
-            username.as_str(),
-            SOCKS_PASSWORD,
-            socks.addr
-        );
-        let proxy = ureq::Proxy::new(&proxy_uri).map_err(|_| PTransportError::Proxy {
-            endpoint: socks.addr,
-        })?;
+        // **SOCKS5h, via the typed builder with an explicit `resolve_target(false)`
+        // — not a `socks5://` scheme string.** The persona's target hostname must
+        // be resolved by the proxy (Tor), never locally: a client-side resolve
+        // leaks the target to the OS resolver (a cross-persona correlation point
+        // *above* the SOCKS layer) and breaks `.onion` outright. Two traps this
+        // construction closes, both of which bit the original `socks5://` code:
+        //   1. A *scheme string* is stringly-typed — `socks5` (resolve-locally)
+        //      vs `socks5h` (proxy-resolves) is a one-char silent difference, and
+        //      ureq derives resolve-locality from the scheme's default (`socks5` ⇒
+        //      true). The `ProxyProtocol` enum makes the wrong choice a compile
+        //      error, and `.resolve_target(false)` pins the flag independent of the
+        //      scheme's (drifting — ureq's own doc contradicts its code) default.
+        //   2. ureq's builder takes host/port separately and does not bracket IPv6
+        //      in its internal URI, so the IPv6 host is bracketed here (the
+        //      `SocketAddr` Display did this for the string form).
+        // Verified sufficient: with `resolve_target(false)`, ureq's `connect()`
+        // takes the `resolver.empty()` branch (no target DNS) and hands
+        // `uri.host_port()` — the name — to the SOCKS proxy (ureq `run.rs`/`socks.rs`).
+        // The ureq error is discarded: it would echo the URI, which embeds the
+        // username (invariant (a)).
+        let host = match socks.addr.ip() {
+            IpAddr::V6(v6) => format!("[{v6}]"),
+            IpAddr::V4(v4) => v4.to_string(),
+        };
+        let proxy = ureq::Proxy::builder(ureq::ProxyProtocol::Socks5h)
+            .host(&host)
+            .port(socks.addr.port())
+            .username(username.as_str())
+            .password(SOCKS_PASSWORD)
+            .resolve_target(false)
+            .build()
+            .map_err(|_| PTransportError::Proxy {
+                endpoint: socks.addr,
+            })?;
         let agent = ureq::Agent::config_builder()
             .proxy(Some(proxy))
             .build()
@@ -309,5 +345,29 @@ mod tests {
         assert_send_sync::<PTorClient>();
         assert_send_sync::<SocksUsername>();
         assert_send_sync::<PCanonicalId>();
+    }
+
+    #[test]
+    fn proxy_resolves_the_target_at_tor_never_locally() {
+        // The DNS-leak regression pin (Axis B). `resolve_target() == false` means
+        // ureq hands the persona's target *hostname* to the SOCKS proxy (Tor) and
+        // never resolves it via the OS resolver. The original `socks5://` string
+        // built a Socks5 proxy whose `resolve_target` defaults to *true* (resolve
+        // locally) — which this assertion catches: it fails against that code and
+        // passes only for the socks5h / `resolve_target(false)` construction.
+        // Asserted through the *real* `PTorClient` construction (the agent's live
+        // config), not a re-built proxy, so it pins the production path end-to-end.
+        let client = PTorClient::for_persona(&pid(5), &TorSocksEndpoint::loopback(9050))
+            .expect("proxy config is well-formed");
+        let proxy = client
+            .agent()
+            .config()
+            .proxy()
+            .expect("a per-P client always carries a SOCKS proxy");
+        assert!(
+            !proxy.resolve_target(),
+            "per-P transport must resolve the target at the proxy (Tor), never locally — \
+             a local resolve leaks the persona's target to the OS resolver and breaks .onion"
+        );
     }
 }

@@ -14,14 +14,26 @@ publish = false
 # crypto crates already vet; no new surface.
 sha3 = { version = "0.10", default-features = false }
 # Same ureq as shekyl-cli's daemon client (already vetted + in the lock): rustls
-# TLS, SOCKS5 proxy. No new supply-chain surface, a new internal consumer.
-ureq = { version = "3", default-features = false, features = ["rustls", "socks-proxy"] }
+# TLS. The SOCKS5 connector is NOT enabled here — it is forwarded through the
+# `tor-socks` feature (below) so its absence is a compile error, not a silent
+# direct dial: without ureq's `socks-proxy`, ureq falls OPEN to a proxy-less TCP
+# connection, bypassing every persona's Tor circuit (a deanonymization leak).
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 # The persona canonical id as a workspace newtype (`PCanonicalId`) — the same
 # type PR-B (#205) threads through `pscan_state`/`accrual`/`stake_engine`, so the
 # engine hands this crate `&PCanonicalId` directly rather than raw `[u8; 32]`.
 # Foundational, light (serde + zeroize); no `schema` feature — we hash the id,
 # never persist it.
 shekyl-types = { path = "../shekyl-types" }
+
+[features]
+# `tor-socks` forwards ureq's SOCKS5 connector and is REQUIRED — a `compile_error!`
+# in `lib.rs` fails the build without it. It is a feature (not a hard dep-line
+# flag) precisely so its absence is a representable, guarded state: the per-P
+# circuit isolation is worthless if ureq silently dials direct, so "SOCKS present"
+# is enforced at compile time, not hoped for at runtime.
+default = ["tor-socks"]
+tor-socks = ["ureq/socks-proxy"]
 
 [lints]
 workspace = true
