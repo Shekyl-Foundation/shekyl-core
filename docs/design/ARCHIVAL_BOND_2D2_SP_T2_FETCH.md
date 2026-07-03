@@ -135,13 +135,18 @@ disposition — the success metric is *what leaks*, never blocks/sec:
    N; (b) because the leak lives in the **OS network stack, below our RPC layer**, "the RPC server is
    ours" does **not** rescue `local` here — rewriting the server cannot un-see N loopback TCP
    connections. *Disposition:* a **stated privacy cost of the `local` posture**, recorded in the §4
-   read-model (below), not a throughput footnote, plus a **design guardrail** — the Rust RPC server
-   must **not** add per-IP connection counting or caps that would promote this OS-intrinsic residual
-   into a first-class RPC-observable signal (and any cap would also cap N personas). It is an argument
-   on the *unlinkability axis* for the remote-over-Tor posture (distinct circuits unlink the personas
-   *at the network layer*; caveat that a single shared remote daemon still sees N terminating
-   connections — remote hides the count from a **path/network** observer, not unconditionally from the
-   terminating node).
+   read-model (below), not a throughput footnote, plus a **positive design invariant** (greppable and
+   testable, not a "don't make it worse" vibe): **the RPC layer holds no per-connection
+   persona-distinguishing state** — no per-IP accounting, no per-connection logging that survives the
+   request, no connection-count metric exposed on any endpoint. Framed as an invariant a reviewer can
+   check it ("does any handler retain per-connection state?"), and it concedes the irreducible floor
+   plainly: the OS loopback TCP table is below our layer, so **"our RPC, therefore private" is false
+   for `local`** — loopback enumeration is an operating-system fact, not an RPC one, and one more
+   reason `local` is convenience-tier while remote-over-Tor is the privacy default. It is likewise an
+   argument on the *unlinkability axis* for remote-over-Tor (distinct circuits unlink the personas *at
+   the network layer*; caveat that a single shared remote daemon still sees N terminating connections —
+   remote hides the count from a **path/network** observer, not unconditionally from the terminating
+   node).
 2. **Cross-persona timing correlation — a *remote-posture* threat, measured now.** The two leaks are
    **posture-complementary, not parallel**. Enumeration (#1) is the **`local`** leak: N loopback
    connections already link the personas by source address, so timing adds nothing there — *`local`'s
@@ -165,11 +170,36 @@ disposition — the success metric is *what leaks*, never blocks/sec:
    - **Coupling at or above the floor** (magnitude comparable to / exceeding Tor jitter): a
      mitigation lands, and — because the coupling *is* `m_blockchain_lock` and a **lock-free read path
      already exists** — the fork has three rungs, cheapest first:
-     1. **Serve the per-`P` read lock-free** — route the fetch through `get_block_from_height` / the
-        `.bin` LMDB read instead of the lock-taking `get_block`. This dissolves the cross-persona
-        serialization *at the source*, with **no wallet jitter and no C++ lock surgery**, as a change
-        in **our own Rust RPC/FFI layer**. Preferred **iff** the lock-free path measures coupling-free
-        (§3 compares both paths).
+     1. **Serve the per-`P` read lock-free** — route the fetch through a **single-height**
+        `get_block_from_height` LMDB read instead of the lock-taking `get_block`, dissolving the
+        cross-persona serialization *at the source* with **no wallet jitter and no C++ lock surgery**,
+        in **our own Rust RPC/FFI layer**. But rung 1 is a **consistency-correctness question wearing a
+        privacy fix's clothes** — free *only* if the lock-free read is **consistency-equivalent to the
+        locked read under writer contention**; a scanner acting on a torn / reorg-straddling view is
+        worse than a slow scanner. Verified at source (`get_block_from_height` / `on_get_blocks_by_height`
+        / the LMDB txn path):
+        - **Single-block atomicity is LMDB's, not the lock's:** each `get_block_from_height` takes a
+          fresh fully-committed MVCC snapshot (`TXN_PREFIX_RDONLY` renew-then-reset per call), so no
+          single block read can tear or straddle a commit; `m_blockchain_lock` adds **nothing** to
+          single-block atomicity.
+        - **What the lock genuinely adds** is (a) a main+alt two-table lookup so a block migrating
+          between chains mid-reorg is never missed by both reads — but this compensates for
+          `on_get_block`'s *own* unlocked height→hash step (`blockchain.cpp:907`, no lock), which the
+          atomic height→block `.bin` read has no analogue for, so a **by-height** read does not need it;
+          and (b) cross-read snapshot coherence across a **multi-height** batch — which **neither path**
+          provides across the scanner's existing *three separate* RPC calls
+          (`get_block`+`get_transactions`+`get_o_indexes`), so the scanner does not rely on it.
+        - **Therefore, for a single-height per-`P` read the lock-free path is consistency-equivalent** —
+          the torn-view risk lives only in multi-height batches, which rung 1 avoids by construction
+          (one block per call); worst case under an *unbatched* reorg a lock-free reader sees a *valid,
+          whole, shorter chain* (a normal reorg the scanner already handles), never a torn block.
+
+        This is a source **argument**, not a proof: the harness must **confirm** it with a
+        writer-contention diff (§3 M-consistency), and rung 1 must not silently mint a **substitute**
+        shared-resource channel one layer up (shared thread-pool queuing; the per-thread read txn is
+        already per-call-fresh) — also measured (§3 M-substitute). If the diff diverges, the lock was
+        doing consistency work the bare read drops, and the honest fix is rung 2 or a *bigger* rung 1
+        (a consistency-preserving lock-free read built properly in Rust, not "just call `.bin`").
      2. **Wallet-side decorrelation** — a fetch-scheduling-jitter / randomized-order duty scoped to the
         **remote `PBlockSource` only** (`DaemonBlockSource`/`local` neither needs it, since enumeration
         already dwarfs timing there, nor gets it; it belongs at the `PBlockSource` layer, not the
@@ -177,8 +207,9 @@ disposition — the success metric is *what leaks*, never blocks/sec:
         residual coupling survives the lock-free path.
      3. **C++ lock surgery** on `m_blockchain_lock` — last resort, deferred to the daemon→Rust port.
 
-     **Default to rung 1 if the lock-free path is coupling-free; else rung 2.** Rung 1 exists *because
-     the RPC server is ours.*
+     **Default to rung 1 iff the lock-free path is *both* lower-coupling (§3 timing delta) *and*
+     consistency-equivalent under the writer-contention diff (§3 M-consistency); else rung 2.** Rung 1
+     exists *because the RPC server is ours.*
 
 **Why measure *now*, not when the fetch path exists (the sharp reason):** the measurement's *result
 changes the wallet-side design*. If #2's coupling magnitude survives the remote-threat evaluation
@@ -217,11 +248,30 @@ concurrent `get_block`-by-height fetchers from `127.0.0.1`.
     **remote-shared-daemon adversary**: does the coupling survive a Tor circuit's own jitter (compare
     the magnitude distribution against known Tor per-circuit latency-jitter)? *Output:* the DQ-T2.5 #2
     fork — below-floor ⇒ liveness/UX defer; at-or-above-floor ⇒ **rung 1** (serve lock-free) if the
-    lock-free path measured coupling-free, else **rung 2** (remote-`PBlockSource` decorrelation). The
-    `local` posture is **not** evaluated here: its timing is subsumed by enumeration (#1).
+    lock-free path measured coupling-free **and** consistency-equivalent (below), else **rung 2**
+    (remote-`PBlockSource` decorrelation). The `local` posture is **not** evaluated here: its timing is
+    subsumed by enumeration (#1).
+- **M-consistency (the correctness gate on rung 1 — measures what makes rung 1 *safe*, not fast).**
+  A latency-only harness would greenlight rung 1 without ever testing the thing that makes it safe, so
+  the harness diffs **outputs**, not just timings: drive N per-`P` **single-height** reads on **both**
+  paths *while the daemon is accepting blocks / doing a small reorg mid-fetch* (`generateblocks` +
+  `pop_blocks` on the regtest chain), and **diff the two paths' returned blocks for the same heights**.
+  *Output:* agreement under writer contention ⇒ rung 1 genuinely free (the timing question collapses to
+  "serve lock-free, done"); divergence ⇒ the lock is doing consistency work the bare read drops ⇒ rung
+  2 or a consistency-preserving Rust-side read. The source argument in DQ-T2.5 #2 (single-block reads
+  are LMDB-atomic; the lock's multi-read guarantees aren't ones the by-height scanner relies on)
+  predicts agreement — this measurement is what turns that prediction into a decision.
+- **M-substitute (the boundary-shift check).** Rung 1 moves the per-`P` isolation boundary (SP-T1's
+  proxy-isolation property), so the lock-free path is measured under **N-persona** contention — not
+  just single-stream — so a *new* shared-resource coupling one layer up (a shared MVCC txn reused
+  across personas, a shared read buffer, a shared thread pool with observable queuing) cannot hide
+  behind the dissolved `m_blockchain_lock`. *Output:* the lock-free path's own coupling-magnitude
+  distribution under N personas; dissolving the lock must not silently substitute a fresh timing
+  channel.
 
-Both are read-only against a throwaway regtest chain, driving only existing RPC routes; neither
-modifies the daemon.
+M-enum / M-timing / M-substitute are read-only; **M-consistency** additionally drives the daemon's own
+block-accept / `pop_blocks` on the throwaway regtest chain (the writer contention it must measure).
+None modify the daemon *binary* — all drive existing RPC routes.
 
 ---
 
@@ -240,10 +290,11 @@ Per the ~10-commit-as-CI-cost-guideline, one reviewable PR, sliced by commit:
    `DaemonBlockSource`/`local`.
 5. **Posture→impl selector** at the scan-loop wiring (DQ-T2.3) — local→direct, remote→`PBlockSource`,
    conflation unrepresentable.
-6. **Daemon disposition** — record M-enum / M-timing results (both read paths) + the chosen rung. If
-   M-timing selects **rung 1** (serve per-`P` reads lock-free), that is an **in-scope Rust RPC/FFI
-   change** here, not a deferral; rungs 2/3 carry rule-21 reopens (FOLLOWUPS / the daemon→Rust-port
-   note).
+6. **Daemon disposition** — record M-enum / M-timing / **M-consistency** / **M-substitute** results
+   (both read paths) + the chosen rung. Rung 1 is gated on the M-consistency diff **agreeing** *and*
+   M-substitute showing **no** new channel; if selected (serve per-`P` reads via a **single-height**
+   lock-free read), that is an **in-scope Rust RPC/FFI change** here, not a deferral; rungs 2/3 carry
+   rule-21 reopens (FOLLOWUPS / the daemon→Rust-port note).
 
 The `Ok(None)` provable-absence property (withheld-body robustness) is **out of scope for SP-T2** —
 it is header-chain-anchoring work (a later 2d-2 robustness slice); `PBlockSource` inherits
