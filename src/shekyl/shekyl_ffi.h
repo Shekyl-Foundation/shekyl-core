@@ -2055,6 +2055,15 @@ int32_t shekyl_pow_randomx_v2_hash(
 int32_t shekyl_pow_randomx_v2_set_canonical(
     const uint8_t (*seedhash)[32]);
 
+/// RandomX seed-epoch schedule: the height whose block hash seeds the
+/// cache used to verify `height` (2048-block epochs, 64-block lag;
+/// SEEDHASH_EPOCH_* env overrides are the regtest lever). Pure
+/// arithmetic; replaces the retired crypto::rx_seedheight.
+uint64_t shekyl_pow_randomx_v2_seedheight(uint64_t height);
+/// seedheight(height + lag) — the upcoming seed height (the second
+/// output of the retired crypto::rx_seedheights).
+uint64_t shekyl_pow_randomx_v2_next_seedheight(uint64_t height);
+
 } // extern "C"
 
 /// `shekyl_difficulty_lwma1_next` returned successfully and

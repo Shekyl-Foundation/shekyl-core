@@ -268,6 +268,25 @@ pub unsafe extern "C" fn shekyl_pow_randomx_v2_set_canonical(seedhash: *const [u
     SHEKYL_POW_RANDOMX_V2_OK
 }
 
+/// The height whose block hash seeds the cache used to verify `height`
+/// — the RandomX seed-epoch schedule (2048-block epochs, 64-block lag;
+/// `SEEDHASH_EPOCH_*` env overrides are the regtest lever, read once).
+///
+/// Pure arithmetic ported from the retired C `rx_seedheight`
+/// (`rx-slow-hash.c`); no pointers, no failure modes.
+#[no_mangle]
+pub extern "C" fn shekyl_pow_randomx_v2_seedheight(height: u64) -> u64 {
+    shekyl_pow_randomx::seedheight(height)
+}
+
+/// `seedheight(height + lag)` — the upcoming seed height, for the RPC
+/// next-seed pre-announce path (the second output of the retired C
+/// `rx_seedheights`).
+#[no_mangle]
+pub extern "C" fn shekyl_pow_randomx_v2_next_seedheight(height: u64) -> u64 {
+    shekyl_pow_randomx::seedheights(height).1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,5 +456,15 @@ mod tests {
         let prepared = PreparedCache::derive(Seedhash::from_bytes(seed_bytes));
         let expected = compute_hash(&prepared, blob);
         assert_eq!(out, expected);
+    }
+
+    /// The seed-epoch exports round the schedule through the C ABI
+    /// unchanged (mainnet pins; the schedule itself is KAT'd in
+    /// `shekyl_pow_randomx::seed_epoch`).
+    #[test]
+    fn seedheight_exports_match_schedule() {
+        assert_eq!(shekyl_pow_randomx_v2_seedheight(2112), 0);
+        assert_eq!(shekyl_pow_randomx_v2_seedheight(2113), 2048);
+        assert_eq!(shekyl_pow_randomx_v2_next_seedheight(2100), 2048);
     }
 }

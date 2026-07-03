@@ -1670,8 +1670,8 @@ namespace cryptonote
       return false;
     }
 
-    uint64_t next_height;
-    crypto::rx_seedheights(height, &seed_height, &next_height);
+    const uint64_t next_height = shekyl_pow_randomx_v2_next_seedheight(height);
+    seed_height = shekyl_pow_randomx_v2_seedheight(height);
     if (next_height != seed_height)
       next_seed_hash = m_core.get_block_id_by_height(next_height);
     else

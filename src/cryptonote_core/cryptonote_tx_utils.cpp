@@ -886,7 +886,7 @@ namespace cryptonote
 
     if (pbc != NULL)
     {
-      const uint64_t seed_height = rx_seedheight(height);
+      const uint64_t seed_height = shekyl_pow_randomx_v2_seedheight(height);
       resolved_seed = seed_hash ? *seed_hash : pbc->get_pending_block_id_by_height(seed_height);
       resolved_seed_hash = &resolved_seed;
     }
