@@ -195,6 +195,12 @@ pub(crate) mod diagnostics;
 // C4 engine-vs-sim `EconomicsEngine` differential (§5.4 / §7.1); replays
 // the sim-recorded `RecordedChainFixture` through the real
 // `LocalEconomics` path. Test-substrate only.
+/// SP-T2 daemon-observability measurement harness (Round-0): quantifies the
+/// enumeration and cross-persona timing residuals of serving N per-`P` block
+/// fetches from one daemon, against a live `shekyld --regtest`. `#[ignore]`d,
+/// requires `SHEKYLD_BIN`. See `docs/design/ARCHIVAL_BOND_2D2_SP_T2_FETCH.md`.
+#[cfg(test)]
+mod daemon_observability;
 #[cfg(test)]
 mod economics_differential;
 pub(crate) mod economics_snapshot;
