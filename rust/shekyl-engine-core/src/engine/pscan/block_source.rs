@@ -29,10 +29,13 @@
 
 use std::future::Future;
 
-use shekyl_rpc_client::RpcError;
+use shekyl_p_transport::PTorClient;
+use shekyl_rpc_client::{Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
 use shekyl_types::BlockHeight;
 
+use crate::engine::block_fetch::default_fetch_scannable_block;
+use crate::engine::prpc::PRpc;
 use crate::engine::traits::DaemonEngine;
 
 /// Error from a [`BlockSource`].
@@ -103,6 +106,19 @@ pub(crate) trait BlockSource {
     /// tip robustness is 2d-2, not a wallet-side PoW/root-anchoring job). The 2d-1
     /// [`DaemonBlockSource`] surfaces a missing block as `Err`: it cannot *prove*
     /// absence, so it never fabricates a `None`.
+    ///
+    /// **P-SH — single-height-per-call is a *correctness* precondition, not an
+    /// ergonomics choice** (`ARCHIVAL_BOND_2D2_SP_T2_FETCH.md` DQ-T2.5). This
+    /// method takes **one** `height`, and that is load-bearing: a single-height
+    /// read is atomic (LMDB/MVCC — no adversary needed), whereas a *multi*-height
+    /// batch can straddle a reorg *between* its per-height reads (finding-b),
+    /// returning an internally-inconsistent set the scanner would splice. The
+    /// signature — one `height`, not a range/slice — makes that batch
+    /// **unrepresentable**: reintroducing a multi-height fetch is a visible
+    /// signature change here, and it reopens finding-b — it requires *either* a
+    /// single-`txn` batch read on the daemon side *or* the scanner's cross-height
+    /// coherence requirement established first. The type enforces; this note is
+    /// the reopen condition it carries.
     fn block_at(
         &self,
         height: BlockHeight,
@@ -163,6 +179,64 @@ impl<D: DaemonEngine> BlockSource for DaemonBlockSource<D> {
     }
 }
 
+/// The 2d-2 **remote-posture** [`BlockSource`]: fetches whole blocks over `P`'s
+/// **own** Tor circuit via [`PRpc`] (a plain fetch shim — the Round-0
+/// disposition attached no decorrelation duty, DQ-T2.5).
+///
+/// Constructed **only** from a [`PTorClient`] + the daemon base URL (DQ-T2.3,
+/// §416): there is no principal-`DaemonClient` path and no `Default`, so a remote
+/// source **cannot** be built over the shared principal connection — the posture
+/// conflation the firewall forbids (`P` routing its fetch over a shared circuit)
+/// is unrepresentable on the constructor, not merely discouraged.
+//
+// `allow(dead_code)`: transient — the non-test consumer is the posture selector
+// at the SP-5 scan-loop wiring (a later slice). The proving test ships with the
+// enabler; it is not deferred.
+#[allow(dead_code)]
+pub(crate) struct PBlockSource {
+    rpc: PRpc,
+}
+
+#[allow(dead_code)]
+impl PBlockSource {
+    /// Build a remote-posture source dialing `base_url` over `client`'s circuit.
+    pub(crate) fn new(client: PTorClient, base_url: String) -> Self {
+        Self {
+            rpc: PRpc::new(client, base_url),
+        }
+    }
+}
+
+impl BlockSource for PBlockSource {
+    async fn tip_height(&self) -> Result<BlockHeight, BlockSourceError> {
+        // `PRpc: Rpc`, so `get_height` is the inherited tip query — over `P`'s
+        // circuit, same claimed-not-trusted semantics as any single source.
+        let height = self.rpc.get_height().await?;
+        let raw = u64::try_from(height)
+            .map_err(|_| BlockSourceError::Source(format!("chain height {height} exceeds u64")))?;
+        Ok(BlockHeight::from_raw(raw))
+    }
+
+    async fn block_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<Option<ScannableBlock>, BlockSourceError> {
+        let number = usize::try_from(height.to_raw()).map_err(|_| {
+            BlockSourceError::Source(format!(
+                "height {} exceeds the platform's usize",
+                height.to_raw()
+            ))
+        })?;
+        // P-SH: exactly one height per call — `default_fetch_scannable_block`
+        // issues a single `get_block` (+ its txs) for `number`. Like
+        // `DaemonBlockSource`, a missing block surfaces as `Err` (this source
+        // cannot *prove* absence; `Ok(None)` is the withheld-body-robustness
+        // slice, out of scope for SP-T2).
+        let block = default_fetch_scannable_block(&self.rpc, number).await?;
+        Ok(Some(block))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +271,33 @@ mod tests {
             .expect("block_at transport")
             .expect("block 1 present");
         assert_eq!(fetched.block.number(), Some(1));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remote_source_over_a_dead_proxy_errors_without_leaking_the_username() {
+        use shekyl_p_transport::TorSocksEndpoint;
+        use shekyl_types::PCanonicalId;
+
+        // No Tor: a closed SOCKS port (`:1`) refuses immediately, so the remote
+        // source's transport error path is exercised fast. `PBlockSource::new`
+        // takes only a `PTorClient` — there is no principal path to construct it
+        // over a shared connection (DQ-T2.3). The failure is a `Source` error and
+        // must not render the SOCKS username (invariant (a)).
+        let client = PTorClient::for_persona(
+            &PCanonicalId::from_bytes([9u8; 32]),
+            &TorSocksEndpoint::loopback(1),
+        )
+        .expect("proxy config is well-formed");
+        let username = client.username().as_str().to_owned();
+        let source = PBlockSource::new(client, "http://127.0.0.1:18081".to_string());
+
+        let err = source
+            .tip_height()
+            .await
+            .expect_err("a dead SOCKS proxy must fail the tip query");
+        assert!(
+            !format!("{err}").contains(&username),
+            "invariant (a): a block-source error must never render the SOCKS username"
+        );
     }
 }

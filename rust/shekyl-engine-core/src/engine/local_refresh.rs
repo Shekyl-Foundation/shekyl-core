@@ -640,19 +640,64 @@ impl RefreshEngine for LocalRefresh {
                 // Reorg detection (only when no reorg recorded yet
                 // this call; after a fork is decided, subsequent
                 // heights are the new chain and re-checking would
-                // false-trigger).
+                // false-trigger). BOUND: this is one-reorg-per-attempt —
+                // the `reorg_rewind.is_none()` gate disables detection
+                // after the first fork, so a *second* reorg landing
+                // between two fetches in the post-rewind re-scan is not
+                // caught this attempt (the merge validates set/range/
+                // dedup, not linkage). It self-heals on the next refresh:
+                // the between-attempts check rewinds the torn region. The
+                // sequence-coherence keystone covers the first reorg; a
+                // multi-reorg-per-attempt extension is a follow-up (needs
+                // its own two-reorg test).
+                // The expected parent of `h` is the
+                // hash of `h - 1` from wherever it was most recently
+                // seen: the block fetched earlier *in this attempt*
+                // (a reorg can land between two consecutive
+                // single-height fetches — the intra-attempt straddle;
+                // each fetch is atomic, but atomic reads do not make
+                // the *sequence* coherent), else the persisted reorg
+                // window (a reorg that landed between attempts), else
+                // the explicitly fetched boundary parent of a floored
+                // start. The running-tail and window sources are
+                // disjoint by construction (tail heights are
+                // > `synced_height`, the window's are ≤ it).
                 if reorg_rewind.is_none() && h > 1 {
-                    if let Some(stored_parent) = snapshot.block_hash_at(h - 1) {
-                        if stored_parent != scannable.block.header.previous {
+                    let expected_parent = match block_hashes.last() {
+                        Some(&(prev_h, prev_hash)) if prev_h + 1 == h => Some(prev_hash),
+                        _ => snapshot.block_hash_at(h - 1).or(if h == effective_start {
+                            effective_parent_hash
+                        } else {
+                            None
+                        }),
+                    };
+                    if let Some(expected_parent) = expected_parent {
+                        if expected_parent != scannable.block.header.previous {
                             warn!(
                                 height = h,
                                 "LocalRefresh: chain reorg detected at parent of {h}, walking fork point",
                             );
 
+                            // Anchor the fork-walk at the persisted-window
+                            // top (`synced_height`), not `h - 1`. An
+                            // intra-attempt straddle's fork can sit *above*
+                            // the window, where `find_fork_point` (which
+                            // walks only the window) would return
+                            // `from_height + 1` immediately and splice
+                            // *around* the fork instead of behind it.
+                            // Anchoring at `synced_height` makes the
+                            // conservative answer the attempt boundary:
+                            // refetch the attempt range rather than keep
+                            // possibly-stale intra-attempt blocks. (`h`
+                            // only advances from `synced_height + 1` while
+                            // `reorg_rewind.is_none()`, so `h - 1 >=
+                            // synced_height` always — the anchor is
+                            // unconditionally `synced_height`, so this is
+                            // written directly rather than as a `min`.)
                             let fork_height = find_fork_point(
                                 daemon,
                                 &snapshot,
-                                h - 1,
+                                snapshot.synced_height,
                                 &cancel,
                                 &mut emit_state,
                                 diagnostics,
@@ -1434,6 +1479,187 @@ mod producer_property_tests {
             chain.push(block);
         }
         chain
+    }
+
+    /// A divergent continuation of `base`: internally-linked blocks for
+    /// heights `fork_h..len`, built on `base[fork_h - 1]` with a
+    /// different nonce so every hash diverges from `base`'s at the same
+    /// height. Feed to [`TestDaemon::replace_chain_from`] /
+    /// `replace_chain_after_fetch` to model a competing chain.
+    fn divergent_tail(base: &[ScannableBlock], fork_h: u64, len: u64) -> Vec<ScannableBlock> {
+        let mut parent = base[usize::try_from(fork_h - 1).expect("test fork height fits in usize")]
+            .block
+            .hash();
+        let mut tail = Vec::new();
+        for h in fork_h..len {
+            let mut block = make_synthetic_block(h, parent);
+            block.block.header.nonce = 1; // diverge from the canonical chain
+            parent = block.block.hash();
+            tail.push(block);
+        }
+        tail
+    }
+
+    // ── Intra-attempt straddle (SP-T2 sequence-coherence keystone) ──
+
+    /// A reorg landing *between* two consecutive single-height fetches
+    /// within one attempt is detected by the running prev-hash linkage
+    /// check and rewound — never silently spliced. Each fetch is
+    /// atomic; this is the sequence-coherence half of the pair (P-SH
+    /// makes reads atomic; this check makes the *sequence* coherent).
+    ///
+    /// Setup: wallet synced to 4 on chain A (tip 12). The attempt scans
+    /// 5..12; after the daemon serves the fetch at height 7 it reorgs
+    /// to chain B (diverging at height 6), so the fetch at 8 returns a
+    /// B-block whose `previous` is B7's hash — not the A7 the attempt
+    /// just fetched. Pre-fix, the check consulted only the persisted
+    /// window (≤ synced 4) and skipped every intra-attempt pair,
+    /// splicing A6/A7 against B8+ silently.
+    #[tokio::test(start_paused = true)]
+    async fn intra_attempt_reorg_is_detected_and_rewound() {
+        const SYNCED: u64 = 4;
+        const TIP: u64 = 12;
+        const FORK: u64 = 6; // first divergent height (above the persisted window)
+        const TRIGGER: u64 = 7; // daemon reorgs right after serving this fetch
+
+        let blob = rederive_account(
+            &PROPERTY_TEST_MASTER_SEED,
+            DerivationNetwork::Fakechain,
+            SeedFormat::Raw32,
+        )
+        .expect("rederive_account against fakechain raw32 seed");
+        let vm = ViewMaterial::try_from_keys(&blob)
+            .expect("ViewMaterial::try_from_keys against deterministic test blob");
+        let refresh = LocalRefresh::new(vm, 0);
+
+        let chain_a = linear_chain(TIP);
+        let tail_b = divergent_tail(&chain_a, FORK, TIP);
+        let anchor = chain_a[usize::try_from(SYNCED).unwrap()].block.hash();
+
+        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain_a.clone());
+        daemon.replace_chain_after_fetch(TRIGGER, FORK, tail_b.clone());
+
+        let snapshot = snapshot_at_anchor(SYNCED, anchor);
+        let sink = AssertionSink::new();
+        let cancel = CancellationToken::new();
+        let (progress_tx, _progress_rx) = fresh_progress_channel();
+
+        let result = refresh
+            .produce_scan_result(
+                snapshot,
+                &daemon,
+                RefreshOptions::default(),
+                cancel,
+                progress_tx,
+                &sink,
+            )
+            .await
+            .expect("straddled scan completes via rewind");
+
+        // Detected and rewound to the attempt boundary — the
+        // conservative fork point when the true fork (6) sits above
+        // the persisted window (≤ 4), where `find_fork_point` cannot
+        // locate it precisely.
+        assert_eq!(
+            result.reorg_rewind.map(|r| r.fork_height),
+            Some(SYNCED + 1),
+            "intra-attempt straddle must be detected and rewound"
+        );
+
+        // The final sequence is the post-reorg chain, fully linked: A
+        // below the fork, B at and above it. No old-chain block above
+        // the fork survives — the pre-fix behavior (A6/A7 spliced
+        // against B8..B11) is exactly what this rules out.
+        let expected: Vec<(u64, [u8; 32])> = (SYNCED + 1..FORK)
+            .map(|h| (h, chain_a[usize::try_from(h).unwrap()].block.hash()))
+            .chain((FORK..TIP).map(|h| {
+                let idx = usize::try_from(h - FORK).unwrap();
+                (h, tail_b[idx].block.hash())
+            }))
+            .collect();
+        assert_eq!(
+            result.block_hashes, expected,
+            "scan result must carry the post-reorg chain only, never a torn splice"
+        );
+    }
+
+    /// The seam case: an intra-attempt reorg whose fork sits at **exactly**
+    /// `synced_height` — the boundary between the two expected-parent
+    /// lookups (running tail owns heights > `synced_height`, the persisted
+    /// window owns heights ≤ it). This is the one height where "disjoint by
+    /// construction" is asserted rather than obvious; an off-by-one at the
+    /// seam would splice a fork landing precisely on the boundary.
+    ///
+    /// Setup: wallet synced to 4 on chain A (window anchor = A4); the daemon
+    /// reorgs from height **4** (replacing the window-top block itself) right
+    /// after serving the fetch at 6. The fetch at 7 returns B7, whose
+    /// `previous` (B6's hash) mismatches the running tail's A6 → the walk
+    /// enters the persisted window at its top (4), finds the stored A4 also
+    /// replaced (daemon serves B4), continues below the window (no stored
+    /// hash at 3) and resolves the conservative fork at 4 — rewinding
+    /// *through* the seam, refetching the replaced window-top block.
+    #[tokio::test(start_paused = true)]
+    async fn intra_attempt_reorg_at_exact_synced_height_rewinds_through_seam() {
+        const SYNCED: u64 = 4;
+        const TIP: u64 = 12;
+        const FORK: u64 = SYNCED; // fork at exactly the persisted-window top
+        const TRIGGER: u64 = 6; // daemon reorgs right after serving this fetch
+
+        let blob = rederive_account(
+            &PROPERTY_TEST_MASTER_SEED,
+            DerivationNetwork::Fakechain,
+            SeedFormat::Raw32,
+        )
+        .expect("rederive_account against fakechain raw32 seed");
+        let vm = ViewMaterial::try_from_keys(&blob)
+            .expect("ViewMaterial::try_from_keys against deterministic test blob");
+        let refresh = LocalRefresh::new(vm, 0);
+
+        let chain_a = linear_chain(TIP);
+        let tail_b = divergent_tail(&chain_a, FORK, TIP);
+        let anchor = chain_a[usize::try_from(SYNCED).unwrap()].block.hash();
+
+        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain_a);
+        daemon.replace_chain_after_fetch(TRIGGER, FORK, tail_b.clone());
+
+        let snapshot = snapshot_at_anchor(SYNCED, anchor);
+        let sink = AssertionSink::new();
+        let cancel = CancellationToken::new();
+        let (progress_tx, _progress_rx) = fresh_progress_channel();
+
+        let result = refresh
+            .produce_scan_result(
+                snapshot,
+                &daemon,
+                RefreshOptions::default(),
+                cancel,
+                progress_tx,
+                &sink,
+            )
+            .await
+            .expect("seam-straddled scan completes via rewind");
+
+        // The rewind lands AT the fork (the replaced window-top height), not
+        // one above it — the seam is rewound through, not spliced around.
+        assert_eq!(
+            result.reorg_rewind.map(|r| r.fork_height),
+            Some(FORK),
+            "a fork at exactly synced_height must rewind to it, not splice"
+        );
+
+        // Every height from the fork up carries the B-chain hash — including
+        // height 4 itself (the window-top block the reorg replaced) and
+        // heights 5/6 (fetched as A before the swap, purged, refetched as B).
+        let expected: Vec<(u64, [u8; 32])> = (FORK..TIP)
+            .map(|h| {
+                let idx = usize::try_from(h - FORK).unwrap();
+                (h, tail_b[idx].block.hash())
+            })
+            .collect();
+        assert_eq!(
+            result.block_hashes, expected,
+            "the seam height must carry the post-reorg hash, never the stale window-top"
+        );
     }
 
     /// Fresh empty [`LedgerSnapshot`] anchored at `synced_height = 0`

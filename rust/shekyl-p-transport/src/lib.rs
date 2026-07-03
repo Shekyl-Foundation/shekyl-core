@@ -34,7 +34,22 @@
 //! bundled-Tor harness; this crate is buildable and testable without a running Tor
 //! — constructing a [`PTorClient`] configures the SOCKS proxy but does not dial.
 
-use std::net::{Ipv4Addr, SocketAddr};
+// The per-P circuit isolation is worthless if ureq lacks its SOCKS connector: it
+// then falls OPEN to a proxy-less TCP dial, deanonymizing every persona with no
+// runtime signal. Feature unification means a runtime/CI test in one feature
+// config cannot prove production has the feature — so "SOCKS present" is enforced
+// at COMPILE time here, not hoped for. `tor-socks` is default-on and forwards
+// `ureq/socks-proxy` (see Cargo.toml); its absence fails the build.
+#[cfg(not(feature = "tor-socks"))]
+compile_error!(
+    "shekyl-p-transport requires the `tor-socks` feature (forwards ureq/socks-proxy). \
+     Without ureq's SOCKS connector, every per-P request dials the target DIRECTLY, \
+     bypassing its Tor circuit — a deanonymization leak. This feature is default-on and \
+     load-bearing; do not disable it."
+);
+
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::time::Duration;
 
 use sha3::digest::core_api::CoreWrapper;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
@@ -55,6 +70,32 @@ const SOCKS_USER_DIGEST_LEN: usize = 32;
 /// username, so the password is a constant whose only job is to select SOCKS5
 /// user/pass auth so the username is actually sent.
 const SOCKS_PASSWORD: &str = "shekyl-p";
+
+/// Per-`P` request timeouts (§2b, the blocking-pool axis). A `spawn_blocking`
+/// task in a synchronous `ureq` call is **not** a cancellation point: on shutdown
+/// an in-flight fetch drains to completion or its timeout, so a bounded timeout is
+/// what keeps a stalled fetch from pinning a tokio blocking-pool thread.
+/// `GLOBAL_TIMEOUT` is the whole-call cap (dial + send + response read).
+///
+/// **Caveat on `CONNECT_TIMEOUT`:** ureq's SOCKS connector runs the handshake in a
+/// `thread::scope` that *joins* its worker on exit, so a stalled SOCKS read is not
+/// actually interrupted by `timeout_connect`. The real backstop for a half-built
+/// circuit is **Tor's own `SocksTimeout`** (~120 s), with `GLOBAL_TIMEOUT`
+/// bounding the rest — `CONNECT_TIMEOUT` is a hint, not a hard guarantee on the
+/// circuit-build phase.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const GLOBAL_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Maximum per-request response body size. ureq's default is 10 MiB — *below* the
+/// wallet's own accepted maximum (a `get_block` blob is up to `2×MAX_BLOCK_BLOB_SIZE`
+/// hex ≈ 66 MiB, and a `get_transactions` batch is up to `TXS_PER_REQUEST` pruned
+/// txs), so the default would reject legitimate large blocks the local posture
+/// (unbounded `read_to_end`) syncs fine. This cap sits above the largest legitimate
+/// daemon response while still bounding a runaway/malicious (posture ③) response —
+/// the reference `SimpleRequestRpc` reads unbounded because it dials only the
+/// trusted local daemon; the per-`P` path may dial an untrusted node, so it keeps a
+/// (generous) explicit bound rather than ureq's too-small default.
+const MAX_RESPONSE_BODY_SIZE: u64 = 256 * 1024 * 1024;
 
 /// A per-`P` SOCKS username — the Tor `IsolateSOCKSAuth` isolation key.
 ///
@@ -137,7 +178,7 @@ impl TorSocksEndpoint {
     }
 }
 
-/// Failure constructing a [`PTorClient`].
+/// Failure constructing or using a [`PTorClient`].
 #[derive(Debug)]
 pub enum PTransportError {
     /// The SOCKS proxy could not be configured for this endpoint. Carries the
@@ -145,6 +186,32 @@ pub enum PTransportError {
     /// invariant (a) is that the username never reaches a log, including via an
     /// error message.
     Proxy { endpoint: SocketAddr },
+    /// A per-`P` request ([`PTorClient::blocking_post`]) failed. Carries a
+    /// **username-free** category only (invariant (a)): the raw `ureq` error is
+    /// deliberately dropped because it can echo the proxy URI, which embeds the
+    /// SOCKS username.
+    Request(RequestErrorKind),
+}
+
+/// Coarse, username-free classification of a per-`P` request failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestErrorKind {
+    /// Failed below HTTP — connect / proxy / timeout / IO. Retry-eligible.
+    Transport,
+    /// The daemon returned a non-2xx HTTP status (carried).
+    Http(u16),
+    /// The response was received but its body could not be read.
+    Read,
+}
+
+impl core::fmt::Display for RequestErrorKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Transport => write!(f, "transport failure"),
+            Self::Http(status) => write!(f, "HTTP status {status}"),
+            Self::Read => write!(f, "unreadable response body"),
+        }
+    }
 }
 
 impl core::fmt::Display for PTransportError {
@@ -153,6 +220,7 @@ impl core::fmt::Display for PTransportError {
             Self::Proxy { endpoint } => {
                 write!(f, "per-P SOCKS proxy configuration failed for {endpoint}")
             }
+            Self::Request(kind) => write!(f, "per-P request failed: {kind}"),
         }
     }
 }
@@ -166,6 +234,7 @@ impl std::error::Error for PTransportError {}
 /// `PTorClient` *always* carries a non-empty, persona-derived username (invariants
 /// (b)/(c)): "`P` shares the principal's circuit" is unrepresentable here, the
 /// write-/read-side analogue of SP-0's no-selective-fetch shape.
+#[derive(Clone)]
 pub struct PTorClient {
     agent: ureq::Agent,
     username: SocksUsername,
@@ -182,20 +251,58 @@ impl PTorClient {
         socks: &TorSocksEndpoint,
     ) -> Result<Self, PTransportError> {
         let username = derive_socks_user(id);
-        // `SocketAddr`'s Display brackets IPv6 (`[::1]:9050`), so the URI is always
-        // well-formed. The ureq error is deliberately discarded: it would echo the
-        // proxy URI, which embeds the username (invariant (a)).
-        let proxy_uri = format!(
-            "socks5://{}:{}@{}",
-            username.as_str(),
-            SOCKS_PASSWORD,
-            socks.addr
-        );
-        let proxy = ureq::Proxy::new(&proxy_uri).map_err(|_| PTransportError::Proxy {
-            endpoint: socks.addr,
-        })?;
+        // **SOCKS5h, via the typed builder with an explicit `resolve_target(false)`
+        // — not a `socks5://` scheme string.** The persona's target hostname must
+        // be resolved by the proxy (Tor), never locally: a client-side resolve
+        // leaks the target to the OS resolver (a cross-persona correlation point
+        // *above* the SOCKS layer) and breaks `.onion` outright. Two traps this
+        // construction closes, both of which bit the original `socks5://` code:
+        //   1. A *scheme string* is stringly-typed — `socks5` (resolve-locally)
+        //      vs `socks5h` (proxy-resolves) is a one-char silent difference, and
+        //      ureq derives resolve-locality from the scheme's default (`socks5` ⇒
+        //      true). The `ProxyProtocol` enum makes the wrong choice a compile
+        //      error, and `.resolve_target(false)` pins the flag independent of the
+        //      scheme's (drifting — ureq's own doc contradicts its code) default.
+        //   2. ureq's builder takes host/port separately and does not bracket IPv6
+        //      in its internal URI, so the IPv6 host is bracketed here (the
+        //      `SocketAddr` Display did this for the string form).
+        // Verified sufficient: with `resolve_target(false)`, ureq's `connect()`
+        // takes the `resolver.empty()` branch (no target DNS) and hands
+        // `uri.host_port()` — the name — to the SOCKS proxy (ureq `run.rs`/`socks.rs`).
+        // The ureq error is discarded: it would echo the URI, which embeds the
+        // username (invariant (a)).
+        let host = match socks.addr.ip() {
+            IpAddr::V6(v6) => format!("[{v6}]"),
+            IpAddr::V4(v4) => v4.to_string(),
+        };
+        let proxy = ureq::Proxy::builder(ureq::ProxyProtocol::Socks5h)
+            .host(&host)
+            .port(socks.addr.port())
+            .username(username.as_str())
+            .password(SOCKS_PASSWORD)
+            .resolve_target(false)
+            .build()
+            .map_err(|_| PTransportError::Proxy {
+                endpoint: socks.addr,
+            })?;
         let agent = ureq::Agent::config_builder()
             .proxy(Some(proxy))
+            // Bounded timeouts — this is the sole agent constructor, so the
+            // §2b blocking-pool guarantee is set here once and inherited by
+            // every per-`P` request (`blocking_post`).
+            .timeout_connect(Some(CONNECT_TIMEOUT))
+            .timeout_global(Some(GLOBAL_TIMEOUT))
+            // Return the response for any status so `blocking_post` reads the
+            // code itself (a non-2xx is a typed `Http(status)`, not an opaque
+            // transport error).
+            .http_status_as_error(false)
+            // No redirects. The daemon RPC is a fixed endpoint that never
+            // legitimately 3xx-redirects; ureq's default (10) would silently
+            // re-POST the request body to an attacker-chosen `Location` over
+            // `P`'s circuit (a compromised/③ or MITM'd daemon bouncing the query
+            // off the configured endpoint). `max_redirects(0)` surfaces a 3xx as
+            // `Http(3xx)` instead of following it.
+            .max_redirects(0)
             .build()
             .new_agent();
         Ok(Self { agent, username })
@@ -210,6 +317,50 @@ impl PTorClient {
     /// circuit-ID verification test. Do not log it (invariant (a)).
     pub fn username(&self) -> &SocksUsername {
         &self.username
+    }
+
+    /// Issue **one** synchronous `POST` over `P`'s circuit and return the
+    /// response body.
+    ///
+    /// This is the **only** place a per-`P` HTTP request is made: the agent —
+    /// constructed once in [`Self::for_persona`] with the SOCKS proxy + bounded
+    /// timeouts — is used here and nowhere else, so `ureq` stays confined to this
+    /// crate and a consumer cannot build or misuse an agent a different way (§2b
+    /// invariant 1: the safe construction is the only construction). Synchronous
+    /// by design — the async bridge (`spawn_blocking`) lives in the engine's
+    /// `PRpc`, keeping this a pure transport primitive.
+    ///
+    /// `content_type` is the request `Content-Type` (`application/json` for
+    /// JSON(-RPC) routes, `application/octet-stream` for `.bin`) — sent for
+    /// parity with the reference transport and daemon forward-compat, **not** as a
+    /// validation the daemon enforces (its axum handlers read the body via
+    /// `String`/`Bytes` extractors that ignore `Content-Type`). Errors carry a
+    /// **username-free** [`RequestErrorKind`] only (invariant (a)).
+    pub fn blocking_post(
+        &self,
+        url: &str,
+        content_type: &str,
+        body: &[u8],
+    ) -> Result<Vec<u8>, PTransportError> {
+        let response = self
+            .agent
+            .post(url)
+            .content_type(content_type)
+            .send(body)
+            .map_err(|_| PTransportError::Request(RequestErrorKind::Transport))?;
+        let status = response.status().as_u16();
+        if !(200..300).contains(&status) {
+            return Err(PTransportError::Request(RequestErrorKind::Http(status)));
+        }
+        // Explicit body cap: ureq's default (10 MiB) is below the wallet's own
+        // accepted block/tx-batch maximum, so it would reject legitimate large
+        // responses (`MAX_RESPONSE_BODY_SIZE`).
+        response
+            .into_body()
+            .into_with_config()
+            .limit(MAX_RESPONSE_BODY_SIZE)
+            .read_to_vec()
+            .map_err(|_| PTransportError::Request(RequestErrorKind::Read))
     }
 }
 
@@ -309,5 +460,50 @@ mod tests {
         assert_send_sync::<PTorClient>();
         assert_send_sync::<SocksUsername>();
         assert_send_sync::<PCanonicalId>();
+    }
+
+    #[test]
+    fn proxy_resolves_the_target_at_tor_never_locally() {
+        // The DNS-leak regression pin (Axis B). `resolve_target() == false` means
+        // ureq hands the persona's target *hostname* to the SOCKS proxy (Tor) and
+        // never resolves it via the OS resolver. The original `socks5://` string
+        // built a Socks5 proxy whose `resolve_target` defaults to *true* (resolve
+        // locally) — which this assertion catches: it fails against that code and
+        // passes only for the socks5h / `resolve_target(false)` construction.
+        // Asserted through the *real* `PTorClient` construction (the agent's live
+        // config), not a re-built proxy, so it pins the production path end-to-end.
+        let client = PTorClient::for_persona(&pid(5), &TorSocksEndpoint::loopback(9050))
+            .expect("proxy config is well-formed");
+        let proxy = client
+            .agent()
+            .config()
+            .proxy()
+            .expect("a per-P client always carries a SOCKS proxy");
+        assert!(
+            !proxy.resolve_target(),
+            "per-P transport must resolve the target at the proxy (Tor), never locally — \
+             a local resolve leaks the persona's target to the OS resolver and breaks .onion"
+        );
+    }
+
+    #[test]
+    fn blocking_post_maps_a_dead_proxy_to_a_username_free_transport_error() {
+        // Dial through a closed SOCKS port (`:1`): loopback refuses immediately,
+        // so the error path is exercised fast (no timeout wait). The failure must
+        // be the coarse, username-free `Transport` kind — and its rendering must
+        // not leak the SOCKS username (invariant (a)).
+        let client = PTorClient::for_persona(&pid(8), &TorSocksEndpoint::loopback(1))
+            .expect("proxy config is well-formed");
+        let err = client
+            .blocking_post("http://127.0.0.1:18081/json_rpc", "application/json", b"{}")
+            .expect_err("a dead SOCKS proxy must fail the request");
+        assert!(
+            matches!(err, PTransportError::Request(RequestErrorKind::Transport)),
+            "expected a Transport error, got {err:?}"
+        );
+        assert!(
+            !format!("{err}").contains(client.username().as_str()),
+            "invariant (a): a request error must never render the SOCKS username"
+        );
     }
 }

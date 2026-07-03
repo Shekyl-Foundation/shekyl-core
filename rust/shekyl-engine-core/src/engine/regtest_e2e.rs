@@ -51,7 +51,7 @@ fn serial_lock() -> Arc<Mutex<()>> {
 
 /// A live `shekyld --regtest` daemon spawned for one test, with an ephemeral
 /// data dir and RPC port. Killed and cleaned on drop.
-struct RegtestDaemon {
+pub(super) struct RegtestDaemon {
     child: Child,
     data_dir: PathBuf,
     rpc_port: u16,
@@ -68,7 +68,7 @@ struct GetInfoResp {
 
 /// `generateblocks` result fields we care about.
 #[derive(Deserialize, Debug)]
-struct GenerateBlocksResp {
+pub(super) struct GenerateBlocksResp {
     height: u64,
     #[serde(default)]
     blocks: Vec<String>,
@@ -96,7 +96,7 @@ impl RegtestDaemon {
     }
 
     /// Spawn the daemon and wait until its RPC answers `get_info`.
-    async fn start() -> RegtestDaemon {
+    pub(super) async fn start() -> RegtestDaemon {
         // Serialize across this test binary so no two in-process daemons race on
         // a port. Each instance uses a unique ephemeral port + temp datadir and
         // kills its own child (+ removes its datadir) on Drop, so no global daemon
@@ -189,7 +189,7 @@ impl RegtestDaemon {
         );
     }
 
-    async fn height(&self) -> u64 {
+    pub(super) async fn height(&self) -> u64 {
         self.rpc
             .json_rpc_call::<GetInfoResp>("get_info", None)
             .await
@@ -197,8 +197,15 @@ impl RegtestDaemon {
             .height
     }
 
+    /// The ephemeral RPC port the daemon bound. Observability harnesses open
+    /// their own independent per-persona clients against it (each a distinct
+    /// TCP connection), rather than sharing this instance's `rpc` client.
+    pub(super) fn rpc_port(&self) -> u16 {
+        self.rpc_port
+    }
+
     /// Mine `n` blocks to `address` (FAKECHAIN-gated daemon RPC).
-    async fn generate_blocks(&self, n: u64, address: &str) -> GenerateBlocksResp {
+    pub(super) async fn generate_blocks(&self, n: u64, address: &str) -> GenerateBlocksResp {
         self.rpc
             .json_rpc_call::<GenerateBlocksResp>(
                 "generateblocks",
@@ -216,7 +223,7 @@ impl RegtestDaemon {
     /// route — not `json_rpc`). Exercises the daemon's `pop_block`
     /// deferred-insertion tree rollback (popping `H` removes the leaves of
     /// outputs created at `H − maturity`).
-    async fn pop_blocks(&self, n: u64) {
+    pub(super) async fn pop_blocks(&self, n: u64) {
         self.rpc
             .rpc_call::<_, serde_json::Value>("pop_blocks", Some(json!({ "nblocks": n })))
             .await
