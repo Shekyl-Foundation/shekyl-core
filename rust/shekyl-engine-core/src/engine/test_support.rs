@@ -216,15 +216,19 @@ struct State {
     /// error. Models persistent-failure scenarios distinct from
     /// transient retry-and-recover ones.
     malformed_at: HashSet<u64>,
-    /// One-shot scripted reorg `(trigger_height, fork_height,
-    /// new_blocks)`: fires immediately after
+    /// FIFO queue of scripted reorgs `(trigger_height, fork_height,
+    /// new_blocks)`: the **front** entry fires immediately after
     /// `fetch_scannable_block(trigger_height)` serves its block,
     /// replacing the chain at-and-above `fork_height` (same contract
-    /// as [`TestDaemon::replace_chain_from`]). Models a reorg landing
-    /// *between* two consecutive single-height fetches — the
-    /// intra-attempt straddle the producer's running prev-hash
+    /// as [`TestDaemon::replace_chain_from`]) and popping. Models
+    /// reorgs landing *between* two consecutive single-height fetches
+    /// — the intra-attempt straddle the producer's running prev-hash
     /// linkage check must detect (SP-T2 sequence-coherence keystone).
-    reorg_after_fetch: Option<(u64, u64, Vec<ScannableBlock>)>,
+    /// A queue (not a single slot) so a test can script a *sequence*
+    /// of reorgs within one attempt, each firing when its trigger
+    /// height is (re-)served, exercising multi-reorg-per-attempt
+    /// detection.
+    reorgs_after_fetch: VecDeque<(u64, u64, Vec<ScannableBlock>)>,
 
     /// Tx-hash set keyed by the byte-derived hash. `submit_transaction`
     /// inserts on first sight (returning `Submitted`) and observes
@@ -269,7 +273,7 @@ impl State {
             height_errors: VecDeque::new(),
             block_errors: HashMap::new(),
             malformed_at: HashSet::new(),
-            reorg_after_fetch: None,
+            reorgs_after_fetch: VecDeque::new(),
             submitted_hashes: HashSet::new(),
             submit_errors: VecDeque::new(),
             fee_estimates: default_fee_estimates(),
@@ -377,6 +381,11 @@ impl TestDaemon {
     /// observes the post-reorg chain — a deterministic reorg landing
     /// *between* two consecutive single-height fetches (the
     /// intra-attempt straddle; SP-T2 sequence-coherence keystone).
+    ///
+    /// Calls **queue** in FIFO order: arm two (or more) to script a
+    /// sequence of reorgs within a single attempt, the front firing
+    /// when its `trigger_height` is served, then the next. This drives
+    /// the multi-reorg-per-attempt detection path.
     pub(crate) fn replace_chain_after_fetch(
         &self,
         trigger_height: u64,
@@ -386,7 +395,8 @@ impl TestDaemon {
         self.state
             .lock()
             .expect("TestDaemon state poisoned")
-            .reorg_after_fetch = Some((trigger_height, fork_height, new_blocks));
+            .reorgs_after_fetch
+            .push_back((trigger_height, fork_height, new_blocks));
     }
 
     /// Cap the height that `get_height` reports at `cap`. Useful
@@ -579,23 +589,25 @@ impl DaemonEngine for TestDaemon {
                 RpcError::InvalidNode(format!("TestDaemon: no block at height {height}"))
             })?;
 
-            // One-shot scripted reorg: fires after this block is
-            // served, so the *next* fetch observes the post-reorg
-            // chain (see `replace_chain_after_fetch`).
+            // Scripted reorg queue: the FRONT entry fires after its
+            // trigger block is served, so the *next* fetch observes the
+            // post-reorg chain, then it pops and the following entry
+            // arms (see `replace_chain_after_fetch`). Front-only so a
+            // scripted sequence fires in strict FIFO order.
             if state
-                .reorg_after_fetch
-                .as_ref()
+                .reorgs_after_fetch
+                .front()
                 .is_some_and(|(trigger, _, _)| *trigger == height)
             {
                 let (_, fork_height, new_blocks) = state
-                    .reorg_after_fetch
-                    .take()
-                    .expect("checked is_some above");
+                    .reorgs_after_fetch
+                    .pop_front()
+                    .expect("checked front is_some above");
                 let keep = usize::try_from(fork_height)
-                    .expect("TestDaemon::reorg_after_fetch: fork_height fits in usize");
+                    .expect("TestDaemon::reorgs_after_fetch: fork_height fits in usize");
                 assert!(
                     keep <= state.chain.len(),
-                    "TestDaemon::reorg_after_fetch: fork_height {fork_height} exceeds chain \
+                    "TestDaemon::reorgs_after_fetch: fork_height {fork_height} exceeds chain \
                      length {}",
                     state.chain.len()
                 );
