@@ -577,7 +577,9 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
   }
 
   {
-    const crypto::hash seedhash = get_block_id_by_height(crypto::rx_seedheight(m_db->height()));
+    if (shekyl_pow_randomx_v2_seed_epoch_overridden())
+      MWARNING("SEEDHASH_EPOCH_* override active: the RandomX seed-epoch schedule differs from mainnet defaults (regtest lever) — blocks will fail verification against mainnet peers");
+    const crypto::hash seedhash = get_block_id_by_height(shekyl_pow_randomx_v2_seedheight(m_db->height()));
     if (seedhash != crypto::null_hash)
       shekyl_pow_randomx_v2_set_canonical(reinterpret_cast<const uint8_t (*)[32]>(seedhash.data));
   }
@@ -698,7 +700,7 @@ void Blockchain::pop_blocks(uint64_t nblocks)
     m_db->batch_stop();
 
   {
-    const crypto::hash seedhash = get_block_id_by_height(crypto::rx_seedheight(m_db->height()));
+    const crypto::hash seedhash = get_block_id_by_height(shekyl_pow_randomx_v2_seedheight(m_db->height()));
     // Mirror the init() guard: get_block_id_by_height() returns null_hash for a
     // nonexistent height, and an unwound/degraded chain can hit that here.
     // Pinning the all-zero seedhash would derive and stick a 256 MiB canonical
@@ -1377,7 +1379,7 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
         "%n", std::to_string(m_db->height() - split_height).c_str(), "%d", std::to_string(discarded_blocks).c_str(), NULL);
 
   const uint64_t new_height = m_db->height();
-  const crypto::hash seedhash = get_block_id_by_height(crypto::rx_seedheight(new_height));
+  const crypto::hash seedhash = get_block_id_by_height(shekyl_pow_randomx_v2_seedheight(new_height));
 
   crypto::hash prev_id;
   if (!get_block_hash(alt_chain.back().bl, prev_id))
@@ -1745,17 +1747,13 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
       CHECK_AND_ASSERT_MES(get_block_by_hash(*from_block, prev_block), false, "From block not found"); // TODO
       uint64_t from_block_height = cryptonote::get_block_height(prev_block);
       height = from_block_height + 1;
-      {
-        uint64_t next_height;
-        crypto::rx_seedheights(height, &seed_height, &next_height);
-        seed_hash = get_block_id_by_height(seed_height);
-      }
+      seed_height = shekyl_pow_randomx_v2_seedheight(height);
+      seed_hash = get_block_id_by_height(seed_height);
     }
     else
     {
       height = alt_chain.back().height + 1;
-      uint64_t next_height;
-      crypto::rx_seedheights(height, &seed_height, &next_height);
+      seed_height = shekyl_pow_randomx_v2_seedheight(height);
 
       if (alt_chain.size() && alt_chain.front().height <= seed_height)
       {
@@ -1806,11 +1804,8 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
     median_weight = m_current_block_cumul_weight_limit / 2;
     diffic = get_difficulty_for_next_block();
     already_generated_coins = m_db->get_block_already_generated_coins(height - 1);
-    {
-      uint64_t next_height;
-      crypto::rx_seedheights(height, &seed_height, &next_height);
-      seed_hash = get_block_id_by_height(seed_height);
-    }
+    seed_height = shekyl_pow_randomx_v2_seedheight(height);
+    seed_hash = get_block_id_by_height(seed_height);
   }
   b.timestamp = time(NULL);
 
@@ -1962,11 +1957,7 @@ bool Blockchain::get_miner_data(uint8_t& major_version, uint64_t& height, crypto
 
   major_version = m_hardfork->get_ideal_version(height);
 
-  {
-    uint64_t seed_height, next_height;
-    crypto::rx_seedheights(height, &seed_height, &next_height);
-    seed_hash = get_block_id_by_height(seed_height);
-  }
+  seed_hash = get_block_id_by_height(shekyl_pow_randomx_v2_seedheight(height));
 
   difficulty = get_difficulty_for_next_block();
   median_weight = m_current_block_cumul_weight_median;
@@ -2160,7 +2151,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     memset(proof_of_work.data, 0xff, sizeof(proof_of_work.data));
     {
       crypto::hash seedhash = null_hash;
-      uint64_t seedheight = rx_seedheight(bei.height);
+      uint64_t seedheight = shekyl_pow_randomx_v2_seedheight(bei.height);
       // seedblock is on the alt chain somewhere
       if (alt_chain.size() && alt_chain.front().height <= seedheight)
       {
@@ -5046,7 +5037,7 @@ leave:
     }
   }
 
-  const crypto::hash seedhash = get_block_id_by_height(crypto::rx_seedheight(new_height));
+  const crypto::hash seedhash = get_block_id_by_height(shekyl_pow_randomx_v2_seedheight(new_height));
 
   // Make sure that txpool notifications happen BEFORE block and miner data notifications
   notify_txpool_event(std::move(txpool_events));

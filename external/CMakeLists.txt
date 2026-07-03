@@ -77,7 +77,11 @@ endif()
 
 add_subdirectory(db_drivers)
 add_subdirectory(qrcodegen)
-add_subdirectory(randomx EXCLUDE_FROM_ALL)
+# external/randomx (v1) is no longer configured: its last linker
+# (cncrypto's rx-slow-hash.c) was deleted with the claim-era v1 hashing
+# machinery. The submodule itself stays checked out — tevador's v1 test
+# suite is the independent-provenance vector source for the RandomX v2
+# spec-anchor test work. Re-adding a build target requires a consumer.
 
 # RandomX v2 (Shekyl-Foundation fork) — out-of-tree build.
 #

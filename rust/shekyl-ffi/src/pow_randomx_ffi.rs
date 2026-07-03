@@ -5,7 +5,7 @@
 
 //! FFI surface for the Shekyl RandomX v2 light-cache PoW verifier.
 //!
-//! Two exports wrap [`shekyl_pow_randomx`] in a C-compatible ABI:
+//! The exports wrap [`shekyl_pow_randomx`] in a C-compatible ABI:
 //!
 //! - [`shekyl_pow_randomx_v2_hash`] — the consensus PoW hash. Computes
 //!   `compute_hash(seedhash, data)` through a process-global, internally
@@ -16,6 +16,17 @@
 //!   seedhash (sticky against LRU eviction) and *eagerly* derives its
 //!   256 MiB cache off the validation hot path. Called by the daemon at
 //!   tip advance, replacing `crypto::rx_set_main_seedhash`.
+//! - [`shekyl_pow_randomx_v2_seedheight`] /
+//!   [`shekyl_pow_randomx_v2_next_seedheight`] /
+//!   [`shekyl_pow_randomx_v2_seed_epoch_blocks`] /
+//!   [`shekyl_pow_randomx_v2_seed_epoch_overridden`] — the seed-epoch
+//!   schedule (replacing `crypto::rx_seedheight`/`rx_seedheights`). The
+//!   schedule arithmetic is pure and lives in
+//!   `shekyl_pow_randomx::seed_epoch`; **this module owns the ambient
+//!   half** — the `SEEDHASH_EPOCH_*` env overrides (regtest fast-epoch
+//!   lever) are read once per process here, clamped by the crate's pure
+//!   `clamp_*` functions, and passed in as parameters, keeping the
+//!   verifier crate free of runtime state per its isolation charter.
 //!
 //! The RandomX v2 algorithm itself lives entirely in
 //! [`shekyl_pow_randomx`] (the `#![deny(unsafe_code)]` verifier crate);
@@ -268,6 +279,67 @@ pub unsafe extern "C" fn shekyl_pow_randomx_v2_set_canonical(seedhash: *const [u
     SHEKYL_POW_RANDOMX_V2_OK
 }
 
+/// The effective `(epoch_blocks, epoch_lag)` schedule parameters:
+/// mainnet defaults, or the clamped `SEEDHASH_EPOCH_*` env overrides
+/// (regtest fast-epoch lever). Read once per process — same
+/// read-once semantics as the retired C statics.
+fn seed_epoch_params() -> (u64, u64) {
+    static PARAMS: OnceLock<(u64, u64)> = OnceLock::new();
+    *PARAMS.get_or_init(|| {
+        let blocks = shekyl_pow_randomx::clamp_blocks(
+            std::env::var("SEEDHASH_EPOCH_BLOCKS").ok().as_deref(),
+        );
+        let lag =
+            shekyl_pow_randomx::clamp_lag(std::env::var("SEEDHASH_EPOCH_LAG").ok().as_deref());
+        (blocks, lag)
+    })
+}
+
+/// The height whose block hash seeds the cache used to verify `height`
+/// — the RandomX seed-epoch schedule (2048-block epochs, 64-block lag;
+/// `SEEDHASH_EPOCH_*` env overrides are the regtest lever, read once).
+///
+/// Pure `u64 → u64` (no pointers); total over the domain — the lag
+/// addition in the `next` variant wraps like the C `uint64_t` did.
+/// Replaces the retired C `rx_seedheight`.
+#[no_mangle]
+pub extern "C" fn shekyl_pow_randomx_v2_seedheight(height: u64) -> u64 {
+    let (blocks, lag) = seed_epoch_params();
+    shekyl_pow_randomx::seedheight(height, blocks, lag)
+}
+
+/// `seedheight(height + lag)` — the upcoming seed height, for the RPC
+/// next-seed pre-announce path (the second output of the retired C
+/// `rx_seedheights`). Wrapping add at `u64::MAX`, matching C.
+#[no_mangle]
+pub extern "C" fn shekyl_pow_randomx_v2_next_seedheight(height: u64) -> u64 {
+    let (blocks, lag) = seed_epoch_params();
+    shekyl_pow_randomx::next_seedheight(height, blocks, lag)
+}
+
+/// The effective seed-epoch length in blocks (2048, or the clamped
+/// `SEEDHASH_EPOCH_BLOCKS` override). Single source of truth for C++
+/// consumers that need the epoch length itself (block-sync sizing) —
+/// replaces their independent, differently-clamped env parses.
+#[no_mangle]
+pub extern "C" fn shekyl_pow_randomx_v2_seed_epoch_blocks() -> u64 {
+    seed_epoch_params().0
+}
+
+/// True iff the effective schedule differs from the mainnet defaults
+/// (i.e. a `SEEDHASH_EPOCH_*` override is active). Lets the daemon log
+/// a loud startup warning — the override silently changes a consensus
+/// schedule, and a regtest env leaking into a production unit must be
+/// visible in the logs, not discovered via chain fork.
+#[no_mangle]
+pub extern "C" fn shekyl_pow_randomx_v2_seed_epoch_overridden() -> bool {
+    seed_epoch_params()
+        != (
+            shekyl_pow_randomx::SEEDHASH_EPOCH_BLOCKS,
+            shekyl_pow_randomx::SEEDHASH_EPOCH_LAG,
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,5 +509,35 @@ mod tests {
         let prepared = PreparedCache::derive(Seedhash::from_bytes(seed_bytes));
         let expected = compute_hash(&prepared, blob);
         assert_eq!(out, expected);
+    }
+
+    /// The seed-epoch exports round the schedule through the C ABI
+    /// unchanged. Env-robust: the expected values are derived through
+    /// the same clamp functions the exports use, so the test verifies
+    /// the WIRING (export == pure formula at the effective params)
+    /// whatever the ambient environment; the schedule itself is KAT'd
+    /// env-free in `shekyl_pow_randomx::seed_epoch`.
+    #[test]
+    fn seedheight_exports_match_schedule() {
+        let blocks = shekyl_pow_randomx::clamp_blocks(
+            std::env::var("SEEDHASH_EPOCH_BLOCKS").ok().as_deref(),
+        );
+        let lag =
+            shekyl_pow_randomx::clamp_lag(std::env::var("SEEDHASH_EPOCH_LAG").ok().as_deref());
+        for h in [0u64, 2100, 2112, 2113, 4161, u64::MAX] {
+            assert_eq!(
+                shekyl_pow_randomx_v2_seedheight(h),
+                shekyl_pow_randomx::seedheight(h, blocks, lag)
+            );
+            assert_eq!(
+                shekyl_pow_randomx_v2_next_seedheight(h),
+                shekyl_pow_randomx::next_seedheight(h, blocks, lag)
+            );
+        }
+        assert_eq!(shekyl_pow_randomx_v2_seed_epoch_blocks(), blocks);
+        assert_eq!(
+            shekyl_pow_randomx_v2_seed_epoch_overridden(),
+            (blocks, lag) != (2048, 64)
+        );
     }
 }

@@ -50,8 +50,6 @@ set(crypto_ops_sources
 set(crypto_slowhash_sources
   slow-hash.c)
 
-set(crypto_rx_sources
-  rx-slow-hash.c)
 
 # CryptonightR_JIT.c contains x86 JIT code that is entirely dead on MSVC
 # (returns -1).  Its heavyweight includes trigger an MSVC ICE in the PDB
@@ -73,8 +71,6 @@ set(crypto_cpp_sources
   pow_randomx.cpp
   pow_registry.cpp)
 
-include_directories(${RANDOMX_INCLUDE})
-
 set(crypto_headers)
 
 monero_find_all_headers(crypto_private_headers "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -85,7 +81,7 @@ monero_private_headers(cncrypto
   ${crypto_private_headers})
 
 set(_cncrypto_obj_targets)
-foreach(_group hash ops slowhash rx jit cpp)
+foreach(_group hash ops slowhash jit cpp)
   set(_target obj_cncrypto_${_group})
   add_library(${_target} OBJECT
     ${crypto_${_group}_sources} ${crypto_headers} ${crypto_private_headers})
@@ -103,7 +99,6 @@ set_property(TARGET cncrypto PROPERTY FOLDER "libs")
 target_link_libraries(cncrypto
   PUBLIC
     epee
-    randomx
     ${Boost_SYSTEM_LIBRARY}
     ${SODIUM_LIBRARY}
   PRIVATE

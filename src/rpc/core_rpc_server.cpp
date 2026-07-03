@@ -445,7 +445,7 @@ namespace cryptonote
     if (restricted)
       res.database_size = round_up(res.database_size, 5ull* 1024 * 1024 * 1024);
     res.update_available = restricted ? false : m_core.is_update_available();
-    res.version = restricted ? "" : MONERO_VERSION_FULL;
+    res.version = restricted ? "" : SHEKYL_VERSION_FULL;
     res.protocol_version = SHEKYL_PROTOCOL_VERSION;
     res.synchronized = check_core_ready();
     res.busy_syncing = m_p2p.get_payload_object().is_busy_syncing();
@@ -1670,8 +1670,9 @@ namespace cryptonote
       return false;
     }
 
-    uint64_t next_height;
-    crypto::rx_seedheights(height, &seed_height, &next_height);
+    // seed_height was already filled by get_block_template above (same
+    // height, same schedule); only the pre-announce needs computing.
+    const uint64_t next_height = shekyl_pow_randomx_v2_next_seedheight(height);
     if (next_height != seed_height)
       next_seed_hash = m_core.get_block_id_by_height(next_height);
     else
@@ -2775,7 +2776,7 @@ namespace cryptonote
       return r;
 
     res.version = CORE_RPC_VERSION;
-    res.release = MONERO_VERSION_IS_RELEASE;
+    res.release = SHEKYL_VERSION_IS_RELEASE;
     res.current_height = m_core.get_current_blockchain_height();
     res.target_height = m_p2p.get_payload_object().is_synchronized() ? 0 : m_core.get_target_blockchain_height();
     for (const auto &hf : m_core.get_blockchain_storage().get_hardforks())
@@ -2960,7 +2961,7 @@ namespace cryptonote
       res.status = "Error checking for updates";
       return true;
     }
-    if (tools::vercmp(version.c_str(), MONERO_VERSION) <= 0)
+    if (tools::vercmp(version.c_str(), SHEKYL_VERSION) <= 0)
     {
       res.update = false;
       res.status = CORE_RPC_STATUS_OK;
