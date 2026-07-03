@@ -152,7 +152,8 @@ jobs:
         # "'cargo-fmt' is not installed for the toolchain '1.94.0'"), and
         # `@master`/`@v1` is a mutable ref (supply-chain + reproducibility risk).
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.94.0 --profile minimal --component rustfmt --component clippy
+          curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs
+          sh /tmp/rustup-init.sh -y --default-toolchain 1.94.0 --profile minimal --component rustfmt --component clippy
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Install CMake + Ninja
         # `ubuntu-latest` images carry CMake by default, but we pin
@@ -298,7 +299,8 @@ jobs:
         # "'cargo-fmt' is not installed for the toolchain '1.94.0'"), and
         # `@master`/`@v1` is a mutable ref (supply-chain + reproducibility risk).
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.94.0 --profile minimal --component rustfmt --component clippy
+          curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs
+          sh /tmp/rustup-init.sh -y --default-toolchain 1.94.0 --profile minimal --component rustfmt --component clippy
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Install CMake + Ninja
         run: |
@@ -408,7 +410,8 @@ jobs:
         run: apt -y install build-essential cmake libboost-all-dev miniupnpc libunbound-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl
       - name: install Rust toolchain
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.94.0 --profile minimal --component rustfmt --component clippy
+          curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs
+          sh /tmp/rustup-init.sh -y --default-toolchain 1.94.0 --profile minimal --component rustfmt --component clippy
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: configure git
         run: git config --global --add safe.directory '*'
