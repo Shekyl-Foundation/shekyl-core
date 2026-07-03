@@ -153,16 +153,9 @@ impl SimpleRequestRpc {
 
 impl SimpleRequestRpc {
     async fn inner_post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
-        // The daemon RPC server (Shekyl's axum `Json` / binary extractors)
-        // requires a request Content-Type and rejects the request before any
-        // handler runs without one. JSON-RPC and JSON routes are
-        // `application/json`; the EPEE binary routes (`*.bin`, e.g.
-        // `get_o_indexes.bin`, `get_blocks.bin`) are `application/octet-stream`.
-        let content_type = if route.ends_with(".bin") {
-            "application/octet-stream"
-        } else {
-            "application/json"
-        };
+        // Route → Content-Type is a shared protocol invariant (which routes are
+        // EPEE-binary), so it lives once in `shekyl_rpc_client::content_type_for`.
+        let content_type = shekyl_rpc_client::content_type_for(route);
         let request_fn = |uri| {
             Request::post(uri)
                 .header("content-type", content_type)
