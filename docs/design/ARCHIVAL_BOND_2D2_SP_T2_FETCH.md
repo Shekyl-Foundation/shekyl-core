@@ -106,21 +106,42 @@ tension where the commit lands; it is not two unrelated facts.
 ### DQ-T2.5 — the daemon investigation: **observability, not throughput** (measured this round)
 
 The wallet's per-`P` transport is only real if the daemon serves N concurrent per-`P` fetch streams
-**without leaking the personas to an adversary watching the daemon.** Grounded facts:
-`core_rpc_server` is an `epee` HTTP server with `rpc_max_connections{,_per_private_ip,_per_public_ip}`;
-block reads go through LMDB (`get_block_from_height`, MVCC concurrent readers) but the core/RPC layer
-takes `CRITICAL_REGION` locks in places. Reframed to the mission-#1 lens, that is **two adversarial
-questions**, each with a rule-21 disposition — the success metric is *what leaks*, never blocks/sec:
+**without leaking the personas to an adversary watching the daemon.** Grounded facts (verified at
+source):
 
-1. **Enumeration.** In the local posture, all N personas + the principal connect from `127.0.0.1`,
-   so the daemon (or anything with a view of its connection table — a subpoena, a compromise, a
-   co-located process) **can count concurrent per-`P` connections and infer the persona count**,
-   defeating exactly the per-`P` unlinkability the firewall exists for. *Likely disposition:* this
-   is a **stated privacy cost of the `local` posture**, recorded in the §4 read-model (below), not a
-   throughput footnote — and an argument on the *unlinkability axis* for the remote-over-Tor posture
-   (distinct circuits unlink the personas *at the network layer*; caveat that a single shared remote
-   daemon still sees N terminating connections — remote hides the count from a **path/network**
-   observer, not unconditionally from the terminating node).
+- The daemon's RPC is served by **our own Rust/Axum layer** (`rust/shekyl-daemon-rpc`); the C++
+  `epee` HTTP acceptor is deliberately left unbound, so its
+  `rpc_max_connections{,_per_private_ip,_per_public_ip}` caps are **dead in this path and gate
+  nothing** — the `per_private_ip=25` default does *not* limit N loopback personas. Axum dispatches
+  into the C++ `core_rpc_server` handlers via an FFI shim.
+- The real scanner fetch (`default_fetch_scannable_block`, `block_fetch.rs:79`) calls **JSON-RPC
+  `get_block`**, which enters the coarse `CRITICAL_REGION_LOCAL(m_blockchain_lock)`
+  (`blockchain.cpp:941`, via `get_block_by_hash`). The binary `get_blocks_by_height.bin` path reads
+  LMDB directly (`get_block_from_height`, MVCC concurrent readers) and takes **no `m_blockchain_lock`**
+  — a lock-free read path already exists.
+- **The RPC client *and server* are ours to change** (already Rust). This widens the disposition
+  space below: the fix need not be C++ lock surgery.
+
+Reframed to the mission-#1 lens, that is **two adversarial questions**, each with a rule-21
+disposition — the success metric is *what leaks*, never blocks/sec:
+
+1. **Enumeration — an OS-level loopback residual, *below* the RPC layer.** In the local posture, all
+   N personas + the principal open connections from `127.0.0.1`, so **anything with a view of the
+   host's TCP table** (`ss`/`netstat`/`/proc/net/tcp`, a co-resident process, a host compromise, a
+   subpoena) **can count the concurrent connections and infer the persona count**, defeating exactly
+   the per-`P` unlinkability the firewall exists for. Two grounded sharpenings: (a) the leak is *not*
+   an RPC field — our Axum layer today exposes **no** RPC-connection-count and enforces **no** per-IP
+   cap (the epee `per_private_ip` accounting is dead), so nothing in the RPC *response* surface reveals
+   N; (b) because the leak lives in the **OS network stack, below our RPC layer**, "the RPC server is
+   ours" does **not** rescue `local` here — rewriting the server cannot un-see N loopback TCP
+   connections. *Disposition:* a **stated privacy cost of the `local` posture**, recorded in the §4
+   read-model (below), not a throughput footnote, plus a **design guardrail** — the Rust RPC server
+   must **not** add per-IP connection counting or caps that would promote this OS-intrinsic residual
+   into a first-class RPC-observable signal (and any cap would also cap N personas). It is an argument
+   on the *unlinkability axis* for the remote-over-Tor posture (distinct circuits unlink the personas
+   *at the network layer*; caveat that a single shared remote daemon still sees N terminating
+   connections — remote hides the count from a **path/network** observer, not unconditionally from the
+   terminating node).
 2. **Cross-persona timing correlation — a *remote-posture* threat, measured now.** The two leaks are
    **posture-complementary, not parallel**. Enumeration (#1) is the **`local`** leak: N loopback
    connections already link the personas by source address, so timing adds nothing there — *`local`'s
@@ -142,12 +163,22 @@ questions**, each with a rule-21 disposition — the success metric is *what lea
      instinct holds — the lock-granularity change is a **liveness/UX** cost, deferred to the
      daemon→Rust port with a rule-21 reopen. `PBlockSource` carries **no** decorrelation duty.
    - **Coupling at or above the floor** (magnitude comparable to / exceeding Tor jitter): a
-     **remote-posture** mitigation lands **now**, and the fork is *who decorrelates* — the **wallet**
-     (a fetch-scheduling-jitter / randomized-order duty scoped to the **remote `PBlockSource` only** —
-     `DaemonBlockSource`/`local` neither needs it, since enumeration already dwarfs timing there, nor
-     gets it) or the **daemon** (C++ lock surgery, deferred). **Default to the wallet-side
-     mitigation:** it does not wait on the C++ surgery, and it belongs at the *`PBlockSource`* layer —
-     not the shared `BlockSource` trait — precisely because the threat is remote-only.
+     mitigation lands, and — because the coupling *is* `m_blockchain_lock` and a **lock-free read path
+     already exists** — the fork has three rungs, cheapest first:
+     1. **Serve the per-`P` read lock-free** — route the fetch through `get_block_from_height` / the
+        `.bin` LMDB read instead of the lock-taking `get_block`. This dissolves the cross-persona
+        serialization *at the source*, with **no wallet jitter and no C++ lock surgery**, as a change
+        in **our own Rust RPC/FFI layer**. Preferred **iff** the lock-free path measures coupling-free
+        (§3 compares both paths).
+     2. **Wallet-side decorrelation** — a fetch-scheduling-jitter / randomized-order duty scoped to the
+        **remote `PBlockSource` only** (`DaemonBlockSource`/`local` neither needs it, since enumeration
+        already dwarfs timing there, nor gets it; it belongs at the `PBlockSource` layer, not the
+        shared `BlockSource` trait, precisely because the threat is remote-only). The **fallback** if
+        residual coupling survives the lock-free path.
+     3. **C++ lock surgery** on `m_blockchain_lock` — last resort, deferred to the daemon→Rust port.
+
+     **Default to rung 1 if the lock-free path is coupling-free; else rung 2.** Rung 1 exists *because
+     the RPC server is ours.*
 
 **Why measure *now*, not when the fetch path exists (the sharp reason):** the measurement's *result
 changes the wallet-side design*. If #2's coupling magnitude survives the remote-threat evaluation
@@ -164,25 +195,33 @@ first, and `PBlockSource` knows what it is responsible for.
 Vehicle: a regtest/FAKECHAIN `shekyld` (the Track-2 rig) with a small block set, driven by N
 concurrent `get_block`-by-height fetchers from `127.0.0.1`.
 
-- **M-enum:** with N persona connections open, read the daemon's connection table (or the
-  `per_private_ip` accounting) — confirm the count is observable, and whether the `per_private_ip`
-  cap default gates N. *Output:* the §4 stated-cost paragraph + the cap default to document/set.
-- **M-timing:** drive N concurrent `get_block` streams and instrument the block-fetch lock-hold under
-  contention — but the rig measures the **mechanism**, and the threat evaluation is a separate step on
-  top of it (the reason the harness measures against the right adversary from the first line):
-  - **(a) Mechanism — local Track-2 rig.** Characterize the daemon-internal coupling directly on
-    loopback, *no Tor*: lock-hold duration under contention and — the load-bearing number — **how far a
-    probe persona's `get_block` latency shifts per unit of a contending persona's fetch activity, in
-    absolute time.** *Output:* the **coupling-magnitude distribution**, not a signal/no-signal boolean.
-    Loopback is the *correct* vehicle because the coupling is daemon-internal — Tor would only add noise
-    to a mechanism measurement.
+- **M-enum:** with N persona connections open to the regtest daemon, confirm the count is observable
+  in the **host TCP table** (`ss -t` / `/proc/net/tcp`, connections to the RPC port from `127.0.0.1`),
+  and confirm the RPC *surface* leaks nothing — no RPC-connection-count field, and the (dead epee)
+  `per_private_ip` cap does not gate N. *Output:* the §4 stated-cost paragraph (the residual is
+  OS-intrinsic, below the RPC layer) + the design guardrail that our Rust RPC server must not add
+  per-IP counting/caps.
+- **M-timing:** drive N concurrent fetch streams and measure per-persona latency under contention —
+  but the rig measures the **mechanism**, and the threat evaluation is a separate step on top of it
+  (the reason the harness measures against the right adversary from the first line):
+  - **(a) Mechanism — local Track-2 rig, *comparing both read paths*.** Characterize the
+    daemon-internal coupling directly on loopback, *no Tor*, driving N concurrent fetchers on **each**
+    path: the lock-taking **JSON-RPC `get_block`** (the real scanner path, `block_fetch.rs:79`) *and*
+    the lock-free **`get_blocks_by_height.bin`** (`get_block_from_height`, no `m_blockchain_lock`). The
+    load-bearing number is **how far a probe persona's latency shifts per unit of a contending
+    persona's fetch activity, in absolute time**; the **delta between the two paths isolates the
+    `m_blockchain_lock` contribution**. *Output:* the **coupling-magnitude distribution on each path**,
+    not a signal/no-signal boolean. Loopback is the *correct* vehicle because the coupling is
+    daemon-internal — Tor would only add noise to a mechanism measurement.
   - **(b) Threat evaluation — analysis on the magnitude.** Evaluate that distribution against the
     **remote-shared-daemon adversary**: does the coupling survive a Tor circuit's own jitter (compare
     the magnitude distribution against known Tor per-circuit latency-jitter)? *Output:* the DQ-T2.5 #2
-    fork — below-floor ⇒ liveness/UX defer; at-or-above-floor ⇒ remote-`PBlockSource` decorrelation now.
-    The `local` posture is **not** evaluated here: its timing is subsumed by enumeration (#1).
+    fork — below-floor ⇒ liveness/UX defer; at-or-above-floor ⇒ **rung 1** (serve lock-free) if the
+    lock-free path measured coupling-free, else **rung 2** (remote-`PBlockSource` decorrelation). The
+    `local` posture is **not** evaluated here: its timing is subsumed by enumeration (#1).
 
-Both are read-only against a throwaway regtest chain; neither modifies the daemon.
+Both are read-only against a throwaway regtest chain, driving only existing RPC routes; neither
+modifies the daemon.
 
 ---
 
@@ -201,8 +240,10 @@ Per the ~10-commit-as-CI-cost-guideline, one reviewable PR, sliced by commit:
    `DaemonBlockSource`/`local`.
 5. **Posture→impl selector** at the scan-loop wiring (DQ-T2.3) — local→direct, remote→`PBlockSource`,
    conflation unrepresentable.
-6. **Daemon disposition** — record M-enum / M-timing results + the rule-21 reopen(s) in FOLLOWUPS /
-   the daemon→Rust-port note.
+6. **Daemon disposition** — record M-enum / M-timing results (both read paths) + the chosen rung. If
+   M-timing selects **rung 1** (serve per-`P` reads lock-free), that is an **in-scope Rust RPC/FFI
+   change** here, not a deferral; rungs 2/3 carry rule-21 reopens (FOLLOWUPS / the daemon→Rust-port
+   note).
 
 The `Ok(None)` provable-absence property (withheld-body robustness) is **out of scope for SP-T2** —
 it is header-chain-anchoring work (a later 2d-2 robustness slice); `PBlockSource` inherits
