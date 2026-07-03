@@ -1092,8 +1092,24 @@ impl Message<SignBond> for StakeEngine {
         // S6: the session-level `certify_draw` self-cert (over `OsRngGapAdapter`,
         // gated, at session start) is wired in `on_start` — see
         // `run_session_self_cert` and the `conformance` feature.
-        // TODO(2d): wire `_spread` and `_bond_first` into the broadcast timing
-        // (deferred — 2c-2b lands inert, no submission path).
+        // TODO(2d) — the broadcast write path `_spread`/`_bond_first` feed is now
+        // BUILT: `PTransactionSubmitter` (the per-`P` CX-2 seam) + `BroadcastPosture`
+        // (no-③-by-type) in `transaction_submitter.rs` / `posture.rs` (SP-T4a,
+        // `ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`). What remains is the CONSUMER
+        // wiring, still gated — **not on the seam**: assemble the bond `vin` into a
+        // full tx (funding inputs/outputs + `credit_term` →
+        // `shekyl_tx_builder::sign_transaction_with_terms`), give `StakeEngine` a
+        // broadcast submitter + a resolved posture + a block-timed scheduler
+        // (delay ≈ `_spread`) — the 2c-2a assemble / 2c-2b request-path wiring this
+        // actor is still inert for. The draw stays on `_`-prefixed locals until that
+        // wiring lands (which *consumes* the seam, not the reverse).
+        //
+        // GF-7 SCOPE (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §4): this jitter
+        // decorrelates the bond-post from `P`'s own observable funding/entry event
+        // (the funding-seam ordering prior) **only** — NOT from the principal's
+        // lifecycle timeline, nor from `P`'s other broadcasts. That correlation
+        // (GATE6 §10.12 GF-7) is deferred, unmeasured, and a **genesis gate** — not
+        // something this timing draw closes.
 
         // 5. Borrow the held bundle — slot membership confirmed by step 1.
         let keys = self
