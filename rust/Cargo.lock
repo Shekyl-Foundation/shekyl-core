@@ -3943,6 +3943,7 @@ dependencies = [
  "shekyl-engine-state",
  "shekyl-fcmp",
  "shekyl-fcmp-proofs",
+ "shekyl-p-transport",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-scanner",

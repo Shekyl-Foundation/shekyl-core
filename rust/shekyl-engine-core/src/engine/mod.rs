@@ -192,6 +192,10 @@ pub(crate) mod curve_tree_decode;
 pub(crate) mod block_fetch;
 pub mod daemon;
 pub(crate) mod diagnostics;
+/// SP-T2 (DQ-T2.2): the per-`P` RPC-over-Tor transport (`PRpc`) — an `Rpc` impl
+/// over `shekyl-p-transport`'s `PTorClient`. Confines the async/sync bridge; all
+/// `ureq`/agent construction stays in `shekyl-p-transport` (§2b invariant 1).
+pub(crate) mod prpc;
 // C4 engine-vs-sim `EconomicsEngine` differential (§5.4 / §7.1); replays
 // the sim-recorded `RecordedChainFixture` through the real
 // `LocalEconomics` path. Test-substrate only.

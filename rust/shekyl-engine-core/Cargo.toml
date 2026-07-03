@@ -66,6 +66,10 @@ shekyl-engine-state = { path = "../shekyl-engine-state" }
 shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
+# SP-T2: the per-P Tor transport primitive (PTorClient). engine-core wraps it in
+# `PRpc` (an `Rpc` impl); it does NOT depend on `ureq` — all agent construction
+# and use is confined to shekyl-p-transport (§2b invariant 1).
+shekyl-p-transport = { path = "../shekyl-p-transport" }
 shekyl-fcmp = { path = "../shekyl-fcmp", optional = true }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-rpc-client = { path = "../shekyl-rpc-client", features = ["std"] }
