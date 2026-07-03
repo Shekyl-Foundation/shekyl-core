@@ -127,6 +127,13 @@ signature change) vs *configured* (holds by setup, can regress silently under a 
   onion-serving side (`ADD_ONION`) will have its own version of these axes; **"SP-T2 proved
   isolation" is exactly the over-broad claim that would hide the next target-layer leak** — so an
   isolation claim is only ever *"axis X, proven structural/configured by Y,"* never unqualified.
+  **The four axes above are the *client* half (circuit / target-resolution / connection-reuse /
+  reconnect-identity).** The onion-*serving* side has a symmetric, not-yet-enumerated set:
+  descriptor-publication timing (do N personas publish in a correlated burst?), the shared HSDir set
+  (do their descriptors land on overlapping directories, correlatable by the HSDir?), and
+  introduction-point reuse. **SP-T3 must open by enumerating its serving axes** — "SP-T2 proved the
+  client axes" must not become the over-broad claim that hides a serving-side correlation (the same
+  trap, other direction). This is a flag for SP-T3, not SP-T2 work.
 
 ### DQ-T2.3 — posture→impl selector (no conflation)
 
@@ -352,7 +359,45 @@ fetch shim.
 
 ---
 
-## 3. The measurement (Round-0 task, before the wallet design freezes)
+## 2b. Build invariants (slices 1–6) — where a new path could reopen a closed hole
+
+The pre-build round found two `!`-fixes (the intra-attempt reorg splice, the per-`P` DNS leak) in
+code whose *shape* was reviewed and right — a property underneath was silently broken. The lesson:
+**"proven" means "proven on the path checked," and the build adds paths.** Each invariant below is a
+place a slice could reintroduce what the round just closed; they are build-binding, not advisory.
+
+1. **One agent construction site, and it is the hardened one (Axis B can't regress by a second
+   path).** The DNS-leak fix + the `socks5h`/`resolve_target(false)` + the `tor-socks` compile-guard
+   all live in `PTorClient::for_persona` (`shekyl-p-transport`), and the DNS regression test covers
+   *that* constructor. So `PRpc`/`PBlockSource` **must not** build a `ureq::Agent` (or any HTTP
+   client) themselves — they take a `PTorClient` and use `PTorClient::agent()`. No
+   `Agent::config_builder()` anywhere but `for_persona`; the safe construction is the *only*
+   construction (the `VerifiedTorBinary` shape). A second inline agent build is a new, uncovered
+   Axis-B surface — treat it as the same class of defect as the leak it would recreate.
+2. **The blocking pool is a *fifth axis* — a shared runtime resource the per-circuit isolation does
+   not cover.** `PRpc::post` bridges sync `ureq` into async via `spawn_blocking` (the workspace
+   idiom), which has two edges the idiom does not handle for free:
+   - **Cancellation drains, it does not cancel.** A `spawn_blocking` task in a synchronous `ureq`
+     call is not a cancellation point — on scan cancel / wallet close / `ctx.stop()` it runs to
+     completion or its own timeout. So `PRpc` **must** set explicit, short-ish `ureq` connect+read
+     timeouts (a stalled/building Tor circuit can hang a read far longer than a direct dial), and the
+     design accepts that in-flight fetches *drain* on shutdown. This couples to `TorService` teardown
+     ordering: the blocking fetches must drain **before or independently of** the control-connection
+     teardown, or a fetch outlives the Tor it is fetching through — a shutdown-ordering constraint the
+     selector/lifecycle slice owns.
+   - **Bounded per-`P` fetch concurrency.** tokio's blocking pool is bounded (512 default) and
+     **shared** with the scan offload (`pscan/scan_step.rs`) and the daemon-rpc handlers. N personas
+     each holding a blocking thread on a slow Tor fetch must stay well below the pool, or a
+     many-persona wallet starves *unrelated* `spawn_blocking` work. The per-`P` fetch concurrency is
+     bounded (a semaphore at the scan-loop wiring), and the bound is stated where it lands.
+3. **The posture selector *refuses on absence*, it does not degrade (no-silent-③, adversarially
+   tested).** The enforcement is not "explicit ③ works" but an adversarial test: construct the
+   selector with **no posture chosen** and the **local node unreachable**, and assert it **errors** —
+   never falls through to a remote/public default. The failure mode to forbid is the convenience
+   reflex "local node down → fall back to a public node so the wallet still works," which silently
+   lands a user in the discouraged posture with every §5 residual. The test codifies *breaking is
+   correct here* so a later "the wallet shouldn't just break" optimization trips a red test, not a
+   silent re-posture. (DQ-T2.3.)
 
 Vehicle: a regtest/FAKECHAIN `shekyld` (the Track-2 rig) with a small block set, driven by N
 concurrent `get_block`-by-height fetchers from `127.0.0.1`.
