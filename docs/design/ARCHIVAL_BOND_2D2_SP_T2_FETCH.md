@@ -285,31 +285,58 @@ disposition — the success metric is *what leaks*, never blocks/sec:
         residual coupling survives the lock-free path.
      3. **C++ lock surgery** on `m_blockchain_lock` — last resort, deferred to the daemon→Rust port.
 
-     **Settled (Round-0 measured 2026-07-02 + the §5 posture re-derivation) — engineering reasons
-     first, threat math demoted:**
-     - **Rung 1 adopted — as correct architecture, not as closing a live channel.** The per-`P`
-       block read is served by the **single-height lock-free read**: simpler (no shared lock on a
-       read that never needed one), measurably better under load (the lock amplifies contention ~4×
-       at CPU saturation — §3 results), and consistency-confirmed under a forced writer window. The
-       timing channel it removes is load-bearing in **neither** posture: in `local` it is **subsumed
-       by enumeration** — any adversary able to measure sub-ms cross-persona timing on your box can
-       read `/proc/net/tcp` directly (strictly more capability for strictly less information); in
-       `remote` it is a residual of a posture we **actively discourage** (§5). Rung 1 exists
-       *because the RPC server is ours.*
+     **Settled (Round-0 measured 2026-07-02 + the §5 posture re-derivation; rung-1 withdrawn
+     2026-07-03) — engineering reasons first, threat math demoted:**
+     - **Rung 1 WITHDRAWN (revised 2026-07-03) — the justification is gone, so the burden flipped.**
+       Rung 1 was provisionally adopted as "correct architecture." Re-examined against *this same
+       disposition*, all three justifications evaporated or inverted: **(a)** the timing channel it
+       closes is **retired** — local timing is subsumed by enumeration, remote is discouraged, so
+       there is **no live channel to close**; **(b)** "simpler" is now **false in the load-bearing
+       direction** — routing the **shared** `default_fetch_scannable_block` seam to the `.bin`
+       lock-free read is not simpler, it is a fetch-path **migration that touches the principal
+       refresh path** and productionizes epee decode into core: *more* surface, not less; **(c)**
+       "better under load" is real but **load-only, and the coupling was a saturation cliff on a
+       *busy shared remote daemon*** (§3) — the benefit accrues precisely in the posture we
+       discourage, while at normal load on a local node the coupling was negligible. What remains is
+       "architecturally pretty" — an aesthetic claim, not a security or correctness one, and
+       get-it-right ≠ make-every-path-pretty. A **load-only optimization to a discouraged posture,
+       bought with a correctness-surface change to the mission-critical principal path**, is the
+       priority order inverted. The finding-b edge sharpens it: the harness **cannot force finding-b
+       on regtest** (pop+regen cannot stage a competing-chain reorg), so a `.bin` migration would
+       ship a fetch path whose one novel correctness risk is *specifically what the measurement
+       apparatus cannot exercise*. **Verdict: withdrawn, not deferred** — rung 1 needs a *fresh*
+       justification to happen at all; "deferred to its own round" is how load-only optimizations
+       sneak back on momentum, "withdrawn, reopens only on X" is how they stay out until X happens.
+       **Reopen (rule-21):** *iff* the `local` posture ever shows **measurable fetch-throughput pain
+       at realistic persona counts under normal (non-saturated) load**, rung 1 reopens — scoped as a
+       principal-path fetch migration **with a finding-b test strategy that can stage a genuine
+       competing-chain reorg** (regtest cannot, so that is a testing-infrastructure *prerequisite*,
+       not a nice-to-have). **The Round-0 disposition's *knowledge* is the asset, not the migration:**
+       we established what `m_blockchain_lock` guards (a consistent main+alt read; cross-read
+       coherence across a multi-height batch), that **single-height reads are LMDB-atomic**, and that
+       **`default_fetch_scannable_block` is the shared fetch seam** — so a reopen starts from "here's
+       what we know," not a re-derivation. The round's real output was a **decision not to migrate**,
+       which is a result. (`PBlockSource` therefore fetches over the standard `get_block` path today,
+       exactly like the local source and the principal refresh — one fetch body, no per-posture fork.)
      - **Rung 2 not adopted, with the reason recorded:** the attack it would defend against (patient
        statistical averaging of the residual coupling by a shared-daemon operator) is an attack on
        the discouraged posture — we state it as a reason remote is discouraged (§5) rather than
        harden a path we tell people not to use. **Reopen:** if `remote` is ever promoted to a
        supported posture, rung 2 reopens as *coherence-destruction* (per-persona fetch-time jitter),
        not magnitude reduction.
-     - **Rung 3 moot** — rung 1 side-steps the lock; the residual left is scheduler-level, not lock.
+     - **Rung 3 (C++ lock surgery) — not done, and moot for the same reason rung 1 is withdrawn:**
+       there is no live channel to justify touching `m_blockchain_lock`. The read stays on the
+       standard `get_block` path; the residual coupling that *does* exist is scheduler-level (§3
+       M-substitute), not the lock.
      - **The timing reopens (R-T1/R-T2) close with rationale, not stay open:** the coupling numbers
        are **architectural characterization, not a live-channel measurement** — the local timing
        channel is dominated by the documented enumeration residual. The one reopen is a **posture
        change** (remote promoted to supported), which reopens timing, arrival-sync, and scan-pattern
        together as first-class.
-     - **P-SH — the lone load-bearing precondition, and it is *correctness*, not privacy.** The
-       per-`P` lock-free read is **single-height-per-snapshot**. A straddled multi-height read is a
+     - **P-SH — the lone load-bearing precondition, and it is *correctness*, not privacy** (and it
+       stands **independent of rung 1's withdrawal** — it constrains the `block_at` *signature*, not
+       which read path serves it). The per-`P` block read is **single-height-per-call**. A straddled
+       multi-height read is a
        wrong scan result with **no adversary at all**, so no threat-model concession touches it —
        dominance arguments retire threat channels; they never touch correctness invariants.
        Enforcement is the **type, not a comment**: `BlockSource::block_at(height)` takes one height,
@@ -502,11 +529,15 @@ Per the ~10-commit-as-CI-cost-guideline, one reviewable PR, sliced by commit:
    decorrelation duty (rung 2 not adopted; reopens only on posture promotion).
 5. **Posture→impl selector** at the scan-loop wiring (DQ-T2.3) — local→direct, remote→`PBlockSource`,
    conflation unrepresentable.
-6. **Rung-1 fetch routing** — serve the per-`P` block read via the **single-height lock-free read**
-   (an in-scope Rust RPC-layer change, gated green by the Round-0 M-consistency diff), with the
-   **P-SH note on the `block_at(height)` signature** — the type is the enforcement, the comment
-   carries the finding-b reopen. The Round-0 results + settled disposition are recorded in this doc
-   (§3 results, DQ-T2.5 settled block); no open daemon reopens remain except the posture-change one.
+6. **~~Rung-1 fetch routing~~ — WITHDRAWN (2026-07-03), not a build step.** The plan was to serve
+   the per-`P` read via the single-height lock-free `.bin` path; on re-examination its justification
+   was retired (DQ-T2.5 rung-1 bullet) and it is **withdrawn pending a fresh justification that does
+   not currently exist** — reopens only if `local` shows measurable throughput pain under normal
+   load, and then only *with* a competing-chain-reorg test capability regtest lacks. The build
+   **keeps** the standard `get_block` fetch (`default_fetch_scannable_block`) for every posture. The
+   **P-SH note on the `block_at(height)` signature** (slice 2, landed) stands on its own — it
+   constrains the signature, not the read path. This slice is a *recorded decision not to build*, so
+   the decomposition ends at slice 5.
 
 The `Ok(None)` provable-absence property (withheld-body robustness) is **out of scope for SP-T2** —
 it is header-chain-anchoring work (a later 2d-2 robustness slice); `PBlockSource` inherits
