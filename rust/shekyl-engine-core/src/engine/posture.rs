@@ -30,6 +30,21 @@
 //! (① → `DaemonBlockSource`, ②/③ → `PBlockSource`) is the later scan-loop wiring
 //! slice, which owns the config source + the per-`P` connection plumbing; this
 //! module is only the *decision*, which SP-5's wiring cannot invalidate.
+//!
+//! ## Two postures, deliberately different types (SP-T4a)
+//!
+//! This module also carries the **broadcast** posture ([`BroadcastPosture`] /
+//! [`select_broadcast`]), and it is a *narrower* type than the fetch [`Posture`]
+//! **on purpose**: it has **no `ThirdParty` variant at all**. Fetch-③ is
+//! allowed-with-disclosure — a *continuous, statistical, unavoidable* leak (you
+//! cannot not-scan; a third-party daemon learns only the shape of your scanning).
+//! Broadcast-③ is forbidden — a *discrete, categorical, avoidable* first-seen-
+//! origin leak (one broadcast hands the first-receiving daemon a permanent,
+//! on-chain-anchored origin fact about a `P`-bound artifact). The allow/forbid
+//! line tracks continuous-statistical-unavoidable vs. discrete-categorical-
+//! avoidable, and the asymmetry is encoded in the **types** so a "unify the two
+//! selectors for symmetry" refactor cannot silently re-enable broadcast-③
+//! (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §2 axis 3 / §3 invariant B).
 
 /// A resolved daemon posture — the scan loop acts on exactly one.
 ///
@@ -82,6 +97,82 @@ pub(crate) fn select(
         (None, true) => Ok(Posture::Local),
         // No choice + an unreachable local node → REFUSE. Never a remote fallback.
         (None, false) => Err(PostureError::NoChoiceAndLocalUnreachable),
+    }
+}
+
+// ============================================================================
+// Broadcast posture (SP-T4a) — the write side, a *narrower* type by design.
+// ============================================================================
+
+/// A resolved **broadcast** posture — where `P` submits a signed transaction.
+///
+/// **Deliberately a narrower type than the fetch [`Posture`]: no `ThirdParty`
+/// variant at all** (SP-T4a; `ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §2 axis 3 /
+/// §3 invariant B). Broadcast-③ would hand the first-receiving daemon a
+/// permanent, on-chain-anchored **first-seen-origin** fact about a `P`-bound
+/// artifact (the bond vin) — a discrete, categorical leak that defeats the
+/// unlinkability property directly, where fetch-③ only erodes it statistically.
+/// A broadcast is rare, so the convenience of going through a stranger is worth
+/// almost nothing; security-over-features (`00-mission` #1) forbids it. Encoding
+/// the forbid in the **type** means a symmetry refactor cannot silently re-enable
+/// broadcast-③ — it would have to *add the variant back*, visibly.
+///
+/// **No `Default`**, same as [`Posture`]: a posture is chosen, never
+/// defaulted-into.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // consumer is the broadcast-wiring slice; the invariant tests ship now.
+pub(crate) enum BroadcastPosture {
+    /// ① Your own node on this machine (loopback). The privacy default — the
+    /// broadcast originates on your own box, so no stranger sees it first.
+    Local,
+    /// ② Your own node on your own remote server, reached over `P`'s Tor circuit.
+    ///
+    /// **Trust-on-user-assertion — the wallet cannot verify node ownership.** An
+    /// onion address carries no proof that it is *yours*, and "is this `base_url`
+    /// my own node" is not a type-checkable property. So the forbid on ③ closes
+    /// the *system-selected* third-party path structurally, but it **cannot** stop
+    /// a user from putting a *third party's* onion here (by mistake, or for
+    /// convenience) — which reopens the exact first-seen-origin leak. The choice
+    /// site (config / UX) MUST therefore disclose at the point of entry: *this
+    /// must be a node you control; pointing it at a third party defeats the
+    /// broadcast firewall — first-seen-origin is a permanent, categorical link.*
+    ///
+    /// rule-21 reopen: an **authenticated** `OwnRemote` (a client-auth onion /
+    /// proof-of-ownership) would make "my own node" type-checkable and close this
+    /// structurally — out of scope now, the named path if the disclosure proves
+    /// insufficient.
+    OwnRemote { base_url: String },
+}
+
+/// Why a broadcast posture could not be resolved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum BroadcastPostureError {
+    /// No posture was chosen **and** the local node is unreachable. The system
+    /// **refuses** — it never falls back to a remote node the user did not name,
+    /// and can never fall back to a third party (the type has no such variant).
+    NoChoiceAndLocalUnreachable,
+}
+
+/// Resolve the **broadcast** posture from the operator's (optional) explicit
+/// choice and whether the local node is reachable.
+///
+/// Same refusal discipline as [`select`] — no choice + unreachable local →
+/// error, never a silent remote — and structurally stronger on ③: the choice
+/// type ([`BroadcastPosture`]) *cannot represent* a third party, so there is no
+/// ③ arm to write and no ③ a caller could name.
+#[allow(dead_code)]
+pub(crate) fn select_broadcast(
+    choice: Option<BroadcastPosture>,
+    local_reachable: bool,
+) -> Result<BroadcastPosture, BroadcastPostureError> {
+    match (choice, local_reachable) {
+        // An explicit choice is honored (only ① or ② are representable).
+        (Some(posture), _) => Ok(posture),
+        // No choice + a reachable local node → your own node (the default).
+        (None, true) => Ok(BroadcastPosture::Local),
+        // No choice + an unreachable local node → REFUSE. Never a remote fallback.
+        (None, false) => Err(BroadcastPostureError::NoChoiceAndLocalUnreachable),
     }
 }
 
@@ -138,5 +229,62 @@ mod tests {
         Posture::ThirdParty {
             base_url: "http://example.onion:18081".to_string(),
         }
+    }
+
+    // ── Broadcast posture (SP-T4a) ──
+
+    #[test]
+    fn broadcast_absence_of_choice_plus_local_unreachable_refuses() {
+        // Same no-silent-remote refusal as fetch; a dead local node is an error the
+        // user sees, never a silent re-posture — and never to a third party, which
+        // the type cannot even represent.
+        assert_eq!(
+            select_broadcast(None, false),
+            Err(BroadcastPostureError::NoChoiceAndLocalUnreachable),
+        );
+    }
+
+    #[test]
+    fn broadcast_absence_of_choice_with_reachable_local_defaults_to_own_node() {
+        assert_eq!(select_broadcast(None, true), Ok(BroadcastPosture::Local));
+    }
+
+    #[test]
+    fn broadcast_named_own_remote_is_honored_both_ways() {
+        // A named remote is honored even when local is up; a named local is honored
+        // even when the probe says unreachable (the choice is authoritative — a
+        // dead node surfaces as an error, not a re-posture).
+        let remote = BroadcastPosture::OwnRemote {
+            base_url: "http://example.onion:18081".to_string(),
+        };
+        assert_eq!(select_broadcast(Some(remote.clone()), true), Ok(remote));
+        assert_eq!(
+            select_broadcast(Some(BroadcastPosture::Local), false),
+            Ok(BroadcastPosture::Local)
+        );
+    }
+
+    #[test]
+    fn broadcast_posture_has_no_third_party_variant() {
+        // The forbid, as a compile-fence: this exhaustive match names EVERY
+        // `BroadcastPosture` variant. Adding a `ThirdParty` (the "unify the two
+        // selectors for symmetry" reflex) makes it non-exhaustive → a compile error
+        // that forces the change to confront the first-seen-origin leak, never a
+        // silent re-enable of broadcast-③. Fence by *enumeration* (distinct arm
+        // bodies, no `_ =>` catch-all) so a new variant cannot slip through.
+        fn variant_name(p: &BroadcastPosture) -> &'static str {
+            match p {
+                BroadcastPosture::Local => "local",
+                // NO `ThirdParty` arm — the variant does not exist. Do not add one.
+                BroadcastPosture::OwnRemote { .. } => "own-remote",
+            }
+        }
+        assert_eq!(variant_name(&BroadcastPosture::Local), "local");
+        assert_eq!(
+            variant_name(&BroadcastPosture::OwnRemote {
+                base_url: "http://example.onion:18081".to_string(),
+            }),
+            "own-remote"
+        );
     }
 }
