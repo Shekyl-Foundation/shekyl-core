@@ -89,6 +89,45 @@ proxy, the same class of leak as a shared pool. Almost certainly moot for `.onio
 (Tor resolves, not the client), but the source-check must **confirm** the hostname never reaches a
 client-side resolver, not assume the proxy binding is the only shared-state axis.
 
+**Verdict (source-checked 2026-07-02 — `PRpc`, and the check found a live leak).** The four-axis
+check — pool / resolver / reconnect-auth, each graded *structural* (cannot regress without a
+signature change) vs *configured* (holds by setup, can regress silently under a dep bump):
+
+| candidate | A pool | B resolver | C reconnect-auth |
+| --- | --- | --- | --- |
+| `SimpleRequestRpc` (`simple-request`/hyper) | isolated-structural (fresh client/call) | **unsupported** — *no SOCKS code at all*, always client-side `getaddrinfo` | **unsupported** — no SOCKS auth to re-present |
+| `PRpc` over `PTorClient`/`ureq::Agent` | isolated-structural (per-`Agent` owned pool) | isolated-**configured** (needs `socks5h`+`resolve_target(false)`) | isolated-structural (immutable `Arc<Config>` re-presented verbatim on every re-dial) |
+
+- **`SimpleRequestRpc` collapses at Axis B:** `simple-request 0.2.0` has *no proxy/SOCKS code*
+  (zero grep hits) and always resolves targets via hyper's `GaiResolver` — making it Tor-capable
+  means writing a new connector stack, i.e. *more* work than `PRpc` and with no structural floor.
+  **Decision: `PRpc` over the SP-T1 `ureq::Agent`.** The async/sync seam is `spawn_blocking` (the
+  established workspace idiom); the `Agent` is cheap-`Clone` (Arc), so `post` clones it into the
+  closure with no shared state.
+- **Axis B is graded *configured* honestly — because the dependency offers no structural option** —
+  and it was found **configured *wrong* in landed SP-T1 code**: the proxy was built as `socks5://`,
+  which ureq defaults to *resolve-locally*, so every persona's target hostname was leaking to the OS
+  resolver (a cross-persona correlation point) and `.onion` was broken outright. SP-T1's measured
+  test proved *circuit* isolation while dialing IPs — it never proved the *target* rode the circuit.
+  **Fixed as a landed-behavior bug** (commit — `fix(p-transport)!: close the per-P DNS leak`),
+  hardened to the maximum structure the dep allows: the **typed** `ProxyProtocol::Socks5h` enum (a
+  wrong enum is a compile error; the wrong *scheme string* was the silent one-char bug) + an
+  **explicit `resolve_target(false)`** (pins it independent of ureq's drifting scheme default) +
+  **verified at source** that nothing resolves the target upstream of Tor (`resolver.empty()` branch;
+  `uri.host_port()` handed to the proxy by name). And the fail-open hazard — absent ureq's
+  `socks-proxy` feature, ureq dials **direct**, deanonymizing silently — is closed at **compile
+  time**: a required `tor-socks` feature forwards it with a `compile_error!` on absence, because
+  feature unification means a runtime test cannot prove production has the feature.
+- **The durable lesson (record it — the next transport surface will need it).** The leak existed
+  because per-`P` isolation was *tested at the circuit layer and assumed at the target layer*.
+  **"Isolation" is not one property — it is a stack of separable ones: circuit, target-resolution,
+  connection-reuse, reconnect-identity — each independently correct or broken.** The four-axis
+  decomposition is the **standing model** for any future isolation claim: whenever code claims
+  "per-`P` isolation," the question is *on which axes, proven how (structural vs configured)*. SP-T3's
+  onion-serving side (`ADD_ONION`) will have its own version of these axes; **"SP-T2 proved
+  isolation" is exactly the over-broad claim that would hide the next target-layer leak** — so an
+  isolation claim is only ever *"axis X, proven structural/configured by Y,"* never unqualified.
+
 ### DQ-T2.3 — posture→impl selector (no conflation)
 
 `local` ⇒ direct-localhost `BlockSource`; `remote` (own-remote ② / untrusted ③) ⇒
