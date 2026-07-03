@@ -70,16 +70,12 @@ impl Rpc for PRpc {
         route: &str,
         body: Vec<u8>,
     ) -> impl Send + Future<Output = Result<Vec<u8>, RpcError>> {
-        // Content-type routing mirrors `SimpleRequestRpc`: the EPEE `.bin` routes
-        // are `application/octet-stream`, everything else `application/json`. This
-        // is sent for parity + daemon forward-compat, **not** a validation the
-        // daemon enforces (its handlers read the body via `String`/`Bytes`
-        // extractors that ignore `Content-Type`).
-        let content_type = if route.ends_with(".bin") {
-            "application/octet-stream"
-        } else {
-            "application/json"
-        };
+        // Route → Content-Type via the shared protocol invariant
+        // (`shekyl_rpc_client::content_type_for`), so `PRpc` and `SimpleRequestRpc`
+        // can't drift on which routes are EPEE-binary. Sent for parity + daemon
+        // forward-compat, **not** a validation the daemon enforces (its handlers
+        // read the body via `String`/`Bytes` extractors that ignore `Content-Type`).
+        let content_type = shekyl_rpc_client::content_type_for(route);
         let url = format!("{}/{}", self.base_url, route);
         let client = self.client.clone();
         async move {

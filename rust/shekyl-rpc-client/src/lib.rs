@@ -240,6 +240,23 @@ pub struct TxRelayResponse {
     pub fee_too_low: bool,
 }
 
+/// The HTTP `Content-Type` a daemon route expects: EPEE binary routes (`*.bin`,
+/// e.g. `get_o_indexes.bin`, `get_blocks_by_height.bin`) are
+/// `application/octet-stream`; everything else (JSON-RPC and plain JSON routes) is
+/// `application/json`.
+///
+/// This is a **protocol invariant** — which routes are EPEE-binary — so it lives
+/// once here (the `Rpc` trait's home) and is shared by every transport
+/// (`shekyl-rpc-transport`'s `SimpleRequestRpc`, the per-`P` `PRpc`) rather than
+/// re-derived per impl, where the copies could drift.
+pub fn content_type_for(route: &str) -> &'static str {
+    if route.ends_with(".bin") {
+        "application/octet-stream"
+    } else {
+        "application/json"
+    }
+}
+
 /// An RPC connection to a Monero daemon.
 ///
 /// This is abstract such that users can use an HTTP library (which being their choice), a

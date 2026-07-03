@@ -201,6 +201,18 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// first-per-class `SuppressedRateLimit` notice for the attempt.
 const PER_BLOCK_CEILING: u32 = 1;
 
+/// Upper bound on intra-attempt reorg rewinds absorbed by a single
+/// `produce_scan_result` call before it stops re-checking linkage and
+/// lets any residual self-heal on the next refresh. Each detected reorg
+/// rewinds `h` backward, so an *unbounded* count would let a daemon that
+/// reorgs between every pair of fetches — a reorg storm, or a hostile
+/// daemon deliberately spinning the wallet — stall one attempt forever.
+/// The common real case is a single reorg per attempt; this budget covers
+/// legitimate multi-reorg bursts while the bound guarantees termination.
+/// Reaching it is **not** a torn splice: the between-attempts linkage
+/// check rewinds any residual on the next refresh.
+const MAX_REORG_REWINDS_PER_ATTEMPT: u32 = 8;
+
 // ============================================================================
 // LocalRefresh aggregate
 // ============================================================================
@@ -615,7 +627,12 @@ impl RefreshEngine for LocalRefresh {
             let mut block_hashes: Vec<(u64, [u8; 32])> = Vec::new();
             let mut new_transfers: Vec<DetectedTransfer> = Vec::new();
             let mut spent_key_images: Vec<KeyImageObserved> = Vec::new();
+            // The rewind target carried out to the merge (the *latest* fork, which
+            // is always the correct one — `find_fork_point` re-measures divergence
+            // from the fixed persisted window each call). `reorg_rewinds` bounds how
+            // many times detection may re-fire this attempt (termination).
             let mut reorg_rewind: Option<ReorgRewind> = None;
+            let mut reorg_rewinds: u32 = 0;
             // CT-5 §3.2 transit fields (A1 frozen-contract): the full per-block
             // leaf set and the consensus header `curve_tree_root`, materialized
             // here where the `ScannableBlock` is in hand and carried on
@@ -637,32 +654,34 @@ impl RefreshEngine for LocalRefresh {
                     fetch_block_with_retry(daemon, h, &cancel, &mut emit_state, diagnostics)
                         .await?;
 
-                // Reorg detection (only when no reorg recorded yet
-                // this call; after a fork is decided, subsequent
-                // heights are the new chain and re-checking would
-                // false-trigger). BOUND: this is one-reorg-per-attempt —
-                // the `reorg_rewind.is_none()` gate disables detection
-                // after the first fork, so a *second* reorg landing
-                // between two fetches in the post-rewind re-scan is not
-                // caught this attempt (the merge validates set/range/
-                // dedup, not linkage). It self-heals on the next refresh:
-                // the between-attempts check rewinds the torn region. The
-                // sequence-coherence keystone covers the first reorg; a
-                // multi-reorg-per-attempt extension is a follow-up (needs
-                // its own two-reorg test).
-                // The expected parent of `h` is the
-                // hash of `h - 1` from wherever it was most recently
-                // seen: the block fetched earlier *in this attempt*
-                // (a reorg can land between two consecutive
-                // single-height fetches — the intra-attempt straddle;
-                // each fetch is atomic, but atomic reads do not make
-                // the *sequence* coherent), else the persisted reorg
-                // window (a reorg that landed between attempts), else
-                // the explicitly fetched boundary parent of a floored
-                // start. The running-tail and window sources are
-                // disjoint by construction (tail heights are
-                // > `synced_height`, the window's are ≤ it).
-                if reorg_rewind.is_none() && h > 1 {
+                // Reorg detection via running prev-hash linkage. The
+                // expected parent of `h` is the hash of `h - 1` from
+                // wherever it was most recently seen: the block fetched
+                // earlier *in this attempt* (a reorg can land between two
+                // consecutive single-height fetches — the intra-attempt
+                // straddle; each fetch is atomic, but atomic reads do not
+                // make the *sequence* coherent), else the persisted reorg
+                // window (a reorg that landed between attempts), else the
+                // explicitly fetched boundary parent of a floored start.
+                // The running-tail and window sources are disjoint by
+                // construction (tail heights are > `synced_height`, the
+                // window's are ≤ it).
+                //
+                // BOUND: up to `MAX_REORG_REWINDS_PER_ATTEMPT` reorgs are
+                // absorbed per attempt, not just the first. Each detection
+                // rewinds and re-scans; a *further* reorg landing during
+                // that re-scan is caught the same way. This is sound
+                // because the fork walk anchors at `synced_height`, so
+                // every `fork_height <= synced_height + 1 <= every block
+                // this attempt accumulated` — the `clear()` below therefore
+                // empties the accumulators on every reorg, and the re-scan
+                // re-derives `effective_start`, keeping the result
+                // internally consistent no matter how many times detection
+                // fires. The counter bounds only *how many* rewinds,
+                // guaranteeing termination against a daemon that reorgs on
+                // every fetch; a residual beyond the budget self-heals on
+                // the next refresh's between-attempts linkage check.
+                if reorg_rewinds < MAX_REORG_REWINDS_PER_ATTEMPT && h > 1 {
                     let expected_parent = match block_hashes.last() {
                         Some(&(prev_h, prev_hash)) if prev_h + 1 == h => Some(prev_hash),
                         _ => snapshot.block_hash_at(h - 1).or(if h == effective_start {
@@ -688,12 +707,18 @@ impl RefreshEngine for LocalRefresh {
                             // Anchoring at `synced_height` makes the
                             // conservative answer the attempt boundary:
                             // refetch the attempt range rather than keep
-                            // possibly-stale intra-attempt blocks. (`h`
-                            // only advances from `synced_height + 1` while
-                            // `reorg_rewind.is_none()`, so `h - 1 >=
-                            // synced_height` always — the anchor is
-                            // unconditionally `synced_height`, so this is
-                            // written directly rather than as a `min`.)
+                            // possibly-stale intra-attempt blocks. The
+                            // anchor is unconditionally `synced_height` (the
+                            // window top), never `h - 1`, and this holds for
+                            // *every* reorg this attempt, not only the first:
+                            // the rewind target is where the current chain
+                            // diverges from the persisted window — a function
+                            // of window-vs-daemon alone, independent of the
+                            // detection height `h` — and `find_fork_point`
+                            // measures exactly that. It follows that every
+                            // `fork_height <= synced_height + 1`, which is
+                            // what makes the clear-and-re-scan below sound
+                            // across repeated detection.
                             let fork_height = find_fork_point(
                                 daemon,
                                 &snapshot,
@@ -710,18 +735,37 @@ impl RefreshEngine for LocalRefresh {
                                 RefreshDiagnostic::ReorgObserved { fork_height, depth },
                             );
 
+                            // The latest fork wins: it is the current
+                            // divergence-from-window, so it is the correct
+                            // merge rewind target even after earlier reorgs.
                             reorg_rewind = Some(ReorgRewind { fork_height });
+                            reorg_rewinds += 1;
+                            if reorg_rewinds == MAX_REORG_REWINDS_PER_ATTEMPT {
+                                warn!(
+                                    fork_height,
+                                    max = MAX_REORG_REWINDS_PER_ATTEMPT,
+                                    "LocalRefresh: reorg-rewind budget exhausted; deferring \
+                                     residual linkage detection to the next refresh",
+                                );
+                            }
                             effective_start = fork_height;
                             effective_parent_hash = parent_hash_for_start(&snapshot, fork_height);
 
-                            // Discard everything we accumulated
-                            // at-or-above the fork height; restart
-                            // scanning from there.
-                            block_hashes.retain(|(bh, _)| *bh < fork_height);
-                            new_transfers.retain(|t| t.block_height < fork_height);
-                            spent_key_images.retain(|k| k.block_height < fork_height);
-                            block_leaves.retain(|(bh, _)| *bh < fork_height);
-                            block_curve_tree_roots.retain(|(bh, _)| *bh < fork_height);
+                            // Discard every block accumulated this attempt and
+                            // restart from the fork. On the first reorg
+                            // `fork_height <= original_start <= every accumulated
+                            // height`, so `clear()` matches the height-keyed
+                            // `retain(< fork_height)` it replaces. It is also
+                            // correct across a *second, shallower* reorg (a fork
+                            // above the first's): there a height-keyed retain would
+                            // keep now-stale lower blocks from the first-reorg
+                            // chain, while the truth on that range is the new chain
+                            // — which the re-scan re-fetches from `fork_height`.
+                            block_hashes.clear();
+                            new_transfers.clear();
+                            spent_key_images.clear();
+                            block_leaves.clear();
+                            block_curve_tree_roots.clear();
 
                             h = fork_height;
                             continue;
@@ -1487,13 +1531,27 @@ mod producer_property_tests {
     /// height. Feed to [`TestDaemon::replace_chain_from`] /
     /// `replace_chain_after_fetch` to model a competing chain.
     fn divergent_tail(base: &[ScannableBlock], fork_h: u64, len: u64) -> Vec<ScannableBlock> {
+        divergent_tail_nonce(base, fork_h, len, 1)
+    }
+
+    /// [`divergent_tail`] with an explicit `nonce`, so two competing tails off
+    /// the *same* parent still diverge from each other (a second reorg must fork
+    /// away from the first reorg's chain, not reproduce it). `nonce = 1` is the
+    /// canonical divergent tail; a distinct nonce yields a distinct chain sharing
+    /// the same `fork_h - 1` parent.
+    fn divergent_tail_nonce(
+        base: &[ScannableBlock],
+        fork_h: u64,
+        len: u64,
+        nonce: u32,
+    ) -> Vec<ScannableBlock> {
         let mut parent = base[usize::try_from(fork_h - 1).expect("test fork height fits in usize")]
             .block
             .hash();
         let mut tail = Vec::new();
         for h in fork_h..len {
             let mut block = make_synthetic_block(h, parent);
-            block.block.header.nonce = 1; // diverge from the canonical chain
+            block.block.header.nonce = nonce; // diverge from the canonical chain
             parent = block.block.hash();
             tail.push(block);
         }
@@ -1659,6 +1717,110 @@ mod producer_property_tests {
         assert_eq!(
             result.block_hashes, expected,
             "the seam height must carry the post-reorg hash, never the stale window-top"
+        );
+    }
+
+    /// **Two** reorgs within a single attempt, each landing between two
+    /// consecutive fetches. The first is detected and rewound; then, during the
+    /// post-rewind re-scan, a *second* reorg lands — and it too must be detected
+    /// so the returned sequence is the final chain, fully linked, never a torn
+    /// splice of the first-reorg chain below and the second-reorg chain above.
+    ///
+    /// This is the revert-proof for lifting the one-reorg-per-attempt bound: the
+    /// pre-fix `reorg_rewind.is_none()` gate disables detection after the first
+    /// fork, so the second reorg slips through and the result splices B8/B9
+    /// (first-reorg chain) against C10/C11 (second-reorg chain) with a broken
+    /// link at 10. The bounded-multi-reorg fix catches the second straddle and
+    /// re-scans to C8..C11.
+    ///
+    /// Setup: wallet synced to 4 on chain A (tip 12). Reorg 1 forks at 6 (chain
+    /// B), firing after the fetch at 7. Reorg 2 forks at 8 (chain C, a *distinct*
+    /// nonce so it diverges from B), firing after the re-scan's fetch at 9. Both
+    /// forks sit above the persisted window (≤ 4), so each `find_fork_point`
+    /// resolves the conservative attempt-boundary fork at `synced + 1 = 5`.
+    #[tokio::test(start_paused = true)]
+    async fn two_reorgs_in_one_attempt_are_both_detected_never_spliced() {
+        const SYNCED: u64 = 4;
+        const TIP: u64 = 12;
+        const FORK1: u64 = 6; // first divergent height (chain B), above the window
+        const TRIGGER1: u64 = 7; // daemon reorgs to B right after serving this
+        const FORK2: u64 = 8; // second divergent height (chain C)
+        const TRIGGER2: u64 = 9; // daemon reorgs to C right after serving this
+
+        let blob = rederive_account(
+            &PROPERTY_TEST_MASTER_SEED,
+            DerivationNetwork::Fakechain,
+            SeedFormat::Raw32,
+        )
+        .expect("rederive_account against fakechain raw32 seed");
+        let vm = ViewMaterial::try_from_keys(&blob)
+            .expect("ViewMaterial::try_from_keys against deterministic test blob");
+        let refresh = LocalRefresh::new(vm, 0);
+
+        let chain_a = linear_chain(TIP);
+        // Chain B: A below FORK1, divergent tail at/above it.
+        let tail_b = divergent_tail(&chain_a, FORK1, TIP);
+        let chain_b: Vec<ScannableBlock> = chain_a[..usize::try_from(FORK1).unwrap()]
+            .iter()
+            .cloned()
+            .chain(tail_b.iter().cloned())
+            .collect();
+        // Chain C: forks off chain B at FORK2 with a distinct nonce, so it
+        // diverges from B (not a reproduction of it) at and above FORK2.
+        let tail_c = divergent_tail_nonce(&chain_b, FORK2, TIP, 2);
+        let anchor = chain_a[usize::try_from(SYNCED).unwrap()].block.hash();
+
+        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain_a.clone());
+        // Queue both reorgs; they fire in FIFO order as their triggers are served
+        // (TRIGGER1 in the first pass, TRIGGER2 in the post-rewind re-scan).
+        daemon.replace_chain_after_fetch(TRIGGER1, FORK1, tail_b.clone());
+        daemon.replace_chain_after_fetch(TRIGGER2, FORK2, tail_c.clone());
+
+        let snapshot = snapshot_at_anchor(SYNCED, anchor);
+        let sink = AssertionSink::new();
+        let cancel = CancellationToken::new();
+        let (progress_tx, _progress_rx) = fresh_progress_channel();
+
+        let result = refresh
+            .produce_scan_result(
+                snapshot,
+                &daemon,
+                RefreshOptions::default(),
+                cancel,
+                progress_tx,
+                &sink,
+            )
+            .await
+            .expect("double-straddled scan completes via two rewinds");
+
+        // Both forks sit above the window, so each walk resolves the conservative
+        // attempt boundary (`synced + 1`). The final rewind target is that same
+        // boundary — the merge rolls persisted state back to it and re-ingests.
+        assert_eq!(
+            result.reorg_rewind.map(|r| r.fork_height),
+            Some(SYNCED + 1),
+            "the second intra-attempt straddle must also rewind, not slip through"
+        );
+
+        // The final sequence is the fully-linked post-*double*-reorg chain: A
+        // below FORK1, B between the forks, C at and above FORK2. The pre-fix
+        // behavior — B8/B9 spliced against C10/C11 with a broken link at 10 — is
+        // exactly what this rules out.
+        let expected: Vec<(u64, [u8; 32])> = (SYNCED + 1..FORK1)
+            .map(|h| (h, chain_a[usize::try_from(h).unwrap()].block.hash()))
+            .chain((FORK1..FORK2).map(|h| {
+                let idx = usize::try_from(h - FORK1).unwrap();
+                (h, tail_b[idx].block.hash())
+            }))
+            .chain((FORK2..TIP).map(|h| {
+                let idx = usize::try_from(h - FORK2).unwrap();
+                (h, tail_c[idx].block.hash())
+            }))
+            .collect();
+        assert_eq!(
+            result.block_hashes, expected,
+            "both reorgs must be absorbed: the result is the final chain (C above \
+             the second fork), never a torn B→C splice"
         );
     }
 
