@@ -99,9 +99,11 @@ impl Rpc for PRpc {
 /// loop surfaces a real bad-node/protocol problem instead of retrying it as an
 /// endless "connecting…". Never renders the SOCKS username — every
 /// [`RequestErrorKind`] `Display` is username-free (invariant (a)).
-#[allow(dead_code)] // used by PRpc::post; PRpc's consumer is the later wiring slice.
-// Owned `PTransportError` by design: this is a `.map_err(classify)` target, which
-// hands ownership of the error (the by-ref form would force `|e| classify(&e)`).
+// `dead_code` until the wiring slice consumes `PRpc` (whose `post` calls this).
+// Owned `PTransportError` by design — this is a `.map_err(classify)` target, which
+// hands ownership of the error (the by-ref form would force `|e| classify(&e)`),
+// so `needless_pass_by_value` is a false positive here.
+#[allow(dead_code)]
 #[allow(clippy::needless_pass_by_value)]
 fn classify(e: PTransportError) -> RpcError {
     match e {
