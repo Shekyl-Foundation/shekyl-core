@@ -3743,144 +3743,6 @@ sustainability is unaffected by the recalibration.
   phrase-string-wipe-on-drop split, and explicitly named this
   FOLLOWUPS entry as the bounded closure path for the residual.
 
-- **RandomX v2 Phase 3c — `aes`-crate symbol-surface check on the
-  linked `shekyld` binary** (trigger: Phase 2b PR landing; target:
-  V3.0 / Phase 3c PR closes this item). Phase 2b added `aes-0.9.0`
-  as a workspace dependency of `shekyl-pow-randomx`. The Rust-
-  mangled symbols (`_ZN3aes...`) and AES-NI intrinsics
-  (`_mm_aesenc_si128`, which lowers to a bare `aesenc` CPU
-  instruction without an external symbol) **never match any of the
-  10 banned `randomx_*` names** in
-  [`docs/design/RANDOMX_V2_RUST.md`](design/RANDOMX_V2_RUST.md) §7.1
-  by construction — §7.1 uses an explicit-list grep, not an
-  `aes*` or `randomx_*` glob. The structural concern about
-  symbol collision is precluded.
-
-  **Runnable check** (one-shot, when Phase 3c links the verifier
-  through the daemon for the first time). The Shekyl daemon
-  (`shekyld`) is built via CMake, not `cargo`, per
-  [`docs/COMPILING_DEBUGGING_TESTING.md`](COMPILING_DEBUGGING_TESTING.md);
-  the canonical command from a clean checkout is:
-
-  ```bash
-  make release && \
-    nm build/$(uname -s)/release/bin/shekyld | grep -iE '(aes|randomx)'
-  ```
-
-  (Substitute the appropriate `<platform>` segment manually if
-  `uname -s` doesn't match the CMake output directory — the
-  pattern is `build/<platform>/release/bin/shekyld`.)
-
-  **Expected disposition.** No matches against any name in §7.1's
-  10-symbol banned list. AES-crate symbols (Rust-mangled
-  `_ZN3aes...`) are expected to appear and are benign — they are
-  the `aes-0.9.0` crate's internal surface, not the C-ABI banned
-  `randomx_*` symbols §7.1 forbids. The check confirms nothing
-  leaks into the daemon by surprise; a regression that surfaces
-  here is a Phase 3c rewire bug, not a Phase 2b correctness defect.
-
-  **Why deferred.** The check is by definition a post-link
-  observation; pre-Phase-3c there is no `shekyld` binary that
-  links the Rust verifier. Recording the disposition in
-  FOLLOWUPS.md (rather than in the Phase 2b PR description) makes
-  the Phase 3c author's runbook auditable without "rely on the
-  Phase 3c author re-reading the Phase 2b PR description months
-  later" failure mode per `21-reversion-clause-discipline.mdc`'s
-  named-criteria principle.
-
-  **Sequencing relationship to the existing Phase 2f symbol-
-  isolation item.** The V3.1+ entry "Binary-level `nm`-on-
-  `shekyld` symbol-isolation invariant for the deleted CryptoNote
-  DAA functions" (see V3.1+) names the same post-link `nm` shape
-  as the natural landing site for the Phase 2f symbol-isolation
-  binary check. Phase 3c can fold this F7 check into the same
-  post-link CI step or run it as a one-shot at PR-open time; the
-  disposition is "no `randomx_*` matches" either way.
-
-  **Cross-references.**
-  [`docs/design/RANDOMX_V2_RUST.md`](design/RANDOMX_V2_RUST.md) §7.1
-  (10-symbol explicit-list grep);
-  [`docs/completed/RANDOMX_V2_PHASE2B_PLAN.md`](completed/RANDOMX_V2_PHASE2B_PLAN.md)
-  §5.7 (F7 finding and forward-action rationale);
-  [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
-  Phase 3c (the wiring PR that closes this item).
-
-  **Target.** V3.0 / Phase 3c. Closes when the post-link `nm`
-  check above runs against the verifier-linked `shekyld` with
-  zero `randomx_*` matches and aes-crate symbols visibly present
-  per the expected disposition.
-
-- **RandomX v2 — vendored C library static-destructor double-free at
-  process teardown** (surfaced 2026-06-22, RandomX v2 Phase 3a Hole-1
-  parity gate). `external/randomx-v2`'s global
-  `SuperscalarInstructionInfo` objects double-free their
-  `std::vector<MacroOp>` members when `librandomx` is unloaded at
-  process exit, confirmed by a gdb backtrace through `_dl_fini` ->
-  `__do_global_dtors_aux` ->
-  `randomx::SuperscalarInstructionInfo::~SuperscalarInstructionInfo`.
-  The abort fires **only at teardown**, after any hash result has been
-  computed and returned, so it is independent of PoW correctness.
-
-  **Current disposition (worked around, not fixed).** The Phase 3a
-  parity harness
-  ([`tests/randomx_v2_parity/randomx_v2_full_parity.cpp`](../tests/randomx_v2_parity/randomx_v2_full_parity.cpp))
-  exits via `std::_Exit` to bypass the broken static destructors so the
-  abort cannot mask the parity verdict. No consumer of a *result* is
-  affected: the Rust consensus verifier does not link the C library,
-  and a long-running miner reaches teardown only at clean shutdown,
-  after its work is done.
-
-  **Why deferred from Phase 3a.** Patching the vendored `external/
-  randomx-v2` C++ is outside the consensus-cutover PR's scope
-  (`15-deletion-and-debt.mdc` "while we're here is the enemy"); the
-  defect is teardown-only and the gate already has a clean, documented
-  workaround.
-
-  **Reopening / discharge criterion.** Reopen if the double-free is
-  ever observed to fire *before* teardown (i.e. where it could corrupt
-  a live result), or if the miner's clean-shutdown abort proves
-  operationally relevant. Discharge by either (a) fixing the vendored
-  library's static-object lifetime and removing the `std::_Exit`
-  workaround, or (b) recording an explicit "benign-at-teardown,
-  won't-fix" disposition citing the gdb evidence. Target: V3.0
-  (disposition decision before genesis, since the miner lib ships at
-  genesis; the decision may legitimately be "document as benign").
-
-  **Cross-references.**
-  [`tests/randomx_v2_parity/randomx_v2_full_parity.cpp`](../tests/randomx_v2_parity/randomx_v2_full_parity.cpp)
-  header ("Library teardown bug");
-  [`docs/design/RANDOMX_V2_PHASE3_PLAN.md`](./design/RANDOMX_V2_PHASE3_PLAN.md)
-  §7.
-
-- **RandomX v2 — separate-process miner-run full-dataset KAT**
-  (surfaced 2026-06-22, RandomX v2 Phase 3a Hole-1 parity gate). The
-  frozen `kFrozenKatHashHex` in the Phase 3a parity harness is captured
-  from the harness's own **in-process** full-dataset computation, not
-  from an actual v2 mining run in a separate process. It is an honest
-  regression anchor against library / flag drift, but the live
-  C-full == Rust-light comparison the harness runs on every invocation
-  already proves the cutover invariant; the frozen KAT is a regression
-  belt over those suspenders.
-
-  **Why deferred from Phase 3a.** Standing up a separate-process miner
-  run to source the KAT is harness scope beyond proving the parity
-  invariant, which the in-process comparison already does. The
-  in-process KAT carries its proxy nature documented at the capture
-  site in the meantime.
-
-  **Reopening / discharge criterion.** Discharge by capturing a hash
-  from an actual RandomX v2 mining run (separate process, full dataset)
-  at the pinned commit and replacing — or cross-checking —
-  `kFrozenKatHashHex` with it. Target: V3.0 (close before the genesis
-  freeze gate so the cutover's KAT carries end-to-end miner
-  provenance).
-
-  **Cross-references.**
-  [`tests/randomx_v2_parity/randomx_v2_full_parity.cpp`](../tests/randomx_v2_parity/randomx_v2_full_parity.cpp)
-  header ("KAT provenance caveat");
-  [`docs/design/RANDOMX_V2_PHASE3_PLAN.md`](./design/RANDOMX_V2_PHASE3_PLAN.md)
-  §7.2 #3.
-
 - **CryptoNote fossil — hardcoded key-image fixup for Monero blocks
   202612 / 685498** (surfaced 2026-06-22, RandomX v2 Phase 3b consensus
   cutover).
@@ -3974,24 +3836,26 @@ sustainability is unaffected by the recalibration.
      `tests/core_tests/chaingen.cpp:465` — the PoW-dispatch/test surface, *not*
      the RPC-payment files the prior cluster assumed, so it is removed here
      (one touch of those test files) rather than with (1). **Target V3.0.**
-  4. **RandomX v1 retention (reversion clause,
-     `21-reversion-clause-discipline.mdc`).** `src/crypto/rx-slow-hash.c`, the
-     `rx_slow_hash` / `rx_seedheight` / `rx_seedheights` /
-     `rx_slow_hash_allocate_state` / `rx_set_main_seedhash` C surface
-     (`hash-ops.h`), the `cncrypto` RandomX linkage, **and** the deferred
-     `shekyl_pow_randomx_v2_seedheight` export + `shekyl-pow-randomx::consensus`
-     module are **kept** — v1 is the consensus rollback escape hatch, and the C
-     `rx_seedheight` cleanly serves every caller while v1 stays. **Reopen
-     deletion only when the v2 rollback window formally closes** — concretely,
-     after **N consecutive stable releases on RandomX v2 with no rollback
-     invocation** (N to be ratified; suggest 2–3 tagged stable releases) — at
-     which point the `rx_*` core, the cncrypto linkage, and the `seedheight`
-     export land together. This is a **retention** entry, not deletion debt; it
-     carries no deletion target version.
+  4. ~~**RandomX v1 retention (reversion clause,
+     `21-reversion-clause-discipline.mdc`).**~~ **CLOSED — reversion clause
+     struck by PR #235 (2026-07).** The retention premise (v1 as the
+     consensus rollback escape hatch) was invalidated at source: the v1
+     surface's only live runtime effect was a deterministic release-mode
+     miner-thread crash (every `start_mining` allocated a ~2 GiB v1 dataset
+     against a NULL cache), and its schedule half (`rx_seedheight`) was live
+     consensus that belonged in Rust. PR #235 deleted `rx-slow-hash.c` +
+     `c_threads.h`, unlinked the v1 `randomx` lib from the daemon, and
+     ported the seed-epoch schedule to `shekyl-pow-randomx::seed_epoch`
+     (the formerly deferred `shekyl_pow_randomx_v2_seedheight` export landed
+     with it). The v1 *submodule* stays checked out as independent-provenance
+     vector source for the spec-anchor test work (tevador's v1 test suite),
+     not as a build target — re-adding a build target requires a consumer.
 
   The `aes`-crate symbol-surface check and the verifier-linked `shekyld`
-  `nm` symbol-isolation invariant are tracked as the separate Phase 3c
-  item above.
+  `nm` symbol-isolation invariant **landed** (test-regime hardening PR-1,
+  2026-07): `scripts/ci/check_randomx_symbol_isolation.sh`, run against
+  the linked daemon in the `full-parity` cron job of
+  `.github/workflows/randomx-v2-differential.yml`.
 
   **Cross-references.**
   [`docs/design/RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md)
@@ -6627,57 +6491,6 @@ one place to confirm each item's relationship to the wallet stack.
   forward is now O(1) per block as the access pattern intended.
   Closure record retained for traceability; no V3.x work remains
   for this item.
-
-- **Binary-level `nm`-on-`shekyld` symbol-isolation invariant for the
-  deleted CryptoNote DAA functions.** Surfaced 2026-05-18 (LWMA-1
-  Phase 4 PR, Commit 10 design discussion). The current
-  consensus-invariants CI gate
-  ([`.github/workflows/consensus-invariants.yml`](../.github/workflows/consensus-invariants.yml)
-  +
-  [`scripts/ci/check_consensus_invariants.sh`](../scripts/ci/check_consensus_invariants.sh))
-  invariant 1 is a **source-level** grep: it verifies there are no
-  live `next_difficulty` or `next_difficulty_64` call sites in
-  `src/**`. This is a necessary precondition for binary absence but
-  is not the strongest available statement of the invariant: the
-  load-bearing property the threat model wants is that *the linked
-  daemon binary* doesn't contain a reachable
-  `cryptonote::next_difficulty(...)` symbol from which a future code
-  path could resurrect the deleted DAA.
-
-  **Disposition.** Add a binary-level CI step to the existing
-  workflow once CI infrastructure exposes a linked `shekyld` to a
-  post-link grep:
-
-  ```bash
-  if nm shekyld | rg -q '^.* (T|U) (next_difficulty_64|next_difficulty)\b'; then
-    echo "ERROR: linked daemon contains deleted DAA symbol"
-    exit 1
-  fi
-  ```
-
-  The check fails on either a defined (`T`) or referenced (`U`)
-  symbol matching the deleted DAA family. `nm` is preferred over
-  `readelf -s` for cross-toolchain portability (works on the
-  upcoming MSVC Windows build via `llvm-nm` and on macOS via
-  Apple's `nm`).
-
-  **Why not now.** The PR's reviewer-attention budget is loaded with
-  the consensus-rule changes (FTL/MTP/DAA); the source-level
-  invariant catches the same defection class with zero binary
-  artifact wrangling. The binary-level enhancement is value-add but
-  not load-bearing; deferred to a V3.x CI-hygiene pass.
-
-  **Target: V3.x** (CI hygiene). Closes when the
-  consensus-invariants workflow is extended with a post-build job
-  that links `shekyld` for the host triple and runs the `nm` check
-  above. The same job is the natural landing site for the upcoming
-  RandomX v2 Phase 2f symbol-isolation binary check; sharing the
-  job amortizes the link cost and avoids two parallel sub-workflows
-  doing similar things. No correctness issue exists today — the
-  source-level grep gives strong evidence the binary won't contain
-  the symbols, since unreferenced functions in C++ translation
-  units that lack `extern "C"` exports are eligible for dead-code
-  elimination.
 
 - **RandomX v2 `ExternalProject_Add`: per-`CONFIG` install path and
   `IMPORTED_LOCATION_<CONFIG>` for multi-config generators.**
@@ -10676,3 +10489,28 @@ Retained for citation in review; each links to the canonical record.
   the 10 pull_request-triggered workflows that lacked them (house pattern
   from economics-c2a-prime.yml) — repeated pushes no longer stack full
   matrices behind each other on the shared runner pool.
+
+- **RESOLVED (RandomX v2 test-regime hardening PR-1, 2026-07-03): four
+  RandomX symbol/provenance items discharged with the Hole-1 gate wiring.**
+  (1) *Phase 3a full-dataset parity gate wired into CI* — the gate existed
+  since the cutover but no automation ran it (armed gate, no trigger); the
+  `full-parity` cron job in `randomx-v2-differential.yml` now builds
+  `-DBUILD_RANDOMX_V2_MINER_LIB=ON` daily and runs
+  `ctest -L randomx_v2_full_parity_daily` (weekly: the full
+  `randomx_v2_full_parity` sweep re-checking all 1024 Phase 2g canonical
+  pins under C-full-dataset via the `gen-parity-corpus` file + `corpus`
+  harness mode). (2) *Separate-process miner-run KAT* — discharged by
+  `tests/randomx_v2_parity/randomx_v2_miner_kat.cpp` (miner-shaped
+  consumer, links only `shekyl_randomx_v2`), which re-derives
+  `kFrozenKatHashHex` on every gate run. (3) *Vendored-library teardown
+  double-free* — recorded **benign-at-teardown, won't-fix** (gdb evidence
+  and reopening criterion at the parity-harness header; reopen only if
+  observed before teardown). (4) *`nm` symbol isolation on the linked
+  `shekyld`* (both the Phase 3c `aes`/`randomx_*` item and the V3.x
+  DAA-family item) — landed as
+  `scripts/ci/check_randomx_symbol_isolation.sh` in the same cron job:
+  §7.1 banned 10-symbol list absent, demangled
+  `cryptonote::next_difficulty` family absent (the original entry's
+  unmangled grep could never match a mangled C++ symbol — corrected),
+  `shekyl_pow_randomx_v2_hash` + `_ZN3aes` present (falsifiability
+  anchors; empirically verified against a Release static build).

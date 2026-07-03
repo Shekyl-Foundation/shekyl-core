@@ -67,6 +67,13 @@ path = "src/lib.rs"
 name = "shekyl-randomx-differential"
 path = "src/main.rs"
 
+# Explicit (not auto-discovered) so the bin name is hyphenated to
+# match the house invocation style; auto-discovery would name it
+# `gen_parity_corpus` after the file stem.
+[[bin]]
+name = "gen-parity-corpus"
+path = "src/bin/gen_parity_corpus.rs"
+
 [dependencies]
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx", features = ["test-internals"] }
 randomx-v2-sys = { path = "../randomx-v2-sys" }

@@ -84,8 +84,15 @@ on:
 # run behind the old one — with the shared runner pool, repeated pushes
 # queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
 # unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
+#
+# Schedule runs are keyed on `github.run_id` (i.e. never share a group):
+# for `schedule` events `github.ref` is the default branch — the SAME
+# `refs/heads/dev` a push-to-dev run uses — so a plain ref-keyed group
+# lets any dev push land mid-cron and CANCEL the multi-hour parity /
+# mutants run. A canceled run never fires the alarm a failed run would;
+# that is the armed-gate-with-no-trigger failure mode reborn as a race.
 concurrency:
-  group: randomx-v2-differential-${{ github.ref }}
+  group: randomx-v2-differential-${{ github.event_name == 'schedule' && github.run_id || format('{0}-{1}', github.event_name, github.ref) }}
   cancel-in-progress: true
 
 permissions:
@@ -314,3 +321,108 @@ jobs:
         # parallel worktree; the runner's 14 GB SSD is tight for
         # multi-worktree mutation runs at workspace scale.
         run: cargo mutants --package shekyl-randomx-differential --package shekyl-pow-randomx --in-place
+
+  full-parity:
+    # Phase 3a Hole-1 gate wiring (RandomX v2 test-regime hardening F1):
+    # the C **full-dataset** (miner mode) vs Rust **light-cache**
+    # (verifier) parity harness — `tests/randomx_v2_parity/` — existed
+    # since the Phase 3 cutover but was wired into ZERO workflows: an
+    # armed gate no automation ever ran. This job is its trigger.
+    #
+    # Cron-only, not per-PR: every exercised seed allocates and
+    # initializes a ~2 080 MiB dataset (minutes each, 19–35 datasets per
+    # run), on top of a full C++ daemon build — far outside the per-PR
+    # budget. Daily (05:00 cron + workflow_dispatch) runs the
+    # `randomx_v2_full_parity_daily` subset (genesis + canonical +
+    # miner-KAT + corpus seeds 0–15, mirroring the Phase 2g per-PR seed
+    # subset); the Monday 06:00 cron runs the full
+    # `randomx_v2_full_parity` sweep (all 32 corpus seeds = all 1024
+    # canonical pins re-checked under C-full-dataset).
+    #
+    # Unlike structural-validate (which builds only the C reference
+    # out-of-band), this job needs the parent CMake project — the parity
+    # harness links cryptonote_core + the Rust FFI — so it mirrors
+    # build.yml's Ubuntu container recipe (apt list + pinned-Rust install
+    # + ccache). CMake must stay single-config here (default Makefiles /
+    # Ninja with an explicit CMAKE_BUILD_TYPE): external/CMakeLists.txt
+    # FATAL_ERRORs on multi-config generators under
+    # BUILD_RANDOMX_V2_MINER_LIB=ON by design — do not "fix" that guard.
+    #
+    # The job also runs the binary symbol-isolation gate on the linked
+    # daemon (scripts/ci/check_randomx_symbol_isolation.sh): the daemon
+    # build is already paid for here, and this is the only workflow that
+    # builds one on a cadence.
+    name: 'cron: full-dataset parity gate + symbol isolation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    container:
+      image: ubuntu:24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+        CCACHE_TEMPDIR: /tmp/.ccache-temp
+        CCACHE_DIR: ~/.ccache
+    env:
+      # Full sweep on the Monday 06:00 cron; daily subset otherwise
+      # (including workflow_dispatch, the manual-verification default).
+      PARITY_CTEST_LABEL: ${{ github.event.schedule == '0 6 * * 1' && 'randomx_v2_full_parity' || 'randomx_v2_full_parity_daily' }}
+    steps:
+      - name: set apt conf
+        # Mirrors build.yml APT_SET_CONF (kept in sync manually; this
+        # workflow already mirrors build.yml's Rust-install block the
+        # same way).
+        run: |
+          tee -a /etc/apt/apt.conf.d/80-custom << EOF
+          Acquire::Retries "3";
+          Acquire::http::Timeout "120";
+          Acquire::ftp::Timeout "120";
+          EOF
+      - name: update apt
+        run: apt update
+      - name: install build dependencies
+        # Mirrors build.yml APT_INSTALL_LINUX.
+        run: apt -y install build-essential cmake libboost-all-dev miniupnpc libunbound-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl
+      - name: install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.94.0 --profile minimal --component rustfmt --component clippy
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: configure git
+        run: git config --global --add safe.directory '*'
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: actions/cache@v5
+        with:
+          path: ~/.ccache
+          key: ccache-ubuntu:24.04-full-parity-${{ github.sha }}
+          restore-keys: ccache-ubuntu:24.04-full-parity-
+      - uses: ./.github/actions/set-make-job-count
+      - name: build daemon + parity harness + miner-KAT tool
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
+        run: |
+          ccache --max-size=150M
+          ccache --set-config=compression=true
+          cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release -D BUILD_RANDOMX_V2_MINER_LIB=ON
+          cmake --build build --target daemon randomx-v2-full-parity randomx-v2-miner-kat
+      - name: symbol isolation on linked daemon (nm)
+        run: scripts/ci/check_randomx_symbol_isolation.sh build/bin/shekyld
+      - name: generate parity corpus
+        # Deterministic (fixed ChaCha20 seed): byte-identical on every
+        # run at the same corpus revision; the per-PR structural gate
+        # pins its SHA-256. Consumes the C reference the parent CMake
+        # build just produced (randomx-v2-sys links librandomx.a).
+        working-directory: rust
+        env:
+          RANDOMX_V2_INSTALL_DIR: ${{ github.workspace }}/build/external/randomx-v2-install
+        run: |
+          cargo run --release --locked -p shekyl-randomx-differential \
+            --bin gen-parity-corpus -- \
+            --out "${{ github.workspace }}/build/tests/randomx_v2_parity/parity_corpus.dat"
+      - name: run parity gate (ctest -L ${{ env.PARITY_CTEST_LABEL }})
+        # Serial (ctest default): each test allocates a ~2 080 MiB
+        # dataset; parallel invocations would multiply peak memory.
+        # --no-tests=error: zero matched tests is a wiring failure, not
+        # a pass — this job exists because the gate had no trigger.
+        working-directory: build
+        run: ctest -L "$PARITY_CTEST_LABEL" --output-on-failure --no-tests=error
