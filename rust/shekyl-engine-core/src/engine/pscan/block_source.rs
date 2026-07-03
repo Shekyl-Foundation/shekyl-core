@@ -125,6 +125,38 @@ pub(crate) trait BlockSource {
     ) -> impl Future<Output = Result<Option<ScannableBlock>, BlockSourceError>> + Send;
 }
 
+// Shared [`BlockSource`] conversion scaffolding: the `tip_height` body and the
+// `block_at` height→number conversion are transport-agnostic, so both the local
+// `DaemonBlockSource` and the remote `PBlockSource` route through these helpers
+// rather than re-deriving the same checked conversions (and the same error
+// strings) per impl, where the copies could drift.
+
+/// A source's claimed tip height: the bare [`Rpc::get_height`] converted
+/// fail-closed to a [`BlockHeight`]. Generic over the transport so the local
+/// (`DaemonEngine: Rpc`) and remote ([`PRpc`]) sources share one body; the
+/// returned future is `Send` because `get_height`'s is.
+async fn tip_height_via<R: Rpc>(rpc: &R) -> Result<BlockHeight, BlockSourceError> {
+    let height = rpc.get_height().await?;
+    // Checked, fail-closed conversion. The 64-bit-only build gate already makes
+    // `usize <= u64` (so this never errors), but the uniform checked form keeps
+    // the conversion honest.
+    let raw = u64::try_from(height)
+        .map_err(|_| BlockSourceError::Source(format!("chain height {height} exceeds u64")))?;
+    Ok(BlockHeight::from_raw(raw))
+}
+
+/// A [`BlockHeight`] as the `usize` block **number** the fetch layer indexes by,
+/// converted fail-closed. Shared by both `block_at` impls, which then differ only
+/// in *which* single-height fetch they issue.
+fn block_number(height: BlockHeight) -> Result<usize, BlockSourceError> {
+    usize::try_from(height.to_raw()).map_err(|_| {
+        BlockSourceError::Source(format!(
+            "height {} exceeds the platform's usize",
+            height.to_raw()
+        ))
+    })
+}
+
 /// The 2d-1 local [`BlockSource`]: a firewall-shaped view over an existing
 /// [`DaemonEngine`] connection.
 ///
@@ -154,26 +186,17 @@ impl<D: DaemonEngine> DaemonBlockSource<D> {
 impl<D: DaemonEngine> BlockSource for DaemonBlockSource<D> {
     async fn tip_height(&self) -> Result<BlockHeight, BlockSourceError> {
         // `DaemonEngine: Rpc`, so `get_height` is the inherited tip query.
-        let height = self.daemon.get_height().await?;
-        // Checked, fail-closed conversion — mirrors `block_at`'s discipline. The
-        // 64-bit-only build gate already makes `usize <= u64` (so this never
-        // errors), but the uniform checked form keeps the conversion honest.
-        let raw = u64::try_from(height)
-            .map_err(|_| BlockSourceError::Source(format!("chain height {height} exceeds u64")))?;
-        Ok(BlockHeight::from_raw(raw))
+        tip_height_via(&self.daemon).await
     }
 
     async fn block_at(
         &self,
         height: BlockHeight,
     ) -> Result<Option<ScannableBlock>, BlockSourceError> {
-        let number = usize::try_from(height.to_raw()).map_err(|_| {
-            BlockSourceError::Source(format!(
-                "height {} exceeds the platform's usize",
-                height.to_raw()
-            ))
-        })?;
-        // High-level fetch: whole block, all transactions, no selectivity.
+        let number = block_number(height)?;
+        // High-level fetch: whole block, all transactions, no selectivity. Routes
+        // through `DaemonEngine::fetch_scannable_block` (which the daemon actor and
+        // the test double override) — not the bare `Rpc`, which would bypass them.
         let block = self.daemon.fetch_scannable_block(number).await?;
         Ok(Some(block))
     }
@@ -211,22 +234,14 @@ impl BlockSource for PBlockSource {
     async fn tip_height(&self) -> Result<BlockHeight, BlockSourceError> {
         // `PRpc: Rpc`, so `get_height` is the inherited tip query — over `P`'s
         // circuit, same claimed-not-trusted semantics as any single source.
-        let height = self.rpc.get_height().await?;
-        let raw = u64::try_from(height)
-            .map_err(|_| BlockSourceError::Source(format!("chain height {height} exceeds u64")))?;
-        Ok(BlockHeight::from_raw(raw))
+        tip_height_via(&self.rpc).await
     }
 
     async fn block_at(
         &self,
         height: BlockHeight,
     ) -> Result<Option<ScannableBlock>, BlockSourceError> {
-        let number = usize::try_from(height.to_raw()).map_err(|_| {
-            BlockSourceError::Source(format!(
-                "height {} exceeds the platform's usize",
-                height.to_raw()
-            ))
-        })?;
+        let number = block_number(height)?;
         // P-SH: exactly one height per call — `default_fetch_scannable_block`
         // issues a single `get_block` (+ its txs) for `number`. Like
         // `DaemonBlockSource`, a missing block surfaces as `Err` (this source
