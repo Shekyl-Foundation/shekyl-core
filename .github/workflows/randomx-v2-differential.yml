@@ -391,7 +391,12 @@ jobs:
       # through to full: louder and slower, but never silent
       # under-coverage. A dropped Monday cron is recoverable via
       # dispatch with parity_scope=full.)
-      PARITY_CTEST_LABEL: ${{ (inputs.parity_scope == 'full' || (github.event_name == 'schedule' && github.event.schedule != '0 5 * * *')) && 'randomx_v2_full_parity' || 'randomx_v2_full_parity_daily' }}
+      #
+      # The `inputs.*` reference is guarded behind the event_name check:
+      # the inputs context is only populated for workflow_dispatch, and
+      # this expression is the load-bearing cadence selector — it must
+      # not depend on how an empty context dereferences on cron events.
+      PARITY_CTEST_LABEL: ${{ ((github.event_name == 'workflow_dispatch' && inputs.parity_scope == 'full') || (github.event_name == 'schedule' && github.event.schedule != '0 5 * * *')) && 'randomx_v2_full_parity' || 'randomx_v2_full_parity_daily' }}
     steps:
       - name: set apt conf
         # Mirrors build.yml APT_SET_CONF (kept in sync manually; this

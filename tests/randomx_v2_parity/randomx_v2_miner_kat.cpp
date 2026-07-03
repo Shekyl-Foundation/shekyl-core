@@ -26,7 +26,10 @@
 ///
 ///   randomx-v2-miner-kat <blob-ascii> [expected-hash-hex]
 ///
-/// The seed is the canonical-mode seed `0x01..0x20` (the seed under which
+/// `expected-hash-hex` must be exactly 64 hex characters (either case; no
+/// 0x prefix, no whitespace) — anything else is a format error, rejected
+/// up front so it can never surface as a spurious KAT mismatch. The seed
+/// is the canonical-mode seed `0x01..0x20` (the seed under which
 /// `kFrozenKatHashHex` is frozen). With `expected-hash-hex` the tool exits
 /// nonzero on mismatch; without it, it prints the computed hash (capture
 /// mode, for re-freezing after an intentional pin change).
@@ -37,6 +40,7 @@
 /// must not mask the verdict behind SIGABRT.
 
 #include <array>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -61,6 +65,26 @@ namespace
     }
     return s;
   }
+
+  // Strict expected-hash validation: exactly 64 hex chars, normalized to
+  // lowercase for the compare. Deliberately strict rather than lenient —
+  // no 0x prefix, no whitespace stripping: a KAT anchor with a formatting
+  // surprise should fail HERE with a format error, not surface as a
+  // spurious KAT mismatch (or worse, be quietly massaged into matching).
+  bool normalize_expected_hex(const std::string &in, std::string &out)
+  {
+    if (in.size() != 64)
+      return false;
+    out.clear();
+    out.reserve(64);
+    for (const char c : in)
+    {
+      if (!std::isxdigit(static_cast<unsigned char>(c)))
+        return false;
+      out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+    return true;
+  }
 } // namespace
 
 int main(int argc, char **argv)
@@ -74,7 +98,15 @@ int main(int argc, char **argv)
   }
   const char *blob = argv[1];
   const size_t blob_len = std::strlen(blob);
-  const std::string expected = (argc == 3) ? argv[2] : "";
+  std::string expected;
+  if (argc == 3 && !normalize_expected_hex(argv[2], expected))
+  {
+    std::fprintf(stderr,
+                 "FATAL: expected-hash-hex must be exactly 64 hex characters "
+                 "(no 0x prefix, no whitespace); got %zu chars\n",
+                 std::strlen(argv[2]));
+    std::_Exit(EXIT_FAILURE);
+  }
 
   std::printf(
     "RandomX v2 miner-shaped full-dataset KAT [pin aaafe71]\n"

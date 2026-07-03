@@ -391,7 +391,10 @@ namespace
     }
     if (seed_index >= seed_count)
     {
-      err = "seed index out of range";
+      char buf[96];
+      std::snprintf(buf, sizeof(buf), "seed index %u out of range (seed_count=%u)",
+                    seed_index, seed_count);
+      err = buf;
       return false;
     }
     if (data_per_seed == 0)
@@ -423,12 +426,22 @@ namespace
         }
         if (canonical_index != i * data_per_seed + j)
         {
-          err = "corpus record index mismatch (shifted or interleaved records)";
+          char buf[112];
+          std::snprintf(buf, sizeof(buf),
+                        "corpus record index mismatch at group %u record %u: "
+                        "expected %u got %u (shifted or interleaved records)",
+                        i, j, i * data_per_seed + j, canonical_index);
+          err = buf;
           return false;
         }
         if (data_len >= kCorpusMaxDataLen)
         {
-          err = "corpus record exceeds the R1-D4 data-length ceiling";
+          char buf[112];
+          std::snprintf(buf, sizeof(buf),
+                        "corpus record %u data_len %u exceeds the R1-D4 "
+                        "data-length ceiling (%u)",
+                        canonical_index, data_len, kCorpusMaxDataLen);
+          err = buf;
           return false;
         }
         if (selected)
@@ -466,8 +479,13 @@ namespace
     const std::streamoff end_pos = in.tellg();
     if (!in || end_pos != file_size)
     {
-      err = "corpus structure does not match the physical file size "
-            "(truncated file or trailing bytes)";
+      char buf[128];
+      std::snprintf(buf, sizeof(buf),
+                    "corpus structure ends at byte %lld but the file is %lld "
+                    "bytes (truncated file or trailing bytes)",
+                    static_cast<long long>(end_pos),
+                    static_cast<long long>(file_size));
+      err = buf;
       return false;
     }
     return true;
