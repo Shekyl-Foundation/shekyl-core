@@ -19,7 +19,7 @@
 //!   unreachable without an explicit, informed decision at the choice site.
 //! - [`select`] takes the operator's *optional* choice and a local-reachability
 //!   result and returns a `Result`. The one dangerous case — **no choice made,
-//!   and the local node is unreachable** — is an [`PostureError`], **not** a
+//!   and the local node is unreachable** — is a [`PostureError`], **not** a
 //!   fallback value: the system *refuses* rather than "helpfully" degrading to a
 //!   remote/third-party node so the wallet "still works."
 //!

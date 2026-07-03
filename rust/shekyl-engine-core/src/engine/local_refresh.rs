@@ -640,7 +640,17 @@ impl RefreshEngine for LocalRefresh {
                 // Reorg detection (only when no reorg recorded yet
                 // this call; after a fork is decided, subsequent
                 // heights are the new chain and re-checking would
-                // false-trigger). The expected parent of `h` is the
+                // false-trigger). BOUND: this is one-reorg-per-attempt —
+                // the `reorg_rewind.is_none()` gate disables detection
+                // after the first fork, so a *second* reorg landing
+                // between two fetches in the post-rewind re-scan is not
+                // caught this attempt (the merge validates set/range/
+                // dedup, not linkage). It self-heals on the next refresh:
+                // the between-attempts check rewinds the torn region. The
+                // sequence-coherence keystone covers the first reorg; a
+                // multi-reorg-per-attempt extension is a follow-up (needs
+                // its own two-reorg test).
+                // The expected parent of `h` is the
                 // hash of `h - 1` from wherever it was most recently
                 // seen: the block fetched earlier *in this attempt*
                 // (a reorg can land between two consecutive
@@ -668,27 +678,26 @@ impl RefreshEngine for LocalRefresh {
                                 "LocalRefresh: chain reorg detected at parent of {h}, walking fork point",
                             );
 
-                            // Walk from the top of the *persisted*
-                            // window, not from `h - 1`: an
-                            // intra-attempt straddle's fork can sit
-                            // above the window, where
-                            // `find_fork_point` would return its
-                            // `from_height + 1` immediately (no
-                            // stored hash to compare) and the rewind
-                            // would splice *around* the fork instead
-                            // of behind it. Capping at
-                            // `synced_height` makes the conservative
-                            // answer the attempt boundary: refetch
-                            // the attempt range rather than keep
-                            // possibly-stale intra-attempt blocks.
-                            // (For the between-attempts case the
-                            // window gate already implied
-                            // `h - 1 <= synced_height`, so the cap
-                            // changes nothing there.)
+                            // Anchor the fork-walk at the persisted-window
+                            // top (`synced_height`), not `h - 1`. An
+                            // intra-attempt straddle's fork can sit *above*
+                            // the window, where `find_fork_point` (which
+                            // walks only the window) would return
+                            // `from_height + 1` immediately and splice
+                            // *around* the fork instead of behind it.
+                            // Anchoring at `synced_height` makes the
+                            // conservative answer the attempt boundary:
+                            // refetch the attempt range rather than keep
+                            // possibly-stale intra-attempt blocks. (`h`
+                            // only advances from `synced_height + 1` while
+                            // `reorg_rewind.is_none()`, so `h - 1 >=
+                            // synced_height` always — the anchor is
+                            // unconditionally `synced_height`, so this is
+                            // written directly rather than as a `min`.)
                             let fork_height = find_fork_point(
                                 daemon,
                                 &snapshot,
-                                std::cmp::min(h - 1, snapshot.synced_height),
+                                snapshot.synced_height,
                                 &cancel,
                                 &mut emit_state,
                                 diagnostics,
