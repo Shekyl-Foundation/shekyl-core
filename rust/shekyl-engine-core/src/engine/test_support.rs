@@ -216,6 +216,15 @@ struct State {
     /// error. Models persistent-failure scenarios distinct from
     /// transient retry-and-recover ones.
     malformed_at: HashSet<u64>,
+    /// One-shot scripted reorg `(trigger_height, fork_height,
+    /// new_blocks)`: fires immediately after
+    /// `fetch_scannable_block(trigger_height)` serves its block,
+    /// replacing the chain at-and-above `fork_height` (same contract
+    /// as [`TestDaemon::replace_chain_from`]). Models a reorg landing
+    /// *between* two consecutive single-height fetches — the
+    /// intra-attempt straddle the producer's running prev-hash
+    /// linkage check must detect (SP-T2 sequence-coherence keystone).
+    reorg_after_fetch: Option<(u64, u64, Vec<ScannableBlock>)>,
 
     /// Tx-hash set keyed by the byte-derived hash. `submit_transaction`
     /// inserts on first sight (returning `Submitted`) and observes
@@ -260,6 +269,7 @@ impl State {
             height_errors: VecDeque::new(),
             block_errors: HashMap::new(),
             malformed_at: HashSet::new(),
+            reorg_after_fetch: None,
             submitted_hashes: HashSet::new(),
             submit_errors: VecDeque::new(),
             fee_estimates: default_fee_estimates(),
@@ -356,6 +366,27 @@ impl TestDaemon {
         );
         state.chain.truncate(keep);
         state.chain.extend(new_blocks);
+    }
+
+    /// Schedule a one-shot chain replacement that fires immediately
+    /// after `fetch_scannable_block(trigger_height)` serves its
+    /// block: the canonical chain is replaced at-and-above
+    /// `fork_height` with `new_blocks` (same contract as
+    /// [`Self::replace_chain_from`]). The trigger fetch itself still
+    /// serves the *pre-replacement* block, so the very next fetch
+    /// observes the post-reorg chain — a deterministic reorg landing
+    /// *between* two consecutive single-height fetches (the
+    /// intra-attempt straddle; SP-T2 sequence-coherence keystone).
+    pub(crate) fn replace_chain_after_fetch(
+        &self,
+        trigger_height: u64,
+        fork_height: u64,
+        new_blocks: Vec<ScannableBlock>,
+    ) {
+        self.state
+            .lock()
+            .expect("TestDaemon state poisoned")
+            .reorg_after_fetch = Some((trigger_height, fork_height, new_blocks));
     }
 
     /// Cap the height that `get_height` reports at `cap`. Useful
@@ -544,9 +575,35 @@ impl DaemonEngine for TestDaemon {
                 RpcError::InvalidNode("TestDaemon: height did not fit in usize".to_string())
             })?;
 
-            state.chain.get(idx).cloned().ok_or_else(|| {
+            let block = state.chain.get(idx).cloned().ok_or_else(|| {
                 RpcError::InvalidNode(format!("TestDaemon: no block at height {height}"))
-            })
+            })?;
+
+            // One-shot scripted reorg: fires after this block is
+            // served, so the *next* fetch observes the post-reorg
+            // chain (see `replace_chain_after_fetch`).
+            if state
+                .reorg_after_fetch
+                .as_ref()
+                .is_some_and(|(trigger, _, _)| *trigger == height)
+            {
+                let (_, fork_height, new_blocks) = state
+                    .reorg_after_fetch
+                    .take()
+                    .expect("checked is_some above");
+                let keep = usize::try_from(fork_height)
+                    .expect("TestDaemon::reorg_after_fetch: fork_height fits in usize");
+                assert!(
+                    keep <= state.chain.len(),
+                    "TestDaemon::reorg_after_fetch: fork_height {fork_height} exceeds chain \
+                     length {}",
+                    state.chain.len()
+                );
+                state.chain.truncate(keep);
+                state.chain.extend(new_blocks);
+            }
+
+            Ok(block)
         }
     }
 
