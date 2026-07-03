@@ -7,11 +7,13 @@
 
 use std::sync::Arc;
 
-use shekyl_rpc_client::TxRelayResponse;
+use shekyl_p_transport::PTorClient;
+use shekyl_rpc_client::{Rpc, TxRelayResponse};
 use shekyl_wire::Transaction;
 
 use super::error::{AmbiguousErrorKind, SubmitError, TerminalErrorKind};
 use super::pending::{ReservationId, TxHash};
+use super::prpc::PRpc;
 use super::traits::{DaemonEngine, TxSubmitOutcome};
 
 /// The canonical genesis transaction id (`GENESIS_TX_WIRE_FORMAT.md` §11) for a
@@ -163,13 +165,74 @@ where
     }
 }
 
+/// The 2d-2 **remote-posture** transaction submitter: broadcasts `P`'s signed
+/// transactions over `P`'s **own** Tor circuit via [`PRpc`] — the write-side
+/// mirror of `PBlockSource` (SP-T4a, CX-2; `ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`).
+///
+/// Constructed **only** from a [`PTorClient`] + the daemon base URL: there is no
+/// principal-`DaemonClient` path and no `Default`, so a `P` broadcast **cannot**
+/// be built over the shared principal connection — the write-side origin-in-`P`-
+/// space isolation is unrepresentable on the constructor, not merely discouraged
+/// (mirrors `PBlockSource::new`, one direction over).
+//
+// `allow(dead_code)`: transient — the non-test consumer is the broadcast posture
+// selector (slices 3–4). The proving test ships with the enabler; not deferred.
+#[allow(dead_code)]
+pub(crate) struct PTransactionSubmitter {
+    rpc: PRpc,
+}
+
+#[allow(dead_code)]
+impl PTransactionSubmitter {
+    /// Build a remote-posture submitter broadcasting over `client`'s circuit to
+    /// `base_url`.
+    pub(crate) fn new(client: PTorClient, base_url: String) -> Self {
+        Self {
+            rpc: PRpc::new(client, base_url),
+        }
+    }
+}
+
+impl TransactionSubmitter for PTransactionSubmitter {
+    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<TxHash, SubmitError> {
+        // Local, fail-closed tx id. The bytes are wallet-built (a signed vin), so a
+        // parse failure is a build-path defect — map it to the same `Malformed`
+        // terminal the `DaemonEngine` path returns rather than panicking, and never
+        // reach the network with an unparseable blob.
+        let Some(hash) = canonical_tx_id_opt(&tx_bytes) else {
+            return Err(SubmitError::DaemonRejectedTerminal {
+                kind: TerminalErrorKind::Malformed,
+            });
+        };
+        // Broadcast over `P`'s own circuit. **SP-T4a axis 4 (ambiguous partial
+        // failure):** ANY transport error → [`SubmitError::DaemonAmbiguous`], never
+        // a retry decision derived from `PRpc`'s fetch-style `classify`. A dropped
+        // connection does not tell us whether the tx propagated, so absence-of-a-
+        // daemon-verdict is *ambiguous*, not a retryable transient — the write-side
+        // inversion of the fetch default. The orchestrator's §5.2 retry re-sends the
+        // **same** bytes (same txid → daemon dedupes → `AlreadyKnown`), so retry is
+        // idempotent and never a rebuild; recovering from the ambiguity is its job,
+        // not this submitter's.
+        let resp = self.rpc.publish_transaction(&tx_bytes).await.map_err(|_| {
+            SubmitError::DaemonAmbiguous {
+                kind: AmbiguousErrorKind::DaemonUnavailable,
+                // `LocalPendingTx::submit_async` re-binds the active reservation id.
+                reservation_id: ReservationId::new(0),
+            }
+        })?;
+        // A daemon *verdict* is mapped by the shared helpers — identical to the
+        // principal path, so the two cannot drift.
+        outcome_to_result(submit_outcome_from_response(&resp, hash))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    //! `submit_outcome_from_response` mapping regression (§3.6) — the
-    //! transport-agnostic daemon-reply→outcome mapping shared by the
-    //! principal `DaemonClient` and the per-`P` `PTransactionSubmitter`.
-    //! Pure function; exercised directly against synthetic `TxRelayResponse`
-    //! values (no live daemon).
+    //! Submit-path tests: the transport-agnostic `submit_outcome_from_response`
+    //! mapping regression (§3.6, exercised directly against synthetic
+    //! `TxRelayResponse` values — no live daemon), plus the per-`P`
+    //! `PTransactionSubmitter`'s ambiguous-failure + username-non-leak proof
+    //! (SP-T4a).
     use super::*;
     use serde_json::json;
 
@@ -289,6 +352,51 @@ mod tests {
             TxSubmitOutcome::DaemonRejectedTerminal {
                 kind: TerminalErrorKind::DoubleSpend
             }
+        );
+    }
+
+    /// SP-T4a axis 4 + invariant (a): a broadcast whose **transport** fails
+    /// surfaces as [`SubmitError::DaemonAmbiguous`] — we cannot know whether it
+    /// propagated, so it is *not* a retryable transient — and the error rendering
+    /// must never leak the SOCKS username. No Tor: a closed SOCKS port (`:1`)
+    /// refuses immediately, so the `spawn_blocking` bridge + error mapping run
+    /// fast. The tx bytes are a serialized synthetic coinbase — valid wire, so the
+    /// submitter reaches the transport rather than short-circuiting on the local
+    /// parse guard (which would return `Malformed`, a different arm).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn broadcast_over_a_dead_proxy_is_a_username_free_ambiguous_error() {
+        use shekyl_p_transport::TorSocksEndpoint;
+        use shekyl_types::PCanonicalId;
+
+        use crate::engine::test_support::make_synthetic_block;
+
+        let mut tx_bytes = Vec::new();
+        make_synthetic_block(0, [0u8; 32])
+            .block
+            .miner_transaction
+            .write(&mut tx_bytes)
+            .expect("serialize synthetic coinbase to canonical wire");
+
+        let client = PTorClient::for_persona(
+            &PCanonicalId::from_bytes([5u8; 32]),
+            &TorSocksEndpoint::loopback(1),
+        )
+        .expect("proxy config is well-formed");
+        let username = client.username().as_str().to_owned();
+        let submitter = PTransactionSubmitter::new(client, "http://127.0.0.1:18081".to_string());
+
+        let err = submitter
+            .submit(tx_bytes)
+            .await
+            .expect_err("a dead SOCKS proxy must fail the broadcast");
+        assert!(
+            matches!(err, SubmitError::DaemonAmbiguous { .. }),
+            "a broadcast transport failure is ambiguous (maybe-propagated), never a \
+             retryable transient: expected DaemonAmbiguous, got {err:?}"
+        );
+        assert!(
+            !format!("{err}").contains(&username),
+            "invariant (a): a submit error must never render the SOCKS username"
         );
     }
 }
