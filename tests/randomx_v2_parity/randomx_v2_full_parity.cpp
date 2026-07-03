@@ -105,6 +105,8 @@
 /// labels and for how the corpus file is generated.
 
 #include <array>
+#include <cctype>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -318,9 +320,10 @@ namespace
   // the requested group's blobs in memory, and re-derives canonical_index
   // to reject any record shift.
 
-  // Upper bound on a single corpus blob. The generator's R1-D4 ceiling is
-  // 600 KiB; anything larger indicates a corrupt or foreign file.
-  constexpr uint32_t kCorpusMaxDataLen = 2u * 1024u * 1024u;
+  // Upper bound on a single corpus blob: the generator's R1-D4 ceiling
+  // (corpus_random.rs DATA_LEN_BLOCK_TEMPLATE_MAX, an exclusive bound), so
+  // any record at or above it indicates a corrupt or foreign file.
+  constexpr uint32_t kCorpusMaxDataLen = 600u * 1024u;
 
   bool read_u32_le(std::ifstream &in, uint32_t &out)
   {
@@ -342,6 +345,19 @@ namespace
       err = "cannot open corpus file '" + path +
             "' (generate with: cargo run --release -p "
             "shekyl-randomx-differential --bin gen-parity-corpus -- --out <path>)";
+      return false;
+    }
+
+    // Physical file size, for the walk-accounts-for-every-byte check at the
+    // end. A pure EOF probe is not enough: seekg past EOF on a filebuf
+    // succeeds without setting failbit, so a file truncated inside a
+    // *skipped* record's data would pass peek()==EOF (verified empirically:
+    // 9 bytes cut from the final blob passed every seed<31 invocation).
+    in.seekg(0, std::ios::end);
+    const std::streamoff file_size = in.tellg();
+    if (!in.seekg(0, std::ios::beg))
+    {
+      err = "cannot determine corpus file size";
       return false;
     }
 
@@ -406,7 +422,7 @@ namespace
           err = "corpus record index mismatch (shifted or interleaved records)";
           return false;
         }
-        if (data_len > kCorpusMaxDataLen)
+        if (data_len >= kCorpusMaxDataLen)
         {
           err = "corpus record exceeds the R1-D4 data-length ceiling";
           return false;
@@ -438,10 +454,16 @@ namespace
         seed = group_seed;
     }
 
-    // EOF-exact: trailing bytes mean writer/reader drift.
-    if (in.peek() != std::char_traits<char>::eof())
+    // Byte-exact: the walked structure must account for exactly the
+    // physical file. tellg > file_size means a skipped record's seekg ran
+    // past EOF (truncation the seek itself does not report — see the
+    // file_size note above); tellg < file_size means trailing bytes
+    // (writer/reader drift).
+    const std::streamoff end_pos = in.tellg();
+    if (!in || end_pos != file_size)
     {
-      err = "trailing bytes after final corpus record";
+      err = "corpus structure does not match the physical file size "
+            "(truncated file or trailing bytes)";
       return false;
     }
     return true;
@@ -498,6 +520,19 @@ int run_cases(const std::string &mode, const Hash32 &seed,
 
   for (const Case &c : cases)
   {
+    // The dataset above was built from `seed`; the Rust leg and the pin
+    // are evaluated under `c.seed`. Every mode populates all cases with
+    // the one group seed, but nothing else enforces that — and a
+    // mis-plumbed seed would surface as HALT-ON-RED, misattributing a
+    // harness bug to a consensus-critical light/full divergence.
+    if (c.seed != seed)
+    {
+      std::fprintf(stderr,
+                   "FATAL: case %s carries a different seed than the dataset "
+                   "(harness seed plumbing bug, NOT a parity divergence)\n",
+                   c.label.c_str());
+      return EXIT_FAILURE;
+    }
     Hash32 cfull{};
     Hash32 rust{};
     c_full_hash(vm.vm, c.blob, cfull);
@@ -657,12 +692,24 @@ int main(int argc, char **argv)
     }
     else
     {
+      // Strict decimal-u32 parse. strtoul alone is not enough: it accepts
+      // "" (returns 0 with end at the terminator), "-1" (wraps to
+      // ULONG_MAX without ERANGE), and values above UINT32_MAX that a bare
+      // cast would silently truncate into a *valid* index — e.g.
+      // 4294967296 → seed 0.
       char *end_index = nullptr;
       char *end_count = nullptr;
+      errno = 0;
       const unsigned long seed_index = std::strtoul(argv[3], &end_index, 10);
       const unsigned long seed_count = std::strtoul(argv[4], &end_count, 10);
-      if (!end_index || *end_index != '\0' || !end_count || *end_count != '\0')
-        std::fprintf(stderr, "FATAL: non-numeric corpus argument\n");
+      const bool digits_only =
+        std::isdigit(static_cast<unsigned char>(argv[3][0])) &&
+        std::isdigit(static_cast<unsigned char>(argv[4][0])) &&
+        end_index && *end_index == '\0' && end_count && *end_count == '\0';
+      if (!digits_only || errno == ERANGE ||
+          seed_index > UINT32_MAX || seed_count > UINT32_MAX)
+        std::fprintf(stderr,
+                     "FATAL: corpus arguments must be decimal integers in [0, 2^32)\n");
       else
         rc = run_corpus(argv[2], static_cast<uint32_t>(seed_index),
                         static_cast<uint32_t>(seed_count));

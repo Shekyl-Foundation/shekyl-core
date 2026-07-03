@@ -580,17 +580,21 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
     if (shekyl_pow_randomx_v2_seed_epoch_overridden())
     {
       // The seed-epoch schedule is consensus; SEEDHASH_EPOCH_* is a
-      // regtest-only lever. Fail closed on mainnet: a mainnet node running
-      // an overridden schedule computes wrong seedheights and rejects every
-      // block its peers accept, so refusing to start is strictly better
-      // than starting broken (a warn-only mainnet node silently forks
-      // itself off the network).
-      if (m_nettype == MAINNET)
+      // fakechain-only lever (regtest daemons and test fixtures both run
+      // nettype FAKECHAIN). Fail closed on every public network, not just
+      // mainnet: a node that inherits the lever from a leaked environment
+      // (shared systemd template, container base layer) computes wrong
+      // seedheights and silently rejects every block its peers accept —
+      // and on testnet/stagenet that forks the genesis-rehearsal
+      // infrastructure exactly when it matters most. The lever's
+      // legitimate use, fast epochs for local development, is what
+      // FAKECHAIN exists for.
+      if (m_nettype != FAKECHAIN)
       {
-        MERROR("SEEDHASH_EPOCH_* override active on mainnet: the RandomX seed-epoch schedule is consensus-critical and the override is a regtest-only lever; refusing to start. Unset SEEDHASH_EPOCH_BLOCKS / SEEDHASH_EPOCH_LAG to run a mainnet node.");
+        MERROR("SEEDHASH_EPOCH_* override active on a public network: the RandomX seed-epoch schedule is consensus-critical and the override is a fakechain-only (regtest) lever; refusing to start. Unset SEEDHASH_EPOCH_BLOCKS / SEEDHASH_EPOCH_LAG to run this node.");
         return false;
       }
-      MWARNING("SEEDHASH_EPOCH_* override active: the RandomX seed-epoch schedule differs from mainnet defaults (regtest lever) — blocks will fail verification against mainnet peers");
+      MWARNING("SEEDHASH_EPOCH_* override active: the RandomX seed-epoch schedule differs from mainnet defaults (fakechain lever) — blocks will fail verification against public-network peers");
     }
     const crypto::hash seedhash = get_block_id_by_height(shekyl_pow_randomx_v2_seedheight(m_db->height()));
     if (seedhash != crypto::null_hash)

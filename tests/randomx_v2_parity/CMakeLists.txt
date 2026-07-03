@@ -144,8 +144,13 @@ set_tests_properties(
   PROPERTIES
     LABELS "randomx_v2_full_parity;randomx_v2_full_parity_daily"
     TIMEOUT 3600)
-set_tests_properties(
-  ${_parity_weekly_tests}
-  PROPERTIES
-    LABELS "randomx_v2_full_parity"
-    TIMEOUT 3600)
+# Guard: if _parity_daily_seed_count is ever raised to the full corpus
+# count, the weekly list is empty and a bare set_tests_properties() would
+# be a configure-time error.
+if(_parity_weekly_tests)
+  set_tests_properties(
+    ${_parity_weekly_tests}
+    PROPERTIES
+      LABELS "randomx_v2_full_parity"
+      TIMEOUT 3600)
+endif()

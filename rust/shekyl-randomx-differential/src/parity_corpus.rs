@@ -117,6 +117,31 @@ mod tests {
 
     use super::*;
 
+    /// Sink that hashes bytes as they are written and keeps only the
+    /// 16-byte header, so the pin test never materializes the ~150 MiB
+    /// serialization (the corpus generation itself is unavoidable; the
+    /// second full-size buffer is not).
+    struct HashingSink {
+        hasher: Sha256,
+        header: Vec<u8>,
+        len: usize,
+    }
+
+    impl std::io::Write for HashingSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.header.len() < 16 {
+                let take = (16 - self.header.len()).min(buf.len());
+                self.header.extend_from_slice(&buf[..take]);
+            }
+            self.hasher.update(buf);
+            self.len += buf.len();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
     /// Whole-file SHA-256 pin over the v1 parity-corpus serialization.
     ///
     /// This is a substrate pin in the [`crate::canonical_outputs`]
@@ -131,21 +156,27 @@ mod tests {
 
     #[test]
     fn parity_corpus_file_sha256_pin() {
-        let mut bytes = Vec::new();
-        write_parity_corpus(&mut bytes).expect("Vec writer cannot fail");
+        let mut sink = HashingSink {
+            hasher: Sha256::new(),
+            header: Vec::with_capacity(16),
+            len: 0,
+        };
+        write_parity_corpus(&mut sink).expect("hashing sink cannot fail");
 
-        // Structural floor: header + at least one full group.
-        assert_eq!(&bytes[..8], &PARITY_CORPUS_MAGIC);
+        // Structural floor: header fields, checked before the opaque hash
+        // so a format bug fails legibly.
+        assert_eq!(&sink.header[..8], &PARITY_CORPUS_MAGIC);
         assert_eq!(
-            u32::from_le_bytes(bytes[8..12].try_into().expect("4 bytes")),
+            u32::from_le_bytes(sink.header[8..12].try_into().expect("4 bytes")),
             u32::try_from(NIGHTLY_SEEDHASH_COUNT).expect("fits u32"),
         );
         assert_eq!(
-            u32::from_le_bytes(bytes[12..16].try_into().expect("4 bytes")),
+            u32::from_le_bytes(sink.header[12..16].try_into().expect("4 bytes")),
             u32::try_from(NIGHTLY_DATA_PER_SEEDHASH).expect("fits u32"),
         );
+        assert!(sink.len > 16, "corpus serialization is implausibly small");
 
-        let got = hex_lower(&Sha256::digest(&bytes));
+        let got = hex_lower(&sink.hasher.finalize());
         assert_eq!(
             got, PARITY_CORPUS_FILE_SHA256,
             "parity-corpus serialization drifted; if intentional, update \

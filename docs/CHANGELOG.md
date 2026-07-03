@@ -4,13 +4,17 @@
 
 ### Added
 
-- **daemon: `SEEDHASH_EPOCH_*` override now refuses to start on mainnet.**
-  The RandomX seed-epoch schedule is consensus; the `SEEDHASH_EPOCH_BLOCKS` /
-  `SEEDHASH_EPOCH_LAG` env overrides are a regtest-only lever. A mainnet node
-  started with the lever active computed wrong seedheights and silently
-  rejected every block its peers accepted (warn-only since the #235 port);
-  it now fails closed at init with an actionable error. Testnet/stagenet/
-  regtest keep the warning-only behavior.
+- **daemon: `SEEDHASH_EPOCH_*` override now refuses to start on every public
+  network.** The RandomX seed-epoch schedule is consensus; the
+  `SEEDHASH_EPOCH_BLOCKS` / `SEEDHASH_EPOCH_LAG` env overrides are a
+  fakechain-only (regtest) lever. A node started with the lever active
+  computed wrong seedheights and silently rejected every block its peers
+  accepted (warn-only since the #235 port) — self-forking mainnet, or the
+  testnet/stagenet rehearsal infrastructure, if the lever leaked in from a
+  shared environment. Init now fails closed with an actionable error on
+  MAINNET, TESTNET, and STAGENET; FAKECHAIN (regtest daemons and test
+  fixtures — the lever's legitimate fast-epoch use) keeps the warning-only
+  behavior.
 - **pow: the Phase 3a full-dataset parity gate is wired into CI** (RandomX v2
   test-regime hardening PR-1). New `full-parity` cron job in
   `randomx-v2-differential.yml`: daily subset / weekly full sweep of the C

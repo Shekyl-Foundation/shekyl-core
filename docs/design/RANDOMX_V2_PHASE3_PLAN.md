@@ -543,13 +543,13 @@ exists.)
 
 | Gate | Cadence | Asserts |
 |------|---------|---------|
-| Hole-1 C-full vs Rust-light parity (§7) | release-gate (`randomx_v2_full_parity`) | the cutover invariant; **halt-on-red** |
+| Hole-1 C-full vs Rust-light parity (§7) | daily/weekly cron (`randomx_v2_full_parity_daily` / `randomx_v2_full_parity`; wired by test-regime hardening PR-1, 2026-07) | the cutover invariant; **halt-on-red** |
 | 2g differential (light-vs-light) | per-PR | Rust verifier ≡ C v2 light |
-| Per-hash average latency ≤3.0× | per-PR (from 3a) | parent §6 line 246 |
+| Per-hash average latency ≤3.0× | **UNWIRED** — T5 runs in no workflow (test-regime audit F1-HIGH, 2026-07); wiring is the runtime-mode change queued after PR-1 | parent §6 line 246 |
 | Build both flag states (3a) | per-PR | legacy v1 path stays buildable in 3a |
 | `cargo fmt` / `clippy -D warnings` / `cargo test` | per-PR | [`45-rust-lint-checks`](../../.cursor/rules/45-rust-lint-checks.mdc) |
 | Genesis identity (§8.3) | 3b | block id / coinbase vectors unchanged |
-| Symbol-isolation `nm` on `shekyld` | Phase 3c | parent §7 (deferred) |
+| Symbol-isolation `nm` on `shekyld` | daily/weekly cron (landed with PR-1: `scripts/ci/check_randomx_symbol_isolation.sh`) | parent §7 |
 
 ## 10. Risks
 

@@ -62,12 +62,22 @@ if [ -z "$SYMS" ]; then
   echo "FATAL: nm produced no symbols for '$BIN' (stripped binary or wrong file)" >&2
   exit 1
 fi
+# Check 2 greps the demangled table; if the demangle invocation yielded
+# nothing (non-GNU nm, demangler failure) that check would pass vacuously
+# while checks 1/3/4 still pass on the populated $SYMS.
+if [ -z "$SYMS_DEMANGLED" ]; then
+  echo "FATAL: nm --demangle produced no symbols for '$BIN'" >&2
+  exit 1
+fi
 
 fail=0
 
 # --- Check 1: banned RandomX C-ABI entry points (§7.1 explicit list) ---
 BANNED_RANDOMX='randomx_alloc_cache|randomx_alloc_dataset|randomx_create_vm|randomx_init_cache|randomx_init_dataset|randomx_destroy_vm|randomx_vm_set_cache|randomx_calculate_hash|randomx_dataset_item_count|randomx_get_flags'
-if matches="$(printf '%s\n' "$SYMS" | grep -E " (${BANNED_RANDOMX})$")"; then
+# [[:space:]] rather than a literal space before the symbol name: GNU nm
+# separates columns with single spaces, but tab-separating nm variants
+# exist, and a missed banned symbol here would pass vacuously.
+if matches="$(printf '%s\n' "$SYMS" | grep -E "[[:space:]](${BANNED_RANDOMX})$")"; then
   echo "FAIL: RandomX C library symbols present in daemon (RANDOMX_V2_RUST.md §7.1):" >&2
   printf '%s\n' "$matches" >&2
   fail=1
@@ -90,7 +100,7 @@ fi
 # `pipefail` turns a FOUND symbol into a failed pipeline (observed on the
 # 24k-line Release shekyld table). Plain grep >/dev/null reads the whole
 # stream.
-if printf '%s\n' "$SYMS" | grep ' shekyl_pow_randomx_v2_hash$' >/dev/null; then
+if printf '%s\n' "$SYMS" | grep -E '[[:space:]]shekyl_pow_randomx_v2_hash$' >/dev/null; then
   echo "OK: Rust verifier FFI export (shekyl_pow_randomx_v2_hash) present"
 else
   echo "FAIL: shekyl_pow_randomx_v2_hash absent from '$BIN'." >&2

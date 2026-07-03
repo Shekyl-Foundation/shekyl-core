@@ -41,13 +41,26 @@ namespace shekyl_parity
     std::vector<std::thread> workers;
     workers.reserve(threads);
     unsigned long start = 0;
-    for (unsigned long t = 0; t < threads; ++t)
+    try
     {
-      const unsigned long count = item_count / threads + (t < item_count % threads ? 1 : 0);
-      workers.emplace_back([dataset, cache, start, count] {
-        randomx_init_dataset(dataset, cache, start, count);
-      });
-      start += count;
+      for (unsigned long t = 0; t < threads; ++t)
+      {
+        const unsigned long count = item_count / threads + (t < item_count % threads ? 1 : 0);
+        workers.emplace_back([dataset, cache, start, count] {
+          randomx_init_dataset(dataset, cache, start, count);
+        });
+        start += count;
+      }
+    }
+    catch (...)
+    {
+      // A std::thread constructor that throws (resource exhaustion) must
+      // not leave the already-spawned workers joinable: their destructors
+      // would call std::terminate and mask the real error. Let the spawned
+      // ranges finish, then propagate.
+      for (std::thread &w : workers)
+        w.join();
+      throw;
     }
     for (std::thread &w : workers)
       w.join();
