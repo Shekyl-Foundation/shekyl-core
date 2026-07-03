@@ -192,6 +192,10 @@ pub(crate) mod curve_tree_decode;
 pub(crate) mod block_fetch;
 pub mod daemon;
 pub(crate) mod diagnostics;
+/// SP-T2 (DQ-T2.3): daemon-posture selection — the no-silent-③ invariant (a
+/// posture is named, never defaulted; no-choice + local-unreachable *refuses*,
+/// never falls back to a remote/third-party node). §2b build invariant 3.
+pub(crate) mod posture;
 /// SP-T2 (DQ-T2.2): the per-`P` RPC-over-Tor transport (`PRpc`) — an `Rpc` impl
 /// over `shekyl-p-transport`'s `PTorClient`. Confines the async/sync bridge; all
 /// `ureq`/agent construction stays in `shekyl-p-transport` (§2b invariant 1).
