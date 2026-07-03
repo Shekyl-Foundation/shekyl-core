@@ -165,21 +165,30 @@ into — *"using someone else's node, if it consistently fails to deliver your c
 relay your responses, can eventually cost your bond, and it sees your traffic — run your own
 node, here or on your own server."*
 
-**Enumeration — a per-posture *observability* property, not a throughput one (SP-T2 DQ-T2.5).**
-The postures also differ in **who can count `P`s**, and it cuts against the naive "local is strictly
-safest" read. In the **local** posture every persona connection (plus the principal) is a distinct
-`127.0.0.1` connection to your own daemon, so the daemon — or anyone with a view of its connection
-table (a subpoena of that machine, a compromise, a co-located process) — **can count the concurrent
-per-`P` connections and infer how many personas the wallet is running right now**, which is exactly
-the per-`P` unlinkability the firewall exists to protect. The per-`P` connection is *both* the
-isolation mechanism *and* the enumeration surface. The **remote-over-Tor** postures (②/③) put each
-persona on a **distinct circuit**, so a **path/network** observer cannot link the personas to one
-wallet or count them — though a *single shared remote daemon* still sees N terminating connections,
-so remote hides the count from the network, not unconditionally from the terminating node. Net:
-`local`'s TM-6 win (no network scan) is real, but it carries a **disclosed enumeration cost** against
-a local-daemon-table adversary — *convenience-with-a-named-residual*, not strictly-best; on the
-**unlinkability axis specifically**, remote-over-Tor is stronger. (Whether the *privacy-recommended*
-default shifts is settled by SP-T2's Round-0 measurement, `ARCHIVAL_BOND_2D2_SP_T2_FETCH.md` §2.5/§3.)
+**Daemon observability — the two-axis read-model (settled by SP-T2 Round-0, measured 2026-07-02).**
+The postures differ in *what the daemon-facing surface leaks*, and weighing **one** axis (persona
+unlinkability) in isolation briefly pulled the recommendation toward remote-over-Tor; weighing
+**both** axes re-confirms own-node:
+
+- **Scan-pattern confidentiality:** ①/② leak *nothing to a stranger* — the scan terminates at your
+  own daemon. ③ shows a third party the scan itself (every requested height, per connection; height
+  trajectories are also cross-session fingerprints), and Tor anonymizes *who* is scanning, not
+  *what* is scanned.
+- **Persona unlinkability:** ①'s enumeration residual — N distinct `127.0.0.1` connections make the
+  persona count readable from the **host TCP table** (an OS-level fact below the RPC layer; measured:
+  no RPC field exposes it, and no per-IP cap gates it) — is observable **only from the box itself**,
+  where an adversary already has strictly stronger tools (`/proc`, wallet memory); it is the *least*
+  of a compromised host's problems. ③ unlinks personas on the network path but re-exposes them to
+  the terminating daemon: N terminating connections, **arrival-synchronized tip fetches** (every new
+  block, all N personas fetch within a small window — a deterministic steady-state correlation), and
+  a residual timing coupling (measured ~0.3 ms, scheduler-level, post-lock-free-read).
+
+Net: **run your own node (① here, ② on your own server) is the privacy default**; ③ is the
+**actively-discouraged** fallback for users who genuinely cannot run one, its residuals disclosed as
+the *reasons* for the discouragement rather than silently hardened. Wallet-side mitigation of ③'s
+residuals (fetch-time jitter, decoys) reopens only if ③ is ever promoted to a supported posture.
+Full derivation + the measured numbers: `ARCHIVAL_BOND_2D2_SP_T2_FETCH.md` (DQ-T2.5 settled
+disposition, §3 Round-0 results, §5).
 
 ---
 

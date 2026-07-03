@@ -141,12 +141,14 @@ disposition — the success metric is *what leaks*, never blocks/sec:
    request, no connection-count metric exposed on any endpoint. Framed as an invariant a reviewer can
    check it ("does any handler retain per-connection state?"), and it concedes the irreducible floor
    plainly: the OS loopback TCP table is below our layer, so **"our RPC, therefore private" is false
-   for `local`** — loopback enumeration is an operating-system fact, not an RPC one, and one more
-   reason `local` is convenience-tier while remote-over-Tor is the privacy default. It is likewise an
-   argument on the *unlinkability axis* for remote-over-Tor (distinct circuits unlink the personas *at
-   the network layer*; caveat that a single shared remote daemon still sees N terminating connections —
-   remote hides the count from a **path/network** observer, not unconditionally from the terminating
-   node).
+   for `local`** — loopback enumeration is an operating-system fact, not an RPC one. **But the
+   residual is observable only from the box itself**, and that bounds it operationally: an adversary
+   positioned to read your loopback TCP table already has local presence, and local presence carries
+   strictly stronger tools (`/proc`, wallet memory, ptrace) — the connection count is the *least* of
+   that adversary's capabilities. So this residual does **not** argue for handing the scan to a
+   stranger's daemon. Re-derived on both privacy axes (§5), **`local` — run your own node — is the
+   privacy default**, and this residual is its honestly-stated floor: *off-box, `local` leaks
+   nothing; on a compromised box, the persona count is visible and is the least of your problems.*
 2. **Cross-persona timing correlation — a *remote-posture* threat, measured now.** The two leaks are
    **posture-complementary, not parallel**. Enumeration (#1) is the **`local`** leak: N loopback
    connections already link the personas by source address, so timing adds nothing there — *`local`'s
@@ -163,7 +165,9 @@ disposition — the success metric is *what leaks*, never blocks/sec:
    ms-scale jitter of a Tor circuit and the re-linking fails; a coupling of tens of ms survives Tor
    jitter and the re-linking succeeds. The measurement (§3) therefore outputs the **coupling-magnitude
    distribution** — how far a probe persona's latency shifts per unit of a contending persona's
-   activity, in absolute time — not a signal/no-signal boolean. The fork:
+   activity, in absolute time — not a signal/no-signal boolean. *(The fork below is the
+   pre-measurement decision procedure, kept as the decision record; the **settled disposition**
+   follows the ladder.)* The fork:
    - **Coupling below the remote-threat floor** (magnitude ≪ Tor circuit jitter): the rust-vs-cpp
      instinct holds — the lock-granularity change is a **liveness/UX** cost, deferred to the
      daemon→Rust port with a rule-21 reopen. `PBlockSource` carries **no** decorrelation duty.
@@ -207,9 +211,38 @@ disposition — the success metric is *what leaks*, never blocks/sec:
         residual coupling survives the lock-free path.
      3. **C++ lock surgery** on `m_blockchain_lock` — last resort, deferred to the daemon→Rust port.
 
-     **Default to rung 1 iff the lock-free path is *both* lower-coupling (§3 timing delta) *and*
-     consistency-equivalent under the writer-contention diff (§3 M-consistency); else rung 2.** Rung 1
-     exists *because the RPC server is ours.*
+     **Settled (Round-0 measured 2026-07-02 + the §5 posture re-derivation) — engineering reasons
+     first, threat math demoted:**
+     - **Rung 1 adopted — as correct architecture, not as closing a live channel.** The per-`P`
+       block read is served by the **single-height lock-free read**: simpler (no shared lock on a
+       read that never needed one), measurably better under load (the lock amplifies contention ~4×
+       at CPU saturation — §3 results), and consistency-confirmed under a forced writer window. The
+       timing channel it removes is load-bearing in **neither** posture: in `local` it is **subsumed
+       by enumeration** — any adversary able to measure sub-ms cross-persona timing on your box can
+       read `/proc/net/tcp` directly (strictly more capability for strictly less information); in
+       `remote` it is a residual of a posture we **actively discourage** (§5). Rung 1 exists
+       *because the RPC server is ours.*
+     - **Rung 2 not adopted, with the reason recorded:** the attack it would defend against (patient
+       statistical averaging of the residual coupling by a shared-daemon operator) is an attack on
+       the discouraged posture — we state it as a reason remote is discouraged (§5) rather than
+       harden a path we tell people not to use. **Reopen:** if `remote` is ever promoted to a
+       supported posture, rung 2 reopens as *coherence-destruction* (per-persona fetch-time jitter),
+       not magnitude reduction.
+     - **Rung 3 moot** — rung 1 side-steps the lock; the residual left is scheduler-level, not lock.
+     - **The timing reopens (R-T1/R-T2) close with rationale, not stay open:** the coupling numbers
+       are **architectural characterization, not a live-channel measurement** — the local timing
+       channel is dominated by the documented enumeration residual. The one reopen is a **posture
+       change** (remote promoted to supported), which reopens timing, arrival-sync, and scan-pattern
+       together as first-class.
+     - **P-SH — the lone load-bearing precondition, and it is *correctness*, not privacy.** The
+       per-`P` lock-free read is **single-height-per-snapshot**. A straddled multi-height read is a
+       wrong scan result with **no adversary at all**, so no threat-model concession touches it —
+       dominance arguments retire threat channels; they never touch correctness invariants.
+       Enforcement is the **type, not a comment**: `BlockSource::block_at(height)` takes one height,
+       so batching heights into one response is unrepresentable without changing the one signature
+       whose doc carries the reopen (*batching reopens finding-b; it requires a single-txn batch
+       read, or the scanner's cross-height coherence requirement established first*). The comment
+       explains; the type enforces.
 
 **Why measure *now*, not when the fetch path exists (the sharp reason):** the measurement's *result
 changes the wallet-side design*. If #2's coupling magnitude survives the remote-threat evaluation
@@ -217,7 +250,9 @@ changes the wallet-side design*. If #2's coupling magnitude survives the remote-
 decision in DQ-T2.2/T2.3); if it does not, `PBlockSource` is a plain fetch shim. Freezing the
 `PBlockSource` design *before* the measurement means either over-building a decorrelation shim
 speculatively (violating get-it-right-not-speculatively) or under-building and retrofitting. Measure
-first, and `PBlockSource` knows what it is responsible for.
+first, and `PBlockSource` knows what it is responsible for. **Measured: it is responsible for
+fetching.** The decorrelation duty did not attach (rung 2 not adopted) — `PBlockSource` is a plain
+fetch shim.
 
 ---
 
@@ -273,6 +308,37 @@ M-enum / M-timing / M-substitute are read-only; **M-consistency** additionally d
 block-accept / `pop_blocks` on the throwaway regtest chain (the writer contention it must measure).
 None modify the daemon *binary* — all drive existing RPC routes.
 
+### Round-0 results (measured 2026-07-02)
+
+**Envelope** (a disposition is "safe *under these conditions*"): regtest/FAKECHAIN `shekyld`,
+~2 s/block coinbase-only chain, tip 41, probe + up to 16 contending personas on an 8c/16t i9-11950H;
+harness `engine::daemon_observability` (`#[ignore]`d, `SHEKYLD_BIN`), one consolidated run (~170 s).
+A larger-block / higher-write mainnet is outside this envelope; so is N ≫ 16.
+
+- **M-enum — confirmed as specified.** 30/30 clients connected (the dead epee cap gates nothing);
+  the count was visible only in the host TCP table (31 ESTABLISHED); `get_info.rpc_connections_count
+  = 0`. The leak is OS-level, below the RPC surface.
+- **M-timing — a saturation *cliff*, not a slope.** Both paths are ~flat to 8 contenders; the entire
+  signal is the N=16 cliff (= the box's thread count): locked `get_block` p90 2314→4244 µs vs
+  lock-free `.bin` 937→1241 µs — under CPU saturation the lock amplifies contention **~4×**
+  (lock-isolated coupling ≈ 1.6 ms at the cliff). At N = threads the measurement cannot cleanly
+  separate lock-contention from CPU-saturation; given the settled disposition, it does not need to.
+- **M-substitute — named and sourced.** The lock-free path keeps ~304 µs of coupling, also only at
+  the N≈cores cliff → scheduler/worker-pool saturation, **not** LMDB (the read txn is
+  per-call-fresh). A smaller instance of the same channel; recorded, not adjectived away.
+- **M-consistency — conclusive under a *forced* window.** The harness brackets every read with a
+  writer-commit counter and **fails as inconclusive if no read provably raced a commit** (a
+  quiet-run green cannot pass). Measured: 19 reads raced a commit (14 single-height + 5 batch);
+  4 725 stable-height cross-path pairs byte-identical; 2 416 present tip reads, 0 torn/mis-height;
+  0 straddles. **Finding-b was *not* empirically exercised and cannot be forced by
+  `pop+regenerate`** — top-down pop + bottom-up regen never presents an inconsistent adjacent-height
+  pair, so only a genuine competing-chain reorg stages the straddle. It therefore stays
+  **source-established + structurally excluded by P-SH** (single-height reads), not "empirically
+  passed" — the denominator is recorded so a green result cannot mean "the race never fired."
+- *(Noted for the build, not measured: the scanner's tx fetch (`get_transactions`, by-hash) cannot
+  straddle heights; and the `.bin` route incidentally returns block+txs in one response — whether
+  the build collapses the fetch triple is a build-slice question.)*
+
 ---
 
 ## 4. Decomposition (commit-slices — one PR unless it grows exceptionally large)
@@ -285,16 +351,15 @@ Per the ~10-commit-as-CI-cost-guideline, one reviewable PR, sliced by commit:
 3. **The RPC-over-Tor transport** (DQ-T2.2) — the source-verified per-`P`-isolated `Rpc`
    (`SimpleRequestRpc`-per-instance or `PRpc`), with an isolation KAT.
 4. **`PBlockSource`** (DQ-T2.1/.3) — `new(client)` only, `tip_height`/`block_at` over #3 reusing
-   `default_fetch_scannable_block`; plus a timing-decorrelation responsibility on the **remote** impl
-   **iff** the M-timing coupling magnitude survived the remote-threat evaluation (§3b) — never on
-   `DaemonBlockSource`/`local`.
+   `default_fetch_scannable_block`; a **plain fetch shim** — the Round-0 disposition attached **no**
+   decorrelation duty (rung 2 not adopted; reopens only on posture promotion).
 5. **Posture→impl selector** at the scan-loop wiring (DQ-T2.3) — local→direct, remote→`PBlockSource`,
    conflation unrepresentable.
-6. **Daemon disposition** — record M-enum / M-timing / **M-consistency** / **M-substitute** results
-   (both read paths) + the chosen rung. Rung 1 is gated on the M-consistency diff **agreeing** *and*
-   M-substitute showing **no** new channel; if selected (serve per-`P` reads via a **single-height**
-   lock-free read), that is an **in-scope Rust RPC/FFI change** here, not a deferral; rungs 2/3 carry
-   rule-21 reopens (FOLLOWUPS / the daemon→Rust-port note).
+6. **Rung-1 fetch routing** — serve the per-`P` block read via the **single-height lock-free read**
+   (an in-scope Rust RPC-layer change, gated green by the Round-0 M-consistency diff), with the
+   **P-SH note on the `block_at(height)` signature** — the type is the enforcement, the comment
+   carries the finding-b reopen. The Round-0 results + settled disposition are recorded in this doc
+   (§3 results, DQ-T2.5 settled block); no open daemon reopens remain except the posture-change one.
 
 The `Ok(None)` provable-absence property (withheld-body robustness) is **out of scope for SP-T2** —
 it is header-chain-anchoring work (a later 2d-2 robustness slice); `PBlockSource` inherits
@@ -303,11 +368,39 @@ slice.)
 
 ---
 
-## 5. The §4 posture read-model update (lands in the transport plan)
+## 5. The §4 posture read-model (re-derived on both axes — lands in the transport plan)
 
-The enumeration finding (DQ-T2.5 #1) is a **posture property**, so it is stated in the transport
-plan's §4, not buried here: the `local` posture's per-`P` loopback connections make the persona
-count observable to the local daemon / its connection table — a named privacy residual that
-sharpens `local` as *convenience-with-a-disclosed-cost* rather than strictly-best, and informs
-(the round settles) whether the *privacy-recommended* default shifts toward remote-over-Tor on the
-unlinkability axis. Draft lands in `ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md` §4.
+The round initially weighed one axis — persona unlinkability — and drifted toward remote-over-Tor
+as the privacy default. Weighing **both** axes inverts the recommendation, and the operational
+reality settles it:
+
+- **Scan-pattern confidentiality:** `local` leaks *nothing off-box* — no scan heights, no persona
+  count, no timing; the scan never leaves the machine. `remote` shows a stranger's daemon the scan
+  itself: Tor anonymizes *who* is scanning, not *what* is scanned.
+- **Persona unlinkability:** `local`'s enumeration residual is observable only under local
+  compromise, where the adversary already has strictly stronger tools (`/proc`, wallet memory,
+  ptrace). `remote` unlinks personas on the network path but re-exposes them to the terminating
+  daemon.
+
+**Recommendation: run your own node** (transport plan ① local, or ② your own remote node — both
+terminate the scan at *your* daemon). `local` is the privacy-maximizing default — nothing leaves
+the box, and the one residual bites only an already-compromised host. **Third-party daemons (③) are
+actively discouraged** — for staking or anything else — and the per-`P` Tor path (SP-T1/SP-T2's
+`PBlockSource`, which serves ② and ③ alike) exists as the *fallback for users who genuinely cannot
+run a node*, with ③'s costs disclosed rather than silently hardened (the silent-compliance lens:
+disclosed-cost). The residual list — the *reasons* ③ is discouraged:
+
+1. **Scan-pattern exposure:** the terminating daemon sees N per-circuit connections and every
+   height each one requests; per-connection height trajectories are also **cross-session
+   fingerprints** — a persona resuming its monotonic scan is linkable across fresh circuits.
+2. **Arrival-synchronized fetching:** in steady state every new block triggers all N personas to
+   fetch the same tip within a small window over their own circuits — a deterministic, always-on
+   correlation at the terminating daemon that no lock work touches.
+3. **Residual timing coupling** (§3 results: ~0.3 ms scheduler-level post-rung-1; ~4× lock
+   amplification pre-rung-1), which a daemon operator who controls their own load could in
+   principle average up over a long scan.
+
+These are recorded as **why-remote-is-discouraged residuals, not `PBlockSource` mitigation
+duties**. Hardening any of them (fetch-time jitter, decoy fetches, …) reopens only on a posture
+promotion (remote → supported), per the DQ-T2.5 settled disposition. The same two-axis statement
+lands in `ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md` §4.
