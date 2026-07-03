@@ -81,6 +81,7 @@ set(unit_tests_sources
   rpc_target_wire_contract.cpp
   rolling_median.cpp
   scaling_2021.cpp
+  seed_epoch.cpp
   serialization.cpp
   sha256.cpp
   slow_memmem.cpp

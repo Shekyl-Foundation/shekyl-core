@@ -937,23 +937,15 @@ namespace cryptonote
   {
     size_t res = block_sync_size > 0 ? block_sync_size : BLOCKS_SYNCHRONIZING_DEFAULT_COUNT;
 
+    // Single source for the effective epoch length: the same clamped
+    // value the seed-epoch schedule itself uses (mainnet default, or
+    // the SEEDHASH_EPOCH_BLOCKS regtest override). This replaces an
+    // independent env parse with different clamp semantics (round-up,
+    // unbounded) that could let a sync batch span a seed-epoch
+    // boundary while the schedule silently ran the default.
     static size_t max_block_size = 0;
     if (max_block_size == 0)
-    {
-      const char *env = getenv("SEEDHASH_EPOCH_BLOCKS");
-      if (env)
-      {
-        int n = atoi(env);
-        if (n <= 0)
-          n = BLOCKS_SYNCHRONIZING_MAX_COUNT;
-        size_t p = 1;
-        while (p < (size_t)n)
-          p <<= 1;
-        max_block_size = p;
-      }
-      else
-        max_block_size = BLOCKS_SYNCHRONIZING_MAX_COUNT;
-    }
+      max_block_size = shekyl_pow_randomx_v2_seed_epoch_blocks();
     if (res > max_block_size)
     {
       static bool warned = false;

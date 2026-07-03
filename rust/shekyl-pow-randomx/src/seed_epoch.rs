@@ -1,4 +1,4 @@
-// Copyright (c) 2026, The Shekyl Foundation
+// Copyright (c) 2025-2026, The Shekyl Foundation
 //
 // All rights reserved.
 // BSD-3-Clause
@@ -7,42 +7,57 @@
 //! cache used to verify a given height.
 //!
 //! Ported from the inherited C `rx_seedheight`/`rx_seedheights`
-//! (formerly `src/crypto/rx-slow-hash.c`) with behavior preserved
-//! bit-for-bit, including the `SEEDHASH_EPOCH_LAG` /
-//! `SEEDHASH_EPOCH_BLOCKS` environment overrides — the regtest /
-//! FAKECHAIN lever for fast epochs (`cryptonote_core.cpp` reads the
-//! same variable for its own epoch bookkeeping, so both sides of the
-//! FFI see one process environment). Like the C statics they replace,
-//! the overrides are read **once** per process and cached.
+//! (formerly `src/crypto/rx-slow-hash.c`). **This module is pure
+//! parameterized arithmetic** — the crate's isolation charter (lib.rs
+//! "Isolation invariants", enforced by
+//! `scripts/ci/check_randomx_crate_invariants.sh`) bans ambient
+//! runtime state here, so the `SEEDHASH_EPOCH_*` environment lever
+//! (the regtest/FAKECHAIN fast-epoch override) lives at the FFI
+//! boundary in `shekyl-ffi::pow_randomx_ffi`, which reads the
+//! environment once and passes the clamped parameters in.
 //!
-//! The consensus schedule (mainnet defaults): epoch length 2048
-//! blocks, seed lag 64. `seedheight(h) = 0` for the first
-//! `2048 + 64` blocks, then the last epoch boundary at least `lag+1`
-//! blocks behind `h`. Overrides are clamped exactly as the C did:
-//! non-power-of-two or out-of-range values fall back to the defaults
-//! (`atoi` garbage parsed as 0, which fails the power-of-two check).
-
-use std::sync::OnceLock;
+//! # C-parity contract (precise, not "bit-for-bit")
+//!
+//! The schedule formula and the clamp *ranges* are byte-identical to
+//! the retired C for every ASCII override value that fits in a C
+//! `int`, and for all absent/garbage/negative values (both sides land
+//! on the defaults). Three deliberate edge deltas from glibc `atoi`,
+//! all regtest-lever-only and all measured against the C before
+//! deletion:
+//!
+//! - values ≥ 2³²: glibc `atoi` is `(int)strtol` and truncates
+//!   mod 2³² (measured: `atoi("4294967312") == 16`), so the old C
+//!   *accepted* absurd wrapped overrides; this port parses the full
+//!   number and clamps to the default instead.
+//! - non-ASCII whitespace: C `isspace` skips ASCII only; this port
+//!   does the same (`is_ascii_whitespace`), but note a plain
+//!   `str::trim_start` would have accepted NBSP-prefixed values the
+//!   C rejected — deliberately not used.
+//! - non-UTF-8 env bytes: treated as absent (C parsed the raw byte
+//!   prefix). The env read lives in `shekyl-ffi`; see there.
+//!
+//! Overflow: `height + lag` uses wrapping arithmetic, matching C
+//! `uint64_t` wraparound (unreachable for real chain heights; matters
+//! only for hostile values fed straight to the C ABI).
 
 /// Mainnet epoch length in blocks. Must equal
-/// `BLOCKS_SYNCHRONIZING_MAX_COUNT` in `cryptonote_config.h`.
-const SEEDHASH_EPOCH_BLOCKS: u64 = 2048;
+/// `BLOCKS_SYNCHRONIZING_MAX_COUNT` in `cryptonote_config.h` (a unit
+/// test in `tests/unit_tests/` pins the two together across the FFI).
+pub const SEEDHASH_EPOCH_BLOCKS: u64 = 2048;
 /// Mainnet seed lag in blocks.
-const SEEDHASH_EPOCH_LAG: u64 = 64;
-
-fn is_power_of_2(n: u64) -> bool {
-    n != 0 && (n & (n - 1)) == 0
-}
+pub const SEEDHASH_EPOCH_LAG: u64 = 64;
 
 /// Clamp a raw `SEEDHASH_EPOCH_LAG` override exactly as the C `atoi`
-/// path did: absent → default; unparsable → 0 → fails power-of-two →
-/// default; parsed but `> default` or not a power of two → default.
-fn clamp_lag(raw: Option<&str>) -> u64 {
+/// path did for in-range values: absent → default; unparsable → 0 →
+/// fails power-of-two → default; parsed but `> default` or not a
+/// power of two → default.
+#[must_use]
+pub fn clamp_lag(raw: Option<&str>) -> u64 {
     match raw {
         None => SEEDHASH_EPOCH_LAG,
         Some(s) => {
             let lag = parse_atoi(s);
-            if lag > SEEDHASH_EPOCH_LAG || !is_power_of_2(lag) {
+            if lag > SEEDHASH_EPOCH_LAG || !lag.is_power_of_two() {
                 SEEDHASH_EPOCH_LAG
             } else {
                 lag
@@ -53,12 +68,13 @@ fn clamp_lag(raw: Option<&str>) -> u64 {
 
 /// Clamp a raw `SEEDHASH_EPOCH_BLOCKS` override exactly as the C did:
 /// `< 2`, `> default`, or not a power of two → default.
-fn clamp_blocks(raw: Option<&str>) -> u64 {
+#[must_use]
+pub fn clamp_blocks(raw: Option<&str>) -> u64 {
     match raw {
         None => SEEDHASH_EPOCH_BLOCKS,
         Some(s) => {
             let blocks = parse_atoi(s);
-            if !(2..=SEEDHASH_EPOCH_BLOCKS).contains(&blocks) || !is_power_of_2(blocks) {
+            if !(2..=SEEDHASH_EPOCH_BLOCKS).contains(&blocks) || !blocks.is_power_of_two() {
                 SEEDHASH_EPOCH_BLOCKS
             } else {
                 blocks
@@ -67,37 +83,30 @@ fn clamp_blocks(raw: Option<&str>) -> u64 {
     }
 }
 
-/// C `atoi` semantics for the value range these knobs see: leading
-/// whitespace skipped, optional sign, digits until the first
-/// non-digit; no digits → 0. Negative values map to 0 (they would
-/// wrap through C's int → unsigned comparison paths only for values
-/// the clamps reject anyway; regtest uses small positive powers of
-/// two).
+/// C `atoi` semantics for the value range these knobs accept: ASCII
+/// whitespace skipped (C-locale `isspace` — NOT Unicode whitespace),
+/// optional sign, digits until the first non-digit; no digits → 0;
+/// negative → 0 (no in-`int`-range negative wraps to an accepted
+/// power of two, so outcomes match C on every branch). See the module
+/// doc for the deliberate ≥2³² delta.
 fn parse_atoi(s: &str) -> u64 {
-    let t = s.trim_start();
+    let t = s.trim_start_matches(|c: char| c.is_ascii_whitespace());
     let t = t.strip_prefix('+').unwrap_or(t);
     if t.starts_with('-') {
         return 0;
     }
-    let digits: String = t.chars().take_while(char::is_ascii_digit).collect();
-    digits.parse::<u64>().unwrap_or(0)
+    let end = t.find(|c: char| !c.is_ascii_digit()).unwrap_or(t.len());
+    t[..end].parse::<u64>().unwrap_or(0)
 }
 
-fn epoch_lag() -> u64 {
-    static LAG: OnceLock<u64> = OnceLock::new();
-    *LAG.get_or_init(|| clamp_lag(std::env::var("SEEDHASH_EPOCH_LAG").ok().as_deref()))
-}
-
-fn epoch_blocks() -> u64 {
-    static BLOCKS: OnceLock<u64> = OnceLock::new();
-    *BLOCKS.get_or_init(|| clamp_blocks(std::env::var("SEEDHASH_EPOCH_BLOCKS").ok().as_deref()))
-}
-
-/// The height whose block hash seeds the cache for verifying `height`.
+/// The height whose block hash seeds the cache for verifying `height`,
+/// under an epoch schedule of `blocks` per epoch with `lag` blocks of
+/// seed lag. Callers pass parameters that have been through
+/// [`clamp_blocks`]/[`clamp_lag`] (the FFI layer does this once per
+/// process); the mainnet schedule is
+/// ([`SEEDHASH_EPOCH_BLOCKS`], [`SEEDHASH_EPOCH_LAG`]).
 #[must_use]
-pub fn seedheight(height: u64) -> u64 {
-    let lag = epoch_lag();
-    let blocks = epoch_blocks();
+pub fn seedheight(height: u64, blocks: u64, lag: u64) -> u64 {
     if height <= blocks + lag {
         0
     } else {
@@ -105,19 +114,24 @@ pub fn seedheight(height: u64) -> u64 {
     }
 }
 
-/// `(seedheight(height), seedheight(height + lag))` — the current
-/// seed height and the upcoming one, for the RPC pre-announce path.
+/// The *upcoming* seed height: `seedheight(height + lag)`, for the
+/// RPC next-seed pre-announce path (the second output of the retired
+/// C `rx_seedheights`). Wrapping add matches C `uint64_t` overflow
+/// (reachable only via hostile heights at the C ABI).
 #[must_use]
-pub fn seedheights(height: u64) -> (u64, u64) {
-    (seedheight(height), seedheight(height + epoch_lag()))
+pub fn next_seedheight(height: u64, blocks: u64, lag: u64) -> u64 {
+    seedheight(height.wrapping_add(lag), blocks, lag)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Pure re-statement of the C formula at mainnet constants, used to
-    /// cross-check `seedheight` without the env-cached accessors.
+    const B: u64 = SEEDHASH_EPOCH_BLOCKS;
+    const L: u64 = SEEDHASH_EPOCH_LAG;
+
+    /// Pure re-statement of the C formula, used to cross-check the
+    /// boundary sweep with explicit (non-env) constants.
     fn c_formula(height: u64, blocks: u64, lag: u64) -> u64 {
         if height <= blocks + lag {
             0
@@ -128,27 +142,37 @@ mod tests {
 
     #[test]
     fn mainnet_schedule_matches_c_formula() {
-        // Boundary sweep around the first three epochs plus large heights.
-        for h in (0..=3 * 2048 + 130).chain([u64::MAX - 65, u64::MAX]) {
-            assert_eq!(
-                seedheight(h),
-                c_formula(h, epoch_blocks(), epoch_lag()),
-                "height {h}"
-            );
+        // Boundary sweep around the first three epochs plus large heights,
+        // at the explicit mainnet constants (env-independent).
+        for h in (0..=3 * B + 130).chain([u64::MAX - 65, u64::MAX]) {
+            assert_eq!(seedheight(h, B, L), c_formula(h, B, L), "height {h}");
         }
     }
 
     #[test]
     fn mainnet_pinned_values() {
         // Pinned expectations at the default 2048/64 schedule (KAT-style;
-        // any change here is a consensus change).
-        assert_eq!(seedheight(0), 0);
-        assert_eq!(seedheight(2112), 0); // == blocks + lag: still genesis seed
-        assert_eq!(seedheight(2113), 2048); // first rollover
-        assert_eq!(seedheight(4160), 2048); // == 2*blocks + lag
-        assert_eq!(seedheight(4161), 4096);
-        let (s, n) = seedheights(2100);
-        assert_eq!((s, n), (0, 2048)); // lag window pre-announces the next seed
+        // any change here is a consensus change). Env-independent: the
+        // constants are passed explicitly.
+        assert_eq!(seedheight(0, B, L), 0);
+        assert_eq!(seedheight(2112, B, L), 0); // == blocks + lag: still genesis seed
+        assert_eq!(seedheight(2113, B, L), 2048); // first rollover
+        assert_eq!(seedheight(4160, B, L), 2048); // == 2*blocks + lag
+        assert_eq!(seedheight(4161, B, L), 4096);
+        assert_eq!(next_seedheight(2100, B, L), 2048); // lag window pre-announces
+        assert_eq!(seedheight(2100, B, L), 0);
+    }
+
+    #[test]
+    fn next_seedheight_wraps_like_c_uint64() {
+        // C computed seedheight(height + lag) with uint64_t wraparound;
+        // the port must not abort (workspace pins overflow-checks=true).
+        assert_eq!(next_seedheight(u64::MAX, B, L), seedheight(L - 1, B, L));
+        assert_eq!(next_seedheight(u64::MAX, B, L), 0);
+        assert_eq!(
+            next_seedheight(u64::MAX - L, B, L),
+            seedheight(u64::MAX, B, L)
+        );
     }
 
     #[test]
@@ -161,7 +185,14 @@ mod tests {
         assert_eq!(clamp_lag(Some("0")), 64); // 0 fails pow2
         assert_eq!(clamp_lag(Some("garbage")), 64); // atoi → 0 → default
         assert_eq!(clamp_lag(Some("-8")), 64);
-        assert_eq!(clamp_lag(Some("  8tail")), 8); // atoi prefix parse
+        assert_eq!(clamp_lag(Some("  8tail")), 8); // ASCII-ws + prefix parse
+        assert_eq!(clamp_lag(Some("+16")), 16);
+        // Deliberate deltas from glibc atoi (module doc): mod-2^32 wrap
+        // values are rejected to default rather than wrapped-accepted,
+        // and non-ASCII whitespace is NOT skipped.
+        assert_eq!(clamp_lag(Some("4294967312")), 64); // C accepted as 16
+        assert_eq!(clamp_lag(Some("\u{00A0}16")), 64); // NBSP: C rejected too
+        assert_eq!(clamp_lag(Some("99999999999999999999")), 64); // > u64: parse fails → default (C: LONG_MAX→(int)→-1→default)
     }
 
     #[test]

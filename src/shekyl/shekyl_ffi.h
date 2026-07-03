@@ -2063,6 +2063,13 @@ uint64_t shekyl_pow_randomx_v2_seedheight(uint64_t height);
 /// seedheight(height + lag) — the upcoming seed height (the second
 /// output of the retired crypto::rx_seedheights).
 uint64_t shekyl_pow_randomx_v2_next_seedheight(uint64_t height);
+/// The effective seed-epoch length in blocks (2048, or the clamped
+/// SEEDHASH_EPOCH_BLOCKS override) — the single source for consumers
+/// needing the epoch length itself (block-sync sizing).
+uint64_t shekyl_pow_randomx_v2_seed_epoch_blocks(void);
+/// True iff a SEEDHASH_EPOCH_* override is active (schedule differs
+/// from the mainnet defaults); the daemon logs a startup warning.
+bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
 
 } // extern "C"
 

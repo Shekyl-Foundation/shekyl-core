@@ -577,6 +577,8 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
   }
 
   {
+    if (shekyl_pow_randomx_v2_seed_epoch_overridden())
+      MWARNING("SEEDHASH_EPOCH_* override active: the RandomX seed-epoch schedule differs from mainnet defaults (regtest lever) — blocks will fail verification against mainnet peers");
     const crypto::hash seedhash = get_block_id_by_height(shekyl_pow_randomx_v2_seedheight(m_db->height()));
     if (seedhash != crypto::null_hash)
       shekyl_pow_randomx_v2_set_canonical(reinterpret_cast<const uint8_t (*)[32]>(seedhash.data));

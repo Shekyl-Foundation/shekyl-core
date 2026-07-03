@@ -94,5 +94,3 @@ bool is_branch_in_tree(const char hash[HASH_SIZE], const char root[HASH_SIZE], c
 
 #define RX_BLOCK_VERSION	12
 
-
-uint32_t rx_get_miner_thread(void);
