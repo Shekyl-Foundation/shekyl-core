@@ -1574,6 +1574,85 @@ mod producer_property_tests {
         );
     }
 
+    /// The seam case: an intra-attempt reorg whose fork sits at **exactly**
+    /// `synced_height` — the boundary between the two expected-parent
+    /// lookups (running tail owns heights > `synced_height`, the persisted
+    /// window owns heights ≤ it). This is the one height where "disjoint by
+    /// construction" is asserted rather than obvious; an off-by-one at the
+    /// seam would splice a fork landing precisely on the boundary.
+    ///
+    /// Setup: wallet synced to 4 on chain A (window anchor = A4); the daemon
+    /// reorgs from height **4** (replacing the window-top block itself) right
+    /// after serving the fetch at 6. The fetch at 7 returns B7, whose
+    /// `previous` (B6's hash) mismatches the running tail's A6 → the walk
+    /// enters the persisted window at its top (4), finds the stored A4 also
+    /// replaced (daemon serves B4), continues below the window (no stored
+    /// hash at 3) and resolves the conservative fork at 4 — rewinding
+    /// *through* the seam, refetching the replaced window-top block.
+    #[tokio::test(start_paused = true)]
+    async fn intra_attempt_reorg_at_exact_synced_height_rewinds_through_seam() {
+        const SYNCED: u64 = 4;
+        const TIP: u64 = 12;
+        const FORK: u64 = SYNCED; // fork at exactly the persisted-window top
+        const TRIGGER: u64 = 6; // daemon reorgs right after serving this fetch
+
+        let blob = rederive_account(
+            &PROPERTY_TEST_MASTER_SEED,
+            DerivationNetwork::Fakechain,
+            SeedFormat::Raw32,
+        )
+        .expect("rederive_account against fakechain raw32 seed");
+        let vm = ViewMaterial::try_from_keys(&blob)
+            .expect("ViewMaterial::try_from_keys against deterministic test blob");
+        let refresh = LocalRefresh::new(vm, 0);
+
+        let chain_a = linear_chain(TIP);
+        let tail_b = divergent_tail(&chain_a, FORK, TIP);
+        let anchor = chain_a[usize::try_from(SYNCED).unwrap()].block.hash();
+
+        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain_a);
+        daemon.replace_chain_after_fetch(TRIGGER, FORK, tail_b.clone());
+
+        let snapshot = snapshot_at_anchor(SYNCED, anchor);
+        let sink = AssertionSink::new();
+        let cancel = CancellationToken::new();
+        let (progress_tx, _progress_rx) = fresh_progress_channel();
+
+        let result = refresh
+            .produce_scan_result(
+                snapshot,
+                &daemon,
+                RefreshOptions::default(),
+                cancel,
+                progress_tx,
+                &sink,
+            )
+            .await
+            .expect("seam-straddled scan completes via rewind");
+
+        // The rewind lands AT the fork (the replaced window-top height), not
+        // one above it — the seam is rewound through, not spliced around.
+        assert_eq!(
+            result.reorg_rewind.map(|r| r.fork_height),
+            Some(FORK),
+            "a fork at exactly synced_height must rewind to it, not splice"
+        );
+
+        // Every height from the fork up carries the B-chain hash — including
+        // height 4 itself (the window-top block the reorg replaced) and
+        // heights 5/6 (fetched as A before the swap, purged, refetched as B).
+        let expected: Vec<(u64, [u8; 32])> = (FORK..TIP)
+            .map(|h| {
+                let idx = usize::try_from(h - FORK).unwrap();
+                (h, tail_b[idx].block.hash())
+            })
+            .collect();
+        assert_eq!(
+            result.block_hashes, expected,
+            "the seam height must carry the post-reorg hash, never the stale window-top"
+        );
+    }
+
     /// Fresh empty [`LedgerSnapshot`] anchored at `synced_height = 0`
     /// with an empty reorg window. Matches the
     /// `EngineCreateParams::for_test_full` starting state used across
