@@ -15,6 +15,19 @@
   MAINNET, TESTNET, and STAGENET; FAKECHAIN (regtest daemons and test
   fixtures — the lever's legitimate fast-epoch use) keeps the warning-only
   behavior.
+- **pow: native-aarch64 CI lane** (RandomX v2 test-regime hardening PR-2).
+  New `native-arm` job on `ubuntu-24.04-arm` (native silicon, deliberately
+  not qemu — softfloat would mask a real FP-rounding divergence): verifier
+  crate tests, the T2 adversarial byte-equality against an arm-built C
+  oracle, a new `canonical_pins_full` test re-deriving all 1024 committed
+  canonical pins, and the harness's three-leg `--mode=correctness`
+  (Rust ≡ arm-built C ≡ canonical over the same 1024) — the first CI
+  executions the `fpu_rounding` FPCR path and the correctness mode have
+  ever had. The 1024-pin test also runs per-PR on x86_64. The rustup
+  install (all four jobs) and the out-of-band C-reference build (the
+  three jobs that use it; `full-parity` builds through the parent CMake
+  project) are now composite actions (`.github/actions/install-rust`,
+  `.github/actions/build-randomx-v2-ref`).
 - **pow: the Phase 3a full-dataset parity gate is wired into CI** (RandomX v2
   test-regime hardening PR-1). New `full-parity` cron job in
   `randomx-v2-differential.yml`: daily subset / weekly full sweep of the C

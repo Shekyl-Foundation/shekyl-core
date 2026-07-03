@@ -1,0 +1,44 @@
+name: 'install-rust'
+description: >-
+  Install the repo-pinned Rust toolchain reproducibly, without
+  third-party actions, on any Linux runner arch (x86_64 or aarch64 —
+  rustup-init selects the host triple itself).
+
+  Download-then-run, NOT `curl | sh`: in a pipeline the step's fate is
+  sh's exit status, and when curl fails to connect sh reads empty stdin
+  and exits 0 — the step goes green with no toolchain installed and the
+  job dies later at the first `rustc` use with a misattributed exit 127
+  (observed live on PR #236). With the file form under `-e`, a failed
+  download fails THIS step; --retry rides through transients (house
+  precedent: build.yml APT_SET_CONF's Acquire::Retries).
+
+  Keep the default toolchain in sync with rust/rust-toolchain.toml on a
+  bump (the toolchain.toml doc's mandate: CI installs the pinned
+  toolchain up front; the .toml only selects it). Avoids the dtolnay
+  moving-ref: `@stable` installed the wrong channel for the pin, and
+  `@master`/`@v1` is a mutable ref (supply-chain + reproducibility
+  risk).
+inputs:
+  toolchain:
+    description: 'Rust toolchain channel to pin (keep in sync with rust/rust-toolchain.toml)'
+    required: false
+    default: '1.94.0'
+  components:
+    description: 'Space-separated rustup components to install alongside the minimal profile'
+    required: false
+    default: 'rustfmt clippy'
+runs:
+  using: 'composite'
+  steps:
+    - name: install pinned Rust toolchain
+      shell: bash
+      run: |
+        set -euo pipefail
+        curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs
+        component_args=""
+        for c in ${{ inputs.components }}; do
+          component_args="$component_args --component $c"
+        done
+        # shellcheck disable=SC2086 — word-splitting of component_args is intended
+        sh /tmp/rustup-init.sh -y --default-toolchain '${{ inputs.toolchain }}' --profile minimal $component_args
+        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"

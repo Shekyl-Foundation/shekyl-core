@@ -21,6 +21,16 @@
 #   Mutation-tests the harness + verifier under the §1.4 sole-consumer
 #   discipline. Skip-list discipline lives in `.cargo/mutants.toml`.
 #
+# * Daily cron / weekly full sweep / dispatch: `full-parity` — the
+#   Phase 3a C-full-dataset vs Rust-light parity gate + post-link nm
+#   symbol isolation (test-regime hardening PR-1; see the job comment).
+#
+# * Per-PR + push + daily cron + dispatch: `native-arm` — verifier +
+#   T2 + all 1024 canonical pins + the three-leg `--mode=correctness`
+#   (rust == arm-built C == canonical) on a native aarch64 runner
+#   (test-regime hardening PR-2; first CI executions of the FPCR arch
+#   surface and of the correctness mode).
+#
 # Path-filtered triggers per the R1-D12 close: per-PR job runs on
 # every PR by default but is skipped for PRs that touch only `docs/`,
 # `*.md`, or non-RandomX surfaces (positive `paths:` filter, which is
@@ -56,6 +66,8 @@ on:
       - 'external/randomx-v2/**'
       - 'external/CMakeLists.txt'
       - 'scripts/ci/check_randomx_crate_invariants.sh'
+      - '.github/actions/install-rust/**'
+      - '.github/actions/build-randomx-v2-ref/**'
       - '.github/workflows/randomx-v2-differential.yml'
       - '.github/workflows/randomx-v2-adversarial-ratio.yml'
       - '.cargo/mutants.toml'
@@ -67,6 +79,8 @@ on:
       - 'external/randomx-v2/**'
       - 'external/CMakeLists.txt'
       - 'scripts/ci/check_randomx_crate_invariants.sh'
+      - '.github/actions/install-rust/**'
+      - '.github/actions/build-randomx-v2-ref/**'
       - '.github/workflows/randomx-v2-differential.yml'
       - '.github/workflows/randomx-v2-adversarial-ratio.yml'
       - '.cargo/mutants.toml'
@@ -143,18 +157,15 @@ jobs:
         with:
           submodules: recursive
       - name: Install Rust toolchain
-        # Reproducible, third-party-action-free install of the exact channel
-        # pinned by rust/rust-toolchain.toml (1.94.0) + its components, matching
-        # build.yml / depends.yml / codeql.yml (the toolchain.toml doc's
-        # mandate: CI installs the pinned toolchain up front; the .toml only
-        # selects it). Avoids the dtolnay moving-ref: `@stable` installed the
-        # wrong channel for the 1.94.0 pin (cargo fmt/clippy then failed with
-        # "'cargo-fmt' is not installed for the toolchain '1.94.0'"), and
-        # `@master`/`@v1` is a mutable ref (supply-chain + reproducibility risk).
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs
-          sh /tmp/rustup-init.sh -y --default-toolchain 1.94.0 --profile minimal --component rustfmt --component clippy
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        # Composite action (.github/actions/install-rust): reproducible,
+        # third-party-action-free install of the channel pinned by
+        # rust/rust-toolchain.toml, download-then-run form. This file's
+        # inline copies were already hardened on PR #236; the composite
+        # consolidates that one proven recipe so future edits (toolchain
+        # bumps, flag changes) happen once — the 8 `curl | sh` copies in
+        # OTHER workflows still carry the silent-green bug and migrate
+        # in a follow-up sweep.
+        uses: ./.github/actions/install-rust
       - name: Install CMake + Ninja
         # `ubuntu-latest` images carry CMake by default, but we pin
         # Ninja explicitly because the submodule's CMakeLists builds
@@ -165,35 +176,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build
       - name: Configure + build randomx-v2 C reference
-        # Build the submodule's own CMakeLists out-of-band rather than
-        # going through the parent project's `external/CMakeLists.txt`
-        # `ExternalProject_Add` wrapper. The wrapper is the production
-        # wiring (per §5.4) but the parent project requires Boost +
-        # OpenSSL + ~ a dozen other deps the harness build never
-        # touches. Building the submodule directly via its self-
-        # contained CMakeLists produces byte-identical `librandomx.a`
-        # at substantially smaller install footprint, which is
-        # justified for the CI cost — the harness's audit-against-
-        # actual-code discipline (per §4.5 T-A11 + §4.3) is
-        # independent of which CMake invocation produced the lib, so
-        # long as the lib is built from the fork-pinned submodule SHA
-        # (verified at runtime by T15 — `randomx-v2-sys/Cargo.toml`'s
-        # `fork-pin-sha` matches `git -C external/randomx-v2 rev-parse
-        # HEAD`).
-        run: |
-          mkdir -p "${RANDOMX_V2_INSTALL_DIR}/lib" "${RANDOMX_V2_INSTALL_DIR}/include"
-          cmake -G Ninja \
-            -S external/randomx-v2 \
-            -B "${RANDOMX_V2_BUILD_DIR}" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-          cmake --build "${RANDOMX_V2_BUILD_DIR}" --target randomx
-          # The submodule's CMakeLists does not declare an `install`
-          # target; copy the static lib + header manually to mirror
-          # the layout that `randomx-v2-sys/build.rs` expects
-          # (`<prefix>/lib/librandomx.a` + `<prefix>/include/randomx.h`).
-          cp "${RANDOMX_V2_BUILD_DIR}/librandomx.a" "${RANDOMX_V2_INSTALL_DIR}/lib/"
-          cp external/randomx-v2/src/randomx.h "${RANDOMX_V2_INSTALL_DIR}/include/"
+        # Composite action (.github/actions/build-randomx-v2-ref): one
+        # recipe for every lane — the rationale (out-of-band submodule
+        # build, T15 fork-pin binding) lives in the action.
+        uses: ./.github/actions/build-randomx-v2-ref
       - name: cargo fmt --check (harness + sys)
         working-directory: rust
         run: cargo fmt --all -- --check
@@ -232,9 +218,15 @@ jobs:
         # runtime aligned with R1-D6 close Reframe 2's
         # `T2_PER_PR_BUDGET_MS` budget — debug-mode RandomX is
         # multi-minute slow without JIT).
+        # canonical_pins_full is likewise skipped here and run in its
+        # own release-mode step below: 1024 interpreted light hashes
+        # are minutes in release and hours in debug. The skip string is
+        # the shared PREFIX of the test fn and the --test target name,
+        # so a rename that breaks the pairing shows up on both sides.
         run: |
           cargo test --locked -p shekyl-randomx-differential -p randomx-v2-sys \
-            -- --skip t2_adversarial_corpus_byte_equality
+            -- --skip t2_adversarial_corpus_byte_equality \
+               --skip canonical_pins_full
       - name: cargo test --release T2 adversarial_corpus_byte_equality
         working-directory: rust
         # Per-PR release-mode T2 invocation (post-PR-#79 FOLLOWUP
@@ -249,6 +241,20 @@ jobs:
         run: |
           cargo test --release --locked -p shekyl-randomx-differential \
             --test adversarial_corpus_byte_equality
+      - name: cargo test --release canonical pins (rust leg, 1024 pins)
+        working-directory: rust
+        # Full 1024-pin re-check of the Rust verifier against the
+        # committed canonical table (rust-vs-canonical leg only; no C
+        # oracle). Added with the native-aarch64 lane (test-regime
+        # hardening PR-2) and run on x86_64 too so BOTH shipping arches
+        # re-verify every pin per PR — before this step, the pin table's
+        # only per-PR consumers were subset/shape tests. Release-mode
+        # dedicated step per the T2 house pattern (~2-5 min; debug would
+        # be hours). The three-leg runtime differential remains the
+        # runtime-mode wiring change's scope.
+        run: |
+          cargo test --release --locked -p shekyl-randomx-differential \
+            --test canonical_pins_full
       - name: cargo test --features test-internals (verifier)
         working-directory: rust
         # Per §5.3.3 R5-D1: the verifier crate's
@@ -290,33 +296,15 @@ jobs:
         with:
           submodules: recursive
       - name: Install Rust toolchain
-        # Reproducible, third-party-action-free install of the exact channel
-        # pinned by rust/rust-toolchain.toml (1.94.0) + its components, matching
-        # build.yml / depends.yml / codeql.yml (the toolchain.toml doc's
-        # mandate: CI installs the pinned toolchain up front; the .toml only
-        # selects it). Avoids the dtolnay moving-ref: `@stable` installed the
-        # wrong channel for the 1.94.0 pin (cargo fmt/clippy then failed with
-        # "'cargo-fmt' is not installed for the toolchain '1.94.0'"), and
-        # `@master`/`@v1` is a mutable ref (supply-chain + reproducibility risk).
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs
-          sh /tmp/rustup-init.sh -y --default-toolchain 1.94.0 --profile minimal --component rustfmt --component clippy
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        # Composite action (.github/actions/install-rust); see the
+        # structural-validate job's step comment.
+        uses: ./.github/actions/install-rust
       - name: Install CMake + Ninja
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build
       - name: Configure + build randomx-v2 C reference
-        run: |
-          mkdir -p "${RANDOMX_V2_INSTALL_DIR}/lib" "${RANDOMX_V2_INSTALL_DIR}/include"
-          cmake -G Ninja \
-            -S external/randomx-v2 \
-            -B "${RANDOMX_V2_BUILD_DIR}" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-          cmake --build "${RANDOMX_V2_BUILD_DIR}" --target randomx
-          cp "${RANDOMX_V2_BUILD_DIR}/librandomx.a" "${RANDOMX_V2_INSTALL_DIR}/lib/"
-          cp external/randomx-v2/src/randomx.h "${RANDOMX_V2_INSTALL_DIR}/include/"
+        uses: ./.github/actions/build-randomx-v2-ref
       - name: Install cargo-mutants
         # `cargo install --locked` is idempotent: on workflow re-run
         # the binary is already present in `~/.cargo/bin`. The
@@ -337,7 +325,16 @@ jobs:
         # `--in-place` runs mutations inline rather than in a
         # parallel worktree; the runner's 14 GB SSD is tight for
         # multi-worktree mutation runs at workspace scale.
-        run: cargo mutants --package shekyl-randomx-differential --package shekyl-pow-randomx --in-place
+        #
+        # canonical_pins_full is skipped here for the same
+        # reason structural-validate's debug step skips it: mutants
+        # runs the suite in DEBUG once per mutant, and 1024 interpreted
+        # hashes are hours in debug — the baseline alone would eat the
+        # 360-minute cap. Mutation coverage of the verifier's hashing
+        # is already carried by the rest of the suite; the pins test's
+        # job is arch parity, not mutant killing. (First `--` = cargo
+        # test args, second = test-binary args.)
+        run: cargo mutants --package shekyl-randomx-differential --package shekyl-pow-randomx --in-place -- -- --skip canonical_pins_full
 
   full-parity:
     # Phase 3a Hole-1 gate wiring (RandomX v2 test-regime hardening F1):
@@ -413,16 +410,18 @@ jobs:
       - name: install build dependencies
         # Mirrors build.yml APT_INSTALL_LINUX.
         run: apt -y install build-essential cmake libboost-all-dev miniupnpc libunbound-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl
-      - name: install Rust toolchain
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs
-          sh /tmp/rustup-init.sh -y --default-toolchain 1.94.0 --profile minimal --component rustfmt --component clippy
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
         with:
           submodules: recursive
+      - name: install Rust toolchain
+        # Composite action (.github/actions/install-rust); see the
+        # structural-validate job's step comment. Must come AFTER
+        # checkout: a `./`-referenced local action does not exist on
+        # the runner until the repo is checked out (the inline `run:`
+        # it replaced had no such dependency).
+        uses: ./.github/actions/install-rust
       - uses: actions/cache@v5
         with:
           path: ~/.ccache
@@ -458,3 +457,112 @@ jobs:
         # a pass — this job exists because the gate had no trigger.
         working-directory: build
         run: ctest -L "$PARITY_CTEST_LABEL" --output-on-failure --no-tests=error
+
+  native-arm:
+    # Native aarch64 lane (test-regime hardening PR-2 / audit F5): the
+    # verifier ships on exactly two arches (fpu_rounding.rs: x86_64
+    # MXCSR, aarch64 FPCR) and until this job only x86_64 had ever
+    # executed in CI. NATIVE arm silicon, deliberately NOT qemu — qemu
+    # softfloat would mask a real FP-rounding divergence, and RandomX
+    # is FP-rounding-sensitive (every program flips rounding modes via
+    # CFROUND; fpu_rounding.rs swaps mode bits 1 and 2 between the two
+    # encodings).
+    #
+    # What runs here and why:
+    #   - uname guard: the lane must FAIL if the runner is not actually
+    #     aarch64 (a silently-substituted x86 runner would turn this
+    #     into an armed gate testing nothing).
+    #   - C reference build: compiles the fork's a64 paths (v2 FE-mix +
+    #     prefetch tweaks verified present at source and in a local
+    #     cross-build at PR-2; this step is the continuous proof).
+    #   - verifier crate tests (release): first native-arm execution of
+    #     the interpreter/unit suite.
+    #   - T2 (release): the 8 adversarial recipes byte-equal across
+    #     Rust-light and the ARM-BUILT C oracle (both interpreted;
+    #     c_oracle passes no JIT flag).
+    #   - canonical pins (release): all 1024 committed pins re-derived
+    #     on FPCR silicon by the portable single-leg test.
+    #   - three-leg --mode=correctness (release): rust == arm-built C ==
+    #     canonical over the same 1024 — the lane's strongest gate,
+    #     covering the arm C reference on every pin, not just T2's 8
+    #     recipes.
+    # fmt/clippy/invariants are arch-independent and already gate on
+    # x86; not repeated here.
+    #
+    # TRIAGE POSTURE (decided in advance, per the F5 finding): a
+    # divergence on this lane is a plausible REAL consensus finding —
+    # the two shipping arches disagreeing on a consensus hash — NOT
+    # lane flakiness. Halt and escalate per RANDOMX_V2_PHASE3_PLAN.md
+    # §7.3 discipline; start at fpu_rounding.rs mode encoding. Do not
+    # rerun-until-green, do not mark flaky.
+    #
+    # Cadence: per-PR + push (same paths filter as the workflow) +
+    # daily cron + dispatch — an arch divergence should block the
+    # introducing PR, not surface at the next cron.
+    name: 'native-arm: verifier + T2 + 1024 pins + 3-leg correctness (aarch64/FPCR)'
+    runs-on: ubuntu-24.04-arm
+    # 120 rather than 90: release compile + C build + verifier tests +
+    # T2 + pins + the SERIAL three-leg correctness mode sum to ~75+ min
+    # on a 4-vCPU runner; measure the first runs before tightening.
+    timeout-minutes: 120
+    if: github.event_name != 'schedule' || github.event.schedule == '0 5 * * *'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: verify aarch64 architecture
+        run: |
+          ARCH=$(uname -m)
+          echo "Runner architecture: $ARCH"
+          if [ "$ARCH" != "aarch64" ]; then
+            echo "FATAL: expected aarch64 runner, got $ARCH — this lane exists to execute the FPCR arch surface; on any other arch it tests nothing" >&2
+            exit 1
+          fi
+      - name: Install Rust toolchain
+        # Composite action (.github/actions/install-rust); rustup-init
+        # resolves the aarch64 host triple itself.
+        uses: ./.github/actions/install-rust
+      - name: Install CMake + Ninja
+        # cmake is listed explicitly (unlike the x86 jobs, which lean on
+        # ubuntu-latest carrying it): the arm image is a separate build
+        # and this lane must not die at `cmake: command not found`
+        # before its actual checks run. Idempotent if preinstalled.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build
+      - name: Configure + build randomx-v2 C reference (aarch64)
+        # Composite action: the SAME recipe as the x86 lanes by
+        # construction — on this runner it produces the arm
+        # librandomx.a (a64 JIT asm + v2 tweaks) that randomx-v2-sys
+        # links for T2.
+        uses: ./.github/actions/build-randomx-v2-ref
+      - name: cargo test --release verifier crate (native arm)
+        working-directory: rust
+        run: cargo test --release --locked -p shekyl-pow-randomx
+      - name: cargo test --release T2 adversarial_corpus_byte_equality (native arm)
+        working-directory: rust
+        run: |
+          cargo test --release --locked -p shekyl-randomx-differential \
+            --test adversarial_corpus_byte_equality
+      - name: cargo test --release canonical pins (rust leg, 1024 pins, native arm)
+        working-directory: rust
+        run: |
+          cargo test --release --locked -p shekyl-randomx-differential \
+            --test canonical_pins_full
+      - name: three-leg correctness mode (rust == C-arm == canonical, 1024 pins)
+        working-directory: rust
+        # The harness binary's --mode=correctness at nightly sizing: the
+        # strictly stronger check for THIS lane, because it also walks
+        # the ARM-BUILT C reference against every pin (T2 covers only
+        # the 8 adversarial recipes on that surface). Verified locally
+        # at this exact invocation before wiring (exit 0,
+        # seedhashes_checked=32, random_pairs_checked=1024). The x86
+        # per-PR/nightly cadences for the runtime modes remain the
+        # runtime-mode wiring change's scope — this step wires the mode
+        # only where the lane's premise needs it.
+        run: |
+          cargo run --release --locked -p shekyl-randomx-differential \
+            --bin shekyl-randomx-differential -- \
+            --mode=correctness \
+            --random-corpus-seedhashes=32 \
+            --random-corpus-data-per-seedhash=32
