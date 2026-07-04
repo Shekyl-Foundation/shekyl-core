@@ -453,6 +453,10 @@ mod tests {
                     t.key_image,
                     t.source_ciphertext.clone(),
                     t.output_handle,
+                    // F14 (§2.6): the awaiting-confirmation lock is
+                    // persisted — a restart between accept and
+                    // confirmation must not resurrect spendability.
+                    t.awaiting_confirmation.clone(),
                 )
             })
             .collect();
@@ -467,6 +471,14 @@ mod tests {
             assert_eq!(t.global_output_index, orig.2);
             assert_eq!(t.amount(), orig.3);
             assert_eq!(t.key_image, orig.4);
+            assert_eq!(
+                t.awaiting_confirmation, orig.7,
+                "F14 lock must survive the persistence round-trip"
+            );
+            assert!(
+                t.awaiting_confirmation.is_some(),
+                "fixture exercises the Some leg"
+            );
             assert_eq!(
                 t.source_ciphertext.as_ref().map(|c| &c.x25519),
                 orig.5.as_ref().map(|c| &c.x25519)

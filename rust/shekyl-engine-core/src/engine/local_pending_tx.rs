@@ -4278,6 +4278,79 @@ mod tests {
         assert_loop_breaker_trips_on(TerminalErrorKind::FeeTooLow).await;
     }
 
+    /// §2.5 retryable rejection (`StaleRoot` / `ReferenceTooRecent` /
+    /// `ReferenceNotFound`): the reservation is restored to
+    /// `consumer_held` with its `output_locks` retained — a definite
+    /// verdict whose remedy preserves the input selection — and the
+    /// same reservation is resubmittable afterwards.
+    #[tokio::test]
+    async fn submit_retryable_rejection_restores_reservation() {
+        let sink = Arc::new(AssertionSink::new());
+        let (pending, _ledger, _tree_dir) =
+            funded_pending_tx_with_sink(Arc::clone(&sink) as Arc<dyn DiagnosticSink>).await;
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonRejectedRetryable {
+            cause: RetryableRejectCause::StaleRoot,
+            reservation_id: built.id,
+        }));
+
+        let err = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            SubmitError::DaemonRejectedRetryable {
+                cause: RetryableRejectCause::StaleRoot,
+                ..
+            }
+        ));
+
+        // Restored to consumer_held with output locks retained: the
+        // reservation is still outstanding, back under consumer
+        // ownership, and its inputs stay locked against competing
+        // selection.
+        assert_eq!(pending.outstanding(), 1);
+        {
+            let state = pending.state.lock().expect("state lock");
+            assert!(
+                state.consumer_held.contains_key(&built.id),
+                "reservation restored to consumer_held"
+            );
+            assert!(
+                !state.in_flight.contains_key(&built.id),
+                "reservation no longer in flight"
+            );
+            assert!(
+                state.output_locks.values().any(|owner| *owner == built.id),
+                "output locks retained for the restored reservation"
+            );
+        }
+
+        let events = sink.recorded_pending();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                PendingTxDiagnostic::SubmitRetryablyRejected {
+                    cause: RetryableRejectCause::StaleRoot,
+                    ..
+                }
+            )),
+            "expected SubmitRetryablyRejected emission: {events:?}"
+        );
+
+        // The restored reservation resubmits — this time accepted.
+        let tx_hash = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect("restored reservation resubmits");
+        assert_eq!(tx_hash, canonical_tx_id(&built.tx_bytes));
+        assert_eq!(pending.outstanding(), 0);
+    }
+
     #[tokio::test]
     async fn submit_timeout_keeps_reservation_in_flight() {
         let sink = Arc::new(AssertionSink::new());
