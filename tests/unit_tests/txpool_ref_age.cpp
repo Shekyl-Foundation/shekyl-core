@@ -284,10 +284,9 @@ TEST(txpool_ref_age, sweep_evicts_stale_reference)
   EXPECT_TRUE(db->txpool_has_tx(edge_txid, relay_category::all))
     << "reference at the exact window floor is still minable and must stay";
   EXPECT_EQ(bap.txpool.m_txpool_weight, 100u);
-
-  // The tx did not time out; it must not enter the resubmit-gate shortcut set.
-  EXPECT_EQ(bap.txpool.m_timed_out_transactions.count(stale_txid), 0u)
-    << "ref-age eviction must not be recorded as a timeout";
+  // No eviction memory exists post-D3 (DAEMON_SUBMIT_VERDICT.md §9.1): a
+  // resubmit of the evicted bytes re-enters full admission and is rejected
+  // by check_tx_inputs on the aged reference, not by a recorded shortcut.
 }
 
 TEST(txpool_ref_age, sweep_spares_kept_by_block_and_zero_reference)
@@ -323,10 +322,11 @@ TEST(txpool_ref_age, sweep_spares_kept_by_block_and_zero_reference)
   EXPECT_EQ(bap.txpool.m_txpool_weight, 200u);
 }
 
-TEST(txpool_ref_age, sweep_receive_time_eviction_still_marks_timeout)
+TEST(txpool_ref_age, sweep_receive_time_eviction_still_evicts)
 {
   // Control: the pre-existing receive-time sweep is untouched — it still
-  // evicts and still records the timeout for the resubmit gate.
+  // evicts on age. Post-D3 there is no timeout memory: a resubmit of the
+  // evicted bytes re-enters full admission (DAEMON_SUBMIT_VERDICT.md §9.1).
   const uint64_t chain_height = 300;
   auto db = new RefAgeTestDB(chain_height);
   BlockchainAndPool bap;
@@ -344,7 +344,6 @@ TEST(txpool_ref_age, sweep_receive_time_eviction_still_marks_timeout)
   ASSERT_TRUE(bap.txpool.remove_stuck_transactions());
 
   EXPECT_FALSE(db->txpool_has_tx(old_txid, relay_category::all));
-  EXPECT_EQ(bap.txpool.m_timed_out_transactions.count(old_txid), 1u);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
