@@ -390,6 +390,90 @@ namespace cryptonote
       nic_verified_hf_version);
   }
   //---------------------------------------------------------------------------------
+  bool tx_memory_pool::insert_attested_tx(transaction &tx, const crypto::hash &id,
+    const cryptonote::blobdata &blob, uint64_t tx_weight, uint64_t fee,
+    const crypto::hash &ref_block_id, uint64_t ref_block_height,
+    bool &pruned_on_insert)
+  {
+    // The commit shim already holds both locks in the §4.4 order; these are
+    // re-entrant and make the requirement explicit, as add_tx does.
+    CRITICAL_REGION_LOCAL(m_transactions_lock);
+    CRITICAL_REGION_LOCAL1(m_blockchain);
+
+    pruned_on_insert = false;
+    const time_t receive_time = time(nullptr);
+
+    // Mirror of add_tx's fresh-insert tail (the !existing_tx arm) for a
+    // local-origin, engine-verified tx. relay_method::local keeps the tx out
+    // of the broadcasted category until relay dispatch; last_relayed_time =
+    // max() makes it immediately eligible for the relay nudge / periodic
+    // loop (DAEMON_SUBMIT_VERDICT.md §5.2 item 1).
+    txpool_tx_meta_t meta{};
+    meta.set_relay_method(relay_method::local);
+    meta.last_relayed_time = std::numeric_limits<decltype(meta.last_relayed_time)>::max();
+    meta.receive_time = receive_time;
+    meta.weight = tx_weight;
+    meta.fee = fee;
+    // Certificate-derived reference anchoring: the F22 ref-age sweep
+    // (remove_stuck_transactions) and the template-time canonicality
+    // re-check (is_transaction_ready_to_go) key off these fields, exactly
+    // as they key off check_tx_inputs' outputs on the P2P path.
+    meta.max_used_block_id = ref_block_id;
+    meta.max_used_block_height = ref_block_height;
+    meta.last_failed_height = 0;
+    meta.last_failed_id = null_hash;
+    meta.kept_by_block = 0;
+    meta.relayed = false;
+    meta.do_not_relay = 0;
+    meta.double_spend_seen = false;
+    meta.pruned = tx.pruned;
+    meta.bf_padding = 0;
+    memset(meta.padding, 0, sizeof(meta.padding));
+
+    // §3.5 attestation: same derivation as the P2P path above. The
+    // certificate gate lives in the (only) caller.
+    if (tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc)
+    {
+      meta.fcmp_verification_hash = Blockchain::compute_fcmp_verification_hash(tx);
+      meta.fcmp_verified = (meta.fcmp_verification_hash != null_hash) ? 1 : 0;
+    }
+    else
+    {
+      meta.fcmp_verification_hash = null_hash;
+      meta.fcmp_verified = 0;
+    }
+
+    try
+    {
+      LockedTXN lock(m_blockchain.get_db());
+      if (!insert_key_images(tx, id, relay_method::local))
+        return false;
+      m_blockchain.add_txpool_tx(id, blob, meta);
+      add_tx_to_transient_lists(id, fee / (double)(tx_weight ? tx_weight : 1), receive_time);
+      lock.commit();
+    }
+    catch (const std::exception &e)
+    {
+      MERROR("internal error: error adding attested transaction to txpool: " << e.what());
+      return false;
+    }
+
+    m_txpool_weight += tx_weight;
+    ++m_cookie;
+
+    MINFO("Attested transaction added to pool: txid " << id << " weight: " << tx_weight
+      << " fee/byte: " << (fee / (double)(tx_weight ? tx_weight : 1))
+      << ", count: " << m_added_txs_by_id.size());
+
+    prune(m_txpool_max_weight);
+
+    // F23 / defect 0.7: the tail's prune() can evict the tx it just
+    // inserted. `Accepted ⇒ in pool at commit-check time` requires the
+    // membership re-check here, under the same lock scope.
+    pruned_on_insert = !have_tx(id, relay_category::legacy);
+    return true;
+  }
+  //---------------------------------------------------------------------------------
   size_t tx_memory_pool::get_txpool_weight() const
   {
     CRITICAL_REGION_LOCAL(m_transactions_lock);
