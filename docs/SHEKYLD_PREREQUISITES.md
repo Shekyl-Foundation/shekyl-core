@@ -404,7 +404,19 @@ client that gracefully consumes the field if it appears later.
 
 ## 5. Stale FCMP++ root signal on `send_raw_transaction` (Phase 6 prerequisite)
 
-### Verdict: ABSENT — file as daemon-side follow-up, NOT a Phase 2a blocker
+> **RESOLVED (2026-07, submit-verdict series).** The reactive stale-root
+> signal now exists — not as the `fcmp_root_stale: bool` flag this audit
+> recommended, but as `RejectCause::StaleRoot` in the typed
+> `SubmitVerdict` contract ([`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md)
+> §2.1), computed by the Rust admission engine and consumed by the
+> wallet's per-cause disposition table (§2.5: reservation preserved,
+> rebuild against a fresh root). The `send_raw_transaction` endpoint this
+> audit describes was **deleted** (§9.3) along with the eleven-boolean
+> reply schema; the FOLLOWUPS item below is closed. The section is kept
+> as the audit record; the evidence line numbers refer to the pre-series
+> tree.
+
+### Verdict (historical): ABSENT — file as daemon-side follow-up, NOT a Phase 2a blocker
 
 `shekyld` does not expose a signal that distinguishes "this transaction's
 FCMP++ membership proof references a curve-tree root I no longer accept"
