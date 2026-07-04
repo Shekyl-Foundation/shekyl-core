@@ -1,0 +1,26 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-rpc-types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Wallet-daemon RPC wire-contract types: the SubmitVerdict/RejectCause submit contract (docs/design/DAEMON_SUBMIT_VERDICT.md §2), single Rust definition consumed by shekyl-daemon-rpc and shekyl-rpc-client"
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+# The frozen-hex txid KAT (tests/txid_kat.rs) computes the engine-side txid
+# over a C++-captured oracle blob. Dev-only: the contract crate's production
+# dependency surface stays serde alone.
+shekyl-wire = { path = "../shekyl-wire" }
+
+[lints]
+workspace = true

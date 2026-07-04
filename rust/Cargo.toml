@@ -71,6 +71,12 @@ members = [
     "shekyl-rpc-client",
     "shekyl-rpc-transport",
 
+    # Wallet↔daemon wire-contract types: the SubmitVerdict/RejectCause submit
+    # contract (docs/design/DAEMON_SUBMIT_VERDICT.md §2) — the single Rust
+    # definition consumed by shekyl-daemon-rpc (server) and shekyl-rpc-client
+    # (wallet). Draft until the §8 parity matrix clears.
+    "shekyl-rpc-types",
+
     # Per-P archival-firewall network transport (2d-2 SP-T1)
     "shekyl-p-transport",
 
