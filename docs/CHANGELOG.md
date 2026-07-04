@@ -4,6 +4,19 @@
 
 ### Added
 
+- **rpc: `shekyl-rpc-types` crate — the typed wallet↔daemon submit
+  contract** (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2, PR-2 of the
+  submit-path Rust cutover). `SubmitVerdict` / `RejectCause` /
+  `SubmitTransactionRequest` as the single Rust definition both
+  `shekyl-daemon-rpc` and `shekyl-rpc-client` will consume, replacing the
+  Monero-inherited status-string-plus-booleans reply schema. Ships with the
+  §2.3 version-skew pins (unknown cause → `Unrecognized` fail-safe; unknown
+  verdict tag → `Err` arm; unknown fields tolerated), frozen JSON
+  representations for every variant, and the §3.4 frozen-hex txid KAT
+  (C++-daemon-captured oracle blobs proving `shekyl-wire` txid ≡ C++
+  `get_transaction_hash`). Contract is **draft** until the §8 parity
+  matrix's ⚠-rows resolve (that document's freeze rule).
+
 - **daemon: `SEEDHASH_EPOCH_*` override now refuses to start on every public
   network.** The RandomX seed-epoch schedule is consensus; the
   `SEEDHASH_EPOCH_BLOCKS` / `SEEDHASH_EPOCH_LAG` env overrides are a
