@@ -394,6 +394,34 @@
 
 ### Removed
 
+- **rpc: delete the legacy transaction-submit surface**
+  (`docs/design/DAEMON_SUBMIT_VERDICT.md` §9, PR-5 of the submit-path
+  Rust cutover, `chore/submit-legacy-deletions`). The typed
+  `/submit_transaction` route (Rust admission engine, PR-3) is the only
+  submit surface; the §9 deletion enumeration executes with its greps
+  re-run as the completeness check:
+  - **`on_send_raw_tx` endpoint (§9.3):** handler, epee route maps, the
+    `COMMAND_RPC_SEND_RAW_TX` defs with their eleven-boolean reply
+    schema, the `core_rpc_ffi` DJSON dispatch entries, and the
+    `shekyl-daemon-rpc` axum proxy routes. `wallet2::commit_tx` ports to
+    the typed endpoint via a transport-only epee mirror
+    (`COMMAND_RPC_SUBMIT_TRANSACTION`); the trezor mock daemon serves
+    the typed route as a test-only pool-admit stand-in.
+  - **`tx_sanity_check` (F29, §8.8/§9.2):** S1 duplicated the Rust
+    Phase-A parse gate; S2 (coinbase-submit reject) lives in the engine;
+    S3 (decoy-median heuristics) was verified vacuous at runtime under
+    FCMP++ (empty `key_offsets` → unconditional early-return `true`).
+  - **`m_timed_out_transactions` (D3, §9.1):** the RAM-only eviction
+    memory whose resubmit gate produced unexplained false-terminal
+    rejections, contradicting the §5.2 retry contract. Resubmits of
+    evicted bytes now re-enter full admission and resolve to a definite
+    verdict.
+  - **python-rpc `send_raw_transaction` helper:** superseded by
+    `submit_transaction` (PR-3).
+  - **Kept per §9.4:** the P2P `add_tx` ingestion path (with the PR-3
+    double-spend regression pin), `tx_verification_context` as an
+    internal P2P contract, Dandelion++ relay machinery, and the
+    relay-only `on_relay_tx` operator endpoint.
 - **rpc: delete the RPC-payment subsystem in its entirety (legacy-PoW cleanup,
   2026-06, `chore/rpc-payment-deletion`).** The Monero-inherited *pay-for-RPC*
   subsystem — clients hash RandomX/CryptoNight to earn "credits" they spend on
