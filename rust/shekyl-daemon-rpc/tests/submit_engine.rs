@@ -320,6 +320,45 @@ fn internal_fault_is_a_fault_not_a_verdict() {
     assert_eq!(shim.relay_count(), 0);
 }
 
+#[test]
+fn snapshot_fault_is_a_fault_not_a_verdict() {
+    // §3.4's loud-failure gate on the Phase-B side: a shim that cannot
+    // produce facts (DB exception, marshalling fault) must surface as the
+    // transport Err arm, never as a verdict — and verification never runs.
+    struct FaultingShim;
+    impl shekyl_daemon_rpc::submit::SubmitStateShim for FaultingShim {
+        fn snapshot_facts(
+            &self,
+            _txid: &shekyl_types::TxHash,
+            _key_images: &[[u8; 32]],
+            _reference_block: &shekyl_types::BlockHash,
+        ) -> Result<SubmitFacts, shekyl_daemon_rpc::submit::ShimFault> {
+            Err(shekyl_daemon_rpc::submit::ShimFault)
+        }
+        fn commit(
+            &self,
+            _blob: &[u8],
+            _txid: &shekyl_types::TxHash,
+            _meta: &shekyl_daemon_rpc::submit::TxMeta,
+            _cert: &shekyl_daemon_rpc::submit::VerificationCertificate,
+            _expected: &SubmitFacts,
+        ) -> CommitOutcome {
+            panic!("commit must be unreachable after a snapshot fault");
+        }
+        fn relay(&self, _txid: &shekyl_types::TxHash) {
+            panic!("relay must be unreachable after a snapshot fault");
+        }
+    }
+
+    let verifier = MockVerifier::passing();
+    let engine = SubmitEngine::with_gate(FaultingShim, Arc::clone(&verifier), PhaseCGate::new(1));
+    assert_eq!(
+        engine.submit(&spend_hex()).unwrap_err(),
+        EngineFault::SnapshotFault
+    );
+    assert_eq!(verifier.call_count(), 0);
+}
+
 // ── Phase D: race classification, most-terminal-first (§3.1) ────────────
 
 #[test]

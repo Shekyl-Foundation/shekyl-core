@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 use shekyl_daemon_rpc::submit::{
-    CommitOutcome, KeyImageConflict, ParsedSubmission, ReferenceFacts, SubmitFacts,
+    CommitOutcome, KeyImageConflict, ParsedSubmission, ReferenceFacts, ShimFault, SubmitFacts,
     SubmitStateShim, TxMeta, TxVerifier, VerificationCertificate, VerifyFailure,
 };
 use shekyl_types::{BlockHash, BlockHeight, TxHash};
@@ -254,13 +254,13 @@ impl SubmitStateShim for MockShim {
         txid: &TxHash,
         key_images: &[[u8; 32]],
         reference_block: &BlockHash,
-    ) -> SubmitFacts {
+    ) -> Result<SubmitFacts, ShimFault> {
         self.snapshots.lock().unwrap().push(SnapshotRecord {
             txid: *txid,
             key_images: key_images.to_vec(),
             reference_block: *reference_block,
         });
-        self.facts.clone()
+        Ok(self.facts.clone())
     }
 
     fn commit(

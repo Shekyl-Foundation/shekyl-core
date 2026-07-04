@@ -26,6 +26,11 @@ use crate::submit::verify::TxVerifier;
 /// so a daemon defect is not converted into a wallet rebuild.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum EngineFault {
+    /// The snapshot shim reported an internal failure (DB exception,
+    /// marshalling fault, fee-parameter derivation failure) — §3.4's
+    /// loud-failure gate on the Phase-B side.
+    #[error("submit snapshot internal fault (see daemon log)")]
+    SnapshotFault,
     /// The commit shim reported an internal inconsistency (release-mode
     /// txid divergence, marshalling fault) — §3.4's loud-failure gate.
     #[error("submit commit internal fault (see daemon log)")]
@@ -80,9 +85,10 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         };
 
         // ── Phase B: POD fact snapshot (shim 1, one short lock) ────────
-        let facts =
-            self.shim
-                .snapshot_facts(&parsed.txid, &parsed.key_images, &parsed.reference_block);
+        let facts = self
+            .shim
+            .snapshot_facts(&parsed.txid, &parsed.key_images, &parsed.reference_block)
+            .map_err(|_| EngineFault::SnapshotFault)?;
 
         // Early return on identity only. In-chain outranks in-pool (a
         // just-mined tx can transiently be both; "settled" is the more

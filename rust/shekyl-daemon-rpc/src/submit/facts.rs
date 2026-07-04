@@ -61,7 +61,11 @@ pub struct ReferenceFacts {
 /// found at B it is a reorg, classified `StaleRoot`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubmitFacts {
-    /// The submitted txid is pool-resident (at the `legacy` relay category).
+    /// The submitted txid is pool-resident (at the `all` relay category, so
+    /// the daemon's own Dandelion++-embargoed `local`-state insertions are
+    /// visible — the §3.1 identity-category pin; a `legacy`-category fact
+    /// would make the F31 resubmit probe fault at the insert tail instead
+    /// of returning `AlreadyInPool`).
     pub in_pool: bool,
     /// The submitted txid is in the main chain.
     pub in_chain: bool,
@@ -80,6 +84,14 @@ pub struct SubmitFacts {
     /// basis for the ref-age window arithmetic.
     pub chain_height: BlockHeight,
 }
+
+/// The snapshot shim failed internally (§3.4: DB exception, marshalling
+/// fault, fee-parameter derivation failure). **Never a verdict** — the
+/// engine surfaces it as [`crate::submit::EngineFault::SnapshotFault`]
+/// (HTTP 5xx at the transport). Payload-free by design: the C++ side has
+/// already logged the specifics where an operator can correlate them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShimFault;
 
 /// Meta fields the commit shim needs for the existing `add_tx` insert tail
 /// (§4.2): everything else in `txpool_tx_meta_t` is derived C++-side from
@@ -119,12 +131,15 @@ pub enum CommitOutcome {
 /// for the reversion shape.
 pub trait SubmitStateShim {
     /// Phase B: one short pool→blockchain lock scope, reads only (§4.1).
+    ///
+    /// `Err(ShimFault)` is the shim's internal-failure arm (DB exception,
+    /// marshalling fault) — never a verdict input.
     fn snapshot_facts(
         &self,
         txid: &TxHash,
         key_images: &[[u8; 32]],
         reference_block: &BlockHash,
-    ) -> SubmitFacts;
+    ) -> Result<SubmitFacts, ShimFault>;
 
     /// Phase D: one short pool→blockchain lock scope — release-mode txid
     /// check first, then the §3.1 re-check list (identity, key images,
@@ -158,7 +173,7 @@ impl<T: SubmitStateShim + ?Sized> SubmitStateShim for std::sync::Arc<T> {
         txid: &TxHash,
         key_images: &[[u8; 32]],
         reference_block: &BlockHash,
-    ) -> SubmitFacts {
+    ) -> Result<SubmitFacts, ShimFault> {
         (**self).snapshot_facts(txid, key_images, reference_block)
     }
 
