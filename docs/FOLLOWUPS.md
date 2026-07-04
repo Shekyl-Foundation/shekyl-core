@@ -7135,6 +7135,74 @@ one place to confirm each item's relationship to the wallet stack.
   **Target: pre-genesis (blocks the seal).** See
   [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md) §4 and
   [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (the S-3 privacy-sim home).
+- **2d-2 2c-2a — the submit-outcome partition is §5.2's core design object (correctness-bin;
+  build it from the daemon's real reply surface, not the `AlreadyKnown` fiction).** The SP-T4a
+  review (PR #240) established that `PTransactionSubmitter` maps a transport failure to
+  `DaemonAmbiguous` **honestly**, but the *recovery* contract does not exist yet and the code
+  comments described a fiction: **no production code derives `TxSubmitOutcome::AlreadyKnown`** —
+  the sole constructor is the test double (`test_support.rs`); the promised wallet-side derivation
+  (`traits/daemon.rs` §5.2 doc; also the `AlreadyKnown` language in
+  `V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md` / `V3_ENGINE_TRAIT_BOUNDARIES.md`) is unbuilt. So 2c-2a
+  writes the **first real** ambiguity contract. Two **correctness-bin** classification bugs it must
+  fix (no dominance argument retires these — wrong result with no adversary): (1) a **fee-floor-rise
+  on retry returns `FeeTooLow`** which `finalize_submit_terminal` treats as terminal and **releases
+  the reservation's output locks while the original tx is still mineable in the pool** — a
+  false-terminal (transient dressed as terminal); (2) a **delivered 4xx** (the tx provably never
+  relayed — e.g. a double-slash route from a trailing-slash `base_url`) is flattened by
+  `map_err(|_|)` into `DaemonAmbiguous`, and the ambiguous bucket has **no TTL exit** (the `ttl`
+  field is consumed nowhere; `signal_mempool_evicted` is dead code) so it wedges output locks
+  **until wallet restart**. The design object: every daemon reply **and** transport failure lands in
+  exactly one of {definitely-relayed, definitely-not-relayed, genuinely-ambiguous}; a post-ambiguity
+  terminal is disambiguated against "is my txid already on-chain?" before it counts as a rejection
+  (a same-bytes retry of a healthy duplicate returns `OK + not_relayed` → `Submitted`, not a
+  rejection); the ambiguous bucket gets a TTL exit; a **cancelled** submit is ambiguous too (dropping
+  the future detaches the `spawn_blocking` POST, which may still broadcast — the 2c consumer must not
+  wrap `submit` in a cancelling combinator). Revive `AmbiguousErrorKind::DaemonTimeout` (zero
+  producers today) via a shared `RpcError → AmbiguousErrorKind` classifier with detail capture; the
+  **`submit_via_rpc<R: Rpc>` dedup** (open-coded hash + the duplicated `DaemonAmbiguous` literal +
+  the half-shared parse/publish/map pipeline in `daemon.rs`/`transaction_submitter.rs`) folds in
+  here, with the partition rewrite, to avoid churn-on-churn. **Target: pre-2c-2b (the retry consumer
+  must not be built against the wrong contract).**
+- **2d-2 2c-2a — the posture→submitter dispatch shape is an API decision that gates every 2c slice
+  (`TransactionSubmitter` is RPITIT-non-dyn).** `select_broadcast` resolves the posture at runtime
+  (①→principal, ②→`PTransactionSubmitter`), but `TransactionSubmitter::submit` returns `impl Future`
+  (RPITIT) so the trait is **not dyn-compatible**, and the two impls share no nameable common type
+  (no enum/`Either` exists in the crate). So the runtime dispatch the seam exists for is unbuildable
+  as-is — it forces an API choice: an **enum wrapper** over the two concrete submitters (likely the
+  make-bad-states-unrepresentable answer — the submitter set is *closed*: principal + per-`P`, no
+  third — but verify RPITIT permits it cleanly), a boxed `async_trait`, or a hand-rolled dyn shim.
+  This decision shapes `PTransactionSubmitter`'s surface, the selector's return type, and the
+  orchestrator's storage, so it is a **2c-2a design input**, not a 2c-2b implementation detail —
+  discovered mid-wiring, it retrofits everything downstream. It also carries the **routing guard**
+  (②→`PTransactionSubmitter`, **never** the principal submitter — the review's unguarded reverse
+  direction: nothing today stops handing `P`'s bytes to `DaemonTransactionSubmitter`) and the
+  **byte↔persona pairing** (a `P`-bound-bytes newtype only `PTransactionSubmitter::submit` accepts,
+  so `P1`-bytes/`P2`-submitter is unrepresentable). **Target: 2c-2a design freeze (before the
+  funding/assembly/scheduler slices).**
+- **2d-2 2c — `DaemonUrl` newtype: validate `base_url` at construction + house the S1 disclosure.**
+  `base_url` is a bare `String` across three sites (`BroadcastPosture::OwnRemote`,
+  `PTransactionSubmitter::new`, `PBlockSource::new`) with no validation and an unredacted
+  `derive(Debug)`. A `DaemonUrl` newtype (parse/validate at construction: scheme, host,
+  **.onion-or-loopback**, no trailing slash; redacting `Debug`) closes: (a) the trailing-slash wedge
+  (`http://x.onion:18081/` → `…//send_raw_transaction` → both daemons 404 → `DaemonAmbiguous` wedge,
+  verified at source); (b) the **clearnet-`OwnRemote`** residual (a clearnet `base_url` through
+  `socks5h` exits Tor at an exit relay, which then sees the plaintext P-bound broadcast — the S1
+  disclosure as written *affirms* this, "a node you control"); (c) the `Debug` credential/onion leak
+  (PRpc pre-provisions creds-in-`base_url`; `SocksUsername` already has a redacting `Debug`). Most
+  importantly it gives the S1 trust-on-user-assertion warning a **structural home** — the
+  constructor is where "this must be a node you control" belongs, a type boundary not a doc-comment.
+  Precedent in-subsystem: `TorSocksEndpoint`, `SocksUsername`, `VerifiedTorBinary`. Caveat: does
+  **not** fix the delivered-4xx flattening (that is the partition obligation above — even a valid URL
+  meets a 4xx). 2c owns the config source, so this folds in there. **Target: 2c config-source slice.**
+- **2d-2 2c — the `OwnRemote` config-point disclosure is a mandated duty with no home yet.** The S1
+  disclosure ("the choice site MUST disclose at the point of entry: *this must be a node you
+  control; pointing it at a third party defeats the broadcast firewall — first-seen-origin is a
+  permanent, categorical link*") is the **sole compensating control** for the conceded
+  user-mislabeled-③ path (`posture.rs` `OwnRemote` doc; `ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`
+  §3(B)) — but its only home is rustdoc on a `dead_code` variant. When 2c builds the config/UX
+  surface, the point-of-entry warning **must** ship (silent-compliance lens: a mechanism needing
+  sustained correct user behavior is already failing — convert to a loud default). Fold into the
+  `DaemonUrl` constructor + the config/UX slice. **Target: 2c config-source slice.**
 - **2d-2 SP-T3 — onion-route end-to-end validation (the property DQ-T0.4 *cannot* prove).**
   DQ-T0.4 (the SP-T0 circuit-isolation measurement) proves exactly one thing: `IsolateSOCKSAuth`
   puts per-persona SOCKS streams on **distinct circuits** — read as the attach-time `CircID` at
