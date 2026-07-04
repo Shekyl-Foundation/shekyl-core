@@ -85,16 +85,28 @@ impl SubmitStateShim for FfiSubmitShim {
         // SAFETY: txid/reference_block are 32-byte references; key_images is
         // a flat array of n × 32 bytes (contiguous by `[[u8; 32]]` layout);
         // out pointers are sized above; the handle is live for the daemon's
-        // lifetime (CoreRpc's contract).
+        // lifetime (CoreRpc's contract). The key-image in/out pointers are
+        // NULL when n == 0 — the shim's argument contract accepts null iff
+        // `n_key_images == 0` (its bad-args guard is `n > 0 && !ptr`), and an
+        // empty Vec/slice's `as_ptr()` is a dangling non-null sentinel that
+        // would silently bypass that guard rather than honor it.
         let rc = unsafe {
             ffi::shekyl_submit_snapshot_facts(
                 self.core.raw_handle(),
                 txid.as_bytes().as_ptr(),
-                key_images.as_ptr().cast::<u8>(),
+                if key_images.is_empty() {
+                    std::ptr::null()
+                } else {
+                    key_images.as_ptr().cast::<u8>()
+                },
                 key_images.len(),
                 reference_block.as_bytes().as_ptr(),
                 &mut pod,
-                ki_conflicts.as_mut_ptr(),
+                if ki_conflicts.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    ki_conflicts.as_mut_ptr()
+                },
             )
         };
 
@@ -123,7 +135,10 @@ impl SubmitStateShim for FfiSubmitShim {
         // SAFETY: blob points at blob_len bytes; txid/cert hashes are
         // 32-byte references; out pointers are sized above (the C++ side
         // release-checks its blob-derived key-image count against
-        // n_key_images before writing).
+        // n_key_images before writing). The fresh-KI out pointer is NULL when
+        // n == 0 — the shim accepts null iff `n_key_images == 0` (guard is
+        // `n > 0 && !ptr`); see the snapshot call above for why a dangling
+        // empty-Vec sentinel is the wrong thing to hand that guard.
         let rc = unsafe {
             ffi::shekyl_submit_commit_tx(
                 self.core.raw_handle(),
@@ -136,7 +151,11 @@ impl SubmitStateShim for FfiSubmitShim {
                 cert.ref_height().to_raw(),
                 cert.root().as_ptr(),
                 &mut fresh_pod,
-                fresh_ki.as_mut_ptr(),
+                if fresh_ki.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    fresh_ki.as_mut_ptr()
+                },
                 n_key_images,
             )
         };
