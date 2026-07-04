@@ -196,8 +196,6 @@ const std::unordered_map<std::string, json_fn>& get_json_table() {
         DJSON("/gettransactions",                   on_get_transactions,             COMMAND_RPC_GET_TRANSACTIONS),
         DJSON("/get_alt_blocks_hashes",             on_get_alt_blocks_hashes,        COMMAND_RPC_GET_ALT_BLOCKS_HASHES),
         DJSON("/is_key_image_spent",                on_is_key_image_spent,           COMMAND_RPC_IS_KEY_IMAGE_SPENT),
-        DJSON("/send_raw_transaction",              on_send_raw_tx,                  COMMAND_RPC_SEND_RAW_TX),
-        DJSON("/sendrawtransaction",                on_send_raw_tx,                  COMMAND_RPC_SEND_RAW_TX),
         DJSON("/get_public_nodes",                  on_get_public_nodes,             COMMAND_RPC_GET_PUBLIC_NODES),
         DJSON("/get_transaction_pool",              on_get_transaction_pool,         COMMAND_RPC_GET_TRANSACTION_POOL),
         DJSON("/get_transaction_pool_hashes.bin",   on_get_transaction_pool_hashes_bin, COMMAND_RPC_GET_TRANSACTION_POOL_HASHES_BIN),

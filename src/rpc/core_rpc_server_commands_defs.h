@@ -558,53 +558,37 @@ namespace cryptonote
     typedef epee::misc_utils::struct_init<response_t> response;
   };
   //-----------------------------------------------
-  struct COMMAND_RPC_SEND_RAW_TX
+  // Epee marshaling mirror of the typed submit contract
+  // (docs/design/DAEMON_SUBMIT_VERDICT.md §2.4; authoritative Rust
+  // definition in rust/shekyl-rpc-types). Transport-only per rule 20:
+  // consumed by the legacy C++ wallet's commit_tx and the trezor test
+  // mock daemon; the production route is served by the Rust admission
+  // engine (rust/shekyl-daemon-rpc). Deliberately no rpc_request_base /
+  // rpc_response_base parent — the wire carries exactly the §2 fields.
+  struct COMMAND_RPC_SUBMIT_TRANSACTION
   {
-    struct request_t: public rpc_request_base
+    struct request_t
     {
-      std::string tx_as_hex;
-      bool do_not_relay;
-      bool do_sanity_checks;
+      std::string tx_blob; // hex-encoded raw tx bytes
 
       BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base);
-        KV_SERIALIZE(tx_as_hex)
-        KV_SERIALIZE_OPT(do_not_relay, false)
-        KV_SERIALIZE_OPT(do_sanity_checks, true)
+        KV_SERIALIZE(tx_blob)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<request_t> request;
 
-
-    struct response_t: public rpc_response_base
+    struct response_t
     {
-      std::string reason;
-      bool not_relayed;
-      bool double_spend;
-      bool invalid_input;
-      bool invalid_output;
-      bool too_big;
-      bool overspend;
-      bool fee_too_low;
-      bool too_few_outputs;
-      bool sanity_check_failed;
-      bool tx_extra_too_big;
-      bool nonzero_unlock_time;
+      // Serde tag: "accepted" | "already_in_pool" | "already_in_chain"
+      // | "rejected". Unknown tags are treated as rejections by the
+      // legacy wallet (the Rust client's Err arm is the real skew rule).
+      std::string verdict;
+      // Present iff verdict == "rejected" (§2.1 RejectCause, snake_case).
+      std::string cause;
 
       BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(reason)
-        KV_SERIALIZE(not_relayed)
-        KV_SERIALIZE(double_spend)
-        KV_SERIALIZE(invalid_input)
-        KV_SERIALIZE(invalid_output)
-        KV_SERIALIZE(too_big)
-        KV_SERIALIZE(overspend)
-        KV_SERIALIZE(fee_too_low)
-        KV_SERIALIZE(too_few_outputs)
-        KV_SERIALIZE(sanity_check_failed)
-        KV_SERIALIZE(tx_extra_too_big)
-        KV_SERIALIZE(nonzero_unlock_time)
+        KV_SERIALIZE(verdict)
+        KV_SERIALIZE_OPT(cause, std::string())
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

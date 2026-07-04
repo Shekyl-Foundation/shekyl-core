@@ -67,7 +67,6 @@ json_handler!(get_height, "/get_height");
 json_handler!(get_transactions, "/get_transactions");
 json_handler!(get_alt_blocks_hashes, "/get_alt_blocks_hashes");
 json_handler!(is_key_image_spent, "/is_key_image_spent");
-json_handler!(send_raw_transaction, "/send_raw_transaction");
 json_handler!(get_public_nodes, "/get_public_nodes");
 json_handler!(get_transaction_pool, "/get_transaction_pool");
 json_handler!(

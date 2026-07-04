@@ -52,7 +52,6 @@ using namespace epee;
 
 #include "cryptonote_config.h"
 #include "hardforks/hardforks.h"
-#include "cryptonote_core/tx_sanity_check.h"
 #include "wallet2.h"
 #include "wallet_args.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
@@ -186,36 +185,6 @@ std::string tools::wallet2::default_daemon_address = "";
 
 namespace
 {
-  void add_reason(std::string &reasons, const char *reason)
-  {
-    if (!reasons.empty())
-      reasons += ", ";
-    reasons += reason;
-  }
-
-  std::string get_text_reason(const cryptonote::COMMAND_RPC_SEND_RAW_TX::response &res)
-  {
-      std::string reason;
-      if (res.double_spend)
-        add_reason(reason, "double spend");
-      if (res.invalid_input)
-        add_reason(reason, "invalid input");
-      if (res.invalid_output)
-        add_reason(reason, "invalid output");
-      if (res.too_few_outputs)
-        add_reason(reason, "too few outputs");
-      if (res.too_big)
-        add_reason(reason, "too big");
-      if (res.overspend)
-        add_reason(reason, "overspend");
-      if (res.fee_too_low)
-        add_reason(reason, "fee too low");
-      if (res.sanity_check_failed)
-        add_reason(reason, "tx sanity check failed");
-      if (res.not_relayed)
-        add_reason(reason, "tx was not relayed");
-      return reason;
-  }
 
   size_t get_num_outputs(const std::vector<cryptonote::tx_destination_entry> &dsts, const std::vector<tools::wallet2::transfer_details> &transfers, const std::vector<size_t> &selected_transfers)
   {
@@ -7678,16 +7647,26 @@ void wallet2::commit_tx(pending_tx& ptx)
   using namespace cryptonote;
   if (m_callback) m_callback->on_transfer_stage("broadcasting", 3, 4);
   {
-    COMMAND_RPC_SEND_RAW_TX::request req;
-    req.tx_as_hex = epee::string_tools::buff_to_hex_nodelimer(tx_to_blob(ptx.tx));
-    req.do_not_relay = false;
-    req.do_sanity_checks = true;
-    COMMAND_RPC_SEND_RAW_TX::response daemon_send_resp;
+    // Typed submit contract (DAEMON_SUBMIT_VERDICT.md §2.4): transport-only
+    // epee marshaling over the Rust-served route. Verdict interpretation is
+    // deliberately minimal here — the identity-bearing verdicts (accepted /
+    // already_in_pool / already_in_chain) all mean "the bytes are held";
+    // everything else (rejected, or a verdict tag this build cannot name)
+    // throws tx_rejected with the cause as the reason text. The rich
+    // per-cause dispositions live in the Rust wallet engine (§2.5); this
+    // legacy path is a deletion target, not a second policy site.
+    COMMAND_RPC_SUBMIT_TRANSACTION::request req;
+    req.tx_blob = epee::string_tools::buff_to_hex_nodelimer(tx_to_blob(ptx.tx));
+    COMMAND_RPC_SUBMIT_TRANSACTION::response daemon_send_resp;
 
     {
       const boost::lock_guard<boost::recursive_mutex> lock{m_daemon_rpc_mutex};
-      bool r = epee::net_utils::invoke_http_json("/sendrawtransaction", req, daemon_send_resp, *m_http_client, rpc_timeout);
-      THROW_ON_RPC_RESPONSE_ERROR(r, {}, daemon_send_resp, "sendrawtransaction", error::tx_rejected, ptx.tx, get_rpc_status(daemon_send_resp.status), get_text_reason(daemon_send_resp));
+      bool r = epee::net_utils::invoke_http_json("/submit_transaction", req, daemon_send_resp, *m_http_client, rpc_timeout);
+      THROW_WALLET_EXCEPTION_IF(!r, error::no_connection_to_daemon, "submit_transaction");
+      const std::string &verdict = daemon_send_resp.verdict;
+      const bool held = verdict == "accepted" || verdict == "already_in_pool" || verdict == "already_in_chain";
+      THROW_WALLET_EXCEPTION_IF(!held, error::tx_rejected, ptx.tx, verdict,
+          daemon_send_resp.cause.empty() ? verdict : daemon_send_resp.cause);
     }
 
     // sanity checks
