@@ -9,12 +9,22 @@
 //! `BalanceSummary`) measured via Valgrind's Callgrind for
 //! deterministic instruction-count metrics. Tier-1 CI gate input.
 
-// Bench fns receive their fixture by value per gungraun's
-// `#[benches::with_setup]` contract, and the by-value drop is part of the
-// measured hot path — taking `&[T]` would change the instruction count and
-// break baseline comparability. `gungraun-macros` does not auto-suppress
-// `needless_pass_by_value` the way `iai-callgrind-macros` did, so allow it
-// explicitly.
+// This bench measures `BalanceSummary::compute` and nothing else. `compute`
+// borrows `&[TransferDetails]`; production never drops the transfers on this
+// path (the ledger owns them, they are wiped once at wallet teardown). The
+// fixture is therefore RETURNED from the bench fn so its teardown is charged
+// to the harness, OUTSIDE the measured region — the `scan_block_iai` idiom.
+//
+// This matters because `TransferDetails` is zeroize-on-drop and the zeroize
+// crate's per-field volatile writes are deliberately un-elidable. Measuring
+// the by-value drop instead made this a "zeroize N `TransferDetails`" bench
+// (~95% of the instruction count was the drop, not `compute`), so it tripped
+// the +15% `hot_path` gate on every field ever added to `TransferDetails`
+// (F14's `awaiting_confirmation` being the latest) rather than on real
+// balance-compute regressions.
+//
+// `gungraun-macros` does not auto-suppress `needless_pass_by_value` on the
+// generated wrapper the way `iai-callgrind-macros` did, so allow it explicitly.
 #![allow(clippy::needless_pass_by_value)]
 
 use curve25519_dalek::Scalar;
@@ -63,9 +73,14 @@ fn build_transfers(n: usize) -> Vec<TransferDetails> {
 
 #[library_benchmark]
 #[benches::with_setup(args = [100, 1_000, 10_000], setup = build_transfers)]
-fn hot_path_bench_balance_compute(transfers: Vec<TransferDetails>) -> BalanceSummary {
+fn hot_path_bench_balance_compute(
+    transfers: Vec<TransferDetails>,
+) -> (BalanceSummary, Vec<TransferDetails>) {
     let h = 1_000 + (transfers.len() as u64) / 2;
-    black_box(BalanceSummary::compute(&transfers, h))
+    let summary = black_box(BalanceSummary::compute(&transfers, h));
+    // Return the fixture: its zeroize-on-drop teardown must be charged to the
+    // harness, not the measured region (see the module comment).
+    (summary, transfers)
 }
 
 library_benchmark_group!(
