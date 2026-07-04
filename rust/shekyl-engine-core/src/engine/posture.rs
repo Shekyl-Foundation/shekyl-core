@@ -137,10 +137,19 @@ pub(crate) enum BroadcastPosture {
     /// must be a node you control; pointing it at a third party defeats the
     /// broadcast firewall — first-seen-origin is a permanent, categorical link.*
     ///
-    /// rule-21 reopen: an **authenticated** `OwnRemote` (a client-auth onion /
-    /// proof-of-ownership) would make "my own node" type-checkable and close this
-    /// structurally — out of scope now, the named path if the disclosure proves
-    /// insufficient.
+    /// **rule-21 reopen.** *Reopening criteria* (observable, substrate-anchored):
+    /// a field report of an `OwnRemote` pointed at a third party (a mislabel
+    /// incident); OR a testnet/audit measurement that the mislabel rate under the
+    /// config-point disclosure exceeds threshold; OR the clearnet-`OwnRemote`
+    /// residual (a clearnet `base_url` exits Tor at an exit relay — see the
+    /// `DaemonUrl` obligation) surfacing in a privacy audit. *Re-evaluation shape*:
+    /// a design round on the config/UX slice (2c owns the config source) decides
+    /// whether to add an **authenticated** `OwnRemote` — a client-auth onion /
+    /// proof-of-ownership makes "my own node" type-checkable and closes this
+    /// structurally. Until a listed trigger fires, the disclosure is the accepted
+    /// mitigation; the authenticated path is out of scope now, named so a future
+    /// maintainer can tell whether the criteria are met without re-deriving this
+    /// reasoning. (Tracked in `FOLLOWUPS.md`.)
     OwnRemote { base_url: String },
 }
 
