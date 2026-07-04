@@ -943,3 +943,167 @@ mod tests {
         );
     }
 }
+
+// -----------------------------------------------------------------------------
+// F4a spec anchors — break the C-fork circularity (RANDOMX_V2_SPEC_ANCHORS.md)
+// -----------------------------------------------------------------------------
+#[cfg(test)]
+mod spec_anchors {
+    //! Independent anchors for the AES layer, per the F4 spec-anchor
+    //! plan (`docs/design/RANDOMX_V2_SPEC_ANCHORS.md`).
+    //!
+    //! The rest of the verifier's AES coverage is the fork-derived
+    //! byte-equality corpus (T4–T8, pin `aaafe71`). These tests add a
+    //! perspective the fork is *not* in: every AES round-key / state /
+    //! xkey constant is asserted to BE `Blake2b(published string)` per
+    //! `specs.md` §3.2–3.4 (Tier 1), and the raw AES round primitive is
+    //! asserted against the FIPS-197 published worked example (Tier 2).
+    //! Neither test consults the C fork, so a fork/port shared bug or a
+    //! fork substitution in these constants cannot pass here.
+
+    use super::*;
+    use blake2::digest::consts::U32;
+    use blake2::{Blake2b, Blake2b512, Digest};
+
+    /// `Hash512` per `specs.md` §1.1 = Blake2b with 512-bit output.
+    fn hash512(input: &[u8]) -> [u8; 64] {
+        let mut h = Blake2b512::new();
+        h.update(input);
+        h.finalize().into()
+    }
+
+    /// `Hash256` per `specs.md` §1.1 = Blake2b with 256-bit output.
+    fn hash256(input: &[u8]) -> [u8; 32] {
+        let mut h = Blake2b::<U32>::new();
+        h.update(input);
+        h.finalize().into()
+    }
+
+    /// Assert a 64-byte `Hash512(label)` partitions into the four given
+    /// 16-byte round keys, in order.
+    fn assert_h512_keys(label: &[u8], keys: [&[u8; 16]; 4]) {
+        let d = hash512(label);
+        for (i, k) in keys.iter().enumerate() {
+            assert_eq!(
+                &d[i * 16..i * 16 + 16],
+                k.as_slice(),
+                "constant #{i} does not equal Blake2b512({label:?})[{}..{}] — \
+                 the derivation in specs.md no longer produces this hardcoded \
+                 constant (or the constant drifted)",
+                i * 16,
+                i * 16 + 16,
+            );
+        }
+    }
+
+    /// Tier 1 — `AesGenerator1R` keys = `Hash512("RandomX AesGenerator1R keys")`
+    /// (`specs.md` §3.2). The C fork is nowhere in this assertion: the
+    /// keys are recomputed from the Blake2b primitive over the published
+    /// string and compared to the hardcoded Rust constants.
+    #[test]
+    fn aes_generator_1r_keys_are_blake2b_of_spec_string() {
+        assert_h512_keys(
+            b"RandomX AesGenerator1R keys",
+            [
+                &AES_GEN_1R_KEY0,
+                &AES_GEN_1R_KEY1,
+                &AES_GEN_1R_KEY2,
+                &AES_GEN_1R_KEY3,
+            ],
+        );
+    }
+
+    /// Tier 1 — `AesGenerator4R` keys 0–3 and 4–7 = two `Hash512`
+    /// derivations (`specs.md` §3.3).
+    #[test]
+    fn aes_generator_4r_keys_are_blake2b_of_spec_strings() {
+        assert_h512_keys(
+            b"RandomX AesGenerator4R keys 0-3",
+            [
+                &AES_GEN_4R_KEY0,
+                &AES_GEN_4R_KEY1,
+                &AES_GEN_4R_KEY2,
+                &AES_GEN_4R_KEY3,
+            ],
+        );
+        assert_h512_keys(
+            b"RandomX AesGenerator4R keys 4-7",
+            [
+                &AES_GEN_4R_KEY4,
+                &AES_GEN_4R_KEY5,
+                &AES_GEN_4R_KEY6,
+                &AES_GEN_4R_KEY7,
+            ],
+        );
+    }
+
+    /// Tier 1 — `AesHash1R` initial states = `Hash512("RandomX AesHash1R
+    /// state")` and extra keys = `Hash256("RandomX AesHash1R xkeys")`
+    /// (`specs.md` §3.4).
+    #[test]
+    fn aes_hash_1r_states_and_xkeys_are_blake2b_of_spec_strings() {
+        assert_h512_keys(
+            b"RandomX AesHash1R state",
+            [
+                &AES_HASH_1R_STATE0,
+                &AES_HASH_1R_STATE1,
+                &AES_HASH_1R_STATE2,
+                &AES_HASH_1R_STATE3,
+            ],
+        );
+        let xk = hash256(b"RandomX AesHash1R xkeys");
+        assert_eq!(
+            &xk[0..16],
+            AES_HASH_1R_XKEY0.as_slice(),
+            "xkey0 != Hash256(...)"
+        );
+        assert_eq!(
+            &xk[16..32],
+            AES_HASH_1R_XKEY1.as_slice(),
+            "xkey1 != Hash256(...)"
+        );
+    }
+
+    /// Tier 2 — the raw AES round primitive against the FIPS-197
+    /// published worked example (Appendix B, "Cipher Example",
+    /// AES-128). `cipher_round` computes one full AES round
+    /// (SubBytes ∘ ShiftRows ∘ MixColumns, then AddRoundKey); FIPS-197's
+    /// round-1 documented `(input, round key, output)` triple pins it to
+    /// the standard, independent of both the `aes` crate's own tests and
+    /// the RandomX fork. Independently reproduced from the FIPS-197 S-box
+    /// + MixColumns matrix at design time (see RANDOMX_V2_SPEC_ANCHORS.md).
+    #[test]
+    fn cipher_round_matches_fips197_appendix_b() {
+        // FIPS-197 Appendix B: state at "start of round 1".
+        let mut state: [u8; 16] = [
+            0x19, 0x3d, 0xe3, 0xbe, 0xa0, 0xf4, 0xe2, 0x2b, 0x9a, 0xc6, 0x8d, 0x2a, 0xe9, 0xf8,
+            0x48, 0x08,
+        ];
+        // Round key 1 (from the FIPS-197 key expansion of the example key).
+        let round_key: [u8; 16] = [
+            0xa0, 0xfa, 0xfe, 0x17, 0x88, 0x54, 0x2c, 0xb1, 0x23, 0xa3, 0x39, 0x39, 0x2a, 0x6c,
+            0x76, 0x05,
+        ];
+        // Documented "start of round 2" — the round-1 output.
+        let expected: [u8; 16] = [
+            0xa4, 0x9c, 0x7f, 0xf2, 0x68, 0x9f, 0x35, 0x2b, 0x6b, 0x5b, 0xea, 0x43, 0x02, 0x6a,
+            0x50, 0x49,
+        ];
+        cipher_round(&mut state, &round_key);
+        assert_eq!(
+            state, expected,
+            "cipher_round (this crate's wrapper over aes::hazmat::cipher_round) \
+             diverged from the FIPS-197 Appendix B round-1 worked example — \
+             the wrapper's cast/orientation or the underlying AES round is not \
+             the standard function",
+        );
+    }
+
+    // The Blake2b primitive that the Tier-1 derivations above rest on is
+    // anchored against its RFC 7693 / BLAKE2-reference published vectors
+    // in `blake2_generator::spec_anchors` (its home module) — for both
+    // the `Hash512` and `Hash256` sizes used here. Not re-baked in this
+    // module: the constant-derivation tests above already fail if Blake2b
+    // drifts, and a second copy of the RFC vector would only add a
+    // drift-between-copies hazard.
+}

@@ -233,3 +233,56 @@ mod tests {
         }
     }
 }
+
+// -----------------------------------------------------------------------------
+// F4a spec anchors — break the C-fork circularity (RANDOMX_V2_SPEC_ANCHORS.md)
+// -----------------------------------------------------------------------------
+#[cfg(test)]
+mod spec_anchors {
+    //! Blake2b is the primitive the F4 Tier-1 constant-derivation
+    //! anchors rest on (`docs/design/RANDOMX_V2_SPEC_ANCHORS.md`): the
+    //! `aes` module recomputes every AES round-key / state from
+    //! `Blake2b(published string)` and asserts equality. That chain is
+    //! only meaningful if Blake2b *is* the standard function, so both
+    //! output sizes RandomX uses (`Hash512` and `Hash256`, `specs.md`
+    //! §1.1) are anchored here against published vectors, independent of
+    //! the RandomX C fork.
+
+    use blake2::digest::consts::U32;
+    use blake2::{Blake2b, Blake2b512, Digest};
+
+    /// `Blake2b-512("abc")` against the RFC 7693 Appendix A published
+    /// vector — the same primitive `Blake2Generator` reinitializes its
+    /// state with (`S = Hash512(S)`).
+    #[test]
+    fn blake2b512_matches_rfc7693_appendix_a() {
+        let mut h = Blake2b512::new();
+        h.update(b"abc");
+        let got: [u8; 64] = h.finalize().into();
+        let expected: [u8; 64] = [
+            0xba, 0x80, 0xa5, 0x3f, 0x98, 0x1c, 0x4d, 0x0d, 0x6a, 0x27, 0x97, 0xb6, 0x9f, 0x12,
+            0xf6, 0xe9, 0x4c, 0x21, 0x2f, 0x14, 0x68, 0x5a, 0xc4, 0xb7, 0x4b, 0x12, 0xbb, 0x6f,
+            0xdb, 0xff, 0xa2, 0xd1, 0x7d, 0x87, 0xc5, 0x39, 0x2a, 0xab, 0x79, 0x2d, 0xc2, 0x52,
+            0xd5, 0xde, 0x45, 0x33, 0xcc, 0x95, 0x18, 0xd3, 0x8a, 0xa8, 0xdb, 0xf1, 0x92, 0x5a,
+            0xb9, 0x23, 0x86, 0xed, 0xd4, 0x00, 0x99, 0x23,
+        ];
+        assert_eq!(got, expected, "Blake2b-512 != RFC 7693 Appendix A");
+    }
+
+    /// `Blake2b-256("")` against the official BLAKE2 reference test
+    /// vectors (blake2.net `blake2-kat`, BLAKE2b with a 32-byte digest,
+    /// empty input) — the `Hash256` size RandomX uses for the
+    /// `AesHash1R` extra keys.
+    #[test]
+    fn blake2b256_empty_matches_reference_vector() {
+        let mut h = Blake2b::<U32>::new();
+        h.update(b"");
+        let got: [u8; 32] = h.finalize().into();
+        let expected: [u8; 32] = [
+            0x0e, 0x57, 0x51, 0xc0, 0x26, 0xe5, 0x43, 0xb2, 0xe8, 0xab, 0x2e, 0xb0, 0x60, 0x99,
+            0xda, 0xa1, 0xd1, 0xe5, 0xdf, 0x47, 0x77, 0x8f, 0x77, 0x87, 0xfa, 0xab, 0x45, 0xcd,
+            0xf1, 0x2f, 0xe3, 0xa8,
+        ];
+        assert_eq!(got, expected, "Blake2b-256 != BLAKE2 reference vector");
+    }
+}
