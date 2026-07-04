@@ -104,10 +104,15 @@ pub(crate) struct WatchdogConfig {
 impl WatchdogConfig {
     /// Derive the default configuration from the consensus block target
     /// (`daa_target_seconds`, generated from `config/consensus_constants.json`).
+    ///
+    /// A zero target is a broken consensus constant, not a runtime
+    /// condition to degrade around: a silent `max(1)` fallback would
+    /// compute a horizon that blows past the F35 re-relay upper bound.
+    /// Loud failure, release builds included.
     pub(crate) fn from_block_target(block_target_seconds: u64) -> Self {
-        debug_assert!(block_target_seconds > 0, "block target must be positive");
+        assert!(block_target_seconds > 0, "block target must be positive");
         Self {
-            escape_horizon_blocks: DAEMON_RE_RELAY_CUTOFF_SECONDS / 2 / block_target_seconds.max(1),
+            escape_horizon_blocks: DAEMON_RE_RELAY_CUTOFF_SECONDS / 2 / block_target_seconds,
         }
     }
 }
@@ -514,6 +519,15 @@ mod tests {
             re_relay_cutoff_blocks
         );
         assert!(cfg.escape_horizon_blocks > 0, "horizon must be non-trivial");
+    }
+
+    /// A zero block target is a broken consensus constant; the
+    /// constructor fails loudly in all build profiles rather than
+    /// deriving a nonsense horizon from a silent fallback.
+    #[test]
+    #[should_panic(expected = "block target must be positive")]
+    fn zero_block_target_panics() {
+        let _ = WatchdogConfig::from_block_target(0);
     }
 
     /// §10 item 8 ladder ordering: below horizon → wait; past horizon →

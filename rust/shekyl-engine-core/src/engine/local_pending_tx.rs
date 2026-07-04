@@ -4183,7 +4183,10 @@ mod tests {
         assert!(!b.record_terminal(TerminalErrorKind::FeeTooLow));
         assert_eq!(b.tripped(), None);
 
-        // Out-of-scope terminal kinds (no rebuild prescription) reset.
+        // An out-of-scope kind (`DoubleSpend` — no rebuild prescription,
+        // so no loop to break) resets the streak: two in-scope
+        // `Unrecognized` rejections with an out-of-scope one between
+        // them are not consecutive and must not trip.
         let mut b = SubmitLoopBreaker::default();
         assert!(!b.record_terminal(TerminalErrorKind::Unrecognized));
         assert!(!b.record_terminal(TerminalErrorKind::DoubleSpend));
