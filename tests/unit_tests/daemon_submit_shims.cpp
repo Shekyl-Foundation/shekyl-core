@@ -658,6 +658,33 @@ TEST(daemon_submit_shims, insert_evicted_by_prune_reports_pruned_on_insert)
   EXPECT_TRUE(fx.db->txpool_has_tx(filler.txid, relay_category::all));
 }
 
+// §10 item 2's regression pin: the legacy add_tx path's foreign-key-image
+// behavior (`tvc.m_double_spend`), captured before PR-5 deletes the legacy
+// RPC route. The pin outlives the deletion — the P2P ingestion path keeps
+// add_tx (§9.4) — and documents the exact behavior the engine's
+// DoubleSpendConflict classification replaces on the wallet-facing side.
+TEST(daemon_submit_shims, legacy_add_tx_double_spend_pin)
+{
+  ShimFixture fx;
+  SubmitTx competitor = fx.make_tx(1, 0);
+  SubmitTx mine = fx.make_tx(0, 0); // different tx, same key image
+
+  shekyl_submit_facts_ffi fresh;
+  uint8_t fresh_ki = 0;
+  ASSERT_EQ(fx.commit(competitor, fresh, fresh_ki), SHEKYL_SUBMIT_OK);
+
+  tx_verification_context tvc{};
+  // version == nic_verified_hf_version skips ver_non_input_consensus (the
+  // shape tx carries no real proofs); the double-spend gate sits before
+  // check_tx_inputs, so the reject under test fires first.
+  EXPECT_FALSE(fx.bap.txpool.add_tx(mine.tx, tvc, relay_method::local,
+    /*relayed=*/false, /*version=*/1, /*nic_verified_hf_version=*/1));
+  EXPECT_TRUE(tvc.m_verifivation_failed);
+  EXPECT_TRUE(tvc.m_double_spend)
+    << "legacy path pins the foreign-key-image conflict on tvc.m_double_spend";
+  EXPECT_FALSE(fx.db->txpool_has_tx(mine.txid, relay_category::all));
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // §10 item 4: Dandelion++ embargo arming, pool-level
 // ─────────────────────────────────────────────────────────────────────────
