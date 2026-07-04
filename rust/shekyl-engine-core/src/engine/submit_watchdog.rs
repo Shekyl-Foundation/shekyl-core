@@ -108,11 +108,25 @@ impl WatchdogConfig {
     /// A zero target is a broken consensus constant, not a runtime
     /// condition to degrade around: a silent `max(1)` fallback would
     /// compute a horizon that blows past the F35 re-relay upper bound.
-    /// Loud failure, release builds included.
+    /// Loud failure, release builds included — and the same discipline
+    /// applies to the *derived* horizon, not just the input: a
+    /// `block_target_seconds` large enough that the integer division
+    /// floors `escape_horizon_blocks` to zero is the identical failure
+    /// mode (a broken consensus constant) wearing a different input
+    /// value. A zero horizon means every held tx is "past horizon" on
+    /// the very first check, jumping straight to the escape ladder —
+    /// silently disabling the wait rung entirely.
     pub(crate) fn from_block_target(block_target_seconds: u64) -> Self {
         assert!(block_target_seconds > 0, "block target must be positive");
+        let escape_horizon_blocks = DAEMON_RE_RELAY_CUTOFF_SECONDS / 2 / block_target_seconds;
+        assert!(
+            escape_horizon_blocks > 0,
+            "block target {block_target_seconds}s yields a zero-block escape horizon \
+             (re-relay cutoff / 2 = {}s) — broken consensus constant",
+            DAEMON_RE_RELAY_CUTOFF_SECONDS / 2
+        );
         Self {
-            escape_horizon_blocks: DAEMON_RE_RELAY_CUTOFF_SECONDS / 2 / block_target_seconds,
+            escape_horizon_blocks,
         }
     }
 }
@@ -528,6 +542,19 @@ mod tests {
     #[should_panic(expected = "block target must be positive")]
     fn zero_block_target_panics() {
         let _ = WatchdogConfig::from_block_target(0);
+    }
+
+    /// A block target *large enough* that the re-relay-cutoff-derived
+    /// horizon floors to zero blocks (integer division, not a zero
+    /// target) is the same broken-consensus-constant failure mode as
+    /// [`zero_block_target_panics`], and must fail loudly the same way
+    /// — not silently disable the watchdog's wait rung for every held
+    /// tx. `DAEMON_RE_RELAY_CUTOFF_SECONDS` itself is such a target:
+    /// `.../2/DAEMON_RE_RELAY_CUTOFF_SECONDS == 0` unconditionally.
+    #[test]
+    #[should_panic(expected = "zero-block escape horizon")]
+    fn block_target_too_large_panics() {
+        let _ = WatchdogConfig::from_block_target(DAEMON_RE_RELAY_CUTOFF_SECONDS);
     }
 
     /// §10 item 8 ladder ordering: below horizon → wait; past horizon →

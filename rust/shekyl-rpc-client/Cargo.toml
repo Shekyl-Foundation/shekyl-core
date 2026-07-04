@@ -37,9 +37,28 @@ shekyl-curve-io = { path = "../shekyl-curve-io", default-features = false }
 # The submit wire contract (SubmitVerdict / RejectCause / SubmitTransactionRequest):
 # the single Rust definition per docs/design/DAEMON_SUBMIT_VERDICT.md §2.3, shared
 # with the daemon-side shekyl-daemon-rpc so wallet and daemon cannot skew.
-shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+#
+# Unlike every other dependency in this block, this is an unconditional std
+# pull, not a no_std-optional one: `shekyl-rpc-types` is a plain std crate
+# (a `String` field + derive, no alloc/no_std split) — matching this
+# workspace's other wire/data-contract crates (`shekyl-wire`, `shekyl-types`,
+# neither of which is no_std either), and its two consumers (this crate; the
+# Axum `shekyl-daemon-rpc` server) are both std binaries. `default-features
+# = false` here is therefore a no-op today (the crate declares no
+# `[features]`), kept only for consistency with this block's style.
+# Reopen (retrofit `shekyl-rpc-types` with the `std-shims` + `serde/alloc`
+# split this crate's other deps already use) only if a genuine no_std
+# consumer of *this* crate emerges — not speculatively, and not while the
+# wire contract itself is still draft (`DAEMON_SUBMIT_VERDICT.md` §8 parity
+# matrix open).
+shekyl-rpc-types = { path = "../shekyl-rpc-types", default-features = false }
 
 [features]
+# NOTE: `std` here is aspirational while `shekyl-rpc-types` is a dependency
+# (see its comment above) — that crate has no `std` feature to wire in and
+# forces std unconditionally, so `--no-default-features` does not currently
+# yield a real no_std build of this crate. Kept in place (not ripped out)
+# because it is genuinely load-bearing for this block's *other* deps.
 std = [
   "std-shims/std",
 
