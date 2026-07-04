@@ -39,6 +39,7 @@ pub mod certificate;
 pub mod engine;
 pub mod facts;
 pub mod fee;
+pub mod ffi_shim;
 pub mod gate;
 pub mod phase_a;
 pub mod verifier;
@@ -69,9 +70,16 @@ pub mod consensus {
 pub use certificate::VerificationCertificate;
 pub use engine::{EngineFault, SubmitEngine};
 pub use facts::{
-    CommitOutcome, KeyImageConflict, ReferenceFacts, SubmitFacts, SubmitStateShim, TxMeta,
+    CommitOutcome, KeyImageConflict, ReferenceFacts, ShimFault, SubmitFacts, SubmitStateShim,
+    TxMeta,
 };
+pub use ffi_shim::FfiSubmitShim;
 pub use gate::PhaseCGate;
 pub use phase_a::{parse_submission, ParsedSubmission, PhaseAReject, SubmitTxKind};
 pub use verifier::DaemonTxVerifier;
 pub use verify::{TxVerifier, VerifyFailure};
+
+/// The production engine: FFI state shim (§4) + native verifier (§3.3's
+/// Phase-C battery). One instance per daemon, shared across transport
+/// workers via `Arc` in the server's `AppState`.
+pub type DaemonSubmitEngine = SubmitEngine<FfiSubmitShim, DaemonTxVerifier>;
