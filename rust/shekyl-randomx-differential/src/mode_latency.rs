@@ -71,11 +71,15 @@
 //!
 //! ## Cadence
 //!
-//! Per R1-D12 (c) + R1-D7's "no per-PR CI gate at 2g; activates at
-//! Phase 3a", this mode runs in the **nightly** workflow (and
-//! optionally the release-gate workflow) but not in the per-PR
-//! workflow. The §6.2 T5 entry pins the cadence as "nightly +
-//! release-gate".
+//! **Wired** (test-regime hardening runtime-mode change, 2026-07):
+//! the daily 05:00 cron in `randomx-v2-differential.yml`'s dedicated
+//! `runtime-modes` job (main + dev matrix), plus opt-in
+//! `workflow_dispatch` via the `runtime_modes` input — and not the
+//! per-PR workflow (per R1-D12 (c) + R1-D7's per-PR budget). History:
+//! the §6.2 T5 entry pinned "nightly + release-gate" at 2g, but no
+//! nightly invocation ever existed — the cadence lived only in this
+//! comment until the armed-gate audit (F1-HIGH) wired it. The
+//! release-gate cadence still lands post-genesis.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -93,6 +97,33 @@ use crate::rust_subject::RustSubjectSession;
 /// changing the budget requires a plan-doc round per §5.7's
 /// drift-prevention discipline. Encoded as `f64` because the
 /// ratio is `median_rust_ns / median_c_ns`, an `f64` quotient.
+///
+/// **Recorded baselines (2026-07-04, the gate's first executions —
+/// canonical disclosure site; workflow comments point here):**
+///
+/// - **Committed runner class (`ubuntu-latest`), the budget's
+///   substrate — 1.817×** (workflow_dispatch run 28690002177,
+///   N=1024, medians rust 377.5 ms / C 207.8 ms). The budget HOLDS
+///   with ~39% headroom.
+/// - **Dev hardware (i9-11950H) — 3.041–3.139×** at the wiring tip,
+///   and **3.124–3.209×** at the Phase-2g-close pin `d60186fa9`
+///   under the same 1.94 toolchain: statistically identical, so the
+///   ratio did NOT drift while the gate was unwired. The ratio is
+///   **hardware-dependent** — the C interpreter gains more from
+///   desktop cache/IPC than the Rust interpreter does — so local
+///   runs on developer hardware may exceed the budget while the
+///   committed runner class passes. A local red off the committed
+///   runner class is an expected artifact, not a regression.
+///
+/// Triage: a red **on the committed runner class** is a real
+/// tripwire hit. Disposition per §5.7: budget round (context for a
+/// re-derivation: T5 protects sync/reorg throughput and serves as a
+/// regression tripwire; T6 owns the adversarial/DoS bound; nothing
+/// consensus-relevant binds near 3.0×, so a re-derived budget should
+/// be runner-baseline + 10–15% margin, recorded with that
+/// derivation) versus verifier perf work (features-tier: interpreter
+/// churn in consensus-critical code buys no security). Never
+/// rerun-until-green; never a silent budget bump.
 pub const LATENCY_RATIO_BUDGET: f64 = 3.0;
 
 /// Successful run summary surfaced on the stdout report path

@@ -24,7 +24,13 @@ inputs:
     required: false
     default: '1.94.0'
   components:
-    description: 'Space-separated rustup components to install alongside the minimal profile'
+    description: >-
+      Space-separated rustup components to install alongside the
+      minimal profile. May be empty ('') for a bare pinned toolchain:
+      the install script's word-split loop renders a zero-iteration
+      `for c in ; do` — valid sh/bash — and passes no --component
+      flags (verified under `set -euo pipefail`; depends.yml relies
+      on this).
     required: false
     default: 'rustfmt clippy'
 runs:

@@ -121,16 +121,21 @@ jobs:
         update-alternatives --set ${{ matrix.toolchain.host }}-g++ $(which ${{ matrix.toolchain.host }}-g++-posix)
         update-alternatives --set ${{ matrix.toolchain.host }}-gcc $(which ${{ matrix.toolchain.host }}-gcc-posix)
     - name: install Rust
-      run: |
-        # Install the toolchain pinned by rust/rust-toolchain.toml up front (and add
-        # the cross target to *it*), so the daemon build's parallel cargos use the
-        # pinned 1.94 instead of racing to auto-install it. Bump in sync with the file.
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.94.0 --profile minimal
-        . "$HOME/.cargo/env"
-        if [ -n "${{ matrix.toolchain.rust_target }}" ]; then
-          rustup target add ${{ matrix.toolchain.rust_target }}
-        fi
-        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      # Composite action (.github/actions/install-rust) with no extra
+      # components — identical to the inline form this replaces (pinned
+      # 1.94.0, --profile minimal, GITHUB_PATH append, hardened
+      # download-then-run): one definition to bump on a toolchain
+      # change. Installed up front so the daemon build's parallel
+      # cargos use the pin instead of racing to auto-install it.
+      uses: ./.github/actions/install-rust
+      with:
+        components: ''
+    - name: add Rust cross target
+      # Separate step ON PURPOSE: the composite's GITHUB_PATH append
+      # only takes effect for subsequent steps, which is exactly what
+      # the old block's `. "$HOME/.cargo/env"` worked around in-block.
+      if: ${{ matrix.toolchain.rust_target }}
+      run: rustup target add ${{ matrix.toolchain.rust_target }}
     - name: archival KAT tests run under aarch64 (qemu-user)
       if: matrix.toolchain.host == 'aarch64-linux-gnu'
       run: |

@@ -47,6 +47,28 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Economics C2a′ layer gate — stacked silent failures; layer verdicts
+  currently vacuous** (surfaced 2026-07-04 when PR #241's hardened rustup
+  install turned the first layer of it loud). Three independent silent
+  failures stack in `economics-c2a-prime.yml`'s layer jobs, verified in the
+  last green `dev` run (28669067396): (1) the layer containers never had
+  `curl`, so the `curl | sh` rustup install exited 0 having installed
+  nothing — **fixed in PR #241** (curl + ca-certificates added; the
+  hardened form now fails loud); (2) `run_economics_c2a_prime.sh layer1`
+  dies with `FATAL: no C2a′ Layer 1 gtest cases (filter
+  'EconomicsC2aPrime.Layer1*')` — the §5.8 harness it checks for has not
+  landed; (3) the workflow invokes the script as `script 2>&1 | tee log`
+  under `sh -e` WITHOUT pipefail, so tee's exit status swallows the die
+  and the job reports success. Net: every Layer 1/2 verdict to date was
+  green-by-construction — the dual-leg KAT gate is armed with no trigger,
+  the same theater class as the RandomX audit's findings. **Disposition
+  needed (deliberately NOT flipped in PR #241** — a RandomX-surface PR,
+  and making the pipe loud turns `dev` red on the un-landed harness,
+  which is a policy call): land the §5.8 gtest harness (or descope the
+  layer legs), then make the pipe verdict-preserving
+  (`shell: bash` + `set -o pipefail`, or drop the tee). *Target: V3.0*
+  (the economics consensus KAT gate must be real before genesis).
+
 - **[Done 2026-07-01] CT-balance FFI cutover — `verRctSemanticsSimple` +
   `verRctSemanticsFeeOnly` → `shekyl_verify_ct_balance` (flagged 2026-06-30).** The commitment-sum balance
   is the last native-C++ island in an otherwise-FFI'd FCMP++ verify path
@@ -4053,6 +4075,18 @@ sustainability is unaffected by the recalibration.
 ---
 
 ## V3.1 — audit response and stressnet gates
+
+- **`tests/performance_tests/` — rule-15 deletion-or-adoption audit**
+  (surfaced 2026-07-03, RandomX v2 test-regime benchmark review). The
+  inherited Monero performance suite is wired into **zero workflows**
+  (workflow-reference grep: no CI consumer) and mostly measures legacy
+  CryptoNote primitives — a dormant surface of the same class as the
+  armed gates the test-regime program closed. Disposition per
+  `15-deletion-and-debt.mdc`: audit each benchmark for
+  delete (legacy-primitive measurements with no v3 subject) vs adopt
+  (anything measuring a live v3 surface moves to a wired harness — the
+  Rust side's gungraun benches are the house pattern). *Target: V3.1*
+  (not genesis-gating; the live perf gates are T5/T6, wired 2026-07).
 
 - **Re-evaluate the inert `(1 + stake_ratio)` factor in `calc_burn_pct`
   (spawned gate-7 iteration 5, 2026-06-11).** The gate-7 locked-supply

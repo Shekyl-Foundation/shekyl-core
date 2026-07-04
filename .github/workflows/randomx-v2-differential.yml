@@ -8,14 +8,27 @@
 #   the submodule's own CMakeLists, then runs the Rust workspace's
 #   structural gates against the differential harness crate
 #   (`cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`).
-#   Covers T9, T10, T11, T13, T14, T15, T17 (per §6 test plan).
-#   Runtime modes (T1, T3, T5, T7, T8, T16 — those that invoke the
-#   harness binary's `--mode=...` subcommands) are deferred behind
-#   the V3.0 `compute_hash` divergence (per `docs/FOLLOWUPS.md`'s
-#   "Investigate `shekyl-pow-randomx::compute_hash` divergence from
-#   C reference at large data sizes" entry); per §6.8 cadence the
-#   runtime gates become merge-blocking once the V3.0 investigation
-#   closes and the verifier ships a corrected `compute_hash`.
+#   Covers T9, T10, T11, T13, T14, T15, T17 (per §6 test plan) plus
+#   the merge-blocking runtime mode, wired by the test-regime
+#   hardening runtime-mode change: `--mode=correctness` (three-leg
+#   rust == C == canonical) per-PR at per-PR sizing and full-size on
+#   the daily cron. The modes' original deferral condition — the V3.0
+#   `compute_hash` divergence — closed via PR #79 (989610cac), but per
+#   §6.8 the cadence was never re-wired until the test-regime audit
+#   flagged the gap (armed-gate instance four: a real gate no
+#   automation ran). T6 lives in randomx-v2-adversarial-ratio.yml.
+#
+# * Daily cron + opt-in dispatch (`runtime_modes` input):
+#   `runtime-modes` — the §6.8 nightly-cadence runtime gates in a job
+#   of their own, on BOTH active branches (main + dev matrix, house
+#   pattern: nightly.yml): `--mode=concurrent` (T7 concurrent
+#   byte-equality + T8 RSS ceiling) and `--mode=latency` (T5, ≤3.0×
+#   in-mode gate). Isolated from structural-validate so the disclosed
+#   likeliest-to-red T5 tripwire (green at 1.817× on the committed
+#   runner class, 2026-07-04; see the latency step) cannot abort the
+#   merge-blocking gates, and opt-in on dispatch so a parity-recovery
+#   dispatch can still produce a green run while the T5 budget
+#   question is open.
 #
 # * Weekly cron (`0 6 * * 1`): `cargo-mutants` per §5.5.6 + §4.6 M2.
 #   Mutation-tests the harness + verifier under the §1.4 sole-consumer
@@ -105,6 +118,17 @@ on:
           - daily
           - full
         default: daily
+      runtime_modes:
+        description: >-
+          Also run the runtime-modes job (T5 latency + T7/T8
+          concurrent) on this dispatch. Off by default so a
+          parity-recovery dispatch (parity_scope=full) stays scoped to
+          the parity gate and doesn't spend a runtime-modes runner.
+          Turn on to measure the committed-runner-class T5 number on
+          demand (recorded baseline: 1.817×, 2026-07-04 — see
+          LATENCY_RATIO_BUDGET in mode_latency.rs).
+        type: boolean
+        default: false
 
 # Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
 # Without a concurrency group, every push to an open PR stacks a full new
@@ -113,13 +137,14 @@ on:
 # unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
 #
 # Schedule and manual-dispatch runs are keyed on `github.run_id` (i.e.
-# never share a group): for `schedule` events `github.ref` is the default
-# branch — the SAME `refs/heads/dev` a push-to-dev run uses — so a plain
-# ref-keyed group lets any dev push land mid-cron and CANCEL the
-# multi-hour parity / mutants run; a second `workflow_dispatch` would
-# likewise cancel a running one. A canceled run never fires the alarm a
-# failed run would; that is the armed-gate-with-no-trigger failure mode
-# reborn as a race.
+# never share a group): schedule events fire ONLY on the default branch
+# (`refs/heads/main` — verify with `git ls-remote --symref origin HEAD`),
+# so a scheduled run's `github.ref` is the SAME ref a push-to-main run
+# uses, and a plain ref-keyed group would let a main push land mid-cron
+# and CANCEL the multi-hour parity / mutants run; a second
+# `workflow_dispatch` would likewise cancel a running one. A canceled
+# run never fires the alarm a failed run would; that is the
+# armed-gate-with-no-trigger failure mode reborn as a race.
 concurrency:
   group: randomx-v2-differential-${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.run_id || format('{0}-{1}', github.event_name, github.ref) }}
   cancel-in-progress: true
@@ -148,10 +173,24 @@ jobs:
     # and cadence-independent. The mutants job's `if:` filter
     # (below) keeps the weekly mutation run from triggering this
     # job's full setup twice on Monday at 06:00 UTC.
-    name: 'structural: build + cargo test (T9-T15, T17)'
+    name: 'structural: build + cargo test (T9-T15, T17) + 3-leg correctness'
     runs-on: ubuntu-latest
+    # 120 sized for the cron path (the heaviest: debug suite + T2 +
+    # full-size 32×32 serial three-leg correctness; the arm lane prices
+    # its release-only subset at ~75+ min on 4 vCPU). The 10–20 min T5
+    # latency mode lives in the parallel runtime-modes job and the pins
+    # step is skipped on the cron, so this fits with margin — measure
+    # the first crons before tightening.
     timeout-minutes: 120
     if: github.event_name != 'schedule' || github.event.schedule == '0 5 * * *'
+    env:
+      # Runtime-mode sizing: per-PR/push/dispatch events run the R1-D4
+      # §F2 per-PR subset (16×8 = 128 pairs); the daily 05:00 cron (the
+      # only schedule that reaches this job, per the `if:` above) runs
+      # full nightly sizing (32×32 = 1024). Same fail-safe shape as
+      # full-parity's label selector.
+      CORRECTNESS_SEEDHASHES: ${{ github.event_name == 'schedule' && '32' || '16' }}
+      CORRECTNESS_DATA_PER_SEEDHASH: ${{ github.event_name == 'schedule' && '32' || '8' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -162,9 +201,11 @@ jobs:
         # rust/rust-toolchain.toml, download-then-run form. This file's
         # inline copies were already hardened on PR #236; the composite
         # consolidates that one proven recipe so future edits (toolchain
-        # bumps, flag changes) happen once — the 8 `curl | sh` copies in
-        # OTHER workflows still carry the silent-green bug and migrate
-        # in a follow-up sweep.
+        # bumps, flag changes) happen once. The runtime-mode change
+        # completed the repo-wide sweep: zero inline rustup installs
+        # remain — every workflow uses this composite (cross-target
+        # sites add a separate `rustup target add` step, the
+        # depends.yml pattern).
         uses: ./.github/actions/install-rust
       - name: Install CMake + Ninja
         # `ubuntu-latest` images carry CMake by default, but we pin
@@ -199,10 +240,11 @@ jobs:
         # Covers T9 (corpus-determinism), T10 (adversarial pin),
         # T11 (failure_output schema), T13 (crate-invariant script),
         # T14 (sole consumer), T15 (fork-pin SHA), T17 (invocation
-        # banner). Per §6.7.5 + §6.8 the runtime-mode tests (T1,
-        # T3, T5, T7, T8, T16) are deferred behind the V3.0
-        # `compute_hash` divergence; once that closes a future
-        # amendment adds runtime-mode invocations here.
+        # banner). The §6.7.5/§6.8 runtime-mode deferral is CLOSED:
+        # the amendment it anticipated is `--mode=correctness` per-PR
+        # + cron below, `--mode=latency` (T5) + `--mode=concurrent`
+        # (T7/T8) in the runtime-modes job, and T6 in
+        # randomx-v2-adversarial-ratio.yml (weekly).
         #
         # T2 (`adversarial_corpus_byte_equality`) was originally
         # `#[ignore]`-gated behind the V3.0 verifier-divergence
@@ -242,6 +284,13 @@ jobs:
           cargo test --release --locked -p shekyl-randomx-differential \
             --test adversarial_corpus_byte_equality
       - name: cargo test --release canonical pins (rust leg, 1024 pins)
+        # Skipped on the cron: at the cron's full 32×32 sizing the
+        # correctness step below re-derives the identical
+        # rust-vs-canonical leg over the same corpus (strict superset),
+        # so running the pins here would pay the 32 cache derives +
+        # 1024 hashes twice in one job. Per-PR it is NOT redundant —
+        # per-PR correctness runs only the 16×8 subset.
+        if: github.event_name != 'schedule'
         working-directory: rust
         # Full 1024-pin re-check of the Rust verifier against the
         # committed canonical table (rust-vs-canonical leg only; no C
@@ -255,6 +304,25 @@ jobs:
         run: |
           cargo test --release --locked -p shekyl-randomx-differential \
             --test canonical_pins_full
+      - name: three-leg correctness mode (rust == C == canonical)
+        working-directory: rust
+        # F1-HIGH fix (test-regime audit): the flagship three-leg
+        # differential ran in NO workflow. The §6.8 deferral's blocking
+        # condition (the V3.0 compute_hash divergence) closed via PR #79
+        # and the 1024-pair three-leg was re-verified manually once —
+        # but nothing re-wired the cadence the file header specified,
+        # leaving the pin table's only automated consumer the weekly
+        # mutants run. Merge-blocking per-PR at per-PR sizing; full
+        # nightly sizing on the daily cron (sizing env above). The mode
+        # enforces its own verdict (nonzero exit on any leg
+        # disagreement). Its first CI-wired execution was the
+        # native-arm lane (PR #239); this is the x86 cadence.
+        run: |
+          cargo run --release --locked -p shekyl-randomx-differential \
+            --bin shekyl-randomx-differential -- \
+            --mode=correctness \
+            --random-corpus-seedhashes="$CORRECTNESS_SEEDHASHES" \
+            --random-corpus-data-per-seedhash="$CORRECTNESS_DATA_PER_SEEDHASH"
       - name: cargo test --features test-internals (verifier)
         working-directory: rust
         # Per §5.3.3 R5-D1: the verifier crate's
@@ -275,26 +343,93 @@ jobs:
         # enforced; harness scope per §5.5.4 row).
         run: scripts/ci/check_randomx_crate_invariants.sh
 
-  mutants:
-    # Weekly cargo-mutants run per §5.5.6 + §4.6 M2 (Round-3
-    # substrate-completeness amendment). Mutation testing is
-    # nightly-only (not per-PR) per the F5 budget — `cargo mutants`
-    # against the harness + verifier surfaces is multi-hour work; the
-    # weekly cadence balances substrate signal against runner cost.
+  runtime-modes:
+    # The §6.8 nightly-cadence runtime gates (T5 latency, T7/T8
+    # concurrent) in a job of their own, per the post-wiring review
+    # round:
     #
-    # Skip-list discipline lives in `.cargo/mutants.toml`
-    # (`exclude_globs` for the tooling binaries + canonical-output
-    # data file per §5.5.6 row). Each entry in the skip list is a
-    # substrate-anchored carve-out; new skip-list entries require a
-    # §5.5.6-row plan-doc amendment.
-    name: 'weekly: cargo-mutants (T18)'
+    # * Isolation: measurement gates live apart from the structural
+    #   job so ANY latency red (T5 is green on the committed runner
+    #   class — 1.817× recorded 2026-07-04 — but it is a tripwire and
+    #   tripwires fire) cannot abort the merge-blocking gates ordered
+    #   after it (test-internals, crate invariants).
+    # * Cadence: daily 05:00 cron, plus dispatch ONLY when the
+    #   `runtime_modes` input is set — a parity-recovery dispatch
+    #   (parity_scope=full) must be able to produce a green run while
+    #   the T5 budget question is open.
+    # * Branch coverage: schedule events fire on the default branch
+    #   (main) only, so without a matrix this cron would never measure
+    #   dev, where verifier work lands first. Both active branches are
+    #   checked out per the nightly.yml house pattern.
+    #
+    # Step-order pin: concurrent runs BEFORE latency — latency is the
+    # likeliest-to-red step (it is the calibrated tripwire), and any
+    # step ordered after it would be skipped on that red (the exact
+    # masking this job exists to remove).
+    name: 'cron: runtime modes — T7/T8 concurrent + T5 latency (${{ matrix.branch }})'
     runs-on: ubuntu-latest
-    timeout-minutes: 360
-    if: github.event_name == 'schedule' && github.event.schedule == '0 6 * * 1' || github.event_name == 'workflow_dispatch'
+    # Setup + release compile ≈ 15 min, concurrent ≈ 5–10 min, latency
+    # ≈ 10–20 min; 90 leaves shared-runner margin — measure the first
+    # crons before tightening.
+    timeout-minutes: 90
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 5 * * *') || (github.event_name == 'workflow_dispatch' && inputs.runtime_modes)
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [main, dev]
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ matrix.branch }}
           submodules: recursive
+      - name: Install Rust toolchain
+        # Composite action (.github/actions/install-rust); see the
+        # structural-validate job's step comment.
+        uses: ./.github/actions/install-rust
+      - name: Install CMake + Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build
+      - name: Configure + build randomx-v2 C reference
+        uses: ./.github/actions/build-randomx-v2-ref
+      - name: concurrent mode (T7 byte-equality + T8 RSS ceiling)
+        working-directory: rust
+        # First CI wiring of `--mode=concurrent` (the last runtime mode
+        # of the §6.7.5/§6.8 deferral, shipped in Phase 2g as
+        # mode_concurrent.rs but wired into no workflow until this
+        # job): 4+1 workers × 256 hashes each over the per-PR-size
+        # random corpus against a capacity-2 CacheStore — T7 asserts
+        # cross-worker determinism plus rust/C byte-equality, T8
+        # asserts the 640 MiB × 1.10 RSS ceiling via /proc/self/statm
+        # (Linux runner, so the T8 leg is live, not the cross-platform
+        # no-op). The daemon verifies blocks on multiple threads: a
+        # divergence here is a plausible REAL consensus finding —
+        # halt and escalate per RANDOMX_V2_PHASE3_PLAN.md §7.3, do not
+        # rerun-until-green.
+        run: |
+          cargo run --release --locked -p shekyl-randomx-differential \
+            --bin shekyl-randomx-differential -- --mode=concurrent
+      - name: latency mode (T5 gate, rust/C ratio)
+        working-directory: rust
+        # The ≤3.0× LATENCY_RATIO_BUDGET gate, enforced in-mode over
+        # interleaved same-process samples (the RATIO is immune to the
+        # shared-runner noise that makes absolute wall-clock CI gates
+        # flake-theater); rust/C hash equivalence is asserted before
+        # timing. 1024 samples ≈ 10–20 min.
+        #
+        # RECORDED BASELINE (2026-07-04, first executions): committed
+        # runner class 1.817× — the budget HOLDS with ~39% headroom;
+        # the earlier "expected red" state came from dev-hardware
+        # readings (~3.1×), which the drift-check showed are a
+        # hardware artifact, not a regression. The canonical record +
+        # triage policy live on `LATENCY_RATIO_BUDGET` in
+        # rust/shekyl-randomx-differential/src/mode_latency.rs —
+        # update THAT doc when the state changes, not a copy here. A
+        # red HERE (the committed runner class) is a real tripwire
+        # hit: never rerun-until-green, never a silent budget bump.
+        run: |
+          cargo run --release --locked -p shekyl-randomx-differential \
+            --bin shekyl-randomx-differential -- --mode=latency
       - name: Install Rust toolchain
         # Composite action (.github/actions/install-rust); see the
         # structural-validate job's step comment.
@@ -444,12 +579,18 @@ jobs:
         # pins its SHA-256. Consumes the C reference the parent CMake
         # build just produced (randomx-v2-sys links librandomx.a).
         working-directory: rust
-        env:
-          RANDOMX_V2_INSTALL_DIR: ${{ github.workspace }}/build/external/randomx-v2-install
+        # Runtime $GITHUB_WORKSPACE, NOT the ${{ github.workspace }}
+        # template: inside a container job the template interpolates
+        # the HOST path (/home/runner/work/...), which does not exist
+        # in the container (the work tree is mounted at /__w/...) —
+        # the first hosted execution of this job died exactly there
+        # (dispatch run 28690002177: "No such file or directory"
+        # creating the corpus). The env var is container-correct.
         run: |
+          export RANDOMX_V2_INSTALL_DIR="$GITHUB_WORKSPACE/build/external/randomx-v2-install"
           cargo run --release --locked -p shekyl-randomx-differential \
             --bin gen-parity-corpus -- \
-            --out "${{ github.workspace }}/build/tests/randomx_v2_parity/parity_corpus.dat"
+            --out "$GITHUB_WORKSPACE/build/tests/randomx_v2_parity/parity_corpus.dat"
       - name: run parity gate (ctest -L ${{ env.PARITY_CTEST_LABEL }})
         # Serial (ctest default): each test allocates a ~2 080 MiB
         # dataset; parallel invocations would multiply peak memory.
