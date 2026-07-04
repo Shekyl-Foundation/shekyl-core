@@ -19,15 +19,23 @@
   hardening, runtime-mode change). The harness's `--mode=correctness`
   three-leg differential (Rust ≡ C ≡ canonical) is now merge-blocking
   per-PR at per-PR sizing and full-size on the daily cron; `--mode=latency`
-  (T5, ≤3.0× in-mode ratio gate, interleaved same-process sampling) runs on
-  the daily cron; and the T6 adversarial worst-case-ratio gate gets a weekly
-  cron (previously dispatch-only) plus a concurrency group and the pinned
-  install-rust composite (replacing a `dtolnay/rust-toolchain@stable`
+  (T5, ≤3.0× in-mode ratio gate, interleaved same-process sampling) and
+  `--mode=concurrent` (T7 concurrent byte-equality + T8 RSS ceiling — the
+  deferral's last unwired runtime mode) run in a dedicated `runtime-modes`
+  cron job on both active branches (main + dev matrix; opt-in on dispatch
+  via the `runtime_modes` input, so a parity-recovery dispatch is not
+  forced red by T5's disclosed known-over-budget state, and with a triage
+  band that classifies a T5 red as known-state vs fresh regression); and
+  the T6 adversarial worst-case-ratio gate gets a weekly cron (previously
+  dispatch-only; also main + dev matrix) plus a concurrency group and the
+  pinned install-rust composite (replacing a `dtolnay/rust-toolchain@stable`
   moving-ref). `set_canonical`'s eager-derive claim is now a state-probe
-  test (epoch rollover cannot stall the first post-boundary verify). Every
-  remaining `curl | sh` rustup install repo-wide (10 sites across 7
-  workflow files, including the disabled release workflow) was converted to
-  the fail-loud download-then-run form, preserving each site's flags.
+  test (epoch rollover cannot stall the first post-boundary verify). The
+  rustup sweep completed repo-wide: every inline/env-block rustup install
+  (14 sites across 8 workflow files, including build.yml and the disabled
+  release workflow) now uses the hardened `install-rust` composite —
+  cross-target sites add a separate `rustup target add` step (the
+  depends.yml pattern) — so zero `curl | sh` or hand-copied recipes remain.
 - **pow: native-aarch64 CI lane** (RandomX v2 test-regime hardening PR-2).
   New `native-arm` job on `ubuntu-24.04-arm` (native silicon, deliberately
   not qemu — softfloat would mask a real FP-rounding divergence): verifier

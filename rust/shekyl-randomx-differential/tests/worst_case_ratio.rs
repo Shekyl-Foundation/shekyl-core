@@ -44,7 +44,8 @@
 //! ## Cadence
 //!
 //! T6 runs **weekly** (Tuesday 06:00 UTC cron in
-//! `randomx-v2-adversarial-ratio.yml`) plus `workflow_dispatch`, per
+//! `randomx-v2-adversarial-ratio.yml`, on both active branches via a
+//! main + dev matrix) plus `workflow_dispatch`, per
 //! the test-regime hardening runtime-mode change (2026-07; M3
 //! cadence-amendment citation in that workflow's header). R1-D6
 //! close Reframe 2 originally specified nightly, but no schedule was

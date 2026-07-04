@@ -13,7 +13,11 @@
 # ## hardening runtime-mode change, 2026-07)
 #
 # M3 change-class citation (this file's own discipline, below):
-# **cadence change** + **toolchain-pin change** + **recipe dedup**.
+# **cadence change** + **toolchain-pin change** + **recipe dedup**
+# + **branch-coverage matrix** (post-wiring review: schedule events
+# fire on the default branch — main — only, so a bare cron would
+# never measure dev, where verifier work lands first; the main+dev
+# matrix below is the nightly.yml house pattern).
 # Original R1-D7 Sub-A disposition: `workflow_dispatch`-only
 # pre-genesis, because "the constants are still drifting (recipes
 # being added, RUNNER_NOISE_MARGIN being baselined)". Substrate
@@ -88,9 +92,11 @@ on:
         type: string
 
 # Schedule and dispatch runs never share a group (github.run_id):
-# both use github.ref == refs/heads/dev, and a cancel-in-progress
-# collision would silently swallow a running measurement — a
-# canceled run fires no alarm (house lesson from
+# a scheduled run's github.ref is the default branch
+# (refs/heads/main — schedules fire only there), a dispatch run's
+# is whatever ref it was launched from, and any shared-ref
+# cancel-in-progress collision would silently swallow a running
+# measurement — a canceled run fires no alarm (house lesson from
 # randomx-v2-differential.yml's concurrency fix on PR #236).
 concurrency:
   group: randomx-v2-adversarial-ratio-${{ github.run_id }}
@@ -110,17 +116,26 @@ env:
 
 jobs:
   adversarial-ratio:
-    # Pre-genesis: `workflow_dispatch` only per R1-D7 Sub-A close.
-    # Post-genesis a release-gate trigger is added.
-    name: 't6: cargo test --ignored worst_case_ratio'
+    # Weekly Tuesday 06:00 UTC cron + `workflow_dispatch`, per the
+    # header's M3 cadence amendment (originally dispatch-only per
+    # R1-D7 Sub-A close; post-genesis a release-gate trigger is
+    # added). The cron fires on the default branch (main) only, so
+    # the matrix checks out BOTH active branches — without it the
+    # weekly gate would never measure dev.
+    name: 't6: cargo test --ignored worst_case_ratio (${{ matrix.branch }})'
     runs-on: ubuntu-latest
     # T6 runtime ≈ 40 s on the C4 corpus + ~3 min C-reference build
     # + ~2 min Rust compile. 30 minutes covers the C4 size; future
     # corpus expansions may need an amendment per R1-D7 Sub-A close.
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [main, dev]
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ matrix.branch }}
           submodules: recursive
       - name: Install Rust toolchain
         # Composite action (.github/actions/install-rust): pins the
@@ -148,8 +163,9 @@ jobs:
         uses: ./.github/actions/build-randomx-v2-ref
       - name: cargo test --ignored t6_worst_case_ratio
         working-directory: rust
-        # Post-PR-#79 + c71ce2413 substrate closure: T6 activates on
-        # `workflow_dispatch` (and post-genesis release-gate, when
+        # Post-PR-#79 + c71ce2413 substrate closure: T6 runs on the
+        # weekly cron + `workflow_dispatch` per the header's M3
+        # cadence amendment (and post-genesis release-gate, when
         # added per R1-D7 Sub-A close). The previous `if: false`
         # gate paired with the V3.0 verifier-divergence FOLLOWUP
         # has been lifted; T6 itself retains its test-layer

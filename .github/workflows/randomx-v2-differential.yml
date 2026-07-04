@@ -9,15 +9,25 @@
 #   structural gates against the differential harness crate
 #   (`cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`).
 #   Covers T9, T10, T11, T13, T14, T15, T17 (per §6 test plan) plus
-#   the runtime modes, wired by the test-regime hardening runtime-mode
-#   change: `--mode=correctness` (three-leg rust == C == canonical) is
-#   merge-blocking per-PR at per-PR sizing and full-size on the daily
-#   cron; `--mode=latency` (T5, ≤3.0× in-mode gate) runs on the daily
-#   cron. The modes' original deferral condition — the V3.0
+#   the merge-blocking runtime mode, wired by the test-regime
+#   hardening runtime-mode change: `--mode=correctness` (three-leg
+#   rust == C == canonical) per-PR at per-PR sizing and full-size on
+#   the daily cron. The modes' original deferral condition — the V3.0
 #   `compute_hash` divergence — closed via PR #79 (989610cac), but per
 #   §6.8 the cadence was never re-wired until the test-regime audit
 #   flagged the gap (armed-gate instance four: a real gate no
 #   automation ran). T6 lives in randomx-v2-adversarial-ratio.yml.
+#
+# * Daily cron + opt-in dispatch (`runtime_modes` input):
+#   `runtime-modes` — the §6.8 nightly-cadence runtime gates in a job
+#   of their own, on BOTH active branches (main + dev matrix, house
+#   pattern: nightly.yml): `--mode=concurrent` (T7 concurrent
+#   byte-equality + T8 RSS ceiling) and `--mode=latency` (T5, ≤3.0×
+#   in-mode gate). Isolated from structural-validate so the disclosed
+#   known-over-budget T5 state (see the latency step) cannot abort the
+#   merge-blocking gates, and opt-in on dispatch so a parity-recovery
+#   dispatch can still produce a green run while the T5 budget
+#   question is open.
 #
 # * Weekly cron (`0 6 * * 1`): `cargo-mutants` per §5.5.6 + §4.6 M2.
 #   Mutation-tests the harness + verifier under the §1.4 sole-consumer
@@ -107,6 +117,16 @@ on:
           - daily
           - full
         default: daily
+      runtime_modes:
+        description: >-
+          Also run the runtime-modes job (T5 latency + T7/T8
+          concurrent) on this dispatch. Off by default: T5 is in a
+          disclosed known-over-budget state, so a parity-recovery
+          dispatch (parity_scope=full) must not be forced red by it.
+          Turn on to measure the committed-runner-class T5 number on
+          demand (the §5.7 budget-round evidence path).
+        type: boolean
+        default: false
 
 # Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
 # Without a concurrency group, every push to an open PR stacks a full new
@@ -115,13 +135,14 @@ on:
 # unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
 #
 # Schedule and manual-dispatch runs are keyed on `github.run_id` (i.e.
-# never share a group): for `schedule` events `github.ref` is the default
-# branch — the SAME `refs/heads/dev` a push-to-dev run uses — so a plain
-# ref-keyed group lets any dev push land mid-cron and CANCEL the
-# multi-hour parity / mutants run; a second `workflow_dispatch` would
-# likewise cancel a running one. A canceled run never fires the alarm a
-# failed run would; that is the armed-gate-with-no-trigger failure mode
-# reborn as a race.
+# never share a group): schedule events fire ONLY on the default branch
+# (`refs/heads/main` — verify with `git ls-remote --symref origin HEAD`),
+# so a scheduled run's `github.ref` is the SAME ref a push-to-main run
+# uses, and a plain ref-keyed group would let a main push land mid-cron
+# and CANCEL the multi-hour parity / mutants run; a second
+# `workflow_dispatch` would likewise cancel a running one. A canceled
+# run never fires the alarm a failed run would; that is the
+# armed-gate-with-no-trigger failure mode reborn as a race.
 concurrency:
   group: randomx-v2-differential-${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.run_id || format('{0}-{1}', github.event_name, github.ref) }}
   cancel-in-progress: true
@@ -150,8 +171,14 @@ jobs:
     # and cadence-independent. The mutants job's `if:` filter
     # (below) keeps the weekly mutation run from triggering this
     # job's full setup twice on Monday at 06:00 UTC.
-    name: 'structural: build + cargo test (T9-T15, T17) + runtime modes'
+    name: 'structural: build + cargo test (T9-T15, T17) + 3-leg correctness'
     runs-on: ubuntu-latest
+    # 120 sized for the cron path (the heaviest: debug suite + T2 +
+    # full-size 32×32 serial three-leg correctness; the arm lane prices
+    # its release-only subset at ~75+ min on 4 vCPU). The 10–20 min T5
+    # latency mode lives in the parallel runtime-modes job and the pins
+    # step is skipped on the cron, so this fits with margin — measure
+    # the first crons before tightening.
     timeout-minutes: 120
     if: github.event_name != 'schedule' || github.event.schedule == '0 5 * * *'
     env:
@@ -173,9 +200,10 @@ jobs:
         # inline copies were already hardened on PR #236; the composite
         # consolidates that one proven recipe so future edits (toolchain
         # bumps, flag changes) happen once. The runtime-mode change
-        # completed the repo-wide sweep: zero `curl | sh` rustup
-        # installs remain (other workflows use the hardened inline form
-        # where their flags differ from this composite's pin).
+        # completed the repo-wide sweep: zero inline rustup installs
+        # remain — every workflow uses this composite (cross-target
+        # sites add a separate `rustup target add` step, the
+        # depends.yml pattern).
         uses: ./.github/actions/install-rust
       - name: Install CMake + Ninja
         # `ubuntu-latest` images carry CMake by default, but we pin
@@ -211,9 +239,10 @@ jobs:
         # T11 (failure_output schema), T13 (crate-invariant script),
         # T14 (sole consumer), T15 (fork-pin SHA), T17 (invocation
         # banner). The §6.7.5/§6.8 runtime-mode deferral is CLOSED:
-        # the amendment it anticipated is the runtime-mode steps below
-        # (`--mode=correctness` per-PR + cron, `--mode=latency` on the
-        # cron; T6 in randomx-v2-adversarial-ratio.yml, weekly).
+        # the amendment it anticipated is `--mode=correctness` per-PR
+        # + cron below, `--mode=latency` (T5) + `--mode=concurrent`
+        # (T7/T8) in the runtime-modes job, and T6 in
+        # randomx-v2-adversarial-ratio.yml (weekly).
         #
         # T2 (`adversarial_corpus_byte_equality`) was originally
         # `#[ignore]`-gated behind the V3.0 verifier-divergence
@@ -253,6 +282,13 @@ jobs:
           cargo test --release --locked -p shekyl-randomx-differential \
             --test adversarial_corpus_byte_equality
       - name: cargo test --release canonical pins (rust leg, 1024 pins)
+        # Skipped on the cron: at the cron's full 32×32 sizing the
+        # correctness step below re-derives the identical
+        # rust-vs-canonical leg over the same corpus (strict superset),
+        # so running the pins here would pay the 32 cache derives +
+        # 1024 hashes twice in one job. Per-PR it is NOT redundant —
+        # per-PR correctness runs only the 16×8 subset.
+        if: github.event_name != 'schedule'
         working-directory: rust
         # Full 1024-pin re-check of the Rust verifier against the
         # committed canonical table (rust-vs-canonical leg only; no C
@@ -285,32 +321,6 @@ jobs:
             --mode=correctness \
             --random-corpus-seedhashes="$CORRECTNESS_SEEDHASHES" \
             --random-corpus-data-per-seedhash="$CORRECTNESS_DATA_PER_SEEDHASH"
-      - name: latency mode (T5 gate, rust/C ratio, daily cron)
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        working-directory: rust
-        # Cron per the ratified benchmark-review scope, plus dispatch so
-        # the committed-runner-class number can be measured on demand.
-        # The ≤3.0× LATENCY_RATIO_BUDGET gate is enforced in-mode over
-        # interleaved same-process samples, so the RATIO is immune to
-        # the shared-runner noise that makes absolute wall-clock CI
-        # gates flake-theater; the mode also asserts rust/C hash
-        # equivalence as a precondition before timing. 1024 samples ≈
-        # 10–20 min.
-        #
-        # KNOWN-RISK DISCLOSURE (wiring-time measurements, 2026-07): the
-        # gate's first-ever executions — three runs on a dev box
-        # (i9-11950H, NOT the committed ubuntu-latest runner class the
-        # budget was baselined against) — measured 3.136×/3.139×/3.041×
-        # vs the 3.0× budget: consistently over, tight spread, i.e. a
-        # real current ratio on that machine, not noise. A red here is
-        # DATA, not flake: the budget is plan-doc-locked (§5.7), so the
-        # disposition is a maintainer call between a §5.7 budget round
-        # (with the committed-runner-class dispatch measurement as
-        # evidence) and verifier perf work — never rerun-until-green,
-        # never a silent budget bump.
-        run: |
-          cargo run --release --locked -p shekyl-randomx-differential \
-            --bin shekyl-randomx-differential -- --mode=latency
       - name: cargo test --features test-internals (verifier)
         working-directory: rust
         # Per §5.3.3 R5-D1: the verifier crate's
@@ -330,6 +340,107 @@ jobs:
         # `shekyl-randomx-differential` (Pattern A + B + C
         # enforced; harness scope per §5.5.4 row).
         run: scripts/ci/check_randomx_crate_invariants.sh
+
+  runtime-modes:
+    # The §6.8 nightly-cadence runtime gates (T5 latency, T7/T8
+    # concurrent) in a job of their own, per the post-wiring review
+    # round:
+    #
+    # * Isolation: T5 is in a disclosed known-over-budget state (see
+    #   the latency step), and inside structural-validate an expected
+    #   red would abort the job and SKIP the merge-blocking gates
+    #   ordered after it (test-internals, crate invariants) — a real
+    #   regression there would hide behind the known T5 red.
+    # * Cadence: daily 05:00 cron, plus dispatch ONLY when the
+    #   `runtime_modes` input is set — a parity-recovery dispatch
+    #   (parity_scope=full) must be able to produce a green run while
+    #   the T5 budget question is open.
+    # * Branch coverage: schedule events fire on the default branch
+    #   (main) only, so without a matrix this cron would never measure
+    #   dev, where verifier work lands first. Both active branches are
+    #   checked out per the nightly.yml house pattern.
+    #
+    # Step-order pin: concurrent runs BEFORE latency — latency is the
+    # expected-red step, and any step ordered after it would be
+    # skipped on that red (the exact masking this job exists to
+    # remove).
+    name: 'cron: runtime modes — T7/T8 concurrent + T5 latency (${{ matrix.branch }})'
+    runs-on: ubuntu-latest
+    # Setup + release compile ≈ 15 min, concurrent ≈ 5–10 min, latency
+    # ≈ 10–20 min; 90 leaves shared-runner margin — measure the first
+    # crons before tightening.
+    timeout-minutes: 90
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 5 * * *') || (github.event_name == 'workflow_dispatch' && inputs.runtime_modes)
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [main, dev]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.branch }}
+          submodules: recursive
+      - name: Install Rust toolchain
+        # Composite action (.github/actions/install-rust); see the
+        # structural-validate job's step comment.
+        uses: ./.github/actions/install-rust
+      - name: Install CMake + Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build
+      - name: Configure + build randomx-v2 C reference
+        uses: ./.github/actions/build-randomx-v2-ref
+      - name: concurrent mode (T7 byte-equality + T8 RSS ceiling)
+        working-directory: rust
+        # First CI wiring of `--mode=concurrent` (the last runtime mode
+        # of the §6.7.5/§6.8 deferral, shipped in Phase 2g as
+        # mode_concurrent.rs but wired into no workflow until this
+        # job): 4+1 workers × 256 hashes each over the per-PR-size
+        # random corpus against a capacity-2 CacheStore — T7 asserts
+        # cross-worker determinism plus rust/C byte-equality, T8
+        # asserts the 640 MiB × 1.10 RSS ceiling via /proc/self/statm
+        # (Linux runner, so the T8 leg is live, not the cross-platform
+        # no-op). The daemon verifies blocks on multiple threads: a
+        # divergence here is a plausible REAL consensus finding —
+        # halt and escalate per RANDOMX_V2_PHASE3_PLAN.md §7.3, do not
+        # rerun-until-green.
+        run: |
+          cargo run --release --locked -p shekyl-randomx-differential \
+            --bin shekyl-randomx-differential -- --mode=concurrent
+      - name: latency mode (T5 gate, rust/C ratio)
+        working-directory: rust
+        # The ≤3.0× LATENCY_RATIO_BUDGET gate, enforced in-mode over
+        # interleaved same-process samples (the RATIO is immune to the
+        # shared-runner noise that makes absolute wall-clock CI gates
+        # flake-theater); rust/C hash equivalence is asserted before
+        # timing. 1024 samples ≈ 10–20 min.
+        #
+        # KNOWN-RISK: currently expected red. The canonical disclosure
+        # (wiring-time measurements 3.041–3.139× vs 3.0×, hardware
+        # caveat, disposition policy) lives on `LATENCY_RATIO_BUDGET`
+        # in rust/shekyl-randomx-differential/src/mode_latency.rs —
+        # update THAT doc when the state changes, not a copy here.
+        #
+        # The tee/grep below only CLASSIFIES a red for triage: inside
+        # the disclosed band → the known state; above it → a fresh
+        # regression stacked on top (a red-on-red is otherwise
+        # indistinguishable at run-status level). The step fails
+        # either way — the band is a triage aid, NOT a second budget.
+        run: |
+          set -o pipefail
+          if cargo run --release --locked -p shekyl-randomx-differential \
+            --bin shekyl-randomx-differential -- --mode=latency 2>&1 | tee /tmp/t5-latency.log; then
+            exit 0
+          fi
+          # 3.25 = the 3.139 wiring-time maximum plus headroom; bump it
+          # only together with the mode_latency.rs disclosure.
+          ratio=$(sed -n 's/.*ratio (rust\/c) = \([0-9.]*\)x.*/\1/p' /tmp/t5-latency.log | head -1)
+          if [ -n "$ratio" ] && awk "BEGIN { exit !($ratio > 3.25) }"; then
+            echo "::error::T5 ratio ${ratio}x is ABOVE the disclosed known-over-budget band (3.04-3.14x, triage ceiling 3.25x) — treat as a FRESH regression, not the known state"
+          else
+            echo "::warning::T5 ratio ${ratio:-unparsed}x is within the disclosed known-over-budget band (3.04-3.14x) — see LATENCY_RATIO_BUDGET in mode_latency.rs for the disposition"
+          fi
+          exit 1
 
   mutants:
     # Weekly cargo-mutants run per §5.5.6 + §4.6 M2 (Round-3

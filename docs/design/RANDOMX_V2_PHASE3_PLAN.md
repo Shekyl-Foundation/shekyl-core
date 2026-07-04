@@ -545,9 +545,10 @@ exists.)
 |------|---------|---------|
 | Hole-1 C-full vs Rust-light parity (§7) | daily/weekly cron (`randomx_v2_full_parity_daily` / `randomx_v2_full_parity`; wired by test-regime hardening PR-1, 2026-07) | the cutover invariant; **halt-on-red** |
 | 2g differential (light-vs-light) | per-PR | Rust verifier ≡ C v2 light |
-| Per-hash average latency ≤3.0× (T5, in-mode gate) | daily cron (wired by the runtime-mode change, 2026-07; interleaved same-process ratio — runner-noise-immune) | parent §6 line 246 |
+| Per-hash average latency ≤3.0× (T5, in-mode gate) | daily cron in the dedicated `runtime-modes` job, main + dev matrix; opt-in on dispatch (`runtime_modes` input) — wired by the runtime-mode change, 2026-07; interleaved same-process ratio — runner-noise-immune | parent §6 line 246 |
 | Three-leg correctness `--mode=correctness` (rust ≡ C ≡ canonical) | per-PR at 16×8 sizing + daily cron at full 32×32 (x86, runtime-mode change) and per-PR on the native-arm lane (PR #239) | the 1024 canonical pins, all three legs |
-| Adversarial worst-case ratio (T6, ≤5.0× − noise margin per recipe) | weekly cron + dispatch (`randomx-v2-adversarial-ratio.yml`; cadence amended from dispatch-only per the M3 citation in that file) | verification-DoS bound on crafted programs |
+| Concurrent byte-equality + RSS ceiling (T7/T8, `--mode=concurrent`) | daily cron in the `runtime-modes` job, main + dev matrix; opt-in on dispatch (first CI wiring — the §6.7.5/§6.8 deferral's last unwired runtime mode) | thread-safe verification under the daemon's multi-worker fanout; 640 MiB × 1.10 RSS bound |
+| Adversarial worst-case ratio (T6, ≤5.0× − noise margin per recipe) | weekly cron + dispatch (`randomx-v2-adversarial-ratio.yml`, main + dev matrix; cadence amended from dispatch-only per the M3 citation in that file) | verification-DoS bound on crafted programs |
 | Build both flag states (3a) | per-PR | legacy v1 path stays buildable in 3a |
 | `cargo fmt` / `clippy -D warnings` / `cargo test` | per-PR | [`45-rust-lint-checks`](../../.cursor/rules/45-rust-lint-checks.mdc) |
 | Genesis identity (§8.3) | 3b | block id / coinbase vectors unchanged |
