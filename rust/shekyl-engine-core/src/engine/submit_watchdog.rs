@@ -371,19 +371,29 @@ pub(crate) fn apply_probe_outcome(
         ),
         ProbeOutcome::ConfirmedInChain => (
             ProbeDisposition::KeepHolding,
-            // Advance the baseline to the probe height. Leaving the original
-            // (already past-horizon) baseline made the next escape_ladder_step
-            // re-fire OperatorAlarm(PresentButUnconfirmedPastHorizon) on the
-            // very next tick — for a tx the probe just reported confirmed.
-            // Restarting the horizon here gives refresh a full window to clear
-            // the F14 lock via mark_spent on the normal path; only a fresh
-            // full horizon without clearing (deep reorg / refresh stall)
-            // re-escalates, which is KeepHolding's documented "alarm only if
-            // the horizon elapses again" contract.
+            // Restart the wait epoch outright — both the baseline AND the
+            // probed flag. Advancing only the baseline (leaving
+            // `probed_this_epoch: true`) still let escape_ladder_step jump
+            // *straight to* the alarm rung once a fresh horizon elapsed:
+            // `probed_this_epoch` short-circuits the probe, so the
+            // re-escalation would raise
+            // OperatorAlarm(PresentButUnconfirmedPastHorizon) on a tx last
+            // *observed confirmed* — a stale-info alarm whose reason is
+            // factually wrong, and exactly the alarm-fatigue §5.3 warns
+            // against. Clearing the flag keeps that alarm rung specific to the
+            // present-but-unconfirmed branch: KeepHolding's documented "alarm
+            // only if the horizon elapses again" still holds, but every
+            // re-escalation is routed through a *fresh probe* first — which
+            // re-reads presence and only alarms if the tx is genuinely
+            // present-but-unconfirmed (a deep reorg back to the pool), restarts
+            // on eviction, or resets the epoch again if still in-chain. The
+            // normal path needs none of this: refresh clears the F14 lock via
+            // mark_spent well within one horizon and the entry drops from the
+            // projection.
             Some(HeldSubmit {
                 tx_hash: held.tx_hash,
                 baseline_height: probe_height,
-                probed_this_epoch: true,
+                probed_this_epoch: false,
             }),
         ),
         ProbeOutcome::RejectedTerminal => (ProbeDisposition::ReleaseConfirmedAbsent, None),
@@ -672,7 +682,11 @@ mod tests {
         let (disp, next) = apply_probe_outcome(&h, ProbeOutcome::ConfirmedInChain, 2_000);
         assert_eq!(disp, ProbeDisposition::KeepHolding);
         let next = next.expect("tracking continues");
-        assert!(next.probed_this_epoch);
+        assert!(
+            !next.probed_this_epoch,
+            "confirmed-in-chain restarts the epoch outright, so a later \
+             re-escalation is routed through a fresh probe — not a direct alarm"
+        );
         assert_eq!(
             next.baseline_height, 2_000,
             "confirmed-in-chain restarts the horizon from the probe height"
@@ -684,10 +698,12 @@ mod tests {
     }
 
     /// Regression (round-7 review): a `ConfirmedInChain` probe must not
-    /// produce a spurious `PresentButUnconfirmedPastHorizon` alarm on the
-    /// next tick. The horizon restarts from the probe height, so the kernel
-    /// waits a full window for refresh to clear the F14 lock; only a fresh
-    /// full horizon without clearing re-escalates.
+    /// produce a spurious `PresentButUnconfirmedPastHorizon` alarm — not on the
+    /// next tick (the pre-fix bug), and not on the *following* horizon either
+    /// (the residual: baseline advanced but the probed flag left set, which
+    /// short-circuited the probe straight to a stale-info alarm). The epoch
+    /// restarts outright, so re-escalation is routed through a fresh probe and
+    /// the alarm rung stays specific to the present-but-unconfirmed branch.
     #[test]
     fn confirmed_in_chain_does_not_alarm_next_tick() {
         let h = held(1_000);
@@ -696,22 +712,28 @@ mod tests {
         let next = next.expect("tracking continues");
 
         // Immediately after the confirmation observation: within the new
-        // horizon → wait, NOT alarm (the pre-fix bug fired the alarm here).
+        // horizon → wait, NOT alarm.
         assert_eq!(
             escape_ladder_step(&next, probe_height, healthy(), CFG),
             WatchdogStep::Wait(WaitReason::HorizonNotReached)
         );
 
         // A full fresh horizon later without the lock clearing (deep reorg /
-        // refresh stall) → the alarm is warranted.
+        // refresh stall): re-escalate through a *fresh probe*, NOT a direct
+        // alarm — the kernel re-reads presence before it decides a human is
+        // needed. (The residual bug alarmed here on a tx last seen confirmed.)
+        let re_horizon = probe_height + CFG.escape_horizon_blocks;
         assert_eq!(
-            escape_ladder_step(
-                &next,
-                probe_height + CFG.escape_horizon_blocks,
-                healthy(),
-                CFG
-            ),
-            WatchdogStep::OperatorAlarm(AlarmReason::PresentButUnconfirmedPastHorizon)
+            escape_ladder_step(&next, re_horizon, healthy(), CFG),
+            WatchdogStep::ProbeResubmitSameBytes
+        );
+
+        // The alarm is warranted only once that fresh probe actually observes
+        // the tx present-but-unconfirmed (reorged back to the pool).
+        let (disp, _) = apply_probe_outcome(&next, ProbeOutcome::PresentInPool, re_horizon);
+        assert_eq!(
+            disp,
+            ProbeDisposition::Alarm(AlarmReason::PresentButUnconfirmedPastHorizon)
         );
     }
 
