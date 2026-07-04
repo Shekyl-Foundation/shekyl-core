@@ -7197,26 +7197,23 @@ one place to confirm each item's relationship to the wallet stack.
   spent-marking moved off submit-accept (PR-4). **Target: `DAEMON_SUBMIT_VERDICT.md` PR-4,
   downstream of its PR-2/PR-3; the wallet-side prerequisite is the dispatch-shape freeze (next
   entry), which PR-4's shared mapping presupposes.**
-- **2d-2 2c-2a — the posture→submitter dispatch shape is an API decision that gates every 2c slice
-  (`TransactionSubmitter` is RPITIT-non-dyn).** `select_broadcast` resolves the posture at runtime
-  (①→principal, ②→`PTransactionSubmitter`), but `TransactionSubmitter::submit` returns `impl Future`
-  (RPITIT) so the trait is **not dyn-compatible**, and the two impls share no nameable common type
-  (no enum/`Either` exists in the crate). So the runtime dispatch the seam exists for is unbuildable
-  as-is — it forces an API choice: an **enum wrapper** over the two concrete submitters (likely the
-  make-bad-states-unrepresentable answer — the submitter set is *closed*: principal + per-`P`, no
-  third — but verify RPITIT permits it cleanly), a boxed `async_trait`, or a hand-rolled dyn shim.
-  This decision shapes `PTransactionSubmitter`'s surface, the selector's return type, and the
-  orchestrator's storage, so it is a **2c-2a design input**, not a 2c-2b implementation detail —
-  discovered mid-wiring, it retrofits everything downstream. It also carries the **routing guard**
-  (②→`PTransactionSubmitter`, **never** the principal submitter — the review's unguarded reverse
-  direction: nothing today stops handing `P`'s bytes to `DaemonTransactionSubmitter`) and the
-  **byte↔persona pairing** (a `P`-bound-bytes newtype only `PTransactionSubmitter::submit` accepts,
-  so `P1`-bytes/`P2`-submitter is unrepresentable). With the partition superseded (previous entry),
-  this is the **single remaining wallet-side submit design decision**, and it gained a second
-  consumer: [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md) PR-4's "both submitters
-  share the mapping" presupposes the dispatch mechanism, so the freeze is a **PR-4 prerequisite**,
-  decidable in parallel with the daemon-side PR-2/PR-3. **Target: 2c-2a design freeze (before the
-  funding/assembly/scheduler slices, and before `DAEMON_SUBMIT_VERDICT.md` PR-4).**
+- **2d-2 2c-2a — posture→submitter dispatch shape: FROZEN 2026-07-04 (user-ratified) —
+  [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md) §3.1 is the
+  binding record.** The API question this entry posed (`TransactionSubmitter` is RPITIT-non-dyn;
+  the two impls share no nameable type) is decided: a **closed-set enum**
+  `BroadcastSubmitter<D> { Local(DaemonTransactionSubmitter<D>), PerP(PTransactionSubmitter) }`
+  with match-delegation — RPITIT compatibility **verified by compile probe on the MSRV toolchain
+  (1.94.0)** over the exact shapes (generic + concrete arm, `+ Send`), no `Box`/`async_trait`;
+  a **single constructor choke point** (posture in, submitter out; `select_broadcast` stays
+  posture-only) carrying the **routing guard** (②→`PerP`, never the principal submitter); and the
+  **byte↔persona pairing** as a `PBoundBytes` newtype equality-checked at that choke point
+  (`validate_handle` discipline: `debug_assert` loud, fail-closed in release) — per-persona type
+  *branding* rejected for the dynamic persona set, rule-21 reopen in §3.1. The shape survives
+  [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md) PR-4's `SubmitVerdict` reshape
+  (match-delegation is output-agnostic), unblocking PR-4's "both submitters share the mapping."
+  **Remaining: implementation only** — the enum + constructor + `PBoundBytes` land with the 2c
+  wiring (2c-2a/2c-2b, PR-4-adjacent). **Target: code lands in the 2c slices; the design decision
+  is closed.**
 - **2d-2 2c — `DaemonUrl` newtype: validate `base_url` at construction + house the S1 disclosure.**
   `base_url` is a bare `String` across three sites (`BroadcastPosture::OwnRemote`,
   `PTransactionSubmitter::new`, `PBlockSource::new`) with no validation and an unredacted
