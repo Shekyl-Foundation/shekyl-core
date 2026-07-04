@@ -3910,7 +3910,7 @@ uint64_t Blockchain::get_dynamic_base_fee(uint64_t block_reward, size_t median_b
 }
 
 //------------------------------------------------------------------
-bool Blockchain::check_fee(size_t tx_weight, uint64_t fee) const
+uint64_t Blockchain::get_current_fee_per_byte() const
 {
   const uint8_t version = get_current_hard_fork_version();
 
@@ -3919,9 +3919,18 @@ bool Blockchain::check_fee(size_t tx_weight, uint64_t fee) const
   const uint64_t blockchain_height = m_db->height();
   uint64_t already_generated_coins = blockchain_height ? m_db->get_block_already_generated_coins(blockchain_height - 1) : 0;
   if (!get_block_reward(median, 1, already_generated_coins, base_reward, version))
-    return false;
+    return 0;
 
-  uint64_t fee_per_byte = get_dynamic_base_fee(base_reward, std::min<uint64_t>(median, m_long_term_effective_median_block_weight), version);
+  // get_dynamic_base_fee never returns 0, so 0 is unambiguously the
+  // block-reward-failure arm above.
+  return get_dynamic_base_fee(base_reward, std::min<uint64_t>(median, m_long_term_effective_median_block_weight), version);
+}
+//------------------------------------------------------------------
+bool Blockchain::check_fee(size_t tx_weight, uint64_t fee) const
+{
+  const uint64_t fee_per_byte = get_current_fee_per_byte();
+  if (fee_per_byte == 0)
+    return false;
   MDEBUG("Using " << print_money(fee_per_byte) << "/byte fee");
   uint64_t needed_fee = tx_weight * fee_per_byte;
   const uint64_t mask = get_fee_quantization_mask();

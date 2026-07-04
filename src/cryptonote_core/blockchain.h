@@ -716,6 +716,20 @@ namespace cryptonote
     bool check_fee(size_t tx_weight, uint64_t fee) const;
 
     /**
+     * @brief gets the current dynamic per-byte fee floor parameter
+     *
+     * The exact fee-floor parameter check_fee() gates on, extracted so the
+     * submit-shim fact snapshot (daemon_submit_ffi.cpp) marshals the same
+     * value the Phase-D check_fee re-gate consumes (DAEMON_SUBMIT_VERDICT.md
+     * §4.1, parity row P2). Reads per-block state; call under the same
+     * blockchain lock scope as the rest of the snapshot.
+     *
+     * @return the fee-per-byte floor parameter, or 0 if the block reward
+     *         computation failed (check_fee() returns false in that case)
+     */
+    uint64_t get_current_fee_per_byte() const;
+
+    /**
      * @brief check that a transaction's outputs conform to current standards
      *
      * This function checks, for example at the time of this writing, that
