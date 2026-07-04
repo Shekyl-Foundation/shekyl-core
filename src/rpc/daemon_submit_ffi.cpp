@@ -66,7 +66,8 @@ static_assert(offsetof(shekyl_submit_facts_ffi, in_pool) == 0, "in_pool offset")
 static_assert(offsetof(shekyl_submit_facts_ffi, in_chain) == 1, "in_chain offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, ref_block_found) == 2, "ref_block_found offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, tree_depth) == 3, "tree_depth offset");
-static_assert(offsetof(shekyl_submit_facts_ffi, reserved) == 4, "reserved offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, in_pool_broadcast) == 4, "in_pool_broadcast offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, reserved) == 5, "reserved offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, ref_height) == 8, "ref_height offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, root) == 16, "root offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, fee_per_byte) == 48, "fee_per_byte offset");
@@ -121,14 +122,26 @@ uint8_t classify_key_image(tx_memory_pool& pool, Blockchain& bc,
 // The §4.1 fact collection. Caller holds the §4.4 pool→blockchain lock
 // order; everything here is a read.
 //
-// `in_pool` is queried at `relay_category::all`, deliberately wider than
-// the legacy path's `legacy` category (row I4): the engine's presence fact
-// must see the daemon's *own* local-state (Dandelion++ embargo) insertions,
-// or a resubmit-during-embargo — the §5.2 ladder's status-query probe
-// (F31) — would fall through identity, re-verify, and fault at the insert
-// tail instead of returning AlreadyInPool. The legacy path saw those txs
-// too, just later and lossily (add_tx's existing-tx arm → `OK +
-// not_relayed`).
+// Two presence facts, and the engine chooses which to disclose by caller
+// tier (§3.1 identity-category pin):
+//
+//   `in_pool` (relay_category::all) is the *internal* truth, wider than the
+//   legacy path's `legacy` category (row I4): it must see the daemon's own
+//   local-state (Dandelion++ embargo) insertions, or a resubmit-during-
+//   embargo — the §5.2 ladder's status-query probe (F31) — would fall
+//   through identity, re-verify, and fault at the insert tail instead of
+//   returning AlreadyInPool. It is also what the commit re-check keys on to
+//   avoid a double-insert.
+//
+//   `in_pool_broadcast` (relay_category::legacy) is the *foreign-disclosable*
+//   truth — presence that carries no embargo secret because the tx has
+//   fluffed. The two differ exactly for an embargoed tx. The Rust engine
+//   discloses `in_pool` only to the owner (unrestricted endpoint) and
+//   `in_pool_broadcast` to a foreign caller (restricted/public endpoint), so
+//   `POST /submit_transaction` is not a stem-presence oracle. The legacy
+//   `have_tx(_, legacy)` identity check disclosed exactly this narrower fact
+//   to foreign callers; an embargoed self-resubmit was caught later and
+//   lossily by add_tx's existing-tx arm (`OK + not_relayed`).
 void collect_facts_locked(tx_memory_pool& pool, Blockchain& bc,
   const crypto::hash& txid, const std::vector<crypto::key_image>& key_images,
   const crypto::hash& reference_block,
@@ -137,6 +150,7 @@ void collect_facts_locked(tx_memory_pool& pool, Blockchain& bc,
   memset(&facts, 0, sizeof(facts));
 
   facts.in_pool = pool.have_tx(txid, relay_category::all) ? 1 : 0;
+  facts.in_pool_broadcast = pool.have_tx(txid, relay_category::legacy) ? 1 : 0;
   facts.in_chain = bc.have_tx(txid) ? 1 : 0;
 
   for (size_t i = 0; i < key_images.size(); ++i)
@@ -267,6 +281,23 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
       return SHEKYL_SUBMIT_INTERNAL_FAULT;
     }
 
+    // §3.4 weight authority: the engine-supplied tx_weight gates check_fee
+    // (below) and is persisted into txpool meta, where block-template
+    // assembly and pool eviction ordering weigh with the C++ arithmetic. Row
+    // I3 pins the Rust weight formula (BP+ clawback) to C++
+    // get_transaction_weight only by KAT; re-derive it here over the same
+    // reparsed blob and release-check, exactly as the txid check does. A
+    // silent low divergence would let an over-weight tx into a block template
+    // that every validating node then rejects — a mined-and-orphaned block.
+    const uint64_t cpp_weight = get_transaction_weight(tx, blob_len);
+    if (cpp_weight != tx_weight)
+    {
+      MERROR("submit commit: tx weight divergence between engine and C++ over "
+        "the same blob: engine " << tx_weight << ", C++ " << cpp_weight
+        << " (daemon defect; see DAEMON_SUBMIT_VERDICT.md row I3)");
+      return SHEKYL_SUBMIT_INTERNAL_FAULT;
+    }
+
     // Blob-derived key images, `txin_to_key` in vin order — the same
     // extraction as the engine's ParsedSubmission (phase_a.rs).
     std::vector<crypto::key_image> kis;
@@ -295,6 +326,23 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
       MERROR("submit commit: fee-per-byte derivation failed");
       return SHEKYL_SUBMIT_INTERNAL_FAULT;
     }
+
+    // Re-establish the legacy add_tx side effect: an incoming spend that
+    // conflicts with a resident pool tx on a key image marks that resident tx
+    // `double_spend_seen`, so its owner sees the early warning via pool RPC
+    // (tx_pool.cpp add_tx → mark_double_spend). Rust classifies
+    // DoubleSpendConflict for the *submitter* from these same fresh facts;
+    // this marks the *victim*. KI_OWN_TX is the submitted txid's own image
+    // (identity, not a conflict) — only KI_OTHER, a foreign spender, marks.
+    // Not a verdict, so it stays C++-side, and it precedes the Raced return so
+    // the flag is set whether or not this submit is the one that ultimately
+    // relays.
+    bool foreign_ki_conflict = false;
+    for (size_t i = 0; i < n_key_images; ++i)
+      if (out_fresh_ki_conflicts[i] == SHEKYL_SUBMIT_KI_OTHER)
+        foreign_ki_conflict = true;
+    if (foreign_ki_conflict)
+      pool.mark_double_spend(tx);
 
     // §3.1 Phase-D re-check list. Any moved premise → Raced{fresh}; Rust
     // classifies most-terminal-first. The C++ chooses no verdict.
@@ -458,6 +506,7 @@ void shekyl_submit_facts_test_fill(shekyl_submit_facts_ffi* out, uint64_t seed)
   out->in_chain = static_cast<uint8_t>(submit_facts_field_value(seed, 1));
   out->ref_block_found = static_cast<uint8_t>(submit_facts_field_value(seed, 2));
   out->tree_depth = static_cast<uint8_t>(submit_facts_field_value(seed, 3));
+  out->in_pool_broadcast = static_cast<uint8_t>(submit_facts_field_value(seed, 10));
   out->ref_height = submit_facts_field_value(seed, 4);
   for (size_t i = 0; i < sizeof(out->root); ++i)
     out->root[i] = static_cast<uint8_t>(submit_facts_field_value(seed, 5) >> ((i % 8) * 8));

@@ -59,7 +59,14 @@ pub struct SubmitFactsFfi {
     pub in_chain: u8,
     pub ref_block_found: u8,
     pub tree_depth: u8,
-    pub reserved: [u8; 4],
+    /// Pool-resident at the `legacy` (broadcast-visible) relay category —
+    /// the publicly disclosable presence fact. `in_pool` is at the wider
+    /// `all` category (includes Dandelion++-embargoed `local`/stem state);
+    /// the two differ exactly for an embargoed tx, and the engine discloses
+    /// the narrower fact to a foreign caller so the submit endpoint is not a
+    /// stem-presence oracle (§3.1 identity-category pin).
+    pub in_pool_broadcast: u8,
+    pub reserved: [u8; 3],
     pub ref_height: u64,
     pub root: [u8; 32],
     pub fee_per_byte: u64,
@@ -76,7 +83,8 @@ impl SubmitFactsFfi {
             in_chain: 0,
             ref_block_found: 0,
             tree_depth: 0,
-            reserved: [0; 4],
+            in_pool_broadcast: 0,
+            reserved: [0; 3],
             ref_height: 0,
             root: [0; 32],
             fee_per_byte: 0,
@@ -95,7 +103,8 @@ const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_pool) == 0);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_chain) == 1);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, ref_block_found) == 2);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, tree_depth) == 3);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, reserved) == 4);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_pool_broadcast) == 4);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, reserved) == 5);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, ref_height) == 8);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, root) == 16);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, fee_per_byte) == 48);

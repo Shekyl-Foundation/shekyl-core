@@ -1,3 +1,8 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
 //! Generate the FCMP++ reference-block age-window constants from the JSON
 //! authority at `config/consensus_constants.json`, exactly as
 //! `rust/shekyl-engine-core/build.rs` and `rust/shekyl-difficulty/build.rs`

@@ -151,11 +151,11 @@ fn verify_spend(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), Ve
     // pre-checks around it (`outPk == enc_amounts == enc_labels`,
     // `pseudoOuts == vin`, base pseudoOuts empty) are structural in
     // `shekyl-wire`'s reader/validator and cannot fail here.
-    let pseudo_flat: Vec<u8> = prunable.pseudo_outs.iter().flatten().copied().collect();
-    let mask_flat: Vec<u8> = base.commitments.iter().flatten().copied().collect();
+    // `as_flattened()` views `Vec<[u8; 32]>` as `&[u8]` with no per-submission
+    // reallocation (the CT crate takes a flat byte slice).
     if verify_ct_balance(
-        &pseudo_flat,
-        &mask_flat,
+        prunable.pseudo_outs.as_flattened(),
+        base.commitments.as_flattened(),
         AtomicUnits::from_raw(*fee),
         &[],
         &[],

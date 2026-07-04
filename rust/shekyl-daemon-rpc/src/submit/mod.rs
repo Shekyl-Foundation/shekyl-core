@@ -26,10 +26,11 @@
 //!   ([`SubmitFacts`]). Early return: `AlreadyInPool` / `AlreadyInChain`
 //!   **only** — a snapshot key-image hit is a re-check input, never a
 //!   verdict (defect 0.4's self-duplicate race).
-//! - **Phase C** — no locks held, bounded by [`gate::PhaseCGate`] (F39):
-//!   ref-age window, fee floor ([`fee`]), weight rule, then the expensive
-//!   cryptography behind the [`TxVerifier`] seam. Success mints the
-//!   [`VerificationCertificate`] witness (§3.3).
+//! - **Phase C** — no locks held, bounded by the process-global Phase-C
+//!   semaphore ([`gate::phase_c_semaphore`], F39) acquired at the transport
+//!   dispatch layer: ref-age window, fee floor ([`fee`]), weight rule, then
+//!   the expensive cryptography behind the [`TxVerifier`] seam. Success mints
+//!   the [`VerificationCertificate`] witness (§3.3).
 //! - **Phase D** — one short lock via [`SubmitStateShim::commit`]: every
 //!   mutable premise re-checked C++-side; on a race the shim returns fresh
 //!   facts and **Rust classifies, most-terminal-first** (§3.1) — the C++
@@ -68,13 +69,13 @@ pub mod consensus {
 }
 
 pub use certificate::VerificationCertificate;
-pub use engine::{EngineFault, SubmitEngine};
+pub use engine::{EngineFault, SubmitCaller, SubmitEngine};
 pub use facts::{
     CommitOutcome, KeyImageConflict, ReferenceFacts, ShimFault, SubmitFacts, SubmitStateShim,
     TxMeta,
 };
 pub use ffi_shim::FfiSubmitShim;
-pub use gate::PhaseCGate;
+pub use gate::phase_c_semaphore;
 pub use phase_a::{parse_submission, ParsedSubmission, PhaseAReject, SubmitTxKind};
 pub use verifier::DaemonTxVerifier;
 pub use verify::{TxVerifier, VerifyFailure};

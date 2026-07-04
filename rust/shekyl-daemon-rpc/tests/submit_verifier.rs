@@ -45,7 +45,8 @@ use shekyl_curve_tree::{
 };
 use shekyl_daemon_rpc::submit::{
     parse_submission, CommitOutcome, DaemonTxVerifier, KeyImageConflict, ParsedSubmission,
-    ReferenceFacts, SubmitEngine, SubmitFacts, SubmitTxKind, TxVerifier, VerifyFailure,
+    ReferenceFacts, SubmitCaller, SubmitEngine, SubmitFacts, SubmitTxKind, TxVerifier,
+    VerifyFailure,
 };
 use shekyl_fcmp::tree::SELENE_CHUNK_WIDTH;
 use shekyl_fcmp::MAX_TREE_DEPTH;
@@ -114,6 +115,7 @@ fn fixture() -> &'static SpendFixture {
 fn admitting_facts(fx: &SpendFixture) -> SubmitFacts {
     SubmitFacts {
         in_pool: false,
+        in_pool_broadcast: false,
         in_chain: false,
         key_image_conflicts: vec![KeyImageConflict::Free; fx.parsed.key_images.len()],
         reference: Some(ReferenceFacts {
@@ -500,7 +502,9 @@ fn engine_accepts_the_spend_end_to_end_with_the_production_verifier() {
     let fx = fixture();
     let shim = MockShim::new(admitting_facts(fx), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
-    let verdict = engine.submit(&fx.hex).expect("no engine fault");
+    let verdict = engine
+        .submit(&fx.hex, SubmitCaller::Owner)
+        .expect("no engine fault");
     assert_eq!(verdict, SubmitVerdict::Accepted);
     assert_eq!(shim.commit_count(), 1, "exactly one commit");
     assert_eq!(shim.relay_count(), 1, "accepted ⇒ relay nudged");
@@ -721,6 +725,7 @@ fn non_spend_kinds_refuse_loudly() {
     assert_eq!(parsed.kind, SubmitTxKind::ServeCreditOnly);
     let facts = SubmitFacts {
         in_pool: false,
+        in_pool_broadcast: false,
         in_chain: false,
         key_image_conflicts: Vec::new(),
         reference: None,

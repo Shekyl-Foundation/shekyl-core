@@ -74,7 +74,10 @@ enum {
 //   offset  1: in_chain              (u8; txid in main chain)
 //   offset  2: ref_block_found       (u8; reference hash known ⇒ fields below valid)
 //   offset  3: tree_depth            (u8; current curve-tree depth, LMDB convention)
-//   offset  4: reserved[4]           (zeroed)
+//   offset  4: in_pool_broadcast     (u8; txid pool-resident at `legacy`/broadcast category —
+//                                      the foreign-disclosable presence; differs from in_pool
+//                                      only for a Dandelion++-embargoed tx, §3.1 identity pin)
+//   offset  5: reserved[3]           (zeroed)
 //   offset  8: ref_height            (u64; reference block main-chain height)
 //   offset 16: root[32]              (curve-tree root at ref_height)
 //   offset 48: fee_per_byte          (u64; check_fee's derived floor param)
@@ -89,7 +92,8 @@ typedef struct shekyl_submit_facts_ffi {
     uint8_t in_chain;
     uint8_t ref_block_found;
     uint8_t tree_depth;
-    uint8_t reserved[4];
+    uint8_t in_pool_broadcast;
+    uint8_t reserved[3];
     uint64_t ref_height;
     uint8_t root[32];
     uint64_t fee_per_byte;

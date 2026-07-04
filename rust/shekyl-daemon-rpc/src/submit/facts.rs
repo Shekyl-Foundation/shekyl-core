@@ -61,12 +61,23 @@ pub struct ReferenceFacts {
 /// found at B it is a reorg, classified `StaleRoot`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubmitFacts {
-    /// The submitted txid is pool-resident (at the `all` relay category, so
+    /// The submitted txid is pool-resident at the `all` relay category, so
     /// the daemon's own Dandelion++-embargoed `local`-state insertions are
     /// visible — the §3.1 identity-category pin; a `legacy`-category fact
     /// would make the F31 resubmit probe fault at the insert tail instead
-    /// of returning `AlreadyInPool`).
+    /// of returning `AlreadyInPool`. This is the *internal* presence truth
+    /// (duplicate-safety + owner disclosure); what a foreign caller is told
+    /// is gated on [`in_pool_broadcast`](Self::in_pool_broadcast).
     pub in_pool: bool,
+    /// The submitted txid is pool-resident at the `legacy` (broadcast-visible)
+    /// relay category — presence that carries no Dandelion++ embargo secret
+    /// because the tx has already fluffed. The engine discloses only this
+    /// narrower fact to a foreign caller (restricted/public endpoint), so
+    /// `POST /submit_transaction` cannot be probed as a stem-presence oracle:
+    /// an embargoed self-tx (`in_pool && !in_pool_broadcast`) is concealed
+    /// from foreigners exactly as the legacy `relay_category::legacy` identity
+    /// check concealed it.
+    pub in_pool_broadcast: bool,
     /// The submitted txid is in the main chain.
     pub in_chain: bool,
     /// Conflict descriptor per submitted key image, in submission order.

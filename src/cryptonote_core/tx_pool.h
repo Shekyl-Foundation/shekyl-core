@@ -179,6 +179,15 @@ namespace cryptonote
       bool &pruned_on_insert);
 
     /**
+     * @brief mark all resident pool transactions double-spending the passed tx
+     *        as double_spend_seen (the early-warning flag surfaced via pool
+     *        RPC). Public for the attested-commit shim (daemon_submit_ffi.cpp),
+     *        which re-establishes this legacy add_tx side effect on the RPC
+     *        submit path; add_tx still calls it internally on the P2P path.
+     */
+    void mark_double_spend(const transaction &tx);
+
+    /**
      * @brief takes a transaction with the given hash from the pool
      *
      * @param id the hash of the transaction
@@ -633,11 +642,6 @@ namespace cryptonote
      */
     bool is_transaction_ready_to_go(txpool_tx_meta_t& txd, const crypto::hash &txid, const cryptonote::blobdata_ref &txblob, transaction&tx) const;
     bool is_transaction_ready_to_go(txpool_tx_meta_t& txd, const crypto::hash &txid, const cryptonote::blobdata &txblob, transaction&tx) const;
-
-    /**
-     * @brief mark all transactions double spending the one passed
-     */
-    void mark_double_spend(const transaction &tx);
 
     /**
      * @brief prune lowest fee/byte txes till we're not above bytes

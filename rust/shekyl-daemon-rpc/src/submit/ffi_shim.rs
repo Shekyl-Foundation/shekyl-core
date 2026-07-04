@@ -62,6 +62,7 @@ fn facts_from_ffi(pod: &ffi::SubmitFactsFfi, ki: &[u8]) -> Result<SubmitFacts, (
 
     Ok(SubmitFacts {
         in_pool: pod.in_pool != 0,
+        in_pool_broadcast: pod.in_pool_broadcast != 0,
         in_chain: pod.in_chain != 0,
         key_image_conflicts,
         reference,
@@ -70,6 +71,29 @@ fn facts_from_ffi(pod: &ffi::SubmitFactsFfi, ki: &[u8]) -> Result<SubmitFacts, (
         weight_limit: pod.weight_limit,
         chain_height: BlockHeight::from_raw(pod.chain_height),
     })
+}
+
+/// A slice's data pointer, or NULL when the slice is empty. The C++ submit
+/// shims accept a NULL key-image pointer **iff** the matching count is 0
+/// (their bad-args guard is `n > 0 && !ptr`); an empty slice's `as_ptr()` is a
+/// dangling non-null sentinel that would satisfy `!ptr == false` and silently
+/// bypass that guard. Single-sourced because a review round (81dea974d) had to
+/// fix this same contract at two call sites at once.
+fn const_ptr_or_null<T>(slice: &[T]) -> *const T {
+    if slice.is_empty() {
+        std::ptr::null()
+    } else {
+        slice.as_ptr()
+    }
+}
+
+/// Mutable counterpart of [`const_ptr_or_null`] for out-parameter arrays.
+fn mut_ptr_or_null<T>(slice: &mut [T]) -> *mut T {
+    if slice.is_empty() {
+        std::ptr::null_mut()
+    } else {
+        slice.as_mut_ptr()
+    }
 }
 
 impl SubmitStateShim for FfiSubmitShim {
@@ -85,28 +109,17 @@ impl SubmitStateShim for FfiSubmitShim {
         // SAFETY: txid/reference_block are 32-byte references; key_images is
         // a flat array of n × 32 bytes (contiguous by `[[u8; 32]]` layout);
         // out pointers are sized above; the handle is live for the daemon's
-        // lifetime (CoreRpc's contract). The key-image in/out pointers are
-        // NULL when n == 0 — the shim's argument contract accepts null iff
-        // `n_key_images == 0` (its bad-args guard is `n > 0 && !ptr`), and an
-        // empty Vec/slice's `as_ptr()` is a dangling non-null sentinel that
-        // would silently bypass that guard rather than honor it.
+        // lifetime (CoreRpc's contract). The key-image in/out pointers honor
+        // the null-iff-empty contract via the ptr helpers (see their docs).
         let rc = unsafe {
             ffi::shekyl_submit_snapshot_facts(
                 self.core.raw_handle(),
                 txid.as_bytes().as_ptr(),
-                if key_images.is_empty() {
-                    std::ptr::null()
-                } else {
-                    key_images.as_ptr().cast::<u8>()
-                },
+                const_ptr_or_null(key_images).cast::<u8>(),
                 key_images.len(),
                 reference_block.as_bytes().as_ptr(),
                 &mut pod,
-                if ki_conflicts.is_empty() {
-                    std::ptr::null_mut()
-                } else {
-                    ki_conflicts.as_mut_ptr()
-                },
+                mut_ptr_or_null(ki_conflicts.as_mut_slice()),
             )
         };
 
@@ -135,10 +148,8 @@ impl SubmitStateShim for FfiSubmitShim {
         // SAFETY: blob points at blob_len bytes; txid/cert hashes are
         // 32-byte references; out pointers are sized above (the C++ side
         // release-checks its blob-derived key-image count against
-        // n_key_images before writing). The fresh-KI out pointer is NULL when
-        // n == 0 — the shim accepts null iff `n_key_images == 0` (guard is
-        // `n > 0 && !ptr`); see the snapshot call above for why a dangling
-        // empty-Vec sentinel is the wrong thing to hand that guard.
+        // n_key_images before writing). The fresh-KI out pointer honors the
+        // null-iff-empty contract via `mut_ptr_or_null` (see its doc).
         let rc = unsafe {
             ffi::shekyl_submit_commit_tx(
                 self.core.raw_handle(),
@@ -151,11 +162,7 @@ impl SubmitStateShim for FfiSubmitShim {
                 cert.ref_height().to_raw(),
                 cert.root().as_ptr(),
                 &mut fresh_pod,
-                if fresh_ki.is_empty() {
-                    std::ptr::null_mut()
-                } else {
-                    fresh_ki.as_mut_ptr()
-                },
+                mut_ptr_or_null(fresh_ki.as_mut_slice()),
                 n_key_images,
             )
         };
@@ -200,7 +207,8 @@ mod tests {
             in_chain: 0,
             ref_block_found: ref_found,
             tree_depth: 9,
-            reserved: [0; 4],
+            in_pool_broadcast: 0,
+            reserved: [0; 3],
             ref_height: 150,
             root: [0xAA; 32],
             fee_per_byte: 7,
@@ -233,6 +241,14 @@ mod tests {
         );
         assert!(facts.in_pool);
         assert!(!facts.in_chain);
+        assert!(!facts.in_pool_broadcast, "pod broadcast byte 0 → false");
+
+        // in_pool_broadcast converts independently of in_pool (the foreign-
+        // disclosure fact).
+        let mut broadcast_pod = pod_with(1);
+        broadcast_pod.in_pool_broadcast = 1;
+        let broadcast_facts = facts_from_ffi(&broadcast_pod, &[]).expect("converts");
+        assert!(broadcast_facts.in_pool_broadcast);
         let reference = facts.reference.expect("ref_block_found = 1");
         assert_eq!(reference.height, BlockHeight::from_raw(150));
         assert_eq!(reference.root, [0xAA; 32]);

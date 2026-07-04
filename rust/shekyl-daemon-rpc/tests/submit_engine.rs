@@ -14,7 +14,7 @@ mod submit_fixtures;
 use std::sync::Arc;
 
 use shekyl_daemon_rpc::submit::{
-    parse_submission, CommitOutcome, EngineFault, KeyImageConflict, PhaseCGate, SubmitEngine,
+    parse_submission, CommitOutcome, EngineFault, KeyImageConflict, SubmitCaller, SubmitEngine,
     SubmitFacts, VerifyFailure,
 };
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
@@ -32,8 +32,7 @@ fn engine(
 ) -> (MockEngine, Arc<MockShim>, Arc<MockVerifier>) {
     let shim = MockShim::new(facts, outcome);
     let verifier = MockVerifier::passing();
-    let engine =
-        SubmitEngine::with_gate(Arc::clone(&shim), Arc::clone(&verifier), PhaseCGate::new(1));
+    let engine = SubmitEngine::new(Arc::clone(&shim), Arc::clone(&verifier));
     (engine, shim, verifier)
 }
 
@@ -55,7 +54,9 @@ fn rejected(cause: RejectCause) -> SubmitVerdict {
 #[test]
 fn phase_a_failure_never_touches_the_shim() {
     let (engine, shim, verifier) = engine(base_facts(), CommitOutcome::Committed);
-    let verdict = engine.submit("not hex at all").expect("verdict, not fault");
+    let verdict = engine
+        .submit("not hex at all", SubmitCaller::Owner)
+        .expect("verdict, not fault");
     assert_eq!(verdict, rejected(RejectCause::Malformed));
     assert_eq!(shim.snapshot_count(), 0, "Phase A is FFI-free (§3.1)");
     assert_eq!(shim.commit_count(), 0);
@@ -71,7 +72,7 @@ fn already_in_chain_outranks_in_pool() {
     facts.in_pool = true; // transiently both, just-mined: settled fact wins
     let (engine, shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         SubmitVerdict::AlreadyInChain
     );
     assert_eq!(verifier.call_count(), 0, "identity precedes verification");
@@ -84,7 +85,7 @@ fn already_in_pool_short_circuits() {
     facts.in_pool = true;
     let (engine, shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         SubmitVerdict::AlreadyInPool
     );
     assert_eq!(verifier.call_count(), 0);
@@ -101,7 +102,7 @@ fn snapshot_key_image_conflict_is_not_a_verdict() {
     facts.key_image_conflicts = vec![KeyImageConflict::Other, KeyImageConflict::Free];
     let (engine, shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         SubmitVerdict::Accepted
     );
     assert_eq!(verifier.call_count(), 1, "verification still runs");
@@ -116,7 +117,7 @@ fn unknown_reference_block_rejects_reference_not_found() {
     facts.reference = None;
     let (engine, shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::ReferenceNotFound)
     );
     assert_eq!(verifier.call_count(), 0, "no crypto on an unanchored proof");
@@ -130,7 +131,7 @@ fn too_recent_reference_rejects_reference_too_recent() {
     facts.reference.as_mut().unwrap().height = BlockHeight::from_raw(196);
     let (engine, _shim, _verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::ReferenceTooRecent)
     );
 }
@@ -144,7 +145,7 @@ fn young_chain_rejects_reference_too_recent() {
     facts.reference.as_mut().unwrap().height = BlockHeight::from_raw(0);
     let (engine, _shim, _verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::ReferenceTooRecent)
     );
 }
@@ -156,7 +157,7 @@ fn aged_out_reference_rejects_stale_root() {
     facts.reference.as_mut().unwrap().height = BlockHeight::from_raw(99);
     let (engine, _shim, _verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::StaleRoot)
     );
 }
@@ -170,7 +171,7 @@ fn age_window_boundaries_admit() {
         facts.reference.as_mut().unwrap().height = BlockHeight::from_raw(ref_height);
         let (engine, _shim, _verifier) = engine(facts, CommitOutcome::Committed);
         assert_eq!(
-            engine.submit(&spend_hex()).unwrap(),
+            engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
             SubmitVerdict::Accepted,
             "ref height {ref_height} must be in-window"
         );
@@ -185,7 +186,7 @@ fn tree_depth_out_of_range_rejects_stale_root() {
     facts.reference.as_mut().unwrap().tree_depth = 2;
     let (engine, _shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::StaleRoot)
     );
     assert_eq!(verifier.call_count(), 0);
@@ -200,7 +201,7 @@ fn weight_over_limit_rejects_malformed() {
     facts.fee_per_byte = u64::MAX; // fee would also fail: weight must win
     let (engine, _shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::Malformed)
     );
     assert_eq!(verifier.call_count(), 0);
@@ -212,7 +213,7 @@ fn fee_below_floor_rejects_fee_too_low() {
     facts.fee_per_byte = 1_000_000; // floor far above the 1e6 fixture fee
     let (engine, shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::FeeTooLow)
     );
     assert_eq!(
@@ -235,7 +236,7 @@ fn serve_credit_terminates_at_the_fee_floor() {
     facts.reference = None; // would be ReferenceNotFound on a spending arm
     let (engine, _shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
-        engine.submit(&hex).unwrap(),
+        engine.submit(&hex, SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::FeeTooLow)
     );
     assert_eq!(verifier.call_count(), 0);
@@ -253,9 +254,11 @@ fn verifier_failures_map_to_their_causes() {
     ] {
         let shim = MockShim::new(base_facts(), CommitOutcome::Committed);
         let verifier = MockVerifier::failing(failure);
-        let engine =
-            SubmitEngine::with_gate(Arc::clone(&shim), Arc::clone(&verifier), PhaseCGate::new(1));
-        assert_eq!(engine.submit(&spend_hex()).unwrap(), rejected(cause));
+        let engine = SubmitEngine::new(Arc::clone(&shim), Arc::clone(&verifier));
+        assert_eq!(
+            engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
+            rejected(cause)
+        );
         assert_eq!(
             shim.commit_count(),
             0,
@@ -272,7 +275,7 @@ fn committed_accepts_relays_and_binds_the_certificate() {
     let parsed = parse_submission(&spend_hex()).unwrap();
 
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         SubmitVerdict::Accepted
     );
 
@@ -304,7 +307,7 @@ fn pruned_on_insert_rejects_fee_too_low() {
     // F23 / defect 0.7: admitted then evicted by the tail's prune().
     let (engine, shim, _verifier) = engine(base_facts(), CommitOutcome::PrunedOnInsert);
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::FeeTooLow)
     );
     assert_eq!(shim.relay_count(), 0, "an evicted tx must not be nudged");
@@ -314,7 +317,9 @@ fn pruned_on_insert_rejects_fee_too_low() {
 fn internal_fault_is_a_fault_not_a_verdict() {
     let (engine, shim, _verifier) = engine(base_facts(), CommitOutcome::InternalFault);
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap_err(),
+        engine
+            .submit(&spend_hex(), SubmitCaller::Owner)
+            .unwrap_err(),
         EngineFault::CommitFault
     );
     assert_eq!(shim.relay_count(), 0);
@@ -351,9 +356,11 @@ fn snapshot_fault_is_a_fault_not_a_verdict() {
     }
 
     let verifier = MockVerifier::passing();
-    let engine = SubmitEngine::with_gate(FaultingShim, Arc::clone(&verifier), PhaseCGate::new(1));
+    let engine = SubmitEngine::new(FaultingShim, Arc::clone(&verifier));
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap_err(),
+        engine
+            .submit(&spend_hex(), SubmitCaller::Owner)
+            .unwrap_err(),
         EngineFault::SnapshotFault
     );
     assert_eq!(verifier.call_count(), 0);
@@ -373,7 +380,7 @@ fn raced_in_chain_wins_over_every_other_premise() {
     fresh.fee_per_byte = u64::MAX;
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         SubmitVerdict::AlreadyInChain
     );
 }
@@ -386,7 +393,7 @@ fn raced_in_pool_classifies_already_in_pool() {
     fresh.in_pool = true;
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         SubmitVerdict::AlreadyInPool
     );
 }
@@ -402,7 +409,7 @@ fn raced_key_image_conflict_beats_stale_root() {
     fresh.fee_per_byte = u64::MAX;
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::DoubleSpendConflict)
     );
 }
@@ -418,7 +425,7 @@ fn raced_own_tx_key_image_is_not_a_conflict() {
     fresh.reference = None;
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::StaleRoot)
     );
 }
@@ -431,7 +438,7 @@ fn raced_reference_gone_classifies_stale_root() {
     fresh.reference = None;
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::StaleRoot)
     );
 }
@@ -444,7 +451,7 @@ fn raced_root_mismatch_classifies_stale_root() {
     fresh.reference.as_mut().unwrap().root = [0xBB; 32];
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::StaleRoot)
     );
 }
@@ -457,7 +464,7 @@ fn raced_reference_aged_out_classifies_stale_root() {
     fresh.chain_height = BlockHeight::from_raw(251);
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::StaleRoot)
     );
 }
@@ -470,7 +477,7 @@ fn raced_fee_floor_rise_classifies_fee_too_low() {
     fresh.fee_per_byte = 1_000_000;
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
     assert_eq!(
-        engine.submit(&spend_hex()).unwrap(),
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
         rejected(RejectCause::FeeTooLow)
     );
 }
@@ -482,7 +489,102 @@ fn raced_with_no_changed_premise_is_a_shim_contract_fault() {
     let fresh = base_facts();
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
     assert!(matches!(
-        engine.submit(&spend_hex()).unwrap_err(),
+        engine
+            .submit(&spend_hex(), SubmitCaller::Owner)
+            .unwrap_err(),
         EngineFault::ShimContract(_)
     ));
+}
+
+// ── §3.1 identity-category pin: the foreign-disclosure boundary ─────────
+//
+// `in_pool` (relay_category::all) is the internal presence truth; a foreign
+// caller (restricted/public endpoint) may learn only `in_pool_broadcast`
+// (relay_category::legacy). Disclosing embargoed presence to a foreigner
+// would turn POST /submit_transaction into a Dandelion++ stem-presence
+// oracle, so an embargoed pool-resident tx is concealed — verified in full
+// and reported Accepted, indistinguishable from a fresh submission.
+
+#[test]
+fn foreign_embargoed_presence_is_concealed_at_phase_b() {
+    // Pool-resident at `all` but not broadcast-visible (embargoed). A
+    // foreign caller must NOT get a fast AlreadyInPool: it runs the full
+    // battery and (clean commit) reports Accepted.
+    let mut facts = base_facts();
+    facts.in_pool = true;
+    facts.in_pool_broadcast = false;
+    let (engine, shim, verifier) = engine(facts, CommitOutcome::Committed);
+    assert_eq!(
+        engine.submit(&spend_hex(), SubmitCaller::Foreign).unwrap(),
+        SubmitVerdict::Accepted
+    );
+    assert_eq!(
+        verifier.call_count(),
+        1,
+        "foreign caller pays full verification — no early identity leak"
+    );
+    assert_eq!(shim.commit_count(), 1);
+}
+
+#[test]
+fn foreign_broadcast_presence_reveals_already_in_pool() {
+    // Already fluffed (broadcast-visible): no embargo secret, so disclosing
+    // AlreadyInPool to a foreign caller is safe — exactly what the legacy
+    // `relay_category::legacy` identity check disclosed.
+    let mut facts = base_facts();
+    facts.in_pool = true;
+    facts.in_pool_broadcast = true;
+    let (engine, _shim, verifier) = engine(facts, CommitOutcome::Committed);
+    assert_eq!(
+        engine.submit(&spend_hex(), SubmitCaller::Foreign).unwrap(),
+        SubmitVerdict::AlreadyInPool
+    );
+    assert_eq!(
+        verifier.call_count(),
+        0,
+        "broadcast-visible presence short-circuits"
+    );
+}
+
+#[test]
+fn owner_embargoed_presence_reveals_already_in_pool() {
+    // The owner (unrestricted endpoint) keeps the F31 resubmit-as-status
+    // query: an embargoed self-tx returns AlreadyInPool immediately.
+    let mut facts = base_facts();
+    facts.in_pool = true;
+    facts.in_pool_broadcast = false;
+    let (engine, _shim, verifier) = engine(facts, CommitOutcome::Committed);
+    assert_eq!(
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
+        SubmitVerdict::AlreadyInPool
+    );
+    assert_eq!(verifier.call_count(), 0);
+}
+
+#[test]
+fn foreign_raced_embargoed_duplicate_conceals_as_accepted() {
+    // A foreign caller whose commit raced against an embargoed pool-resident
+    // tx is told Accepted (it is in the pool and will relay), never
+    // AlreadyInPool — the race outcome must not be an oracle either.
+    let mut fresh = base_facts();
+    fresh.in_pool = true;
+    fresh.in_pool_broadcast = false;
+    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
+    assert_eq!(
+        engine.submit(&spend_hex(), SubmitCaller::Foreign).unwrap(),
+        SubmitVerdict::Accepted
+    );
+}
+
+#[test]
+fn foreign_raced_broadcast_duplicate_reveals_already_in_pool() {
+    // Broadcast-visible at the race window: safe to disclose AlreadyInPool.
+    let mut fresh = base_facts();
+    fresh.in_pool = true;
+    fresh.in_pool_broadcast = true;
+    let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
+    assert_eq!(
+        engine.submit(&spend_hex(), SubmitCaller::Foreign).unwrap(),
+        SubmitVerdict::AlreadyInPool
+    );
 }

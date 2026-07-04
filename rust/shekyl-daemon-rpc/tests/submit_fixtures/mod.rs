@@ -176,6 +176,7 @@ pub fn hexify(tx: &Transaction) -> String {
 pub fn admitting_facts(parsed: &ParsedSubmission) -> SubmitFacts {
     SubmitFacts {
         in_pool: false,
+        in_pool_broadcast: false,
         in_chain: false,
         key_image_conflicts: vec![KeyImageConflict::Free; parsed.key_images.len()],
         reference: Some(ReferenceFacts {
