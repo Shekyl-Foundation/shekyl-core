@@ -469,8 +469,14 @@ namespace cryptonote
 
     // F23 / defect 0.7: the tail's prune() can evict the tx it just
     // inserted. `Accepted ⇒ in pool at commit-check time` requires the
-    // membership re-check here, under the same lock scope.
-    pruned_on_insert = !have_tx(id, relay_category::legacy);
+    // membership re-check here, under the same lock scope. The query MUST be
+    // relay_category::all — this is an identity-membership question ("did
+    // prune evict the bytes just inserted"), not a relay-visibility one: the
+    // entry sits at relay_method::local, which `legacy` excludes
+    // (matches_category, blockchain_db.cpp), so a `legacy` query here would
+    // misreport EVERY accepted tx as pruned-on-insert. Mirrors the Phase-B
+    // snapshot's deliberate `all` (shekyl_submit_snapshot_facts).
+    pruned_on_insert = !have_tx(id, relay_category::all);
     return true;
   }
   //---------------------------------------------------------------------------------

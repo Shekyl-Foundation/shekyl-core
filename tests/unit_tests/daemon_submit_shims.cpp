@@ -132,9 +132,16 @@ public:
   {
     return m_txpool.size();
   }
-  virtual bool txpool_has_tx(const crypto::hash& txid, relay_category) const override
+  // Category-honest, mirroring BlockchainLMDB::txpool_has_tx: a fixture that
+  // drops the category would green-light a `legacy` membership query against a
+  // `local` entry — masking exactly the class of bug these shim tests exist to
+  // pin (the post-prune re-check regression found on review).
+  virtual bool txpool_has_tx(const crypto::hash& txid, relay_category tx_category) const override
   {
-    return m_txpool.count(txid) != 0;
+    const auto it = m_txpool.find(txid);
+    if (it == m_txpool.end())
+      return false;
+    return tx_category == relay_category::all || it->second.meta.matches(tx_category);
   }
   virtual bool get_txpool_tx_meta(const crypto::hash& txid, cryptonote::txpool_tx_meta_t& meta) const override
   {
@@ -144,10 +151,14 @@ public:
     meta = it->second.meta;
     return true;
   }
-  virtual bool get_txpool_tx_blob(const crypto::hash& txid, cryptonote::blobdata& bd, relay_category) const override
+  virtual bool get_txpool_tx_blob(const crypto::hash& txid, cryptonote::blobdata& bd, relay_category tx_category) const override
   {
+    // Same category honesty as txpool_has_tx above (LMDB's blob getter
+    // filters identically; the relay nudge deliberately fetches at `all`).
     const auto it = m_txpool.find(txid);
     if (it == m_txpool.end())
+      return false;
+    if (tx_category != relay_category::all && !it->second.meta.matches(tx_category))
       return false;
     bd = it->second.blob;
     return true;
@@ -458,6 +469,15 @@ TEST(daemon_submit_shims, clean_commit_inserts_attested_pool_entry)
   EXPECT_EQ(meta.kept_by_block, 0);
   EXPECT_EQ(meta.do_not_relay, 0);
   EXPECT_EQ(fx.bap.txpool.get_txpool_weight(), s.weight);
+  // Regression pin (review finding): the committed entry sits at
+  // relay_method::local, which relay_category::legacy EXCLUDES — so the
+  // post-prune membership re-check (and any identity question about a
+  // just-inserted tx) must query relay_category::all. A `legacy` query here
+  // would have misreported every accepted tx as pruned-on-insert; the
+  // category-honest fixture makes that class of bug fail loudly.
+  EXPECT_TRUE(fx.db->txpool_has_tx(s.txid, relay_category::all));
+  EXPECT_FALSE(fx.db->txpool_has_tx(s.txid, relay_category::legacy))
+    << "a local-method entry must not match legacy; identity checks use `all`";
 }
 
 TEST(daemon_submit_shims, commit_txid_divergence_is_internal_fault)
