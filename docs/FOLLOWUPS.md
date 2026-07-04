@@ -671,6 +671,45 @@ sustainability is unaffected by the recalibration.
   spend block (`Ct::read` rejected the storage-pruned FCMP++ form) — EOF-tolerant
   prunable after `pqc_auths`; regression `pruned_fcmp_spend_round_trips_and_ingests`.
 
+- **`AlreadyInChain` submit verdict: distinct lock-lifecycle disposition
+  (PR-4 / #248 review, deferred to 2c).**
+  `transaction_submitter::outcome_to_result` collapses `AlreadyInChain` into
+  `Ok(hash)` identically to `Submitted` / `AlreadyInPool`, so
+  `finalize_submit_accept` places a fresh F14 awaiting-confirmation lock
+  (baseline = current height) on a tx that is already on-chain, relying on a
+  future refresh `mark_spent` to clear it. Per `DAEMON_SUBMIT_VERDICT.md`
+  §2.5, `AlreadyInChain` is a **distinct** disposition ("confirmation observed
+  by verdict; refresh remains the settlement authority — the verdict
+  authorizes lock-lifecycle transitions only"), not the `Accepted`
+  awaiting-lock path. For an `AlreadyInChain` whose confirming block is
+  at/below the wallet's synced height with no reorg re-scan, refresh never
+  re-observes the spend and the lock is never cleared (the confirmed-absent
+  release is watchdog-actor-gated, unbuilt) — the inputs appear permanently
+  "awaiting confirmation" despite the tx being confirmed. *Fix:* give
+  `AlreadyInChain` its own disposition (do not place a fresh awaiting-lock;
+  let refresh settle it), nailing the §2.5 refresh-authoritative semantics.
+  *Target:* V3.0, with the 2c StakeEngine submit-consumer work (the second
+  `outcome_to_result` consumer that makes verdict-mapping a shared surface).
+  Deferred from PR-4 by explicit decision — needs the §2.5 lock-lifecycle
+  semantics pinned, not a drive-by.
+
+- **Submit-error reservation-id placeholder: split submitter error from
+  orchestrator error (PR-4 / #248 review, deferred to 2c).**
+  `transaction_submitter::submit_error_from_cause` embeds
+  `ReservationId::new(0)` in its `DaemonRejectedRetryable` / `DaemonAmbiguous`
+  arms as a placeholder meaningful only because the one current caller
+  (`LocalPendingTx::submit_async`) destructures `{ .. }` and re-binds the real
+  id. `0` is a real, allocatable `ReservationId`; the already-planned 2c
+  `StakeEngine` submit consumer has no such re-binder and would act on
+  reservation `0` as though it were the failing one, corrupting reservation
+  bookkeeping. *Fix* (the depth-appropriate one the code comment already
+  flags): split the submitter error (owns no reservation) from the
+  orchestrator error (owns one), so `0` is unrepresentable rather than a
+  trusted-then-discarded sentinel. *Target:* V3.0, with the 2c StakeEngine
+  submit-consumer wiring (`ARCHIVAL_BOND_REQUEST_2C2B_PLAN`) — the PR that
+  adds the second consumer is where the un-split error bites, so it must land
+  the split.
+
 - **CT-2 Tier B reconstruct-root KATs (staked / non-coinbase maturity
   classes) — post-CT-5 (CT-2 Round 1 deferral, tracked 2026-06-13).**
   Target: V3.0, ordered after CT-5. `recon_tier_b.rs` carries five
