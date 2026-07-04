@@ -91,7 +91,7 @@ driving task + SP-4 finalize + the cadence); SP-6/SP-7 are future.
 | `VerifiedRange` / `PReconcileSet` (SP-6) | **0 files — design-level, future** | Consume for half (B); **gated on SP-6 being built** (PR-A only *collects* the inputs) |
 | `CoverDiscovery` (SP-7) — re-fund takes `AbsentVerified` only | **0 files — design-level, future** | Honor it once built; no auto-escalation of `Incomplete` |
 | `tip_height()` = "this source's *claimed* tip" (TM-3) | concept (in the plan) | Resolved by **posture**, not multi-source machinery (§4) |
-| `_spread` / `_bond_first` broadcast stub | **landed** (`stake_engine.rs:956-962`, `TODO(2d)`) | Wire discretionary-broadcast timing over the per-`P` circuit (§5) |
+| `_spread` / `_bond_first` broadcast stub | **landed** (`stake_engine.rs:1089`, `TODO(2d)`); the write path it feeds is now built (SP-T4a `PTransactionSubmitter` + `BroadcastPosture`) | Wire discretionary-broadcast timing over the per-`P` circuit (§5) — gated on the consumer wiring (2c-2a/2c-2b), not the seam |
 
 **Implication for 2d-2 half (B):** the reconcile is **blocked** until SP-6 (`PReconcileSet`)
 and the PR-B driving task exist; only half (A) transport can proceed now. The doc treats (B)
@@ -544,6 +544,19 @@ originate from principal-space — the write-side firewall break — so origin-i
 by the type, not §5 prose. *Timing:* anchor-free draw for the discretionary sends (DQ3); **N/A for
 the challenge-response** (§7: its response window is public — nothing to jitter, only the origin to
 isolate).
+
+> **SP-T4a (the seam) is built** — see
+> [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md): a per-`P`
+> `PTransactionSubmitter` (no principal-`DaemonClient` path) + a broadcast `Posture` that
+> **forbids ③ by type** — a *different, narrower* type than the fetch `Posture`, with **no
+> `ThirdParty` variant at all**, because first-seen-origin is a discrete, categorical, avoidable
+> leak where fetch-③ is continuous, statistical, and unavoidable (the read/write selectors are
+> deliberately different types) — plus the axis-4 `DaemonAmbiguous` retry contract. Production
+> wiring of the discretionary consumer is gated on the funding/tx-assembly + 2c-2a/2c-2b
+> `StakeEngine` wiring, **not** on the seam. **SP-T4b** (the deadline-critical challenge-response
+> submission) reuses this seam once a GATE2 wallet-side build/sign/submit producer for
+> `ArchivalServeCreditResponse` exists. The **GF-7** principal-timeline timing residual is a
+> **genesis gate** (measured `P(link | T_obs)` before launch), not a deferred round.
 
 **SP-R0 — reconcile GC (gated).** On SP-6's `PReconcileSet`, GC phantom `bonded_slots`/`p_slot`
 **only** on confirmed-absence within `covered` (the SP-6 rule); never on absence-from-one-source.

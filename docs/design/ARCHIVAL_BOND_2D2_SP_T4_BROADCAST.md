@@ -112,7 +112,8 @@ correlation no circuit isolation touches. The mitigation primitive exists but is
   least-developed, still **deferred (R3/R4)**, and (S-3) **unmeasured** — no
   `P(link | T_obs)` simulation exists. SP-T4a **must not claim the timing axis
   closed.** It wires the narrow funding-seam primitive and hands GF-7 forward as
-  a named, deferred, measured-someday residual (§4).
+  a named, deferred residual **and a genesis gate** (§4) — not a measured-someday
+  aspiration.
 
 ### Axis 3 — first-seen-origin (**new — forbid broadcast-③ by type**)
 
@@ -188,16 +189,34 @@ The enforcement pattern is the SP-T2 mirror; the instances are new.
   `From<DaemonClient>`, no `Default`. A principal `DaemonClient` cannot be
   coerced into the `P` submitter; the type won't take it. Mirrors `PBlockSource`
   (`block_source.rs:196`) and the DQ1 no-principal-path move, write side.
-- **(B) Broadcast-③ is unrepresentable — a *different, narrower* Posture type.**
-  The broadcast posture is **not** the fetch `Posture`. It is a distinct type
-  with **`Local` and `OwnRemote` only — no `ThirdParty` variant at all** (not a
+- **(B) *System-selected* broadcast-③ is unrepresentable — a *different,
+  narrower* Posture type — and `OwnRemote` is trust-on-user-assertion.** The
+  broadcast posture is **not** the fetch `Posture`. It is a distinct type with
+  **`Local` and `OwnRemote` only — no `ThirdParty` variant at all** (not a
   `ThirdParty` arm that returns an error; the variant does not exist). This is
   **stronger** than the fetch selector's no-silent-③ (which allows ③ when
-  explicitly named): the broadcast selector is **no-③-at-all**. Because it is
-  encoded in the type, a future "unify the selectors for symmetry" refactor
-  **cannot silently re-enable broadcast-③** — it would have to *add the variant
-  back*, a visible, reviewable, reason-demanding change. The two selectors are
-  deliberately different types; that difference **is** the recorded decision.
+  explicitly named): the broadcast selector is **no-③-at-all**, and a "unify the
+  selectors for symmetry" refactor **cannot silently re-enable broadcast-③** — it
+  would have to *add the variant back*, a visible, reviewable change.
+
+  **But the forbid closes the *system-selected* path, not the *user-mislabeled*
+  one — and that limit is on the record, not papered over.** `OwnRemote {
+  base_url }` carries an unconstrained onion, and "is this `base_url` my own node"
+  is **not a type-checkable property** — an onion address carries no ownership
+  proof the wallet can verify. So a user who puts a **third party's** onion in
+  `OwnRemote` (by mistake, or because a stranger's node is convenient) broadcasts
+  through a stranger and reopens the exact first-seen-origin leak: the type makes
+  ③ unrepresentable to the *system*, but it cannot make a value in `OwnRemote`
+  point only at *your* node. So "unrepresentable" is true of the *variant* and
+  false of the *leak* — and a genesis reader must not take it as "impossible."
+  `OwnRemote` is therefore **trust-on-user-assertion**, carrying a mandated
+  **config-point disclosure** (the same disclose-the-cost posture the fetch-③
+  path uses): *this must be a node you control; pointing it at a third party
+  defeats the broadcast firewall — first-seen-origin is a permanent, categorical
+  link.* The only *structural* closure is a **rule-21 reopen**: an
+  **authenticated `OwnRemote`** (a client-auth onion / proof-of-ownership) would
+  make "my own node" type-checkable — out of scope now, the named path if the
+  disclosure proves insufficient.
 - **(C) Retry holds the bytes; rebuild-on-retry cannot compile.** The submit
   contract carries the already-built `tx_bytes`; "retry" re-sends the *same held
   bytes*. There is no path where a retry re-derives a tx (new inputs/signature →
@@ -211,7 +230,7 @@ must not be re-litigated by a symmetry refactor.
 
 ---
 
-## 4. The GF-7 disclosure (loud — what remains open and why it is out of scope)
+## 4. The GF-7 disclosure — a genesis gate, not a deferred round (loud)
 
 The honest core of SP-T4a's threat model: **the timing axis the firewall most
 needs closed is unmeasured.** GATE6 §10.12 records it — S-1 (funding/exit seams
@@ -237,12 +256,26 @@ site:
 This is a **named, deferred residual with a disclosed inheritance**, not a silent
 gap — the `21-reversion-clause-discipline` / disclosed-cost posture.
 
+**GF-7 is a genesis gate, not merely a deferred round.** §4's own framing — *the
+timing axis the firewall most needs closed is unmeasured* — is the reason:
+everything here is pre-genesis, and shipping the broadcast seam with the
+principal↔`P` timing correlation unmeasured would launch the write-side firewall
+**unvalidated on its core axis** — exactly what *get-it-right-not-get-it-now*
+forbids for a privacy coin's firewall (`00-mission` #2). So the residual carries
+an explicit launch condition, not just an inheritance: **genesis cannot ship
+until GF-7's `P(link | T_obs)` is measured against a modeled observer and meets
+threshold** (the S-3 privacy-sim obligation on the funding/exit timing seams).
+That elevates GF-7 from "a round someone will get to" to "the thing that blocks
+launch" — its correct weight — and prevents the failure mode where a disclosed-
+but-unweighted residual quietly slips past genesis. Tracked as a genesis blocker
+in `docs/FOLLOWUPS.md`.
+
 ---
 
 ## 5. Decomposition (commit-slices — one PR unless it grows exceptionally large)
 
-One validation surface (the `P`-broadcast seam + its enforcement + its real
-consumer), clean per-surface commits (the #238 shape):
+One validation surface (the `P`-broadcast seam + its enforcement), clean
+per-surface commits (the #238 shape):
 
 1. **Shared submit-verdict mapping.** Extract the `TxRelayResponse →
    TxSubmitOutcome` mapping (currently `DaemonClient`-side, `daemon.rs:142`) into
@@ -259,14 +292,27 @@ consumer), clean per-surface commits (the #238 shape):
    third-party broadcast because it *cannot represent one*. Proving test: the
    type has no `ThirdParty` constructor (a compile-fenced absence) + the selector
    maps ①→principal submitter, ②→`PTransactionSubmitter`, and there is no ③ arm.
-4. **Wire the real consumer.** Replace the `TODO(2d)` (`stake_engine.rs:1095`):
-   route the signed `JoinMarketVin` through the `P`-broadcast seam, timed by
-   `(_spread, _bond_first)`, with the GF-7 disclosure comment (§4) at the wire
-   site. This is the consumer that proves slices 2–3.
-5. **Docs (rule 91).** This doc; refine `TRANSPORT_PLAN.md` §15 SP-T4 to point
-   here and record the broadcast-③ forbid + selector asymmetry; **fix the stale
-   line-ref** at `TRANSPORT_PLAN.md:94` (`stake_engine.rs:956-962` →
-   `:1089-1096`).
+4. **Point the consumer at the seam (production wiring is *gated*).** The real
+   end-consumer — the discretionary `JoinMarketVin` bond-post — **cannot** be
+   wired end-to-end yet, and verifying-at-source is why: `JoinMarketVin` is a tx
+   *input* (it needs funding inputs/outputs + `credit_term` →
+   `sign_transaction_with_terms` to assemble a submittable tx), and `StakeEngine`
+   holds no broadcast submitter / posture / block-timed scheduler — it is inert
+   pending the 2c-2a assemble / 2c-2b request-path wiring. That is a real
+   dependency (defer-only-on-a-real-blocker), not a shrink-the-PR defer. So slice
+   4 updates the `TODO(2d)` (`stake_engine.rs:1095`) to point at the built seam
+   and name exactly what production wiring still needs, and records the GF-7 scope
+   (§4) at the timing-draw site — a comment at the consumer site, **not**
+   production wiring. The seam ships now as the **prerequisite** that 2c-2a/2c-2b
+   will consume: a byte-defined-consumer building block, fully tested by slice 2's
+   proving test — not consumer-less infra (contrast SP-T3, whose onion had no
+   byte-defined payload at all).
+5. **Docs (rule 91).** This doc (incl. the S1 *trust-on-user-assertion*
+   sharpening on `OwnRemote` and the S2 *GF-7 genesis-gate* elevation); refine
+   `TRANSPORT_PLAN.md` §15 SP-T4 to point here and record the broadcast-③ forbid
+   + selector asymmetry; **fix the stale line-ref** at `TRANSPORT_PLAN.md:94`
+   (`stake_engine.rs:956-962` → `:1089-1096`); add the GF-7 genesis-blocker entry
+   to `docs/FOLLOWUPS.md`.
 
 **SP-T4b** (serve-credit challenge-response broadcast) is the separate, gated
 follow-up — it reuses this seam once a GATE2 wallet-side build/sign/submit

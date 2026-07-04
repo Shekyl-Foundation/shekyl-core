@@ -7113,6 +7113,22 @@ one place to confirm each item's relationship to the wallet stack.
   intra-doc link in the `randomx-v2-sys`/`shekyl-pow-randomx` docs, `generic_array::as_slice`
   deprecations in vendored crypto). **Reopen as** a standalone doc-hygiene sweep: fix those warnings,
   then swap the shekyl-tor-scoped step for `cargo doc --workspace --no-deps` under `-D warnings`.
+- **2d-2 SP-T4a — GF-7 principal-timeline timing correlation is a GENESIS GATE (measure
+  `P(link | T_obs)` before launch).** SP-T4a wired the narrow funding-seam entry-gap jitter
+  (`draw_entry_gap`, `spread ~ U[0, 600 blocks]`) into the bond-post broadcast and forbids
+  broadcast-③ by type — but it does **not** decorrelate `P`'s broadcast from the **principal's
+  lifecycle timeline** (nor from `P`'s other broadcasts). That correlation is **GF-7** (GATE6
+  §10.12 — S-1: *the* load-bearing principal↔`P` unlinkability seam, least-developed, deferred
+  R3/R4; S-3: **zero** simulated privacy scenarios, i.e. **unmeasured**). Shipping the write-side
+  firewall to genesis with its core timing axis unmeasured is exactly what
+  *get-it-right-not-get-it-now* forbids for a privacy coin. **This is a genesis blocker, not a
+  deferred round: genesis cannot ship until GF-7's `P(link | T_obs)` is measured against a modeled
+  observer (as a function of standoff window / entry jitter / batch size) and meets threshold.**
+  The measurement round inherits: `DEFAULT_ENTRY_GAP_WINDOW = 600` as the grading parameter; the
+  entry/bond-post as the one broadcast currently jittered; the open principal-timeline +
+  cross-broadcast decorrelation that no built primitive addresses. **Target: pre-genesis (blocks
+  the seal).** See [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md)
+  §4 and [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (the S-3 privacy-sim home).
 - **2d-2 SP-T3 — onion-route end-to-end validation (the property DQ-T0.4 *cannot* prove).**
   DQ-T0.4 (the SP-T0 circuit-isolation measurement) proves exactly one thing: `IsolateSOCKSAuth`
   puts per-persona SOCKS streams on **distinct circuits** — read as the attach-time `CircID` at
