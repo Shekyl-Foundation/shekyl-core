@@ -33,8 +33,8 @@ fuzz_target!(|data: &[u8]| {
         // re-parsing it must succeed with the same txid (the §3.4
         // divergence class is unrepresentable past Phase A).
         assert_eq!(parsed.blob, data, "admitted blob must be the decoded input");
-        let reparsed = parse_submission(&hex::encode(&parsed.blob))
-            .expect("admitted bytes must re-admit");
+        let reparsed =
+            parse_submission(&hex::encode(&parsed.blob)).expect("admitted bytes must re-admit");
         assert_eq!(
             parsed.txid, reparsed.txid,
             "txid must be a pure function of admitted bytes"
