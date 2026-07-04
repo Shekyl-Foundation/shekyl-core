@@ -99,6 +99,16 @@ class Daemon(object):
         return self.rpc.send_request("/send_raw_transaction", send_raw_transaction)
     sendrawtransaction = send_raw_transaction
 
+    def submit_transaction(self, tx_as_hex):
+        # Native typed submit route (DAEMON_SUBMIT_VERDICT.md sec. 2.4): the
+        # response body is the serde-tagged SubmitVerdict. Transport-level
+        # failures (HTTP 400/500) raise, mirroring the wallet client's Err
+        # arm; verdicts including Rejected come back as HTTP 200 JSON.
+        submit_transaction = {
+            'tx_blob': tx_as_hex,
+        }
+        return self.rpc.send_request("/submit_transaction", submit_transaction)
+
     def submitblock(self, block):
         submitblock = {
             'method': 'submitblock',

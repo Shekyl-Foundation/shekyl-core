@@ -95,6 +95,13 @@ impl CoreRpc {
         }
     }
 
+    /// Raw handle for the submit shims (`crate::submit::ffi_shim`), which
+    /// call the `shekyl_submit_*` FFI directly rather than through the
+    /// string-dispatch surface above.
+    pub(crate) fn raw_handle(&self) -> *mut ffi::CoreRpcHandle {
+        self.handle
+    }
+
     /// Dispatch a JSON-RPC 2.0 method.
     /// Returns the raw response string from C++ (contains ok/error envelope).
     pub fn json_rpc(&self, method: &str, params: &str) -> Option<String> {

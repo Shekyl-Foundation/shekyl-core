@@ -390,6 +390,122 @@ namespace cryptonote
       nic_verified_hf_version);
   }
   //---------------------------------------------------------------------------------
+  bool tx_memory_pool::insert_attested_tx(transaction &tx, const crypto::hash &id,
+    const cryptonote::blobdata &blob, uint64_t tx_weight, uint64_t fee,
+    const crypto::hash &ref_block_id, uint64_t ref_block_height,
+    bool &pruned_on_insert)
+  {
+    // The commit shim already holds both locks in the §4.4 order; these are
+    // re-entrant and make the requirement explicit, as add_tx does.
+    CRITICAL_REGION_LOCAL(m_transactions_lock);
+    CRITICAL_REGION_LOCAL1(m_blockchain);
+
+    pruned_on_insert = false;
+    const time_t receive_time = time(nullptr);
+
+    // Mirror of add_tx's fresh-insert tail (the !existing_tx arm) for a
+    // local-origin, engine-verified tx. relay_method::local keeps the tx out
+    // of the broadcasted category until relay dispatch.
+    //
+    // last_relayed_time is receive_time, NOT add_tx's max() sentinel. add_tx
+    // can use max() because a received tx's explicit relay dispatch always
+    // follows and calls set_relayed, overwriting it. The engine path's relay
+    // is fire-and-forget (DAEMON_SUBMIT_VERDICT.md §4.3), and the periodic
+    // relay loop is its stated fallback if the nudge misses (§5.2 item 1) —
+    // but get_relayable_transactions skips a max()-stamped local tx forever:
+    // `now - max()` underflows to now+1 and get_relay_delay(max(), _) casts to
+    // a negative time_t returned as a huge unsigned delay, so the entry never
+    // becomes eligible. receive_time lets the loop relay it after
+    // MIN_RELAY_TIME if the nudge missed, while a successful nudge's
+    // set_relayed overwrites it first (no double relay).
+    txpool_tx_meta_t meta{};
+    meta.set_relay_method(relay_method::local);
+    meta.last_relayed_time = receive_time;
+    meta.receive_time = receive_time;
+    meta.weight = tx_weight;
+    meta.fee = fee;
+    // Certificate-derived reference anchoring: the F22 ref-age sweep
+    // (remove_stuck_transactions) and the template-time canonicality
+    // re-check (is_transaction_ready_to_go) key off these fields, exactly
+    // as they key off check_tx_inputs' outputs on the P2P path.
+    meta.max_used_block_id = ref_block_id;
+    meta.max_used_block_height = ref_block_height;
+    meta.last_failed_height = 0;
+    meta.last_failed_id = null_hash;
+    meta.kept_by_block = 0;
+    meta.relayed = false;
+    meta.do_not_relay = 0;
+    meta.double_spend_seen = false;
+    meta.pruned = tx.pruned;
+    meta.bf_padding = 0;
+    memset(meta.padding, 0, sizeof(meta.padding));
+
+    // §3.5 attestation: same derivation as the P2P path above. The
+    // certificate gate lives in the (only) caller.
+    if (tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc)
+    {
+      meta.fcmp_verification_hash = Blockchain::compute_fcmp_verification_hash(tx);
+      meta.fcmp_verified = (meta.fcmp_verification_hash != null_hash) ? 1 : 0;
+    }
+    else
+    {
+      meta.fcmp_verification_hash = null_hash;
+      meta.fcmp_verified = 0;
+    }
+
+    // insert_key_images mutates the in-memory m_spent_key_images index
+    // incrementally, before the DB write. A failure after it (a false return,
+    // or a DB exception from add_txpool_tx / add_tx_to_transient_lists —
+    // LMDB map-full/resize, I/O) aborts the DB txn via LockedTXN but does NOT
+    // touch that in-memory index, so without an explicit rollback it would
+    // leave a phantom spender keyed to a txid that never entered the pool.
+    // A later rebuilt spend of the same inputs would then classify as a false
+    // DoubleSpendConflict until daemon restart. Roll the images back on every
+    // failure past the point they may have been inserted.
+    bool key_images_inserted = false;
+    try
+    {
+      LockedTXN lock(m_blockchain.get_db());
+      key_images_inserted = true;
+      if (!insert_key_images(tx, id, relay_method::local))
+      {
+        remove_transaction_keyimages(tx, id);
+        return false;
+      }
+      m_blockchain.add_txpool_tx(id, blob, meta);
+      add_tx_to_transient_lists(id, fee / (double)(tx_weight ? tx_weight : 1), receive_time);
+      lock.commit();
+    }
+    catch (const std::exception &e)
+    {
+      MERROR("internal error: error adding attested transaction to txpool: " << e.what());
+      if (key_images_inserted)
+        remove_transaction_keyimages(tx, id);
+      return false;
+    }
+
+    m_txpool_weight += tx_weight;
+    ++m_cookie;
+
+    MINFO("Attested transaction added to pool: txid " << id << " weight: " << tx_weight
+      << " fee/byte: " << (fee / (double)(tx_weight ? tx_weight : 1))
+      << ", count: " << m_added_txs_by_id.size());
+
+    prune(m_txpool_max_weight);
+
+    // F23 / defect 0.7: the tail's prune() can evict the tx it just
+    // inserted. `Accepted ⇒ in pool at commit-check time` requires the
+    // membership re-check here, under the same lock scope. The query MUST be
+    // relay_category::all — this is an identity-membership question ("did
+    // prune evict the bytes just inserted"), not a relay-visibility one: the
+    // entry sits at relay_method::local, which `legacy` excludes
+    // (matches_category, blockchain_db.cpp), so a `legacy` query here would
+    // misreport EVERY accepted tx as pruned-on-insert. Mirrors the Phase-B
+    // snapshot's deliberate `all` (shekyl_submit_snapshot_facts).
+    pruned_on_insert = !have_tx(id, relay_category::all);
+    return true;
+  }
+  //---------------------------------------------------------------------------------
   size_t tx_memory_pool::get_txpool_weight() const
   {
     CRITICAL_REGION_LOCAL(m_transactions_lock);
@@ -753,8 +869,30 @@ namespace cryptonote
     CRITICAL_REGION_LOCAL(m_transactions_lock);
     CRITICAL_REGION_LOCAL1(m_blockchain);
     std::list<std::pair<crypto::hash, uint64_t>> remove;
-    m_blockchain.for_all_txpool_txes([this, &remove](const crypto::hash &txid, const txpool_tx_meta_t &meta, const cryptonote::blobdata_ref*) {
+    const uint64_t chain_height = m_blockchain.get_current_blockchain_height();
+    m_blockchain.for_all_txpool_txes([this, chain_height, &remove](const crypto::hash &txid, const txpool_tx_meta_t &meta, const cryptonote::blobdata_ref*) {
       uint64_t tx_age = time(nullptr) - meta.receive_time;
+
+      // FCMP++ reference-age eviction (DAEMON_SUBMIT_VERDICT.md §6 leg 1):
+      // consensus rejects a tx whose referenceBlock aged past
+      // FCMP_REFERENCE_BLOCK_MAX_AGE (blockchain.cpp ref-age window), and the
+      // age only grows — such a tx can never be mined from this pool, but the
+      // receive-time sweep below would hold it (answering AlreadyInPool to
+      // wallets) for up to the full pool lifetime. The meta's
+      // max_used_block_height carries the reference height for the FCMP++
+      // membership-proof arms (regular spend and bond-post); it is 0 for
+      // serve-credit-only txs (no membership ref recorded) and for
+      // kept_by_block entries stored on a failed input check, so the > 0 gate
+      // leaves both alone. A genuine reference at height 0 is therefore not
+      // swept here — bounded residue: the template-time re-check excludes it
+      // from blocks and the receive-time sweep eventually evicts it.
+      // kept_by_block entries are excluded outright: they exist to survive
+      // reorgs, and a chain pop can shrink chain_height enough to bring a
+      // reference back inside the window.
+      const bool ref_stale = !meta.kept_by_block &&
+        meta.max_used_block_height > 0 &&
+        chain_height > FCMP_REFERENCE_BLOCK_MAX_AGE &&
+        meta.max_used_block_height < chain_height - FCMP_REFERENCE_BLOCK_MAX_AGE;
 
       if((tx_age > CRYPTONOTE_MEMPOOL_TX_LIVETIME && !meta.kept_by_block) ||
          (tx_age > CRYPTONOTE_MEMPOOL_TX_FROM_ALT_BLOCK_LIVETIME && meta.kept_by_block) )
@@ -762,6 +900,19 @@ namespace cryptonote
         LOG_PRINT_L1("Tx " << txid << " removed from tx pool due to outdated, age: " << tx_age );
         remove_tx_from_transient_lists(find_tx_in_sorted_container(txid), txid, !meta.matches(relay_category::broadcasted));
         m_timed_out_transactions.insert(txid);
+        remove.push_back(std::make_pair(txid, meta.weight));
+      }
+      else if (ref_stale)
+      {
+        // Deliberately NOT inserted into m_timed_out_transactions: the tx did
+        // not time out, its reference aged out. A resubmit of the same bytes
+        // is properly rejected by check_tx_inputs (the reference cannot get
+        // younger), so the resubmit gate's false-terminal shortcut is neither
+        // needed nor wanted here.
+        LOG_PRINT_L1("Tx " << txid << " removed from tx pool: FCMP++ reference at height "
+          << meta.max_used_block_height << " aged out of the max-age window ("
+          << FCMP_REFERENCE_BLOCK_MAX_AGE << " blocks, chain height " << chain_height << ")");
+        remove_tx_from_transient_lists(find_tx_in_sorted_container(txid), txid, !meta.matches(relay_category::broadcasted));
         remove.push_back(std::make_pair(txid, meta.weight));
       }
       return true;
@@ -1474,17 +1625,55 @@ namespace cryptonote
     // FCMP++ verification cache: if the proof was already verified and the
     // verification hash still matches, seed the m_input_cache so
     // check_tx_inputs returns immediately without calling shekyl_fcmp_verify.
+    //
+    // Template-time ref-age re-check (DAEMON_SUBMIT_VERDICT.md §6 leg 2): the
+    // verification hash binds proof ‖ referenceBlock ‖ key-images but NOT the
+    // reference's height-relative validity, which consensus re-derives per
+    // block (blockchain.cpp regular-spend arm, steps "too recent"/"too old").
+    // Seeding unconditionally lets a tx whose reference aged past
+    // FCMP_REFERENCE_BLOCK_MAX_AGE — or whose reference block was reorged out
+    // — into a template that every validating node rejects. So before
+    // honoring the seed, re-derive the window edges over
+    // txd.max_used_block_height (populated by the regular-spend arm for every
+    // fcmp_verified tx; serve-credit/bond-post vins hash to null and are
+    // never fcmp_verified) and re-check that the block at that height is
+    // still txd.max_used_block_id. O(1) by requirement (round-5 minor d):
+    // height arithmetic plus the same get_block_id_by_height lookup shape
+    // this function already performs above — never a chain walk. On guard
+    // failure the seed is skipped and check_tx_inputs below runs the full
+    // path, which rejects cheaply at step 1 (ref-age / block_exists) before
+    // any proof work, and negative-caches the result for this chain state.
     if (txd.fcmp_verified)
     {
       const auto cache_it = m_input_cache.find(txid);
       if (cache_it == m_input_cache.end())
       {
-        cryptonote::transaction& parsed_tx = lazy_tx();
-        if (is_fcmp_verification_cached(txd, parsed_tx))
+        const uint64_t chain_height = top_block_height + 1;  // = m_db->height(), the consensus check's basis
+        const bool ref_too_recent = chain_height < FCMP_REFERENCE_BLOCK_MIN_AGE ||
+          txd.max_used_block_height > chain_height - FCMP_REFERENCE_BLOCK_MIN_AGE;
+        const bool ref_too_old = chain_height > FCMP_REFERENCE_BLOCK_MAX_AGE &&
+          txd.max_used_block_height < chain_height - FCMP_REFERENCE_BLOCK_MAX_AGE;
+        // Ordering matters: the too-recent edge also excludes heights at or
+        // above the current top (possible after a chain pop), keeping the
+        // canonicality lookup in-range.
+        const bool ref_canonical = !ref_too_recent && !ref_too_old &&
+          m_blockchain.get_block_id_by_height(txd.max_used_block_height) == txd.max_used_block_id;
+        if (ref_canonical)
         {
-          tx_verification_context cached_tvc{};
-          m_input_cache.insert(std::make_pair(txid,
-            std::make_tuple(true, cached_tvc, txd.max_used_block_height, txd.max_used_block_id)));
+          cryptonote::transaction& parsed_tx = lazy_tx();
+          if (is_fcmp_verification_cached(txd, parsed_tx))
+          {
+            tx_verification_context cached_tvc{};
+            m_input_cache.insert(std::make_pair(txid,
+              std::make_tuple(true, cached_tvc, txd.max_used_block_height, txd.max_used_block_id)));
+          }
+        }
+        else
+        {
+          MDEBUG("FCMP++ verification cache seed skipped for " << txid
+            << ": reference at height " << txd.max_used_block_height
+            << (ref_too_recent ? " too recent for" : ref_too_old ? " aged out of" : " no longer canonical in")
+            << " chain at height " << chain_height);
         }
       }
     }

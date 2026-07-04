@@ -26,25 +26,14 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-//! Rust daemon RPC server — Axum replacement for epee's HTTP server.
-//!
-//! All RPC handler logic remains in C++ (`core_rpc_server::on_*`).
-//! This crate provides the HTTP transport layer: route registration,
-//! JSON/binary/JSON-RPC dispatch, body size limits, CORS, and
-//! restricted-mode enforcement.
+// Shared definition of the opaque handle behind core_rpc_ffi.h /
+// daemon_submit_ffi.h. Internal to the rpc library's FFI translation units;
+// Rust and other C consumers see only the forward declaration.
 
-// This crate's `tracing::*` events reach the C++-installed subscriber
-// because the daemon links exactly one Rust image
-// (`rust/shekyl-daemon-image`, which combines this crate with
-// `shekyl-ffi`'s logging surface into one archive with one
-// `tracing-core` dispatcher). See V3_WALLET_DECISION_LOG.md
-// (single-image contract, 2026-06-11 amendment).
+#pragma once
 
-pub mod core;
-pub mod ffi;
-pub mod ffi_exports;
-pub mod handlers;
-pub mod middleware;
-pub mod server;
-pub mod submit;
-pub mod types;
+namespace cryptonote { class core_rpc_server; }
+
+struct core_rpc_handle {
+    cryptonote::core_rpc_server* rpc;
+};
