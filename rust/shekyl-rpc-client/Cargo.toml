@@ -34,6 +34,10 @@ serde_json = { version = "1", default-features = false, features = ["alloc"] }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 
 shekyl-curve-io = { path = "../shekyl-curve-io", default-features = false }
+# The submit wire contract (SubmitVerdict / RejectCause / SubmitTransactionRequest):
+# the single Rust definition per docs/design/DAEMON_SUBMIT_VERDICT.md §2.3, shared
+# with the daemon-side shekyl-daemon-rpc so wallet and daemon cannot skew.
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 
 [features]
 std = [

@@ -147,7 +147,7 @@ pub(crate) fn derive_seed(master: &[u8; 32], role: &[u8]) -> [u8; 32] {
 /// to mutate the canonical chain or queue failures. Cloning shares
 /// state with the original handle by design: a reorg injected on
 /// one clone is observed by all clones, and a transaction
-/// submitted via one clone is observed as `AlreadyKnown` by every
+/// submitted via one clone is observed as `AlreadyInPool` by every
 /// other.
 ///
 /// Locking is `std::sync::Mutex` rather than `tokio::sync::Mutex`
@@ -167,7 +167,7 @@ pub(crate) fn derive_seed(master: &[u8; 32], role: &[u8]) -> [u8; 32] {
 /// - `submit_transaction` dedupes by tx hash exactly as the real
 ///   daemon does (first submission → `Submitted { hash }`; every
 ///   subsequent submission of the same `tx_bytes` →
-///   `AlreadyKnown { hash }`). The hash is derived
+///   `AlreadyInPool { hash }`). The hash is derived
 ///   deterministically via `shekyl_crypto_hash::cn_fast_hash` over
 ///   the submitted bytes — the real daemon hashes the tx prefix
 ///   plus signatures, but for `TestDaemon` the byte-keyed dedup
@@ -232,7 +232,7 @@ struct State {
 
     /// Tx-hash set keyed by the byte-derived hash. `submit_transaction`
     /// inserts on first sight (returning `Submitted`) and observes
-    /// the existing entry on retry (returning `AlreadyKnown`). The
+    /// the existing entry on retry (returning `AlreadyInPool`). The
     /// real daemon's mempool serves the same role; modelling it as
     /// a `HashSet` preserves the §5.2 idempotency guarantee tests
     /// rely on without modeling mempool eviction.
@@ -651,7 +651,7 @@ impl DaemonEngine for TestDaemon {
             if state.submitted_hashes.insert(hash) {
                 Ok(TxSubmitOutcome::Submitted { hash })
             } else {
-                Ok(TxSubmitOutcome::AlreadyKnown { hash })
+                Ok(TxSubmitOutcome::AlreadyInPool { hash })
             }
         }
     }
@@ -920,11 +920,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn submit_transaction_dedupes_retry_returns_already_known() {
+    async fn submit_transaction_dedupes_retry_returns_already_in_pool() {
         // Models the §5.2 retry contract: engine submits, network
         // glitches between submit and ack, engine retries with the
         // same tx_bytes; the daemon (and TestDaemon) reports
-        // AlreadyKnown rather than admitting a duplicate. Same hash
+        // AlreadyInPool rather than admitting a duplicate. Same hash
         // both times — caller correlates the two outcomes.
         let daemon = TestDaemon::with_seed(DEFAULT_TEST_SEED);
         let bytes = b"tx-beta".to_vec();
@@ -934,8 +934,8 @@ mod tests {
 
         let expected = TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&bytes));
         assert!(matches!(first, TxSubmitOutcome::Submitted { hash } if hash == expected));
-        assert!(matches!(second, TxSubmitOutcome::AlreadyKnown { hash } if hash == expected));
-        assert!(matches!(third, TxSubmitOutcome::AlreadyKnown { hash } if hash == expected));
+        assert!(matches!(second, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected));
+        assert!(matches!(third, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected));
         assert_eq!(daemon.submitted_count(), 1, "dedup keeps the set size at 1");
     }
 
@@ -990,7 +990,7 @@ mod tests {
         let expected = TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&bytes));
         assert!(matches!(first, TxSubmitOutcome::Submitted { hash } if hash == expected));
         assert!(
-            matches!(second_via_clone, TxSubmitOutcome::AlreadyKnown { hash } if hash == expected)
+            matches!(second_via_clone, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected)
         );
     }
 

@@ -58,8 +58,8 @@ use super::diagnostics::{
     PendingTxDiagnostic,
 };
 use super::error::{
-    AmbiguousErrorKind, FeeEstimatorError, IoError, OutputSelectorError, PendingTxError, SendError,
-    SignerError, SubmitError, TerminalErrorKind,
+    AmbiguousErrorKind, FeeEstimatorError, IoError, OutputSelectorError, PendingTxError,
+    RetryableRejectCause, SendError, SignerError, SubmitError, TerminalErrorKind,
 };
 use super::fee_estimator::{FeeEstimationContext, FeeEstimator};
 use super::fee_snapshot::FeeSnapshotSource;
@@ -188,6 +188,11 @@ impl ContentFingerprint {
 #[derive(Debug, Clone)]
 pub(crate) struct ConsumerHeldEntry {
     /// Build-time [`Instant`] for the R8 TTL safety-net.
+    //
+    // `dead_code` allow: the C7 TTL sweep is the reader. The field lost its
+    // interim reader when the `consumer_held → in_flight` flip started moving
+    // the whole entry (verdict-cutover reshape) instead of projecting fields.
+    #[allow(dead_code)]
     pub created_at: Instant,
     /// [`SnapshotId`] pinned at build for submit-time comparison.
     pub snapshot_id: SnapshotId,
@@ -826,6 +831,44 @@ where
         SubmitError::DaemonRejectedTerminal { kind }
     }
 
+    /// Restore a reservation whose daemon verdict was a §2.5 retryable
+    /// rejection (`StaleRoot` / `ReferenceTooRecent` / `ReferenceNotFound`)
+    /// to `consumer_held`.
+    ///
+    /// The verdict is definite (not in pool, not in chain — under
+    /// single-egress, provably unrelayed), but the input selection remains
+    /// sound, so the `output_locks` are **retained**: releasing them would
+    /// let a competing build select the same inputs and broadcast a second
+    /// same-key-image artifact (`DAEMON_SUBMIT_VERDICT.md` §7.1). The
+    /// entry returns with its full re-anchor substrate, so the consumer's
+    /// next `submit(rid, seen_gen)` reproves against a fresh reference
+    /// where the pre-flight staleness check calls for it (the `StaleRoot`
+    /// remedy) or simply re-offers the same bytes (`ReferenceTooRecent` /
+    /// `ReferenceNotFound` after their per-cause waits).
+    fn finalize_submit_retryable(
+        &self,
+        state: &mut PendingTxState,
+        id: ReservationId,
+        cause: RetryableRejectCause,
+    ) -> SubmitError {
+        if let Some(flight) = state.in_flight.remove(&id) {
+            state.consumer_held.insert(id, flight.entry);
+        }
+
+        emit_pending_tx_diagnostic(
+            self.sink.as_ref(),
+            PendingTxDiagnostic::SubmitRetryablyRejected {
+                reservation_id: id,
+                cause,
+            },
+        );
+
+        SubmitError::DaemonRejectedRetryable {
+            cause,
+            reservation_id: id,
+        }
+    }
+
     fn finalize_submit_ambiguous(
         &self,
         state: &PendingTxState,
@@ -835,7 +878,7 @@ where
         let tx_hash = state
             .in_flight
             .get(&id)
-            .map(|flight| canonical_tx_id(&flight.tx_bytes))
+            .map(|flight| canonical_tx_id(&flight.entry.tx_bytes))
             .unwrap_or_else(|| phase1_tx_hash(id));
 
         emit_pending_tx_diagnostic(
@@ -1835,25 +1878,24 @@ where
                 });
             }
 
-            // Consent satisfied. Move the entry out of `consumer_held` (no deep
-            // clone of `tx_bytes`) and flip it to `in_flight` atomically under the
-            // lock, then send lock-free — "committed as of" the flip (F-H). The
-            // lock is held continuously since the peek above (no await), so the
-            // entry is still present. Only the one `tx_bytes` copy `in_flight`
-            // retains (for ambiguous-resolution hash/retry) is cloned; the
-            // original moves on to the send.
+            // Consent satisfied. Move the entry out of `consumer_held` and flip it
+            // to `in_flight` atomically under the lock, then send lock-free —
+            // "committed as of" the flip (F-H). The lock is held continuously
+            // since the peek above (no await), so the entry is still present.
+            // `in_flight` preserves the *whole* entry (re-anchor substrate
+            // included) so a §2.5 retryable rejection can restore it to
+            // `consumer_held` losslessly; one `tx_bytes` clone moves on to the
+            // send.
             let held = state
                 .consumer_held
                 .remove(&id)
                 .expect("consumer_held membership established above, lock held throughout");
-            let tx_bytes = held.tx_bytes;
+            let tx_bytes = held.tx_bytes.clone();
             let submitted_at = Instant::now();
             state.in_flight.insert(
                 id,
                 InFlightSubmit {
-                    tx_bytes: tx_bytes.clone(),
-                    snapshot_id: held.snapshot_id,
-                    created_at: held.created_at,
+                    entry: held,
                     submitted_at,
                 },
             );
@@ -1868,6 +1910,9 @@ where
                     Ok(tx_hash) => Ok(self.finalize_submit_accept(&mut state, id, tx_hash)),
                     Err(SubmitError::DaemonRejectedTerminal { kind }) => {
                         Err(self.finalize_submit_terminal(&mut state, id, kind))
+                    }
+                    Err(SubmitError::DaemonRejectedRetryable { cause, .. }) => {
+                        Err(self.finalize_submit_retryable(&mut state, id, cause))
                     }
                     Err(SubmitError::DaemonAmbiguous {
                         kind,
@@ -1901,6 +1946,9 @@ where
                 return Err(match submit_err {
                     SubmitError::DaemonRejectedTerminal { kind } => {
                         self.finalize_submit_terminal(&mut state, id, kind)
+                    }
+                    SubmitError::DaemonRejectedRetryable { cause, .. } => {
+                        self.finalize_submit_retryable(&mut state, id, cause)
                     }
                     SubmitError::DaemonAmbiguous { kind, .. } => {
                         self.finalize_submit_ambiguous(&state, id, kind)
@@ -3806,9 +3854,7 @@ mod tests {
             state.in_flight.insert(
                 built.id,
                 InFlightSubmit {
-                    tx_bytes: held.tx_bytes,
-                    snapshot_id: held.snapshot_id,
-                    created_at: held.created_at,
+                    entry: held,
                     submitted_at: Instant::now(),
                 },
             );

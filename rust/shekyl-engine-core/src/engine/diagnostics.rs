@@ -74,7 +74,7 @@ use std::time::Duration;
 
 use tracing::{event, Level};
 
-use super::error::{AmbiguousErrorKind, TerminalErrorKind};
+use super::error::{AmbiguousErrorKind, RetryableRejectCause, TerminalErrorKind};
 use super::pending::{FeePriority, ReservationId, SnapshotId, TxHash};
 
 /// Classification of a producer-side malformed-block detection.
@@ -685,6 +685,21 @@ pub enum PendingTxDiagnostic {
         /// Which ambiguous sub-class the daemon round-trip
         /// surfaced.
         kind: AmbiguousErrorKind,
+    },
+
+    /// Daemon round-trip completed with a definite §2.5 retryable
+    /// rejection (`DAEMON_SUBMIT_VERDICT.md`): the reservation was
+    /// returned to `consumer_held` with its re-anchor substrate and
+    /// `output_locks` intact. The consumer resubmits via
+    /// `submit(rid, seen_gen)` after the per-cause wait (`StaleRoot`:
+    /// reprove against a fresh root; `ReferenceTooRecent`: timed
+    /// backoff; `ReferenceNotFound`: sync-gated).
+    SubmitRetryablyRejected {
+        /// The reservation returned to `consumer_held`.
+        reservation_id: ReservationId,
+
+        /// Which retryable cause the daemon named.
+        cause: RetryableRejectCause,
     },
 
     /// Lazy-R5 staleness check at `submit` entry: the

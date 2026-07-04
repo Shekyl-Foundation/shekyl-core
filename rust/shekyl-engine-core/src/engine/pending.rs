@@ -508,22 +508,28 @@ impl Default for ReservationTTLConfig {
 /// `dead_code` allow: no V3.0-time reader until C5β wires the
 /// `in_flight` collection. Pattern matches the
 /// `ReservationTTLConfig` allow above.
+///
+/// # Why the full [`ConsumerHeldEntry`] rides along
+///
+/// The `consumer_held → in_flight` move preserves the **entire** held
+/// entry (not a `tx_bytes`/`snapshot_id`/`created_at` projection):
+/// `DAEMON_SUBMIT_VERDICT.md` §2.5's retryable rejections
+/// (`StaleRoot` / `ReferenceTooRecent` / `ReferenceNotFound`) return
+/// the reservation to `consumer_held` with its re-anchor substrate
+/// (`request` / `reference` / `content_gen` / `fingerprint`) intact,
+/// so a subsequent `submit(rid, seen_gen)` can reprove against a
+/// fresh root without a lossy round-trip. A projection here would
+/// make that restoration reconstruct fields it no longer has.
+/// `tx_bytes` / `snapshot_id` / `created_at` are reached through
+/// [`Self::entry`]; V3.0's uniform "age from creation" TTL policy
+/// reads `entry.created_at` for both collections.
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct InFlightSubmit {
-    /// Serialized signed transaction bytes (for hash / retry).
-    pub tx_bytes: Vec<u8>,
-    /// [`SnapshotId`] the reservation was built against;
-    /// preserved verbatim from the source `Reservation` at the
-    /// `consumer_held → in_flight` transition.
-    pub snapshot_id: SnapshotId,
-    /// When the reservation was originally built (the
-    /// `consumer_held` insert timestamp). Preserved across the
-    /// `consumer_held → in_flight` move so the `consumer_held`
-    /// TTL semantics are not lost. V3.0's uniform "age from
-    /// creation" aging policy reads this field for both
-    /// collections.
-    pub created_at: Instant,
+    /// The full held entry preserved across the
+    /// `consumer_held → in_flight` transition (bytes, snapshot pin,
+    /// build timestamps, and the CT-5d re-anchor substrate).
+    pub entry: super::local_pending_tx::ConsumerHeldEntry,
     /// When the reservation entered `in_flight` (the submit-
     /// dispatch timestamp). V3.x's `ReservationTTLActor`
     /// age-from-submission policy reads this field for

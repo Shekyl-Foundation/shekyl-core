@@ -8,10 +8,10 @@
 use std::sync::Arc;
 
 use shekyl_p_transport::PTorClient;
-use shekyl_rpc_client::{Rpc, TxRelayResponse};
+use shekyl_rpc_client::{RejectCause, Rpc, SubmitVerdict};
 use shekyl_wire::Transaction;
 
-use super::error::{AmbiguousErrorKind, SubmitError, TerminalErrorKind};
+use super::error::{AmbiguousErrorKind, RetryableRejectCause, SubmitError, TerminalErrorKind};
 use super::pending::{ReservationId, TxHash};
 use super::prpc::PRpc;
 use super::traits::{DaemonEngine, TxSubmitOutcome};
@@ -33,59 +33,35 @@ pub(crate) fn canonical_tx_id(tx_bytes: &[u8]) -> TxHash {
     canonical_tx_id_opt(tx_bytes).expect("wallet-built tx_bytes parse as canonical shekyl-wire")
 }
 
-/// Map a daemon `send_raw_transaction` reply onto a [`TxSubmitOutcome`]
-/// (§3.6, honest-subset mapping).
+/// Map a daemon [`SubmitVerdict`] onto a [`TxSubmitOutcome`]
+/// (`DAEMON_SUBMIT_VERDICT.md` §2.1 → wallet projection).
 ///
-/// `hash` is the **locally**-computed transaction id (§3.6 step 2); the
-/// daemon reply is consulted only for the accept/reject verdict, never
-/// for identity.
+/// `hash` is the **locally**-computed transaction id; the daemon reply
+/// is consulted only for the verdict, never for identity — the typed
+/// route carries no txid field at all (wire minimalism, §2.2), so an
+/// untrusted daemon cannot influence the id the wallet records.
 ///
-/// The daemon (`on_send_raw_transaction`, `core_rpc_server.cpp`) sets a
-/// dedicated boolean for ~10 rejection classes (`double_spend`,
-/// `fee_too_low`, `invalid_input`, `invalid_output`, `too_big`,
-/// `overspend`, `too_few_outputs`, `sanity_check_failed`,
-/// `tx_extra_too_big`, `nonzero_unlock_time`). The mapping is narrow by
-/// **wallet choice**, not daemon limitation: 2a-1 needs only two distinct
-/// terminal outcomes (`double_spend` → [`TerminalErrorKind::DoubleSpend`],
-/// `fee_too_low` → [`TerminalErrorKind::FeeTooLow`]); every other
-/// rejection — the other flagged classes plus the **unflagged** generics
-/// (an **already-known** duplicate and a **stale FCMP++ root**, which set
-/// no dedicated flag and yield an empty `reason`) — collapses to
-/// [`TerminalErrorKind::Malformed`].
-///
-/// The indistinguishability that blocks finer wallet handling is
-/// specifically among the **unflagged** generics: an already-known
-/// duplicate and a stale FCMP++ root are not separable client-side
-/// without a daemon-side signal (`docs/FOLLOWUPS.md` —
-/// `fcmp_root_stale`). Consequently this function never produces
-/// [`TxSubmitOutcome::AlreadyKnown`] (the orchestrator derives that
-/// wallet-side per §5.2) nor [`TxSubmitOutcome::ProofStale`] (detection
-/// deferred to Phase 6). Both are documented on the enum.
+/// A 1:1 structural mapping by design: the daemon's Rust admission
+/// engine computes the verdict atomically at commit-check time, so
+/// there is no client-side flag triage left to do (the legacy
+/// `send_raw_transaction` boolean-flag collapse this function used to
+/// perform is deleted with that endpoint). The per-cause *dispositions*
+/// (§2.5) are applied downstream via [`outcome_to_result`] and the
+/// orchestrator's finalizers, keeping mapping and policy separable.
 ///
 /// Transport-agnostic: shared by the principal `DaemonClient` and the
-/// per-`P` [`PTransactionSubmitter`] (SP-T4a) — a daemon reply is
+/// per-`P` [`PTransactionSubmitter`] (SP-T4a) — a daemon verdict is
 /// interpreted the same regardless of which circuit carried it.
-pub(crate) fn submit_outcome_from_response(
-    resp: &TxRelayResponse,
+pub(crate) fn submit_outcome_from_verdict(
+    verdict: &SubmitVerdict,
     hash: TxHash,
 ) -> TxSubmitOutcome {
-    if resp.status == "OK" {
-        // `not_relayed` (daemon relayed locally only) is still an
-        // accept into the pool; the wallet's broadcast landed.
-        return TxSubmitOutcome::Submitted { hash };
+    match verdict {
+        SubmitVerdict::Accepted => TxSubmitOutcome::Submitted { hash },
+        SubmitVerdict::AlreadyInPool => TxSubmitOutcome::AlreadyInPool { hash },
+        SubmitVerdict::AlreadyInChain => TxSubmitOutcome::AlreadyInChain { hash },
+        SubmitVerdict::Rejected { cause } => TxSubmitOutcome::Rejected { cause: *cause },
     }
-
-    let kind = if resp.double_spend {
-        TerminalErrorKind::DoubleSpend
-    } else if resp.fee_too_low {
-        TerminalErrorKind::FeeTooLow
-    } else {
-        // Generic verification failure: maps to `Malformed` until a
-        // daemon-side stale-root signal lets `ProofStale` split out
-        // (Phase 6, SHEKYLD_PREREQUISITE).
-        TerminalErrorKind::Malformed
-    };
-    TxSubmitOutcome::DaemonRejectedTerminal { kind }
 }
 
 /// Collapse a resolved [`TxSubmitOutcome`] to the submitter's public
@@ -94,16 +70,50 @@ pub(crate) fn submit_outcome_from_response(
 /// paths. A daemon *verdict* only — a transport failure never reaches
 /// here; it is mapped to [`SubmitError::DaemonAmbiguous`] at the call
 /// site (absence-of-verdict is not an outcome, §5.2).
+///
+/// The `Ok` arm covers all three identity-bearing verdicts:
+/// `AlreadyInPool` is the same disposition as a fresh accept (§2.5 —
+/// the bytes are held; it also resolves prior transport ambiguity), and
+/// `AlreadyInChain` is confirmation observed by verdict (refresh
+/// remains the settlement authority). Rejections split by remedy class:
+///
+/// - **Terminal** (locks released, reservation gone):
+///   `Malformed` / `FeeTooLow` / `DoubleSpendConflict` / `Unrecognized`
+///   → [`SubmitError::DaemonRejectedTerminal`].
+/// - **Retryable** (reservation restored to `consumer_held`, locks
+///   retained): `StaleRoot` / `ReferenceTooRecent` / `ReferenceNotFound`
+///   → [`SubmitError::DaemonRejectedRetryable`]. The `reservation_id`
+///   here is a placeholder the orchestrator re-binds
+///   (`LocalPendingTx::submit_async` names the reservation under
+///   submit); the submitter surface is reservation-unaware.
 pub(crate) fn outcome_to_result(outcome: TxSubmitOutcome) -> Result<TxHash, SubmitError> {
     match outcome {
-        TxSubmitOutcome::Submitted { hash } | TxSubmitOutcome::AlreadyKnown { hash } => Ok(hash),
-        TxSubmitOutcome::ProofStale { .. } => Err(SubmitError::DaemonRejectedTerminal {
-            // Phase 6 splits stale-root detection; until then treat as malformed.
-            kind: TerminalErrorKind::Malformed,
-        }),
-        TxSubmitOutcome::DaemonRejectedTerminal { kind } => {
-            Err(SubmitError::DaemonRejectedTerminal { kind })
-        }
+        TxSubmitOutcome::Submitted { hash }
+        | TxSubmitOutcome::AlreadyInPool { hash }
+        | TxSubmitOutcome::AlreadyInChain { hash } => Ok(hash),
+        TxSubmitOutcome::Rejected { cause } => Err(submit_error_from_cause(cause)),
+    }
+}
+
+/// Split a [`RejectCause`] into the terminal / retryable error classes
+/// per the §2.5 disposition table. Factored out of [`outcome_to_result`]
+/// so the cause→class mapping is a single, testable site.
+fn submit_error_from_cause(cause: RejectCause) -> SubmitError {
+    let terminal = |kind| SubmitError::DaemonRejectedTerminal { kind };
+    let retryable = |cause| SubmitError::DaemonRejectedRetryable {
+        cause,
+        // Placeholder rid: the submitter owns no reservation; the
+        // orchestrator re-binds (same convention as the ambiguous arm).
+        reservation_id: ReservationId::new(0),
+    };
+    match cause {
+        RejectCause::Malformed => terminal(TerminalErrorKind::Malformed),
+        RejectCause::FeeTooLow => terminal(TerminalErrorKind::FeeTooLow),
+        RejectCause::DoubleSpendConflict => terminal(TerminalErrorKind::DoubleSpend),
+        RejectCause::Unrecognized => terminal(TerminalErrorKind::Unrecognized),
+        RejectCause::StaleRoot => retryable(RetryableRejectCause::StaleRoot),
+        RejectCause::ReferenceTooRecent => retryable(RetryableRejectCause::ReferenceTooRecent),
+        RejectCause::ReferenceNotFound => retryable(RetryableRejectCause::ReferenceNotFound),
     }
 }
 
@@ -146,15 +156,16 @@ where
                 // `LocalPendingTx::submit_async` re-binds the active reservation id.
                 reservation_id: ReservationId::new(0),
             })?;
-        // `TxRelayResponse` carries NO txid field — neither path reads an id back from
-        // the daemon (§3.6: identity is always locally computed, anti-untrusted-daemon).
+        // The typed verdict carries NO txid field — neither path reads an id back from
+        // the daemon (identity is always locally computed, anti-untrusted-daemon).
         // So this compares two LOCAL hash pipelines and catches a `DaemonEngine` *impl*
         // (a test double / fault injector) that returns a divergent outcome hash — NOT
         // a lying daemon. `DaemonEngine`-path-specific: the per-`P` submitter feeds its
         // own locally-computed hash straight into the shared mapper, nothing to check.
         #[cfg(debug_assertions)]
-        if let TxSubmitOutcome::Submitted { hash } | TxSubmitOutcome::AlreadyKnown { hash } =
-            &outcome
+        if let TxSubmitOutcome::Submitted { hash }
+        | TxSubmitOutcome::AlreadyInPool { hash }
+        | TxSubmitOutcome::AlreadyInChain { hash } = &outcome
         {
             debug_assert_eq!(
                 Some(*hash),
@@ -221,19 +232,16 @@ impl TransactionSubmitter for PTransactionSubmitter {
         // daemon-verdict is *ambiguous*, not a retryable transient — the write-side
         // inversion of the fetch default.
         //
-        // This submitter's job ENDS here: map honestly and stop. The recovery
-        // contract — what a post-ambiguity retry means — is the **consumer's §5.2
-        // orchestrator** (2c-2a/2c-2b) to write, from the daemon's REAL reply
-        // surface, NOT an `AlreadyKnown` dedupe: no production code derives
-        // `AlreadyKnown` (only the test double constructs it). A same-bytes retry of
-        // a *healthy* duplicate returns `OK + not_relayed` → `Submitted`; the
-        // dangerous windows are a tx timed out of the pool (→ `Malformed`), a fee
-        // floor risen since send (→ `FeeTooLow` **while the original is still
-        // mineable** — a false-terminal that must NOT release output locks), and a
-        // stale FCMP++ root. And dropping this future detaches the `spawn_blocking`
-        // POST, which may still broadcast — a cancelled submit is ambiguous too.
-        // (See `ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §2 axis 4 + the 2c
-        // submit-outcome-partition obligation in `FOLLOWUPS.md`.)
+        // This submitter's job ENDS here: map honestly and stop. Under the typed
+        // verdict the post-ambiguity retry is a *status query* (§2.5): a same-bytes
+        // resubmit of a pool-resident tx returns `AlreadyInPool` (no relay pulse,
+        // F31), a mined one `AlreadyInChain`, and the dangerous windows are now
+        // named verdicts rather than flag-triage guesses — a tx evicted under pool
+        // pressure returns `Rejected{FeeTooLow}`, an aged-out reference
+        // `Rejected{StaleRoot}`. And dropping this future detaches the
+        // `spawn_blocking` POST, which may still broadcast — a cancelled submit is
+        // ambiguous too. (See `ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §2 axis 4 +
+        // the 2c submit-outcome-partition obligation in `FOLLOWUPS.md`.)
         let resp = self.rpc.publish_transaction(&tx_bytes).await.map_err(|_| {
             SubmitError::DaemonAmbiguous {
                 kind: AmbiguousErrorKind::DaemonUnavailable,
@@ -248,137 +256,111 @@ impl TransactionSubmitter for PTransactionSubmitter {
         })?;
         // A daemon *verdict* is mapped by the shared helpers — identical to the
         // principal path, so the two cannot drift.
-        outcome_to_result(submit_outcome_from_response(&resp, hash))
+        outcome_to_result(submit_outcome_from_verdict(&resp, hash))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    //! Submit-path tests: the transport-agnostic `submit_outcome_from_response`
-    //! mapping regression (§3.6, exercised directly against synthetic
-    //! `TxRelayResponse` values — no live daemon), plus the per-`P`
-    //! `PTransactionSubmitter`'s ambiguous-failure + username-non-leak proof
-    //! (SP-T4a).
+    //! Submit-path tests: the transport-agnostic verdict → outcome →
+    //! error-class mapping regressions (`DAEMON_SUBMIT_VERDICT.md` §2.1 /
+    //! §2.5, exercised directly against `SubmitVerdict` values — no live
+    //! daemon), plus the per-`P` `PTransactionSubmitter`'s
+    //! ambiguous-failure + username-non-leak proof (SP-T4a).
     use super::*;
-    use serde_json::json;
 
-    /// A `status == "OK"` reply is a fresh accept into the pool.
+    /// Every identity-bearing verdict maps 1:1 and carries the locally
+    /// computed hash — never a daemon-supplied id.
     #[test]
-    fn submit_ok_maps_to_submitted() {
+    fn verdicts_map_structurally() {
         let hash = TxHash::from_bytes([7u8; 32]);
-        let resp = TxRelayResponse {
-            status: "OK".to_string(),
-            ..Default::default()
-        };
         assert_eq!(
-            submit_outcome_from_response(&resp, hash),
+            submit_outcome_from_verdict(&SubmitVerdict::Accepted, hash),
             TxSubmitOutcome::Submitted { hash }
         );
-    }
-
-    /// An `OK` reply carrying daemon fields the wallet does **not** model
-    /// (`not_relayed`, `reason`, …) parses without error and still maps to
-    /// `Submitted` — `#[serde(default)]` deserialize-and-ignores the
-    /// unmodeled surface (the F1 trim contract).
-    #[test]
-    fn submit_ok_tolerates_unmodeled_daemon_fields() {
-        let hash = TxHash::from_bytes([1u8; 32]);
-        let resp: TxRelayResponse = serde_json::from_value(json!({
-            "status": "OK",
-            "not_relayed": true,
-            "reason": "",
-            "sanity_check_failed": false,
-        }))
-        .expect("unmodeled daemon fields tolerated");
         assert_eq!(
-            submit_outcome_from_response(&resp, hash),
-            TxSubmitOutcome::Submitted { hash }
+            submit_outcome_from_verdict(&SubmitVerdict::AlreadyInPool, hash),
+            TxSubmitOutcome::AlreadyInPool { hash }
         );
-    }
-
-    #[test]
-    fn submit_double_spend_is_terminal_double_spend() {
-        let resp = TxRelayResponse {
-            status: "Failed".to_string(),
-            double_spend: true,
-            ..Default::default()
-        };
         assert_eq!(
-            submit_outcome_from_response(&resp, TxHash::from_bytes([0u8; 32])),
-            TxSubmitOutcome::DaemonRejectedTerminal {
-                kind: TerminalErrorKind::DoubleSpend
+            submit_outcome_from_verdict(&SubmitVerdict::AlreadyInChain, hash),
+            TxSubmitOutcome::AlreadyInChain { hash }
+        );
+        assert_eq!(
+            submit_outcome_from_verdict(
+                &SubmitVerdict::Rejected {
+                    cause: RejectCause::Malformed
+                },
+                hash
+            ),
+            TxSubmitOutcome::Rejected {
+                cause: RejectCause::Malformed
             }
         );
     }
 
+    /// All three identity-bearing outcomes resolve `Ok(hash)`: a fresh
+    /// accept, a pool-resident duplicate (§2.5: same disposition), and a
+    /// mined duplicate (confirmation observed by verdict).
     #[test]
-    fn submit_fee_too_low_is_terminal_fee_too_low() {
-        let resp = TxRelayResponse {
-            status: "Failed".to_string(),
-            fee_too_low: true,
-            ..Default::default()
-        };
-        assert_eq!(
-            submit_outcome_from_response(&resp, TxHash::from_bytes([0u8; 32])),
-            TxSubmitOutcome::DaemonRejectedTerminal {
-                kind: TerminalErrorKind::FeeTooLow
-            }
-        );
+    fn identity_outcomes_resolve_ok() {
+        let hash = TxHash::from_bytes([9u8; 32]);
+        for outcome in [
+            TxSubmitOutcome::Submitted { hash },
+            TxSubmitOutcome::AlreadyInPool { hash },
+            TxSubmitOutcome::AlreadyInChain { hash },
+        ] {
+            assert_eq!(outcome_to_result(outcome).expect("identity outcome"), hash);
+        }
     }
 
-    /// `status != "OK"` with no recognized flag and an empty `reason`
-    /// is the generic-verification-failure bucket — the same bucket an
-    /// already-known duplicate and a stale FCMP++ root land in. It maps
-    /// to `Malformed` until Phase 6 splits `ProofStale` out.
+    /// Terminal causes (release + rebuild recourse) map to
+    /// `DaemonRejectedTerminal` with the matching kind.
     #[test]
-    fn submit_generic_failure_is_terminal_malformed() {
-        let resp = TxRelayResponse {
-            status: "Failed".to_string(),
-            ..Default::default()
-        };
-        assert_eq!(
-            submit_outcome_from_response(&resp, TxHash::from_bytes([0u8; 32])),
-            TxSubmitOutcome::DaemonRejectedTerminal {
-                kind: TerminalErrorKind::Malformed
-            }
-        );
+    fn terminal_causes_map_to_terminal_kinds() {
+        for (cause, expected) in [
+            (RejectCause::Malformed, TerminalErrorKind::Malformed),
+            (RejectCause::FeeTooLow, TerminalErrorKind::FeeTooLow),
+            (
+                RejectCause::DoubleSpendConflict,
+                TerminalErrorKind::DoubleSpend,
+            ),
+            (RejectCause::Unrecognized, TerminalErrorKind::Unrecognized),
+        ] {
+            let err =
+                outcome_to_result(TxSubmitOutcome::Rejected { cause }).expect_err("terminal cause");
+            assert!(
+                matches!(err, SubmitError::DaemonRejectedTerminal { kind } if kind == expected),
+                "cause {cause:?} must map to terminal kind {expected:?}, got {err:?}"
+            );
+        }
     }
 
-    /// A daemon rejection flagged with a class the wallet does **not**
-    /// model (e.g. `invalid_input`) deserialize-and-ignores that flag and
-    /// collapses to `Malformed` — the deliberate honest-subset mapping,
-    /// not a parse failure.
+    /// Retryable causes (reservation preserved, resubmit after the
+    /// per-cause wait) map to `DaemonRejectedRetryable`.
     #[test]
-    fn submit_unmodeled_rejection_flag_is_terminal_malformed() {
-        let resp: TxRelayResponse = serde_json::from_value(json!({
-            "status": "Failed",
-            "invalid_input": true,
-            "reason": "invalid input",
-        }))
-        .expect("unmodeled rejection flag tolerated");
-        assert_eq!(
-            submit_outcome_from_response(&resp, TxHash::from_bytes([0u8; 32])),
-            TxSubmitOutcome::DaemonRejectedTerminal {
-                kind: TerminalErrorKind::Malformed
-            }
-        );
-    }
-
-    /// When both `double_spend` and `fee_too_low` are set, double-spend
-    /// wins: it is the stronger (output-conflict) terminal signal.
-    #[test]
-    fn submit_double_spend_precedes_fee_too_low() {
-        let resp = TxRelayResponse {
-            status: "Failed".to_string(),
-            double_spend: true,
-            fee_too_low: true,
-        };
-        assert_eq!(
-            submit_outcome_from_response(&resp, TxHash::from_bytes([0u8; 32])),
-            TxSubmitOutcome::DaemonRejectedTerminal {
-                kind: TerminalErrorKind::DoubleSpend
-            }
-        );
+    fn retryable_causes_map_to_retryable_class() {
+        for (cause, expected) in [
+            (RejectCause::StaleRoot, RetryableRejectCause::StaleRoot),
+            (
+                RejectCause::ReferenceTooRecent,
+                RetryableRejectCause::ReferenceTooRecent,
+            ),
+            (
+                RejectCause::ReferenceNotFound,
+                RetryableRejectCause::ReferenceNotFound,
+            ),
+        ] {
+            let err = outcome_to_result(TxSubmitOutcome::Rejected { cause })
+                .expect_err("retryable cause");
+            assert!(
+                matches!(
+                    err,
+                    SubmitError::DaemonRejectedRetryable { cause: got, .. } if got == expected
+                ),
+                "cause {cause:?} must map to retryable {expected:?}, got {err:?}"
+            );
+        }
     }
 
     /// SP-T4a axis 4 + invariant (a): a broadcast whose **transport** fails
