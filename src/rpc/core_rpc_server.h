@@ -97,6 +97,10 @@ namespace cryptonote
     // daemon to build the Rust/Axum bind address when the epee acceptor is not
     // bound. Empty until init() runs.
     const std::string& get_rpc_bind_ip() const { return m_rpc_bind_ip; }
+    // Core access for the Rust submit shims (daemon_submit_ffi.cpp), which
+    // resolve pool/blockchain/protocol from the same handle the Axum
+    // transport already holds. See DAEMON_SUBMIT_VERDICT.md §4.
+    core& get_core() noexcept { return m_core; }
 
     CHAIN_HTTP_TO_MAP2(connection_context); //forward http requests to uri map
 

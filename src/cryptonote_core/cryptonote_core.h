@@ -661,6 +661,19 @@ namespace cryptonote
      const Blockchain& get_blockchain_storage()const{return m_blockchain_storage;}
 
      /**
+      * @brief gets the transaction pool instance
+      *
+      * Consumed by the Rust submit shims (daemon_submit_ffi.cpp), which need
+      * direct pool fact queries (identity, key-image conflicts) and the
+      * attested insert tail under one pool→blockchain lock scope
+      * (DAEMON_SUBMIT_VERDICT.md §4.1/§4.2) — surfaces core's per-call
+      * forwarders don't expose.
+      *
+      * @return a reference to the transaction pool instance
+      */
+     tx_memory_pool& get_pool(){return m_mempool;}
+
+     /**
       * @copydoc tx_memory_pool::print_pool
       *
       * @note see tx_memory_pool::print_pool

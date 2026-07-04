@@ -357,8 +357,8 @@ Shekyl — they operate on `key_offsets`, which FCMP++ consensus requires empty,
 so `n_indices == 0` and the function early-returns true.)
 
 **Phase B — fact snapshot (shim 1, one short lock).** POD snapshot under a
-single pool→blockchain lock scope: identity-in-pool (at `legacy` relay
-category), identity-in-chain, per-input key-image conflict owners
+single pool→blockchain lock scope: identity-in-pool (at the `all` relay
+category — see below), identity-in-chain, per-input key-image conflict owners
 (own-txid vs other), reference-block **existence by hash** + its height,
 curve-tree root at that height, current tree depth, fee parameters
 (fee-per-byte, quantization mask), weight limit, chain height. Early return:
@@ -366,6 +366,25 @@ curve-tree root at that height, current tree depth, fee parameters
 re-check input, never a verdict — emitting `DoubleSpendConflict` from a
 snapshot would resurrect defect 0.4's self-duplicate race in the new
 architecture.
+
+**Identity category (implementation-round pin).** Earlier drafts pinned
+identity-in-pool at the `legacy` relay category, matching `add_new_tx:1075`.
+Implementation surfaced the contradiction: `matches_category(local, legacy)`
+is **false** (`blockchain_db.cpp:51-80`), so a tx sitting in its Dandelion++
+embargo window (`relay_method::local` — exactly the state the engine's own
+commit produces) would be invisible to a `legacy`-category identity fact.
+The §5.2 ladder's resubmit probe (F31) would then fall through Phase B,
+re-verify, and fault at the insert tail (`add_txpool_tx` throws on
+duplicate) instead of returning `AlreadyInPool`. The legacy path never hit
+this because its `add_tx` existing-tx arm caught local-state duplicates
+later, lossily (`OK + not_relayed`). The engine's identity fact therefore
+uses `relay_category::all` — presence in the pool database is the honest
+fact; relay-state visibility tiers exist for *foreign* queries
+(pool-inspection RPC), not for the daemon's own admission engine. Privacy
+note: distinguishing `AlreadyInPool` from `Accepted` on a byte-identical
+resubmit reveals pool presence only to a caller who already holds the full
+tx bytes, which is not an origin-tracing gain (V3.0 is own-daemon; the §11
+multi-daemon reopen re-evaluates).
 
 **Phase C — verification (Rust, no locks held anywhere).** Ref-age window
 arithmetic (min 5 / max 100, from config); fee floor against snapshot params;
@@ -947,7 +966,7 @@ against the C++ behavior); the matrix is the gate, per round-5 minor (b).
 | I1 | Blob size cap (`get_max_tx_size`) | `:799-805` | `too_big` | **A** — constant, `Malformed` |
 | I2 | Parse + hash (`parse_and_validate_tx_from_blob`) | `:809-814` | generic `Failed` | **A** — `shekyl-wire` parse + txid; `Malformed` |
 | I3 | Weight computation (`get_transaction_weight`) | `:816` | — | **C** ⚠ — Rust weight formula, KAT-pinned against C++ over representative shapes (BP+ clawback arithmetic) |
-| I4 | Identity: pool at `legacy` category | `:1075-1079` | `OK + not_relayed` (lossy) | **B** — `AlreadyInPool` |
+| I4 | Identity: pool at `legacy` category | `:1075-1079` | `OK + not_relayed` (lossy) | **B** — `AlreadyInPool`; engine queries at `all` so embargoed (`local`) self-txs are visible — the legacy path caught those later via `add_tx`'s existing-tx arm (§3.1 identity-category pin) |
 | I5 | Identity: chain (`have_tx`) | `:1081-1085` | `OK + not_relayed` (lossy) | **B** — `AlreadyInChain` |
 
 ### 8.3 Non-input consensus battery (`ver_non_input_consensus`, `tx_verification_utils.cpp:46-178` — invoked from `add_tx:169`)

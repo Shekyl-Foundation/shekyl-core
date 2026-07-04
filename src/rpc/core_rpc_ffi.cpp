@@ -27,6 +27,7 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "core_rpc_ffi.h"
+#include "core_rpc_ffi_internal.h"
 #include "core_rpc_server.h"
 #include "core_rpc_server_commands_defs.h"
 #include "storages/portable_storage_template_helper.h"
@@ -42,10 +43,6 @@
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon.rpc.ffi"
 
 using namespace cryptonote;
-
-struct core_rpc_handle {
-    core_rpc_server* rpc;
-};
 
 // ─── Template Helpers ────────────────────────────────────────────────────────
 
