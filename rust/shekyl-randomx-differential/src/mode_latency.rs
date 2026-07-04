@@ -71,11 +71,15 @@
 //!
 //! ## Cadence
 //!
-//! Per R1-D12 (c) + R1-D7's "no per-PR CI gate at 2g; activates at
-//! Phase 3a", this mode runs in the **nightly** workflow (and
-//! optionally the release-gate workflow) but not in the per-PR
-//! workflow. The §6.2 T5 entry pins the cadence as "nightly +
-//! release-gate".
+//! **Wired** (test-regime hardening runtime-mode change, 2026-07):
+//! the daily 05:00 cron in `randomx-v2-differential.yml`'s dedicated
+//! `runtime-modes` job (main + dev matrix), plus opt-in
+//! `workflow_dispatch` via the `runtime_modes` input — and not the
+//! per-PR workflow (per R1-D12 (c) + R1-D7's per-PR budget). History:
+//! the §6.2 T5 entry pinned "nightly + release-gate" at 2g, but no
+//! nightly invocation ever existed — the cadence lived only in this
+//! comment until the armed-gate audit (F1-HIGH) wired it. The
+//! release-gate cadence still lands post-genesis.
 
 use std::cmp::Ordering;
 use std::fmt;
