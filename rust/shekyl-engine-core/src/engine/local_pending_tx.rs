@@ -908,10 +908,20 @@ where
             let accepted_at_height = ledger.height();
             for index in selected_indices {
                 if let Some(td) = ledger.transfer_mut(index) {
-                    td.awaiting_confirmation = Some(AwaitingConfirmation {
-                        tx_hash,
-                        accepted_at_height,
-                    });
+                    // Race guard: if the tx mined during the submit round-trip,
+                    // a refresh may already have observed the spend and run
+                    // `mark_spent` (spent = true, lock cleared). The
+                    // confirmed-present state is authoritative — re-locking an
+                    // already-spent input would persist an inconsistent
+                    // `spent && awaiting_confirmation` record whose F14 lock no
+                    // future `mark_spent` ever clears. Place the lock only on
+                    // inputs still unspent at commit time.
+                    if !td.spent {
+                        td.awaiting_confirmation = Some(AwaitingConfirmation {
+                            tx_hash,
+                            accepted_at_height,
+                        });
+                    }
                 }
             }
         });

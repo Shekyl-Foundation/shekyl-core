@@ -58,6 +58,13 @@ pub struct AwaitingConfirmation {
     pub accepted_at_height: u64,
 }
 
+impl Zeroize for AwaitingConfirmation {
+    fn zeroize(&mut self) {
+        self.tx_hash.zeroize();
+        self.accepted_at_height.zeroize();
+    }
+}
+
 /// A precomputed FCMP++ curve-tree path for an output.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct FcmpPrecomputedPath {
@@ -321,10 +328,11 @@ impl Zeroize for TransferDetails {
         self.spent.zeroize();
         self.spent_height.zeroize();
         self.key_image.zeroize();
-        if let Some(ref mut awaiting) = self.awaiting_confirmation {
-            awaiting.tx_hash.zeroize();
-            awaiting.accepted_at_height.zeroize();
-        }
+        // `Option<AwaitingConfirmation>::zeroize` wipes the inner fields AND
+        // resets the tag to `None` (matching the sibling `Option` fields);
+        // the hand-rolled `if let Some` left it `Some(all-zero)`, and would
+        // have silently skipped any future secret field on the inner struct.
+        self.awaiting_confirmation.zeroize();
         // `source_ciphertext` and `output_handle` are non-secret — see
         // the field docs above. `HybridCiphertext` is on-chain public
         // data; `OutputHandle` is wallet-private-derivable from any

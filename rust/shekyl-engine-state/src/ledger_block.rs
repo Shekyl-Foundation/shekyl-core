@@ -265,11 +265,17 @@ impl LedgerBlock {
             .map(|(_, hash)| hash)
     }
 
-    /// Get unspent, unfrozen transfers.
+    /// Get unspent, unfrozen transfers whose spend is not already
+    /// network-exposed.
+    ///
+    /// Outputs under an F14 awaiting-confirmation lock (§2.6) are excluded,
+    /// matching [`TransferDetails::is_spendable`]: their spend is already
+    /// broadcast, so treating them as unspent/available would invite a second
+    /// tx bearing the same key image (the §7.1 self-linkage the lock prevents).
     pub fn unspent_transfers(&self) -> Vec<&TransferDetails> {
         self.transfers
             .iter()
-            .filter(|td| !td.spent && !td.frozen)
+            .filter(|td| !td.spent && !td.frozen && td.awaiting_confirmation.is_none())
             .collect()
     }
 

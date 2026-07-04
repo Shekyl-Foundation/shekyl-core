@@ -419,10 +419,16 @@ impl LedgerIndexes {
         }
 
         // 3. Spend-state consistency. A spent output must carry a key image (it
-        //    cannot have been spent by us otherwise). `spent_height` is `None` while
-        //    the spend is in flight — optimistically marked at submit, before a block
-        //    confirms it — and `Some` once a refresh scans the confirming block; a
-        //    not-yet-spent output carries no spend height.
+        //    cannot have been spent by us otherwise); a not-yet-spent output carries
+        //    no spend height. Since the F14 cutover (§2.6), production `spent` is
+        //    refresh-authoritative — `mark_spent` sets `spent` + `spent_height` and
+        //    clears the awaiting-confirmation lock together when it scans the
+        //    confirming block, so a production spent output always has
+        //    `spent_height = Some`. An in-flight spend is NOT marked spent at submit
+        //    (that durable-spent-at-submit flow was retired): it carries an
+        //    awaiting-confirmation lock instead, `spent` stays false. The check stays
+        //    permissive about `spent` without a height only for the Phase-1 test stub
+        //    that still models that retired half-state.
         for (i, td) in ledger.transfers.iter().enumerate() {
             if td.spent && td.key_image.is_none() {
                 return Err(format!("transfers[{i}] is spent but has no key_image"));
