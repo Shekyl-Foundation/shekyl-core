@@ -26,10 +26,10 @@ todos:
   - id: phase2b_stage3_stake_engine
     content: "Phase 2b implementation — Stage 3: StakeEngine, ordinary principal↔P transfers, reward emission, bond lifecycle, Σwork path. Gated on §2.4 closure. entitlement.rs / 3C / cleartext stake-claim deletion targets. UPDATE 2026-06-30: StakeEngine persona/bond/scan surface + P-scan SP-0…SP-7 LANDED (rust/shekyl-engine-core/src/engine/{stake_engine.rs,pscan/}); genuinely unbuilt = the emission-vin verifier (C-1 ML-DSA equality + shekyl_fcmp_membership_only_verify + emission codec/builder + StakeEngine emission handler; archival_p derivation+KAT already landed) — HOMED in REWARD_EMISSION_LEG.md + REWARD_EMISSION_VIN_PLAN.md (PR-E0 done; E1/E2/E3, C-1 = PR-E3 step 8); the principal stake/unstake/drain lifecycle (NOT yet homed in any plan doc); SP-R0 durable-removal GC; Gate 6 Rounds 2–5. In progress via the 2d-2 transport track."
     status: in_progress
-  - id: phase2_ops_addresses_proofs
+  - id: phase2c_ops_addresses_proofs
     content: "Phase 2c (End-state 5): primary_address; create_payment_request / list_payment_requests / match_transfer_to_request; real enc_label outbound when paying a payment URI carrying a rid (ungated as of feat/enc-label-ungate 2026-06-15 — the indistinguishability invariant, SUBADDRESS_UNDER_PQC.md §5.7.10, retired the operational.cooperative_payment_requests gate; GUI rid-URI tooling is the de-facto feature boundary); tx_proof + reserve_proof via shekyl-proofs; sign/verify_message; restore-from-keys constructors. Engine substrate lands FA-8 (PR #113) before Wallet orchestrator methods. Does not block Phase 2a (2a-3 uses sentinel enc_label only)."
     status: pending
-  - id: phase2_ops_cold_wallet
+  - id: phase2d_ops_cold_wallet
     content: "Phase 2d: air-gapped flow as UnsignedTxBundle/SignedTxBundle (Phase 1 binding decision) — Wallet::export_unsigned, Wallet::sign_unsigned (offline-only), Wallet::submit_signed (network-only, refuses unknown bundle hash); wallet2's four-call export_outputs/import_outputs/export_key_images/import_key_images dance is NOT ported"
     status: pending
   - id: phase3_cli_scaffold
