@@ -89,10 +89,23 @@ own published test vector, independent of RandomX entirely:
 - **AES round** (`aes::hazmat::cipher_round` /
   `equiv_inv_cipher_round`, used by `aes.rs`): FIPS-197 Appendix B worked
   single-round example — the exact hazmat primitive RandomX composes.
-- **Argon2d** (`argon2` crate, `Argon2d`/`V0x13`, used by `argon2d.rs`): the
-  Argon2 reference (`draft-irtf-cfrg-argon2` / RFC 9106) Argon2d test vector
-  at published params. (RFC 9106's headline KAT is Argon2**id**; the Argon2d
-  vector comes from the reference `test.c`. Both are published and non-fork.)
+- **Argon2d** (`argon2` crate, `Argon2d`/`V0x13`, used by `argon2d.rs`):
+  **scope-adjusted during F4a implementation (source-verified constraint).**
+  The published RFC 9106 §5 vectors (both Argon2d §5.1 and Argon2id §5.3)
+  mandate an *associated-data* input, and `argon2-0.5.3`'s public API
+  (`hash_password_into` / `fill_memory` / `new_with_secret`) exposes **no AD
+  parameter** — so those vectors are not reproducible with the crate the
+  verifier links, and no independent Argon2 generator is available in-tree
+  (no `argon2-cffi`/CLI). F4a therefore anchors Argon2 at the **parameter**
+  level only: `constants_match_spec` / `params_match_spec` (argon2d.rs) pin
+  `(Argon2d, V0x13, m=262144, t=3, p=1, salt="RandomX\x03")` to `specs.md`
+  §1.2/§7.1 (citation retightened from the fork's `configuration.md` to the
+  spec). The independent Argon2d **value** anchor is deferred to **F4b**,
+  where tevador's v1 cache-memory KAT anchors the *exact* `fill_memory` path
+  RandomX uses (Tier 3) — strictly better than a synthetic small-param tag
+  that would exercise the finalizer RandomX omits. The v2-delta-audit fact
+  that makes this sound (v1/v2 `configuration.h` byte-identical) is recorded
+  at the `constants_match_spec` test.
 
 These prove the primitives the whole chain rests on are the standard
 functions, not a look-alike.

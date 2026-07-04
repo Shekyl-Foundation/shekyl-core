@@ -178,10 +178,17 @@ pub(crate) fn fill_cache(key: &[u8], blocks: &mut [Block]) {
 mod tests {
     use super::*;
 
-    /// Constants must match the values published in
-    /// `external/randomx-v2/doc/configuration.md` at pin `aaafe71`. A
-    /// mismatch here means the spec moved and this crate's Cache
-    /// derivation is out of sync with the consensus reference.
+    /// Constants must match the parameter set the spec mandates:
+    /// `specs.md` §1.2 (`RANDOMX_ARGON_MEMORY/ITERATIONS/LANES`) and
+    /// §7.1 (`RANDOMX_ARGON_SALT`). These are byte-identical between the
+    /// v1 and v2 forks' `configuration.h` (an F4 v2-delta-audit fact:
+    /// cache init is not a v2 delta), which is what makes tevador's v1
+    /// cache-memory KAT transferable as the *independent* Argon2d value
+    /// anchor in F4b (`docs/design/RANDOMX_V2_SPEC_ANCHORS.md` Tier 3).
+    /// This test anchors the *parameters* to the spec; F4b anchors the
+    /// *output* to an independent implementation. A mismatch here means
+    /// this crate's Cache derivation is out of sync with the consensus
+    /// parameter set.
     #[test]
     fn constants_match_spec() {
         assert_eq!(RANDOMX_ARGON_MEMORY, 262_144);
