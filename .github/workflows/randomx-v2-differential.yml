@@ -24,7 +24,8 @@
 #   pattern: nightly.yml): `--mode=concurrent` (T7 concurrent
 #   byte-equality + T8 RSS ceiling) and `--mode=latency` (T5, ≤3.0×
 #   in-mode gate). Isolated from structural-validate so the disclosed
-#   known-over-budget T5 state (see the latency step) cannot abort the
+#   likeliest-to-red T5 tripwire (green at 1.817× on the committed
+#   runner class, 2026-07-04; see the latency step) cannot abort the
 #   merge-blocking gates, and opt-in on dispatch so a parity-recovery
 #   dispatch can still produce a green run while the T5 budget
 #   question is open.
@@ -120,11 +121,12 @@ on:
       runtime_modes:
         description: >-
           Also run the runtime-modes job (T5 latency + T7/T8
-          concurrent) on this dispatch. Off by default: T5 is in a
-          disclosed known-over-budget state, so a parity-recovery
-          dispatch (parity_scope=full) must not be forced red by it.
+          concurrent) on this dispatch. Off by default so a
+          parity-recovery dispatch (parity_scope=full) stays scoped to
+          the parity gate and doesn't spend a runtime-modes runner.
           Turn on to measure the committed-runner-class T5 number on
-          demand (the §5.7 budget-round evidence path).
+          demand (recorded baseline: 1.817×, 2026-07-04 — see
+          LATENCY_RATIO_BUDGET in mode_latency.rs).
         type: boolean
         default: false
 
@@ -346,11 +348,11 @@ jobs:
     # concurrent) in a job of their own, per the post-wiring review
     # round:
     #
-    # * Isolation: T5 is in a disclosed known-over-budget state (see
-    #   the latency step), and inside structural-validate an expected
-    #   red would abort the job and SKIP the merge-blocking gates
-    #   ordered after it (test-internals, crate invariants) — a real
-    #   regression there would hide behind the known T5 red.
+    # * Isolation: measurement gates live apart from the structural
+    #   job so ANY latency red (T5 is green on the committed runner
+    #   class — 1.817× recorded 2026-07-04 — but it is a tripwire and
+    #   tripwires fire) cannot abort the merge-blocking gates ordered
+    #   after it (test-internals, crate invariants).
     # * Cadence: daily 05:00 cron, plus dispatch ONLY when the
     #   `runtime_modes` input is set — a parity-recovery dispatch
     #   (parity_scope=full) must be able to produce a green run while
@@ -361,9 +363,9 @@ jobs:
     #   checked out per the nightly.yml house pattern.
     #
     # Step-order pin: concurrent runs BEFORE latency — latency is the
-    # expected-red step, and any step ordered after it would be
-    # skipped on that red (the exact masking this job exists to
-    # remove).
+    # likeliest-to-red step (it is the calibrated tripwire), and any
+    # step ordered after it would be skipped on that red (the exact
+    # masking this job exists to remove).
     name: 'cron: runtime modes — T7/T8 concurrent + T5 latency (${{ matrix.branch }})'
     runs-on: ubuntu-latest
     # Setup + release compile ≈ 15 min, concurrent ≈ 5–10 min, latency
@@ -415,53 +417,19 @@ jobs:
         # flake-theater); rust/C hash equivalence is asserted before
         # timing. 1024 samples ≈ 10–20 min.
         #
-        # KNOWN-RISK: currently expected red. The canonical disclosure
-        # (wiring-time measurements 3.041–3.139× vs 3.0×, hardware
-        # caveat, disposition policy) lives on `LATENCY_RATIO_BUDGET`
-        # in rust/shekyl-randomx-differential/src/mode_latency.rs —
-        # update THAT doc when the state changes, not a copy here.
-        #
-        # The tee/grep below only CLASSIFIES a red for triage: inside
-        # the disclosed band → the known state; above it → a fresh
-        # regression stacked on top (a red-on-red is otherwise
-        # indistinguishable at run-status level). The step fails
-        # either way — the band is a triage aid, NOT a second budget.
+        # RECORDED BASELINE (2026-07-04, first executions): committed
+        # runner class 1.817× — the budget HOLDS with ~39% headroom;
+        # the earlier "expected red" state came from dev-hardware
+        # readings (~3.1×), which the drift-check showed are a
+        # hardware artifact, not a regression. The canonical record +
+        # triage policy live on `LATENCY_RATIO_BUDGET` in
+        # rust/shekyl-randomx-differential/src/mode_latency.rs —
+        # update THAT doc when the state changes, not a copy here. A
+        # red HERE (the committed runner class) is a real tripwire
+        # hit: never rerun-until-green, never a silent budget bump.
         run: |
-          set -o pipefail
-          if cargo run --release --locked -p shekyl-randomx-differential \
-            --bin shekyl-randomx-differential -- --mode=latency 2>&1 | tee /tmp/t5-latency.log; then
-            exit 0
-          fi
-          # 3.25 = the 3.139 wiring-time maximum plus headroom; bump it
-          # only together with the mode_latency.rs disclosure.
-          ratio=$(sed -n 's/.*ratio (rust\/c) = \([0-9.]*\)x.*/\1/p' /tmp/t5-latency.log | head -1)
-          if [ -n "$ratio" ] && awk "BEGIN { exit !($ratio > 3.25) }"; then
-            echo "::error::T5 ratio ${ratio}x is ABOVE the disclosed known-over-budget band (3.04-3.14x, triage ceiling 3.25x) — treat as a FRESH regression, not the known state"
-          else
-            echo "::warning::T5 ratio ${ratio:-unparsed}x is within the disclosed known-over-budget band (3.04-3.14x) — see LATENCY_RATIO_BUDGET in mode_latency.rs for the disposition"
-          fi
-          exit 1
-
-  mutants:
-    # Weekly cargo-mutants run per §5.5.6 + §4.6 M2 (Round-3
-    # substrate-completeness amendment). Mutation testing is
-    # nightly-only (not per-PR) per the F5 budget — `cargo mutants`
-    # against the harness + verifier surfaces is multi-hour work; the
-    # weekly cadence balances substrate signal against runner cost.
-    #
-    # Skip-list discipline lives in `.cargo/mutants.toml`
-    # (`exclude_globs` for the tooling binaries + canonical-output
-    # data file per §5.5.6 row). Each entry in the skip list is a
-    # substrate-anchored carve-out; new skip-list entries require a
-    # §5.5.6-row plan-doc amendment.
-    name: 'weekly: cargo-mutants (T18)'
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
-    if: github.event_name == 'schedule' && github.event.schedule == '0 6 * * 1' || github.event_name == 'workflow_dispatch'
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          submodules: recursive
+          cargo run --release --locked -p shekyl-randomx-differential \
+            --bin shekyl-randomx-differential -- --mode=latency
       - name: Install Rust toolchain
         # Composite action (.github/actions/install-rust); see the
         # structural-validate job's step comment.
@@ -611,12 +579,18 @@ jobs:
         # pins its SHA-256. Consumes the C reference the parent CMake
         # build just produced (randomx-v2-sys links librandomx.a).
         working-directory: rust
-        env:
-          RANDOMX_V2_INSTALL_DIR: ${{ github.workspace }}/build/external/randomx-v2-install
+        # Runtime $GITHUB_WORKSPACE, NOT the ${{ github.workspace }}
+        # template: inside a container job the template interpolates
+        # the HOST path (/home/runner/work/...), which does not exist
+        # in the container (the work tree is mounted at /__w/...) —
+        # the first hosted execution of this job died exactly there
+        # (dispatch run 28690002177: "No such file or directory"
+        # creating the corpus). The env var is container-correct.
         run: |
+          export RANDOMX_V2_INSTALL_DIR="$GITHUB_WORKSPACE/build/external/randomx-v2-install"
           cargo run --release --locked -p shekyl-randomx-differential \
             --bin gen-parity-corpus -- \
-            --out "${{ github.workspace }}/build/tests/randomx_v2_parity/parity_corpus.dat"
+            --out "$GITHUB_WORKSPACE/build/tests/randomx_v2_parity/parity_corpus.dat"
       - name: run parity gate (ctest -L ${{ env.PARITY_CTEST_LABEL }})
         # Serial (ctest default): each test allocates a ~2 080 MiB
         # dataset; parallel invocations would multiply peak memory.

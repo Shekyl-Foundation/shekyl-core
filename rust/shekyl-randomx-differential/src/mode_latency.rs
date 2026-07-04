@@ -94,16 +94,32 @@ use crate::rust_subject::RustSubjectSession;
 /// drift-prevention discipline. Encoded as `f64` because the
 /// ratio is `median_rust_ns / median_c_ns`, an `f64` quotient.
 ///
-/// **Known near-/over-budget state (2026-07, CI-wiring measurements):**
-/// the gate's first-ever executions — three runs on dev hardware
-/// (i9-11950H; NOT the committed `ubuntu-latest` runner class this
-/// budget was baselined against) — measured **3.136× / 3.139× /
-/// 3.041×**: consistently over, tight spread. If the daily-cron T5
-/// gate reads red, start HERE, not at "fresh regression": the
-/// disposition is the plan-doc-locked choice between a §5.7 budget
-/// round (evidence: the committed-runner-class dispatch measurement)
-/// and verifier perf work. Never rerun-until-green; never a silent
-/// budget bump.
+/// **Recorded baselines (2026-07-04, the gate's first executions —
+/// canonical disclosure site; workflow comments point here):**
+///
+/// - **Committed runner class (`ubuntu-latest`), the budget's
+///   substrate — 1.817×** (workflow_dispatch run 28690002177,
+///   N=1024, medians rust 377.5 ms / C 207.8 ms). The budget HOLDS
+///   with ~39% headroom.
+/// - **Dev hardware (i9-11950H) — 3.041–3.139×** at the wiring tip,
+///   and **3.124–3.209×** at the Phase-2g-close pin `d60186fa9`
+///   under the same 1.94 toolchain: statistically identical, so the
+///   ratio did NOT drift while the gate was unwired. The ratio is
+///   **hardware-dependent** — the C interpreter gains more from
+///   desktop cache/IPC than the Rust interpreter does — so local
+///   runs on developer hardware may exceed the budget while the
+///   committed runner class passes. A local red off the committed
+///   runner class is an expected artifact, not a regression.
+///
+/// Triage: a red **on the committed runner class** is a real
+/// tripwire hit. Disposition per §5.7: budget round (context for a
+/// re-derivation: T5 protects sync/reorg throughput and serves as a
+/// regression tripwire; T6 owns the adversarial/DoS bound; nothing
+/// consensus-relevant binds near 3.0×, so a re-derived budget should
+/// be runner-baseline + 10–15% margin, recorded with that
+/// derivation) versus verifier perf work (features-tier: interpreter
+/// churn in consensus-critical code buys no security). Never
+/// rerun-until-green; never a silent budget bump.
 pub const LATENCY_RATIO_BUDGET: f64 = 3.0;
 
 /// Successful run summary surfaced on the stdout report path
