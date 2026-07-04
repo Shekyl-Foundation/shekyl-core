@@ -45,7 +45,10 @@
 //!                                    - block_hash_at(built_at_height) == built_at_tip_hash
 //!                                      else PendingTxError::ChainStateChanged
 //!                                  on pass: reservation is removed,
-//!                                  selected outputs marked spent,
+//!                                  selected outputs placed under the F14
+//!                                  awaiting-confirmation lock (§2.6;
+//!                                  the test-only helper below still
+//!                                  marks spent, pre-F14 shape),
 //!                                  TxHash returned
 //!
 //! discard_pending_tx(handle)   ─►  reservation removed, idempotent

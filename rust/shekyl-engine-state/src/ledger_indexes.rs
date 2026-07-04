@@ -175,6 +175,10 @@ impl LedgerIndexes {
             if let Some(td) = ledger.transfers.get_mut(idx) {
                 td.spent = true;
                 td.spent_height = Some(spent_height);
+                // F14 confirmed-present release (§2.6): the observed
+                // on-chain spend supersedes the awaiting-confirmation
+                // lock — refresh is the settlement authority.
+                td.awaiting_confirmation = None;
                 debug_assert!(
                     self.check_invariants(ledger).is_ok(),
                     "invariant violated after mark_spent: {}",
@@ -508,6 +512,7 @@ mod tests {
             spent: false,
             spent_height: None,
             key_image,
+            awaiting_confirmation: None,
             source_ciphertext: None,
             output_handle: None,
             eligible_height: block_height + SPENDABLE_AGE,

@@ -64,8 +64,13 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 ///   `TransferDetails` (M3d).
 /// - Version `5` removes `TransferDetails::subaddress` per FA-2 End-state 5
 ///   (`SUBADDRESS_UNDER_PQC.md` §5.7.4).
-/// - Version `6` (this version) adds `TransferDetails::receive_attribution`
+/// - Version `6` adds `TransferDetails::receive_attribution`
 ///   (FA-8, §5.7.9).
+/// - Version `7` retires the confidential-staking (claim-era) fields
+///   (PR-3 of the staking sweep).
+/// - Version `8` (this version) adds
+///   `TransferDetails::awaiting_confirmation` — the F14 persisted
+///   awaiting-confirmation lock (`DAEMON_SUBMIT_VERDICT.md` §2.6).
 ///
 /// Any field addition / removal / renaming inside the block, or any
 /// transitive change in a nested type's serialized shape, bumps this;
@@ -73,7 +78,7 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 /// the `.cursor/rules/15-deletion-and-debt.mdc` "no in-Shekyl
 /// migration code" rule (Shekyl is pre-genesis; `rm -rf ~/.shekyl` is
 /// the migration path).
-pub const LEDGER_BLOCK_VERSION: u32 = 7;
+pub const LEDGER_BLOCK_VERSION: u32 = 8;
 
 /// Maximum number of `(height, hash)` pairs the scanner should keep in
 /// [`ReorgBlocks`]. The value is informational — the persistence layer
@@ -361,6 +366,12 @@ mod tests {
             key_image: Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
                 [seed ^ 0xFF; 32],
             )),
+            // Exercise the Some leg of the F14 lock in the round-trip
+            // tests; the None leg is covered by every other fixture.
+            awaiting_confirmation: Some(crate::transfer::AwaitingConfirmation {
+                tx_hash: shekyl_types::TxHash::from_bytes([seed.wrapping_add(4); 32]),
+                accepted_at_height: 100 + u64::from(seed),
+            }),
             // Post-M3d: per-output secrets are no longer persisted on
             // `TransferDetails`; the M3b deterministic-handle pathway
             // (`source_ciphertext`, `output_handle`) carries the

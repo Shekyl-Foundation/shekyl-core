@@ -62,6 +62,7 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
         spent: false,
         spent_height: None,
         key_image: None,
+        awaiting_confirmation: None,
         source_ciphertext: None,
         output_handle: None,
         eligible_height: height + SPENDABLE_AGE,

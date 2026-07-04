@@ -1614,7 +1614,7 @@ mod tests {
     /// signing KATs — the A4 reversion clause of `CT5C_ASSEMBLER_CUTOVER.md`, the
     /// same slice that cut production over to the real `assemble_path`. A
     /// real-tree bond round-trip (mirroring `local_pending_tx`'s
-    /// `build_then_submit_marks_outputs_spent` over `funded_ledger_and_tree`) is
+    /// `build_then_submit_places_awaiting_confirmation_lock` over `funded_ledger_and_tree`) is
     /// **not** blocked on CT-5 — `assemble_path` is real — but on threading the
     /// bond's cleartext `credit_term` through the engine signer, which today
     /// calls the zero-terms `sign_transaction` (`sign_bridge.rs`). That

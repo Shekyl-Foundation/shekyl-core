@@ -49,7 +49,7 @@ use shekyl_curve_tree::{
     select_reference_height, should_reanchor, AssembleInput, BlockHeight, Gindex, ReferenceBlock,
     REF_ANCHOR_AGE,
 };
-use shekyl_engine_state::LedgerBlock;
+use shekyl_engine_state::{AwaitingConfirmation, LedgerBlock};
 use shekyl_units::AtomicUnits;
 
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
@@ -792,10 +792,22 @@ where
         state.in_flight.remove(&id);
         release_output_locks_for(state, id);
 
+        // F14 (`DAEMON_SUBMIT_VERDICT.md` §2.6): the accepting verdict means
+        // the tx is network-exposed, not settled. Instead of the legacy
+        // durable `spent = true` write, place the persisted
+        // awaiting-confirmation lock on each input: the output stays
+        // unselectable across restarts (same-key-image rebuild hazard,
+        // §7.1) until refresh observes the spend on-chain
+        // (confirmed-present release, `mark_spent`) or the watchdog horizon
+        // resolves the tx as confirmed-absent.
         self.ledger.with_ledger_block_mut(|ledger| {
+            let accepted_at_height = ledger.height();
             for index in selected_indices {
                 if let Some(td) = ledger.transfer_mut(index) {
-                    td.spent = true;
+                    td.awaiting_confirmation = Some(AwaitingConfirmation {
+                        tx_hash,
+                        accepted_at_height,
+                    });
                 }
             }
         });
@@ -3268,7 +3280,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_then_submit_marks_outputs_spent() {
+    async fn build_then_submit_places_awaiting_confirmation_lock() {
         // CT-5c: a consistent ledger+tree so the real `assemble_path` resolves
         // the spent output and the signer builds a real membership proof.
         let (ledger, _tree_dir, tree) =
@@ -3325,16 +3337,23 @@ mod tests {
         assert_eq!(tx_hash, canonical_tx_id(&built.tx_bytes));
         assert_eq!(pending.outstanding(), 0);
 
-        let spent = pending
-            .ledger
-            .read()
-            .ledger
-            .ledger
-            .transfers()
-            .first()
-            .expect("output 0")
-            .spent;
-        assert!(spent);
+        // F14 (§2.6): submit-accept places the awaiting-confirmation lock
+        // (keyed by the accepted txid), not a durable `spent` write —
+        // refresh is the settlement authority for `spent`.
+        {
+            let guard = pending.ledger.read();
+            let td = guard.ledger.ledger.transfers().first().expect("output 0");
+            assert!(!td.spent, "spent stays refresh-authoritative");
+            let lock = td
+                .awaiting_confirmation
+                .as_ref()
+                .expect("submit-accept places the F14 lock");
+            assert_eq!(lock.tx_hash, tx_hash);
+            assert!(
+                !td.is_spendable(u64::MAX),
+                "locked output must be excluded from selection"
+            );
+        }
     }
 
     /// PR 2c-1 — the real-tree closing milestone for archival bond-post
@@ -3347,7 +3366,7 @@ mod tests {
     /// consistent `funded_ledger_and_tree` fixture, and its membership path is
     /// assembled by the production `CurveTreeClient::assemble_path` (CT-5c) — the
     /// same path the real-tree transfer KAT
-    /// (`build_then_submit_marks_outputs_spent`) drives. The bond's `bond_credit`
+    /// (`build_then_submit_places_awaiting_confirmation_lock`) drives. The bond's `bond_credit`
     /// rides as the single-sourced output-side cleartext term through
     /// `tx_builder::sign_transaction_with_terms`, the credit-term threading the
     /// 2a docstring deferred to this milestone.
@@ -4539,16 +4558,20 @@ mod tests {
         assert_eq!(tx_hash, canonical_tx_id(&built.tx_bytes));
         assert_eq!(daemon.submitted_count(), 1);
 
-        let spent = pending
-            .ledger
-            .read()
-            .ledger
-            .ledger
-            .transfers()
-            .first()
-            .expect("output 0")
-            .spent;
-        assert!(spent);
+        // F14 (§2.6): accept places the awaiting-confirmation lock, not a
+        // durable `spent` write.
+        {
+            let guard = pending.ledger.read();
+            let td = guard.ledger.ledger.transfers().first().expect("output 0");
+            assert!(!td.spent, "spent stays refresh-authoritative");
+            assert_eq!(
+                td.awaiting_confirmation
+                    .as_ref()
+                    .expect("submit-accept places the F14 lock")
+                    .tx_hash,
+                tx_hash
+            );
+        }
     }
 
     #[tokio::test]

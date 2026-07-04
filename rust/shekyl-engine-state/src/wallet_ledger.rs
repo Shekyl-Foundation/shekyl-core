@@ -81,6 +81,10 @@ use crate::{
 /// top-level block (`STAKING_BLOCK_VERSION` 1); the aggregator layout
 /// itself grew a block, so the bundle bytes shift and the format
 /// version bumps.
+/// Version `9` is the claim-era retirement (`LEDGER_BLOCK_VERSION` 7).
+/// Version `10` adds `TransferDetails::awaiting_confirmation` — the F14
+/// persisted awaiting-confirmation lock (`LEDGER_BLOCK_VERSION` 8,
+/// `DAEMON_SUBMIT_VERDICT.md` §2.6).
 /// Each per-block bump (`LEDGER_BLOCK_VERSION`,
 /// `BOOKKEEPING_BLOCK_VERSION`) identifies which block is
 /// incompatible at load time; the bundle-level bump exists because
@@ -92,7 +96,7 @@ use crate::{
 /// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
 /// bump in the same PR, regardless of whether any direct field of
 /// `WalletLedger` was touched.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 9;
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 10;
 
 /// The `.wallet`-side ledger bundle: the four typed blocks + a
 /// bundle-level `format_version`.
