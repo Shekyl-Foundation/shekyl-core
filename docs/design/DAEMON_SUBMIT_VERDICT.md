@@ -357,8 +357,9 @@ Shekyl — they operate on `key_offsets`, which FCMP++ consensus requires empty,
 so `n_indices == 0` and the function early-returns true.)
 
 **Phase B — fact snapshot (shim 1, one short lock).** POD snapshot under a
-single pool→blockchain lock scope: identity-in-pool (at the `all` relay
-category — see below), identity-in-chain, per-input key-image conflict owners
+single pool→blockchain lock scope: identity-in-pool (both at the `all` and
+`legacy` relay categories — tier-gated disclosure, see below),
+identity-in-chain, per-input key-image conflict owners
 (own-txid vs other), reference-block **existence by hash** + its height,
 curve-tree root at that height, current tree depth, fee parameters
 (fee-per-byte, quantization mask), weight limit, chain height. Early return:
@@ -367,24 +368,46 @@ re-check input, never a verdict — emitting `DoubleSpendConflict` from a
 snapshot would resurrect defect 0.4's self-duplicate race in the new
 architecture.
 
-**Identity category (implementation-round pin).** Earlier drafts pinned
-identity-in-pool at the `legacy` relay category, matching `add_new_tx:1075`.
-Implementation surfaced the contradiction: `matches_category(local, legacy)`
-is **false** (`blockchain_db.cpp:51-80`), so a tx sitting in its Dandelion++
-embargo window (`relay_method::local` — exactly the state the engine's own
-commit produces) would be invisible to a `legacy`-category identity fact.
-The §5.2 ladder's resubmit probe (F31) would then fall through Phase B,
-re-verify, and fault at the insert tail (`add_txpool_tx` throws on
-duplicate) instead of returning `AlreadyInPool`. The legacy path never hit
-this because its `add_tx` existing-tx arm caught local-state duplicates
-later, lossily (`OK + not_relayed`). The engine's identity fact therefore
-uses `relay_category::all` — presence in the pool database is the honest
-fact; relay-state visibility tiers exist for *foreign* queries
-(pool-inspection RPC), not for the daemon's own admission engine. Privacy
-note: distinguishing `AlreadyInPool` from `Accepted` on a byte-identical
-resubmit reveals pool presence only to a caller who already holds the full
-tx bytes, which is not an origin-tracing gain (V3.0 is own-daemon; the §11
-multi-daemon reopen re-evaluates).
+**Identity category (implementation-round pin, tier-gated disclosure).**
+Earlier drafts pinned identity-in-pool at the `legacy` relay category,
+matching `add_new_tx:1075`. Implementation surfaced the contradiction:
+`matches_category(local, legacy)` is **false** (`blockchain_db.cpp:51-80`),
+so a tx sitting in its Dandelion++ embargo window (`relay_method::local` —
+exactly the state the engine's own commit produces) would be invisible to a
+`legacy`-category identity fact. The §5.2 ladder's resubmit probe (F31)
+would then fall through Phase B, re-verify, and fault at the insert tail
+(`add_txpool_tx` throws on duplicate) instead of returning `AlreadyInPool`.
+The legacy path never hit this because its `add_tx` existing-tx arm caught
+local-state duplicates later, lossily (`OK + not_relayed`).
+
+The snapshot therefore carries **two** presence facts (§4.1): `in_pool` at
+`relay_category::all` (the internal truth — duplicate-safety and the owner
+status-query) and `in_pool_broadcast` at `relay_category::legacy` (the
+broadcast-visible, foreign-disclosable fact). They differ exactly for an
+embargoed tx, and the engine discloses by **caller tier**
+([`SubmitCaller`](../../rust/shekyl-daemon-rpc/src/submit/engine.rs)),
+derived from the endpoint's `restricted` bit:
+
+- **Owner** (unrestricted/local endpoint — the daemon's own wallet) sees
+  `in_pool`: the F31 resubmit-as-status query returns `AlreadyInPool`
+  during the embargo, as intended.
+- **Foreign** (restricted/public endpoint) sees only `in_pool_broadcast`.
+  An embargoed self-tx (`in_pool && !in_pool_broadcast`) is **concealed**:
+  the submit runs the full verification battery and reports `Accepted`
+  (the commit races on `in_pool` and `classify_race` conceals it),
+  indistinguishable in verdict from a fresh submission.
+
+This closes the stem-presence oracle: without the tier gate, a Dandelion++
+stem relay (which holds the tx bytes) could probe the public
+`POST /submit_transaction` of many daemons — a fast `AlreadyInPool` vs a
+full-verify `Accepted` maps the stem path back toward the origin. Relay-state
+visibility tiers exist for *foreign* queries (the same reason
+pool-inspection RPC has them); the fix restores exactly the disclosure the
+legacy `relay_category::legacy` identity check gave a foreign caller, while
+keeping the owner's wider `all`-category view for its own admission engine.
+This was live in V3.0 (own-daemon still exposes the restricted public bind);
+the §11 multi-daemon reopen re-evaluates the residual timing delta (a
+concealed duplicate skips the insert, as the legacy existing-tx arm did).
 
 **Phase C — verification (Rust, no locks held anywhere).** Ref-age window
 arithmetic (min 5 / max 100, from config); fee floor against snapshot params;
@@ -566,9 +589,23 @@ attestation is a consensus-integrity hazard, not a perf bug. Discipline:
 
 Three exported functions, POD-struct interfaces, zero verdict logic. Per
 [`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
-this is the C++-as-minimal-transport-shim shape; per
-[`40-ffi-discipline.mdc`](../../.cursor/rules/40-ffi-discipline.mdc) they
-export through the single `shekyl-ffi` surface.
+this is the C++-as-minimal-transport-shim shape.
+
+**FFI boundary (implementation-round pin).** These shims deliberately do
+**not** route through the single `shekyl-ffi` surface that
+[`40-ffi-discipline.mdc`](../../.cursor/rules/40-ffi-discipline.mdc) /
+[`25-rust-architecture.mdc`](../../.cursor/rules/25-rust-architecture.mdc)
+otherwise mandate. They resolve pool/blockchain/protocol from a live
+`core_rpc_server` (`core_rpc_ffi_*`), which is a daemon-only object;
+`libshekyl_ffi.a` links into the wallet and every other consumer, so pulling
+these symbols into it would drag the whole daemon RPC surface behind the FFI
+crate. The submit shims therefore own their boundary — the C++ header
+`src/rpc/daemon_submit_ffi.h`, its `#[repr(C)]` twins in
+`rust/shekyl-daemon-rpc/src/ffi.rs`, and the marshalling in
+`src/submit/ffi_shim.rs` — colocated with the daemon-RPC crate that is their
+only caller, exactly as `core_rpc_ffi_*` already does. An FFI-surface audit
+(rule 40's enumeration, rule 35/36 secret-locality sweeps) must include this
+boundary, not only `shekyl-ffi`.
 
 ### 4.1 `shekyl_submit_snapshot_facts`
 
@@ -966,7 +1003,7 @@ against the C++ behavior); the matrix is the gate, per round-5 minor (b).
 | I1 | Blob size cap (`get_max_tx_size`) | `:799-805` | `too_big` | **A** — constant, `Malformed` |
 | I2 | Parse + hash (`parse_and_validate_tx_from_blob`) | `:809-814` | generic `Failed` | **A** — `shekyl-wire` parse + txid; `Malformed` |
 | I3 | Weight computation (`get_transaction_weight`) | `:816` | — | **C** ⚠ — Rust weight formula, KAT-pinned against C++ over representative shapes (BP+ clawback arithmetic) |
-| I4 | Identity: pool at `legacy` category | `:1075-1079` | `OK + not_relayed` (lossy) | **B** — `AlreadyInPool`; engine queries at `all` so embargoed (`local`) self-txs are visible — the legacy path caught those later via `add_tx`'s existing-tx arm (§3.1 identity-category pin) |
+| I4 | Identity: pool, tier-gated | `:1075-1079` | `OK + not_relayed` (lossy) | **B** — `AlreadyInPool`; snapshot carries `in_pool` (`all`) + `in_pool_broadcast` (`legacy`), and the engine discloses by [`SubmitCaller`](../../rust/shekyl-daemon-rpc/src/submit/engine.rs) tier: owner sees `all` (embargoed self-txs visible, F31), foreign sees only `legacy` (embargo concealed → stem-presence oracle closed; §3.1 identity-category pin) |
 | I5 | Identity: chain (`have_tx`) | `:1081-1085` | `OK + not_relayed` (lossy) | **B** — `AlreadyInChain` |
 
 ### 8.3 Non-input consensus battery (`ver_non_input_consensus`, `tx_verification_utils.cpp:46-178` — invoked from `add_tx:169`)
