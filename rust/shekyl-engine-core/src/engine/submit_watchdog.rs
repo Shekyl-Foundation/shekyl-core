@@ -57,6 +57,8 @@
 // lifecycle.
 #![allow(dead_code)]
 
+use std::collections::{HashMap, HashSet};
+
 use shekyl_engine_state::LedgerBlock;
 use shekyl_types::TxHash;
 
@@ -163,20 +165,27 @@ pub(crate) struct HeldSubmit {
 /// Fresh projections carry `probed_this_epoch: false`; the driving
 /// actor overlays its in-memory probe state across refresh cycles.
 pub(crate) fn held_submits(ledger: &LedgerBlock) -> Vec<HeldSubmit> {
+    // Single pass: a txid → slot index keeps the grouping O(transfers)
+    // instead of O(transfers × distinct-held-txids), while first-seen Vec
+    // order is preserved (deterministic projection).
     let mut held: Vec<HeldSubmit> = Vec::new();
+    let mut slot: HashMap<TxHash, usize> = HashMap::new();
     for td in ledger.transfers() {
         let Some(awaiting) = &td.awaiting_confirmation else {
             continue;
         };
-        match held.iter_mut().find(|h| h.tx_hash == awaiting.tx_hash) {
-            Some(entry) => {
-                entry.baseline_height = entry.baseline_height.min(awaiting.accepted_at_height);
+        match slot.get(&awaiting.tx_hash) {
+            Some(&i) => {
+                held[i].baseline_height = held[i].baseline_height.min(awaiting.accepted_at_height);
             }
-            None => held.push(HeldSubmit {
-                tx_hash: awaiting.tx_hash,
-                baseline_height: awaiting.accepted_at_height,
-                probed_this_epoch: false,
-            }),
+            None => {
+                slot.insert(awaiting.tx_hash, held.len());
+                held.push(HeldSubmit {
+                    tx_hash: awaiting.tx_hash,
+                    baseline_height: awaiting.accepted_at_height,
+                    probed_this_epoch: false,
+                });
+            }
         }
     }
     held
@@ -275,12 +284,16 @@ pub(crate) fn escape_ladder_step(
         return WatchdogStep::Wait(WaitReason::HorizonNotReached);
     }
     // Health-context gate (§5.2 item 3): separate "tx stuck" from
-    // daemon-side conditions before spending a rung.
-    if !health.is_synced() {
-        return WatchdogStep::Wait(WaitReason::DaemonSyncing);
-    }
+    // daemon-side conditions before spending a rung. Peerlessness is checked
+    // BEFORE sync: a daemon with no peers can neither sync nor relay, so the
+    // actionable operator-only condition (DaemonPeerless) must not be masked
+    // by the transient DaemonSyncing wait when the daemon is both behind and
+    // peerless.
     if !health.has_peers() {
         return WatchdogStep::OperatorAlarm(AlarmReason::DaemonPeerless);
+    }
+    if !health.is_synced() {
+        return WatchdogStep::Wait(WaitReason::DaemonSyncing);
     }
     if held.probed_this_epoch {
         // One resubmit acts as the probe; a present tx does not become
@@ -358,9 +371,19 @@ pub(crate) fn apply_probe_outcome(
         ),
         ProbeOutcome::ConfirmedInChain => (
             ProbeDisposition::KeepHolding,
+            // Advance the baseline to the probe height. Leaving the original
+            // (already past-horizon) baseline made the next escape_ladder_step
+            // re-fire OperatorAlarm(PresentButUnconfirmedPastHorizon) on the
+            // very next tick — for a tx the probe just reported confirmed.
+            // Restarting the horizon here gives refresh a full window to clear
+            // the F14 lock via mark_spent on the normal path; only a fresh
+            // full horizon without clearing (deep reorg / refresh stall)
+            // re-escalates, which is KeepHolding's documented "alarm only if
+            // the horizon elapses again" contract.
             Some(HeldSubmit {
+                tx_hash: held.tx_hash,
+                baseline_height: probe_height,
                 probed_this_epoch: true,
-                ..*held
             }),
         ),
         ProbeOutcome::RejectedTerminal => (ProbeDisposition::ReleaseConfirmedAbsent, None),
@@ -371,10 +394,12 @@ pub(crate) fn apply_probe_outcome(
 // Confirmed-absent release (§2.6 release path 2)
 // ---------------------------------------------------------------------------
 
-/// Release the F14 awaiting-confirmation locks held under `tx_hash`
-/// (the confirmed-absent leg of §2.6: the tx provably never confirmed —
-/// definite terminal verdict on the probe, or operator-directed release
-/// after the alarm rung). Returns the number of locks released.
+/// Release the F14 awaiting-confirmation locks held under any txid in
+/// `tx_hashes` (the confirmed-absent leg of §2.6: the tx provably never
+/// confirmed — definite terminal verdict on the probe, or operator-directed
+/// release after the alarm rung), in a **single** ledger scan regardless of
+/// how many txids a cadence tick resolves. Returns the number of locks
+/// released.
 ///
 /// The confirmed-**present** leg lives in
 /// `shekyl_engine_state::LedgerIndexes::mark_spent` (refresh observes
@@ -383,13 +408,19 @@ pub(crate) fn apply_probe_outcome(
 /// proof (§2.6 invariant 2's "definite verdict or observed absence").
 /// Release makes the outputs selectable again; it does **not**
 /// authorize an automatic rebuild (§2.6 invariant 3 / §7.4).
-pub(crate) fn release_awaiting_confirmation(ledger: &mut LedgerBlock, tx_hash: TxHash) -> usize {
+pub(crate) fn release_awaiting_confirmation(
+    ledger: &mut LedgerBlock,
+    tx_hashes: &HashSet<TxHash>,
+) -> usize {
+    if tx_hashes.is_empty() {
+        return 0;
+    }
     let mut released = 0;
     for td in &mut ledger.transfers {
         if td
             .awaiting_confirmation
             .as_ref()
-            .is_some_and(|a| a.tx_hash == tx_hash)
+            .is_some_and(|a| tx_hashes.contains(&a.tx_hash))
         {
             td.awaiting_confirmation = None;
             released += 1;
@@ -493,7 +524,10 @@ mod tests {
             transfer_with_lock(3, lock(still_held)),
         ]);
 
-        assert_eq!(release_awaiting_confirmation(&mut ledger, gone), 2);
+        assert_eq!(
+            release_awaiting_confirmation(&mut ledger, &HashSet::from([gone])),
+            2
+        );
         assert!(ledger.transfers()[0].is_spendable(u64::MAX));
         assert!(ledger.transfers()[1].is_spendable(u64::MAX));
         assert!(
@@ -637,10 +671,66 @@ mod tests {
 
         let (disp, next) = apply_probe_outcome(&h, ProbeOutcome::ConfirmedInChain, 2_000);
         assert_eq!(disp, ProbeDisposition::KeepHolding);
-        assert!(next.expect("tracking continues").probed_this_epoch);
+        let next = next.expect("tracking continues");
+        assert!(next.probed_this_epoch);
+        assert_eq!(
+            next.baseline_height, 2_000,
+            "confirmed-in-chain restarts the horizon from the probe height"
+        );
 
         let (disp, next) = apply_probe_outcome(&h, ProbeOutcome::RejectedTerminal, 2_000);
         assert_eq!(disp, ProbeDisposition::ReleaseConfirmedAbsent);
         assert!(next.is_none(), "terminal verdict ends tracking");
+    }
+
+    /// Regression (round-7 review): a `ConfirmedInChain` probe must not
+    /// produce a spurious `PresentButUnconfirmedPastHorizon` alarm on the
+    /// next tick. The horizon restarts from the probe height, so the kernel
+    /// waits a full window for refresh to clear the F14 lock; only a fresh
+    /// full horizon without clearing re-escalates.
+    #[test]
+    fn confirmed_in_chain_does_not_alarm_next_tick() {
+        let h = held(1_000);
+        let probe_height = 1_000 + CFG.escape_horizon_blocks; // past horizon
+        let (_disp, next) = apply_probe_outcome(&h, ProbeOutcome::ConfirmedInChain, probe_height);
+        let next = next.expect("tracking continues");
+
+        // Immediately after the confirmation observation: within the new
+        // horizon → wait, NOT alarm (the pre-fix bug fired the alarm here).
+        assert_eq!(
+            escape_ladder_step(&next, probe_height, healthy(), CFG),
+            WatchdogStep::Wait(WaitReason::HorizonNotReached)
+        );
+
+        // A full fresh horizon later without the lock clearing (deep reorg /
+        // refresh stall) → the alarm is warranted.
+        assert_eq!(
+            escape_ladder_step(
+                &next,
+                probe_height + CFG.escape_horizon_blocks,
+                healthy(),
+                CFG
+            ),
+            WatchdogStep::OperatorAlarm(AlarmReason::PresentButUnconfirmedPastHorizon)
+        );
+    }
+
+    /// Regression (round-7 review): a daemon that is BOTH behind and peerless
+    /// must surface the actionable DaemonPeerless alarm, not be masked by the
+    /// transient DaemonSyncing wait — a peerless daemon cannot sync, so
+    /// waiting on it is indefinite.
+    #[test]
+    fn behind_and_peerless_alarms_peerless_not_syncing() {
+        let h = held(0);
+        let past = CFG.escape_horizon_blocks;
+        let behind_and_peerless = DaemonHealthContext {
+            connections: 0,
+            height: 5_000,
+            target_height: 6_000,
+        };
+        assert_eq!(
+            escape_ladder_step(&h, past, behind_and_peerless, CFG),
+            WatchdogStep::OperatorAlarm(AlarmReason::DaemonPeerless)
+        );
     }
 }
