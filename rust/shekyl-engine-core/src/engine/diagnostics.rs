@@ -472,6 +472,13 @@ pub enum BuildErrorKind {
     /// distinct from [`Self::RebuildingMembershipData`] (tree backfill lag) — a
     /// clean wait-N-blocks signal, self-resolving as the tip advances.
     OutputNotYetSpendable,
+
+    /// The build was refused because the F28/F37 rebuild-loop circuit
+    /// breaker is tripped (`DAEMON_SUBMIT_VERDICT.md` §2.5). Mirrors
+    /// [`SendError::SubmitLoopBreakerTripped`](super::error::SendError::SubmitLoopBreakerTripped);
+    /// the trip itself was alarmed via
+    /// [`PendingTxDiagnostic::SubmitLoopBreakerTripped`].
+    SubmitLoopBreakerTripped,
 }
 
 /// Coarse-grained projection of a
@@ -742,6 +749,21 @@ pub enum PendingTxDiagnostic {
 
         /// How long the reservation has been outstanding.
         age: Duration,
+    },
+
+    /// **Operator alarm** — the F28/F37 rebuild-loop circuit breaker
+    /// tripped (`DAEMON_SUBMIT_VERDICT.md` §2.5): a second consecutive
+    /// daemon rejection of the same kind. Two independent builds
+    /// rejected identically is a systematic wallet/daemon rule (or
+    /// fee-model) disagreement, not a bad tx; further automatic builds
+    /// are refused until the operator acknowledges. Emitted exactly
+    /// once per trip.
+    SubmitLoopBreakerTripped {
+        /// The reservation whose rejection tripped the breaker.
+        reservation_id: ReservationId,
+
+        /// The rejection kind of the consecutive streak.
+        kind: TerminalErrorKind,
     },
 }
 

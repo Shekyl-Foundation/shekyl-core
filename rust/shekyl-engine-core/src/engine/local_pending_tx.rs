@@ -332,6 +332,106 @@ pub(crate) struct PendingTxState {
     pub in_flight: HashMap<ReservationId, InFlightSubmit>,
     /// Monotone counter for fresh [`ReservationId`]s.
     pub next_id: u64,
+    /// F28/F37 rebuild-loop circuit breaker. See [`SubmitLoopBreaker`].
+    pub loop_breaker: SubmitLoopBreaker,
+}
+
+/// The F28/F37 rebuild-loop circuit breaker
+/// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.5).
+///
+/// The §2.5 dispositions for `Rejected{Malformed}`, `Rejected{FeeTooLow}`,
+/// and `Rejected{Unrecognized}` are *one-shot rebuild*: a second
+/// consecutive rejection of the same kind is a systematic wallet/daemon
+/// rule (or fee-model) disagreement, not a bad tx — a third silent build
+/// burns fees and multiplies linking artifacts (§7.1 for `Malformed`;
+/// for `FeeTooLow` the bound is privacy-load-bearing outright, since a
+/// fee-driven rebuild can pull in an additional input, leaking
+/// co-ownership per iteration — F30). The breaker mechanizes "never
+/// loop":
+///
+/// - Each terminal rejection of a breaker-scoped kind extends that
+///   kind's consecutive streak; any other definite submit outcome
+///   (accept, or a terminal rejection of a different class) resets the
+///   streak.
+/// - The **second** consecutive same-kind rejection trips the breaker:
+///   an operator alarm is emitted
+///   ([`PendingTxDiagnostic::SubmitLoopBreakerTripped`]) and further
+///   `build` calls are refused with
+///   [`SendError::SubmitLoopBreakerTripped`] until the operator
+///   acknowledges via
+///   [`LocalPendingTx::acknowledge_submit_loop_breaker`].
+/// - An accepted submit while tripped resets the *streak* but not the
+///   tripped state: acceptance of a different tx does not falsify the
+///   systematic-disagreement hypothesis for the failing payment, and
+///   auto-clearing would let an alternating pattern re-enter the loop
+///   the breaker exists to break. Acknowledgment is the only reset.
+#[derive(Debug, Default)]
+pub(crate) struct SubmitLoopBreaker {
+    /// The rejection kind of the current consecutive streak, if any.
+    streak_kind: Option<TerminalErrorKind>,
+    /// Consecutive same-kind rejections observed.
+    streak: u8,
+    /// Set when the breaker trips; cleared only by acknowledgment.
+    tripped: Option<TerminalErrorKind>,
+}
+
+impl SubmitLoopBreaker {
+    /// Consecutive same-kind rejections at which the breaker trips.
+    /// §2.5: "one-shot rebuild" — the second consecutive rejection is
+    /// the escalation point; there is never a third build.
+    const TRIP_THRESHOLD: u8 = 2;
+
+    /// Which terminal kinds the breaker scopes over. `DoubleSpend` is
+    /// excluded: its disposition is terminal release with no rebuild
+    /// prescription, so there is no loop to break.
+    fn in_scope(kind: TerminalErrorKind) -> bool {
+        matches!(
+            kind,
+            TerminalErrorKind::Malformed
+                | TerminalErrorKind::FeeTooLow
+                | TerminalErrorKind::Unrecognized
+        )
+    }
+
+    /// Record a definite non-rejection submit outcome (accept). Resets
+    /// the streak; deliberately does **not** clear `tripped` (see type
+    /// docs).
+    fn record_accept(&mut self) {
+        self.streak_kind = None;
+        self.streak = 0;
+    }
+
+    /// Record a terminal rejection. Returns `true` iff this rejection
+    /// trips the breaker (exactly once — an already-tripped breaker
+    /// does not re-alarm).
+    fn record_terminal(&mut self, kind: TerminalErrorKind) -> bool {
+        if !Self::in_scope(kind) {
+            self.streak_kind = None;
+            self.streak = 0;
+            return false;
+        }
+        if self.streak_kind == Some(kind) {
+            self.streak = self.streak.saturating_add(1);
+        } else {
+            self.streak_kind = Some(kind);
+            self.streak = 1;
+        }
+        if self.streak >= Self::TRIP_THRESHOLD && self.tripped.is_none() {
+            self.tripped = Some(kind);
+            return true;
+        }
+        false
+    }
+
+    /// The kind the breaker tripped on, if tripped.
+    pub(crate) fn tripped(&self) -> Option<TerminalErrorKind> {
+        self.tripped
+    }
+
+    /// Operator acknowledgment: clear the tripped state and streak.
+    fn acknowledge(&mut self) {
+        *self = Self::default();
+    }
 }
 
 // ============================================================================
@@ -560,6 +660,7 @@ fn build_error_kind(err: &SendError) -> BuildErrorKind {
         SendError::CurveTreeUnavailable { .. } | SendError::Io(_) => {
             BuildErrorKind::DaemonUnavailable
         }
+        SendError::SubmitLoopBreakerTripped { .. } => BuildErrorKind::SubmitLoopBreakerTripped,
     }
 }
 
@@ -791,6 +892,9 @@ where
 
         state.in_flight.remove(&id);
         release_output_locks_for(state, id);
+        // F28/F37: a definite accept ends any consecutive-rejection streak
+        // (it does not clear a tripped breaker — see `SubmitLoopBreaker`).
+        state.loop_breaker.record_accept();
 
         // F14 (`DAEMON_SUBMIT_VERDICT.md` §2.6): the accepting verdict means
         // the tx is network-exposed, not settled. Instead of the legacy
@@ -839,6 +943,19 @@ where
                 reason: DiscardReason::DaemonRejectedTerminal { kind },
             },
         );
+
+        // F28/F37 loop-breaker (§2.5): a second consecutive same-kind
+        // rejection is a systematic disagreement — alarm once and gate
+        // further builds until the operator acknowledges.
+        if state.loop_breaker.record_terminal(kind) {
+            emit_pending_tx_diagnostic(
+                self.sink.as_ref(),
+                PendingTxDiagnostic::SubmitLoopBreakerTripped {
+                    reservation_id: id,
+                    kind,
+                },
+            );
+        }
 
         SubmitError::DaemonRejectedTerminal { kind }
     }
@@ -2013,6 +2130,23 @@ where
         Ok(())
     }
 
+    /// Operator acknowledgment of a tripped F28/F37 loop-breaker
+    /// (`DAEMON_SUBMIT_VERDICT.md` §2.5): clears the tripped state and
+    /// the consecutive-rejection streak, re-enabling `build`. The
+    /// operator investigates the systematic disagreement the alarm
+    /// named *before* acknowledging — the breaker cannot distinguish a
+    /// fixed root cause from an unfixed one.
+    ///
+    /// `dead_code` allow: the consumer-facing wiring (CLI/RPC operator
+    /// surface) lands with the §5.3 watchdog; the reset path exists now
+    /// so the breaker's lifecycle is complete and testable.
+    #[allow(dead_code)]
+    pub(crate) fn acknowledge_submit_loop_breaker(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.loop_breaker.acknowledge();
+        }
+    }
+
     #[allow(dead_code)] // trait surface only; production wiring lands with mempool eviction (V3.x).
     fn signal_mempool_evicted_sync(&self, rid: ReservationId) -> Result<(), PendingTxError> {
         let mut state = self
@@ -2076,6 +2210,7 @@ where
             consumer_held: HashMap::new(),
             in_flight: HashMap::new(),
             next_id: 0,
+            loop_breaker: SubmitLoopBreaker::default(),
         });
         Self {
             signer,
@@ -2132,6 +2267,25 @@ where
                 },
             );
             return Err(err);
+        }
+
+        // F28/F37 loop-breaker gate (§2.5): while tripped, automatic
+        // builds are refused — the alarm was raised at trip time and only
+        // operator acknowledgment re-enables building.
+        {
+            let tripped = self
+                .state
+                .lock()
+                .map_err(|_| SendError::CannotSign {
+                    reason: "pending-tx state lock poisoned",
+                })?
+                .loop_breaker
+                .tripped();
+            if let Some(kind) = tripped {
+                let err = SendError::SubmitLoopBreakerTripped { kind };
+                emit_build_failed(self.sink.as_ref(), &err);
+                return Err(err);
+            }
         }
 
         let fee_snapshot = self.fee_snapshot_source.fetch().await.map_err(|err| {
@@ -4000,6 +4154,128 @@ mod tests {
             .build(standard_request(7_000))
             .await
             .expect("outputs released");
+    }
+
+    // -- F28/F37 loop-breaker (`DAEMON_SUBMIT_VERDICT.md` §2.5) --------------
+
+    /// Streak semantics, unit-level over [`SubmitLoopBreaker`] directly.
+    #[test]
+    fn loop_breaker_streak_semantics() {
+        // Second consecutive same-kind rejection trips, exactly once.
+        let mut b = SubmitLoopBreaker::default();
+        assert!(!b.record_terminal(TerminalErrorKind::Malformed));
+        assert!(b.record_terminal(TerminalErrorKind::Malformed));
+        assert_eq!(b.tripped(), Some(TerminalErrorKind::Malformed));
+        // Already tripped: no re-alarm on further rejections.
+        assert!(!b.record_terminal(TerminalErrorKind::Malformed));
+
+        // A different in-scope kind resets the streak.
+        let mut b = SubmitLoopBreaker::default();
+        assert!(!b.record_terminal(TerminalErrorKind::FeeTooLow));
+        assert!(!b.record_terminal(TerminalErrorKind::Malformed));
+        assert!(!b.record_terminal(TerminalErrorKind::FeeTooLow));
+        assert_eq!(b.tripped(), None);
+
+        // An accept resets the streak.
+        let mut b = SubmitLoopBreaker::default();
+        assert!(!b.record_terminal(TerminalErrorKind::FeeTooLow));
+        b.record_accept();
+        assert!(!b.record_terminal(TerminalErrorKind::FeeTooLow));
+        assert_eq!(b.tripped(), None);
+
+        // Out-of-scope terminal kinds (no rebuild prescription) reset.
+        let mut b = SubmitLoopBreaker::default();
+        assert!(!b.record_terminal(TerminalErrorKind::Unrecognized));
+        assert!(!b.record_terminal(TerminalErrorKind::DoubleSpend));
+        assert!(!b.record_terminal(TerminalErrorKind::Unrecognized));
+        assert_eq!(b.tripped(), None);
+
+        // `Unrecognized` is in scope (§2.5: the F28 loop-breaker applies).
+        let mut b = SubmitLoopBreaker::default();
+        assert!(!b.record_terminal(TerminalErrorKind::Unrecognized));
+        assert!(b.record_terminal(TerminalErrorKind::Unrecognized));
+        assert_eq!(b.tripped(), Some(TerminalErrorKind::Unrecognized));
+
+        // Acknowledgment clears tripped state and streak.
+        let mut b = SubmitLoopBreaker::default();
+        b.record_terminal(TerminalErrorKind::Malformed);
+        b.record_terminal(TerminalErrorKind::Malformed);
+        b.acknowledge();
+        assert_eq!(b.tripped(), None);
+        assert!(!b.record_terminal(TerminalErrorKind::Malformed));
+    }
+
+    /// Drive the breaker through the engine: two consecutive same-kind
+    /// rejections alarm once and gate `build`; acknowledgment re-enables.
+    async fn assert_loop_breaker_trips_on(kind: TerminalErrorKind) {
+        let sink = Arc::new(AssertionSink::new());
+        let (pending, _ledger, _tree_dir) =
+            funded_pending_tx_with_sink(Arc::clone(&sink) as Arc<dyn DiagnosticSink>).await;
+
+        // First rejection: outputs released, no alarm, rebuild allowed.
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonRejectedTerminal { kind }));
+        pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect_err("first rejection");
+
+        // One-shot rebuild (the §2.5 disposition) — rejected again.
+        let rebuilt = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("one-shot rebuild allowed after first rejection");
+        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonRejectedTerminal { kind }));
+        pending
+            .submit(rebuilt.id, rebuilt.content_gen)
+            .await
+            .expect_err("second rejection");
+
+        // The second consecutive rejection alarmed exactly once.
+        let events = sink.recorded_pending();
+        let alarms = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    PendingTxDiagnostic::SubmitLoopBreakerTripped { kind: k, .. } if *k == kind
+                )
+            })
+            .count();
+        assert_eq!(alarms, 1, "exactly one alarm per trip: {events:?}");
+
+        // Third build is refused: never loop.
+        let err = pending
+            .build(standard_request(7_000))
+            .await
+            .expect_err("third build must be refused while tripped");
+        assert!(
+            matches!(err, SendError::SubmitLoopBreakerTripped { kind: k } if k == kind),
+            "expected SubmitLoopBreakerTripped, got {err:?}"
+        );
+
+        // Operator acknowledgment re-enables building.
+        pending.acknowledge_submit_loop_breaker();
+        pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build allowed after acknowledgment");
+    }
+
+    /// F28: `Malformed` one-shot loop-breaker.
+    #[tokio::test]
+    async fn loop_breaker_trips_on_second_consecutive_malformed() {
+        assert_loop_breaker_trips_on(TerminalErrorKind::Malformed).await;
+    }
+
+    /// F37: `FeeTooLow` bounded retry — second consecutive `FeeTooLow`
+    /// on the rebuilt tx → alarm, no third build.
+    #[tokio::test]
+    async fn loop_breaker_trips_on_second_consecutive_fee_too_low() {
+        assert_loop_breaker_trips_on(TerminalErrorKind::FeeTooLow).await;
     }
 
     #[tokio::test]

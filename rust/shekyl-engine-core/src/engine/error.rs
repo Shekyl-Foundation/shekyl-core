@@ -581,6 +581,24 @@ pub enum SendError {
         /// `REF_ANCHOR_AGE` — the minimum synced height to anchor a reference.
         ref_anchor_age: u64,
     },
+
+    /// The F28/F37 rebuild-loop circuit breaker is tripped
+    /// (`DAEMON_SUBMIT_VERDICT.md` §2.5): two consecutive daemon
+    /// rejections of the same kind (`Malformed`, `FeeTooLow`, or
+    /// `Unrecognized`) indicate a systematic wallet/daemon disagreement,
+    /// and further automatic builds are refused — a third build burns
+    /// fees and multiplies linking artifacts (§7.1) without resolving
+    /// the disagreement. The operator investigates the alarm and resets
+    /// via `acknowledge_submit_loop_breaker`.
+    #[error(
+        "submit loop-breaker tripped: two consecutive daemon rejections \
+         of the same kind ({kind:?}); builds refused until the operator \
+         acknowledges"
+    )]
+    SubmitLoopBreakerTripped {
+        /// The rejection kind the breaker tripped on.
+        kind: TerminalErrorKind,
+    },
 }
 
 // --- PendingTx lifecycle ---------------------------------------------------
