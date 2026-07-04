@@ -1092,9 +1092,10 @@ mod spec_anchors {
         cipher_round(&mut state, &round_key);
         assert_eq!(
             state, expected,
-            "aes::hazmat::cipher_round diverged from the FIPS-197 Appendix B \
-             round-1 worked example — the AES round primitive is not the \
-             standard function",
+            "cipher_round (this crate's wrapper over aes::hazmat::cipher_round) \
+             diverged from the FIPS-197 Appendix B round-1 worked example — \
+             the wrapper's cast/orientation or the underlying AES round is not \
+             the standard function",
         );
     }
 
