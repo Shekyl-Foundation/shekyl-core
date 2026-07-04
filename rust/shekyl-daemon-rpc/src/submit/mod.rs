@@ -41,6 +41,7 @@ pub mod facts;
 pub mod fee;
 pub mod gate;
 pub mod phase_a;
+pub mod verifier;
 pub mod verify;
 
 /// FCMP++ reference-block age-window constants, generated from the JSON
@@ -72,4 +73,5 @@ pub use facts::{
 };
 pub use gate::PhaseCGate;
 pub use phase_a::{parse_submission, ParsedSubmission, PhaseAReject, SubmitTxKind};
+pub use verifier::DaemonTxVerifier;
 pub use verify::{TxVerifier, VerifyFailure};

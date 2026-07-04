@@ -43,7 +43,11 @@ pub struct ReferenceFacts {
     pub height: BlockHeight,
     /// Curve-tree root at that height.
     pub root: [u8; 32],
-    /// Current curve-tree depth (the verifier's `layers` input).
+    /// Current curve-tree depth in the consensus/LMDB convention
+    /// (`curve_trees_tree_depth` = layer count − 1) — the row-K10 upper
+    /// bound for the wire `tree_depth`. The verifier reconstructs its
+    /// layer count as `wire tree_depth + 1`, exactly as the C++ caller
+    /// does (`blockchain.cpp:4119`).
     pub tree_depth: u8,
 }
 
