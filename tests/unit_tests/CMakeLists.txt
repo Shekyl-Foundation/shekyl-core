@@ -43,6 +43,7 @@ set(unit_tests_sources
   cryptonote_format_utils.cpp
   daemon_default_data_dir.cpp
   daemon_submit_ffi_roundtrip.cpp
+  daemon_submit_shims.cpp
   decompose_amount_into_digits.cpp
   device.cpp
   difficulty.cpp
