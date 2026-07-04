@@ -131,11 +131,10 @@ where
     D: DaemonEngine,
 {
     async fn submit(&self, tx_bytes: Vec<u8>) -> Result<TxHash, SubmitError> {
-        // Debug-only plumbing cross-check that the daemon impl returns the canonical
-        // wire id. Computed only in debug builds so release does no extra parse — the
-        // daemon path parses the blob again, and this is its sole consumer. Graceful on a
-        // malformed blob (the daemon path returns `Malformed`; the matched arms below are
-        // reached only for a valid tx).
+        // Debug-only consistency guard: the `DaemonEngine` impl's accept outcome must
+        // carry the same hash this computes locally. Computed only in debug builds so
+        // release does no extra parse. Graceful on a malformed blob (the daemon path
+        // returns `Malformed`; the check below fires only on an accept outcome).
         #[cfg(debug_assertions)]
         let local_hash = canonical_tx_id_opt(&tx_bytes);
         let outcome = self
@@ -147,10 +146,12 @@ where
                 // `LocalPendingTx::submit_async` re-binds the active reservation id.
                 reservation_id: ReservationId::new(0),
             })?;
-        // Cross-check the daemon-returned id against the canonical wire hash on an
-        // accept outcome (debug only). This is `DaemonEngine`-path-specific: the
-        // per-`P` submitter computes the hash locally and never reads it back, so it
-        // has nothing to cross-check.
+        // `TxRelayResponse` carries NO txid field — neither path reads an id back from
+        // the daemon (§3.6: identity is always locally computed, anti-untrusted-daemon).
+        // So this compares two LOCAL hash pipelines and catches a `DaemonEngine` *impl*
+        // (a test double / fault injector) that returns a divergent outcome hash — NOT
+        // a lying daemon. `DaemonEngine`-path-specific: the per-`P` submitter feeds its
+        // own locally-computed hash straight into the shared mapper, nothing to check.
         #[cfg(debug_assertions)]
         if let TxSubmitOutcome::Submitted { hash } | TxSubmitOutcome::AlreadyKnown { hash } =
             &outcome
@@ -158,7 +159,7 @@ where
             debug_assert_eq!(
                 Some(*hash),
                 local_hash,
-                "daemon-returned id must equal the canonical wire tx hash"
+                "DaemonEngine impl outcome hash must equal the local canonical wire tx hash"
             );
         }
         outcome_to_result(outcome)
@@ -169,14 +170,22 @@ where
 /// transactions over `P`'s **own** Tor circuit via [`PRpc`] — the write-side
 /// mirror of `PBlockSource` (SP-T4a, CX-2; `ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`).
 ///
-/// Constructed **only** from a [`PTorClient`] + the daemon base URL: there is no
-/// principal-`DaemonClient` path and no `Default`, so a `P` broadcast **cannot**
-/// be built over the shared principal connection — the write-side origin-in-`P`-
-/// space isolation is unrepresentable on the constructor, not merely discouraged
-/// (mirrors `PBlockSource::new`, one direction over).
+/// Constructed **only** from a [`PTorClient`] + the daemon base URL: no
+/// principal-`DaemonClient` path, no `Default`, so *this* submitter cannot be built
+/// over the shared principal connection (mirrors `PBlockSource::new`, one direction
+/// over). **Honest scope (§3A):** that closes *construction* — it does **not** stop
+/// handing `P`'s tx **bytes** to the *principal* `DaemonTransactionSubmitter` (the
+/// `submit(Vec<u8>)` trait takes opaque, persona-unbound bytes), nor pairing `P1`'s
+/// bytes with a submitter built from `P2`'s circuit. This binds the *circuit* to a
+/// persona (via `PTorClient::for_persona`), not the *bytes*; the posture→submitter
+/// routing (②→here, never the principal) and the byte↔persona pairing are
+/// **2c-2b's** obligation (a `P`-bound-bytes newtype only this `submit` accepts is
+/// the make-bad-states-unrepresentable option).
 //
-// `allow(dead_code)`: transient — the non-test consumer is the broadcast posture
-// selector (slices 3–4). The proving test ships with the enabler; not deferred.
+// `allow(dead_code)`: transient — the non-test consumer is the gated **2c-2a/2c-2b**
+// bond-assembly + request-path wiring (see `stake_engine.rs` `TODO(2d)`), NOT the
+// posture selector (which resolves a posture, never a submitter). The dead-proxy
+// proving test ships with the enabler; not deferred.
 #[allow(dead_code)]
 pub(crate) struct PTransactionSubmitter {
     rpc: PRpc,
@@ -195,7 +204,8 @@ impl PTransactionSubmitter {
 
 impl TransactionSubmitter for PTransactionSubmitter {
     async fn submit(&self, tx_bytes: Vec<u8>) -> Result<TxHash, SubmitError> {
-        // Local, fail-closed tx id. The bytes are wallet-built (a signed vin), so a
+        // Local, fail-closed tx id. The bytes are a wallet-built, fully-assembled
+        // signed transaction (for the bond path, the tx carrying the bond vin), so a
         // parse failure is a build-path defect — map it to the same `Malformed`
         // terminal the `DaemonEngine` path returns rather than panicking, and never
         // reach the network with an unparseable blob.
@@ -209,14 +219,30 @@ impl TransactionSubmitter for PTransactionSubmitter {
         // a retry decision derived from `PRpc`'s fetch-style `classify`. A dropped
         // connection does not tell us whether the tx propagated, so absence-of-a-
         // daemon-verdict is *ambiguous*, not a retryable transient — the write-side
-        // inversion of the fetch default. The orchestrator's §5.2 retry re-sends the
-        // **same** bytes (same txid → daemon dedupes → `AlreadyKnown`), so retry is
-        // idempotent and never a rebuild; recovering from the ambiguity is its job,
-        // not this submitter's.
+        // inversion of the fetch default.
+        //
+        // This submitter's job ENDS here: map honestly and stop. The recovery
+        // contract — what a post-ambiguity retry means — is the **consumer's §5.2
+        // orchestrator** (2c-2a/2c-2b) to write, from the daemon's REAL reply
+        // surface, NOT an `AlreadyKnown` dedupe: no production code derives
+        // `AlreadyKnown` (only the test double constructs it). A same-bytes retry of
+        // a *healthy* duplicate returns `OK + not_relayed` → `Submitted`; the
+        // dangerous windows are a tx timed out of the pool (→ `Malformed`), a fee
+        // floor risen since send (→ `FeeTooLow` **while the original is still
+        // mineable** — a false-terminal that must NOT release output locks), and a
+        // stale FCMP++ root. And dropping this future detaches the `spawn_blocking`
+        // POST, which may still broadcast — a cancelled submit is ambiguous too.
+        // (See `ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §2 axis 4 + the 2c
+        // submit-outcome-partition obligation in `FOLLOWUPS.md`.)
         let resp = self.rpc.publish_transaction(&tx_bytes).await.map_err(|_| {
             SubmitError::DaemonAmbiguous {
                 kind: AmbiguousErrorKind::DaemonUnavailable,
-                // `LocalPendingTx::submit_async` re-binds the active reservation id.
+                // Placeholder: the submitter owns no reservation. The *current*
+                // caller (`LocalPendingTx::submit_async`) re-binds this rid — but the
+                // P seam's future consumer (StakeEngine, 2c) has no re-binder, so the
+                // rid-0 sentinel is meaningless until re-bound and MUST NOT be trusted
+                // as a real reservation. (2c: split the submitter error (no rid) from
+                // the reservation-bound orchestrator error so `0` is unrepresentable.)
                 reservation_id: ReservationId::new(0),
             }
         })?;
@@ -397,6 +423,43 @@ mod tests {
         assert!(
             !format!("{err}").contains(&username),
             "invariant (a): a submit error must never render the SOCKS username"
+        );
+    }
+
+    /// The local parse-guard: unparseable bytes are a build-path defect that
+    /// **never reaches the network** — `submit` short-circuits to
+    /// `DaemonRejectedTerminal { Malformed }` *before* any transport. This guards
+    /// the arm the dead-proxy test deliberately routes around (it feeds valid wire
+    /// to reach the transport). The dead SOCKS port (`:1`) is the tell: if a
+    /// refactor let the guard fall through to the network, the outcome would be
+    /// `DaemonAmbiguous`, not `Malformed` — so the assertion distinguishes
+    /// "guarded before the wire" from "reached it" (and a swap to the panicking
+    /// `canonical_tx_id` would panic here instead of returning).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn broadcast_of_unparseable_bytes_is_a_local_malformed_never_reaching_the_network() {
+        use shekyl_p_transport::TorSocksEndpoint;
+        use shekyl_types::PCanonicalId;
+
+        let client = PTorClient::for_persona(
+            &PCanonicalId::from_bytes([3u8; 32]),
+            &TorSocksEndpoint::loopback(1),
+        )
+        .expect("proxy config is well-formed");
+        let submitter = PTransactionSubmitter::new(client, "http://127.0.0.1:18081".to_string());
+
+        let err = submitter
+            .submit(b"not a canonical shekyl-wire transaction".to_vec())
+            .await
+            .expect_err("unparseable bytes must fail");
+        assert!(
+            matches!(
+                err,
+                SubmitError::DaemonRejectedTerminal {
+                    kind: TerminalErrorKind::Malformed
+                }
+            ),
+            "a build-path defect is a local Malformed terminal, never a transport \
+             outcome (would be DaemonAmbiguous if the guard fell through): got {err:?}"
         );
     }
 }

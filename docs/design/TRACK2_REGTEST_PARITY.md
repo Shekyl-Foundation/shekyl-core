@@ -46,7 +46,7 @@ regtest spend path) and the depth-3+ verify validation deferred by #162.
 | `--fixed-difficulty` (instant mining) | `cryptonote_core.cpp:94`, `blockchain.cpp:1008` | exists |
 | Live header carries **real** root; per-height root table written on add-block | `blockchain.cpp:1959-1961`, `blockchain_db.cpp:453-458` | exists |
 | Daemon `shekyl_fcmp_verify` == Rust `verify` via FFI; pool + block-accept | `blockchain.cpp:3998/4126`, `tx_pool.cpp:239` | exists |
-| Production `DaemonClient` (HTTP JSON-RPC): block fetch, fee, submit→verdict | `engine/daemon.rs:231-285` | exists |
+| Production `DaemonClient` (HTTP JSON-RPC): block fetch, fee, submit→verdict | `engine/daemon.rs` (`impl DaemonEngine for DaemonClient`; verdict mapping shared via `engine/transaction_submitter.rs`) | exists |
 | Block→curve-tree ingest + verify-at-ingest vs header root | `engine/merge.rs:397,568` | exists |
 
 **Gaps (the Track-2 build):** (1) no Rust harness that spawns `shekyld` and drives

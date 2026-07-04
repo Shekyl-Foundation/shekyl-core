@@ -18,13 +18,18 @@ different readiness, so it splits:
 
 - **SP-T4a (this doc — buildable now):** the CX-2 write-side seam (a
   `P`-scoped `TransactionSubmitter`, no principal path) + the broadcast
-  posture-selector, **proven by wiring the one real, already-built consumer:**
-  the discretionary `_spread`/`_bond_first` entry/bond-post broadcast. The bond
-  vin is built + signed today (`build_join_market_vin`), the anchor-free timing
-  draw exists (`draw_entry_gap_guarded`), and only the submission is deferred
-  (`TODO(2d)`, `stake_engine.rs:1095`). SP-T4a fleshes exactly that out — so the
-  seam ships with a real consumer, not consumer-less infrastructure (the SP-0 /
-  SP-T2 bar).
+  posture-selector, **proven by its own dead-proxy test (slice 2)** — the
+  submitter accepts real wire bytes, maps a transport failure to
+  `DaemonAmbiguous`, and never leaks the SOCKS username. Its *real* consumer —
+  the discretionary `_spread`/`_bond_first` entry/bond-post broadcast — is
+  **not wired here** and cannot be: the bond vin is built + signed today
+  (`build_join_market_vin`) and the anchor-free draw exists
+  (`draw_entry_gap_guarded`), but the submission needs tx-assembly + a
+  submitter/posture/scheduler in `StakeEngine`, all gated on **2c-2a/2c-2b**
+  (`TODO(2d)`, `stake_engine.rs`). So the seam ships as the **prerequisite** that
+  wiring consumes — a byte-defined-consumer building block, fully tested — not
+  consumer-less infrastructure (the SP-0 / SP-T2 bar; contrast SP-T3, whose onion
+  had no byte-defined payload at all).
 - **SP-T4b (gated — separate slice):** the deadline-critical serve-credit
   challenge-response broadcast. Its tx has a byte-exact wire + on-chain verifier
   (`shekyl-archival-retention`), but **no wallet-side build/sign/submit
@@ -59,9 +64,10 @@ Everything SP-T4a builds on is landed on `dev`:
   bytes → same txid (hash computed locally, `transaction_submitter.rs:20`) →
   daemon dedupes by hash → `TxSubmitOutcome::AlreadyKnown`; the path **never
   rebuilds on retry**.
-- **The real consumer.** `build_join_market_vin` returns a signed `JoinMarketVin`
-  (`stake_engine.rs:1109`); `draw_entry_gap_guarded` returns `(_spread,
-  _bond_first)` (`:1089`); the submission is the open `TODO(2d)` (`:1095`).
+- **The real consumer.** `build_join_market_vin` (in `shekyl-archival-bond-builder`)
+  returns a signed `JoinMarketVin`; `draw_entry_gap_guarded` returns `(_spread,
+  _bond_first)`; the submission is the open `TODO(2d)` — all at the bond-post
+  handler in `stake_engine.rs` (line numbers omitted; they drift).
 - **The read-side enforcement template.** `PBlockSource`
   (`pscan/block_source.rs:196`) — constructible **only** from `PTorClient`, no
   principal path, no `Default`; `Posture`/`select` no-silent-③ selector
@@ -102,18 +108,21 @@ correlation no circuit isolation touches. The mitigation primitive exists but is
   **entry/bond-post funding seam** — *not* a general "any `P` broadcast" timing
   primitive, *not* a block-anchor decorrelator, *not* a principal-timeline
   decorrelator, *not* a cross-broadcast decorrelator.
-- **What SP-T4a does.** Wire `draw_entry_gap`'s `(_spread, _bond_first)` into the
-  entry/bond-post submission (the `TODO(2d)`). This applies the built primitive
-  to the one broadcast it was designed for.
+- **What SP-T4a does.** *Draws* `draw_entry_gap`'s `(_spread, _bond_first)` at the
+  bond-post handler (`stake_engine.rs`), but does **not** wire it into any
+  submission — the draw stays on `_`-prefixed locals; wiring it into the broadcast
+  (including the `_bond_first` order-coin, not just the `_spread` delay) is the
+  **2c-2a/2c-2b** scheduler's job. Applying the built primitive to the one
+  broadcast it was designed for is therefore pending, not done (§5 slice 4).
 - **What SP-T4a explicitly does NOT close (the GF-7 residual — §4).** The
   broader **principal-timeline** correlation (does `P`'s broadcast timing track
   the principal's lifecycle activity?) is **GF-7**, which GATE6 §10.12 flags
   (S-1) as *the* load-bearing principal↔`P` unlinkability seam **and** the
   least-developed, still **deferred (R3/R4)**, and (S-3) **unmeasured** — no
   `P(link | T_obs)` simulation exists. SP-T4a **must not claim the timing axis
-  closed.** It wires the narrow funding-seam primitive and hands GF-7 forward as
-  a named, deferred residual **and a genesis gate** (§4) — not a measured-someday
-  aspiration.
+  closed.** It *draws* the narrow funding-seam primitive (wiring it in is 2c's) and
+  hands GF-7 forward as a named, deferred residual **and a genesis gate** (§4) —
+  not a measured-someday aspiration.
 
 ### Axis 3 — first-seen-origin (**new — forbid broadcast-③ by type**)
 
@@ -159,24 +168,43 @@ axis, but as a categorically different leak:
   posture, not a hardship. Forbid bricks no one who should be broadcasting bond
   vins; it enforces the posture they should already be in. **The forbid holds.**
 
-### Axis 4 — ambiguous partial-failure (**new — but the principal contract already solves it**)
+### Axis 4 — ambiguous partial-failure (**new — the submitter maps honestly; the real recovery contract is 2c's to write**)
 
 A `ConnectionError` on submit does **not** tell you whether the tx propagated —
 the daemon may have accepted and relayed it before the response failed. So
 "retry on `ConnectionError`" — correct for fetch, and what `PRpc`'s fetch-style
 `classify` would hand you — is **wrong** for broadcast if it means "re-derive and
-re-submit." The principal path already has the right contract (§1); SP-T4a's job
-is to **carry it onto the `P` path, not inherit `PRpc`'s fetch `classify`:**
+re-submit." The submitter therefore maps **any** transport error to
+`SubmitError::DaemonAmbiguous` and stops — disambiguation is not its job:
 
 - `PTransactionSubmitter::submit` maps **any** `Err` from `publish_transaction`
   to `SubmitError::DaemonAmbiguous` — exactly as `DaemonTransactionSubmitter`
-  does (`transaction_submitter.rs:68`). It **does not consult `classify`'s
+  does (`transaction_submitter.rs`). It **does not consult `classify`'s
   transient/permanent verdict** to decide a local retry: absence-of-verdict is
   ambiguous, full stop.
-- Retry (with dedup) belongs to the **orchestrator**, which re-submits the
-  **same held bytes** → same txid → daemon dedupes → `AlreadyKnown`. Retry =
-  re-send the same bytes; **rebuild-on-retry is unrepresentable** (§3 invariant
-  C).
+- **The recovery contract is 2c's §5.2 orchestrator to write — from the daemon's
+  *real* reply surface, not the `AlreadyKnown` abstraction, which no production
+  code derives (only the test double constructs it).** A same-bytes retry does
+  **not** yield `AlreadyKnown`: a healthy duplicate returns `OK + not_relayed`
+  → `Submitted`; the dangerous windows are a tx *timed out of the pool*
+  (→ `Malformed`), a *fee floor risen since send* (→ `FeeTooLow` **while the
+  original is still mineable** — a false-terminal that must **not** release the
+  reservation's output locks), and a *stale FCMP++ root*. So §5.2 must assign
+  every reply/failure to exactly one of {definitely-relayed,
+  definitely-not-relayed, genuinely-ambiguous}, disambiguate a post-ambiguity
+  terminal against "is my txid already on-chain?" before treating it as a
+  rejection, and give the ambiguous bucket a **TTL exit** (there is none today —
+  ambiguous = locked-until-restart; see the 2c tracked obligation). Retry =
+  re-send the same bytes; **rebuild-on-retry is unrepresentable** (§3 invariant C).
+- **Cancellation is a third outcome the write seam must document.** `PRpc::post`
+  bridges the synchronous `ureq` POST via `spawn_blocking`; dropping the `submit`
+  future (a `timeout`/`select`/shutdown above) **detaches** that task, which runs
+  to completion (≤ `GLOBAL_TIMEOUT` ≈ 120 s) and **may still broadcast** the tx
+  while the caller gets no value — unlike the principal (hyper) path, which stops
+  driving on drop. So the 2c consumer **must not** wrap `submit` in a cancelling
+  combinator, or must treat a cancelled submit as ambiguous (same as a returned
+  `DaemonAmbiguous`); the reservation's synchronous `in_flight` flip before the
+  `await` already yields that retained-ambiguous posture.
 
 ---
 
@@ -184,11 +212,22 @@ is to **carry it onto the `P` path, not inherit `PRpc`'s fetch `classify`:**
 
 The enforcement pattern is the SP-T2 mirror; the instances are new.
 
-- **(A) No principal path in.** `PTransactionSubmitter` is constructible
-  **only** from a `PRpc` (itself constructible only from a `PTorClient`) — no
-  `From<DaemonClient>`, no `Default`. A principal `DaemonClient` cannot be
-  coerced into the `P` submitter; the type won't take it. Mirrors `PBlockSource`
-  (`block_source.rs:196`) and the DQ1 no-principal-path move, write side.
+- **(A) No principal path in — closes *construction*, not the reverse
+  direction.** `PTransactionSubmitter` is constructible **only** from a `PRpc`
+  (itself constructible only from a `PTorClient`) — no `From<DaemonClient>`, no
+  `Default`. A principal `DaemonClient` cannot be coerced into the `P` submitter;
+  the type won't take it. Mirrors `PBlockSource` (`block_source.rs`) and the DQ1
+  no-principal-path move, write side. **But note the honest scope (as the S1
+  sharpening did for (B)):** this makes a *P submitter over the principal
+  connection* unrepresentable; it does **not** stop handing `P`'s tx **bytes** to
+  the *principal* `DaemonTransactionSubmitter` — the `submit(Vec<u8>)` trait takes
+  opaque bytes with no persona binding, so origin-in-`P`-space on the write path
+  is **not** structurally closed here. The posture→submitter dispatch that routes
+  ②→`PTransactionSubmitter` (never the principal submitter) is the load-bearing
+  guard, and it is **2c-2b's** obligation — with a `P`-bound-bytes newtype (only
+  `PTransactionSubmitter::submit` accepts) as the make-bad-states-unrepresentable
+  option. "Axis 1 covered" (§2) means *the submitter exists and is principal-path-
+  free by construction*, not *the routing is enforced* — the latter lands in 2c.
 - **(B) *System-selected* broadcast-③ is unrepresentable — a *different,
   narrower* Posture type — and `OwnRemote` is trust-on-user-assertion.** The
   broadcast posture is **not** the fetch `Posture`. It is a distinct type with
@@ -243,15 +282,19 @@ observer, and has not been).
 SP-T4a therefore states plainly, in the design and in code comments at the wire
 site:
 
-> SP-T4a wires the narrow funding-seam decorrelation (`draw_entry_gap`) into the
-> entry/bond-post broadcast. It does **not** decorrelate `P`'s broadcast from the
-> principal's lifecycle timeline (GF-7), nor from `P`'s other broadcasts. That
-> correlation is **deferred (GATE6 R3/R4) and unmeasured (S-3)** — out of this
-> slice's scope. GF-7's measurement round inherits: (i) the standoff window
+> SP-T4a *draws* the narrow funding-seam decorrelation (`draw_entry_gap`) but does
+> **not** wire it into any broadcast — that wiring (and the scheduler that carries
+> both the `_spread` delay and the `_bond_first` order-coin to the wire) is
+> **2c-2a/2c-2b**. Even once wired, it does **not** decorrelate `P`'s broadcast
+> from the principal's lifecycle timeline (GF-7), nor from `P`'s other broadcasts.
+> That correlation is **deferred (GATE6 R3/R4) and unmeasured (S-3)** — out of this
+> slice's scope, and only *becomes measurable* once 2c builds the real consumer.
+> GF-7's measurement round inherits: (i) the standoff window
 > (`DEFAULT_ENTRY_GAP_WINDOW = 600`) as the parameter to grade `P(link | T_obs)`
-> against; (ii) the entry/bond-post as the one broadcast currently jittered;
-> (iii) the open question of principal-timeline and cross-broadcast
-> decorrelation, which no built primitive addresses.
+> against; (ii) the entry/bond-post as the broadcast the jitter is *drawn for*
+> (wiring pending 2c); (iii) the open question of principal-timeline and
+> cross-broadcast decorrelation, which no built primitive addresses and which 2c's
+> scheduler is the only home to mitigate.
 
 This is a **named, deferred residual with a disclosed inheritance**, not a silent
 gap — the `21-reversion-clause-discipline` / disclosed-cost posture.
@@ -291,7 +334,12 @@ per-surface commits (the #238 shape):
    `Local`/`OwnRemote` only (invariant B); the selector refuses to resolve a
    third-party broadcast because it *cannot represent one*. Proving test: the
    type has no `ThirdParty` constructor (a compile-fenced absence) + the selector
-   maps ①→principal submitter, ②→`PTransactionSubmitter`, and there is no ③ arm.
+   *refuses* to yield ③ (the exhaustive-match fence test). **Note:** slice 3 ships
+   the posture *decision* only — `select_broadcast` returns a `BroadcastPosture`,
+   **not** a submitter. The posture→submitter dispatch (①→principal,
+   ②→`PTransactionSubmitter`) is **2c-2b's** obligation, not shipped or tested
+   here (it needs a dispatch shape the RPITIT trait can't express as-is — see the
+   2c tracked obligation). Do not read this slice as proving the routing.
 4. **Point the consumer at the seam (production wiring is *gated*).** The real
    end-consumer — the discretionary `JoinMarketVin` bond-post — **cannot** be
    wired end-to-end yet, and verifying-at-source is why: `JoinMarketVin` is a tx
@@ -300,7 +348,7 @@ per-surface commits (the #238 shape):
    holds no broadcast submitter / posture / block-timed scheduler — it is inert
    pending the 2c-2a assemble / 2c-2b request-path wiring. That is a real
    dependency (defer-only-on-a-real-blocker), not a shrink-the-PR defer. So slice
-   4 updates the `TODO(2d)` (`stake_engine.rs:1095`) to point at the built seam
+   4 updates the `TODO(2d)` (in `stake_engine.rs`) to point at the built seam
    and name exactly what production wiring still needs, and records the GF-7 scope
    (§4) at the timing-draw site — a comment at the consumer site, **not**
    production wiring. The seam ships now as the **prerequisite** that 2c-2a/2c-2b
@@ -311,8 +359,8 @@ per-surface commits (the #238 shape):
    sharpening on `OwnRemote` and the S2 *GF-7 genesis-gate* elevation); refine
    `TRANSPORT_PLAN.md` §15 SP-T4 to point here and record the broadcast-③ forbid
    + selector asymmetry; **fix the stale line-ref** at `TRANSPORT_PLAN.md:94`
-   (`stake_engine.rs:956-962` → `:1089-1096`); add the GF-7 genesis-blocker entry
-   to `docs/FOLLOWUPS.md`.
+   (point it at the `TODO(2d)` in `stake_engine.rs`, no fragile line number); add
+   the GF-7 genesis-blocker entry to `docs/FOLLOWUPS.md`.
 
 **SP-T4b** (serve-credit challenge-response broadcast) is the separate, gated
 follow-up — it reuses this seam once a GATE2 wallet-side build/sign/submit
@@ -326,7 +374,18 @@ producer for `ArchivalServeCreditResponse` exists.
 | --- | --- | --- |
 | ① Local | direct localhost source | direct localhost submit (own node) |
 | ② Own-remote | `PBlockSource` over `P`'s circuit | `PTransactionSubmitter` over `P`'s circuit |
-| ③ Third-party | **allowed, disclosed** (continuous · statistical · unavoidable) | **forbidden — unrepresentable** (discrete · categorical · avoidable; first-seen-origin) |
+| ③ Third-party | **allowed, disclosed** (continuous · statistical · unavoidable) | **forbidden by type** — no ③ variant (discrete · categorical · avoidable; first-seen-origin). *System-selected* ③ unrepresentable; an `OwnRemote` pointed at a stranger is the disclosed residual (invariant B). |
+
+**Read/write asymmetry on ① when unreachable.** `select_broadcast` (like the fetch
+`select`) *honors* an explicitly-named `Local` even when the reachability probe
+says the node is down — the named choice is authoritative. On the **read** path a
+dead local node then surfaces as a per-fetch error and the scan stalls. On the
+**write** path the same dead node turns *every* broadcast into a `DaemonAmbiguous`
+(§2 axis 4) that, with no TTL exit, wedges the reservation's output locks until
+wallet restart — so "a dead node surfaces as an error" is materially heavier for
+broadcast. The clean pre-flight refusal exists only on the no-choice arm; making a
+dead-local broadcast a loud refusal rather than a lock wedge is part of 2c's
+submit-outcome-partition obligation (below).
 
 The ③ column is the whole point: the selectors differ because the operations'
 threat models differ, and the difference is encoded in **two distinct types**.

@@ -1092,17 +1092,20 @@ impl Message<SignBond> for StakeEngine {
         // S6: the session-level `certify_draw` self-cert (over `OsRngGapAdapter`,
         // gated, at session start) is wired in `on_start` — see
         // `run_session_self_cert` and the `conformance` feature.
-        // TODO(2d) — the broadcast write path `_spread`/`_bond_first` feed is now
-        // BUILT: `PTransactionSubmitter` (the per-`P` CX-2 seam) + `BroadcastPosture`
+        // TODO(2d) — the write-side *seam* that `_spread`/`_bond_first` will feed is
+        // built: `PTransactionSubmitter` (the per-`P` CX-2 seam) + `BroadcastPosture`
         // (no-③-by-type) in `transaction_submitter.rs` / `posture.rs` (SP-T4a,
-        // `ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`). What remains is the CONSUMER
-        // wiring, still gated — **not on the seam**: assemble the bond `vin` into a
-        // full tx (funding inputs/outputs + `credit_term` →
-        // `shekyl_tx_builder::sign_transaction_with_terms`), give `StakeEngine` a
-        // broadcast submitter + a resolved posture + a block-timed scheduler
-        // (delay ≈ `_spread`) — the 2c-2a assemble / 2c-2b request-path wiring this
-        // actor is still inert for. The draw stays on `_`-prefixed locals until that
-        // wiring lands (which *consumes* the seam, not the reverse).
+        // `ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`). But the draw itself is NOT wired:
+        // both values stay `_`-prefixed locals. The remaining CONSUMER wiring, still
+        // gated (**not on the seam**): assemble the bond `vin` into a full tx (funding
+        // inputs/outputs + `credit_term` → `shekyl_tx_builder::sign_transaction_with_terms`),
+        // give `StakeEngine` a broadcast submitter + a resolved posture + a block-timed
+        // scheduler that consumes BOTH draw values — the `_spread` DELAY **and** the
+        // `_bond_first` ORDER-COIN (the fair bond-before-vs-after-funding inversion;
+        // dropping it collapses the observer's ordering prior from 0.5 to certainty,
+        // half the golden-vector-certified decorrelation). This is the 2c-2a assemble /
+        // 2c-2b request-path wiring this actor is inert for; it *consumes* the seam,
+        // not the reverse.
         //
         // GF-7 SCOPE (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §4): this jitter
         // decorrelates the bond-post from `P`'s own observable funding/entry event

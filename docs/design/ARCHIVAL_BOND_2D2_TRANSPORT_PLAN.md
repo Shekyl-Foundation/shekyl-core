@@ -91,7 +91,7 @@ driving task + SP-4 finalize + the cadence); SP-6/SP-7 are future.
 | `VerifiedRange` / `PReconcileSet` (SP-6) | **0 files — design-level, future** | Consume for half (B); **gated on SP-6 being built** (PR-A only *collects* the inputs) |
 | `CoverDiscovery` (SP-7) — re-fund takes `AbsentVerified` only | **0 files — design-level, future** | Honor it once built; no auto-escalation of `Incomplete` |
 | `tip_height()` = "this source's *claimed* tip" (TM-3) | concept (in the plan) | Resolved by **posture**, not multi-source machinery (§4) |
-| `_spread` / `_bond_first` broadcast stub | **landed** (`stake_engine.rs:1089`, `TODO(2d)`); the write path it feeds is now built (SP-T4a `PTransactionSubmitter` + `BroadcastPosture`) | Wire discretionary-broadcast timing over the per-`P` circuit (§5) — gated on the consumer wiring (2c-2a/2c-2b), not the seam |
+| `_spread` / `_bond_first` broadcast stub | **drawn** (the `TODO(2d)` in `stake_engine.rs`); the write-side *seam* it will feed is built (SP-T4a `PTransactionSubmitter` + `BroadcastPosture`), but the draw is **not** wired into any broadcast | Wire discretionary-broadcast timing (both the `_spread` delay **and** the `_bond_first` order-coin) over the per-`P` circuit (§5) — gated on the consumer wiring (2c-2a/2c-2b), not the seam |
 
 **Implication for 2d-2 half (B):** the reconcile is **blocked** until SP-6 (`PReconcileSet`)
 and the PR-B driving task exist; only half (A) transport can proceed now. The doc treats (B)
