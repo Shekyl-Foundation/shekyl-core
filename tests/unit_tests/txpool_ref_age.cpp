@@ -23,6 +23,9 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
 #include "cryptonote_core/blockchain.h"
+// cryptonote_core.h defines cryptonote::test_options (blockchain.h only
+// forward-declares it), needed by init_blockchain's fakechain options.
+#include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/tx_pool.h"
 
 using namespace cryptonote;
@@ -202,7 +205,13 @@ cryptonote::transaction make_fcmp_shape_tx()
   rv.txnFee = 1000000;
   memset(&rv.referenceBlock, 0xAD, sizeof(rv.referenceBlock));
   rv.outPk.resize(1);
-  memset(rv.outPk[0].mask.bytes, 0xDD, sizeof(rv.outPk[0].mask.bytes));
+  // The commitment mask must be a decodable curve point:
+  // parse_and_validate_tx_from_blob's expand step computes mask * INV_EIGHT
+  // (expand_transaction_1), which throws on garbage bytes. The Ed25519
+  // basepoint's compressed encoding (0x58 then 0x66×31) is the cheapest
+  // valid point that needs no rctOps call.
+  memset(rv.outPk[0].mask.bytes, 0x66, sizeof(rv.outPk[0].mask.bytes));
+  rv.outPk[0].mask.bytes[0] = 0x58;
   rv.enc_amounts.resize(1);
   rv.enc_amounts[0].fill(0x42);
   rv.enc_labels.resize(1);
