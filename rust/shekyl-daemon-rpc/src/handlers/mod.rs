@@ -29,3 +29,4 @@
 pub mod binary;
 pub mod json;
 pub mod json_rpc;
+pub mod submit;

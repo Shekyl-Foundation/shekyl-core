@@ -29,8 +29,9 @@
 //! Axum HTTP server replacing epee's http_server_impl_base for daemon RPC.
 
 use crate::core::CoreRpc;
-use crate::handlers::{binary, json, json_rpc};
+use crate::handlers::{binary, json, json_rpc, submit};
 use crate::middleware::DEFAULT_BODY_LIMIT;
+use crate::submit::{DaemonSubmitEngine, DaemonTxVerifier, FfiSubmitShim, SubmitEngine};
 
 use axum::routing::{get, post};
 use axum::Router;
@@ -42,6 +43,9 @@ use tracing::info;
 
 pub struct AppState {
     pub core: Arc<CoreRpc>,
+    /// The Rust admission engine behind `POST /submit_transaction`
+    /// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §3).
+    pub submit_engine: Arc<DaemonSubmitEngine>,
     pub restricted: bool,
     pub shutdown: Arc<Notify>,
 }
@@ -95,6 +99,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/sendrawtransaction",
             get(json::send_raw_transaction).post(json::send_raw_transaction),
         )
+        // Native typed submit route (DAEMON_SUBMIT_VERDICT.md §2.4). POST
+        // only; the legacy routes above dual-serve within the PR series and
+        // are deleted in PR-5 (§9).
+        .route("/submit_transaction", post(submit::submit_transaction))
         .route(
             "/get_public_nodes",
             get(json::get_public_nodes).post(json::get_public_nodes),
@@ -213,8 +221,13 @@ pub async fn serve_with_listener(
     listener: tokio::net::TcpListener,
     shutdown: Arc<Notify>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let submit_engine = Arc::new(SubmitEngine::new(
+        FfiSubmitShim::new(core.clone()),
+        DaemonTxVerifier,
+    ));
     let state = Arc::new(AppState {
         core,
+        submit_engine,
         restricted: config.restricted,
         shutdown: shutdown.clone(),
     });
