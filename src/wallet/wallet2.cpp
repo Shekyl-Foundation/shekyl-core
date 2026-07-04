@@ -7650,11 +7650,14 @@ void wallet2::commit_tx(pending_tx& ptx)
     // Typed submit contract (DAEMON_SUBMIT_VERDICT.md §2.4): transport-only
     // epee marshaling over the Rust-served route. Verdict interpretation is
     // deliberately minimal here — the identity-bearing verdicts (accepted /
-    // already_in_pool / already_in_chain) all mean "the bytes are held";
-    // everything else (rejected, or a verdict tag this build cannot name)
-    // throws tx_rejected with the cause as the reason text. The rich
-    // per-cause dispositions live in the Rust wallet engine (§2.5); this
-    // legacy path is a deletion target, not a second policy site.
+    // already_in_pool / already_in_chain) all mean "the bytes are held", and
+    // a "rejected" verdict throws tx_rejected with the cause as the reason
+    // text. The contract is closed: a verdict tag this build cannot name, or
+    // a "rejected" verdict missing its cause, is a malformed daemon response
+    // and surfaces as a protocol error rather than masquerading as a policy
+    // rejection. The rich per-cause dispositions live in the Rust wallet
+    // engine (§2.5); this legacy path is a deletion target, not a second
+    // policy site.
     COMMAND_RPC_SUBMIT_TRANSACTION::request req;
     req.tx_blob = epee::string_tools::buff_to_hex_nodelimer(tx_to_blob(ptx.tx));
     COMMAND_RPC_SUBMIT_TRANSACTION::response daemon_send_resp;
@@ -7665,8 +7668,14 @@ void wallet2::commit_tx(pending_tx& ptx)
       THROW_WALLET_EXCEPTION_IF(!r, error::no_connection_to_daemon, "submit_transaction");
       const std::string &verdict = daemon_send_resp.verdict;
       const bool held = verdict == "accepted" || verdict == "already_in_pool" || verdict == "already_in_chain";
-      THROW_WALLET_EXCEPTION_IF(!held, error::tx_rejected, ptx.tx, verdict,
-          daemon_send_resp.cause.empty() ? verdict : daemon_send_resp.cause);
+      if (!held)
+      {
+        THROW_WALLET_EXCEPTION_IF(verdict != "rejected", error::wallet_generic_rpc_error,
+            "submit_transaction", "unknown verdict tag in daemon response: " + verdict);
+        THROW_WALLET_EXCEPTION_IF(daemon_send_resp.cause.empty(), error::wallet_generic_rpc_error,
+            "submit_transaction", "rejected verdict missing its cause in daemon response");
+        THROW_WALLET_EXCEPTION(error::tx_rejected, ptx.tx, verdict, daemon_send_resp.cause);
+      }
     }
 
     // sanity checks
