@@ -405,12 +405,22 @@ namespace cryptonote
 
     // Mirror of add_tx's fresh-insert tail (the !existing_tx arm) for a
     // local-origin, engine-verified tx. relay_method::local keeps the tx out
-    // of the broadcasted category until relay dispatch; last_relayed_time =
-    // max() makes it immediately eligible for the relay nudge / periodic
-    // loop (DAEMON_SUBMIT_VERDICT.md §5.2 item 1).
+    // of the broadcasted category until relay dispatch.
+    //
+    // last_relayed_time is receive_time, NOT add_tx's max() sentinel. add_tx
+    // can use max() because a received tx's explicit relay dispatch always
+    // follows and calls set_relayed, overwriting it. The engine path's relay
+    // is fire-and-forget (DAEMON_SUBMIT_VERDICT.md §4.3), and the periodic
+    // relay loop is its stated fallback if the nudge misses (§5.2 item 1) —
+    // but get_relayable_transactions skips a max()-stamped local tx forever:
+    // `now - max()` underflows to now+1 and get_relay_delay(max(), _) casts to
+    // a negative time_t returned as a huge unsigned delay, so the entry never
+    // becomes eligible. receive_time lets the loop relay it after
+    // MIN_RELAY_TIME if the nudge missed, while a successful nudge's
+    // set_relayed overwrites it first (no double relay).
     txpool_tx_meta_t meta{};
     meta.set_relay_method(relay_method::local);
-    meta.last_relayed_time = std::numeric_limits<decltype(meta.last_relayed_time)>::max();
+    meta.last_relayed_time = receive_time;
     meta.receive_time = receive_time;
     meta.weight = tx_weight;
     meta.fee = fee;
@@ -443,11 +453,25 @@ namespace cryptonote
       meta.fcmp_verified = 0;
     }
 
+    // insert_key_images mutates the in-memory m_spent_key_images index
+    // incrementally, before the DB write. A failure after it (a false return,
+    // or a DB exception from add_txpool_tx / add_tx_to_transient_lists —
+    // LMDB map-full/resize, I/O) aborts the DB txn via LockedTXN but does NOT
+    // touch that in-memory index, so without an explicit rollback it would
+    // leave a phantom spender keyed to a txid that never entered the pool.
+    // A later rebuilt spend of the same inputs would then classify as a false
+    // DoubleSpendConflict until daemon restart. Roll the images back on every
+    // failure past the point they may have been inserted.
+    bool key_images_inserted = false;
     try
     {
       LockedTXN lock(m_blockchain.get_db());
+      key_images_inserted = true;
       if (!insert_key_images(tx, id, relay_method::local))
+      {
+        remove_transaction_keyimages(tx, id);
         return false;
+      }
       m_blockchain.add_txpool_tx(id, blob, meta);
       add_tx_to_transient_lists(id, fee / (double)(tx_weight ? tx_weight : 1), receive_time);
       lock.commit();
@@ -455,6 +479,8 @@ namespace cryptonote
     catch (const std::exception &e)
     {
       MERROR("internal error: error adding attested transaction to txpool: " << e.what());
+      if (key_images_inserted)
+        remove_transaction_keyimages(tx, id);
       return false;
     }
 

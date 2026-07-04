@@ -116,9 +116,15 @@ public:
     return root_at(height);
   }
 
+  // Fault-injection hook: when set, add_txpool_tx throws, standing in for an
+  // LMDB map-full/resize or I/O failure in the insert tail after
+  // insert_key_images has already mutated the in-memory key-image index.
+  bool throw_on_add_txpool_tx = false;
   virtual void add_txpool_tx(const crypto::hash& txid, const cryptonote::blobdata_ref& blob,
     const cryptonote::txpool_tx_meta_t& meta) override
   {
+    if (throw_on_add_txpool_tx)
+      throw std::runtime_error("injected add_txpool_tx failure (LMDB map-full)");
     m_txpool[txid] = {meta, cryptonote::blobdata(blob.data(), blob.size())};
   }
   virtual void update_txpool_tx(const crypto::hash& txid, const cryptonote::txpool_tx_meta_t& meta) override
@@ -464,8 +470,13 @@ TEST(daemon_submit_shims, clean_commit_inserts_attested_pool_entry)
   EXPECT_EQ(meta.max_used_block_id, fx.cert_ref);
   EXPECT_EQ(meta.fcmp_verified, 1) << "attested insert must seed the verification cache";
   EXPECT_NE(meta.fcmp_verification_hash, crypto::null_hash);
-  EXPECT_EQ(meta.last_relayed_time, std::numeric_limits<decltype(meta.last_relayed_time)>::max())
-    << "committed tx must be immediately eligible for the relay nudge (§5.2 item 1)";
+  EXPECT_NE(meta.last_relayed_time, std::numeric_limits<decltype(meta.last_relayed_time)>::max())
+    << "the max() sentinel is skipped forever by get_relayable_transactions "
+       "(now - max() underflows), so a missed nudge would strand the tx";
+  EXPECT_EQ(meta.last_relayed_time,
+      static_cast<decltype(meta.last_relayed_time)>(meta.receive_time))
+    << "attested insert stamps last_relayed_time = receive_time so the periodic "
+       "relay loop is a real fallback if the fire-and-forget nudge misses (§5.2 item 1)";
   EXPECT_EQ(meta.kept_by_block, 0);
   EXPECT_EQ(meta.do_not_relay, 0);
   EXPECT_EQ(fx.bap.txpool.get_txpool_weight(), s.weight);
@@ -478,6 +489,41 @@ TEST(daemon_submit_shims, clean_commit_inserts_attested_pool_entry)
   EXPECT_TRUE(fx.db->txpool_has_tx(s.txid, relay_category::all));
   EXPECT_FALSE(fx.db->txpool_has_tx(s.txid, relay_category::legacy))
     << "a local-method entry must not match legacy; identity checks use `all`";
+}
+
+TEST(daemon_submit_shims, commit_db_failure_rolls_back_key_images)
+{
+  // A DB exception in the insert tail, after insert_key_images has already
+  // mutated the in-memory m_spent_key_images index, must roll that index back.
+  // Otherwise a phantom spender keyed to a txid that never entered the pool is
+  // stranded, and a rebuilt spend of the same input false-rejects as
+  // DoubleSpendConflict until daemon restart (review finding).
+  ShimFixture fx;
+  SubmitTx s = fx.make_tx(0, 0);
+  const crypto::key_image ki = std::get<txin_to_key>(s.tx.vin[0]).k_image;
+
+  fx.db->throw_on_add_txpool_tx = true;
+  shekyl_submit_facts_ffi fresh;
+  uint8_t fresh_ki = 0;
+  EXPECT_EQ(fx.commit(s, fresh, fresh_ki), SHEKYL_SUBMIT_INTERNAL_FAULT)
+    << "an insert-tail DB failure is a §3.4 internal fault, never a verdict";
+  EXPECT_FALSE(fx.db->txpool_has_tx(s.txid, relay_category::all));
+
+  // The discriminating check: a DIFFERENT txid querying the same key image.
+  // With a phantom {s.txid} left in the index this returns true (the input
+  // looks spent); after rollback the index has no entry and it returns false.
+  crypto::hash other;
+  memset(other.data, 0x77, sizeof(other.data));
+  EXPECT_FALSE(fx.bap.txpool.have_tx_keyimg_as_spent(ki, other))
+    << "insert-tail DB failure stranded a phantom key-image spender";
+
+  // And with the fault cleared the input admits cleanly — the rollback left no
+  // residue that would wedge a later legitimate spend.
+  fx.db->throw_on_add_txpool_tx = false;
+  shekyl_submit_facts_ffi fresh2;
+  uint8_t fresh_ki2 = 0;
+  EXPECT_EQ(fx.commit(s, fresh2, fresh_ki2), SHEKYL_SUBMIT_OK);
+  EXPECT_TRUE(fx.db->txpool_has_tx(s.txid, relay_category::all));
 }
 
 TEST(daemon_submit_shims, commit_txid_divergence_is_internal_fault)
@@ -493,6 +539,28 @@ TEST(daemon_submit_shims, commit_txid_divergence_is_internal_fault)
       reinterpret_cast<const uint8_t*>(wrong.data)),
     SHEKYL_SUBMIT_INTERNAL_FAULT)
     << "§3.4 release-check: txid divergence is a daemon defect, never a verdict";
+  EXPECT_FALSE(fx.db->txpool_has_tx(s.txid, relay_category::all));
+}
+
+TEST(daemon_submit_shims, commit_weight_divergence_is_internal_fault)
+{
+  // Row I3 runtime invariant: the engine-supplied tx_weight is release-checked
+  // against the C++ get_transaction_weight over the same reparsed blob. A
+  // divergence (a Rust/C++ BP+ clawback mismatch) is a §3.4 loud fault, never
+  // a verdict — otherwise a wrong weight is stored and block-template assembly
+  // packs an over-weight block the network rejects.
+  ShimFixture fx;
+  SubmitTx s = fx.make_tx(0, 0);
+
+  shekyl_submit_facts_ffi fresh;
+  uint8_t fresh_ki = 0;
+  EXPECT_EQ(daemon_submit::commit_tx(fx.bap.txpool, fx.bap.bc,
+      reinterpret_cast<const uint8_t*>(s.blob.data()), s.blob.size(),
+      reinterpret_cast<const uint8_t*>(s.txid.data),
+      s.weight + 1, s.fee, // engine weight disagrees with the C++ re-derivation
+      reinterpret_cast<const uint8_t*>(fx.cert_ref.data), ShimFixture::ref_height,
+      fx.cert_root.data(), &fresh, &fresh_ki, 1),
+    SHEKYL_SUBMIT_INTERNAL_FAULT);
   EXPECT_FALSE(fx.db->txpool_has_tx(s.txid, relay_category::all));
 }
 
@@ -559,6 +627,14 @@ TEST(daemon_submit_shims, latch_race_competing_spend_returns_raced_with_fresh_fa
   EXPECT_FALSE(fx.db->txpool_has_tx(mine.txid, relay_category::all))
     << "a raced commit must not insert";
   EXPECT_TRUE(fx.db->txpool_has_tx(competitor.txid, relay_category::all));
+
+  // The resident victim must be flagged double_spend_seen so its owner sees
+  // the early warning via pool RPC — the legacy add_tx side effect the engine
+  // path must preserve (review finding: the RPC submit path dropped it).
+  txpool_tx_meta_t victim_meta;
+  ASSERT_TRUE(fx.db->get_txpool_tx_meta(competitor.txid, victim_meta));
+  EXPECT_TRUE(victim_meta.double_spend_seen)
+    << "committing a conflicting spend must mark the resident pool tx double_spend_seen";
 
   competitor_thread.join();
 }
