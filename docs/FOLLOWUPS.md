@@ -6267,10 +6267,10 @@ one place to confirm each item's relationship to the wallet stack.
      it through `on_send_raw_transaction`. Additive; no consensus-rule
      change; no breaking RPC change.
   3. The Rust wallet's `submit_outcome_from_response`
-     (`rust/shekyl-engine-core/src/engine/daemon.rs`) adds `fcmp_root_stale`
-     to the consumed `TxRelayResponse` subset and splits `ProofStale` out
-     of the generic `Malformed` bucket; the orchestrator drives the §3.6
-     bounded rebuild loop.
+     (`rust/shekyl-engine-core/src/engine/transaction_submitter.rs`) adds
+     `fcmp_root_stale` to the consumed `TxRelayResponse` subset and splits
+     `ProofStale` out of the generic `Malformed` bucket; the orchestrator
+     drives the §3.6 bounded rebuild loop.
 
   **Not a Phase 2a blocker.** The proactive `reference.rs` validity
   horizon (`should_reanchor`/`select_reference_height`,
@@ -7114,21 +7114,27 @@ one place to confirm each item's relationship to the wallet stack.
   deprecations in vendored crypto). **Reopen as** a standalone doc-hygiene sweep: fix those warnings,
   then swap the shekyl-tor-scoped step for `cargo doc --workspace --no-deps` under `-D warnings`.
 - **2d-2 SP-T4a — GF-7 principal-timeline timing correlation is a GENESIS GATE (measure
-  `P(link | T_obs)` before launch).** SP-T4a wired the narrow funding-seam entry-gap jitter
-  (`draw_entry_gap`, `spread ~ U[0, 600 blocks]`) into the bond-post broadcast and forbids
-  broadcast-③ by type — but it does **not** decorrelate `P`'s broadcast from the **principal's
-  lifecycle timeline** (nor from `P`'s other broadcasts). That correlation is **GF-7** (GATE6
-  §10.12 — S-1: *the* load-bearing principal↔`P` unlinkability seam, least-developed, deferred
-  R3/R4; S-3: **zero** simulated privacy scenarios, i.e. **unmeasured**). Shipping the write-side
-  firewall to genesis with its core timing axis unmeasured is exactly what
-  *get-it-right-not-get-it-now* forbids for a privacy coin. **This is a genesis blocker, not a
-  deferred round: genesis cannot ship until GF-7's `P(link | T_obs)` is measured against a modeled
-  observer (as a function of standoff window / entry jitter / batch size) and meets threshold.**
-  The measurement round inherits: `DEFAULT_ENTRY_GAP_WINDOW = 600` as the grading parameter; the
-  entry/bond-post as the one broadcast currently jittered; the open principal-timeline +
-  cross-broadcast decorrelation that no built primitive addresses. **Target: pre-genesis (blocks
-  the seal).** See [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md)
-  §4 and [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (the S-3 privacy-sim home).
+  `P(link | T_obs)` before launch).** SP-T4a *draws* the narrow funding-seam entry-gap jitter
+  (`draw_entry_gap`, `spread ~ U[0, 600 blocks]`) but does **not** wire it into any broadcast — the
+  draw stays on `_`-prefixed locals (`stake_engine.rs`), and no bond-post broadcast exists until the
+  **2c-2a/2c-2b** scheduler consumes it. SP-T4a forbids broadcast-③ by type but does **not**
+  decorrelate `P`'s broadcast from the **principal's lifecycle timeline** (nor from `P`'s other
+  broadcasts). That correlation is **GF-7** (GATE6 §10.12 — S-1: *the* load-bearing principal↔`P`
+  unlinkability seam, least-developed, deferred R3/R4; S-3: **zero** simulated privacy scenarios,
+  i.e. **unmeasured**). Shipping the write-side firewall to genesis with its core timing axis
+  unmeasured is exactly what *get-it-right-not-get-it-now* forbids for a privacy coin. **This is a
+  genesis blocker, not a deferred round: genesis cannot ship until GF-7's `P(link | T_obs)` is
+  measured against a modeled observer (as a function of standoff window / entry jitter / batch size)
+  and meets threshold.** **2c is the first point at which GF-7 becomes *measurable*** — it builds the
+  real broadcast consumer to correlate against a principal timeline, so 2c's scheduler design must
+  leave a measurement hook (observability-to-a-modeled-adversary) and is the **only** home for the
+  cross-broadcast + principal-timeline decorrelation the two open axes need (see the 2c tracked
+  obligation below). The measurement round inherits: `DEFAULT_ENTRY_GAP_WINDOW = 600` as the grading
+  parameter; the entry/bond-post as the broadcast the jitter is *drawn for* (wiring pending 2c); the
+  open principal-timeline + cross-broadcast decorrelation that no built primitive addresses.
+  **Target: pre-genesis (blocks the seal).** See
+  [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md) §4 and
+  [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (the S-3 privacy-sim home).
 - **2d-2 SP-T3 — onion-route end-to-end validation (the property DQ-T0.4 *cannot* prove).**
   DQ-T0.4 (the SP-T0 circuit-isolation measurement) proves exactly one thing: `IsolateSOCKSAuth`
   puts per-persona SOCKS streams on **distinct circuits** — read as the attach-time `CircID` at
