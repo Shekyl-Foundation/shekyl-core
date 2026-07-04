@@ -544,15 +544,6 @@ namespace cryptonote
     bool handle_get_objects(NOTIFY_REQUEST_GET_OBJECTS::request& arg, NOTIFY_RESPONSE_GET_OBJECTS::request& rsp);
 
     /**
-     * @brief get number of outputs of an amount past the minimum spendable age
-     *
-     * @param amount the output amount
-     *
-     * @return the number of mature outputs
-     */
-    uint64_t get_num_mature_outputs(uint64_t amount) const;
-
-    /**
      * @brief get the public key for an output
      *
      * @param amount the output amount
