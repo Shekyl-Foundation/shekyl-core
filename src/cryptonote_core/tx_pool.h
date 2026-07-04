@@ -494,7 +494,12 @@ namespace cryptonote
      */
     bool get_pool_info(time_t start_time, bool include_sensitive, size_t max_tx_count, std::vector<std::pair<crypto::hash, tx_details>>& added_txs, std::vector<crypto::hash>& remaining_added_txids, std::vector<crypto::hash>& removed_txs, bool& incremental) const;
 
+// Same test-visibility idiom as blockchain.h: unit tests drive the private
+// sweep/readiness surface (remove_stuck_transactions,
+// is_transaction_ready_to_go) and assert on private state (m_input_cache).
+#ifndef IN_UNIT_TESTS
   private:
+#endif
 
     /**
      * @brief insert key images into m_spent_key_images

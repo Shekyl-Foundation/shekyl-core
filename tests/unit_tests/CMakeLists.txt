@@ -113,6 +113,7 @@ set(unit_tests_sources
   ct_balance_differential.cpp
   deferred_insertion.cpp
   tx_data_pruning_lmdb.cpp
+  txpool_ref_age.cpp
   pending_tree_fuzz.cpp
   )
 

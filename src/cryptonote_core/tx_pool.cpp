@@ -753,8 +753,30 @@ namespace cryptonote
     CRITICAL_REGION_LOCAL(m_transactions_lock);
     CRITICAL_REGION_LOCAL1(m_blockchain);
     std::list<std::pair<crypto::hash, uint64_t>> remove;
-    m_blockchain.for_all_txpool_txes([this, &remove](const crypto::hash &txid, const txpool_tx_meta_t &meta, const cryptonote::blobdata_ref*) {
+    const uint64_t chain_height = m_blockchain.get_current_blockchain_height();
+    m_blockchain.for_all_txpool_txes([this, chain_height, &remove](const crypto::hash &txid, const txpool_tx_meta_t &meta, const cryptonote::blobdata_ref*) {
       uint64_t tx_age = time(nullptr) - meta.receive_time;
+
+      // FCMP++ reference-age eviction (DAEMON_SUBMIT_VERDICT.md §6 leg 1):
+      // consensus rejects a tx whose referenceBlock aged past
+      // FCMP_REFERENCE_BLOCK_MAX_AGE (blockchain.cpp ref-age window), and the
+      // age only grows — such a tx can never be mined from this pool, but the
+      // receive-time sweep below would hold it (answering AlreadyInPool to
+      // wallets) for up to the full pool lifetime. The meta's
+      // max_used_block_height carries the reference height for the FCMP++
+      // membership-proof arms (regular spend and bond-post); it is 0 for
+      // serve-credit-only txs (no membership ref recorded) and for
+      // kept_by_block entries stored on a failed input check, so the > 0 gate
+      // leaves both alone. A genuine reference at height 0 is therefore not
+      // swept here — bounded residue: the template-time re-check excludes it
+      // from blocks and the receive-time sweep eventually evicts it.
+      // kept_by_block entries are excluded outright: they exist to survive
+      // reorgs, and a chain pop can shrink chain_height enough to bring a
+      // reference back inside the window.
+      const bool ref_stale = !meta.kept_by_block &&
+        meta.max_used_block_height > 0 &&
+        chain_height > FCMP_REFERENCE_BLOCK_MAX_AGE &&
+        meta.max_used_block_height < chain_height - FCMP_REFERENCE_BLOCK_MAX_AGE;
 
       if((tx_age > CRYPTONOTE_MEMPOOL_TX_LIVETIME && !meta.kept_by_block) ||
          (tx_age > CRYPTONOTE_MEMPOOL_TX_FROM_ALT_BLOCK_LIVETIME && meta.kept_by_block) )
@@ -762,6 +784,19 @@ namespace cryptonote
         LOG_PRINT_L1("Tx " << txid << " removed from tx pool due to outdated, age: " << tx_age );
         remove_tx_from_transient_lists(find_tx_in_sorted_container(txid), txid, !meta.matches(relay_category::broadcasted));
         m_timed_out_transactions.insert(txid);
+        remove.push_back(std::make_pair(txid, meta.weight));
+      }
+      else if (ref_stale)
+      {
+        // Deliberately NOT inserted into m_timed_out_transactions: the tx did
+        // not time out, its reference aged out. A resubmit of the same bytes
+        // is properly rejected by check_tx_inputs (the reference cannot get
+        // younger), so the resubmit gate's false-terminal shortcut is neither
+        // needed nor wanted here.
+        LOG_PRINT_L1("Tx " << txid << " removed from tx pool: FCMP++ reference at height "
+          << meta.max_used_block_height << " aged out of the max-age window ("
+          << FCMP_REFERENCE_BLOCK_MAX_AGE << " blocks, chain height " << chain_height << ")");
+        remove_tx_from_transient_lists(find_tx_in_sorted_container(txid), txid, !meta.matches(relay_category::broadcasted));
         remove.push_back(std::make_pair(txid, meta.weight));
       }
       return true;
