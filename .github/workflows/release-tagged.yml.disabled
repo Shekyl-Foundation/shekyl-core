@@ -159,7 +159,10 @@ jobs:
 
       - name: Install Rust toolchain with Windows target
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          # Download-then-run, NOT `curl | sh` (silent-green on failed
+          # download; observed live on PR #236).
+          curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs
+          sh /tmp/rustup-init.sh -y
           . "$HOME/.cargo/env"
           rustup target add x86_64-pc-windows-gnu
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
@@ -265,7 +268,10 @@ jobs:
 
       - name: Install Rust toolchain
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          # Download-then-run, NOT `curl | sh` (silent-green on failed
+          # download; observed live on PR #236).
+          curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs
+          sh /tmp/rustup-init.sh -y
           . "$HOME/.cargo/env"
           if [ -n "${{ matrix.platform.rust_target }}" ]; then
             rustup target add ${{ matrix.platform.rust_target }}

@@ -9,16 +9,26 @@
 # with corpus size). Dedicated workflow keeps the gate's status
 # separable from the always-on differential workflow.
 #
-# ## Trigger cadence (R1-D7 Sub-A)
+# ## Trigger cadence (R1-D7 Sub-A, amended by the test-regime
+# ## hardening runtime-mode change, 2026-07)
 #
-# Per R1-D6 close Reframe 2 + R1-D7 Sub-A: T6 runs on
-# **`workflow_dispatch`** during pre-genesis. Pre-genesis the
-# constants are still drifting (recipes being added,
-# `RUNNER_NOISE_MARGIN` being baselined); `workflow_dispatch`
-# during pre-genesis avoids burning CI cycles on a gate whose
-# constants are still drifting. Post-genesis: release-gate trigger
-# is added at that round of plan-doc amendment (per the §11 history
-# row that records the genesis transition).
+# M3 change-class citation (this file's own discipline, below):
+# **cadence change** + **toolchain-pin change** + **recipe dedup**.
+# Original R1-D7 Sub-A disposition: `workflow_dispatch`-only
+# pre-genesis, because "the constants are still drifting (recipes
+# being added, RUNNER_NOISE_MARGIN being baselined)". Substrate
+# evidence that the premise expired: the recipe set has been stable
+# since Phase 2h C5, RUNNER_NOISE_MARGIN is baselined against the
+# committed ubuntu-latest runner class, and the PR #79 substrate
+# closure that made ratios load-bearing landed 2026-05-26. The
+# test-regime audit (maintainer-ratified benchmark review,
+# 2026-07-03) found the practical effect was an armed gate with no
+# automated trigger — "T6 runs nightly" lived in doc comments while
+# the only trigger was manual — and directed the verification-DoS
+# gate onto a cron. Weekly (Tuesday 06:00 UTC, staggered clear of
+# the Monday mutants/codeql/oxide cluster and the daily 05:00
+# structural cron); `workflow_dispatch` retained. Post-genesis the
+# release-gate trigger still lands per the §11 history row.
 #
 # ## Post-PR-#79 substrate note (FOLLOWUP closed)
 #
@@ -65,6 +75,10 @@
 name: randomx-v2-adversarial-ratio
 
 on:
+  schedule:
+    # Weekly T6 adversarial-ratio gate; see the cadence-amendment
+    # citation above.
+    - cron: "0 6 * * 2"
   workflow_dispatch:
     inputs:
       samples_per_recipe:
@@ -72,6 +86,15 @@ on:
         required: false
         default: ''
         type: string
+
+# Schedule and dispatch runs never share a group (github.run_id):
+# both use github.ref == refs/heads/dev, and a cancel-in-progress
+# collision would silently swallow a running measurement — a
+# canceled run fires no alarm (house lesson from
+# randomx-v2-differential.yml's concurrency fix on PR #236).
+concurrency:
+  group: randomx-v2-adversarial-ratio-${{ github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -100,28 +123,29 @@ jobs:
         with:
           submodules: recursive
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        # Composite action (.github/actions/install-rust): pins the
+        # rust-toolchain.toml channel. Replaces `dtolnay/rust-toolchain
+        # @stable` — the exact moving-ref the repo's own toolchain
+        # discipline bans (it installed the wrong channel for the
+        # 1.94.0 pin in build.yml's history, and a mutable ref is a
+        # supply-chain + reproducibility risk). Latency RATIOS are
+        # toolchain-sensitive; a silently-moving stable would shift
+        # the measurement substrate under the baselined noise margin.
+        uses: ./.github/actions/install-rust
       - name: Install CMake + Ninja
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build
       - name: Configure + build randomx-v2 C reference
-        # Same build invocation as randomx-v2-differential.yml's
-        # structural-validate job (byte-identical librandomx.a).
-        # The duplication is intentional per Phase 2h R1-D7 Sub-A
-        # close: T6's dedicated workflow stays independent of the
-        # differential workflow so its activation/failure surface
-        # is decoupled.
-        run: |
-          mkdir -p "${RANDOMX_V2_INSTALL_DIR}/lib" "${RANDOMX_V2_INSTALL_DIR}/include"
-          cmake -G Ninja \
-            -S external/randomx-v2 \
-            -B "${RANDOMX_V2_BUILD_DIR}" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-          cmake --build "${RANDOMX_V2_BUILD_DIR}" --target randomx
-          cp "${RANDOMX_V2_BUILD_DIR}/librandomx.a" "${RANDOMX_V2_INSTALL_DIR}/lib/"
-          cp external/randomx-v2/src/randomx.h "${RANDOMX_V2_INSTALL_DIR}/include/"
+        # Composite action (.github/actions/build-randomx-v2-ref):
+        # byte-identical librandomx.a by construction across every
+        # consuming lane. R1-D7 Sub-A's "duplication is intentional"
+        # rationale was about decoupled ACTIVATION surfaces (this
+        # workflow's triggers/failure status stay independent), which
+        # a shared build recipe does not couple — it only prevents the
+        # recipes drifting apart, which would put the ratio gate on a
+        # differently-configured oracle than the differential gates.
+        uses: ./.github/actions/build-randomx-v2-ref
       - name: cargo test --ignored t6_worst_case_ratio
         working-directory: rust
         # Post-PR-#79 + c71ce2413 substrate closure: T6 activates on

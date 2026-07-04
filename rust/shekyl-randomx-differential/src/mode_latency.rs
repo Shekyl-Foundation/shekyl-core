@@ -93,6 +93,17 @@ use crate::rust_subject::RustSubjectSession;
 /// changing the budget requires a plan-doc round per §5.7's
 /// drift-prevention discipline. Encoded as `f64` because the
 /// ratio is `median_rust_ns / median_c_ns`, an `f64` quotient.
+///
+/// **Known near-/over-budget state (2026-07, CI-wiring measurements):**
+/// the gate's first-ever executions — three runs on dev hardware
+/// (i9-11950H; NOT the committed `ubuntu-latest` runner class this
+/// budget was baselined against) — measured **3.136× / 3.139× /
+/// 3.041×**: consistently over, tight spread. If the daily-cron T5
+/// gate reads red, start HERE, not at "fresh regression": the
+/// disposition is the plan-doc-locked choice between a §5.7 budget
+/// round (evidence: the committed-runner-class dispatch measurement)
+/// and verifier perf work. Never rerun-until-green; never a silent
+/// budget bump.
 pub const LATENCY_RATIO_BUDGET: f64 = 3.0;
 
 /// Successful run summary surfaced on the stdout report path

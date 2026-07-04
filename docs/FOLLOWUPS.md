@@ -4054,6 +4054,18 @@ sustainability is unaffected by the recalibration.
 
 ## V3.1 — audit response and stressnet gates
 
+- **`tests/performance_tests/` — rule-15 deletion-or-adoption audit**
+  (surfaced 2026-07-03, RandomX v2 test-regime benchmark review). The
+  inherited Monero performance suite is wired into **zero workflows**
+  (workflow-reference grep: no CI consumer) and mostly measures legacy
+  CryptoNote primitives — a dormant surface of the same class as the
+  armed gates the test-regime program closed. Disposition per
+  `15-deletion-and-debt.mdc`: audit each benchmark for
+  delete (legacy-primitive measurements with no v3 subject) vs adopt
+  (anything measuring a live v3 surface moves to a wired harness — the
+  Rust side's gungraun benches are the house pattern). *Target: V3.1*
+  (not genesis-gating; the live perf gates are T5/T6, wired 2026-07).
+
 - **Re-evaluate the inert `(1 + stake_ratio)` factor in `calc_burn_pct`
   (spawned gate-7 iteration 5, 2026-06-11).** The gate-7 locked-supply
   re-pricing ([`design/STAKER_ARCHIVAL_SIM.md`](./design/STAKER_ARCHIVAL_SIM.md)

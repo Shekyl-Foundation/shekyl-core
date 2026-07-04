@@ -32,7 +32,11 @@ jobs:
 
       - name: Install Rust toolchain
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          # Download-then-run, NOT `curl | sh`: a failed download must fail
+          # THIS step (piped, sh reads empty stdin and exits 0 — observed
+          # live on PR #236); --retry rides through transients.
+          curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs
+          sh /tmp/rustup-init.sh -y
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Cache cargo registry + build

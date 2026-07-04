@@ -477,11 +477,24 @@ mod tests {
         assert_eq!(rc, SHEKYL_POW_RANDOMX_V2_ERR_NULL_PTR);
     }
 
+    /// Serializes the canonical-mutating tests: the process-global
+    /// store has ONE canonical slot, and the sticky-eviction guarantee
+    /// protects only whichever seed currently holds it — two parallel
+    /// `set_canonical` tests would demote each other's seed to the
+    /// transient tier, where a concurrent novel derive can evict it
+    /// (a microsecond-window flake, but a flake on a consensus-adjacent
+    /// gate reads as a false "lazy derive" red). Poison-tolerant so one
+    /// failing test doesn't cascade.
+    static CANONICAL_SLOT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// `set_canonical` derives + pins, then a hash under the pinned
     /// seed succeeds and matches the direct path. Idempotent re-pin is
     /// also a no-op success.
     #[test]
     fn set_canonical_pins_and_hashes() {
+        let _canonical_slot = CANONICAL_SLOT_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let seed_bytes = [0x22u8; 32];
 
         // SAFETY: seed_bytes is a valid stack [u8; 32].
@@ -509,6 +522,52 @@ mod tests {
         let prepared = PreparedCache::derive(Seedhash::from_bytes(seed_bytes));
         let expected = compute_hash(&prepared, blob);
         assert_eq!(out, expected);
+    }
+
+    /// The eager-derive claim as a behavior gate (RandomX v2 test-regime
+    /// hardening: epoch-rollover stall check). `set_canonical`'s contract
+    /// is that the canonical cache is derived AT tip advance, off the
+    /// validation hot path — so the first verify after a seed-epoch
+    /// rollover never pays the multi-second cache build, which would
+    /// delay propagation of the first post-boundary block network-wide
+    /// (orphan-risk-shaped). Until this test, that claim lived only in
+    /// doc comments.
+    ///
+    /// Probed as STATE, not latency: [`CacheStore::lookup`] never
+    /// derives, so cache-present-immediately-after-`set_canonical` is
+    /// exactly "the derive already happened". A lazy implementation
+    /// fails this test deterministically; a wall-clock variant was
+    /// rejected as flake-theater on shared runners (the house rule
+    /// against absolute-time CI gates).
+    #[test]
+    fn set_canonical_eagerly_derives_off_the_verify_path() {
+        // CANONICAL_SLOT_LOCK: while 0x77 holds the canonical slot the
+        // sticky guarantee shields it from novel-derive eviction, and
+        // the lock keeps the sibling canonical test from demoting it
+        // mid-test. The unique seed (no other test uses 0x77) keeps the
+        // is_none() precondition sound.
+        let _canonical_slot = CANONICAL_SLOT_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let seed_bytes = [0x77u8; 32];
+        let seed = Seedhash::from_bytes(seed_bytes);
+
+        assert!(
+            cache_store().lookup(&seed).is_none(),
+            "precondition: seed 0x77.. must be underived before set_canonical \
+             (another test started using this seed?)"
+        );
+
+        // SAFETY: seed_bytes is a valid stack [u8; 32].
+        let rc = unsafe { shekyl_pow_randomx_v2_set_canonical(&raw const seed_bytes) };
+        assert_eq!(rc, SHEKYL_POW_RANDOMX_V2_OK);
+
+        assert!(
+            cache_store().lookup(&seed).is_some(),
+            "set_canonical must derive the canonical cache EAGERLY: a lazy \
+             derive stalls the first post-rollover verify by the full cache \
+             build (the doc-comment claim this test converts into a gate)"
+        );
     }
 
     /// The seed-epoch exports round the schedule through the C ABI

@@ -68,7 +68,11 @@ env:
     libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev
     protobuf-compiler ccache git curl ripgrep python3
   INSTALL_RUST: |
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    # Download-then-run, NOT `curl | sh`: a failed download must fail
+    # THIS step (piped, sh reads empty stdin and exits 0 — observed
+    # live on PR #236); --retry rides through transients.
+    curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs
+    sh /tmp/rustup-init.sh -y
     echo "$HOME/.cargo/bin" >> $GITHUB_PATH
   CCACHE_SETTINGS: |
     ccache --max-size=150M

@@ -15,6 +15,19 @@
   MAINNET, TESTNET, and STAGENET; FAKECHAIN (regtest daemons and test
   fixtures — the lever's legitimate fast-epoch use) keeps the warning-only
   behavior.
+- **pow: runtime differential modes wired into CI** (RandomX v2 test-regime
+  hardening, runtime-mode change). The harness's `--mode=correctness`
+  three-leg differential (Rust ≡ C ≡ canonical) is now merge-blocking
+  per-PR at per-PR sizing and full-size on the daily cron; `--mode=latency`
+  (T5, ≤3.0× in-mode ratio gate, interleaved same-process sampling) runs on
+  the daily cron; and the T6 adversarial worst-case-ratio gate gets a weekly
+  cron (previously dispatch-only) plus a concurrency group and the pinned
+  install-rust composite (replacing a `dtolnay/rust-toolchain@stable`
+  moving-ref). `set_canonical`'s eager-derive claim is now a state-probe
+  test (epoch rollover cannot stall the first post-boundary verify). Every
+  remaining `curl | sh` rustup install repo-wide (10 sites across 7
+  workflow files, including the disabled release workflow) was converted to
+  the fail-loud download-then-run form, preserving each site's flags.
 - **pow: native-aarch64 CI lane** (RandomX v2 test-regime hardening PR-2).
   New `native-arm` job on `ubuntu-24.04-arm` (native silicon, deliberately
   not qemu — softfloat would mask a real FP-rounding divergence): verifier
