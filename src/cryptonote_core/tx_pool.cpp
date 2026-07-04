@@ -1509,17 +1509,55 @@ namespace cryptonote
     // FCMP++ verification cache: if the proof was already verified and the
     // verification hash still matches, seed the m_input_cache so
     // check_tx_inputs returns immediately without calling shekyl_fcmp_verify.
+    //
+    // Template-time ref-age re-check (DAEMON_SUBMIT_VERDICT.md §6 leg 2): the
+    // verification hash binds proof ‖ referenceBlock ‖ key-images but NOT the
+    // reference's height-relative validity, which consensus re-derives per
+    // block (blockchain.cpp regular-spend arm, steps "too recent"/"too old").
+    // Seeding unconditionally lets a tx whose reference aged past
+    // FCMP_REFERENCE_BLOCK_MAX_AGE — or whose reference block was reorged out
+    // — into a template that every validating node rejects. So before
+    // honoring the seed, re-derive the window edges over
+    // txd.max_used_block_height (populated by the regular-spend arm for every
+    // fcmp_verified tx; serve-credit/bond-post vins hash to null and are
+    // never fcmp_verified) and re-check that the block at that height is
+    // still txd.max_used_block_id. O(1) by requirement (round-5 minor d):
+    // height arithmetic plus the same get_block_id_by_height lookup shape
+    // this function already performs above — never a chain walk. On guard
+    // failure the seed is skipped and check_tx_inputs below runs the full
+    // path, which rejects cheaply at step 1 (ref-age / block_exists) before
+    // any proof work, and negative-caches the result for this chain state.
     if (txd.fcmp_verified)
     {
       const auto cache_it = m_input_cache.find(txid);
       if (cache_it == m_input_cache.end())
       {
-        cryptonote::transaction& parsed_tx = lazy_tx();
-        if (is_fcmp_verification_cached(txd, parsed_tx))
+        const uint64_t chain_height = top_block_height + 1;  // = m_db->height(), the consensus check's basis
+        const bool ref_too_recent = chain_height < FCMP_REFERENCE_BLOCK_MIN_AGE ||
+          txd.max_used_block_height > chain_height - FCMP_REFERENCE_BLOCK_MIN_AGE;
+        const bool ref_too_old = chain_height > FCMP_REFERENCE_BLOCK_MAX_AGE &&
+          txd.max_used_block_height < chain_height - FCMP_REFERENCE_BLOCK_MAX_AGE;
+        // Ordering matters: the too-recent edge also excludes heights at or
+        // above the current top (possible after a chain pop), keeping the
+        // canonicality lookup in-range.
+        const bool ref_canonical = !ref_too_recent && !ref_too_old &&
+          m_blockchain.get_block_id_by_height(txd.max_used_block_height) == txd.max_used_block_id;
+        if (ref_canonical)
         {
-          tx_verification_context cached_tvc{};
-          m_input_cache.insert(std::make_pair(txid,
-            std::make_tuple(true, cached_tvc, txd.max_used_block_height, txd.max_used_block_id)));
+          cryptonote::transaction& parsed_tx = lazy_tx();
+          if (is_fcmp_verification_cached(txd, parsed_tx))
+          {
+            tx_verification_context cached_tvc{};
+            m_input_cache.insert(std::make_pair(txid,
+              std::make_tuple(true, cached_tvc, txd.max_used_block_height, txd.max_used_block_id)));
+          }
+        }
+        else
+        {
+          MDEBUG("FCMP++ verification cache seed skipped for " << txid
+            << ": reference at height " << txd.max_used_block_height
+            << (ref_too_recent ? " too recent for" : ref_too_old ? " aged out of" : " no longer canonical in")
+            << " chain at height " << chain_height);
         }
       }
     }

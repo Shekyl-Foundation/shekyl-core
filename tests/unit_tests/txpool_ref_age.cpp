@@ -5,7 +5,10 @@
 
 // F22 defect-fix coverage (docs/design/DAEMON_SUBMIT_VERDICT.md §6, §10 item 5):
 //   leg 1 — remove_stuck_transactions evicts pool txs whose FCMP++ reference
-//           aged past FCMP_REFERENCE_BLOCK_MAX_AGE (defect 0.8).
+//           aged past FCMP_REFERENCE_BLOCK_MAX_AGE (defect 0.8);
+//   leg 2 — is_transaction_ready_to_go re-checks the ref-age window and
+//           reference-block canonicality before honoring the fcmp_verified
+//           cache seed (defect 0.9).
 
 #define IN_UNIT_TESTS
 
@@ -27,19 +30,24 @@ using namespace cryptonote;
 namespace
 {
 
-// In-memory txpool-backed TestDB with a settable chain height.
+// In-memory txpool-backed TestDB with a settable chain height and a fork
+// nonce that lets a test simulate a reorg: block ids are a pure function of
+// (height, fork_nonce), so bumping the nonce changes every historical id the
+// way a reorg past that height would.
 class RefAgeTestDB : public BaseTestDB
 {
 public:
   explicit RefAgeTestDB(uint64_t height) : m_height(height) { m_open = true; }
 
   void set_chain_height(uint64_t height) { m_height = height; }
+  void set_fork_nonce(uint64_t nonce) { m_fork_nonce = nonce; }
 
   crypto::hash block_id_at(uint64_t height) const
   {
     crypto::hash h = crypto::null_hash;
     const uint64_t tagged_height = height + 1; // +1 keeps height 0 distinct from null_hash
     memcpy(h.data, &tagged_height, sizeof(tagged_height));
+    memcpy(h.data + sizeof(tagged_height), &m_fork_nonce, sizeof(m_fork_nonce));
     return h;
   }
 
@@ -116,6 +124,7 @@ private:
   };
 
   uint64_t m_height;
+  uint64_t m_fork_nonce = 0;
   std::unordered_map<crypto::hash, pool_entry> m_txpool;
 };
 
@@ -163,6 +172,57 @@ cryptonote::blobdata make_minimal_tx_blob()
   tx.version = 1;
   tx.unlock_time = 0;
   return cryptonote::tx_to_blob(tx);
+}
+
+// Structurally parseable FCMP++ tx: survives parse_and_validate_tx_from_blob
+// (serializer + expand_transaction_1) without any cryptographic validity —
+// the leg-2 guard only needs compute_fcmp_verification_hash to bind
+// proof ‖ referenceBlock ‖ key-images on the parsed tx.
+cryptonote::transaction make_fcmp_shape_tx()
+{
+  cryptonote::transaction tx{};
+  tx.version = 3;
+  tx.unlock_time = 0;
+
+  cryptonote::txin_to_key txin{};
+  txin.amount = 0;
+  memset(&txin.k_image, 0xBB, sizeof(txin.k_image));
+  tx.vin.push_back(txin); // key_offsets stay empty: FCMP++ txs carry no ring members
+
+  cryptonote::tx_out txout{};
+  txout.amount = 0;
+  cryptonote::txout_to_tagged_key tagged{};
+  memset(&tagged.key, 0xCC, sizeof(tagged.key));
+  tagged.view_tag.data = 0;
+  txout.target = tagged;
+  tx.vout.push_back(txout);
+
+  rct::rctSig& rv = tx.rct_signatures;
+  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.txnFee = 1000000;
+  memset(&rv.referenceBlock, 0xAD, sizeof(rv.referenceBlock));
+  rv.outPk.resize(1);
+  memset(rv.outPk[0].mask.bytes, 0xDD, sizeof(rv.outPk[0].mask.bytes));
+  rv.enc_amounts.resize(1);
+  rv.enc_amounts[0].fill(0x42);
+  rv.enc_labels.resize(1);
+  rv.enc_labels[0].fill(0x43);
+
+  rct::BulletproofPlus bpp{};
+  bpp.L.resize(6); // L.size()==6 → max_amounts 2^0 = 1 ≥ the single output
+  bpp.R.resize(6);
+  rv.p.bulletproofs_plus.push_back(bpp);
+  rv.p.curve_trees_tree_depth = 20;
+  rv.p.fcmp_pp_proof = {0x01, 0x02, 0x03, 0x04, 0x05};
+  rv.p.pseudoOuts.resize(1);
+
+  cryptonote::pqc_authentication auth{};
+  auth.auth_version = 1;
+  auth.scheme_id = 0;
+  auth.flags = 0;
+  tx.pqc_auths.push_back(auth);
+
+  return tx;
 }
 
 txpool_tx_meta_t make_meta(uint64_t weight, time_t receive_time)
@@ -276,4 +336,120 @@ TEST(txpool_ref_age, sweep_receive_time_eviction_still_marks_timeout)
 
   EXPECT_FALSE(db->txpool_has_tx(old_txid, relay_category::all));
   EXPECT_EQ(bap.txpool.m_timed_out_transactions.count(old_txid), 1u);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// F22 leg 2: template-time ref-age + canonicality re-check before the
+// fcmp_verified cache seed
+// ─────────────────────────────────────────────────────────────────────────
+
+namespace
+{
+
+struct Leg2Fixture
+{
+  static constexpr uint64_t chain_height = 300;
+
+  RefAgeTestDB* db;
+  BlockchainAndPool bap;
+  cryptonote::transaction shape_tx;
+  cryptonote::blobdata blob;
+  crypto::hash txid;
+  txpool_tx_meta_t meta;
+
+  Leg2Fixture()
+  {
+    db = new RefAgeTestDB(chain_height);
+    EXPECT_TRUE(init_blockchain(bap.bc, db));
+
+    shape_tx = make_fcmp_shape_tx();
+    blob = cryptonote::tx_to_blob(shape_tx);
+
+    // The blob must survive the template path's full parse; a failure here
+    // is a fixture bug, not a product bug.
+    cryptonote::transaction reparsed;
+    EXPECT_TRUE(cryptonote::parse_and_validate_tx_from_blob(blob, reparsed));
+
+    txid = make_txid(0x66);
+    meta = make_meta(blob.size(), time(nullptr));
+    meta.fcmp_verified = 1;
+    meta.fcmp_verification_hash = Blockchain::compute_fcmp_verification_hash(shape_tx);
+    EXPECT_NE(meta.fcmp_verification_hash, crypto::null_hash);
+  }
+
+  // With the seed honored, the pool-level cache short-circuits
+  // check_tx_inputs and the tx reads ready. With the seed refused, the full
+  // Blockchain::check_tx_inputs runs and fails on this DB (the reference
+  // block does not exist), so the tx reads not-ready. The verdict is
+  // therefore a direct observation of the guard.
+  bool run_readiness()
+  {
+    cryptonote::transaction tx_out;
+    return bap.txpool.is_transaction_ready_to_go(meta, txid, blob, tx_out);
+  }
+};
+
+} // namespace
+
+TEST(txpool_ref_age, template_seed_honored_for_valid_canonical_reference)
+{
+  Leg2Fixture fx;
+  const uint64_t ref_height = Leg2Fixture::chain_height - 50;
+  fx.meta.max_used_block_height = ref_height;
+  fx.meta.max_used_block_id = fx.db->block_id_at(ref_height);
+
+  EXPECT_TRUE(fx.run_readiness());
+  const auto it = fx.bap.txpool.m_input_cache.find(fx.txid);
+  ASSERT_NE(it, fx.bap.txpool.m_input_cache.end());
+  EXPECT_TRUE(std::get<0>(it->second)) << "guard must seed a positive cache entry";
+}
+
+TEST(txpool_ref_age, template_seed_refused_for_stale_reference)
+{
+  Leg2Fixture fx;
+  const uint64_t ref_height =
+    Leg2Fixture::chain_height - FCMP_REFERENCE_BLOCK_MAX_AGE - 1;
+  fx.meta.max_used_block_height = ref_height;
+  fx.meta.max_used_block_id = fx.db->block_id_at(ref_height);
+
+  EXPECT_FALSE(fx.run_readiness())
+    << "stale-reference tx must not be pulled into a block template";
+  const auto it = fx.bap.txpool.m_input_cache.find(fx.txid);
+  ASSERT_NE(it, fx.bap.txpool.m_input_cache.end());
+  EXPECT_FALSE(std::get<0>(it->second))
+    << "the full re-check must negative-cache, not seed success";
+}
+
+TEST(txpool_ref_age, template_seed_refused_for_noncanonical_reference)
+{
+  // Simulated reorg: the reference height is inside the window, but the
+  // block at that height is no longer the block the proof anchored.
+  Leg2Fixture fx;
+  const uint64_t ref_height = Leg2Fixture::chain_height - 50;
+  fx.meta.max_used_block_height = ref_height;
+  fx.meta.max_used_block_id = fx.db->block_id_at(ref_height);
+  fx.db->set_fork_nonce(1); // every historical block id changes
+
+  EXPECT_FALSE(fx.run_readiness())
+    << "a reorged-out reference must not ride the verification cache into a template";
+  const auto it = fx.bap.txpool.m_input_cache.find(fx.txid);
+  ASSERT_NE(it, fx.bap.txpool.m_input_cache.end());
+  EXPECT_FALSE(std::get<0>(it->second));
+}
+
+TEST(txpool_ref_age, template_seed_refused_for_too_recent_reference)
+{
+  // A chain pop can leave a pooled reference above the min-age ceiling (or
+  // above the top entirely); the guard must refuse the seed without an
+  // out-of-range block-id lookup.
+  Leg2Fixture fx;
+  const uint64_t ref_height = Leg2Fixture::chain_height - 1;
+  ASSERT_GT(ref_height, Leg2Fixture::chain_height - FCMP_REFERENCE_BLOCK_MIN_AGE);
+  fx.meta.max_used_block_height = ref_height;
+  fx.meta.max_used_block_id = fx.db->block_id_at(ref_height);
+
+  EXPECT_FALSE(fx.run_readiness());
+  const auto it = fx.bap.txpool.m_input_cache.find(fx.txid);
+  ASSERT_NE(it, fx.bap.txpool.m_input_cache.end());
+  EXPECT_FALSE(std::get<0>(it->second));
 }
