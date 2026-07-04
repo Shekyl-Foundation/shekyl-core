@@ -1,13 +1,16 @@
 # Daemon Submit Verdict — Rust cutover of the transaction-submit path
 
-**Status:** CONVERGED (architecture closed) after five adversarial design rounds,
-accreted in review before this document was written; the rounds' decisions
-(D1–D5) and findings (F1–F33 + minors) are recorded in §1 and folded into every
-section rather than appended as errata. Round 5 confirmed the Rust cutover, the
-wallet-owned-liveness split, the embargo-as-kernel resolution, and the two F22
-pre-existing-defect commits as sound and correctly scoped; its findings sharpen
-premises and semantics without reopening structure. Further rounds, if any,
-accrete in this document.
+**Status:** CONVERGED (architecture closed) after six adversarial design rounds;
+rounds 1–5 accreted in review before this document was written, round 6 reviewed
+the document itself. The rounds' decisions (D1–D5) and findings (F1–F39 +
+minors) are recorded in §1 and folded into every section rather than appended
+as errata. Round 5 confirmed the Rust cutover, the wallet-owned-liveness split,
+the embargo-as-kernel resolution, and the two F22 pre-existing-defect commits
+as sound and correctly scoped. Round 6 resolved the one finding that had
+dropped through the round-2→round-3 index seam (F14, awaiting-confirmation
+durability) and hardened the freeze gate (Phase-D policy re-check, archival
+matrix rows, noise-zone threat entry, schema-evolution rule) without reopening
+structure. Further rounds, if any, accrete in this document.
 **Process rule:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 (FFI-boundary-moving, consensus-adjacent: the submit path shares admission
 logic with block validation, and getting the attestation seam wrong is a
@@ -64,7 +67,8 @@ reduces to a projection verifiable by inspection.
 
 ## 1. Decision record
 
-Five review rounds. Architecture converged and closed at round 5. Entries
+Six review rounds. Architecture converged and closed at round 5; round 6
+hardened invariants and the freeze gate without reopening structure. Entries
 here are binding; the referenced sections carry the mechanics.
 
 **Round-2 decisions (user-ratified):**
@@ -81,10 +85,17 @@ here are binding; the referenced sections carry the mechanics.
 | Round | Findings | Landed in |
 | --- | --- | --- |
 | 1 | F1–F12: lock-order pin, FCMP++ cost, diffused-predicate ambiguity, version skew, txid canonicalization, race testing, oracle honesty, retry policy, spent-on-submit, dual-parser honesty, FFI-vs-wire contract distinction, evicted-history bounds | §2.3, §3, §4.4, §7.3, §10, §11 |
-| 2 | D1–D5 above | throughout |
+| 2 | D1–D5 above; F13–F19: F13 → F21 (reorg re-check); **F14 held open through round 5 — resolved round 6** (awaiting-confirmation durability, §2.6); F15 → Phase B takes both locks in one scope; F16 → trust rider (§7.2, via D4); F17 → moot under D3; F18 → Phase-C lock-freedom by construction (§3.1); F19 → skew test C | throughout; §2.6 |
 | 3 | F20 (liveness machinery), F21 (reorg re-check), F22 (two pre-existing defects), F23 (prune-after-accept), F24 (txid authority), F25 (attestation choke point), F26 (FFI struct tests), F27 (no `detail` on wire), F28 (`Malformed` loop-breaker), F29 (`tx_sanity_check` parity rows) | §5, §3.1, §6, §3.4, §3.5, §4.5, §2.2, §2.5, §8 |
 | 4 | Liveness ownership hand-off; embargo-as-kernel; health context; privacy-tiered escape ladder; `diffused` staking reopen | §5, §11 |
 | 5 | F30 (rebuild-wound mechanization — **gating**, folded from first draft), F31 (resubmit is a status query), F32 (health-metadata trust rider), F33 (certificate witness type + blob binding); minors a–d (commit-check-time wording, matrix-pending hypothesis, F22 leg interaction, O(1) template re-check) | §7.1, §5.3, §7.2, §3.3/§3.5, §3.1, §8, §6 |
+| 6 | F14 resolution (awaiting-confirmation persistence + confirmed-absent release), F34 (Phase-D dynamic-policy re-gate), F35 (noise-zone black-hole threat entry), F36 (archival-arm matrix rows, pinned at source), F37 (`FeeTooLow` loop-breaker + fee-param rider rows), F38 (schema-evolution authoring rule), F39 (Phase-C concurrency bound); minors a–d (Phase-D most-terminal-first order, watchdog present/absent branch, second-entry-point sweep, lock-freedom-by-construction sentence) | §2.6, §3.1, §7.5, §8.7.1, §2.5, §7.2, §2.3, §11, §5.3, §9 |
+
+The round-2 row's F13–F19 mapping was itself a round-6 fix: the index
+previously jumped from round 1 to round 3, and F14 — the one round-2 finding
+that was *not* absorbed elsewhere — fell through exactly the between-rounds
+seam this record exists to prevent. The mapping is now explicit so absorption
+is auditable, not assumed.
 
 ---
 
@@ -122,13 +133,18 @@ pub enum RejectCause {
     /// key-image domain/order violations. Deterministically permanent for
     /// these bytes.
     Malformed,
-    /// Fee below the current floor (Phase C) **or** admitted-then-evicted
-    /// under pool pressure at the post-prune membership check (Phase D).
-    /// Both mean the same thing to the wallet: not in the pool, fee is why.
+    /// Fee below the floor: at Phase C against the snapshot params, at the
+    /// Phase-D re-gate against fresh params (the floor is per-block dynamic,
+    /// §3.1 / F34), or admitted-then-evicted under pool pressure at the
+    /// post-prune membership check. All mean the same thing to the wallet:
+    /// not in the pool, fee is why.
     FeeTooLow,
-    /// A *different* transaction (pool or chain) spends at least one of this
-    /// tx's inputs. Emitted from Phase D re-check only — never from the
-    /// Phase B snapshot (§3.1), so it genuinely means a competing spend.
+    /// A *different* transaction (pool or chain) consumes at least one of
+    /// this tx's inputs — a key image, or an archival claim slot (a bond
+    /// record already posted for this P; a serve-credit already claimed for
+    /// this (P, shard, epoch); §8.7.1). Emitted from Phase D re-check (or
+    /// Phase C over chain-state facts) — never from the Phase B snapshot
+    /// alone (§3.1), so it genuinely means a competing consumption.
     DoubleSpendConflict,
     /// The FCMP++ reference block is no longer canonical (reorged away), or
     /// the curve-tree root at the reference height no longer matches, or the
@@ -193,6 +209,23 @@ Wallet and daemon are released together but not deployed atomically:
 - All three behaviors are pinned by the skew tests in `shekyl-rpc-types`
   (§10).
 
+**Schema-evolution rule (authoring constraint, F38 — binding).** The runtime
+asymmetry above is safe only while authors stay on the right side of it:
+
+- New **rejection** semantics MUST land as additive `RejectCause` variants.
+  Older wallets then degrade to `Unrecognized` → release + one-shot rebuild —
+  the fail-safe direction, with the F28 loop-breaker bounding the worst case.
+- New **top-level `SubmitVerdict` tags** are reserved for genuinely new
+  *non-rejection* dispositions and are a **breaking change** requiring a
+  coordinated wire-version bump plus skew-test extension. A rejection-shaped
+  top-level tag would route every older wallet into `Err` → TTL-resubmit →
+  the same unknown tag: a designed-in routine loop on every such release
+  (the watchdog alarm would fire, but as a recurring operational cost, not a
+  safety net).
+
+This is the priority-3 surface: the rule that makes the skew guarantee
+durable rather than incidental. Reversion clause in §11.
+
 ### 2.4 Endpoint
 
 `POST /submit_transaction`, body `{ "tx_blob": "<hex>" }`, response is the
@@ -219,11 +252,11 @@ Request-surface trims relative to `COMMAND_RPC_SEND_RAW_TX`:
 
 | Verdict / cause | Wallet disposition |
 | --- | --- |
-| `Accepted` | Pending-tx enters *awaiting confirmation*; watchdog (§5.3) takes over. Outputs move to an awaiting-confirmation lock state — **not** marked spent at submit-accept (the current `local_pending_tx.rs:775-807` behavior moves to refresh-authoritative confirmation; PR-4). |
+| `Accepted` | Pending-tx enters *awaiting confirmation*; watchdog (§5.3) takes over. Outputs move to the awaiting-confirmation lock state (§2.6: persisted, dual release paths) — **not** marked spent at submit-accept (the current `local_pending_tx.rs:775-807` behavior moves to refresh-authoritative confirmation; PR-4). |
 | `AlreadyInPool` | Same as `Accepted` (identity fact: the bytes are held). Resolves prior transport ambiguity for this txid. |
 | `AlreadyInChain` | Confirmation observed by verdict; refresh remains the settlement authority (reorgs happen — the verdict authorizes lock-lifecycle transitions only). |
 | `Rejected{Malformed}` | Release locks, surface, **one-shot rebuild**: if the rebuilt tx also returns `Malformed`, escalate to operator alarm — two independent builds rejected as malformed is a systematic wallet/daemon rule disagreement, not a bad tx; a third silent build burns fees and multiplies linking-tag artifacts (§7.1). Never loop. |
-| `Rejected{FeeTooLow}` | Release, re-estimate fee, rebuild. Covers both the static-floor and pool-pressure variants; under single-egress this verdict carries proof the tx is in neither pool nor chain, so release is safe. |
+| `Rejected{FeeTooLow}` | Release, re-estimate fee, rebuild — **once** (F37; the F28 logic applies verbatim): a second consecutive `FeeTooLow` on the rebuilt tx is a systematic fee-model disagreement (a KAT gap on P2, or sustained pool pressure the wallet's estimate never meets) → operator alarm, never loop. The bound is privacy-load-bearing, not just liveness hygiene: unlike `Malformed`, a fee-driven rebuild can *change the input set* — covering a higher fee may pull in an additional input, so each iteration broadcasts a new tx sharing the original key image **and** revealing a newly co-owned input (F30 linkage plus wallet-clustering, once per loop, under the malicious-relay case of §7.1). Covers static-floor, Phase-D re-gate, and pool-pressure variants; under single-egress this verdict carries proof the tx is in neither pool nor chain, so release is safe. |
 | `Rejected{DoubleSpendConflict}` | Terminal release. A different tx spends the input; refresh will surface which. |
 | `Rejected{StaleRoot}` | Rebuild the **proof** over the same input selection against a fresh root. This constructs the wallet's deferred `ProofStale` path and closes the `fcmp_root_stale` FOLLOWUPS criterion (its named reopen was exactly "a daemon-side stale-root signal"). |
 | `Rejected{ReferenceTooRecent}` | Timed backoff (min-age is 5 blocks; the wallet built too close to the tip), then resubmit-same-bytes. |
@@ -238,6 +271,50 @@ answers `AlreadyInPool`, a competing spend answers `DoubleSpendConflict`, a
 dead tx re-offers and re-verifies. It requires possessing the full tx bytes,
 so it adds **no txid-probe oracle** to the public RPC surface; the dedicated
 txid-status RPC stays rejected (§7.3).
+
+### 2.6 The awaiting-confirmation lock invariant (F14)
+
+Moving spent-marking off submit-accept (the `Accepted` row above) deletes a
+durable `spent = true` write. The state that replaces it must carry both
+properties the old write had, or the redesign regresses fund safety *and*
+privacy. Binding invariant, enforced by PR-4 and tested in §10 item 8:
+
+1. **Persistence.** The awaiting-confirmation lock state is written to the
+   wallet ledger with the same durability the old spent-marking had (the
+   AEAD-sealed ledger file, not in-memory session state). If the wallet
+   restarts between `Accepted` and confirmation and the state were
+   in-memory, the outputs become selectable again and the wallet builds a
+   second tx over the same inputs — **the same key image** — which by §7.1's
+   mechanization is a broadcast-linkage artifact the wallet inflicts on
+   itself. Post-F30 this is a priority-2 privacy regression, not only the
+   fund-safety hazard originally filed.
+2. **Two release paths, both required.**
+   - *Confirmed-present:* refresh observes the tx in the chain → outputs
+     transition to refresh-authoritative spent. (The path everyone
+     remembers.)
+   - *Confirmed-absent:* a tx that is evicted and never confirms must not
+     strand its outputs in awaiting-confirmation forever. Release is wired
+     to the watchdog horizon (§5.3), not a separate timer: the watchdog's
+     resubmit rung converts absence into a definite verdict (re-offered →
+     the wait restarts on fresh relay; `Rejected{*}` → release per this
+     table; ref aged past the FCMP++ max-age window → `StaleRoot`, a
+     natural terminal for same-bytes liveness), and refresh releases on
+     N-of-horizon observed absence when no definite verdict is reachable
+     (daemon unreachable → the alarm rung carries the decision to the
+     operator). No path strands silently: every exit is
+     release-by-verdict, release-by-confirmation, or operator alarm.
+3. **Release is not rebuild authorization.** Releasing outputs makes them
+   selectable; it does not authorize an automatic rebuild. For a tx that
+   was ever network-exposed (`Accepted`/`AlreadyInPool` at any point), any
+   new spend of the same outputs bears the same key image, so the
+   escape-ladder ordering (§5.3) and §7.4's
+   automatic-actions-are-privacy-neutral rule govern what happens *after*
+   release. The confirmed-absent horizon is doing for verdict-less
+   ambiguity exactly what the §7.1 cool-off knob does for terminal
+   verdicts under multi-daemon — the two knobs are siblings, not the same
+   knob: verdict-based release is immediate under the single-egress
+   theorem (cool-off 0 at V3.0); absence-based release always waits the
+   horizon because there is no verdict to trust.
 
 ---
 
@@ -257,7 +334,7 @@ flowchart TD
     PhaseB --> PhaseC
     PhaseC["Phase C - Rust, NO locks held:\nref-age arithmetic, fee floor, weight rule,\nFCMP++ + BP+ + CT balance + PQC auth vs snapshot root\n=> VerificationCertificate (witness)"] -->|"failure: Rejected{cause}"| Wallet
     PhaseC --> PhaseD
-    PhaseD["Phase D - shim 2, one short pool-then-blockchain lock:\nre-check (identity, KI, hash-anchored ref, root compare),\ntxid release-check, attested insert via add_tx tail,\npost-prune membership check"] -->|"raced: fresh facts -> Rust reclassifies"| PhaseC2["Rust classify:\nAlreadyInChain / DoubleSpendConflict / StaleRoot / FeeTooLow"]
+    PhaseD["Phase D - shim 2, one short pool-then-blockchain lock:\ntxid release-check, re-check (identity, KI, hash-anchored ref,\nroot compare, fee re-gate vs fresh params),\nattested insert via add_tx tail, post-prune membership check"] -->|"raced: fresh facts -> Rust reclassifies"| PhaseC2["Rust classify (most-terminal-first):\nAlreadyInChain / DoubleSpendConflict / StaleRoot / FeeTooLow"]
     PhaseC2 --> Wallet
     PhaseD -->|"committed"| Relay["shim 3: relay nudge into existing\nrelay_transactions(local) - arms D++ embargo"]
     Relay --> Wallet
@@ -269,7 +346,7 @@ flowchart TD
 (`get_max_tx_size` equivalent, snapshot-independent constant); `shekyl-wire`
 `Transaction::read` + `validate()` (structural bounds, arm-mixing matrix,
 `Null`-ct-iff-coinbase, unlock-time rule, per-arm archival bounds); key-image
-domain check (thin-port, §8 row A6); **explicit coinbase-submit rejection**;
+domain check (thin-port, §8 row M8); **explicit coinbase-submit rejection**;
 canonical txid via `shekyl-wire`'s hash. Any failure → `Rejected{Malformed}`
 without touching C++. Working hypothesis, **matrix-pending, not settled**
 (round-5 minor b): coinbase-reject is the only live `tx_sanity_check` residue
@@ -292,25 +369,69 @@ architecture.
 
 **Phase C — verification (Rust, no locks held anywhere).** Ref-age window
 arithmetic (min 5 / max 100, from config); fee floor against snapshot params;
-weight rule; then the expensive cryptography natively — FCMP++ membership
-(`shekyl-fcmp`, the same Rust crate C++ calls through `shekyl_fcmp_verify`
-today, minus the FFI hop), BP+ range proofs, CT balance, PQC hybrid auth with
-scheme-id consistency. Defect 0.5 dies here: block ingestion proceeds while
-proofs verify. Success mints the **`VerificationCertificate`** (§3.3).
+weight rule (the *limit* is a compile-time constant on Shekyl —
+`get_transaction_weight_limit` reduces to `get_min_block_weight`, which
+returns `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5` unconditionally,
+`cryptonote_basic_impl.cpp:66-71` — so unlike the fee floor it needs no
+Phase-D re-check); the archival-arm battery for bond-post / serve-credit txs
+(§8.7.1 — already Rust in `shekyl-archival-retention`, called natively); then
+the expensive cryptography natively — FCMP++ membership (`shekyl-fcmp`, the
+same Rust crate C++ calls through `shekyl_fcmp_verify` today, minus the FFI
+hop), BP+ range proofs, CT balance, PQC hybrid auth with scheme-id
+consistency. Defect 0.5 dies here: block ingestion proceeds while proofs
+verify.
+
+Phase C holds no locks **by construction**, not by discipline: it calls
+`shekyl-fcmp` and the other Rust crates natively rather than routing through
+`check_tx_inputs`, which takes the blockchain lock (`blockchain.cpp:3364+`)
+— the C++ verification path is simply not on the submit route (closes
+round-2 F18; a reader must not assume the reused C++ path is still reachable
+from RPC).
+
+**Concurrency bound (F39).** Moving verification outside locks (the F2 win)
+also removed the *accidental* serialization the old path imposed — FCMP++
+verification under the pool lock bounded concurrent verification to one.
+Phase C therefore runs under a **bounded semaphore sized to available cores**
+(a deliberate cap replacing the accidental one): cheap-to-submit /
+expensive-to-verify is otherwise an unbounded CPU/memory amplification. For
+own-daemon V3.0 the exposure is self-inflicted and moot; for any public-RPC
+operator it is live, so the cap ships with PR-3 and is listed as a
+multi-daemon-reopen prerequisite (§11). Success mints the
+**`VerificationCertificate`** (§3.3).
 
 **Phase D — check-and-commit (shim 2, one short lock).** Under one
-pool→blockchain lock scope, re-check every mutable premise:
+pool→blockchain lock scope, re-check every mutable premise — chain-structural
+*and* dynamic-policy (F34):
 
-1. identity-in-pool, identity-in-chain (unchanged since B?),
-2. key-image owners (a competing spend may have landed),
-3. **`block_exists(referenceBlock)` hash-anchored, age window on the returned
+1. the release-mode txid equality check (§3.4 — internal-fault gate; runs
+   first because nothing else is trustworthy if the blobs disagree),
+2. identity-in-pool, identity-in-chain (unchanged since B?),
+3. key-image owners (a competing spend may have landed), plus the
+   archival-arm mutable premises for bond-post / serve-credit txs
+   (record-exists, duplicate-credit bit, good-through, H_close deadline —
+   §8.7.1: a block during C can flip any of them),
+4. **`block_exists(referenceBlock)` hash-anchored, age window on the returned
    height** (F21: the reference is pinned by *hash*; a block hash commits to
    its prefix chain, so hash-canonicality at a height within the window ⇒
    root-canonicality — height arithmetic on a cached height cannot detect a
    reorg),
-4. **root-at-height == certificate root** (belt-and-suspenders over 3; also
+5. **root-at-height == certificate root** (belt-and-suspenders over 4; also
    catches root-table maintenance bugs),
-5. the release-mode txid equality check (§3.4).
+6. **fee re-gate against fresh params (F34).** The floor is per-block
+   dynamic — `check_fee` reads `m_current_block_cumul_weight_limit`, the
+   long-term effective median, and supply at current height
+   (`blockchain.cpp:3913-3936`), all of which move every block — so across
+   a long Phase C the floor can rise with the pool *not* full, which the
+   post-prune membership check (F23) would never catch: the tx would be
+   admitted below the current floor, `Accepted`, and then neither relay nor
+   mine — exactly the zombie-`Accepted` this redesign exists to abolish.
+   The shim re-runs the existing `Blockchain::check_fee` gate against fresh
+   params before the insert tail (mirroring `add_tx`'s own order,
+   `tx_pool.cpp:176-192` before `:229`; mechanism reuse, not new logic —
+   the same reuse shape as the tail itself, and its parity with Rust's
+   Phase-C arithmetic is already KAT-pinned by row P2). Failure returns
+   `Raced{fresh}`; Rust re-runs its own floor arithmetic on the fresh
+   params and emits `FeeTooLow`.
 
 If clean: insert through the existing `add_tx` insert tail (meta build,
 `fcmp_verified` attestation from the certificate, key-image index, transient
@@ -322,10 +443,18 @@ between commit-check and the reply hitting the wire; every snapshot can be
 stale by reply — which is exactly why the wallet keys liveness on chain
 confirmation, §5.3, not on verdicts).
 
-If raced: the shim returns fresh facts and **Rust classifies** —
-`AlreadyInChain` (block landed during C), `DoubleSpendConflict` (competing
-spend landed), `StaleRoot` (reorg orphaned the reference / root moved). The
-C++ never chooses a verdict.
+If raced: the shim returns fresh facts and **Rust classifies,
+most-terminal-first** (round-6 minor a; the order is load-bearing):
+
+> `AlreadyInChain` (settled) → `DoubleSpendConflict` (terminal) →
+> `StaleRoot` (retryable: rebuild proof) → `FeeTooLow` (retryable:
+> re-estimate).
+
+When multiple premises moved at once, the wallet must hear the most terminal
+fact: a reorg *plus* a competing spend classified as `StaleRoot` would send
+the wallet through rebuild → resubmit → `DoubleSpendConflict` — a wasted
+round trip and a wasted proof rebuild — whereas `DoubleSpendConflict`
+directly is correct and final. The C++ never chooses a verdict.
 
 **Relay (shim 3).** Post-commit nudge into the existing
 `relay_transactions(..., relay_method::local)` dispatch — the same entry
@@ -342,7 +471,8 @@ pub trait SubmitStateShim {
                       reference_block: &BlockHash) -> SubmitFacts;
     fn commit(&self, blob: &[u8], txid: &TxId, meta: &TxMeta,
               cert: &VerificationCertificate, expected: &SubmitFacts)
-              -> CommitOutcome; // Committed | Raced(SubmitFacts) | PrunedOnInsert
+              -> CommitOutcome;
+    // Committed | Raced(SubmitFacts) | PrunedOnInsert | InternalFault (§4.2)
     fn relay(&self, txid: &TxId);
 }
 ```
@@ -430,14 +560,25 @@ descriptor (`none | own_txid | other`), `ref_block_found: u8`,
 `fee_quantization_mask: u64`, `weight_limit: u64`, `chain_height: u64`.
 One `CRITICAL_REGION` pair, pool→blockchain, reads only.
 
+For archival-arm txs the snapshot extends with the arm's stateful facts
+(§8.7.1): bond-record presence + stored pubkey, join epoch,
+good-through-at-E, duplicate-credit bit, holdings-at-H_fire, registry
+segment (subroot + leaf count), seal hash, leaf-layer scalars. The shim
+derives H_fire via the existing Rust FFI epoch/fire helpers to key the
+holdings/registry reads — exactly as `check_archival_serve_credit_input`
+does today (`blockchain.cpp:4288-4319`); the derivation is Rust either way,
+so this is fact-fetching, not logic.
+
 ### 4.2 `shekyl_submit_commit_tx`
 
 In: blob, engine txid, meta fields (weight, fee), certificate facts
 (ref hash/height, root), `expected_facts`.
 Behavior: take pool→blockchain locks; recompute C++ txid over blob and
 release-check (§3.4); re-run the §3.1 Phase-D re-check list against
-`expected_facts`; on clean, execute the existing insert tail with
-`fcmp_verified = 1` + verification hash; post-prune membership check.
+`expected_facts`, including the `check_fee` re-gate against fresh params
+(F34 — reused mechanism, mirroring `add_tx`'s gate-before-tail order); on
+clean, execute the existing insert tail with `fcmp_verified = 1` +
+verification hash; post-prune membership check.
 Out: `Committed | Raced{fresh: SubmitFactsFfi} | PrunedOnInsert |
 InternalFault`.
 
@@ -517,8 +658,12 @@ de-risking the multi-daemon reopen in advance.
    each attempt (`tx_pool.cpp:868-877`); a fluff echo arriving first cancels
    the embargo through ordinary ingestion. **Noise zones (Tor/i2p)
    intentionally do not arm the embargo** (`levin_notify.cpp:850`,
-   `tx_pool.cpp:914-915`) — covert-channel re-send cadence covers them.
-   Recorded here so nobody "fixes" the noise-zone branch into arming.
+   `tx_pool.cpp:914-915`) — covert-channel re-send cadence covers them,
+   and arming would fluff over clearnet, deanonymizing the origin.
+   Recorded here so nobody "fixes" the noise-zone branch into arming —
+   but the consequence is not a parenthetical: over anonymity networks
+   the black-hole guarantee is **deployment-dependent**, a named threat
+   entry (§7.5), and the wallet watchdog horizon must be sized for it.
    Shim 3 enters through the same `relay_transactions` entry point, so
    arming is **inherited, not re-implemented**; PR-3 carries the test
    obligation (§10.4).
@@ -539,6 +684,14 @@ de-risking the multi-daemon reopen in advance.
   claims.
 - **Chain-confirmation keying.** The watchdog's success condition is
   confirmation observed via refresh — never a daemon relay claim.
+- **Horizon bound (F35).** The escape horizon must fire **before the
+  1.5-day re-relay cutoff** (§5.2 item 1), not after: between 1.5 days and
+  the 3-day eviction a pool tx is held-but-no-longer-re-relayed, so a
+  watchdog that fires inside that window is inspecting a tx the daemon has
+  already stopped offering. And the horizon must be sized for the
+  anon-network eclipse case (§7.5) — where the watchdog is the *only*
+  backstop — not only for the clearnet-stem case where the embargo also
+  protects.
 - **Privacy-tiered escape ladder.** The timeout is itself an attack surface:
   an adversary who can delay confirmation (censoring miner, eclipse) can
   force the wallet past its threshold on demand; if the escape auto-rebuilds
@@ -548,6 +701,17 @@ de-risking the multi-daemon reopen in advance.
      daemon dedups; zero new network artifact).
   2. **Operator alarm** — a human decides.
   3. **Deliberate, alarmed rebuild** — never automatic on timeout.
+- **The ladder branches on presence (round-6 minor b).** Resubmit-same-bytes
+  is *inert* for a stuck-but-present tx: it returns `AlreadyInPool` (no
+  relay pulse, F31) and tells the wallet nothing it didn't know. The rungs
+  are therefore presence-conditional, with one resubmit acting as the
+  probe: **absent** (evicted / never landed) → the resubmit *is* the remedy,
+  re-offering through full admission and fresh relay, and the wait restarts;
+  **present-but-unconfirmed past horizon** → skip straight to the alarm rung
+  — repeating the resubmit is pointless by construction, and the eclipse
+  case (§7.5) lands exactly here. Terminal verdicts on the probe
+  (`AlreadyInChain`, `DoubleSpendConflict`, `Rejected{*}`) resolve the wait
+  per §2.5/§2.6.
 - **Resubmit is a status query, not a relay trigger (F31, source-verified).**
   An in-pool resubmit early-returns `AlreadyInPool` at Phase B, before
   shim 3 — and the old path behaves identically
@@ -660,14 +824,24 @@ with trust classification:
 | `SubmitVerdict` itself | lock lifecycle | trusted (single-egress theorem) | `Rejected ⇒ safe-release` **dissolves**; cool-off knob activates |
 | Peer/connection count | watchdog: tx-stuck vs daemon-peerless | trusted | **untrusted** — a lying "I'm healthy" makes the wallet wait on a non-propagating tx |
 | Current vs target height | `ReferenceNotFound` sync-gating; watchdog | trusted | **untrusted** — a lying sync height flips backoff/terminal at will |
+| Fee params (fee-per-byte, quantization mask) | fee estimation; the `FeeTooLow` re-estimate rung | trusted | **untrusted** — a lying fee oracle griefs: overpay, or an induced `FeeTooLow` loop (bounded by the F37 loop-breaker) |
+| Curve-tree roots / chain view consumed at proof-construction time | tx builder (`shekyl-tx-builder`) | trusted | **untrusted** — a lying chain view yields proofs honest daemons reject (`StaleRoot`-shaped griefing); it cannot forge membership, since consensus verifies against canonical roots |
 
 Round 4 introduced the health-context consumption; F32 caught that the
 then-current rider enumerated only the *deleted* relay fields
 (`diffused`/`height`/`was_diffused`) while the *newly relied-upon* health
-fields went unlabeled. The rider above is authoritative. Damage cap: because
-the escape ladder never auto-rebuilds, health-field lies degrade **liveness
-only** — they cannot force a linkage event. Wallet health-based branching is
-**own-daemon-gated**; the multi-daemon reopen inherits these fields as
+fields went unlabeled; F37 caught the same gap for the fee params the
+re-estimate rung consumes, and widened the lens: the wallet's
+**construction-time** chain view is daemon-sourced too, so the multi-daemon
+reopen is broader than the submit-time fields — the rider now enumerates
+both. The rider above is authoritative. Damage cap: because the escape
+ladder never auto-rebuilds on timeout and `FeeTooLow` is retry-bounded,
+lies in the **metadata rows** (peer count, sync height, fee params, chain
+view) degrade **liveness or fees only** — none can force a linkage event.
+The verdict row is categorically different: a lying `Rejected` is the §7.1
+attack itself, which is why its multi-daemon cell activates the cool-off
+knob rather than a mere trust downgrade. Wallet health-based branching is
+**own-daemon-gated**; the multi-daemon reopen inherits every row as
 untrusted remote metadata exactly as it inherits the relay-field deletions.
 
 ### 7.3 Resubmission-as-oracle rider (F7)
@@ -690,7 +864,46 @@ attacker-triggerable and therefore restricts automatic actions to
 privacy-neutral ones (resubmit-same-bytes). Everything linkage-bearing
 (rebuild) requires the operator rung. §5.3's ladder is the enforcement.
 
-### 7.5 Untrusted-input surfaces (fuzz obligations)
+### 7.5 Anonymity-network black-hole — the embargo's deployment boundary (F35)
+
+The F20 resolution rests on the Dandelion++ embargo being *the* mechanism no
+wallet policy can substitute (§5.2 item 2). That mechanism **does not run
+for the deployment a privacy-maximalist coin most expects**: noise zones
+(Tor/i2p) intentionally do not arm the embargo (`levin_notify.cpp:850`,
+`tx_pool.cpp:914-915`), by design — an origin fluffing to clearnet because
+its anon send stalled would deanonymize itself, which is the exact wound the
+noise zone exists to prevent. The absence is correct and stays; what must
+not stay is framing it as a parenthetical.
+
+Wargamed: an anon-only node whose out-peers are all adversarial (anon-peer
+eclipse) has no embargo — there is no clearnet identity to fluff from — and
+the covert-channel re-send cadence re-offers into the same eclipsed peer
+set. The tx sits in the pool; watchdog resubmits return `AlreadyInPool`,
+which neither informs (the wallet knew) nor propagates (no relay pulse,
+F31). Black-hole resistance over noise zones therefore reduces to
+**fan-out across all anon out-peers plus re-send cadence — both of which an
+anon-peer eclipse defeats — leaving the wallet watchdog's operator-alarm
+rung as the sole backstop.**
+
+That is an acceptable end state (the alarm is precisely the "a human
+decides" rung, and eclipse is not silently survivable in any design), but
+it carries two named obligations:
+
+1. **The watchdog horizon is sized for this case**, not only for the
+   clearnet-stem case where the embargo also protects (§5.3's horizon
+   bound: fire before the 1.5-day re-relay cutoff, well inside the 3-day
+   pool lifetime).
+2. **The escalation for present-but-unconfirmed goes straight to alarm**
+   (§5.3's presence branch) — the resubmit rung is inert here by
+   construction, and burning horizon-multiples on it delays the only
+   effective response.
+
+Cross-boundary honesty: on clearnet the guarantee is "the origin itself
+eventually fluffs" (mechanism); over noise zones it is "the operator is
+told, in bounded time, that the tx is not confirming" (detection). The
+design does not pretend the second is the first.
+
+### 7.6 Untrusted-input surfaces (fuzz obligations)
 
 - **The Rust admission parser (Phase A) is the front-line untrusted-input
   surface** — named fuzz target (§10.6), running `shekyl-wire` parse +
@@ -781,7 +994,7 @@ against the C++ behavior); the matrix is the gate, per round-5 minor (b).
 | --- | --- | --- | --- | --- |
 | P0 | `m_timed_out_transactions` gate | `:161-167` | flagless `Failed` (defect 0.2) | **DEL** — D3; set deleted (§9.1) |
 | P1 | `unlock_time == 0` | `:204-211` | `nonzero_unlock_time` | **A** — `Malformed` |
-| P2 | Fee floor (`get_tx_fee` + `check_fee`) | `:176-192`, `blockchain.cpp:3913-3936` | `fee_too_low` | **C** — Rust arithmetic over snapshot `fee_per_byte` + quantization mask + the 2% acceptance buffer; KAT against `check_fee` |
+| P2 | Fee floor (`get_tx_fee` + `check_fee`) | `:176-192`, `blockchain.cpp:3913-3936` | `fee_too_low` | **C + D re-gate (F34)** — Rust arithmetic over snapshot `fee_per_byte` + quantization mask + the 2% acceptance buffer at C, KAT against `check_fee`; the commit shim re-runs `check_fee` against fresh params at D because the floor is per-block dynamic (§3.1 item 6) |
 | P3 | `tx.extra` ≤ `MAX_TX_EXTRA_SIZE` | `:194-201` | `tx_extra_too_big` | **A** — `Malformed` |
 | P4 | Pool KI spent (relay-category-aware) | `:216-227` | `double_spend` | **B/D** — snapshot fact + Phase-D re-check; verdict decided by Rust only at D (§3.1) |
 | P5 | Insert tail (meta, KI index, transient lists, DB) | `:229-366` | — | **KEEP** behind `commit_tx` (shim 2) — mechanism, not logic |
@@ -806,7 +1019,64 @@ against the C++ behavior); the matrix is the gate, per round-5 minor (b).
 | K11 | Proof non-empty; KI/pseudoOut/PQC-leaf flattening | `:3792-3820` | flagless fail | **A**/**C** |
 | K12 | `shekyl_fcmp_verify` | `:3838-3850` | flagless fail | **C** — native `shekyl-fcmp` call (same Rust crate, no FFI hop) |
 | K13 | PQC hybrid auth + scheme-id consistency | `:3870-3889` | flagless fail | **C** ⚠ — bind `verify_transaction_pqc_auth`'s Rust backend natively; confirm scheme-id rule parity |
-| K14 | Bond-post / serve-credit input legs | `:3474-3530`, `:3565-3730` | flagless fail | **C** ⚠ — same battery over the archival arms; ports pinned by the existing archival test vectors |
+| K14 | Bond-post / serve-credit input legs | `:3474-3530`, `:3565-3730` | flagless fail | expanded to §8.7.1 (F36) — the archival arms carry economic/semantic consensus checks that a one-line row was silently compressing |
+
+### 8.7.1 Archival-arm legs (F36 — pinned at source)
+
+**Completeness pin.** The submit call chain is `on_send_raw_tx` →
+`handle_incoming_tx` → `add_new_tx` → `add_tx` → the four enumerated
+functions; grep confirms the only archival validation reachable from it is
+`check_tx_inputs` → `check_archival_serve_credit_input` (`:3602`) and
+`check_archival_bond_post_input` (`:3614`). **There is no bond-specific
+submit entry point outside the four functions.** Archival economics are
+therefore submit-path, not block-only — the opposite disposition to the one
+the matrix's silence implied, which is why these rows exist. (One
+hypothesis-correction from the pin: no tier-ladder stake constants exist in
+consensus code — the submit-path economic constraint is the **bond-floor
+equality**, `bonded_total_atomic == bond_credit == bond_floor(holdings)`
+with `ARCHIVAL_BOND_FLOOR_ATOMIC = 750_000_000` const-asserted at
+`bond_floor.rs:32-35`, scaling per shard count.)
+
+Bond-post rows (`check_archival_bond_post_input`, `blockchain.cpp:4183-4229`,
+called at `:3614`; funding spend inputs run the regular K battery over
+`spend_indices`, `:3628-`):
+
+| # | Check | Site | Disposition |
+| --- | --- | --- | --- |
+| BP1 | Hybrid pubkey length == `PQC_HYBRID_SINGLE_KEY_LEN` | `:4187-4191` | **A** ⚠ — confirm `shekyl-wire`'s per-arm archival bounds cover it, else engine rule; `Malformed` |
+| BP2 | `p_canonical_id` recomputation from pubkey | `:4193-4205` | **C** — already Rust behind `shekyl_archival_p_canonical_id_from_pubkey`; engine calls natively; `Malformed` |
+| BP3 | Bond record does not already exist (DB) | `:4207-4208`, consumed at `bond_post.rs:73-75` | **B fact + D re-check** — a bond-post block landing during C flips it; conflict → `DoubleSpendConflict` (claim-slot leg) |
+| BP4 | Economic battery: post-kind, holdings-shape consistency, credit/debit exclusivity, debit == 0, **bond-floor equality** | `:4212-4226` → `verify_join_market_bond_post`, `bond_post.rs:40-78`; floor per `bond_floor.rs:19-30` | **C** — already Rust (`shekyl-archival-retention`), native call; violations → `Malformed` |
+| BP5 | `pqc_auths[i].hybrid_public_key == bond.hybrid_public_key` | `:3620-3626` | **A** — structural cross-field check; `Malformed` |
+
+Serve-credit rows (`check_archival_serve_credit_input`,
+`blockchain.cpp:4231-4379`, called at `:3602`):
+
+| # | Check | Site | Disposition |
+| --- | --- | --- | --- |
+| SC1 | Path layer / branch-scalar bounds | `:4236-4257` | **A** ⚠ — confirm `shekyl-wire` per-arm bounds parity; `Malformed` |
+| SC2 | No duplicate serve-credit for (P, shard, E) (DB bit) | `:4259-4263` | **B fact + D re-check** — a block during C can claim it; conflict → `DoubleSpendConflict` (claim-slot leg) |
+| SC3 | Bond record present, stored pubkey fetched (DB) | `:4265-4270` | **B fact + D re-check** |
+| SC4 | Settlement epoch ≥ join epoch + 1 | `:4272-4279` → `serve_credit_epoch_ok` | **C** — arithmetic over the B-fact join epoch; already Rust; `Malformed` |
+| SC5 | `good_through(P, E)` interval semantics (DB) | `:4281-4286` | **B fact + D re-check** — debits during C can flip it |
+| SC6 | Credit deadline `current_height ≤ H_close` | `:4288-4295` | **C** over snapshot height + **D re-check** (height moves during C); past-deadline → `Malformed` (permanent for these bytes) |
+| SC7 | Seal hash at H_seal; H_fire derivation; shard-in-holdings at H_fire; registry segment; leaf-layer scalars | `:4297-4341` | **B facts** (historical state; deep-reorg drift is block-validation-backstopped) → **C** decision |
+| SC8 | Serve-credit vin verification over wire bytes + ctx (incl. vin wire-tag pin) | `:4343-4376` → `shekyl_archival_verify_serve_credit_vin` | **C** — already Rust, native call; the wire-tag check folds into Phase A's parse (`shekyl-wire` owns the dense tag); `Malformed` |
+
+Classification rule for archival premise failures: **state conflicts**
+(BP3, SC2 — someone else consumed the claim slot) → `DoubleSpendConflict`;
+**window/deadline/shape failures** → `Malformed`. If the archival wallet
+(SP-T4a) later needs a finer-grained cause, it lands as an additive
+`RejectCause` variant per the §2.3 schema-evolution rule — old wallets
+degrade to `Unrecognized` → release, which is safe for both legs.
+
+Scope honesty: **pool-level dedup of two concurrently pool-resident
+archival claims is not attempted** — two bond-posts for the same P (with
+disjoint funding inputs) can coexist in the pool, exactly as they can
+today on the P2P path (the DB record is written at block-connect, not
+pool-insert); block validation arbitrates, and the loser strands until the
+F22 leg-1 sweep evicts it. Parity preserved, no regression, recorded so
+nobody files it as a hole later.
 
 ### 8.8 `tx_sanity_check` (`tx_sanity_check.cpp:42-102`) — F29
 
@@ -816,10 +1086,13 @@ against the C++ behavior); the matrix is the gate, per round-5 minor (b).
 | S2 | **Coinbase-submit reject** (`is_coinbase`) | `:52-56` | **A** — explicit engine rule (the live residue; hypothesis pending this matrix's freeze per minor b) |
 | S3 | Decoy-median heuristics | `:57-101` | **DEL** — **vacuous, verified**: they operate on `key_offsets`, which FCMP++ requires empty (row K3), so `n_indices == 0` and the function early-returns `true` at `:78-82`. Not merely obsolete — dead at runtime today. Rule-60 deletion, reason recorded |
 
-**Freeze rule:** rows marked ⚠ (I3, N3, N6, N7, N8, M3, M8, O6, K13, K14)
-must be resolved — Rust location named or port completed, with KAT/pinned
-vectors — before the §2 contract freezes and PR-2's crate version is
-declared stable. Everything else is verified as of this document.
+**Freeze rule:** rows marked ⚠ (I3, N3, N6, N7, N8, M3, M8, O6, K13, and
+§8.7.1's BP1 + SC1) must be resolved — Rust location named or port
+completed, with KAT/pinned vectors — before the §2 contract freezes and
+PR-2's crate version is declared stable. The archival economic/semantic
+legs (BP2–BP4, SC4, SC8) are already Rust with named sources and carry no
+⚠; their obligation is the native-call binding, covered by PR-3. Everything
+else is verified as of this document.
 
 ---
 
@@ -837,6 +1110,10 @@ completeness check.
 | `src/cryptonote_core/tx_pool.h:677` | member declaration |
 | `src/cryptonote_core/tx_pool.cpp:161-167` | resubmit gate (defect 0.2) |
 | `src/cryptonote_core/tx_pool.cpp:764` | insert on stuck-sweep |
+
+Re-verified at round 6 (minor c): the grep returns **exactly these three
+sites** — no stats getters, serialization, or RPC readers exist. The member
+deletes clean. PR-5's re-grep remains the backstop.
 
 ### 9.2 `tx_sanity_check` (F29 / §8.8)
 
@@ -872,6 +1149,21 @@ completeness check.
   `check_tx_inputs` verification — unchanged (§3.5).
 - **Dandelion++ / levin relay machinery** — inherited by shim 3, not
   modified (§5.2).
+- **`on_relay_tx`** (`core_rpc_server.cpp:3047-3096`) — kept, with its
+  nature named: it is **relay-only, not a second submit entry** (requires
+  the tx already pool-resident; unrestricted-RPC-gated,
+  `core_rpc_server.h:179`). It *is* an operator-demand origin
+  re-announcement pulse — the exact signal F31 keeps off the wallet path —
+  which is acceptable for operator/debug tooling behind the unrestricted
+  gate and must not grow a wallet-facing consumer.
+
+**Second-entry-point sweep (round-6 minor c), grep-derived:** no ZMQ or
+alternative submit surface mirrors `on_send_raw_tx` — `src/rpc/` contains
+only the epee HTTP server, the `core_rpc_ffi` axum dispatch (whose
+legacy-route entries are enumerated in §9.3), and the handler/args
+plumbing; a repo-wide grep for `SendRawTx|send_raw_tx` matches only the
+§9.3 sites plus the wallet-RPC caller that ports with wallet2. The
+enumeration above is the complete submit surface.
 
 ---
 
@@ -888,9 +1180,14 @@ completeness check.
    Phase C → `AlreadyInChain`; (ii) competing spend lands during C →
    `DoubleSpendConflict`; (iii) reorg during C orphans the reference block →
    `StaleRoot`; (iv) pool fills during C → post-prune eviction →
-   `FeeTooLow`. Plus one C++ latch-based integration test driving a real
-   commit shim, and the old-path `m_double_spend` regression pin captured
-   **before** PR-5 deletes the legacy path.
+   `FeeTooLow`; (v) **fee floor rises during C with the pool *not* full**
+   (F34) → Phase-D re-gate → `FeeTooLow` — the case the post-prune check
+   cannot catch; (vi) multiple premises move at once (reorg + competing
+   spend) → classification is most-terminal-first → `DoubleSpendConflict`,
+   never `StaleRoot` (round-6 minor a). Plus one C++ latch-based
+   integration test driving a real commit shim, and the old-path
+   `m_double_spend` regression pin captured **before** PR-5 deletes the
+   legacy path.
 3. **FFI struct round-trips (PR-3):** bidirectional (Rust-writes/C++-reads,
    C++-writes/Rust-reads) over edge values (§4.5).
 4. **Embargo arming (PR-3):** engine-admitted tx dispatched over a public
@@ -908,8 +1205,17 @@ completeness check.
    `submit_transaction`.
 8. **Wallet projection (PR-4):** per-cause disposition table driven by a
    mock daemon returning each verdict; `Malformed` one-shot loop-breaker;
-   watchdog escape-ladder ordering (resubmit precedes alarm precedes
-   rebuild; rebuild never fires without the alarm rung).
+   **`FeeTooLow` bounded retry** (F37: second consecutive `FeeTooLow` on
+   the rebuilt tx → alarm, no third build); watchdog escape-ladder ordering
+   (resubmit precedes alarm precedes rebuild; rebuild never fires without
+   the alarm rung) and **presence branching** (round-6 minor b:
+   present-but-unconfirmed past horizon goes straight to alarm; absent
+   re-offers). Awaiting-confirmation invariant (F14, §2.6): **restart
+   mid-await → outputs still excluded from selection** (persistence leg);
+   **evicted-never-confirmed → outputs released after the watchdog
+   horizon**, via verdict where reachable and via observed-absence
+   otherwise (confirmed-absent leg); confirmed-present → refresh clears to
+   spent-final.
 
 ---
 
@@ -921,10 +1227,11 @@ completeness check.
 | `PreviouslyEvicted` deleted (D3) | FCMP++ ref-age mechanics change such that aged-out resubmits stop resolving to definite verdicts (e.g., unbounded reference validity in a V4 proof system) | Contract amendment round against the then-current §8 matrix |
 | Dedicated txid-status RPC rejected | A consumer emerges that legitimately cannot hold tx bytes (hardware-wallet flow where the host discards them) **and** own-daemon deployment | Threat-model review (§7.3 oracle analysis re-run); privacy sign-off gate |
 | `do_not_relay` deleted | A staged-broadcast design (SP-T2/T4 successors) needs admit-without-announce as a wire-level operation rather than a regtest configuration | Design round in the staged-broadcast doc, citing this table |
-| Rebuild cool-off default 0 | Multi-daemon egress or third-party-daemon support lands (the single-egress theorem dissolves) | The multi-daemon design round must set a nonzero default and activate §7.2's untrusted rider before shipping |
+| Rebuild cool-off default 0 | Multi-daemon egress or third-party-daemon support lands (the single-egress theorem dissolves) | The multi-daemon design round must, before shipping: set a nonzero cool-off default, activate §7.2's untrusted rider (all five rows), and verify the Phase-C concurrency cap (F39) against public-RPC load — the three are one prerequisite bundle |
 | C++ interim anything (there is none — the verdict is born in Rust) | n/a — recorded to memorialize round 2's rejection of the patch-C++ shape | n/a |
 | `SubmitStateShim` over C++ FFI | The Rust mempool lands | Swap the trait impl; engine, contract, wallet untouched (§3.2). This is the *planned* reversion |
-| Health-based wallet branching own-daemon-gated (F32) | Multi-daemon reopen | Same round as the cool-off row; peer count + sync height enter as untrusted remote metadata |
+| Health-based wallet branching own-daemon-gated (F32) | Multi-daemon reopen | Same round as the cool-off row; peer count + sync height + fee params + construction-time chain view enter as untrusted remote metadata |
+| New top-level `SubmitVerdict` tags rejected (F38 — additive rejection semantics go under `RejectCause`) | A genuinely new **non-rejection** disposition emerges that no `RejectCause` variant can express (a new stable state of the submitted bytes, not a new reason for refusing them) | Coordinated wire-version bump: contract amendment round, skew-test extension, dual-version deployment window — never a silent tag addition |
 
 ---
 
@@ -932,10 +1239,10 @@ completeness check.
 
 | PR | Content | Gate |
 | --- | --- | --- |
-| 1 | **This document** | Design rounds converged (rounds 1–5 recorded); F30 folded from first draft |
-| 2 | `rust/shekyl-rpc-types`: the §2 enums + request/response types, serde round-trips, skew tests, txid KAT | Contract freeze requires §8 ⚠-rows resolved |
-| 3 | Daemon: admission engine in `shekyl-daemon-rpc` (generic over `SubmitStateShim`), three C++ shims, typed axum route, **two separately-scoped F22 defect commits**, race suite + embargo test + FFI round-trips + fuzz target + regtest coverage. Legacy endpoint dual-serves from here | §10 items 2–7 green |
-| 4 | Wallet cutover: typed `publish_transaction`, `TxSubmitOutcome` reshape + per-cause dispositions + `Malformed` loop-breaker, watchdog scaffolding (chain-confirmation-keyed held tracking, escape ladder, health-context consumption), retire `AlreadyKnown`, construct `ProofStale`, move spent-marking off submit-accept to awaiting-confirmation cleared by refresh; both submitters share the mapping | §10 item 8 green |
+| 1 | **This document** | Design rounds converged (rounds 1–6 recorded); F30 folded from first draft; round 6 amended in place (F14 resolution + freeze-gate hardening) |
+| 2 | `rust/shekyl-rpc-types`: the §2 enums + request/response types, serde round-trips, skew tests, txid KAT | Contract freeze requires §8 ⚠-rows resolved (incl. §8.7.1 BP1/SC1) |
+| 3 | Daemon: admission engine in `shekyl-daemon-rpc` (generic over `SubmitStateShim`) with the Phase-C concurrency cap (F39) and the Phase-D fee re-gate (F34), three C++ shims (archival fact legs included), typed axum route, **two separately-scoped F22 defect commits**, race suite + embargo test + FFI round-trips + fuzz target + regtest coverage. Legacy endpoint dual-serves from here | §10 items 2–7 green |
+| 4 | Wallet cutover: typed `publish_transaction`, `TxSubmitOutcome` reshape + per-cause dispositions + `Malformed`/`FeeTooLow` loop-breakers (F28/F37), watchdog scaffolding (chain-confirmation-keyed held tracking, escape ladder with presence branching, health-context consumption, horizon inside the 1.5-day re-relay bound), retire `AlreadyKnown`, construct `ProofStale`, move spent-marking off submit-accept to the **persisted** awaiting-confirmation state with both §2.6 release paths (F14); both submitters share the mapping | §10 item 8 green |
 | 5 | Deletions per §9 enumeration (greps re-run as completeness check) | old-path regression pin captured in PR-3 |
 | 6 | Docs sweep per rule 91: `docs/DAEMON_RPC_RUST.md`, `PHASE_2A_SEND_PATH.md` (three-bucket language → Result shape), `SHEKYLD_PREREQUISITES.md` §5, FOLLOWUPS close-outs (`fcmp_root_stale`), SP-T4a comment rewrite, `CHANGELOG.md` | — |
 
@@ -953,12 +1260,17 @@ completeness check.
   (§7.3), wire minimalism (§2.2), the `diffused` deletion (chain-confirmation
   keying is trustless where a relay claim was trusted metadata), the escape
   ladder's never-auto-rebuild rule (§7.4), the F31
-  no-origin-relay-pulse semantics, and the F30 mechanization that
-  armor-plates all of these against rule-60-style erosion.
+  no-origin-relay-pulse semantics, the F14 awaiting-confirmation durability
+  (a wallet restart cannot self-inflict a same-key-image broadcast, §2.6),
+  the F37 `FeeTooLow` bound (fee-driven rebuilds leak co-ownership per
+  iteration), and the F30 mechanization that armor-plates all of these
+  against rule-60-style erosion.
 - **Priority 3 (outlast the team) — binding for:** the single-Rust-definition
-  contract with named skew rules, the `SubmitStateShim` seam that survives
-  the mempool migration, the liveness hand-off sentence that survives the
-  plan boundary, and this document's decision record.
+  contract with named skew rules and the F38 schema-evolution rule that
+  keeps the skew guarantee durable rather than incidental (§2.3), the
+  `SubmitStateShim` seam that survives the mempool migration, the liveness
+  hand-off sentence that survives the plan boundary, and this document's
+  decision record.
 
 P2P consensus ingestion is untouched throughout; this series changes the
 wallet↔daemon wire and the RPC-side admission path only.
