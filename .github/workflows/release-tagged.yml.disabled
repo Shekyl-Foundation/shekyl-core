@@ -157,22 +157,27 @@ jobs:
           update-alternatives --set x86_64-w64-mingw32-g++ $(which x86_64-w64-mingw32-g++-posix)
           update-alternatives --set x86_64-w64-mingw32-gcc $(which x86_64-w64-mingw32-gcc-posix)
 
-      - name: Install Rust toolchain with Windows target
-        run: |
-          # Download-then-run, NOT `curl | sh` (silent-green on failed
-          # download; observed live on PR #236).
-          curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs
-          sh /tmp/rustup-init.sh -y
-          . "$HOME/.cargo/env"
-          rustup target add x86_64-pc-windows-gnu
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
       - name: Configure git
         run: git config --global --add safe.directory '*'
 
       - uses: actions/checkout@v5
         with:
           submodules: recursive
+
+      - name: Install Rust toolchain
+        # Composite action (.github/actions/install-rust): the one
+        # hardened download-then-run recipe, installing the
+        # rust-toolchain.toml pin up front. Must come AFTER checkout —
+        # a `./`-referenced local action does not exist on the runner
+        # until the repo is checked out.
+        uses: ./.github/actions/install-rust
+
+      - name: Add Windows cross target
+        # Separate step ON PURPOSE (depends.yml pattern): the
+        # composite's GITHUB_PATH append only takes effect for
+        # subsequent steps, which is what the old block's
+        # `. "$HOME/.cargo/env"` worked around in-block.
+        run: rustup target add x86_64-pc-windows-gnu
 
       - uses: actions/cache@v5
         with:
@@ -266,18 +271,6 @@ jobs:
             pkg-config python3 gperf bsdmainutils curl git ca-certificates \
             unzip ccache ${{ matrix.platform.packages }}
 
-      - name: Install Rust toolchain
-        run: |
-          # Download-then-run, NOT `curl | sh` (silent-green on failed
-          # download; observed live on PR #236).
-          curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs
-          sh /tmp/rustup-init.sh -y
-          . "$HOME/.cargo/env"
-          if [ -n "${{ matrix.platform.rust_target }}" ]; then
-            rustup target add ${{ matrix.platform.rust_target }}
-          fi
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
       - name: Configure git
         run: git config --global --add safe.directory '*'
 
@@ -285,6 +278,17 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+
+      - name: Install Rust toolchain
+        # Composite action (.github/actions/install-rust), after
+        # checkout — see the Windows job's step comments.
+        uses: ./.github/actions/install-rust
+
+      - name: Add Rust cross target
+        # Separate step ON PURPOSE (depends.yml pattern); see the
+        # Windows job's step comment.
+        if: ${{ matrix.platform.rust_target }}
+        run: rustup target add ${{ matrix.platform.rust_target }}
 
       - name: ccache
         uses: actions/cache@v5

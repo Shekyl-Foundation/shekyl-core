@@ -130,13 +130,12 @@ jobs:
             valgrind build-essential pkg-config libssl-dev python3 jq
 
       - name: install Rust toolchain
-        run: |
-          # Download-then-run, NOT `curl | sh`: a failed download must fail
-          # THIS step (piped, sh reads empty stdin and exits 0 — observed
-          # live on PR #236); --retry rides through transients.
-          curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs
-          sh /tmp/rustup-init.sh -y
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        # Composite action (.github/actions/install-rust): the one
+        # hardened download-then-run recipe, installing the
+        # rust-toolchain.toml pin up front (the inline `-y` form
+        # installed a floating stable that rust-toolchain.toml then
+        # overrode per cargo invocation anyway).
+        uses: ./.github/actions/install-rust
 
       - name: cache cargo registry + target
         uses: actions/cache@v4
@@ -341,13 +340,12 @@ jobs:
             build-essential pkg-config libssl-dev
 
       - name: install Rust toolchain
-        run: |
-          # Download-then-run, NOT `curl | sh`: a failed download must fail
-          # THIS step (piped, sh reads empty stdin and exits 0 — observed
-          # live on PR #236); --retry rides through transients.
-          curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs
-          sh /tmp/rustup-init.sh -y
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        # Composite action (.github/actions/install-rust): the one
+        # hardened download-then-run recipe, installing the
+        # rust-toolchain.toml pin up front (the inline `-y` form
+        # installed a floating stable that rust-toolchain.toml then
+        # overrode per cargo invocation anyway).
+        uses: ./.github/actions/install-rust
 
       - name: cache cargo registry + target
         uses: actions/cache@v4
@@ -413,13 +411,12 @@ jobs:
             valgrind build-essential pkg-config libssl-dev python3 jq
 
       - name: install Rust toolchain
-        run: |
-          # Download-then-run, NOT `curl | sh`: a failed download must fail
-          # THIS step (piped, sh reads empty stdin and exits 0 — observed
-          # live on PR #236); --retry rides through transients.
-          curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs
-          sh /tmp/rustup-init.sh -y
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        # Composite action (.github/actions/install-rust): the one
+        # hardened download-then-run recipe, installing the
+        # rust-toolchain.toml pin up front (the inline `-y` form
+        # installed a floating stable that rust-toolchain.toml then
+        # overrode per cargo invocation anyway).
+        uses: ./.github/actions/install-rust
 
       - name: cache cargo registry + target
         uses: actions/cache@v4
