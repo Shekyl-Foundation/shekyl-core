@@ -224,9 +224,9 @@ The enforcement pattern is the SP-T2 mirror; the instances are new.
   opaque bytes with no persona binding, so origin-in-`P`-space on the write path
   is **not** structurally closed here. The posture→submitter dispatch that routes
   ②→`PTransactionSubmitter` (never the principal submitter) is the load-bearing
-  guard, and it is **2c-2b's** obligation — with a `P`-bound-bytes newtype (only
-  `PTransactionSubmitter::submit` accepts) as the make-bad-states-unrepresentable
-  option. "Axis 1 covered" (§2) means *the submitter exists and is principal-path-
+  guard — its **shape is now frozen in §3.1** (closed-set enum, single
+  constructor choke point, `PBoundBytes` pairing); the implementation lands in
+  2c. "Axis 1 covered" (§2) means *the submitter exists and is principal-path-
   free by construction*, not *the routing is enforced* — the latter lands in 2c.
 - **(B) *System-selected* broadcast-③ is unrepresentable — a *different,
   narrower* Posture type — and `OwnRemote` is trust-on-user-assertion.** The
@@ -266,6 +266,54 @@ The enforcement pattern is the SP-T2 mirror; the instances are new.
 The **two-different-selector-types asymmetry** (invariant B) is the genesis-
 adjacent firewall stance this doc settles: it is decided once, deliberately, and
 must not be re-litigated by a symmetry refactor.
+
+### 3.1 The posture→submitter dispatch shape (FROZEN 2026-07-04, user-ratified)
+
+Invariant (A) left the routing guard as an open obligation and the FOLLOWUPS
+dispatch-shape entry posed the API choice (`TransactionSubmitter::submit` is
+RPITIT → not dyn-compatible; the two impls share no nameable type). The choice
+is now frozen — it gates [`DAEMON_SUBMIT_VERDICT.md`](DAEMON_SUBMIT_VERDICT.md)
+PR-4, whose "both submitters share the mapping" presupposes it. Five parts:
+
+1. **Closed-set enum, match-delegation.**
+   `BroadcastSubmitter<D> { Local(DaemonTransactionSubmitter<D>),
+   PerP(PTransactionSubmitter) }`, implementing `TransactionSubmitter` by
+   matching and delegating. Grounds: the broadcast submitter set is *closed by
+   type* (invariant B — no ③ variant exists), so the enum states the closed set
+   for free, where a boxed `async_trait` or dyn shim would pay allocation to
+   erase it. **RPITIT compatibility is verified, not assumed**: a compile probe
+   on the workspace MSRV toolchain (1.94.0) over these exact shapes — generic
+   arm + concrete arm, `+ Send` bound — compiles clean with `async fn`
+   match-delegation, one unified `Send` future, no `Box`.
+2. **One construction choke point.** `select_broadcast` stays posture-only (its
+   existing contract — it resolves a posture, never a submitter). The enum gains
+   the single constructor (posture in, submitter out) in
+   `transaction_submitter.rs`, so the posture→submitter binding — the (A)
+   routing guard, ②→`PerP` and never the principal submitter — is a property of
+   one audited constructor, not a convention at call sites.
+3. **Arms.** `Local` wraps the principal's loopback submitter (the wallet's own
+   local daemon observing `P`'s tx is conceded — it is the operator's node;
+   loopback never crosses the network). `PerP` wraps `PTransactionSubmitter`
+   over `P`'s own circuit. The `DaemonUrl` newtype (FOLLOWUPS, 2c config-source
+   slice) slots into the `PerP` construction path when it lands.
+4. **Byte↔persona pairing: checked at the choke point, not type-branded.** A
+   `PBoundBytes { persona, bytes }` newtype is the enum façade's accepted input;
+   the constructor-bound persona is equality-checked against it (`debug_assert`
+   loud in dev, fail-closed error in release — the `validate_handle`
+   discipline). Full per-persona type branding is **rejected for now**: the
+   persona set is dynamic, so branding costs const-generic machinery for a
+   state the single-constructor path already makes unreachable. Rule-21 reopen:
+   a static-persona context (or a second call-site family outside the
+   choke point) re-raises branding.
+5. **Survives PR-4.** Match-delegation is agnostic to the trait's output shape:
+   when `DAEMON_SUBMIT_VERDICT.md` PR-4 reshapes `submit`'s result into the
+   `SubmitVerdict` projection (§2.5 dispositions), the enum carries through
+   unchanged, and "both submitters share the mapping" is literal — one mapping
+   function, two transports, one dispatch type.
+
+Implementation lands with the 2c wiring (the enum + constructor + `PBoundBytes`
+are 2c-2a/2c-2b code, PR-4-adjacent); this section freezes the shape so nothing
+downstream is built against a different one.
 
 ---
 
