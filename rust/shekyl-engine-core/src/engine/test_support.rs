@@ -76,7 +76,7 @@ use shekyl_scanner::ScannableBlock;
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Transaction, TxPrefix};
 
 use crate::engine::pending::TxHash;
-use crate::engine::traits::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
+use crate::engine::traits::{DaemonEngine, DaemonHealth, FeeEstimates, TxSubmitOutcome};
 
 /// Default 32-byte seed for tests that don't exercise the
 /// `ChaCha20Rng`-driven paths of [`TestDaemon`].
@@ -255,6 +255,14 @@ struct State {
     /// estimates (e.g. mid-startup, during fee-pool rotation).
     fee_errors: VecDeque<RpcError>,
 
+    /// Health snapshot returned by `get_health`. Fixed to a healthy,
+    /// fully-synced daemon (peers present, `target_height == 0`) so the
+    /// `DaemonEngine` impl is complete for tests that don't exercise the
+    /// health gate. Watchdog health-gating and health-failure paths are
+    /// driven through the hermetic `StubDaemon` in the `submit_lifecycle`
+    /// test module, which controls both health facts and submit outcomes.
+    health: DaemonHealth,
+
     /// Deterministic RNG seeded from the constructor seed. Held
     /// for §6.2 compliance and reserved for future RNG-driven
     /// affordances (fee jitter, synthetic-fork randomization);
@@ -278,6 +286,7 @@ impl State {
             submit_errors: VecDeque::new(),
             fee_estimates: default_fee_estimates(),
             fee_errors: VecDeque::new(),
+            health: default_health(),
             rng: ChaCha20Rng::from_seed(seed),
         }
     }
@@ -296,6 +305,20 @@ fn default_fee_estimates() -> FeeEstimates {
         standard: FeeRate::new(10, 1).expect("standard fee rate is non-zero"),
         priority: FeeRate::new(100, 1).expect("priority fee rate is non-zero"),
         quantization_mask: 1,
+    }
+}
+
+/// Construct the default [`DaemonHealth`] that every `TestDaemon`
+/// returns from `get_health`: a healthy, fully-synced daemon (peers
+/// present, `target_height == 0`). `TestDaemon` health is fixed to this
+/// value — the watchdog health-gate and health-failure paths are driven
+/// by the hermetic `StubDaemon` in the `submit_lifecycle` test module,
+/// which controls both health facts and submit outcomes.
+fn default_health() -> DaemonHealth {
+    DaemonHealth {
+        connections: 8,
+        height: 0,
+        target_height: 0,
     }
 }
 
@@ -653,6 +676,16 @@ impl DaemonEngine for TestDaemon {
             } else {
                 Ok(TxSubmitOutcome::AlreadyInPool { hash })
             }
+        }
+    }
+
+    fn get_health(
+        &self,
+    ) -> impl Send + std::future::Future<Output = Result<DaemonHealth, Self::Error>> {
+        let state = self.state.clone();
+        async move {
+            let state = state.lock().expect("TestDaemon state poisoned");
+            Ok(state.health)
         }
     }
 }

@@ -47,7 +47,7 @@ use shekyl_rpc_transport::SimpleRequestRpc;
 use shekyl_wire::Transaction;
 
 use crate::engine::pending::TxHash;
-use crate::engine::traits::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
+use crate::engine::traits::{DaemonEngine, DaemonHealth, FeeEstimates, TxSubmitOutcome};
 use crate::engine::transaction_submitter::submit_outcome_from_verdict;
 
 /// Grace-block horizon passed to the daemon's `get_fee_estimate`
@@ -236,6 +236,48 @@ impl DaemonEngine for DaemonClient {
 
             let verdict = self.publish_transaction(&tx_bytes).await?;
             Ok(submit_outcome_from_verdict(&verdict, hash))
+        }
+    }
+
+    /// Snapshot daemon health via **one** `get_info` JSON-RPC read
+    /// (§5.2 item 3) — the same info surface `Engine::open_*` already
+    /// queries for network verification, so this adds no new RPC method.
+    ///
+    /// The summed outgoing/incoming connection counts and the sync
+    /// position feed the §5.3 escape ladder's health gate. Untrusted-
+    /// daemon input is parsed defensively (rule `20-rust-vs-cpp-policy`
+    /// §3): a response missing the mandatory `height` field is a
+    /// malformed reply ([`RpcError::InvalidNode`]), not a silently
+    /// defaulted zero (a false "synced at height 0" would mislead the
+    /// ladder's sync gate). Absent connection counts map to `0` — the
+    /// safe direction, since a peerless reading only ever routes to the
+    /// operator-alarm rung, never to a rebuild. `target_height` follows
+    /// the info surface's "0 when synced" convention, so its absence
+    /// maps to `0`, and the connection sum is `saturating_add` (rule §4).
+    fn get_health(&self) -> impl Send + Future<Output = Result<DaemonHealth, Self::Error>> {
+        async move {
+            let info: Value = self.json_rpc_call("get_info", None).await?;
+            let height = info
+                .get("height")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| RpcError::InvalidNode("get_info missing height".to_string()))?;
+            let target_height = info
+                .get("target_height")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let outgoing = info
+                .get("outgoing_connections_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let incoming = info
+                .get("incoming_connections_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            Ok(DaemonHealth {
+                connections: outgoing.saturating_add(incoming),
+                height,
+                target_height,
+            })
         }
     }
 }

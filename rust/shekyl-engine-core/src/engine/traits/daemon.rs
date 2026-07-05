@@ -212,6 +212,34 @@ pub(crate) enum TxSubmitOutcome {
     },
 }
 
+/// Daemon health facts consumed by the §5.3 watchdog escape ladder.
+///
+/// A contract-accurate projection of the daemon's existing `get_info`
+/// surface — the summed connection count, the daemon's current height,
+/// and its network-estimated target height — carrying **no new RPC
+/// method** (`DAEMON_SUBMIT_VERDICT.md` §5.2 item 3). The wallet-side
+/// liveness kernel maps this into its
+/// [`DaemonHealthContext`](super::super::submit_watchdog::DaemonHealthContext);
+/// the split keeps this RPC-transport trait free of any liveness-policy
+/// type (the kernel depends on the trait, never the reverse).
+///
+/// # Trust classification (§7.2)
+///
+/// Trusted under the own-daemon V3.0 deployment model; **untrusted**
+/// under the multi-daemon reopen. The damage cap is the ladder's rung 2:
+/// health context can only *delay* escalation, never authorize a
+/// rebuild.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DaemonHealth {
+    /// Outgoing + incoming connection count.
+    pub connections: u64,
+    /// The daemon's current chain height.
+    pub height: u64,
+    /// The daemon's network-estimated target height (`0` when synced —
+    /// the info surface's convention).
+    pub target_height: u64,
+}
+
 /// Engine-side view of the daemon RPC surface (§2.5).
 ///
 /// Implementors carry the RPC client (today: [`DaemonClient`] wrapping
@@ -343,4 +371,30 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
         &self,
         tx_bytes: Vec<u8>,
     ) -> impl std::future::Future<Output = Result<TxSubmitOutcome, Self::Error>> + Send;
+
+    /// Snapshot the daemon's health facts for the §5.3 watchdog escape
+    /// ladder (§5.2 item 3): the summed connection count and the
+    /// sync position, which distinguish "tx stuck" from "daemon has no
+    /// peers to relay to" and "daemon is behind." One `get_info` read;
+    /// **no new RPC method** — the fields already exist on the info
+    /// surface the wallet queries for network verification.
+    ///
+    /// # Cancellation
+    ///
+    /// Class **a** per §4: a read-only network call with no wallet-side
+    /// side effect; dropping the returned future is equivalent to never
+    /// calling.
+    ///
+    /// # Idempotency
+    ///
+    /// **Yes** per §4: a snapshot read at call time; repeated calls
+    /// return whatever the daemon's current view is. Read-only methods
+    /// are always retry-safe (§5.2).
+    ///
+    /// # Panics
+    ///
+    /// Never panics. Per `get_fee_estimates`'s panic note.
+    fn get_health(
+        &self,
+    ) -> impl std::future::Future<Output = Result<DaemonHealth, Self::Error>> + Send;
 }

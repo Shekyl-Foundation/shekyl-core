@@ -817,6 +817,17 @@ impl Engine<SoloSigner> {
         // confidential-staking sweep.)
         let economics = super::local_economics::LocalEconomics::new();
 
+        // §5.3 submit lifecycle driver: the escape horizon is derived from
+        // the consensus block target (`daa_target_seconds`, generated from
+        // `config/consensus_constants.json` into `shekyl_economics`), the
+        // same source the kernel's `WatchdogConfig::from_block_target`
+        // documents. Owned by the Engine so its overlays persist across
+        // ticks; the wallet surface and daemon are lent per tick.
+        let submit_driver =
+            tokio::sync::Mutex::new(super::submit_lifecycle::SubmitLifecycleDriver::new(
+                shekyl_economics::EconomicParams::default().daa_target_seconds,
+            ));
+
         Ok(Self {
             persistence: file,
             state_wrap_key,
@@ -826,6 +837,7 @@ impl Engine<SoloSigner> {
             merge_view_secret,
             ledger,
             pending,
+            submit_driver,
             prefs,
             daemon,
             network,
@@ -1059,6 +1071,7 @@ impl<
             merge_view_secret,
             ledger,
             pending,
+            submit_driver,
             prefs,
             daemon: _old,
             network,
@@ -1079,6 +1092,7 @@ impl<
             merge_view_secret,
             ledger,
             pending,
+            submit_driver,
             prefs,
             daemon,
             network,
