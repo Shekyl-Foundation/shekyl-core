@@ -334,6 +334,51 @@ pub(crate) struct PendingTxState {
     pub next_id: u64,
     /// F28/F37 rebuild-loop circuit breaker. See [`SubmitLoopBreaker`].
     pub loop_breaker: SubmitLoopBreaker,
+    /// In-memory serialized bytes of network-exposed txs, keyed by
+    /// canonical txid, retained for the §5.3 watchdog's rung-1
+    /// resubmit-same-bytes probe (`DAEMON_SUBMIT_VERDICT.md` §5.3
+    /// decision 2). Populated at finalize-accept / finalize-already-in-
+    /// chain from the in-flight entry about to be dropped; pruned by the
+    /// driver when the txid leaves the held projection.
+    ///
+    /// **Ephemeral by design (decision 2).** Not persisted: a wallet
+    /// restart drops these, degrading the probe rung to the operator-
+    /// alarm rung — still satisfying §2.6's "every exit is verdict,
+    /// confirmation, or operator alarm." Persistence's only real product
+    /// would be a silent cross-restart re-broadcast of a signed key-image
+    /// spend, which the ephemeral design correctly converts into a human
+    /// decision.
+    pub held_bytes: HashMap<TxHash, Vec<u8>>,
+    /// F40 targeted re-scan requests awaiting the driver's next tick.
+    /// `finalize_submit_already_in_chain` pushes here (alongside the
+    /// observability diagnostic) whenever the daemon claims a confirming
+    /// height at-or-below the wallet's synced height (§2.5(b)); the driver
+    /// drains it and runs the cheap-check-then-escalate executor under the
+    /// F40-R2 breaker.
+    ///
+    /// A dedicated queue rather than the diagnostic sink: diagnostics are
+    /// observability-only (decision 3), so control flow does not ride the
+    /// sink.
+    pub rescan_queue: Vec<RescanRequest>,
+}
+
+/// A targeted re-scan request enqueued by
+/// [`LocalPendingTx::finalize_submit_already_in_chain`] and drained by
+/// the submit lifecycle driver (`DAEMON_SUBMIT_VERDICT.md` §2.5(b) /
+/// F40, decision 3).
+///
+/// Carries only the public facts the executor needs: the awaited txid
+/// and the daemon-claimed confirming height. The executor re-checks the
+/// fruitless-soundness guard (`claimed_height ≤ current synced_height`)
+/// at execution time — the synced height may have advanced between
+/// enqueue and drain (decision 1 refinement).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RescanRequest {
+    /// Canonical txid the daemon claims is already in the chain.
+    pub tx_hash: TxHash,
+    /// Daemon-claimed confirming-block height (F40, §2.2 carve-out).
+    /// A **release-path discriminant** only, never settlement truth.
+    pub claimed_height: u64,
 }
 
 /// The F28/F37 rebuild-loop circuit breaker
@@ -890,7 +935,13 @@ where
             .filter_map(|(output_id, owner)| (*owner == id).then_some(*output_id))
             .collect();
 
-        state.in_flight.remove(&id);
+        // §5.3 decision 2: retain the network-exposed bytes for the
+        // watchdog's rung-1 resubmit-same-bytes probe before the in-flight
+        // record (their only holder) is dropped. Ephemeral — a restart
+        // drops the map and the probe rung degrades to the operator alarm.
+        if let Some(flight) = state.in_flight.remove(&id) {
+            state.held_bytes.insert(tx_hash, flight.entry.tx_bytes);
+        }
         release_output_locks_for(state, id);
         // F28/F37: a definite accept ends any consecutive-rejection streak
         // (it does not clear a tripped breaker — see `SubmitLoopBreaker`).
@@ -978,7 +1029,13 @@ where
             .filter_map(|(output_id, owner)| (*owner == id).then_some(*output_id))
             .collect();
 
-        state.in_flight.remove(&id);
+        // §5.3 decision 2: retain the network-exposed bytes for the
+        // watchdog probe (see the accept path). The AlreadyInChain arm
+        // holds too, so a fruitless-re-scan escalation can fall through to
+        // the F31 resubmit-as-status-query with the original bytes.
+        if let Some(flight) = state.in_flight.remove(&id) {
+            state.held_bytes.insert(tx_hash, flight.entry.tx_bytes);
+        }
         release_output_locks_for(state, id);
         // F28/F37: a definite identity-bearing verdict ends any
         // consecutive-rejection streak, same as a fresh accept.
@@ -1013,6 +1070,13 @@ where
         // point can release the lock just placed), and the R2 breaker
         // lives with the re-scan executor.
         if height <= synced_height {
+            // Decision 3: enqueue the control-flow request on the dedicated
+            // queue the driver drains; the diagnostic below is the
+            // observability trace only (sinks are observability-only).
+            state.rescan_queue.push(RescanRequest {
+                tx_hash,
+                claimed_height: height,
+            });
             emit_pending_tx_diagnostic(
                 self.sink.as_ref(),
                 PendingTxDiagnostic::TargetedRescanRequested {
@@ -1032,6 +1096,46 @@ where
         );
 
         tx_hash
+    }
+
+    /// Drain the F40 targeted re-scan queue (decision 3), returning the
+    /// pending requests for the driver to execute this tick and leaving
+    /// the queue empty. One lock acquisition.
+    pub(crate) fn drain_rescan_queue(&self) -> Vec<RescanRequest> {
+        std::mem::take(
+            &mut self
+                .state
+                .lock()
+                .expect("pending-tx state lock poisoned")
+                .rescan_queue,
+        )
+    }
+
+    /// Look up the retained network-exposed bytes for `tx_hash` (§5.3
+    /// decision 2), cloned for the watchdog's resubmit-same-bytes probe.
+    /// `None` means the bytes are gone — a restart crossed the await, or
+    /// the tx already left the held projection and was pruned — and the
+    /// probe rung degrades to the operator alarm.
+    pub(crate) fn held_bytes_for(&self, tx_hash: &TxHash) -> Option<Vec<u8>> {
+        self.state
+            .lock()
+            .expect("pending-tx state lock poisoned")
+            .held_bytes
+            .get(tx_hash)
+            .cloned()
+    }
+
+    /// Prune retained probe bytes down to the live held-projection set
+    /// `live` (decision 2: "prune when the hash leaves the held
+    /// projection"). The driver calls this after projecting
+    /// `held_submits` so confirmed / released txs do not retain their
+    /// bytes indefinitely.
+    pub(crate) fn prune_held_bytes(&self, live: &HashSet<TxHash>) {
+        self.state
+            .lock()
+            .expect("pending-tx state lock poisoned")
+            .held_bytes
+            .retain(|tx_hash, _| live.contains(tx_hash));
     }
 
     fn finalize_submit_terminal(
@@ -2333,6 +2437,8 @@ where
             in_flight: HashMap::new(),
             next_id: 0,
             loop_breaker: SubmitLoopBreaker::default(),
+            held_bytes: HashMap::new(),
+            rescan_queue: Vec::new(),
         });
         Self {
             signer,
