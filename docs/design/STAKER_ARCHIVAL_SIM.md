@@ -3472,6 +3472,18 @@ the trilemma axis.
 (`rust/shekyl-staking-sim/src/standoff.rs`). Monte-Carlo (200k trials/arm, SplitMix64, reproducible)
 over candidate-set size = 1 target + Poisson background funding-shaped decoys.
 
+> **GF-7 joint-axis follow-on (2026-07-05, PR #255):** the standoff harness above grades the
+> funding-seam axis in isolation. The **joint three-axis** scenario the GF-7 measurement round
+> requires — principal lifecycle × bond-post × `P`'s other broadcasts, against a fusing adversary
+> per [`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](ARCHIVAL_BOND_2C_GF7_HOOKS.md) §2 — now exists:
+> `cargo run -p shekyl-staking-sim -- --gf7-timeline`
+> (`rust/shekyl-staking-sim/src/gf7_timeline.rs`), consuming the production scheduler's own
+> emissions via the injected `BroadcastTimelineObserver` seam (the sim holds the only recording
+> impl; production is no-op behind the non-default `gf7-hooks` feature). The scenario ships with
+> two adversary arms (funding-seam-fusing vs. funding-seam-blind — the blind arm isolates how much
+> the *other* two axes leak on their own). The **measurement round** — grading `P(link | T_obs)`
+> under threshold — remains the open genesis-gate obligation (`docs/FOLLOWUPS.md`).
+
 **Homeostasis is analytical, not re-simmed.** Economic dynamics are epoch-quantized
 (`SETTLEMENT_EPOCH_BLOCKS = 10_000` ≈ 13.9 d); the standoff adds at most `window_blocks` of entry
 latency = `window/epoch` of one epoch. Re-running the epoch-granularity sweep to resolve a sub-epoch

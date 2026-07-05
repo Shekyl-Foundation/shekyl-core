@@ -91,7 +91,7 @@ driving task + SP-4 finalize + the cadence); SP-6/SP-7 are future.
 | `VerifiedRange` / `PReconcileSet` (SP-6) | **0 files — design-level, future** | Consume for half (B); **gated on SP-6 being built** (PR-A only *collects* the inputs) |
 | `CoverDiscovery` (SP-7) — re-fund takes `AbsentVerified` only | **0 files — design-level, future** | Honor it once built; no auto-escalation of `Incomplete` |
 | `tip_height()` = "this source's *claimed* tip" (TM-3) | concept (in the plan) | Resolved by **posture**, not multi-source machinery (§4) |
-| `_spread` / `_bond_first` broadcast stub | **drawn** (the `TODO(2d)` in `stake_engine.rs`); the write-side *seam* it will feed is built (SP-T4a `PTransactionSubmitter` + `BroadcastPosture`), but the draw is **not** wired into any broadcast | Wire discretionary-broadcast timing (both the `_spread` delay **and** the `_bond_first` order-coin) over the per-`P` circuit (§5) — gated on the consumer wiring (2c-2a/2c-2b), not the seam |
+| `spread` / `bond_first` broadcast placement | **drawn AND consumed** (2c-2b PR #255): `plan_entry_seam` turns the draw into an `EntrySeamPlan` (block offsets for both events), carried in the `SignBond` reply (`SignedBondPost`); the write-side *seam* it will feed is built (SP-T4a `PTransactionSubmitter` + `BroadcastPosture`), but the plan is **not** yet wired into any broadcast | Carry the `EntrySeamPlan` to the wire over the per-`P` circuit (§5) — gated on the 2c-2a assemble / 2d dispatch wiring, not the seam or the plan |
 
 **Implication for 2d-2 half (B):** the reconcile is **blocked** until SP-6 (`PReconcileSet`)
 and the PR-B driving task exist; only half (A) transport can proceed now. The doc treats (B)
@@ -218,7 +218,7 @@ Consequences for the design:
 - **Origin constraint (the only privacy item here):** the response, being public-content,
   needs no content protection — only that its **origin stays in `P`-space**, never shared with
   the principal. The per-`P` circuit delivers this; the discretionary-broadcast timing
-  (`_spread`/`_bond_first`) reuses the anchor-free entry-gap draw so a *bond-post* doesn't
+  (`spread`/`bond_first`) reuses the anchor-free entry-gap draw so a *bond-post* doesn't
   correlate in time with the principal's activity.
 
 ---
@@ -320,7 +320,7 @@ a consensus change.
 | --- | --- |
 | DQ1 — boundary | Network-resource disjointness; per-`P` injected transport (§1) |
 | DQ2 — transport mechanism | **Resolved**: bundled wallet-owned Tor over SOCKS, per-`P` `IsolateSOCKSAuth` (§3) |
-| DQ3 — discretionary broadcast timing | Wire `_spread`/`_bond_first` over the per-`P` circuit, anchor-free draw (§5) |
+| DQ3 — discretionary broadcast timing | Wire `spread`/`bond_first` over the per-`P` circuit, anchor-free draw (§5) |
 | DQ4 — tip currency / TM-3 | Resolved by **posture** (§4), not multi-source machinery; untrusted-remote keeps the bounded risk |
 | DQ5 — reconcile GC | Consume `PReconcileSet`, GC only on confirmed-absence; **gated on PR-201** (§2) |
 | DQ6 — counterparty (TM-5) | Folds into transport (§7) |
@@ -391,7 +391,7 @@ non-empty** (§13(b)) — and leaves principal-side isolation to its own ticket,
 | **SP-T1** | **Per-`P` SOCKS-auth client + the circuit-ID verification test** — a `ureq::Agent` with a **persona-derived SOCKS username** (→ distinct `IsolateSOCKSAuth` circuit); test asserts **control-port circuit-ID disjointness** (§15). **The keystone.** | SP-T0 |
 | **SP-T2** | **The `BlockSource` Tor impl** behind SP-0 — `P`'s whole-block fetch over its SP-T1 client, **added *beside*** the direct-localhost source (posture→impl per §478; *not* a replacement of `DaemonBlockSource` — see `ARCHIVAL_BOND_2D2_SP_T2_FETCH.md` §0). | SP-T1, SP-0 (landed) |
 | **SP-T3** | **v3 onion serving** (GF-9) — `P`'s inbound onion; HS key `p_slot`-bound, rotates with the persona; published only while serving; backoff-gated. | SP-T0; GATE2 serve/challenge surface |
-| **SP-T4** | **All `P` broadcasts** — origin-in-`P`-space *always* (discretionary `_spread`/`_bond_first` **and** the deadline-critical challenge-response submission), write-side no-principal-path (CX-2); anchor-free *timing* where applicable. | SP-T1; broadcast stub |
+| **SP-T4** | **All `P` broadcasts** — origin-in-`P`-space *always* (discretionary `spread`/`bond_first` **and** the deadline-critical challenge-response submission), write-side no-principal-path (CX-2); anchor-free *timing* where applicable. | SP-T1; broadcast stub |
 | **SP-T5** | **Reconcile the stale 2d-1 comments** (Arti→SOCKS, multi-source→posture) — small code-only PR. | — |
 
 **Half (B) — reconcile (completeness-critical; gated):**
@@ -537,7 +537,7 @@ persona**; published only while `P` actively serves; backoff-gated on repeated f
 liveness model — *not* a slash trigger). Depends on the GATE2 serve/challenge surface.
 
 **SP-T4 — all `P` broadcasts (CX-2).** Every `P`-originated tx — the discretionary
-`_spread`/`_bond_first` **and** the deadline-critical challenge-response (serve-credit) submission —
+`spread`/`bond_first` **and** the deadline-critical challenge-response (serve-credit) submission —
 emits over the `PTorClient` circuit, with **no constructor path that accepts the principal's
 `DaemonClient`** (the write-side mirror of SP-T2). The default broadcast-via-daemon path would
 originate from principal-space — the write-side firewall break — so origin-in-`P`-space is enforced

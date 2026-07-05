@@ -7284,7 +7284,8 @@ one place to confirm each item's relationship to the wallet stack.
 - **2d-2 SP-T4a — GF-7 principal-timeline timing correlation is a GENESIS GATE (measure
   `P(link | T_obs)` before launch).** SP-T4a *draws* the narrow funding-seam entry-gap jitter
   (`draw_entry_gap`, `spread ~ U[0, 600 blocks]`) but does **not** wire it into any broadcast — the
-  draw stays on `_`-prefixed locals (`stake_engine.rs`), and no bond-post broadcast exists until the
+  draw stays on `_`-prefixed locals (`stake_engine.rs`) *(historical: since consumed into
+  `plan_entry_seam` — see the 2c-2b landing below)*, and no bond-post broadcast exists until the
   **2c-2a/2c-2b** scheduler consumes it. SP-T4a forbids broadcast-③ by type but does **not**
   decorrelate `P`'s broadcast from the **principal's lifecycle timeline** (nor from `P`'s other
   broadcasts). That correlation is **GF-7** (GATE6 §10.12 — S-1: *the* load-bearing principal↔`P`

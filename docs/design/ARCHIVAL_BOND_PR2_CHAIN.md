@@ -55,7 +55,7 @@ new prose uses the prefix.
 | **2b** | `feat/archival-stake-engine` #157 | **landed inert — partly superseded** | StakeEngine actor, *seed-owning* model | §3.2 (record + supersession §4) |
 | **2c-1** | `feat/archival-bond-realtree-kat` #158 | **landed** | Real-tree composition KAT (prove half; verify half now **live** — CT-5 closed #162) | §3.3 (record) |
 | **2c-2a** | `feat/archival-stake-wiring` | **landed inert** | **Model D** wiring (seed-free actor + typed contracts + `StakingBlock`) | §3.4 (record) |
-| **2c-2b** | `feat/archival-bond-request` #163 (archived) | **landed inert** | JoinMarket bond request path (wired + KAT-exercised, not user-invocable until 2d) | [`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`](ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md) + S6 follow-on §3.5.1 |
+| **2c-2b** | `feat/archival-bond-request` #163 (archived) | **landed inert** | JoinMarket bond request path (wired + KAT-exercised, not user-invocable until 2d) | [`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`](ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md) + S6 follow-on §3.5.1 + GF-7 placement/seam follow-on §3.5.2 (landed #255) |
 | **2d-1** | — | **not started — prerequisite** | **`P`-scan layer**: `P.view_sk` sweep over the chain (scan-layer firewall, StakeEngine owns `P.view_sk`). **Two readers**: steady-state funding-output discovery (2c-2b SP-2.e) **and** the 2d-2 reconciliation | §3.6 (foundation) |
 | **2d-2** | — | **not started** | `P`-isolated Arti transport + broadcast/re-anchor + full-scan `bonded_slots`/`p_slot` reconcile — **depends on 2d-1** (cannot reconcile bonds it has not scanned for) | §3.6 |
 
@@ -143,6 +143,22 @@ follow-on PR (off `dev`, **after #163 merges** — it consumes #163's
 `OsRngGapAdapter` / `on_start` / `DEFAULT_ENTRY_GAP`). Full plan:
 [`ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md`](../completed/ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md)
 (2-round, tightened — the design is already settled in 2c-2b §3.3).
+
+#### 3.5.2 GF-7 follow-on — block-timed placement + measurement seam (landed — PR #255)
+
+The entry-gap draw 2c-2b left on `_`-prefixed locals is now **consumed**:
+`plan_entry_seam` (`shekyl-standoff/src/plan.rs`) single-sources the
+`(spread, bond_first)` → block-offset placement, and the `SignBond` reply is
+`SignedBondPost` (vin + `EntrySeamPlan`, never decoupled). The same PR lands
+the GF-7 measurement seam per
+[`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](ARCHIVAL_BOND_2C_GF7_HOOKS.md) (all five §6
+acceptance criteria): the injected `BroadcastTimelineObserver` + three-axis
+event vocabulary behind the non-default `gf7-hooks` feature, the
+`shekyl-staking-sim --gf7-timeline` joint-axis scenario, and the CI no-emit
+guard (`.github/workflows/gf7-no-emit-guard.yml`). Still open: carrying the
+plan to the wire (2c-2a assemble / 2d dispatch, where live
+`BondPostDispatched` emission moves out of the sim), and the GF-7
+**measurement round** itself (the genesis gate — `docs/FOLLOWUPS.md`).
 
 ### 3.6 Bond-PR 2d — `P`-scan layer (2d-1) + transport/broadcast/reconcile (2d-2)
 
