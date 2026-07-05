@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Documentation
+
+- **docs: submit-verdict / 2c completion-status sweep (rule 91).** Landed
+  work is now marked landed where the docs still read as pending:
+  `DAEMON_SUBMIT_VERDICT.md` §12 gains a series-status banner (all six
+  PRs merged as #244/#247, #245, #246, #248, #249, #250) and §10 item 1
+  records the F40 wire amendment + R1 pin as landed (#254, R2 riding
+  2c-2b); the `docs/FOLLOWUPS.md` submit-outcome SUPERSEDED entry's
+  absorbed remainders are closed. Two stale-doc residues the PR-6 sweep
+  (#250) missed are corrected: `V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md`'s
+  CL-4 exemplar and `V3_ENGINE_TRAIT_BOUNDARIES.md`'s §4 idempotency
+  row/retry prose no longer cite the retired `AlreadyKnown` dedup
+  heuristic — `submit_transaction` idempotency is stated as the verdict
+  contract's resubmit-is-a-status-query property (§2.5/F31).
+
 ### Added
 
 - **wallet/rpc: `AlreadyInChain { height }` — the F40 disposition lands**

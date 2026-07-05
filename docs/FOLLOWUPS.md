@@ -7315,7 +7315,8 @@ one place to confirm each item's relationship to the wallet stack.
   [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (the S-3 privacy-sim home).
 - **2d-2 2c-2a — submit-outcome handling: the wallet CONSUMES `SubmitVerdict`; the partition is
   no longer a design object (SUPERSEDED 2026-07-04 by
-  [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md), D4).** This entry originally
+  [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md), D4; absorbed remainders
+  CLOSED 2026-07-05 — §12 series fully landed).** This entry originally
   tasked 2c-2a with designing a wallet-side three-bucket relay partition
   ({definitely-relayed / definitely-not-relayed / ambiguous}) reconstructed from the inherited
   lossy reply surface, plus a TTL exit and an on-chain disambiguation step. That framing is
@@ -7332,15 +7333,16 @@ one place to confirm each item's relationship to the wallet stack.
   delivered-4xx no-TTL wedge — verdicts are definite, `Err(RpcError)` is the only ambiguity
   (Two Generals) and gets TTL-then-resubmit with every stable state resolving on the resubmit
   (§2.5/F31; a **cancelled** submit remains ambiguity-shaped — the consumer must not wrap
-  `submit` in a cancelling combinator, carried as a PR-4 obligation). What REMAINS of this
-  entry, all absorbed into the daemon-doc PR sequence (§12): retire the `AlreadyKnown` fiction
-  from `traits/daemon.rs` + `V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md` /
-  `V3_ENGINE_TRAIT_BOUNDARIES.md` (PR-4 code / PR-6 docs); the shared
-  `RpcError → AmbiguousErrorKind` classifier + the `submit_via_rpc<R: Rpc>` dedup (PR-4, "both
-  submitters share the mapping"); the `TxSubmitOutcome` reshape + `ProofStale` construction +
-  spent-marking moved off submit-accept (PR-4). **Target: `DAEMON_SUBMIT_VERDICT.md` PR-4,
-  downstream of its PR-2/PR-3; the wallet-side prerequisite is the dispatch-shape freeze (next
-  entry), which PR-4's shared mapping presupposes.**
+  `submit` in a cancelling combinator, carried as a PR-4 obligation). **CLOSED 2026-07-05 —
+  every absorbed remainder landed with the daemon-doc PR sequence (§12, all six PRs merged):**
+  the `AlreadyKnown` fiction is retired from `traits/daemon.rs` (PR-4, #248) and from
+  `V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md` / `V3_ENGINE_TRAIT_BOUNDARIES.md` (the CL-4 exemplar
+  and §4 idempotency rows now carry the resubmit-is-a-status-query contract; docs sweep,
+  #254 branch — the PR-6 sweep #250 missed these two files); the shared
+  `RpcError → AmbiguousErrorKind` classifier + the `submit_via_rpc<R: Rpc>` dedup landed
+  (PR-4, "both submitters share the mapping"); the `TxSubmitOutcome` reshape + `ProofStale`
+  construction + spent-marking moved off submit-accept landed (PR-4). The dispatch-shape
+  prerequisite froze and landed 2026-07-04 (next entry).
 - **2d-2 2c-2a — posture→submitter dispatch shape: FROZEN 2026-07-04 (user-ratified) —
   [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md) §3.1 is the
   binding record.** The API question this entry posed (`TransactionSubmitter` is RPITIT-non-dyn;

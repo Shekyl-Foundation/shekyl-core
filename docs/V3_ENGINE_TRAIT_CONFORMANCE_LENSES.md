@@ -138,9 +138,11 @@ deliberate-absence discipline in §3.2).
     `RwLock` poisoning (sync-infallible return by design per §2.2's
     Round-3 disposition).
   - `DaemonEngine::submit_transaction` — class **b** (network
-    side-effect; drop-after-dispatch does not un-send), conditionally
-    idempotent (daemon dedupes by hash → `AlreadyKnown`), never
-    panics.
+    side-effect; drop-after-dispatch does not un-send), idempotent as
+    a status query (resubmitting the same bytes yields a definite
+    verdict for every stable state — `AlreadyInPool` /
+    `AlreadyInChain`, per `DAEMON_SUBMIT_VERDICT.md` §2.5/F31; the
+    legacy `AlreadyKnown` dedup heuristic is retired), never panics.
 - **Pass criterion:** all three subsections present on every method.
   The `# Panics` text states **what the implementor actually does** —
   a method that *maps* lock poisoning to a domain error must say so,

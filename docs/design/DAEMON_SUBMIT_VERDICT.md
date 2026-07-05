@@ -1464,15 +1464,16 @@ enumeration above is the complete submit surface.
    inside known variants accepted); frozen-hex txid KAT (a fixed tx blob's
    txid pinned as hex — build-time proof that `shekyl-wire` and C++
    `get_transaction_hash` agree, alongside §3.4's runtime check). *F40
-   amendment (lands with the 2c wire change):* the `AlreadyInChain` frozen
-   JSON fixture gains `height`; add skew test D — a field-less
+   amendment (landed 2026-07-05, #254):* the `AlreadyInChain` frozen
+   JSON fixture gains `height`; skew test D — a field-less
    `already_in_chain` deserializes to the `Err` arm (the §2.3
    required-field asymmetry, pinned so the post-genesis
-   optional-with-default rule has a test to flip). Wallet-side (with the
-   2c disposition implementation), the two F40 rules get pins: an R1 test —
-   a failed targeted re-scan leaves the lock in place and emits the F31
-   status query, never a release; an R2 test — N consecutive fruitless
-   daemon-directed re-scans trip the breaker to operator alarm.
+   optional-with-default rule has a test to flip). Wallet-side, the R1
+   pin landed with the same PR (the request path releases nothing —
+   `submit_already_in_chain_at_or_below_synced_requests_rescan_never_releases`);
+   the R2 test — N consecutive fruitless daemon-directed re-scans trip
+   the breaker to operator alarm — lands with the 2c-2b driving actor
+   that executes the re-scans.
 2. **Race suite (PR-3, pure Rust via mock `SubmitStateShim`):**
    deterministic interleavings — (i) block containing the tx lands during
    Phase C → `AlreadyInChain`; (ii) competing spend lands during C →
@@ -1557,6 +1558,13 @@ enumeration above is the complete submit surface.
 ---
 
 ## 12. PR sequence (short-lived branches off `dev`; each lands within rule-06 bounds)
+
+**Status (2026-07-05): all six PRs landed on `dev`** — PR-1 as #244/#247
+(design doc + in-place amendment), PR-2 as #245, PR-3 as #246, PR-4 as
+#248, PR-5 as #249, PR-6 as #250. The F40 wire amendment (§10 item 1)
+landed separately as #254; its remaining execution obligations (re-scan
+executor, F40-R2 breaker) ride the 2c-2b driving actor per
+`docs/FOLLOWUPS.md`'s `AlreadyInChain` entry.
 
 | PR | Content | Gate |
 | --- | --- | --- |

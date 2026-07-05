@@ -3730,7 +3730,7 @@ not the cancellation surface; the token is).
 | `PendingTxEngine` | `signal_mempool_evicted` | sync | no (a second call for the same rid returns `ReservationNotFound`; end state unchanged) | n/a (synchronous `fn`; cannot be cancelled mid-call) |
 | `PendingTxEngine` | `outstanding` | sync | yes (read-only) | n/a |
 | `DaemonEngine` | `get_fee_estimates` | async | yes (read-only; fee state is a snapshot at call time) | **a** (network read; no wallet-side side effect) |
-| `DaemonEngine` | `submit_transaction` | async | **conditionally** — daemon dedupes by tx hash (same tx bytes → same submission outcome) | **b** (network side effect; daemon may receive and act on the transaction even if the wallet drops the await) |
+| `DaemonEngine` | `submit_transaction` | async | **yes, as a status query** — resubmitting the same tx bytes returns the same locally computed hash and a definite verdict for every stable state (`AlreadyInPool` for pool-resident bytes with no relay pulse, `AlreadyInChain` for mined bytes; `DAEMON_SUBMIT_VERDICT.md` §2.5/F31) | **b** (network side effect; daemon may receive and act on the transaction even if the wallet drops the await) |
 | `DaemonEngine` | `Rpc` supertrait methods | async | per-method (inherits `Rpc`'s spec) | per-method (read-only RPCs are class **a**; mutating RPCs are class **b**) |
 | `PersistenceEngine` | `base_path` | sync | yes (read-only; returns immutable cached path) | n/a |
 | `PersistenceEngine` | `network` | sync | yes (read-only) | n/a |
@@ -3755,7 +3755,10 @@ logic concrete safety properties:
   already merged, the retry returns `ConcurrentMutation`
   deterministically rather than double-applying.
 - `submit_transaction` and `PendingTxEngine::submit`: retry is
-  safe; the daemon de-duplicates by tx hash.
+  safe; a resubmit of the same bytes is a status query returning a
+  definite verdict (`AlreadyInPool` / `AlreadyInChain`,
+  `DAEMON_SUBMIT_VERDICT.md` §2.5/F31), and the rid-level
+  `SubmitAlreadyPending` guard prevents double-dispatch.
 - Read-only methods: trivially retry-safe.
 - `sign_transaction`: retry is **rejected at handle resolution**
   per the post-M3 replay-rejection contract — consumed handles
@@ -4224,11 +4227,13 @@ The clearest example today is `PendingTxEngine::submit` and
   the daemon's RPC; the daemon dedupes by tx hash on receipt —
   submitting the same tx twice produces a single on-chain
   effect because the daemon recognizes the duplicate and
-  returns its existing-pool acknowledgment.
-- §4 marks both methods as "conditionally idempotent (daemon
-  dedupes by tx hash)" — the *same condition* applies at both
+  returns a definite identity verdict (`AlreadyInPool` /
+  `AlreadyInChain`, `DAEMON_SUBMIT_VERDICT.md` §2.5/F31).
+- §4 grounds both methods' retry safety in the same daemon-side
+  dedup: the resubmit-is-a-status-query property applies at both
   layers because the layering is transparent to the dedup
-  property.
+  property (the rid-level `SubmitAlreadyPending` guard is the
+  outer layer's additional condition).
 
 Three crash cases under retry, summarized at a glance and then
 walked individually below:
