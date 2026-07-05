@@ -4,7 +4,9 @@
 rounds 1–5 accreted in review before this document was written, round 6 reviewed
 the document itself. The rounds' decisions (D1–D5) and findings (F1–F39 +
 minors) are recorded in §1 and folded into every section rather than appended
-as errata. Round 5 confirmed the Rust cutover, the wallet-owned-liveness split,
+as errata. The 2c design round (2026-07-04, post-convergence) added F40
+(`AlreadyInChain { height }`, §2.2 carve-out) and F41 (constant-work-on-Conceal
+invariant, §3.1) without reopening the architecture. Round 5 confirmed the Rust cutover, the wallet-owned-liveness split,
 the embargo-as-kernel resolution, and the two F22 pre-existing-defect commits
 as sound and correctly scoped. Round 6 resolved the one finding that had
 dropped through the round-2→round-3 index seam (F14, awaiting-confirmation
@@ -90,6 +92,7 @@ here are binding; the referenced sections carry the mechanics.
 | 4 | Liveness ownership hand-off; embargo-as-kernel; health context; privacy-tiered escape ladder; `diffused` staking reopen | §5, §11 |
 | 5 | F30 (rebuild-wound mechanization — **gating**, folded from first draft), F31 (resubmit is a status query), F32 (health-metadata trust rider), F33 (certificate witness type + blob binding); minors a–d (commit-check-time wording, matrix-pending hypothesis, F22 leg interaction, O(1) template re-check) | §7.1, §5.3, §7.2, §3.3/§3.5, §3.1, §8, §6 |
 | 6 | F14 resolution (awaiting-confirmation persistence + confirmed-absent release), F34 (Phase-D dynamic-policy re-gate), F35 (noise-zone black-hole threat entry), F36 (archival-arm matrix rows, pinned at source), F37 (`FeeTooLow` loop-breaker + fee-param rider rows), F38 (schema-evolution authoring rule), F39 (Phase-C concurrency bound); minors a–d (Phase-D most-terminal-first order, watchdog present/absent branch, second-entry-point sweep, lock-freedom-by-construction sentence) | §2.6, §3.1, §7.5, §8.7.1, §2.5, §7.2, §2.3, §11, §5.3, §9 |
+| 2c (2026-07-04, post-convergence) | F40 (`AlreadyInChain { height }` — §2.2 reasoned carve-out with R1 rescan-never-release + R2 fruitless-rescan breaker), F41 (constant-work-on-Conceal invariant + transport-layer per-source rate-limit sibling + cache reversion clause; structural round same day: three-layer enforcement decomposition — `MustFullyVerify`/`FastPathEligible` disclosure-capability tokens seal the engine-cache vector at compile time, transport no-memoization becomes a named-and-tested assumption, the invocation-count tripwire guards only the irreducible battery-timing residual) | §2.1, §2.2, §2.3, §2.5, §3.1, §4.1, §7.2, §10, §11 |
 
 The round-2 row's F13–F19 mapping was itself a round-6 fix: the index
 previously jumped from round 1 to round 3, and F14 — the one round-2 finding
@@ -119,8 +122,16 @@ pub enum SubmitVerdict {
     Accepted,
     /// Identity match: these exact bytes (same txid) are in the pool.
     AlreadyInPool,
-    /// Identity match: this txid is in the main chain.
-    AlreadyInChain,
+    /// Identity match: this txid is in the main chain, confirmed at
+    /// `height`. The height is the lock-lifecycle discriminant (§2.5): it
+    /// decides *which release path* clears the awaiting-confirmation lock
+    /// — refresh catch-up (confirming block above the wallet's synced
+    /// height) vs targeted re-scan (at/below it). Carve-out from §2.2 wire
+    /// minimalism, reasoned in §7.2 (F40): unlike the deleted relay-`height`,
+    /// this is not trusted-daemon metadata the wallet consumes as truth —
+    /// it is a routing hint whose misuse is damage-capped in both
+    /// directions.
+    AlreadyInChain { height: u64 },
     /// Not in pool, not in chain, and not admitted — `cause` says why.
     Rejected { cause: RejectCause },
 }
@@ -177,10 +188,63 @@ trivial reading above: verdicts are definite; transport errors are not.
 
 ### 2.2 Wire minimalism
 
-- **No payloads.** No `relayed`, no `diffused`, no `height`, no
+- **No payloads.** No `relayed`, no `diffused`, no relay-state `height`, no
   `was_diffused` (D3/D4). Every deleted field was either trusted-daemon
   metadata the wallet must not consume (§7) or a snapshot the wallet can
   observe trustlessly via refresh.
+
+  **One reasoned carve-out (F40, 2c design round 2026-07-04):**
+  `AlreadyInChain { height }`. The deleted relay-`height` failed both tests —
+  relay metadata the wallet would have consumed as truth, *and* observable
+  via refresh. The confirming-block height fails the second test in exactly
+  the case that matters: when the confirming block is at/below the wallet's
+  synced height with no reorg re-scan pending, refresh **never re-observes
+  the spend** (the FOLLOWUPS stranded-lock finding), so "observe it
+  trustlessly via refresh" is false there by construction. And it passes the
+  first test because the wallet does not consume it as truth — it consumes
+  it as a **release-path discriminant** (§2.5), with misuse damage-capped in
+  both directions (§7.2 rider row). A unit `AlreadyInChain` forces the
+  wallet to *guess* which release path applies; the guess is steerable by
+  anyone who can slow the wallet's own daemon's block delivery, converting
+  the guess into a selectable-input leak plus F28/F37 alarm fatigue on
+  demand. Decidability beats minimalism here; the minimalism rule survives
+  for every field that remains deleted.
+
+  The carve-out is admitted **through the §5 principle** ("daemon messages
+  *inform* wallet refresh decisions; they never *drive* them"), which is the
+  test the deleted fields failed and this one passes — provided two rules
+  are pinned as part of F40 itself:
+
+  - **F40-R1 (rescan, never release).** A `height ≤ synced` claim authorizes
+    a *targeted re-scan* and nothing else. Lock release comes **only** from
+    refresh observing the spend (`mark_spent`,
+    `ledger_indexes.rs`) or the §2.6 confirmed-absent watchdog path — both
+    cross-check chain data the daemon cannot forge (§5.1). A failed re-scan
+    must not release; it falls through to the F31 status query. Under R1 the
+    height *informs* (which disposition to attempt) and never *drives* (the
+    irreversible action is always refresh-authoritative) — the exact line
+    §5 draws.
+  - **F40-R2 (fruitless-rescan breaker).** Without a bound, a lie-low daemon
+    gets a free wallet-work amplifier: each false `height ≤ synced` claim is
+    cheap for the daemon and costs the wallet a re-scan. Consecutive
+    daemon-directed re-scans that find no matching tx count against an
+    F28/F37-family loop-breaker — N fruitless re-scans trip an operator
+    alarm ("your daemon is claiming confirmations that don't exist"), the
+    honest §7.1 surface for a violated trust bound. The lie is
+    self-limiting and surfaces as the alarm it should be.
+
+  Asserting the field without R1/R2 would contradict §2.1 (verdict-driven
+  irreversible action) rather than satisfy §5; the two rules are what make
+  the carve-out a carve-out and not an erosion of the rule.
+
+  *Disambiguation (same field, opposite directions):* F40 is the **wallet**
+  consuming a height as a bounded release-path discriminant — permitted
+  under R1/R2. It is unrelated to, and must not be conflated with, F22
+  leg 2 (§1 defect 0.9, fixed in PR-3): the **daemon's template
+  construction** trusting a cached verification result whose hash does not
+  bind height — the live consensus footgun. A later reader seeing "height"
+  near "cache" in this document is looking at two different hazards with
+  two different fixes.
 - **No `detail` field (F27).** Sub-cause diagnostics (which of the ~12
   `Malformed` legs fired) are logged daemon-side at `INFO`, keyed by txid,
   where they are trustworthy and operator-correlatable. A wire field the
@@ -222,6 +286,19 @@ asymmetry above is safe only while authors stay on the right side of it:
   the same unknown tag: a designed-in routine loop on every such release
   (the watchdog alarm would fire, but as a recurring operational cost, not a
   safety net).
+- New **required fields on existing variants** (the third category, named by
+  the F40 `AlreadyInChain { height }` addition) are asymmetric: an older
+  wallet tolerates the new field (no `deny_unknown_fields`), but a newer
+  wallet reading an older daemon's field-less variant takes a
+  deserialization error → the `Err` arm → TTL-resubmit → the same error — a
+  loop with the same shape as the rejection-shaped-tag hazard. **Pre-genesis
+  this is a non-event** (wallet and daemon are released together, there are
+  no deployed users — the atomic-cutover inversion per
+  `16-architectural-inheritance.mdc`), and F40 lands that way: required
+  field, frozen JSON fixtures updated, no `Option`. **Post-genesis**, a
+  field addition to an existing variant MUST be optional-with-default
+  (`#[serde(default)]`-shaped) or it is a breaking change under the same
+  coordinated-bump rule as a new tag.
 
 This is the priority-3 surface: the rule that makes the skew guarantee
 durable rather than incidental. Reversion clause in §11.
@@ -254,7 +331,7 @@ Request-surface trims relative to `COMMAND_RPC_SEND_RAW_TX`:
 | --- | --- |
 | `Accepted` | Pending-tx enters *awaiting confirmation*; watchdog (§5.3) takes over. Outputs move to the awaiting-confirmation lock state (§2.6: persisted, dual release paths) — **not** marked spent at submit-accept (the current `local_pending_tx.rs:775-807` behavior moves to refresh-authoritative confirmation; PR-4). |
 | `AlreadyInPool` | Same as `Accepted` (identity fact: the bytes are held). Resolves prior transport ambiguity for this txid. |
-| `AlreadyInChain` | Confirmation observed by verdict; refresh remains the settlement authority (reorgs happen — the verdict authorizes lock-lifecycle transitions only). |
+| `AlreadyInChain{height}` | Confirmation observed by verdict; refresh remains the settlement authority (reorgs happen — the verdict authorizes lock-lifecycle transitions only). Outputs enter the awaiting-confirmation lock in **both** height cases (fund safety first: no selectable window either way); `height` decides the **release path** (F40). *(a) `height` > wallet synced height:* the ordinary §2.6 path-1 release — refresh reaches the confirming block and settles spent-marking; baseline the lock at `height`, not at current daemon height. *(b) `height` ≤ wallet synced height:* refresh already passed that height without observing the spend — path-1 release is unreachable by construction (the FOLLOWUPS stranded-lock wedge). Enqueue a **targeted re-scan** of the window around `height` (the reorg-heal machinery — the wallet's view of that height is stale or divergent); the re-scan re-observes the spend and settles refresh-authoritatively. A failed re-scan **never releases** (F40-R1: release is refresh- or watchdog-authoritative only); it falls through to the F31 resubmit-as-status-query for a fresh definite verdict, and consecutive fruitless daemon-directed re-scans are breaker-bounded (F40-R2, F28/F37 family) → operator alarm. Every exit is verdict, confirmation, or operator alarm — no silent strand, no daemon-steered release. |
 | `Rejected{Malformed}` | Release locks, surface, **one-shot rebuild**: if the rebuilt tx also returns `Malformed`, escalate to operator alarm — two independent builds rejected as malformed is a systematic wallet/daemon rule disagreement, not a bad tx; a third silent build burns fees and multiplies linking-tag artifacts (§7.1). Never loop. |
 | `Rejected{FeeTooLow}` | Release, re-estimate fee, rebuild — **once** (F37; the F28 logic applies verbatim): a second consecutive `FeeTooLow` on the rebuilt tx is a systematic fee-model disagreement (a KAT gap on P2, or sustained pool pressure the wallet's estimate never meets) → operator alarm, never loop. The bound is privacy-load-bearing, not just liveness hygiene: unlike `Malformed`, a fee-driven rebuild can *change the input set* — covering a higher fee may pull in an additional input, so each iteration broadcasts a new tx sharing the original key image **and** revealing a newly co-owned input (F30 linkage plus wallet-clustering, once per loop, under the malicious-relay case of §7.1). Covers static-floor, Phase-D re-gate, and pool-pressure variants; under single-egress this verdict carries proof the tx is in neither pool nor chain, so release is safe. |
 | `Rejected{DoubleSpendConflict}` | Terminal release. A different tx spends the input; refresh will surface which. |
@@ -359,7 +436,10 @@ so `n_indices == 0` and the function early-returns true.)
 **Phase B — fact snapshot (shim 1, one short lock).** POD snapshot under a
 single pool→blockchain lock scope: identity-in-pool (both at the `all` and
 `legacy` relay categories — tier-gated disclosure, see below),
-identity-in-chain, per-input key-image conflict owners
+identity-in-chain (with the F40 confirming-block height, read under the
+same lock so the membership fact and its height cannot be racy — it rides
+`SubmitFactsFfi`, so the Phase-D `Raced{fresh}` reclassification carries it
+for free), per-input key-image conflict owners
 (own-txid vs other), reference-block **existence by hash** + its height,
 curve-tree root at that height, current tree depth, fee parameters
 (fee-per-byte, quantization mask), weight limit, chain height. Early return:
@@ -408,6 +488,143 @@ keeping the owner's wider `all`-category view for its own admission engine.
 This was live in V3.0 (own-daemon still exposes the restricted public bind);
 the §11 multi-daemon reopen re-evaluates the residual timing delta (a
 concealed duplicate skips the insert, as the legacy existing-tx arm did).
+
+**Constant-work-on-Conceal (F41, 2c design round 2026-07-04 — invariant,
+not new design).** The oracle closure above holds only if `Conceal` is
+indistinguishable in *time* as well as in verdict. Today that is true by
+construction: the `Conceal` arm deliberately does not early-return — it
+falls through to the full Phase-C battery
+([`engine.rs`](../../rust/shekyl-daemon-rpc/src/submit/engine.rs), the
+`disclose_pool_presence` fall-through) — and the Rust engine has **no
+verification cache** (verified: no memoization anywhere on the submit
+path). That is a security property held by the *absence of an
+optimization*, with nothing previously asserting it — precisely the state
+that silently vacates when a well-meaning perf PR adds a txid→certificate
+or txid→verdict cache and the cached hit returns fast. A fast path for
+already-seen bytes re-opens the stem-presence oracle as a **timing**
+oracle: the foreign prober no longer needs a verdict difference, only a
+latency difference. The invariant, stated as the coupling every future
+change must satisfy:
+
+> **F41.** Any cache, memoization, or fast path added to the submit
+> route must either **exempt** the `Conceal` path (a foreign-caller
+> submission whose bytes are pool-resident in a non-broadcast state runs
+> the full battery regardless of any cached result) or **equally delay**
+> it to full-battery cost. A perf/caching PR touching submit that does
+> not cite F41 and demonstrate one of the two is rejected on review.
+
+**F41 enforcement decomposition (structural round, 2026-07-04).** The
+invariant as first stated was review-plus-tripwire — the weak form, out of
+step with how this document's sibling properties are enforced (the §3.3
+witness certificate, SP-T4a §3.1 part 6's P-1/P-2). The honest boundary
+first, so nothing over-claims: **F41's core is a timing property, and type
+systems do not prove timing.** This is the same wall constant-time
+cryptography hits — `subtle`'s `Choice` enforces that constant-time
+primitives are *called*; actual data-independence is still discipline plus
+statistical testing. No Rust type makes "this branch runs data-independent
+work" a compile error, so a claim that any type "structurally enforces F41"
+in full would be false. What decomposes out of the tested residue is the
+*control-flow* half — "can a verdict be produced on the `Conceal` path
+without running the battery" — which is exactly what types enforce. Three
+layers, each vector matched to what its layer can actually prove:
+
+| Vector | Enforcement | Artifact |
+| --- | --- | --- |
+| Engine-level cache / fast path short-circuiting `Conceal` before Phase C (the realistic way F41 dies) | **Structural — type error** | The disclosure-capability tokens below |
+| Transport/RPC-layer response memoization (beyond the engine's type reach) | **Named assumption + its own test** | §10 item 9b: two `Conceal` submits of the same bytes both reach the engine |
+| Battery-internal data-dependent shortcut (timing leak inside verification itself) | **Tested — the irreducible residual** | §10 item 9a invocation-count tripwire (necessary, not sufficient — the documented seam) |
+
+**The disclosure-capability tokens.** The substrate almost enforces layer 1
+already: an `Accepted` from the `Conceal` path requires commit, commit
+requires `&VerificationCertificate`, and the certificate is move-only,
+`!Clone`, unserializable, minted `pub(crate)` only from Phase C's success
+path ([`certificate.rs`](../../rust/shekyl-daemon-rpc/src/submit/certificate.rs))
+— so a cache cannot *retain a certificate to replay*. The remaining hole is
+a cache sitting **earlier**: memoizing the `SubmitVerdict` or the
+`SubmitFacts` and answering a `Conceal` call before Phase C is ever
+reached. Closing it is the P-1/P-2 idiom applied to a capability instead
+of bytes — mint at the decision site, carry, never reconstruct:
+
+- `disclose_pool_presence` (already the single decision point, shared by
+  Phase B and Phase D so they cannot drift) yields a **move-only token**
+  alongside its classification: the `Conceal` arm yields
+  `MustFullyVerify`; the `Reveal`/`Absent` arms yield `FastPathEligible`.
+  **Sole-origin is structural, not conventional — the tokens inherit the
+  certificate's own enforcement verbatim:** both types are `pub(crate)`
+  with private fields and a single constructor each, reachable only from
+  `disclose_pool_presence`, and they **inherit the F25 write-site
+  enumeration audit** (§3.5 item 4) — "grep token construction = grep the
+  disclosure choke point," the same collapse as "grep certificate
+  construction = grep Phase C completion." Without this pin the
+  carry-not-reconstruct defeat below answers only
+  reconstruct-by-reclassifying; a second constructor added anywhere — a
+  test helper, a `Default`, an ergonomic `From` impl — is
+  construct-by-alternate-constructor, a `Reveal`-shaped token not born of
+  this request's classification, and layer 1 degrades back to "reviewer
+  must notice," the weak form this decomposition exists to escape. Test
+  code needing tokens goes through `disclose_pool_presence` with
+  constructed facts, never through a testing constructor.
+- Verdict-producing functions are typed against the tokens: any
+  cache/fast-path lookup accepts **only `FastPathEligible`**; the
+  `Conceal` route to a terminal verdict **consumes `MustFullyVerify` by
+  exchanging it for the certificate** — i.e. through Phase C, there being
+  no other certificate mint.
+- A cache added on the `Conceal` branch is then a **compile error**, not a
+  review catch; a maintainer who wants to fast-path `Conceal` must write
+  an explicit token conversion — a named, loud, reviewable act (the
+  `// SAFETY:`-comment shape: "this conversion reopens F41") — never a
+  silent early-return.
+
+Three adversarial defeats of the token, pre-answered in the P-1/P-2 shape:
+
+1. **Reconstruct rather than carry** (mint a `FastPathEligible` from a
+   fresh `Reveal`-shaped classification, present it on a `Conceal`
+   request): defeated as P-2 defeats re-wrapping — the token is carried
+   from the `disclose_pool_presence` call that classified *this* request
+   (tied to that call's caller/facts snapshot), never re-minted.
+2. **Clone the capability**: `!Clone`/`!Copy`, move-only — same as the
+   certificate, same as `PBoundBytes`.
+3. **Cache outside the engine**: beyond the type's reach by construction —
+   which is why it is a *named assumption with its own test* (layer 2),
+   not silently absorbed into the structural claim. The constant-work
+   claim is scoped to "the transport layer does not memoize submit
+   responses," and that scope is pinned and tested, not assumed.
+
+**Deliberate non-goal:** the tokens seal the `Conceal` branch only.
+`FastPathEligible` is freely mintable on `Reveal`/`Absent`, so the
+legitimate `Reveal`-path optimization the §11 reversion clause exists to
+permit still type-checks. Sealing everything would forbid the safe cache
+the clause anticipates, and over-constraint gets worked around — which
+reintroduces the risk out from under the type. Bad states unrepresentable;
+not all states.
+
+The tokens are an implementation obligation with a hard ordering
+constraint (FOLLOWUPS): **they must exist before the first submit-path
+perf/cache PR** — a capability retrofitted after a cache lands is a lock
+installed after the door has been used.
+
+Two companions make the invariant durable rather than aspirational:
+
+- **DoS relief lives at the transport layer, not in a cache.** The
+  pressure that would motivate a verification cache is resubmit spam —
+  cheap-to-send, expensive-to-verify bytes. That pressure is relieved
+  where it does not touch the timing property: **per-source rate
+  limiting at the transport/handler layer**, tier-appropriate — **Owner
+  is never rate-limited** (the F31 status query is legitimate,
+  unbounded-in-principle wallet behavior); **Foreign has no legitimate
+  resubmit-spam case** (an honest relay submits a given tx once), so a
+  per-source limiter costs honest traffic nothing. This sits beside the
+  F39 semaphore, which bounds aggregate concurrency but not per-source
+  rate; the two are complements, not substitutes.
+- **The known residual is disclosed, not hidden by the invariant:** a
+  concealed duplicate skips the Phase-D insert (as the legacy
+  existing-tx arm did), a small timing delta at the commit tail. F41
+  guards the dominant cost (Phase-C verification, orders of magnitude
+  above the insert); the insert-skip residual stays on the §11
+  multi-daemon reopen's ledger where it already lives.
+
+Test obligation in §10; reversion clause (the terms under which a
+submit-path cache may land) in §11.
 
 **Phase C — verification (Rust, no locks held anywhere).** Ref-age window
 arithmetic (min 5 / max 100, from config); fee floor against snapshot params;
@@ -582,6 +799,18 @@ attestation is a consensus-integrity hazard, not a perf bug. Discipline:
    against a different blob: commit blob-B with tx-A's certificate →
    C++(blob-B) ≠ cert.txid → internal fault. The txid check does double duty
    as certificate-blob binding.
+4. **The F41 disclosure-capability tokens join the enumeration (2c
+   structural round).** `MustFullyVerify` and `FastPathEligible` (§3.1)
+   carry the same possession-⇒-provenance weight the certificate carries
+   for verification, so they inherit the same audit: each has exactly one
+   constructor, `pub(crate)`, private fields, reachable only from
+   `disclose_pool_presence`. The enumeration check is "grep token
+   construction = grep the disclosure choke point"; a construction site
+   outside `disclose_pool_presence` — including test helpers, `Default`,
+   or `From` impls — is an audit failure of the same class as an
+   un-enumerated `fcmp_verified` write. Post-implementation, the mint
+   sites are exactly two: the certificate's (Phase C success) and the
+   tokens' (`disclose_pool_presence`).
 
 ---
 
@@ -610,10 +839,13 @@ boundary, not only `shekyl-ffi`.
 ### 4.1 `shekyl_submit_snapshot_facts`
 
 In: txid, key images (flat 32B array), reference block hash.
-Out (POD `SubmitFactsFfi`): `in_pool: u8`, `in_chain: u8`, per-KI conflict
-descriptor (`none | own_txid | other`), `ref_block_found: u8`,
-`ref_height: u64`, `root: [u8; 32]`, `tree_depth: u8`, `fee_per_byte: u64`,
-`fee_quantization_mask: u64`, `weight_limit: u64`, `chain_height: u64`.
+Out (POD `SubmitFactsFfi`): `in_pool: u8`, `in_chain: u8`,
+`in_chain_height: u64` (valid iff `in_chain` — the F40 confirming-block
+height, read under the same lock scope as the membership fact so the pair
+cannot be racy), per-KI conflict descriptor (`none | own_txid | other`),
+`ref_block_found: u8`, `ref_height: u64`, `root: [u8; 32]`,
+`tree_depth: u8`, `fee_per_byte: u64`, `fee_quantization_mask: u64`,
+`weight_limit: u64`, `chain_height: u64`.
 One `CRITICAL_REGION` pair, pool→blockchain, reads only.
 
 For archival-arm txs the snapshot extends with the arm's stateful facts
@@ -882,6 +1114,7 @@ with trust classification:
 | Current vs target height | `ReferenceNotFound` sync-gating; watchdog | trusted | **untrusted** — a lying sync height flips backoff/terminal at will |
 | Fee params (fee-per-byte, quantization mask) | fee estimation; the `FeeTooLow` re-estimate rung | trusted | **untrusted** — a lying fee oracle griefs: overpay, or an induced `FeeTooLow` loop (bounded by the F37 loop-breaker) |
 | Curve-tree roots / chain view consumed at proof-construction time | tx builder (`shekyl-tx-builder`) | trusted | **untrusted** — a lying chain view yields proofs honest daemons reject (`StaleRoot`-shaped griefing); it cannot forge membership, since consensus verifies against canonical roots |
+| `AlreadyInChain.height` (F40) | lock release-path routing (§2.5) | trusted (but R1/R2-bounded even here) | **untrusted** — but damage-capped in both directions: lie-high routes to path-1 waiting, released by the §2.6 confirmed-absent watchdog horizon (bounded liveness cost); lie-low routes to a targeted re-scan that finds nothing, **never releases** (F40-R1), falls through to the F31 status query, and is breaker-bounded against repetition (F40-R2 — a lie-low spam campaign is a wallet-work amplifier otherwise; the breaker converts it to an operator alarm). Neither lie can force a linkage event: the lock is placed in **both** branches, so no lie makes the inputs selectable. Categorically a *metadata* row, not a verdict row — the verdict (`AlreadyInChain` itself) is the §7.1-class claim; the height only routes its release |
 
 Round 4 introduced the health-context consumption; F32 caught that the
 then-current rider enumerated only the *deleted* relay fields
@@ -1230,7 +1463,16 @@ enumeration above is the complete submit surface.
    (unknown verdict tag → error/`Err` arm); skew test C (unknown fields
    inside known variants accepted); frozen-hex txid KAT (a fixed tx blob's
    txid pinned as hex — build-time proof that `shekyl-wire` and C++
-   `get_transaction_hash` agree, alongside §3.4's runtime check).
+   `get_transaction_hash` agree, alongside §3.4's runtime check). *F40
+   amendment (lands with the 2c wire change):* the `AlreadyInChain` frozen
+   JSON fixture gains `height`; add skew test D — a field-less
+   `already_in_chain` deserializes to the `Err` arm (the §2.3
+   required-field asymmetry, pinned so the post-genesis
+   optional-with-default rule has a test to flip). Wallet-side (with the
+   2c disposition implementation), the two F40 rules get pins: an R1 test —
+   a failed targeted re-scan leaves the lock in place and emits the F31
+   status query, never a release; an R2 test — N consecutive fruitless
+   daemon-directed re-scans trip the breaker to operator alarm.
 2. **Race suite (PR-3, pure Rust via mock `SubmitStateShim`):**
    deterministic interleavings — (i) block containing the tx lands during
    Phase C → `AlreadyInChain`; (ii) competing spend lands during C →
@@ -1272,6 +1514,28 @@ enumeration above is the complete submit surface.
    horizon**, via verdict where reachable and via observed-absence
    otherwise (confirmed-absent leg); confirmed-present → refresh clears to
    spent-final.
+9. **Conceal constant-work (F41), one obligation per enforcement layer
+   (§3.1 decomposition):
+   (a) invocation-count tripwire** — a foreign-caller submit of
+   embargoed-pool-resident bytes (the `Conceal` path) and a foreign-caller
+   submit of fresh never-seen bytes of the same shape both run the full
+   battery, asserted by mock-verifier invocation counting, not wall-clock
+   (deterministic red the day a fast path lands on `Conceal`; a wall-clock
+   test is flaky and gets muted). This guards the layer-3 residual only and
+   is **necessary, not sufficient** — it does not see a cache that keeps
+   invocation parity while leaking through another observable; that seam is
+   documented at the §3.1 decomposition table, and the structural token is
+   what shrinks it.
+   **(b) transport no-memoization** — two consecutive foreign-caller
+   submits of the same `Conceal`-classified bytes both **reach the engine**
+   (engine-entry counting), pinning the layer-2 named assumption that no
+   transport/RPC-framework response cache sits above the engine. Green
+   engine types with a memoizing transport would reopen the oracle; this
+   test is what makes that configuration red.
+   *(Token compile-enforcement needs no runtime test — layer 1's property
+   is that violation does not compile; its "test" is a compile-fail case
+   (`trybuild`-style) pinning that a cache lookup cannot accept
+   `MustFullyVerify`.)*
 
 ---
 
@@ -1288,6 +1552,7 @@ enumeration above is the complete submit surface.
 | `SubmitStateShim` over C++ FFI | The Rust mempool lands | Swap the trait impl; engine, contract, wallet untouched (§3.2). This is the *planned* reversion |
 | Health-based wallet branching own-daemon-gated (F32) | Multi-daemon reopen | Same round as the cool-off row; peer count + sync height + fee params + construction-time chain view enter as untrusted remote metadata |
 | New top-level `SubmitVerdict` tags rejected (F38 — additive rejection semantics go under `RejectCause`) | A genuinely new **non-rejection** disposition emerges that no `RejectCause` variant can express (a new stable state of the submitted bytes, not a new reason for refusing them) | Coordinated wire-version bump: contract amendment round, skew-test extension, dual-version deployment window — never a silent tag addition |
+| Submit-path verification cache rejected (F41 — constant-work-on-Conceal) | Measured Phase-C load on a production-shaped workload that the transport-layer per-source rate limiter + F39 semaphore demonstrably cannot absorb (the DoS-relief siblings must be shown insufficient first, not skipped) | Perf design round that cites F41. A `Reveal`/`Absent`-path cache is the anticipated safe form: it takes `FastPathEligible` and **type-checks without touching this clause**. Touching the `Conceal` path requires **converting a `MustFullyVerify` token — a compile-visible act** that names F41 at the conversion site; the round must justify that conversion (equal-delay being the only admissible shape, since exemption *is* the token's default), and the §10 item-9 obligations stay green through the change — a red is a rejected PR, not a test to update |
 
 ---
 

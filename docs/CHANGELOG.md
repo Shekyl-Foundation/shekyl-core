@@ -4,6 +4,25 @@
 
 ### Added
 
+- **docs: GF-7 measurement-hook specification — the evidence pipeline for
+  the genesis gate (2c design round,
+  `docs/design/ARCHIVAL_BOND_2C_GF7_HOOKS.md`).** GF-7 (principal↔`P`
+  timing unlinkability, GATE6 §10.12) is a genesis blocker whose
+  `P(link | T_obs)` first becomes measurable when the 2c-2b scheduler
+  broadcasts a bond-post on a real timeline. The new spec pins what that
+  scheduler must emit before its wiring PR lands: an injected
+  `BroadcastTimelineObserver` seam (no hardwired sink), a three-axis
+  **joint** event vocabulary — principal lifecycle, bond-post with the
+  consumed draw parameters, `P`'s other broadcasts — graded jointly per
+  the co-triggered-firewalls principle, with the funding-seam-blind
+  adversary as a first-class arm (the named certifies-the-wrong-gate
+  failure mode). Containment is build-structural, three independent
+  layers: inert-by-type trait, sim-only recording impl enforced by a CI
+  dependency-graph assertion, and a non-default `gf7-hooks` feature
+  compiled out of release (the `shekyl-standoff` `conformance` shape).
+  The 2c-2b wiring PR is gated on the spec's §6 acceptance criteria;
+  threshold-setting stays with the sim-side measurement round.
+
 - **rpc: `shekyl-rpc-types` crate — the typed wallet↔daemon submit
   contract** (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2, PR-2 of the
   submit-path Rust cutover). `SubmitVerdict` / `RejectCause` /
@@ -483,9 +502,10 @@
   already re-bound the real id); the change is to the type surface the
   second consumer will build against.
 - **wallet: `AlreadyInChain` submit verdict gets its distinct §2.5
-  lock-lifecycle disposition** (`docs/FOLLOWUPS.md` "`AlreadyInChain`
-  submit verdict", closed; 2c pre-wiring; `DAEMON_SUBMIT_VERDICT.md`
-  §2.5/§2.6). `TransactionSubmitter::submit` now succeeds with
+  lock-lifecycle disposition (interim)** (`docs/FOLLOWUPS.md`
+  "`AlreadyInChain` submit verdict", still open — F40 conformance
+  pending; 2c pre-wiring; `DAEMON_SUBMIT_VERDICT.md` §2.5/§2.6).
+  `TransactionSubmitter::submit` now succeeds with
   `SubmitSuccess`, splitting the `Ok` arm by disposition: `Broadcast`
   (`Accepted` / `AlreadyInPool`) places the F14 awaiting-confirmation
   lock as before; `AlreadyInChain` resolves through the new
@@ -496,7 +516,95 @@
   confirming block was at/below the wallet's synced height (no
   `mark_spent` re-observation, watchdog confirmed-absent release
   unbuilt). Regression:
-  `submit_already_in_chain_releases_without_awaiting_lock`.
+  `submit_already_in_chain_releases_without_awaiting_lock`. **Note:**
+  this change predates the F40 design merge (`AlreadyInChain { height }`,
+  §2.2 carve-out); it carries no `height` discriminant and does not yet
+  implement the lock-in-both-cases + height-routed release (F40-R1/R2).
+  A follow-up brings the implementation into line with F40 (see the
+  FOLLOWUPS item).
+- **docs: constant-work-on-Conceal named as invariant F41 (2c design
+  round, `docs/design/DAEMON_SUBMIT_VERDICT.md` §3.1/§10/§11).** The
+  stem-presence-oracle closure was held by an accident of absence: the
+  `Conceal` path runs the full Phase-C battery and no verification cache
+  exists — true, load-bearing, and previously asserted by nothing, so
+  the first well-meaning perf PR adding a txid cache would have re-opened
+  the oracle as a timing oracle (fast cached hit vs full-verify tells the
+  foreign prober what the verdict no longer does). F41 states the
+  coupling: any submit-path cache must exempt the Conceal path or
+  equally delay it. Companions: a §10 timing-uniformity tripwire test
+  (both Conceal and fresh-bytes submits run the full battery, asserted
+  by verifier invocation counting); a §11 reversion clause naming the
+  only terms a cache may land under (rate-limiter + F39 semaphore shown
+  insufficient first); and the DoS-relief sibling pinned at the
+  transport layer — per-source rate limiting, Owner never limited,
+  Foreign per-source-limited — so the pressure that would motivate the
+  cache is relieved where it cannot touch the timing property.
+  **Structural round (same day):** F41's enforcement decomposed into
+  three layers, each vector matched to what its layer can prove — the
+  engine-cache vector (the realistic kill) becomes a **compile error**
+  via move-only disclosure-capability tokens minted at
+  `disclose_pool_presence` (`MustFullyVerify` on Conceal /
+  `FastPathEligible` on Reveal/Absent; cache lookups accept only the
+  latter; the Conceal route consumes the former by exchanging it for
+  the §3.3 certificate — the P-1/P-2 mint-once/carry-through idiom
+  applied to a capability); the transport-memoization vector becomes a
+  named assumption with its own engine-entry test; and the
+  invocation-count tripwire guards only the irreducible battery-timing
+  residual, its necessary-not-sufficient seam documented (types don't
+  prove timing — stated, not hidden). The tokens' sole-origin is itself
+  structural, not conventional: both types are `pub(crate)` with a
+  single constructor reachable only from `disclose_pool_presence`,
+  inheriting the F25 write-site enumeration audit (§3.5 item 4 — "grep
+  token construction = grep the disclosure choke point"), closing the
+  construct-by-alternate-constructor side door (test helpers,
+  `Default`, `From`) that the carry-not-reconstruct defeat alone does
+  not answer. The §11 reversion clause is
+  rewritten around the token: a Reveal-path cache type-checks freely;
+  touching Conceal requires a compile-visible `MustFullyVerify`
+  conversion naming F41. Implementation obligations and the ordering
+  constraint (tokens + tests precede the first perf/cache PR touching
+  submit) tracked in `FOLLOWUPS.md`.
+
+- **docs: dispatch-shape post-freeze wargame — byte-holder enumeration
+  confirms the freeze, adds two provenance pins (2c design round,
+  `docs/design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §3.1.1).** The frozen
+  §3.1 shape (closed-set enum + constructor choke point + `PBoundBytes`
+  equality check) pins the *check* but not the *provenance*: the F31
+  status-query resubmit and the watchdog probe rung re-send held bytes,
+  and a held record storing raw `Vec<u8>` forces a re-wrap at probe time —
+  the choke point then validates the wrapper's claim, not the bytes'
+  provenance, reopening the cross-persona/principal routing hazard on the
+  retry axis. Two freeze-compatible pins close it: P-1 single private
+  mint site in the assemble/sign module (possession is proof of
+  provenance); P-2 the held record stores the `PBoundBytes` value itself,
+  so every resubmit re-sends the stored value through the same choke
+  path. Freeze confirmed, no reopen; the pins are recorded as §3.1
+  part 6 (mint-once / store-wrapped — an addition beside the frozen
+  five) and are implementation obligations for the 2c wiring slices.
+
+- **docs: `AlreadyInChain { height }` — the F40 lock-release discriminant
+  (2c design round, `docs/design/DAEMON_SUBMIT_VERDICT.md` §2.1/§2.2/§2.3/
+  §2.5/§4.1/§7.2/§10; closes the FOLLOWUPS `AlreadyInChain` design half).**
+  The unit `AlreadyInChain` verdict forced the wallet to guess which
+  release path clears the awaiting-confirmation lock — a guess steerable
+  by anyone who can slow the wallet's own daemon's block delivery into a
+  selectable-input leak plus F28/F37 alarm fatigue. The verdict now
+  carries the confirming-block `height`: the lock is placed in both
+  height cases, and `height` routes the release (refresh catch-up above
+  the synced height; targeted re-scan at/below it, falling through to
+  the F31 status query). Recorded as a reasoned carve-out from §2.2 wire
+  minimalism admitted through the §5 inform-never-drive principle, held
+  by two pinned rules — F40-R1: a below-synced claim authorizes a re-scan
+  and never a release (release stays refresh-/watchdog-authoritative);
+  F40-R2: fruitless daemon-directed re-scans are breaker-bounded
+  (F28/F37 family) to operator alarm, closing the lie-low wallet-work
+  amplifier — plus a new §7.2 trust-rider row (damage-capped both
+  directions), a new §2.3 schema-evolution category (required-field
+  additions: atomic pre-genesis, optional-with-default post-genesis),
+  and a §2.2 disambiguation note keeping F40 (wallet consumes a bounded
+  height discriminant) distinct from F22 leg 2 (daemon cache fails to
+  bind height — the opposite direction on the same field). Implementation
+  lands with the 2c submit-consumer slices.
 - **docs: submit-verdict series stale-doc sweep**
   (`docs/design/DAEMON_SUBMIT_VERDICT.md` §12 PR-6, rule 91,
   `docs/submit-verdict-sweep`). Docs describing the deleted legacy
