@@ -255,17 +255,13 @@ struct State {
     /// estimates (e.g. mid-startup, during fee-pool rotation).
     fee_errors: VecDeque<RpcError>,
 
-    /// Health snapshot returned by `get_health` when no error is
-    /// queued. Defaults to a healthy, fully-synced daemon (peers
-    /// present, `target_height == 0`) so watchdog tests that don't
-    /// exercise the health gate see a non-escalating fixture.
-    /// Override via `set_health`.
+    /// Health snapshot returned by `get_health`. Fixed to a healthy,
+    /// fully-synced daemon (peers present, `target_height == 0`) so the
+    /// `DaemonEngine` impl is complete for tests that don't exercise the
+    /// health gate. Watchdog health-gating and health-failure paths are
+    /// driven through the hermetic `StubDaemon` in the `submit_lifecycle`
+    /// test module, which controls both health facts and submit outcomes.
     health: DaemonHealth,
-    /// Errors queued for upcoming `get_health` calls (FIFO). Models a
-    /// daemon whose `get_info` transiently fails; the watchdog driver
-    /// treats a health error as a skip (no escalation), so tests can
-    /// assert that a failed health read does not trip the ladder.
-    health_errors: VecDeque<RpcError>,
 
     /// Deterministic RNG seeded from the constructor seed. Held
     /// for §6.2 compliance and reserved for future RNG-driven
@@ -291,7 +287,6 @@ impl State {
             fee_estimates: default_fee_estimates(),
             fee_errors: VecDeque::new(),
             health: default_health(),
-            health_errors: VecDeque::new(),
             rng: ChaCha20Rng::from_seed(seed),
         }
     }
@@ -521,25 +516,6 @@ impl TestDaemon {
             .push_back(err);
     }
 
-    /// Override the [`DaemonHealth`] returned by future `get_health`
-    /// calls. Persists across subsequent queries until called again.
-    /// Watchdog tests drive the §5.3 health gate (peerless → alarm,
-    /// behind → wait) through this setter.
-    pub(crate) fn set_health(&self, health: DaemonHealth) {
-        self.state.lock().expect("TestDaemon state poisoned").health = health;
-    }
-
-    /// Queue a one-shot error for the next `get_health` call. Multiple
-    /// invocations queue multiple errors (FIFO). Once the queue drains,
-    /// subsequent calls return the configured [`DaemonHealth`].
-    pub(crate) fn inject_health_failure(&self, err: RpcError) {
-        self.state
-            .lock()
-            .expect("TestDaemon state poisoned")
-            .health_errors
-            .push_back(err);
-    }
-
     /// Number of distinct transactions that have entered the
     /// `submit_transaction` dedup set. Each call to
     /// `submit_transaction(bytes)` with previously-unseen `bytes`
@@ -706,10 +682,7 @@ impl DaemonEngine for TestDaemon {
     ) -> impl Send + std::future::Future<Output = Result<DaemonHealth, Self::Error>> {
         let state = self.state.clone();
         async move {
-            let mut state = state.lock().expect("TestDaemon state poisoned");
-            if let Some(err) = state.health_errors.pop_front() {
-                return Err(err);
-            }
+            let state = state.lock().expect("TestDaemon state poisoned");
             Ok(state.health)
         }
     }

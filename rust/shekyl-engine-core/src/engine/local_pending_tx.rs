@@ -2503,8 +2503,7 @@ where
     L: LedgerEngine + Stage1LedgerSpendableAccess,
 {
     fn held_submits(&self) -> Vec<HeldSubmit> {
-        self.ledger
-            .with_ledger_block(|ledger| submit_watchdog::held_submits(ledger))
+        self.ledger.with_ledger_block(submit_watchdog::held_submits)
     }
 
     fn synced_height(&self) -> u64 {
