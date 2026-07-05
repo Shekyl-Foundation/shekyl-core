@@ -127,8 +127,16 @@ sealed `PScanState`:
    pressure (which drives randomized selection on the principal transfer
    path) does not apply — the bond post names `P` in cleartext anyway.
 4. **Balance rule.** `funding == change + fee + credit` exactly
-   (`verify_credit_funding`, CONSTRUCTION §7.3); one change output back to
-   P's own address via the existing `construct_output` path.
+   (`verify_credit_funding`, CONSTRUCTION §7.3); change returns to P's own
+   address via the existing `construct_output` path, **split across two
+   outputs** (`change/2` and `change − change/2`, both to P). The daemon's
+   prunable-tx floor (`blockchain.cpp` `check_tx_semantic`: `vout.size() <
+   2` rejects) applies to bond posts — the serve-credit-only carve-out does
+   not cover them — so a single-change-output bond post is consensus-
+   invalid. (The `real_tree_bond_post_proofs` KAT predates this check's
+   application here and builds one output; it exercises proof composition
+   on a fakechain-shaped fixture, not daemon admission. Production assembly
+   follows the two-output split; the KAT is unchanged.)
 
 ### 3.3 D-A3 — Assembly flow and secret locality
 
