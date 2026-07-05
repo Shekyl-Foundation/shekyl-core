@@ -580,8 +580,10 @@ namespace cryptonote
     struct response_t
     {
       // Serde tag: "accepted" | "already_in_pool" | "already_in_chain"
-      // | "rejected". Unknown tags are treated as rejections by the
-      // legacy wallet (the Rust client's Err arm is the real skew rule).
+      // | "rejected". The contract is closed: the legacy wallet treats a
+      // tag it cannot name as a protocol error, not a rejection (see
+      // wallet2::commit_tx). The Rust client's typed Err arm is the real
+      // skew rule.
       std::string verdict;
       // Present iff verdict == "rejected" (§2.1 RejectCause, snake_case).
       std::string cause;
