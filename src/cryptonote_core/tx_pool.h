@@ -722,12 +722,6 @@ private:
     //! cached verification hash in the meta still matches the tx contents.
     bool is_fcmp_verification_cached(const txpool_tx_meta_t& meta, const transaction& tx) const;
 
-    //! transactions which are unlikely to be included in blocks
-    /*! These transactions are kept in RAM in case they *are* included
-     *  in a block eventually, but this container is not saved to disk.
-     */
-    std::unordered_set<crypto::hash> m_timed_out_transactions;
-
     Blockchain& m_blockchain;  //!< reference to the Blockchain object
 
     size_t m_txpool_max_weight;

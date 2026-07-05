@@ -91,17 +91,9 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/is_key_image_spent",
             get(json::is_key_image_spent).post(json::is_key_image_spent),
         )
-        .route(
-            "/send_raw_transaction",
-            get(json::send_raw_transaction).post(json::send_raw_transaction),
-        )
-        .route(
-            "/sendrawtransaction",
-            get(json::send_raw_transaction).post(json::send_raw_transaction),
-        )
-        // Native typed submit route (DAEMON_SUBMIT_VERDICT.md §2.4). POST
-        // only; the legacy routes above dual-serve within the PR series and
-        // are deleted in PR-5 (§9).
+        // The typed submit route (DAEMON_SUBMIT_VERDICT.md §2.4) is the
+        // only submit surface; the legacy /send_raw_transaction proxy was
+        // deleted per §9.3. POST only.
         .route("/submit_transaction", post(submit::submit_transaction))
         .route(
             "/get_public_nodes",

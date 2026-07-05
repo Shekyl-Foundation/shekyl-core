@@ -409,8 +409,8 @@ int relay_tx(tx_memory_pool& pool, i_cryptonote_protocol& protocol,
       return SHEKYL_SUBMIT_INTERNAL_FAULT;
     }
 
-    // The exact legacy dispatch (core_rpc_server.cpp on_send_raw_tx):
-    // relay_method::local arms the Dandelion++ embargo machinery.
+    // The exact dispatch the deleted legacy on_send_raw_tx handler used
+    // (§9.3): relay_method::local arms the Dandelion++ embargo machinery.
     NOTIFY_NEW_TRANSACTIONS::request r;
     r.txs.push_back(std::move(txblob));
     protocol.relay_transactions(r, boost::uuids::nil_uuid(),

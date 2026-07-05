@@ -48,7 +48,7 @@ public:
   mock_rpc_daemon(
     cryptonote::core& cr
   , nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<cryptonote::core> >& p2p
-  ): cryptonote::core_rpc_server(cr, p2p) {}
+  ): cryptonote::core_rpc_server(cr, p2p), m_core_ref(cr) {}
 
   static void init_options(boost::program_options::options_description& desc){ cryptonote::core_rpc_server::init_options(desc); }
   cryptonote::network_type nettype() const { return m_network_type; }
@@ -56,17 +56,20 @@ public:
 
   CHAIN_HTTP_TO_MAP2(cryptonote::core_rpc_server::connection_context); //forward http requests to uri map
   BEGIN_URI_MAP2()
-    MAP_URI_AUTO_JON2("/send_raw_transaction", on_send_raw_tx_2, cryptonote::COMMAND_RPC_SEND_RAW_TX)
-    MAP_URI_AUTO_JON2("/sendrawtransaction", on_send_raw_tx_2, cryptonote::COMMAND_RPC_SEND_RAW_TX)
+    // Test-only stand-in for the Rust admission engine's typed submit route
+    // (DAEMON_SUBMIT_VERDICT.md §2.4): the mock daemon runs the epee server
+    // only, so the wallet's /submit_transaction POST is answered here.
+    MAP_URI_AUTO_JON2("/submit_transaction", on_submit_transaction_2, cryptonote::COMMAND_RPC_SUBMIT_TRANSACTION)
     else {  // Default to parent for non-overriden callbacks
       return cryptonote::core_rpc_server::handle_http_request_map(query_info, response_info, m_conn_context);
     }
   END_URI_MAP2()
 
-  bool on_send_raw_tx_2(const cryptonote::COMMAND_RPC_SEND_RAW_TX::request& req, cryptonote::COMMAND_RPC_SEND_RAW_TX::response& res, const cryptonote::core_rpc_server::connection_context *ctx);
+  bool on_submit_transaction_2(const cryptonote::COMMAND_RPC_SUBMIT_TRANSACTION::request& req, cryptonote::COMMAND_RPC_SUBMIT_TRANSACTION::response& res, const cryptonote::core_rpc_server::connection_context *ctx);
 
 protected:
   cryptonote::network_type m_network_type;
+  cryptonote::core& m_core_ref;
 };
 
 class mock_daemon {

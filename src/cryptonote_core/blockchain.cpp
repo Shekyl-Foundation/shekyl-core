@@ -2480,27 +2480,6 @@ size_t Blockchain::get_alternative_blocks_count() const
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
   return m_db->get_alt_block_count();
 }
-//------------------------------------------------------------------
-// This function adds the output specified by <amount, i> to the result_outs container
-// unlocked and other such checks should be done by here.
-uint64_t Blockchain::get_num_mature_outputs(uint64_t amount) const
-{
-  uint64_t num_outs = m_db->get_num_outputs(amount);
-  // ensure we don't include outputs that aren't yet eligible to be used
-  // outpouts are sorted by height
-  const uint64_t blockchain_height = m_db->height();
-  while (num_outs > 0)
-  {
-    const tx_out_index toi = m_db->get_output_tx_and_index(amount, num_outs - 1);
-    const uint64_t height = m_db->get_tx_block_height(toi.first);
-    if (height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE <= blockchain_height)
-      break;
-    --num_outs;
-  }
-
-  return num_outs;
-}
-
 crypto::public_key Blockchain::get_output_key(uint64_t amount, uint64_t global_index) const
 {
   output_data_t data = m_db->get_output_key(amount, global_index);

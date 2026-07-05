@@ -50,7 +50,6 @@ using namespace epee;
 #include "shekyl/shekyl_ffi.h"
 #include "fcmp/rctOps.h"
 #include "cryptonote_basic/merge_mining.h"
-#include "cryptonote_core/tx_sanity_check.h"
 #include "misc_language.h"
 #include "net/local_ip.h"
 #include "net/parse.h"
@@ -83,13 +82,6 @@ using namespace epee;
 
 namespace
 {
-  void add_reason(std::string &reasons, const char *reason)
-  {
-    if (!reasons.empty())
-      reasons += ", ";
-    reasons += reason;
-  }
-
   uint64_t round_up(uint64_t value, uint64_t quantum)
   {
     return (value + quantum - 1) / quantum * quantum;
@@ -1109,107 +1101,6 @@ namespace cryptonote
       }
     }
 
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_send_raw_tx(const COMMAND_RPC_SEND_RAW_TX::request& req, COMMAND_RPC_SEND_RAW_TX::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(send_raw_tx);
-
-    {
-      bool ok;
-      use_bootstrap_daemon_if_necessary<COMMAND_RPC_SEND_RAW_TX>(invoke_http_mode::JON, "/sendrawtransaction", req, res, ok);
-    }
-
-    const bool restricted = m_restricted && ctx;
-
-    bool skip_validation = false;
-    if (!restricted)
-    {
-      boost::shared_lock<boost::shared_mutex> lock(m_bootstrap_daemon_mutex);
-      if (m_should_use_bootstrap_daemon)
-      {
-        skip_validation = !check_core_ready();
-      }
-      else
-      {
-        CHECK_CORE_READY();
-      }
-    }
-    else
-    {
-      CHECK_CORE_READY();
-    }
-
-    std::string tx_blob;
-    if(!string_tools::parse_hexstr_to_binbuff(req.tx_as_hex, tx_blob))
-    {
-      LOG_PRINT_L0("[on_send_raw_tx]: Failed to parse tx from hexbuff: " << req.tx_as_hex);
-      res.status = "Failed";
-      return true;
-    }
-
-    if (req.do_sanity_checks && !cryptonote::tx_sanity_check(tx_blob, m_core.get_blockchain_storage().get_num_mature_outputs(0)))
-    {
-      res.status = "Failed";
-      res.reason = "Sanity check failed";
-      res.sanity_check_failed = true;
-      return true;
-    }
-    res.sanity_check_failed = false;
-
-    if (!skip_validation)
-    {
-      tx_verification_context tvc{};
-      if(!m_core.handle_incoming_tx(tx_blob, tvc, (req.do_not_relay ? relay_method::none : relay_method::local), false) || tvc.m_verifivation_failed)
-      {
-        res.status = "Failed";
-        std::string reason = "";
-        if ((res.double_spend = tvc.m_double_spend))
-          add_reason(reason, "double spend");
-        if ((res.invalid_input = tvc.m_invalid_input))
-          add_reason(reason, "invalid input");
-        if ((res.invalid_output = tvc.m_invalid_output))
-          add_reason(reason, "invalid output");
-        if ((res.too_big = tvc.m_too_big))
-          add_reason(reason, "too big");
-        if ((res.overspend = tvc.m_overspend))
-          add_reason(reason, "overspend");
-        if ((res.fee_too_low = tvc.m_fee_too_low))
-          add_reason(reason, "fee too low");
-        if ((res.too_few_outputs = tvc.m_too_few_outputs))
-          add_reason(reason, "too few outputs");
-        if ((res.tx_extra_too_big = tvc.m_tx_extra_too_big))
-          add_reason(reason, "tx-extra too big");
-        if ((res.nonzero_unlock_time = tvc.m_nonzero_unlock_time))
-          add_reason(reason, "tx unlock time is not zero");
-        const std::string punctuation = reason.empty() ? "" : ": ";
-        if (tvc.m_verifivation_failed)
-        {
-          LOG_PRINT_L0("[on_send_raw_tx]: tx verification failed" << punctuation << reason);
-        }
-        else
-        {
-          LOG_PRINT_L0("[on_send_raw_tx]: Failed to process tx" << punctuation << reason);
-        }
-        return true;
-      }
-
-      if(tvc.m_relay == relay_method::none)
-      {
-        LOG_PRINT_L0("[on_send_raw_tx]: tx accepted, but not relayed");
-        res.reason = "Not relayed";
-        res.not_relayed = true;
-        res.status = CORE_RPC_STATUS_OK;
-        return true;
-      }
-    }
-
-    NOTIFY_NEW_TRANSACTIONS::request r;
-    r.txs.push_back(std::move(tx_blob));
-    m_core.get_protocol()->relay_transactions(r, boost::uuids::nil_uuid(), epee::net_utils::zone::invalid, relay_method::local);
-    //TODO: make sure that tx has reached other nodes here, probably wait to receive reflections from other nodes
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }

@@ -142,7 +142,8 @@ int shekyl_submit_commit_tx(core_rpc_handle* h,
 // Shim 3 (§4.3): post-commit relay nudge — fetch the pool-resident blob by
 // txid and enqueue it through the existing
 // relay_transactions(relay_method::local) dispatch, the same entry point
-// on_send_raw_tx uses, so Dandelion++ embargo arming is inherited, not
+// the deleted legacy on_send_raw_tx handler used (§9.3), so Dandelion++
+// embargo arming is inherited, not
 // re-implemented (§5.2 item 2). Fire and forget: the nudge is latency; the
 // embargo + periodic loop are the guarantee. Returns SHEKYL_SUBMIT_OK /
 // SHEKYL_SUBMIT_INTERNAL_FAULT (callers may ignore; a miss means the tx

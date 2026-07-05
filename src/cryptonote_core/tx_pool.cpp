@@ -156,16 +156,6 @@ namespace cryptonote
 
     PERF_TIMER(add_tx);
 
-    // we do not accept transactions that timed out before, unless they're
-    // kept_by_block
-    if (!kept_by_block && m_timed_out_transactions.find(id) != m_timed_out_transactions.end())
-    {
-      // not clear if we should set that, since verifivation (sic) did not fail before, since
-      // the tx was accepted before timing out.
-      tvc.m_verifivation_failed = true;
-      return false;
-    }
-
     if (version != nic_verified_hf_version && !cryptonote::ver_non_input_consensus(tx, tvc, version))
     {
       LOG_PRINT_L1("transaction " << id << " failed non-input consensus rule checks");
@@ -899,16 +889,16 @@ namespace cryptonote
       {
         LOG_PRINT_L1("Tx " << txid << " removed from tx pool due to outdated, age: " << tx_age );
         remove_tx_from_transient_lists(find_tx_in_sorted_container(txid), txid, !meta.matches(relay_category::broadcasted));
-        m_timed_out_transactions.insert(txid);
         remove.push_back(std::make_pair(txid, meta.weight));
       }
       else if (ref_stale)
       {
-        // Deliberately NOT inserted into m_timed_out_transactions: the tx did
-        // not time out, its reference aged out. A resubmit of the same bytes
-        // is properly rejected by check_tx_inputs (the reference cannot get
-        // younger), so the resubmit gate's false-terminal shortcut is neither
-        // needed nor wanted here.
+        // A resubmit of the same bytes after this eviction is properly
+        // rejected by check_tx_inputs (the reference cannot get younger);
+        // no eviction memory is kept (DAEMON_SUBMIT_VERDICT.md D3 — a
+        // stuck-then-evicted tx resubmitted later must re-enter full
+        // admission and resolve to a definite verdict, never a
+        // false-terminal shortcut keyed on a past eviction).
         LOG_PRINT_L1("Tx " << txid << " removed from tx pool: FCMP++ reference at height "
           << meta.max_used_block_height << " aged out of the max-age window ("
           << FCMP_REFERENCE_BLOCK_MAX_AGE << " blocks, chain height " << chain_height << ")");
