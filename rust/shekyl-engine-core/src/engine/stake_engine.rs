@@ -131,11 +131,15 @@ use kameo::actor::{Actor, ActorRef, Spawn, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError, SendError};
 use kameo::message::{Context, Message};
 
+use curve25519_dalek::Scalar;
 use rand_core::RngCore as _;
 use shekyl_archival_bond_builder::{build_join_market_vin, BondBuildError, JoinMarketVin};
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_archival_retention::{epoch_is_claim_expired, HoldingsDescriptor};
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
+use shekyl_crypto_pq::derivation::derive_output_secrets;
+use shekyl_crypto_pq::kem::HybridCiphertext;
+use shekyl_crypto_pq::output::recover_combined_ss;
 use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
 use shekyl_standoff::draw::{draw_entry_gap, GapRng};
@@ -143,12 +147,15 @@ use shekyl_standoff::draw::{draw_entry_gap, GapRng};
 use shekyl_standoff::gf7::{BroadcastTimelineObserver, NoOpObserver, TimelineEvent};
 use shekyl_standoff::plan::{plan_entry_seam, EntrySeamPlan};
 use shekyl_types::{PCanonicalId, SettlementEpoch};
+use zeroize::Zeroizing;
 
+use super::error::KeyEngineError;
 use super::pscan::persona_scanner::{guaranteed_scanner_for_persona, PersonaScanError};
 use super::pscan::scan_step::{
     run_dual_extractor, BlockRange, DualExtractError, ScanStep, ScanStepResult,
 };
 use super::stake_timing::DEFAULT_ENTRY_GAP;
+use super::traits::key::SourceSecretsBundle;
 
 // S6 / DQ3 — the session RNG self-cert grader (`shekyl-standoff` `conformance`)
 // is gated to **`x86_64` exactly** (the guard below is `target_arch = "x86_64"`,
@@ -1236,6 +1243,79 @@ impl Message<SignBond> for StakeEngine {
     }
 }
 
+// ---------------------------------------------------------------------------
+// WI-2 D-A3 step 1 — P-side per-output spend-bundle derivation
+// ---------------------------------------------------------------------------
+
+/// Re-derive the per-output spend-secrets bundle for a **P-owned** funding
+/// output — the persona analog of
+/// [`LocalKeys::derive_primary_source_secrets_bundle`]
+/// (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.3 actor step 1), over the same
+/// pipeline with `P`'s keys substituted for the principal's:
+///
+/// 1. `combined_ss` ← [`recover_combined_ss`]`(P.view_sk, P.ml_kem_dk,
+///    ciphertext)` — hybrid X25519 + ML-KEM-768 re-decap and HKDF-SHA-512
+///    combination.
+/// 2. Per-output secrets ← [`derive_output_secrets`]`(combined_ss,
+///    output_index)`.
+/// 3. Spend scalar `x = ho + b` with `b` = `P.spend_sk`. **No claim offset**,
+///    for the same reason as the principal path: `P`'s funding outputs are
+///    paid to the *base* spend key `b·G` (the scan's `GuaranteedScanner`
+///    claims against `spend_pk` directly), so `O = x·G + y·T` and
+///    `KI = x·Hp(O)` both bind to `b`.
+///
+/// This is exactly the WI-2 D-A1 re-derivation contract: the persisted
+/// `PFundingOutputRecord` carries only `(ciphertext, index_in_transaction)`
+/// public identity; the secrets drop in the scan's offload closure (rule 16,
+/// the M3d discipline) and are recomputed here, inside the actor, at
+/// assemble time. Every intermediate is `Zeroizing`; only the bundle's own
+/// wiped-on-drop fields leave the frame — and the bundle itself never leaves
+/// the actor (rule 36).
+///
+/// A free function rather than a `StakeEngine` method: it needs only the
+/// borrowed [`ArchivalPKeys`], and the `AssembleBond` handler calls it per
+/// selected funding record before entering the proving offload.
+///
+/// [`LocalKeys::derive_primary_source_secrets_bundle`]: super::local_keys::LocalKeys
+/// [`recover_combined_ss`]: shekyl_crypto_pq::output::recover_combined_ss
+/// [`derive_output_secrets`]: shekyl_crypto_pq::derivation::derive_output_secrets
+#[allow(dead_code)] // transient — consumed by the WI-2 `AssembleBond` handler as it lands.
+pub(crate) fn derive_p_source_secrets_bundle(
+    keys: &ArchivalPKeys,
+    source_ciphertext: &HybridCiphertext,
+    output_index: u64,
+) -> Result<SourceSecretsBundle, KeyEngineError> {
+    let combined_ss = recover_combined_ss(
+        keys.view_sk.as_canonical_bytes(),
+        keys.ml_kem_dk.as_canonical_bytes(),
+        &source_ciphertext.x25519,
+        &source_ciphertext.ml_kem,
+    )?;
+
+    let secrets = derive_output_secrets(&combined_ss.0, output_index);
+
+    // `x = ho + b` — see the principal-path comment in `local_keys.rs` for
+    // why there is no claim-offset term. Each intermediate `Scalar` is
+    // `Zeroizing` so the canonical-byte materializations wipe on drop.
+    let ho_scalar: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.ho))
+            .expect("ho from wide_reduce is always canonical (per derive_output_secrets)"),
+    );
+    let b_scalar: Zeroizing<Scalar> = Zeroizing::new(Scalar::from_bytes_mod_order(
+        *keys.spend_sk.as_canonical_bytes(),
+    ));
+    let x_scalar: Zeroizing<Scalar> = Zeroizing::new(*ho_scalar + *b_scalar);
+    let spend_key_x = Zeroizing::new(x_scalar.to_bytes());
+
+    Ok(SourceSecretsBundle {
+        spend_key_x,
+        spend_key_y: Zeroizing::new(secrets.y),
+        commitment_mask: Zeroizing::new(secrets.z),
+        combined_ss: Zeroizing::new(combined_ss.0.to_vec()),
+        output_index,
+    })
+}
+
 // SP-5 — the actor performs the per-batch scan-step; `view_sk` never crosses the
 // boundary. The handler builds the bonded union's transient scanners from the
 // resident bundles and **offloads** the CPU+secret dual extraction to
@@ -1685,6 +1765,112 @@ mod tests {
     ) -> Result<PersonaIdentity, StakeEngineError> {
         let h = handle.mint_handle(PSlot(slot)).await?;
         handle.activate_persona(h).await
+    }
+
+    /// WI-2 D-A1/D-A3 — the P-side spend-bundle re-derivation is
+    /// byte-identical to the scanner-side derivation chain for the same
+    /// output (the M3b byte-identical-derivation property, P edition,
+    /// `ARCHIVAL_BOND_WI2_ASSEMBLY.md` §4).
+    ///
+    /// The persisted `PFundingOutputRecord` carries only public identity
+    /// (`ciphertext`, `index_in_transaction`); assemble-time spending is
+    /// sound only if [`derive_p_source_secrets_bundle`] recomputes exactly
+    /// the secrets the scan derived (and dropped) at discovery time. The
+    /// oracle here is `scan_output_recover` — the same chain the persona
+    /// `GuaranteedScanner` drives — hand-composed into a bundle, plus the
+    /// SAL open `x·G + y·T == O` as the real-correctness guard.
+    #[test]
+    fn p_source_secrets_bundle_byte_identical_against_scan_chain() {
+        use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+        use curve25519_dalek::edwards::CompressedEdwardsY;
+        use shekyl_crypto_pq::output::{construct_output, scan_output_recover};
+
+        let keys = derive_bundle(0);
+        let tx_key_secret = [0x5Au8; 32];
+
+        for output_index in [0u64, 1, 7, 255, 1_000_000] {
+            let constructed = construct_output(
+                &tx_key_secret,
+                &keys.x25519_pk,
+                &keys.ml_kem_ek,
+                keys.spend_pk.as_canonical_bytes(),
+                50_000u64.wrapping_add(output_index),
+                output_index,
+            )
+            .expect("construct_output succeeds for a P-paid synthetic output");
+            let ciphertext = HybridCiphertext {
+                x25519: constructed.kem_ciphertext_x25519,
+                ml_kem: constructed.kem_ciphertext_ml_kem.clone(),
+            };
+
+            // Oracle: the scanner-side chain, hand-composed (x = ho + b,
+            // no claim offset — P outputs are paid to the base spend key).
+            let recovered = scan_output_recover(
+                keys.view_sk.as_canonical_bytes(),
+                keys.ml_kem_dk.as_canonical_bytes(),
+                &constructed.kem_ciphertext_x25519,
+                &constructed.kem_ciphertext_ml_kem,
+                &constructed.output_key,
+                &constructed.commitment,
+                &constructed.enc_amount,
+                constructed.amount_tag,
+                &constructed.enc_label,
+                constructed.label_tag,
+                constructed.view_tag_prefilter,
+                output_index,
+            )
+            .expect("scan_output_recover claims the P-paid output");
+            let ho: Scalar =
+                Option::from(Scalar::from_canonical_bytes(recovered.ho)).expect("ho canonical");
+            let b: Scalar = Scalar::from_bytes_mod_order(*keys.spend_sk.as_canonical_bytes());
+            let oracle_x = (ho + b).to_bytes();
+
+            // Assemble-time chain under test.
+            let bundle = derive_p_source_secrets_bundle(&keys, &ciphertext, output_index)
+                .expect("derive_p_source_secrets_bundle succeeds against own ciphertext");
+
+            assert_eq!(
+                *bundle.spend_key_x, oracle_x,
+                "spend_key_x byte-identity violated (output_index={output_index})"
+            );
+            assert_eq!(*bundle.spend_key_y, recovered.y);
+            assert_eq!(*bundle.commitment_mask, recovered.z);
+            assert_eq!(bundle.combined_ss.as_slice(), &recovered.combined_ss[..]);
+            assert_eq!(bundle.output_index, output_index);
+
+            // Real-correctness guard: the derived witness opens the output
+            // key under the SAL relation the daemon enforces.
+            let x: Scalar = Option::from(Scalar::from_canonical_bytes(*bundle.spend_key_x))
+                .expect("x canonical");
+            let y: Scalar = Option::from(Scalar::from_canonical_bytes(*bundle.spend_key_y))
+                .expect("y canonical");
+            let o = CompressedEdwardsY(constructed.output_key)
+                .decompress()
+                .expect("O decompresses");
+            assert_eq!(
+                (&x * ED25519_BASEPOINT_TABLE) + (*shekyl_curve_generators::T * y),
+                o,
+                "SAL relation x·G + y·T == O violated (output_index={output_index})"
+            );
+        }
+    }
+
+    /// A corrupted funding-record ciphertext fails closed at re-derivation
+    /// (the D-A5 "spend-bundle derivation failure" row): a low-order X25519
+    /// component is rejected by `recover_combined_ss`, never silently spent.
+    #[test]
+    fn p_source_secrets_bundle_rejects_tampered_ciphertext() {
+        let keys = derive_bundle(0);
+        let tampered = HybridCiphertext {
+            x25519: [0u8; 32], // low-order Montgomery point u=0
+            ml_kem: vec![0u8; shekyl_crypto_pq::kem::ML_KEM_768_CT_LEN],
+        };
+        let err = derive_p_source_secrets_bundle(&keys, &tampered, 0)
+            .expect_err("a low-order X25519 component must be rejected");
+        assert!(matches!(
+            err,
+            KeyEngineError::SourceCiphertextDecapsulationFailed(_)
+        ));
     }
 
     // §10.1 — an actor spawned with no initial active slot is idle.
