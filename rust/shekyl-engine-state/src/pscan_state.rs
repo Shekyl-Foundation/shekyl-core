@@ -40,15 +40,17 @@ use shekyl_units::AtomicUnits;
 use crate::error::WalletLedgerError;
 use crate::pscan_cursor::PScanCursor;
 
-/// Schema version of the durable P-scan state. **v3** adds the durable
-/// `bond_post_matches` (SP-6 reconcile evidence); **v2** tracked the nested
-/// [`PScanCursor`] gaining its verified-frontier `frontier_hash`. Any field
+/// Schema version of the durable P-scan state. **v4** adds the durable
+/// `funding_outputs` (WI-2 D-A1, `ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.1 — the
+/// per-output funding-discovery records bond assembly selects from); **v3** added
+/// the durable `bond_post_matches` (SP-6 reconcile evidence); **v2** tracked the
+/// nested [`PScanCursor`] gaining its verified-frontier `frontier_hash`. Any field
 /// addition / removal / renaming bumps this; loads that see a different version
 /// **refuse rather than migrate** (the `StakingBlock` precedent). No migration at any
-/// step: no deployed wallet persisted a `.wallet.pscan` (the scan task that writes it
-/// is not yet wired). Distinct from the inner [`PScanCursor`]'s own version (nested,
-/// like the wallet ledger over its sub-blocks).
-pub const PSCAN_STATE_VERSION: u32 = 3;
+/// step: pre-genesis, a version mismatch means re-scan (rule 15). Distinct from the
+/// inner [`PScanCursor`]'s own version (nested, like the wallet ledger over its
+/// sub-blocks).
+pub const PSCAN_STATE_VERSION: u32 = 4;
 
 /// A persisted archival bond-post match (SP-6 reconcile evidence): an on-chain
 /// bond-post whose `p_canonical_id` is one of `P`'s personas. The **durable, sealed
@@ -79,6 +81,62 @@ impl std::fmt::Debug for BondPostRecord {
     /// render the contents. This is the same discipline the persona keys carry.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("BondPostRecord(<redacted persona-history>)")
+    }
+}
+
+/// A persisted `P`-owned funding output (WI-2 D-A1,
+/// `ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.1): the **public identity** of one output
+/// the P-scan recovered for a bonded persona — everything bond assembly needs to
+/// select, path-prove, and re-derive spend secrets for the output **without a
+/// targeted network fetch** (a per-output fetch at assemble time is a
+/// probe-shaped correlation leak; the scan records identity while the block is
+/// in hand as cover).
+///
+/// **No derived secrets** — `y` / `z` / `k_amount` / `combined_shared_secret`
+/// drop in the scan's offload closure exactly as before (rule 16, the M3d
+/// `TransferDetails` discipline). The spend bundle is re-derived at assemble
+/// time inside the StakeEngine actor from `(ciphertext, index_in_transaction)`
+/// and the persona's resident keys.
+///
+/// Every field is public on-chain data plus the recovered cleartext `amount`;
+/// but the *set* ties amounts to persona slots — `P`'s funding history, the
+/// same class as [`BondPostRecord`] — so it carries the same redacted-`Debug`
+/// discipline.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
+pub struct PFundingOutputRecord {
+    /// The owning persona's slot ordinal (selects the re-derivation keys).
+    pub p_slot: u32,
+    /// Hash of the transaction carrying the output.
+    pub tx_hash: [u8; 32],
+    /// The output's index within its transaction — the KEM derivation index
+    /// the spend-bundle re-derivation consumes.
+    pub index_in_transaction: u64,
+    /// The global (chain-wide) output index — the curve-tree leaf position
+    /// (`AssembleInput::gindex`).
+    pub gindex: u64,
+    /// The on-chain output key `O` (compressed Edwards bytes).
+    pub output_key: [u8; 32],
+    /// The on-chain amount commitment point `C` (compressed Edwards bytes) —
+    /// the *point*, never the opened `(mask, amount)` pair (the mask is a
+    /// derived secret and is re-derived at assemble time).
+    pub commitment: [u8; 32],
+    /// X25519 half of the output's hybrid KEM ciphertext (public, on-chain).
+    pub ciphertext_x25519: [u8; 32],
+    /// ML-KEM-768 half of the output's hybrid KEM ciphertext (public, on-chain).
+    pub ciphertext_ml_kem: Vec<u8>,
+    /// The recovered cleartext amount.
+    pub amount: AtomicUnits,
+    /// Height of the block carrying the output.
+    pub height: BlockHeight,
+    /// The settlement epoch `height` falls in.
+    pub epoch: SettlementEpoch,
+}
+
+impl std::fmt::Debug for PFundingOutputRecord {
+    /// **Redacted on purpose** — a row of `P`'s funding history (persona slot,
+    /// amount, placement). Same discipline as [`BondPostRecord`].
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PFundingOutputRecord(<redacted funding-history>)")
     }
 }
 
@@ -125,6 +183,14 @@ pub struct PScanState {
     /// terminal post at retire time. Ordered by scan (height); public and bounded by
     /// `P`'s own posting.
     bond_post_matches: Vec<BondPostRecord>,
+    /// Per-output funding-discovery records (WI-2 D-A1) — the `P`-local output
+    /// set bond assembly selects funding from (the "steady-state funding-output
+    /// discovery" reader of `ARCHIVAL_BOND_PR2_CHAIN.md` §3.6 reader (a)).
+    /// Ordered by scan (height, then gindex); everything behind the same
+    /// finality horizon as `accruals` (an entry exists iff its epoch delta was
+    /// ingested), and per-epoch sums of these records equal the `accruals`
+    /// entries by construction. Bounded by `P`'s own funding inflow.
+    funding_outputs: Vec<PFundingOutputRecord>,
 }
 
 impl std::fmt::Debug for PScanState {
@@ -139,13 +205,14 @@ impl std::fmt::Debug for PScanState {
             .field("accruals", &self.accruals)
             .field("pending_unbonds", &self.pending_unbonds)
             .field("bond_post_matches", &"<redacted persona-history>")
+            .field("funding_outputs", &"<redacted funding-history>")
             .finish()
     }
 }
 
 impl PScanState {
     /// A fresh state at genesis: pre-scan cursor, no accruals, no pending unbonds, no
-    /// matches.
+    /// matches, no funding outputs.
     pub fn genesis() -> Self {
         Self {
             version: PSCAN_STATE_VERSION,
@@ -153,22 +220,26 @@ impl PScanState {
             accruals: BTreeMap::new(),
             pending_unbonds: BTreeMap::new(),
             bond_post_matches: Vec::new(),
+            funding_outputs: Vec::new(),
         }
     }
 
     /// A state pinned to `cursor` with the given per-epoch `accruals`,
-    /// `pending_unbonds`, and `bond_post_matches`, stamped with the current version.
-    /// The caller (the SP-5 scan task) owns the invariants that `accruals` covers
-    /// exactly the epochs finalized behind `cursor`, `pending_unbonds` holds every
-    /// persona whose `Unbond` was confirmed but not yet durably retired (SP-6), and
-    /// `bond_post_matches` holds every bond-post matched in `[0, cursor.synced_height)`
-    /// (the reconcile evidence — complete because the scan is exhaustive over that
-    /// verified range).
+    /// `pending_unbonds`, `bond_post_matches`, and `funding_outputs`, stamped with
+    /// the current version. The caller (the SP-5 scan task) owns the invariants that
+    /// `accruals` covers exactly the epochs finalized behind `cursor`,
+    /// `pending_unbonds` holds every persona whose `Unbond` was confirmed but not
+    /// yet durably retired (SP-6), `bond_post_matches` holds every bond-post matched
+    /// in `[0, cursor.synced_height)` (the reconcile evidence — complete because the
+    /// scan is exhaustive over that verified range), and `funding_outputs` holds
+    /// every recovered funding output over the same range (per-epoch sums equal the
+    /// `accruals` entries).
     pub fn new(
         cursor: PScanCursor,
         accruals: BTreeMap<SettlementEpoch, AtomicUnits>,
         pending_unbonds: BTreeMap<PCanonicalId, SettlementEpoch>,
         bond_post_matches: Vec<BondPostRecord>,
+        funding_outputs: Vec<PFundingOutputRecord>,
     ) -> Self {
         Self {
             version: PSCAN_STATE_VERSION,
@@ -176,6 +247,7 @@ impl PScanState {
             accruals,
             pending_unbonds,
             bond_post_matches,
+            funding_outputs,
         }
     }
 
@@ -210,6 +282,12 @@ impl PScanState {
     /// `[0, synced_height)` (the exhaustively-scanned verified range).
     pub fn bond_post_matches(&self) -> &[BondPostRecord] {
         &self.bond_post_matches
+    }
+
+    /// The per-output funding-discovery records (WI-2 D-A1) — the `P`-local
+    /// output set bond assembly selects from, complete over `[0, synced_height)`.
+    pub fn funding_outputs(&self) -> &[PFundingOutputRecord] {
+        &self.funding_outputs
     }
 
     /// The finalized confirmed inflow for `epoch`, or [`AtomicUnits::ZERO`] if no
@@ -291,13 +369,30 @@ mod tests {
             .collect()
     }
 
+    fn funding_output(slot: u32, gindex: u64, amount: u64, height: u64) -> PFundingOutputRecord {
+        PFundingOutputRecord {
+            p_slot: slot,
+            tx_hash: [0xA1; 32],
+            index_in_transaction: 1,
+            gindex,
+            output_key: [0xB2; 32],
+            commitment: [0xC3; 32],
+            ciphertext_x25519: [0xD4; 32],
+            ciphertext_ml_kem: vec![0xE5; 8],
+            amount: AtomicUnits::from_raw(amount),
+            height: BlockHeight::from_raw(height),
+            epoch: SettlementEpoch::from_raw(2),
+        }
+    }
+
     #[test]
-    fn round_trips_cursor_accruals_pending_and_matches() {
+    fn round_trips_cursor_accruals_pending_matches_and_funding() {
         let state = PScanState::new(
             PScanCursor::at(BlockHeight::from_raw(40_000), [0x9C; 32]),
             accruals(&[(2, 100), (3, 250)]),
             pending(&[(0xAB, 7)]),
             bond_posts(&[(12_345, 0xAB, 0), (39_000, 0xCD, 2)]),
+            vec![funding_output(3, 77, 100, 12_400)],
         );
         let bytes = state.to_postcard_bytes().expect("serialize");
         let back = PScanState::from_postcard_bytes(&bytes).expect("deserialize");
@@ -323,6 +418,44 @@ mod tests {
             bond_posts(&[(12_345, 0xAB, 0), (39_000, 0xCD, 2)]).as_slice(),
             "the bond-post reconcile evidence round-trips through the seal"
         );
+        assert_eq!(
+            back.funding_outputs(),
+            &[funding_output(3, 77, 100, 12_400)],
+            "the funding-output discovery records round-trip through the seal"
+        );
+    }
+
+    #[test]
+    fn funding_output_record_debug_is_redacted() {
+        let rendered = format!("{:?}", funding_output(3, 77, 4_242, 12_400));
+        assert!(
+            rendered.contains("redacted"),
+            "Debug must redact the funding-history row: {rendered}"
+        );
+        assert!(
+            !rendered.contains("4242") && !rendered.contains("12400") && !rendered.contains("77"),
+            "neither amount, height, nor gindex may appear: {rendered}"
+        );
+    }
+
+    #[test]
+    fn pscan_state_debug_redacts_funding_outputs_including_count() {
+        let state = PScanState::new(
+            PScanCursor::genesis(),
+            accruals(&[]),
+            pending(&[]),
+            bond_posts(&[]),
+            vec![funding_output(3, 77, 100, 12_400), funding_output(3, 78, 200, 12_401)],
+        );
+        let rendered = format!("{state:?}");
+        assert!(
+            rendered.contains("<redacted funding-history>"),
+            "funding outputs must be redacted in the state's Debug: {rendered}"
+        );
+        assert!(
+            !rendered.contains("PFundingOutputRecord") && !rendered.contains("12400"),
+            "neither contents nor per-entry structure (the count) may appear: {rendered}"
+        );
     }
 
     #[test]
@@ -345,6 +478,7 @@ mod tests {
             accruals(&[]),
             pending(&[]),
             bond_posts(&[(123_456, 0xAB, 2), (789_012, 0xCD, 0)]),
+            vec![],
         );
         let rendered = format!("{state:?}");
         assert!(
@@ -374,6 +508,7 @@ mod tests {
             accruals(&[(5, 9)]),
             pending(&[]),
             bond_posts(&[]),
+            vec![],
         );
         assert_eq!(
             state.accrual_for(SettlementEpoch::from_raw(4)),
@@ -392,6 +527,7 @@ mod tests {
             accruals(&[(1, 10), (2, 20), (3, 30)]),
             pending(&[]),
             bond_posts(&[]),
+            vec![],
         );
         assert_eq!(state.total_accrued(), Some(AtomicUnits::from_raw(60)));
     }
@@ -403,6 +539,7 @@ mod tests {
             accruals(&[(1, u64::MAX), (2, 1)]),
             pending(&[]),
             bond_posts(&[]),
+            vec![],
         );
         assert_eq!(state.total_accrued(), None, "must not wrap a money total");
     }
@@ -417,6 +554,7 @@ mod tests {
             accruals: BTreeMap::new(),
             pending_unbonds: BTreeMap::new(),
             bond_post_matches: Vec::new(),
+            funding_outputs: Vec::new(),
         };
         let forged = wrong
             .to_postcard_bytes()

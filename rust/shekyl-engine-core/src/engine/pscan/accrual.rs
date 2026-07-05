@@ -40,13 +40,13 @@ use std::collections::BTreeMap;
 
 use shekyl_archival_retention::consensus_state::{epoch_close_height, settlement_epoch_at_height};
 use shekyl_engine_state::pscan_cursor::PScanCursor;
-use shekyl_engine_state::pscan_state::{BondPostRecord, PScanState};
+use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord, PScanState};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 
 use super::exhaustiveness::{VerifiedBatch, VerifiedRange};
 use super::reconcile::PReconcileSet;
-use super::scan_step::{BondPostMatch, ScanStepResult};
+use super::scan_step::{BondPostMatch, FundingOutputMatch, ScanStepResult};
 
 /// Per-epoch `P` funding inflow — the **finalized** confirmed amount that funded
 /// `P` in one settlement epoch, the signal the cover's `C_min` (earnings ramp)
@@ -153,6 +153,12 @@ pub(crate) struct PScanAccrual {
     /// of `P`'s persona-activity history — so [`BondPostMatch`] carries a redacting
     /// `Debug` (no clear log/`{:?}` path), unlike the public amount-deltas.
     bond_post_matches: Vec<BondPostMatch>,
+    /// Per-output funding-discovery records (WI-2 D-A1) accumulated across the
+    /// scan — the funding-selection substrate for production bond assembly,
+    /// durable via [`PScanState::funding_outputs`]. Public output identity only
+    /// (no derived secrets), but a row of `P`'s funding history — redacted
+    /// `Debug` like the matches.
+    funding_outputs: Vec<FundingOutputMatch>,
 }
 
 impl std::fmt::Debug for PScanAccrual {
@@ -167,6 +173,7 @@ impl std::fmt::Debug for PScanAccrual {
             .field("accruals", &self.accruals)
             .field("pending_unbonds", &self.pending_unbonds)
             .field("bond_post_matches", &"<redacted persona-history>")
+            .field("funding_outputs", &"<redacted funding-history>")
             .finish()
     }
 }
@@ -182,6 +189,7 @@ impl PScanAccrual {
             accruals: BTreeMap::new(),
             pending_unbonds: BTreeMap::new(),
             bond_post_matches: Vec::new(),
+            funding_outputs: Vec::new(),
         }
     }
 
@@ -210,6 +218,11 @@ impl PScanAccrual {
                     p_canonical_id: r.p_canonical_id,
                     post_kind: r.post_kind,
                 })
+                .collect(),
+            funding_outputs: state
+                .funding_outputs()
+                .iter()
+                .map(FundingOutputMatch::from)
                 .collect(),
         }
     }
@@ -294,6 +307,8 @@ impl PScanAccrual {
         self.accruals.extend(staged);
         self.bond_post_matches
             .extend(result.bond_post_matches.iter().cloned());
+        self.funding_outputs
+            .extend(result.funding_outputs.iter().cloned());
         self.synced_height = result.range.end();
         self.frontier_hash = verified.frontier_hash();
         self.covered = new_covered;
@@ -382,7 +397,20 @@ impl PScanAccrual {
                     post_kind: m.post_kind,
                 })
                 .collect(),
+            self.funding_outputs
+                .iter()
+                .map(PFundingOutputRecord::from)
+                .collect(),
         )
+    }
+
+    /// The discovered `P`-owned funding outputs behind the verified frontier —
+    /// the funding-selection substrate for production bond assembly (WI-2 D-A2).
+    /// Public output identity only; spend secrets are re-derived at assemble
+    /// time inside the actor.
+    #[allow(dead_code)] // transient — the consumer is WI-2's funding selection.
+    pub(crate) fn funding_outputs(&self) -> &[FundingOutputMatch] {
+        &self.funding_outputs
     }
 
     /// The SP-6 reconcile evidence: the matched bond-posts bound to the verified
@@ -417,6 +445,7 @@ mod tests {
                 })
                 .collect(),
             bond_post_matches: Vec::new(),
+            funding_outputs: Vec::new(),
         }
     }
 
@@ -441,6 +470,7 @@ mod tests {
                 .expect("range"),
             funding: Vec::new(),
             bond_post_matches: matches,
+            funding_outputs: Vec::new(),
         }
     }
 
@@ -739,6 +769,40 @@ mod tests {
             [0x42; 32],
             "the verified-frontier anchor round-trips through the seal"
         );
+    }
+
+    /// WI-2 D-A1: per-output funding records accumulate through `ingest` and
+    /// survive the `to_state` → `from_state` seal round-trip unchanged (the
+    /// funding-selection substrate is durable).
+    #[test]
+    fn funding_outputs_accumulate_and_round_trip_through_the_seal() {
+        let record = FundingOutputMatch {
+            p_slot: 3,
+            tx_hash: [0xAA; 32],
+            index_in_transaction: 1,
+            gindex: 42,
+            output_key: [0xBB; 32],
+            commitment: [0xCC; 32],
+            ciphertext_x25519: [0xDD; 32],
+            ciphertext_ml_kem: vec![0xEE; 4],
+            amount: AtomicUnits::from_raw(500),
+            height: BlockHeight::from_raw(5),
+            epoch: epoch(0),
+        };
+        let mut acc = PScanAccrual::genesis();
+        let mut step = step(0, 10, &[(0, 500)]);
+        step.funding_outputs = vec![record.clone()];
+        acc.ingest(&step, &VerifiedBatch::for_test(0, 10, [0x42; 32]))
+            .expect("ingest");
+        assert_eq!(acc.funding_outputs(), &[record.clone()]);
+
+        let back = PScanAccrual::from_state(&acc.to_state());
+        assert_eq!(
+            back.funding_outputs(),
+            &[record],
+            "the funding-selection substrate survives the seal round-trip"
+        );
+        assert_eq!(back, acc);
     }
 
     #[test]

@@ -760,6 +760,7 @@ mod tests {
             BTreeMap::new(),
             BTreeMap::new(),
             Vec::new(),
+            Vec::new(),
         );
         store.save(&seeded).await.expect("seed");
         let mut accrual = PScanAccrual::from_state(&seeded);
@@ -853,6 +854,7 @@ mod tests {
             BTreeMap::new(),
             pending,
             Vec::new(),
+            Vec::new(),
         );
         let accrual = PScanAccrual::from_state(&state);
         assert_eq!(
@@ -896,6 +898,7 @@ mod tests {
             PScanCursor::at(BlockHeight::from_raw(cursor_height), [0u8; 32]),
             BTreeMap::new(),
             pending,
+            Vec::new(),
             Vec::new(),
         ));
         assert_eq!(

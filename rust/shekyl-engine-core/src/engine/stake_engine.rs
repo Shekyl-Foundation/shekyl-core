@@ -748,14 +748,18 @@ impl StakeEngine {
     /// would mis-size the privacy parameter `C_min` (DQ7).
     fn bonded_scan_inputs(
         &self,
-    ) -> Result<(Vec<GuaranteedScanner>, BTreeSet<PCanonicalId>), ScanSetupError> {
+    ) -> Result<(Vec<(u32, GuaranteedScanner)>, BTreeSet<PCanonicalId>), ScanSetupError> {
         let mut scanners = Vec::new();
         let mut known_ids = BTreeSet::new();
-        for held in self.held.values() {
+        for (slot, held) in &self.held {
             if let HeldPersona::Bonded(_) = held {
                 let keys = held.keys();
-                scanners
-                    .push(guaranteed_scanner_for_persona(keys).map_err(ScanSetupError::Scanner)?);
+                // Slot-tagged so the extractor can attribute each recovered
+                // output to its owning persona (WI-2 D-A1 funding records).
+                scanners.push((
+                    slot.0,
+                    guaranteed_scanner_for_persona(keys).map_err(ScanSetupError::Scanner)?,
+                ));
                 let id = persona_canonical_id(keys).map_err(ScanSetupError::CanonicalId)?;
                 known_ids.insert(id);
             }
