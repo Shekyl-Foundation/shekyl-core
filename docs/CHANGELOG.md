@@ -482,6 +482,21 @@
   id. Behavior-preserving for the existing wallet path (the finalizers
   already re-bound the real id); the change is to the type surface the
   second consumer will build against.
+- **wallet: `AlreadyInChain` submit verdict gets its distinct §2.5
+  lock-lifecycle disposition** (`docs/FOLLOWUPS.md` "`AlreadyInChain`
+  submit verdict", closed; 2c pre-wiring; `DAEMON_SUBMIT_VERDICT.md`
+  §2.5/§2.6). `TransactionSubmitter::submit` now succeeds with
+  `SubmitSuccess`, splitting the `Ok` arm by disposition: `Broadcast`
+  (`Accepted` / `AlreadyInPool`) places the F14 awaiting-confirmation
+  lock as before; `AlreadyInChain` resolves through the new
+  `finalize_submit_already_in_chain`, releasing the reservation and its
+  output locks **without** placing a fresh awaiting-lock — refresh
+  remains the settlement authority. Fixes the collapsed-`Ok(hash)`
+  behavior that stranded inputs "awaiting confirmation" whenever the
+  confirming block was at/below the wallet's synced height (no
+  `mark_spent` re-observation, watchdog confirmed-absent release
+  unbuilt). Regression:
+  `submit_already_in_chain_releases_without_awaiting_lock`.
 - **docs: submit-verdict series stale-doc sweep**
   (`docs/design/DAEMON_SUBMIT_VERDICT.md` §12 PR-6, rule 91,
   `docs/submit-verdict-sweep`). Docs describing the deleted legacy

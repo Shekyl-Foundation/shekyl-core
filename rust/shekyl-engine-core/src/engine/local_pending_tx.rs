@@ -75,7 +75,7 @@ use super::signer::{Signer, TransferSigningContext};
 use super::signing_assembly::assemble_tx_to_sign;
 use super::traits::{LedgerEngine, PendingTxEngine};
 use super::transaction_submitter::canonical_tx_id;
-use super::transaction_submitter::{SubmitterError, TransactionSubmitter};
+use super::transaction_submitter::{SubmitSuccess, SubmitterError, TransactionSubmitter};
 use super::tx_counts::{InputCount, OutputCount};
 use super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
 
@@ -552,7 +552,7 @@ where
     /// `submit` after `SubmitAttempted` (PR 5 C7 R9 per-error-class
     /// coverage). FIFO not required — one slot consumed per submit.
     #[cfg(any(test, feature = "test-helpers"))]
-    pub(crate) submit_daemon_outcome: Mutex<Option<Result<TxHash, SubmitterError>>>,
+    pub(crate) submit_daemon_outcome: Mutex<Option<Result<SubmitSuccess, SubmitterError>>>,
 }
 
 #[allow(private_bounds)]
@@ -864,7 +864,7 @@ where
     }
 
     #[allow(clippy::unused_self)] // `self` is used only under `test` / `test-helpers` cfgs.
-    fn take_queued_submit_outcome(&self) -> Option<Result<TxHash, SubmitterError>> {
+    fn take_queued_submit_outcome(&self) -> Option<Result<SubmitSuccess, SubmitterError>> {
         #[cfg(any(test, feature = "test-helpers"))]
         {
             self.submit_daemon_outcome
@@ -925,6 +925,43 @@ where
                 }
             }
         });
+
+        emit_pending_tx_diagnostic(
+            self.sink.as_ref(),
+            PendingTxDiagnostic::SubmitSucceeded {
+                reservation_id: id,
+                tx_hash,
+            },
+        );
+
+        tx_hash
+    }
+
+    /// Resolve a submit whose verdict was `AlreadyInChain` (§2.5):
+    /// confirmation observed by verdict — the reservation is done, but
+    /// **refresh remains the settlement authority**.
+    ///
+    /// Differs from [`Self::finalize_submit_accept`] in exactly one way: no
+    /// fresh F14 awaiting-confirmation lock is placed. The accept-path lock
+    /// exists to bridge "network-exposed, not yet observed on-chain"; an
+    /// already-mined tx has no such gap to bridge, and a fresh lock
+    /// (baseline = *current* height) on a spend refresh may already have
+    /// scanned past would never be cleared by `mark_spent` — the exact
+    /// stranding the F14 race guard in the accept path exists to prevent.
+    /// The verdict authorizes lock-lifecycle transitions only; `spent`
+    /// stays refresh-written (`docs/FOLLOWUPS.md` "`AlreadyInChain` submit
+    /// verdict", closed with this split).
+    fn finalize_submit_already_in_chain(
+        &self,
+        state: &mut PendingTxState,
+        id: ReservationId,
+        tx_hash: TxHash,
+    ) -> TxHash {
+        state.in_flight.remove(&id);
+        release_output_locks_for(state, id);
+        // F28/F37: a definite identity-bearing verdict ends any
+        // consecutive-rejection streak, same as a fresh accept.
+        state.loop_breaker.record_accept();
 
         emit_pending_tx_diagnostic(
             self.sink.as_ref(),
@@ -2048,9 +2085,16 @@ where
                 // The submitter error carries no reservation id (the split that
                 // made the former rid-0 sentinel unrepresentable); the finalizers
                 // bind `id` — the reservation under submit — into the
-                // reservation-bound `SubmitError` they return.
+                // reservation-bound `SubmitError` they return. Success splits by
+                // lock-lifecycle disposition (§2.5): `Broadcast` places the F14
+                // lock, `AlreadyInChain` does not (refresh settles).
                 return match outcome {
-                    Ok(tx_hash) => Ok(self.finalize_submit_accept(&mut state, id, tx_hash)),
+                    Ok(SubmitSuccess::Broadcast { hash }) => {
+                        Ok(self.finalize_submit_accept(&mut state, id, hash))
+                    }
+                    Ok(SubmitSuccess::AlreadyInChain { hash }) => {
+                        Ok(self.finalize_submit_already_in_chain(&mut state, id, hash))
+                    }
                     Err(SubmitterError::RejectedTerminal { kind }) => {
                         Err(self.finalize_submit_terminal(&mut state, id, kind))
                     }
@@ -2067,8 +2111,8 @@ where
         };
 
         let submitter = Arc::clone(&self.submitter);
-        let tx_hash = match submitter.submit(tx_bytes).await {
-            Ok(hash) => hash,
+        let success = match submitter.submit(tx_bytes).await {
+            Ok(success) => success,
             Err(submit_err) => {
                 let mut state = self
                     .state
@@ -2097,7 +2141,16 @@ where
             .lock()
             .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
 
-        Ok(self.finalize_submit_accept(&mut state, id, tx_hash))
+        // Success splits by lock-lifecycle disposition (§2.5): `Broadcast`
+        // (fresh accept / pool-resident duplicate) places the F14
+        // awaiting-confirmation lock; `AlreadyInChain` releases without one —
+        // refresh remains the settlement authority.
+        Ok(match success {
+            SubmitSuccess::Broadcast { hash } => self.finalize_submit_accept(&mut state, id, hash),
+            SubmitSuccess::AlreadyInChain { hash } => {
+                self.finalize_submit_already_in_chain(&mut state, id, hash)
+            }
+        })
     }
 
     fn discard_sync(&self, id: ReservationId, reason: DiscardReason) -> Result<(), PendingTxError> {
@@ -2239,7 +2292,10 @@ where
     /// `SubmitAttempted` is emitted and the rid moves to `in_flight`.
     #[cfg(any(test, feature = "test-helpers"))]
     #[allow(dead_code)] // Canonical C7 R9 test-driver API; hybrid tests land in C7.
-    pub(crate) fn queue_submit_daemon_outcome(&self, outcome: Result<TxHash, SubmitterError>) {
+    pub(crate) fn queue_submit_daemon_outcome(
+        &self,
+        outcome: Result<SubmitSuccess, SubmitterError>,
+    ) {
         *self
             .submit_daemon_outcome
             .lock()
@@ -2587,8 +2643,10 @@ mod tests {
     struct TestTransactionSubmitter;
 
     impl TransactionSubmitter for TestTransactionSubmitter {
-        async fn submit(&self, tx_bytes: Vec<u8>) -> Result<TxHash, SubmitterError> {
-            Ok(canonical_tx_id(&tx_bytes))
+        async fn submit(&self, tx_bytes: Vec<u8>) -> Result<SubmitSuccess, SubmitterError> {
+            Ok(SubmitSuccess::Broadcast {
+                hash: canonical_tx_id(&tx_bytes),
+            })
         }
     }
 
@@ -3513,6 +3571,69 @@ mod tests {
                 "locked output must be excluded from selection"
             );
         }
+    }
+
+    /// §2.5 `AlreadyInChain` distinct disposition (`docs/FOLLOWUPS.md`
+    /// closure): a submit resolving `AlreadyInChain` releases the
+    /// reservation but places **no** fresh F14 awaiting-confirmation lock —
+    /// the tx is already mined, so there is no "network-exposed, not yet
+    /// observed" gap for the lock to bridge, and a fresh lock (baseline =
+    /// current height) on a spend refresh has already scanned past would
+    /// never be cleared by `mark_spent`. Refresh remains the settlement
+    /// authority for `spent`. The contrast test is
+    /// [`build_then_submit_places_awaiting_confirmation_lock`], which proves
+    /// the `Broadcast` disposition *does* place the lock.
+    #[tokio::test]
+    async fn submit_already_in_chain_releases_without_awaiting_lock() {
+        let sink = Arc::new(AssertionSink::new());
+        let (pending, _ledger, _tree_dir) =
+            funded_pending_tx_with_sink(Arc::clone(&sink) as Arc<dyn DiagnosticSink>).await;
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+        let expected_hash = canonical_tx_id(&built.tx_bytes);
+        pending.queue_submit_daemon_outcome(Ok(SubmitSuccess::AlreadyInChain {
+            hash: expected_hash,
+        }));
+
+        let tx_hash = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect("AlreadyInChain resolves the submit successfully");
+        assert_eq!(tx_hash, expected_hash);
+        assert_eq!(pending.outstanding(), 0, "reservation released");
+
+        // No F14 lock, no spent write: the verdict authorizes lock-lifecycle
+        // transitions only — the output returns to selectable until refresh
+        // observes the on-chain spend and runs `mark_spent`.
+        {
+            let guard = pending.ledger.read();
+            for td in guard.ledger.ledger.transfers() {
+                assert!(!td.spent, "spent stays refresh-authoritative");
+                assert!(
+                    td.awaiting_confirmation.is_none(),
+                    "AlreadyInChain must not place a fresh awaiting-confirmation lock"
+                );
+            }
+        }
+
+        // Build-time output locks are swept with the reservation: a new
+        // build can select again (the daemon will answer a stale selection
+        // with a definite verdict; refresh settles the ledger).
+        pending
+            .build(standard_request(7_000))
+            .await
+            .expect("outputs released after AlreadyInChain resolution");
+
+        let events = sink.recorded_pending();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                PendingTxDiagnostic::SubmitSucceeded { tx_hash: h, .. } if *h == expected_hash
+            )),
+            "AlreadyInChain resolution emits SubmitSucceeded: {events:?}"
+        );
     }
 
     /// PR 2c-1 — the real-tree closing milestone for archival bond-post
@@ -4948,11 +5069,18 @@ mod tests {
         assert_eq!(daemon.submitted_count(), 1);
 
         let submitter = DaemonTransactionSubmitter::new(Arc::clone(&daemon));
-        let hash_again = submitter
+        let success = submitter
             .submit(built.tx_bytes.clone())
             .await
             .expect("daemon dedup accepts identical bytes");
-        assert_eq!(hash_again, canonical_tx_id(&built.tx_bytes));
+        // A pool-resident duplicate is `AlreadyInPool` → the `Broadcast`
+        // disposition (§2.5: same as a fresh accept), carrying the local hash.
+        assert_eq!(
+            success,
+            SubmitSuccess::Broadcast {
+                hash: canonical_tx_id(&built.tx_bytes)
+            }
+        );
         assert_eq!(daemon.submitted_count(), 1);
 
         let err = pending
