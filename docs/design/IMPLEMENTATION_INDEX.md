@@ -20,11 +20,23 @@ this stamp.
 new identifier families register here at birth; Phase 3+ / Stage 3+ work
 items start with an index row).
 
-- Additive edits date themselves (`UPDATE YYYY-MM-DD:` prefix) rather than
-  silently rewriting rows.
+- **Row format:** every status cell *leads* with the current status and its
+  as-of date (e.g. `Landed (as of 2026-08-01)`); dated `UPDATE YYYY-MM-DD:`
+  entries append *below/after* that line as the history chain. Readers get
+  the answer without parsing the chain.
+- **Two verification classes:** *code-anchored* items cite a `git grep`
+  target on `dev`; *decision-anchored* items (round closures, wire freezes,
+  contract docs — no code artifact) cite the commit hash or PR number of the
+  doc edit that closed them.
+- **Section contract:** rule 94 refers to §2 (identifier-family registry),
+  §4–§5 (live / built-unwired / missing inventory), and §6
+  (known-stale-statuses ledger) by role. Their meanings — and this numbering
+  — are load-bearing; a restructuring that moves them updates
+  `.cursor/rules/94-tracking-index.mdc` in the same PR.
 - This doc never carries design content — link to the owning doc instead.
-- New identifier families (a new `XX-N` prefix in any plan doc) get a row in
-  §2 in the same PR that introduces them.
+- New identifier families (a new prefix series in any plan doc) get a §2 row
+  in the same PR that introduces them, after the rule-94 prefix-uniqueness
+  check.
 
 ---
 

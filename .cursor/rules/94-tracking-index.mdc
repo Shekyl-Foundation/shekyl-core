@@ -1,5 +1,5 @@
 ---
-description: The implementation tracking index (docs/design/IMPLEMENTATION_INDEX.md) is load-bearing. New identifier families register there at birth; phase/track tokens are always prefixed; statuses are dated and code-verified. Work items in Phase 3+ / Stage 3+ don't start without an index row.
+description: The implementation tracking index (docs/design/IMPLEMENTATION_INDEX.md) is load-bearing. New identifier families register there at birth; phase/track tokens are always prefixed; statuses are dated and verified (code-anchored or decision-anchored). Work items in Phase 3+ / Stage 3+ don't start without an index row. Fail closed if the index is missing.
 alwaysApply: true
 ---
 
@@ -7,8 +7,8 @@ alwaysApply: true
 
 `docs/design/IMPLEMENTATION_INDEX.md` is the single disambiguation
 layer for the project's identifier families (Phase N, Stage N,
-Bond-PR N, SP-N, SP-T-N, PR-E-N, GF-N, F-N, …) and the code-verified
-map of what is live, built-but-unwired, or missing.
+Bond-PR N, SP-N, SP-TN, PR-E-N, GF-N, F-N, …) and the verified map of
+what is live, built-but-unwired, or missing.
 
 This rule exists because the schemes grew independently and collided:
 `2a–2d` meant different things in `WALLET_REWRITE_PLAN.md` and
@@ -17,48 +17,103 @@ scheme. Reconstructing that from plan prose cost a full verification
 pass. The index makes the reconstruction unnecessary; this rule keeps
 the index true.
 
+## Fail closed
+
+If the index is missing or unreadable at
+`docs/design/IMPLEMENTATION_INDEX.md` (a branch predating it, a bad
+rebase), do **not** improvise: mint no new identifier families and
+start no Phase 3+ / Stage 3+ implementation work. Halt and flag the
+missing index to the user.
+
+This rule names index sections semantically: the **identifier-family
+registry** (§2 at time of writing), the **live / built-unwired /
+missing inventory** (§4–§5), and the **known-stale-statuses ledger**
+(§6). Keeping those sections' meanings stable is part of the index's
+own contract; a restructuring that moves them updates this rule in
+the same PR.
+
 ## Rules
 
 1. **New identifier families register at birth.** A PR that mints a
-   new prefix scheme (any `XX-N` series in a plan doc) adds a §2 row
-   to the index **in the same PR**. Before minting, check §2: if the
-   prefix is taken or ambiguous against an existing family, pick a
-   different prefix. Never re-issue bare `2a`-style tokens.
+   new prefix series in a plan doc adds a registry row **in the same
+   PR**. Before minting, check the registry for collision. A new
+   family is **ambiguous** iff a token it will mint could parse as a
+   token of an existing family — mechanically: the family's
+   alphabetic prefix up to the first digit (`SP-`, `SP-T`, `GF-`,
+   `FA-`) must be unique among registered families. `SP-N` and
+   `SP-TN` legitimately coexist (token sets cannot collide), as do
+   `F-N` and `FA-N`. Never re-issue bare `2a`-style tokens.
 
-2. **No bare phase/track tokens in new prose.** Always
-   `Phase 2b` / `Bond-PR 2b` / `Stage 3` — never a bare `2b` whose
-   scheme the reader must infer. (Pinned 2026-06-19,
-   `ARCHIVAL_BOND_PR2_CHAIN.md` §0; branch names are immutable
-   history and are exempt.)
+   Concurrent PRs adding registry rows will merge-conflict on the
+   table — that is the mechanism working. Conflict resolution
+   **re-runs the uniqueness check against the merged table**; never
+   resolve by textually keeping both hunks unexamined.
 
-3. **Statuses are dated and code-verified.** Index status edits are
-   additive `UPDATE YYYY-MM-DD:` entries, verified against landed
-   code (`git grep` on `dev`), not against another doc's prose. Where
-   a plan doc's status table and code disagree, **code wins**; record
-   the disagreement in the index's "known stale statuses" section
-   and fix the plan doc in a scoped follow-up, not as drive-by churn.
+2. **No bare phase/track tokens going forward.** New prose, new
+   commit messages, and new PR titles write `Phase 2b` /
+   `Bond-PR 2b` / `Stage 3` — never a bare `2b` whose scheme the
+   reader must infer (this also makes `git log --grep` archaeology
+   work). Existing branch names, commit messages, and PR titles are
+   immutable history and exempt. (Pinned 2026-06-19,
+   `ARCHIVAL_BOND_PR2_CHAIN.md` §0.)
+
+3. **Statuses are dated and verified — two verification classes.**
+   - **Code-anchored:** items with a code artifact verify against
+     landed code (`git grep` on `dev`), never against another doc's
+     prose. Where a plan doc and code disagree, **code wins**; record
+     the disagreement in the known-stale-statuses ledger and fix the
+     plan doc in a scoped follow-up, not as drive-by churn.
+   - **Decision-anchored:** items with no code artifact (round
+     closures, wire freezes, contract docs) cite the commit hash or
+     PR number of the doc edit that closed them. The closing commit
+     wins where no code exists.
+
+   Status edits are additive `UPDATE YYYY-MM-DD:` entries, and every
+   row **leads with its current status + as-of date**, with the
+   `UPDATE` chain beneath — a reader gets the answer without parsing
+   history (row format spec lives in the index itself).
 
 4. **Landing a tracked item updates the index.** The rule-91 doc
-   task for any PR that lands, wires, or unblocks a §4/§5 item
+   task for any PR that lands, wires, or unblocks an inventory item
    includes the index row. Exception: when a PR deliberately avoids
-   doc churn (e.g. conflict avoidance with an in-flight PR), the PR
-   description names the follow-up that carries the index update.
+   doc churn (e.g. conflict avoidance with an in-flight PR), the
+   deferral takes rule-21 shape — the PR description names a
+   **concrete carrier**: a PR/issue number or a landing condition
+   ("carried by the 2c-2b partition PR"), never "a follow-up will
+   handle it."
 
 5. **Phase 3+ / Stage 3+ work starts registered.** From
    `WALLET_REWRITE_PLAN.md` Phase 3 onward (and for all remaining
    Stage-3+ implementation), a work item without an index row does
    not begin implementation. The row costs one table line at design
-   time; the alternative is re-running the archaeology this rule
-   was written to end. Pre-existing Phase-2-era items are
-   grandfathered as-is but gain rows as they are touched.
+   time; the alternative is re-running the archaeology this rule was
+   written to end. Pre-existing Phase-2-era items are grandfathered:
+   they gain rows when a PR **changes their status** (lands, wires,
+   supersedes, or closes them) — a passing textual mention does not
+   trigger the row.
+
+## Enforcement
+
+Review-borne and agent halt-condition **only** — no CI backstop
+exists today; nothing in `.github/workflows/` checks the registry or
+lints doc tokens. A minimal lint is feasible (registry-prefix
+uniqueness; diff-scoped bare-token detection in `docs/design/*.md`)
+and is carried by the stale-status fix pass that the index's
+known-stale-statuses ledger already mandates. Until that lands, do
+not treat these rules as automatically enforced.
 
 ## Worked example
 
-Minting a hypothetical emission-audit series: check §2 (`EA-` unused),
+Minting a hypothetical emission-audit series: check the registry
+(`EA-` prefix unused, cannot parse as any existing family's tokens),
 add `**EA-1…EA-N** | emission-audit findings | REWARD_EMISSION_LEG.md`
-to §2 in the PR that introduces `EA-1`, and write `EA-1` (never bare
-`1`) in all prose. A later PR landing `EA-3` updates the relevant
-status row with `UPDATE 2026-08-01: EA-3 landed #NNN`.
+to the registry in the PR that introduces `EA-1`, and write `EA-1`
+(never bare `1`) in all prose. A later PR landing `EA-3` updates the
+row: `Landed (as of 2026-08-01)` up front, then
+`UPDATE 2026-08-01: EA-3 landed #NNN (verified: git grep
+emission_audit on dev → emission/audit.rs)`. A design-only closure
+cites its closing edit instead: `(decision-anchored: closed by
+#NNN / abc1234)`.
 
 ## Related rules
 
@@ -66,6 +121,7 @@ status row with `UPDATE 2026-08-01: EA-3 landed #NNN`.
   carries index maintenance.
 - **`05-system-thinking.mdc`** — specification first; the index row
   is part of the specification artifact.
-- **`21-reversion-clause-discipline.mdc`** — "known stale statuses"
-  entries are reject-now-fix-separately dispositions and carry a
-  target for the fix, not an indefinite parking spot.
+- **`21-reversion-clause-discipline.mdc`** — both known-stale-status
+  entries and rule-4 deferrals are reject-now-fix-separately
+  dispositions: each carries a concrete carrier or target, not an
+  indefinite parking spot.
