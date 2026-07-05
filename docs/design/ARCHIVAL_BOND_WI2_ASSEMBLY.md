@@ -233,6 +233,60 @@ PendingBondPost {
   (`PendingPostExists`) — the four-kind future (Rebond etc.) reopens this,
   per CONSTRUCTION §9's provisional table.
 
+#### 3.5.1 At-rest threat model: the record as a linkability artifact
+
+The sealed record holds a **fully-signed, broadcast-ready** bond
+transaction plus its timing plan — a funds-and-linkage-bearing seal (the
+top tier of the four-tier model; rule 36 territory). Threat-modeled
+against disk seizure explicitly:
+
+- **Seizure without the wallet passphrase** yields ciphertext:
+  `.wallet.pending` is sealed under the same `file_kek` AEAD envelope
+  family as `.wallet.keys` (`PayloadKind::PendingPostBlockPostcard`).
+  The record's at-rest tier is exactly the keys file's tier — no new
+  cleartext surface.
+- **Seizure with the passphrase (open-wallet compromise)** must be
+  assessed as *marginal* disclosure, because the adjacent seals under the
+  same kek already fall: `.wallet.keys` yields `ArchivalPKeys` (from
+  which every P output, bond, and signature is re-derivable — the wallet
+  is broadcast-capable regardless), and `.wallet.pscan` yields the
+  funding records and `bond_post_matches` (persona ↔ amount history).
+  The pending record's genuinely **new** leak is the *pre-execution
+  timing plan*: `EntrySeamPlan` + `anchor_t0` reveal the intended
+  relative placement of a post that has not happened yet. That is
+  intent-disclosure to an adversary who has already fully compromised
+  the wallet — accepted, with the retention bound below as the
+  mitigation.
+
+**Why the fully-signed bytes, not minimum-to-re-derive (P-2 rationale).**
+Sealing only re-derivation inputs (funding refs + plan + anchor) was
+considered and rejected:
+
+1. **Re-derivation cannot reproduce the bytes.** FCMP proof construction
+   and the hybrid signature both draw fresh randomness by design; a
+   re-derived transaction is a *different* transaction spending the same
+   key images. After a dispatch attempt with unknown outcome (submit
+   timeout; daemon accepted-then-crashed; partial propagation), re-sending
+   different bytes creates a same-key-image conflict wherever the first
+   copy landed — the retry is rejected as a double-spend and the wallet
+   cannot distinguish "original confirmed" from "conflict" without a full
+   reconcile. Byte-identical resend is idempotent under partial
+   propagation; that idempotence *is* pin P-2.
+2. **The tier doesn't drop.** The re-derivation inputs alone still name
+   persona → funding set → timing plan (the linkage the finding worries
+   about), and under the same-kek compromise above the adversary holds
+   `ArchivalPKeys` and can produce broadcast-ready bytes anyway. Removing
+   the signed bytes shrinks convenience for the attacker, not the tier of
+   the seal.
+
+**Retention bound.** The record lives from assemble to terminal state:
+WI-3 retires it on `Confirmed` (and reservation-release on terminal
+failure). The window is bounded by the seam plan's offsets plus
+confirmation depth — days, not indefinite — and **one live post per
+persona** caps exposure to at most one broadcast-ready bundle per persona
+at any time. A record that never reaches terminal state is surfaced by
+WI-3's resume-from-restart path, not silently retained.
+
 ### 3.6 D-A5 — Failure modes (rule 82)
 
 | Failure | Shape | State after |
