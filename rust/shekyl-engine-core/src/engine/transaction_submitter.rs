@@ -12,6 +12,7 @@ use shekyl_rpc_client::{RejectCause, Rpc, SubmitVerdict};
 use shekyl_types::PCanonicalId;
 use shekyl_wire::Transaction;
 
+use super::bond_assembly::PBoundBytes;
 use super::error::{AmbiguousErrorKind, RetryableRejectCause, TerminalErrorKind};
 use super::pending::TxHash;
 use super::posture::BroadcastPosture;
@@ -365,48 +366,6 @@ impl TransactionSubmitter for PTransactionSubmitter {
 // Posture→submitter dispatch (SP-T4a §3.1, FROZEN 2026-07-04, user-ratified)
 // ============================================================================
 
-/// `P`-bound transaction bytes — the byte↔persona pairing carried as a value
-/// (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §3.1 part 4).
-///
-/// [`BroadcastSubmitter::submit_bound`] accepts only this type and
-/// equality-checks the carried persona against the submitter's
-/// constructor-bound persona, so `P1`'s bytes cannot ride `P2`'s circuit.
-/// Full per-persona type *branding* is rejected (the persona set is dynamic;
-/// rule-21 reopen in §3.1 part 4) — the pairing is a checked value, not a
-/// type parameter.
-///
-/// **Provenance pins (§3.1.1 part 6, implementation obligations on the
-/// 2c-2b assemble/sign slice):** P-1 — this constructor migrates to (or is
-/// re-exported private-to) the bond assemble/sign module when that module
-/// lands, so possession is proof of provenance and no re-wrap site exists;
-/// P-2 — the held/pending record for a `P`-bound tx stores this value
-/// itself (not a raw `Vec<u8>`), so F31/watchdog resubmits re-send the
-/// stored value through the same choke path. Until that slice lands, the
-/// only callers are tests.
-//
-// `allow(dead_code)`: transient — the non-test consumer is the 2c-2b
-// bond-assembly + request-path wiring.
-#[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PBoundBytes {
-    persona: PCanonicalId,
-    bytes: Vec<u8>,
-}
-
-#[allow(dead_code)]
-impl PBoundBytes {
-    /// Bind fully-assembled, signed transaction bytes to the persona they
-    /// were built for. See the type docs for the P-1 mint-site obligation.
-    pub(crate) fn bind(persona: PCanonicalId, bytes: Vec<u8>) -> Self {
-        Self { persona, bytes }
-    }
-
-    /// The persona these bytes are bound to.
-    pub(crate) fn persona(&self) -> &PCanonicalId {
-        &self.persona
-    }
-}
-
 /// Failure surface of [`BroadcastSubmitter::submit_bound`]: either the
 /// pre-flight pairing check refused the dispatch (nothing reached a wire), or
 /// the delegated submit itself failed.
@@ -528,7 +487,7 @@ impl<D: DaemonEngine> BroadcastSubmitter<D> {
                 });
             }
         }
-        Ok(self.submit(bound.bytes).await?)
+        Ok(self.submit(bound.into_bytes()).await?)
     }
 }
 
@@ -838,7 +797,7 @@ mod tests {
         let bytes = wire_tx_bytes();
         let expected = canonical_tx_id(&bytes);
         let success = submitter
-            .submit_bound(PBoundBytes::bind(
+            .submit_bound(PBoundBytes::bind_for_test(
                 PCanonicalId::from_bytes([14u8; 32]),
                 bytes,
             ))
@@ -867,7 +826,7 @@ mod tests {
         .expect("proxy config is well-formed");
 
         let err = submitter
-            .submit_bound(PBoundBytes::bind(persona, wire_tx_bytes()))
+            .submit_bound(PBoundBytes::bind_for_test(persona, wire_tx_bytes()))
             .await
             .expect_err("a dead SOCKS proxy must fail the broadcast");
         assert!(
@@ -905,7 +864,7 @@ mod tests {
         // fire (panic, in this debug build) before the transport is reached —
         // this `expect_err` is never evaluated.
         submitter
-            .submit_bound(PBoundBytes::bind(
+            .submit_bound(PBoundBytes::bind_for_test(
                 PCanonicalId::from_bytes([23u8; 32]),
                 wire_tx_bytes(),
             ))
