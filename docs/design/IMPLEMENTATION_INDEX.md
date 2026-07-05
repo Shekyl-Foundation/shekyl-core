@@ -10,10 +10,9 @@ the known disagreements at the verification date rather than editing those
 docs from here).
 
 **Verification stamp.** Statuses below were verified against landed code at
-`dev` = `13ccb1ddb` (merge of PR #254), 2026-07-05, with PR #255
-(`feat/gf7-scheduler-seam`) noted separately as in-flight. When you update a
-status here, re-verify against code (`git grep`, not plan prose) and move
-this stamp.
+`dev` = `6d5ecac5f` (merge of PR #255, `feat/gf7-scheduler-seam`),
+2026-07-05. When you update a status here, re-verify against code
+(`git grep`, not plan prose) and move this stamp.
 
 **Maintenance discipline** (institutionalized as
 [`.cursor/rules/94-tracking-index.mdc`](../../.cursor/rules/94-tracking-index.mdc) —
@@ -64,8 +63,8 @@ different deliverables in sequence:
    `feat/archival-bond-request` #163, plan doc
    [`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`](ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md).
 2. **2c-2b re-scope (GF-7 scheduler seam)** — block-timed entry-seam planning
-   plus GF-7 measurement hooks, PR #255 (in flight at the verification date),
-   plan doc [`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](ARCHIVAL_BOND_2C_GF7_HOOKS.md).
+   plus GF-7 measurement hooks, landed PR #255 (2026-07-05), plan doc
+   [`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](ARCHIVAL_BOND_2C_GF7_HOOKS.md).
 
 When you see `2c-2b` in prose, the linked plan doc disambiguates; new prose
 should say "request path" or "GF-7 seam" explicitly.
@@ -91,6 +90,7 @@ should say "request path" or "GF-7 seam" explicitly.
 | **Round N / R N** | Per-doc adversarial design rounds; each design doc numbers its own | Owning doc's round table | Gate-6 R1 closed; R2 = the 2d-2 work; R3–R5 open |
 | **F-N** | Findings within a specific design doc's review (e.g. F40 `AlreadyInChain`, F41 `Conceal` constant-work in the daemon-submit series) | The doc that numbered them, e.g. [`DAEMON_SUBMIT_VERDICT.md`](DAEMON_SUBMIT_VERDICT.md) | F-numbers are doc-scoped, not global |
 | **DQ-N** | Design questions in the 2d-2 transport plan | [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) | — |
+| **WI-1…WI-4** | Post-#255 archival-bond work items: 1 `start_pscan` lifecycle wiring, 2 production bond assembly + pending-post persistence, 3 block-timed dispatch driver, 4 GF-7 measurement round | This index §4 (rows) + the carrying design docs per row | Registered 2026-07-05; prefix `WI` passes the rule-94 uniqueness check against Phase/Stage/M/Bond-PR/SP/SP-T/PR-A/PR-B/PR-E/CT/GF/S/F/DQ |
 
 ---
 
@@ -122,15 +122,19 @@ Current front:
 
 | Item | Plan doc | Status (code-verified 2026-07-05) |
 | --- | --- | --- |
-| GF-7 scheduler seam (2c-2b re-scope) | [`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](ARCHIVAL_BOND_2C_GF7_HOOKS.md) | **PR #255 in flight** — `plan_entry_seam`/`EntrySeamPlan`, `BroadcastTimelineObserver` seam behind `gf7-hooks`, `--gf7-timeline` sim scenario, `ci/gf7-no-emit-guard` |
+| GF-7 scheduler seam (2c-2b re-scope) | [`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](ARCHIVAL_BOND_2C_GF7_HOOKS.md) | **Landed (as of 2026-07-05)** — PR #255 merged (`6d5ecac5f`): `plan_entry_seam`/`EntrySeamPlan`, `BroadcastTimelineObserver` seam behind `gf7-hooks`, `--gf7-timeline` sim scenario, `ci/gf7-no-emit-guard` |
 | 2d-1 `P`-scan layer | [`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](ARCHIVAL_BOND_2D1_PSCAN_PLAN.md) | **Built, unwired** — SP-0…SP-7 landed via #192/#194/#195 (design + CT compare + SP-1 adapter) and PR-A #201 / PR-B #205; `pscan/` modules on `dev`; `start_pscan` exists but is `dead_code` (no lifecycle caller) |
 | 2d-2 `P`-isolated transport | [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) | **Partially built, inert** — SP-T1 circuit isolation #204/#209; SP-T4a `BroadcastSubmitter` #254; `shekyl-p-transport` (`PTorClient`) and `PBlockSource` on `dev` but `dead_code`; block-timed dispatch driver not built (`TODO(2d)` in `stake_engine.rs`) |
+| WI-1 `start_pscan` lifecycle wiring | [`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](ARCHIVAL_BOND_2D1_PSCAN_PLAN.md) (SP-5 completion) | **In progress (as of 2026-07-05)** — closes the §5 "Built, unwired" `P`-scan gap: one lifecycle call site (auto-start after staker open), `PScanHandle` storage, close-stops-task |
+| WI-2 production bond assembly + pending-post persistence | [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md) (P-1/P-2 pins) + WI-2 addendum when opened | **Registered (as of 2026-07-05)** — closes the §5 "Production bond-tx assembly: Missing" gap; design addendum precedes implementation |
+| WI-3 block-timed dispatch driver | [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) (SP-T4b/T5 seam) + WI-3 design round when opened | **Registered (as of 2026-07-05)** — closes the §5 "Block-timed dispatch driver: Missing" gap (`TODO(2d)` in `stake_engine.rs`); consumes WI-2's sealed pending posts on the `P`-scan block clock |
+| WI-4 GF-7 measurement round | [`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](ARCHIVAL_BOND_2C_GF7_HOOKS.md) §"measurement round" | **Registered (as of 2026-07-05)** — sim-side only: real S-3 correlator, threshold definition, `P(link \| T_obs)` grading report; genesis-gate artifact |
 
 ---
 
 ## 5. What is live vs. built-but-unwired vs. missing (Stage 3 slice)
 
-Verified at `dev` = `13ccb1ddb`:
+Verified at `dev` = `6d5ecac5f`:
 
 | Layer | State | Evidence anchor |
 | --- | --- | --- |
