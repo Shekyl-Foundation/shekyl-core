@@ -6038,6 +6038,37 @@ surface for a file scheduled for deletion. The rewrite plan deletes
 scoped follow-ups that ride alongside that deletion or land in
 its wake.
 
+- **Daemon PQC phase-1 payload assembly duplicates
+  `shekyl_wire::Transaction::pqc_signing_payload_hashes` — route through a
+  `shekyl_*` FFI entry point and delete the C++ copy.** Surfaced 2026-07-05
+  during the WI-2 bond-assembly pseudoOuts coupling closure
+  (`GENESIS_TX_WIRE_FORMAT.md` §1.1): `get_transaction_signed_payload` in
+  `src/cryptonote_core/tx_pqc_verify.cpp` hand-assembles the phase-1 signed
+  payload (prefix blob + rctSigBase blob + prunable hash + PQC header + all-key
+  hashes) in C++, byte-for-byte parallel to the Rust assembly that already
+  exists and is tested on the signing side
+  (`shekyl_wire::Transaction::pqc_signing_payload_hashes`, consumed by
+  `shekyl-tx-builder::phase1_payload_hashes` / `sign_pqc_auths`). Two
+  implementations of the same consensus-critical preimage must agree
+  byte-for-byte forever; every serialization-shape change (e.g. the
+  spend-subset pseudoOuts sizing, closed 2026-07-05) has to be applied twice.
+
+  **Disposition.** Per
+  [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+  ("advance the boundary, don't thicken it") the verify path should call a
+  `shekyl_*` FFI entry point that takes the canonical tx blob and returns the
+  per-input phase-1 payload hashes (or performs the full hybrid-signature
+  verification in Rust, which also satisfies "crypto contracts belong in
+  Rust"), with `tx_pqc_verify.cpp` reduced to a marshaling shim. This is a
+  consensus-verification-path migration, so it is a planned activity with its
+  own design round and test gates (byte-parity KATs between the C++ assembly
+  and the Rust entry point before the C++ copy is deleted), not a ride-along.
+
+  **Closure point / target: V3.0+** (rides the daemon Rust-forward track; the
+  duplicated assembly is tested against the Rust side by the existing
+  end-to-end spend tests in the interim, so the risk is drift-on-change, not
+  present-day divergence).
+
 - **FCMP++ sender-side output verification — inherited `wallet2::sanity_check`
   receipt check is non-functional; cryptographic re-derivation belongs in
   Rust.** Surfaced 2026-06-21 debugging the C++ FCMP++ spend path. The

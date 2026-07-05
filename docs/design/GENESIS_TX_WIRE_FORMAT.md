@@ -187,10 +187,19 @@ The clean serializer and the first gate-(c) cut **landed** — PR #168
 - **Non-spend Fcmp residuals** — the EOF-tolerant fee-only form (above) is in; the **§4
   `into_full`/`FullTransaction`** ergonomic is **DONE** (2026-06-25:
   `Transaction::into_full() -> Result<FullTransaction, PrunedError>` in `shekyl-wire`,
-  the single typed boundary that guarantees `prunable` present). What remains is the
-  **`bond_post` pseudoOuts↔spend-subset exact coupling** (a §13 F1/F3 forward obligation
-  owned by the emission / membership-only PRs — `validate()` bounds it, doesn't pin it)
-  and the live byte/hash parity for the fee-only / bond_post shapes. True storage-pruned
+  the single typed boundary that guarantees `prunable` present). The
+  **`bond_post` pseudoOuts↔spend-subset exact coupling** is **DONE** (2026-07-05, WI-2
+  bond-assembly PR): `pseudoOuts` is sized by the `ToKey` (spend) subset of vin on both
+  sides — `Prunable::read` takes the spend count and `validate()` pins
+  `pseudo_outs.len() == n_spend` exactly; the C++ oracle's prunable serializer call
+  sites (`cryptonote_basic.h` tx serializer, `tx_pqc_verify.cpp` phase-1 payload,
+  `calculate_transaction_prunable_hash`, `get_pruned_transaction_weight`) now pass the
+  spend-input count instead of `vin.size()`, matching the consensus pins that were
+  already spend-subset-keyed (`blockchain.cpp` bond-post arm,
+  `tx_verification_utils.cpp`). Pure spends are byte-identical (every vin is `ToKey`).
+  What remains is the live byte/hash parity for the fee-only / bond_post shapes — the
+  C++ full-tx serializer still emits an empty prunable stanza for the serve-credit
+  fee-only shape where the wire form ends at the base (FOLLOWUPS). True storage-pruned
   txs (prunable dropped + external prunable hash) stay post-genesis / p2p scope.
 - The F1–F6 freeze obligations and the §2.1 deferred sub-freezes remain.
 
@@ -334,7 +343,7 @@ rename has **no genesis-wire effect**.
 | base: `VARINT(fee)` + `referenceBlock[32]` (Fcmp only) | rctTypes.h:205-206 | **Ratify** — `referenceBlock` lives in the **base**. |
 | base arrays: `enc_amounts[nout×9]`, `enc_labels[nout×9]`, `outPk[nout×32]` (no length prefix) | rctTypes.h:213-280 | **Ratify** — sized by `vout`. See the `enc_labels` invariant below. |
 | `pqc_auths` (non-coinbase): `nvin ×` `{auth_version(1) scheme_id(1) flags(u16 LE) hybrid_public_key(varint+bytes) hybrid_signature(varint+bytes)}` at **tx level**, EOF-tolerant on read | basic.h:334-353,491-517 | **Ratify** — tx-level, between base and prunable; read tolerates truncation (pruned form). |
-| prunable (type≠Null): `VARINT(nbp)` `bpp×nbp` `VARINT(curve_trees_tree_depth)` `VARINT(proof_len)` `fcmp_pp_proof[proof_len]` `pseudoOuts[nvin×32]` | rctTypes.h:347-410 | **Ratify** — but `bpp` and `fcmp_pp_proof` interiors are a freeze gap, see §6 Q6. |
+| prunable (type≠Null): `VARINT(nbp)` `bpp×nbp` `VARINT(curve_trees_tree_depth)` `VARINT(proof_len)` `fcmp_pp_proof[proof_len]` `pseudoOuts[n_spend×32]` | rctTypes.h:347-410 | **Ratify** — but `bpp` and `fcmp_pp_proof` interiors are a freeze gap, see §6 Q6. `n_spend` = the `txin_to_key` subset of vin (== `nvin` for pure spends; a bond_post vin carries no pseudo-out — §1.1 coupling closure, 2026-07-05). |
 
 **`enc_labels` indistinguishability invariant — BINDING serializer rule.** Every
 output carries a fixed-size `enc_label` (9 B), **real or zero-sentinel, never
@@ -438,7 +447,7 @@ Ct               := ct_type(1) ...          # 00 Null (coinbase) | 01 Fcmp (spen
   if Fcmp  (spend):     V(fee) referenceBlock[32] enc_amounts[nout×9] enc_labels[nout×9] outPk[nout×32]
                         PqcAuths  Prunable
 PqcAuths         := nvin × { auth_version(1) scheme_id(1) flags(u16 LE) vec(u8) vec(u8) }   # EOF-tolerant (pruned form omits)
-Prunable         := V(nbp) nbp×BpPlus  V(tree_depth) V(proof_len) fcmp[proof_len]  pseudoOuts[nvin×32]
+Prunable         := V(nbp) nbp×BpPlus  V(tree_depth) V(proof_len) fcmp[proof_len]  pseudoOuts[n_spend×32]
 ```
 
 `BpPlus` and `fcmp[proof_len]` interiors are genesis-frozen but defined in the
@@ -718,7 +727,7 @@ pre-renumber tags until recapture.)*
   `enc_amount`/`enc_label` = 8B value + 1B tag (9B); `outPk` = 32B commitment;
   the `enc_label` indistinguishability invariant (§2.3) is binding.
 **9.8 PqcAuths** (spend only; count = `nvin`, **no length prefix**; EOF-tolerant on read — the empty/pruned form parses, but a spend then fails verify, §13) — per input: `auth_version(1) · scheme_id(1) · flags(u16 LE) · V(pk_len)·pk · V(sig_len)·sig`.
-**9.9 Prunable** (Fcmp) — `V(nbp=1) · BpPlus · V(curve_trees_tree_depth) · V(proof_len) · fcmp_proof[proof_len] · pseudoOuts[nvin×32]`. `BpPlus` + `fcmp_proof` interiors frozen by reference (§6 Q6); `proof_len == proof_size(nvin, tree_depth)` and Bp+ length is exact by `nout` (§10, canonical-form).
+**9.9 Prunable** (Fcmp) — `V(nbp=1) · BpPlus · V(curve_trees_tree_depth) · V(proof_len) · fcmp_proof[proof_len] · pseudoOuts[n_spend×32]`. `BpPlus` + `fcmp_proof` interiors frozen by reference (§6 Q6); `proof_len == proof_size(n_spend, tree_depth)` and Bp+ length is exact by `nout` (§10, canonical-form). `n_spend` = the `txin_to_key` subset of vin: a bond_post vin occupies a pqc_auths slot but carries **no** pseudo-out (its cleartext `bond_credit` rides the CT balance — §2.0); for a pure spend `n_spend == nvin`. Coupling pinned both sides 2026-07-05 (§1.1).
 **9.10 `archival_serve_credit` (0x02)** (gate-2 §5.1.1) — `p_canonical_id[32] · V(shard_id) · V(settlement_epoch) · segment_subroot_rk[32] · leaf_index_in_segment(u32 LE) · leaf_bytes[128] · path{ V(c1_layers) · per-layer[ V(branch_scalars ≤256) · scalar[32]… ], V(c2_layers) · same } · V(sig_len)·hybrid_signature`. Non-spending; carries **empty** pqc_auths. **Sig-preimage** (gate-2 §5.2) uses fixed-width `le64`/`le32` (NOT the wire varints), customization `"shekyl/archival-serve-credit-response-v1"`, over the c1+c2 branch sections only.
 **9.11 `archival_bond_post` (0x03)** (gate-4 §3.4.1) — `V(pk_len)·hybrid_public_key · p_canonical_id[32] · post_kind(1) · [ V(bspk_len)·bond_spend_pk  // iff post_kind==JoinMarket ] · holdings{ kind(1), [V(shard_count ≤4096)·shard_id(V)… if ShardSetCompact] } · V(bonded_total_atomic) · V(bond_credit) · V(bond_debit)`. **JoinMarket-only at genesis**; `bonded_total == bond_credit == bond_floor`, `bond_debit==0`. **`bond_spend_pk`** is the **GF-1 debit authorizer** (gate-6 §9.6, 2026-06-16): on the wire **iff JoinMarket** AND bound into the cSHAKE256 **sig-preimage** (customization `"shekyl/archival-bond-post-v1"`; preimage = `tx_prefix_hash · p_canonical_id · post_kind · encode_bond_spend_commitment · holdings · {bonded_total,bond_credit,bond_debit}_le64`) — keeps `P_pubkey` identity-only so the identity key never authorizes a value-out. `hybrid_pubkey_len`/`bond_spend_pk_len ≤ 2048`. **Auth placement (F5):** the bond_post **vin body carries no signature** — authorization is the **tx-level `pqc_auths` slot aligned with this vin** (§13; gate-4 §3.4.1:278), identity key on a credit, `bond_spend_pk` on a debit. *(The GF-1 `bond_spend` **key derivation already exists** (`archival_p.rs:120-123`, KAT'd); only the **wire/record/sig-preimage surfacing** is open, and it lands in the clean crate (§4) — the current `bond_wire.rs` encoder is **retired, not patched**.)*
 

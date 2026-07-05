@@ -282,6 +282,22 @@ namespace cryptonote
 
   typedef std::variant<txin_gen, txin_to_script, txin_to_scripthash, txin_to_key, txin_archival_serve_credit_response, txin_archival_bond_post> txin_v;
 
+  // The txin_to_key (spend) subset of vin. This count — not vin.size() — sizes
+  // the prunable pseudoOuts array: an archival bond-post vin occupies a
+  // pqc_auths slot but carries no pseudo-out (its cleartext bond_credit rides
+  // the CT balance instead; see rctTypes.h serialize_rctsig_prunable). For a
+  // pure spend every vin is txin_to_key, so the two counts coincide. The
+  // authoritative wire definition is Rust-side (shekyl-wire, GENESIS_TX_WIRE_FORMAT.md
+  // §9.9); this helper keeps the C++ parser byte-aligned with it.
+  inline size_t count_spend_inputs(const std::vector<txin_v>& vin)
+  {
+    size_t n = 0;
+    for (const auto& in : vin)
+      if (std::holds_alternative<txin_to_key>(in))
+        ++n;
+    return n;
+  }
+
   typedef std::variant<txout_to_script, txout_to_scripthash, txout_to_key, txout_to_tagged_key> txout_target_v;
 
   //typedef std::pair<uint64_t, txout> out_t;
@@ -489,9 +505,12 @@ namespace cryptonote
 
           if (!pruned && rct_signatures.type != rct::RCTTypeNull)
           {
+            // pseudoOuts are sized by the spend subset, not vin.size() — see
+            // count_spend_inputs. Matches the consensus pins in blockchain.cpp
+            // / tx_verification_utils.cpp (`pseudoOuts.size() == num_spend`).
             ar.tag("rctsig_prunable");
             ar.begin_object();
-            bool r = rct_signatures.p.serialize_rctsig_prunable(ar, rct_signatures.type, vin.size(), vout.size());
+            bool r = rct_signatures.p.serialize_rctsig_prunable(ar, rct_signatures.type, count_spend_inputs(vin), vout.size());
             if (!r || !ar.good()) return false;
             ar.end_object();
           }
