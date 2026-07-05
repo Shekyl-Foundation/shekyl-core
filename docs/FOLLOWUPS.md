@@ -672,8 +672,9 @@ sustainability is unaffected by the recalibration.
   prunable after `pqc_auths`; regression `pruned_fcmp_spend_round_trips_and_ingests`.
 
 - **`AlreadyInChain` submit verdict: distinct lock-lifecycle disposition —
-  DESIGN DECIDED 2026-07-04 (F40, `AlreadyInChain { height }`); implementation
-  with the 2c submit-consumer slice (PR-4 / #248 review, deferred to 2c).**
+  DESIGN DECIDED 2026-07-04 (F40, `AlreadyInChain { height }`); interim
+  implementation landed #252, F40 conformance pending (PR-4 / #248 review,
+  deferred to 2c).**
   Original finding: `transaction_submitter::outcome_to_result` collapses
   `AlreadyInChain` into `Ok(hash)` identically to `Submitted` /
   `AlreadyInPool`, so `finalize_submit_accept` places a fresh F14
@@ -704,9 +705,22 @@ sustainability is unaffected by the recalibration.
   → operator alarm, closing the lie-low wallet-work amplifier. Misuse is
   damage-capped both directions (§7.2 row — no lie can force a linkage
   event); pre-genesis the field lands required with fixtures updated
-  atomically (§2.3 third-category rule, new). *Remaining: implementation
-  only* — wire type + shim `in_chain_height` + the wallet disposition land
-  with the 2c StakeEngine submit-consumer work. *Target:* V3.0, 2c slices.
+  atomically (§2.3 third-category rule, new). **Interim implementation
+  (#252, predates the F40 design merge):** `TransactionSubmitter::submit`
+  now returns `transaction_submitter::SubmitSuccess`, splitting the `Ok`
+  arm by disposition — `Broadcast` (`Accepted` / `AlreadyInPool`) takes the
+  `finalize_submit_accept` path and places the F14 awaiting-confirmation
+  lock; `AlreadyInChain` takes the new `finalize_submit_already_in_chain`
+  path, which releases the reservation and its output locks and places
+  **no** fresh awaiting-lock (refresh-authoritative). This carries no
+  `height` discriminant and implements only the "place no lock" shape the
+  design round superseded — it does **not** yet place the lock in both
+  height cases, route release by `height`, or enforce F40-R1/R2. Regression:
+  `submit_already_in_chain_releases_without_awaiting_lock`. *Remaining
+  (F40 conformance): restore `AlreadyInChain { height: u64 }` wire type +
+  shim `in_chain_height`, place the lock in both height cases, and route
+  release by `height` with F40-R1/R2 — lands with the 2c StakeEngine
+  submit-consumer work.* *Target:* V3.0, 2c slices.
 
 - **Submit-error reservation-id placeholder: split submitter error from
   orchestrator error (PR-4 / #248 review, deferred to 2c) — RESOLVED

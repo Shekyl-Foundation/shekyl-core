@@ -58,6 +58,41 @@ pub(crate) enum SubmitterError {
     },
 }
 
+/// Success surface of a [`TransactionSubmitter`] — the identity-bearing
+/// resolutions, split by **lock-lifecycle disposition**
+/// (`DAEMON_SUBMIT_VERDICT.md` §2.5).
+///
+/// `Accepted` and `AlreadyInPool` share a disposition (network-exposed, not
+/// settled → the orchestrator places the persisted F14
+/// awaiting-confirmation lock, §2.6) and so share the [`Self::Broadcast`]
+/// variant. `AlreadyInChain` is **distinct**: confirmation observed by
+/// verdict, refresh remains the settlement authority — collapsing it into
+/// the broadcast arm would place a fresh awaiting-lock (baseline = current
+/// height) on an already-mined tx, a lock refresh may never clear
+/// (`docs/FOLLOWUPS.md` "`AlreadyInChain` submit verdict", closed with this
+/// split).
+///
+/// The `hash` on both variants is the **locally**-computed tx id — the
+/// daemon reply carries no txid field (wire minimalism, §2.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SubmitSuccess {
+    /// `Accepted` / `AlreadyInPool`: the bytes are held by the daemon and
+    /// network-exposed, not settled. Disposition: F14 awaiting-confirmation
+    /// lock; watchdog takes over.
+    Broadcast {
+        /// The locally computed tx id.
+        hash: TxHash,
+    },
+    /// `AlreadyInChain`: this txid is in the main chain. Disposition:
+    /// release the reservation, place **no** fresh awaiting-lock; refresh
+    /// settles (`mark_spent` on observing the spend; reorgs happen — the
+    /// verdict authorizes lock-lifecycle transitions only).
+    AlreadyInChain {
+        /// The locally computed tx id.
+        hash: TxHash,
+    },
+}
+
 /// The canonical genesis transaction id (`GENESIS_TX_WIRE_FORMAT.md` §11) for a
 /// serialized blob, or `None` if it is not canonical shekyl-wire: parse the blob and
 /// take its 3/4-part `hash()` — **the id the daemon computes**, not a flat
@@ -107,17 +142,18 @@ pub(crate) fn submit_outcome_from_verdict(
 }
 
 /// Collapse a resolved [`TxSubmitOutcome`] to the submitter's public
-/// `Result<TxHash, SubmitterError>`. Shared by both submitters so the
-/// outcome→error mapping cannot drift between the principal and per-`P`
+/// `Result<SubmitSuccess, SubmitterError>`. Shared by both submitters so
+/// the outcome→error mapping cannot drift between the principal and per-`P`
 /// paths. A daemon *verdict* only — a transport failure never reaches
 /// here; it is mapped to [`SubmitterError::Ambiguous`] at the call
 /// site (absence-of-verdict is not an outcome, §5.2).
 ///
-/// The `Ok` arm covers all three identity-bearing verdicts:
-/// `AlreadyInPool` is the same disposition as a fresh accept (§2.5 —
-/// the bytes are held; it also resolves prior transport ambiguity), and
-/// `AlreadyInChain` is confirmation observed by verdict (refresh
-/// remains the settlement authority). Rejections split by remedy class:
+/// The `Ok` arm splits by lock-lifecycle disposition (§2.5):
+/// `AlreadyInPool` is the same disposition as a fresh accept (the bytes
+/// are held; it also resolves prior transport ambiguity) →
+/// [`SubmitSuccess::Broadcast`]; `AlreadyInChain` is confirmation observed
+/// by verdict (refresh remains the settlement authority) →
+/// [`SubmitSuccess::AlreadyInChain`]. Rejections split by remedy class:
 ///
 /// - **Terminal** (locks released, reservation gone):
 ///   `Malformed` / `FeeTooLow` / `DoubleSpendConflict` / `Unrecognized`
@@ -128,11 +164,12 @@ pub(crate) fn submit_outcome_from_verdict(
 ///   reservation-unaware; the orchestrator binds its own rid when it
 ///   converts the class into its reservation-bound
 ///   [`SubmitError`](super::error::SubmitError).
-pub(crate) fn outcome_to_result(outcome: TxSubmitOutcome) -> Result<TxHash, SubmitterError> {
+pub(crate) fn outcome_to_result(outcome: TxSubmitOutcome) -> Result<SubmitSuccess, SubmitterError> {
     match outcome {
-        TxSubmitOutcome::Submitted { hash }
-        | TxSubmitOutcome::AlreadyInPool { hash }
-        | TxSubmitOutcome::AlreadyInChain { hash } => Ok(hash),
+        TxSubmitOutcome::Submitted { hash } | TxSubmitOutcome::AlreadyInPool { hash } => {
+            Ok(SubmitSuccess::Broadcast { hash })
+        }
+        TxSubmitOutcome::AlreadyInChain { hash } => Ok(SubmitSuccess::AlreadyInChain { hash }),
         TxSubmitOutcome::Rejected { cause } => Err(submitter_error_from_cause(cause)),
     }
 }
@@ -159,7 +196,7 @@ pub(crate) trait TransactionSubmitter: Send + Sync + 'static {
     fn submit(
         &self,
         tx_bytes: Vec<u8>,
-    ) -> impl std::future::Future<Output = Result<TxHash, SubmitterError>> + Send;
+    ) -> impl std::future::Future<Output = Result<SubmitSuccess, SubmitterError>> + Send;
 }
 
 /// [`DaemonEngine`]-backed submitter (Phase 2a §5).
@@ -177,7 +214,7 @@ impl<D> TransactionSubmitter for DaemonTransactionSubmitter<D>
 where
     D: DaemonEngine,
 {
-    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<TxHash, SubmitterError> {
+    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<SubmitSuccess, SubmitterError> {
         // Debug-only consistency guard: the `DaemonEngine` impl's accept outcome must
         // carry the same hash this computes locally. Computed only in debug builds so
         // release does no extra parse. Graceful on a malformed blob (the daemon path
@@ -249,7 +286,7 @@ impl PTransactionSubmitter {
 }
 
 impl TransactionSubmitter for PTransactionSubmitter {
-    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<TxHash, SubmitterError> {
+    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<SubmitSuccess, SubmitterError> {
         // Local, fail-closed tx id. The bytes are a wallet-built, fully-assembled
         // signed transaction (for the bond path, the tx carrying the bond vin), so a
         // parse failure is a build-path defect — map it to the same `Malformed`
@@ -331,19 +368,28 @@ mod tests {
         );
     }
 
-    /// All three identity-bearing outcomes resolve `Ok(hash)`: a fresh
-    /// accept, a pool-resident duplicate (§2.5: same disposition), and a
-    /// mined duplicate (confirmation observed by verdict).
+    /// All three identity-bearing outcomes resolve `Ok`, split by
+    /// lock-lifecycle disposition (§2.5): a fresh accept and a
+    /// pool-resident duplicate share `Broadcast` (network-exposed, F14
+    /// lock placed); a mined duplicate is the distinct `AlreadyInChain`
+    /// (no fresh awaiting-lock; refresh settles). All carry the locally
+    /// computed hash.
     #[test]
-    fn identity_outcomes_resolve_ok() {
+    fn identity_outcomes_resolve_ok_split_by_disposition() {
         let hash = TxHash::from_bytes([9u8; 32]);
         for outcome in [
             TxSubmitOutcome::Submitted { hash },
             TxSubmitOutcome::AlreadyInPool { hash },
-            TxSubmitOutcome::AlreadyInChain { hash },
         ] {
-            assert_eq!(outcome_to_result(outcome).expect("identity outcome"), hash);
+            assert_eq!(
+                outcome_to_result(outcome).expect("identity outcome"),
+                SubmitSuccess::Broadcast { hash }
+            );
         }
+        assert_eq!(
+            outcome_to_result(TxSubmitOutcome::AlreadyInChain { hash }).expect("identity outcome"),
+            SubmitSuccess::AlreadyInChain { hash }
+        );
     }
 
     /// Terminal causes (release + rebuild recourse) map to
