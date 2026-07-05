@@ -6164,7 +6164,7 @@ by the rewrite plan's half-day review gate, item 3):
 | Closed by Phase 5 | `wallet_tools.cpp` mixin/decoy infrastructure (V3.2 below) | Phase 5 — swept with `tests/unit_tests/wallet*.cpp` |
 | Closed (Operation A) | `monero-oxide` vendor-bump `87acb57` → `3933664` | Phase 0 PR 0.6 (mechanical, fork-tip only) |
 | Cross-linked, not absorbed | `shekyld` `fee_policy_version` daemon-side exposure | V3.1 daemon release (wallet uses `Option<u32>` forward-compat) |
-| Cross-linked, not absorbed | `shekyld` stale-FCMP++-root signal on `send_raw_transaction` | V3.1 daemon release (reopening criterion for deferred `ProofStale` detection; wallet ships variant unconstructed) |
+| Closed 2026-07 (submit-verdict series) | `shekyld` stale-FCMP++-root signal on `send_raw_transaction` | Shipped early as `RejectCause::StaleRoot` in the typed `SubmitVerdict` contract (`DAEMON_SUBMIT_VERDICT.md` §2.1); reopening criterion fired, variant constructed |
 | Cross-linked, not absorbed | `tx_pool` / `blockchain_db` LMDB transactional wrapper | V3.1.x peer plan (separate from rewrite) |
 | Cross-linked, not absorbed | `monero-oxide` un-pin Operation B (40 upstream commits) | V3.1.x un-pin plan (peer to rewrite, parallelizable) |
 | Cross-linked, not absorbed | Workspace clippy `-D warnings` cleanup | V3.1.x dedicated pass (after rewrite stabilizes) |
@@ -6297,7 +6297,23 @@ one place to confirm each item's relationship to the wallet stack.
   ([`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md),
   2026-04-25).**
 
-- **`shekyld` stale-FCMP++-root signal on `send_raw_transaction`.**
+- ~~**`shekyld` stale-FCMP++-root signal on `send_raw_transaction`.**~~
+  **CLOSED (2026-07, submit-verdict series — ahead of its V3.1 target
+  and in a stronger shape than specced).** The reactive stale-root
+  signal shipped as `RejectCause::StaleRoot` in the typed
+  `SubmitVerdict` contract
+  ([`docs/design/DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md)
+  §2.1) rather than as a `fcmp_root_stale: bool` bolted onto the legacy
+  reply: the Rust admission engine classifies not-found
+  (`ReferenceNotFound`), too-recent (`ReferenceTooRecent`), and
+  stale/depth-moved (`StaleRoot`) as *distinct* causes — finer than the
+  single flag this item asked for — and the wallet's per-cause
+  disposition table (§2.5, PR-4) preserves the reservation and drives
+  the bounded rebuild. The `ProofStale` reopening criterion fired
+  exactly as written ("a daemon-side stale-root signal"); the variant
+  is constructed via `RejectCause::StaleRoot`, and the legacy
+  `send_raw_transaction` endpoint this item targeted was deleted
+  (§9.3, PR-5). Steps 1–3 below are the historical spec; superseded.
   Surfaced by the Phase 2a send-path audit
   ([`docs/SHEKYLD_PREREQUISITES.md`](SHEKYLD_PREREQUISITES.md) §5,
   appended 2026-06; line citations re-verified 2026-06). The daemon
@@ -7258,7 +7274,7 @@ one place to confirm each item's relationship to the wallet stack.
   `PTransactionSubmitter::new`, `PBlockSource::new`) with no validation and an unredacted
   `derive(Debug)`. A `DaemonUrl` newtype (parse/validate at construction: scheme, host,
   **.onion-or-loopback**, no trailing slash; redacting `Debug`) closes: (a) the trailing-slash wedge
-  (`http://x.onion:18081/` → `…//send_raw_transaction` → both daemons 404 → `DaemonAmbiguous` wedge,
+  (`http://x.onion:18081/` → `…//submit_transaction` → both daemons 404 → `DaemonAmbiguous` wedge,
   verified at source); (b) the **clearnet-`OwnRemote`** residual (a clearnet `base_url` through
   `socks5h` exits Tor at an exit relay, which then sees the plaintext P-bound broadcast — the S1
   disclosure as written *affirms* this, "a node you control"); (c) the `Debug` credential/onion leak

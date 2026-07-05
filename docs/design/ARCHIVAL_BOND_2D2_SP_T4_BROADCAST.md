@@ -49,8 +49,10 @@ Everything SP-T4a builds on is landed on `dev`:
 - **`P`-space transport (already works).** `PTorClient::blocking_post` is a
   general POST (`shekyl-p-transport/src/lib.rs:339`); `PRpc` (`prpc.rs:67`)
   implements `Rpc`, so it **inherits `Rpc::publish_transaction`** (the default
-  method over `post`, `shekyl-rpc-client/src/lib.rs:491` → `send_raw_transaction`
-  → `TxRelayResponse`). A tx broadcast over `P`'s own circuit is callable today
+  method over `post` — since the submit-verdict series, posting the typed
+  `submit_transaction` route and returning `SubmitVerdict`; at this doc's
+  writing it was `send_raw_transaction` → the since-deleted
+  `TxRelayResponse`). A tx broadcast over `P`'s own circuit is callable today
   with **zero new transport code**.
 - **The submit seam to mirror.** `TransactionSubmitter::submit(tx_bytes) ->
   Result<TxHash, SubmitError>` (`transaction_submitter.rs:34`), impl
@@ -62,8 +64,10 @@ Everything SP-T4a builds on is landed on `dev`:
   **not** an outcome — it is `SubmitError::DaemonAmbiguous` ("ambiguity is the
   absence of a daemon verdict", `:157-165`). Retry is safe **only** because same
   bytes → same txid (hash computed locally, `transaction_submitter.rs:20`) →
-  daemon dedupes by hash → `TxSubmitOutcome::AlreadyKnown`; the path **never
-  rebuilds on retry**.
+  daemon dedupes by hash → `TxSubmitOutcome::AlreadyInPool` /
+  `AlreadyInChain` (daemon-attested identity facts under the typed verdict;
+  the wallet-side `AlreadyKnown` heuristic this doc originally named was
+  retired with the cutover); the path **never rebuilds on retry**.
 - **The real consumer.** `build_join_market_vin` (in `shekyl-archival-bond-builder`)
   returns a signed `JoinMarketVin`; `draw_entry_gap_guarded` returns `(_spread,
   _bond_first)`; the submission is the open `TODO(2d)` — all at the bond-post
@@ -184,17 +188,21 @@ re-submit." The submitter therefore maps **any** transport error to
   ambiguous, full stop.
 - **The recovery contract is 2c's §5.2 orchestrator to write — from the daemon's
   *real* reply surface, not the `AlreadyKnown` abstraction, which no production
-  code derives (only the test double constructs it).** A same-bytes retry does
-  **not** yield `AlreadyKnown`: a healthy duplicate returns `OK + not_relayed`
-  → `Submitted`; the dangerous windows are a tx *timed out of the pool*
-  (→ `Malformed`), a *fee floor risen since send* (→ `FeeTooLow` **while the
-  original is still mineable** — a false-terminal that must **not** release the
-  reservation's output locks), and a *stale FCMP++ root*. So §5.2 must assign
-  every reply/failure to exactly one of {definitely-relayed,
-  definitely-not-relayed, genuinely-ambiguous}, disambiguate a post-ambiguity
-  terminal against "is my txid already on-chain?" before treating it as a
-  rejection, and give the ambiguous bucket a **TTL exit** (there is none today —
-  ambiguous = locked-until-restart; see the 2c tracked obligation). Retry =
+  code derives (only the test double constructs it).** *(Resolved by the
+  submit-verdict series, [`DAEMON_SUBMIT_VERDICT.md`](DAEMON_SUBMIT_VERDICT.md):
+  the "real reply surface" is now the typed `SubmitVerdict` — a same-bytes
+  retry of a pool-resident tx returns the daemon-attested `AlreadyInPool`, a
+  mined one `AlreadyInChain`, and each dangerous window below is a named
+  cause with a specified disposition rather than a flag-triage guess.)* The
+  dangerous windows as analyzed pre-verdict: a tx *timed out of the pool*
+  (→ was `Malformed`; now re-enters full admission — the D3 eviction memory
+  is deleted), a *fee floor risen since send* (→ `FeeTooLow` **while the
+  original is still mineable** — a false-terminal that must **not** release
+  the reservation's output locks; now bounded by the F37 loop-breaker), and
+  a *stale FCMP++ root* (now the retryable `StaleRoot`). §5.2's assignment
+  of every reply/failure to exactly one of {definitely-relayed,
+  definitely-not-relayed, genuinely-ambiguous} is the verdict contract; the
+  ambiguous bucket's **TTL exit** is the submit watchdog. Retry =
   re-send the same bytes; **rebuild-on-retry is unrepresentable** (§3 invariant C).
 - **Cancellation is a third outcome the write seam must document.** `PRpc::post`
   bridges the synchronous `ureq` POST via `spawn_blocking`; dropping the `submit`

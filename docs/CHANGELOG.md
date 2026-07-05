@@ -469,6 +469,19 @@
 
 ### Changed
 
+- **docs: submit-verdict series stale-doc sweep**
+  (`docs/design/DAEMON_SUBMIT_VERDICT.md` §12 PR-6, rule 91,
+  `docs/submit-verdict-sweep`). Docs describing the deleted legacy
+  submit surface are corrected rather than left misleading:
+  `DAEMON_RPC_RUST.md` endpoint coverage recounted post-deletion (the
+  native Rust `/submit_transaction` route is now first-class);
+  `PHASE_2A_SEND_PATH.md` §3.6 carries a superseded banner mapping the
+  historical honest-subset design onto the shipped verdict contract;
+  `SHEKYLD_PREREQUISITES.md` §5 records its stale-root audit as
+  resolved; and the `FOLLOWUPS.md` `fcmp_root_stale` item is **closed
+  ahead of its V3.1 target** — the `ProofStale` reversion clause's
+  reopening criterion fired, satisfied by `RejectCause::StaleRoot` with
+  finer cause resolution than the item's own spec.
 - **wallet: submit path cut over to the typed `SubmitVerdict` contract**
   (`docs/design/DAEMON_SUBMIT_VERDICT.md` §12 PR-4,
   `feat/wallet-submit-cutover`). The wallet now consumes the daemon's

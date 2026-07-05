@@ -8,7 +8,13 @@ Phase 1 `shekyl-wallet-core::Wallet` orchestrator wrapper (`build_pending_tx` /
 
 **Status:** **Engine substrate complete** (2a-1…2a-4 landed on `dev`). §10 items
 below reconciled in `PHASE_2A_SEND_PATH_AUDIT.md` §2a-4 post-verdict; residuals
-named with reopening criteria. PR 2a-1
+named with reopening criteria. **Submit-contract note (2026-07):** the
+wallet↔daemon submit surface this doc designed against
+(`send_raw_transaction`, `TxRelayResponse`, the wallet-side `AlreadyKnown`
+dedup heuristic) was replaced by the typed `SubmitVerdict` contract and the
+legacy endpoint deleted — see [`DAEMON_SUBMIT_VERDICT.md`](DAEMON_SUBMIT_VERDICT.md)
+and the §3.6 superseded banner below; other mentions of those names in this
+doc are the historical design record. PR 2a-1
 (daemon fee snapshot + broadcast **primitives**) **merged** (`#109`); the
 `LocalPendingTx` async boundary + capability narrowing re-split into 2a-2/2a-3
 with their first consumers (see §5 re-split note).  
@@ -469,6 +475,31 @@ remains (e.g. missing FCMP witness in `TransferDetails`); such gaps get a
 named FOLLOWUPS row with reversion clause, not a silent stub.
 
 ### 3.6 `DaemonEngine::submit_transaction`
+
+> **SUPERSEDED (2026-07) by the submit-verdict series**
+> ([`DAEMON_SUBMIT_VERDICT.md`](DAEMON_SUBMIT_VERDICT.md)). This
+> section's contract shape is the historical design record; the shipped
+> shape differs materially:
+>
+> - The boolean-flag `send_raw_transaction` reply and the
+>   `TxRelayResponse` honest-subset mapping are **deleted** (§9.3). The
+>   wallet consumes the atomic serde-tagged `SubmitVerdict` from the
+>   typed `/submit_transaction` route; the mapping is 1:1 structural
+>   (`submit_outcome_from_verdict`), with no client-side flag triage.
+> - The "unflagged generics" indistinguishability dissolved: `StaleRoot`,
+>   `ReferenceTooRecent`, `ReferenceNotFound`, `DoubleSpendConflict`,
+>   `FeeTooLow`, and `Malformed` are distinct daemon-attested causes with
+>   per-cause dispositions (verdict doc §2.5).
+> - The `ProofStale` reversion clause below **fired**: its named
+>   reopening criterion ("a daemon-side stale-root signal") is satisfied
+>   by `RejectCause::StaleRoot`, and the deferred detection is live —
+>   retryable, reservation preserved.
+> - `AlreadyKnown` (the wallet-side dedup heuristic) is retired;
+>   `AlreadyInPool` / `AlreadyInChain` are daemon-attested identity
+>   facts.
+>
+> Step 2's local-hash rule and the transport-failure/`DaemonAmbiguous`
+> separation survive unchanged in the new contract.
 
 1. Parse `tx_bytes` → `Transaction` (strict — malformed bytes →
    `SubmitError::DaemonRejectedTerminal`).

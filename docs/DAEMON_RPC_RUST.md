@@ -43,13 +43,22 @@ from the Rust FFI.
 
 ## Endpoint Coverage
 
-- **33 JSON REST** endpoints (`/get_info`, `/send_raw_transaction`, etc.)
+- **31 JSON REST** endpoints (`/get_info`, `/get_transactions`, etc.)
   - Accept both **GET and POST** (matching epee behavior)
-- **8 binary** endpoints (`/get_blocks.bin`, `/get_o_indexes.bin`, etc.)
+  - The legacy `/send_raw_transaction` + `/sendrawtransaction` pair was
+    deleted (`design/DAEMON_SUBMIT_VERDICT.md` §9.3); transaction submit
+    is the native `/submit_transaction` route below, not an FFI proxy
+- **1 native Rust** endpoint: `POST /submit_transaction` — served
+  directly by the Rust admission engine (`src/submit/`), never crossing
+  the C++ dispatch tables (`design/DAEMON_SUBMIT_VERDICT.md` §2–§3)
+- **9 binary** endpoints (`/get_blocks.bin`, `/get_o_indexes.bin`, etc.)
   - POST-only; return **400 Bad Request** on parse failure (matching epee)
-- **48 JSON-RPC 2.0** methods (`get_block_count`, `get_block_template`, etc.)
+- **36 JSON-RPC 2.0** methods (`get_block_count`, `get_block_template`, etc.)
   - POST-only (per JSON-RPC 2.0 spec)
-- **90 total** dispatcher registrations (74 unique handlers)
+- **76 total** FFI dispatcher registrations (62 unique C++ handlers),
+  plus the native Rust submit route (counts as of the 2026-07
+  submit-verdict series; earlier snapshots predate the RPC-payment and
+  legacy-submit deletions)
 
 All URI aliases (e.g. `/getheight` ↔ `/get_height`) are registered.
 
