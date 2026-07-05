@@ -469,6 +469,19 @@
 
 ### Changed
 
+- **wallet: submitter error split from the reservation-bound orchestrator
+  error** (`docs/FOLLOWUPS.md` "Submit-error reservation-id placeholder",
+  closed; 2c pre-wiring). `TransactionSubmitter::submit` now fails with a
+  reservation-unaware `SubmitterError` (`RejectedTerminal` /
+  `RejectedRetryable` / `Ambiguous` — a closed enum carrying no
+  `ReservationId`); the reservation-bound `SubmitError` arms are produced
+  only by `LocalPendingTx`'s finalizers, which bind the reservation under
+  submit. The former `ReservationId::new(0)` placeholder in the submitter
+  arms is unrepresentable, so the 2c `StakeEngine` submit consumer — which
+  has no orchestrator re-binder — cannot observe a fabricated reservation
+  id. Behavior-preserving for the existing wallet path (the finalizers
+  already re-bound the real id); the change is to the type surface the
+  second consumer will build against.
 - **docs: submit-verdict series stale-doc sweep**
   (`docs/design/DAEMON_SUBMIT_VERDICT.md` §12 PR-6, rule 91,
   `docs/submit-verdict-sweep`). Docs describing the deleted legacy

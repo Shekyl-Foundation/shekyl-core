@@ -694,21 +694,19 @@ sustainability is unaffected by the recalibration.
   semantics pinned, not a drive-by.
 
 - **Submit-error reservation-id placeholder: split submitter error from
-  orchestrator error (PR-4 / #248 review, deferred to 2c).**
-  `transaction_submitter::submit_error_from_cause` embeds
-  `ReservationId::new(0)` in its `DaemonRejectedRetryable` / `DaemonAmbiguous`
-  arms as a placeholder meaningful only because the one current caller
-  (`LocalPendingTx::submit_async`) destructures `{ .. }` and re-binds the real
-  id. `0` is a real, allocatable `ReservationId`; the already-planned 2c
-  `StakeEngine` submit consumer has no such re-binder and would act on
-  reservation `0` as though it were the failing one, corrupting reservation
-  bookkeeping. *Fix* (the depth-appropriate one the code comment already
-  flags): split the submitter error (owns no reservation) from the
-  orchestrator error (owns one), so `0` is unrepresentable rather than a
-  trusted-then-discarded sentinel. *Target:* V3.0, with the 2c StakeEngine
-  submit-consumer wiring (`ARCHIVAL_BOND_REQUEST_2C2B_PLAN`) — the PR that
-  adds the second consumer is where the un-split error bites, so it must land
-  the split.
+  orchestrator error (PR-4 / #248 review, deferred to 2c) — RESOLVED
+  2026-07-04 (2c pre-wiring).** `TransactionSubmitter::submit` now returns
+  the reservation-unaware `transaction_submitter::SubmitterError`
+  (`RejectedTerminal` / `RejectedRetryable` / `Ambiguous` — a closed enum
+  carrying **no** `ReservationId`); the reservation-bound `SubmitError`
+  arms are constructed only by `LocalPendingTx`'s finalizers, which bind
+  the reservation under submit. The `ReservationId::new(0)` sentinel is
+  unrepresentable rather than trusted-then-discarded, so the 2c
+  `StakeEngine` submit consumer (which has no orchestrator re-binder) can
+  consume the seam without observing a fabricated reservation. Original
+  finding: `submit_error_from_cause` (now `submitter_error_from_cause`)
+  embedded rid `0` in its retryable/ambiguous arms, meaningful only because
+  the one caller destructured `{ .. }` and re-bound the real id.
 
 - **CT-2 Tier B reconstruct-root KATs (staked / non-coinbase maturity
   classes) — post-CT-5 (CT-2 Round 1 deferral, tracked 2026-06-13).**
