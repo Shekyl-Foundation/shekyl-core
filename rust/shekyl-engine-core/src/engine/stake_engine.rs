@@ -131,24 +131,37 @@ use kameo::actor::{Actor, ActorRef, Spawn, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError, SendError};
 use kameo::message::{Context, Message};
 
+use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::Scalar;
 use rand_core::RngCore as _;
 use shekyl_archival_bond_builder::{build_join_market_vin, BondBuildError, JoinMarketVin};
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
-use shekyl_archival_retention::{epoch_is_claim_expired, HoldingsDescriptor};
+use shekyl_archival_retention::{bond_floor, epoch_is_claim_expired, HoldingsDescriptor};
+use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
-use shekyl_crypto_pq::derivation::derive_output_secrets;
+use shekyl_crypto_pq::derivation::{derive_output_secrets, derive_pqc_public_key};
 use shekyl_crypto_pq::kem::HybridCiphertext;
-use shekyl_crypto_pq::output::recover_combined_ss;
-use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_crypto_pq::output::{construct_output, recover_combined_ss};
+use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme as _};
+use shekyl_curve_generators::biased_hash_to_point;
+use shekyl_scanner::extra::Extra;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
 use shekyl_standoff::draw::{draw_entry_gap, GapRng};
 #[cfg(feature = "gf7-hooks")]
 use shekyl_standoff::gf7::{BroadcastTimelineObserver, NoOpObserver, TimelineEvent};
 use shekyl_standoff::plan::{plan_entry_seam, EntrySeamPlan};
+use shekyl_tx_builder::{
+    phase1_payload_hashes, sign_pqc_auths, sign_transaction_with_terms,
+    tx_prefix_hash_from_parts_with_extra, PqcAuth, SpendInput, TreeContext, WireEncodeInput,
+};
 use shekyl_types::{PCanonicalId, SettlementEpoch};
+use shekyl_units::AtomicUnits;
+use shekyl_wire::Input;
 use zeroize::Zeroizing;
 
+use super::bond_assembly::{
+    finalize_bond_tx, wire_bond_post_input, BondAssemblyError, FundingInputContext, PBoundBytes,
+};
 use super::error::KeyEngineError;
 use super::pscan::persona_scanner::{guaranteed_scanner_for_persona, PersonaScanError};
 use super::pscan::scan_step::{
@@ -557,6 +570,14 @@ pub(crate) enum StakeEngineError {
     /// `IdentityEncode`, or `Sign`).
     #[error("bond construction failed: {0}")]
     BondBuild(#[from] BondBuildError),
+
+    /// A WI-2 [`AssembleBond`] pipeline step failed — funding arithmetic,
+    /// spend-bundle derivation, output construction, proving, PQC auth
+    /// signing, wire encoding, or the A-1 prefix↔vin invariant. The wrapped
+    /// [`BondAssemblyError`] names the §3.6 failure mode; in every arm
+    /// nothing was persisted and no funding was reserved.
+    #[error("bond assembly failed: {0}")]
+    Assembly(#[from] BondAssemblyError),
 
     /// Building the bonded union's transient scanners for a [`ScanStep`] failed —
     /// a resident persona key was malformed (corrupted in-memory state). Fail
@@ -1240,6 +1261,437 @@ impl Message<SignBond> for StakeEngine {
         let vin = build_join_market_vin(keys, msg.holdings, &msg.tx_prefix_hash)
             .map_err(StakeEngineError::BondBuild)?;
         Ok(SignedBondPost { vin, plan })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WI-2 D-A3 — AssembleBond: the production bond-assembly message
+// ---------------------------------------------------------------------------
+
+/// Assemble the **full, broadcast-ready** JoinMarket bond transaction inside
+/// the actor (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.3) — the production superset
+/// of [`SignBond`] (which signs the vin only and remains for the composition
+/// KAT).
+///
+/// Carries the same handle + ticket typed contracts as [`SignBond`], plus the
+/// **public** funding contexts the Engine-side orchestrator selected (§3.2)
+/// and path-assembled: records, membership paths, and the tree context. The
+/// spend secrets are **not** in the message — they are re-derived from each
+/// record's `(ciphertext, index)` inside the handler
+/// ([`derive_p_source_secrets_bundle`], rule 36).
+///
+/// The reply pairs the minted [`PBoundBytes`] with the [`EntrySeamPlan`] from
+/// this request's entry-gap draw — the same seam discipline as
+/// [`SignedBondPost`]: the caller that receives the bytes to place receives
+/// where to place them.
+#[allow(dead_code)] // inert until the WI-2 Engine-side orchestrator lands (this PR).
+pub(crate) struct AssembleBond {
+    /// Operation-scoped capability proving the slot is currently held (typed
+    /// contract #2). Must match `ticket.p_slot()`.
+    pub handle: PersonaHandle,
+    /// Proof that the live-bond record was durably persisted for this slot
+    /// before assembly (typed contract #1). Must match `handle.p_slot()`.
+    pub ticket: super::stake_persist::PersistedBondTicket,
+    /// Holdings to bond; `bond_floor(holdings)` is recomputed inside.
+    pub holdings: HoldingsDescriptor,
+    /// The selected funding inputs (§3.2) with their assembled membership
+    /// paths — public identity + public tree data only.
+    pub funding: Vec<FundingInputContext>,
+    /// The curve-tree reference context the paths were assembled against.
+    pub tree_ctx: TreeContext,
+    /// The fee the Engine-side selection was run against.
+    pub fee: u64,
+}
+
+/// Reply of [`AssembleBond`]: the persona-bound wire bytes (minted at the
+/// single P-1 site, [`finalize_bond_tx`]), the placement plan, and the
+/// funding gindexes for the caller's reservation record (§3.5). Secrets never
+/// cross the boundary.
+#[allow(dead_code)] // inert until the WI-2 Engine-side orchestrator lands (this PR).
+#[derive(Debug)]
+pub(crate) struct AssembledBondPost {
+    /// The fully-signed, wire-encoded bond transaction, persona-bound.
+    pub bound_tx: PBoundBytes,
+    /// Relative placement of the entry event and the bond-post broadcast.
+    pub plan: EntrySeamPlan,
+    /// The spent funding records' gindexes — the §3.5 reservation set.
+    pub funding_gindexes: Vec<u64>,
+}
+
+impl Message<AssembleBond> for StakeEngine {
+    type Reply = Result<AssembledBondPost, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: AssembleBond,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        // ── Steps 1–5: identical typed contracts + draw as `SignBond` ────
+        self.validate_handle(&msg.handle)?;
+        let handle_slot = msg.handle.p_slot;
+        let ticket_slot = msg.ticket.p_slot();
+        if handle_slot != ticket_slot {
+            return Err(StakeEngineError::SlotMismatch {
+                handle_slot,
+                ticket_slot,
+            });
+        }
+        {
+            let mut probe = [0u8; 8];
+            rand_core::OsRng
+                .try_fill_bytes(&mut probe)
+                .map_err(StakeEngineError::RngSourceFailed)?;
+            let _ = probe;
+        }
+        let mut rng = OsRngGapAdapter;
+        let (spread, bond_first) = draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
+            .map_err(|DegenerateDraw| StakeEngineError::RngDegeneracy)?;
+        let plan = plan_entry_seam((spread, bond_first));
+
+        #[cfg(feature = "gf7-hooks")]
+        {
+            let persona = u64::from(handle_slot.0);
+            self.observer.record(TimelineEvent::EntryGapDrawConsumed {
+                persona,
+                window_blocks: DEFAULT_ENTRY_GAP.as_blocks(),
+                spread_blocks: spread,
+                bond_first,
+            });
+            self.observer.record(TimelineEvent::BondPostScheduled {
+                persona,
+                entry_offset_blocks: plan.entry_offset_blocks,
+                bond_post_offset_blocks: plan.bond_post_offset_blocks,
+            });
+        }
+
+        // ── Step 6: borrow the held bundle (never crosses the boundary) ──
+        let keys = self
+            .held
+            .get(&handle_slot)
+            .expect("validate_handle confirmed slot is held")
+            .keys();
+
+        // ── Step 7: funding arithmetic (§3.2 balance rule, checked) ──────
+        // `funding == change + fee + credit` exactly; change splits across
+        // TWO outputs (daemon prunable-tx floor: `vout.size() < 2` rejects).
+        let floor = bond_floor(&msg.holdings);
+        let required = floor
+            .checked_add(msg.fee)
+            .ok_or(BondAssemblyError::AmountOverflow)?;
+        let mut available: u64 = 0;
+        for ctx in &msg.funding {
+            available = available
+                .checked_add(ctx.record.amount.to_raw())
+                .ok_or(BondAssemblyError::AmountOverflow)?;
+        }
+        if available < required {
+            return Err(BondAssemblyError::InsufficientFunding {
+                available,
+                required,
+            }
+            .into());
+        }
+        let change = available - required;
+        let change_lo = change / 2;
+        let change_hi = change - change_lo;
+
+        // ── Step 8: change outputs to P's own base address ────────────────
+        // Both return to `P`'s base spend key (the pscan `GuaranteedScanner`
+        // claims against `spend_pk` directly), so the change re-enters the
+        // funding set on the next sweep.
+        let mut tx_key_secret = Zeroizing::new([0u8; 32]);
+        rand_core::OsRng.fill_bytes(tx_key_secret.as_mut());
+        let tx_pubkey = &Scalar::from_bytes_mod_order(*tx_key_secret) * ED25519_BASEPOINT_TABLE;
+
+        let mut output_infos = Vec::with_capacity(2);
+        let mut output_keys = Vec::with_capacity(2);
+        let mut view_tags = Vec::with_capacity(2);
+        let mut kem_blobs = Vec::with_capacity(2);
+        let mut leaf_hash_blob = Vec::with_capacity(64);
+        for (idx, amount) in [change_lo, change_hi].into_iter().enumerate() {
+            let constructed = construct_output(
+                &tx_key_secret,
+                &keys.x25519_pk,
+                &keys.ml_kem_ek,
+                keys.spend_pk.as_canonical_bytes(),
+                amount,
+                idx as u64,
+            )
+            .map_err(|e| BondAssemblyError::build("change-output construction", e))?;
+            let mut kem_blob = Vec::with_capacity(32 + constructed.kem_ciphertext_ml_kem.len());
+            kem_blob.extend_from_slice(&constructed.kem_ciphertext_x25519);
+            kem_blob.extend_from_slice(&constructed.kem_ciphertext_ml_kem);
+            kem_blobs.push(kem_blob);
+            leaf_hash_blob.extend_from_slice(&constructed.h_pqc);
+            output_keys.push(constructed.output_key);
+            view_tags.push(Some(constructed.view_tag_prefilter));
+            output_infos.push(shekyl_tx_builder::OutputInfo {
+                dest_key: constructed.output_key,
+                amount: AtomicUnits::from_raw(amount),
+                commitment_mask: constructed.z,
+                enc_amount: {
+                    let mut enc = [0u8; 9];
+                    enc[..8].copy_from_slice(&constructed.enc_amount);
+                    enc[8] = constructed.amount_tag;
+                    enc
+                },
+                enc_label: {
+                    let mut enc = [0u8; 9];
+                    enc[..8].copy_from_slice(&constructed.enc_label);
+                    enc[8] = constructed.label_tag;
+                    enc
+                },
+            });
+        }
+
+        // ── Step 9: tx_extra — tx pubkey + per-output KEM blobs + the 0x07
+        // PQC leaf hashes (without which the change outputs ingest with a
+        // zero `h_pqc` leaf and are unspendable).
+        let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
+        extra.push_pqc_leaf_hashes(leaf_hash_blob);
+        let tx_extra = extra.serialize();
+
+        // ── Step 10 (§3.3 actor step 1): re-derive spend bundles, compute
+        // key images, build the tx-builder SpendInputs. Secrets stay inside
+        // this frame until they move into the proving closure.
+        struct PreparedInput {
+            spend: SpendInput,
+            key_image: [u8; 32],
+            pqc_pubkey: Vec<u8>,
+            gindex: u64,
+        }
+        let mut prepared = Vec::with_capacity(msg.funding.len());
+        for ctx in &msg.funding {
+            let rec = &ctx.record;
+            let ciphertext = HybridCiphertext {
+                x25519: rec.ciphertext_x25519,
+                ml_kem: rec.ciphertext_ml_kem.clone(),
+            };
+            let bundle =
+                derive_p_source_secrets_bundle(keys, &ciphertext, rec.index_in_transaction)
+                    .map_err(|e| BondAssemblyError::build("spend-bundle derivation", e))?;
+
+            // KI = x·Hp(O) — same construction the FCMP++ verifier checks.
+            let x_scalar: Zeroizing<Scalar> = Zeroizing::new(
+                Option::from(Scalar::from_canonical_bytes(*bundle.spend_key_x)).ok_or_else(
+                    || BondAssemblyError::build("key-image derivation", "non-canonical x"),
+                )?,
+            );
+            let key_image = (biased_hash_to_point(rec.output_key) * *x_scalar)
+                .compress()
+                .to_bytes();
+
+            // `h_pqc` is not persisted on the record (public identity only);
+            // read it back from the assembled leaf chunk, which carries the
+            // ingested leaf for this output.
+            let h_pqc = ctx
+                .leaf_chunk
+                .iter()
+                .find(|leaf| leaf.output_key == rec.output_key)
+                .map(|leaf| leaf.h_pqc)
+                .ok_or_else(|| {
+                    BondAssemblyError::build(
+                        "leaf-chunk lookup",
+                        "funding output missing from its own leaf chunk",
+                    )
+                })?;
+
+            let combined: [u8; 64] = bundle.combined_ss[..64].try_into().map_err(|_| {
+                BondAssemblyError::build("spend-bundle derivation", "combined_ss wrong length")
+            })?;
+            let pqc_pubkey = derive_pqc_public_key(&combined, rec.index_in_transaction)
+                .map_err(|e| BondAssemblyError::build("pqc public-key derivation", e))?;
+
+            prepared.push(PreparedInput {
+                spend: SpendInput {
+                    output_key: rec.output_key,
+                    commitment: rec.commitment,
+                    amount: rec.amount,
+                    spend_key_x: *bundle.spend_key_x,
+                    spend_key_y: *bundle.spend_key_y,
+                    commitment_mask: *bundle.commitment_mask,
+                    h_pqc,
+                    combined_ss: bundle.combined_ss.to_vec(),
+                    output_index: rec.index_in_transaction,
+                    leaf_chunk: ctx.leaf_chunk.clone(),
+                    c1_layers: ctx.c1_layers.clone(),
+                    c2_layers: ctx.c2_layers.clone(),
+                },
+                key_image,
+                pqc_pubkey,
+                gindex: rec.gindex,
+            });
+        }
+        // Consensus requires spend inputs strictly DESCENDING by key image;
+        // one canonical order shared by the proof, the wire key-image list,
+        // and the pqc_auths slots (same rule as the transfer path).
+        prepared.sort_by(|a, b| b.key_image.cmp(&a.key_image));
+
+        let key_images: Vec<[u8; 32]> = prepared.iter().map(|p| p.key_image).collect();
+        let funding_gindexes: Vec<u64> = prepared.iter().map(|p| p.gindex).collect();
+
+        // ── Steps 11–12 (§3.3 actor step 2): the wire BondPost prefix input
+        // from PUBLIC parts, then the prefix hash. No circularity: the wire
+        // input carries no signature, so the prefix is fully determined
+        // before the vin is signed.
+        let hybrid_pk_bytes = keys
+            .hybrid_sign_pk
+            .to_canonical_bytes()
+            .map_err(|e| BondAssemblyError::build("identity encoding", e))?;
+        let bond_spend_pk_bytes = keys
+            .bond_spend_pk
+            .to_canonical_bytes()
+            .map_err(|e| BondAssemblyError::build("identity encoding", e))?;
+        let persona = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes);
+        let expected_vin = shekyl_archival_retention::ArchivalBondPostVin {
+            hybrid_public_key: hybrid_pk_bytes.clone(),
+            p_canonical_id: *persona.as_bytes(),
+            post_kind: shekyl_archival_retention::BondPostKind::JoinMarket,
+            holdings: msg.holdings.clone(),
+            bonded_total_atomic: floor,
+            bond_credit: floor,
+            bond_debit: 0,
+        };
+        let prefix_bond_input: Input =
+            wire_bond_post_input(&expected_vin, bond_spend_pk_bytes.clone())?;
+        let extra_inputs = vec![prefix_bond_input];
+
+        let prefix_hash = tx_prefix_hash_from_parts_with_extra(
+            &key_images,
+            &extra_inputs,
+            &output_keys,
+            &view_tags,
+            &tx_extra,
+        )
+        .map_err(|e| BondAssemblyError::build("prefix hash", e))?;
+
+        // ── Step 13 (§3.3 actor step 3): build + sign the vin over the now-
+        // fixed prefix hash.
+        let built = build_join_market_vin(keys, msg.holdings.clone(), &prefix_hash)
+            .map_err(StakeEngineError::BondBuild)?;
+
+        // ── Step 14 — invariant A-1 (fail closed): the signed vin's post
+        // fields must equal the prefix's BondPost input. Typed equality on
+        // `ArchivalBondPostVin` implies byte-identity (its wire write is a
+        // deterministic function of the value). A mismatch means the
+        // signature binds a different post than the hash covered — a build
+        // defect, never recoverable.
+        if built.vin() != &expected_vin {
+            debug_assert_eq!(
+                built.vin(),
+                &expected_vin,
+                "A-1: signed vin diverged from the prefix BondPost input"
+            );
+            return Err(BondAssemblyError::BondPostMismatch.into());
+        }
+        let credit_term = built.credit_term();
+
+        // ── Step 15 (§3.3 actor step 5): offload the CPU-bound proving
+        // (Bp+ + FCMP membership) to `spawn_blocking` — the SP-5 pattern.
+        // The SpendInputs (owned secrets) MOVE into the closure and come
+        // back for the fast inline PQC signing; `&mut self` is held across
+        // the await, so the mailbox cannot interleave another message.
+        let mut spend_inputs = Vec::with_capacity(prepared.len());
+        let mut pqc_pubkeys = Vec::with_capacity(prepared.len());
+        for p in prepared {
+            spend_inputs.push(p.spend);
+            pqc_pubkeys.push(p.pqc_pubkey);
+        }
+        let outputs_for_prove = output_infos.clone();
+        let tree = msg.tree_ctx.clone();
+        let fee = msg.fee;
+        let (signed, spend_inputs) = tokio::task::spawn_blocking(move || {
+            sign_transaction_with_terms(
+                prefix_hash,
+                &spend_inputs,
+                &outputs_for_prove,
+                AtomicUnits::from_raw(fee),
+                &[],
+                &[credit_term],
+                &tree,
+            )
+            .map(|signed| (signed, spend_inputs))
+        })
+        .await
+        .map_err(|e| BondAssemblyError::build("proving offload join", e))?
+        .map_err(|e| BondAssemblyError::build("proving", e))?;
+
+        let bulletproof = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
+            .map_err(|e| BondAssemblyError::build("bulletproof parse", e))?;
+
+        // ── Step 16: assemble the wire input; pqc_auths carries one slot per
+        // prefix input — the spend slots (output-derived keys) then the bond
+        // slot (P's identity key), matching prefix input order.
+        let mut wire = WireEncodeInput {
+            key_images,
+            extra_inputs,
+            output_keys,
+            view_tags,
+            tx_extra,
+            fee,
+            enc_amounts: signed.enc_amounts.clone(),
+            enc_labels: signed.enc_labels.clone(),
+            out_commitments: signed.commitments.clone(),
+            pseudo_outs: signed.pseudo_outs.clone(),
+            bulletproof,
+            reference_block: signed.reference_block,
+            fcmp_proof: signed.fcmp_proof.clone(),
+            pqc_auths: pqc_pubkeys
+                .iter()
+                .map(|pk| PqcAuth {
+                    auth_version: 1,
+                    signature: Vec::new(),
+                    public_key: pk.clone(),
+                })
+                .chain(std::iter::once(PqcAuth {
+                    auth_version: 1,
+                    signature: Vec::new(),
+                    public_key: hybrid_pk_bytes.clone(),
+                }))
+                .collect(),
+            fcmp_layers: signed.tree_depth,
+        };
+
+        // ── Step 17: PQC auth completion (fast; stays inline). One payload
+        // hash per pqc_auths slot; the spend slots sign with output-derived
+        // keys, the bond slot signs with P's `hybrid_sign_sk`.
+        let payload_hashes = phase1_payload_hashes(&wire)
+            .map_err(|e| BondAssemblyError::build("phase1 payload hash", e))?;
+        if payload_hashes.len() != spend_inputs.len() + 1 {
+            return Err(BondAssemblyError::build(
+                "phase1 payload hash",
+                format!(
+                    "expected {} payload hashes, got {}",
+                    spend_inputs.len() + 1,
+                    payload_hashes.len()
+                ),
+            )
+            .into());
+        }
+        let mut pqc_auths = sign_pqc_auths(&payload_hashes[..spend_inputs.len()], &spend_inputs)
+            .map_err(|e| BondAssemblyError::build("pqc auth signing", e))?;
+        let bond_payload_hash = payload_hashes[spend_inputs.len()];
+        let bond_sig = HybridEd25519MlDsa
+            .sign(&keys.hybrid_sign_sk, &bond_payload_hash)
+            .map_err(|e| BondAssemblyError::build("bond pqc auth signing", e))?;
+        pqc_auths.push(PqcAuth {
+            auth_version: 1,
+            signature: bond_sig
+                .to_canonical_bytes()
+                .map_err(|e| BondAssemblyError::build("bond pqc auth encoding", e))?,
+            public_key: hybrid_pk_bytes,
+        });
+        wire.pqc_auths = pqc_auths;
+        drop(spend_inputs); // secrets end here; nothing below needs them
+
+        // ── Step 18 (§3.3 actor step 6): encode + mint at the P-1 site ────
+        let bound_tx = finalize_bond_tx(persona, &wire)?;
+
+        Ok(AssembledBondPost {
+            bound_tx,
+            plan,
+            funding_gindexes,
+        })
     }
 }
 

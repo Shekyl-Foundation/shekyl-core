@@ -24,9 +24,15 @@
 //! mint) build on these types; secrets never appear in this module's Engine
 //! surface (rule 36).
 
+use shekyl_archival_retention::bond_wire::{
+    ArchivalBondPostVin, BondPostKind as RetentionBondPostKind,
+};
+use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind};
 use shekyl_engine_state::pending_post_block::PendingBondPost;
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
+use shekyl_tx_builder::{encode_final_tx, LeafEntry, WireEncodeInput};
 use shekyl_types::PCanonicalId;
+use shekyl_wire::{BondPost, BondPostKind as WireBondPostKind, Holdings, Input};
 
 // ---------------------------------------------------------------------------
 // PBoundBytes — the byte↔persona pairing, minted only here (pin P-1)
@@ -127,7 +133,6 @@ impl PBoundBytes {
 /// Failure surface of the bond-assembly path (`ARCHIVAL_BOND_WI2_ASSEMBLY.md`
 /// §3.6). Every arm names its operator-facing disposition: refusals are
 /// caller-recoverable states, defects are fail-closed build errors.
-#[allow(dead_code)] // transient — consumed by the WI-2 assemble handler as it lands.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum BondAssemblyError {
     /// The persona's spendable funding set (unreserved, scan-discovered
@@ -150,6 +155,7 @@ pub(crate) enum BondAssemblyError {
     /// at genesis: one live post per persona (§3.5); the caller waits for the
     /// pending post to confirm or fail before re-assembling.
     #[error("a pending bond post already exists for this persona; one live post per persona")]
+    #[allow(dead_code)] // transient — constructed by the D-A4 pending-post gate as it lands.
     PendingPostExists,
 
     /// Invariant A-1 (§3.3 step 4, fail closed): the signed vin's
@@ -167,6 +173,29 @@ pub(crate) enum BondAssemblyError {
     /// closed rather than wrap.
     #[error("funding amount arithmetic overflowed")]
     AmountOverflow,
+
+    /// A cryptographic step of the assemble pipeline failed (spend-bundle
+    /// derivation, output construction, proving, PQC auth signing, or wire
+    /// encoding). `stage` names the pipeline step; `detail` is the wrapped
+    /// error's rendering (public error text — never key material). Nothing
+    /// was persisted (§3.6: no partial state, funding never reserved).
+    #[error("bond assembly failed at {stage}: {detail}")]
+    Build {
+        /// Pipeline step that failed.
+        stage: &'static str,
+        /// Rendered cause.
+        detail: String,
+    },
+}
+
+impl BondAssemblyError {
+    /// Shorthand for the pipeline-step failure arm.
+    pub(crate) fn build(stage: &'static str, err: impl std::fmt::Display) -> Self {
+        Self::Build {
+            stage,
+            detail: err.to_string(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -178,11 +207,12 @@ pub(crate) enum BondAssemblyError {
 ///
 /// Redacted `Debug` via the contained records' own redaction; the struct adds
 /// nothing renderable beyond the total, so it derives nothing.
-#[allow(dead_code)] // transient — consumed by the WI-2 assemble handler as it lands.
 pub(crate) struct FundingSelection {
     /// The selected records, in selection (oldest-first) order.
+    #[allow(dead_code)] // transient — read by the Engine-side WI-2 orchestrator as it lands.
     pub records: Vec<PFundingOutputRecord>,
     /// Exact sum of the selected records' amounts.
+    #[allow(dead_code)] // transient — read by the Engine-side WI-2 orchestrator as it lands.
     pub total: u64,
 }
 
@@ -203,7 +233,7 @@ pub(crate) struct FundingSelection {
 ///
 /// `required` is `bond_floor(holdings) + fee`, computed by the caller with
 /// checked arithmetic.
-#[allow(dead_code)] // transient — consumed by the WI-2 assemble handler as it lands.
+#[allow(dead_code)] // transient — consumed by the Engine-side WI-2 orchestrator as it lands.
 pub(crate) fn select_funding_outputs(
     records: &[PFundingOutputRecord],
     reserved: &std::collections::BTreeSet<u64>,
@@ -242,6 +272,84 @@ pub(crate) fn select_funding_outputs(
         records: selected,
         total,
     })
+}
+
+// ---------------------------------------------------------------------------
+// D-A3 — assembly-flow types and the PBoundBytes mint site (§3.3)
+// ---------------------------------------------------------------------------
+
+/// One selected funding input, ready for the actor's `AssembleBond` handler:
+/// the public identity record (D-A1) plus its curve-tree membership path,
+/// already mapped to the tx-builder's mirror types by the Engine-side
+/// orchestrator (§3.3 Engine step 2). Carries **public data only** — the
+/// spend bundle is re-derived from `record.{ciphertext, index}` inside the
+/// actor (rule 36).
+pub(crate) struct FundingInputContext {
+    /// The persisted public-identity funding record.
+    pub record: PFundingOutputRecord,
+    /// All outputs in the same Selene leaf chunk as this input.
+    pub leaf_chunk: Vec<LeafEntry>,
+    /// Selene (C1) branch layers, bottom-to-top.
+    pub c1_layers: Vec<Vec<[u8; 32]>>,
+    /// Helios (C2) branch layers, bottom-to-top.
+    pub c2_layers: Vec<Vec<[u8; 32]>>,
+}
+
+/// Map a [`HoldingsDescriptor`] (the retention-side typed holdings) onto the
+/// canonical wire [`Holdings`] enum.
+pub(crate) fn wire_holdings(holdings: &HoldingsDescriptor) -> Holdings {
+    match holdings.kind {
+        HoldingsKind::ShardSetCompact => Holdings::ShardSetCompact(holdings.shard_ids.clone()),
+        HoldingsKind::CompleteTree => Holdings::CompleteTree,
+    }
+}
+
+/// Map a built [`ArchivalBondPostVin`] onto the canonical wire
+/// [`Input::BondPost`] prefix input (`GENESIS_TX_WIRE_FORMAT.md` §9.11).
+///
+/// `bond_spend_pk` is the GF-1 debit-authorizer hybrid public key
+/// (JoinMarket-coupled on the wire per §9.11); the vin itself does not carry
+/// it, so the caller supplies P's canonical `bond_spend_pk` bytes alongside.
+///
+/// Refuses a non-JoinMarket vin: JoinMarket is the only post kind valid at
+/// genesis, and the `bond_spend_pk` coupling below is JoinMarket-specific.
+pub(crate) fn wire_bond_post_input(
+    vin: &ArchivalBondPostVin,
+    bond_spend_pk: Vec<u8>,
+) -> Result<Input, BondAssemblyError> {
+    match vin.post_kind {
+        RetentionBondPostKind::JoinMarket => {}
+        other => {
+            return Err(BondAssemblyError::build(
+                "wire bond-post mapping",
+                format!("non-JoinMarket post kind {other:?} is invalid at genesis"),
+            ));
+        }
+    }
+    Ok(Input::BondPost(Box::new(BondPost {
+        hybrid_public_key: vin.hybrid_public_key.clone(),
+        p_canonical_id: vin.p_canonical_id,
+        kind: WireBondPostKind::JoinMarket { bond_spend_pk },
+        holdings: wire_holdings(&vin.holdings),
+        bonded_total_atomic: vin.bonded_total_atomic,
+        bond_credit: vin.bond_credit,
+        bond_debit: vin.bond_debit,
+    })))
+}
+
+/// Finalize the assembled bond transaction: serialize the fully-populated
+/// [`WireEncodeInput`] via the canonical encoder and **mint the
+/// [`PBoundBytes`] pairing** — the single production mint site (pin P-1).
+///
+/// The bytes bound here are the encoder's output over the typed parts the
+/// assemble path built, never caller-supplied bytes: possession of the
+/// returned value is proof the transaction came out of this path.
+pub(crate) fn finalize_bond_tx(
+    persona: PCanonicalId,
+    input: &WireEncodeInput,
+) -> Result<PBoundBytes, BondAssemblyError> {
+    let bytes = encode_final_tx(input).map_err(|e| BondAssemblyError::build("wire encoding", e))?;
+    Ok(PBoundBytes::bind(persona, bytes))
 }
 
 // ---------------------------------------------------------------------------
