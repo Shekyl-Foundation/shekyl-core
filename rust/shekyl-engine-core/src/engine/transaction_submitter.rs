@@ -11,10 +11,52 @@ use shekyl_p_transport::PTorClient;
 use shekyl_rpc_client::{RejectCause, Rpc, SubmitVerdict};
 use shekyl_wire::Transaction;
 
-use super::error::{AmbiguousErrorKind, RetryableRejectCause, SubmitError, TerminalErrorKind};
-use super::pending::{ReservationId, TxHash};
+use super::error::{AmbiguousErrorKind, RetryableRejectCause, TerminalErrorKind};
+use super::pending::TxHash;
 use super::prpc::PRpc;
 use super::traits::{DaemonEngine, TxSubmitOutcome};
+
+/// Failure surface of a [`TransactionSubmitter`] — the round trip's outcome
+/// classified by lifecycle class, **owning no reservation**.
+///
+/// A submitter broadcasts opaque bytes; it has no knowledge of which
+/// reservation (if any) those bytes belong to. The reservation-bound error is
+/// the *orchestrator's* ([`SubmitError`](super::error::SubmitError), whose
+/// `DaemonRejectedRetryable` / `DaemonAmbiguous` arms carry the
+/// [`ReservationId`](super::pending::ReservationId) the orchestrator names).
+/// This split makes the former `ReservationId::new(0)` placeholder
+/// unrepresentable: a consumer with no re-binder (the 2c `StakeEngine` submit
+/// path) can no longer observe — let alone act on — a sentinel rid
+/// (`docs/FOLLOWUPS.md` "Submit-error reservation-id placeholder", closed
+/// with this split).
+///
+/// Closed enum: the three variants are the complete lifecycle partition of a
+/// completed round trip (`DAEMON_SUBMIT_VERDICT.md` §2.5) — terminal
+/// (rebuild), retryable (reservation-preserving resubmit), ambiguous
+/// (absence of a verdict, Two Generals).
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SubmitterError {
+    /// A definite daemon verdict whose remedy is release-and-rebuild.
+    #[error("daemon rejected submission terminally: {kind:?}")]
+    RejectedTerminal {
+        /// The terminal sub-discriminant.
+        kind: TerminalErrorKind,
+    },
+    /// A definite daemon verdict whose remedy preserves the input selection:
+    /// resubmit after the per-cause wait.
+    #[error("daemon rejected retryably: {cause:?}")]
+    RejectedRetryable {
+        /// The retryable sub-discriminant.
+        cause: RetryableRejectCause,
+    },
+    /// No daemon verdict was obtained (transport failure): the bytes may or
+    /// may not have propagated.
+    #[error("daemon submit ambiguous: {kind:?}")]
+    Ambiguous {
+        /// The ambiguous sub-discriminant.
+        kind: AmbiguousErrorKind,
+    },
+}
 
 /// The canonical genesis transaction id (`GENESIS_TX_WIRE_FORMAT.md` §11) for a
 /// serialized blob, or `None` if it is not canonical shekyl-wire: parse the blob and
@@ -65,10 +107,10 @@ pub(crate) fn submit_outcome_from_verdict(
 }
 
 /// Collapse a resolved [`TxSubmitOutcome`] to the submitter's public
-/// `Result<TxHash, SubmitError>`. Shared by both submitters so the
+/// `Result<TxHash, SubmitterError>`. Shared by both submitters so the
 /// outcome→error mapping cannot drift between the principal and per-`P`
 /// paths. A daemon *verdict* only — a transport failure never reaches
-/// here; it is mapped to [`SubmitError::DaemonAmbiguous`] at the call
+/// here; it is mapped to [`SubmitterError::Ambiguous`] at the call
 /// site (absence-of-verdict is not an outcome, §5.2).
 ///
 /// The `Ok` arm covers all three identity-bearing verdicts:
@@ -79,33 +121,28 @@ pub(crate) fn submit_outcome_from_verdict(
 ///
 /// - **Terminal** (locks released, reservation gone):
 ///   `Malformed` / `FeeTooLow` / `DoubleSpendConflict` / `Unrecognized`
-///   → [`SubmitError::DaemonRejectedTerminal`].
+///   → [`SubmitterError::RejectedTerminal`].
 /// - **Retryable** (reservation restored to `consumer_held`, locks
 ///   retained): `StaleRoot` / `ReferenceTooRecent` / `ReferenceNotFound`
-///   → [`SubmitError::DaemonRejectedRetryable`]. The `reservation_id`
-///   here is a placeholder the orchestrator re-binds
-///   (`LocalPendingTx::submit_async` names the reservation under
-///   submit); the submitter surface is reservation-unaware.
-pub(crate) fn outcome_to_result(outcome: TxSubmitOutcome) -> Result<TxHash, SubmitError> {
+///   → [`SubmitterError::RejectedRetryable`]. The submitter surface is
+///   reservation-unaware; the orchestrator binds its own rid when it
+///   converts the class into its reservation-bound
+///   [`SubmitError`](super::error::SubmitError).
+pub(crate) fn outcome_to_result(outcome: TxSubmitOutcome) -> Result<TxHash, SubmitterError> {
     match outcome {
         TxSubmitOutcome::Submitted { hash }
         | TxSubmitOutcome::AlreadyInPool { hash }
         | TxSubmitOutcome::AlreadyInChain { hash } => Ok(hash),
-        TxSubmitOutcome::Rejected { cause } => Err(submit_error_from_cause(cause)),
+        TxSubmitOutcome::Rejected { cause } => Err(submitter_error_from_cause(cause)),
     }
 }
 
 /// Split a [`RejectCause`] into the terminal / retryable error classes
 /// per the §2.5 disposition table. Factored out of [`outcome_to_result`]
 /// so the cause→class mapping is a single, testable site.
-fn submit_error_from_cause(cause: RejectCause) -> SubmitError {
-    let terminal = |kind| SubmitError::DaemonRejectedTerminal { kind };
-    let retryable = |cause| SubmitError::DaemonRejectedRetryable {
-        cause,
-        // Placeholder rid: the submitter owns no reservation; the
-        // orchestrator re-binds (same convention as the ambiguous arm).
-        reservation_id: ReservationId::new(0),
-    };
+fn submitter_error_from_cause(cause: RejectCause) -> SubmitterError {
+    let terminal = |kind| SubmitterError::RejectedTerminal { kind };
+    let retryable = |cause| SubmitterError::RejectedRetryable { cause };
     match cause {
         RejectCause::Malformed => terminal(TerminalErrorKind::Malformed),
         RejectCause::FeeTooLow => terminal(TerminalErrorKind::FeeTooLow),
@@ -122,7 +159,7 @@ pub(crate) trait TransactionSubmitter: Send + Sync + 'static {
     fn submit(
         &self,
         tx_bytes: Vec<u8>,
-    ) -> impl std::future::Future<Output = Result<TxHash, SubmitError>> + Send;
+    ) -> impl std::future::Future<Output = Result<TxHash, SubmitterError>> + Send;
 }
 
 /// [`DaemonEngine`]-backed submitter (Phase 2a §5).
@@ -140,7 +177,7 @@ impl<D> TransactionSubmitter for DaemonTransactionSubmitter<D>
 where
     D: DaemonEngine,
 {
-    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<TxHash, SubmitError> {
+    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<TxHash, SubmitterError> {
         // Debug-only consistency guard: the `DaemonEngine` impl's accept outcome must
         // carry the same hash this computes locally. Computed only in debug builds so
         // release does no extra parse. Graceful on a malformed blob (the daemon path
@@ -151,10 +188,8 @@ where
             .daemon
             .submit_transaction(tx_bytes)
             .await
-            .map_err(|_| SubmitError::DaemonAmbiguous {
+            .map_err(|_| SubmitterError::Ambiguous {
                 kind: AmbiguousErrorKind::DaemonUnavailable,
-                // `LocalPendingTx::submit_async` re-binds the active reservation id.
-                reservation_id: ReservationId::new(0),
             })?;
         // The typed verdict carries NO txid field — neither path reads an id back from
         // the daemon (identity is always locally computed, anti-untrusted-daemon).
@@ -214,19 +249,19 @@ impl PTransactionSubmitter {
 }
 
 impl TransactionSubmitter for PTransactionSubmitter {
-    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<TxHash, SubmitError> {
+    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<TxHash, SubmitterError> {
         // Local, fail-closed tx id. The bytes are a wallet-built, fully-assembled
         // signed transaction (for the bond path, the tx carrying the bond vin), so a
         // parse failure is a build-path defect — map it to the same `Malformed`
         // terminal the `DaemonEngine` path returns rather than panicking, and never
         // reach the network with an unparseable blob.
         let Some(hash) = canonical_tx_id_opt(&tx_bytes) else {
-            return Err(SubmitError::DaemonRejectedTerminal {
+            return Err(SubmitterError::RejectedTerminal {
                 kind: TerminalErrorKind::Malformed,
             });
         };
         // Broadcast over `P`'s own circuit. **SP-T4a axis 4 (ambiguous partial
-        // failure):** ANY transport error → [`SubmitError::DaemonAmbiguous`], never
+        // failure):** ANY transport error → [`SubmitterError::Ambiguous`], never
         // a retry decision derived from `PRpc`'s fetch-style `classify`. A dropped
         // connection does not tell us whether the tx propagated, so absence-of-a-
         // daemon-verdict is *ambiguous*, not a retryable transient — the write-side
@@ -243,15 +278,12 @@ impl TransactionSubmitter for PTransactionSubmitter {
         // ambiguous too. (See `ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §2 axis 4 +
         // the 2c submit-outcome-partition obligation in `FOLLOWUPS.md`.)
         let resp = self.rpc.publish_transaction(&tx_bytes).await.map_err(|_| {
-            SubmitError::DaemonAmbiguous {
+            // The submitter owns no reservation, and now cannot claim one:
+            // `SubmitterError` carries no rid, so the P seam's 2c consumer
+            // (StakeEngine, which has no orchestrator re-binder) can no longer
+            // observe a sentinel reservation (`docs/FOLLOWUPS.md` closure).
+            SubmitterError::Ambiguous {
                 kind: AmbiguousErrorKind::DaemonUnavailable,
-                // Placeholder: the submitter owns no reservation. The *current*
-                // caller (`LocalPendingTx::submit_async`) re-binds this rid — but the
-                // P seam's future consumer (StakeEngine, 2c) has no re-binder, so the
-                // rid-0 sentinel is meaningless until re-bound and MUST NOT be trusted
-                // as a real reservation. (2c: split the submitter error (no rid) from
-                // the reservation-bound orchestrator error so `0` is unrepresentable.)
-                reservation_id: ReservationId::new(0),
             }
         })?;
         // A daemon *verdict* is mapped by the shared helpers — identical to the
@@ -330,7 +362,7 @@ mod tests {
             let err =
                 outcome_to_result(TxSubmitOutcome::Rejected { cause }).expect_err("terminal cause");
             assert!(
-                matches!(err, SubmitError::DaemonRejectedTerminal { kind } if kind == expected),
+                matches!(err, SubmitterError::RejectedTerminal { kind } if kind == expected),
                 "cause {cause:?} must map to terminal kind {expected:?}, got {err:?}"
             );
         }
@@ -356,7 +388,7 @@ mod tests {
             assert!(
                 matches!(
                     err,
-                    SubmitError::DaemonRejectedRetryable { cause: got, .. } if got == expected
+                    SubmitterError::RejectedRetryable { cause: got } if got == expected
                 ),
                 "cause {cause:?} must map to retryable {expected:?}, got {err:?}"
             );
@@ -364,7 +396,7 @@ mod tests {
     }
 
     /// SP-T4a axis 4 + invariant (a): a broadcast whose **transport** fails
-    /// surfaces as [`SubmitError::DaemonAmbiguous`] — we cannot know whether it
+    /// surfaces as [`SubmitterError::Ambiguous`] — we cannot know whether it
     /// propagated, so it is *not* a retryable transient — and the error rendering
     /// must never leak the SOCKS username. No Tor: a closed SOCKS port (`:1`)
     /// refuses immediately, so the `spawn_blocking` bridge + error mapping run
@@ -398,9 +430,9 @@ mod tests {
             .await
             .expect_err("a dead SOCKS proxy must fail the broadcast");
         assert!(
-            matches!(err, SubmitError::DaemonAmbiguous { .. }),
+            matches!(err, SubmitterError::Ambiguous { .. }),
             "a broadcast transport failure is ambiguous (maybe-propagated), never a \
-             retryable transient: expected DaemonAmbiguous, got {err:?}"
+             retryable transient: expected Ambiguous, got {err:?}"
         );
         assert!(
             !format!("{err}").contains(&username),
@@ -410,11 +442,11 @@ mod tests {
 
     /// The local parse-guard: unparseable bytes are a build-path defect that
     /// **never reaches the network** — `submit` short-circuits to
-    /// `DaemonRejectedTerminal { Malformed }` *before* any transport. This guards
+    /// `RejectedTerminal { Malformed }` *before* any transport. This guards
     /// the arm the dead-proxy test deliberately routes around (it feeds valid wire
     /// to reach the transport). The dead SOCKS port (`:1`) is the tell: if a
     /// refactor let the guard fall through to the network, the outcome would be
-    /// `DaemonAmbiguous`, not `Malformed` — so the assertion distinguishes
+    /// `Ambiguous`, not `Malformed` — so the assertion distinguishes
     /// "guarded before the wire" from "reached it" (and a swap to the panicking
     /// `canonical_tx_id` would panic here instead of returning).
     #[tokio::test(flavor = "multi_thread")]
@@ -436,12 +468,12 @@ mod tests {
         assert!(
             matches!(
                 err,
-                SubmitError::DaemonRejectedTerminal {
+                SubmitterError::RejectedTerminal {
                     kind: TerminalErrorKind::Malformed
                 }
             ),
             "a build-path defect is a local Malformed terminal, never a transport \
-             outcome (would be DaemonAmbiguous if the guard fell through): got {err:?}"
+             outcome (would be Ambiguous if the guard fell through): got {err:?}"
         );
     }
 }

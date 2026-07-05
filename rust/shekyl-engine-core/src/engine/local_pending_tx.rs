@@ -75,7 +75,7 @@ use super::signer::{Signer, TransferSigningContext};
 use super::signing_assembly::assemble_tx_to_sign;
 use super::traits::{LedgerEngine, PendingTxEngine};
 use super::transaction_submitter::canonical_tx_id;
-use super::transaction_submitter::TransactionSubmitter;
+use super::transaction_submitter::{SubmitterError, TransactionSubmitter};
 use super::tx_counts::{InputCount, OutputCount};
 use super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
 
@@ -552,7 +552,7 @@ where
     /// `submit` after `SubmitAttempted` (PR 5 C7 R9 per-error-class
     /// coverage). FIFO not required — one slot consumed per submit.
     #[cfg(any(test, feature = "test-helpers"))]
-    pub(crate) submit_daemon_outcome: Mutex<Option<Result<TxHash, SubmitError>>>,
+    pub(crate) submit_daemon_outcome: Mutex<Option<Result<TxHash, SubmitterError>>>,
 }
 
 #[allow(private_bounds)]
@@ -864,7 +864,7 @@ where
     }
 
     #[allow(clippy::unused_self)] // `self` is used only under `test` / `test-helpers` cfgs.
-    fn take_queued_submit_outcome(&self) -> Option<Result<TxHash, SubmitError>> {
+    fn take_queued_submit_outcome(&self) -> Option<Result<TxHash, SubmitterError>> {
         #[cfg(any(test, feature = "test-helpers"))]
         {
             self.submit_daemon_outcome
@@ -2045,28 +2045,20 @@ where
             );
 
             if let Some(outcome) = self.take_queued_submit_outcome() {
+                // The submitter error carries no reservation id (the split that
+                // made the former rid-0 sentinel unrepresentable); the finalizers
+                // bind `id` — the reservation under submit — into the
+                // reservation-bound `SubmitError` they return.
                 return match outcome {
                     Ok(tx_hash) => Ok(self.finalize_submit_accept(&mut state, id, tx_hash)),
-                    Err(SubmitError::DaemonRejectedTerminal { kind }) => {
+                    Err(SubmitterError::RejectedTerminal { kind }) => {
                         Err(self.finalize_submit_terminal(&mut state, id, kind))
                     }
-                    Err(SubmitError::DaemonRejectedRetryable { cause, .. }) => {
+                    Err(SubmitterError::RejectedRetryable { cause }) => {
                         Err(self.finalize_submit_retryable(&mut state, id, cause))
                     }
-                    Err(SubmitError::DaemonAmbiguous {
-                        kind,
-                        reservation_id,
-                    }) => {
-                        debug_assert_eq!(
-                            reservation_id, id,
-                            "queued DaemonAmbiguous must name the reservation under submit"
-                        );
+                    Err(SubmitterError::Ambiguous { kind }) => {
                         Err(self.finalize_submit_ambiguous(&state, id, kind))
-                    }
-                    Err(e) => {
-                        state.in_flight.remove(&id);
-                        release_output_locks_for(&mut state, id);
-                        Err(e)
                     }
                 };
             }
@@ -2082,17 +2074,20 @@ where
                     .state
                     .lock()
                     .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
+                // Reservation-unaware submitter error in; reservation-bound
+                // `SubmitError` out — the finalizers bind `id`, the reservation
+                // under submit. The closed three-variant enum makes the former
+                // pass-through-with-sentinel-rid arm unrepresentable.
                 return Err(match submit_err {
-                    SubmitError::DaemonRejectedTerminal { kind } => {
+                    SubmitterError::RejectedTerminal { kind } => {
                         self.finalize_submit_terminal(&mut state, id, kind)
                     }
-                    SubmitError::DaemonRejectedRetryable { cause, .. } => {
+                    SubmitterError::RejectedRetryable { cause } => {
                         self.finalize_submit_retryable(&mut state, id, cause)
                     }
-                    SubmitError::DaemonAmbiguous { kind, .. } => {
+                    SubmitterError::Ambiguous { kind } => {
                         self.finalize_submit_ambiguous(&state, id, kind)
                     }
-                    other => other,
                 });
             }
         };
@@ -2244,7 +2239,7 @@ where
     /// `SubmitAttempted` is emitted and the rid moves to `in_flight`.
     #[cfg(any(test, feature = "test-helpers"))]
     #[allow(dead_code)] // Canonical C7 R9 test-driver API; hybrid tests land in C7.
-    pub(crate) fn queue_submit_daemon_outcome(&self, outcome: Result<TxHash, SubmitError>) {
+    pub(crate) fn queue_submit_daemon_outcome(&self, outcome: Result<TxHash, SubmitterError>) {
         *self
             .submit_daemon_outcome
             .lock()
@@ -2592,7 +2587,7 @@ mod tests {
     struct TestTransactionSubmitter;
 
     impl TransactionSubmitter for TestTransactionSubmitter {
-        async fn submit(&self, tx_bytes: Vec<u8>) -> Result<TxHash, SubmitError> {
+        async fn submit(&self, tx_bytes: Vec<u8>) -> Result<TxHash, SubmitterError> {
             Ok(canonical_tx_id(&tx_bytes))
         }
     }
@@ -4063,7 +4058,7 @@ mod tests {
             .build(standard_request(7_000))
             .await
             .expect("build ok");
-        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonRejectedTerminal {
+        pending.queue_submit_daemon_outcome(Err(SubmitterError::RejectedTerminal {
             kind: TerminalErrorKind::DoubleSpend,
         }));
 
@@ -4108,7 +4103,7 @@ mod tests {
             .build(standard_request(7_000))
             .await
             .expect("build ok");
-        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonRejectedTerminal {
+        pending.queue_submit_daemon_outcome(Err(SubmitterError::RejectedTerminal {
             kind: TerminalErrorKind::FeeTooLow,
         }));
         let err = pending
@@ -4150,7 +4145,7 @@ mod tests {
             .build(standard_request(7_000))
             .await
             .expect("build ok");
-        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonRejectedTerminal {
+        pending.queue_submit_daemon_outcome(Err(SubmitterError::RejectedTerminal {
             kind: TerminalErrorKind::Malformed,
         }));
         assert!(matches!(
@@ -4230,7 +4225,7 @@ mod tests {
             .build(standard_request(7_000))
             .await
             .expect("build ok");
-        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonRejectedTerminal { kind }));
+        pending.queue_submit_daemon_outcome(Err(SubmitterError::RejectedTerminal { kind }));
         pending
             .submit(built.id, built.content_gen)
             .await
@@ -4241,7 +4236,7 @@ mod tests {
             .build(standard_request(7_000))
             .await
             .expect("one-shot rebuild allowed after first rejection");
-        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonRejectedTerminal { kind }));
+        pending.queue_submit_daemon_outcome(Err(SubmitterError::RejectedTerminal { kind }));
         pending
             .submit(rebuilt.id, rebuilt.content_gen)
             .await
@@ -4305,9 +4300,8 @@ mod tests {
             .build(standard_request(7_000))
             .await
             .expect("build ok");
-        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonRejectedRetryable {
+        pending.queue_submit_daemon_outcome(Err(SubmitterError::RejectedRetryable {
             cause: RetryableRejectCause::StaleRoot,
-            reservation_id: built.id,
         }));
 
         let err = pending
@@ -4373,9 +4367,8 @@ mod tests {
             .build(standard_request(7_000))
             .await
             .expect("build ok");
-        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonAmbiguous {
+        pending.queue_submit_daemon_outcome(Err(SubmitterError::Ambiguous {
             kind: AmbiguousErrorKind::DaemonTimeout,
-            reservation_id: built.id,
         }));
 
         let err = pending
@@ -4425,9 +4418,8 @@ mod tests {
             .build(standard_request(7_000))
             .await
             .expect("build ok");
-        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonAmbiguous {
+        pending.queue_submit_daemon_outcome(Err(SubmitterError::Ambiguous {
             kind: AmbiguousErrorKind::DaemonUnavailable,
-            reservation_id: built.id,
         }));
         assert!(matches!(
             pending.submit(built.id, built.content_gen).await,
@@ -4446,9 +4438,8 @@ mod tests {
             .build(standard_request(7_000))
             .await
             .expect("build ok");
-        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonAmbiguous {
+        pending.queue_submit_daemon_outcome(Err(SubmitterError::Ambiguous {
             kind: AmbiguousErrorKind::DaemonTimeout,
-            reservation_id: built.id,
         }));
         assert!(matches!(
             pending.submit(built.id, built.content_gen).await,
