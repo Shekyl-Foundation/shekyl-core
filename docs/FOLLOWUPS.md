@@ -7230,6 +7230,16 @@ one place to confirm each item's relationship to the wallet stack.
   obligation below). The measurement round inherits: `DEFAULT_ENTRY_GAP_WINDOW = 600` as the grading
   parameter; the entry/bond-post as the broadcast the jitter is *drawn for* (wiring pending 2c); the
   open principal-timeline + cross-broadcast decorrelation that no built primitive addresses.
+  **Hook spec LANDED (2c design round, 2026-07-04):**
+  [`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](design/ARCHIVAL_BOND_2C_GF7_HOOKS.md) pins the scheduler's
+  observer seam (injected, `ScanSchedule`-discipline), the three-axis **joint** event vocabulary
+  (principal lifecycle / bond-post with draw parameters / `P`'s other broadcasts — never
+  per-axis-multiplied, per the co-triggered-firewalls principle), the **funding-seam-blind
+  adversary** as a first-class grading arm (the named wrong-gate failure mode), and the
+  three-layer build-time **no-emit guard** (inert trait; sim-only impl + CI dependency-graph
+  assertion; non-default `gf7-hooks` feature, the `shekyl-standoff` `conformance` containment
+  shape). **The 2c-2b wiring PR is gated on that spec's §6 acceptance criteria.** The measurement
+  round (threshold-setting, S-3 modeled observer) remains sim-side, after the scheduler exists.
   **Target: pre-genesis (blocks the seal).** See
   [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md) §4 and
   [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (the S-3 privacy-sim home).

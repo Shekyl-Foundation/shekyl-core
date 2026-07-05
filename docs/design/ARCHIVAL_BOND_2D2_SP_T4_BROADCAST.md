@@ -419,6 +419,17 @@ launch" — its correct weight — and prevents the failure mode where a disclos
 but-unweighted residual quietly slips past genesis. Tracked as a genesis blocker
 in `docs/FOLLOWUPS.md`.
 
+**The evidence pipeline is specified (2c design round, 2026-07-04):**
+[`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](ARCHIVAL_BOND_2C_GF7_HOOKS.md) pins the
+measurement-hook contract the 2c-2b scheduler must land with — the injected
+observer seam, the three-axis joint event vocabulary (principal lifecycle /
+bond-post / `P`'s other broadcasts), the funding-seam-blind adversary as the
+named grading arm, and the three-layer build-time no-emit guard (inert trait /
+sim-only impl with a CI dependency-graph assertion / non-default feature,
+`shekyl-standoff`'s `conformance`-feature containment shape). The 2c-2b wiring
+PR is gated on that spec's §6 acceptance criteria; the measurement round
+itself remains the sim's, after the scheduler exists.
+
 ---
 
 ## 5. Decomposition (commit-slices — one PR unless it grows exceptionally large)

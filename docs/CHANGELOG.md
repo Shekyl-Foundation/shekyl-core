@@ -4,6 +4,25 @@
 
 ### Added
 
+- **docs: GF-7 measurement-hook specification — the evidence pipeline for
+  the genesis gate (2c design round,
+  `docs/design/ARCHIVAL_BOND_2C_GF7_HOOKS.md`).** GF-7 (principal↔`P`
+  timing unlinkability, GATE6 §10.12) is a genesis blocker whose
+  `P(link | T_obs)` first becomes measurable when the 2c-2b scheduler
+  broadcasts a bond-post on a real timeline. The new spec pins what that
+  scheduler must emit before its wiring PR lands: an injected
+  `BroadcastTimelineObserver` seam (no hardwired sink), a three-axis
+  **joint** event vocabulary — principal lifecycle, bond-post with the
+  consumed draw parameters, `P`'s other broadcasts — graded jointly per
+  the co-triggered-firewalls principle, with the funding-seam-blind
+  adversary as a first-class arm (the named certifies-the-wrong-gate
+  failure mode). Containment is build-structural, three independent
+  layers: inert-by-type trait, sim-only recording impl enforced by a CI
+  dependency-graph assertion, and a non-default `gf7-hooks` feature
+  compiled out of release (the `shekyl-standoff` `conformance` shape).
+  The 2c-2b wiring PR is gated on the spec's §6 acceptance criteria;
+  threshold-setting stays with the sim-side measurement round.
+
 - **rpc: `shekyl-rpc-types` crate — the typed wallet↔daemon submit
   contract** (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2, PR-2 of the
   submit-path Rust cutover). `SubmitVerdict` / `RejectCause` /
