@@ -7308,8 +7308,18 @@ one place to confirm each item's relationship to the wallet stack.
   adversary** as a first-class grading arm (the named wrong-gate failure mode), and the
   three-layer build-time **no-emit guard** (inert trait; sim-only impl + CI dependency-graph
   assertion; non-default `gf7-hooks` feature, the `shekyl-standoff` `conformance` containment
-  shape). **The 2c-2b wiring PR is gated on that spec's §6 acceptance criteria.** The measurement
-  round (threshold-setting, S-3 modeled observer) remains sim-side, after the scheduler exists.
+  shape). **The 2c-2b wiring PR is gated on that spec's §6 acceptance criteria.**
+  **2c-2b wiring LANDED (2026-07-05): all five §6 criteria.** `plan_entry_seam` single-sources
+  the draw consumption (`shekyl-standoff::plan`); the `SignBond` handler consumes both draw
+  values into the plan, replies `SignedBondPost` (vin + plan, never decoupled), and emits to the
+  injected observer (§6.1/§6.2); `shekyl-staking-sim --gf7-timeline` drives all three axes
+  through one recorded timeline with the funding-seam-blind arm first-class (§6.3);
+  `ci/gf7-no-emit-guard` asserts the dependency graph + feature containment (§6.4); the
+  no-behavioral-delta argument lives in the `stake_engine` module docs (§6.5). **What remains
+  open on this entry is exactly the measurement round** (threshold-setting, S-3 modeled
+  observer, sim-side) — plus the live-dispatch emission (`BondPostDispatched` from the real
+  broadcast consumer) which lands with the 2c-2a assemble / 2d dispatch wiring; the sim
+  synthesizes it from the schedule meanwhile.
   **Target: pre-genesis (blocks the seal).** See
   [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md) §4 and
   [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (the S-3 privacy-sim home).

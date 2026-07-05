@@ -54,6 +54,31 @@
   the callers) — the 2c-2b request path is the lift condition and owns the
   P-1/P-2 provenance pins.
 
+- **standoff/engine/sim: 2c-2b block-timed placement wiring + GF-7
+  measurement seam** (`docs/design/ARCHIVAL_BOND_2C_GF7_HOOKS.md` §6
+  acceptance criteria, all five). `shekyl-standoff` gains
+  `plan_entry_seam`/`EntrySeamPlan` — the single-sourced consumer of the
+  full `draw_entry_gap` tuple (order-coin cannot be dropped; the
+  triangular mis-build cannot be re-introduced) — and, behind the
+  non-default `gf7-hooks` feature, the `BroadcastTimelineObserver` seam
+  with the three-axis joint `TimelineEvent` vocabulary. The
+  `StakeEngine::SignBond` handler now consumes both draw values into the
+  plan and replies with `SignedBondPost` (signed vin + placement plan,
+  never decoupled), emitting draw-consumption and schedule events to the
+  injected observer (production injects the no-op).
+  `shekyl-staking-sim --gf7-timeline` is the §6.3 pipeline proof: the
+  only recording observer, all three event classes through one recorded
+  timeline per pair, funding-seam-blind + funding-seam grading arms over
+  the recorded stream only (on the fixed seed the jitter degrades the
+  funding arm 0.999→0.242 across windows 0→600 while the blind arm
+  plateaus ~0.55 over a 0.125 baseline — the residual the measurement
+  round will grade). CI gains `ci/gf7-no-emit-guard` (§6.4): a
+  dependency-graph assertion that `shekyl-staking-sim` has zero
+  dependents and a per-crate feature-resolution check that `gf7-hooks`
+  never resolves on production edges outside the sim, with a positive
+  control against rename-vacuousness. The §6.5 no-behavioral-delta
+  argument is documented in the `stake_engine` module docs.
+
 - **docs: GF-7 measurement-hook specification — the evidence pipeline for
   the genesis gate (2c design round,
   `docs/design/ARCHIVAL_BOND_2C_GF7_HOOKS.md`).** GF-7 (principal↔`P`
