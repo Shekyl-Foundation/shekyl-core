@@ -469,6 +469,22 @@
 
 ### Changed
 
+- **docs: `AlreadyInChain { height }` — the F40 lock-release discriminant
+  (2c design round, `docs/design/DAEMON_SUBMIT_VERDICT.md` §2.1/§2.2/§2.3/
+  §2.5/§4.1/§7.2/§10; closes the FOLLOWUPS `AlreadyInChain` design half).**
+  The unit `AlreadyInChain` verdict forced the wallet to guess which
+  release path clears the awaiting-confirmation lock — a guess steerable
+  by anyone who can slow the wallet's own daemon's block delivery into a
+  selectable-input leak plus F28/F37 alarm fatigue. The verdict now
+  carries the confirming-block `height`: the lock is placed in both
+  height cases, and `height` routes the release (refresh catch-up above
+  the synced height; targeted re-scan at/below it, falling through to
+  the F31 status query). Recorded as a reasoned carve-out from §2.2 wire
+  minimalism, a new §7.2 trust-rider row (damage-capped both directions),
+  and a new §2.3 schema-evolution category (required-field additions:
+  atomic pre-genesis, optional-with-default post-genesis). Implementation
+  lands with the 2c submit-consumer slices.
+
 - **docs: submit-verdict series stale-doc sweep**
   (`docs/design/DAEMON_SUBMIT_VERDICT.md` §12 PR-6, rule 91,
   `docs/submit-verdict-sweep`). Docs describing the deleted legacy

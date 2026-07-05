@@ -671,27 +671,36 @@ sustainability is unaffected by the recalibration.
   spend block (`Ct::read` rejected the storage-pruned FCMP++ form) — EOF-tolerant
   prunable after `pqc_auths`; regression `pruned_fcmp_spend_round_trips_and_ingests`.
 
-- **`AlreadyInChain` submit verdict: distinct lock-lifecycle disposition
-  (PR-4 / #248 review, deferred to 2c).**
-  `transaction_submitter::outcome_to_result` collapses `AlreadyInChain` into
-  `Ok(hash)` identically to `Submitted` / `AlreadyInPool`, so
-  `finalize_submit_accept` places a fresh F14 awaiting-confirmation lock
-  (baseline = current height) on a tx that is already on-chain, relying on a
-  future refresh `mark_spent` to clear it. Per `DAEMON_SUBMIT_VERDICT.md`
-  §2.5, `AlreadyInChain` is a **distinct** disposition ("confirmation observed
-  by verdict; refresh remains the settlement authority — the verdict
-  authorizes lock-lifecycle transitions only"), not the `Accepted`
-  awaiting-lock path. For an `AlreadyInChain` whose confirming block is
-  at/below the wallet's synced height with no reorg re-scan, refresh never
-  re-observes the spend and the lock is never cleared (the confirmed-absent
-  release is watchdog-actor-gated, unbuilt) — the inputs appear permanently
-  "awaiting confirmation" despite the tx being confirmed. *Fix:* give
-  `AlreadyInChain` its own disposition (do not place a fresh awaiting-lock;
-  let refresh settle it), nailing the §2.5 refresh-authoritative semantics.
-  *Target:* V3.0, with the 2c StakeEngine submit-consumer work (the second
-  `outcome_to_result` consumer that makes verdict-mapping a shared surface).
-  Deferred from PR-4 by explicit decision — needs the §2.5 lock-lifecycle
-  semantics pinned, not a drive-by.
+- **`AlreadyInChain` submit verdict: distinct lock-lifecycle disposition —
+  DESIGN DECIDED 2026-07-04 (F40, `AlreadyInChain { height }`); implementation
+  with the 2c submit-consumer slice (PR-4 / #248 review, deferred to 2c).**
+  Original finding: `transaction_submitter::outcome_to_result` collapses
+  `AlreadyInChain` into `Ok(hash)` identically to `Submitted` /
+  `AlreadyInPool`, so `finalize_submit_accept` places a fresh F14
+  awaiting-confirmation lock (baseline = current height) on a tx that is
+  already on-chain, relying on a future refresh `mark_spent` to clear it.
+  For an `AlreadyInChain` whose confirming block is at/below the wallet's
+  synced height with no reorg re-scan, refresh never re-observes the spend
+  and the lock is never cleared — permanent "awaiting confirmation" on a
+  confirmed tx. The 2c design round found the pinned fix ("place no lock,
+  let refresh settle") **under-specified against the behind-the-daemon
+  case**: a unit variant cannot distinguish "confirming block above my
+  synced height" (lock needed until refresh catches up) from "at/below it"
+  (path-1 release unreachable), and an adversary who slows the wallet's own
+  daemon's block delivery steers the guess into a selectable-input leak →
+  same-key-image rebuild → `DoubleSpendConflict` → F28/F37 alarm fatigue on
+  demand. **Decision (binding record: `DAEMON_SUBMIT_VERDICT.md` §2.1/§2.2
+  carve-out/§2.5 row/§7.2 rider row/§10 item 1):** restore
+  `AlreadyInChain { height: u64 }`. Lock is placed in **both** height cases
+  (no selectable window either way); `height` decides the **release path**
+  — `> synced`: §2.6 path-1 refresh catch-up, lock baselined at `height`;
+  `≤ synced`: targeted re-scan around `height` (reorg-heal), falling through
+  to the F31 status query if the re-scan finds nothing. Misuse is
+  damage-capped both directions (§7.2 row — no lie can force a linkage
+  event); pre-genesis the field lands required with fixtures updated
+  atomically (§2.3 third-category rule, new). *Remaining: implementation
+  only* — wire type + shim `in_chain_height` + the wallet disposition land
+  with the 2c StakeEngine submit-consumer work. *Target:* V3.0, 2c slices.
 
 - **Submit-error reservation-id placeholder: split submitter error from
   orchestrator error (PR-4 / #248 review, deferred to 2c).**
