@@ -7344,22 +7344,27 @@ one place to confirm each item's relationship to the wallet stack.
   *branding* rejected for the dynamic persona set, rule-21 reopen in §3.1. The shape survives
   [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md) PR-4's `SubmitVerdict` reshape
   (match-delegation is output-agnostic), unblocking PR-4's "both submitters share the mapping."
-  **Remaining: implementation only** — the enum + constructor + `PBoundBytes` land with the 2c
-  wiring (2c-2a/2c-2b, PR-4-adjacent). **Post-freeze wargame (2026-07-04, §3.1.1): freeze
-  CONFIRMED against the byte-holder enumeration** (assemble path / F31 resubmit / watchdog probe
-  rung), with **two freeze-compatible provenance pins added as implementation obligations**:
-  **P-1** `PBoundBytes` has exactly one constructor, private to the assemble/sign module —
-  possession is proof of provenance, no re-wrap site exists; **P-2** the held/pending record for
-  a `P`-bound tx stores the `PBoundBytes` value itself (not `Vec<u8>`), so F31/watchdog
-  resubmits re-send the stored value through the same choke path — the retry axis cannot route
-  `P`'s probe over the principal connection. The pins are recorded as **§3.1 part 6**
-  (mint-once / store-wrapped) — an addition *beside* the frozen five parts, not a reopen; the
-  adversary they close is the future-maintainer refactor that stores raw bytes and threads
-  persona separately, silently converting the part-4 equality check into a rubber stamp.
-  **Target: code lands in the 2c slices; the design decision is closed.**
+  **Post-freeze wargame (2026-07-04, §3.1.1): freeze CONFIRMED against the byte-holder
+  enumeration** (assemble path / F31 resubmit / watchdog probe rung), with **two
+  freeze-compatible provenance pins added as implementation obligations**: **P-1** `PBoundBytes`
+  has exactly one constructor, private to the assemble/sign module — possession is proof of
+  provenance, no re-wrap site exists; **P-2** the held/pending record for a `P`-bound tx stores
+  the `PBoundBytes` value itself (not `Vec<u8>`), so F31/watchdog resubmits re-send the stored
+  value through the same choke path — the retry axis cannot route `P`'s probe over the principal
+  connection. The pins are recorded as **§3.1 part 6** (mint-once / store-wrapped) — an addition
+  *beside* the frozen five parts, not a reopen; the adversary they close is the
+  future-maintainer refactor that stores raw bytes and threads persona separately, silently
+  converting the part-4 equality check into a rubber stamp.
+  **Implementation LANDED 2026-07-04** (`transaction_submitter.rs`): the enum + `for_posture`
+  choke point + `PBoundBytes` + `BroadcastSubmitError`, with `PTransactionSubmitter` tightened to
+  `for_persona` (persona↔circuit binding by construction; the retained `PCanonicalId` feeds the
+  pairing check). Landed inert (`allow(dead_code)`, proving tests are the callers) — the lift
+  condition is the 2c-2b request path, which also owns the §3.1 part-6 P-1 (mint-site migration)
+  and P-2 (store `PBoundBytes`, not raw bytes) provenance pins. **Target: the design decision and
+  the dispatch code are closed; remaining obligations ride 2c-2b.**
 - **2d-2 2c — `DaemonUrl` newtype: validate `base_url` at construction + house the S1 disclosure.**
   `base_url` is a bare `String` across three sites (`BroadcastPosture::OwnRemote`,
-  `PTransactionSubmitter::new`, `PBlockSource::new`) with no validation and an unredacted
+  `PTransactionSubmitter::for_persona`, `PBlockSource::new`) with no validation and an unredacted
   `derive(Debug)`. A `DaemonUrl` newtype (parse/validate at construction: scheme, host,
   **.onion-or-loopback**, no trailing slash; redacting `Debug`) closes: (a) the trailing-slash wedge
   (`http://x.onion:18081/` → `…//submit_transaction` → both daemons 404 → `DaemonAmbiguous` wedge,

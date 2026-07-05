@@ -4,6 +4,21 @@
 
 ### Added
 
+- **wallet: posture→submitter dispatch — the frozen SP-T4a §3.1 shape lands**
+  (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §3.1, frozen 2026-07-04;
+  `docs/FOLLOWUPS.md` 2c-2a dispatch-shape entry). The closed-set
+  `BroadcastSubmitter<D> { Local, PerP }` enum with match-delegation (RPITIT,
+  no `Box`), the single `for_posture` construction choke point carrying the
+  ②→`PerP` routing guard (an `OwnRemote` broadcast can never ride the shared
+  principal connection — the first-seen-origin leak the dispatch closes), the
+  `PBoundBytes` byte↔persona newtype equality-checked at the `submit_bound`
+  façade (`debug_assert` loud in dev, fail-closed `PersonaMismatch` in
+  release), and `PTransactionSubmitter` tightened to `for_persona` so the
+  persona↔circuit binding is by construction and the retained `PCanonicalId`
+  feeds the pairing check. Lands inert (`allow(dead_code)`; proving tests are
+  the callers) — the 2c-2b request path is the lift condition and owns the
+  P-1/P-2 provenance pins.
+
 - **docs: GF-7 measurement-hook specification — the evidence pipeline for
   the genesis gate (2c design round,
   `docs/design/ARCHIVAL_BOND_2C_GF7_HOOKS.md`).** GF-7 (principal↔`P`
