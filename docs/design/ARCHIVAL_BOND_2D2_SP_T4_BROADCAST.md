@@ -323,6 +323,56 @@ Implementation lands with the 2c wiring (the enum + constructor + `PBoundBytes`
 are 2c-2a/2c-2b code, PR-4-adjacent); this section freezes the shape so nothing
 downstream is built against a different one.
 
+#### 3.1.1 Post-freeze wargame (2026-07-04): byte-holder enumeration — freeze CONFIRMED, two provenance pins added
+
+The freeze above pins the *check* (persona equality at the choke point) but
+not the *provenance* (who may mint a `PBoundBytes`, and whether the value
+survives the retry lifecycle or gets re-wrapped from raw bytes). The wargame
+that surfaces the gap: **enumerate every holder of persona-bound `Vec<u8>`
+that can reach a `submit`** — each is a site where "these bytes" and "this
+circuit" must be provably the same persona.
+
+| Holder | Site | Mis-pairing exposure under §3.1 as frozen |
+| --- | --- | --- |
+| **H1 — assemble/sign path** | `StakeEngine` (`stake_engine.rs`): `sign_bond` → `build_join_market_vin` composition — the only site that *knows* which persona's slot keys signed the bytes | **Closed.** Bytes are born here; wrapping at birth carries ground truth. Choke-point equality check + enum exhaustiveness make both mis-pairings (`P1`→`P2`-circuit; persona→principal) unreachable. |
+| **H2 — F31 status-query resubmit** | resubmit-same-bytes from the held record — today `local_pending_tx.rs:204` stores `tx_bytes: Vec<u8>`, persona-unbound | **Open as frozen.** If the held record stores raw bytes, the resubmit path must *re-wrap* them into a `PBoundBytes` at probe time — and the choke-point check then validates the **wrapper's claim**, not the bytes' provenance. A re-wrap site that attaches the wrong persona (or routes to `Local`) passes every §3.1 check. |
+| **H3 — watchdog resubmit rung** | `submit_watchdog.rs` `ProbeResubmitSameBytes` — the kernel decides the probe; the driving actor re-sends the held bytes | **Same exposure as H2** (it executes H2's re-send). The ladder's privacy-neutrality claim ("identical bytes, same txid") is about the *network* artifact; it says nothing about which *circuit* carries the probe — a probe for `P`'s tx sent over the principal connection is precisely the first-seen-origin correlation the firewall exists to prevent, now on the retry axis instead of the first-send axis. |
+
+The exposure at H2/H3 is not a flaw in the frozen shape — the enum, choke
+point, and equality check are all correct — it is a **provenance hole
+beside it**: the check trusts the newtype, so the newtype must be
+unforgeable-by-construction and must **travel**, not be reconstructed. Two
+pins close it, both freeze-compatible (they constrain implementation; they
+do not alter the frozen shape):
+
+1. **P-1 — mint-site pin.** `PBoundBytes` has exactly one constructor,
+   private to the assemble/sign module (`pub(super)`-or-tighter; no public
+   `new`, no `From<(PersonaHandle, Vec<u8>)>`). It is minted at the moment
+   the bytes are signed under the persona's slot keys — the one site where
+   the pairing is ground truth rather than a claim. Everywhere else in the
+   codebase, a `PBoundBytes` can be *held* or *moved* but never *created*,
+   so possession is proof of provenance (the same possession-is-proof shape
+   as the `sign_bond` by-value token, §"contract #1" in `stake_engine.rs`).
+2. **P-2 — carry-through pin.** The held/pending record for a `P`-bound tx
+   stores the **`PBoundBytes` value itself**, not `Vec<u8>` (the principal
+   tx's held record keeps raw bytes as today — the type distinction is the
+   routing fact and must persist through the retry lifecycle). F31 and
+   watchdog resubmits re-send the *stored* value through the same §3.1
+   choke path as the first send; no re-wrap site exists anywhere.
+   Consequence: "which submitter does the probe use" is answered by the
+   stored type, never re-derived at probe time — H2 and H3 collapse into
+   H1's already-closed case.
+
+**Outcome: freeze confirmed, no reopen.** `Box<dyn TransactionSubmitter>`
+re-examined against the enumeration and rejected on the same grounds,
+strengthened: erasure discards the persona discriminant exactly where H2/H3
+need it. The rule-21 branding reopen recorded in §3.1(4) is **unchanged** —
+P-1/P-2 are not branding (the persona id stays a runtime value); they close
+the wrapper-forgery hole at the module boundary instead, which is the cheap
+point on the same curve. The pins are implementation obligations for the 2c
+wiring slices (2c-2a assemble wiring mints per P-1; the 2c submit-consumer /
+watchdog slice persists per P-2).
+
 ---
 
 ## 4. The GF-7 disclosure — a genesis gate, not a deferred round (loud)

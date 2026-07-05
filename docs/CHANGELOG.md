@@ -469,6 +469,22 @@
 
 ### Changed
 
+- **docs: dispatch-shape post-freeze wargame — byte-holder enumeration
+  confirms the freeze, adds two provenance pins (2c design round,
+  `docs/design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §3.1.1).** The frozen
+  §3.1 shape (closed-set enum + constructor choke point + `PBoundBytes`
+  equality check) pins the *check* but not the *provenance*: the F31
+  status-query resubmit and the watchdog probe rung re-send held bytes,
+  and a held record storing raw `Vec<u8>` forces a re-wrap at probe time —
+  the choke point then validates the wrapper's claim, not the bytes'
+  provenance, reopening the cross-persona/principal routing hazard on the
+  retry axis. Two freeze-compatible pins close it: P-1 single private
+  mint site in the assemble/sign module (possession is proof of
+  provenance); P-2 the held record stores the `PBoundBytes` value itself,
+  so every resubmit re-sends the stored value through the same choke
+  path. Freeze confirmed, no reopen; pins are implementation obligations
+  for the 2c wiring slices.
+
 - **docs: `AlreadyInChain { height }` — the F40 lock-release discriminant
   (2c design round, `docs/design/DAEMON_SUBMIT_VERDICT.md` §2.1/§2.2/§2.3/
   §2.5/§4.1/§7.2/§10; closes the FOLLOWUPS `AlreadyInChain` design half).**

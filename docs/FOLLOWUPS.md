@@ -7276,8 +7276,15 @@ one place to confirm each item's relationship to the wallet stack.
   [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md) PR-4's `SubmitVerdict` reshape
   (match-delegation is output-agnostic), unblocking PR-4's "both submitters share the mapping."
   **Remaining: implementation only** — the enum + constructor + `PBoundBytes` land with the 2c
-  wiring (2c-2a/2c-2b, PR-4-adjacent). **Target: code lands in the 2c slices; the design decision
-  is closed.**
+  wiring (2c-2a/2c-2b, PR-4-adjacent). **Post-freeze wargame (2026-07-04, §3.1.1): freeze
+  CONFIRMED against the byte-holder enumeration** (assemble path / F31 resubmit / watchdog probe
+  rung), with **two freeze-compatible provenance pins added as implementation obligations**:
+  **P-1** `PBoundBytes` has exactly one constructor, private to the assemble/sign module —
+  possession is proof of provenance, no re-wrap site exists; **P-2** the held/pending record for
+  a `P`-bound tx stores the `PBoundBytes` value itself (not `Vec<u8>`), so F31/watchdog
+  resubmits re-send the stored value through the same choke path — the retry axis cannot route
+  `P`'s probe over the principal connection. **Target: code lands in the 2c slices; the design
+  decision is closed.**
 - **2d-2 2c — `DaemonUrl` newtype: validate `base_url` at construction + house the S1 disclosure.**
   `base_url` is a bare `String` across three sites (`BroadcastPosture::OwnRemote`,
   `PTransactionSubmitter::new`, `PBlockSource::new`) with no validation and an unredacted
