@@ -73,6 +73,8 @@ use super::pending::{
 use super::refresh::{derive_snapshot_id, LedgerSnapshot};
 use super::signer::{Signer, TransferSigningContext};
 use super::signing_assembly::assemble_tx_to_sign;
+use super::submit_lifecycle::WatchdogHost;
+use super::submit_watchdog::{self, HeldSubmit};
 use super::traits::{LedgerEngine, PendingTxEngine};
 use super::transaction_submitter::canonical_tx_id;
 use super::transaction_submitter::{SubmitSuccess, SubmitterError, TransactionSubmitter};
@@ -2476,6 +2478,66 @@ where
 // ============================================================================
 // PendingTxEngine impl
 // ============================================================================
+
+/// The §5.3 submit-lifecycle driver reaches the wallet through this
+/// narrow object-safe surface rather than the six-parameter
+/// `LocalPendingTx` generic (`DAEMON_SUBMIT_VERDICT.md` §5.3). The ledger
+/// reads bridge the driver's `synced_height` / `block_hash_at` /
+/// `held_submits` / `release_awaiting_confirmation` to the guarded
+/// `LedgerBlock` via the same [`Stage1LedgerSpendableAccess`] path the
+/// build path uses; the byte / queue accessors delegate to the inherent
+/// methods; `emit` routes through the diagnostic sink.
+///
+/// `#[allow(private_bounds)]`: [`Stage1LedgerSpendableAccess`] is a
+/// private trait (crate-internal ledger-access seam); the public
+/// `WatchdogHost` impl carries it as a where-bound exactly as the
+/// inherent impl and the `PendingTxEngine` impl do.
+#[allow(private_bounds)]
+impl<S, O, F, FS, TS, L> WatchdogHost for LocalPendingTx<S, O, F, FS, TS, L>
+where
+    S: Signer,
+    O: OutputSelector,
+    F: FeeEstimator,
+    FS: FeeSnapshotSource,
+    TS: TransactionSubmitter,
+    L: LedgerEngine + Stage1LedgerSpendableAccess,
+{
+    fn held_submits(&self) -> Vec<HeldSubmit> {
+        self.ledger
+            .with_ledger_block(|ledger| submit_watchdog::held_submits(ledger))
+    }
+
+    fn synced_height(&self) -> u64 {
+        self.ledger.with_ledger_block(LedgerBlock::height)
+    }
+
+    fn block_hash_at(&self, height: u64) -> Option<[u8; 32]> {
+        self.ledger
+            .with_ledger_block(|ledger| ledger.block_hash_at(height).copied())
+    }
+
+    fn held_bytes_for(&self, tx_hash: &TxHash) -> Option<Vec<u8>> {
+        LocalPendingTx::held_bytes_for(self, tx_hash)
+    }
+
+    fn prune_held_bytes(&self, live: &HashSet<TxHash>) {
+        LocalPendingTx::prune_held_bytes(self, live);
+    }
+
+    fn drain_rescan_queue(&self) -> Vec<RescanRequest> {
+        LocalPendingTx::drain_rescan_queue(self)
+    }
+
+    fn release_awaiting_confirmation(&self, tx_hashes: &HashSet<TxHash>) -> usize {
+        self.ledger.with_ledger_block_mut(|ledger| {
+            submit_watchdog::release_awaiting_confirmation(ledger, tx_hashes)
+        })
+    }
+
+    fn emit(&self, event: PendingTxDiagnostic) {
+        emit_pending_tx_diagnostic(self.sink.as_ref(), event);
+    }
+}
 
 impl<S, O, F, FS, TS, L> PendingTxEngine for LocalPendingTx<S, O, F, FS, TS, L>
 where

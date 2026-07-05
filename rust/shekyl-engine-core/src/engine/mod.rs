@@ -266,11 +266,17 @@ pub(crate) mod stake_persist;
 /// (distinct inner types → compile error on cross-apply). Design-now; real checks
 /// wire in cold-start / 2d wiring.
 pub(crate) mod stake_timing;
+/// `docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3: the submit lifecycle
+/// driver — the wallet-side actor that lifts the [`submit_watchdog`]
+/// kernel (projection → escape ladder → resubmit-same-bytes probe →
+/// outcome) and executes the F40 targeted re-scan with its R2
+/// fruitless-rescan breaker. Thin scheduler around audited kernel
+/// decisions; cadence is owned by the embedding runtime (`tick()`).
+pub(crate) mod submit_lifecycle;
 /// PR-4 (`docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3): the submit
 /// watchdog's pure decision kernel — F14-lock-keyed held tracking, the
 /// privacy-tiered escape ladder with presence branching, health-context
-/// gating, and the F35 horizon bound. Scaffolding: the driving actor
-/// (cadence is wallet role policy) lands with the wallet plan.
+/// gating, and the F35 horizon bound. Driven by [`submit_lifecycle`].
 pub(crate) mod submit_watchdog;
 /// CT-5c: production no longer uses synthetic membership vectors — the signer
 /// folds the real paths the curve-tree client assembled (`assemble_path`).
@@ -298,7 +304,7 @@ pub use daemon::DaemonClient;
 pub use diagnostics::{
     BuildErrorKind, BuildRequestSummary, DaemonOp, DiagnosticSink, DiscardReason, MalformedKind,
     NoopDiagnosticSink, PendingTxDiagnostic, ProtocolErrorKind, RefreshDiagnostic, SuppressedClass,
-    TracingDiagnosticSink,
+    TracingDiagnosticSink, WatchdogAlarmReason, WatchdogProbeOutcome,
 };
 pub use error::{
     ChangePasswordError, IoError, KeyError, OpenError, PendingTxError, PersistenceError,
