@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### Added
+
+- **wallet: `start_pscan` lifecycle wiring — WI-1, completing 2d-1 SP-5**
+  (`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md` §"WI-1"; `IMPLEMENTATION_INDEX.md`
+  §4 WI-1 row). The firewalled `P`-scan gains its lifecycle call sites:
+  `Engine::start_pscan_if_staker` (the post-open auto-start — a staker
+  wallet gets its scan at production settings, a non-staker gets
+  `Ok(None)` and pays nothing) and `Engine::start_pscan` (the on-demand
+  entry mirroring `start_refresh`; `NoStakeEngine` for a non-staker).
+  Both run `PScanConfig::production()` at `DEFAULT_PSCAN_CADENCE` (60 s,
+  rule-75 rationale + bounds documented on the constant); the
+  config-injectable seam stays crate-private (`start_pscan_with`) for
+  tests. The returned `PScanHandle` is embedder-held, not engine-held —
+  the running task's store holds a strong engine arc, so engine-held
+  storage would make the pair immortal; embedder-held makes
+  "close stops the task" ownership-enforced (`close(self)` is
+  unreachable until the handle is shut down and `Arc::try_unwrap`
+  succeeds). The transient `#[allow(dead_code)]` chain through
+  `block_source`/`cadence`/`task`/`accrual` is removed; remaining allows
+  each name their later consumer (2d-2 posture selector, SP-7 `C_min`,
+  SP-R0 reconcile GC, cold-start cover discovery). Lifecycle tests cover
+  staker auto-start, non-staker quiet path, double-start refusal
+  (single-flight), shutdown-releases-engine, and restart-after-stop.
+
 ### Documentation
 
 - **docs: submit-verdict / 2c completion-status sweep (rule 91).** Landed
