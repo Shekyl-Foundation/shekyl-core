@@ -13,8 +13,8 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-# Default build is the draw only: float-free, dependency-free, the path a
-# wallet ships. `conformance` pulls the statistics utility and compiles the
+# Default build is the draw + plan only: float-free, dependency-free, the path
+# a wallet ships. `conformance` pulls the statistics utility and compiles the
 # grading + self-certification machinery (test/diagnostic only).
 default = []
 conformance = ["dep:shekyl-stats"]
