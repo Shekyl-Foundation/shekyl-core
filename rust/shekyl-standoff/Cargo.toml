@@ -13,11 +13,18 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-# Default build is the draw only: float-free, dependency-free, the path a
-# wallet ships. `conformance` pulls the statistics utility and compiles the
+# Default build is the draw + plan only: float-free, dependency-free, the path
+# a wallet ships. `conformance` pulls the statistics utility and compiles the
 # grading + self-certification machinery (test/diagnostic only).
 default = []
 conformance = ["dep:shekyl-stats"]
+# GF-7 measurement-hook seam (`docs/design/ARCHIVAL_BOND_2C_GF7_HOOKS.md` §3/§4):
+# the `BroadcastTimelineObserver` trait + the three-axis `TimelineEvent`
+# vocabulary. NEVER default — release artifacts build with this off (the §4
+# layer-3 no-emit containment, same shape as `conformance` above); the only
+# recording impl lives in `shekyl-staking-sim` (layer 2, CI dependency-graph
+# asserted). Adds no dependencies: the seam is inert by type (layer 1).
+gf7-hooks = []
 
 [dependencies]
 shekyl-stats = { path = "../shekyl-stats", optional = true }

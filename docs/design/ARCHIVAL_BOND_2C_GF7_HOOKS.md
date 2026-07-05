@@ -5,6 +5,21 @@ wiring PR: the scheduler MUST land with the §3 observer seam and satisfy the §
 acceptance criteria, or it ships unmeasurable and the GF-7 genesis gate has no
 evidence pipeline.**
 
+**Implementation status (2026-07-05): the 2c-2b wiring landed against all five
+§6 criteria.** Seam + vocabulary: `rust/shekyl-standoff/src/gf7.rs` (behind the
+non-default `gf7-hooks` feature); single-sourced draw consumer:
+`rust/shekyl-standoff/src/plan.rs` (`plan_entry_seam`); consumption point +
+emission: the `SignBond` handler in
+`rust/shekyl-engine-core/src/engine/stake_engine.rs` (reply is
+`SignedBondPost`: vin + plan, never decoupled; the module docs carry the §6.5
+no-behavioral-delta argument); §6.3 joint-axis scenario:
+`shekyl-staking-sim --gf7-timeline` (`rust/shekyl-staking-sim/src/gf7_timeline.rs`,
+the only recording observer); §6.4 guard:
+`.github/workflows/gf7-no-emit-guard.yml`. `BondPostDispatched` from a live
+broadcast consumer arrives with the 2c-2a assemble / 2d dispatch wiring (§3's
+note); the sim synthesizes it from the schedule meanwhile. The measurement
+round remains open — see the `docs/FOLLOWUPS.md` GF-7 genesis-blocker entry.
+
 **Authority:** [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md)
 §10.12 (GF-7); [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md)
 §4 (the genesis-gate disclosure); [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)

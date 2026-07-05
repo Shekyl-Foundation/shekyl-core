@@ -69,9 +69,11 @@ Everything SP-T4a builds on is landed on `dev`:
   the wallet-side `AlreadyKnown` heuristic this doc originally named was
   retired with the cutover); the path **never rebuilds on retry**.
 - **The real consumer.** `build_join_market_vin` (in `shekyl-archival-bond-builder`)
-  returns a signed `JoinMarketVin`; `draw_entry_gap_guarded` returns `(_spread,
-  _bond_first)`; the submission is the open `TODO(2d)` — all at the bond-post
-  handler in `stake_engine.rs` (line numbers omitted; they drift).
+  returns a signed `JoinMarketVin`; `draw_entry_gap_guarded` returns `(spread,
+  bond_first)` — since 2c-2b (PR #255) consumed into `plan_entry_seam` and
+  carried in the `SignBond` reply (`SignedBondPost`); the submission is the open
+  `TODO(2d)` — all at the bond-post handler in `stake_engine.rs` (line numbers
+  omitted; they drift).
 - **The read-side enforcement template.** `PBlockSource`
   (`pscan/block_source.rs:196`) — constructible **only** from `PTorClient`, no
   principal path, no `Default`; `Posture`/`select` no-silent-③ selector
@@ -118,6 +120,10 @@ correlation no circuit isolation touches. The mitigation primitive exists but is
   (including the `_bond_first` order-coin, not just the `_spread` delay) is the
   **2c-2a/2c-2b** scheduler's job. Applying the built primitive to the one
   broadcast it was designed for is therefore pending, not done (§5 slice 4).
+  **[Update 2026-07-05: the 2c-2b placement wiring landed (PR #255) — the draw
+  is consumed into `plan_entry_seam` and carried as `SignedBondPost` (both the
+  delay and the order-coin, by construction). What remains open is carrying the
+  plan to the *wire* (2c-2a assemble / 2d dispatch) — see §4.]**
 - **What SP-T4a explicitly does NOT close (the GF-7 residual — §4).** The
   broader **principal-timeline** correlation (does `P`'s broadcast timing track
   the principal's lifecycle activity?) is **GF-7**, which GATE6 §10.12 flags
@@ -452,6 +458,20 @@ sim-only impl with a CI dependency-graph assertion / non-default feature,
 `shekyl-standoff`'s `conformance`-feature containment shape). The 2c-2b wiring
 PR is gated on that spec's §6 acceptance criteria; the measurement round
 itself remains the sim's, after the scheduler exists.
+
+**The wiring landed (PR #255, 2026-07-05) — all five §6 criteria.** The draw is
+now *consumed*, not just drawn: `plan_entry_seam` (`shekyl-standoff/src/plan.rs`)
+single-sources the `(spread, bond_first)` → block-offset placement, the
+`SignBond` handler replies with `SignedBondPost` (vin + plan, never decoupled),
+and the injected observer seam emits the three-axis timeline events behind the
+non-default `gf7-hooks` feature (CI-guarded no-emit,
+`.github/workflows/gf7-no-emit-guard.yml`). §4's blockquote above remains
+accurate on what is still open: the plan is not yet carried to any *wire* — the
+posture→submitter dispatch and live `BondPostDispatched` emission stay with the
+2c-2a assemble / 2d broadcast wiring, and the **measurement round** (grading
+`P(link | T_obs)` under threshold via `shekyl-staking-sim --gf7-timeline`) is
+the genesis gate's remaining obligation. See the hooks spec's implementation
+status block and the `docs/FOLLOWUPS.md` GF-7 genesis-blocker entry.
 
 ---
 

@@ -16,7 +16,8 @@
 //!
 //! Modes: `--timing-cluster` (ARCHIVAL_TIMING_CONSTANTS pin);
 //! `--failure-confirmation` (L14b Round-1 policy comparator per
-//! ARCHIVAL_FAILURE_CONFIRMATION_PIN.md).
+//! ARCHIVAL_FAILURE_CONFIRMATION_PIN.md); `--gf7-timeline` (joint three-axis
+//! GF-7 pipeline proof per ARCHIVAL_BOND_2C_GF7_HOOKS.md §6.3).
 
 mod agent;
 mod audit;
@@ -25,6 +26,7 @@ mod cover;
 mod curve;
 mod failure_confirmation;
 mod fingerprint;
+mod gf7_timeline;
 mod metrics;
 mod model;
 mod participation;
@@ -617,6 +619,50 @@ fn print_standoff_report() {
     }
 }
 
+fn print_gf7_timeline_report() {
+    let report = gf7_timeline::run_full_report();
+    eprintln!(
+        "shekyl-staking-sim — GF-7 joint three-axis timeline (ARCHIVAL_BOND_2C_GF7_HOOKS.md §6.3)"
+    );
+    eprintln!(
+        "PIPELINE PROOF, not the measurement round: trivial nearest-cadence grading over the"
+    );
+    eprintln!("  recorded observer stream (all three axes, one joint timeline per pair). The");
+    eprintln!("  measurement round replaces the correlator and sets the genesis-gate threshold.");
+    eprintln!(
+        "  n_principals={} (baseline 1/n), trials/window={}, horizon={} blk.",
+        report.n_principals, report.trials, report.horizon_blocks
+    );
+    eprintln!(
+        "  Axis coverage (one sample timeline): bond-post={} perP={} lifecycle={}.",
+        report.coverage.axis_i_bond_post_events,
+        report.coverage.axis_ii_per_p_submits,
+        report.coverage.axis_iii_lifecycle_events
+    );
+    eprintln!();
+    eprintln!(
+        "  blind = funding-seam-blind arm (§2's named failure mode: lifecycle cadence only);"
+    );
+    eprintln!("  fund = funding-seam arm (the axis the entry-gap jitter already handles).");
+    eprintln!("  Expect: fund falls with window (jitter works); blind stays above baseline");
+    eprintln!("  (the residual GF-7 names — the reason the hooks exist).");
+    eprintln!();
+    eprintln!(
+        "{:>8} {:>10} {:>10} {:>10}",
+        "window", "blind", "fund", "baseline"
+    );
+    for r in &report.results {
+        eprintln!(
+            "{:>8} {:>10.3} {:>10.3} {:>10.3}",
+            r.window_blocks, r.p_link_blind, r.p_link_funding, r.baseline
+        );
+    }
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing gf7-timeline report: {e}"),
+    }
+}
+
 fn print_cover_report() {
     use cover::Dispersion;
     let disp = |d: Dispersion| match d {
@@ -1117,6 +1163,11 @@ fn main() {
 
     if std::env::args().any(|a| a == "--standoff") {
         print_standoff_report();
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--gf7-timeline") {
+        print_gf7_timeline_report();
         return;
     }
 

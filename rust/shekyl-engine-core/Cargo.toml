@@ -444,6 +444,15 @@ multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "chacha20poly1305"
 # and stats-free (`ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md` §0). For CI's x86 lane
 # and opt-in operator diagnostics, not the shipping binary.
 conformance = ["shekyl-standoff/conformance"]
+# Internal feature (GF-7): enables the sim-facing GF-7 measurement hooks
+# (`ARCHIVAL_BOND_2C_GF7_HOOKS.md`). Plumbs `shekyl-standoff`'s
+# `BroadcastTimelineObserver` seam into `StakeEngine` (injected observer field +
+# typed event emission at the entry-gap draw / bond-post schedule points). NOT
+# in `default`: release artifacts carry no observer field, no `record` calls,
+# and no event vocabulary (§4 layer-3 no-emit containment). The only recording
+# observer lives in `shekyl-staking-sim` (§4 layer 2); production spawn paths
+# inject the no-op (§6.1).
+gf7-hooks = ["shekyl-standoff/gf7-hooks"]
 # Internal feature: re-exports otherwise-`pub(crate)` types under a
 # `__bench_internals` module so external Criterion harnesses can
 # measure them. Not part of the public API; consumers must not depend

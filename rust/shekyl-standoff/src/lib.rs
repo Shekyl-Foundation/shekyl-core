@@ -5,6 +5,10 @@
 //! `cover`) — *when* `P` funds/enters and *how much* it sends on top of the
 //! public `bond_floor`. Both are pure-integer, golden-vector-pinned, and
 //! imported by the simulator, the conformance vector, and the wallet alike.
+//! The timing draw's single-sourced **consumer** is [`plan_entry_seam`]
+//! (`plan`): the one conversion from the drawn `(spread, bond_first)` pair to
+//! the relative placement of the two seam events, shared by wallet and sim so
+//! the conformance-correct construction cannot fork between them.
 //!
 //! The funding seam (`docs/design/ARCHIVAL_FIREWALL_GATE6.md` §10.12) is
 //! decorrelated by a randomized **standoff window**: at a private intent the
@@ -53,12 +57,17 @@
 
 pub mod cover;
 pub mod draw;
+pub mod plan;
 
 pub use cover::{
     cover_dial_span_atomic, draw_cover_amount, COVER_RAMP_END_COUNT, COVER_RUNWAY_FLOOR_ATOMIC,
     COVER_SPAN_CAP_ATOMIC, COVER_TAIL_COUNT,
 };
 pub use draw::{draw_entry_gap, GapRng, DEFAULT_ENTRY_GAP_WINDOW};
+pub use plan::{plan_entry_seam, EntrySeamPlan};
 
 #[cfg(feature = "conformance")]
 pub mod conformance;
+
+#[cfg(feature = "gf7-hooks")]
+pub mod gf7;

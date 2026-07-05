@@ -1223,7 +1223,13 @@ cross-referenced to their home docs.
   **privacy axis of the R-3 reconciliation already obligated pre-seal** (§6 scope note), not new
   scope. Deliverable: a minimal adversary sim on the funding/exit timing seams — `P(link | T_obs)`
   as a function of standoff window / entry jitter / batch size. Home:
-  [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md).
+  [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md). *(Progress 2026-07-05: the evidence
+  pipeline for the GF-7 funding-seam instance exists — hook spec
+  [`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](ARCHIVAL_BOND_2C_GF7_HOOKS.md) landed with the 2c-2b
+  scheduler wiring, PR #255: injected observer seam in the production scheduler + the
+  `--gf7-timeline` joint three-axis scenario with a funding-seam-blind grading arm. The graded
+  measurement round itself is still open — it is the genesis gate tracked in
+  `docs/FOLLOWUPS.md`.)*
 - **S-4 — the bridge (onion↔`P_canonical_id`) is an inherited staking-model cost, conceded by
   design.** Serve-credit must attribute to `P_canonical_id`, and the obvious attribution signs the
   response with the consensus key; the only escape (a challenger verifies a *valid* response without
