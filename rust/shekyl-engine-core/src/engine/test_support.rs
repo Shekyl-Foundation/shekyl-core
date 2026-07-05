@@ -76,7 +76,7 @@ use shekyl_scanner::ScannableBlock;
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Transaction, TxPrefix};
 
 use crate::engine::pending::TxHash;
-use crate::engine::traits::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
+use crate::engine::traits::{DaemonEngine, DaemonHealth, FeeEstimates, TxSubmitOutcome};
 
 /// Default 32-byte seed for tests that don't exercise the
 /// `ChaCha20Rng`-driven paths of [`TestDaemon`].
@@ -255,6 +255,18 @@ struct State {
     /// estimates (e.g. mid-startup, during fee-pool rotation).
     fee_errors: VecDeque<RpcError>,
 
+    /// Health snapshot returned by `get_health` when no error is
+    /// queued. Defaults to a healthy, fully-synced daemon (peers
+    /// present, `target_height == 0`) so watchdog tests that don't
+    /// exercise the health gate see a non-escalating fixture.
+    /// Override via `set_health`.
+    health: DaemonHealth,
+    /// Errors queued for upcoming `get_health` calls (FIFO). Models a
+    /// daemon whose `get_info` transiently fails; the watchdog driver
+    /// treats a health error as a skip (no escalation), so tests can
+    /// assert that a failed health read does not trip the ladder.
+    health_errors: VecDeque<RpcError>,
+
     /// Deterministic RNG seeded from the constructor seed. Held
     /// for §6.2 compliance and reserved for future RNG-driven
     /// affordances (fee jitter, synthetic-fork randomization);
@@ -278,6 +290,8 @@ impl State {
             submit_errors: VecDeque::new(),
             fee_estimates: default_fee_estimates(),
             fee_errors: VecDeque::new(),
+            health: default_health(),
+            health_errors: VecDeque::new(),
             rng: ChaCha20Rng::from_seed(seed),
         }
     }
@@ -296,6 +310,18 @@ fn default_fee_estimates() -> FeeEstimates {
         standard: FeeRate::new(10, 1).expect("standard fee rate is non-zero"),
         priority: FeeRate::new(100, 1).expect("priority fee rate is non-zero"),
         quantization_mask: 1,
+    }
+}
+
+/// Construct the default [`DaemonHealth`] that fresh `TestDaemon`s
+/// return from `get_health`: a healthy, fully-synced daemon (peers
+/// present, `target_height == 0`). Watchdog tests that exercise the
+/// health gate override this with [`TestDaemon::set_health`].
+fn default_health() -> DaemonHealth {
+    DaemonHealth {
+        connections: 8,
+        height: 0,
+        target_height: 0,
     }
 }
 
@@ -495,6 +521,25 @@ impl TestDaemon {
             .push_back(err);
     }
 
+    /// Override the [`DaemonHealth`] returned by future `get_health`
+    /// calls. Persists across subsequent queries until called again.
+    /// Watchdog tests drive the §5.3 health gate (peerless → alarm,
+    /// behind → wait) through this setter.
+    pub(crate) fn set_health(&self, health: DaemonHealth) {
+        self.state.lock().expect("TestDaemon state poisoned").health = health;
+    }
+
+    /// Queue a one-shot error for the next `get_health` call. Multiple
+    /// invocations queue multiple errors (FIFO). Once the queue drains,
+    /// subsequent calls return the configured [`DaemonHealth`].
+    pub(crate) fn inject_health_failure(&self, err: RpcError) {
+        self.state
+            .lock()
+            .expect("TestDaemon state poisoned")
+            .health_errors
+            .push_back(err);
+    }
+
     /// Number of distinct transactions that have entered the
     /// `submit_transaction` dedup set. Each call to
     /// `submit_transaction(bytes)` with previously-unseen `bytes`
@@ -653,6 +698,19 @@ impl DaemonEngine for TestDaemon {
             } else {
                 Ok(TxSubmitOutcome::AlreadyInPool { hash })
             }
+        }
+    }
+
+    fn get_health(
+        &self,
+    ) -> impl Send + std::future::Future<Output = Result<DaemonHealth, Self::Error>> {
+        let state = self.state.clone();
+        async move {
+            let mut state = state.lock().expect("TestDaemon state poisoned");
+            if let Some(err) = state.health_errors.pop_front() {
+                return Err(err);
+            }
+            Ok(state.health)
         }
     }
 }
