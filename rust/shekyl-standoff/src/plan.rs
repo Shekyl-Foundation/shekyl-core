@@ -40,8 +40,10 @@
 /// Exactly one of the two offsets is `0` (that event fires at the anchor);
 /// the other equals the drawn `spread` (`~ U[0, window]`). Which is which is
 /// the `bond_first` order-coin's decision. A `spread` of `0` places both
-/// events at the anchor — the no-standoff degenerate case the drawn window
-/// makes rare and the caller's degeneracy guard polices.
+/// events at the anchor — a valid (if standoff-free) outcome the uniform
+/// draw makes rare (probability `1/(window + 1)`). The caller's degeneracy
+/// guard rejects only the *systematic* routes to it — a zero-width window
+/// and a stuck RNG repeating spreads — never the rare honest zero.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EntrySeamPlan {
     /// Blocks from the anchor to `P`'s observable funding/entry event.

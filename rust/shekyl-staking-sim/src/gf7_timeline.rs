@@ -145,6 +145,15 @@ struct RecordedPair {
 /// later `PerP` submits. The entry-seam placement is the real pipeline:
 /// `draw_entry_gap(window)` → `plan_entry_seam`, both events placed relative
 /// to the private anchor `t0` (the co-triggering session's block).
+///
+/// # Preconditions (asserted — misconfiguration fails loudly, never silently)
+///
+/// - `1 <= period_range.0 <= period_range.1`: a zero period breaks the
+///   cadence arithmetic (mod-by-zero, non-advancing loop); an inverted range
+///   underflows the width.
+/// - `period_range.1 <= horizon / 2`: guarantees the first session (`phase <
+///   period`) lands in the first half, so the private anchor exists and the
+///   seam events fit the horizon even at the widest swept window.
 fn simulate_pair(
     rng: &mut SplitMix64,
     window: u64,
@@ -153,6 +162,18 @@ fn simulate_pair(
     observer: &mut RecordingObserver,
 ) {
     let (pmin, pmax) = period_range;
+    assert!(
+        pmin >= 1 && pmin <= pmax,
+        "period_range must satisfy 1 <= min <= max (got {pmin}..={pmax}): \
+         a zero period breaks the cadence arithmetic and an inverted range \
+         underflows"
+    );
+    assert!(
+        pmax <= horizon / 2,
+        "max session period ({pmax}) must fit in half the horizon ({horizon}): \
+         the private anchor must land in the first half so the seam events \
+         fit the horizon"
+    );
     let period = pmin + rng.next_u64() % (pmax - pmin + 1);
     let phase = rng.next_u64() % period;
 
@@ -168,11 +189,9 @@ fn simulate_pair(
 
     // The private intent anchor co-triggers with a session in the first half
     // (so the seam events fit the horizon comfortably even at window 600).
-    let first_half = sessions
-        .iter()
-        .filter(|&&s| s <= horizon / 2)
-        .count()
-        .max(1);
+    // Non-empty by the asserted precondition: `phase < period <= horizon / 2`,
+    // so the first session always lands in the first half.
+    let first_half = sessions.iter().filter(|&&s| s <= horizon / 2).count();
     let anchor_idx = (rng.next_u64() as usize) % first_half;
     let t0 = sessions[anchor_idx];
 
@@ -529,5 +548,34 @@ mod tests {
         assert!(cov.axis_i_bond_post_events >= 3);
         assert!(cov.axis_ii_per_p_submits >= 1);
         assert!(cov.axis_iii_lifecycle_events >= 3);
+    }
+
+    // The two precondition guards bite (not just exist): a degenerate or
+    // inverted period range, and a period too large for the anchor to land
+    // in the first half, both fail loudly instead of panicking obscurely
+    // (mod-by-zero / out-of-bounds) or looping forever.
+
+    #[test]
+    #[should_panic(expected = "period_range must satisfy 1 <= min <= max")]
+    fn zero_period_range_is_refused() {
+        let mut rng = SplitMix64(1);
+        let mut obs = RecordingObserver::new();
+        simulate_pair(&mut rng, 600, 4_000, (0, 0), &mut obs);
+    }
+
+    #[test]
+    #[should_panic(expected = "period_range must satisfy 1 <= min <= max")]
+    fn inverted_period_range_is_refused() {
+        let mut rng = SplitMix64(1);
+        let mut obs = RecordingObserver::new();
+        simulate_pair(&mut rng, 600, 4_000, (400, 40), &mut obs);
+    }
+
+    #[test]
+    #[should_panic(expected = "must fit in half the horizon")]
+    fn period_exceeding_half_horizon_is_refused() {
+        let mut rng = SplitMix64(1);
+        let mut obs = RecordingObserver::new();
+        simulate_pair(&mut rng, 600, 4_000, (40, 2_001), &mut obs);
     }
 }
