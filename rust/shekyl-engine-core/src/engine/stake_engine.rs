@@ -85,10 +85,15 @@
 //!
 //! The actor is reworked to Model D here; the live spawn (`assemble()` deriving
 //! the union and spawning the handle, `Engine.stake`) lands in this same PR's
-//! `assemble()` wiring, and the first consumer (the JoinMarket bond request
-//! that consumes a [`PersistedBondTicket`] + [`PersonaHandle`]) lands in 2c-2b.
-//! Items not yet wired carry their own `#[allow(dead_code)]` so the dead-code
-//! check stays effective and the allows fall away as wiring lands.
+//! `assemble()` wiring. 2c-2b wires the block-timed placement plan into the
+//! [`SignBond`] reply ([`SignedBondPost`] pairs the signed vin with its
+//! [`EntrySeamPlan`]) and the GF-7 measurement seam (`gf7-hooks`,
+//! `docs/design/ARCHIVAL_BOND_2C_GF7_HOOKS.md`). The first live caller (the
+//! JoinMarket bond request that consumes a [`PersistedBondTicket`] +
+//! [`PersonaHandle`] and dispatches at the planned offsets) lands with the
+//! 2c-2a assemble / 2d broadcast wiring. Items not yet wired carry their own
+//! `#[allow(dead_code)]` so the dead-code check stays effective and the
+//! allows fall away as wiring lands.
 //!
 //! [`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md`]: ../../../../../docs/design/ARCHIVAL_BOND_CONSTRUCTION.md
 //! [`ArchivalPKeys`]: shekyl_crypto_pq::archival_p::ArchivalPKeys
@@ -109,6 +114,9 @@ use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
 use shekyl_standoff::draw::{draw_entry_gap, GapRng};
+#[cfg(feature = "gf7-hooks")]
+use shekyl_standoff::gf7::{BroadcastTimelineObserver, NoOpObserver, TimelineEvent};
+use shekyl_standoff::plan::{plan_entry_seam, EntrySeamPlan};
 use shekyl_types::{PCanonicalId, SettlementEpoch};
 
 use super::pscan::persona_scanner::{guaranteed_scanner_for_persona, PersonaScanError};
@@ -595,6 +603,15 @@ pub(crate) struct StakeEngineArgs {
     /// entirely and there is no grade.
     #[cfg(all(test, feature = "conformance"))]
     pub self_cert: TestSelfCert,
+    /// GF-7 measurement-hook observer (`ARCHIVAL_BOND_2C_GF7_HOOKS.md` §3) —
+    /// **injected**, `ScanSchedule`-discipline: no hardwired sink. Every
+    /// production construction path injects [`NoOpObserver`]; only the sim
+    /// (via a direct `StakeEngineArgs`, never a production spawn) constructs
+    /// a recording one. Exists only under the non-default `gf7-hooks` feature
+    /// (the §4 layer-3 no-emit containment); the default build carries no
+    /// field, no calls, no vocabulary.
+    #[cfg(feature = "gf7-hooks")]
+    pub observer: Box<dyn BroadcastTimelineObserver>,
 }
 
 /// Test-only selector for the S6 session self-cert (see [`StakeEngineArgs`]).
@@ -630,6 +647,10 @@ pub(crate) struct StakeEngine {
     /// invalidating every [`PersonaHandle`] minted before it — the mechanism
     /// behind operation-scoped handles (typed contract #2).
     generation: u64,
+    /// GF-7 measurement-hook observer (injected via [`StakeEngineArgs`];
+    /// see the field docs there). Feature-gated out of default builds.
+    #[cfg(feature = "gf7-hooks")]
+    observer: Box<dyn BroadcastTimelineObserver>,
 }
 
 #[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
@@ -867,6 +888,8 @@ impl Actor for StakeEngine {
             held,
             active,
             generation: 0,
+            #[cfg(feature = "gf7-hooks")]
+            observer: args.observer,
         })
     }
 
@@ -1015,8 +1038,11 @@ impl Message<ActivePersona> for StakeEngine {
 ///
 /// The `ArchivalPKeys` bundle is borrowed inside the actor and never crosses
 /// the actor boundary (rule 36-secret-locality). `build_join_market_vin` is
-/// called here, returning the signed `JoinMarketVin` for the engine to wire
-/// into the transaction.
+/// called here; the reply is a [`SignedBondPost`] carrying the signed
+/// `JoinMarketVin` **and** the [`EntrySeamPlan`] derived from this request's
+/// entry-gap draw — the caller receives the placement plan with the bytes it
+/// places, so the draw cannot be silently dropped between signing and
+/// scheduling.
 ///
 /// Does **not** advance the rotation generation — signing does not change
 /// the active slot or wipe any persona.
@@ -1028,7 +1054,7 @@ impl Message<ActivePersona> for StakeEngine {
 /// stake.activate_persona(handle1)           (sets active slot; handle1 consumed)
 /// engine.persist_bond_record(slot) → ticket (durable; Engine, not actor)
 /// stake.mint_handle(slot)      → handle2
-/// stake.sign_bond(handle2, ticket, holdings, tx_prefix_hash) → JoinMarketVin
+/// stake.sign_bond(handle2, ticket, holdings, tx_prefix_hash) → SignedBondPost
 /// ```
 #[allow(dead_code)] // inert until 2c-2b request path is wired end-to-end
 pub(crate) struct SignBond {
@@ -1046,8 +1072,27 @@ pub(crate) struct SignBond {
     pub tx_prefix_hash: [u8; 32],
 }
 
+/// Reply of [`SignBond`]: the signed bond vin **and** the block-timed
+/// placement plan derived from the same request's entry-gap draw.
+///
+/// Pairing them in one reply is the seam discipline: the caller that receives
+/// the bytes to place also receives *where to place them* (relative to its
+/// private intent anchor `t0`), so the order-coin cannot be silently dropped
+/// between signing and scheduling — the failure mode named in
+/// [`shekyl_standoff::plan`]'s module docs. The plan is relative (blocks from
+/// `t0`); the anchor itself never leaves the caller.
+#[allow(dead_code)] // inert until the 2c-2a assemble / 2d dispatch consumer lands
+#[derive(Debug)]
+pub(crate) struct SignedBondPost {
+    /// The signed JoinMarket bond vin, ready for transaction assembly.
+    pub vin: JoinMarketVin,
+    /// Relative placement of the entry event and the bond-post broadcast,
+    /// from [`plan_entry_seam`] over this request's draw.
+    pub plan: EntrySeamPlan,
+}
+
 impl Message<SignBond> for StakeEngine {
-    type Reply = Result<JoinMarketVin, StakeEngineError>;
+    type Reply = Result<SignedBondPost, StakeEngineError>;
 
     async fn handle(
         &mut self,
@@ -1086,47 +1131,76 @@ impl Message<SignBond> for StakeEngine {
         //    fires `RngDegeneracy` if they are equal (double-jitter-trap detection).
         //    The actual timing draw result is returned on success.
         let mut rng = OsRngGapAdapter;
-        let (_spread, _bond_first) =
-            draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
-                .map_err(|DegenerateDraw| StakeEngineError::RngDegeneracy)?;
+        let (spread, bond_first) = draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
+            .map_err(|DegenerateDraw| StakeEngineError::RngDegeneracy)?;
         // S6: the session-level `certify_draw` self-cert (over `OsRngGapAdapter`,
         // gated, at session start) is wired in `on_start` — see
         // `run_session_self_cert` and the `conformance` feature.
-        // TODO(2d) — the write-side *seam* that `_spread`/`_bond_first` will feed is
-        // built: `PTransactionSubmitter` (the per-`P` CX-2 seam) + `BroadcastPosture`
-        // (no-③-by-type) in `transaction_submitter.rs` / `posture.rs` (SP-T4a,
-        // `ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`). But the draw itself is NOT wired:
-        // both values stay `_`-prefixed locals. The remaining CONSUMER wiring, still
-        // gated (**not on the seam**): assemble the bond `vin` into a full tx (funding
-        // inputs/outputs + `credit_term` → `shekyl_tx_builder::sign_transaction_with_terms`),
-        // give `StakeEngine` a broadcast submitter + a resolved posture + a block-timed
-        // scheduler that consumes BOTH draw values — the `_spread` DELAY **and** the
-        // `_bond_first` ORDER-COIN (the fair bond-before-vs-after-funding inversion;
-        // dropping it collapses the observer's ordering prior from 0.5 to certainty,
-        // half the golden-vector-certified decorrelation). This is the 2c-2a assemble /
-        // 2c-2b request-path wiring this actor is inert for; it *consumes* the seam,
-        // not the reverse.
+
+        // 5. Consume BOTH draw values into the block-timed placement plan
+        //    (2c-2b scheduler wiring). `plan_entry_seam` is the single-sourced
+        //    consumer (`shekyl_standoff::plan`): it takes the draw tuple whole,
+        //    so the `bond_first` ORDER-COIN (the fair bond-before-vs-after-
+        //    funding inversion; dropping it collapses the observer's ordering
+        //    prior from 0.5 to certainty, half the golden-vector-certified
+        //    decorrelation) is consumed with the `spread` DELAY by construction.
+        //    The plan rides the reply; the caller anchors it at its private
+        //    intent time `t0`.
+        //    TODO(2d) — the write-side *seam* the plan will drive is built:
+        //    `PTransactionSubmitter` (per-`P` CX-2) + `BroadcastPosture`
+        //    (no-③-by-type) in `transaction_submitter.rs` / `posture.rs`
+        //    (SP-T4a, `ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`). The remaining
+        //    CONSUMER wiring, still gated (**not on the seam**): assemble the
+        //    bond `vin` into a full tx (funding inputs/outputs + `credit_term`
+        //    → `shekyl_tx_builder::sign_transaction_with_terms`) and dispatch
+        //    at the planned offsets through the submitter. That is the 2c-2a
+        //    assemble / 2d dispatch wiring; this handler plans, it does not
+        //    broadcast.
         //
         // GF-7 SCOPE (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §4): this jitter
         // decorrelates the bond-post from `P`'s own observable funding/entry event
         // (the funding-seam ordering prior) **only** — NOT from the principal's
         // lifecycle timeline, nor from `P`'s other broadcasts. That correlation
-        // (GATE6 §10.12 GF-7) is deferred, unmeasured, and a **genesis gate** — not
-        // something this timing draw closes.
+        // (GATE6 §10.12 GF-7) remains a **genesis gate**; the measurement pipeline
+        // that will quantify it is the `gf7-hooks` observer seam below
+        // (`ARCHIVAL_BOND_2C_GF7_HOOKS.md`), evaluated in `shekyl-staking-sim`.
+        let plan = plan_entry_seam((spread, bond_first));
 
-        // 5. Borrow the held bundle — slot membership confirmed by step 1.
+        // GF-7 hooks-spec §3: emit the draw-consumption and schedule events to
+        // the injected observer. Sim-facing only — this block is compiled out
+        // of default builds (§4 layer 3), and the production observer is the
+        // no-op (§6.1). Payload discipline: opaque wallet-local slot ordinal,
+        // block-relative offsets, no wall-clock, no identities.
+        #[cfg(feature = "gf7-hooks")]
+        {
+            let persona = u64::from(handle_slot.0);
+            self.observer.record(TimelineEvent::EntryGapDrawConsumed {
+                persona,
+                window_blocks: DEFAULT_ENTRY_GAP.as_blocks(),
+                spread_blocks: spread,
+                bond_first,
+            });
+            self.observer.record(TimelineEvent::BondPostScheduled {
+                persona,
+                entry_offset_blocks: plan.entry_offset_blocks,
+                bond_post_offset_blocks: plan.bond_post_offset_blocks,
+            });
+        }
+
+        // 6. Borrow the held bundle — slot membership confirmed by step 1.
         let keys = self
             .held
             .get(&handle_slot)
             .expect("validate_handle confirmed slot is held")
             .keys();
 
-        // 6. Build and sign the JoinMarket vin inside the actor.
+        // 7. Build and sign the JoinMarket vin inside the actor.
         //    `ArchivalPKeys` is borrowed here and never returned to the caller
-        //    (rule 36-secret-locality): only the signed `JoinMarketVin` crosses
-        //    the actor boundary.
-        build_join_market_vin(keys, msg.holdings, &msg.tx_prefix_hash)
-            .map_err(StakeEngineError::BondBuild)
+        //    (rule 36-secret-locality): only the signed `JoinMarketVin` (paired
+        //    with its placement plan) crosses the actor boundary.
+        let vin = build_join_market_vin(keys, msg.holdings, &msg.tx_prefix_hash)
+            .map_err(StakeEngineError::BondBuild)?;
+        Ok(SignedBondPost { vin, plan })
     }
 }
 
@@ -1330,6 +1404,11 @@ impl StakeEngineHandle {
             // tests build args directly with their mode.
             #[cfg(all(test, feature = "conformance"))]
             self_cert: TestSelfCert::Skip,
+            // GF-7 hooks-spec §6.1: production construction injects the no-op.
+            // A recording observer enters only via a direct `StakeEngineArgs`
+            // (sim/tests), never through this spawn path.
+            #[cfg(feature = "gf7-hooks")]
+            observer: Box::new(NoOpObserver),
         });
         Self { actor }
     }
@@ -1400,7 +1479,8 @@ impl StakeEngineHandle {
     }
 
     /// Build and sign a JoinMarket archival bond post for the persona named by
-    /// `handle` (Bond-PR 2c-2b, S1/S2).
+    /// `handle` (Bond-PR 2c-2b, S1/S2), returning the signed vin **paired
+    /// with** its block-timed placement plan ([`SignedBondPost`]).
     ///
     /// Consumes both `handle` (operation-scoped capability, typed contract #2)
     /// and `ticket` (persist-before-use witness, typed contract #1) by value,
@@ -1428,7 +1508,7 @@ impl StakeEngineHandle {
         ticket: super::stake_persist::PersistedBondTicket,
         holdings: HoldingsDescriptor,
         tx_prefix_hash: [u8; 32],
-    ) -> Result<JoinMarketVin, StakeEngineError> {
+    ) -> Result<SignedBondPost, StakeEngineError> {
         self.actor
             .ask(SignBond {
                 handle,
@@ -1997,6 +2077,106 @@ mod tests {
         );
     }
 
+    /// GF-7 hooks-spec §6.2 (emission-complete for the 2c-2b surface) — a
+    /// successful `sign_bond` emits exactly the draw-consumption and schedule
+    /// events to the **injected** observer, and the emitted payloads are
+    /// internally consistent: the schedule event equals `plan_entry_seam` over
+    /// the emitted draw, and both match the plan riding the reply. Also pins
+    /// the §3 payload discipline the sim depends on: opaque slot ordinal and
+    /// the sweepable window parameter on the draw event.
+    #[cfg(feature = "gf7-hooks")]
+    #[tokio::test]
+    async fn sign_bond_emits_gf7_draw_and_schedule_events() {
+        use std::sync::{Arc, Mutex};
+
+        use crate::engine::stake_persist::PersistedBondTicket;
+        use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind};
+
+        struct Recorder(Arc<Mutex<Vec<TimelineEvent>>>);
+        impl BroadcastTimelineObserver for Recorder {
+            fn record(&mut self, event: TimelineEvent) {
+                self.0.lock().expect("recorder lock").push(event);
+            }
+        }
+
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let bundles: BTreeMap<PSlot, ArchivalPKeys> =
+            [(PSlot(0), derive_bundle(0))].into_iter().collect();
+        let handle = StakeEngineHandle {
+            actor: StakeEngine::spawn(StakeEngineArgs {
+                bundles,
+                bonded: BTreeSet::new(),
+                active: None,
+                #[cfg(feature = "conformance")]
+                self_cert: TestSelfCert::Skip,
+                observer: Box::new(Recorder(Arc::clone(&recorded))),
+            }),
+        };
+
+        let h0 = handle
+            .mint_handle(PSlot(0))
+            .await
+            .expect("mint handle for slot 0");
+        let ticket = PersistedBondTicket::__test_only_forge(PSlot(0));
+        let holdings = HoldingsDescriptor {
+            kind: HoldingsKind::ShardSetCompact,
+            shard_ids: vec![7, 42],
+        };
+        let post = handle
+            .sign_bond(h0, ticket, holdings, [0u8; 32])
+            .await
+            .expect("sign_bond succeeds for a held, matching slot");
+
+        let events = recorded.lock().expect("recorder lock");
+        assert_eq!(
+            events.len(),
+            2,
+            "exactly the two 2c-2b emission points fire: {events:?}"
+        );
+
+        let (spread, bond_first) = match events[0] {
+            TimelineEvent::EntryGapDrawConsumed {
+                persona,
+                window_blocks,
+                spread_blocks,
+                bond_first,
+            } => {
+                assert_eq!(persona, 0, "opaque wallet-local slot ordinal");
+                assert_eq!(
+                    window_blocks,
+                    DEFAULT_ENTRY_GAP.as_blocks(),
+                    "sweepable window parameter rides the event"
+                );
+                (spread_blocks, bond_first)
+            }
+            ref other => panic!("first event must be the draw consumption, got {other:?}"),
+        };
+
+        match events[1] {
+            TimelineEvent::BondPostScheduled {
+                persona,
+                entry_offset_blocks,
+                bond_post_offset_blocks,
+            } => {
+                assert_eq!(persona, 0, "same persona ordinal as the draw event");
+                let emitted = EntrySeamPlan {
+                    entry_offset_blocks,
+                    bond_post_offset_blocks,
+                };
+                assert_eq!(
+                    emitted,
+                    plan_entry_seam((spread, bond_first)),
+                    "schedule event must be the planner over the emitted draw"
+                );
+                assert_eq!(
+                    emitted, post.plan,
+                    "schedule event must match the plan riding the reply"
+                );
+            }
+            ref other => panic!("second event must be the schedule, got {other:?}"),
+        }
+    }
+
     // ---- SP-3/SP-5: the offloaded dual-extractor scan-step ----
 
     use shekyl_crypto_pq::kem::HybridKemPublicKey;
@@ -2240,6 +2420,8 @@ mod tests {
                 bonded: BTreeSet::new(),
                 active: None,
                 self_cert: mode,
+                #[cfg(feature = "gf7-hooks")]
+                observer: Box::new(shekyl_standoff::gf7::NoOpObserver),
             };
             StakeEngineHandle {
                 actor: StakeEngine::spawn(args),
