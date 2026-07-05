@@ -501,8 +501,9 @@
   mint site in the assemble/sign module (possession is proof of
   provenance); P-2 the held record stores the `PBoundBytes` value itself,
   so every resubmit re-sends the stored value through the same choke
-  path. Freeze confirmed, no reopen; pins are implementation obligations
-  for the 2c wiring slices.
+  path. Freeze confirmed, no reopen; the pins are recorded as §3.1
+  part 6 (mint-once / store-wrapped — an addition beside the frozen
+  five) and are implementation obligations for the 2c wiring slices.
 
 - **docs: `AlreadyInChain { height }` — the F40 lock-release discriminant
   (2c design round, `docs/design/DAEMON_SUBMIT_VERDICT.md` §2.1/§2.2/§2.3/
@@ -515,9 +516,17 @@
   height cases, and `height` routes the release (refresh catch-up above
   the synced height; targeted re-scan at/below it, falling through to
   the F31 status query). Recorded as a reasoned carve-out from §2.2 wire
-  minimalism, a new §7.2 trust-rider row (damage-capped both directions),
-  and a new §2.3 schema-evolution category (required-field additions:
-  atomic pre-genesis, optional-with-default post-genesis). Implementation
+  minimalism admitted through the §5 inform-never-drive principle, held
+  by two pinned rules — F40-R1: a below-synced claim authorizes a re-scan
+  and never a release (release stays refresh-/watchdog-authoritative);
+  F40-R2: fruitless daemon-directed re-scans are breaker-bounded
+  (F28/F37 family) to operator alarm, closing the lie-low wallet-work
+  amplifier — plus a new §7.2 trust-rider row (damage-capped both
+  directions), a new §2.3 schema-evolution category (required-field
+  additions: atomic pre-genesis, optional-with-default post-genesis),
+  and a §2.2 disambiguation note keeping F40 (wallet consumes a bounded
+  height discriminant) distinct from F22 leg 2 (daemon cache fails to
+  bind height — the opposite direction on the same field). Implementation
   lands with the 2c submit-consumer slices.
 
 - **docs: submit-verdict series stale-doc sweep**

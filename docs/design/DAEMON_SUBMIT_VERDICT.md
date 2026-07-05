@@ -206,6 +206,42 @@ trivial reading above: verdicts are definite; transport errors are not.
   the guess into a selectable-input leak plus F28/F37 alarm fatigue on
   demand. Decidability beats minimalism here; the minimalism rule survives
   for every field that remains deleted.
+
+  The carve-out is admitted **through the §5 principle** ("daemon messages
+  *inform* wallet refresh decisions; they never *drive* them"), which is the
+  test the deleted fields failed and this one passes — provided two rules
+  are pinned as part of F40 itself:
+
+  - **F40-R1 (rescan, never release).** A `height ≤ synced` claim authorizes
+    a *targeted re-scan* and nothing else. Lock release comes **only** from
+    refresh observing the spend (`mark_spent`,
+    `ledger_indexes.rs`) or the §2.6 confirmed-absent watchdog path — both
+    cross-check chain data the daemon cannot forge (§5.1). A failed re-scan
+    must not release; it falls through to the F31 status query. Under R1 the
+    height *informs* (which disposition to attempt) and never *drives* (the
+    irreversible action is always refresh-authoritative) — the exact line
+    §5 draws.
+  - **F40-R2 (fruitless-rescan breaker).** Without a bound, a lie-low daemon
+    gets a free wallet-work amplifier: each false `height ≤ synced` claim is
+    cheap for the daemon and costs the wallet a re-scan. Consecutive
+    daemon-directed re-scans that find no matching tx count against an
+    F28/F37-family loop-breaker — N fruitless re-scans trip an operator
+    alarm ("your daemon is claiming confirmations that don't exist"), the
+    honest §7.1 surface for a violated trust bound. The lie is
+    self-limiting and surfaces as the alarm it should be.
+
+  Asserting the field without R1/R2 would contradict §2.1 (verdict-driven
+  irreversible action) rather than satisfy §5; the two rules are what make
+  the carve-out a carve-out and not an erosion of the rule.
+
+  *Disambiguation (same field, opposite directions):* F40 is the **wallet**
+  consuming a height as a bounded release-path discriminant — permitted
+  under R1/R2. It is unrelated to, and must not be conflated with, F22
+  leg 2 (§1 defect 0.9, fixed in PR-3): the **daemon's template
+  construction** trusting a cached verification result whose hash does not
+  bind height — the live consensus footgun. A later reader seeing "height"
+  near "cache" in this document is looking at two different hazards with
+  two different fixes.
 - **No `detail` field (F27).** Sub-cause diagnostics (which of the ~12
   `Malformed` legs fired) are logged daemon-side at `INFO`, keyed by txid,
   where they are trustworthy and operator-correlatable. A wire field the
@@ -292,7 +328,7 @@ Request-surface trims relative to `COMMAND_RPC_SEND_RAW_TX`:
 | --- | --- |
 | `Accepted` | Pending-tx enters *awaiting confirmation*; watchdog (§5.3) takes over. Outputs move to the awaiting-confirmation lock state (§2.6: persisted, dual release paths) — **not** marked spent at submit-accept (the current `local_pending_tx.rs:775-807` behavior moves to refresh-authoritative confirmation; PR-4). |
 | `AlreadyInPool` | Same as `Accepted` (identity fact: the bytes are held). Resolves prior transport ambiguity for this txid. |
-| `AlreadyInChain{height}` | Confirmation observed by verdict; refresh remains the settlement authority (reorgs happen — the verdict authorizes lock-lifecycle transitions only). Outputs enter the awaiting-confirmation lock in **both** height cases (fund safety first: no selectable window either way); `height` decides the **release path** (F40). *(a) `height` > wallet synced height:* the ordinary §2.6 path-1 release — refresh reaches the confirming block and settles spent-marking; baseline the lock at `height`, not at current daemon height. *(b) `height` ≤ wallet synced height:* refresh already passed that height without observing the spend — path-1 release is unreachable by construction (the FOLLOWUPS stranded-lock wedge). Enqueue a **targeted re-scan** of the window around `height` (the reorg-heal machinery — the wallet's view of that height is stale or divergent); the re-scan re-observes the spend and settles refresh-authoritatively. If the re-scan does *not* find the tx at `height` (daemon lied, or a second reorg), the F31 resubmit-as-status-query yields a fresh definite verdict; every exit is verdict, confirmation, or operator alarm — no silent strand. |
+| `AlreadyInChain{height}` | Confirmation observed by verdict; refresh remains the settlement authority (reorgs happen — the verdict authorizes lock-lifecycle transitions only). Outputs enter the awaiting-confirmation lock in **both** height cases (fund safety first: no selectable window either way); `height` decides the **release path** (F40). *(a) `height` > wallet synced height:* the ordinary §2.6 path-1 release — refresh reaches the confirming block and settles spent-marking; baseline the lock at `height`, not at current daemon height. *(b) `height` ≤ wallet synced height:* refresh already passed that height without observing the spend — path-1 release is unreachable by construction (the FOLLOWUPS stranded-lock wedge). Enqueue a **targeted re-scan** of the window around `height` (the reorg-heal machinery — the wallet's view of that height is stale or divergent); the re-scan re-observes the spend and settles refresh-authoritatively. A failed re-scan **never releases** (F40-R1: release is refresh- or watchdog-authoritative only); it falls through to the F31 resubmit-as-status-query for a fresh definite verdict, and consecutive fruitless daemon-directed re-scans are breaker-bounded (F40-R2, F28/F37 family) → operator alarm. Every exit is verdict, confirmation, or operator alarm — no silent strand, no daemon-steered release. |
 | `Rejected{Malformed}` | Release locks, surface, **one-shot rebuild**: if the rebuilt tx also returns `Malformed`, escalate to operator alarm — two independent builds rejected as malformed is a systematic wallet/daemon rule disagreement, not a bad tx; a third silent build burns fees and multiplies linking-tag artifacts (§7.1). Never loop. |
 | `Rejected{FeeTooLow}` | Release, re-estimate fee, rebuild — **once** (F37; the F28 logic applies verbatim): a second consecutive `FeeTooLow` on the rebuilt tx is a systematic fee-model disagreement (a KAT gap on P2, or sustained pool pressure the wallet's estimate never meets) → operator alarm, never loop. The bound is privacy-load-bearing, not just liveness hygiene: unlike `Malformed`, a fee-driven rebuild can *change the input set* — covering a higher fee may pull in an additional input, so each iteration broadcasts a new tx sharing the original key image **and** revealing a newly co-owned input (F30 linkage plus wallet-clustering, once per loop, under the malicious-relay case of §7.1). Covers static-floor, Phase-D re-gate, and pool-pressure variants; under single-egress this verdict carries proof the tx is in neither pool nor chain, so release is safe. |
 | `Rejected{DoubleSpendConflict}` | Terminal release. A different tx spends the input; refresh will surface which. |
@@ -926,7 +962,7 @@ with trust classification:
 | Current vs target height | `ReferenceNotFound` sync-gating; watchdog | trusted | **untrusted** — a lying sync height flips backoff/terminal at will |
 | Fee params (fee-per-byte, quantization mask) | fee estimation; the `FeeTooLow` re-estimate rung | trusted | **untrusted** — a lying fee oracle griefs: overpay, or an induced `FeeTooLow` loop (bounded by the F37 loop-breaker) |
 | Curve-tree roots / chain view consumed at proof-construction time | tx builder (`shekyl-tx-builder`) | trusted | **untrusted** — a lying chain view yields proofs honest daemons reject (`StaleRoot`-shaped griefing); it cannot forge membership, since consensus verifies against canonical roots |
-| `AlreadyInChain.height` (F40) | lock release-path routing (§2.5) | trusted | **untrusted** — but damage-capped in both directions: lie-high routes to path-1 waiting, released by the §2.6 confirmed-absent watchdog horizon (bounded liveness cost); lie-low routes to a targeted re-scan that finds nothing and falls through to the F31 status query (bounded work). Neither lie can force a linkage event: the lock is placed in **both** branches, so no lie makes the inputs selectable. Categorically a *metadata* row, not a verdict row — the verdict (`AlreadyInChain` itself) is the §7.1-class claim; the height only routes its release |
+| `AlreadyInChain.height` (F40) | lock release-path routing (§2.5) | trusted (but R1/R2-bounded even here) | **untrusted** — but damage-capped in both directions: lie-high routes to path-1 waiting, released by the §2.6 confirmed-absent watchdog horizon (bounded liveness cost); lie-low routes to a targeted re-scan that finds nothing, **never releases** (F40-R1), falls through to the F31 status query, and is breaker-bounded against repetition (F40-R2 — a lie-low spam campaign is a wallet-work amplifier otherwise; the breaker converts it to an operator alarm). Neither lie can force a linkage event: the lock is placed in **both** branches, so no lie makes the inputs selectable. Categorically a *metadata* row, not a verdict row — the verdict (`AlreadyInChain` itself) is the §7.1-class claim; the height only routes its release |
 
 Round 4 introduced the health-context consumption; F32 caught that the
 then-current rider enumerated only the *deleted* relay fields
@@ -1280,7 +1316,11 @@ enumeration above is the complete submit surface.
    JSON fixture gains `height`; add skew test D — a field-less
    `already_in_chain` deserializes to the `Err` arm (the §2.3
    required-field asymmetry, pinned so the post-genesis
-   optional-with-default rule has a test to flip).
+   optional-with-default rule has a test to flip). Wallet-side (with the
+   2c disposition implementation), the two F40 rules get pins: an R1 test —
+   a failed targeted re-scan leaves the lock in place and emits the F31
+   status query, never a release; an R2 test — N consecutive fruitless
+   daemon-directed re-scans trip the breaker to operator alarm.
 2. **Race suite (PR-3, pure Rust via mock `SubmitStateShim`):**
    deterministic interleavings — (i) block containing the tx lands during
    Phase C → `AlreadyInChain`; (ii) competing spend lands during C →

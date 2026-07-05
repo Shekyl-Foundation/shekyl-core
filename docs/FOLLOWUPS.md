@@ -695,7 +695,13 @@ sustainability is unaffected by the recalibration.
   (no selectable window either way); `height` decides the **release path**
   — `> synced`: §2.6 path-1 refresh catch-up, lock baselined at `height`;
   `≤ synced`: targeted re-scan around `height` (reorg-heal), falling through
-  to the F31 status query if the re-scan finds nothing. Misuse is
+  to the F31 status query if the re-scan finds nothing. The carve-out is
+  admitted through the §5 inform-never-drive principle and holds only with
+  its two pinned rules: **F40-R1** — a `height ≤ synced` claim authorizes a
+  re-scan, never a release (release is refresh-/watchdog-authoritative
+  only; a failed re-scan must not release); **F40-R2** — consecutive
+  fruitless daemon-directed re-scans are breaker-bounded (F28/F37 family)
+  → operator alarm, closing the lie-low wallet-work amplifier. Misuse is
   damage-capped both directions (§7.2 row — no lie can force a linkage
   event); pre-genesis the field lands required with fixtures updated
   atomically (§2.3 third-category rule, new). *Remaining: implementation
@@ -7293,8 +7299,11 @@ one place to confirm each item's relationship to the wallet stack.
   possession is proof of provenance, no re-wrap site exists; **P-2** the held/pending record for
   a `P`-bound tx stores the `PBoundBytes` value itself (not `Vec<u8>`), so F31/watchdog
   resubmits re-send the stored value through the same choke path — the retry axis cannot route
-  `P`'s probe over the principal connection. **Target: code lands in the 2c slices; the design
-  decision is closed.**
+  `P`'s probe over the principal connection. The pins are recorded as **§3.1 part 6**
+  (mint-once / store-wrapped) — an addition *beside* the frozen five parts, not a reopen; the
+  adversary they close is the future-maintainer refactor that stores raw bytes and threads
+  persona separately, silently converting the part-4 equality check into a rubber stamp.
+  **Target: code lands in the 2c slices; the design decision is closed.**
 - **2d-2 2c — `DaemonUrl` newtype: validate `base_url` at construction + house the S1 disclosure.**
   `base_url` is a bare `String` across three sites (`BroadcastPosture::OwnRemote`,
   `PTransactionSubmitter::new`, `PBlockSource::new`) with no validation and an unredacted

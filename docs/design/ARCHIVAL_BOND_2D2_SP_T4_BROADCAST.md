@@ -281,7 +281,9 @@ Invariant (A) left the routing guard as an open obligation and the FOLLOWUPS
 dispatch-shape entry posed the API choice (`TransactionSubmitter::submit` is
 RPITIT → not dyn-compatible; the two impls share no nameable type). The choice
 is now frozen — it gates [`DAEMON_SUBMIT_VERDICT.md`](DAEMON_SUBMIT_VERDICT.md)
-PR-4, whose "both submitters share the mapping" presupposes it. Five parts:
+PR-4, whose "both submitters share the mapping" presupposes it. Six parts —
+parts 1–5 frozen 2026-07-04; part 6 added the same day by the §3.1.1
+post-freeze wargame (an addition *beside* the frozen five, not a reopen):
 
 1. **Closed-set enum, match-delegation.**
    `BroadcastSubmitter<D> { Local(DaemonTransactionSubmitter<D>),
@@ -318,6 +320,20 @@ PR-4, whose "both submitters share the mapping" presupposes it. Five parts:
    `SubmitVerdict` projection (§2.5 dispositions), the enum carries through
    unchanged, and "both submitters share the mapping" is literal — one mapping
    function, two transports, one dispatch type.
+6. **Provenance: minted once, stored wrapped (added 2026-07-04 by the §3.1.1
+   wargame).** Parts 1–5 pin the *check*; this part pins what makes the check
+   check something. `PBoundBytes` is minted at exactly one site — the
+   assemble/sign path, where the pairing is ground truth because the persona's
+   slot keys were in scope (P-1) — and the held/pending record for a `P`-bound
+   tx stores the wrapped value itself, never raw bytes plus a separate persona
+   field (P-2). The retry paths (F31 status-query resubmit, watchdog probe
+   rung) *move* the existing wrapper; a re-wrap site anywhere converts the
+   part-4 equality check into a rubber stamp — it would validate a pairing the
+   caller just asserted. The adversary this closes is not external (these are
+   internal paths) but the future-maintainer refactor that stores bytes and
+   threads persona "for flexibility" — the same erosion-bait class
+   `DAEMON_SUBMIT_VERDICT.md` §2.2 names for wire fields, applied to the
+   pairing token. Full statement and byte-holder enumeration: §3.1.1.
 
 Implementation lands with the 2c wiring (the enum + constructor + `PBoundBytes`
 are 2c-2a/2c-2b code, PR-4-adjacent); this section freezes the shape so nothing
@@ -364,9 +380,11 @@ do not alter the frozen shape):
    H1's already-closed case.
 
 **Outcome: freeze confirmed, no reopen.** `Box<dyn TransactionSubmitter>`
-re-examined against the enumeration and rejected on the same grounds,
-strengthened: erasure discards the persona discriminant exactly where H2/H3
-need it. The rule-21 branding reopen recorded in §3.1(4) is **unchanged** —
+re-examined against the enumeration: it remains unavailable before it is
+undesirable — `submit` is RPITIT, not dyn-compatible at all (the §3.1
+preamble's ground, compile-probed on 1.94.0) — and the wargame adds the
+adversarial reading of the same fact: even were erasure available, it
+discards the persona discriminant exactly where H2/H3 need it. The rule-21 branding reopen recorded in §3.1(4) is **unchanged** —
 P-1/P-2 are not branding (the persona id stays a runtime value); they close
 the wrapper-forgery hole at the module boundary instead, which is the cheap
 point on the same curve. The pins are implementation obligations for the 2c
