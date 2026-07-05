@@ -15,7 +15,10 @@ docs from here).
 status here, re-verify against code (`git grep`, not plan prose) and move
 this stamp.
 
-**Maintenance discipline.**
+**Maintenance discipline** (institutionalized as
+[`.cursor/rules/94-tracking-index.mdc`](../../.cursor/rules/94-tracking-index.mdc) —
+new identifier families register here at birth; Phase 3+ / Stage 3+ work
+items start with an index row).
 
 - Additive edits date themselves (`UPDATE YYYY-MM-DD:` prefix) rather than
   silently rewriting rows.

@@ -1,0 +1,71 @@
+---
+description: The implementation tracking index (docs/design/IMPLEMENTATION_INDEX.md) is load-bearing. New identifier families register there at birth; phase/track tokens are always prefixed; statuses are dated and code-verified. Work items in Phase 3+ / Stage 3+ don't start without an index row.
+alwaysApply: true
+---
+
+# Tracking-index discipline
+
+`docs/design/IMPLEMENTATION_INDEX.md` is the single disambiguation
+layer for the project's identifier families (Phase N, Stage N,
+Bond-PR N, SP-N, SP-T-N, PR-E-N, GF-N, F-N, …) and the code-verified
+map of what is live, built-but-unwired, or missing.
+
+This rule exists because the schemes grew independently and collided:
+`2a–2d` meant different things in `WALLET_REWRITE_PLAN.md` and
+`ARCHIVAL_BOND_PR2_CHAIN.md`, and `2c-2b` was reused *within* one
+scheme. Reconstructing that from plan prose cost a full verification
+pass. The index makes the reconstruction unnecessary; this rule keeps
+the index true.
+
+## Rules
+
+1. **New identifier families register at birth.** A PR that mints a
+   new prefix scheme (any `XX-N` series in a plan doc) adds a §2 row
+   to the index **in the same PR**. Before minting, check §2: if the
+   prefix is taken or ambiguous against an existing family, pick a
+   different prefix. Never re-issue bare `2a`-style tokens.
+
+2. **No bare phase/track tokens in new prose.** Always
+   `Phase 2b` / `Bond-PR 2b` / `Stage 3` — never a bare `2b` whose
+   scheme the reader must infer. (Pinned 2026-06-19,
+   `ARCHIVAL_BOND_PR2_CHAIN.md` §0; branch names are immutable
+   history and are exempt.)
+
+3. **Statuses are dated and code-verified.** Index status edits are
+   additive `UPDATE YYYY-MM-DD:` entries, verified against landed
+   code (`git grep` on `dev`), not against another doc's prose. Where
+   a plan doc's status table and code disagree, **code wins**; record
+   the disagreement in the index's "known stale statuses" section
+   and fix the plan doc in a scoped follow-up, not as drive-by churn.
+
+4. **Landing a tracked item updates the index.** The rule-91 doc
+   task for any PR that lands, wires, or unblocks a §4/§5 item
+   includes the index row. Exception: when a PR deliberately avoids
+   doc churn (e.g. conflict avoidance with an in-flight PR), the PR
+   description names the follow-up that carries the index update.
+
+5. **Phase 3+ / Stage 3+ work starts registered.** From
+   `WALLET_REWRITE_PLAN.md` Phase 3 onward (and for all remaining
+   Stage-3+ implementation), a work item without an index row does
+   not begin implementation. The row costs one table line at design
+   time; the alternative is re-running the archaeology this rule
+   was written to end. Pre-existing Phase-2-era items are
+   grandfathered as-is but gain rows as they are touched.
+
+## Worked example
+
+Minting a hypothetical emission-audit series: check §2 (`EA-` unused),
+add `**EA-1…EA-N** | emission-audit findings | REWARD_EMISSION_LEG.md`
+to §2 in the PR that introduces `EA-1`, and write `EA-1` (never bare
+`1`) in all prose. A later PR landing `EA-3` updates the relevant
+status row with `UPDATE 2026-08-01: EA-3 landed #NNN`.
+
+## Related rules
+
+- **`91-documentation-after-plans.mdc`** — the doc-update task that
+  carries index maintenance.
+- **`05-system-thinking.mdc`** — specification first; the index row
+  is part of the specification artifact.
+- **`21-reversion-clause-discipline.mdc`** — "known stale statuses"
+  entries are reject-now-fix-separately dispositions and carry a
+  target for the fix, not an indefinite parking spot.

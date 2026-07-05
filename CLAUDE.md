@@ -59,6 +59,7 @@ Foundations & process
 - [`07-consensus-atomic-cutovers`](.cursor/rules/07-consensus-atomic-cutovers.mdc) — named, opt-in exception to `06` for consensus-boundary PRs
 - [`90-commits`](.cursor/rules/90-commits.mdc) — commit message & PR discipline
 - [`91-documentation-after-plans`](.cursor/rules/91-documentation-after-plans.mdc) — docs update is the final task of a plan
+- [`94-tracking-index`](.cursor/rules/94-tracking-index.mdc) — `docs/design/IMPLEMENTATION_INDEX.md` is load-bearing; identifier families register at birth; Phase 3+ / Stage 3+ items start with an index row
 - [`26-sub-pr-design-discipline`](.cursor/rules/26-sub-pr-design-discipline.mdc) — opt-in design-round process for multi-round/consensus/FFI sub-PRs
 
 Architecture & scope
