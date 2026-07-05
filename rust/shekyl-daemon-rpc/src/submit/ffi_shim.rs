@@ -63,7 +63,9 @@ fn facts_from_ffi(pod: &ffi::SubmitFactsFfi, ki: &[u8]) -> Result<SubmitFacts, (
     Ok(SubmitFacts {
         in_pool: pod.in_pool != 0,
         in_pool_broadcast: pod.in_pool_broadcast != 0,
-        in_chain: pod.in_chain != 0,
+        // in_chain_height is valid iff in_chain (§4.1) — the Option encodes
+        // the validity gate so the engine cannot read an unset height.
+        in_chain: (pod.in_chain != 0).then(|| BlockHeight::from_raw(pod.in_chain_height)),
         key_image_conflicts,
         reference,
         fee_per_byte: pod.fee_per_byte,
@@ -215,6 +217,7 @@ mod tests {
             fee_quantization_mask: 10,
             weight_limit: 149_400,
             chain_height: 200,
+            in_chain_height: 0,
         }
     }
 
@@ -240,8 +243,15 @@ mod tests {
             ]
         );
         assert!(facts.in_pool);
-        assert!(!facts.in_chain);
+        assert_eq!(facts.in_chain, None);
         assert!(!facts.in_pool_broadcast, "pod broadcast byte 0 → false");
+
+        // in_chain = 1 gates the F40 height into the Some arm.
+        let mut chain_pod = pod_with(1);
+        chain_pod.in_chain = 1;
+        chain_pod.in_chain_height = 180;
+        let chain_facts = facts_from_ffi(&chain_pod, &[]).expect("converts");
+        assert_eq!(chain_facts.in_chain, Some(BlockHeight::from_raw(180)));
 
         // in_pool_broadcast converts independently of in_pool (the foreign-
         // disclosure fact).

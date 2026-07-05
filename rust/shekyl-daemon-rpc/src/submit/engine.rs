@@ -172,9 +172,14 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // just-mined tx can transiently be both; "settled" is the more
         // useful truth). A snapshot key-image hit is a re-check input,
         // never a verdict — emitting DoubleSpendConflict here would
-        // resurrect defect 0.4's self-duplicate race.
-        if facts.in_chain {
-            return Ok(SubmitVerdict::AlreadyInChain);
+        // resurrect defect 0.4's self-duplicate race. The confirming-block
+        // height rides the verdict (F40): it was read under the same lock
+        // scope as the membership fact, and the wallet consumes it as a
+        // release-path discriminant (§2.5), never as truth.
+        if let Some(height) = facts.in_chain {
+            return Ok(SubmitVerdict::AlreadyInChain {
+                height: height.to_raw(),
+            });
         }
         // Pool identity discloses only what the caller's tier permits. A
         // `Conceal` (foreign caller, embargoed presence) deliberately does
@@ -340,9 +345,12 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         caller: SubmitCaller,
     ) -> Result<SubmitVerdict, EngineFault> {
         // 1. Settled identity outranks everything: a reorg plus a
-        //    competing spend must still report the settled fact.
-        if fresh.in_chain {
-            return Ok(SubmitVerdict::AlreadyInChain);
+        //    competing spend must still report the settled fact. The F40
+        //    height rides the fresh facts for free (§3.1 Phase B).
+        if let Some(height) = fresh.in_chain {
+            return Ok(SubmitVerdict::AlreadyInChain {
+                height: height.to_raw(),
+            });
         }
         // 2. Pool identity (the defect-0.4 self-duplicate race: a
         //    concurrent submit of the same bytes won the commit).

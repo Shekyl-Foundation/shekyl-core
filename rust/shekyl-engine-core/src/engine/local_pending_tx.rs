@@ -937,31 +937,91 @@ where
         tx_hash
     }
 
-    /// Resolve a submit whose verdict was `AlreadyInChain` (§2.5):
-    /// confirmation observed by verdict — the reservation is done, but
-    /// **refresh remains the settlement authority**.
+    /// Resolve a submit whose verdict was `AlreadyInChain { height }`
+    /// (F40, §2.5): confirmation observed by verdict — the reservation is
+    /// done, but **refresh remains the settlement authority**.
     ///
-    /// Differs from [`Self::finalize_submit_accept`] in exactly one way: no
-    /// fresh F14 awaiting-confirmation lock is placed. The accept-path lock
-    /// exists to bridge "network-exposed, not yet observed on-chain"; an
-    /// already-mined tx has no such gap to bridge, and a fresh lock
-    /// (baseline = *current* height) on a spend refresh may already have
-    /// scanned past would never be cleared by `mark_spent` — the exact
-    /// stranding the F14 race guard in the accept path exists to prevent.
+    /// The F14 awaiting-confirmation lock is placed in **both** height
+    /// cases (fund safety first: a no-lock disposition leaves a
+    /// selectable-input window an adversary who slows the wallet's own
+    /// daemon's block delivery can steer it into). The lock is baselined
+    /// at the daemon-claimed confirming `height`, not at the wallet's
+    /// current height; `height` decides only the **release path**:
+    ///
+    /// - *`height` > wallet synced height:* the ordinary §2.6 path-1
+    ///   release — refresh reaches the confirming block and `mark_spent`
+    ///   settles spent-marking, clearing the lock.
+    /// - *`height` ≤ wallet synced height:* refresh already passed that
+    ///   height without observing the spend — path-1 is unreachable by
+    ///   construction (the FOLLOWUPS stranded-lock wedge). Emit
+    ///   [`PendingTxDiagnostic::TargetedRescanRequested`] so the driving
+    ///   actor enqueues a targeted re-scan of the window around `height`
+    ///   (reorg-heal machinery). A failed re-scan **never releases**
+    ///   (F40-R1); it falls through to the F31 resubmit-as-status-query
+    ///   via the watchdog, and consecutive fruitless re-scans are
+    ///   breaker-bounded (F40-R2) → operator alarm.
+    ///
     /// The verdict authorizes lock-lifecycle transitions only; `spent`
     /// stays refresh-written (`docs/FOLLOWUPS.md` "`AlreadyInChain` submit
-    /// verdict", closed with this split).
+    /// verdict", closed with the disposition split; reshaped to F40 with
+    /// the `height` carve-out).
     fn finalize_submit_already_in_chain(
         &self,
         state: &mut PendingTxState,
         id: ReservationId,
         tx_hash: TxHash,
+        height: u64,
     ) -> TxHash {
+        let selected_indices: Vec<OutputId> = state
+            .output_locks
+            .iter()
+            .filter_map(|(output_id, owner)| (*owner == id).then_some(*output_id))
+            .collect();
+
         state.in_flight.remove(&id);
         release_output_locks_for(state, id);
         // F28/F37: a definite identity-bearing verdict ends any
         // consecutive-rejection streak, same as a fresh accept.
         state.loop_breaker.record_accept();
+
+        let synced_height = self.ledger.with_ledger_block_mut(|ledger| {
+            let synced_height = ledger.height();
+            for index in selected_indices {
+                if let Some(td) = ledger.transfer_mut(index) {
+                    // Same race guard as the accept path: if refresh already
+                    // observed the spend and ran `mark_spent`, the
+                    // confirmed-present state is authoritative — re-locking
+                    // would strand an inconsistent record.
+                    if !td.spent {
+                        td.awaiting_confirmation = Some(AwaitingConfirmation {
+                            tx_hash,
+                            // F40 §2.5(a): baseline at the claimed confirming
+                            // height, not the wallet's current height — the
+                            // watchdog horizon counts from the block that
+                            // (per the verdict) settles the spend.
+                            accepted_at_height: height,
+                        });
+                    }
+                }
+            }
+            synced_height
+        });
+
+        // F40 §2.5(b): a claim refresh has already scanned past routes to
+        // the targeted re-scan. Requesting is all that happens here — the
+        // R1 never-release property is structural (nothing below this
+        // point can release the lock just placed), and the R2 breaker
+        // lives with the re-scan executor.
+        if height <= synced_height {
+            emit_pending_tx_diagnostic(
+                self.sink.as_ref(),
+                PendingTxDiagnostic::TargetedRescanRequested {
+                    reservation_id: id,
+                    tx_hash,
+                    claimed_height: height,
+                },
+            );
+        }
 
         emit_pending_tx_diagnostic(
             self.sink.as_ref(),
@@ -2086,14 +2146,15 @@ where
                 // made the former rid-0 sentinel unrepresentable); the finalizers
                 // bind `id` — the reservation under submit — into the
                 // reservation-bound `SubmitError` they return. Success splits by
-                // lock-lifecycle disposition (§2.5): `Broadcast` places the F14
-                // lock, `AlreadyInChain` does not (refresh settles).
+                // lock-lifecycle disposition (§2.5): both arms place the F14
+                // lock (F40); `AlreadyInChain` baselines it at the claimed
+                // confirming height, which routes the release path.
                 return match outcome {
                     Ok(SubmitSuccess::Broadcast { hash }) => {
                         Ok(self.finalize_submit_accept(&mut state, id, hash))
                     }
-                    Ok(SubmitSuccess::AlreadyInChain { hash }) => {
-                        Ok(self.finalize_submit_already_in_chain(&mut state, id, hash))
+                    Ok(SubmitSuccess::AlreadyInChain { hash, height }) => {
+                        Ok(self.finalize_submit_already_in_chain(&mut state, id, hash, height))
                     }
                     Err(SubmitterError::RejectedTerminal { kind }) => {
                         Err(self.finalize_submit_terminal(&mut state, id, kind))
@@ -2143,12 +2204,15 @@ where
 
         // Success splits by lock-lifecycle disposition (§2.5): `Broadcast`
         // (fresh accept / pool-resident duplicate) places the F14
-        // awaiting-confirmation lock; `AlreadyInChain` releases without one —
-        // refresh remains the settlement authority.
+        // awaiting-confirmation lock baselined at the current height;
+        // `AlreadyInChain` places it too (F40 — no selectable-input window
+        // in either height case), baselined at the claimed confirming
+        // height, which routes the release path. Refresh remains the
+        // settlement authority in both arms.
         Ok(match success {
             SubmitSuccess::Broadcast { hash } => self.finalize_submit_accept(&mut state, id, hash),
-            SubmitSuccess::AlreadyInChain { hash } => {
-                self.finalize_submit_already_in_chain(&mut state, id, hash)
+            SubmitSuccess::AlreadyInChain { hash, height } => {
+                self.finalize_submit_already_in_chain(&mut state, id, hash, height)
             }
         })
     }
@@ -3573,18 +3637,19 @@ mod tests {
         }
     }
 
-    /// §2.5 `AlreadyInChain` distinct disposition (`docs/FOLLOWUPS.md`
-    /// closure): a submit resolving `AlreadyInChain` releases the
-    /// reservation but places **no** fresh F14 awaiting-confirmation lock —
-    /// the tx is already mined, so there is no "network-exposed, not yet
-    /// observed" gap for the lock to bridge, and a fresh lock (baseline =
-    /// current height) on a spend refresh has already scanned past would
-    /// never be cleared by `mark_spent`. Refresh remains the settlement
-    /// authority for `spent`. The contrast test is
-    /// [`build_then_submit_places_awaiting_confirmation_lock`], which proves
-    /// the `Broadcast` disposition *does* place the lock.
+    /// F40 §2.5 case (a) — `AlreadyInChain { height }` with the confirming
+    /// block **above** the wallet's synced height (fixture synced = 20,
+    /// claimed = 25): the F14 awaiting-confirmation lock is placed exactly
+    /// as on the `Broadcast` arm (fund safety first — a no-lock
+    /// disposition would leave a selectable-input window an adversary who
+    /// slows the wallet's daemon's block delivery could steer it into),
+    /// but baselined at the **claimed height**, not the wallet's current
+    /// height. Release is the ordinary §2.6 path 1: refresh reaches the
+    /// confirming block and `mark_spent` settles. No targeted re-scan is
+    /// requested — refresh has not yet passed the claimed height, so
+    /// path 1 is reachable.
     #[tokio::test]
-    async fn submit_already_in_chain_releases_without_awaiting_lock() {
+    async fn submit_already_in_chain_above_synced_locks_at_claimed_height() {
         let sink = Arc::new(AssertionSink::new());
         let (pending, _ledger, _tree_dir) =
             funded_pending_tx_with_sink(Arc::clone(&sink) as Arc<dyn DiagnosticSink>).await;
@@ -3595,6 +3660,7 @@ mod tests {
         let expected_hash = canonical_tx_id(&built.tx_bytes);
         pending.queue_submit_daemon_outcome(Ok(SubmitSuccess::AlreadyInChain {
             hash: expected_hash,
+            height: 25, // > fixture synced height 20
         }));
 
         let tx_hash = pending
@@ -3604,29 +3670,121 @@ mod tests {
         assert_eq!(tx_hash, expected_hash);
         assert_eq!(pending.outstanding(), 0, "reservation released");
 
-        // No F14 lock, no spent write: the verdict authorizes lock-lifecycle
-        // transitions only — the output returns to selectable until refresh
-        // observes the on-chain spend and runs `mark_spent`.
+        // The F14 lock is placed on the selected inputs, baselined at the
+        // claimed confirming height; `spent` stays refresh-written.
         {
             let guard = pending.ledger.read();
-            for td in guard.ledger.ledger.transfers() {
+            let locked: Vec<_> = guard
+                .ledger
+                .ledger
+                .transfers()
+                .iter()
+                .filter(|td| td.awaiting_confirmation.is_some())
+                .collect();
+            assert!(
+                !locked.is_empty(),
+                "AlreadyInChain must place the F14 lock (F40: no selectable window)"
+            );
+            for td in &locked {
                 assert!(!td.spent, "spent stays refresh-authoritative");
+                let lock = td.awaiting_confirmation.as_ref().expect("filtered above");
+                assert_eq!(lock.tx_hash, expected_hash);
+                assert_eq!(
+                    lock.accepted_at_height, 25,
+                    "the lock is baselined at the claimed confirming height, \
+                     not the wallet's current height"
+                );
                 assert!(
-                    td.awaiting_confirmation.is_none(),
-                    "AlreadyInChain must not place a fresh awaiting-confirmation lock"
+                    !td.is_spendable(u64::MAX),
+                    "locked output must be excluded from selection"
                 );
             }
         }
 
-        // Build-time output locks are swept with the reservation: a new
-        // build can select again (the daemon will answer a stale selection
-        // with a definite verdict; refresh settles the ledger).
-        pending
+        let events = sink.recorded_pending();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                PendingTxDiagnostic::SubmitSucceeded { tx_hash: h, .. } if *h == expected_hash
+            )),
+            "AlreadyInChain resolution emits SubmitSucceeded: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, PendingTxDiagnostic::TargetedRescanRequested { .. })),
+            "above-synced claim routes to path-1 refresh release, never a re-scan: {events:?}"
+        );
+    }
+
+    /// F40 §2.5 case (b) + the R1 pin — `AlreadyInChain { height }` with
+    /// the confirming block **at/below** the wallet's synced height
+    /// (fixture synced = 20, claimed = 15): refresh already passed that
+    /// height without observing the spend, so the §2.6 path-1 release is
+    /// unreachable by construction (the FOLLOWUPS stranded-lock wedge).
+    /// The disposition places the F14 lock anyway and requests a
+    /// **targeted re-scan** ([`PendingTxDiagnostic::TargetedRescanRequested`]);
+    /// per F40-R1 the request **never releases** — the lock stands after
+    /// the resolution, and release remains refresh- or
+    /// watchdog-authoritative only. (The R2 fruitless-re-scan breaker
+    /// lives with the re-scan executor, the 2c-2b driving actor.)
+    #[tokio::test]
+    async fn submit_already_in_chain_at_or_below_synced_requests_rescan_never_releases() {
+        let sink = Arc::new(AssertionSink::new());
+        let (pending, _ledger, _tree_dir) =
+            funded_pending_tx_with_sink(Arc::clone(&sink) as Arc<dyn DiagnosticSink>).await;
+        let built = pending
             .build(standard_request(7_000))
             .await
-            .expect("outputs released after AlreadyInChain resolution");
+            .expect("build ok");
+        let expected_hash = canonical_tx_id(&built.tx_bytes);
+        pending.queue_submit_daemon_outcome(Ok(SubmitSuccess::AlreadyInChain {
+            hash: expected_hash,
+            height: 15, // ≤ fixture synced height 20
+        }));
+
+        let tx_hash = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect("AlreadyInChain resolves the submit successfully");
+        assert_eq!(tx_hash, expected_hash);
+        assert_eq!(pending.outstanding(), 0, "reservation released");
+
+        // R1 pin: the re-scan *request* releases nothing — the F14 lock
+        // stands, baselined at the claimed height.
+        {
+            let guard = pending.ledger.read();
+            let locked: Vec<_> = guard
+                .ledger
+                .ledger
+                .transfers()
+                .iter()
+                .filter(|td| td.awaiting_confirmation.is_some())
+                .collect();
+            assert!(
+                !locked.is_empty(),
+                "F40-R1: requesting a re-scan must not release the F14 lock"
+            );
+            for td in &locked {
+                assert!(!td.spent, "spent stays refresh-authoritative");
+                let lock = td.awaiting_confirmation.as_ref().expect("filtered above");
+                assert_eq!(lock.tx_hash, expected_hash);
+                assert_eq!(lock.accepted_at_height, 15);
+            }
+        }
 
         let events = sink.recorded_pending();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                PendingTxDiagnostic::TargetedRescanRequested {
+                    tx_hash: h,
+                    claimed_height: 15,
+                    ..
+                } if *h == expected_hash
+            )),
+            "at/below-synced claim requests the targeted re-scan: {events:?}"
+        );
         assert!(
             events.iter().any(|e| matches!(
                 e,

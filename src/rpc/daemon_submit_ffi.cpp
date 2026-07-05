@@ -60,7 +60,7 @@
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon.rpc.submit"
 
 // ── §4.5 layout pins (mirrored by const asserts in shekyl-daemon-rpc) ──────
-static_assert(sizeof(shekyl_submit_facts_ffi) == 80, "SubmitFactsFfi size");
+static_assert(sizeof(shekyl_submit_facts_ffi) == 88, "SubmitFactsFfi size");
 static_assert(alignof(shekyl_submit_facts_ffi) == 8, "SubmitFactsFfi align");
 static_assert(offsetof(shekyl_submit_facts_ffi, in_pool) == 0, "in_pool offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, in_chain) == 1, "in_chain offset");
@@ -74,6 +74,7 @@ static_assert(offsetof(shekyl_submit_facts_ffi, fee_per_byte) == 48, "fee_per_by
 static_assert(offsetof(shekyl_submit_facts_ffi, fee_quantization_mask) == 56, "fee_quantization_mask offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, weight_limit) == 64, "weight_limit offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, chain_height) == 72, "chain_height offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, in_chain_height) == 80, "in_chain_height offset");
 
 using namespace cryptonote;
 
@@ -152,6 +153,11 @@ void collect_facts_locked(tx_memory_pool& pool, Blockchain& bc,
   facts.in_pool = pool.have_tx(txid, relay_category::all) ? 1 : 0;
   facts.in_pool_broadcast = pool.have_tx(txid, relay_category::legacy) ? 1 : 0;
   facts.in_chain = bc.have_tx(txid) ? 1 : 0;
+  // F40: the confirming-block height, read under the same lock scope as the
+  // membership fact so the pair cannot be racy (§3.1 Phase B). Valid iff
+  // in_chain; zeroed (by the memset above) otherwise.
+  if (facts.in_chain)
+    facts.in_chain_height = bc.get_db().get_tx_block_height(txid);
 
   for (size_t i = 0; i < key_images.size(); ++i)
     ki_conflicts[i] = classify_key_image(pool, bc, key_images[i], txid, facts.in_pool != 0);
@@ -514,6 +520,7 @@ void shekyl_submit_facts_test_fill(shekyl_submit_facts_ffi* out, uint64_t seed)
   out->fee_quantization_mask = submit_facts_field_value(seed, 7);
   out->weight_limit = submit_facts_field_value(seed, 8);
   out->chain_height = submit_facts_field_value(seed, 9);
+  out->in_chain_height = submit_facts_field_value(seed, 11);
 }
 
 int shekyl_submit_facts_test_check(const shekyl_submit_facts_ffi* facts, uint64_t seed)

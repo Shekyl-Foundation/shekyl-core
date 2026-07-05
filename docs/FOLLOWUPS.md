@@ -673,8 +673,8 @@ sustainability is unaffected by the recalibration.
 
 - **`AlreadyInChain` submit verdict: distinct lock-lifecycle disposition —
   DESIGN DECIDED 2026-07-04 (F40, `AlreadyInChain { height }`); interim
-  implementation landed #252, F40 conformance pending (PR-4 / #248 review,
-  deferred to 2c).**
+  implementation landed #252; F40 conformance LANDED 2026-07-05 (#254);
+  R2 breaker execution remains with the 2c-2b driving actor.**
   Original finding: `transaction_submitter::outcome_to_result` collapses
   `AlreadyInChain` into `Ok(hash)` identically to `Submitted` /
   `AlreadyInPool`, so `finalize_submit_accept` places a fresh F14
@@ -711,16 +711,27 @@ sustainability is unaffected by the recalibration.
   arm by disposition — `Broadcast` (`Accepted` / `AlreadyInPool`) takes the
   `finalize_submit_accept` path and places the F14 awaiting-confirmation
   lock; `AlreadyInChain` takes the new `finalize_submit_already_in_chain`
-  path, which releases the reservation and its output locks and places
-  **no** fresh awaiting-lock (refresh-authoritative). This carries no
-  `height` discriminant and implements only the "place no lock" shape the
-  design round superseded — it does **not** yet place the lock in both
-  height cases, route release by `height`, or enforce F40-R1/R2. Regression:
-  `submit_already_in_chain_releases_without_awaiting_lock`. *Remaining
-  (F40 conformance): restore `AlreadyInChain { height: u64 }` wire type +
-  shim `in_chain_height`, place the lock in both height cases, and route
-  release by `height` with F40-R1/R2 — lands with the 2c StakeEngine
-  submit-consumer work.* *Target:* V3.0, 2c slices.
+  path. **F40 conformance (#254, 2026-07-05):** the wire type is
+  `SubmitVerdict::AlreadyInChain { height }` (required field; frozen
+  fixture updated atomically per §2.3 third-category rule, skew test D pins
+  the field-less form to the `Err` arm); the FFI snapshot grows
+  `in_chain_height` (size 88, offset 80, read under the same lock scope as
+  the membership fact; fill/check field 11); `SubmitFacts.in_chain` is
+  `Option<BlockHeight>` so the validity gate is structural; the admission
+  engine emits the height at both the Phase-B short-circuit and the
+  Phase-D `classify_race` settled-identity arm; wallet-side,
+  `SubmitSuccess::AlreadyInChain { hash, height }` reaches
+  `finalize_submit_already_in_chain`, which places the F14 lock in
+  **both** height cases baselined at the claimed `height` and routes the
+  release path — `> synced` waits for §2.6 path-1 refresh catch-up;
+  `≤ synced` emits the new `PendingTxDiagnostic::TargetedRescanRequested`
+  for the reorg-heal re-scan. F40-R1 is structural (the request path
+  releases nothing; regressions
+  `submit_already_in_chain_above_synced_locks_at_claimed_height` and
+  `submit_already_in_chain_at_or_below_synced_requests_rescan_never_releases`).
+  *Remaining: the re-scan executor consuming `TargetedRescanRequested`
+  and its F40-R2 fruitless-re-scan breaker land with the 2c-2b driving
+  actor.* *Target:* V3.0, 2c-2b.
 
 - **Submit-error reservation-id placeholder: split submitter error from
   orchestrator error (PR-4 / #248 review, deferred to 2c) — RESOLVED

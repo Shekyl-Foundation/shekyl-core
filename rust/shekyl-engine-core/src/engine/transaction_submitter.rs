@@ -68,14 +68,18 @@ pub(crate) enum SubmitterError {
 /// settled → the orchestrator places the persisted F14
 /// awaiting-confirmation lock, §2.6) and so share the [`Self::Broadcast`]
 /// variant. `AlreadyInChain` is **distinct**: confirmation observed by
-/// verdict, refresh remains the settlement authority — collapsing it into
-/// the broadcast arm would place a fresh awaiting-lock (baseline = current
-/// height) on an already-mined tx, a lock refresh may never clear
-/// (`docs/FOLLOWUPS.md` "`AlreadyInChain` submit verdict", closed with this
-/// split).
+/// verdict, refresh remains the settlement authority. The F14 lock is
+/// still placed (F40: fund safety first — no selectable-input window in
+/// either height case), but baselined at the daemon-claimed confirming
+/// `height` rather than the wallet's current height, and `height` routes
+/// the *release path* (`docs/FOLLOWUPS.md` "`AlreadyInChain` submit
+/// verdict", closed with this split; reshaped to F40 with the `height`
+/// carve-out).
 ///
 /// The `hash` on both variants is the **locally**-computed tx id — the
-/// daemon reply carries no txid field (wire minimalism, §2.2).
+/// daemon reply carries no txid field (wire minimalism, §2.2; the F40
+/// `height` is the one reasoned carve-out, and it is a release-path
+/// discriminant, never identity or settlement truth).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SubmitSuccess {
     /// `Accepted` / `AlreadyInPool`: the bytes are held by the daemon and
@@ -85,13 +89,19 @@ pub(crate) enum SubmitSuccess {
         /// The locally computed tx id.
         hash: TxHash,
     },
-    /// `AlreadyInChain`: this txid is in the main chain. Disposition:
-    /// release the reservation, place **no** fresh awaiting-lock; refresh
-    /// settles (`mark_spent` on observing the spend; reorgs happen — the
-    /// verdict authorizes lock-lifecycle transitions only).
+    /// `AlreadyInChain`: this txid is in the main chain. Disposition
+    /// (F40, §2.5): release the reservation, place the F14 awaiting-lock
+    /// in **both** height cases (baselined at `height`); `height` routes
+    /// the release path — above-synced waits for refresh to reach the
+    /// confirming block (§2.6 path 1); at/below-synced requests a
+    /// targeted re-scan (R1: the re-scan never releases; R2: fruitless
+    /// re-scans are breaker-bounded).
     AlreadyInChain {
         /// The locally computed tx id.
         hash: TxHash,
+        /// Daemon-claimed confirming-block height — the release-path
+        /// discriminant (untrusted; damage-capped per §7.2).
+        height: u64,
     },
 }
 
@@ -138,7 +148,10 @@ pub(crate) fn submit_outcome_from_verdict(
     match verdict {
         SubmitVerdict::Accepted => TxSubmitOutcome::Submitted { hash },
         SubmitVerdict::AlreadyInPool => TxSubmitOutcome::AlreadyInPool { hash },
-        SubmitVerdict::AlreadyInChain => TxSubmitOutcome::AlreadyInChain { hash },
+        SubmitVerdict::AlreadyInChain { height } => TxSubmitOutcome::AlreadyInChain {
+            hash,
+            height: *height,
+        },
         SubmitVerdict::Rejected { cause } => TxSubmitOutcome::Rejected { cause: *cause },
     }
 }
@@ -171,7 +184,9 @@ pub(crate) fn outcome_to_result(outcome: TxSubmitOutcome) -> Result<SubmitSucces
         TxSubmitOutcome::Submitted { hash } | TxSubmitOutcome::AlreadyInPool { hash } => {
             Ok(SubmitSuccess::Broadcast { hash })
         }
-        TxSubmitOutcome::AlreadyInChain { hash } => Ok(SubmitSuccess::AlreadyInChain { hash }),
+        TxSubmitOutcome::AlreadyInChain { hash, height } => {
+            Ok(SubmitSuccess::AlreadyInChain { hash, height })
+        }
         TxSubmitOutcome::Rejected { cause } => Err(submitter_error_from_cause(cause)),
     }
 }
@@ -239,7 +254,7 @@ where
         #[cfg(debug_assertions)]
         if let TxSubmitOutcome::Submitted { hash }
         | TxSubmitOutcome::AlreadyInPool { hash }
-        | TxSubmitOutcome::AlreadyInChain { hash } = &outcome
+        | TxSubmitOutcome::AlreadyInChain { hash, .. } = &outcome
         {
             debug_assert_eq!(
                 Some(*hash),
@@ -554,8 +569,9 @@ mod tests {
             TxSubmitOutcome::AlreadyInPool { hash }
         );
         assert_eq!(
-            submit_outcome_from_verdict(&SubmitVerdict::AlreadyInChain, hash),
-            TxSubmitOutcome::AlreadyInChain { hash }
+            submit_outcome_from_verdict(&SubmitVerdict::AlreadyInChain { height: 42 }, hash),
+            TxSubmitOutcome::AlreadyInChain { hash, height: 42 },
+            "the F40 height passes through the projection untouched"
         );
         assert_eq!(
             submit_outcome_from_verdict(
@@ -574,8 +590,8 @@ mod tests {
     /// lock-lifecycle disposition (§2.5): a fresh accept and a
     /// pool-resident duplicate share `Broadcast` (network-exposed, F14
     /// lock placed); a mined duplicate is the distinct `AlreadyInChain`
-    /// (no fresh awaiting-lock; refresh settles). All carry the locally
-    /// computed hash.
+    /// (F40: lock placed too, baselined at the carried `height`, which
+    /// routes the release path). All carry the locally computed hash.
     #[test]
     fn identity_outcomes_resolve_ok_split_by_disposition() {
         let hash = TxHash::from_bytes([9u8; 32]);
@@ -589,8 +605,9 @@ mod tests {
             );
         }
         assert_eq!(
-            outcome_to_result(TxSubmitOutcome::AlreadyInChain { hash }).expect("identity outcome"),
-            SubmitSuccess::AlreadyInChain { hash }
+            outcome_to_result(TxSubmitOutcome::AlreadyInChain { hash, height: 77 })
+                .expect("identity outcome"),
+            SubmitSuccess::AlreadyInChain { hash, height: 77 }
         );
     }
 

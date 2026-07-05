@@ -177,7 +177,7 @@ pub fn admitting_facts(parsed: &ParsedSubmission) -> SubmitFacts {
     SubmitFacts {
         in_pool: false,
         in_pool_broadcast: false,
-        in_chain: false,
+        in_chain: None,
         key_image_conflicts: vec![KeyImageConflict::Free; parsed.key_images.len()],
         reference: Some(ReferenceFacts {
             height: BlockHeight::from_raw(150),

@@ -195,6 +195,7 @@ fn submit_facts_filled(seed: u64) -> crate::ffi::SubmitFactsFfi {
         fee_quantization_mask: submit_facts_field_value(seed, 7),
         weight_limit: submit_facts_field_value(seed, 8),
         chain_height: submit_facts_field_value(seed, 9),
+        in_chain_height: submit_facts_field_value(seed, 11),
     }
 }
 
@@ -252,7 +253,7 @@ mod tests {
         // Distinct fields derive distinct values for a nontrivial seed —
         // the property that makes same-width offset swaps detectable.
         let seed = 0xDEAD_BEEF_CAFE_F00D;
-        let values: Vec<u64> = (0..11).map(|f| submit_facts_field_value(seed, f)).collect();
+        let values: Vec<u64> = (0..12).map(|f| submit_facts_field_value(seed, f)).collect();
         let mut deduped = values.clone();
         deduped.sort_unstable();
         deduped.dedup();

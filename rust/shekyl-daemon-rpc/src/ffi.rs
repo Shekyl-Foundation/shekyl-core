@@ -73,6 +73,11 @@ pub struct SubmitFactsFfi {
     pub fee_quantization_mask: u64,
     pub weight_limit: u64,
     pub chain_height: u64,
+    /// Main-chain height of the block containing the submitted txid — the
+    /// F40 confirming-block height, read under the same lock scope as
+    /// `in_chain` so the pair cannot be racy (§4.1). Valid iff `in_chain`;
+    /// zeroed otherwise.
+    pub in_chain_height: u64,
 }
 
 impl SubmitFactsFfi {
@@ -91,13 +96,14 @@ impl SubmitFactsFfi {
             fee_quantization_mask: 0,
             weight_limit: 0,
             chain_height: 0,
+            in_chain_height: 0,
         }
     }
 }
 
 // §4.5 layout pins — the Rust twins of daemon_submit_ffi.cpp's
 // static_asserts. A drift on either side fails that side's build.
-const _: () = assert!(std::mem::size_of::<SubmitFactsFfi>() == 80);
+const _: () = assert!(std::mem::size_of::<SubmitFactsFfi>() == 88);
 const _: () = assert!(std::mem::align_of::<SubmitFactsFfi>() == 8);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_pool) == 0);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_chain) == 1);
@@ -111,6 +117,7 @@ const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, fee_per_byte) == 48);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, fee_quantization_mask) == 56);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, weight_limit) == 64);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, chain_height) == 72);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_chain_height) == 80);
 
 extern "C" {
     pub fn core_rpc_ffi_create(rpc_server_ptr: *mut std::ffi::c_void) -> *mut CoreRpcHandle;

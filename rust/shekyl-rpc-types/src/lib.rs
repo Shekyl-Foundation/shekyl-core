@@ -22,10 +22,13 @@
 //! - A verdict is truth at commit-check time — the wallet acts on it
 //!   (lock-lifecycle transitions only; ledger `spent` finality stays
 //!   refresh-authoritative).
-//! - Wire minimalism (§2.2): no `relayed`/`diffused`/`height` payloads, no
-//!   `detail` field. Every deleted field was either trusted-daemon metadata
-//!   the wallet must not consume or a snapshot observable trustlessly via
-//!   refresh.
+//! - Wire minimalism (§2.2): no `relayed`/`diffused` payloads, no relay-state
+//!   `height`, no `detail` field. Every deleted field was either
+//!   trusted-daemon metadata the wallet must not consume or a snapshot
+//!   observable trustlessly via refresh. One reasoned carve-out (F40):
+//!   [`SubmitVerdict::AlreadyInChain`] carries the confirming-block `height`
+//!   — a release-path discriminant the wallet consumes under the R1/R2
+//!   bounds, not metadata it consumes as truth (§2.2 / §7.2).
 //!
 //! ## Version-skew rules (§2.3, test-pinned)
 //!
@@ -92,9 +95,29 @@ pub enum SubmitVerdict {
     /// Identity match: these exact bytes (same txid) are in the pool.
     /// Resolves prior transport ambiguity for this txid.
     AlreadyInPool,
-    /// Identity match: this txid is in the main chain. Confirmation observed
-    /// by verdict; refresh remains the settlement authority (reorgs happen).
-    AlreadyInChain,
+    /// Identity match: this txid is in the main chain, confirmed at
+    /// `height`. Confirmation observed by verdict; refresh remains the
+    /// settlement authority (reorgs happen).
+    ///
+    /// The height is the lock-lifecycle discriminant (§2.5): it decides
+    /// *which release path* clears the awaiting-confirmation lock — refresh
+    /// catch-up (confirming block above the wallet's synced height) vs
+    /// targeted re-scan (at/below it). Carve-out from §2.2 wire minimalism,
+    /// reasoned in §7.2 (F40): unlike the deleted relay-`height`, this is
+    /// not trusted-daemon metadata the wallet consumes as truth — it is a
+    /// routing hint whose misuse is damage-capped in both directions
+    /// (F40-R1 rescan-never-release, F40-R2 fruitless-rescan breaker).
+    ///
+    /// The field is **required** (no `#[serde(default)]`): pre-genesis,
+    /// wallet and daemon release together, and a field-less
+    /// `already_in_chain` from a stale daemon lands in the `Err` arm
+    /// (§2.3 third-category rule, pinned by skew test D). Post-genesis,
+    /// field additions to existing variants must be optional-with-default;
+    /// this pin is the test that rule flips.
+    AlreadyInChain {
+        /// Main-chain height of the block containing the transaction.
+        height: u64,
+    },
     /// Not in pool, not in chain, and not admitted — `cause` says why. Under
     /// single-egress this carries the proof that the bytes were not relayed
     /// by this daemon (design doc §7.1), so lock release is safe.

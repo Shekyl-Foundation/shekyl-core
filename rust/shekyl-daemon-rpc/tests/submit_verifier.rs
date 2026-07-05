@@ -116,7 +116,7 @@ fn admitting_facts(fx: &SpendFixture) -> SubmitFacts {
     SubmitFacts {
         in_pool: false,
         in_pool_broadcast: false,
-        in_chain: false,
+        in_chain: None,
         key_image_conflicts: vec![KeyImageConflict::Free; fx.parsed.key_images.len()],
         reference: Some(ReferenceFacts {
             height: BlockHeight::from_raw(fx.reference_height),
@@ -726,7 +726,7 @@ fn non_spend_kinds_refuse_loudly() {
     let facts = SubmitFacts {
         in_pool: false,
         in_pool_broadcast: false,
-        in_chain: false,
+        in_chain: None,
         key_image_conflicts: Vec::new(),
         reference: None,
         fee_per_byte: 1,

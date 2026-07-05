@@ -4,6 +4,26 @@
 
 ### Added
 
+- **wallet/rpc: `AlreadyInChain { height }` — the F40 disposition lands**
+  (`DAEMON_SUBMIT_VERDICT.md` §2.2 carve-out / §2.5 row / §10 item 1;
+  `docs/FOLLOWUPS.md` `AlreadyInChain` entry). The wire verdict grows the
+  required `height` field (frozen fixture updated atomically per the §2.3
+  third-category rule; new skew test D pins a field-less
+  `already_in_chain` to the deserialization-error arm). The daemon reads
+  the confirming-block height under the same lock scope as the membership
+  fact (`in_chain_height`, FFI snapshot size 80 → 88) and emits it at both
+  the Phase-B short-circuit and the Phase-D `classify_race` settled arm.
+  Wallet-side, `finalize_submit_already_in_chain` is reshaped from the
+  superseded "no lock, refresh settles" interim (#252) to F40: the F14
+  awaiting-confirmation lock is placed in **both** height cases (no
+  selectable-input window either way), baselined at the claimed `height`;
+  `height` routes only the release path — above-synced waits for §2.6
+  path-1 refresh catch-up, at/below-synced emits the new
+  `PendingTxDiagnostic::TargetedRescanRequested` for the reorg-heal
+  re-scan. F40-R1 (rescan never releases) is structural and pinned by
+  regression; the R2 fruitless-re-scan breaker lands with the 2c-2b
+  driving actor that executes the re-scan.
+
 - **wallet: posture→submitter dispatch — the frozen SP-T4a §3.1 shape lands**
   (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §3.1, frozen 2026-07-04;
   `docs/FOLLOWUPS.md` 2c-2a dispatch-shape entry). The closed-set
@@ -530,13 +550,12 @@
   behavior that stranded inputs "awaiting confirmation" whenever the
   confirming block was at/below the wallet's synced height (no
   `mark_spent` re-observation, watchdog confirmed-absent release
-  unbuilt). Regression:
-  `submit_already_in_chain_releases_without_awaiting_lock`. **Note:**
-  this change predates the F40 design merge (`AlreadyInChain { height }`,
-  §2.2 carve-out); it carries no `height` discriminant and does not yet
-  implement the lock-in-both-cases + height-routed release (F40-R1/R2).
-  A follow-up brings the implementation into line with F40 (see the
-  FOLLOWUPS item).
+  unbuilt). **Note:** this change predates the F40 design merge
+  (`AlreadyInChain { height }`, §2.2 carve-out); it carried no `height`
+  discriminant and implemented only the "no lock" shape the design round
+  superseded. The F40 reshape landed in this same unreleased span (see
+  the `AlreadyInChain { height }` entry above); its interim regression
+  test is replaced by the two F40 routing tests.
 - **docs: constant-work-on-Conceal named as invariant F41 (2c design
   round, `docs/design/DAEMON_SUBMIT_VERDICT.md` §3.1/§10/§11).** The
   stem-presence-oracle closure was held by an accident of absence: the
