@@ -95,6 +95,31 @@
 //! `#[allow(dead_code)]` so the dead-code check stays effective and the
 //! allows fall away as wiring lands.
 //!
+//! # No behavioral delta across `gf7-hooks` (hooks-spec §6.5)
+//!
+//! Feature-on and feature-off builds of this actor are **behaviorally
+//! identical** — the §4 layer-3 consequence, held by construction rather
+//! than by test:
+//!
+//! - Every `#[cfg(feature = "gf7-hooks")]` site in this file (grep the
+//!   attribute; the set is: the trait imports, one `StakeEngineArgs` field,
+//!   one `StakeEngine` field, the `on_start` field forward, the spawn-path
+//!   no-op injection, the emission block in the [`SignBond`] handler, and
+//!   test code) is either **state that only the emission block reads** or
+//!   **the emission block itself**.
+//! - The emission block's only statements call
+//!   [`BroadcastTimelineObserver::record`], whose return type is `()` — it
+//!   cannot feed a value back into the handler. The draw, the degeneracy
+//!   guard, [`plan_entry_seam`], the vin signing, and the
+//!   [`SignedBondPost`] reply all sit **outside** the `cfg`, unconditioned.
+//! - The production observer is the no-op even when the feature is on;
+//!   recording observers exist only in `shekyl-staking-sim` (CI-asserted by
+//!   the `gf7-no-emit-guard` dependency-graph check).
+//!
+//! Feature-off therefore removes only code whose effect was already `()`.
+//! Empirically corroborated by the test suite running under both feature
+//! configurations in CI.
+//!
 //! [`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md`]: ../../../../../docs/design/ARCHIVAL_BOND_CONSTRUCTION.md
 //! [`ArchivalPKeys`]: shekyl_crypto_pq::archival_p::ArchivalPKeys
 //! [`PersistedBondTicket`]: super::stake_persist::PersistedBondTicket
