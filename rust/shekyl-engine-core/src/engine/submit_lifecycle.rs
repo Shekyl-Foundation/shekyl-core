@@ -140,8 +140,15 @@ pub(crate) trait WatchdogHost: Send + Sync {
 /// - `alarmed`: the edge-trigger latch. Each held tx emits its **first**
 ///   alarm; subsequent ticks suppress re-emission (alarm-fatigue bound,
 ///   §5.3). Cleared when the tx leaves the held projection.
-/// - `fruitless`: the F40-R2 per-txid consecutive fruitless-rescan
-///   counter (populated by the re-scan executor in the following commit).
+/// - `rescan_targets`: the F40 targeted-re-scan verification state — one
+///   entry per unverified `AlreadyInChain` claim, persisted across ticks
+///   so the R2 breaker can count *consecutive* fruitless re-scans. Seeded
+///   from the host's rescan queue; reaped when the tx leaves the held
+///   projection (confirmation observed by refresh).
+/// - `breaker_tripped`: the F40-R2 breaker edge-trigger latch, distinct
+///   from `alarmed` so the two operator signals (watchdog vs. lying-daemon
+///   confirmation) are independent. Emits `FruitlessRescanBreakerTripped`
+///   once per trip.
 pub(crate) struct SubmitLifecycleDriver<D: DaemonEngine> {
     /// Narrow wallet surface (production: `LocalPendingTx`).
     host: Arc<dyn WatchdogHost>,
@@ -153,9 +160,51 @@ pub(crate) struct SubmitLifecycleDriver<D: DaemonEngine> {
     overlay: HashMap<TxHash, HeldSubmit>,
     /// Edge-trigger alarm latch (see struct docs).
     alarmed: HashSet<TxHash>,
-    /// F40-R2 consecutive fruitless-rescan counters (see struct docs).
-    fruitless: HashMap<TxHash, u32>,
+    /// F40 targeted-re-scan verification state (see struct docs).
+    rescan_targets: HashMap<TxHash, RescanTarget>,
+    /// F40-R2 breaker edge-trigger latch (see struct docs).
+    breaker_tripped: HashSet<TxHash>,
 }
+
+/// One in-flight F40 targeted-re-scan verification, persisted across
+/// ticks (`DAEMON_SUBMIT_VERDICT.md` §7.2, F40).
+///
+/// The daemon claimed this tx confirmed at `claimed_height` (an
+/// already-scanned height, per the §2.5(b) enqueue guard). Each tick the
+/// executor re-checks the daemon's block hash there against the ledger's;
+/// a match with the spend still unobserved is one fruitless re-scan
+/// (`consecutive_fruitless += 1`), and
+/// [`FRUITLESS_RESCAN_BREAKER_THRESHOLD`] consecutive fruitless re-scans
+/// trip the R2 breaker.
+struct RescanTarget {
+    /// Daemon-claimed confirming height (a release-path discriminant,
+    /// never settlement truth). The fruitless-soundness guard re-checks
+    /// `claimed_height ≤ current synced_height` at execution time.
+    claimed_height: u64,
+    /// Consecutive fruitless re-scans observed (reset semantics: a
+    /// non-fruitless outcome leaves the counter untouched per decision 1;
+    /// the target is reaped on confirmation, which resets it by removal).
+    consecutive_fruitless: u32,
+}
+
+/// Consecutive fruitless targeted re-scans (the daemon claims
+/// confirmation at an already-scanned height whose block matches ours but
+/// lacks the spend) at which the F40-R2 breaker trips
+/// (`DAEMON_SUBMIT_VERDICT.md` §7.2, F40-R2).
+///
+/// **Default rationale (rule 75).** The breaker bounds a lying daemon's
+/// work-amplification and alerts the operator; it is not a one-off-race
+/// detector. One fruitless re-scan can be a benign transient (the
+/// executor observed the claim a tick before refresh cleared the lock);
+/// two could still be slow refresh under load. Three *consecutive*
+/// fruitless re-scans — each a full tick apart, each re-confirming the
+/// block hash matches and the spend is still absent — is a daemon
+/// persistently lying about confirmation, which no wallet action can
+/// remedy (the lock stays placed; F40-R1 is structural). Safe-adjustment
+/// bounds: at least 2 (a single transient must not trip), and small
+/// enough that the operator is alerted well before the escape horizon
+/// would independently alarm.
+const FRUITLESS_RESCAN_BREAKER_THRESHOLD: u32 = 3;
 
 impl<D: DaemonEngine> SubmitLifecycleDriver<D> {
     /// Construct a driver over `host` and `daemon`, deriving the escape
@@ -179,29 +228,43 @@ impl<D: DaemonEngine> SubmitLifecycleDriver<D> {
             config: WatchdogConfig::from_block_target(block_target_seconds),
             overlay: HashMap::new(),
             alarmed: HashSet::new(),
-            fruitless: HashMap::new(),
+            rescan_targets: HashMap::new(),
+            breaker_tripped: HashSet::new(),
         }
     }
 
-    /// One driver cadence step (§5.3). Runs the escape-ladder pass over
-    /// every held tx; the F40 targeted re-scan executor is prepended in
-    /// the following commit.
+    /// One driver cadence step (§5.3). Projects the held set once,
+    /// reconciles the in-memory overlays, executes the F40 targeted
+    /// re-scan verification (with the R2 breaker), then runs the escape
+    /// ladder per held tx.
     ///
     /// `&mut self`: the pass mutates the in-memory overlays. No mutex
     /// guard is held across an `.await` — every host read is a discrete
     /// call — so the driver is `Send` and cannot deadlock the wallet
     /// state lock across a daemon round-trip.
     pub(crate) async fn tick(&mut self) {
-        self.run_escape_ladder().await;
-    }
+        // Seed rescan targets from the host queue before reconciling, so
+        // the just-enqueued targets survive the live-set prune (their
+        // F14 locks are placed, so they are in the held projection).
+        for request in self.host.drain_rescan_queue() {
+            self.rescan_targets
+                .entry(request.tx_hash)
+                .or_insert(RescanTarget {
+                    claimed_height: request.claimed_height,
+                    consecutive_fruitless: 0,
+                });
+        }
 
-    /// Project the held set, reconcile the overlays, fetch health once,
-    /// and step the escape ladder per held tx.
-    async fn run_escape_ladder(&mut self) {
         let projected = self.host.held_submits();
         let live: HashSet<TxHash> = projected.iter().map(|h| h.tx_hash).collect();
         self.reconcile_overlays(&live, &projected);
 
+        self.execute_rescans().await;
+        self.run_escape_ladder().await;
+    }
+
+    /// Fetch health once and step the escape ladder per held tx.
+    async fn run_escape_ladder(&mut self) {
         // Nothing awaiting → skip the health RPC entirely.
         if self.overlay.is_empty() {
             return;
@@ -224,21 +287,119 @@ impl<D: DaemonEngine> SubmitLifecycleDriver<D> {
         }
     }
 
-    /// Drop overlay / alarm state for txids that left the projection
-    /// (confirmed via refresh, or released), prune the retained bytes to
-    /// the live set, and seed overlay entries for newly-held txids.
+    /// Drop overlay / alarm / rescan state for txids that left the
+    /// projection (confirmed via refresh, or released), prune the
+    /// retained bytes to the live set, and seed overlay entries for
+    /// newly-held txids.
     ///
     /// `entry(..).or_insert(..)` preserves an existing overlay entry: a
     /// `RestartWait` may have advanced its baseline past the F14 accept
     /// height the fresh projection carries, and that higher baseline is
     /// the live wait epoch.
+    ///
+    /// Reaping the rescan target on projection-exit is the R2 breaker's
+    /// success path: a tx that left the held set confirmed via refresh
+    /// (`mark_spent` cleared the F14 lock), so the `AlreadyInChain` claim
+    /// was truthful — the consecutive-fruitless streak resets by removal.
     fn reconcile_overlays(&mut self, live: &HashSet<TxHash>, projected: &[HeldSubmit]) {
         self.overlay.retain(|tx, _| live.contains(tx));
         self.alarmed.retain(|tx| live.contains(tx));
-        self.fruitless.retain(|tx, _| live.contains(tx));
+        self.rescan_targets.retain(|tx, _| live.contains(tx));
+        self.breaker_tripped.retain(|tx| live.contains(tx));
         self.host.prune_held_bytes(live);
         for h in projected {
             self.overlay.entry(h.tx_hash).or_insert(*h);
+        }
+    }
+
+    /// Execute the F40 targeted re-scan verification for every active
+    /// target (`DAEMON_SUBMIT_VERDICT.md` §7.2, decision 1). All targets
+    /// remaining after [`reconcile_overlays`](Self::reconcile_overlays)
+    /// are held (spend unobserved); each is re-checked against the
+    /// daemon's block hash at the claimed height.
+    async fn execute_rescans(&mut self) {
+        if self.rescan_targets.is_empty() {
+            return;
+        }
+        let synced = self.host.synced_height();
+        // Snapshot keys so no `rescan_targets` borrow is held across the
+        // per-target `.await`.
+        let targets: Vec<(TxHash, u64)> = self
+            .rescan_targets
+            .iter()
+            .map(|(tx, target)| (*tx, target.claimed_height))
+            .collect();
+        for (tx_hash, claimed_height) in targets {
+            self.check_rescan_target(tx_hash, claimed_height, synced)
+                .await;
+        }
+    }
+
+    /// Verify one targeted re-scan (decision 1 + its fruitless-soundness
+    /// refinement). Fruitless (block matches, spend absent) increments
+    /// the consecutive counter and trips the R2 breaker at the threshold;
+    /// every other outcome leaves the counter untouched.
+    async fn check_rescan_target(&mut self, tx_hash: TxHash, claimed_height: u64, synced: u64) {
+        // Fruitless-soundness guard (decision 1 refinement), re-checked at
+        // execution time: synced_height may have rewound below the claimed
+        // height since enqueue (reorg). Above current synced the block is
+        // not (or no longer) scanned, so "spend unobserved" is refresh lag,
+        // not absence — re-route to the §2.6 path-1 wait (the escape ladder
+        // owns liveness), never the fruitless counter.
+        if claimed_height > synced {
+            return;
+        }
+
+        // The ledger's stored hash at the claimed height. Absent (outside
+        // the retained range) → the cheap hash-compare is impossible, so
+        // the fruitless inference cannot be made soundly: defer (the
+        // escape ladder still bounds liveness). Counter untouched.
+        let Some(ledger_hash) = self.host.block_hash_at(claimed_height) else {
+            return;
+        };
+
+        // One block-header fetch — the entire per-lie cost cap (decision
+        // 1). Clone the Arc so the future borrows the daemon, not `self`.
+        let daemon = Arc::clone(&self.daemon);
+        let daemon_hash = match daemon.get_block_hash(claimed_height as usize).await {
+            Ok(hash) => hash,
+            // Transport ambiguity is not a verdict: retry next tick,
+            // counter untouched.
+            Err(_) => return,
+        };
+
+        if daemon_hash == ledger_hash {
+            // Same block we scanned, spend still unobserved (the target
+            // is held, guaranteed by reconcile) → the daemon lied about
+            // this tx confirming there. One fruitless re-scan.
+            self.record_fruitless(tx_hash);
+        }
+        // Divergence (daemon_hash != ledger_hash): a reorg replaced the
+        // block at the claimed height. Defer to the refresh reorg-heal
+        // machinery (parent-hash divergence at synced+1 rewinds and
+        // re-scans); counter untouched (decision 1).
+    }
+
+    /// Record one fruitless re-scan for `tx_hash` and trip the R2 breaker
+    /// at [`FRUITLESS_RESCAN_BREAKER_THRESHOLD`] consecutive occurrences.
+    ///
+    /// The breaker trip is an operator alarm only: the F14 lock stays
+    /// placed (F40-R1 is structural — no path here releases it), so the
+    /// tx's outputs remain reserved and the operator adjudicates the
+    /// lying daemon. Edge-triggered via `breaker_tripped` (emit once per
+    /// trip), independent of the watchdog `alarmed` latch.
+    fn record_fruitless(&mut self, tx_hash: TxHash) {
+        let attempts = {
+            let target = self
+                .rescan_targets
+                .get_mut(&tx_hash)
+                .expect("rescan target present: iterated from rescan_targets");
+            target.consecutive_fruitless += 1;
+            target.consecutive_fruitless
+        };
+        if attempts >= FRUITLESS_RESCAN_BREAKER_THRESHOLD && self.breaker_tripped.insert(tx_hash) {
+            self.host
+                .emit(PendingTxDiagnostic::FruitlessRescanBreakerTripped { tx_hash, attempts });
         }
     }
 
