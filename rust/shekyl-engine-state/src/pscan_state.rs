@@ -445,7 +445,10 @@ mod tests {
             accruals(&[]),
             pending(&[]),
             bond_posts(&[]),
-            vec![funding_output(3, 77, 100, 12_400), funding_output(3, 78, 200, 12_401)],
+            vec![
+                funding_output(3, 77, 100, 12_400),
+                funding_output(3, 78, 200, 12_401),
+            ],
         );
         let rendered = format!("{state:?}");
         assert!(
