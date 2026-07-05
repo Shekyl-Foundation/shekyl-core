@@ -517,7 +517,14 @@
   named assumption with its own engine-entry test; and the
   invocation-count tripwire guards only the irreducible battery-timing
   residual, its necessary-not-sufficient seam documented (types don't
-  prove timing — stated, not hidden). The §11 reversion clause is
+  prove timing — stated, not hidden). The tokens' sole-origin is itself
+  structural, not conventional: both types are `pub(crate)` with a
+  single constructor reachable only from `disclose_pool_presence`,
+  inheriting the F25 write-site enumeration audit (§3.5 item 4 — "grep
+  token construction = grep the disclosure choke point"), closing the
+  construct-by-alternate-constructor side door (test helpers,
+  `Default`, `From`) that the carry-not-reconstruct defeat alone does
+  not answer. The §11 reversion clause is
   rewritten around the token: a Reveal-path cache type-checks freely;
   touching Conceal requires a compile-visible `MustFullyVerify`
   conversion naming F41. Implementation obligations and the ordering

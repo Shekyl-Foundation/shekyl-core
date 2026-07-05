@@ -740,8 +740,13 @@ sustainability is unaffected by the recalibration.
   `FastPathEligible`; the Conceal route consumes `MustFullyVerify` by
   exchanging it for the §3.3 certificate — carried-never-reconstructed (the
   P-1/P-2 idiom applied to a capability), making cache-on-Conceal a compile
-  error; plus a compile-fail (`trybuild`-style) pin — target: with the
-  submit-path implementation PRs, **structurally before any perf work**;
+  error; **sole-origin pinned structurally** (both tokens `pub(crate)`,
+  private fields, single constructor each, reachable only from
+  `disclose_pool_presence`, inheriting the F25 write-site enumeration per
+  §3.5 item 4 — no test-helper/`Default`/`From` side doors; tests construct
+  facts, not tokens); plus a compile-fail (`trybuild`-style) pin — target:
+  with the submit-path implementation PRs, **structurally before any perf
+  work**;
   **(b)** the §10 item-9a invocation-count tripwire (Conceal-path and
   fresh-bytes submits both run the full battery; guards the layer-3
   battery-timing residual, necessary-not-sufficient seam documented) —

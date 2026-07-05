@@ -549,6 +549,21 @@ of bytes — mint at the decision site, carry, never reconstruct:
   Phase B and Phase D so they cannot drift) yields a **move-only token**
   alongside its classification: the `Conceal` arm yields
   `MustFullyVerify`; the `Reveal`/`Absent` arms yield `FastPathEligible`.
+  **Sole-origin is structural, not conventional — the tokens inherit the
+  certificate's own enforcement verbatim:** both types are `pub(crate)`
+  with private fields and a single constructor each, reachable only from
+  `disclose_pool_presence`, and they **inherit the F25 write-site
+  enumeration audit** (§3.5 item 4) — "grep token construction = grep the
+  disclosure choke point," the same collapse as "grep certificate
+  construction = grep Phase C completion." Without this pin the
+  carry-not-reconstruct defeat below answers only
+  reconstruct-by-reclassifying; a second constructor added anywhere — a
+  test helper, a `Default`, an ergonomic `From` impl — is
+  construct-by-alternate-constructor, a `Reveal`-shaped token not born of
+  this request's classification, and layer 1 degrades back to "reviewer
+  must notice," the weak form this decomposition exists to escape. Test
+  code needing tokens goes through `disclose_pool_presence` with
+  constructed facts, never through a testing constructor.
 - Verdict-producing functions are typed against the tokens: any
   cache/fast-path lookup accepts **only `FastPathEligible`**; the
   `Conceal` route to a terminal verdict **consumes `MustFullyVerify` by
@@ -784,6 +799,18 @@ attestation is a consensus-integrity hazard, not a perf bug. Discipline:
    against a different blob: commit blob-B with tx-A's certificate →
    C++(blob-B) ≠ cert.txid → internal fault. The txid check does double duty
    as certificate-blob binding.
+4. **The F41 disclosure-capability tokens join the enumeration (2c
+   structural round).** `MustFullyVerify` and `FastPathEligible` (§3.1)
+   carry the same possession-⇒-provenance weight the certificate carries
+   for verification, so they inherit the same audit: each has exactly one
+   constructor, `pub(crate)`, private fields, reachable only from
+   `disclose_pool_presence`. The enumeration check is "grep token
+   construction = grep the disclosure choke point"; a construction site
+   outside `disclose_pool_presence` — including test helpers, `Default`,
+   or `From` impls — is an audit failure of the same class as an
+   un-enumerated `fcmp_verified` write. Post-implementation, the mint
+   sites are exactly two: the certificate's (Phase C success) and the
+   tokens' (`disclose_pool_presence`).
 
 ---
 
