@@ -725,27 +725,41 @@ sustainability is unaffected by the recalibration.
   adds the second consumer is where the un-split error bites, so it must land
   the split.
 
-- **F41 constant-work-on-Conceal: invariant NAMED (2c design round 2026-07-04,
-  `DAEMON_SUBMIT_VERDICT.md` §3.1) — two implementation obligations open, and a
-  hard ordering constraint.** The stem-presence oracle closure holds only
-  because the `Conceal` path runs the full Phase-C battery (the fall-through in
-  `submit/engine.rs`) and the Rust engine has no verification cache — a
-  security property previously held by the *absence of an optimization*, now
-  asserted as F41 with the coupling stated ("any submit-path cache must exempt
-  or equally-delay `Conceal`") plus a §11 reversion clause naming the only
-  terms a cache may land under. *Open obligations:* **(a)** the §10 item-9
-  timing-uniformity tripwire test (mock-verifier invocation counting:
-  Conceal-path submit and fresh-bytes submit both run the full battery) —
-  target: PR-3-adjacent, before any perf work touches submit; **(b)**
-  per-source rate limiting at the transport/handler layer (Owner never
-  limited — F31 status queries are legitimate; Foreign per-source-limited —
-  no honest resubmit-spam case exists), the DoS-relief sibling that removes
-  the pressure to add the cache F41 constrains — target: V3.0, with the
+- **F41 constant-work-on-Conceal: invariant NAMED + enforcement DECOMPOSED
+  (2c design round 2026-07-04, `DAEMON_SUBMIT_VERDICT.md` §3.1) — four
+  implementation obligations open, and a hard ordering constraint.** The
+  stem-presence oracle closure holds only because the `Conceal` path runs the
+  full Phase-C battery (the fall-through in `submit/engine.rs`) and the Rust
+  engine has no verification cache — a security property previously held by
+  the *absence of an optimization*, now asserted as F41 and enforced by the
+  §3.1 three-layer decomposition (each vector matched to what its layer can
+  prove; the honest boundary — types don't prove timing — stated in the doc).
+  *Open obligations:* **(a)** the disclosure-capability tokens —
+  `disclose_pool_presence` yields move-only `MustFullyVerify` (Conceal arm) /
+  `FastPathEligible` (Reveal/Absent arms); cache lookups accept only
+  `FastPathEligible`; the Conceal route consumes `MustFullyVerify` by
+  exchanging it for the §3.3 certificate — carried-never-reconstructed (the
+  P-1/P-2 idiom applied to a capability), making cache-on-Conceal a compile
+  error; plus a compile-fail (`trybuild`-style) pin — target: with the
+  submit-path implementation PRs, **structurally before any perf work**;
+  **(b)** the §10 item-9a invocation-count tripwire (Conceal-path and
+  fresh-bytes submits both run the full battery; guards the layer-3
+  battery-timing residual, necessary-not-sufficient seam documented) —
+  target: PR-3-adjacent; **(c)** the §10 item-9b transport no-memoization
+  test (two Conceal submits of the same bytes both reach the engine — pins
+  the layer-2 named assumption the engine types cannot reach) — target:
+  PR-3-adjacent; **(d)** per-source rate limiting at the transport/handler
+  layer (Owner never limited — F31 status queries are legitimate; Foreign
+  per-source-limited — no honest resubmit-spam case exists), the DoS-relief
+  sibling that removes the pressure to cache — target: V3.0, with the
   daemon-rpc transport hardening. **Ordering constraint (the named reopen):
-  both must precede the first perf/caching PR touching the submit route** —
-  a cache PR arriving first must cite F41, demonstrate exemption or
-  equal-delay, and keep the tripwire green (a red tripwire is a rejected PR,
-  not a test to update). *Target:* V3.0.
+  (a)–(c) must precede the first perf/caching PR touching the submit route**
+  — a capability retrofitted after a cache lands is a lock installed after
+  the door has been used. A cache PR arriving first must cite F41; a
+  Reveal-path cache type-checks and is the anticipated safe form; touching
+  Conceal requires the compile-visible `MustFullyVerify` conversion per the
+  §11 clause, with the §10 obligations green (a red is a rejected PR, not a
+  test to update). *Target:* V3.0.
 
 - **CT-2 Tier B reconstruct-root KATs (staked / non-coinbase maturity
   classes) — post-CT-5 (CT-2 Round 1 deferral, tracked 2026-06-13).**

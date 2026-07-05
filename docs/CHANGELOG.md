@@ -505,8 +505,24 @@
   transport layer — per-source rate limiting, Owner never limited,
   Foreign per-source-limited — so the pressure that would motivate the
   cache is relieved where it cannot touch the timing property.
-  Implementation obligations and the ordering constraint (both precede
-  the first perf/cache PR touching submit) tracked in `FOLLOWUPS.md`.
+  **Structural round (same day):** F41's enforcement decomposed into
+  three layers, each vector matched to what its layer can prove — the
+  engine-cache vector (the realistic kill) becomes a **compile error**
+  via move-only disclosure-capability tokens minted at
+  `disclose_pool_presence` (`MustFullyVerify` on Conceal /
+  `FastPathEligible` on Reveal/Absent; cache lookups accept only the
+  latter; the Conceal route consumes the former by exchanging it for
+  the §3.3 certificate — the P-1/P-2 mint-once/carry-through idiom
+  applied to a capability); the transport-memoization vector becomes a
+  named assumption with its own engine-entry test; and the
+  invocation-count tripwire guards only the irreducible battery-timing
+  residual, its necessary-not-sufficient seam documented (types don't
+  prove timing — stated, not hidden). The §11 reversion clause is
+  rewritten around the token: a Reveal-path cache type-checks freely;
+  touching Conceal requires a compile-visible `MustFullyVerify`
+  conversion naming F41. Implementation obligations and the ordering
+  constraint (tokens + tests precede the first perf/cache PR touching
+  submit) tracked in `FOLLOWUPS.md`.
 
 - **docs: dispatch-shape post-freeze wargame — byte-holder enumeration
   confirms the freeze, adds two provenance pins (2c design round,

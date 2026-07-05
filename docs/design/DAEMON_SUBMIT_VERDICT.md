@@ -92,7 +92,7 @@ here are binding; the referenced sections carry the mechanics.
 | 4 | Liveness ownership hand-off; embargo-as-kernel; health context; privacy-tiered escape ladder; `diffused` staking reopen | §5, §11 |
 | 5 | F30 (rebuild-wound mechanization — **gating**, folded from first draft), F31 (resubmit is a status query), F32 (health-metadata trust rider), F33 (certificate witness type + blob binding); minors a–d (commit-check-time wording, matrix-pending hypothesis, F22 leg interaction, O(1) template re-check) | §7.1, §5.3, §7.2, §3.3/§3.5, §3.1, §8, §6 |
 | 6 | F14 resolution (awaiting-confirmation persistence + confirmed-absent release), F34 (Phase-D dynamic-policy re-gate), F35 (noise-zone black-hole threat entry), F36 (archival-arm matrix rows, pinned at source), F37 (`FeeTooLow` loop-breaker + fee-param rider rows), F38 (schema-evolution authoring rule), F39 (Phase-C concurrency bound); minors a–d (Phase-D most-terminal-first order, watchdog present/absent branch, second-entry-point sweep, lock-freedom-by-construction sentence) | §2.6, §3.1, §7.5, §8.7.1, §2.5, §7.2, §2.3, §11, §5.3, §9 |
-| 2c (2026-07-04, post-convergence) | F40 (`AlreadyInChain { height }` — §2.2 reasoned carve-out with R1 rescan-never-release + R2 fruitless-rescan breaker), F41 (constant-work-on-Conceal invariant + transport-layer per-source rate-limit sibling + cache reversion clause) | §2.1, §2.2, §2.3, §2.5, §3.1, §4.1, §7.2, §10, §11 |
+| 2c (2026-07-04, post-convergence) | F40 (`AlreadyInChain { height }` — §2.2 reasoned carve-out with R1 rescan-never-release + R2 fruitless-rescan breaker), F41 (constant-work-on-Conceal invariant + transport-layer per-source rate-limit sibling + cache reversion clause; structural round same day: three-layer enforcement decomposition — `MustFullyVerify`/`FastPathEligible` disclosure-capability tokens seal the engine-cache vector at compile time, transport no-memoization becomes a named-and-tested assumption, the invocation-count tripwire guards only the irreducible battery-timing residual) | §2.1, §2.2, §2.3, §2.5, §3.1, §4.1, §7.2, §10, §11 |
 
 The round-2 row's F13–F19 mapping was itself a round-6 fix: the index
 previously jumped from round 1 to round 3, and F14 — the one round-2 finding
@@ -512,6 +512,81 @@ change must satisfy:
 > the full battery regardless of any cached result) or **equally delay**
 > it to full-battery cost. A perf/caching PR touching submit that does
 > not cite F41 and demonstrate one of the two is rejected on review.
+
+**F41 enforcement decomposition (structural round, 2026-07-04).** The
+invariant as first stated was review-plus-tripwire — the weak form, out of
+step with how this document's sibling properties are enforced (the §3.3
+witness certificate, SP-T4a §3.1 part 6's P-1/P-2). The honest boundary
+first, so nothing over-claims: **F41's core is a timing property, and type
+systems do not prove timing.** This is the same wall constant-time
+cryptography hits — `subtle`'s `Choice` enforces that constant-time
+primitives are *called*; actual data-independence is still discipline plus
+statistical testing. No Rust type makes "this branch runs data-independent
+work" a compile error, so a claim that any type "structurally enforces F41"
+in full would be false. What decomposes out of the tested residue is the
+*control-flow* half — "can a verdict be produced on the `Conceal` path
+without running the battery" — which is exactly what types enforce. Three
+layers, each vector matched to what its layer can actually prove:
+
+| Vector | Enforcement | Artifact |
+| --- | --- | --- |
+| Engine-level cache / fast path short-circuiting `Conceal` before Phase C (the realistic way F41 dies) | **Structural — type error** | The disclosure-capability tokens below |
+| Transport/RPC-layer response memoization (beyond the engine's type reach) | **Named assumption + its own test** | §10 item 9b: two `Conceal` submits of the same bytes both reach the engine |
+| Battery-internal data-dependent shortcut (timing leak inside verification itself) | **Tested — the irreducible residual** | §10 item 9a invocation-count tripwire (necessary, not sufficient — the documented seam) |
+
+**The disclosure-capability tokens.** The substrate almost enforces layer 1
+already: an `Accepted` from the `Conceal` path requires commit, commit
+requires `&VerificationCertificate`, and the certificate is move-only,
+`!Clone`, unserializable, minted `pub(crate)` only from Phase C's success
+path ([`certificate.rs`](../../rust/shekyl-daemon-rpc/src/submit/certificate.rs))
+— so a cache cannot *retain a certificate to replay*. The remaining hole is
+a cache sitting **earlier**: memoizing the `SubmitVerdict` or the
+`SubmitFacts` and answering a `Conceal` call before Phase C is ever
+reached. Closing it is the P-1/P-2 idiom applied to a capability instead
+of bytes — mint at the decision site, carry, never reconstruct:
+
+- `disclose_pool_presence` (already the single decision point, shared by
+  Phase B and Phase D so they cannot drift) yields a **move-only token**
+  alongside its classification: the `Conceal` arm yields
+  `MustFullyVerify`; the `Reveal`/`Absent` arms yield `FastPathEligible`.
+- Verdict-producing functions are typed against the tokens: any
+  cache/fast-path lookup accepts **only `FastPathEligible`**; the
+  `Conceal` route to a terminal verdict **consumes `MustFullyVerify` by
+  exchanging it for the certificate** — i.e. through Phase C, there being
+  no other certificate mint.
+- A cache added on the `Conceal` branch is then a **compile error**, not a
+  review catch; a maintainer who wants to fast-path `Conceal` must write
+  an explicit token conversion — a named, loud, reviewable act (the
+  `// SAFETY:`-comment shape: "this conversion reopens F41") — never a
+  silent early-return.
+
+Three adversarial defeats of the token, pre-answered in the P-1/P-2 shape:
+
+1. **Reconstruct rather than carry** (mint a `FastPathEligible` from a
+   fresh `Reveal`-shaped classification, present it on a `Conceal`
+   request): defeated as P-2 defeats re-wrapping — the token is carried
+   from the `disclose_pool_presence` call that classified *this* request
+   (tied to that call's caller/facts snapshot), never re-minted.
+2. **Clone the capability**: `!Clone`/`!Copy`, move-only — same as the
+   certificate, same as `PBoundBytes`.
+3. **Cache outside the engine**: beyond the type's reach by construction —
+   which is why it is a *named assumption with its own test* (layer 2),
+   not silently absorbed into the structural claim. The constant-work
+   claim is scoped to "the transport layer does not memoize submit
+   responses," and that scope is pinned and tested, not assumed.
+
+**Deliberate non-goal:** the tokens seal the `Conceal` branch only.
+`FastPathEligible` is freely mintable on `Reveal`/`Absent`, so the
+legitimate `Reveal`-path optimization the §11 reversion clause exists to
+permit still type-checks. Sealing everything would forbid the safe cache
+the clause anticipates, and over-constraint gets worked around — which
+reintroduces the risk out from under the type. Bad states unrepresentable;
+not all states.
+
+The tokens are an implementation obligation with a hard ordering
+constraint (FOLLOWUPS): **they must exist before the first submit-path
+perf/cache PR** — a capability retrofitted after a cache lands is a lock
+installed after the door has been used.
 
 Two companions make the invariant durable rather than aspirational:
 
@@ -1412,14 +1487,28 @@ enumeration above is the complete submit surface.
    horizon**, via verdict where reachable and via observed-absence
    otherwise (confirmed-absent leg); confirmed-present → refresh clears to
    spent-final.
-9. **Conceal timing uniformity (F41):** response-time comparison between a
-   foreign-caller submit of embargoed-pool-resident bytes (the `Conceal`
-   path) and a foreign-caller submit of fresh never-seen bytes of the same
-   shape — the two distributions must be statistically indistinguishable at
-   Phase-C granularity (the assertion is "both ran the full battery," not a
-   wall-clock equality; a mock verifier counting invocations is the
-   robust form). The test is the tripwire F41 names: it goes red the day a
-   cache gives `Conceal` a fast path.
+9. **Conceal constant-work (F41), one obligation per enforcement layer
+   (§3.1 decomposition):
+   (a) invocation-count tripwire** — a foreign-caller submit of
+   embargoed-pool-resident bytes (the `Conceal` path) and a foreign-caller
+   submit of fresh never-seen bytes of the same shape both run the full
+   battery, asserted by mock-verifier invocation counting, not wall-clock
+   (deterministic red the day a fast path lands on `Conceal`; a wall-clock
+   test is flaky and gets muted). This guards the layer-3 residual only and
+   is **necessary, not sufficient** — it does not see a cache that keeps
+   invocation parity while leaking through another observable; that seam is
+   documented at the §3.1 decomposition table, and the structural token is
+   what shrinks it.
+   **(b) transport no-memoization** — two consecutive foreign-caller
+   submits of the same `Conceal`-classified bytes both **reach the engine**
+   (engine-entry counting), pinning the layer-2 named assumption that no
+   transport/RPC-framework response cache sits above the engine. Green
+   engine types with a memoizing transport would reopen the oracle; this
+   test is what makes that configuration red.
+   *(Token compile-enforcement needs no runtime test — layer 1's property
+   is that violation does not compile; its "test" is a compile-fail case
+   (`trybuild`-style) pinning that a cache lookup cannot accept
+   `MustFullyVerify`.)*
 
 ---
 
@@ -1436,7 +1525,7 @@ enumeration above is the complete submit surface.
 | `SubmitStateShim` over C++ FFI | The Rust mempool lands | Swap the trait impl; engine, contract, wallet untouched (§3.2). This is the *planned* reversion |
 | Health-based wallet branching own-daemon-gated (F32) | Multi-daemon reopen | Same round as the cool-off row; peer count + sync height + fee params + construction-time chain view enter as untrusted remote metadata |
 | New top-level `SubmitVerdict` tags rejected (F38 — additive rejection semantics go under `RejectCause`) | A genuinely new **non-rejection** disposition emerges that no `RejectCause` variant can express (a new stable state of the submitted bytes, not a new reason for refusing them) | Coordinated wire-version bump: contract amendment round, skew-test extension, dual-version deployment window — never a silent tag addition |
-| Submit-path verification cache rejected (F41 — constant-work-on-Conceal) | Measured Phase-C load on a production-shaped workload that the transport-layer per-source rate limiter + F39 semaphore demonstrably cannot absorb (the DoS-relief siblings must be shown insufficient first, not skipped) | Perf design round that cites F41 and demonstrates either Conceal-exemption or equal-delay; the §10 item-9 timing-uniformity test must stay green through the change — a red is a rejected PR, not a test to update |
+| Submit-path verification cache rejected (F41 — constant-work-on-Conceal) | Measured Phase-C load on a production-shaped workload that the transport-layer per-source rate limiter + F39 semaphore demonstrably cannot absorb (the DoS-relief siblings must be shown insufficient first, not skipped) | Perf design round that cites F41. A `Reveal`/`Absent`-path cache is the anticipated safe form: it takes `FastPathEligible` and **type-checks without touching this clause**. Touching the `Conceal` path requires **converting a `MustFullyVerify` token — a compile-visible act** that names F41 at the conversion site; the round must justify that conversion (equal-delay being the only admissible shape, since exemption *is* the token's default), and the §10 item-9 obligations stay green through the change — a red is a rejected PR, not a test to update |
 
 ---
 
