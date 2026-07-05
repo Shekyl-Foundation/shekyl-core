@@ -18,11 +18,18 @@ description = "Agent-based staker-archival coverage simulation (docs/design/STAK
 serde = { workspace = true }
 serde_json = "1"
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# GF-7 measurement pipeline (`docs/design/ARCHIVAL_BOND_2C_GF7_HOOKS.md` §4/§5):
+# this crate is the ONLY home of a recording `BroadcastTimelineObserver` impl
+# (layer 2 of the no-emit guard — a standalone binary no production crate
+# depends on; CI asserts the dependency graph). The `gf7-hooks` feature pulls
+# the observer trait + event vocabulary; the `--gf7-timeline` mode drives the
+# joint three-axis scenario through the recorded timeline (§6.3). The sim also
+# imports the single-sourced `draw_entry_gap` + `plan_entry_seam` so it grades
+# the same draw/planner the wallet runs ("what we validated is what ships").
+shekyl-standoff = { path = "../shekyl-standoff", features = ["gf7-hooks"] }
 
-# The funding-seam standoff draw + its conformance instruments are
-# single-sourced in `shekyl-standoff`; the sim's `run()` does not call the draw
-# in production logic, so this is a dev-only dependency (the `conformance`
-# feature pulls the float grading + self-cert harness for the smoke test that
-# the sim's `SplitMix64` conforms through the shared `certify_draw`).
+# The `conformance` feature (float grading + self-cert harness) stays dev-only:
+# it backs the smoke test that the sim's `SplitMix64` conforms through the
+# shared `certify_draw`; the sim binary itself does not grade.
 [dev-dependencies]
 shekyl-standoff = { path = "../shekyl-standoff", features = ["conformance"] }

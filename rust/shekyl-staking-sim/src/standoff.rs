@@ -169,10 +169,12 @@ pub struct StandoffResult {
 
 /// SplitMix64 — small, seeded, reproducible. No `rand` dependency (keeps the
 /// crate's minimal-dep posture; the harness must be deterministic for replay).
-struct SplitMix64(u64);
+/// `pub(crate)`: the GF-7 joint-timeline scenario (`gf7_timeline`) reuses the
+/// same reproducible stream so both harnesses replay from a seed.
+pub(crate) struct SplitMix64(pub(crate) u64);
 
 impl SplitMix64 {
-    fn next_u64(&mut self) -> u64 {
+    pub(crate) fn next_u64(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -212,6 +214,16 @@ impl SplitMix64 {
                 return k - 1;
             }
         }
+    }
+}
+
+/// The sim's reproducible PRNG satisfies the standoff draw conformance trait,
+/// so this crate's reference streams (the `run()` smoke test and the GF-7
+/// joint-timeline scenario) are the same one the wallet self-certifies
+/// against. Reference determinism, not a PRNG mandate.
+impl shekyl_standoff::GapRng for SplitMix64 {
+    fn next_u64(&mut self) -> u64 {
+        SplitMix64::next_u64(self)
     }
 }
 
@@ -460,15 +472,6 @@ pub fn run_full_report() -> StandoffReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The sim's reproducible PRNG satisfies the standoff draw conformance trait,
-    /// so `run()`'s reference stream is the same one the wallet self-certifies
-    /// against. Reference determinism, not a PRNG mandate.
-    impl shekyl_standoff::GapRng for SplitMix64 {
-        fn next_u64(&mut self) -> u64 {
-            SplitMix64::next_u64(self)
-        }
-    }
 
     #[test]
     fn zero_window_is_no_cover() {
