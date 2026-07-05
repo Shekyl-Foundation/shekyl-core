@@ -251,7 +251,10 @@ schedule pressure.
 5. **The pre-WI-3 pass is provisional.** WI-4 grades against the sim's
    *synthesized* `BondPostDispatched` (§0's interim); WI-3's live
    emission may differ (e.g., the production driver's due-check
-   quantizing to sweep boundaries in a way the synthesis didn't model),
+   quantizing to sweep boundaries in a way the synthesis didn't model —
+   exactly the quantization
+   [`ARCHIVAL_BOND_WI3_DISPATCH.md`](ARCHIVAL_BOND_WI3_DISPATCH.md) §3.2's
+   dispersal draw counters, and whose sufficiency WI-4 grades),
    which changes the joint timeline the correlator sees. The early pass
    is the continue/redesign checkpoint, not the seal: the acceptance doc
    marks it **provisional**, and the re-run against the live WI-3

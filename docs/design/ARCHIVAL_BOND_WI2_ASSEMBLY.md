@@ -34,9 +34,10 @@ block-timed dispatch driver consumes. In scope:
 5. The **durable pending-post record** (SP-T4 §3.1.1 pin P-2).
 6. Failure modes (rule 82).
 
-Out of scope (WI-3): the dispatch due-check, `BroadcastSubmitter` wiring,
-entry-event coordination (D1), retry/re-anchor semantics, live
-`BondPostDispatched` emission. Out of scope (2d-2): posture-aware
+Out of scope (WI-3, designed in
+[`ARCHIVAL_BOND_WI3_DISPATCH.md`](ARCHIVAL_BOND_WI3_DISPATCH.md)): the
+dispatch due-check, `BroadcastSubmitter` wiring, entry-event coordination
+(D1), retry/re-anchor semantics, live `BondPostDispatched` emission. Out of scope (2d-2): posture-aware
 `PBlockSource`, key-image-based external-spend reconcile (see §3.4 limitation).
 
 ## 2. Substrate (verified at `feat/pscan-lifecycle`, 2026-07-05)
