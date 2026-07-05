@@ -68,12 +68,13 @@ fn phase_a_failure_never_touches_the_shim() {
 #[test]
 fn already_in_chain_outranks_in_pool() {
     let mut facts = base_facts();
-    facts.in_chain = true;
+    facts.in_chain = Some(BlockHeight::from_raw(180));
     facts.in_pool = true; // transiently both, just-mined: settled fact wins
     let (engine, shim, verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
-        SubmitVerdict::AlreadyInChain
+        SubmitVerdict::AlreadyInChain { height: 180 },
+        "the F40 confirming height rides the verdict"
     );
     assert_eq!(verifier.call_count(), 0, "identity precedes verification");
     assert_eq!(shim.commit_count(), 0);
@@ -374,14 +375,15 @@ fn raced_in_chain_wins_over_every_other_premise() {
     // moved: the settled fact must win (order is load-bearing — StaleRoot
     // here would send the wallet through a wasted rebuild).
     let mut fresh = base_facts();
-    fresh.in_chain = true;
+    fresh.in_chain = Some(BlockHeight::from_raw(201));
     fresh.key_image_conflicts = vec![KeyImageConflict::Other, KeyImageConflict::Free];
     fresh.reference = None;
     fresh.fee_per_byte = u64::MAX;
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
-        SubmitVerdict::AlreadyInChain
+        SubmitVerdict::AlreadyInChain { height: 201 },
+        "the F40 height rides the fresh facts through reclassification"
     );
 }
 

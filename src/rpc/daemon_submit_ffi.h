@@ -68,7 +68,7 @@ enum {
 };
 
 // POD fact snapshot (§4.1) — also the shape of Phase-D fresh facts when the
-// commit races. Byte layout (size 80, align 8), asserted on both sides:
+// commit races. Byte layout (size 88, align 8), asserted on both sides:
 //
 //   offset  0: in_pool               (u8; txid pool-resident at `all` category — §3.1 F40)
 //   offset  1: in_chain              (u8; txid in main chain)
@@ -84,6 +84,9 @@ enum {
 //   offset 56: fee_quantization_mask (u64; ≥ 1)
 //   offset 64: weight_limit          (u64; get_transaction_weight_limit)
 //   offset 72: chain_height          (u64; block count, m_db->height())
+//   offset 80: in_chain_height       (u64; valid iff in_chain — the F40 confirming-block
+//                                      height, read under the same lock scope as the
+//                                      membership fact so the pair cannot be racy)
 //
 // Key-image conflicts travel beside the struct as a plain uint8_t array
 // (one SHEKYL_SUBMIT_KI_* entry per submitted key image, submission order).
@@ -100,6 +103,7 @@ typedef struct shekyl_submit_facts_ffi {
     uint64_t fee_quantization_mask;
     uint64_t weight_limit;
     uint64_t chain_height;
+    uint64_t in_chain_height;
 } shekyl_submit_facts_ffi;
 
 // Shim 1 (§4.1): Phase-B POD fact snapshot under one short pool→blockchain

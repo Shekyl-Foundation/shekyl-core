@@ -78,8 +78,12 @@ pub struct SubmitFacts {
     /// from foreigners exactly as the legacy `relay_category::legacy` identity
     /// check concealed it.
     pub in_pool_broadcast: bool,
-    /// The submitted txid is in the main chain.
-    pub in_chain: bool,
+    /// `Some(height)` iff the submitted txid is in the main chain,
+    /// confirmed at `height` — the F40 confirming-block height, read under
+    /// the same lock scope as the membership fact so the pair cannot be
+    /// racy (§3.1 Phase B / §4.1). It rides the fact snapshot, so the
+    /// Phase-D `Raced(fresh)` reclassification carries it for free.
+    pub in_chain: Option<BlockHeight>,
     /// Conflict descriptor per submitted key image, in submission order.
     pub key_image_conflicts: Vec<KeyImageConflict>,
     /// Reference-block facts, iff the hash is known to the daemon.

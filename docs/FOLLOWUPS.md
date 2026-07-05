@@ -673,8 +673,8 @@ sustainability is unaffected by the recalibration.
 
 - **`AlreadyInChain` submit verdict: distinct lock-lifecycle disposition —
   DESIGN DECIDED 2026-07-04 (F40, `AlreadyInChain { height }`); interim
-  implementation landed #252, F40 conformance pending (PR-4 / #248 review,
-  deferred to 2c).**
+  implementation landed #252; F40 conformance LANDED 2026-07-05 (#254);
+  R2 breaker execution remains with the 2c-2b driving actor.**
   Original finding: `transaction_submitter::outcome_to_result` collapses
   `AlreadyInChain` into `Ok(hash)` identically to `Submitted` /
   `AlreadyInPool`, so `finalize_submit_accept` places a fresh F14
@@ -711,16 +711,27 @@ sustainability is unaffected by the recalibration.
   arm by disposition — `Broadcast` (`Accepted` / `AlreadyInPool`) takes the
   `finalize_submit_accept` path and places the F14 awaiting-confirmation
   lock; `AlreadyInChain` takes the new `finalize_submit_already_in_chain`
-  path, which releases the reservation and its output locks and places
-  **no** fresh awaiting-lock (refresh-authoritative). This carries no
-  `height` discriminant and implements only the "place no lock" shape the
-  design round superseded — it does **not** yet place the lock in both
-  height cases, route release by `height`, or enforce F40-R1/R2. Regression:
-  `submit_already_in_chain_releases_without_awaiting_lock`. *Remaining
-  (F40 conformance): restore `AlreadyInChain { height: u64 }` wire type +
-  shim `in_chain_height`, place the lock in both height cases, and route
-  release by `height` with F40-R1/R2 — lands with the 2c StakeEngine
-  submit-consumer work.* *Target:* V3.0, 2c slices.
+  path. **F40 conformance (#254, 2026-07-05):** the wire type is
+  `SubmitVerdict::AlreadyInChain { height }` (required field; frozen
+  fixture updated atomically per §2.3 third-category rule, skew test D pins
+  the field-less form to the `Err` arm); the FFI snapshot grows
+  `in_chain_height` (size 88, offset 80, read under the same lock scope as
+  the membership fact; fill/check field 11); `SubmitFacts.in_chain` is
+  `Option<BlockHeight>` so the validity gate is structural; the admission
+  engine emits the height at both the Phase-B short-circuit and the
+  Phase-D `classify_race` settled-identity arm; wallet-side,
+  `SubmitSuccess::AlreadyInChain { hash, height }` reaches
+  `finalize_submit_already_in_chain`, which places the F14 lock in
+  **both** height cases baselined at the claimed `height` and routes the
+  release path — `> synced` waits for §2.6 path-1 refresh catch-up;
+  `≤ synced` emits the new `PendingTxDiagnostic::TargetedRescanRequested`
+  for the reorg-heal re-scan. F40-R1 is structural (the request path
+  releases nothing; regressions
+  `submit_already_in_chain_above_synced_locks_at_claimed_height` and
+  `submit_already_in_chain_at_or_below_synced_requests_rescan_never_releases`).
+  *Remaining: the re-scan executor consuming `TargetedRescanRequested`
+  and its F40-R2 fruitless-re-scan breaker land with the 2c-2b driving
+  actor.* *Target:* V3.0, 2c-2b.
 
 - **Submit-error reservation-id placeholder: split submitter error from
   orchestrator error (PR-4 / #248 review, deferred to 2c) — RESOLVED
@@ -7304,7 +7315,8 @@ one place to confirm each item's relationship to the wallet stack.
   [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (the S-3 privacy-sim home).
 - **2d-2 2c-2a — submit-outcome handling: the wallet CONSUMES `SubmitVerdict`; the partition is
   no longer a design object (SUPERSEDED 2026-07-04 by
-  [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md), D4).** This entry originally
+  [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md), D4; absorbed remainders
+  CLOSED 2026-07-05 — §12 series fully landed).** This entry originally
   tasked 2c-2a with designing a wallet-side three-bucket relay partition
   ({definitely-relayed / definitely-not-relayed / ambiguous}) reconstructed from the inherited
   lossy reply surface, plus a TTL exit and an on-chain disambiguation step. That framing is
@@ -7321,15 +7333,16 @@ one place to confirm each item's relationship to the wallet stack.
   delivered-4xx no-TTL wedge — verdicts are definite, `Err(RpcError)` is the only ambiguity
   (Two Generals) and gets TTL-then-resubmit with every stable state resolving on the resubmit
   (§2.5/F31; a **cancelled** submit remains ambiguity-shaped — the consumer must not wrap
-  `submit` in a cancelling combinator, carried as a PR-4 obligation). What REMAINS of this
-  entry, all absorbed into the daemon-doc PR sequence (§12): retire the `AlreadyKnown` fiction
-  from `traits/daemon.rs` + `V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md` /
-  `V3_ENGINE_TRAIT_BOUNDARIES.md` (PR-4 code / PR-6 docs); the shared
-  `RpcError → AmbiguousErrorKind` classifier + the `submit_via_rpc<R: Rpc>` dedup (PR-4, "both
-  submitters share the mapping"); the `TxSubmitOutcome` reshape + `ProofStale` construction +
-  spent-marking moved off submit-accept (PR-4). **Target: `DAEMON_SUBMIT_VERDICT.md` PR-4,
-  downstream of its PR-2/PR-3; the wallet-side prerequisite is the dispatch-shape freeze (next
-  entry), which PR-4's shared mapping presupposes.**
+  `submit` in a cancelling combinator, carried as a PR-4 obligation). **CLOSED 2026-07-05 —
+  every absorbed remainder landed with the daemon-doc PR sequence (§12, all six PRs merged):**
+  the `AlreadyKnown` fiction is retired from `traits/daemon.rs` (PR-4, #248) and from
+  `V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md` / `V3_ENGINE_TRAIT_BOUNDARIES.md` (the CL-4 exemplar
+  and §4 idempotency rows now carry the resubmit-is-a-status-query contract; docs sweep,
+  #254 branch — the PR-6 sweep #250 missed these two files); the shared
+  `RpcError → AmbiguousErrorKind` classifier + the `submit_via_rpc<R: Rpc>` dedup landed
+  (PR-4, "both submitters share the mapping"); the `TxSubmitOutcome` reshape + `ProofStale`
+  construction + spent-marking moved off submit-accept landed (PR-4). The dispatch-shape
+  prerequisite froze and landed 2026-07-04 (next entry).
 - **2d-2 2c-2a — posture→submitter dispatch shape: FROZEN 2026-07-04 (user-ratified) —
   [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md) §3.1 is the
   binding record.** The API question this entry posed (`TransactionSubmitter` is RPITIT-non-dyn;
@@ -7344,22 +7357,27 @@ one place to confirm each item's relationship to the wallet stack.
   *branding* rejected for the dynamic persona set, rule-21 reopen in §3.1. The shape survives
   [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md) PR-4's `SubmitVerdict` reshape
   (match-delegation is output-agnostic), unblocking PR-4's "both submitters share the mapping."
-  **Remaining: implementation only** — the enum + constructor + `PBoundBytes` land with the 2c
-  wiring (2c-2a/2c-2b, PR-4-adjacent). **Post-freeze wargame (2026-07-04, §3.1.1): freeze
-  CONFIRMED against the byte-holder enumeration** (assemble path / F31 resubmit / watchdog probe
-  rung), with **two freeze-compatible provenance pins added as implementation obligations**:
-  **P-1** `PBoundBytes` has exactly one constructor, private to the assemble/sign module —
-  possession is proof of provenance, no re-wrap site exists; **P-2** the held/pending record for
-  a `P`-bound tx stores the `PBoundBytes` value itself (not `Vec<u8>`), so F31/watchdog
-  resubmits re-send the stored value through the same choke path — the retry axis cannot route
-  `P`'s probe over the principal connection. The pins are recorded as **§3.1 part 6**
-  (mint-once / store-wrapped) — an addition *beside* the frozen five parts, not a reopen; the
-  adversary they close is the future-maintainer refactor that stores raw bytes and threads
-  persona separately, silently converting the part-4 equality check into a rubber stamp.
-  **Target: code lands in the 2c slices; the design decision is closed.**
+  **Post-freeze wargame (2026-07-04, §3.1.1): freeze CONFIRMED against the byte-holder
+  enumeration** (assemble path / F31 resubmit / watchdog probe rung), with **two
+  freeze-compatible provenance pins added as implementation obligations**: **P-1** `PBoundBytes`
+  has exactly one constructor, private to the assemble/sign module — possession is proof of
+  provenance, no re-wrap site exists; **P-2** the held/pending record for a `P`-bound tx stores
+  the `PBoundBytes` value itself (not `Vec<u8>`), so F31/watchdog resubmits re-send the stored
+  value through the same choke path — the retry axis cannot route `P`'s probe over the principal
+  connection. The pins are recorded as **§3.1 part 6** (mint-once / store-wrapped) — an addition
+  *beside* the frozen five parts, not a reopen; the adversary they close is the
+  future-maintainer refactor that stores raw bytes and threads persona separately, silently
+  converting the part-4 equality check into a rubber stamp.
+  **Implementation LANDED 2026-07-04** (`transaction_submitter.rs`): the enum + `for_posture`
+  choke point + `PBoundBytes` + `BroadcastSubmitError`, with `PTransactionSubmitter` tightened to
+  `for_persona` (persona↔circuit binding by construction; the retained `PCanonicalId` feeds the
+  pairing check). Landed inert (`allow(dead_code)`, proving tests are the callers) — the lift
+  condition is the 2c-2b request path, which also owns the §3.1 part-6 P-1 (mint-site migration)
+  and P-2 (store `PBoundBytes`, not raw bytes) provenance pins. **Target: the design decision and
+  the dispatch code are closed; remaining obligations ride 2c-2b.**
 - **2d-2 2c — `DaemonUrl` newtype: validate `base_url` at construction + house the S1 disclosure.**
   `base_url` is a bare `String` across three sites (`BroadcastPosture::OwnRemote`,
-  `PTransactionSubmitter::new`, `PBlockSource::new`) with no validation and an unredacted
+  `PTransactionSubmitter::for_persona`, `PBlockSource::new`) with no validation and an unredacted
   `derive(Debug)`. A `DaemonUrl` newtype (parse/validate at construction: scheme, host,
   **.onion-or-loopback**, no trailing slash; redacting `Debug`) closes: (a) the trailing-slash wedge
   (`http://x.onion:18081/` → `…//submit_transaction` → both daemons 404 → `DaemonAmbiguous` wedge,

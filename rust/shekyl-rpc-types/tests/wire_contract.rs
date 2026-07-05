@@ -23,8 +23,8 @@ fn frozen_corpus() -> Vec<(SubmitVerdict, &'static str)> {
             r#"{"verdict":"already_in_pool"}"#,
         ),
         (
-            SubmitVerdict::AlreadyInChain,
-            r#"{"verdict":"already_in_chain"}"#,
+            SubmitVerdict::AlreadyInChain { height: 1_234_567 },
+            r#"{"verdict":"already_in_chain","height":1234567}"#,
         ),
         (
             SubmitVerdict::Rejected {

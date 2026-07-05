@@ -15,7 +15,11 @@
 //!   definitely-not-relayed → release + one-shot rebuild);
 //! - skew B: unknown `verdict` tag → deserialization error → the client's
 //!   `Err` arm (ambiguous → TTL-resubmit);
-//! - skew C: unknown *fields* inside known variants are tolerated.
+//! - skew C: unknown *fields* inside known variants are tolerated;
+//! - skew D: a **missing required field** on a known variant (a field-less
+//!   `already_in_chain` from a pre-F40 daemon) → deserialization error →
+//!   the `Err` arm (the §2.3 third-category asymmetry, pinned so the
+//!   post-genesis optional-with-default rule has a test to flip).
 //!
 //! The asymmetry is deliberate: an unknown rejection *cause* still proves
 //! "not in pool, not in chain" (the shape the wallet can act on), while an
@@ -99,6 +103,22 @@ fn skew_c_unknown_fields_inside_known_variants_are_tolerated() {
         SubmitVerdict::Rejected {
             cause: RejectCause::FeeTooLow
         }
+    );
+}
+
+#[test]
+fn skew_d_field_less_already_in_chain_is_a_deserialization_error() {
+    // F40 (§2.3 third-category rule): `height` is a *required* field on
+    // `already_in_chain`. A field-less form — an older (pre-F40) daemon —
+    // must land in the Err arm (TTL-resubmit), never in a defaulted height:
+    // a defaulted 0 would route the wallet's release path (targeted
+    // re-scan at height 0) off a value the daemon never asserted.
+    // Pre-genesis this Err arm is a non-event (wallet and daemon release
+    // together); post-genesis the field must become optional-with-default,
+    // and this is the test that flips.
+    assert!(
+        serde_json::from_str::<SubmitVerdict>(r#"{"verdict":"already_in_chain"}"#).is_err(),
+        "field-less already_in_chain must be a deserialization error"
     );
 }
 

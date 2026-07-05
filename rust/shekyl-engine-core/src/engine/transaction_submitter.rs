@@ -7,12 +7,14 @@
 
 use std::sync::Arc;
 
-use shekyl_p_transport::PTorClient;
+use shekyl_p_transport::{PTorClient, PTransportError, TorSocksEndpoint};
 use shekyl_rpc_client::{RejectCause, Rpc, SubmitVerdict};
+use shekyl_types::PCanonicalId;
 use shekyl_wire::Transaction;
 
 use super::error::{AmbiguousErrorKind, RetryableRejectCause, TerminalErrorKind};
 use super::pending::TxHash;
+use super::posture::BroadcastPosture;
 use super::prpc::PRpc;
 use super::traits::{DaemonEngine, TxSubmitOutcome};
 
@@ -66,14 +68,18 @@ pub(crate) enum SubmitterError {
 /// settled → the orchestrator places the persisted F14
 /// awaiting-confirmation lock, §2.6) and so share the [`Self::Broadcast`]
 /// variant. `AlreadyInChain` is **distinct**: confirmation observed by
-/// verdict, refresh remains the settlement authority — collapsing it into
-/// the broadcast arm would place a fresh awaiting-lock (baseline = current
-/// height) on an already-mined tx, a lock refresh may never clear
-/// (`docs/FOLLOWUPS.md` "`AlreadyInChain` submit verdict", closed with this
-/// split).
+/// verdict, refresh remains the settlement authority. The F14 lock is
+/// still placed (F40: fund safety first — no selectable-input window in
+/// either height case), but baselined at the daemon-claimed confirming
+/// `height` rather than the wallet's current height, and `height` routes
+/// the *release path* (`docs/FOLLOWUPS.md` "`AlreadyInChain` submit
+/// verdict", closed with this split; reshaped to F40 with the `height`
+/// carve-out).
 ///
 /// The `hash` on both variants is the **locally**-computed tx id — the
-/// daemon reply carries no txid field (wire minimalism, §2.2).
+/// daemon reply carries no txid field (wire minimalism, §2.2; the F40
+/// `height` is the one reasoned carve-out, and it is a release-path
+/// discriminant, never identity or settlement truth).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SubmitSuccess {
     /// `Accepted` / `AlreadyInPool`: the bytes are held by the daemon and
@@ -83,13 +89,19 @@ pub(crate) enum SubmitSuccess {
         /// The locally computed tx id.
         hash: TxHash,
     },
-    /// `AlreadyInChain`: this txid is in the main chain. Disposition:
-    /// release the reservation, place **no** fresh awaiting-lock; refresh
-    /// settles (`mark_spent` on observing the spend; reorgs happen — the
-    /// verdict authorizes lock-lifecycle transitions only).
+    /// `AlreadyInChain`: this txid is in the main chain. Disposition
+    /// (F40, §2.5): release the reservation, place the F14 awaiting-lock
+    /// in **both** height cases (baselined at `height`); `height` routes
+    /// the release path — above-synced waits for refresh to reach the
+    /// confirming block (§2.6 path 1); at/below-synced requests a
+    /// targeted re-scan (R1: the re-scan never releases; R2: fruitless
+    /// re-scans are breaker-bounded).
     AlreadyInChain {
         /// The locally computed tx id.
         hash: TxHash,
+        /// Daemon-claimed confirming-block height — the release-path
+        /// discriminant (untrusted; damage-capped per §7.2).
+        height: u64,
     },
 }
 
@@ -136,7 +148,10 @@ pub(crate) fn submit_outcome_from_verdict(
     match verdict {
         SubmitVerdict::Accepted => TxSubmitOutcome::Submitted { hash },
         SubmitVerdict::AlreadyInPool => TxSubmitOutcome::AlreadyInPool { hash },
-        SubmitVerdict::AlreadyInChain => TxSubmitOutcome::AlreadyInChain { hash },
+        SubmitVerdict::AlreadyInChain { height } => TxSubmitOutcome::AlreadyInChain {
+            hash,
+            height: *height,
+        },
         SubmitVerdict::Rejected { cause } => TxSubmitOutcome::Rejected { cause: *cause },
     }
 }
@@ -169,7 +184,9 @@ pub(crate) fn outcome_to_result(outcome: TxSubmitOutcome) -> Result<SubmitSucces
         TxSubmitOutcome::Submitted { hash } | TxSubmitOutcome::AlreadyInPool { hash } => {
             Ok(SubmitSuccess::Broadcast { hash })
         }
-        TxSubmitOutcome::AlreadyInChain { hash } => Ok(SubmitSuccess::AlreadyInChain { hash }),
+        TxSubmitOutcome::AlreadyInChain { hash, height } => {
+            Ok(SubmitSuccess::AlreadyInChain { hash, height })
+        }
         TxSubmitOutcome::Rejected { cause } => Err(submitter_error_from_cause(cause)),
     }
 }
@@ -237,7 +254,7 @@ where
         #[cfg(debug_assertions)]
         if let TxSubmitOutcome::Submitted { hash }
         | TxSubmitOutcome::AlreadyInPool { hash }
-        | TxSubmitOutcome::AlreadyInChain { hash } = &outcome
+        | TxSubmitOutcome::AlreadyInChain { hash, .. } = &outcome
         {
             debug_assert_eq!(
                 Some(*hash),
@@ -253,35 +270,50 @@ where
 /// transactions over `P`'s **own** Tor circuit via [`PRpc`] — the write-side
 /// mirror of `PBlockSource` (SP-T4a, CX-2; `ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`).
 ///
-/// Constructed **only** from a [`PTorClient`] + the daemon base URL: no
-/// principal-`DaemonClient` path, no `Default`, so *this* submitter cannot be built
-/// over the shared principal connection (mirrors `PBlockSource::new`, one direction
-/// over). **Honest scope (§3A):** that closes *construction* — it does **not** stop
-/// handing `P`'s tx **bytes** to the *principal* `DaemonTransactionSubmitter` (the
-/// `submit(Vec<u8>)` trait takes opaque, persona-unbound bytes), nor pairing `P1`'s
-/// bytes with a submitter built from `P2`'s circuit. This binds the *circuit* to a
-/// persona (via `PTorClient::for_persona`), not the *bytes*; the posture→submitter
-/// routing (②→here, never the principal) and the byte↔persona pairing are
-/// **2c-2b's** obligation (a `P`-bound-bytes newtype only this `submit` accepts is
-/// the make-bad-states-unrepresentable option).
+/// Constructed **only** via [`Self::for_persona`], which builds the circuit-bound
+/// [`PTorClient`] internally from the persona id: no principal-`DaemonClient`
+/// path, no `Default`, and no constructor accepting a pre-built transport whose
+/// circuit could belong to a *different* persona — persona↔circuit binding is by
+/// construction (mirrors `PBlockSource`, one direction over, tightened per §3.1
+/// part 4). The submitter retains the bound [`PCanonicalId`] so the
+/// [`BroadcastSubmitter`] choke point can equality-check byte↔persona pairing.
+/// **Honest scope (§3A):** construction-closure does **not** stop handing `P`'s
+/// tx **bytes** to the *principal* `DaemonTransactionSubmitter` (the
+/// `submit(Vec<u8>)` trait takes opaque, persona-unbound bytes); that routing is
+/// closed by the [`BroadcastSubmitter`] constructor choke point (②→here, never
+/// the principal) plus the [`PBoundBytes`] pairing check at its façade.
 //
-// `allow(dead_code)`: transient — the non-test consumer is the gated **2c-2a/2c-2b**
+// `allow(dead_code)`: transient — the non-test consumer is the gated **2c-2b**
 // bond-assembly + request-path wiring (see `stake_engine.rs` `TODO(2d)`), NOT the
 // posture selector (which resolves a posture, never a submitter). The dead-proxy
 // proving test ships with the enabler; not deferred.
 #[allow(dead_code)]
 pub(crate) struct PTransactionSubmitter {
+    persona: PCanonicalId,
     rpc: PRpc,
 }
 
 #[allow(dead_code)]
 impl PTransactionSubmitter {
-    /// Build a remote-posture submitter broadcasting over `client`'s circuit to
-    /// `base_url`.
-    pub(crate) fn new(client: PTorClient, base_url: String) -> Self {
-        Self {
+    /// Build a remote-posture submitter broadcasting over `persona`'s **own**
+    /// circuit (through `socks`) to `base_url`. The transport is constructed
+    /// here from the persona id, so the circuit and the retained
+    /// [`Self::persona`] cannot disagree.
+    pub(crate) fn for_persona(
+        persona: PCanonicalId,
+        socks: &TorSocksEndpoint,
+        base_url: String,
+    ) -> Result<Self, PTransportError> {
+        let client = PTorClient::for_persona(&persona, socks)?;
+        Ok(Self {
+            persona,
             rpc: PRpc::new(client, base_url),
-        }
+        })
+    }
+
+    /// The persona whose circuit carries this submitter's broadcasts.
+    pub(crate) fn persona(&self) -> &PCanonicalId {
+        &self.persona
     }
 }
 
@@ -329,6 +361,191 @@ impl TransactionSubmitter for PTransactionSubmitter {
     }
 }
 
+// ============================================================================
+// Posture→submitter dispatch (SP-T4a §3.1, FROZEN 2026-07-04, user-ratified)
+// ============================================================================
+
+/// `P`-bound transaction bytes — the byte↔persona pairing carried as a value
+/// (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §3.1 part 4).
+///
+/// [`BroadcastSubmitter::submit_bound`] accepts only this type and
+/// equality-checks the carried persona against the submitter's
+/// constructor-bound persona, so `P1`'s bytes cannot ride `P2`'s circuit.
+/// Full per-persona type *branding* is rejected (the persona set is dynamic;
+/// rule-21 reopen in §3.1 part 4) — the pairing is a checked value, not a
+/// type parameter.
+///
+/// **Provenance pins (§3.1.1 part 6, implementation obligations on the
+/// 2c-2b assemble/sign slice):** P-1 — this constructor migrates to (or is
+/// re-exported private-to) the bond assemble/sign module when that module
+/// lands, so possession is proof of provenance and no re-wrap site exists;
+/// P-2 — the held/pending record for a `P`-bound tx stores this value
+/// itself (not a raw `Vec<u8>`), so F31/watchdog resubmits re-send the
+/// stored value through the same choke path. Until that slice lands, the
+/// only callers are tests.
+//
+// `allow(dead_code)`: transient — the non-test consumer is the 2c-2b
+// bond-assembly + request-path wiring.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PBoundBytes {
+    persona: PCanonicalId,
+    bytes: Vec<u8>,
+}
+
+#[allow(dead_code)]
+impl PBoundBytes {
+    /// Bind fully-assembled, signed transaction bytes to the persona they
+    /// were built for. See the type docs for the P-1 mint-site obligation.
+    pub(crate) fn bind(persona: PCanonicalId, bytes: Vec<u8>) -> Self {
+        Self { persona, bytes }
+    }
+
+    /// The persona these bytes are bound to.
+    pub(crate) fn persona(&self) -> &PCanonicalId {
+        &self.persona
+    }
+}
+
+/// Failure surface of [`BroadcastSubmitter::submit_bound`]: either the
+/// pre-flight pairing check refused the dispatch (nothing reached a wire), or
+/// the delegated submit itself failed.
+#[derive(Debug, thiserror::Error)]
+#[allow(dead_code)] // transient — the non-test consumer is the 2c-2b request path.
+pub(crate) enum BroadcastSubmitError {
+    /// The bytes' bound persona does not match the submitter's
+    /// constructor-bound persona. A build-path defect (the single-mint-site
+    /// P-1 pin makes it unreachable from production flow); fail-closed —
+    /// the bytes never reached a transport. `Debug` on [`PCanonicalId`] is
+    /// truncated, so rendering this error leaks no full persona id.
+    #[error("persona mismatch: bytes bound to {bytes_persona:?} handed to a submitter bound to {submitter_persona:?}")]
+    PersonaMismatch {
+        /// The persona the bytes were bound to at mint.
+        bytes_persona: PCanonicalId,
+        /// The persona whose circuit this submitter carries.
+        submitter_persona: PCanonicalId,
+    },
+    /// The pairing was sound; the delegated submit failed.
+    #[error(transparent)]
+    Submit(#[from] SubmitterError),
+}
+
+/// The closed-set posture→submitter dispatch
+/// (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §3.1, frozen 2026-07-04): the
+/// broadcast submitter set is closed *by type* — [`BroadcastPosture`] has no
+/// `ThirdParty` variant (invariant B), so this enum states the closed set for
+/// free where a boxed `dyn` shim would pay allocation to erase it.
+/// Match-delegation is output-agnostic (§3.1 part 5): it carries through the
+/// `SubmitVerdict` reshapes unchanged, and "both submitters share the
+/// mapping" is literal — one [`outcome_to_result`], two transports, one
+/// dispatch type.
+///
+/// Construction goes through [`Self::for_posture`] — the single choke point
+/// that owns the ②→[`Self::PerP`] routing guard (invariant A's open
+/// obligation, closed here).
+//
+// `allow(dead_code)`: transient — the non-test consumer is the 2c-2b
+// bond-assembly + request-path wiring (`stake_engine.rs` `TODO(2d)`).
+#[allow(dead_code)]
+pub(crate) enum BroadcastSubmitter<D> {
+    /// ① The principal's loopback submitter. The wallet's own local daemon
+    /// observing `P`'s tx is conceded (§3.1 part 3): it is the operator's
+    /// node, and loopback never crosses the network — so this arm carries no
+    /// persona binding and [`Self::submit_bound`]'s pairing check is
+    /// inapplicable here by design, not by omission.
+    Local(DaemonTransactionSubmitter<D>),
+    /// ② `P`'s own circuit to the operator's remote node. The arm the
+    /// routing guard protects: an `OwnRemote` posture resolves here and
+    /// never to the principal submitter.
+    PerP(PTransactionSubmitter),
+}
+
+#[allow(dead_code)]
+impl<D: DaemonEngine> BroadcastSubmitter<D> {
+    /// The single construction choke point: posture in, submitter out
+    /// (§3.1 part 2). [`super::posture::select_broadcast`] stays
+    /// posture-only (it resolves a posture, never a submitter); the
+    /// posture→submitter binding lives here so the routing guard —
+    /// ②→[`Self::PerP`], **never** the principal submitter — is a property
+    /// of one audited constructor, not a convention at call sites.
+    ///
+    /// `local_daemon` feeds the ① arm; `persona` + `socks` feed the ② arm
+    /// (the `DaemonUrl` newtype slots into the ② construction path when it
+    /// lands — FOLLOWUPS, 2c config-source slice).
+    ///
+    /// # Errors
+    ///
+    /// [`PTransportError`] when the ② arm's SOCKS proxy configuration is
+    /// rejected; the ① arm is infallible.
+    pub(crate) fn for_posture(
+        posture: BroadcastPosture,
+        persona: PCanonicalId,
+        local_daemon: Arc<D>,
+        socks: &TorSocksEndpoint,
+    ) -> Result<Self, PTransportError> {
+        match posture {
+            // ① — the operator's own loopback node (conceded observer).
+            BroadcastPosture::Local => {
+                Ok(Self::Local(DaemonTransactionSubmitter::new(local_daemon)))
+            }
+            // ② — ALWAYS the per-`P` submitter over `P`'s own circuit. Do
+            // not add a principal-submitter shortcut here: routing an
+            // OwnRemote broadcast over the shared principal connection is
+            // the first-seen-origin leak the whole dispatch exists to close.
+            BroadcastPosture::OwnRemote { base_url } => Ok(Self::PerP(
+                PTransactionSubmitter::for_persona(persona, socks, base_url)?,
+            )),
+        }
+    }
+
+    /// Submit `P`-bound bytes through the dispatch, enforcing the
+    /// byte↔persona pairing at the choke point (§3.1 part 4).
+    ///
+    /// On the [`Self::PerP`] arm the bytes' bound persona is
+    /// equality-checked against the submitter's constructor-bound persona —
+    /// the `validate_handle` discipline: `debug_assert` loud in dev,
+    /// fail-closed [`BroadcastSubmitError::PersonaMismatch`] in release. On
+    /// the [`Self::Local`] arm the check is inapplicable (conceded loopback,
+    /// see the variant docs) and the bytes delegate directly.
+    pub(crate) async fn submit_bound(
+        &self,
+        bound: PBoundBytes,
+    ) -> Result<SubmitSuccess, BroadcastSubmitError> {
+        if let Self::PerP(submitter) = self {
+            if bound.persona() != submitter.persona() {
+                debug_assert!(
+                    false,
+                    "submit_bound: bytes bound to {:?} handed to a submitter bound to {:?} — \
+                     a P-bound tx must be dispatched through the submitter constructed for \
+                     its own persona (§3.1 part 4; the P-1 single-mint-site pin makes this \
+                     unreachable from production flow)",
+                    bound.persona(),
+                    submitter.persona(),
+                );
+                return Err(BroadcastSubmitError::PersonaMismatch {
+                    bytes_persona: *bound.persona(),
+                    submitter_persona: *submitter.persona(),
+                });
+            }
+        }
+        Ok(self.submit(bound.bytes).await?)
+    }
+}
+
+impl<D: DaemonEngine> TransactionSubmitter for BroadcastSubmitter<D> {
+    /// Match-delegation (§3.1 part 1): one unified `Send` future, no `Box`.
+    /// The trait surface takes persona-unbound bytes for generic consumers
+    /// (the shared verdict mapping, the watchdog probe rung); the `P`-bound
+    /// path goes through [`Self::submit_bound`], and the P-2 store-wrapped
+    /// pin keeps retries on that façade.
+    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<SubmitSuccess, SubmitterError> {
+        match self {
+            Self::Local(submitter) => submitter.submit(tx_bytes).await,
+            Self::PerP(submitter) => submitter.submit(tx_bytes).await,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Submit-path tests: the transport-agnostic verdict → outcome →
@@ -352,8 +569,9 @@ mod tests {
             TxSubmitOutcome::AlreadyInPool { hash }
         );
         assert_eq!(
-            submit_outcome_from_verdict(&SubmitVerdict::AlreadyInChain, hash),
-            TxSubmitOutcome::AlreadyInChain { hash }
+            submit_outcome_from_verdict(&SubmitVerdict::AlreadyInChain { height: 42 }, hash),
+            TxSubmitOutcome::AlreadyInChain { hash, height: 42 },
+            "the F40 height passes through the projection untouched"
         );
         assert_eq!(
             submit_outcome_from_verdict(
@@ -372,8 +590,8 @@ mod tests {
     /// lock-lifecycle disposition (§2.5): a fresh accept and a
     /// pool-resident duplicate share `Broadcast` (network-exposed, F14
     /// lock placed); a mined duplicate is the distinct `AlreadyInChain`
-    /// (no fresh awaiting-lock; refresh settles). All carry the locally
-    /// computed hash.
+    /// (F40: lock placed too, baselined at the carried `height`, which
+    /// routes the release path). All carry the locally computed hash.
     #[test]
     fn identity_outcomes_resolve_ok_split_by_disposition() {
         let hash = TxHash::from_bytes([9u8; 32]);
@@ -387,8 +605,9 @@ mod tests {
             );
         }
         assert_eq!(
-            outcome_to_result(TxSubmitOutcome::AlreadyInChain { hash }).expect("identity outcome"),
-            SubmitSuccess::AlreadyInChain { hash }
+            outcome_to_result(TxSubmitOutcome::AlreadyInChain { hash, height: 77 })
+                .expect("identity outcome"),
+            SubmitSuccess::AlreadyInChain { hash, height: 77 }
         );
     }
 
@@ -463,13 +682,21 @@ mod tests {
             .write(&mut tx_bytes)
             .expect("serialize synthetic coinbase to canonical wire");
 
-        let client = PTorClient::for_persona(
-            &PCanonicalId::from_bytes([5u8; 32]),
+        let persona = PCanonicalId::from_bytes([5u8; 32]);
+        // A parallel client for the same persona: `derive_socks_user` is
+        // deterministic, so its username equals the one the submitter's
+        // internally-built transport carries.
+        let username = PTorClient::for_persona(&persona, &TorSocksEndpoint::loopback(1))
+            .expect("proxy config is well-formed")
+            .username()
+            .as_str()
+            .to_owned();
+        let submitter = PTransactionSubmitter::for_persona(
+            persona,
             &TorSocksEndpoint::loopback(1),
+            "http://127.0.0.1:18081".to_string(),
         )
         .expect("proxy config is well-formed");
-        let username = client.username().as_str().to_owned();
-        let submitter = PTransactionSubmitter::new(client, "http://127.0.0.1:18081".to_string());
 
         let err = submitter
             .submit(tx_bytes)
@@ -500,12 +727,12 @@ mod tests {
         use shekyl_p_transport::TorSocksEndpoint;
         use shekyl_types::PCanonicalId;
 
-        let client = PTorClient::for_persona(
-            &PCanonicalId::from_bytes([3u8; 32]),
+        let submitter = PTransactionSubmitter::for_persona(
+            PCanonicalId::from_bytes([3u8; 32]),
             &TorSocksEndpoint::loopback(1),
+            "http://127.0.0.1:18081".to_string(),
         )
         .expect("proxy config is well-formed");
-        let submitter = PTransactionSubmitter::new(client, "http://127.0.0.1:18081".to_string());
 
         let err = submitter
             .submit(b"not a canonical shekyl-wire transaction".to_vec())
@@ -521,5 +748,168 @@ mod tests {
             "a build-path defect is a local Malformed terminal, never a transport \
              outcome (would be Ambiguous if the guard fell through): got {err:?}"
         );
+    }
+
+    // ── Posture→submitter dispatch (SP-T4a §3.1) ──
+
+    /// Canonical-wire tx bytes for dispatch tests: a serialized synthetic
+    /// coinbase, so the `DaemonTransactionSubmitter` debug hash-consistency
+    /// guard and the per-`P` parse guard are both satisfied.
+    fn wire_tx_bytes() -> Vec<u8> {
+        use crate::engine::test_support::make_synthetic_block;
+
+        let mut tx_bytes = Vec::new();
+        make_synthetic_block(0, [0u8; 32])
+            .block
+            .miner_transaction
+            .write(&mut tx_bytes)
+            .expect("serialize synthetic coinbase to canonical wire");
+        tx_bytes
+    }
+
+    fn dead_proxy_socks() -> shekyl_p_transport::TorSocksEndpoint {
+        // A closed SOCKS port (`:1`): loopback refuses immediately, so the ②
+        // arm's transport path is exercised fast with no Tor and no timeout.
+        shekyl_p_transport::TorSocksEndpoint::loopback(1)
+    }
+
+    /// The choke point's routing guard, both directions of the fence: a
+    /// `Local` posture resolves to the ① principal arm, and an `OwnRemote`
+    /// posture resolves to the ② per-`P` arm — **never** the principal
+    /// submitter (the first-seen-origin leak the dispatch closes). Fence by
+    /// enumeration: the match names every variant, no catch-all, so a new
+    /// arm cannot slip through unasserted.
+    #[tokio::test]
+    async fn choke_point_routes_each_posture_to_its_own_arm() {
+        use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
+
+        let persona = PCanonicalId::from_bytes([11u8; 32]);
+        let daemon = Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
+
+        fn arm_name<D>(submitter: &BroadcastSubmitter<D>) -> &'static str {
+            match submitter {
+                BroadcastSubmitter::Local(_) => "local",
+                BroadcastSubmitter::PerP(_) => "per-p",
+            }
+        }
+
+        let local = BroadcastSubmitter::for_posture(
+            BroadcastPosture::Local,
+            persona,
+            Arc::clone(&daemon),
+            &dead_proxy_socks(),
+        )
+        .expect("① construction is infallible");
+        assert_eq!(arm_name(&local), "local");
+
+        let remote = BroadcastSubmitter::for_posture(
+            BroadcastPosture::OwnRemote {
+                base_url: "http://127.0.0.1:18081".to_string(),
+            },
+            persona,
+            daemon,
+            &dead_proxy_socks(),
+        )
+        .expect("proxy config is well-formed");
+        assert_eq!(
+            arm_name(&remote),
+            "per-p",
+            "②→PerP, never the principal submitter (§3.1 part 2 routing guard)"
+        );
+    }
+
+    /// Match-delegation through the ① arm reaches the wrapped principal
+    /// submitter: a `P`-bound submit over the `Local` posture lands on the
+    /// wallet's own daemon (conceded observer) and resolves `Broadcast`,
+    /// with no pairing constraint on this arm by design.
+    #[tokio::test]
+    async fn local_arm_delegates_bound_bytes_to_the_principal_daemon() {
+        use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
+
+        let daemon = Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
+        let submitter = BroadcastSubmitter::for_posture(
+            BroadcastPosture::Local,
+            PCanonicalId::from_bytes([13u8; 32]),
+            Arc::clone(&daemon),
+            &dead_proxy_socks(),
+        )
+        .expect("① construction is infallible");
+
+        let bytes = wire_tx_bytes();
+        let expected = canonical_tx_id(&bytes);
+        let success = submitter
+            .submit_bound(PBoundBytes::bind(
+                PCanonicalId::from_bytes([14u8; 32]),
+                bytes,
+            ))
+            .await
+            .expect("loopback submit succeeds");
+        assert_eq!(success, SubmitSuccess::Broadcast { hash: expected });
+        assert_eq!(daemon.submitted_count(), 1);
+    }
+
+    /// The §3.1 part 4 pairing check on the ② arm: matched bytes pass the
+    /// choke point and reach `P`'s transport (the dead proxy proves the
+    /// delegation got that far — `Ambiguous`, not a pre-flight refusal).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn per_p_arm_dispatches_matched_bytes_over_p_s_own_circuit() {
+        use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
+
+        let persona = PCanonicalId::from_bytes([17u8; 32]);
+        let submitter = BroadcastSubmitter::for_posture(
+            BroadcastPosture::OwnRemote {
+                base_url: "http://127.0.0.1:18081".to_string(),
+            },
+            persona,
+            Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED)),
+            &dead_proxy_socks(),
+        )
+        .expect("proxy config is well-formed");
+
+        let err = submitter
+            .submit_bound(PBoundBytes::bind(persona, wire_tx_bytes()))
+            .await
+            .expect_err("a dead SOCKS proxy must fail the broadcast");
+        assert!(
+            matches!(
+                err,
+                BroadcastSubmitError::Submit(SubmitterError::Ambiguous { .. })
+            ),
+            "matched pairing must delegate to the transport (whose dead proxy is \
+             ambiguous), never be refused pre-flight: got {err:?}"
+        );
+    }
+
+    /// The pairing check refuses a cross-persona dispatch **before any
+    /// transport** — the `validate_handle` discipline's loud half: in a
+    /// debug build the mismatch is a panic (the fail-closed
+    /// `PersonaMismatch` return is the release-build behavior of the same
+    /// guard). The dead proxy is the tell: if the check fell through to the
+    /// wire, the outcome would be an `Ambiguous` error, not this panic.
+    #[tokio::test(flavor = "multi_thread")]
+    #[should_panic(expected = "submit_bound: bytes bound to")]
+    async fn per_p_arm_refuses_cross_persona_bytes_before_any_transport() {
+        use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
+
+        let submitter = BroadcastSubmitter::for_posture(
+            BroadcastPosture::OwnRemote {
+                base_url: "http://127.0.0.1:18081".to_string(),
+            },
+            PCanonicalId::from_bytes([19u8; 32]),
+            Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED)),
+            &dead_proxy_socks(),
+        )
+        .expect("proxy config is well-formed");
+
+        // A *different* persona's bytes: the §3.1 part 4 equality check must
+        // fire (panic, in this debug build) before the transport is reached —
+        // this `expect_err` is never evaluated.
+        submitter
+            .submit_bound(PBoundBytes::bind(
+                PCanonicalId::from_bytes([23u8; 32]),
+                wire_tx_bytes(),
+            ))
+            .await
+            .expect_err("unreachable in a debug build: the pairing check panics first");
     }
 }

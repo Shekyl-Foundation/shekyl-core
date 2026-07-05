@@ -335,9 +335,14 @@ post-freeze wargame (an addition *beside* the frozen five, not a reopen):
    `DAEMON_SUBMIT_VERDICT.md` §2.2 names for wire fields, applied to the
    pairing token. Full statement and byte-holder enumeration: §3.1.1.
 
-Implementation lands with the 2c wiring (the enum + constructor + `PBoundBytes`
-are 2c-2a/2c-2b code, PR-4-adjacent); this section freezes the shape so nothing
-downstream is built against a different one.
+Implementation **landed 2026-07-04** (`transaction_submitter.rs`: the enum, the
+`for_posture` choke point, `PBoundBytes`, `BroadcastSubmitError`, and
+`PTransactionSubmitter::for_persona` tightening), inert behind
+`allow(dead_code)` with the proving tests as the only callers; the 2c-2b
+request path is the lift condition and owns the P-1/P-2 provenance pins
+(§3.1.1, recorded above as §3.1 part 6). This
+section froze the shape so nothing downstream was built against a different
+one.
 
 #### 3.1.1 Post-freeze wargame (2026-07-04): byte-holder enumeration — freeze CONFIRMED, two provenance pins added
 

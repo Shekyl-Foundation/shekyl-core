@@ -2,7 +2,57 @@
 
 ## [Unreleased]
 
+### Documentation
+
+- **docs: submit-verdict / 2c completion-status sweep (rule 91).** Landed
+  work is now marked landed where the docs still read as pending:
+  `DAEMON_SUBMIT_VERDICT.md` §12 gains a series-status banner (all six
+  PRs merged as #244/#247, #245, #246, #248, #249, #250) and §10 item 1
+  records the F40 wire amendment + R1 pin as landed (#254, R2 riding
+  2c-2b); the `docs/FOLLOWUPS.md` submit-outcome SUPERSEDED entry's
+  absorbed remainders are closed. Two stale-doc residues the PR-6 sweep
+  (#250) missed are corrected: `V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md`'s
+  CL-4 exemplar and `V3_ENGINE_TRAIT_BOUNDARIES.md`'s §4 idempotency
+  row/retry prose no longer cite the retired `AlreadyKnown` dedup
+  heuristic — `submit_transaction` idempotency is stated as the verdict
+  contract's resubmit-is-a-status-query property (§2.5/F31).
+
 ### Added
+
+- **wallet/rpc: `AlreadyInChain { height }` — the F40 disposition lands**
+  (`DAEMON_SUBMIT_VERDICT.md` §2.2 carve-out / §2.5 row / §10 item 1;
+  `docs/FOLLOWUPS.md` `AlreadyInChain` entry). The wire verdict grows the
+  required `height` field (frozen fixture updated atomically per the §2.3
+  third-category rule; new skew test D pins a field-less
+  `already_in_chain` to the deserialization-error arm). The daemon reads
+  the confirming-block height under the same lock scope as the membership
+  fact (`in_chain_height`, FFI snapshot size 80 → 88) and emits it at both
+  the Phase-B short-circuit and the Phase-D `classify_race` settled arm.
+  Wallet-side, `finalize_submit_already_in_chain` is reshaped from the
+  superseded "no lock, refresh settles" interim (#252) to F40: the F14
+  awaiting-confirmation lock is placed in **both** height cases (no
+  selectable-input window either way), baselined at the claimed `height`;
+  `height` routes only the release path — above-synced waits for §2.6
+  path-1 refresh catch-up, at/below-synced emits the new
+  `PendingTxDiagnostic::TargetedRescanRequested` for the reorg-heal
+  re-scan. F40-R1 (rescan never releases) is structural and pinned by
+  regression; the R2 fruitless-re-scan breaker lands with the 2c-2b
+  driving actor that executes the re-scan.
+
+- **wallet: posture→submitter dispatch — the frozen SP-T4a §3.1 shape lands**
+  (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §3.1, frozen 2026-07-04;
+  `docs/FOLLOWUPS.md` 2c-2a dispatch-shape entry). The closed-set
+  `BroadcastSubmitter<D> { Local, PerP }` enum with match-delegation (RPITIT,
+  no `Box`), the single `for_posture` construction choke point carrying the
+  ②→`PerP` routing guard (an `OwnRemote` broadcast can never ride the shared
+  principal connection — the first-seen-origin leak the dispatch closes), the
+  `PBoundBytes` byte↔persona newtype equality-checked at the `submit_bound`
+  façade (`debug_assert` loud in dev, fail-closed `PersonaMismatch` in
+  release), and `PTransactionSubmitter` tightened to `for_persona` so the
+  persona↔circuit binding is by construction and the retained `PCanonicalId`
+  feeds the pairing check. Lands inert (`allow(dead_code)`; proving tests are
+  the callers) — the 2c-2b request path is the lift condition and owns the
+  P-1/P-2 provenance pins.
 
 - **docs: GF-7 measurement-hook specification — the evidence pipeline for
   the genesis gate (2c design round,
@@ -515,13 +565,12 @@
   behavior that stranded inputs "awaiting confirmation" whenever the
   confirming block was at/below the wallet's synced height (no
   `mark_spent` re-observation, watchdog confirmed-absent release
-  unbuilt). Regression:
-  `submit_already_in_chain_releases_without_awaiting_lock`. **Note:**
-  this change predates the F40 design merge (`AlreadyInChain { height }`,
-  §2.2 carve-out); it carries no `height` discriminant and does not yet
-  implement the lock-in-both-cases + height-routed release (F40-R1/R2).
-  A follow-up brings the implementation into line with F40 (see the
-  FOLLOWUPS item).
+  unbuilt). **Note:** this change predates the F40 design merge
+  (`AlreadyInChain { height }`, §2.2 carve-out); it carried no `height`
+  discriminant and implemented only the "no lock" shape the design round
+  superseded. The F40 reshape landed in this same unreleased span (see
+  the `AlreadyInChain { height }` entry above); its interim regression
+  test is replaced by the two F40 routing tests.
 - **docs: constant-work-on-Conceal named as invariant F41 (2c design
   round, `docs/design/DAEMON_SUBMIT_VERDICT.md` §3.1/§10/§11).** The
   stem-presence-oracle closure was held by an accident of absence: the

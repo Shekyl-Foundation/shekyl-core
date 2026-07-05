@@ -709,6 +709,31 @@ pub enum PendingTxDiagnostic {
         cause: RetryableRejectCause,
     },
 
+    /// An `AlreadyInChain` verdict claimed a confirming height at or
+    /// below the wallet's synced height (F40, `DAEMON_SUBMIT_VERDICT.md`
+    /// §2.5 case *b*): refresh already passed that height without
+    /// observing the spend, so the ordinary path-1 release is
+    /// unreachable by construction. The consumer of this diagnostic
+    /// (the 2c-2b driving actor) enqueues a **targeted re-scan** of the
+    /// window around `claimed_height` via the reorg-heal machinery.
+    /// The re-scan is bounded by the two F40 rules: it **never
+    /// releases** the F14 lock (R1 — release stays refresh- or
+    /// watchdog-authoritative), and consecutive fruitless
+    /// daemon-directed re-scans are breaker-bounded to an operator
+    /// alarm (R2).
+    TargetedRescanRequested {
+        /// The reservation whose verdict carried the claim.
+        reservation_id: ReservationId,
+
+        /// The locally computed txid the daemon claims is confirmed.
+        tx_hash: TxHash,
+
+        /// The daemon-claimed confirming-block height (untrusted;
+        /// damage-capped per §7.2 — a lie here costs a fruitless
+        /// re-scan, counted by the R2 breaker, never a release).
+        claimed_height: u64,
+    },
+
     /// Lazy-R5 staleness check at `submit` entry: the
     /// reservation's `snapshot_id` did not match the engine's
     /// `current_snapshot`. Reservation does NOT auto-release;

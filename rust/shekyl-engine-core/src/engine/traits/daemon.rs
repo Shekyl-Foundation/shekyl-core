@@ -195,6 +195,10 @@ pub(crate) enum TxSubmitOutcome {
     AlreadyInChain {
         /// Locally computed hash, equal to the chain-resident txid.
         hash: TxHash,
+        /// Daemon-claimed confirming-block height (F40, §2.2 carve-out).
+        /// Consumed only as a **release-path discriminant** (§2.5) under
+        /// the R1/R2 bounds — never as settlement truth.
+        height: u64,
     },
 
     /// Not in pool, not in chain, and not admitted — `cause` says why.
