@@ -308,10 +308,12 @@ fn default_fee_estimates() -> FeeEstimates {
     }
 }
 
-/// Construct the default [`DaemonHealth`] that fresh `TestDaemon`s
-/// return from `get_health`: a healthy, fully-synced daemon (peers
-/// present, `target_height == 0`). Watchdog tests that exercise the
-/// health gate override this with [`TestDaemon::set_health`].
+/// Construct the default [`DaemonHealth`] that every `TestDaemon`
+/// returns from `get_health`: a healthy, fully-synced daemon (peers
+/// present, `target_height == 0`). `TestDaemon` health is fixed to this
+/// value — the watchdog health-gate and health-failure paths are driven
+/// by the hermetic `StubDaemon` in the `submit_lifecycle` test module,
+/// which controls both health facts and submit outcomes.
 fn default_health() -> DaemonHealth {
     DaemonHealth {
         connections: 8,

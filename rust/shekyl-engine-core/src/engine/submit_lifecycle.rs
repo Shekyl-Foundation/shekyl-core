@@ -31,8 +31,9 @@
 //! The driver owns the in-memory overlays the kernel doc anticipates
 //! (see the struct docs) and **nothing else** — it is not coupled to the
 //! wallet or the daemon by ownership. Each [`tick`](SubmitLifecycleDriver::tick)
-//! borrows the wallet surface as `&dyn `[`WatchdogHost`] and the daemon
-//! as `&D`. This keeps the persistent state decoupled from the transient
+//! borrows the wallet surface as a [`WatchdogHost`] trait object
+//! (`&dyn WatchdogHost`) and the daemon as `&D`. This keeps the
+//! persistent state decoupled from the transient
 //! handles: the embedding [`Engine`](super::Engine) owns the pending-tx
 //! engine and the daemon by value and lends both to the driver for the
 //! duration of one tick, with no `Arc`-sharing of the wallet state.
