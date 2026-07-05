@@ -794,7 +794,7 @@ mod tests {
         step.funding_outputs = vec![record.clone()];
         acc.ingest(&step, &VerifiedBatch::for_test(0, 10, [0x42; 32]))
             .expect("ingest");
-        assert_eq!(acc.funding_outputs(), &[record.clone()]);
+        assert_eq!(acc.funding_outputs(), std::slice::from_ref(&record));
 
         let back = PScanAccrual::from_state(&acc.to_state());
         assert_eq!(

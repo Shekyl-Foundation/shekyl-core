@@ -574,6 +574,11 @@ pub(crate) enum StakeEngineError {
     ScanJoin(#[from] tokio::task::JoinError),
 }
 
+/// The bonded union's transient scan inputs (SP-3 dual extractor): one
+/// slot-tagged [`GuaranteedScanner`] per bonded persona plus their cleartext
+/// `p_canonical_id` set. Built per [`ScanStep`] and dropped with it (DQ5).
+pub(crate) type BondedScanInputs = (Vec<(u32, GuaranteedScanner)>, BTreeSet<PCanonicalId>);
+
 /// Why building a [`ScanStep`]'s bonded-union scan inputs failed. Both arms are a
 /// **malformed resident persona key** (corrupted in-memory state) — fail closed,
 /// concrete cause preserved (vs a stringified loss). Wrapped by
@@ -746,9 +751,7 @@ impl StakeEngine {
     ///
     /// Fails closed if a resident key is malformed: a silently-weakened scanner
     /// would mis-size the privacy parameter `C_min` (DQ7).
-    fn bonded_scan_inputs(
-        &self,
-    ) -> Result<(Vec<(u32, GuaranteedScanner)>, BTreeSet<PCanonicalId>), ScanSetupError> {
+    fn bonded_scan_inputs(&self) -> Result<BondedScanInputs, ScanSetupError> {
         let mut scanners = Vec::new();
         let mut known_ids = BTreeSet::new();
         for (slot, held) in &self.held {
