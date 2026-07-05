@@ -68,3 +68,6 @@ pub use plan::{plan_entry_seam, EntrySeamPlan};
 
 #[cfg(feature = "conformance")]
 pub mod conformance;
+
+#[cfg(feature = "gf7-hooks")]
+pub mod gf7;
