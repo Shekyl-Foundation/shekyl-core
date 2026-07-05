@@ -671,27 +671,42 @@ sustainability is unaffected by the recalibration.
   spend block (`Ct::read` rejected the storage-pruned FCMP++ form) — EOF-tolerant
   prunable after `pqc_auths`; regression `pruned_fcmp_spend_round_trips_and_ingests`.
 
-- **`AlreadyInChain` submit verdict: distinct lock-lifecycle disposition
-  (PR-4 / #248 review, deferred to 2c).**
-  `transaction_submitter::outcome_to_result` collapses `AlreadyInChain` into
-  `Ok(hash)` identically to `Submitted` / `AlreadyInPool`, so
-  `finalize_submit_accept` places a fresh F14 awaiting-confirmation lock
-  (baseline = current height) on a tx that is already on-chain, relying on a
-  future refresh `mark_spent` to clear it. Per `DAEMON_SUBMIT_VERDICT.md`
-  §2.5, `AlreadyInChain` is a **distinct** disposition ("confirmation observed
-  by verdict; refresh remains the settlement authority — the verdict
-  authorizes lock-lifecycle transitions only"), not the `Accepted`
-  awaiting-lock path. For an `AlreadyInChain` whose confirming block is
-  at/below the wallet's synced height with no reorg re-scan, refresh never
-  re-observes the spend and the lock is never cleared (the confirmed-absent
-  release is watchdog-actor-gated, unbuilt) — the inputs appear permanently
-  "awaiting confirmation" despite the tx being confirmed. *Fix:* give
-  `AlreadyInChain` its own disposition (do not place a fresh awaiting-lock;
-  let refresh settle it), nailing the §2.5 refresh-authoritative semantics.
-  *Target:* V3.0, with the 2c StakeEngine submit-consumer work (the second
-  `outcome_to_result` consumer that makes verdict-mapping a shared surface).
-  Deferred from PR-4 by explicit decision — needs the §2.5 lock-lifecycle
-  semantics pinned, not a drive-by.
+- **`AlreadyInChain` submit verdict: distinct lock-lifecycle disposition —
+  DESIGN DECIDED 2026-07-04 (F40, `AlreadyInChain { height }`); implementation
+  with the 2c submit-consumer slice (PR-4 / #248 review, deferred to 2c).**
+  Original finding: `transaction_submitter::outcome_to_result` collapses
+  `AlreadyInChain` into `Ok(hash)` identically to `Submitted` /
+  `AlreadyInPool`, so `finalize_submit_accept` places a fresh F14
+  awaiting-confirmation lock (baseline = current height) on a tx that is
+  already on-chain, relying on a future refresh `mark_spent` to clear it.
+  For an `AlreadyInChain` whose confirming block is at/below the wallet's
+  synced height with no reorg re-scan, refresh never re-observes the spend
+  and the lock is never cleared — permanent "awaiting confirmation" on a
+  confirmed tx. The 2c design round found the pinned fix ("place no lock,
+  let refresh settle") **under-specified against the behind-the-daemon
+  case**: a unit variant cannot distinguish "confirming block above my
+  synced height" (lock needed until refresh catches up) from "at/below it"
+  (path-1 release unreachable), and an adversary who slows the wallet's own
+  daemon's block delivery steers the guess into a selectable-input leak →
+  same-key-image rebuild → `DoubleSpendConflict` → F28/F37 alarm fatigue on
+  demand. **Decision (binding record: `DAEMON_SUBMIT_VERDICT.md` §2.1/§2.2
+  carve-out/§2.5 row/§7.2 rider row/§10 item 1):** restore
+  `AlreadyInChain { height: u64 }`. Lock is placed in **both** height cases
+  (no selectable window either way); `height` decides the **release path**
+  — `> synced`: §2.6 path-1 refresh catch-up, lock baselined at `height`;
+  `≤ synced`: targeted re-scan around `height` (reorg-heal), falling through
+  to the F31 status query if the re-scan finds nothing. The carve-out is
+  admitted through the §5 inform-never-drive principle and holds only with
+  its two pinned rules: **F40-R1** — a `height ≤ synced` claim authorizes a
+  re-scan, never a release (release is refresh-/watchdog-authoritative
+  only; a failed re-scan must not release); **F40-R2** — consecutive
+  fruitless daemon-directed re-scans are breaker-bounded (F28/F37 family)
+  → operator alarm, closing the lie-low wallet-work amplifier. Misuse is
+  damage-capped both directions (§7.2 row — no lie can force a linkage
+  event); pre-genesis the field lands required with fixtures updated
+  atomically (§2.3 third-category rule, new). *Remaining: implementation
+  only* — wire type + shim `in_chain_height` + the wallet disposition land
+  with the 2c StakeEngine submit-consumer work. *Target:* V3.0, 2c slices.
 
 - **Submit-error reservation-id placeholder: split submitter error from
   orchestrator error (PR-4 / #248 review, deferred to 2c).**
@@ -709,6 +724,47 @@ sustainability is unaffected by the recalibration.
   submit-consumer wiring (`ARCHIVAL_BOND_REQUEST_2C2B_PLAN`) — the PR that
   adds the second consumer is where the un-split error bites, so it must land
   the split.
+
+- **F41 constant-work-on-Conceal: invariant NAMED + enforcement DECOMPOSED
+  (2c design round 2026-07-04, `DAEMON_SUBMIT_VERDICT.md` §3.1) — four
+  implementation obligations open, and a hard ordering constraint.** The
+  stem-presence oracle closure holds only because the `Conceal` path runs the
+  full Phase-C battery (the fall-through in `submit/engine.rs`) and the Rust
+  engine has no verification cache — a security property previously held by
+  the *absence of an optimization*, now asserted as F41 and enforced by the
+  §3.1 three-layer decomposition (each vector matched to what its layer can
+  prove; the honest boundary — types don't prove timing — stated in the doc).
+  *Open obligations:* **(a)** the disclosure-capability tokens —
+  `disclose_pool_presence` yields move-only `MustFullyVerify` (Conceal arm) /
+  `FastPathEligible` (Reveal/Absent arms); cache lookups accept only
+  `FastPathEligible`; the Conceal route consumes `MustFullyVerify` by
+  exchanging it for the §3.3 certificate — carried-never-reconstructed (the
+  P-1/P-2 idiom applied to a capability), making cache-on-Conceal a compile
+  error; **sole-origin pinned structurally** (both tokens `pub(crate)`,
+  private fields, single constructor each, reachable only from
+  `disclose_pool_presence`, inheriting the F25 write-site enumeration per
+  §3.5 item 4 — no test-helper/`Default`/`From` side doors; tests construct
+  facts, not tokens); plus a compile-fail (`trybuild`-style) pin — target:
+  with the submit-path implementation PRs, **structurally before any perf
+  work**;
+  **(b)** the §10 item-9a invocation-count tripwire (Conceal-path and
+  fresh-bytes submits both run the full battery; guards the layer-3
+  battery-timing residual, necessary-not-sufficient seam documented) —
+  target: PR-3-adjacent; **(c)** the §10 item-9b transport no-memoization
+  test (two Conceal submits of the same bytes both reach the engine — pins
+  the layer-2 named assumption the engine types cannot reach) — target:
+  PR-3-adjacent; **(d)** per-source rate limiting at the transport/handler
+  layer (Owner never limited — F31 status queries are legitimate; Foreign
+  per-source-limited — no honest resubmit-spam case exists), the DoS-relief
+  sibling that removes the pressure to cache — target: V3.0, with the
+  daemon-rpc transport hardening. **Ordering constraint (the named reopen):
+  (a)–(c) must precede the first perf/caching PR touching the submit route**
+  — a capability retrofitted after a cache lands is a lock installed after
+  the door has been used. A cache PR arriving first must cite F41; a
+  Reveal-path cache type-checks and is the anticipated safe form; touching
+  Conceal requires the compile-visible `MustFullyVerify` conversion per the
+  §11 clause, with the §10 obligations green (a red is a rejected PR, not a
+  test to update). *Target:* V3.0.
 
 - **CT-2 Tier B reconstruct-root KATs (staked / non-coinbase maturity
   classes) — post-CT-5 (CT-2 Round 1 deferral, tracked 2026-06-13).**
@@ -7221,6 +7277,16 @@ one place to confirm each item's relationship to the wallet stack.
   obligation below). The measurement round inherits: `DEFAULT_ENTRY_GAP_WINDOW = 600` as the grading
   parameter; the entry/bond-post as the broadcast the jitter is *drawn for* (wiring pending 2c); the
   open principal-timeline + cross-broadcast decorrelation that no built primitive addresses.
+  **Hook spec LANDED (2c design round, 2026-07-04):**
+  [`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](design/ARCHIVAL_BOND_2C_GF7_HOOKS.md) pins the scheduler's
+  observer seam (injected, `ScanSchedule`-discipline), the three-axis **joint** event vocabulary
+  (principal lifecycle / bond-post with draw parameters / `P`'s other broadcasts — never
+  per-axis-multiplied, per the co-triggered-firewalls principle), the **funding-seam-blind
+  adversary** as a first-class grading arm (the named wrong-gate failure mode), and the
+  three-layer build-time **no-emit guard** (inert trait; sim-only impl + CI dependency-graph
+  assertion; non-default `gf7-hooks` feature, the `shekyl-standoff` `conformance` containment
+  shape). **The 2c-2b wiring PR is gated on that spec's §6 acceptance criteria.** The measurement
+  round (threshold-setting, S-3 modeled observer) remains sim-side, after the scheduler exists.
   **Target: pre-genesis (blocks the seal).** See
   [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md) §4 and
   [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (the S-3 privacy-sim home).
@@ -7267,8 +7333,18 @@ one place to confirm each item's relationship to the wallet stack.
   [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md) PR-4's `SubmitVerdict` reshape
   (match-delegation is output-agnostic), unblocking PR-4's "both submitters share the mapping."
   **Remaining: implementation only** — the enum + constructor + `PBoundBytes` land with the 2c
-  wiring (2c-2a/2c-2b, PR-4-adjacent). **Target: code lands in the 2c slices; the design decision
-  is closed.**
+  wiring (2c-2a/2c-2b, PR-4-adjacent). **Post-freeze wargame (2026-07-04, §3.1.1): freeze
+  CONFIRMED against the byte-holder enumeration** (assemble path / F31 resubmit / watchdog probe
+  rung), with **two freeze-compatible provenance pins added as implementation obligations**:
+  **P-1** `PBoundBytes` has exactly one constructor, private to the assemble/sign module —
+  possession is proof of provenance, no re-wrap site exists; **P-2** the held/pending record for
+  a `P`-bound tx stores the `PBoundBytes` value itself (not `Vec<u8>`), so F31/watchdog
+  resubmits re-send the stored value through the same choke path — the retry axis cannot route
+  `P`'s probe over the principal connection. The pins are recorded as **§3.1 part 6**
+  (mint-once / store-wrapped) — an addition *beside* the frozen five parts, not a reopen; the
+  adversary they close is the future-maintainer refactor that stores raw bytes and threads
+  persona separately, silently converting the part-4 equality check into a rubber stamp.
+  **Target: code lands in the 2c slices; the design decision is closed.**
 - **2d-2 2c — `DaemonUrl` newtype: validate `base_url` at construction + house the S1 disclosure.**
   `base_url` is a bare `String` across three sites (`BroadcastPosture::OwnRemote`,
   `PTransactionSubmitter::new`, `PBlockSource::new`) with no validation and an unredacted
