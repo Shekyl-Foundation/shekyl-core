@@ -44,7 +44,6 @@ use tokio::time::{interval, Interval, MissedTickBehavior};
 ///
 /// `Send + 'static`: the schedule is moved into the spawned P-scan task and held
 /// across its `await` points.
-#[allow(dead_code)] // transient — the SP-5 scan task (later commit) is the lib consumer.
 pub(crate) trait ScanSchedule: Send + 'static {
     /// Resolves when the next scan cycle should run.
     fn next_tick(&mut self) -> impl Future<Output = ()> + Send;
@@ -59,12 +58,10 @@ pub(crate) trait ScanSchedule: Send + 'static {
 /// See the module docs for why fixed-rate (not sleep-after-completion) is what
 /// keeps the DQ8 retire invisible. 2d-2 replaces this with a transport-aware
 /// constant-rate-or-jittered schedule.
-#[allow(dead_code)] // transient — the SP-5 task / Engine wiring (later commit) is the lib consumer.
 pub(crate) struct FixedRateSchedule {
     interval: Interval,
 }
 
-#[allow(dead_code)] // transient — the SP-5 task / Engine wiring (later commit) is the lib consumer.
 impl FixedRateSchedule {
     /// A fixed-rate schedule firing every `period`. The first tick resolves
     /// immediately (the first scan cycle runs at once), then every `period`.

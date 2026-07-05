@@ -91,7 +91,6 @@ impl PFundingInflow {
 /// Why ingesting a scan-step result into the accrual failed. Both arms fail
 /// **closed** — a mis-attributed or wrapped funding total mis-sizes `C_min`.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[allow(dead_code)] // transient — surfaced through the SP-5 task's error once it lands.
 pub(crate) enum AccrualError {
     /// The step's range did not begin exactly at the frontier — a gap or overlap
     /// that would skip or double-count blocks. The task feeds contiguous ranges;
@@ -124,7 +123,6 @@ pub(crate) enum AccrualError {
 /// `PScanState`'s persona-history, under the same no-clear-`Debug` discipline (including
 /// its count), symmetric to the redacted [`BondPostMatch`]/`BondPostRecord` records.
 #[derive(Clone, PartialEq, Eq)]
-#[allow(dead_code)] // transient — the SP-5 scan task (later commit) is the lib consumer.
 pub(crate) struct PScanAccrual {
     /// The scan frontier: every block below this height has been scanned and its
     /// confirmed funding folded into `accruals`.
@@ -173,7 +171,6 @@ impl std::fmt::Debug for PScanAccrual {
     }
 }
 
-#[allow(dead_code)] // transient — the SP-5 scan task (later commit) is the lib consumer.
 impl PScanAccrual {
     /// A fresh accrual at genesis — pre-scan, no funding, no pending unbonds, an empty
     /// covered range, no matches.
@@ -312,6 +309,7 @@ impl PScanAccrual {
     /// the frontier. A finalized epoch with no funding of ours yields
     /// `Some(`[`AtomicUnits::ZERO`]`)` — a real, complete zero, distinct from the
     /// `None` of an unfinalized epoch.
+    #[allow(dead_code)] // transient — the lib consumer is SP-7 `C_min` sizing.
     pub(crate) fn finalized_inflow(&self, epoch: SettlementEpoch) -> Option<PFundingInflow> {
         // The first height past `epoch` (its close); finalized iff the frontier
         // has reached it. Checked — an absurdly-distant epoch can't be finalized.
@@ -392,6 +390,7 @@ impl PScanAccrual {
     /// accrual's own verification-gated `covered` — so 2d-2 SP-R0 receives a match set
     /// it cannot reason about absence beyond (`absence ≠ unscanned`). The matches are
     /// complete over `covered` because the scan is exhaustive across it.
+    #[allow(dead_code)] // transient — the consumer is 2d-2 SP-R0's reconcile GC.
     pub(crate) fn reconcile_set(&self) -> PReconcileSet {
         PReconcileSet::from_verified_scan(self.covered, self.bond_post_matches.clone())
     }

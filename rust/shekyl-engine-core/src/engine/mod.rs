@@ -324,6 +324,11 @@ pub use pending::{
     FeePriority, PendingTx, ReservationExtension, ReservationId, ReservationTTLConfig, SnapshotId,
     TxHash, TxRecipient, TxRecipientSummary, TxRequest, DEFAULT_RESERVATION_TTL,
 };
+// The P-scan lifecycle surface (WI-1): handle + start error + cadence default,
+// re-exported so embedders holding the `PScanHandle` (the module keeps the
+// handle embedder-held, not engine-held — see `pscan::start`'s docs) can name
+// the types without reaching into the `pub(crate)` pscan internals.
+pub use pscan::start::{PScanHandle, PScanStartError, DEFAULT_PSCAN_CADENCE};
 pub use refresh::{
     RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
 };
