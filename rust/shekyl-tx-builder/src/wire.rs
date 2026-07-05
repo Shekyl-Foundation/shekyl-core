@@ -19,6 +19,15 @@ use crate::types::PqcAuth;
 #[derive(Clone, Debug)]
 pub struct WireEncodeInput {
     pub key_images: Vec<[u8; 32]>,
+    /// Non-`ToKey` prefix inputs (e.g. an archival bond post), appended after
+    /// the `ToKey` inputs in prefix order (`ARCHIVAL_BOND_WI2_ASSEMBLY.md`
+    /// §3.2.2). Each occupies a `pqc_auths` slot but carries **no** pseudo-out
+    /// (the wire `Transaction::validate` pins `pseudo_outs` to the `ToKey`
+    /// subset exactly). `Input::ToKey` entries are rejected here — spends go
+    /// through `key_images` so the per-input pseudo-out coupling stays intact.
+    /// The encoder stays payload-agnostic: it never inspects the variant
+    /// beyond the `ToKey` guard.
+    pub extra_inputs: Vec<Input>,
     pub output_keys: Vec<[u8; 32]>,
     pub view_tags: Vec<Option<u8>>,
     pub tx_extra: Vec<u8>,
@@ -43,16 +52,33 @@ pub struct WireEncodeInput {
     pub fcmp_layers: u8,
 }
 
-/// Map key images to `shekyl_wire::Input::ToKey` (FCMP++ inputs: amount 0, no offsets).
-fn wire_inputs(key_images: &[[u8; 32]]) -> Vec<Input> {
-    key_images
+/// Map key images to `shekyl_wire::Input::ToKey` (FCMP++ inputs: amount 0, no offsets),
+/// then append the non-`ToKey` extras in the caller's order.
+///
+/// A `ToKey` extra is a category error (it would bypass the pseudo-out coupling
+/// enforced per key image), so it is rejected rather than encoded.
+fn wire_inputs(
+    key_images: &[[u8; 32]],
+    extra_inputs: &[Input],
+) -> Result<Vec<Input>, TxBuilderError> {
+    if extra_inputs
+        .iter()
+        .any(|i| matches!(i, Input::ToKey { .. }))
+    {
+        return Err(TxBuilderError::WireError(
+            "extra_inputs must not contain Input::ToKey (spend inputs go through key_images)"
+                .into(),
+        ));
+    }
+    Ok(key_images
         .iter()
         .map(|ki| Input::ToKey {
             amount: 0,
             key_offsets: Vec::new(),
             key_image: *ki,
         })
-        .collect()
+        .chain(extra_inputs.iter().cloned())
+        .collect())
 }
 
 /// Map output keys + view tags to `shekyl_wire::Output`. Genesis outputs always carry a
@@ -103,7 +129,13 @@ fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError>
     // `from_bytes`) rejects — far from the cause. (Not full `validate()`: that adds the
     // ≥2-output rule, which would false-reject the minimal fixtures and the unproven
     // daemon path.)
-    let n_in = input.key_images.len();
+    // `pqc_auths` is per prefix input (spends AND extras — the daemon's
+    // `verify_transaction_pqc_auth` walks `tx.vin` as a whole); `pseudo_outs`
+    // is per *spend* (`ToKey`) input only — the wire `Transaction::validate`
+    // pins `pseudo_outs.len() == n_spend` exactly (a bond post occupies a
+    // pqc_auths slot but no pseudo-out slot).
+    let n_spend = input.key_images.len();
+    let n_in = n_spend + input.extra_inputs.len();
     let n_out = input.output_keys.len();
     for (label, got) in [
         ("enc_amounts", input.enc_amounts.len()),
@@ -116,15 +148,18 @@ fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError>
             )));
         }
     }
-    for (label, got) in [
-        ("pqc_auths", input.pqc_auths.len()),
-        ("pseudo_outs", input.pseudo_outs.len()),
-    ] {
-        if got != n_in {
-            return Err(TxBuilderError::WireError(format!(
-                "{label} count {got} != input count {n_in}"
-            )));
-        }
+    if input.pqc_auths.len() != n_in {
+        return Err(TxBuilderError::WireError(format!(
+            "pqc_auths count {} != input count {n_in} (spends {n_spend} + extras {})",
+            input.pqc_auths.len(),
+            input.extra_inputs.len()
+        )));
+    }
+    if input.pseudo_outs.len() != n_spend {
+        return Err(TxBuilderError::WireError(format!(
+            "pseudo_outs count {} != spend input count {n_spend}",
+            input.pseudo_outs.len()
+        )));
     }
 
     // Bp+: oxide `Bulletproof::write` and wire `BpPlus` share the exact byte layout
@@ -170,7 +205,7 @@ fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError>
     Ok(Transaction {
         prefix: TxPrefix {
             unlock_time: 0,
-            inputs: wire_inputs(&input.key_images),
+            inputs: wire_inputs(&input.key_images, &input.extra_inputs)?,
             outputs: wire_outputs(&input.output_keys, &input.view_tags)?,
             extra: input.tx_extra.clone(),
         },
@@ -202,6 +237,7 @@ fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError>
 /// [`Transaction::prefix_hash`] reads only the prefix, so the ct is irrelevant.
 fn prefix_only_tx(
     key_images: &[[u8; 32]],
+    extra_inputs: &[Input],
     output_keys: &[[u8; 32]],
     view_tags: &[Option<u8>],
     tx_extra: &[u8],
@@ -209,7 +245,7 @@ fn prefix_only_tx(
     Ok(Transaction {
         prefix: TxPrefix {
             unlock_time: 0,
-            inputs: wire_inputs(key_images),
+            inputs: wire_inputs(key_images, extra_inputs)?,
             outputs: wire_outputs(output_keys, view_tags)?,
             extra: tx_extra.to_vec(),
         },
@@ -243,6 +279,7 @@ pub fn tx_prefix_hash_for_signing(input: &WireEncodeInput) -> [u8; 32] {
     // ct/Bp+ assembly and its unrelated failure modes (e.g. BpPlus parsing).
     prefix_only_tx(
         &input.key_images,
+        &input.extra_inputs,
         &input.output_keys,
         &input.view_tags,
         &input.tx_extra,
@@ -259,9 +296,27 @@ pub fn tx_prefix_hash_from_parts(
     view_tags: &[Option<u8>],
     tx_extra: &[u8],
 ) -> [u8; 32] {
-    prefix_only_tx(key_images, output_keys, view_tags, tx_extra)
+    prefix_only_tx(key_images, &[], output_keys, view_tags, tx_extra)
         .expect("prefix tx builds for well-formed parts")
         .prefix_hash()
+}
+
+/// [`tx_prefix_hash_from_parts`] with non-`ToKey` prefix inputs (e.g. an archival
+/// bond post) appended after the `ToKey` inputs — the shape a bond-post transaction's
+/// prefix takes (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.2.2).
+///
+/// # Errors
+///
+/// [`TxBuilderError::WireError`] if `extra_inputs` contains an [`Input::ToKey`]
+/// (spend inputs go through `key_images`) or an output is missing its view tag.
+pub fn tx_prefix_hash_from_parts_with_extra(
+    key_images: &[[u8; 32]],
+    extra_inputs: &[Input],
+    output_keys: &[[u8; 32]],
+    view_tags: &[Option<u8>],
+    tx_extra: &[u8],
+) -> Result<[u8; 32], TxBuilderError> {
+    Ok(prefix_only_tx(key_images, extra_inputs, output_keys, view_tags, tx_extra)?.prefix_hash())
 }
 
 #[cfg(test)]
@@ -272,6 +327,7 @@ mod tests {
     fn minimal_input() -> WireEncodeInput {
         WireEncodeInput {
             key_images: vec![[1u8; 32]],
+            extra_inputs: Vec::new(),
             output_keys: vec![[2u8; 32]],
             view_tags: vec![Some(3)],
             tx_extra: vec![1, 2, 3],
@@ -404,6 +460,114 @@ mod tests {
             tx.prefix_hash(),
             "delegated prefix hash must match the encoded tx's prefix hash"
         );
+    }
+
+    /// A canonical-length wire bond post usable as an `extra_inputs` entry.
+    fn synthetic_bond_post() -> Input {
+        use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
+        use shekyl_wire::{BondPost, BondPostKind, Holdings};
+        Input::BondPost(Box::new(BondPost {
+            hybrid_public_key: vec![0xA1; PQC_HYBRID_SINGLE_KEY_LEN],
+            p_canonical_id: [0xB2; 32],
+            kind: BondPostKind::JoinMarket {
+                bond_spend_pk: vec![0xC3; PQC_HYBRID_SINGLE_KEY_LEN],
+            },
+            holdings: Holdings::CompleteTree,
+            bonded_total_atomic: 500,
+            bond_credit: 500,
+            bond_debit: 0,
+        }))
+    }
+
+    /// With an extra (bond-post) input: `pqc_auths` is per prefix input
+    /// (spends + extras) while `pseudo_outs` stays per spend input, the
+    /// encoded bytes re-parse, and the prefix/signing hashes match the
+    /// re-parsed tx (so the extra input is inside the signed preimages).
+    #[test]
+    fn extra_input_occupies_pqc_slot_without_pseudo_out() {
+        let mut input = minimal_input();
+        input.extra_inputs = vec![synthetic_bond_post()];
+        // 1 spend + 1 extra ⇒ 2 pqc_auths, still 1 pseudo_out.
+        input.pqc_auths.push(PqcAuth {
+            auth_version: 1,
+            signature: vec![0xDD; 128],
+            public_key: vec![0xEE; 64],
+        });
+
+        let bytes = encode_final_tx(&input).expect("encode with extra input");
+        let tx = Transaction::from_bytes(&bytes).expect("re-parse");
+        assert_eq!(tx.prefix.inputs.len(), 2);
+        assert!(matches!(tx.prefix.inputs[1], Input::BondPost(_)));
+        assert_eq!(
+            phase1_payload_hashes(&input).expect("hashes"),
+            tx.pqc_signing_payload_hashes()
+        );
+        assert_eq!(tx_prefix_hash_for_signing(&input), tx.prefix_hash());
+        assert_eq!(
+            tx_prefix_hash_from_parts_with_extra(
+                &input.key_images,
+                &input.extra_inputs,
+                &input.output_keys,
+                &input.view_tags,
+                &input.tx_extra,
+            )
+            .expect("prefix hash with extra"),
+            tx.prefix_hash(),
+            "parts-with-extra prefix hash must match the encoded tx"
+        );
+        // The extra input must actually change the prefix hash — the legacy
+        // parts function (no extras) must NOT match.
+        assert_ne!(
+            tx_prefix_hash_from_parts(
+                &input.key_images,
+                &input.output_keys,
+                &input.view_tags,
+                &input.tx_extra,
+            ),
+            tx.prefix_hash(),
+            "extra input must be part of the prefix preimage"
+        );
+    }
+
+    /// `pqc_auths` sized for spends only (missing the extra's slot) is a
+    /// boundary failure, not a daemon-side surprise.
+    #[test]
+    fn extra_input_without_pqc_slot_is_rejected() {
+        let mut input = minimal_input();
+        input.extra_inputs = vec![synthetic_bond_post()];
+        assert!(matches!(
+            encode_final_tx(&input),
+            Err(TxBuilderError::WireError(_))
+        ));
+    }
+
+    /// A `ToKey` smuggled through `extra_inputs` bypasses the per-spend
+    /// pseudo-out coupling — category error, rejected.
+    #[test]
+    fn tokey_extra_input_is_rejected() {
+        let mut input = minimal_input();
+        input.extra_inputs = vec![Input::ToKey {
+            amount: 0,
+            key_offsets: Vec::new(),
+            key_image: [9u8; 32],
+        }];
+        input.pqc_auths.push(PqcAuth {
+            auth_version: 1,
+            signature: vec![0xDD; 128],
+            public_key: vec![0xEE; 64],
+        });
+        assert!(matches!(
+            encode_final_tx(&input),
+            Err(TxBuilderError::WireError(_))
+        ));
+        assert!(tx_prefix_hash_from_parts_with_extra(
+            &input.key_images,
+            &input.extra_inputs,
+            &input.output_keys,
+            &input.view_tags,
+            &input.tx_extra,
+        )
+        .is_err());
     }
 
     #[test]

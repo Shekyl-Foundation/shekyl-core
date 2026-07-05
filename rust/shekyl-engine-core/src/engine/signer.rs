@@ -318,6 +318,7 @@ impl Signer for LocalSigner {
         })?;
 
         let wire_input = shekyl_tx_builder::WireEncodeInput {
+            extra_inputs: Vec::new(),
             key_images: signatures
                 .per_input
                 .iter()

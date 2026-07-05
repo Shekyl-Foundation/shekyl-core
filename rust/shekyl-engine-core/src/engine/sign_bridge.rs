@@ -359,6 +359,7 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
 
     let mut wire_with_proofs = WireEncodeInput {
         key_images: key_images.clone(),
+        extra_inputs: Vec::new(),
         output_keys: output_keys.clone(),
         view_tags: view_tags.clone(),
         tx_extra: tx_extra.clone(),
