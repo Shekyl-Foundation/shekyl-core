@@ -6,9 +6,12 @@
 //! shape as this crate's `conformance` grading (never in a default build;
 //! hooks-spec §4 layer 3). The other two containment layers: the trait is
 //! **inert by type** (typed events in, nothing out — no I/O, no writer, no
-//! serialization; layer 1), and the only recording implementation lives in
-//! `shekyl-staking-sim`, a binary crate no production crate depends on,
-//! CI-asserted by a dependency-graph check (layer 2).
+//! serialization; layer 1), and the only **non-test** recording
+//! implementation lives in `shekyl-staking-sim`, a binary crate no
+//! production crate depends on, CI-asserted by a dependency-graph check
+//! (layer 2 — the containment claim is about production edges;
+//! `#[cfg(test)]` recorders, e.g. the stake-engine emission-completeness
+//! test's, are outside it by construction).
 //!
 //! # Why the seam lives here
 //!

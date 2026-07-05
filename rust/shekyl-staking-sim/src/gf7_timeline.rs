@@ -152,8 +152,11 @@ struct RecordedPair {
 ///   cadence arithmetic (mod-by-zero, non-advancing loop); an inverted range
 ///   underflows the width.
 /// - `period_range.1 <= horizon / 2`: guarantees the first session (`phase <
-///   period`) lands in the first half, so the private anchor exists and the
-///   seam events fit the horizon even at the widest swept window.
+///   period`) lands in the first half, so the private anchor `t0` exists and
+///   `t0 <= horizon / 2`.
+/// - `window <= horizon / 2`: together with the anchor bound this puts every
+///   seam event at `t0 + spread <= horizon` — on the recorded timeline, not
+///   past its end.
 fn simulate_pair(
     rng: &mut SplitMix64,
     window: u64,
@@ -171,8 +174,13 @@ fn simulate_pair(
     assert!(
         pmax <= horizon / 2,
         "max session period ({pmax}) must fit in half the horizon ({horizon}): \
-         the private anchor must land in the first half so the seam events \
-         fit the horizon"
+         the private anchor must land in the first half"
+    );
+    assert!(
+        window <= horizon / 2,
+        "standoff window ({window}) must fit in half the horizon ({horizon}): \
+         with the anchor in the first half, this bounds every seam event by \
+         the horizon"
     );
     let period = pmin + rng.next_u64() % (pmax - pmin + 1);
     let phase = rng.next_u64() % period;
@@ -572,10 +580,18 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "must fit in half the horizon")]
+    #[should_panic(expected = "max session period")]
     fn period_exceeding_half_horizon_is_refused() {
         let mut rng = SplitMix64(1);
         let mut obs = RecordingObserver::new();
         simulate_pair(&mut rng, 600, 4_000, (40, 2_001), &mut obs);
+    }
+
+    #[test]
+    #[should_panic(expected = "standoff window")]
+    fn window_exceeding_half_horizon_is_refused() {
+        let mut rng = SplitMix64(1);
+        let mut obs = RecordingObserver::new();
+        simulate_pair(&mut rng, 2_001, 4_000, (40, 400), &mut obs);
     }
 }
