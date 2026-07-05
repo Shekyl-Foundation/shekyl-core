@@ -581,6 +581,24 @@ pub enum SendError {
         /// `REF_ANCHOR_AGE` — the minimum synced height to anchor a reference.
         ref_anchor_age: u64,
     },
+
+    /// The F28/F37 rebuild-loop circuit breaker is tripped
+    /// (`DAEMON_SUBMIT_VERDICT.md` §2.5): two consecutive daemon
+    /// rejections of the same kind (`Malformed`, `FeeTooLow`, or
+    /// `Unrecognized`) indicate a systematic wallet/daemon disagreement,
+    /// and further automatic builds are refused — a third build burns
+    /// fees and multiplies linking artifacts (§7.1) without resolving
+    /// the disagreement. The operator investigates the alarm and resets
+    /// via `acknowledge_submit_loop_breaker`.
+    #[error(
+        "submit loop-breaker tripped: two consecutive daemon rejections \
+         of the same kind ({kind:?}); builds refused until the operator \
+         acknowledges"
+    )]
+    SubmitLoopBreakerTripped {
+        /// The rejection kind the breaker tripped on.
+        kind: TerminalErrorKind,
+    },
 }
 
 // --- PendingTx lifecycle ---------------------------------------------------
@@ -1016,6 +1034,50 @@ pub enum TerminalErrorKind {
     /// exists so audit can distinguish the structural-defect class from
     /// the spend-conflict and economic-policy classes.
     Malformed,
+
+    /// The daemon rejected with a cause this wallet build does not
+    /// know ([`RejectCause::Unrecognized`] per the §2.3 version-skew
+    /// rules — an additive daemon-side cause landed before this wallet
+    /// updated). Fail-safe disposition per `DAEMON_SUBMIT_VERDICT.md`
+    /// §2.5: release + one-shot rebuild, same shape as [`Self::Malformed`]
+    /// but named distinctly so audit and telemetry can see skew events.
+    ///
+    /// [`RejectCause::Unrecognized`]: shekyl_rpc_client::RejectCause::Unrecognized
+    Unrecognized,
+}
+
+/// Retryable daemon-rejection sub-discriminant
+/// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.5).
+///
+/// A **definite** verdict (the tx is in neither pool nor chain — not
+/// ambiguity), but one whose remedy preserves the reservation: the
+/// input selection stays sound, so the engine returns the entry to
+/// `consumer_held` with its `output_locks` retained and the consumer
+/// resubmits after the per-cause wait. This is the third lifecycle
+/// class next to [`TerminalErrorKind`] (reservation gone) and
+/// [`AmbiguousErrorKind`] (reservation held awaiting a verdict).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RetryableRejectCause {
+    /// The FCMP++ reference is no longer canonical / the curve-tree
+    /// root moved (reorg). Disposition (§2.5): rebuild the **proof**
+    /// over the same input selection against a fresh root — the CT-5d
+    /// re-anchor path — then resubmit. This is the formerly-deferred
+    /// `ProofStale` signal, now daemon-attested.
+    StaleRoot,
+
+    /// The reference block is canonical but younger than the FCMP++
+    /// reference minimum age (the wallet built too close to the tip).
+    /// Disposition: timed backoff, then resubmit the same bytes.
+    ReferenceTooRecent,
+
+    /// The reference block hash is unknown to this daemon (typically:
+    /// daemon not yet synced to it). Disposition: sync-gated — consult
+    /// daemon health context; wait for sync and resubmit-same-bytes,
+    /// or treat as [`Self::StaleRoot`] if the daemon is synced and
+    /// still does not know the reference (§2.5, own-daemon-gated per
+    /// §7.2).
+    ReferenceNotFound,
 }
 
 /// Ambiguous submit-side daemon-rejection sub-discriminant. R9
@@ -1102,6 +1164,27 @@ pub enum SubmitError {
         /// The ambiguous sub-discriminant.
         kind: AmbiguousErrorKind,
         /// The reservation that remains `in_flight`.
+        reservation_id: ReservationId,
+    },
+
+    /// The daemon returned a definite rejection whose remedy preserves
+    /// the reservation (`DAEMON_SUBMIT_VERDICT.md` §2.5): the entry is
+    /// returned to `consumer_held` with its `output_locks` retained and
+    /// its full re-anchor substrate intact; the consumer resubmits via
+    /// `submit(rid, seen_gen)` after the per-cause wait. Unlike
+    /// [`Self::DaemonAmbiguous`] this **is** a verdict — under
+    /// single-egress it proves the bytes are in neither pool nor chain
+    /// — so waiting on chain observation is unnecessary; unlike
+    /// [`Self::DaemonRejectedTerminal`] the input selection remains
+    /// sound, so releasing the locks would only invite a competing
+    /// build over the same inputs (a same-key-image artifact, §7.1).
+    #[error(
+        "daemon rejected retryably: {cause:?} (reservation {reservation_id:?} returned to consumer-held)"
+    )]
+    DaemonRejectedRetryable {
+        /// The retryable sub-discriminant.
+        cause: RetryableRejectCause,
+        /// The reservation returned to `consumer_held`.
         reservation_id: ReservationId,
     },
 

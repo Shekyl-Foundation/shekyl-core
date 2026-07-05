@@ -42,14 +42,13 @@
 use std::future::Future;
 
 use serde_json::{json, Value};
-use shekyl_rpc_client::{FeeRate, Rpc, RpcError};
+use shekyl_rpc_client::{FeeRate, RejectCause, Rpc, RpcError};
 use shekyl_rpc_transport::SimpleRequestRpc;
 use shekyl_wire::Transaction;
 
-use crate::engine::error::TerminalErrorKind;
 use crate::engine::pending::TxHash;
 use crate::engine::traits::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
-use crate::engine::transaction_submitter::submit_outcome_from_response;
+use crate::engine::transaction_submitter::submit_outcome_from_verdict;
 
 /// Grace-block horizon passed to the daemon's `get_fee_estimate`
 /// JSON-RPC (matches `shekyl_rpc_client`'s private
@@ -204,36 +203,39 @@ impl DaemonEngine for DaemonClient {
         }
     }
 
-    /// Broadcast `tx_bytes` to the daemon and map its verdict to a
-    /// [`TxSubmitOutcome`] (§3.6).
+    /// Offer `tx_bytes` to the daemon over the typed submit route and
+    /// map its [`SubmitVerdict`](shekyl_rpc_client::SubmitVerdict) to a
+    /// [`TxSubmitOutcome`].
     ///
     /// 1. Parse `tx_bytes` back into a [`Transaction`]. A round-trip
-    ///    failure is a malformed-tx terminal condition (step 1) — these
-    ///    are the wallet's *own* serialized bytes, so a parse failure is
-    ///    a build-path defect, not a daemon verdict; no round-trip is
-    ///    issued.
-    /// 2. Compute the tx id **locally** from the parsed transaction
-    ///    (step 2); never read it back from a daemon field, so an
-    ///    untrusted daemon cannot influence the id the wallet records.
+    ///    failure is a malformed-tx rejection — these are the wallet's
+    ///    *own* serialized bytes, so a parse failure is a build-path
+    ///    defect, not a daemon verdict; no round-trip is issued
+    ///    (mirrors the daemon's own Phase-A `Rejected{Malformed}`, so
+    ///    the local guard and the wire verdict agree).
+    /// 2. Compute the tx id **locally** from the parsed transaction;
+    ///    never read it back from a daemon field, so an untrusted
+    ///    daemon cannot influence the id the wallet records.
     /// 3. [`Rpc::publish_transaction`]; a transport/protocol failure
-    ///    surfaces as [`Self::Error`] (the orchestrator maps it to the
-    ///    ambiguous-reservation path), not as an outcome.
-    /// 4. Map the daemon verdict via [`submit_outcome_from_response`].
+    ///    (including an unknown top-level verdict tag per the §2.3 skew
+    ///    rules) surfaces as [`Self::Error`] — the orchestrator maps it
+    ///    to the ambiguous-reservation path, not to an outcome.
+    /// 4. Map the daemon verdict via [`submit_outcome_from_verdict`].
     fn submit_transaction(
         &self,
         tx_bytes: Vec<u8>,
     ) -> impl Send + Future<Output = Result<TxSubmitOutcome, Self::Error>> {
         async move {
             let Ok(tx) = Transaction::from_bytes(&tx_bytes) else {
-                return Ok(TxSubmitOutcome::DaemonRejectedTerminal {
-                    kind: TerminalErrorKind::Malformed,
+                return Ok(TxSubmitOutcome::Rejected {
+                    cause: RejectCause::Malformed,
                 });
             };
 
             let hash = TxHash::from_bytes(tx.hash());
 
-            let resp = self.publish_transaction(&tx_bytes).await?;
-            Ok(submit_outcome_from_response(&resp, hash))
+            let verdict = self.publish_transaction(&tx_bytes).await?;
+            Ok(submit_outcome_from_verdict(&verdict, hash))
         }
     }
 }

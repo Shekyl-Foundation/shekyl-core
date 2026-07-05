@@ -124,10 +124,15 @@ fn scanner_get_transfers(scanner: &ScannerState, params: Value) -> Result<Value,
     let mut result = serde_json::Map::new();
 
     if want_in {
+        // Exclude outputs under an F14 awaiting-confirmation lock (§2.6):
+        // their spend is already broadcast (submitted, unconfirmed), so
+        // listing them as available received funds misrepresents the
+        // spendable balance. They surface under `out` instead — exactly where
+        // they appeared when submit-accept marked them `spent`.
         let incoming: Vec<Value> = ledger
             .transfers()
             .iter()
-            .filter(|td| !td.spent)
+            .filter(|td| !td.spent && td.awaiting_confirmation.is_none())
             .map(transfer_to_json)
             .collect();
         result.insert("in".to_string(), Value::Array(incoming));
@@ -137,7 +142,7 @@ fn scanner_get_transfers(scanner: &ScannerState, params: Value) -> Result<Value,
         let outgoing: Vec<Value> = ledger
             .transfers()
             .iter()
-            .filter(|td| td.spent)
+            .filter(|td| td.spent || td.awaiting_confirmation.is_some())
             .map(transfer_to_json)
             .collect();
         result.insert("out".to_string(), Value::Array(outgoing));

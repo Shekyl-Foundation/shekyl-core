@@ -110,7 +110,11 @@ pub enum SubmitVerdict {
 /// Additive variants are the *only* schema-evolution vector for rejection
 /// semantics (F38): older wallets deserialize unknown causes to
 /// [`RejectCause::Unrecognized`] and take the fail-safe release path.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Copy`: fieldless enum; the consumer is the wallet engine's
+/// `TxSubmitOutcome` (itself `Copy`), which embeds the cause in its
+/// `Rejected` variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RejectCause {
     /// Parse, structural, semantic, or policy-static failure — including

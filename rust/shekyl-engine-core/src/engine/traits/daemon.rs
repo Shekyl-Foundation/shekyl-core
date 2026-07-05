@@ -44,7 +44,7 @@
 use shekyl_rpc_client::{FeeRate, Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
 
-use crate::engine::error::{IoError, TerminalErrorKind};
+use crate::engine::error::IoError;
 use crate::engine::pending::TxHash;
 
 /// Multi-priority fee snapshot returned by
@@ -121,42 +121,29 @@ pub struct FeeEstimates {
 /// Outcome of a daemon transaction submission via
 /// [`DaemonEngine::submit_transaction`].
 ///
-/// Carries the daemon's view of the submission. The variant set is the
-/// **honest subset** the daemon's `send_raw_transaction` reply can
-/// actually distinguish (§3.6, as amended), plus two variants the
-/// orchestrator / a later phase produce rather than the daemon-verdict
-/// mapping:
+/// The wallet-side projection of the daemon's atomic
+/// [`SubmitVerdict`](shekyl_rpc_client::SubmitVerdict)
+/// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.1), plus the locally
+/// computed [`TxHash`] on the identity-bearing variants. The verdict is
+/// computed by the daemon's Rust admission engine with every mutable
+/// premise re-checked under one lock scope, so the variants are mutually
+/// consistent facts — never the racy multi-flag snapshot the deleted
+/// `send_raw_transaction` reply carried. Per-cause wallet dispositions
+/// are specified in §2.5 and applied by the orchestrator
+/// (`LocalPendingTx`), not here.
 ///
-/// - [`Self::Submitted`] — daemon `status == "OK"`; accepted to the
-///   pool.
-/// - [`Self::DaemonRejectedTerminal`] — daemon `status != "OK"`; a
-///   final, non-recoverable rejection. The daemon flags ~10 rejection
-///   classes; the wallet maps only `double_spend` and `fee_too_low` to
-///   distinct terminal kinds **by choice** (2a-1 needs no finer remedy)
-///   and collapses the rest to [`TerminalErrorKind::Malformed`]. The
-///   cases that are *genuinely* indistinguishable client-side are the
-///   **unflagged** generics — an **already-known** duplicate and a
-///   **stale FCMP++ root** — which set no dedicated flag and yield
-///   `status == "Failed", reason == ""`. Verified against
-///   `core_rpc_server.cpp::on_send_raw_transaction`.
-/// - [`Self::AlreadyKnown`] — **not** produced by the daemon-verdict
-///   mapping (the daemon gives no distinguishing signal). It is the
-///   orchestrator's wallet-side product: on a §5.2 retry where the
-///   wallet already recorded a [`TxHash`] for these exact bytes, a
-///   generic daemon rejection is interpreted as already-known. Best
-///   effort, by construction.
-/// - [`Self::ProofStale`] — reactive stale-root signal whose
-///   **detection is deferred to Phase 6** (the daemon currently emits
-///   no stale-root-specific flag, so a stale root is presently
-///   indistinguishable from a generic terminal rejection). The variant
-///   exists now so the §3.6 bounded rebuild loop has a stable target;
-///   the proactive `reference.rs` validity horizon is the interim
-///   guard. Reopening criterion: a daemon-side stale-root signal
-///   (`SHEKYLD_PREREQUISITE`, tracked in `docs/FOLLOWUPS.md`).
+/// The legacy wallet-side `AlreadyKnown` heuristic (interpreting a
+/// generic rejection as a dedup hit via a local hash record) is retired:
+/// [`Self::AlreadyInPool`] / [`Self::AlreadyInChain`] are daemon-attested
+/// identity facts. The formerly-deferred `ProofStale` detection is now
+/// constructible as [`RejectCause::StaleRoot`], closing the
+/// `fcmp_root_stale` FOLLOWUPS reopening criterion (its named reopen was
+/// exactly "a daemon-side stale-root signal").
 ///
 /// # Transport failures are not an outcome
 ///
-/// A failed daemon round-trip (timeout, connection drop) is **not** a
+/// A failed daemon round-trip (timeout, connection drop, unknown
+/// top-level verdict tag per the §2.3 skew rules) is **not** a
 /// `TxSubmitOutcome`: it is [`Self::Error`](DaemonEngine::Error), which
 /// the orchestrator maps to
 /// [`SubmitError::DaemonAmbiguous`](crate::engine::error::SubmitError::DaemonAmbiguous)
@@ -166,62 +153,58 @@ pub struct FeeEstimates {
 ///
 /// # `#[non_exhaustive]`
 ///
-/// `#[non_exhaustive]` lets the enum extend without a Stage 1
-/// amendment per §8.2 (e.g. a relayed-but-unconfirmed advisory once
-/// daemon feedback supports it).
+/// New top-level verdict tags are a breaking wire change (F38) — but the
+/// *outcome* enum stays `#[non_exhaustive]` so a coordinated
+/// wire-version bump lands wallet-side additively.
 ///
-/// # Retry contract (§5.2)
+/// # Retry contract (§5.2 / §2.5)
 ///
-/// Per the §5.2 retry contract, [`DaemonEngine::submit_transaction`]
-/// is conditionally idempotent: same `tx_bytes` produce the same
-/// [`TxHash`] (the hash is a deterministic function of the bytes) and
-/// the daemon dedupes by hash. A caller may retry on transient
-/// transport failures; the wallet-side hash record is what lets the
-/// orchestrator recognize the retry as [`Self::AlreadyKnown`].
+/// [`DaemonEngine::submit_transaction`] is idempotent as a status query:
+/// resubmitting held bytes yields a definite verdict for every stable
+/// state (mined → [`Self::AlreadyInChain`]; pool-resident →
+/// [`Self::AlreadyInPool`], with **no** relay pulse per F31; competing
+/// spend → [`RejectCause::DoubleSpendConflict`]; dead → re-offered
+/// through full admission). Callers MAY retry on transient transport
+/// failures.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Phase 2a-stub: production callers land with §5.2 retry contract.
 pub(crate) enum TxSubmitOutcome {
-    /// The daemon accepted this transaction as a fresh submission
-    /// (`status == "OK"`).
+    /// Admitted to the daemon's pool at commit-check time; relay is
+    /// daemon-owned from here. The pending-tx enters awaiting
+    /// confirmation — liveness is keyed on chain confirmation observed
+    /// via refresh, never on a daemon relay claim (§5.3).
     Submitted {
         /// Hash of the submitted transaction. Deterministic in the
         /// `tx_bytes` argument and computed **locally** from those
-        /// bytes (§3.6 step 2), never read from a daemon field.
+        /// bytes, never read from a daemon field.
         hash: TxHash,
     },
 
-    /// The transaction is already known to the daemon. Produced by the
-    /// orchestrator's §5.2 retry-contract logic (wallet-side dedup by
-    /// local hash), **not** by the daemon-verdict mapping — the daemon
-    /// collapses already-known into the generic terminal bucket.
-    AlreadyKnown {
-        /// Hash of the submitted transaction. Equal to the hash
-        /// recorded on the original [`Self::Submitted`].
+    /// Identity fact: these exact bytes (same txid) are already in the
+    /// daemon's pool. Same wallet disposition as [`Self::Submitted`]
+    /// (§2.5) — and it resolves prior transport ambiguity for this txid.
+    AlreadyInPool {
+        /// Locally computed hash, equal to the pool-resident txid.
         hash: TxHash,
     },
 
-    /// The transaction's FCMP++ membership proof references a curve-tree
-    /// root the daemon no longer accepts. Recoverable by rebuilding
-    /// against a fresh root, re-signing, and re-submitting (§3.6); the
-    /// spend selection may be preserved. **Detection deferred to Phase
-    /// 6** (see the type-level reopening criterion); no code path
-    /// constructs this variant yet.
-    ProofStale {
-        /// Hash of the (stale) submitted transaction, locally computed.
+    /// Identity fact: this txid is in the main chain. Confirmation
+    /// observed by verdict; refresh remains the settlement authority
+    /// (reorgs happen — the verdict authorizes lock-lifecycle
+    /// transitions only).
+    AlreadyInChain {
+        /// Locally computed hash, equal to the chain-resident txid.
         hash: TxHash,
     },
 
-    /// The daemon rejected the transaction with a final,
-    /// non-recoverable outcome. The orchestrator drops the reservation
-    /// from `in_flight` and releases its `output_locks`; recourse is to
-    /// rebuild against current chain state.
-    DaemonRejectedTerminal {
-        /// The terminal sub-discriminant. The daemon distinguishes only
-        /// [`TerminalErrorKind::DoubleSpend`] and
-        /// [`TerminalErrorKind::FeeTooLow`]; all other terminal
-        /// rejections map to [`TerminalErrorKind::Malformed`].
-        kind: TerminalErrorKind,
+    /// Not in pool, not in chain, and not admitted — `cause` says why.
+    /// Under the single-egress theorem (§7.1) this carries the proof
+    /// that the bytes were not relayed by this daemon, so lock release
+    /// is safe where the §2.5 disposition calls for it.
+    Rejected {
+        /// Why the daemon refused the transaction. Dispositions per
+        /// §2.5 are applied by the orchestrator.
+        cause: shekyl_rpc_client::RejectCause,
     },
 }
 
@@ -337,20 +320,21 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     /// daemon-side effect (the daemon may have already received
     /// and acted on the transaction). Callers that need to know
     /// whether a submission landed re-submit and observe
-    /// [`TxSubmitOutcome::AlreadyKnown`].
+    /// [`TxSubmitOutcome::AlreadyInPool`] /
+    /// [`TxSubmitOutcome::AlreadyInChain`].
     ///
     /// # Idempotency
     ///
-    /// **Conditionally** per §4: the daemon dedupes by transaction
-    /// hash, so resubmitting the same `tx_bytes` returns the same
-    /// hash, with [`TxSubmitOutcome::AlreadyKnown`] indicating the
-    /// daemon already had it. See §5.2 for the retry contract:
-    /// callers MAY retry on transient transport failures.
+    /// **Yes, as a status query** (`DAEMON_SUBMIT_VERDICT.md` §2.5):
+    /// resubmitting the same `tx_bytes` returns the same locally
+    /// computed hash and a definite verdict for every stable state —
+    /// [`TxSubmitOutcome::AlreadyInPool`] for pool-resident bytes (no
+    /// relay pulse, F31), [`TxSubmitOutcome::AlreadyInChain`] for mined
+    /// bytes. Callers MAY retry on transient transport failures.
     ///
     /// # Panics
     ///
     /// Never panics. Per `get_fee_estimates`'s panic note.
-    #[allow(dead_code)] // Phase 2a-stub: production callers land with §5.2 retry contract.
     fn submit_transaction(
         &self,
         tx_bytes: Vec<u8>,

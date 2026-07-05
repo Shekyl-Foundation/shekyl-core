@@ -4227,6 +4227,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-curve-io",
+ "shekyl-rpc-types",
  "std-shims",
  "thiserror",
  "zeroize",

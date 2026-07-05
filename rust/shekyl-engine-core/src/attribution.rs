@@ -283,6 +283,7 @@ mod tests {
             spent: false,
             spent_height: None,
             key_image: None,
+            awaiting_confirmation: None,
             source_ciphertext: None,
             output_handle: None,
             eligible_height: 0,

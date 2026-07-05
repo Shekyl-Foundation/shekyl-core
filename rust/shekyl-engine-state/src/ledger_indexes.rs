@@ -175,6 +175,10 @@ impl LedgerIndexes {
             if let Some(td) = ledger.transfers.get_mut(idx) {
                 td.spent = true;
                 td.spent_height = Some(spent_height);
+                // F14 confirmed-present release (§2.6): the observed
+                // on-chain spend supersedes the awaiting-confirmation
+                // lock — refresh is the settlement authority.
+                td.awaiting_confirmation = None;
                 debug_assert!(
                     self.check_invariants(ledger).is_ok(),
                     "invariant violated after mark_spent: {}",
@@ -415,10 +419,16 @@ impl LedgerIndexes {
         }
 
         // 3. Spend-state consistency. A spent output must carry a key image (it
-        //    cannot have been spent by us otherwise). `spent_height` is `None` while
-        //    the spend is in flight — optimistically marked at submit, before a block
-        //    confirms it — and `Some` once a refresh scans the confirming block; a
-        //    not-yet-spent output carries no spend height.
+        //    cannot have been spent by us otherwise); a not-yet-spent output carries
+        //    no spend height. Since the F14 cutover (§2.6), production `spent` is
+        //    refresh-authoritative — `mark_spent` sets `spent` + `spent_height` and
+        //    clears the awaiting-confirmation lock together when it scans the
+        //    confirming block, so a production spent output always has
+        //    `spent_height = Some`. An in-flight spend is NOT marked spent at submit
+        //    (that durable-spent-at-submit flow was retired): it carries an
+        //    awaiting-confirmation lock instead, `spent` stays false. The check stays
+        //    permissive about `spent` without a height only for the Phase-1 test stub
+        //    that still models that retired half-state.
         for (i, td) in ledger.transfers.iter().enumerate() {
             if td.spent && td.key_image.is_none() {
                 return Err(format!("transfers[{i}] is spent but has no key_image"));
@@ -508,6 +518,7 @@ mod tests {
             spent: false,
             spent_height: None,
             key_image,
+            awaiting_confirmation: None,
             source_ciphertext: None,
             output_handle: None,
             eligible_height: block_height + SPENDABLE_AGE,
@@ -538,6 +549,35 @@ mod tests {
         indexes
             .check_invariants(&ledger)
             .expect("rebuilt indexes are consistent");
+    }
+
+    /// F14 confirmed-present release (`DAEMON_SUBMIT_VERDICT.md` §2.6):
+    /// the refresh-observed on-chain spend supersedes the persisted
+    /// awaiting-confirmation lock — `mark_spent` clears it in the same
+    /// transition that sets the refresh-authoritative `spent` state.
+    #[test]
+    fn mark_spent_releases_awaiting_confirmation_lock() {
+        let mut transfer = mk_transfer(1, 100, Some(ki(0xAA)));
+        transfer.awaiting_confirmation = Some(crate::transfer::AwaitingConfirmation {
+            tx_hash: shekyl_types::TxHash::from_bytes([0xBB; 32]),
+            accepted_at_height: 150,
+        });
+        let ledger_init = LedgerBlock::new(
+            vec![transfer],
+            BlockchainTip::new(150, [0; 32]),
+            ReorgBlocks::default(),
+        );
+        let mut ledger = ledger_init;
+        let indexes = LedgerIndexes::rebuild_from_ledger(&ledger);
+
+        assert!(indexes.mark_spent(&mut ledger, &ki(0xAA), 160));
+        let td = &ledger.transfers[0];
+        assert!(td.spent);
+        assert_eq!(td.spent_height, Some(160));
+        assert!(
+            td.awaiting_confirmation.is_none(),
+            "confirmed-present release clears the F14 lock"
+        );
     }
 
     #[test]

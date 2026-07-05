@@ -441,6 +441,51 @@
 
 ### Changed
 
+- **wallet: submit path cut over to the typed `SubmitVerdict` contract**
+  (`docs/design/DAEMON_SUBMIT_VERDICT.md` §12 PR-4,
+  `feat/wallet-submit-cutover`). The wallet now consumes the daemon's
+  atomic Rust verdict instead of the legacy status-string reply, and its
+  post-submit state machine is re-shaped around it:
+  - **Typed client.** `shekyl-rpc-client::publish_transaction` posts the
+    native `submit_transaction` route and returns `SubmitVerdict`; the
+    string-keyed `TxRelayResponse` is deleted. The transaction id is
+    computed locally from the held bytes, never read from the daemon
+    (wire minimalism, §2.2).
+  - **Outcome reshape.** `TxSubmitOutcome` is the 1:1 wallet projection
+    of the verdict (`Submitted` / `AlreadyInPool` / `AlreadyInChain` /
+    `Rejected { cause }`). The wallet-side `AlreadyKnown` dedup
+    heuristic is retired in favor of daemon-attested identity facts, and
+    the formerly-deferred `ProofStale` detection is now constructible as
+    `RejectCause::StaleRoot` (closes that FOLLOWUPS reopening
+    criterion).
+  - **Per-cause dispositions (§2.5).** Terminal rejections release locks
+    and surface a `TerminalErrorKind`; retryable rejections
+    (`StaleRoot`, `ReferenceTooRecent`, `ReferenceNotFound`) restore the
+    reservation to consumer ownership losslessly with output locks
+    retained.
+  - **F28/F37 loop-breakers.** A second consecutive `Malformed`,
+    `FeeTooLow`, or `Unrecognized` rejection trips a circuit breaker:
+    further builds are refused with `SendError::SubmitLoopBreakerTripped`
+    until operator acknowledgment — fee-driven rebuild loops leak
+    co-ownership per iteration, so the bound is a privacy control.
+  - **F14 awaiting-confirmation lock (§2.6).** Submit-accept no longer
+    marks inputs `spent = true`; it places a **persisted**
+    `awaiting_confirmation` lock (tx hash + accepted height) on each
+    input, released either by observed chain confirmation
+    (confirmed-present → spent-final via `mark_spent`) or by the
+    watchdog's confirmed-absent path. A restart between accept and
+    confirmation can no longer self-inflict a same-key-image broadcast.
+    `LEDGER_BLOCK_VERSION` 7→8, `WALLET_LEDGER_FORMAT_VERSION` 9→10;
+    balance reporting gains an `awaiting_confirmation` bucket excluded
+    from `unlocked`.
+  - **Watchdog decision kernel (§5.3 scaffolding).** Pure, unit-tested
+    escape-ladder logic in `engine/submit_watchdog.rs`:
+    chain-confirmation-keyed held tracking, presence branching
+    (absent → re-offer same bytes; present-but-unconfirmed past horizon
+    → operator alarm, never auto-rebuild), daemon-health gating, and an
+    escape horizon bounded inside the daemon's 1.5-day re-relay window
+    (F35). The async actor that drives it lands with the refresh-loop
+    integration.
 - **wallet: migrate the scan/refresh block-parse from `shekyl-oxide` to
   `shekyl-wire` (§8 step-4 scanner slice, 2026-06,
   `feat/scan-refresh-wire-migration`).** The wallet's block/transaction parse on

@@ -21,6 +21,12 @@ pub struct BalanceSummary {
     pub locked_by_timelock: AtomicUnits,
     /// Balance in frozen outputs.
     pub frozen: AtomicUnits,
+    /// Balance committed to a network-exposed spend awaiting chain
+    /// confirmation (the F14 lock, `DAEMON_SUBMIT_VERDICT.md` §2.6).
+    /// Counted in `total` (the spend has not settled) but never in
+    /// `unlocked` — presenting it as spendable would invite a
+    /// same-key-image rebuild.
+    pub awaiting_confirmation: AtomicUnits,
 }
 
 /// Accumulate a balance bucket. A wallet's unspent total is bounded by the
@@ -46,6 +52,11 @@ impl BalanceSummary {
 
             let amount = td.amount();
             summary.total = accumulate(summary.total, amount);
+
+            if td.awaiting_confirmation.is_some() {
+                summary.awaiting_confirmation = accumulate(summary.awaiting_confirmation, amount);
+                continue;
+            }
 
             if td.frozen {
                 summary.frozen = accumulate(summary.frozen, amount);
@@ -86,6 +97,7 @@ mod tests {
             spent: false,
             spent_height: None,
             key_image: None,
+            awaiting_confirmation: None,
             source_ciphertext: None,
             output_handle: None,
             eligible_height: height + SPENDABLE_AGE,
@@ -126,6 +138,20 @@ mod tests {
         let transfers = vec![td];
         let summary = BalanceSummary::compute(&transfers, 100);
         assert_eq!(summary.total, AtomicUnits::ZERO);
+    }
+
+    #[test]
+    fn awaiting_confirmation_excluded_from_unlocked() {
+        let mut td = make_td(1000, 50);
+        td.awaiting_confirmation = Some(shekyl_engine_state::AwaitingConfirmation {
+            tx_hash: shekyl_types::TxHash::from_bytes([7u8; 32]),
+            accepted_at_height: 90,
+        });
+        let transfers = vec![td];
+        let summary = BalanceSummary::compute(&transfers, 100);
+        assert_eq!(summary.total, AtomicUnits::from_raw(1000));
+        assert_eq!(summary.unlocked, AtomicUnits::ZERO);
+        assert_eq!(summary.awaiting_confirmation, AtomicUnits::from_raw(1000));
     }
 
     #[test]

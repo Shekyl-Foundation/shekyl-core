@@ -188,57 +188,14 @@ fn hash_hex(hash: &str) -> Result<[u8; 32], RpcError> {
         .map_err(|_| RpcError::InvalidNode("hash wasn't 32-bytes".to_string()))
 }
 
-/// The daemon's verdict on a `send_raw_transaction` broadcast.
-///
-/// This is **not** a full mirror of the daemon's
-/// `on_send_raw_transaction` response (`core_rpc_server.cpp`). The daemon
-/// serializes ~10 rejection-class booleans (`double_spend`, `fee_too_low`,
-/// `invalid_input`, `invalid_output`, `too_big`, `overspend`,
-/// `too_few_outputs`, `sanity_check_failed`, `tx_extra_too_big`,
-/// `nonzero_unlock_time`) plus `not_relayed` and a `reason` string. This
-/// struct models only the **verdict subset the wallet consumes**:
-///
-/// - `status` — `"OK"` (accepted into the pool, possibly relay-local only)
-///   vs. any rejection status (`"Failed"`);
-/// - `double_spend` / `fee_too_low` — the two rejection classes the wallet
-///   maps to distinct terminal outcomes.
-///
-/// Every other daemon rejection class collapses to a generic terminal
-/// `Malformed` in the wallet mapping (no dedicated outcome), so modeling
-/// the corresponding flags here would be unread state — fields without a
-/// consumer (`21-reversion-clause-discipline.mdc`). `#[serde(default)]`
-/// (and the absence of `deny_unknown_fields`) means the daemon's
-/// unmodeled fields deserialize-and-ignore rather than failing the parse;
-/// when a future wallet outcome needs a finer class (e.g. a daemon
-/// stale-FCMP++-root flag, `docs/FOLLOWUPS.md`), the field is added here
-/// **with** its consumer.
-///
-/// [`Rpc::publish_transaction`] returns this for a parsed daemon verdict
-/// (including rejection); a transport- or protocol-level failure — or a
-/// response that omits `status` — is an [`RpcError`] instead, so callers
-/// never see a malformed reply masquerading as a daemon rejection.
-///
-/// **Intentionally not `#[non_exhaustive]`.** `shekyl-rpc` is a
-/// Shekyl-owned, in-workspace crate with no out-of-workspace consumers;
-/// the only struct-literal constructors are in-workspace tests
-/// (production code only deserializes this). Pre-genesis, adding a field
-/// later is a bounded in-workspace edit, not a downstream break, so
-/// `#[non_exhaustive]` would buy nothing while blocking the cross-crate
-/// test literals (`21-reversion-clause-discipline.mdc`: reject now,
-/// reopen if an out-of-workspace consumer ever constructs this type).
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct TxRelayResponse {
-    /// Daemon status string: `"OK"` on accept, otherwise a rejection
-    /// status (e.g. `"Failed"`). An empty/absent value is rejected as
-    /// [`RpcError::InvalidNode`] by [`Rpc::publish_transaction`], never
-    /// surfaced as a rejection verdict.
-    pub status: String,
-    /// The transaction double-spends an output already spent or in-pool.
-    pub double_spend: bool,
-    /// The offered fee is below the daemon's required minimum.
-    pub fee_too_low: bool,
-}
+// The submit wire contract is defined once in `shekyl-rpc-types`
+// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.3's single-Rust-definition
+// rule) and re-exported here so wallet-side consumers reach it through
+// their existing `shekyl_rpc_client` import without a second direct
+// dependency. The legacy `TxRelayResponse` (a lossy projection of the
+// deleted `send_raw_transaction` boolean-flag reply) is replaced by the
+// typed [`SubmitVerdict`]; see [`Rpc::publish_transaction`].
+pub use shekyl_rpc_types::{RejectCause, SubmitTransactionRequest, SubmitVerdict};
 
 /// The HTTP `Content-Type` a daemon route expects: EPEE binary routes (`*.bin`,
 /// e.g. `get_o_indexes.bin`, `get_blocks_by_height.bin`) are
@@ -481,49 +438,43 @@ pub trait Rpc: Sync + Clone {
         }
     }
 
-    /// Broadcast a transaction to the daemon, returning the daemon's
-    /// accept-or-reject decision.
+    /// Offer a transaction to the daemon via the typed submit route,
+    /// returning the daemon's atomic [`SubmitVerdict`]
+    /// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2).
     ///
     /// `tx_blob` is the **serialized** transaction (the canonical wire bytes); it is
-    /// hex-encoded into the daemon's `send_raw_transaction` `tx_as_hex` field. The
+    /// hex-encoded into the `POST /submit_transaction` request's `tx_blob` field. The
     /// caller already holds these bytes, so this takes the blob directly rather than a
     /// parsed transaction (no parse → re-serialize round-trip).
     ///
-    /// The returned [`TxRelayResponse`] carries the daemon's verdict,
-    /// including on rejection: an [`Err`] is reserved for transport- or
-    /// protocol-level failures, while a daemon that parses the
-    /// transaction and decides to reject it yields an [`Ok`] with
-    /// `status != "OK"` and the relevant rejection flags set. Callers map
-    /// the verdict onto their own submission-outcome type; this method
-    /// does not collapse a daemon rejection into an error, because the
-    /// rejection class (double-spend, fee-too-low, …) is information the
-    /// caller needs.
+    /// The response body **is** the serde-tagged verdict: HTTP 200 for
+    /// every verdict *including* `Rejected` — a daemon that parses the
+    /// transaction and decides to refuse it yields `Ok(Rejected { cause })`,
+    /// because the rejection cause drives the caller's per-cause
+    /// disposition (§2.5). The [`Err`] arm is reserved for transport- and
+    /// protocol-level failures, which are the *absence* of a verdict
+    /// (Two Generals): connection drop, timeout, non-JSON body.
     ///
-    /// A reply that **omits `status`** is a protocol-shape failure, not a
-    /// daemon verdict: under `#[serde(default)]` it would otherwise
-    /// deserialize as `status == ""` and be indistinguishable from a
-    /// rejection. Such a reply is rejected as [`RpcError::InvalidNode`]
-    /// so a malformed/incomplete response is never mistaken for a
-    /// terminal daemon rejection by higher layers.
+    /// # Version-skew behavior (§2.3, pinned by `shekyl-rpc-types` tests)
+    ///
+    /// - An unknown `cause` string inside `Rejected` deserializes to
+    ///   [`RejectCause::Unrecognized`] — the fail-safe release path.
+    /// - An unknown top-level `verdict` tag fails deserialization and
+    ///   surfaces as [`RpcError::InvalidNode`] — a verdict this build
+    ///   cannot name is not a verdict it can act on, so it lands in the
+    ///   same ambiguous arm as a transport drop (hold + TTL + resubmit).
     fn publish_transaction(
         &self,
         tx_blob: &[u8],
-    ) -> impl Send + Future<Output = Result<TxRelayResponse, RpcError>> {
+    ) -> impl Send + Future<Output = Result<SubmitVerdict, RpcError>> {
         async move {
-            let res: TxRelayResponse = self
-                .rpc_call(
-                    "send_raw_transaction",
-                    Some(json!({ "tx_as_hex": hex::encode(tx_blob), "do_sanity_checks": false })),
-                )
-                .await?;
-
-            if res.status.is_empty() {
-                Err(RpcError::InvalidNode(
-                    "send_raw_transaction reply omitted status".to_string(),
-                ))?;
-            }
-
-            Ok(res)
+            self.rpc_call(
+                "submit_transaction",
+                Some(SubmitTransactionRequest {
+                    tx_blob: hex::encode(tx_blob),
+                }),
+            )
+            .await
         }
     }
 

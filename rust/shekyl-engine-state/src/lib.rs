@@ -64,7 +64,7 @@ pub use payment_request::{
 pub use safety_constants::NetworkSafetyConstants;
 pub use staking_block::{StakingBlock, STAKING_BLOCK_VERSION};
 pub use sync_state_block::{SyncStateBlock, SYNC_STATE_BLOCK_VERSION};
-pub use transfer::{FcmpPrecomputedPath, TransferDetails, SPENDABLE_AGE};
+pub use transfer::{AwaitingConfirmation, FcmpPrecomputedPath, TransferDetails, SPENDABLE_AGE};
 pub use tx_meta_block::{
     ScannedPoolTx, TxMetaBlock, TxSecretKey, TxSecretKeys, TX_META_BLOCK_VERSION,
 };

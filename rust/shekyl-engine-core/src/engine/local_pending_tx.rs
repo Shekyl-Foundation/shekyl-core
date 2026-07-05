@@ -49,7 +49,7 @@ use shekyl_curve_tree::{
     select_reference_height, should_reanchor, AssembleInput, BlockHeight, Gindex, ReferenceBlock,
     REF_ANCHOR_AGE,
 };
-use shekyl_engine_state::LedgerBlock;
+use shekyl_engine_state::{AwaitingConfirmation, LedgerBlock};
 use shekyl_units::AtomicUnits;
 
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
@@ -58,8 +58,8 @@ use super::diagnostics::{
     PendingTxDiagnostic,
 };
 use super::error::{
-    AmbiguousErrorKind, FeeEstimatorError, IoError, OutputSelectorError, PendingTxError, SendError,
-    SignerError, SubmitError, TerminalErrorKind,
+    AmbiguousErrorKind, FeeEstimatorError, IoError, OutputSelectorError, PendingTxError,
+    RetryableRejectCause, SendError, SignerError, SubmitError, TerminalErrorKind,
 };
 use super::fee_estimator::{FeeEstimationContext, FeeEstimator};
 use super::fee_snapshot::FeeSnapshotSource;
@@ -188,6 +188,11 @@ impl ContentFingerprint {
 #[derive(Debug, Clone)]
 pub(crate) struct ConsumerHeldEntry {
     /// Build-time [`Instant`] for the R8 TTL safety-net.
+    //
+    // `dead_code` allow: the C7 TTL sweep is the reader. The field lost its
+    // interim reader when the `consumer_held → in_flight` flip started moving
+    // the whole entry (verdict-cutover reshape) instead of projecting fields.
+    #[allow(dead_code)]
     pub created_at: Instant,
     /// [`SnapshotId`] pinned at build for submit-time comparison.
     pub snapshot_id: SnapshotId,
@@ -327,6 +332,106 @@ pub(crate) struct PendingTxState {
     pub in_flight: HashMap<ReservationId, InFlightSubmit>,
     /// Monotone counter for fresh [`ReservationId`]s.
     pub next_id: u64,
+    /// F28/F37 rebuild-loop circuit breaker. See [`SubmitLoopBreaker`].
+    pub loop_breaker: SubmitLoopBreaker,
+}
+
+/// The F28/F37 rebuild-loop circuit breaker
+/// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.5).
+///
+/// The §2.5 dispositions for `Rejected{Malformed}`, `Rejected{FeeTooLow}`,
+/// and `Rejected{Unrecognized}` are *one-shot rebuild*: a second
+/// consecutive rejection of the same kind is a systematic wallet/daemon
+/// rule (or fee-model) disagreement, not a bad tx — a third silent build
+/// burns fees and multiplies linking artifacts (§7.1 for `Malformed`;
+/// for `FeeTooLow` the bound is privacy-load-bearing outright, since a
+/// fee-driven rebuild can pull in an additional input, leaking
+/// co-ownership per iteration — F30). The breaker mechanizes "never
+/// loop":
+///
+/// - Each terminal rejection of a breaker-scoped kind extends that
+///   kind's consecutive streak; any other definite submit outcome
+///   (accept, or a terminal rejection of a different class) resets the
+///   streak.
+/// - The **second** consecutive same-kind rejection trips the breaker:
+///   an operator alarm is emitted
+///   ([`PendingTxDiagnostic::SubmitLoopBreakerTripped`]) and further
+///   `build` calls are refused with
+///   [`SendError::SubmitLoopBreakerTripped`] until the operator
+///   acknowledges via
+///   [`LocalPendingTx::acknowledge_submit_loop_breaker`].
+/// - An accepted submit while tripped resets the *streak* but not the
+///   tripped state: acceptance of a different tx does not falsify the
+///   systematic-disagreement hypothesis for the failing payment, and
+///   auto-clearing would let an alternating pattern re-enter the loop
+///   the breaker exists to break. Acknowledgment is the only reset.
+#[derive(Debug, Default)]
+pub(crate) struct SubmitLoopBreaker {
+    /// The rejection kind of the current consecutive streak, if any.
+    streak_kind: Option<TerminalErrorKind>,
+    /// Consecutive same-kind rejections observed.
+    streak: u8,
+    /// Set when the breaker trips; cleared only by acknowledgment.
+    tripped: Option<TerminalErrorKind>,
+}
+
+impl SubmitLoopBreaker {
+    /// Consecutive same-kind rejections at which the breaker trips.
+    /// §2.5: "one-shot rebuild" — the second consecutive rejection is
+    /// the escalation point; there is never a third build.
+    const TRIP_THRESHOLD: u8 = 2;
+
+    /// Which terminal kinds the breaker scopes over. `DoubleSpend` is
+    /// excluded: its disposition is terminal release with no rebuild
+    /// prescription, so there is no loop to break.
+    fn in_scope(kind: TerminalErrorKind) -> bool {
+        matches!(
+            kind,
+            TerminalErrorKind::Malformed
+                | TerminalErrorKind::FeeTooLow
+                | TerminalErrorKind::Unrecognized
+        )
+    }
+
+    /// Record a definite non-rejection submit outcome (accept). Resets
+    /// the streak; deliberately does **not** clear `tripped` (see type
+    /// docs).
+    fn record_accept(&mut self) {
+        self.streak_kind = None;
+        self.streak = 0;
+    }
+
+    /// Record a terminal rejection. Returns `true` iff this rejection
+    /// trips the breaker (exactly once — an already-tripped breaker
+    /// does not re-alarm).
+    fn record_terminal(&mut self, kind: TerminalErrorKind) -> bool {
+        if !Self::in_scope(kind) {
+            self.streak_kind = None;
+            self.streak = 0;
+            return false;
+        }
+        if self.streak_kind == Some(kind) {
+            self.streak = self.streak.saturating_add(1);
+        } else {
+            self.streak_kind = Some(kind);
+            self.streak = 1;
+        }
+        if self.streak >= Self::TRIP_THRESHOLD && self.tripped.is_none() {
+            self.tripped = Some(kind);
+            return true;
+        }
+        false
+    }
+
+    /// The kind the breaker tripped on, if tripped.
+    pub(crate) fn tripped(&self) -> Option<TerminalErrorKind> {
+        self.tripped
+    }
+
+    /// Operator acknowledgment: clear the tripped state and streak.
+    fn acknowledge(&mut self) {
+        *self = Self::default();
+    }
 }
 
 // ============================================================================
@@ -555,6 +660,7 @@ fn build_error_kind(err: &SendError) -> BuildErrorKind {
         SendError::CurveTreeUnavailable { .. } | SendError::Io(_) => {
             BuildErrorKind::DaemonUnavailable
         }
+        SendError::SubmitLoopBreakerTripped { .. } => BuildErrorKind::SubmitLoopBreakerTripped,
     }
 }
 
@@ -786,11 +892,36 @@ where
 
         state.in_flight.remove(&id);
         release_output_locks_for(state, id);
+        // F28/F37: a definite accept ends any consecutive-rejection streak
+        // (it does not clear a tripped breaker — see `SubmitLoopBreaker`).
+        state.loop_breaker.record_accept();
 
+        // F14 (`DAEMON_SUBMIT_VERDICT.md` §2.6): the accepting verdict means
+        // the tx is network-exposed, not settled. Instead of the legacy
+        // durable `spent = true` write, place the persisted
+        // awaiting-confirmation lock on each input: the output stays
+        // unselectable across restarts (same-key-image rebuild hazard,
+        // §7.1) until refresh observes the spend on-chain
+        // (confirmed-present release, `mark_spent`) or the watchdog horizon
+        // resolves the tx as confirmed-absent.
         self.ledger.with_ledger_block_mut(|ledger| {
+            let accepted_at_height = ledger.height();
             for index in selected_indices {
                 if let Some(td) = ledger.transfer_mut(index) {
-                    td.spent = true;
+                    // Race guard: if the tx mined during the submit round-trip,
+                    // a refresh may already have observed the spend and run
+                    // `mark_spent` (spent = true, lock cleared). The
+                    // confirmed-present state is authoritative — re-locking an
+                    // already-spent input would persist an inconsistent
+                    // `spent && awaiting_confirmation` record whose F14 lock no
+                    // future `mark_spent` ever clears. Place the lock only on
+                    // inputs still unspent at commit time.
+                    if !td.spent {
+                        td.awaiting_confirmation = Some(AwaitingConfirmation {
+                            tx_hash,
+                            accepted_at_height,
+                        });
+                    }
                 }
             }
         });
@@ -823,7 +954,58 @@ where
             },
         );
 
+        // F28/F37 loop-breaker (§2.5): a second consecutive same-kind
+        // rejection is a systematic disagreement — alarm once and gate
+        // further builds until the operator acknowledges.
+        if state.loop_breaker.record_terminal(kind) {
+            emit_pending_tx_diagnostic(
+                self.sink.as_ref(),
+                PendingTxDiagnostic::SubmitLoopBreakerTripped {
+                    reservation_id: id,
+                    kind,
+                },
+            );
+        }
+
         SubmitError::DaemonRejectedTerminal { kind }
+    }
+
+    /// Restore a reservation whose daemon verdict was a §2.5 retryable
+    /// rejection (`StaleRoot` / `ReferenceTooRecent` / `ReferenceNotFound`)
+    /// to `consumer_held`.
+    ///
+    /// The verdict is definite (not in pool, not in chain — under
+    /// single-egress, provably unrelayed), but the input selection remains
+    /// sound, so the `output_locks` are **retained**: releasing them would
+    /// let a competing build select the same inputs and broadcast a second
+    /// same-key-image artifact (`DAEMON_SUBMIT_VERDICT.md` §7.1). The
+    /// entry returns with its full re-anchor substrate, so the consumer's
+    /// next `submit(rid, seen_gen)` reproves against a fresh reference
+    /// where the pre-flight staleness check calls for it (the `StaleRoot`
+    /// remedy) or simply re-offers the same bytes (`ReferenceTooRecent` /
+    /// `ReferenceNotFound` after their per-cause waits).
+    fn finalize_submit_retryable(
+        &self,
+        state: &mut PendingTxState,
+        id: ReservationId,
+        cause: RetryableRejectCause,
+    ) -> SubmitError {
+        if let Some(flight) = state.in_flight.remove(&id) {
+            state.consumer_held.insert(id, flight.entry);
+        }
+
+        emit_pending_tx_diagnostic(
+            self.sink.as_ref(),
+            PendingTxDiagnostic::SubmitRetryablyRejected {
+                reservation_id: id,
+                cause,
+            },
+        );
+
+        SubmitError::DaemonRejectedRetryable {
+            cause,
+            reservation_id: id,
+        }
     }
 
     fn finalize_submit_ambiguous(
@@ -835,7 +1017,7 @@ where
         let tx_hash = state
             .in_flight
             .get(&id)
-            .map(|flight| canonical_tx_id(&flight.tx_bytes))
+            .map(|flight| canonical_tx_id(&flight.entry.tx_bytes))
             .unwrap_or_else(|| phase1_tx_hash(id));
 
         emit_pending_tx_diagnostic(
@@ -1835,25 +2017,24 @@ where
                 });
             }
 
-            // Consent satisfied. Move the entry out of `consumer_held` (no deep
-            // clone of `tx_bytes`) and flip it to `in_flight` atomically under the
-            // lock, then send lock-free — "committed as of" the flip (F-H). The
-            // lock is held continuously since the peek above (no await), so the
-            // entry is still present. Only the one `tx_bytes` copy `in_flight`
-            // retains (for ambiguous-resolution hash/retry) is cloned; the
-            // original moves on to the send.
+            // Consent satisfied. Move the entry out of `consumer_held` and flip it
+            // to `in_flight` atomically under the lock, then send lock-free —
+            // "committed as of" the flip (F-H). The lock is held continuously
+            // since the peek above (no await), so the entry is still present.
+            // `in_flight` preserves the *whole* entry (re-anchor substrate
+            // included) so a §2.5 retryable rejection can restore it to
+            // `consumer_held` losslessly; one `tx_bytes` clone moves on to the
+            // send.
             let held = state
                 .consumer_held
                 .remove(&id)
                 .expect("consumer_held membership established above, lock held throughout");
-            let tx_bytes = held.tx_bytes;
+            let tx_bytes = held.tx_bytes.clone();
             let submitted_at = Instant::now();
             state.in_flight.insert(
                 id,
                 InFlightSubmit {
-                    tx_bytes: tx_bytes.clone(),
-                    snapshot_id: held.snapshot_id,
-                    created_at: held.created_at,
+                    entry: held,
                     submitted_at,
                 },
             );
@@ -1868,6 +2049,9 @@ where
                     Ok(tx_hash) => Ok(self.finalize_submit_accept(&mut state, id, tx_hash)),
                     Err(SubmitError::DaemonRejectedTerminal { kind }) => {
                         Err(self.finalize_submit_terminal(&mut state, id, kind))
+                    }
+                    Err(SubmitError::DaemonRejectedRetryable { cause, .. }) => {
+                        Err(self.finalize_submit_retryable(&mut state, id, cause))
                     }
                     Err(SubmitError::DaemonAmbiguous {
                         kind,
@@ -1901,6 +2085,9 @@ where
                 return Err(match submit_err {
                     SubmitError::DaemonRejectedTerminal { kind } => {
                         self.finalize_submit_terminal(&mut state, id, kind)
+                    }
+                    SubmitError::DaemonRejectedRetryable { cause, .. } => {
+                        self.finalize_submit_retryable(&mut state, id, cause)
                     }
                     SubmitError::DaemonAmbiguous { kind, .. } => {
                         self.finalize_submit_ambiguous(&state, id, kind)
@@ -1951,6 +2138,23 @@ where
         );
 
         Ok(())
+    }
+
+    /// Operator acknowledgment of a tripped F28/F37 loop-breaker
+    /// (`DAEMON_SUBMIT_VERDICT.md` §2.5): clears the tripped state and
+    /// the consecutive-rejection streak, re-enabling `build`. The
+    /// operator investigates the systematic disagreement the alarm
+    /// named *before* acknowledging — the breaker cannot distinguish a
+    /// fixed root cause from an unfixed one.
+    ///
+    /// `dead_code` allow: the consumer-facing wiring (CLI/RPC operator
+    /// surface) lands with the §5.3 watchdog; the reset path exists now
+    /// so the breaker's lifecycle is complete and testable.
+    #[allow(dead_code)]
+    pub(crate) fn acknowledge_submit_loop_breaker(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.loop_breaker.acknowledge();
+        }
     }
 
     #[allow(dead_code)] // trait surface only; production wiring lands with mempool eviction (V3.x).
@@ -2016,6 +2220,7 @@ where
             consumer_held: HashMap::new(),
             in_flight: HashMap::new(),
             next_id: 0,
+            loop_breaker: SubmitLoopBreaker::default(),
         });
         Self {
             signer,
@@ -2072,6 +2277,25 @@ where
                 },
             );
             return Err(err);
+        }
+
+        // F28/F37 loop-breaker gate (§2.5): while tripped, automatic
+        // builds are refused — the alarm was raised at trip time and only
+        // operator acknowledgment re-enables building.
+        {
+            let tripped = self
+                .state
+                .lock()
+                .map_err(|_| SendError::CannotSign {
+                    reason: "pending-tx state lock poisoned",
+                })?
+                .loop_breaker
+                .tripped();
+            if let Some(kind) = tripped {
+                let err = SendError::SubmitLoopBreakerTripped { kind };
+                emit_build_failed(self.sink.as_ref(), &err);
+                return Err(err);
+            }
         }
 
         let fee_snapshot = self.fee_snapshot_source.fetch().await.map_err(|err| {
@@ -3220,7 +3444,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_then_submit_marks_outputs_spent() {
+    async fn build_then_submit_places_awaiting_confirmation_lock() {
         // CT-5c: a consistent ledger+tree so the real `assemble_path` resolves
         // the spent output and the signer builds a real membership proof.
         let (ledger, _tree_dir, tree) =
@@ -3277,16 +3501,23 @@ mod tests {
         assert_eq!(tx_hash, canonical_tx_id(&built.tx_bytes));
         assert_eq!(pending.outstanding(), 0);
 
-        let spent = pending
-            .ledger
-            .read()
-            .ledger
-            .ledger
-            .transfers()
-            .first()
-            .expect("output 0")
-            .spent;
-        assert!(spent);
+        // F14 (§2.6): submit-accept places the awaiting-confirmation lock
+        // (keyed by the accepted txid), not a durable `spent` write —
+        // refresh is the settlement authority for `spent`.
+        {
+            let guard = pending.ledger.read();
+            let td = guard.ledger.ledger.transfers().first().expect("output 0");
+            assert!(!td.spent, "spent stays refresh-authoritative");
+            let lock = td
+                .awaiting_confirmation
+                .as_ref()
+                .expect("submit-accept places the F14 lock");
+            assert_eq!(lock.tx_hash, tx_hash);
+            assert!(
+                !td.is_spendable(u64::MAX),
+                "locked output must be excluded from selection"
+            );
+        }
     }
 
     /// PR 2c-1 — the real-tree closing milestone for archival bond-post
@@ -3299,7 +3530,7 @@ mod tests {
     /// consistent `funded_ledger_and_tree` fixture, and its membership path is
     /// assembled by the production `CurveTreeClient::assemble_path` (CT-5c) — the
     /// same path the real-tree transfer KAT
-    /// (`build_then_submit_marks_outputs_spent`) drives. The bond's `bond_credit`
+    /// (`build_then_submit_places_awaiting_confirmation_lock`) drives. The bond's `bond_credit`
     /// rides as the single-sourced output-side cleartext term through
     /// `tx_builder::sign_transaction_with_terms`, the credit-term threading the
     /// 2a docstring deferred to this milestone.
@@ -3806,9 +4037,7 @@ mod tests {
             state.in_flight.insert(
                 built.id,
                 InFlightSubmit {
-                    tx_bytes: held.tx_bytes,
-                    snapshot_id: held.snapshot_id,
-                    created_at: held.created_at,
+                    entry: held,
                     submitted_at: Instant::now(),
                 },
             );
@@ -3935,6 +4164,204 @@ mod tests {
             .build(standard_request(7_000))
             .await
             .expect("outputs released");
+    }
+
+    // -- F28/F37 loop-breaker (`DAEMON_SUBMIT_VERDICT.md` §2.5) --------------
+
+    /// Streak semantics, unit-level over [`SubmitLoopBreaker`] directly.
+    #[test]
+    fn loop_breaker_streak_semantics() {
+        // Second consecutive same-kind rejection trips, exactly once.
+        let mut b = SubmitLoopBreaker::default();
+        assert!(!b.record_terminal(TerminalErrorKind::Malformed));
+        assert!(b.record_terminal(TerminalErrorKind::Malformed));
+        assert_eq!(b.tripped(), Some(TerminalErrorKind::Malformed));
+        // Already tripped: no re-alarm on further rejections.
+        assert!(!b.record_terminal(TerminalErrorKind::Malformed));
+
+        // A different in-scope kind resets the streak.
+        let mut b = SubmitLoopBreaker::default();
+        assert!(!b.record_terminal(TerminalErrorKind::FeeTooLow));
+        assert!(!b.record_terminal(TerminalErrorKind::Malformed));
+        assert!(!b.record_terminal(TerminalErrorKind::FeeTooLow));
+        assert_eq!(b.tripped(), None);
+
+        // An accept resets the streak.
+        let mut b = SubmitLoopBreaker::default();
+        assert!(!b.record_terminal(TerminalErrorKind::FeeTooLow));
+        b.record_accept();
+        assert!(!b.record_terminal(TerminalErrorKind::FeeTooLow));
+        assert_eq!(b.tripped(), None);
+
+        // An out-of-scope kind (`DoubleSpend` — no rebuild prescription,
+        // so no loop to break) resets the streak: two in-scope
+        // `Unrecognized` rejections with an out-of-scope one between
+        // them are not consecutive and must not trip.
+        let mut b = SubmitLoopBreaker::default();
+        assert!(!b.record_terminal(TerminalErrorKind::Unrecognized));
+        assert!(!b.record_terminal(TerminalErrorKind::DoubleSpend));
+        assert!(!b.record_terminal(TerminalErrorKind::Unrecognized));
+        assert_eq!(b.tripped(), None);
+
+        // `Unrecognized` is in scope (§2.5: the F28 loop-breaker applies).
+        let mut b = SubmitLoopBreaker::default();
+        assert!(!b.record_terminal(TerminalErrorKind::Unrecognized));
+        assert!(b.record_terminal(TerminalErrorKind::Unrecognized));
+        assert_eq!(b.tripped(), Some(TerminalErrorKind::Unrecognized));
+
+        // Acknowledgment clears tripped state and streak.
+        let mut b = SubmitLoopBreaker::default();
+        b.record_terminal(TerminalErrorKind::Malformed);
+        b.record_terminal(TerminalErrorKind::Malformed);
+        b.acknowledge();
+        assert_eq!(b.tripped(), None);
+        assert!(!b.record_terminal(TerminalErrorKind::Malformed));
+    }
+
+    /// Drive the breaker through the engine: two consecutive same-kind
+    /// rejections alarm once and gate `build`; acknowledgment re-enables.
+    async fn assert_loop_breaker_trips_on(kind: TerminalErrorKind) {
+        let sink = Arc::new(AssertionSink::new());
+        let (pending, _ledger, _tree_dir) =
+            funded_pending_tx_with_sink(Arc::clone(&sink) as Arc<dyn DiagnosticSink>).await;
+
+        // First rejection: outputs released, no alarm, rebuild allowed.
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonRejectedTerminal { kind }));
+        pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect_err("first rejection");
+
+        // One-shot rebuild (the §2.5 disposition) — rejected again.
+        let rebuilt = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("one-shot rebuild allowed after first rejection");
+        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonRejectedTerminal { kind }));
+        pending
+            .submit(rebuilt.id, rebuilt.content_gen)
+            .await
+            .expect_err("second rejection");
+
+        // The second consecutive rejection alarmed exactly once.
+        let events = sink.recorded_pending();
+        let alarms = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    PendingTxDiagnostic::SubmitLoopBreakerTripped { kind: k, .. } if *k == kind
+                )
+            })
+            .count();
+        assert_eq!(alarms, 1, "exactly one alarm per trip: {events:?}");
+
+        // Third build is refused: never loop.
+        let err = pending
+            .build(standard_request(7_000))
+            .await
+            .expect_err("third build must be refused while tripped");
+        assert!(
+            matches!(err, SendError::SubmitLoopBreakerTripped { kind: k } if k == kind),
+            "expected SubmitLoopBreakerTripped, got {err:?}"
+        );
+
+        // Operator acknowledgment re-enables building.
+        pending.acknowledge_submit_loop_breaker();
+        pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build allowed after acknowledgment");
+    }
+
+    /// F28: `Malformed` one-shot loop-breaker.
+    #[tokio::test]
+    async fn loop_breaker_trips_on_second_consecutive_malformed() {
+        assert_loop_breaker_trips_on(TerminalErrorKind::Malformed).await;
+    }
+
+    /// F37: `FeeTooLow` bounded retry — second consecutive `FeeTooLow`
+    /// on the rebuilt tx → alarm, no third build.
+    #[tokio::test]
+    async fn loop_breaker_trips_on_second_consecutive_fee_too_low() {
+        assert_loop_breaker_trips_on(TerminalErrorKind::FeeTooLow).await;
+    }
+
+    /// §2.5 retryable rejection (`StaleRoot` / `ReferenceTooRecent` /
+    /// `ReferenceNotFound`): the reservation is restored to
+    /// `consumer_held` with its `output_locks` retained — a definite
+    /// verdict whose remedy preserves the input selection — and the
+    /// same reservation is resubmittable afterwards.
+    #[tokio::test]
+    async fn submit_retryable_rejection_restores_reservation() {
+        let sink = Arc::new(AssertionSink::new());
+        let (pending, _ledger, _tree_dir) =
+            funded_pending_tx_with_sink(Arc::clone(&sink) as Arc<dyn DiagnosticSink>).await;
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonRejectedRetryable {
+            cause: RetryableRejectCause::StaleRoot,
+            reservation_id: built.id,
+        }));
+
+        let err = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            SubmitError::DaemonRejectedRetryable {
+                cause: RetryableRejectCause::StaleRoot,
+                ..
+            }
+        ));
+
+        // Restored to consumer_held with output locks retained: the
+        // reservation is still outstanding, back under consumer
+        // ownership, and its inputs stay locked against competing
+        // selection.
+        assert_eq!(pending.outstanding(), 1);
+        {
+            let state = pending.state.lock().expect("state lock");
+            assert!(
+                state.consumer_held.contains_key(&built.id),
+                "reservation restored to consumer_held"
+            );
+            assert!(
+                !state.in_flight.contains_key(&built.id),
+                "reservation no longer in flight"
+            );
+            assert!(
+                state.output_locks.values().any(|owner| *owner == built.id),
+                "output locks retained for the restored reservation"
+            );
+        }
+
+        let events = sink.recorded_pending();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                PendingTxDiagnostic::SubmitRetryablyRejected {
+                    cause: RetryableRejectCause::StaleRoot,
+                    ..
+                }
+            )),
+            "expected SubmitRetryablyRejected emission: {events:?}"
+        );
+
+        // The restored reservation resubmits — this time accepted.
+        let tx_hash = pending
+            .submit(built.id, built.content_gen)
+            .await
+            .expect("restored reservation resubmits");
+        assert_eq!(tx_hash, canonical_tx_id(&built.tx_bytes));
+        assert_eq!(pending.outstanding(), 0);
     }
 
     #[tokio::test]
@@ -4493,16 +4920,20 @@ mod tests {
         assert_eq!(tx_hash, canonical_tx_id(&built.tx_bytes));
         assert_eq!(daemon.submitted_count(), 1);
 
-        let spent = pending
-            .ledger
-            .read()
-            .ledger
-            .ledger
-            .transfers()
-            .first()
-            .expect("output 0")
-            .spent;
-        assert!(spent);
+        // F14 (§2.6): accept places the awaiting-confirmation lock, not a
+        // durable `spent` write.
+        {
+            let guard = pending.ledger.read();
+            let td = guard.ledger.ledger.transfers().first().expect("output 0");
+            assert!(!td.spent, "spent stays refresh-authoritative");
+            assert_eq!(
+                td.awaiting_confirmation
+                    .as_ref()
+                    .expect("submit-accept places the F14 lock")
+                    .tx_hash,
+                tx_hash
+            );
+        }
     }
 
     #[tokio::test]

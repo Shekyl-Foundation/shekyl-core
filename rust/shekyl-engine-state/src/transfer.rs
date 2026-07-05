@@ -25,6 +25,46 @@ use crate::{
 /// the curve tree. Mirrors `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE` (C++).
 pub const SPENDABLE_AGE: u64 = 10;
 
+/// The F14 awaiting-confirmation lock state
+/// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.6).
+///
+/// Set on an output when a transaction spending it is **network-exposed**
+/// (daemon verdict `Accepted` / `AlreadyInPool`); replaces the old durable
+/// `spent = true` write at submit-accept. While present, the output is
+/// excluded from selection ([`TransferDetails::is_spendable`]) — a wallet
+/// restart between accept and confirmation must not make the output
+/// selectable again, or the wallet builds a second tx over the same input
+/// with the **same key image** (a self-inflicted broadcast-linkage
+/// artifact, §7.1). Persisted in the AEAD-sealed ledger for exactly that
+/// reason (§2.6 invariant 1).
+///
+/// Two release paths, both required (§2.6 invariant 2):
+///
+/// - **Confirmed-present:** refresh observes the spend on-chain →
+///   [`crate::ledger_indexes::LedgerIndexes::mark_spent`] transitions the
+///   output to refresh-authoritative `spent` and clears this state.
+/// - **Confirmed-absent:** the tx never confirms (evicted, never landed) →
+///   the wallet's watchdog horizon releases the lock after converting
+///   absence into a definite verdict where reachable (resubmit-same-bytes
+///   probe) or on observed absence otherwise. Release is not rebuild
+///   authorization (§2.6 invariant 3).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AwaitingConfirmation {
+    /// Canonical txid of the network-exposed transaction spending this
+    /// output — the watchdog's chain-confirmation key.
+    pub tx_hash: TxHash,
+    /// Wallet synced height when the accepting verdict was observed; the
+    /// baseline for the watchdog's escape horizon.
+    pub accepted_at_height: u64,
+}
+
+impl Zeroize for AwaitingConfirmation {
+    fn zeroize(&mut self) {
+        self.tx_hash.zeroize();
+        self.accepted_at_height.zeroize();
+    }
+}
+
 /// A precomputed FCMP++ curve-tree path for an output.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct FcmpPrecomputedPath {
@@ -106,6 +146,13 @@ pub struct TransferDetails {
     /// `#[serde(transparent)]` over `[u8; 32]` so the on-disk wire
     /// format is unchanged from `Option<[u8; 32]>`.
     pub key_image: Option<KeyImage>,
+    /// F14 awaiting-confirmation lock (`DAEMON_SUBMIT_VERDICT.md` §2.6):
+    /// a network-exposed spend of this output awaits chain confirmation.
+    /// Excludes the output from selection while present; cleared by
+    /// refresh-authoritative confirmation (confirmed-present) or the
+    /// watchdog horizon (confirmed-absent). See [`AwaitingConfirmation`].
+    #[serde(default)]
+    pub awaiting_confirmation: Option<AwaitingConfirmation>,
 
     // ── M3b deterministic-handle pathway (per `STAGE_1_PR_3_M3B_PREFLIGHT.md`) ──
     //
@@ -177,9 +224,15 @@ impl TransferDetails {
     /// Whether this output is available for regular spending.
     ///
     /// Outputs below `eligible_height` are immature (no curve-tree path yet)
-    /// and cannot be spent.
+    /// and cannot be spent. Outputs with a network-exposed spend awaiting
+    /// chain confirmation ([`Self::awaiting_confirmation`], F14 §2.6) are
+    /// excluded: selecting one would build a second tx bearing the same
+    /// key image.
     pub fn is_spendable(&self, current_height: u64) -> bool {
-        !self.spent && !self.frozen && current_height >= self.eligible_height
+        !self.spent
+            && !self.frozen
+            && self.awaiting_confirmation.is_none()
+            && current_height >= self.eligible_height
     }
 
     /// The amount held in this output.
@@ -211,6 +264,16 @@ impl TransferDetails {
 // upstream `Schema` impl and is wire-identical to `serde_bytes::Bytes` in
 // postcard (both emit `varint(len) || bytes`).
 
+/// Wire mirror of [`AwaitingConfirmation`] for the schema snapshot; the
+/// same rename delegation as the enclosing mirror keeps the snapshot's
+/// type name matching the real struct.
+#[derive(postcard_schema::Schema)]
+#[allow(dead_code)]
+struct AwaitingConfirmationSchema {
+    tx_hash: [u8; 32],
+    accepted_at_height: u64,
+}
+
 #[derive(postcard_schema::Schema)]
 #[allow(dead_code)]
 struct TransferDetailsSchema {
@@ -228,6 +291,9 @@ struct TransferDetailsSchema {
     spent: bool,
     spent_height: Option<u64>,
     key_image: Option<[u8; 32]>,
+    // `AwaitingConfirmation` mirrored field-for-field: `TxHash` is a
+    // transparent 32-byte-array newtype on the wire.
+    awaiting_confirmation: Option<AwaitingConfirmationSchema>,
     // Non-secret on-chain payloads; reference the workspace types
     // directly (their `postcard_schema::Schema` derives lock the wire
     // shape from the source side per
@@ -262,6 +328,11 @@ impl Zeroize for TransferDetails {
         self.spent.zeroize();
         self.spent_height.zeroize();
         self.key_image.zeroize();
+        // `Option<AwaitingConfirmation>::zeroize` wipes the inner fields AND
+        // resets the tag to `None` (matching the sibling `Option` fields);
+        // the hand-rolled `if let Some` left it `Some(all-zero)`, and would
+        // have silently skipped any future secret field on the inner struct.
+        self.awaiting_confirmation.zeroize();
         // `source_ciphertext` and `output_handle` are non-secret — see
         // the field docs above. `HybridCiphertext` is on-chain public
         // data; `OutputHandle` is wallet-private-derivable from any
@@ -298,6 +369,10 @@ impl std::fmt::Debug for TransferDetails {
             .field("block_height", &self.block_height)
             .field("amount", &self.amount())
             .field("spent", &self.spent)
+            .field(
+                "awaiting_confirmation",
+                &self.awaiting_confirmation.is_some(),
+            )
             .field("eligible_height", &self.eligible_height)
             .field("frozen", &self.frozen)
             .finish_non_exhaustive()
@@ -322,6 +397,7 @@ mod tests {
             spent: false,
             spent_height: None,
             key_image: None,
+            awaiting_confirmation: None,
             source_ciphertext: None,
             output_handle: None,
             eligible_height: 110,
