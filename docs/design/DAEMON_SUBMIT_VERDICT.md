@@ -4,7 +4,9 @@
 rounds 1–5 accreted in review before this document was written, round 6 reviewed
 the document itself. The rounds' decisions (D1–D5) and findings (F1–F39 +
 minors) are recorded in §1 and folded into every section rather than appended
-as errata. Round 5 confirmed the Rust cutover, the wallet-owned-liveness split,
+as errata. The 2c design round (2026-07-04, post-convergence) added F40
+(`AlreadyInChain { height }`, §2.2 carve-out) and F41 (constant-work-on-Conceal
+invariant, §3.1) without reopening the architecture. Round 5 confirmed the Rust cutover, the wallet-owned-liveness split,
 the embargo-as-kernel resolution, and the two F22 pre-existing-defect commits
 as sound and correctly scoped. Round 6 resolved the one finding that had
 dropped through the round-2→round-3 index seam (F14, awaiting-confirmation
@@ -90,6 +92,7 @@ here are binding; the referenced sections carry the mechanics.
 | 4 | Liveness ownership hand-off; embargo-as-kernel; health context; privacy-tiered escape ladder; `diffused` staking reopen | §5, §11 |
 | 5 | F30 (rebuild-wound mechanization — **gating**, folded from first draft), F31 (resubmit is a status query), F32 (health-metadata trust rider), F33 (certificate witness type + blob binding); minors a–d (commit-check-time wording, matrix-pending hypothesis, F22 leg interaction, O(1) template re-check) | §7.1, §5.3, §7.2, §3.3/§3.5, §3.1, §8, §6 |
 | 6 | F14 resolution (awaiting-confirmation persistence + confirmed-absent release), F34 (Phase-D dynamic-policy re-gate), F35 (noise-zone black-hole threat entry), F36 (archival-arm matrix rows, pinned at source), F37 (`FeeTooLow` loop-breaker + fee-param rider rows), F38 (schema-evolution authoring rule), F39 (Phase-C concurrency bound); minors a–d (Phase-D most-terminal-first order, watchdog present/absent branch, second-entry-point sweep, lock-freedom-by-construction sentence) | §2.6, §3.1, §7.5, §8.7.1, §2.5, §7.2, §2.3, §11, §5.3, §9 |
+| 2c (2026-07-04, post-convergence) | F40 (`AlreadyInChain { height }` — §2.2 reasoned carve-out with R1 rescan-never-release + R2 fruitless-rescan breaker), F41 (constant-work-on-Conceal invariant + transport-layer per-source rate-limit sibling + cache reversion clause) | §2.1, §2.2, §2.3, §2.5, §3.1, §4.1, §7.2, §10, §11 |
 
 The round-2 row's F13–F19 mapping was itself a round-6 fix: the index
 previously jumped from round 1 to round 3, and F14 — the one round-2 finding
@@ -485,6 +488,53 @@ keeping the owner's wider `all`-category view for its own admission engine.
 This was live in V3.0 (own-daemon still exposes the restricted public bind);
 the §11 multi-daemon reopen re-evaluates the residual timing delta (a
 concealed duplicate skips the insert, as the legacy existing-tx arm did).
+
+**Constant-work-on-Conceal (F41, 2c design round 2026-07-04 — invariant,
+not new design).** The oracle closure above holds only if `Conceal` is
+indistinguishable in *time* as well as in verdict. Today that is true by
+construction: the `Conceal` arm deliberately does not early-return — it
+falls through to the full Phase-C battery
+([`engine.rs`](../../rust/shekyl-daemon-rpc/src/submit/engine.rs), the
+`disclose_pool_presence` fall-through) — and the Rust engine has **no
+verification cache** (verified: no memoization anywhere on the submit
+path). That is a security property held by the *absence of an
+optimization*, with nothing previously asserting it — precisely the state
+that silently vacates when a well-meaning perf PR adds a txid→certificate
+or txid→verdict cache and the cached hit returns fast. A fast path for
+already-seen bytes re-opens the stem-presence oracle as a **timing**
+oracle: the foreign prober no longer needs a verdict difference, only a
+latency difference. The invariant, stated as the coupling every future
+change must satisfy:
+
+> **F41.** Any cache, memoization, or fast path added to the submit
+> route must either **exempt** the `Conceal` path (a foreign-caller
+> submission whose bytes are pool-resident in a non-broadcast state runs
+> the full battery regardless of any cached result) or **equally delay**
+> it to full-battery cost. A perf/caching PR touching submit that does
+> not cite F41 and demonstrate one of the two is rejected on review.
+
+Two companions make the invariant durable rather than aspirational:
+
+- **DoS relief lives at the transport layer, not in a cache.** The
+  pressure that would motivate a verification cache is resubmit spam —
+  cheap-to-send, expensive-to-verify bytes. That pressure is relieved
+  where it does not touch the timing property: **per-source rate
+  limiting at the transport/handler layer**, tier-appropriate — **Owner
+  is never rate-limited** (the F31 status query is legitimate,
+  unbounded-in-principle wallet behavior); **Foreign has no legitimate
+  resubmit-spam case** (an honest relay submits a given tx once), so a
+  per-source limiter costs honest traffic nothing. This sits beside the
+  F39 semaphore, which bounds aggregate concurrency but not per-source
+  rate; the two are complements, not substitutes.
+- **The known residual is disclosed, not hidden by the invariant:** a
+  concealed duplicate skips the Phase-D insert (as the legacy
+  existing-tx arm did), a small timing delta at the commit tail. F41
+  guards the dominant cost (Phase-C verification, orders of magnitude
+  above the insert); the insert-skip residual stays on the §11
+  multi-daemon reopen's ledger where it already lives.
+
+Test obligation in §10; reversion clause (the terms under which a
+submit-path cache may land) in §11.
 
 **Phase C — verification (Rust, no locks held anywhere).** Ref-age window
 arithmetic (min 5 / max 100, from config); fee floor against snapshot params;
@@ -1362,6 +1412,14 @@ enumeration above is the complete submit surface.
    horizon**, via verdict where reachable and via observed-absence
    otherwise (confirmed-absent leg); confirmed-present → refresh clears to
    spent-final.
+9. **Conceal timing uniformity (F41):** response-time comparison between a
+   foreign-caller submit of embargoed-pool-resident bytes (the `Conceal`
+   path) and a foreign-caller submit of fresh never-seen bytes of the same
+   shape — the two distributions must be statistically indistinguishable at
+   Phase-C granularity (the assertion is "both ran the full battery," not a
+   wall-clock equality; a mock verifier counting invocations is the
+   robust form). The test is the tripwire F41 names: it goes red the day a
+   cache gives `Conceal` a fast path.
 
 ---
 
@@ -1378,6 +1436,7 @@ enumeration above is the complete submit surface.
 | `SubmitStateShim` over C++ FFI | The Rust mempool lands | Swap the trait impl; engine, contract, wallet untouched (§3.2). This is the *planned* reversion |
 | Health-based wallet branching own-daemon-gated (F32) | Multi-daemon reopen | Same round as the cool-off row; peer count + sync height + fee params + construction-time chain view enter as untrusted remote metadata |
 | New top-level `SubmitVerdict` tags rejected (F38 — additive rejection semantics go under `RejectCause`) | A genuinely new **non-rejection** disposition emerges that no `RejectCause` variant can express (a new stable state of the submitted bytes, not a new reason for refusing them) | Coordinated wire-version bump: contract amendment round, skew-test extension, dual-version deployment window — never a silent tag addition |
+| Submit-path verification cache rejected (F41 — constant-work-on-Conceal) | Measured Phase-C load on a production-shaped workload that the transport-layer per-source rate limiter + F39 semaphore demonstrably cannot absorb (the DoS-relief siblings must be shown insufficient first, not skipped) | Perf design round that cites F41 and demonstrates either Conceal-exemption or equal-delay; the §10 item-9 timing-uniformity test must stay green through the change — a red is a rejected PR, not a test to update |
 
 ---
 

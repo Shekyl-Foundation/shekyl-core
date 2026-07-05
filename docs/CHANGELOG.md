@@ -488,6 +488,26 @@
 
 ### Changed
 
+- **docs: constant-work-on-Conceal named as invariant F41 (2c design
+  round, `docs/design/DAEMON_SUBMIT_VERDICT.md` §3.1/§10/§11).** The
+  stem-presence-oracle closure was held by an accident of absence: the
+  `Conceal` path runs the full Phase-C battery and no verification cache
+  exists — true, load-bearing, and previously asserted by nothing, so
+  the first well-meaning perf PR adding a txid cache would have re-opened
+  the oracle as a timing oracle (fast cached hit vs full-verify tells the
+  foreign prober what the verdict no longer does). F41 states the
+  coupling: any submit-path cache must exempt the Conceal path or
+  equally delay it. Companions: a §10 timing-uniformity tripwire test
+  (both Conceal and fresh-bytes submits run the full battery, asserted
+  by verifier invocation counting); a §11 reversion clause naming the
+  only terms a cache may land under (rate-limiter + F39 semaphore shown
+  insufficient first); and the DoS-relief sibling pinned at the
+  transport layer — per-source rate limiting, Owner never limited,
+  Foreign per-source-limited — so the pressure that would motivate the
+  cache is relieved where it cannot touch the timing property.
+  Implementation obligations and the ordering constraint (both precede
+  the first perf/cache PR touching submit) tracked in `FOLLOWUPS.md`.
+
 - **docs: dispatch-shape post-freeze wargame — byte-holder enumeration
   confirms the freeze, adds two provenance pins (2c design round,
   `docs/design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §3.1.1).** The frozen
