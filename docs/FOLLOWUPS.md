@@ -7504,7 +7504,25 @@ one place to confirm each item's relationship to the wallet stack.
   adversarial read of the bounds themselves (is `r < 2` honest under the 1.86 panel; is
   the widened null the adversary's class or a subset; does the `K_COVER` derivation
   circle through the arm it gates), not a consistency rubber stamp.
-  **Target: pre-genesis (M1 blocks genesis; M6.2 lands with the §14.4 round).**
+  **Review-closure round R1 conducted (2026-07-06, §17; ratification pending):** all
+  three §16.10 attacks run to land. Attack 1 — the `r < 2` bar survives (claim-anchored,
+  observer-independent) but the *measured* `r(N)`'s N-invariance is unswept: **N-sweep
+  added** (§16.7 item 4, `N ∈ {10, 20, 50}`, `r < 2` at every swept `N`, a-priori).
+  Attack 2 — the family was still a proper subset: **members 4–5 added** (spectral
+  graph partition; seeded nearest-neighbor expansion — one leaked founder label must
+  not unravel the rest), and two **label-free channels** closed structurally: post-gate
+  claim-absence sorts non-claiming founders ⇒ M3 extended to the full lifecycle
+  (post/serve/claim/drain, §16.4); actualized enumeration collapses cover
+  **retroactively** for recorded history ⇒ new wargame §14.3.4, P4 gains a
+  **non-disclosure commitment** (consent-to-risk is not license-to-disclose; voluntary
+  disclosure is a named cover-collapse event), and the `K_COVER` cover model gains a
+  **founder-strip sensitivity row** (§16.2 obligation 3). Attack 3 — the `K_COVER`
+  cycle does not close: the validation projection (exchangeability) is `K`-independent
+  (the breaking joint); the calibration projection is a monotone fixed point, not a
+  vicious circle; the cover model must additionally carry **gate-open cohort dynamics**
+  with its demand assumption as a named conditional (§16.2 obligation 3). No bound
+  relaxed; all amendments adversary-strengthening, inside the pre-code window.
+  **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round).**
   **Open leg-(b) residual (rule 21), severity sharpened:** the *block-time* sealing re-run is
   confirmatory by construction (live `BondPostDispatched.at` is the due block — dispersal is
   sub-block, `U[0,60s)`, never entering `at`; `gf7_emits_bond_post_dispatched_per_submit`),

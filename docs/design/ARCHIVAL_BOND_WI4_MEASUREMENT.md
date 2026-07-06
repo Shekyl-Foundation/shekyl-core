@@ -155,6 +155,14 @@ claim ("advantage ≤ one excess de-anonymization") invariant, and the sweep
 reports the realized `N`, `P(link)`, and `r` together so the absolute
 number is always interpretable against the cover that produced it.
 
+*Pinned at review closure (2026-07-06, §17.1):* the ratio's N-invariance
+is a property of the **bound's meaning**, not of the **measurement** —
+`r` has only been measured at `N = 10`, and whether measured `r(N)` is
+flat in `N` is an empirical question about the score distribution's
+tail, not a definitional fact. The next measurement round carries an
+in-model N-sweep (§16.7 item 4) with the a-priori form: `r < 2` at
+**every** swept `N`, not only the posture anchor.
+
 **Why doubling-chance is the conservative choice, not a lax one.** The
 alternative floors are `A < 1/N` (ratio 2, chosen) versus a stricter
 `A → 0` (ratio → 1, no advantage tolerated). Ratio 1 is unachievable
@@ -804,6 +812,17 @@ it (§3.3's review-decision clause, exercised):
   decision, and nothing downstream may ever assume they were private. If
   any founder might later want a genesis persona to have been private,
   this posture does not and cannot provide that.
+  *Amended at review closure (2026-07-06, §17.2):* consent-to-risk is
+  **not license-to-disclose**. "Attributable" means the founders make no
+  privacy claim and can never require retroactive privacy; it does
+  **not** mean the persona↔founder mapping is published or publishable.
+  P4 therefore carries a **non-disclosure commitment**: the mapping is
+  never voluntarily disclosed, by anyone, ever — because the cover the
+  founder bonds provide to *users* survives only as long as the founder
+  set is non-enumerable (§14.3.4). Voluntary disclosure of any founder
+  persona is a named **cover-collapse event**, retroactive in effect,
+  and is treated with the same severity as a P4 consent failure in the
+  §14.5 reversion clause.
 
 ### 14.3 Wargames the posture must survive
 
@@ -841,6 +860,43 @@ than economic — the exposure exists for any privacy-critical user who
 serves the single-shard phase, so the phase must be closed to them, not
 merely unattractive. Founder personas serving the single shard are
 covered by P4 (attributable by consent).
+
+#### 14.3.4 Founder enumeration and retroactive cover collapse (added at review closure, 2026-07-06, §17.2)
+
+The §14.3.2 partition adversary sorts founders from users **using the
+observable channel**. This wargame is the adversary who gets the labels
+**for free** — voluntary disclosure, compelled disclosure, an opsec
+failure that identifies which personas were the foundation's. Two facts
+make this the sharpest attack on the posture:
+
+1. **The collapse is retroactive.** Chain timelines are permanent. A
+   user minted during the transition window had an anonymity set that
+   counted the founder bonds *at mint time*; if the founder set is
+   enumerated years later, the adversary re-runs the partition on the
+   recorded history with labels known, and that user's **historical**
+   effective `N` drops to the organic count. Founder cover is therefore
+   only as durable as founder **non-enumeration** — it is not a fact
+   established at launch and banked; it is a property that must keep
+   holding.
+2. **Post-gate behavior is an enumeration channel.** If founder wallets
+   post bonds but never claim rewards (staked for cover, not yield),
+   then once claims exist post-gate, *claim-absence* sorts them — a
+   partition rule needing no timing features at all. The disposition is
+   M3's, extended: the single-production-path requirement covers the
+   **full persona lifecycle** (post, serve, claim, drain), not only bond
+   dispatch (§16.4). Founders accrue and claim exactly as any user does
+   — M1's gate is uniform, so this costs nothing and closes the channel.
+   During the §14.4-measured window this axis is structurally clean:
+   M1's zero-accrual means claims are **uniformly absent for everyone**
+   pre-gate, so claim features are out of the arm's dictionary by
+   construction, not by omission.
+
+Consequences carried forward: P4 gains the non-disclosure commitment
+(§14.2); the `K_COVER` cover model gains a **founder-strip sensitivity
+row** (§16.2 obligation 3) quantifying what cover remains if the five
+are retroactively enumerated — the stripped number is the durability
+floor, and the M1 review decides how much reliance on non-enumeration
+the constant is allowed to price in.
 
 ### 14.4 The partition-adversary arm (pre-committed spec; hypothesis class widened 2026-07-06, pre-implementation)
 
@@ -889,6 +945,22 @@ the null distribution then models.
      distance; score its overlap with the founder set. This is the
      enumerate-"the five" adversary directly: founders individually
      unremarkable but mutually similar.
+  4. *Spectral partition on the pairwise-similarity graph* (`k` swept as
+     in member 1) — *added at review closure (2026-07-06, §17.2)*:
+     members 1–3 assume compact (centroid- or band-shaped) structure;
+     a similarity-graph cut catches non-spherical, chain-shaped, or
+     manifold-shaped founder structure that k-means and cohesion
+     enumeration both miss.
+  5. *Seeded nearest-neighbor expansion* — *added at review closure
+     (2026-07-06, §17.2)*: the adversary is **granted one true founder
+     label** (the realistic partial-compromise: one founder doxxed, one
+     opsec failure) and takes the `M − 1` nearest pairs in feature
+     space; score the overlap with the remaining founders. Seed drawn
+     uniformly over the founder set, averaged. Members 1–4 are all
+     unsupervised; this is the semi-supervised shape none of them
+     covers, and it is the on-ramp to the §14.3.4 enumeration collapse
+     — the arm must show one leaked label does not unravel the rest.
+     Calibration: permutation over the **non-seed** labels only.
 - **The statistic.** `T = max over F` of label agreement, per trial,
   averaged over trials.
 - **The null.** The permutation distribution of the **same** `T` (labels
@@ -902,7 +974,12 @@ the null distribution then models.
   - **M-b (outlier):** four founders at posture, one with a distinct
     cadence. Detected by family member 2.
   - **M-c (cohesion):** five founders individually within the user range
-    but drawn from a narrow common band. Detected by family member 3.
+    but drawn from a narrow common band. Detected by family member 3;
+    *at review closure (2026-07-06):* **also** required detected by
+    member 5 under seeding (the seed's neighbors are the band — if the
+    seeded member cannot recover M-c's remaining four, it does not
+    bite), and member 4's bite is checked against whichever of M-a/M-c
+    its graph cut is sensitive to, recorded per-run.
   A family proven to bite on M-a alone proves nothing about its other
   members; each control validates the member aimed at its failure mode.
 - **Pass bounds (a-priori).**
@@ -1168,6 +1245,22 @@ smallest-cohort regime of that separate leak is never entered either.
    machinery), but the constant's finalization gates on the §14.4 run
    with the widened hypothesis class.** The two must not be reviewed
    independently with one silently assuming the other passed.
+3. *The cover model is dynamic and carries two named rows* (added at
+   review closure, 2026-07-06, §17.2–§17.3). The model that sets
+   `K_COVER` may not be a static founder headcount:
+   - **Founder-strip sensitivity row (§14.3.4):** cover at gate-open
+     computed both with and without the five founder personas. The
+     stripped number is the durability floor under retroactive
+     enumeration; the review decides how much reliance on
+     non-enumeration the constant prices in, explicitly, rather than
+     the with-founders number being used as if unconditional.
+   - **Gate-open cohort dynamics row (§17.3):** at gate-open, pent-up
+     demand produces an entry cohort that covers *itself* — the first
+     post-gate users are mutually covering, and that herd is
+     load-bearing for the transition. Its size is demand-driven and
+     empirically unknown pre-testnet (the same conditional axis as
+     §16.9 item 2); the model states its demand assumption as a named
+     conditional, not as a constant.
 
 ### 16.3 M2 — cover-gate proxy choice
 
@@ -1190,6 +1283,15 @@ point, so a future "founder convenience path" fails CI instead of
 silently reintroducing the distinguisher. What this cannot mechanize —
 off-path distinguishers (funding provenance, address reuse, temporal
 clustering) — is exactly what §14.4 measures and M4 caps.
+
+*Scope extended at review closure (2026-07-06, §17.2 / §14.3.4):* the
+single-path requirement covers the **full persona lifecycle** — post,
+serve, claim, drain — not only bond dispatch. A founder wallet that
+posts through the production path but never *claims* is sortable by
+claim-absence once claims exist post-gate (a partition rule needing no
+timing features). Founders accrue and claim through the identical
+production path as any user; the CI enumeration asserts one entry point
+per lifecycle stage, not one entry point for dispatch alone.
 
 ### 16.5 M4 — global anti-clustering during the launch window
 
@@ -1250,6 +1352,15 @@ The armed-gate-with-no-trigger pattern, applied to the measurement layer:
    restated as a build item: sub-block wall-clock emission (finer hook
    or harness timestamp), because a gate that structurally cannot
    observe the channel it certifies is not a gate.
+4. *N-sweep* (added at review closure, 2026-07-06, §17.1): the main
+   gate re-graded at `N ∈ {10, 20, 50}` in-model, with the a-priori
+   bound `r < 2` at **every** swept `N`. The bound's ratio form is
+   N-invariant by definition; whether the *measured* `r(N)` is flat is
+   an empirical property of the score distribution's tail that has only
+   been observed at `N = 10`. A measured `r` that grows with `N` means
+   the `N = 10` pass was a small-candidate-set artifact — that outcome
+   is a redesign signal, never absorbed. Rides the §14.4 round (same
+   generator, one extra sweep axis).
 
 ### 16.8 M7 — daemon-tip trust-site enumeration
 
@@ -1329,3 +1440,133 @@ by surviving the attempt, not by being agreed with. The review closing
 exists, the first genuinely hostile look at an unexamined bound comes
 from an adversary against a live chain, the one place a genesis-frozen
 constant cannot be reopened.
+
+## 17. Review-closure round R1 (2026-07-06): the three attacks, on the record
+
+**Status: conducted; ratification pending.** This section is the §16.10
+record — each attack was run to land, not to affirm, and where it
+landed the amendment is in place (dated, cross-referenced) rather than
+deferred. Closure of §§14–16 is ratified by the human review reading
+this record against the amended text; this section does not close
+itself.
+
+### 17.1 Attack 1 — `r < 2` under the panel that reaches `1.86`
+
+**The attack.** Argue the bar was calibrated against a weaker observer
+class: the original sweep cleared at `1.43–1.51` against arms now known
+to have been tautologically soft (§4.3.1's pre-amendment union), so
+perhaps `2` was only ever "comfortably above what the weak panel
+measured" and the honest bar under the oracle panel is lower.
+
+**Outcome: the bar survives; the attack lands elsewhere.** The bound is
+**claim-anchored, not observer-anchored**: §3.2 derives `r < 2` from
+"fewer than one excess de-anonymization across the anonymity set"
+(`N·A < 1`), a statement about the acceptable breach rate that does not
+mention the observer at all — and §3.4 committed, pre-sweep, that the
+bound is evaluated against the *strongest fielded arm*. Strengthening
+the panel therefore moves the **measured number toward the bar** (the
+correct direction, `1.51 → 1.86`) and cannot move the bar: the bar
+answers "how much linkage does the claim tolerate," the panel answers
+"how much linkage does the model exhibit." The git-committed a-priori
+ordering (§13.4) confirms the constant `2` predates every measured
+number, weak-panel numbers included.
+
+**Where it lands instead.** §3.1's annotation "`r` … N-invariant" is a
+property of the *bound's meaning*, not of the *measurement*: measured
+`r(N)` exists only at `N = 10`. If the true anchor's score is separable
+from the candidate field, `P(link)` stays high as `N` grows and
+measured `r` grows ~linearly — the `N = 10` pass would be a
+small-candidate-set artifact. This is testable in-model at trivial
+cost. **Amendment:** §3.2 pinned note; §16.7 item 4 (N-sweep,
+`N ∈ {10, 20, 50}`, bound `r < 2` at every swept `N`, a-priori).
+
+### 17.2 Attack 2 — a partition outside the widened family
+
+**The attack.** Construct adversary rules the §14.4 family (members
+1–3) cannot represent, and channels that need no timing rule at all.
+Four constructions were attempted; three landed.
+
+1. **Non-compact structure (landed).** Members 1–3 all assume compact
+   founder structure (centroids, per-feature ranks, cohesion bands). A
+   founder set lying on a chain or manifold in feature space defeats
+   all three while being cleanly separable by a similarity-graph cut.
+   **Amendment:** family member 4 (spectral partition, k-swept).
+2. **Semi-supervised expansion (landed).** All members were
+   unsupervised, but the realistic adversary starts with one leaked
+   label (a doxxed founder, one opsec failure) and expands by
+   nearest-neighbor. One free label must not unravel the other four.
+   **Amendment:** family member 5 (seeded expansion, permutation over
+   non-seed labels), with M-c required to bite under seeding.
+3. **Label-free channels (landed, the sharpest).** Two constructions
+   need no partition rule: *(a)* post-gate claim-absence — founder
+   wallets that post but never claim are sortable by lifecycle shape
+   once claims exist; *(b)* actualized enumeration — voluntary or
+   compelled disclosure of the persona↔founder mapping hands the
+   adversary the labels, and because chain timelines are permanent the
+   collapse is **retroactive**: transition-window users lose their
+   historical cover years after mint. **Amendments:** §14.3.4 (new
+   wargame), P4 non-disclosure commitment (§14.2), M3 extended to the
+   full lifecycle (§16.4), founder-strip sensitivity row in the
+   `K_COVER` cover model (§16.2 obligation 3).
+4. **Oblique projections (did not land).** Projection-pursuit over
+   oblique feature combinations is not a named member, but its
+   detectable shapes are covered: axis-aligned projections by member 2,
+   correlated-structure projections by members 3–4. Omission recorded
+   as safe **within the named dictionary**; an adversary computing
+   features outside the dictionary is the §4.3.1 off-model ceiling,
+   already named.
+
+**Outcome.** The family as previously widened was still a proper subset
+of the practical adversary's class — the attack the §16.10 bar was
+designed to force. The family is now five members with per-member bite
+requirements; the label-free channels are closed structurally (M3
+lifecycle, P4 non-disclosure) or priced explicitly (founder-strip
+row), not absorbed into the timing arm they would have invalidated.
+
+### 17.3 Attack 3 — tracing the `K_COVER` cycle closed
+
+**The attack.** Show the derivation is circular: the cover model sets
+`K_COVER`, `K_COVER` gates the reward, the reward shapes the population,
+and the population is what the §14.4 arm measures — so the constant
+validates itself.
+
+**Outcome: the cycle does not close; it breaks at a named joint.** The
+two consumers (§14.4's dual-disposition pin) consume **different
+projections**, and only one of them depends on `K`:
+
+- The **validation projection** (founder/user exchangeability, bound 1)
+  is `K`-independent: the arm measures whether the generator's posture
+  makes founders sortable, and nothing in that statistic reads the gate
+  constant. The property that licenses counting founders toward `N` is
+  established without reference to `K` — this is where the would-be
+  cycle breaks.
+- The **calibration projection** (cover thickness at gate-open) *is*
+  self-referential: thickness is computed under the arrival model the
+  gate itself induces (zero organic pre-gate, demand-driven cohort at
+  opening). But self-reference here is a **fixed-point condition, not
+  a vicious circle**: cover-at-opening is non-decreasing in `K` (later
+  opening ⇒ at least as much accumulated founder activity and pent-up
+  demand), so "minimal `K` with thickness ≥ target" is well-defined and
+  monotone-reachable. A circularity would require the *validation* to
+  depend on the constant it licenses; it does not.
+
+**What the attack surfaced anyway.** The calibration projection cannot
+be a static founder headcount: at gate-open the entry cohort covers
+*itself*, and that herd — not the five founders — is the bulk of the
+transition cover. Its size is demand-driven and pre-testnet unknown.
+**Amendment:** gate-open cohort dynamics row in the cover model (§16.2
+obligation 3), with the demand assumption stated as a named conditional
+on the same axis as §16.9 item 2.
+
+### 17.4 Disposition
+
+All three §16.10 questions are answered attack-shaped, on the record:
+the bar survives with a new instrument (N-sweep), the family survives
+only after gaining two members and two structural closures, and the
+cycle is traced to its breaking joint with one new model obligation.
+No bound was relaxed; every amendment is in the adversary-strengthening
+direction, inside the legitimate pre-code window (§14.4's own amendment
+rule). **Ratification of this record by the standing review closes
+§§14–16; the §14.4 implementation round (now five members, three
+controls with cross-member bite requirements, plus the N-sweep and the
+M6.2 coupling control) is the round that follows closure.**

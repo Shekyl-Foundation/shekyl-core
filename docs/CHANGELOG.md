@@ -63,6 +63,25 @@
   never-serialized `PublicByConsent` marker, M6 generator-coupling
   control (blind@window-0 ≥ 2× chance or INVALID) + leg-(b) wall-clock
   emission. Irreducible three named.
+  **Review-closure round R1 conducted (§17, 2026-07-06; ratification
+  pending):** the three §16.10 attacks run to land, each answered
+  attack-shaped on the record. Attack 1: `r < 2` survives
+  (claim-anchored, observer-independent) but measured `r(N)` is only
+  known at `N = 10` — **N-sweep added** (§16.7 item 4, `r < 2` at every
+  swept `N`, a-priori). Attack 2: the widened family was still a proper
+  subset — **members 4–5 added** (spectral graph partition; seeded
+  nearest-neighbor expansion with one granted founder label), and two
+  label-free channels closed: M3 extended to the **full persona
+  lifecycle** (claim-absence sorts non-claiming founders, §16.4/§14.3.4)
+  and **P4 gains a non-disclosure commitment** (consent-to-risk ≠
+  license-to-disclose; enumeration collapses recorded cover
+  *retroactively* — §14.3.4, founder-strip sensitivity row in the
+  `K_COVER` cover model). Attack 3: the `K_COVER` cycle traced and
+  **does not close** — the validation projection is `K`-independent
+  (the breaking joint), the calibration projection a monotone fixed
+  point; the cover model gains a gate-open cohort-dynamics row with its
+  demand assumption as a named conditional (§16.2 obligation 3). No
+  bound relaxed; all amendments adversary-strengthening, pre-code.
   **PROVISIONAL:** the block-time sealing
   re-run is confirmatory by construction (live `BondPostDispatched.at` is
   the due block; dispersal is sub-block `U[0,60s)`), so no block-resolution
