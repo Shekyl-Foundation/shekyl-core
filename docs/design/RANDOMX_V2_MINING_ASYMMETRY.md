@@ -344,7 +344,7 @@ Structured adversarial passes on the measurement design (2026-07-05). All findin
 |-------|-------|
 | Result | **1024 / 1024 pairs byte-identical, 0 mismatches** (full corpus). Single-vector KATs: `--rx0` (v1 build-faithfulness) = `639183aa…` exact; `--kat-full` (v2, full dataset) = `34f8b017…` == canonical. |
 | Miner | XMRig **6.26.0** @ `b2ca7248`, RandomX sources compiled with `-DXMRIG_FEATURE_ASM` (x86-64 JIT), **software AES**, Argon2 generic arch; config `RandomX_ConfigurationMoneroV2` (ProgramSize 384 + 4 tweaks). |
-| Mode | **full-dataset (`FULL_MEM｜JIT`)** — the adversary's mining mode. XMRig's light/interpreter path is v2-incomplete (`2fe105f9…`) and must not be used. |
+| Mode | **full-dataset (`RANDOMX_FLAG_FULL_MEM \| RANDOMX_FLAG_JIT`)** — the adversary's mining mode. XMRig's light/interpreter path is v2-incomplete (`2fe105f9…`) and must not be used. |
 | Reference | Shekyl `CANONICAL_RANDOM_HASHES` (`canonical_outputs.rs`), fork `external/randomx-v2` @ `aaafe71`, via `parity_corpus.dat` SHA-256 `713d5702…03ba`. |
 | Corpus | nightly 32 seedhashes × 32 blobs = 1024 raw-blob pairs (`corpus_random.rs`, seed `shekyl-randomx-differential-corpus-v1`). |
 | Build/host | g++/gcc 14.2 (Debian), `-O2 -std=c++17`; dev box `i9-11950H`. ~16 min (32 × 2 GiB dataset inits, single-thread). |
