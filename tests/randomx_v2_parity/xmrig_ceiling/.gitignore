@@ -1,0 +1,4 @@
+/build/
+/xmrig_parity
+*.o
+*.a
