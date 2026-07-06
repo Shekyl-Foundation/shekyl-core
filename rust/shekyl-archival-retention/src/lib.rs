@@ -89,7 +89,7 @@ pub use emission_wire::{
 };
 pub use error::VerifyError;
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
-pub use k_cover::{K_COVER, K_COVER_PROVISIONAL};
+pub use k_cover::{KCover, K_COVER, K_COVER_PROVISIONAL};
 pub use path::{verify_leaf_index, verify_segment_path, SegmentPathOpening};
 pub use reward_arithmetic::{
     curve_milli, g_age_milli, mul_div_floor, reward_share_floor, scarcity_milli, BandedCurveParams,

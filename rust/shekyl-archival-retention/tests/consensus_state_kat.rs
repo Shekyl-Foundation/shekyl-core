@@ -7,7 +7,7 @@
 
 use shekyl_archival_retention::{
     curve_milli, epoch_close_compute, r_market_count, sigma_work_milli, BadInterval,
-    BandedCurveParams, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
+    BandedCurveParams, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard, KCover,
     ServeCreditRow, WORK_MILLI_SCALE,
 };
 
@@ -166,7 +166,7 @@ fn consensus_state_kat_v1() {
         frozen_shard_count: ec["frozen_shard_count"]
             .as_u64()
             .expect("frozen_shard_count"),
-        k_cover: ec["k_cover"].as_u64().expect("k_cover"),
+        k_cover: KCover::for_kat(ec["k_cover"].as_u64().expect("k_cover")),
     })
     .expect("well-formed fixture indices");
 

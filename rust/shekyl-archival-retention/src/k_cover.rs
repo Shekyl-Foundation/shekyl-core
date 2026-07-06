@@ -61,3 +61,49 @@ const _: () = assert!(
     "K_COVER sentinel invariant violated: provisional iff 0 \
      (ARCHIVAL_REWARD_GATE_M1.md §4 sentinel mechanics)"
 );
+
+/// Capability newtype for the M1 cover threshold (segment-freeze pre-flight
+/// PF-6a).
+///
+/// A bare `u64` threshold lets any future caller — a "simulate close" RPC
+/// preview, a leaked test helper — pass an arbitrary value and it compiles.
+/// This newtype makes accidental divergence a **type error**: the only
+/// non-test constructor is [`KCover::consensus`], which returns the crate
+/// constant. KAT parameterization goes through [`KCover::for_kat`], gated
+/// behind the **permanent** `consensus-kat` feature (enabled only via
+/// dev-dependencies; it must survive the §4 seal, so it does not ride
+/// `provisional-k-cover`). Deliberate misuse — a production consumer
+/// enabling `consensus-kat` and calling the KAT constructor — stays one
+/// grep: the §6 tripwire refuses `for_kat` outside `tests/` and `#[cfg(test)]`
+/// modules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KCover(u64);
+
+impl KCover {
+    /// The consensus threshold — the only production constructor. Threads
+    /// [`K_COVER`] verbatim; there is no way to construct a divergent value
+    /// without the `consensus-kat` feature.
+    #[must_use]
+    pub const fn consensus() -> Self {
+        Self(K_COVER)
+    }
+
+    /// KAT-injection constructor: the reward-gate and consensus-state KATs
+    /// parameterize the threshold per case so the fixtures survive the §4
+    /// constant finalization without rewrite. Test-only by construction —
+    /// `cfg(test)` for in-crate unit tests, the `consensus-kat` dev-only
+    /// feature for integration tests. Never call from production code (§6
+    /// tripwire).
+    #[cfg(any(test, feature = "consensus-kat"))]
+    #[must_use]
+    pub const fn for_kat(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// The threshold value, for the single `epoch_close_compute` comparison
+    /// site (§6 tripwire: reading is not a second predicate).
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}

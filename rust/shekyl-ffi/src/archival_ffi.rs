@@ -19,9 +19,9 @@ use shekyl_archival_retention::{
     verify_leaf_index, verify_segment_path, ArchivalBondPostVin, ArchivalServeCreditResponse,
     BadInterval, BandedCurveParams, BondCtBalanceError, BondPostError, BondPostKind, BondTerm,
     CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
-    HoldingsKind, WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-    ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, CHALLENGE_RESOLUTION_BLOCKS, K_COVER, MAX_CLAIM_AGE_W,
-    SETTLEMENT_EPOCH_BLOCKS,
+    HoldingsKind, KCover, WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+    ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
+    CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -595,8 +595,10 @@ unsafe fn gather_bad_intervals(ptr: *const u64, pair_len: usize) -> Option<Vec<B
 /// `H_close(E)`, produced by the C++ gather's single
 /// `count_frozen_shards_at_close` helper (`freeze_height ≤ H_close(E)`,
 /// equality counts, decode failure aborts loudly) inside the close's write
-/// transaction. The `K_COVER` threshold itself is threaded here from the
-/// crate constant — the comparison lives only in `epoch_close_compute`.
+/// transaction. The `K_COVER` threshold itself is threaded here through the
+/// PF-6a `KCover::consensus()` capability constructor — the only production
+/// path to a threshold value — and the comparison lives only in
+/// `epoch_close_compute`.
 ///
 /// `out_r_market_ptr` must address `shards_len` writable `u64`s; outputs are
 /// zeroed before computation so a failure never leaves stale values.
@@ -723,7 +725,9 @@ pub unsafe extern "C" fn shekyl_archival_epoch_close_compute(
         shards: &shards,
         credit_pairs: &pairs,
         frozen_shard_count,
-        k_cover: K_COVER,
+        // PF-6a: the consensus() constructor is the only production path to
+        // a threshold value; a divergent threshold is a type error here.
+        k_cover: KCover::consensus(),
     };
     let result = match epoch_close_compute(&inputs) {
         Ok(r) => r,
@@ -1184,7 +1188,7 @@ mod tests {
             shards: &rust_shards,
             credit_pairs: &rust_pairs,
             frozen_shard_count: 1,
-            k_cover: K_COVER,
+            k_cover: KCover::consensus(),
         })
         .unwrap();
         assert_eq!(sigma, expected.sigma_work_milli);
