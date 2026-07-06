@@ -1909,3 +1909,116 @@ the **value channel** (loud rewards), the **attribute strata**, and the
 qualifiers on the honest `1.86`, and the fifth (GF-4) a co-equal gate.
 None reopens the number; all five are recorded so the seal cannot read
 the entry-seam number as the whole claim.
+
+### 18.7 R3 addendum: tiers vs continuous accrual — the design question, answered at source (2026-07-06)
+
+**The question.** Would replacing discrete lock tiers with a climbing,
+duration-based accrual rate (unbond whenever; yield a public function
+of elapsed time) reduce the bond-attribute partition — or create *more*
+uniqueness, because the payout then encodes exact duration?
+
+**The design-level answer (recorded because the reasoning generalizes).**
+The two models leak on different channels, and the channels are not
+symmetric. A tier leaks at **two** moments: bond time (the label is on
+the post the instant it lands — a forced, frozen, early-bound partition
+on the exact entry-seam event GF-7 grades) and unbond time (the payout
+reflects it). Continuous accrual leaks at **one**: unbond time, where
+the payout back-solves through the public rate schedule to a duration.
+But the duration leak is **late-bound and user-shapeable** (the persona
+chooses when to unbond, and quantized accrual boundaries let it land in
+a duration class shared with everyone else in the window), where the
+tier is **early-bound and protocol-forced**. Controllable exposure
+dominates structural exposure: continuous-with-quantized-boundaries
+reconstructs the bounded-bucket property of tiers, but with the bucket
+chosen at exit (invisible at the entry seam) and chosen to maximize
+crowd rather than assigned by capital. It also dissolves the adverse
+value↔privacy coupling of tiers (highest-yield tier = smallest crowd =
+most-valuable personas most linkable). The honest price: the rate-curve
+**shape** becomes a privacy parameter (sharp knees → rational unbonders
+cluster past each knee → de-facto tiers rebuilt), and the privacy claim
+loads more heavily onto the exit seam, where correlated mass-unbonding
+(a co-trigger) can thin duration classes — cold-start thinness
+relocated to the exit. Verdict: **not more uniqueness — relocated,
+controllable uniqueness**, moved off the channel that cannot be
+defended (forced bond-time labels) onto one that can (late-bound,
+quantizable exit classes), *provided* the class width and curve shape
+are a-priori-derived and measured, and the exit seam gets a real gate.
+
+**Verified at source: the shipped archival leg already embodies the
+strong form of this disposition, by a cleaner route than the proposal.**
+
+1. **Tiers are gone** (retired with confidential staking; §18.3), and
+   the climbing rate exists — but it attaches to **shard age**, not
+   persona bond duration: `g(age) = 1 + age_weight · age`
+   (`reward_arithmetic.rs::g_age_milli`), a public property of the
+   *data* identical for every holder of the shard. The accrual input is
+   not a persona attribute at all, which is strictly cleaner than
+   persona-duration accrual: the rate schedule cannot fingerprint the
+   persona because it does not read the persona.
+2. **There is no lump-sum unbond payout to back-solve.** Rewards are
+   per-epoch loud claims (§18.5) whose `settlement_epochs` vector
+   publishes the persona's bonded epochs **directly**, at
+   settlement-epoch granularity (`SETTLEMENT_EPOCH_BLOCKS = 10_000`).
+   The prescribed quantized duration classes are therefore
+   **structural, not a mitigation to add**: duration resolves to
+   ~10k-block classes by construction, never finer, and there is no
+   arithmetic bridge sharper than the published class. The
+   exit→entry back-solve bridge the wargame feared is capped at class
+   width.
+3. **The knee wargame is real in the current design — but on the
+   holdings axis, not duration.** `g(age)` is linear (no knees ✓), but
+   `Curve(work)` is banded piecewise-linear with breakpoints at
+   `plateau/4`, `plateau/2`, and the plateau
+   (`reward_arithmetic.rs::curve_milli`): rational operators cluster
+   holdings at the plateau, i.e. the curve's incentive gradient
+   produces clustering on the **observable `holdings` attribute** —
+   exactly the §18.3 stratum. Direction is **ambiguous**: clustering at
+   the modal point may *thicken* that stratum (good — a bigger crowd)
+   while thinning the tails (bad — outlier holdings more linkable).
+   Which way it cuts is a measurement question, not a debate.
+4. **The residual bond-time attribute survives:** "every bond is
+   identical at the seam" is not true of the shipped leg —
+   `holdings`/`bond_floor` is cleartext on the post (§18.3). The tier
+   channel is deleted; the holdings channel is the remaining bond-time
+   partition, already dispositioned to stratified grading.
+
+**Pins forced (all routed to rounds already on the R3 map — no new
+machinery):**
+
+- **P-curve (reversion-clause-shaped):** the linearity of `g(age)` and
+  the breakpoint structure of `Curve` are **privacy parameters, not
+  just economic ones**. Any future amendment that adds knees to the
+  age/duration axis, or moves `Curve` breakpoints, re-shapes incentive
+  clustering on an observable attribute and requires review under this
+  gate (a §14.4/§18.3-style stratified re-grade), not economic review
+  alone. Reopening criterion: any PR touching `g_age_milli`,
+  `curve_milli`, or their parameters.
+- **P-width (a-priori discipline, exit-side analogue of the entry-gap
+  window):** `SETTLEMENT_EPOCH_BLOCKS` is the duration-class width.
+  The GF-4 round derives the adversary-advantage bound as a function of
+  class width — how much does knowing the class narrow the
+  funding-seam candidate set — **before** 10_000 is accepted as a
+  privacy value rather than an economic one. Same
+  threshold-before-measurement ordering as §3.5.
+- **P-claim-timing:** each per-epoch emission tx is a **recurring
+  timing observable at a new seam** (the claim seam): *when within the
+  claimable window* `P` submits is the entry-gap channel's shape,
+  repeated per epoch for the persona's life (compounding §18.4). The
+  entry-seam dispersal/jitter discipline applies there; graded in the
+  GF-4/value-channel round (§18.1/§18.5), including the batching
+  (≤ 15 epochs) and forfeiture (`W = 26`) parameters as sweep axes.
+- **P-correlated-exit:** mass unbonding is a co-trigger (all founders
+  exit at once; a market event fires correlated drains); duration-class
+  anonymity must hold under **correlated** exits, not independent ones
+  — cold-start thinness relocated to the exit seam and the duration
+  axis. Named wargame for the GF-4 round; a further reason GF-4 is
+  co-equal (§18.1).
+
+**Net.** The design question is answered and the answer is already
+shipped in its strongest form: no persona-duration accrual at all (the
+rate reads the shard, not the persona), structural epoch-granularity
+duration quantization, a linear age curve. What the analysis adds is
+the four pins above — the curve shape and class width become named,
+reviewed privacy parameters, and the claim-timing and correlated-exit
+observables join the GF-4 round's surface. Nothing here reopens the
+`1.86`; everything lands on the exit-seam gate the seal already needs.

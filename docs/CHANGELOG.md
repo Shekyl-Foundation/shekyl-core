@@ -121,6 +121,19 @@
   (co-equal genesis gate, graded jointly with persona rotation) + the
   value channel. **Ride the §14.4 round:** attribute-stratified grading,
   lifetime-accumulation sweep. No bound reopened.
+  **R3 addendum (§18.7):** tiers-vs-continuous-accrual answered at
+  source — the shipped leg already embodies the strong form (accrual
+  reads shard age, not persona duration; `g(age)` linear, no knees;
+  duration structurally quantized at settlement-epoch granularity, so
+  the exit→entry back-solve is capped at class width by construction).
+  Four pins routed to existing rounds: curve shape as privacy parameter
+  (reopen on any `g_age_milli`/`curve_milli` change; `Curve` plateau
+  breakpoints cluster the holdings stratum — §18.3 measures direction),
+  `SETTLEMENT_EPOCH_BLOCKS` as a-priori duration-class width (GF-4
+  derives the bound before 10k is a privacy value), per-epoch claim
+  submission as a recurring entry-gap-shaped timing observable
+  (GF-4/value-channel round), and correlated mass-unbonding as a named
+  GF-4 wargame (duration-class anonymity under co-triggered exits).
   **PROVISIONAL:** the block-time sealing
   re-run is confirmatory by construction (live `BondPostDispatched.at` is
   the due block; dispersal is sub-block `U[0,60s)`), so no block-resolution

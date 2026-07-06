@@ -7565,6 +7565,23 @@ one place to confirm each item's relationship to the wallet stack.
   **Extensions riding the §14.4 round:** attribute-stratified grading (§18.3) and
   lifetime-accumulation sweep (§18.4). No bound reopened; §18 records so the seal cannot
   read the entry-seam number as the whole claim.
+  **R3 addendum (§18.7): tiers-vs-continuous-accrual design question answered at source.**
+  The shipped leg already embodies the strong form — no persona-duration accrual at all
+  (`g(age) = 1 + age_weight·age` reads **shard age**, a public data property, not the
+  persona; linear, no knees), and duration is structurally quantized at settlement-epoch
+  granularity (`settlement_epochs` cleartext ⇒ the exit→entry back-solve bridge is capped
+  at class width by construction). Four pins, all routed to existing rounds: **P-curve**
+  (`g_age_milli`/`curve_milli` shape is a privacy parameter — knees on the age axis or
+  moved `Curve` breakpoints re-shape incentive clustering on observable attributes;
+  reopen on any PR touching them; note `Curve`'s existing plateau breakpoints cluster
+  the **holdings** stratum, direction ambiguous — §18.3 measures); **P-width**
+  (`SETTLEMENT_EPOCH_BLOCKS = 10_000` is the duration-class width — GF-4 round derives
+  the adversary-advantage bound as a function of width before 10k is accepted as a
+  privacy value); **P-claim-timing** (per-epoch emission submission is a recurring
+  entry-gap-shaped timing observable at the claim seam; batching ≤15 / forfeiture W=26
+  as sweep axes; GF-4/value-channel round); **P-correlated-exit** (duration-class
+  anonymity must hold under co-triggered mass unbonding — cold-start thinness relocated
+  to the exit seam; named GF-4 wargame).
   **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
   GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
   seams, not just entry).**
