@@ -28,14 +28,16 @@
 //! never stored, so no torn seal-vs-reservation state is representable.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::Duration;
 
-use rand_core::RngCore as _;
 use shekyl_archival_retention::ARCHIVAL_REORG_DEPTH_BLOCKS;
 use shekyl_engine_state::{PendingBondPost, PendingPostBlock, PendingPostState};
-use shekyl_standoff::draw::{bounded_uniform, GapRng};
+use shekyl_standoff::draw::bounded_uniform;
 use shekyl_types::{BlockHeight, PCanonicalId};
 use tokio_util::sync::CancellationToken;
+
+use crate::engine::stake_timing::OsRngGapAdapter;
 
 #[cfg(feature = "gf7-hooks")]
 use shekyl_standoff::gf7::{BroadcastTimelineObserver, TimelineEvent};
@@ -80,22 +82,31 @@ pub(crate) trait PendingSealStore: Send + Sync + 'static {
 /// The single shared write path over the pending seal (§3.3 writer
 /// discipline): an async mutex around load→modify→seal. Both writers — the
 /// WI-2 assemble path (append) and this driver (transition/remove) — go
-/// through one instance of this handle; the lock is what makes their two
-/// cadences safe against read-modify-seal races. (Same shape as
-/// `PScanStore`, plus the lock, because unlike the pscan seal this one
-/// legitimately has two writers.)
+/// through this handle; the lock is what makes their two cadences safe
+/// against read-modify-seal races. (Same shape as `PScanStore`, plus the
+/// lock, because unlike the pscan seal this one legitimately has two
+/// writers.)
+///
+/// **The lock is per-wallet, not per-instance.** It is injected as a shared
+/// [`Arc`] owned by the `Engine` (`pending_write_lock`), so the driver's
+/// store and the future WI-2 assemble path — which construct *independent*
+/// stateless [`PendingSealStore`] adapters over the same `.wallet.pending`
+/// file — still serialize against **one** mutex. Creating the lock inside
+/// `new` would give each writer its own, which is precisely the lost-update
+/// this discipline exists to forbid (assemble's append and the driver's
+/// transition both load, then the last save wins). Requiring the caller to
+/// pass the engine-held lock makes "one mutex per wallet" a construction
+/// invariant, not a convention.
 pub(crate) struct PendingPostStore<S> {
     seal: S,
-    write_lock: tokio::sync::Mutex<()>,
+    write_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl<S: PendingSealStore> PendingPostStore<S> {
-    /// Wrap the sealed-block store in the locked write path.
-    pub(crate) fn new(seal: S) -> Self {
-        Self {
-            seal,
-            write_lock: tokio::sync::Mutex::new(()),
-        }
+    /// Wrap the sealed-block store in the locked write path, sharing the
+    /// engine-held `write_lock` (see the type docs: one mutex per wallet).
+    pub(crate) fn new(seal: S, write_lock: Arc<tokio::sync::Mutex<()>>) -> Self {
+        Self { seal, write_lock }
     }
 
     /// Read the current block under the lock (a serialized snapshot; no
@@ -337,17 +348,6 @@ struct TickPlan {
     dispatched: Option<(PendingBondPost, u32)>,
 }
 
-/// Adapts [`rand_core::OsRng`] to [`GapRng`] for the dispersal draw — fresh
-/// OS entropy per dispatch, per §3.2 part 3 (same zero-state adapter shape
-/// as the stake engine's entry-gap `OsRngGapAdapter`).
-struct OsRngDispersalAdapter;
-
-impl GapRng for OsRngDispersalAdapter {
-    fn next_u64(&mut self) -> u64 {
-        rand_core::OsRng.next_u64()
-    }
-}
-
 /// The block-timed dispatch driver. Owned by the pscan task; [`Self::on_tick`]
 /// runs at the end of every sweep tick against the tip the sweep already
 /// fetched (§3.1 — no new network read, no separate timer task).
@@ -376,9 +376,17 @@ pub(crate) struct DispatchDriver<S, T> {
 
 impl<S: PendingSealStore, T: BondBroadcast> DispatchDriver<S, T> {
     /// Build the driver over the sealed-block store and the broadcast seam.
-    pub(crate) fn new(seal: S, broadcast: T, config: DispatchConfig) -> Self {
+    /// `write_lock` is the engine-held, per-wallet pending-seal mutex (see
+    /// [`PendingPostStore`]): the driver's store and the WI-2 assemble path
+    /// share this one lock so their two write cadences cannot race.
+    pub(crate) fn new(
+        seal: S,
+        broadcast: T,
+        config: DispatchConfig,
+        write_lock: Arc<tokio::sync::Mutex<()>>,
+    ) -> Self {
         Self {
-            store: PendingPostStore::new(seal),
+            store: PendingPostStore::new(seal, write_lock),
             broadcast,
             config,
             held_this_session: BTreeSet::new(),
@@ -398,13 +406,16 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchDriver<S, T> {
         self.observer = observer;
     }
 
-    /// The locked write path, exposed so the WI-2 assemble path appends its
-    /// sealed post through the **same** handle (§3.3 writer discipline —
-    /// two writers, one lock, one seal path).
+    /// The driver's locked write path (§3.3 writer discipline). The WI-2
+    /// assemble path does **not** have to route through this exact handle:
+    /// its store shares the same engine-held `pending_write_lock`, so an
+    /// independently-constructed `PendingPostStore` over `.wallet.pending`
+    /// already serializes against the driver's writes (see
+    /// [`PendingPostStore`]). This accessor is kept for the in-task read of
+    /// the derived reservation set and gate-11's single-write-path audit.
     // Transient — the consumer is the WI-2 Engine-side assemble orchestrator
-    // (out of WI-3 scope per the design doc §1), which appends its sealed
-    // post through this shared handle. Gate 11 enforces that when it lands,
-    // it lands HERE and not on a second write path.
+    // (out of WI-3 scope per the design doc §1). Gate 11 enforces that when it
+    // lands, it lands on the one locked seal path and not a second write.
     #[allow(dead_code)]
     pub(crate) fn store(&self) -> &PendingPostStore<S> {
         &self.store
@@ -453,13 +464,12 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                 // reality wins, whatever the record's state arm says (the
                 // `Pending`-but-confirmed arm is the seal-before-send crash
                 // case). Removal is the byte-prune and the reservation
-                // release in one seal (R2-4).
-                let mut retired = Vec::new();
-                for persona in confirmed {
-                    if block.remove_post(persona).is_some() {
-                        changed = true;
-                        retired.push(*persona);
-                    }
+                // release in one seal (R2-4). Batched over the LIVE posts
+                // (`remove_confirmed`) so the cost is bounded by in-flight
+                // posts, not by the ever-growing `confirmed` set.
+                let retired = block.remove_confirmed(confirmed);
+                if !retired.is_empty() {
+                    changed = true;
                 }
 
                 // Alarm scan (§3.4 resubmit bound): dispatched, unconfirmed,
@@ -482,17 +492,13 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                     select_dispatch_candidate(block.posts(), tip, horizon, held, alarmed)
                         .map(|p| p.persona);
                 let dispatched = candidate.map(|persona| {
-                    let attempts = block
+                    // `mark_dispatched` returns the transitioned post from the
+                    // same lookup it mutates — no second scan to re-find it.
+                    let (attempts, post) = block
                         .mark_dispatched(&persona, tip)
                         .expect("selected candidate is a live post by construction");
                     changed = true;
-                    let post = block
-                        .posts()
-                        .iter()
-                        .find(|p| p.persona == persona)
-                        .expect("post just marked is present")
-                        .clone();
-                    (post, attempts)
+                    (post.clone(), attempts)
                 });
 
                 (
@@ -549,7 +555,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         // maybe-sent — exactly the crash-resume case P-2 makes safe.
         let bound_ms = u64::try_from(self.config.dispersal_bound.as_millis()).unwrap_or(u64::MAX);
         if bound_ms > 0 {
-            let delay_ms = bounded_uniform(&mut OsRngDispersalAdapter, bound_ms - 1);
+            let delay_ms = bounded_uniform(&mut OsRngGapAdapter, bound_ms - 1);
             tokio::select! {
                 biased;
                 () = cancel.cancelled() => return Ok(()),
@@ -770,6 +776,12 @@ mod tests {
         }
     }
 
+    /// A fresh per-test pending-seal write lock (in production the `Engine`
+    /// owns one per wallet and shares it with the WI-2 assemble path).
+    fn test_lock() -> Arc<tokio::sync::Mutex<()>> {
+        Arc::new(tokio::sync::Mutex::new(()))
+    }
+
     fn driver_with_posts(
         posts: Vec<PendingBondPost>,
         outcomes: Vec<Verdict>,
@@ -781,7 +793,8 @@ mod tests {
         let store = std::sync::Arc::new(MemStore::default());
         *store.block.lock().expect("mem store") = Some(PendingPostBlock::new(posts));
         let broadcast = std::sync::Arc::new(ScriptedBroadcast::scripted(outcomes));
-        let driver = DispatchDriver::new(store.clone(), broadcast.clone(), test_config());
+        let driver =
+            DispatchDriver::new(store.clone(), broadcast.clone(), test_config(), test_lock());
         (driver, store, broadcast)
     }
 
@@ -991,7 +1004,12 @@ mod tests {
 
         // "Restart": a fresh driver over the same sealed store (held set empty).
         let broadcast2 = std::sync::Arc::new(ScriptedBroadcast::scripted(vec![accepted()]));
-        let mut driver2 = DispatchDriver::new(store.clone(), broadcast2.clone(), test_config());
+        let mut driver2 = DispatchDriver::new(
+            store.clone(),
+            broadcast2.clone(),
+            test_config(),
+            test_lock(),
+        );
         tick(&mut driver2, 101).await;
         tick(&mut driver2, 102).await;
 

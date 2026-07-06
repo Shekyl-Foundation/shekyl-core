@@ -50,6 +50,15 @@ HANDLE="rust/shekyl-engine-file/src/handle.rs"
 PAYLOAD="rust/shekyl-engine-file/src/payload.rs"
 SEAL_STORE="rust/shekyl-engine-core/src/engine/pscan/start.rs"
 
+# Path-exact exemption regexes: the exemption filters below anchor an
+# alternation of these paths as `^(<file>|<file>):`. The paths contain `.`
+# (e.g. `handle.rs`), which is a regex wildcard — an unescaped `.` would let a
+# look-alike path (`handleXrs`, a sibling under a similarly-named dir) be
+# exempted by accident. Escape every `.` so only the exact pinned files match.
+HANDLE_RE="${HANDLE//./\\.}"
+PAYLOAD_RE="${PAYLOAD//./\\.}"
+SEAL_STORE_RE="${SEAL_STORE//./\\.}"
+
 # Guardrail: if a pinned choke file moved or was renamed, fail loudly rather
 # than let the invariants below pass vacuously on zero hits.
 for f in "$HANDLE" "$PAYLOAD" "$SEAL_STORE"; do
@@ -68,7 +77,7 @@ done
 ENCODE_PATTERN='encode_payload\(\s*PayloadKind::PendingPostBlockPostcard'
 if ENCODE_STRAYS="$(rg -n "$ENCODE_PATTERN" rust/ --glob '*.rs' \
   | rg -v 'pending-post-write-allow' \
-  | rg -v "^(${HANDLE}|${PAYLOAD}):")"; then
+  | rg -v "^(${HANDLE_RE}|${PAYLOAD_RE}):")"; then
   echo "FAIL: PendingPostBlockPostcard encode site outside the pinned choke" >&2
   echo "  (sole encode site: WalletFile::save_pending_posts in $HANDLE)" >&2
   echo "$ENCODE_STRAYS" >&2
@@ -94,7 +103,7 @@ fi
 CALLER_PATTERN='\.save_pending_posts\('
 if CALLER_STRAYS="$(rg -n "$CALLER_PATTERN" rust/ --glob '*.rs' \
   | rg -v 'pending-post-write-allow' \
-  | rg -v "^(${HANDLE}|${SEAL_STORE}):")"; then
+  | rg -v "^(${HANDLE_RE}|${SEAL_STORE_RE}):")"; then
   echo "FAIL: save_pending_posts caller outside the locked PendingPostStore path" >&2
   echo "  (sole production caller: the PendingSealStore impl in $SEAL_STORE)" >&2
   echo "$CALLER_STRAYS" >&2

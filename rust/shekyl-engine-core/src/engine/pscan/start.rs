@@ -129,10 +129,13 @@ pub enum PScanStartError {
     /// read-modify-seal of the same `.wallet.pscan`.
     #[error("a P-scan task is already running for this wallet")]
     AlreadyRunning,
-    /// The sealed `P`-scan state could not be loaded (corrupt / version mismatch).
-    /// Surfaced here, before the spawn, rather than as a silent task death — the
-    /// caller learns the firewall scan did not start.
-    #[error("loading the sealed P-scan state failed: {0}")]
+    /// A sealed state could not be loaded (corrupt / version mismatch) — either
+    /// the `.wallet.pscan` scan state or the `.wallet.pending` bond-post block
+    /// (its schema-v2 fail-closed refusal of a WI-2 v1 seal surfaces here).
+    /// Surfaced before the spawn rather than as a silent task death: the caller
+    /// learns the firewall scan / dispatch did not start, instead of a pending
+    /// post that never dispatches while every sweep logs a generic retry.
+    #[error("loading a sealed P-scan / pending-post state failed: {0}")]
     LoadFailed(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
@@ -216,6 +219,36 @@ fn run_blocking_io<T>(f: impl FnOnce() -> T) -> T {
     }
 }
 
+/// Run a synchronous [`WalletFile`] persistence closure under a brief engine
+/// read guard — the guard discipline both file-backed stores
+/// ([`WalletFilePScanStore`], [`WalletFilePendingSealStore`]) share, single-
+/// sourced here rather than hand-copied per method. Acquires the read lock,
+/// hands `f` the live persistence handle (`g.persistence()`, seam b — held by
+/// value behind the lock, so it can't move into `spawn_blocking`) and the
+/// region-2 wrap key, runs it via [`run_blocking_io`] (frees the tokio worker
+/// on a multi-threaded runtime), and drops the guard on return. **No await
+/// spans the guard** — `f` is synchronous — so the caller decodes only after
+/// the lock releases.
+// `type_complexity`: same self-arc engine shape as the stores it serves.
+#[allow(clippy::type_complexity)]
+async fn with_persistence_read<S, D, L, E, R, P, T>(
+    engine: &Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
+    f: impl FnOnce(&WalletFile, &[u8; 32]) -> T + Send,
+) -> T
+where
+    S: EngineSignerKind + Send + Sync + 'static,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+    T: Send,
+    Engine<S, D, L, E, R, P, WalletFile>: Send + Sync,
+{
+    let g = engine.read().await;
+    run_blocking_io(|| f(g.persistence(), g.state_wrap_key().as_bytes()))
+}
+
 /// Failures of the file-backed store: either the `WalletFile` seal/open layer, or
 /// postcard (de)serialization of the [`PScanState`] body.
 #[derive(Debug, thiserror::Error)]
@@ -245,19 +278,9 @@ where
     ) -> impl std::future::Future<Output = Result<Option<PScanState>, Self::Error>> + Send {
         let engine = self.engine.clone();
         async move {
-            // Read + open under the lock; the guard drops before we decode. The
-            // seal stays single-sourced in `WalletFile` (seam b), which is held by
-            // value behind the lock and so cannot move into `spawn_blocking`;
-            // `run_blocking_io` instead frees the tokio worker for the synchronous
-            // file I/O without relocating the `WalletFile` (no await spans it, so
-            // the read guard is fine).
-            let body = {
-                let g = engine.read().await;
-                run_blocking_io(|| {
-                    g.persistence()
-                        .open_pscan_state(g.state_wrap_key().as_bytes())
-                })?
-            };
+            // Guard discipline (open under the lock, decode after it drops) is
+            // shared with the pending store via `with_persistence_read`.
+            let body = with_persistence_read(&engine, WalletFile::open_pscan_state).await?;
             match body {
                 Some(b) => Ok(Some(
                     PScanState::from_postcard_bytes(&b)
@@ -278,15 +301,7 @@ where
         let body = state.to_postcard_bytes();
         async move {
             let body = body.map_err(WalletFilePScanStoreError::Codec)?;
-            let g = engine.read().await;
-            // `run_blocking_io` for the synchronous seal + atomic write: frees the
-            // tokio worker (on a multi-threaded runtime) without moving the
-            // lock-held `WalletFile` (seam b keeps the seal single-sourced there).
-            // No await spans the guard.
-            run_blocking_io(|| {
-                g.persistence()
-                    .save_pscan_state(g.state_wrap_key().as_bytes(), &body)
-            })?;
+            with_persistence_read(&engine, |wf, key| wf.save_pscan_state(key, &body)).await?;
             Ok(())
         }
     }
@@ -343,16 +358,8 @@ where
     {
         let engine = self.engine.clone();
         async move {
-            // Same guard discipline as `WalletFilePScanStore::load`: read + open
-            // under the lock, decode after the guard drops; `run_blocking_io` frees
-            // the tokio worker for the synchronous file I/O.
-            let body = {
-                let g = engine.read().await;
-                run_blocking_io(|| {
-                    g.persistence()
-                        .open_pending_posts(g.state_wrap_key().as_bytes())
-                })?
-            };
+            // Same shared guard discipline as `WalletFilePScanStore::load`.
+            let body = with_persistence_read(&engine, WalletFile::open_pending_posts).await?;
             match body {
                 Some(b) => Ok(Some(
                     PendingPostBlock::from_postcard_bytes(&b)
@@ -372,11 +379,7 @@ where
         let body = block.to_postcard_bytes();
         async move {
             let body = body.map_err(WalletFilePendingStoreError::Codec)?;
-            let g = engine.read().await;
-            run_blocking_io(|| {
-                g.persistence()
-                    .save_pending_posts(g.state_wrap_key().as_bytes(), &body)
-            })?;
+            with_persistence_read(&engine, |wf, key| wf.save_pending_posts(key, &body)).await?;
             Ok(())
         }
     }
@@ -537,14 +540,22 @@ where
         // Brief read borrow: clone the spawn inputs + claim the single-flight slot.
         // Stake is checked first so a non-staker never claims-then-releases; the
         // slot guard is RAII, so any error below releases it on the early return.
-        let (daemon, stake, slot_guard) = {
+        let (daemon, stake, pending_write_lock, slot_guard) = {
             let g = self_arc.read().await;
             let stake = g.stake_handle().ok_or(PScanStartError::NoStakeEngine)?;
             let slot_guard = g
                 .pscan_slot
                 .try_claim()
                 .ok_or(PScanStartError::AlreadyRunning)?;
-            (g.daemon().clone(), stake, slot_guard)
+            // The per-wallet pending-seal write lock (§3.3): the dispatch driver
+            // and the WI-2 assemble path share this one mutex (see the engine
+            // field docs), so their two write cadences cannot race.
+            (
+                g.daemon().clone(),
+                stake,
+                g.pending_write_lock.clone(),
+                slot_guard,
+            )
         };
 
         // The WI-3 dispatch driver's broadcast seam shares the daemon (one more
@@ -560,22 +571,39 @@ where
         // WI-3: the block-timed bond-post dispatch driver, ticked at the end of
         // every sweep (`ARCHIVAL_BOND_WI3_DISPATCH.md` §3.1). The dispersal draw
         // spans the sweep cadence — the tick interval is exactly the phase window
-        // the send-time decorrelation must cover.
-        let dispatch = DispatchDriver::new(
-            WalletFilePendingSealStore {
-                engine: self_arc.clone(),
-            },
-            broadcast,
-            DispatchConfig::production(cadence),
-        );
+        // the send-time decorrelation must cover. The pending seal store is bound
+        // separately so its seal can be validated up front (below) before it moves
+        // into the driver.
+        let pending_seal = WalletFilePendingSealStore {
+            engine: self_arc.clone(),
+        };
 
-        // Load the sealed state up front (#4): a corrupt / version-mismatched seal
-        // surfaces here, not as a silent task death. `slot_guard` drops on this
-        // early return, releasing the slot.
+        // Load both sealed states up front so a corrupt / version-mismatched seal
+        // surfaces **here**, loudly, as [`PScanStartError::LoadFailed`] — never as a
+        // silent per-sweep retry. The pscan seal already fails loud this way; the
+        // pending seal's decode runs lazily inside the dispatch tick (mapped to a
+        // transient `Dispatched` error the sweep just logs-and-retries), so without
+        // this probe a WI-2 v1 `.wallet.pending` under this v2 binary would make the
+        // dispatch tick fail every sweep forever while `start_pscan` reported success
+        // — the assembled bond post silently never dispatching. The driver re-loads
+        // under its own write lock each tick (the two-writer discipline); this is a
+        // fail-closed decode probe, and its result is intentionally discarded.
+        // `slot_guard` drops on any early return here, releasing the slot.
         let initial = store
             .load()
             .await
             .map_err(|e| PScanStartError::LoadFailed(Box::new(e)))?;
+        pending_seal
+            .load()
+            .await
+            .map_err(|e| PScanStartError::LoadFailed(Box::new(e)))?;
+
+        let dispatch = DispatchDriver::new(
+            pending_seal,
+            broadcast,
+            DispatchConfig::production(cadence),
+            pending_write_lock,
+        );
 
         let schedule = FixedRateSchedule::new(cadence);
         let cancel_token = CancellationToken::new();

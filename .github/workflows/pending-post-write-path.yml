@@ -26,12 +26,18 @@
 name: ci/pending-post-write-path
 
 on:
+  # No `branches:` filter: the split-write-path this gate forbids can be
+  # introduced on ANY branch (this PR bases on `feat/bond-assembly`, not `dev`),
+  # so the gate must run on every PR regardless of base — a `branches: [dev]`
+  # filter let a second write path merge up through a feature branch with the
+  # gate never firing on the offending diff.
   pull_request:
-    branches: [dev]
+    # The check script greps ALL of `rust/` for stray writers, so the trigger
+    # must be that wide too: a new `.save_pending_posts(` caller in any crate
+    # (not just the pscan/file surface) is exactly what this gate catches, and a
+    # narrow path list would skip the job on precisely those PRs.
     paths:
-      - "rust/shekyl-engine-file/src/**"
-      - "rust/shekyl-engine-core/src/engine/pscan/**"
-      - "rust/shekyl-engine-core/src/engine/bond_assembly.rs"
+      - "rust/**"
       - "scripts/ci/check_pending_post_write_path.sh"
       - ".github/workflows/pending-post-write-path.yml"
 

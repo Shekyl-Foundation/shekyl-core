@@ -167,7 +167,7 @@ use super::pscan::persona_scanner::{guaranteed_scanner_for_persona, PersonaScanE
 use super::pscan::scan_step::{
     run_dual_extractor, BlockRange, DualExtractError, ScanStep, ScanStepResult,
 };
-use super::stake_timing::DEFAULT_ENTRY_GAP;
+use super::stake_timing::{OsRngGapAdapter, DEFAULT_ENTRY_GAP};
 use super::traits::key::SourceSecretsBundle;
 
 // S6 / DQ3 — the session RNG self-cert grader (`shekyl-standoff` `conformance`)
@@ -1837,24 +1837,6 @@ impl Message<RetireBondedPersona> for StakeEngine {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         Ok(self.retire_bonded(&msg.witness))
-    }
-}
-
-/// Adapts [`rand_core::OsRng`] to the [`GapRng`] trait for use in
-/// [`SignBond`]'s entry-gap draw.
-///
-/// `GapRng` requires only `next_u64`; `OsRng` implements `RngCore` (which
-/// includes `next_u64`). This zero-state adapter bridges the two without
-/// pulling `rand_core`'s full `RngCore` trait into the message handler. If
-/// `OsRng::next_u64` panics (i.e., the entropy source dies mid-draw after the
-/// step-3 preflight), the actor's fail-stop fires — the panic is loud, not
-/// silent (Round 3 acceptance condition).
-struct OsRngGapAdapter;
-
-impl GapRng for OsRngGapAdapter {
-    fn next_u64(&mut self) -> u64 {
-        // `RngCore` (for `next_u64`) is in scope via the module-level import.
-        rand_core::OsRng.next_u64()
     }
 }
 

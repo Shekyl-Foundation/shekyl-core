@@ -30,6 +30,8 @@
 //! module (the P-1 provenance boundary) — trusting our own prior seal exactly
 //! as `PScanAccrual::from_state` trusts the sealed frontier.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 use shekyl_types::{BlockHeight, PCanonicalId};
 
@@ -204,26 +206,37 @@ impl PendingPostBlock {
     /// [`PendingPostState::Dispatched`] with `attempts = 1`, or bump its
     /// attempt counter (saturating) if it is already dispatched (the
     /// byte-identical resubmit path, §3.4). Returns the post-transition
-    /// attempt count, or `None` if the persona has no live post.
+    /// attempt count **and a reference to the transitioned post**, or `None`
+    /// if the persona has no live post.
+    ///
+    /// Returning the post (not just the count) lets the dispatch driver lift
+    /// the sealed bytes it must re-send from the *same* lookup that performed
+    /// the transition — no second `posts` scan to re-find the record it just
+    /// mutated.
     ///
     /// A pure in-memory mutation: the caller (the locked `PendingPostStore`
     /// write path) seals the whole block **before any network send**.
     #[must_use]
-    pub fn mark_dispatched(&mut self, persona: &PCanonicalId, at: BlockHeight) -> Option<u32> {
+    pub fn mark_dispatched(
+        &mut self,
+        persona: &PCanonicalId,
+        at: BlockHeight,
+    ) -> Option<(u32, &PendingBondPost)> {
         let post = self.posts.iter_mut().find(|p| &p.persona == persona)?;
-        match &mut post.state {
+        let attempts = match &mut post.state {
             PendingPostState::Pending => {
                 post.state = PendingPostState::Dispatched { at, attempts: 1 };
-                Some(1)
+                1
             }
             PendingPostState::Dispatched { attempts, .. } => {
                 // `at` is NOT updated on resubmit: it records the tip the
                 // due-check *first* fired against (the dispatch fact), and a
                 // resubmit re-sends the same bytes, not a new dispatch.
                 *attempts = attempts.saturating_add(1);
-                Some(*attempts)
+                *attempts
             }
-        }
+        };
+        Some((attempts, &*post))
     }
 
     /// WI-3 §3.5 / §3.6 — remove `persona`'s post (confirmation retire, or
@@ -236,6 +249,32 @@ impl PendingPostBlock {
     pub fn remove_post(&mut self, persona: &PCanonicalId) -> Option<PendingBondPost> {
         let idx = self.posts.iter().position(|p| &p.persona == persona)?;
         Some(self.posts.remove(idx))
+    }
+
+    /// WI-3 §3.5 — confirmation retire, batched: drop every live post whose
+    /// persona is in `confirmed`, returning the removed personas. Each removal
+    /// *is* the byte-prune + reservation release in the same seal (R2-4), as in
+    /// [`Self::remove_post`].
+    ///
+    /// Walks the **live posts once** (`O(live posts)`), so the cost is bounded
+    /// by the wallet's in-flight post count — **not** by `|confirmed|`, which is
+    /// the pscan's monotonically-growing confirmed-persona set (never pruned
+    /// until 2d-2 SP-6). A persona-by-persona `remove_post` loop over `confirmed`
+    /// would instead re-scan the block once per ever-confirmed persona
+    /// (`O(|confirmed| · live)`), doing more work every sweep for the wallet's
+    /// whole lifetime to retire the same handful of live posts.
+    #[must_use]
+    pub fn remove_confirmed(&mut self, confirmed: &BTreeSet<PCanonicalId>) -> Vec<PCanonicalId> {
+        let mut retired = Vec::new();
+        self.posts.retain(|post| {
+            if confirmed.contains(&post.persona) {
+                retired.push(post.persona);
+                false
+            } else {
+                true
+            }
+        });
+        retired
     }
 
     /// Serialize to postcard bytes (the inner half of the seal; the engine
@@ -299,10 +338,12 @@ mod tests {
         let mut block = PendingPostBlock::empty();
         assert!(block.push_post(post(0xAA, &[1, 2])));
         assert_eq!(
-            block.mark_dispatched(
-                &PCanonicalId::from_bytes([0xAA; 32]),
-                BlockHeight::from_raw(1_012)
-            ),
+            block
+                .mark_dispatched(
+                    &PCanonicalId::from_bytes([0xAA; 32]),
+                    BlockHeight::from_raw(1_012)
+                )
+                .map(|(attempts, _)| attempts),
             Some(1)
         );
         let bytes = block.to_postcard_bytes().expect("encode");
@@ -365,13 +406,23 @@ mod tests {
         assert!(block.push_post(post(0xAA, &[1])));
 
         assert_eq!(
-            block.mark_dispatched(&persona, BlockHeight::from_raw(500)),
+            block
+                .mark_dispatched(&persona, BlockHeight::from_raw(500))
+                .map(|(attempts, _)| attempts),
             Some(1)
         );
-        // Resubmit at a later tip: attempts bump, `at` stays at first send.
+        // Resubmit at a later tip: attempts bump, `at` stays at first send. The
+        // returned post reflects the just-applied transition (same lookup).
+        let (attempts, post) = block
+            .mark_dispatched(&persona, BlockHeight::from_raw(510))
+            .expect("live post");
+        assert_eq!(attempts, 2);
         assert_eq!(
-            block.mark_dispatched(&persona, BlockHeight::from_raw(510)),
-            Some(2)
+            post.state,
+            PendingPostState::Dispatched {
+                at: BlockHeight::from_raw(500),
+                attempts: 2
+            }
         );
         assert_eq!(
             block.posts()[0].state,
@@ -381,13 +432,12 @@ mod tests {
             }
         );
         // No live post for an unknown persona.
-        assert_eq!(
-            block.mark_dispatched(
+        assert!(block
+            .mark_dispatched(
                 &PCanonicalId::from_bytes([0xEE; 32]),
                 BlockHeight::from_raw(1)
-            ),
-            None
-        );
+            )
+            .is_none());
     }
 
     /// §3.5/§3.6 (R2-4) — removal retires the record, prunes the held bytes,
@@ -412,6 +462,38 @@ mod tests {
             block.remove_post(&persona).is_none(),
             "re-removal is idempotent (crash-replay safe)"
         );
+    }
+
+    /// §3.5 batched retire: `remove_confirmed` drops exactly the live posts
+    /// whose persona is confirmed (releasing their reservations), leaves the
+    /// rest, and ignores confirmed personas with no live post — so a
+    /// monotonically-growing confirmed set costs nothing per unmatched entry.
+    #[test]
+    fn remove_confirmed_retires_only_matching_live_posts() {
+        let persona = |b: u8| PCanonicalId::from_bytes([b; 32]);
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_post(post(0xAA, &[1])));
+        assert!(block.push_post(post(0xBB, &[2, 3])));
+
+        // Confirm 0xAA (live) plus 0xCC (never had a post — the ever-growing
+        // confirmed-set case).
+        let confirmed: BTreeSet<PCanonicalId> = [persona(0xAA), persona(0xCC)].into();
+        let retired = block.remove_confirmed(&confirmed);
+
+        assert_eq!(retired, vec![persona(0xAA)], "only the live match retires");
+        assert!(!block.has_live_post_for(&persona(0xAA)));
+        assert!(
+            block.has_live_post_for(&persona(0xBB)),
+            "unconfirmed post kept"
+        );
+        assert_eq!(
+            block.reserved_gindexes().into_iter().collect::<Vec<_>>(),
+            vec![2, 3],
+            "the retired post's reservation released; the kept post's remains"
+        );
+
+        // Idempotent: re-running with the same set retires nothing more.
+        assert!(block.remove_confirmed(&confirmed).is_empty());
     }
 
     #[test]

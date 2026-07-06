@@ -624,6 +624,19 @@ pub struct Engine<
     /// wallet (no two tasks racing the `.wallet.pscan` seal).
     pscan_slot: pscan::task::PScanSlot,
 
+    /// Per-wallet write lock over the `.wallet.pending` sibling seal (WI-3
+    /// §3.3 writer discipline). The pending seal legitimately has **two**
+    /// writers — the WI-2 assemble path (append) and the WI-3 dispatch driver
+    /// (transition/remove) — on two cadences; a shared async mutex around
+    /// load→modify→seal is what makes them safe against read-modify-seal
+    /// races. Held here (not inside the ephemeral dispatch driver) so both
+    /// writers serialize against **one** mutex per wallet: the driver clones
+    /// it into its [`PendingPostStore`](pscan::dispatch::PendingPostStore) at
+    /// spawn, and the assemble path takes the same clone. A bare `Arc<Mutex>`
+    /// (no back-reference to the engine), so — unlike the running task's
+    /// engine-arc — it introduces no ownership cycle.
+    pending_write_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+
     /// Producer-side [`RefreshEngine`] implementor.
     ///
     /// Per [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`] §7.X C5,
@@ -1044,6 +1057,7 @@ impl<
             capability,
             refresh_slot,
             pscan_slot,
+            pending_write_lock,
             refresh: _old,
             economics,
             stake,
@@ -1065,6 +1079,7 @@ impl<
             capability,
             refresh_slot,
             pscan_slot,
+            pending_write_lock,
             refresh: std::sync::Arc::new(refresh),
             economics,
             stake,
@@ -1101,6 +1116,7 @@ impl<
             capability,
             refresh_slot,
             pscan_slot,
+            pending_write_lock,
             refresh,
             economics,
             stake,
@@ -1122,6 +1138,7 @@ impl<
             capability,
             refresh_slot,
             pscan_slot,
+            pending_write_lock,
             refresh,
             economics,
             stake,
