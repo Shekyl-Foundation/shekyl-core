@@ -1,0 +1,54 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Pending-post single-write-path enforcement — WI-3 gate 11
+# (`docs/design/ARCHIVAL_BOND_WI3_DISPATCH.md` §5 gate 11).
+#
+# Runs `scripts/ci/check_pending_post_write_path.sh` on every PR that
+# touches the pending-seal surface. The script enforces that pending-post
+# persistence has exactly one write path and one payload kind:
+#
+#   - `encode_payload(PayloadKind::PendingPostBlockPostcard, ..)` exists
+#     only in `WalletFile::save_pending_posts` (plus the payload codec's
+#     own in-file tests);
+#   - the driver's locked `PendingPostStore` path (the production
+#     `PendingSealStore` impl) is the sole production caller of that
+#     writer;
+#   - no raw write bypasses the crash-atomic seal of `.wallet.pending`.
+#
+# Gate 10's torn-state-unrepresentability argument rests on the absence of
+# a second write site; this workflow is what turns that absence from
+# reviewer discipline into an enforced invariant (the same family as the
+# gf7-no-emit guard and the token `const _` sole-origin guard).
+
+name: ci/pending-post-write-path
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "rust/shekyl-engine-file/src/**"
+      - "rust/shekyl-engine-core/src/engine/pscan/**"
+      - "rust/shekyl-engine-core/src/engine/bond_assembly.rs"
+      - "scripts/ci/check_pending_post_write_path.sh"
+      - ".github/workflows/pending-post-write-path.yml"
+
+# Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
+concurrency:
+  group: pending-post-write-path-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check-pending-post-write-path:
+    name: "Pending-post single-write-path grep gate"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run pending-post write-path check
+        run: scripts/ci/check_pending_post_write_path.sh
