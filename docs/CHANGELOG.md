@@ -4,6 +4,27 @@
 
 ### Added
 
+- **archival: segment-freeze pipeline design round 1 opened**
+  ([`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](design/ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md))
+  — the production writer/deleter for `m_archival_shard_segment`,
+  satisfying the M1 §1.3 merge condition. Substrate survey (doc §2):
+  the daemon already maintains the curve tree inside the block write
+  txn with a drain-journaled, pop-symmetric leaf count, so freezing
+  reduces to a **first-crossing rule** — segment `k` freezes at the
+  first height where `leaf_count ≥ (k+1)·SEGMENT_LEAF_COUNT`, `R_k`
+  read from the layer-2 chunk the same-txn grow computed — and
+  O-1..O-3 discharge by inheritance (doc §3), with the pop hook a
+  derived delete (no freeze journal). Pins
+  `SEGMENT_LEAF_COUNT = 25 992` (level-2 subtree, `38·18·38`) into
+  the constants pipeline with the boundary division in a single Rust
+  FFI entry point called by both connect and pop hooks (M1-1
+  single-source shape). Exercises the maintainer's pre-genesis
+  schema-restructure authorization once: **`archival_shard_leaf` is
+  deleted** (doc §6.2) — it is a derived copy of
+  `m_curve_tree_leaves`; the gate-2 challenge path reads the
+  38-leaf chunk directly from the tree's own leaf table. Adversarial
+  review of the round-1 draft pending; implementation gated on round
+  closure.
 - **archival: M1 reward gate implemented — steps 1–5 of the §11.9
   pinned sequence** ([`ARCHIVAL_REWARD_GATE_M1.md`](design/ARCHIVAL_REWARD_GATE_M1.md)
   §11.10 implementation record). Executed on

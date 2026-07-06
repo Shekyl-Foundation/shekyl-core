@@ -7473,6 +7473,19 @@ one place to confirm each item's relationship to the wallet stack.
   the count helper binds to the `LMDB_SCHEMA.md`-fixed table schema, not pipeline
   behavior), and this design round OPENS before the M1 gate PR merges, so a surprise
   discovered here can still reopen the M1 spec cheaply.**
+  **ROUND 1 OPENED (2026-07-06):**
+  [`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](design/ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md) —
+  the M1 §1.3 merge condition is satisfied. Substrate survey found the daemon already
+  delivers O-1..O-3 for the driving quantity (curve-tree leaf count: consensus,
+  drain-journaled, pop-symmetric via `trim_curve_tree`), so freezing is a
+  **first-crossing rule** (`frozen = ⌊leaf_count / SEGMENT_LEAF_COUNT⌋`, doc §3) with
+  `R_k` read from the layer-2 chunk the same-txn grow just computed (no new crypto).
+  Under the maintainer's pre-genesis schema/FFI authorization the round also pins
+  `SEGMENT_LEAF_COUNT = 25 992` (level-2; gate-2 fixture placeholder `26 000` to be
+  regenerated), puts the boundary arithmetic in a single Rust FFI entry point called by
+  both connect and pop hooks (M1-1 single-source shape), and **deletes
+  `archival_shard_leaf`** (derived copy of `m_curve_tree_leaves`; challenge path reads
+  the leaf chunk directly, doc §6.2). Adversarial review of the round-1 draft pending.
 - **2d-2 SP-T4a — GF-7 principal-timeline timing correlation is a GENESIS GATE (measure
   `P(link | T_obs)` before launch).** SP-T4a *draws* the narrow funding-seam entry-gap jitter
   (`draw_entry_gap`, `spread ~ U[0, 600 blocks]`) but does **not** wire it into any broadcast — the

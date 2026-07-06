@@ -5,10 +5,12 @@
 §11.9 implementation-gates decision. IMPLEMENTED (2026-07-06, §11.10
 record): the §6 pinned sequence executed steps 1–5 on
 `feat/m1-reward-gate-design` after the pre-flight pass at the audit
-pin, on the §1.3 second branch (fixture rows). Outstanding before the
-gate PR merges: the segment-freeze pipeline design round OPENS (§1.3
-condition); `K_COVER` sealing remains gated on the §14.4 partition
-run (§4).** Per
+pin, on the §1.3 second branch (fixture rows). The §1.3 merge
+condition is satisfied: the segment-freeze pipeline design round
+OPENED 2026-07-06
+([`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md),
+round 1 draft carrying the O-1..O-3 discharge arguments in its §3).
+`K_COVER` sealing remains gated on the §14.4 partition run (§4).** Per
 `05-system-thinking.mdc` (specification first) and
 `26-sub-pr-design-discipline.mdc` (cited: consensus-critical sub-PR
 with design rounds before implementation; the pre-flight pass applies
@@ -196,6 +198,19 @@ round's record, cross-referenced both ways, and **the pipeline round
 opens before the gate PR merges** — so a surprise discovered there
 can still reopen this spec cheaply, while the work proceeds in
 parallel.
+
+**Condition satisfied (2026-07-06):** the pipeline design round
+opened as
+[`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)
+(round 1 draft). Its §3 carries the O-1..O-3 discharge arguments —
+freezing as a first-crossing rule over the consensus curve-tree leaf
+count, inheriting determinism/monotonicity/pop-symmetry from the
+tree machinery already inside the block write txn (drain journal +
+`trim_curve_tree`). Its §9 pop-symmetry test is the arming condition;
+discharge finalizes when that round's rounds close and the tests
+land. Its §6.2 additionally retires the `archival_shard_leaf` table
+(derived copy of `m_curve_tree_leaves`) under the maintainer's
+schema-restructure authorization for that round.
 
 ---
 
