@@ -161,8 +161,20 @@ echo
 # ----------------------------------------------------------------------
 # Invariant 4: archival reward gates (mint + integer arithmetic).
 # ----------------------------------------------------------------------
-echo "[4/4] Archival reward gates"
+echo "[4/5] Archival reward gates"
 if ! scripts/ci/check_archival_reward_gates.sh; then
+  FAIL=1
+else
+  echo "      OK"
+fi
+echo
+
+# ----------------------------------------------------------------------
+# Invariant 5: M1 reward-gate predicate + operand one-site guarantees
+# (ARCHIVAL_REWARD_GATE_M1.md §6 tripwire row, §10 M1-1, §11.8 M3-1).
+# ----------------------------------------------------------------------
+echo "[5/5] M1 reward-gate predicate/operand sites"
+if ! scripts/ci/check_reward_gate_predicate_sites.sh; then
   FAIL=1
 else
   echo "      OK"
@@ -176,4 +188,4 @@ if [[ "$FAIL" -ne 0 ]]; then
   echo "consensus-invariants: FAIL"
   exit 1
 fi
-echo "consensus-invariants: PASS (4/4)"
+echo "consensus-invariants: PASS (5/5)"

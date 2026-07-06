@@ -38,6 +38,9 @@ on:
       - "rust/shekyl-difficulty/**"
       - "rust/shekyl-ffi/**"
       - "scripts/ci/check_consensus_invariants.sh"
+      - "scripts/ci/check_archival_reward_gates.sh"
+      - "scripts/ci/check_reward_gate_predicate_sites.sh"
+      - "rust/shekyl-archival-retention/**"
       - ".github/workflows/consensus-invariants.yml"
 
 # Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
