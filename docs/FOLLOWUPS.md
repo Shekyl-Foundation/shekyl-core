@@ -7641,6 +7641,18 @@ one place to confirm each item's relationship to the wallet stack.
   drain-side visibility the chain denies). GF-4 wargame: precomputed-`reward_P(E)`
   adversary vs user-side value events, graded at the off-chain boundary under layers
   2–3, jointly with the timing axes.
+  **R4 closure (§18.12, 2026-07-06):** the whole-path routing obligation retracted —
+  already discharged by the base transfer format (no on-chain residual exists to
+  manage). **Drain-decoupling pin tightened to input-level:** the drain-amount
+  computation must not read the reward sequence (or reward-derived accounting) as an
+  input — user target / cadence / randomness only; checked at the function's inputs,
+  not its outputs (P-1/P-2 discipline). Acceptance test for the gate-6 policy PR: does
+  the drain-amount selection path read any reward-sequence-derived value? Verification
+  at source of the landed path's inputs is a named obligation of that PR. **Why-loud
+  recorded:** the mint is loud by deliberate priority-1 decision (inflation audit); R-1
+  is a priority-ordered tradeoff driven to its floor, not an unclosed defect — a future
+  reviewer must not "fix" it by CT-committing the mint. Floor: the fee-widened lifetime-
+  aggregate band at the definitional off-chain crossing; inventory closed to its floor.
   **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
   GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
   seams, not just entry).**

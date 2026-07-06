@@ -2401,3 +2401,70 @@ the value takes. With this section's facts, the attack's on-chain legs
 are dead; the graded question becomes the off-chain boundary under
 layers 2–3, jointly with the timing axes (R-4's no-per-axis-
 multiplication obligation).
+
+### 18.12 R4 closure: the drain pin tightened to input-level; why the mint is loud (2026-07-06)
+
+The R4 reviewer accepted §18.11's resolution in full and closed the
+round with three amendments, all recorded here.
+
+**1. Retraction: the "extend (c) to the whole mint→user path"
+obligation is already discharged.** §18.11's facts 1–2 (no non-mint
+cleartext amounts; spend set unenumerable) mean the mint→user path is
+unlinkable at every on-chain hop **by the base transfer format** —
+there is nothing to extend. The whole-length obligation R4 constructed
+dissolves; (c)'s status is not "primary mitigation" but "no on-chain
+residual exists to manage."
+
+**2. The drain-amount decoupling pin is tightened from output-level
+to input-level.** §18.11's formulation ("drain amounts user-driven or
+rounded, never computable reward subsums") has two failure modes the
+closure round caught:
+
+- *Rounding granularity:* a drain rounded on a grid fine relative to
+  the reward-sequence spacing still lands near subsums — rounding
+  reduces bits without severing the correlation.
+- *"User-driven" reintroduces the footgun:* a user driving drain
+  amounts by habit or convenience ("drain what I earned this month")
+  produces a computable subsum by choice — the exact self-inflicted
+  reconstruction the pin exists to prevent.
+
+**The pin, in its structural form:** the wallet's drain-amount
+computation **must not read the reward sequence (or reward-derived
+accounting) as an input.** Permitted inputs: a user-specified target,
+a fixed cadence, randomness. Forbidden input: anything computable
+from `reward_P(E)` (per-epoch amounts, sums-since-last-drain, epoch
+counts). The property is checked at the function's *inputs*, not its
+*outputs* — the same discipline as the P-1/P-2 mint-site pins: close
+it at what the function is allowed to read, so a matchable subsum is
+unrepresentable-by-construction rather than kept-far-by-discipline.
+**Acceptance test (mechanically checkable when the gate-6 drain
+policy lands):** does the drain-amount selection path read any
+reward-sequence-derived value? If yes, the footgun is open regardless
+of output behavior; if no, closed. Verification at source of the
+landed selection path's actual inputs is a named obligation of the
+gate-6 policy PR.
+
+**3. Why the mint is loud — recorded so the tradeoff survives its
+authors.** After CT closes the funding leg and the constant closes
+the bond term, the archival leg's entire `P`→user value exposure
+reduces to the loud reward-mint amounts — and those are loud by a
+**deliberate priority-1 decision** (inflation auditability: every
+verifier recomputes `reward_P(E)` at zero tolerance; a hidden mint
+amount makes supply unverifiable, `00-mission` priority 1 over
+priority 2). R-1 is therefore **not a defect that failed to close; it
+is a priority-ordered tradeoff whose residual is then driven to its
+floor** with the tools that don't conflict with the audit posture
+(routing — complete on-chain; drain-decoupling — this pin;
+quantization — defense-in-depth). A future reviewer must not "fix"
+the loud mint by CT-committing it: that silently breaks supply
+verifiability. (Same record-the-why shape as the F41 constant-work
+invariant: the property's load-bearing reason is written down, not
+just the property.)
+
+**Floor statement.** The only unavoidable residual is the lifetime
+aggregate as a fee-and-retention-widened band at the definitional
+off-chain crossing — bounded not by our mitigations but by the fact
+that no counterparty-crossing privacy can exist inside the protocol.
+The R4 residual inventory is closed to its floor; the drain-decoupling
+pin (input-level form) is the one piece of new structural work the
+round produced, and it rides the gate-6 policy PR.

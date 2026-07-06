@@ -175,6 +175,14 @@
   decoupling** (exact-subsum match is a wallet-policy footgun — drain
   amounts never computable reward subsums), quantization as
   defense-in-depth for the approximate lifetime-aggregate band.
+  **R4 closure (§18.12):** whole-path routing obligation retracted
+  (discharged by the base transfer format); drain-decoupling pin
+  tightened to input-level — the drain-amount computation must not
+  read the reward sequence as an input (user target/cadence/randomness
+  only; verified at the selection path's inputs when the gate-6 policy
+  lands). Why-loud recorded: the mint is loud by priority-1 decision
+  (inflation audit) — R-1 is a priority-ordered tradeoff at its floor,
+  not an unclosed defect; do not "fix" it by CT-committing the mint.
   **PROVISIONAL:** the block-time sealing
   re-run is confirmatory by construction (live `BondPostDispatched.at` is
   the due block; dispersal is sub-block `U[0,60s)`), so no block-resolution
