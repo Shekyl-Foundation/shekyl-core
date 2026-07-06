@@ -34,7 +34,9 @@ shekyl-archival-bond-builder = { path = "../shekyl-archival-bond-builder" }
 # it; promoting it to a direct dep makes the type's origin explicit at this
 # crate's boundary. `shekyl-archival-retention` is already a dev-dep here and
 # in the workspace lockfile — no new supply-chain surface.
-shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# `provisional-k-cover`: K_COVER unsealed-sentinel acknowledgment
+# (ARCHIVAL_REWARD_GATE_M1.md §4) — delete this feature at the §14.4 seal.
+shekyl-archival-retention = { path = "../shekyl-archival-retention", features = ["provisional-k-cover"] }
 # `SignBond` handler draws the entry-gap via `draw_entry_gap` / `GapRng`
 # (S4/S5 — conformance-correct, float-free). Default build (no `conformance`
 # feature) is dependency-free; `conformance` is dev/test-only.

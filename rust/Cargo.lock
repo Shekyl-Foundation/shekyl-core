@@ -3671,6 +3671,7 @@ dependencies = [
  "hex",
  "serde_json",
  "sha3",
+ "shekyl-archival-retention",
  "shekyl-crypto-pq",
  "shekyl-ct-balance",
  "shekyl-curve-generators",
