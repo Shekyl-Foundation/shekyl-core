@@ -100,11 +100,13 @@ fn main() {
 
     // M1 reward-gate cover threshold (ARCHIVAL_REWARD_GATE_M1.md §4 sentinel
     // mechanics). `k_cover_provisional` gates a compile-time refusal in
-    // `src/k_cover.rs`; while provisional, the ONLY permitted value is
-    // u64::MAX (fail-closed sentinel: the gate never opens — a liveness
-    // failure, never the privacy failure of a too-loose gate). This makes a
+    // `src/k_cover.rs`; while provisional, the ONLY permitted value is 0 —
+    // the gate-identity degenerate the G-9 KAT pins executably (pre-seal
+    // behavior is exactly the pre-gate behavior, so the r_market/sigma store
+    // paths stay exercised end-to-end until seal). This makes a
     // plausible-looking provisional K_COVER unrepresentable, not merely
-    // discouraged.
+    // discouraged; the shipping guard is the compile refusal in
+    // src/k_cover.rs, never the sentinel value.
     let k_cover = map
         .get("k_cover")
         .and_then(serde_json::Value::as_u64)
@@ -120,20 +122,20 @@ fn main() {
             )
         });
 
-    if k_cover_provisional && k_cover != u64::MAX {
+    if k_cover_provisional && k_cover != 0 {
         panic!(
-            "k_cover_provisional is true but k_cover ({k_cover}) is not the u64::MAX \
-             fail-closed sentinel in {}. A plausible-looking provisional K_COVER is the \
-             silent-ship class ARCHIVAL_REWARD_GATE_M1.md §4 refuses: either seal the \
-             §14.4-derived value (flip k_cover_provisional to false) or keep the sentinel.",
+            "k_cover_provisional is true but k_cover ({k_cover}) is not the gate-identity \
+             sentinel 0 in {}. A plausible-looking provisional K_COVER is the silent-ship \
+             class ARCHIVAL_REWARD_GATE_M1.md §4 refuses: either seal the §14.4-derived \
+             value (flip k_cover_provisional to false) or keep the sentinel.",
             config_path.display()
         );
     }
-    if !k_cover_provisional && k_cover == u64::MAX {
+    if !k_cover_provisional && k_cover == 0 {
         panic!(
-            "k_cover_provisional is false but k_cover is still the u64::MAX sentinel in {}. \
-             Sealing requires the WI-4 §14.4-derived value, not the sentinel with the flag \
-             flipped.",
+            "k_cover_provisional is false but k_cover is 0 (the gate never gates — no \
+             cold-start refusal) in {}. Sealing requires the WI-4 §14.4-derived value >= 1, \
+             not the sentinel with the flag flipped.",
             config_path.display()
         );
     }

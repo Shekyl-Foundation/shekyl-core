@@ -19,19 +19,25 @@
 //! disposition (§9 R1-D3 / §10 M1-6):
 //!
 //! 1. **The provisional value is unrepresentable-as-plausible.** While the
-//!    flag is set, `build.rs` refuses any value other than `u64::MAX` — the
-//!    fail-closed sentinel (the gate never opens: a liveness failure, never
-//!    the privacy failure of a too-loose gate; `00-mission.mdc` hierarchy).
+//!    flag is set, `build.rs` refuses any value other than `0` — the
+//!    gate-identity sentinel (`frozen_shard_count < 0` is never true, so
+//!    pre-seal behavior is exactly the pre-gate behavior and the store
+//!    write paths stay exercised end-to-end by the existing test corpus).
+//!    The shipping guard is the compile refusal below, never the sentinel
+//!    value: a build that reaches genesis with the sentinel is refused at
+//!    compile time, so the sentinel's runtime semantics are unreachable in
+//!    a release artifact (`00-mission.mdc` hierarchy holds structurally).
 //! 2. **Building without acknowledgment refuses.** The `compile_error!`
 //!    below fires for any build of this crate while the flag is set unless
 //!    the `provisional-k-cover` feature is enabled. Every consumer therefore
 //!    carries a grep-able acknowledgment line in its `Cargo.toml`; the KAT
 //!    parameterizes `K_COVER` and never bakes the sentinel (§5).
 //!
-//! **Sealing** (the §14.4 value lands): set `k_cover`, flip
-//! `k_cover_provisional` to `false`, then delete the `provisional-k-cover`
-//! feature and every acknowledgment line — the deletion target is the seal
-//! itself (`15-deletion-and-debt.mdc`: the version is named by the event).
+//! **Sealing** (the §14.4 value lands): set `k_cover` (`>= 1` — `build.rs`
+//! refuses a sealed `0`), flip `k_cover_provisional` to `false`, then delete
+//! the `provisional-k-cover` feature and every acknowledgment line — the
+//! deletion target is the seal itself (`15-deletion-and-debt.mdc`: the
+//! version is named by the event).
 
 include!(concat!(env!("OUT_DIR"), "/k_cover_generated.rs"));
 
@@ -47,11 +53,11 @@ compile_error!(
 );
 
 // Tripwire, mirroring the WORK_MILLI_SCALE idiom (reward_arithmetic.rs): the
-// two states the JSON can express are (provisional, u64::MAX) and (sealed,
-// real value). build.rs enforces this at generation; this guard re-asserts it
-// at the consumption site so a hand-edited generated file also fails.
+// two states the JSON can express are (provisional, 0) and (sealed, >= 1).
+// build.rs enforces this at generation; this guard re-asserts it at the
+// consumption site so a hand-edited generated file also fails.
 const _: () = assert!(
-    K_COVER_PROVISIONAL == (K_COVER == u64::MAX),
-    "K_COVER sentinel invariant violated: provisional iff u64::MAX \
+    K_COVER_PROVISIONAL == (K_COVER == 0),
+    "K_COVER sentinel invariant violated: provisional iff 0 \
      (ARCHIVAL_REWARD_GATE_M1.md §4 sentinel mechanics)"
 );
