@@ -7442,17 +7442,22 @@ one place to confirm each item's relationship to the wallet stack.
   implementation PR is conditioned on them** (fixture-driven KATs allowed; pipeline
   round must discharge O-1..O-3, and landing segment writes without O-3 reopens §9.4 and
   breaks retention-proof correctness generally). WI-4 doc provenance = merge-ordering
-  dependency (`feat/wi4-gf7-measurement` pushed, unmerged — merge before/with the M1
-  implementation PR). Pre-flight pattern recorded: verify every consensus-predicate
+  dependency — **resolved 2026-07-06: WI-4 merged to `dev` (#262, `1e89df832`), sequence
+  slot 0 satisfied**. Pre-flight pattern recorded: verify every consensus-predicate
   *operand* at its production site, not just the predicate's consumers.
-  **Target: V3.0 pre-genesis — implementation next. Gates decided (doc §11.9,
-  2026-07-06): §1.3 second branch (fixture rows; O-1..O-3 blocking on the pipeline
-  round, which opens before the gate PR merges); pre-flight runs against the dev head
-  at the audit pin (not `69af41a`) re-verifying the §6 enumeration + three named items;
-  WI-4 doc merge holds sequence slot 0. Intra-PR order pinned: constants +
-  compile-refusal before the `k_cover` identifier exists anywhere else, then helper +
-  threading, wire positivity + corpus fix (same commit), KATs + C++ store tests,
-  tripwire scripts last.**
+  **Target: V3.0 pre-genesis — IMPLEMENTED (doc §11.10 record, 2026-07-06): steps 1–5
+  of the §11.9 pinned sequence executed on `feat/m1-reward-gate-design` after the
+  pre-flight pass held the §6 enumeration (re-verified post-WI-4-merge; M3-3
+  discharged — the `K_COVER` calibration derives against segment count per WI-4 §16.3).
+  Constants + armed compile refusal (`a2292b23c`, sentinel refined to gate-identity `0`
+  in `6194ab7a7`); count helper + FFI threading + zero-at-top gate (`f65d3d89d`); wire
+  positivity + corpus digest regeneration (`cc28bee37`); KATs G-1..G-10 + C++
+  count-pass/store tests (`e0a0cfd11`); predicate/operand tripwire as
+  consensus-invariants invariant 5 (`31f133e5e`). Outstanding before the PR merges:
+  the segment-freeze pipeline design round OPENS (§1.3 condition, entry below).
+  Deferred to `K_COVER` sealing: the direct gated-path C++ close test (unreachable
+  under the gate-identity sentinel; the stored shape is covered via the
+  bitwise-identical legitimately-empty epoch, doc §11.10 delta 4).**
 - **Segment-freeze pipeline — design round required (opened by `ARCHIVAL_REWARD_GATE_M1.md`
   §1.3, 2026-07-06).** The production writer for `m_archival_shard_segment` does not exist
   (`put_archival_shard_segment`: unit-test fixture only; the `LMDB_SCHEMA.md` "curve-tree

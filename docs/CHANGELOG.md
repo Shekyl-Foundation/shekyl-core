@@ -4,6 +4,41 @@
 
 ### Added
 
+- **archival: M1 reward gate implemented — steps 1–5 of the §11.9
+  pinned sequence** ([`ARCHIVAL_REWARD_GATE_M1.md`](design/ARCHIVAL_REWARD_GATE_M1.md)
+  §11.10 implementation record). Executed on
+  `feat/m1-reward-gate-design` after the pre-flight pass held the §6
+  enumeration at the audit pin (re-verified post-WI-4-merge at
+  `1e89df832`; M3-3 discharged — WI-4 §16.3 pins `shard_count` as
+  structural, the `K_COVER` calibration derives against segment
+  count). (1) `k_cover` + `k_cover_provisional` constants with
+  `build.rs` validation and a `compile_error!` refusal absent the
+  `provisional-k-cover` feature — armed before the identifier existed
+  anywhere else; sentinel refined in-arc from fail-closed `u64::MAX`
+  to gate-identity `0` (provisional ⇔ `0`, sealed ⇒ `≥ 1`) so the
+  pre-seal corpus stays live end-to-end while the compile refusal
+  remains the shipping guard. (2) `count_frozen_shards_at_close`
+  (single production call site in the close gather; `freeze_height ≤
+  H_close` filter, decode failure aborts loudly) threaded as an FFI
+  `frozen_shard_count` parameter into
+  `EpochCloseInputs::{frozen_shard_count, k_cover}` with the
+  zero-at-top gate factor in `epoch_close_compute`. (3) Wire-level
+  positivity: `WireError::RewardAmountZero` at both `validate()` and
+  `read_payload()` — the zero-amount row is unencodable *and*
+  undecodable; the `EMISSION_AUTH_MSG_V1` corpus zero row replaced
+  and its four pinned digests regenerated in the same commit.
+  (4) `reward_gate_kat.rs` G-1..G-10 plus C++ store-side cases:
+  count-filter boundary (equality counts), malformed-row loud abort,
+  write-txn precondition, and the zero-output stored shape + reorg
+  round-trip via a legitimately-empty epoch (bitwise-identical to a
+  gated close per §2.1; direct gated-path test deferred to `K_COVER`
+  sealing). (5) `scripts/ci/check_reward_gate_predicate_sites.sh` as
+  consensus-invariants invariant 5: single `K_COVER` comparison site,
+  single counting read over `m_archival_shard_segment` (`mdb_stat`
+  refused), `≤` boundary pinned with strict-`<` refused, positive
+  controls guarding the guards. Outstanding before the PR merges:
+  the segment-freeze pipeline design round opens (§1.3 condition).
+
 - **docs: M1 reward-gate consensus rule — design rounds 1–3 spec + closure**
   ([`ARCHIVAL_REWARD_GATE_M1.md`](design/ARCHIVAL_REWARD_GATE_M1.md)).
   The WI-4 launch posture's cold-start refusal in consensus-rule form:

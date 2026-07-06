@@ -188,6 +188,22 @@ arithmetic is owned by [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §4.0.
 per-`P` delta when serve-credit state settles (re-cap one `P`, apply delta to `Σwork`) — the
 per-`P` cap is nonlinear. Reorg revert order must match the chosen path (§6).
 
+### 3.6 M1 reward gate — zero-at-top factor over §3.3/§3.5 (implemented)
+
+[`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md) adds the
+cold-start refusal as a consensus factor **inside** the close compute:
+for epochs where `frozen_shard_count(E) < K_COVER` (segment-table
+count, `freeze_height ≤ H_close(E)`), the stored §3.3 `R_market` and
+§3.5 `Σwork` values are **zero** — through the normal close path, never
+a skipped close (close-log/revert symmetry preserved). Readers of
+these quantities must not assume a stored zero implies an empty
+market: gated, legitimately-empty, and unclosed epochs are
+indistinguishable at the read surface (that spec's §2.1), and the
+emission leg's zero-tolerance compare inherits non-claimability from
+the stored zero. `K_COVER` is provisional (gate-identity `0`,
+compile-refused at seal time) until the WI-4 §14.4 partition run
+seals it.
+
 ---
 
 ## 4. Invariants — gate 2/4 must guarantee
@@ -383,6 +399,7 @@ servo/emission-cadence need + privacy review — not F1 portfolio axis.
 | [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Layer 2 margin-robustness; participation attractor |
 | [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) | Gate 4 — join-Market, bond-post wire |
 | [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) | Gate 6 — `P`↔principal firewall (parallel) |
+| [`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md) | M1 cold-start gate — zero-at-top factor over §3.3/§3.5 (§3.6) |
 
 ---
 

@@ -2,11 +2,13 @@
 
 **Status: design rounds 1–3 closed (§9, §10, §11 records), plus the
 §11.8 round-3 amendment (count-pass discipline, M3-1..M3-3) and the
-§11.9 implementation-gates decision. Spec amended in place per the
-rounds' dispositions. Implementation proceeds on the §1.3 second
-branch (fixture rows; O-1..O-3 blocking on the pipeline round, which
-opens before the gate PR merges), after the pre-flight pass against
-the dev head at the audit pin, in the §6 pinned sequence.** Per
+§11.9 implementation-gates decision. IMPLEMENTED (2026-07-06, §11.10
+record): the §6 pinned sequence executed steps 1–5 on
+`feat/m1-reward-gate-design` after the pre-flight pass at the audit
+pin, on the §1.3 second branch (fixture rows). Outstanding before the
+gate PR merges: the segment-freeze pipeline design round OPENS (§1.3
+condition); `K_COVER` sealing remains gated on the §14.4 partition
+run (§4).** Per
 `05-system-thinking.mdc` (specification first) and
 `26-sub-pr-design-discipline.mdc` (cited: consensus-critical sub-PR
 with design rounds before implementation; the pre-flight pass applies
@@ -17,13 +19,12 @@ between the rounds' closure and the first production commit).
 is the pre-flight pin, this is the spec. The launch-posture context
 (founder cover, cold-start refusal, the partition trap) lives in WI-4
 §14–§16 and is not restated here; this doc owns the consensus rule.
-**Location note (round 3, §11 M2-4):** the WI-4 doc lives on
-`feat/wi4-gf7-measurement` (pushed to `origin`, not yet merged to
-`dev`) — every "WI-4 §…" pointer in this spec resolves against that
-branch. Merge-ordering dependency, pinned: the WI-4 measurement doc
-merges to `dev` **before or with** this spec's implementation PR, or
-the pointers here dangle on `dev` exactly as round 3's review
-experienced.
+**Location note (round 3, §11 M2-4; resolved 2026-07-06):** the WI-4
+doc merged to `dev` via PR #262 (`1e89df832`) mid-implementation-arc —
+every "WI-4 §…" pointer in this spec now resolves on `dev`. The
+merge-ordering dependency ("before or with this spec's implementation
+PR", §11.9 sequence slot 0) is **satisfied**: WI-4 landed on `dev`
+before this branch's implementation PR opens.
 
 **Timeframes (rule 05).** *Now:* the launch mechanics — the gate is the
 structural form of cold-start refusal. *Mining-era end:* the gate is
@@ -582,8 +583,8 @@ not need it):
 | Predicate + operand tripwire | new `scripts/ci/` grep gate (shape precedent: `check_pending_post_write_path.sh`) | §10 M1-1: refuse any `K_COVER` comparison outside `epoch_close_compute` (+ the constants surface). **Extended at §11.8 M3-1:** also refuse any counting read over `m_archival_shard_segment` outside the single `count_frozen_shards_at_close` helper — the operand's production site gets the same one-site guarantee as the predicate site (§11.1's own pattern applied to the surface round 3 created) |
 | Store-shape + reorg tests | `tests/unit_tests/archival_substrate_lmdb.cpp` | §5 round-2 additions: gated-close stored shape (sigma present-and-zero, no `r_market` rows, close-log row written); boundary-epoch close/revert/re-apply bit-identical |
 | Wallet claim builder | future engine-side emission assembly (does not exist yet — verified at round 1, no `build_emission`/claim-builder site in `rust/`) | **Forward obligation, pinned here:** the builder derives claimable epochs from the same positive-share recompute (and can never encode a zero-amount row anyway, §2.3); carried as a spec requirement into the builder's own design round |
-| KAT | `rust/shekyl-archival-retention/tests/` + `fixtures/reward_gate_kat_v1.json` | §5 cases G-1..G-5 |
-| CI | `scripts/ci/check_archival_reward_gates.sh` | KAT wired into the existing gate-check shape |
+| KAT | `rust/shekyl-archival-retention/tests/reward_gate_kat.rs` + `fixtures/reward_gate_kat_v1.json` | §5 cases G-1..G-10 (G-6..G-9 added at round 2, G-10 at round 3) |
+| CI | `scripts/ci/check_reward_gate_predicate_sites.sh`, wired as invariant 5 of `check_consensus_invariants.sh` (this is the landed form of the tripwire row above); the KAT runs in the crate's normal `cargo test` lane | Gate checks in the existing consensus-invariants shape |
 | FFI/daemon | `shekyl-ffi` epoch-close entry point + `db_lmdb.cpp` gather (`process_archival_epoch_close_at_height`) | **Corrected at round 3 (§11 M2-1) — the rounds-1–2 "expected zero-change" was wrong.** The FFI signature gains a `frozen_shard_count` parameter; the C++ gather calls the single `count_frozen_shards_at_close(h_close)` helper (§1.1 count-pass discipline: explicit `freeze_height ≤ H_close(E)` filter — equality counts; decode failure aborts loudly; one call site) |
 | Count-pass boundary + decode tests | `tests/unit_tests/archival_substrate_lmdb.cpp` | §11.8 M3-1/M3-2: filter boundary (below/equal/above `H_close`, equality counts) + malformed-row loud abort — the cases the Rust KAT structurally cannot reach |
 | Docs | `ARCHIVAL_CONSENSUS_STATE.md`, `REWARD_EMISSION_LEG.md`, `docs/FOLLOWUPS.md`, `docs/CHANGELOG.md`, `docs/design/IMPLEMENTATION_INDEX.md` | Gate section + cross-references |
@@ -1132,6 +1133,8 @@ the round-3 review searched `dev` and this branch only. No pointer
 in this spec is stale-named. Fix landed: the Provenance section
 names the branch and pins the merge-ordering dependency (WI-4 doc
 merges before or with this spec's implementation PR).
+**Dependency satisfied 2026-07-06:** WI-4 merged to `dev` via #262
+(`1e89df832`) — see the Provenance note and §11.10.
 
 ### 11.5 M2-5 (low) — adopted as fixture requirements
 
@@ -1154,6 +1157,17 @@ fixture-requirements paragraph).
   contributed to emission" (gated, legitimately-empty, and — via the
   NOTFOUND launder — unclosed epochs all read zero; §2.1). The §5
   stored-shape test makes that assumption fail fast.
+  **Enumeration amended at implementation (§11.10):** the step-4 test
+  work added `has_archival_sigma_work_row` (test-support reader that
+  distinguishes present-and-zero from `MDB_NOTFOUND`, which
+  `get_archival_sigma_work_milli` deliberately launders to 0 — needed
+  to assert the stored shape at all) and
+  `put_archival_shard_segment_raw_for_corruption_test` (test-support
+  raw writer that plants an undecodable segment row, arming the M3-2
+  decode-failure abort — `put_archival_shard_segment` funnels through
+  `encode()` and cannot write a malformed row). Both are
+  test-support-only, no production caller; neither reads gatedness
+  (which remains unrepresentable, §2.1).
 - **R2-3 (reorg crossing a claim attempt):** adopted as a **forward
   obligation on the wallet claim builder / PR-E3**, not a store
   test: a claim built against branch A, mined on branch B where the
@@ -1264,6 +1278,87 @@ it to guard, closing the window where a plausible provisional value
 is loose with no trigger. Then helper + threading, wire positivity +
 corpus fix (same commit), KATs + C++ store tests, tripwire scripts
 last (they grep for final site names).
+
+### 11.10 Pre-flight pass + implementation record (2026-07-06)
+
+**Pre-flight pass (§11.9 gate 2).** Run at the dev head at pre-flight
+time — which was still `69af41a5a`; PRs #261 (RandomX differential)
+and #262 (WI-4 measurement doc) merged to `dev` mid-arc, ~30 minutes
+after step 1 landed. The §6 enumeration held: single
+`epoch_close_compute` call site (the FFI shim), gather anchors
+unchanged, no new sigma/`r_market` readers. Re-verified at the docs
+step against `dev` = `1e89df832`: the mid-arc merges touch only
+docs, simulation crates, and RandomX parity tests — zero hits on
+`epoch_close_compute`/sigma/`r_market`/`m_archival_shard_segment`.
+The three named items:
+
+- **Lagged-read clause (R2-1):** §2.2 sourcing unchanged at both pins.
+- **Stored-close readers (R2-2):** no new production reader; the two
+  test-support additions are recorded in the §11.6 amendment.
+- **M3-3 (K_COVER calibration input): discharged.** WI-4 merged to
+  `dev` (#262, `1e89df832`) — sequence slot 0 (§11.9 gate 3)
+  **satisfied** before the implementation PR opens. Checked against
+  the merged text: WI-4 §16.3 pins `shard_count` as "structural,
+  monotonic, and coincides with height. No live-participant estimate
+  is ever read," and the §16.2 derivation chain anchors `K_COVER` on
+  the cover-thickness model over segment count, not any
+  served/participation quantity. The calibration does not
+  reintroduce the sensor the round-3 re-anchor removed.
+
+**Steps 1–5, executed in the §11.9 pinned order** (branch
+`feat/m1-reward-gate-design`):
+
+| Step | Commit(s) | Delivered |
+| --- | --- | --- |
+| 1. Constants + compile refusal | `a2292b23c`, `6194ab7a7` | `k_cover` + `k_cover_provisional` in `consensus_constants.json`; `build.rs` validation; generated `k_cover.rs` with `compile_error!` absent the `provisional-k-cover` feature — armed before the identifier existed anywhere else |
+| 2. Helper + threading | `f65d3d89d` | `count_frozen_shards_at_close(h_close)` (`db_lmdb.cpp`, one production call site in the close gather); FFI `frozen_shard_count` param; `EpochCloseInputs::{frozen_shard_count, k_cover}`; zero-at-top gate factor in `epoch_close_compute` |
+| 3. Wire positivity + corpus fix | `cc28bee37` | `WireError::RewardAmountZero` at both `validate()` and `read_payload()` (zero unencodable *and* undecodable); `EMISSION_AUTH_MSG_V1` corpus zero-amount row replaced, four pinned digests regenerated (same commit, §2.3) |
+| 4. KATs + store tests | `e0a0cfd11` | `reward_gate_kat.rs` + fixture, G-1..G-10; C++ cases: filter boundary (below/equal/above, equality counts), malformed-row loud abort, txn precondition, zero-output stored shape + reorg round-trip |
+| 5. Tripwires | `31f133e5e` | `check_reward_gate_predicate_sites.sh` wired as invariant 5 of `check_consensus_invariants.sh`: single `K_COVER` comparison site (+ constants surface), single counting read over `m_archival_shard_segment` (`mdb_stat` refused outright), `≤` boundary operator pinned with strict-`<` refused, positive controls guarding the guards |
+
+**Implementation-time deltas from the spec text** (each within the
+rounds' dispositions; none touches the design's shape):
+
+1. **Sentinel refined to gate-identity `0` (`6194ab7a7`).** §4's
+   provisional value landed first as fail-closed `u64::MAX`, which
+   gated every close and de-exercised the store-write paths across
+   the existing C++ corpus — a vacuous-green inversion (the tests go
+   red, so the paths go untested). Refined to `0`:
+   `frozen_shard_count < 0` is never true, so pre-seal behavior is
+   exactly pre-gate behavior and the corpus stays live end-to-end.
+   `build.rs` enforces provisional ⇔ `0` and sealed ⇒ `≥ 1`;
+   `k_cover.rs` carries the matching `const` assert. The shipping
+   guard is unchanged — the compile refusal, never the sentinel's
+   runtime semantics (§4's own hierarchy).
+2. **`k_cover` as an `EpochCloseInputs` field.** Consequence of (1):
+   with the sentinel at `0` the gated branch is unreachable through
+   the constant, so the KATs inject `k_cover` per-case. The
+   production FFI threads the constant verbatim (`k_cover: K_COVER`)
+   — a tripwire positive control pins that exact spelling, so the
+   parameterization cannot silently become a second value source.
+3. **Test-support store surface.** Two additions, recorded in the
+   §11.6 R2-2 amendment: `has_archival_sigma_work_row` (stored-shape
+   probe past the NOTFOUND launder) and
+   `put_archival_shard_segment_raw_for_corruption_test` (raw writer
+   arming the M3-2 abort, unreachable through `encode()`).
+4. **Gated-close stored shape tested via a legitimately-empty
+   epoch.** With the provisional `0`, no C++ test can drive the gate
+   branch through production code. Per §2.1 the store cannot
+   represent gatedness — a gated close and a legitimately-zero close
+   are bitwise-identical by construction — so the stored-shape and
+   reorg round-trip cases (G-6/G-9's C++ side) assert the identical
+   zero-output shape (sigma present-and-zero, no `r_market` rows,
+   close-log row written, revert/re-apply bit-identical) via an
+   empty-credit epoch. **Forward item, named:** when `K_COVER` seals
+   `≥ 1`, add the direct gated-path close test (drive
+   `frozen_shard_count < K_COVER` through the gather) — carried in
+   `docs/FOLLOWUPS.md` with the sealing entry.
+
+**Outstanding before the gate PR merges** (unchanged from §11.9):
+the segment-freeze pipeline design round **opens** (§1.3 condition;
+`docs/FOLLOWUPS.md` entry); `K_COVER` sealing remains gated on the
+WI-4 §14.4 partition run and is not blocked by (and does not block)
+the PR itself — the compile refusal holds the seam.
 
 ---
 
