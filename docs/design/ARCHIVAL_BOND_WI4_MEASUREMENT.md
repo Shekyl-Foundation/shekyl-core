@@ -1826,6 +1826,13 @@ shard-service as the second once multi-shard; the §3.3 regime
 enumeration is extended to name these as heterogeneity axes. Rides the
 §14.4 measurement round already on the critical path.
 
+> **Narrowed by §18.8 (the P-is-public correction):** the
+> "smaller effective `N`" framing treated the pseudonym set as an
+> anonymity set; it is not one — `P` is public. Strata are graded as
+> candidate **bridge** axes (attribute↔user-side correlate), not as
+> crowds `P` hides in. The entry-side amount correlate is closed
+> structurally (§18.8 trace).
+
 ### 18.4 Linkability accumulates over a persona's lifetime — the gate grades per-instant
 
 Every WI-4 number is per-post; an adversary correlates over a persona's
@@ -1884,6 +1891,14 @@ both are about what the persona's *non-entry* activity leaks, or its own
 round if that proves too large. Recorded in `docs/FOLLOWUPS.md`. This
 is the surface most likely to have been genuinely un-thought-about,
 because the entire GF apparatus is timing-shaped.
+
+> **Sharpened by §18.8 (the P-is-public correction):** "links `P`
+> across epochs" is a non-finding — `P` is public. The channel's real
+> content is the `P`→user **amount bridge**: the entry-side form is
+> closed structurally (bond amount consensus-forced to
+> `bond_floor(holdings)`, §18.8 trace); the surviving form is V-2b —
+> `P`'s lifetime total is publicly computable and matchable against
+> user-side amount surfaces at exit.
 
 ### 18.6 Disposition summary and what stays on the critical path
 
@@ -2022,3 +2037,125 @@ the four pins above — the curve shape and class width become named,
 reviewed privacy parameters, and the claim-timing and correlated-exit
 observables join the GF-4 round's surface. Nothing here reopens the
 `1.86`; everything lands on the exit-seam gate the seal already needs.
+
+> **Superseded in part by §18.8 (the P-is-public correction):** the
+> P-curve pin's "privacy parameter, not just economic" framing
+> over-escalated — holdings clustering partitions the set of
+> *pseudonyms*, which are public objects, and is privacy-relevant only
+> through a user-side correlate. See §18.8 for the corrected pin set.
+
+### 18.8 R3 correction round: the P-is-public reframing, retractions, and the amount-bridge trace (2026-07-06)
+
+**The correction (collapses an error running through §§18.3, 18.5,
+18.7).** `P` is the pseudonym — it is *supposed* to be visible. Every
+on-chain act of `P` (holdings cleartext, `settlement_epochs`, claim
+cadence, reward amounts) is attributable to `P` by construction, and
+`P` has no anonymity to lose: **the protected object is the `P`→user
+link, and nothing else.** Prior sections repeatedly treated
+`P`-distinctiveness (a rare holdings value, a recurring claim habit, a
+thin stratum) as an exposure in itself. That framing is wrong: a
+distinctive attribute on `P` partitions the set of pseudonyms — a set
+of public objects — and threatens nothing unless the attribute also
+**correlates with something user-identifiable**, i.e. forms a bridge.
+Every exposure in this document must be re-asked in exactly one form:
+*does this observable help an adversary connect `P` to the user?*
+
+**What survives re-asking (the bridges).** GF-7's entry seam (the
+funding event is the *user's* act; timing correlation to the bond post
+is the bridge — the `1.86` measures this correctly). The claim-cadence
+channel, **re-anchored**: it matters only insofar as `P`'s claim timing
+correlates with the *user's* observable rhythm (session clock, refresh
+cadence, sibling personas sharing the user's clock) — the co-trigger
+structure, not `P`'s habit per se. The exit seam (GF-4): the drain
+moves value back toward the user and rotation fires on the user's
+event. Lifetime accumulation (§18.4), **re-anchored**: each `P` event
+is one more *timing sample against the user's clock*, so exposure still
+compounds with lifetime — through the bridge, not through `P`'s
+fingerprint.
+
+**Retractions (recorded, not rewritten — the sections stand as the
+history of the error):**
+
+- **§18.3's intrinsic-stratification claim is retracted.** "A rare
+  holdings stratum has smaller effective `N` so its `r` is higher"
+  treated the pseudonym set as an anonymity set. It is not one.
+  Holdings distinctiveness on `P` is a **non-finding** absent a
+  user-side correlate; the §14.4-round stratified grading obligation is
+  **narrowed** to the conditional form: grade strata only as candidate
+  *bridge* axes (does the attribute correlate with a user-side
+  observable?), not as crowds `P` must hide in.
+- **§18.7's P-curve escalation is retracted.** The `Curve` knee does
+  not "manufacture the anonymity crowd" — there is no crowd `P` needs,
+  because `P` is not hiding. The curve is an **economic** parameter;
+  its privacy relevance is contingent on holdings correlating with a
+  user-side amount, which the trace below addresses. The reopening
+  trigger (PRs touching `g_age_milli`/`curve_milli`) downgrades from
+  "stratified privacy re-grade required" to "check the §18.8 bridge
+  question if the change alters what is publicly computable about
+  value flows."
+- **P-width and P-correlated-exit survive** (class width bounds the
+  exit→entry *bridge*; correlated exits are *user-event* co-triggers),
+  and **P-claim-timing survives re-anchored** as above.
+
+**The amount-bridge trace (the sharpest question, verified at source).**
+Does `P`'s public bond amount reveal the user's funding amount? **No —
+the bridge is structurally closed at the entry seam, by consensus
+rule, in the strongest form (quantization to a protocol constant):**
+
+1. The bond post's public amount is **consensus-forced** to
+   `bond_floor(holdings)`: `verify_join_market_bond_post` rejects any
+   vin where `bonded_total_atomic != floor || bond_credit != floor`
+   (`bond_post.rs::FloorMismatch`), and the builder pins the same
+   invariant at construction (`shekyl-archival-bond-builder`
+   `bonded_total_atomic == bond_credit == bond_floor(holdings)`). The
+   public amount carries **zero bits beyond the holdings descriptor**,
+   which is already cleartext in the same vin. It cannot be the
+   funding amount forwarded, because consensus fixes it to a value
+   chosen before the user decided how much to fund.
+2. The funding side is hidden and change is hidden: user→`P` funding
+   is ordinary FCMP++ (Pedersen commitments); the assemble path
+   (`bond_assembly.rs::select_funding_outputs`) greedily selects
+   `P`-local outputs until `sum ≥ bond_floor + fee` and returns excess
+   to `P` as an ordinary hidden output.
+3. No principal reach-across exists in code: the
+   `InsufficientFunding` refusal arm names the rule — `P` bonds from
+   `P`-local outputs only ("no reach-across to principal outputs;
+   that reach-across is the funding-seam linkage the architecture
+   firewalls").
+
+**Surviving residuals of the trace (both `P`→user-shaped, both routed
+to the GF-4 round):**
+
+- **V-2a — staker-membership prior (entry side).** Because the
+  required funding is a universal public constant
+  (`bond_floor·k + fee`), an adversary with *user-side off-chain*
+  amount visibility (e.g. exchange-withdrawal records) gains a "this
+  user is funding an archival bond" prior. It selects no particular
+  `P` — every bond costs the same, which is crowd-forming — but it
+  sharpens the GF-7 correlator's candidate set. In-model this is
+  subsumed by the adversary-knows-candidates assumption; named so the
+  subsumption is visible rather than accidental.
+- **V-2b — exit lifetime-total match (the value channel's surviving
+  form).** `P`'s lifetime value — `bond_floor·k` returned at drain
+  plus `Σ reward_amount_plain` — is **publicly computable to the
+  atomic unit** from chain data. On-chain re-entry of that value is
+  FCMP++-hidden, so the bridge requires user-side amount visibility: a
+  user-side deposit matching `P`'s publicly-known lifetime total is an
+  amount-certainty bridge, independent of every timing mitigation.
+  This is what §18.5's value channel **is**, under the corrected
+  framing: not "`P`'s amounts are distinctive" (non-finding) but
+  "`P`'s publicly-computable total can be matched against user-side
+  amount surfaces." Graded in the GF-4 round; the operational
+  mitigation shape (drain splitting/laundering through time) is that
+  round's design question.
+
+**Net effect on the R3 map.** GF-4 and the value channel remain
+load-bearing, **for the corrected reason**: they are where `P`'s public
+activity can bridge to the user — by value (V-2b) and by time
+(drain/rotation co-trigger, claim cadence against user rhythm). The
+entry-seam `1.86` covers the funding-*timing* bridge; the entry-seam
+funding-*amount* bridge is closed structurally (this section); the
+un-graded surface is the exit-side pair. §18.3's stratified grading
+narrows to bridge-axis screening; §18.7's curve pin downgrades to
+economic-with-a-bridge-check. The verdict-line conditionals (§13.1,
+§13.5) are unaffected — they were already stated in `P`→user form.

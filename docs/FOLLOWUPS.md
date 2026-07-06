@@ -7582,6 +7582,26 @@ one place to confirm each item's relationship to the wallet stack.
   as sweep axes; GF-4/value-channel round); **P-correlated-exit** (duration-class
   anonymity must hold under co-triggered mass unbonding — cold-start thinness relocated
   to the exit seam; named GF-4 wargame).
+  **R3 correction round (§18.8, the P-is-public reframing):** `P` is the pseudonym —
+  public by construction, with no anonymity to lose; the only protected object is the
+  **`P`→user link**, so every exposure re-asks as "does this observable bridge `P` to
+  the user?" **Retracted:** §18.3's intrinsic-stratification claim (holdings
+  distinctiveness partitions the *pseudonym* set — a non-finding absent a user-side
+  correlate; stratified grading narrows to bridge-axis screening) and §18.7's P-curve
+  "privacy-primary" escalation (the curve is economic; bridge-check contingent).
+  **Re-anchored on user-rhythm/user-event correlation:** claim-timing, lifetime
+  accumulation, correlated-exit. **Amount-bridge trace verified at source — closed at
+  entry, structurally:** the bond's public amount is consensus-forced to
+  `bond_floor(holdings)` (`bond_post.rs` FloorMismatch; builder pins
+  `bonded_total_atomic == bond_credit == bond_floor`), carrying zero bits beyond the
+  already-public holdings; funding and change are FCMP++-hidden; no principal
+  reach-across exists in the assemble path (`bond_assembly.rs`). **Surviving residuals
+  (GF-4 round):** V-2a staker-membership prior (universal funding constant is visible
+  to off-chain user-side amount surfaces — subsumed in-model by
+  adversary-knows-candidates, named); V-2b exit lifetime-total match (`bond_floor·k +
+  Σ reward_amount_plain` publicly computable to the atomic unit; matchable against
+  user-side amount surfaces at exit — the value channel's surviving form, an
+  amount-certainty bridge independent of timing mitigations).
   **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
   GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
   seams, not just entry).**

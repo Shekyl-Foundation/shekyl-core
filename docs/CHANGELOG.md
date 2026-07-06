@@ -134,6 +134,19 @@
   submission as a recurring entry-gap-shaped timing observable
   (GF-4/value-channel round), and correlated mass-unbonding as a named
   GF-4 wargame (duration-class anonymity under co-triggered exits).
+  **R3 correction round (§18.8):** the P-is-public reframing — `P` is
+  the pseudonym, public by construction; only the `P`→user link is
+  protected. Retracted §18.3's intrinsic-stratification claim and
+  §18.7's P-curve privacy-primary escalation; re-anchored claim-timing,
+  lifetime accumulation, and correlated-exit on user-rhythm/user-event
+  correlation. Amount-bridge trace verified at source: **closed at
+  entry structurally** — the bond's public amount is consensus-forced
+  to `bond_floor(holdings)` (`bond_post.rs` FloorMismatch), funding and
+  change FCMP++-hidden, no principal reach-across in the assemble path.
+  Surviving residuals routed to GF-4: V-2a staker-membership prior
+  (universal funding constant vs off-chain user-side amount surfaces)
+  and V-2b exit lifetime-total match (`P`'s lifetime value publicly
+  computable to the atomic unit — the value channel's surviving form).
   **PROVISIONAL:** the block-time sealing
   re-run is confirmatory by construction (live `BondPostDispatched.at` is
   the due block; dispersal is sub-block `U[0,60s)`), so no block-resolution
