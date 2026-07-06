@@ -4,6 +4,22 @@
 
 ### Added
 
+- **docs: M1 reward-gate consensus rule — design round 1 spec**
+  ([`ARCHIVAL_REWARD_GATE_M1.md`](design/ARCHIVAL_REWARD_GATE_M1.md)).
+  The WI-4 launch posture's cold-start refusal in consensus-rule form:
+  zero reward accrual for every persona in epochs where
+  `shard_count < K_COVER`, enforced as a uniform zero-at-top factor in
+  `epoch_close_compute` and inherited by the emission zero-tolerance
+  compare with no second predicate site; gated epochs structurally
+  non-claimable. Spec-first per `05-system-thinking` and
+  `26-sub-pr-design-discipline` (cited): no code until round 1 closes.
+  Carries the WI-4 §16.2 obligations — activation-boundary KAT as a
+  first-class deliverable, the zero-accrual/no-seniority invariant
+  enumeration with source-verification checks, and the spec/constant
+  split (`K_COVER` finalization gates on the §14.4 partition run;
+  provisional sentinel + sealing-checklist blocker until then). Surface
+  enumerated in advance; five round-1 review questions recorded (§8).
+
 - **wallet: block-timed bond-post dispatch driver — WI-3**
   (`ARCHIVAL_BOND_WI3_DISPATCH.md`; `IMPLEMENTATION_INDEX.md` §4 WI-3
   row). The sealed pending post now actually reaches a wire at its

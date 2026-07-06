@@ -7389,6 +7389,22 @@ one place to confirm each item's relationship to the wallet stack.
   intra-doc link in the `randomx-v2-sys`/`shekyl-pow-randomx` docs, `generic_array::as_slice`
   deprecations in vendored crypto). **Reopen as** a standalone doc-hygiene sweep: fix those warnings,
   then swap the shekyl-tor-scoped step for `cargo doc --workspace --no-deps` under `-D warnings`.
+- **M1 reward gate — design round 1 OPEN (`ARCHIVAL_REWARD_GATE_M1.md`, 2026-07-06;
+  consensus rule, genesis-frozen, builds first per the WI-4 ranked path).** The launch
+  posture's cold-start refusal in structural form: zero accrual to every `(P, s, E)` for
+  epochs where `shard_count < K_COVER` — uniform, global, blind (no founder marking),
+  keyed on the monotone-in-height shard count so it is non-gameable and sensorless. Spec
+  pins: zero-at-top enforcement locus in `epoch_close_compute` (no consensus quantity from
+  a gated epoch survives), gated epochs structurally non-claimable on the emission vin,
+  the zero-accrual/no-seniority invariant table with named source-verification checks,
+  the activation-boundary KAT (G-1..G-5, first-class deliverable, parameterized over
+  `K_COVER`), and the spec/constant split — **the rule's machinery may land after round
+  closure, but `K_COVER`'s finalization gates on the §14.4 partition-adversary run with
+  the widened hypothesis class** (WI-4 §16.2 obligations 1–3); the provisional constant
+  ships with a NOT-GENESIS-READY sentinel and a sealing-checklist blocker. Five round-1
+  review questions recorded in the doc §8 (zero-consumer audit, non-claimable corner,
+  invariant-table source checks, sentinel mechanics, reorg-across-activation argument).
+  **Target: V3.0 pre-genesis — first item on the WI-4 implementation path.**
 - **2d-2 SP-T4a — GF-7 principal-timeline timing correlation is a GENESIS GATE (measure
   `P(link | T_obs)` before launch).** SP-T4a *draws* the narrow funding-seam entry-gap jitter
   (`draw_entry_gap`, `spread ~ U[0, 600 blocks]`) but does **not** wire it into any broadcast — the
