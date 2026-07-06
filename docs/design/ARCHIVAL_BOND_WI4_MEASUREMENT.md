@@ -2468,3 +2468,59 @@ that no counterparty-crossing privacy can exist inside the protocol.
 The R4 residual inventory is closed to its floor; the drain-decoupling
 pin (input-level form) is the one piece of new structural work the
 round produced, and it rides the gate-6 policy PR.
+
+### 18.13 Arc closure: theory ceiling declared; Tor-default trace resolved (2026-07-06)
+
+The review arc (R1–R4 plus the R3 correction round) is closed at its
+theory ceiling: everything at or below the `P`↔principal seam is
+structurally foreclosed, closed by an input-level pin awaiting one
+trace, measured-thin-but-honest (1.86), or a deliberate recorded
+tradeoff. The remaining work is implementation against the pinned
+design, not further seam analysis. Two verification traces were open
+at closure; one resolved immediately, one waits on the gate-6 PR.
+
+**Trace 1 (resolved): default Tor coverage — split verdict.** The
+persona side is stronger than default-on: `shekyl-p-transport`
+**fails the build** without its SOCKS connector
+(`compile_error!`, `rust/shekyl-p-transport/src/lib.rs`), and every
+per-`P` request rides its own Tor circuit via a cSHAKE-derived
+`IsolateSOCKSAuth` username (fixed-width non-empty by type, redacted
+`Debug`, principal-disjoint). "`P` dials clearnet" is not a
+misconfiguration — it is unrepresentable. The **principal side is
+opt-in**: `shekyl-cli`'s `--proxy` is `Option<String>` defaulting to
+`None` (`rust/shekyl-cli/src/main.rs`), so the principal's daemon
+connection dials clearnet unless the user configures a proxy; the
+p-transport invariants explicitly model the principal as the
+no-auth/empty-username circuit, with the principal-side SOCKS
+namespace obligation already deferred in FOLLOWUPS. **Disposition:**
+the network half of the principal↔user seam is closed by
+construction for personas and open by default for the principal.
+The named work item is the principal-side default flip
+(default-on Tor for principal daemon connections, opt-out loud in
+the UI the way the persona-side `compile_error!` is loud in the
+build). Until it lands, a passive network observer needs *no user
+error* to correlate principal daemon traffic with on-chain events —
+the vantage is granted by our default, not by a user mistake.
+
+**Trace 2 (pending, unchanged):** drain-amount selection inputs —
+rides the gate-6 policy PR per §18.12's acceptance test.
+
+**The closing frame on the principal↔user seam** (recorded as the
+answer to "how hard is this seam in the real world"): against a
+chain-only adversary the seam is invisible by construction — FCMP++
+spends are untrackable to a principal, amounts recipient-only, spend
+sets unenumerable; there is nothing on-chain to trace. The boundary
+classes that remain are exactly three, and only one is a user
+mistake: (1) the **on-ramp witness** — irreducible, not assistance
+but presence; bounded to entry-seam material because the chain goes
+dark to the counterparty too; (2) the **network position** — today a
+default-defect (ours, not the user's), converted by the default flip
+into an intentional-opt-out class; (3) the **enumerated mistake set**
+(drain subsums, address reuse, cross-persona correlation) — closed
+by safe-by-default coverage, template: the §18.12 input-level pin.
+After the default flip, tracing the seam requires being the on-ramp
+counterparty or the user's intentional departure from defaults —
+both outside the protocol's power, which is the definition of closed
+to its floor. Caveat carried: under default-on, the opt-out set
+remains a distinguishable minority; acceptable (informed choice),
+but the opt-out must be explicit and loud, never ambient.

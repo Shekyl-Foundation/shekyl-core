@@ -7304,6 +7304,24 @@ one place to confirm each item's relationship to the wallet stack.
 
 ## V3.x — staker archival and visualization ship
 
+- **Principal-side default-on Tor — flip `--proxy` from opt-in to default, opt-out loud.**
+  Source-verified at the WI-4 arc closure (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §18.13):
+  the persona side is Tor-mandatory **by construction** (`shekyl-p-transport` fails the
+  build without its SOCKS connector), but the principal side is opt-in — `shekyl-cli`'s
+  `--proxy` is `Option<String>` defaulting to `None`, so the principal's daemon
+  connection dials clearnet by default. Until flipped, a passive network observer needs
+  **no user error** to correlate principal daemon traffic with on-chain events — the
+  vantage is granted by our default, not by a user mistake. This is the network half of
+  the principal↔user seam and the one standing unmade security-over-features call on
+  the archival leg: opt-in isolation protects the educated user and abandons the
+  un-educated one, the inversion of who privacy-first defaults are for. Shape: default-on
+  Tor for all principal daemon connections; opt-out explicit and loud in the UI (the
+  runtime analogue of the persona side's `compile_error!`), never ambient. Caveat
+  recorded in §18.13: under default-on the opt-out set remains a distinguishable
+  minority — acceptable as informed choice. Interacts with (but does not wait for) the
+  principal-side `IsolateSOCKSAuth` item below and the embedded-Arti-vs-external-Tor
+  fork in the transport PR. **Target: V3.0 pre-genesis (defaults are what genesis users
+  inherit; a post-genesis flip re-partitions the population into before/after cohorts).**
 - **Principal-side `IsolateSOCKSAuth` — give the principal's `DaemonClient`s isolated circuits
   (2d-2 Round 0, deliberately a separate ticket).** Today the principal's two daemon surfaces
   (`cli/daemon.rs::DaemonClient` ureq/SOCKS + `engine-core::DaemonClient` over `SimpleRequestRpc`)
@@ -7653,6 +7671,14 @@ one place to confirm each item's relationship to the wallet stack.
   is a priority-ordered tradeoff driven to its floor, not an unclosed defect — a future
   reviewer must not "fix" it by CT-committing the mint. Floor: the fee-widened lifetime-
   aggregate band at the definitional off-chain crossing; inventory closed to its floor.
+  **Arc closure (§18.13, 2026-07-06):** theory ceiling declared — remaining work is
+  implementation, not seam analysis. Tor-default trace resolved (split verdict: persona
+  side Tor-mandatory by `compile_error!`; principal side opt-in, `--proxy` default
+  `None` — default flip is the named V3.0 item, see the principal-side default-on Tor
+  entry). Drain-inputs trace rides the gate-6 PR. Principal↔user closing frame recorded:
+  chain-only adversary sees nothing by construction; the three boundary classes are the
+  irreducible on-ramp witness, the network default (ours until flipped), and the
+  enumerated mistake set (closed by safe-by-default coverage, §18.12 pin as template).
   **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
   GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
   seams, not just entry).**

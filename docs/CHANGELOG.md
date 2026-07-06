@@ -183,6 +183,15 @@
   lands). Why-loud recorded: the mint is loud by priority-1 decision
   (inflation audit) — R-1 is a priority-ordered tradeoff at its floor,
   not an unclosed defect; do not "fix" it by CT-committing the mint.
+  **Arc closure (§18.13):** theory ceiling declared; Tor-default trace
+  resolved at source — persona side Tor-mandatory by construction
+  (`shekyl-p-transport` `compile_error!` without SOCKS), principal
+  side opt-in (`--proxy` default `None`); principal-side default-on
+  Tor added to FOLLOWUPS as a V3.0 pre-genesis item. Principal↔user
+  seam closing frame recorded: chain-only adversary blind by
+  construction; residual boundaries are the irreducible on-ramp
+  witness, the network default (until flipped), and the enumerated
+  user-mistake set closed by safe-by-default coverage.
   **PROVISIONAL:** the block-time sealing
   re-run is confirmatory by construction (live `BondPostDispatched.at` is
   the due block; dispersal is sub-block `U[0,60s)`), so no block-resolution
