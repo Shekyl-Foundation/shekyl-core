@@ -56,5 +56,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # ripgrep is load-bearing for every invariant in the gate script; its
+      # `command -v rg` precondition fails closed if it is missing. `ubuntu-latest`
+      # ships without `rg`, so install it explicitly (house pattern:
+      # consensus-invariants.yml / economics-c2a-prime.yml).
+      - name: Install ripgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ripgrep
+          rg --version
+
       - name: Run pending-post write-path check
         run: scripts/ci/check_pending_post_write_path.sh
