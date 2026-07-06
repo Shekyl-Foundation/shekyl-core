@@ -21,7 +21,14 @@ pub trait GapRng {
 /// incomplete top bucket is rejected so every value in `[0, max]` is
 /// equiprobable. Pure integer arithmetic, so the result is deterministic and
 /// identical on every architecture.
-pub(crate) fn bounded_uniform<R: GapRng + ?Sized>(rng: &mut R, max: u64) -> u64 {
+///
+/// Public because it is the standoff family's single unbiased sampler: the
+/// entry-gap draw and the cover-amount draw use it internally, and the WI-3
+/// dispatch driver's send-time dispersal draw
+/// (`ARCHIVAL_BOND_WI3_DISPATCH.md` §3.2 part 3) draws through the same
+/// audited rejection sampling rather than re-implementing it — the bias
+/// would be privacy-load-bearing there exactly as here.
+pub fn bounded_uniform<R: GapRng + ?Sized>(rng: &mut R, max: u64) -> u64 {
     if max == u64::MAX {
         // Full range: every draw is already uniform over [0, u64::MAX].
         return rng.next_u64();
