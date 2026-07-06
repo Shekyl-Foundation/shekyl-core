@@ -99,6 +99,28 @@
   exchangeability as the load-bearing step and regime-splitting as the
   mean-to-max carrier in deployment. Closure requires §§17.1–17.5
   ratified together.
+  **Distinct-position round R3 (§18, 2026-07-06):** the mean-vs-max
+  disposition is sound but incomplete (captured the max for the split
+  axis, assumed the heterogeneity enumeration complete). Five surfaces
+  scope what `1.86` means — one seam (entry; exit/drain is GF-4,
+  unmeasured), one scope (per-post, not per-principal), one channel
+  (timing, not the loud reward-amount value channel), one instant (not
+  lifetime-cumulative), one stratum (unstratified by observable bond
+  attributes). **Landed on the verdict line:** the cross-seam
+  conditional (§13.1/§13.5) — `r < 2` promotes per-post → per-principal
+  **only where persona mutual-unlinkability (GF-4) holds**, parallel to
+  isolation conditioning; the most important previously-unstated
+  dependency (S-1 is per-principal; the bound is per-post). **Verified
+  at source:** the archival reward value channel is loud by design
+  (`reward_amount_plain` cleartext, P-tied, per-epoch recurring;
+  confidential reward deleted — `emission_wire.rs`,
+  `REWARD_EMISSION_LEG.md`; consensus-inert until PR-E3/C-1) — orthogonal
+  to the timing gate, needs its own measurement; the attribute-strata
+  coupling is real but via `holdings`/`bond_floor`, not the retired
+  lock-tier multipliers. **New sealing-path rounds:** GF-4 exit seam
+  (co-equal genesis gate, graded jointly with persona rotation) + the
+  value channel. **Ride the §14.4 round:** attribute-stratified grading,
+  lifetime-accumulation sweep. No bound reopened.
   **PROVISIONAL:** the block-time sealing
   re-run is confirmatory by construction (live `BondPostDispatched.at` is
   the due block; dispersal is sub-block `U[0,60s)`), so no block-resolution

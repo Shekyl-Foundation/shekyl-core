@@ -7538,7 +7538,36 @@ one place to confirm each item's relationship to the wallet stack.
   regime-splitting as the mean-to-max lift in deployment (the discipline that already
   surfaced cold-start as a fail rather than averaging it in). §17 closure now requires
   §§17.1–17.5 ratified together.
-  **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round).**
+  **Distinct-position round R3 conducted (2026-07-06, §18):** the mean-vs-max
+  disposition is sound but incomplete — it captured the max for the axis it split on
+  (activity) and assumed the heterogeneity enumeration complete. Five surfaces
+  enumerated, scoping what the honest `1.86` means: it is a bound on **one seam**
+  (entry; the exit/drain seam is **GF-4, unmeasured** — §18.1), at **one scope**
+  (per-**post**, not the per-**principal** property S-1 names — §18.2), along **one
+  channel** (timing, not the loud reward-amount value channel — §18.5), at **one
+  instant** (per-post, not lifetime-cumulative — §18.4), for **one stratum**
+  (unstratified by observable bond attributes — §18.3). **Landed now (verdict-line
+  honesty):** the cross-seam/per-principal conditional (§18.2) on the verdict line
+  (§13.1) and sealed-claim ledger (§13.5) — `r < 2` promotes from per-post to
+  per-principal **only where persona mutual-unlinkability (GF-4) holds**, structurally
+  parallel to isolation conditioning; the single most important previously-unstated
+  dependency, since S-1 is per-principal and the bound is per-post. **Verified at
+  source:** the reward **value channel** is loud by design (`reward_amount_plain`
+  cleartext, `P`-tied via `p_pubkey`/`P_canonical_id`, per-settlement-epoch recurring;
+  confidential reward explicitly deleted — `emission_wire.rs`, `REWARD_EMISSION_LEG.md`
+  §2/§5.5; consensus-inert until PR-E3/C-1) — **orthogonal to the timing gate, open by
+  design, needs its own measurement** (§18.5); and the attribute-strata coupling is
+  real but via **`holdings`/`bond_floor`** (lock-tier multipliers are the *retired*
+  confidential path, deleted from the archival leg — §18.3 correction). **New
+  sealing-path measurement rounds (a-priori-then-attack-shaped, like GF-7):** GF-4 exit
+  seam as a **co-equal genesis gate** (jointly with persona rotation — same drain event,
+  cannot multiply independently) and the value channel (folded into GF-4 or its own).
+  **Extensions riding the §14.4 round:** attribute-stratified grading (§18.3) and
+  lifetime-accumulation sweep (§18.4). No bound reopened; §18 records so the seal cannot
+  read the entry-seam number as the whole claim.
+  **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
+  GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
+  seams, not just entry).**
   **Open leg-(b) residual (rule 21), severity sharpened:** the *block-time* sealing re-run is
   confirmatory by construction (live `BondPostDispatched.at` is the due block — dispersal is
   sub-block, `U[0,60s)`, never entering `at`; `gf7_emits_bond_post_dispatched_per_submit`),

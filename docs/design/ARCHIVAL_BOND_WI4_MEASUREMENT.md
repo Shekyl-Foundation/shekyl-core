@@ -638,8 +638,25 @@ recommended **local-daemon posture** against a **block-resolution**
 observer in **steady state**, and it names what it does not certify — the
 remote/non-isolated-daemon posture (Axis A reopen, §4.1.1; the pre-fix
 `r ≈ 5` shape is the expected re-grade there) and the wall-clock sub-block
-channel (§13.3). Every gate-relevant row clears the bound on **all three
-arms**, now including the strengthened panel:
+channel (§13.3).
+
+*Scope of the number, pinned at review closure R3 (2026-07-06, §18).*
+The `1.86` is honest for what it grades, and the qualifiers that bound
+its meaning are load-bearing enough to state on the verdict line, not
+bury: it is a bound on **one seam** (the entry/funding→bond-post seam;
+the exit/drain seam is GF-4, unmeasured — §18.1), at **one scope**
+(per-post, not the per-principal property S-1 actually names — safe as
+a per-principal bound only where persona mutual-unlinkability holds,
+which is also GF-4 — §18.2), along **one channel** (timing, not the
+loud per-epoch reward-amount value channel — §18.5), at **one instant**
+(per-post, not cumulative over a persona's observed lifetime — §18.4),
+for **one stratum** (unstratified by the observable bond attributes
+`bond_floor`/`holdings`/shard that partition `N` — §18.3). None of
+these reopens the `1.86`; each names a place the honest number quietly
+widens under the next adversarial question, and §18 dispositions them.
+
+Every gate-relevant row clears the bound on **all three arms**, now
+including the strengthened panel:
 
 | Gate-relevant row | `blind` | `s3` | `lr` (panel) | `r = lr·N` |
 | --- | --- | --- | --- | --- |
@@ -742,8 +759,9 @@ de-anonymization" claim, with the margin now honestly thin (§13.1).
 
 ### 13.5 The sealed claim is conditional by construction (pinned 2026-07-06)
 
-The ledger against the `1.86` margin is three conditionals, and it is
-**asymmetric** in a way the eventual seal must preserve:
+The ledger against the `1.86` margin is four conditionals (the fourth
+added at R3), and it is **asymmetric** in a way the eventual seal must
+preserve:
 
 - **Leg (b)** (wall-clock channel, §13.3) and the **§14.4 partition run**
   are *buildable*: each has a committed a-priori bound and a build item,
@@ -752,18 +770,35 @@ The ledger against the `1.86` margin is three conditionals, and it is
   is a transport-layer property that no bond-layer measurement can
   discharge. It never becomes a cleared checkbox; it remains a stated
   assumption on every number in this document, forever.
+- **Cross-seam / per-principal conditioning (added R3, 2026-07-06,
+  §18.2)** is a *second* conditional of the buildable kind, but it
+  gates a **scope promotion** the other two do not touch: the measured
+  bound is per-**post**, and S-1 is a per-**principal** property. A
+  principal holds `K` personas; if they are independently linkable at
+  per-post `p`, the per-principal breach probability is `1 − (1 − p)^K`,
+  which compounds toward 1 for a prolific principal. The only thing that
+  stops the compounding is **persona mutual-unlinkability** — and that
+  is exactly the exit/rotation seam GF-4 governs, **unmeasured**. So the
+  per-post `1.86` implies a per-principal guarantee **only where GF-4
+  holds**, and that dependency is a committed conditional, not an
+  assumption to leave implicit.
 
 Consequence for seal-time wording: even when leg (b) and the partition
 arm both pass and `K_COVER` is set, the gate's honest form is **not**
-"unlinkability holds." It is "unlinkability holds **conditional on
-circuit/client isolation, which is enforced and verified at the
-transport layer, not here**." Two-of-three-measured must never be read
-as three-of-three-cleared: the isolation conditional survives into the
-genesis claim itself as a permanent qualifier, and a future reader who
-sees "leg-b passed, partition passed, sealed" and drops that qualifier
-has dropped the assumption the entire gate rests on. Any seal statement
-derived from this document carries the conditional clause on the verdict
-line, in the same position the posture condition occupies today.
+"unlinkability holds." It is "the per-persona entry-seam advantage is
+bounded (`r < 2`) under the local-daemon posture, **conditional on
+(1) circuit/client isolation, verified at the transport layer, not
+here, and (2) persona mutual-unlinkability (GF-4), graded separately —
+without which the per-post bound does not promote to the per-principal
+property S-1 names**." Measured-conditionals-cleared must never be read
+as all-conditionals-cleared, and a per-**post** bound must never be read
+as a per-**principal** one: both the isolation conditional and the
+cross-seam/GF-4 conditional survive into the genesis claim itself as
+permanent qualifiers, and a future reader who sees "leg-b passed,
+partition passed, sealed" and drops either has dropped an assumption the
+gate rests on. Any seal statement derived from this document carries
+**both** conditional clauses on the verdict line, in the same position
+the posture condition occupies today.
 
 **No cross-subsidy (the same pin, applied to marginal numbers).** The
 steady-state margin is ~7% (`1.86` vs `2.0`) and lends nothing. When the
@@ -1700,3 +1735,177 @@ heterogeneity) is bound to the regime-splitting discipline that
 carries it. One instrument (§9 criterion 9) and one process property
 (§16.10 distinct-position) are added. All amendments
 adversary-strengthening, pre-code.
+
+## 18. Distinct-position round R3 (2026-07-06): the completeness gap the mean-vs-max disposition left open
+
+**Position.** Standing adversarial reviewer, distinct from the bound's
+author (§16.10 requirement). **Result.** The §17.5 mean-vs-max
+disposition is *sound but incomplete*: it proved the max is captured
+**for the axis it splits on** (activity level) and silently assumed the
+heterogeneity-axis enumeration complete. It is not. R3 enumerates the
+un-split axes and the un-graded seams, dispositions each, and states
+two conditionals that promote the honest `1.86` to less than a reader
+would otherwise take it for. **No amendment reopens the `1.86`** — it is
+what it honestly is for the entry seam, per-post, timing-channel,
+per-instant, unstratified; each finding names a different one of those
+five qualifiers.
+
+The five surfaces, ranked by how load-bearing (§18.1–§18.2 are seams the
+review intensity had not reached; §18.3–§18.5 are the concrete content
+of the completeness gap):
+
+### 18.1 The exit seam (GF-4) is unmeasured — the `1.86` bounds one of two co-equal channels
+
+WI-4 grades the **entry** seam (funding → bond-post). S-1
+(principal↔`P`) breaks if an adversary links via the **exit** seam
+(drain / persona rotation) just as surely, and GF-4 was deferred as a
+separate one-sided draw with its own future round. The genesis claim
+rests on the **conjunction** of both seams; only the entry seam has a
+number. Worse, the co-trigger principle applies: GF-4 and the
+persona-rotation network fire on the **same event** (the drain), so
+they cannot be measured independently and multiplied — they must be
+**graded jointly**, and the joint observable may leak more than either
+alone.
+
+**Disposition.** GF-4 is a **co-equal genesis gate on the sealing
+path**, not a deferred someday — it needs the same
+a-priori-threshold-then-attack-shaped-measurement treatment GF-7 got.
+Recorded as a sealing-path blocker in `docs/FOLLOWUPS.md`. The asymmetry
+of attention (a polished entry number, nothing on exit) is the finding;
+the seal needs both.
+
+### 18.2 Per-post bound vs per-principal property — the cross-seam conditional (highest-leverage; landed on the verdict line)
+
+`r < 2` is a per-**post** bound; S-1 is a per-**principal** property. A
+principal holds `K` personas; breaking the principal needs **any one**
+linked, so if personas are independently linkable at per-post `p ≈ 0.19`
+the per-principal breach probability is `1 − (1 − p)^K`, compounding
+toward 1 with `K`. The only brake is **persona mutual-unlinkability**,
+which is **GF-4** (§18.1) — unmeasured. So the per-post bound promotes
+to a per-principal guarantee **only where GF-4 holds**, and that was an
+unstated dependency.
+
+**Disposition (landed now, this round).** The conditional is stated on
+the verdict line (§13.1 scope pin) and in the sealed-claim ledger
+(§13.5), structurally parallel to isolation conditioning: a
+buildable-kind conditional that gates a **scope promotion**
+(post→principal), discharged only by the GF-4 measurement in §18.1.
+This is the single most important previously-unstated dependency in the
+gate, because S-1 is defined at the principal level and the bound is
+measured at the post level — a one-line honesty fix that also makes
+GF-4's sealing-path status visible.
+
+### 18.3 Observable bond-attribute strata partition `N` (the concrete completeness gap)
+
+The mean-vs-max disposition's regime split covers activity level; it
+does **not** cover the observable attributes that also partition the
+anonymity set: at source (verified R3) the bond record carries
+**`bond_floor` and `holdings` in cleartext** (C0-visible per
+`ARCHIVAL_FIREWALL_THREATS.md`), and, once there are multiple shards,
+**which shards a persona serves**. A persona in a rare attribute
+stratum sits in a **smaller** effective `N`, so its `r` is higher, and
+an unstratified steady-state row averages that exposure away — the exact
+mean-vs-max failure, on a different axis.
+
+*Correction to the reviewer's framing, verified at source.* The
+concrete lever is **not** a lock-tier multiplier: lock tiers
+(1000/25000/150000-block, 1.0×/1.5×/2.0×) belong to the **retired
+confidential-staking** path and are **deleted** from the archival
+reward leg (`REWARD_EMISSION_LEG.md` §"Delete"; archival collateral is a
+flat `bond_floor` per shard, `bond_floor.rs`). The adverse
+value↔privacy coupling the reviewer identified is **real but arrives by
+a different route**: `holdings` (shard count / `CompleteTree`) scales
+`bond_floor` and is the stake-size-bearing observable, and the
+work/`scarcity`/`g(age)` economics make a **larger-holdings, older-shard
+persona both higher-yield and rarer-stratum** — the most-valuable
+personas systematically in the smallest anonymity sets.
+
+**Disposition.** Linkability must be graded **stratified by observable
+bond attributes**, with `holdings`/`bond_floor` as the first stratum and
+shard-service as the second once multi-shard; the §3.3 regime
+enumeration is extended to name these as heterogeneity axes. Rides the
+§14.4 measurement round already on the critical path.
+
+### 18.4 Linkability accumulates over a persona's lifetime — the gate grades per-instant
+
+Every WI-4 number is per-post; an adversary correlates over a persona's
+**entire observable history** (each bond, rebond, serve-credit response,
+reward emission, drain is an observation), so cumulative exposure is
+`1 − (1 − p)^events`, growing monotonically with lifetime. A per-post
+`p ≈ 0.19` is not the exposure of a persona observed across dozens of
+events. This **compounds the cold-start finding and is worse than it**:
+cold-start is thin cover at birth; accumulation is exposure growing over
+the whole life — and the **same foundational/founder personas** are
+long-lived by construction, so they suffer both.
+
+**Disposition.** Grade **cumulative lifetime linkability** for a
+representative long-lived persona, not only per-post, and treat persona
+**lifetime as a swept axis** with the founder/long-lived end as the
+pessimistic anchor — the §6 pessimistic-distribution discipline
+(already applied to activity rate) extended to longevity. Rides the
+§14.4 round.
+
+### 18.5 The value channel — loud reward amounts are a recurring, persona-tied, stake-bearing observable (verified at source)
+
+GF-7 grades **timing**; the reward is the one place **amount** re-enters
+as a recurring observable, and the reviewer's load-bearing question —
+does FCMP++ hide reward amounts the way it hides funding — is answered
+**no, by design**, verified at source (R3):
+
+- Reward payout is a **staker-submitted claim tx**
+  (`txin_archival_reward_emission`), not coinbase, carrying
+  **`reward_amount_plain` per epoch in cleartext**
+  (`emission_wire.rs`); the design principle is **"loud reward"** so
+  every node can recompute and audit inflation
+  (`REWARD_EMISSION_LEG.md` §2) — confidential reward amount is
+  explicitly **deleted** (§5.5). Contrast funding, which is
+  Pedersen/FCMP++-hidden.
+- It is **directly tied to `P`** on-chain via `p_pubkey` /
+  `P_canonical_id` and bond-record dedup (`emission_wire.rs`,
+  `claimed_epochs.rs`); privacy on the leg is *recipient hiding on the
+  output set*, **not** hidden amounts.
+- Cadence is **per settlement epoch** (~10,000 blocks), recurring for
+  the persona's whole life — so it **compounds §18.4** (a per-epoch
+  repeat of the leak) and **repeats the §18.3 partitioning attribute**
+  (the loud amount reflects `holdings`-scaled work, once per epoch).
+- Implementation status: codec + arithmetic exist; the vin is
+  consensus-**inert** until PR-E3 / C-1 (`emission_wire.rs`,
+  `IMPLEMENTATION_INDEX.md`), so no reward amounts are on-chain **yet**
+  — the channel is a genesis-blocking design fact to grade before the
+  leg activates, not a live leak today.
+
+**Disposition.** The value channel is **orthogonal to everything the
+timing gate measures** and is **open by design** (loud amounts, P-tied,
+recurring). It is not gradable by the GF-7 timing correlator as
+constituted; it needs its **own measurement** of how much the loud
+per-epoch amount sequence links `P` across epochs and to the
+`holdings` stratum — folded into the GF-4 exit-seam round (§18.1) since
+both are about what the persona's *non-entry* activity leaks, or its own
+round if that proves too large. Recorded in `docs/FOLLOWUPS.md`. This
+is the surface most likely to have been genuinely un-thought-about,
+because the entire GF apparatus is timing-shaped.
+
+### 18.6 Disposition summary and what stays on the critical path
+
+- **Landed now (verdict-line honesty):** §18.2 cross-seam/per-principal
+  conditional (§13.1, §13.5) — the highest-leverage one-line fix.
+- **Verified at source, reframed:** §18.5 value channel (loud, P-tied,
+  recurring — confirmed open by design); §18.3 attribute strata
+  (tier-multiplier route corrected to the `holdings`/`bond_floor`
+  route).
+- **New sealing-path measurement rounds:** §18.1 GF-4 exit seam
+  (co-equal genesis gate) and §18.5 value channel (folded into it or
+  its own), both a-priori-threshold-then-attack-shaped.
+- **Extensions riding the §14.4 round already on the critical path:**
+  §18.3 attribute-stratified grading and §18.4 lifetime-accumulation
+  sweep — both are regime-enumeration/pessimistic-distribution
+  extensions, not new machinery.
+
+The through-line: R1/R2 drove the **entry seam** to a polished per-post
+timing number; R3 finds the seal needs the **exit seam** (GF-4), the
+**per-principal** aggregation S-1 actually names (conditional on GF-4),
+the **value channel** (loud rewards), the **attribute strata**, and the
+**lifetime accumulation** — four of five being scope/channel/time
+qualifiers on the honest `1.86`, and the fifth (GF-4) a co-equal gate.
+None reopens the number; all five are recorded so the seal cannot read
+the entry-seam number as the whole claim.
