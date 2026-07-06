@@ -1,18 +1,26 @@
 # M1 — Reward eligibility gated on shard count (consensus rule)
 
-**Status: design rounds 1–2 closed (§9, §10 records). Spec amended in
-place per both rounds' dispositions; implementation may proceed after
-the pre-flight pass.** Per `05-system-thinking.mdc` (specification
-first) and `26-sub-pr-design-discipline.mdc` (cited:
-consensus-critical sub-PR with design rounds before implementation;
-the pre-flight pass applies between the rounds' closure and the first
-production commit).
+**Status: design rounds 1–3 closed (§9, §10, §11 records). Spec
+amended in place per the rounds' dispositions. Implementation may
+proceed after the pre-flight pass, subject to the §1.3 substrate
+condition (segment-freeze pipeline obligations O-1..O-3).** Per
+`05-system-thinking.mdc` (specification first) and
+`26-sub-pr-design-discipline.mdc` (cited: consensus-critical sub-PR
+with design rounds before implementation; the pre-flight pass applies
+between the rounds' closure and the first production commit).
 
 **Provenance.** This document is the design round that
 `ARCHIVAL_BOND_WI4_MEASUREMENT.md` §16.2 pins as required — that section
 is the pre-flight pin, this is the spec. The launch-posture context
 (founder cover, cold-start refusal, the partition trap) lives in WI-4
 §14–§16 and is not restated here; this doc owns the consensus rule.
+**Location note (round 3, §11 M2-4):** the WI-4 doc lives on
+`feat/wi4-gf7-measurement` (pushed to `origin`, not yet merged to
+`dev`) — every "WI-4 §…" pointer in this spec resolves against that
+branch. Merge-ordering dependency, pinned: the WI-4 measurement doc
+merges to `dev` **before or with** this spec's implementation PR, or
+the pointers here dangle on `dev` exactly as round 3's review
+experienced.
 
 **Timeframes (rule 05).** *Now:* the launch mechanics — the gate is the
 structural form of cold-start refusal. *Mining-era end:* the gate is
@@ -34,21 +42,50 @@ and it is non-partitioning: a uniform function of chain state, applied
 identically to every bond, marking none (§16.1 partition-trap
 constraint — **global and blind**).
 
-### 1.1 The gate input, defined
+### 1.1 The gate input, defined (re-anchored at round 3, §11 M2-1)
 
 `shard_count(E)` = the number of archival shards with a **frozen
-segment** at `H_close(E)` — concretely, the count of
-`EpochCloseShard { has_segment: true, .. }` rows in the epoch-close
-gather (`rust/shekyl-archival-retention/src/consensus_state.rs`,
-`EpochCloseInputs::shards`).
+segment at or before the close height** — concretely, the count of
+rows in the **segment table** (`m_archival_shard_segment`,
+`LMDB_SCHEMA.md`) whose `freeze_height ≤ H_close(E)`, taken inside
+the same write transaction that performs the close.
 
-Substrate properties, verified at source (WI-4 §16.2 "Substrate"):
-shards are frozen chain segments (`freeze_height`), so `shard_count`
-is a **deterministic, monotone function of chain height**. No actor
-can inflate it (that requires mining the chain forward) and no actor
-can stall it (chain growth freezes segments). Cumulative-bond-count
-was evaluated and **rejected** as the gate input: sybil-inflatable
-whenever cost-to-post is low.
+**Explicitly not the gate input:** the epoch-close gather's
+`EpochCloseInputs::shards` (`EpochCloseShard { has_segment, .. }`).
+Rounds 1–2 anchored the definition there; round 3 found the anchor
+pins a **different quantity** than the prose properties describe. The
+gather enumerates serve-credit rows for epoch `E` — a shard enters
+`shards` iff at least one `P` with a decodable bond earned a credit
+on it that epoch (`db_lmdb.cpp`, gather phase) — so the gathered
+count is `|{distinct s : ∃ credit(P,s,E)}|`, a **participation
+measurement**: exactly the sensor class §1.2 declares absent. Under
+that reading the gate is not monotone (an epoch where fewer than
+`K_COVER` distinct shards happen to be served re-gates with no
+adversary — a liveness bug), and a withdraw-service cartel or a
+challenge-suppression DoS becomes a repeatable global griefing
+lever. The segment-table count has neither defect. One asymmetry is
+worth recording: the gathered count is bounded above by the
+segment-table count, so the divergence is only ever downward — the
+harmful direction.
+
+**Threading (consequence for §2.1/§6):** `epoch_close_compute`
+cannot derive the segment-table count from its current inputs, so
+`EpochCloseInputs` gains a `frozen_shard_count: u64` field, the FFI
+entry point gains the corresponding parameter, and the C++ gather
+gains a segment-table count pass (a cursor walk filtered on
+`freeze_height ≤ H_close(E)` — the filter is **explicit**, mirroring
+the height guard the read path already applies; bare row existence
+is not the predicate, per §11 M2-3).
+
+Substrate properties (WI-4 §16.2 "Substrate"): shards are frozen
+chain segments (`freeze_height`), so the segment-table count is a
+**deterministic, monotone-per-branch function of chain height**. No
+actor can inflate it (that requires mining the chain forward) and no
+actor can stall it (chain growth freezes segments).
+Cumulative-bond-count was evaluated and **rejected** as the gate
+input: sybil-inflatable whenever cost-to-post is low. **Status
+correction (round 3, §11 M2-2): these are import obligations, not
+source facts** — see §1.3.
 
 ### 1.2 The gate predicate
 
@@ -57,12 +94,48 @@ gated(E)  ⇔  shard_count(E) < K_COVER
 ```
 
 Both operands are consensus facts every verifier derives identically:
-`shard_count(E)` from the shard set at `H_close(E)`, `K_COVER` from
-`config/consensus_constants.json` (§4). There is no sensor, no
-estimate, and no live-participant measurement anywhere in the
-predicate — the flood-then-withdraw liveness DoS (keep a measured
+`shard_count(E)` from the segment table at `H_close(E)` (§1.1),
+`K_COVER` from `config/consensus_constants.json` (§4). There is no
+sensor, no estimate, and no live-participant measurement anywhere in
+the predicate — the flood-then-withdraw liveness DoS (keep a measured
 cover below the bar) has no sensor to attack (WI-4 §16.3 / M2,
-resolved into this rule).
+resolved into this rule). Round 3 is what makes this paragraph true
+rather than aspirational: the rounds-1–2 anchor (the credit-derived
+gather count) *was* a live-participant measurement; the §1.1
+re-anchoring removes it (§11 M2-1).
+
+### 1.3 Substrate obligations on the segment-freeze pipeline (round 3, §11 M2-2)
+
+The segment table's **writer does not exist in production**.
+`put_archival_shard_segment` is called only by the unit-test fixture
+(`tests/unit_tests/archival_substrate_lmdb.cpp`); the
+curve-tree-checkpoint writer `LMDB_SCHEMA.md` names is unbuilt, and
+**no delete path exists** — segment writes are not connect/revert
+paired today. §1.1's properties therefore cannot be "verified at
+source"; they are **named obligations the segment-freeze design
+round must discharge** (rule-21 shape — this round's arguments are
+explicitly conditioned on them):
+
+- **O-1 (determinism):** segment freezing is a pure function of
+  chain content at the freeze height — same chain, same rows, every
+  node.
+- **O-2 (monotonicity per branch):** segments freeze as the chain
+  grows and are never unfrozen or deleted on a single branch.
+- **O-3 (pop-symmetry):** segment writes are connect/revert-paired —
+  a reorg that pops the freeze height deletes the row, and re-apply
+  recreates it bit-identically. Without O-3, a reorg near a freeze
+  boundary leaves a stale row carrying the orphaned branch's
+  `segment_subroot_rk`, which breaks retention-proof correctness
+  generally — not just this gate. (The §9.4 reorg argument's step 1
+  asserts this pairing; it holds today only vacuously, because
+  nothing writes the table.)
+
+The pre-flight pass **cannot sign off implementation of the gate
+against a table nothing populates**: either the freeze pipeline's
+design round precedes the gate's implementation PR, or the gate PR
+lands with the KAT exercising fixture-written rows and O-1..O-3
+pinned as blocking items on the pipeline round. Discharge is
+recorded in the pipeline round's record, cross-referenced here.
 
 ---
 
@@ -75,10 +148,13 @@ reimplementation of the predicate.
 ### 2.1 Canonical: the epoch-close computation
 
 `epoch_close_compute` (`consensus_state.rs`) gains the gate as a
-uniform factor at the **top** of the computation:
+uniform factor at the **top** of the computation, fed by the new
+`EpochCloseInputs::frozen_shard_count` field (§1.1 threading — the
+segment-table count at `H_close(E)`, supplied by the C++ gather's
+count pass; **not** derived from `inputs.shards`):
 
 ```text
-if shard_count(E) < K_COVER:
+if inputs.frozen_shard_count < K_COVER:
     EpochCloseResult = { r_market_by_shard: [0; n], sigma_work_milli: 0 }
 ```
 
@@ -387,6 +463,16 @@ precedent; new fixture `reward_gate_kat_v1.json`) pinning behavior
 | G-7 | wire positivity (§2.3) | vin with any `reward_amount_plain[i] == 0` rejected at `validate()`, stateless |
 | G-8 | batch spanning the boundary | `settlement_epochs = [K_COVER_boundary − 1, K_COVER_boundary]` with positive amounts: rejected whole (compare fails on the gated epoch); `[K_COVER_boundary]` alone with the correct amount: accepted — the §8 Q2 batching corner, executable |
 | G-9 | `K_COVER = 0` degenerate | gate is the identity everywhere, including composed with G-4's `chain_epochs == 0` edge — the two zeros must compose without masking |
+| G-10 | participation-independence (§11 M2-1, executable) | `frozen_shard_count ≥ K_COVER` while credits touch **fewer than `K_COVER` distinct shards**: **not gated** — accrual is non-zero for the credited member. The gate reads the segment table, never the served set |
+
+**Fixture requirements (round 3):** the KAT fixture supplies
+`frozen_shard_count` explicitly (it is an input, not derived from the
+credit rows); the C++ store-side tests write segment rows via the
+existing fixture writer. Per §11 M2-5, G-2's "equal to the ungated
+computation" and G-3's "first non-zero accrual" are exercised with a
+fixture shard **frozen during the gated window**, so the boundary
+identity is tested with the age term live rather than degenerately
+zero (gated epochs deliberately accrue shard age — §3's age row).
 
 Added at round 2 (§10 M1-7), alongside the KAT but **in the C++ unit
 suite** (`tests/unit_tests/archival_substrate_lmdb.cpp` — every real
@@ -417,7 +503,7 @@ not need it):
 
 | Surface | File | Change |
 | --- | --- | --- |
-| Canonical gate | `rust/shekyl-archival-retention/src/consensus_state.rs` (`epoch_close_compute`, `EpochCloseInputs`) | Gate factor at top of compute; `K_COVER` threading |
+| Canonical gate | `rust/shekyl-archival-retention/src/consensus_state.rs` (`epoch_close_compute`, `EpochCloseInputs`) | Gate factor at top of compute; `K_COVER` threading; **new `frozen_shard_count: u64` input field** (§1.1 round-3 re-anchor — the gate input is the segment-table count, not derivable from `inputs.shards`) |
 | Constant | `config/consensus_constants.json` + `rust/shekyl-archival-retention/build.rs` (or the crate's constants surface, `src/constants.rs`) | `k_cover` entry + `k_cover_provisional` flag, compile-refusal plumbing (§4 sentinel mechanics), generated-constant contract per the file's existing C++/Rust generation |
 | Emission validation | `rust/shekyl-archival-retention/src/emission_wire.rs` (`validate()`) — resited at round 2; the wire check is share-agnostic (pure value positivity), the semantic rule derives via the §2.2 compare | §2.3 wire positivity: reject any `reward_amount_plain[i] == 0`; update the test corpus (the sample vin currently carries a zero amount) |
 | Predicate tripwire | new `scripts/ci/` grep gate (shape precedent: `check_pending_post_write_path.sh`) | §10 M1-1: refuse any `K_COVER` comparison outside `epoch_close_compute` (+ the constants surface) — keeps the predicate-site count at exactly one |
@@ -425,7 +511,7 @@ not need it):
 | Wallet claim builder | future engine-side emission assembly (does not exist yet — verified at round 1, no `build_emission`/claim-builder site in `rust/`) | **Forward obligation, pinned here:** the builder derives claimable epochs from the same positive-share recompute (and can never encode a zero-amount row anyway, §2.3); carried as a spec requirement into the builder's own design round |
 | KAT | `rust/shekyl-archival-retention/tests/` + `fixtures/reward_gate_kat_v1.json` | §5 cases G-1..G-5 |
 | CI | `scripts/ci/check_archival_reward_gates.sh` | KAT wired into the existing gate-check shape |
-| FFI/daemon | `shekyl-ffi` epoch-close entry point (consumer of `epoch_close_compute`) | **Expected zero-change** — the gate lives inside the canonical computation; verify at pre-flight, not assume |
+| FFI/daemon | `shekyl-ffi` epoch-close entry point + `db_lmdb.cpp` gather (`process_archival_epoch_close_at_height`) | **Corrected at round 3 (§11 M2-1) — the rounds-1–2 "expected zero-change" was wrong.** The FFI signature gains a `frozen_shard_count` parameter; the C++ gather gains a segment-table count pass over `m_archival_shard_segment` with the **explicit** `freeze_height ≤ H_close(E)` filter (§11 M2-3 — bare row existence is not the predicate; mirror the read path's height guard) |
 | Docs | `ARCHIVAL_CONSENSUS_STATE.md`, `REWARD_EMISSION_LEG.md`, `docs/FOLLOWUPS.md`, `docs/CHANGELOG.md`, `docs/design/IMPLEMENTATION_INDEX.md` | Gate section + cross-references |
 
 Pre-flight (per `26-sub-pr-design-discipline.mdc`) re-checks this
@@ -453,16 +539,26 @@ creep and reopens the round.
   this document, before the substrate change lands, since the gate's
   non-manipulability proof (§1.1) is what the reopening event
   invalidates.
-- **Reorg-argument reversion clause (round 2, §10 M1-8).** The §9.4
-  reorg argument is trivial *because* the gate predicate reads only
-  the close-height snapshot (the gathered frozen-segment rows —
-  connect/revert-paired store state) against a frozen constant. If
+- **Reorg-argument reversion clause (round 2, §10 M1-8; snapshot
+  re-anchored at round 3, §11 M2-1).** The §9.4 reorg argument is
+  trivial *because* the gate predicate reads only the close-height
+  snapshot — the **segment table** filtered to
+  `freeze_height ≤ H_close(E)`, store state whose connect/revert
+  pairing is obligation O-3 (§1.3) — against a frozen constant. If
   the §14.4 partition run ever tempts a corpus-size- or
   participation-triggered activation instead of a frozen epoch
   constant, **the reorg argument must be rebuilt from zero** — that
   design change reopens §9.4 explicitly, not implicitly. This is the
   same input restriction the §6 grep tripwire guards, load-bearing
-  twice.
+  twice. **Round-3 trigger addition (§11 M2-2):** the reversion
+  clause's reopening list gains *the segment-freeze pipeline landing
+  without O-3 pop-symmetry* — if segment writes ship without paired
+  deletion, both §9.4 and the retention-proof correctness argument
+  are void and this round reopens.
+- **Lagged-read tripwire is permanent (round 3, §11 R2-1).** The §2.2
+  reopen-on-refactor clause (never recompute `Σwork` from primaries)
+  is checked in every future PR touching the close or verify path —
+  a standing pre-flight item, not a one-time note.
 - **Gated-epoch prune optimization — rejected (round 2, §10 M1-9,
   rule 21 shape).** Gated epochs are never claimable, so their
   serve-credit and `r_market` rows could in principle be pruned
@@ -704,6 +800,13 @@ tripwire + §7 reversion clause guard) is *no live/tip state beyond
 the close-height snapshot, no participation counters, frozen
 constant threshold*.
 
+> **Re-corrected at round 3 (§11 M2-1):** this note pinned the wrong
+> snapshot. "The gathered frozen-segment snapshot" is credit-derived —
+> a participation counter, violating the very purity requirement the
+> note states. The correct snapshot is the **segment table** filtered
+> to `freeze_height ≤ H_close(E)` (§1.1 as re-anchored). The purity
+> statement itself stands; the quantity it was attached to did not.
+
 ### 10.2 M1-2 (high) — adopted as the primary form of the §2.3 rule
 
 Round 1 had independently derived the same uniform rule but sited it
@@ -811,7 +914,153 @@ pin (10.4).
 
 ---
 
-## 11. Cross-references
+## 11. Round-3 record (closed)
+
+Round 3 ran as two parallel reviews against the pushed spec text at
+`f7621540d`: a closure review (findings R2-1..R2-4, all low/watch)
+and a deep source pass (findings M2-1..M2-5) that surfaced a
+**critical defect the first two rounds missed**. Every source claim
+in both reviews was re-verified before disposition; all held, and
+one (M2-4) resolved more precisely than stated.
+
+### 11.1 M2-1 (critical) — accepted in full; §1.1 re-anchored to the segment table
+
+The two-quantity defect is real and rounds 1–2 own it: §1.1's prose
+properties (deterministic, monotone, sensorless) describe the
+**global segment-table count**, while its concrete anchor — and
+§10.1's precision note — pinned the **epoch-close gather count**,
+which is credit-derived (a shard enters `EpochCloseInputs::shards`
+only via a serve-credit row from a decodable bond; verified in the
+gather phase of `process_archival_epoch_close_at_height`). The
+gathered count is a participation measurement: exactly the sensor
+§1.2 claims does not exist. Consequences as the finding states: (a)
+non-monotone — a low-participation epoch re-gates with no adversary,
+falsifying §7's dead-rule claim under that reading; (b) the
+withdraw-service / challenge-suppression lever exists — a repeatable
+global griefing instrument; (c) the divergence asymmetry (gathered ≤
+global) means manipulation is downward-only — the harmful direction;
+(d) G-2/G-3 and §9.4 silently assumed the global reading.
+
+**Fix landed:** §1.1 redefines `shard_count(E)` over
+`m_archival_shard_segment` with the explicit
+`freeze_height ≤ H_close(E)` filter; §2.1 threads it as
+`EpochCloseInputs::frozen_shard_count` (the compute cannot derive it
+from current inputs); §6's FFI/daemon row corrected from "expected
+zero-change" to the enumerated signature + gather-count-pass changes;
+§10.1's precision note re-corrected in place; G-10 added (the
+participation-independence property, executable: high segment count +
+low served-shard diversity ⇒ **not** gated). The finding's own note
+is confirmed: M1-1's dissolution (one predicate site, no vin
+predicate) is orthogonal to which quantity the one site compares —
+it survives unchanged.
+
+**Why rounds 1–2 missed it:** both rounds verified the *consumers*
+of the gate (vin path, store semantics, zeroing locus) against
+source, but took the gate *input's* anchor from the round-1 draft
+without walking the gather that populates it. The rule-16 lesson
+("what does this deliver against the threat model?") applied to the
+predicate's output side but not its input side. Recorded as a
+pattern for pre-flight: **verify the definition of every operand of
+a consensus predicate at its production site, not just the
+predicate's consumers.**
+
+### 11.2 M2-2 (critical, pre-flight blocker) — accepted; §1.3 obligations named
+
+Verified: `put_archival_shard_segment` has no production caller
+(unit-test fixture only; the `LMDB_SCHEMA.md` "curve-tree
+checkpoint / genesis seed" writer is unbuilt), and no deletion path
+exists against `m_archival_shard_segment` anywhere in the tree —
+segment writes are not connect/revert-paired today. §1.1's
+"verified at source" was verifying unbuilt code's intended
+properties. Fix landed: §1.3 restates the properties as named
+obligations O-1 (determinism), O-2 (per-branch monotonicity), O-3
+(pop-symmetry) on the future segment-freeze design round, rule-21
+shape; the §9.4 reorg argument is explicitly conditioned on O-3; the
+§7 reversion clause gains the pipeline-lands-without-O-3 trigger;
+and the status header carries the pre-flight condition — the gate
+implementation PR may precede the pipeline only with fixture-driven
+KATs and the obligations pinned as blockers on the pipeline round.
+The O-3 note generalizes beyond the gate: a stale
+`segment_subroot_rk` from an orphaned branch breaks retention-proof
+correctness wholesale.
+
+### 11.3 M2-3 (high) — accepted; filter made explicit
+
+Verified: the gather sets `has_segment = 1` on bare row existence,
+while the read path guards `at_height < freeze_height`. Under the
+M2-1 fix the gate's count applies the filter explicitly (§1.1, §6);
+the residual hazard (a consensus predicate's meaning depending on an
+acceptance check in another module) is thereby removed from the gate
+input. The finding's mitigant is confirmed at source
+(`shard_age_milli` returns 0 for `close ≤ freeze_height`), which
+bounds the residual for the gather's *remaining* uses of
+`has_segment` to a unit of count in quantities that are not the gate
+input.
+
+### 11.4 M2-4 (medium) — resolved more precisely: a merge-ordering dependency, not a missing doc
+
+`ARCHIVAL_BOND_WI4_MEASUREMENT.md` exists and is verifiable — on
+`feat/wi4-gf7-measurement`, pushed to `origin`, unmerged to `dev`;
+the round-3 review searched `dev` and this branch only. No pointer
+in this spec is stale-named. Fix landed: the Provenance section
+names the branch and pins the merge-ordering dependency (WI-4 doc
+merges before or with this spec's implementation PR).
+
+### 11.5 M2-5 (low) — adopted as fixture requirements
+
+G-2/G-3 exercised with a fixture shard frozen during the gated
+window so the boundary identity runs with the age term live (§5
+fixture-requirements paragraph).
+
+### 11.6 R2-1..R2-4 (closure review) — dispositions
+
+- **R2-1 (lagged-read refactor risk):** adopted — §7 gains the
+  "tripwire is permanent" item; every close/verify-path PR re-checks
+  the §2.2 clause at pre-flight.
+- **R2-2 (enumerate stored-close readers):** adopted into this
+  record as the auditable list. Readers of the stored close shape
+  today: `get_archival_r_market` and `get_archival_sigma_work_milli`
+  (`db_lmdb.cpp`), called by **no production code** — the unit suite
+  exercises them, and the first production reader will be PR-E3's
+  verify (stored-Σwork lagged read, §2.2). Any new reader added
+  after this round must not assume "sigma row present ⟹ epoch
+  contributed to emission" (gated, legitimately-empty, and — via the
+  NOTFOUND launder — unclosed epochs all read zero; §2.1). The §5
+  stored-shape test makes that assumption fail fast.
+- **R2-3 (reorg crossing a claim attempt):** adopted as a **forward
+  obligation on the wallet claim builder / PR-E3**, not a store
+  test: a claim built against branch A, mined on branch B where the
+  boundary moved, is *correctly rejected* by the compare (each
+  branch's store is internally consistent — §9.4); the wallet-side
+  obligation is handling that rejection (rebuild against the new
+  branch, no resubmit-loop), recorded alongside the §6
+  wallet-claim-builder row's forward obligation.
+- **R2-4 (claim-era wire retirement interaction):** **closed at
+  source.** `2615c0d` (dev) retired the claim-era confidential-
+  staking system (`txin_stake_claim`/`txout_to_staked_key`, stake-
+  ratio cache, staker accrual → `block_burn`); its scope statement
+  itself pins genesis staking as archival bonds plus the 2b
+  reward-emission leg, and names the reward-emission C-1 cutover as
+  the redirect point for the burned staker inflow. The archival
+  close/emission path (this spec's entire surface) shares no wire
+  type, no LMDB table, and no consensus path with the retired
+  system; this branch is cut from a dev head containing the
+  retirement, and every source line this round verified post-dates
+  it. No adjustment to the non-claimability rule needed.
+
+### 11.7 Net
+
+Rounds 1–2's closures on the vin path, store semantics, zeroing
+locus, and sentinel are untouched. Round 3 re-anchored the gate
+input (the one operand the earlier rounds never walked to its
+production site), converted the substrate claims into named
+cross-round obligations, and closed the residual watch items. The
+design is closed from a specification standpoint; implementation
+remains conditioned on §1.3.
+
+---
+
+## 12. Cross-references
 
 - `ARCHIVAL_BOND_WI4_MEASUREMENT.md` §14 (launch posture), §16.1
   (partition trap), §16.2 (M1 pre-flight pin and its three

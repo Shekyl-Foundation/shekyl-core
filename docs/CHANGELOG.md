@@ -4,7 +4,7 @@
 
 ### Added
 
-- **docs: M1 reward-gate consensus rule — design rounds 1–2 spec + closure**
+- **docs: M1 reward-gate consensus rule — design rounds 1–3 spec + closure**
   ([`ARCHIVAL_REWARD_GATE_M1.md`](design/ARCHIVAL_REWARD_GATE_M1.md)).
   The WI-4 launch posture's cold-start refusal in consensus-rule form:
   zero reward accrual for every persona in epochs where
@@ -40,6 +40,30 @@
   reorg-argument and prune-optimization reversion clauses added
   (rule 21). Surface enumeration updated; wallet-claim-builder
   obligation pinned forward.
+  **Round 3 closed against two parallel reviews (§11, R2-1..R2-4 +
+  M2-1..M2-5), surfacing a critical defect the earlier rounds
+  missed:** §1.1's concrete anchor pinned the epoch-close *gather*
+  count — credit-derived, a participation measurement (the sensor
+  class §1.2 forbids: non-monotone, withdraw-service griefing lever)
+  — while the security argument, dead-rule acceptance, and reorg
+  triviality are proofs about the *segment-table* count. §1.1
+  re-anchored to `m_archival_shard_segment` filtered on
+  `freeze_height ≤ H_close(E)`, threaded as a new
+  `EpochCloseInputs::frozen_shard_count` field + FFI parameter + C++
+  gather count pass (the §6 "FFI zero-change" row corrected); G-10
+  participation-independence KAT added. The segment-freeze substrate
+  is confirmed unbuilt (`put_archival_shard_segment` has no
+  production caller, no delete path) — §1.3 restates the substrate
+  properties as named obligations O-1..O-3 (determinism, per-branch
+  monotonicity, pop-symmetry) on the future freeze-pipeline design
+  round, with implementation conditioned on them and the §9.4 reorg
+  argument explicitly conditioned on O-3. WI-4 provenance resolved as
+  a merge-ordering dependency (`feat/wi4-gf7-measurement`, pushed,
+  unmerged). Closure-review items: lagged-read tripwire made a
+  standing pre-flight check, stored-close reader enumeration
+  recorded, reorg-crossing-claim-attempt pinned as a wallet-builder
+  forward obligation, claim-era-retirement (`2615c0d`) interaction
+  closed at source (no shared wire/table/path).
 
 - **wallet: block-timed bond-post dispatch driver — WI-3**
   (`ARCHIVAL_BOND_WI3_DISPATCH.md`; `IMPLEMENTATION_INDEX.md` §4 WI-3

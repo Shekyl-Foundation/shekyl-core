@@ -7389,7 +7389,7 @@ one place to confirm each item's relationship to the wallet stack.
   intra-doc link in the `randomx-v2-sys`/`shekyl-pow-randomx` docs, `generic_array::as_slice`
   deprecations in vendored crypto). **Reopen as** a standalone doc-hygiene sweep: fix those warnings,
   then swap the shekyl-tor-scoped step for `cargo doc --workspace --no-deps` under `-D warnings`.
-- **M1 reward gate — design rounds 1–2 CLOSED (`ARCHIVAL_REWARD_GATE_M1.md` §9/§10, 2026-07-06;
+- **M1 reward gate — design rounds 1–3 CLOSED (`ARCHIVAL_REWARD_GATE_M1.md` §9/§10/§11, 2026-07-06;
   consensus rule, genesis-frozen, builds first per the WI-4 ranked path).** The launch
   posture's cold-start refusal in structural form: zero accrual to every `(P, s, E)` for
   epochs where `shard_count < K_COVER` — uniform, global, blind (no founder marking),
@@ -7429,7 +7429,37 @@ one place to confirm each item's relationship to the wallet stack.
   stored-shape and boundary-reorg tests (M1-7); reorg-argument reversion clause (M1-8:
   corpus/participation-triggered activation rebuilds the argument from zero) and
   gated-epoch prune optimization rejected with reopening criteria (M1-9, rule 21).
-  **Target: V3.0 pre-genesis — implementation next, after the rule-26 pre-flight pass.**
+  **Round 3 closed (doc §11, 2026-07-06; two parallel reviews, R2-1..R2-4 + M2-1..M2-5) —
+  critical re-anchor:** §1.1's anchor pinned the credit-derived *gather* count (a
+  participation sensor: non-monotone, withdraw-service griefing lever) where every
+  argument assumed the *segment-table* count; re-anchored to `m_archival_shard_segment`
+  with the explicit `freeze_height ≤ H_close(E)` filter, threaded as
+  `EpochCloseInputs::frozen_shard_count` + FFI param + C++ count pass (§6 "FFI
+  zero-change" corrected; G-10 participation-independence KAT). Segment-freeze substrate
+  confirmed unbuilt (no production `put_archival_shard_segment` caller, no delete path):
+  §1.3 names obligations **O-1 determinism / O-2 per-branch monotonicity / O-3
+  pop-symmetry** on the future freeze-pipeline design round — **the gate's
+  implementation PR is conditioned on them** (fixture-driven KATs allowed; pipeline
+  round must discharge O-1..O-3, and landing segment writes without O-3 reopens §9.4 and
+  breaks retention-proof correctness generally). WI-4 doc provenance = merge-ordering
+  dependency (`feat/wi4-gf7-measurement` pushed, unmerged — merge before/with the M1
+  implementation PR). Pre-flight pattern recorded: verify every consensus-predicate
+  *operand* at its production site, not just the predicate's consumers.
+  **Target: V3.0 pre-genesis — implementation next, after the rule-26 pre-flight pass,
+  subject to the §1.3 substrate condition.**
+- **Segment-freeze pipeline — design round required (opened by `ARCHIVAL_REWARD_GATE_M1.md`
+  §1.3, 2026-07-06).** The production writer for `m_archival_shard_segment` does not exist
+  (`put_archival_shard_segment`: unit-test fixture only; the `LMDB_SCHEMA.md` "curve-tree
+  checkpoint / genesis seed" writer is unbuilt) and **no delete path exists** — segment
+  writes are not connect/revert-paired. The M1 gate, the retention-proof read path, and
+  the §9.4 reorg argument all consume this table; its design round must discharge the
+  named obligations **O-1 (determinism: freezing is a pure function of chain content),
+  O-2 (per-branch monotonicity: never unfrozen/deleted on one branch), O-3 (pop-symmetry:
+  connect/revert-paired writes — a stale `segment_subroot_rk` from an orphaned branch
+  breaks retention-proof correctness generally)**. Discharge is recorded in that round's
+  record and cross-referenced from M1 §1.3. **Target: V3.0 pre-genesis — precedes or
+  accompanies the M1 gate implementation PR (fixture-driven KATs permitted in the interim
+  per M1 §1.3).**
 - **2d-2 SP-T4a — GF-7 principal-timeline timing correlation is a GENESIS GATE (measure
   `P(link | T_obs)` before launch).** SP-T4a *draws* the narrow funding-seam entry-gap jitter
   (`draw_entry_gap`, `spread ~ U[0, 600 blocks]`) but does **not** wire it into any broadcast — the
