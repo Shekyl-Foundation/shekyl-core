@@ -1904,9 +1904,16 @@ struct shekyl_archival_credit_pair
 /// `out_sigma_work_milli_ptr`. Outputs are zeroed before computation; a
 /// non-zero return never leaves stale values. Credit pairs must be distinct
 /// (the serve-credit ledger key `(P, shard, E)` guarantees this at gather).
+///
+/// `frozen_shard_count` is the M1 reward-gate input
+/// (ARCHIVAL_REWARD_GATE_M1.md §1.1): the segment-table count at
+/// `H_close(E)` from the single `count_frozen_shards_at_close` helper,
+/// inside the close's write txn. Epochs below `K_COVER` compute to the
+/// all-zero result (the §2.1 zero-at-top gate, applied inside Rust).
 uint8_t shekyl_archival_epoch_close_compute(
     uint64_t settlement_epoch,
     uint64_t close_block_height,
+    uint64_t frozen_shard_count,
     const struct shekyl_archival_epoch_close_bond* bonds_ptr,
     size_t bonds_len,
     const struct shekyl_archival_epoch_close_shard* shards_ptr,

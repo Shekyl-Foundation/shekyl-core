@@ -599,6 +599,13 @@ private:
   void delete_archival_sigma_work_for_epoch(uint64_t settlement_epoch);
   void delete_archival_sigma_work_before_epoch(uint64_t prune_below_epoch);
   void delete_archival_serve_credit_before_epoch(uint64_t prune_below_epoch);
+  /** M1 reward-gate operand (ARCHIVAL_REWARD_GATE_M1.md §1.1): the single
+   * counting read over m_archival_shard_segment — rows with
+   * freeze_height <= h_close (equality counts). One call site
+   * (process_archival_epoch_close_at_height); the §6 tripwire refuses any
+   * other counting read over the segment table. Decode failure aborts
+   * loudly (§1.1 count-pass discipline), never a lenient skip. */
+  uint64_t count_frozen_shards_at_close(uint64_t h_close) const;
 
 private:
   // Prefer the active write txn when present so uncommitted archival bits are visible
