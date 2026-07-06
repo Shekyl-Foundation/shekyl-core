@@ -721,6 +721,16 @@ has dropped the assumption the entire gate rests on. Any seal statement
 derived from this document carries the conditional clause on the verdict
 line, in the same position the posture condition occupies today.
 
+**No cross-subsidy (the same pin, applied to marginal numbers).** The
+steady-state margin is ~7% (`1.86` vs `2.0`) and lends nothing. When the
+measurement rounds produce leg-(b) and partition numbers, each stands
+or falls against **its own** a-priori bound: a "close enough" grade on
+one conditional does not borrow confidence from the steady-state pass,
+and the steady-state pass does not absorb a marginal conditional. The
+honest-1.86-over-comfortable-1.51 move exists precisely to keep this
+temptation visible; reading a marginal conditional as cleared is the
+same failure §13.5 forbids for assumed ones.
+
 ## 14. Addendum (2026-07-06): the founder-cover launch posture — refusing the cold-start regime
 
 **Status: pre-committed specification, review checkpoint required before
@@ -1309,5 +1319,13 @@ are right, and it must answer at minimum:
    where exactly the cycle breaks?
 
 A closure that does not put these three on the record has rubber-stamped
-the a-priori half of everything downstream. The review closing *well*
-is worth more than it closing *soon*.
+the a-priori half of everything downstream. The answers must be
+**attack-shaped, not affirmation-shaped**: the reviewer actively tries
+to show `r < 2` is too loose under the panel, actively tries to
+construct an adversary partition outside the widened family, and
+actively tries to trace the `K_COVER` cycle *closed* — the bounds pass
+by surviving the attempt, not by being agreed with. The review closing
+*well* is worth more than it closing *soon*: once a measured number
+exists, the first genuinely hostile look at an unexamined bound comes
+from an adversary against a live chain, the one place a genesis-frozen
+constant cannot be reopened.
