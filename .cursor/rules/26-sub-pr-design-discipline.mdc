@@ -86,6 +86,25 @@ artifacts. Record findings in the plan-doc status block and in a
 sibling audit trail (2c's shape:
 `docs/design/<TRAIT>_AUDIT.md`).
 
+**Halt condition (hard rule, added 2026-07-06 after the M1 reward-gate
+process breach — see the FOLLOWUPS breach record).** **No
+implementation commits land on a branch whose governing design doc
+names an undischarged pre-flight pass.** If the plan-doc's own text
+conditions the implementation sequence on a pre-flight pass ("proceeds
+after the pre-flight pass" or equivalent), the pass must be run and its
+findings recorded *before* the first production commit — not
+concurrently, not retroactively. The precedent: the M1 gate's §11.9
+sequencing text named exactly this condition, and the implementing
+agent committed the sequence before the pass ran; the pass later held,
+but only by luck, and the retroactive audit (899ebf7..cc28bee,
+ratified 2026-07-06) cost more than the pass would have. A written
+halt condition with no trigger is theater; this rule is the named
+tripwire the agent's own compliance check runs against. When an agent
+finds itself about to commit implementation against an undischarged
+named pass, the disposition is **halt and run the pass**, and the
+breach — if one has already occurred — is recorded in
+`docs/FOLLOWUPS.md` as a breach, never cited as precedent.
+
 **Posture (extends Round 4 / R5-D1).** Design closure means **design
 closure plus active defense against named attacker objectives**, not
 per-finding whack-a-mole. Pre-flight complements the threat-model

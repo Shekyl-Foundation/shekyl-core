@@ -25,6 +25,46 @@
   38-leaf chunk directly from the tree's own leaf table. Adversarial
   review of the round-1 draft pending; implementation gated on round
   closure.
+- **archival: segment-freeze pipeline implemented — steps 1–7 of the
+  round-1 plan** ([`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](design/ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)
+  §7, on `feat/segment-freeze-pipeline`). (1) `SEGMENT_LEAF_COUNT =
+  25 992` through the constants pipeline + Rust first-crossing
+  arithmetic (`frozen_segment_count`, `challenge_leaf_chunk_bounds`)
+  with boundary/overflow unit tests; (2) FFI exports for both; (3)
+  connect/pop hooks in `db_lmdb` inside the block write txn —
+  `process_archival_segment_freezes_at_height` writes newly-crossed
+  segment rows reading `R_k` from the layer-2 chunk the same-txn grow
+  computed, `revert_archival_segment_freezes` is the derived delete
+  (O-3 pop-symmetry); (4) **`archival_shard_leaf` deleted** — the
+  gate-2 challenge path reads the 38-leaf chunk directly from
+  `m_curve_tree_leaves`; (5) the §9 C++ suite
+  (`archival_segment_freeze.cpp`: first-crossing, multi-segment
+  catch-up, independent `R_k` recomposition, bit-identical
+  pop/re-apply, pop-above-boundary no-op, missing-layer-2-chunk loud
+  abort, M1 operand against production rows — the §11.10 fixture
+  caveat retired) + gate-2 fixture regenerated at `25 992`; (6)
+  tripwire extensions (`check_reward_gate_predicate_sites.sh`: writer
+  one-site, cursor accounting, division one-site, `for_kat`
+  containment); (7) docs (`LMDB_SCHEMA.md` v7 note, M1 §1.3
+  discharge record). O-1..O-3 discharged. Pre-flight additions folded
+  in: **PF-8** transposition-distinguishing epoch-close FFI fixture
+  (exact-sigma pin catches any swap of the three leading `u64`s);
+  **PF-6a** `KCover` capability newtype (`consensus()` sole
+  production constructor; KAT injection behind the permanent
+  dev-only `consensus-kat` feature).
+- **archival: M1 pre-flight dispositions recorded — PF-1 breach
+  record, PF-2 accepted residual, PF-9 seal-before-stressnet pin.**
+  PF-1: the §11.9 sequencing breach recorded in `FOLLOWUPS.md` as a
+  breach (not a precedent); `26-sub-pr-design-discipline.mdc` gains
+  the explicit halt condition — no implementation commits on a branch
+  whose governing design doc names an undischarged pre-flight pass.
+  PF-2: the compile-refusal's out-of-band hand-built-artifact residual
+  recorded as accepted with its upstream dependency named
+  (Guix-reproducible builds + signed-tag release path — M1 §4). PF-9:
+  `K_COVER` finalization pinned as a **prerequisite of Phase 7.7
+  stressnet entry** (M1 §4 rule-21 entry + `RELEASE_CHECKLIST.md`) —
+  while provisional the gate runs as identity, so only a post-seal
+  stressnet exercises the activation boundary live before genesis.
 - **archival: M1 reward gate implemented — steps 1–5 of the §11.9
   pinned sequence** ([`ARCHIVAL_REWARD_GATE_M1.md`](design/ARCHIVAL_REWARD_GATE_M1.md)
   §11.10 implementation record). Executed on

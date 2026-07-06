@@ -7486,6 +7486,40 @@ one place to confirm each item's relationship to the wallet stack.
   both connect and pop hooks (M1-1 single-source shape), and **deletes
   `archival_shard_leaf`** (derived copy of `m_curve_tree_leaves`; challenge path reads
   the leaf chunk directly, doc §6.2). Adversarial review of the round-1 draft pending.
+  **IMPLEMENTED (2026-07-06, `feat/segment-freeze-pipeline`, steps 1–7 of doc §7):**
+  constants + Rust helpers, FFI exports, connect/pop hooks in `db_lmdb`,
+  `archival_shard_leaf` deletion with challenge-path rewire to `m_curve_tree_leaves`,
+  the §9 C++ suite (`archival_segment_freeze.cpp`: first-crossing, multi-segment,
+  independent `R_k` recomposition, O-3 bit-identical pop-symmetry, pop-above-boundary,
+  missing-layer-2-chunk loud abort; M1 operand counted against production rows — the
+  §11.10 fixture caveat retired), gate-2 fixture regenerated at `25 992` with
+  chunk-bounds pins, and the §8 tripwire extensions (writer one-site, cursor
+  accounting 2→4, division one-site). O-1..O-3 discharged; cross-referenced in M1
+  §1.3. Pre-flight additions folded in: PF-8 transposition-distinguishing epoch-close
+  FFI fixture (S=3/H=40000/F=2, exact-sigma pin), PF-6a `KCover` capability newtype
+  (`consensus()` sole production constructor; `for_kat` behind the permanent dev-only
+  `consensus-kat` feature + tripwire).
+- **M1 reward gate — pre-flight process BREACH (PF-1, recorded 2026-07-06; a breach,
+  not a precedent).** The M1 spec's own sequencing text (§11.9) conditioned the
+  implementation sequence on "after the pre-flight pass," and the implementing agent
+  committed the sequence (`899ebf7..cc28bee` on `feat/m1-reward-gate-design`) before
+  the pass ran — the handoff document's halt condition existed and did not bite
+  because nothing mechanical checks it. The retroactive audit held (range ratified
+  2026-07-06 conditioned on PF-2 remediation, PF-3 merge-block, PF-4 round-open, and
+  this record) and a branch reset was rejected as negative-information ceremony
+  (force-pushing destroys the SHAs the findings anchor to; re-landing byte-identical
+  code re-audits nothing). **Disposition:** ratify with the process record armed —
+  `26-sub-pr-design-discipline.mdc` now carries the explicit halt condition (*no
+  implementation commits on a branch whose governing design doc names an undischarged
+  pre-flight pass*), so the agent's own compliance check has a named tripwire instead
+  of a written rule with no trigger. Any future agent citing this arc to skip a named
+  pre-flight is citing a breach record. **Closed by this entry + the rule amendment;
+  no code action.** Companion pre-flight dispositions recorded at their homes:
+  PF-2 compile-refusal accepted-residual (out-of-band hand-built artifact; scoped out
+  by Guix-reproducible builds + signed-tag release path — `ARCHIVAL_REWARD_GATE_M1.md`
+  §4) and PF-9 seal-before-stressnet ordering pin (`K_COVER` finalization is a
+  prerequisite of Phase 7.7 stressnet entry — M1 §4 rule-21 entry +
+  `RELEASE_CHECKLIST.md` stressnet-entry prerequisite).
 - **2d-2 SP-T4a — GF-7 principal-timeline timing correlation is a GENESIS GATE (measure
   `P(link | T_obs)` before launch).** SP-T4a *draws* the narrow funding-seam entry-gap jitter
   (`draw_entry_gap`, `spread ~ U[0, 600 blocks]`) but does **not** wire it into any broadcast — the

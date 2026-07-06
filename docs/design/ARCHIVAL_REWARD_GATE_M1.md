@@ -212,6 +212,20 @@ land. Its §6.2 additionally retires the `archival_shard_leaf` table
 (derived copy of `m_curve_tree_leaves`) under the maintainer's
 schema-restructure authorization for that round.
 
+**Discharged (implementation landed, `feat/segment-freeze-pipeline`):**
+the production writer (`process_archival_segment_freezes_at_height`)
+and revert (`revert_archival_segment_freezes`) run inside the block
+write txn per the pipeline doc's §4 hooks; O-3 is armed by the
+`pop_symmetry_row_bit_identical_after_reapply` case in
+`tests/unit_tests/archival_segment_freeze.cpp` (encoded-byte
+comparison after trim + regrow), O-1/O-2 by the first-crossing and
+multi-segment cases in the same suite. The §11.10 fixture caveat is
+retired: `multi_segment_single_grow_writes_both_rows` counts the M1
+operand (`count_frozen_shards_at_close`) against production-written
+rows end-to-end. The `archival_shard_leaf` table is deleted and the
+challenge path reads the 38-leaf chunk from `m_curve_tree_leaves`
+via `shekyl_archival_challenge_leaf_chunk_bounds`.
+
 ---
 
 ## 2. Enforcement locus: one canonical computation, one inherited check
@@ -500,6 +514,48 @@ above):** mirror the frozen-constant tripwire already in
 release/genesis profile that fails until the §14.4-sealed value
 lands, so the refusal lives next to the constant it guards in the
 same shape the crate already uses for `WORK_MILLI_SCALE`.
+
+**Accepted residual of the compile refusal (PF-2, pre-flight
+2026-07-06).** The refusal's mechanics survived adversarial re-wargame:
+feature unification works *for* the refusal (any crate enabling
+`provisional-k-cover` anywhere in the graph is an explicit,
+grep-visible acknowledgment; the `compile_error!` cannot be silently
+defeated by adding features); deleting the feature makes the CI
+negative test fail loudly on an unknown-feature error (fails closed);
+flipping `k_cover_provisional` with value `0` hits the `build.rs`
+refusal; sealing requires `≥ 1`. **Named residual:** an artifact built
+by hand outside the runbook/tag path fires no refusal — a compile gate
+cannot reach a build invocation that never evaluates the flag. That
+residual is scoped out by the release disciplines upstream of this
+gate: Guix-reproducible builds and the hardware-backed signed-tag path
+(`docs/SIGNING.md`); an out-of-band binary is unsigned and
+non-reproducible, a release-discipline violation before it is a
+`K_COVER` violation. Recorded as **accepted-residual with that
+dependency named** — if either upstream discipline is ever weakened,
+this residual reopens with it.
+
+**Seal-before-stressnet ordering pin (PF-9, pre-flight 2026-07-06;
+rule-21 entry on the WI-4 §13.5 sealing conditions).** A consequence
+of the gate-identity sentinel (`0`) that the sealing checklist alone
+does not order: while provisional, the gating branch never executes
+outside KATs on any network — pre-seal testnets run the gate as
+identity (`< 0` is never true). The first *network-level* execution of
+the gated path — real reorgs at the activation boundary, real
+close/revert timing — therefore happens only after seal. If sealing
+landed after Phase 7.7 stressnet entry, the boundary's only
+pre-genesis exercise would be fixtures and the first live activation
+would be mainnet genesis: exactly the one-shot class §5 exists to
+refuse. **Pin: `K_COVER` finalization (the §14.4-derived value landed
+and `k_cover_provisional` cleared) is a prerequisite of Phase 7.7
+stressnet entry.** Each stressnet/testnet reset then re-exercises the
+activation boundary naturally, for free, for the 4-week minimum
+(`docs/RELEASE_CHECKLIST.md`). WI-4 §13.5 lists finalization as a
+genesis blocker; this pin adds the *ordering* against the stressnet
+gate, which is the whole value. Reopening criteria (rule 21): the pin
+relaxes only if the sentinel mechanics change such that the gated
+branch is exercised at network level pre-seal (e.g., a testnet-only
+sealed value distinct from mainnet's), with a design-round record
+demonstrating the activation boundary gets equivalent live exercise.
 
 **Genesis-frozen.** Both the rule and the constant must be right the
 first time — post-activation there is no runtime signal (§7). This is

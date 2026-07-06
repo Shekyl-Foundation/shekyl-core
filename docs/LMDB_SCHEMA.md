@@ -494,7 +494,17 @@ Journal: block heights that finalized an epoch (pop revert).
 
 ### `archival_shard_segment`
 
-Frozen segment metadata per `shard_id` (gate-2 §9; `CURVE_TREE_CLIENT.md` §7.2).
+Frozen segment metadata per `shard_id` (gate-2 §9;
+`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`; `CURVE_TREE_CLIENT.md` §7.2).
+
+Rows are written by the segment-freeze connect hook at the block whose
+same-txn `grow_curve_tree` first crosses a `SEGMENT_LEAF_COUNT` (25 992)
+boundary: `freeze_height` = that block's height (first-crossing rule, O-2
+per-branch monotone), `R_k` = the layer-2 chunk hash the grow computed
+(MMR-final). The pop hook deletes rows whose segment un-completes after the
+same-txn `trim_curve_tree` (O-3 pop-symmetry: re-applying the block rewrites
+a bit-identical row). Writer/deleter one-site and the cursor accounting are
+CI-enforced (`scripts/ci/check_reward_gate_predicate_sites.sh`).
 
 | Property | Value |
 |---|---|
@@ -502,23 +512,17 @@ Frozen segment metadata per `shard_id` (gate-2 §9; `CURVE_TREE_CLIENT.md` §7.2
 | Flags | `MDB_CREATE` |
 | Key | `BE(shard_id)` (8 bytes) |
 | Value | `ArchivalShardSegmentValue` — `freeze_height`, `segment_leaf_count`, `R_k[32]` |
-| Writers | `put_archival_shard_segment` (curve-tree checkpoint / genesis seed) |
-| Readers | `get_archival_shard_segment_at_height` |
+| Writers | `process_archival_segment_freezes_at_height` → `put_archival_shard_segment` (sole production caller) |
+| Readers | `get_archival_shard_segment_at_height`, `count_frozen_shards_at_close` (M1 gate operand) |
+| Reorg | `revert_archival_segment_freezes` (reverse walk deleting rows above the post-trim frontier) |
 | Introduced | HF1 (gate-2 verifier step 6) |
 
-### `archival_shard_leaf`
-
-Selene leaf-layer scalar chunk for a challenged index within a segment.
-
-| Property | Value |
-|---|---|
-| LMDB name | `"archival_shard_leaf"` |
-| Flags | `MDB_CREATE` |
-| Key | `BE(shard_id) \|\| BE(leaf_index_in_segment)` (16 bytes) |
-| Value | flat `[u8; 32*n]` Selene scalars covering the challenged leaf |
-| Writers | `put_archival_shard_leaf_layer_scalars` |
-| Readers | `get_archival_shard_leaf_layer_scalars` |
-| Introduced | HF1 (gate-2 verifier step 7) |
+The former `archival_shard_leaf` table (Selene leaf-layer scalar chunks per
+challenged index) is **deleted** (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`
+§6.2): it was a derived copy of `m_curve_tree_leaves`, and the serve-credit
+challenge path now derives the global chunk bounds via
+`shekyl_archival_challenge_leaf_chunk_bounds` and reads the 38-leaf chunk
+from the curve tree directly.
 
 ### `archival_slash_applied`
 
@@ -912,31 +916,32 @@ General key-value store for database-level metadata.
 | 17 | `archival_serve_credit` | `P_id[32]\|\|BE(shard)\|\|BE(E)` | `uint8_t` flag | 1 | `CREATE` only |
 | 18 | `archival_bond` | `P_id[32]` | `ArchivalBondValue` | var | `CREATE` only |
 | 19 | `archival_shard_segment` | `BE(shard_id)` | segment meta | 49 | `CREATE` only |
-| 20 | `archival_shard_leaf` | `BE(shard)\|\|BE(leaf)` | flat scalars | var | `CREATE` only |
-| 21 | `archival_slash_applied` | `P_id[32]\|\|BE(shard)\|\|BE(E)` | `uint8_t` flag | 1 | `CREATE` only |
-| 22 | `archival_slash_log` | `BE(height)\|\|BE(seq)` | slash revert blob | 57 | `CREATE` only |
-| 23 | `archival_r_market` | `BE(shard)\|\|BE(E)` | `BE(u64)` count | 8 | `CREATE` only |
-| 24 | `archival_sigma_work` | `BE(E)` | `BE(u64)` sigma milli | 8 | `CREATE` only |
-| 25 | `archival_epoch_close_log` | `BE(block_height)` | `BE(E)` | 8 | `CREATE` only |
-| 26 | `curve_tree_leaves` | `uint64_t` tree_pos | leaf tuple | 128 | `INTEGERKEY` |
-| 27 | `curve_tree_layers` | `uint64_t` composite | chunk hash | 32 | `INTEGERKEY` |
-| 28 | `curve_tree_meta` | string | varies | varies | — |
-| 29 | `curve_tree_checkpoints` | `uint64_t` height | snapshot | 41 | `INTEGERKEY` |
-| 30 | `curve_tree_roots` | `uint64_t` height | root hash | 32 | `INTEGERKEY` |
-| 31 | `pending_tree_leaves` | BE(maturity)\|\|BE(output) | leaf tuple | 128 | `CREATE` only |
-| 32 | `pending_tree_drain` | BE(block_h)\|\|BE(output) | maturity+leaf | 136 | `CREATE` only |
-| 33 | `block_pending_additions` | BE(block_h)\|\|BE(output) | BE(maturity) | 8 | `CREATE` only |
-| 34 | `output_to_leaf` | `uint64_t` output_idx | `uint64_t` tree_pos | 8 | `INTEGERKEY` |
-| 35 | `leaf_to_output` | `uint64_t` tree_pos | `uint64_t` output_idx | 8 | `INTEGERKEY` |
-| 36 | `hf_versions` | `uint64_t` height | `uint8_t` version | 1 | `INTEGERKEY` |
-| 37 | `txpool_meta` | `crypto::hash` txid | `txpool_tx_meta_t` | 192 | — |
-| 38 | `txpool_blob` | `crypto::hash` txid | tx blob | var | — |
-| 39 | `alt_blocks` | `crypto::hash` blkid | meta + blob | var | — |
-| 40 | `properties` | string | varies | varies | — |
-| 41 | `hf_starting_heights` (legacy) | string | varies | varies | migration stub |
-| 42 | `txs` (legacy) | `uint64_t` tx_id | — | — | `INTEGERKEY` |
+| 20 | `archival_slash_applied` | `P_id[32]\|\|BE(shard)\|\|BE(E)` | `uint8_t` flag | 1 | `CREATE` only |
+| 21 | `archival_slash_log` | `BE(height)\|\|BE(seq)` | slash revert blob | 57 | `CREATE` only |
+| 22 | `archival_r_market` | `BE(shard)\|\|BE(E)` | `BE(u64)` count | 8 | `CREATE` only |
+| 23 | `archival_sigma_work` | `BE(E)` | `BE(u64)` sigma milli | 8 | `CREATE` only |
+| 24 | `archival_epoch_close_log` | `BE(block_height)` | `BE(E)` | 8 | `CREATE` only |
+| 25 | `curve_tree_leaves` | `uint64_t` tree_pos | leaf tuple | 128 | `INTEGERKEY` |
+| 26 | `curve_tree_layers` | `uint64_t` composite | chunk hash | 32 | `INTEGERKEY` |
+| 27 | `curve_tree_meta` | string | varies | varies | — |
+| 28 | `curve_tree_checkpoints` | `uint64_t` height | snapshot | 41 | `INTEGERKEY` |
+| 29 | `curve_tree_roots` | `uint64_t` height | root hash | 32 | `INTEGERKEY` |
+| 30 | `pending_tree_leaves` | BE(maturity)\|\|BE(output) | leaf tuple | 128 | `CREATE` only |
+| 31 | `pending_tree_drain` | BE(block_h)\|\|BE(output) | maturity+leaf | 136 | `CREATE` only |
+| 32 | `block_pending_additions` | BE(block_h)\|\|BE(output) | BE(maturity) | 8 | `CREATE` only |
+| 33 | `output_to_leaf` | `uint64_t` output_idx | `uint64_t` tree_pos | 8 | `INTEGERKEY` |
+| 34 | `leaf_to_output` | `uint64_t` tree_pos | `uint64_t` output_idx | 8 | `INTEGERKEY` |
+| 35 | `hf_versions` | `uint64_t` height | `uint8_t` version | 1 | `INTEGERKEY` |
+| 36 | `txpool_meta` | `crypto::hash` txid | `txpool_tx_meta_t` | 192 | — |
+| 37 | `txpool_blob` | `crypto::hash` txid | tx blob | var | — |
+| 38 | `alt_blocks` | `crypto::hash` blkid | meta + blob | var | — |
+| 39 | `properties` | string | varies | varies | — |
+| 40 | `hf_starting_heights` (legacy) | string | varies | varies | migration stub |
+| 41 | `txs` (legacy) | `uint64_t` tx_id | — | — | `INTEGERKEY` |
 
-Total: **42 sub-databases** (`mdb_env_set_maxdbs` must accommodate archival epoch-close tables + legacy stubs).
+Total: **41 sub-databases** (`archival_shard_leaf` deleted pre-genesis by the
+segment-freeze pipeline; `mdb_env_set_maxdbs` stays at 42 —
+`mdb_env_set_maxdbs` is a capacity ceiling, not an exact count).
 
 ### Schema v6 → v7 migration (breaking)
 
@@ -944,5 +949,5 @@ DB v7 is **not** backward compatible with v6. Nodes with v6 data must resync fro
 - `pending_tree_leaves`: changed from `MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED` (key=maturity, dup=leaf) to composite 16-byte key `BE(maturity) || BE(output_index)` with `MDB_CREATE` only.
 - `pending_tree_drain`: same restructuring (key was block_height with DUPSORT, now composite key).
 - Three new tables: `block_pending_additions`, `output_to_leaf`, `leaf_to_output`.
-- `maxdbs` increased from 32 to 36; gate-2/gate-4 archival substrate (six subdbs) requires **42** (`db_lmdb.cpp`).
+- `maxdbs` increased from 32 to 36; gate-2/gate-4 archival substrate required **42** (`db_lmdb.cpp`; the substrate's `archival_shard_leaf` was later deleted by the segment-freeze pipeline, leaving 41 live subdbs under the same ceiling).
 - Typed key/value encoders added in `src/blockchain_db/shekyl_types.h`.
