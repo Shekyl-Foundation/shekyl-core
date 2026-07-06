@@ -4,6 +4,39 @@
 
 ### Added
 
+- **wallet: block-timed bond-post dispatch driver — WI-3**
+  (`ARCHIVAL_BOND_WI3_DISPATCH.md`; `IMPLEMENTATION_INDEX.md` §4 WI-3
+  row). The sealed pending post now actually reaches a wire at its
+  planned block. The driver (`pscan/dispatch.rs`) rides the `P`-scan
+  sweep's own tip read (§3.1 named invariant: the dispatch clock is the
+  daemon's claimed tip, sound under the recommended local-daemon
+  posture; the sweep-corroborated clamp is held in reserve for the 2d-2
+  reopen), dispatches at most one due post per tick in deterministic
+  order behind a fresh dispersal draw, and seals the `Dispatched`
+  transition **before** any send — every attempt, first or resubmit,
+  re-lifts the stored bytes through the `submit_bound` choke (pin P-2).
+  Outcome handling per §3.4: accept/F31 holds resubmits for the pscan's
+  own reorg-deep confirmation (a daemon's F40 claim never releases the
+  reservation), terminal verify rejection removes bytes + reservation in
+  one seal and alarms (never auto-re-assembles), unknown outcomes
+  resubmit byte-identical next due tick, bounded by the derived
+  1.5×`ARCHIVAL_REORG_DEPTH_BLOCKS` alarm horizon (funds-safety over
+  liveness: the alarmed record is held, not dropped). Schema:
+  `PENDING_POST_VERSION` 1 → 2 for the `Dispatched` arm; v1 fails
+  closed (pre-genesis, rule 15). Wiring: a `DispatchTick` seam at the
+  end of `pscan_sweep` (a failed tick logs and retries next sweep, never
+  halts the scan); production store is the `WalletFile`-backed
+  region-2 AEAD seal of `.wallet.pending`, production broadcast is the
+  `Local`-posture `BroadcastSubmitter`. GF-7: live `BondPostDispatched`
+  emission at the submit call site (per-submit emission-completeness
+  test, gate 8); **WI-3's GF-7 acceptance stays open** until WI-4's
+  a-priori threshold artifact + live-emission sealing re-run per the §5
+  reconvergence gate. Enforcement: `ci/pending-post-write-path`
+  (`scripts/ci/check_pending_post_write_path.sh`) pins the single
+  write path / single payload kind for pending-post persistence
+  (gate 11) — the torn-state-unrepresentability argument (gate 10)
+  rests on it.
+
 - **wallet: `start_pscan` lifecycle wiring — WI-1, completing 2d-1 SP-5**
   (`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md` §"WI-1"; `IMPLEMENTATION_INDEX.md`
   §4 WI-1 row). The firewalled `P`-scan gains its lifecycle call sites:

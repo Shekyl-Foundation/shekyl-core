@@ -1,7 +1,16 @@
 # WI-3 — Block-timed bond-post dispatch driver
 
-> **Status: design rounds 1–2, 2026-07-05.** The spec-first rounds the WI-3
-> implementation anchors on (rule `05-system-thinking`; process shape per
+> **Status: implemented — in review (2026-07-05, `feat/wi3-dispatch-driver`,
+> stacked on `feat/bond-assembly`).** Gates 1–11 landed: the driver + locked
+> seal path (`pscan/dispatch.rs`), schema v2 (`PENDING_POST_VERSION` 2, v1
+> fails closed), the sweep wiring (`DispatchTick` seam in `pscan/task.rs`,
+> production store/broadcast in `pscan/start.rs`), the per-submit
+> `BondPostDispatched` emission test, and the gate-11 grep gate
+> (`scripts/ci/check_pending_post_write_path.sh` +
+> `ci/pending-post-write-path` workflow). **GF-7 acceptance stays open** per
+> the §5 reconvergence gate until WI-4's threshold artifact + live-emission
+> re-run exist. Design record below is rounds 1–2, spec-first per rule
+> `05-system-thinking` (process shape per
 > `26-sub-pr-design-discipline` — this slice touches a broadcast-privacy
 > surface and a persisted-schema bump, so it gets explicit rounds). Round 2
 > was an adversarial review pass; its findings and dispositions are §7, and
