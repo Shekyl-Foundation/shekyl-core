@@ -7494,7 +7494,16 @@ one place to confirm each item's relationship to the wallet stack.
   **Scheduling note (2026-07-06): the §14.4 implementation round is SEALING-PATH work,
   not ordinary validation** — via Pin 2 it gates `K_COVER`, a genesis-immutable constant,
   so it inherits the reward rule's own "must be right before seal, cannot be changed
-  after" weight. Do not schedule it as deferrable measurement.
+  after" weight. Do not schedule it as deferrable measurement. Its output feeds **two
+  consumers with opposite dispositions** (§14.4 "Two consumers" pin): a
+  distinguishability fail ⇒ posture redesign, never a bar move; a sound-but-thin cover
+  result ⇒ `K_COVER` calibrates higher, not a posture failure. **Seal-time wording pin
+  (§13.5):** the sealed claim stays conditional by construction — isolation conditioning
+  is transport-layer and never discharges; two-of-three-measured must not read as
+  three-of-three-cleared. **Review-closure bar (§16.10):** the §§14–16 closure is the
+  adversarial read of the bounds themselves (is `r < 2` honest under the 1.86 panel; is
+  the widened null the adversary's class or a subset; does the `K_COVER` derivation
+  circle through the arm it gates), not a consistency rubber stamp.
   **Target: pre-genesis (M1 blocks genesis; M6.2 lands with the §14.4 round).**
   **Open leg-(b) residual (rule 21), severity sharpened:** the *block-time* sealing re-run is
   confirmatory by construction (live `BondPostDispatched.at` is the due block — dispersal is

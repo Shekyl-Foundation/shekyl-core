@@ -51,7 +51,14 @@
   deliverable (the once-firing rule's boundary is never re-exercised at
   runtime), and `K_COVER` finalization gated on the §14.4 widened-class
   measurement (rule shape specs immediately; the constant waits on the
-  cover model that measurement validates). M3/M7 CI enumerations (gate-11 /
+  cover model that measurement validates). Three closing pins (§13.5,
+  §14.4, §16.10): the sealed claim stays conditional by construction
+  (isolation conditioning never discharges — two-of-three-measured is
+  not three-of-three-cleared); the partition arm's output feeds two
+  consumers with opposite dispositions (distinguishability fail ⇒
+  posture redesign; sound-but-thin cover ⇒ `K_COVER` calibrates
+  higher); and the §§14–16 review closure is held to an adversarial
+  read of the bounds themselves, not a consistency check. M3/M7 CI enumerations (gate-11 /
   F25 shape), M4 global launch-window bond rate cap (WI-3 D-B2), M5
   never-serialized `PublicByConsent` marker, M6 generator-coupling
   control (blind@window-0 ≥ 2× chance or INVALID) + leg-(b) wall-clock

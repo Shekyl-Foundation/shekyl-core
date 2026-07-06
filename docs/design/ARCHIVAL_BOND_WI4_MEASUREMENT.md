@@ -696,6 +696,31 @@ that bound: worst gate row `r = 1.86` ⇒ `0.86` expected excess links
 across the whole set — under the committed "fewer than one excess
 de-anonymization" claim, with the margin now honestly thin (§13.1).
 
+### 13.5 The sealed claim is conditional by construction (pinned 2026-07-06)
+
+The ledger against the `1.86` margin is three conditionals, and it is
+**asymmetric** in a way the eventual seal must preserve:
+
+- **Leg (b)** (wall-clock channel, §13.3) and the **§14.4 partition run**
+  are *buildable*: each has a committed a-priori bound and a build item,
+  and each resolves to a measured number that either clears or does not.
+- **Isolation conditioning** (§16.9 item 1) is *permanently conditional*: it
+  is a transport-layer property that no bond-layer measurement can
+  discharge. It never becomes a cleared checkbox; it remains a stated
+  assumption on every number in this document, forever.
+
+Consequence for seal-time wording: even when leg (b) and the partition
+arm both pass and `K_COVER` is set, the gate's honest form is **not**
+"unlinkability holds." It is "unlinkability holds **conditional on
+circuit/client isolation, which is enforced and verified at the
+transport layer, not here**." Two-of-three-measured must never be read
+as three-of-three-cleared: the isolation conditional survives into the
+genesis claim itself as a permanent qualifier, and a future reader who
+sees "leg-b passed, partition passed, sealed" and drops that qualifier
+has dropped the assumption the entire gate rests on. Any seal statement
+derived from this document carries the conditional clause on the verdict
+line, in the same position the posture condition occupies today.
+
 ## 14. Addendum (2026-07-06): the founder-cover launch posture — refusing the cold-start regime
 
 **Status: pre-committed specification, review checkpoint required before
@@ -889,6 +914,30 @@ the null distribution then models.
   construction; in deployment it is real and sits with the other
   off-model axes named in §4.3.1's ceiling statement (funding provenance,
   address reuse, off-wire distinguishers). Named residual, not absorbed.
+- **Two consumers, two disposition rules (pinned 2026-07-06).** Since
+  §16.2 Pin 2 placed this arm on `K_COVER`'s critical path, its output
+  feeds **two independent decisions that consume different projections
+  of the same measurement round**, and a result must be dispositioned
+  per consumer or a borderline number will be mis-read:
+  1. *Launch-posture validator* (consumes the indistinguishability
+     statistic `T` against bound 1): a bound-1 **fail** — founders
+     sortable from users better than chance — means the posture is
+     **unsound**; the disposition is posture redesign (P1
+     indistinguishability, P2 staggering, M3 path-sharing) and
+     re-measurement. Never a bar move.
+  2. *`K_COVER` calibrator* (consumes the cover-thickness model at the
+     measured shard count): a result that is **sound but thin** — `T`
+     at chance (bound 1 passes) while cover thickness is marginal at
+     the anticipated shard count — is **not a posture failure at all**;
+     the disposition is `K_COVER` calibrates higher (the gate opens
+     later, cover accumulates longer).
+  These are opposite actions on adjacent-looking results. A marginal
+  outcome must be read against *which quantity* is marginal: the
+  partition statistic (consumer 1's fail) or the thickness at `K`
+  (consumer 2's calibration). Force-reading a thin-cover result as a
+  posture failure wastes a sound posture; force-reading a
+  distinguishability fail as a calibration question ships a partitioned
+  anonymity set with a bigger `K` in front of it.
 
 ### 14.5 What this does to the §13 verdict, and the reversion clause
 
@@ -1237,3 +1286,28 @@ exceeding the §14.4 bounds (the mechanism would then be manufacturing
 the signal it exists to suppress); M5 reopens only if persona records
 gain a serialization path (the never-serialize constraint is the load-
 bearing fact). None reopens on convenience.
+
+**The review-closure bar (pinned 2026-07-06).** The §§14–16 review is
+the last point where the downstream bounds can be shaped by argument
+rather than contested against data — everything below it is committed
+before code precisely so this review can scrutinize the bounds without
+a passing number in view. Once the §14.4 round produces a number,
+every one of these questions becomes anchored to it. The closure is
+therefore **not** a consistency check ("are the specs internally
+coherent"); it is the adversarial read of whether the bounds themselves
+are right, and it must answer at minimum:
+
+1. Is `r < 2` still the honest bar under the oracle panel that now
+   reaches `1.86` — or does the panel's strength argue the bar was
+   calibrated against a weaker observer class?
+2. Is the §14.4 widened hypothesis class actually the adversary's
+   class, or still a named subset of it — what rule shapes the family
+   omits, and why each omission is safe?
+3. Does the `K_COVER` derivation contain a circularity — the cover
+   model that sets the constant being validated by the very arm the
+   constant gates — and if the dependency is real but non-circular,
+   where exactly the cycle breaks?
+
+A closure that does not put these three on the record has rubber-stamped
+the a-priori half of everything downstream. The review closing *well*
+is worth more than it closing *soon*.
