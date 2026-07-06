@@ -412,6 +412,127 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
   EXPECT_EQ(db.get_archival_sigma_work_milli(settlement_epoch), sigma);
 }
 
+// ── M1 reward gate: count pass + stored shape (ARCHIVAL_REWARD_GATE_M1.md) ──
+//
+// The Rust activation-boundary KAT (tests/reward_gate_kat.rs, G-1..G-10)
+// injects frozen_shard_count and never executes the C++ filter, so the
+// count-pass cases live here (§11.8 M3-1/M3-2): the freeze_height ≤ H_close
+// boundary (equality counts — an off-by-one here is a consensus fork at
+// exactly the boundary class), the malformed-row loud abort (a lenient skip
+// silently lowers the count on one node — a fork in the gating direction),
+// and the write-txn precondition.
+
+TEST(archival_substrate_lmdb, frozen_shard_count_filter_boundary)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+  const uint64_t h_close = 10000;
+
+  // Non-dense shard IDs (walk-not-watermark, §1.1): strictly below, exactly
+  // equal, and strictly above the close height.
+  db.put_archival_shard_segment(7, h_close - 1, make_hash(0x61), 26000);
+  db.put_archival_shard_segment(1000000, h_close, make_hash(0x62), 26000);
+  db.put_archival_shard_segment(42, h_close + 1, make_hash(0x63), 26000);
+
+  // Equality counts (freeze_height <= h_close); the future row does not.
+  EXPECT_EQ(lmdb.count_frozen_shards_at_close(h_close), 2u);
+  // One below the boundary the equal row drops out.
+  EXPECT_EQ(lmdb.count_frozen_shards_at_close(h_close - 1), 1u);
+  // Below every freeze the count is zero; above every freeze it is total.
+  EXPECT_EQ(lmdb.count_frozen_shards_at_close(h_close - 2), 0u);
+  EXPECT_EQ(lmdb.count_frozen_shards_at_close(h_close + 1), 3u);
+}
+
+TEST(archival_substrate_lmdb, frozen_shard_count_malformed_row_aborts)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+
+  db.put_archival_shard_segment(7, 100, make_hash(0x64), 26000);
+  // Correct length, wrong version byte: decodable length, undecodable row.
+  std::vector<uint8_t> bad(1 + 8 + 8 + 32, 0);
+  bad[0] = 99;
+  lmdb.put_archival_shard_segment_raw_for_corruption_test(8, bad);
+
+  // Loud abort, never a lenient skip that returns 1 (§1.1 decode-failure
+  // pin: two nodes disagreeing on the count is a fork in the gating
+  // direction).
+  EXPECT_THROW(lmdb.count_frozen_shards_at_close(200), std::runtime_error);
+
+  // A truncated row aborts identically.
+  std::vector<uint8_t> truncated(10, 0);
+  truncated[0] = 1;
+  lmdb.put_archival_shard_segment_raw_for_corruption_test(8, truncated);
+  EXPECT_THROW(lmdb.count_frozen_shards_at_close(200), std::runtime_error);
+}
+
+TEST(archival_substrate_lmdb, frozen_shard_count_requires_active_write_txn)
+{
+  TempLMDB fixture;
+  BlockchainLMDB& lmdb = fixture.db;
+  fixture.db.batch_stop();
+  EXPECT_THROW(lmdb.count_frozen_shards_at_close(100), std::runtime_error);
+  fixture.db.batch_start();
+}
+
+// Stored shape of an all-zero close + reorg round-trip (§5 round-2
+// additions). Per §2.1 the store cannot represent gatedness: a gated close
+// and a legitimately-zero close are bitwise-identical to every store reader.
+// Pre-seal the production gate path is unreachable by construction (the §4
+// sentinel is the gate-identity 0, and the FFI threads K_COVER verbatim), so
+// this test drives the zero-output close through a legitimately-zero epoch —
+// the identical stored shape the gate produces post-seal: sigma row PRESENT
+// and zero (not NOTFOUND — the §2.1 never-skip-the-close pin), no r_market
+// rows, close-log row written so revert stays symmetric.
+TEST(archival_substrate_lmdb, zero_output_close_stored_shape_and_reorg_roundtrip)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+
+  const uint64_t seb = 10000;
+  const uint64_t settlement_epoch = 1;
+  const uint64_t close_height = (settlement_epoch + 1) * seb;
+
+  // Membership begins at join+1, so a bond joined AT the settlement epoch is
+  // not yet a member: its credit rows yield r_market = 0 and sigma = 0.
+  const crypto::hash p1 = make_hash(0x54);
+  db.put_archival_bond_record(p1, {0x01}, settlement_epoch,
+    2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
+  db.put_archival_shard_segment(7, 0, make_hash(0x65), 26000);
+  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch);
+
+  db.process_archival_epoch_close_at_height(close_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // Sigma row present-and-zero — distinguishable from NOTFOUND only through
+  // the probe (get_archival_sigma_work_milli launders NOTFOUND to 0).
+  EXPECT_TRUE(lmdb.has_archival_sigma_work_row(settlement_epoch));
+  EXPECT_EQ(db.get_archival_sigma_work_milli(settlement_epoch), 0u);
+  // No r_market rows (the store phase skips zero counts entirely).
+  EXPECT_EQ(db.get_archival_r_market(7, settlement_epoch), 0u);
+
+  // Revert keys on the close log: the sigma row disappearing proves the log
+  // row was written (revert returns early on a missing log row).
+  db.revert_archival_epoch_close_at_height(close_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  EXPECT_FALSE(lmdb.has_archival_sigma_work_row(settlement_epoch));
+
+  // Re-apply: bit-identical zero shape (close/revert/re-apply symmetry at a
+  // zero-output close, the §9.4 pairing exercised on the gate's shape).
+  db.process_archival_epoch_close_at_height(close_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  EXPECT_TRUE(lmdb.has_archival_sigma_work_row(settlement_epoch));
+  EXPECT_EQ(db.get_archival_sigma_work_milli(settlement_epoch), 0u);
+  EXPECT_EQ(db.get_archival_r_market(7, settlement_epoch), 0u);
+}
+
 // ── F-S1: v4 fields survive the load-modify-store writers ───────────────────
 //
 // put_archival_bond_record rebuilds a fresh ArchivalBondValue from scalar args

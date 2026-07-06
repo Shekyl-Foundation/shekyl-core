@@ -5749,6 +5749,31 @@ uint64_t BlockchainLMDB::count_frozen_shards_at_close(uint64_t h_close) const
   return count;
 }
 
+bool BlockchainLMDB::has_archival_sigma_work_row(uint64_t settlement_epoch) const
+{
+  shekyl::db::ArchivalSigmaWorkKey key(settlement_epoch);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v;
+  const int result = archival_db_get(m_archival_sigma_work, &k, &v);
+  if (result && result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to probe archival_sigma_work row: ", result).c_str()));
+  return result == 0;
+}
+
+void BlockchainLMDB::put_archival_shard_segment_raw_for_corruption_test(uint64_t shard_id,
+  const std::vector<uint8_t>& blob)
+{
+  check_open();
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: raw segment write requires active write txn");
+  shekyl::db::ArchivalShardKey key(shard_id);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v = { blob.size(), const_cast<uint8_t*>(blob.data()) };
+  const int result = mdb_put(*m_write_txn, m_archival_shard_segment, &k, &v, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to put raw archival shard segment: ", result).c_str()));
+}
+
 void BlockchainLMDB::process_archival_epoch_close_at_height(uint64_t block_height)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
