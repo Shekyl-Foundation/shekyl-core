@@ -4,13 +4,13 @@
 
 ### Added
 
-- **docs: M1 reward-gate consensus rule — design round 1 spec + closure**
+- **docs: M1 reward-gate consensus rule — design rounds 1–2 spec + closure**
   ([`ARCHIVAL_REWARD_GATE_M1.md`](design/ARCHIVAL_REWARD_GATE_M1.md)).
   The WI-4 launch posture's cold-start refusal in consensus-rule form:
   zero reward accrual for every persona in epochs where
   `shard_count < K_COVER`, enforced as a uniform zero-at-top factor in
   `epoch_close_compute` and inherited by the emission zero-tolerance
-  compare with no second predicate site. Spec-first per
+  compare through the zeroed stored `Σwork`. Spec-first per
   `05-system-thinking` and `26-sub-pr-design-discipline` (cited).
   Carries the WI-4 §16.2 obligations — activation-boundary KAT as a
   first-class deliverable, the zero-accrual/no-seniority invariant
@@ -19,13 +19,27 @@
   **Round 1 closed against an adversarial wargame (§9):** consumer walk
   verified zero pre-gate readers of the epoch-close outputs and
   `join_settlement_epoch` as eligibility-only; the non-claimable rule
-  amended to the uniform positive-share form (zero-amount claim rows
-  unrepresentable for gated *and* legitimately-empty epochs; the vin
-  never consults `K_COVER`); the provisional `k_cover` sentinel
-  hardened to a compile-time refusal in non-test builds; the
-  reorg-across-activation-boundary argument written out against the
-  existing connect/revert pairing (no new KAT case required). Surface
-  enumeration updated; wallet-claim-builder obligation pinned forward.
+  amended to the uniform positive-share form; the provisional
+  `k_cover` sentinel hardened to a compile-time refusal in non-test
+  builds; the reorg-across-activation-boundary argument written out
+  against the existing connect/revert pairing.
+  **Round 2 closed against a second independent review (§10, findings
+  M1-1..M1-9):** the non-claimable rule resited to the **wire level**
+  (strictly positive `reward_amount_plain`, rejected at `validate()`
+  — the zero-row beacon becomes unencodable, and `K_COVER` is
+  compared at exactly one code site, guarded by a new CI grep
+  tripwire); §2.1 output naming corrected to the real two-field
+  `EpochCloseResult` (no per-`P` surface widening); the gate pinned
+  to run **through the normal close path, never an early-return skip**
+  (close-log/revert symmetry, prune advance, stored-zero sigma), with
+  the zero-accrual-is-not-zero-accountability invariant (serve
+  credits, bad intervals, slashing stay live during gated epochs);
+  the §4.5 lagged-read discipline recorded as load-bearing for
+  non-claimability (never recompute `Σwork` from primaries); KAT
+  extended G-6..G-9 plus C++ store-shape and boundary-reorg tests;
+  reorg-argument and prune-optimization reversion clauses added
+  (rule 21). Surface enumeration updated; wallet-claim-builder
+  obligation pinned forward.
 
 - **wallet: block-timed bond-post dispatch driver — WI-3**
   (`ARCHIVAL_BOND_WI3_DISPATCH.md`; `IMPLEMENTATION_INDEX.md` §4 WI-3

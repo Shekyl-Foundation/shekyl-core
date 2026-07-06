@@ -7389,7 +7389,7 @@ one place to confirm each item's relationship to the wallet stack.
   intra-doc link in the `randomx-v2-sys`/`shekyl-pow-randomx` docs, `generic_array::as_slice`
   deprecations in vendored crypto). **Reopen as** a standalone doc-hygiene sweep: fix those warnings,
   then swap the shekyl-tor-scoped step for `cargo doc --workspace --no-deps` under `-D warnings`.
-- **M1 reward gate — design round 1 CLOSED (`ARCHIVAL_REWARD_GATE_M1.md` §9, 2026-07-06;
+- **M1 reward gate — design rounds 1–2 CLOSED (`ARCHIVAL_REWARD_GATE_M1.md` §9/§10, 2026-07-06;
   consensus rule, genesis-frozen, builds first per the WI-4 ranked path).** The launch
   posture's cold-start refusal in structural form: zero accrual to every `(P, s, E)` for
   epochs where `shard_count < K_COVER` — uniform, global, blind (no founder marking),
@@ -7414,8 +7414,22 @@ one place to confirm each item's relationship to the wallet stack.
   sixth KAT case needed). Error-genericity residual rejected with a mechanism argument
   (gatedness is publicly computable ex ante; named errors stay per rule 82). Forward
   obligation pinned: the future wallet claim builder derives claimable epochs from the
-  same positive-share recompute. **Target: V3.0 pre-genesis — implementation next, after
-  the rule-26 pre-flight pass.**
+  same positive-share recompute. **Round 2 closed against a second independent review
+  (doc §10, M1-1..M1-9, 2026-07-06):** the positive-share rule resited to the wire —
+  strictly positive `reward_amount_plain` enforced at `validate()`, making the
+  zero-amount beacon *unencodable* and leaving exactly **one** `K_COVER` comparison site
+  in the codebase (CI grep tripwire pinned; M1-1's two-site premise dissolved at N=1);
+  §2.1 wording reconciled to the real two-field `EpochCloseResult` (M1-3, no per-`P`
+  widening); "zero through the normal close path, never skip the close" pinned (M1-5:
+  close-log revert symmetry, prune advance, stored-zero sigma) plus the
+  zero-accrual≠zero-accountability invariant (serve credits / bad intervals / slashing
+  live during gated epochs — no free-misbehavior sandbox); the §4.5 lagged-`Σwork`-read
+  discipline recorded as doubly load-bearing (M1-4 — a primaries-recompute refactor
+  would silently bypass the gate; reopens the round); KATs extended G-6..G-9 + C++
+  stored-shape and boundary-reorg tests (M1-7); reorg-argument reversion clause (M1-8:
+  corpus/participation-triggered activation rebuilds the argument from zero) and
+  gated-epoch prune optimization rejected with reopening criteria (M1-9, rule 21).
+  **Target: V3.0 pre-genesis — implementation next, after the rule-26 pre-flight pass.**
 - **2d-2 SP-T4a — GF-7 principal-timeline timing correlation is a GENESIS GATE (measure
   `P(link | T_obs)` before launch).** SP-T4a *draws* the narrow funding-seam entry-gap jitter
   (`draw_entry_gap`, `spread ~ U[0, 600 blocks]`) but does **not** wire it into any broadcast — the
