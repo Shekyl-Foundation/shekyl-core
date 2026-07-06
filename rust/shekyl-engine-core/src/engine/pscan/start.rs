@@ -69,12 +69,21 @@ use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use shekyl_engine_state::PendingPostBlock;
+use shekyl_p_transport::TorSocksEndpoint;
+
 use super::block_source::DaemonBlockSource;
 use super::cadence::FixedRateSchedule;
+use super::dispatch::{BondBroadcast, DispatchConfig, DispatchDriver, PendingSealStore};
 use super::task::{run_pscan_task, PScanConfig, PScanStore};
+use crate::engine::bond_assembly::PBoundBytes;
+use crate::engine::posture::BroadcastPosture;
 use crate::engine::signer::EngineSignerKind;
 use crate::engine::traits::{
     DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine,
+};
+use crate::engine::transaction_submitter::{
+    BroadcastSubmitError, BroadcastSubmitter, SubmitSuccess,
 };
 use crate::engine::Engine;
 
@@ -283,6 +292,140 @@ where
     }
 }
 
+/// The production [`PendingSealStore`] (WI-3 §3.3 / §5 gate 11): same live-file
+/// reach as [`WalletFilePScanStore`] — through the engine arc under a brief read
+/// lock — delegating the seal to [`WalletFile::save_pending_posts`] /
+/// [`WalletFile::open_pending_posts`], the **sole** writer of `.wallet.pending`
+/// and the sole `PayloadKind::PendingPostBlockPostcard` encode site. This type
+/// adds no second write path; it only carries bytes to that one.
+#[allow(clippy::type_complexity)] // same self-arc shape as `WalletFilePScanStore`.
+struct WalletFilePendingSealStore<S, D, L, E, R, P>
+where
+    S: EngineSignerKind,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+{
+    engine: Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
+}
+
+/// Failures of the file-backed pending-post store: the `.wallet.pending`
+/// seal/open layer, or postcard (de)serialization of the [`PendingPostBlock`]
+/// body (including the fail-closed version refusal — a v1 seal under the v2
+/// binary surfaces here, per the WI-3 schema-v2 discipline).
+#[derive(Debug, thiserror::Error)]
+enum WalletFilePendingStoreError {
+    /// The `.wallet.pending` seal/open (envelope, atomic write, swap-refusal, I/O).
+    #[error("pending-post file: {0}")]
+    File(#[from] WalletFileError),
+    /// (De)serializing the `PendingPostBlock` body across the seal boundary.
+    #[error("pending-post block codec: {0}")]
+    Codec(WalletLedgerError),
+}
+
+impl<S, D, L, E, R, P> PendingSealStore for WalletFilePendingSealStore<S, D, L, E, R, P>
+where
+    S: EngineSignerKind + Send + Sync + 'static,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+    Engine<S, D, L, E, R, P, WalletFile>: Send + Sync,
+{
+    type Error = WalletFilePendingStoreError;
+
+    fn load(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Option<PendingPostBlock>, Self::Error>> + Send
+    {
+        let engine = self.engine.clone();
+        async move {
+            // Same guard discipline as `WalletFilePScanStore::load`: read + open
+            // under the lock, decode after the guard drops; `run_blocking_io` frees
+            // the tokio worker for the synchronous file I/O.
+            let body = {
+                let g = engine.read().await;
+                run_blocking_io(|| {
+                    g.persistence()
+                        .open_pending_posts(g.state_wrap_key().as_bytes())
+                })?
+            };
+            match body {
+                Some(b) => Ok(Some(
+                    PendingPostBlock::from_postcard_bytes(&b)
+                        .map_err(WalletFilePendingStoreError::Codec)?,
+                )),
+                None => Ok(None),
+            }
+        }
+    }
+
+    fn save(
+        &self,
+        block: &PendingPostBlock,
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        let engine = self.engine.clone();
+        // Encode before taking the lock — postcard needs no engine state.
+        let body = block.to_postcard_bytes();
+        async move {
+            let body = body.map_err(WalletFilePendingStoreError::Codec)?;
+            let g = engine.read().await;
+            run_blocking_io(|| {
+                g.persistence()
+                    .save_pending_posts(g.state_wrap_key().as_bytes(), &body)
+            })?;
+            Ok(())
+        }
+    }
+}
+
+/// Tor's conventional local SOCKS port. A **placeholder** feeding
+/// [`BroadcastSubmitter::for_posture`]'s signature: the hardwired ① `Local`
+/// posture below never dials SOCKS (the ① arm ignores the endpoint entirely),
+/// but construction must stay on the audited posture→submitter choke point
+/// rather than reach around it to a bare submitter.
+const TOR_SOCKS_PLACEHOLDER_PORT: u16 = 9050;
+
+/// The production [`BondBroadcast`]: routes every dispatch through the
+/// [`BroadcastSubmitter::for_posture`] choke point (posture→submitter binding)
+/// and its [`submit_bound`](BroadcastSubmitter::submit_bound) pairing check.
+///
+/// **Posture is hardwired ① `Local`** — the privacy default (the loopback
+/// broadcast originates on the operator's own box; exactly what
+/// [`select_broadcast`](crate::engine::posture::select_broadcast) resolves for
+/// no-choice + reachable-local). The operator's *explicit* posture choice (an
+/// ② `OwnRemote` over `P`'s own circuit, with its per-persona circuit-bound
+/// submitter) plugs in here when the 2c config-source slice lands; the seam —
+/// per-dispatch construction from `(posture, persona)` — is already the ②
+/// shape, so that slice swaps the hardwired value, not this type.
+struct LocalBondBroadcast<D> {
+    daemon: Arc<D>,
+}
+
+impl<D: DaemonEngine> BondBroadcast for LocalBondBroadcast<D> {
+    fn submit_bound(
+        &self,
+        bound: PBoundBytes,
+    ) -> impl std::future::Future<Output = Result<SubmitSuccess, BroadcastSubmitError>> + Send {
+        let daemon = self.daemon.clone();
+        async move {
+            let submitter = BroadcastSubmitter::for_posture(
+                BroadcastPosture::Local,
+                *bound.persona(),
+                daemon,
+                &TorSocksEndpoint::loopback(TOR_SOCKS_PLACEHOLDER_PORT),
+            )
+            // The ① arm is infallible (`for_posture` docs): only the ② arm's
+            // SOCKS proxy configuration can be rejected, and ① never builds one.
+            .expect("the Local arm of for_posture is infallible");
+            submitter.submit_bound(bound).await
+        }
+    }
+}
+
 // `private_bounds`: the engine traits are deliberately `pub(crate)` behind the
 // `pub` `Engine` (see the `#[allow(private_bounds)]` on the struct itself); every
 // engine impl that restates them carries the same allow.
@@ -404,10 +547,27 @@ where
             (g.daemon().clone(), stake, slot_guard)
         };
 
+        // The WI-3 dispatch driver's broadcast seam shares the daemon (one more
+        // clone before `daemon` moves into the block source).
+        let broadcast = LocalBondBroadcast {
+            daemon: Arc::new(daemon.clone()),
+        };
         let block_source = DaemonBlockSource::new(daemon);
         let store = WalletFilePScanStore {
             engine: self_arc.clone(),
         };
+
+        // WI-3: the block-timed bond-post dispatch driver, ticked at the end of
+        // every sweep (`ARCHIVAL_BOND_WI3_DISPATCH.md` §3.1). The dispersal draw
+        // spans the sweep cadence — the tick interval is exactly the phase window
+        // the send-time decorrelation must cover.
+        let dispatch = DispatchDriver::new(
+            WalletFilePendingSealStore {
+                engine: self_arc.clone(),
+            },
+            broadcast,
+            DispatchConfig::production(cadence),
+        );
 
         // Load the sealed state up front (#4): a corrupt / version-mismatched seal
         // surfaces here, not as a silent task death. `slot_guard` drops on this
@@ -427,6 +587,7 @@ where
             schedule,
             config,
             initial,
+            dispatch,
             cancel_token.clone(),
             slot_guard,
         ));

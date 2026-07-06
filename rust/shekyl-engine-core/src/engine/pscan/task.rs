@@ -27,6 +27,7 @@ use tokio_util::sync::CancellationToken;
 use super::accrual::{AccrualError, PScanAccrual};
 use super::block_source::{BlockSource, BlockSourceError};
 use super::cadence::ScanSchedule;
+use super::dispatch::{DispatchError, DispatchTick};
 use super::exhaustiveness::{verify_exhaustive, ExhaustivenessError};
 use super::scan_step::{BlockRange, BondPostMatch, MAX_SCAN_STEP_BLOCKS};
 use crate::engine::stake_engine::{
@@ -184,6 +185,12 @@ pub(crate) enum PScanTaskError {
     /// failure, not a proven gap (SP-7's root-anchored job).
     #[error("block {height} missing below the finality horizon")]
     MissingBlock { height: u64 },
+    /// The end-of-sweep dispatch tick failed to seal the pending-post block
+    /// (WI-3 §4 row 2: the error is logged, no send happened, and the tick
+    /// retries on the next sweep — every scan batch this sweep already
+    /// sealed, so nothing is lost).
+    #[error("bond-post dispatch tick failed: {0}")]
+    Dispatch(#[from] DispatchError),
     /// Chain-exhaustiveness verification failed: a fetched batch did not chain to the
     /// stored verified frontier, or a body did not match its committed hash.
     ///
@@ -211,18 +218,25 @@ pub(crate) enum PScanTaskError {
 /// up to the finality horizon (`tip − reorg_depth`), accumulating funding,
 /// recording `Unbond`s, retiring eligible terminal personas, and sealing after
 /// each step. Idempotent across crashes by atomic coupling (see [`PScanAccrual`]).
-async fn pscan_sweep<B, S>(
+// Eight parameters: three collaborators (source/stake/store), three pieces of
+// per-task mutable state (accrual/retired/dispatch), config, cancel. Bundling
+// them into a struct would only relocate the same list; the internal call has
+// exactly one production caller ([`run_pscan_task`]) plus tests.
+#[allow(clippy::too_many_arguments)]
+async fn pscan_sweep<B, S, D>(
     block_source: &B,
     stake: &StakeEngineHandle,
     store: &S,
     accrual: &mut PScanAccrual,
     retired_this_session: &mut BTreeSet<PCanonicalId>,
+    dispatch: &mut D,
     config: &PScanConfig,
     cancel: &CancellationToken,
 ) -> Result<(), PScanTaskError>
 where
     B: BlockSource + Sync,
     S: PScanStore,
+    D: DispatchTick,
 {
     let tip = block_source.tip_height().await?;
     // Finality horizon: scan only blocks behind `tip − reorg_depth`, so every
@@ -345,6 +359,15 @@ where
         // effect strictly follow the durability of what justifies it.
         dispatch_retires(stake, accrual, retired_this_session, cancel).await?;
     }
+
+    // WI-3 end-of-sweep dispatch tick (§3.1): rides *this sweep's own* tip read
+    // — no second network fetch, no separate timer task — and hands the driver
+    // the accrual's reorg-deep JoinMarket confirmations (§3.5: our own verified
+    // scan, never a daemon claim). Runs after the catch-up loop so a due-check
+    // against a fresh tip never races the same sweep's confirmation retire.
+    dispatch
+        .on_tick(tip, &accrual.confirmed_join_market_personas(), cancel)
+        .await?;
     Ok(())
 }
 
@@ -440,19 +463,21 @@ async fn dispatch_retires(
 // struct would only move the same fields behind one more name. Mirrors the
 // many-parameter `run_refresh_task` spawn entry-point.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn run_pscan_task<B, S, Sched>(
+pub(crate) async fn run_pscan_task<B, S, Sched, D>(
     block_source: B,
     stake: StakeEngineHandle,
     store: S,
     mut schedule: Sched,
     config: PScanConfig,
     initial: Option<PScanState>,
+    mut dispatch: D,
     cancel: CancellationToken,
     _slot_guard: PScanSlotGuard,
 ) where
     B: BlockSource + Sync,
     S: PScanStore,
     Sched: ScanSchedule,
+    D: DispatchTick,
 {
     let mut accrual = match initial {
         Some(state) => PScanAccrual::from_state(&state),
@@ -472,6 +497,7 @@ pub(crate) async fn run_pscan_task<B, S, Sched>(
             &store,
             &mut accrual,
             &mut retired_this_session,
+            &mut dispatch,
             &config,
             &cancel,
         )
@@ -654,6 +680,7 @@ mod tests {
             &store,
             &mut accrual,
             &mut retired,
+            &mut (),
             &cfg(4, 1),
             &CancellationToken::new(),
         )
@@ -691,6 +718,7 @@ mod tests {
                 &store,
                 &mut accrual,
                 &mut retired,
+                &mut (),
                 &cfg(4, 4),
                 &CancellationToken::new(),
             )
@@ -716,6 +744,7 @@ mod tests {
             &store,
             &mut accrual,
             &mut retired,
+            &mut (),
             &cfg(4, 4),
             &CancellationToken::new(),
         )
@@ -772,6 +801,7 @@ mod tests {
             &store,
             &mut accrual,
             &mut retired,
+            &mut (),
             &cfg(4, 4),
             &CancellationToken::new(),
         )

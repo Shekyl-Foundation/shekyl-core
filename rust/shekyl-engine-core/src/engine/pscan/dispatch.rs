@@ -27,12 +27,6 @@
 //! envelope committed by one atomic file write; the reservation is derived,
 //! never stored, so no torn seal-vs-reservation state is representable.
 
-// Landed inert (same pattern as `stake_engine` / `submit_watchdog`): the
-// production consumer is the pscan sweep wiring (`task.rs` end-of-tick call +
-// `start.rs` construction), which lands in the next commit of this WI-3
-// implementation PR. The allow lifts when the sweep calls `on_tick`.
-#![allow(dead_code)]
-
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -107,6 +101,9 @@ impl<S: PendingSealStore> PendingPostStore<S> {
     /// Read the current block under the lock (a serialized snapshot; no
     /// seal write). The WI-2 assemble path reads the derived reservation
     /// set ([`PendingPostBlock::reserved_gindexes`]) through this.
+    // Transient — the consumer is the assemble-path rewire through this shared
+    // handle (the gate-11 writer-discipline follow-through in this WI-3 PR).
+    #[allow(dead_code)]
     pub(crate) async fn read<R>(
         &self,
         f: impl FnOnce(&PendingPostBlock) -> R,
@@ -299,6 +296,34 @@ fn select_dispatch_candidate<'a>(
 // The driver
 // ---------------------------------------------------------------------------
 
+/// The sweep-facing seam for the end-of-sweep dispatch tick: the driving
+/// task (`run_pscan_task`) is generic over it, so the loop tests run with
+/// the [`()`](impl@DispatchTick) no-op and never build a driver.
+/// [`DispatchDriver`] is the production impl.
+pub(crate) trait DispatchTick: Send + 'static {
+    /// Run one dispatch tick at the end of a pscan sweep — see the
+    /// [`DispatchDriver`] impl for the full per-tick contract.
+    fn on_tick(
+        &mut self,
+        tip: BlockHeight,
+        confirmed: &BTreeSet<PCanonicalId>,
+        cancel: &CancellationToken,
+    ) -> impl std::future::Future<Output = Result<(), DispatchError>> + Send;
+}
+
+/// The no-dispatch no-op — for pscan loop tests that exercise the scan and
+/// never the dispatch path.
+impl DispatchTick for () {
+    async fn on_tick(
+        &mut self,
+        _tip: BlockHeight,
+        _confirmed: &BTreeSet<PCanonicalId>,
+        _cancel: &CancellationToken,
+    ) -> Result<(), DispatchError> {
+        Ok(())
+    }
+}
+
 /// What one locked read-modify-seal pass decided (phase 1 of a tick).
 struct TickPlan {
     /// Personas retired by confirmation this tick (records removed).
@@ -371,10 +396,15 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchDriver<S, T> {
     /// The locked write path, exposed so the WI-2 assemble path appends its
     /// sealed post through the **same** handle (§3.3 writer discipline —
     /// two writers, one lock, one seal path).
+    // Transient — the consumer is the assemble-path rewire (gate-11 follow-
+    // through in this WI-3 PR), same as `PendingPostStore::read` above.
+    #[allow(dead_code)]
     pub(crate) fn store(&self) -> &PendingPostStore<S> {
         &self.store
     }
+}
 
+impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T> {
     /// Run one dispatch tick (§3.2–§3.6), at the end of a pscan sweep.
     ///
     /// `tip` is the sweep's own `tip_height()` read. Clock trust (R2-1):
@@ -392,7 +422,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchDriver<S, T> {
     /// dispatch at most one due post — seal the `Dispatched` transition
     /// first, sleep the dispersal draw, submit, and absorb the outcome
     /// (§3.4).
-    pub(crate) async fn on_tick(
+    async fn on_tick(
         &mut self,
         tip: BlockHeight,
         confirmed: &BTreeSet<PCanonicalId>,
