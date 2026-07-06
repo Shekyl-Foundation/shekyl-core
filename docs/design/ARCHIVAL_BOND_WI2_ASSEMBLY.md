@@ -234,12 +234,15 @@ PendingBondPost {
   anchor `t0` (`shekyl_standoff::plan` discipline); anchoring at assemble
   time keeps the draw's decorrelation intact and gives WI-3 a pure
   computation: `due = anchor_t0 + plan.bond_post_offset_blocks`.
-  **WI-3 R2-1 pin:** the height stamped is the **dispatch-clock** value
-  (`min(claimed_tip, verified_frontier + reorg_depth)`,
-  [`ARCHIVAL_BOND_WI3_DISPATCH.md`](ARCHIVAL_BOND_WI3_DISPATCH.md) §3.1),
-  never the bare claimed tip — anchor and due-check must read the same
-  sweep-corroborated clock, or the offsets change meaning under the clamp.
-  Binds the Engine-side orchestrator when it lands.
+  **WI-3 R2-1 pin (frame consistency):** the height stamped is read from
+  the **same clock function** as WI-3's due-check
+  ([`ARCHIVAL_BOND_WI3_DISPATCH.md`](ARCHIVAL_BOND_WI3_DISPATCH.md) §3.1)
+  — today the raw claimed tip, sound under the local-daemon posture per
+  that section's named invariant; if the 2d-2 remote/untrusted-daemon
+  reopen arms the sweep-corroborated clamp held in reserve there, the
+  anchor stamp and the due-check switch together, or the offsets change
+  meaning across the seam. Binds the Engine-side orchestrator when it
+  lands.
 - **Redaction.** The record is a persona-activity row (persona, plan,
   amounts implied by gindexes): redacted `Debug`, sealed at rest — the
   `BondPostRecord` discipline.

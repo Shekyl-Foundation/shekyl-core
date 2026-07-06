@@ -62,74 +62,68 @@ posture-aware `PBlockSource` and external-spend reconcile (2d-2).
 
 ## 3. Design decisions
 
-### 3.1 D-B1 — The dispatch clock: sweep-corroborated, never
-### daemon-authoritative (amended, round 2 R2-1)
+### 3.1 D-B1 — The block clock is the pscan sweep's tip read, sound
+### under the local-daemon posture (revised, round 2 R2-1)
 
-**Round-1 shape and why it was wrong.** Round 1 due-checked against the
-raw claimed `tip_height()` — a bare daemon-controlled number. An inflated
-claim makes every pending post read as due immediately: the drawn jitter
-(`spread`, `bond_first`, the §3.2 dispersal) is denominated in that clock,
-so a lying tip spends the whole GF-7 decorrelation budget to zero and
-re-introduces D-B2's co-launch-by-simultaneity through the clock instead
-of the backlog. That is a **privacy** failure, which under `00-mission`
-priority-2 outranks the plan-frame argument that motivated the raw tip.
-Round 1's own D-B6 refused the rejection pump on exactly the
-"daemon-controlled input driving the dispatch path" ground; the same
-ground indicts the raw tip.
+**Decision.** The due-check runs at the end of every pscan sweep tick,
+against the same `tip_height()` the sweep already fetched. No new network
+read, no separate timer task, no wall-clock schedule.
 
-**Decision (amended).** The due-check runs at the end of every pscan
-sweep tick — no new network read, no separate timer task, no wall-clock
-schedule — against the **dispatch clock**, a monotone, sweep-corroborated
-value:
+- **Clock value:** the **raw claimed tip**, not the finality horizon. The
+  plan's offsets are relative to `anchor_t0`, which WI-2 stamps from the
+  same clock at assemble time; due-checking against the same clock keeps
+  the offsets meaning what the draw drew. (The finality horizon lags by
+  `ARCHIVAL_REORG_DEPTH_BLOCKS`; due-checking against it would silently
+  add a constant ~reorg-depth delay to every post.)
+- **Why this clock and not the principal's refresh:** the dispatch time
+  must be a function of `P`'s own isolated view. Deriving it from the
+  principal's refresh loop would couple `P`'s broadcast timing to the
+  principal's activity rhythm — manufacturing exactly the axis-(iii)
+  correlation GF-7 measures.
 
-```text
-dispatch_clock = min(claimed_tip,
-                     verified_frontier + ARCHIVAL_REORG_DEPTH_BLOCKS)
-```
-
-where `verified_frontier` is the accrual's exhaustiveness-verified scan
-frontier (`PScanAccrual::next_height`) — a height the sweep has actually
-fetched, chained via `verify_exhaustive` to the wallet's own sealed
-`frontier_hash`, and sealed. The frontier can only advance behind a
-`VerifiedBatch` (`accrual.rs`'s structural guard), so the clock's
-corroborated component is anchored to scanned reality, not to a claim.
-
-- **Honest steady state is unchanged.** Once caught up, the frontier
-  tracks `tip − reorg_depth` exactly (the sweep scans to the horizon every
-  tick), the clamp is inactive, and the clock equals the claimed tip — the
-  round-1 frame argument (offsets mean what the draw drew; no silent
-  reorg-depth delay) is preserved wherever the daemon is honest.
-- **The free lie is structurally forbidden.** A daemon that inflates the
-  claimed tip without serving blocks strands the sweep at `MissingBlock`
-  (or fails the exhaustiveness gate); the frontier does not advance, the
-  clamp holds, and no post becomes due early. Making the inflation
-  effective now requires fabricating and serving a coherent block sequence
-  that chains to the wallet's own sealed frontier hash and scans clean —
-  the attack cost rises from "report a number" to "manufacture a chain",
-  and a manufactured chain is the 2d-2 **tip-honesty posture residual**
-  already named at `PScanTaskError::Exhaustiveness` — a known, owned
-  residual, not a new surface this driver adds.
-- **Stalling is the safe direction.** An under-claimed tip (or a frontier
-  held back by withheld blocks) only *delays* dispatch — monotone noise on
-  a privately-anchored plan (§3.6 late-is-noise), degrading to the same
-  liveness-not-privacy class as an eclipsing daemon, which is
-  network-layer scope. The dangerous direction (under-jitter via
-  inflation) is the one the clamp forbids.
-- **Frame consistency.** `anchor_t0` is stamped from the **same
-  `dispatch_clock` function** at assemble time — a pin on WI-2's
-  Engine-side orchestrator (not yet built; recorded at
-  `ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.5's anchor bullet). Anchor and
-  due-check reading one clock keeps the offsets' meaning invariant under
-  the clamp.
-- **Why this clock and not the principal's refresh:** unchanged from
-  round 1 — the dispatch time must be a function of `P`'s own isolated
-  view; deriving it from the principal's refresh loop would manufacture
-  exactly the axis-(iii) correlation GF-7 measures.
+**Named trust invariant (R2-1 — retired by posture, not absent).** The
+dispatch clock trusts a daemon-controlled value, and against an
+*adversarial* daemon that trust is exploitable: an inflated claimed tip
+makes every pending post read as due immediately, collapsing the drawn
+jitter (`spread`, `bond_first`, the §3.2 dispersal) to zero and
+re-introducing D-B2's co-launch through the clock instead of the backlog
+— a privacy failure, not a fund-safety one (the reservation stays
+observation-gated per D-B5). This is **sound under the recommended and
+default posture — a local daemon the operator owns** — because a daemon
+you run is not an adversary to your own timing plan; the attack is a
+theorem about the trust posture, not a general truth. A user pointing the
+wallet at a remote daemon they don't control is accepting this risk
+knowingly, alongside the larger class it belongs to. The invariant is
+named here — and must be marked at the driver's clock-read site
+(`// sound under local-daemon posture; reopens under 2d-2`) — so the
+future untrusted-daemon posture inherits a flagged assumption to
+discharge, not a silent hole ("a safety property that held for an
+unstated reason" is the armed-gate failure in reverse).
 
 **Reopen criterion (rule 21), shared with D-B6:** both are "how much does
-the dispatch path trust the daemon's clock", and both reopen together in
-the 2d-2 posture design round (daemon-response authentication /
-tip-honesty machinery). Until then the clamp is the structural floor.
+the dispatch path trust the daemon", and both reopen together in the
+2d-2 remote/untrusted-daemon posture round. **The pre-designed mitigation
+is held in reserve for that reopen** — a sweep-corroborated clamp,
+`dispatch_clock = min(claimed_tip, verified_frontier +
+ARCHIVAL_REORG_DEPTH_BLOCKS)`, where `verified_frontier` is
+`PScanAccrual::next_height` (advances only behind a `VerifiedBatch`, so
+a bare inflated tip strands at `MissingBlock`/exhaustiveness and the
+clamp holds; a fabricated corroborating chain remains the 2d-2
+tip-honesty residual; stalling degrades in the safe over-delay
+direction; honest steady state leaves the clamp inactive). It is
+specified, not built: building it now would be remote-daemon defense
+engineered into the local-daemon default. When the reopen arms it,
+`anchor_t0`'s stamp and the due-check switch to the clamp **together**
+(the frame-consistency pin at `ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.5).
+
+**The general discipline this instance names:** the local-daemon posture
+is a legitimate, load-bearing simplifying assumption — and it is *spent
+explicitly, never absorbed silently*. Every site that leans on "the
+daemon isn't your adversary" (this clock; the F40 rescan trust bound;
+the submit-verdict boundary; the earlier FeeTooLow single-egress
+reclassification) carries the same source-site marker, so the eventual
+untrusted-daemon posture is a matter of walking named reopens, not
+re-auditing the dispatch path for trust assumptions nobody wrote down.
 
 ### 3.2 D-B2 — D1: no shared-tick co-launch
 
@@ -206,25 +200,42 @@ load→modify→seal; both writers go through it. (Same shape as `PScanStore`,
 plus the lock because unlike the pscan seal this one legitimately has two
 writers on two cadences.)
 
-**Crash-atomicity (round 2, R2-2).** The lock above is a *thread-safety*
+**Crash-atomicity (round 2, R2-2 — the load-bearing item of the round,
+and posture-independent).** The lock above is a *thread-safety*
 guarantee; the resume-after-crash story needs a *crash-atomicity*
-guarantee, and they are not the same thing. Here the second is structural
-rather than transactional: the **entire** pending-post state — every
-record, its `state` arm, its held bytes — lives in **one** sealed
-postcard blob committed by **one** `atomic_write_file` (the `.wallet.pscan`
-seal shape), and the reservation is **derived, never stored** —
-`PendingPostBlock::reserved_gindexes()` is computed from the live records
-on every read, so there is no second write a crash could tear it apart
-from. A crash leaves either the old seal or the new seal, both
-self-consistent by construction; the "sealed-`Dispatched` but reservation
-in the pre-dispatch state" tear is *unrepresentable*, which is stronger
-than a multi-write transaction that merely makes it atomic. The invariant
-this rests on is pinned for implementation and review: **no pending-post
-state exists outside the blob** — no side files, no split writes, no
-cached reservation table, no field whose truth lives anywhere but the
-sealed records themselves. Any future change that externalizes a piece of
-this state must bring its own transaction boundary and reopen this
-disposition.
+guarantee, and they are not the same thing. Power loss and OOM kills
+don't care whose daemon it is — this is the finding that bites the
+recommended local posture directly, which is why the correctness budget
+goes here.
+
+Stated against the actual write path: `PendingPostStore` serializes the
+whole `PendingPostBlock` to one postcard blob
+(`PendingPostBlock::to_postcard_bytes`), seals it under the `file_kek`
+AEAD envelope as `PayloadKind::PendingPostBlockPostcard` (`0x03`,
+`shekyl-engine-file/src/payload.rs`), and commits it to
+`.wallet.pending` through the orchestrator's single atomic-write path
+(`shekyl-engine-file/src/atomic.rs`: sibling temp → write → `fsync(fd)`
+→ `rename(2)` → `fsync(parent)`). The guarantee is therefore
+**structural rather than transactional**: the **entire** pending-post
+state — every record, its `state` arm, its held bytes — lives in that
+one blob, and the reservation is **derived, never stored**
+(`PendingPostBlock::reserved_gindexes()` is computed from the live
+records on every read), so there is no second write a crash could tear
+it apart from. A crash leaves either the old seal or the new seal, both
+self-consistent; the "sealed-`Dispatched` but reservation in the
+pre-dispatch state" tear is *unrepresentable*. This is the same
+discipline the daemon's LMDB side established for `pop_block` reversal
+(all paired mutations inside one transaction boundary), delivered here
+by the file layer's rename-atomicity instead of a DB txn — same
+guarantee, the mechanism the wallet seal actually has.
+
+The invariant this rests on is pinned for implementation and review:
+**no pending-post state exists outside the blob** — no side files, no
+split writes, no cached reservation table, no field whose truth lives
+anywhere but the sealed records themselves. Any future change that
+externalizes a piece of this state (a second file, an in-memory
+authority, an index) must bring its own transaction boundary and reopen
+this disposition.
 
 ### 3.4 D-B4 — Outcome handling
 
@@ -304,7 +315,10 @@ the funding reservation in the same seal.
   operator aware. Reopen criterion (rule 21): if 2d-2's posture work
   lands a daemon-response authentication story that demotes "malicious
   daemon" below this threat, an automatic re-assemble with capped backoff
-  can be reconsidered in that design round.
+  can be reconsidered in that design round. This reopen is **shared with
+  D-B1's clock-trust invariant** (§3.1, R2-1): both are "how much does
+  the dispatch path trust the daemon", and the 2d-2 round discharges
+  them together.
 
 ### 3.7 D-B7 — Live `BondPostDispatched` emission
 
@@ -350,11 +364,12 @@ Functional gates (all must pass to merge):
 7. Schema: v2 round-trip; v1 fails closed.
 8. GF-7: emission-completeness test extends to `BondPostDispatched` (the
    stake-engine emission test's shape, driver edition).
-9. Clock integrity (R2-1): an inflated claimed tip with a non-advancing
-   frontier makes **no** post due (the clamp holds); frontier catch-up to
-   the inflated height releases the clamp only through verified batches;
-   an under-claimed tip only delays. Honest steady state: clamp inactive,
-   clock == claimed tip.
+9. Clock trust marker (R2-1): review gate — the driver's clock-read site
+   carries the `// sound under local-daemon posture; reopens under 2d-2`
+   marker per §3.1's named invariant. The sweep-corroborated-clamp test
+   suite (inflated tip + non-advancing frontier ⇒ nothing due; release
+   only through verified batches; under-claim only delays) lands with
+   the 2d-2 reopen that builds the clamp, not now.
 10. Single-blob invariant (R2-2/R2-4): a review-gate assertion that no
     pending-post state lives outside the sealed block (no side files, no
     split writes), plus a test that terminal removal prunes the bytes and
@@ -412,13 +427,29 @@ Open at round-1 close (none block the seams above):
 ## 7. Round 2 (2026-07-05) — adversarial review findings and dispositions
 
 Round 2 verified all seven round-1 dispositions at source and wargamed
-the dispatch path. Four findings, severity-ordered; dispositions amended
-in place (§3.1, §3.3, §3.6, §5) with this section as the change record.
+the dispatch path. Four findings; dispositions amended in place (§3.1,
+§3.3, §3.6, §5) with this section as the change record.
+
+**Posture correction within the round.** The findings were first ranked
+as if a remote daemon were the default; the recommended and default
+posture is a **local daemon and wallet the operator owns**, and the
+re-ranking under the correct posture sharpened the round rather than
+softening it. The local posture retires the adversarial-daemon finding
+(R2-1) to a named invariant with a pre-designed mitigation in reserve —
+but it does nothing for the crash-safety and at-rest findings (R2-2,
+R2-4) or the measurement-validity finding (R2-3), because none of those
+trust the daemon in the first place. R2-2 is the round's genuinely
+load-bearing item: it bites the recommended posture directly, no
+adversary required. The general discipline the correction names — the
+local-daemon assumption is spent explicitly at every leaning site, never
+absorbed silently — is stated in §3.1 and applies track-wide (the tip
+clock, the F40 rescan trust bound, the submit-verdict boundary, the
+FeeTooLow single-egress reclassification).
 
 | # | Finding | Severity | Disposition |
 | --- | --- | --- | --- |
-| R2-1 | The round-1 dispatch clock trusted the daemon's bare claimed tip; an inflated claim makes every post due at once, collapsing the entire GF-7 jitter budget (spread, order-coin, dispersal) to zero — D-B2's co-launch re-introduced through the clock. Privacy failure; priority-2 outranks the fund-safety framing round 1 led with, and D-B6's own "daemon-controlled input" ground indicts it | **Load-bearing** | D-B1 amended: sweep-corroborated `dispatch_clock = min(claimed_tip, verified_frontier + reorg_depth)`. Free lie structurally forbidden (frontier advances only behind `VerifiedBatch`); fabricated-chain inflation named to the 2d-2 tip-honesty residual; stalling is the safe direction; `anchor_t0` pinned to the same clock function (WI-2 orchestrator pin). Reopen shared with D-B6 (2d-2 posture round) |
-| R2-2 | "One locked write path" states thread-safety, not crash-atomicity; a torn seal-vs-reservation write would void the P-2 safe-resend guarantee at resume | Pin now | §3.3 amended: crash-atomicity is structural — one blob, one `atomic_write_file`, reservation derived-never-stored, torn states unrepresentable. "No pending-post state outside the blob" pinned as implementation invariant + §5 gate 10 |
+| R2-1 | The dispatch clock trusts the daemon's claimed tip; an *adversarial* daemon's inflated claim makes every post due at once, collapsing the GF-7 jitter budget (spread, order-coin, dispersal) to zero — D-B2's co-launch re-introduced through the clock. A privacy failure, but posture-dependent: the recommended and default posture is a **local daemon the operator owns**, against which the attack does not exist | Posture-dependent — **latent** under the recommended posture (initially ranked load-bearing as if remote were the default; corrected) | D-B1 revised: raw tip kept as the clock; the trust is a **named invariant** ("retired by posture, not silently absent") with a mandatory source-site marker at the clock read. The sweep-corroborated clamp `min(claimed_tip, verified_frontier + reorg_depth)` is fully specified and **held in reserve** as the pre-designed mitigation for the 2d-2 remote/untrusted-daemon reopen (shared with D-B6); building it now would be remote-daemon defense in the local default. On reopen, `anchor_t0` and the due-check switch to the clamp together (WI-2 §3.5 pin) |
+| R2-2 | "One locked write path" states thread-safety, not crash-atomicity; a torn seal-vs-reservation write would void the P-2 safe-resend guarantee at resume | **Load-bearing** — posture-independent (power loss and OOM kills don't care whose daemon it is; this is the finding that bites the recommended local posture directly) | §3.3 amended, stated against the actual write path: one postcard blob → `file_kek` AEAD envelope (`PayloadKind::PendingPostBlockPostcard`) → the orchestrator's single atomic-write path (temp → fsync → rename → fsync(parent)); reservation derived-never-stored, torn states unrepresentable. Same discipline as the daemon's `pop_block` single-txn precedent, delivered by rename-atomicity instead of an LMDB txn. "No pending-post state outside the blob" pinned as implementation invariant + §5 gate 10 |
 | R2-3 | The dispersal draw exists only in the live driver; WI-4's pre-live run grades a synthesized timeline that lacks it, so a "range suffices" conclusion could be drawn against a correlator that never saw dispersal | Sequencing | §5 reconvergence gate amended: the dispersal *distribution* is a swept parameter of the sim synthesis; any pre-live range conclusion is provisional-until-live-re-run, same status as the emission. Binds WI-4's measurement design (WI-4 row obligation). §6(a) subsumed |
 | R2-4 | Terminal reject must not strand the signed key-image-bearing bytes at rest, nor leave a record whose reservation is gone — a restart would resurrect an abandoned spend | Minor | Structurally closed by R2-2's shape: the record *is* the bytes *is* the reservation; removal is one seal. Stated explicitly in §3.6; test in §5 gate 10 |
 
