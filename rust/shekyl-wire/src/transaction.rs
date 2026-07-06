@@ -21,12 +21,17 @@
 //!                enc_amounts[nout×9] enc_labels[nout×9] outPk[nout×32]
 //!                PqcAuths(nvin)  Prunable
 //! PqcAuth     := auth_version(1) scheme_id(1) flags(u16 LE) V(pk_len) pk V(sig_len) sig
-//! Prunable    := V(nbp) nbp×BpPlus V(tree_depth) V(proof_len) fcmp_proof[] pseudoOuts[nvin×32]
+//! Prunable    := V(nbp) nbp×BpPlus V(tree_depth) V(proof_len) fcmp_proof[] pseudoOuts[n_spend×32]
 //! BpPlus      := A A1 B r1 s1 d1 (6×32) V(L_len) L[..×32] V(R_len) R[..×32]   # V restored from outPk
 //! ```
 //!
 //! `pqc_auths` has **no length prefix** — its count is `nvin` (the C++
-//! `PREPARE_CUSTOM_VECTOR_SERIALIZATION(vin.size(), …)`); same for `pseudoOuts`.
+//! `PREPARE_CUSTOM_VECTOR_SERIALIZATION(vin.size(), …)`). `pseudoOuts` also has no
+//! length prefix, but its count is `n_spend` — the number of **`ToKey` (key-image)
+//! inputs only**. A bond-post input occupies a `pqc_auths` slot but carries no
+//! pseudo-out (its cleartext `bond_credit` rides the CT balance instead:
+//! `Σ pseudoOuts = Σ out_masks + fee + bond_credit`). For a pure spend
+//! `n_spend == nvin`, so the two counts only diverge on bond-post transactions.
 //! Source: `src/fcmp/rctTypes.h` (`serialize_rctsig_base` / `serialize_rctsig_prunable`,
 //! `BulletproofPlus`), `src/cryptonote_basic/cryptonote_basic.h` (`pqc_authentication`,
 //! tx-level between base and prunable).
@@ -873,7 +878,10 @@ pub struct Prunable {
     pub tree_depth: u64,
     /// Opaque FCMP++ membership+SAL proof bytes (interior frozen by reference, §6 Q6).
     pub fcmp_proof: Vec<u8>,
-    /// Re-blinded pseudo-out commitments, one per input.
+    /// Re-blinded pseudo-out commitments, one per **`ToKey` (spend) input**. A
+    /// bond-post input carries no pseudo-out — its cleartext `bond_credit` term
+    /// rides the CT balance directly (blockchain.cpp bond-post arm pins
+    /// `pseudoOuts.size() == num_spend`).
     pub pseudo_outs: Vec<[u8; 32]>,
 }
 
@@ -892,7 +900,7 @@ impl Prunable {
         Ok(())
     }
 
-    fn read<R: Read>(inputs: usize, r: &mut R) -> io::Result<Prunable> {
+    fn read<R: Read>(spend_inputs: usize, r: &mut R) -> io::Result<Prunable> {
         let nbp: usize = read_varint(r)?;
         if nbp > READ_LEN_CAP {
             return Err(io::Error::other(format!(
@@ -905,8 +913,9 @@ impl Prunable {
         }
         let tree_depth = read_varint(r)?;
         let fcmp_proof = read_len_prefixed(r, "fcmp_proof")?;
-        // pseudoOuts: one per input, no length prefix.
-        let pseudo_outs = read_points(r, inputs)?;
+        // pseudoOuts: one per ToKey (spend) input, no length prefix. A bond-post
+        // input contributes no pseudo-out (module header / blockchain.cpp pin).
+        let pseudo_outs = read_points(r, spend_inputs)?;
         Ok(Prunable {
             bulletproofs,
             tree_depth,
@@ -979,9 +988,16 @@ impl Ct {
     }
 
     /// Read the ct section. `inputs`/`outputs` (the vin/vout counts) size the
-    /// per-input/per-output arrays that carry no length prefix. Takes a [`BufRead`]
-    /// so the EOF-tolerant tail (§9.8) can be detected without consuming bytes.
-    pub fn read<R: BufRead>(inputs: usize, outputs: usize, r: &mut R) -> io::Result<Ct> {
+    /// per-input/per-output arrays that carry no length prefix; `spend_inputs`
+    /// (the `ToKey` subset of vin) sizes `pseudoOuts`, which a bond-post input
+    /// does not contribute to (module header). Takes a [`BufRead`] so the
+    /// EOF-tolerant tail (§9.8) can be detected without consuming bytes.
+    pub fn read<R: BufRead>(
+        inputs: usize,
+        spend_inputs: usize,
+        outputs: usize,
+        r: &mut R,
+    ) -> io::Result<Ct> {
         let ct_type = read_byte(r)?;
         match ct_type {
             CT_TYPE_NULL => Ok(Ct::Null(CtBase::read(outputs, r)?)),
@@ -1024,7 +1040,7 @@ impl Ct {
                 let prunable = if r.fill_buf()?.is_empty() {
                     None
                 } else {
-                    Some(Prunable::read(inputs, r)?)
+                    Some(Prunable::read(spend_inputs, r)?)
                 };
                 Ok(Ct::Fcmp {
                     fee,
@@ -1141,7 +1157,14 @@ impl Transaction {
             )));
         }
         let prefix = TxPrefix::read(r)?;
-        let ct = Ct::read(prefix.inputs.len(), prefix.outputs.len(), r)?;
+        // pseudoOuts are sized by the ToKey (spend) subset of vin — a bond-post
+        // input occupies a pqc_auths slot but no pseudo-out slot (module header).
+        let spend_inputs = prefix
+            .inputs
+            .iter()
+            .filter(|i| matches!(i, Input::ToKey { .. }))
+            .count();
+        let ct = Ct::read(prefix.inputs.len(), spend_inputs, prefix.outputs.len(), r)?;
         Ok(Transaction { prefix, ct })
     }
 
@@ -1676,9 +1699,10 @@ impl Transaction {
     /// no-prunable shape. Use this on a *complete* tx; the scan/refresh boundary, which
     /// ingests pruned txs, calls [`Self::validate_context_free_pruned`] instead.
     ///
-    /// The bond_post `pseudoOuts` coupling is a §13 (F1/F3) **forward obligation** the
-    /// oracle itself leaves unchecked (`is_archival_bond_post_tx` exempt) — so it is
-    /// left unchecked here too, by design.
+    /// The bond_post `pseudoOuts`↔spend-subset coupling (formerly a §13 F1/F3
+    /// forward obligation) is **pinned exactly** here: `pseudo_outs.len()` must
+    /// equal the `ToKey` input count for every shape, bond-post included
+    /// (`GENESIS_TX_WIRE_FORMAT.md` §1.1 coupling closure, 2026-07-05).
     pub fn validate(&self) -> io::Result<()> {
         self.validate_context_free_pruned()?;
         // Prunable-coupled checks: spend-proof completeness that needs the full,
@@ -1726,12 +1750,16 @@ impl Transaction {
                             prunable.bulletproofs.len()
                         )));
                     }
-                    // pseudoOuts: a pure fcmp spend pins `pseudoOuts == num_inputs`
-                    // (blockchain.cpp:3762); a bond-post tx (n_ki < n_in) is exempt — a
-                    // §13 (F1/F3) forward obligation, mirroring the oracle.
-                    if n_ki == n_in && prunable.pseudo_outs.len() != n_in {
+                    // pseudoOuts: one per ToKey (spend) input, exactly. For a pure
+                    // fcmp spend this is `pseudoOuts == num_inputs` (blockchain.cpp
+                    // spend arm); for a bond-post tx it is the spend subset only
+                    // (blockchain.cpp bond-post arm pins `pseudoOuts == num_spend`;
+                    // the bond input's cleartext bond_credit rides the CT balance,
+                    // not a pseudo-out). Closes the §13 (F1/F3) forward obligation
+                    // the earlier exemption deferred.
+                    if prunable.pseudo_outs.len() != n_ki {
                         return Err(io::Error::other(format!(
-                            "shekyl-wire: pseudoOuts {} != input count {n_in}",
+                            "shekyl-wire: pseudoOuts {} != spend (ToKey) input count {n_ki}",
                             prunable.pseudo_outs.len()
                         )));
                     }

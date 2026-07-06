@@ -734,6 +734,22 @@ motivated the split); `PFundingInflow` finalization at epoch-close; `Engine::sta
 wiring; and the DQ8 retirement/union-shrink reading consensus `W`. `block_source` and `inflow`
 keep their transient `#[allow(dead_code)]` until that task wires them.
 
+**WI-1 (landed 2026-07-05) — the lifecycle call sites, completing SP-5.** Two `pub` entry
+points on the file-backed engine (`engine/pscan/start.rs`): `Engine::start_pscan_if_staker`
+(the auto-start lifecycle call — a staker gets its P-scan at production settings, a non-staker
+gets `Ok(None)`) and `Engine::start_pscan` (the on-demand entry, mirroring `start_refresh`;
+`NoStakeEngine` for a non-staker). Both run `PScanConfig::production()` at
+`DEFAULT_PSCAN_CADENCE` (60 s; rule-75 rationale + bounds on the constant); the
+config-injectable seam stays `pub(crate)` as `start_pscan_with` for tests. The `PScanHandle`
+is **embedder-held, not engine-held**: the running task's store holds a strong engine arc, so
+engine-held storage would make the pair immortal; embedder-held makes "close stops the task"
+ownership-enforced (`close` consumes `self`, unreachable until `Arc::try_unwrap`, impossible
+until the handle is shut down). The transient `#[allow(dead_code)]` chain through
+`block_source`/`cadence`/`task`/`accrual` is removed; the remaining allows each name a later
+consumer (2d-2 posture selector, SP-7 `C_min`, SP-R0 reconcile GC, cold-start cover
+discovery). Fetch stays on `DaemonBlockSource`; the posture-aware `PBlockSource` swap
+(DQ-T2.3) is explicitly out of WI-1 scope.
+
 ---
 
 ### SP-6 — `PReconcileSet`: typed, distinct, *and* carries the range it can vouch for (absence ≠ unscanned)
@@ -1049,9 +1065,9 @@ frontier hash untouched, nothing sealed).
 independent gates that the `pending_unbonds` precedent only *looked* fused:
 
 - *Migration code* is gated on **forward-persistence** — and there is none. The `.wallet.pscan`
-  writer (`start_pscan` / the scan task) is dead-code-unwired; no deployed wallet (RC tags
-  included) has ever persisted a v1 `.wallet.pscan`, so nothing reads v1 forward → **no migration
-  code**.
+  writer (`start_pscan` / the scan task) was dead-code-unwired at decision time (WI-1 wired it
+  2026-07-05, after this bump landed); no deployed wallet (RC tags included) has ever persisted
+  a v1 `.wallet.pscan`, so nothing reads v1 forward → **no migration code**.
 - *The version number* is gated on **rule-42's snapshot guard** — a post-merge `.snap` diff forces
   the paired constant to move in the same PR (mechanical, persistence-independent). `pending_unbonds`
   needed no bump only because it rode v1's *creating* PR (a fresh `+` const line — a new, not a

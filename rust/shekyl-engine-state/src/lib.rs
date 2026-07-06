@@ -39,6 +39,7 @@ pub mod ledger_indexes;
 pub mod local_label;
 pub mod payment_id;
 pub mod payment_request;
+pub mod pending_post_block;
 pub mod pscan_cursor;
 pub mod pscan_state;
 pub mod safety_constants;
@@ -60,6 +61,9 @@ pub use local_label::{LocalLabel, SecretStr};
 pub use payment_id::PaymentId;
 pub use payment_request::{
     DisputeReason, PaymentRequest, PaymentRequestId, PaymentRequestState, ReceiveAttribution,
+};
+pub use pending_post_block::{
+    PendingBondPost, PendingPostBlock, PendingPostState, PENDING_POST_VERSION,
 };
 pub use safety_constants::NetworkSafetyConstants;
 pub use staking_block::{StakingBlock, STAKING_BLOCK_VERSION};

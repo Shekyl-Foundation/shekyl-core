@@ -632,6 +632,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     // `shekyl-wire` format on a real spend (FCMP_SPEND_SIGNING_PREIMAGE.md §5 residual).
     let wire_input = shekyl_tx_builder::WireEncodeInput {
         key_images: vec![*ki.key_image.as_bytes()],
+        extra_inputs: Vec::new(),
         output_keys: vec![payment.output_key, change.output_key],
         view_tags: vec![
             Some(payment.view_tag_prefilter),

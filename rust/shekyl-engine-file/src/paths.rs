@@ -148,6 +148,34 @@ pub fn pscan_state_path_from(base: &Path) -> PathBuf {
     PathBuf::from(os)
 }
 
+/// Extension suffix appended to the base path to derive the `P`-isolated
+/// pending-bond-post path (WI-2 D-A4, `ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.5).
+/// Appended as raw bytes (same rule as [`KEYS_FILE_SUFFIX`]) so a base like
+/// `primary.wallet` becomes `primary.wallet.pending` — a sibling of
+/// `.wallet.pscan`, deliberately a *separate* sealed file because its writer
+/// (the bond-assemble path) is not the pscan task's single-flight loop.
+pub const PENDING_POST_SUFFIX: &str = ".pending";
+
+/// Derive the `.wallet.pending` pending-bond-post path from a user-provided
+/// base, the same way [`pscan_state_path_from`] does (append to the full
+/// base, not `set_extension`).
+///
+/// # Examples
+///
+/// ```
+/// use shekyl_engine_file::paths::pending_post_path_from;
+/// use std::path::Path;
+/// assert_eq!(
+///     pending_post_path_from(Path::new("/tmp/primary.wallet")),
+///     Path::new("/tmp/primary.wallet.pending"),
+/// );
+/// ```
+pub fn pending_post_path_from(base: &Path) -> PathBuf {
+    let mut os: OsString = base.as_os_str().to_owned();
+    os.push(PENDING_POST_SUFFIX);
+    PathBuf::from(os)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

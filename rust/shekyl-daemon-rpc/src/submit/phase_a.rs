@@ -226,38 +226,18 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
         )));
     }
 
-    // Bond-post structural statics (row N7's context-free legs, pinned at
-    // `tx_verification_utils.cpp:151-153` / `blockchain.cpp:3635-3649`):
-    // ≥ 1 txin_to_key funding input, and pseudoOuts arity == funding-input
-    // count (validate() exempts the bond-post shape from its pure-spend
-    // pseudoOuts rule, so the engine owns this arity).
-    //
-    // Known consequence, deliberate: the C++ *wire* layer pins
-    // `pseudoOuts == vin.size()` (rctTypes.h:399-401, mirrored by
-    // `shekyl-wire`'s per-input read), while this consensus rule demands
-    // `== funding count` — contradictory whenever a bond-post input is
-    // present, so every wire-parseable funded bond-post rejects here
-    // exactly as it rejects at `ver_non_input_consensus` in C++. Parity
-    // preserved; the resolution is the §13 (F1/F3) wire reshape, not an
-    // engine-side relaxation.
-    if kind == SubmitTxKind::BondPost {
-        if n_to_key == 0 {
-            return Err(PhaseAReject::new(
-                "bond-post tx requires at least one txin_to_key funding input",
-            ));
-        }
-        if let Ct::Fcmp {
-            prunable: Some(prunable),
-            ..
-        } = &tx.ct
-        {
-            if prunable.pseudo_outs.len() != n_to_key {
-                return Err(PhaseAReject::new(format!(
-                    "bond-post pseudoOuts count {} != funding input count {n_to_key}",
-                    prunable.pseudo_outs.len()
-                )));
-            }
-        }
+    // Bond-post structural static (row N7's context-free leg, pinned at
+    // `tx_verification_utils.cpp:151-152` / `blockchain.cpp:3635-3649`):
+    // ≥ 1 txin_to_key funding input. The companion pseudoOuts arity
+    // (`== funding count`, `ver_non_input_consensus:153`) is no longer
+    // engine-owned: since the §13 (F1/F3) coupling closure (2026-07-05,
+    // `GENESIS_TX_WIRE_FORMAT.md` §1.1) `shekyl-wire`'s read *and*
+    // validate() pin `pseudoOuts == ToKey subset` exactly for every shape,
+    // bond-post included, so validate() above already enforced it.
+    if kind == SubmitTxKind::BondPost && n_to_key == 0 {
+        return Err(PhaseAReject::new(
+            "bond-post tx requires at least one txin_to_key funding input",
+        ));
     }
 
     // Spending shapes must carry a non-empty membership proof (row K11's

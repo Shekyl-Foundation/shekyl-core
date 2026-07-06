@@ -56,7 +56,6 @@ const DEFAULT_PSCAN_BATCH_BLOCKS: u64 = 128;
 /// finality depth; tests inject a small horizon so they need not build a
 /// reorg-depth-deep chain.
 #[derive(Clone, Copy, Debug)]
-#[allow(dead_code)] // transient — `Engine::start_pscan` (later commit) is the lib consumer.
 pub(crate) struct PScanConfig {
     /// Blocks below `tip` the scan stays behind — the finality horizon. Production
     /// is `ARCHIVAL_REORG_DEPTH_BLOCKS` (the consensus const); a smaller value is a
@@ -66,7 +65,6 @@ pub(crate) struct PScanConfig {
     pub batch_blocks: u64,
 }
 
-#[allow(dead_code)] // transient — `Engine::start_pscan` (later commit) is the lib consumer.
 impl PScanConfig {
     /// The production config: the consensus finality depth + the default batch.
     pub(crate) fn production() -> Self {
@@ -91,12 +89,10 @@ impl PScanConfig {
 /// reference-counted — the engine holds one handle, the running task's
 /// [`PScanSlotGuard`] holds another for its lifetime.
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // transient — `Engine::start_pscan` (later commit) claims it.
 pub(crate) struct PScanSlot {
     flag: Arc<AtomicBool>,
 }
 
-#[allow(dead_code)] // transient — `Engine::start_pscan` is the claim site.
 impl PScanSlot {
     /// A fresh slot in the released state. Built once at `Engine::assemble`.
     pub(crate) fn new() -> Self {
@@ -129,7 +125,6 @@ impl PScanSlot {
 /// whether the task returned, was cancelled, or panicked. Not `Clone` — the claim
 /// is unique, which is the point of single-flight.
 #[derive(Debug)]
-#[allow(dead_code)] // transient — held by `run_pscan_task` once the Engine spawns it.
 pub(crate) struct PScanSlotGuard {
     flag: Arc<AtomicBool>,
 }
@@ -149,7 +144,6 @@ impl Drop for PScanSlotGuard {
 /// `Arc<RwLock<Engine>>` under a brief read lock (the seal stays single-sourced in
 /// `WalletFile::save_pscan_state`, per seam choice (b)). RPITIT `+ Send` mirrors
 /// `PersistenceEngine` so the futures cross the `tokio::spawn` boundary.
-#[allow(dead_code)] // transient — `Engine::start_pscan` (later commit) supplies the impl.
 pub(crate) trait PScanStore: Send + Sync + 'static {
     /// The store's failure type (rendered into [`PScanTaskError::Store`]).
     type Error: std::error::Error + Send + Sync + 'static;
@@ -171,7 +165,6 @@ pub(crate) trait PScanStore: Send + Sync + 'static {
 /// Why the scan loop failed. Transient I/O is fatal to a single sweep; the loop
 /// logs and retries on the next cadence tick.
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)] // transient — surfaced/logged by `run_pscan_task` / the Engine wiring.
 pub(crate) enum PScanTaskError {
     /// The per-`P` block source failed (transport / parse / daemon).
     #[error("block source failed: {0}")]
@@ -218,7 +211,6 @@ pub(crate) enum PScanTaskError {
 /// up to the finality horizon (`tip − reorg_depth`), accumulating funding,
 /// recording `Unbond`s, retiring eligible terminal personas, and sealing after
 /// each step. Idempotent across crashes by atomic coupling (see [`PScanAccrual`]).
-#[allow(dead_code)] // transient — `run_pscan_task` is the lib consumer.
 async fn pscan_sweep<B, S>(
     block_source: &B,
     stake: &StakeEngineHandle,
@@ -443,8 +435,6 @@ async fn dispatch_retires(
 /// `start_pscan` can claim. The initial load is done by `start_pscan` (not here),
 /// so a corrupt/version-mismatched seal surfaces as a `start_pscan` error rather
 /// than a silent task death.
-#[allow(dead_code)]
-// transient — `Engine::start_pscan` (later commit) spawns it.
 // `too_many_arguments`: each is a distinct spawn input (source, vault, store,
 // cadence, config, resume-state, cancel, single-flight guard); grouping them into a
 // struct would only move the same fields behind one more name. Mirrors the
@@ -770,6 +760,7 @@ mod tests {
             BTreeMap::new(),
             BTreeMap::new(),
             Vec::new(),
+            Vec::new(),
         );
         store.save(&seeded).await.expect("seed");
         let mut accrual = PScanAccrual::from_state(&seeded);
@@ -863,6 +854,7 @@ mod tests {
             BTreeMap::new(),
             pending,
             Vec::new(),
+            Vec::new(),
         );
         let accrual = PScanAccrual::from_state(&state);
         assert_eq!(
@@ -906,6 +898,7 @@ mod tests {
             PScanCursor::at(BlockHeight::from_raw(cursor_height), [0u8; 32]),
             BTreeMap::new(),
             pending,
+            Vec::new(),
             Vec::new(),
         ));
         assert_eq!(

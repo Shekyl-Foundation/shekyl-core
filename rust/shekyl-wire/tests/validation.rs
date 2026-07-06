@@ -384,6 +384,58 @@ fn two_bond_posts_rejected() {
     assert!(err.to_string().contains("one bond_post"), "{err}");
 }
 
+/// A well-formed JoinMarket bond post with wire-exact key lengths (the reader
+/// pins `hybrid_public_key` / `bond_spend_pk` to their exact byte lengths).
+fn join_market_bond_post() -> Input {
+    Input::BondPost(Box::new(BondPost {
+        hybrid_public_key: vec![0u8; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN],
+        p_canonical_id: [7u8; 32],
+        kind: BondPostKind::JoinMarket {
+            bond_spend_pk: vec![9u8; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN],
+        },
+        holdings: Holdings::CompleteTree,
+        bonded_total_atomic: 100,
+        bond_credit: 100,
+        bond_debit: 0,
+    }))
+}
+
+#[test]
+fn bond_post_spend_round_trips_with_spend_subset_pseudo_outs() {
+    // pseudoOuts are per ToKey (spend) input only: a 2-vin bond-post tx
+    // (1 spend + 1 bond_post) carries exactly 1 pseudo-out. The blob must
+    // re-parse to the same value and validate (module header / blockchain.cpp
+    // bond-post arm `pseudoOuts.size() == num_spend`).
+    let mut tx = spend(vec![ki(1)], vec![out(), out()], 0, 1);
+    tx.prefix.inputs.push(join_market_bond_post());
+    if let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct {
+        // One pqc_auths slot per vin, including the bond_post slot.
+        pqc_auths.push(pqc_auths[0].clone());
+    }
+    tx.validate().expect("bond-post spend must validate");
+    let reparsed = Transaction::from_bytes(&tx.serialize()).expect("bond-post spend re-parses");
+    assert_eq!(reparsed, tx, "round trip must be value-identical");
+}
+
+#[test]
+fn bond_post_spend_with_per_vin_pseudo_outs_rejected() {
+    // The pre-coupling shape (pseudoOuts sized by vin.size(), bond slot
+    // included) is exactly what the §13 F1/F3 coupling closure rejects.
+    let mut tx = spend(vec![ki(1)], vec![out(), out()], 0, 1);
+    tx.prefix.inputs.push(join_market_bond_post());
+    if let Ct::Fcmp {
+        pqc_auths,
+        prunable: Some(prunable),
+        ..
+    } = &mut tx.ct
+    {
+        pqc_auths.push(pqc_auths[0].clone());
+        prunable.pseudo_outs.push([0u8; 32]);
+    }
+    let err = tx.validate().unwrap_err();
+    assert!(err.to_string().contains("pseudoOuts"), "{err}");
+}
+
 #[test]
 fn bond_post_oversized_pubkey_rejected() {
     let bp = BondPost {

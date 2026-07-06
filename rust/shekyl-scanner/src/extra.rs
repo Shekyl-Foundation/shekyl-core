@@ -244,6 +244,19 @@ impl Extra {
         Extra(fields)
     }
 
+    /// Append a PQC leaf-hash commitment field (Shekyl tag `0x07`,
+    /// `N × 32` bytes — `H(pqc_pk)` per output, in output order).
+    ///
+    /// The daemon's curve-tree ingestion reads this field to set each new
+    /// output's `h_pqc` leaf component; an output ingested **without** it
+    /// carries a zero leaf hash and can never satisfy the spend-side
+    /// `pqc_auths`-derived hash check — i.e. it is unspendable. Any
+    /// transaction whose outputs must be spendable (bond-post change, and
+    /// eventually the transfer path) appends this field.
+    pub fn push_pqc_leaf_hashes(&mut self, blob: Vec<u8>) {
+        self.0.push(ExtraField::PqcLeafHashes(blob));
+    }
+
     #[allow(dead_code)]
     pub(crate) fn new(key: EdwardsPoint, additional: Vec<EdwardsPoint>) -> Extra {
         let mut res = Extra(Vec::with_capacity(3));

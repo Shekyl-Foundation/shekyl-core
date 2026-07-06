@@ -344,6 +344,13 @@ namespace rct {
         std::vector<uint8_t> fcmp_pp_proof; // opaque FCMP++ proof blob
 
         // when changing this function, update cryptonote::get_pruned_transaction_weight
+        //
+        // `inputs` is the pseudo-out count: the number of txin_to_key (spend)
+        // inputs, NOT vin.size(). An archival bond-post vin carries no
+        // pseudo-out (blockchain.cpp / tx_verification_utils.cpp pin
+        // `pseudoOuts.size() == num_spend`); for a pure spend the two counts
+        // coincide. Callers compute the spend subset (cryptonote_basic.h
+        // transaction serializer, tx_pqc_verify.cpp, get_transaction_prunable_hash).
         template<bool W, template <bool> class Archive>
         bool serialize_rctsig_prunable(Archive<W> &ar, uint8_t type, size_t inputs, size_t outputs)
         {

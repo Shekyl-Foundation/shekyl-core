@@ -73,6 +73,21 @@ rust/shekyl-engine-state/src/payment_id.rs|pub struct PaymentId(pub [u8; 8]);
 # audit"* (2026-04-25) for the runtime-only invariant rationale.
 rust/shekyl-engine-state/src/ledger_indexes.rs|pub(crate) pub_keys: HashMap<[u8; 32], usize>
 
+# ── pending_post_block.rs ─────────────────────────────────────────────
+#
+# `PendingBondPost.tx_bytes` (WI-2 D-A4) is the fully-assembled, signed,
+# wire-encoded transaction — the value a submitter broadcasts verbatim
+# (SP-T4 pin P-2: retries re-send the stored bytes, never a re-encode). A
+# signed tx is a public network artifact by construction: it carries key
+# images, output keys, commitments, the FCMP++ membership proof, and the
+# on-chain KEM ciphertexts, but no private scalar / spend-key material —
+# signing already consumed the secrets (the same class as transfer.rs's
+# `path_blob`). Its sensitivity is *correlation* (which persona posts
+# what, when), not confidentiality; that is handled by the type's redacted
+# `Debug` and the engine-layer AEAD-at-rest seal on the `.wallet.pending`
+# sibling file, not by wipe-on-drop.
+rust/shekyl-engine-state/src/pending_post_block.rs|pub tx_bytes: Vec<u8>
+
 # ── pscan_cursor.rs ───────────────────────────────────────────────────
 #
 # `PScanCursor::frontier_hash` is the recomputed 32-byte hash of the last
@@ -81,9 +96,31 @@ rust/shekyl-engine-state/src/ledger_indexes.rs|pub(crate) pub_keys: HashMap<[u8;
 # no secret material.
 rust/shekyl-engine-state/src/pscan_cursor.rs|frontier_hash: [u8; 32]
 
-# `pscan_state.rs`: `PScanState::pending_unbonds` keys on the `PCanonicalId`
-# newtype (shekyl-types), not a raw `[u8; 32]`, so the grep no longer flags it and
-# it needs no entry — the same outcome the `TxHash` / `KeyImage` newtype sweeps had.
+# ── pscan_state.rs ────────────────────────────────────────────────────
+#
+# `PScanState::pending_unbonds` keys on the `PCanonicalId` newtype
+# (shekyl-types), not a raw `[u8; 32]`, so the grep no longer flags it and
+# it needs no entry — the same outcome the `TxHash` / `KeyImage` newtype
+# sweeps had.
+#
+# `PFundingOutputRecord` (WI-2 D-A1) mirrors one recovered funding
+# output's **public on-chain identity** — the type carries **no derived
+# secrets** (the mask / combined-shared-secret / amount-key drop in the
+# scan offload closure per the M3d `TransferDetails` discipline; the spend
+# bundle re-derives at assemble time). `tx_hash` is the public tx
+# identifier; `output_key` is the on-chain one-time output key `O`;
+# `commitment` is the on-chain amount-commitment *point* `C` (never the
+# opened mask/amount pair); `ciphertext_x25519` and `ciphertext_ml_kem`
+# are the two halves of the output's hybrid KEM ciphertext, both public
+# on-chain. The funding-history correlation risk (the *set* ties amounts
+# to persona slots) is handled by the record's redacted `Debug`, not by
+# wipe-on-drop — the same treatment the cleartext `amount` (an
+# `AtomicUnits`, not byte-shaped) gets.
+rust/shekyl-engine-state/src/pscan_state.rs|pub tx_hash: [u8; 32]
+rust/shekyl-engine-state/src/pscan_state.rs|pub output_key: [u8; 32]
+rust/shekyl-engine-state/src/pscan_state.rs|pub commitment: [u8; 32]
+rust/shekyl-engine-state/src/pscan_state.rs|pub ciphertext_x25519: [u8; 32]
+rust/shekyl-engine-state/src/pscan_state.rs|pub ciphertext_ml_kem: Vec<u8>
 
 # ── sync_state_block.rs ───────────────────────────────────────────────
 #

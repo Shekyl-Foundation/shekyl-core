@@ -131,24 +131,44 @@ use kameo::actor::{Actor, ActorRef, Spawn, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError, SendError};
 use kameo::message::{Context, Message};
 
+use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+use curve25519_dalek::Scalar;
 use rand_core::RngCore as _;
 use shekyl_archival_bond_builder::{build_join_market_vin, BondBuildError, JoinMarketVin};
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
-use shekyl_archival_retention::{epoch_is_claim_expired, HoldingsDescriptor};
+use shekyl_archival_retention::{bond_floor, epoch_is_claim_expired, HoldingsDescriptor};
+use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
-use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_crypto_pq::derivation::{derive_output_secrets, derive_pqc_public_key};
+use shekyl_crypto_pq::kem::HybridCiphertext;
+use shekyl_crypto_pq::output::{construct_output, recover_combined_ss};
+use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme as _};
+use shekyl_curve_generators::biased_hash_to_point;
+use shekyl_scanner::extra::Extra;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
 use shekyl_standoff::draw::{draw_entry_gap, GapRng};
 #[cfg(feature = "gf7-hooks")]
 use shekyl_standoff::gf7::{BroadcastTimelineObserver, NoOpObserver, TimelineEvent};
 use shekyl_standoff::plan::{plan_entry_seam, EntrySeamPlan};
+use shekyl_tx_builder::{
+    phase1_payload_hashes, sign_pqc_auths, sign_transaction_with_terms,
+    tx_prefix_hash_from_parts_with_extra, PqcAuth, SpendInput, TreeContext, WireEncodeInput,
+};
 use shekyl_types::{PCanonicalId, SettlementEpoch};
+use shekyl_units::AtomicUnits;
+use shekyl_wire::Input;
+use zeroize::Zeroizing;
 
+use super::bond_assembly::{
+    finalize_bond_tx, wire_bond_post_input, BondAssemblyError, FundingInputContext, PBoundBytes,
+};
+use super::error::KeyEngineError;
 use super::pscan::persona_scanner::{guaranteed_scanner_for_persona, PersonaScanError};
 use super::pscan::scan_step::{
     run_dual_extractor, BlockRange, DualExtractError, ScanStep, ScanStepResult,
 };
 use super::stake_timing::DEFAULT_ENTRY_GAP;
+use super::traits::key::SourceSecretsBundle;
 
 // S6 / DQ3 — the session RNG self-cert grader (`shekyl-standoff` `conformance`)
 // is gated to **`x86_64` exactly** (the guard below is `target_arch = "x86_64"`,
@@ -551,6 +571,14 @@ pub(crate) enum StakeEngineError {
     #[error("bond construction failed: {0}")]
     BondBuild(#[from] BondBuildError),
 
+    /// A WI-2 [`AssembleBond`] pipeline step failed — funding arithmetic,
+    /// spend-bundle derivation, output construction, proving, PQC auth
+    /// signing, wire encoding, or the A-1 prefix↔vin invariant. The wrapped
+    /// [`BondAssemblyError`] names the §3.6 failure mode; in every arm
+    /// nothing was persisted and no funding was reserved.
+    #[error("bond assembly failed: {0}")]
+    Assembly(#[from] BondAssemblyError),
+
     /// Building the bonded union's transient scanners for a [`ScanStep`] failed —
     /// a resident persona key was malformed (corrupted in-memory state). Fail
     /// closed and loud rather than scan with a silently-weakened key (DQ7). The
@@ -573,6 +601,11 @@ pub(crate) enum StakeEngineError {
     #[error("scan-step task failed to join: {0}")]
     ScanJoin(#[from] tokio::task::JoinError),
 }
+
+/// The bonded union's transient scan inputs (SP-3 dual extractor): one
+/// slot-tagged [`GuaranteedScanner`] per bonded persona plus their cleartext
+/// `p_canonical_id` set. Built per [`ScanStep`] and dropped with it (DQ5).
+pub(crate) type BondedScanInputs = (Vec<(u32, GuaranteedScanner)>, BTreeSet<PCanonicalId>);
 
 /// Why building a [`ScanStep`]'s bonded-union scan inputs failed. Both arms are a
 /// **malformed resident persona key** (corrupted in-memory state) — fail closed,
@@ -708,6 +741,95 @@ impl StakeEngine {
         Ok(())
     }
 
+    /// Steps 1–5 shared verbatim by the [`SignBond`] and [`AssembleBond`]
+    /// handlers: validate the handle, cross-check it against the ticket's slot,
+    /// preflight the OS entropy source, draw the guarded entry gap, plan the
+    /// entry seam, and emit the GF-7 hooks. Returns the validated handle slot and
+    /// the placement plan.
+    ///
+    /// This is the **single definition** of a security-relevant sequence — the
+    /// RNG source preflight, the double-jitter degeneracy guard, the
+    /// timing-decorrelation plan, and the observer emission. Both bond handlers
+    /// must run it identically; keeping it in one place means a future change to
+    /// the draw/guard discipline (a stronger degeneracy check, a new observer
+    /// event) lands once rather than silently diverging between two copies and
+    /// weakening the timing firewall in the un-updated path with no compile error.
+    fn validate_and_plan_entry_seam(
+        &mut self,
+        handle: &PersonaHandle,
+        ticket_slot: PSlot,
+    ) -> Result<(PSlot, EntrySeamPlan), StakeEngineError> {
+        // 1. Validate the handle: generation currency + slot membership.
+        self.validate_handle(handle)?;
+
+        // 2. Slot cross-check: tickets witness a specific slot; a ticket cannot
+        //    authorize signing for any other slot (even a held one).
+        let handle_slot = handle.p_slot;
+        if handle_slot != ticket_slot {
+            return Err(StakeEngineError::SlotMismatch {
+                handle_slot,
+                ticket_slot,
+            });
+        }
+
+        // 3. Preflight the OS entropy source (Round 3 — source failure, fail-loud).
+        //    `GapRng::next_u64` is infallible; a source failure therefore must be
+        //    caught here via `try_fill_bytes` before calling `draw_entry_gap`.
+        //    No silent fallback: source failure → `RngSourceFailed`, not a retry
+        //    on a weaker source.
+        {
+            let mut probe = [0u8; 8];
+            rand_core::OsRng
+                .try_fill_bytes(&mut probe)
+                .map_err(StakeEngineError::RngSourceFailed)?;
+            let _ = probe; // consumed; used only to exercise the source
+        }
+
+        // 4. Entry-gap draw + per-draw degeneracy guard (S4/S5, Round 2/3).
+        //    `draw_entry_gap_guarded` draws twice (spread_draw, spread_probe) and
+        //    fires `RngDegeneracy` if they are equal (double-jitter-trap detection).
+        //    The actual timing draw result is returned on success.
+        let mut rng = OsRngGapAdapter;
+        let (spread, bond_first) = draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
+            .map_err(|DegenerateDraw| StakeEngineError::RngDegeneracy)?;
+        // S6: the session-level `certify_draw` self-cert (over `OsRngGapAdapter`,
+        // gated, at session start) is wired in `on_start` — see
+        // `run_session_self_cert` and the `conformance` feature.
+
+        // 5. Consume BOTH draw values into the block-timed placement plan (2c-2b
+        //    scheduler wiring). `plan_entry_seam` is the single-sourced consumer
+        //    (`shekyl_standoff::plan`): it takes the draw tuple whole, so the
+        //    `bond_first` ORDER-COIN (the fair bond-before-vs-after-funding
+        //    inversion; dropping it collapses the observer's ordering prior from
+        //    0.5 to certainty, half the golden-vector-certified decorrelation) is
+        //    consumed with the `spread` DELAY by construction. The plan rides the
+        //    reply; the caller anchors it at its private intent time `t0`.
+        let plan = plan_entry_seam((spread, bond_first));
+
+        // GF-7 hooks-spec §3: emit the draw-consumption and schedule events to
+        // the injected observer. Sim-facing only — this block is compiled out
+        // of default builds (§4 layer 3), and the production observer is the
+        // no-op (§6.1). Payload discipline: opaque wallet-local slot ordinal,
+        // block-relative offsets, no wall-clock, no identities.
+        #[cfg(feature = "gf7-hooks")]
+        {
+            let persona = u64::from(handle_slot.0);
+            self.observer.record(TimelineEvent::EntryGapDrawConsumed {
+                persona,
+                window_blocks: DEFAULT_ENTRY_GAP.as_blocks(),
+                spread_blocks: spread,
+                bond_first,
+            });
+            self.observer.record(TimelineEvent::BondPostScheduled {
+                persona,
+                entry_offset_blocks: plan.entry_offset_blocks,
+                bond_post_offset_blocks: plan.bond_post_offset_blocks,
+            });
+        }
+
+        Ok((handle_slot, plan))
+    }
+
     /// Project the public identity of a held slot. The caller must have
     /// validated membership (e.g. via [`Self::validate_handle`]).
     fn identity_of(&self, slot: PSlot) -> PersonaIdentity {
@@ -746,16 +868,26 @@ impl StakeEngine {
     ///
     /// Fails closed if a resident key is malformed: a silently-weakened scanner
     /// would mis-size the privacy parameter `C_min` (DQ7).
-    fn bonded_scan_inputs(
-        &self,
-    ) -> Result<(Vec<GuaranteedScanner>, BTreeSet<PCanonicalId>), ScanSetupError> {
+    ///
+    /// `known_ids` is recomputed here **on purpose**, not cached: it rides the
+    /// same loop that rebuilds the transient secret scanners, which *must* be
+    /// rebuilt every batch (DQ5). Caching only the public id set would save one
+    /// `persona_canonical_id` per bonded persona per batch (marginal, since
+    /// bonded personas are few) at the cost of a stale-cache invalidation surface
+    /// on a firewall-critical set — a missed invalidation would silently drop a
+    /// newly-bonded persona's bond-post matches. Recompute is the safe trade.
+    fn bonded_scan_inputs(&self) -> Result<BondedScanInputs, ScanSetupError> {
         let mut scanners = Vec::new();
         let mut known_ids = BTreeSet::new();
-        for held in self.held.values() {
+        for (slot, held) in &self.held {
             if let HeldPersona::Bonded(_) = held {
                 let keys = held.keys();
-                scanners
-                    .push(guaranteed_scanner_for_persona(keys).map_err(ScanSetupError::Scanner)?);
+                // Slot-tagged so the extractor can attribute each recovered
+                // output to its owning persona (WI-2 D-A1 funding records).
+                scanners.push((
+                    slot.0,
+                    guaranteed_scanner_for_persona(keys).map_err(ScanSetupError::Scanner)?,
+                ));
                 let id = persona_canonical_id(keys).map_err(ScanSetupError::CanonicalId)?;
                 known_ids.insert(id);
             }
@@ -1124,93 +1256,27 @@ impl Message<SignBond> for StakeEngine {
         msg: SignBond,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        // 1. Validate the handle: generation currency + slot membership.
-        self.validate_handle(&msg.handle)?;
-
-        // 2. Slot cross-check: ticket witnesses persist for a specific slot; it
-        //    cannot authorize signing for any other slot (even a held one).
-        let handle_slot = msg.handle.p_slot;
-        let ticket_slot = msg.ticket.p_slot();
-        if handle_slot != ticket_slot {
-            return Err(StakeEngineError::SlotMismatch {
-                handle_slot,
-                ticket_slot,
-            });
-        }
-
-        // 3. Preflight the OS entropy source (Round 3 — source failure, fail-loud).
-        //    `GapRng::next_u64` is infallible; a source failure therefore must be
-        //    caught here via `try_fill_bytes` before calling `draw_entry_gap`.
-        //    No silent fallback: source failure → `RngSourceFailed`, not a retry
-        //    on a weaker source.
-        {
-            let mut probe = [0u8; 8];
-            rand_core::OsRng
-                .try_fill_bytes(&mut probe)
-                .map_err(StakeEngineError::RngSourceFailed)?;
-            let _ = probe; // consumed; used only to exercise the source
-        }
-
-        // 4. Entry-gap draw + per-draw degeneracy guard (S4/S5, Round 2/3).
-        //    `draw_entry_gap_guarded` draws twice (spread_draw, spread_probe) and
-        //    fires `RngDegeneracy` if they are equal (double-jitter-trap detection).
-        //    The actual timing draw result is returned on success.
-        let mut rng = OsRngGapAdapter;
-        let (spread, bond_first) = draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
-            .map_err(|DegenerateDraw| StakeEngineError::RngDegeneracy)?;
-        // S6: the session-level `certify_draw` self-cert (over `OsRngGapAdapter`,
-        // gated, at session start) is wired in `on_start` — see
-        // `run_session_self_cert` and the `conformance` feature.
-
-        // 5. Consume BOTH draw values into the block-timed placement plan
-        //    (2c-2b scheduler wiring). `plan_entry_seam` is the single-sourced
-        //    consumer (`shekyl_standoff::plan`): it takes the draw tuple whole,
-        //    so the `bond_first` ORDER-COIN (the fair bond-before-vs-after-
-        //    funding inversion; dropping it collapses the observer's ordering
-        //    prior from 0.5 to certainty, half the golden-vector-certified
-        //    decorrelation) is consumed with the `spread` DELAY by construction.
-        //    The plan rides the reply; the caller anchors it at its private
-        //    intent time `t0`.
-        //    TODO(2d) — the write-side *seam* the plan will drive is built:
-        //    `PTransactionSubmitter` (per-`P` CX-2) + `BroadcastPosture`
-        //    (no-③-by-type) in `transaction_submitter.rs` / `posture.rs`
-        //    (SP-T4a, `ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`). The remaining
-        //    CONSUMER wiring, still gated (**not on the seam**): assemble the
-        //    bond `vin` into a full tx (funding inputs/outputs + `credit_term`
-        //    → `shekyl_tx_builder::sign_transaction_with_terms`) and dispatch
-        //    at the planned offsets through the submitter. That is the 2c-2a
-        //    assemble / 2d dispatch wiring; this handler plans, it does not
-        //    broadcast.
+        // Steps 1–5 (validate + slot cross-check + entropy preflight + guarded
+        // draw + entry-seam plan + GF-7 hooks) are the shared bond-handler
+        // prologue; see `validate_and_plan_entry_seam`.
         //
-        // GF-7 SCOPE (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §4): this jitter
-        // decorrelates the bond-post from `P`'s own observable funding/entry event
-        // (the funding-seam ordering prior) **only** — NOT from the principal's
-        // lifecycle timeline, nor from `P`'s other broadcasts. That correlation
-        // (GATE6 §10.12 GF-7) remains a **genesis gate**; the measurement pipeline
-        // that will quantify it is the `gf7-hooks` observer seam below
+        // GF-7 SCOPE (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §4): the jitter that
+        // prologue draws decorrelates the bond-post from `P`'s own observable
+        // funding/entry event (the funding-seam ordering prior) **only** — NOT
+        // from the principal's lifecycle timeline, nor from `P`'s other
+        // broadcasts. That correlation (GATE6 §10.12 GF-7) remains a **genesis
+        // gate**; the measurement pipeline that will quantify it is the
+        // `gf7-hooks` observer seam the prologue emits to
         // (`ARCHIVAL_BOND_2C_GF7_HOOKS.md`), evaluated in `shekyl-staking-sim`.
-        let plan = plan_entry_seam((spread, bond_first));
-
-        // GF-7 hooks-spec §3: emit the draw-consumption and schedule events to
-        // the injected observer. Sim-facing only — this block is compiled out
-        // of default builds (§4 layer 3), and the production observer is the
-        // no-op (§6.1). Payload discipline: opaque wallet-local slot ordinal,
-        // block-relative offsets, no wall-clock, no identities.
-        #[cfg(feature = "gf7-hooks")]
-        {
-            let persona = u64::from(handle_slot.0);
-            self.observer.record(TimelineEvent::EntryGapDrawConsumed {
-                persona,
-                window_blocks: DEFAULT_ENTRY_GAP.as_blocks(),
-                spread_blocks: spread,
-                bond_first,
-            });
-            self.observer.record(TimelineEvent::BondPostScheduled {
-                persona,
-                entry_offset_blocks: plan.entry_offset_blocks,
-                bond_post_offset_blocks: plan.bond_post_offset_blocks,
-            });
-        }
+        //
+        // TODO(2d) — the write-side *seam* the plan will drive is built:
+        // `PTransactionSubmitter` (per-`P` CX-2) + `BroadcastPosture`
+        // (no-③-by-type) in `transaction_submitter.rs` / `posture.rs` (SP-T4a).
+        // The remaining CONSUMER wiring is the 2c-2a assemble / 2d dispatch path
+        // (see `AssembleBond`); this handler plans + signs the vin, it does not
+        // broadcast.
+        let (handle_slot, plan) =
+            self.validate_and_plan_entry_seam(&msg.handle, msg.ticket.p_slot())?;
 
         // 6. Borrow the held bundle — slot membership confirmed by step 1.
         let keys = self
@@ -1227,6 +1293,494 @@ impl Message<SignBond> for StakeEngine {
             .map_err(StakeEngineError::BondBuild)?;
         Ok(SignedBondPost { vin, plan })
     }
+}
+
+// ---------------------------------------------------------------------------
+// WI-2 D-A3 — AssembleBond: the production bond-assembly message
+// ---------------------------------------------------------------------------
+
+/// Assemble the **full, broadcast-ready** JoinMarket bond transaction inside
+/// the actor (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.3) — the production superset
+/// of [`SignBond`] (which signs the vin only and remains for the composition
+/// KAT).
+///
+/// Carries the same handle + ticket typed contracts as [`SignBond`], plus the
+/// **public** funding contexts the Engine-side orchestrator selected (§3.2)
+/// and path-assembled: records, membership paths, and the tree context. The
+/// spend secrets are **not** in the message — they are re-derived from each
+/// record's `(ciphertext, index)` inside the handler
+/// ([`derive_p_source_secrets_bundle`], rule 36).
+///
+/// The reply pairs the minted [`PBoundBytes`] with the [`EntrySeamPlan`] from
+/// this request's entry-gap draw — the same seam discipline as
+/// [`SignedBondPost`]: the caller that receives the bytes to place receives
+/// where to place them.
+#[allow(dead_code)] // inert until the WI-2 Engine-side orchestrator lands (this PR).
+pub(crate) struct AssembleBond {
+    /// Operation-scoped capability proving the slot is currently held (typed
+    /// contract #2). Must match `ticket.p_slot()`.
+    pub handle: PersonaHandle,
+    /// Proof that the live-bond record was durably persisted for this slot
+    /// before assembly (typed contract #1). Must match `handle.p_slot()`.
+    pub ticket: super::stake_persist::PersistedBondTicket,
+    /// Holdings to bond; `bond_floor(holdings)` is recomputed inside.
+    pub holdings: HoldingsDescriptor,
+    /// The selected funding inputs (§3.2) with their assembled membership
+    /// paths — public identity + public tree data only.
+    pub funding: Vec<FundingInputContext>,
+    /// The curve-tree reference context the paths were assembled against.
+    pub tree_ctx: TreeContext,
+    /// The fee the Engine-side selection was run against.
+    pub fee: u64,
+}
+
+/// Reply of [`AssembleBond`]: the persona-bound wire bytes (minted at the
+/// single P-1 site, [`finalize_bond_tx`]), the placement plan, and the
+/// funding gindexes for the caller's reservation record (§3.5). Secrets never
+/// cross the boundary.
+#[allow(dead_code)] // inert until the WI-2 Engine-side orchestrator lands (this PR).
+#[derive(Debug)]
+pub(crate) struct AssembledBondPost {
+    /// The fully-signed, wire-encoded bond transaction, persona-bound.
+    pub bound_tx: PBoundBytes,
+    /// Relative placement of the entry event and the bond-post broadcast.
+    pub plan: EntrySeamPlan,
+    /// The spent funding records' gindexes — the §3.5 reservation set.
+    pub funding_gindexes: Vec<u64>,
+}
+
+impl Message<AssembleBond> for StakeEngine {
+    type Reply = Result<AssembledBondPost, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: AssembleBond,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        // ── Steps 1–5: the shared bond-handler prologue (identical typed
+        // contracts + guarded draw as `SignBond`); see
+        // `validate_and_plan_entry_seam`. ──────────────────────────────────
+        let (handle_slot, plan) =
+            self.validate_and_plan_entry_seam(&msg.handle, msg.ticket.p_slot())?;
+
+        // ── Step 6: borrow the held bundle (never crosses the boundary) ──
+        let keys = self
+            .held
+            .get(&handle_slot)
+            .expect("validate_handle confirmed slot is held")
+            .keys();
+
+        // ── Step 7: funding arithmetic (§3.2 balance rule, checked) ──────
+        // `funding == change + fee + credit` exactly; change splits across
+        // TWO outputs (daemon prunable-tx floor: `vout.size() < 2` rejects).
+        let floor = bond_floor(&msg.holdings);
+        let required = floor
+            .checked_add(msg.fee)
+            .ok_or(BondAssemblyError::AmountOverflow)?;
+        let mut available: u64 = 0;
+        for ctx in &msg.funding {
+            available = available
+                .checked_add(ctx.record.amount.to_raw())
+                .ok_or(BondAssemblyError::AmountOverflow)?;
+        }
+        if available < required {
+            return Err(BondAssemblyError::InsufficientFunding {
+                available,
+                required,
+            }
+            .into());
+        }
+        let change = available - required;
+        let change_lo = change / 2;
+        let change_hi = change - change_lo;
+
+        // ── Step 8: change outputs to P's own base address ────────────────
+        // Both return to `P`'s base spend key (the pscan `GuaranteedScanner`
+        // claims against `spend_pk` directly), so the change re-enters the
+        // funding set on the next sweep.
+        let mut tx_key_secret = Zeroizing::new([0u8; 32]);
+        rand_core::OsRng.fill_bytes(tx_key_secret.as_mut());
+        let tx_pubkey = &Scalar::from_bytes_mod_order(*tx_key_secret) * ED25519_BASEPOINT_TABLE;
+
+        let mut output_infos = Vec::with_capacity(2);
+        let mut output_keys = Vec::with_capacity(2);
+        let mut view_tags = Vec::with_capacity(2);
+        let mut kem_blobs = Vec::with_capacity(2);
+        let mut leaf_hash_blob = Vec::with_capacity(64);
+        for (idx, amount) in [change_lo, change_hi].into_iter().enumerate() {
+            let constructed = construct_output(
+                &tx_key_secret,
+                &keys.x25519_pk,
+                &keys.ml_kem_ek,
+                keys.spend_pk.as_canonical_bytes(),
+                amount,
+                idx as u64,
+            )
+            .map_err(|e| BondAssemblyError::build("change-output construction", e))?;
+            let mut kem_blob = Vec::with_capacity(32 + constructed.kem_ciphertext_ml_kem.len());
+            kem_blob.extend_from_slice(&constructed.kem_ciphertext_x25519);
+            kem_blob.extend_from_slice(&constructed.kem_ciphertext_ml_kem);
+            kem_blobs.push(kem_blob);
+            leaf_hash_blob.extend_from_slice(&constructed.h_pqc);
+            output_keys.push(constructed.output_key);
+            view_tags.push(Some(constructed.view_tag_prefilter));
+            output_infos.push(shekyl_tx_builder::OutputInfo {
+                dest_key: constructed.output_key,
+                amount: AtomicUnits::from_raw(amount),
+                commitment_mask: constructed.z,
+                enc_amount: {
+                    let mut enc = [0u8; 9];
+                    enc[..8].copy_from_slice(&constructed.enc_amount);
+                    enc[8] = constructed.amount_tag;
+                    enc
+                },
+                enc_label: {
+                    let mut enc = [0u8; 9];
+                    enc[..8].copy_from_slice(&constructed.enc_label);
+                    enc[8] = constructed.label_tag;
+                    enc
+                },
+            });
+        }
+
+        // ── Step 9: tx_extra — tx pubkey + per-output KEM blobs + the 0x07
+        // PQC leaf hashes (without which the change outputs ingest with a
+        // zero `h_pqc` leaf and are unspendable).
+        let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
+        extra.push_pqc_leaf_hashes(leaf_hash_blob);
+        let tx_extra = extra.serialize();
+
+        // ── Step 10 (§3.3 actor step 1): re-derive spend bundles, compute
+        // key images, build the tx-builder SpendInputs. Secrets stay inside
+        // this frame until they move into the proving closure.
+        struct PreparedInput {
+            spend: SpendInput,
+            key_image: [u8; 32],
+            pqc_pubkey: Vec<u8>,
+            gindex: u64,
+        }
+        let mut prepared = Vec::with_capacity(msg.funding.len());
+        // Consume `msg.funding` by value (the sum pass above already read what it
+        // needed): the curve-tree membership vecs (`leaf_chunk`, `c1_layers`,
+        // `c2_layers` — many 32-byte node vecs per tree layer) MOVE into each
+        // `SpendInput` rather than deep-copy. `rec` borrows the disjoint `record`
+        // field, so its `Copy` reads coexist with those field moves.
+        for ctx in msg.funding {
+            let rec = &ctx.record;
+            let ciphertext = HybridCiphertext {
+                x25519: rec.ciphertext_x25519,
+                ml_kem: rec.ciphertext_ml_kem.clone(),
+            };
+            let bundle =
+                derive_p_source_secrets_bundle(keys, &ciphertext, rec.index_in_transaction)
+                    .map_err(|e| BondAssemblyError::build("spend-bundle derivation", e))?;
+
+            // KI = x·Hp(O) — same construction the FCMP++ verifier checks.
+            let x_scalar: Zeroizing<Scalar> = Zeroizing::new(
+                Option::from(Scalar::from_canonical_bytes(*bundle.spend_key_x)).ok_or_else(
+                    || BondAssemblyError::build("key-image derivation", "non-canonical x"),
+                )?,
+            );
+            let key_image = (biased_hash_to_point(rec.output_key) * *x_scalar)
+                .compress()
+                .to_bytes();
+
+            // `h_pqc` is not persisted on the record (public identity only);
+            // read it back from the assembled leaf chunk, which carries the
+            // ingested leaf for this output.
+            let h_pqc = ctx
+                .leaf_chunk
+                .iter()
+                .find(|leaf| leaf.output_key == rec.output_key)
+                .map(|leaf| leaf.h_pqc)
+                .ok_or_else(|| {
+                    BondAssemblyError::build(
+                        "leaf-chunk lookup",
+                        "funding output missing from its own leaf chunk",
+                    )
+                })?;
+
+            let combined: [u8; 64] = bundle.combined_ss[..64].try_into().map_err(|_| {
+                BondAssemblyError::build("spend-bundle derivation", "combined_ss wrong length")
+            })?;
+            let pqc_pubkey = derive_pqc_public_key(&combined, rec.index_in_transaction)
+                .map_err(|e| BondAssemblyError::build("pqc public-key derivation", e))?;
+
+            prepared.push(PreparedInput {
+                spend: SpendInput {
+                    output_key: rec.output_key,
+                    commitment: rec.commitment,
+                    amount: rec.amount,
+                    spend_key_x: *bundle.spend_key_x,
+                    spend_key_y: *bundle.spend_key_y,
+                    commitment_mask: *bundle.commitment_mask,
+                    h_pqc,
+                    combined_ss: bundle.combined_ss.to_vec(),
+                    output_index: rec.index_in_transaction,
+                    leaf_chunk: ctx.leaf_chunk,
+                    c1_layers: ctx.c1_layers,
+                    c2_layers: ctx.c2_layers,
+                },
+                key_image,
+                pqc_pubkey,
+                gindex: rec.gindex,
+            });
+        }
+        // Consensus requires spend inputs strictly DESCENDING by key image;
+        // one canonical order shared by the proof, the wire key-image list,
+        // and the pqc_auths slots (same rule as the transfer path).
+        prepared.sort_by(|a, b| b.key_image.cmp(&a.key_image));
+
+        let key_images: Vec<[u8; 32]> = prepared.iter().map(|p| p.key_image).collect();
+        let funding_gindexes: Vec<u64> = prepared.iter().map(|p| p.gindex).collect();
+
+        // ── Steps 11–12 (§3.3 actor step 2): the wire BondPost prefix input
+        // from PUBLIC parts, then the prefix hash. No circularity: the wire
+        // input carries no signature, so the prefix is fully determined
+        // before the vin is signed.
+        let hybrid_pk_bytes = keys
+            .hybrid_sign_pk
+            .to_canonical_bytes()
+            .map_err(|e| BondAssemblyError::build("identity encoding", e))?;
+        let bond_spend_pk_bytes = keys
+            .bond_spend_pk
+            .to_canonical_bytes()
+            .map_err(|e| BondAssemblyError::build("identity encoding", e))?;
+        let persona = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes);
+        let expected_vin = shekyl_archival_retention::ArchivalBondPostVin {
+            hybrid_public_key: hybrid_pk_bytes.clone(),
+            p_canonical_id: *persona.as_bytes(),
+            post_kind: shekyl_archival_retention::BondPostKind::JoinMarket,
+            holdings: msg.holdings.clone(),
+            bonded_total_atomic: floor,
+            bond_credit: floor,
+            bond_debit: 0,
+        };
+        let prefix_bond_input: Input =
+            wire_bond_post_input(&expected_vin, bond_spend_pk_bytes.clone())?;
+        let extra_inputs = vec![prefix_bond_input];
+
+        let prefix_hash = tx_prefix_hash_from_parts_with_extra(
+            &key_images,
+            &extra_inputs,
+            &output_keys,
+            &view_tags,
+            &tx_extra,
+        )
+        .map_err(|e| BondAssemblyError::build("prefix hash", e))?;
+
+        // ── Step 13 (§3.3 actor step 3): build + sign the vin over the now-
+        // fixed prefix hash.
+        let built = build_join_market_vin(keys, msg.holdings.clone(), &prefix_hash)
+            .map_err(StakeEngineError::BondBuild)?;
+
+        // ── Step 14 — invariant A-1 (fail closed): the signed vin's post
+        // fields must equal the prefix's BondPost input. Typed equality on
+        // `ArchivalBondPostVin` implies byte-identity (its wire write is a
+        // deterministic function of the value). A mismatch means the
+        // signature binds a different post than the hash covered — a build
+        // defect, never recoverable.
+        if built.vin() != &expected_vin {
+            // Loud in debug (a build defect, never a recoverable state), fail
+            // closed in release. `debug_assert!(false, …)` — not
+            // `debug_assert_eq!(built.vin(), &expected_vin, …)`, which would be
+            // an always-false assert inside a branch that already established
+            // inequality (it reads as a conditional check but can only panic).
+            debug_assert!(
+                false,
+                "A-1: signed vin diverged from the prefix BondPost input"
+            );
+            return Err(BondAssemblyError::BondPostMismatch.into());
+        }
+        let credit_term = built.credit_term();
+
+        // ── Step 15 (§3.3 actor step 5): offload the CPU-bound proving
+        // (Bp+ + FCMP membership) to `spawn_blocking` — the SP-5 pattern.
+        // The SpendInputs (owned secrets) MOVE into the closure and come
+        // back for the fast inline PQC signing; `&mut self` is held across
+        // the await, so the mailbox cannot interleave another message.
+        let mut spend_inputs = Vec::with_capacity(prepared.len());
+        let mut pqc_pubkeys = Vec::with_capacity(prepared.len());
+        for p in prepared {
+            spend_inputs.push(p.spend);
+            pqc_pubkeys.push(p.pqc_pubkey);
+        }
+        let outputs_for_prove = output_infos.clone();
+        let tree = msg.tree_ctx.clone();
+        let fee = msg.fee;
+        let (signed, spend_inputs) = tokio::task::spawn_blocking(move || {
+            sign_transaction_with_terms(
+                prefix_hash,
+                &spend_inputs,
+                &outputs_for_prove,
+                AtomicUnits::from_raw(fee),
+                &[],
+                &[credit_term],
+                &tree,
+            )
+            .map(|signed| (signed, spend_inputs))
+        })
+        .await
+        .map_err(|e| BondAssemblyError::build("proving offload join", e))?
+        .map_err(|e| BondAssemblyError::build("proving", e))?;
+
+        let bulletproof = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
+            .map_err(|e| BondAssemblyError::build("bulletproof parse", e))?;
+
+        // ── Step 16: assemble the wire input; pqc_auths carries one slot per
+        // prefix input — the spend slots (output-derived keys) then the bond
+        // slot (P's identity key), matching prefix input order.
+        //
+        // `signed` is a locally-owned value dropped at the end of this handler
+        // and never read whole again (the only prior use, the bulletproof parse
+        // above, borrowed `bulletproof_plus`). So the multi-KB owned proof
+        // fields MOVE into the wire input rather than clone — the two `Copy`
+        // reads below (`reference_block`, `tree_depth`) still work after a
+        // partial move.
+        let mut wire = WireEncodeInput {
+            key_images,
+            extra_inputs,
+            output_keys,
+            view_tags,
+            tx_extra,
+            fee,
+            enc_amounts: signed.enc_amounts,
+            enc_labels: signed.enc_labels,
+            out_commitments: signed.commitments,
+            pseudo_outs: signed.pseudo_outs,
+            bulletproof,
+            reference_block: signed.reference_block,
+            fcmp_proof: signed.fcmp_proof,
+            pqc_auths: pqc_pubkeys
+                .iter()
+                .map(|pk| PqcAuth {
+                    auth_version: 1,
+                    signature: Vec::new(),
+                    public_key: pk.clone(),
+                })
+                .chain(std::iter::once(PqcAuth {
+                    auth_version: 1,
+                    signature: Vec::new(),
+                    public_key: hybrid_pk_bytes.clone(),
+                }))
+                .collect(),
+            fcmp_layers: signed.tree_depth,
+        };
+
+        // ── Step 17: PQC auth completion (fast; stays inline). One payload
+        // hash per pqc_auths slot; the spend slots sign with output-derived
+        // keys, the bond slot signs with P's `hybrid_sign_sk`.
+        let payload_hashes = phase1_payload_hashes(&wire)
+            .map_err(|e| BondAssemblyError::build("phase1 payload hash", e))?;
+        if payload_hashes.len() != spend_inputs.len() + 1 {
+            return Err(BondAssemblyError::build(
+                "phase1 payload hash",
+                format!(
+                    "expected {} payload hashes, got {}",
+                    spend_inputs.len() + 1,
+                    payload_hashes.len()
+                ),
+            )
+            .into());
+        }
+        let mut pqc_auths = sign_pqc_auths(&payload_hashes[..spend_inputs.len()], &spend_inputs)
+            .map_err(|e| BondAssemblyError::build("pqc auth signing", e))?;
+        let bond_payload_hash = payload_hashes[spend_inputs.len()];
+        let bond_sig = HybridEd25519MlDsa
+            .sign(&keys.hybrid_sign_sk, &bond_payload_hash)
+            .map_err(|e| BondAssemblyError::build("bond pqc auth signing", e))?;
+        pqc_auths.push(PqcAuth {
+            auth_version: 1,
+            signature: bond_sig
+                .to_canonical_bytes()
+                .map_err(|e| BondAssemblyError::build("bond pqc auth encoding", e))?,
+            public_key: hybrid_pk_bytes,
+        });
+        wire.pqc_auths = pqc_auths;
+        drop(spend_inputs); // secrets end here; nothing below needs them
+
+        // ── Step 18 (§3.3 actor step 6): encode + mint at the P-1 site ────
+        let bound_tx = finalize_bond_tx(persona, &wire)?;
+
+        Ok(AssembledBondPost {
+            bound_tx,
+            plan,
+            funding_gindexes,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WI-2 D-A3 step 1 — P-side per-output spend-bundle derivation
+// ---------------------------------------------------------------------------
+
+/// Re-derive the per-output spend-secrets bundle for a **P-owned** funding
+/// output — the persona analog of
+/// [`LocalKeys::derive_primary_source_secrets_bundle`]
+/// (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.3 actor step 1), over the same
+/// pipeline with `P`'s keys substituted for the principal's:
+///
+/// 1. `combined_ss` ← [`recover_combined_ss`]`(P.view_sk, P.ml_kem_dk,
+///    ciphertext)` — hybrid X25519 + ML-KEM-768 re-decap and HKDF-SHA-512
+///    combination.
+/// 2. Per-output secrets ← [`derive_output_secrets`]`(combined_ss,
+///    output_index)`.
+/// 3. Spend scalar `x = ho + b` with `b` = `P.spend_sk`. **No claim offset**,
+///    for the same reason as the principal path: `P`'s funding outputs are
+///    paid to the *base* spend key `b·G` (the scan's `GuaranteedScanner`
+///    claims against `spend_pk` directly), so `O = x·G + y·T` and
+///    `KI = x·Hp(O)` both bind to `b`.
+///
+/// This is exactly the WI-2 D-A1 re-derivation contract: the persisted
+/// `PFundingOutputRecord` carries only `(ciphertext, index_in_transaction)`
+/// public identity; the secrets drop in the scan's offload closure (rule 16,
+/// the M3d discipline) and are recomputed here, inside the actor, at
+/// assemble time. Every intermediate is `Zeroizing`; only the bundle's own
+/// wiped-on-drop fields leave the frame — and the bundle itself never leaves
+/// the actor (rule 36).
+///
+/// A free function rather than a `StakeEngine` method: it needs only the
+/// borrowed [`ArchivalPKeys`], and the `AssembleBond` handler calls it per
+/// selected funding record before entering the proving offload.
+///
+/// [`LocalKeys::derive_primary_source_secrets_bundle`]: super::local_keys::LocalKeys
+/// [`recover_combined_ss`]: shekyl_crypto_pq::output::recover_combined_ss
+/// [`derive_output_secrets`]: shekyl_crypto_pq::derivation::derive_output_secrets
+#[allow(dead_code)] // transient — consumed by the WI-2 `AssembleBond` handler as it lands.
+pub(crate) fn derive_p_source_secrets_bundle(
+    keys: &ArchivalPKeys,
+    source_ciphertext: &HybridCiphertext,
+    output_index: u64,
+) -> Result<SourceSecretsBundle, KeyEngineError> {
+    let combined_ss = recover_combined_ss(
+        keys.view_sk.as_canonical_bytes(),
+        keys.ml_kem_dk.as_canonical_bytes(),
+        &source_ciphertext.x25519,
+        &source_ciphertext.ml_kem,
+    )?;
+
+    let secrets = derive_output_secrets(&combined_ss.0, output_index);
+
+    // `x = ho + b` — see the principal-path comment in `local_keys.rs` for
+    // why there is no claim-offset term. Each intermediate `Scalar` is
+    // `Zeroizing` so the canonical-byte materializations wipe on drop.
+    let ho_scalar: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.ho))
+            .expect("ho from wide_reduce is always canonical (per derive_output_secrets)"),
+    );
+    let b_scalar: Zeroizing<Scalar> = Zeroizing::new(Scalar::from_bytes_mod_order(
+        *keys.spend_sk.as_canonical_bytes(),
+    ));
+    let x_scalar: Zeroizing<Scalar> = Zeroizing::new(*ho_scalar + *b_scalar);
+    let spend_key_x = Zeroizing::new(x_scalar.to_bytes());
+
+    Ok(SourceSecretsBundle {
+        spend_key_x,
+        spend_key_y: Zeroizing::new(secrets.y),
+        commitment_mask: Zeroizing::new(secrets.z),
+        combined_ss: Zeroizing::new(combined_ss.0.to_vec()),
+        output_index,
+    })
 }
 
 // SP-5 — the actor performs the per-batch scan-step; `view_sk` never crosses the
@@ -1678,6 +2232,112 @@ mod tests {
     ) -> Result<PersonaIdentity, StakeEngineError> {
         let h = handle.mint_handle(PSlot(slot)).await?;
         handle.activate_persona(h).await
+    }
+
+    /// WI-2 D-A1/D-A3 — the P-side spend-bundle re-derivation is
+    /// byte-identical to the scanner-side derivation chain for the same
+    /// output (the M3b byte-identical-derivation property, P edition,
+    /// `ARCHIVAL_BOND_WI2_ASSEMBLY.md` §4).
+    ///
+    /// The persisted `PFundingOutputRecord` carries only public identity
+    /// (`ciphertext`, `index_in_transaction`); assemble-time spending is
+    /// sound only if [`derive_p_source_secrets_bundle`] recomputes exactly
+    /// the secrets the scan derived (and dropped) at discovery time. The
+    /// oracle here is `scan_output_recover` — the same chain the persona
+    /// `GuaranteedScanner` drives — hand-composed into a bundle, plus the
+    /// SAL open `x·G + y·T == O` as the real-correctness guard.
+    #[test]
+    fn p_source_secrets_bundle_byte_identical_against_scan_chain() {
+        use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+        use curve25519_dalek::edwards::CompressedEdwardsY;
+        use shekyl_crypto_pq::output::{construct_output, scan_output_recover};
+
+        let keys = derive_bundle(0);
+        let tx_key_secret = [0x5Au8; 32];
+
+        for output_index in [0u64, 1, 7, 255, 1_000_000] {
+            let constructed = construct_output(
+                &tx_key_secret,
+                &keys.x25519_pk,
+                &keys.ml_kem_ek,
+                keys.spend_pk.as_canonical_bytes(),
+                50_000u64.wrapping_add(output_index),
+                output_index,
+            )
+            .expect("construct_output succeeds for a P-paid synthetic output");
+            let ciphertext = HybridCiphertext {
+                x25519: constructed.kem_ciphertext_x25519,
+                ml_kem: constructed.kem_ciphertext_ml_kem.clone(),
+            };
+
+            // Oracle: the scanner-side chain, hand-composed (x = ho + b,
+            // no claim offset — P outputs are paid to the base spend key).
+            let recovered = scan_output_recover(
+                keys.view_sk.as_canonical_bytes(),
+                keys.ml_kem_dk.as_canonical_bytes(),
+                &constructed.kem_ciphertext_x25519,
+                &constructed.kem_ciphertext_ml_kem,
+                &constructed.output_key,
+                &constructed.commitment,
+                &constructed.enc_amount,
+                constructed.amount_tag,
+                &constructed.enc_label,
+                constructed.label_tag,
+                constructed.view_tag_prefilter,
+                output_index,
+            )
+            .expect("scan_output_recover claims the P-paid output");
+            let ho: Scalar =
+                Option::from(Scalar::from_canonical_bytes(recovered.ho)).expect("ho canonical");
+            let b: Scalar = Scalar::from_bytes_mod_order(*keys.spend_sk.as_canonical_bytes());
+            let oracle_x = (ho + b).to_bytes();
+
+            // Assemble-time chain under test.
+            let bundle = derive_p_source_secrets_bundle(&keys, &ciphertext, output_index)
+                .expect("derive_p_source_secrets_bundle succeeds against own ciphertext");
+
+            assert_eq!(
+                *bundle.spend_key_x, oracle_x,
+                "spend_key_x byte-identity violated (output_index={output_index})"
+            );
+            assert_eq!(*bundle.spend_key_y, recovered.y);
+            assert_eq!(*bundle.commitment_mask, recovered.z);
+            assert_eq!(bundle.combined_ss.as_slice(), &recovered.combined_ss[..]);
+            assert_eq!(bundle.output_index, output_index);
+
+            // Real-correctness guard: the derived witness opens the output
+            // key under the SAL relation the daemon enforces.
+            let x: Scalar = Option::from(Scalar::from_canonical_bytes(*bundle.spend_key_x))
+                .expect("x canonical");
+            let y: Scalar = Option::from(Scalar::from_canonical_bytes(*bundle.spend_key_y))
+                .expect("y canonical");
+            let o = CompressedEdwardsY(constructed.output_key)
+                .decompress()
+                .expect("O decompresses");
+            assert_eq!(
+                (&x * ED25519_BASEPOINT_TABLE) + (*shekyl_curve_generators::T * y),
+                o,
+                "SAL relation x·G + y·T == O violated (output_index={output_index})"
+            );
+        }
+    }
+
+    /// A corrupted funding-record ciphertext fails closed at re-derivation
+    /// (the D-A5 "spend-bundle derivation failure" row): a low-order X25519
+    /// component is rejected by `recover_combined_ss`, never silently spent.
+    #[test]
+    fn p_source_secrets_bundle_rejects_tampered_ciphertext() {
+        let keys = derive_bundle(0);
+        let tampered = HybridCiphertext {
+            x25519: [0u8; 32], // low-order Montgomery point u=0
+            ml_kem: vec![0u8; shekyl_crypto_pq::kem::ML_KEM_768_CT_LEN],
+        };
+        let err = derive_p_source_secrets_bundle(&keys, &tampered, 0)
+            .expect_err("a low-order X25519 component must be rejected");
+        assert!(matches!(
+            err,
+            KeyEngineError::SourceCiphertextDecapsulationFailed(_)
+        ));
     }
 
     // §10.1 — an actor spawned with no initial active slot is idle.

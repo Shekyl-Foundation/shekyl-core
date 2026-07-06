@@ -21,11 +21,10 @@
 //! ## Staging note
 //!
 //! SP-0 is the keystone; its non-test consumer is the **SP-5** scan loop (the
-//! `P`-scan task that drives this source), which is not yet built. Until it
-//! lands, the trait and the local impl are exercised only by this module's tests,
-//! so they carry `#[allow(dead_code)]` — transient scaffolding the SP-5 PR
-//! removes when it wires the first real caller. The proving test below ships
-//! *with* the enabler (it is not deferred).
+//! `P`-scan task that drives this source), live since the WI-1 lifecycle wiring
+//! (`Engine::start_pscan`). [`PBlockSource`] still carries transient
+//! `#[allow(dead_code)]`: its consumer is the 2d-2 posture selector (DQ-T2.3),
+//! explicitly out of WI-1's scope.
 
 use std::future::Future;
 
@@ -78,10 +77,6 @@ impl From<RpcError> for BlockSourceError {
 // Visibility: `pub(crate)` for SP-0 — the only implementors today are the local
 // placeholder and tests. Bump to `pub` when 2d-2's transport needs to implement
 // it from another crate (a one-word change behind a stable signature).
-//
-// `allow(dead_code)`: transient — the non-test consumer is the SP-5 scan loop
-// (module "Staging note"); removed when that PR wires the first real caller.
-#[allow(dead_code)]
 pub(crate) trait BlockSource {
     /// This source's **claimed** chain height — the *count* of blocks, matching
     /// the daemon's `get_height` (a genesis-only chain has height `1`). So the
@@ -168,14 +163,10 @@ fn block_number(height: BlockHeight) -> Result<usize, BlockSourceError> {
 /// This establishes the *interface* only. The per-`P` network **isolation**
 /// (separate connection, no shared cache with the principal) is 2d-2's
 /// transport, not this placeholder.
-//
-// `allow(dead_code)`: transient — see the module "Staging note" (SP-5 consumer).
-#[allow(dead_code)]
 pub(crate) struct DaemonBlockSource<D: DaemonEngine> {
     daemon: D,
 }
 
-#[allow(dead_code)]
 impl<D: DaemonEngine> DaemonBlockSource<D> {
     /// Wrap a daemon connection as a per-`P` block source.
     pub(crate) fn new(daemon: D) -> Self {

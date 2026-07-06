@@ -64,8 +64,9 @@ own observable funding/entry event only**. It does nothing about:
 
 Genesis cannot ship until `P(link | T_obs)` — the probability a modeled
 observer links `P` to its principal given the joint observable timeline — is
-measured and under threshold (the threshold is the measurement round's to set,
-against the S-3 modeled observer, not this spec's). The standoff harness's own
+measured and under threshold (the threshold is the measurement round's to
+derive — **a priori, before grading runs**, per §5.1 — against the S-3
+modeled observer, not this spec's to pin). The standoff harness's own
 caveat 2 already concedes that its numbers are `P(link | isolation holds)` on
 the funding axis alone, with the residual channel being **concurrent network
 activity** — which is exactly axes (ii) and (iii). The hooks exist to make
@@ -186,9 +187,81 @@ The sim side extends the existing standoff harness
   harness's rate-driven finding transfers: the rate is a pre-testnet unknown,
   so the grading is a *conditional* surface, flagged like
   `fetch_latency_per_unit`);
-- sets the threshold in the measurement round, with the grading surface as
-  evidence — this spec deliberately does not pin a number a later round would
-  have to re-litigate.
+- grades against a threshold the measurement round derives **before any
+  grading runs** (§5.1) — this spec deliberately does not pin the number, but
+  it does pin the ordering.
+
+### 5.1 Measurement-round binding constraints (WI-4; pinned 2026-07-05)
+
+The measurement round is not free to arrange itself; the following are
+acceptance-criteria-level constraints on WI-4, recorded here so the round
+opens against them rather than re-deriving (or inverting) them under
+schedule pressure.
+
+1. **Threshold precedes grading — strict ordering.** A threshold chosen
+   after seeing the correlator's output certifies "we picked a bar the
+   architecture clears," not "the architecture clears a bar the adversary
+   can't" — a green gate over a false floor, which for a
+   privacy-maximalist coin is the worst failure shape because it ships
+   linkability silently under a passing number. The ordering is therefore:
+   (a) the acceptance doc derives the threshold **a priori** from a stated
+   adversary-advantage claim traceable to S-1 — the shape is "a modeled
+   S-3 observer's advantage over random guessing must be ≤ ε because at ε
+   the expected number of correctly-linked personas across the anonymity
+   set is < 1," or whatever the real S-1 bound is — and records the
+   derivation; (b) the derivation is reviewed (the rule-16 adversarial
+   review, against the S-3 model, funding-seam-blind arm as the null,
+   with the record stating why the bound is conservative under the
+   strongest observer assumed); (c) **only then** does the sweep run.
+   A sweep that fails the pre-committed bar is a redesign signal for the
+   decorrelation architecture (more jitter / reorder / isolation) —
+   **never** a signal to move the bar.
+2. **The correlator is adversarially specced before it is built.** A weak
+   S-3 produces a low `P(link)` that says nothing about a strong one. Two
+   binding requirements: (a) the correlator fuses the three axes
+   **jointly** — a per-axis likelihood multiplied across axes is exactly
+   the §2 per-axis-multiplied error and understates linkage; the joint
+   fusion is a correlator-spec property to verify in review, not an
+   intent; (b) the grading includes at least one **stronger-than-S-3
+   stress arm** (e.g., a likelihood-ratio correlator over the full joint
+   timeline) alongside the modeled S-3 and the funding-seam-blind null.
+   If the near-optimal arm also clears the pre-committed threshold, the
+   pass is robust; if only the modeled S-3 clears it, the gate is
+   model-limited and the real bar has not been cleared — that outcome is
+   a finding, not a pass.
+3. **Instrumentation validity is itself gated (positive/negative
+   controls).** The correlator joins recorded streams to principals via
+   the sim-side opaque-ordinal ground truth (§3). If that join is ever
+   broken — ordinals emitted unlinkable even to the sim — the correlator
+   measures `P(link | axes independent)`, the friendly number, and a pass
+   is an artifact of broken instrumentation. WI-4 therefore runs two
+   controls before any graded scenario counts: a **known-linked**
+   synthetic scenario that must come back linked (the join survived
+   identity-stripping), and a **known-independent** scenario that must
+   come back at chance. A grading run without both controls passing is
+   invalid, whatever number it produces — the sim-side analogue of "the
+   tripwire must bite."
+4. **Pessimistic lifecycle distributions, stated.** The number is only as
+   trustworthy as the synthetic principal-lifecycle distributions
+   (session / refresh / drain cadence). They are drawn **pessimistically**
+   — the least-favorable plausible rhythm — and the acceptance doc states
+   the choice and its rationale. "Certified against a realistic-or-worse
+   principal" is the claim that makes the gate meaningful; a
+   conveniently-noisy principal quietly voids it.
+5. **The pre-WI-3 pass is provisional.** WI-4 grades against the sim's
+   *synthesized* `BondPostDispatched` (§0's interim); WI-3's live
+   emission may differ (e.g., the production driver's due-check
+   quantizing to sweep boundaries in a way the synthesis didn't model —
+   exactly the quantization
+   [`ARCHIVAL_BOND_WI3_DISPATCH.md`](ARCHIVAL_BOND_WI3_DISPATCH.md) §3.2's
+   dispersal draw counters, and whose sufficiency WI-4 grades),
+   which changes the joint timeline the correlator sees. The early pass
+   is the continue/redesign checkpoint, not the seal: the acceptance doc
+   marks it **provisional**, and the re-run against the live WI-3
+   emission is the sealing measurement. (This is the same reconvergence
+   gate recorded on the WI-3/WI-4 index rows: WI-3's GF-7 acceptance
+   closes on WI-4's threshold artifact; WI-4's own pass seals on WI-3's
+   live timeline.)
 
 ## 6. Acceptance criteria for the 2c-2b wiring PR (the gate this spec places)
 

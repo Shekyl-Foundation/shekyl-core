@@ -24,9 +24,11 @@
 //! event and broadcast/GC nothing.
 //!
 //! The full SP-3/SP-5 layer — extractor, accrual, cadence, driving task, and the
-//! `Engine::start_pscan` wiring — lands in this PR (PR-B). The lifecycle layer that
-//! *calls* `start_pscan` is the only remaining consumer, so the modules carry
-//! transient `#[allow(dead_code)]` on the items it will reach until it lands.
+//! `Engine::start_pscan` wiring — landed with PR-B; the lifecycle call sites
+//! (`Engine::start_pscan` / `start_pscan_if_staker`, WI-1) made the chain live.
+//! Remaining transient `#[allow(dead_code)]` marks items whose consumer is a
+//! *later* slice (2d-2 posture selector, SP-7 `C_min` sizing, SP-R0 reconcile GC,
+//! cold-start cover discovery), each annotated with its named consumer.
 
 pub(crate) mod accrual;
 pub(crate) mod block_source;

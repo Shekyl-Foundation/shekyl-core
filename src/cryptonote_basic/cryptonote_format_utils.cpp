@@ -330,8 +330,9 @@ namespace cryptonote
     // FCMP++ proof size (serialized as varint length + bytes) -- already in pruned blob
     // No CLSAG data in FCMP++
 
-    // calculate deterministic pseudoOuts size
-    extra = 32 * (tx.vin.size());
+    // calculate deterministic pseudoOuts size: sized by the spend subset,
+    // not vin.size() — see count_spend_inputs (cryptonote_basic.h).
+    extra = 32 * count_spend_inputs(tx.vin);
     weight += extra;
 
     // clawback
@@ -1069,9 +1070,10 @@ namespace cryptonote
       transaction &tt = const_cast<transaction&>(t);
       std::stringstream ss;
       binary_archive<true> ba(ss);
-      const size_t inputs = t.vin.size();
+      // pseudoOuts are sized by the spend subset, not vin.size() — see
+      // count_spend_inputs (cryptonote_basic.h).
       const size_t outputs = t.vout.size();
-      bool r = tt.rct_signatures.p.serialize_rctsig_prunable(ba, t.rct_signatures.type, inputs, outputs);
+      bool r = tt.rct_signatures.p.serialize_rctsig_prunable(ba, t.rct_signatures.type, count_spend_inputs(t.vin), outputs);
       CHECK_AND_ASSERT_MES(r, false, "Failed to serialize rct signatures prunable");
       cryptonote::get_blob_hash(ss.str(), res);
     }

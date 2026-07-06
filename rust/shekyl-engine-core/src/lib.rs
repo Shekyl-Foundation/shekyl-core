@@ -22,12 +22,12 @@ pub use engine::payment_requests::{NewPaymentRequest, PaymentRequestFilter};
 pub use engine::{
     Capability, CapabilityInput, ChangePasswordError, Credentials, DaemonClient, DaemonOp,
     DiagnosticSink, Engine, EngineCreateParams, EngineSignerKind, FeePriority, IoError, KeyError,
-    LocalRefresh, MalformedKind, Network, NoopDiagnosticSink, OpenError, OpenedEngine, PendingTx,
-    PendingTxError, PersistenceError, ProtocolErrorKind, RefreshDiagnostic, RefreshError,
-    RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent,
-    RefreshSummary, ReservationId, SendError, SoloSigner, StateWrapKey, SuppressedClass,
-    TracingDiagnosticSink, TxError, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
-    ViewMaterial,
+    LocalRefresh, MalformedKind, Network, NoopDiagnosticSink, OpenError, OpenedEngine, PScanHandle,
+    PScanStartError, PendingTx, PendingTxError, PersistenceError, ProtocolErrorKind,
+    RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress,
+    RefreshReorgEvent, RefreshSummary, ReservationId, SendError, SoloSigner, StateWrapKey,
+    SuppressedClass, TracingDiagnosticSink, TxError, TxHash, TxRecipient, TxRecipientSummary,
+    TxRequest, ViewMaterial,
 };
 pub use error::EngineCoreError;
 pub use outbound_label::label_plaintext_for_payment_uri;

@@ -433,6 +433,7 @@ fn build_fixture() -> SpendFixture {
         derive_pqc_public_key(&combined_ss.0, spent_index).expect("derive hybrid public key");
     let mut wire_input = WireEncodeInput {
         key_images: vec![*ki.key_image.as_bytes()],
+        extra_inputs: Vec::new(),
         output_keys: vec![payment.output_key, change.output_key],
         view_tags: vec![
             Some(payment.view_tag_prefilter),

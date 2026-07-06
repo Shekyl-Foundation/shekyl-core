@@ -50,6 +50,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::consensus_state::settlement_epoch_at_height;
+use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
 use shekyl_units::AtomicUnits;
@@ -184,6 +185,106 @@ impl std::fmt::Debug for BondPostMatch {
     }
 }
 
+/// A recovered `P`-owned funding output's **public identity** (WI-2 D-A1,
+/// `ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.1) — the transform-shaped twin of the
+/// persisted [`PFundingOutputRecord`] (rule 18), carrying everything bond
+/// assembly needs to select, path-prove, and re-derive spend secrets for the
+/// output without a targeted network fetch. **No derived secrets** — `y` / `z`
+/// / `k_amount` / `combined_shared_secret` stay inside the offload closure and
+/// drop with the scanners (DQ5); the spend bundle is re-derived at assemble
+/// time inside the actor from `(ciphertext, index_in_transaction)`.
+///
+/// `Debug` is **redacted**: a row of `P`'s funding history (slot, amount,
+/// placement) — the same no-clear-`Debug` discipline as [`BondPostMatch`].
+///
+/// **Why a separate type when it is byte-identical to [`PFundingOutputRecord`]
+/// today** (do not collapse the two without revisiting this): the split is the
+/// engine-core↔engine-state *serialization boundary*, not incidental
+/// duplication. `PFundingOutputRecord` carries `Serialize`/`Deserialize`/`Schema`
+/// and *is* the on-disk format gated by `PSCAN_STATE_VERSION` — changing it is a
+/// persisted-schema event (rule 42: version bump + snapshot check). This
+/// transform twin is the in-memory scan-extraction result crossing the actor
+/// boundary, version-free, so the live scan path can evolve without touching the
+/// frozen persisted format. That decoupling is also the seam along which the two
+/// are expected to **diverge** once the P posture settles post-GF-7 (a transient
+/// scan-time field the disk form should not carry, or vice-versa). The sibling
+/// [`BondPostMatch`]/`BondPostRecord` pair is twinned at the same boundary for
+/// the same reason. The duplication hazard is compiler-guarded: both `From`
+/// impls are exhaustive struct literals, so a field added to either type fails to
+/// compile until both types and both impls carry it.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct FundingOutputMatch {
+    /// The owning persona's slot ordinal (selects the re-derivation keys).
+    pub(crate) p_slot: u32,
+    /// Hash of the transaction carrying the output.
+    pub(crate) tx_hash: [u8; 32],
+    /// The output's index within its transaction — the KEM derivation index.
+    pub(crate) index_in_transaction: u64,
+    /// The global (chain-wide) output index — the curve-tree leaf position.
+    pub(crate) gindex: u64,
+    /// The on-chain output key `O` (compressed Edwards bytes).
+    pub(crate) output_key: [u8; 32],
+    /// The on-chain amount commitment point `C` (compressed Edwards bytes) —
+    /// the point, never the opened `(mask, amount)` pair (the mask is a
+    /// derived secret).
+    pub(crate) commitment: [u8; 32],
+    /// X25519 half of the output's hybrid KEM ciphertext (public, on-chain).
+    pub(crate) ciphertext_x25519: [u8; 32],
+    /// ML-KEM-768 half of the output's hybrid KEM ciphertext (public, on-chain).
+    pub(crate) ciphertext_ml_kem: Vec<u8>,
+    /// The recovered cleartext amount.
+    pub(crate) amount: AtomicUnits,
+    /// Height of the block carrying the output.
+    pub(crate) height: BlockHeight,
+    /// The settlement epoch `height` falls in.
+    pub(crate) epoch: SettlementEpoch,
+}
+
+impl std::fmt::Debug for FundingOutputMatch {
+    /// Redacted — see the type docs.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FundingOutputMatch(<redacted funding-history>)")
+    }
+}
+
+impl From<&FundingOutputMatch> for PFundingOutputRecord {
+    /// The rule-18 transform→state seam: field-for-field into the persisted twin.
+    fn from(m: &FundingOutputMatch) -> Self {
+        PFundingOutputRecord {
+            p_slot: m.p_slot,
+            tx_hash: m.tx_hash,
+            index_in_transaction: m.index_in_transaction,
+            gindex: m.gindex,
+            output_key: m.output_key,
+            commitment: m.commitment,
+            ciphertext_x25519: m.ciphertext_x25519,
+            ciphertext_ml_kem: m.ciphertext_ml_kem.clone(),
+            amount: m.amount,
+            height: m.height,
+            epoch: m.epoch,
+        }
+    }
+}
+
+impl From<&PFundingOutputRecord> for FundingOutputMatch {
+    /// The rule-18 state→transform seam (resume from a sealed state).
+    fn from(r: &PFundingOutputRecord) -> Self {
+        FundingOutputMatch {
+            p_slot: r.p_slot,
+            tx_hash: r.tx_hash,
+            index_in_transaction: r.index_in_transaction,
+            gindex: r.gindex,
+            output_key: r.output_key,
+            commitment: r.commitment,
+            ciphertext_x25519: r.ciphertext_x25519,
+            ciphertext_ml_kem: r.ciphertext_ml_kem.clone(),
+            amount: r.amount,
+            height: r.height,
+            epoch: r.epoch,
+        }
+    }
+}
+
 /// Public result of one scan-step — only public extraction outputs cross the
 /// actor boundary (the secret scanners stay in the offload closure).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -194,6 +295,9 @@ pub(crate) struct ScanStepResult {
     pub(crate) funding: Vec<EpochInflowDelta>,
     /// Bond-posts in this range whose `p_canonical_id` is one of ours.
     pub(crate) bond_post_matches: Vec<BondPostMatch>,
+    /// Per-output funding-discovery records (WI-2 D-A1) — public identity only;
+    /// per-epoch sums of these equal `funding`'s deltas by construction.
+    pub(crate) funding_outputs: Vec<FundingOutputMatch>,
 }
 
 /// Why a dual-extraction failed. All arms fail **closed** — a corrupted scan
@@ -264,10 +368,12 @@ fn post_kind_byte(kind: &BondPostKind) -> u8 {
 /// it to `spawn_blocking`); the secret `scanners` live only here and drop at
 /// return (DQ5). Returns **only** public data.
 ///
-/// `known_ids` is the bonded union's cleartext `p_canonical_id` set; `range` and
-/// `blocks` are aligned (`blocks[i]` at `range.start + i`).
+/// `scanners` is the bonded union's slot-tagged scanner set (the tag attributes
+/// each recovered output to its owning persona slot for the WI-2 D-A1 funding
+/// records); `known_ids` is the union's cleartext `p_canonical_id` set; `range`
+/// and `blocks` are aligned (`blocks[i]` at `range.start + i`).
 pub(crate) fn run_dual_extractor(
-    mut scanners: Vec<GuaranteedScanner>,
+    mut scanners: Vec<(u32, GuaranteedScanner)>,
     known_ids: &BTreeSet<PCanonicalId>,
     range: BlockRange,
     blocks: &[ScannableBlock],
@@ -288,11 +394,14 @@ pub(crate) fn run_dual_extractor(
     }
 
     // Per-epoch confirmed amounts, accumulated with a running checked add so an
-    // overflow fails closed immediately and no per-output buffer is held. An
-    // epoch entry is created lazily (only on a recovered output), so an epoch with
-    // nothing of ours yields no delta rather than a spurious zero.
+    // overflow fails closed immediately. An epoch entry is created lazily (only
+    // on a recovered output), so an epoch with nothing of ours yields no delta
+    // rather than a spurious zero. The per-output funding records (WI-2 D-A1)
+    // accumulate alongside — public identity only; the recovered secrets drop
+    // with each `RecoveredWalletOutput` inside this function.
     let mut by_epoch: BTreeMap<SettlementEpoch, AtomicUnits> = BTreeMap::new();
     let mut bond_post_matches = Vec::new();
+    let mut funding_outputs = Vec::new();
 
     for (i, block) in blocks.iter().enumerate() {
         let height = range.height_at(i);
@@ -318,8 +427,11 @@ pub(crate) fn run_dual_extractor(
 
         // (a) funding — scan with each bonded persona's scanner. `scan` consumes
         // the block, so clone per scanner; an output belongs to at most one
-        // persona, so no cross-scanner double-count.
-        for scanner in &mut scanners {
+        // persona, so no cross-scanner double-count. Each recovered output
+        // contributes its epoch delta *and* a per-output funding record (WI-2
+        // D-A1) — public identity only; the `RecoveredWalletOutput`'s derived
+        // secrets drop with it at the end of each iteration.
+        for (slot, scanner) in &mut scanners {
             let recovered = scanner
                 .scan(block.clone())
                 .map_err(DualExtractError::Scan)?;
@@ -328,6 +440,22 @@ pub(crate) fn run_dual_extractor(
                 *acc = acc
                     .checked_add(out.amount())
                     .ok_or(DualExtractError::InflowOverflow { epoch })?;
+
+                let wo = out.wallet_output();
+                let ct = out.source_ciphertext();
+                funding_outputs.push(FundingOutputMatch {
+                    p_slot: *slot,
+                    tx_hash: wo.transaction(),
+                    index_in_transaction: wo.index_in_transaction(),
+                    gindex: wo.index_on_blockchain(),
+                    output_key: wo.key().compress().to_bytes(),
+                    commitment: wo.commitment().calculate().compress().to_bytes(),
+                    ciphertext_x25519: ct.x25519,
+                    ciphertext_ml_kem: ct.ml_kem.clone(),
+                    amount: out.amount(),
+                    height,
+                    epoch,
+                });
             }
         }
     }
@@ -341,6 +469,7 @@ pub(crate) fn run_dual_extractor(
         range,
         funding,
         bond_post_matches,
+        funding_outputs,
     })
 }
 
@@ -429,7 +558,7 @@ mod tests {
         let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
         // Height 20_001 → settlement epoch 2 (SETTLEMENT_EPOCH_BLOCKS = 10_000).
         let res = run_dual_extractor(
-            vec![scanner],
+            vec![(0, scanner)],
             &BTreeSet::new(),
             range(20_001, 20_002),
             &[funding_block(&p)],
@@ -443,6 +572,68 @@ mod tests {
             "the persona's own output was summed into the epoch delta"
         );
         assert!(res.bond_post_matches.is_empty());
+    }
+
+    /// D-A1 consistency gate (WI-2): the per-output funding records and the
+    /// per-epoch deltas are two views of the same recovered set — the records'
+    /// per-epoch amount sums must equal the deltas exactly, and each record
+    /// carries the tagging slot plus a complete public identity.
+    #[test]
+    fn funding_records_sum_to_the_epoch_deltas_and_carry_the_slot_tag() {
+        let p = persona(0);
+        let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
+        let res = run_dual_extractor(
+            vec![(7, scanner)],
+            &BTreeSet::new(),
+            range(20_001, 20_002),
+            &[funding_block(&p)],
+        )
+        .expect("extract");
+
+        assert!(
+            !res.funding_outputs.is_empty(),
+            "the recovered output produced a per-output record"
+        );
+        // sum(records) per epoch == the epoch delta, exactly.
+        let mut by_epoch: BTreeMap<SettlementEpoch, AtomicUnits> = BTreeMap::new();
+        for rec in &res.funding_outputs {
+            let acc = by_epoch.entry(rec.epoch).or_insert(AtomicUnits::ZERO);
+            *acc = acc.checked_add(rec.amount).expect("no overflow in test");
+        }
+        assert_eq!(by_epoch.len(), res.funding.len());
+        for delta in &res.funding {
+            assert_eq!(by_epoch.get(&delta.epoch), Some(&delta.amount));
+        }
+        for rec in &res.funding_outputs {
+            assert_eq!(rec.p_slot, 7, "record carries the scanner's slot tag");
+            assert_eq!(rec.height, BlockHeight::from_raw(20_001));
+            assert_ne!(rec.output_key, [0u8; 32], "output key populated");
+            assert_ne!(rec.commitment, [0u8; 32], "commitment populated");
+            assert!(
+                !rec.ciphertext_ml_kem.is_empty(),
+                "hybrid ciphertext ML-KEM half preserved for re-derivation"
+            );
+        }
+    }
+
+    /// D-A1 redaction gate: a funding record is a row of `P`'s funding history —
+    /// its `Debug` must render the constant placeholder, never fields.
+    #[test]
+    fn funding_output_match_debug_is_redacted() {
+        let p = persona(0);
+        let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &BTreeSet::new(),
+            range(20_001, 20_002),
+            &[funding_block(&p)],
+        )
+        .expect("extract");
+        let rec = res.funding_outputs.first().expect("one record");
+        assert_eq!(
+            format!("{rec:?}"),
+            "FundingOutputMatch(<redacted funding-history>)"
+        );
     }
 
     #[test]
@@ -464,7 +655,7 @@ mod tests {
         let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
         let known = BTreeSet::from([canonical_id(&mine)]);
         let res =
-            run_dual_extractor(vec![scanner], &known, range(5, 6), &[block]).expect("extract");
+            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
 
         assert_eq!(
             res.bond_post_matches.len(),
@@ -503,7 +694,7 @@ mod tests {
         let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
         let known = BTreeSet::from([canonical_id(&mine)]);
         let res =
-            run_dual_extractor(vec![scanner], &known, range(5, 6), &[block]).expect("extract");
+            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
 
         assert_eq!(res.bond_post_matches.len(), 1);
         assert_eq!(
@@ -524,7 +715,7 @@ mod tests {
         let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
         let known = BTreeSet::from([canonical_id(&p)]);
         let res =
-            run_dual_extractor(vec![scanner], &known, range(7, 8), &[block]).expect("extract");
+            run_dual_extractor(vec![(0, scanner)], &known, range(7, 8), &[block]).expect("extract");
 
         assert_eq!(res.funding.len(), 1, "funding recovered");
         assert_eq!(res.bond_post_matches.len(), 1, "bond-post matched");
@@ -536,7 +727,7 @@ mod tests {
         let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
         // Range covers 3 blocks; only 1 supplied.
         let err = run_dual_extractor(
-            vec![scanner],
+            vec![(0, scanner)],
             &BTreeSet::new(),
             range(0, 3),
             &[funding_block(&p)],

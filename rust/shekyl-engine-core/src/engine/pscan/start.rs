@@ -21,6 +21,43 @@
 //! borrow taken at the call site, clones the daemon + stake handle under a brief
 //! read lock, then runs unattended until the returned [`PScanHandle`] is cancelled
 //! or dropped.
+//!
+//! # Lifecycle (WI-1)
+//!
+//! The embedder-facing surface is two `pub` entry points:
+//!
+//! - [`Engine::start_pscan_if_staker`] — the **auto-start** lifecycle call. The
+//!   canonical post-open step: after wrapping the opened engine in its
+//!   `Arc<RwLock<_>>`, an embedder calls this once; a staker wallet
+//!   (`stake.is_some()`) gets its firewalled `P`-scan started, a non-staker gets
+//!   `Ok(None)` and pays nothing. Auto-start is the recommended default
+//!   (`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md` SP-5): the `P`-scan is load-bearing for
+//!   funding discovery and unbond/retire reconcile, so a staker wallet that never
+//!   scans silently accrues nothing and never retires.
+//! - [`Engine::start_pscan`] — the **on-demand** entry mirroring
+//!   [`Engine::start_refresh`]'s shape, for embedders that manage the start
+//!   moment themselves. Refuses with [`PScanStartError::NoStakeEngine`] for a
+//!   non-staker.
+//!
+//! Both run [`PScanConfig::production`] at [`DEFAULT_PSCAN_CADENCE`] — no public
+//! tuning knobs (per `81-no-protocol-knowledge.mdc`, an embedder should not need
+//! to know what a finality horizon is). The config-injectable seam stays
+//! `pub(crate)` as [`Engine::start_pscan_with`] for tests.
+//!
+//! # The handle is embedder-held, not engine-held
+//!
+//! The returned [`PScanHandle`] is owned by the caller (the `RefreshHandle`
+//! discipline), **not** stored on the `Engine`. Storing it on the engine would
+//! make the pair immortal: the running task's store holds a strong
+//! `Arc<RwLock<Engine>>`, so an engine that owned the task's handle could never
+//! be dropped (task keeps engine alive; only the engine's drop would cancel the
+//! task). Embedder-held inverts that into the correct shutdown order
+//! structurally: [`Engine::close`] consumes `self`, which the embedder can only
+//! obtain via `Arc::try_unwrap` — impossible while the scan task still holds its
+//! clone — so the handle **must** be cancelled/shut down before close can
+//! proceed. "Close stops the task" is enforced by ownership, not by convention.
+//! Reopen engine-held storage only if the store moves to a `Weak` upgrade-per-
+//! sweep shape (a design round of its own, not a lifecycle patch).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -41,14 +78,36 @@ use crate::engine::traits::{
 };
 use crate::engine::Engine;
 
+/// Default wall-clock interval between P-scan sweeps (rule 75: rationale + bounds).
+///
+/// **Rationale.** The P-scan is a catch-up loop over *final* blocks — its sweep
+/// ceiling trails the tip by [`ARCHIVAL_REORG_DEPTH_BLOCKS`] (720 blocks ≈ 24 h at
+/// the 120 s block target), so per-block reactivity buys nothing: a new block
+/// becomes scannable only ~24 h after it is mined, and only ~0.5 blocks cross the
+/// finality horizon per minute. Each sweep catches up to the horizon fully
+/// (batched internally), so a 60 s tick keeps the steady-state frontier within one
+/// block-target of the horizon while the idle-path cost stays negligible (one
+/// `tip_height` RPC per tick). The cadence is **fixed-rate and size-independent**
+/// (DQ8): ticks fire on schedule regardless of how much work the previous sweep
+/// did, so retirement activity stays invisible on the timing axis.
+///
+/// **Bounds.** Anything in [10 s, 600 s] is safe: below that only wastes RPC on
+/// no-op sweeps (nothing new finalizes that fast); above it the scan still keeps
+/// up trivially (each sweep clears the whole backlog) but funding-output discovery
+/// and unbond/retire reconcile latency degrade for no benefit. The value is not
+/// embedder-tunable (per `81-no-protocol-knowledge.mdc`); tests inject their own
+/// cadence through [`Engine::start_pscan_with`].
+///
+/// [`ARCHIVAL_REORG_DEPTH_BLOCKS`]: shekyl_archival_retention::ARCHIVAL_REORG_DEPTH_BLOCKS
+pub const DEFAULT_PSCAN_CADENCE: Duration = Duration::from_secs(60);
+
 /// Why a P-scan task could not be started. Distinct from [`PScanTaskError`] (the
 /// per-sweep, recoverable failures the running loop logs): this is the one-time
 /// wiring precondition checked before the spawn.
 ///
 /// [`PScanTaskError`]: super::task::PScanTaskError
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)] // transient — surfaced once the lifecycle layer calls start_pscan.
-pub(crate) enum PScanStartError {
+pub enum PScanStartError {
     /// No archival-bond [`StakeEngine`] is running, so there is no persona to scan
     /// as. The stake engine is the `view_sk` vault the scan-step offloads to; with
     /// no vault there is nothing for the P-scan to do.
@@ -75,26 +134,25 @@ pub(crate) enum PScanStartError {
 /// token fires on both [`cancel`](Self::cancel) and `Drop`, so a dropped handle
 /// winds the task down rather than leaking it (the `CancellationToken` is `Arc`'d
 /// internally, so the task observes the fire even after the handle's clone drops).
-#[allow(dead_code)] // transient — held by the lifecycle layer once it calls start_pscan.
-pub(crate) struct PScanHandle {
+pub struct PScanHandle {
     cancel_token: CancellationToken,
     // `Option` so [`shutdown`](Self::shutdown) can take the join handle out for
     // `.await` without moving a field out of a `Drop` type.
     join: Option<JoinHandle<()>>,
 }
 
-#[allow(dead_code)] // transient — exercised by the lifecycle layer + the e2e tests.
 impl PScanHandle {
     /// Fire the cancel token. Idempotent. The task observes it at the next cadence
     /// tick (or mid-`select!`) and exits after its in-flight sweep.
-    pub(crate) fn cancel(&self) {
+    pub fn cancel(&self) {
         self.cancel_token.cancel();
     }
 
-    /// Cancel and await the task's exit. Test/shutdown wind-down: deterministically
-    /// observes that the loop has stopped (and released its borrows) before
-    /// returning.
-    pub(crate) async fn shutdown(mut self) {
+    /// Cancel and await the task's exit. Shutdown wind-down: deterministically
+    /// observes that the loop has stopped (and released its clone of the engine
+    /// arc) before returning — the step that makes a subsequent `Arc::try_unwrap`
+    /// → [`Engine::close`](crate::engine::Engine) possible.
+    pub async fn shutdown(mut self) {
         self.cancel_token.cancel();
         if let Some(join) = self.join.take() {
             // A `JoinError` here means the task panicked; on shutdown there is
@@ -239,7 +297,64 @@ where
     P: PendingTxEngine,
     Self: Send + Sync,
 {
-    /// Spawn the driving P-scan task and return a [`PScanHandle`] to control it.
+    /// Start the firewalled P-scan **iff this wallet is a staker** — the lifecycle
+    /// auto-start call (WI-1, closing 2d-1 SP-5).
+    ///
+    /// The canonical post-open step: an embedder wraps the opened engine in its
+    /// `Arc<RwLock<_>>` and calls this once. A staker wallet (a running
+    /// [`StakeEngine`](crate::engine::stake_engine::StakeEngine), i.e. the open
+    /// path found `staking_enabled`) gets its P-scan spawned at production
+    /// settings; a non-staker gets `Ok(None)` and pays nothing — the "if staker"
+    /// gate is this method's job, so the embedder never branches on staking state
+    /// itself (per `81-no-protocol-knowledge.mdc`).
+    ///
+    /// The returned [`PScanHandle`] is embedder-held (see the module docs): call
+    /// [`PScanHandle::shutdown`] before `Arc::try_unwrap` →
+    /// [`close`](Self::close).
+    ///
+    /// # Errors
+    ///
+    /// Everything except the non-staker case propagates from
+    /// [`start_pscan`](Self::start_pscan): [`PScanStartError::AlreadyRunning`],
+    /// [`PScanStartError::LoadFailed`]. A non-staker is `Ok(None)`, not an error —
+    /// for this call the absent stake engine is the expected quiet path, not a
+    /// wiring failure.
+    pub async fn start_pscan_if_staker(
+        self_arc: Arc<RwLock<Self>>,
+    ) -> Result<Option<PScanHandle>, PScanStartError> {
+        if self_arc.read().await.stake_handle().is_none() {
+            return Ok(None);
+        }
+        // Benign TOCTOU: the stake engine is set at open and never unset during a
+        // session, so a re-check inside `start_pscan` can only agree.
+        Self::start_pscan(self_arc).await.map(Some)
+    }
+
+    /// Spawn the driving P-scan task at production settings and return a
+    /// [`PScanHandle`] to control it — the on-demand entry, mirroring
+    /// [`start_refresh`](Self::start_refresh)'s shape.
+    ///
+    /// Runs [`PScanConfig::production`] at [`DEFAULT_PSCAN_CADENCE`]; there are no
+    /// public tuning knobs (the finality horizon is a consensus constant and the
+    /// cadence has a documented default + bounds — nothing an embedder should
+    /// choose). Unlike [`start_pscan_if_staker`](Self::start_pscan_if_staker),
+    /// calling this on a non-staker is an error
+    /// ([`PScanStartError::NoStakeEngine`]): the caller asked for a scan that
+    /// cannot exist.
+    ///
+    /// # Errors
+    ///
+    /// - [`PScanStartError::NoStakeEngine`] if no stake engine is running.
+    /// - [`PScanStartError::AlreadyRunning`] if a P-scan task already holds the
+    ///   single-flight slot for this wallet.
+    /// - [`PScanStartError::LoadFailed`] if the sealed state cannot be loaded.
+    pub async fn start_pscan(self_arc: Arc<RwLock<Self>>) -> Result<PScanHandle, PScanStartError> {
+        Self::start_pscan_with(self_arc, PScanConfig::production(), DEFAULT_PSCAN_CADENCE).await
+    }
+
+    /// Spawn the driving P-scan task with explicit `config` + `cadence` — the
+    /// injectable seam behind [`start_pscan`](Self::start_pscan), crate-visible
+    /// for tests that need a tight cadence or a shallow horizon.
     ///
     /// Wires the verified layer to the live engine: a [`DaemonBlockSource`] over a
     /// clone of the engine's daemon, the
@@ -271,8 +386,7 @@ where
     /// - [`PScanStartError::LoadFailed`] if the sealed state cannot be loaded.
     ///
     /// All per-sweep failures are recoverable and logged by the loop, not here.
-    #[allow(dead_code)] // transient — the lifecycle layer is the call site (next).
-    pub(crate) async fn start_pscan(
+    pub(crate) async fn start_pscan_with(
         self_arc: Arc<RwLock<Self>>,
         config: PScanConfig,
         cadence: Duration,
@@ -430,6 +544,7 @@ mod tests {
                     post_kind: 2,
                 },
             ],
+            Vec::new(),
         );
         store.save(&state_a).await.expect("save A");
         assert!(pscan_path.exists(), ".wallet.pscan written by the seal");
@@ -445,6 +560,7 @@ mod tests {
             accruals(&[(0, 100), (1, 250), (2, 75)]),
             pending(&[(0xAB, 1)]),
             Vec::new(),
+            Vec::new(),
         );
         store.save(&state_b).await.expect("save B");
         assert_eq!(
@@ -455,8 +571,8 @@ mod tests {
     }
 
     /// The start precondition: with no stake engine running (a fresh, non-staking
-    /// wallet) there is no persona to scan as, so `start_pscan` refuses up front
-    /// rather than spawning a no-op loop.
+    /// wallet) there is no persona to scan as, so the on-demand `start_pscan`
+    /// refuses up front rather than spawning a no-op loop.
     #[tokio::test(flavor = "multi_thread")]
     async fn start_pscan_without_a_stake_engine_returns_no_stake_engine() {
         let (_tmp, engine) = create_test_engine();
@@ -466,18 +582,163 @@ mod tests {
         );
         let arc = Arc::new(RwLock::new(engine));
 
-        let result = Engine::<SoloSigner>::start_pscan(
-            arc,
-            PScanConfig::production(),
-            Duration::from_secs(60),
-        )
-        .await;
+        let result = Engine::<SoloSigner>::start_pscan(arc).await;
 
         match result {
             Err(PScanStartError::NoStakeEngine) => {}
             Ok(_) => panic!("expected NoStakeEngine, got a running handle"),
             Err(other) => panic!("expected NoStakeEngine, got {other:?}"),
         }
+    }
+
+    /// The lifecycle auto-start on a **non-staker** is the quiet path: `Ok(None)`,
+    /// no error, no task — the embedder calls it unconditionally after open and
+    /// never branches on staking state itself.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn start_pscan_if_staker_is_none_for_a_non_staker() {
+        let (_tmp, engine) = create_test_engine();
+        let arc = Arc::new(RwLock::new(engine));
+
+        let started = Engine::<SoloSigner>::start_pscan_if_staker(arc.clone())
+            .await
+            .expect("non-staker auto-start must not error");
+        assert!(started.is_none(), "a non-staker gets no P-scan task");
+
+        // Nothing claimed the single-flight slot: the quiet path really did nothing.
+        assert!(
+            !arc.read().await.pscan_slot.is_claimed(),
+            "the quiet path must not claim the P-scan slot"
+        );
+    }
+
+    /// The staker lifecycle end-to-end: `start_pscan_if_staker` on a staker wallet
+    /// spawns the task (the single-flight slot is claimed), a second start is
+    /// refused with [`PScanStartError::AlreadyRunning`], and `shutdown` releases
+    /// both the slot and the task's engine-arc clone — after which
+    /// `Arc::try_unwrap` succeeds and [`Engine::close`] can run. That last step is
+    /// the "close stops the task" property, enforced by ownership (see the module
+    /// docs): close is unreachable *until* the handle has been shut down.
+    ///
+    /// The daemon is a never-connecting stub, which is fine on purpose: a failed
+    /// tip fetch is a recoverable per-sweep error the loop logs and retries, so
+    /// the task stays alive for the lifecycle assertions without a chain.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn staker_auto_start_single_flight_and_shutdown_releases_the_engine() {
+        use shekyl_engine_file::SafetyOverrides;
+
+        use crate::engine::stake_engine::PSlot;
+        use crate::engine::OpenedEngine;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_path = tmp.path().join("wallet");
+        let creds = Credentials::password_only(b"correct horse battery staple");
+        let seed = fixed_seed();
+        let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
+        let network = params.network;
+
+        // Become a staker: persist a bond record (sets `staking_enabled`), then
+        // reopen — the open path spawns the StakeEngine for a staker.
+        let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create wallet");
+        engine
+            .persist_bond_record(PSlot(3))
+            .expect("persist bond record");
+        engine.close(&creds).expect("close created wallet");
+
+        let opened = Engine::<SoloSigner>::open_full(
+            &base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("reopen staker wallet");
+        assert!(matches!(opened, OpenedEngine::Loaded(_)));
+        let engine = opened.into_wallet();
+        assert!(
+            engine.stake_handle().is_some(),
+            "a staker reopen spawns the StakeEngine"
+        );
+        let arc = Arc::new(RwLock::new(engine));
+
+        // Auto-start: a staker gets a running P-scan task.
+        let handle = Engine::<SoloSigner>::start_pscan_if_staker(arc.clone())
+            .await
+            .expect("staker auto-start succeeds")
+            .expect("a staker gets a P-scan handle");
+        assert!(
+            arc.read().await.pscan_slot.is_claimed(),
+            "the running task holds the single-flight slot"
+        );
+
+        // Double-start is refused while the first task runs.
+        match Engine::<SoloSigner>::start_pscan(arc.clone()).await {
+            Err(PScanStartError::AlreadyRunning) => {}
+            Ok(_) => panic!("expected AlreadyRunning, got a second handle"),
+            Err(other) => panic!("expected AlreadyRunning, got {other:?}"),
+        }
+        // ... and through the auto-start entry too.
+        match Engine::<SoloSigner>::start_pscan_if_staker(arc.clone()).await {
+            Err(PScanStartError::AlreadyRunning) => {}
+            Ok(_) => panic!("expected AlreadyRunning, got a second handle"),
+            Err(other) => panic!("expected AlreadyRunning, got {other:?}"),
+        }
+
+        // Shutdown: the task exits, releasing the slot and its engine-arc clone.
+        handle.shutdown().await;
+        assert!(
+            !arc.read().await.pscan_slot.is_claimed(),
+            "shutdown releases the single-flight slot"
+        );
+
+        // The embedder is now the sole owner, so close is reachable — the
+        // ownership-enforced "close stops the task" order.
+        let engine = Arc::try_unwrap(arc)
+            .unwrap_or_else(|_| panic!("the shut-down task must not hold the engine arc"))
+            .into_inner();
+        engine.close(&creds).expect("close after shutdown");
+    }
+
+    /// A stopped scan can be started again: the slot is reusable across
+    /// start → shutdown → start within one session (restart-after-stop is an
+    /// ordinary lifecycle, not a wedged state).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pscan_can_be_restarted_after_shutdown() {
+        use shekyl_engine_file::SafetyOverrides;
+
+        use crate::engine::stake_engine::PSlot;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_path = tmp.path().join("wallet");
+        let creds = Credentials::password_only(b"correct horse battery staple");
+        let seed = fixed_seed();
+        let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
+        let network = params.network;
+
+        let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create wallet");
+        engine
+            .persist_bond_record(PSlot(0))
+            .expect("persist bond record");
+        engine.close(&creds).expect("close created wallet");
+        let engine = Engine::<SoloSigner>::open_full(
+            &base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("reopen staker wallet")
+        .into_wallet();
+        let arc = Arc::new(RwLock::new(engine));
+
+        let first = Engine::<SoloSigner>::start_pscan(arc.clone())
+            .await
+            .expect("first start");
+        first.shutdown().await;
+
+        let second = Engine::<SoloSigner>::start_pscan(arc.clone())
+            .await
+            .expect("restart after shutdown succeeds");
+        second.shutdown().await;
     }
 
     /// Single-flight (#1): the slot admits exactly one claimant; a second

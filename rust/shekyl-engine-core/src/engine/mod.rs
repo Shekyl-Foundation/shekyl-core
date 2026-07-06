@@ -190,6 +190,11 @@ pub(crate) mod curve_tree_decode;
 // replacement for the legacy `shekyl_rpc_client::Rpc::get_scannable_block_by_*` path.
 // Backs `DaemonEngine::fetch_scannable_block`'s default impl.
 pub(crate) mod block_fetch;
+/// WI-2 (`ARCHIVAL_BOND_WI2_ASSEMBLY.md`): production bond assembly — the
+/// `PBoundBytes` P-1 provenance boundary (single private mint site), the D-A2
+/// funding-selection policy over the sealed `PFundingOutputRecord` set, and
+/// the assemble path's typed failure surface.
+pub(crate) mod bond_assembly;
 pub mod daemon;
 pub(crate) mod diagnostics;
 /// SP-T2 (DQ-T2.3): daemon-posture selection — the no-silent-③ invariant (a
@@ -330,6 +335,11 @@ pub use pending::{
     FeePriority, PendingTx, ReservationExtension, ReservationId, ReservationTTLConfig, SnapshotId,
     TxHash, TxRecipient, TxRecipientSummary, TxRequest, DEFAULT_RESERVATION_TTL,
 };
+// The P-scan lifecycle surface (WI-1): handle + start error + cadence default,
+// re-exported so embedders holding the `PScanHandle` (the module keeps the
+// handle embedder-held, not engine-held — see `pscan::start`'s docs) can name
+// the types without reaching into the `pub(crate)` pscan internals.
+pub use pscan::start::{PScanHandle, PScanStartError, DEFAULT_PSCAN_CADENCE};
 pub use refresh::{
     RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
 };

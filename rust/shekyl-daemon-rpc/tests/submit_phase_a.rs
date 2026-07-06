@@ -255,10 +255,11 @@ fn bond_post_input() -> Input {
 /// pseudo-outs. Built by reshaping the spend fixture: swap one input for
 /// the bond-post arm, resize the pseudo-outs.
 ///
-/// The wire layer (C++ `rctTypes.h:399-401`, mirrored by `shekyl-wire`'s
-/// per-input read) only parses `n_pseudo == n_funding + 1` (== vin count);
-/// the consensus layer (`ver_non_input_consensus:153`) only accepts
-/// `n_pseudo == n_funding`. Both are exercised below.
+/// Since the §13 (F1/F3) coupling closure (`GENESIS_TX_WIRE_FORMAT.md`
+/// §1.1, 2026-07-05) wire and consensus agree: `n_pseudo == n_funding`
+/// (the ToKey subset) is the only parseable-and-valid shape; the bond-post
+/// vin occupies a pqc_auths slot but no pseudo-out slot. Both the admit
+/// and the mis-sized reject are exercised below.
 fn bond_post_tx(n_funding: usize, n_pseudo: usize) -> Transaction {
     // Start from a spend with n_funding + 1 inputs so the pqc_auths / base
     // shapes are already right, then replace the last input (lowest key
@@ -278,30 +279,31 @@ fn bond_post_tx(n_funding: usize, n_pseudo: usize) -> Transaction {
 #[test]
 fn bond_post_without_funding_input_rejects() {
     // ver_non_input_consensus:151-152: spend_input_count == 0 rejects.
-    // (One pseudo-out so the wire's per-input read consumes cleanly and
-    // the *engine* static is what fires.)
-    let reason = reject_reason(&hexify(&bond_post_tx(0, 1)));
+    // (Zero pseudo-outs — the spend-subset shape for zero funding inputs —
+    // so the wire parses cleanly and the *engine* static is what fires.)
+    let reason = reject_reason(&hexify(&bond_post_tx(0, 0)));
     assert!(reason.contains("funding"), "unexpected reason: {reason}");
 }
 
 #[test]
-fn no_wire_parseable_funded_bond_post_admits() {
-    // C++ parity for the known wire/consensus contradiction (the §13
-    // F1/F3 forward obligation): the wire demands pseudoOuts == vin count,
-    // consensus demands == funding count. A funded bond-post therefore
-    // rejects on one side or the other — never admits.
-    //
-    // Consensus-shaped pseudo-outs (== funding count): the wire's
-    // per-input read cannot parse it.
-    let reason = reject_reason(&hexify(&bond_post_tx(1, 1)));
-    assert!(
-        reason.contains("parse failed"),
-        "unexpected reason: {reason}"
+fn funded_bond_post_with_spend_subset_pseudo_outs_admits() {
+    // The §13 (F1/F3) coupling closure made the funded bond-post
+    // admissible: pseudoOuts == funding (ToKey) count parses, validates,
+    // and clears Phase A as a BondPost. (Before the closure the wire
+    // demanded == vin count while consensus demanded == funding count, so
+    // no funded bond-post could admit; that contradiction is gone.)
+    let parsed = parse_submission(&hexify(&bond_post_tx(1, 1)))
+        .expect("funded bond-post must clear Phase A");
+    assert_eq!(parsed.kind, SubmitTxKind::BondPost);
+    assert_eq!(
+        parsed.key_images.len(),
+        1,
+        "key images come from the funding inputs only"
     );
 
-    // Wire-shaped pseudo-outs (== vin count): parses, then the engine's
-    // consensus arity static rejects, exactly as ver_non_input_consensus
-    // does in C++.
+    // Per-vin pseudo-outs (the pre-closure wire shape) no longer parse:
+    // the reader consumes exactly the spend subset, so the extra chunk is
+    // trailing garbage.
     let reason = reject_reason(&hexify(&bond_post_tx(1, 2)));
-    assert!(reason.contains("pseudoOuts"), "unexpected reason: {reason}");
+    assert!(reason.contains("trailing"), "unexpected reason: {reason}");
 }
