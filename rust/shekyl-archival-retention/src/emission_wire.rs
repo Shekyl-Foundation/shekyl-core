@@ -219,6 +219,14 @@ pub enum WireError {
         epochs: usize,
         amounts: usize,
     },
+    /// Wire-level positivity (ARCHIVAL_REWARD_GATE_M1.md §2.3): every
+    /// `reward_amount_plain` entry must be strictly positive. A zero-amount
+    /// row is the timing-beacon class (gated, legitimately-zero,
+    /// floored-to-zero, and NOTFOUND-laundered epochs all pass `0 == 0`);
+    /// this makes the beacon unencodable rather than rejected downstream.
+    RewardAmountZero {
+        index: usize,
+    },
     /// In-memory struct misalignment caught on write (unrepresentable on wire).
     WorkClaimMisaligned {
         epochs: usize,
@@ -269,6 +277,12 @@ impl fmt::Display for WireError {
                 write!(
                     f,
                     "reward amounts ({amounts}) misaligned with epochs ({epochs})"
+                )
+            }
+            Self::RewardAmountZero { index } => {
+                write!(
+                    f,
+                    "reward amount at epoch index {index} is zero; claimed epochs must carry a strictly positive amount"
                 )
             }
             Self::WorkClaimMisaligned { epochs, claims } => {
@@ -418,6 +432,12 @@ impl ArchivalRewardEmissionVin {
                 epochs: n,
                 amounts: self.reward_amount_plain.len(),
             });
+        }
+        // §2.3 wire positivity: strictly positive per-epoch amounts. Zero is
+        // unencodable, so a zero-share epoch (gated or legitimate) can never
+        // pass the zero-tolerance compare — the builder omits it instead.
+        if let Some(index) = self.reward_amount_plain.iter().position(|&a| a == 0) {
+            return Err(WireError::RewardAmountZero { index });
         }
         if self.work_claim.len() != n {
             return Err(WireError::WorkClaimMisaligned {
@@ -583,8 +603,14 @@ impl ArchivalRewardEmissionVin {
         let backing_pubkey = read_canonical_pubkey(r, "backing_pubkey")?;
         let tree_depth = read_byte(r)?;
         let mut reward_amount_plain = Vec::with_capacity(epoch_count);
-        for _ in 0..epoch_count {
-            reward_amount_plain.push(read_varint(r)?);
+        for index in 0..epoch_count {
+            let amount: u64 = read_varint(r)?;
+            // §2.3 wire positivity, enforced inline as parsed (same
+            // discipline as the other read-side checks above).
+            if amount == 0 {
+                return Err(WireError::RewardAmountZero { index });
+            }
+            reward_amount_plain.push(amount);
         }
         let auth_backing = read_canonical_sig(r, "auth_backing")?;
         let auth_claim = read_canonical_sig(r, "auth_claim")?;
@@ -784,7 +810,9 @@ mod tests {
                 backing_pubkey: vec![0xB2; SINGLE_KEY_CANONICAL_LEN],
                 tree_depth: 3,
             },
-            reward_amount_plain: vec![1_000_000, 2_000_000, 0],
+            // Strictly positive per §2.3 wire positivity (the pre-gate corpus
+            // carried a trailing 0 here; zero amounts are now unencodable).
+            reward_amount_plain: vec![1_000_000, 2_000_000, 3_000_000],
             auth_backing: vec![0xC3; SINGLE_SIG_CANONICAL_LEN],
             auth_claim: vec![0xD4; SINGLE_SIG_CANONICAL_LEN],
         }
@@ -889,6 +917,14 @@ mod tests {
             vin.serialize(),
             Err(WireError::RewardAmountsMisaligned { .. })
         ));
+
+        // §2.3 wire positivity: a zero amount at any index rejects on write.
+        let mut vin = sample_vin();
+        vin.reward_amount_plain[1] = 0;
+        assert!(matches!(
+            vin.serialize(),
+            Err(WireError::RewardAmountZero { index: 1 })
+        ));
         let mut vin = sample_vin();
         vin.work_claim[1].epoch = 13;
         assert!(matches!(
@@ -908,6 +944,29 @@ mod tests {
         assert!(matches!(
             vin.serialize(),
             Err(WireError::ProofSizeInvalid { .. })
+        ));
+    }
+
+    #[test]
+    fn emission_read_rejects_zero_reward_amount() {
+        // §2.3 wire positivity on the read side. serialize() refuses to encode
+        // a zero, so plant one directly in the bytes: two wires differing only
+        // in the last amount (1 vs 2 — both single-byte varints) locate that
+        // varint's byte without offset arithmetic; patch it to 0x00.
+        let mut vin = sample_vin();
+        vin.reward_amount_plain[2] = 1;
+        let mut wire = vin.serialize().unwrap();
+        vin.reward_amount_plain[2] = 2;
+        let wire_alt = vin.serialize().unwrap();
+        assert_eq!(wire.len(), wire_alt.len());
+        let diffs: Vec<usize> = (0..wire.len())
+            .filter(|&i| wire[i] != wire_alt[i])
+            .collect();
+        assert_eq!(diffs.len(), 1, "amount varint must be the only difference");
+        wire[diffs[0]] = 0x00;
+        assert!(matches!(
+            ArchivalRewardEmissionVin::read_payload_exact(&mut &wire[1..]),
+            Err(WireError::RewardAmountZero { index: 2 })
         ));
     }
 
@@ -1060,7 +1119,7 @@ mod tests {
         // (b) One past the cap must reject on write.
         let mut over = vin.clone();
         over.settlement_epochs.push(16);
-        over.reward_amount_plain.push(0);
+        over.reward_amount_plain.push(16_000);
         over.work_claim.push(WorkEpochClaim {
             epoch: 16,
             shard_entries: vec![],
