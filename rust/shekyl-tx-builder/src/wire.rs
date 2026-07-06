@@ -272,8 +272,14 @@ pub fn encode_final_tx(input: &WireEncodeInput) -> Result<Vec<u8>, TxBuilderErro
 
 /// The FCMP++ `signable_tx_hash` — the canonical prefix hash (§1.2), via shekyl-wire.
 ///
-/// Panics only on a genesis-invalid input (an output without a view_tag), which the
-/// signing path never produces; this keeps the `[u8; 32]` contract its callers rely on.
+/// Infallible by contract — it returns `[u8; 32]` because its callers (the spend
+/// signing path) require an unconditional hash. It panics only on a malformed
+/// [`WireEncodeInput`] the builder never constructs: either an output missing its
+/// view_tag, or an [`Input::ToKey`] in `extra_inputs` (spend inputs go through
+/// `key_images`; `extra_inputs` carries only non-`ToKey` prefix inputs such as an
+/// archival bond post). For a spend `extra_inputs` is empty, so only the view_tag
+/// arm is reachable. Callers that supply `extra_inputs` from unvalidated parts use
+/// the fallible [`tx_prefix_hash_from_parts_with_extra`] instead.
 pub fn tx_prefix_hash_for_signing(input: &WireEncodeInput) -> [u8; 32] {
     // `prefix_hash` depends only on the prefix, so build a prefix-only tx — skips the
     // ct/Bp+ assembly and its unrelated failure modes (e.g. BpPlus parsing).
@@ -284,7 +290,7 @@ pub fn tx_prefix_hash_for_signing(input: &WireEncodeInput) -> [u8; 32] {
         &input.view_tags,
         &input.tx_extra,
     )
-    .expect("prefix tx builds for a well-formed spend")
+    .expect("prefix tx builds for a well-formed WireEncodeInput")
     .prefix_hash()
 }
 
