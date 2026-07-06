@@ -7429,9 +7429,45 @@ one place to confirm each item's relationship to the wallet stack.
   observer, sim-side) — plus the live-dispatch emission (`BondPostDispatched` from the real
   broadcast consumer) which lands with the 2c-2a assemble / 2d dispatch wiring; the sim
   synthesizes it from the schedule meanwhile.
+  **UPDATE 2026-07-05 (WI-4 graded, `feat/wi4-gf7-measurement`) + 2026-07-06 (adversarial
+  review re-grade): PROVISIONAL-PASS (local-daemon posture only; remote-daemon posture unmet,
+  named residual; wall-clock leg (b) open).** The measurement round landed: a-priori threshold
+  `r = P(link)·N < 2` committed *before* grading
+  ([`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](design/ARCHIVAL_BOND_WI4_MEASUREMENT.md) §3,
+  provenance settled §13.4), then the posture-conditioned S-3 correlator, funding-seam-blind
+  null, oracle-panel stress arm, validity controls, and the pre-committed sweep
+  (`shekyl-staking-sim/src/gf7_timeline.rs`, `--gf7-timeline`). The 2026-07-06 review forced
+  three strengthenings, all landed and re-graded: **(1) posture-conditioned observer (§4.1.1)**
+  — the wallet session/refresh-marker exclusion is a *posture theorem* (loopback under the
+  local-daemon posture; D-B1 2d-2 reopen family), **not** a chain-visibility convention; a
+  remote/non-isolated daemon makes the markers live anchors and re-grades toward the pre-fix
+  `r ≈ 5` fail — that posture is a **named unmet residual on the verdict**. The *indirect*
+  session channel is coupled in the generator and graded (blind `0.237` at window 0 →
+  `≈ 0.13` under full jitter). **(2) Oracle-panel stress arm (§4.3.1)** — {MAP,
+  density-corrected MAP, exact seam-consistency-gated MAP}; `lr` now strictly exceeds `s3` on
+  every gate row; worst gate row `r = 1.86` (honestly thin 7% margin). **(3) D-B3 resume
+  channel swept** — session-lattice resubmit exposure graded (`r = 1.57`, under the bound).
+  Controls valid; every gate-relevant row clears the bound on all three arms (§13.1).
+  **Cold-start RECLASSIFIED (§13.2, was "accepted residual"):** low-activity/cold-start
+  **fails** (`lr` panel `r = 3.54`) and cold-start *is* the genesis regime — disposition is
+  the **§14 founder-cover launch posture** (refuse to enter the regime: founder wallets
+  provide real production-path-identical staggered cover with permanent consented
+  attributability; privacy-critical staking structurally gated on the shard schedule until
+  cover accumulates; founder/user **partition-adversary arm** with a-priori bounds specified
+  in §14.4). §14 is spec-committed, **implementation gated on review** (§3.5 ordering); a
+  §14.4 bound-1 fail is a launch blocker. **Target: pre-genesis.**
+  **Open leg-(b) residual (rule 21), severity sharpened:** the *block-time* sealing re-run is
+  confirmatory by construction (live `BondPostDispatched.at` is the due block — dispersal is
+  sub-block, `U[0,60s)`, never entering `at`; `gf7_emits_bond_post_dispatched_per_submit`),
+  so **no block-resolution live re-run can close leg (b)** — the wall-clock sweep-phase
+  channel (WI-3 §3.2), the one dispersal exists to defend, is the **primary open uncertainty**
+  and compounds with the remote-posture residual (the same network-position adversary holds
+  both capabilities). **Closing requirement (named):** sub-block wall-clock emission (finer
+  hook or harness timestamp) + re-grade. **Reopen leg (b) when:** that emission exists.
   **Target: pre-genesis (blocks the seal).** See
-  [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md) §4 and
-  [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (the S-3 privacy-sim home).
+  [`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](design/ARCHIVAL_BOND_WI4_MEASUREMENT.md) §13 (result),
+  §14 (launch posture), [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md)
+  §4 and [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (the S-3 privacy-sim home).
 - **2d-2 2c-2a — submit-outcome handling: the wallet CONSUMES `SubmitVerdict`; the partition is
   no longer a design object (SUPERSEDED 2026-07-04 by
   [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md), D4; absorbed remainders

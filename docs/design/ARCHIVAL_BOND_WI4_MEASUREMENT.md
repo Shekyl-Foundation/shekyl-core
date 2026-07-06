@@ -192,6 +192,12 @@ The two-regime split is itself a pre-commitment: the low-activity regime
 cannot be dropped from the run to make the steady-state number look
 complete.
 
+*Disposition exercised (2026-07-06):* the graded low-activity regime
+**failed** the bound (§13.2), and the review decision is a third,
+stronger shape of the redesign branch — restructure the launch so the
+regime is never entered by a privacy-critical persona (§14 founder-cover
+posture), with the failed row retained as the counterfactual bracket.
+
 ### 3.4 Conservative under the strongest modeled observer
 
 Per §5.1 constraint 2, a weak correlator's low `P(link)` says nothing about
@@ -243,6 +249,48 @@ The observer's input is **one joint timeline per scenario run** — all three
 event classes (§2 vocabulary) interleaved on logical block time, with the
 principal-side ground truth held only on the sim side (§5).
 
+#### 4.1.1 Amendment (2026-07-06): the observer is posture-conditioned
+
+The original §4.1 text reads as if the observer's scope were absolute. It is
+not — it is **conditioned on the recommended local-daemon posture**, and the
+review of the first grading round (§13) forced that condition to the
+surface. Restated precisely:
+
+- **`WalletSessionMarker` / `RefreshCycleMarker` are excluded as direct
+  anchors, and the exclusion is a posture theorem, not a modeling
+  convention.** Under the **local-daemon posture** these are loopback: a
+  refresh is the wallet pulling blocks from, and a session is the wallet
+  opening against, a daemon on the same host. No chain reader and no
+  network-position observer on the host's uplink can see them — the
+  daemon's own p2p sync rhythm is continuous and decoupled from wallet
+  activity. Scoring them as direct anchors grants the adversary loopback
+  vision it cannot have (the pre-fix `r ≈ 5` measurement is that
+  over-granted world).
+- **Named trust/transport invariant (Axis A), same reopen family as WI-3's
+  D-B1 tip-clock invariant (2d-2):** *the correlator excludes direct
+  refresh/session markers; sound because under the local-daemon posture
+  their traffic is loopback and unobservable to any adversary; a
+  **remote or non-isolated-daemon posture reopens this** — the wallet's
+  polling cadence becomes network-observable (connection timing / traffic
+  volume to a daemon the user does not control, and the remote daemon sees
+  the RPC rhythm directly), the markers become live anchors, and the gate
+  must be re-graded with them in.* The pre-fix `r ≈ 5` shape is the honest
+  expectation for that re-grade: the remote-daemon posture is currently a
+  **fail**, named on the verdict (§13.1), not an excluded channel.
+- **The indirect channel (Axis B) is not excluded — it is coupled in the
+  generator and graded.** Excluding the markers as direct anchors does not
+  remove session cadence from the observable world: `simulate_pair` draws
+  the funding co-trigger `t0` **from the session lattice**, places the
+  drain **on** a session, and (under the `resume` sweep group) lands the
+  D-B3 resume resubmit's `BondPostDispatched` **on** a session. The
+  chain-visible events the observer scores therefore carry the session
+  clock's signature. The graded evidence that this channel is live:
+  `blind = 0.237` at window 0 (well above the `0.100` baseline — the
+  correlator recovering the principal purely from refresh-shadowed
+  observable timing), driven to `≈ 0.13` by the full entry jitter. The
+  decorrelation win is measured **against** the coupled world, not against
+  a refresh-free one.
+
 ### 4.2 Joint fusion, not per-axis multiplication
 
 Per §2 of the hooks spec and §5.1 constraint 2(a): the correlator fuses the
@@ -277,6 +325,41 @@ is lower and unquantified" (caveat iv) made concrete: a likelihood-ratio
 scorer is the strongest observer WI-4 can field against the modeled channel
 without adding un-modeled side information, so clearing it is the strongest
 in-model statement WI-4 can make.
+
+#### 4.3.1 Amendment (2026-07-06): the stress arm is an oracle-panel with an exact-likelihood member
+
+The first grading round exposed a mis-specification in the single-LR stress
+arm as originally fielded: the density-corrected scorer underperformed the
+plain MAP, which by the Neyman–Pearson property means the density model was
+wrong, not that the adversary is weaker — and papering over it with a bare
+two-member union (`lr = MAP ∪ density-corrected`) produced an arm that
+tracked `s3` and stressed nothing. Post-review, the arm is respecified as an
+**oracle-panel upper bound with three members**, one of which uses the exact
+generative model:
+
+1. **MAP** (the modeled S-3 scorer itself);
+2. **density-corrected MAP** (`kernel_sum / anchor_count` — discounts
+   "near by chance");
+3. **seam-consistency-gated MAP** — the exact in-model likelihood filter.
+   The generative model (`plan_entry_seam`) puts the first bond dispatch
+   within `spread + dispersal ≤ window + dispersal_bound` of the funding
+   send; that box is the **true support** of the seam likelihood, so
+   candidates outside it have exact likelihood zero. The correlator
+   hard-rejects them and runs the MAP among survivors — the
+   Neyman–Pearson-honest use of full generative knowledge.
+
+The panel links if **any** member identifies the true principal. The oracle
+framing is deliberate and is what makes `lr ≥ s3` a feature rather than a
+tautology: the union upper-bounds every realizable per-instance strategy
+over these correlators, so the panel can *break* a gate the modeled S-3
+clears (the §3.4 model-limitation tripwire) but can never *certify* a floor
+the stronger members break. Post-amendment measurement confirms the teeth:
+`lr` strictly exceeds `s3` on every gate row (e.g. window-600 `0.186` vs
+`0.151`), and the gate is graded against `lr` per §3.4. Amending the arm
+*after* the first sweep is safe in this direction only — strengthening the
+adversary post-hoc can push the verdict toward fail, never manufacture a
+pass — which is why this amendment is recorded rather than silently
+substituted.
 
 ### 4.4 The graded quantity
 
@@ -474,3 +557,294 @@ derivation and correlator spec):
   redesign or a named-and-accepted residual (§3.3), decided at review. The
   low-activity regime's residual status (L12) reopens only on a measured
   improvement to genesis-era cover, not on schedule pressure.
+
+## 13. Result — provisional grading round (implementation 2026-07-05, re-graded 2026-07-06 post-review)
+
+The §11 round landed the correlator, controls, and sweep in
+`shekyl-staking-sim/src/gf7_timeline.rs` (binary `--gf7-timeline`). The
+2026-07-06 review round then forced three strengthenings — the
+posture-conditioned observer restatement (§4.1.1), the oracle-panel stress
+arm with the exact-likelihood member (§4.3.1), and the D-B3 `resume` sweep
+group — and the surface below is the **re-graded** result under all three.
+Run config: `N = 10`, `1000` trials/point, deterministic seed. **Controls
+valid** (positive `P(link)=0.996 ≥ 0.80`; negative `P(link)=0.102`,
+`|·−0.1|<0.05`), so the graded rows count.
+
+### 13.1 Verdict: PROVISIONAL-PASS (local-daemon posture only; remote-daemon posture unmet, named residual; wall-clock leg (b) open)
+
+The verdict is deliberately narrow, per the review: it certifies the
+recommended **local-daemon posture** against a **block-resolution**
+observer in **steady state**, and it names what it does not certify — the
+remote/non-isolated-daemon posture (Axis A reopen, §4.1.1; the pre-fix
+`r ≈ 5` shape is the expected re-grade there) and the wall-clock sub-block
+channel (§13.3). Every gate-relevant row clears the bound on **all three
+arms**, now including the strengthened panel:
+
+| Gate-relevant row | `blind` | `s3` | `lr` (panel) | `r = lr·N` |
+| --- | --- | --- | --- | --- |
+| window 600 / disp 0 | 0.128 | 0.151 | 0.186 | **1.86** |
+| dispersal 0 (600-win) | 0.130 | 0.149 | 0.183 | **1.83** |
+| draw direct / disp 0 | 0.128 | 0.143 | 0.178 | **1.78** |
+| regime steady / disp 0 | 0.130 | 0.143 | 0.178 | **1.78** |
+| resume off / disp 0 | 0.127 | 0.143 | 0.177 | **1.77** |
+
+The entry-jitter axis carries the gate: `s3` falls `0.996 → 0.636 → 0.242
+→ 0.151` across window `0 → 60 → 300 → 600`, reproducing the standoff's
+600-block finding. The strengthened panel has real teeth now — `lr`
+strictly exceeds `s3` on every gate row (the seam-consistency-gated member
+finds links the smooth MAP misses), and the gate margin is honest and
+thin: **worst row `r = 1.86` against the bound `2.0`** (7% margin), not
+the comfortable-looking 1.43–1.51 of the pre-review single-scorer run.
+
+The **funding-seam-blind null sits above baseline at ≈ 0.13** (`r ≈ 1.3`)
+— and per §4.1.1 that number is the graded *indirect* session channel, not
+a refresh-free world: at window 0 the blind arm reaches `0.237` on
+session-lattice-coupled observables alone, and the entry jitter is what
+drives it down to `≈ 0.13`.
+
+**D-B3 resume channel (`resume on` context row):** `blind = 0.149`,
+`s3 = 0.133`, `lr = 0.157`, `r = 1.57` — clears the bound. The
+session-lattice resubmit exposure raises the cadence arm (blind
+`0.127 → 0.149`, exactly the direction the review predicted: the resubmit
+carries the session clock), while the seam arms do not improve (the
+resubmit carries no seam information). Graded, not assumed away; under the
+bound at posture.
+
+### 13.2 Context rows (not the steady-state gate — §3.2/§3.3)
+
+- **Low-activity / cold-start:** `s3 = 0.265`, panel `lr = 0.354`
+  (`r = 3.54`) — **fails the bound**, and harder under the strengthened
+  panel than the pre-review `2.65` suggested. Post-review reclassification:
+  this is **not an accepted residual**. Cold-start is the genesis regime,
+  so a fail here is a launch-window privacy failure and requires an
+  explicit **launch-posture decision** before genesis. That decision is
+  specified in **§14** (founder-cover posture): the disposition is to
+  *refuse to enter* the cold-start regime rather than accept its number.
+  The row remains graded as the counterfactual bracket for what the regime
+  costs if entered unprotected.
+- **Conformance-trap draw:** `s3 = 0.211 > 0.143` (real draw) — the trap is
+  more linkable, as designed (negative anchor behaves).
+- **Inversion off:** `s3 = 0.251 > 0.237` (on), at window 300 — inversion
+  helps, as the standoff found.
+- **Block-unit `dispersal > 0`:** a **coarse-tick counterfactual**, not the
+  realistic operating point. The live driver's dispersal is `U[0, 60s)`
+  (`DEFAULT_PSCAN_CADENCE`), well under one block; and the emitted
+  `BondPostDispatched { at }` records the **due-check tip block, captured
+  before the dispersal sleep** (`pscan/dispatch.rs`), so the dispersal is
+  invisible at block granularity. The realistic block-time gate therefore
+  sits at `dispersal = 0`.
+
+### 13.3 Reconvergence leg (b): the wall-clock channel is the primary open uncertainty
+
+The block-time sealing re-run is **confirmatory by construction**: because
+the live `BondPostDispatched.at` is the due block (dispersal is sub-block,
+never enters `at`), the live block-time timeline reproduces the sim's
+`dispersal = 0` surface — already evidenced by the engine emission test
+`gf7_emits_bond_post_dispatched_per_submit` (`pscan/dispatch.rs`, feature
+`gf7-hooks`).
+
+The review sharpened what that means, and the sharpened form is recorded
+here as binding: **the channel the dispersal primitive was built to defend
+is exactly the channel this gate has not measured.** A real
+network-position adversary timestamps packets at wall-clock, sub-block
+resolution; the wall-clock sweep-phase channel (WI-3 §3.2) is what
+dispersal decorrelates; and the hooks' block-resolution emission cannot see
+it — on either side of the seal, so **no block-resolution live re-run can
+close leg (b)**. This is not a routine residual: it is the primary open
+uncertainty of the WI-4 verdict, it compounds with the Axis-A posture
+condition (the same network-position adversary holds both capabilities the
+verdict conditions away), and closing it requires **sub-block wall-clock
+emission** (a finer-resolution hook or harness timestamp) followed by a
+re-grade. Tracked in `docs/FOLLOWUPS.md` with that closing requirement
+named. WI-3's reconvergence gate leg (a) (this threshold artifact exists)
+is satisfied; leg (b)'s block-time portion is confirmatory, its wall-clock
+portion is the tracked open item.
+
+### 13.4 Threshold provenance (review item (a), settled)
+
+The review asked whether `r < 2` was a-priori or post-hoc, noting the gate
+rows sit between 1 and 2. Settled at source: §3.2's derivation (bound the
+observer at one excess de-anonymization across the anonymity set, i.e.
+additive advantage `A < 1/N ⇔ r < 2`) was committed in the spec commit
+**before any correlator code existed**, and §3.2 explicitly pre-rejected
+`r < 1` — the ratio-1 bar grades the *conceded floor* (blind guessing
+achieves `r = 1`) as a failure and is unachievable against any observer
+with a nonzero timing channel. The interpretation of the passing rows under
+that bound: worst gate row `r = 1.86` ⇒ `0.86` expected excess links
+across the whole set — under the committed "fewer than one excess
+de-anonymization" claim, with the margin now honestly thin (§13.1).
+
+## 14. Addendum (2026-07-06): the founder-cover launch posture — refusing the cold-start regime
+
+**Status: pre-committed specification, review checkpoint required before
+the §14.4 measurement runs** (same §3.5 ordering discipline as the main
+gate: bounds in this section are committed by this document ahead of any
+partition-arm code or numbers).
+
+### 14.1 The two launch facts, and what they invert
+
+The §13.2 cold-start fail (`r = 3.54` under the panel) assumed genesis
+forces privacy-critical personas into the thin window. Two launch facts
+break that assumption:
+
+1. **The five founder wallets do not require unlinkability for their
+   genesis personas** — they opt out of the privacy claim for these
+   specific personas (with the permanence consequence pinned in §14.3.1).
+2. **There is no economic reason to stake before shards exist to serve.**
+   At genesis there is at most one shard; service capacity and reward
+   accrue only as the shard schedule expands. The privacy-seeking staking
+   population has no reason to exist in the thin window.
+
+Fact 1 inverts the cover chicken-and-egg: cover normally requires `N`,
+and `N` requires participants who pay for the thinness. A wallet that has
+opted out of the privacy claim can generate **real** bond/funding/drain
+activity — produced by the production dispatch path, indistinguishable at
+the observed channel from any other principal's activity *because it is
+another principal's activity* — without anyone bearing an unconsented
+exposure. This is categorically different from synthetic decoy traffic,
+which was rejected in the standoff review because decoys distinguishable
+from real traffic add signal, not cover. Founder activity is not a decoy;
+it is a genuine participant that happens to have consented to its own
+attributability.
+
+Fact 2 means the dangerous cohort — real users needing unlinkability,
+minted at genesis, watched forever — is naturally near-empty in the thin
+window. The posture's job is to convert "naturally near-empty" into
+"structurally empty."
+
+### 14.2 The posture (P1–P4)
+
+The disposition for the §13.2 cold-start fail is **refuse to enter the
+regime**, not accept its number and not redesign the decorrelation around
+it (§3.3's review-decision clause, exercised):
+
+- **P1 — Founder cover, production-path identical.** The five founder
+  wallets stake intermittently through the launch window using the
+  **identical** production path a real user would: same dispatch driver,
+  same entry-gap draws, same dispersal, same recommended posture. No
+  founder-specific code path, cadence profile, or configuration exists —
+  indistinguishability by construction, not by discipline.
+- **P2 — Staggered, never clustered.** Founder bonds are dispersed across
+  the launch window. Five bonds in one block are one co-triggered anchor
+  (the §6 trap shape, at launch, on the most-watched blocks of the chain);
+  five bonds staggered are five independent contributions to cover. The
+  intermittency is decorrelation work, not load spreading.
+- **P3 — The shard schedule is the structural gate.** Privacy-critical
+  staking is **not available** — not merely not-incentivized — until the
+  cover threshold is met. "No reason to stake early" leaves an over-eager
+  user free to opt into a cold-start breach the posture assumed they'd
+  avoid; the make-bad-states-unrepresentable form closes that gap. The
+  gate's opening condition couples the shard schedule to measured cover:
+  the second shard (the first real reason to stake) does not open before
+  accumulated founder-plus-organic activity puts a newly-minted persona
+  into the steady-state regime, so the two curves — "cover thick enough"
+  and "reason to stake" — are aligned by construction rather than by hope.
+- **P4 — Founder genesis personas are public, forever, by consent.** The
+  honest form of "not concerned about linkability": the linkage formed at
+  genesis cannot be un-formed later, so the opt-out must be permanent and
+  explicit — these personas are treated as **attributable from the start**
+  (not merely unprotected), recorded in writing as a named posture
+  decision, and nothing downstream may ever assume they were private. If
+  any founder might later want a genesis persona to have been private,
+  this posture does not and cannot provide that.
+
+### 14.3 Wargames the posture must survive
+
+#### 14.3.1 Founder-exposure permanence
+
+Founder personas minted at genesis are the longest-lived; a genesis
+linkage on them is permanent, including retroactively (years later, when
+the foundation's genesis stake is a matter of public interest). P4 is the
+answer, and it is load-bearing: "not concerned at first" is insufficient —
+the consent is to **permanent** attributability of these specific
+personas. Founders who need private staking positions create them later,
+as ordinary users, through the gated steady-state path, with no linkage to
+the genesis personas assumed or required.
+
+#### 14.3.2 The partition adversary (the one that gets measured — §14.4)
+
+Founder cover counts toward a user's `N` **only** to the extent founder
+activity is a member of the same indistinguishability class as user
+activity at the correlator's channel. If founder bonds are identifiable
+(recognizable wallets, distinct cadence, distinct funding pattern, five
+wallets in detectable lockstep), the adversary partitions the anonymity
+set into {founders} ∪ {users} and discounts the founders to zero: a real
+persona's effective `N` is back to the thin real-user count, and the
+posture has manufactured cover that evaporates under scrutiny. This is
+the load-bearing requirement, it is P1/P2's reason for existing, and it
+is a **measured property, not an assertion** — §14.4 specifies the
+correlator arm.
+
+#### 14.3.3 Single-shard concentration
+
+With one shard, all early service and reward concentrate on it: a real
+persona serving the sole shard is in a service-role set of one,
+regardless of timing decorrelation. This is why P3 is structural rather
+than economic — the exposure exists for any privacy-critical user who
+serves the single-shard phase, so the phase must be closed to them, not
+merely unattractive. Founder personas serving the single shard are
+covered by P4 (attributable by consent).
+
+### 14.4 The partition-adversary arm (pre-committed spec)
+
+A new correlator probe in the GF-7 sim, gating the launch-posture claim
+the way §5's controls gate the run. **Bounds committed here, ahead of
+implementation, per §3.5.**
+
+- **Setup.** `M = 5` founder pairs and `N − M` user pairs per trial, all
+  synthesized by the **same generator at the same posture** (P1's
+  indistinguishability-by-construction, as deployed). A **marked
+  variant** runs as the probe's positive control: founder pairs generated
+  in detectable lockstep (clustered dispatch anchors / a distinct narrow
+  cadence band — the P2 violation, deliberately committed).
+- **The probe.** An unsupervised partition adversary over the observable
+  per-pair timelines (the §4.1.1 posture-conditioned channel): cluster
+  the pairs into two cohorts (e.g. 2-means over per-pair observable
+  timing features) and score the best-assignment overlap between the
+  recovered partition and the true founder/user labels.
+- **The null.** The chance level of the overlap statistic is estimated
+  in-run by a **permutation baseline**: the identical clustering scored
+  against randomly permuted cohort labels. (Best-assignment overlap has
+  an inflated chance level; the permutation null calibrates it without
+  post-hoc bar placement.)
+- **Pass bounds (a-priori).**
+  1. *Indistinguishable posture:* partition overlap within `0.05` of the
+     permutation baseline — the adversary cannot sort founder from user
+     better than chance.
+  2. *Marked control:* partition overlap at least `0.30` above the
+     permutation baseline — the probe demonstrably bites when the
+     distinguishing structure is present (a probe that cannot detect
+     deliberate lockstep proves nothing when it fails to detect the
+     posture).
+  3. Both bounds must hold or the partition measurement is **INVALID**
+     (same all-or-nothing shape as §5's controls).
+- **What a fail means.** An indistinguishable-posture overlap above bound
+  1 is a **launch-posture blocker**: founder cover is discounted below
+  its headcount and P1/P2 must be tightened (and re-measured) before the
+  §14.2 posture may be relied on. It is never a reason to relax bound 1.
+
+### 14.5 What this does to the §13 verdict, and the reversion clause
+
+The §13.2 cold-start row remains graded and reported as the
+**counterfactual bracket** — the cost of entering the regime unprotected.
+The launch-posture claim itself becomes: *no privacy-critical persona is
+minted into the thin window* (P3 structural gate), *the window's cover is
+real and indistinguishable* (P1/P2, measured by §14.4), *and the parties
+bearing the window's exposure consented permanently* (P4).
+
+**Reversion clause (rule 21).** The posture is rejected-now-with-reopening
+-criteria in both directions:
+
+- The **cold-start-as-accepted-residual** disposition (the pre-review
+  §13.2 text) is rejected; it reopens only if the §14 posture is itself
+  rejected at review *and* a measured genesis-cover improvement makes the
+  regime's number clear the bound without it.
+- The **§14 posture** reopens (as a launch blocker) on any of: the §14.4
+  partition measurement failing bound 1; the shard schedule decoupling
+  from the cover threshold (P3's alignment breaking); or a founder
+  requiring retroactive privacy for a genesis persona (P4's consent
+  failing, which the posture cannot honor and must therefore surface
+  loudly, pre-genesis).
+
+Implementation of §14.4 is the next round, **gated on review of this
+section** — the same spec-first checkpoint the main gate ran on.

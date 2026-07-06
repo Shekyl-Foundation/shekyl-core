@@ -4,6 +4,40 @@
 
 ### Added
 
+- **sim: GF-7 graded genesis gate — WI-4 (PROVISIONAL-PASS, local-daemon
+  posture only)** (`ARCHIVAL_BOND_WI4_MEASUREMENT.md`;
+  `IMPLEMENTATION_INDEX.md` §4 WI-4 row). The GF-7 principal↔`P`
+  funding-seam unlinkability property is now *measured*, not just hooked.
+  The a-priori bound `r = P(link)·N < 2` (the modeled observer may at most
+  double blind guessing) is committed in the reviewed acceptance doc
+  **before** any grading code (§3; provenance settled §13.4), then graded
+  by a real S-3 correlator replacing the `nearest_principal` placeholder
+  (`shekyl-staking-sim/src/gf7_timeline.rs`, `--gf7-timeline`). The
+  2026-07-06 adversarial review re-grade hardened the round: the observer
+  is **posture-conditioned** (§4.1.1 — session/refresh markers are
+  loopback-invisible under the local-daemon posture and excluded as direct
+  anchors; the **remote/non-isolated-daemon posture is a named unmet
+  residual** on the verdict, D-B1 2d-2 reopen family; the *indirect*
+  session channel is coupled in the generator and graded — blind `0.237`
+  at window 0 → `≈0.13` under full jitter); the stress arm is an
+  **oracle-panel** with an exact seam-consistency-gated member (§4.3.1;
+  `lr > s3` on every gate row); the **D-B3 resume channel** is swept
+  (session-lattice resubmit, `r = 1.57`, under bound). Controls valid;
+  every gate-relevant row clears the bound on all three arms; worst gate
+  row `r = 1.86` (honestly thin margin). **Cold-start reclassified:**
+  low-activity **fails** the bound (panel `r = 3.54`) and is the genesis
+  regime — disposition is the **§14 founder-cover launch posture** (refuse
+  the regime: production-path-identical staggered founder cover under
+  permanent consented attributability; shard-schedule structural gate;
+  §14.4 partition-adversary arm spec-committed with a-priori bounds,
+  implementation gated on review). **PROVISIONAL:** the block-time sealing
+  re-run is confirmatory by construction (live `BondPostDispatched.at` is
+  the due block; dispersal is sub-block `U[0,60s)`), so no block-resolution
+  re-run can close reconvergence leg (b); the wall-clock sweep-phase
+  channel is the primary open uncertainty — closing requires sub-block
+  wall-clock emission + re-grade (`docs/FOLLOWUPS.md`). Sim-only, feature
+  `gf7-hooks` (non-default); no production telemetry.
+
 - **wallet: block-timed bond-post dispatch driver — WI-3**
   (`ARCHIVAL_BOND_WI3_DISPATCH.md`; `IMPLEMENTATION_INDEX.md` §4 WI-3
   row). The sealed pending post now actually reaches a wire at its
