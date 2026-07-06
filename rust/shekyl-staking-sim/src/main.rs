@@ -681,7 +681,8 @@ fn print_gf7_timeline_report() {
     eprintln!("  s3 = modeled S-3 (joint MAP fusion, seam + observable lifecycle); lr = stress");
     eprintln!("  PANEL, an oracle-union upper bound over {{MAP, density-corrected MAP, exact");
     eprintln!("  seam-consistency-gated MAP}} — ≥ s3 by construction, with teeth from the gated");
-    eprintln!("  member (the true in-model seam support |bond−funding| ≤ window+dispersal).");
+    eprintln!("  member (the true in-model seam support: first |bond−funding| ≤ window plus");
+    eprintln!("  the max dispersal offset, dispersal−1 — the draw is U[0, dispersal)).");
     eprintln!("  Bound applies to each arm; '*' marks a gate-relevant row (realistic posture:");
     eprintln!("  full window, inversion on, steady-state, sub-block dispersal ⇒ dispersal=0).");
     eprintln!();

@@ -372,12 +372,19 @@ generative model:
 2. **density-corrected MAP** (`kernel_sum / anchor_count` — discounts
    "near by chance");
 3. **seam-consistency-gated MAP** — the exact in-model likelihood filter.
-   The generative model (`plan_entry_seam`) puts the first bond dispatch
-   within `spread + dispersal ≤ window + dispersal_bound` of the funding
-   send; that box is the **true support** of the seam likelihood, so
-   candidates outside it have exact likelihood zero. The correlator
-   hard-rejects them and runs the MAP among survivors — the
-   Neyman–Pearson-honest use of full generative knowledge.
+   The generative model (`plan_entry_seam`) puts the **first** bond
+   dispatch within `spread + dispersal` of the funding send, where
+   `spread ~ U[0, window]` (inclusive) and the dispersal draw is
+   `U[0, dispersal_bound)` (exclusive — supremum `dispersal_bound − 1`,
+   matching the live driver's `bounded_uniform` call); the tight support
+   is therefore `window + max(dispersal_bound − 1, 0)`. That box is the
+   **true support** of the seam likelihood, so candidates outside it have
+   exact likelihood zero. The correlator hard-rejects them — gating on the
+   **earliest** recorded dispatch only, since the D-B3 resume resubmit
+   lands on the session lattice, not the seam, and admitting a candidate
+   on resubmit proximity would widen the gate past the true support — and
+   runs the MAP among survivors: the Neyman–Pearson-honest use of full
+   generative knowledge.
 
 The panel links if **any** member identifies the true principal. The oracle
 framing is deliberate and is what makes `lr ≥ s3` a feature rather than a

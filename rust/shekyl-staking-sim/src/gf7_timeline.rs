@@ -565,16 +565,23 @@ fn guess_density_corrected(query: &[u64], candidates: &[Candidate], sigma2: f64)
 }
 
 /// Seam-consistency-gated MAP — the **exact in-model likelihood filter**, the
-/// panel's Neyman-Pearson-honest member. The generative model puts the first
-/// bond dispatch within `spread + dispersal ≤ window + dispersal_bound` of the
-/// candidate's funding send (`plan_entry_seam`: one offset is `0`, the other
-/// `spread ~ U[0, window]`, dispersal added on top), so the true candidate
-/// **always** has a (bond, funding) pair inside `bound` — that box is the true
-/// support of the seam likelihood, and candidates outside it have exact
-/// likelihood zero. The correlator hard-rejects them and runs the kernel MAP
-/// among the survivors: strictly better use of the known model than the smooth
-/// kernel alone whenever the plain MAP would have picked an inconsistent
-/// candidate.
+/// panel's Neyman-Pearson-honest member. The generative model puts the
+/// **first** bond dispatch within `spread + dispersal` of the candidate's
+/// funding send (`plan_entry_seam`: one offset is `0`, the other
+/// `spread ~ U[0, window]`, dispersal `U[0, dispersal_bound)` added on top),
+/// so the true candidate **always** has its earliest dispatch inside `bound`
+/// of a funding send — that box is the true support of the seam likelihood,
+/// and candidates outside it have exact likelihood zero. The correlator
+/// hard-rejects them and runs the kernel MAP among the survivors: strictly
+/// better use of the known model than the smooth kernel alone whenever the
+/// plain MAP would have picked an inconsistent candidate.
+///
+/// The gate reads only the **earliest** dispatch (`min`, an observer-realizable
+/// statistic over the recorded timestamps): the D-B3 resume resubmit lands on
+/// the session lattice, not the seam, so admitting a candidate on resubmit
+/// proximity would widen the gate past the true support — exactly the
+/// exact-zero-likelihood leak the filter exists to reject. The first dispatch
+/// alone carries the seam, and it always admits the truth.
 fn guess_consistency_gated(
     query: &[u64],
     candidates: &[Candidate],
@@ -584,7 +591,8 @@ fn guess_consistency_gated(
     let consistent = |c: &Candidate| {
         query
             .iter()
-            .any(|&q| c.funding.iter().any(|&f| q.abs_diff(f) <= bound))
+            .min()
+            .is_some_and(|&first| c.funding.iter().any(|&f| first.abs_diff(f) <= bound))
     };
     let mut best = (f64::NEG_INFINITY, 0usize);
     for (idx, c) in candidates.iter().enumerate() {
@@ -635,9 +643,15 @@ fn grade(p: &SynthParams, n: usize, trials: u32, rng: &mut SplitMix64) -> (f64, 
             })
             .collect();
 
-        // The exact in-model seam support: `spread ≤ window` plus the
-        // dispersal added to the dispatch (guess_consistency_gated docs).
-        let seam_bound = p.window + p.dispersal_bound;
+        // The exact in-model seam support: `spread ≤ window` plus the maximum
+        // dispersal added to the dispatch — the draw is `U[0, dispersal_bound)`
+        // (`bounded_uniform(max = dispersal_bound - 1)`, matching the live
+        // driver), so its supremum is `dispersal_bound - 1`, not
+        // `dispersal_bound`. A bound wider by even one block admits candidates
+        // with exact likelihood zero and understates the gated member — the
+        // stress panel must be graded on the tight support
+        // (guess_consistency_gated docs).
+        let seam_bound = p.window + p.dispersal_bound.saturating_sub(1);
 
         for (truth, ev) in streams.iter().enumerate() {
             let query = query_times(ev);
