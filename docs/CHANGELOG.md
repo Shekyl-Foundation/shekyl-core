@@ -166,6 +166,15 @@
   inflation audit); open defenses: quantization (grid width a-priori
   derived, GF-4 candidate) + gate-6 routing. Claim-cadence, reward
   amount, and holdings stratum graded jointly on GF-4.
+  **R-1 disposition (§18.11):** FCMP++ hides amount AND linkage at
+  every on-chain hop (no non-mint cleartext amounts; `P`'s spend set
+  unenumerable — the precomputed sequence has no anchor after hop
+  one). R-1 is a managed residual at the economically-guaranteed
+  off-chain boundary, defended in layers: firewall-routing (primary,
+  complete on-chain), new gate-6 pin candidate **drain-amount
+  decoupling** (exact-subsum match is a wallet-policy footgun — drain
+  amounts never computable reward subsums), quantization as
+  defense-in-depth for the approximate lifetime-aggregate band.
   **PROVISIONAL:** the block-time sealing
   re-run is confirmatory by construction (live `BondPostDispatched.at` is
   the due block; dispersal is sub-block `U[0,60s)`), so no block-resolution

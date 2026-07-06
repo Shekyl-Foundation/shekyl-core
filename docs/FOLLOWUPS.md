@@ -7627,6 +7627,20 @@ one place to confirm each item's relationship to the wallet stack.
   claim-cadence + reward-amount + holdings stratum graded **jointly** on GF-4
   (no-per-axis-multiplication). GF-4 pinned as a different problem class from GF-7: its
   amount half is defended by coarsening and routing, never decorrelation.
+  **R-1 disposition (§18.11, 2026-07-06):** the R4 open question — does FCMP++ hide the
+  amount or only the linkage — resolved at source: **both, at every on-chain hop** (no
+  non-mint output carries a cleartext amount, `output.rs` `enc_amount`/commitment; and
+  `P`'s spend set is unenumerable — membership proofs give the sequence signature no
+  anchor after hop one). R-1 is a **managed residual**: the off-chain crossing is
+  economically guaranteed, defended in layers — (1) firewall-routing primary, complete
+  on-chain by construction; (2) **new gate-6 pin candidate: drain-amount decoupling**
+  (drain amounts never computable reward subsums — the accumulate-then-move exact-subsum
+  match is a wallet-policy footgun, not structural; change absorbs the difference);
+  (3) quantization as defense-in-depth for the lifetime-aggregate band (which is
+  approximate — fees/retention ride unattributable txs, so V-2b's exact form needs
+  drain-side visibility the chain denies). GF-4 wargame: precomputed-`reward_P(E)`
+  adversary vs user-side value events, graded at the off-chain boundary under layers
+  2–3, jointly with the timing axes.
   **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
   GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
   seams, not just entry).**

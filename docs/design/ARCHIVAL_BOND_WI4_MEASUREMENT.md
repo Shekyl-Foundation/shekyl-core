@@ -2318,3 +2318,86 @@ propagation is cut by CT at first spend; its off-chain matching
 surface is the load-bearing unknown. The entry-seam toolkit (jitter,
 dispersal) does not transfer; the exit-seam toolkit is quantize (R-3)
 + route (gate-6 ladder) + measure (R-4 joint grading).
+
+### 18.11 R-1 disposition: amount-hiding is complete on-chain; the managed residual and its layers (2026-07-06)
+
+R4's inventory left one load-bearing open question: does FCMP++
+routing hide the *amount* or only the *linkage*? If a spend's outputs
+surfaced computable amounts anywhere on-chain, the precomputed reward
+sequence would be matchable however many hops later, and quantization
+would be mandatory rather than hardening. **Resolved at source: FCMP++
+hides both, at every on-chain hop.**
+
+1. **No non-mint output carries a cleartext amount.** Every ordinary
+   output carries a Pedersen commitment `C = z·G + amount·H` plus an
+   XOR-encrypted amount recoverable only by the recipient
+   (`enc_amount = amount ⊕ k_amount`, keys via hybrid KEM decap —
+   `shekyl-crypto-pq/src/output.rs`). What sum comes out of a spend is
+   invisible to third parties. The only cleartext amounts on-chain are
+   the reward-mint vouts (§18.10, by priority-1 disposition) and the
+   bond-term constant (§18.8/§18.9).
+2. **`P`'s spend set is not enumerable.** The mint outputs are
+   publicly `P`-attributed with loud amounts (the emission tx carries
+   `P_pubkey` on the vin; its vouts are the rewards), so the adversary
+   knows what `P` holds — but a later spend is an FCMP++ membership
+   proof over the whole tree; the key image dedups without identifying
+   the consumed output. The adversary cannot observe *when* `P`'s
+   reward value moves, along *which* transactions, or *what fees it
+   pays*. The sequence signature loses its anchor at hop one.
+
+**The residual, honestly scoped.** The off-chain crossing is not a
+rare coincidence — reward value is economically guaranteed to
+eventually reach the user, and amount-hiding ends definitionally at
+any surface where a counterparty credits a cleartext number. R-1 is
+therefore a **managed residual, not a closed one**: a precomputed
+amount-signature the value must eventually cross a boundary carrying,
+defended by the layers below. Three degradations stand between the
+precomputed sequence and an off-chain match:
+
+- **(i) Drain amounts are wallet-chosen — the exact-subsum match is a
+  wallet-policy footgun, not a structural leak.** A spend's output
+  split is arbitrary and CT-hidden; change absorbs the difference
+  between "what moved" and any reward subsum. Nothing forces a drain
+  output to equal a computable subsum of `reward_P`; a wallet that
+  moves exact epoch-sums has *chosen* to reconstruct the signature the
+  chain erased. **New pin (gate-6, firewall-class candidate):
+  drain-amount decoupling** — drain amounts user-driven or rounded,
+  never computable reward subsums. This closes the accumulate-then-
+  move pattern at its only remaining formation point.
+- **(ii) No timing anchor.** Because the spend set is unenumerable
+  (fact 2), the adversary cannot correlate "value left `P`" with a
+  user-side receipt window; the timing half of the exit match starts
+  blind.
+- **(iii) The unavoidable invariant is the lifetime aggregate,
+  approximately.** Total-minted-to-`P` is public and exact; what
+  reaches the user is that minus fees and retention across
+  unattributable transactions — a band, not a target. V-2b's exact
+  form (`bond_floor·k + Σ rewards` to the atomic unit) holds only for
+  an adversary who also observes the drain-side fee/retention split,
+  which facts 1–2 deny on-chain.
+
+**Recorded mitigation hierarchy (supersedes §18.10's flat listing):**
+
+1. **(c) firewall-routing — primary, and structurally complete
+   on-chain.** Amount and linkage both hidden at every post-mint hop;
+   spend set unenumerable. The §7.3 obligation extends as R4 demanded:
+   not "the first spend is FCMP++" but "the whole mint→user path
+   preserves unlinkability, including accumulate-then-move" — and with
+   facts 1–2 the on-chain half of that extension holds by
+   construction.
+2. **Drain-amount decoupling (new wallet-policy pin)** — the cheap
+   structural move at the wallet layer; breaks exact-subsum and
+   sequence formation before any off-chain surface sees them.
+3. **(a) quantization (R-3) — defense-in-depth** for the off-chain
+   *aggregate* residual, grid width derived against the
+   sequence-match adversary — noting the sequence adversary needs an
+   off-chain sequence surface, which layer 2 breaks first, so the
+   grid's threat model is primarily the lifetime-aggregate band.
+
+**GF-4 wargame, as pinned by R4:** an adversary with `reward_P(E)`
+precomputed for all `E` attempts to identify a user-side value event
+as a sum/subsum of a specific `P`'s reward sequence across the hops
+the value takes. With this section's facts, the attack's on-chain legs
+are dead; the graded question becomes the off-chain boundary under
+layers 2–3, jointly with the timing axes (R-4's no-per-axis-
+multiplication obligation).
