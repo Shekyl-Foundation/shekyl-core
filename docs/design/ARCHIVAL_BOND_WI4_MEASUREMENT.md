@@ -1081,6 +1081,35 @@ smallest-cohort regime of that separate leak is never entered either.
   existing `check_archival_reward_gates.sh` shape. Own design doc + round
   before any code.
 
+**Two obligations pinned for the M1 design round (2026-07-06 review).**
+
+1. *The activation-boundary test is a first-class deliverable.* The
+   dead-rule acceptance above relocates the armed-gate-with-no-trigger
+   risk **to time**: the gate fires once, at the activation boundary,
+   and is never exercised again — no steady-state test and no runtime
+   signal covers the boundary condition after launch, so an off-by-one
+   in `shard_count ≥ K_COVER`, the `chain_epochs == 0` genesis edge
+   (`shard_age_milli`'s "everything is hot at genesis" zero), or the
+   exact epoch at which first accrual becomes non-zero has exactly one
+   chance to be right. The M1 spec must therefore carry a consensus
+   test pinning behavior **across the exact transition** — accrual
+   provably zero at `K_COVER − 1` shards and provably non-zero at
+   `K_COVER`, exercised at the boundary epoch — in the crate's existing
+   KAT shape (`consensus_state_kat_v1.json` precedent), designed in
+   from the start rather than backfilled.
+2. *`K_COVER` cannot be finalized ahead of the §14.4 measurement.* The
+   derivation chain is explicit: `K_COVER` ← cover-thickness model ←
+   founder-cover soundness ← partition-adversary-stays-at-chance ←
+   the hypothesis class matching the adversary's (§14.4's widened
+   family). A partition arm built at `k = 2` that passes while the real
+   adversary fields a richer partition yields a `K_COVER` derived
+   against an overoptimistic cover model — the gate that refuses
+   cold-start calibrated too loose. Consequence for ordering: **M1's
+   design round may spec the rule shape immediately (the genesis-frozen
+   machinery), but the constant's finalization gates on the §14.4 run
+   with the widened hypothesis class.** The two must not be reviewed
+   independently with one silently assuming the other passed.
+
 ### 16.3 M2 — cover-gate proxy choice
 
 Resolved into M1 by the substrate verification above: the gate reads
@@ -1185,12 +1214,19 @@ same collapse that made the token sole-origin structural.
 
 ### 16.10 Ordering and reversion
 
-**Build order: M1 first.** It is the genesis-frozen item — the one that
-cannot be patched after launch — and it converts the load-bearing
-incentive fact into a protocol fact. M6.2 (coupling control) is the
-cheapest and lands with the §14.4 implementation round. M3/M7 are CI
-gates in an existing pattern. M4 needs its own round (the three named
-wargames). M5 rides the wallet-side persona-record work.
+**Build order: M1's spec first, with the spec/constant split explicit.**
+M1 is the genesis-frozen item — the one that cannot be patched after
+launch — and it converts the load-bearing incentive fact into a protocol
+fact. Per §16.2's pinned obligation 2, the round splits: the **rule
+shape** (uniform zero-accrual factor, boundary test, CI gate) is specced
+immediately; the **`K_COVER` constant** is finalized only after the
+§14.4 measurement runs with the widened hypothesis class, because the
+cover model that sets it is exactly what that measurement validates.
+The §14.4 implementation round therefore sits on M1's critical path.
+M6.2 (coupling control) is the cheapest and lands with that same §14.4
+round. M3/M7 are CI gates in an existing pattern. M4 needs its own round
+(the three named wargames). M5 rides the wallet-side persona-record
+work.
 
 **Reversion clause (rule 21).** Each mechanism is
 proposed-now-with-reopening-criteria: M1 reopens only on a substrate

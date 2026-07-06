@@ -7476,7 +7476,15 @@ one place to confirm each item's relationship to the wallet stack.
   hollows the gate); synergy: zero accrual ⇒ zero thin-window claims ⇒ the cold-start
   claim-cohort hazard above is refused in the same window. Needs its own design doc +
   round before any code (`epoch_close_compute`, `consensus_constants.json`, existing
-  reward-gates CI shape). M2 resolved into M1; M3 single-dispatch-path CI enumeration
+  reward-gates CI shape). **Two obligations pinned for M1's round (§16.2):** (1) the
+  once-firing rule's **activation-boundary test** is a first-class deliverable (accrual
+  provably zero at `K_COVER − 1`, non-zero at `K_COVER`, at the boundary epoch, KAT
+  shape) — the dead-rule acceptance relocates armed-gate-with-no-trigger risk to time
+  and runtime never re-exercises the boundary; (2) **`K_COVER` finalization gates on the
+  §14.4 widened-class measurement** (derivation chain: `K_COVER` ← cover model ←
+  founder-cover soundness ← partition-at-chance ← hypothesis class matches the
+  adversary's) — rule shape specs immediately, the constant waits; the two reviews must
+  not proceed independently. M2 resolved into M1; M3 single-dispatch-path CI enumeration
   (gate-11 shape); M4 global launch-window bond rate cap (WI-3 D-B2 item, three named
   wargames incl. re-measuring *under* the cap); M5 never-serialized local
   `PublicByConsent` marker (mechanizes the non-assumption, not the consent); M6 coupling
