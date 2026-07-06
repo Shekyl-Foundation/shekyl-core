@@ -1,7 +1,8 @@
 # M1 — Reward eligibility gated on shard count (consensus rule)
 
-**Status: design round 1 — specification for review. No code lands until
-this round closes.** Per `05-system-thinking.mdc` (specification first)
+**Status: design round 1 closed (§9 record). Spec amended in place per
+the round's dispositions; implementation may proceed after the
+pre-flight pass.** Per `05-system-thinking.mdc` (specification first)
 and `26-sub-pr-design-discipline.mdc` (cited: consensus-critical sub-PR
 with design rounds before implementation; the pre-flight pass applies
 between this round's closure and the first production commit).
@@ -101,23 +102,60 @@ recomputation flows through §2.1's canonical gate, a vin claiming any
 non-zero amount for a gated epoch fails the existing compare with **no
 new validation branch**. The gate adds no second predicate site.
 
-### 2.3 Gated epochs are non-claimable (spec decision, round 1)
+### 2.3 Zero-share epochs are non-claimable (spec decision, amended at round-1 closure)
 
 A claim batching gated epochs at amount zero would pass the §2.2
 compare while carrying zero economic content — a pure timing signal
 (the claim's existence and cadence) with no reward attached, in
 exactly the window where claim-cohort thinness is the co-hazard the
-gate refuses (WI-4 §16.2 "Verified synergy"). The disposition, in the
-make-bad-states-unrepresentable shape: **an emission's
-`settlement_epochs` must not include a gated epoch.** Validation
-rejects the vin (structural error, same class as
-`FloorMismatch`), rather than accepting a zero row.
+gate refuses (WI-4 §16.2 "Verified synergy").
 
-Consequences to check at review: the claim-window arithmetic
-(`max_claim_age_w = 26`) never forces a claimant to include a gated
-epoch — it cannot, because gated epochs produce nothing to claim and
-the window constrains only epochs actually claimed. The batching
-bound (`max_settlement_epochs_per_emission = 15`) is unaffected.
+**The rule (uniform, not gate-specific — amended per §9 R1-D2):**
+**every epoch in an emission's `settlement_epochs` must have a
+strictly positive recomputed reward share.** Validation rejects the
+vin (structural error, same class as `FloorMismatch`) when any
+claimed epoch's ex-ante recomputation yields zero.
+
+The round-1 draft stated this as "must not include a *gated* epoch,"
+which would have required the vin path to consult the gate predicate
+directly. The uniform positive-share form is strictly better on
+three counts, each verified at source during the round (§9):
+
+1. **The vin never learns about `K_COVER`.** Zero-at-top (§2.1) makes
+   gated epochs zero-share; the positive-share rule then makes them
+   non-claimable through pure data flow. One predicate site (§2.1),
+   no parallel gate check to drift.
+2. **It closes a pre-existing hole the gate-specific form missed.**
+   `Σwork(E) = 0` is already a legitimate pre-gate state — an epoch
+   with no serve credits stores a genuine zero, and
+   `reward_share_floor` already returns 0 on a zero normalizer
+   (`reward_arithmetic.rs`). Under the draft rule, a zero-amount
+   claim row for a legitimately-empty epoch (`0 == 0` passes the
+   §2.2 compare) remained representable. Under the uniform rule,
+   zero-amount claim rows are unrepresentable everywhere — gated,
+   empty, or slashed-to-zero alike.
+3. **The wallet-side builder needs no second predicate** (§9 R1-Q2
+   disposition). The claim builder must already recompute expected
+   shares from public state to satisfy the zero-tolerance compare;
+   "skip zero-share epochs" is the same computation on the same
+   data, not a separate eligibility check that can drift from the
+   consensus rule.
+
+Consequences, confirmed: the claim-window arithmetic
+(`max_claim_age_w = 26`) never forces a claimant to include a
+zero-share epoch — the window constrains only epochs actually
+claimed. The batching bound
+(`max_settlement_epochs_per_emission = 15`) is unaffected.
+
+**Error-genericity non-requirement (§9 R1-D2 pushback, recorded so it
+is not re-litigated):** the reject needs no privacy-motivated generic
+wording. Gatedness is a deterministic public function of public chain
+state (`shard_count` at `H_close(E)` vs `K_COVER`); any observer
+computes the gated epoch set ex ante without submitting anything, so
+a distinguishable error variant reveals nothing not already globally
+derivable. Under the uniform rule the error is "claimed epoch has
+zero computed share," which is not gate-specific by construction —
+and a named, specific error is the `82-failure-mode-ux` disposition.
 
 ---
 
@@ -187,10 +225,25 @@ failure class) under an `_comment_archival_launch` block. Until the
 §14.4-derived value lands, the entry carries a **provisional sentinel
 value and an explicit `PROVISIONAL — NOT GENESIS-READY` comment**;
 the genesis-readiness checklist (WI-4 §13.5 sealing conditions) lists
-the constant's finalization as a blocker. The machinery reading a
-provisional constant is testable end-to-end (the KAT parameterizes
-`K_COVER`, §5); shipping genesis with the sentinel is refused by the
-checklist, not by code.
+the constant's finalization as a blocker.
+
+**Sentinel mechanics (amended at round-1 closure, §9 R1-D3): the
+build refuses, not just the checklist.** A runtime small-value
+sentinel is rejected — a real-looking tiny `K_COVER` could be
+silently treated as legitimate by any future `if threshold`-shaped
+code, and a checklist is a human gate where a compile gate is
+available. The JSON entry carries a companion flag
+(`k_cover_provisional: true`); the constants generation
+(`build.rs` / `generate_consensus_constants.py`) propagates it, and
+the gate code emits a **compile-time refusal in non-test builds**
+unless the flag is cleared — the same mechanism precedent as
+`shekyl-p-transport`'s `compile_error!` absent the `tor-socks`
+feature. Test and KAT builds enable a `provisional-k-cover` feature
+explicitly (the KAT parameterizes `K_COVER` anyway, §5); a release
+or genesis-config build with the provisional flag set does not
+compile. The machinery is thereby testable end-to-end while
+shipping-with-sentinel is refused **by code**, with the checklist as
+the second layer rather than the only one.
 
 **Genesis-frozen.** Both the rule and the constant must be right the
 first time — post-activation there is no runtime signal (§7). This is
@@ -224,7 +277,7 @@ precedent; new fixture `reward_gate_kat_v1.json`) pinning behavior
 | G-2 | `K_COVER` | non-zero accrual for a credited member — provably non-zero, and equal to the ungated computation's output (the gate at/above threshold is the identity) |
 | G-3 | boundary epoch — the first `E` with `shard_count(E) ≥ K_COVER` | first non-zero accrual lands at exactly this `E`; the prior epoch's is zero |
 | G-4 | genesis edge — `chain_epochs == 0` | gate composes with the `shard_age_milli` zero without masking or double-zeroing; result is well-defined zero |
-| G-5 | §2.3 — emission vin including a gated epoch | rejected structurally (not a zero-amount pass) |
+| G-5 | §2.3 — emission vin claiming a zero-share epoch (gated case *and* the legitimately-empty case, per the uniform rule) | rejected structurally (not a zero-amount pass) |
 
 The KAT is **designed in from the start**, not backfilled; it is
 parameterized over `K_COVER` so it survives the §4 constant
@@ -245,8 +298,9 @@ not need it):
 | Surface | File | Change |
 | --- | --- | --- |
 | Canonical gate | `rust/shekyl-archival-retention/src/consensus_state.rs` (`epoch_close_compute`, `EpochCloseInputs`) | Gate factor at top of compute; `K_COVER` threading |
-| Constant | `config/consensus_constants.json` + `rust/shekyl-archival-retention/build.rs` (or the crate's constants surface, `src/constants.rs`) | `k_cover` entry, provisional-sentinel comment, generated-constant plumbing per the file's existing C++/Rust generation contract |
-| Emission validation | `rust/shekyl-archival-retention/src/emission_wire.rs` | §2.3 non-claimable check (structural reject of gated epochs in `settlement_epochs`) |
+| Constant | `config/consensus_constants.json` + `rust/shekyl-archival-retention/build.rs` (or the crate's constants surface, `src/constants.rs`) | `k_cover` entry + `k_cover_provisional` flag, compile-refusal plumbing (§4 sentinel mechanics), generated-constant contract per the file's existing C++/Rust generation |
+| Emission validation | the PR-E3 verify path (`REWARD_EMISSION_VIN_PLAN.md`; the recompute site, not `emission_wire.rs` — the wire layer stays share-agnostic) | §2.3 uniform positive-share check (structural reject of any claimed epoch whose recomputed share is zero) |
+| Wallet claim builder | future engine-side emission assembly (does not exist yet — verified at round 1, no `build_emission`/claim-builder site in `rust/`) | **Forward obligation, pinned here:** the builder derives claimable epochs from the same positive-share recompute; carried as a spec requirement into the builder's own design round |
 | KAT | `rust/shekyl-archival-retention/tests/` + `fixtures/reward_gate_kat_v1.json` | §5 cases G-1..G-5 |
 | CI | `scripts/ci/check_archival_reward_gates.sh` | KAT wired into the existing gate-check shape |
 | FFI/daemon | `shekyl-ffi` epoch-close entry point (consumer of `epoch_close_compute`) | **Expected zero-change** — the gate lives inside the canonical computation; verify at pre-flight, not assume |
@@ -285,10 +339,10 @@ creep and reopens the round.
 
 ---
 
-## 8. Round-1 review questions
+## 8. Round-1 review questions (as posed; dispositions in §9)
 
-The questions this round must answer before closure (each is a
-disposition to record, not an open musing):
+The questions this round answered before closure (each is a
+disposition recorded in §9, not an open musing):
 
 1. **§2.1 zero-at-top vs zero-at-share.** The spec chooses zeroing the
    whole epoch-close output. Confirm no consumer of
@@ -318,7 +372,146 @@ disposition to record, not an open musing):
 
 ---
 
-## 9. Cross-references
+## 9. Round-1 record (closed)
+
+The round ran as an adversarial wargame over the four highlighted
+decisions (findings R1-1..R1-4) plus the five §8 questions
+(R1-Q1..Q5). Dispositions, with source evidence; retained finding
+IDs match the review's.
+
+### 9.1 R1-D1 — Q1/Q3: the consumer walk (findings R1-Q1-1, R1-Q3-1, both High as posed; both resolved, one dissolves)
+
+The review's concern: a consumer written against the invariant
+"`Σwork` present ⟹ the epoch contributed to emission" is silently
+broken by gated zeros. Walked at source:
+
+- **`epoch_close_compute` has exactly one production call site:**
+  `BlockchainLMDB::process_archival_epoch_close_at_height`
+  (`src/blockchain_db/lmdb/db_lmdb.cpp`, via
+  `shekyl_archival_epoch_close_compute` in
+  `rust/shekyl-ffi/src/archival_ffi.rs`). Outputs persist to two LMDB
+  tables (`archival_r_market`, `archival_sigma_work`). The only
+  readers are `get_archival_r_market` /
+  `get_archival_sigma_work_milli` — and **no production code calls
+  them yet**. The emission verify that will (PR-E3) is unbuilt, and
+  its plan already mandates explicit structural bounds
+  (`h > h_close(E)`, `E ≥ C − W`) over row-absence proxies
+  (`REWARD_EMISSION_VIN_PLAN.md` finding F-E1). There is no pre-gate
+  consumer holding the broken invariant, because there is no
+  consumer at all.
+- **The invariant was already false pre-gate.** An epoch with no
+  serve credits stores a legitimate `Σwork = 0` row today; gated
+  epochs reuse an existing state class rather than introducing one.
+  `reward_share_floor` short-circuits to 0 on a zero normalizer
+  (`reward_arithmetic.rs` — no divide-by-zero path; `mul_div_floor`
+  additionally guards `d == 0`).
+- **`join_settlement_epoch` is eligibility-only, confirmed:**
+  `serve_credit_epoch_ok` (`serve_eligibility.rs`) is a pure
+  `E ≥ E_join + 1` predicate; its one consumer
+  (`blockchain.cpp` serve-credit acceptance) uses it as
+  accept/reject only. Serve-credit rows are *inputs* to epoch close
+  (gathered per epoch at `H_close`), not readers of it; no reward
+  arithmetic exists outside `epoch_close_compute` and the future
+  verify-side recompute. §3's two "Review check" rows are
+  discharged.
+
+### 9.2 R1-D2 — Q2 + the R1-2 residual: the non-claimable rule made uniform
+
+The walk in 9.1 surfaced that zero-share is a legitimate
+pre-existing state, which converts the draft's gate-specific
+non-claimable rule into the **uniform positive-share rule** now in
+§2.3 — the vin path never consults `K_COVER`; gated epochs become
+non-claimable through §2.1's data flow alone; and the
+previously-representable zero-amount claim row for a
+legitimately-empty epoch becomes unrepresentable as a side effect.
+R1-Q2-1 (Medium — wallet builder must refuse too) is discharged by
+the same move: the builder already recomputes shares for the
+zero-tolerance compare, so zero-share skipping is the same predicate
+on the same data; pinned as a forward obligation in §6 since no
+builder exists yet (verified: no claim-construction site in `rust/`).
+
+R1-2's error-genericity residual is **rejected with a mechanism
+argument** (recorded in §2.3): gatedness is a deterministic public
+function of public chain state, computable ex ante by any observer,
+so error-message distinguishability discloses nothing — and the
+uniform rule's natural error ("zero computed share") is not
+gate-specific anyway. Named errors stay, per `82-failure-mode-ux`.
+
+### 9.3 R1-D3 — Q4: sentinel is build-refused (finding R1-Q4-1, accepted)
+
+Accepted in full; §4 "Sentinel mechanics" amended. Runtime
+small-value sentinel rejected (future `if threshold` code could
+treat it as legitimate); compile-time refusal in non-test builds via
+a `k_cover_provisional` flag propagated through constants
+generation, `compile_error!`-precedent from `shekyl-p-transport`.
+The checklist becomes the second layer, not the only one.
+
+### 9.4 R1-D4 — Q5: the reorg argument, written out (finding R1-Q5-1)
+
+The invariant the review demanded — "a reorg that would change an
+epoch's gated status is either impossible past finality or explicitly
+handled" — holds via case (a) of the review's dichotomy, through
+machinery that already exists. The argument, with the exact
+constants:
+
+1. **Gated status is connect/revert-paired state, not a one-way
+   latch.** `gated(E)` is a pure function of the frozen-segment rows
+   at `H_close(E)`, and the epoch-close materialization is
+   symmetric: `process_archival_epoch_close_at_height` writes the
+   `R_market`/`Σwork` rows when the close block connects;
+   `revert_archival_epoch_close_at_height` deletes them when it pops
+   (`db_lmdb.cpp`; `ARCHIVAL_CONSENSUS_STATE.md` §4 invariant 2).
+   A reorg across `H_close(E)` reverts the close and recomputes it
+   on the new chain deterministically — both branches agree with
+   themselves, always.
+2. **No citing emission can outlive the close it cites.** An
+   emission claiming `E` is valid only in blocks **strictly above**
+   `H_close(E)` (`REWARD_EMISSION_LEG.md` §4.5: "reorg revert cannot
+   strand a citing emission — all citing emissions sit strictly
+   above `h_close(E)` and are popped before the finalization
+   reverts"). So any reorg deep enough to change `gated(E)` pops
+   every emission that relied on the old status *before* it pops the
+   status itself. There is no window in which a mint from an
+   epoch-gated-on-the-new-chain survives onto the new chain.
+3. **Depth bound.** `ARCHIVAL_REORG_DEPTH_BLOCKS = 720 ≪
+   SETTLEMENT_EPOCH_BLOCKS = 10_000`: a processable reorg can cross
+   at most one epoch-close boundary, and only when the tip is within
+   720 blocks of it — the same bound the claimed-epoch prune already
+   leans on (§6.6 of the emission leg).
+4. **The double-spend limb.** A reward vout minted on the orphaned
+   branch does not exist on the new chain; a spend of it is invalid
+   for output-nonexistence, and its FCMP++ key images were never
+   recorded on the new chain (key-image state is popped with the
+   spending blocks). Additionally, outputs only become spendable
+   after deferred curve-tree insertion at maturity
+   (`shekyl_types.h` pending-tree machinery), so the exposure window
+   is further narrowed. None of this is gate-specific — it is the
+   standard reorg property of every output on the chain; the gate
+   adds no new surface to it.
+5. **The supply-audit limb.** Loud mint amounts are per-chain state;
+   the audit sums the canonical chain. Since (1)–(2) guarantee each
+   chain is internally consistent about gated status and citing
+   emissions, no cross-branch inconsistency is observable on any
+   single chain — a reorg replaces one consistent view with another.
+
+Consequence for §5: **no sixth KAT case is required** — the KAT pins
+the pure function's boundary behavior; reorg consistency is the
+connect/revert pairing's property and is already exercised by the
+existing epoch-close revert tests (`revert_archival_epoch_close_at_height`
+coverage). The pre-flight pass verifies that pairing covers the
+gate-added zeroing (it does trivially: the gate changes the values
+written, not the write/revert shape).
+
+### 9.5 Findings accepted without amendment
+
+R1-1 (zero-at-top correct; residual covered by 9.1), R1-3 (split
+well-articulated; sentinel hardened further by 9.3 anyway), R1-4
+(KAT parameterization survives finalization; reorg pressure resolved
+by 9.4).
+
+---
+
+## 10. Cross-references
 
 - `ARCHIVAL_BOND_WI4_MEASUREMENT.md` §14 (launch posture), §16.1
   (partition trap), §16.2 (M1 pre-flight pin and its three

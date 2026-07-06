@@ -4,21 +4,28 @@
 
 ### Added
 
-- **docs: M1 reward-gate consensus rule — design round 1 spec**
+- **docs: M1 reward-gate consensus rule — design round 1 spec + closure**
   ([`ARCHIVAL_REWARD_GATE_M1.md`](design/ARCHIVAL_REWARD_GATE_M1.md)).
   The WI-4 launch posture's cold-start refusal in consensus-rule form:
   zero reward accrual for every persona in epochs where
   `shard_count < K_COVER`, enforced as a uniform zero-at-top factor in
   `epoch_close_compute` and inherited by the emission zero-tolerance
-  compare with no second predicate site; gated epochs structurally
-  non-claimable. Spec-first per `05-system-thinking` and
-  `26-sub-pr-design-discipline` (cited): no code until round 1 closes.
+  compare with no second predicate site. Spec-first per
+  `05-system-thinking` and `26-sub-pr-design-discipline` (cited).
   Carries the WI-4 §16.2 obligations — activation-boundary KAT as a
   first-class deliverable, the zero-accrual/no-seniority invariant
   enumeration with source-verification checks, and the spec/constant
-  split (`K_COVER` finalization gates on the §14.4 partition run;
-  provisional sentinel + sealing-checklist blocker until then). Surface
-  enumerated in advance; five round-1 review questions recorded (§8).
+  split (`K_COVER` finalization gates on the §14.4 partition run).
+  **Round 1 closed against an adversarial wargame (§9):** consumer walk
+  verified zero pre-gate readers of the epoch-close outputs and
+  `join_settlement_epoch` as eligibility-only; the non-claimable rule
+  amended to the uniform positive-share form (zero-amount claim rows
+  unrepresentable for gated *and* legitimately-empty epochs; the vin
+  never consults `K_COVER`); the provisional `k_cover` sentinel
+  hardened to a compile-time refusal in non-test builds; the
+  reorg-across-activation-boundary argument written out against the
+  existing connect/revert pairing (no new KAT case required). Surface
+  enumeration updated; wallet-claim-builder obligation pinned forward.
 
 - **wallet: block-timed bond-post dispatch driver — WI-3**
   (`ARCHIVAL_BOND_WI3_DISPATCH.md`; `IMPLEMENTATION_INDEX.md` §4 WI-3
