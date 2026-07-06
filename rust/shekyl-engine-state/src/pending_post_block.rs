@@ -35,22 +35,37 @@ use shekyl_types::{BlockHeight, PCanonicalId};
 
 use crate::error::WalletLedgerError;
 
-/// Schema version of the durable pending-post block. **v1** is the WI-2
-/// genesis shape: JoinMarket-only, dispatch state [`PendingPostState::Pending`]
-/// only (WI-3 adds the dispatched/confirmed arms and bumps this). Any field
-/// addition / removal / renaming bumps this; loads that see a different
-/// version **refuse rather than migrate** (pre-genesis, a mismatch means
-/// re-assemble; rule 15).
-pub const PENDING_POST_VERSION: u32 = 1;
+/// Schema version of the durable pending-post block. **v2** is the WI-3
+/// dispatch shape: v1's JoinMarket-only record plus the
+/// [`PendingPostState::Dispatched`] arm (`ARCHIVAL_BOND_WI3_DISPATCH.md`
+/// §3.3). Any field addition / removal / renaming bumps this; loads that see
+/// a different version **refuse rather than migrate** — pre-genesis, a v1
+/// seal under a v2 binary fails closed and the operator re-assembles
+/// (rule 15).
+pub const PENDING_POST_VERSION: u32 = 2;
 
-/// Dispatch state of a pending bond post. WI-2 writes only
-/// [`Self::Pending`]; WI-3's block-timed dispatch driver extends this with
-/// its dispatched/confirmed arms (a version-bumping change, by design — the
-/// driver owns those semantics, not the assemble path).
+/// Dispatch state of a pending bond post. The WI-2 assemble path writes only
+/// [`Self::Pending`]; WI-3's block-timed dispatch driver owns the
+/// [`Self::Dispatched`] transition (seal-before-send, §3.3) and the attempt
+/// bookkeeping.
+///
+/// There is deliberately **no persisted `Confirmed` arm**: confirmation
+/// *removes* the record (§3.5) — retirement and reservation release are one
+/// atomic seal, so a live record always means a live reservation.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub enum PendingPostState {
     /// Assembled and sealed; not yet handed to any submitter.
     Pending,
+    /// Sealed as dispatched **before** the first network send
+    /// (seal-before-send): a crash after this seal resumes as "maybe sent",
+    /// which is safe because every resend is byte-identical (pin P-2).
+    Dispatched {
+        /// Tip height the due-check fired against at the first send.
+        at: BlockHeight,
+        /// Total send attempts (first send inclusive); bumped on every
+        /// byte-identical resubmit, bounded by the driver's attempt budget.
+        attempts: u32,
+    },
 }
 
 /// One durable pending bond post: the assembled, signed, wire-encoded
@@ -185,6 +200,44 @@ impl PendingPostBlock {
         true
     }
 
+    /// WI-3 §3.3 step 2 — transition `persona`'s post into
+    /// [`PendingPostState::Dispatched`] with `attempts = 1`, or bump its
+    /// attempt counter (saturating) if it is already dispatched (the
+    /// byte-identical resubmit path, §3.4). Returns the post-transition
+    /// attempt count, or `None` if the persona has no live post.
+    ///
+    /// A pure in-memory mutation: the caller (the locked `PendingPostStore`
+    /// write path) seals the whole block **before any network send**.
+    #[must_use]
+    pub fn mark_dispatched(&mut self, persona: &PCanonicalId, at: BlockHeight) -> Option<u32> {
+        let post = self.posts.iter_mut().find(|p| &p.persona == persona)?;
+        match &mut post.state {
+            PendingPostState::Pending => {
+                post.state = PendingPostState::Dispatched { at, attempts: 1 };
+                Some(1)
+            }
+            PendingPostState::Dispatched { attempts, .. } => {
+                // `at` is NOT updated on resubmit: it records the tip the
+                // due-check *first* fired against (the dispatch fact), and a
+                // resubmit re-sends the same bytes, not a new dispatch.
+                *attempts = attempts.saturating_add(1);
+                Some(*attempts)
+            }
+        }
+    }
+
+    /// WI-3 §3.5 / §3.6 — remove `persona`'s post (confirmation retire, or
+    /// terminal-reject prune). Removal *is* the byte-prune and the
+    /// reservation release in one seal: the record is the stored bytes and
+    /// the reservation is derived ([`Self::reserved_gindexes`]), so neither
+    /// can survive it (R2-4). Returns the removed post, or `None` if the
+    /// persona has no live post (idempotent under crash-replay).
+    #[must_use]
+    pub fn remove_post(&mut self, persona: &PCanonicalId) -> Option<PendingBondPost> {
+        let idx = self.posts.iter().position(|p| &p.persona == persona)?;
+        Some(self.posts.remove(idx))
+    }
+
     /// Serialize to postcard bytes (the inner half of the seal; the engine
     /// layer applies the AEAD + atomic write to the sibling file).
     pub fn to_postcard_bytes(&self) -> Result<Vec<u8>, WalletLedgerError> {
@@ -239,6 +292,31 @@ mod tests {
         assert_eq!(back.posts().len(), 1);
     }
 
+    /// Gate 7 (WI-3 §5): the `Dispatched` arm round-trips with its `at` /
+    /// `attempts` payload intact.
+    #[test]
+    fn dispatched_arm_round_trips_through_postcard() {
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_post(post(0xAA, &[1, 2])));
+        assert_eq!(
+            block.mark_dispatched(
+                &PCanonicalId::from_bytes([0xAA; 32]),
+                BlockHeight::from_raw(1_012)
+            ),
+            Some(1)
+        );
+        let bytes = block.to_postcard_bytes().expect("encode");
+        let back = PendingPostBlock::from_postcard_bytes(&bytes).expect("decode");
+        assert_eq!(back, block);
+        assert_eq!(
+            back.posts()[0].state,
+            PendingPostState::Dispatched {
+                at: BlockHeight::from_raw(1_012),
+                attempts: 1
+            }
+        );
+    }
+
     #[test]
     fn version_mismatch_fails_closed() {
         let wrong = PendingPostBlock {
@@ -254,6 +332,86 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// Gate 7 (WI-3 §5): a WI-2 **v1** seal under this v2 binary fails
+    /// closed on the version gate — refuse-not-migrate; the operator
+    /// re-assembles (rule 15, pre-genesis).
+    #[test]
+    fn v1_seal_fails_closed_under_v2_binary() {
+        let v1 = PendingPostBlock {
+            version: 1,
+            posts: Vec::new(),
+        };
+        let bytes = postcard::to_allocvec(&v1).expect("encode");
+        let err = PendingPostBlock::from_postcard_bytes(&bytes).expect_err("v1 must refuse");
+        assert!(matches!(
+            err,
+            WalletLedgerError::UnsupportedBlockVersion {
+                block: "pending_post_block",
+                file: 1,
+                binary: PENDING_POST_VERSION,
+            }
+        ));
+    }
+
+    /// §3.3 — first `mark_dispatched` transitions Pending→Dispatched with
+    /// `attempts = 1`; each subsequent call is the resubmit path: `attempts`
+    /// bumps, `at` (the first-dispatch tip) does NOT move.
+    #[test]
+    fn mark_dispatched_transitions_then_bumps_attempts_without_moving_at() {
+        let persona = PCanonicalId::from_bytes([0xAA; 32]);
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_post(post(0xAA, &[1])));
+
+        assert_eq!(
+            block.mark_dispatched(&persona, BlockHeight::from_raw(500)),
+            Some(1)
+        );
+        // Resubmit at a later tip: attempts bump, `at` stays at first send.
+        assert_eq!(
+            block.mark_dispatched(&persona, BlockHeight::from_raw(510)),
+            Some(2)
+        );
+        assert_eq!(
+            block.posts()[0].state,
+            PendingPostState::Dispatched {
+                at: BlockHeight::from_raw(500),
+                attempts: 2
+            }
+        );
+        // No live post for an unknown persona.
+        assert_eq!(
+            block.mark_dispatched(
+                &PCanonicalId::from_bytes([0xEE; 32]),
+                BlockHeight::from_raw(1)
+            ),
+            None
+        );
+    }
+
+    /// §3.5/§3.6 (R2-4) — removal retires the record, prunes the held bytes,
+    /// and releases the derived reservation in one mutation; re-removal is
+    /// idempotent (`None`).
+    #[test]
+    fn remove_post_prunes_bytes_and_releases_the_derived_reservation() {
+        let persona = PCanonicalId::from_bytes([0xAA; 32]);
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_post(post(0xAA, &[1, 2])));
+        assert!(block.push_post(post(0xBB, &[7])));
+
+        let removed = block.remove_post(&persona).expect("live post removes");
+        assert_eq!(removed.persona, persona);
+        assert!(!block.has_live_post_for(&persona));
+        assert_eq!(
+            block.reserved_gindexes().into_iter().collect::<Vec<_>>(),
+            vec![7],
+            "the removed post's reservation is gone in the same mutation"
+        );
+        assert!(
+            block.remove_post(&persona).is_none(),
+            "re-removal is idempotent (crash-replay safe)"
+        );
     }
 
     #[test]

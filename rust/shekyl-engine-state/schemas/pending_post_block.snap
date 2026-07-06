@@ -227,6 +227,32 @@
                           {
                             "name": "Pending",
                             "ty": "UnitVariant"
+                          },
+                          {
+                            "name": "Dispatched",
+                            "ty": {
+                              "StructVariant": [
+                                {
+                                  "name": "at",
+                                  "ty": {
+                                    "name": "BlockHeight",
+                                    "ty": {
+                                      "NewtypeStruct": {
+                                        "name": "u64",
+                                        "ty": "U64"
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "name": "attempts",
+                                  "ty": {
+                                    "name": "u32",
+                                    "ty": "U32"
+                                  }
+                                }
+                              ]
+                            }
                           }
                         ]
                       }
