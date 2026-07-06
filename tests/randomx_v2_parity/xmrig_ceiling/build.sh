@@ -29,31 +29,35 @@ XMRIG_DIR="${XMRIG_DIR:-/home/torvaldsl/shekyl/xmrig}"
 X="$XMRIG_DIR/src/crypto/randomx"
 A="$XMRIG_DIR/src/3rdparty/argon2"
 here="$(cd "$(dirname "$0")" && pwd)"
-PIN="b2ca7248"
+# Full 40-char SHA is the single source of truth for the pin. Comparing the full HEAD
+# avoids the `--short` abbreviation trap (git picks 7+ chars by uniqueness, so an 8-char
+# literal would spuriously mismatch a 7-char abbrev on another machine). Display uses the
+# first 8 for readability.
+PIN_SHA="b2ca72480c58d197e18c885d9fc1a0c8d517e60a"
 
 # Fail early and actionably if XMRIG_DIR isn't a usable XMRig checkout, rather than
 # letting a missing directory surface as a cryptic compile error 40 lines later.
 if [ ! -d "$XMRIG_DIR/.git" ] || [ ! -f "$X/randomx.h" ]; then
   echo "ERROR: XMRIG_DIR='$XMRIG_DIR' is not an XMRig git clone with RandomX sources." >&2
-  echo "       Clone XMRig (pinned to $PIN) and pass XMRIG_DIR=/path/to/xmrig." >&2
+  echo "       Clone XMRig (pinned to ${PIN_SHA:0:8}) and pass XMRIG_DIR=/path/to/xmrig." >&2
   exit 2
 fi
 
-have="$(git -C "$XMRIG_DIR" rev-parse --short HEAD 2>/dev/null || echo '?')"
+have="$(git -C "$XMRIG_DIR" rev-parse HEAD 2>/dev/null || echo '?')"
 # Pin mismatch is fail-fast, not a warning: an off-pin build produces a hash the
 # committed ceiling result no longer describes, and a warning-that-continues is exactly
 # the silent-compliance footgun that lets void numbers get generated and shared. A
 # deliberate off-pin run must opt in loudly via ALLOW_UNPINNED=1.
-if [ "$have" != "$PIN" ]; then
+if [ "$have" != "$PIN_SHA" ]; then
   if [ "${ALLOW_UNPINNED:-0}" = "1" ]; then
     echo "############################################################" >&2
-    echo "# UNPINNED BUILD: XMRig HEAD $have != pin $PIN.             " >&2
+    echo "# UNPINNED BUILD: XMRig HEAD ${have:0:8} != pin ${PIN_SHA:0:8}." >&2
     echo "# Results are NOT the committed ceiling and are void as such." >&2
     echo "############################################################" >&2
   else
-    echo "ERROR: XMRig HEAD is $have, expected pin $PIN. Ceiling numbers are only" >&2
-    echo "       meaningful against the pinned miner. Re-pin (git checkout $PIN) or" >&2
-    echo "       set ALLOW_UNPINNED=1 to build off-pin deliberately (results are void)." >&2
+    echo "ERROR: XMRig HEAD is ${have:0:8}, expected pin ${PIN_SHA:0:8}. Ceiling numbers are" >&2
+    echo "       only meaningful against the pinned miner. Re-pin (git checkout ${PIN_SHA:0:8})" >&2
+    echo "       or set ALLOW_UNPINNED=1 to build off-pin deliberately (results are void)." >&2
     exit 2
   fi
 fi
@@ -99,10 +103,13 @@ echo "built: $here/xmrig_parity"
 # blockchain symbol may appear. This keeps the XMRig (GPL) surface provably out of
 # the daemon's build graph, the same contract scripts/ci/check_randomx_symbol_isolation.sh
 # enforces on shekyld (from the other direction).
+# nm -C (demangle) is REQUIRED: nm prints mangled C++ names by default, so the C++
+# patterns (cryptonote::, Blockchain) would never match and the gate would pass vacuously.
 echo "== build-graph isolation check =="
-if nm "$here/xmrig_parity" 2>/dev/null | grep -qiE 'shekyl_|cryptonote::|Blockchain'; then
+iso_syms="$(nm -C "$here/xmrig_parity" 2>/dev/null | grep -iE 'shekyl_|cryptonote::|Blockchain' || true)"
+if [ -n "$iso_syms" ]; then
   echo "FAIL: harness links Shekyl consensus/daemon symbols — build-graph isolation broken"
-  nm "$here/xmrig_parity" | grep -iE 'shekyl_|cryptonote::|Blockchain' | head
+  echo "$iso_syms" | head
   exit 1
 fi
 echo "OK: XMRig-only harness, no Shekyl consensus symbols (GPL surface isolated from the daemon)"

@@ -94,10 +94,12 @@ int main(int argc, char** argv) {
         if (!vm) { fprintf(stderr, "rx0: create_vm failed\n"); return 2; }
         uint8_t out[32]; randomx_calculate_hash(vm, input, strlen(input), out);
         std::string got = hex(out, 32);
+        int rc = (got == expect) ? 0 : 1;
         printf("RX0  xmrig = %s\n     expect = %s\n%s\n", got.c_str(), expect,
-               got == expect ? "RX0 MATCH: build pipeline is faithful (v1 reference vector reproduced)"
-                             : "RX0 MISMATCH: the build itself is wrong");
-        return got == expect ? 0 : 1;
+               rc == 0 ? "RX0 MATCH: build pipeline is faithful (v1 reference vector reproduced)"
+                       : "RX0 MISMATCH: the build itself is wrong");
+        randomx_destroy_vm(vm); randomx_release_cache(cache); free(cm); free(sp);
+        return rc;
     }
 
     if (strcmp(argv[1], "--kat-full") == 0) {
@@ -120,6 +122,8 @@ int main(int argc, char** argv) {
         if (!vm) { fprintf(stderr, "katfull: create_vm failed\n"); return 2; }
         uint8_t out[32]; randomx_calculate_hash(vm, blob, strlen(blob), out);
         printf("KATFULL xmrig(full+JIT) = %s\n", hex(out, 32).c_str());
+        randomx_destroy_vm(vm); randomx_release_dataset(ds); randomx_release_cache(cache);
+        free(dsmem); free(cm); free(sp);
         return 0;
     }
 
@@ -145,6 +149,7 @@ int main(int argc, char** argv) {
         printf("KAT  xmrig(light-JIT) = %s\n     canonical(full)  = %s\n%s\n", got.c_str(), canonical,
                diverges ? "light-JIT DIVERGES as expected (XMRig light path is v2-incomplete)"
                         : "UNEXPECTED MATCH: XMRig light path no longer diverges — revisit Phase 0 finding");
+        randomx_destroy_vm(vm); randomx_release_cache(cache); free(cm); free(sp);
         return diverges ? 0 : 1;
     }
 
@@ -218,6 +223,7 @@ int main(int argc, char** argv) {
                g, (unsigned long long)total, (unsigned long long)mism); fflush(stdout);
     }
     randomx_release_dataset(ds);
+    free(cache_mem); free(scratchpad); free(ds_mem);
     fclose(f);
 
     printf("\n=== RESULT: %llu pairs checked, %llu mismatches ===\n",
