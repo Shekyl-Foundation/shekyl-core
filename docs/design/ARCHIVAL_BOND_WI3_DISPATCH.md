@@ -374,6 +374,25 @@ Functional gates (all must pass to merge):
     pending-post state lives outside the sealed block (no side files, no
     split writes), plus a test that terminal removal prunes the bytes and
     the derived reservation in the same seal.
+11. Single-write-path enforcement (R2-2 enforcement half, post-closure
+    pin): a structural check — same family as the `cargo tree` no-import
+    guard and the token `const _` sole-origin guard — that pending-post
+    persistence has **exactly one write path and one payload kind**:
+    `WalletFile::save_pending_posts` (`shekyl-engine-file/src/handle.rs`)
+    is the sole writer of `.wallet.pending`, and the sole
+    `encode_payload(PayloadKind::PendingPostBlockPostcard, ..)` site,
+    reachable only through the driver's locked `PendingPostStore` path.
+    "Grep pending-post persistence" must collapse to that one choke
+    point the way "grep token construction" collapses to the disclosure
+    choke. Rationale: gate 10's unrepresentability argument *rests* on
+    the absence of a second write site; without enforcement, that
+    absence is held by reviewer discipline — the armed-gate-with-no-
+    trigger position the F41 `const _` guard and the F25 enumeration
+    were built to escape. The check rides with the WI-3 implementation
+    PR (capability-before-cache, one level down: the enforcement is
+    installed before the code that depends on the invariant exists),
+    not as a separate commit and not retrofitted after a convenience
+    second write lands.
 
 **Reconvergence gate (rule 21, named per the index row):** WI-3's
 **GF-7 acceptance does not close at merge.** It closes when:
@@ -456,3 +475,15 @@ FeeTooLow single-egress reclassification).
 Round 2 closes with no open structural items; (b)/(c) of §6 remain the
 implementation-PR and WI-4-evidence questions they were. Reopen per the
 per-disposition criteria above, not by sequential numbering (rule 21).
+
+**Post-closure pin (2026-07-05, additive — not a reopen).** Source
+verification of the R2-2 disposition confirmed the atomic-write helper
+and the single-blob shape at source, and surfaced the enforcement half
+the design-record half was missing: "no pending-post state outside the
+blob" is a structural claim held today by the *absence* of a second
+write site, with nothing that bites if a future change adds one — the
+same discipline-not-structure position the F41 tokens were in before
+the `const _` sole-origin guard. §5 gate 11 pins the enforcement: a
+single-write-path / single-payload-kind check riding with the WI-3
+implementation PR, installed before the code that depends on the
+invariant exists. Neither R2-1 nor R2-2's disposition changes.
