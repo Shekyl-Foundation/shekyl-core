@@ -993,3 +993,211 @@ reopening-criteria, not refused-forever:
 - **Does not reopen** on user demand for remote-daemon staking
   convenience — that is preference-anchored, not substrate-anchored,
   and the priority hierarchy already adjudicated it (§15.2).
+
+## 16. Addendum (2026-07-06): mechanization — converting the launch posture from policy to structure
+
+**Status: proposed dispositions, review checkpoint required.** M1 is a
+consensus-rule change and therefore gets its own design document and
+review round per `05-system-thinking.mdc` (spec first) — this section is
+its pre-flight pin, not its spec. The rest are graded by mechanism class.
+The organizing question: which risks currently held by policy, consent,
+or naming can be made unrepresentable instead — in the track's own
+pattern (P-1/P-2, F41, gate 11, D-B3): *replace a property held by review
+with one held by construction, keyed on a choke point you can enumerate.*
+
+### 16.1 The partition trap (the constraint every mechanism must pass)
+
+Any mechanism that sorts founder-from-user on an observable partitions
+the anonymity set: the moment the protocol, the wire, or a broadly
+visible internal type can tell a founder bond from a user bond, the
+adversary can too, and founder cover collapses to zero for the users it
+exists to protect. A mechanism that enforces the right behavior *by
+marking the actor it applies to* is worse than no mechanism — it
+manufactures the distinguisher the cover depends on hiding. Every item
+below is therefore held to: **global and blind** — applied uniformly to
+all bonds, keyed off structural chain facts, never off identity. M1 is
+the exemplar; the others are graded against its shape.
+
+### 16.2 M1 — reward eligibility gated on shard count (consensus rule; build first)
+
+**What it converts.** The cold-start safety currently rests on an
+incentive *fact* — no economic reason to stake pre-shards (§14.1 fact 2,
+P3). Incentive facts are game-able: an irrational or adversarial actor
+stakes early anyway and mints a cold-start-linkable persona the posture
+assumed away. The conversion: staker reward eligibility becomes a
+uniform consensus computation — **no reward accrues to any `(P, s, E)`
+for epochs where `shard_count < K_COVER`** — so a bond posted into the
+thin window earns nothing *by construction*. Posting stays legal
+(forbidding it would block the founder cover); the reward gradient
+becomes the mechanical sorter, and it is non-partitioning: a uniform
+function of chain state, applied identically to every bond, marking none.
+
+**Substrate, verified at source (2026-07-06).** Shards are frozen chain
+segments — `archival_shard_segment.freeze_height`, age =
+`close_height − freeze_height` (`ARCHIVAL_REWARD_ARITHMETIC.md` §Shard
+age) — so `shard_count` is a **deterministic, monotone function of chain
+height**. This dissolves the proxy-choice wargame: shard-count and
+block-height are not competing proxies, they coincide by construction;
+shard-count is simultaneously the semantically correct gate (reward
+follows serveable data) and inherits height's non-manipulability — no
+actor can inflate it (would require mining the chain forward) and no
+actor can stall it (chain growth freezes segments). Cumulative-bond-count
+is **rejected**: sybil-inflatable whenever cost-to-post is low.
+
+**The sharp pin: zero accrual, not deferred payout.** `R_market(s, E)`
+is per-epoch membership (`ARCHIVAL_CONSENSUS_STATE.md` §R_market) — no
+seniority. The gate must preserve that: serve credits and any other
+reward-bearing quantity from pre-gate epochs must contribute **nothing**
+post-gate. A defer-payout form (accrue now, claim later) preserves the
+early-staking yield and hollows the gate — a rational user pre-positions
+for deferred reward and the thin window repopulates with exactly the
+personas the posture refuses. The invariant to carry into the spec:
+**no consensus quantity may accrue from pre-`K_COVER` epochs**, and the
+no-first-mover-advantage property (gate opening confers no seniority)
+is checked at spec time, not assumed.
+
+**Verified synergy.** The cold-start claim-cohort hazard
+(`docs/FOLLOWUPS.md`: at launch a claim's `tier × creation_height`
+cohort approaches one) is refused by the same rule in the same window —
+zero accrual ⇒ zero claims exist during the thin window, so the
+smallest-cohort regime of that separate leak is never entered either.
+
+**Named residuals and shape notes.**
+- *Dead-rule note (rule 15 shape):* `shard_count` monotone ⇒ the gate is
+  trivially satisfied forever after activation — a permanently-inert
+  consensus branch. Named and accepted: it is a pure uniform computation
+  with negligible surface, and unlike migration code it cannot misfire
+  on live state. A height-sunset alternative is rejected (a second
+  genesis-frozen constant to get right, buying nothing).
+- *Timeframes (rule 05):* now = the launch mechanics; mining-era-end =
+  gate long-dead and inert; V4 = independent of the crypto substrate.
+- *Genesis-frozen:* the rule and `K_COVER` must be right the first time.
+  `K_COVER`'s derivation is the review object — it must be coupled to
+  the same cover model the §14.4 arm measures (P3's alignment), derived
+  a-priori, not tuned post-hoc.
+- *Where it lands:* `epoch_close_compute`
+  (`shekyl-archival-retention/src/consensus_state.rs`) as a uniform
+  factor; constant from `config/consensus_constants.json`; CI in the
+  existing `check_archival_reward_gates.sh` shape. Own design doc + round
+  before any code.
+
+### 16.3 M2 — cover-gate proxy choice
+
+Resolved into M1 by the substrate verification above: the gate reads
+`shard_count`, which is structural, monotonic, and coincides with height.
+No live-participant estimate is ever read — the flood-then-withdraw
+liveness DoS (keep measured cover below the bar to block posting) has no
+sensor to attack.
+
+### 16.4 M3 — one dispatch path, structurally audited
+
+Founder indistinguishability is enforced by the **absence of a founder
+branch**, not by founder discipline: founder wallets run the identical
+dispatch, entry-gap draw, dispersal, and posture as production because
+there is no other code to run. The absence is auditable in the gate-11
+shape: extend the single-write-path CI gate
+(`scripts/ci/check_pending_post_write_path.sh`) with a **single
+dispatch-arm enumeration** — assert exactly one bond-dispatch entry
+point, so a future "founder convenience path" fails CI instead of
+silently reintroducing the distinguisher. What this cannot mechanize —
+off-path distinguishers (funding provenance, address reuse, temporal
+clustering) — is exactly what §14.4 measures and M4 caps.
+
+### 16.5 M4 — global anti-clustering during the launch window
+
+"Founders stake intermittently" (P2) is a behavioral instruction; its
+mechanical form is a **network-wide minimum-spacing / rate cap on bond
+posts during the launch window, applied to all bonds blindly** — five
+bonds in one block becomes unrepresentable rather than discouraged, and
+because it is global it staggers founders and early organic activity
+without partitioning either. This is the WI-3 D-B2 deep-backlog spacing
+item (held open, beyond one-per-tick) with a launch-posture rationale
+attached: spacing is cover-preservation, not just backlog hygiene — five
+co-triggered bonds read as one anchor; five dispersed bonds are five
+independent contributions to `N`. Three wargames carry into its round:
+1. *Relaxation:* a rate cap is a liveness constraint; its bound must
+   relax on the same structural proxy as M1 (`shard_count`), or it is a
+   permanent throughput ceiling.
+2. *Cap-boundary structure:* queueing behind a cap creates its own
+   observable timing lattice (posts clustering at cap slots). The §14.4
+   partition arm and the main gate must be **re-run under the cap** —
+   the mechanism is part of the measured channel, not outside it.
+3. *Enforcement locus:* a consensus form (blocks containing over-cap
+   bond posts are invalid) is enforceable but hands miners a
+   censorship-adjacent selection lever; a relay-policy form has no
+   lever but binds no miner. The choice is the design round's first
+   question; both horns are named here so neither is chosen by default.
+
+### 16.6 M5 — the boundary case: founder-persona "public" status stays off-wire
+
+The naive mechanical form is the §16.1 trap in disguise: any observable
+`is_founder` fact — type, wire field, dispatch variation — *is* the
+partition. So P4's "public by consent" must remain an off-wire,
+local-only fact. What **can** be mechanized is the inverse guarantee:
+a wallet-local `PublicByConsent` marker on the persona record that
+**gates off** downstream privacy assumptions — so no later feature can
+accidentally treat a known-public persona as protected and build a false
+guarantee on it. Constraints held by construction: the type never
+serializes (no serialize impl; F25-style audit that no wire or dispatch
+type constructs from it), never affects dispatch shape, never appears in
+any observable. The consent itself — "these personas are attributable
+forever, and I accept that" — is irreducibly human and permanent (P4);
+the mechanism enforces the *non-assumption*, not the consent.
+
+### 16.7 M6 — arm the triggerless gates
+
+The armed-gate-with-no-trigger pattern, applied to the measurement layer:
+1. *Partition-adversary arm* — specced with a-priori bounds at §14.4;
+   implementation is the next round.
+2. *Indirect-channel coupling control* (new, added to the §5 controls
+   family): a control scenario that **fails the run as INVALID** if the
+   synthetic generator ever produces session-independent chain-visible
+   timing. A-priori form: the blind arm at `window = 0` must sit at
+   least `2×` above the `1/N` chance floor (measured `0.237` vs chance
+   `0.10` at `N = 10`); a future refactor that decouples the generator
+   trips the control instead of silently producing the hollow pass
+   §4.1.1 warns about. Same shape as the positive control: the tripwire
+   must bite.
+3. *Leg-(b) wall-clock emission* — the §13.3 closing requirement,
+   restated as a build item: sub-block wall-clock emission (finer hook
+   or harness timestamp), because a gate that structurally cannot
+   observe the channel it certifies is not a gate.
+
+### 16.8 M7 — daemon-tip trust-site enumeration
+
+Completes D-B1's named invariant structurally: an F25-style enumeration
+asserting every site that trusts the daemon's claimed tip is in a known,
+counted set — a new tip-trusting read fails the audit gate instead of
+extending the trust surface silently. Converts "we documented where we
+trust the daemon's clock" into "a new place we trust it fails CI" — the
+same collapse that made the token sole-origin structural.
+
+### 16.9 The irreducible three (named so this is not oversold)
+
+1. **Isolation conditioning** — every GF-7 number is conditional on
+   circuit/client isolation holding; that is a transport-layer guarantee
+   verified where it is enforced, not a bond-layer mechanism.
+2. **The true post-isolation network rate** driving real `N` — a
+   pre-testnet empirical unknown; no mechanism produces it, only
+   measurement against a live network (reported as a conditional axis).
+3. **Founder consent** (P4) — permanent human agreement. M5 mechanizes
+   the non-assumption; the consent cannot be mechanized.
+
+### 16.10 Ordering and reversion
+
+**Build order: M1 first.** It is the genesis-frozen item — the one that
+cannot be patched after launch — and it converts the load-bearing
+incentive fact into a protocol fact. M6.2 (coupling control) is the
+cheapest and lands with the §14.4 implementation round. M3/M7 are CI
+gates in an existing pattern. M4 needs its own round (the three named
+wargames). M5 rides the wallet-side persona-record work.
+
+**Reversion clause (rule 21).** Each mechanism is
+proposed-now-with-reopening-criteria: M1 reopens only on a substrate
+change to shard-segment creation (if `shard_count` ever stops being a
+pure function of height, the proxy analysis in §16.2 is void and the
+gate re-derives); M4's cap reopens on measured cap-boundary structure
+exceeding the §14.4 bounds (the mechanism would then be manufacturing
+the signal it exists to suppress); M5 reopens only if persona records
+gain a serialization path (the never-serialize constraint is the load-
+bearing fact). None reopens on convenience.

@@ -39,6 +39,18 @@
   structural refusal at the dispatch driver rather than a warned override
   — privacy is not a setting; tunneled circumvention the named residual;
   reversion on a measured decorrelated remote transport.
+  **Mechanization addendum (§16, proposed, review-gated):** the launch
+  posture converted from policy to structure under the global-and-blind
+  constraint (mechanisms sort on structure, never identity). M1 —
+  reward-eligibility-by-shard-count as a genesis-frozen consensus rule
+  (zero accrual pre-`K_COVER`, not deferred payout; shard count verified
+  at source as a deterministic monotone function of height; refuses the
+  cold-start claim-cohort hazard in the same window) — is the build-first
+  item and gets its own design round. M3/M7 CI enumerations (gate-11 /
+  F25 shape), M4 global launch-window bond rate cap (WI-3 D-B2), M5
+  never-serialized `PublicByConsent` marker, M6 generator-coupling
+  control (blind@window-0 ≥ 2× chance or INVALID) + leg-(b) wall-clock
+  emission. Irreducible three named.
   **PROVISIONAL:** the block-time sealing
   re-run is confirmatory by construction (live `BondPostDispatched.at` is
   the due block; dispersal is sub-block `U[0,60s)`), so no block-resolution

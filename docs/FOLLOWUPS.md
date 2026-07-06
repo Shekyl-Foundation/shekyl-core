@@ -7464,7 +7464,26 @@ one place to confirm each item's relationship to the wallet stack.
   not a setting), honest-user protection scope named (tunneled circumvention a residual),
   reversion on a measured decorrelated remote transport. The §4.3.1/§13.1 in-model ceiling
   is pinned: `r = 1.86` is against the strongest observer of the *modeled* channel, not the
-  strongest adversary. **Target: pre-genesis.**
+  strongest adversary. **Mechanization addendum (§16, proposed, review-gated):** the launch
+  posture converted from policy to structure under the global-and-blind constraint (sort on
+  structure, never identity — an observable founder marker *is* the partition that destroys
+  cover). Seven items, M1 first: **M1 reward-eligibility-by-shard-count is a genesis-frozen
+  CONSENSUS rule** — no reward accrues to any `(P,s,E)` for epochs with
+  `shard_count < K_COVER`; substrate verified at source (shards are frozen chain segments,
+  `shard_count` a deterministic monotone function of height ⇒ non-manipulable,
+  non-stallable; cumulative-bond-count rejected as sybil-inflatable); sharp pin: **zero
+  accrual, not deferred payout** (defer-payout preserves the early-staking yield and
+  hollows the gate); synergy: zero accrual ⇒ zero thin-window claims ⇒ the cold-start
+  claim-cohort hazard above is refused in the same window. Needs its own design doc +
+  round before any code (`epoch_close_compute`, `consensus_constants.json`, existing
+  reward-gates CI shape). M2 resolved into M1; M3 single-dispatch-path CI enumeration
+  (gate-11 shape); M4 global launch-window bond rate cap (WI-3 D-B2 item, three named
+  wargames incl. re-measuring *under* the cap); M5 never-serialized local
+  `PublicByConsent` marker (mechanizes the non-assumption, not the consent); M6 coupling
+  control added to the §5 controls family (blind@window-0 ≥ 2× chance or INVALID) +
+  leg-(b) wall-clock emission; M7 F25-style daemon-tip trust-site enumeration.
+  Irreducible three named (isolation conditioning, live network rate, founder consent).
+  **Target: pre-genesis (M1 blocks genesis; M6.2 lands with the §14.4 round).**
   **Open leg-(b) residual (rule 21), severity sharpened:** the *block-time* sealing re-run is
   confirmatory by construction (live `BondPostDispatched.at` is the due block — dispersal is
   sub-block, `U[0,60s)`, never entering `at`; `gf7_emits_bond_post_dispatched_per_submit`),
