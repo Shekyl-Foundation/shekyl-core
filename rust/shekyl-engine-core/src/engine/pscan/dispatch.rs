@@ -1131,11 +1131,16 @@ mod tests {
         assert_eq!(picked.persona, persona(2), "alarmed personas are excluded");
     }
 
-    /// GF-7 emission (§3.7): the driver emits `BondPostDispatched` with the
-    /// slot ordinal and the due-check tip at the submit call site.
+    /// GF-7 emission-completeness, driver edition (§3.7 / gate 8, the
+    /// stake-engine emission test's shape): every submit call site emits
+    /// exactly one `BondPostDispatched` — the first send and each
+    /// byte-identical resubmit (the timeline records every network
+    /// exposure, which is what WI-4's correlator grades) — with the opaque
+    /// slot ordinal and the due-check tip as the payload (no wall-clock,
+    /// no txid, no identity). Ticks that send nothing emit nothing.
     #[cfg(feature = "gf7-hooks")]
     #[tokio::test]
-    async fn gf7_emits_bond_post_dispatched() {
+    async fn gf7_emits_bond_post_dispatched_per_submit() {
         use std::sync::Arc;
 
         #[derive(Default)]
@@ -1147,20 +1152,38 @@ mod tests {
         }
 
         let events = Arc::new(Mutex::new(Vec::new()));
-        let (mut driver, _store, _broadcast) =
-            driver_with_posts(vec![post(5, 100, 0, &[7])], vec![accepted()]);
+        // First send lands ambiguous ⇒ the next due tick resubmits.
+        let (mut driver, _store, broadcast) =
+            driver_with_posts(vec![post(5, 100, 0, &[7])], vec![ambiguous(), accepted()]);
         driver.set_observer(Box::new(Recorder(events.clone())));
 
-        tick(&mut driver, 100).await;
+        // Not yet due: no send, no emission (emission is the submit call
+        // site, nothing else on the tick emits).
+        tick(&mut driver, 99).await;
+        assert!(
+            events.lock().expect("recorder").is_empty(),
+            "a no-send tick must not emit"
+        );
+
+        tick(&mut driver, 100).await; // first send (ambiguous outcome)
+        tick(&mut driver, 150).await; // byte-identical resubmit (accepted)
+        assert_eq!(broadcast.sent().len(), 2, "two network exposures");
 
         let recorded = events.lock().expect("recorder").clone();
         assert_eq!(
             recorded,
-            vec![TimelineEvent::BondPostDispatched {
-                persona: 5,
-                at: 100
-            }],
-            "one emission per dispatch: slot ordinal + the due-check tip, nothing else"
+            vec![
+                TimelineEvent::BondPostDispatched {
+                    persona: 5,
+                    at: 100
+                },
+                TimelineEvent::BondPostDispatched {
+                    persona: 5,
+                    at: 150
+                },
+            ],
+            "one emission per submit — slot ordinal + the tick's tip, and nothing besides \
+             the submit call site emits"
         );
     }
 }
