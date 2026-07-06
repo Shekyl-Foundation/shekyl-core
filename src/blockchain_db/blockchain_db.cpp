@@ -421,6 +421,12 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     if (new_output_count > 0)
       grow_curve_tree(leaf_data, new_output_count);
 
+    // Segment-freeze connect hook (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.1):
+    // runs after grow so a segment completed at this height is countable by
+    // an epoch close at this height (`freeze_height <= H_close`, inclusive).
+    // Unconditional — a no-op when the drain crossed no segment boundary.
+    process_archival_segment_freezes_at_height(prev_height + 1);
+
     // TODO(optimization): checkpoint save + intermediate layer pruning run
     // synchronously here.  For trees with millions of outputs this could add
     // noticeable latency every FCMP_CURVE_TREE_CHECKPOINT_INTERVAL blocks.
@@ -527,6 +533,13 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
       // Step 3: Trim the tree.
       trim_curve_tree(drained_count);
     }
+
+    // Segment-freeze pop hook (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.2):
+    // after the trim, delete every registry row above the post-trim
+    // frozen-segment count. Runs after revert_archival_epoch_close_at_height
+    // (above) so the close revert saw the rows the close saw. Unconditional —
+    // a no-op when the pop un-crossed no segment boundary.
+    revert_archival_segment_freezes();
 
     // Step 4: Restore drained leaves back to the pending table.
     for (const auto& entry : drain_entries)
@@ -1334,6 +1347,14 @@ void BlockchainDB::put_archival_shard_segment(uint64_t /*shard_id*/, uint64_t /*
 
 void BlockchainDB::put_archival_shard_leaf_layer_scalars(uint64_t /*shard_id*/,
   uint32_t /*leaf_index_in_segment*/, const std::vector<uint8_t>& /*flat_scalars*/)
+{
+}
+
+void BlockchainDB::process_archival_segment_freezes_at_height(uint64_t /*block_height*/)
+{
+}
+
+void BlockchainDB::revert_archival_segment_freezes()
 {
 }
 

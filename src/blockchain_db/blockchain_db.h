@@ -1983,6 +1983,27 @@ public:
   virtual void put_archival_shard_leaf_layer_scalars(uint64_t shard_id,
     uint32_t leaf_index_in_segment, const std::vector<uint8_t>& flat_scalars);
 
+  // ─── Segment-freeze pipeline (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4) ─────
+  //
+  // The production writer/deleter for the shard-segment registry. Freezing
+  // is a first-crossing rule over the consensus curve-tree leaf count
+  // (frozen = floor(leaf_count / SEGMENT_LEAF_COUNT), computed ONLY by the
+  // Rust entry point shekyl_archival_frozen_segment_count). Both hooks run
+  // inside the block's write txn: the connect hook immediately after
+  // grow_curve_tree, the pop hook after trim_curve_tree — partial commit on
+  // either path is a consensus split (M1 §1.3 obligations O-1..O-3).
+
+  /// Connect hook (§4.1): write a registry row for every level-2 subtree the
+  /// same-txn grow completed, with `freeze_height = block_height` and `R_k`
+  /// read from the layer-2 chunk the grow just wrote. No-op when no segment
+  /// boundary was crossed.
+  virtual void process_archival_segment_freezes_at_height(uint64_t block_height);
+  /// Pop hook (§4.2): delete every registry row with
+  /// `shard_id >= frozen_segment_count(post-trim leaf count)`. The delete
+  /// rule is derived from the same function as the write rule, so re-applied
+  /// blocks recreate rows bit-identically (O-3 pop-symmetry).
+  virtual void revert_archival_segment_freezes();
+
   /// Gate-2 §6 / gate-4 §4.2: slash scheduler at `H_slash_deadline` (LMDB impl).
   virtual void process_archival_slash_at_height(uint64_t block_height);
   /// Revert slash journal rows recorded when `block_height` connected.

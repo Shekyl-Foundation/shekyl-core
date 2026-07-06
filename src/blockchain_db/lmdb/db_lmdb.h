@@ -483,6 +483,8 @@ private:
 
   virtual void process_archival_slash_at_height(uint64_t block_height) override;
   virtual void revert_archival_slashes_at_height(uint64_t block_height) override;
+  virtual void process_archival_segment_freezes_at_height(uint64_t block_height) override;
+  virtual void revert_archival_segment_freezes() override;
   virtual void process_archival_epoch_close_at_height(uint64_t block_height) override;
   virtual void revert_archival_epoch_close_at_height(uint64_t block_height) override;
   virtual uint64_t get_archival_r_market(uint64_t shard_id,
@@ -631,6 +633,13 @@ private:
   // Prefer the active write txn when present so uncommitted archival bits are visible
   // during block connect (slash scheduling, same-block idempotency after prior txs).
   int archival_db_get(MDB_dbi dbi, MDB_val* k, MDB_val* v) const;
+
+  /** Shared operand of the two segment-freeze hooks
+   * (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4): post-grow / post-trim leaf
+   * count read on the block's write txn, passed through the Rust
+   * first-crossing entry point (shekyl_archival_frozen_segment_count —
+   * the only site allowed to perform the boundary division, §5.1). */
+  uint64_t frozen_segment_count_on_write_txn() const;
 
   MDB_env* m_env;
 

@@ -5774,6 +5774,119 @@ void BlockchainLMDB::put_archival_shard_segment_raw_for_corruption_test(uint64_t
     throw0(DB_ERROR(lmdb_error("Failed to put raw archival shard segment: ", result).c_str()));
 }
 
+namespace
+{
+  // Defined in the curve-tree anonymous-namespace block below; declared here
+  // so the freeze hooks can read the layer-2 chunk the same-txn grow wrote.
+  uint64_t ct_layer_chunk_key(uint8_t layer, uint64_t chunk);
+}
+
+uint64_t BlockchainLMDB::frozen_segment_count_on_write_txn() const
+{
+  // Post-grow / post-trim leaf count, read on the block's write txn so the
+  // hook sees the same-txn tree mutation. The boundary division lives ONLY
+  // in the Rust entry point (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.1
+  // division-one-site discipline).
+  const std::string lc_key = "leaf_count";
+  MDB_val k = {lc_key.size(), const_cast<char*>(lc_key.data())};
+  MDB_val v;
+  uint64_t leaf_count = 0;
+  const int rc = mdb_get(*m_write_txn, m_curve_tree_meta, &k, &v);
+  if (rc == 0 && v.mv_size == sizeof(uint64_t))
+    memcpy(&leaf_count, v.mv_data, sizeof(uint64_t));
+  else if (rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to get curve tree leaf count at segment freeze: ", rc).c_str()));
+  return shekyl_archival_frozen_segment_count(leaf_count);
+}
+
+void BlockchainLMDB::process_archival_segment_freezes_at_height(uint64_t block_height)
+{
+  // Segment-freeze connect hook (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.1):
+  // for every level-2 subtree the same-txn grow completed, write a registry
+  // row with freeze_height = block_height and R_k read from the layer-2
+  // chunk the grow just wrote (which IS the frozen sub-root — MMR finality).
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: segment freeze requires active write txn");
+
+  const uint64_t complete = frozen_segment_count_on_write_txn();
+
+  // Resume point: one-row reverse peek over the table this writer owns
+  // (empty table => 0). This is the writer deriving its own frontier from
+  // its own rows — not a second count pass (tripwire-exempt by name).
+  uint64_t next = 0;
+  {
+    MDB_cursor* cur = nullptr;
+    int rc = mdb_cursor_open(*m_write_txn, m_archival_shard_segment, &cur);
+    if (rc)
+      throw0(DB_ERROR(lmdb_error("Failed to open archival_shard_segment cursor for freeze resume peek: ", rc).c_str()));
+    MDB_val k, v;
+    rc = mdb_cursor_get(cur, &k, &v, MDB_LAST);
+    if (rc == 0)
+    {
+      if (k.mv_size != shekyl::db::kArchivalShardKeySize)
+        throw std::runtime_error("FATAL: archival_shard_segment key size mismatch at freeze resume peek");
+      next = shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data)) + 1;
+    }
+    else if (rc != MDB_NOTFOUND)
+      throw0(DB_ERROR(lmdb_error("archival_shard_segment cursor error at freeze resume peek: ", rc).c_str()));
+    mdb_cursor_close(cur);
+  }
+
+  for (uint64_t shard_id = next; shard_id < complete; ++shard_id)
+  {
+    // A missing layer-2 chunk for a completed segment means the tree and
+    // the freeze rule disagree — corruption, not a skippable row (same
+    // loud-abort class as the M1 count pass's decode failure).
+    const uint64_t layer_key = ct_layer_chunk_key(2, shard_id);
+    MDB_val lk = {sizeof(layer_key), (void *)&layer_key};
+    MDB_val lv;
+    const int rc = mdb_get(*m_write_txn, m_curve_tree_layers, &lk, &lv);
+    if (rc || lv.mv_size != 32)
+      throw0(DB_ERROR(lmdb_error(
+        "FATAL: missing/malformed layer-2 chunk for completed segment at freeze: ", rc).c_str()));
+    crypto::hash rk{};
+    memcpy(rk.data, lv.mv_data, 32);
+    put_archival_shard_segment(shard_id, block_height, rk, SHEKYL_ARCHIVAL_SEGMENT_LEAF_COUNT);
+  }
+}
+
+void BlockchainLMDB::revert_archival_segment_freezes()
+{
+  // Segment-freeze pop hook (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.2):
+  // delete every row with shard_id >= frozen_segment_count(post-trim leaf
+  // count). Derived from the same Rust entry point as the connect hook, so
+  // re-applied blocks recreate rows bit-identically (O-3 pop-symmetry). No
+  // journal: the drain journal already restores the leaf count exactly.
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: segment freeze revert requires active write txn");
+
+  const uint64_t complete = frozen_segment_count_on_write_txn();
+
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(*m_write_txn, m_archival_shard_segment, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_shard_segment cursor for freeze revert: ", rc).c_str()));
+  MDB_val k, v;
+  while ((rc = mdb_cursor_get(cur, &k, &v, MDB_LAST)) == 0)
+  {
+    if (k.mv_size != shekyl::db::kArchivalShardKeySize)
+      throw std::runtime_error("FATAL: archival_shard_segment key size mismatch at freeze revert");
+    const uint64_t shard_id = shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data));
+    if (shard_id < complete)
+      break;
+    rc = mdb_cursor_del(cur, 0);
+    if (rc)
+      throw0(DB_ERROR(lmdb_error("Failed to delete archival_shard_segment row at freeze revert: ", rc).c_str()));
+  }
+  if (rc != 0 && rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("archival_shard_segment cursor error at freeze revert: ", rc).c_str()));
+  mdb_cursor_close(cur);
+}
+
 void BlockchainLMDB::process_archival_epoch_close_at_height(uint64_t block_height)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
