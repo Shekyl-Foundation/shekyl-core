@@ -7491,6 +7491,10 @@ one place to confirm each item's relationship to the wallet stack.
   control added to the §5 controls family (blind@window-0 ≥ 2× chance or INVALID) +
   leg-(b) wall-clock emission; M7 F25-style daemon-tip trust-site enumeration.
   Irreducible three named (isolation conditioning, live network rate, founder consent).
+  **Scheduling note (2026-07-06): the §14.4 implementation round is SEALING-PATH work,
+  not ordinary validation** — via Pin 2 it gates `K_COVER`, a genesis-immutable constant,
+  so it inherits the reward rule's own "must be right before seal, cannot be changed
+  after" weight. Do not schedule it as deferrable measurement.
   **Target: pre-genesis (M1 blocks genesis; M6.2 lands with the §14.4 round).**
   **Open leg-(b) residual (rule 21), severity sharpened:** the *block-time* sealing re-run is
   confirmatory by construction (live `BondPostDispatched.at` is the due block — dispersal is
