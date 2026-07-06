@@ -7602,6 +7602,15 @@ one place to confirm each item's relationship to the wallet stack.
   Σ reward_amount_plain` publicly computable to the atomic unit; matchable against
   user-side amount surfaces at exit — the value channel's surviving form, an
   amount-certainty bridge independent of timing mitigations).
+  **Mechanism pin (§18.9, 2026-07-06):** a follow-on reading proposed the bond amount is
+  CT-hidden above the floor with a user-configurable blinding mask; verified at source
+  **wrong in mechanism** — the bond term enters the CT balance as a transparent `amount·H`
+  cleartext term (`bond_ct_balance.rs`; funding inputs and change are the hidden legs),
+  and `commitment_mask` is HKDF-derived per output, never user-chosen. The closure is
+  loud-but-constant, not hidden; the proposed cross-persona mask-consistency wargame is
+  unrepresentable-by-construction (reopen: any PR introducing a user-supplied blinding
+  factor or above-floor bonding). Remaining `P`→user bridges are timing-only **on-chain**;
+  V-2a/V-2b survive off-chain (loud rewards + universal constant vs. user-side surfaces).
   **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
   GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
   seams, not just entry).**

@@ -147,6 +147,15 @@
   (universal funding constant vs off-chain user-side amount surfaces)
   and V-2b exit lifetime-total match (`P`'s lifetime value publicly
   computable to the atomic unit — the value channel's surviving form).
+  **Mechanism pin (§18.9):** a follow-on CT reading (bond amount hidden
+  above the floor behind a user-configurable mask) verified at source
+  wrong in mechanism — the bond term is a transparent `amount·H`
+  cleartext term in the CT balance (`bond_ct_balance.rs`; funding and
+  change are the hidden legs), `commitment_mask` is HKDF-derived and
+  never user-chosen; closure is loud-but-constant, the proposed
+  mask-consistency wargame unrepresentable-by-construction (reopen on
+  any user-supplied blinding factor or above-floor bonding). On-chain
+  bridges are timing-only; V-2a/V-2b survive off-chain.
   **PROVISIONAL:** the block-time sealing
   re-run is confirmatory by construction (live `BondPostDispatched.at` is
   the due block; dispersal is sub-block `U[0,60s)`), so no block-resolution

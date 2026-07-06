@@ -2159,3 +2159,69 @@ un-graded surface is the exit-side pair. §18.3's stratified grading
 narrows to bridge-axis screening; §18.7's curve pin downgrades to
 economic-with-a-bridge-check. The verdict-line conditionals (§13.1,
 §13.5) are unaffected — they were already stated in `P`→user form.
+
+### 18.9 Mechanism pin: the bond term is loud-but-constant, not CT-hidden; the mask wargame is unrepresentable (2026-07-06)
+
+A follow-on review reading proposed a different closure mechanism for
+the entry amount bridge — that the bonded amount is a Pedersen/CT
+commitment hidden *above* the floor, with the blinding mask as random
+or user-configurable padding — and, on that mechanism, proposed a
+cross-persona mask-consistency wargame (a user configuring the same
+distinctive padding across `P1`/`P2`/`P3` bridges them to a common
+configurer). **Verified at source: that mechanism is not the design,
+and the record must not absorb it, because the two closures fail
+differently and imply different residuals.**
+
+What the code does (`bond_ct_balance.rs`, `bond_post.rs`,
+`stake_engine.rs` assemble path):
+
+1. **The bond term enters the CT balance equation as a transparent
+   cleartext term.** `verify_bond_post_ct_balance` places
+   `BondTerm::Credit(amount)` on the output side as `amount·H` —
+   H-only, no blinding factor, structurally identical to the fee term
+   (the unit test balances `h_only(BOND_CREDIT)` against
+   `Credit(750_000_000)`). The equation's *hidden* legs are the
+   funding inputs (pseudo-outs) and the change output (out masks).
+   `bond_credit`/`bonded_total_atomic` are cleartext `u64`s on the
+   vin, consensus-forced to `bond_floor(holdings)` **exactly** (§18.8;
+   `FloorMismatch` rejects both directions). Nothing sits hidden above
+   the floor: over-funding exits as hidden **change back to `P`**,
+   never as extra bonded amount.
+2. **`commitment_mask` is a deterministically-derived Pedersen
+   blinding factor, not padding and not configurable.** The input-side
+   mask is re-derived via HKDF from the output's shared secret
+   (`derive_output_secrets(combined_ss, index) → z`,
+   `stake_engine.rs::derive_p_source_secrets_bundle`); the change-side
+   mask comes from `construct_output` the same way. No user-facing
+   configuration surface for either exists in the repo, and no
+   "configurable with warning" path exists.
+
+**Dispositions:**
+
+- **The entry amount bridge stays closed, with §18.8's mechanism:**
+  the bond's public amount carries zero bits because it is a
+  *constant* (loud but information-free), not because it is *hidden*.
+  The funding/change legs are CT-hidden; the bond term is
+  quantized-to-constant. The distinction is load-bearing: a
+  hidden-amount design would carry mask-management residuals; a
+  constant-amount design carries none.
+- **The mask-consistency wargame dissolves as
+  unrepresentable-by-construction.** The failure mode requires a
+  user-chosen mask; the mask is HKDF-derived per output. The
+  "remove the configuration option" disposition the wargame reached
+  for is the design as built — there is nothing to remove. (Recorded
+  because the wargame's *shape* is right and would apply if a future
+  change ever made masks or bonded amounts user-chosen; reopening
+  criterion: any PR introducing a user-supplied blinding factor or a
+  bonded amount above the floor.)
+- **"The remaining bridges are timing-only" is pinned with one
+  qualifier: on-chain.** On-chain, with the tier channel deleted, the
+  bond amount constant, and funding/change CT-hidden, the `P`→user
+  bridge classes are timing-shaped (funding-seam timing — graded,
+  `1.86`; exit/drain timing, claim cadence against user rhythm,
+  co-triggers — GF-4, ungraded), which is exactly what the GF
+  apparatus measures. **Off-chain**, the V-2a/V-2b residuals (§18.8)
+  survive unchanged, because they depend on the *loud reward amounts*
+  and the *universal funding constant* matched against user-side
+  amount surfaces (e.g. exchange records) — not on the bond amount.
+  V-2b remains on the GF-4 round's surface.
