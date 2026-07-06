@@ -741,6 +741,95 @@ impl StakeEngine {
         Ok(())
     }
 
+    /// Steps 1–5 shared verbatim by the [`SignBond`] and [`AssembleBond`]
+    /// handlers: validate the handle, cross-check it against the ticket's slot,
+    /// preflight the OS entropy source, draw the guarded entry gap, plan the
+    /// entry seam, and emit the GF-7 hooks. Returns the validated handle slot and
+    /// the placement plan.
+    ///
+    /// This is the **single definition** of a security-relevant sequence — the
+    /// RNG source preflight, the double-jitter degeneracy guard, the
+    /// timing-decorrelation plan, and the observer emission. Both bond handlers
+    /// must run it identically; keeping it in one place means a future change to
+    /// the draw/guard discipline (a stronger degeneracy check, a new observer
+    /// event) lands once rather than silently diverging between two copies and
+    /// weakening the timing firewall in the un-updated path with no compile error.
+    fn validate_and_plan_entry_seam(
+        &mut self,
+        handle: &PersonaHandle,
+        ticket_slot: PSlot,
+    ) -> Result<(PSlot, EntrySeamPlan), StakeEngineError> {
+        // 1. Validate the handle: generation currency + slot membership.
+        self.validate_handle(handle)?;
+
+        // 2. Slot cross-check: tickets witness a specific slot; a ticket cannot
+        //    authorize signing for any other slot (even a held one).
+        let handle_slot = handle.p_slot;
+        if handle_slot != ticket_slot {
+            return Err(StakeEngineError::SlotMismatch {
+                handle_slot,
+                ticket_slot,
+            });
+        }
+
+        // 3. Preflight the OS entropy source (Round 3 — source failure, fail-loud).
+        //    `GapRng::next_u64` is infallible; a source failure therefore must be
+        //    caught here via `try_fill_bytes` before calling `draw_entry_gap`.
+        //    No silent fallback: source failure → `RngSourceFailed`, not a retry
+        //    on a weaker source.
+        {
+            let mut probe = [0u8; 8];
+            rand_core::OsRng
+                .try_fill_bytes(&mut probe)
+                .map_err(StakeEngineError::RngSourceFailed)?;
+            let _ = probe; // consumed; used only to exercise the source
+        }
+
+        // 4. Entry-gap draw + per-draw degeneracy guard (S4/S5, Round 2/3).
+        //    `draw_entry_gap_guarded` draws twice (spread_draw, spread_probe) and
+        //    fires `RngDegeneracy` if they are equal (double-jitter-trap detection).
+        //    The actual timing draw result is returned on success.
+        let mut rng = OsRngGapAdapter;
+        let (spread, bond_first) = draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
+            .map_err(|DegenerateDraw| StakeEngineError::RngDegeneracy)?;
+        // S6: the session-level `certify_draw` self-cert (over `OsRngGapAdapter`,
+        // gated, at session start) is wired in `on_start` — see
+        // `run_session_self_cert` and the `conformance` feature.
+
+        // 5. Consume BOTH draw values into the block-timed placement plan (2c-2b
+        //    scheduler wiring). `plan_entry_seam` is the single-sourced consumer
+        //    (`shekyl_standoff::plan`): it takes the draw tuple whole, so the
+        //    `bond_first` ORDER-COIN (the fair bond-before-vs-after-funding
+        //    inversion; dropping it collapses the observer's ordering prior from
+        //    0.5 to certainty, half the golden-vector-certified decorrelation) is
+        //    consumed with the `spread` DELAY by construction. The plan rides the
+        //    reply; the caller anchors it at its private intent time `t0`.
+        let plan = plan_entry_seam((spread, bond_first));
+
+        // GF-7 hooks-spec §3: emit the draw-consumption and schedule events to
+        // the injected observer. Sim-facing only — this block is compiled out
+        // of default builds (§4 layer 3), and the production observer is the
+        // no-op (§6.1). Payload discipline: opaque wallet-local slot ordinal,
+        // block-relative offsets, no wall-clock, no identities.
+        #[cfg(feature = "gf7-hooks")]
+        {
+            let persona = u64::from(handle_slot.0);
+            self.observer.record(TimelineEvent::EntryGapDrawConsumed {
+                persona,
+                window_blocks: DEFAULT_ENTRY_GAP.as_blocks(),
+                spread_blocks: spread,
+                bond_first,
+            });
+            self.observer.record(TimelineEvent::BondPostScheduled {
+                persona,
+                entry_offset_blocks: plan.entry_offset_blocks,
+                bond_post_offset_blocks: plan.bond_post_offset_blocks,
+            });
+        }
+
+        Ok((handle_slot, plan))
+    }
+
     /// Project the public identity of a held slot. The caller must have
     /// validated membership (e.g. via [`Self::validate_handle`]).
     fn identity_of(&self, slot: PSlot) -> PersonaIdentity {
@@ -779,6 +868,14 @@ impl StakeEngine {
     ///
     /// Fails closed if a resident key is malformed: a silently-weakened scanner
     /// would mis-size the privacy parameter `C_min` (DQ7).
+    ///
+    /// `known_ids` is recomputed here **on purpose**, not cached: it rides the
+    /// same loop that rebuilds the transient secret scanners, which *must* be
+    /// rebuilt every batch (DQ5). Caching only the public id set would save one
+    /// `persona_canonical_id` per bonded persona per batch (marginal, since
+    /// bonded personas are few) at the cost of a stale-cache invalidation surface
+    /// on a firewall-critical set — a missed invalidation would silently drop a
+    /// newly-bonded persona's bond-post matches. Recompute is the safe trade.
     fn bonded_scan_inputs(&self) -> Result<BondedScanInputs, ScanSetupError> {
         let mut scanners = Vec::new();
         let mut known_ids = BTreeSet::new();
@@ -1159,93 +1256,27 @@ impl Message<SignBond> for StakeEngine {
         msg: SignBond,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        // 1. Validate the handle: generation currency + slot membership.
-        self.validate_handle(&msg.handle)?;
-
-        // 2. Slot cross-check: ticket witnesses persist for a specific slot; it
-        //    cannot authorize signing for any other slot (even a held one).
-        let handle_slot = msg.handle.p_slot;
-        let ticket_slot = msg.ticket.p_slot();
-        if handle_slot != ticket_slot {
-            return Err(StakeEngineError::SlotMismatch {
-                handle_slot,
-                ticket_slot,
-            });
-        }
-
-        // 3. Preflight the OS entropy source (Round 3 — source failure, fail-loud).
-        //    `GapRng::next_u64` is infallible; a source failure therefore must be
-        //    caught here via `try_fill_bytes` before calling `draw_entry_gap`.
-        //    No silent fallback: source failure → `RngSourceFailed`, not a retry
-        //    on a weaker source.
-        {
-            let mut probe = [0u8; 8];
-            rand_core::OsRng
-                .try_fill_bytes(&mut probe)
-                .map_err(StakeEngineError::RngSourceFailed)?;
-            let _ = probe; // consumed; used only to exercise the source
-        }
-
-        // 4. Entry-gap draw + per-draw degeneracy guard (S4/S5, Round 2/3).
-        //    `draw_entry_gap_guarded` draws twice (spread_draw, spread_probe) and
-        //    fires `RngDegeneracy` if they are equal (double-jitter-trap detection).
-        //    The actual timing draw result is returned on success.
-        let mut rng = OsRngGapAdapter;
-        let (spread, bond_first) = draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
-            .map_err(|DegenerateDraw| StakeEngineError::RngDegeneracy)?;
-        // S6: the session-level `certify_draw` self-cert (over `OsRngGapAdapter`,
-        // gated, at session start) is wired in `on_start` — see
-        // `run_session_self_cert` and the `conformance` feature.
-
-        // 5. Consume BOTH draw values into the block-timed placement plan
-        //    (2c-2b scheduler wiring). `plan_entry_seam` is the single-sourced
-        //    consumer (`shekyl_standoff::plan`): it takes the draw tuple whole,
-        //    so the `bond_first` ORDER-COIN (the fair bond-before-vs-after-
-        //    funding inversion; dropping it collapses the observer's ordering
-        //    prior from 0.5 to certainty, half the golden-vector-certified
-        //    decorrelation) is consumed with the `spread` DELAY by construction.
-        //    The plan rides the reply; the caller anchors it at its private
-        //    intent time `t0`.
-        //    TODO(2d) — the write-side *seam* the plan will drive is built:
-        //    `PTransactionSubmitter` (per-`P` CX-2) + `BroadcastPosture`
-        //    (no-③-by-type) in `transaction_submitter.rs` / `posture.rs`
-        //    (SP-T4a, `ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`). The remaining
-        //    CONSUMER wiring, still gated (**not on the seam**): assemble the
-        //    bond `vin` into a full tx (funding inputs/outputs + `credit_term`
-        //    → `shekyl_tx_builder::sign_transaction_with_terms`) and dispatch
-        //    at the planned offsets through the submitter. That is the 2c-2a
-        //    assemble / 2d dispatch wiring; this handler plans, it does not
-        //    broadcast.
+        // Steps 1–5 (validate + slot cross-check + entropy preflight + guarded
+        // draw + entry-seam plan + GF-7 hooks) are the shared bond-handler
+        // prologue; see `validate_and_plan_entry_seam`.
         //
-        // GF-7 SCOPE (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §4): this jitter
-        // decorrelates the bond-post from `P`'s own observable funding/entry event
-        // (the funding-seam ordering prior) **only** — NOT from the principal's
-        // lifecycle timeline, nor from `P`'s other broadcasts. That correlation
-        // (GATE6 §10.12 GF-7) remains a **genesis gate**; the measurement pipeline
-        // that will quantify it is the `gf7-hooks` observer seam below
+        // GF-7 SCOPE (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §4): the jitter that
+        // prologue draws decorrelates the bond-post from `P`'s own observable
+        // funding/entry event (the funding-seam ordering prior) **only** — NOT
+        // from the principal's lifecycle timeline, nor from `P`'s other
+        // broadcasts. That correlation (GATE6 §10.12 GF-7) remains a **genesis
+        // gate**; the measurement pipeline that will quantify it is the
+        // `gf7-hooks` observer seam the prologue emits to
         // (`ARCHIVAL_BOND_2C_GF7_HOOKS.md`), evaluated in `shekyl-staking-sim`.
-        let plan = plan_entry_seam((spread, bond_first));
-
-        // GF-7 hooks-spec §3: emit the draw-consumption and schedule events to
-        // the injected observer. Sim-facing only — this block is compiled out
-        // of default builds (§4 layer 3), and the production observer is the
-        // no-op (§6.1). Payload discipline: opaque wallet-local slot ordinal,
-        // block-relative offsets, no wall-clock, no identities.
-        #[cfg(feature = "gf7-hooks")]
-        {
-            let persona = u64::from(handle_slot.0);
-            self.observer.record(TimelineEvent::EntryGapDrawConsumed {
-                persona,
-                window_blocks: DEFAULT_ENTRY_GAP.as_blocks(),
-                spread_blocks: spread,
-                bond_first,
-            });
-            self.observer.record(TimelineEvent::BondPostScheduled {
-                persona,
-                entry_offset_blocks: plan.entry_offset_blocks,
-                bond_post_offset_blocks: plan.bond_post_offset_blocks,
-            });
-        }
+        //
+        // TODO(2d) — the write-side *seam* the plan will drive is built:
+        // `PTransactionSubmitter` (per-`P` CX-2) + `BroadcastPosture`
+        // (no-③-by-type) in `transaction_submitter.rs` / `posture.rs` (SP-T4a).
+        // The remaining CONSUMER wiring is the 2c-2a assemble / 2d dispatch path
+        // (see `AssembleBond`); this handler plans + signs the vin, it does not
+        // broadcast.
+        let (handle_slot, plan) =
+            self.validate_and_plan_entry_seam(&msg.handle, msg.ticket.p_slot())?;
 
         // 6. Borrow the held bundle — slot membership confirmed by step 1.
         let keys = self
@@ -1326,43 +1357,11 @@ impl Message<AssembleBond> for StakeEngine {
         msg: AssembleBond,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        // ── Steps 1–5: identical typed contracts + draw as `SignBond` ────
-        self.validate_handle(&msg.handle)?;
-        let handle_slot = msg.handle.p_slot;
-        let ticket_slot = msg.ticket.p_slot();
-        if handle_slot != ticket_slot {
-            return Err(StakeEngineError::SlotMismatch {
-                handle_slot,
-                ticket_slot,
-            });
-        }
-        {
-            let mut probe = [0u8; 8];
-            rand_core::OsRng
-                .try_fill_bytes(&mut probe)
-                .map_err(StakeEngineError::RngSourceFailed)?;
-            let _ = probe;
-        }
-        let mut rng = OsRngGapAdapter;
-        let (spread, bond_first) = draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
-            .map_err(|DegenerateDraw| StakeEngineError::RngDegeneracy)?;
-        let plan = plan_entry_seam((spread, bond_first));
-
-        #[cfg(feature = "gf7-hooks")]
-        {
-            let persona = u64::from(handle_slot.0);
-            self.observer.record(TimelineEvent::EntryGapDrawConsumed {
-                persona,
-                window_blocks: DEFAULT_ENTRY_GAP.as_blocks(),
-                spread_blocks: spread,
-                bond_first,
-            });
-            self.observer.record(TimelineEvent::BondPostScheduled {
-                persona,
-                entry_offset_blocks: plan.entry_offset_blocks,
-                bond_post_offset_blocks: plan.bond_post_offset_blocks,
-            });
-        }
+        // ── Steps 1–5: the shared bond-handler prologue (identical typed
+        // contracts + guarded draw as `SignBond`); see
+        // `validate_and_plan_entry_seam`. ──────────────────────────────────
+        let (handle_slot, plan) =
+            self.validate_and_plan_entry_seam(&msg.handle, msg.ticket.p_slot())?;
 
         // ── Step 6: borrow the held bundle (never crosses the boundary) ──
         let keys = self
@@ -1461,7 +1460,12 @@ impl Message<AssembleBond> for StakeEngine {
             gindex: u64,
         }
         let mut prepared = Vec::with_capacity(msg.funding.len());
-        for ctx in &msg.funding {
+        // Consume `msg.funding` by value (the sum pass above already read what it
+        // needed): the curve-tree membership vecs (`leaf_chunk`, `c1_layers`,
+        // `c2_layers` — many 32-byte node vecs per tree layer) MOVE into each
+        // `SpendInput` rather than deep-copy. `rec` borrows the disjoint `record`
+        // field, so its `Copy` reads coexist with those field moves.
+        for ctx in msg.funding {
             let rec = &ctx.record;
             let ciphertext = HybridCiphertext {
                 x25519: rec.ciphertext_x25519,
@@ -1513,9 +1517,9 @@ impl Message<AssembleBond> for StakeEngine {
                     h_pqc,
                     combined_ss: bundle.combined_ss.to_vec(),
                     output_index: rec.index_in_transaction,
-                    leaf_chunk: ctx.leaf_chunk.clone(),
-                    c1_layers: ctx.c1_layers.clone(),
-                    c2_layers: ctx.c2_layers.clone(),
+                    leaf_chunk: ctx.leaf_chunk,
+                    c1_layers: ctx.c1_layers,
+                    c2_layers: ctx.c2_layers,
                 },
                 key_image,
                 pqc_pubkey,
@@ -1577,9 +1581,13 @@ impl Message<AssembleBond> for StakeEngine {
         // signature binds a different post than the hash covered — a build
         // defect, never recoverable.
         if built.vin() != &expected_vin {
-            debug_assert_eq!(
-                built.vin(),
-                &expected_vin,
+            // Loud in debug (a build defect, never a recoverable state), fail
+            // closed in release. `debug_assert!(false, …)` — not
+            // `debug_assert_eq!(built.vin(), &expected_vin, …)`, which would be
+            // an always-false assert inside a branch that already established
+            // inequality (it reads as a conditional check but can only panic).
+            debug_assert!(
+                false,
                 "A-1: signed vin diverged from the prefix BondPost input"
             );
             return Err(BondAssemblyError::BondPostMismatch.into());
@@ -1622,6 +1630,13 @@ impl Message<AssembleBond> for StakeEngine {
         // ── Step 16: assemble the wire input; pqc_auths carries one slot per
         // prefix input — the spend slots (output-derived keys) then the bond
         // slot (P's identity key), matching prefix input order.
+        //
+        // `signed` is a locally-owned value dropped at the end of this handler
+        // and never read whole again (the only prior use, the bulletproof parse
+        // above, borrowed `bulletproof_plus`). So the multi-KB owned proof
+        // fields MOVE into the wire input rather than clone — the two `Copy`
+        // reads below (`reference_block`, `tree_depth`) still work after a
+        // partial move.
         let mut wire = WireEncodeInput {
             key_images,
             extra_inputs,
@@ -1629,13 +1644,13 @@ impl Message<AssembleBond> for StakeEngine {
             view_tags,
             tx_extra,
             fee,
-            enc_amounts: signed.enc_amounts.clone(),
-            enc_labels: signed.enc_labels.clone(),
-            out_commitments: signed.commitments.clone(),
-            pseudo_outs: signed.pseudo_outs.clone(),
+            enc_amounts: signed.enc_amounts,
+            enc_labels: signed.enc_labels,
+            out_commitments: signed.commitments,
+            pseudo_outs: signed.pseudo_outs,
             bulletproof,
             reference_block: signed.reference_block,
-            fcmp_proof: signed.fcmp_proof.clone(),
+            fcmp_proof: signed.fcmp_proof,
             pqc_auths: pqc_pubkeys
                 .iter()
                 .map(|pk| PqcAuth {

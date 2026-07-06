@@ -196,6 +196,22 @@ impl std::fmt::Debug for BondPostMatch {
 ///
 /// `Debug` is **redacted**: a row of `P`'s funding history (slot, amount,
 /// placement) — the same no-clear-`Debug` discipline as [`BondPostMatch`].
+///
+/// **Why a separate type when it is byte-identical to [`PFundingOutputRecord`]
+/// today** (do not collapse the two without revisiting this): the split is the
+/// engine-core↔engine-state *serialization boundary*, not incidental
+/// duplication. `PFundingOutputRecord` carries `Serialize`/`Deserialize`/`Schema`
+/// and *is* the on-disk format gated by `PSCAN_STATE_VERSION` — changing it is a
+/// persisted-schema event (rule 42: version bump + snapshot check). This
+/// transform twin is the in-memory scan-extraction result crossing the actor
+/// boundary, version-free, so the live scan path can evolve without touching the
+/// frozen persisted format. That decoupling is also the seam along which the two
+/// are expected to **diverge** once the P posture settles post-GF-7 (a transient
+/// scan-time field the disk form should not carry, or vice-versa). The sibling
+/// [`BondPostMatch`]/`BondPostRecord` pair is twinned at the same boundary for
+/// the same reason. The duplication hazard is compiler-guarded: both `From`
+/// impls are exhaustive struct literals, so a field added to either type fails to
+/// compile until both types and both impls carry it.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct FundingOutputMatch {
     /// The owning persona's slot ordinal (selects the re-derivation keys).

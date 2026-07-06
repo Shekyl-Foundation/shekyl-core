@@ -14,8 +14,9 @@
 //! The module carries the Engine-side **public** halves of WI-2:
 //!
 //! - **D-A2 funding selection** ([`select_funding_outputs`]): deterministic
-//!   oldest-first greedy accumulation over the sealed [`PFundingOutputRecord`]
-//!   set, excluding records reserved by a live pending post.
+//!   oldest-first greedy accumulation over the assembling persona's slice of the
+//!   sealed [`PFundingOutputRecord`] set, excluding records reserved by a live
+//!   pending post.
 //! - The **error surface** ([`BondAssemblyError`]) for the assemble path's
 //!   named failure modes (§3.6, rule 82).
 //!
@@ -219,11 +220,21 @@ pub(crate) struct FundingSelection {
 /// D-A2 funding selection (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.2), Engine-side
 /// over public data only:
 ///
-/// 1. **Eligibility.** Every persisted record is already final (the pscan
-///    ingest horizon is `tip − ARCHIVAL_REORG_DEPTH_BLOCKS`). Records whose
-///    `gindex` appears in `reserved` — the union of live pending posts'
-///    reservation sets — are excluded; the pending record is the single
-///    source of reservation truth.
+/// 1. **Eligibility.** Selection is scoped to `p_slot` — the assembling
+///    persona's outputs only. This is load-bearing, not a filter of
+///    convenience: the `AssembleBond` handler re-derives every input's spend
+///    secrets with **one** persona's keys ([`derive_p_source_secrets_bundle`]
+///    keyed on the handle's slot), so a record belonging to a *different*
+///    bonded persona would derive a wrong key image and the daemon would reject
+///    the post. The sealed set mixes every bonded persona's records
+///    (`bonded_scan_inputs` slot-tags each), so the slot filter is what keeps
+///    the selection self-consistent with the single-persona derivation.
+///    Every persisted record is already final (the pscan ingest horizon is
+///    `tip − ARCHIVAL_REORG_DEPTH_BLOCKS`). Records whose `gindex` appears in
+///    `reserved` — the union of live pending posts' reservation sets — are
+///    excluded; the pending record is the single source of reservation truth.
+///
+/// [`derive_p_source_secrets_bundle`]: super::stake_engine::derive_p_source_secrets_bundle
 /// 2. **Ramp.** If the unreserved sum is below `required`, refuse with
 ///    [`BondAssemblyError::InsufficientFunding`].
 /// 3. **Order.** Oldest-first (height, then gindex) greedy accumulation until
@@ -233,15 +244,27 @@ pub(crate) struct FundingSelection {
 ///
 /// `required` is `bond_floor(holdings) + fee`, computed by the caller with
 /// checked arithmetic.
+///
+/// **Interim-safety (tracked, do not remove without the FOLLOWUP):** `reserved`
+/// covers only *live pending posts*. A funding output spent by a bond post that
+/// has since **confirmed** is un-reserved (its pending record cleared) yet still
+/// present in `records` — nothing prunes `funding_outputs` on spend today. So a
+/// live assemble path could re-select an already-spent output and the daemon
+/// would reject the double-spend. Durable removal of confirmed-spent outputs is
+/// SP-R0-gated (confirmed-absence-within-`covered` discipline); until it lands
+/// the WI-2 assemble/dispatch path must stay dead-code (it is — see the
+/// `#[allow(dead_code)]` below and on `AssembleBond`). See FOLLOWUPS "2d-1 WI-2
+/// — durable removal of SPENT funding outputs".
 #[allow(dead_code)] // transient — consumed by the Engine-side WI-2 orchestrator as it lands.
 pub(crate) fn select_funding_outputs(
     records: &[PFundingOutputRecord],
+    p_slot: u32,
     reserved: &std::collections::BTreeSet<u64>,
     required: u64,
 ) -> Result<FundingSelection, BondAssemblyError> {
     let mut eligible: Vec<&PFundingOutputRecord> = records
         .iter()
-        .filter(|r| !reserved.contains(&r.gindex))
+        .filter(|r| r.p_slot == p_slot && !reserved.contains(&r.gindex))
         .collect();
     // Oldest-first: height, then gindex. Distinct outputs have distinct
     // gindexes, so the order is total and deterministic.
@@ -364,8 +387,12 @@ mod tests {
     use shekyl_units::AtomicUnits;
 
     fn record(gindex: u64, height: u64, amount: u64) -> PFundingOutputRecord {
+        record_for_slot(0, gindex, height, amount)
+    }
+
+    fn record_for_slot(p_slot: u32, gindex: u64, height: u64, amount: u64) -> PFundingOutputRecord {
         PFundingOutputRecord {
-            p_slot: 0,
+            p_slot,
             tx_hash: [u8::try_from(gindex & 0xFF).expect("masked to a byte"); 32],
             index_in_transaction: 0,
             gindex,
@@ -392,7 +419,7 @@ mod tests {
             record(4, 20, 500),
         ];
         let selection =
-            select_funding_outputs(&records, &Default::default(), 1_000).expect("selects");
+            select_funding_outputs(&records, 0, &Default::default(), 1_000).expect("selects");
         // Oldest-first: (10,1) then (10,3) then (20,4); 300+400+500 ≥ 1000.
         let picked: Vec<u64> = selection.records.iter().map(|r| r.gindex).collect();
         assert_eq!(picked, vec![1, 3, 4]);
@@ -405,9 +432,44 @@ mod tests {
     fn reserved_gindexes_are_excluded() {
         let records = vec![record(1, 10, 600), record(2, 20, 600)];
         let reserved = [1u64].into_iter().collect();
-        let selection = select_funding_outputs(&records, &reserved, 500).expect("selects");
+        let selection = select_funding_outputs(&records, 0, &reserved, 500).expect("selects");
         let picked: Vec<u64> = selection.records.iter().map(|r| r.gindex).collect();
         assert_eq!(picked, vec![2], "the reserved record must not be selected");
+    }
+
+    /// §3.2 rule 1 (persona scoping): the sealed set mixes every bonded
+    /// persona's records, but selection funds **one** persona's bond — records
+    /// owned by a different `p_slot` must never be selected (they would derive a
+    /// wrong key image under the single-persona `AssembleBond` derivation).
+    #[test]
+    fn selection_excludes_other_personas_records() {
+        // Persona 0 alone has just under the requirement; persona 1 has plenty.
+        // A slot-blind selector would reach across and "succeed" with persona
+        // 1's outputs — the exact mis-keying this filter closes.
+        let records = vec![
+            record_for_slot(0, 1, 10, 400),
+            record_for_slot(1, 2, 10, 5_000),
+            record_for_slot(1, 3, 20, 5_000),
+        ];
+        // Assembling for persona 0: only its own 400 is eligible → refuse.
+        let err = select_funding_outputs(&records, 0, &Default::default(), 1_000)
+            .err()
+            .expect("persona 0 cannot reach across to persona 1's outputs");
+        match err {
+            BondAssemblyError::InsufficientFunding { available, .. } => {
+                assert_eq!(available, 400, "only persona 0's own record is counted");
+            }
+            other => panic!("expected InsufficientFunding, got {other:?}"),
+        }
+        // Assembling for persona 1: selects only persona 1's records.
+        let selection =
+            select_funding_outputs(&records, 1, &Default::default(), 1_000).expect("selects");
+        let picked: Vec<u64> = selection.records.iter().map(|r| r.gindex).collect();
+        assert_eq!(
+            picked,
+            vec![2],
+            "persona 1 funds from its own oldest record"
+        );
     }
 
     /// §3.2 rule 2 (fund-from-earnings ramp): an unreserved sum below the
@@ -416,7 +478,7 @@ mod tests {
     fn insufficient_funding_refuses_with_available_and_required() {
         let records = vec![record(1, 10, 300), record(2, 20, 200)];
         let reserved = [2u64].into_iter().collect();
-        let err = select_funding_outputs(&records, &reserved, 1_000)
+        let err = select_funding_outputs(&records, 0, &reserved, 1_000)
             .err()
             .expect("must refuse");
         match err {

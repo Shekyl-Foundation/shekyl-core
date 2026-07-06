@@ -7328,6 +7328,35 @@ one place to confirm each item's relationship to the wallet stack.
   SP-6). See [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §12
   (SP-R0) / §16 and [`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](design/ARCHIVAL_BOND_2D1_PSCAN_PLAN.md)
   SP-6/SP-7.
+- **2d-1 WI-2 — durable removal of SPENT funding outputs from `PScanState::funding_outputs`
+  (SP-R0-adjacent, gated on SP-6).** `PScanAccrual::ingest` only ever *extends* `funding_outputs`;
+  nothing removes an output once a confirmed bond post spends it. `select_funding_outputs` excludes
+  only the *transiently-reserved* set (a live pending post's `funding_gindexes`), so once a post
+  confirms and its pending record clears, the spent output is un-reserved **and** still present — a
+  later assembly can re-select it and the daemon rejects the double-spend (duplicate key image).
+  **Interim-safety invariant (load-bearing):** the WI-2 assemble/dispatch path is
+  `#[allow(dead_code)]` today (no live consumer, per the `select_funding_outputs` /
+  `AssembleBond` annotations), so nothing double-spends now; it **must not go live** until either
+  (a) spent outputs are durably removed here, or (b) the reservation set is extended to durably
+  retain confirmed-spent gindexes. Durable removal must follow the SP-R0 discipline —
+  *positive-confirmation, confirmed-absence within `covered`, never absence-from-one-source* (an
+  over-eager drop of a not-yet-confirmed-spent output strands live funds), which is why it rides
+  SP-6/SP-R0 rather than a naive "saw our own bond post" seam. **If WI-2 assemble must be live at
+  genesis, this item is pulled into the V3.0 pre-genesis queue.** **Target:** V3.x (with SP-R0).
+  See [`ARCHIVAL_BOND_WI2_ASSEMBLY.md`](design/ARCHIVAL_BOND_WI2_ASSEMBLY.md) §3.2/§3.5 and
+  [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §12 (SP-R0).
+- **2d-1 SP-3 — borrow the block in the dual extractor instead of cloning per bonded scanner
+  (perf, non-gating; own PR).** `run_dual_extractor` calls `scanner.scan(block.clone())` inside the
+  per-block loop, so each block is deep-copied once per bonded persona (N×B full-block copies per
+  catch-up sweep). The `scan` API consumes `ScannableBlock` by value; the fix is a borrowing entry
+  point (`scan(&ScannableBlock)`) so one decoded block serves all scanners. **Deferred to its own
+  PR** because it reworks `shekyl-scanner`'s secret-safe-point / zeroize internals
+  (`scan_with_cancel` destructures the block by value and threads the §5.4.9 F11-S cancellation
+  checkpoints), which want isolated review against the scanner's own tests — not folded into an
+  unrelated cleanup batch. Correctness is unaffected today (N bonded personas is small); this is
+  throughput only. **Target:** V3.1+ (post-genesis; pull forward only if catch-up scan profiles
+  hot). See `rust/shekyl-engine-core/src/engine/pscan/scan_step.rs::run_dual_extractor` and
+  `rust/shekyl-scanner/src/scan.rs`.
 - **[Done] 2d-2 SP-T1 — take `shekyl-types::PCanonicalId` and delete `PCircuitTag` (was gated on #205).**
   Done on branch `feat/2d2-sp-t1-pcanonicalid`: #205 landed, so `PCanonicalId` exists;
   `derive_socks_user`/`for_persona` now take `&PCanonicalId` and `PCircuitTag` is deleted. The change
