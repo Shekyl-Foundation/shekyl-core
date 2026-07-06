@@ -19,6 +19,15 @@ and (per RandomX's own invariant) software-vs-hardware AES do not change the has
 The build is proven faithful by `--rx0` reproducing the published RandomX v1 reference
 vector exactly.
 
+**Why `--rx0` exists (do not delete it as redundant):** it is a falsifiability anchor —
+"prove the instrument reads a *known-true* value before you trust its readings on unknowns."
+The v1 vector (`639183aa…`) is published and independently verifiable, so reproducing it
+byte-for-byte proves the whole pipeline (Argon2 cache, soft-AES, interpreter, blake2) is
+correct *before* the 1024-vector v2 result is believed. Same discipline as the nm-gate's
+falsifiability anchors: a green result is only meaningful once the harness is shown to fail
+when it should and match a truth it did not author. Deleting the pre-check would leave the
+1024/0 claim resting on nothing but its own machinery.
+
 ## Result (2026-07-06)
 
 | Check | Result |

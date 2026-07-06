@@ -67,3 +67,17 @@ g++ -O2 -std=c++17 -I"$XMRIG_DIR/src" "$here/xmrig_parity.cpp" support.o \
     libxmrig_randomx.a libargon2.a -lpthread -o "$here/xmrig_parity"
 
 echo "built: $here/xmrig_parity"
+
+# Build-graph isolation assertion (the nm-gate analog): this GPL-linked, XMRig-only
+# harness must NOT pull in any Shekyl consensus / daemon code. Its only inputs are
+# XMRig's RandomX, Argon2, and the support shims — so no shekyl_* / cryptonote /
+# blockchain symbol may appear. This keeps the XMRig (GPL) surface provably out of
+# the daemon's build graph, the same contract scripts/ci/check_randomx_symbol_isolation.sh
+# enforces on shekyld (from the other direction).
+echo "== build-graph isolation check =="
+if nm "$here/xmrig_parity" 2>/dev/null | grep -qiE 'shekyl_|cryptonote::|Blockchain'; then
+  echo "FAIL: harness links Shekyl consensus/daemon symbols — build-graph isolation broken"
+  nm "$here/xmrig_parity" | grep -iE 'shekyl_|cryptonote::|Blockchain' | head
+  exit 1
+fi
+echo "OK: XMRig-only harness, no Shekyl consensus symbols (GPL surface isolated from the daemon)"
