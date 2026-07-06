@@ -49,13 +49,13 @@
 //! case (§7.5) lands exactly here. Terminal verdicts on the probe
 //! resolve the wait per §2.5/§2.6.
 
-// Landed inert (same pattern as `stake_engine` / `stake_persist`): the
-// kernel's production consumer is the wallet-plan watchdog actor; until it
-// lands, the §10 item 8 tests are the only callers. The allow lifts when
-// the actor wires `held_submits` → `escape_ladder_step` → probe →
-// `apply_probe_outcome` / `release_awaiting_confirmation` into the
-// lifecycle.
-#![allow(dead_code)]
+// The kernel's production consumer is the §5.3 submit lifecycle driver
+// ([`submit_lifecycle`](super::submit_lifecycle)), reached from the public
+// [`Engine::run_submit_lifecycle_tick`](super::Engine::run_submit_lifecycle_tick)
+// entry point: the driver wires `held_submits` → `escape_ladder_step` →
+// probe → `apply_probe_outcome` / `release_awaiting_confirmation` into the
+// lifecycle. The former `#![allow(dead_code)]` (landed-inert scaffolding) is
+// lifted now that the driver makes every kernel surface live.
 
 use std::collections::{HashMap, HashSet};
 

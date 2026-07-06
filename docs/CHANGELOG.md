@@ -43,6 +43,41 @@
 
 ### Added
 
+- **wallet: submit lifecycle driver — the §5.3 watchdog actor + F40
+  re-scan executor / R2 breaker land** (`DAEMON_SUBMIT_VERDICT.md` §5.3 /
+  §2.5 / §10 items 1 & 8; `docs/FOLLOWUPS.md` `AlreadyInChain` entry, now
+  resolved). The landed-inert submit-watchdog kernel gains its production
+  consumer: `SubmitLifecycleDriver` owns the persistent overlay (escape-
+  ladder wait epochs, alarm latches, F40 re-scan / R2 counters) and, on
+  each `tick`, projects the F14-lock-derived held submits, fetches daemon
+  health (new `DaemonEngine::get_health` surface), runs the escape ladder
+  per held tx (projection → health gate → rung-1 resubmit-same-bytes probe
+  → outcome), and drains the `PendingTxState` rescan queue to execute the
+  F40 targeted re-scan. The probe uses an **ephemeral in-memory held-bytes
+  store** (retained at finalize-accept / finalize-already-in-chain, pruned
+  when the hash leaves the held projection); after a restart the bytes are
+  gone and the probe rung degrades to the operator-alarm rung, converting a
+  would-be silent cross-restart re-broadcast into a human decision (rule-21
+  reversion clause: durability-only reopen, auto-vs-confirm stays a separate
+  human-in-the-loop axis). The re-scan is **cheap-check-then-escalate**:
+  one block-hash fetch at the claimed height compared against the ledger's
+  stored hash — match + spend still unobserved = fruitless (per-txid
+  consecutive counter), divergence = defer to refresh reorg-heal (counter
+  untouched), capping a lying daemon's per-lie cost at one fetch. The
+  **fruitless-soundness guard** (`claimed_height ≤ synced_height`, re-checked
+  at execution) keeps the inference sound: an above-synced request re-routes
+  to the §2.6 path-1 wait, never the counter. **F40-R2** trips at 3
+  consecutive fruitless re-scans → `PendingTxDiagnostic::FruitlessRescanBreakerTripped`
+  operator alarm; F40-R1 is structural (the lock stays placed — no path here
+  releases it). New bounded diagnostics: `WatchdogAlarm`,
+  `FruitlessRescanBreakerTripped`, `WatchdogProbeDispatched`,
+  `WatchdogProbeResolved`. Exposed via the public
+  `Engine::run_submit_lifecycle_tick` (production call site: after each
+  refresh cycle); the former `#![allow(dead_code)]` on the kernel is lifted.
+  Fifteen driver regressions land over a hermetic `StubHost`/`StubDaemon`
+  (`submit_lifecycle::tests`), including the R2 breaker test explicitly
+  deferred from #254.
+
 - **wallet/rpc: `AlreadyInChain { height }` — the F40 disposition lands**
   (`DAEMON_SUBMIT_VERDICT.md` §2.2 carve-out / §2.5 row / §10 item 1;
   `docs/FOLLOWUPS.md` `AlreadyInChain` entry). The wire verdict grows the
@@ -60,8 +95,9 @@
   path-1 refresh catch-up, at/below-synced emits the new
   `PendingTxDiagnostic::TargetedRescanRequested` for the reorg-heal
   re-scan. F40-R1 (rescan never releases) is structural and pinned by
-  regression; the R2 fruitless-re-scan breaker lands with the 2c-2b
-  driving actor that executes the re-scan.
+  regression; the re-scan executor consuming `TargetedRescanRequested` and
+  the R2 fruitless-re-scan breaker land in the submit lifecycle driver
+  (see the driver entry above).
 
 - **wallet: posture→submitter dispatch — the frozen SP-T4a §3.1 shape lands**
   (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §3.1, frozen 2026-07-04;

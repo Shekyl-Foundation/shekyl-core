@@ -10,9 +10,11 @@ the known disagreements at the verification date rather than editing those
 docs from here).
 
 **Verification stamp.** Statuses below were verified against landed code at
-`dev` = `6d5ecac5f` (merge of PR #255, `feat/gf7-scheduler-seam`),
-2026-07-05. When you update a status here, re-verify against code
-(`git grep`, not plan prose) and move this stamp.
+`dev` = `e22549a79` (merge of PR #257), 2026-07-05. Since the prior stamp
+(`13ccb1ddb`, PR #254) the GF-7 scheduler seam (PR #255) and the submit
+lifecycle driver (PR #257) have landed and are reflected below. When you
+update a status here, re-verify against code (`git grep`, not plan prose) and
+move this stamp.
 
 **Maintenance discipline** (institutionalized as
 [`.cursor/rules/94-tracking-index.mdc`](../../.cursor/rules/94-tracking-index.mdc) —
@@ -122,7 +124,7 @@ Current front:
 
 | Item | Plan doc | Status (code-verified 2026-07-05) |
 | --- | --- | --- |
-| GF-7 scheduler seam (2c-2b re-scope) | [`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](ARCHIVAL_BOND_2C_GF7_HOOKS.md) | **Landed (as of 2026-07-05)** — PR #255 merged (`6d5ecac5f`): `plan_entry_seam`/`EntrySeamPlan`, `BroadcastTimelineObserver` seam behind `gf7-hooks`, `--gf7-timeline` sim scenario, `ci/gf7-no-emit-guard` |
+| GF-7 scheduler seam (2c-2b re-scope) | [`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](ARCHIVAL_BOND_2C_GF7_HOOKS.md) | **Landed (as of 2026-07-05)** — PR #255 merged (`6d5ecac5f`): `plan_entry_seam`/`EntrySeamPlan`, `BroadcastTimelineObserver` seam behind `gf7-hooks`, `--gf7-timeline` sim scenario, `gf7-no-emit-guard` workflow. UPDATE 2026-07-05: landed #255 (verified: git grep `plan_entry_seam`/`BroadcastTimelineObserver` on dev → `shekyl-staking-sim/src/gf7_timeline.rs`, `shekyl-standoff::gf7`; `.github/workflows/gf7-no-emit-guard.yml`) |
 | 2d-1 `P`-scan layer | [`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](ARCHIVAL_BOND_2D1_PSCAN_PLAN.md) | **Built, unwired** — SP-0…SP-7 landed via #192/#194/#195 (design + CT compare + SP-1 adapter) and PR-A #201 / PR-B #205; `pscan/` modules on `dev`; `start_pscan` exists but is `dead_code` (no lifecycle caller) |
 | 2d-2 `P`-isolated transport | [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) | **Partially built, inert** — SP-T1 circuit isolation #204/#209; SP-T4a `BroadcastSubmitter` #254; `shekyl-p-transport` (`PTorClient`) and `PBlockSource` on `dev` but `dead_code`; block-timed dispatch driver not built (`TODO(2d)` in `stake_engine.rs`) |
 | WI-1 `start_pscan` lifecycle wiring | [`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](ARCHIVAL_BOND_2D1_PSCAN_PLAN.md) (SP-5 completion, §"WI-1" note) | **Implemented — in review (2026-07-05)** — closes the §5 "Built, unwired" `P`-scan gap: `start_pscan_if_staker` (auto-start) + `start_pscan` (on-demand), embedder-held `PScanHandle` (close-stops-task by ownership), dead-code chain un-deadened |
@@ -132,9 +134,9 @@ Current front:
 
 ---
 
-## 5. What is live vs. built-but-unwired vs. missing (Stage 3 slice)
+## 5. What is live vs. built-but-unwired vs. missing (Stage 3 slice + wallet submit-verdict path)
 
-Verified at `dev` = `6d5ecac5f`:
+Verified at `dev` = `e22549a79`:
 
 | Layer | State | Evidence anchor |
 | --- | --- | --- |
@@ -144,6 +146,7 @@ Verified at `dev` = `6d5ecac5f`:
 | `P` transport (`PTorClient`, `PRpc`, `PBlockSource`) | **Built, unwired** | `shekyl-p-transport`, `engine/pscan/` |
 | `BroadcastSubmitter` / `BroadcastPosture` (SP-T4a) | **Built, inert** — persona-bound submit seam exists, nothing feeds it yet | `engine/transaction_submitter.rs` (`for_posture`/`submit_bound`), `engine/posture.rs`; landed #254 |
 | Block-timed dispatch driver (consume seam plan → submit at height) | **Missing** — the seam between signing and broadcasting | `TODO(2d)` marker, `stake_engine.rs` |
+| Submit lifecycle driver (§5.3 watchdog + F40 re-scan / F40-R2 breaker) — *distinct from the staking dispatch driver above* | **Built + wired to `Engine`, no production cadence caller (as of 2026-07-05)** — `pub run_submit_lifecycle_tick` drives the watchdog kernel over held F14 locks (escape ladder, presence branching, F40 targeted re-scan, F40-R2 fruitless-rescan breaker); the post-refresh call site is documented but not yet invoked in production (tests drive `tick` directly). UPDATE 2026-07-05: landed #257 (verified: git grep `run_submit_lifecycle_tick` on dev → `engine/mod.rs`; driver in `engine/submit_lifecycle.rs`) | `engine/submit_lifecycle.rs`, `engine/mod.rs` (`run_submit_lifecycle_tick`), `engine/submit_watchdog.rs` |
 | Production bond-tx assembly | **Missing** — full assembly exercised only in KATs | `local_pending_tx.rs` tests |
 | Reward-emission leg (PR-E1…E3, C-1 verifier) | **Missing** — the hard Stage-3 blocker | `REWARD_EMISSION_LEG.md` |
 | Principal stake/unstake/drain lifecycle | **Missing — not yet homed in any plan doc** | `WALLET_REWRITE_PLAN.md` timeline note |

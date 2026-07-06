@@ -271,11 +271,17 @@ pub(crate) mod stake_persist;
 /// (distinct inner types → compile error on cross-apply). Design-now; real checks
 /// wire in cold-start / 2d wiring.
 pub(crate) mod stake_timing;
+/// `docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3: the submit lifecycle
+/// driver — the wallet-side actor that lifts the [`submit_watchdog`]
+/// kernel (projection → escape ladder → resubmit-same-bytes probe →
+/// outcome) and executes the F40 targeted re-scan with its R2
+/// fruitless-rescan breaker. Thin scheduler around audited kernel
+/// decisions; cadence is owned by the embedding runtime (`tick()`).
+pub(crate) mod submit_lifecycle;
 /// PR-4 (`docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3): the submit
 /// watchdog's pure decision kernel — F14-lock-keyed held tracking, the
 /// privacy-tiered escape ladder with presence branching, health-context
-/// gating, and the F35 horizon bound. Scaffolding: the driving actor
-/// (cadence is wallet role policy) lands with the wallet plan.
+/// gating, and the F35 horizon bound. Driven by [`submit_lifecycle`].
 pub(crate) mod submit_watchdog;
 /// CT-5c: production no longer uses synthetic membership vectors — the signer
 /// folds the real paths the curve-tree client assembled (`assemble_path`).
@@ -303,7 +309,7 @@ pub use daemon::DaemonClient;
 pub use diagnostics::{
     BuildErrorKind, BuildRequestSummary, DaemonOp, DiagnosticSink, DiscardReason, MalformedKind,
     NoopDiagnosticSink, PendingTxDiagnostic, ProtocolErrorKind, RefreshDiagnostic, SuppressedClass,
-    TracingDiagnosticSink,
+    TracingDiagnosticSink, WatchdogAlarmReason, WatchdogProbeOutcome,
 };
 pub use error::{
     ChangePasswordError, IoError, KeyError, OpenError, PendingTxError, PersistenceError,
@@ -548,6 +554,21 @@ pub struct Engine<
     /// [`OpenError::OutstandingPendingTx`](error::OpenError::OutstandingPendingTx)
     /// when any reservation is in flight.
     pub(crate) pending: P,
+
+    /// The §5.3 submit lifecycle driver's persistent overlay state
+    /// (`docs/design/DAEMON_SUBMIT_VERDICT.md`): the escape-ladder wait
+    /// epochs, alarm latches, and F40 targeted-re-scan / R2-breaker
+    /// counters that must survive across driver ticks. Not generic in
+    /// `P`/`D` — the wallet surface and the daemon are lent to the driver
+    /// per tick ([`SubmitLifecycleDriver::tick`]), not owned by it.
+    ///
+    /// Wrapped in a [`tokio::sync::Mutex`] so the tick entry point
+    /// ([`Engine::run_submit_lifecycle_tick`]) can hold the driver's
+    /// `&mut` across the daemon round-trips inside one tick while the
+    /// entry point itself takes `&self`. The guard is the *driver's*
+    /// lock, independent of the ledger `RwLock`, so a tick never blocks
+    /// the merge write-lock.
+    submit_driver: tokio::sync::Mutex<submit_lifecycle::SubmitLifecycleDriver>,
 
     /// User preferences per the layer-2 plaintext+HMAC contract in
     /// [`docs/WALLET_PREFS.md`]. Loaded at open, saved on
@@ -1016,6 +1037,7 @@ impl<
             merge_view_secret,
             ledger,
             pending,
+            submit_driver,
             prefs,
             daemon,
             network,
@@ -1036,6 +1058,7 @@ impl<
             merge_view_secret,
             ledger,
             pending,
+            submit_driver,
             prefs,
             daemon,
             network,
@@ -1071,6 +1094,7 @@ impl<
             merge_view_secret,
             ledger,
             pending: _old,
+            submit_driver,
             prefs,
             daemon,
             network,
@@ -1091,6 +1115,7 @@ impl<
             merge_view_secret,
             ledger,
             pending,
+            submit_driver,
             prefs,
             daemon,
             network,
@@ -1102,6 +1127,47 @@ impl<
             stake,
             _signer,
         }
+    }
+}
+
+#[allow(private_bounds)]
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        L: LedgerEngine,
+        E: EconomicsEngine,
+        R: RefreshEngine,
+        P: PendingTxEngine + submit_lifecycle::WatchdogHost,
+        F: PersistenceEngine,
+    > Engine<S, D, L, E, R, P, F>
+{
+    /// Run one submit lifecycle driver cadence step
+    /// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3): the F40 targeted
+    /// re-scan verification (with its R2 breaker) and the escape ladder
+    /// (projection → health → resubmit-same-bytes probe → outcome) over
+    /// every held tx. Lends the pending-tx engine (as the
+    /// [`WatchdogHost`](submit_lifecycle::WatchdogHost)) and the daemon
+    /// to the driver for the duration of the tick.
+    ///
+    /// # Cadence is the embedding runtime's, not the Engine's (§5.3)
+    ///
+    /// "Cadence is role policy; termination is not." This method is the
+    /// **entry point**, not a scheduler — the owner of the `Engine`
+    /// (the wallet binary / RPC server; Stage 4: the actor runtime)
+    /// decides *when* to call it. The natural call site is after each
+    /// completed refresh cycle, since the held projection and
+    /// `synced_height` only move on refresh / ledger writes; it must
+    /// **not** be called while a merge write-lock is held, because the
+    /// tick issues daemon round-trips and holding the ledger lock across
+    /// them would block the merge it depends on.
+    ///
+    /// Available only when the pending-tx engine is the production
+    /// [`LocalPendingTx`](local_pending_tx::LocalPendingTx) (the
+    /// `WatchdogHost` implementor); fault-injection test wrappers that do
+    /// not implement the host contract do not expose this entry point.
+    pub async fn run_submit_lifecycle_tick(&self) {
+        let mut driver = self.submit_driver.lock().await;
+        driver.tick(&self.pending, &self.daemon).await;
     }
 }
 

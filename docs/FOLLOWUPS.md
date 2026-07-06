@@ -674,7 +674,8 @@ sustainability is unaffected by the recalibration.
 - **`AlreadyInChain` submit verdict: distinct lock-lifecycle disposition —
   DESIGN DECIDED 2026-07-04 (F40, `AlreadyInChain { height }`); interim
   implementation landed #252; F40 conformance LANDED 2026-07-05 (#254);
-  R2 breaker execution remains with the 2c-2b driving actor.**
+  targeted re-scan executor + F40-R2 breaker LANDED 2026-07-05
+  (`feat/submit-lifecycle-driver`) — RESOLVED.**
   Original finding: `transaction_submitter::outcome_to_result` collapses
   `AlreadyInChain` into `Ok(hash)` identically to `Submitted` /
   `AlreadyInPool`, so `finalize_submit_accept` places a fresh F14
@@ -729,9 +730,56 @@ sustainability is unaffected by the recalibration.
   releases nothing; regressions
   `submit_already_in_chain_above_synced_locks_at_claimed_height` and
   `submit_already_in_chain_at_or_below_synced_requests_rescan_never_releases`).
-  *Remaining: the re-scan executor consuming `TargetedRescanRequested`
-  and its F40-R2 fruitless-re-scan breaker land with the 2c-2b driving
-  actor.* *Target:* V3.0, 2c-2b.
+  **Re-scan executor + F40-R2 breaker (`feat/submit-lifecycle-driver`,
+  2026-07-05):** the §5.3 `SubmitLifecycleDriver` drains the
+  `PendingTxState` rescan queue on tick and executes the cheap-check-then-
+  escalate re-scan (`DAEMON_SUBMIT_VERDICT.md` §2.5/§5.3): fetch the single
+  block at the claimed height (`DaemonEngine::get_block_hash`), compare
+  against the ledger's stored hash. Match + spend still unobserved =
+  fruitless (per-txid consecutive counter); divergence = defer to the
+  refresh reorg-heal machinery, counter untouched — capping a lying
+  daemon's per-lie cost at one block fetch. The **fruitless-soundness
+  guard** (`claimed_height ≤ synced_height`, re-checked at execution time)
+  keeps the inference sound: an above-synced request re-routes to the §2.6
+  path-1 wait, never the fruitless counter (executor/refresh race would
+  otherwise feed false positives). F40-R2 trips at
+  `FRUITLESS_RESCAN_BREAKER_THRESHOLD` (default 3) consecutive fruitless
+  re-scans → `PendingTxDiagnostic::FruitlessRescanBreakerTripped` operator
+  alarm; F40-R1 is structural (the lock stays placed — no path here
+  releases it). Regressions in `submit_lifecycle::tests`:
+  `r2_breaker_trips_after_threshold_never_releases`,
+  `divergent_hash_never_counts_or_releases`,
+  `above_synced_never_fruitless_until_scanned`,
+  `missing_ledger_hash_defers_without_counting`,
+  `confirmation_reaps_the_rescan_target`. *Target:* V3.0 — **RESOLVED.**
+
+- **Watchdog probe bytes: ephemeral in-memory held-bytes store — reversion
+  clause (rule 21), two independent axes, only one reopens. DECIDED
+  2026-07-05 (`feat/submit-lifecycle-driver`, decision 2).** The §5.3 rung-1
+  resubmit-same-bytes probe needs the original tx bytes; `finalize_submit_accept`
+  drops the in-flight record at accept, so the driver retains bytes in an
+  in-memory `PendingTxState::held_bytes` (`HashMap<TxHash, Vec<u8>>`), populated
+  at finalize-accept / finalize-already-in-chain and pruned when the hash leaves
+  the held projection. **Rejection (current substrate):** the store is *not*
+  persisted. After a wallet restart the bytes are gone and the probe rung
+  degrades to the operator-alarm rung — still satisfying §2.6's "every exit is
+  verdict, confirmation, or operator alarm." Persistence's only real product
+  would be a **silent cross-restart re-broadcast of a signed key-image spend**;
+  the ephemeral design correctly converts that into a human decision.
+  **Reopening criteria — durability axis only:** reopen *iff* evidence shows
+  restart-mid-await with a stuck tx is operationally common enough that
+  alarm-degradation is a real burden. The clause names **two independent axes**
+  and pins that only the first reopens: (1) *durability* (bytes survive restart)
+  and (2) *auto-action policy* (probe auto-fires vs. requires human
+  confirmation). **Even a reopened, persisted-bytes design keeps the auto-vs-
+  confirm axis a separate, explicitly-argued decision whose default stays
+  human-in-the-loop across a restart** — a future "we needed durability so we
+  persisted and auto-probed" must not quietly buy the whole package the
+  ephemeral design was avoiding. **Re-evaluation shape:** the durability reopen
+  is a persistence-schema change → a rule-42 schema-bump design round (the store
+  is off the rule-42 surface precisely because it is ephemeral); the auto-vs-
+  confirm axis, if ever raised, is a separate threat-model round, not folded in.
+  *Target:* V3.0 disposition stable; reopen substrate-anchored per above.
 
 - **Submit-error reservation-id placeholder: split submitter error from
   orchestrator error (PR-4 / #248 review, deferred to 2c) — RESOLVED
@@ -7417,6 +7465,16 @@ one place to confirm each item's relationship to the wallet stack.
   condition is the 2c-2b request path, which also owns the §3.1 part-6 P-1 (mint-site migration)
   and P-2 (store `PBoundBytes`, not raw bytes) provenance pins. **Target: the design decision and
   the dispatch code are closed; remaining obligations ride 2c-2b.**
+  **Watchdog probe rung — principal path LANDED 2026-07-05
+  (`feat/submit-lifecycle-driver`):** the §5.3 `SubmitLifecycleDriver`'s rung-1
+  resubmit-same-bytes probe now has its principal-path consumer — it re-offers the
+  ephemeral held bytes (`PendingTxState::held_bytes`, decision 2) through the existing
+  principal submitter. This closes the "watchdog probe rung" byte-holder from the §3.1.1
+  enumeration **for principal-path txs only**. The **`P`-bound probe remains a 2c-2b
+  obligation (P-2 unchanged):** a `P`-bound tx's retry must re-send the stored
+  `PBoundBytes` through the `for_posture` choke (②→`PerP`), never the principal
+  connection; the driver's principal-path probe deliberately does not route `P`-bound
+  bytes, per decision 5 (P-bound probes out of scope, named seam).
 - **2d-2 2c — `DaemonUrl` newtype: validate `base_url` at construction + house the S1 disclosure.**
   `base_url` is a bare `String` across three sites (`BroadcastPosture::OwnRemote`,
   `PTransactionSubmitter::for_persona`, `PBlockSource::new`) with no validation and an unredacted

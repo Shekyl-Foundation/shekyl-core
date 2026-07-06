@@ -1470,10 +1470,16 @@ enumeration above is the complete submit surface.
    required-field asymmetry, pinned so the post-genesis
    optional-with-default rule has a test to flip). Wallet-side, the R1
    pin landed with the same PR (the request path releases nothing —
-   `submit_already_in_chain_at_or_below_synced_requests_rescan_never_releases`);
-   the R2 test — N consecutive fruitless daemon-directed re-scans trip
-   the breaker to operator alarm — lands with the 2c-2b driving actor
-   that executes the re-scans.
+   `submit_already_in_chain_at_or_below_synced_requests_rescan_never_releases`).
+   *R2 breaker landed 2026-07-05 (`feat/submit-lifecycle-driver`):* the
+   §5.3 driving actor executes the re-scans, and the R2 test — N
+   consecutive fruitless daemon-directed re-scans trip the breaker to
+   operator alarm, never releasing — landed as
+   `submit_lifecycle::tests::r2_breaker_trips_after_threshold_never_releases`,
+   with the fruitless-soundness guard pinned by
+   `above_synced_never_fruitless_until_scanned` and
+   `missing_ledger_hash_defers_without_counting`, and the divergence path
+   by `divergent_hash_never_counts_or_releases`.
 2. **Race suite (PR-3, pure Rust via mock `SubmitStateShim`):**
    deterministic interleavings — (i) block containing the tx lands during
    Phase C → `AlreadyInChain`; (ii) competing spend lands during C →
@@ -1514,7 +1520,18 @@ enumeration above is the complete submit surface.
    **evicted-never-confirmed → outputs released after the watchdog
    horizon**, via verdict where reachable and via observed-absence
    otherwise (confirmed-absent leg); confirmed-present → refresh clears to
-   spent-final.
+   spent-final. *Watchdog-execution remainder landed 2026-07-05
+   (`feat/submit-lifecycle-driver`), driven through the §5.3
+   `SubmitLifecycleDriver` over a hermetic `StubHost`/`StubDaemon`:*
+   escape-ladder ordering (`probe_precedes_alarm_present_past_horizon`,
+   `alarm_is_edge_triggered_and_probe_not_repeated`), presence branching
+   (`absent_reoffer_restarts_the_wait`), confirmed-absent release
+   (`terminal_probe_releases_confirmed_absent`), retryable-rejection alarm
+   (`retryable_rejection_alarms_needs_rebuild`), restart degradation
+   (`missing_bytes_degrade_probe_to_alarm`), health gating
+   (`peerless_daemon_alarms_without_probing`, `syncing_daemon_waits`,
+   `health_failure_makes_no_decision`), and held-bytes pruning
+   (`held_bytes_pruned_on_confirmation`).
 9. **Conceal constant-work (F41), one obligation per enforcement layer
    (§3.1 decomposition):
    (a) invocation-count tripwire** — a foreign-caller submit of
@@ -1562,9 +1579,13 @@ enumeration above is the complete submit surface.
 **Status (2026-07-05): all six PRs landed on `dev`** — PR-1 as #244/#247
 (design doc + in-place amendment), PR-2 as #245, PR-3 as #246, PR-4 as
 #248, PR-5 as #249, PR-6 as #250. The F40 wire amendment (§10 item 1)
-landed separately as #254; its remaining execution obligations (re-scan
-executor, F40-R2 breaker) ride the 2c-2b driving actor per
-`docs/FOLLOWUPS.md`'s `AlreadyInChain` entry.
+landed separately as #254. The wallet-side execution remainder — the §5.3
+`SubmitLifecycleDriver` (watchdog actor over the landed kernel), the F40
+targeted re-scan executor, and its F40-R2 fruitless-rescan breaker —
+**landed 2026-07-05 on `feat/submit-lifecycle-driver`**, closing the
+`AlreadyInChain` obligations tracked in `docs/FOLLOWUPS.md`. The
+`P`-bound probe routing through stored `PBoundBytes` remains the one open
+seam (rides the 2c-2b request path per decision 5 of the driver plan).
 
 | PR | Content | Gate |
 | --- | --- | --- |
