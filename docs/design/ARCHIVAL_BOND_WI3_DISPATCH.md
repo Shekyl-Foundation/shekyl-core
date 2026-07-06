@@ -377,22 +377,34 @@ Functional gates (all must pass to merge):
 11. Single-write-path enforcement (R2-2 enforcement half, post-closure
     pin): a structural check — same family as the `cargo tree` no-import
     guard and the token `const _` sole-origin guard — that pending-post
-    persistence has **exactly one write path and one payload kind**:
-    `WalletFile::save_pending_posts` (`shekyl-engine-file/src/handle.rs`)
-    is the sole writer of `.wallet.pending`, and the sole
-    `encode_payload(PayloadKind::PendingPostBlockPostcard, ..)` site,
-    reachable only through the driver's locked `PendingPostStore` path.
+    persistence has **exactly one write path and one payload kind**. The
+    gate has a verified-today half and a pre-committed-constraint half,
+    and the distinction is deliberate:
+    - **Verified today (WI-2 D-A4, commit `23d7696b2`, on this
+      branch):** `WalletFile::save_pending_posts`
+      (`shekyl-engine-file/src/handle.rs`) is the sole writer of
+      `.wallet.pending` and the sole
+      `encode_payload(PayloadKind::PendingPostBlockPostcard, ..)` site.
+      These names are the **pinned-in-advance choke point** — the token
+      sole-origin shape, where the constructor's location was fixed in
+      the design before the tokens existed.
+    - **Constraint on the WI-3 implementation PR (code that does not
+      exist yet):** the driver's locked `PendingPostStore` path must be
+      the sole *caller* of that writer; the PR must not introduce a
+      second encode site or a second writer at any point during the
+      build; and the single-write-path assertion itself lands **in the
+      same PR** — the gate constrains the implementation, the
+      implementation is built to hit the pre-committed names, never the
+      gate retrofitted to whatever landed.
     "Grep pending-post persistence" must collapse to that one choke
     point the way "grep token construction" collapses to the disclosure
     choke. Rationale: gate 10's unrepresentability argument *rests* on
     the absence of a second write site; without enforcement, that
     absence is held by reviewer discipline — the armed-gate-with-no-
     trigger position the F41 `const _` guard and the F25 enumeration
-    were built to escape. The check rides with the WI-3 implementation
-    PR (capability-before-cache, one level down: the enforcement is
-    installed before the code that depends on the invariant exists),
-    not as a separate commit and not retrofitted after a convenience
-    second write lands.
+    were built to escape. Capability-before-cache, one level down: the
+    enforcement is installed with the code that depends on the
+    invariant, not retrofitted after a convenience second write lands.
 
 **Reconvergence gate (rule 21, named per the index row):** WI-3's
 **GF-7 acceptance does not close at merge.** It closes when:
