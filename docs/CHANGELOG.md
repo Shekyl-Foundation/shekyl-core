@@ -24,13 +24,22 @@
   `lr > s3` on every gate row); the **D-B3 resume channel** is swept
   (session-lattice resubmit, `r = 1.57`, under bound). Controls valid;
   every gate-relevant row clears the bound on all three arms; worst gate
-  row `r = 1.86` (honestly thin margin). **Cold-start reclassified:**
+  row `r = 1.86` (honestly thin margin; per §4.3.1's pinned ceiling the
+  margin holds against the strongest observer of the *modeled* channel,
+  not the strongest adversary). **Cold-start reclassified:**
   low-activity **fails** the bound (panel `r = 3.54`) and is the genesis
   regime — disposition is the **§14 founder-cover launch posture** (refuse
   the regime: production-path-identical staggered founder cover under
   permanent consented attributability; shard-schedule structural gate;
-  §14.4 partition-adversary arm spec-committed with a-priori bounds,
-  implementation gated on review). **PROVISIONAL:** the block-time sealing
+  §14.4 partition-adversary arm spec-committed with a-priori bounds and a
+  pre-implementation-widened hypothesis class — max-statistic over a named
+  rule family vs the permutation null of the maximized statistic, one
+  marked control per failure mode; implementation gated on review).
+  **Remote-daemon disposition made explicit (§15, proposed, review-gated):**
+  structural refusal at the dispatch driver rather than a warned override
+  — privacy is not a setting; tunneled circumvention the named residual;
+  reversion on a measured decorrelated remote transport.
+  **PROVISIONAL:** the block-time sealing
   re-run is confirmatory by construction (live `BondPostDispatched.at` is
   the due block; dispersal is sub-block `U[0,60s)`), so no block-resolution
   re-run can close reconvergence leg (b); the wall-clock sweep-phase

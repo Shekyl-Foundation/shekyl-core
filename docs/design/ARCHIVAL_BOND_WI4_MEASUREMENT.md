@@ -361,6 +361,23 @@ adversary post-hoc can push the verdict toward fail, never manufacture a
 pass — which is why this amendment is recorded rather than silently
 substituted.
 
+**The ceiling (pinned so the margin is never over-cited).** The
+seam-consistency-gated member is the strongest observer *because it is
+handed the true generative support* — the sim defined `plan_entry_seam`,
+so the sim's adversary knows it exactly. A real adversary estimates the
+support from data; the oracle panel therefore upper-bounds **the
+strongest observer of the modeled channel**, which is the right thing to
+gate against (if the strongest in-model observer clears the bar, the pass
+is robust *within the model*) — but it is **not** a claim about an
+adversary operating on side information the model does not emit. The gap
+between "strongest observer of the modeled channel" and "strongest
+adversary" is exactly the un-emitted axes: axis-(ii) serve-credit claim
+cadence once SP-T4b makes it principal-coupled; funding provenance;
+address reuse; cross-persona correlation; off-wire distinguishers; and
+cross-trial founder re-identification (§14.4's scope boundary). The
+§13.1 margin (`r = 1.86` vs `2.0`) must always be cited with this
+qualifier.
+
 ### 4.4 The graded quantity
 
 For each swept parameter point, each arm reports `P(link | T_obs)` — the
@@ -595,6 +612,11 @@ strictly exceeds `s3` on every gate row (the seam-consistency-gated member
 finds links the smooth MAP misses), and the gate margin is honest and
 thin: **worst row `r = 1.86` against the bound `2.0`** (7% margin), not
 the comfortable-looking 1.43–1.51 of the pre-review single-scorer run.
+That margin is **against the strongest observer of the modeled channel,
+not the strongest adversary** — the oracle panel is handed the generative
+support the sim defined; the un-emitted axes it cannot see are named in
+§4.3.1's ceiling statement, and the margin must never be cited without
+that qualifier.
 
 The **funding-seam-blind null sits above baseline at ≈ 0.13** (`r ≈ 1.3`)
 — and per §4.1.1 that number is the graded *indirect* session channel, not
@@ -785,43 +807,88 @@ serves the single-shard phase, so the phase must be closed to them, not
 merely unattractive. Founder personas serving the single shard are
 covered by P4 (attributable by consent).
 
-### 14.4 The partition-adversary arm (pre-committed spec)
+### 14.4 The partition-adversary arm (pre-committed spec; hypothesis class widened 2026-07-06, pre-implementation)
 
 A new correlator probe in the GF-7 sim, gating the launch-posture claim
 the way §5's controls gate the run. **Bounds committed here, ahead of
-implementation, per §3.5.**
+implementation, per §3.5.** *(Amended 2026-07-06, before any
+implementation code, on a review wargame: the original probe was a single
+2-means partition, and the failure modes that actually destroy founder
+cover are not limited to two-cluster separability — a single founder
+failing to blend, or the founder set being mutually similar enough to
+enumerate as "the five", both defeat the posture while leaving a k=2
+clustering at chance. The amendment widens the hypothesis class and adds
+a marked control per failure mode. Amending a pre-committed spec is
+legitimate only in this window — pre-review, pre-code — and only in the
+adversary-strengthening direction, same rule as §4.3.1.)*
+
+**The null being tested.** Not "2-means fails" but: *no decision rule the
+adversary can field over the observable set recovers the founder/user
+labels better than chance.* Quantifying over all rules is vacuous (the
+labels themselves are a partition), so the arm fields a **named rule
+family `F`** and reports the **maximum label-agreement over `F`**,
+calibrated against the permutation distribution **of that same maximized
+statistic**. Maximizing before permuting prices in rule selection — the
+adversary who picks the partition *after* seeing the data is exactly what
+the null distribution then models.
 
 - **Setup.** `M = 5` founder pairs and `N − M` user pairs per trial, all
   synthesized by the **same generator at the same posture** (P1's
-  indistinguishability-by-construction, as deployed). A **marked
-  variant** runs as the probe's positive control: founder pairs generated
-  in detectable lockstep (clustered dispatch anchors / a distinct narrow
-  cadence band — the P2 violation, deliberately committed).
-- **The probe.** An unsupervised partition adversary over the observable
-  per-pair timelines (the §4.1.1 posture-conditioned channel): cluster
-  the pairs into two cohorts (e.g. 2-means over per-pair observable
-  timing features) and score the best-assignment overlap between the
-  recovered partition and the true founder/user labels.
-- **The null.** The chance level of the overlap statistic is estimated
-  in-run by a **permutation baseline**: the identical clustering scored
-  against randomly permuted cohort labels. (Best-assignment overlap has
-  an inflated chance level; the permutation null calibrates it without
-  post-hoc bar placement.)
+  indistinguishability-by-construction, as deployed).
+- **The feature dictionary (named, so the implementation cannot
+  cherry-pick weak features).** Per pair, over the §4.1.1
+  posture-conditioned observables only: the seam gap `|bond − funding|`;
+  dispatch phase within the horizon; the sorted inter-event gap vector;
+  estimated cadence period (drain/resume spacing); observable event
+  count; resume-to-bond spacing where present.
+- **The rule family `F`.**
+  1. *k-swept clustering* (`k ∈ {2, 3, 4, 5}`): cluster the pairs over
+     the feature dictionary; score the best cluster-subset-to-cohort
+     assignment against the true labels. (The original 2-means is the
+     `k = 2` member.)
+  2. *Per-feature outlier set:* for each feature, rank pairs and take the
+     top-`M` set; score its overlap with the founder set. Catches the
+     four-blend-one-doesn't shape a clustering misses.
+  3. *Most-cohesive-subset enumeration:* over all `C(N, M)` subsets
+     (252 at `N = 10`), find the subset minimizing mean pairwise feature
+     distance; score its overlap with the founder set. This is the
+     enumerate-"the five" adversary directly: founders individually
+     unremarkable but mutually similar.
+- **The statistic.** `T = max over F` of label agreement, per trial,
+  averaged over trials.
+- **The null.** The permutation distribution of the **same** `T` (labels
+  permuted, the full family re-maximized per permutation). Best-assignment
+  overlap and max-over-family are both chance-inflated; permuting the
+  maximized statistic calibrates both inflations without post-hoc bar
+  placement.
+- **Marked positive controls — one per failure mode, each must bite.**
+  - **M-a (lockstep):** all five founder dispatch anchors clustered — the
+    P2 violation. Detected by family member 1.
+  - **M-b (outlier):** four founders at posture, one with a distinct
+    cadence. Detected by family member 2.
+  - **M-c (cohesion):** five founders individually within the user range
+    but drawn from a narrow common band. Detected by family member 3.
+  A family proven to bite on M-a alone proves nothing about its other
+  members; each control validates the member aimed at its failure mode.
 - **Pass bounds (a-priori).**
-  1. *Indistinguishable posture:* partition overlap within `0.05` of the
-     permutation baseline — the adversary cannot sort founder from user
-     better than chance.
-  2. *Marked control:* partition overlap at least `0.30` above the
-     permutation baseline — the probe demonstrably bites when the
-     distinguishing structure is present (a probe that cannot detect
-     deliberate lockstep proves nothing when it fails to detect the
-     posture).
-  3. Both bounds must hold or the partition measurement is **INVALID**
+  1. *Deployed posture:* `T` within `0.05` of the permutation-null mean —
+     no rule in the family sorts founder from user better than chance.
+  2. *Each marked control:* `T` at least `0.30` above the
+     permutation-null mean, **per control** (M-a, M-b, M-c separately).
+  3. All bounds must hold or the partition measurement is **INVALID**
      (same all-or-nothing shape as §5's controls).
-- **What a fail means.** An indistinguishable-posture overlap above bound
-  1 is a **launch-posture blocker**: founder cover is discounted below
-  its headcount and P1/P2 must be tightened (and re-measured) before the
+- **What a fail means.** A deployed-posture `T` above bound 1 is a
+  **launch-posture blocker**: founder cover is discounted below its
+  headcount and P1/P2 must be tightened (and re-measured) before the
   §14.2 posture may be relied on. It is never a reason to relax bound 1.
+- **Scope boundary (named).** Per-trial exchangeability is what this arm
+  measures; it cannot speak to **cross-trial founder re-identification**
+  — a persistent per-founder signature accumulating across successive
+  bond posts over the launch window (the same wallet's habits repeating).
+  In-model the generator is memoryless so the axis is clean by
+  construction; in deployment it is real and sits with the other
+  off-model axes named in §4.3.1's ceiling statement (funding provenance,
+  address reuse, off-wire distinguishers). Named residual, not absorbed.
 
 ### 14.5 What this does to the §13 verdict, and the reversion clause
 
@@ -848,3 +915,81 @@ bearing the window's exposure consented permanently* (P4).
 
 Implementation of §14.4 is the next round, **gated on review of this
 section** — the same spec-first checkpoint the main gate ran on.
+
+## 15. Addendum (2026-07-06): the remote-daemon posture — refuse, not accept
+
+**Status: proposed disposition, review checkpoint required before any
+implementation.** Same spec-first ordering as §14.
+
+### 15.1 The question "named residual" was carrying implicitly
+
+The §13 verdict names the remote-daemon posture as an unmet residual
+(`r ≈ 5` expected re-grade with the §4.1.1 markers observable). Naming it
+is honest, but "named residual" carries an unmade decision — the same
+work "accepted residual" was doing for cold-start before §14 reframed it.
+The decision is binary: is remote-daemon a posture the system **refuses
+to enter**, or one whose risk a user **accepts**? For cold-start, §14
+found a structural refusal (no early reward, shard-gated availability).
+The analogous question here has an analogous answer, because the wallet
+is Shekyl's own software and it knows its daemon endpoint.
+
+### 15.2 Proposed disposition: structural refusal at the dispatch driver
+
+The archival-bond dispatch driver (the WI-2/WI-3 surface that arms
+funding, bond-post, and drain dispatch) **refuses to arm when the wallet's
+daemon connection is not local** (loopback or unix-domain socket). Not a
+warning, not a confirm-to-proceed dialog: the bond path is unavailable
+under a remote-daemon configuration, the same way early staking is
+unavailable under §14's shard gate.
+
+Why refusal rather than informed consent, when §14.2 P4 gives founders
+exactly the informed-consent shape: the two cases differ in who bears the
+exposure and what the alternative costs. Founder consent (P4) is a
+*bounded, enumerated* set of parties accepting exposure so that *others*
+gain cover — the exposure is load-bearing for the system. A remote-daemon
+user's exposure protects no one, and per `00-mission.mdc` privacy is
+never a setting: a warned override is precisely a setting whose off
+position is linkability. The one asymmetry that could justify
+consent-over-refusal — a user who *cannot* run a local daemon and would
+be excluded from staking entirely — is real, and it is priced: exclusion
+from archival staking under a posture the gate measures at `r ≈ 5` is the
+correct trade under the priority hierarchy (security/privacy over
+feature availability). Staking is not required to use the coin.
+
+### 15.3 Honest scope: what the refusal does and does not enforce
+
+The endpoint check is **honest-user protection, not adversarial-user
+prevention.** A user can tunnel a remote daemon through loopback (SSH
+forward, proxy) and the driver cannot distinguish that from a genuinely
+local daemon. The gate therefore enforces: *no one degrades their posture
+by accident, by default, or by not reading documentation.* Deliberate
+circumvention reconstructs the user-accepted-risk shape — but as an act
+of configuration the user built themselves, not a switch the software
+offered. That is the honest boundary of what software can enforce about
+its own host, and it should be stated in the driver's documentation with
+the number: the gate certifies the local posture; a tunneled-remote
+configuration silently re-enters the `r ≈ 5` regime the refusal exists to
+prevent.
+
+### 15.4 What this does to the verdict, and the reversion clause
+
+On acceptance at review, the §13 verdict's "remote-daemon posture unmet,
+named residual" line becomes "remote-daemon posture **structurally
+refused** (§15); tunneled circumvention a named residual" — the residual
+shrinks from *every remote-daemon user* to *users who deliberately
+defeated the gate*, and the Axis-A invariant's precondition becomes
+machine-enforced rather than documentation-enforced.
+
+**Reversion clause (rule 21).** The refusal is rejected-now-with-
+reopening-criteria, not refused-forever:
+
+- **Reopens** if the wallet↔daemon transport gains measured
+  decorrelation — an isolated-circuit RPC transport whose connection
+  cadence is demonstrated (by a re-grade of this gate with the §4.1.1
+  markers observable) to close the marker channel to within the local
+  posture's numbers. The re-evaluation shape is a new GF-7 measurement
+  round against the remote transport, graded under the same `r < 2`
+  bound; the decision sits with the same review that gates §14.
+- **Does not reopen** on user demand for remote-daemon staking
+  convenience — that is preference-anchored, not substrate-anchored,
+  and the priority hierarchy already adjudicated it (§15.2).

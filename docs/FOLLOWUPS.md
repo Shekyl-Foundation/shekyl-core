@@ -7454,8 +7454,17 @@ one place to confirm each item's relationship to the wallet stack.
   provide real production-path-identical staggered cover with permanent consented
   attributability; privacy-critical staking structurally gated on the shard schedule until
   cover accumulates; founder/user **partition-adversary arm** with a-priori bounds specified
-  in §14.4). §14 is spec-committed, **implementation gated on review** (§3.5 ordering); a
-  §14.4 bound-1 fail is a launch blocker. **Target: pre-genesis.**
+  in §14.4 — hypothesis class widened pre-implementation 2026-07-06 to a max-statistic over
+  a named rule family {k-swept clustering, per-feature outlier set, most-cohesive-subset
+  enumeration} against the permutation null of the maximized statistic, with a marked
+  control per failure mode). §14 is spec-committed, **implementation gated on review**
+  (§3.5 ordering); a §14.4 bound-1 fail is a launch blocker. **Remote-daemon disposition
+  made explicit (§15, proposed, review-gated):** structural refusal at the dispatch driver
+  (bond path unavailable on a non-local daemon endpoint; no warned override — privacy is
+  not a setting), honest-user protection scope named (tunneled circumvention a residual),
+  reversion on a measured decorrelated remote transport. The §4.3.1/§13.1 in-model ceiling
+  is pinned: `r = 1.86` is against the strongest observer of the *modeled* channel, not the
+  strongest adversary. **Target: pre-genesis.**
   **Open leg-(b) residual (rule 21), severity sharpened:** the *block-time* sealing re-run is
   confirmatory by construction (live `BondPostDispatched.at` is the due block — dispersal is
   sub-block, `U[0,60s)`, never entering `at`; `gf7_emits_bond_post_dispatched_per_submit`),

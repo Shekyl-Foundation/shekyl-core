@@ -172,7 +172,7 @@ this index:
 | [`WALLET_REWRITE_PLAN.md`](WALLET_REWRITE_PLAN.md) | Engine-layer phase plan; Stage architecture; Stage-3 gating |
 | [`ARCHIVAL_BOND_PR2_CHAIN.md`](ARCHIVAL_BOND_PR2_CHAIN.md) | Bond-PR chain record + per-sub-PR statuses |
 | [`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](ARCHIVAL_BOND_2C_GF7_HOOKS.md) | GF-7 measurement-hook design (PR #255) |
-| [`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](ARCHIVAL_BOND_WI4_MEASUREMENT.md) | WI-4 GF-7 graded genesis gate: a-priori threshold, posture-conditioned correlator spec (§4.1.1/§4.3.1), §13 result (PROVISIONAL-PASS, local-daemon posture only), §14 founder-cover launch posture + partition-adversary arm spec |
+| [`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](ARCHIVAL_BOND_WI4_MEASUREMENT.md) | WI-4 GF-7 graded genesis gate: a-priori threshold, posture-conditioned correlator spec (§4.1.1/§4.3.1 incl. the pinned in-model ceiling), §13 result (PROVISIONAL-PASS, local-daemon posture only), §14 founder-cover launch posture + partition-adversary arm spec (§14.4 hypothesis class widened pre-implementation), §15 remote-daemon structural-refusal disposition (proposed, review-gated) |
 | [`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](ARCHIVAL_BOND_2D1_PSCAN_PLAN.md) | `P`-scan pipeline (SP-0…SP-7, PR-A/PR-B) |
 | [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) | Transport slices (SP-T0…SP-T5, DQ-N) |
 | [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) | Gate-6 rounds, GF-N findings, S-N seam scenarios |
