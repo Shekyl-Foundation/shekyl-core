@@ -1960,9 +1960,6 @@ public:
   virtual uint64_t archival_bond_join_epoch(const crypto::hash& p_id) const;
   virtual bool get_archival_shard_segment_at_height(uint64_t shard_id, uint64_t at_height,
     crypto::hash& out_rk, uint64_t& out_leaf_count) const;
-  virtual bool get_archival_shard_leaf_layer_scalars(uint64_t shard_id,
-    uint32_t leaf_index_in_segment, uint64_t at_height,
-    std::vector<uint8_t>& out_flat_scalars) const;
 
   // Gate-4 bond-post / registry writers (substrate seeding until bond vin lands).
   virtual void put_archival_bond_record(const crypto::hash& p_id,
@@ -1980,8 +1977,6 @@ public:
   virtual void remove_archival_bond_record(const crypto::hash& p_id);
   virtual void put_archival_shard_segment(uint64_t shard_id, uint64_t freeze_height,
     const crypto::hash& segment_subroot_rk, uint64_t segment_leaf_count);
-  virtual void put_archival_shard_leaf_layer_scalars(uint64_t shard_id,
-    uint32_t leaf_index_in_segment, const std::vector<uint8_t>& flat_scalars);
 
   // ─── Segment-freeze pipeline (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4) ─────
   //

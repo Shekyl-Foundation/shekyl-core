@@ -1316,13 +1316,6 @@ bool BlockchainDB::get_archival_shard_segment_at_height(uint64_t /*shard_id*/, u
   return false;
 }
 
-bool BlockchainDB::get_archival_shard_leaf_layer_scalars(uint64_t /*shard_id*/,
-  uint32_t /*leaf_index_in_segment*/, uint64_t /*at_height*/,
-  std::vector<uint8_t>& /*out_flat_scalars*/) const
-{
-  return false;
-}
-
 void BlockchainDB::put_archival_bond_record(const crypto::hash& /*p_id*/,
   const std::vector<uint8_t>& /*hybrid_pubkey*/, uint64_t /*join_settlement_epoch*/,
   uint64_t /*bonded_total_atomic*/, uint8_t /*holdings_kind*/,
@@ -1342,11 +1335,6 @@ void BlockchainDB::remove_archival_bond_record(const crypto::hash& /*p_id*/)
 
 void BlockchainDB::put_archival_shard_segment(uint64_t /*shard_id*/, uint64_t /*freeze_height*/,
   const crypto::hash& /*segment_subroot_rk*/, uint64_t /*segment_leaf_count*/)
-{
-}
-
-void BlockchainDB::put_archival_shard_leaf_layer_scalars(uint64_t /*shard_id*/,
-  uint32_t /*leaf_index_in_segment*/, const std::vector<uint8_t>& /*flat_scalars*/)
 {
 }
 

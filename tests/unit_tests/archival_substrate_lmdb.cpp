@@ -328,9 +328,6 @@ TEST(archival_substrate_lmdb, shard_registry_roundtrip)
   const crypto::hash rk = make_hash(0x22);
   BlockchainDB& db = fixture.db;
   db.put_archival_shard_segment(42, 100, rk, 26000);
-
-  std::vector<uint8_t> scalars(128, 0x33);
-  db.put_archival_shard_leaf_layer_scalars(42, 1234, scalars);
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
@@ -340,10 +337,6 @@ TEST(archival_substrate_lmdb, shard_registry_roundtrip)
   ASSERT_TRUE(db.get_archival_shard_segment_at_height(42, 100, out_rk, leaf_count));
   EXPECT_EQ(out_rk, rk);
   EXPECT_EQ(leaf_count, 26000u);
-
-  std::vector<uint8_t> out_scalars;
-  ASSERT_TRUE(db.get_archival_shard_leaf_layer_scalars(42, 1234, 100, out_scalars));
-  EXPECT_EQ(out_scalars, scalars);
 }
 
 // Storage-flow coverage for the gather → Rust compute → store epoch-close

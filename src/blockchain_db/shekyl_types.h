@@ -134,7 +134,6 @@ static constexpr size_t kArchivalSlashLogKeySize = 12;    // BE(block_height) ||
 static constexpr uint32_t kArchivalSlashLogEpochMarkerSeq = 0xFFFFFFFFu;
 static constexpr size_t kArchivalBondKeySize = 32;        // P_id[32]
 static constexpr size_t kArchivalShardKeySize = 8;        // BE(shard_id)
-static constexpr size_t kArchivalShardLeafKeySize = 16;   // BE(shard_id) || BE(leaf_index)
 
 // ─── Encoder lifetime contract ─────────────────────────────────────────────
 //
@@ -543,9 +542,11 @@ private:
     std::array<uint8_t, kArchivalBondKeySize> bytes_{};
 };
 
-// ─── ArchivalShardKey / ArchivalShardLeafKey ───────────────────────────────
+// ─── ArchivalShardKey ──────────────────────────────────────────────────────
 //
-// Shard registry segment and per-leaf Selene layer scalars (gate-2 §9).
+// Shard registry segment key (gate-2 §9). The challenge-path leaf chunk is
+// read from the consensus curve-tree leaf table, not a shard-keyed snapshot
+// (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §6.2).
 
 class ArchivalShardKey {
 public:
@@ -561,23 +562,6 @@ public:
 
 private:
     std::array<uint8_t, kArchivalShardKeySize> bytes_{};
-};
-
-class ArchivalShardLeafKey {
-public:
-    ArchivalShardLeafKey(uint64_t shard_id, uint64_t leaf_index_in_segment) noexcept
-    {
-        store_be64(bytes_.data(), shard_id);
-        store_be64(bytes_.data() + 8, leaf_index_in_segment);
-    }
-
-    MDB_val as_mdb_val() const noexcept
-    {
-        return { bytes_.size(), const_cast<uint8_t*>(bytes_.data()) };
-    }
-
-private:
-    std::array<uint8_t, kArchivalShardLeafKeySize> bytes_{};
 };
 
 // ─── ArchivalBondValue ─────────────────────────────────────────────────────

@@ -14,9 +14,10 @@ use std::path::PathBuf;
 use serde_json::{json, Value};
 use shekyl_archival_retention::VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE;
 use shekyl_archival_retention::{
-    challenge_fire_height, challenge_leaf_index, challenge_seal_height, encode_path,
-    p_canonical_id_from_hybrid_pubkey, verify_leaf_index, verify_segment_path,
-    ArchivalServeCreditResponse, SegmentPathOpening, SETTLEMENT_EPOCH_BLOCKS,
+    challenge_fire_height, challenge_leaf_chunk_bounds, challenge_leaf_index,
+    challenge_seal_height, encode_path, p_canonical_id_from_hybrid_pubkey, verify_leaf_index,
+    verify_segment_path, ArchivalServeCreditResponse, SegmentPathOpening, SEGMENT_LEAF_COUNT,
+    SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
@@ -25,7 +26,7 @@ use shekyl_curve_tree::{
     AssembleInput, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, Gindex, RawOutput,
     ReferenceBlock, TargetKind, TxLeafInputs,
 };
-use shekyl_fcmp::tree::{construct_leaf, ed25519_point_to_selene_scalar};
+use shekyl_fcmp::tree::{construct_leaf, ed25519_point_to_selene_scalar, SELENE_CHUNK_WIDTH};
 
 const CT2_FIXTURE: &str = include_str!("../../shekyl-curve-tree/tests/fixtures/ct2_tier_a.json");
 const KAT_FIXTURE: &str = include_str!("fixtures/gate2_serve_credit_kat_v1.json");
@@ -136,12 +137,26 @@ fn build_integration_substrate(pinned_pk_hex: Option<&str>, pinned_sk_hex: Optio
     let _hybrid_sk_bytes = hybrid_sk.to_canonical_bytes().expect("sk bytes");
     let p_id = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes).to_bytes();
 
-    let (leaf_bytes, rk, path, layer_scalars) = ct2_founder_opening();
+    // Full-chunk opening: the consensus challenge path reads exactly
+    // SELENE_CHUNK_WIDTH leaves from the curve-tree leaf table
+    // (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §6.2 — frozen segments have only
+    // full chunks), so the integration substrate must carry a full chunk.
+    let (leaf_bytes, rk, path, layer_scalars) = ct2_full_chunk_opening();
+    assert_eq!(
+        layer_scalars.len(),
+        4 * SELENE_CHUNK_WIDTH,
+        "integration substrate requires a full leaf chunk"
+    );
     let shard_id = 42u64;
     // Consensus requires settlement_epoch >= join_settlement_epoch + 1; join at 0 ⇒ first credit at 1.
     let settlement_epoch = 1u64;
-    let segment_leaf_count = 26_000u64;
+    let segment_leaf_count = SEGMENT_LEAF_COUNT;
     let leaf_index = challenge_leaf_index(&p_id, shard_id, settlement_epoch, segment_leaf_count);
+    // Cross-language pin: the fixture carries the chunk bounds the Rust
+    // derivation produces so the C++ integration test can assert the FFI
+    // returns the same values before seeding the leaf table.
+    let chunk_bounds = challenge_leaf_chunk_bounds(shard_id, u64::from(leaf_index))
+        .expect("challenged index within segment");
 
     let block_hash_at_seal = [0xABu8; 32];
     let h_open = settlement_epoch_open_height(settlement_epoch);
@@ -206,6 +221,8 @@ fn build_integration_substrate(pinned_pk_hex: Option<&str>, pinned_sk_hex: Optio
         "join_settlement_epoch": 0,
         "bond_hybrid_pubkey_hex": encode_hex(&hybrid_pk_bytes),
         "leaf_layer_scalars_hex": flat_layer_scalars_hex(&layer_scalars),
+        "chunk_first_leaf_position": chunk_bounds.first_leaf_position,
+        "chunk_leaf_count": chunk_bounds.leaf_count,
         "wire_hex": encode_hex(&wire),
     })
 }
@@ -263,7 +280,7 @@ fn ct2_main_chain() -> Vec<Ct2Block> {
         .collect()
 }
 
-fn ct2_founder_opening() -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 32]>) {
+fn ct2_ingested() -> (CurveTreeClient, Vec<Ct2Block>, ReferenceBlock) {
     let blocks = ct2_main_chain();
     let mut client = CurveTreeClient::new();
     for blk in &blocks {
@@ -285,6 +302,42 @@ fn ct2_founder_opening() -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 3
         curve_tree_root: tip.root,
         block_hash: [0u8; 32],
     };
+    (client, blocks, reference)
+}
+
+fn ct2_opening_at(
+    client: &CurveTreeClient,
+    reference: &ReferenceBlock,
+    gindex: u64,
+    raw: RawOutput,
+) -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 32]>) {
+    let input = AssembleInput {
+        gindex: Gindex(gindex),
+        output_key: raw.output_key,
+        commitment: raw.commitment.expect("coinbase output has a commitment"),
+    };
+    let path = client.assemble_path(&input, reference).expect("assemble");
+    let cl = path
+        .leaf_chunk
+        .iter()
+        .find(|cl| cl.output_key == input.output_key)
+        .expect("chunk leaf for opened output");
+    let leaf_bytes = construct_leaf(&cl.output_key, &cl.commitment, &cl.h_pqc).expect("leaf");
+    let layer_scalars = leaf_layer_scalars(&path.leaf_chunk);
+    let opening = SegmentPathOpening {
+        c1_layers: path.c1_layers,
+        c2_layers: path.c2_layers,
+    };
+    (
+        leaf_bytes,
+        reference.curve_tree_root,
+        opening,
+        layer_scalars,
+    )
+}
+
+fn ct2_founder_opening() -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 32]>) {
+    let (client, blocks, reference) = ct2_ingested();
     let last_drained = reference.height.0.saturating_sub(61);
     let drained = blocks
         .iter()
@@ -299,31 +352,18 @@ fn ct2_founder_opening() -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 3
         .filter(|b| b.height < last_drained)
         .map(|b| b.outputs.len() as u64)
         .sum();
-    let founder = AssembleInput {
-        gindex: Gindex(founder_gindex),
-        output_key: raw.output_key,
-        commitment: raw.commitment.expect("coinbase output has a commitment"),
-    };
-    let path = client
-        .assemble_path(&founder, &reference)
-        .expect("assemble");
-    let cl = path
-        .leaf_chunk
-        .iter()
-        .find(|cl| cl.output_key == founder.output_key)
-        .expect("founder chunk leaf");
-    let leaf_bytes = construct_leaf(&cl.output_key, &cl.commitment, &cl.h_pqc).expect("leaf");
-    let layer_scalars = leaf_layer_scalars(&path.leaf_chunk);
-    let opening = SegmentPathOpening {
-        c1_layers: path.c1_layers,
-        c2_layers: path.c2_layers,
-    };
-    (
-        leaf_bytes,
-        reference.curve_tree_root,
-        opening,
-        layer_scalars,
-    )
+    ct2_opening_at(&client, &reference, founder_gindex, raw)
+}
+
+/// Opening for gindex 0 — the tree's first leaf chunk, which is full
+/// (`SELENE_CHUNK_WIDTH` leaves) whenever at least one chunk's worth of
+/// outputs has drained. The integration substrate needs a full chunk because
+/// the consensus challenge path reads exactly one full chunk from the
+/// curve-tree leaf table (pipeline doc §6.2).
+fn ct2_full_chunk_opening() -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 32]>) {
+    let (client, blocks, reference) = ct2_ingested();
+    let first = blocks.first().expect("non-empty");
+    ct2_opening_at(&client, &reference, 0, first.outputs[0])
 }
 
 fn leaf_layer_scalars(chunk: &[ChunkLeaf]) -> Vec<[u8; 32]> {
@@ -345,7 +385,7 @@ fn build_kat_document(
     let p_id = [0x42u8; 32];
     let shard_id = 7u64;
     let settlement_epoch = 100u64;
-    let segment_leaf_count = 26_000u64;
+    let segment_leaf_count = SEGMENT_LEAF_COUNT;
     let leaf_index = challenge_leaf_index(&p_id, shard_id, settlement_epoch, segment_leaf_count);
 
     let h_open = 1_000_000u64;
@@ -575,5 +615,34 @@ fn gate2_serve_credit_kat_vectors() {
                 .expect("segment count"),
         ),
         parsed.leaf_index_in_segment
+    );
+
+    // Chunk-bounds pin (pipeline doc §6.2): the fixture's pinned bounds must
+    // match the live derivation, and the substrate chunk must be exactly one
+    // full leaf chunk (chunk_leaf_count leaves × 128 bytes).
+    let bounds =
+        challenge_leaf_chunk_bounds(parsed.shard_id, u64::from(parsed.leaf_index_in_segment))
+            .expect("challenged index within segment");
+    assert_eq!(
+        bounds.first_leaf_position,
+        integration["chunk_first_leaf_position"]
+            .as_u64()
+            .expect("chunk first"),
+        "pinned chunk_first_leaf_position drifted from derivation"
+    );
+    assert_eq!(
+        bounds.leaf_count,
+        integration["chunk_leaf_count"]
+            .as_u64()
+            .expect("chunk leaf count"),
+        "pinned chunk_leaf_count drifted from derivation"
+    );
+    let scalars_hex = integration["leaf_layer_scalars_hex"]
+        .as_str()
+        .expect("integration scalars");
+    assert_eq!(
+        scalars_hex.len() as u64,
+        bounds.leaf_count * 128 * 2,
+        "integration substrate chunk must be exactly one full leaf chunk"
     );
 }

@@ -464,9 +464,6 @@ private:
   virtual uint64_t archival_bond_join_epoch(const crypto::hash& p_id) const override;
   virtual bool get_archival_shard_segment_at_height(uint64_t shard_id, uint64_t at_height,
     crypto::hash& out_rk, uint64_t& out_leaf_count) const override;
-  virtual bool get_archival_shard_leaf_layer_scalars(uint64_t shard_id,
-    uint32_t leaf_index_in_segment, uint64_t at_height,
-    std::vector<uint8_t>& out_flat_scalars) const override;
 
   virtual void put_archival_bond_record(const crypto::hash& p_id,
     const std::vector<uint8_t>& hybrid_pubkey, uint64_t join_settlement_epoch,
@@ -478,8 +475,6 @@ private:
   virtual void remove_archival_bond_record(const crypto::hash& p_id) override;
   virtual void put_archival_shard_segment(uint64_t shard_id, uint64_t freeze_height,
     const crypto::hash& segment_subroot_rk, uint64_t segment_leaf_count) override;
-  virtual void put_archival_shard_leaf_layer_scalars(uint64_t shard_id,
-    uint32_t leaf_index_in_segment, const std::vector<uint8_t>& flat_scalars) override;
 
   virtual void process_archival_slash_at_height(uint64_t block_height) override;
   virtual void revert_archival_slashes_at_height(uint64_t block_height) override;
@@ -675,7 +670,6 @@ private:
   MDB_dbi m_archival_serve_credit;    // P_id[32]||BE(shard)||BE(E) [48B] -> uint8_t 0x01 flag
   MDB_dbi m_archival_bond;            // P_id[32] -> ArchivalBondValue blob
   MDB_dbi m_archival_shard_segment;   // BE(shard_id) -> segment metadata
-  MDB_dbi m_archival_shard_leaf;      // BE(shard)||BE(leaf_idx) -> flat scalars
   MDB_dbi m_archival_slash_applied;   // P_id||shard||E -> slash idempotency bit
   MDB_dbi m_archival_slash_log;       // BE(height)||BE(seq) -> revert journal
   MDB_dbi m_archival_r_market;        // BE(shard)||BE(E) -> BE(count)

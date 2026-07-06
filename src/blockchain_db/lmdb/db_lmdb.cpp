@@ -287,7 +287,6 @@ const char* const LMDB_BLOCK_BURN = "block_burn";
 const char* const LMDB_ARCHIVAL_SERVE_CREDIT = "archival_serve_credit";
 const char* const LMDB_ARCHIVAL_BOND = "archival_bond";
 const char* const LMDB_ARCHIVAL_SHARD_SEGMENT = "archival_shard_segment";
-const char* const LMDB_ARCHIVAL_SHARD_LEAF = "archival_shard_leaf";
 const char* const LMDB_ARCHIVAL_SLASH_APPLIED = "archival_slash_applied";
 const char* const LMDB_ARCHIVAL_SLASH_LOG = "archival_slash_log";
 const char* const LMDB_ARCHIVAL_R_MARKET = "archival_r_market";
@@ -1633,8 +1632,6 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
     "Failed to open db handle for m_archival_bond");
   lmdb_db_open(txn, LMDB_ARCHIVAL_SHARD_SEGMENT, MDB_CREATE, m_archival_shard_segment,
     "Failed to open db handle for m_archival_shard_segment");
-  lmdb_db_open(txn, LMDB_ARCHIVAL_SHARD_LEAF, MDB_CREATE, m_archival_shard_leaf,
-    "Failed to open db handle for m_archival_shard_leaf");
   lmdb_db_open(txn, LMDB_ARCHIVAL_SLASH_APPLIED, MDB_CREATE, m_archival_slash_applied,
     "Failed to open db handle for m_archival_slash_applied");
   lmdb_db_open(txn, LMDB_ARCHIVAL_SLASH_LOG, MDB_CREATE, m_archival_slash_log,
@@ -5066,27 +5063,6 @@ bool BlockchainLMDB::get_archival_shard_segment_at_height(uint64_t shard_id, uin
   return out_leaf_count > 0;
 }
 
-bool BlockchainLMDB::get_archival_shard_leaf_layer_scalars(uint64_t shard_id,
-  uint32_t leaf_index_in_segment, uint64_t /*at_height*/,
-  std::vector<uint8_t>& out_flat_scalars) const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  shekyl::db::ArchivalShardLeafKey key(shard_id, leaf_index_in_segment);
-  MDB_val k = key.as_mdb_val();
-  TXN_PREFIX_RDONLY();
-  MDB_val v;
-  const int get_result = mdb_get(m_txn, m_archival_shard_leaf, &k, &v);
-  TXN_POSTFIX_RDONLY();
-  if (get_result != 0 || v.mv_size == 0 || (v.mv_size % 32) != 0)
-    return false;
-
-  out_flat_scalars.assign(static_cast<const uint8_t*>(v.mv_data),
-    static_cast<const uint8_t*>(v.mv_data) + v.mv_size);
-  return true;
-}
-
 void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
   const std::vector<uint8_t>& hybrid_pubkey, uint64_t join_settlement_epoch,
   uint64_t bonded_total_atomic, uint8_t holdings_kind,
@@ -6139,23 +6115,6 @@ void BlockchainLMDB::put_archival_shard_segment(uint64_t shard_id, uint64_t free
   const int result = mdb_put(*m_write_txn, m_archival_shard_segment, &k, &v, 0);
   if (result)
     throw0(DB_ERROR(lmdb_error("Failed to put archival shard segment: ", result).c_str()));
-}
-
-void BlockchainLMDB::put_archival_shard_leaf_layer_scalars(uint64_t shard_id,
-  uint32_t leaf_index_in_segment, const std::vector<uint8_t>& flat_scalars)
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  if (flat_scalars.empty() || (flat_scalars.size() % 32) != 0)
-    throw0(DB_ERROR("Archival shard leaf scalars must be a non-empty multiple of 32 bytes"));
-
-  shekyl::db::ArchivalShardLeafKey key(shard_id, leaf_index_in_segment);
-  MDB_val k = key.as_mdb_val();
-  MDB_val v = { flat_scalars.size(), const_cast<uint8_t*>(flat_scalars.data()) };
-  const int result = mdb_put(*m_write_txn, m_archival_shard_leaf, &k, &v, 0);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to put archival shard leaf scalars: ", result).c_str()));
 }
 
 // ─── Deferred Staked Leaf Insertion ─────────────────────────────────────────
