@@ -20,8 +20,8 @@
 # Usage:
 #   XMRIG_DIR=/path/to/xmrig ./build.sh
 #   ./xmrig_parity --rx0                       # build-faithfulness self-check (v1 vector)
-#   ./xmrig_parity --kat                        # single v2 KAT, light-JIT
 #   ./xmrig_parity --kat-full                   # single v2 KAT, full-dataset (the adversary mode)
+#   ./xmrig_parity --kat                        # single v2 KAT, light-JIT — demonstrates the divergence
 #   ./xmrig_parity /path/to/parity_corpus.dat   # full 1024-vector full-dataset differential
 set -euo pipefail
 
@@ -29,12 +29,37 @@ XMRIG_DIR="${XMRIG_DIR:-/home/torvaldsl/shekyl/xmrig}"
 X="$XMRIG_DIR/src/crypto/randomx"
 A="$XMRIG_DIR/src/3rdparty/argon2"
 here="$(cd "$(dirname "$0")" && pwd)"
+PIN="b2ca7248"
+
+# Fail early and actionably if XMRIG_DIR isn't a usable XMRig checkout, rather than
+# letting a missing directory surface as a cryptic compile error 40 lines later.
+if [ ! -d "$XMRIG_DIR/.git" ] || [ ! -f "$X/randomx.h" ]; then
+  echo "ERROR: XMRIG_DIR='$XMRIG_DIR' is not an XMRig git clone with RandomX sources." >&2
+  echo "       Clone XMRig (pinned to $PIN) and pass XMRIG_DIR=/path/to/xmrig." >&2
+  exit 2
+fi
+
+have="$(git -C "$XMRIG_DIR" rev-parse --short HEAD 2>/dev/null || echo '?')"
+# Pin mismatch is fail-fast, not a warning: an off-pin build produces a hash the
+# committed ceiling result no longer describes, and a warning-that-continues is exactly
+# the silent-compliance footgun that lets void numbers get generated and shared. A
+# deliberate off-pin run must opt in loudly via ALLOW_UNPINNED=1.
+if [ "$have" != "$PIN" ]; then
+  if [ "${ALLOW_UNPINNED:-0}" = "1" ]; then
+    echo "############################################################" >&2
+    echo "# UNPINNED BUILD: XMRig HEAD $have != pin $PIN.             " >&2
+    echo "# Results are NOT the committed ceiling and are void as such." >&2
+    echo "############################################################" >&2
+  else
+    echo "ERROR: XMRig HEAD is $have, expected pin $PIN. Ceiling numbers are only" >&2
+    echo "       meaningful against the pinned miner. Re-pin (git checkout $PIN) or" >&2
+    echo "       set ALLOW_UNPINNED=1 to build off-pin deliberately (results are void)." >&2
+    exit 2
+  fi
+fi
+
 out="${OUT_DIR:-$here/build}"
 mkdir -p "$out"; cd "$out"
-
-PIN="b2ca7248"
-have="$(git -C "$XMRIG_DIR" rev-parse --short HEAD 2>/dev/null || echo '?')"
-[ "$have" = "$PIN" ] || echo "WARNING: XMRig HEAD is $have, expected pin $PIN — re-pin or ceiling numbers are void."
 
 INC="-I$XMRIG_DIR/src -I$X"
 # XMRIG_FEATURE_ASM is REQUIRED: without it jit_compiler.hpp selects the fallback JIT,

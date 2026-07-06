@@ -15,9 +15,18 @@
 // is byte-identical to Shekyl's committed CANONICAL_RANDOM_HASHES, which were
 // generated from external/randomx-v2 @ aaafe71 with randomx_create_vm(RANDOMX_FLAG_V2).
 //
-// The hash is mode-invariant (light==full, interpreter==JIT), so we run the
-// simplest reproducible config: light cache, software AES, interpreter, single thread.
-// This is a hash-CORRECTNESS test (hardware-independent) — not a timing measurement.
+// MODE MATTERS — the ceiling comparison MUST run full-dataset + JIT. XMRig's v2 is
+// NOT mode-invariant: its light/interpreter path is v2-INCOMPLETE (it applies only
+// Tweak_V2_PREFETCH; AES/CFROUND/COMMITMENT are JIT-only), and even its light-JIT
+// result diverges from its own full-dataset result. Full-dataset (mining) mode is the
+// one an adversary uses and the only one that reproduces the canonical hash. Software
+// AES throughout — RandomX mandates soft==hard output, matching the fork's soft-AES
+// c_oracle canonical. This is a hash-CORRECTNESS test (hardware-independent), not timing.
+//
+// Modes: <parity_corpus.dat> = full-dataset differential over all 1024 vectors;
+//   --rx0 = published rx/0 v1 build-faithfulness anchor (interpreter is fine — v1 has
+//           no tweaks); --kat-full = single v2 KAT, full-dataset (== canonical);
+//   --kat = single v2 KAT, light-JIT — DEMONSTRATES the v2-incomplete divergence.
 //
 // Corpus: parity_corpus.dat (magic SKLPRTY1), carrying per-record
 // seed[32] / canonical_index / canonical_hash[32] / data_len / data.
@@ -46,13 +55,29 @@ static std::string hex(const uint8_t* p, size_t n) {
     return s;
 }
 
-static void run_one(randomx_vm* vm, const uint8_t* seed_unused, const void* blob, size_t len, uint8_t out[32]) {
-    (void)seed_unused;
-    randomx_calculate_hash(vm, blob, len, out);
+// RandomX buffer sizes (RandomX_ConfigurationMoneroV2): cache = ArgonMemory(262144)*1024,
+// scratchpad = RANDOMX_SCRATCHPAD_L3, dataset item = 64 bytes.
+static const size_t CACHE_BYTES      = 268435456; // 256 MiB
+static const size_t SCRATCHPAD_BYTES = 2097152;   // 2 MiB
+static const size_t DATASET_ITEM_BYTES = 64;
+
+// Aligned alloc that aborts on failure — an unchecked posix_memalign would leave the
+// pointer indeterminate and feed garbage to RandomX (UB). Dev-only harness, so exit(2)
+// (not throw) is the honest, minimal contract.
+static void* xalloc(size_t align, size_t size) {
+    void* p = nullptr;
+    if (posix_memalign(&p, align, size) != 0 || !p) {
+        fprintf(stderr, "xalloc: failed to allocate %zu bytes (align %zu)\n", size, align);
+        exit(2);
+    }
+    return p;
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2) { fprintf(stderr, "usage: %s <parity_corpus.dat> | --kat\n", argv[0]); return 2; }
+    if (argc < 2) {
+        fprintf(stderr, "usage: %s <parity_corpus.dat> | --rx0 | --kat-full | --kat\n", argv[0]);
+        return 2;
+    }
 
     if (strcmp(argv[1], "--rx0") == 0) {
         // Published RandomX v1 (rx/0) reference vector — proves the build pipeline
@@ -61,7 +86,7 @@ int main(int argc, char** argv) {
         const char* key    = "test key 000";
         const char* input  = "This is a test";
         const char* expect = "639183aae1bf4c9a35884cb46b09cad9175f04efd7684e7262a0ac1c2f0b4e3f";
-        void* cm; void* sp; posix_memalign(&cm, 4096, 268435456); posix_memalign(&sp, 4096, 2097152);
+        void* cm = xalloc(4096, CACHE_BYTES); void* sp = xalloc(4096, SCRATCHPAD_BYTES);
         randomx_cache* cache = randomx_create_cache(RANDOMX_FLAG_DEFAULT, (uint8_t*)cm);
         if (!cache) { fprintf(stderr, "rx0: create_cache failed\n"); return 2; }
         randomx_init_cache(cache, key, strlen(key));
@@ -80,13 +105,13 @@ int main(int argc, char** argv) {
         uint8_t seed[32]; for (int i = 0; i < 32; i++) seed[i] = (uint8_t)(i + 1);
         const char* blob = "Shekyl RandomX v2 full-dataset parity KAT (Phase 3a, pin aaafe71)";
         randomx_apply_config(RandomX_MoneroConfigV2);
-        void* cm; void* sp; posix_memalign(&cm, 4096, 268435456); posix_memalign(&sp, 4096, 2097152);
+        void* cm = xalloc(4096, CACHE_BYTES); void* sp = xalloc(4096, SCRATCHPAD_BYTES);
         randomx_cache* cache = randomx_create_cache(RANDOMX_FLAG_JIT, (uint8_t*)cm);
         if (!cache) { cache = randomx_create_cache(RANDOMX_FLAG_DEFAULT, (uint8_t*)cm); }
         if (!cache) { fprintf(stderr, "katfull: create_cache failed\n"); return 2; }
         randomx_init_cache(cache, seed, 32);
         unsigned long items = randomx_dataset_item_count();
-        void* dsmem; if (posix_memalign(&dsmem, 4096, (size_t)items * 64) != 0) { fprintf(stderr, "ds alloc\n"); return 2; }
+        void* dsmem = xalloc(4096, (size_t)items * DATASET_ITEM_BYTES);
         randomx_dataset* ds = randomx_create_dataset((uint8_t*)dsmem);
         if (!ds) { fprintf(stderr, "katfull: create_dataset failed\n"); return 2; }
         fprintf(stderr, "initializing full dataset (%lu items, ~%lu MiB)...\n", items, (unsigned long)((size_t)items*64/1048576));
@@ -99,13 +124,15 @@ int main(int argc, char** argv) {
     }
 
     if (strcmp(argv[1], "--kat") == 0) {
-        // Frozen KAT from tests/randomx_v2_parity/randomx_v2_full_parity.cpp:262-267.
+        // LIGHT-JIT path on the frozen KAT — DEMONSTRATES XMRig's v2-incompleteness.
+        // Its light-JIT hash is EXPECTED to diverge from the full-dataset canonical
+        // (34f8b017…); use --kat-full for the value that actually matches. If this ever
+        // stops diverging, XMRig's light path changed and the Phase 0 finding needs review.
         uint8_t seed[32]; for (int i = 0; i < 32; i++) seed[i] = (uint8_t)(i + 1); // 0x01..0x20
         const char* blob = "Shekyl RandomX v2 full-dataset parity KAT (Phase 3a, pin aaafe71)";
-        const char* expect = "34f8b0179159d837e463c17c8692c106d2d3536f7da325aeefeb3e22a136b651";
+        const char* canonical = "34f8b0179159d837e463c17c8692c106d2d3536f7da325aeefeb3e22a136b651";
         randomx_apply_config(RandomX_MoneroConfigV2);
-        void* cm; void* sp;
-        posix_memalign(&cm, 4096, 268435456); posix_memalign(&sp, 4096, 2097152);
+        void* cm = xalloc(4096, CACHE_BYTES); void* sp = xalloc(4096, SCRATCHPAD_BYTES);
         randomx_cache* cache = randomx_create_cache(RANDOMX_FLAG_DEFAULT, (uint8_t*)cm);
         if (!cache) { fprintf(stderr, "kat: create_cache failed\n"); return 2; }
         randomx_init_cache(cache, seed, 32);
@@ -114,9 +141,11 @@ int main(int argc, char** argv) {
         uint8_t out[32];
         randomx_calculate_hash(vm, blob, strlen(blob), out);
         std::string got = hex(out, 32);
-        printf("KAT  xmrig = %s\n     expect = %s\n%s\n", got.c_str(), expect,
-               got == expect ? "KAT MATCH: XMRig RandomX-v2 == fork on the frozen vector" : "KAT MISMATCH");
-        return got == expect ? 0 : 1;
+        bool diverges = (got != canonical);
+        printf("KAT  xmrig(light-JIT) = %s\n     canonical(full)  = %s\n%s\n", got.c_str(), canonical,
+               diverges ? "light-JIT DIVERGES as expected (XMRig light path is v2-incomplete)"
+                        : "UNEXPECTED MATCH: XMRig light path no longer diverges — revisit Phase 0 finding");
+        return diverges ? 0 : 1;
     }
 
     FILE* f = fopen(argv[1], "rb");
@@ -137,15 +166,14 @@ int main(int argc, char** argv) {
     // FULL-DATASET + JIT: the mode a real adversary mines with. XMRig's v2 is
     // mode-invariant with the fork ONLY in full mode (its light path is v2-incomplete),
     // so the ceiling comparison MUST use full dataset. One 2 GiB dataset, re-init per seedhash.
-    void* cache_mem = nullptr; void* scratchpad = nullptr; void* ds_mem = nullptr;
-    if (posix_memalign(&cache_mem, 4096, 268435456) != 0 || !cache_mem) { fprintf(stderr, "cache alloc\n"); return 2; }
-    if (posix_memalign(&scratchpad, 4096, 2097152) != 0 || !scratchpad) { fprintf(stderr, "sp alloc\n"); return 2; }
+    void* cache_mem = xalloc(4096, CACHE_BYTES);
+    void* scratchpad = xalloc(4096, SCRATCHPAD_BYTES);
     unsigned long items = randomx_dataset_item_count();
-    if (posix_memalign(&ds_mem, 4096, (size_t)items * 64) != 0 || !ds_mem) { fprintf(stderr, "ds alloc\n"); return 2; }
+    void* ds_mem = xalloc(4096, (size_t)items * DATASET_ITEM_BYTES);
     randomx_dataset* ds = randomx_create_dataset((uint8_t*)ds_mem);
     if (!ds) { fprintf(stderr, "create_dataset failed\n"); return 2; }
     printf("full dataset: %lu items (~%lu MiB); %u seedhashes to init\n",
-           items, (unsigned long)((size_t)items*64/1048576), seed_count);
+           items, (unsigned long)((size_t)items * DATASET_ITEM_BYTES / 1048576), seed_count);
 
     uint64_t total = 0, mism = 0;
     int shown = 0;
