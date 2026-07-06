@@ -623,6 +623,19 @@ public:
    * bypass. Test-support only; no production caller. */
   void put_archival_shard_segment_raw_for_corruption_test(uint64_t shard_id,
     const std::vector<uint8_t>& blob);
+  /** Raw segment-row reader (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §9): the
+   * O-3 pop-symmetry pin compares re-applied rows bit-identically (encoded
+   * bytes, not decoded fields), which no production reader exposes.
+   * Test-support only; no production caller. */
+  bool get_archival_shard_segment_raw_for_test(uint64_t shard_id,
+    std::vector<uint8_t>& out_blob) const;
+  /** Corruption-simulation deleter (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §9):
+   * removes a curve-tree layer chunk so the freeze processor's
+   * missing-layer-2-chunk loud abort is armed by a test. The grow path can
+   * only ever leave the layers table consistent with the leaf count, so the
+   * corruption case is unreachable without this bypass. Test-support only;
+   * no production caller. */
+  void remove_curve_tree_layer_chunk_for_corruption_test(uint8_t layer, uint64_t chunk);
 
 private:
   // Prefer the active write txn when present so uncommitted archival bits are visible

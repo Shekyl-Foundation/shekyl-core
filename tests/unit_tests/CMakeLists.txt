@@ -111,6 +111,7 @@ set(unit_tests_sources
   archival_serve_credit_integration.cpp
   archival_bond_post.cpp
   archival_bond_post_integration.cpp
+  archival_segment_freeze.cpp
   archival_substrate_lmdb.cpp
   ct_balance_differential.cpp
   deferred_insertion.cpp

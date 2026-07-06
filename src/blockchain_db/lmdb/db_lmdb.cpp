@@ -5736,6 +5736,14 @@ bool BlockchainLMDB::has_archival_sigma_work_row(uint64_t settlement_epoch) cons
   return result == 0;
 }
 
+namespace
+{
+  // Defined in the curve-tree anonymous-namespace block below; declared here
+  // so the freeze hooks (and the layer-chunk corruption helper) can address
+  // the layer rows the same-txn grow wrote.
+  uint64_t ct_layer_chunk_key(uint8_t layer, uint64_t chunk);
+}
+
 void BlockchainLMDB::put_archival_shard_segment_raw_for_corruption_test(uint64_t shard_id,
   const std::vector<uint8_t>& blob)
 {
@@ -5750,11 +5758,33 @@ void BlockchainLMDB::put_archival_shard_segment_raw_for_corruption_test(uint64_t
     throw0(DB_ERROR(lmdb_error("Failed to put raw archival shard segment: ", result).c_str()));
 }
 
-namespace
+bool BlockchainLMDB::get_archival_shard_segment_raw_for_test(uint64_t shard_id,
+  std::vector<uint8_t>& out_blob) const
 {
-  // Defined in the curve-tree anonymous-namespace block below; declared here
-  // so the freeze hooks can read the layer-2 chunk the same-txn grow wrote.
-  uint64_t ct_layer_chunk_key(uint8_t layer, uint64_t chunk);
+  check_open();
+  shekyl::db::ArchivalShardKey key(shard_id);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v;
+  const int result = archival_db_get(m_archival_shard_segment, &k, &v);
+  if (result == MDB_NOTFOUND)
+    return false;
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to get raw archival shard segment: ", result).c_str()));
+  out_blob.assign(static_cast<const uint8_t*>(v.mv_data),
+    static_cast<const uint8_t*>(v.mv_data) + v.mv_size);
+  return true;
+}
+
+void BlockchainLMDB::remove_curve_tree_layer_chunk_for_corruption_test(uint8_t layer, uint64_t chunk)
+{
+  check_open();
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: layer-chunk corruption delete requires active write txn");
+  uint64_t layer_key = ct_layer_chunk_key(layer, chunk);
+  MDB_val k = {sizeof(layer_key), (void *)&layer_key};
+  const int result = mdb_del(*m_write_txn, m_curve_tree_layers, &k, nullptr);
+  if (result && result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to delete curve tree layer chunk for corruption test: ", result).c_str()));
 }
 
 uint64_t BlockchainLMDB::frozen_segment_count_on_write_txn() const
