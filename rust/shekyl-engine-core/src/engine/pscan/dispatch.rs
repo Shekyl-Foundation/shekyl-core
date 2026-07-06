@@ -101,8 +101,9 @@ impl<S: PendingSealStore> PendingPostStore<S> {
     /// Read the current block under the lock (a serialized snapshot; no
     /// seal write). The WI-2 assemble path reads the derived reservation
     /// set ([`PendingPostBlock::reserved_gindexes`]) through this.
-    // Transient — the consumer is the assemble-path rewire through this shared
-    // handle (the gate-11 writer-discipline follow-through in this WI-3 PR).
+    // Transient — the consumer is the WI-2 Engine-side assemble orchestrator
+    // (WI-2's remaining slice, out of WI-3 scope per the design doc §1), which
+    // reads reservations through this shared handle.
     #[allow(dead_code)]
     pub(crate) async fn read<R>(
         &self,
@@ -396,8 +397,10 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchDriver<S, T> {
     /// The locked write path, exposed so the WI-2 assemble path appends its
     /// sealed post through the **same** handle (§3.3 writer discipline —
     /// two writers, one lock, one seal path).
-    // Transient — the consumer is the assemble-path rewire (gate-11 follow-
-    // through in this WI-3 PR), same as `PendingPostStore::read` above.
+    // Transient — the consumer is the WI-2 Engine-side assemble orchestrator
+    // (out of WI-3 scope per the design doc §1), which appends its sealed
+    // post through this shared handle. Gate 11 enforces that when it lands,
+    // it lands HERE and not on a second write path.
     #[allow(dead_code)]
     pub(crate) fn store(&self) -> &PendingPostStore<S> {
         &self.store
