@@ -156,6 +156,16 @@
   mask-consistency wargame unrepresentable-by-construction (reopen on
   any user-supplied blinding factor or above-floor bonding). On-chain
   bridges are timing-only; V-2a/V-2b survive off-chain.
+  **R4 exit-seam inventory (§18.10):** both determinative source
+  checks resolved — the reward payout is cleartext by genesis
+  disposition (`REWARD_EMISSION_LEG.md` §5.5/§9) and exact (no grid),
+  and `reward_P(E)` is ex-ante computable from public consensus state.
+  R-1 confirmed dominant but reach-bounded (severed at first spend by
+  FCMP++/CT; all bits at the off-chain matching surface — V-2b in
+  sharpest form). CT-committing the payout foreclosed (priority-1
+  inflation audit); open defenses: quantization (grid width a-priori
+  derived, GF-4 candidate) + gate-6 routing. Claim-cadence, reward
+  amount, and holdings stratum graded jointly on GF-4.
   **PROVISIONAL:** the block-time sealing
   re-run is confirmatory by construction (live `BondPostDispatched.at` is
   the due block; dispersal is sub-block `U[0,60s)`), so no block-resolution

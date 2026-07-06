@@ -2225,3 +2225,96 @@ What the code does (`bond_ct_balance.rs`, `bond_post.rs`,
   and the *universal funding constant* matched against user-side
   amount surfaces (e.g. exchange records) — not on the bond amount.
   V-2b remains on the GF-4 round's surface.
+
+### 18.10 Exit-seam residual inventory: the loud-and-variable frame, resolved at source (2026-07-06)
+
+§18.9's two-closure observation generalizes into the frame that sorts
+the remaining surface: **an amount carries user-correlated bits only
+where it is loud AND variable.** The bond term is loud-but-constant
+(zero bits); the funding/change legs are variable-but-hidden (zero
+observable bits); the residuals live in the one remaining quadrant.
+Review round R4 enumerated the inventory (R-1..R-5) against that frame
+and named two determinative source checks. Both are now resolved.
+
+**Source check 1 — is the reward payout cleartext or CT-committed?
+Cleartext, by explicit genesis disposition.** `reward_amount_plain:
+Vec<u64>` rides the emission vin loud, per settlement epoch
+(`emission_wire.rs` frozen field set (A)); the vout amounts are loud
+too (`RewardCommit.amount_plain`, with
+`Σ vout.amount_plain == Σ reward_P(E)` enforced).
+`REWARD_EMISSION_LEG.md` §5.5: "emission mint is **not confidential**
+… the entitled amount is **public** on the vin (loud inflation
+check)"; §9's rejected-surfaces table records "Confidential reward
+amount — Delete" as a genesis decision. Stronger than the R-1 wargame
+anticipated: `reward_P(E) = budget(E)·capped_P(E)/Σwork(E)` is a
+deterministic function of *public consensus state* (replication
+counts, shard age, serve-credit bits, gate-1 budget), and §4.1 pins
+that every verifier recomputes all three channels at zero tolerance —
+the adversary does not predict the amount, **consensus requires that
+everyone can compute it exactly, ex ante, for every `P`.**
+
+**Source check 2 — is the amount exact or quantized? Exact.**
+`reward_share_floor` is `floor(budget·capped/Σwork)` to the atomic
+unit (`reward_arithmetic.rs`); the only coarsening is integer flooring
+with dust unminted. No grid exists.
+
+**Resolved inventory:**
+
+- **R-1 (reward-amount surface) — real, in its sharpest form, with
+  its reach bounded.** Loud, variable, exact, ex-ante computable. But
+  the exposure is pinned *at mint* and **severed at first spend**:
+  `P`'s subsequent movements (including the drain) are ordinary
+  FCMP++ spends — CT amounts, hidden change/fee splits — so the
+  computed reward never propagates on-chain. Two consequences. (i)
+  Among pseudonyms the amount adds **zero partition bits** — it is a
+  function of `P`'s already-public state (holdings, serve bits), so
+  per the §18.8 frame it says nothing about `P` that wasn't public.
+  (ii) All of its bits live at the **off-chain user-side matching
+  surface**: R-1 is V-2b upgraded from "lifetime total computable"
+  to "per-epoch schedule computable ex ante — a targeted search with
+  a computed target." That is the dominant exit-seam amount residual,
+  and it is off-chain-matched, so it is a GF-4-round object.
+- **R-2 (constant funding requirement) — scoped down as proposed.**
+  The constant closes the on-chain amount bits (and the user-side
+  funding *transfer* is itself CT-hidden on-chain); the residual is
+  off-chain funding-assembly observability, which rides the §13.5
+  isolation conditioning already pinned. Not a new bridge.
+- **R-3 (quantization) — absent; named as the open mitigation
+  candidate.** A gridded `reward_P` formula remains deterministic and
+  zero-tolerance recomputable, so quantization is *compatible* with
+  the loud-audit posture — it coarsens the value without hiding it,
+  collapsing the user-side match from an exact computed target to a
+  bucket shared across personas. It is a consensus economics change
+  (grid width interacts with dust/budget conservation), so it is a
+  GF-4-round design candidate with the width a-priori derived from
+  the adversary-advantage argument (the settlement-epoch-width
+  discipline, §18.7, applied to the value axis) — not a wallet knob.
+- **R-4 (claim-timing cadence) — stands, joint grading pinned.** The
+  pure-timing recurring observable (batching ≤ 15, forfeiture W = 26
+  are signed pins, `emission_wire.rs`). Claim timing, reward amount,
+  and holdings stratum are co-present on one persona; the GF-4 round
+  grades them **jointly** (the §16.2 no-per-axis-multiplication
+  obligation, applied to the exit seam).
+- **R-5 (the asymmetry) — stands, corrected in one place.** Timing
+  can be jittered; a consensus-computed amount cannot. But of the
+  three defense classes named, **(b) CT-committing the payout is
+  foreclosed, not open**: it is a recorded rejected surface
+  (`REWARD_EMISSION_LEG.md` §9) because loud mint is the
+  inflation-audit posture — a hidden mint amount makes supply
+  unverifiable, which `00-mission` priority 1 rejects regardless of
+  the privacy gain. The available classes are **(a)** quantization
+  (R-3, open candidate) and **(c)** firewall routing, which
+  *partially exists*: the gate-6 backing ladder already pins mint
+  outputs as the safest lineage rung ("provenance terminates at
+  consensus"), and everything after mint is FCMP++-hidden (§7.3
+  invariant). GF-4 is therefore confirmed as a **different problem
+  class** from GF-7, not a symmetric second copy: its amount half is
+  defended by coarsening and routing, never by decorrelation.
+
+**Frame pin (carried into the GF-4 round):** loud-and-variable
+amounts are the only residual bridge class on the value axis, and the
+archival leg has exactly one — the reward schedule. Its on-chain
+propagation is cut by CT at first spend; its off-chain matching
+surface is the load-bearing unknown. The entry-seam toolkit (jitter,
+dispersal) does not transfer; the exit-seam toolkit is quantize (R-3)
++ route (gate-6 ladder) + measure (R-4 joint grading).

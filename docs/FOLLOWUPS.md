@@ -7611,6 +7611,22 @@ one place to confirm each item's relationship to the wallet stack.
   unrepresentable-by-construction (reopen: any PR introducing a user-supplied blinding
   factor or above-floor bonding). Remaining `P`→user bridges are timing-only **on-chain**;
   V-2a/V-2b survive off-chain (loud rewards + universal constant vs. user-side surfaces).
+  **R4 exit-seam inventory (§18.10, 2026-07-06), both source checks resolved:** the reward
+  payout is **cleartext by genesis disposition** (`REWARD_EMISSION_LEG.md` §5.5 loud
+  inflation check; §9 "Confidential reward amount — Delete") and **exact** (integer floor,
+  no grid) — and sharper than anticipated: `reward_P(E)` is a deterministic function of
+  public consensus state that every verifier recomputes at zero tolerance, so the amount
+  is **ex-ante computable for every `P`**. R-1 confirmed as the dominant exit-seam amount
+  residual, reach-bounded: pinned at mint, severed at first spend (all post-mint movement
+  FCMP++/CT-hidden), zero partition bits among pseudonyms; all bits live at the off-chain
+  user-side matching surface (V-2b upgraded to targeted-search-with-computed-target).
+  Defense classes: CT-committing the payout is **foreclosed** (priority-1 inflation-audit
+  posture, recorded rejected surface); open classes are **quantization** (R-3, compatible
+  with the loud audit — grid width a-priori derived, a consensus economics candidate for
+  the GF-4 round) and **routing** (gate-6 backing ladder, partially exists). R-4
+  claim-cadence + reward-amount + holdings stratum graded **jointly** on GF-4
+  (no-per-axis-multiplication). GF-4 pinned as a different problem class from GF-7: its
+  amount half is defended by coarsening and routing, never decorrelation.
   **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
   GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
   seams, not just entry).**
