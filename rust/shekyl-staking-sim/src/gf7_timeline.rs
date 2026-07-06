@@ -259,8 +259,11 @@ impl SynthParams {
 ///   arithmetic; an inverted range underflows the width).
 /// - `period_range.1 <= horizon / 2` (the private anchor lands in the first
 ///   half).
-/// - `window <= horizon / 2` and `dispersal_bound <= horizon / 2` (every seam
-///   event lands on the recorded timeline, not past its end).
+/// - `window + max(dispersal_bound − 1, 0) <= horizon / 2` (the combined seam
+///   span: the anchor lands by `horizon / 2`, the bond dispatch lands at most
+///   `window + (dispersal_bound − 1)` after it, so this is exactly the bound
+///   that keeps every seam event on the recorded timeline, not past its end —
+///   two separate half-horizon checks would not compose to that guarantee).
 fn simulate_pair(rng: &mut SplitMix64, p: &SynthParams, observer: &mut RecordingObserver) {
     let (horizon, (pmin, pmax)) = p.regime.cadence();
     assert!(
@@ -274,15 +277,21 @@ fn simulate_pair(rng: &mut SplitMix64, p: &SynthParams, observer: &mut Recording
         "max session period ({pmax}) must fit in half the horizon ({horizon}): \
          the private anchor must land in the first half"
     );
+    // The combined seam span, not two independent half-horizon checks: the
+    // anchor `t0` lands by `horizon / 2` (previous assert), and the farthest
+    // seam event is the bond dispatch at `t0 + spread + dispersal` with
+    // `spread <= window` and `dispersal <= dispersal_bound − 1` (the draw is
+    // `U[0, dispersal_bound)`). Bounding the sum by the remaining half is the
+    // exact condition for every seam event to land on the recorded timeline;
+    // `window` and `dispersal_bound` each passing `<= horizon / 2` separately
+    // would not compose to that guarantee.
+    let seam_span = p.window + p.dispersal_bound.saturating_sub(1);
     assert!(
-        p.window <= horizon / 2,
-        "standoff window ({}) must fit in half the horizon ({horizon})",
-        p.window
-    );
-    assert!(
-        p.dispersal_bound <= horizon / 2,
-        "dispersal bound ({}) must fit in half the horizon ({horizon})",
-        p.dispersal_bound
+        seam_span <= horizon / 2,
+        "seam span (window {} + max dispersal {}) must fit in half the horizon \
+         ({horizon}): the bond dispatch must land on the recorded timeline",
+        p.window,
+        p.dispersal_bound.saturating_sub(1)
     );
 
     let period = pmin + rng.next_u64() % (pmax - pmin + 1);
@@ -1247,11 +1256,10 @@ mod tests {
 
     // The precondition guards bite (not just exist). The period guard is
     // unreachable through `SynthParams` (the regime enum's cadence is always
-    // internally valid), so the reachable guards are the window and dispersal
-    // bounds.
+    // internally valid), so the reachable guard is the combined seam span.
 
     #[test]
-    #[should_panic(expected = "standoff window")]
+    #[should_panic(expected = "seam span")]
     fn window_exceeding_half_horizon_is_refused() {
         let mut rng = SplitMix64(1);
         let mut obs = RecordingObserver::new();
@@ -1266,7 +1274,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "dispersal bound")]
+    #[should_panic(expected = "seam span")]
     fn dispersal_exceeding_half_horizon_is_refused() {
         let mut rng = SplitMix64(1);
         let mut obs = RecordingObserver::new();
@@ -1274,6 +1282,25 @@ mod tests {
             &mut rng,
             &SynthParams {
                 dispersal_bound: 2_001,
+                ..SynthParams::posture()
+            },
+            &mut obs,
+        );
+    }
+
+    /// The guard is on the *combined* span: window and dispersal each within
+    /// the half-horizon individually, but their sum past it, must still be
+    /// refused — the case the two pre-fix independent checks let through.
+    #[test]
+    #[should_panic(expected = "seam span")]
+    fn combined_seam_span_exceeding_half_horizon_is_refused() {
+        let mut rng = SplitMix64(1);
+        let mut obs = RecordingObserver::new();
+        simulate_pair(
+            &mut rng,
+            &SynthParams {
+                window: 1_500,
+                dispersal_bound: 1_500,
                 ..SynthParams::posture()
             },
             &mut obs,
