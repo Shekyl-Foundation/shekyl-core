@@ -1,0 +1,70 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Pending-post single-write-path enforcement — WI-3 gate 11
+# (`docs/design/ARCHIVAL_BOND_WI3_DISPATCH.md` §5 gate 11).
+#
+# Runs `scripts/ci/check_pending_post_write_path.sh` on every PR that
+# touches the pending-seal surface. The script enforces that pending-post
+# persistence has exactly one write path and one payload kind:
+#
+#   - `encode_payload(PayloadKind::PendingPostBlockPostcard, ..)` exists
+#     only in `WalletFile::save_pending_posts` (plus the payload codec's
+#     own in-file tests);
+#   - the driver's locked `PendingPostStore` path (the production
+#     `PendingSealStore` impl) is the sole production caller of that
+#     writer;
+#   - no raw write bypasses the crash-atomic seal of `.wallet.pending`.
+#
+# Gate 10's torn-state-unrepresentability argument rests on the absence of
+# a second write site; this workflow is what turns that absence from
+# reviewer discipline into an enforced invariant (the same family as the
+# gf7-no-emit guard and the token `const _` sole-origin guard).
+
+name: ci/pending-post-write-path
+
+on:
+  # No `branches:` filter: the split-write-path this gate forbids can be
+  # introduced on ANY branch (this PR bases on `feat/bond-assembly`, not `dev`),
+  # so the gate must run on every PR regardless of base — a `branches: [dev]`
+  # filter let a second write path merge up through a feature branch with the
+  # gate never firing on the offending diff.
+  pull_request:
+    # The check script greps ALL of `rust/` for stray writers, so the trigger
+    # must be that wide too: a new `.save_pending_posts(` caller in any crate
+    # (not just the pscan/file surface) is exactly what this gate catches, and a
+    # narrow path list would skip the job on precisely those PRs.
+    paths:
+      - "rust/**"
+      - "scripts/ci/check_pending_post_write_path.sh"
+      - ".github/workflows/pending-post-write-path.yml"
+
+# Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
+concurrency:
+  group: pending-post-write-path-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check-pending-post-write-path:
+    name: "Pending-post single-write-path grep gate"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # ripgrep is load-bearing for every invariant in the gate script; its
+      # `command -v rg` precondition fails closed if it is missing. `ubuntu-latest`
+      # ships without `rg`, so install it explicitly (house pattern:
+      # consensus-invariants.yml / economics-c2a-prime.yml).
+      - name: Install ripgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ripgrep
+          rg --version
+
+      - name: Run pending-post write-path check
+        run: scripts/ci/check_pending_post_write_path.sh

@@ -413,6 +413,28 @@ impl PScanAccrual {
         &self.funding_outputs
     }
 
+    /// Personas with a reorg-deep **JoinMarket** bond-post match — the WI-3
+    /// dispatch driver's confirmation set (`ARCHIVAL_BOND_WI3_DISPATCH.md`
+    /// §3.5). Every match here came out of our own verified, exhaustive scan
+    /// below the finality horizon — never a daemon claim — which is what makes
+    /// it safe to retire a pending post (and release its funding reservation)
+    /// against.
+    pub(crate) fn confirmed_join_market_personas(
+        &self,
+    ) -> std::collections::BTreeSet<PCanonicalId> {
+        // `m.post_kind` is the wire byte the extractor recorded (`post_kind_byte`
+        // in `scan_step`), so compare against the wire crate's own JoinMarket
+        // constant — the *same* definition that produced the byte. Comparing to an
+        // unrelated `archival_retention::BondPostKind::JoinMarket as u8` would only
+        // coincidentally agree (both map to 0 today) and could silently diverge if
+        // either enum were reordered.
+        self.bond_post_matches
+            .iter()
+            .filter(|m| m.post_kind == shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET)
+            .map(|m| m.p_canonical_id)
+            .collect()
+    }
+
     /// The SP-6 reconcile evidence: the matched bond-posts bound to the verified
     /// `covered` range they were gathered over. Constructible only here, from the
     /// accrual's own verification-gated `covered` — so 2d-2 SP-R0 receives a match set

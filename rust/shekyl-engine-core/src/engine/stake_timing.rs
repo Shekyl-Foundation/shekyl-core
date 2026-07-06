@@ -24,7 +24,31 @@
 //! waits for a second consumer — `21-reversion-clause-discipline.mdc` reopening
 //! criterion: "a downstream crate names one of these types in its public API."
 
+use rand_core::RngCore as _;
+use shekyl_standoff::draw::GapRng;
 use shekyl_units::AtomicUnits;
+
+/// Bridges [`rand_core::OsRng`] to the standoff [`GapRng`] trait for the
+/// wallet's **live** entropy draws: the stake engine's entry-gap draw
+/// ([`SignBond`](super::stake_engine)) and the WI-3 dispatch driver's
+/// send-time dispersal draw
+/// ([`DispatchDriver`](super::pscan::dispatch)). Zero-state — fresh OS
+/// entropy per `next_u64` — so a single shared adapter serves both draws
+/// with no per-site copy to drift.
+///
+/// `GapRng` needs only `next_u64`; `OsRng` provides it via `RngCore`. Pulling
+/// only the one method keeps `rand_core`'s full trait out of the call sites.
+/// If `OsRng::next_u64` panics (the entropy source dies mid-draw), the panic
+/// is **loud, never silent**: the stake actor fail-stops (Round-3 acceptance
+/// condition), and the dispatch tick unwinds its sweep — neither proceeds on a
+/// low-entropy draw.
+pub(crate) struct OsRngGapAdapter;
+
+impl GapRng for OsRngGapAdapter {
+    fn next_u64(&mut self) -> u64 {
+        rand_core::OsRng.next_u64()
+    }
+}
 
 /// Canonical session self-cert sample size (S6), **single-sourced** from
 /// [`shekyl_standoff::conformance::CERTIFY_SAMPLE_N`] — the same `n` the reference

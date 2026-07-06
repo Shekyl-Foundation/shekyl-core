@@ -356,10 +356,13 @@ impl std::error::Error for DualExtractError {
 }
 
 /// The wire post-kind byte (JoinMarket's dense tag is `0x00`,
-/// `shekyl_wire::transaction` §9.11).
+/// `shekyl_wire::transaction` §9.11). Single-sourced from the wire crate's own
+/// [`BOND_POST_KIND_JOINMARKET`](shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET)
+/// so the recorded byte and the confirmation filter in [`PScanAccrual`] cannot
+/// drift from the wire definition.
 fn post_kind_byte(kind: &BondPostKind) -> u8 {
     match kind {
-        BondPostKind::JoinMarket { .. } => 0,
+        BondPostKind::JoinMarket { .. } => shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
         BondPostKind::Other(b) => *b,
     }
 }
