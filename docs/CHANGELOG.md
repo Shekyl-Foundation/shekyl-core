@@ -64,6 +64,20 @@
   recorded, reorg-crossing-claim-attempt pinned as a wallet-builder
   forward obligation, claim-era-retirement (`2615c0d`) interaction
   closed at source (no shared wire/table/path).
+  **Round-3 amendment (§11.8, M3-1..M3-3, post-closure pin):** the
+  count pass — the surface round 3 itself created — armed to the
+  same standard as the predicate site. Single named helper
+  (`count_frozen_shards_at_close`, one call site) owns the
+  `freeze_height ≤ H_close(E)` filter; the CI tripwire extended to
+  refuse any other counting read over `m_archival_shard_segment`;
+  C++ unit cases pin the filter boundary (equality counts, per `≤` —
+  the off-by-one the Rust KAT structurally cannot reach) and the
+  decode-failure discipline (undecodable segment row aborts the
+  close loudly, same class as the gather's FATAL — a lenient skip
+  would be a consensus fork in the gating direction); G-1..G-3
+  rebound to `frozen_shard_count`; named pre-flight item added
+  requiring the WI-4 §14.4 `K_COVER` calibration to derive against
+  the segment count, not any served/participation quantity.
 
 - **wallet: block-timed bond-post dispatch driver — WI-3**
   (`ARCHIVAL_BOND_WI3_DISPATCH.md`; `IMPLEMENTATION_INDEX.md` §4 WI-3

@@ -1,6 +1,7 @@
 # M1 — Reward eligibility gated on shard count (consensus rule)
 
-**Status: design rounds 1–3 closed (§9, §10, §11 records). Spec
+**Status: design rounds 1–3 closed (§9, §10, §11 records), plus the
+§11.8 round-3 amendment (count-pass discipline, M3-1..M3-3). Spec
 amended in place per the rounds' dispositions. Implementation may
 proceed after the pre-flight pass, subject to the §1.3 substrate
 condition (segment-freeze pipeline obligations O-1..O-3).** Per
@@ -76,6 +77,32 @@ gains a segment-table count pass (a cursor walk filtered on
 `freeze_height ≤ H_close(E)` — the filter is **explicit**, mirroring
 the height guard the read path already applies; bare row existence
 is not the predicate, per §11 M2-3).
+
+**Count-pass discipline (round-3 amendment, §11.8 M3-1/M3-2).** The
+count pass is the gate operand's *production site* and gets the same
+structural protection as the predicate site:
+
+- **One named helper, one call site.** The filter lives in a single
+  function — `count_frozen_shards_at_close(h_close)` — called only
+  from the close gather. No second counting read over
+  `m_archival_shard_segment` may exist anywhere (an RPC "corpus
+  size" surface, a verification-path recount, or a cached counter
+  lacking O-3 pop-symmetry are the named drift adversaries); the §6
+  tripwire's scope covers this, not just `K_COVER` comparisons.
+- **Boundary inclusivity is consensus.** `freeze_height == H_close(E)`
+  **counts** (the filter is `≤`, not `<`). An off-by-one edit here is
+  a consensus fork at exactly the boundary class the Rust KAT cannot
+  reach — G-10 injects `frozen_shard_count` and never executes the
+  C++ filter — so the boundary is pinned by a C++ unit case (§5)
+  with freeze heights strictly below, equal to, and above
+  `H_close(E)`.
+- **Decode failure is a loud abort.** The count pass must decode
+  every row to read `freeze_height`; an undecodable row aborts the
+  close — the same FATAL class as the gather's existing
+  decode-failure discipline, never a lenient skip. A lenient-skip
+  implementation silently lowers the count on one malformed row
+  while a strict node aborts: two nodes disagreeing on `gated(E)` —
+  a fork, in the gating direction.
 
 Substrate properties (WI-4 §16.2 "Substrate"): shards are frozen
 chain segments (`freeze_height`), so the segment-table count is a
@@ -452,11 +479,11 @@ following have exactly one chance to be right:
 precedent; new fixture `reward_gate_kat_v1.json`) pinning behavior
 **across the exact transition**:
 
-| Case | `shard_count` | Expected |
+| Case | `frozen_shard_count` (§11.8 M3-1 rebind — fixture authors bind names; the old `shard_count` column bound the pre-round-3 quantity) | Expected |
 | --- | --- | --- |
 | G-1 | `K_COVER − 1` | `Σwork = 0`, all `R_market = 0`, `reward_P = 0` for every `P` — provably zero |
 | G-2 | `K_COVER` | non-zero accrual for a credited member — provably non-zero, and equal to the ungated computation's output (the gate at/above threshold is the identity) |
-| G-3 | boundary epoch — the first `E` with `shard_count(E) ≥ K_COVER` | first non-zero accrual lands at exactly this `E`; the prior epoch's is zero |
+| G-3 | boundary epoch — the first `E` with `frozen_shard_count(E) ≥ K_COVER` | first non-zero accrual lands at exactly this `E`; the prior epoch's is zero |
 | G-4 | genesis edge — `chain_epochs == 0` | gate composes with the `shard_age_milli` zero without masking or double-zeroing; result is well-defined zero |
 | G-5 | §2.3 — emission vin claiming a zero-share epoch (gated case *and* the legitimately-empty case, per the uniform rule) | rejected structurally (not a zero-amount pass) |
 | G-6 | gated-close **result shape** | `EpochCloseResult == { r_market_by_shard: [0; n], sigma_work_milli: 0 }` exactly — no field escapes the zeroing |
@@ -485,6 +512,20 @@ consumer reads the store, not `EpochCloseResult`):
   close log, re-apply; assert bit-identical store (the §9.4 argument's
   connect/revert pairing, exercised at exactly the gate boundary).
 
+Added at the round-3 amendment (§11.8 M3-1/M3-2), same suite — the
+count-pass cases the Rust KAT structurally cannot reach (G-10
+injects `frozen_shard_count`; only C++ executes the filter):
+
+- **Filter boundary** — segment rows with `freeze_height` strictly
+  below, **equal to**, and strictly above `H_close(E)`: the count
+  includes the equal row (`≤`, §1.1 count-pass discipline) and
+  excludes the above row. This pins the off-by-one that would be a
+  consensus fork at the exact boundary class.
+- **Malformed segment row** — an undecodable row in
+  `m_archival_shard_segment` aborts the close loudly (the §1.1
+  decode-failure pin, armed): never a lenient skip that silently
+  lowers the count.
+
 The KAT is **designed in from the start**, not backfilled; it is
 parameterized over `K_COVER` so it survives the §4 constant
 finalization without rewrite. CI wires it into the existing
@@ -506,18 +547,33 @@ not need it):
 | Canonical gate | `rust/shekyl-archival-retention/src/consensus_state.rs` (`epoch_close_compute`, `EpochCloseInputs`) | Gate factor at top of compute; `K_COVER` threading; **new `frozen_shard_count: u64` input field** (§1.1 round-3 re-anchor — the gate input is the segment-table count, not derivable from `inputs.shards`) |
 | Constant | `config/consensus_constants.json` + `rust/shekyl-archival-retention/build.rs` (or the crate's constants surface, `src/constants.rs`) | `k_cover` entry + `k_cover_provisional` flag, compile-refusal plumbing (§4 sentinel mechanics), generated-constant contract per the file's existing C++/Rust generation |
 | Emission validation | `rust/shekyl-archival-retention/src/emission_wire.rs` (`validate()`) — resited at round 2; the wire check is share-agnostic (pure value positivity), the semantic rule derives via the §2.2 compare | §2.3 wire positivity: reject any `reward_amount_plain[i] == 0`; update the test corpus (the sample vin currently carries a zero amount) |
-| Predicate tripwire | new `scripts/ci/` grep gate (shape precedent: `check_pending_post_write_path.sh`) | §10 M1-1: refuse any `K_COVER` comparison outside `epoch_close_compute` (+ the constants surface) — keeps the predicate-site count at exactly one |
+| Predicate + operand tripwire | new `scripts/ci/` grep gate (shape precedent: `check_pending_post_write_path.sh`) | §10 M1-1: refuse any `K_COVER` comparison outside `epoch_close_compute` (+ the constants surface). **Extended at §11.8 M3-1:** also refuse any counting read over `m_archival_shard_segment` outside the single `count_frozen_shards_at_close` helper — the operand's production site gets the same one-site guarantee as the predicate site (§11.1's own pattern applied to the surface round 3 created) |
 | Store-shape + reorg tests | `tests/unit_tests/archival_substrate_lmdb.cpp` | §5 round-2 additions: gated-close stored shape (sigma present-and-zero, no `r_market` rows, close-log row written); boundary-epoch close/revert/re-apply bit-identical |
 | Wallet claim builder | future engine-side emission assembly (does not exist yet — verified at round 1, no `build_emission`/claim-builder site in `rust/`) | **Forward obligation, pinned here:** the builder derives claimable epochs from the same positive-share recompute (and can never encode a zero-amount row anyway, §2.3); carried as a spec requirement into the builder's own design round |
 | KAT | `rust/shekyl-archival-retention/tests/` + `fixtures/reward_gate_kat_v1.json` | §5 cases G-1..G-5 |
 | CI | `scripts/ci/check_archival_reward_gates.sh` | KAT wired into the existing gate-check shape |
-| FFI/daemon | `shekyl-ffi` epoch-close entry point + `db_lmdb.cpp` gather (`process_archival_epoch_close_at_height`) | **Corrected at round 3 (§11 M2-1) — the rounds-1–2 "expected zero-change" was wrong.** The FFI signature gains a `frozen_shard_count` parameter; the C++ gather gains a segment-table count pass over `m_archival_shard_segment` with the **explicit** `freeze_height ≤ H_close(E)` filter (§11 M2-3 — bare row existence is not the predicate; mirror the read path's height guard) |
+| FFI/daemon | `shekyl-ffi` epoch-close entry point + `db_lmdb.cpp` gather (`process_archival_epoch_close_at_height`) | **Corrected at round 3 (§11 M2-1) — the rounds-1–2 "expected zero-change" was wrong.** The FFI signature gains a `frozen_shard_count` parameter; the C++ gather calls the single `count_frozen_shards_at_close(h_close)` helper (§1.1 count-pass discipline: explicit `freeze_height ≤ H_close(E)` filter — equality counts; decode failure aborts loudly; one call site) |
+| Count-pass boundary + decode tests | `tests/unit_tests/archival_substrate_lmdb.cpp` | §11.8 M3-1/M3-2: filter boundary (below/equal/above `H_close`, equality counts) + malformed-row loud abort — the cases the Rust KAT structurally cannot reach |
 | Docs | `ARCHIVAL_CONSENSUS_STATE.md`, `REWARD_EMISSION_LEG.md`, `docs/FOLLOWUPS.md`, `docs/CHANGELOG.md`, `docs/design/IMPLEMENTATION_INDEX.md` | Gate section + cross-references |
 
 Pre-flight (per `26-sub-pr-design-discipline.mdc`) re-checks this
 enumeration against the substrate at the audit pin before the first
 production commit; growth beyond it during implementation is scope
 creep and reopens the round.
+
+**Named pre-flight items** (beyond the enumeration re-check):
+
+1. The §2.2 lagged-read clause (standing item, §11.6 R2-1).
+2. **`K_COVER` derivation input check (§11.8 M3-3):** the round-3
+   re-anchor deliberately moved the gate input further from directly
+   measuring what the gate protects (cohort thickness), pushing the
+   entire proxy burden into the `K_COVER` derivation. The WI-4 §14.4
+   calibration must derive the constant against the **segment
+   count** — not any served/participation quantity — or the
+   calibration reintroduces, at constant-derivation time, exactly
+   the sensor the gate input shed. Verifiable once the WI-4 doc
+   merges per the Provenance ordering pin.
+3. The §1.3 substrate condition (O-1..O-3 status at the audit pin).
 
 ---
 
@@ -1057,6 +1113,47 @@ production site), converted the substrate claims into named
 cross-round obligations, and closed the residual watch items. The
 design is closed from a specification standpoint; implementation
 remains conditioned on §1.3.
+
+### 11.8 Round-3 amendment (post-closure pin, not a fourth round)
+
+The round-3 closure review (two reviewers, tip `eaeddb84f`) accepted
+the round's core in full and surfaced three findings against the
+surface round 3 itself created — the count pass. All three are this
+spec's own doctrine (§11.1's pattern: the operand's production site
+deserves the same protection as the predicate's) applied to the new
+site; none touches the design's shape. Per the design-round closure
+discipline (`21-reversion-clause-discipline.mdc` — a
+substrate-completeness amendment is not a new round), they are folded
+in as an amendment:
+
+- **M3-1 (medium, accepted)** — the count pass was a new load-bearing
+  production site with no structural guard: the §6 tripwire covered
+  only `K_COVER` comparisons, nothing exercised the C++ filter, and
+  G-10 structurally cannot (it injects `frozen_shard_count`). Fixed:
+  §1.1 count-pass discipline names the single helper
+  (`count_frozen_shards_at_close`, one call site), the §6 tripwire
+  extends to refuse any other counting read over
+  `m_archival_shard_segment`, and §5 gains the C++ filter-boundary
+  case (below/equal/above `H_close(E)`; **equality counts**, per
+  `≤`). The named drift adversaries: a second count site with a
+  divergent filter (RPC corpus-size surface, verification-path
+  recount, cached counter lacking O-3 pop-symmetry), and an
+  off-by-one edit to the filter itself. Wording sweep folded in:
+  G-1..G-3 rebound from the old `shard_count` name to
+  `frozen_shard_count` — fixture authors bind names.
+- **M3-2 (medium, accepted)** — count-pass decode-failure semantics
+  were unpinned, and the failure mode is a consensus divergence in
+  the gating direction (lenient-skip node counts low and gates;
+  strict node aborts). Fixed: §1.1 pins decode failure as a loud
+  abort, same class as the gather's FATAL; §5 gains the
+  malformed-row case arming it.
+- **M3-3 (low, accepted)** — the re-anchor moved the gate input
+  further from directly measuring cohort thickness, pushing the
+  entire proxy burden into the `K_COVER` derivation; if the WI-4
+  §14.4 calibration derives against a served/participation quantity,
+  it reintroduces at constant-derivation time exactly the sensor the
+  gate input shed. Fixed: named pre-flight item 2 in §6, verifiable
+  once WI-4 merges per the Provenance ordering pin.
 
 ---
 
