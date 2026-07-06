@@ -7522,6 +7522,22 @@ one place to confirm each item's relationship to the wallet stack.
   vicious circle; the cover model must additionally carry **gate-open cohort dynamics**
   with its demand assumption as a named conditional (§16.2 obligation 3). No bound
   relaxed; all amendments adversary-strengthening, inside the pre-code window.
+  **Distinct-position round R2 conducted (2026-07-06, §17.5):** the standing reviewer's
+  post-merge pass (WI-3 PR #260 traced at source — all seven dispositions faithful;
+  finding A-1 landed as the two-tip-consumer marker fix in `dispatch.rs` + WI3 doc §3.1:
+  the alarm horizon is a second tip consumer with **inverted** sensitivity, so the 2d-2
+  clamp must cover both reads). Two structural findings on the newest pins, both landed:
+  **B-1** — the no-cross-subsidy pin armed no trigger; now §9 criterion 9, the report's
+  aggregate verdict is a **computed conjunction** over every committed bound (INVALID on
+  absence, FAIL on any miss) — cross-subsidy unrepresentable in the artifact. **B-2** —
+  attack-shaped review was satisfiable by self-attack; §16.10 now requires a distinct
+  adversarial position + the attack recorded as the specific construction. Its concrete
+  instance, the **r < 2 mean-vs-max challenge**, run to land in §17.5: the bound survives
+  (exchangeability makes it per-persona in-model; the untargeted reading was conceded at
+  the floor) but forces the §3.2 pin naming exchangeability as the load-bearing step and
+  regime-splitting as the mean-to-max lift in deployment (the discipline that already
+  surfaced cold-start as a fail rather than averaging it in). §17 closure now requires
+  §§17.1–17.5 ratified together.
   **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round).**
   **Open leg-(b) residual (rule 21), severity sharpened:** the *block-time* sealing re-run is
   confirmatory by construction (live `BondPostDispatched.at` is the due block — dispersal is

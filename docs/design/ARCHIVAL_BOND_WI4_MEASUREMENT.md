@@ -137,6 +137,29 @@ N · A  <  1   ⟺   A < 1/N   ⟺   P(link | T_obs) < 2/N   ⟺   r(T_obs) < 2
 > most **double** the blind-guessing success rate. Equivalently, additive
 > advantage `A < 1/N`.
 
+*Pinned at review closure (2026-07-06, §17.5 — the mean-vs-max
+challenge):* the derivation above reads as a **set-average** ("expected
+excess across the set"), but the quantity S-1 protects is
+**per-persona** — and the step that makes the committed bound
+per-persona is **exchangeability**, which was load-bearing and
+unstated. In-model, personas are drawn i.i.d. from the same lifecycle
+distributions, so every persona faces the same `P(link)`: set-mean,
+per-persona value, and per-persona max coincide, and `r < 2` **is** the
+bound on any *targeted* persona's link probability (`< 2/N`). That
+equivalence fails wherever exchangeability fails — a persona subclass
+with distinct linkability (the low-activity principal is the known
+instance) has its own, higher `P(link)` that a set average would hide.
+The discipline that carries the max, not the mean, is **regime
+splitting** (§3.3): any identified subclass is graded as its own regime
+row against the same bound, never averaged into the set — exactly how
+the cold-start row was surfaced as a fail (§13.2) rather than absorbed
+into a passing mean. Reporting already takes the **worst gate row**
+(`1.86` is a max, not a mean). The untargeted adversary ("just break
+*someone*") is bounded by the same concession structure: blind guessing
+already links someone in most sets (the pass-4 conceded floor), so the
+protected quantity is the excess, per persona, per regime — which is
+what the ratio bound caps.
+
 **Posture-anchored instance.** At the standoff's steady-state anonymity-set
 target `N = TARGET_ANON_SET = 10` under the recommended posture (600-block
 uniform-independent entry window, inversion on), the ratio bound is the
@@ -523,6 +546,19 @@ All must hold for WI-4 to close (and to close WI-3's reconvergence leg b):
 8. **Gates.** `cargo fmt --check`, `cargo clippy --all-targets -D
    warnings`, `cargo test -p shekyl-staking-sim` (+ the `gf7-hooks` engine
    emission tests) green, as CI runs them.
+9. **Aggregate verdict is a computed conjunction, never narrated**
+   (added 2026-07-06, finding B-1 — the §13.5 no-cross-subsidy pin made
+   structural). The report's verdict line is computed as the conjunction
+   over **every bound committed at run time** — steady-state `r < 2`
+   (per arm, per gate row), and as they land: leg-(b) against its
+   wall-clock bound, the §14.4 partition arm against bounds 1–2, the
+   §16.7 N-sweep at every swept `N`, the M6.2 coupling control —
+   emitting **PASS only if all hold, INVALID if any committed bound's
+   measurement is absent, FAIL if any is unmet**, in the same mechanical
+   shape as criterion 3's controls. A reviewer must not be *able* to
+   wave a marginal conditional through on the strength of the
+   steady-state margin: the cross-subsidy §13.5 forbids is
+   unrepresentable in the artifact, not merely forbidden in prose.
 
 ## 10. Sweep surface (pre-committed)
 
@@ -738,6 +774,13 @@ and the steady-state pass does not absorb a marginal conditional. The
 honest-1.86-over-comfortable-1.51 move exists precisely to keep this
 temptation visible; reading a marginal conditional as cleared is the
 same failure §13.5 forbids for assumed ones.
+*Made structural (2026-07-06, finding B-1):* this pin as first written
+was a discipline a reviewer must remember — the armed-gate-with-no-
+trigger shape. It is now enforced by §9 criterion 9: the report's
+aggregate verdict is a **computed conjunction** over every committed
+bound (INVALID on absence, FAIL on any miss), so yielding to the
+temptation is unrepresentable in the artifact rather than forbidden in
+prose.
 
 ## 14. Addendum (2026-07-06): the founder-cover launch posture — refusing the cold-start regime
 
@@ -1441,6 +1484,23 @@ exists, the first genuinely hostile look at an unexamined bound comes
 from an adversary against a live chain, the one place a genesis-frozen
 constant cannot be reopened.
 
+*Strengthened (2026-07-06, finding B-2):* two structural requirements
+the paragraph above implied but did not pin, without which "attack-
+shaped" is satisfiable by affirmation wearing an attack's clothes:
+
+1. **Distinct adversarial position.** A bound survives its author's
+   attack trivially — authors do not find their own blind spots, which
+   is why adversarial review is a separate role. At least one attack on
+   each §16.10 question must come from a position **other than the one
+   that set the bound**. An author-conducted round (§17 R1 is one) is a
+   legitimate *first* pass that sharpens the record; it does not by
+   itself satisfy the closure.
+2. **"Survived" is a recorded artifact.** Each attack is recorded as
+   *the specific construction attempted and why it failed* (or what
+   amendment it forced), on paper, in this document — not a checkbox.
+   "I tried to break it and couldn't" without the construction is not
+   a record. §17.5 carries the first distinct-position instance.
+
 ## 17. Review-closure round R1 (2026-07-06): the three attacks, on the record
 
 **Status: conducted; ratification pending.** This section is the §16.10
@@ -1566,7 +1626,77 @@ only after gaining two members and two structural closures, and the
 cycle is traced to its breaking joint with one new model obligation.
 No bound was relaxed; every amendment is in the adversary-strengthening
 direction, inside the legitimate pre-code window (§14.4's own amendment
-rule). **Ratification of this record by the standing review closes
-§§14–16; the §14.4 implementation round (now five members, three
-controls with cross-member bite requirements, plus the N-sweep and the
-M6.2 coupling control) is the round that follows closure.**
+rule). *(Amended same day, per §16.10's B-2 strengthening: R1 was
+author-conducted — a legitimate first pass that sharpened the record,
+not by itself sufficient for closure. §17.5 carries the
+distinct-position round.)* **Ratification of §§17.1–17.5 together by
+the standing review closes §§14–16; the §14.4 implementation round (now
+five members, three controls with cross-member bite requirements, plus
+the N-sweep and the M6.2 coupling control) is the round that follows
+closure.**
+
+### 17.5 Distinct-position round R2 (2026-07-06): the mean-vs-max challenge, and two structural findings
+
+**Position.** This round's attacks came from the standing adversarial
+reviewer, not from the track that authored the bounds — the first
+instance satisfying §16.10's distinct-position requirement (itself
+pinned by this round's finding B-2).
+
+**B-1 (landed — structural).** The §13.5 no-cross-subsidy pin stated a
+rule with no trigger: a reviewer had to *remember* to apply it when the
+leg-(b) and partition numbers arrive — the review-discipline-that-
+drifts pattern this track has converted to structure everywhere else
+(P-1/P-2, F41, gate 11, the coupling control). Amendment: §9
+criterion 9 — the report's aggregate verdict is a **computed
+conjunction** over every committed bound, INVALID on absence, FAIL on
+any miss. The pin is now a property of the artifact.
+
+**B-2 (landed — structural).** §16.10's attack-shaped requirement was
+satisfiable by self-attack ("I tried to break it and couldn't" from the
+bound's own author). Amendment: §16.10 now requires at least one attack
+per question from a distinct adversarial position, and "survived"
+recorded as the specific construction attempted — this section is that
+record's first entry.
+
+**The r < 2 mean-vs-max attack (the concrete instance, run to land).**
+
+- *The construction.* §3.2 derives `r < 2` from "expected excess
+  de-anonymizations `< 1` per set" — a **mean**. S-1 says a *single*
+  successful de-anonymization is a breach. A mean of `0.86` excess
+  links per set of 10 has substantial mass at "≥ 1 excess link in this
+  set" (`≈ 0.6` under near-independence); an untargeted adversary who
+  wants *someone* expects to succeed in most sets; and a set-average
+  does not obviously control the probability that a specific targeted
+  persona is the one linked. So: honest as a set-average bound,
+  potentially too loose as a per-persona breach bound — which does S-1
+  demand?
+- *Why the bound survives.* Two steps, each of which was true but
+  unstated. **(1) Exchangeability makes the bound per-persona
+  in-model:** personas are synthesized i.i.d., so `P(link)` is the same
+  for every persona — set-mean, per-persona value, and max coincide,
+  and `r < 2` **is** the targeted-persona bound (`P(link) < 2/N`,
+  advantage `< 1/N` per persona, not per set on average).
+  **(2) The untargeted reading was conceded at the floor:** blind
+  guessing already links someone in most sets (`≈ 0.65` at `N = 10`);
+  S-1's operational form (§3.1) protects the *excess over the conceded
+  floor*, because an absolute "nobody is ever linked" is unachievable
+  against any nonzero channel — the same argument that rejected
+  ratio 1 as a permanent red (§3.2).
+- *What it forces anyway.* Exchangeability is the load-bearing step and
+  it is **in-model true, deployment false**: a persona subclass with
+  distinct linkability has a higher `P(link)` that a set average would
+  hide, and the mean-to-max lift is carried by **regime splitting**
+  (§3.3) — every identified subclass graded as its own row against the
+  same bound, never averaged in. That this discipline already operated
+  correctly is checkable: the low-activity subclass was surfaced as a
+  **failing row** (§13.2) and dispositioned (§14), not absorbed into a
+  passing mean, and reporting already quotes the **worst** gate row.
+  Amendment: the §3.2 pin naming exchangeability, the per-regime max
+  discipline, and the excess-per-persona-per-regime reading of S-1.
+
+**Disposition.** The bar is not moved; the derivation's unstated step
+is now stated and its deployment-side failure mode (subclass
+heterogeneity) is bound to the regime-splitting discipline that
+carries it. One instrument (§9 criterion 9) and one process property
+(§16.10 distinct-position) are added. All amendments
+adversary-strengthening, pre-code.

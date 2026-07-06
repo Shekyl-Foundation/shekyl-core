@@ -82,6 +82,23 @@
   point; the cover model gains a gate-open cohort-dynamics row with its
   demand assumption as a named conditional (§16.2 obligation 3). No
   bound relaxed; all amendments adversary-strengthening, pre-code.
+  **Distinct-position round R2 (§17.5, 2026-07-06):** the standing
+  reviewer's post-merge pass. WI-3 (PR #260) traced at source against
+  D-B1..D-B7 — faithful; one finding (A-1): the R2-1 clock-trust marker
+  reasoned about one of two tip consumers, and the alarm horizon's
+  sensitivity is inverted (inflation ⇒ premature alarm, not
+  benign-later) — marker + WI3 doc amended so the 2d-2 clamp covers
+  both reads. On the WI-4 pins: B-1 converts the no-cross-subsidy pin
+  to structure (§9 criterion 9 — aggregate verdict is a computed
+  conjunction over every committed bound, INVALID on absence, FAIL on
+  any miss); B-2 pins that §16.10 attacks come from a distinct
+  adversarial position with the construction recorded; its concrete
+  instance — the `r < 2` **mean-vs-max challenge** — survives
+  (exchangeability makes the bound per-persona in-model; the untargeted
+  reading was conceded at the floor) and forces the §3.2 pin naming
+  exchangeability as the load-bearing step and regime-splitting as the
+  mean-to-max carrier in deployment. Closure requires §§17.1–17.5
+  ratified together.
   **PROVISIONAL:** the block-time sealing
   re-run is confirmatory by construction (live `BondPostDispatched.at` is
   the due block; dispersal is sub-block `U[0,60s)`), so no block-resolution
