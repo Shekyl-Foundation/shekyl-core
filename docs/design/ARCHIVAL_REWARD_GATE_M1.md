@@ -1,10 +1,12 @@
 # M1 — Reward eligibility gated on shard count (consensus rule)
 
 **Status: design rounds 1–3 closed (§9, §10, §11 records), plus the
-§11.8 round-3 amendment (count-pass discipline, M3-1..M3-3). Spec
-amended in place per the rounds' dispositions. Implementation may
-proceed after the pre-flight pass, subject to the §1.3 substrate
-condition (segment-freeze pipeline obligations O-1..O-3).** Per
+§11.8 round-3 amendment (count-pass discipline, M3-1..M3-3) and the
+§11.9 implementation-gates decision. Spec amended in place per the
+rounds' dispositions. Implementation proceeds on the §1.3 second
+branch (fixture rows; O-1..O-3 blocking on the pipeline round, which
+opens before the gate PR merges), after the pre-flight pass against
+the dev head at the audit pin, in the §6 pinned sequence.** Per
 `05-system-thinking.mdc` (specification first) and
 `26-sub-pr-design-discipline.mdc` (cited: consensus-critical sub-PR
 with design rounds before implementation; the pre-flight pass applies
@@ -163,6 +165,36 @@ design round precedes the gate's implementation PR, or the gate PR
 lands with the KAT exercising fixture-written rows and O-1..O-3
 pinned as blocking items on the pipeline round. Discharge is
 recorded in the pipeline round's record, cross-referenced here.
+
+**Decision (§11.9): the second branch.** The gate implements now, on
+fixture-written rows, with O-1..O-3 blocking on the pipeline round.
+The fork was wargamed rather than defaulted: what could the pipeline
+round discover that invalidates gate work built against fixture
+rows? The exposure is small because the count helper's contract
+binds to the **table schema**, not to pipeline behavior — and the
+schema is already fixed in `LMDB_SCHEMA.md` (key `BE(shard_id)`, 8
+bytes, `CREATE`-only ⇒ single row per shard, no version component;
+value carries `freeze_height`). Enumerated:
+
+- *Future-dated freeze heights* — handled by the `≤ H_close(E)`
+  filter; a row frozen "in the future" simply doesn't count yet.
+- *Non-dense shard IDs* — handled by walk-not-watermark, which the
+  count-pass discipline above already chose (the cached-counter
+  alternative is a named drift adversary).
+- *Versioned segments* — unrepresentable under the existing key; a
+  pipeline design that needed them would be a schema change, which
+  reopens far more than this gate.
+
+The genuinely dangerous obligation — O-3 pop-symmetry — is
+**chain-wide** (retention-proof correctness generally, per the O-3
+entry above), not gate-specific: serializing the gate behind the
+pipeline round buys the gate almost nothing while delaying the item
+this spec ranks first *because it cannot be patched after seal*.
+**Condition:** O-1..O-3 remain blocking items on the pipeline
+round's record, cross-referenced both ways, and **the pipeline round
+opens before the gate PR merges** — so a surprise discovered there
+can still reopen this spec cheaply, while the work proceeds in
+parallel.
 
 ---
 
@@ -561,6 +593,19 @@ enumeration against the substrate at the audit pin before the first
 production commit; growth beyond it during implementation is scope
 creep and reopens the round.
 
+**The audit pin is the dev head at pre-flight time, not `69af41a`
+(§11.9).** The design rounds verified against the dev head current at
+each round; dev has had merges land mid-arc before, and the pass
+exists precisely to catch what landed since. Concretely re-verified
+at the pin: exactly one `epoch_close_compute` call site; the gather
+anchors (`process_archival_epoch_close_at_height` shape); **no new
+readers of the stored sigma/`r_market` rows have appeared** (the
+§11.6 R2-2 enumeration re-run, since a new reader is a new consumer
+of the gate's zeroed outputs); plus the three named items below. The
+§11.1 pattern applies to the pass itself — every operand at its
+production site, as it exists at the pin, not as it existed when the
+rounds closed.
+
 **Named pre-flight items** (beyond the enumeration re-check):
 
 1. The §2.2 lagged-read clause (standing item, §11.6 R2-1).
@@ -575,9 +620,35 @@ creep and reopens the round.
    merges per the Provenance ordering pin.
 3. The §1.3 substrate condition (O-1..O-3 status at the audit pin).
 
----
+**Implementation sequence (§11.9).** The ordering below is pinned;
+it is not a suggestion:
 
-## 7. Dead-rule note, named residuals, reversion clause
+0. **WI-4 doc merge gets an explicit slot** — `feat/wi4-gf7-measurement`
+   merges to `dev` before or with the implementation PR, per the
+   Provenance ordering pin. Without a named slot the pin is
+   aspirational and the implementation PR's provenance dangles on
+   `dev` exactly as the round-2 review sweep experienced. The
+   pipeline design round (§1.3 decision condition) **opens** before
+   the gate PR merges.
+1. **Constants plumbing + compile-refusal first**, before the
+   `k_cover` identifier exists anywhere else in the tree. The §4
+   sentinel's refusal must be armed before there is anything for it
+   to guard — landing the identifier first opens a window where a
+   plausible provisional value is loose in the tree with no trigger,
+   which is precisely the silent-ship class the sentinel exists to
+   refuse.
+2. **Count helper + threading** — `count_frozen_shards_at_close` in
+   the C++ gather, the FFI parameter, `EpochCloseInputs::frozen_shard_count`,
+   the §2.1 zero-at-top factor.
+3. **Wire positivity + the test-corpus fix** — the `validate()`
+   reject and the existing sample vin that carries a zero amount
+   (§6 emission-validation row), in the same commit: the corpus must
+   flip with the rule, not before or after it.
+4. **KATs (G-1..G-10) + the C++ store-side tests** — stored-shape,
+   boundary-reorg, filter-boundary, malformed-row.
+5. **Tripwire scripts last** — the grep gates need the final site
+   names to grep for; landing them earlier hard-codes names that
+   steps 1–4 may still move.
 
 - **Dead rule, named and accepted** (rule 15 shape): `shard_count`
   monotone ⇒ the gate is trivially satisfied forever after activation —
@@ -1154,6 +1225,45 @@ in as an amendment:
   it reintroduces at constant-derivation time exactly the sensor the
   gate input shed. Fixed: named pre-flight item 2 in §6, verifiable
   once WI-4 merges per the Provenance ordering pin.
+
+### 11.9 Implementation gates decided (spec → implementation handoff)
+
+Three gates, all from the spec's own text, decided at the handoff
+rather than left open for the implementer to re-derive:
+
+1. **The §1.3 fork: second branch taken.** Gate implements now on
+   fixture-written rows; O-1..O-3 blocking on the pipeline round.
+   The decision was wargamed, not defaulted — the invalidation
+   surface a future pipeline round could expose against fixture-built
+   gate work is enumerated in §1.3's decision block, and it is small
+   because the count helper binds to the `LMDB_SCHEMA.md`-fixed
+   table schema, not to pipeline behavior. The dangerous obligation
+   (O-3) is chain-wide, so serializing the gate behind it buys
+   almost nothing while delaying the item the spec ranks first
+   because it cannot be patched after seal. Condition attached: the
+   pipeline round **opens before the gate PR merges**, keeping the
+   reopen path cheap.
+2. **The audit pin is the dev head at pre-flight time** — not
+   `69af41a`, the head the rounds happened to verify against. The
+   §6 pre-flight block names what re-verifies: the enumeration
+   (single `epoch_close_compute` call site, gather anchors, no new
+   sigma/`r_market` readers) plus the three named items, with the
+   M3-3 calibration check running against WI-4 once mergeable. The
+   §11.1 pattern applies to the pass itself.
+3. **WI-4 merge ordering gets an explicit sequence slot** (§6
+   implementation sequence, step 0) — the Provenance pin ("before or
+   with the implementation PR") is otherwise aspirational, and the
+   provenance dangles on `dev` exactly as the round-2 sweep
+   experienced.
+
+**Intra-PR ordering pinned** (§6 implementation sequence, steps
+1–5), with the load-bearing one first: constants plumbing +
+compile-refusal land before the `k_cover` identifier exists anywhere
+else in the tree — the refusal is armed before there is anything for
+it to guard, closing the window where a plausible provisional value
+is loose with no trigger. Then helper + threading, wire positivity +
+corpus fix (same commit), KATs + C++ store tests, tripwire scripts
+last (they grep for final site names).
 
 ---
 

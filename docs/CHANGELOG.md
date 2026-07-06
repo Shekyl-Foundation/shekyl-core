@@ -78,6 +78,22 @@
   rebound to `frozen_shard_count`; named pre-flight item added
   requiring the WI-4 §14.4 `K_COVER` calibration to derive against
   the segment count, not any served/participation quantity.
+  **Implementation gates decided (§11.9):** §1.3 fork resolved to
+  the second branch — the gate implements now on fixture rows
+  (wargamed: the count helper binds to the `LMDB_SCHEMA.md`-fixed
+  schema, not pipeline behavior; future-dated freezes handled by
+  `≤`, non-dense IDs by walk-not-watermark, versioned segments
+  unrepresentable under the existing key; O-3 is chain-wide, so
+  serializing the gate behind the pipeline buys almost nothing while
+  delaying the unpatchable-after-seal item), with O-1..O-3 blocking
+  on the pipeline round and that round opening before the gate PR
+  merges. Pre-flight audit pin = dev head at pre-flight time, not
+  `69af41a`. WI-4 doc merge holds sequence slot 0. Intra-PR order
+  pinned: constants + compile-refusal before the `k_cover`
+  identifier exists anywhere else in the tree (the refusal armed
+  before there is anything to guard), then helper + threading, wire
+  positivity + corpus fix in the same commit, KATs + C++ store
+  tests, tripwire scripts last.
 
 - **wallet: block-timed bond-post dispatch driver — WI-3**
   (`ARCHIVAL_BOND_WI3_DISPATCH.md`; `IMPLEMENTATION_INDEX.md` §4 WI-3

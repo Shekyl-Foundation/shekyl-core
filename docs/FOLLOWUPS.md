@@ -7445,8 +7445,14 @@ one place to confirm each item's relationship to the wallet stack.
   dependency (`feat/wi4-gf7-measurement` pushed, unmerged — merge before/with the M1
   implementation PR). Pre-flight pattern recorded: verify every consensus-predicate
   *operand* at its production site, not just the predicate's consumers.
-  **Target: V3.0 pre-genesis — implementation next, after the rule-26 pre-flight pass,
-  subject to the §1.3 substrate condition.**
+  **Target: V3.0 pre-genesis — implementation next. Gates decided (doc §11.9,
+  2026-07-06): §1.3 second branch (fixture rows; O-1..O-3 blocking on the pipeline
+  round, which opens before the gate PR merges); pre-flight runs against the dev head
+  at the audit pin (not `69af41a`) re-verifying the §6 enumeration + three named items;
+  WI-4 doc merge holds sequence slot 0. Intra-PR order pinned: constants +
+  compile-refusal before the `k_cover` identifier exists anywhere else, then helper +
+  threading, wire positivity + corpus fix (same commit), KATs + C++ store tests,
+  tripwire scripts last.**
 - **Segment-freeze pipeline — design round required (opened by `ARCHIVAL_REWARD_GATE_M1.md`
   §1.3, 2026-07-06).** The production writer for `m_archival_shard_segment` does not exist
   (`put_archival_shard_segment`: unit-test fixture only; the `LMDB_SCHEMA.md` "curve-tree
@@ -7457,9 +7463,11 @@ one place to confirm each item's relationship to the wallet stack.
   O-2 (per-branch monotonicity: never unfrozen/deleted on one branch), O-3 (pop-symmetry:
   connect/revert-paired writes — a stale `segment_subroot_rk` from an orphaned branch
   breaks retention-proof correctness generally)**. Discharge is recorded in that round's
-  record and cross-referenced from M1 §1.3. **Target: V3.0 pre-genesis — precedes or
-  accompanies the M1 gate implementation PR (fixture-driven KATs permitted in the interim
-  per M1 §1.3).**
+  record and cross-referenced from M1 §1.3. **Target: V3.0 pre-genesis. Per the M1 §1.3
+  decision (§11.9, 2026-07-06): the gate implements now on fixture rows (second branch —
+  the count helper binds to the `LMDB_SCHEMA.md`-fixed table schema, not pipeline
+  behavior), and this design round OPENS before the M1 gate PR merges, so a surprise
+  discovered here can still reopen the M1 spec cheaply.**
 - **2d-2 SP-T4a — GF-7 principal-timeline timing correlation is a GENESIS GATE (measure
   `P(link | T_obs)` before launch).** SP-T4a *draws* the narrow funding-seam entry-gap jitter
   (`draw_entry_gap`, `spread ~ U[0, 600 blocks]`) but does **not** wire it into any broadcast — the
