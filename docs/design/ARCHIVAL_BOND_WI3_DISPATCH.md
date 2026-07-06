@@ -1,9 +1,12 @@
 # WI-3 — Block-timed bond-post dispatch driver
 
-> **Status: design round 1, 2026-07-05.** The spec-first round the WI-3
+> **Status: design rounds 1–2, 2026-07-05.** The spec-first rounds the WI-3
 > implementation anchors on (rule `05-system-thinking`; process shape per
 > `26-sub-pr-design-discipline` — this slice touches a broadcast-privacy
-> surface and a persisted-schema bump, so it gets an explicit round). This
+> surface and a persisted-schema bump, so it gets explicit rounds). Round 2
+> was an adversarial review pass; its findings and dispositions are §7, and
+> the affected dispositions (D-B1, D-B3, D-B6, §5) are amended **in place**
+> — this doc is the living spec, §7 is the change record. This
 > is an addendum to
 > [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md)
 > (the SP-T4a seam this driver is the gated consumer of) and
@@ -59,29 +62,74 @@ posture-aware `PBlockSource` and external-spend reconcile (2d-2).
 
 ## 3. Design decisions
 
-### 3.1 D-B1 — The block clock is the pscan sweep's tip read
+### 3.1 D-B1 — The dispatch clock: sweep-corroborated, never
+### daemon-authoritative (amended, round 2 R2-1)
 
-**Decision.** The due-check runs at the end of every pscan sweep tick,
-against the same `tip_height()` the sweep already fetched. No new network
-read, no separate timer task, no wall-clock schedule.
+**Round-1 shape and why it was wrong.** Round 1 due-checked against the
+raw claimed `tip_height()` — a bare daemon-controlled number. An inflated
+claim makes every pending post read as due immediately: the drawn jitter
+(`spread`, `bond_first`, the §3.2 dispersal) is denominated in that clock,
+so a lying tip spends the whole GF-7 decorrelation budget to zero and
+re-introduces D-B2's co-launch-by-simultaneity through the clock instead
+of the backlog. That is a **privacy** failure, which under `00-mission`
+priority-2 outranks the plan-frame argument that motivated the raw tip.
+Round 1's own D-B6 refused the rejection pump on exactly the
+"daemon-controlled input driving the dispatch path" ground; the same
+ground indicts the raw tip.
 
-- **Clock value:** the **raw claimed tip**, not the finality horizon. The
-  plan's offsets are relative to `anchor_t0`, which WI-2 stamps as the raw
-  tip at assemble time; due-checking against the same clock keeps the
-  offsets meaning what the draw drew. (The finality horizon lags by
-  `ARCHIVAL_REORG_DEPTH_BLOCKS`; due-checking against it would silently add
-  a constant ~reorg-depth delay to every post — harmless for privacy,
-  wrong for the plan's semantics.)
-- **Why this clock and not the principal's refresh:** the dispatch time
-  must be a function of `P`'s own isolated view. Deriving it from the
-  principal's refresh loop would couple `P`'s broadcast timing to the
-  principal's activity rhythm — manufacturing exactly the axis-(iii)
-  correlation GF-7 measures.
-- **Tip dishonesty:** an over-claiming source can make a post due early by
-  at most the over-claim; an under-claiming source delays it. Both degrade
-  timing *noise*, neither creates linkage the plan didn't already accept
-  (the plan is jitter, not a commitment), and tip-honesty is the 2d-2
-  posture residual already named in `pscan/task.rs`. No new machinery.
+**Decision (amended).** The due-check runs at the end of every pscan
+sweep tick — no new network read, no separate timer task, no wall-clock
+schedule — against the **dispatch clock**, a monotone, sweep-corroborated
+value:
+
+```text
+dispatch_clock = min(claimed_tip,
+                     verified_frontier + ARCHIVAL_REORG_DEPTH_BLOCKS)
+```
+
+where `verified_frontier` is the accrual's exhaustiveness-verified scan
+frontier (`PScanAccrual::next_height`) — a height the sweep has actually
+fetched, chained via `verify_exhaustive` to the wallet's own sealed
+`frontier_hash`, and sealed. The frontier can only advance behind a
+`VerifiedBatch` (`accrual.rs`'s structural guard), so the clock's
+corroborated component is anchored to scanned reality, not to a claim.
+
+- **Honest steady state is unchanged.** Once caught up, the frontier
+  tracks `tip − reorg_depth` exactly (the sweep scans to the horizon every
+  tick), the clamp is inactive, and the clock equals the claimed tip — the
+  round-1 frame argument (offsets mean what the draw drew; no silent
+  reorg-depth delay) is preserved wherever the daemon is honest.
+- **The free lie is structurally forbidden.** A daemon that inflates the
+  claimed tip without serving blocks strands the sweep at `MissingBlock`
+  (or fails the exhaustiveness gate); the frontier does not advance, the
+  clamp holds, and no post becomes due early. Making the inflation
+  effective now requires fabricating and serving a coherent block sequence
+  that chains to the wallet's own sealed frontier hash and scans clean —
+  the attack cost rises from "report a number" to "manufacture a chain",
+  and a manufactured chain is the 2d-2 **tip-honesty posture residual**
+  already named at `PScanTaskError::Exhaustiveness` — a known, owned
+  residual, not a new surface this driver adds.
+- **Stalling is the safe direction.** An under-claimed tip (or a frontier
+  held back by withheld blocks) only *delays* dispatch — monotone noise on
+  a privately-anchored plan (§3.6 late-is-noise), degrading to the same
+  liveness-not-privacy class as an eclipsing daemon, which is
+  network-layer scope. The dangerous direction (under-jitter via
+  inflation) is the one the clamp forbids.
+- **Frame consistency.** `anchor_t0` is stamped from the **same
+  `dispatch_clock` function** at assemble time — a pin on WI-2's
+  Engine-side orchestrator (not yet built; recorded at
+  `ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.5's anchor bullet). Anchor and
+  due-check reading one clock keeps the offsets' meaning invariant under
+  the clamp.
+- **Why this clock and not the principal's refresh:** unchanged from
+  round 1 — the dispatch time must be a function of `P`'s own isolated
+  view; deriving it from the principal's refresh loop would manufacture
+  exactly the axis-(iii) correlation GF-7 measures.
+
+**Reopen criterion (rule 21), shared with D-B6:** both are "how much does
+the dispatch path trust the daemon's clock", and both reopen together in
+the 2d-2 posture design round (daemon-response authentication /
+tip-honesty machinery). Until then the clamp is the structural floor.
 
 ### 3.2 D-B2 — D1: no shared-tick co-launch
 
@@ -158,6 +206,26 @@ load→modify→seal; both writers go through it. (Same shape as `PScanStore`,
 plus the lock because unlike the pscan seal this one legitimately has two
 writers on two cadences.)
 
+**Crash-atomicity (round 2, R2-2).** The lock above is a *thread-safety*
+guarantee; the resume-after-crash story needs a *crash-atomicity*
+guarantee, and they are not the same thing. Here the second is structural
+rather than transactional: the **entire** pending-post state — every
+record, its `state` arm, its held bytes — lives in **one** sealed
+postcard blob committed by **one** `atomic_write_file` (the `.wallet.pscan`
+seal shape), and the reservation is **derived, never stored** —
+`PendingPostBlock::reserved_gindexes()` is computed from the live records
+on every read, so there is no second write a crash could tear it apart
+from. A crash leaves either the old seal or the new seal, both
+self-consistent by construction; the "sealed-`Dispatched` but reservation
+in the pre-dispatch state" tear is *unrepresentable*, which is stronger
+than a multi-write transaction that merely makes it atomic. The invariant
+this rests on is pinned for implementation and review: **no pending-post
+state exists outside the blob** — no side files, no split writes, no
+cached reservation table, no field whose truth lives anywhere but the
+sealed records themselves. Any future change that externalizes a piece of
+this state must bring its own transaction boundary and reopen this
+disposition.
+
 ### 3.4 D-B4 — Outcome handling
 
 | Daemon outcome | Disposition | Record after |
@@ -217,7 +285,15 @@ the funding reservation in the same seal.
   acceptance window for that reference, the submit fails verify — that is
   the terminal-rejection row of §3.4: remove, release, alarm. The record
   itself never expires by local timer; staleness is adjudicated by the
-  verifier, not guessed at by the wallet.
+  verifier, not guessed at by the wallet. **Removal is also the byte-prune
+  and the reservation release, in one seal (round 2, R2-4):** the record
+  *is* the stored signed bytes and *is* the reservation (derived, §3.3
+  R2-2), so a terminal reject cannot leave an abandoned key-image-bearing
+  spend at rest for a restart to resurrect, and cannot leave a record
+  whose reservation is gone — both torn intermediates are unrepresentable
+  under the single-blob invariant. When a manual re-anchor then mints
+  fresh bytes, at most one broadcast-ready bundle per persona exists at
+  any instant, preserving WI-2 §3.5.1's retention bound.
 - **Re-anchor = a fresh WI-2 assemble.** New funding selection (the
   reservation was released), fresh entry-gap draw, fresh `anchor_t0`,
   fresh bytes, sealed as a new pending post. It is **not automatic**: an
@@ -274,6 +350,15 @@ Functional gates (all must pass to merge):
 7. Schema: v2 round-trip; v1 fails closed.
 8. GF-7: emission-completeness test extends to `BondPostDispatched` (the
    stake-engine emission test's shape, driver edition).
+9. Clock integrity (R2-1): an inflated claimed tip with a non-advancing
+   frontier makes **no** post due (the clamp holds); frontier catch-up to
+   the inflated height releases the clamp only through verified batches;
+   an under-claimed tip only delays. Honest steady state: clamp inactive,
+   clock == claimed tip.
+10. Single-blob invariant (R2-2/R2-4): a review-gate assertion that no
+    pending-post state lives outside the sealed block (no side files, no
+    split writes), plus a test that terminal removal prunes the bytes and
+    the derived reservation in the same seal.
 
 **Reconvergence gate (rule 21, named per the index row):** WI-3's
 **GF-7 acceptance does not close at merge.** It closes when:
@@ -292,16 +377,51 @@ never the reverse. A failed re-run is a **decorrelation-redesign signal
 against this doc's §3.2/§3.6 dispositions** (reopening this round), never
 a move-the-threshold signal.
 
+**Dispersal is provisional in the same sense as the emission (round 2,
+R2-3).** The §3.2 dispersal draw is a *new* timing-entropy primitive that
+exists only in the live driver; the sim's `--gf7-timeline` synthesis does
+not contain it unless it is modeled. WI-4's pre-live run must therefore
+treat the dispersal **distribution** (shape and range, not just presence)
+as a swept parameter of the synthesis — otherwise the "range suffices"
+conclusion is drawn against a correlator that never saw dispersal, and
+§6(a)'s held-open question gets a false answer nobody re-checks. The
+sealing re-run in (b) is where the *actual* dispersal timing is graded;
+any pre-live conclusion about the range is provisional-until-live-re-run
+exactly as the emission itself is. This constraint binds WI-4's
+measurement design (an addendum obligation on the WI-4 row), not just
+this driver.
+
 ## 6. Round-1 closure
 
-Open for round-2 review (none block the seams above):
+Open at round-1 close (none block the seams above):
 
 - **(a)** The dispersal draw's range (`[0, tick_interval)`) — held cheap
-  here; WI-4's grading is the arbiter and can send it back.
+  here; WI-4's grading is the arbiter and can send it back. *(Round 2:
+  subsumed by R2-3 — the range question is answerable only against a
+  synthesis that sweeps the dispersal distribution, and any pre-live
+  answer is provisional; see §5.)*
 - **(b)** The attempt-budget constant — proposed to reuse the
   submit-watchdog's bound rather than a new tunable (rule 75: every
-  tunable needs a rationale; reuse inherits the existing one).
+  tunable needs a rationale; reuse inherits the existing one). *(Stands
+  open for the implementation PR.)*
 - **(c)** Whether the one-per-tick rule should also space *first*
   dispatches a minimum number of ticks apart when the backlog is deep
   (beyond one-per-tick) — deferred to WI-4 evidence, same reopen shape
   as (a).
+
+## 7. Round 2 (2026-07-05) — adversarial review findings and dispositions
+
+Round 2 verified all seven round-1 dispositions at source and wargamed
+the dispatch path. Four findings, severity-ordered; dispositions amended
+in place (§3.1, §3.3, §3.6, §5) with this section as the change record.
+
+| # | Finding | Severity | Disposition |
+| --- | --- | --- | --- |
+| R2-1 | The round-1 dispatch clock trusted the daemon's bare claimed tip; an inflated claim makes every post due at once, collapsing the entire GF-7 jitter budget (spread, order-coin, dispersal) to zero — D-B2's co-launch re-introduced through the clock. Privacy failure; priority-2 outranks the fund-safety framing round 1 led with, and D-B6's own "daemon-controlled input" ground indicts it | **Load-bearing** | D-B1 amended: sweep-corroborated `dispatch_clock = min(claimed_tip, verified_frontier + reorg_depth)`. Free lie structurally forbidden (frontier advances only behind `VerifiedBatch`); fabricated-chain inflation named to the 2d-2 tip-honesty residual; stalling is the safe direction; `anchor_t0` pinned to the same clock function (WI-2 orchestrator pin). Reopen shared with D-B6 (2d-2 posture round) |
+| R2-2 | "One locked write path" states thread-safety, not crash-atomicity; a torn seal-vs-reservation write would void the P-2 safe-resend guarantee at resume | Pin now | §3.3 amended: crash-atomicity is structural — one blob, one `atomic_write_file`, reservation derived-never-stored, torn states unrepresentable. "No pending-post state outside the blob" pinned as implementation invariant + §5 gate 10 |
+| R2-3 | The dispersal draw exists only in the live driver; WI-4's pre-live run grades a synthesized timeline that lacks it, so a "range suffices" conclusion could be drawn against a correlator that never saw dispersal | Sequencing | §5 reconvergence gate amended: the dispersal *distribution* is a swept parameter of the sim synthesis; any pre-live range conclusion is provisional-until-live-re-run, same status as the emission. Binds WI-4's measurement design (WI-4 row obligation). §6(a) subsumed |
+| R2-4 | Terminal reject must not strand the signed key-image-bearing bytes at rest, nor leave a record whose reservation is gone — a restart would resurrect an abandoned spend | Minor | Structurally closed by R2-2's shape: the record *is* the bytes *is* the reservation; removal is one seal. Stated explicitly in §3.6; test in §5 gate 10 |
+
+Round 2 closes with no open structural items; (b)/(c) of §6 remain the
+implementation-PR and WI-4-evidence questions they were. Reopen per the
+per-disposition criteria above, not by sequential numbering (rule 21).
