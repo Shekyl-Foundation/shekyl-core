@@ -24,8 +24,11 @@ one the opening assumed:
 
 1. **WS-1 — the Q10→M-2→Q7 held-sourcing correction (§5).** The as-of-E `held`
    ground truth is the per-`(P,s,E)` serve-credit bits, not the mutable
-   descriptor. This is a sourcing + accessor decision, the supply-conservation
-   hard blocker.
+   descriptor — but the bits only *mean* held-at-E because acceptance gates on
+   holding, and that gate (`:4307`) uses the same broken tip accessor. So M-2
+   closes under **bits-sourcing ∧ as-of-fire-height acceptance** (§5.4), one
+   shared sourcing function and one shared accessor: the supply-conservation
+   hard blocker, and the keystone with no backstop underneath it (§5.5).
 2. **The §8 policy trio** (Q3 / Q11-F-E7 / Q12-F-E8) — "round-closable; not deep"
    (§2), unchanged from the opening.
 
@@ -60,8 +63,8 @@ rows corrected by the Round-3 §5 source audit:**
 | **Q9 / F-E3** intra-block `(P,E)` dedup atomicity | **PINNED** at the function; **plumbing open** (WS-2) — the fused check/set is atomic on its *passed* set, but the load-at-verify / write-at-connect straddle lets two same-block same-`(P,E)` emissions both pass (§6) | `claimed_epochs_check_and_set` (`rust/shekyl-archival-retention/src/claimed_epochs.rs:99`) |
 | **Q1 / F-E4** auth count + algorithm | **PINNED** — two hybrid (Ed25519+ML-DSA-65) auths, rotation-forced; drove E2's wire freeze | `emission_wire.rs` `auth_backing`/`auth_claim`; `shekyl_emission_hybrid_auth_verify` |
 | **Q7** FFI seam | **resolved by house pattern** — snapshot-by-value | `archival_ffi.rs:346` (`shekyl_archival_verify_*` marshal-by-value) |
-| **M-2** numerator as-of-E sourcing | **design closed *conditional on bits-sourcing* (§5).** `R_market(s,E)`/`Σwork(E)` are frozen-persisted (invariant 2). The `held(P,E)` term is sound-as-written **only if** sourced from the per-`(P,s,E)` serve-credit bits, **not** the mutable bond descriptor — the Round-2 "snapshot field set (B)" framing omitted this and is corrected in §5 | `consensus_state.rs` `EpochCloseResult`; `market_member_at_epoch:98`; `archival_serve_credit` bit table |
-| **Q10 / F-E6** `held(P,E)` frozen-at-E | **CORRECTED (§5): not a marshaling pin — a sourcing correction + accessor build.** The "as-of-E interval marshaling" framing conflated **standing** (`bad_intervals`, genuinely interval/as-of-E) with **held** (no interval log; the `held_shard_ids` descriptor is tip-mutable — the documented M2-1 defect at `db_lmdb.cpp:4984–4990`). As-of-E held ground truth = the serve-credit bits; the `at_height`-honoring read is **Open** (FOLLOWUPS P2B-7 Pin 4) | `good_through` straddle-close (`consensus_state.rs:84–92`) is the **standing** half; held half in §5 |
+| **M-2** numerator as-of-E sourcing | **design closed *conditional on bits-sourcing ∧ as-of-fire-height acceptance* (§5.4) — the conjunction.** `R_market(s,E)`/`Σwork(E)` frozen-persisted (invariant 2). The `held(P,E)` term is sound **only if** (1) sourced from the per-`(P,s,E)` serve-credit bits, not the mutable descriptor, **and** (2) those bits were populated by an acceptance gate reading as-of-fire-height (`:4307`, currently the broken tip accessor). Round-2 "snapshot field set (B)" omitted both; corrected in §5 | `consensus_state.rs` `EpochCloseResult`; `market_member_at_epoch:98`; `archival_serve_credit`; `blockchain.cpp:4307` |
+| **Q10 / F-E6** `held(P,E)` frozen-at-E | **CORRECTED (§5): not a marshaling pin — a sourcing correction + one accessor build.** The "as-of-E interval marshaling" framing conflated **standing** (`bad_intervals`, genuinely interval/as-of-E) with **held** (no interval log; `held_shard_ids` is tip-mutable — M2-1 at `db_lmdb.cpp:4975`/`4984–4990`). As-of-E held ground truth = the serve-credit bits; the one `at_height`-honoring accessor serves **both** :4307 acceptance and the V3.0 mutable-holdings read (**Open**, FOLLOWUPS P2B-7 Pin 4) | `good_through` straddle-close (`consensus_state.rs:84–92`) is the **standing** half; held half in §5 |
 
 ### 1.1 Stale-doc corrections (this round lands them)
 
@@ -190,19 +193,23 @@ item left; everything below is implementation, in dependency order (the verify
 body's dedup step, item 3, additionally awaits WS-2):
 
 1. **`held(P,E)` as-of-E sourcing — the WS-1 build item (§5, corrects §8.0's
-   "one build item").** Source the `work_P(E)` shard set from the per-`(P,s,E)`
-   serve-credit bits (`archival_serve_credit`, keyed
-   `ArchivalServeCreditKey(P,shard,E)`), **not** the mutable `held_shard_ids`
-   descriptor. Two concrete pieces: **(a)** drop the descriptor `held_shard_ids`
-   filter from `epoch_close_compute`'s work loop (`consensus_state.rs:386–389`)
-   — it is redundant with the credit bits as-of-E (§5) and actively wrong under
-   mid-life drop; **(b)** the verify gather does a **point read** of the
-   `(P,s,E)` bits at the claimed `E` (they are keyed by `E` — no reconstruction),
-   marshaled by value. **Standing** stays as-is: `bad_intervals` + `join` →
-   `market_member_at_epoch` (`consensus_state.rs:98`) is genuinely as-of-E. The
-   `at_height`-honoring hold read remains **Open** (FOLLOWUPS P2B-7 Pin 4) and
-   co-designs with the V3.0 mutable-holdings read rule so verify and the
-   serve-credit-window membership check share one bit source.
+   "one build item").** M-2 closes under the **two-conjunct** rule (§5.4). Four
+   concrete pieces: **(a)** a single `as_of_E_served_work(frozen_ledger, P, E)`
+   sourcing function called by **both** `epoch_close_compute` (denominator) and
+   the verify body (numerator) — divergence unrepresentable, M-3 pushed one layer
+   deeper (§5.5-1); **(b)** **remove `held_shard_ids` from the work-channel
+   input type** (not merely delete the `consensus_state.rs:386–389` filter line —
+   remove the field from work's scope so a re-filter does not compile, §5.5-2),
+   sourcing the shard set from `archival_serve_credit` (keyed
+   `ArchivalServeCreditKey(P,shard,E)`), marshaled by value at the claimed `E`
+   (keyed by `E` — point read, no reconstruction); **(c)** the **one
+   `at_height`-honoring accessor** (FOLLOWUPS P2B-7 Pin 4) fixing `:4307`
+   acceptance (conjunct 2) and shared with the V3.0 mutable-holdings read —
+   co-designed in the bond-lifecycle connect-path work, not a duplicate
+   emission-only reader; **(d)** the **three armed KATs** (§5.6:
+   drop-after-serve, acceptance-gate, ledger reorg-symmetry). **Standing** stays
+   as-is: `bad_intervals` + `join` → `market_member_at_epoch`
+   (`consensus_state.rs:98`) is genuinely as-of-E.
 2. **M-2/Q7 as-of-E snapshot struct.** Marshaled by value, each field from the
    frozen E-close materialization (invariant 2: `R_market(s,E)`, `Σwork(E)`,
    shard `freeze_height`) **plus** the per-`(P,s,E)` serve-credit bits for the
@@ -302,49 +309,136 @@ was a registry leaf as-of-E. So the serve-credit bit is a *sound* as-of-E
 held-and-served witness; the descriptor filter adds nothing it doesn't already
 imply, except drift.
 
-### 5.4 Disposition — source `work_P` from the bits; retire the descriptor
+### 5.4 Disposition — the two conjuncts of supply conservation
 
-**PROPOSED (consensus sourcing rule; priority-1, awaiting ratification):**
-`work_P(E)`'s held-and-served shard set is sourced from the per-`(P,s,E)`
-serve-credit bits (`archival_serve_credit`), never from `held_shard_ids`. Two
-concrete changes:
+M-2 is *literally* the supply-conservation keystone: there is **no independent
+per-epoch cap** — no `Σ minted(E) ≤ budget(E)` enforced separately from the
+share formula. `reward_share_floor(budget, capped_milli, sigma_work_milli)`
+(`reward_arithmetic.rs:129`) takes `budget` as an **input** (set by the emission
+schedule + tx-responsive release, *work-independent*), and conservation is
+purely structural: `reward_P = budget · capped_P / Σwork_stored` sums to `budget`
+**iff every verify-time numerator `capped_P` equals P's exact frozen term in the
+stored denominator `Σwork(E)`**. `VIN_PLAN:495–523` spells out the failure: a
+live- or tip-descriptor-sourced numerator exceeds P's frozen term (R_market has
+drifted up since close), `Σ > budget`, **real inflation** breaking R1.B. That
+same passage names `held(P,E)` as the still-open *fourth* input gated on Q10 —
+the correction below is that it is **not a fourth input**: it collapses into the
+E-indexed serve-credit bit (input #2, §5.3), and the descriptor was a phantom
+fifth source.
 
-1. **Drop the descriptor filter** at `consensus_state.rs:386–389`
-   (`held_shard_ids.contains(shard.shard_id)`). It is redundant with the credit
-   bits as-of-E (§5.3) and *actively wrong* under mid-life drop — at close it
-   under-counts a shard served-then-dropped within `E`; on verify the tip read
-   compounds the error. Work is already gated by `credit_pairs`; the credit bit
-   is the correct and sufficient gate.
-2. **Verify gather = point read of the `(P,s,E)` bits at the claimed `E`** (keyed
-   by `E`; not a bond-history reconstruction), marshaled by value into the M-2
-   snapshot (§3 item 2). Standing continues via `bad_intervals` + `join`.
+**PROPOSED (consensus sourcing rule; priority-1, awaiting ratification):** M-2
+closes under **bits-sourcing ∧ as-of-fire-height acceptance** — the conjunction,
+not bits-sourcing alone.
 
-**Reorg-symmetry.** Already satisfied — the bits set/remove on connect/disconnect
-(`blockchain_db.cpp:224`/`:586`); the marshaling reads bits, never the descriptor,
-so it inherits the symmetry. No new schema, no new revert path.
+- **Conjunct 1 — bits-sourcing.** `work_P(E)`'s held-and-served shard set is
+  sourced from the per-`(P,s,E)` serve-credit bits (`archival_serve_credit`),
+  never from `held_shard_ids`.
+- **Conjunct 2 — as-of-fire-height acceptance.** The bit only *means*
+  "held-and-served as-of-E" because acceptance gates on holding at fire height —
+  and that gate uses the **same broken accessor**: `blockchain.cpp:4307` calls
+  `archival_bond_holds_shard(resp.p_canonical_id, resp.shard_id, h_fire)`
+  (verified this round), which ignores `at_height` and reads tip
+  (`db_lmdb.cpp:4975`, the M2-1 defect). Under immutable holdings tip ≡ h_fire,
+  so every extant credit is a sound as-of-E bit; under **V3.0 mutable holdings**
+  it is not — :4307 can admit a credit for a shard `P` acquired *after* the
+  challenge fired, or reject one `P` held-at-fire-then-dropped.
 
-**Q7 falls out.** With the frozen values being the bits + invariant-2 snapshot,
-Q7 is "extend the epoch-close snapshot-marshal idiom to the verify path"
-(`archival_ffi.rs:346` house pattern) — resolved, as Round 2 held, but now over
-the *correct* source.
+**Both conjuncts, or the conflation returns.** Bits-sourcing *without* fixing
+:4307 merely moves the as-of-E defect one layer up: the ledger you would trust
+was itself populated by a tip-descriptor gate. Stating conjunct 1 alone
+reproduces the exact M2-1 shape the original defect was — a sound-looking
+sourcing rule resting on an unsound populate path.
 
-**Coupling (do not build twice).** The `at_height`-honoring hold read is Open
-(FOLLOWUPS P2B-7 Pin 4) and is the same as-of-E question the serve-credit-window
-membership check faces under mutable holdings. Emission-verify held-sourcing and
-that membership check **must share one bit-sourced accessor**; co-design in the
-bond-lifecycle connect-path work, not a duplicate emission-only reader.
+**One build, not two.** The `at_height`-honoring accessor (FOLLOWUPS P2B-7
+Pin 4) discharges conjunct 2 at :4307 **and** is the identical read the V3.0
+mutable-holdings rule needs — one accessor, one as-of-E semantics, one
+implementation. Retiring the descriptor filter (conjunct 1) is *sound only
+because* that accessor makes the bit trustworthy; neither change is correct in
+isolation. That is the coupling made precise: not "share one source," but "the
+ledger only *means* held-at-E once acceptance reads as-of-fire-height."
 
-**Reopening (rule 21).** Reopens iff (a) a serve-credit bit can be set for a
-shard `P` did **not** hold as-of-E — i.e., the §5.3 segment-path binding is ever
-weakened so `credit ⇏ held` (then the descriptor filter, or a dedicated held
-interval log, returns as a real requirement); or (b) `work_P` is redefined to
-count held-but-**unserved** shards (none such today — work requires credit). The
-descriptor `held_shard_ids` remains load-bearing for *current-membership*
-questions (bond-floor, gate-4 connect) and is not deleted, only removed from the
-as-of-E work path.
+### 5.5 Make the single path unbreakable by construction
+
+Deleting the filter promotes the credit ledger to the **sole** gate on
+`work_P(E)`. That is correct — the descriptor filter was never sound
+defense-in-depth; it was a *second, silently-wrong source of "held,"* and that
+wrong source is precisely what manufactures the over-mint. Collapsing to one
+path genuinely reduces attack surface. But the honest blast radius is that the
+path is **unbackstopped**: the §5.4 zero-tolerance recompute (leg step 5) catches
+a *wallet* lying about the amount, and per-`(P,E)` dedup caps one claim per
+epoch — **neither catches a consensus-rule sourcing inconsistency.** Both sides
+recompute with the same rule, so if the rule mis-sources, *consensus itself*
+mints the inflated amount and the zero-tolerance compare passes it. Sourcing is
+the one correctness obligation with nothing underneath it; the protection must
+therefore be structural, not a second checker. Three moves, all
+make-bad-states-unrepresentable:
+
+1. **One sourcing function, both sides.** A single
+   `as_of_E_served_work(frozen_ledger, P, E)` that **close** calls to build
+   `Σwork` and **verify** calls to build `capped_P`. Then the numerator is P's
+   exact term in the denominator *by construction* — same code, same frozen data
+   — and divergence is **unrepresentable**, not tested-against. This is M-3's
+   single-source idiom (`reward_arithmetic`/`Curve`, both sides) pushed one layer
+   deeper: from same-arithmetic to same-input-sourcing.
+2. **Descriptor out of the work-channel type.** Not "delete the filter line" —
+   **remove `held_shard_ids` from the input the work computation sees**, so a
+   future "shouldn't we re-check they still hold it?" edit does not compile. The
+   descriptor keeps its real job (current membership: bond-floor, gate-4 connect)
+   elsewhere; it is simply unreachable from work.
+3. **Reorg-symmetry inherited, not bespoke.** The bits' set-on-connect /
+   remove-on-disconnect (`blockchain_db.cpp:224`/`:586`, verified this round —
+   keyed `(P, shard, E)`, E-indexed) is an instance of the **M1 O-3
+   pop-symmetric discipline that just landed** (`CHANGELOG.md`; `LMDB_SCHEMA.md`
+   v8; `ARCHIVAL_REWARD_GATE_M1.md:89`), not a hand-rolled parallel path — one
+   reorg mechanism, many tables. And the frozen snapshot is **one marshaled
+   struct passed to both readers**, so **Q7 falls out as "one snapshot, two
+   readers"** (`archival_ffi.rs:346` house pattern) — resolved as Round 2 held,
+   but now over the *correct* source, and with no new schema or revert path.
+
+### 5.6 The three armed KATs (triggers, not prose invariants)
+
+Because the deletion promotes the ledger to the sole work gate, its correctness
+rests on (acceptance-time membership at :4307) + (ledger reorg-symmetry). Three
+KATs arm that — the load-bearing test set the WS-1 build lands with:
+
+1. **Drop-after-serve KAT (regression guard on the deletion).** `P` holds `s` at
+   `h_fire`, serves (credit accepted), **drops `s` before close** → `work_P(E)`
+   counts `s`. This is the case the descriptor filter got wrong; it guards the
+   deletion against re-introduction.
+2. **Acceptance-gate KAT (the :4307 fix's boundary).** Credit **rejected** when
+   `P` did not hold at `h_fire` (even if held at tip); **accepted** when `P` held
+   at `h_fire` (even if dropped by tip). Forecloses the only case that could put
+   a credit in the ledger without a real as-of-E hold.
+3. **Ledger reorg-symmetry KAT (now load-bearing, not corroborating).** Credit
+   set-on-connect / removed-on-disconnect round-trips **bit-identically** across
+   a pop spanning the serve height. Sites verified this round:
+   `blockchain_db.cpp:224` (set, `set_archival_serve_credit_bit`) / `:586`
+   (remove, `remove_archival_serve_credit_bit`). The set is unconditional on
+   `(P, s, E)` with no refcount, so the KAT must also cover connect/disconnect
+   *ordering* under duplicate-`(P,s,E)` credits, not only the single round-trip.
+
+### 5.7 Reopening (rule 21)
+
+Reopens iff (a) a serve-credit bit can be set for a shard `P` did **not** hold
+as-of-E — i.e., the §5.3 segment-path binding **or** conjunct-2 acceptance is
+ever weakened so `credit ⇏ held` (then the descriptor filter, or a dedicated
+held interval log, returns as a real requirement); or (b) `work_P` is redefined
+to count held-but-**unserved** shards (none such today — work requires credit).
+
+**Proof-carrying acceptance — named reopen, not now.** The purist "derive, don't
+hold state" would have the serve-credit response **carry a proof** it held `s` at
+fire height against a committed **per-P holdings-history root** — acceptance
+verifies an in-tx witness and there is *no stateful accessor at all*. It is
+cleaner in principle but needs new commitment machinery (the holdings-history
+root), i.e. more complexity and surface, against the very preference it serves.
+The height-honoring accessor + one-sourcing-function gets essentially all the
+conservation benefit at a fraction of the cost. **Build the accessor for
+genesis; record proof-carrying acceptance as this reopen,** triggered iff
+mutable-holdings behavior makes the stateful accessor's as-of-E reads a
+demonstrated correctness or performance problem.
 **Re-evaluation shape.** Design-round 1 of the PR that weakens the segment-path
-binding or redefines `work_P`'s shard predicate, with the credit-implies-held
-proof re-examined at source.
+binding, weakens :4307 acceptance, or redefines `work_P`'s shard predicate, with
+the credit-implies-held proof re-examined at source.
 
 ---
 
@@ -375,10 +469,14 @@ parallelizable with WS-1.
 - **Q3** — RESOLVED (vacuous at arity 1).
 - **Q12 / F-E8** — RESOLVED (foreclosed by wire positivity + zero-tolerance recompute).
 - **Q11 / F-E7** — **PROPOSED: ACCEPT** — awaiting ratification (consensus-acceptance-path).
-- **WS-1 (Q10 → M-2 → Q7)** — **PROPOSED: source `work_P` held-set from the
-  per-`(P,s,E)` serve-credit bits; retire the descriptor filter (§5.4)** —
-  awaiting ratification (consensus sourcing rule; the supply-conservation hard
-  blocker). Corrects the Round-2 Q10/M-2 closure.
+- **WS-1 (Q10 → M-2 → Q7)** — **PROPOSED: M-2 closes under bits-sourcing ∧
+  as-of-fire-height acceptance (§5.4, the conjunction); one shared
+  `as_of_E_served_work` sourcing function both sides; `held_shard_ids` out of
+  the work-channel type; one `at_height` accessor for :4307 + mutable-holdings;
+  reorg-symmetry inherited from M1 O-3; three armed KATs (§5.6)** — awaiting
+  ratification (consensus sourcing rule; the supply-conservation hard blocker,
+  M-2 = the keystone with no backstop under it, §5.5). Corrects the Round-2
+  Q10/M-2 closure.
 - **WS-2 (Q9 / F-E3)** — OPEN, parallel; two options enumerated (§6), own closure.
 
 On Q11 **and** WS-1 ratification, the leg's remaining open design is WS-2 (dedup
