@@ -369,20 +369,11 @@ pub fn epoch_close_compute(
         }
     }
 
-    let age_milli_by_shard: Vec<u64> = shards
-        .iter()
-        .map(|s| {
-            if s.has_segment {
-                shard_age_milli(
-                    inputs.close_block_height,
-                    s.freeze_height,
-                    inputs.settlement_epoch_blocks,
-                )
-            } else {
-                0
-            }
-        })
-        .collect();
+    // Shard age feeds `shard_work_milli` only for member-held credited shards
+    // (the guarded branch below), so compute it lazily and memoize per shard
+    // index — a shard whose only credit comes from a non-member or non-holding
+    // bond never pays the two `shard_age_milli` divisions.
+    let mut age_milli_by_shard: Vec<Option<u64>> = vec![None; shards.len()];
 
     let mut work_by_bond = vec![0u64; bonds.len()];
     for pair in inputs.credit_pairs {
@@ -396,9 +387,20 @@ pub fn epoch_close_compute(
         {
             continue;
         }
+        let age_milli = *age_milli_by_shard[pair.shard_idx].get_or_insert_with(|| {
+            if shard.has_segment {
+                shard_age_milli(
+                    inputs.close_block_height,
+                    shard.freeze_height,
+                    inputs.settlement_epoch_blocks,
+                )
+            } else {
+                0
+            }
+        });
         let contribution = shard_work_milli(
             r_market_by_shard[pair.shard_idx],
-            age_milli_by_shard[pair.shard_idx],
+            age_milli,
             inputs.age_weight_milli,
             true,
         );

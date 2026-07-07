@@ -7476,6 +7476,18 @@ one place to confirm each item's relationship to the wallet stack.
   Deferred to `K_COVER` sealing: the direct gated-path C++ close test (unreachable
   under the gate-identity sentinel; the stored shape is covered via the
   bitwise-identical legitimately-empty epoch, doc §11.10 delta 4).**
+- **M1 reward-gate C++ test-support surface — fold the corruption-injection seam off the
+  production DB API at reward-gate completion (code-review #263, 2026-07-07).** `db_lmdb.h`
+  exposes three reward-gate members on the public `BlockchainLMDB` surface for the
+  count-pass / store KATs: `count_frozen_shards_at_close` (one production caller),
+  `has_archival_sigma_work_row` (stored-shape probe past the `MDB_NOTFOUND` launder), and
+  `put_archival_shard_segment_raw_for_corruption_test` (raw undecodable-row writer, **no
+  production caller** — recorded as accepted test-support in §11.6 R2-2 / §11.10 delta 3).
+  Per rule 20 a corruption-injection primitive on the shipping DB class is scaffolding that
+  belongs behind a test-only seam (friend accessor) or exercised at the Rust/FFI layer.
+  Deferred rather than churned now: this is the reward-gate slice still being wired (PR
+  #264), and the real rule-20 endpoint is the LMDB store's Rust migration, not a
+  friend-declaration in the inherited C++. Fold the seam in with that completion.
 - **Segment-freeze pipeline — design round required (opened by `ARCHIVAL_REWARD_GATE_M1.md`
   §1.3, 2026-07-06).** The production writer for `m_archival_shard_segment` does not exist
   (`put_archival_shard_segment`: unit-test fixture only; the `LMDB_SCHEMA.md` "curve-tree
@@ -7504,6 +7516,16 @@ one place to confirm each item's relationship to the wallet stack.
   both connect and pop hooks (M1-1 single-source shape), and **deletes
   `archival_shard_leaf`** (derived copy of `m_curve_tree_leaves`; challenge path reads
   the leaf chunk directly, doc §6.2). Adversarial review of the round-1 draft pending.
+  **Efficiency follow-on lands with this pipeline, not before (code-review #263,
+  2026-07-07):** `count_frozen_shards_at_close` currently walks and decodes the whole
+  `m_archival_shard_segment` table on every epoch close — O(total frozen shards), repeated
+  each close, unbounded as the chain ages. The right fix is a persisted **pop-symmetric
+  counter** (increment on freeze, decrement on revert), which is a persisted-schema surface
+  (rule 42 version bump) whose reorg symmetry *is* this pipeline's O-3 connect/revert
+  pairing — it can only be built and differential-tested against the walk once the
+  freeze/pop hooks exist. Building it now would be a consensus counter with no symmetric
+  writer. Keep the walk (correct, only linear at epoch boundaries) until then; add the
+  counter in the same PR that introduces the segment-freeze writer.
 - **2d-2 SP-T4a — GF-7 principal-timeline timing correlation is a GENESIS GATE (measure
   `P(link | T_obs)` before launch).** SP-T4a *draws* the narrow funding-seam entry-gap jitter
   (`draw_entry_gap`, `spread ~ U[0, 600 blocks]`) but does **not** wire it into any broadcast — the

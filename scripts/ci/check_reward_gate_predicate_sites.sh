@@ -53,6 +53,13 @@ fi
 
 FAIL=0
 
+# Drop `rg -n` hits (path:line:content) whose content is a comment or doc line
+# (`// …`, `/* …`, ` * …`), so an explanatory comment, a log line, or an assert
+# message that merely names a pinned symbol cannot trip a raw textual count.
+# A genuinely-benign in-code mention still uses the reward-gate-site-allow
+# marker; this only spares prose from the magic-number tripwires.
+drop_comment_hits() { rg -v '^[^:]+:[0-9]+:[[:space:]]*(//|/\*|\*)'; }
+
 GATE_RS="rust/shekyl-archival-retention/src/consensus_state.rs"
 KCOVER_RS="rust/shekyl-archival-retention/src/k_cover.rs"
 BUILD_RS="rust/shekyl-archival-retention/build.rs"
@@ -123,6 +130,7 @@ fi
 # which enumerates a complete-tree bond's shard ids — an enumeration read
 # that predates the gate, not a count feeding a consensus predicate).
 CURSOR_HITS="$(rg -n 'mdb_cursor_open\([^)]*m_archival_shard_segment' src/ \
+  | drop_comment_hits \
   | rg -v 'reward-gate-site-allow' || true)"
 CURSOR_COUNT="$(printf '%s' "$CURSOR_HITS" | rg -c '.' || true)"
 if [[ "${CURSOR_COUNT:-0}" -ne 2 ]]; then
@@ -141,15 +149,28 @@ if STAT_HITS="$(rg -n 'mdb_stat\([^)]*m_archival_shard_segment' src/)"; then
   FAIL=1
 fi
 
-# Positive control: the helper exists and has exactly one production call
-# site (the epoch-close gather). Declaration (.h) + definition + call = the
-# expected shape; more calls mean a second consumer of the count, which is a
-# review item even when it routes through the helper (the gate input must
-# come from the close's own write-txn snapshot, §1.1).
-CALL_HITS="$(rg -n 'count_frozen_shards_at_close\(' "$LMDB_CPP" | rg -v 'reward-gate-site-allow' || true)"
+# Positive control: the helper is defined exactly once (its definition carries
+# the BlockchainLMDB:: qualifier). A rename or a lost definition fails here
+# rather than silently de-arming the call-site count below.
+DEF_COUNT="$(rg -c 'BlockchainLMDB::count_frozen_shards_at_close\(' "$LMDB_CPP" || true)"
+if [[ "${DEF_COUNT:-0}" -ne 1 ]]; then
+  echo "FAIL: expected exactly one BlockchainLMDB::count_frozen_shards_at_close definition in $LMDB_CPP, found ${DEF_COUNT:-0}" >&2
+  FAIL=1
+fi
+
+# The real invariant: exactly one production *call site* (the epoch-close
+# gather). Count invocations that are neither the definition (BlockchainLMDB::
+# qualifier) nor a comment/doc line — so a log line, an assert message, or an
+# explanatory comment naming the helper does not turn the gate red, while a
+# genuine second consumer of the count (the gate input must come from the
+# close's own write-txn snapshot, §1.1) still does.
+CALL_HITS="$(rg -n 'count_frozen_shards_at_close\(' "$LMDB_CPP" \
+  | rg -v 'BlockchainLMDB::count_frozen_shards_at_close' \
+  | drop_comment_hits \
+  | rg -v 'reward-gate-site-allow' || true)"
 CALL_COUNT="$(printf '%s' "$CALL_HITS" | rg -c '.' || true)"
-if [[ "${CALL_COUNT:-0}" -ne 2 ]]; then
-  echo "FAIL: expected exactly 2 count_frozen_shards_at_close occurrences in $LMDB_CPP (definition + close-gather call), found ${CALL_COUNT:-0}" >&2
+if [[ "${CALL_COUNT:-0}" -ne 1 ]]; then
+  echo "FAIL: expected exactly one count_frozen_shards_at_close call site in $LMDB_CPP (the epoch-close gather), found ${CALL_COUNT:-0}" >&2
   printf '%s\n' "$CALL_HITS" >&2
   FAIL=1
 fi
