@@ -107,7 +107,7 @@ should say "request path" or "GF-7 seam" explicitly.
 | 2c | Addresses / proofs | Per plan doc |
 | 2d | Air-gapped flow (`UnsignedTxBundle`/`SignedTxBundle`) | Per plan doc — **not** the bond chain's 2d-1/2d-2 |
 | 3 | `shekyl-cli` binary | Per plan doc |
-| 4 | `shekyl-wallet-rpc` binary | Per plan doc |
+| 4 | `shekyl-wallet-rpc` binary | **Spec-first contract landed (as of 2026-07-06)** — OpenAPI 3.1 contract at `docs/api/wallet_rpc.yaml` (JSON-RPC envelope, error-code range allocation, 15 SPECIFIED methods over landed Phase 1/2a orchestrator surface; stake / payment-request / proofs / sign / bundle methods RESERVED with named engine-layer prerequisites per rule 21). Implementation crate not started. UPDATE 2026-07-06: spec landed `feat/wallet-rpc-openapi-spec` (decision-anchored: the spec commit; no code artifact yet — first implementation sub-PR verifies against it) |
 | 5 | C++ deletion (single commit) | Not started; gated on 1–4 completeness |
 | 6 | Tests and docs | Per plan doc |
 
