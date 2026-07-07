@@ -1,0 +1,630 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# ============================================================================
+# Shekyl wallet RPC — OpenAPI 3.1 contract (Phase 4, WALLET_REWRITE_PLAN.md)
+# ============================================================================
+#
+# THIS FILE IS THE CONTRACT. Per WALLET_REWRITE_PLAN.md §"Spec-first", the
+# implementation in rust/shekyl-wallet-rpc conforms to this spec, never the
+# reverse. A method that is not specified here does not exist; a change to a
+# specified shape lands here first (or in the same PR as) the implementation
+# change.
+#
+# Transport: JSON-RPC 2.0 over HTTP POST / or a Unix domain socket. UDS with
+# filesystem-permission auth is the recommended deployment mode
+# (docs/WALLET_RPC_README.md); HTTP basic auth remains available for tooling.
+#
+# JSON shape policy (locked, WALLET_REWRITE_PLAN.md §"JSON shape"):
+#   - Shekyl-native. No Monero wallet_rpc_server compatibility, partial or
+#     otherwise.
+#   - Amounts are atomic units only, encoded as u64 DECIMAL STRINGS (JSON
+#     numbers lose precision past 2^53). No floats, no coin-name units.
+#   - Capability mode ("FULL" | "VIEW_ONLY" | "HARDWARE_OFFLOAD") is carried
+#     explicitly on every wallet-handle response — never inferred.
+#   - Hybrid PQC signatures are structured: {"ed25519": hex, "ml_dsa_65": hex}.
+#     Never a single opaque signature blob.
+#   - RCTTypeFcmpPlusPlusPqc is the only transaction type; no "rct_type"
+#     field exists anywhere in this API.
+#
+# Method registry status. Every planned method is listed in one of two
+# states:
+#   SPECIFIED — full request/response schemas below; implementable now.
+#   RESERVED  — name + error-code range allocated; full schemas land in the
+#               sub-PR that implements the method, gated on the named
+#               engine-layer prerequisite (rule 21 reversion shape: the
+#               reopening criterion for each reserved method is the landing
+#               of its named prerequisite on dev, verified per rule 94).
+#
+#   SPECIFIED (this commit):
+#     create_wallet, open_wallet, close_wallet, change_password,
+#     get_balance, get_primary_address,
+#     build_pending_tx, submit_pending_tx, discard_pending_tx,
+#     get_transfers, get_transfer_by_id,
+#     refresh, rescan_blockchain,
+#     get_height, get_version
+#   RESERVED (prerequisite in parentheses):
+#     stake, unstake, claim, get_stakes            (Stage 3 StakeEngine +
+#                                                   Phase 2b orchestrator;
+#                                                   reward path blocked on
+#                                                   REWARD_EMISSION_LEG.md
+#                                                   PR-E1..E3 / C-1)
+#     create_payment_request, list_payment_requests,
+#     match_transfer_to_request                    (Phase 2c orchestrator
+#                                                   wrappers over the FA-8
+#                                                   engine substrate)
+#     get_tx_key, get_tx_proof, check_tx_proof,
+#     get_reserve_proof, check_reserve_proof       (Phase 2c proofs
+#                                                   orchestration over
+#                                                   shekyl-proofs)
+#     sign, verify                                 (Phase 2 sign_message /
+#                                                   verify_message on the
+#                                                   orchestrator)
+#     export_unsigned, submit_signed               (Phase 2d UnsignedTxBundle
+#                                                   / SignedTxBundle)
+#
+# Error-code allocation (stable ranges; per-method codes land alongside each
+# method, ranges are fixed from this first commit — WALLET_REWRITE_PLAN.md
+# §"Cross-cutting design decisions"):
+#
+#   -32700, -32600..-32603   JSON-RPC 2.0 protocol errors (spec-standard)
+#   -29000..-29099           wallet lifecycle (create/open/close/password)
+#   -29100..-29199           send / build / submit / discard
+#   -29200..-29299           refresh / rescan
+#   -29300..-29399           proofs (RESERVED range)
+#   -29400..-29499           transfers / history queries
+#   -29500..-29599           staking (RESERVED range)
+#   -29600..-29699           payment requests (RESERVED range)
+#   -29700..-29799           air-gapped bundles (RESERVED range)
+#   -29800..-29899           sign / verify message (RESERVED range)
+#   -29900..-29999           server / transport / tenancy
+#
+# Codes allocated in this commit are enumerated in
+# components.schemas.WalletRpcErrorCode.
+
+openapi: 3.1.0
+info:
+  title: Shekyl Wallet RPC
+  version: 0.1.0
+  description: >
+    JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
+    wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
+    process type: `shekyl-cli` is a thin client of this API (Shape B), and the
+    GUI/mobile wallets re-wire against it after Phase 6.
+  license:
+    name: BSD-3-Clause
+
+servers:
+  - url: "uds:///run/user/{uid}/shekyl.sock"
+    description: Recommended — Unix domain socket, filesystem-permission auth.
+  - url: "http://127.0.0.1:29500"
+    description: Loopback HTTP with basic auth, for tooling compatibility.
+
+paths:
+  /:
+    post:
+      operationId: jsonRpcCall
+      summary: JSON-RPC 2.0 envelope; the `method` member selects the operation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JsonRpcRequest"
+      responses:
+        "200":
+          description: >
+            JSON-RPC 2.0 response. Application-level failures ride the
+            `error` member with codes from the allocation table; HTTP status
+            is 200 for every well-formed JSON-RPC exchange.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JsonRpcResponse"
+
+components:
+  schemas:
+    # ── Envelope ─────────────────────────────────────────────────────
+    JsonRpcRequest:
+      type: object
+      required: [jsonrpc, id, method]
+      properties:
+        jsonrpc:
+          const: "2.0"
+        id:
+          oneOf: [{ type: string }, { type: integer }]
+        method:
+          type: string
+          enum:
+            - create_wallet
+            - open_wallet
+            - close_wallet
+            - change_password
+            - get_balance
+            - get_primary_address
+            - build_pending_tx
+            - submit_pending_tx
+            - discard_pending_tx
+            - get_transfers
+            - get_transfer_by_id
+            - refresh
+            - rescan_blockchain
+            - get_height
+            - get_version
+        params:
+          description: Per-method params object; see `*Params` schemas.
+          type: object
+
+    JsonRpcResponse:
+      type: object
+      required: [jsonrpc, id]
+      properties:
+        jsonrpc:
+          const: "2.0"
+        id:
+          oneOf: [{ type: string }, { type: integer }, { type: "null" }]
+        result:
+          description: Per-method result object; see `*Result` schemas.
+          type: object
+        error:
+          $ref: "#/components/schemas/JsonRpcError"
+
+    JsonRpcError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          $ref: "#/components/schemas/WalletRpcErrorCode"
+        message:
+          type: string
+          description: >
+            Human-readable summary. Never carries secret material, addresses
+            of counterparties, or amounts (privacy: error text is the most
+            commonly logged surface).
+        data:
+          type: object
+          description: Structured per-code detail (documented per code).
+
+    WalletRpcErrorCode:
+      type: integer
+      description: |
+        Allocated codes (this commit). Per-method additions extend this enum
+        within the ranges fixed in the file header.
+
+          -29000 WALLET_ALREADY_OPEN      lifecycle: a wallet is open; close first
+          -29001 WALLET_NOT_OPEN          lifecycle: no wallet open
+          -29002 WALLET_FILE_EXISTS       create: refusing to overwrite
+          -29003 WALLET_FILE_NOT_FOUND    open: no such wallet file
+          -29004 INVALID_PASSWORD         open/change_password: MAC failure
+          -29005 CAPABILITY_FORBIDS       operation requires FULL capability
+                                          (data: {"capability": "..."})
+          -29100 INVALID_RECIPIENT        build: address parse/network check
+          -29101 INSUFFICIENT_FUNDS       build: spendable balance too low
+          -29102 FEE_ESTIMATION_FAILED    build: daemon fee query failed
+          -29103 RESERVATION_NOT_FOUND    submit: unknown/expired handle
+          -29104 SNAPSHOT_INVALIDATED     submit: reorg raced the reservation;
+                                          discard-or-rebuild (lazy R5)
+          -29105 CONTENT_GEN_MISMATCH     submit: seen_gen != content_gen —
+                                          re-anchor changed authorized content
+                                          (CT-5d); re-review and resubmit
+          -29106 SUBMIT_REJECTED          submit: definite daemon rejection
+                                          (data carries the SubmitVerdict
+                                          projection per DAEMON_SUBMIT_VERDICT
+                                          §2.5)
+          -29107 SUBMIT_AMBIGUOUS         submit: transport-level RpcError;
+                                          resubmit-of-held-bytes is the
+                                          status query
+          -29200 REFRESH_IN_PROGRESS      refresh: single-flight violation
+          -29201 DAEMON_UNREACHABLE       refresh/rescan: daemon RPC failed
+          -29400 UNKNOWN_TRANSFER_ID      get_transfer_by_id: no match
+          -29900 TENANT_UNAVAILABLE       server: wallet-dir tenancy (reserved
+                                          for the multi-tenant sub-PR)
+
+    # ── Scalars ──────────────────────────────────────────────────────
+    AtomicUnits:
+      type: string
+      pattern: "^[0-9]+$"
+      description: >
+        u64 amount in atomic units, decimal string. Mirrors
+        `shekyl_units::AtomicUnits`.
+
+    Hex32:
+      type: string
+      pattern: "^[0-9a-f]{64}$"
+      description: 32 bytes, lowercase hex.
+
+    CapabilityMode:
+      type: string
+      enum: [FULL, VIEW_ONLY, HARDWARE_OFFLOAD]
+      description: >
+        Typed projection of the wallet envelope capability
+        (`shekyl_engine_file::Capability`). Carried explicitly on every
+        wallet-handle response; never inferred by the client.
+
+    FeePriority:
+      description: >
+        Mirrors `shekyl_engine_core::FeePriority`. Named tiers resolve to a
+        feerate via the daemon fee estimate at build time — never hardcoded
+        multipliers. `custom` pins atomic-units-per-byte and bypasses the
+        daemon estimate (and its sanity checks) entirely.
+      oneOf:
+        - type: string
+          enum: [ECONOMY, STANDARD, PRIORITY]
+        - type: object
+          required: [custom]
+          properties:
+            custom:
+              $ref: "#/components/schemas/AtomicUnits"
+
+    HybridSignature:
+      type: object
+      required: [ed25519, ml_dsa_65]
+      description: Hybrid PQC signature; both components always present.
+      properties:
+        ed25519:
+          type: string
+          pattern: "^[0-9a-f]{128}$"
+        ml_dsa_65:
+          type: string
+          pattern: "^[0-9a-f]+$"
+
+    # ── Wallet lifecycle ─────────────────────────────────────────────
+    WalletHandle:
+      type: object
+      required: [name, capability, network]
+      description: >
+        Returned by every lifecycle call that leaves a wallet open. The RPC
+        process holds at most one open wallet per tenant; the handle is
+        informational, not a bearer token — auth rides the transport.
+      properties:
+        name:
+          type: string
+          description: Wallet file stem within the served wallet directory.
+        capability:
+          $ref: "#/components/schemas/CapabilityMode"
+        network:
+          type: string
+          enum: [MAINNET, TESTNET, STAGENET]
+        restore_height_hint:
+          type: integer
+          format: int64
+
+    CreateWalletParams:
+      type: object
+      required: [name, password]
+      properties:
+        name:
+          type: string
+        password:
+          type: string
+        language:
+          type: string
+          default: en
+          description: BIP-39 wordlist language for the generated seed.
+
+    CreateWalletResult:
+      type: object
+      required: [wallet]
+      properties:
+        wallet:
+          $ref: "#/components/schemas/WalletHandle"
+
+    OpenWalletParams:
+      type: object
+      required: [name, password]
+      properties:
+        name:
+          type: string
+        password:
+          type: string
+
+    OpenWalletResult:
+      type: object
+      required: [wallet]
+      properties:
+        wallet:
+          $ref: "#/components/schemas/WalletHandle"
+
+    CloseWalletParams:
+      type: object
+      description: No parameters; closing an already-closed wallet is an error (-29001).
+
+    CloseWalletResult:
+      type: object
+      description: Empty object on success.
+
+    ChangePasswordParams:
+      type: object
+      required: [old_password, new_password]
+      properties:
+        old_password:
+          type: string
+        new_password:
+          type: string
+
+    ChangePasswordResult:
+      type: object
+      description: Empty object on success.
+
+    # ── Balance / address ────────────────────────────────────────────
+    GetBalanceParams:
+      type: object
+      description: No parameters.
+
+    GetBalanceResult:
+      type: object
+      required: [liquid, staked, unlocked, claimable_rewards, pending]
+      description: >
+        Staking is first-class (locked JSON shape). `staked` and
+        `claimable_rewards` are "0" until the Stage 3 stake methods land;
+        the fields are present from the first release so the shape never
+        changes under clients.
+      properties:
+        liquid:
+          $ref: "#/components/schemas/AtomicUnits"
+        staked:
+          $ref: "#/components/schemas/AtomicUnits"
+        unlocked:
+          $ref: "#/components/schemas/AtomicUnits"
+        claimable_rewards:
+          $ref: "#/components/schemas/AtomicUnits"
+        pending:
+          $ref: "#/components/schemas/AtomicUnits"
+
+    GetPrimaryAddressParams:
+      type: object
+      description: No parameters.
+
+    GetPrimaryAddressResult:
+      type: object
+      required: [address]
+      description: >
+        Single `address` string; no `index` field (no subaddresses — payment
+        requests are the receive-attribution surface, Phase 2c).
+      properties:
+        address:
+          type: string
+
+    # ── Send lifecycle (build / submit / discard) ────────────────────
+    TxRecipient:
+      type: object
+      required: [address, amount]
+      properties:
+        address:
+          type: string
+          description: Canonical Shekyl address; parsed and network-checked at build.
+        amount:
+          $ref: "#/components/schemas/AtomicUnits"
+
+    BuildPendingTxParams:
+      type: object
+      required: [recipients, priority]
+      description: >
+        Mirrors `shekyl_engine_core::TxRequest`. No payment_id, no extra
+        escape hatch (Phase 1 decision).
+      properties:
+        recipients:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/TxRecipient"
+        priority:
+          $ref: "#/components/schemas/FeePriority"
+
+    BuildPendingTxResult:
+      type: object
+      required: [pending_tx_id, built_at_height, built_at_tip_hash, fee, content_gen]
+      description: >
+        Mirrors `shekyl_engine_core::PendingTx`. `pending_tx_id` is a
+        process-local reservation handle — it carries no meaning across RPC
+        server restarts (the reservation ledger is process state). Clients
+        display fee + recipients for confirmation, then submit or discard.
+      properties:
+        pending_tx_id:
+          type: string
+          description: Opaque reservation handle (`ReservationId`).
+        built_at_height:
+          type: integer
+          format: int64
+        built_at_tip_hash:
+          $ref: "#/components/schemas/Hex32"
+        fee:
+          $ref: "#/components/schemas/AtomicUnits"
+        content_gen:
+          type: integer
+          format: int64
+          description: >
+            Authorized-content generation (CT-5d re-anchor gate). Pass back
+            verbatim as `seen_gen` on submit; a mismatch means a re-anchor
+            changed the transaction content after the client reviewed it.
+
+    SubmitPendingTxParams:
+      type: object
+      required: [pending_tx_id, seen_gen]
+      properties:
+        pending_tx_id:
+          type: string
+        seen_gen:
+          type: integer
+          format: int64
+
+    SubmitPendingTxResult:
+      type: object
+      required: [tx_hash, verdict]
+      properties:
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+        verdict:
+          type: string
+          enum: [ACCEPTED, ALREADY_IN_POOL, ALREADY_IN_CHAIN]
+          description: >
+            Success projection of the wire `SubmitVerdict`
+            (`shekyl_rpc_types::SubmitVerdict`; DAEMON_SUBMIT_VERDICT.md
+            §2.5). Rejections surface as error -29106 with the verdict
+            detail in `error.data`; transport ambiguity as -29107.
+        confirmed_height:
+          type: integer
+          format: int64
+          description: Present iff verdict is ALREADY_IN_CHAIN.
+
+    DiscardPendingTxParams:
+      type: object
+      required: [pending_tx_id]
+      properties:
+        pending_tx_id:
+          type: string
+
+    DiscardPendingTxResult:
+      type: object
+      description: >
+        Empty object. Idempotent — discarding an unknown handle succeeds
+        (cross-cutting lock 4).
+
+    # ── History ──────────────────────────────────────────────────────
+    Transfer:
+      type: object
+      required: [id, direction, tx_hash, amount, fee, block_height, state]
+      description: >
+        Client-facing projection of `shekyl_engine_state::TransferDetails`.
+        Internal fields (key material, key offsets, commitments) never cross
+        this boundary — the RPC exposes accounting facts only.
+      properties:
+        id:
+          type: string
+          description: Stable per-wallet transfer identifier.
+        direction:
+          type: string
+          enum: [INCOMING, OUTGOING]
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+        amount:
+          $ref: "#/components/schemas/AtomicUnits"
+        fee:
+          $ref: "#/components/schemas/AtomicUnits"
+        block_height:
+          type: integer
+          format: int64
+        state:
+          type: string
+          enum: [PENDING, CONFIRMED, SPENT]
+        spent_height:
+          type: integer
+          format: int64
+
+    GetTransfersParams:
+      type: object
+      description: All filters optional; unfiltered returns full history.
+      properties:
+        direction:
+          type: string
+          enum: [INCOMING, OUTGOING]
+        state:
+          type: string
+          enum: [PENDING, CONFIRMED, SPENT]
+        since_height:
+          type: integer
+          format: int64
+
+    GetTransfersResult:
+      type: object
+      required: [transfers]
+      properties:
+        transfers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Transfer"
+
+    GetTransferByIdParams:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+
+    GetTransferByIdResult:
+      type: object
+      required: [transfer]
+      properties:
+        transfer:
+          $ref: "#/components/schemas/Transfer"
+
+    # ── Refresh / rescan ─────────────────────────────────────────────
+    RefreshParams:
+      type: object
+      description: No parameters. Single-flight; a concurrent call errors -29200.
+
+    RefreshResult:
+      type: object
+      required: [blocks_processed, transfers_detected, synced_height]
+      description: Projection of `shekyl_engine_core::RefreshSummary`.
+      properties:
+        blocks_processed:
+          type: integer
+          format: int64
+        transfers_detected:
+          type: integer
+          format: int64
+        synced_height:
+          type: integer
+          format: int64
+        reorg_fork_height:
+          type: integer
+          format: int64
+          description: Present iff a reorg was detected and rewound this refresh.
+
+    RescanBlockchainParams:
+      type: object
+      description: >
+        Full rescan from the wallet's restore height. Destroys and rebuilds
+        scan-derived state; accounting facts are re-derived from chain data.
+
+    RescanBlockchainResult:
+      type: object
+      required: [blocks_processed, transfers_detected, synced_height]
+      properties:
+        blocks_processed:
+          type: integer
+          format: int64
+        transfers_detected:
+          type: integer
+          format: int64
+        synced_height:
+          type: integer
+          format: int64
+
+    # ── Node info ────────────────────────────────────────────────────
+    GetHeightParams:
+      type: object
+      description: No parameters.
+
+    GetHeightResult:
+      type: object
+      required: [wallet_height, daemon_height]
+      properties:
+        wallet_height:
+          type: integer
+          format: int64
+        daemon_height:
+          type: integer
+          format: int64
+
+    GetVersionParams:
+      type: object
+      description: No parameters.
+
+    GetVersionResult:
+      type: object
+      required: [version, api_version]
+      properties:
+        version:
+          type: string
+          description: shekyl-wallet-rpc semver.
+        api_version:
+          type: integer
+          description: >
+            Monotonic API contract version; bumped when any SPECIFIED shape
+            changes incompatibly. Pre-genesis this stays 1 — incompatible
+            changes are atomic cutovers, not versioned skew (rule 16
+            user-absent-context inversion).

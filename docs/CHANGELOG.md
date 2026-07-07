@@ -4,6 +4,26 @@
 
 ### Added
 
+- **wallet-rpc: OpenAPI 3.1 contract for `shekyl-wallet-rpc` (Phase 4
+  spec-first gate)** (`docs/api/wallet_rpc.yaml`;
+  `WALLET_REWRITE_PLAN.md` §"Phase 4"; `IMPLEMENTATION_INDEX.md` §3 Phase 4
+  row). The spec lands **before** the first method per the plan's
+  spec-first rule: JSON-RPC 2.0 envelope, the stable error-code range
+  allocation (-29000..-29999 by domain), and full schemas for the 15
+  methods whose engine-layer prerequisites (Phase 1 orchestrator + Phase 2a
+  send path) have landed — wallet lifecycle, balance/address, the
+  build/submit/discard send trio (with the CT-5d `content_gen` gate and the
+  `SubmitVerdict` success/rejection projection per
+  `DAEMON_SUBMIT_VERDICT.md` §2.5), transfers, refresh/rescan, and
+  height/version. JSON shapes are Shekyl-native and locked: atomic-unit
+  string amounts, first-class staking fields in `get_balance` (zero until
+  Stage 3), explicit capability mode on every wallet handle, structured
+  hybrid PQC signatures. Stake, payment-request, proofs, sign/verify, and
+  air-gapped-bundle methods are RESERVED with named prerequisites (rule 21
+  reversion shape) — their error-code ranges are allocated now so the
+  contract never shifts under clients. No implementation crate yet; the
+  first `rust/shekyl-wallet-rpc` sub-PR conforms to this file.
+
 - **sim: GF-7 graded genesis gate — WI-4 (PROVISIONAL-PASS, local-daemon
   posture only)** (`ARCHIVAL_BOND_WI4_MEASUREMENT.md`;
   `IMPLEMENTATION_INDEX.md` §4 WI-4 row). The GF-7 principal↔`P`
