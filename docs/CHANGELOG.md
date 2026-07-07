@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.1.0-alpha.6] - 2026-07-07
+
 ### Added
 
 - **wallet-rpc: OpenAPI 3.1 contract for `shekyl-wallet-rpc` (Phase 4
