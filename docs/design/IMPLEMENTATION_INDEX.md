@@ -85,7 +85,7 @@ should say "request path" or "GF-7 seam" explicitly.
 | **SP-0…SP-7, SP-R0** | `P`-scan pipeline slices (2d-1); SP-R0 is the durable-removal GC follow-on | [`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](ARCHIVAL_BOND_2D1_PSCAN_PLAN.md) | Shipped grouped as PR-A / PR-B, not one-PR-per-SP |
 | **PR-A / PR-B** | The two validation-surface bundles that shipped SP-0…SP-7 (#201, #205) | [`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](ARCHIVAL_BOND_2D1_PSCAN_PLAN.md) | Named per rule 19 (validation-surface bundling) |
 | **SP-T0…SP-T5** | `P`-isolated transport slices (2d-2): Tor bootstrap, circuit isolation, fetch, …, broadcast | [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) | Sub-docs: `_SP_T0_TOR.md`, `_SP_T2_FETCH.md`, `_SP_T4_BROADCAST.md` |
-| **PR-E0…PR-E3** | Reward-emission implementation PRs; C-1 (ML-DSA equality + membership-only verify) is PR-E3 step 8 | [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md), [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) | C-1 is the hard Stage-3 emission blocker |
+| **PR-E0…PR-E3** | Reward-emission implementation PRs; C-1 (ML-DSA equality + membership-only verify) is PR-E3 step 8. **E0/E1/E2 landed; E3 keystone design closed; policy trio Q3/Q12 resolved, Q11 proposed-accept** | [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md), [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md), [`REWARD_EMISSION_E3_GATING_ROUND.md`](REWARD_EMISSION_E3_GATING_ROUND.md) | C-1 is the hard Stage-3 emission blocker |
 | **CT-1…CT-5 (5a–5d)** | Curve-tree client series | [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md); closeouts in `docs/completed/CT*` | Series closed (`CT5_SERIES_CLOSEOUT.md`) |
 | **GF-1…GF-12** | Gate-6 firewall findings; **GF-7** = the funding-seam (principal↔`P`) unlinkability property, a genesis gate | [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) | GF-7's measurement hooks: [`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](ARCHIVAL_BOND_2C_GF7_HOOKS.md) |
 | **S-1…S-6** | Gate-6 §10.12 seam-scenario rows (adversary fusion analysis) | [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §10.12 | Not to be confused with S6 the certify-draw plan (`docs/completed/ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md`) |
@@ -150,7 +150,7 @@ Verified at `dev` = `e22549a79`:
 | Block-timed dispatch driver (consume seam plan → submit at height) | **Implemented — in review** (WI-3, `feat/wi3-dispatch-driver`; GF-7 acceptance open per the WI-3 row's reconvergence gate) | `engine/pscan/dispatch.rs`; WI-3 row above |
 | Submit lifecycle driver (§5.3 watchdog + F40 re-scan / F40-R2 breaker) — *distinct from the staking dispatch driver above* | **Built + wired to `Engine`, no production cadence caller (as of 2026-07-05)** — `pub run_submit_lifecycle_tick` drives the watchdog kernel over held F14 locks (escape ladder, presence branching, F40 targeted re-scan, F40-R2 fruitless-rescan breaker); the post-refresh call site is documented but not yet invoked in production (tests drive `tick` directly). UPDATE 2026-07-05: landed #257 (verified: git grep `run_submit_lifecycle_tick` on dev → `engine/mod.rs`; driver in `engine/submit_lifecycle.rs`) | `engine/submit_lifecycle.rs`, `engine/mod.rs` (`run_submit_lifecycle_tick`), `engine/submit_watchdog.rs` |
 | Production bond-tx assembly | **Missing** — full assembly exercised only in KATs | `local_pending_tx.rs` tests |
-| Reward-emission leg (PR-E1…E3, C-1 verifier) | **Missing** — the hard Stage-3 blocker | `REWARD_EMISSION_LEG.md` |
+| Reward-emission leg (PR-E1…E3, C-1 verifier) | **E0/E1/E2 landed; E3 keystone design closed (2026-07-01); E3 verify body + C-1 the open implementation** — the hard Stage-3 blocker. Policy trio Q3/Q12 resolved, Q11 proposed-accept (`REWARD_EMISSION_E3_GATING_ROUND.md`, 2026-07-07) | `REWARD_EMISSION_LEG.md`, `REWARD_EMISSION_VIN_PLAN.md`, `REWARD_EMISSION_E3_GATING_ROUND.md` |
 | Principal stake/unstake/drain lifecycle | **Missing — not yet homed in any plan doc** | `WALLET_REWRITE_PLAN.md` timeline note |
 
 ---
@@ -179,6 +179,7 @@ this index:
 | [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) | Transport slices (SP-T0…SP-T5, DQ-N) |
 | [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) | Gate-6 rounds, GF-N findings, S-N seam scenarios |
 | [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) / [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) | Emission leg (PR-E0…E3, C-1) |
+| [`REWARD_EMISSION_E3_GATING_ROUND.md`](REWARD_EMISSION_E3_GATING_ROUND.md) | E3 gating round: pre-flight audit + policy-trio (Q3/Q11/Q12) closure |
 | [`DAEMON_SUBMIT_VERDICT.md`](DAEMON_SUBMIT_VERDICT.md) | Daemon submit-verdict series (F-N findings incl. F40/F41) |
 | [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) | Principal-side stake lifecycle design |
 | [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Staking/archival simulation harness |
