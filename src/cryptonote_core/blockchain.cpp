@@ -4334,21 +4334,22 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
     MERROR_VER("Archival serve-credit: challenged leaf index out of segment range");
     return false;
   }
-  // 4 Selene scalars per leaf — the get_curve_tree_leaf_by_tree_position contract.
-  constexpr size_t kCurveTreeLeafBytes = 128;
-  std::vector<uint8_t> leaf_layer_scalars(chunk_leaf_count * kCurveTreeLeafBytes);
-  for (uint64_t i = 0; i < chunk_leaf_count; ++i)
+  // Leaf byte-width is the shared shekyl::db::kLeafSize (4 Selene scalars × 32B);
+  // no local re-declaration to drift against the DB's leaf-record contract. The
+  // buffer is left uninitialised — the chunk read overwrites every byte or fails
+  // wholesale (no partial-fill path reaches the FFI verifier).
+  const size_t leaf_layer_scalars_len = chunk_leaf_count * shekyl::db::kLeafSize;
+  std::unique_ptr<uint8_t[]> leaf_layer_scalars(new uint8_t[leaf_layer_scalars_len]);
+  // One cursor scan over the contiguous chunk positions (a single B-tree
+  // traversal), not one root-to-leaf lookup per leaf. Every chunk of a frozen
+  // segment is full (segment bases are chunk-aligned; freezing requires the
+  // whole segment present), so a short/missing chunk is registry/tree
+  // disagreement, not a benign partial chunk.
+  if (!m_db->get_curve_tree_leaf_chunk(chunk_first_leaf, chunk_leaf_count, leaf_layer_scalars.get()))
   {
-    // Every chunk of a frozen segment is full (segment bases are chunk-
-    // aligned; freezing requires the whole segment present), so a missing
-    // leaf here is registry/tree disagreement, not a partial chunk.
-    if (!m_db->get_curve_tree_leaf_by_tree_position(chunk_first_leaf + i,
-          leaf_layer_scalars.data() + i * kCurveTreeLeafBytes))
-    {
-      MERROR_VER("Archival serve-credit: leaf chunk read failed at tree position "
-        << (chunk_first_leaf + i) << " (frozen-segment registry disagrees with curve tree)");
-      return false;
-    }
+    MERROR_VER("Archival serve-credit: leaf chunk read failed at tree position "
+      << chunk_first_leaf << " (frozen-segment registry disagrees with curve tree)");
+    return false;
   }
 
   txin_v vin_variant = resp;
@@ -4375,8 +4376,8 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   ctx.segment_leaf_count = segment_leaf_count;
   ctx.pqc_pubkey_ptr = bond_pubkey.data();
   ctx.pqc_pubkey_len = bond_pubkey.size();
-  ctx.leaf_layer_scalars_ptr = leaf_layer_scalars.data();
-  ctx.leaf_layer_scalars_len = leaf_layer_scalars.size();
+  ctx.leaf_layer_scalars_ptr = leaf_layer_scalars.get();
+  ctx.leaf_layer_scalars_len = leaf_layer_scalars_len;
 
   const uint8_t verify_rc = shekyl_archival_verify_serve_credit_vin(
     reinterpret_cast<const uint8_t*>(wire.data() + 1), wire.size() - 1, &ctx);

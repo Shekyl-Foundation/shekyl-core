@@ -2235,6 +2235,25 @@ public:
    */
   virtual bool get_curve_tree_leaf_by_output_index(uint64_t output_index, uint8_t* leaf_out) const = 0;
 
+  /**
+   * @brief get a contiguous run of leaves by tree position in one read.
+   *
+   * Reads `count` leaves starting at `first_tree_position` into `out`
+   * (count × 128 bytes, densely packed). Returns false — leaving `out`
+   * unspecified — if any leaf in the run is missing or malformed; callers
+   * must not read `out` on false.
+   *
+   * The base implementation loops over get_curve_tree_leaf_by_tree_position();
+   * LMDB overrides it with a single cursor scan (one B-tree traversal instead
+   * of one per leaf) for the serve-credit verification hot path.
+   *
+   * @param first_tree_position  tree position of the first leaf in the run
+   * @param count                number of contiguous leaves to read
+   * @param out                  output buffer of count × 128 bytes
+   * @return true iff every leaf in the run was present and full
+   */
+  virtual bool get_curve_tree_leaf_chunk(uint64_t first_tree_position, uint64_t count, uint8_t* out) const;
+
   // ─── FCMP++ Per-Height Curve Tree Root ──────────────────────────────────
 
   /**

@@ -514,6 +514,7 @@ private:
   virtual bool get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, uint8_t* hash_out) const override;
   virtual bool get_curve_tree_leaf_by_tree_position(uint64_t tree_position, uint8_t* leaf_out) const override;
   virtual bool get_curve_tree_leaf_by_output_index(uint64_t output_index, uint8_t* leaf_out) const override;
+  virtual bool get_curve_tree_leaf_chunk(uint64_t first_tree_position, uint64_t count, uint8_t* out) const override;
 
   virtual void store_curve_tree_root_at_height(uint64_t block_height, const std::array<uint8_t, 32>& root) override;
   virtual std::array<uint8_t, 32> get_curve_tree_root_at_height(uint64_t block_height) const override;
@@ -532,26 +533,9 @@ private:
   virtual uint64_t get_last_pruned_tx_data_height() const override;
   virtual bool tx_has_verification_data(const crypto::hash& tx_hash) const override;
 
-  // migrate from older DB version to current
+  // migrate from older DB version to current (pre-V8 DBs are refused loudly;
+  // no in-Shekyl migration path exists — 15-deletion-and-debt / 60-no-monero-legacy)
   void migrate(const uint32_t oldversion);
-
-  // migrate from DB version 0 to 1
-  void migrate_0_1();
-
-  // migrate from DB version 1 to 2
-  void migrate_1_2();
-
-  // migrate from DB version 2 to 3
-  void migrate_2_3();
-
-  // migrate from DB version 3 to 4
-  void migrate_3_4();
-
-  // migrate from DB version 4 to 5
-  void migrate_4_5();
-
-  // migrate from DB version 5 to 6 (split pqc_auths from txs_pruned)
-  void migrate_5_6();
 
   void cleanup_batch();
 
@@ -650,6 +634,12 @@ private:
   // Prefer the active write txn when present so uncommitted archival bits are visible
   // during block connect (slash scheduling, same-block idempotency after prior txs).
   int archival_db_get(MDB_dbi dbi, MDB_val* k, MDB_val* v) const;
+
+  /** Strict "leaf_count" curve-tree meta read on the active write txn
+   * (same-txn tree-mutation visibility): absent row → empty tree (0), a
+   * present-but-malformed row is a loud corruption abort. Single canonical
+   * same-txn reader so the freeze hooks cannot drift from the meta encoding. */
+  uint64_t read_curve_tree_leaf_count_on_write_txn() const;
 
   /** Shared operand of the two segment-freeze hooks
    * (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4): post-grow / post-trim leaf
