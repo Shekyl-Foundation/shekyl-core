@@ -96,8 +96,11 @@ using namespace crypto;
 // Increase when the DB structure changes.
 // V7: curve-tree tables restructured — composite keys replace DUPSORT,
 // bidirectional output↔leaf mapping tables and block-pending journal added.
-// Nodes with V6 data dirs must delete and resync.
-#define VERSION 7
+// V8: persisted pop-symmetric frozen-shard counter added to `properties`
+// (`archival_frozen_shard_count`, ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4);
+// a pre-V8 DB has segment rows the counter does not account for.
+// Nodes with pre-V8 data dirs must delete and resync.
+#define VERSION 8
 
 namespace
 {
@@ -5686,23 +5689,56 @@ void BlockchainLMDB::prune_archival_epochs_before(uint64_t prune_below_epoch)
   delete_archival_sigma_work_before_epoch(prune_below_epoch);
 }
 
-uint64_t BlockchainLMDB::count_frozen_shards_at_close(uint64_t h_close) const
+uint64_t BlockchainLMDB::get_archival_frozen_shard_count_on_write_txn() const
 {
-  // The single counting read over m_archival_shard_segment
-  // (ARCHIVAL_REWARD_GATE_M1.md §1.1 count-pass discipline). Runs on the
-  // close's write txn so the count and the close see the same snapshot;
-  // walk-not-watermark so non-dense shard IDs are handled by construction.
+  // Persisted pop-symmetric frozen-shard counter
+  // (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4): +1 in the CREATE-only row
+  // writer, −1 per row the pop revert deletes, so it moves in lockstep with
+  // the segment table by construction. Read on the write txn so the close
+  // sees same-txn freezes (the M1 §1.1 same-snapshot pin).
+  const std::string key = "archival_frozen_shard_count";
+  MDB_val k = {key.size(), const_cast<char*>(key.data())};
+  MDB_val v;
+  const int rc = mdb_get(*m_write_txn, m_properties, &k, &v);
+  if (rc == MDB_NOTFOUND)
+    return 0;
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to read archival frozen-shard counter: ", rc).c_str()));
+  if (v.mv_size != sizeof(uint64_t))
+    throw std::runtime_error("FATAL: archival frozen-shard counter size mismatch");
+  uint64_t count = 0;
+  memcpy(&count, v.mv_data, sizeof(count));
+  return count;
+}
+
+void BlockchainLMDB::set_archival_frozen_shard_count_on_write_txn(uint64_t count)
+{
+  const std::string key = "archival_frozen_shard_count";
+  MDB_val k = {key.size(), const_cast<char*>(key.data())};
+  MDB_val v = {sizeof(count), &count};
+  const int rc = mdb_put(*m_write_txn, m_properties, &k, &v, 0);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to set archival frozen-shard counter: ", rc).c_str()));
+}
+
+uint64_t BlockchainLMDB::count_frozen_shard_rows_by_walk_for_test() const
+{
+  // Differential oracle for the O(1) counter (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md
+  // §4.4): the pre-counter full-table walk, retained as the test-side truth
+  // the counter is differential-tested against across freeze/pop/re-apply
+  // cycles. Counts every decodable row (per-row decode failure is the same
+  // loud abort as the old count pass); the close-boundary height check lives
+  // in the production reader's frontier probe, not here — every production
+  // row satisfies it by construction. Test-support only; no production
+  // caller (tripwire-pinned).
   if (!m_write_txn)
-    throw std::runtime_error("FATAL: frozen-shard count requires active write txn");
+    throw std::runtime_error("FATAL: frozen-shard walk requires active write txn");
 
   MDB_cursor* cur = nullptr;
   int rc = mdb_cursor_open(*m_write_txn, m_archival_shard_segment, &cur);
   if (rc)
-    throw0(DB_ERROR(lmdb_error("Failed to open archival_shard_segment cursor for frozen-shard count: ", rc).c_str()));
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_shard_segment cursor for frozen-shard walk: ", rc).c_str()));
   // RAII close so the loud-abort throws below cannot strand the cursor.
-  // A write-txn cursor is also reclaimed at txn end (lmdb.h mdb_cursor_open
-  // docs), but the guard keeps this function correct if it is ever adapted
-  // to a read-only txn, where explicit close is mandatory.
   const std::unique_ptr<MDB_cursor, decltype(&mdb_cursor_close)> cur_guard(cur, &mdb_cursor_close);
 
   uint64_t count = 0;
@@ -5712,20 +5748,65 @@ uint64_t BlockchainLMDB::count_frozen_shards_at_close(uint64_t h_close) const
   {
     op = MDB_NEXT;
     if (k.mv_size != shekyl::db::kArchivalShardKeySize)
-      throw std::runtime_error("FATAL: archival_shard_segment key size mismatch at frozen-shard count");
+      throw std::runtime_error("FATAL: archival_shard_segment key size mismatch at frozen-shard walk");
     shekyl::db::ArchivalShardSegmentValue segment{};
-    // Decode failure is a loud abort (§1.1 pin): a lenient skip would
-    // silently lower the count on one malformed row — a consensus fork in
-    // the gating direction.
     if (!shekyl::db::ArchivalShardSegmentValue::decode(v.mv_data, v.mv_size, segment))
-      throw std::runtime_error("FATAL: archival_shard_segment decode failed at frozen-shard count");
-    // freeze_height <= h_close: equality counts (a shard frozen at the
-    // close boundary is frozen at the close).
-    if (segment.freeze_height <= h_close)
-      ++count;
+      throw std::runtime_error("FATAL: archival_shard_segment decode failed at frozen-shard walk");
+    ++count;
   }
   if (rc != MDB_NOTFOUND)
-    throw0(DB_ERROR(lmdb_error("archival_shard_segment cursor error at frozen-shard count: ", rc).c_str()));
+    throw0(DB_ERROR(lmdb_error("archival_shard_segment cursor error at frozen-shard walk: ", rc).c_str()));
+  return count;
+}
+
+uint64_t BlockchainLMDB::count_frozen_shards_at_close(uint64_t h_close) const
+{
+  // The single counting read over m_archival_shard_segment
+  // (ARCHIVAL_REWARD_GATE_M1.md §1.1 count-pass discipline), now O(1): the
+  // persisted pop-symmetric counter (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md
+  // §4.4) replaces the full-table walk the pre-counter implementation
+  // repeated at every close. Runs on the close's write txn so the count and
+  // the close see the same snapshot. Two O(1) frontier checks on the
+  // MDB_LAST row keep the §1.1 pins armed: the row must decode (the M3-2
+  // loud abort, exercised at the frontier), and its freeze_height must
+  // satisfy the close boundary — equality counts, and under the production
+  // writer (rows freeze at or below the writing block's height, O-2
+  // monotone) a frontier row above h_close is tree/registry disagreement:
+  // corruption, aborted as loudly as a decode failure, never leniently
+  // filtered (the fixture-branch "future rows don't count yet" disposition
+  // is superseded — M1 §11.11).
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: frozen-shard count requires active write txn");
+
+  const uint64_t count = get_archival_frozen_shard_count_on_write_txn();
+
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(*m_write_txn, m_archival_shard_segment, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_shard_segment cursor for frozen-shard frontier check: ", rc).c_str()));
+  const std::unique_ptr<MDB_cursor, decltype(&mdb_cursor_close)> cur_guard(cur, &mdb_cursor_close);
+
+  MDB_val k, v;
+  rc = mdb_cursor_get(cur, &k, &v, MDB_LAST);
+  if (rc == MDB_NOTFOUND)
+  {
+    // Counter/table divergence in either direction is a loud abort: a
+    // silently-wrong operand is a consensus fork in the gating direction.
+    if (count != 0)
+      throw std::runtime_error("FATAL: frozen-shard counter nonzero over an empty segment table");
+    return 0;
+  }
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("archival_shard_segment cursor error at frozen-shard frontier check: ", rc).c_str()));
+  if (count == 0)
+    throw std::runtime_error("FATAL: frozen-shard counter zero with segment rows present");
+  if (k.mv_size != shekyl::db::kArchivalShardKeySize)
+    throw std::runtime_error("FATAL: archival_shard_segment key size mismatch at frozen-shard frontier check");
+  shekyl::db::ArchivalShardSegmentValue segment{};
+  if (!shekyl::db::ArchivalShardSegmentValue::decode(v.mv_data, v.mv_size, segment))
+    throw std::runtime_error("FATAL: archival_shard_segment decode failed at frozen-shard frontier check");
+  if (!(segment.freeze_height <= h_close))
+    throw std::runtime_error("FATAL: frontier segment row frozen above the close height");
   return count;
 }
 
@@ -5884,6 +5965,7 @@ void BlockchainLMDB::revert_archival_segment_freezes()
   if (rc)
     throw0(DB_ERROR(lmdb_error("Failed to open archival_shard_segment cursor for freeze revert: ", rc).c_str()));
   MDB_val k, v;
+  uint64_t deleted = 0;
   while ((rc = mdb_cursor_get(cur, &k, &v, MDB_LAST)) == 0)
   {
     if (k.mv_size != shekyl::db::kArchivalShardKeySize)
@@ -5894,10 +5976,23 @@ void BlockchainLMDB::revert_archival_segment_freezes()
     rc = mdb_cursor_del(cur, 0);
     if (rc)
       throw0(DB_ERROR(lmdb_error("Failed to delete archival_shard_segment row at freeze revert: ", rc).c_str()));
+    ++deleted;
   }
   if (rc != 0 && rc != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("archival_shard_segment cursor error at freeze revert: ", rc).c_str()));
   mdb_cursor_close(cur);
+
+  // Persisted pop-symmetric counter, pop side
+  // (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4): decrement by the rows this
+  // walk actually deleted — the symmetric writer the counter could not have
+  // before this pipeline existed.
+  if (deleted > 0)
+  {
+    const uint64_t frozen_count = get_archival_frozen_shard_count_on_write_txn();
+    if (frozen_count < deleted)
+      throw std::runtime_error("FATAL: archival frozen-shard counter underflow on freeze revert");
+    set_archival_frozen_shard_count_on_write_txn(frozen_count - deleted);
+  }
 }
 
 void BlockchainLMDB::process_archival_epoch_close_at_height(uint64_t block_height)
@@ -6149,9 +6244,23 @@ void BlockchainLMDB::put_archival_shard_segment(uint64_t shard_id, uint64_t free
   shekyl::db::ArchivalShardKey key(shard_id);
   MDB_val k = key.as_mdb_val();
   MDB_val v = { encoded.size(), const_cast<uint8_t*>(encoded.data()) };
-  const int result = mdb_put(*m_write_txn, m_archival_shard_segment, &k, &v, 0);
+  // MDB_NOOVERWRITE makes the CREATE-only registry contract structural
+  // (LMDB_SCHEMA.md: single row per shard; the overwrite-the-frozen-row
+  // adversary O-2 refuses), and is what keeps the +1 below in lockstep with
+  // the table: every successful put is exactly one new row.
+  const int result = mdb_put(*m_write_txn, m_archival_shard_segment, &k, &v, MDB_NOOVERWRITE);
+  if (result == MDB_KEYEXIST)
+    throw std::runtime_error("FATAL: archival shard segment row overwrite refused (rows are CREATE-only, O-2)");
   if (result)
     throw0(DB_ERROR(lmdb_error("Failed to put archival shard segment: ", result).c_str()));
+
+  // Persisted pop-symmetric counter, freeze side
+  // (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4): increment where the row is
+  // created, so counter and table cannot drift apart.
+  const uint64_t frozen_count = get_archival_frozen_shard_count_on_write_txn();
+  if (frozen_count == std::numeric_limits<uint64_t>::max())
+    throw std::runtime_error("FATAL: archival frozen-shard counter overflow");
+  set_archival_frozen_shard_count_on_write_txn(frozen_count + 1);
 }
 
 // ─── Deferred Staked Leaf Insertion ─────────────────────────────────────────
@@ -8911,6 +9020,15 @@ void BlockchainLMDB::migrate_5_6()
 
 void BlockchainLMDB::migrate(const uint32_t oldversion)
 {
+  // Pre-genesis posture (15-deletion-and-debt.mdc): no in-Shekyl migration
+  // code; `rm -rf` and resync is the migration path. V8 added the persisted
+  // frozen-shard counter (properties `archival_frozen_shard_count`); a
+  // pre-V8 DB carries segment rows the counter does not account for, and
+  // proceeding would feed the M1 reward gate a wrong operand. Refuse loudly.
+  // (The Monero-era migrate_0_1..migrate_5_6 ladder below is unreachable
+  // from here — deletion scheduled in docs/FOLLOWUPS.md.)
+  if (oldversion < 8)
+    throw0(DB_ERROR("Database schema is pre-V8; no pre-genesis migration path exists. Delete the data directory and resync."));
   if (oldversion < 1)
     migrate_0_1();
   if (oldversion < 2)

@@ -597,18 +597,27 @@ private:
   void delete_archival_sigma_work_before_epoch(uint64_t prune_below_epoch);
   void delete_archival_serve_credit_before_epoch(uint64_t prune_below_epoch);
   /** M1 reward-gate operand (ARCHIVAL_REWARD_GATE_M1.md §1.1): the single
-   * counting read over m_archival_shard_segment — rows with
-   * freeze_height <= h_close (equality counts). One call site
-   * (process_archival_epoch_close_at_height); the §6 tripwire refuses any
-   * other counting read over the segment table. Decode failure aborts
-   * loudly (§1.1 count-pass discipline), never a lenient skip.
+   * counting read over m_archival_shard_segment, O(1) via the persisted
+   * pop-symmetric counter (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4) plus
+   * two frontier checks on the MDB_LAST row: decode must succeed and its
+   * freeze_height must satisfy `<= h_close` (equality counts; a frontier
+   * row above the close is corruption and aborts loudly — M1 §11.11).
+   * One call site (process_archival_epoch_close_at_height); the §6
+   * tripwire refuses any other counting read over the segment table.
    *
-   * Public (with the two test-support members below) so the count-pass
+   * Public (with the test-support members below) so the count-pass
    * boundary and decode-failure cases — unreachable from the Rust KAT,
    * which injects the count — are pinned in archival_substrate_lmdb.cpp
    * per §11.8 M3-1/M3-2. */
 public:
   uint64_t count_frozen_shards_at_close(uint64_t h_close) const;
+  /** Differential oracle for the O(1) counter
+   * (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4): the pre-counter full-table
+   * walk with per-row decode, counting every registry row. Tests assert
+   * walk == counter across freeze/pop/re-apply cycles; a divergence is the
+   * counter-drift adversary made visible. Test-support only; no production
+   * caller (tripwire-pinned). */
+  uint64_t count_frozen_shard_rows_by_walk_for_test() const;
   /** Stored-shape probe (ARCHIVAL_REWARD_GATE_M1.md §5 round-2 additions):
    * distinguishes a present-and-zero sigma row from MDB_NOTFOUND, which
    * get_archival_sigma_work_milli deliberately launders to 0. Test-support
@@ -648,6 +657,14 @@ private:
    * first-crossing entry point (shekyl_archival_frozen_segment_count —
    * the only site allowed to perform the boundary division, §5.1). */
   uint64_t frozen_segment_count_on_write_txn() const;
+
+  /** Persisted pop-symmetric frozen-shard counter (§4.4): properties key
+   * `archival_frozen_shard_count`, +1 in put_archival_shard_segment (the
+   * CREATE-only row writer), −1 per row revert_archival_segment_freezes
+   * deletes. Exactly those two mutation sites (tripwire-pinned); the M1
+   * gate operand reads it O(1) via count_frozen_shards_at_close. */
+  uint64_t get_archival_frozen_shard_count_on_write_txn() const;
+  void set_archival_frozen_shard_count_on_write_txn(uint64_t count);
 
   MDB_env* m_env;
 

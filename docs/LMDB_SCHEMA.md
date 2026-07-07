@@ -1,7 +1,7 @@
 # LMDB Schema Reference
 
 **Last updated:** April 2026
-**DB version:** 7 (schema v7: composite-key pending/drain tables, output↔leaf mapping)
+**DB version:** 8 (schema v8: persisted pop-symmetric frozen-shard counter; v7: composite-key pending/drain tables, output↔leaf mapping)
 **Source:** `src/blockchain_db/lmdb/db_lmdb.cpp`, `src/blockchain_db/lmdb/db_lmdb.h`, `src/blockchain_db/blockchain_db.h`, `src/blockchain_db/shekyl_types.h`
 
 ## Conventions
@@ -506,6 +506,14 @@ same-txn `trim_curve_tree` (O-3 pop-symmetry: re-applying the block rewrites
 a bit-identical row). Writer/deleter one-site and the cursor accounting are
 CI-enforced (`scripts/ci/check_reward_gate_predicate_sites.sh`).
 
+The row count is mirrored by the persisted `"archival_frozen_shard_count"`
+counter in `properties` (V8; `ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §4.4):
++1 on put (`MDB_NOOVERWRITE` — rows are CREATE-only), −1 per row deleted on
+revert, same write transaction. `count_frozen_shards_at_close` reads the
+counter in O(1) and frontier-checks the `MDB_LAST` row (decode + boundary);
+the O(N) walk survives only as the differential test oracle
+`count_frozen_shard_rows_by_walk_for_test`.
+
 | Property | Value |
 |---|---|
 | LMDB name | `"archival_shard_segment"` |
@@ -877,13 +885,14 @@ General key-value store for database-level metadata.
 
 | Key | Value type | Description |
 |---|---|---|
-| `"version"` (NUL-terminated) | `uint32_t` | Database schema version (currently 7) |
+| `"version"` (NUL-terminated) | `uint32_t` | Database schema version (currently 8) |
 | `"pruning_seed"` (NUL-terminated) | `uint32_t` | Blockchain pruning seed |
 | `"tx_prune_next_block"` (NUL-terminated) | `uint64_t` | Next block height for tx pruning |
 | `"last_pruned_tx_data_height"` (NUL-terminated) | `uint64_t` | Height of last pruned tx data |
 | `"staker_pool_balance"` (no NUL) | `uint64_t` | Running staker reward pool balance |
 | `"total_bonded_atomic"` (no NUL) | `uint64_t` | Global bonded collateral audit scalar (gate-4 §4.5) |
 | `"total_burned"` (no NUL) | `uint64_t` | Cumulative destroyed SHEKYL |
+| `"archival_frozen_shard_count"` (no NUL) | `uint64_t` | Pop-symmetric `archival_shard_segment` row counter — the M1 gate operand's O(1) backing store (V8; `ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §4.4). +1 in `put_archival_shard_segment`, −1 per deleted row in `revert_archival_segment_freezes`; mutation surface CI-pinned |
 
 | Property | Value |
 |---|---|
@@ -951,3 +960,12 @@ DB v7 is **not** backward compatible with v6. Nodes with v6 data must resync fro
 - Three new tables: `block_pending_additions`, `output_to_leaf`, `leaf_to_output`.
 - `maxdbs` increased from 32 to 36; gate-2/gate-4 archival substrate required **42** (`db_lmdb.cpp`; the substrate's `archival_shard_leaf` was later deleted by the segment-freeze pipeline, leaving 41 live subdbs under the same ceiling).
 - Typed key/value encoders added in `src/blockchain_db/shekyl_types.h`.
+
+### Schema v7 → v8 (breaking, no migration path)
+
+DB v8 adds the persisted `"archival_frozen_shard_count"` counter to
+`properties` (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §4.4). A pre-v8 database
+has `archival_shard_segment` rows the counter does not account for, so
+`BlockchainLMDB::migrate` **refuses any pre-v8 database loudly** and directs
+the operator to delete the data directory and resync. Pre-genesis, no
+in-Shekyl migration code is justified (`15-deletion-and-debt.mdc`).

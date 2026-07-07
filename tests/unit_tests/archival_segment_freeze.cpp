@@ -132,11 +132,17 @@ TEST(archival_segment_freeze, multi_segment_single_grow_writes_both_rows)
   EXPECT_EQ(lc1, kE);
   EXPECT_NE(rk0, rk1);
 
-  // M1 integration (§9): the count pass over production-written rows equals
-  // the pipeline's row count at and after the freeze height, zero before.
-  EXPECT_EQ(lmdb.count_frozen_shards_at_close(49), 0u);
+  // M1 integration (§9): the O(1) operand over production-written rows
+  // equals the pipeline's row count at and after the freeze height
+  // (equality counts, §1.1). A close below the freeze height cannot happen
+  // in production (freezes run before the same-txn close at the same
+  // height); the reader aborts loudly rather than filter (M1 §11.11).
   EXPECT_EQ(lmdb.count_frozen_shards_at_close(50), 2u);
   EXPECT_EQ(lmdb.count_frozen_shards_at_close(51), 2u);
+  EXPECT_THROW(lmdb.count_frozen_shards_at_close(49), std::runtime_error);
+  // Differential oracle (§4.4): the full-decode walk agrees with the
+  // persisted counter.
+  EXPECT_EQ(lmdb.count_frozen_shard_rows_by_walk_for_test(), 2u);
 }
 
 TEST(archival_segment_freeze, rk_matches_independent_recomposition)
@@ -212,6 +218,45 @@ TEST(archival_segment_freeze, pop_symmetry_row_bit_identical_after_reapply)
   std::vector<uint8_t> row_after;
   ASSERT_TRUE(lmdb.get_archival_shard_segment_raw_for_test(0, row_after));
   EXPECT_EQ(row_after, row_before);
+}
+
+TEST(archival_segment_freeze, counter_matches_walk_across_freeze_pop_reapply)
+{
+  // Differential test for the persisted pop-symmetric counter (§4.4): the
+  // O(1) gate operand equals the full-decode walk at every step of a
+  // freeze / pop / re-apply cycle — the counter's reorg symmetry IS the
+  // pipeline's O-3 connect/revert pairing, exercised end-to-end.
+  TempLMDB fixture;
+  BlockchainLMDB& lmdb = fixture.db;
+  BlockchainDB& db = fixture.db;
+
+  EXPECT_EQ(lmdb.count_frozen_shards_at_close(7), 0u);
+  EXPECT_EQ(lmdb.count_frozen_shard_rows_by_walk_for_test(), 0u);
+
+  // Freeze two segments in one block.
+  grow(db, 0, 2 * kE);
+  db.process_archival_segment_freezes_at_height(7);
+  EXPECT_EQ(lmdb.count_frozen_shards_at_close(7), 2u);
+  EXPECT_EQ(lmdb.count_frozen_shard_rows_by_walk_for_test(), 2u);
+
+  // Pop across the upper boundary only: one row deleted, counter follows.
+  db.trim_curve_tree(kE);
+  db.revert_archival_segment_freezes();
+  EXPECT_EQ(lmdb.count_frozen_shards_at_close(7), 1u);
+  EXPECT_EQ(lmdb.count_frozen_shard_rows_by_walk_for_test(), 1u);
+
+  // Pop across the remaining boundary: empty registry, zero counter.
+  db.trim_curve_tree(1);
+  db.revert_archival_segment_freezes();
+  EXPECT_EQ(lmdb.count_frozen_shards_at_close(7), 0u);
+  EXPECT_EQ(lmdb.count_frozen_shard_rows_by_walk_for_test(), 0u);
+
+  // Re-apply: rows recreated (O-1 bit-identical per the pop-symmetry test),
+  // counter back in lockstep.
+  grow(db, kE - 1, kE + 1);
+  db.process_archival_segment_freezes_at_height(7);
+  EXPECT_EQ(lmdb.count_frozen_shards_at_close(7), 2u);
+  EXPECT_EQ(lmdb.count_frozen_shard_rows_by_walk_for_test(), 2u);
 }
 
 TEST(archival_segment_freeze, pop_above_boundary_leaves_row_untouched)

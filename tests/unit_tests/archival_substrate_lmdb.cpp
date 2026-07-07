@@ -444,36 +444,45 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
 // ── M1 reward gate: count pass + stored shape (ARCHIVAL_REWARD_GATE_M1.md) ──
 //
 // The Rust activation-boundary KAT (tests/reward_gate_kat.rs, G-1..G-10)
-// injects frozen_shard_count and never executes the C++ filter, so the
-// count-pass cases live here (§11.8 M3-1/M3-2): the freeze_height ≤ H_close
-// boundary (equality counts — an off-by-one here is a consensus fork at
-// exactly the boundary class), the malformed-row loud abort (a lenient skip
-// silently lowers the count on one node — a fork in the gating direction),
-// and the write-txn precondition.
+// injects frozen_shard_count and never executes the C++ operand reader, so
+// the count-pass cases live here (§11.8 M3-1/M3-2, amended §11.11 for the
+// O(1) counter): the freeze_height ≤ H_close frontier boundary (equality
+// counts — an off-by-one here is a consensus fork at exactly the boundary
+// class), the malformed-frontier loud abort (a lenient skip silently lowers
+// the count on one node — a fork in the gating direction), counter/table
+// divergence aborts, and the write-txn precondition.
 
-TEST(archival_substrate_lmdb, frozen_shard_count_filter_boundary)
+TEST(archival_substrate_lmdb, frozen_shard_count_frontier_boundary)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
   BlockchainLMDB& lmdb = fixture.db;
   const uint64_t h_close = 10000;
 
-  // Non-dense shard IDs (walk-not-watermark, §1.1): strictly below, exactly
-  // equal, and strictly above the close height.
-  db.put_archival_shard_segment(7, h_close - 1, make_hash(0x61), 26000);
-  db.put_archival_shard_segment(1000000, h_close, make_hash(0x62), 26000);
-  db.put_archival_shard_segment(42, h_close + 1, make_hash(0x63), 26000);
+  // Production-shaped rows: dense IDs, per-branch-monotone freeze heights
+  // (O-2), the frontier frozen exactly at the close.
+  db.put_archival_shard_segment(0, h_close - 1, make_hash(0x61), 26000);
+  db.put_archival_shard_segment(1, h_close, make_hash(0x62), 26000);
 
-  // Equality counts (freeze_height <= h_close); the future row does not.
+  // Equality counts (frontier freeze_height <= h_close, §1.1): the row
+  // frozen AT the close boundary is frozen at the close.
   EXPECT_EQ(lmdb.count_frozen_shards_at_close(h_close), 2u);
-  // One below the boundary the equal row drops out.
-  EXPECT_EQ(lmdb.count_frozen_shards_at_close(h_close - 1), 1u);
-  // Below every freeze the count is zero; above every freeze it is total.
-  EXPECT_EQ(lmdb.count_frozen_shards_at_close(h_close - 2), 0u);
-  EXPECT_EQ(lmdb.count_frozen_shards_at_close(h_close + 1), 3u);
+  EXPECT_EQ(lmdb.count_frozen_shards_at_close(h_close + 5), 2u);
+
+  // A frontier row above the close height is tree/registry disagreement —
+  // impossible under the production writer (rows freeze at the writing
+  // block's height, before the same-txn close) — and aborts loudly
+  // (M1 §11.11: the fixture-branch "future rows are filtered out"
+  // disposition is superseded; lenient filtering would mask a divergent
+  // DB in the gating direction).
+  EXPECT_THROW(lmdb.count_frozen_shards_at_close(h_close - 1), std::runtime_error);
+
+  // Differential oracle (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4): the
+  // full-decode walk agrees with the persisted counter.
+  EXPECT_EQ(lmdb.count_frozen_shard_rows_by_walk_for_test(), 2u);
 }
 
-TEST(archival_substrate_lmdb, frozen_shard_count_malformed_row_aborts)
+TEST(archival_substrate_lmdb, frozen_shard_count_malformed_frontier_aborts)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
@@ -481,19 +490,38 @@ TEST(archival_substrate_lmdb, frozen_shard_count_malformed_row_aborts)
 
   db.put_archival_shard_segment(7, 100, make_hash(0x64), 26000);
   // Correct length, wrong version byte: decodable length, undecodable row.
+  // Written at shard_id 8 > 7 so it is the MDB_LAST frontier the O(1)
+  // reader probes.
   std::vector<uint8_t> bad(1 + 8 + 8 + 32, 0);
   bad[0] = 99;
   lmdb.put_archival_shard_segment_raw_for_corruption_test(8, bad);
 
   // Loud abort, never a lenient skip that returns 1 (§1.1 decode-failure
   // pin: two nodes disagreeing on the count is a fork in the gating
-  // direction).
+  // direction). The differential walk aborts on the same row.
   EXPECT_THROW(lmdb.count_frozen_shards_at_close(200), std::runtime_error);
+  EXPECT_THROW(lmdb.count_frozen_shard_rows_by_walk_for_test(), std::runtime_error);
 
   // A truncated row aborts identically.
   std::vector<uint8_t> truncated(10, 0);
   truncated[0] = 1;
   lmdb.put_archival_shard_segment_raw_for_corruption_test(8, truncated);
+  EXPECT_THROW(lmdb.count_frozen_shards_at_close(200), std::runtime_error);
+}
+
+TEST(archival_substrate_lmdb, frozen_shard_counter_table_divergence_aborts)
+{
+  TempLMDB fixture;
+  BlockchainLMDB& lmdb = fixture.db;
+
+  // The raw corruption writer bypasses the counter: a decodable row with the
+  // counter still at zero is exactly the rows-without-counter divergence the
+  // reader must refuse (a silently-wrong operand is a consensus fork in the
+  // gating direction).
+  shekyl::db::ArchivalShardSegmentValue seg{};
+  seg.freeze_height = 100;
+  seg.segment_leaf_count = 26000;
+  lmdb.put_archival_shard_segment_raw_for_corruption_test(0, seg.encode());
   EXPECT_THROW(lmdb.count_frozen_shards_at_close(200), std::runtime_error);
 }
 

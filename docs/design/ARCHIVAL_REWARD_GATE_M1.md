@@ -85,7 +85,11 @@ is not the predicate, per §11 M2-3).
 
 **Count-pass discipline (round-3 amendment, §11.8 M3-1/M3-2).** The
 count pass is the gate operand's *production site* and gets the same
-structural protection as the predicate site:
+structural protection as the predicate site. (§11.11 later replaces
+the O(N) walk *mechanism* with a persisted pop-symmetric counter +
+O(1) frontier check; every discipline below survives the swap — the
+one-site guarantee, the `≤` boundary, and the loud-abort class all
+transfer to the counter reader.)
 
 - **One named helper, one call site.** The filter lives in a single
   function — `count_frozen_shards_at_close(h_close)` — called only
@@ -1430,6 +1434,52 @@ the segment-freeze pipeline design round **opens** (§1.3 condition;
 `docs/FOLLOWUPS.md` entry); `K_COVER` sealing remains gated on the
 WI-4 §14.4 partition run and is not blocked by (and does not block)
 the PR itself — the compile refusal holds the seam.
+
+### 11.11 Operand mechanism swap: O(N) walk → persisted counter (2026-07-07)
+
+Landed with the segment-freeze pipeline PR (#264), closing the
+`FOLLOWUPS.md` O(1)-operand efficiency item. The gate operand
+`frozen_shard_count` is now read from a persisted counter
+(`properties["archival_frozen_shard_count"]`, schema V8) instead of
+a full-table cursor walk. Specification and soundness argument:
+`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §4.4.
+
+**Why this is not M3-1's adversary.** §11.8 M3-1 named "a cached
+counter lacking O-3 pop-symmetry" as a drift adversary. The landed
+counter is defined by having exactly the property the adversary
+lacked: it moves ±1 in the same write transaction as the one-site
+row writer (+1, `MDB_NOOVERWRITE`-guarded CREATE-only put) and the
+pop revert (−1 per deleted row, underflow-aborted), its mutation
+surface is tripwire-pinned (invariant 6: key literal exactly twice,
+setter call sites exactly two, differential oracle zero production
+callers), and it is differential-tested against the walk across
+freeze/pop/re-apply cycles. The adversary was drift; the defense is
+structural lockstep plus a CI-pinned mutation surface.
+
+**Discipline transfer.** The §1 count-pass disciplines survive
+mechanically:
+
+- *One-site:* still one counting read (`count_frozen_shards_at_close`),
+  one production call site; the invariant-2 cursor accounting now
+  admits 5 pinned cursor sites (the reader's frontier probe replaced
+  its walk; the test-only differential walk is the 5th).
+- *Boundary inclusivity:* the frontier check pins
+  `freeze_height ≤ h_close` at the `MDB_LAST` row; per-branch
+  monotone `freeze_height` over dense CREATE-only ids extends the
+  bound to every row. A **future-dated frontier is now a loud
+  abort** rather than a filtered-out row — under the production
+  writer (same-txn freeze at the connect hook) a row above the
+  close height cannot exist in the close's snapshot, so observing
+  one is snapshot/counter divergence, not a countable state. The
+  boundary unit tests moved from sparse fixture heights to
+  production-shaped dense rows accordingly.
+- *Loud abort on corruption:* the frontier row must decode (M3-2's
+  class, preserved at the frontier); counter/table divergence
+  (either direction) aborts the close.
+
+**Schema consequence.** V7 → V8 bump with a loud pre-V8 refusal in
+`migrate` (no pre-genesis migration code, `15-deletion-and-debt.mdc`);
+`LMDB_SCHEMA.md` "Schema v7 → v8" records the break.
 
 ---
 

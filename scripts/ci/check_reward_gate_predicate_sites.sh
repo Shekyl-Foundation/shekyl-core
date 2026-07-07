@@ -26,8 +26,14 @@
 #      production site gets the same one-site guarantee as the predicate
 #      site. Named drift adversaries (§11.8 M3-1): an RPC "corpus size"
 #      surface, a verification-path recount, or a cached counter lacking
-#      O-3 pop-symmetry. `mdb_stat` over the segment table is refused
-#      outright — it is precisely the cached-counter shortcut.
+#      O-3 pop-symmetry. The landed operand IS a persisted counter — but
+#      one WITH O-3 pop-symmetry (±1 in lockstep with the one-site row
+#      writer and the revert walk, ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md
+#      §4.4, differential-tested against the walk), which is exactly what
+#      M3-1's adversary lacked. Its mutation surface is pinned by
+#      invariant 6 below. `mdb_stat` over the segment table remains
+#      refused outright — it counts rows with no decode and no frontier
+#      boundary check.
 #
 # The boundary operator is also pinned: `freeze_height <= h_close`
 # (equality counts, §1.1) must exist exactly once, and no strict-`<`
@@ -172,8 +178,9 @@ fi
 #
 # Iteration capability = counting capability: a cursor open over the segment
 # table outside the pinned sites is the second-count-site adversary. Pinned
-# sites (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §8 cursor accounting, 4 total):
-#   1. count_frozen_shards_at_close — the count helper itself;
+# sites (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §8 cursor accounting, 5 total):
+#   1. count_frozen_shards_at_close — the O(1) operand reader's one-row
+#      frontier probe (MDB_LAST decode + boundary check);
 #   2. process_archival_slash_for_epoch — pre-existing slash-scan shard
 #      enumeration (enumeration read predating the gate, not a count
 #      feeding a consensus predicate);
@@ -181,21 +188,24 @@ fi
 #      one-row resume peek (the writer deriving its own frontier from its
 #      own rows, not a second count pass);
 #   4. revert_archival_segment_freezes — the pop revert's reverse walk
-#      deleting rows above the post-trim frontier.
+#      deleting rows above the post-trim frontier;
+#   5. count_frozen_shard_rows_by_walk_for_test — the differential oracle
+#      the counter is tested against (test-support, no production caller;
+#      the _for_test suffix is the named exemption shape).
 CURSOR_HITS="$(scan -n 'mdb_cursor_open\([^)]*m_archival_shard_segment' src/ \
   | drop_comment_hits \
   | scan -v 'reward-gate-site-allow')"
 CURSOR_COUNT="$(printf '%s' "$CURSOR_HITS" | scan -c '.')"
-if [[ "${CURSOR_COUNT:-0}" -ne 4 ]]; then
-  echo "FAIL: expected exactly 4 cursor opens over m_archival_shard_segment (count helper, slash scan, freeze resume peek, revert walk), found ${CURSOR_COUNT:-0}" >&2
+if [[ "${CURSOR_COUNT:-0}" -ne 5 ]]; then
+  echo "FAIL: expected exactly 5 cursor opens over m_archival_shard_segment (operand frontier probe, slash scan, freeze resume peek, revert walk, differential-walk test oracle), found ${CURSOR_COUNT:-0}" >&2
   echo "  (a new iteration over the segment table must route through" >&2
   echo "   count_frozen_shards_at_close or carry a reviewed reward-gate-site-allow marker)" >&2
   printf '%s\n' "$CURSOR_HITS" >&2
   FAIL=1
 fi
-# Positive controls for the two freeze-pipeline cursor sites: a rename or
+# Positive controls for the freeze-pipeline cursor sites: a rename or
 # removal must fail here, not silently re-shape the count above.
-for fn in process_archival_segment_freezes_at_height revert_archival_segment_freezes; do
+for fn in process_archival_segment_freezes_at_height revert_archival_segment_freezes count_frozen_shard_rows_by_walk_for_test; do
   if ! rg -q "BlockchainLMDB::${fn}\(" "$LMDB_CPP"; then
     echo "FAIL: positive control — ${fn} not found in $LMDB_CPP (freeze-pipeline site renamed or removed; update this gate)" >&2
     FAIL=1
@@ -337,6 +347,58 @@ FSC_HELPER_COUNT="$(printf '%s' "$FSC_HELPER_CALLS" | rg -c '.' || true)"
 if [[ "${FSC_HELPER_COUNT:-0}" -ne 2 ]]; then
   echo "FAIL: positive control — expected exactly 2 frozen_segment_count_on_write_txn() calls in $LMDB_CPP (freeze processor + revert), found ${FSC_HELPER_COUNT:-0}" >&2
   printf '%s\n' "$FSC_HELPER_CALLS" >&2
+  FAIL=1
+fi
+
+# -- Invariant 6: pop-symmetric counter mutation surface ------------------------
+#
+# The persisted frozen-shard counter (properties `archival_frozen_shard_count`,
+# ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4) is the M1 gate operand's O(1)
+# backing store. Its soundness is structural: the counter moves ONLY where a
+# registry row is created (+1, put_archival_shard_segment) or deleted (−1,
+# revert_archival_segment_freezes). A third mutation site is the counter-drift
+# adversary — the exact "cached counter" M3-1 refused, reintroduced without
+# its lockstep property.
+
+# The key literal appears exactly twice in code (the getter and setter key
+# definitions); everything else routes through those helpers.
+KEY_HITS="$(scan -n '"archival_frozen_shard_count"' src/ | drop_comment_hits)"
+KEY_COUNT="$(printf '%s' "$KEY_HITS" | scan -c '.')"
+if [[ "${KEY_COUNT:-0}" -ne 2 ]]; then
+  echo "FAIL: expected exactly 2 code uses of the \"archival_frozen_shard_count\" key in src/ (getter + setter), found ${KEY_COUNT:-0}" >&2
+  printf '%s\n' "$KEY_HITS" >&2
+  FAIL=1
+fi
+
+# The setter has exactly 2 production call sites: the row writer's +1 and
+# the revert walk's −1 (the pop-symmetric pair).
+SET_CALLS="$(scan -n 'set_archival_frozen_shard_count_on_write_txn\(' src/ \
+  | scan -v '::set_archival_frozen_shard_count_on_write_txn|void\s+set_archival_frozen_shard_count_on_write_txn' \
+  | drop_comment_hits \
+  | scan -v 'reward-gate-site-allow')"
+SET_COUNT="$(printf '%s' "$SET_CALLS" | scan -c '.')"
+if [[ "${SET_COUNT:-0}" -ne 2 ]]; then
+  echo "FAIL: expected exactly 2 set_archival_frozen_shard_count_on_write_txn call sites (put_archival_shard_segment +1, revert_archival_segment_freezes −1), found ${SET_COUNT:-0}" >&2
+  printf '%s\n' "$SET_CALLS" >&2
+  FAIL=1
+fi
+
+# Positive controls: both counter helpers are defined, and the differential
+# walk oracle has no production caller (its only invocations are its
+# definition/declaration; tests/ live outside src/).
+for fn in get_archival_frozen_shard_count_on_write_txn set_archival_frozen_shard_count_on_write_txn; do
+  if ! rg -q "BlockchainLMDB::${fn}\(" "$LMDB_CPP"; then
+    echo "FAIL: positive control — ${fn} not found in $LMDB_CPP (counter helper renamed or removed; update this gate)" >&2
+    FAIL=1
+  fi
+done
+WALK_CALLS="$(scan -n 'count_frozen_shard_rows_by_walk_for_test\(' src/ \
+  | scan -v '::count_frozen_shard_rows_by_walk_for_test|uint64_t\s+count_frozen_shard_rows_by_walk_for_test' \
+  | drop_comment_hits \
+  | scan -v 'reward-gate-site-allow')"
+if [[ -n "$WALK_CALLS" ]]; then
+  echo "FAIL: count_frozen_shard_rows_by_walk_for_test has a production caller in src/ — the differential oracle is test-support only" >&2
+  printf '%s\n' "$WALK_CALLS" >&2
   FAIL=1
 fi
 

@@ -7526,6 +7526,31 @@ one place to confirm each item's relationship to the wallet stack.
   freeze/pop hooks exist. Building it now would be a consensus counter with no symmetric
   writer. Keep the walk (correct, only linear at epoch boundaries) until then; add the
   counter in the same PR that introduces the segment-freeze writer.
+  **Counter LANDED (2026-07-07, `feat/segment-freeze-pipeline`, #264 — closes the
+  efficiency follow-on above):** persisted `properties["archival_frozen_shard_count"]`
+  (schema V8, rule-42 bump; pre-V8 DBs refused loudly in `migrate`, no pre-genesis
+  migration code). +1 in `put_archival_shard_segment` (now `MDB_NOOVERWRITE`,
+  CREATE-only enforced at the mutation site), −1 per deleted row in
+  `revert_archival_segment_freezes` (underflow-aborted) — O-3 pop-symmetry is
+  structural, which is exactly what M1 §11.8 M3-1's cached-counter adversary lacked.
+  `count_frozen_shards_at_close` is O(1): counter read + `MDB_LAST` frontier check
+  (decode + `freeze_height ≤ h_close`; future-dated frontier and counter/table
+  divergence are loud aborts). The walk survives only as the differential test oracle
+  `count_frozen_shard_rows_by_walk_for_test` (zero production callers,
+  tripwire-enforced); `archival_segment_freeze.cpp` drives counter == walk across
+  freeze/pop/re-apply. Tripwire: cursor accounting 4→5, new invariant 6 pins the
+  counter's mutation surface. Spec: `ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §4.4,
+  M1 §11.11.
+  **Follow-on surfaced by the counter (target: V3.0 pre-genesis):**
+  `BlockchainLMDB::reset()` predates the FCMP/archival substrate — it drops the
+  legacy tables (including `m_properties`, so the counter resets to absent ⇒ 0)
+  but none of the curve-tree or archival tables (`m_archival_shard_segment`,
+  `m_curve_tree_*`, close-log, sigma-work, …). A `reset()` on a chain with frozen
+  segments leaves orphaned rows that the counter no longer accounts for — the
+  O(1) reader's divergence abort would fire on the next close (loud, so the gap
+  cannot corrupt silently, but the fix belongs in `reset()`: drop every live
+  table). Out of #264's scope (`reset()` is not on the connect/pop/close path);
+  fix as its own small PR.
   **IMPLEMENTED (2026-07-06, `feat/segment-freeze-pipeline`, steps 1–7 of doc §7):**
   constants + Rust helpers, FFI exports, connect/pop hooks in `db_lmdb`,
   `archival_shard_leaf` deletion with challenge-path rewire to `m_curve_tree_leaves`,

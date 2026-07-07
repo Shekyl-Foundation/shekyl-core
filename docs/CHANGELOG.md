@@ -52,6 +52,29 @@
   **PF-6a** `KCover` capability newtype (`consensus()` sole
   production constructor; KAT injection behind the permanent
   dev-only `consensus-kat` feature).
+- **archival: O(1) pop-symmetric frozen-shard counter — the M1 gate
+  operand's persisted backing store (schema V8)**
+  ([`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](design/ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)
+  §4.4; M1 §11.11; closes the `FOLLOWUPS.md` efficiency follow-on
+  from code-review #263). `properties["archival_frozen_shard_count"]`
+  moves in structural lockstep with the segment table: +1 in
+  `put_archival_shard_segment` (now `MDB_NOOVERWRITE` — rows are
+  CREATE-only, enforced at the mutation site), −1 per deleted row in
+  `revert_archival_segment_freezes` (underflow-aborted).
+  `count_frozen_shards_at_close` drops its full-table walk for an
+  O(1) counter read + `MDB_LAST` frontier check (row must decode;
+  `freeze_height ≤ h_close`; future-dated frontier and counter/table
+  divergence are loud aborts). This is *not* M1 §11.8 M3-1's
+  cached-counter adversary — the adversary lacked O-3 pop-symmetry,
+  which this counter has by construction, differential-tested against
+  the retained walk oracle (`count_frozen_shard_rows_by_walk_for_test`,
+  zero production callers) across freeze/pop/re-apply cycles. Tripwire:
+  segment-table cursor accounting 4→5; new invariant 6 pins the
+  counter's mutation surface (key literal ×2, setter call sites ×2,
+  walk oracle unreferenced in production). **Breaking (rule 42):** DB
+  `VERSION` 7→8; `migrate` refuses pre-V8 databases loudly
+  (delete-and-resync; no pre-genesis migration code per
+  `15-deletion-and-debt.mdc`).
 - **archival: M1 pre-flight dispositions recorded — PF-1 breach
   record, PF-2 accepted residual, PF-9 seal-before-stressnet pin.**
   PF-1: the §11.9 sequencing breach recorded in `FOLLOWUPS.md` as a
