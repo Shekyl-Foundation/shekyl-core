@@ -137,6 +137,13 @@ components:
           oneOf: [{ type: string }, { type: integer }]
         method:
           type: string
+          # SPECIFIED methods only — the callable surface. RESERVED names
+          # (file header) are deliberately absent: a method not specified here
+          # does not exist, and listing an unimplemented name would be
+          # pre-provisioning the contract for an absent caller (rule 21
+          # reversion shape). Each reserved name joins this enum in the sub-PR
+          # that implements it; pre-genesis that growth is an atomic cutover,
+          # not client-breaking skew (see GetVersionResult.api_version, rule 16).
           enum:
             - create_wallet
             - open_wallet
@@ -160,6 +167,14 @@ components:
     JsonRpcResponse:
       type: object
       required: [jsonrpc, id]
+      # JSON-RPC 2.0 §5: a response carries EXACTLY ONE of `result` / `error`,
+      # never both and never neither. Encoded structurally so generated clients
+      # cannot accept or emit an invalid envelope.
+      oneOf:
+        - required: [result]
+          not: { required: [error] }
+        - required: [error]
+          not: { required: [result] }
       properties:
         jsonrpc:
           const: "2.0"
@@ -189,6 +204,35 @@ components:
 
     WalletRpcErrorCode:
       type: integer
+      # Exactly the codes allocated in THIS commit (JSON-RPC protocol errors +
+      # the -29xxx application codes enumerated below). RESERVED ranges carry no
+      # specific codes yet and are deliberately absent (rule 21 reversion shape:
+      # each reserved code lands in the sub-PR that implements its method). A
+      # server emitting a code outside this set is a conformance failure.
+      enum:
+        - -32700   # JSON-RPC parse error
+        - -32600   # JSON-RPC invalid request
+        - -32601   # JSON-RPC method not found (covers RESERVED, unimplemented names)
+        - -32602   # JSON-RPC invalid params
+        - -32603   # JSON-RPC internal error
+        - -29000   # WALLET_ALREADY_OPEN
+        - -29001   # WALLET_NOT_OPEN
+        - -29002   # WALLET_FILE_EXISTS
+        - -29003   # WALLET_FILE_NOT_FOUND
+        - -29004   # INVALID_PASSWORD
+        - -29005   # CAPABILITY_FORBIDS
+        - -29100   # INVALID_RECIPIENT
+        - -29101   # INSUFFICIENT_FUNDS
+        - -29102   # FEE_ESTIMATION_FAILED
+        - -29103   # RESERVATION_NOT_FOUND
+        - -29104   # SNAPSHOT_INVALIDATED
+        - -29105   # CONTENT_GEN_MISMATCH
+        - -29106   # SUBMIT_REJECTED
+        - -29107   # SUBMIT_AMBIGUOUS
+        - -29200   # REFRESH_IN_PROGRESS
+        - -29201   # DAEMON_UNREACHABLE
+        - -29400   # UNKNOWN_TRANSFER_ID
+        - -29900   # TENANT_UNAVAILABLE
       description: |
         Allocated codes (this commit). Per-method additions extend this enum
         within the ranges fixed in the file header.
@@ -230,6 +274,15 @@ components:
         u64 amount in atomic units, decimal string. Mirrors
         `shekyl_units::AtomicUnits`.
 
+    Feerate:
+      type: string
+      pattern: "^[1-9][0-9]*$"
+      description: >
+        Nonzero feerate in atomic units per byte, decimal string. Mirrors the
+        `NonZeroU64` inside `shekyl_engine_core::FeePriority::Custom` — a rate,
+        NOT an amount, so it is distinct from `AtomicUnits` and forbids "0"
+        (the pattern excludes zero and leading zeros).
+
     Hex32:
       type: string
       pattern: "^[0-9a-f]{64}$"
@@ -256,19 +309,26 @@ components:
           required: [custom]
           properties:
             custom:
-              $ref: "#/components/schemas/AtomicUnits"
+              $ref: "#/components/schemas/Feerate"
 
     HybridSignature:
       type: object
       required: [ed25519, ml_dsa_65]
-      description: Hybrid PQC signature; both components always present.
+      description: >
+        Hybrid PQC signature; both components always present. Fixed lengths
+        mirror `shekyl_crypto_pq::HybridSignature::validate`
+        (`ED25519_SIGNATURE_LENGTH` = 64 B; `ML_DSA_65_SIGNATURE_LENGTH` =
+        `ml_dsa_65::SIG_LEN` = 3309 B) so spec-based conformance rejects
+        malformed signatures the same way the Rust validator does.
       properties:
         ed25519:
           type: string
           pattern: "^[0-9a-f]{128}$"
+          description: 64-byte Ed25519 signature, lowercase hex.
         ml_dsa_65:
           type: string
-          pattern: "^[0-9a-f]+$"
+          pattern: "^[0-9a-f]{6618}$"
+          description: 3309-byte ML-DSA-65 signature, lowercase hex.
 
     # ── Wallet lifecycle ─────────────────────────────────────────────
     WalletHandle:
