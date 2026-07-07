@@ -483,6 +483,22 @@
   staker auto-start, non-staker quiet path, double-start refusal
   (single-flight), shutdown-releases-engine, and restart-after-stop.
 
+### Changed
+
+- **net: rotated `NETWORK_ID` for all three networks (mainnet, testnet,
+  stagenet)** (`src/cryptonote_config.h`). The `GENESIS_TX` for every
+  network was regenerated during the post-`v3.1.0-alpha.3` work, but the
+  `NETWORK_ID` handshake identifiers were left unchanged — the exact
+  silent-fork combination the `RELEASE_PROMOTION.md` §6 frozen-tuple gate
+  warns about (same network id, incompatible genesis → peers attempt to
+  connect, then reject each other's genesis block). Rotating the ids makes
+  the fresh-genesis network cleanly distinct so pre-rotation and
+  post-rotation nodes cannot even attempt to peer. Pre-genesis, no live
+  network stands on the old tuple, so this is a `rm -rf ~/.shekyl` +
+  re-sync change with no migration path (per `15-deletion-and-debt.mdc`).
+  Gates the next testnet rehearsal release, which must run
+  `TESTNET_REHEARSAL_CHECKLIST.md` from clean datadirs per §6.
+
 ### Documentation
 
 - **docs: submit-verdict / 2c completion-status sweep (rule 91).** Landed
