@@ -5886,9 +5886,15 @@ uint64_t BlockchainLMDB::frozen_segment_count_on_write_txn() const
   MDB_val v;
   uint64_t leaf_count = 0;
   const int rc = mdb_get(*m_write_txn, m_curve_tree_meta, &k, &v);
-  if (rc == 0 && v.mv_size == sizeof(uint64_t))
+  if (rc == 0)
+  {
+    // A present-but-malformed row is corruption, not an LMDB error —
+    // abort with an accurate message (lmdb_error(rc=0) would say "Success").
+    if (v.mv_size != sizeof(uint64_t))
+      throw0(DB_ERROR("FATAL: malformed curve tree leaf_count row at segment freeze (wrong size)"));
     memcpy(&leaf_count, v.mv_data, sizeof(uint64_t));
-  else if (rc != MDB_NOTFOUND)
+  }
+  else if (rc != MDB_NOTFOUND) // absent row is a legitimately-empty tree (0 leaves)
     throw0(DB_ERROR(lmdb_error("Failed to get curve tree leaf count at segment freeze: ", rc).c_str()));
   return shekyl_archival_frozen_segment_count(leaf_count);
 }
@@ -5915,6 +5921,7 @@ void BlockchainLMDB::process_archival_segment_freezes_at_height(uint64_t block_h
     int rc = mdb_cursor_open(*m_write_txn, m_archival_shard_segment, &cur);
     if (rc)
       throw0(DB_ERROR(lmdb_error("Failed to open archival_shard_segment cursor for freeze resume peek: ", rc).c_str()));
+    const std::unique_ptr<MDB_cursor, decltype(&mdb_cursor_close)> cur_guard(cur, &mdb_cursor_close);
     MDB_val k, v;
     rc = mdb_cursor_get(cur, &k, &v, MDB_LAST);
     if (rc == 0)
@@ -5925,7 +5932,6 @@ void BlockchainLMDB::process_archival_segment_freezes_at_height(uint64_t block_h
     }
     else if (rc != MDB_NOTFOUND)
       throw0(DB_ERROR(lmdb_error("archival_shard_segment cursor error at freeze resume peek: ", rc).c_str()));
-    mdb_cursor_close(cur);
   }
 
   for (uint64_t shard_id = next; shard_id < complete; ++shard_id)
@@ -5937,9 +5943,11 @@ void BlockchainLMDB::process_archival_segment_freezes_at_height(uint64_t block_h
     MDB_val lk = {sizeof(layer_key), (void *)&layer_key};
     MDB_val lv;
     const int rc = mdb_get(*m_write_txn, m_curve_tree_layers, &lk, &lv);
-    if (rc || lv.mv_size != 32)
+    if (rc)
       throw0(DB_ERROR(lmdb_error(
-        "FATAL: missing/malformed layer-2 chunk for completed segment at freeze: ", rc).c_str()));
+        "FATAL: missing layer-2 chunk for completed segment at freeze: ", rc).c_str()));
+    if (lv.mv_size != 32)
+      throw0(DB_ERROR("FATAL: malformed layer-2 chunk for completed segment at freeze (wrong size)"));
     crypto::hash rk{};
     memcpy(rk.data, lv.mv_data, 32);
     put_archival_shard_segment(shard_id, block_height, rk, SHEKYL_ARCHIVAL_SEGMENT_LEAF_COUNT);
@@ -5964,6 +5972,7 @@ void BlockchainLMDB::revert_archival_segment_freezes()
   int rc = mdb_cursor_open(*m_write_txn, m_archival_shard_segment, &cur);
   if (rc)
     throw0(DB_ERROR(lmdb_error("Failed to open archival_shard_segment cursor for freeze revert: ", rc).c_str()));
+  const std::unique_ptr<MDB_cursor, decltype(&mdb_cursor_close)> cur_guard(cur, &mdb_cursor_close);
   MDB_val k, v;
   uint64_t deleted = 0;
   while ((rc = mdb_cursor_get(cur, &k, &v, MDB_LAST)) == 0)
@@ -5980,7 +5989,6 @@ void BlockchainLMDB::revert_archival_segment_freezes()
   }
   if (rc != 0 && rc != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("archival_shard_segment cursor error at freeze revert: ", rc).c_str()));
-  mdb_cursor_close(cur);
 
   // Persisted pop-symmetric counter, pop side
   // (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4): decrement by the rows this

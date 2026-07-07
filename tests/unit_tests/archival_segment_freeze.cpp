@@ -11,6 +11,7 @@
 #include "gtest/gtest.h"
 
 #include <boost/filesystem.hpp>
+#include <array>
 #include <cstring>
 #include <vector>
 
