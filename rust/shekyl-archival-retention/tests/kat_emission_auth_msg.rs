@@ -29,15 +29,15 @@ use shekyl_archival_retention::{
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 
 /// Expected 64-byte `auth_msg` digest, stake-side (`Backing`) customization.
-const EXPECTED_BACKING_HEX: &str = "5ffd5095e5249f59abc299f9d87a1fdb8ed88362dabab6515f91acdb7437691c2ef4fe8e6b73a48eef3a337b3d02712e64e2c552a8a7b76b263f1c47f708e74d";
+const EXPECTED_BACKING_HEX: &str = "07daaf9c75b3c536a32ad25abb727f1bdacac2783505941a135a709dbc07fa292d1efa279328b209fae8b2863051644d5f0a5f8182599360bceb9a7c686343c9";
 /// Expected 64-byte `auth_msg` digest, claim-side (`Claim`) customization.
-const EXPECTED_CLAIM_HEX: &str = "c468f442754b1fcd670b65433e445ebae9a82dca6682a7070898dd7279d5975b12369a1a64c6effe676ba0ca8875b498cdc8f249d4a51e9325bf29e8976e2cdf";
+const EXPECTED_CLAIM_HEX: &str = "c861085cc864eafcd407f681effe8e80b9698fae61653187dde181650b35ae894beaeb37c466da2a904e800c50e1916eaa800b2396b592193ecf4a786693800e";
 /// Expected serialized wire length of the fixture vin.
-const EXPECTED_WIRE_LEN: usize = 10_930;
+const EXPECTED_WIRE_LEN: usize = 10_933;
 /// Expected `cshake256_32("shekyl/emission-wire-kat-v1", wire_bytes)` of the
 /// fixture vin's full serialization (tag included) — pins the wire layout.
 const EXPECTED_WIRE_DIGEST_HEX: &str =
-    "e70926ece926316a1c9d9663cb856e1a2820e3473bbeaa569de499ff6e590308";
+    "5ce06d80fcb61ace96c63c196751752f93cf70874c1451d4e2fd8b713f509ff9";
 
 /// Fully deterministic fixture — every byte fixed, no RNG, so the vectors are
 /// reproducible from this source alone.
@@ -85,7 +85,10 @@ fn fixture_vin() -> ArchivalRewardEmissionVin {
             backing_pubkey: vec![0xB2; SINGLE_KEY_CANONICAL_LEN],
             tree_depth: 3,
         },
-        reward_amount_plain: vec![1_000_000, 2_000_000, 0],
+        // Strictly positive per ARCHIVAL_REWARD_GATE_M1.md §2.3 wire
+        // positivity (the pre-gate corpus carried a trailing 0; the vectors
+        // were regenerated in lockstep at the gate's implementation PR).
+        reward_amount_plain: vec![1_000_000, 2_000_000, 3_000_000],
         auth_backing: vec![0xC3; SINGLE_SIG_CANONICAL_LEN],
         auth_claim: vec![0xD4; SINGLE_SIG_CANONICAL_LEN],
     }

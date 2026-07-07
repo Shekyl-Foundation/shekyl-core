@@ -599,6 +599,33 @@ private:
   void delete_archival_sigma_work_for_epoch(uint64_t settlement_epoch);
   void delete_archival_sigma_work_before_epoch(uint64_t prune_below_epoch);
   void delete_archival_serve_credit_before_epoch(uint64_t prune_below_epoch);
+  /** M1 reward-gate operand (ARCHIVAL_REWARD_GATE_M1.md §1.1): the single
+   * counting read over m_archival_shard_segment — rows with
+   * freeze_height <= h_close (equality counts). One call site
+   * (process_archival_epoch_close_at_height); the §6 tripwire refuses any
+   * other counting read over the segment table. Decode failure aborts
+   * loudly (§1.1 count-pass discipline), never a lenient skip.
+   *
+   * Public (with the two test-support members below) so the count-pass
+   * boundary and decode-failure cases — unreachable from the Rust KAT,
+   * which injects the count — are pinned in archival_substrate_lmdb.cpp
+   * per §11.8 M3-1/M3-2. */
+public:
+  uint64_t count_frozen_shards_at_close(uint64_t h_close) const;
+  /** Stored-shape probe (ARCHIVAL_REWARD_GATE_M1.md §5 round-2 additions):
+   * distinguishes a present-and-zero sigma row from MDB_NOTFOUND, which
+   * get_archival_sigma_work_milli deliberately launders to 0. Test-support
+   * reader; recorded in the spec's §11.6 R2-2 stored-close reader
+   * enumeration. */
+  bool has_archival_sigma_work_row(uint64_t settlement_epoch) const;
+  /** Corruption-simulation writer (ARCHIVAL_REWARD_GATE_M1.md §11.8 M3-2):
+   * plants a raw (undecodable) segment-table row so the count-pass
+   * decode-failure loud abort is armed by a test. put_archival_shard_segment
+   * funnels through encode() and can only write decodable rows, so the
+   * malformed-row consensus-divergence case is unreachable without this
+   * bypass. Test-support only; no production caller. */
+  void put_archival_shard_segment_raw_for_corruption_test(uint64_t shard_id,
+    const std::vector<uint8_t>& blob);
 
 private:
   // Prefer the active write txn when present so uncommitted archival bits are visible

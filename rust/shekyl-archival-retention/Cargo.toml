@@ -26,11 +26,24 @@ shekyl-units = { path = "../shekyl-units" }
 # `PCanonicalId` domain newtype returned by `id::p_canonical_id_from_hybrid_pubkey`.
 shekyl-types = { path = "../shekyl-types" }
 
+[features]
+# M1 reward-gate provisional-sentinel acknowledgment (ARCHIVAL_REWARD_GATE_M1.md
+# §4). While `k_cover_provisional` is true in config/consensus_constants.json,
+# building this crate WITHOUT this feature is a compile_error! (src/k_cover.rs)
+# — every consumer acknowledges the unsealed constant explicitly, grep-able at
+# its dependency line. DELETE this feature (and every enablement site) when the
+# §14.4-derived value seals; the deletion target is the seal event itself.
+provisional-k-cover = []
+
 [build-dependencies]
 serde_json = { workspace = true }
 
 # CT-4 assembled-path KAT cross-check (gate-2 §10 step 1).
 [dev-dependencies]
+# Self-dependency: integration tests / benches build the lib without cfg(test),
+# so the provisional-k-cover acknowledgment must ride the dev graph explicitly
+# (delete with the feature at K_COVER seal).
+shekyl-archival-retention = { path = ".", features = ["provisional-k-cover"] }
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 serde_json = { workspace = true }
 # ARCHIVAL_P_DERIVE_V1 p_canonical_id cross-check: derive `P` via

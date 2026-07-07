@@ -231,6 +231,15 @@ across the whole market cohort, forcing the per-emission full-ledger re-walk §4
 and the wallet build path import the canonical `reward_arithmetic` integer `Curve`/Form-C — no
 reimplementation (single-source rule).
 
+**M1 cold-start gate (implemented — [`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md)):**
+for settlement epochs where `frozen_shard_count(E) < K_COVER`, the close compute zeroes the
+finalized row (`R_market`, `Σwork`) at the top — so `reward_P(E) = 0` for every `P` falls out of
+the formula above with no verifier-side branch. Non-claimability is carried by two properties
+that already exist at this layer: the **lagged stored-`Σwork` read** (never a primaries
+recompute — that spec pins the read discipline as doubly load-bearing) and the **wire-level
+positivity rule** (`reward_amount_plain[i] == 0` is unencodable, `WireError::RewardAmountZero`),
+so a gated epoch admits no claim row that could pass the §5.4 compare.
+
 **Distinct from the Curve residual (below):** the unminted floor remainder is the integer-division
 dust, **not** the plateau-capped work the reversion clause governs. In form C the *Curve* residual
 is redistributed via the rate (not burned); the *floor* residual is the `≤ (N_P−1)`-atomic dust,
@@ -1018,6 +1027,7 @@ amounts), bond post/slash reaction.
 | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | Membership proof base |
 | [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) | §7.2 verify API — statement, wire, security argument, PQC gate |
 | [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) | **Implementation plan** for §12 — sub-PR sequence, pre-flight, ML-DSA hard gate |
+| [`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md) | M1 cold-start gate — zeroed finalized row + wire positivity (§4 note) |
 
 ---
 

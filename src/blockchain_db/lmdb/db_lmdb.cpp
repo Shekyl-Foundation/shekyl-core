@@ -5710,6 +5710,77 @@ void BlockchainLMDB::prune_archival_epochs_before(uint64_t prune_below_epoch)
   delete_archival_sigma_work_before_epoch(prune_below_epoch);
 }
 
+uint64_t BlockchainLMDB::count_frozen_shards_at_close(uint64_t h_close) const
+{
+  // The single counting read over m_archival_shard_segment
+  // (ARCHIVAL_REWARD_GATE_M1.md §1.1 count-pass discipline). Runs on the
+  // close's write txn so the count and the close see the same snapshot;
+  // walk-not-watermark so non-dense shard IDs are handled by construction.
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: frozen-shard count requires active write txn");
+
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(*m_write_txn, m_archival_shard_segment, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_shard_segment cursor for frozen-shard count: ", rc).c_str()));
+  // RAII close so the loud-abort throws below cannot strand the cursor.
+  // A write-txn cursor is also reclaimed at txn end (lmdb.h mdb_cursor_open
+  // docs), but the guard keeps this function correct if it is ever adapted
+  // to a read-only txn, where explicit close is mandatory.
+  const std::unique_ptr<MDB_cursor, decltype(&mdb_cursor_close)> cur_guard(cur, &mdb_cursor_close);
+
+  uint64_t count = 0;
+  MDB_val k, v;
+  MDB_cursor_op op = MDB_FIRST;
+  while ((rc = mdb_cursor_get(cur, &k, &v, op)) == 0)
+  {
+    op = MDB_NEXT;
+    if (k.mv_size != shekyl::db::kArchivalShardKeySize)
+      throw std::runtime_error("FATAL: archival_shard_segment key size mismatch at frozen-shard count");
+    shekyl::db::ArchivalShardSegmentValue segment{};
+    // Decode failure is a loud abort (§1.1 pin): a lenient skip would
+    // silently lower the count on one malformed row — a consensus fork in
+    // the gating direction.
+    if (!shekyl::db::ArchivalShardSegmentValue::decode(v.mv_data, v.mv_size, segment))
+      throw std::runtime_error("FATAL: archival_shard_segment decode failed at frozen-shard count");
+    // freeze_height <= h_close: equality counts (a shard frozen at the
+    // close boundary is frozen at the close).
+    if (segment.freeze_height <= h_close)
+      ++count;
+  }
+  if (rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("archival_shard_segment cursor error at frozen-shard count: ", rc).c_str()));
+  return count;
+}
+
+bool BlockchainLMDB::has_archival_sigma_work_row(uint64_t settlement_epoch) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  shekyl::db::ArchivalSigmaWorkKey key(settlement_epoch);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v;
+  const int result = archival_db_get(m_archival_sigma_work, &k, &v);
+  if (result && result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to probe archival_sigma_work row: ", result).c_str()));
+  return result == 0;
+}
+
+void BlockchainLMDB::put_archival_shard_segment_raw_for_corruption_test(uint64_t shard_id,
+  const std::vector<uint8_t>& blob)
+{
+  check_open();
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: raw segment write requires active write txn");
+  shekyl::db::ArchivalShardKey key(shard_id);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v = { blob.size(), const_cast<uint8_t*>(blob.data()) };
+  const int result = mdb_put(*m_write_txn, m_archival_shard_segment, &k, &v, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to put raw archival shard segment: ", result).c_str()));
+}
+
 void BlockchainLMDB::process_archival_epoch_close_at_height(uint64_t block_height)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
@@ -5830,10 +5901,16 @@ void BlockchainLMDB::process_archival_epoch_close_at_height(uint64_t block_heigh
     bond_ffi.push_back(b);
   }
 
+  // M1 reward-gate operand (ARCHIVAL_REWARD_GATE_M1.md §1.1): the
+  // segment-table count at H_close(E), from the single helper, inside the
+  // same write txn as the close. Structural and participation-independent —
+  // deliberately NOT derived from the credit-bearing `shards` gather above.
+  const uint64_t frozen_shard_count = count_frozen_shards_at_close(block_height);
+
   std::vector<uint64_t> r_market(shards.size(), 0);
   uint64_t sigma_work_milli = 0;
   const uint8_t compute_rc = shekyl_archival_epoch_close_compute(
-    settlement_epoch, block_height,
+    settlement_epoch, block_height, frozen_shard_count,
     bond_ffi.empty() ? nullptr : bond_ffi.data(), bond_ffi.size(),
     shards.empty() ? nullptr : shards.data(), shards.size(),
     pairs.empty() ? nullptr : pairs.data(), pairs.size(),
