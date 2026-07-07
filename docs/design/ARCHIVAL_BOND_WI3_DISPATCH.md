@@ -109,6 +109,23 @@ future untrusted-daemon posture inherits a flagged assumption to
 discharge, not a silent hole ("a safety property that held for an
 unstated reason" is the armed-gate failure in reverse).
 
+**Both tip consumers, opposite sensitivities (A-1, post-merge review
+2026-07-06).** The invariant above justifies raw-tip trust via the
+due-check's monotone-noise property (an inflated tip can only make posts
+due *at once*, and overflow arithmetic can only push a due block
+*later*). That reasoning covers one of the driver's **two** tip
+consumers. The second is the **unconfirmed-dispatch alarm horizon**
+(`tip < Dispatched::at + alarm_horizon_blocks`), whose sensitivity is
+**inverted**: a tip inflated past the horizon makes every
+dispatched-but-unconfirmed post read as past-horizon *instantly*,
+tripping the operator alarm on posts that are propagating normally —
+premature-alarm, not benign-later. Retired by the same posture (your
+own daemon does not lie to you), and blunted by the 900-block margin;
+but the reopen below must know the invariant has two consumers, or a
+2d-2 implementer reasoning from the due-check alone clamps one read and
+leaves the alarm trusting the raw tip — an armed reopen narrower than
+the surface it guards (the F41 tripwire shape).
+
 **Reopen criterion (rule 21), shared with D-B6:** both are "how much does
 the dispatch path trust the daemon", and both reopen together in the
 2d-2 remote/untrusted-daemon posture round. **The pre-designed mitigation
@@ -122,7 +139,8 @@ tip-honesty residual; stalling degrades in the safe over-delay
 direction; honest steady state leaves the clamp inactive). It is
 specified, not built: building it now would be remote-daemon defense
 engineered into the local-daemon default. When the reopen arms it,
-`anchor_t0`'s stamp and the due-check switch to the clamp **together**
+`anchor_t0`'s stamp, the due-check, **and the alarm-horizon read (per
+A-1 above)** switch to the clamp **together**
 (the frame-consistency pin at `ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.5).
 
 **The general discipline this instance names:** the local-daemon posture

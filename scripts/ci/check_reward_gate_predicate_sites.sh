@@ -53,6 +53,30 @@ fi
 
 FAIL=0
 
+# rg exit-code discipline: 0 = matches, 1 = no matches, >1 = scan error
+# (regex error, I/O failure). `if VAR="$(rg …)"` folds >1 into "no matches"
+# because set -e is suppressed in if-conditions — a false-green on the gate's
+# own scanner. `scan` maps no-match to success (empty output) and propagates
+# scan errors, so a plain `VAR="$(scan …)"` assignment aborts loudly under
+# set -e / pipefail. Presence checks branch on [[ -n "$VAR" ]], never on rg's
+# exit status directly.
+scan() {
+  local rc=0
+  rg "$@" || rc=$?
+  if (( rc > 1 )); then
+    echo "FAIL: rg exited ${rc} (scan error, not no-match) during: rg $*" >&2
+    return "${rc}"
+  fi
+  return 0
+}
+
+# Drop `rg -n` hits (path:line:content) whose content is a comment or doc line
+# (`// …`, `/* …`, ` * …`), so an explanatory comment, a log line, or an assert
+# message that merely names a pinned symbol cannot trip a raw textual count.
+# A genuinely-benign in-code mention still uses the reward-gate-site-allow
+# marker; this only spares prose from the magic-number tripwires.
+drop_comment_hits() { scan -v '^[^:]+:[0-9]+:[[:space:]]*(//|/\*|\*)'; }
+
 GATE_RS="rust/shekyl-archival-retention/src/consensus_state.rs"
 KCOVER_RS="rust/shekyl-archival-retention/src/k_cover.rs"
 BUILD_RS="rust/shekyl-archival-retention/build.rs"
@@ -84,11 +108,12 @@ done
 # and may compare their local copies freely; a test comparison cannot fork
 # consensus. Doc-comment prose mentions without an operator do not match.
 CMP_PATTERN='(\b(K_COVER|k_cover)\b\s*(==|!=|<=|>=|<|>))|((==|!=|<=|>=|<|>)\s*[A-Za-z_.:]*\b(K_COVER|k_cover)\b)'
-if CMP_STRAYS="$(rg -n "$CMP_PATTERN" rust/ src/ \
+CMP_STRAYS="$(scan -n "$CMP_PATTERN" rust/ src/ \
   --glob '*.rs' --glob '*.cpp' --glob '*.h' --glob '*.hpp' \
   --glob '!rust/*/tests/**' --glob '!rust/target/**' \
-  | rg -v 'reward-gate-site-allow' \
-  | rg -v "^(${GATE_RE}|${KCOVER_RE}|${BUILD_RE}):")"; then
+  | scan -v 'reward-gate-site-allow' \
+  | scan -v "^(${GATE_RE}|${KCOVER_RE}|${BUILD_RE}):")"
+if [[ -n "$CMP_STRAYS" ]]; then
   echo "FAIL: K_COVER / k_cover comparison outside the canonical gate site" >&2
   echo "  (sole predicate site: epoch_close_compute in $GATE_RS;" >&2
   echo "   constants surface: $KCOVER_RS + $BUILD_RS)" >&2
@@ -124,10 +149,10 @@ fi
 # threshold adversary the newtype exists to refuse.
 # A *call* (`for_kat(`) is the adversary; doc-comment prose mentions cannot
 # construct a value and are ignored (invariant 1's operator-adjacency logic).
-FOR_KAT_STRAYS="$(rg -n 'for_kat\(' rust/ --glob '*.rs' \
+FOR_KAT_STRAYS="$(scan -n 'for_kat\(' rust/ --glob '*.rs' \
   --glob '!rust/*/tests/**' --glob '!rust/target/**' \
-  | rg -v 'reward-gate-site-allow' \
-  | rg -v "^(${KCOVER_RE}|${GATE_RE}):" || true)"
+  | scan -v 'reward-gate-site-allow' \
+  | scan -v "^(${KCOVER_RE}|${GATE_RE}):")"
 if [[ -n "$FOR_KAT_STRAYS" ]]; then
   echo "FAIL: KCover::for_kat referenced outside its definition, the consensus_state.rs test module, and rust/*/tests/" >&2
   echo "  (production code constructs the threshold only via KCover::consensus() — PF-6a)" >&2
@@ -137,7 +162,7 @@ fi
 # Guard the guard: the gate-file exemption above admits consensus_state.rs
 # wholesale, so pin that its only for_kat use stays in the test module —
 # exactly one hit, and the file still has a #[cfg(test)] module.
-GATE_FOR_KAT_COUNT="$(rg -c 'for_kat\(' "$GATE_RS" || true)"
+GATE_FOR_KAT_COUNT="$(scan -c 'for_kat\(' "$GATE_RS")"
 if [[ "${GATE_FOR_KAT_COUNT:-0}" -ne 1 ]] || ! rg -q '#\[cfg\(test\)\]' "$GATE_RS"; then
   echo "FAIL: expected exactly one for_kat use in $GATE_RS (the #[cfg(test)] helper), found ${GATE_FOR_KAT_COUNT:-0}" >&2
   FAIL=1
@@ -157,9 +182,10 @@ fi
 #      own rows, not a second count pass);
 #   4. revert_archival_segment_freezes — the pop revert's reverse walk
 #      deleting rows above the post-trim frontier.
-CURSOR_HITS="$(rg -n 'mdb_cursor_open\([^)]*m_archival_shard_segment' src/ \
-  | rg -v 'reward-gate-site-allow' || true)"
-CURSOR_COUNT="$(printf '%s' "$CURSOR_HITS" | rg -c '.' || true)"
+CURSOR_HITS="$(scan -n 'mdb_cursor_open\([^)]*m_archival_shard_segment' src/ \
+  | drop_comment_hits \
+  | scan -v 'reward-gate-site-allow')"
+CURSOR_COUNT="$(printf '%s' "$CURSOR_HITS" | scan -c '.')"
 if [[ "${CURSOR_COUNT:-0}" -ne 4 ]]; then
   echo "FAIL: expected exactly 4 cursor opens over m_archival_shard_segment (count helper, slash scan, freeze resume peek, revert walk), found ${CURSOR_COUNT:-0}" >&2
   echo "  (a new iteration over the segment table must route through" >&2
@@ -178,21 +204,35 @@ done
 
 # mdb_stat over the segment table is the cached-counter shortcut (§11.8
 # M3-1's third drift adversary) — refused outright, no allowlist.
-if STAT_HITS="$(rg -n 'mdb_stat\([^)]*m_archival_shard_segment' src/)"; then
+STAT_HITS="$(scan -n 'mdb_stat\([^)]*m_archival_shard_segment' src/)"
+if [[ -n "$STAT_HITS" ]]; then
   echo "FAIL: mdb_stat over m_archival_shard_segment — a counting read outside count_frozen_shards_at_close" >&2
   echo "$STAT_HITS" >&2
   FAIL=1
 fi
 
-# Positive control: the helper exists and has exactly one production call
-# site (the epoch-close gather). Declaration (.h) + definition + call = the
-# expected shape; more calls mean a second consumer of the count, which is a
-# review item even when it routes through the helper (the gate input must
-# come from the close's own write-txn snapshot, §1.1).
-CALL_HITS="$(rg -n 'count_frozen_shards_at_close\(' "$LMDB_CPP" | rg -v 'reward-gate-site-allow' || true)"
-CALL_COUNT="$(printf '%s' "$CALL_HITS" | rg -c '.' || true)"
-if [[ "${CALL_COUNT:-0}" -ne 2 ]]; then
-  echo "FAIL: expected exactly 2 count_frozen_shards_at_close occurrences in $LMDB_CPP (definition + close-gather call), found ${CALL_COUNT:-0}" >&2
+# Positive control: the helper is defined exactly once (its definition carries
+# the BlockchainLMDB:: qualifier). A rename or a lost definition fails here
+# rather than silently de-arming the call-site count below.
+DEF_COUNT="$(scan -c 'BlockchainLMDB::count_frozen_shards_at_close\(' "$LMDB_CPP")"
+if [[ "${DEF_COUNT:-0}" -ne 1 ]]; then
+  echo "FAIL: expected exactly one BlockchainLMDB::count_frozen_shards_at_close definition in $LMDB_CPP, found ${DEF_COUNT:-0}" >&2
+  FAIL=1
+fi
+
+# The real invariant: exactly one production *call site* (the epoch-close
+# gather). Count invocations that are neither the definition (BlockchainLMDB::
+# qualifier) nor a comment/doc line — so a log line, an assert message, or an
+# explanatory comment naming the helper does not turn the gate red, while a
+# genuine second consumer of the count (the gate input must come from the
+# close's own write-txn snapshot, §1.1) still does.
+CALL_HITS="$(scan -n 'count_frozen_shards_at_close\(' "$LMDB_CPP" \
+  | scan -v 'BlockchainLMDB::count_frozen_shards_at_close' \
+  | drop_comment_hits \
+  | scan -v 'reward-gate-site-allow')"
+CALL_COUNT="$(printf '%s' "$CALL_HITS" | scan -c '.')"
+if [[ "${CALL_COUNT:-0}" -ne 1 ]]; then
+  echo "FAIL: expected exactly one count_frozen_shards_at_close call site in $LMDB_CPP (the epoch-close gather), found ${CALL_COUNT:-0}" >&2
   printf '%s\n' "$CALL_HITS" >&2
   FAIL=1
 fi
@@ -203,12 +243,13 @@ fi
 # freeze-height comparisons anywhere in src/. Equality counts (§1.1); the
 # off-by-one edit is a consensus fork at exactly the boundary class the
 # Rust KAT cannot reach.
-LE_COUNT="$(rg -c 'segment\.freeze_height\s*<=\s*h_close' "$LMDB_CPP" || true)"
+LE_COUNT="$(scan -c 'segment\.freeze_height\s*<=\s*h_close' "$LMDB_CPP")"
 if [[ "${LE_COUNT:-0}" -ne 1 ]]; then
   echo "FAIL: expected exactly one 'segment.freeze_height <= h_close' comparison in $LMDB_CPP, found ${LE_COUNT:-0}" >&2
   FAIL=1
 fi
-if LT_HITS="$(rg -n 'freeze_height\s*<[^=]' src/ | rg -v 'reward-gate-site-allow')"; then
+LT_HITS="$(scan -n 'freeze_height\s*<[^=]' src/ | scan -v 'reward-gate-site-allow')"
+if [[ -n "$LT_HITS" ]]; then
   echo "FAIL: strict-< freeze_height comparison in src/ — boundary inclusivity is consensus (§1.1: equality counts)" >&2
   echo "$LT_HITS" >&2
   FAIL=1
@@ -221,9 +262,9 @@ fi
 # named test exemption (put_archival_shard_segment_raw_for_corruption_test,
 # the §9 corruption-injection surface). A third mdb_put is the
 # overwrite-the-frozen-row adversary O-2 refuses.
-PUT_HITS="$(rg -n 'mdb_put\([^)]*m_archival_shard_segment' src/ \
-  | rg -v 'reward-gate-site-allow' || true)"
-PUT_COUNT="$(printf '%s' "$PUT_HITS" | rg -c '.' || true)"
+PUT_HITS="$(scan -n 'mdb_put\([^)]*m_archival_shard_segment' src/ \
+  | scan -v 'reward-gate-site-allow')"
+PUT_COUNT="$(printf '%s' "$PUT_HITS" | scan -c '.')"
 if [[ "${PUT_COUNT:-0}" -ne 2 ]]; then
   echo "FAIL: expected exactly 2 mdb_put sites over m_archival_shard_segment (production writer + corruption-test raw writer), found ${PUT_COUNT:-0}" >&2
   printf '%s\n' "$PUT_HITS" >&2
@@ -239,7 +280,8 @@ done
 # Direct mdb_del over the segment table is refused: deletion happens only
 # through the revert walk's cursor (invariant 2 site 4), preserving O-3
 # pop-symmetry. A stray point-delete is the partial-revert adversary.
-if DEL_HITS="$(rg -n 'mdb_del\([^)]*m_archival_shard_segment' src/ | rg -v 'reward-gate-site-allow')"; then
+DEL_HITS="$(scan -n 'mdb_del\([^)]*m_archival_shard_segment' src/ | scan -v 'reward-gate-site-allow')"
+if [[ -n "$DEL_HITS" ]]; then
   echo "FAIL: direct mdb_del over m_archival_shard_segment — segment rows are deleted only by revert_archival_segment_freezes' cursor walk" >&2
   echo "$DEL_HITS" >&2
   FAIL=1
@@ -250,9 +292,9 @@ fi
 # excluded; tests/ live outside src/ and are out of scope.) A second caller
 # bypasses the first-crossing discipline that makes freeze_height
 # per-branch-monotone (O-2).
-PUT_CALLS="$(rg -n 'put_archival_shard_segment\(' src/ \
-  | rg -v '::put_archival_shard_segment|void\s+put_archival_shard_segment|reward-gate-site-allow' || true)"
-PUT_CALL_COUNT="$(printf '%s' "$PUT_CALLS" | rg -c '.' || true)"
+PUT_CALLS="$(scan -n 'put_archival_shard_segment\(' src/ \
+  | scan -v '::put_archival_shard_segment|void\s+put_archival_shard_segment|reward-gate-site-allow')"
+PUT_CALL_COUNT="$(printf '%s' "$PUT_CALLS" | scan -c '.')"
 if [[ "${PUT_CALL_COUNT:-0}" -ne 1 ]]; then
   echo "FAIL: expected exactly 1 production call to put_archival_shard_segment (the freeze processor), found ${PUT_CALL_COUNT:-0}" >&2
   printf '%s\n' "$PUT_CALLS" >&2
@@ -267,9 +309,10 @@ fi
 # duplicated-division drift adversary (§3 obligation O-1).
 # Comment lines are excluded: prose describing the formula (the FFI header's
 # contract doc) is not arithmetic. Code operators survive the filter.
-if DIV_HITS="$(rg -n '(/|%)\s*(SHEKYL_ARCHIVAL_)?SEGMENT_LEAF_COUNT|(SHEKYL_ARCHIVAL_)?SEGMENT_LEAF_COUNT\s*(/|%)' src/ \
-  | rg -v '^[^:]+:[0-9]+:\s*(//|/\*|\*)' \
-  | rg -v 'reward-gate-site-allow')"; then
+DIV_HITS="$(scan -n '(/|%)\s*(SHEKYL_ARCHIVAL_)?SEGMENT_LEAF_COUNT|(SHEKYL_ARCHIVAL_)?SEGMENT_LEAF_COUNT\s*(/|%)' src/ \
+  | drop_comment_hits \
+  | scan -v 'reward-gate-site-allow')"
+if [[ -n "$DIV_HITS" ]]; then
   echo "FAIL: SEGMENT_LEAF_COUNT-adjacent division/modulo in src/ — boundary arithmetic lives only in shekyl_archival_frozen_segment_count (Rust)" >&2
   echo "$DIV_HITS" >&2
   FAIL=1

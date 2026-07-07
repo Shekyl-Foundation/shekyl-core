@@ -27,12 +27,14 @@
 //! row); what is pinned here is everything the compare will consume.
 
 use shekyl_archival_retention::{
-    curve_milli, epoch_close_compute, reward_share_floor, ArchivalRewardEmissionVin, BadInterval,
-    BandedCurveParams, CreditPair, EmissionWireError, EpochCloseBond, EpochCloseInputs,
-    EpochCloseResult, EpochCloseShard, HoldingsDescriptor, HoldingsKind, KCover,
-    MembershipOnlyBacking, ShardWorkEntry, WorkEpochClaim,
+    curve_milli, epoch_close_compute, reward_share_floor, ArchivalRewardEmissionVin,
+    BandedCurveParams, CreditPair, EmissionWireError, EpochCloseInputs, EpochCloseResult,
+    EpochCloseShard, HoldingsDescriptor, HoldingsKind, KCover, MembershipOnlyBacking,
+    ShardWorkEntry, WorkEpochClaim,
 };
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
+
+mod common;
 
 const KAT: &str = include_str!("fixtures/reward_gate_kat_v1.json");
 
@@ -45,7 +47,7 @@ struct Scenario {
     settlement_epoch_blocks: u64,
     age_weight_milli: u64,
     curve: BandedCurveParams,
-    bonds: Vec<(u64, bool, Vec<BadInterval>, Vec<u64>)>,
+    bonds: Vec<common::BondOwned>,
     shards: Vec<EpochCloseShard>,
     credit_pairs: Vec<CreditPair>,
 }
@@ -58,56 +60,15 @@ impl Scenario {
             close_block_height: base["close_block_height"].as_u64().expect("close height"),
             settlement_epoch_blocks: base["settlement_epoch_blocks"].as_u64().expect("seb"),
             age_weight_milli: base["age_weight_milli"].as_u64().expect("age weight"),
-            curve: BandedCurveParams {
-                plateau_work_milli: base["curve"]["plateau_work_milli"]
-                    .as_u64()
-                    .expect("plateau_work"),
-                plateau_value_milli: base["curve"]["plateau_value_milli"]
-                    .as_u64()
-                    .expect("plateau_value"),
-            },
-            bonds: base["bonds"]
-                .as_array()
-                .expect("bonds")
-                .iter()
-                .map(|b| {
-                    (
-                        b["join_epoch"].as_u64().expect("join_epoch"),
-                        b["complete_tree"].as_bool().expect("complete_tree"),
-                        b["bad_intervals"]
-                            .as_array()
-                            .expect("bad_intervals")
-                            .iter()
-                            .map(|iv| BadInterval {
-                                start_epoch: iv["start"].as_u64().expect("start"),
-                                end_exclusive: iv["end_exclusive"].as_u64().expect("end_exclusive"),
-                            })
-                            .collect(),
-                        b["held_shard_ids"]
-                            .as_array()
-                            .expect("held_shard_ids")
-                            .iter()
-                            .map(|v| v.as_u64().expect("shard id"))
-                            .collect(),
-                    )
-                })
-                .collect(),
-            shards: parse_shards(&base["shards"]),
-            credit_pairs: parse_pairs(&base["credit_pairs"]),
+            curve: common::parse_curve(&base["curve"]),
+            bonds: common::parse_bonds(&base["bonds"]),
+            shards: common::parse_shards(&base["shards"]),
+            credit_pairs: common::parse_pairs(&base["credit_pairs"]),
         }
     }
 
     fn compute(&self, frozen_shard_count: u64, k_cover: u64) -> EpochCloseResult {
-        let bonds: Vec<EpochCloseBond<'_>> = self
-            .bonds
-            .iter()
-            .map(|(join, complete, bad, held)| EpochCloseBond {
-                join_settlement_epoch: *join,
-                is_foundation_complete_tree: *complete,
-                bad_intervals: bad,
-                held_shard_ids: held,
-            })
-            .collect();
+        let bonds = common::bonds_as_slice(&self.bonds);
         epoch_close_compute(&EpochCloseInputs {
             settlement_epoch: self.settlement_epoch,
             close_block_height: self.close_block_height,
@@ -124,41 +85,6 @@ impl Scenario {
             k_cover: KCover::for_kat(k_cover),
         })
         .expect("well-formed fixture indices")
-    }
-}
-
-fn parse_shards(v: &serde_json::Value) -> Vec<EpochCloseShard> {
-    v.as_array()
-        .expect("shards")
-        .iter()
-        .map(|s| EpochCloseShard {
-            shard_id: s["shard_id"].as_u64().expect("shard_id"),
-            has_segment: s["has_segment"].as_bool().expect("has_segment"),
-            freeze_height: s["freeze_height"].as_u64().expect("freeze_height"),
-        })
-        .collect()
-}
-
-fn parse_pairs(v: &serde_json::Value) -> Vec<CreditPair> {
-    v.as_array()
-        .expect("credit_pairs")
-        .iter()
-        .map(|p| CreditPair {
-            bond_idx: usize::try_from(p["bond"].as_u64().expect("bond idx")).unwrap(),
-            shard_idx: usize::try_from(p["shard"].as_u64().expect("shard idx")).unwrap(),
-        })
-        .collect()
-}
-
-fn expected_result(v: &serde_json::Value) -> EpochCloseResult {
-    EpochCloseResult {
-        r_market_by_shard: v["r_market_by_shard"]
-            .as_array()
-            .expect("r_market_by_shard")
-            .iter()
-            .map(|x| x.as_u64().expect("count"))
-            .collect(),
-        sigma_work_milli: v["sigma_work_milli"].as_u64().expect("sigma_work_milli"),
     }
 }
 
@@ -190,7 +116,7 @@ fn g1_g6_below_threshold_is_exact_zero_shape() {
 #[test]
 fn g2_at_threshold_is_ungated_identity() {
     let (doc, scenario, k_cover) = fixture();
-    let want = expected_result(&doc["ungated_expected"]);
+    let want = common::expected_result(&doc["ungated_expected"]);
     let at_threshold = scenario.compute(k_cover, k_cover);
     assert_eq!(at_threshold, want);
     assert!(at_threshold.sigma_work_milli > 0, "provably non-zero");
@@ -211,7 +137,7 @@ fn g3_first_nonzero_accrual_at_exact_boundary_epoch() {
         .collect();
     let first_nonzero =
         usize::try_from(doc["g3_first_nonzero_index"].as_u64().expect("index")).unwrap();
-    let want_boundary = expected_result(&doc["ungated_expected"]);
+    let want_boundary = common::expected_result(&doc["ungated_expected"]);
 
     for (i, &frozen) in counts.iter().enumerate() {
         let out = scenario.compute(frozen, k_cover);
@@ -236,7 +162,7 @@ fn g4_genesis_edge_composes_with_gate() {
     let (doc, mut scenario, k_cover) = fixture();
     let edge = &doc["genesis_edge"];
     scenario.close_block_height = edge["close_block_height"].as_u64().expect("close height");
-    scenario.shards = parse_shards(&edge["shards"]);
+    scenario.shards = common::parse_shards(&edge["shards"]);
     assert!(
         scenario.close_block_height < scenario.settlement_epoch_blocks,
         "fixture must exercise chain_epochs == 0"
@@ -250,7 +176,7 @@ fn g4_genesis_edge_composes_with_gate() {
     // Ungated at the genesis edge: the age term is zero but the computation
     // is live — pinned non-zero values prove the gate zero and the genesis
     // age zero are distinct effects, not a masked double-zero.
-    let want = expected_result(&edge["ungated_expected"]);
+    let want = common::expected_result(&edge["ungated_expected"]);
     assert_eq!(scenario.compute(k_cover, k_cover), want);
     assert!(want.sigma_work_milli > 0);
 }
@@ -261,15 +187,15 @@ fn g4_genesis_edge_composes_with_gate() {
 #[test]
 fn g9_k_cover_zero_is_identity_everywhere() {
     let (doc, mut scenario, k_cover) = fixture();
-    let want = expected_result(&doc["ungated_expected"]);
+    let want = common::expected_result(&doc["ungated_expected"]);
     assert_eq!(scenario.compute(0, 0), want);
     assert_eq!(scenario.compute(u64::MAX, 0), want);
 
     // Composed with the genesis edge: identity there too.
     let edge = &doc["genesis_edge"];
     scenario.close_block_height = edge["close_block_height"].as_u64().expect("close height");
-    scenario.shards = parse_shards(&edge["shards"]);
-    let edge_want = expected_result(&edge["ungated_expected"]);
+    scenario.shards = common::parse_shards(&edge["shards"]);
+    let edge_want = common::expected_result(&edge["ungated_expected"]);
     assert_eq!(scenario.compute(0, 0), edge_want);
     // And the two zeros compose: gating (k_cover back above the count)
     // still zeroes at the edge — k_cover = 0 was the identity, not a mask.
@@ -287,7 +213,7 @@ fn g9_k_cover_zero_is_identity_everywhere() {
 fn g10_gate_is_participation_independent() {
     let (doc, mut scenario, k_cover) = fixture();
     let variant = &doc["single_shard_variant"];
-    scenario.credit_pairs = parse_pairs(&variant["credit_pairs"]);
+    scenario.credit_pairs = common::parse_pairs(&variant["credit_pairs"]);
     let distinct_credited: std::collections::BTreeSet<usize> =
         scenario.credit_pairs.iter().map(|p| p.shard_idx).collect();
     assert!(
@@ -298,7 +224,7 @@ fn g10_gate_is_participation_independent() {
     let frozen = variant["frozen_shard_count"].as_u64().expect("frozen");
     assert!(frozen >= k_cover);
     let out = scenario.compute(frozen, k_cover);
-    assert_eq!(out, expected_result(&variant["expected"]));
+    assert_eq!(out, common::expected_result(&variant["expected"]));
     assert!(out.sigma_work_milli > 0, "not gated: accrual is non-zero");
 }
 
@@ -393,7 +319,7 @@ fn g5_g8_gated_epoch_share_is_structurally_unclaimable() {
 
     // Boundary epoch: the recomputed share is positive and encodable.
     let boundary = scenario.compute(k_cover, k_cover);
-    let want = expected_result(&doc["ungated_expected"]);
+    let want = common::expected_result(&doc["ungated_expected"]);
     assert_eq!(boundary, want);
     let capped = curve_milli(1_090, &scenario.curve); // b0's work at the boundary
     let share = reward_share_floor(1_000_000, capped, boundary.sigma_work_milli);

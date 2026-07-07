@@ -16,8 +16,10 @@
 //!
 //! Modes: `--timing-cluster` (ARCHIVAL_TIMING_CONSTANTS pin);
 //! `--failure-confirmation` (L14b Round-1 policy comparator per
-//! ARCHIVAL_FAILURE_CONFIRMATION_PIN.md); `--gf7-timeline` (joint three-axis
-//! GF-7 pipeline proof per ARCHIVAL_BOND_2C_GF7_HOOKS.md §6.3).
+//! ARCHIVAL_FAILURE_CONFIRMATION_PIN.md); `--gf7-timeline` (the GF-7 graded
+//! measurement round — joint three-axis correlator + three arms + validity
+//! controls, graded against the a-priori `r < 2` bound per
+//! ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4).
 
 mod agent;
 mod audit;
@@ -622,16 +624,22 @@ fn print_standoff_report() {
 fn print_gf7_timeline_report() {
     let report = gf7_timeline::run_full_report();
     eprintln!(
-        "shekyl-staking-sim — GF-7 joint three-axis timeline (ARCHIVAL_BOND_2C_GF7_HOOKS.md §6.3)"
+        "shekyl-staking-sim — GF-7 measurement round (ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4)"
     );
     eprintln!(
-        "PIPELINE PROOF, not the measurement round: trivial nearest-cadence grading over the"
+        "GRADED genesis gate for principal↔P funding-seam unlinkability. A-priori bound (§3,"
     );
-    eprintln!("  recorded observer stream (all three axes, one joint timeline per pair). The");
-    eprintln!("  measurement round replaces the correlator and sets the genesis-gate threshold.");
     eprintln!(
-        "  n_principals={} (baseline 1/n), trials/window={}, horizon={} blk.",
-        report.n_principals, report.trials, report.horizon_blocks
+        "  committed before this correlator existed): r = P(link)·N < {:.1} — the modeled",
+        report.ratio_bound
+    );
+    eprintln!("  observer may at most double blind guessing (additive advantage A < 1/N).");
+    eprintln!(
+        "  N={} (baseline 1/N={:.3}, absolute bar P(link)<{:.3}), trials/point={}.",
+        report.n_principals,
+        1.0 / report.n_principals as f64,
+        report.ratio_bound / report.n_principals as f64,
+        report.trials,
     );
     eprintln!(
         "  Axis coverage (one sample timeline): bond-post={} perP={} lifecycle={}.",
@@ -639,23 +647,95 @@ fn print_gf7_timeline_report() {
         report.coverage.axis_ii_per_p_submits,
         report.coverage.axis_iii_lifecycle_events
     );
+    eprintln!("  Conditional on: isolation holds (post-isolation timing residual); pessimistic");
+    eprintln!("  near-periodic lifecycle; N is realized cover (rate-driven, not a wallet choice).");
     eprintln!();
-    eprintln!(
-        "  blind = funding-seam-blind arm (§2's named failure mode: lifecycle cadence only);"
-    );
-    eprintln!("  fund = funding-seam arm (the axis the entry-gap jitter already handles).");
-    eprintln!("  Expect: fund falls with window (jitter works); blind stays above baseline");
-    eprintln!("  (the residual GF-7 names — the reason the hooks exist).");
-    eprintln!();
-    eprintln!(
-        "{:>8} {:>10} {:>10} {:>10}",
-        "window", "blind", "fund", "baseline"
-    );
-    for r in &report.results {
+
+    // Controls gate the run's validity (§5).
+    eprintln!("Controls (must both pass or the run is INVALID — §5):");
+    for c in &report.controls {
         eprintln!(
-            "{:>8} {:>10.3} {:>10.3} {:>10.3}",
-            r.window_blocks, r.p_link_blind, r.p_link_funding, r.baseline
+            "  [{}] {:<28} P(link)={:.3} baseline={:.3}  ({})",
+            if c.passed { "ok" } else { "FAIL" },
+            c.name,
+            c.p_link,
+            c.baseline,
+            c.expectation,
         );
+    }
+    eprintln!();
+    eprintln!(
+        "  Observer is POSTURE-CONDITIONED (§4.1): under the recommended local-daemon posture,"
+    );
+    eprintln!(
+        "  wallet session/refresh markers are loopback-invisible and are NOT direct anchors;"
+    );
+    eprintln!("  their cadence still reaches the observer through the chain-visible events it");
+    eprintln!("  co-triggers (funding/bond/drain/resume ride the session lattice — graded, see");
+    eprintln!("  blind at window 0). A remote/non-isolated daemon REOPENS this: markers become");
+    eprintln!("  anchors and the gate must be re-graded with them in (pre-fix shape: r≈5, fail).");
+    eprintln!();
+    eprintln!(
+        "  Arms: blind = funding-seam-blind null (§2 failure mode, observable cadence only);"
+    );
+    eprintln!("  s3 = modeled S-3 (joint MAP fusion, seam + observable lifecycle); lr = stress");
+    eprintln!("  PANEL, an oracle-union upper bound over {{MAP, density-corrected MAP, exact");
+    eprintln!("  seam-consistency-gated MAP}} — ≥ s3 by construction, with teeth from the gated");
+    eprintln!("  member (the true in-model seam support: first |bond−funding| ≤ window plus");
+    eprintln!("  the max dispersal offset, dispersal−1 — the draw is U[0, dispersal)).");
+    eprintln!("  Bound applies to each arm; '*' marks a gate-relevant row (realistic posture:");
+    eprintln!("  full window, inversion on, steady-state, sub-block dispersal ⇒ dispersal=0).");
+    eprintln!();
+    eprintln!(
+        "{:<10} {:>4} {:>3} {:>5} {:>6} {:>6} | {:>7} {:>7} {:>7} | {:>4} {:>4}",
+        "group", "win", "inv", "disp", "draw", "regime", "blind", "s3", "lr", "r_lr", "pass",
+    );
+    for r in &report.rows {
+        eprintln!(
+            "{:<10} {:>4} {:>3} {:>5} {:>6} {:>6} | {:>7.3} {:>7.3} {:>7.3} | {:>4.2} {:>4}{}",
+            r.group,
+            r.window_blocks,
+            if r.inversion { "Y" } else { "n" },
+            r.dispersal_bound,
+            r.draw_shape,
+            r.regime,
+            r.blind.p_link,
+            r.modeled_s3.p_link,
+            r.lr_stress.p_link,
+            r.lr_stress.ratio,
+            if r.pass { "Y" } else { "N" },
+            if r.gate_relevant { " *" } else { "" },
+        );
+    }
+    eprintln!();
+    eprintln!("Gate status: {}", report.gate_status);
+    eprintln!(
+        "  Verdict is over gate-relevant rows (*) only. Non-gated rows are context (§3.2/§3.3):"
+    );
+    eprintln!("  - low-activity/cold-start FAILS the bound, and cold-start is the genesis regime:");
+    eprintln!("    disposition is the §14 founder-cover launch posture (refuse the regime —");
+    eprintln!("    production-path-identical staggered founder cover, shard-schedule structural");
+    eprintln!("    gate, §14.4 partition-adversary arm; spec-committed, measurement gated on");
+    eprintln!(
+        "    review). This row stays graded as the counterfactual bracket — never a bar move."
+    );
+    eprintln!(
+        "  - the block-unit dispersal>0 rows are a coarse-tick counterfactual: real WI-3 dispersal"
+    );
+    eprintln!("    is U[0,60s) (sub-block), so the realistic block-time gate sits at dispersal=0.");
+    eprintln!("    The wall-clock sub-block channel (dispersal's actual target) is UNMEASURED at");
+    eprintln!("    block resolution and is the primary open uncertainty: closing leg (b) requires");
+    eprintln!(
+        "    sub-block wall-clock emission — a block-resolution live re-run cannot close it."
+    );
+    if report.provisional {
+        eprintln!(
+            "  PROVISIONAL: grades the sim's synthesized dispatch (incl. modeled WI-3 dispersal)."
+        );
+        eprintln!(
+            "  Sealing re-run against WI-3's live BondPostDispatched = reconvergence leg (b),"
+        );
+        eprintln!("  tracked in docs/FOLLOWUPS.md (rule 21 armed-gate posture).");
     }
     match serde_json::to_string_pretty(&report) {
         Ok(json) => println!("{json}"),
