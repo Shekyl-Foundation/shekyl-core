@@ -5755,6 +5755,9 @@ uint64_t BlockchainLMDB::count_frozen_shards_at_close(uint64_t h_close) const
 
 bool BlockchainLMDB::has_archival_sigma_work_row(uint64_t settlement_epoch) const
 {
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
   shekyl::db::ArchivalSigmaWorkKey key(settlement_epoch);
   MDB_val k = key.as_mdb_val();
   MDB_val v;
