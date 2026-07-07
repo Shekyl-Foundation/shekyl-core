@@ -3,26 +3,34 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! iai-callgrind companion to `benches/ledger.rs`.
+//! gungraun companion to `benches/ledger.rs`.
 //!
 //! Same workload (build a `WalletLedger` with N synthetic transfers,
 //! round-trip through postcard) measured via Valgrind's Callgrind for
 //! deterministic instruction-count metrics. This is the Tier-1 metric
 //! the CI gate in `docs/MID_REWIRE_HARDENING.md` §3.3 will enforce.
 //!
-//! Requires `cargo install iai-callgrind-runner` and a working Valgrind
+//! Requires `cargo install gungraun-runner` and a working Valgrind
 //! install. The criterion sibling bench (`ledger.rs`) is the
 //! wall-clock story; this file is the "same machine, two runs,
 //! agree to the instruction" story.
 
+// Bench fns receive their fixture by value per gungraun's
+// `#[benches::with_setup]` contract, and the by-value drop is part of the
+// measured hot path — taking `&[T]` / `&[u8]` would change the instruction
+// count and break baseline comparability. `gungraun-macros` does not
+// auto-suppress `needless_pass_by_value` the way `iai-callgrind-macros` did,
+// so allow it explicitly.
+#![allow(clippy::needless_pass_by_value)]
+
 use curve25519_dalek::Scalar;
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use std::hint::black_box;
 
+use shekyl_curve_primitives::Commitment;
 use shekyl_engine_state::{
     transfer::SPENDABLE_AGE, BlockchainTip, LedgerBlock, TransferDetails, WalletLedger,
 };
-use shekyl_oxide::primitives::Commitment;
 
 fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
     let mut tx_hash = [0u8; 32];
@@ -33,27 +41,24 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
         * curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 
     TransferDetails {
-        tx_hash,
+        tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
         internal_output_index: seed & 0xff,
         global_output_index: seed,
         block_height: height,
         key,
         key_offset: Scalar::ZERO,
         commitment: Commitment::new(Scalar::ONE, 1_000 + seed),
-        subaddress: None,
         payment_id: None,
         spent: false,
         spent_height: None,
         key_image: None,
-        staked: (seed & 0b11) == 0,
-        stake_tier: (seed & 0x3) as u8,
-        stake_lock_until: height + 100,
-        last_claimed_height: 0,
+        awaiting_confirmation: None,
         source_ciphertext: None,
         output_handle: None,
         eligible_height: height + SPENDABLE_AGE,
         frozen: false,
         fcmp_precomputed_path: None,
+        receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
     }
 }
 
@@ -63,7 +68,7 @@ fn build_ledger(n: usize) -> WalletLedger {
         .map(|seed| synthetic_transfer(seed, 1_000 + seed))
         .collect();
     // See `benches/ledger.rs::build_ledger` for the I-1 invariant
-    // rationale. The criterion sibling and this iai-callgrind harness
+    // rationale. The criterion sibling and this gungraun harness
     // share the same tip-pinning requirement; the deserialize bench
     // below would otherwise panic out of Valgrind with the same
     // `tip-height-not-below-transfer` shape.

@@ -29,8 +29,9 @@
 //! Axum HTTP server replacing epee's http_server_impl_base for daemon RPC.
 
 use crate::core::CoreRpc;
-use crate::handlers::{binary, json, json_rpc};
+use crate::handlers::{binary, json, json_rpc, submit};
 use crate::middleware::DEFAULT_BODY_LIMIT;
+use crate::submit::{DaemonSubmitEngine, DaemonTxVerifier, FfiSubmitShim, SubmitEngine};
 
 use axum::routing::{get, post};
 use axum::Router;
@@ -42,6 +43,9 @@ use tracing::info;
 
 pub struct AppState {
     pub core: Arc<CoreRpc>,
+    /// The Rust admission engine behind `POST /submit_transaction`
+    /// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §3).
+    pub submit_engine: Arc<DaemonSubmitEngine>,
     pub restricted: bool,
     pub shutdown: Arc<Notify>,
 }
@@ -87,14 +91,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/is_key_image_spent",
             get(json::is_key_image_spent).post(json::is_key_image_spent),
         )
-        .route(
-            "/send_raw_transaction",
-            get(json::send_raw_transaction).post(json::send_raw_transaction),
-        )
-        .route(
-            "/sendrawtransaction",
-            get(json::send_raw_transaction).post(json::send_raw_transaction),
-        )
+        // The typed submit route (DAEMON_SUBMIT_VERDICT.md §2.4) is the
+        // only submit surface; the legacy /send_raw_transaction proxy was
+        // deleted per §9.3. POST only.
+        .route("/submit_transaction", post(submit::submit_transaction))
         .route(
             "/get_public_nodes",
             get(json::get_public_nodes).post(json::get_public_nodes),
@@ -195,20 +195,36 @@ impl AppState {
     }
 }
 
-/// Start the Axum daemon RPC server. Blocks until the shutdown signal fires.
-pub async fn run_server(
+/// Bind the daemon RPC TCP listener.
+///
+/// Separated from serving so a caller (the FFI start path) can validate the
+/// bind synchronously and fail loudly — surfacing EADDRINUSE before any handle
+/// is handed back — rather than discovering the failure asynchronously inside a
+/// spawned serve task.
+pub async fn bind_listener(bind_address: &str) -> std::io::Result<tokio::net::TcpListener> {
+    tokio::net::TcpListener::bind(bind_address).await
+}
+
+/// Serve the daemon RPC on an already-bound listener. Blocks until the shutdown
+/// signal fires.
+pub async fn serve_with_listener(
     core: Arc<CoreRpc>,
     config: ServerConfig,
+    listener: tokio::net::TcpListener,
     shutdown: Arc<Notify>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let submit_engine = Arc::new(SubmitEngine::new(
+        FfiSubmitShim::new(core.clone()),
+        DaemonTxVerifier,
+    ));
     let state = Arc::new(AppState {
         core,
+        submit_engine,
         restricted: config.restricted,
         shutdown: shutdown.clone(),
     });
 
     let app = build_router(state);
-    let listener = tokio::net::TcpListener::bind(&config.bind_address).await?;
     info!(
         "shekyl-daemon-rpc ({}) listening on {}",
         if config.restricted {
@@ -224,4 +240,15 @@ pub async fn run_server(
         .await?;
 
     Ok(())
+}
+
+/// Start the Axum daemon RPC server (bind + serve). Blocks until the shutdown
+/// signal fires.
+pub async fn run_server(
+    core: Arc<CoreRpc>,
+    config: ServerConfig,
+    shutdown: Arc<Notify>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let listener = bind_listener(&config.bind_address).await?;
+    serve_with_listener(core, config, listener, shutdown).await
 }

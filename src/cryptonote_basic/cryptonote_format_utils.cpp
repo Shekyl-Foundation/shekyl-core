@@ -330,8 +330,9 @@ namespace cryptonote
     // FCMP++ proof size (serialized as varint length + bytes) -- already in pruned blob
     // No CLSAG data in FCMP++
 
-    // calculate deterministic pseudoOuts size
-    extra = 32 * (tx.vin.size());
+    // calculate deterministic pseudoOuts size: sized by the spend subset,
+    // not vin.size() — see count_spend_inputs (cryptonote_basic.h).
+    extra = 32 * count_spend_inputs(tx.vin);
     weight += extra;
 
     // clawback
@@ -385,8 +386,6 @@ namespace cryptonote
     {
       if (std::holds_alternative<txin_to_key>(in))
         amount_in += std::get<txin_to_key>(in).amount;
-      else if (std::holds_alternative<txin_stake_claim>(in))
-        amount_in += std::get<txin_stake_claim>(in).amount;
       else
         CHECK_AND_ASSERT_MES(false, 0, "unexpected type id in transaction");
     }
@@ -658,8 +657,6 @@ namespace cryptonote
     {
       if (std::holds_alternative<txin_to_key>(in))
         money += std::get<txin_to_key>(in).amount;
-      else if (std::holds_alternative<txin_stake_claim>(in))
-        money += std::get<txin_stake_claim>(in).amount;
       else if (std::holds_alternative<txin_gen>(in))
         continue;
       else
@@ -675,14 +672,61 @@ namespace cryptonote
     return coinbase_in.height;
   }
   //---------------------------------------------------------------
+  uint64_t archival_bond_floor(const archival_holdings_descriptor& holdings)
+  {
+    const uint64_t per_shard = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+    if (holdings.kind == archival_holdings_kind::CompleteTree)
+      return per_shard;
+    const size_t shard_count = holdings.shard_ids.size();
+    if (shard_count == 0 || shard_count > config::ARCHIVAL_MAX_HOLDINGS_SHARDS)
+      return 0;
+    if (per_shard > std::numeric_limits<uint64_t>::max() / shard_count)
+      return 0;
+    return per_shard * shard_count;
+  }
+
   bool check_inputs_types_supported(const transaction& tx)
   {
-    for(const auto& in: tx.vin)
+    size_t bond_posts = 0;
+    size_t serve_credits = 0;
+    size_t spend_keys = 0;
+    for (const auto& in : tx.vin)
     {
-      CHECK_AND_ASSERT_MES(std::holds_alternative<txin_to_key>(in) || std::holds_alternative<txin_stake_claim>(in), false, "wrong variant type (index "
-        << in.index() << "), expected txin_to_key or txin_stake_claim"
-        << ", in transaction id=" << get_transaction_hash(tx));
-
+      if (std::holds_alternative<txin_gen>(in))
+      {
+        MERROR("txin_gen is not allowed in non-coinbase transactions, tx id="
+          << get_transaction_hash(tx));
+        return false;
+      }
+      if (std::holds_alternative<txin_archival_serve_credit_response>(in))
+        ++serve_credits;
+      else if (std::holds_alternative<txin_archival_bond_post>(in))
+        ++bond_posts;
+      else if (std::holds_alternative<txin_to_key>(in))
+        ++spend_keys;
+      else
+      {
+        MERROR("wrong variant type (index " << in.index() << "), in transaction id="
+          << get_transaction_hash(tx));
+        return false;
+      }
+    }
+    if (serve_credits > 0 && (bond_posts + spend_keys) > 0)
+    {
+      MERROR("archival serve-credit vins cannot mix with spend/bond inputs, tx id="
+        << get_transaction_hash(tx));
+      return false;
+    }
+    if (bond_posts > 1)
+    {
+      MERROR("archival bond-post tx has multiple bond vins, tx id=" << get_transaction_hash(tx));
+      return false;
+    }
+    if (bond_posts == 1 && serve_credits > 0)
+    {
+      MERROR("archival bond-post cannot mix with serve-credit vins, tx id="
+        << get_transaction_hash(tx));
+      return false;
     }
     return true;
   }
@@ -714,9 +758,11 @@ namespace cryptonote
       uint64_t amount = 0;
       if (std::holds_alternative<txin_to_key>(in))
         amount = std::get<txin_to_key>(in).amount;
-      else if (std::holds_alternative<txin_stake_claim>(in))
-        amount = std::get<txin_stake_claim>(in).amount;
       else if (std::holds_alternative<txin_gen>(in))
+        continue;
+      else if (std::holds_alternative<txin_archival_serve_credit_response>(in))
+        continue;
+      else if (std::holds_alternative<txin_archival_bond_post>(in))
         continue;
       else
         return false;
@@ -755,8 +801,6 @@ namespace cryptonote
       output_public_key = std::get<txout_to_key>(out.target).key;
     else if (std::holds_alternative<txout_to_tagged_key>(out.target))
       output_public_key = std::get<txout_to_tagged_key>(out.target).key;
-    else if (std::holds_alternative<txout_to_staked_key>(out.target))
-      output_public_key = std::get<txout_to_staked_key>(out.target).key;
     else
     {
       LOG_ERROR("Unexpected output target type found (index " << out.target.index() << ")");
@@ -770,8 +814,6 @@ namespace cryptonote
   {
     if (std::holds_alternative<txout_to_tagged_key>(out.target))
       return std::optional<crypto::view_tag>(std::get<txout_to_tagged_key>(out.target).view_tag);
-    if (std::holds_alternative<txout_to_staked_key>(out.target))
-      return std::optional<crypto::view_tag>(std::get<txout_to_staked_key>(out.target).view_tag);
     return std::optional<crypto::view_tag>();
   }
   //---------------------------------------------------------------
@@ -802,26 +844,6 @@ namespace cryptonote
     }
   }
   //---------------------------------------------------------------
-  void set_staked_tx_out(const uint64_t amount, const crypto::public_key& output_public_key, const crypto::view_tag& view_tag, uint8_t lock_tier, tx_out& out)
-  {
-    out.amount = amount;
-    txout_to_staked_key tsk;
-    tsk.key = output_public_key;
-    tsk.view_tag = view_tag;
-    tsk.lock_tier = lock_tier;
-    out.target = tsk;
-  }
-  //---------------------------------------------------------------
-  bool get_output_staking_info(const tx_out& out, uint8_t& lock_tier)
-  {
-    if (std::holds_alternative<txout_to_staked_key>(out.target))
-    {
-      const auto& staked = std::get<txout_to_staked_key>(out.target);
-      lock_tier = staked.lock_tier;
-      return true;
-    }
-    return false;
-  }
   //---------------------------------------------------------------
   bool check_output_types(const transaction& tx, const uint8_t hf_version)
   {
@@ -829,11 +851,13 @@ namespace cryptonote
     {
       if (hf_version >= HF_VERSION_SHEKYL_NG)
       {
-        // post-NG: allow tagged_key and staked_key outputs
+        // txout_to_tagged_key is the sole output type from genesis (the
+        // claim-era txout_to_staked_key was retired with the confidential-
+        // staking cutover; GENESIS_TX_WIRE_FORMAT.md tag registry).
         CHECK_AND_ASSERT_MES(
-          std::holds_alternative<txout_to_tagged_key>(o.target) || std::holds_alternative<txout_to_staked_key>(o.target),
+          std::holds_alternative<txout_to_tagged_key>(o.target),
           false, "wrong variant type (index " << o.target.index()
-            << "), expected txout_to_tagged_key or txout_to_staked_key in transaction id=" << get_transaction_hash(tx));
+            << "), expected txout_to_tagged_key in transaction id=" << get_transaction_hash(tx));
       }
       else if (hf_version > HF_VERSION_VIEW_TAGS)
       {
@@ -1046,9 +1070,10 @@ namespace cryptonote
       transaction &tt = const_cast<transaction&>(t);
       std::stringstream ss;
       binary_archive<true> ba(ss);
-      const size_t inputs = t.vin.size();
+      // pseudoOuts are sized by the spend subset, not vin.size() — see
+      // count_spend_inputs (cryptonote_basic.h).
       const size_t outputs = t.vout.size();
-      bool r = tt.rct_signatures.p.serialize_rctsig_prunable(ba, t.rct_signatures.type, inputs, outputs);
+      bool r = tt.rct_signatures.p.serialize_rctsig_prunable(ba, t.rct_signatures.type, count_spend_inputs(t.vin), outputs);
       CHECK_AND_ASSERT_MES(r, false, "Failed to serialize rct signatures prunable");
       cryptonote::get_blob_hash(ss.str(), res);
     }
@@ -1255,49 +1280,9 @@ namespace cryptonote
     return blob;
   }
   //---------------------------------------------------------------
-  bool calculate_block_hash(const block& b, crypto::hash& res, const blobdata_ref *blob)
+  bool calculate_block_hash(const block& b, crypto::hash& res)
   {
-    blobdata bd;
-    blobdata_ref bdref;
-    if (!blob)
-    {
-      bd = block_to_blob(b);
-      bdref = bd;
-      blob = &bdref;
-    }
-
-    bool hash_result = get_object_hash(get_block_hashing_blob(b), res);
-    if (!hash_result)
-      return false;
-
-    if (b.miner_tx.vin.size() == 1 && std::holds_alternative<cryptonote::txin_gen>(b.miner_tx.vin[0]))
-    {
-      const cryptonote::txin_gen &txin_gen = std::get<cryptonote::txin_gen>(b.miner_tx.vin[0]);
-      if (txin_gen.height != 202612)
-        return true;
-    }
-
-    // EXCEPTION FOR BLOCK 202612
-    const std::string correct_blob_hash_202612 = "3a8a2b3a29b50fc86ff73dd087ea43c6f0d6b8f936c849194d5c84c737903966";
-    const std::string existing_block_id_202612 = "bbd604d2ba11ba27935e006ed39c9bfdd99b76bf4a50654bc1e1e61217962698";
-    crypto::hash block_blob_hash = get_blob_hash(*blob);
-
-    if (string_tools::pod_to_hex(block_blob_hash) == correct_blob_hash_202612)
-    {
-      string_tools::hex_to_pod(existing_block_id_202612, res);
-      return true;
-    }
-
-    {
-      // make sure that we aren't looking at a block with the 202612 block id but not the correct blobdata
-      if (string_tools::pod_to_hex(res) == existing_block_id_202612)
-      {
-        LOG_ERROR("Block with block id for 202612 but incorrect block blob hash found!");
-        res = null_hash;
-        return false;
-      }
-    }
-    return hash_result;
+    return get_object_hash(get_block_hashing_blob(b), res);
   }
   //---------------------------------------------------------------
   bool get_block_hash(const block& b, crypto::hash& res)
@@ -1355,7 +1340,7 @@ namespace cryptonote
     b.miner_tx.invalidate_hashes();
     if (block_hash)
     {
-      calculate_block_hash(b, *block_hash, &b_blob);
+      calculate_block_hash(b, *block_hash);
       ++block_hashes_calculated_count;
       b.set_hash(*block_hash);
     }
@@ -1415,33 +1400,6 @@ namespace cryptonote
     for(auto& th: b.tx_hashes)
       txs_ids.push_back(th);
     return get_tx_tree_hash(txs_ids);
-  }
-  //---------------------------------------------------------------
-  crypto::hash get_block_longhash(const blobdata_ref block_hashing_blob,
-    const uint64_t height,
-    const uint8_t major_version,
-    const crypto::hash &seed_hash)
-  {
-    crypto::hash res;
-
-    if (height == 202612) // block 202612 bug workaround
-    {
-      static const std::string longhash_202612 = "84f64766475d51837ac9efbef1926486e58563c95a19fef4aec3254f03000000";
-      epee::string_tools::hex_to_pod(longhash_202612, res);
-    }
-    else if (major_version >= RX_BLOCK_VERSION) // RandomX
-    {
-      crypto::rx_slow_hash(seed_hash.data, block_hashing_blob.data(), block_hashing_blob.size(), res.data);
-    }
-    else // CryptoNight
-    {
-      static_assert(HF_VERSION_CRYPTONIGHT_VARIANT_1 >= 1);
-      const int pow_variant = major_version >= HF_VERSION_CRYPTONIGHT_VARIANT_1
-        ? major_version - (HF_VERSION_CRYPTONIGHT_VARIANT_1 - 1) : 0;
-      crypto::cn_slow_hash(block_hashing_blob.data(), block_hashing_blob.size(), res, pow_variant, height);
-    }
-
-    return res;
   }
   //---------------------------------------------------------------
   bool is_valid_decomposed_amount(uint64_t amount)

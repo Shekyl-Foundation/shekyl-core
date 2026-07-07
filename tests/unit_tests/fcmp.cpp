@@ -42,12 +42,29 @@
 #include "crypto/crypto.h"
 #include "cryptonote_config.h"
 #include "serialization/binary_archive.h"
-#include "cryptonote_basic/cryptonote_basic.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/blockchain.h"
 
 using namespace std;
 using namespace crypto;
 using namespace rct;
+
+namespace {
+
+crypto::hash hash_rctsig_base_component(const rct::rctSig &rv)
+{
+  std::stringstream ss;
+  binary_archive<true> ba(ss);
+  const size_t inputs = rv.p.pseudoOuts.size();
+  const size_t outputs = rv.enc_amounts.size();
+  rct::rctSig mutable_rv = rv;
+  CHECK_AND_ASSERT_THROW_MES(
+      mutable_rv.serialize_rctsig_base(ba, inputs, outputs),
+      "serialize_rctsig_base failed in test");
+  return cryptonote::get_blob_hash(ss.str());
+}
+
+} // namespace
 
 TEST(fcmp, HPow2)
 {
@@ -175,6 +192,12 @@ TEST(fcmp, RCTTypeFcmpPlusPlusPqc_serialization_roundtrip)
   enc_amt.fill(0x42);
   rv.enc_amounts.push_back(enc_amt);
 
+  std::array<uint8_t, 9> enc_lbl;
+  for (size_t i = 0; i < 8; ++i)
+    enc_lbl[i] = static_cast<uint8_t>(0x50 + i);
+  enc_lbl[8] = 0xE1;
+  rv.enc_labels.push_back(enc_lbl);
+
   rct::ctkey outpk;
   outpk.dest = rct::pkGen();
   outpk.mask = rct::pkGen();
@@ -205,6 +228,38 @@ TEST(fcmp, RCTTypeFcmpPlusPlusPqc_serialization_roundtrip)
   ASSERT_EQ(rv2.p.curve_trees_tree_depth, 20);
   ASSERT_EQ(rv2.p.fcmp_pp_proof.size(), 5u);
   ASSERT_EQ(rv2.p.fcmp_pp_proof, rv.p.fcmp_pp_proof);
+}
+
+// enc_label integrity is prehash-bound (no Pedersen commitment backstop).
+// Tampering enc_labels must change serialize_rctsig_base → get_tx_prehash input.
+TEST(fcmp, enc_label_binds_rctsig_base_prehash)
+{
+  rct::rctSig rv;
+  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.txnFee = 1000000;
+  memset(&rv.referenceBlock, 0xCD, sizeof(rv.referenceBlock));
+  rv.enc_amounts.resize(1);
+  rv.enc_labels.resize(1);
+  rv.outPk.resize(1);
+  rv.outPk[0].mask = rct::skGen();
+  for (size_t i = 0; i < 8; ++i)
+  {
+    rv.enc_amounts[0][i] = static_cast<uint8_t>(0x10 + i);
+    rv.enc_labels[0][i] = static_cast<uint8_t>(0xA0 + i);
+  }
+  rv.enc_amounts[0][8] = 0x55;
+  rv.enc_labels[0][8] = 0x66;
+
+  const crypto::hash h0 = hash_rctsig_base_component(rv);
+
+  rv.enc_labels[0][0] ^= 0x01;
+  const crypto::hash h_label_tamper = hash_rctsig_base_component(rv);
+  EXPECT_NE(h0, h_label_tamper) << "enc_label byte flip must change rctSigBase prehash component";
+
+  rv.enc_labels[0][0] ^= 0x01;
+  rv.enc_amounts[0][0] ^= 0x01;
+  const crypto::hash h_amount_tamper = hash_rctsig_base_component(rv);
+  EXPECT_NE(h0, h_amount_tamper) << "enc_amount byte flip must change rctSigBase prehash component";
 }
 
 TEST(fcmp, RCTTypeNull_serialization)

@@ -195,14 +195,6 @@ namespace boost
   }
 
   template <class Archive>
-  inline void serialize(Archive &a, cryptonote::txout_to_staked_key &x, const boost::serialization::version_type ver)
-  {
-    a & x.key;
-    a & x.view_tag;
-    a & x.lock_tier;
-  }
-
-  template <class Archive>
   inline void serialize(Archive &a, cryptonote::txout_to_scripthash &x, const boost::serialization::version_type ver)
   {
     a & x.hash;
@@ -240,13 +232,48 @@ namespace boost
   }
 
   template <class Archive>
-  inline void serialize(Archive &a, cryptonote::txin_stake_claim &x, const boost::serialization::version_type ver)
+  inline void serialize(Archive &a, cryptonote::archival_leaf_bytes &x, const boost::serialization::version_type ver)
   {
-    a & x.amount;
-    a & x.staked_output_index;
-    a & x.from_height;
-    a & x.to_height;
-    a & x.k_image;
+    a & x.data;
+  }
+
+  template <class Archive>
+  inline void serialize(Archive &a, cryptonote::archival_segment_path_opening &x, const boost::serialization::version_type ver)
+  {
+    a & x.c1_layers;
+    a & x.c2_layers;
+  }
+
+  template <class Archive>
+  inline void serialize(Archive &a, cryptonote::archival_holdings_descriptor &x, const boost::serialization::version_type ver)
+  {
+    a & x.kind;
+    a & x.shard_ids;
+  }
+
+  template <class Archive>
+  inline void serialize(Archive &a, cryptonote::txin_archival_bond_post &x, const boost::serialization::version_type ver)
+  {
+    a & x.hybrid_public_key;
+    a & x.p_canonical_id;
+    a & x.post_kind;
+    a & x.holdings;
+    a & x.bonded_total_atomic;
+    a & x.bond_credit;
+    a & x.bond_debit;
+  }
+
+  template <class Archive>
+  inline void serialize(Archive &a, cryptonote::txin_archival_serve_credit_response &x, const boost::serialization::version_type ver)
+  {
+    a & x.p_canonical_id;
+    a & x.shard_id;
+    a & x.settlement_epoch;
+    a & x.segment_subroot_rk;
+    a & x.leaf_index_in_segment;
+    a & x.leaf_bytes;
+    a & x.path;
+    a & x.hybrid_signature;
   }
 
   template <class Archive>
@@ -373,10 +400,17 @@ namespace boost
   {
     a & x.type;
     if (x.type == rct::RCTTypeNull)
+    {
+      a & x.enc_amounts;
+      a & x.enc_labels;
+      serializeOutPk(a, x.outPk, ver);
+      a & x.txnFee;
       return;
+    }
     if (x.type != rct::RCTTypeFcmpPlusPlusPqc)
       throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception, "Unsupported rct type");
     a & x.enc_amounts;
+    a & x.enc_labels;
     serializeOutPk(a, x.outPk, ver);
     a & x.txnFee;
   }
@@ -393,10 +427,17 @@ namespace boost
   {
     a & x.type;
     if (x.type == rct::RCTTypeNull)
+    {
+      a & x.enc_amounts;
+      a & x.enc_labels;
+      serializeOutPk(a, x.outPk, ver);
+      a & x.txnFee;
       return;
+    }
     if (x.type != rct::RCTTypeFcmpPlusPlusPqc)
       throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception, "Unsupported rct type");
     a & x.enc_amounts;
+    a & x.enc_labels;
     serializeOutPk(a, x.outPk, ver);
     a & x.txnFee;
     //--------------

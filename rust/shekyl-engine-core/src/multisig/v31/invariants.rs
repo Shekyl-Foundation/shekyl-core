@@ -17,6 +17,8 @@
 //! - I6: Assembly: all M tx_hash and proof commitments agree (SS11.5)
 //! - I7: Receive-time output validation (SS8.3, enforced at scan time)
 
+use shekyl_units::AtomicUnits;
+
 /// Invariant identifiers for InvariantViolation messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -87,7 +89,7 @@ pub struct InvariantCheckInput<'a> {
     /// Locally computed chain_state_fingerprint.
     pub local_chain_state_fingerprint: &'a [u8; 32],
     /// Input amounts from local view.
-    pub input_amounts: &'a [u64],
+    pub input_amounts: &'a [AtomicUnits],
     /// Set of seen kem_randomness_seeds (for replay detection).
     pub seen_kem_seeds: &'a std::collections::HashSet<[u8; 32]>,
     /// Per-input: the locally-persisted assigned_prover_index.
@@ -251,7 +253,7 @@ mod tests {
             reference_block_hash: [0xCC; 32],
             input_global_indices: vec![42],
             input_eligible_heights: vec![800],
-            input_amounts: vec![310],
+            input_amounts: vec![AtomicUnits::from_raw(310)],
             input_assigned_prover_indices: vec![0],
         };
         let chain_fp = fp.compute();
@@ -269,9 +271,9 @@ mod tests {
             reference_block_hash: [0xCC; 32],
             recipients: vec![IntentRecipient {
                 address: vec![1, 2, 3],
-                amount: 300,
+                amount: AtomicUnits::from_raw(300),
             }],
-            fee: 10,
+            fee: AtomicUnits::from_raw(10),
             input_global_indices: vec![42],
             kem_randomness_seed: [0xDD; 32],
             chain_state_fingerprint: chain_fp,
@@ -296,7 +298,7 @@ mod tests {
             reference_block_hash: [0xCC; 32],
             input_global_indices: vec![42],
             input_eligible_heights: vec![800],
-            input_amounts: vec![310],
+            input_amounts: vec![AtomicUnits::from_raw(310)],
             input_assigned_prover_indices: vec![0],
         };
         let chain_fp = fp.compute();
@@ -307,7 +309,8 @@ mod tests {
         let group_id = Box::leak(Box::new([0xBB; 32]));
         let ref_hash = Box::leak(Box::new([0xCC; 32]));
         let chain_fp_ref = Box::leak(Box::new(chain_fp));
-        let amounts: &'static [u64] = Box::leak(vec![310u64].into_boxed_slice());
+        let amounts: &'static [AtomicUnits] =
+            Box::leak(vec![AtomicUnits::from_raw(310)].into_boxed_slice());
         let seeds: &'static HashSet<[u8; 32]> = Box::leak(Box::new(HashSet::new()));
         let prover_indices: &'static [u8] = Box::leak(vec![0u8].into_boxed_slice());
         let output_pubkeys: &'static [[u8; 32]] = Box::leak(vec![[0xAA; 32]].into_boxed_slice());

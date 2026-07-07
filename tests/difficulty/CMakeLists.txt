@@ -30,8 +30,8 @@
 # fixtures (`difficulty.cpp`, `data.txt`, `generate-data`,
 # `gen_wide_data.py`, `wide_difficulty.py`) were deleted in Phase 4 of
 # the LWMA-1 migration; they exercised the deleted CryptoNote
-# cut-windowed-average DAA. See `docs/design/DAA_LWMA1.md` §9.1 and
-# drift F1 in `docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md` §2. LWMA-1
+# cut-windowed-average DAA. See `docs/completed/DAA_LWMA1.md` §9.1 and
+# drift F1 in `docs/completed/DAA_LWMA1_PHASE4_PREFLIGHT.md` §2. LWMA-1
 # coverage is provided by:
 #
 #   - The `shekyl-difficulty` Rust unit-test suite (`cargo test -p
@@ -39,7 +39,7 @@
 #   - The cross-implementation `lwma1-cross-check` C++ harness below.
 
 # ----------------------------------------------------------------------
-# LWMA-1 cross-check harness (Phase 2 of docs/design/DAA_LWMA1_PLAN.md).
+# LWMA-1 cross-check harness (Phase 2 of docs/completed/DAA_LWMA1_PLAN.md).
 #
 # Compares the Rust production implementation
 # (`shekyl_difficulty_lwma1_next` via `libshekyl_ffi.a`) against:
@@ -52,7 +52,7 @@
 #     `docs/design/refs/shekyl_lwma1_running_max_symmetric_clamp.md`.
 #
 # Iterates the §8.1 input corpus and asserts the cross-implementation
-# relations documented in `docs/design/DAA_LWMA1.md` §3 / §8.1. Failure
+# relations documented in `docs/completed/DAA_LWMA1.md` §3 / §8.1. Failure
 # aborts the test; the gate is 100% passing before the C++ cutover.
 #
 # MSVC gate: both reference headers use GCC/Clang `__int128` /

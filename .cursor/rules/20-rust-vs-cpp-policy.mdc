@@ -39,6 +39,47 @@ code is structured; this file covers *when* to choose Rust.
 The historical reason for keeping things in C++ was inertia. The forward
 direction is Rust.
 
+## Touching C++: advance the boundary, don't thicken it
+
+The sections above decide where *new* code goes. This one governs what to do
+when you must touch *existing* C++ — for a feature, a fix, or a refactor.
+Editing C++ is the exception, not the default.
+
+The rationale is debt, not aesthetics. Every line you add to or change in C++
+is debt the Rust rewrite has to re-create and re-review later; and the
+inherited C++ carries enough accumulated bugs, glitches, and workarounds that
+"fix it in place" is rarely the cheapest path once that rewrite cost is
+counted. So when you touch C++ for any reason:
+
+- **Prefer Rust for the change itself — new logic and bug fixes.** If what
+  you're adding or fixing matches "Rust if any of" (secrets, crypto contracts,
+  untrusted-input parsing, amount arithmetic), it belongs behind the FFI in a
+  `shekyl_*` Rust entry point with proper types, not in a new or patched C++
+  branch. A bug fix is **not** exempt: fixing it in C++ now and re-fixing it in
+  Rust at rewrite time is two chances to get it wrong, and the C++ copy is dead
+  code on arrival.
+- **Keep the C++ a minimal transport/marshaling shim** over that entry point.
+- **Leave the file in better Rust-forward shape than you found it**
+  (`16-architectural-inheritance.mdc`'s "good shape after my edit").
+
+This is *opportunistic* boundary-advancement, and the guardrail is load-bearing:
+the touching PR's scope is **unchanged**. Routing the change through Rust is not
+the same as rewriting the surrounding C++ subsystem — that is a planning
+activity (see below), never a "while we're here" expansion
+(`15-deletion-and-debt.mdc`). The payoff is cumulative: each minimal forward cut
+shrinks the eventual rewrite scope.
+
+## The daemon: the largest instance of the rule above
+
+The daemon is not part of the wallet rewrite. Its glue — RPC, mempool,
+blockchain orchestration — stays C++ for now under the "C++ if all of" test
+above. But it *will* eventually be rewritten in Rust, so the
+advance-the-boundary rule applies to it with full force: new consensus logic
+belongs in a `shekyl_*` Rust entry point, not a new C++ branch, and every
+daemon file you touch should leave the C++/Rust boundary a little further
+forward. Each minimal forward cut shrinks the eventual daemon-rewrite scope and
+de-risks the Stage 5 transition.
+
 ## Migration is a planning activity, not a "while we're here" activity
 
 Migrating a C++ subsystem to Rust requires:

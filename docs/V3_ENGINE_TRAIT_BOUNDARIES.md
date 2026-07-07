@@ -23,7 +23,7 @@ reservation-tracker ownership correction), Phase 0b
 trait surface narrowing), and Phase 0c
 ([PR #25](https://github.com/Shekyl-Foundation/shekyl-core/pull/25),
 drop `transfers()` for `!Clone` discipline). The
-[Stage 1 PR 2 design doc](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+[Stage 1 PR 2 design doc](completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
 §2.2 captures the lifecycle-not-just-pre-flight discipline pattern
 that this drift count surfaced. **Stage 1 PR 3 (`KeyEngine`, PRs
 #31–#41, M3a–M3e) landed 2026-05-11.** **Stage 1 PR 4
@@ -31,11 +31,15 @@ that this drift count surfaced. **Stage 1 PR 3 (`KeyEngine`, PRs
 (`PendingTxEngine`, PR #81) landed 2026-05-27** — completing the
 §8.1 critical-path chain `DaemonEngine` → `LedgerEngine` →
 (`RefreshEngine` ∥ `PendingTxEngine`) on `dev` (merge
-`b9c03dc24`). `PersistenceEngine` Phase 0–2c landed on `dev` (trait module + file layer;
-`WalletFile` wiring follows). **`EconomicsEngine` remains spec-only**
-(no `engine/traits/economics.rs` yet); §8.1 permits it off the critical path.
+`b9c03dc24`). `PersistenceEngine` landed on `dev` (trait module + file layer +
+`WalletFile` wiring; the `F = WalletFile` slot and `persistence` field in
+`engine/mod.rs`). **`EconomicsEngine` landed** (PR #94,
+`feat/stage-1-pr7-economics-engine`, merge `24a342529`;
+`engine/traits/economics.rs` + the `engine/traits/mod.rs` re-export), growing
+the orchestrator to the `Engine<S, D, L, E, R, P, F>` seven-parameter shape —
+the `E` slot is carried for struct-shape stability with zero V3.0 consumer (R6).
 Post-closeout inventory: [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) and
-[`docs/design/STAGE_1_COMPLETION_AUDIT.md`](design/STAGE_1_COMPLETION_AUDIT.md).
+[`docs/completed/STAGE_1_COMPLETION_AUDIT.md`](completed/STAGE_1_COMPLETION_AUDIT.md).
 Subsequent per-trait PRs follow §8.1's within-stage-1 ordering and
 §8.2's amendment co-landing rule.
 
@@ -606,6 +610,17 @@ the implementation swap. Round 4b's mechanical fill-in
 applies these disciplines per-method as the per-method
 classifications land in §4 (Item 1).
 
+**These three documentation disciplines are CL-4 (the per-method
+C/I/P triad) of the seven *conformance lenses*** enumerated in
+[`docs/V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md`](V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md).
+That document is the consolidated checklist for reviewing a trait
+surface's documentation contract (ownership boundary, supertrait
+bounds, error landing pad, the C/I/P triad, Stage-4 swap-in
+invariance, justified `#[allow(dead_code)]`, and value/error-type
+forward-compat). The conformance lenses are distinct from the §8.3.1
+*design* lenses, which govern trait *shape* rather than
+documentation; see that doc's §0 for the disambiguation.
+
 ---
 
 ## 2. The seven traits (Stage 1 surface, pinned for Stage 4)
@@ -756,7 +771,7 @@ Round-2 dispositions targeted the pre-migration primitive-shape
 trait (`sign_with_spend`, `view_ecdh`, `ml_kem_decapsulate`,
 `derive_subaddress_public`); Stage 1 PR 3's Round 2 substantive
 workflow-shape pivot (commits `1c20fb7ee`, `3e3cb292c` —
-see [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+see [`STAGE_1_PR_3_KEY_ENGINE.md`](completed/STAGE_1_PR_3_KEY_ENGINE.md)
 "Round trajectory") replaced those primitives with the
 workflow-shape methods above (`try_claim_output`,
 `sign_transaction`), and Round 3 added the handle-indirected
@@ -764,7 +779,7 @@ contract that ensures no secret material crosses the trait
 boundary. The pre-migration Q9.1/Q9.2/Q9.3 dispositions are
 preserved here for the design-trajectory record; their
 post-M3 analogues live in
-[`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+[`STAGE_1_PR_3_KEY_ENGINE.md`](completed/STAGE_1_PR_3_KEY_ENGINE.md)
 §7.14 (Pattern-6 replay/idempotency contract) and the
 source-trait docstrings.
 
@@ -784,7 +799,7 @@ source-trait docstrings.
   `SignDomain` is no longer a trait-level concept; per the
   workflow-shape pivot, HKDF domain separation lives inside
   `LocalKeys` via the `SignsInDomain` marker trait + per-domain
-  markers (see [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  markers (see [`STAGE_1_PR_3_KEY_ENGINE.md`](completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §3.1.4 / Sub-bundle A).
 - **Q9.3 (explicit `wipe()` method): closed no.** `AllKeysBlob:
   ZeroizeOnDrop`; the Stage 4 actor's `Drop` inherits the wipe.
@@ -792,7 +807,7 @@ source-trait docstrings.
   process-explicit lock"; no method is needed. **Post-M3 status:**
   unchanged. The `AllKeysBlob` `ZeroizeOnDrop` migration landed
   via `chore/allkeysblob-zeroize-realignment` (post-M3a,
-  Phase 0e closure per [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  Phase 0e closure per [`STAGE_1_PR_3_KEY_ENGINE.md`](completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §5.1).
 
 ### 2.2 `LedgerEngine`
@@ -978,7 +993,7 @@ height parameter, no filter), and consumers reach transfers via
 (`rust/shekyl-engine-state/src/ledger_block.rs:231`) which takes
 no parameters at all.
 Introducing `Balance` as a parallel type alongside `BalanceSummary`
-would conflict with `docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`
+would conflict with `docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md`
 §7's explicit `BalanceSummary → Balance` rename deferral
 ("cosmetic; defer to a separate cleanup if naming churn is
 wanted"), and introducing empty `BalanceFilter` / `TransferFilter`
@@ -1162,7 +1177,7 @@ lifecycle drift. The template language refinement co-lands in PR
 realignment template.
 
 **Cross-doc realignment note.**
-[`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+[`docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md`](completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
 predates this amendment and the Phase 0b amendment above, and
 carries stale references to the now-removed `Balance` /
 `BalanceFilter` / `TransferFilter` types and the now-removed
@@ -2100,7 +2115,9 @@ multipliers, base burn rate, ESF, release bounds, pool-share
 constants, emission-decay constants) and the canonical
 derivations of values from those parameters and from chain
 state (base emission at a height, burn amount for a given fee,
-pool-weighted stake total). At V3.0 these are pure functions
+per-epoch staking rate `ρ_e` for the yield schedule — see Phase
+2b §8.6; this retires the former pool-weighted-stake-total
+surface). At V3.0 these are pure functions
 over `shekyl-economics` constants; at V3.x Component 3 they
 gain internal state for adaptive-burn observation, but the
 trait surface is unchanged.
@@ -2216,30 +2233,38 @@ pub trait EconomicsEngine {
         activity: ActivityMetric,
     ) -> Result<u64, Self::Error>;
 
-    /// Canonical total weighted stake across the principal pool — the
-    /// denominator intended for Phase 2b's `StakeEngine::projected_yield`
-    /// (2026-05-08 disposition). Sourced from chain-mirror state via
-    /// `ChainEconomicsSource::active_weighted_stake`, not from wallet-local
+    /// Public per-epoch staking rate `ρ_e` for the settled rate-epoch
+    /// `rate_epoch` — the sole yield-schedule surface Phase 2b's `StakeEngine`
+    /// consumes (`PHASE_2B_STAKE_LIFECYCLE.md` §8.6). `rate_epoch` is a
+    /// rate-epoch *index* (not a height); the caller converts via the public
+    /// `rate_epoch_blocks` from `parameters_snapshot()`. Consensus-derived from
+    /// the on-chain `band_sum` via chain-mirror state, not from a wallet-local
     /// `shekyl-staking::Registry` (Bug 2 class).
     ///
-    /// **`u128` per Bug 7** — aggregation uses `u128` to prevent overflow at
-    /// large pool sizes.
+    /// **`u64` fixed-point** — `ρ_e` is a rate (reward per unit weight per
+    /// block), not an amount, so it is *not* `AtomicUnits`; the yield product
+    /// `own_weight · K_S` is the crossing into `AtomicUnits`. The fixed-point
+    /// scale is consensus-defined upstream; the wallet consumes it.
     ///
-    /// **Zero is valid, not an error.** A return of `0` means no active stake
-    /// at the mirrored height — consensus burns the block's pool contribution
-    /// rather than carrying it ([`STAKER_REWARD_DISBURSEMENT.md`](STAKER_REWARD_DISBURSEMENT.md)
-    /// §"Empty-staker-set behavior"). Do not treat `0` as a failed read.
+    /// **Fallible — `Ok(0)` vs `Err` are distinct.** `Ok(0)` is a *settled*
+    /// epoch with an empty staker set (no yield that epoch — consensus burns
+    /// rather than carries; [`STAKER_REWARD_DISBURSEMENT.md`](STAKER_REWARD_DISBURSEMENT.md)
+    /// §"Empty-staker-set behavior"). `Err` is "cannot determine": rate-epoch
+    /// not yet settled, mirror unsynced, or defensive overflow. Unlike the
+    /// retired `pool_weighted_total` (`-> u128`, which overloaded `0` as both
+    /// no-stake and not-synced), the `Result` signals "unknown" explicitly.
     ///
-    /// **Callers using this as a denominator must guard division.** `0` is a
-    /// live divide-by-zero for yield-style computations; check before dividing.
-    ///
-    /// **`0` is overloaded.** The same value can mean (a) no active stake at
-    /// the relevant height (legitimate) or (b) wallet not synced to that height
-    /// / stale mirror (must not be used as denominator). This method is
-    /// infallible (`-> u128`) and cannot signal "unknown." Consumers that must
-    /// distinguish the cases must verify sync state separately before
-    /// interpreting `0`.
-    fn pool_weighted_total(&self) -> u128;
+    /// **Retires `pool_weighted_total` (`-> u128`).** That method's sole named
+    /// consumer was `StakeEngine::projected_yield`'s pool denominator; the
+    /// confidential staking redesign eliminated the daemon-supplied denominator
+    /// (`PHASE_2B_STAKE_LIFECYCLE.md` §7, §8.6), so the pool-aggregate surface
+    /// is dead (rule 15). Reopen (rule 21) only for a future consumer needing a
+    /// pool aggregate that cannot be composed from `rate_at_epoch` + chain
+    /// state. The `band_sum` mirror (`ChainEconomicsSource::active_weighted_stake`)
+    /// is repurposed as this method's internal `ρ_e`-derivation input, not a
+    /// public surface. **(Code removal lands with Stage 3; the trait still
+    /// carries `pool_weighted_total` until then.)**
+    fn rate_at_epoch(&self, rate_epoch: u64) -> Result<u64, Self::Error>;
 
     /// Parameter snapshot for governance / display.
     ///
@@ -2298,12 +2323,14 @@ graph's Group A (independent) gains `EconomicsEngine` alongside
 `StakeEngine` (Phase 2b) and `ArchivalEngine` (V3.x) are
 separate traits that consume `EconomicsEngine`:
 
-- `StakeEngine::projected_yield(stake, horizon)` calls
-  `EconomicsEngine::pool_weighted_total()` to get the pool
-  denominator and reads stake's lock-tier multiplier from
-  `EconomicsEngine::parameters_snapshot()` to compute the
-  yield. The canonical derivation lives on `EconomicsEngine`;
-  `StakeEngine` composes it with per-stake state.
+- `StakeEngine::projected_yield(stake_id, horizon)` calls
+  `EconomicsEngine::rate_at_epoch(rate_epoch)` for the public
+  per-epoch rate `ρ_e` and reads the stake's lock-tier multiplier
+  from `EconomicsEngine::parameters_snapshot()`, then composes
+  exact yield as `Σ own_weight · K_S` (no pool denominator — the
+  confidential redesign eliminated it; Phase 2b §8.6). The
+  canonical derivation lives on `EconomicsEngine`; `StakeEngine`
+  composes it with per-stake state.
 - `ArchivalEngine::archival_yield_history()` reads yield-rate
   parameters from `EconomicsEngine::parameters_snapshot()`
   and composes them with per-shard archival state.
@@ -2342,10 +2369,10 @@ New methods proposed for this trait must satisfy both:
   consumers may have to work around. The named-consumer rule
   is workflow discipline, not just ergonomic discipline:
   a method addition that names "Phase 2b's `StakeEngine`
-  needs `pool_weighted_total_at_height(height) -> u128` for
-  historical-yield queries" is a legitimate proposal; a
-  method addition that says "this might be useful to expose"
-  is not.
+  needs `rate_at_epoch(rate_epoch) -> Result<u64, _>` for the
+  per-epoch yield schedule" is a legitimate proposal (and is
+  exactly the §8.6 amendment that landed); a method addition
+  that says "this might be useful to expose" is not.
 
 The four clauses:
 
@@ -3319,7 +3346,7 @@ address it are sent back for amendment.
 #### 3.3.6 EconomicsEngine reads at Stage 4 (Round 4a Resolution C)
 
 `EconomicsEngine` reads (`base_emission_at`, `burn_amount`,
-`pool_weighted_total`, `parameters_snapshot`) are pure-function
+`rate_at_epoch`, `parameters_snapshot`) are pure-function
 or pure-snapshot at V3.0. The trait surface in §2.7 returns the
 **value type** `EconomicsParametersSnapshot` (no `Arc` in the
 trait return); the implementation choice of how to make that
@@ -3454,7 +3481,7 @@ Three classes:
 
 - **Class a** is most read-style methods: `balance`,
   `synced_height`, `get_fee_estimates`,
-  `base_emission_at`, `burn_amount`, `pool_weighted_total`,
+  `base_emission_at`, `burn_amount`, `rate_at_epoch`,
   `parameters_snapshot`. Reading these has no observable effect;
   dropping them at any stage is a no-op. All four
   `EconomicsEngine` methods are class a at V3.0; V3.x's
@@ -3691,7 +3718,7 @@ not the cancellation surface; the token is).
 | `KeyEngine` | `account_public_address` | sync | yes (read-only) | n/a |
 | `KeyEngine` | `derive_subaddress` | sync | yes (deterministic in `(view_secret, subaddress_index, purpose)`; pure derivation) | n/a |
 | `KeyEngine` | `try_claim_output` | async | **conditionally** — `NotMine` is fully idempotent; `Mine` re-binds the same `OutputHandle` deterministically under the M3b+ handle pathway (`handle = cSHAKE256(view_secret \|\| tx_hash \|\| output_index)`) | **b** (post-M3b workflow-internal handle-table insertion on `Mine`; deterministic handle so re-call observes the existing entry) |
-| `KeyEngine` | `sign_transaction` | async | **implementation-defined per replay-rejection contract** (Pattern-6 cluster, [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md) §7.14) — committed direction is replay-rejection at handle resolution | **a** (no observable side effect outside the returned signature material; signing-then-not-using is invisible to others) |
+| `KeyEngine` | `sign_transaction` | async | **implementation-defined per replay-rejection contract** (Pattern-6 cluster, [`STAGE_1_PR_3_KEY_ENGINE.md`](completed/STAGE_1_PR_3_KEY_ENGINE.md) §7.14) — committed direction is replay-rejection at handle resolution | **a** (M3a stub is side-effect-free; even the committed signing body produces only the returned signature material, so signing-then-not-using is invisible to others). **PR-5 forward trigger:** reclassify to **b** if PR 5's signing body consumes handle-table entries as a replay-rejection side effect that is *not* enqueue-survivable. |
 | `LedgerEngine` | `synced_height` | sync | yes (read-only) | n/a |
 | `LedgerEngine` | `snapshot` | sync | yes (read-only; returns owned snapshot) | n/a |
 | `LedgerEngine` | `balance` | sync | yes (read-only) | n/a |
@@ -3699,10 +3726,11 @@ not the cancellation surface; the token is).
 | `RefreshEngine` | `produce_scan_result` | async | no (each call observes the daemon's current tip; tip advances over time) | **c** (explicit `CancellationToken` parameter; five-checkpoint cancellation per §7) |
 | `PendingTxEngine` | `build` | async | no (each build picks fresh decoys; reservation IDs are monotonic) | **b** (allocates a reservation and mutates the reservation tracker; Stage 4 drop after enqueue is observation-only) |
 | `PendingTxEngine` | `submit` | async | **conditionally** — daemon dedupes by tx hash; calling `submit` twice on the same `ReservationId` produces one mempool submission | **b** (network side effect via `DaemonEngine`; Stage 4 drop after enqueue is observation-only) |
-| `PendingTxEngine` | `discard` | async | yes (discarding an already-discarded reservation is a no-op error variant the caller can treat as success) | **b** (mutates reservation tracker) |
+| `PendingTxEngine` | `discard` | sync | no (a second `discard` of the same rid returns `ReservationNotFound`; the end state is unchanged but the return value is not a success the caller can ignore without mapping it) | n/a (synchronous `fn`; cannot be cancelled mid-call) |
+| `PendingTxEngine` | `signal_mempool_evicted` | sync | no (a second call for the same rid returns `ReservationNotFound`; end state unchanged) | n/a (synchronous `fn`; cannot be cancelled mid-call) |
 | `PendingTxEngine` | `outstanding` | sync | yes (read-only) | n/a |
 | `DaemonEngine` | `get_fee_estimates` | async | yes (read-only; fee state is a snapshot at call time) | **a** (network read; no wallet-side side effect) |
-| `DaemonEngine` | `submit_transaction` | async | **conditionally** — daemon dedupes by tx hash (same tx bytes → same submission outcome) | **b** (network side effect; daemon may receive and act on the transaction even if the wallet drops the await) |
+| `DaemonEngine` | `submit_transaction` | async | **yes, as a status query** — resubmitting the same tx bytes returns the same locally computed hash and a definite verdict for every stable state (`AlreadyInPool` for pool-resident bytes with no relay pulse, `AlreadyInChain` for mined bytes; `DAEMON_SUBMIT_VERDICT.md` §2.5/F31) | **b** (network side effect; daemon may receive and act on the transaction even if the wallet drops the await) |
 | `DaemonEngine` | `Rpc` supertrait methods | async | per-method (inherits `Rpc`'s spec) | per-method (read-only RPCs are class **a**; mutating RPCs are class **b**) |
 | `PersistenceEngine` | `base_path` | sync | yes (read-only; returns immutable cached path) | n/a |
 | `PersistenceEngine` | `network` | sync | yes (read-only) | n/a |
@@ -3712,7 +3740,7 @@ not the cancellation surface; the token is).
 | `PersistenceEngine` | `rotate_password` | async | no (state changes per call; old credentials are no longer valid after a successful rotation) | **b** (writes file; Stage 4 drop is observation-only — rotation may complete after caller drops) |
 | `EconomicsEngine` | `base_emission_at` | sync | yes (read-only; deterministic given height at V3.0 neutral projection; V3.x adaptive-burn state may affect other methods — not this height-keyed projection) | n/a |
 | `EconomicsEngine` | `burn_amount` | sync | yes (read-only; deterministic given inputs at V3.0; deterministic given inputs plus state at V3.x) | n/a |
-| `EconomicsEngine` | `pool_weighted_total` | sync | yes (read-only; canonical derivation from current pool state) | n/a |
+| `EconomicsEngine` | `rate_at_epoch` | sync | yes (read-only; canonical derivation of `ρ_e` from chain-mirror `band_sum` at the rate-epoch) | n/a |
 | `EconomicsEngine` | `parameters_snapshot` | sync | yes (read-only; returns owned snapshot) | n/a |
 
 The "**conditionally**" entries name the explicit condition for
@@ -3727,7 +3755,10 @@ logic concrete safety properties:
   already merged, the retry returns `ConcurrentMutation`
   deterministically rather than double-applying.
 - `submit_transaction` and `PendingTxEngine::submit`: retry is
-  safe; the daemon de-duplicates by tx hash.
+  safe; a resubmit of the same bytes is a status query returning a
+  definite verdict (`AlreadyInPool` / `AlreadyInChain`,
+  `DAEMON_SUBMIT_VERDICT.md` §2.5/F31), and the rid-level
+  `SubmitAlreadyPending` guard prevents double-dispatch.
 - Read-only methods: trivially retry-safe.
 - `sign_transaction`: retry is **rejected at handle resolution**
   per the post-M3 replay-rejection contract — consumed handles
@@ -4196,11 +4227,13 @@ The clearest example today is `PendingTxEngine::submit` and
   the daemon's RPC; the daemon dedupes by tx hash on receipt —
   submitting the same tx twice produces a single on-chain
   effect because the daemon recognizes the duplicate and
-  returns its existing-pool acknowledgment.
-- §4 marks both methods as "conditionally idempotent (daemon
-  dedupes by tx hash)" — the *same condition* applies at both
+  returns a definite identity verdict (`AlreadyInPool` /
+  `AlreadyInChain`, `DAEMON_SUBMIT_VERDICT.md` §2.5/F31).
+- §4 grounds both methods' retry safety in the same daemon-side
+  dedup: the resubmit-is-a-status-query property applies at both
   layers because the layering is transparent to the dedup
-  property.
+  property (the rid-level `SubmitAlreadyPending` guard is the
+  outer layer's additional condition).
 
 Three crash cases under retry, summarized at a glance and then
 walked individually below:
@@ -4400,7 +4433,7 @@ ceremony, which today add ~50–200 ms per test.
   deterministic given the same inputs but distinct across calls.
   (Post-M3 + Post-PR-4 note: PR 3 shipped without a
   `MockKey` type per
-  [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`STAGE_1_PR_3_KEY_ENGINE.md`](completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §6.4's no-Mock substrate; PR 4 additionally retired
   `MockLedger` (C6β = `e94526dec`; replaced by
   `FaultInjecting<L: LedgerEngine>` composed against
@@ -4763,7 +4796,7 @@ the discipline's enforcement against the corresponding audience.
 
 PRs 1, 2, 3, 4, and 5 each surfaced disciplines that compound across
 subsequent per-engine PRs. The per-engine PR design rounds
-([Stage 1 PR 3 (`KeyEngine`)](design/STAGE_1_PR_3_KEY_ENGINE.md),
+([Stage 1 PR 3 (`KeyEngine`)](completed/STAGE_1_PR_3_KEY_ENGINE.md),
 [Stage 1 PR 4 (`RefreshEngine`)](design/STAGE_1_PR_4_REFRESH_ENGINE.md),
 [Stage 1 PR 5 (`PendingTxEngine`)](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md))
 produced disciplines whose value is **compound-by-inheritance**: each
@@ -4818,11 +4851,11 @@ Applicability conditions (all three must hold):
 
 | Trait | Lens applies? | Substrate citation |
 |---|---|---|
-| `KeyEngine` | yes — (1) keys mediate cross-actor signing/decoding; (2) HW-wallet latency surfaces a quiescence dependency; (3) Stage 4 actor non-trivial | [PR 3 design doc](design/STAGE_1_PR_3_KEY_ENGINE.md) substrate; not lens-reframed but admissible |
-| `LedgerEngine` | yes — (1) ledger snapshot mediates state-mutation; (2) reorg cascade surfaces quiescence dependency; (3) Stage 4 actor non-trivial | [PR 2 design doc](design/STAGE_1_PR_2_LEDGER_ENGINE.md); landed pre-lens; future LedgerEngine refinement PRs apply |
+| `KeyEngine` | yes — (1) keys mediate cross-actor signing/decoding; (2) HW-wallet latency surfaces a quiescence dependency; (3) Stage 4 actor non-trivial | [PR 3 design doc](completed/STAGE_1_PR_3_KEY_ENGINE.md) substrate; not lens-reframed but admissible |
+| `LedgerEngine` | yes — (1) ledger snapshot mediates state-mutation; (2) reorg cascade surfaces quiescence dependency; (3) Stage 4 actor non-trivial | [PR 2 design doc](completed/STAGE_1_PR_2_LEDGER_ENGINE.md); landed pre-lens; future LedgerEngine refinement PRs apply |
 | `RefreshEngine` | yes | [PR 4 Round 2 reframe](design/STAGE_1_PR_4_REFRESH_ENGINE.md) — original lens-application instance |
 | `EconomicsEngine` | bounded — surface is parameter-derivation; (2) fails | synchronous framing correct; no payoff lost |
-| `DaemonEngine` | yes — (1) connection state mediates RPC fan-out; (2) adversarial-daemon liveness; (3) Stage 4 non-trivial | [PR 1 design doc](design/STAGE_1_PR_1_DAEMON_ENGINE.md); landed pre-lens |
+| `DaemonEngine` | yes — (1) connection state mediates RPC fan-out; (2) adversarial-daemon liveness; (3) Stage 4 non-trivial | [PR 1 design doc](completed/STAGE_1_PR_1_DAEMON_ENGINE.md); landed pre-lens |
 | `PersistenceEngine` | bounded — single-runtime-consumer; (3) bounded payoff | synchronous framing correct |
 | `PendingTxEngine` | yes | [PR 5 Round 1](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) — second lens-application instance |
 | `StakeEngine` (Phase 2b) | yes — (1) stake records mediate cross-actor claim/unstake; (2) reorg + adaptive-burn surfaces quiescence; (3) Stage 4 non-trivial | Phase 2b design rounds apply the lens by inheritance |
@@ -5945,8 +5978,15 @@ here as additional entries.
 
 *Description.* `StakeEngine` is the canonical
 candidate for Phase 2b's additive trait — it owns per-stake
-records, the stake FSM state, and the principal-pool
-aggregation state at Stage 4; it consumes `EconomicsEngine`
+records, the stake FSM state, and (confidential redesign)
+per-stake commitment-opening secrets (`amount`, `z`) held
+**in memory only** (re-derived on hydration, never sealed).
+It owns **no** network principal-pool aggregation: the
+daemon-supplied pool denominator was eliminated, and exact
+yield derives from `EconomicsEngine::rate_at_epoch` × the
+wallet's own (secret) weight
+([`design/PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md)
+§7, §8.6). It consumes `EconomicsEngine`
 via the canonical-derivation surface (§2.7); it has explicit
 cross-cutting consumers (`Engine<S>` for stake-aware
 operations, future `ArchivalEngine` for sibling-actor

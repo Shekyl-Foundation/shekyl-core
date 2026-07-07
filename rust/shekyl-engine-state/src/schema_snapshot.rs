@@ -8,10 +8,12 @@
 //!
 //! This module is the mechanical half of the `block_version` discipline
 //! described in `docs/MID_REWIRE_HARDENING.md` §3.4 (hardening-pass commit
-//! 3.4). Every block type that lands on disk — [`WalletLedger`] and the
-//! four inner blocks [`LedgerBlock`], [`BookkeepingBlock`], [`TxMetaBlock`],
-//! and [`SyncStateBlock`] — derives
-//! [`postcard_schema::Schema`](postcard_schema::Schema), producing a
+//! 3.4). Every type that lands on disk — [`WalletLedger`] and the five inner
+//! blocks [`LedgerBlock`], [`BookkeepingBlock`], [`TxMetaBlock`],
+//! [`SyncStateBlock`], and [`StakingBlock`], plus the `P`-isolated
+//! [`PScanCursor`], [`PScanState`], and [`PendingPostBlock`] (separate sealed
+//! records, not wallet-ledger sub-blocks) —
+//! derives [`postcard_schema::Schema`](postcard_schema::Schema), producing a
 //! compile-time [`NamedType`] tree that captures every field's wire shape.
 //! The snapshot tests in this module serialize that tree to pretty JSON and
 //! compare it against a committed `.snap` file under
@@ -29,6 +31,10 @@
 //! - `bookkeeping_block.snap`      ↔  [`BOOKKEEPING_BLOCK_VERSION`]
 //! - `tx_meta_block.snap`          ↔  [`TX_META_BLOCK_VERSION`]
 //! - `sync_state_block.snap`       ↔  [`SYNC_STATE_BLOCK_VERSION`]
+//! - `staking_block.snap`          ↔  [`STAKING_BLOCK_VERSION`]
+//! - `pscan_cursor.snap`           ↔  [`PSCAN_CURSOR_VERSION`]
+//! - `pscan_state.snap`            ↔  [`PSCAN_STATE_VERSION`]
+//! - `pending_post_block.snap`     ↔  [`PENDING_POST_VERSION`]
 //!
 //! The pairing is enforced in CI by
 //! `.github/workflows/schema-snapshot.yml` — any PR that touches a `.snap`
@@ -63,15 +69,24 @@
 //! [`BOOKKEEPING_BLOCK_VERSION`]: crate::bookkeeping_block::BOOKKEEPING_BLOCK_VERSION
 //! [`TX_META_BLOCK_VERSION`]: crate::tx_meta_block::TX_META_BLOCK_VERSION
 //! [`SYNC_STATE_BLOCK_VERSION`]: crate::sync_state_block::SYNC_STATE_BLOCK_VERSION
+//! [`STAKING_BLOCK_VERSION`]: crate::staking_block::STAKING_BLOCK_VERSION
+//! [`PSCAN_CURSOR_VERSION`]: crate::pscan_cursor::PSCAN_CURSOR_VERSION
+//! [`PSCAN_STATE_VERSION`]: crate::pscan_state::PSCAN_STATE_VERSION
+//! [`PENDING_POST_VERSION`]: crate::pending_post_block::PENDING_POST_VERSION
 //! [`WalletLedger`]: crate::wallet_ledger::WalletLedger
 //! [`LedgerBlock`]: crate::ledger_block::LedgerBlock
 //! [`BookkeepingBlock`]: crate::bookkeeping_block::BookkeepingBlock
 //! [`TxMetaBlock`]: crate::tx_meta_block::TxMetaBlock
 //! [`SyncStateBlock`]: crate::sync_state_block::SyncStateBlock
+//! [`StakingBlock`]: crate::staking_block::StakingBlock
+//! [`PScanCursor`]: crate::pscan_cursor::PScanCursor
+//! [`PScanState`]: crate::pscan_state::PScanState
+//! [`PendingPostBlock`]: crate::pending_post_block::PendingPostBlock
 
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::BTreeSet,
         env, fs,
         path::{Path, PathBuf},
     };
@@ -83,7 +98,9 @@ mod tests {
 
     use crate::{
         bookkeeping_block::BookkeepingBlock, ledger_block::LedgerBlock,
-        sync_state_block::SyncStateBlock, tx_meta_block::TxMetaBlock, wallet_ledger::WalletLedger,
+        pending_post_block::PendingPostBlock, pscan_cursor::PScanCursor, pscan_state::PScanState,
+        staking_block::StakingBlock, sync_state_block::SyncStateBlock, tx_meta_block::TxMetaBlock,
+        wallet_ledger::WalletLedger,
     };
 
     /// Snapshot directory, relative to the `shekyl-engine-state` crate root.
@@ -221,6 +238,96 @@ mod tests {
         check_or_update_snapshot("sync_state_block", <SyncStateBlock as Schema>::SCHEMA);
     }
 
+    #[test]
+    fn staking_block_schema_matches_snapshot() {
+        check_or_update_snapshot("staking_block", <StakingBlock as Schema>::SCHEMA);
+    }
+
+    #[test]
+    fn pscan_cursor_schema_matches_snapshot() {
+        check_or_update_snapshot("pscan_cursor", <PScanCursor as Schema>::SCHEMA);
+    }
+
+    #[test]
+    fn pscan_state_schema_matches_snapshot() {
+        check_or_update_snapshot("pscan_state", <PScanState as Schema>::SCHEMA);
+    }
+
+    #[test]
+    fn pending_post_block_schema_matches_snapshot() {
+        check_or_update_snapshot("pending_post_block", <PendingPostBlock as Schema>::SCHEMA);
+    }
+
+    /// Meta-guard against the dual-registry divergence: the version-bump CI
+    /// registry (the `PAIRS` array in `.github/workflows/schema-snapshot.yml`)
+    /// must list **exactly** the committed snapshots.
+    ///
+    /// The `.snap` files are the harness's de-facto registry — every type with a
+    /// `*_schema_matches_snapshot` test above writes `schemas/<stem>.snap`. The
+    /// YAML `PAIRS` is a *second*, hand-maintained registry; it exists because it
+    /// drives a **git-level** check the in-process tests cannot do (a `.snap`
+    /// changed in a PR ⟹ its `_VERSION` constant moved in the same PR — the test
+    /// has no diff to see). Two hand-mirrored registries are a silent-divergence
+    /// hazard: register a new type's snapshot without adding its `PAIRS` entry and
+    /// the `.snap`↔`_VERSION` enforcement is silently absent (CI green, guard
+    /// gone). This test makes that divergence **loud** — the two stem-sets must be
+    /// equal — so a new (or removed) type can't slip the pairing past review.
+    #[test]
+    fn version_bump_registry_covers_every_snapshot() {
+        // Assert-mode only: this invariant is about the *committed* snapshot set.
+        // Under `UPDATE_SNAPSHOTS=1` the `.snap` files are being (re)generated, so
+        // `schemas/` may not exist yet and — because Rust runs tests in a
+        // non-deterministic order — the set is only transiently complete while the
+        // per-type writers run. Comparing it to `PAIRS` mid-regeneration is
+        // meaningless and would fail spuriously. CI's assert-snapshots job runs
+        // *without* the flag, so the guard still fires where it gates merges. (Same
+        // `UPDATE_SNAPSHOTS` branch the snapshot writers above take.)
+        if env::var_os("UPDATE_SNAPSHOTS").is_some() {
+            return;
+        }
+
+        // The committed snapshots: the set of `schemas/*.snap` stems.
+        let snap_stems: BTreeSet<String> = fs::read_dir(schemas_dir())
+            .expect("read schemas dir")
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                if path.extension()? == "snap" {
+                    path.file_stem()?.to_str().map(String::from)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // The YAML `PAIRS` stems. `CARGO_MANIFEST_DIR` is the crate root
+        // (`rust/shekyl-engine-state`); the workflow is two levels up, at repo root.
+        let workflow = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.github/workflows/schema-snapshot.yml");
+        let yaml = fs::read_to_string(&workflow)
+            .unwrap_or_else(|e| panic!("read {}: {e}", workflow.display()));
+        let pair_stems: BTreeSet<String> = yaml.lines().filter_map(parse_pairs_stem).collect();
+
+        assert_eq!(
+            snap_stems, pair_stems,
+            "the `PAIRS` array in .github/workflows/schema-snapshot.yml must list \
+             exactly the committed snapshots (rust/shekyl-engine-state/schemas/*.snap). \
+             A snapshot with no `PAIRS` entry leaves its .snap<->_VERSION pairing \
+             silently unenforced; a `PAIRS` entry with no snapshot is stale. Sync them.",
+        );
+    }
+
+    /// Extract `<stem>` from a `PAIRS` line `"<stem>|<src>.rs|<VERSION>"`. Returns
+    /// `None` for any other YAML line (the shape-gate below keeps it specific).
+    fn parse_pairs_stem(line: &str) -> Option<String> {
+        let inner = line.trim().strip_prefix('"')?.strip_suffix('"')?;
+        let mut parts = inner.split('|');
+        let stem = parts.next()?;
+        let src = parts.next()?;
+        let version = parts.next()?;
+        (parts.next().is_none() && src.ends_with(".rs") && version.contains("VERSION"))
+            .then(|| stem.to_string())
+    }
+
     /// Defense-in-depth: the rendered JSON must actually be
     /// deserializable back into an `OwnedNamedType`. This catches any
     /// future regression in `postcard_schema`'s Serialize impl (e.g. a
@@ -233,6 +340,7 @@ mod tests {
             <BookkeepingBlock as Schema>::SCHEMA,
             <TxMetaBlock as Schema>::SCHEMA,
             <SyncStateBlock as Schema>::SCHEMA,
+            <StakingBlock as Schema>::SCHEMA,
         ] {
             let json = render_schema(schema);
             let parsed: OwnedNamedType = serde_json::from_str(&json)

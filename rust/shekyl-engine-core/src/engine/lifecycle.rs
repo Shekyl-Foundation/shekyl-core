@@ -65,11 +65,14 @@ use shekyl_engine_file::{
     CreateParams as FileCreateParams, OpenOutcome, SafetyOverrides, WalletFile, WalletFileError,
 };
 use shekyl_engine_prefs::{LoadOutcome as PrefsLoadOutcome, WalletPrefs};
-use shekyl_engine_state::{LedgerIndexes, WalletLedger};
+use shekyl_engine_state::{LedgerIndexes, StakingBlock, WalletLedger};
+
+use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
 
 use super::error::{IoError, KeyError, OpenError};
 use super::local_ledger::LocalLedger;
 use super::local_refresh::LocalRefresh;
+use super::stake_engine::{PSlot, StakeEngineHandle, ARCHIVAL_PERSONA_LOOKAHEAD};
 use super::traits::{DaemonEngine, LedgerEngine, RefreshEngine};
 use super::{Capability, DaemonClient, Engine, EngineSignerKind, SoloSigner};
 
@@ -136,17 +139,20 @@ pub enum OpenedEngine<
     S: EngineSignerKind,
     D: DaemonEngine = DaemonClient,
     L: LedgerEngine = LocalLedger,
+    E: super::traits::EconomicsEngine = super::local_economics::LocalEconomics,
     R: RefreshEngine = LocalRefresh,
     P: super::traits::PendingTxEngine = super::LocalPendingTx<
         super::LocalSigner,
         super::WalletGreedyOutputSelector,
         super::DaemonFeeEstimator,
+        super::fee_snapshot::DaemonFeeSnapshotSource<DaemonClient>,
+        super::transaction_submitter::DaemonTransactionSubmitter<DaemonClient>,
         super::LocalLedger,
     >,
 > {
     /// `.wallet` was present and decoded successfully. The wallet is
     /// fully loaded against the persisted ledger.
-    Loaded(Engine<S, D, L, R, P>),
+    Loaded(Engine<S, D, L, E, R, P>),
 
     /// `.wallet` was missing. The keys file was intact and the wallet
     /// was reconstructed with an empty ledger anchored at
@@ -154,7 +160,7 @@ pub enum OpenedEngine<
     /// state, then `save_state` the rebuilt ledger.
     Restored {
         /// The reconstructed wallet, ready for refresh.
-        wallet: Engine<S, D, L, R, P>,
+        wallet: Engine<S, D, L, E, R, P>,
         /// Block height the synthesized ledger anchors at; equals the
         /// keys-file's `restore_height_hint` widened to `u64`.
         from_height: u64,
@@ -165,9 +171,10 @@ impl<
         S: EngineSignerKind,
         D: DaemonEngine + std::fmt::Debug,
         L: LedgerEngine,
+        E: super::traits::EconomicsEngine,
         R: RefreshEngine,
         P: super::traits::PendingTxEngine,
-    > std::fmt::Debug for OpenedEngine<S, D, L, R, P>
+    > std::fmt::Debug for OpenedEngine<S, D, L, E, R, P>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -191,12 +198,13 @@ impl<
         S: EngineSignerKind,
         D: DaemonEngine,
         L: LedgerEngine,
+        E: super::traits::EconomicsEngine,
         R: RefreshEngine,
         P: super::traits::PendingTxEngine,
-    > OpenedEngine<S, D, L, R, P>
+    > OpenedEngine<S, D, L, E, R, P>
 {
     /// Borrow the underlying wallet regardless of the variant.
-    pub fn wallet(&self) -> &Engine<S, D, L, R, P> {
+    pub fn wallet(&self) -> &Engine<S, D, L, E, R, P> {
         match self {
             Self::Loaded(w) => w,
             Self::Restored { wallet, .. } => wallet,
@@ -204,7 +212,7 @@ impl<
     }
 
     /// Mutably borrow the underlying wallet regardless of the variant.
-    pub fn wallet_mut(&mut self) -> &mut Engine<S, D, L, R, P> {
+    pub fn wallet_mut(&mut self) -> &mut Engine<S, D, L, E, R, P> {
         match self {
             Self::Loaded(w) => w,
             Self::Restored { wallet, .. } => wallet,
@@ -214,7 +222,7 @@ impl<
     /// Consume the outcome and return the wallet, discarding the
     /// recovery-path signal. Use only when the caller has already
     /// surfaced the lost-state branch through some other channel.
-    pub fn into_wallet(self) -> Engine<S, D, L, R, P> {
+    pub fn into_wallet(self) -> Engine<S, D, L, E, R, P> {
         match self {
             Self::Loaded(w) => w,
             Self::Restored { wallet, .. } => wallet,
@@ -508,6 +516,8 @@ impl Engine<SoloSigner> {
         Self::assemble(
             file,
             blob,
+            master_seed_64,
+            seed_format,
             initial_ledger,
             indexes,
             prefs,
@@ -613,7 +623,16 @@ impl Engine<SoloSigner> {
         let indexes = LedgerIndexes::rebuild_from_ledger(&ledger.ledger);
 
         let wallet = Self::assemble(
-            file, blob, ledger, indexes, prefs, daemon, network, capability,
+            file,
+            blob,
+            &inputs.master_seed_64,
+            seed_format,
+            ledger,
+            indexes,
+            prefs,
+            daemon,
+            network,
+            capability,
         )?;
 
         Ok(match restored_from {
@@ -670,6 +689,8 @@ impl Engine<SoloSigner> {
     fn assemble(
         mut file: WalletFile,
         keys: AllKeysBlob,
+        master_seed: &[u8; MASTER_SEED_BYTES],
+        seed_format: SeedFormat,
         ledger: WalletLedger,
         indexes: LedgerIndexes,
         prefs: WalletPrefs,
@@ -709,38 +730,231 @@ impl Engine<SoloSigner> {
             file.effective_skip_to_height(),
             file.effective_refresh_from_block_height(),
         );
+        // §6 step 3(a): derive the merge-path view-secret projection from the
+        // owned blob *while it is still borrowable* — before `KeyActor::spawn`
+        // consumes it below. This is the (6-i) construction-time projection;
+        // the full blob then lives only in the actor.
+        let merge_view_secret = super::key_actor::HandleDerivationViewSecret::from_keys(&keys);
         let refresh = std::sync::Arc::new(super::local_refresh::LocalRefresh::new(
             view_material,
             scan_start_floor,
         ));
 
-        let keys = std::sync::Arc::new(keys);
+        // §6 step 3(b): spawn the `KeyActor`, which takes the `AllKeysBlob` by
+        // value. After this point no `&AllKeysBlob` is reachable from the
+        // orchestrator — every public read resolves from the handle's
+        // construction-time projections, and every secret-touching op routes
+        // through the actor's message protocol (§4.1–4.2). The spawn requires an
+        // ambient runtime (`KeyEngineHandle::spawn` asserts `Handle::try_current`;
+        // §4.2 require-ambient disposition — no engine-owned nested runtime).
+        // `merge_view_secret` was derived above (step 3(a)) before this
+        // consuming spawn.
+        let key = super::key_actor::KeyEngineHandle::spawn(keys);
+
+        // CT-5a commit 2: open the FCMP++ curve-tree store *beside the wallet
+        // files* (`docs/design/CT5_ENGINE_WIRING.md` §3.1) and spawn the actor
+        // over it. The store is the `.curvetree` sibling of the `.wallet` /
+        // `.wallet.keys` pair; `open_and_spawn` resumes from its contents with
+        // no genesis replay (R1-Q2). It requires the same ambient runtime the
+        // `KeyEngineHandle::spawn` above already asserts, so it is grouped here
+        // with the other actor spawn. A store-open failure is a wallet-file
+        // boundary failure (the store is a wallet companion file), so it maps to
+        // `IoError::WalletFile` with a curve-tree-store detail prefix rather than
+        // a new error variant (which would force a downstream RPC-tier match).
+        let curve_tree = {
+            let store_path =
+                shekyl_engine_file::paths::curve_tree_store_path_from(file.base_path());
+            super::curve_tree_actor::CurveTreeHandle::open_and_spawn(&store_path).map_err(|e| {
+                OpenError::Io(IoError::WalletFile {
+                    detail: format!("curve-tree store open failed: {e:?}"),
+                })
+            })?
+        };
+
+        // ARCHIVAL_BOND_CONSTRUCTION.md §10.2 (Model D): for a staker, derive the
+        // derive-forward set from the still-borrowed `master_seed` and spawn the
+        // StakeEngine over it. Read `&ledger.staking` *before* `ledger` is moved
+        // into the `LocalLedger` aggregate below. Non-stakers (the common case)
+        // get `None` — no derivation, no resident personas, no actor.
+        let stake = Self::spawn_stake_engine_if_staker(
+            master_seed,
+            network_to_derivation(network),
+            seed_format,
+            &ledger.staking,
+        )?;
+
         let ledger = std::sync::Arc::new(super::local_ledger::LocalLedger::new(ledger, indexes));
+        let fee_snapshot_source = super::fee_snapshot::DaemonFeeSnapshotSource::new(daemon.clone());
+        let submitter = std::sync::Arc::new(
+            super::transaction_submitter::DaemonTransactionSubmitter::new(std::sync::Arc::new(
+                daemon.clone(),
+            )),
+        );
         let pending = super::LocalPendingTx::new(
-            std::sync::Arc::new(super::LocalSigner::new(std::sync::Arc::clone(&keys))),
+            // §6 step 4: the signer no longer holds `Arc<AllKeysBlob>`; it
+            // carries a `KeyEngineHandle` clone and the future signing path
+            // routes through the actor's `SignTransaction` message.
+            std::sync::Arc::new(super::LocalSigner::new(key.clone())),
             super::WalletGreedyOutputSelector,
             super::DaemonFeeEstimator,
+            fee_snapshot_source,
+            submitter,
             std::sync::Arc::clone(&ledger),
+            // CT-5 §3.2.1 D1/D3 (commit 4b): share the curve-tree actor handle so
+            // the spend path gates selection on `min(synced_height, tree_cursor)`.
+            Some(curve_tree.clone()),
             std::sync::Arc::new(super::TracingDiagnosticSink),
             super::pending::ReservationTTLConfig::default(),
             network,
         );
 
+        // The economics slot is assembled but not consumed by any production
+        // path at V3.0 (PR 7 R6). The base-subsidy consensus cutover
+        // (7-cutover / C2c, #93) routed `get_block_reward` to the Rust
+        // primitive `shekyl_base_block_reward` directly, not through this
+        // trait, so this engine field stays unconsumed. (The claim-era
+        // pool_weighted_total chain-read seam was retired with the
+        // confidential-staking sweep.)
+        let economics = super::local_economics::LocalEconomics::new();
+
+        // §5.3 submit lifecycle driver: the escape horizon is derived from
+        // the consensus block target (`daa_target_seconds`, generated from
+        // `config/consensus_constants.json` into `shekyl_economics`), the
+        // same source the kernel's `WatchdogConfig::from_block_target`
+        // documents. Owned by the Engine so its overlays persist across
+        // ticks; the wallet surface and daemon are lent per tick.
+        let submit_driver =
+            tokio::sync::Mutex::new(super::submit_lifecycle::SubmitLifecycleDriver::new(
+                shekyl_economics::EconomicParams::default().daa_target_seconds,
+            ));
+
         Ok(Self {
             persistence: file,
             state_wrap_key,
             prefs_hmac_key,
-            keys,
+            key,
+            curve_tree,
+            merge_view_secret,
             ledger,
             pending,
+            submit_driver,
             prefs,
             daemon,
             network,
             capability,
             refresh_slot: super::refresh::RefreshSlot::new(),
+            pscan_slot: super::pscan::task::PScanSlot::new(),
+            pending_write_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
             refresh,
+            economics,
+            stake,
             _signer: std::marker::PhantomData,
         })
+    }
+
+    /// Derive the Model-D derive-forward set and spawn the archival
+    /// [`StakeEngine`](super::stake_engine::StakeEngine) for a staker, or return
+    /// `None` for a non-staker (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2).
+    ///
+    /// The derive-forward set is
+    /// `{persisted bonded slots} ∪ {cursor ..= cursor + ARCHIVAL_PERSONA_LOOKAHEAD}`,
+    /// where `cursor` is the **scan-reconciled monotone** persona cursor
+    /// ([`StakingBlock::monotone_current_slot_from_record`]) — never at or below
+    /// an observed bonded slot, so a stale/rolled-back `p_slot` can never re-derive
+    /// a rotated-past persona as "current". The bonded slots are unioned in because
+    /// under Model D the seed is dropped after this function returns, so a persona
+    /// absent from the held set is unreachable for the wallet's life — and a
+    /// retired-but-bonded persona's `bond_spend` key is needed to unbond it.
+    ///
+    /// The bundles are derived here from the transiently-borrowed `master_seed`;
+    /// the seed is **not** moved in (it stays owned by the caller and drops at the
+    /// caller's function end), and it never reaches the spawned actor. The actor
+    /// starts **idle** (`active = None`): nothing is on the wire until 2c-2b's
+    /// request path mints a [`PersonaHandle`](super::stake_engine::PersonaHandle)
+    /// and activates it.
+    ///
+    /// # Cost
+    ///
+    /// One PQ keygen per slot in the set, run synchronously here. The whole
+    /// `create` / `open_full` call is the blocking unit async callers wrap in
+    /// `spawn_blocking` (module docs), so this is off the open hot path at that
+    /// granularity; intra-call parallelism across the (small, `k`-bounded) set is
+    /// a perf follow-up, not a correctness concern. Only stakers pay it.
+    ///
+    /// # Errors
+    ///
+    /// [`OpenError::Key`] if any archival derivation fails (same closed-error
+    /// contract as `rederive_account`).
+    fn spawn_stake_engine_if_staker(
+        master_seed: &[u8; MASTER_SEED_BYTES],
+        derivation_network: DerivationNetwork,
+        seed_format: SeedFormat,
+        staking: &StakingBlock,
+    ) -> Result<Option<StakeEngineHandle>, OpenError> {
+        if !staking.staking_enabled {
+            return Ok(None);
+        }
+
+        let cursor = staking.monotone_current_slot_from_record();
+
+        // Union the persisted bonded hint with the lookahead window. A `BTreeSet`
+        // dedups the overlap (a bonded slot inside the window appears once) and
+        // keeps the derive order deterministic.
+        let mut slots: std::collections::BTreeSet<u32> =
+            staking.bonded_slots.iter().copied().collect();
+        for offset in 0..=ARCHIVAL_PERSONA_LOOKAHEAD {
+            // `cursor + offset` can saturate at `u32::MAX` only for a wallet that
+            // has rotated ~4 billion times; `checked_add` drops the out-of-range
+            // tail rather than wrapping to slot 0 (which would re-derive a
+            // rotated-past persona — the exact unlinkability break the monotone
+            // cursor prevents).
+            if let Some(slot) = cursor.checked_add(offset) {
+                slots.insert(slot);
+            }
+        }
+
+        let mut bundles = std::collections::BTreeMap::new();
+        for &slot in &slots {
+            let keys = derive_archival_p_keys(master_seed, derivation_network, seed_format, slot)
+                .map_err(|e| {
+                OpenError::Key(KeyError::Primitive {
+                    detail: rederivation_failure_detail(&e),
+                })
+            })?;
+            bundles.insert(PSlot(slot), keys);
+        }
+
+        let bonded: std::collections::BTreeSet<PSlot> =
+            staking.bonded_slots.iter().copied().map(PSlot).collect();
+
+        // Idle at open: the request path (2c-2b) mints a handle and activates.
+        let handle = StakeEngineHandle::spawn(bundles, bonded, None);
+
+        // S6 (conformance build only) — eager observation of the actor's
+        // `on_start` RNG self-cert. Block wallet-open until the grade completes;
+        // a non-conformant CSPRNG surfaces as `OpenError`, failing open loudly
+        // rather than staking on an RNG that cannot produce unlinkable timing.
+        //
+        // This deliberately uses `block_in_place` directly rather than
+        // `drive_persistence`: the awaited work (the actor's `on_start`) runs on
+        // the *ambient* runtime, not inside the future, so `drive_persistence`'s
+        // current-thread fallback (a fresh runtime on a scope thread) would
+        // deadlock — the actor would never be polled while we wait. `block_in_place`
+        // on a multi-thread runtime releases this worker so the actor keeps
+        // running; on a current-thread runtime it *panics* loudly (the
+        // panic-not-deadlock signal). Production wallet-open runs on the
+        // `rt-multi-thread` ambient runtime; conformance tests must use
+        // `#[tokio::test(flavor = "multi_thread")]`.
+        #[cfg(feature = "conformance")]
+        {
+            let rt = tokio::runtime::Handle::current();
+            let cert = tokio::task::block_in_place(|| rt.block_on(handle.wait_for_self_cert()));
+            if let Err(failure) = cert {
+                return Err(OpenError::StakeRngSelfCertFailed(failure));
+            }
+        }
+
+        Ok(Some(handle))
     }
 }
 
@@ -793,10 +1007,11 @@ impl<
         S: EngineSignerKind,
         D1: DaemonEngine,
         L: LedgerEngine,
+        E: super::traits::EconomicsEngine,
         R: RefreshEngine,
         P: super::traits::PendingTxEngine,
         F: super::traits::PersistenceEngine,
-    > Engine<S, D1, L, R, P, F>
+    > Engine<S, D1, L, E, R, P, F>
 {
     /// Test-only constructor: rebuild the engine with `daemon`
     /// substituted in place of the existing one, leaving every
@@ -844,35 +1059,52 @@ impl<
     /// test surface; production paths cannot reach it because
     /// `pub(crate) #[cfg(test)]` excludes them from the published
     /// API and from the non-test build.
-    pub(crate) fn replace_daemon<D2: DaemonEngine>(self, daemon: D2) -> Engine<S, D2, L, R, P, F> {
+    pub(crate) fn replace_daemon<D2: DaemonEngine>(
+        self,
+        daemon: D2,
+    ) -> Engine<S, D2, L, E, R, P, F> {
         let Engine {
             persistence,
             state_wrap_key,
             prefs_hmac_key,
-            keys,
+            key,
+            curve_tree,
+            merge_view_secret,
             ledger,
             pending,
+            submit_driver,
             prefs,
             daemon: _old,
             network,
             capability,
             refresh_slot,
+            pscan_slot,
+            pending_write_lock,
             refresh,
+            economics,
+            stake,
             _signer,
         } = self;
         Engine {
             persistence,
             state_wrap_key,
             prefs_hmac_key,
-            keys,
+            key,
+            curve_tree,
+            merge_view_secret,
             ledger,
             pending,
+            submit_driver,
             prefs,
             daemon,
             network,
             capability,
             refresh_slot,
+            pscan_slot,
+            pending_write_lock,
             refresh,
+            economics,
+            stake,
             _signer,
         }
     }
@@ -928,9 +1160,10 @@ fn is_default_overrides(overrides: &SafetyOverrides) -> bool {
 impl<
         S: EngineSignerKind,
         D: DaemonEngine,
+        E: super::traits::EconomicsEngine,
         P: super::traits::PendingTxEngine,
         F: super::traits::PersistenceEngine,
-    > Engine<S, D, LocalLedger, super::LocalRefresh, P, F>
+    > Engine<S, D, LocalLedger, E, super::LocalRefresh, P, F>
 {
     /// Rotate the wallet password, optionally also rotating the KDF
     /// parameters of the on-disk envelope wrap.
@@ -1041,7 +1274,7 @@ mod tests {
 
     use shekyl_crypto_pq::wallet_envelope::KdfParams;
     use shekyl_engine_prefs::hmac_key::FILE_KEK_BYTES;
-    use shekyl_simple_request_rpc::SimpleRequestRpc;
+    use shekyl_rpc_transport::SimpleRequestRpc;
     use tempfile::TempDir;
     use zeroize::Zeroizing;
 
@@ -1049,14 +1282,21 @@ mod tests {
     /// lifecycle methods covered here do not issue any RPC calls;
     /// the daemon is held on the `Engine<S>` for refresh / submit
     /// paths that land in later commits.
+    ///
+    /// **Runs inside the ambient test runtime.** Since `KeyEngineHandle::spawn`
+    /// became require-ambient (§4.2), every engine-building lifecycle test is a
+    /// `#[tokio::test(flavor = "multi_thread")]`. This helper therefore must not
+    /// build a *nested* runtime (`block_on` inside a runtime panics); it bridges
+    /// the async `SimpleRequestRpc::new` to the sync test body via
+    /// `block_in_place` + the ambient handle — the same shape as
+    /// [`super::drive_persistence`]'s multi-thread branch, and the reason the
+    /// tests pin `flavor = "multi_thread"`.
     fn dummy_daemon() -> DaemonClient {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("tokio runtime");
-        let rpc = rt
-            .block_on(SimpleRequestRpc::new("http://127.0.0.1:1".to_string()))
-            .expect("construct SimpleRequestRpc (no actual connection attempted)");
+        let rpc = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(SimpleRequestRpc::new("http://127.0.0.1:1".to_string()))
+        })
+        .expect("construct SimpleRequestRpc (no actual connection attempted)");
         DaemonClient::new(rpc)
     }
 
@@ -1116,8 +1356,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn create_full_then_open_full_round_trips_state() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_full_then_open_full_round_trips_state() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse battery staple";
         let creds = Credentials::password_only(password);
@@ -1147,8 +1387,8 @@ mod tests {
         assert_eq!(wallet.capability(), Capability::Full);
     }
 
-    #[test]
-    fn open_full_with_wrong_password_returns_incorrect_password() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn open_full_with_wrong_password_returns_incorrect_password() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse";
         let creds = Credentials::password_only(password);
@@ -1174,8 +1414,39 @@ mod tests {
         assert!(matches!(err, OpenError::IncorrectPassword), "got {err:?}");
     }
 
-    #[test]
-    fn open_full_with_wrong_network_returns_network_mismatch() {
+    /// Phase 1 query surface: `Engine::primary_address` assembles the
+    /// wallet's one reusable address from the `KeyActor`'s cached
+    /// public projection and the engine's cached network, and the
+    /// result survives an encode → decode round trip through the
+    /// `shekyl-address` codec.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn primary_address_renders_and_round_trips() {
+        use crate::engine::ShekylAddress;
+
+        let fix = make_create_fixture();
+        let creds = Credentials::password_only(b"correct horse");
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
+        let network = params.network;
+        let wallet =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+
+        let addr = wallet.primary_address();
+        assert_eq!(addr.network, network);
+
+        let encoded = addr.encode().expect("encode primary address");
+        let decoded = ShekylAddress::decode_for_network(&encoded, network)
+            .expect("decode primary address for the wallet's network");
+        assert_eq!(decoded.spend_key, addr.spend_key);
+        assert_eq!(decoded.view_key, addr.view_key);
+        assert_eq!(decoded.ml_kem_encap_key, addr.ml_kem_encap_key);
+
+        wallet.close(&creds).expect("close");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn open_full_with_wrong_network_returns_network_mismatch() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse";
         let creds = Credentials::password_only(password);
@@ -1207,8 +1478,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn change_password_rewraps_envelope_then_reopen_uses_new_password() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn change_password_rewraps_envelope_then_reopen_uses_new_password() {
         let fix = make_create_fixture();
         let p_old: &[u8] = b"old password";
         let p_new: &[u8] = b"new password";
@@ -1247,8 +1518,113 @@ mod tests {
         .expect("reopen with new password");
     }
 
-    #[test]
-    fn open_full_after_state_file_deleted_returns_restored_from_height() {
+    /// FOLLOWUPS V3.0: verify the rotated envelope round-trips against an
+    /// *independently constructed* [`WalletFile::open`] call rather than
+    /// only against [`Engine::open_full`]. This pins the full
+    /// I/O ↔ KDF ↔ AEAD chain at the orchestrator layer: if
+    /// `change_password` left the on-disk envelope in any state the
+    /// wallet-file layer alone cannot decode, this test fails even when
+    /// the orchestrator's own reopen path happens to succeed off cached
+    /// bytes.
+    ///
+    /// Capability coverage: FULL only. ViewOnly / HardwareOffload are
+    /// added when their `open_*` bodies land (see the View/HW lifecycle
+    /// entry in `docs/FOLLOWUPS.md`).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn change_password_round_trips_via_independent_wallet_file_open() {
+        let fix = make_create_fixture();
+        let p_old: &[u8] = b"old password";
+        let p_new: &[u8] = b"new password";
+        let creds_old = Credentials::password_only(p_old);
+        let creds_new = Credentials::password_only(p_new);
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds_old, &seed);
+        let network = params.network;
+        let mut wallet =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+        wallet
+            .change_password(&creds_old, &creds_new, None)
+            .expect("rotate password");
+        wallet.close(&creds_new).expect("close after rotate");
+
+        // Old password must refuse at the wallet-file layer with the
+        // envelope's deliberately-indistinct AEAD failure.
+        let err = WalletFile::open(&fix.base_path, p_old, network, SafetyOverrides::none())
+            .expect_err("old password must refuse at the wallet-file layer");
+        assert!(
+            matches!(
+                err,
+                WalletFileError::Envelope(WalletEnvelopeError::InvalidPasswordOrCorrupt)
+            ),
+            "got {err:?}"
+        );
+
+        // New password opens through the wallet-file layer alone, finds
+        // the persisted state (close saved it), and reports FULL.
+        let (file, outcome) =
+            WalletFile::open(&fix.base_path, p_new, network, SafetyOverrides::none())
+                .expect("independent WalletFile::open with new password");
+        assert_eq!(file.capability(), Capability::Full);
+        assert!(
+            matches!(outcome, shekyl_engine_file::OpenOutcome::StateLoaded(_)),
+            "expected StateLoaded after a clean close, got {outcome:?}"
+        );
+    }
+
+    /// Companion to the round-trip test above: a rotation that also
+    /// changes KDF parameters must rewrite the envelope header so the
+    /// new cost parameters govern subsequent opens. Asserted via
+    /// [`inspect_keys_file`](shekyl_crypto_pq::wallet_envelope::inspect_keys_file)
+    /// on the raw on-disk bytes — open-success alone cannot distinguish
+    /// "new KDF recorded" from "new KDF silently dropped", because
+    /// `open` reads whatever parameters the header declares.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn change_password_with_new_kdf_rewrites_envelope_header() {
+        use shekyl_crypto_pq::wallet_envelope::inspect_keys_file;
+        use shekyl_engine_file::paths::keys_path_from;
+
+        let fix = make_create_fixture();
+        let p_old: &[u8] = b"old password";
+        let p_new: &[u8] = b"new password";
+        let creds_old = Credentials::password_only(p_old);
+        let creds_new = Credentials::password_only(p_new);
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds_old, &seed);
+        let network = params.network;
+        let created_kdf = params.kdf;
+        // Still minimum-wall-clock, but distinguishable from the
+        // create-time parameters.
+        let rotated_kdf = KdfParams {
+            m_log2: created_kdf.m_log2,
+            t: created_kdf.t + 1,
+            p: created_kdf.p,
+        };
+
+        let mut wallet =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+        wallet
+            .change_password(&creds_old, &creds_new, Some(rotated_kdf))
+            .expect("rotate password with new KDF params");
+        wallet.close(&creds_new).expect("close after rotate");
+
+        let keys_bytes =
+            std::fs::read(keys_path_from(&fix.base_path)).expect("read rotated keys file");
+        let header = inspect_keys_file(&keys_bytes).expect("inspect rotated keys file header");
+        assert_eq!(header.kdf.m_log2, rotated_kdf.m_log2);
+        assert_eq!(header.kdf.t, rotated_kdf.t);
+        assert_eq!(header.kdf.p, rotated_kdf.p);
+
+        // And the rewritten header actually governs an independent open.
+        let (file, _outcome) =
+            WalletFile::open(&fix.base_path, p_new, network, SafetyOverrides::none())
+                .expect("independent WalletFile::open after KDF rotation");
+        assert_eq!(file.capability(), Capability::Full);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn open_full_after_state_file_deleted_returns_restored_from_height() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse";
         let creds = Credentials::password_only(password);
@@ -1293,8 +1669,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn close_with_outstanding_reservation_returns_outstanding_pending_tx() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn close_with_outstanding_reservation_returns_outstanding_pending_tx() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse";
         let creds = Credentials::password_only(password);
@@ -1303,8 +1679,6 @@ mod tests {
         let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
         let wallet =
             Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
-
-        use std::time::Instant;
 
         use super::super::local_pending_tx::ConsumerHeldEntry;
 
@@ -1315,15 +1689,7 @@ mod tests {
             .lock()
             .expect("pending state lock not poisoned")
             .consumer_held
-            .insert(
-                id,
-                ConsumerHeldEntry {
-                    created_at: Instant::now(),
-                    snapshot_id: super::super::pending::SnapshotId([0u8; 16]),
-                    built_at_height: 0,
-                    built_at_tip_hash: [0u8; 32],
-                },
-            );
+            .insert(id, ConsumerHeldEntry::for_outstanding_test(vec![0xAB; 64]));
 
         let count_before = wallet.outstanding_pending_txs();
         assert_eq!(count_before, 1);
@@ -1337,8 +1703,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn open_view_only_returns_capability_not_yet_implemented() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn open_view_only_returns_capability_not_yet_implemented() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse";
         let creds = Credentials::password_only(password);
@@ -1371,8 +1737,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn open_hardware_offload_returns_capability_not_yet_implemented() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn open_hardware_offload_returns_capability_not_yet_implemented() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse";
         let creds = Credentials::password_only(password);
@@ -1401,8 +1767,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn tampered_prefs_are_recovered_and_warned_about() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tampered_prefs_are_recovered_and_warned_about() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse";
         let creds = Credentials::password_only(password);
@@ -1466,8 +1832,8 @@ mod tests {
     use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;
     use shekyl_engine_file::WalletFileError;
 
-    #[test]
-    fn persistence_trait_save_state_round_trip() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn persistence_trait_save_state_round_trip() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse battery staple";
         let creds = Credentials::password_only(password);
@@ -1498,8 +1864,8 @@ mod tests {
         assert!(matches!(opened, OpenedEngine::Loaded(_)));
     }
 
-    #[test]
-    fn change_password_flushes_prefs() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn change_password_flushes_prefs() {
         let fix = make_create_fixture();
         let p_old: &[u8] = b"old password";
         let p_new: &[u8] = b"new password";
@@ -1529,8 +1895,8 @@ mod tests {
         assert_eq!(reopened.prefs().cosmetic.default_decimal_point, 9);
     }
 
-    #[test]
-    fn password_rotate_preserves_state_wrap_key_bytes() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn password_rotate_preserves_state_wrap_key_bytes() {
         let fix = make_create_fixture();
         let p_old: &[u8] = b"old password";
         let p_new: &[u8] = b"new password";
@@ -1554,8 +1920,8 @@ mod tests {
 
     /// Design §2c / F-R3.8: open → save_state(k) ok → rotate ok → save_state(k_stale)
     /// without re-derive must fail loud when keys-file bytes used for AAD drift.
-    #[test]
-    fn stale_state_wrap_key_fails_after_rotate_without_rederive() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stale_state_wrap_key_fails_after_rotate_without_rederive() {
         use shekyl_engine_file::paths::keys_path_from;
 
         let fix_a = make_create_fixture();
@@ -1621,8 +1987,8 @@ mod tests {
         assert_open_state_aead_failure(err);
     }
 
-    #[test]
-    fn wrong_state_wrap_key_sealed_state_fails_on_reopen() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wrong_state_wrap_key_sealed_state_fails_on_reopen() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse battery staple";
         let creds = Credentials::password_only(password);
@@ -1666,8 +2032,8 @@ mod tests {
         assert_open_state_aead_failure(err);
     }
 
-    #[test]
-    fn rederived_state_wrap_key_succeeds_after_rotate() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rederived_state_wrap_key_succeeds_after_rotate() {
         let fix = make_create_fixture();
         let p_old: &[u8] = b"old password";
         let p_new: &[u8] = b"new password";
@@ -1702,8 +2068,8 @@ mod tests {
         .expect("save with re-derived wrap key");
     }
 
-    #[test]
-    fn open_does_not_retain_file_kek() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn open_does_not_retain_file_kek() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse";
         let creds = Credentials::password_only(password);

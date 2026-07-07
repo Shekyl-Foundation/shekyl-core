@@ -9,7 +9,7 @@
 # Two triggers, three jobs:
 #
 #   pull_request → dev
-#     - capture-pr:       runs the Rust iai-callgrind harness on the PR
+#     - capture-pr:       runs the Rust gungraun harness on the PR
 #                         head, uploads `shekyl_rust_v0.json` as an
 #                         artifact.
 #     - compare:          fetches `bench-baseline/baseline.json`, runs
@@ -34,7 +34,7 @@
 #                         it does not yet exist. Never merges into
 #                         `dev` or `main`.
 #
-# Implementation scope: **Rust + iai-callgrind only** (Tier 1).
+# Implementation scope: **Rust + gungraun only** (Tier 1).
 # C++ Google Benchmark + Rust criterion wall-clock are Tier-2 and
 # deferred per `docs/MID_REWIRE_HARDENING.md` §3.3 implementation
 # notes / §6.1 upgrade path. Criterion numbers are still captured
@@ -87,6 +87,15 @@ on:
 
 # Top-level defaults: read-only. Per-job overrides upgrade to write
 # only where strictly necessary (PR comment; bench-baseline push).
+# Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
+# Without a concurrency group, every push to an open PR stacks a full new
+# run behind the old one — with the shared runner pool, repeated pushes
+# queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
+# unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
+concurrency:
+  group: benchmarks-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -121,9 +130,12 @@ jobs:
             valgrind build-essential pkg-config libssl-dev python3 jq
 
       - name: install Rust toolchain
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        # Composite action (.github/actions/install-rust): the one
+        # hardened download-then-run recipe, installing the
+        # rust-toolchain.toml pin up front (the inline `-y` form
+        # installed a floating stable that rust-toolchain.toml then
+        # overrode per cargo invocation anyway).
+        uses: ./.github/actions/install-rust
 
       - name: cache cargo registry + target
         uses: actions/cache@v4
@@ -135,13 +147,17 @@ jobs:
           key: bench-rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: bench-rust-${{ runner.os }}-
 
-      - name: install iai-callgrind-runner
+      - name: install gungraun-runner
         run: |
-          # Pin to the lib-side version declared in the bench crates'
-          # Cargo.toml (0.16.x today); SemVer-compatible patch drift
-          # is fine, but we do not want a surprise 0.17 slipping in
-          # and breaking the handshake protocol.
-          cargo install iai-callgrind-runner --version '^0.16' --locked
+          # EXACT-pin the runner to the lib version in `rust/Cargo.lock`.
+          # gungraun refuses to run when the runner is *newer* than the
+          # `gungraun` library ("runner X is newer than gungraun Y"), so a
+          # `^0.19` install silently drifts ahead the moment a new patch
+          # publishes (0.19.3 did exactly that) and breaks every bench run.
+          # Keep this `=` pin in lockstep with the lock: bump both together.
+          # Migrated from `iai-callgrind-runner ^0.16` per
+          # `docs/investigation/2026-05-09-bench-baseline-flake.md` §5.
+          cargo install gungraun-runner --version '=0.19.3' --locked
 
       - name: capture baseline
         run: ./scripts/bench/capture_rust_baseline.sh
@@ -324,9 +340,12 @@ jobs:
             build-essential pkg-config libssl-dev
 
       - name: install Rust toolchain
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        # Composite action (.github/actions/install-rust): the one
+        # hardened download-then-run recipe, installing the
+        # rust-toolchain.toml pin up front (the inline `-y` form
+        # installed a floating stable that rust-toolchain.toml then
+        # overrode per cargo invocation anyway).
+        uses: ./.github/actions/install-rust
 
       - name: cache cargo registry + target
         uses: actions/cache@v4
@@ -353,7 +372,7 @@ jobs:
           # Build the bench binary as an ordinary `--release` binary
           # (not under valgrind) so samply can sample it. The bench
           # harness defines `#[library_benchmark]` entry points; the
-          # resulting binary, when run without the iai-callgrind
+          # resulting binary, when run without the gungraun
           # protocol env, exits after a trivial handshake. That's
           # enough for samply to attach; for deeper profiles we
           # invoke it with cargo criterion instead.
@@ -392,9 +411,12 @@ jobs:
             valgrind build-essential pkg-config libssl-dev python3 jq
 
       - name: install Rust toolchain
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        # Composite action (.github/actions/install-rust): the one
+        # hardened download-then-run recipe, installing the
+        # rust-toolchain.toml pin up front (the inline `-y` form
+        # installed a floating stable that rust-toolchain.toml then
+        # overrode per cargo invocation anyway).
+        uses: ./.github/actions/install-rust
 
       - name: cache cargo registry + target
         uses: actions/cache@v4
@@ -406,8 +428,10 @@ jobs:
           key: bench-rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: bench-rust-${{ runner.os }}-
 
-      - name: install iai-callgrind-runner
-        run: cargo install iai-callgrind-runner --version '^0.16' --locked
+      - name: install gungraun-runner
+        # EXACT-pin in lockstep with `rust/Cargo.lock` (see the install step in
+        # the capture-pr job above for why `^0.19` drifts and breaks the run).
+        run: cargo install gungraun-runner --version '=0.19.3' --locked
 
       - name: capture baseline
         run: ./scripts/bench/capture_rust_baseline.sh
@@ -436,7 +460,7 @@ jobs:
           **Tip file:**
           - \`baseline.json\` — \`shekyl_rust_v0\`-schema envelope
             captured on a GitHub-hosted \`ubuntu-latest\` runner.
-          - \`baseline.iai.snapshot\` — raw iai-callgrind stdout
+          - \`baseline.iai.snapshot\` — raw gungraun stdout
             corresponding to the same capture.
 
           Current source commit: \`${CAPTURE_SOURCE_SHA}\`.

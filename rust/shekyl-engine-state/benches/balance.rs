@@ -25,8 +25,8 @@ use std::hint::black_box;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use curve25519_dalek::Scalar;
 
+use shekyl_curve_primitives::Commitment;
 use shekyl_engine_state::{transfer::SPENDABLE_AGE, TransferDetails};
-use shekyl_oxide::primitives::Commitment;
 use shekyl_scanner::BalanceSummary;
 
 fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
@@ -38,27 +38,24 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
         * curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 
     TransferDetails {
-        tx_hash,
+        tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
         internal_output_index: seed & 0xff,
         global_output_index: seed,
         block_height: height,
         key,
         key_offset: Scalar::ZERO,
         commitment: Commitment::new(Scalar::ONE, 1_000 + seed),
-        subaddress: None,
         payment_id: None,
         spent: (seed & 0x7) == 0,
         spent_height: None,
         key_image: None,
-        staked: (seed & 0b11) == 0,
-        stake_tier: (seed & 0x3) as u8,
-        stake_lock_until: height + 100,
-        last_claimed_height: 0,
+        awaiting_confirmation: None,
         source_ciphertext: None,
         output_handle: None,
         eligible_height: height + SPENDABLE_AGE,
         frozen: (seed & 0xf) == 0,
         fcmp_precomputed_path: None,
+        receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
     }
 }
 

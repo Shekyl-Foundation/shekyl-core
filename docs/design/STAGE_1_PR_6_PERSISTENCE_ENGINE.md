@@ -61,7 +61,7 @@ post–Phase-0 `dev` tip per PR 2 / PR 4 / PR 5 precedent.
   skeleton for this doc; §8.3 / WALLET_REWRITE_PLAN principles 4–8 cited
   in §3 below.
 - **Prior PRs (shape precedent).**
-  [`STAGE_1_PR_2_LEDGER_ENGINE.md`](STAGE_1_PR_2_LEDGER_ENGINE.md) (Phase 0
+  [`STAGE_1_PR_2_LEDGER_ENGINE.md`](../completed/STAGE_1_PR_2_LEDGER_ENGINE.md) (Phase 0
   pins + interior `RwLock`),
   [`STAGE_1_PR_4_REFRESH_ENGINE.md`](STAGE_1_PR_4_REFRESH_ENGINE.md) (async
   inline sync body),

@@ -1,32 +1,35 @@
 //! Keccak-256 hashing for Shekyl's `cn_fast_hash` primitive.
 //!
-//! Uses original Keccak padding (0x01), NOT NIST SHA3 padding (0x06).
-//! This is consensus-critical: the output must be byte-identical to the
-//! C implementation in `src/crypto/keccak.c`. The primitive is byte-
-//! identical to upstream Monero's `cn_fast_hash` (same Keccak variant,
-//! same padding) — that compatibility is incidental to the genesis-
-//! locked Shekyl spec, not a Monero-compatibility requirement; see
-//! `60-no-monero-legacy.mdc`.
+//! Backed by the audited RustCrypto `sha3` crate (`Keccak256`) — original Keccak
+//! padding (0x01), NOT NIST SHA3 padding (0x06). This is consensus-critical: the
+//! output must be byte-identical to the C `src/crypto/keccak.c` (the empty-input KAT
+//! in `tests` pins exactly that). The byte-identity, not the implementation crate, is
+//! what is genesis-locked — `sha3` and the prior `tiny-keccak` both compute the same
+//! original-Keccak-256, and standardizing on the RustCrypto crate collapses the
+//! codebase onto one audited keccak (shekyl-oxide already uses `sha3`).
+//!
+//! The `cn_fast_hash` *name* is the inherited CryptoNote consensus-primitive name
+//! ("cn" = CryptoNote; the *fast* hash vs. the slow PoW hash), kept for 1:1 source
+//! mapping to the C++ daemon; a rule-93 rename to `keccak256` is a tracked follow-up
+//! (see `60-no-monero-legacy.mdc`).
 
 #![deny(unsafe_code)]
 
-use tiny_keccak::{Hasher, Keccak};
+use sha3::{Digest, Keccak256};
 
 pub const HASH_SIZE: usize = 32;
 
 pub type Hash = [u8; HASH_SIZE];
 
-/// Compute `cn_fast_hash` -- Keccak-256 with original padding.
+/// Compute `cn_fast_hash` — Keccak-256 with original padding, via RustCrypto `sha3`.
 ///
-/// This matches `cn_fast_hash` in `src/crypto/hash.c` which calls
-/// `keccak1600` (full 200-byte state absorb) then takes the first 32 bytes.
-/// For 32-byte output the rate is 136 bytes (1600 - 2*256 = 1088 bits).
+/// Matches `cn_fast_hash` in `src/crypto/hash.c` (keccak1600 absorb, first 32 bytes;
+/// rate 136 bytes for 256-bit output). `sha3::Keccak256` is the original Keccak
+/// variant (0x01 padding), so this is byte-identical to the prior tiny-keccak impl and
+/// to the C++ daemon — verified by the empty-input KAT below and the live coinbase/
+/// spend hash KATs in shekyl-wire.
 pub fn cn_fast_hash(data: &[u8]) -> Hash {
-    let mut keccak = Keccak::v256();
-    keccak.update(data);
-    let mut out = [0u8; HASH_SIZE];
-    keccak.finalize(&mut out);
-    out
+    Keccak256::digest(data).into()
 }
 
 /// Compute `tree_hash_cnt`: largest power of 2 strictly less than count.

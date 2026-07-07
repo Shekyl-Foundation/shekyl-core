@@ -33,10 +33,18 @@
 //! JSON/binary/JSON-RPC dispatch, body size limits, CORS, and
 //! restricted-mode enforcement.
 
+// This crate's `tracing::*` events reach the C++-installed subscriber
+// because the daemon links exactly one Rust image
+// (`rust/shekyl-daemon-image`, which combines this crate with
+// `shekyl-ffi`'s logging surface into one archive with one
+// `tracing-core` dispatcher). See V3_WALLET_DECISION_LOG.md
+// (single-image contract, 2026-06-11 amendment).
+
 pub mod core;
 pub mod ffi;
 pub mod ffi_exports;
 pub mod handlers;
 pub mod middleware;
 pub mod server;
+pub mod submit;
 pub mod types;

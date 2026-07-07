@@ -34,9 +34,9 @@
 //! Secret wrappers (`ViewSecret`, `SpendSecret`, `MlKem768DecapKey`)
 //! carry `Zeroize + ZeroizeOnDrop` and forbid `Copy`. Public-key
 //! wrappers (`SpendPublicKey`, `ViewPublicKey`) carry `Copy + Eq + Hash`
-//! for use as identity-bearing values in registries (e.g. the subaddress
-//! registry's `HashMap<SpendPublicKey, SubaddressIndex>` in
-//! `shekyl-engine-core`'s `LocalKeys`); they implement `Zeroize` (so
+//! for use as identity-bearing values in maps and sets keyed by account
+//! identity (e.g. `HashMap<SpendPublicKey, _>`); they implement
+//! `Zeroize` (so
 //! the surrounding `AllKeysBlob`'s derived `ZeroizeOnDrop` calls
 //! `.zeroize()` on them as part of the uniform field-wipe pattern raw
 //! `[u8; 32]` fields had) but not `ZeroizeOnDrop` (which would conflict
@@ -292,10 +292,10 @@ impl MlKem768DecapKey {
 /// # Hygiene properties
 ///
 /// - **`Copy`.** Public-key values flow through registries
-///   (e.g. `LocalKeys`'s `HashMap<SpendPublicKey, SubaddressIndex>`)
+///   (e.g. primary spend-key equality checks in `LocalKeys`)
 ///   and through cryptographic plumbing; `Copy` matches their
 ///   value-type role.
-/// - **`Eq + Hash + Ord`.** Required by the subaddress registry
+/// - **`Eq + Hash + Ord`.** Required by spend-public-key keyed maps
 ///   and any other identity-bearing key map.
 /// - **Manual truncated `Debug`** prints the first two bytes only.
 ///   Default `Debug` on an account-bound identifier invites
@@ -329,10 +329,7 @@ impl SpendPublicKey {
     /// surface.
     ///
     /// Public constructor (rather than `pub(crate)`) because the
-    /// engine boundary lives outside this crate: subaddress
-    /// derivation in `shekyl-engine-core::engine::local_keys` wraps
-    /// the bytes returned by [`crate::subaddress::subaddress_keys`]
-    /// at the trait-surface boundary, mirroring the
+    /// engine boundary lives outside this crate, mirroring the
     /// [`crate::key_image::KeyImage::from_canonical_bytes`] pattern.
     pub fn from_canonical_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)

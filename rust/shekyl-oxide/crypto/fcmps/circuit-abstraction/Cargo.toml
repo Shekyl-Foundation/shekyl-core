@@ -3,18 +3,15 @@ name = "generalized-bulletproofs-circuit-abstraction"
 version = "0.1.0"
 description = "An abstraction for arithmetic circuits over Generalized Bulletproofs"
 license = "MIT"
-repository = "https://github.com/Shekyl-Foundation/shekyl-oxide/tree/main/crypto/fcmps/circuit-abstraction"
-authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
+repository = "https://github.com/monero-oxide/monero-oxide/tree/main/crypto/fcmps/circuit-abstraction"
+authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 keywords = ["bulletproofs", "circuit"]
 edition = "2021"
-rust-version = "1.66"
+rust-version = "1.68"
 
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
-
-[lints]
-workspace = true
 
 [dependencies]
 std-shims = { version = "^0.1.1", default-features = false }

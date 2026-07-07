@@ -47,7 +47,7 @@
 //! implementor reconstructs the per-input secret material internally
 //! via [`recover_combined_ss`] (Layer 1) composed with the engine-owned
 //! spend-secret material in
-//! `LocalKeys::derive_source_secrets_bundle`
+//! `LocalKeys::derive_primary_source_secrets_bundle`
 //! (Layer 2; lands in M3b commit 6). The bundle's *shape* documents
 //! the contract that
 //! [`shekyl_tx_builder::sign_transaction`] consumes; it stays stable
@@ -67,13 +67,13 @@
 //! [`HybridCiphertext`]: shekyl_crypto_pq::kem::HybridCiphertext
 //! [`TransferDetails`]: shekyl_engine_state::TransferDetails
 
-use shekyl_address::ShekylAddress;
+use shekyl_address::Network;
 use shekyl_crypto_pq::handle::OutputHandle;
-use shekyl_crypto_pq::kem::{HybridCiphertext, HybridKemPublicKey};
+use shekyl_crypto_pq::kem::HybridCiphertext;
 use shekyl_crypto_pq::key_image::KeyImage;
-use shekyl_crypto_pq::keys::{SpendPublicKey, ViewPublicKey};
-use shekyl_engine_state::SubaddressIndex;
-use zeroize::Zeroizing;
+use shekyl_tx_builder::{LeafEntry, PqcAuth, TreeContext};
+use shekyl_units::AtomicUnits;
+use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::engine::error::KeyEngineError;
 
@@ -83,20 +83,10 @@ use crate::engine::error::KeyEngineError;
 /// `STAGE_1_PR_3_KEY_ENGINE.md` §3.3 Sub-bundle A's
 /// `VIEW_TAG_BYTES` row (A4 disposition Round 3 §3.1.4).
 ///
-/// 1 byte matches `shekyl_crypto_pq::derivation::derive_view_tag_x25519`'s
-/// `u8` return type and bounds the X25519-only pre-filter false-positive
-/// rate to 2⁻⁸ per output. A future widening migration would bump this
-/// constant and the underlying HKDF salt suffix
-/// (`HKDF_SALT_VIEW_TAG_X25519`'s `-v1`) together.
+/// 1 byte matches `shekyl_crypto_pq::derivation::derive_view_tag_prefilter`'s
+/// `u8` return type (FA-6 ML-KEM-keyed pre-filter). A future widening migration
+/// would bump this constant and `HKDF_SALT_VIEW_TAG_PREFILTER`'s `-v1` together.
 pub(crate) const VIEW_TAG_BYTES: usize = 1;
-
-// --- Address aliases -------------------------------------------------------
-
-/// Re-export of the workspace's parsed structured address type for use
-/// at the trait surface. Closes the §3.3 Sub-bundle B "open question:
-/// `Address` type provenance" with the existing
-/// [`shekyl_address::ShekylAddress`] type.
-pub(crate) type Address = ShekylAddress;
 
 // --- Trait-surface message shapes (§3.3 Sub-bundle B) ----------------------
 
@@ -167,6 +157,10 @@ pub(crate) struct OutputDetectionInput {
     /// Amount-tag byte from the on-chain encrypted-amounts proof; used
     /// by `scan_output_recover` to validate amount integrity.
     pub amount_tag_on_chain: u8,
+    /// Encrypted label bytes (8-byte XOR-encrypted plaintext).
+    pub enc_label: [u8; 8],
+    /// Label-tag byte from the on-chain encrypted-labels proof.
+    pub label_tag_on_chain: u8,
     /// The output's index within its containing transaction. Used for
     /// HKDF context binding inside `try_claim_output`'s impl and as
     /// part of the `OutputHandle` derivation context.
@@ -185,10 +179,13 @@ pub(crate) struct OutputDetectionInput {
 
 /// Result of a [`KeyEngine::try_claim_output`] call.
 ///
-/// `Mine` carries the structured non-secret claim payload; `NotMine`
-/// carries no data. Most outputs are `NotMine` in real scanning; the
-/// X25519 pre-filter rejects them cheaply inside `try_claim_output`'s
-/// impl without entering the handle-table insertion path.
+/// `Mine` carries the secret-bearing [`OutputClaim`] payload (see its
+/// docs); `NotMine` carries no data. Most outputs are `NotMine` in real
+/// scanning; the X25519 pre-filter rejects them cheaply inside
+/// `try_claim_output`'s impl without entering the handle-table insertion
+/// path. As the actor reply type, dropping a `Mine` value runs
+/// [`OutputClaim`]'s wipe-on-drop — including the channel-internal drop
+/// when a cancelled `ask` discards the un-taken reply.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 #[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
@@ -197,18 +194,34 @@ pub(crate) enum OutputClaimResult {
     NotMine,
 }
 
-/// Structured non-secret claim payload from a successful output
-/// detection.
+/// Structured claim payload from a successful output detection.
 ///
-/// **No fields are secret-bearing.** The per-output spending secrets
-/// (the secret-key derivative, the amount-blinding factor, and HKDF-
-/// derived intermediate material) live inside the implementor's
-/// workflow-internal handle table keyed by `handle`; they are not
-/// exposed to the orchestrator. The fields below are public on-chain
-/// data ([`OutputClaim::key_image`]) and balance-display data
-/// ([`OutputClaim::amount_atomic_units`]); neither imposes a
-/// `Zeroize` discipline on the receiver.
-#[derive(Clone, Debug)]
+/// # Secret-bearing; wipes on drop because it travels the actor channel
+///
+/// Stage 2 serves `try_claim_output` from the [`KeyActor`] mailbox, so
+/// this reply is moved through kameo's bounded request mailbox and its
+/// oneshot reply channel — allocations this crate neither owns nor
+/// zeroizes. A copy left in a freed channel buffer (e.g. when an `ask`
+/// future is cancelled after the actor computed the reply but before the
+/// caller takes it) is a leak unless the value wipes on drop. The type is
+/// therefore `#[derive(ZeroizeOnDrop)]`: every field wipes when the value
+/// drops, including the channel-internal drop the in-process call never
+/// had.
+///
+/// The per-output *spending* secrets (the secret-key derivative `x`, the
+/// amount-blinding factor, HKDF intermediates) do **not** live here — they
+/// stay inside the implementor's workflow-internal handle table keyed by
+/// `handle`. The fields that are here span two secrecy classes, both
+/// wiped:
+/// - **Secret:** `amount_atomic_units` — the decrypted cleartext amount.
+///   This reverses the pre-Stage-2 disposition that classified the amount
+///   as non-secret balance-display data; the decrypted amount is a secret.
+/// - **Privacy-linkable:** `handle` and `key_image` — per-output
+///   identifiers that fingerprint the wallet if they linger in freed
+///   memory, even though `key_image` becomes public on-chain after spend.
+///
+/// [`KeyActor`]: super::super::key_actor::KeyActor
+#[derive(Clone, ZeroizeOnDrop)]
 #[non_exhaustive]
 #[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct OutputClaim {
@@ -219,98 +232,28 @@ pub(crate) struct OutputClaim {
     /// [`OutputHandle`] for the unforgeability and privacy
     /// considerations.
     pub handle: OutputHandle,
-    /// The output's key image. Public on-chain after spend.
+    /// The output's key image. Public on-chain after spend; a per-output
+    /// privacy fingerprint before then.
     pub key_image: KeyImage,
-    /// The decrypted output amount (atomic units). Non-secret; the
-    /// orchestrator displays it as part of the wallet's balance
-    /// presentation and uses it to drive transaction-build amount
-    /// accounting.
-    pub amount_atomic_units: u64,
+    /// The decrypted output amount (atomic units). **Secret** — wiped on
+    /// drop with the rest of the claim. The orchestrator reads it for
+    /// balance presentation and transaction-build amount accounting while
+    /// the claim is held.
+    pub amount_atomic_units: AtomicUnits,
 }
 
-// --- Subaddress derivation message shapes ----------------------------------
-
-/// Purpose argument to [`KeyEngine::derive_subaddress`].
-///
-/// Selects which [`SubaddressFor`] variant the trait method returns.
-/// New purposes accrete additively in V3.x (e.g., `PqcRecipient` for
-/// hybrid-augmented audit subaddresses); the `#[non_exhaustive]`
-/// annotation gives existing call sites a compile-time signal when
-/// new variants land.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
-pub(crate) enum SubaddressPurpose {
-    /// Recipient context: encoded address + KEM public key for senders
-    /// to encapsulate against. Used by payment-URI / QR-code
-    /// generation paths.
-    Recipient,
-    /// Audit context: canonical spend / view public-key pair. Used by
-    /// export / backup / inspection paths.
-    Audit,
-}
-
-/// Discriminated return type from [`KeyEngine::derive_subaddress`].
-///
-/// Each variant pairs with a [`SubaddressPurpose`] variant; the
-/// `#[non_exhaustive]` annotation accretes additively with
-/// `SubaddressPurpose`.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
-pub(crate) enum SubaddressFor {
-    Recipient(RecipientSubaddress),
-    Audit(SubaddressKeyPair),
-}
-
-/// Recipient-context subaddress payload.
-///
-/// Returned by `derive_subaddress(idx, SubaddressPurpose::Recipient)`.
-/// Carries everything a sender needs to encapsulate to this
-/// subaddress: the encoded address (for display / UI / parsing at
-/// recipient input) and the hybrid KEM public key (for hybrid
-/// encapsulation at transaction-build time).
-///
-/// **Per-subaddress derivation.** Both components of `kem_pk` are
-/// bound to `(view_secret, subaddress_index)` per
-/// `STAGE_1_PR_3_KEY_ENGINE.md` §3.1.3. Carrying a wallet-level
-/// ML-KEM PK in the encoded subaddress would make any two encodings
-/// from the same wallet trivially linkable via direct byte
-/// comparison; per-subaddress derivation is rule-forced by
-/// `00-mission.mdc`'s priority hierarchy.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
-pub(crate) struct RecipientSubaddress {
-    /// Encoded address. Parsed structured form so the type system
-    /// catches encoding errors at compile time.
-    pub encoded: Address,
-    /// The hybrid KEM public key (X25519 + ML-KEM-768) the sender
-    /// encapsulates against. Public; not zeroized.
-    pub kem_pk: HybridKemPublicKey,
-}
-
-/// Audit-context subaddress payload.
-///
-/// Returned by `derive_subaddress(idx, SubaddressPurpose::Audit)`.
-/// Carries the canonical classical spend / view public-key pair for
-/// the subaddress index; used by export / backup paths.
-///
-/// **Today's classical-only shape.** Per `30-cryptography.mdc`'s
-/// hybrid-by-default rule, a future V3.x shape may extend the audit
-/// payload with the hybrid KEM PK (mirroring
-/// [`RecipientSubaddress::kem_pk`]). The extension lands as an
-/// additional field on `SubaddressKeyPair` (or, if the audit
-/// payload's V3.x shape diverges further, as a new variant on
-/// [`SubaddressFor`] + [`SubaddressPurpose`]); the `#[non_exhaustive]`
-/// annotation on the enums absorbs the additive variant without
-/// breaking existing call sites.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
-pub(crate) struct SubaddressKeyPair {
-    pub spend_pk: SpendPublicKey,
-    pub view_pk: ViewPublicKey,
+// CLIPPY: `amount_atomic_units` is redacted (it is the decrypted cleartext
+// amount, a secret); `handle` and `key_image` render through their own
+// truncated `Debug`. All fields appear, so `missing_fields_in_debug` does
+// not apply.
+impl std::fmt::Debug for OutputClaim {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OutputClaim")
+            .field("handle", &self.handle)
+            .field("key_image", &self.key_image)
+            .field("amount_atomic_units", &"[REDACTED]")
+            .finish()
+    }
 }
 
 // --- Sign-transaction message shapes ---------------------------------------
@@ -337,8 +280,8 @@ pub(crate) struct SubaddressKeyPair {
 /// - [`Self::source_ciphertext`] is the on-chain hybrid X25519 +
 ///   ML-KEM-768 ciphertext the scanner detected for the output;
 ///   ciphertexts are public.
-/// - [`Self::output_index`] is the output's position within its
-///   transaction; public.
+/// - `output_index` is **not** carried: it is recovered in-actor from
+///   [`Self::handle`] alongside `combined_ss` (refinement C, §3.9).
 ///
 /// The bundle of derived per-input secrets is computed inside the
 /// implementor's [`KeyEngine::sign_transaction`] body — it never
@@ -364,20 +307,28 @@ pub(crate) struct TxInputSigningContext {
     /// Resolved by `sign_transaction`'s impl against the implementor's
     /// workflow-internal handle table.
     pub handle: OutputHandle,
+    /// Containing transaction hash (co-located with handle per §3.9 PF2).
+    pub tx_hash: [u8; 32],
+    /// Output index within the containing transaction.
+    pub internal_output_index: u64,
+    /// Decrypted spend amount (atomic units).
+    pub amount: AtomicUnits,
+    /// Claim-time canonical key image (C7 single-site; §3.7.4 PF8).
+    pub key_image: KeyImage,
     /// On-chain hybrid X25519 + ML-KEM-768 ciphertext for this input.
-    /// Re-decapped inside the implementor (via
-    /// [`recover_combined_ss`]) to reconstruct the combined shared
-    /// secret without crossing the trait boundary.
-    ///
-    /// Public on-chain data; not secret.
-    ///
-    /// [`recover_combined_ss`]: shekyl_crypto_pq::output::recover_combined_ss
     pub source_ciphertext: HybridCiphertext,
-    /// Output position within the containing transaction. Binds the
-    /// engine-internal PQC key derivation to a specific output
-    /// (matches `SpendInput::output_index` in `shekyl-tx-builder`).
-    /// Public on-chain data.
-    pub output_index: u64,
+    /// Compressed output public key (on-chain).
+    pub output_key: [u8; 32],
+    /// Pedersen commitment (on-chain).
+    pub commitment: [u8; 32],
+    /// PQC leaf hash `H(pqc_pk)` for this output.
+    pub h_pqc: [u8; 32],
+    /// Sibling leaf chunk for FCMP++ membership proof.
+    pub leaf_chunk: Vec<LeafEntry>,
+    /// Selene (C1) branch layers, bottom-to-top.
+    pub c1_layers: Vec<Vec<[u8; 32]>>,
+    /// Helios (C2) branch layers, bottom-to-top.
+    pub c2_layers: Vec<Vec<[u8; 32]>>,
 }
 
 // CLIPPY: future-proofed for PR 5's potential re-acquisition of secret-bearing
@@ -389,8 +340,17 @@ impl std::fmt::Debug for TxInputSigningContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TxInputSigningContext")
             .field("handle", &self.handle)
+            .field("tx_hash", &"[REDACTED]")
+            .field("internal_output_index", &self.internal_output_index)
+            .field("amount", &"[REDACTED]")
+            .field("key_image", &self.key_image)
             .field("source_ciphertext", &self.source_ciphertext)
-            .field("output_index", &self.output_index)
+            .field("output_key", &"[REDACTED]")
+            .field("commitment", &"[REDACTED]")
+            .field("h_pqc", &"[REDACTED]")
+            .field("leaf_chunk", &format!("{} entries", self.leaf_chunk.len()))
+            .field("c1_layers", &format!("{} layers", self.c1_layers.len()))
+            .field("c2_layers", &format!("{} layers", self.c2_layers.len()))
             .finish()
     }
 }
@@ -401,7 +361,7 @@ impl std::fmt::Debug for TxInputSigningContext {
 /// materials [`KeyEngine::sign_transaction`] needs to produce a
 /// signature against an FCMP++ input. Post-M3b this bundle never
 /// crosses the trait boundary; it is a Layer-2 derivation result
-/// returned by `LocalKeys::derive_source_secrets_bundle`
+/// returned by `LocalKeys::derive_primary_source_secrets_bundle`
 /// (composed from the Layer-1 [`recover_combined_ss`] primitive
 /// and the engine-owned spend-secret material) and consumed by
 /// the implementor's `sign_transaction` body before being dropped
@@ -506,14 +466,16 @@ impl std::fmt::Debug for SourceSecretsBundle {
 #[non_exhaustive]
 #[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct TxToSign {
+    /// Network for recipient address decoding at sign time.
+    pub network: Network,
     /// Per-input signing context (one entry per spend input).
     pub inputs: Vec<TxInputSigningContext>,
-    /// Per-output context (commitment, amount-blinding factor,
-    /// destination subaddress kem_pk). Pinned in PR 5.
+    /// Per-output context (payments + optional change intent).
     pub outputs: Vec<TxOutputContext>,
-    /// FCMP++ transaction-level context (reference block, anchor
-    /// data, etc.). Pinned in PR 5.
+    /// FCMP++ transaction-level tree snapshot (C1).
     pub fcmp_plus_plus_context: FcmpPlusPlusContext,
+    /// Fee variant directive (F4/F8, §3.9).
+    pub fee: FeeDirective,
 }
 
 // CLIPPY: `inputs` redacts as a whole at the top level — defence in
@@ -531,49 +493,99 @@ impl std::fmt::Debug for TxToSign {
             .field("inputs", &"[REDACTED]")
             .field("outputs", &self.outputs)
             .field("fcmp_plus_plus_context", &self.fcmp_plus_plus_context)
+            .field("fee", &self.fee)
             .finish()
     }
 }
 
-/// Per-output signing context. **Forward declaration; pinned in PR 5
-/// (`PendingTxEngine`).**
+/// Recipient destination placeholder (2c fills KEM construction).
 #[derive(Debug)]
 #[non_exhaustive]
-pub(crate) struct TxOutputContext {}
-
-/// FCMP++ transaction-level signing context. **Forward declaration;
-/// pinned in PR 5 (`PendingTxEngine`).**
-#[derive(Debug)]
-#[non_exhaustive]
-pub(crate) struct FcmpPlusPlusContext {}
-
-/// Output of [`KeyEngine::sign_transaction`].
-///
-/// Carries hybrid signatures per-input, FCMP++ witnesses, and any
-/// other signature-class output the signing pass produces. All fields
-/// are public (signatures are public by definition); no `Zeroizing`
-/// discipline applies.
-#[derive(Debug)]
-#[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
-pub(crate) struct TxSignatures {
-    /// Per-input hybrid signature bundle.
-    pub per_input: Vec<TxInputSignature>,
-    /// FCMP++ membership-proof witnesses, one per input.
-    pub fcmp_plus_plus_witnesses: Vec<FcmpPlusPlusWitness>,
+pub(crate) struct OutputDestination {
+    /// Canonical encoded recipient address from the build request.
+    #[allow(dead_code)] // 2a-3 recipient output construction reads this.
+    pub address: String,
 }
 
-/// Per-input hybrid signature payload. **Forward declaration;
-/// pinned in PR 5 (`PendingTxEngine`).**
-#[derive(Debug)]
+/// Public fee variant directive (§3.9). All fields are network-derived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub(crate) struct TxInputSignature {}
+pub(crate) struct FeeDirective {
+    pub fee_no_change: u64,
+    pub fee_with_change: u64,
+    pub dust_threshold: u64,
+}
 
-/// FCMP++ membership-proof witness. **Forward declaration; pinned
-/// in PR 5 (`PendingTxEngine`).**
-#[derive(Debug)]
+/// Per-output signing context (§3.9). Deliberately **not** `Clone`.
+#[derive(ZeroizeOnDrop)]
 #[non_exhaustive]
-pub(crate) struct FcmpPlusPlusWitness {}
+pub(crate) enum TxOutputContext {
+    /// User payment. `amount` is the only confidential field.
+    Payment {
+        #[zeroize(skip)]
+        #[allow(dead_code)] // 2a-3 recipient output construction reads `dest.address`.
+        dest: OutputDestination,
+        amount: u64,
+    },
+    /// Change-to-self intent (no amount on the message).
+    Change {
+        /// Subaddress index within the primary account (2a: always 0).
+        subaddress_index: u32,
+    },
+}
+
+impl std::fmt::Debug for TxOutputContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Payment { .. } => f
+                .debug_struct("Payment")
+                .field("dest", &"[REDACTED]")
+                .field("amount", &"[REDACTED]")
+                .finish(),
+            Self::Change { subaddress_index } => f
+                .debug_struct("Change")
+                .field("subaddress_index", subaddress_index)
+                .finish(),
+        }
+    }
+}
+
+/// FCMP++ transaction-level signing context (one tree per tx, C1).
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub(crate) struct FcmpPlusPlusContext {
+    #[allow(dead_code)] // 2a-3 `sign_transaction` consumes `tree`.
+    pub tree: TreeContext,
+}
+
+/// Output of [`KeyEngine::sign_transaction`] (§3.9). Secret-free on-chain
+/// material for final wire encode in `LocalSigner`.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub(crate) struct TxSignatures {
+    pub bulletproof_plus: Vec<u8>,
+    pub out_commitments: Vec<[u8; 32]>,
+    pub enc_amounts: Vec<[u8; 9]>,
+    pub enc_labels: Vec<[u8; 9]>,
+    pub per_input: Vec<TxInputSignature>,
+    pub fcmp_proof: Vec<u8>,
+    pub fee: u64,
+    pub reference_block: [u8; 32],
+    pub tree_depth: u8,
+    /// Output one-time keys for final wire encode (LocalSigner).
+    pub output_keys: Vec<[u8; 32]>,
+    pub view_tags: Vec<Option<u8>>,
+    pub tx_extra: Vec<u8>,
+}
+
+/// Per-input public signature bundle (§3.9).
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub(crate) struct TxInputSignature {
+    pub key_image: KeyImage,
+    pub pseudo_out: [u8; 32],
+    pub pqc_auth: PqcAuth,
+}
 
 // --- Trait surface ---------------------------------------------------------
 
@@ -635,48 +647,14 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     ///
     /// **Yes.** A snapshot read of the implementor's stored public
     /// material; repeated calls observe equivalent values.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic — the Stage 1 `LocalKeys` implementor returns a
+    /// borrowed reference to an [`AccountPublicAddress`] field cached
+    /// at construction (`&self.account_public_address`), acquiring no
+    /// lock.
     fn account_public_address(&self) -> &AccountPublicAddress;
-
-    /// Derive a subaddress for a specific purpose.
-    ///
-    /// `purpose = SubaddressPurpose::Recipient` returns
-    /// `SubaddressFor::Recipient(RecipientSubaddress { encoded, kem_pk })`
-    /// (encoded address + hybrid KEM PK for senders to encapsulate
-    /// against; used by payment-URI / QR-code generation paths).
-    ///
-    /// `purpose = SubaddressPurpose::Audit` returns
-    /// `SubaddressFor::Audit(SubaddressKeyPair { spend_pk, view_pk })`
-    /// (canonical classical spend / view PK pair; used by export /
-    /// backup / inspection paths).
-    ///
-    /// # Recipient purpose — derivation cost
-    ///
-    /// The X25519 component of `kem_pk` derives via the existing
-    /// classical Edwards-curve subaddress-derivation machinery
-    /// (cheap; scalar arithmetic). The ML-KEM-768 component derives via
-    /// deterministic keygen seeded by
-    /// `HKDF-Expand(view_secret, SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT
-    /// || subaddress_index_le_bytes)` per
-    /// `STAGE_1_PR_3_KEY_ENGINE.md` §3.1.3 / §3.3 Sub-bundle A.
-    /// Total cost is dominated by ML-KEM-768 KeyGen (~50 µs on
-    /// commodity hardware). **Audit purpose** has the same
-    /// X25519-derivation cost as Recipient and skips the ML-KEM
-    /// keygen path entirely.
-    ///
-    /// # Cancellation
-    ///
-    /// Class **a** (synchronous compute, no side effect).
-    ///
-    /// # Idempotency
-    ///
-    /// **Yes.** Deterministic in `(view_secret, subaddress_index,
-    /// purpose)`; repeated calls produce equivalent
-    /// `SubaddressFor` values.
-    fn derive_subaddress(
-        &self,
-        idx: SubaddressIndex,
-        purpose: SubaddressPurpose,
-    ) -> Result<SubaddressFor, Self::Error>;
 
     /// Workflow: try to claim an on-chain output for this wallet.
     ///
@@ -731,6 +709,14 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// returns a fresh handle on each call (counter-based pathway,
     /// not adopted). The deterministic-handle pathway is the
     /// committed direction.
+    ///
+    /// # Panics
+    ///
+    /// Cryptographic
+    /// rejections (X25519 view-tag pre-filter miss, hybrid-decap
+    /// failure, post-decap validity check) are **not** panics — they
+    /// map to `OutputClaimResult::NotMine` per the claim contract
+    /// above.
     fn try_claim_output(
         &self,
         input: &OutputDetectionInput,
@@ -749,17 +735,25 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// per-output spending material needed to produce the per-input
     /// signature.
     ///
-    /// # M3a transitional bridge
+    /// # M3a stub status
     ///
-    /// Per the module-level "`SourceSecretsBundle` is transitional"
-    /// section, M3a Commit 4's `LocalKeys::sign_transaction`
-    /// extracts secrets from each
-    /// `TxInputSigningContext::source_secrets` and routes them into
-    /// [`shekyl_tx_builder::sign_transaction`]. M3b's
-    /// deterministic-handle pathway replaces `source_secrets` with
-    /// `source_ciphertext` and derives the bundle internally; the
-    /// trait's contract for what secrets `sign_transaction` needs
-    /// stays stable.
+    /// The Stage 1 implementor `LocalKeys::sign_transaction` is an
+    /// **M3a stub**: it returns
+    /// [`KeyEngineError::SignTransactionTraitSurfaceIncomplete`]
+    /// without producing signatures. The bridge into
+    /// [`shekyl_tx_builder::sign_transaction`] is PR-5-pinned — it
+    /// waits on [`TxToSign`]'s shape finalizing the per-input public
+    /// on-chain carriers and FCMP++ tree-branch context the builder's
+    /// `SpendInput` construction requires. The per-input secret
+    /// material is never supplied as a populated bundle crossing the
+    /// trait boundary; per the module-level "secrets stay
+    /// engine-internal" section, the committed direction reconstructs
+    /// it inside the engine from each
+    /// [`TxInputSigningContext::source_ciphertext`] +
+    /// [`output_index`](TxInputSigningContext::output_index) via the
+    /// engine-internal `LocalKeys::derive_primary_source_secrets_bundle`
+    /// helper. The trait's contract for what `sign_transaction`
+    /// consumes stays stable across the stub-to-PR-5 transition.
     ///
     /// # Validation contract
     ///
@@ -778,9 +772,19 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     ///
     /// # Cancellation
     ///
-    /// Class **b** (computational; produces signature material).
-    /// Implementors complete or fail atomically — partial signature
-    /// material is never returned.
+    /// Class **a** per §4: the M3a stub is side-effect-free (returns
+    /// an error without touching state), and even the committed
+    /// signing contract produces only the returned signature material
+    /// — a dropped future leaves no observable trace for other
+    /// actors. **Forward note (reversion clause).** PR 5 pins the
+    /// final class. If PR 5's signing body consumes handles from the
+    /// workflow-internal handle table as a replay-rejection side
+    /// effect (the committed direction; see
+    /// [`Self::try_claim_output`]'s idempotency note) and that
+    /// consumption is *not* enqueue-survivable, the class is
+    /// reclassified to **b** in both this rustdoc and §4 of
+    /// `V3_ENGINE_TRAIT_BOUNDARIES.md`. Until that body lands, the
+    /// classification is **a** and the §4 table agrees.
     ///
     /// # Idempotency
     ///
@@ -789,9 +793,17 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// may reject double-spend attempts at the handle layer; the
     /// counter-based pathway treats each call independently. The
     /// committed direction is replay-rejection at handle resolution.
+    ///
+    /// # Panics
+    ///
+    /// **Does not panic.** The M3a stub returns
+    /// [`KeyEngineError::SignTransactionTraitSurfaceIncomplete`]; it
+    /// acquires no lock and asserts no invariant. PR 5's signing body
+    /// will document its own panic surface (handle-table access,
+    /// builder invariants) when it lands.
     fn sign_transaction(
         &self,
-        tx: &TxToSign,
+        tx: TxToSign,
     ) -> impl std::future::Future<Output = Result<TxSignatures, Self::Error>> + Send;
 }
 
@@ -881,24 +893,29 @@ mod tests {
     }
 
     #[test]
-    fn tx_input_signing_context_debug_renders_public_fields() {
-        // Post-M3b: `TxInputSigningContext` carries only public on-chain
-        // material. The manual `Debug` impl renders all three fields
-        // verbatim; secret-byte sentinels MUST NOT appear (because the
-        // type does not own any secret-bearing fields).
+    fn tx_input_signing_context_debug_redacts_on_chain_material() {
         let ctx = TxInputSigningContext {
             handle: sentinel_handle(),
+            tx_hash: [0x77; 32],
+            internal_output_index: 0,
+            amount: AtomicUnits::from_raw(1),
+            key_image: KeyImage::from_canonical_bytes([0x88; 32]),
             source_ciphertext: sentinel_ciphertext(),
-            output_index: 7,
+            output_key: [0x44; 32],
+            commitment: [0x55; 32],
+            h_pqc: [0x66; 32],
+            leaf_chunk: Vec::new(),
+            c1_layers: Vec::new(),
+            c2_layers: Vec::new(),
         };
         let rendered = format!("{ctx:?}");
         assert!(
-            rendered.contains("output_index: 7"),
-            "output_index missing: {rendered}"
-        );
-        assert!(
             rendered.contains("source_ciphertext"),
             "source_ciphertext label missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("[REDACTED]"),
+            "on-chain material must be redacted as [REDACTED]: {rendered}"
         );
         assert_all_sentinels_redacted(&rendered);
     }
@@ -911,25 +928,44 @@ mod tests {
         // Rationale: PR 5 may re-acquire secret-bearing fields on
         // the per-input shape; pre-establishing the redaction
         // discipline is cheaper than re-establishing it later.
+        use shekyl_tx_builder::TreeContext;
+
+        use shekyl_address::Network;
+
         let tx = TxToSign {
+            network: Network::Mainnet,
             inputs: vec![TxInputSigningContext {
                 handle: sentinel_handle(),
+                tx_hash: [0x77; 32],
+                internal_output_index: 0,
+                amount: AtomicUnits::from_raw(1),
+                key_image: KeyImage::from_canonical_bytes([0x88; 32]),
                 source_ciphertext: sentinel_ciphertext(),
-                output_index: 7,
+                output_key: [0x44; 32],
+                commitment: [0x55; 32],
+                h_pqc: [0x66; 32],
+                leaf_chunk: Vec::new(),
+                c1_layers: Vec::new(),
+                c2_layers: Vec::new(),
             }],
             outputs: vec![],
-            fcmp_plus_plus_context: FcmpPlusPlusContext {},
+            fcmp_plus_plus_context: FcmpPlusPlusContext {
+                tree: TreeContext {
+                    reference_block: [0; 32],
+                    tree_root: [0; 32],
+                    tree_depth: 1,
+                },
+            },
+            fee: FeeDirective {
+                fee_no_change: 0,
+                fee_with_change: 0,
+                dust_threshold: 0,
+            },
         };
         let rendered = format!("{tx:?}");
         assert!(
             rendered.contains("[REDACTED]"),
             "TxToSign must redact inputs, rendered = {rendered}"
-        );
-        // The blanket redaction also hides the public output_index
-        // value carried inside `inputs`; this is intentional.
-        assert!(
-            !rendered.contains("output_index: 7"),
-            "blanket redaction must hide nested fields: {rendered}"
         );
     }
 }

@@ -26,7 +26,7 @@
 //! a cached `AccountPublicAddress` field on `LocalKeys` without
 //! any per-call derivation work. The criterion `median_ns` is
 //! expected to reflect optimizer amortization across `b.iter`'s
-//! iteration loop; the iai-callgrind sibling is the load-bearing
+//! iteration loop; the gungraun sibling is the load-bearing
 //! signal for this pair (§4.4 amortization caveat for trivial
 //! reads applies here, not to LedgerEngine::balance).
 //!
@@ -34,8 +34,8 @@
 //!
 //! - Pair: this file (criterion / wall-clock) and
 //!   `engine_trait_bench_key_account_public_address_iai.rs`
-//!   (iai-callgrind / instructions). The CI gate
-//!   (`ci/benchmarks` workflow) routes through iai-callgrind for
+//!   (gungraun / instructions). The CI gate
+//!   (`ci/benchmarks` workflow) routes through gungraun for
 //!   the pass/fail signal; this file is the Tier-2 informational
 //!   column.
 //! - Threshold class: `engine_trait_bench_*` — bidirectional ±10%

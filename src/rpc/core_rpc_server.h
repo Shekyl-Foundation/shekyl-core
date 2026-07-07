@@ -42,7 +42,6 @@
 #include "cryptonote_core/cryptonote_core.h"
 #include "p2p/net_node.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
-#include "rpc_payment.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon.rpc"
@@ -68,10 +67,6 @@ namespace cryptonote
     static const command_line::arg_descriptor<std::string> arg_bootstrap_daemon_address;
     static const command_line::arg_descriptor<std::string> arg_bootstrap_daemon_login;
     static const command_line::arg_descriptor<std::string> arg_bootstrap_daemon_proxy;
-    static const command_line::arg_descriptor<std::string> arg_rpc_payment_address;
-    static const command_line::arg_descriptor<uint64_t> arg_rpc_payment_difficulty;
-    static const command_line::arg_descriptor<uint64_t> arg_rpc_payment_credits;
-    static const command_line::arg_descriptor<bool> arg_rpc_payment_allow_free_loopback;
     static const command_line::arg_descriptor<std::size_t> arg_rpc_max_connections_per_public_ip;
     static const command_line::arg_descriptor<std::size_t> arg_rpc_max_connections_per_private_ip;
     static const command_line::arg_descriptor<std::size_t> arg_rpc_max_connections;
@@ -90,10 +85,22 @@ namespace cryptonote
         const boost::program_options::variables_map& vm,
         const bool restricted,
         const std::string& port,
-        bool allow_rpc_payment,
-        const std::string& proxy = {}
+        const std::string& proxy = {},
+        // When false, skip binding the epee HTTP listener. RPC is served by the
+        // Rust/Axum transport (see daemon.cpp), which binds the configured port
+        // itself; the epee handlers are still reachable via the direct dispatch
+        // shim in core_rpc_ffi.cpp, which never touches m_net_server's acceptor.
+        bool bind_http_listener = true
       );
     network_type nettype() const { return m_core.get_nettype(); }
+    // Resolved listen host for this server, valid after init(). Used by the
+    // daemon to build the Rust/Axum bind address when the epee acceptor is not
+    // bound. Empty until init() runs.
+    const std::string& get_rpc_bind_ip() const { return m_rpc_bind_ip; }
+    // Core access for the Rust submit shims (daemon_submit_ffi.cpp), which
+    // resolve pool/blockchain/protocol from the same handle the Axum
+    // transport already holds. See DAEMON_SUBMIT_VERDICT.md §4.
+    core& get_core() noexcept { return m_core; }
 
     CHAIN_HTTP_TO_MAP2(connection_context); //forward http requests to uri map
 
@@ -111,8 +118,6 @@ namespace cryptonote
       MAP_URI_AUTO_JON2("/gettransactions", on_get_transactions, COMMAND_RPC_GET_TRANSACTIONS)
       MAP_URI_AUTO_JON2("/get_alt_blocks_hashes", on_get_alt_blocks_hashes, COMMAND_RPC_GET_ALT_BLOCKS_HASHES)
       MAP_URI_AUTO_JON2("/is_key_image_spent", on_is_key_image_spent, COMMAND_RPC_IS_KEY_IMAGE_SPENT)
-      MAP_URI_AUTO_JON2("/send_raw_transaction", on_send_raw_tx, COMMAND_RPC_SEND_RAW_TX)
-      MAP_URI_AUTO_JON2("/sendrawtransaction", on_send_raw_tx, COMMAND_RPC_SEND_RAW_TX)
       MAP_URI_AUTO_JON2_IF("/start_mining", on_start_mining, COMMAND_RPC_START_MINING, !m_restricted)
       MAP_URI_AUTO_JON2_IF("/stop_mining", on_stop_mining, COMMAND_RPC_STOP_MINING, !m_restricted)
       MAP_URI_AUTO_JON2_IF("/mining_status", on_mining_status, COMMAND_RPC_MINING_STATUS, !m_restricted)
@@ -179,17 +184,9 @@ namespace cryptonote
         MAP_JON_RPC_WE("get_output_distribution", on_get_output_distribution, COMMAND_RPC_GET_OUTPUT_DISTRIBUTION)
         MAP_JON_RPC_WE_IF("prune_blockchain",    on_prune_blockchain,           COMMAND_RPC_PRUNE_BLOCKCHAIN, !m_restricted)
         MAP_JON_RPC_WE_IF("flush_cache",         on_flush_cache,                COMMAND_RPC_FLUSH_CACHE, !m_restricted)
-        MAP_JON_RPC_WE("get_staking_info",       on_get_staking_info,           COMMAND_RPC_GET_STAKING_INFO)
-        MAP_JON_RPC_WE("estimate_claim_reward", on_estimate_claim_reward,      COMMAND_RPC_ESTIMATE_CLAIM_REWARD)
         MAP_JON_RPC_WE("get_curve_tree_path",       on_get_curve_tree_path,        COMMAND_RPC_GET_CURVE_TREE_PATH)
         MAP_JON_RPC_WE("get_curve_tree_info",       on_get_curve_tree_info,        COMMAND_RPC_GET_CURVE_TREE_INFO)
         MAP_JON_RPC_WE("get_curve_tree_checkpoint",  on_get_curve_tree_checkpoint,  COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT)
-        MAP_JON_RPC_WE("rpc_access_info",        on_rpc_access_info,            COMMAND_RPC_ACCESS_INFO)
-        MAP_JON_RPC_WE("rpc_access_submit_nonce",on_rpc_access_submit_nonce,    COMMAND_RPC_ACCESS_SUBMIT_NONCE)
-        MAP_JON_RPC_WE("rpc_access_pay",         on_rpc_access_pay,             COMMAND_RPC_ACCESS_PAY)
-        MAP_JON_RPC_WE_IF("rpc_access_tracking", on_rpc_access_tracking,        COMMAND_RPC_ACCESS_TRACKING, !m_restricted)
-        MAP_JON_RPC_WE_IF("rpc_access_data",     on_rpc_access_data,            COMMAND_RPC_ACCESS_DATA, !m_restricted)
-        MAP_JON_RPC_WE_IF("rpc_access_account",  on_rpc_access_account,         COMMAND_RPC_ACCESS_ACCOUNT, !m_restricted)
       END_JSON_RPC_MAP()
     END_URI_MAP2()
 
@@ -201,7 +198,6 @@ namespace cryptonote
     bool on_get_transactions(const COMMAND_RPC_GET_TRANSACTIONS::request& req, COMMAND_RPC_GET_TRANSACTIONS::response& res, const connection_context *ctx = NULL);
     bool on_is_key_image_spent(const COMMAND_RPC_IS_KEY_IMAGE_SPENT::request& req, COMMAND_RPC_IS_KEY_IMAGE_SPENT::response& res, const connection_context *ctx = NULL);
     bool on_get_indexes(const COMMAND_RPC_GET_TX_GLOBAL_OUTPUTS_INDEXES::request& req, COMMAND_RPC_GET_TX_GLOBAL_OUTPUTS_INDEXES::response& res, const connection_context *ctx = NULL);
-    bool on_send_raw_tx(const COMMAND_RPC_SEND_RAW_TX::request& req, COMMAND_RPC_SEND_RAW_TX::response& res, const connection_context *ctx = NULL);
     bool on_start_mining(const COMMAND_RPC_START_MINING::request& req, COMMAND_RPC_START_MINING::response& res, const connection_context *ctx = NULL);
     bool on_stop_mining(const COMMAND_RPC_STOP_MINING::request& req, COMMAND_RPC_STOP_MINING::response& res, const connection_context *ctx = NULL);
     bool on_mining_status(const COMMAND_RPC_MINING_STATUS::request& req, COMMAND_RPC_MINING_STATUS::response& res, const connection_context *ctx = NULL);
@@ -259,17 +255,9 @@ namespace cryptonote
     bool on_get_output_distribution(const COMMAND_RPC_GET_OUTPUT_DISTRIBUTION::request& req, COMMAND_RPC_GET_OUTPUT_DISTRIBUTION::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_prune_blockchain(const COMMAND_RPC_PRUNE_BLOCKCHAIN::request& req, COMMAND_RPC_PRUNE_BLOCKCHAIN::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_flush_cache(const COMMAND_RPC_FLUSH_CACHE::request& req, COMMAND_RPC_FLUSH_CACHE::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
-    bool on_get_staking_info(const COMMAND_RPC_GET_STAKING_INFO::request& req, COMMAND_RPC_GET_STAKING_INFO::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
-    bool on_estimate_claim_reward(const COMMAND_RPC_ESTIMATE_CLAIM_REWARD::request& req, COMMAND_RPC_ESTIMATE_CLAIM_REWARD::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_get_curve_tree_path(const COMMAND_RPC_GET_CURVE_TREE_PATH::request& req, COMMAND_RPC_GET_CURVE_TREE_PATH::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_get_curve_tree_info(const COMMAND_RPC_GET_CURVE_TREE_INFO::request& req, COMMAND_RPC_GET_CURVE_TREE_INFO::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_get_curve_tree_checkpoint(const COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT::request& req, COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
-    bool on_rpc_access_info(const COMMAND_RPC_ACCESS_INFO::request& req, COMMAND_RPC_ACCESS_INFO::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
-    bool on_rpc_access_submit_nonce(const COMMAND_RPC_ACCESS_SUBMIT_NONCE::request& req, COMMAND_RPC_ACCESS_SUBMIT_NONCE::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
-    bool on_rpc_access_pay(const COMMAND_RPC_ACCESS_PAY::request& req, COMMAND_RPC_ACCESS_PAY::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
-    bool on_rpc_access_tracking(const COMMAND_RPC_ACCESS_TRACKING::request& req, COMMAND_RPC_ACCESS_TRACKING::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
-    bool on_rpc_access_data(const COMMAND_RPC_ACCESS_DATA::request& req, COMMAND_RPC_ACCESS_DATA::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
-    bool on_rpc_access_account(const COMMAND_RPC_ACCESS_ACCOUNT::request& req, COMMAND_RPC_ACCESS_ACCOUNT::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     //-----------------------
     bool is_restricted() const { return m_restricted; }
 
@@ -281,7 +269,7 @@ private:
     //utils
     uint64_t get_block_reward(const block& blk);
     bool fill_block_header_response(const block& blk, bool orphan_status, uint64_t height, const crypto::hash& hash, block_header_response& response, bool fill_pow_hash);
-    std::map<std::string, bool> get_public_nodes(uint32_t credits_per_hash_threshold = 0);
+    std::map<std::string, bool> get_public_nodes();
     bool set_bootstrap_daemon(
       const std::string &address,
       const std::string &username_password,
@@ -294,8 +282,7 @@ private:
     template <typename COMMAND_TYPE>
     bool use_bootstrap_daemon_if_necessary(const invoke_http_mode &mode, const std::string &command_name, const typename COMMAND_TYPE::request& req, typename COMMAND_TYPE::response& res, bool &r);
     bool get_block_template(const account_public_address &address, const crypto::hash *prev_block, const cryptonote::blobdata &extra_nonce, size_t &reserved_offset, cryptonote::difficulty_type &difficulty, uint64_t &height, uint64_t &expected_reward, block &b, uint64_t &seed_height, crypto::hash &seed_hash, crypto::hash &next_seed_hash, epee::json_rpc::error &error_resp);
-    bool check_payment(const std::string &client, uint64_t payment, const std::string &rpc, bool same_ts, std::string &message, uint64_t &credits, std::string &top_hash);
-    
+
     core& m_core;
     nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<cryptonote::core> >& m_p2p;
     boost::shared_mutex m_bootstrap_daemon_mutex;
@@ -307,9 +294,12 @@ private:
     bool m_restricted;
     epee::critical_section m_host_fails_score_lock;
     std::map<std::string, uint64_t> m_host_fails_score;
-    std::unique_ptr<rpc_payment> m_rpc_payment;
     bool disable_rpc_ban;
-    bool m_rpc_payment_allow_free_loopback;
+    // Resolved listen host for this server (the IP epee would have bound; the
+    // restricted variant resolves to its own bind IP). Recorded in init() so the
+    // Rust/Axum transport can bind the configured address even when the epee
+    // acceptor is skipped and get_binded_port()/host are unavailable.
+    std::string m_rpc_bind_ip;
   };
 }
 

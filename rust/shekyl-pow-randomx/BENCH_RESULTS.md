@@ -125,7 +125,7 @@ Initial commit-4 B-2 used `vec![0u8; N].into_boxed_slice()` as
 the zero-initialized 2 MiB allocation idiom. A PR review noted the
 discrepancy against production: `crate::vm::alloc_zeroed_scratchpad`
 goes through `Box::new_zeroed_slice(N) + assume_init`, which is
-the stabilized (Rust 1.82+) path that routes directly to the
+the stabilized (Rust 1.92+) path that routes directly to the
 allocator's `alloc_zeroed`. The `vec![0u8; N]` form *also* folds
 to `alloc_zeroed` on current `rustc` via the `IsZero`
 specialization in `Vec::from_elem`, so the timing converged on

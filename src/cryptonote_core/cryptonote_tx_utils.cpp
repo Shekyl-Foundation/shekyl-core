@@ -31,6 +31,8 @@
 #include <unordered_set>
 #include <random>
 #include <iostream>
+#include <cstdlib>
+#include <cstring>
 #include "include_base_utils.h"
 #include "string_tools.h"
 using namespace epee;
@@ -48,6 +50,40 @@ using namespace epee;
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
 #include "fcmp/rctSigs.h"
+
+namespace {
+
+ShekylOutputData construct_output_for_destination(
+    const crypto::secret_key& tx_key,
+    const uint8_t* pk_x25519,
+    const uint8_t* pk_ml_kem,
+    size_t pk_ml_kem_len,
+    const crypto::public_key& spend_key,
+    uint64_t amount,
+    uint64_t output_index,
+    const std::string& original_uri)
+{
+  uint8_t label_pt[8] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  if (!original_uri.empty() && original_uri.compare(0, 7, "shekyl:") == 0)
+  {
+    const int32_t label_rc = shekyl_label_plaintext_for_payment_uri(original_uri.c_str(), label_pt);
+    if (label_rc == -3)
+      LOG_PRINT_L1("payment URI parse failed; using sentinel enc_label for output");
+    else if (label_rc != 0)
+      LOG_PRINT_L1("shekyl_label_plaintext_for_payment_uri failed (rc=" << label_rc << "); using sentinel enc_label");
+  }
+  return shekyl_construct_output_labeled(
+      reinterpret_cast<const uint8_t*>(&tx_key),
+      pk_x25519,
+      pk_ml_kem,
+      pk_ml_kem_len,
+      reinterpret_cast<const uint8_t*>(&spend_key),
+      amount,
+      output_index,
+      label_pt);
+}
+
+} // namespace
 
 using namespace crypto;
 
@@ -155,6 +191,7 @@ namespace cryptonote
 
       tx.rct_signatures.outPk.resize(out_amounts.size());
       tx.rct_signatures.enc_amounts.resize(out_amounts.size());
+      tx.rct_signatures.enc_labels.resize(out_amounts.size());
 
       for (size_t i = 0; i < out_amounts.size(); ++i)
       {
@@ -169,7 +206,7 @@ namespace cryptonote
         crypto::public_key out_key;
         memcpy(out_key.data, od.output_key, 32);
         crypto::view_tag vt;
-        vt.data = od.view_tag_x25519;
+        vt.data = od.view_tag_prefilter;
 
         tx_out out;
         cryptonote::set_tx_out(out_amounts[i], out_key, true, vt, out);
@@ -179,6 +216,8 @@ namespace cryptonote
 
         memcpy(tx.rct_signatures.enc_amounts[i].data(), od.enc_amount, 8);
         tx.rct_signatures.enc_amounts[i][8] = od.amount_tag;
+        memcpy(tx.rct_signatures.enc_labels[i].data(), od.enc_label, 8);
+        tx.rct_signatures.enc_labels[i][8] = od.label_tag;
 
         kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
         if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
@@ -438,6 +477,7 @@ namespace cryptonote
     struct v3_output_rct {
       uint8_t commitment[32];
       std::array<uint8_t, 9> enc_amount_with_tag;
+      std::array<uint8_t, 9> enc_label_with_tag;
       uint8_t commitment_mask[32]; // HKDF z scalar
     };
     std::vector<v3_output_rct> v3_rct_data;
@@ -464,29 +504,29 @@ namespace cryptonote
         const uint8_t* pk_ml_kem = dst_entr.addr.m_pqc_public_key.data() + SHEKYL_X25519_PK_BYTES;
         const size_t pk_ml_kem_len = dst_entr.addr.m_pqc_public_key.size() - SHEKYL_X25519_PK_BYTES;
 
-        ShekylOutputData od = shekyl_construct_output(
-          reinterpret_cast<const uint8_t*>(&tx_key),
+        ShekylOutputData od = construct_output_for_destination(
+          tx_key,
           pk_x25519, pk_ml_kem, pk_ml_kem_len,
-          reinterpret_cast<const uint8_t*>(&dst_entr.addr.m_spend_public_key),
-          dst_entr.amount, static_cast<uint64_t>(output_index));
+          dst_entr.addr.m_spend_public_key,
+          dst_entr.amount, static_cast<uint64_t>(output_index),
+          dst_entr.original);
         CHECK_AND_ASSERT_MES(od.success, false,
-          "shekyl_construct_output failed for output " << output_index);
+          "construct_output_for_destination failed for output " << output_index);
 
         crypto::public_key out_key;
         memcpy(out_key.data, od.output_key, 32);
         crypto::view_tag vt;
-        vt.data = od.view_tag_x25519;
+        vt.data = od.view_tag_prefilter;
 
         tx_out out;
-        if (dst_entr.is_staking)
-          cryptonote::set_staked_tx_out(dst_entr.amount, out_key, vt, dst_entr.stake_tier, out);
-        else
-          cryptonote::set_tx_out(dst_entr.amount, out_key, true, vt, out);
+        cryptonote::set_tx_out(dst_entr.amount, out_key, true, vt, out);
         tx.vout.push_back(out);
 
         memcpy(v3_rct_data[output_index].commitment, od.commitment, 32);
         memcpy(v3_rct_data[output_index].enc_amount_with_tag.data(), od.enc_amount, 8);
         v3_rct_data[output_index].enc_amount_with_tag[8] = od.amount_tag;
+        memcpy(v3_rct_data[output_index].enc_label_with_tag.data(), od.enc_label, 8);
+        v3_rct_data[output_index].enc_label_with_tag[8] = od.label_tag;
         memcpy(v3_rct_data[output_index].commitment_mask, od.z, 32);
 
         kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
@@ -607,6 +647,7 @@ namespace cryptonote
         {
           memcpy(tx.rct_signatures.outPk[i].mask.bytes, v3_rct_data[i].commitment, 32);
           tx.rct_signatures.enc_amounts[i] = v3_rct_data[i].enc_amount_with_tag;
+          tx.rct_signatures.enc_labels[i] = v3_rct_data[i].enc_label_with_tag;
         }
         if (out_commitment_masks)
         {
@@ -702,6 +743,7 @@ namespace cryptonote
     tx.rct_signatures.type = rct::RCTTypeNull;
     tx.rct_signatures.outPk.resize(destinations.size());
     tx.rct_signatures.enc_amounts.resize(destinations.size());
+    tx.rct_signatures.enc_labels.resize(destinations.size());
 
     uint64_t summary_amounts = 0;
     for (size_t i = 0; i < destinations.size(); ++i)
@@ -726,7 +768,7 @@ namespace cryptonote
       crypto::public_key out_key;
       memcpy(out_key.data, od.output_key, 32);
       crypto::view_tag vt;
-      vt.data = od.view_tag_x25519;
+      vt.data = od.view_tag_prefilter;
 
       tx_out out;
       cryptonote::set_tx_out(dest.amount, out_key, true, vt, out);
@@ -735,6 +777,8 @@ namespace cryptonote
       memcpy(tx.rct_signatures.outPk[i].mask.bytes, od.commitment, 32);
       memcpy(tx.rct_signatures.enc_amounts[i].data(), od.enc_amount, 8);
       tx.rct_signatures.enc_amounts[i][8] = od.amount_tag;
+      memcpy(tx.rct_signatures.enc_labels[i].data(), od.enc_label, 8);
+      tx.rct_signatures.enc_labels[i][8] = od.label_tag;
 
       kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
       if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
@@ -819,37 +863,52 @@ namespace cryptonote
   void get_altblock_longhash(const block& b, crypto::hash& res, const crypto::hash& seed_hash)
   {
     blobdata bd = get_block_hashing_blob(b);
-    rx_slow_hash(seed_hash.data, bd.data(), bd.size(), res.data);
+    if (shekyl_pow_randomx_v2_hash(
+          reinterpret_cast<const uint8_t (*)[32]>(seed_hash.data),
+          reinterpret_cast<const uint8_t*>(bd.data()),
+          bd.size(),
+          reinterpret_cast<uint8_t (*)[32]>(res.data)) != SHEKYL_POW_RANDOMX_V2_OK)
+    {
+      // Fail closed: a longhash the verifier could not compute must never
+      // satisfy a difficulty target. 0xff..ff is the numerically maximum
+      // 256-bit value, which check_hash() rejects for any difficulty > 1.
+      // Matches the fail-closed sentinel the alt-block caller pre-seeds in
+      // blockchain.cpp.
+      memset(res.data, 0xff, sizeof(res.data));
+    }
   }
 
   bool get_block_longhash(const Blockchain *pbc, const blobdata& bd, crypto::hash& res, const uint64_t height, const int major_version, const crypto::hash *seed_hash, const int miners)
   {
-    if (pbc != NULL && major_version >= RX_BLOCK_VERSION)
-    {
-      static const std::string longhash_202612 = "84f64766475d51837ac9efbef1926486e58563c95a19fef4aec3254f03000000";
-      epee::string_tools::hex_to_pod(longhash_202612, res);
-      return true;
-    }
     const IPowSchema& pow_schema = get_pow_for_height(height, major_version);
     const crypto::hash* resolved_seed_hash = seed_hash;
     crypto::hash resolved_seed = crypto::null_hash;
 
-    if (major_version >= RX_BLOCK_VERSION)
+    if (pbc != NULL)
     {
-      if (pbc != NULL)
-      {
-        const uint64_t seed_height = rx_seedheight(height);
-        resolved_seed = seed_hash ? *seed_hash : pbc->get_pending_block_id_by_height(seed_height);
-        resolved_seed_hash = &resolved_seed;
-      }
-      else
-      {
-        memset(&resolved_seed, 0, sizeof(resolved_seed));
-        resolved_seed_hash = &resolved_seed;
-      }
+      const uint64_t seed_height = shekyl_pow_randomx_v2_seedheight(height);
+      resolved_seed = seed_hash ? *seed_hash : pbc->get_pending_block_id_by_height(seed_height);
+      resolved_seed_hash = &resolved_seed;
+    }
+    else
+    {
+      memset(&resolved_seed, 0, sizeof(resolved_seed));
+      resolved_seed_hash = &resolved_seed;
     }
 
-    return pow_schema.hash(bd.data(), bd.size(), height, resolved_seed_hash, miners, res);
+    if (!pow_schema.hash(bd.data(), bd.size(), height, resolved_seed_hash, miners, res))
+    {
+      // Fail closed: on a verifier failure pow_schema.hash() leaves res
+      // unwritten, and the hash-returning overload below pre-seeds res to
+      // null_hash (0x00..00) — the numerically minimum 256-bit value, which
+      // check_hash() accepts for ANY difficulty. Several callers ignore the
+      // returned bool, so a soft failure must never surface as an accepted
+      // PoW. Writing the maximum 256-bit value guarantees check_hash() rejects
+      // it. Matches the fail-closed sentinel in get_altblock_longhash().
+      memset(res.data, 0xff, sizeof(res.data));
+      return false;
+    }
+    return true;
   }
 
   bool get_block_longhash(const Blockchain *pbc, const block& b, crypto::hash& res, const uint64_t height, const crypto::hash *seed_hash, const int miners)

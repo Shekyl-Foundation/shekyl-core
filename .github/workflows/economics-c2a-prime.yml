@@ -67,9 +67,6 @@ env:
     libunbound-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev
     libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev
     protobuf-compiler ccache git curl ripgrep python3
-  INSTALL_RUST: |
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    echo "$HOME/.cargo/bin" >> $GITHUB_PATH
   CCACHE_SETTINGS: |
     ccache --max-size=150M
     ccache --set-config=compression=true
@@ -113,13 +110,19 @@ jobs:
         run: apt update
       - name: install build dependencies
         run: ${{ env.APT_INSTALL_LINUX }}
-      - name: install Rust
-        run: ${{ env.INSTALL_RUST }}
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
         with:
           submodules: recursive
+      - name: install Rust
+        # Composite action (.github/actions/install-rust): the one
+        # hardened download-then-run recipe, installing the
+        # rust-toolchain.toml pin up front. Must come AFTER checkout —
+        # a `./`-referenced local action does not exist on the runner
+        # until the repo is checked out (the env-block form it
+        # replaced had no such dependency).
+        uses: ./.github/actions/install-rust
       - uses: actions/cache@v5
         with:
           path: ~/.ccache
@@ -217,16 +220,26 @@ jobs:
             libboost-thread1.74.0 libboost-chrono1.74.0 libboost-regex1.74.0 \
             libssl3 libsodium23 libunbound8 libprotobuf23
       - name: install build toolchain for Rust tests
+        # curl + ca-certificates: required by the install-Rust step
+        # below. They were NEVER installed in this job — the old
+        # `curl | sh` form swallowed the `curl: not found` (127 → pipe →
+        # sh reads empty stdin → exit 0) and the step passed green with
+        # no toolchain, every run, since the layer jobs landed. The
+        # hardened download-then-run form made it loud (PR #241). See
+        # the FOLLOWUPS entry "Economics C2a′ layer gate — stacked
+        # silent failures" for the rest of what that green was hiding.
         if: matrix.needs_rust
-        run: apt -y install build-essential pkg-config libssl-dev
-      - name: install Rust
-        if: matrix.needs_rust
-        run: ${{ env.INSTALL_RUST }}
+        run: apt -y install build-essential pkg-config libssl-dev curl ca-certificates
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
         with:
           submodules: recursive
+      - name: install Rust
+        # Composite action (.github/actions/install-rust), after
+        # checkout — see the build job's step comment.
+        if: matrix.needs_rust
+        uses: ./.github/actions/install-rust
       - uses: actions/download-artifact@v4
         with:
           name: economics-c2a-build

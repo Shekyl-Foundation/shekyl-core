@@ -11,6 +11,14 @@ build = "build.rs"
 [dependencies]
 thiserror.workspace = true
 serde.workspace = true
+# Blake2b-256 backs the `CalibrationStamp.params_digest` canonical
+# parameter digest (`digest.rs`). `blake2 = "0.10"` is already a
+# workspace dependency (BlakeGenerator in `shekyl-pow-randomx`); the
+# digest uses the `Blake2b<U32>` fixed-output alias over the
+# `digest::consts::U32` re-export. `default-features = false` keeps the
+# `no_std`-friendly core (we only need `Digest`), matching the
+# workspace pin.
+blake2 = { workspace = true }
 
 [build-dependencies]
 serde_json = "1"

@@ -11,17 +11,59 @@ use zeroize::Zeroize;
 use curve25519_dalek::{EdwardsPoint, Scalar};
 
 use shekyl_crypto_pq::{handle::OutputHandle, kem::HybridCiphertext, key_image::KeyImage};
-use shekyl_oxide::primitives::Commitment;
+use shekyl_curve_primitives::Commitment;
+use shekyl_types::TxHash;
+use shekyl_units::AtomicUnits;
 
 use crate::{
     payment_id::PaymentId,
+    payment_request::ReceiveAttribution,
     serde_helpers::{commitment_bytes, edwards_point_bytes, scalar_bytes},
-    subaddress::SubaddressIndex,
 };
 
 /// Outputs must mature this many blocks before the daemon inserts them into
 /// the curve tree. Mirrors `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE` (C++).
 pub const SPENDABLE_AGE: u64 = 10;
+
+/// The F14 awaiting-confirmation lock state
+/// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.6).
+///
+/// Set on an output when a transaction spending it is **network-exposed**
+/// (daemon verdict `Accepted` / `AlreadyInPool`); replaces the old durable
+/// `spent = true` write at submit-accept. While present, the output is
+/// excluded from selection ([`TransferDetails::is_spendable`]) — a wallet
+/// restart between accept and confirmation must not make the output
+/// selectable again, or the wallet builds a second tx over the same input
+/// with the **same key image** (a self-inflicted broadcast-linkage
+/// artifact, §7.1). Persisted in the AEAD-sealed ledger for exactly that
+/// reason (§2.6 invariant 1).
+///
+/// Two release paths, both required (§2.6 invariant 2):
+///
+/// - **Confirmed-present:** refresh observes the spend on-chain →
+///   [`crate::ledger_indexes::LedgerIndexes::mark_spent`] transitions the
+///   output to refresh-authoritative `spent` and clears this state.
+/// - **Confirmed-absent:** the tx never confirms (evicted, never landed) →
+///   the wallet's watchdog horizon releases the lock after converting
+///   absence into a definite verdict where reachable (resubmit-same-bytes
+///   probe) or on observed absence otherwise. Release is not rebuild
+///   authorization (§2.6 invariant 3).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AwaitingConfirmation {
+    /// Canonical txid of the network-exposed transaction spending this
+    /// output — the watchdog's chain-confirmation key.
+    pub tx_hash: TxHash,
+    /// Wallet synced height when the accepting verdict was observed; the
+    /// baseline for the watchdog's escape horizon.
+    pub accepted_at_height: u64,
+}
+
+impl Zeroize for AwaitingConfirmation {
+    fn zeroize(&mut self) {
+        self.tx_hash.zeroize();
+        self.accepted_at_height.zeroize();
+    }
+}
 
 /// A precomputed FCMP++ curve-tree path for an output.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
@@ -84,7 +126,7 @@ pub struct FcmpPrecomputedPath {
 #[derive(Serialize, Deserialize)]
 pub struct TransferDetails {
     // ── Base output data (from scanner) ──
-    pub tx_hash: [u8; 32],
+    pub tx_hash: TxHash,
     pub internal_output_index: u64,
     pub global_output_index: u64,
     pub block_height: u64,
@@ -94,7 +136,6 @@ pub struct TransferDetails {
     pub key_offset: Scalar,
     #[serde(with = "commitment_bytes")]
     pub commitment: Commitment,
-    pub subaddress: Option<SubaddressIndex>,
     pub payment_id: Option<PaymentId>,
 
     // ── Spend tracking ──
@@ -105,13 +146,13 @@ pub struct TransferDetails {
     /// `#[serde(transparent)]` over `[u8; 32]` so the on-disk wire
     /// format is unchanged from `Option<[u8; 32]>`.
     pub key_image: Option<KeyImage>,
-
-    // ── Staking fields ──
-    pub staked: bool,
-    pub stake_tier: u8,
-    pub stake_lock_until: u64,
-    /// Local claim watermark: the `to_height` of the last successful claim.
-    pub last_claimed_height: u64,
+    /// F14 awaiting-confirmation lock (`DAEMON_SUBMIT_VERDICT.md` §2.6):
+    /// a network-exposed spend of this output awaits chain confirmation.
+    /// Excludes the output from selection while present; cleared by
+    /// refresh-authoritative confirmation (confirmed-present) or the
+    /// watchdog horizon (confirmed-absent). See [`AwaitingConfirmation`].
+    #[serde(default)]
+    pub awaiting_confirmation: Option<AwaitingConfirmation>,
 
     // ── M3b deterministic-handle pathway (per `STAGE_1_PR_3_M3B_PREFLIGHT.md`) ──
     //
@@ -126,7 +167,7 @@ pub struct TransferDetails {
     ///
     /// **Non-secret** (broadcast in the transaction's `tx_extra`). The
     /// engine's deterministic-handle pathway
-    /// (`shekyl_engine_core::engine::local_keys::LocalKeys::derive_source_secrets_bundle`)
+    /// (`shekyl_engine_core::engine::local_keys::LocalKeys::derive_primary_source_secrets_bundle`)
     /// consumes this field to re-derive `combined_ss` and the per-output
     /// secrets at signing time. Post-M3d, the orchestrator-side
     /// `TransferDetails` schema no longer carries those derived secrets;
@@ -173,50 +214,34 @@ pub struct TransferDetails {
     // ── Engine management ──
     pub frozen: bool,
     pub fcmp_precomputed_path: Option<FcmpPrecomputedPath>,
+
+    /// Receive-side bookkeeping attribution (FA-8, §5.7.9).
+    #[serde(default)]
+    pub receive_attribution: ReceiveAttribution,
 }
 
 impl TransferDetails {
     /// Whether this output is available for regular spending.
     ///
-    /// Staked outputs are NEVER directly spendable -- they must go through
-    /// the unstake transaction path once matured. Outputs below `eligible_height`
-    /// are immature (no curve-tree path yet) and cannot be spent.
+    /// Outputs below `eligible_height` are immature (no curve-tree path yet)
+    /// and cannot be spent. Outputs with a network-exposed spend awaiting
+    /// chain confirmation ([`Self::awaiting_confirmation`], F14 §2.6) are
+    /// excluded: selecting one would build a second tx bearing the same
+    /// key image.
     pub fn is_spendable(&self, current_height: u64) -> bool {
-        !self.spent && !self.frozen && !self.staked && current_height >= self.eligible_height
+        !self.spent
+            && !self.frozen
+            && self.awaiting_confirmation.is_none()
+            && current_height >= self.eligible_height
     }
 
-    /// Whether this staked output can be unstaked (lock period expired, not yet spent).
-    pub fn is_unstakeable(&self, current_height: u64) -> bool {
-        self.staked && !self.spent && !self.frozen && self.stake_lock_until <= current_height
-    }
-
-    /// Whether this staked output has unclaimed reward backlog.
-    pub fn has_claimable_rewards(&self, current_height: u64) -> bool {
-        if !self.staked || self.spent {
-            return false;
-        }
-        let accrual_cap = std::cmp::min(current_height, self.stake_lock_until);
-        let watermark = if self.last_claimed_height > 0 {
-            self.last_claimed_height
-        } else {
-            self.block_height
-        };
-        watermark < accrual_cap
-    }
-
-    /// The amount (in atomic units) held in this output.
-    pub fn amount(&self) -> u64 {
-        self.commitment.amount
-    }
-
-    /// Whether this is a staked output still within its lock period.
-    pub fn is_locked_stake(&self, current_height: u64) -> bool {
-        self.staked && self.stake_lock_until > current_height
-    }
-
-    /// Whether this is a staked output whose lock period has expired.
-    pub fn is_matured_stake(&self, current_height: u64) -> bool {
-        self.staked && self.stake_lock_until <= current_height
+    /// The amount held in this output.
+    ///
+    /// The stored `commitment.amount` is the vendored fork's raw `u64`
+    /// (`10-shekyl-first.mdc`); this accessor is the edge that lifts it into
+    /// the typed [`AtomicUnits`] domain (`ATOMIC_UNITS_NEWTYPE.md` §4.1).
+    pub fn amount(&self) -> AtomicUnits {
+        AtomicUnits::from_raw(self.commitment.amount)
     }
 }
 
@@ -239,6 +264,16 @@ impl TransferDetails {
 // upstream `Schema` impl and is wire-identical to `serde_bytes::Bytes` in
 // postcard (both emit `varint(len) || bytes`).
 
+/// Wire mirror of [`AwaitingConfirmation`] for the schema snapshot; the
+/// same rename delegation as the enclosing mirror keeps the snapshot's
+/// type name matching the real struct.
+#[derive(postcard_schema::Schema)]
+#[allow(dead_code)]
+struct AwaitingConfirmationSchema {
+    tx_hash: [u8; 32],
+    accepted_at_height: u64,
+}
+
 #[derive(postcard_schema::Schema)]
 #[allow(dead_code)]
 struct TransferDetailsSchema {
@@ -252,15 +287,13 @@ struct TransferDetailsSchema {
     key_offset: Vec<u8>,
     // Commitment via `commitment_bytes` — 32-byte mask || 8-byte LE amount.
     commitment: Vec<u8>,
-    subaddress: Option<crate::subaddress::SubaddressIndex>,
     payment_id: Option<crate::payment_id::PaymentId>,
     spent: bool,
     spent_height: Option<u64>,
     key_image: Option<[u8; 32]>,
-    staked: bool,
-    stake_tier: u8,
-    stake_lock_until: u64,
-    last_claimed_height: u64,
+    // `AwaitingConfirmation` mirrored field-for-field: `TxHash` is a
+    // transparent 32-byte-array newtype on the wire.
+    awaiting_confirmation: Option<AwaitingConfirmationSchema>,
     // Non-secret on-chain payloads; reference the workspace types
     // directly (their `postcard_schema::Schema` derives lock the wire
     // shape from the source side per
@@ -270,6 +303,7 @@ struct TransferDetailsSchema {
     eligible_height: u64,
     frozen: bool,
     fcmp_precomputed_path: Option<FcmpPrecomputedPath>,
+    receive_attribution: ReceiveAttribution,
 }
 
 impl postcard_schema::Schema for TransferDetails {
@@ -294,10 +328,11 @@ impl Zeroize for TransferDetails {
         self.spent.zeroize();
         self.spent_height.zeroize();
         self.key_image.zeroize();
-        self.staked.zeroize();
-        self.stake_tier.zeroize();
-        self.stake_lock_until.zeroize();
-        self.last_claimed_height.zeroize();
+        // `Option<AwaitingConfirmation>::zeroize` wipes the inner fields AND
+        // resets the tag to `None` (matching the sibling `Option` fields);
+        // the hand-rolled `if let Some` left it `Some(all-zero)`, and would
+        // have silently skipped any future secret field on the inner struct.
+        self.awaiting_confirmation.zeroize();
         // `source_ciphertext` and `output_handle` are non-secret — see
         // the field docs above. `HybridCiphertext` is on-chain public
         // data; `OutputHandle` is wallet-private-derivable from any
@@ -334,7 +369,10 @@ impl std::fmt::Debug for TransferDetails {
             .field("block_height", &self.block_height)
             .field("amount", &self.amount())
             .field("spent", &self.spent)
-            .field("staked", &self.staked)
+            .field(
+                "awaiting_confirmation",
+                &self.awaiting_confirmation.is_some(),
+            )
             .field("eligible_height", &self.eligible_height)
             .field("frozen", &self.frozen)
             .finish_non_exhaustive()
@@ -348,27 +386,24 @@ mod tests {
 
     fn sample() -> TransferDetails {
         TransferDetails {
-            tx_hash: [0xAB; 32],
+            tx_hash: shekyl_types::TxHash::from_bytes([0xAB; 32]),
             internal_output_index: 3,
             global_output_index: 1234,
             block_height: 100,
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1_000_000),
-            subaddress: Some(SubaddressIndex::new(1)),
             payment_id: None,
             spent: false,
             spent_height: None,
             key_image: None,
-            staked: false,
-            stake_tier: 0,
-            stake_lock_until: 0,
-            last_claimed_height: 0,
+            awaiting_confirmation: None,
             source_ciphertext: None,
             output_handle: None,
             eligible_height: 110,
             frozen: false,
             fcmp_precomputed_path: None,
+            receive_attribution: ReceiveAttribution::default(),
         }
     }
 
@@ -404,7 +439,7 @@ mod tests {
         });
         td.output_handle = Some(shekyl_crypto_pq::handle::derive_output_handle(
             &[0x77; 32],
-            &td.tx_hash,
+            td.tx_hash.as_bytes(),
             td.internal_output_index,
         ));
         td.key_image = Some(KeyImage::from_canonical_bytes([7u8; 32]));

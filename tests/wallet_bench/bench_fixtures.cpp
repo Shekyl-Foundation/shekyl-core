@@ -151,10 +151,6 @@ void populate_synthetic_transfers(tools::wallet2& w,
     fill_random_bytes(rng, reinterpret_cast<unsigned char*>(&td.m_txid),      32);
 
     // Staking fields at rest: un-staked output, zeroed watermarks.
-    td.m_staked           = false;
-    td.m_stake_tier       = 0;
-    td.m_stake_lock_until = 0;
-    td.m_last_claimed_height = 0;
     td.m_combined_shared_secret_set = false;
 
     // m_tx and m_uses are default-constructed. transfer_details'

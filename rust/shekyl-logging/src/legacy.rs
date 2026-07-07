@@ -46,7 +46,8 @@ use crate::filter::{level_directive, FilterError, TranslationReport};
 /// Rust has no `.dump` targets today — the Chore #2 C++ integration
 /// introduces them — so the preset reduces to `trace` for now. When
 /// Chore #2 wires the C++ shim through `tracing`, this preset must be
-/// revisited. A note lives in `docs/STRUCTURAL_TODO.md`.
+/// revisited. Tracked with the logging-shim follow-ups in
+/// `docs/FOLLOWUPS.md` (open structural-debt tracker).
 const PRESETS: [&str; 5] = [
     // LEVEL 0 — mirrors mlog.cpp, order preserved for diff review.
     "warn,\

@@ -15,7 +15,7 @@ use curve25519_dalek::{constants::X25519_BASEPOINT, montgomery::MontgomeryPoint,
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Sha512;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use fips203::ml_kem_768;
 use fips203::traits::{Decaps, Encaps, KeyGen, SerDes};
@@ -35,14 +35,52 @@ pub const ML_KEM_768_SS_LEN: usize = 32;
 /// Domain separator for KEM shared-secret combination.
 pub const KEM_DOMAIN_SALT: &[u8] = b"shekyl-kem-v1";
 
+/// ML-KEM-768 decapsulation key parsed once for batch chain scan.
+///
+/// FA-6 runs universal decap on every output. Callers scanning many outputs
+/// should parse [`Self`] once and pass it to
+/// [`crate::output::scan_output_with_ml_kem_dk`] /
+/// [`crate::output::scan_output_recover_with_ml_kem_dk`]. The byte-slice
+/// entrypoints re-parse the key per call (FFI and one-off callers only).
+///
+/// Not `Clone` — decapsulation keys are secret material; duplicate via
+/// [`Self::from_bytes`] on the canonical byte form when needed.
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct MlKemDecapsKey(ml_kem_768::DecapsKey);
+
+impl MlKemDecapsKey {
+    /// Parse and validate a 2400-byte ML-KEM-768 decapsulation key.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, CryptoError> {
+        if bytes.len() != ML_KEM_768_DK_LEN {
+            return Err(CryptoError::InvalidKeyMaterial);
+        }
+        let dk_bytes: [u8; ML_KEM_768_DK_LEN] = bytes
+            .try_into()
+            .map_err(|_| CryptoError::InvalidKeyMaterial)?;
+        let dk = ml_kem_768::DecapsKey::try_from_bytes(dk_bytes)
+            .map_err(|e| CryptoError::DecapsulationFailed(format!("invalid decap key: {e}")))?;
+        Ok(Self(dk))
+    }
+
+    pub(crate) fn as_decaps_key(&self) -> &ml_kem_768::DecapsKey {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for MlKemDecapsKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MlKemDecapsKey").finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HybridKemPublicKey {
     pub x25519: [u8; 32],
     pub ml_kem: Vec<u8>,
 }
 
-#[derive(Clone, Zeroize)]
-#[zeroize(drop)]
+// Rule-35 canonical wipe-on-drop idiom (replaces deprecated `#[zeroize(drop)]`).
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct HybridKemSecretKey {
     pub x25519: [u8; 32],
     pub ml_kem: Vec<u8>,
@@ -74,8 +112,8 @@ pub struct HybridCiphertext {
 
 /// Combined shared secret after HKDF combination of X25519 and ML-KEM.
 /// 64 bytes: sufficient for HKDF-Expand derivation of per-output keys.
-#[derive(Clone, Zeroize)]
-#[zeroize(drop)]
+// Rule-35 canonical wipe-on-drop idiom (replaces deprecated `#[zeroize(drop)]`).
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct SharedSecret(pub [u8; 64]);
 
 impl std::fmt::Debug for SharedSecret {

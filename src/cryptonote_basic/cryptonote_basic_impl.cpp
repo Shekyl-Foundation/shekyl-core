@@ -37,6 +37,7 @@ using namespace epee;
 #include "cryptonote_format_utils.h"
 #include "cryptonote_config.h"
 #include "misc_language.h"
+#include "shekyl/economics.h"
 #include "shekyl/shekyl_ffi.h"
 #include "crypto/hash.h"
 #include "int-util.h"
@@ -75,16 +76,11 @@ namespace cryptonote {
   }
   //-----------------------------------------------------------------------------------------------
   bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version) {
-    static_assert(SHEKYL_DAA_TARGET_SECONDS%60==0,"difficulty target must be a multiple of 60");
-    const int target = SHEKYL_DAA_TARGET_SECONDS;
-    const int target_minutes = target / 60;
-    const int emission_speed_factor = EMISSION_SPEED_FACTOR_PER_MINUTE - (target_minutes-1);
-
-    uint64_t base_reward = (MONEY_SUPPLY - already_generated_coins) >> emission_speed_factor;
-    if (base_reward < FINAL_SUBSIDY_PER_MINUTE*target_minutes)
-    {
-      base_reward = FINAL_SUBSIDY_PER_MINUTE*target_minutes;
-    }
+    // Base subsidy curve (0h) is canonical in Rust (`shekyl-economics`); this
+    // delegates to the `shekyl_base_block_reward` FFI rather than recomputing
+    // the ESF formula in C++ (STAGE_1_PR_7 §5.8, C2c cutover). Only the weight
+    // penalty below stays in C++.
+    uint64_t base_reward = shekyl::base_subsidy_before_penalty(already_generated_coins);
 
     uint64_t full_reward_zone = get_min_block_weight(version);
 

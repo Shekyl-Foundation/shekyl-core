@@ -29,10 +29,6 @@
 //!   transfer the wallet already owns, observed in the scanned blocks'
 //!   inputs. Drives
 //!   [`shekyl_engine_state::LedgerIndexes::detect_spends`].
-//! - [`ScanResult::stake_events`] — staker-pool aggregate state
-//!   updates derived from the block. Phase 1 ships the
-//!   [`StakeEvent::Accrual`] variant; further variants land alongside
-//!   the `StakeInstance` work in Phase 2b.
 //! - [`ScanResult::reorg_rewind`] — when present, indicates the
 //!   merge must drop wallet state at and above
 //!   [`ReorgRewind::fork_height`] before applying any of the
@@ -73,8 +69,33 @@
 
 use std::ops::Range;
 
-use shekyl_engine_state::staker_pool::AccrualRecord;
+use shekyl_curve_tree::RawOutput;
 use shekyl_scanner::RecoveredWalletOutput;
+
+/// One transaction's leaf inputs, decoded from a `ScannableBlock` and
+/// owned (`Send + 'static`) so it can ride on [`ScanResult`] and cross the
+/// [`CurveTreeActor`](crate::engine::curve_tree_actor) message boundary.
+///
+/// This is the owned mirror of [`shekyl_curve_tree::TxLeafInputs`], which
+/// borrows (`leaf_hash_blob: Option<&[u8]>`, `outputs: &[RawOutput]`). The
+/// producer materializes these vecs while the `ScannableBlock` is in hand
+/// (CT-5a commit 3); the merge carries them to the actor, whose `IngestBlock`
+/// handler re-borrows them into a [`shekyl_curve_tree::BlockLeaves`].
+///
+/// Public on-chain material only (output keys, commitments, the `0x07`
+/// leaf-hash blob) — no secrets, so no zeroization contract (contrast
+/// [`DetectedTransfer::output`]).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct OwnedTxLeaves {
+    /// Whether this is the block's coinbase (miner) transaction. Drives the
+    /// per-target maturity offset in the daemon's drain order.
+    pub is_miner: bool,
+    /// The `tx_extra 0x07` curve-tree leaf-hash blob, if the tag is present.
+    /// Carried verbatim; the client validates and slices it at ingest.
+    pub leaf_hash_blob: Option<Vec<u8>>,
+    /// The transaction's outputs in on-chain `vout` order.
+    pub outputs: Vec<RawOutput>,
+}
 
 /// Typed value produced by a scanner pass and consumed by
 /// [`Engine::apply_scan_result`](crate::engine::Engine).
@@ -129,16 +150,38 @@ pub struct ScanResult {
     /// [`shekyl_engine_state::LedgerIndexes::detect_spends`].
     pub spent_key_images: Vec<KeyImageObserved>,
 
-    /// Staker-pool aggregate state events derived from the
-    /// scanned blocks. Phase 1 supports the
-    /// [`StakeEvent::Accrual`] variant; further variants land
-    /// alongside the `StakeInstance` work in Phase 2b.
-    pub stake_events: Vec<StakeEvent>,
-
     /// When `Some`, the merge must roll wallet state back to the
     /// fork height *before* applying any per-height events. Drives
     /// [`shekyl_engine_state::LedgerIndexes::handle_reorg`].
     pub reorg_rewind: Option<ReorgRewind>,
+
+    /// Full per-block leaf set — *every* on-chain output, not just the
+    /// wallet-owned ones in [`Self::new_transfers`] — keyed by height in
+    /// `processed_height_range`, ascending. The curve tree contains every
+    /// output, so the producer materializes all of them where the
+    /// `ScannableBlock` is in hand and the merge drives
+    /// `CurveTreeHandle::ingest` per height (CT-5 §3.2, R1-Q2).
+    ///
+    /// **Transit, not persisted state** — dropped after the merge (consistent
+    /// with derive>hold). The materialization cost is `O(outputs-per-block)`,
+    /// released per block (CT-5 §3.2 E4); it is bounded by the consensus
+    /// block-size limit upstream (the producer's excessive-outputs pre-pass,
+    /// X7), not by the daemon's blob length.
+    ///
+    /// **A1 frozen-contract** (CT-5 §3.2): the field shape is frozen here.
+    /// CT-5a populates and carries it; the merge-driven ingest that consumes
+    /// it lands in CT-5a commit 4.
+    pub block_leaves: Vec<(u64, Vec<OwnedTxLeaves>)>,
+
+    /// Per-block consensus header `curve_tree_root` (from pre-0's parser),
+    /// keyed by height in `processed_height_range`, ascending. Consumed by the
+    /// merge's ingest-time root verify (CT-5 §3.3, R1-Q6) and then discarded.
+    ///
+    /// **Transit, not persisted state.** **A1 frozen-contract** (CT-5 §3.2):
+    /// CT-5a populates this field but does **not** yet consume it — the §3.3
+    /// verify lands in CT-5b. This is a deliberate write-but-not-read transit
+    /// field, not dead code; do not remove it (CT-5 §6 E6b note).
+    pub block_curve_tree_roots: Vec<(u64, [u8; 32])>,
 }
 
 /// A scanner-detected output: the recovered output material plus
@@ -177,26 +220,6 @@ pub struct KeyImageObserved {
     pub key_image: shekyl_crypto_pq::key_image::KeyImage,
 }
 
-/// A staker-pool aggregate state event. The variant set is
-/// `#[non_exhaustive]` because Phase 2b's `StakeInstance` work adds
-/// further variants (broadcast / unconfirmed / locked / accruing
-/// transitions); existing call sites must be prepared for new
-/// variants without breaking.
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub enum StakeEvent {
-    /// Per-height accrual record produced by the staker-pool
-    /// aggregator. Drives
-    /// [`shekyl_engine_state::LedgerIndexes::insert_accrual`].
-    Accrual {
-        /// Block height this accrual applies to.
-        height: u64,
-        /// Accrual aggregate (emission, fee pool, weighted stake)
-        /// for the height.
-        record: AccrualRecord,
-    },
-}
-
 /// A reorg-rewind directive. When present in a [`ScanResult`], the
 /// merge first drops wallet transfers and stored block hashes at and
 /// above `fork_height`, then applies the rest of the result against
@@ -225,8 +248,9 @@ impl ScanResult {
             block_hashes: Vec::new(),
             new_transfers: Vec::new(),
             spent_key_images: Vec::new(),
-            stake_events: Vec::new(),
             reorg_rewind: None,
+            block_leaves: Vec::new(),
+            block_curve_tree_roots: Vec::new(),
         }
     }
 }

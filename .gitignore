@@ -150,6 +150,9 @@ artifacts/
 release/
 *.tar.gz
 *.sha256
+# ...except the vendored-crypto content manifest: a tracked source-of-truth (the
+# integrity baseline for rust/shekyl-oxide/crypto/), not a release checksum artifact.
+!rust/shekyl-oxide/CRYPTO_CONTENT_MANIFEST.sha256
 
 # Environment files (may contain secrets)
 .env
@@ -162,3 +165,9 @@ build-sync/
 # build directory (CMake -B build-randomx-v2-diff per
 # RANDOMX_V2_PHASE2G_PLAN.md §5.4.2 + R6-D3).
 build-randomx-v2-diff/
+# Local BUILD_RANDOMX_V2_MINER_LIB=ON Release tree used to exercise the
+# Phase 3a parity gate + symbol-isolation script outside CI.
+build-parity-rel/
+
+# Claude settings
+.claude/

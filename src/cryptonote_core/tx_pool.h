@@ -143,6 +143,51 @@ namespace cryptonote
       uint8_t version, uint8_t nic_verified_hf_version = 0);
 
     /**
+     * @brief RPC-submit commit tail: insert an engine-verified transaction
+     *
+     * The insert tail of the Rust admission engine's Phase-D commit
+     * (DAEMON_SUBMIT_VERDICT.md §4.2): reproduces add_tx's fresh-insert tail
+     * for a local-origin transaction — meta build, key-image index,
+     * transient lists, prune — **without re-running verification**. The
+     * fcmp_verified attestation is derived exactly as the P2P path derives
+     * it (see add_tx); what makes it *earned* here is the caller-side
+     * certificate gate (§3.5): the only caller is the commit shim, which is
+     * reachable only with a Phase-C VerificationCertificate.
+     *
+     * The caller must hold the §4.4 pool→blockchain lock order across the
+     * preceding premise re-checks and this call, and must have re-checked
+     * every mutable premise (identity, key images, reference canonicality,
+     * root, fee re-gate) under that same scope. This method is the tail
+     * only, never a gate.
+     *
+     * @param tx the parsed transaction (blob-derived; txid release-checked)
+     * @param id the transaction hash (C++-recomputed, engine-equal per §3.4)
+     * @param blob the exact submitted bytes
+     * @param tx_weight consensus transaction weight
+     * @param fee transaction fee
+     * @param ref_block_id certificate reference-block hash (anchors
+     *        max_used_block_id for the F22 ref-age sweep and template re-check)
+     * @param ref_block_height certificate reference-block height
+     * @param pruned_on_insert return-by-reference: the tail's prune()
+     *        evicted the tx it just inserted (F23 / defect 0.7)
+     *
+     * @return true if the insert tail committed, false on internal error
+     */
+    bool insert_attested_tx(transaction &tx, const crypto::hash &id,
+      const cryptonote::blobdata &blob, uint64_t tx_weight, uint64_t fee,
+      const crypto::hash &ref_block_id, uint64_t ref_block_height,
+      bool &pruned_on_insert);
+
+    /**
+     * @brief mark all resident pool transactions double-spending the passed tx
+     *        as double_spend_seen (the early-warning flag surfaced via pool
+     *        RPC). Public for the attested-commit shim (daemon_submit_ffi.cpp),
+     *        which re-establishes this legacy add_tx side effect on the RPC
+     *        submit path; add_tx still calls it internally on the P2P path.
+     */
+    void mark_double_spend(const transaction &tx);
+
+    /**
      * @brief takes a transaction with the given hash from the pool
      *
      * @param id the hash of the transaction
@@ -169,6 +214,23 @@ namespace cryptonote
      * @return true if the transaction is in the pool and meets tx_category requirements
      */
     bool have_tx(const crypto::hash &id, relay_category tx_category) const;
+
+    /**
+     * @brief check if a transaction in the pool has a given spent key image
+     *
+     * True iff a *different* pool transaction spends `key_im` (relay-state
+     * blind), or the sole spender is `txid` itself and is legacy-visible.
+     * Public for the submit-shim conflict descriptors (daemon_submit_ffi.cpp,
+     * DAEMON_SUBMIT_VERDICT.md §4.1), which split the two arms on pool
+     * residency; add_tx's double-spend gate uses it via
+     * have_tx_keyimges_as_spent.
+     *
+     * @param key_im the spent key image to look for
+     * @param txid hash of the new transaction where `key_im` was seen.
+     *
+     * @return true if the spent key image is present, otherwise false
+     */
+    bool have_tx_keyimg_as_spent(const crypto::key_image& key_im, const crypto::hash& txid) const;
 
     /**
      * @brief action to take when notified of a block added to the blockchain
@@ -494,7 +556,12 @@ namespace cryptonote
      */
     bool get_pool_info(time_t start_time, bool include_sensitive, size_t max_tx_count, std::vector<std::pair<crypto::hash, tx_details>>& added_txs, std::vector<crypto::hash>& remaining_added_txids, std::vector<crypto::hash>& removed_txs, bool& incremental) const;
 
+// Same test-visibility idiom as blockchain.h: unit tests drive the private
+// sweep/readiness surface (remove_stuck_transactions,
+// is_transaction_ready_to_go) and assert on private state (m_input_cache).
+#ifndef IN_UNIT_TESTS
   private:
+#endif
 
     /**
      * @brief insert key images into m_spent_key_images
@@ -513,16 +580,6 @@ namespace cryptonote
      * @return true
      */
     bool remove_stuck_transactions();
-
-    /**
-     * @brief check if a transaction in the pool has a given spent key image
-     *
-     * @param key_im the spent key image to look for
-     * @param txid hash of the new transaction where `key_im` was seen.
-     *
-     * @return true if the spent key image is present, otherwise false
-     */
-    bool have_tx_keyimg_as_spent(const crypto::key_image& key_im, const crypto::hash& txid) const;
 
     /**
      * @brief check if any spent key image in a transaction is in the pool
@@ -585,11 +642,6 @@ namespace cryptonote
      */
     bool is_transaction_ready_to_go(txpool_tx_meta_t& txd, const crypto::hash &txid, const cryptonote::blobdata_ref &txblob, transaction&tx) const;
     bool is_transaction_ready_to_go(txpool_tx_meta_t& txd, const crypto::hash &txid, const cryptonote::blobdata &txblob, transaction&tx) const;
-
-    /**
-     * @brief mark all transactions double spending the one passed
-     */
-    void mark_double_spend(const transaction &tx);
 
     /**
      * @brief prune lowest fee/byte txes till we're not above bytes
@@ -669,12 +721,6 @@ private:
     //! Check whether an FCMP++ tx's proof was previously verified and the
     //! cached verification hash in the meta still matches the tx contents.
     bool is_fcmp_verification_cached(const txpool_tx_meta_t& meta, const transaction& tx) const;
-
-    //! transactions which are unlikely to be included in blocks
-    /*! These transactions are kept in RAM in case they *are* included
-     *  in a block eventually, but this container is not saved to disk.
-     */
-    std::unordered_set<crypto::hash> m_timed_out_transactions;
 
     Blockchain& m_blockchain;  //!< reference to the Blockchain object
 

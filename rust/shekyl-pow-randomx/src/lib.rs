@@ -173,6 +173,7 @@ mod cache;
 mod cache_store;
 pub(crate) mod fpu_rounding;
 mod prepared_cache;
+mod seed_epoch;
 mod seedhash;
 pub(crate) mod superscalar;
 mod vm;
@@ -188,6 +189,9 @@ mod vm_pool;
 pub(crate) use cache::Cache;
 pub use cache_store::CacheStore;
 pub use prepared_cache::PreparedCache;
+pub use seed_epoch::{
+    clamp_blocks, clamp_lag, next_seedheight, seedheight, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG,
+};
 pub use seedhash::Seedhash;
 pub use vm::compute_hash;
 

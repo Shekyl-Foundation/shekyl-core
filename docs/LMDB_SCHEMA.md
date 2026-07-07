@@ -1,7 +1,7 @@
 # LMDB Schema Reference
 
 **Last updated:** April 2026
-**DB version:** 7 (schema v7: composite-key pending/drain tables, output↔leaf mapping)
+**DB version:** 8 (schema v8: persisted pop-symmetric frozen-shard counter; v7: composite-key pending/drain tables, output↔leaf mapping)
 **Source:** `src/blockchain_db/lmdb/db_lmdb.cpp`, `src/blockchain_db/lmdb/db_lmdb.h`, `src/blockchain_db/blockchain_db.h`, `src/blockchain_db/shekyl_types.h`
 
 ## Conventions
@@ -393,6 +393,173 @@ Per-staked-output watermark tracking the last claimed height.
 | Readers | `get_staker_claim_watermark` (claim validation: `from_height` must equal watermark) |
 | Introduced | HF1 (Shekyl genesis) |
 
+### `archival_serve_credit`
+
+Affirmative serve-credit pass per `(P_id, shard_id, settlement_epoch)` (gate-2 §3.1).
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_serve_credit"` |
+| Flags | `MDB_CREATE` (composite key; no `INTEGERKEY`) |
+| Key | `P_id[32] \|\| BE(shard_id) \|\| BE(settlement_epoch)` (48 bytes) |
+| Value | `uint8_t` `0x01` (presence flag; key existence is the authoritative bit) |
+| Writers | `set_archival_serve_credit_bit` (on archival vin block connect), `remove_archival_serve_credit_bit` (reorg `pop_block`) |
+| Readers | `has_archival_serve_credit_bit` (idempotency check; derived `R_market` at epoch close) |
+| Encoder | `shekyl::db::ArchivalServeCreditKey` in `blockchain_db/shekyl_types.h` |
+| Introduced | HF1 (Shekyl genesis; gate-2 §10 step 3) |
+
+### `archival_bond`
+
+Gate-4 `ArchivalBondRecord` substrate for serve-credit and emission reads
+(`ARCHIVAL_CONSENSUS_STATE.md` §3.4). Written on JoinMarket bond-post connect
+(gate-4 §3.4.1).
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_bond"` |
+| Flags | `MDB_CREATE` |
+| Key | `P_id[32]` (`P_canonical_id`) |
+| Value | versioned `ArchivalBondValue` blob (v4 only at genesis: hybrid pubkey, **`bond_spend_pk`** (GF-1 debit authorizer, gate-4 §4.1), `E_join`, `bonded_total_atomic`, `holdings_kind`, shard set or CompleteTree sentinel, bad intervals, claimed settlement epochs, `first_paying_emission_height`; v1–v3 decode rejected) |
+| Writers | `put_archival_bond_record` (join/re-bond connect), `remove_archival_bond_record` (reorg) |
+| Readers | `get_archival_bond_hybrid_pubkey`, `archival_bond_join_epoch`, `archival_bond_good_through`, `archival_bond_holds_shard` |
+| Encoder | `shekyl::db::ArchivalBondValue` in `blockchain_db/shekyl_types.h` |
+| Introduced | HF1 (gate-4 substrate; gate-2 §5.3 steps 2–3 reads) |
+
+v4 layout (`REWARD_EMISSION_LEG.md` §6.2/§6.3, pinned 2026-06-11; `bond_spend_pk`
+amended in per `ARCHIVAL_BOND_GATE4.md` §4.1, 2026-06-16 — committed at JoinMarket,
+immutable, and bound into the bond-post sig-preimage (gate-4 §3.4.1), so the
+persisted record must carry it. Pre-genesis amendment: no migration, reset
+data-dir per the v4 posture; the field is in the genesis v4, not a v5 bump):
+
+```text
+u8  version (= 4)
+u16 BE pubkey_len ‖ pubkey bytes              (≤ 2048)   // P_pubkey (account identity)
+u16 BE bond_spend_pk_len ‖ bond_spend_pk      (≤ 2048)   // GF-1 debit authorizer (gate-4 §4.1); committed at JoinMarket, immutable
+u64 BE join_settlement_epoch
+u64 BE bonded_total_atomic
+u8  holdings_kind (0 = shard set, 1 = CompleteTree)
+u32 BE holdings_count ‖ u64 BE shard ids      (≤ 4096)
+u32 BE bad_interval_count ‖ (u64 BE start, u64 BE end_exclusive) pairs (≤ 256)
+u32 BE claimed_count ‖ u64 BE claimed epochs  (≤ 32 = W + 6, strictly
+                                               increasing, span ≤ W)
+u64 BE first_paying_emission_height
+```
+
+`first_paying_emission_height` sentinel `0` = unset; unreachable as a real
+value because no emission can pay before the first settlement epoch closes at
+height `SETTLEMENT_EPOCH_BLOCKS` (10_000). Claimed-set mutation semantics
+(windowed dedup `check_and_set`, prune below `current − W`) are consensus
+rules and live in Rust only (`shekyl-archival-retention::claimed_epochs`); the
+codec stores and validates the at-rest shape. The cap and span bounds derive
+from `max_claim_age_w` in `config/consensus_constants.json`
+(`SHEKYL_ARCHIVAL_MAX_CLAIM_AGE_W`).
+
+### `archival_r_market`
+
+Serve-credit-weighted `R_market(shard, E)` snapshot at epoch close (`ARCHIVAL_CONSENSUS_STATE.md` §3.3).
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_r_market"` |
+| Flags | `MDB_CREATE` |
+| Key | `BE(shard_id) \|\| BE(settlement_epoch)` (16 bytes) |
+| Value | `BE(u64)` count |
+| Writers | `process_archival_epoch_close_at_height` |
+| Readers | `get_archival_r_market` |
+| Reorg | `revert_archival_epoch_close_at_height` deletes epoch materialization |
+
+### `archival_sigma_work`
+
+Per-epoch `Σwork(E)` milli accumulator (`ARCHIVAL_CONSENSUS_STATE.md` §3.5).
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_sigma_work"` |
+| Flags | `MDB_CREATE` |
+| Key | `BE(settlement_epoch)` (8 bytes) |
+| Value | `BE(u64)` sigma milli |
+| Writers | `process_archival_epoch_close_at_height` |
+| Readers | `get_archival_sigma_work_milli` |
+| Prune | `prune_archival_epochs_before` when `E < tip − W` |
+
+### `archival_epoch_close_log`
+
+Journal: block heights that finalized an epoch (pop revert).
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_epoch_close_log"` |
+| Key | `BE(block_height)` |
+| Value | `BE(settlement_epoch)` finalized at close |
+
+### `archival_shard_segment`
+
+Frozen segment metadata per `shard_id` (gate-2 §9;
+`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`; `CURVE_TREE_CLIENT.md` §7.2).
+
+Rows are written by the segment-freeze connect hook at the block whose
+same-txn `grow_curve_tree` first crosses a `SEGMENT_LEAF_COUNT` (25 992)
+boundary: `freeze_height` = that block's height (first-crossing rule, O-2
+per-branch monotone), `R_k` = the layer-2 chunk hash the grow computed
+(MMR-final). The pop hook deletes rows whose segment un-completes after the
+same-txn `trim_curve_tree` (O-3 pop-symmetry: re-applying the block rewrites
+a bit-identical row). Writer/deleter one-site and the cursor accounting are
+CI-enforced (`scripts/ci/check_reward_gate_predicate_sites.sh`).
+
+The row count is mirrored by the persisted `"archival_frozen_shard_count"`
+counter in `properties` (V8; `ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §4.4):
++1 on put (`MDB_NOOVERWRITE` — rows are CREATE-only), −1 per row deleted on
+revert, same write transaction. `count_frozen_shards_at_close` reads the
+counter in O(1) and frontier-checks the `MDB_LAST` row (decode + boundary);
+the O(N) walk survives only as the differential test oracle
+`count_frozen_shard_rows_by_walk_for_test`.
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_shard_segment"` |
+| Flags | `MDB_CREATE` |
+| Key | `BE(shard_id)` (8 bytes) |
+| Value | `ArchivalShardSegmentValue` — `freeze_height`, `segment_leaf_count`, `R_k[32]` |
+| Writers | `process_archival_segment_freezes_at_height` → `put_archival_shard_segment` (sole production caller) |
+| Readers | `get_archival_shard_segment_at_height`, `count_frozen_shards_at_close` (M1 gate operand) |
+| Reorg | `revert_archival_segment_freezes` (reverse walk deleting rows above the post-trim frontier) |
+| Introduced | HF1 (gate-2 verifier step 6) |
+
+The former `archival_shard_leaf` table (Selene leaf-layer scalar chunks per
+challenged index) is **deleted** (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`
+§6.2): it was a derived copy of `m_curve_tree_leaves`, and the serve-credit
+challenge path now derives the global chunk bounds via
+`shekyl_archival_challenge_leaf_chunk_bounds` and reads the 38-leaf chunk
+from the curve tree directly.
+
+### `archival_slash_applied`
+
+Slash idempotency per `(P_id, shard_id, settlement_epoch)` (gate-4 §4.2).
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_slash_applied"` |
+| Flags | `MDB_CREATE` |
+| Key | `P_id[32] \|\| BE(shard_id) \|\| BE(settlement_epoch)` (48 bytes; same shape as serve-credit key) |
+| Value | `uint8_t` `0x01` presence flag |
+| Writers | `set_archival_slash_applied` (slash scheduler), `remove_archival_slash_applied` (reorg) |
+| Readers | `has_archival_slash_applied` |
+| Introduced | HF1 (gate-2 §10 step 4) |
+
+### `archival_slash_log`
+
+Per-block revert journal for slash connect / `pop_block` (gate-2 §8).
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_slash_log"` |
+| Flags | `MDB_CREATE` |
+| Key | `BE(block_height) \|\| BE(seq)` (12 bytes) |
+| Value | versioned `ArchivalSlashRevertValue` blob, or epoch-marker sentinel at `seq = 0xFFFFFFFF` |
+| Writers | `append_archival_slash_log`, deleted on slash revert |
+| Readers | `revert_archival_slashes_at_height` |
+| Introduced | HF1 (gate-2 §10 step 4) |
+
 ### `properties` — Staking keys
 
 The `properties` table (see below) stores these staking-related entries:
@@ -400,6 +567,7 @@ The `properties` table (see below) stores these staking-related entries:
 | Key string | Value type | Description |
 |---|---|---|
 | `staker_pool_balance` | `uint64_t` (8 bytes) | Running balance of the staker reward pool. Incremented by emission + fee pool inflow per block (when stakers exist), decremented by successful claims. |
+| `total_bonded_atomic` | `uint64_t` (8 bytes) | Global audit scalar: sum of per-`P` `bonded_total_atomic` (gate-4 §4.5). Credited on JoinMarket `bond_credit`; debited on Unbond/slash connect paths. |
 | `total_burned` | `uint64_t` (8 bytes) | Cumulative amount of SHEKYL destroyed (zero-staker burns + explicit burns). |
 
 ---
@@ -478,6 +646,20 @@ Offset  Size  Field
 |---|---|
 | Writers | `save_curve_tree_checkpoint` (every `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` blocks) |
 | Readers | `get_curve_tree_checkpoint` (for rollback), `prune_curve_tree_intermediate_layers` |
+| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
+
+### `curve_tree_roots`
+
+Per-block curve-tree root hash for fast lookup without deserializing checkpoints.
+
+| Property | Value |
+|---|---|
+| LMDB name | `"curve_tree_roots"` |
+| Flags | `MDB_INTEGERKEY` |
+| Key | `uint64_t` block height (8 bytes) |
+| Value | 32-byte root hash |
+| Writers | `set_curve_tree_root_at_height` (block connect), deleted on `pop_block` |
+| Readers | `get_curve_tree_root_at_height` |
 | Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
 
 ### `pending_tree_leaves`
@@ -703,17 +885,19 @@ General key-value store for database-level metadata.
 
 | Key | Value type | Description |
 |---|---|---|
-| `"version"` (NUL-terminated) | `uint32_t` | Database schema version (currently 7) |
+| `"version"` (NUL-terminated) | `uint32_t` | Database schema version (currently 8) |
 | `"pruning_seed"` (NUL-terminated) | `uint32_t` | Blockchain pruning seed |
 | `"tx_prune_next_block"` (NUL-terminated) | `uint64_t` | Next block height for tx pruning |
 | `"last_pruned_tx_data_height"` (NUL-terminated) | `uint64_t` | Height of last pruned tx data |
 | `"staker_pool_balance"` (no NUL) | `uint64_t` | Running staker reward pool balance |
+| `"total_bonded_atomic"` (no NUL) | `uint64_t` | Global bonded collateral audit scalar (gate-4 §4.5) |
 | `"total_burned"` (no NUL) | `uint64_t` | Cumulative destroyed SHEKYL |
+| `"archival_frozen_shard_count"` (no NUL) | `uint64_t` | Pop-symmetric `archival_shard_segment` row counter — the M1 gate operand's O(1) backing store (V8; `ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §4.4). +1 in `put_archival_shard_segment`, −1 per deleted row in `revert_archival_segment_freezes`; mutation surface CI-pinned |
 
 | Property | Value |
 |---|---|
-| Writers | Various — `set_staker_pool_balance`, `set_total_burned`, migration code, pruning code |
-| Readers | Various — `get_staker_pool_balance`, `get_total_burned`, `get_blockchain_pruning_seed`, etc. |
+| Writers | Various — `set_staker_pool_balance`, `set_total_bonded_atomic`, `set_total_burned`, migration code, pruning code |
+| Readers | Various — `get_staker_pool_balance`, `get_total_bonded_atomic`, `get_total_burned`, `get_blockchain_pruning_seed`, etc. |
 | Introduced | Genesis (DB v0) |
 
 ---
@@ -738,23 +922,35 @@ General key-value store for database-level metadata.
 | 14 | `spent_keys` | zerokval | `crypto::key_image` | 32 | `INTEGERKEY\|DUPSORT\|DUPFIXED` |
 | 15 | `staker_accrual` | `uint64_t` height | `staker_accrual_record` | 40 | `INTEGERKEY` |
 | 16 | `staker_claims` | `uint64_t` output_idx | `uint64_t` height | 8 | `INTEGERKEY` |
-| 17 | `curve_tree_leaves` | `uint64_t` tree_pos | leaf tuple | 128 | `INTEGERKEY` |
-| 18 | `curve_tree_layers` | `uint64_t` composite | chunk hash | 32 | `INTEGERKEY` |
-| 19 | `curve_tree_meta` | string | varies | varies | — |
-| 20 | `curve_tree_checkpoints` | `uint64_t` height | snapshot | 41 | `INTEGERKEY` |
-| 21 | `pending_tree_leaves` | BE(maturity)\|\|BE(output) | leaf tuple | 128 | `CREATE` only |
-| 22 | `pending_tree_drain` | BE(block_h)\|\|BE(output) | maturity+leaf | 136 | `CREATE` only |
-| 23 | `block_pending_additions` | BE(block_h)\|\|BE(output) | BE(maturity) | 8 | `CREATE` only |
-| 24 | `output_to_leaf` | `uint64_t` output_idx | `uint64_t` tree_pos | 8 | `INTEGERKEY` |
-| 25 | `leaf_to_output` | `uint64_t` tree_pos | `uint64_t` output_idx | 8 | `INTEGERKEY` |
-| 26 | `hf_versions` | `uint64_t` height | `uint8_t` version | 1 | `INTEGERKEY` |
-| 27 | `txpool_meta` | `crypto::hash` txid | `txpool_tx_meta_t` | 192 | — |
-| 28 | `txpool_blob` | `crypto::hash` txid | tx blob | var | — |
-| 29 | `alt_blocks` | `crypto::hash` blkid | meta + blob | var | — |
-| 30 | `properties` | string | varies | varies | — |
-| 31 | `txs` (legacy) | `uint64_t` tx_id | — | — | `INTEGERKEY` |
+| 17 | `archival_serve_credit` | `P_id[32]\|\|BE(shard)\|\|BE(E)` | `uint8_t` flag | 1 | `CREATE` only |
+| 18 | `archival_bond` | `P_id[32]` | `ArchivalBondValue` | var | `CREATE` only |
+| 19 | `archival_shard_segment` | `BE(shard_id)` | segment meta | 49 | `CREATE` only |
+| 20 | `archival_slash_applied` | `P_id[32]\|\|BE(shard)\|\|BE(E)` | `uint8_t` flag | 1 | `CREATE` only |
+| 21 | `archival_slash_log` | `BE(height)\|\|BE(seq)` | slash revert blob | 57 | `CREATE` only |
+| 22 | `archival_r_market` | `BE(shard)\|\|BE(E)` | `BE(u64)` count | 8 | `CREATE` only |
+| 23 | `archival_sigma_work` | `BE(E)` | `BE(u64)` sigma milli | 8 | `CREATE` only |
+| 24 | `archival_epoch_close_log` | `BE(block_height)` | `BE(E)` | 8 | `CREATE` only |
+| 25 | `curve_tree_leaves` | `uint64_t` tree_pos | leaf tuple | 128 | `INTEGERKEY` |
+| 26 | `curve_tree_layers` | `uint64_t` composite | chunk hash | 32 | `INTEGERKEY` |
+| 27 | `curve_tree_meta` | string | varies | varies | — |
+| 28 | `curve_tree_checkpoints` | `uint64_t` height | snapshot | 41 | `INTEGERKEY` |
+| 29 | `curve_tree_roots` | `uint64_t` height | root hash | 32 | `INTEGERKEY` |
+| 30 | `pending_tree_leaves` | BE(maturity)\|\|BE(output) | leaf tuple | 128 | `CREATE` only |
+| 31 | `pending_tree_drain` | BE(block_h)\|\|BE(output) | maturity+leaf | 136 | `CREATE` only |
+| 32 | `block_pending_additions` | BE(block_h)\|\|BE(output) | BE(maturity) | 8 | `CREATE` only |
+| 33 | `output_to_leaf` | `uint64_t` output_idx | `uint64_t` tree_pos | 8 | `INTEGERKEY` |
+| 34 | `leaf_to_output` | `uint64_t` tree_pos | `uint64_t` output_idx | 8 | `INTEGERKEY` |
+| 35 | `hf_versions` | `uint64_t` height | `uint8_t` version | 1 | `INTEGERKEY` |
+| 36 | `txpool_meta` | `crypto::hash` txid | `txpool_tx_meta_t` | 192 | — |
+| 37 | `txpool_blob` | `crypto::hash` txid | tx blob | var | — |
+| 38 | `alt_blocks` | `crypto::hash` blkid | meta + blob | var | — |
+| 39 | `properties` | string | varies | varies | — |
+| 40 | `hf_starting_heights` (legacy) | string | varies | varies | migration stub |
+| 41 | `txs` (legacy) | `uint64_t` tx_id | — | — | `INTEGERKEY` |
 
-Total: **31 sub-databases** (30 active + 1 legacy migration stub).
+Total: **41 sub-databases** (`archival_shard_leaf` deleted pre-genesis by the
+segment-freeze pipeline; `mdb_env_set_maxdbs` stays at 42 —
+`mdb_env_set_maxdbs` is a capacity ceiling, not an exact count).
 
 ### Schema v6 → v7 migration (breaking)
 
@@ -762,5 +958,14 @@ DB v7 is **not** backward compatible with v6. Nodes with v6 data must resync fro
 - `pending_tree_leaves`: changed from `MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED` (key=maturity, dup=leaf) to composite 16-byte key `BE(maturity) || BE(output_index)` with `MDB_CREATE` only.
 - `pending_tree_drain`: same restructuring (key was block_height with DUPSORT, now composite key).
 - Three new tables: `block_pending_additions`, `output_to_leaf`, `leaf_to_output`.
-- `maxdbs` increased from 32 to 36.
+- `maxdbs` increased from 32 to 36; gate-2/gate-4 archival substrate required **42** (`db_lmdb.cpp`; the substrate's `archival_shard_leaf` was later deleted by the segment-freeze pipeline, leaving 41 live subdbs under the same ceiling).
 - Typed key/value encoders added in `src/blockchain_db/shekyl_types.h`.
+
+### Schema v7 → v8 (breaking, no migration path)
+
+DB v8 adds the persisted `"archival_frozen_shard_count"` counter to
+`properties` (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §4.4). A pre-v8 database
+has `archival_shard_segment` rows the counter does not account for, so
+`BlockchainLMDB::migrate` **refuses any pre-v8 database loudly** and directs
+the operator to delete the data directory and resync. Pre-genesis, no
+in-Shekyl migration code is justified (`15-deletion-and-debt.mdc`).

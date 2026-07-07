@@ -358,7 +358,15 @@ fn parse_toml_strict(body_bytes: &[u8]) -> Result<WalletPrefs, PrefsError> {
         }
     }
 
-    toml::from_str::<WalletPrefs>(text).map_err(|e| PrefsError::TomlParse(e.to_string()))
+    let prefs: WalletPrefs =
+        toml::from_str(text).map_err(|e| PrefsError::TomlParse(e.to_string()))?;
+    if prefs.schema_version != crate::schema::PREFS_SCHEMA_VERSION {
+        return Err(PrefsError::UnsupportedSchemaVersion {
+            file: prefs.schema_version,
+            binary: crate::schema::PREFS_SCHEMA_VERSION,
+        });
+    }
+    Ok(prefs)
 }
 
 /// Quarantine any pair-half that currently exists and return a
@@ -622,6 +630,30 @@ mod tests {
                 assert!(
                     reason.contains("docs/WALLET_PREFS.md"),
                     "expected spec reference in diagnostic, got: {reason}"
+                );
+            }
+            other => panic!("expected Tampered, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stale_schema_version_quarantined() {
+        let d = tempdir().unwrap();
+        let base = base_in(d.path());
+        let key = fixture_key();
+
+        let toml_body = "schema_version = 1\n";
+        let toml_path = prefs_toml_path_from(&base);
+        fs::write(&toml_path, toml_body).unwrap();
+        let tag = compute_hmac(&key, toml_body.as_bytes());
+        fs::write(prefs_hmac_path_from(&base), tag).unwrap();
+
+        let outcome = load_prefs(&base, &key).unwrap();
+        match outcome {
+            LoadOutcome::Tampered { reason, .. } => {
+                assert!(
+                    reason.contains("schema_version 1"),
+                    "expected version mismatch in diagnostic, got: {reason}"
                 );
             }
             other => panic!("expected Tampered, got {other:?}"),

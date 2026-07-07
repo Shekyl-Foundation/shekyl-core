@@ -309,22 +309,52 @@ module-level mutable state.
 
 ## 5. FFI Surface
 
-The committed FFI surface is one function:
+> **Phase 3 amendment (2026-06; `RANDOMX_V2_PHASE3_PLAN.md` §4.1/§4.5).**
+> The committed surface grew from one function to **two**. The ratified
+> sticky-eviction DoS mitigation (`RANDOMX_V2_PLAN.md` Decision #6;
+> `RANDOMX_V2_PHASE2C_PLAN.md` §5.11.7) needs the `shekyl-ffi` shim to
+> learn the *canonical* seedhash so `CacheStore` can protect it from LRU
+> eviction under an adversary interleaving 3+ seedhashes — and only C++
+> block-handling code knows that seedhash. The signal export
+> (`…_set_canonical`) was never added to the original §5; Phase 3 adds
+> it. The hash code block below is also corrected to the Round-5
+> pointer-to-array form (`RANDOMX_V2_PHASE3_PLAN.md` §2.7 #1) the shipped
+> ABI uses — the original decayed `const uint8_t*` form silently
+> re-admits the wrong-sized-buffer bug class the typed-array pointer was
+> added to prevent.
+
+The committed FFI surface is two functions:
 
 ```c
 int32_t shekyl_pow_randomx_v2_hash(
-    const uint8_t* seedhash32,
+    const uint8_t (*seedhash)[32],
     const uint8_t* data,
     size_t data_len,
-    uint8_t* out_hash32);
+    uint8_t (*out_hash)[32]);
+
+int32_t shekyl_pow_randomx_v2_set_canonical(
+    const uint8_t (*seedhash)[32]);
 ```
 
 Semantics:
 
-- `seedhash32` is exactly 32 bytes.
-- `out_hash32` receives exactly 32 bytes on success.
-- Return codes follow `40-ffi-discipline.mdc`: `0` success, negative
-  values for distinct failure modes.
+- `seedhash` points to exactly 32 bytes (`const uint8_t[32]`);
+  `out_hash` receives exactly 32 bytes on success.
+- `…_hash` `data`/`data_len` pairing (§17): `data == NULL` is valid iff
+  `data_len == 0`; `data == NULL && data_len > 0` returns `ERR_NULL_PTR`;
+  `data_len` above the 2 MiB hashing-blob bound returns
+  `ERR_DATA_TOO_LARGE`. On any non-zero return `*out_hash` is untouched.
+- `…_set_canonical` eagerly derives (or hits) the seedhash's 256 MiB
+  `PreparedCache` **synchronously** and sticky-pins it against LRU
+  eviction. The daemon calls it at tip advance (~once per 2048-block
+  epoch ≈ 2.84 days), off the validation hot path. See §6 for why this
+  synchronous canonical-pin is *not* the rejected prewarm.
+- Return codes follow `40-ffi-discipline.mdc`: `SHEKYL_POW_RANDOMX_V2_OK`
+  (`0`) on success; negatives for distinct failure modes
+  (`ERR_NULL_PTR -1`, `ERR_DATA_TOO_LARGE -2`,
+  `ERR_CACHE_DERIVE_FAILED -3`, `ERR_INTERNAL -4`; the last two are
+  reserved and never returned under `panic = "abort"`, kept for §17
+  taxonomy parity).
 - `shekyl-ffi` may memoize derived caches internally across calls.
   `shekyl-pow-randomx` itself does not hold module-level state.
 
@@ -340,7 +370,11 @@ discretionary export does not introduce a second ABI shape.
 Explicitly not exported:
 
 - `prewarm`
-- `set_main_seedhash`
+- `set_main_seedhash` (the inherited *asynchronous* dataset-init state
+  machine — background threads, reorg scheduling, lifecycle calls. Its
+  *purpose* — pinning the canonical cache — is served instead by the
+  synchronous `…_set_canonical` above; the async machinery is deleted,
+  not ported. See §4 of `RANDOMX_V2_PHASE3_PLAN.md`.)
 - `set_miner_thread`
 - `get_miner_thread`
 - `allocate_state`
@@ -371,6 +405,19 @@ that is below the user-visible threshold.
 There is no supported fake-prewarm pattern. With a capacity-2 LRU, a
 dummy hash can be evicted before the real use. If a future design needs
 prewarm, it must propose a new design doc that revisits this decision.
+
+> **Phase 3 amendment (`RANDOMX_V2_PHASE3_PLAN.md` §4.5).** The prewarm
+> prohibition is scoped to (a) the inherited **async** cache-rebuild
+> state machine and (b) the **fake-prewarm** pattern above. It does *not*
+> forbid `shekyl-ffi` from eagerly deriving the canonical cache
+> **synchronously** when C++ signals a new canonical seedhash: that is
+> `…_set_canonical` (§5), the delivery mechanism for the ratified
+> sticky-eviction DoS mitigation, invoked off the hot path at tip
+> advance. The eager derive is *internal* Rust behavior (the
+> `20-rust-vs-cpp-policy.mdc` forward cut that moves canonical-cache
+> management out of C++); prewarm remains forbidden as an *FFI surface*.
+> This is the sanctioned revisit this clause anticipated — scoped to the
+> synchronous pin, explicitly not re-admitting the rejected async design.
 
 ## 7. Isolation Invariants
 
@@ -592,7 +639,10 @@ Everything else is transform-shaped and derived on demand.
 - No `major_version` or `hf_version` dispatch in PoW selection.
 - No runtime env-var overrides of consensus constants.
 - No Rust JIT.
-- No `prewarm` FFI.
+- No `prewarm` FFI, and no inherited *async* cache-rebuild / dataset-init
+  state machine. (The synchronous, off-hot-path `…_set_canonical` pin
+  added in Phase 3 is the ratified DoS mitigation, not a prewarm in this
+  rejected sense — §5, §6, and `RANDOMX_V2_PHASE3_PLAN.md` §4.)
 - No C ABI exports from `shekyl-pow-randomx`.
 - No module-level runtime-mutable state in `shekyl-pow-randomx`.
 

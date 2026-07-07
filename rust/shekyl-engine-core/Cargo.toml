@@ -16,25 +16,117 @@ build = "build.rs"
 serde_json = "1"
 
 [dependencies]
-shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-scanner = { path = "../shekyl-scanner" }
-shekyl-staking = { path = "../shekyl-staking" }
+# Canonical, spec-faithful block/transaction parse (`GENESIS_TX_WIRE_FORMAT.md`).
+# Backs `DaemonEngine::fetch_scannable_block` (`engine/block_fetch.rs`) and the
+# `ScannableBlock` decode (`engine/curve_tree_decode.rs`), replacing the legacy
+# shekyl-oxide block parse that dropped the coinbase `Null` committed base. First-
+# party Shekyl crate; its third-party edges (`shekyl-crypto-hash`) are already in
+# the workspace lockfile, so no new supply-chain surface (`17-dependency-discipline`).
+shekyl-wire = { path = "../shekyl-wire" }
+# `SignBond` handler calls `build_join_market_vin` inside the StakeEngine actor
+# (keys never cross the actor boundary — rule 36). Promoted from dev-dep because
+# the production `SignBond` message handler calls it directly. No cycle:
+# `shekyl-archival-bond-builder` does not depend on `shekyl-engine-core`.
+shekyl-archival-bond-builder = { path = "../shekyl-archival-bond-builder" }
+# `HoldingsDescriptor` is the parameter type for the `SignBond.holdings` field
+# (passed through to `build_join_market_vin`). The builder already depends on
+# it; promoting it to a direct dep makes the type's origin explicit at this
+# crate's boundary. `shekyl-archival-retention` is already a dev-dep here and
+# in the workspace lockfile — no new supply-chain surface.
+# `provisional-k-cover`: K_COVER unsealed-sentinel acknowledgment
+# (ARCHIVAL_REWARD_GATE_M1.md §4) — delete this feature at the §14.4 seal.
+shekyl-archival-retention = { path = "../shekyl-archival-retention", features = ["provisional-k-cover"] }
+# `SignBond` handler draws the entry-gap via `draw_entry_gap` / `GapRng`
+# (S4/S5 — conformance-correct, float-free). Default build (no `conformance`
+# feature) is dependency-free; `conformance` is dev/test-only.
+shekyl-standoff = { path = "../shekyl-standoff" }
+# `EconomicsEngine` / `LocalEconomics` (PR 7 §2.7) compose the
+# `shekyl-economics` C2 primitives directly (`base_emission_at`,
+# `calc_burn_pct_from_activity`, `params_digest`) and re-export its
+# `ActivityMetric` / `ActivityInvariantViolation` / `EmissionError`
+# types through the trait surface.
+shekyl-economics = { path = "../shekyl-economics" }
+# `EconomicsParametersSnapshot`'s `CalibrationStamp` digest must cover the
+# full calibration surface the snapshot exposes (EconomicParams +
+# staker-emission consts), so the composed digest is computed here.
+# `shekyl_economics::params_digest` stays the EconomicParams-only encoder
+# (it backs the C4 fixture lineage). Same `blake2 0.10` the EconomicParams
+# digest already uses; promotes the transitive dep to direct.
+blake2 = { workspace = true }
 shekyl-address = { path = "../shekyl-address" }
+# `AtomicUnits` amount-newtype (`docs/completed/ATOMIC_UNITS_NEWTYPE.md`).
+# Replaces raw `u64` on the engine's amount-bearing surfaces
+# (`TxRecipient`/`PendingTx` fees, `OutputClaim` secret amount,
+# `OutputSelector`/`FeeEstimator` targets, claim/multisig-intent amounts).
+shekyl-units = { path = "../shekyl-units" }
+# Canonical state-shaped newtypes; `TxHash` is re-exported from
+# `engine::pending` (no local redefinition — see `18-type-placement.mdc`).
+shekyl-types = { path = "../shekyl-types" }
 shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }
 shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-shekyl-simple-request-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc/simple-request" }
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
+# SP-T2: the per-P Tor transport primitive (PTorClient). engine-core wraps it in
+# `PRpc` (an `Rpc` impl); it does NOT depend on `ureq` — all agent construction
+# and use is confined to shekyl-p-transport (§2b invariant 1).
+shekyl-p-transport = { path = "../shekyl-p-transport" }
 shekyl-fcmp = { path = "../shekyl-fcmp", optional = true }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
-shekyl-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc", features = ["std"] }
+shekyl-rpc-client = { path = "../shekyl-rpc-client", features = ["std"] }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
+# `signing_assembly` computes leaf `key_image_gen = Hp(O)` per tx-builder.
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
+# Pedersen commitment + Bp+ proof types the signer/pending paths construct against
+# (formerly reached via the dissolved `shekyl_oxide::{primitives,fcmp::bulletproofs}`).
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-tx-builder = { path = "../shekyl-tx-builder" }
+# CT-5 (`docs/design/CT5_ENGINE_WIRING.md`): the wallet-side FCMP++
+# curve-tree client (`CurveTreeClient`, redb-backed, public-material-only).
+# The `CurveTreeActor` (`engine/curve_tree_actor.rs`) owns it inside its
+# task; `Engine` holds a `Clone` `CurveTreeHandle`. Dependency-discipline
+# (`17-dependency-discipline.mdc`, X6): first-party Shekyl path-crate — no
+# new third-party crate enters the graph. Its only third-party edge is
+# `redb` (already the workspace `4.1.0` pin, verified at source); the actor
+# wrapper uses `kameo` (already a direct dep here, line below, exact-pinned
+# `=0.20.0`). No new `kameo`/`redb` edge versions are introduced.
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+# Phase 2a-3 synthetic FCMP++ tree root (§3.0.5): Selene multiexp + Helios
+# placeholder siblings in `engine::synthetic_tree`, consumed by assembly and
+# `sign_bridge` on the production send path.
+shekyl-fcmp-proofs = { path = "../shekyl-fcmp-proofs", default-features = false, features = ["std", "compile-time-generators"] }
+ec-divisors = { path = "../shekyl-oxide/crypto/divisors", features = ["ed25519"] }
+helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
+multiexp = "0.4"
+# `std` is required for `rand_core::Error: std::error::Error` (the `#[source]` of
+# `StakeEngineError::RngSourceFailed`); declared explicitly rather than relying on
+# transitive feature unification from sibling crypto deps.
+rand_core = { version = "0.6", features = ["std"] }
+dalek-ff-group = "0.5"
+ciphersuite = "0.4"
 modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }
 hkdf = { version = "0.12", optional = true }
 sha2 = { version = "0.10", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
-hex = { version = "0.4", optional = true }
+# The daemon JSON-RPC send path (`DaemonClient::get_fee_estimates` /
+# `submit_transaction`, `engine/daemon.rs`) is always-compiled production
+# code that builds `get_fee_estimate` params and parses the response as
+# `serde_json::Value` (defensive untrusted-daemon parsing per
+# `20-rust-vs-cpp-policy.mdc` §3). `serde_json` is already in the workspace
+# lockfile (transitively via `shekyl-rpc-client`, plus this crate's build- and
+# dev-deps), so making it a direct non-optional dependency adds no new
+# third-party crate (`17-dependency-discipline.mdc`). It is therefore no
+# longer listed under the `multisig` feature.
+serde_json = "1"
+# Hex decode/encode for the daemon block/tx blobs and tx-hash params on the
+# native `fetch_scannable_block` path (`engine/block_fetch.rs`). Already in the
+# workspace lockfile (shekyl-rpc-client, shekyl-wire deps + this crate's multisig path),
+# so promoting it to a direct non-optional dependency adds no third-party crate
+# (`17-dependency-discipline.mdc`). No longer listed under the `multisig` feature.
+hex = "0.4"
 thiserror = "2"
 tracing = "0.1"
 # `produce_scan_result` (the snapshot-merge producer driving
@@ -50,7 +142,26 @@ tracing = "0.1"
 # task hold the engine across `await` points (replaced by actor message
 # passing at Stage 4). `rt` enables `tokio::spawn` for the producer
 # task.
-tokio = { version = "1", features = ["time", "macros", "sync", "rt"] }
+#
+# `rt-multi-thread` is load-bearing on exactly one production path:
+# `drive_persistence`'s multi-thread branch (`lifecycle.rs`), which calls
+# `tokio::task::block_in_place` to bridge the sync `Engine::close` /
+# `change_password` entry points onto an ambient multi-thread runtime
+# without a nested-`block_on` panic. `block_in_place` is gated behind
+# `rt-multi-thread`, so the symbol does not even resolve without this
+# feature; until Stage 2 it was enabled only in `[dev-dependencies]`, so
+# the lib did not compile standalone (`cargo build -p shekyl-engine-core`)
+# and relied on a downstream consumer's feature unification. Promoting it
+# here de-fragilizes that latent `block_in_place` feature-unification bug.
+#
+# This feature is **not** an entailment of the `KeyActor` spawn decision.
+# Per `STAGE_2_KEY_ENGINE_ACTOR.md` §4.2, `KeyEngineHandle::spawn` takes
+# the require-ambient path (it asserts an ambient runtime rather than
+# building an owned one); `kameo`'s spawn is `tokio::spawn`, which any
+# runtime flavor hosts, so the actor spawn needs only `rt`. The
+# `rt-multi-thread` justification stands or falls on `block_in_place`
+# alone.
+tokio = { version = "1", features = ["time", "macros", "sync", "rt", "rt-multi-thread"] }
 # Cancellation token for cooperative shutdown of the refresh producer
 # between blocks. `Engine::start_refresh` constructs and owns the token
 # internally; callers fire it through `RefreshHandle::cancel` (or by
@@ -73,23 +184,42 @@ curve25519-dalek = { version = "4", features = ["alloc", "zeroize"] }
 # `AllKeysBlob` and handing ownership to `Scanner` / `ViewPair`.
 # `AllKeysBlob` already wipes its own copy on `Drop`; the wrapper
 # ensures the scanner's local copies do the same.
-zeroize = { version = "1", features = ["derive"] }
+zeroize = { workspace = true }
+# `kameo` actor framework — Stage 2 `KeyEngine` actor migration
+# (`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`). `KeyActor` owns
+# `AllKeysBlob` inside its task; `Engine` holds a `KeyEngineHandle`
+# wrapping `ActorRef<KeyActor>`. Pinned `=0.20.0` in
+# `[workspace.dependencies]` (coordination-load-bearing dep; an
+# unreviewed minor bump could alter mailbox/supervision semantics).
+# This is the first live consumer (closes the FOLLOWUP kameo pin).
+kameo = { workspace = true }
 
 [dev-dependencies]
-shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
+# PR 7 C4 `EconomicsEngine` differential
+# (`engine::economics_differential`): deserialize the sim-recorded
+# `RecordedChainFixture` (`docs/test_vectors/economics/*.json`, §5.4) and
+# replay it through the real `LocalEconomics` path. Both are already in
+# the workspace lockfile (production `[dependencies]` carry them
+# `optional = true` under the `multisig` feature); pulling them into
+# dev-deps adds no new third-party supply-chain surface and does not
+# alter the default-feature production crate graph.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
-# `iai-callgrind` is the deterministic-instructions sibling for the
+# `gungraun` is the deterministic-instructions sibling for the
 # criterion wall-clock benches in this crate. The CI gate
-# (`ci/benchmarks` workflow) routes through iai-callgrind
+# (`ci/benchmarks` workflow) routes through gungraun
 # `instructions` for percentage-threshold checking; criterion stays
 # as the Tier-2 informational column. Engine-surface benches
-# (`engine_trait_bench_*`) ship as criterion + iai-callgrind pairs
-# per `docs/design/STAGE_0_HARNESS.md`. Pinned to "0.16" matching
+# (`engine_trait_bench_*`) ship as criterion + gungraun pairs
+# per `docs/design/STAGE_0_HARNESS.md`. Pinned to "0.19" matching
 # the workspace consensus (shekyl-engine-state, shekyl-engine-file,
 # shekyl-scanner, shekyl-tx-builder) and the runner version the
-# `ci/benchmarks` workflow installs (`^0.16`).
-iai-callgrind = "0.16"
+# `ci/benchmarks` workflow installs (`^0.19`). Migrated from
+# `iai-callgrind = "0.16"` per
+# `docs/investigation/2026-05-09-bench-baseline-flake.md` §5.
+gungraun = "0.19"
 tempfile = "3"
 # `test-util` enables `#[tokio::test(start_paused = true)]` and the
 # in-test `tokio::time` virtualization that `wallet::refresh`'s
@@ -102,7 +232,7 @@ tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "test-ut
 # injection). The seed plus a stable PRNG implementation is what
 # makes hybrid-test reproducibility a function of the master seed
 # alone. Workspace consensus version is `0.3` (matches
-# `shekyl-crypto-pq`, `shekyl-fcmp`, `shekyl-oxide/.../fcmp++`).
+# `shekyl-crypto-pq`, `shekyl-fcmp`, `shekyl-fcmp-proofs`).
 rand_chacha = "0.3"
 # `derive_seed` (in `engine::test_support`) implements the §6.2
 # master-seed-derivation contract via HKDF-SHA256: hybrid tests
@@ -140,8 +270,8 @@ proptest = "1"
 # Two categories below:
 #   - **Workspace path-deps newly pulled into this crate's dev-
 #     deps:** `shekyl-tx-builder`, `shekyl-fcmp`,
-#     `shekyl-bulletproofs`, `shekyl-fcmp-plus-plus`,
-#     `shekyl-generators`, `shekyl-io`, `shekyl-primitives`,
+#     `shekyl-bulletproofs`, `shekyl-fcmp-proofs`,
+#     `shekyl-curve-generators`, `shekyl-curve-io`, `shekyl-curve-primitives`,
 #     `ec-divisors`, `helioselene`. All are first-party Shekyl /
 #     Shekyl-vendored crates.
 #   - **Crates.io versions reused from the workspace lockfile:**
@@ -156,11 +286,25 @@ proptest = "1"
 # unconditional dev-dep does not alter the production crate graph.
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 shekyl-fcmp = { path = "../shekyl-fcmp" }
-shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
-shekyl-fcmp-plus-plus = { path = "../shekyl-oxide/shekyl-oxide/fcmp/fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
-shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
-shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
-shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-fcmp-proofs = { path = "../shekyl-fcmp-proofs", default-features = false, features = ["std", "compile-time-generators"] }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
+# Stage 1 PR 2a (`ARCHIVAL_BOND_CONSTRUCTION.md` §3, §8). The
+# `join_market_bond_post_signs_and_verifies_through_prover` test (in
+# `engine::local_keys::tests`) drives a JoinMarket bond post —
+# `shekyl-archival-bond-builder::build_join_market_vin` + its `credit_term` —
+# through `tx_builder::sign_transaction_with_terms` over the same synthetic
+# depth-1 FCMP++ tree the M3c test uses, then checks the prover-emitted
+# commitments against the `shekyl-archival-retention` verify side
+# (`verify_join_market_bond_post`, `verify_bond_post_ct_balance`). Both
+# crates are non-optional production `[dependencies]` above (promoted when
+# the `SignBond` handler landed), so tests reach them through the single
+# production edge — no duplicate dev-dep entries here. Keeping one edge per
+# crate is what keeps the `provisional-k-cover` acknowledgment
+# (`shekyl-archival-retention/src/k_cover.rs`) grep-complete: every
+# dependency line on that crate carries the feature.
 multiexp = "0.4"
 ec-divisors = { path = "../shekyl-oxide/crypto/divisors", features = ["ed25519"] }
 ciphersuite = "0.4"
@@ -210,7 +354,7 @@ required-features = ["bench-internals"]
 # Stage 1 PR 3 close-out: trivial pure-read `KeyEngine::
 # account_public_address` pair. Workload class is "trivial pure-read"
 # (returns a borrow into a cached `AccountPublicAddress` field on
-# `LocalKeys` with no per-call derivation); iai-callgrind is the
+# `LocalKeys` with no per-call derivation); gungraun is the
 # load-bearing signal because criterion `median_ns` reflects
 # optimizer amortization across the iteration loop. The fixture is
 # `Box<LocalKeys>` rather than `(Box<Engine<...>>, TempDir)` per the
@@ -227,9 +371,89 @@ name = "engine_trait_bench_key_account_public_address_iai"
 harness = false
 required-features = ["bench-internals"]
 
+# Stage 1 PR 7 (EconomicsEngine) C6: the two deferred economics-trait
+# bench pairs named in §3.8. `base_emission_at` is a state-independent
+# O(height) compute (the naive `projected_already_generated` loop per
+# §5.2 B.6); `parameters_snapshot` is pure compute dominated by the
+# Blake2b-256 `params_digest`. Both dispatch through the engine's
+# `economics` field via `__bench_internals` shims (the trait is
+# `pub(crate)`), so the targets require the `bench-internals` feature.
+[[bench]]
+name = "engine_trait_bench_economics_base_emission_at"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "engine_trait_bench_economics_base_emission_at_iai"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "engine_trait_bench_economics_parameters_snapshot"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "engine_trait_bench_economics_parameters_snapshot_iai"
+harness = false
+required-features = ["bench-internals"]
+
+# Stage 2 (KeyEngine actor) §5.3 B9 dispatch-overhead bench. Measures the
+# actor `ask` round-trip (`KeyEngineHandle::try_claim_output`) against the
+# in-process composition baseline (`LocalKeys::try_claim_output`) for a
+# `Mine` output, plus the cheap `NotMine` case. B9 is a bench-vs-bench
+# ratio (actor ≤ 1.05 × baseline), not an absolute gate. The actor paths
+# are criterion-(wall-clock)-only: the `ask` is a cross-thread async
+# round-trip whose Callgrind instruction count folds in nondeterministic
+# runtime-scheduling machinery, so there is no `_iai` actor sibling (a
+# reasoned, reversion-claused deviation from the criterion+iai pairing
+# discipline). Only the deterministic-crypto baseline gets an iai sibling.
+[[bench]]
+name = "engine_trait_bench_key_dispatch"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "engine_trait_bench_key_dispatch_baseline_iai"
+harness = false
+required-features = ["bench-internals"]
+
+# Stage 2 §5.3 / §8.1 merge-path bench: the 6-i construction-time
+# view-secret projection (`populate_engine_handle_fields`) over a batch of
+# 256 freshly-merged outputs. Evidence for (not a gate on) the §8.1 6-ii
+# deferral decision. Synchronous + runtime-free, so it gets a full
+# criterion + gungraun pair (unlike the actor dispatch paths).
+[[bench]]
+name = "engine_trait_bench_key_merge_projection"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "engine_trait_bench_key_merge_projection_iai"
+harness = false
+required-features = ["bench-internals"]
+
 [features]
 default = []
-multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "serde_json", "hex", "chacha20poly1305", "hkdf", "sha2"]
+multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "chacha20poly1305", "hkdf", "sha2"]
+# Internal feature (S6): enables the StakeEngine session RNG self-cert. Wires
+# `shekyl-standoff`'s `conformance` grader (`certify_draw`) into
+# `StakeEngine::on_start` over the production `OsRngGapAdapter`, fail-stopping the
+# spawn (and so wallet-open) on a non-conformant CSPRNG. **x86-only** — the grade
+# is float (see `compile_error!` guard in `stake_engine.rs`). NOT in `default`:
+# the grader pulls `shekyl-stats` and float, so production builds stay float-free
+# and stats-free (`ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md` §0). For CI's x86 lane
+# and opt-in operator diagnostics, not the shipping binary.
+conformance = ["shekyl-standoff/conformance"]
+# Internal feature (GF-7): enables the sim-facing GF-7 measurement hooks
+# (`ARCHIVAL_BOND_2C_GF7_HOOKS.md`). Plumbs `shekyl-standoff`'s
+# `BroadcastTimelineObserver` seam into `StakeEngine` (injected observer field +
+# typed event emission at the entry-gap draw / bond-post schedule points). NOT
+# in `default`: release artifacts carry no observer field, no `record` calls,
+# and no event vocabulary (§4 layer-3 no-emit containment). The only recording
+# observer lives in `shekyl-staking-sim` (§4 layer 2); production spawn paths
+# inject the no-op (§6.1).
+gf7-hooks = ["shekyl-standoff/gf7-hooks"]
 # Internal feature: re-exports otherwise-`pub(crate)` types under a
 # `__bench_internals` module so external Criterion harnesses can
 # measure them. Not part of the public API; consumers must not depend

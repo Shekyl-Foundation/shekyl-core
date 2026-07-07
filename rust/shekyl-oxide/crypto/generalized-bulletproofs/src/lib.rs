@@ -1,4 +1,4 @@
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc = include_str!("../README.md")]
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(missing_docs)]
@@ -7,10 +7,11 @@
 use core::fmt;
 use std_shims::{collections::HashSet, vec, vec::Vec};
 
+use subtle::ConditionallySelectable;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use ciphersuite::{
-    group::{ff::Field, Group, GroupEncoding},
+    group::{ff::Field as _, Group as _, GroupEncoding as _},
     Ciphersuite,
 };
 use multiexp::{multiexp, multiexp_vartime};
@@ -143,10 +144,7 @@ impl<C: Ciphersuite> Generators<C> {
         if g_bold.len() != h_bold.len() {
             Err(GeneratorsError::DifferingGhBoldLengths)?;
         }
-        if g_bold.len() > ((usize::MAX >> 1) + 1) {
-            Err(GeneratorsError::NotPowerOfTwo)?;
-        }
-        if g_bold.len().next_power_of_two() != g_bold.len() {
+        if !g_bold.len().is_power_of_two() {
             Err(GeneratorsError::NotPowerOfTwo)?;
         }
 
@@ -275,7 +273,7 @@ impl<C: Ciphersuite> Generators<C> {
     }
 }
 
-impl<'a, C: Ciphersuite> ProofGenerators<'a, C> {
+impl<C: Ciphersuite> ProofGenerators<'_, C> {
     pub(crate) fn len(&self) -> usize {
         self.g_bold.len()
     }
@@ -316,7 +314,10 @@ pub struct PedersenCommitment<C: Ciphersuite> {
 
 impl<C: Ciphersuite> PedersenCommitment<C> {
     /// Commit to this value, yielding the Pedersen commitment.
-    pub fn commit(&self, g: C::G, h: C::G) -> C::G {
+    pub fn commit(&self, g: C::G, h: C::G) -> C::G
+    where
+        C::G: ConditionallySelectable,
+    {
         multiexp(&[(self.value, g), (self.mask, h)])
     }
 }
@@ -335,10 +336,13 @@ impl<C: Ciphersuite> PedersenVectorCommitment<C> {
     ///
     /// This function returns `None` if the amount of generators is less than the amount of values
     /// within the relevant vector.
-    pub fn commit(&self, g_bold: &[C::G], h: C::G) -> Option<C::G> {
+    pub fn commit(&self, g_bold: &[C::G], h: C::G) -> Option<C::G>
+    where
+        C::G: ConditionallySelectable,
+    {
         if g_bold.len() < self.g_values.len() {
             None?;
-        };
+        }
 
         let mut terms = vec![(self.mask, h)];
         for pair in self.g_values.iter().copied().zip(g_bold.iter().copied()) {

@@ -70,7 +70,6 @@
 #include "wallet_errors.h"
 #include "common/password.h"
 #include "node_rpc_proxy.h"
-#include "wallet_rpc_helpers.h"
 #include "fee_priority.h"
 #include "fee_algorithm.h"
 
@@ -79,7 +78,6 @@
 
 #define THROW_ON_RPC_RESPONSE_ERROR(r, error, res, method, ...) \
   do { \
-    handle_payment_changes(res, std::integral_constant<bool, HasCredits<decltype(res)>::Has>()); \
     throw_on_rpc_response_error(r, error, res.status, method); \
     THROW_WALLET_EXCEPTION_IF(res.status != CORE_RPC_STATUS_OK, ## __VA_ARGS__); \
   } while(0)
@@ -227,7 +225,7 @@ namespace tools
   class wallet_keys_unlocker;
 
   // Forward declarations for the Phase-1 BIP-39 restore-from-phrase
-  // access surface per `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10.1.
+  // access surface per `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §4.10.1.
   // `wallet_args_options` (defined in `wallet2.cpp`'s `namespace tools`
   // body) and `generate_from_json` (likewise defined in `wallet2.cpp`)
   // are forward-declared here so the friend declaration inside
@@ -380,19 +378,12 @@ namespace tools
       uint64_t m_pk_index = 0;
       cryptonote::subaddress_index m_subaddr_index{};
       std::vector<std::pair<uint64_t, crypto::hash>> m_uses;
-      bool m_staked = false;
-      uint8_t m_stake_tier = 0;
-      uint64_t m_stake_lock_until = 0;
-      uint64_t m_last_claimed_height = 0; // claim watermark: last to_height of a successful claim
       tools::scrubbed_arr<uint8_t, 64> m_combined_shared_secret{}; // wiped on drop; structurally consistent with m_y / m_mask
       bool m_combined_shared_secret_set = false; // true once populated from KEM decap
 
       transfer_details() = default;
 
       uint64_t amount() const { return m_amount; }
-      bool is_staked() const { return m_staked; }
-      bool is_staked_and_locked(uint64_t current_height) const { return m_staked && current_height < m_stake_lock_until; }
-      bool is_staked_and_matured(uint64_t current_height) const { return m_staked && current_height >= m_stake_lock_until; }
       const crypto::public_key get_public_key() const {
         crypto::public_key output_public_key;
         THROW_WALLET_EXCEPTION_IF(m_tx.vout.size() <= m_internal_output_index,
@@ -421,10 +412,6 @@ namespace tools
         FIELD(m_pk_index)
         FIELD(m_subaddr_index)
         FIELD(m_uses)
-        FIELD(m_staked)
-        FIELD(m_stake_tier)
-        VARINT_FIELD(m_stake_lock_until)
-        VARINT_FIELD(m_last_claimed_height)
         do {
           std::vector<uint8_t> _css_compat;
           if (W) {
@@ -1044,7 +1031,7 @@ namespace tools
      * which is populated when the wallet was created via the BIP-39
      * JSON-restore-from-phrase path (the orchestration block inlined
      * into `tools::generate_from_json` per
-     * `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10.1) and unset for
+     * `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §4.10.1) and unset for
      * wallets created via the raw-seed / restore-from-keys / device
      * paths per §4.10 "The field is not set during".
      *
@@ -1149,8 +1136,6 @@ namespace tools
     std::vector<wallet2::pending_tx> create_transactions_all(uint64_t below, const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, fee_priority priority, const std::vector<uint8_t>& extra, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices);
     std::vector<wallet2::pending_tx> create_transactions_single(const crypto::key_image &ki, const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, fee_priority priority, const std::vector<uint8_t>& extra);
     std::vector<wallet2::pending_tx> create_transactions_from(const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, std::vector<size_t> unused_transfers_indices, std::vector<size_t> unused_dust_indices, fee_priority priority, const std::vector<uint8_t>& extra);
-    std::vector<wallet2::pending_tx> create_staking_transaction(uint8_t tier, uint64_t amount, fee_priority priority, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices);
-    std::vector<wallet2::pending_tx> create_unstake_transaction(const std::vector<size_t>& staked_indices, fee_priority priority);
 
     // PQC multisig (scheme_id = 2)
     bool is_pqc_multisig() const { return m_pqc_multisig_n > 0 && m_pqc_multisig_m > 0; }
@@ -1158,15 +1143,6 @@ namespace tools
     uint8_t pqc_multisig_m() const { return m_pqc_multisig_m; }
     crypto::hash pqc_multisig_group_id() const { return m_pqc_multisig_group_id; }
     bool create_pqc_multisig_group(uint8_t n_total, uint8_t m_required, const std::vector<std::vector<uint8_t>>& participant_public_keys);
-    std::vector<wallet2::pending_tx> create_claim_transaction(const std::vector<size_t>& staked_indices);
-    std::vector<size_t> get_matured_staked_outputs() const;
-    std::vector<size_t> get_locked_staked_outputs() const;
-    std::vector<size_t> get_claimable_staked_outputs() const;
-    void stage_claim_watermarks(const pending_tx& ptx);
-    void confirm_claim_watermarks(const crypto::hash& tx_hash);
-    void expire_pending_claim_watermarks(uint64_t current_height, uint64_t max_age = 100);
-    uint64_t get_staked_balance(uint64_t current_height) const;
-    uint64_t estimate_claimable_reward(size_t transfer_index);
     bool sanity_check(const std::vector<wallet2::pending_tx> &ptx_vector, const std::vector<cryptonote::tx_destination_entry>& dsts, const unique_index_container& subtract_fee_from_outputs = {}) const;
     void cold_tx_aux_import(const std::vector<pending_tx>& ptx, const std::vector<std::string>& tx_device_aux);
     void cold_sign_tx(const std::vector<pending_tx>& ptx_vector, signed_tx_set &exported_txs, std::vector<cryptonote::address_parse_info> &dsts_info, std::vector<std::string> & tx_device_aux);
@@ -1186,9 +1162,6 @@ namespace tools
     uint64_t get_blockchain_current_height() const { return m_blockchain.size(); }
     void rescan_spent();
     void rescan_blockchain(bool hard, bool refresh = true, bool keep_key_images = false);
-    // Staked outputs always return false here: they are not part of the
-    // regular spendable balance and can only be consumed via the unstake
-    // transaction path after their lock period expires.
     bool is_transfer_unlocked(const transfer_details& td);
     bool is_transfer_unlocked(uint64_t unlock_time, uint64_t block_height);
 
@@ -1225,7 +1198,6 @@ namespace tools
       a & m_tx_device.parent();
       a & m_device_last_key_image_sync;
       a & m_cold_key_images.parent();
-      a & m_rpc_client_secret_key;
       a & m_has_ever_refreshed_from_node;
       a & m_background_sync_data;
       a & m_pqc_multisig_keys;
@@ -1260,7 +1232,6 @@ namespace tools
       FIELD(m_tx_device)
       FIELD(m_device_last_key_image_sync)
       FIELD(m_cold_key_images)
-      FIELD(m_rpc_client_secret_key)
       assert(version == 3);
       FIELD(m_has_ever_refreshed_from_node)
       FIELD(m_background_sync_data)
@@ -1338,14 +1309,6 @@ namespace tools
     void device_derivation_path(const std::string &device_derivation_path) { m_device_derivation_path = device_derivation_path; }
     const ExportFormat & export_format() const { return m_export_format; }
     inline void set_export_format(const ExportFormat& export_format) { m_export_format = export_format; }
-    bool persistent_rpc_client_id() const { return m_persistent_rpc_client_id; }
-    void persistent_rpc_client_id(bool persistent) { m_persistent_rpc_client_id = persistent; }
-    void auto_mine_for_rpc_payment_threshold(float threshold) { m_auto_mine_for_rpc_payment_threshold = threshold; }
-    float auto_mine_for_rpc_payment_threshold() const { return m_auto_mine_for_rpc_payment_threshold; }
-    crypto::secret_key get_rpc_client_secret_key() const { return m_rpc_client_secret_key; }
-    void set_rpc_client_secret_key(const crypto::secret_key &key) { m_rpc_client_secret_key = key; m_node_rpc_proxy.set_client_secret_key(key); }
-    uint64_t credits_target() const { return m_credits_target; }
-    void credits_target(uint64_t threshold) { m_credits_target = threshold; }
     bool is_mismatched_daemon_version_allowed() const { return m_allow_mismatched_daemon_version; }
     void allow_mismatched_daemon_version(bool allow_mismatch) { m_allow_mismatched_daemon_version = allow_mismatch; }
 
@@ -1515,21 +1478,6 @@ namespace tools
 
     std::pair<size_t, uint64_t> estimate_tx_size_and_weight(bool use_rct, int n_inputs, int n_outputs, size_t extra_size);
 
-    bool get_rpc_payment_info(bool mining, bool &payment_required, uint64_t &credits, uint64_t &diff, uint64_t &credits_per_hash_found, cryptonote::blobdata &hashing_blob, uint64_t &height, uint64_t &seed_height, crypto::hash &seed_hash, crypto::hash &next_seed_hash, uint32_t &cookie);
-    bool daemon_requires_payment();
-    bool make_rpc_payment(uint32_t nonce, uint32_t cookie, uint64_t &credits, uint64_t &balance);
-    bool search_for_rpc_payment(uint64_t credits_target, uint32_t n_threads, const std::function<bool(uint64_t, uint64_t)> &startfunc, const std::function<bool(unsigned)> &contfunc, const std::function<bool(uint64_t)> &foundfunc = NULL, const std::function<void(const std::string&)> &errorfunc = NULL);
-    template<typename T> void handle_payment_changes(const T &res, std::true_type) {
-      if (res.status == CORE_RPC_STATUS_OK || res.status == CORE_RPC_STATUS_PAYMENT_REQUIRED)
-        m_rpc_payment_state.credits = res.credits;
-      if (res.top_hash != m_rpc_payment_state.top_hash)
-      {
-        m_rpc_payment_state.top_hash = res.top_hash;
-        m_rpc_payment_state.stale = true;
-      }
-    }
-    template<typename T> void handle_payment_changes(const T &res, std::false_type) {}
-
     /*
      * "attributes" are a mechanism to store an arbitrary number of string values
      * on the level of the wallet as a whole, identified by keys. Their introduction,
@@ -1603,9 +1551,6 @@ namespace tools
     void enable_dns(bool enable) { m_use_dns = enable; }
     void set_offline(bool offline = true);
     bool is_offline() const { return m_offline; }
-
-    uint64_t credits() const { return m_rpc_payment_state.credits; }
-    void credit_report(uint64_t &expected_spent, uint64_t &discrepancy) const { expected_spent = m_rpc_payment_state.expected_spent; discrepancy = m_rpc_payment_state.discrepancy; }
 
     static std::string get_default_daemon_address() { CRITICAL_REGION_LOCAL(default_daemon_address_lock); return default_daemon_address; }
 
@@ -1731,9 +1676,6 @@ namespace tools
     std::string get_rpc_status(const std::string &s) const;
     void throw_on_rpc_response_error(bool r, const epee::json_rpc::error &error, const std::string &status, const char *method) const;
 
-    std::string get_client_signature() const;
-    void check_rpc_cost(const char *call, uint64_t post_call_credits, uint64_t pre_credits, double expected_cost);
-
     bool should_expand(const cryptonote::subaddress_index &index) const;
     bool spends_one_of_ours(const cryptonote::transaction &tx) const;
 
@@ -1753,14 +1695,6 @@ namespace tools
     transfer_container m_transfers;
     payment_container m_payments;
     serializable_unordered_map<crypto::key_image, size_t> m_key_images;
-
-    struct pending_claim_watermark {
-      uint64_t global_output_index;
-      uint64_t to_height;
-      uint64_t broadcast_height;
-      crypto::hash tx_hash;
-    };
-    std::vector<pending_claim_watermark> m_pending_claim_watermarks;
     serializable_unordered_map<crypto::public_key, size_t> m_pub_keys;
     cryptonote::account_public_address m_account_public_address;
     serializable_unordered_map<crypto::public_key, cryptonote::subaddress_index> m_subaddresses;
@@ -1790,7 +1724,7 @@ namespace tools
     // `load_keys` for the encrypted-blob ser/de path). The phrase itself
     // is never persisted in long-lived state; `query_key("mnemonic")`
     // regenerates it on demand via `shekyl_bip39_mnemonic_from_entropy`.
-    // See `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10 for the entropy-
+    // See `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §4.10 for the entropy-
     // persistence rationale and the `m_bip39_entropy` field-shape
     // disposition (32-byte fixed-length scrubbed array under mlock; the
     // canonical source-of-truth for the wallet's BIP-39 phrase), and
@@ -1838,8 +1772,6 @@ namespace tools
     bool m_show_wallet_name_when_locked;
     uint32_t m_inactivity_lock_timeout;
     BackgroundMiningSetupType m_setup_background_mining;
-    bool m_persistent_rpc_client_id;
-    float m_auto_mine_for_rpc_payment_threshold;
     bool m_is_initialized;
     NodeRPCProxy m_node_rpc_proxy;
     std::unordered_set<crypto::hash> m_scanned_pool_txs[2];
@@ -1850,9 +1782,6 @@ namespace tools
     bool m_use_dns;
     bool m_offline;
     uint32_t m_rpc_version;
-    crypto::secret_key m_rpc_client_secret_key;
-    rpc_payment_state_t m_rpc_payment_state;
-    uint64_t m_credits_target;
     bool m_allow_mismatched_daemon_version;
 
     // Aux transaction data from device
@@ -1974,7 +1903,7 @@ namespace tools
   };
 }
 BOOST_CLASS_VERSION(tools::wallet2, 3)
-BOOST_CLASS_VERSION(tools::wallet2::transfer_details, 3)
+BOOST_CLASS_VERSION(tools::wallet2::transfer_details, 4)
 BOOST_CLASS_VERSION(tools::wallet2::payment_details, 3)
 BOOST_CLASS_VERSION(tools::wallet2::pool_payment_details, 3)
 BOOST_CLASS_VERSION(tools::wallet2::unconfirmed_transfer_details, 3)
@@ -2006,7 +1935,10 @@ namespace boost
     template <class Archive>
     inline void serialize(Archive &a, tools::wallet2::transfer_details &x, const boost::serialization::version_type ver)
     {
-      assert(ver == 3);
+      // No persisted wallet cache exists outside a fresh CI/dev run, so there is
+      // nothing to migrate; this marks the current layout version (matching the
+      // other serializers in this file). A stale dev cache is deleted + rescanned.
+      assert(ver == 4);
       a & x.m_block_height;
       a & x.m_global_output_index;
       a & x.m_internal_output_index;
@@ -2024,10 +1956,6 @@ namespace boost
       a & x.m_pk_index;
       a & x.m_subaddr_index;
       a & x.m_uses;
-      a & x.m_staked;
-      a & x.m_stake_tier;
-      a & x.m_stake_lock_until;
-      a & x.m_last_claimed_height;
       a & x.m_frozen;
       {
         std::vector<uint8_t> css_vec;

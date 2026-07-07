@@ -1,0 +1,164 @@
+{
+  "name": "PScanCursor",
+  "ty": {
+    "Struct": [
+      {
+        "name": "version",
+        "ty": {
+          "name": "u32",
+          "ty": "U32"
+        }
+      },
+      {
+        "name": "synced_height",
+        "ty": {
+          "name": "BlockHeight",
+          "ty": {
+            "NewtypeStruct": {
+              "name": "u64",
+              "ty": "U64"
+            }
+          }
+        }
+      },
+      {
+        "name": "frontier_hash",
+        "ty": {
+          "name": "[T; N]",
+          "ty": {
+            "Tuple": [
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              },
+              {
+                "name": "u8",
+                "ty": "U8"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

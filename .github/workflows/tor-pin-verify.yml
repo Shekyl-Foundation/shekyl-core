@@ -1,0 +1,115 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Bundled-Tor integration lane (2d-2 SP-T0). Manual-dispatch because it needs a
+# real, network-reaching `tor` (the unit lane only compile-checks the
+# `#[ignore]`d live tests). Against ONE GPG-verified Expert Bundle binary it runs:
+#
+#  1. pin-match (SP-T0c) — the `bundled_tor_matches_recorded_pin` KAT is
+#     `#[ignore]`d on the unit lane, so without this a mistranscribed CURRENT_PIN
+#     would pass every automated gate and fail closed for users. Runs the
+#     checklist chain: download → GPG-verify against the Tor Browser Developers
+#     key → extract → prove the extracted binary hashes to the pin.
+#  2. live lifecycle (SP-T0a/b + DQ-T0.6) — the `--lib` `#[ignore]`d actor +
+#     supervisor tests (managed spawn/reap, handshake, crash-respawn, reap-race
+#     self-lock, degraded-episode recovery) against that same verified binary.
+#     These are the crash/reap/hang guarantees whose whole point is that a unit
+#     test cannot reach them; before this lane they ran only on a dev box.
+#
+# NOT covered here (stated, not silently skipped): `tests/circuit_isolation.rs`
+# (DQ-T0.4) needs `tor-gencert` to stand up its hermetic owned-net directory
+# authority, and the Tor Expert Bundle ships only `tor` (no `tor-gencert`), so
+# that measurement has no CI binary source yet — it runs on a dev box with a
+# full tor install until a gencert source is wired.
+#
+# Dispatch after every pin bump, and freely otherwise — it is read-only.
+
+name: tor-pin-verify
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_version:
+        description: >-
+          Tor Expert Bundle version to fetch and verify against CURRENT_PIN
+          (must match the recorded bundle_version, e.g. 15.0.17)
+        required: true
+        default: "15.0.17"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-linux-x86_64:
+    name: tor integration — pin + live lifecycle (linux-x86_64)
+    runs-on: ubuntu-latest
+    env:
+      BUNDLE: tor-expert-bundle-linux-x86_64-${{ inputs.bundle_version }}.tar.gz
+      DIST: https://dist.torproject.org/torbrowser/${{ inputs.bundle_version }}
+      # The Tor Browser Developers signing key — must equal TOR_SIGNING_KEY_FPR
+      # in rust/shekyl-tor/src/binary.rs (the durable pin; a mismatch here means
+      # either this file or the code is stale — reconcile, never override).
+      TOR_FPR: EF6E286DDA85EA2A4BA7DE684E2C6E8793298290
+    steps:
+      - uses: actions/checkout@v5
+
+      # The fingerprint above is a copy of the code constant; refuse to verify
+      # against a stale one.
+      - name: cross-check fingerprint against binary.rs
+        run: grep -q "$TOR_FPR" rust/shekyl-tor/src/binary.rs
+
+      - name: fetch Expert Bundle + signature
+        run: |
+          curl -fsSL -o "$BUNDLE" "$DIST/$BUNDLE"
+          curl -fsSL -o "$BUNDLE.asc" "$DIST/$BUNDLE.asc"
+
+      - name: import Tor signing key (WKD) and GPG-verify the bundle
+        run: |
+          set -o pipefail
+          gpg --auto-key-locate nodefault,wkd --locate-keys torbrowser@torproject.org
+          gpg --status-fd 1 --verify "$BUNDLE.asc" "$BUNDLE" | tee verify.out
+          # Require VALIDSIG terminating in the pinned primary fingerprint —
+          # GOODSIG alone matches any key the keyring happens to hold.
+          grep -E "^\[GNUPG:\] VALIDSIG .* $TOR_FPR$" verify.out
+
+      - name: extract
+        run: tar -xzf "$BUNDLE"
+
+      - uses: dtolnay/rust-toolchain@1.94.0
+
+      # One run covers both jobs: point the pinned-tor var (pin-match KAT) and
+      # the any-tor var (live lifecycle tests) at the same verified binary, and
+      # run the whole `--lib` ignored set on a single tor bootstrap budget.
+      - name: pin-match + live lifecycle against the verified binary
+        run: |
+          set -o pipefail
+          cd rust
+          SHEKYL_TEST_PINNED_TOR_BINARY="$GITHUB_WORKSPACE/tor/tor" \
+          SHEKYL_TEST_TOR_BINARY="$GITHUB_WORKSPACE/tor/tor" \
+            cargo test --locked -p shekyl-tor --lib -- --ignored --test-threads=1 | tee ignored.out
+          # The pin-match KAT is this lane's founding guarantee (a mistranscribed
+          # CURRENT_PIN otherwise fails closed for every user at first managed
+          # launch) — assert it specifically ran and PASSED, not merely that some
+          # count held. `--test-threads=1` prints one "test <name> ... ok" line.
+          grep -qE '(^|[[:space:]])binary::tests::bundled_tor_matches_recorded_pin \.\.\. ok$' ignored.out
+          # And guard the FULL pinned-tor set — not just that one — against a
+          # silent coverage drop. Floor = the current linux/x86_64 ignored-test
+          # count (6: pin + 2 actor + 3 supervisor); a cfg-gating/removal slip
+          # drops below it and fails the lane loudly. `-ge` (not `-eq`) so adding
+          # a live test never breaks the lane; bump the floor only on a deliberate
+          # removal. `-m1`/`head -1`: `--lib` prints a single "test result:" line,
+          # but stay single-valued so a stray second line can't break the compare.
+          passed=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' ignored.out | head -1)
+          echo "ran ${passed:-0} pinned-tor integration tests"
+          [ "${passed:-0}" -ge 6 ]
+          # No tor WE launched may survive the run (the reap/shutdown guarantee).
+          # Match only processes whose cmdline STARTS with this lane's tor binary
+          # (`argv[0] = <path>/tor <args…>`), so neither an unrelated `tor` on the
+          # runner nor a shell that merely references the path can trip it. The
+          # supervisor awaits the reap, but the process table can lag a beat, so
+          # give a bounded settle before asserting a real (persistent) orphan.
+          orphan="^$GITHUB_WORKSPACE/tor/tor "
+          for _ in 1 2 3 4 5; do pgrep -f "$orphan" >/dev/null || break; sleep 1; done
+          ! pgrep -af "$orphan"

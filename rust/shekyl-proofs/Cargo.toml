@@ -8,11 +8,11 @@ license.workspace = true
 
 [dependencies]
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 curve25519-dalek = "4"
 sha2 = "0.10"
-zeroize = { version = "1", features = ["derive"] }
+zeroize = { workspace = true }
 rand_core = { version = "0.6", features = ["getrandom"] }
 thiserror.workspace = true
 

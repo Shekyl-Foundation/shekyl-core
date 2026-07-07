@@ -34,7 +34,7 @@ KEYS_INTEGER = {
     "fcmp_reference_block_min_age": "u64",
     "fcmp_reference_block_max_age": "u64",
     "rct_type_fcmp_plus_plus_pqc": "u8",
-    # LWMA-1 difficulty adjustment, docs/design/DAA_LWMA1.md §4.
+    # LWMA-1 difficulty adjustment, docs/completed/DAA_LWMA1.md §4.
     # All u64 so the generated header has uniform `UINT64_C(...)`
     # emission shape across the DAA window-shape constants. C++
     # consumers (Phase 4) cast at the call site where a narrower
@@ -44,6 +44,22 @@ KEYS_INTEGER = {
     "daa_ftl_seconds": "u64",
     "daa_mtp_window": "u64",
     "daa_genesis_difficulty": "u64",
+    # Archival retention bond floor, FOUNDATION_GENESIS_IDENTITY_SET.md §9.3.
+    "archival_bond_floor_atomic": "u64",
+    # Archival claim-age window W, ARCHIVAL_TIMING_CONSTANTS.md §1 /
+    # REWARD_EMISSION_LEG.md §6.6. C++ consumer: ArchivalBondValue v4
+    # claimed-epoch decode invariants (cap W + slack, span <= W) in
+    # src/blockchain_db/shekyl_types.h. Rust mirror:
+    # rust/shekyl-archival-retention/build.rs (MAX_CLAIM_AGE_W).
+    "max_claim_age_w": "u64",
+    # Segment/shard geometry (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.2):
+    # level-2 subtree leaf count, 38 * 18 * 38. C++ consumer: the freeze
+    # writer's row value field ONLY — the boundary division lives solely
+    # in the Rust entry point (shekyl_archival_frozen_segment_count);
+    # the division-one-site tripwire refuses `/`- or `%`-adjacent uses
+    # in src/. Rust mirror: rust/shekyl-archival-retention/build.rs
+    # (SEGMENT_LEAF_COUNT, width-product compile assert).
+    "segment_leaf_count": "u64",
 }
 
 # Inclusive [min, max] range for each declared type.
@@ -144,14 +160,14 @@ def main() -> int:
 #define SHEKYL_RCT_TYPE_FCMP_PLUS_PLUS_PQC \
     {emit("rct_type_fcmp_plus_plus_pqc")}
 
-// LWMA-1 difficulty adjustment parameters per docs/design/DAA_LWMA1.md
+// LWMA-1 difficulty adjustment parameters per docs/completed/DAA_LWMA1.md
 // §4. Generated alongside the FCMP/RCT constants because both subsets
 // share the cross-language-drift threat model (Bug 3 of the 2026-05-05
 // audit). The Rust mirror lives in rust/shekyl-difficulty's build.rs;
 // the Phase 4 C++ cutover replaces inherited `DIFFICULTY_TARGET_V2`,
 // `CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT`, and
 // `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW` with the symbols below per
-// docs/design/DAA_LWMA1_PLAN.md Phase 4. Until Phase 4 lands, these
+// docs/completed/DAA_LWMA1_PLAN.md Phase 4. Until Phase 4 lands, these
 // macros are emitted but have no C++ consumer.
 #define SHEKYL_DAA_WINDOW_N \
     {emit("daa_window_n")}
@@ -163,6 +179,35 @@ def main() -> int:
     {emit("daa_mtp_window")}
 #define SHEKYL_DAA_GENESIS_DIFFICULTY \
     {emit("daa_genesis_difficulty")}
+
+// Archival per-shard retention bond floor (ARCHIVAL_BOND_FLOOR). Emitted
+// alongside the FCMP/DAA constants because genesis foundation identities and
+// market archiver registration consume the same cross-language authority.
+// Rust mirror: rust/shekyl-engine-core/build.rs. Until the C++ archival
+// registry lands, this macro has no C++ consumer.
+#define SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC \
+    {emit("archival_bond_floor_atomic")}
+
+// Archival claim-age window `W` (MAX_CLAIM_AGE_W,
+// ARCHIVAL_TIMING_CONSTANTS.md §1; REWARD_EMISSION_LEG.md §6.6). Emission
+// for settlement epoch E is rejected once E < C - W; the windowed
+// ClaimedEpochSet on ArchivalBondValue derives its decode invariants
+// (entry cap W + reorg slack, span <= W) from this value. Rust mirror:
+// rust/shekyl-archival-retention/build.rs (MAX_CLAIM_AGE_W).
+#define SHEKYL_ARCHIVAL_MAX_CLAIM_AGE_W \
+    {emit("max_claim_age_w")}
+
+// Segment/shard geometry (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.2):
+// SEGMENT_LEAF_COUNT, the level-2 subtree leaf count under the
+// production curve-tree widths (38 * 18 * 38 = 25992). C++ consumes
+// this macro ONLY as the registry row's segment_leaf_count value field
+// in the freeze writer; the first-crossing boundary division lives
+// solely in the Rust entry point (shekyl_archival_frozen_segment_count)
+// and the division-one-site tripwire refuses `/`/`%` spellings against
+// this macro in src/. Rust mirror + width-product compile assert:
+// rust/shekyl-archival-retention (segment_freeze.rs).
+#define SHEKYL_ARCHIVAL_SEGMENT_LEAF_COUNT \
+    {emit("segment_leaf_count")}
 """
     out_path.write_text(content, encoding="utf-8")
     return 0

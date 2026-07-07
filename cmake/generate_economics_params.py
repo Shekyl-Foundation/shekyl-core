@@ -19,13 +19,6 @@ KEYS = [
     "shekyl_burn_base_rate",
     "shekyl_burn_cap",
     "shekyl_staker_pool_share",
-    "shekyl_stake_tier_short_blocks",
-    "shekyl_stake_tier_medium_blocks",
-    "shekyl_stake_tier_long_blocks",
-    "shekyl_stake_yield_mult_short",
-    "shekyl_stake_yield_mult_medium",
-    "shekyl_stake_yield_mult_long",
-    "shekyl_stake_num_tiers",
     "shekyl_staker_emission_share",
     "shekyl_staker_emission_decay",
     "shekyl_blocks_per_year",
@@ -67,13 +60,6 @@ def main() -> int:
 #define SHEKYL_BURN_BASE_RATE                           UINT64_C({data["shekyl_burn_base_rate"]})
 #define SHEKYL_BURN_CAP                                 UINT64_C({data["shekyl_burn_cap"]})
 #define SHEKYL_STAKER_POOL_SHARE                        UINT64_C({data["shekyl_staker_pool_share"]})
-#define SHEKYL_STAKE_TIER_SHORT_BLOCKS                  UINT64_C({data["shekyl_stake_tier_short_blocks"]})
-#define SHEKYL_STAKE_TIER_MEDIUM_BLOCKS                 UINT64_C({data["shekyl_stake_tier_medium_blocks"]})
-#define SHEKYL_STAKE_TIER_LONG_BLOCKS                   UINT64_C({data["shekyl_stake_tier_long_blocks"]})
-#define SHEKYL_STAKE_YIELD_MULT_SHORT                   UINT64_C({data["shekyl_stake_yield_mult_short"]})
-#define SHEKYL_STAKE_YIELD_MULT_MEDIUM                  UINT64_C({data["shekyl_stake_yield_mult_medium"]})
-#define SHEKYL_STAKE_YIELD_MULT_LONG                    UINT64_C({data["shekyl_stake_yield_mult_long"]})
-#define SHEKYL_STAKE_NUM_TIERS                          {data["shekyl_stake_num_tiers"]}
 #define SHEKYL_STAKER_EMISSION_SHARE                    UINT64_C({data["shekyl_staker_emission_share"]})
 #define SHEKYL_STAKER_EMISSION_DECAY                    UINT64_C({data["shekyl_staker_emission_decay"]})
 #define SHEKYL_BLOCKS_PER_YEAR                          UINT64_C({data["shekyl_blocks_per_year"]})

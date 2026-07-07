@@ -24,17 +24,13 @@
 //! atomically, and `debug_assert!`-driven invariant checks fire
 //! after every mutation.
 //!
-//! Mutators that touch *only* the ledger (`freeze`, `thaw`,
-//! `set_staking_info`, `update_claim_watermark`) live as inherent
-//! methods on [`LedgerBlock`] in [`crate::ledger_block`] — there is no
-//! reason to take a `&mut LedgerIndexes` borrow when the indexes are
-//! never read.
+//! Mutators that touch *only* the ledger (`freeze`, `thaw`) live as
+//! inherent methods on [`LedgerBlock`] in [`crate::ledger_block`] —
+//! there is no reason to take a `&mut LedgerIndexes` borrow when the
+//! indexes are never read.
 //!
-//! Read-only queries that touch only the ledger
-//! (`unspent_transfers`, `staked_outputs`, `claimable_outputs`,
-//! `spendable_outputs`, etc.) likewise live on [`LedgerBlock`]. The
-//! single read-only query that needs indexes ([`Self::staker_pool`])
-//! is exposed here.
+//! Read-only queries that touch only the ledger (`unspent_transfers`,
+//! `spendable_outputs`, etc.) likewise live on [`LedgerBlock`].
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -43,11 +39,7 @@ use shekyl_crypto_pq::key_image::KeyImage;
 use tracing::warn;
 use zeroize::Zeroize;
 
-use crate::{
-    ledger_block::LedgerBlock,
-    staker_pool::{AccrualRecord, StakerPoolState},
-    transfer::TransferDetails,
-};
+use crate::{ledger_block::LedgerBlock, transfer::TransferDetails};
 
 /// Runtime-only state derived from chain replay. None of these fields
 /// are persisted in [`LedgerBlock`]; all are rebuilt by replaying
@@ -57,10 +49,6 @@ use crate::{
 ///   [`LedgerBlock::transfers`] index.
 /// - `pub_keys`: lookup index from output pubkey bytes to the
 ///   [`LedgerBlock::transfers`] index.
-/// - `staker_pool`: aggregated stake-tier accrual state;
-///   `LEDGER_BLOCK_VERSION = 1` deliberately omits persistence per
-///   the staking design notes (see [`crate::ledger_block`] module
-///   docstring).
 ///
 /// Adding a field here means it MUST be reconstructible from
 /// [`LedgerBlock`] + scanner replay. Adding a field that isn't
@@ -79,9 +67,6 @@ pub struct LedgerIndexes {
     /// scanned output reusing a pubkey we already know is dropped
     /// rather than admitted.
     pub(crate) pub_keys: HashMap<[u8; 32], usize>,
-    /// Per-tier accrual aggregate used to estimate claim rewards.
-    /// Rebuilt by replaying the scanned range at open time.
-    pub(crate) staker_pool: StakerPoolState,
 }
 
 impl LedgerIndexes {
@@ -92,20 +77,11 @@ impl LedgerIndexes {
         Self {
             key_images: HashMap::new(),
             pub_keys: HashMap::new(),
-            staker_pool: StakerPoolState::new(),
         }
     }
 
     /// Rebuild the lookup indexes from a freshly-loaded
-    /// [`LedgerBlock`]. The `staker_pool` field is **not** rebuilt
-    /// here — it is reconstructed by daemon-replay of the scanned
-    /// range, owned by the scanner; this method handles only the
-    /// O(1)-lookup half.
-    ///
-    /// On open: load `LedgerBlock` from disk, call
-    /// `LedgerIndexes::rebuild_from_ledger(&ledger)`, then run the
-    /// scanner replay to refill `staker_pool`. Both halves are
-    /// idempotent under repeated calls.
+    /// [`LedgerBlock`]. Idempotent under repeated calls.
     pub fn rebuild_from_ledger(ledger: &LedgerBlock) -> Self {
         let mut indexes = Self::empty();
         for (idx, td) in ledger.transfers.iter().enumerate() {
@@ -199,6 +175,10 @@ impl LedgerIndexes {
             if let Some(td) = ledger.transfers.get_mut(idx) {
                 td.spent = true;
                 td.spent_height = Some(spent_height);
+                // F14 confirmed-present release (§2.6): the observed
+                // on-chain spend supersedes the awaiting-confirmation
+                // lock — refresh is the settlement authority.
+                td.awaiting_confirmation = None;
                 debug_assert!(
                     self.check_invariants(ledger).is_ok(),
                     "invariant violated after mark_spent: {}",
@@ -301,12 +281,25 @@ impl LedgerIndexes {
     ///
     /// Drops the corresponding `(height, hash)` entries from
     /// `ledger.reorg_blocks`, rewinds `ledger.tip` to the highest
-    /// remaining block, rebuilds `key_images` and `pub_keys`, and
-    /// rolls the staker pool back to `fork_height`.
+    /// remaining block, and rebuilds `key_images` and `pub_keys`.
     pub fn handle_reorg(&mut self, ledger: &mut LedgerBlock, fork_height: u64) {
         for idx in (0..ledger.transfers.len()).rev() {
             if ledger.transfers[idx].block_height >= fork_height {
                 ledger.transfers.remove(idx);
+            }
+        }
+
+        // Un-mark spends orphaned by the reorg: an output (received before the fork,
+        // so it survives the removal above) whose spend CONFIRMED at a height ≥
+        // fork_height loses that confirmation — the spending tx's block is gone — and
+        // returns to the spendable pool. A later refresh re-detects the spend if the
+        // tx re-confirms on the new chain. In-flight spends (`spent_height = None`,
+        // never in a block) are left untouched: a reorg of confirmed blocks does not
+        // affect a spend that was never confirmed.
+        for td in &mut ledger.transfers {
+            if td.spent_height.is_some_and(|h| h >= fork_height) {
+                td.spent = false;
+                td.spent_height = None;
             }
         }
 
@@ -333,24 +326,11 @@ impl LedgerIndexes {
             }
         }
 
-        self.staker_pool.handle_reorg(fork_height);
-
         debug_assert!(
             self.check_invariants(ledger).is_ok(),
             "invariant violated after handle_reorg: {}",
             self.check_invariants(ledger).unwrap_err()
         );
-    }
-
-    /// Insert a staker pool accrual record. Touches only
-    /// [`Self::staker_pool`]; does not borrow [`LedgerBlock`].
-    pub fn insert_accrual(&mut self, height: u64, record: AccrualRecord) {
-        self.staker_pool.insert(height, record);
-    }
-
-    /// Read access to the aggregated stake-tier accrual state.
-    pub fn staker_pool(&self) -> &StakerPoolState {
-        &self.staker_pool
     }
 
     /// Verify structural invariants of the indexes against the given
@@ -438,10 +418,20 @@ impl LedgerIndexes {
             ));
         }
 
-        // 3. Spent-height consistency.
+        // 3. Spend-state consistency. A spent output must carry a key image (it
+        //    cannot have been spent by us otherwise); a not-yet-spent output carries
+        //    no spend height. Since the F14 cutover (§2.6), production `spent` is
+        //    refresh-authoritative — `mark_spent` sets `spent` + `spent_height` and
+        //    clears the awaiting-confirmation lock together when it scans the
+        //    confirming block, so a production spent output always has
+        //    `spent_height = Some`. An in-flight spend is NOT marked spent at submit
+        //    (that durable-spent-at-submit flow was retired): it carries an
+        //    awaiting-confirmation lock instead, `spent` stays false. The check stays
+        //    permissive about `spent` without a height only for the Phase-1 test stub
+        //    that still models that retired half-state.
         for (i, td) in ledger.transfers.iter().enumerate() {
-            if td.spent && td.spent_height.is_none() {
-                return Err(format!("transfers[{i}] is spent but spent_height is None"));
+            if td.spent && td.key_image.is_none() {
+                return Err(format!("transfers[{i}] is spent but has no key_image"));
             }
             if let (false, Some(h)) = (td.spent, td.spent_height) {
                 return Err(format!(
@@ -506,11 +496,10 @@ mod tests {
     use super::*;
     use crate::{
         ledger_block::{BlockchainTip, LedgerBlock, ReorgBlocks},
-        subaddress::SubaddressIndex,
         transfer::SPENDABLE_AGE,
     };
     use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
-    use shekyl_oxide::primitives::Commitment;
+    use shekyl_curve_primitives::Commitment;
 
     fn ki(b: u8) -> KeyImage {
         KeyImage::from_canonical_bytes([b; 32])
@@ -518,27 +507,24 @@ mod tests {
 
     fn mk_transfer(seed: u8, block_height: u64, key_image: Option<KeyImage>) -> TransferDetails {
         TransferDetails {
-            tx_hash: [seed; 32],
+            tx_hash: shekyl_types::TxHash::from_bytes([seed; 32]),
             internal_output_index: u64::from(seed),
             global_output_index: u64::from(seed),
             block_height,
             key: ED25519_BASEPOINT_POINT * Scalar::from(u64::from(seed) + 1),
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1_000),
-            subaddress: Some(SubaddressIndex::new(u32::from(seed).saturating_add(1))),
             payment_id: None,
             spent: false,
             spent_height: None,
             key_image,
-            staked: false,
-            stake_tier: 0,
-            stake_lock_until: 0,
-            last_claimed_height: 0,
+            awaiting_confirmation: None,
             source_ciphertext: None,
             output_handle: None,
             eligible_height: block_height + SPENDABLE_AGE,
             frozen: false,
             fcmp_precomputed_path: None,
+            receive_attribution: crate::ReceiveAttribution::default(),
         }
     }
 
@@ -563,6 +549,35 @@ mod tests {
         indexes
             .check_invariants(&ledger)
             .expect("rebuilt indexes are consistent");
+    }
+
+    /// F14 confirmed-present release (`DAEMON_SUBMIT_VERDICT.md` §2.6):
+    /// the refresh-observed on-chain spend supersedes the persisted
+    /// awaiting-confirmation lock — `mark_spent` clears it in the same
+    /// transition that sets the refresh-authoritative `spent` state.
+    #[test]
+    fn mark_spent_releases_awaiting_confirmation_lock() {
+        let mut transfer = mk_transfer(1, 100, Some(ki(0xAA)));
+        transfer.awaiting_confirmation = Some(crate::transfer::AwaitingConfirmation {
+            tx_hash: shekyl_types::TxHash::from_bytes([0xBB; 32]),
+            accepted_at_height: 150,
+        });
+        let ledger_init = LedgerBlock::new(
+            vec![transfer],
+            BlockchainTip::new(150, [0; 32]),
+            ReorgBlocks::default(),
+        );
+        let mut ledger = ledger_init;
+        let indexes = LedgerIndexes::rebuild_from_ledger(&ledger);
+
+        assert!(indexes.mark_spent(&mut ledger, &ki(0xAA), 160));
+        let td = &ledger.transfers[0];
+        assert!(td.spent);
+        assert_eq!(td.spent_height, Some(160));
+        assert!(
+            td.awaiting_confirmation.is_none(),
+            "confirmed-present release clears the F14 lock"
+        );
     }
 
     #[test]
@@ -681,6 +696,37 @@ mod tests {
         assert_eq!(ledger.tip.tip_hash, Some([0xAA; 32]));
         assert!(indexes.key_images.contains_key(&ki(0x10)));
         assert!(!indexes.key_images.contains_key(&ki(0x20)));
+    }
+
+    #[test]
+    fn handle_reorg_unmarks_orphaned_confirmed_spend_keeps_in_flight() {
+        let mut ledger = LedgerBlock::empty();
+        let mut indexes = LedgerIndexes::empty();
+        // Two outputs received well before the fork, so they survive the rewind.
+        indexes.ingest_block(
+            &mut ledger,
+            100,
+            [0xAA; 32],
+            vec![
+                mk_transfer(1, 100, Some(ki(0x10))),
+                mk_transfer(2, 100, Some(ki(0x20))),
+            ],
+        );
+        // Output 0: spend CONFIRMED at height 200 (above the fork).
+        assert!(indexes.mark_spent(&mut ledger, &ki(0x10), 200));
+        // Output 1: spend IN FLIGHT — optimistically marked at submit, no height yet.
+        ledger.transfers[1].spent = true;
+        // Advance the tip past the fork (empty block) so the rewind is well-formed.
+        indexes.ingest_block(&mut ledger, 250, [0xBB; 32], vec![]);
+
+        indexes.handle_reorg(&mut ledger, 150);
+
+        // The orphaned CONFIRMED spend (200 ≥ 150) returns to the spendable pool.
+        assert!(!ledger.transfers[0].spent);
+        assert_eq!(ledger.transfers[0].spent_height, None);
+        // The IN-FLIGHT spend (never confirmed) is untouched by the reorg.
+        assert!(ledger.transfers[1].spent);
+        assert_eq!(ledger.transfers[1].spent_height, None);
     }
 
     #[test]

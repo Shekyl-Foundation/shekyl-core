@@ -1,6 +1,6 @@
 # Post Quantum Cryptography (PQC)
 
-> **Last updated:** 2026-04-10
+> **Last updated:** 2026-06-09
 
 ## Purpose
 
@@ -25,6 +25,9 @@ This document is source-of-truth for PQC-related implementation work in:
 - `src/cryptonote_basic`
 - `src/cryptonote_core`
 - `src/wallet`
+
+Wallet privacy threat-model propagation (pit-of-success vs adversary, T6/T7):
+[`docs/THREAT_MODEL_WALLET.md`](THREAT_MODEL_WALLET.md) (FA-9, Round 4).
 
 ## Reboot Assumption
 
@@ -336,11 +339,19 @@ The sender can re-derive `combined_ss` at proof time without storing it:
   `O = ho*G + B + y*T`. Validates `spend_key` is on the prime-order subgroup.
 
 - **`recover_recipient_spend_pubkey(combined_ss, output_key, output_index)`**:
-  Computes `B' = O - ho*G - y*T` for subaddress lookup. Validates the
-  recovered point is prime-order and non-identity.
+  Computes `B' = O - ho*G - y*T` (primary spend point recovery at scan time).
+  Validates the recovered point is prime-order and non-identity.
 
 - **`decrypt_amount(combined_ss, enc_amount, amount_tag, output_index)`**:
   Decrypts the amount and verifies the `amount_tag`.
+
+- **Label encryption (5-T, FA-11):** `construct_output` always XOR-encrypts an
+  8-byte **plaintext** under per-output `k_label`. Launch default plaintext is
+  the sentinel block `0xFF…` (`SENTINEL_PLAINTEXT`); on-wire `enc_label` bytes
+  are **unique per output** (never literal `0xFF` on wire). Scan verifies
+  HKDF-derived `label_tag` (integrity tag, same role as `amount_tag` — not a
+  sentinel/category flag), then decrypts `enc_label`; cooperative tags use
+  `wire_version = 0x01` per `docs/design/SUBADDRESS_UNDER_PQC.md` §5.7.11.
 
 - **`compute_output_key_image(combined_ss, output_index, spend_secret, hp_of_O)`**:
   Derives `ho` internally and computes `I = x * Hp(O)` where `x = ho + b`.
@@ -375,15 +386,17 @@ fast wallet scanning.
 | `y` (T-component) | `shekyl-output-derive-v1` | `shekyl-output-y` &#124;&#124; index\_le64 | 64 B | mod l (wide) |
 | `z` (commitment mask) | `shekyl-output-derive-v1` | `shekyl-output-mask` &#124;&#124; index\_le64 | 64 B | mod l (wide) |
 | `k_amount` | `shekyl-output-derive-v1` | `shekyl-output-amount-key` &#124;&#124; index\_le64 | 32 B | raw |
-| `view_tag_combined` | `shekyl-output-derive-v1` | `shekyl-output-view-tag` &#124;&#124; index\_le64 | 1 B | first byte |
+| `k_label` | `shekyl-output-derive-v1` | `shekyl-output-label-key` &#124;&#124; index\_le64 | 32 B | raw |
+| `view_tag_combined` | `shekyl-output-derive-v1` | `shekyl-output-view-tag-combined` &#124;&#124; index\_le64 | 1 B | first byte |
 | `amount_tag` | `shekyl-output-derive-v1` | `shekyl-output-amount-tag` &#124;&#124; index\_le64 | 1 B | first byte |
+| `label_tag` | `shekyl-output-derive-v1` | `shekyl-output-label-tag` &#124;&#124; index\_le64 | 1 B | first byte |
 | `ml_dsa_seed` | `shekyl-output-derive-v1` | `shekyl-pqc-output` &#124;&#124; index\_le64 | 32 B | raw |
 
-**Secondary derivation (X25519 shared secret only, for fast scan):**
+**Secondary derivation (ML-KEM shared secret only, wire pre-filter — FA-6):**
 
 | Secret | Salt | Info string | Output | Reduction |
 |--------|------|-------------|--------|-----------|
-| `view_tag_x25519` | `shekyl-view-tag-x25519-v1` | `shekyl-view-tag` &#124;&#124; index\_le64 | 1 B | first byte |
+| `view_tag_prefilter` (wire `view_tag`) | `shekyl-view-tag-prefilter-v1` | `shekyl-view-tag-prefilter` &#124;&#124; index\_le64 | 1 B | first byte |
 
 - `index_le64` is the output index as a little-endian 8-byte integer.
 - "wide reduce" means expanding 64 bytes via HKDF-Expand, then reducing
@@ -469,22 +482,23 @@ X25519 ephemeral key (ensuring the view-tag pre-filter matches) so the fuzzer re
 ML-KEM decapsulation and downstream algebraic checks. Test 3 corrupts the X25519 key to
 separately exercise the view-tag rejection path.
 
-#### View-Tag Pre-Filter
+#### View-Tag Pre-Filter (FA-6)
 
-The X25519-only view tag (`derive_view_tag_x25519`) is a cheap O(1) pre-filter that
-rejects ~255/256 of non-owned outputs before the expensive ML-KEM decapsulation. On a
-view-tag match, the **full** verification chain runs without abbreviation:
+The wire `view_tag` is `derive_view_tag_prefilter(ml_kem_ss, output_index)` — keyed on
+ML-KEM shared secret only (T6). The scanner runs **ML-KEM decap on every output**, compares
+the pre-filter byte, then on match runs X25519 ECDH and the full recovery chain:
 
-1. Full ML-KEM-768 decapsulation
-2. HKDF derivation of ALL output secrets (ho, y, z, k_amount, amount_tag, ml_dsa_seed)
-3. Amount tag verification (probabilistic rejection)
-4. Amount decryption
-5. Output key / commitment algebraic verification
-6. PQC keypair derivation
+1. ML-KEM-768 decapsulation (universal)
+2. View-tag pre-filter compare
+3. X25519 ECDH (on match)
+4. HKDF / amount_tag / label_tag / decrypt / commitment open / PQC keygen
 
-An attacker grinding view tags to match a victim's X25519 tag wastes only their own CPU.
-Each successful tag match triggers the complete verification chain including two independent
-algebraic checks. The view tag reveals no information beyond what the attacker already has
+~255/256 outputs still pay decap but skip X25519 and downstream work. The tag is not
+computable from view-half or quantum-recovered view scalar alone.
+
+An attacker grinding tags without `ml_kem_dk` cannot predict the filter byte. Each match
+triggers the complete verification chain including commitment opening. The tag reveals no
+information beyond what the attacker already has
 (the X25519 ephemeral key is on-chain).
 
 **Independence of algebraic checks**: The two verification equations use different HKDF
@@ -956,6 +970,37 @@ PQC spend/ownership authorization works alongside the FCMP++ membership proof
 layer. FCMP++ provides full-chain anonymity; `pqc_auths` provides quantum-resistant
 spend authorization. Stealth addresses and one-time output derivation remain
 part of the privacy stack.
+
+V3.0 ships **one reusable primary address per account** (End-state 5); on-chain
+privacy is per-output, not per-address rotation. Product and adversary framing:
+[`THREAT_MODEL_WALLET.md`](THREAT_MODEL_WALLET.md).
+
+### Cooperative attribution foundation pin (FA-10)
+
+**Adopted 2026-05-31** per [`docs/design/SUBADDRESS_UNDER_PQC.md`](design/SUBADDRESS_UNDER_PQC.md)
+§6.4. **5-T-substrate** is the genesis path; **5-N** (off-chain label only) is
+withdrawn for V3.0.
+
+> Shekyl commits at genesis to **Priority-2-clean cooperative attribution
+> substrate**: every output carries a fixed-size encrypted label field
+> (`enc_label` + `label_tag`, §5.7.11 in SUBADDRESS). Plaintext is either a
+> logical tag or `SENTINEL_PLAINTEXT`, indistinguishable on wire. Wallet UX for
+> payment requests and meaningful tags is **not** required at launch;
+> **sentinel-only wallets are consensus-valid.**
+
+| Track | Wire | Wallet at V3.0 launch |
+|-------|------|----------------------|
+| ~~**5-N**~~ | Off-chain label only | Not V3.0 |
+| **5-T-substrate** | Mandatory uniform slot + sentinel always | Sentinel-only; meaningful `REQUEST` tags + reconcile UX behind **product flag** |
+
+**What "optional behind a gate" means (and does not):**
+
+- **Means:** wallet feature flag for meaningful tags + reconcile UX.
+- **Does not mean:** optional presence of the slot on wire, URI flag to skip
+  memo, or delayed network activation — any of those would require a fork to
+  add the slot later (§4.9 fatal in SUBADDRESS).
+
+Adversary and phishing surfaces for leaked addresses: [`THREAT_MODEL_WALLET.md`](THREAT_MODEL_WALLET.md).
 
 ## FFI Contract
 

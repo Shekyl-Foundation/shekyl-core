@@ -36,7 +36,7 @@
 //! - **shekyl-bulletproofs**: Bulletproofs+ range proofs (`Bulletproof::prove_plus()`)
 //!   over Pedersen commitments.
 //! - **shekyl-crypto-pq**: Hybrid signature construction (`SignatureScheme::sign()`).
-//! - **shekyl-primitives**: `Commitment` and scalar arithmetic.
+//! - **shekyl-curve-primitives**: `Commitment` and scalar arithmetic.
 
 #![deny(unsafe_code)]
 
@@ -81,23 +81,34 @@ mod error;
 mod sign;
 pub mod types;
 mod validate;
+pub mod wire;
 
 #[cfg(test)]
 mod tests;
 
 pub use error::TxBuilderError;
-pub use sign::{sign_pqc_auths, sign_transaction};
+pub use sign::{sign_pqc_auths, sign_transaction, sign_transaction_with_terms};
 pub use types::{LeafEntry, OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext};
+pub use wire::{
+    encode_final_tx, phase1_payload_hashes, tx_prefix_hash_for_signing, tx_prefix_hash_from_parts,
+    tx_prefix_hash_from_parts_with_extra, WireEncodeInput,
+};
 
 /// Maximum number of inputs per transaction (consensus limit, matches `shekyl-fcmp::MAX_INPUTS`).
 pub const MAX_INPUTS: usize = shekyl_fcmp::MAX_INPUTS;
+
+/// Maximum curve-tree depth a membership proof spans (consensus limit,
+/// re-exported from `shekyl-fcmp` so engine-side consumers that depend on
+/// tx-builder — not fcmp directly — have a single source for the proof-system
+/// limits alongside [`MAX_INPUTS`]).
+pub const MAX_TREE_DEPTH: u8 = shekyl_fcmp::MAX_TREE_DEPTH;
 
 /// Maximum number of outputs per transaction.
 ///
 /// # Canonical source of truth
 ///
 /// This constant mirrors
-/// [`shekyl_generators::MAX_BULLETPROOF_COMMITMENTS`] — the value the
+/// [`shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS`] — the value the
 /// Bulletproofs+ CRS is generated against. The builder cannot
 /// construct a transaction with more outputs than the BP+ CRS
 /// supports, so this mirror is structural rather than a separate
@@ -114,11 +125,11 @@ pub const MAX_INPUTS: usize = shekyl_fcmp::MAX_INPUTS;
 pub const MAX_OUTPUTS: usize = 16;
 
 // Single-direction enforcement against the canonical source of truth.
-// `shekyl_generators::MAX_BULLETPROOF_COMMITMENTS` is the
+// `shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS` is the
 // Bulletproofs+ CRS size; the builder-side cap must agree by
 // construction. See the `MAX_OUTPUTS` doc-comment above for the
 // canonical-source-of-truth rationale.
 const _: () = assert!(
-    MAX_OUTPUTS == shekyl_generators::MAX_BULLETPROOF_COMMITMENTS,
-    "shekyl-tx-builder MAX_OUTPUTS must match shekyl_generators::MAX_BULLETPROOF_COMMITMENTS (Bulletproofs+ CRS size)",
+    MAX_OUTPUTS == shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS,
+    "shekyl-tx-builder MAX_OUTPUTS must match shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS (Bulletproofs+ CRS size)",
 );

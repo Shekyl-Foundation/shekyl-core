@@ -190,7 +190,6 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     ///
     /// [`LedgerBlock::height()`]: shekyl_engine_state::LedgerBlock::height
     /// [`RwLock`]: std::sync::RwLock
-    #[allow(dead_code)] // Stage 1 PR 2: production call sites migrate in commit 5.
     fn synced_height(&self) -> u64;
 
     /// Snapshot the reorg-detection window the producer needs for
@@ -212,7 +211,6 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     /// Same as [`Self::synced_height`] — the Stage 1 `LocalLedger`
     /// implementor panics on `RwLock` poisoning; sync infallible
     /// return is by design.
-    #[allow(dead_code)] // Stage 1 PR 2: production call sites migrate in commit 5.
     fn snapshot(&self) -> LedgerSnapshot;
 
     /// Reservation-agnostic balance computed from `LedgerBlock`
@@ -241,6 +239,13 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     /// Same as [`Self::synced_height`] — the Stage 1 `LocalLedger`
     /// implementor panics on `RwLock` poisoning; sync infallible
     /// return is by design.
-    #[allow(dead_code)] // Stage 1 PR 2: production call sites migrate in commit 5.
+    // Designed `LedgerEngine` surface whose only current consumer is the
+    // `bench-internals`-gated `engine_balance_for_bench` wrapper
+    // (`engine/mod.rs`); non-bench builds therefore see no caller. Unlike
+    // `synced_height` / `snapshot` (now dispatched on the production merge
+    // and pending-tx paths), this method has no production reader yet —
+    // reopens when an orchestrator path projects committed-chain balance
+    // through the trait (Phase 2 balance display).
+    #[allow(dead_code)]
     fn balance(&self) -> BalanceSummary;
 }

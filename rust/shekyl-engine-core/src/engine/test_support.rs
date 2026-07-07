@@ -15,7 +15,7 @@
 //! What this module ships:
 //!
 //! - [`TestDaemon`]: deterministic in-memory implementor of both
-//!   [`shekyl_rpc::Rpc`] (chain serving — height / block fetch
+//!   [`shekyl_rpc_client::Rpc`] (chain serving — height / block fetch
 //!   with reorg simulation, failure injection per height) **and**
 //!   the crate-internal `DaemonEngine` Stage 1 trait (transaction
 //!   submission with daemon-faithful tx-hash dedup per the §5.2
@@ -25,7 +25,7 @@
 //!   and the hybrid `Engine<SoloSigner, TestDaemon>` tests
 //!   (consumed as the engine's `D: DaemonEngine` slot).
 //! - [`make_synthetic_block`]: minimal-valid `ScannableBlock`
-//!   constructor (V2 miner transaction with `Input::Gen`, no
+//!   constructor (v3 miner transaction with `Input::Gen`, no
 //!   regular outputs, no non-miner transactions). Tests that need
 //!   a recoverable owned output build their own
 //!   `ScannableBlock` rather than extending this helper, because
@@ -35,12 +35,12 @@
 //!
 //! # Determinism contract
 //!
-//! Per `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.2, every `Mock*`
-//! constructor takes an explicit 32-byte seed which initializes
-//! a `ChaCha20Rng` internal to the mock. Tests that don't
-//! exercise RNG-driven mock behavior (e.g. producer-only chain
-//! serving) pass [`DEFAULT_TEST_SEED`]; tests that do (future
-//! fee-jitter, synthetic-fork randomization) pass a recorded
+//! Per `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.2, every seeded
+//! test-substrate component (here, [`TestDaemon`]) takes an explicit
+//! 32-byte seed which initializes a `ChaCha20Rng` internal to that
+//! component. Tests that don't exercise RNG-driven behavior (e.g.
+//! producer-only chain serving) pass [`DEFAULT_TEST_SEED`]; tests that
+//! do (future fee-jitter, synthetic-fork randomization) pass a recorded
 //! literal seed and embed it in the test name so reproduction
 //! across CI runs is unambiguous.
 //!
@@ -71,12 +71,12 @@ use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use sha2::Sha256;
 
-use shekyl_oxide::block::{Block, BlockHeader};
-use shekyl_oxide::transaction::{Input, Timelock, Transaction, TransactionPrefix};
-use shekyl_rpc::{FeeRate, Rpc, RpcError, ScannableBlock};
+use shekyl_rpc_client::{FeeRate, Rpc, RpcError};
+use shekyl_scanner::ScannableBlock;
+use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Transaction, TxPrefix};
 
 use crate::engine::pending::TxHash;
-use crate::engine::traits::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
+use crate::engine::traits::{DaemonEngine, DaemonHealth, FeeEstimates, TxSubmitOutcome};
 
 /// Default 32-byte seed for tests that don't exercise the
 /// `ChaCha20Rng`-driven paths of [`TestDaemon`].
@@ -92,23 +92,24 @@ pub(crate) const DEFAULT_TEST_SEED: [u8; 32] = [0u8; 32];
 
 // ---- Role-tag registry for §6.2 master-seed derivation -------------------
 //
-// Each `Mock*` slot in a hybrid composition gets a stable byte string
-// that names its role. Hybrid tests pass `(master_seed, ROLE_X)` to
-// [`derive_seed`] to produce the per-component seed that goes into
-// `MockX::with_seed(...)`. The registry pins the role-tag-to-component
-// mapping in one audited site so reviewers can confirm hybrid tests
-// don't re-bind a tag to a different component slot.
+// Each seeded test-substrate component in a hybrid composition gets a
+// stable byte string that names its role. Hybrid tests pass
+// `(master_seed, ROLE_X)` to [`derive_seed`] to produce the per-component
+// seed that goes into that component's `with_seed(...)` constructor. The
+// registry pins the role-tag-to-component mapping in one audited site so
+// reviewers can confirm hybrid tests don't re-bind a tag to a different
+// component slot.
 //
-// PR 1 lands `ROLE_DAEMON` only. PR 4 C6β retired `ROLE_LEDGER` along
-// with `MockLedger`: hybrid tests use the production
-// [`super::local_ledger::LocalLedger`] directly, which is deterministic
-// by construction — no per-role seed is needed. As of the FOLLOWUPS P1
-// async-post-pass fix the `LedgerEngine` trait is read-only, so there is
-// no ledger-side failure-injection wrapper at all; merge-race injection
-// is driven producer-side (a stale `ScanResult` the real merge rejects).
-// Subsequent Stage 1 PRs add `ROLE_KEY`, `ROLE_ECONOMICS`,
-// `ROLE_PERSISTENCE`, `ROLE_REFRESH`, `ROLE_PENDING_TX` alongside their
-// corresponding `Mock*` / `FaultInjecting*` types.
+// `ROLE_DAEMON` (for [`TestDaemon`]) is the only role tag, and Stage 1
+// kept it that way: the no-Mock substrate discipline (PR 3 §2.1.2)
+// settled that the other engines compose from their production
+// implementors (`LocalLedger`, `LocalKeys`, …) plus `FaultInjecting*`
+// wrappers rather than seeded `Mock*` components, so no further role tags
+// were needed. Production `LocalLedger` is deterministic by construction
+// (no per-role seed); and as of the FOLLOWUPS P1 async-post-pass fix the
+// `LedgerEngine` trait is read-only, so there is no ledger-side
+// failure-injection wrapper at all — merge-race injection is driven
+// producer-side (a stale `ScanResult` the real merge rejects).
 
 /// Role tag for the [`TestDaemon`] slot in §6.2 master-seed derivation.
 pub(crate) const ROLE_DAEMON: &[u8] = b"role/daemon";
@@ -118,7 +119,7 @@ pub(crate) const ROLE_DAEMON: &[u8] = b"role/daemon";
 /// master-seed-derivation contract.
 ///
 /// Hybrid tests own a single literal `master_seed` (recorded in the
-/// test name or CI logs); each `Mock*` they construct gets its
+/// test name or CI logs); each seeded component they construct gets its
 /// `with_seed` argument from `derive_seed(&master, ROLE_X)`. This
 /// keeps cross-run reproducibility a function of the master seed
 /// alone — changing the master re-derives every component
@@ -137,7 +138,7 @@ pub(crate) fn derive_seed(master: &[u8; 32], role: &[u8]) -> [u8; 32] {
     output
 }
 
-/// In-memory implementor of [`shekyl_rpc::Rpc`] **and** the
+/// In-memory implementor of [`shekyl_rpc_client::Rpc`] **and** the
 /// crate-internal `DaemonEngine` trait for refresh / scan-loop /
 /// hybrid tests.
 ///
@@ -146,13 +147,13 @@ pub(crate) fn derive_seed(master: &[u8; 32], role: &[u8]) -> [u8; 32] {
 /// to mutate the canonical chain or queue failures. Cloning shares
 /// state with the original handle by design: a reorg injected on
 /// one clone is observed by all clones, and a transaction
-/// submitted via one clone is observed as `AlreadyKnown` by every
+/// submitted via one clone is observed as `AlreadyInPool` by every
 /// other.
 ///
 /// Locking is `std::sync::Mutex` rather than `tokio::sync::Mutex`
 /// because every guarded critical section is non-`await` (the
 /// state transitions in `get_height`,
-/// `get_scannable_block_by_number`, `submit_transaction`, and
+/// `fetch_scannable_block`, `submit_transaction`, and
 /// `get_fee_estimates` are pure data lookups that drop the guard
 /// before returning the future's result). Holding a
 /// `std::sync::Mutex` across an `await` point would be a defect;
@@ -166,7 +167,7 @@ pub(crate) fn derive_seed(master: &[u8; 32], role: &[u8]) -> [u8; 32] {
 /// - `submit_transaction` dedupes by tx hash exactly as the real
 ///   daemon does (first submission → `Submitted { hash }`; every
 ///   subsequent submission of the same `tx_bytes` →
-///   `AlreadyKnown { hash }`). The hash is derived
+///   `AlreadyInPool { hash }`). The hash is derived
 ///   deterministically via `shekyl_crypto_hash::cn_fast_hash` over
 ///   the submitted bytes — the real daemon hashes the tx prefix
 ///   plus signatures, but for `TestDaemon` the byte-keyed dedup
@@ -207,7 +208,7 @@ struct State {
     /// Errors queued for upcoming `get_height` calls (FIFO). Once
     /// drained, subsequent calls return the canonical height.
     height_errors: VecDeque<RpcError>,
-    /// Per-height error queues for `get_scannable_block_by_number`.
+    /// Per-height error queues for `fetch_scannable_block`.
     /// FIFO; once a height's queue is drained, subsequent fetches
     /// at that height return the canonical block.
     block_errors: HashMap<u64, VecDeque<RpcError>>,
@@ -215,10 +216,23 @@ struct State {
     /// error. Models persistent-failure scenarios distinct from
     /// transient retry-and-recover ones.
     malformed_at: HashSet<u64>,
+    /// FIFO queue of scripted reorgs `(trigger_height, fork_height,
+    /// new_blocks)`: the **front** entry fires immediately after
+    /// `fetch_scannable_block(trigger_height)` serves its block,
+    /// replacing the chain at-and-above `fork_height` (same contract
+    /// as [`TestDaemon::replace_chain_from`]) and popping. Models
+    /// reorgs landing *between* two consecutive single-height fetches
+    /// — the intra-attempt straddle the producer's running prev-hash
+    /// linkage check must detect (SP-T2 sequence-coherence keystone).
+    /// A queue (not a single slot) so a test can script a *sequence*
+    /// of reorgs within one attempt, each firing when its trigger
+    /// height is (re-)served, exercising multi-reorg-per-attempt
+    /// detection.
+    reorgs_after_fetch: VecDeque<(u64, u64, Vec<ScannableBlock>)>,
 
     /// Tx-hash set keyed by the byte-derived hash. `submit_transaction`
     /// inserts on first sight (returning `Submitted`) and observes
-    /// the existing entry on retry (returning `AlreadyKnown`). The
+    /// the existing entry on retry (returning `AlreadyInPool`). The
     /// real daemon's mempool serves the same role; modelling it as
     /// a `HashSet` preserves the §5.2 idempotency guarantee tests
     /// rely on without modeling mempool eviction.
@@ -241,6 +255,14 @@ struct State {
     /// estimates (e.g. mid-startup, during fee-pool rotation).
     fee_errors: VecDeque<RpcError>,
 
+    /// Health snapshot returned by `get_health`. Fixed to a healthy,
+    /// fully-synced daemon (peers present, `target_height == 0`) so the
+    /// `DaemonEngine` impl is complete for tests that don't exercise the
+    /// health gate. Watchdog health-gating and health-failure paths are
+    /// driven through the hermetic `StubDaemon` in the `submit_lifecycle`
+    /// test module, which controls both health facts and submit outcomes.
+    health: DaemonHealth,
+
     /// Deterministic RNG seeded from the constructor seed. Held
     /// for §6.2 compliance and reserved for future RNG-driven
     /// affordances (fee jitter, synthetic-fork randomization);
@@ -259,10 +281,12 @@ impl State {
             height_errors: VecDeque::new(),
             block_errors: HashMap::new(),
             malformed_at: HashSet::new(),
+            reorgs_after_fetch: VecDeque::new(),
             submitted_hashes: HashSet::new(),
             submit_errors: VecDeque::new(),
             fee_estimates: default_fee_estimates(),
             fee_errors: VecDeque::new(),
+            health: default_health(),
             rng: ChaCha20Rng::from_seed(seed),
         }
     }
@@ -280,6 +304,21 @@ fn default_fee_estimates() -> FeeEstimates {
         economy: FeeRate::new(1, 1).expect("economy fee rate is non-zero"),
         standard: FeeRate::new(10, 1).expect("standard fee rate is non-zero"),
         priority: FeeRate::new(100, 1).expect("priority fee rate is non-zero"),
+        quantization_mask: 1,
+    }
+}
+
+/// Construct the default [`DaemonHealth`] that every `TestDaemon`
+/// returns from `get_health`: a healthy, fully-synced daemon (peers
+/// present, `target_height == 0`). `TestDaemon` health is fixed to this
+/// value — the watchdog health-gate and health-failure paths are driven
+/// by the hermetic `StubDaemon` in the `submit_lifecycle` test module,
+/// which controls both health facts and submit outcomes.
+fn default_health() -> DaemonHealth {
+    DaemonHealth {
+        connections: 8,
+        height: 0,
+        target_height: 0,
     }
 }
 
@@ -313,7 +352,7 @@ impl TestDaemon {
     /// the height that becomes valid once it lands). The first
     /// `push_block` against an empty chain should be a genesis-style
     /// block at height 0 if the test downstream calls
-    /// `get_scannable_block_by_number(0)`.
+    /// `fetch_scannable_block(0)`.
     pub(crate) fn push_block(&self, block: ScannableBlock) {
         self.state
             .lock()
@@ -333,7 +372,7 @@ impl TestDaemon {
     /// `fork_height = 0` discards the entire chain (genesis included);
     /// the test then has to install a fresh genesis as `new_blocks[0]`.
     ///
-    /// Subsequent `get_scannable_block_by_number(h)` for
+    /// Subsequent `fetch_scannable_block(h)` for
     /// `h >= fork_height` returns the corresponding entry of
     /// `new_blocks`; `h < fork_height` is unaffected. The reported
     /// daemon height (via `get_height`) becomes
@@ -354,6 +393,33 @@ impl TestDaemon {
         );
         state.chain.truncate(keep);
         state.chain.extend(new_blocks);
+    }
+
+    /// Schedule a one-shot chain replacement that fires immediately
+    /// after `fetch_scannable_block(trigger_height)` serves its
+    /// block: the canonical chain is replaced at-and-above
+    /// `fork_height` with `new_blocks` (same contract as
+    /// [`Self::replace_chain_from`]). The trigger fetch itself still
+    /// serves the *pre-replacement* block, so the very next fetch
+    /// observes the post-reorg chain — a deterministic reorg landing
+    /// *between* two consecutive single-height fetches (the
+    /// intra-attempt straddle; SP-T2 sequence-coherence keystone).
+    ///
+    /// Calls **queue** in FIFO order: arm two (or more) to script a
+    /// sequence of reorgs within a single attempt, the front firing
+    /// when its `trigger_height` is served, then the next. This drives
+    /// the multi-reorg-per-attempt detection path.
+    pub(crate) fn replace_chain_after_fetch(
+        &self,
+        trigger_height: u64,
+        fork_height: u64,
+        new_blocks: Vec<ScannableBlock>,
+    ) {
+        self.state
+            .lock()
+            .expect("TestDaemon state poisoned")
+            .reorgs_after_fetch
+            .push_back((trigger_height, fork_height, new_blocks));
     }
 
     /// Cap the height that `get_height` reports at `cap`. Useful
@@ -379,7 +445,7 @@ impl TestDaemon {
     }
 
     /// Inject a one-shot error for the next
-    /// `get_scannable_block_by_number(height)` call. Multiple
+    /// `fetch_scannable_block(height)` call. Multiple
     /// invocations queue multiple errors at the same height (FIFO).
     /// Once the height's queue drains, subsequent fetches at that
     /// height return the canonical block.
@@ -500,8 +566,18 @@ impl Rpc for TestDaemon {
                 .map_err(|_| RpcError::InvalidNode("TestDaemon height exceeded usize".to_string()))
         }
     }
+}
 
-    fn get_scannable_block_by_number(
+impl DaemonEngine for TestDaemon {
+    type Error = RpcError;
+
+    /// Serve the in-memory chain directly, overriding the
+    /// [`block_fetch`](super::block_fetch) default (which would drive the
+    /// real RPC transport `TestDaemon::post` panics on). The body is the
+    /// former `Rpc::fetch_scannable_block` override, now returning the
+    /// `shekyl_wire`-typed [`ScannableBlock`]; the migration moved block
+    /// fetching from the `Rpc` surface to `DaemonEngine::fetch_scannable_block`.
+    fn fetch_scannable_block(
         &self,
         number: usize,
     ) -> impl Send + std::future::Future<Output = Result<ScannableBlock, RpcError>> {
@@ -532,15 +608,39 @@ impl Rpc for TestDaemon {
                 RpcError::InvalidNode("TestDaemon: height did not fit in usize".to_string())
             })?;
 
-            state.chain.get(idx).cloned().ok_or_else(|| {
+            let block = state.chain.get(idx).cloned().ok_or_else(|| {
                 RpcError::InvalidNode(format!("TestDaemon: no block at height {height}"))
-            })
+            })?;
+
+            // Scripted reorg queue: the FRONT entry fires after its
+            // trigger block is served, so the *next* fetch observes the
+            // post-reorg chain, then it pops and the following entry
+            // arms (see `replace_chain_after_fetch`). Front-only so a
+            // scripted sequence fires in strict FIFO order.
+            if state
+                .reorgs_after_fetch
+                .front()
+                .is_some_and(|(trigger, _, _)| *trigger == height)
+            {
+                let (_, fork_height, new_blocks) = state
+                    .reorgs_after_fetch
+                    .pop_front()
+                    .expect("checked front is_some above");
+                let keep = usize::try_from(fork_height)
+                    .expect("TestDaemon::reorgs_after_fetch: fork_height fits in usize");
+                assert!(
+                    keep <= state.chain.len(),
+                    "TestDaemon::reorgs_after_fetch: fork_height {fork_height} exceeds chain \
+                     length {}",
+                    state.chain.len()
+                );
+                state.chain.truncate(keep);
+                state.chain.extend(new_blocks);
+            }
+
+            Ok(block)
         }
     }
-}
-
-impl DaemonEngine for TestDaemon {
-    type Error = RpcError;
 
     fn get_fee_estimates(
         &self,
@@ -561,7 +661,12 @@ impl DaemonEngine for TestDaemon {
     ) -> impl Send + std::future::Future<Output = Result<TxSubmitOutcome, Self::Error>> {
         let state = self.state.clone();
         async move {
-            let hash = TxHash(shekyl_crypto_hash::cn_fast_hash(&tx_bytes));
+            // A real daemon only ever sees canonical wire txs, for which this yields the
+            // §11 tx id. The flat-hash fallback is for the dedup/error-draining plumbing
+            // tests below, which submit arbitrary (non-wire) bytes — those exercise the
+            // id-keyed dedup, which is format-agnostic, not the tx format.
+            let hash = crate::engine::transaction_submitter::canonical_tx_id_opt(&tx_bytes)
+                .unwrap_or_else(|| TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&tx_bytes)));
             let mut state = state.lock().expect("TestDaemon state poisoned");
             if let Some(err) = state.submit_errors.pop_front() {
                 return Err(err);
@@ -569,8 +674,18 @@ impl DaemonEngine for TestDaemon {
             if state.submitted_hashes.insert(hash) {
                 Ok(TxSubmitOutcome::Submitted { hash })
             } else {
-                Ok(TxSubmitOutcome::AlreadyKnown { hash })
+                Ok(TxSubmitOutcome::AlreadyInPool { hash })
             }
+        }
+    }
+
+    fn get_health(
+        &self,
+    ) -> impl Send + std::future::Future<Output = Result<DaemonHealth, Self::Error>> {
+        let state = self.state.clone();
+        async move {
+            let state = state.lock().expect("TestDaemon state poisoned");
+            Ok(state.health)
         }
     }
 }
@@ -578,7 +693,7 @@ impl DaemonEngine for TestDaemon {
 /// Build a minimal-valid `ScannableBlock` for `height` with the
 /// chosen `parent_hash`. The produced block has:
 ///
-/// - V2 miner transaction with `Input::Gen(height)` (passes
+/// - v3 miner transaction with `Input::Gen(height)` (passes
 ///   [`Block::new`]'s coinbase check).
 /// - No outputs in the miner transaction.
 /// - No non-miner transactions.
@@ -591,37 +706,45 @@ impl DaemonEngine for TestDaemon {
 /// their own `ScannableBlock` (see module docs).
 pub(crate) fn make_synthetic_block(height: u64, parent_hash: [u8; 32]) -> ScannableBlock {
     let header = BlockHeader {
-        hardfork_version: 1,
-        hardfork_signal: 0,
+        major_version: 1,
+        minor_version: 0,
         timestamp: height,
         previous: parent_hash,
         nonce: 0,
+        // This synthetic block carries no outputs (miner tx, `outputs: vec![]`),
+        // so it contributes zero curve-tree leaves and the tree's reconstructed
+        // root stays the empty-tree sentinel at every height. CT-5b's §3.3
+        // ingest verify compares the reconstructed root against this header
+        // field, so it must be the sentinel (not `[0u8; 32]`) for the verify to
+        // pass on the synthetic-block test paths.
+        curve_tree_root: shekyl_fcmp::tree::selene_hash_init(),
     };
 
-    let miner_prefix = TransactionPrefix {
-        additional_timelock: Timelock::None,
-        inputs: vec![Input::Gen(
-            usize::try_from(height).expect("synthetic block height fits in usize"),
-        )],
-        outputs: vec![],
-        extra: vec![],
+    // A coinbase carrying no outputs: the sole `Gen` input and a `Null` ct whose
+    // committed base is empty (one entry per output, zero outputs → empty vecs).
+    // `Scanner::scan` recovers nothing; `Block::hash` is well-defined.
+    let miner_transaction = Transaction {
+        prefix: TxPrefix {
+            unlock_time: 0,
+            inputs: vec![Input::Gen(height)],
+            outputs: vec![],
+            extra: vec![],
+        },
+        ct: Ct::Null(CtBase {
+            enc_amounts: vec![],
+            enc_labels: vec![],
+            commitments: vec![],
+        }),
     };
-
-    let miner_tx = Transaction::V2 {
-        prefix: miner_prefix,
-        proofs: None,
-    };
-
-    let block = Block::new(header, miner_tx, vec![]).expect(
-        "Block::new accepts a V2 miner-tx-only block by construction; \
-         the only failure mode is a non-Gen first input or wrong input count, \
-         neither of which applies here",
-    );
 
     ScannableBlock {
-        block,
+        block: Block {
+            header,
+            miner_transaction,
+            transaction_hashes: vec![],
+        },
         transactions: vec![],
-        output_index_for_first_ringct_output: None,
+        first_output_index: None,
     }
 }
 
@@ -666,7 +789,7 @@ mod tests {
         let expected_h2 = chain[2].block.hash();
         let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
 
-        let block = rpc.get_scannable_block_by_number(2).await.unwrap();
+        let block = rpc.fetch_scannable_block(2).await.unwrap();
         assert_eq!(block.block.hash(), expected_h2);
     }
 
@@ -674,8 +797,8 @@ mod tests {
     async fn parent_hash_chains_correctly() {
         // 3-block chain has heights 0, 1, 2; verify h=2 parents from h=1.
         let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
-        let h1 = rpc.get_scannable_block_by_number(1).await.unwrap();
-        let h2 = rpc.get_scannable_block_by_number(2).await.unwrap();
+        let h1 = rpc.fetch_scannable_block(1).await.unwrap();
+        let h2 = rpc.fetch_scannable_block(2).await.unwrap();
         assert_eq!(h2.block.header.previous, h1.block.hash());
     }
 
@@ -683,12 +806,7 @@ mod tests {
     async fn replace_chain_from_truncates_and_extends() {
         let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(5));
         // Fork at height 3: chain heights 0, 1, 2 survive; replace 3+.
-        let parent_h2 = rpc
-            .get_scannable_block_by_number(2)
-            .await
-            .unwrap()
-            .block
-            .hash();
+        let parent_h2 = rpc.fetch_scannable_block(2).await.unwrap().block.hash();
 
         let mut alt = Vec::new();
         let mut p = parent_h2;
@@ -702,7 +820,7 @@ mod tests {
         rpc.replace_chain_from(3, alt);
 
         assert_eq!(rpc.chain_len(), 5, "keep 3 + 2 new blocks => len 5");
-        let h3 = rpc.get_scannable_block_by_number(3).await.unwrap();
+        let h3 = rpc.fetch_scannable_block(3).await.unwrap();
         assert_eq!(h3.block.header.previous, parent_h2);
         assert_eq!(h3.block.header.timestamp, 9_003);
     }
@@ -729,8 +847,8 @@ mod tests {
         let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
         rpc.inject_block_fetch_failure(2, RpcError::ConnectionError("flaky".into()));
 
-        assert!(rpc.get_scannable_block_by_number(2).await.is_err());
-        assert!(rpc.get_scannable_block_by_number(2).await.is_ok());
+        assert!(rpc.fetch_scannable_block(2).await.is_err());
+        assert!(rpc.fetch_scannable_block(2).await.is_ok());
     }
 
     #[tokio::test]
@@ -741,12 +859,12 @@ mod tests {
         rpc.set_block_returns_malformed(1);
 
         for _ in 0..3 {
-            let err = rpc.get_scannable_block_by_number(1).await.unwrap_err();
+            let err = rpc.fetch_scannable_block(1).await.unwrap_err();
             assert!(matches!(err, RpcError::InvalidNode(_)));
         }
-        assert!(rpc.get_scannable_block_by_number(0).await.is_ok());
-        assert!(rpc.get_scannable_block_by_number(2).await.is_ok());
-        assert!(rpc.get_scannable_block_by_number(3).await.is_ok());
+        assert!(rpc.fetch_scannable_block(0).await.is_ok());
+        assert!(rpc.fetch_scannable_block(2).await.is_ok());
+        assert!(rpc.fetch_scannable_block(3).await.is_ok());
     }
 
     #[tokio::test]
@@ -768,7 +886,7 @@ mod tests {
         let chain = linear_chain(1);
         let expected = chain[0].block.hash();
         let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
-        let h0 = rpc.get_scannable_block_by_number(0).await.unwrap();
+        let h0 = rpc.fetch_scannable_block(0).await.unwrap();
         assert_eq!(h0.block.hash(), expected);
     }
 
@@ -776,7 +894,7 @@ mod tests {
     async fn fetching_past_chain_end_is_an_error() {
         // 2-block chain has heights 0, 1; height 2 is past the tip.
         let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(2));
-        let err = rpc.get_scannable_block_by_number(2).await.unwrap_err();
+        let err = rpc.fetch_scannable_block(2).await.unwrap_err();
         assert!(matches!(err, RpcError::InvalidNode(_)));
     }
 
@@ -801,6 +919,7 @@ mod tests {
             economy: FeeRate::new(7, 1).unwrap(),
             standard: FeeRate::new(70, 1).unwrap(),
             priority: FeeRate::new(700, 1).unwrap(),
+            quantization_mask: 1,
         };
         daemon.set_fee_estimates(custom);
         for _ in 0..3 {
@@ -823,7 +942,10 @@ mod tests {
         let outcome = daemon.submit_transaction(bytes.clone()).await.unwrap();
         match outcome {
             TxSubmitOutcome::Submitted { hash } => {
-                assert_eq!(hash, TxHash(shekyl_crypto_hash::cn_fast_hash(&bytes)));
+                assert_eq!(
+                    hash,
+                    TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&bytes))
+                );
             }
             other => panic!("expected Submitted, got {other:?}"),
         }
@@ -831,11 +953,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn submit_transaction_dedupes_retry_returns_already_known() {
+    async fn submit_transaction_dedupes_retry_returns_already_in_pool() {
         // Models the §5.2 retry contract: engine submits, network
         // glitches between submit and ack, engine retries with the
         // same tx_bytes; the daemon (and TestDaemon) reports
-        // AlreadyKnown rather than admitting a duplicate. Same hash
+        // AlreadyInPool rather than admitting a duplicate. Same hash
         // both times — caller correlates the two outcomes.
         let daemon = TestDaemon::with_seed(DEFAULT_TEST_SEED);
         let bytes = b"tx-beta".to_vec();
@@ -843,10 +965,10 @@ mod tests {
         let second = daemon.submit_transaction(bytes.clone()).await.unwrap();
         let third = daemon.submit_transaction(bytes.clone()).await.unwrap();
 
-        let expected = TxHash(shekyl_crypto_hash::cn_fast_hash(&bytes));
+        let expected = TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&bytes));
         assert!(matches!(first, TxSubmitOutcome::Submitted { hash } if hash == expected));
-        assert!(matches!(second, TxSubmitOutcome::AlreadyKnown { hash } if hash == expected));
-        assert!(matches!(third, TxSubmitOutcome::AlreadyKnown { hash } if hash == expected));
+        assert!(matches!(second, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected));
+        assert!(matches!(third, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected));
         assert_eq!(daemon.submitted_count(), 1, "dedup keeps the set size at 1");
     }
 
@@ -898,10 +1020,10 @@ mod tests {
         let bytes = b"tx-delta".to_vec();
         let first = daemon.submit_transaction(bytes.clone()).await.unwrap();
         let second_via_clone = clone.submit_transaction(bytes.clone()).await.unwrap();
-        let expected = TxHash(shekyl_crypto_hash::cn_fast_hash(&bytes));
+        let expected = TxHash::from_bytes(shekyl_crypto_hash::cn_fast_hash(&bytes));
         assert!(matches!(first, TxSubmitOutcome::Submitted { hash } if hash == expected));
         assert!(
-            matches!(second_via_clone, TxSubmitOutcome::AlreadyKnown { hash } if hash == expected)
+            matches!(second_via_clone, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected)
         );
     }
 

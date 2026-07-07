@@ -3,18 +3,15 @@ name = "helioselene"
 version = "0.1.0"
 description = "Implementation of Helios and Selene, a curve cycle towering Ed25519"
 license = "MIT"
-repository = "https://github.com/Shekyl-Foundation/shekyl-oxide/tree/main/crypto/helioselene"
-authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
+repository = "https://github.com/monero-oxide/monero-oxide/tree/main/crypto/helioselene"
+authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 keywords = ["helios", "selene", "ed25519", "ff", "group"]
 edition = "2021"
-rust-version = "1.66"
+rust-version = "1.68"
 
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
-
-[lints]
-workspace = true
 
 [dependencies]
 std-shims = { version = "0.1.4", default-features = false, optional = true }

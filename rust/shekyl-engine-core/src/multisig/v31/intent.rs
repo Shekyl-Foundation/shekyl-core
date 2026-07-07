@@ -9,6 +9,7 @@
 //! pipeline before proceeding to sign.
 
 use serde::{Deserialize, Serialize};
+use shekyl_units::AtomicUnits;
 
 /// Current SpendIntent version.
 pub const SPEND_INTENT_VERSION: u8 = 1;
@@ -30,11 +31,12 @@ pub const MAX_VALIDITY_SECS: u64 = 86400;
 // after Decision 14, copied the pre-Decision-14 value `10`). See
 // `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
 //
-// `RCT_TYPE_FCMP_PLUS_PLUS_PQC` is also generated; the `shekyl-oxide`
-// `ProofType` enum's `From<ProofType> for u8` is single-source within
-// that crate and is pinned to this generated value at the
-// const-evaluated `assert!` block below (see "Sentinel against silent
-// loss-of-meaning" notes).
+// `RCT_TYPE_FCMP_PLUS_PLUS_PQC` is also generated; the canonical wire ct-type
+// `shekyl_wire::transaction::CT_TYPE_FCMP` is pinned to it by the runtime tripwire
+// `wire_ct_type_matches_consensus_authority` below, and the generated value itself is
+// pinned to the genesis dense baseline (`1`) by the const-evaluated `assert!` block
+// below (see "Sentinel against silent loss-of-meaning" notes). (The former
+// `shekyl-oxide` `ProofType` enum was removed with its serializer in un-vendor slice 1.)
 include!(concat!(
     env!("OUT_DIR"),
     "/consensus_constants_generated.rs"
@@ -60,8 +62,8 @@ const _: () = assert!(
     "FCMP_REFERENCE_BLOCK_MAX_AGE diverged from baseline (100); review consensus implications before updating the sentinel"
 );
 const _: () = assert!(
-    RCT_TYPE_FCMP_PLUS_PLUS_PQC == 7,
-    "RCT_TYPE_FCMP_PLUS_PLUS_PQC diverged from baseline (7); changing the wire type number is a consensus rule change"
+    RCT_TYPE_FCMP_PLUS_PLUS_PQC == 1,
+    "RCT_TYPE_FCMP_PLUS_PLUS_PQC diverged from the genesis dense baseline (1, GENESIS_TX_WIRE_FORMAT.md §2.0); changing the wire type number is a consensus rule change"
 );
 
 /// Maximum recipients per intent (bounds allocation from untrusted input).
@@ -132,7 +134,7 @@ pub enum SpendIntentError {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IntentRecipient {
     pub address: Vec<u8>,
-    pub amount: u64,
+    pub amount: AtomicUnits,
 }
 
 impl PartialOrd for IntentRecipient {
@@ -167,7 +169,7 @@ pub struct SpendIntent {
     pub reference_block_hash: [u8; 32],
 
     pub recipients: Vec<IntentRecipient>,
-    pub fee: u64,
+    pub fee: AtomicUnits,
     pub input_global_indices: Vec<u64>,
 
     pub kem_randomness_seed: [u8; 32],
@@ -203,10 +205,10 @@ impl SpendIntent {
         for r in &self.recipients {
             buf.extend_from_slice(&(r.address.len() as u32).to_le_bytes());
             buf.extend_from_slice(&r.address);
-            buf.extend_from_slice(&r.amount.to_le_bytes());
+            buf.extend_from_slice(&r.amount.to_raw().to_le_bytes());
         }
 
-        buf.extend_from_slice(&self.fee.to_le_bytes());
+        buf.extend_from_slice(&self.fee.to_raw().to_le_bytes());
 
         buf.extend_from_slice(&(self.input_global_indices.len() as u32).to_le_bytes());
         for idx in &self.input_global_indices {
@@ -235,10 +237,10 @@ impl SpendIntent {
         for r in &self.recipients {
             buf.extend_from_slice(&(r.address.len() as u32).to_le_bytes());
             buf.extend_from_slice(&r.address);
-            buf.extend_from_slice(&r.amount.to_le_bytes());
+            buf.extend_from_slice(&r.amount.to_raw().to_le_bytes());
         }
 
-        buf.extend_from_slice(&self.fee.to_le_bytes());
+        buf.extend_from_slice(&self.fee.to_raw().to_le_bytes());
 
         buf.extend_from_slice(&(self.input_global_indices.len() as u32).to_le_bytes());
         for idx in &self.input_global_indices {
@@ -346,25 +348,18 @@ impl SpendIntent {
     }
 
     /// Validate balance (check 12 from SS9.2).
-    pub fn validate_balance(&self, input_amounts: &[u64]) -> Result<(), SpendIntentError> {
-        let inputs_sum: u64 = input_amounts
-            .iter()
-            .copied()
-            .try_fold(0u64, |acc, x| acc.checked_add(x))
+    pub fn validate_balance(&self, input_amounts: &[AtomicUnits]) -> Result<(), SpendIntentError> {
+        let inputs_sum = AtomicUnits::checked_sum(input_amounts.iter().copied())
             .ok_or_else(|| SpendIntentError::Serialization("input amounts overflow u64".into()))?;
-        let outputs_sum: u64 = self
-            .recipients
-            .iter()
-            .map(|r| r.amount)
-            .try_fold(0u64, |acc, x| acc.checked_add(x))
+        let outputs_sum = AtomicUnits::checked_sum(self.recipients.iter().map(|r| r.amount))
             .ok_or_else(|| SpendIntentError::Serialization("output amounts overflow u64".into()))?;
         let outputs_plus_fee = outputs_sum
             .checked_add(self.fee)
             .ok_or_else(|| SpendIntentError::Serialization("outputs + fee overflow u64".into()))?;
         if inputs_sum != outputs_plus_fee {
             return Err(SpendIntentError::BalanceMismatch {
-                inputs: inputs_sum,
-                outputs_plus_fee,
+                inputs: inputs_sum.to_raw(),
+                outputs_plus_fee: outputs_plus_fee.to_raw(),
             });
         }
         Ok(())
@@ -379,7 +374,7 @@ pub struct ChainStateFingerprint {
     pub reference_block_hash: [u8; 32],
     pub input_global_indices: Vec<u64>,
     pub input_eligible_heights: Vec<u64>,
-    pub input_amounts: Vec<u64>,
+    pub input_amounts: Vec<AtomicUnits>,
     pub input_assigned_prover_indices: Vec<u8>,
 }
 
@@ -404,7 +399,7 @@ impl ChainStateFingerprint {
         let mut sorted_amounts = self.input_amounts.clone();
         sorted_amounts.sort();
         for a in &sorted_amounts {
-            preimage.extend_from_slice(&a.to_le_bytes());
+            preimage.extend_from_slice(&a.to_raw().to_le_bytes());
         }
 
         let mut sorted_provers = self.input_assigned_prover_indices.clone();
@@ -436,14 +431,14 @@ mod tests {
             recipients: vec![
                 IntentRecipient {
                     address: vec![1, 2, 3],
-                    amount: 100,
+                    amount: AtomicUnits::from_raw(100),
                 },
                 IntentRecipient {
                     address: vec![4, 5, 6],
-                    amount: 200,
+                    amount: AtomicUnits::from_raw(200),
                 },
             ],
-            fee: 10,
+            fee: AtomicUnits::from_raw(10),
             input_global_indices: vec![42, 99],
             kem_randomness_seed: [0xDD; 32],
             chain_state_fingerprint: [0; 32],
@@ -463,7 +458,7 @@ mod tests {
     fn intent_hash_changes_with_content() {
         let i1 = make_test_intent();
         let mut i2 = make_test_intent();
-        i2.fee = 20;
+        i2.fee = AtomicUnits::from_raw(20);
         assert_ne!(i1.intent_hash(), i2.intent_hash());
     }
 
@@ -604,26 +599,22 @@ mod tests {
         // authority closes the drift class.
         assert_eq!(FCMP_REFERENCE_BLOCK_MIN_AGE, 5);
         assert_eq!(FCMP_REFERENCE_BLOCK_MAX_AGE, 100);
-        assert_eq!(RCT_TYPE_FCMP_PLUS_PLUS_PQC, 7);
+        assert_eq!(RCT_TYPE_FCMP_PLUS_PLUS_PQC, 1);
     }
 
     #[test]
-    fn shekyl_oxide_proof_type_matches_consensus_authority() {
-        // `shekyl-oxide::fcmp::ProofType::FcmpPlusPlusPqc` encodes its
-        // u8 wire value via runtime `From` (not const-evaluable), so
-        // the const-evaluated `assert!` block at the top of the
-        // module can't reach it. This runtime check is the
-        // next-cheapest tripwire: if anyone edits the `ProofType => 7`
-        // arms in shekyl-oxide without also updating
-        // `config/consensus_constants.json`, this test fires.
-        // shekyl-oxide is the disposable Monero fork (per
-        // `10-shekyl-first.mdc`); the consensus authority lives in the
-        // Shekyl-core JSON, and shekyl-oxide must follow.
-        use shekyl_oxide::fcmp::ProofType;
+    fn wire_ct_type_matches_consensus_authority() {
+        // Tripwire on the canonical FCMP++ ct-type wire value: if anyone edits
+        // `shekyl_wire::transaction::CT_TYPE_FCMP` (the genesis dense ct tag, `1`)
+        // without also updating `config/consensus_constants.json`, this test fires.
+        // `shekyl-wire` is the canonical genesis serializer; the consensus authority
+        // lives in the Shekyl-core JSON, and the wire layer must follow.
+        // (Re-pointed from the now-deleted `shekyl_oxide::fcmp::ProofType` — its
+        // serializer was removed in un-vendor slice 1.)
         assert_eq!(
-            u8::from(ProofType::FcmpPlusPlusPqc),
+            shekyl_wire::transaction::CT_TYPE_FCMP,
             RCT_TYPE_FCMP_PLUS_PLUS_PQC,
-            "shekyl-oxide ProofType::FcmpPlusPlusPqc wire value drifted from \
+            "shekyl-wire CT_TYPE_FCMP wire value drifted from \
              config/consensus_constants.json"
         );
     }
@@ -649,14 +640,16 @@ mod tests {
     #[test]
     fn validate_balance_passes() {
         let intent = make_test_intent();
-        intent.validate_balance(&[210, 100]).unwrap();
+        intent
+            .validate_balance(&[AtomicUnits::from_raw(210), AtomicUnits::from_raw(100)])
+            .unwrap();
     }
 
     #[test]
     fn validate_balance_rejects_mismatch() {
         let intent = make_test_intent();
         assert!(matches!(
-            intent.validate_balance(&[100, 100]),
+            intent.validate_balance(&[AtomicUnits::from_raw(100), AtomicUnits::from_raw(100)]),
             Err(SpendIntentError::BalanceMismatch { .. })
         ));
     }
@@ -667,7 +660,7 @@ mod tests {
             reference_block_hash: [0xAA; 32],
             input_global_indices: vec![42, 99],
             input_eligible_heights: vec![800, 850],
-            input_amounts: vec![100, 200],
+            input_amounts: vec![AtomicUnits::from_raw(100), AtomicUnits::from_raw(200)],
             input_assigned_prover_indices: vec![0, 1],
         };
         let h1 = fp.compute();
@@ -681,7 +674,7 @@ mod tests {
             reference_block_hash: [0xAA; 32],
             input_global_indices: vec![42],
             input_eligible_heights: vec![800],
-            input_amounts: vec![100],
+            input_amounts: vec![AtomicUnits::from_raw(100)],
             input_assigned_prover_indices: vec![0],
         };
         let fp2 = ChainStateFingerprint {

@@ -9,6 +9,21 @@
 
 namespace shekyl {
 
+// ─── Base block subsidy (0h) ────────────────────────────────────────────────
+
+// Base block subsidy before the weight penalty and release multiplier.
+//
+// The CryptoNote ESF curve (`max((MONEY_SUPPLY - already_generated) >> esf,
+// tail)`) is canonical in `shekyl-economics`; this wrapper mirrors the
+// compute_fee_burn / compute_emission_split shape so `get_block_reward`
+// reads as a thin orchestrator over the Rust primitive (STAGE_1_PR_7 §5.8,
+// C2c cutover). The FFI clamps `already_generated_coins` at MONEY_SUPPLY and
+// cannot fail across the boundary.
+inline uint64_t base_subsidy_before_penalty(uint64_t already_generated_coins)
+{
+    return shekyl_base_block_reward(already_generated_coins);
+}
+
 // ─── Component 2: Fee Burn ──────────────────────────────────────────────────
 
 struct BurnResult {

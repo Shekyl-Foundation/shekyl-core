@@ -80,6 +80,17 @@ namespace
 
         return BulletproofPlus{keyV(n_outs, I), I, I, I, I, I, I, keyV(nrl, I), keyV(nrl, I)};
     }
+
+    /// Stub builder leaves `enc_labels` zeroed; production signing must use
+    /// `construct_output` precomputed values. `genRctFcmpPlusPlus` rejects
+    /// any stub all-zero `enc_label` outside TRANSACTION_CREATE_FAKE mode.
+    static bool enc_label_is_stub_zeroed(const std::array<uint8_t, 9> &enc)
+    {
+        for (uint8_t b : enc)
+            if (b != 0)
+                return false;
+        return true;
+    }
 }
 
     void fill_construct_tx_rct_stub(rctSig &rv, const key &message, xmr_amount txnFee,
@@ -100,6 +111,7 @@ namespace
 
         rv.outPk.resize(n_out);
         rv.enc_amounts.resize(n_out);
+        rv.enc_labels.resize(n_out);
         for (size_t i = 0; i < n_out; ++i)
             rv.outPk[i].dest = copy(destinations[i]);
 
@@ -111,10 +123,7 @@ namespace
 
         key sumout = zero();
         for (size_t i = 0; i < n_out; ++i)
-        {
             sc_add(sumout.bytes, masks[i].bytes, sumout.bytes);
-            memset(rv.enc_amounts[i].data(), 0, rv.enc_amounts[i].size());
-        }
 
         rv.p.pseudoOuts.resize(n_in);
         keyV a(n_in);
@@ -202,27 +211,33 @@ namespace
           CHECK_AND_ASSERT_MES(rv.outPk.size() == n_bulletproof_plus_amounts(rv.p.bulletproofs_plus), false, "Mismatched sizes of outPk and bulletproofs_plus");
           CHECK_AND_ASSERT_MES(rv.pseudoOuts.empty(), false, "rv.pseudoOuts is not empty");
           CHECK_AND_ASSERT_MES(rv.outPk.size() == rv.enc_amounts.size(), false, "Mismatched sizes of outPk and rv.enc_amounts");
+          CHECK_AND_ASSERT_MES(rv.enc_labels.size() == rv.enc_amounts.size(), false, "Mismatched sizes of enc_labels and rv.enc_amounts");
         }
 
         for (const rctSig *rvp: rvv)
         {
           const rctSig &rv = *rvp;
-          const keyV &pseudoOuts = rv.p.pseudoOuts;
 
-          rct::keyV masks(rv.outPk.size());
-          for (size_t i = 0; i < rv.outPk.size(); i++) {
-            masks[i] = rv.outPk[i].mask;
-          }
-          key sumOutpks = addKeys(masks);
-          DP(sumOutpks);
-          const key txnFeeKey = scalarmultH(d2h(rv.txnFee));
-          addKeys(sumOutpks, txnFeeKey, sumOutpks);
-
-          key sumPseudoOuts = addKeys(pseudoOuts);
-          DP(sumPseudoOuts);
-
-          if (!equalKeys(sumPseudoOuts, sumOutpks)) {
-            LOG_PRINT_L1("Sum check failed");
+          // CT cleartext balance `sum(pseudoOuts) = sum(outPk masks) + fee*H`,
+          // single-sourced in Rust (`shekyl-ct-balance::verify_ct_balance`) and
+          // shared with construct (`shekyl-tx-builder`) and the archival bond-post
+          // path, so the three cannot diverge. Canonical prime-order commitment
+          // points per `GENESIS_TX_WIRE_FORMAT.md` §2.3 (the native
+          // `addKeys`/`equalKeys` block this replaces summed raw points).
+          std::vector<uint8_t> pseudo_flat(rv.p.pseudoOuts.size() * 32);
+          for (size_t i = 0; i < rv.p.pseudoOuts.size(); ++i)
+            memcpy(pseudo_flat.data() + i * 32, rv.p.pseudoOuts[i].bytes, 32);
+          std::vector<uint8_t> mask_flat(rv.outPk.size() * 32);
+          for (size_t i = 0; i < rv.outPk.size(); ++i)
+            memcpy(mask_flat.data() + i * 32, rv.outPk[i].mask.bytes, 32);
+          const uint8_t balance_rc = shekyl_verify_ct_balance(
+              pseudo_flat.empty() ? nullptr : pseudo_flat.data(),
+              rv.p.pseudoOuts.size(),
+              mask_flat.empty() ? nullptr : mask_flat.data(),
+              rv.outPk.size(),
+              rv.txnFee);
+          if (balance_rc != SHEKYL_CT_BALANCE_OK) {
+            LOG_PRINT_L1("Sum check failed (rc=" << static_cast<unsigned>(balance_rc) << ")");
             return false;
           }
 
@@ -254,6 +269,126 @@ namespace
       return verRctSemanticsSimple(std::vector<const rctSig*>(1, &rv));
     }
 
+    bool verRctSemanticsBondPost(const rctSig &rv, const uint64_t bond_credit, const uint64_t bond_debit)
+    {
+      try
+      {
+        CHECK_AND_ASSERT_MES(rv.type == RCTTypeFcmpPlusPlusPqc, false,
+            "verRctSemanticsBondPost called on unsupported rctSig type");
+        CHECK_AND_ASSERT_MES(!rv.p.fcmp_pp_proof.empty(), false,
+            "verRctSemanticsBondPost requires non-empty FCMP++ proof");
+        CHECK_AND_ASSERT_MES(rv.pseudoOuts.empty(), false, "legacy pseudoOuts must be empty");
+        CHECK_AND_ASSERT_MES(rv.outPk.size() == n_bulletproof_plus_amounts(rv.p.bulletproofs_plus),
+            false, "Mismatched sizes of outPk and bulletproofs_plus");
+        CHECK_AND_ASSERT_MES(rv.outPk.size() == rv.enc_amounts.size(), false,
+            "Mismatched sizes of outPk and rv.enc_amounts");
+        CHECK_AND_ASSERT_MES(rv.enc_labels.size() == rv.enc_amounts.size(), false,
+            "Mismatched sizes of enc_labels and rv.enc_amounts");
+        if (!rv.p.bulletproofs_plus.empty()
+            && !is_canonical_bulletproof_plus_layout(rv.p.bulletproofs_plus))
+        {
+          LOG_PRINT_L1("Bond-post bulletproof_plus is not canonical");
+          return false;
+        }
+        std::vector<uint8_t> pseudo_flat;
+        pseudo_flat.reserve(rv.p.pseudoOuts.size() * 32);
+        for (const key &k : rv.p.pseudoOuts)
+          pseudo_flat.insert(pseudo_flat.end(), k.bytes, k.bytes + 32);
+        std::vector<uint8_t> mask_flat;
+        mask_flat.reserve(rv.outPk.size() * 32);
+        for (const ctkey &op : rv.outPk)
+          mask_flat.insert(mask_flat.end(), op.mask.bytes, op.mask.bytes + 32);
+        const uint8_t balance_rc = shekyl_archival_verify_bond_post_ct_balance(
+            pseudo_flat.empty() ? nullptr : pseudo_flat.data(),
+            rv.p.pseudoOuts.size(),
+            mask_flat.empty() ? nullptr : mask_flat.data(),
+            rv.outPk.size(),
+            rv.txnFee,
+            bond_credit,
+            bond_debit);
+        if (balance_rc != SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK)
+        {
+          LOG_PRINT_L1("Bond-post sum check failed (rc=" << static_cast<unsigned>(balance_rc) << ")");
+          return false;
+        }
+
+        std::vector<const BulletproofPlus*> bpp_proofs;
+        for (size_t i = 0; i < rv.p.bulletproofs_plus.size(); ++i)
+          bpp_proofs.push_back(&rv.p.bulletproofs_plus[i]);
+        if (!bpp_proofs.empty() && !verBulletproofPlus(bpp_proofs))
+        {
+          LOG_PRINT_L1("Bond-post aggregate range proof verification failed");
+          return false;
+        }
+        return true;
+      }
+      catch (const std::exception &e)
+      {
+        LOG_PRINT_L1("Error in verRctSemanticsBondPost: " << e.what());
+        return false;
+      }
+      catch (...)
+      {
+        LOG_PRINT_L1("Error in verRctSemanticsBondPost, but not an actual exception");
+        return false;
+      }
+    }
+
+    bool verRctSemanticsFeeOnly(const rctSig &rv)
+    {
+      try
+      {
+        CHECK_AND_ASSERT_MES(rv.type == RCTTypeFcmpPlusPlusPqc, false,
+            "verRctSemanticsFeeOnly called on unsupported rctSig type");
+        CHECK_AND_ASSERT_MES(rv.p.fcmp_pp_proof.empty(), false, "FCMP++ proof must be empty");
+        CHECK_AND_ASSERT_MES(rv.pseudoOuts.empty(), false, "legacy pseudoOuts must be empty");
+        CHECK_AND_ASSERT_MES(rv.p.pseudoOuts.empty(), false, "pseudoOuts must be empty");
+        CHECK_AND_ASSERT_MES(rv.outPk.size() == n_bulletproof_plus_amounts(rv.p.bulletproofs_plus),
+            false, "Mismatched sizes of outPk and bulletproofs_plus");
+        CHECK_AND_ASSERT_MES(rv.outPk.size() == rv.enc_amounts.size(), false,
+            "Mismatched sizes of outPk and rv.enc_amounts");
+        CHECK_AND_ASSERT_MES(rv.enc_labels.size() == rv.enc_amounts.size(), false,
+            "Mismatched sizes of enc_labels and rv.enc_amounts");
+
+        // Fee-only CT balance: `sum(outPk masks) + fee*H = identity` — the general
+        // balance with an empty pseudoOut side (asserted above), through the same
+        // single-sourced `shekyl_verify_ct_balance` (§2.3).
+        std::vector<uint8_t> mask_flat(rv.outPk.size() * 32);
+        for (size_t i = 0; i < rv.outPk.size(); ++i)
+          memcpy(mask_flat.data() + i * 32, rv.outPk[i].mask.bytes, 32);
+        const uint8_t balance_rc = shekyl_verify_ct_balance(
+            nullptr, 0,
+            mask_flat.empty() ? nullptr : mask_flat.data(),
+            rv.outPk.size(),
+            rv.txnFee);
+        if (balance_rc != SHEKYL_CT_BALANCE_OK)
+        {
+          LOG_PRINT_L1("Sum check failed (rc=" << static_cast<unsigned>(balance_rc) << ")");
+          return false;
+        }
+
+        std::vector<const BulletproofPlus*> bpp_proofs;
+        for (size_t i = 0; i < rv.p.bulletproofs_plus.size(); ++i)
+          bpp_proofs.push_back(&rv.p.bulletproofs_plus[i]);
+        if (!bpp_proofs.empty() && !verBulletproofPlus(bpp_proofs))
+        {
+          LOG_PRINT_L1("Aggregate range proof verification failed");
+          return false;
+        }
+        return true;
+      }
+      catch (const std::exception &e)
+      {
+        LOG_PRINT_L1("Error in verRctSemanticsFeeOnly: " << e.what());
+        return false;
+      }
+      catch (...)
+      {
+        LOG_PRINT_L1("Error in verRctSemanticsFeeOnly, but not an actual exception");
+        return false;
+      }
+    }
+
     //------------------------------------------------------------------------------------------------------------------------------
     // FCMP++ transaction construction: replaces ring signatures with a single
     // full-chain membership proof plus Bulletproofs+ range proofs.
@@ -276,6 +411,7 @@ namespace
         const std::vector<xmr_amount> &outamounts,
         const keyV &commitment_masks,
         const std::vector<std::array<uint8_t, 9>> &enc_amounts_precomputed,
+        const std::vector<std::array<uint8_t, 9>> &enc_labels_precomputed,
         const keyV &spend_key_y,
         xmr_amount txnFee,
         const crypto::hash &referenceBlock,
@@ -292,6 +428,7 @@ namespace
         CHECK_AND_ASSERT_THROW_MES(outamounts.size() == destinations.size(), "Different number of amounts/destinations");
         CHECK_AND_ASSERT_THROW_MES(commitment_masks.size() == destinations.size(), "Different number of commitment_masks/destinations");
         CHECK_AND_ASSERT_THROW_MES(enc_amounts_precomputed.size() == destinations.size(), "Different number of enc_amounts_precomputed/destinations");
+        CHECK_AND_ASSERT_THROW_MES(enc_labels_precomputed.size() == destinations.size(), "Different number of enc_labels_precomputed/destinations");
         CHECK_AND_ASSERT_THROW_MES(pqc_pk_hashes.size() == inamounts.size(), "Different number of pqc_pk_hashes/inputs");
         CHECK_AND_ASSERT_THROW_MES(spend_key_y.size() == inamounts.size(), "Different number of spend_key_y/inputs");
         CHECK_AND_ASSERT_THROW_MES(tree_paths.size() == inamounts.size(), "Different number of tree_paths/inputs");
@@ -307,6 +444,7 @@ namespace
         // --- Outputs: destinations + enc_amounts ---
         rv.outPk.resize(destinations.size());
         rv.enc_amounts.resize(destinations.size());
+        rv.enc_labels.resize(destinations.size());
         for (size_t i = 0; i < destinations.size(); i++)
             rv.outPk[i].dest = copy(destinations[i]);
 
@@ -335,12 +473,22 @@ namespace
                 outSk[i].mask = masks[i];
             }
 
-            // Use pre-computed enc_amounts (HKDF k_amount XOR + amount_tag) from construct_output.
+            // Use pre-computed enc_amounts / enc_labels from construct_output.
             key sumout = zero();
             for (size_t i = 0; i < outSk.size(); ++i)
             {
                 sc_add(sumout.bytes, outSk[i].mask.bytes, sumout.bytes);
                 rv.enc_amounts[i] = enc_amounts_precomputed[i];
+                rv.enc_labels[i] = enc_labels_precomputed[i];
+            }
+            if (hwdev.get_mode() != hw::device::TRANSACTION_CREATE_FAKE)
+            {
+                for (const auto &enc : enc_labels_precomputed)
+                {
+                    CHECK_AND_ASSERT_THROW_MES(
+                        !enc_label_is_stub_zeroed(enc),
+                        "enc_labels must be construct_output precomputed values, not stub zero-fill");
+                }
             }
 
             // --- Pseudo-out blinding factors (balance proof) ---

@@ -2,7 +2,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! iai-callgrind companion to
+//! gungraun companion to
 //! `engine_trait_bench_key_account_public_address.rs`.
 //!
 //! `KeyEngine` is `pub(crate)` in `shekyl-engine-core`, so the trait
@@ -19,7 +19,7 @@
 //! `engine_trait_bench_*` threshold class (bidirectional ±10%
 //! slowdown / ±25% speedup).
 //!
-//! Requires `cargo install iai-callgrind-runner` and a working
+//! Requires `cargo install gungraun-runner` and a working
 //! Valgrind install. See `docs/design/STAGE_0_HARNESS.md` §3 for the
 //! existing harness substrate this bench plugs into.
 //!
@@ -30,7 +30,7 @@
 //! derivation, allocation, or arithmetic. The call chain is the
 //! trait-dispatch ceremony (~10 instructions per
 //! `engine_trait_bench_ledger_synced_height_iai.rs`'s expected
-//! range) plus a single struct-field reference load. iai-callgrind's
+//! range) plus a single struct-field reference load. gungraun's
 //! deterministic instruction count is the load-bearing signal for
 //! this workload class because criterion's `median_ns` reflects
 //! optimizer amortization across the iteration loop (the §4.4 hoisting
@@ -72,11 +72,10 @@
 //!
 //! Boundary-cost discipline is preserved: per §4.2, any fixture field
 //! exceeding 64 bytes goes behind `Box<T>` so the bench-function
-//! boundary moves only pointer-sized data, keeping iai-callgrind's
+//! boundary moves only pointer-sized data, keeping gungraun's
 //! residual boundary cost at ~5–10 instructions instead of dominating
 //! the measurement. `LocalKeys` is substantially larger than 64 bytes
-//! (carries an `AllKeysBlob` plus state-shaped fields and a
-//! subaddress-registry `RwLock`); `Box<LocalKeys>` moves only the
+//! (carries an `AllKeysBlob` plus state-shaped fields); `Box<LocalKeys>` moves only the
 //! pointer.
 //!
 //! # Naming alignment
@@ -88,11 +87,11 @@
 //! load-bearing identifier. All three names share the
 //! `engine_trait_bench_key_account_public_address` stem so PR
 //! reviewers grepping for the workload find consistent surface
-//! across the criterion / iai pair and the manifest row.
+//! across the criterion / gungraun pair and the manifest row.
 
 use std::hint::black_box;
 
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use shekyl_engine_core::__bench_internals::{engine_account_public_address_for_bench, LocalKeys};
 
 mod common;

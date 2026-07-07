@@ -1,7 +1,7 @@
 //! LWMA-1 difficulty adjustment for Shekyl.
 //!
 //! Implements the difficulty-adjustment algorithm ratified at Phase 0
-//! of [`docs/design/DAA_LWMA1.md`](../../docs/design/DAA_LWMA1.md):
+//! of [`docs/completed/DAA_LWMA1.md`](../../docs/completed/DAA_LWMA1.md):
 //! the canonical [zawy12 LWMA-1] window-shape with the Shekyl-specific
 //! refinements documented in §5.3 step 2 (running-max + signed-
 //! solvetime + symmetric `±6*T` clamp) defending against the
@@ -20,15 +20,19 @@
 //!   safe Rust primitives; the FFI shim (Phase 3, in
 //!   `rust/shekyl-ffi`) is the only `unsafe` boundary in the LWMA-1
 //!   landing.
-//! - Leaf crate per `docs/design/DAA_LWMA1.md` §2.1: zero internal
+//! - Leaf crate per `docs/completed/DAA_LWMA1.md` §2.1: zero internal
 //!   workspace dependencies. The build script reads
 //!   `config/consensus_constants.json` directly.
 //!
 //! # Public surface
 //!
-//! - [`lwma1_next`] — the algorithm. Inputs are
+//! - [`lwma1_next`] — the difficulty-adjustment algorithm. Inputs are
 //!   `(chain_height, timestamps, cumulative_difficulties)`; the
 //!   output is the difficulty target for the next block.
+//! - [`check_hash`] — the PoW-target predicate: does a 256-bit hash
+//!   satisfy a 128-bit difficulty? (`hash * difficulty < 2^256`.)
+//!   Ported from the inherited C++ `check_hash`/`_64`/`_128` family
+//!   into a single unified path.
 //! - [`is_timestamp_below_ftl`] and [`is_above_mtp`] — coupled
 //!   timestamp-validation predicates per §5.5.
 //! - Public consensus constants `N`, `T_SECONDS`, `FTL_SECONDS`,
@@ -40,17 +44,19 @@
 //! `ShekylU128` ABI) lives in `rust/shekyl-ffi/src/lib.rs` and is
 //! Phase 3 work, not Phase 1. This crate exposes only the safe-Rust
 //! API; the FFI shim wraps it with the `#[repr(C)]` ABI and `i32`
-//! error codes documented in `docs/design/DAA_LWMA1.md` §6.1.
+//! error codes documented in `docs/completed/DAA_LWMA1.md` §6.1.
 
 #![no_std]
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 
+mod check_hash;
 pub mod consts;
 mod error;
 mod lwma1;
 mod timestamp;
 
+pub use check_hash::check_hash;
 pub use consts::{
     FTL_SECONDS, GENESIS_DIFFICULTY, MTP_WINDOW, MTP_WINDOW_USIZE, N, N_USIZE, T_SECONDS,
 };

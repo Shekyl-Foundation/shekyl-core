@@ -27,6 +27,7 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <algorithm>
+#include <limits>
 #include <boost/range/adaptor/reversed.hpp>
 
 #include "string_tools.h"
@@ -212,23 +213,30 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
     {
       add_spent_key(std::get<txin_to_key>(tx_input).k_image);
     }
-    else if (std::holds_alternative<txin_stake_claim>(tx_input))
-    {
-      const auto& claim = std::get<txin_stake_claim>(tx_input);
-      add_spent_key(claim.k_image);
-      set_staker_claim_watermark(claim.staked_output_index, claim.to_height);
-      uint64_t pool_balance = get_staker_pool_balance();
-      if (claim.amount > pool_balance)
-        throw std::runtime_error("FATAL: claim amount " + std::to_string(claim.amount)
-          + " exceeds staker pool balance " + std::to_string(pool_balance)
-          + " for staked output " + std::to_string(claim.staked_output_index)
-          + " — validation should have rejected this transaction");
-      set_staker_pool_balance(pool_balance - claim.amount);
-    }
     else if (std::holds_alternative<txin_gen>(tx_input))
     {
       /* nothing to do here */
       miner_tx = true;
+    }
+    else if (std::holds_alternative<txin_archival_serve_credit_response>(tx_input))
+    {
+      const auto& resp = std::get<txin_archival_serve_credit_response>(tx_input);
+      set_archival_serve_credit_bit(resp.p_canonical_id, resp.shard_id, resp.settlement_epoch);
+    }
+    else if (std::holds_alternative<txin_archival_bond_post>(tx_input))
+    {
+      const auto& bond = std::get<txin_archival_bond_post>(tx_input);
+      if (bond.post_kind != static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
+        throw std::runtime_error("FATAL: bond-post connect supports JoinMarket only at genesis");
+      const uint64_t block_height = get_block_height(blk_hash);
+      const uint64_t join_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
+      put_archival_bond_record(bond.p_canonical_id, bond.hybrid_public_key, join_epoch,
+        bond.bonded_total_atomic, static_cast<uint8_t>(bond.holdings.kind),
+        bond.holdings.shard_ids);
+      const uint64_t bonded_total = get_total_bonded_atomic();
+      if (bond.bond_credit > std::numeric_limits<uint64_t>::max() - bonded_total)
+        throw std::runtime_error("FATAL: total_bonded_atomic overflow on bond credit");
+      set_total_bonded_atomic(bonded_total + bond.bond_credit);
     }
     else
     {
@@ -380,15 +388,6 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
               ? block_height_raw + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
               : block_height_raw + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
         }
-        else if (std::holds_alternative<txout_to_staked_key>(vout.target))
-        {
-          const auto& staked = std::get<txout_to_staked_key>(vout.target);
-          output_key = staked.key;
-          const uint64_t effective_lock_until = block_height_raw + shekyl_stake_lock_blocks(staked.lock_tier);
-          maturity_raw = std::max(
-              effective_lock_until,
-              block_height_raw + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE);
-        }
         else
           continue;
 
@@ -420,7 +419,17 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
       collect_outputs(tx_pair.first, false);
 
     if (new_output_count > 0)
+    {
       grow_curve_tree(leaf_data, new_output_count);
+
+      // Segment-freeze connect hook (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.1):
+      // runs after grow so a segment completed at this height is countable by
+      // an epoch close at this height (`freeze_height <= H_close`, inclusive).
+      // Gated on the same leaf-count-change condition as grow: with no new
+      // leaves the frozen-segment count cannot cross a boundary, so the hook
+      // would be a pure no-op — and a wasted per-block DB read across sync.
+      process_archival_segment_freezes_at_height(prev_height + 1);
+    }
 
     // TODO(optimization): checkpoint save + intermediate layer pruning run
     // synchronously here.  For trees with millions of outputs this could add
@@ -445,6 +454,9 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
 
   m_hardfork->add(blk, prev_height);
 
+  process_archival_slash_at_height(prev_height + 1);
+  process_archival_epoch_close_at_height(prev_height + 1);
+
   ++num_calls;
 
   return prev_height;
@@ -463,6 +475,8 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   // decrements the chain height, so staked-output eligibility checks use the
   // same height that add_block() used when the outputs were inserted.
   const uint64_t removed_block_height = height();
+  revert_archival_slashes_at_height(removed_block_height);
+  revert_archival_epoch_close_at_height(removed_block_height);
   remove_block();
 
   const uint64_t block_height = removed_block_height;
@@ -524,6 +538,16 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
       trim_curve_tree(drained_count);
     }
 
+    // Segment-freeze pop hook (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.2):
+    // after the trim, delete every registry row above the post-trim
+    // frozen-segment count. Runs after revert_archival_epoch_close_at_height
+    // (above) so the close revert saw the rows the close saw. Gated on the same
+    // leaf-count-change condition as trim: with no leaves trimmed the
+    // frozen-segment count cannot un-cross a boundary, so the hook is a pure
+    // no-op — and a wasted per-block DB read across a reorg-free pop.
+    if (drained_count > 0)
+      revert_archival_segment_freezes();
+
     // Step 4: Restore drained leaves back to the pending table.
     for (const auto& entry : drain_entries)
       add_pending_tree_leaf(entry.maturity, entry.output, entry.leaf.data());
@@ -556,39 +580,22 @@ void BlockchainDB::remove_transaction(const crypto::hash& tx_hash)
     {
       remove_spent_key(std::get<txin_to_key>(tx_input).k_image);
     }
-    else if (std::holds_alternative<txin_stake_claim>(tx_input))
+    else if (std::holds_alternative<txin_archival_serve_credit_response>(tx_input))
     {
-      const auto& claim = std::get<txin_stake_claim>(tx_input);
-      remove_spent_key(claim.k_image);
-
-      // Restore the watermark to its pre-claim state.
-      // The current watermark is claim.to_height (set by add_transaction).
-      // The pre-claim watermark was claim.from_height IF a watermark existed,
-      // or absent if this was the first claim.
-      // We detect "first claim" by checking if from_height matches the
-      // staked output's creation height — if so, no watermark existed before.
-      uint64_t current_wm = get_staker_claim_watermark(claim.staked_output_index);
-      if (current_wm == claim.to_height)
+      const auto& resp = std::get<txin_archival_serve_credit_response>(tx_input);
+      remove_archival_serve_credit_bit(resp.p_canonical_id, resp.shard_id, resp.settlement_epoch);
+    }
+    else if (std::holds_alternative<txin_archival_bond_post>(tx_input))
+    {
+      const auto& bond = std::get<txin_archival_bond_post>(tx_input);
+      if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
       {
-        // This claim set the watermark. Restore to pre-claim state.
-        // If from_height equals the watermark the previous claim set,
-        // restore it; otherwise this was the first claim, remove entirely.
-        uint64_t staked_creation_height = 0;
-        try {
-          tx_out_index oi = get_output_tx_and_index_from_global(claim.staked_output_index);
-          staked_creation_height = get_tx_block_height(oi.first);
-        } catch (...) {
-          staked_creation_height = 0;
-        }
-
-        if (claim.from_height <= staked_creation_height)
-          remove_staker_claim_watermark(claim.staked_output_index);
-        else
-          set_staker_claim_watermark(claim.staked_output_index, claim.from_height);
+        remove_archival_bond_record(bond.p_canonical_id);
+        const uint64_t bonded_total = get_total_bonded_atomic();
+        if (bond.bond_credit > bonded_total)
+          throw std::runtime_error("FATAL: total_bonded_atomic underflow on bond-post pop");
+        set_total_bonded_atomic(bonded_total - bond.bond_credit);
       }
-
-      uint64_t pool_balance = get_staker_pool_balance();
-      set_staker_pool_balance(pool_balance + claim.amount);
     }
   }
 
@@ -1279,6 +1286,111 @@ void BlockchainDB::fixup()
     }
   }
   batch_stop();
+}
+
+bool BlockchainDB::get_archival_bond_hybrid_pubkey(const crypto::hash& /*p_id*/,
+  std::vector<uint8_t>& /*out_pubkey*/) const
+{
+  return false;
+}
+
+bool BlockchainDB::get_archival_bond_value(const crypto::hash& /*p_id*/,
+  shekyl::db::ArchivalBondValue& /*out*/) const
+{
+  return false;
+}
+
+bool BlockchainDB::archival_bond_holds_shard(const crypto::hash& /*p_id*/, uint64_t /*shard_id*/,
+  uint64_t /*at_height*/) const
+{
+  return false;
+}
+
+bool BlockchainDB::archival_bond_good_through(const crypto::hash& /*p_id*/,
+  uint64_t /*settlement_epoch*/) const
+{
+  return false;
+}
+
+uint64_t BlockchainDB::archival_bond_join_epoch(const crypto::hash& /*p_id*/) const
+{
+  return std::numeric_limits<uint64_t>::max();
+}
+
+bool BlockchainDB::get_archival_shard_segment_at_height(uint64_t /*shard_id*/, uint64_t /*at_height*/,
+  crypto::hash& /*out_rk*/, uint64_t& /*out_leaf_count*/) const
+{
+  return false;
+}
+
+void BlockchainDB::put_archival_bond_record(const crypto::hash& /*p_id*/,
+  const std::vector<uint8_t>& /*hybrid_pubkey*/, uint64_t /*join_settlement_epoch*/,
+  uint64_t /*bonded_total_atomic*/, uint8_t /*holdings_kind*/,
+  const std::vector<uint64_t>& /*held_shard_ids*/,
+  const std::vector<std::pair<uint64_t, uint64_t>>& /*bad_intervals*/)
+{
+}
+
+void BlockchainDB::put_archival_bond_value(const crypto::hash& /*p_id*/,
+  const shekyl::db::ArchivalBondValue& /*bond*/)
+{
+}
+
+void BlockchainDB::remove_archival_bond_record(const crypto::hash& /*p_id*/)
+{
+}
+
+void BlockchainDB::put_archival_shard_segment(uint64_t /*shard_id*/, uint64_t /*freeze_height*/,
+  const crypto::hash& /*segment_subroot_rk*/, uint64_t /*segment_leaf_count*/)
+{
+}
+
+bool BlockchainDB::get_curve_tree_leaf_chunk(uint64_t first_tree_position, uint64_t count, uint8_t* out) const
+{
+  // Portable fallback: one lookup per leaf. LMDB overrides this with a single
+  // cursor scan over the contiguous positions.
+  for (uint64_t i = 0; i < count; ++i)
+  {
+    if (!get_curve_tree_leaf_by_tree_position(first_tree_position + i,
+          out + i * shekyl::db::kLeafSize))
+      return false;
+  }
+  return true;
+}
+
+void BlockchainDB::process_archival_segment_freezes_at_height(uint64_t /*block_height*/)
+{
+}
+
+void BlockchainDB::revert_archival_segment_freezes()
+{
+}
+
+void BlockchainDB::process_archival_slash_at_height(uint64_t /*block_height*/)
+{
+}
+
+void BlockchainDB::revert_archival_slashes_at_height(uint64_t /*block_height*/)
+{
+}
+
+void BlockchainDB::process_archival_epoch_close_at_height(uint64_t /*block_height*/)
+{
+}
+
+void BlockchainDB::revert_archival_epoch_close_at_height(uint64_t /*block_height*/)
+{
+}
+
+uint64_t BlockchainDB::get_archival_r_market(uint64_t /*shard_id*/,
+  uint64_t /*settlement_epoch*/) const
+{
+  return 0;
+}
+
+uint64_t BlockchainDB::get_archival_sigma_work_milli(uint64_t /*settlement_epoch*/) const
+{
+  return 0;
 }
 
 bool BlockchainDB::txpool_tx_matches_category(const crypto::hash& tx_hash, relay_category category)

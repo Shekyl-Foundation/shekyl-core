@@ -1,7 +1,7 @@
 # LWMA-1 Phase 0 pre-flight harness
 
 This directory contains the Phase 0 pre-flight C++ harnesses
-referenced by [`docs/design/DAA_LWMA1.md`](../../docs/design/DAA_LWMA1.md)
+referenced by [`docs/completed/DAA_LWMA1.md`](../../docs/completed/DAA_LWMA1.md)
 §5.3 step 7 and §8.1. These harnesses are not built by the
 production `make`/`cmake` invocation; they are standalone
 single-file C++17 programs that compile with `g++` directly and
@@ -42,7 +42,7 @@ g++ -std=c++17 -O2 preflight_outofseq.cpp -o preflight_outofseq && ./preflight_o
 ```
 
 Expected outputs land in
-[`docs/design/DAA_LWMA1.md`](../../docs/design/DAA_LWMA1.md) §5.3
+[`docs/completed/DAA_LWMA1.md`](../../docs/completed/DAA_LWMA1.md) §5.3
 step 7 and §8.1; any divergence is a Phase 0 reversion-clause
 trigger per `DAA_LWMA1.md` §10 and must surface on `dev` before
 Phase 1 implementation continues.
@@ -58,7 +58,7 @@ The canonical function is published under the
 [MIT License](https://github.com/zawy12/difficulty-algorithms/blob/master/LICENSE);
 the harness file headers carry the SPDX-License-Identifier and
 the upstream attribution per the same `25-rust-architecture.mdc`
-discipline that `docs/design/DAA_LWMA1_PLAN.md` Phase 2 applies
+discipline that `docs/completed/DAA_LWMA1_PLAN.md` Phase 2 applies
 to the eventual `tests/difficulty/zawy12_lwma1_reference.h`
 vendored header.
 

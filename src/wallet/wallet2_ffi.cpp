@@ -306,7 +306,7 @@ int wallet2_ffi_create_wallet(wallet2_handle* w,
 
     if (!validate_wallet_path(wallet_path, w))
         return w->last_error_code;
-    // Phase 1 hard-error per `docs/design/ELECTRUM_WORDS_REMOVAL.md`
+    // Phase 1 hard-error per `docs/completed/ELECTRUM_WORDS_REMOVAL.md`
     // §4.3: the `language` parameter is meaningless under BIP-39
     // (the wordlist is English-only and selected by the protocol,
     // not by the caller). The parameter is preserved at this Phase
@@ -482,7 +482,7 @@ char* wallet2_ffi_generate_from_keys(wallet2_handle* w,
         w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "address is required");
         return nullptr;
     }
-    // Phase 1 hard-error per `docs/design/ELECTRUM_WORDS_REMOVAL.md`
+    // Phase 1 hard-error per `docs/completed/ELECTRUM_WORDS_REMOVAL.md`
     // §4.3: the `language` parameter is meaningless under BIP-39
     // (English-only wordlist; protocol-selected). Empty / nullptr /
     // zero-length is the only accepted value. Phase 3 drops the
@@ -652,7 +652,7 @@ char* wallet2_ffi_query_key(wallet2_handle* w, const char* key_type)
         std::string key_value;
 
         if (strcmp(key_type, "mnemonic") == 0) {
-            // Phase 1 rewire per `docs/design/ELECTRUM_WORDS_REMOVAL.md`
+            // Phase 1 rewire per `docs/completed/ELECTRUM_WORDS_REMOVAL.md`
             // §4.5: the dispatch reads the persisted 32-byte BIP-39
             // entropy via `wallet2::bip39_entropy()` and calls
             // `shekyl_bip39_mnemonic_from_entropy` directly. The
@@ -2306,159 +2306,6 @@ static char* dispatch_scan_tx(wallet2_handle* w, const rj::Value& p) {
     return json_to_string(doc);
 }
 
-// ── Staking ──────────────────────────────────────────────────────────────────
-
-static char* dispatch_stake(wallet2_handle* w, const rj::Value& p) {
-    try {
-        uint32_t tier = json_u32(p, "tier");
-        uint64_t amount = json_u64(p, "amount");
-        uint32_t priority = json_u32(p, "priority");
-        uint32_t account_index = json_u32(p, "account_index");
-
-        auto ptx_vector = w->wallet->create_staking_transaction(
-            tier, amount, tools::fee_priority_utilities::from_integral(priority), account_index, {});
-        if (ptx_vector.empty()) {
-            w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "No transaction was created");
-            return nullptr;
-        }
-        auto& ptx = ptx_vector.front();
-        w->wallet->commit_tx(ptx);
-
-        rj::Document doc;
-        doc.SetObject();
-        auto& a = doc.GetAllocator();
-        doc.AddMember("tx_hash", json_val_str(
-            epee::string_tools::pod_to_hex(cryptonote::get_transaction_hash(ptx.tx)), a), a);
-        doc.AddMember("fee", ptx.fee, a);
-        return json_to_string(doc);
-    } catch (const std::exception& e) {
-        w->set_error_from_exception(e, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
-        return nullptr;
-    }
-}
-
-static char* dispatch_unstake(wallet2_handle* w, const rj::Value& p) {
-    try {
-        auto matured = w->wallet->get_matured_staked_outputs();
-        if (matured.empty()) {
-            w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "No matured staked outputs available for unstaking");
-            return nullptr;
-        }
-        uint32_t priority = json_u32(p, "priority");
-        auto ptx_vector = w->wallet->create_unstake_transaction(
-            matured, tools::fee_priority_utilities::from_integral(priority));
-        if (ptx_vector.empty()) {
-            w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "No transaction was created");
-            return nullptr;
-        }
-
-        rj::Document doc;
-        doc.SetObject();
-        auto& a = doc.GetAllocator();
-        rj::Value tx_hash_list(rj::kArrayType);
-        uint64_t total_amount = 0;
-        for (auto& ptx : ptx_vector) {
-            w->wallet->commit_tx(ptx);
-            tx_hash_list.PushBack(json_val_str(
-                epee::string_tools::pod_to_hex(cryptonote::get_transaction_hash(ptx.tx)), a), a);
-            for (const auto& o : ptx.tx.vout)
-                total_amount += o.amount;
-        }
-
-        doc.AddMember("tx_hash_list", tx_hash_list, a);
-        doc.AddMember("amount", total_amount, a);
-        return json_to_string(doc);
-    } catch (const std::exception& e) {
-        w->set_error_from_exception(e, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
-        return nullptr;
-    }
-}
-
-static char* dispatch_get_staked_outputs(wallet2_handle* w, const rj::Value&) {
-    try {
-        const uint64_t current_height = w->wallet->get_blockchain_current_height();
-        uint64_t total_staked = 0;
-
-        rj::Document doc;
-        doc.SetObject();
-        auto& a = doc.GetAllocator();
-        rj::Value outputs(rj::kArrayType);
-
-        for (size_t i = 0; i < w->wallet->get_num_transfer_details(); ++i) {
-            const auto& td = w->wallet->get_transfer_details(i);
-            if (td.m_staked && !td.m_spent && !td.m_frozen) {
-                rj::Value entry(rj::kObjectType);
-                entry.AddMember("amount", td.m_amount, a);
-                entry.AddMember("tier", td.m_stake_tier, a);
-                entry.AddMember("lock_until", td.m_stake_lock_until, a);
-                entry.AddMember("matured", td.m_stake_lock_until <= current_height, a);
-                entry.AddMember("global_index", td.m_global_output_index, a);
-                outputs.PushBack(entry, a);
-                total_staked += td.m_amount;
-            }
-        }
-
-        doc.AddMember("outputs", outputs, a);
-        doc.AddMember("total_staked", total_staked, a);
-        return json_to_string(doc);
-    } catch (const std::exception& e) {
-        w->set_error_from_exception(e, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
-        return nullptr;
-    }
-}
-
-static char* dispatch_get_staked_balance(wallet2_handle* w, const rj::Value&) {
-    try {
-        const uint64_t height = w->wallet->get_blockchain_current_height();
-
-        rj::Document doc;
-        doc.SetObject();
-        auto& a = doc.GetAllocator();
-        doc.AddMember("staked_balance", w->wallet->get_staked_balance(height), a);
-        doc.AddMember("locked_count", (uint64_t)w->wallet->get_locked_staked_outputs().size(), a);
-        doc.AddMember("matured_count", (uint64_t)w->wallet->get_matured_staked_outputs().size(), a);
-        return json_to_string(doc);
-    } catch (const std::exception& e) {
-        w->set_error_from_exception(e, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
-        return nullptr;
-    }
-}
-
-static char* dispatch_claim_rewards(wallet2_handle* w, const rj::Value&) {
-    try {
-        auto claimable = w->wallet->get_claimable_staked_outputs();
-        if (claimable.empty()) {
-            w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "No claimable staked outputs");
-            return nullptr;
-        }
-        auto ptx_vector = w->wallet->create_claim_transaction(claimable);
-        if (ptx_vector.empty()) {
-            w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "No claim transaction was created");
-            return nullptr;
-        }
-
-        rj::Document doc;
-        doc.SetObject();
-        auto& a = doc.GetAllocator();
-        uint64_t total = 0;
-        std::string last_hash;
-        for (auto& ptx : ptx_vector) {
-            w->wallet->commit_tx(ptx);
-            w->wallet->stage_claim_watermarks(ptx);
-            last_hash = epee::string_tools::pod_to_hex(cryptonote::get_transaction_hash(ptx.tx));
-            for (const auto& o : ptx.tx.vout)
-                total += o.amount;
-        }
-
-        doc.AddMember("tx_hash", json_val_str(last_hash, a), a);
-        doc.AddMember("amount", total, a);
-        return json_to_string(doc);
-    } catch (const std::exception& e) {
-        w->set_error_from_exception(e, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
-        return nullptr;
-    }
-}
-
 // ── Background Sync ──────────────────────────────────────────────────────────
 
 static char* dispatch_setup_background_sync(wallet2_handle* w, const rj::Value& p) {
@@ -3668,13 +3515,6 @@ char* wallet2_ffi_json_rpc(wallet2_handle* w, const char* method, const char* pa
         if (m == "set_log_level") return dispatch_set_log_level(w, params);
         if (m == "set_log_categories") return dispatch_set_log_categories(w, params);
         if (m == "scan_tx") return dispatch_scan_tx(w, params);
-
-        // Staking
-        if (m == "stake") return dispatch_stake(w, params);
-        if (m == "unstake") return dispatch_unstake(w, params);
-        if (m == "get_staked_outputs") return dispatch_get_staked_outputs(w, params);
-        if (m == "get_staked_balance") return dispatch_get_staked_balance(w, params);
-        if (m == "claim_rewards") return dispatch_claim_rewards(w, params);
 
         // Background sync
         if (m == "setup_background_sync") return dispatch_setup_background_sync(w, params);

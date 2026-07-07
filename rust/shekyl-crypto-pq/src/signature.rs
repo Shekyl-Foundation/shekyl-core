@@ -13,7 +13,7 @@ use ed25519_dalek::{
 use fips204::ml_dsa_65;
 use fips204::traits::{SerDes as _, Signer as _, Verifier as _};
 use serde::{Deserialize, Serialize};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 pub const HYBRID_KEY_VERSION: u8 = 1;
 pub const HYBRID_SIG_VERSION: u8 = 1;
@@ -28,8 +28,9 @@ pub struct HybridPublicKey {
     pub ml_dsa: Vec<u8>,
 }
 
-#[derive(Clone, Zeroize)]
-#[zeroize(drop)]
+// `ZeroizeOnDrop` is the rule-35 canonical wipe-on-drop idiom; it replaces
+// the deprecated `#[zeroize(drop)]` attribute with identical behavior.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct HybridSecretKey {
     pub ed25519: Vec<u8>,
     pub ml_dsa: Vec<u8>,

@@ -2,7 +2,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! iai-callgrind companion to
+//! gungraun companion to
 //! `engine_trait_bench_ledger_balance.rs`.
 //!
 //! `LedgerEngine` is `pub(crate)` in `shekyl-engine-core`, so the
@@ -19,7 +19,7 @@
 //! `engine_trait_bench_*` threshold class (bidirectional ±10%
 //! slowdown / ±25% speedup).
 //!
-//! Requires `cargo install iai-callgrind-runner` and a working
+//! Requires `cargo install gungraun-runner` and a working
 //! Valgrind install. See `docs/design/STAGE_0_HARNESS.md` §3 for the
 //! existing harness substrate this bench plugs into.
 //!
@@ -33,7 +33,7 @@
 //! [`shekyl_scanner::BalanceSummary::compute`] iterates `transfers`
 //! summing per-output amounts subject to spend / maturity filters.
 //! Optimizer amortization does not apply meaningfully because each
-//! iteration measures meaningful work; both criterion and iai-callgrind
+//! iteration measures meaningful work; both criterion and gungraun
 //! report numbers consistent with the per-call cost.
 //!
 //! # Expected post-fixture instructions
@@ -77,7 +77,7 @@
 //! `engine_trait_bench_*` shape per
 //! `docs/design/STAGE_0_HARNESS.md` §4.2: any fixture field exceeding
 //! 64 bytes goes behind `Box<T>` so the bench-function boundary moves
-//! only pointer-sized data, keeping iai-callgrind's residual boundary
+//! only pointer-sized data, keeping gungraun's residual boundary
 //! cost at ~5–10 instructions instead of ~600 (the
 //! `Engine<SoloSigner, ...>` is 6,296 bytes; passing it by value
 //! would dominate the measurement). The `LedgerBlock` populated with
@@ -93,11 +93,11 @@
 //! load-bearing identifier. All three names share the
 //! `engine_trait_bench_ledger_balance` stem so PR reviewers grepping
 //! for the workload find consistent surface across the criterion /
-//! iai pair and the manifest row.
+//! gungraun pair and the manifest row.
 
 use std::hint::black_box;
 
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use shekyl_engine_core::__bench_internals::{engine_balance_for_bench, LocalLedger};
 use shekyl_engine_core::{DaemonClient, Engine, SoloSigner};
 use tempfile::TempDir;

@@ -1,12 +1,13 @@
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc = include_str!("../README.md")]
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(missing_docs)]
 #![allow(non_snake_case)]
+#![allow(clippy::many_single_char_names)]
 
-use generic_array::{typenum::Unsigned, ArrayLength, GenericArray};
+use generic_array::{typenum::Unsigned as _, ArrayLength, GenericArray};
 
-use ciphersuite::{group::ff::Field, Ciphersuite};
+use ciphersuite::{group::ff::Field as _, Ciphersuite};
 
 use generalized_bulletproofs_circuit_abstraction::*;
 

@@ -16,7 +16,7 @@ use zeroize::Zeroize;
 
 use curve25519_dalek::edwards::EdwardsPoint;
 
-use shekyl_oxide::io::*;
+use shekyl_curve_io::*;
 
 // PaymentId moved to `shekyl-engine-state`; re-exported here so `crate::extra::PaymentId`
 // and `use crate::extra::PaymentId` continue to resolve while the migration is in flight.
@@ -232,6 +232,31 @@ impl Extra {
         None
     }
 
+    /// Transaction extra for a hybrid-PQC transfer: tx pubkey plus per-output KEM blobs.
+    pub fn for_hybrid_transfer(
+        tx_pubkey: EdwardsPoint,
+        kem_ciphertexts: impl IntoIterator<Item = Vec<u8>>,
+    ) -> Extra {
+        let mut fields = vec![ExtraField::PublicKey(tx_pubkey)];
+        for kem in kem_ciphertexts {
+            fields.push(ExtraField::PqcKemCiphertext(kem));
+        }
+        Extra(fields)
+    }
+
+    /// Append a PQC leaf-hash commitment field (Shekyl tag `0x07`,
+    /// `N × 32` bytes — `H(pqc_pk)` per output, in output order).
+    ///
+    /// The daemon's curve-tree ingestion reads this field to set each new
+    /// output's `h_pqc` leaf component; an output ingested **without** it
+    /// carries a zero leaf hash and can never satisfy the spend-side
+    /// `pqc_auths`-derived hash check — i.e. it is unspendable. Any
+    /// transaction whose outputs must be spendable (bond-post change, and
+    /// eventually the transfer path) appends this field.
+    pub fn push_pqc_leaf_hashes(&mut self, blob: Vec<u8>) {
+        self.0.push(ExtraField::PqcLeafHashes(blob));
+    }
+
     #[allow(dead_code)]
     pub(crate) fn new(key: EdwardsPoint, additional: Vec<EdwardsPoint>) -> Extra {
         let mut res = Extra(Vec::with_capacity(3));
@@ -274,5 +299,54 @@ impl Extra {
             res.0.push(field);
         }
         Ok(res)
+    }
+}
+
+#[cfg(test)]
+mod pqc_leaf_hashes_tests {
+    use super::*;
+    use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+
+    fn leaf_blob(n: usize) -> Vec<u8> {
+        (0..n)
+            .map(|i| u8::try_from(i).expect("test fixture n <= 256"))
+            .collect()
+    }
+
+    /// Scanner first-match behavior. Daemon parity on duplicate/malformed `0x07`
+    /// is unverified — owned by the Tier-B seam test (`recon_tier_b.rs`).
+    #[test]
+    fn pqc_leaf_hashes_round_trip() {
+        let payload = leaf_blob(64);
+        let field = ExtraField::PqcLeafHashes(payload.clone());
+        let mut wire = Vec::new();
+        field.write(&mut wire).unwrap();
+        let extra = Extra::read(&mut wire.as_slice()).unwrap();
+        assert_eq!(extra.pqc_leaf_hashes(), Some(payload.as_slice()));
+    }
+
+    #[test]
+    fn pqc_leaf_hashes_after_pubkey_field() {
+        let payload = leaf_blob(32);
+        let extra = Extra(vec![
+            ExtraField::PublicKey(ED25519_BASEPOINT_POINT),
+            ExtraField::PqcLeafHashes(payload.clone()),
+        ]);
+        let wire = extra.serialize();
+        let parsed = Extra::read(&mut wire.as_slice()).unwrap();
+        assert_eq!(parsed.pqc_leaf_hashes(), Some(payload.as_slice()));
+    }
+
+    #[test]
+    fn pqc_leaf_hashes_duplicate_tag_returns_first_match() {
+        let first = leaf_blob(32);
+        let second = leaf_blob(64);
+        let extra = Extra(vec![
+            ExtraField::PqcLeafHashes(first.clone()),
+            ExtraField::PqcLeafHashes(second),
+        ]);
+        let wire = extra.serialize();
+        let parsed = Extra::read(&mut wire.as_slice()).unwrap();
+        assert_eq!(parsed.pqc_leaf_hashes(), Some(first.as_slice()));
     }
 }

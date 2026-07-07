@@ -1,4 +1,4 @@
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc = include_str!("../README.md")]
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(missing_docs)]
@@ -11,13 +11,13 @@ use rand_core::{CryptoRng, RngCore};
 use zeroize::{Zeroize, Zeroizing};
 
 use blake2::{
-    digest::{consts::U32, Digest},
+    digest::{consts::U32, Digest as _},
     Blake2b,
 };
 
 use ciphersuite::{
     group::{
-        ff::{Field, FromUniformBytes, PrimeField},
+        ff::{Field as _, FromUniformBytes, PrimeField},
         Group, GroupEncoding,
     },
     Ciphersuite,
@@ -215,11 +215,22 @@ impl From<AcVerifyError> for FcmpError {
 }
 
 /// The full-chain membership proof.
-#[derive(Clone, Debug, Zeroize)]
+#[derive(Clone, Debug)]
 pub struct Fcmp<C> {
     _curves: PhantomData<C>,
     proof: Vec<u8>,
     root_blind_pok: [u8; 64],
+}
+impl<C> Zeroize for Fcmp<C> {
+    fn zeroize(&mut self) {
+        let Self {
+            _curves: PhantomData,
+            proof,
+            root_blind_pok,
+        } = self;
+        proof.zeroize();
+        root_blind_pok.zeroize();
+    }
 }
 
 impl<C> Fcmp<C> {
@@ -304,20 +315,20 @@ where
         {
             let c1_commitments =
                 c1_branches + (c1_words * COMMITMENT_WORD_LEN).div_ceil(c1_padded_pow_2);
-            let ni = 2 + (2 * (c1_commitments / 2));
+            let ni = 2 + (2 * c1_commitments);
             let l_r_poly_len = 1 + ni + 1;
             let t_poly_len = (2 * l_r_poly_len) - 1;
-            let t_commitments = t_poly_len - 1;
+            let t_commitments = t_poly_len - (ni / 2) - 1;
             proof_elements += c1_commitments + t_commitments;
         }
 
         {
             let c2_commitments =
                 c2_branches + (c2_words * COMMITMENT_WORD_LEN).div_ceil(c2_padded_pow_2);
-            let ni = 2 + (2 * (c2_commitments / 2));
+            let ni = 2 + (2 * c2_commitments);
             let l_r_poly_len = 1 + ni + 1;
             let t_poly_len = (2 * l_r_poly_len) - 1;
-            let t_commitments = t_poly_len - 1;
+            let t_commitments = t_poly_len - (ni / 2) - 1;
             proof_elements += c2_commitments + t_commitments;
         }
 
@@ -428,8 +439,8 @@ where
             opening.c_blind_claim,
             opening.C,
             //
-            &opening.extra_leaf_vars,
-            &input.extra_leaf_scalars,
+            opening.extra_leaf_vars.clone(),
+            input.extra_leaf_scalars.clone(),
             //
             // If the leaves are the only layer, the root branch is the leaves
             // Else, the first C1 branch is the leaves
@@ -1004,6 +1015,7 @@ where
         // Verify the root blind PoK
         {
             let claimed_root = if (layers % 2) == 1 {
+                #[allow(clippy::wildcard_enum_match_arm)]
                 TreeRoot::<C::C1, C::C2>::C1(match root[0] {
                     Variable::CG {
                         commitment: i,
@@ -1012,6 +1024,7 @@ where
                     _ => panic!("branch wasn't present in a vector commitment"),
                 })
             } else {
+                #[allow(clippy::wildcard_enum_match_arm)]
                 TreeRoot::<C::C1, C::C2>::C2(match root[0] {
                     Variable::CG {
                         commitment: i,

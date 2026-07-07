@@ -74,7 +74,7 @@ use std::time::Duration;
 
 use tracing::{event, Level};
 
-use super::error::{AmbiguousErrorKind, TerminalErrorKind};
+use super::error::{AmbiguousErrorKind, RetryableRejectCause, TerminalErrorKind};
 use super::pending::{FeePriority, ReservationId, SnapshotId, TxHash};
 
 /// Classification of a producer-side malformed-block detection.
@@ -108,7 +108,7 @@ pub enum MalformedKind {
     /// The fetched block contains a transaction whose output count
     /// exceeds [`shekyl_scanner::MAX_OUTPUTS`] (the FCMP++
     /// Bulletproofs+ CRS bound; canonically anchored at
-    /// `shekyl_generators::MAX_BULLETPROOF_COMMITMENTS`).
+    /// `shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS`).
     ///
     /// # Producer-side detection (PR 4 C4 emission site)
     ///
@@ -157,7 +157,7 @@ pub enum MalformedKind {
 /// [`RefreshDiagnostic::DaemonTimeout`].
 ///
 /// Two ops are timing-classified at C2: `GetHeight` (the
-/// snapshot-tip read) and `GetScannableBlockByNumber` (the
+/// snapshot-tip read) and `FetchScannableBlock` (the
 /// per-block fetch inside the producer's scan loop). Other RPC
 /// calls fire and forget without timing classification at the
 /// diagnostic boundary; the producer's internal timeout budget
@@ -169,26 +169,26 @@ pub enum DaemonOp {
     /// start of each attempt.
     GetHeight,
 
-    /// `Rpc::get_scannable_block_by_number` — used to fetch each
+    /// `DaemonEngine::fetch_scannable_block` — used to fetch each
     /// block in the producer's scan range.
-    GetScannableBlockByNumber,
+    FetchScannableBlock,
 }
 
 /// Bounded classification of typed RPC errors surfaced via
 /// [`RefreshDiagnostic::DaemonProtocolError`].
 ///
 /// Per the §5.4.7 R6 memory-amplifier closure (binding), the
-/// producer MUST classify [`RpcError`](shekyl_rpc::RpcError)
+/// producer MUST classify [`RpcError`](shekyl_rpc_client::RpcError)
 /// variant tags into this bounded enum without propagating the
 /// underlying `String` payload. The classification preserves the
 /// audit-readable failure category; the dropped payload denies
 /// adversarial daemons a memory-amplification channel into the
 /// wallet's observability stream.
 ///
-/// The five variants enumerate the [`RpcError`](shekyl_rpc::RpcError)
+/// The five variants enumerate the [`RpcError`](shekyl_rpc_client::RpcError)
 /// variants that surface at the producer's daemon-call boundary.
 /// Additional variants land additively under the
-/// `#[non_exhaustive]` discipline if `shekyl_rpc::RpcError` grows.
+/// `#[non_exhaustive]` discipline if `shekyl_rpc_client::RpcError` grows.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProtocolErrorKind {
@@ -328,7 +328,7 @@ pub enum RefreshDiagnostic {
     /// Daemon returned a typed RPC error classified into a
     /// bounded [`ProtocolErrorKind`]. Per the §5.4.7 R6
     /// memory-amplifier closure, the underlying
-    /// [`RpcError`](shekyl_rpc::RpcError) `String` payload is NOT
+    /// [`RpcError`](shekyl_rpc_client::RpcError) `String` payload is NOT
     /// propagated.
     DaemonProtocolError {
         /// Bounded classification of the underlying RPC error
@@ -454,6 +454,31 @@ pub enum BuildErrorKind {
     /// in the projection taxonomy. Segment-2h C2β addition per
     /// §5.6.5 F4. `OutputSelector` trait lands in C4β.
     SelectorContractViolation,
+
+    /// The wallet has the balance but the FCMP++ curve tree is still
+    /// rebuilding membership data behind the synced ledger tip, so a
+    /// membership proof cannot yet be built for the shortfall outputs.
+    /// Mirrors
+    /// [`SendError::SpendUnavailableRebuilding`](super::error::SendError::SpendUnavailableRebuilding).
+    /// CT-5 §3.2.1 D3 (adopting-wallet / tree-rebuild surfacing).
+    RebuildingMembershipData,
+
+    /// The wallet has the balance and the curve tree covers it, but one or more
+    /// outputs needed for the spend are **too fresh for the reference block** —
+    /// `eligible_height > tip − REF_ANCHOR_AGE`, so they are not in the tree as
+    /// of the reference block the proof anchors to (C2; 2A §3.7.5, CT-5 §3.2).
+    /// Mirrors
+    /// [`SendError::OutputNotYetSpendable`](super::error::SendError::OutputNotYetSpendable);
+    /// distinct from [`Self::RebuildingMembershipData`] (tree backfill lag) — a
+    /// clean wait-N-blocks signal, self-resolving as the tip advances.
+    OutputNotYetSpendable,
+
+    /// The build was refused because the F28/F37 rebuild-loop circuit
+    /// breaker is tripped (`DAEMON_SUBMIT_VERDICT.md` §2.5). Mirrors
+    /// [`SendError::SubmitLoopBreakerTripped`](super::error::SendError::SubmitLoopBreakerTripped);
+    /// the trip itself was alarmed via
+    /// [`PendingTxDiagnostic::SubmitLoopBreakerTripped`].
+    SubmitLoopBreakerTripped,
 }
 
 /// Coarse-grained projection of a
@@ -462,8 +487,8 @@ pub enum BuildErrorKind {
 /// Phase 0f recursive-trust-boundary projection per PR 4 §5.4.8 #4:
 /// the diagnostic stream's trust boundary is in-process only, but
 /// the projection still avoids exposing fingerprintable / linkable
-/// material. Recipient addresses, amounts, and the from-subaddress
-/// filter are not projected (correlation-attack surface for any
+/// material. Recipient addresses and amounts are not projected
+/// (correlation-attack surface for any
 /// future intra-process consumer). The projection exposes:
 ///
 /// - `recipient_count` — the number of distinct
@@ -544,6 +569,93 @@ pub enum DiscardReason {
     MempoolEvicted,
 }
 
+/// Why the §5.3 submit watchdog raised an operator alarm
+/// (`DAEMON_SUBMIT_VERDICT.md` §5.3, rung 2), carried on
+/// [`PendingTxDiagnostic::WatchdogAlarm`].
+///
+/// The alarm rung is the "a human decides" escalation: the wallet has
+/// exhausted the automatic remedies (wait, resubmit-same-bytes probe)
+/// without a definite terminal verdict, so the driver surfaces the
+/// condition to the operator rather than escalating to an automatic
+/// rebuild (§7.1: a rebuild is never automatic on timeout). Bounded
+/// enum, no `String` payload (PR 4 §5.4.7 R6 memory-amplifier closure
+/// carries to the watchdog stream verbatim).
+///
+/// The first four variants project the kernel's decision surface
+/// ([`AlarmReason`](super::submit_watchdog::AlarmReason) plus the two
+/// driver-level conditions the kernel cannot represent). The
+/// `#[non_exhaustive]` discipline lets the F40 re-scan executor add its
+/// own alarm reasons additively.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WatchdogAlarmReason {
+    /// The probe found the tx present-but-unconfirmed past the escape
+    /// horizon: repeating the resubmit is pointless (F31), and the
+    /// censoring / eclipse case (§7.5) lands exactly here. Projects
+    /// [`AlarmReason::PresentButUnconfirmedPastHorizon`](super::submit_watchdog::AlarmReason::PresentButUnconfirmedPastHorizon).
+    PresentButUnconfirmedPastHorizon,
+
+    /// Past horizon and the daemon reports no peers: relay is
+    /// impossible and no wallet action can fix it. Projects
+    /// [`AlarmReason::DaemonPeerless`](super::submit_watchdog::AlarmReason::DaemonPeerless).
+    DaemonPeerless,
+
+    /// The kernel called for the rung-1 resubmit-same-bytes probe, but
+    /// the retained bytes are gone — a wallet restart crossed the await
+    /// (`DAEMON_SUBMIT_VERDICT.md` §5.3 decision 2, ephemeral held-bytes
+    /// store). The probe rung degrades to the operator-alarm rung,
+    /// preserving §2.6's "every exit is verdict, confirmation, or
+    /// operator alarm."
+    ProbeBytesUnavailable,
+
+    /// The probe was rejected with a **retryable** cause
+    /// ([`RetryableRejectCause`]: stale root / reference too recent /
+    /// reference not found). The bytes are neither admitted nor
+    /// terminally dead: recovery needs a fresh reference, which is a
+    /// human-authorized rebuild (§7.1), not an automatic one. The
+    /// driver alarms directly (the kernel's [`ProbeOutcome`](super::submit_watchdog::ProbeOutcome)
+    /// has no retryable arm by construction).
+    ReferenceStaleNeedsRebuild,
+}
+
+/// The observed outcome of a §5.3 watchdog resubmit-same-bytes probe,
+/// carried on [`PendingTxDiagnostic::WatchdogProbeResolved`] for
+/// observability.
+///
+/// Projects the daemon's [`TxSubmitOutcome`](super::traits::TxSubmitOutcome)
+/// onto the presence facts the ladder branches on, plus the
+/// transport-ambiguous case (a failed round-trip is not a verdict; the
+/// driver keeps waiting and retries next tick). Bounded enum tags only;
+/// `#[non_exhaustive]` for additive growth.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WatchdogProbeOutcome {
+    /// `Submitted`: the tx was absent and the resubmission re-offered it
+    /// through full admission and fresh relay. The wait restarts.
+    ReofferedAfterAbsence,
+
+    /// `AlreadyInPool`: present-but-unconfirmed. No relay pulse (F31);
+    /// the alarm rung follows.
+    PresentInPool,
+
+    /// `AlreadyInChain`: confirmation observed by verdict. Refresh
+    /// remains the settlement authority; the wait epoch restarts.
+    ConfirmedInChain,
+
+    /// `Rejected{terminal}`: a definite terminal verdict — under
+    /// single-egress this proves the bytes are in neither pool nor
+    /// chain (§7.1), so the confirmed-absent release fires.
+    RejectedTerminal,
+
+    /// `Rejected{retryable}`: reference stale — the driver raises the
+    /// [`WatchdogAlarmReason::ReferenceStaleNeedsRebuild`] alarm.
+    RejectedRetryable,
+
+    /// The daemon round-trip failed (timeout / connection drop). Not a
+    /// verdict: no overlay transition, retry on the next tick.
+    TransportAmbiguous,
+}
+
 /// Producer-side diagnostic event for the `PendingTxEngine` trait
 /// (the trait lands in C5α).
 ///
@@ -598,7 +710,7 @@ pub enum PendingTxDiagnostic {
     /// rather than the raw `TxRequest`.
     BuildAttempted {
         /// Bounded projection of the request shape (no recipient
-        /// addresses / amounts / from-subaddress filter).
+        /// addresses / amounts).
         request_summary: BuildRequestSummary,
     },
 
@@ -669,6 +781,46 @@ pub enum PendingTxDiagnostic {
         kind: AmbiguousErrorKind,
     },
 
+    /// Daemon round-trip completed with a definite §2.5 retryable
+    /// rejection (`DAEMON_SUBMIT_VERDICT.md`): the reservation was
+    /// returned to `consumer_held` with its re-anchor substrate and
+    /// `output_locks` intact. The consumer resubmits via
+    /// `submit(rid, seen_gen)` after the per-cause wait (`StaleRoot`:
+    /// reprove against a fresh root; `ReferenceTooRecent`: timed
+    /// backoff; `ReferenceNotFound`: sync-gated).
+    SubmitRetryablyRejected {
+        /// The reservation returned to `consumer_held`.
+        reservation_id: ReservationId,
+
+        /// Which retryable cause the daemon named.
+        cause: RetryableRejectCause,
+    },
+
+    /// An `AlreadyInChain` verdict claimed a confirming height at or
+    /// below the wallet's synced height (F40, `DAEMON_SUBMIT_VERDICT.md`
+    /// §2.5 case *b*): refresh already passed that height without
+    /// observing the spend, so the ordinary path-1 release is
+    /// unreachable by construction. The consumer of this diagnostic
+    /// (the 2c-2b driving actor) enqueues a **targeted re-scan** of the
+    /// window around `claimed_height` via the reorg-heal machinery.
+    /// The re-scan is bounded by the two F40 rules: it **never
+    /// releases** the F14 lock (R1 — release stays refresh- or
+    /// watchdog-authoritative), and consecutive fruitless
+    /// daemon-directed re-scans are breaker-bounded to an operator
+    /// alarm (R2).
+    TargetedRescanRequested {
+        /// The reservation whose verdict carried the claim.
+        reservation_id: ReservationId,
+
+        /// The locally computed txid the daemon claims is confirmed.
+        tx_hash: TxHash,
+
+        /// The daemon-claimed confirming-block height (untrusted;
+        /// damage-capped per §7.2 — a lie here costs a fruitless
+        /// re-scan, counted by the R2 breaker, never a release).
+        claimed_height: u64,
+    },
+
     /// Lazy-R5 staleness check at `submit` entry: the
     /// reservation's `snapshot_id` did not match the engine's
     /// `current_snapshot`. Reservation does NOT auto-release;
@@ -709,6 +861,78 @@ pub enum PendingTxDiagnostic {
 
         /// How long the reservation has been outstanding.
         age: Duration,
+    },
+
+    /// **Operator alarm** — the F28/F37 rebuild-loop circuit breaker
+    /// tripped (`DAEMON_SUBMIT_VERDICT.md` §2.5): a second consecutive
+    /// daemon rejection of the same kind. Two independent builds
+    /// rejected identically is a systematic wallet/daemon rule (or
+    /// fee-model) disagreement, not a bad tx; further automatic builds
+    /// are refused until the operator acknowledges. Emitted exactly
+    /// once per trip.
+    SubmitLoopBreakerTripped {
+        /// The reservation whose rejection tripped the breaker.
+        reservation_id: ReservationId,
+
+        /// The rejection kind of the consecutive streak.
+        kind: TerminalErrorKind,
+    },
+
+    /// The §5.3 watchdog dispatched a rung-1 resubmit-same-bytes probe
+    /// for a held tx that reached the escape horizon
+    /// (`DAEMON_SUBMIT_VERDICT.md` §5.3, [`escape_ladder_step`](super::submit_watchdog::escape_ladder_step)
+    /// returned `ProbeResubmitSameBytes`). Observability-only trace of
+    /// the probe firing; the daemon verdict follows on
+    /// [`WatchdogProbeResolved`](Self::WatchdogProbeResolved).
+    WatchdogProbeDispatched {
+        /// The held tx being re-offered to the daemon.
+        tx_hash: TxHash,
+
+        /// The wait-epoch baseline height the probe fires against
+        /// (the height the horizon was measured from).
+        baseline_height: u64,
+    },
+
+    /// The §5.3 watchdog probe returned a daemon verdict. Observability
+    /// trace of the [`WatchdogProbeOutcome`] the ladder branched on
+    /// (`DAEMON_SUBMIT_VERDICT.md` §5.3 presence branching); any
+    /// resulting alarm is carried separately on
+    /// [`WatchdogAlarm`](Self::WatchdogAlarm).
+    WatchdogProbeResolved {
+        /// The probed tx.
+        tx_hash: TxHash,
+
+        /// The presence fact the probe observed.
+        outcome: WatchdogProbeOutcome,
+    },
+
+    /// **Operator alarm** — the §5.3 watchdog exhausted its automatic
+    /// remedies for a held tx and escalated to the human-decision rung
+    /// (`DAEMON_SUBMIT_VERDICT.md` §5.3 rung 2 / §7.1: a rebuild is
+    /// never automatic on timeout). Edge-triggered: emitted once per tx
+    /// per alarm episode, not once per tick, to bound alarm-fatigue.
+    WatchdogAlarm {
+        /// The held tx the operator must adjudicate.
+        tx_hash: TxHash,
+
+        /// Why the automatic ladder could not resolve the tx.
+        reason: WatchdogAlarmReason,
+    },
+
+    /// **Operator alarm** — the F40-R2 fruitless-rescan breaker tripped
+    /// (`DAEMON_SUBMIT_VERDICT.md` §7.2, F40-R2): a daemon claimed a tx
+    /// confirmed at an already-scanned height, the targeted re-scan
+    /// found the block hash matching but the spend still unobserved,
+    /// and this recurred for `attempts` consecutive ticks. The lock
+    /// stays placed (F40-R1 is structural; no release on this path);
+    /// the operator is alerted to a daemon lying about confirmation.
+    /// Emitted exactly once per trip.
+    FruitlessRescanBreakerTripped {
+        /// The tx the daemon falsely claims confirmed.
+        tx_hash: TxHash,
+
+        /// The consecutive fruitless-rescan count at the trip.
+        attempts: u32,
     },
 }
 
@@ -1456,7 +1680,7 @@ mod tests {
             kind: MalformedKind::ExcessiveOutputs,
         });
         sink.emit(RefreshDiagnostic::DaemonTimeout {
-            op: DaemonOp::GetScannableBlockByNumber,
+            op: DaemonOp::FetchScannableBlock,
             elapsed: Duration::from_millis(1500),
         });
         sink.emit(RefreshDiagnostic::DaemonProtocolError {

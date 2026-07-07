@@ -140,7 +140,6 @@ compare_jsonrpc "RPC hard_fork_info"         "hard_fork_info"
 compare_jsonrpc "RPC get_info"               "get_info"
 compare_jsonrpc "RPC get_last_block_header"  "get_last_block_header"
 compare_jsonrpc "RPC get_output_histogram"   "get_output_histogram" '{"amounts":[0]}'
-compare_jsonrpc "RPC get_staking_info"       "get_staking_info"
 compare_jsonrpc "RPC get_txpool_backlog"     "get_txpool_backlog"
 
 echo ""

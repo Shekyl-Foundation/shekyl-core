@@ -227,26 +227,6 @@ ShekylBurnSplit shekyl_compute_burn_split(
     uint64_t burn_pct,
     uint64_t staker_pool_share);
 
-/// Compute stake weight for a given amount and tier.
-uint64_t shekyl_stake_weight(uint64_t amount, uint8_t tier_id);
-/// Minimum lock duration in blocks for a stake tier.
-uint64_t shekyl_stake_lock_blocks(uint8_t tier_id);
-/// Yield multiplier (fixed-point) for a stake tier.
-uint64_t shekyl_stake_yield_multiplier(uint8_t tier_id);
-/// Per-block staker reward share: (total_reward_at_height * stake_weight) / total_weighted_stake.
-/// total_weighted_stake is passed as a 128-bit value split into lo/hi u64 halves.
-/// If overflow_out is non-null, *overflow_out is set to 1 when the quotient does not fit in u64.
-uint64_t shekyl_calc_per_block_staker_reward(
-    uint64_t total_reward_at_height,
-    uint64_t stake_weight,
-    uint64_t total_weighted_stake_lo,
-    uint64_t total_weighted_stake_hi,
-    uint8_t *overflow_out);
-uint32_t shekyl_stake_tier_count(void);
-/// Null-terminated UTF-8 tier name, or null if tier_id is invalid.
-const char *shekyl_stake_tier_name(uint8_t tier_id);
-uint64_t shekyl_stake_max_claim_range(void);
-uint64_t shekyl_calc_stake_ratio(uint64_t total_staked, uint64_t circulating_supply);
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 
@@ -318,10 +298,10 @@ bool shekyl_derive_output_secrets(
     uint8_t* out_amount_tag,
     uint8_t* out_ml_dsa_seed);
 
-/// Derive X25519-only view tag for scanner pre-filtering.
-/// x25519_ss_ptr: exactly 32 bytes. Returns 1-byte tag.
-uint8_t shekyl_derive_view_tag_x25519(
-    const uint8_t* x25519_ss_ptr,
+/// Derive ML-KEM-keyed view-tag pre-filter byte (FA-6).
+/// ml_kem_ss_ptr: exactly 32 bytes. Returns 1-byte wire tag.
+uint8_t shekyl_derive_view_tag_prefilter(
+    const uint8_t* ml_kem_ss_ptr,
     uint64_t output_index);
 
 /// Expected proof size for given inputs and tree depth.
@@ -377,6 +357,57 @@ uint8_t shekyl_fcmp_verify(
     const uint8_t* tree_root_ptr,
     uint8_t tree_depth,
     const uint8_t* signable_tx_hash_ptr);
+
+/// Verify a membership-only FCMP++ proof (reward-emission backing; NO key image).
+/// Mirror of shekyl_fcmp_verify without the key-image array. Anti-replay for this
+/// path is the emission per-epoch dedup, not a key image; the ML-DSA leaf gate is
+/// shekyl_emission_hybrid_auth_verify. po_count must equal pqc_hash_count.
+/// po_count must be in 1..=MAX_INPUTS (= 8); 0 or larger is rejected up front.
+/// Returns 0 on success, else the VerifyError discriminant:
+///   1 = Deserialization (also: null ptr; po_count == 0 or > MAX_INPUTS; po_count*32 usize overflow)
+///   2 = InvalidTreeRoot   3 = PqcCommitmentMismatch
+///   5 = UpstreamError     6 = BatchVerificationFailed   7 = TreeDepthTooLarge
+///   8 = InputCountMismatch (po_count != pqc_hash_count)
+/// Code 4 (KeyImageCountMismatch) is unreachable here — this path has no key images.
+uint8_t shekyl_fcmp_membership_only_verify(
+    const uint8_t* proof_ptr,
+    size_t proof_len,
+    const uint8_t* pseudo_outs_ptr,
+    size_t po_count,
+    const uint8_t* pqc_pk_hashes_ptr,
+    size_t pqc_hash_count,
+    const uint8_t* tree_root_ptr,
+    uint8_t tree_depth,
+    const uint8_t* signable_tx_hash_ptr);
+
+/// Reward-emission hybrid vin-auth verify (PR-E1; the C-1 hard-gate core). C-1 calls
+/// this once per auth (Auth-B backing, Auth-P pseudonym).
+///   (1) recompute hash_pqc_public_key(pubkey) and require equality with the in-circuit
+///       committed leaf_hash (binds the auth to the proven leaf, gate-6 §9.6);
+///   (2) verify the HYBRID (Ed25519 + ML-DSA-65) signature over msg.
+/// The auth is hybrid, matching every other signature in the system — NOT ML-DSA-only.
+/// Ratified for defense-in-depth against a classical break of ML-DSA-65 (Auth-P has no
+/// membership-proof classical fallback). See REWARD_EMISSION_VIN_PLAN.md R1.A(2) retraction.
+/// pubkey_ptr: canonical hybrid public key bytes. sig_ptr: canonical hybrid
+/// signature bytes. leaf_hash_ptr: 32-byte in-circuit committed leaf hash.
+/// pubkey_len / sig_len MUST equal the canonical hybrid pubkey / signature lengths — a
+/// non-canonical length is rejected UP FRONT (before any pointer is read) as PubkeyDeser (2) /
+/// SigDeser (3), NOT NullPtr. Pass the exact canonical byte counts, not a buffer capacity.
+/// LEAF-HASH INPUT — do not get this wrong: despite the pqc_pk naming, the leaf hash is
+/// hash_pqc_public_key over the FULL canonical hybrid pubkey bytes (Ed25519 || ML-DSA-65),
+/// exactly what curve-tree leaves commit (derivation.rs::derive_pqc_leaf_hash). Hashing only
+/// the ML-DSA component yields a different leaf_hash and systematic LeafHashMismatch (code 4).
+/// Returns 0 on success, else:
+///   1 = NullPtr   2 = PubkeyDeser   3 = SigDeser
+///   4 = LeafHashMismatch   5 = Verify (signature did not verify).
+uint8_t shekyl_emission_hybrid_auth_verify(
+    const uint8_t* pubkey_ptr,
+    size_t pubkey_len,
+    const uint8_t* msg_ptr,
+    size_t msg_len,
+    const uint8_t* sig_ptr,
+    size_t sig_len,
+    const uint8_t* leaf_hash_ptr);
 
 /// Convert raw output tuples into serialized 4-scalar leaves.
 ShekylBuffer shekyl_fcmp_outputs_to_leaves(
@@ -492,7 +523,9 @@ struct ShekylOutputData {
     uint8_t commitment[32];
     uint8_t enc_amount[8];
     uint8_t amount_tag;
-    uint8_t view_tag_x25519;
+    uint8_t enc_label[8];
+    uint8_t label_tag;
+    uint8_t view_tag_prefilter;
     uint8_t kem_ciphertext_x25519[32];
     ShekylBuffer kem_ciphertext_ml_kem;
     ShekylBuffer pqc_public_key;
@@ -514,6 +547,27 @@ ShekylOutputData shekyl_construct_output(
     uint64_t amount,
     uint64_t output_index);
 
+/// Construct output with explicit 8-byte label plaintext (FA-8 cooperative send).
+ShekylOutputData shekyl_construct_output_labeled(
+    const uint8_t* tx_key_secret,
+    const uint8_t* x25519_pk,
+    const uint8_t* ml_kem_ek,
+    size_t ml_kem_ek_len,
+    const uint8_t* spend_key,
+    uint64_t amount,
+    uint64_t output_index,
+    const uint8_t* label_plaintext);
+
+/// Label plaintext for a payment URI (ungated; see SUBADDRESS_UNDER_PQC.md
+/// §5.7.10). Parses `shekyl:…?rid=…` and returns 0 on success (REQUEST
+/// plaintext if a valid u48-encodable `rid` is present, else sentinel — a
+/// missing or out-of-range `rid` also yields the sentinel with rc 0). On -3
+/// (parse/UTF-8 failure) the output is still the sentinel plaintext. -4 is
+/// returned on null pointer without writing `out_plaintext`.
+int32_t shekyl_label_plaintext_for_payment_uri(
+    const char* uri,
+    uint8_t* out_plaintext);
+
 /// Free heap-allocated fields in ShekylOutputData.
 void shekyl_output_data_free(ShekylOutputData* data);
 
@@ -531,6 +585,8 @@ bool shekyl_scan_output(
     const uint8_t* commitment,
     const uint8_t* enc_amount,
     uint8_t amount_tag_on_chain,
+    const uint8_t* enc_label,
+    uint8_t label_tag_on_chain,
     uint8_t view_tag_on_chain,
     const uint8_t* spend_key,
     uint64_t output_index,
@@ -555,6 +611,8 @@ bool shekyl_scan_output_recover(
     const uint8_t* commitment,
     const uint8_t* enc_amount,
     uint8_t amount_tag_on_chain,
+    const uint8_t* enc_label,
+    uint8_t label_tag_on_chain,
     uint8_t view_tag_on_chain,
     uint64_t output_index,
     uint8_t* ho_out,
@@ -589,6 +647,8 @@ bool shekyl_scan_and_recover(
     const uint8_t* commitment,
     const uint8_t* enc_amount,
     uint8_t amount_tag_on_chain,
+    const uint8_t* enc_label,
+    uint8_t label_tag_on_chain,
     uint8_t view_tag_on_chain,
     uint64_t output_index,
     const uint8_t* spend_secret_key,
@@ -727,7 +787,8 @@ bool shekyl_verify_tx_proof_inbound(
 
 /// Generate reserve proof (prove ownership of unspent outputs).
 /// proof_secrets: output_count * 128 bytes — packed per output.
-/// spend_secrets: output_count * 32 bytes — per-output subaddress spend secret.
+/// Spend authority is the single master spend_secret_key; there is no
+/// per-output spend secret (the prover derives x = ho + b from the master).
 bool shekyl_generate_reserve_proof(
     const uint8_t* spend_secret_key,       // 32 bytes (master)
     const uint8_t* address,                // address_len bytes
@@ -736,7 +797,6 @@ bool shekyl_generate_reserve_proof(
     size_t message_len,
     const uint8_t* proof_secrets,          // output_count * 128 bytes
     const uint8_t* key_images,             // output_count * 32 bytes
-    const uint8_t* spend_secrets,          // output_count * 32 bytes
     const uint8_t* output_keys,            // output_count * 32 bytes
     uint32_t output_count,
     ShekylBuffer* proof_out);
@@ -855,7 +915,7 @@ bool shekyl_bip39_mnemonic_from_entropy(
 /// `out32_ptr`. The inverse of `shekyl_bip39_mnemonic_from_entropy` above;
 /// used by the wallet keyfile JSON-restore path to extract the entropy
 /// bytes for `store_keys`-encrypted persistence in `m_bip39_entropy`. See
-/// `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10 for the keyfile schema
+/// `docs/completed/ELECTRUM_WORDS_REMOVAL.md` §4.10 for the keyfile schema
 /// rationale.
 bool shekyl_bip39_mnemonic_to_entropy(
     const uint8_t* words_ptr,
@@ -1056,6 +1116,36 @@ bool shekyl_curve_tree_helios_hash_init(uint8_t* out_ptr);
 uint32_t shekyl_curve_tree_scalars_per_leaf();    // 4
 uint32_t shekyl_curve_tree_selene_chunk_width();  // 38 (LAYER_ONE_LEN)
 uint32_t shekyl_curve_tree_helios_chunk_width();  // 18 (LAYER_TWO_LEN)
+
+/// Compose every curve-tree layer ABOVE the leaf layer, narrow from the leaf-chunk
+/// layer — the correct producer-side grow that telescopes to the reference root
+/// (fixes the depth-3 layer-2 incremental-deepening divergence: an in-place deepen
+/// dropped the pre-existing sibling). The daemon keeps maintaining the leaf layer
+/// with shekyl_curve_tree_hash_grow_selene (which telescopes), then calls this to
+/// recompose every upper layer and obtain the consensus root.
+///
+/// Output sizes are deterministic from num_leaf_chunks via the SELENE/HELIOS
+/// chunk-width ladder, so the caller pre-allocates:
+///   leaf_chunks_ptr:      num_leaf_chunks * 32 bytes (leaf-layer chunk hashes).
+///   out_chunks_ptr:       the upper chunks, layer 1 first then layer 2, …, 32B each.
+///   out_chunks_capacity:  a COUNT of 32-byte chunks (NOT bytes); must be
+///                         >= the sum of the upper-layer chunk counts.
+///   out_layer_sizes_ptr:  one chunk-count per upper layer.
+///   out_layer_sizes_capacity: a COUNT of uint64_t entries (NOT bytes); must be
+///                         >= the number of upper layers.
+///   out_num_upper_layers: number of upper layers written.
+///   out_root_ptr:         32 bytes — the consensus curve-tree root.
+/// Returns true on success; false on a null pointer, insufficient capacity, or a
+/// malformed leaf node.
+bool shekyl_curve_tree_grow_upper_layers(
+    const uint8_t* leaf_chunks_ptr,
+    uint64_t num_leaf_chunks,
+    uint8_t* out_chunks_ptr,
+    uint64_t out_chunks_capacity,
+    uint64_t* out_layer_sizes_ptr,
+    uint64_t out_layer_sizes_capacity,
+    uint64_t* out_num_upper_layers,
+    uint8_t* out_root_ptr);
 
 /// Ed25519 → Selene scalar conversion (Wei25519 x-coordinate).
 /// compressed_ptr: 32 bytes compressed Ed25519 point.
@@ -1589,66 +1679,6 @@ bool shekyl_wallet_extract_rederivation_inputs(
     uint8_t* out_master_seed_64,
     uint32_t* out_error);
 
-/* ---------------------------------------------------------------------------
- * Wallet preferences (Layer 2 of the three-layer config model).
- *
- * On-disk these live in a co-located `<P>.prefs.toml` plus
- * `<P>.prefs.toml.hmac` pair, where `<P>` is the state file path with
- * any trailing `.wallet` suffix stripped. The HMAC key is derived
- * inside Rust from the handle's `file_kek` + `expected_classical_address`,
- * so C++ never sees key material.
- *
- * The FFI surface uses JSON as the wire format even though the on-disk
- * form is TOML — rapidjson is already linked from wallet2.cpp and the
- * JSON↔TOML conversion happens behind the handle. The JSON schema is
- * the serde serialization of `shekyl_wallet_prefs::WalletPrefs`:
- * nested objects named `cosmetic`, `operational`, `device`, `rpc`, and
- * the top-level `subaddress_lookahead`. All nested structs carry
- * `#[serde(deny_unknown_fields)]`, so callers MUST NOT attempt to
- * smuggle Bucket-3 fields (`max_reorg_depth`, `skip_to_height`,
- * `refresh_from_block_height`) through this surface — those are
- * CLI-ephemeral overrides passed to `shekyl_wallet_open` via
- * `ShekylSafetyOverrides`.
- *
- * The get path is advisory: a missing file or tampered HMAC pair is
- * not an error. Defaults are returned, the tamper event is surfaced
- * via `out_was_tampered`, and the corrupt files (if any) are moved
- * aside by the Rust layer. This matches the refuse-to-load policy for
- * the keys/state files (which DO refuse) but acknowledges that losing
- * user preferences is a UX regression rather than a security event.
- * See `docs/WALLET_PREFS.md §5`.
- * ---------------------------------------------------------------------------
- */
-
-/* Read the wallet's preferences, serialized as UTF-8 JSON, into
- * `out_buf`. Uses the standard two-call sizing discipline:
- *
- *     size_t n = 0; uint32_t e = 0;
- *     shekyl_wallet_prefs_get_json(h, NULL, 0, &n, &tampered, &e);
- *     // e == SHEKYL_WALLET_ERR_BUFFER_TOO_SMALL, n now holds length
- *     std::vector<uint8_t> buf(n);
- *     shekyl_wallet_prefs_get_json(h, buf.data(), n, &n, &tampered, &e);
- *
- * The JSON is NOT NUL-terminated. `out_was_tampered` receives true iff
- * the on-disk pair was corrupt and has been quarantined; defaults are
- * still returned. wallet2.cpp should surface a UI banner on tamper
- * but MUST NOT refuse to open the wallet. */
-bool shekyl_wallet_prefs_get_json(
-    ShekylWallet* h,
-    uint8_t* out_buf, size_t out_cap, size_t* out_len_required,
-    bool* out_was_tampered,
-    uint32_t* out_error);
-
-/* Persist caller-supplied preferences JSON. The JSON must round-trip
- * through `shekyl_wallet_prefs::WalletPrefs`'s strict schema; unknown
- * fields or Bucket-3 field names land as `SHEKYL_WALLET_ERR_PREFS`.
- * On success both `<base>.prefs.toml` and `<base>.prefs.toml.hmac`
- * have been atomically rewritten. */
-bool shekyl_wallet_prefs_set_json(
-    ShekylWallet* h,
-    const uint8_t* json_ptr, size_t json_len,
-    uint32_t* out_error);
-
 /* ===========================================================================
  * save_as -- atomic-within-a-filesystem wallet relocate
  * ---------------------------------------------------------------------------
@@ -1677,10 +1707,249 @@ bool shekyl_wallet_save_as(
     uint32_t* out_error);
 
 // ---------------------------------------------------------------------------
+// Archival serve-credit verification (ARCHIVAL_RETENTION_GATE2.md §5.3)
+// ---------------------------------------------------------------------------
+
+struct shekyl_archival_verify_ctx {
+    uint64_t current_height;
+    uint64_t settlement_epoch;
+    uint8_t block_hash_at_seal[32];
+    uint8_t registry_segment_subroot_rk[32];
+    uint64_t segment_leaf_count;
+    const uint8_t* pqc_pubkey_ptr;
+    size_t pqc_pubkey_len;
+    /// Flattened Selene leaf-layer scalars (`N × 32` bytes); not a scalar count.
+    const uint8_t* leaf_layer_scalars_ptr;
+    size_t leaf_layer_scalars_len;
+};
+
+#define SHEKYL_ARCHIVAL_VERIFY_OK                    0
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR        1
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_WIRE              2
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_PATH_TOO_SHALLOW 3
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_NOT_IN_OPENING 4
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_SUBROOT_MISMATCH  5
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_INDEX        6
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_REGISTRY_RK       7
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_FIRE_NOT_REACHED  8
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_CREDIT_DEADLINE   9
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_PQC_VERIFY       10
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_PQC_DESER        11
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_ZERO_GEOMETRY      12
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_EPOCH_MISMATCH    13
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE      14
+
+/// Returns 1 on success; writes 32-byte `P_canonical_id` to `out_p_id`.
+uint8_t shekyl_archival_p_canonical_id_from_pubkey(
+    const uint8_t* hybrid_pubkey_ptr,
+    size_t hybrid_pubkey_len,
+    uint8_t* out_p_id);
+
+uint64_t shekyl_archival_epoch_open_height(uint64_t settlement_epoch);
+uint64_t shekyl_archival_epoch_close_height(uint64_t settlement_epoch);
+uint64_t shekyl_archival_challenge_resolution_blocks(void);
+uint64_t shekyl_archival_epoch_slash_deadline_height(uint64_t settlement_epoch);
+uint64_t shekyl_archival_challenge_seal_height(uint64_t h_open);
+uint64_t shekyl_archival_challenge_fire_height(
+    uint64_t h_open,
+    uint64_t h_close,
+    const uint8_t* block_hash_at_seal,
+    const uint8_t* p_id,
+    uint64_t shard_id,
+    uint64_t settlement_epoch);
+
+/// `vin_payload` is the vin body after the `0x04` type tag.
+uint8_t shekyl_archival_verify_serve_credit_vin(
+    const uint8_t* vin_payload_ptr,
+    size_t vin_payload_len,
+    const struct shekyl_archival_verify_ctx* ctx_ptr);
+
+// Bond-post CT balance (ARCHIVAL_BOND_GATE4.md §3.2)
+#define SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK                    0
+#define SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NULL_PTR        1
+#define SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_BOTH_TERMS      2
+/// Invalid point, non-32-byte-aligned flat buffer, or count*32 overflow.
+#define SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT   3
+#define SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_SUM_MISMATCH    4
+#define SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM    5
+
+/// Flattened `num_pseudo_outs` / `num_out_masks` arrays of 32-byte curve points.
+uint8_t shekyl_archival_verify_bond_post_ct_balance(
+    const uint8_t* pseudo_outs_ptr,
+    size_t num_pseudo_outs,
+    const uint8_t* out_masks_ptr,
+    size_t num_out_masks,
+    uint64_t txn_fee,
+    uint64_t bond_credit,
+    uint64_t bond_debit);
+
+// General CT cleartext balance (GENESIS_TX_WIRE_FORMAT.md §2.3): the no-bond-term
+// shape for verRctSemanticsSimple / verRctSemanticsFeeOnly. Canonical prime-order
+// points only; INVALID_POINT is checked before the sum, so a torsion-laden input
+// returns INVALID_POINT (never SUM_MISMATCH).
+#define SHEKYL_CT_BALANCE_OK                  0
+#define SHEKYL_CT_BALANCE_ERR_NULL_PTR        1
+#define SHEKYL_CT_BALANCE_ERR_INVALID_POINT   2
+#define SHEKYL_CT_BALANCE_ERR_SUM_MISMATCH    3
+
+/// Verify `sum(pseudoOuts) = sum(out_masks) + fee*H` over flattened `N x 32`
+/// curve points (the fee contributes its commitment `fee*H`, not a bare scalar).
+/// Either pointer may be null when its count is zero (fee-only shape).
+uint8_t shekyl_verify_ct_balance(
+    const uint8_t* pseudo_outs_ptr,
+    size_t num_pseudo_outs,
+    const uint8_t* out_masks_ptr,
+    size_t num_out_masks,
+    uint64_t txn_fee);
+
+// JoinMarket bond-post semantic verify (gate-4 §3.5; hybrid pubkey + P_id hint stay C++)
+#define SHEKYL_ARCHIVAL_BOND_POST_OK                           0
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR                 1
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND                2
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_SHARD_SET_EMPTY           3
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_COMPLETE_TREE_WITH_SHARDS 4
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_DEBIT_NONZERO        5
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_BOTH_TERMS                6
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_ZERO                7
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH            8
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS             9
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND            10
+
+/// `record_exists` is 1 when LMDB already stores a bond record for this P_id.
+uint8_t shekyl_archival_verify_join_market_bond_post(
+    uint8_t post_kind,
+    uint8_t holdings_kind,
+    const uint64_t* shard_ids_ptr,
+    size_t shard_ids_len,
+    uint64_t bonded_total_atomic,
+    uint64_t bond_credit,
+    uint64_t bond_debit,
+    uint8_t record_exists);
+
+/// Returns 1 when settlement_epoch >= join_settlement_epoch + 1 (E_first lower bound).
+uint8_t shekyl_archival_serve_credit_epoch_ok(
+    uint64_t settlement_epoch,
+    uint64_t join_settlement_epoch);
+
+// ---------------------------------------------------------------------------
+// Segment-freeze pipeline (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.1). The
+// first-crossing boundary division lives ONLY here; both daemon hooks
+// (add_block freeze processor, pop_block revert) call the entry point and
+// C++ never divides by SHEKYL_ARCHIVAL_SEGMENT_LEAF_COUNT inline
+// (division-one-site tripwire, pipeline doc §8).
+
+/// Frozen-segment count at a curve-tree leaf count:
+/// floor(leaf_count / SEGMENT_LEAF_COUNT).
+uint64_t shekyl_archival_frozen_segment_count(uint64_t leaf_count);
+
+/// Leaf-layer chunk backing challenged index `leaf_index_in_segment` of
+/// frozen shard `shard_id`, as a global position range over the daemon's
+/// curve-tree leaf table (pipeline doc §6.2). Returns 1 and writes the
+/// bounds; 0 (no write) on out-of-segment index, overflow, or null out
+/// pointer — verifier-input rejection, not abort.
+uint8_t shekyl_archival_challenge_leaf_chunk_bounds(
+    uint64_t shard_id,
+    uint64_t leaf_index_in_segment,
+    uint64_t* out_first_leaf_position,
+    uint64_t* out_leaf_count);
+
+// ---------------------------------------------------------------------------
+// Archival epoch-close consensus computation (ARCHIVAL_CONSENSUS_STATE.md §3.3,
+// §3.5). The daemon gathers raw LMDB rows and delegates the entire consensus
+// computation — membership, R_market counting, age weighting, scarcity, curve,
+// Σwork — to Rust in one coarse call (40-ffi-discipline.mdc). C++ performs no
+// consensus arithmetic.
+
+/// `good_through(P, E)` from bond fields (§3.4 interval semantics).
+/// `bad_intervals_ptr` is `2 × bad_intervals_len` u64s — flattened
+/// `(start_epoch, end_exclusive)` pairs. Returns 0 (fail-closed) on malformed input.
+uint8_t shekyl_archival_good_through(
+    uint64_t join_settlement_epoch,
+    uint64_t settlement_epoch,
+    const uint64_t* bad_intervals_ptr,
+    size_t bad_intervals_len);
+
+/// Settlement epoch containing `block_height` (bond-connect join epoch).
+uint64_t shekyl_archival_settlement_epoch_at_height(uint64_t block_height);
+
+/// Returns 1 and writes the settlement epoch whose close is processed at
+/// `block_height`; 0 (no write) at height 0 or non-boundary heights.
+uint8_t shekyl_archival_epoch_close_due(
+    uint64_t block_height,
+    uint64_t* out_settlement_epoch);
+
+/// Returns 1 and writes the prune horizon (`tip_epoch - MAX_CLAIM_AGE_W`) when
+/// the chain is older than the claim window at `block_height`; 0 otherwise.
+uint8_t shekyl_archival_prune_below_epoch(
+    uint64_t block_height,
+    uint64_t* out_prune_below_epoch);
+
+#define SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK                0
+#define SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_NULL_PTR      1
+#define SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_LEN_OVERFLOW  2
+#define SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_INDEX_RANGE   3
+
+/// One gathered bond. Layout must match `ShekylArchivalEpochCloseBond` in
+/// `rust/shekyl-ffi/src/archival_ffi.rs`.
+struct shekyl_archival_epoch_close_bond
+{
+  uint64_t join_settlement_epoch;
+  /// Flattened (start_epoch, end_exclusive) pairs; `2 * bad_intervals_len` u64s.
+  const uint64_t* bad_intervals_ptr;
+  /// Pair count (not u64 count).
+  size_t bad_intervals_len;
+  const uint64_t* held_shard_ids_ptr;
+  size_t held_shard_ids_len;
+  uint8_t is_foundation_complete_tree;
+};
+
+/// One gathered shard-registry row. Layout must match
+/// `ShekylArchivalEpochCloseShard` in `rust/shekyl-ffi/src/archival_ffi.rs`.
+struct shekyl_archival_epoch_close_shard
+{
+  uint64_t shard_id;
+  uint64_t freeze_height;
+  /// 0 when no frozen segment row exists (shard age is then zero).
+  uint8_t has_segment;
+};
+
+/// One serve-credit row as indices into the bond/shard gather arrays.
+/// Layout must match `ShekylArchivalCreditPair` in `rust/shekyl-ffi/src/archival_ffi.rs`.
+struct shekyl_archival_credit_pair
+{
+  size_t bond_idx;
+  size_t shard_idx;
+};
+
+/// Full epoch-close computation. Writes `R_market` per input shard to
+/// `out_r_market_ptr` (`shards_len` u64s) and `Σwork(E)` milli to
+/// `out_sigma_work_milli_ptr`. Outputs are zeroed before computation; a
+/// non-zero return never leaves stale values. Credit pairs must be distinct
+/// (the serve-credit ledger key `(P, shard, E)` guarantees this at gather).
+///
+/// `frozen_shard_count` is the M1 reward-gate input
+/// (ARCHIVAL_REWARD_GATE_M1.md §1.1): the segment-table count at
+/// `H_close(E)` from the single `count_frozen_shards_at_close` helper,
+/// inside the close's write txn. Epochs below `K_COVER` compute to the
+/// all-zero result (the §2.1 zero-at-top gate, applied inside Rust).
+uint8_t shekyl_archival_epoch_close_compute(
+    uint64_t settlement_epoch,
+    uint64_t close_block_height,
+    uint64_t frozen_shard_count,
+    const struct shekyl_archival_epoch_close_bond* bonds_ptr,
+    size_t bonds_len,
+    const struct shekyl_archival_epoch_close_shard* shards_ptr,
+    size_t shards_len,
+    const struct shekyl_archival_credit_pair* credit_pairs_ptr,
+    size_t credit_pairs_len,
+    uint64_t* out_r_market_ptr,
+    uint64_t* out_sigma_work_milli_ptr);
+
+// ---------------------------------------------------------------------------
 // LWMA-1 difficulty-adjustment FFI surface
 //
 // Single function: `shekyl_difficulty_lwma1_next`. Wraps the
-// `shekyl-difficulty` crate's `lwma1_next` per `docs/design/DAA_LWMA1.md`
+// `shekyl-difficulty` crate's `lwma1_next` per `docs/completed/DAA_LWMA1.md`
 // §5.3 and §6.1. The C-ABI difficulty type is `struct shekyl_u128`
 // (two u64 halves, little-endian) per Round 5's ABI disposition --
 // Rust `u128`'s C ABI was target-dependent until rustc 1.77 and the
@@ -1727,6 +1996,110 @@ int32_t shekyl_difficulty_lwma1_next(
     uint64_t chain_height,
     struct shekyl_u128* out_next_difficulty);
 
+/// PoW-target predicate: does `hash` satisfy `difficulty`?
+///
+/// Wraps the `shekyl-difficulty` crate's `check_hash` — the unified
+/// port of the inherited C++ `cryptonote::check_hash`/`_64`/`_128`
+/// family. Passes iff the 32-byte `hash`, read as a 256-bit
+/// little-endian integer, satisfies `hash * difficulty < 2^256`. The
+/// `_64`/`_128` split was a speed optimization; both produced the
+/// identical boolean (proven over the differential corpus in
+/// `rust/shekyl-difficulty/tests/check_hash_vectors.rs`).
+///
+/// `hash` is a pointer to exactly 32 bytes; the fixed length is encoded
+/// in the type as `const uint8_t (*)[32]` (same convention as the
+/// RandomX v2 surface below) so a wrong-sized buffer is a compile error
+/// rather than an out-of-bounds read. `difficulty` is the 128-bit
+/// difficulty as a `struct shekyl_u128` — construct it at the call
+/// site as `{ .lo = (uint64_t)v, .hi = (uint64_t)(v >> 64) }`; never
+/// reinterpret-cast a native `uint128_t` (Round-5 ABI rationale
+/// above). `difficulty == 0` always passes (matching the inherited
+/// behaviour; not an error).
+///
+/// Returns 0 on success and writes the result into `*out_pass`;
+/// returns `SHEKYL_DIFFICULTY_ERR_NULL_PTR` if `hash` or `out_pass`
+/// is null (in which case `*out_pass` is untouched).
+int32_t shekyl_difficulty_check_hash(
+    const uint8_t (*hash)[32],
+    struct shekyl_u128 difficulty,
+    bool* out_pass);
+
+// ---------------------------------------------------------------------------
+// RandomX v2 light-cache PoW verification FFI surface
+//
+// Two functions wrap the `shekyl-pow-randomx` verifier crate (via
+// `shekyl-ffi`'s `pow_randomx_ffi` module): the consensus PoW hash and
+// the canonical-seedhash pin/eager-derive entry point. They replace the
+// inherited C RandomX v1 path (`crypto::rx_slow_hash` /
+// `rx_set_main_seedhash`) on the daemon's block-verification boundary
+// per `docs/design/RANDOMX_V2_PHASE3_PLAN.md` §4 and `RANDOMX_V2_RUST.md`
+// §5/§17/§18.
+//
+// The 32-byte `seedhash`/`out_hash` arguments use the pointer-to-array
+// form `const uint8_t (*)[32]` / `uint8_t (*)[32]` rather than a decayed
+// `const uint8_t*`: the fixed length is part of the type, so a
+// wrong-sized buffer at a call site is a compile error rather than a
+// silent out-of-bounds access (Round-5 hardening, `RANDOMX_V2_PLAN.md`
+// §5; supersedes the decayed form in `RANDOMX_V2_RUST.md` §5).
+//
+// Under the Rust workspace's `panic = "abort"` profile,
+// `SHEKYL_POW_RANDOMX_V2_ERR_CACHE_DERIVE_FAILED` and
+// `SHEKYL_POW_RANDOMX_V2_ERR_INTERNAL` are reserved and never returned:
+// a derivation OOM or panic aborts the process. They are declared for
+// wire-stable ABI/taxonomy parity with `RANDOMX_V2_RUST.md` §17.
+// ---------------------------------------------------------------------------
+
+/// Compute the RandomX v2 PoW hash of `data[0..data_len]` under
+/// `*seedhash`.
+///
+/// On success writes exactly 32 bytes to `*out_hash` and returns
+/// `SHEKYL_POW_RANDOMX_V2_OK` (0). The per-seedhash 256 MiB cache is
+/// derived lazily on first use and memoized internally; the daemon
+/// removes first-use latency on the canonical seedhash by calling
+/// `shekyl_pow_randomx_v2_set_canonical` at tip advance.
+///
+/// `seedhash` and `out_hash` must be non-null. The `data`/`data_len`
+/// pairing follows `RANDOMX_V2_RUST.md` §17: `data == NULL` is valid iff
+/// `data_len == 0` (empty input); `data == NULL && data_len > 0` returns
+/// `SHEKYL_POW_RANDOMX_V2_ERR_NULL_PTR`. On any non-zero return
+/// `*out_hash` is untouched and must not be read.
+int32_t shekyl_pow_randomx_v2_hash(
+    const uint8_t (*seedhash)[32],
+    const uint8_t* data,
+    size_t data_len,
+    uint8_t (*out_hash)[32]);
+
+/// Pin `*seedhash` as the canonical verification cache and eagerly
+/// derive it.
+///
+/// Called at tip advance (replacing `crypto::rx_set_main_seedhash`).
+/// Performs the synchronous ~150-200 ms / 256 MiB cache derivation
+/// off the per-block validation hot path, then pins the result so a
+/// flood of transient-seedhash lookups cannot evict it (the DoS
+/// protection of `RANDOMX_V2_PHASE2C_PLAN.md` §5.11.7). Idempotent:
+/// re-pinning the already-canonical seedhash is a no-op.
+///
+/// `seedhash` must be non-null. Returns `SHEKYL_POW_RANDOMX_V2_OK` (0)
+/// on success, `SHEKYL_POW_RANDOMX_V2_ERR_NULL_PTR` (-1) if null.
+int32_t shekyl_pow_randomx_v2_set_canonical(
+    const uint8_t (*seedhash)[32]);
+
+/// RandomX seed-epoch schedule: the height whose block hash seeds the
+/// cache used to verify `height` (2048-block epochs, 64-block lag;
+/// SEEDHASH_EPOCH_* env overrides are the regtest lever). Pure
+/// arithmetic; replaces the retired crypto::rx_seedheight.
+uint64_t shekyl_pow_randomx_v2_seedheight(uint64_t height);
+/// seedheight(height + lag) — the upcoming seed height (the second
+/// output of the retired crypto::rx_seedheights).
+uint64_t shekyl_pow_randomx_v2_next_seedheight(uint64_t height);
+/// The effective seed-epoch length in blocks (2048, or the clamped
+/// SEEDHASH_EPOCH_BLOCKS override) — the single source for consumers
+/// needing the epoch length itself (block-sync sizing).
+uint64_t shekyl_pow_randomx_v2_seed_epoch_blocks(void);
+/// True iff a SEEDHASH_EPOCH_* override is active (schedule differs
+/// from the mainnet defaults); the daemon logs a startup warning.
+bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
+
 } // extern "C"
 
 /// `shekyl_difficulty_lwma1_next` returned successfully and
@@ -1746,6 +2119,23 @@ int32_t shekyl_difficulty_lwma1_next(
 /// Rust workspace runs `panic = "abort"` so any panic terminates the
 /// process before reaching the return path.
 #define SHEKYL_DIFFICULTY_ERR_INTERNAL       -4
+
+/// `shekyl_pow_randomx_v2_hash` wrote `*out_hash`, or
+/// `shekyl_pow_randomx_v2_set_canonical` pinned the seedhash.
+#define SHEKYL_POW_RANDOMX_V2_OK                       0
+/// A required pointer (`seedhash`/`out_hash`, or `data` when
+/// `data_len > 0`) was null. `*out_hash` is not written.
+#define SHEKYL_POW_RANDOMX_V2_ERR_NULL_PTR            -1
+/// `data_len` exceeds the verifier's hashing-blob bound (2 MiB).
+/// `*out_hash` is not written.
+#define SHEKYL_POW_RANDOMX_V2_ERR_DATA_TOO_LARGE      -2
+/// Reserved for a structured cache-derivation failure. Not currently
+/// emitted: cache derivation uses infallible allocation that aborts on
+/// OOM under `panic = "abort"`. See `RANDOMX_V2_RUST.md` §17.
+#define SHEKYL_POW_RANDOMX_V2_ERR_CACHE_DERIVE_FAILED -3
+/// Reserved for a panic crossing the FFI boundary. Not currently
+/// emitted; `panic = "abort"` terminates the process first.
+#define SHEKYL_POW_RANDOMX_V2_ERR_INTERNAL            -4
 
 /// Secure memory primitives are declared in shekyl/shekyl_secure_mem.h
 /// (C-compatible header used by both memwipe.c and mlocker.cpp).

@@ -55,7 +55,10 @@ fn main() {
          pub const GENERATED_MONEY_SUPPLY: u64 = {money_supply};\n\
          pub const GENERATED_EMISSION_SPEED_FACTOR_PER_MINUTE: u64 = {esf};\n\
          pub const GENERATED_FINAL_SUBSIDY_PER_MINUTE: u64 = {final_subsidy};\n\
-         pub const GENERATED_DAA_TARGET_SECONDS: u64 = {daa_target};\n",
+         pub const GENERATED_DAA_TARGET_SECONDS: u64 = {daa_target};\n\
+         pub const GENERATED_STAKER_EMISSION_SHARE: u64 = {staker_emission_share};\n\
+         pub const GENERATED_STAKER_EMISSION_DECAY: u64 = {staker_emission_decay};\n\
+         pub const GENERATED_BLOCKS_PER_YEAR: u64 = {blocks_per_year};\n",
         scale = get_u64(&map, "shekyl_fixed_point_scale"),
         release_min = get_u64(&map, "shekyl_release_min"),
         release_max = get_u64(&map, "shekyl_release_max"),
@@ -67,6 +70,9 @@ fn main() {
         esf = get_u64(&map, "emission_speed_factor_per_minute"),
         final_subsidy = get_u64(&map, "final_subsidy_per_minute"),
         daa_target = daa_target_seconds,
+        staker_emission_share = get_u64(&map, "shekyl_staker_emission_share"),
+        staker_emission_decay = get_u64(&map, "shekyl_staker_emission_decay"),
+        blocks_per_year = get_u64(&map, "shekyl_blocks_per_year"),
     );
 
     fs::write(&out_file, output).expect("failed writing generated Rust economics params");

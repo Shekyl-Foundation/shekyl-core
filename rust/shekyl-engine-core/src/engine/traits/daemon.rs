@@ -8,23 +8,27 @@
 //! Per [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`] §2.5, `DaemonEngine` is
 //! the wallet-side trait the [`Engine`](super::super::Engine)
 //! orchestrator binds against for daemon-bound calls. It is a
-//! supertrait extension of [`shekyl_rpc::Rpc`] (the
-//! upstream-vendored RPC trait that already covers
-//! `get_height` / `get_scannable_block_by_*` / etc.), adding only
-//! the wallet-specific methods that have no place on `Rpc`:
-//! [`DaemonEngine::get_fee_estimates`] and
+//! supertrait extension of [`shekyl_rpc_client::Rpc`] (the
+//! upstream-vendored RPC trait that covers the transport primitives —
+//! `get_height` / `get_block` / `get_transactions` / `get_o_indexes` /
+//! etc.), adding the wallet-specific methods that have no place on
+//! `Rpc`: [`DaemonEngine::fetch_scannable_block`] — which composes
+//! those transport primitives into a `shekyl-wire`-parsed
+//! [`ScannableBlock`], superseding the legacy single-call
+//! `Rpc::get_scannable_block_by_*` removed in the §8 step-4 migration
+//! — plus [`DaemonEngine::get_fee_estimates`] and
 //! [`DaemonEngine::submit_transaction`].
 //!
 //! # Two-trait shape rationale (§2.5)
 //!
-//! `Rpc` lives in `shekyl-oxide` (the vendored upstream fork tracking
-//! `monero-oxide`); adding wallet-specific methods to it would either
-//! modify upstream-vendored code (increasing divergence pressure on
-//! the canary tracked in [`docs/CI_BASELINE.md`]) or be defined as
-//! an extension trait — which is exactly the two-trait shape under a
-//! different name. Consumers that need the inherited `Rpc` methods
-//! reach them through the supertrait bound rather than duplicating
-//! the surface on `DaemonEngine`.
+//! `Rpc` is the daemon-transport surface in `shekyl-rpc-client` (a first-party
+//! crate relocated from the vendored `shekyl-oxide` `rpc` in the un-vendor, so the
+//! original "don't modify upstream-vendored code / divergence-canary" pressure no
+//! longer applies). The two-trait shape is retained on its own merits: `Rpc` stays
+//! the generic, reusable daemon-transport surface and `DaemonEngine` carries the
+//! wallet-specific methods as a supertrait extension. Consumers that need the
+//! inherited `Rpc` methods reach them through the supertrait bound rather than
+//! duplicating the surface on `DaemonEngine`.
 //!
 //! # Stage-4 swap-in (§7)
 //!
@@ -37,7 +41,8 @@
 //! [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`]: ../../../../../docs/V3_ENGINE_TRAIT_BOUNDARIES.md
 //! [`docs/CI_BASELINE.md`]: ../../../../../docs/CI_BASELINE.md
 
-use shekyl_rpc::{FeeRate, Rpc};
+use shekyl_rpc_client::{FeeRate, Rpc, RpcError};
+use shekyl_scanner::ScannableBlock;
 
 use crate::engine::error::IoError;
 use crate::engine::pending::TxHash;
@@ -55,26 +60,37 @@ use crate::engine::pending::TxHash;
 ///
 /// # `#[non_exhaustive]`
 ///
-/// Phase 2a is expected to extend this struct with per-snapshot
-/// metadata (e.g. estimation timestamp, daemon-reported
-/// `quantization_mask`, observed mempool weight). `#[non_exhaustive]`
-/// permits the additive growth without a Stage 1 `DaemonEngine`
-/// amendment per §8.2: callers construct via field-by-name and
-/// match exhaustively only on the listed fields.
+/// Phase 2a may extend this struct with further per-snapshot
+/// metadata (e.g. estimation timestamp, observed mempool weight).
+/// `#[non_exhaustive]` permits the additive growth without a Stage 1
+/// `DaemonEngine` amendment per §8.2: callers construct via
+/// field-by-name and match exhaustively only on the listed fields.
 ///
 /// # Per-tier `FeeRate`
 ///
-/// `FeeRate` is the `shekyl_rpc::FeeRate` (per-weight cost + rounding
-/// mask) returned by [`Rpc::get_fee_rate`]. The three fields on this
-/// struct correspond one-to-one with the three non-`Custom`
+/// `FeeRate` is the `shekyl_rpc_client::FeeRate` (per-weight cost + rounding
+/// mask) returned by [`Rpc::get_fee_rate`]. The three tier fields on
+/// this struct correspond one-to-one with the three non-`Custom`
 /// `FeePriority` variants; resolving a `FeePriority` to a `FeeRate`
 /// is a structural projection rather than a fresh daemon call.
+///
+/// # Atomic single-RPC snapshot (§3.3)
+///
+/// Per `PHASE_2A_SEND_PATH.md` §3.3, the whole snapshot derives from
+/// **one** `get_fee_estimate` JSON-RPC call (not three per-tier
+/// `get_fee_rate` calls): the response's fee array maps to the three
+/// tiers (`economy`/`standard`/`priority` → indices `0`/`1`/`3` per
+/// `V3_WALLET_DECISION_LOG.md`) and its single `quantization_mask`
+/// is stored once on [`Self::quantization_mask`]. This guarantees the
+/// tier band and the
+/// [`Custom`](super::super::FeePriority::Custom) feerate's rounding
+/// mask all derive from the same daemon view, with no tier-vs-tier
+/// skew from interleaved calls.
 ///
 /// [`docs/V3_WALLET_DECISION_LOG.md`]: ../../../../../docs/V3_WALLET_DECISION_LOG.md
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Phase 2a-stub: production callers land with §3.1 fee policy.
-pub(crate) struct FeeEstimates {
+pub struct FeeEstimates {
     /// Fee rate corresponding to
     /// [`FeePriority::Economy`](super::super::FeePriority::Economy):
     /// the slowest, cheapest tier targeting confirmation within a
@@ -91,64 +107,143 @@ pub(crate) struct FeeEstimates {
     /// the fastest tier short of fee-spiking, targeting next-block
     /// inclusion under normal mempool conditions.
     pub priority: FeeRate,
+
+    /// The daemon's fee-rounding `quantization_mask` for this
+    /// snapshot, carried **once** so a
+    /// [`Custom`](super::super::FeePriority::Custom) feerate can be
+    /// constructed against the same daemon view as the tier band
+    /// (`FeeRate::new(rate, quantization_mask)`, §3.3). Identical to
+    /// the `mask` already embedded in each tier `FeeRate`; surfaced
+    /// here so the `Custom` path does not need a fresh daemon call.
+    pub quantization_mask: u64,
 }
 
 /// Outcome of a daemon transaction submission via
 /// [`DaemonEngine::submit_transaction`].
 ///
-/// Carries the daemon's view of the submission: whether the daemon
-/// accepted the transaction freshly ([`Self::Submitted`]) or
-/// recognized it as a duplicate of one it already knows
-/// ([`Self::AlreadyKnown`]). Both variants carry the resulting
-/// [`TxHash`] so callers can correlate with the wallet's local
-/// reservation tracking and with §5.2's retry-contract verification:
-/// resubmitting bytes for which the wallet already received a hash
-/// must produce that same hash regardless of which variant the
-/// daemon returned.
+/// The wallet-side projection of the daemon's atomic
+/// [`SubmitVerdict`](shekyl_rpc_client::SubmitVerdict)
+/// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.1), plus the locally
+/// computed [`TxHash`] on the identity-bearing variants. The verdict is
+/// computed by the daemon's Rust admission engine with every mutable
+/// premise re-checked under one lock scope, so the variants are mutually
+/// consistent facts — never the racy multi-flag snapshot the deleted
+/// `send_raw_transaction` reply carried. Per-cause wallet dispositions
+/// are specified in §2.5 and applied by the orchestrator
+/// (`LocalPendingTx`), not here.
+///
+/// The legacy wallet-side `AlreadyKnown` heuristic (interpreting a
+/// generic rejection as a dedup hit via a local hash record) is retired:
+/// [`Self::AlreadyInPool`] / [`Self::AlreadyInChain`] are daemon-attested
+/// identity facts. The formerly-deferred `ProofStale` detection is now
+/// constructible as [`RejectCause::StaleRoot`], closing the
+/// `fcmp_root_stale` FOLLOWUPS reopening criterion (its named reopen was
+/// exactly "a daemon-side stale-root signal").
+///
+/// # Transport failures are not an outcome
+///
+/// A failed daemon round-trip (timeout, connection drop, unknown
+/// top-level verdict tag per the §2.3 skew rules) is **not** a
+/// `TxSubmitOutcome`: it is [`Self::Error`](DaemonEngine::Error), which
+/// the orchestrator maps to
+/// [`SubmitError::DaemonAmbiguous`](crate::engine::error::SubmitError::DaemonAmbiguous)
+/// (R9 discipline — reservation retained). Ambiguity is the *absence*
+/// of a daemon verdict; representing it here too would duplicate the
+/// concept across two enums.
 ///
 /// # `#[non_exhaustive]`
 ///
-/// Phase 2a may add variants for richer daemon outcomes
-/// (mempool-rejected-with-reason, relayed-but-unconfirmed, etc.);
-/// `#[non_exhaustive]` lets the enum extend without a Stage 1
-/// amendment per §8.2.
+/// New top-level verdict tags are a breaking wire change (F38) — but the
+/// *outcome* enum stays `#[non_exhaustive]` so a coordinated
+/// wire-version bump lands wallet-side additively.
 ///
-/// # Retry contract (§5.2)
+/// # Retry contract (§5.2 / §2.5)
 ///
-/// Per the §5.2 retry contract, [`DaemonEngine::submit_transaction`]
-/// is conditionally idempotent: same `tx_bytes` produce the same
-/// [`TxHash`] (because the hash is a deterministic function of the
-/// bytes) and the daemon dedupes by hash. A caller may retry on
-/// transient transport failures and observe `AlreadyKnown` on the
-/// second attempt; that is success, not duplicate work.
+/// [`DaemonEngine::submit_transaction`] is idempotent as a status query:
+/// resubmitting held bytes yields a definite verdict for every stable
+/// state (mined → [`Self::AlreadyInChain`]; pool-resident →
+/// [`Self::AlreadyInPool`], with **no** relay pulse per F31; competing
+/// spend → [`RejectCause::DoubleSpendConflict`]; dead → re-offered
+/// through full admission). Callers MAY retry on transient transport
+/// failures.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Phase 2a-stub: production callers land with §5.2 retry contract.
 pub(crate) enum TxSubmitOutcome {
-    /// The daemon accepted this transaction as a fresh submission.
-    /// Subsequent submission of the same bytes returns
-    /// [`Self::AlreadyKnown`] with the same hash.
+    /// Admitted to the daemon's pool at commit-check time; relay is
+    /// daemon-owned from here. The pending-tx enters awaiting
+    /// confirmation — liveness is keyed on chain confirmation observed
+    /// via refresh, never on a daemon relay claim (§5.3).
     Submitted {
         /// Hash of the submitted transaction. Deterministic in the
-        /// `tx_bytes` argument: the daemon and the caller compute
-        /// the same hash from the same bytes.
+        /// `tx_bytes` argument and computed **locally** from those
+        /// bytes, never read from a daemon field.
         hash: TxHash,
     },
 
-    /// The daemon recognized this transaction as already-known. The
-    /// caller may treat this as a successful idempotent retry per
-    /// §5.2.
-    AlreadyKnown {
-        /// Hash of the submitted transaction. Equal to the hash the
-        /// daemon returned on the original [`Self::Submitted`].
+    /// Identity fact: these exact bytes (same txid) are already in the
+    /// daemon's pool. Same wallet disposition as [`Self::Submitted`]
+    /// (§2.5) — and it resolves prior transport ambiguity for this txid.
+    AlreadyInPool {
+        /// Locally computed hash, equal to the pool-resident txid.
         hash: TxHash,
     },
+
+    /// Identity fact: this txid is in the main chain. Confirmation
+    /// observed by verdict; refresh remains the settlement authority
+    /// (reorgs happen — the verdict authorizes lock-lifecycle
+    /// transitions only).
+    AlreadyInChain {
+        /// Locally computed hash, equal to the chain-resident txid.
+        hash: TxHash,
+        /// Daemon-claimed confirming-block height (F40, §2.2 carve-out).
+        /// Consumed only as a **release-path discriminant** (§2.5) under
+        /// the R1/R2 bounds — never as settlement truth.
+        height: u64,
+    },
+
+    /// Not in pool, not in chain, and not admitted — `cause` says why.
+    /// Under the single-egress theorem (§7.1) this carries the proof
+    /// that the bytes were not relayed by this daemon, so lock release
+    /// is safe where the §2.5 disposition calls for it.
+    Rejected {
+        /// Why the daemon refused the transaction. Dispositions per
+        /// §2.5 are applied by the orchestrator.
+        cause: shekyl_rpc_client::RejectCause,
+    },
+}
+
+/// Daemon health facts consumed by the §5.3 watchdog escape ladder.
+///
+/// A contract-accurate projection of the daemon's existing `get_info`
+/// surface — the summed connection count, the daemon's current height,
+/// and its network-estimated target height — carrying **no new RPC
+/// method** (`DAEMON_SUBMIT_VERDICT.md` §5.2 item 3). The wallet-side
+/// liveness kernel maps this into its
+/// [`DaemonHealthContext`](super::super::submit_watchdog::DaemonHealthContext);
+/// the split keeps this RPC-transport trait free of any liveness-policy
+/// type (the kernel depends on the trait, never the reverse).
+///
+/// # Trust classification (§7.2)
+///
+/// Trusted under the own-daemon V3.0 deployment model; **untrusted**
+/// under the multi-daemon reopen. The damage cap is the ladder's rung 2:
+/// health context can only *delay* escalation, never authorize a
+/// rebuild.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DaemonHealth {
+    /// Outgoing + incoming connection count.
+    pub connections: u64,
+    /// The daemon's current chain height.
+    pub height: u64,
+    /// The daemon's network-estimated target height (`0` when synced —
+    /// the info surface's convention).
+    pub target_height: u64,
 }
 
 /// Engine-side view of the daemon RPC surface (§2.5).
 ///
 /// Implementors carry the RPC client (today: [`DaemonClient`] wrapping
-/// `shekyl_simple_request_rpc::SimpleRequestRpc`; at Stage 4: an
+/// `shekyl_rpc_transport::SimpleRequestRpc`; at Stage 4: an
 /// `ActorRef<DaemonActor>` per §1.4). Callers
 /// ([`Engine<S>`](super::super::Engine) orchestration,
 /// `RefreshEngine::produce_scan_result`, `PendingTxEngine::submit`)
@@ -173,6 +268,48 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     /// orchestration code can propagate uniform errors regardless of
     /// implementor.
     type Error: Into<IoError>;
+
+    /// Fetch the block at `number` in scannable form: the block, its pruned
+    /// non-miner transactions, and the first global output index, all parsed
+    /// through the canonical [`shekyl_wire`] parse.
+    ///
+    /// This is the engine-native replacement for the legacy
+    /// `shekyl_rpc_client::Rpc::get_scannable_block_by_number`. The transport is the
+    /// inherited [`Rpc`] surface (`get_block` / `get_transactions` /
+    /// `get_o_indexes`), but parsing is `shekyl_wire`, which reads the coinbase
+    /// `Null` committed base correctly (`GENESIS_TX_WIRE_FORMAT.md` §9.6/§9.9)
+    /// where the legacy parse dropped it and rejected live coinbase blocks as
+    /// `InvalidNode("invalid block")`.
+    ///
+    /// # Cancellation
+    ///
+    /// Class **a** per §4: read-only network calls with no wallet-side side
+    /// effect; dropping the returned future is equivalent to never calling.
+    ///
+    /// # Idempotency
+    ///
+    /// **Yes** per §4: repeated calls return whatever the daemon currently
+    /// serves at `number`. Read-only methods are always retry-safe (§5.2).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RpcError`] for transport failures and malformed daemon
+    /// responses; a block that fails the `shekyl_wire` parse surfaces as
+    /// [`RpcError::InvalidNode`].
+    ///
+    /// # Default implementation
+    ///
+    /// The default delegates to the in-crate native fetch
+    /// (`engine::block_fetch`). The Stage-4 `ActorRef<DaemonActor>` overrides
+    /// it to route through the actor mailbox; the test `TestDaemon` overrides
+    /// it to serve synthetic chains. Trait method signatures do not change
+    /// across the swap-in (§7).
+    fn fetch_scannable_block(
+        &self,
+        number: usize,
+    ) -> impl std::future::Future<Output = Result<ScannableBlock, RpcError>> + Send {
+        crate::engine::block_fetch::default_fetch_scannable_block(self, number)
+    }
 
     /// Atomically snapshot the daemon's fee-rate estimate at each
     /// non-`Custom` priority tier.
@@ -215,22 +352,49 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     /// daemon-side effect (the daemon may have already received
     /// and acted on the transaction). Callers that need to know
     /// whether a submission landed re-submit and observe
-    /// [`TxSubmitOutcome::AlreadyKnown`].
+    /// [`TxSubmitOutcome::AlreadyInPool`] /
+    /// [`TxSubmitOutcome::AlreadyInChain`].
     ///
     /// # Idempotency
     ///
-    /// **Conditionally** per §4: the daemon dedupes by transaction
-    /// hash, so resubmitting the same `tx_bytes` returns the same
-    /// hash, with [`TxSubmitOutcome::AlreadyKnown`] indicating the
-    /// daemon already had it. See §5.2 for the retry contract:
-    /// callers MAY retry on transient transport failures.
+    /// **Yes, as a status query** (`DAEMON_SUBMIT_VERDICT.md` §2.5):
+    /// resubmitting the same `tx_bytes` returns the same locally
+    /// computed hash and a definite verdict for every stable state —
+    /// [`TxSubmitOutcome::AlreadyInPool`] for pool-resident bytes (no
+    /// relay pulse, F31), [`TxSubmitOutcome::AlreadyInChain`] for mined
+    /// bytes. Callers MAY retry on transient transport failures.
     ///
     /// # Panics
     ///
     /// Never panics. Per `get_fee_estimates`'s panic note.
-    #[allow(dead_code)] // Phase 2a-stub: production callers land with §5.2 retry contract.
     fn submit_transaction(
         &self,
         tx_bytes: Vec<u8>,
     ) -> impl std::future::Future<Output = Result<TxSubmitOutcome, Self::Error>> + Send;
+
+    /// Snapshot the daemon's health facts for the §5.3 watchdog escape
+    /// ladder (§5.2 item 3): the summed connection count and the
+    /// sync position, which distinguish "tx stuck" from "daemon has no
+    /// peers to relay to" and "daemon is behind." One `get_info` read;
+    /// **no new RPC method** — the fields already exist on the info
+    /// surface the wallet queries for network verification.
+    ///
+    /// # Cancellation
+    ///
+    /// Class **a** per §4: a read-only network call with no wallet-side
+    /// side effect; dropping the returned future is equivalent to never
+    /// calling.
+    ///
+    /// # Idempotency
+    ///
+    /// **Yes** per §4: a snapshot read at call time; repeated calls
+    /// return whatever the daemon's current view is. Read-only methods
+    /// are always retry-safe (§5.2).
+    ///
+    /// # Panics
+    ///
+    /// Never panics. Per `get_fee_estimates`'s panic note.
+    fn get_health(
+        &self,
+    ) -> impl std::future::Future<Output = Result<DaemonHealth, Self::Error>> + Send;
 }

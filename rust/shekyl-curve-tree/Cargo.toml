@@ -1,0 +1,56 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-curve-tree"
+description = "Wallet-side FCMP++ curve-tree client: local path assembly and block-derived root reconstruction (docs/design/CURVE_TREE_CLIENT.md)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Lean, wallet-side crate. It deliberately does NOT depend on
+# `shekyl-scanner`: the `tx_extra 0x07` *parse* (raw extra bytes ->
+# leaf-hash blob) is owned by `shekyl_scanner::extra::Extra` and runs
+# at the block-decode boundary (CT-3). This crate consumes the already
+# parsed blob and owns only the daemon-parity post-parse validation
+# (`recon::extract_leaf_hashes`). Keeping scanner's heavy dependency
+# fan-in (rpc, crypto-pq, staking, ...) out of the curve-tree client
+# matches `20-rust-vs-cpp-policy.mdc` / `25-rust-architecture.mdc`
+# layering and the wallet/mobile consumption surface.
+[dependencies]
+redb = { workspace = true }
+# Canonical curve-tree composition primitives: `construct_leaf`,
+# `build_layers` (Round-1 root oracle), `build_upper_layers` (CT-1 hot
+# path), `selene_hash_init` (empty-tree root). Shared with the daemon
+# through FFI, so leaf construction cannot diverge (CT2_DRAIN_ORDER.md
+# §3.2).
+shekyl-fcmp = { path = "../shekyl-fcmp" }
+# Consensus maturity constants: `DEFAULT_LOCK_WINDOW` (+10) and
+# `COINBASE_LOCK_WINDOW` (+60). Sourced from the low-level protocol
+# crate rather than re-declared, per `17-dependency-discipline.mdc`.
+shekyl-consensus = { path = "../shekyl-consensus" }
+
+# Reads `config/consensus_constants.json` to emit the FCMP++
+# reference-block age constants (`build.rs`). Mirrors
+# `rust/shekyl-difficulty`'s build-time JSON read so the wallet's
+# reference-block selection cannot drift from consensus
+# (`17-dependency-discipline.mdc`, `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`).
+[build-dependencies]
+serde_json = "1"
+
+# Parses the checked-in CT-2 Tier-A KAT oracle
+# (`tests/fixtures/ct2_tier_a.json`, generated offline by
+# `gen_ct2_fixture.py` from a regtest daemon). Test-only; not in the
+# wallet/mobile production graph.
+[dev-dependencies]
+ciphersuite = "0.4"
+helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
+rand_chacha = { workspace = true }
+serde_json = { workspace = true }
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

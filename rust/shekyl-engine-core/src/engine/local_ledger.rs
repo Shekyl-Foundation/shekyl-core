@@ -260,7 +260,7 @@ impl LocalLedger {
     ///   or pivot the signature — both the cost-benefit-defer-to-
     ///   later anti-pattern this rationale rejects.
     #[allow(dead_code, clippy::needless_pass_by_value)]
-    pub(crate) fn from_test_blocks(blocks: Vec<shekyl_oxide::block::Block>) -> Self {
+    pub(crate) fn from_test_blocks(blocks: Vec<shekyl_wire::Block>) -> Self {
         assert!(
             blocks.is_empty(),
             "LocalLedger::from_test_blocks: non-empty Vec<Block> not yet supported at V3.0. \

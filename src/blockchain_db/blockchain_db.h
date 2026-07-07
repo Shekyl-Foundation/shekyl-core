@@ -1922,28 +1922,93 @@ public:
    */
   void set_auto_remove_logs(bool auto_remove) { m_auto_remove_logs = auto_remove; }
 
-  struct staker_accrual_record
-  {
-    uint64_t staker_emission;
-    uint64_t staker_fee_pool;
-    uint64_t total_weighted_stake_lo;
-    uint64_t total_weighted_stake_hi;
-    uint64_t actually_destroyed;
-  };
+  // Per-height destroyed-amount record (adaptive fee burn + retired-share
+  // burn), so pop_block can roll `total_burned` back without recomputing
+  // the block's burn.
+  virtual void add_block_burn(uint64_t height, uint64_t amount) = 0;
+  virtual uint64_t get_block_burn(uint64_t height) const = 0;
+  virtual void remove_block_burn(uint64_t height) = 0;
 
-  virtual void add_staker_accrual(uint64_t height, const staker_accrual_record& record) = 0;
-  virtual staker_accrual_record get_staker_accrual(uint64_t height) const = 0;
-  virtual void remove_staker_accrual(uint64_t height) = 0;
-
-  virtual void set_staker_pool_balance(uint64_t balance) = 0;
-  virtual uint64_t get_staker_pool_balance() const = 0;
+  virtual void set_total_bonded_atomic(uint64_t balance) = 0;
+  virtual uint64_t get_total_bonded_atomic() const = 0;
 
   virtual void set_total_burned(uint64_t amount) = 0;
   virtual uint64_t get_total_burned() const = 0;
 
-  virtual void set_staker_claim_watermark(uint64_t output_index, uint64_t last_claimed_height) = 0;
-  virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const = 0;
-  virtual void remove_staker_claim_watermark(uint64_t output_index) = 0;
+
+  // ─── Archival serve-credit ledger (gate-2 §3.1) ───────────────────────────
+
+  virtual bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) const = 0;
+  virtual void set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) = 0;
+  virtual void remove_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) = 0;
+
+  // Gate-4 / shard-registry substrate (default: false until implemented).
+  virtual bool get_archival_bond_hybrid_pubkey(const crypto::hash& p_id,
+    std::vector<uint8_t>& out_pubkey) const;
+  // Full-bond reader: returns the complete decoded record (including the v4
+  // claimed-epoch set and first_paying_emission_height) so load-modify-store
+  // callers and tests can observe every field, not just the scalar projections.
+  virtual bool get_archival_bond_value(const crypto::hash& p_id,
+    shekyl::db::ArchivalBondValue& out) const;
+  virtual bool archival_bond_holds_shard(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t at_height) const;
+  virtual bool archival_bond_good_through(const crypto::hash& p_id,
+    uint64_t settlement_epoch) const;
+  virtual uint64_t archival_bond_join_epoch(const crypto::hash& p_id) const;
+  virtual bool get_archival_shard_segment_at_height(uint64_t shard_id, uint64_t at_height,
+    crypto::hash& out_rk, uint64_t& out_leaf_count) const;
+
+  // Gate-4 bond-post / registry writers (substrate seeding until bond vin lands).
+  virtual void put_archival_bond_record(const crypto::hash& p_id,
+    const std::vector<uint8_t>& hybrid_pubkey, uint64_t join_settlement_epoch,
+    uint64_t bonded_total_atomic, uint8_t holdings_kind,
+    const std::vector<uint64_t>& held_shard_ids,
+    const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals = {});
+  // Full-bond writer: serializes the entire record. Load-modify-store callers
+  // (slash apply/revert) must write through this rather than
+  // put_archival_bond_record, whose scalar-arg signature cannot carry the v4
+  // claimed-epoch set / first_paying_emission_height and would silently wipe
+  // them (REWARD_EMISSION_VIN_PLAN.md §1.5 F-S1 / F-E5).
+  virtual void put_archival_bond_value(const crypto::hash& p_id,
+    const shekyl::db::ArchivalBondValue& bond);
+  virtual void remove_archival_bond_record(const crypto::hash& p_id);
+  virtual void put_archival_shard_segment(uint64_t shard_id, uint64_t freeze_height,
+    const crypto::hash& segment_subroot_rk, uint64_t segment_leaf_count);
+
+  // ─── Segment-freeze pipeline (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4) ─────
+  //
+  // The production writer/deleter for the shard-segment registry. Freezing
+  // is a first-crossing rule over the consensus curve-tree leaf count
+  // (frozen = floor(leaf_count / SEGMENT_LEAF_COUNT), computed ONLY by the
+  // Rust entry point shekyl_archival_frozen_segment_count). Both hooks run
+  // inside the block's write txn: the connect hook immediately after
+  // grow_curve_tree, the pop hook after trim_curve_tree — partial commit on
+  // either path is a consensus split (M1 §1.3 obligations O-1..O-3).
+
+  /// Connect hook (§4.1): write a registry row for every level-2 subtree the
+  /// same-txn grow completed, with `freeze_height = block_height` and `R_k`
+  /// read from the layer-2 chunk the grow just wrote. No-op when no segment
+  /// boundary was crossed.
+  virtual void process_archival_segment_freezes_at_height(uint64_t block_height);
+  /// Pop hook (§4.2): delete every registry row with
+  /// `shard_id >= frozen_segment_count(post-trim leaf count)`. The delete
+  /// rule is derived from the same function as the write rule, so re-applied
+  /// blocks recreate rows bit-identically (O-3 pop-symmetry).
+  virtual void revert_archival_segment_freezes();
+
+  /// Gate-2 §6 / gate-4 §4.2: slash scheduler at `H_slash_deadline` (LMDB impl).
+  virtual void process_archival_slash_at_height(uint64_t block_height);
+  /// Revert slash journal rows recorded when `block_height` connected.
+  virtual void revert_archival_slashes_at_height(uint64_t block_height);
+  /// Finalize `R_market` / `Σwork` at settlement-epoch close (`ARCHIVAL_CONSENSUS_STATE.md` §3.3–§3.5).
+  virtual void process_archival_epoch_close_at_height(uint64_t block_height);
+  /// Revert epoch-close materialization when `block_height` is popped.
+  virtual void revert_archival_epoch_close_at_height(uint64_t block_height);
+  virtual uint64_t get_archival_r_market(uint64_t shard_id, uint64_t settlement_epoch) const;
+  virtual uint64_t get_archival_sigma_work_milli(uint64_t settlement_epoch) const;
 
   // ─── Deferred Staked Leaf Insertion ─────────────────────────────────────────
 
@@ -2169,6 +2234,25 @@ public:
    * @return true if the output has a tree leaf (i.e., it has been drained)
    */
   virtual bool get_curve_tree_leaf_by_output_index(uint64_t output_index, uint8_t* leaf_out) const = 0;
+
+  /**
+   * @brief get a contiguous run of leaves by tree position in one read.
+   *
+   * Reads `count` leaves starting at `first_tree_position` into `out`
+   * (count × 128 bytes, densely packed). Returns false — leaving `out`
+   * unspecified — if any leaf in the run is missing or malformed; callers
+   * must not read `out` on false.
+   *
+   * The base implementation loops over get_curve_tree_leaf_by_tree_position();
+   * LMDB overrides it with a single cursor scan (one B-tree traversal instead
+   * of one per leaf) for the serve-credit verification hot path.
+   *
+   * @param first_tree_position  tree position of the first leaf in the run
+   * @param count                number of contiguous leaves to read
+   * @param out                  output buffer of count × 128 bytes
+   * @return true iff every leaf in the run was present and full
+   */
+  virtual bool get_curve_tree_leaf_chunk(uint64_t first_tree_position, uint64_t count, uint8_t* out) const;
 
   // ─── FCMP++ Per-Height Curve Tree Root ──────────────────────────────────
 

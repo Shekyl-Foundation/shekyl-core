@@ -3,27 +3,23 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Unit tests for scanner staking detection, claim tracking, and the
+//! Unit tests for scanner ledger ingestion, spend tracking, and the
 //! `(LedgerBlock, LedgerIndexes)` runtime pair.
 
 #[cfg(test)]
-pub(crate) mod staking {
+pub(crate) mod ledger_ops {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
-    use shekyl_oxide::{primitives::Commitment, transaction::StakingMeta};
+    use shekyl_curve_primitives::Commitment;
+    use shekyl_types::Timelock;
     use zeroize::Zeroizing;
 
     use crate::{
-        claim::ClaimableInfo,
-        ledger_ext::{LedgerBlockExt, LedgerIndexesExt, TransferDetailsExt},
+        ledger_ext::{LedgerBlockExt, LedgerIndexesExt},
         output::*,
         scan::{RecoveredWalletOutput, Timelocked},
-        transfer::TransferDetails,
     };
     use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
-
-    fn tier_lock(tier: u8) -> u64 {
-        shekyl_staking::tiers::tier_by_id(tier).unwrap().lock_blocks
-    }
+    use shekyl_units::AtomicUnits;
 
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
         let mut bytes = [0u8; 32];
@@ -37,7 +33,6 @@ pub(crate) mod staking {
         index: u64,
         global_index: u64,
         amount: u64,
-        staking: Option<StakingMeta>,
     ) -> WalletOutput {
         WalletOutput {
             absolute_id: AbsoluteId {
@@ -56,12 +51,10 @@ pub(crate) mod staking {
                 },
             },
             metadata: Metadata {
-                additional_timelock: shekyl_oxide::transaction::Timelock::None,
-                subaddress: None,
+                additional_timelock: Timelock::None,
                 payment_id: None,
                 arbitrary_data: vec![],
             },
-            staking,
         }
     }
 
@@ -76,7 +69,7 @@ pub(crate) mod staking {
             k_amount: Zeroizing::new([0u8; 32]),
             combined_shared_secret: Zeroizing::new([0u8; 64]),
             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(ki),
-            amount,
+            amount: AtomicUnits::from_raw(amount),
             source_ciphertext: shekyl_crypto_pq::kem::HybridCiphertext {
                 x25519: [0u8; 32],
                 ml_kem: Vec::new(),
@@ -84,6 +77,7 @@ pub(crate) mod staking {
             view_tag: 0,
             enc_amount: [0u8; 8],
             amount_tag: 0,
+            label_plaintext: shekyl_crypto_pq::label::sentinel_plaintext(),
         }
     }
 
@@ -103,429 +97,6 @@ pub(crate) mod staking {
         (LedgerBlock::empty(), LedgerIndexes::empty())
     }
 
-    // ── Staking detection ──
-
-    #[test]
-    fn from_wallet_output_detects_staked() {
-        let output = make_wallet_output(
-            [1; 32],
-            0,
-            100,
-            5_000_000_000,
-            Some(StakingMeta { lock_tier: 2 }),
-        );
-        let td = TransferDetails::from_wallet_output(&output, 1000);
-        assert!(td.staked);
-        assert_eq!(td.stake_tier, 2);
-        assert_eq!(td.stake_lock_until, 1000 + tier_lock(2));
-        assert_eq!(td.last_claimed_height, 0);
-    }
-
-    #[test]
-    fn from_wallet_output_non_staked() {
-        let output = make_wallet_output([2; 32], 0, 101, 1_000_000_000, None);
-        let td = TransferDetails::from_wallet_output(&output, 1000);
-        assert!(!td.staked);
-        assert_eq!(td.stake_tier, 0);
-        assert_eq!(td.stake_lock_until, 0);
-    }
-
-    // ── is_spendable / is_unstakeable ──
-
-    #[test]
-    fn staked_output_never_spendable() {
-        let output = make_wallet_output(
-            [3; 32],
-            0,
-            102,
-            2_000_000_000,
-            Some(StakingMeta { lock_tier: 1 }),
-        );
-        let td = TransferDetails::from_wallet_output(&output, 5000);
-
-        assert!(!td.is_spendable(5000 + tier_lock(1) + 1000));
-        assert!(!td.is_spendable(5000));
-    }
-
-    #[test]
-    fn regular_output_spendable() {
-        let output = make_wallet_output([4; 32], 0, 103, 1_000_000_000, None);
-        let td = TransferDetails::from_wallet_output(&output, 5000);
-        assert!(td.is_spendable(6000));
-    }
-
-    #[test]
-    fn staked_unstakeable_after_maturity() {
-        let output = make_wallet_output(
-            [5; 32],
-            0,
-            104,
-            3_000_000_000,
-            Some(StakingMeta { lock_tier: 0 }),
-        );
-        let td = TransferDetails::from_wallet_output(&output, 5000);
-
-        assert!(!td.is_unstakeable(5000 + tier_lock(0) - 1));
-        assert!(td.is_unstakeable(5000 + tier_lock(0)));
-        assert!(td.is_unstakeable(5000 + tier_lock(0) + 5000));
-    }
-
-    #[test]
-    fn spent_staked_not_unstakeable() {
-        let output = make_wallet_output(
-            [6; 32],
-            0,
-            105,
-            1_000_000_000,
-            Some(StakingMeta { lock_tier: 0 }),
-        );
-        let mut td = TransferDetails::from_wallet_output(&output, 5000);
-        td.spent = true;
-        assert!(!td.is_unstakeable(5000 + tier_lock(0) + 1000));
-    }
-
-    // ── has_claimable_rewards ──
-
-    #[test]
-    fn claimable_during_lock_period() {
-        let output = make_wallet_output(
-            [7; 32],
-            0,
-            106,
-            5_000_000_000,
-            Some(StakingMeta { lock_tier: 2 }),
-        );
-        let td = TransferDetails::from_wallet_output(&output, 1000);
-        assert!(td.has_claimable_rewards(5000));
-    }
-
-    #[test]
-    fn claimable_after_maturity_with_backlog() {
-        let output = make_wallet_output(
-            [8; 32],
-            0,
-            107,
-            5_000_000_000,
-            Some(StakingMeta { lock_tier: 1 }),
-        );
-        let td = TransferDetails::from_wallet_output(&output, 1000);
-
-        let past_maturity = 1000 + tier_lock(1) + 1000;
-        assert!(td.has_claimable_rewards(past_maturity));
-    }
-
-    #[test]
-    fn not_claimable_after_full_drain() {
-        let output = make_wallet_output(
-            [9; 32],
-            0,
-            108,
-            5_000_000_000,
-            Some(StakingMeta { lock_tier: 0 }),
-        );
-        let mut td = TransferDetails::from_wallet_output(&output, 1000);
-        td.last_claimed_height = 1000 + tier_lock(0);
-
-        assert!(!td.has_claimable_rewards(1000 + tier_lock(0) + 1000));
-    }
-
-    #[test]
-    fn not_claimable_when_spent() {
-        let output = make_wallet_output(
-            [10; 32],
-            0,
-            109,
-            5_000_000_000,
-            Some(StakingMeta { lock_tier: 1 }),
-        );
-        let mut td = TransferDetails::from_wallet_output(&output, 1000);
-        td.spent = true;
-        assert!(!td.has_claimable_rewards(5000));
-    }
-
-    // ── ClaimableInfo ──
-
-    #[test]
-    fn claimable_info_from_transfer() {
-        let output = make_wallet_output(
-            [11; 32],
-            0,
-            110,
-            2_000_000_000,
-            Some(StakingMeta { lock_tier: 2 }),
-        );
-        let td = TransferDetails::from_wallet_output(&output, 1000);
-
-        let info = ClaimableInfo::from_transfer(&td, 0, 5000).unwrap();
-        assert_eq!(info.from_height, 1000);
-        assert_eq!(info.to_height, 5000);
-        assert!(!info.accrual_frozen);
-        assert_eq!(info.tier, 2);
-        assert_eq!(info.range_blocks(), 4000);
-    }
-
-    #[test]
-    fn claimable_info_with_watermark() {
-        let output = make_wallet_output(
-            [12; 32],
-            0,
-            111,
-            2_000_000_000,
-            Some(StakingMeta { lock_tier: 1 }),
-        );
-        let mut td = TransferDetails::from_wallet_output(&output, 1000);
-        td.last_claimed_height = 3000;
-
-        let info = ClaimableInfo::from_transfer(&td, 0, 5000).unwrap();
-        assert_eq!(info.from_height, 3000);
-        assert_eq!(info.to_height, 5000);
-    }
-
-    #[test]
-    fn claimable_info_accrual_frozen() {
-        let output = make_wallet_output(
-            [13; 32],
-            0,
-            112,
-            2_000_000_000,
-            Some(StakingMeta { lock_tier: 0 }),
-        );
-        let td = TransferDetails::from_wallet_output(&output, 1000);
-
-        let past_maturity = 1000 + tier_lock(0) + 1000;
-        let info = ClaimableInfo::from_transfer(&td, 0, past_maturity).unwrap();
-        assert_eq!(info.to_height, 1000 + tier_lock(0));
-        assert!(info.accrual_frozen);
-    }
-
-    #[test]
-    fn claimable_info_none_when_fully_claimed() {
-        let output = make_wallet_output(
-            [14; 32],
-            0,
-            113,
-            2_000_000_000,
-            Some(StakingMeta { lock_tier: 0 }),
-        );
-        let mut td = TransferDetails::from_wallet_output(&output, 1000);
-        td.last_claimed_height = 1000 + tier_lock(0);
-
-        assert!(ClaimableInfo::from_transfer(&td, 0, 1000 + tier_lock(0) + 1000).is_none());
-    }
-
-    // ── (LedgerBlock, LedgerIndexes) integration ──
-
-    #[test]
-    fn ledger_auto_detects_staked_outputs() {
-        let (mut ledger, mut indexes) = fresh_state();
-        let outputs = vec![
-            (
-                make_wallet_output([20; 32], 0, 200, 1_000_000_000, None),
-                1_000_000_000,
-            ),
-            (
-                make_wallet_output(
-                    [20; 32],
-                    1,
-                    201,
-                    5_000_000_000,
-                    Some(StakingMeta { lock_tier: 2 }),
-                ),
-                5_000_000_000,
-            ),
-        ];
-
-        indexes.process_scanned_outputs(&mut ledger, 1000, [0xAA; 32], make_timelocked(outputs));
-
-        assert_eq!(ledger.transfers().len(), 2);
-        let transfers = ledger.transfers();
-        assert!(!transfers[0].staked);
-        assert!(transfers[1].staked);
-        assert_eq!(transfers[1].stake_tier, 2);
-        assert_eq!(transfers[1].stake_lock_until, 1000 + tier_lock(2));
-    }
-
-    #[test]
-    fn ledger_claimable_outputs() {
-        let (mut ledger, mut indexes) = fresh_state();
-        let outputs = vec![
-            (
-                make_wallet_output(
-                    [21; 32],
-                    0,
-                    300,
-                    2_000_000_000,
-                    Some(StakingMeta { lock_tier: 1 }),
-                ),
-                2_000_000_000,
-            ),
-            (
-                make_wallet_output(
-                    [21; 32],
-                    1,
-                    301,
-                    3_000_000_000,
-                    Some(StakingMeta { lock_tier: 0 }),
-                ),
-                3_000_000_000,
-            ),
-        ];
-
-        indexes.process_scanned_outputs(&mut ledger, 1000, [0xBB; 32], make_timelocked(outputs));
-
-        let claimable = ledger.claimable_outputs(5000);
-        assert_eq!(claimable.len(), 2);
-
-        ledger.update_claim_watermark(301, 1000 + tier_lock(0));
-        let claimable = ledger.claimable_outputs(1000 + tier_lock(0) + 1000);
-        assert_eq!(claimable.len(), 1);
-    }
-
-    #[test]
-    fn ledger_unstakeable_outputs() {
-        let (mut ledger, mut indexes) = fresh_state();
-        let outputs = vec![
-            (
-                make_wallet_output(
-                    [22; 32],
-                    0,
-                    400,
-                    2_000_000_000,
-                    Some(StakingMeta { lock_tier: 0 }),
-                ),
-                2_000_000_000,
-            ),
-            (
-                make_wallet_output(
-                    [22; 32],
-                    1,
-                    401,
-                    3_000_000_000,
-                    Some(StakingMeta { lock_tier: 2 }),
-                ),
-                3_000_000_000,
-            ),
-        ];
-
-        indexes.process_scanned_outputs(&mut ledger, 1000, [0xCC; 32], make_timelocked(outputs));
-
-        assert_eq!(ledger.unstakeable_outputs(1000 + tier_lock(0) - 1).len(), 0);
-        assert_eq!(ledger.unstakeable_outputs(1000 + tier_lock(0)).len(), 1);
-        assert_eq!(ledger.unstakeable_outputs(1000 + tier_lock(2)).len(), 2);
-    }
-
-    // ── Reorg handling ──
-
-    #[test]
-    fn reorg_removes_staked_outputs() {
-        let (mut ledger, mut indexes) = fresh_state();
-
-        indexes.process_scanned_outputs(
-            &mut ledger,
-            1000,
-            [0xD0; 32],
-            make_timelocked(vec![(
-                make_wallet_output(
-                    [30; 32],
-                    0,
-                    500,
-                    5_000_000_000,
-                    Some(StakingMeta { lock_tier: 1 }),
-                ),
-                5_000_000_000,
-            )]),
-        );
-
-        indexes.process_scanned_outputs(
-            &mut ledger,
-            2000,
-            [0xD1; 32],
-            make_timelocked(vec![(
-                make_wallet_output(
-                    [31; 32],
-                    0,
-                    501,
-                    1_000_000_000,
-                    Some(StakingMeta { lock_tier: 0 }),
-                ),
-                1_000_000_000,
-            )]),
-        );
-
-        assert_eq!(ledger.transfers().len(), 2);
-
-        indexes.handle_reorg(&mut ledger, 2000);
-        assert_eq!(ledger.transfers().len(), 1);
-        assert!(ledger.transfers()[0].staked);
-        assert_eq!(ledger.transfers()[0].stake_tier, 1);
-    }
-
-    // ── Spend detection with claim inputs ──
-
-    #[test]
-    fn detect_spends_marks_staked_output_spent() {
-        let (mut ledger, mut indexes) = fresh_state();
-        let outputs = vec![(
-            make_wallet_output(
-                [40; 32],
-                0,
-                600,
-                2_000_000_000,
-                Some(StakingMeta { lock_tier: 0 }),
-            ),
-            2_000_000_000,
-        )];
-
-        indexes.process_scanned_outputs(&mut ledger, 1000, [0xE0; 32], make_timelocked(outputs));
-
-        let past_maturity = 1000 + tier_lock(0) + 1000;
-        assert!(ledger.transfers()[0].staked);
-        assert!(!ledger.transfers()[0].spent);
-        assert!(ledger.transfers()[0].is_unstakeable(past_maturity));
-
-        let ki = ledger.transfers()[0]
-            .key_image
-            .expect("key image should be set by process_scanned_outputs");
-        indexes.detect_spends(&mut ledger, past_maturity, &[ki]);
-        assert!(ledger.transfers()[0].spent);
-        assert!(!ledger.transfers()[0].is_unstakeable(past_maturity));
-        assert!(!ledger.transfers()[0].has_claimable_rewards(past_maturity));
-    }
-
-    // ── Watermark update ──
-
-    #[test]
-    fn watermark_update_advances_claim_range() {
-        let (mut ledger, mut indexes) = fresh_state();
-        let outputs = vec![(
-            make_wallet_output(
-                [50; 32],
-                0,
-                700,
-                5_000_000_000,
-                Some(StakingMeta { lock_tier: 2 }),
-            ),
-            5_000_000_000,
-        )];
-
-        indexes.process_scanned_outputs(&mut ledger, 1000, [0xF0; 32], make_timelocked(outputs));
-
-        let td = &ledger.transfers()[0];
-        assert_eq!(td.last_claimed_height, 0);
-
-        let info = ClaimableInfo::from_transfer(td, 0, 5000).unwrap();
-        assert_eq!(info.from_height, 1000);
-
-        ledger.update_claim_watermark(700, 5000);
-
-        let td = &ledger.transfers()[0];
-        assert_eq!(td.last_claimed_height, 5000);
-
-        let info = ClaimableInfo::from_transfer(td, 0, 10000).unwrap();
-        assert_eq!(info.from_height, 5000);
-        assert_eq!(info.to_height, 10000);
-    }
-
     // ── Gate 5a: unmark_spent unit tests ──
 
     #[test]
@@ -533,11 +104,11 @@ pub(crate) mod staking {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
             (
-                make_wallet_output([60; 32], 0, 800, 1_000_000_000, None),
+                make_wallet_output([60; 32], 0, 800, 1_000_000_000),
                 1_000_000_000,
             ),
             (
-                make_wallet_output([60; 32], 1, 801, 2_000_000_000, None),
+                make_wallet_output([60; 32], 1, 801, 2_000_000_000),
                 2_000_000_000,
             ),
         ];
@@ -552,7 +123,11 @@ pub(crate) mod staking {
         assert!(ledger.transfers()[1].spent);
 
         let balance_before = ledger.balance(1000);
-        assert_eq!(balance_before.total, 0, "both spent → zero total");
+        assert_eq!(
+            balance_before.total,
+            AtomicUnits::ZERO,
+            "both spent → zero total"
+        );
 
         let unmarked = indexes.unmark_spent(&mut ledger, &[ki_0, ki_1]);
         assert_eq!(unmarked, 2);
@@ -562,15 +137,15 @@ pub(crate) mod staking {
         assert!(ledger.transfers()[1].spent_height.is_none());
 
         let balance_after = ledger.balance(1000);
-        assert_eq!(balance_after.total, 3_000_000_000);
-        assert_eq!(balance_after.unlocked, 3_000_000_000);
+        assert_eq!(balance_after.total, AtomicUnits::from_raw(3_000_000_000));
+        assert_eq!(balance_after.unlocked, AtomicUnits::from_raw(3_000_000_000));
     }
 
     #[test]
     fn unmark_spent_unknown_key_image_is_noop() {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![(
-            make_wallet_output([61; 32], 0, 810, 1_000_000_000, None),
+            make_wallet_output([61; 32], 0, 810, 1_000_000_000),
             1_000_000_000,
         )];
         indexes.process_scanned_outputs(&mut ledger, 100, [0xA1; 32], make_timelocked(outputs));
@@ -585,7 +160,7 @@ pub(crate) mod staking {
     fn unmark_spent_idempotent_on_already_unspent() {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![(
-            make_wallet_output([62; 32], 0, 820, 1_000_000_000, None),
+            make_wallet_output([62; 32], 0, 820, 1_000_000_000),
             1_000_000_000,
         )];
         indexes.process_scanned_outputs(&mut ledger, 100, [0xA2; 32], make_timelocked(outputs));
@@ -600,15 +175,15 @@ pub(crate) mod staking {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
             (
-                make_wallet_output([63; 32], 0, 830, 1_000_000_000, None),
+                make_wallet_output([63; 32], 0, 830, 1_000_000_000),
                 1_000_000_000,
             ),
             (
-                make_wallet_output([63; 32], 1, 831, 2_000_000_000, None),
+                make_wallet_output([63; 32], 1, 831, 2_000_000_000),
                 2_000_000_000,
             ),
             (
-                make_wallet_output([63; 32], 2, 832, 3_000_000_000, None),
+                make_wallet_output([63; 32], 2, 832, 3_000_000_000),
                 3_000_000_000,
             ),
         ];
@@ -629,8 +204,8 @@ pub(crate) mod staking {
         assert!(ledger.transfers()[2].spent);
 
         let balance = ledger.balance(1000);
-        assert_eq!(balance.total, 2_000_000_000);
-        assert_eq!(balance.unlocked, 2_000_000_000);
+        assert_eq!(balance.total, AtomicUnits::from_raw(2_000_000_000));
+        assert_eq!(balance.unlocked, AtomicUnits::from_raw(2_000_000_000));
     }
 
     #[test]
@@ -638,17 +213,11 @@ pub(crate) mod staking {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
             (
-                make_wallet_output([64; 32], 0, 840, 500_000_000, None),
+                make_wallet_output([64; 32], 0, 840, 500_000_000),
                 500_000_000,
             ),
             (
-                make_wallet_output(
-                    [64; 32],
-                    1,
-                    841,
-                    1_000_000_000,
-                    Some(StakingMeta { lock_tier: 1 }),
-                ),
+                make_wallet_output([64; 32], 1, 841, 1_000_000_000),
                 1_000_000_000,
             ),
         ];
@@ -668,7 +237,10 @@ pub(crate) mod staking {
             .check_invariants(&ledger)
             .expect("invariants after unmark_spent");
 
-        assert_eq!(ledger.balance(1000).total, 1_500_000_000);
+        assert_eq!(
+            ledger.balance(1000).total,
+            AtomicUnits::from_raw(1_500_000_000)
+        );
     }
 
     // ── Gate 5a: immature output rejection (regression) ──
@@ -677,18 +249,18 @@ pub(crate) mod staking {
     fn immature_output_not_spendable() {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![(
-            make_wallet_output([65; 32], 0, 850, 1_000_000_000, None),
+            make_wallet_output([65; 32], 0, 850, 1_000_000_000),
             1_000_000_000,
         )];
         indexes.process_scanned_outputs(&mut ledger, 100, [0xA5; 32], make_timelocked(outputs));
 
-        let spendable = ledger.spendable_outputs(105, None, None);
+        let spendable = ledger.spendable_outputs(105, None);
         assert!(
             spendable.is_empty(),
             "output mined at 100 should NOT be spendable at 105"
         );
 
-        let spendable = ledger.spendable_outputs(110, None, None);
+        let spendable = ledger.spendable_outputs(110, None);
         assert_eq!(
             spendable.len(),
             1,
@@ -710,8 +282,8 @@ pub(crate) mod staking {
     fn invariants_hold_after_process_and_spend_cycle() {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
-            (make_wallet_output([66; 32], 0, 860, 1_000, None), 1_000),
-            (make_wallet_output([66; 32], 1, 861, 2_000, None), 2_000),
+            (make_wallet_output([66; 32], 0, 860, 1_000), 1_000),
+            (make_wallet_output([66; 32], 1, 861, 2_000), 2_000),
         ];
         indexes.process_scanned_outputs(&mut ledger, 100, [0xB0; 32], make_timelocked(outputs));
         indexes.check_invariants(&ledger).expect("after process");
@@ -751,28 +323,19 @@ pub(crate) mod staking {
             &mut ledger,
             100,
             [0xC0; 32],
-            make_timelocked(vec![(
-                make_wallet_output([70; 32], 0, 900, 1_000, None),
-                1_000,
-            )]),
+            make_timelocked(vec![(make_wallet_output([70; 32], 0, 900, 1_000), 1_000)]),
         );
         indexes.process_scanned_outputs(
             &mut ledger,
             200,
             [0xC1; 32],
-            make_timelocked(vec![(
-                make_wallet_output([71; 32], 0, 901, 2_000, None),
-                2_000,
-            )]),
+            make_timelocked(vec![(make_wallet_output([71; 32], 0, 901, 2_000), 2_000)]),
         );
         indexes.process_scanned_outputs(
             &mut ledger,
             300,
             [0xC2; 32],
-            make_timelocked(vec![(
-                make_wallet_output([72; 32], 0, 902, 3_000, None),
-                3_000,
-            )]),
+            make_timelocked(vec![(make_wallet_output([72; 32], 0, 902, 3_000), 3_000)]),
         );
         indexes.check_invariants(&ledger).expect("3 blocks");
 
@@ -802,7 +365,8 @@ mod ledger_proptest {
     use proptest::prelude::*;
 
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
-    use shekyl_oxide::primitives::Commitment;
+    use shekyl_curve_primitives::Commitment;
+    use shekyl_types::Timelock;
     use zeroize::Zeroizing;
 
     use crate::{
@@ -811,6 +375,7 @@ mod ledger_proptest {
         scan::{RecoveredWalletOutput, Timelocked},
     };
     use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
+    use shekyl_units::AtomicUnits;
 
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
         let mut bytes = [0u8; 32];
@@ -841,12 +406,10 @@ mod ledger_proptest {
                 },
             },
             metadata: Metadata {
-                additional_timelock: shekyl_oxide::transaction::Timelock::None,
-                subaddress: None,
+                additional_timelock: Timelock::None,
                 payment_id: None,
                 arbitrary_data: vec![],
             },
-            staking: None,
         }
     }
 
@@ -861,7 +424,7 @@ mod ledger_proptest {
             k_amount: Zeroizing::new([0u8; 32]),
             combined_shared_secret: Zeroizing::new([0u8; 64]),
             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(ki),
-            amount,
+            amount: AtomicUnits::from_raw(amount),
             source_ciphertext: shekyl_crypto_pq::kem::HybridCiphertext {
                 x25519: [0u8; 32],
                 ml_kem: Vec::new(),
@@ -869,6 +432,7 @@ mod ledger_proptest {
             view_tag: 0,
             enc_amount: [0u8; 8],
             amount_tag: 0,
+            label_plaintext: shekyl_crypto_pq::label::sentinel_plaintext(),
         }
     }
 
@@ -995,7 +559,8 @@ mod ledger_proptest {
 #[cfg(test)]
 mod sync_bookkeeping {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
-    use shekyl_oxide::primitives::Commitment;
+    use shekyl_curve_primitives::Commitment;
+    use shekyl_types::Timelock;
     use zeroize::Zeroizing;
 
     use crate::{
@@ -1004,6 +569,7 @@ mod sync_bookkeeping {
         scan::{RecoveredWalletOutput, Timelocked},
     };
     use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
+    use shekyl_units::AtomicUnits;
 
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
         let mut bytes = [0u8; 32];
@@ -1037,12 +603,10 @@ mod sync_bookkeeping {
                     },
                 },
                 metadata: Metadata {
-                    additional_timelock: shekyl_oxide::transaction::Timelock::None,
-                    subaddress: None,
+                    additional_timelock: Timelock::None,
                     payment_id: None,
                     arbitrary_data: vec![],
                 },
-                staking: None,
             },
             ho: Zeroizing::new([0u8; 32]),
             y: Zeroizing::new([0u8; 32]),
@@ -1050,7 +614,7 @@ mod sync_bookkeeping {
             k_amount: Zeroizing::new([0u8; 32]),
             combined_shared_secret: Zeroizing::new([0u8; 64]),
             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(ki),
-            amount,
+            amount: AtomicUnits::from_raw(amount),
             source_ciphertext: shekyl_crypto_pq::kem::HybridCiphertext {
                 x25519: [0u8; 32],
                 ml_kem: Vec::new(),
@@ -1058,6 +622,7 @@ mod sync_bookkeeping {
             view_tag: 0,
             enc_amount: [0u8; 8],
             amount_tag: 0,
+            label_plaintext: shekyl_crypto_pq::label::sentinel_plaintext(),
         }
     }
 
@@ -1144,12 +709,12 @@ mod sync_bookkeeping {
         indexes.process_scanned_outputs(&mut ledger, 10, block_hash(10), Timelocked(vec![o1, o2]));
 
         assert_eq!(ledger.transfers().len(), 2);
-        assert_eq!(ledger.balance(100).total, 8000);
+        assert_eq!(ledger.balance(100).total, AtomicUnits::from_raw(8000));
 
         indexes.detect_spends(&mut ledger, 20, &[ki_100]);
         assert!(ledger.transfers()[0].spent);
         assert!(!ledger.transfers()[1].spent);
-        assert_eq!(ledger.balance(100).total, 3000);
+        assert_eq!(ledger.balance(100).total, AtomicUnits::from_raw(3000));
         indexes
             .check_invariants(&ledger)
             .expect("after spend detection");
@@ -1180,13 +745,13 @@ mod sync_bookkeeping {
         );
 
         assert_eq!(ledger.transfers().len(), 3);
-        assert_eq!(ledger.balance(100).total, 6000);
+        assert_eq!(ledger.balance(100).total, AtomicUnits::from_raw(6000));
 
         indexes.handle_reorg(&mut ledger, 20);
 
         assert_eq!(ledger.transfers().len(), 1);
         assert_eq!(ledger.height(), 10);
-        assert_eq!(ledger.balance(100).total, 1000);
+        assert_eq!(ledger.balance(100).total, AtomicUnits::from_raw(1000));
         indexes.check_invariants(&ledger).expect("after reorg");
 
         indexes.process_scanned_outputs(
@@ -1197,7 +762,7 @@ mod sync_bookkeeping {
         );
 
         assert_eq!(ledger.transfers().len(), 2);
-        assert_eq!(ledger.balance(100).total, 8000);
+        assert_eq!(ledger.balance(100).total, AtomicUnits::from_raw(8000));
         indexes
             .check_invariants(&ledger)
             .expect("after re-scan post-reorg");
@@ -1230,11 +795,11 @@ mod sync_bookkeeping {
 
         let spent = indexes.detect_spends(&mut ledger, 20, &[ki]);
         assert_eq!(spent, 1);
-        assert_eq!(ledger.balance(100).total, 0);
+        assert_eq!(ledger.balance(100).total, AtomicUnits::ZERO);
 
         let unmarked = indexes.unmark_spent(&mut ledger, &[ki]);
         assert_eq!(unmarked, 1);
-        assert_eq!(ledger.balance(100).total, 10_000);
+        assert_eq!(ledger.balance(100).total, AtomicUnits::from_raw(10_000));
 
         indexes
             .check_invariants(&ledger)

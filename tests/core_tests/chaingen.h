@@ -437,7 +437,8 @@ uint64_t sum_amount(const std::vector<cryptonote::tx_source_entry>& sources);
 bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins,
                                  const cryptonote::account_public_address& miner_address, cryptonote::transaction& tx,
                                  uint64_t fee, uint8_t hf_version = 1,
-                                 cryptonote::keypair* p_txkey = nullptr);
+                                 cryptonote::keypair* p_txkey = nullptr,
+                                 size_t median_block_weight = 0, size_t txs_weight = 0);
 
 bool append_v3_output_to_miner_tx(cryptonote::transaction& tx, const crypto::secret_key& txkey_sec,
                                   const cryptonote::account_public_address& addr, uint64_t amount);
@@ -981,8 +982,11 @@ inline bool do_replay_file(const std::string& filename)
 
 #define MAKE_MINER_TX_AND_KEY_AT_HF_MANUALLY(TX, BLK, HF_VERSION, KEY)                                    \
   transaction TX;                                                                                         \
+  std::vector<size_t> MAKE_MINER_TX_bw_##TX;                                                              \
+  generator.get_last_n_block_weights(MAKE_MINER_TX_bw_##TX, get_block_hash(BLK), CRYPTONOTE_REWARD_BLOCKS_WINDOW); \
   if (!construct_miner_tx_manually(get_block_height(BLK) + 1, generator.get_already_generated_coins(BLK), \
-    miner_account.get_keys().m_account_address, TX, 0, HF_VERSION, KEY))                                  \
+    miner_account.get_keys().m_account_address, TX, 0, HF_VERSION, KEY,                                   \
+    epee::misc_utils::median(MAKE_MINER_TX_bw_##TX), 0))                                                  \
     return false;
 
 #define MAKE_MINER_TX_AND_KEY_MANUALLY(TX, BLK, KEY) MAKE_MINER_TX_AND_KEY_AT_HF_MANUALLY(TX, BLK, 1, KEY)

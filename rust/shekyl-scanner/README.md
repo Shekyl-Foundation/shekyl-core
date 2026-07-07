@@ -28,7 +28,7 @@ reorg handling, and wallet-state mutation are owned by
 shekyl-scanner
 ├── scan.rs          # Block/tx/output scanning pipeline (Scanner)
 │                    # Hybrid KEM: parse 0x06, view-tag pre-filter,
-│                    # scan_output_recover, subaddress lookup, key image
+│                    # scan_output_recover, primary spend-key claim, key image
 ├── extra.rs         # Transaction extra field parsing (extended with PQC tags)
 ├── view_pair.rs     # ViewPair with X25519 + ML-KEM decapsulation keys
 ├── output.rs        # WalletOutput representation
@@ -40,19 +40,19 @@ shekyl-scanner
 ├── balance.rs       # Balance computation with staking categories
 ├── coin_select.rs   # Coin selection for transaction building
 ├── staker_pool.rs   # Staker pool accrual data for reward estimation
-├── claim.rs         # Claimable reward info for staked outputs
-└── subaddress.rs    # SubaddressIndex type
+└── claim.rs         # Claimable reward info for staked outputs
 ```
 
 ## Dependencies
 
-- `shekyl-oxide` — Transaction/block types, FCMP module, IO primitives
-- `shekyl-rpc` — `ScannableBlock` type, daemon RPC traits
+- `shekyl-wire` — canonical genesis block/tx wire types + parsing
+- `shekyl-curve-io` / `shekyl-curve-primitives` — IO primitives + `Commitment`
+- `shekyl-rpc-client` — daemon RPC `Rpc` trait / `RpcError` / `FeeRate`
 - `shekyl-crypto-pq` — Hybrid KEM operations (X25519 + ML-KEM-768),
   `scan_output_recover`, `compute_output_key_image`
-- `shekyl-staking` — Staking tier definitions
+- `shekyl-types` — `Timelock` and foundational domain newtypes
 - `shekyl-address` — Bech32m address encoding
-- `shekyl-generators` — `hash_to_point` for key image computation
+- `shekyl-curve-generators` — `hash_to_point` for key image computation
 
 ## Usage
 
@@ -70,9 +70,11 @@ use shekyl_scanner::{
 
 // Create a scanner from wallet keys (includes KEM secret keys for hybrid scanning)
 let view_pair = ViewPair::new(
-    view_public, spend_public, view_secret,
-    x25519_sk, ml_kem_dk, subaddresses,
-);
+    spend_public,
+    view_scalar,
+    x25519_sk,
+    ml_kem_dk,
+)?;
 let scanner = Scanner::new(view_pair, spend_secret);
 
 // Scan a block (from daemon RPC)

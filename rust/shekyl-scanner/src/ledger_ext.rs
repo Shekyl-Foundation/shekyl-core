@@ -8,21 +8,18 @@
 //! The canonical [`TransferDetails`], [`LedgerBlock`], and
 //! [`LedgerIndexes`] types live in `shekyl-engine-state` so they can be
 //! shared with the wallet-file orchestrator without pulling in the
-//! scanner's `Timelocked` / `RecoveredWalletOutput` / `BalanceSummary` /
-//! `ClaimableInfo` universe.
+//! scanner's `Timelocked` / `RecoveredWalletOutput` / `BalanceSummary`
+//! universe.
 //!
 //! Everything that *does* require those scanner-only types lives here:
 //!
 //! - [`TransferDetailsExt::from_wallet_output`] — build a `TransferDetails` from
-//!   the scanner's [`WalletOutput`], auto-populating staking metadata.
+//!   the scanner's [`WalletOutput`].
 //! - [`LedgerIndexesExt::process_scanned_outputs`] — ingest a scanned block's
 //!   `Timelocked<RecoveredWalletOutput>` into a `(LedgerBlock, LedgerIndexes)`
 //!   pair atomically.
 //! - [`LedgerBlockExt::balance`] — compute a [`BalanceSummary`] from the
 //!   tracked transfers at a chain height.
-//! - [`LedgerBlockExt::claimable_rewards_summary`] — compute per-staked-output
-//!   claim estimates using the scanner's [`ClaimableInfo`] type and the
-//!   accrual aggregate held in `LedgerIndexes::staker_pool`.
 //!
 //! Call sites must have these traits **in scope** for the
 //! `TransferDetails::from_…` and `ledger.balance(…)` /
@@ -33,19 +30,18 @@
 
 use std::ops::Range;
 
-use shekyl_engine_state::{LedgerBlock, LedgerIndexes, TransferDetails, SPENDABLE_AGE};
-
-use crate::{
-    balance::BalanceSummary, claim::ClaimableInfo, output::WalletOutput, scan::Timelocked,
+use shekyl_engine_state::{
+    LedgerBlock, LedgerIndexes, ReceiveAttribution, TransferDetails, SPENDABLE_AGE,
 };
+use shekyl_types::Timelock;
+
+use crate::{balance::BalanceSummary, output::WalletOutput, scan::Timelocked};
 
 /// Extension methods for [`TransferDetails`] that depend on scanner-only types.
 pub trait TransferDetailsExt {
     /// Create a `TransferDetails` from a scanned [`WalletOutput`] at a given block height.
     ///
-    /// Automatically populates staking fields if the output carries `StakingMeta`.
-    /// `stake_lock_until` is computed as `block_height + tier_lock_blocks`. The
-    /// M3b deterministic-handle pathway fields (`source_ciphertext`,
+    /// The M3b deterministic-handle pathway fields (`source_ciphertext`,
     /// `output_handle`) are left `None`; they are populated by the engine
     /// post-pass at `shekyl_engine_core::engine::merge::populate_engine_handle_fields`
     /// after the scanned block is merged into the ledger. The scanner does
@@ -54,34 +50,29 @@ pub trait TransferDetailsExt {
     fn from_wallet_output(output: &WalletOutput, block_height: u64) -> Self;
 }
 
+/// The absolute block height an output's additional timelock unlocks at, for
+/// the `eligible_height` floor (X5). [`Timelock`] is block-height-only, so this is
+/// exactly its raw unlock value: the block height for [`Timelock::Block`], `0` for
+/// [`Timelock::None`]. (The CryptoNote timestamp form is not representable.)
+fn additional_timelock_block(timelock: Timelock) -> u64 {
+    timelock.to_unlock_raw()
+}
+
 impl TransferDetailsExt for TransferDetails {
     fn from_wallet_output(output: &WalletOutput, block_height: u64) -> Self {
-        let (staked, stake_tier, stake_lock_until) = match output.staking() {
-            Some(meta) => {
-                let lock_blocks = shekyl_staking::tiers::tier_by_id(meta.lock_tier)
-                    .map(|t| t.lock_blocks)
-                    .unwrap_or(0);
-                (true, meta.lock_tier, block_height + lock_blocks)
-            }
-            None => (false, 0, 0),
-        };
         TransferDetails {
-            tx_hash: output.transaction(),
+            tx_hash: shekyl_types::TxHash::from_bytes(output.transaction()),
             internal_output_index: output.index_in_transaction(),
             global_output_index: output.index_on_blockchain(),
             block_height,
             key: output.key(),
             key_offset: output.key_offset(),
             commitment: output.commitment().clone(),
-            subaddress: output.subaddress(),
             payment_id: output.payment_id(),
             spent: false,
             spent_height: None,
             key_image: None,
-            staked,
-            stake_tier,
-            stake_lock_until,
-            last_claimed_height: 0,
+            awaiting_confirmation: None,
             // M3b deterministic-handle pathway: populated by the
             // orchestrator-side post-pass in
             // `shekyl_engine_core::engine::merge::populate_engine_handle_fields`,
@@ -100,15 +91,24 @@ impl TransferDetailsExt for TransferDetails {
             // were removed in the schema migration; `source_ciphertext`
             // and `output_handle` are the only inputs the engine needs
             // to re-derive the spend material at signing time. Other
-            // `Option`-valued fields on `TransferDetails` (`subaddress`,
-            // `payment_id`, `spent_height`, `key_image`,
+            // `Option`-valued fields on `TransferDetails`
+            // (`payment_id`, `spent_height`, `key_image`,
             // `fcmp_precomputed_path`) exist for unrelated reasons and
             // are unaffected by this construction site.
             source_ciphertext: None,
             output_handle: None,
-            eligible_height: block_height + SPENDABLE_AGE,
+            // X5 (CT-5c): the curve tree inserts an output at the *maximum* of
+            // its spendable-age maturity and its additional timelock (e.g. the
+            // block-based coinbase lock, which matures at +60, not the flat
+            // +SPENDABLE_AGE). `eligible_height` must agree with that insertion
+            // height — otherwise selection would treat a coinbase as spendable
+            // at +SPENDABLE_AGE while its leaf is absent from the tree until
+            // the coinbase lock expires, attempting an unprovable spend.
+            eligible_height: (block_height + SPENDABLE_AGE)
+                .max(additional_timelock_block(output.additional_timelock())),
             frozen: false,
             fcmp_precomputed_path: None,
+            receive_attribution: ReceiveAttribution::default(),
         }
     }
 }
@@ -180,54 +180,59 @@ impl LedgerIndexesExt for LedgerIndexes {
 pub trait LedgerBlockExt {
     /// Compute a balance summary at the given chain height.
     fn balance(&self, current_height: u64) -> BalanceSummary;
-
-    /// Compute a summary of claimable rewards for all staked outputs.
-    ///
-    /// `weight_fn` computes the tier-weighted stake for each output.
-    /// `max_claim_range` is the protocol's `MAX_CLAIM_RANGE` constant.
-    /// The accrual aggregate lives on [`LedgerIndexes::staker_pool`] and is
-    /// rebuilt by scanner replay at wallet open — see the module-level
-    /// docs on [`crate::ledger_indexes`](shekyl_engine_state::ledger_indexes)
-    /// for why it is not persisted.
-    fn claimable_rewards_summary<F>(
-        &self,
-        indexes: &LedgerIndexes,
-        current_height: u64,
-        weight_fn: F,
-        max_claim_range: u64,
-    ) -> Vec<(ClaimableInfo, u64)>
-    where
-        F: Fn(u64, u8) -> u64;
 }
 
 impl LedgerBlockExt for LedgerBlock {
     fn balance(&self, current_height: u64) -> BalanceSummary {
         BalanceSummary::compute(self.transfers(), current_height)
     }
+}
 
-    fn claimable_rewards_summary<F>(
-        &self,
-        indexes: &LedgerIndexes,
-        current_height: u64,
-        weight_fn: F,
-        max_claim_range: u64,
-    ) -> Vec<(ClaimableInfo, u64)>
-    where
-        F: Fn(u64, u8) -> u64,
-    {
-        let mut results = Vec::new();
-        for (idx, td) in self.transfers().iter().enumerate() {
-            if let Some(info) = ClaimableInfo::from_transfer(td, idx, current_height) {
-                let weight = weight_fn(td.amount(), td.stake_tier);
-                let (reward, _chunks) = indexes.staker_pool().estimate_reward_with_splitting(
-                    info.from_height,
-                    info.to_height,
-                    weight,
-                    max_claim_range,
-                );
-                results.push((info, reward));
-            }
-        }
-        results
+#[cfg(test)]
+mod x5_eligible_height_tests {
+    use super::*;
+    use crate::output::WalletOutput;
+    use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
+    use shekyl_curve_primitives::Commitment;
+    use shekyl_types::{BlockHeight, Timelock};
+
+    fn dummy_output() -> WalletOutput {
+        let key = &Scalar::from_bytes_mod_order([7u8; 32]) * ED25519_BASEPOINT_TABLE;
+        WalletOutput::new_for_test(
+            [0x11; 32],
+            0,
+            1,
+            key,
+            Scalar::ZERO,
+            Commitment::new(Scalar::ONE, 1_000),
+        )
     }
+
+    /// Baseline: no timelock → `eligible_height = block + SPENDABLE_AGE`.
+    #[test]
+    fn eligible_height_baseline_is_spendable_age() {
+        let td = TransferDetails::from_wallet_output(&dummy_output(), 100);
+        assert_eq!(td.eligible_height, 100 + SPENDABLE_AGE);
+    }
+
+    /// X5 core: a block-based additional timelock (the coinbase +60 lock) floors
+    /// `eligible_height` above the flat `+SPENDABLE_AGE`, so selection agrees
+    /// with the tree's coinbase insertion height instead of treating the output
+    /// as spendable at +SPENDABLE_AGE while its leaf is still absent.
+    #[test]
+    fn eligible_height_respects_block_timelock() {
+        let out =
+            dummy_output().with_additional_timelock(Timelock::Block(BlockHeight::from_raw(160)));
+        let td = TransferDetails::from_wallet_output(&out, 100);
+        assert_eq!(
+            td.eligible_height, 160,
+            "block timelock (160) floors eligible_height above block + SPENDABLE_AGE (110)"
+        );
+    }
+
+    // (The former `eligible_height_ignores_time_timelock` test is retired: the
+    // CryptoNote timestamp-form `Timelock::Time` is no longer representable —
+    // `Timelock` is block-height-only — so there is nothing to ignore. The
+    // former stake-lock floor test is retired with the claim-era staking
+    // sweep: TransferDetails no longer carries stake fields.)
 }

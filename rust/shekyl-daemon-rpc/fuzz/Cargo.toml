@@ -1,0 +1,22 @@
+[package]
+name = "shekyl-daemon-rpc-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+shekyl-daemon-rpc = { path = ".." }
+hex = "0.4"
+
+[[bin]]
+name = "fuzz_submit_phase_a"
+path = "fuzz_targets/fuzz_submit_phase_a.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

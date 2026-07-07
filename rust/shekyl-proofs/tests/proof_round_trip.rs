@@ -178,7 +178,9 @@ fn test_02_inbound_proof_round_trip() {
         &ctx.on_chain[0].commitment,
         &ctx.on_chain[0].enc_amount,
         ctx.outputs[0].amount_tag,
-        ctx.outputs[0].view_tag_x25519,
+        &ctx.outputs[0].enc_label,
+        ctx.outputs[0].label_tag,
+        ctx.outputs[0].view_tag_prefilter,
         0,
     )
     .expect("scan_output_recover");
@@ -259,7 +261,9 @@ fn test_03_outbound_inbound_consistency() {
             &ctx.on_chain[i].commitment,
             &ctx.on_chain[i].enc_amount,
             ctx.outputs[i].amount_tag,
-            ctx.outputs[i].view_tag_x25519,
+            &ctx.outputs[i].enc_label,
+            ctx.outputs[i].label_tag,
+            ctx.outputs[i].view_tag_prefilter,
             i as u64,
         )
         .expect("scan");
@@ -322,7 +326,7 @@ fn test_04_reserve_proof_round_trip() {
 
         let ps = derive_proof_secrets(&combined_ss.0, i as u64);
 
-        let hp_point = shekyl_generators::biased_hash_to_point(ctx.on_chain[i].output_key);
+        let hp_point = shekyl_curve_generators::biased_hash_to_point(ctx.on_chain[i].output_key);
         let hp_bytes = hp_point.compress().to_bytes();
 
         let ki_result =
@@ -332,7 +336,6 @@ fn test_04_reserve_proof_round_trip() {
         entries.push(ReserveOutputEntry {
             proof_secrets: ps,
             key_image: ki_result.key_image,
-            spend_secret: *ki_result.spend_secret_x,
             output_key: ctx.on_chain[i].output_key,
         });
 
@@ -523,7 +526,9 @@ fn test_08_wrong_view_key_inbound_rejected() {
         &ctx.on_chain[0].commitment,
         &ctx.on_chain[0].enc_amount,
         ctx.outputs[0].amount_tag,
-        ctx.outputs[0].view_tag_x25519,
+        &ctx.outputs[0].enc_label,
+        ctx.outputs[0].label_tag,
+        ctx.outputs[0].view_tag_prefilter,
         0,
     )
     .expect("scan");

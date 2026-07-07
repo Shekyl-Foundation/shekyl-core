@@ -1,0 +1,64 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-archival-retention"
+description = "Archival serve-credit challenge replay and segment Merkle path verification (docs/design/ARCHIVAL_RETENTION_GATE2.md)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+sha3 = { version = "0.10", default-features = false }
+shekyl-fcmp = { path = "../shekyl-fcmp" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+curve25519-dalek = "4"
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
+# Single-sourced CT balance equation + typed-side terms (bond_ct_balance wraps
+# this; construct uses the same definitions — ARCHIVAL_BOND_CONSTRUCTION.md §7.2).
+shekyl-ct-balance = { path = "../shekyl-ct-balance" }
+shekyl-units = { path = "../shekyl-units" }
+# `PCanonicalId` domain newtype returned by `id::p_canonical_id_from_hybrid_pubkey`.
+shekyl-types = { path = "../shekyl-types" }
+
+[features]
+# M1 reward-gate provisional-sentinel acknowledgment (ARCHIVAL_REWARD_GATE_M1.md
+# §4). While `k_cover_provisional` is true in config/consensus_constants.json,
+# building this crate WITHOUT this feature is a compile_error! (src/k_cover.rs)
+# — every consumer acknowledges the unsealed constant explicitly, grep-able at
+# its dependency line. DELETE this feature (and every enablement site) when the
+# §14.4-derived value seals; the deletion target is the seal event itself.
+provisional-k-cover = []
+# PF-6a KAT-injection gate: unlocks `KCover::for_kat`, the only constructor of
+# a non-consensus threshold value. PERMANENT (unlike provisional-k-cover): the
+# KATs parameterize K_COVER per case forever, so this survives the §4 seal.
+# Enabled only through dev-dependencies; the §6 tripwire refuses `for_kat`
+# call sites outside tests/.
+consensus-kat = []
+
+[build-dependencies]
+serde_json = { workspace = true }
+
+# CT-4 assembled-path KAT cross-check (gate-2 §10 step 1).
+[dev-dependencies]
+# Self-dependency: integration tests / benches build the lib without cfg(test),
+# so the provisional-k-cover acknowledgment must ride the dev graph explicitly
+# (delete with the feature at K_COVER seal). consensus-kat is permanent and
+# stays after that deletion — the KATs inject per-case thresholds through
+# `KCover::for_kat` (PF-6a).
+shekyl-archival-retention = { path = ".", features = ["provisional-k-cover", "consensus-kat"] }
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+serde_json = { workspace = true }
+# ARCHIVAL_P_DERIVE_V1 p_canonical_id cross-check: derive `P` via
+# `shekyl-crypto-pq::archival_p` and confirm `id::p_canonical_id_from_hybrid_pubkey`
+# reproduces the KAT-pinned value (the second of the two independent cSHAKE256
+# paths the crypto-pq KAT establishes).
+hex = "0.4"
+
+[lints]
+workspace = true

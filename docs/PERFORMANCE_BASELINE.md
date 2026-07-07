@@ -94,9 +94,19 @@ Per [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
 |---|---|---|---|
 | `LedgerEngine` | `synced_height` | `engine_trait_bench_ledger_synced_height` | Stage 0 PR-2 |
 | `LedgerEngine` | `balance` | `engine_trait_bench_ledger_balance` | Stage 1 PR 2 |
-| `EconomicsEngine` | `base_emission_at` | `engine_trait_bench_economics_base_emission_at` | Deferred to EconomicsEngine PR |
-| `EconomicsEngine` | `parameters_snapshot` | `engine_trait_bench_economics_parameters_snapshot` | Deferred to EconomicsEngine PR |
+| `EconomicsEngine` | `base_emission_at` | `engine_trait_bench_economics_base_emission_at` | Stage 1 PR 7 (numbers via CI) |
+| `EconomicsEngine` | `parameters_snapshot` | `engine_trait_bench_economics_parameters_snapshot` | Stage 1 PR 7 (numbers via CI) |
 | `KeyEngine` | `account_public_address` | `engine_trait_bench_key_account_public_address` | Deferred to KeyEngine PR |
+| `KeyEngine` | `try_claim_output` (dispatch) | `engine_trait_bench_key_dispatch` | Stage 2 §5.3 B9 (B9 ratio 1.039 — PASS) |
+| `KeyEngine` | `try_claim_output` (baseline) | `engine_trait_bench_key_dispatch_baseline_claim_mine` | Stage 2 §5.3 B9 (iai 15,163,668) |
+| `Engine` (merge) | 6-i projection | `engine_trait_bench_key_merge_projection` | Stage 2 §5.3 / §8.1 (iai 5,160,059) |
+
+The last three rows are Stage 2 (KeyEngine-actor) benches, not
+§3.3.1 Stage 1 hot paths; they share this document's harness and the
+`engine_trait_bench_*` threshold class. The dispatch bench is a
+bench-vs-bench **ratio** (B9), and its actor paths are
+criterion-(wall-clock)-only — see that section for why there is no
+iai gate row for the `ask` paths.
 
 Reviewers may identify additional hot paths during Stage 1 PR
 review; new benches enter the harness per §4.6's harness-update
@@ -365,48 +375,226 @@ optimizer-amortization noise floor.
 
 ## Bench: `engine_trait_bench_economics_base_emission_at`
 
-**Status:** Deferred to EconomicsEngine PR.
+**Status:** Introduced at Stage 1 PR 7 (EconomicsEngine) C6; iai
+gate-metric numbers deferred to CI `workflow_dispatch` capture at the
+PR's merge SHA (per §4.5/§4.6 frozen-baseline discipline, N=3
+invariance). The bench code, the `[[bench]]` manifest rows, and the
+`__bench_internals` shim land in C6; the cumulative-delta table below
+is populated from the canonical runner's iai-callgrind output (the
+gate metric) — not from local criterion numbers, which are
+non-portable across hardware/toolchain.
 
-This bench section is authored when the EconomicsEngine PR's
-introducing commit lands; same template as
-`engine_trait_bench_ledger_synced_height` above.
+**Workload class:** State-independent compute, **O(height)** (confirmed
+at authoring per §4.4 checklist item 5).
 
-Per §4.6's per-bench deferred assignment, this bench is introduced
-alongside the `EconomicsEngine::base_emission_at(height)` trait
-method. At V3.0 interpretation **(A)** the workload is
-`projected_already_generated(height)` + `base_block_reward` — likely
-**O(height)** naive iteration from genesis (§3.8 / PR 7 §5.2 B.6);
-capture median at authoring. Checkpoint/memoization is a FOLLOWUPS
-optimization if a hot consumer lands — not pre-provisioned now.
+The bench drives
+`EconomicsEngine::base_emission_at(ECONOMICS_BENCH_HEIGHT)` through the
+engine's `economics` field. Under V3.0 interpretation **(A)** the
+method walks `projected_already_generated(height)` block-by-block from
+genesis (`shekyl-economics::emission`) then applies `base_block_reward`
+— per-call cost scales linearly with the bench height
+(`ECONOMICS_BENCH_HEIGHT = 262_800`, ≈1 yr of 120 s blocks, the same
+anchor the C4 fixture's early neutral milestone uses). This is **not**
+a trivial pure-read: the §4.4 hoisting-rule amortization caveat does
+not apply, and the `black_box` around the height argument prevents the
+loop from being constant-folded. The method reads nothing from
+`ChainEconomicsSource`.
+
+The naive O(height) projection is deliberate at V3.0 (§5.2 B.6);
+checkpoint/memoization is a FOLLOWUPS optimization if a hot consumer
+lands — not pre-provisioned now. The frozen baseline pins to the
+naive-loop workload at the merge SHA; a future workload-characterization
+PR that changes the height adds a sibling bench rather than mutating
+`ECONOMICS_BENCH_HEIGHT`.
+
+*Local criterion sanity observation (not the baseline): ~350 µs/call
+at height 262 800, consistent with ~262 800 iterations of checked
+arithmetic — corroborating the O(height) classification. The canonical
+iai `instructions` figure is captured by CI.*
 
 ## Bench: `engine_trait_bench_economics_parameters_snapshot`
 
-**Status:** Deferred to EconomicsEngine PR.
+**Status:** Introduced at Stage 1 PR 7 (EconomicsEngine) C6; iai
+gate-metric numbers deferred to CI `workflow_dispatch` capture at the
+PR's merge SHA (per §4.5/§4.6 frozen-baseline discipline, N=3
+invariance). Same authoring/capture split as
+`engine_trait_bench_economics_base_emission_at` above.
 
-This bench section is authored when the EconomicsEngine PR's
-introducing commit lands; same template as
-`engine_trait_bench_ledger_synced_height` above.
+**Workload class:** Pure compute with a digest (confirmed at authoring
+per §4.4 checklist item 5).
 
-Per §4.6's per-bench deferred assignment, this bench is introduced
-alongside the `EconomicsEngine::parameters_snapshot()` trait method.
-Expected workload class: trivial pure-read if the snapshot returns
-the same value every iteration (criterion median_ns reflects
-optimizer amortization); confirmed at authoring time per §4.4's
-checklist item 5.
+The bench drives `EconomicsEngine::parameters_snapshot()` through the
+engine's `economics` field. Per §6.3 G5 the snapshot is rebuilt fresh
+on every call (no process-wide cache) and computes a Blake2b-256
+`params_digest` over the snapshot's full calibration surface
+(EconomicParams sub-digest + staker-emission consts + tier table) —
+the digest dominates per-call cost, so the workload is **not** a trivial
+pure-read despite the parameter set being build-time-constant. The
+count is height-independent. The method reads nothing from
+`ChainEconomicsSource`; the shim returns the snapshot's
+`money_supply_atomic` (`u64`) so the bench consumes an observable
+without surfacing the `pub(crate)` snapshot type, and an internal
+`black_box` around the snapshot prevents digest elision.
+
+*Local criterion sanity observation (not the baseline): ~135 ns/call,
+well above the trivial-pure-read amortized range — corroborating the
+"pure compute with a digest" classification. The canonical iai
+`instructions` figure is captured by CI.*
 
 ## Bench: `engine_trait_bench_key_account_public_address`
 
-**Status:** Deferred to KeyEngine PR.
+**Status:** Bench pair landed (Stage 1 PR 3 close-out,
+`chore/stage-1-pr3-closeout`, commit `595bb1bed`, 2026-05-12); criterion +
+iai-callgrind targets are `[[bench]]`-registered. Canonical baseline numbers
+**not yet captured** and tracked under the Stage 1 performance-baseline
+FOLLOWUPS entry (stays open until the two `EconomicsEngine` bench slots
+populate). **Capture-script gap:** this pair is *not* in
+`scripts/bench/capture_rust_baseline.sh`'s `BENCHES` array, so the
+CI `workflow_dispatch` runs to date did not capture it; closing the FOLLOWUPS
+entry requires adding the row first. This is **not** Stage 2 scope — Stage 2
+did not introduce this bench.
 
-This bench section is authored when the KeyEngine PR's introducing
-commit lands; same template as
-`engine_trait_bench_ledger_synced_height` above.
+Expected workload class: trivial pure-read (the address is stable across
+iterations); confirmed at authoring time per §4.4's checklist item 5.
+Fixture is `Box<LocalKeys>` per `STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md` §1.2.
 
-Per §4.6's per-bench deferred assignment, this bench is introduced
-alongside the `KeyEngine::account_public_address()` trait method on
-a fixture appropriate to key-layer state. Expected workload class:
-trivial pure-read (the address is stable across iterations);
-confirmed at authoring time per §4.4's checklist item 5.
+## Bench: `engine_trait_bench_key_dispatch`
+
+**Status:** Introduced at Stage 2 (KeyEngine actor) §5.3 B9. Wall-clock
+numbers below captured by CI `workflow_dispatch` (run 26732235292) on a
+GitHub-hosted `ubuntu-latest` runner at SHA `d377edfdb` (AMD EPYC 9V74,
+rustc 1.96.0). Re-confirm at the merge SHA if the branch tip advances
+materially before merge. The bench code, the `[[bench]]` manifest row,
+and the `KeyDispatchBenchHarness` shim (gated behind `bench-internals`)
+land in this PR.
+
+**What B9 is: a bench-vs-bench ratio, not an absolute gate.** This
+bench reports three criterion IDs:
+
+- `engine_trait_bench_key_dispatch_baseline_claim_mine` — direct
+  `LocalKeys::try_claim_output` on a `Mine` output (the composition
+  baseline; full X25519 view-tag + hybrid ML-KEM-768 decap + HKDF +
+  key-image + handle insert).
+- `engine_trait_bench_key_dispatch_actor_claim_mine` — the same output
+  via `KeyEngineHandle::try_claim_output` (an `ask` round-trip through
+  the mailbox).
+- `engine_trait_bench_key_dispatch_actor_claim_not_mine` — a `NotMine`
+  output via the `ask` (X25519 pre-filter only, the cheap common case).
+
+The **B9 signal** is `actor_claim_mine / baseline_claim_mine ≤ 1.05`
+(§5.3 "within 5%"): the mailbox round-trip overhead should be lost in
+the ML-KEM-768 decap noise. The `not_mine` ID records the dispatch cost
+against the *cheapest* real op as evidence for (not a gate on) the §8.3
+view-scan split.
+
+**Workload class:** Crypto-bound async dispatch (confirmed at authoring
+per §4.4 checklist item 5). The `b.iter` body drives the async surface
+through `rt.block_on`; that driver cost is symmetric across the baseline
+and actor IDs, so it cancels in the B9 ratio.
+
+**No iai gate row for the actor paths.** The `ask` is a cross-thread
+async round-trip; iai-callgrind runs under Callgrind (Valgrind
+serializes all threads onto one simulated core), so an `ask`'s
+instruction count folds in nondeterministic runtime-scheduling
+machinery rather than a clean deterministic signal. The actor paths are
+**criterion-only by design** — a reasoned, reversion-claused deviation
+from the criterion+iai pairing discipline
+([`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md)):
+**reopen** the iai actor sibling if a deterministic async-dispatch
+measurement method lands. Only the deterministic-crypto baseline gets an
+iai sibling (`engine_trait_bench_key_dispatch_baseline_claim_mine`,
+below).
+
+**Captured wall-clock baseline (CI run 26732235292, SHA `d377edfdb`):**
+
+| criterion ID | mean | median |
+| --- | --- | --- |
+| `baseline_claim_mine` | 1,333,918 ns | 1,330,067 ns |
+| `actor_claim_mine` | 1,386,043 ns | 1,384,646 ns |
+| `actor_claim_not_mine` | 166,793 ns | 165,949 ns |
+
+**B9 verdict: PASS.** `actor_claim_mine / baseline_claim_mine =
+1,386,043 / 1,333,918 = 1.039` (median 1.041) — inside the ≤ 1.05
+envelope; the mailbox `ask` round-trip (~52 µs here) is lost in the
+ML-KEM-768 decap. The `not_mine` figure (167 µs) records the dispatch
+cost against the cheapest real op — evidence for the §8.3 view-scan
+split, not a gate.
+
+## Bench: `engine_trait_bench_key_dispatch_baseline_claim_mine` (iai)
+
+**Status:** Introduced at Stage 2 §5.3 B9; iai gate-metric numbers
+captured by CI `workflow_dispatch` (run 26732235292, SHA `d377edfdb`,
+valgrind 3.22.0): **`instructions` = 15,163,668**, estimated cycles =
+19,847,252. ML-KEM-768-dominated, as expected; matches the authoring-host
+smoke (~15.16 M). Re-confirm at the merge SHA if the tip advances.
+
+This is the iai-callgrind sibling for the B9 **composition baseline**
+only (`LocalKeys::try_claim_output` over a `Mine` output), driven via an
+actor-free fixture (`KeyBaselineBenchFixture` — no spawned `KeyActor`,
+so no multi-thread runtime under Callgrind). The single async call is
+driven by a **no-op-waker poll** (`std::task::Waker` over a null vtable),
+not a Tokio `block_on`: `LocalKeys::try_claim_output` completes inside
+its first poll, so one `poll` returns `Ready` and the count is exactly
+the crypto work with zero runtime machinery folded in. A current-thread
+Tokio `block_on` was tried first and rejected — under Callgrind it did
+**not** drive the future body to completion, collapsing the measured
+count to ≈4.8k runtime-handshake instructions instead of the real decap;
+the no-op-waker poll is both correct and cleaner.
+
+**Workload class:** Crypto-bound, allocation-present (confirmed at
+authoring per §4.4 checklist item 5). A full hybrid ML-KEM-768
+decapsulation + HKDF expansion + key-image scalar-mult; expected
+`instructions` count is large (millions, ML-KEM-768-dominated) and the
+§4.4 hoisting caveat does not apply. This is the stable regression
+signal for the baseline crypto cost; the criterion ratio above carries
+the B9 envelope check.
+
+*Local iai sanity observation (not the frozen baseline; smoke run on the
+authoring host): `instructions` ≈ 15.16 M, estimated cycles ≈ 19.84 M —
+consistent with an ML-KEM-768-dominated decap. The canonical figure is
+captured by CI at the merge SHA.*
+
+## Bench: `engine_trait_bench_key_merge_projection`
+
+**Status:** Introduced at Stage 2 §5.3 / §8.1. Numbers captured by CI
+`workflow_dispatch` (run 26732235292, SHA `d377edfdb`): iai
+**`instructions` = 5,160,059** (estimated cycles = 7,174,412) and
+criterion **mean = 437,561 ns** (median 428,632 ns) over the 256-output
+batch — ≈ 20,156 instructions and ≈ 1.71 µs per output. Unlike the actor
+dispatch paths, this post-pass is synchronous and runtime-free, so it
+gets a full criterion + iai-callgrind pair
+(`engine_trait_bench_key_merge_projection_iai.rs`).
+
+The bench drives `populate_engine_handle_fields` — the 6-i
+construction-time view-secret projection `Engine::apply_scan_result`
+runs over every newly-inserted output — across a synthetic batch of
+`MERGE_BENCH_OUTPUT_COUNT` (256) unpopulated transfers. Per output:
+a `HashMap` lookup (detection residue → on-chain ciphertext), a
+`derive_output_handle` (cSHAKE256 PRF over the view secret), and a
+~1.1 KiB hybrid-ciphertext clone into `TransferDetails`.
+
+**This bench is evidence for (not a gate on) the §8.1 6-ii deferral
+decision.** 6-i does this projection eagerly at merge time; 6-ii would
+defer it to first spend. If the per-output cost is negligible against a
+refresh's other work, eager 6-i stays and 6-ii remains deferred; a
+surprise here reopens §8.1. **Verdict: eager 6-i confirmed.** At
+≈ 1.71 µs / output the projection is ~780× cheaper than the per-output
+`Mine` claim it rides alongside (1.33 ms baseline above); deferring it to
+first spend buys nothing, so 6-ii stays deferred.
+
+**Workload class:** Batch-bound, per-output crypto (confirmed at
+authoring per §4.4 checklist item 5). The count scales with the 256
+batch size and is dominated by the per-output cSHAKE256; non-hoistable,
+so criterion's `median_ns` approximates per-call cost. The criterion
+sibling uses `iter_batched` with a fresh fixture per invocation (the
+projection is idempotent-once — it only populates `None` fields), and
+the iai sibling measures one `run_projection` over a `setup`-built
+fixture, matching shapes.
+
+*Captured by CI (run 26732235292, SHA `d377edfdb`): criterion mean
+437,561 ns / median 428,632 ns over the 256-output batch (≈ 1.71 µs /
+output); iai 5,160,059 instructions (≈ 20,156 / output). Negligible
+per-output — corroborates the eager-6-i disposition.*
 
 ## Capture environments
 
@@ -601,6 +789,52 @@ Per [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
 - If the cumulative-delta tables for in-scope benches are not
   populated, the PR is not reviewable — measurement is the gate,
   not optional metadata.
+
+## FA-6 decap pre-filter gate (`fa6_decap_prefilter_throughput_pi4`)
+
+Per [`docs/design/FA-6_VIEW_TAG_ML_KEM.md`](design/FA-6_VIEW_TAG_ML_KEM.md) §8.5.1 /
+§8.7. **UX ceiling gate** (not a Stage 1 frozen-baseline regression row).
+
+| Field | Value |
+|-------|-------|
+| Harness | `rust/shekyl-crypto-pq/examples/fa6_decap_prefilter_gate.rs` (`--path fa6\|classical`, `--scenario smoke\|a\|b`) |
+| Pi capture | `scripts/bench/fa6_pi4_gate.sh <scenario> [fa6\|classical]` |
+| Reference device | Raspberry Pi 4 Model B, 4 GB, active cooling, USB3 SSD (§8.2) |
+| Scenario A | 2,016,000 outputs, `T_ceil` = 45 s (clean ≤ 36 s) |
+| Scenario B | 525,960,000 outputs, `T_ceil` = 20 min (clean ≤ 16 min) |
+| `M_margin` | 20% |
+
+**Disposition (2026-06-08):** §8.7 **fail** on budget (A and B); **ship FA-6**
+at genesis; **§10.1 T6 waiver rejected** (classical counterfactual slower on
+Pi 4). Authoritative close-out: [`FA-6_CLOSEOUT.md`](completed/FA-6_CLOSEOUT.md).
+End-to-end restore bench (§8.5.2) remains separate.
+
+Archive captures under
+`docs/benchmarks/fa6_decap_prefilter_pi4_<path>_<scenario>_<utc>.txt`.
+
+### Pi 4 (skl-pi, USB3 SSD, `rustc` 1.96.0 aarch64)
+
+| Path | Scenario | `T_meas` | ns/out | `RUSTFLAGS` | `gate_outcome` |
+|------|----------|----------|--------|-------------|----------------|
+| fa6 | smoke | — | 271,505 | default | informational |
+| fa6 | A | 550.4 s | 273,023 | default | **fail** |
+| fa6 | B | 140,265 s (~39.0 h) | 266,683.88 | `-C target-cpu=cortex-a72` | **fail** |
+| classical | smoke | — | 639,791 | `-C target-cpu=cortex-a72` | informational |
+| classical | A | 1,289.9 s | 639,834 | `-C target-cpu=cortex-a72` | **fail** |
+| classical | B | *(pending)* | ~640,000 (extrap.) | — | **fail** (expected) |
+
+Scenario B measured capture:
+`docs/benchmarks/fa6_decap_prefilter_pi4_fa6_b_20260608T220614Z.txt`.
+Classical B row remains *(pending)* until captured.
+
+### Laptop reference (le7560, x86_64, `rustc` 1.95.0 — ceilings not reachable)
+
+| Path | Scenario | `T_meas` | ns/out | `RUSTFLAGS` | vs classical |
+|------|----------|----------|--------|-------------|--------------|
+| fa6 | A | 127.6 s | 63,315 | default | faster |
+| fa6 | A | 151.4 s | 75,123 | `-C target-cpu=native` | faster |
+| classical | A | 166.7 s | 82,679 | default | — |
+| classical | A | 171.3 s | 84,976 | `-C target-cpu=native` | — |
 
 ## Cross-references
 

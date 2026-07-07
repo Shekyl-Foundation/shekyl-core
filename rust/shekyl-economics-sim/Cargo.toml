@@ -9,5 +9,11 @@ description = "Eight-scenario economics simulation harness for DESIGN_CONCEPTS p
 
 [dependencies]
 shekyl-economics = { path = "../shekyl-economics" }
+# Gate-7 derived-lock model: compile-time tie to the pinned consensus
+# constants (`ARCHIVAL_BOND_FLOOR_ATOMIC`, `SETTLEMENT_EPOCH_BLOCKS`)
+# instead of re-asserting their values locally.
+# `provisional-k-cover`: K_COVER unsealed-sentinel acknowledgment
+# (ARCHIVAL_REWARD_GATE_M1.md §4) — delete this feature at the §14.4 seal.
+shekyl-archival-retention = { path = "../shekyl-archival-retention", features = ["provisional-k-cover"] }
 serde = { workspace = true }
 serde_json = "1"

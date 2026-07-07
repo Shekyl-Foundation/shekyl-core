@@ -12,16 +12,11 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use curve25519_dalek::{edwards::EdwardsPoint, Scalar};
 
-use shekyl_oxide::{
-    io::*,
-    primitives::Commitment,
-    transaction::{StakingMeta, Timelock},
-};
+use shekyl_curve_io::*;
+use shekyl_curve_primitives::Commitment;
+use shekyl_types::Timelock;
 
-use crate::{
-    extra::{PaymentId, MAX_ARBITRARY_DATA_SIZE, MAX_EXTRA_SIZE_BY_RELAY_RULE},
-    SubaddressIndex,
-};
+use crate::extra::{PaymentId, MAX_ARBITRARY_DATA_SIZE, MAX_EXTRA_SIZE_BY_RELAY_RULE};
 
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub(crate) struct AbsoluteId {
@@ -112,7 +107,6 @@ impl OutputData {
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub(crate) struct Metadata {
     pub(crate) additional_timelock: Timelock,
-    pub(crate) subaddress: Option<SubaddressIndex>,
     pub(crate) payment_id: Option<PaymentId>,
     pub(crate) arbitrary_data: Vec<Vec<u8>>,
 }
@@ -121,7 +115,6 @@ impl core::fmt::Debug for Metadata {
     fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
         fmt.debug_struct("Metadata")
             .field("additional_timelock", &self.additional_timelock)
-            .field("subaddress", &self.subaddress)
             .field("payment_id", &self.payment_id)
             .field(
                 "arbitrary_data",
@@ -137,14 +130,12 @@ impl core::fmt::Debug for Metadata {
 
 impl Metadata {
     fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        self.additional_timelock.write(w)?;
+        // Block-height-only unlock encoding: 0 = None, else the block height. The
+        // owning wire format keeps the varint; `Timelock` is a pure value type.
+        write_varint(&self.additional_timelock.to_unlock_raw(), w)?;
 
-        if let Some(subaddress) = self.subaddress {
-            w.write_all(&[1])?;
-            w.write_all(&subaddress.get().to_le_bytes())?;
-        } else {
-            w.write_all(&[0])?;
-        }
+        // FA-2: subaddress metadata slot is always absent on wire.
+        w.write_all(&[0])?;
 
         if let Some(payment_id) = self.payment_id {
             w.write_all(&[1])?;
@@ -165,19 +156,29 @@ impl Metadata {
     }
 
     fn read<R: Read>(r: &mut R) -> io::Result<Metadata> {
-        let additional_timelock = Timelock::read(r)?;
+        // Lift through the canonical, sentinel-aware lift (not a bare 0→None/else→Block
+        // cast): a persisted value `>= UNLOCK_TIME_BLOCK_SENTINEL` is the deleted
+        // timestamp form (corruption or a legacy cache), and is mapped to `None` rather
+        // than materialized as a huge `Timelock::Block`, preserving block-height-only.
+        let additional_timelock = crate::scan::timelock_from_unlock_time(read_varint(r)?);
 
-        let subaddress = match read_byte(r)? {
-            0 => None,
-            1 => Some(SubaddressIndex::new(read_u32(r)?)),
-            _ => Err(io::Error::other(
-                "invalid subaddress is_some boolean in metadata",
-            ))?,
-        };
+        match read_byte(r)? {
+            0 => {}
+            1 => {
+                let _ = read_u32(r)?;
+                return Err(io::Error::other(
+                    "subaddress metadata not supported at V3.0 (FA-2)",
+                ));
+            }
+            _ => {
+                return Err(io::Error::other(
+                    "invalid subaddress is_some boolean in metadata",
+                ));
+            }
+        }
 
         Ok(Metadata {
             additional_timelock,
-            subaddress,
             payment_id: if read_byte(r)? == 1 {
                 PaymentId::read(r).ok()
             } else {
@@ -213,7 +214,6 @@ pub struct WalletOutput {
     pub(crate) relative_id: RelativeId,
     pub(crate) data: OutputData,
     pub(crate) metadata: Metadata,
-    pub(crate) staking: Option<StakingMeta>,
 }
 
 impl WalletOutput {
@@ -252,11 +252,6 @@ impl WalletOutput {
         self.metadata.additional_timelock
     }
 
-    /// Subaddress this output was received at, if any.
-    pub fn subaddress(&self) -> Option<SubaddressIndex> {
-        self.metadata.subaddress
-    }
-
     /// Payment ID included with this output.
     pub fn payment_id(&self) -> Option<PaymentId> {
         self.metadata.payment_id
@@ -267,11 +262,6 @@ impl WalletOutput {
         &self.metadata.arbitrary_data
     }
 
-    /// Staking metadata, if this output is a staked output.
-    pub fn staking(&self) -> Option<StakingMeta> {
-        self.staking
-    }
-
     /// Construct a WalletOutput for testing or programmatic use.
     #[cfg(any(test, feature = "test-utils"))]
     pub fn new_for_test(
@@ -280,8 +270,7 @@ impl WalletOutput {
         index_on_blockchain: u64,
         key: curve25519_dalek::edwards::EdwardsPoint,
         key_offset: curve25519_dalek::Scalar,
-        commitment: shekyl_oxide::primitives::Commitment,
-        staking: Option<StakingMeta>,
+        commitment: shekyl_curve_primitives::Commitment,
     ) -> Self {
         WalletOutput {
             absolute_id: AbsoluteId {
@@ -297,13 +286,21 @@ impl WalletOutput {
                 commitment,
             },
             metadata: Metadata {
-                additional_timelock: shekyl_oxide::transaction::Timelock::None,
-                subaddress: None,
+                additional_timelock: Timelock::None,
                 payment_id: None,
                 arbitrary_data: vec![],
             },
-            staking,
         }
+    }
+
+    /// Set the additional timelock (test/programmatic builder). Lets a test
+    /// construct a coinbase-style block-locked output without widening
+    /// [`Self::new_for_test`]'s signature for every caller.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn with_additional_timelock(mut self, timelock: Timelock) -> Self {
+        self.metadata.additional_timelock = timelock;
+        self
     }
 
     /// Write the WalletOutput.
@@ -312,13 +309,6 @@ impl WalletOutput {
         self.relative_id.write(w)?;
         self.data.write(w)?;
         self.metadata.write(w)?;
-        match &self.staking {
-            Some(s) => {
-                w.write_all(&[1])?;
-                w.write_all(&[s.lock_tier])?;
-            }
-            None => w.write_all(&[0])?,
-        }
         Ok(())
     }
 
@@ -336,20 +326,11 @@ impl WalletOutput {
         let relative_id = RelativeId::read(r)?;
         let data = OutputData::read(r)?;
         let metadata = Metadata::read(r)?;
-        let staking = match read_byte(r)? {
-            0 => None,
-            1 => {
-                let lock_tier = read_byte(r)?;
-                Some(StakingMeta { lock_tier })
-            }
-            _ => Err(io::Error::other("invalid staking flag in WalletOutput"))?,
-        };
         Ok(WalletOutput {
             absolute_id,
             relative_id,
             data,
             metadata,
-            staking,
         })
     }
 }

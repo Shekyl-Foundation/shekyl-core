@@ -1,0 +1,53 @@
+[package]
+name = "shekyl-wire"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Canonical Shekyl genesis block/tx binary wire format (serializer). See docs/design/GENESIS_TX_WIRE_FORMAT.md."
+
+[dependencies]
+# Consensus keccak-256 (cn_fast_hash; original 0x01 padding, byte-identical to
+# the C++ `cn_fast_hash`). The single source for the tx/block hash identities.
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+
+[dev-dependencies]
+# Test-only: load the captured oracle hash vectors so the JSON is the single source
+# of truth for the live-oracle hash KAT (no hand-copied hex). Not a runtime
+# dependency of the serializer.
+serde_json = { workspace = true }
+# End-to-end FCMP++ spend oracle (`tests/fcmp_spend_e2e.rs`). Rather than
+# capturing a "known-good" transaction blob from the C++ daemon — whose FCMP++
+# spend path never produced a daemon-accepted transaction, so there is nothing
+# valid to capture — the test BUILDS a consensus-valid spend in Rust and
+# self-validates it against `shekyl_fcmp::proof::verify` (the exact function the
+# daemon's `shekyl_fcmp_verify` FFI calls, i.e. the consensus rule itself).
+# These deps are dev-only: `shekyl-wire` has no runtime dependents, so the test
+# fixture cannot leak into the serializer's dependency surface.
+shekyl-tx-builder = { path = "../shekyl-tx-builder" }
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-fcmp = { path = "../shekyl-fcmp" }
+shekyl-units = { path = "../shekyl-units" }
+# Single source for the coinbase maturity window consensus constant
+# (`COINBASE_LOCK_WINDOW`) the e2e fixture references, rather than duplicating
+# the literal `60` and risking silent drift if the parameter ever changes.
+shekyl-consensus = { path = "../shekyl-consensus" }
+# Consensus checks composed alongside FCMP membership: CT cleartext balance
+# (`sum(pseudoOuts) == sum(outPk) + fee*H`) and Bp+ range-proof verification.
+shekyl-ct-balance = { path = "../shekyl-ct-balance" }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+rand_core = { version = "0.6", features = ["std"] }
+# Deterministic, seedable CSPRNG for the e2e fixture draw. The workspace's
+# canonical deterministic-test RNG (also used by `shekyl-engine-core`,
+# `shekyl-crypto-pq`, `shekyl-fcmp`); a fixed seed makes a CI failure of the
+# heavy single-case spend oracle replayable, rather than depending on the OS
+# entropy draw of that run.
+rand_chacha = { workspace = true }
+
+[lints]
+workspace = true

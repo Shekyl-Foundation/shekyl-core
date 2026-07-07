@@ -121,7 +121,7 @@ consumers under independent maintenance).
 Pre-genesis, with no deployed users, every one of these
 defaults inverts. Graceful degradation becomes loud failure
 (per the discipline pinned in
-`docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.3). Staged rollouts
+`docs/completed/ELECTRUM_WORDS_REMOVAL.md` §4.3). Staged rollouts
 become atomic cutovers (per the same doc's §5.2). Backward
 compatibility becomes Rule-60 "deleted, not gated." Opt-in
 migration paths become `rm -rf ~/.shekyl` per
@@ -151,7 +151,7 @@ discipline-correct disposition.
 
 **Recurrence cadence.** Two instances surfaced in a single
 design's Round 1 (the
-`docs/design/ELECTRUM_WORDS_REMOVAL.md` Phase-1-hard-error
+`docs/completed/ELECTRUM_WORDS_REMOVAL.md` Phase-1-hard-error
 disposition and the atomic-cutover-default disposition).
 Substrate compounding per the discovery-cadence discipline
 above predicts more instances in subsequent PRs; each PR's

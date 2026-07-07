@@ -26,9 +26,9 @@
 //! again on next open"; that is exactly what runtime-only tracking
 //! gives us, with no reconciliation path.
 //!
-//! `BOOKKEEPING_BLOCK_VERSION` is therefore unchanged by this commit;
-//! the bookkeeping block's scope stays "subaddress registry, labels,
-//! address book."
+//! Pending reservations are runtime-only; they are not persisted in
+//! [`BookkeepingBlock`](shekyl_engine_state::BookkeepingBlock). After FA-2
+//! (End-state 5), bookkeeping holds only the primary label and address book.
 //!
 //! # State machine
 //!
@@ -45,7 +45,10 @@
 //!                                    - block_hash_at(built_at_height) == built_at_tip_hash
 //!                                      else PendingTxError::ChainStateChanged
 //!                                  on pass: reservation is removed,
-//!                                  selected outputs marked spent,
+//!                                  selected outputs placed under the F14
+//!                                  awaiting-confirmation lock (§2.6;
+//!                                  the test-only helper below still
+//!                                  marks spent, pre-F14 shape),
 //!                                  TxHash returned
 //!
 //! discard_pending_tx(handle)   ─►  reservation removed, idempotent
@@ -90,9 +93,9 @@ use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use shekyl_address::Network;
-use shekyl_engine_state::SubaddressIndex;
 #[cfg(test)]
 use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants};
+use shekyl_units::AtomicUnits;
 
 use crate::engine::{
     diagnostics::DiscardReason,
@@ -110,7 +113,7 @@ use crate::engine::refresh::{derive_snapshot_id, LedgerSnapshot};
 /// against the caller's [`FeePriority`]. The constant is non-zero so
 /// that lifecycle tests exercising [`Reservation::fee_atomic_units`]
 /// run against a real value rather than zero-as-special-case.
-pub const STUB_FEE_ATOMIC_UNITS: u64 = 1_000;
+pub const STUB_FEE_ATOMIC_UNITS: AtomicUnits = AtomicUnits::from_raw(1_000);
 
 /// Opaque 16-byte content-derived ledger-snapshot digest.
 ///
@@ -167,7 +170,7 @@ impl ReservationId {
     /// Construct a [`ReservationId`] from a raw counter value. Crate-
     /// internal; production code goes through `build_pending_tx` (which
     /// owns the monotonic counter on `Engine<S>`) or
-    /// [`super::local_pending_tx::LocalPendingTx`] (C5β). Tests in
+    /// [`super::local_pending_tx::LocalPendingTx`]. Tests in
     /// sibling modules use this to synthesize a recognizable id without
     /// running the full build pipeline.
     pub(crate) fn new(v: u64) -> Self {
@@ -177,14 +180,17 @@ impl ReservationId {
 
 /// Result of [`Engine::submit_pending_tx`].
 ///
-/// Phase 1 stub: the bytes encode the [`ReservationId`] in
-/// little-endian at offsets `0..8`, with the remaining bytes left
-/// zero. Phase 2a replaces submit with a real daemon broadcast call
-/// whose response carries the daemon's reported tx hash; callers
-/// compare the field as opaque bytes either way and never rely on the
-/// stub bit pattern.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TxHash(pub [u8; 32]);
+/// The canonical [`TxHash`] from `shekyl-types`, re-exported here so the
+/// pending-tx surface keeps its `pending::TxHash` path while there is a
+/// single definition workspace-wide (`18-type-placement.mdc`: re-export,
+/// never redefine). Built from raw bytes via [`TxHash::from_bytes`].
+///
+/// Phase 1 stub: `phase1_tx_hash` (in `local_pending_tx`) encodes the
+/// [`ReservationId`] in little-endian at offsets `0..8`, the rest left zero.
+/// Phase 2a replaces submit with a real daemon broadcast call whose
+/// response carries the daemon's reported tx hash; callers compare the
+/// bytes as opaque either way and never rely on the stub bit pattern.
+pub use shekyl_types::TxHash;
 
 // `FeePriority` migrated to `engine::fee_estimator` per PR 5
 // C4γ (`STAGE_1_PR_5_PENDING_TX_ENGINE.md` §7.X "trait-surface
@@ -200,7 +206,7 @@ pub struct TxRecipient {
     /// network-checked by [`build_pending_tx_in_state`]).
     pub address: String,
     /// Amount to send to this address in atomic units (no fee).
-    pub amount_atomic_units: u64,
+    pub amount_atomic_units: AtomicUnits,
 }
 
 /// Caller request to [`Engine::build_pending_tx`].
@@ -211,9 +217,6 @@ pub struct TxRequest {
     pub recipients: Vec<TxRecipient>,
     /// Fee tier; Phase 1 ignores and uses [`STUB_FEE_ATOMIC_UNITS`].
     pub priority: FeePriority,
-    /// Optional source-subaddress filter. When `Some`, only outputs
-    /// owned by this subaddress are eligible for selection.
-    pub from_subaddress: Option<SubaddressIndex>,
 }
 
 /// Display-friendly recipient summary stored alongside the
@@ -226,7 +229,7 @@ pub struct TxRecipientSummary {
     pub address: String,
     /// Amount the caller asked to send to this destination, in atomic
     /// units, before fee.
-    pub amount_atomic_units: u64,
+    pub amount_atomic_units: AtomicUnits,
 }
 
 /// R14 reservation-extensibility seam.
@@ -341,7 +344,7 @@ pub(crate) struct Reservation {
     /// this field when reconciling unconfirmed-spend tracking against
     /// the daemon's broadcast response.
     #[allow(dead_code)]
-    pub fee_atomic_units: u64,
+    pub fee_atomic_units: AtomicUnits,
     /// Caller's recipient summary. Carried so a UI can describe an
     /// in-flight tx without reaching into `tx_bytes`. Read only via
     /// `Debug`; the same data lives on [`PendingTx::recipients`] for
@@ -372,7 +375,7 @@ pub struct PendingTx {
     /// time.
     pub built_at_tip_hash: [u8; 32],
     /// Fee in atomic units captured at build time (Phase 1 stub).
-    pub fee_atomic_units: u64,
+    pub fee_atomic_units: AtomicUnits,
     /// [`SnapshotId`] derived at build time from the wallet's
     /// ledger snapshot — mirrors the value stored on the
     /// engine-internal `Reservation` side. Caller-visible so
@@ -387,6 +390,24 @@ pub struct PendingTx {
     pub tx_bytes: Vec<u8>,
     /// Recipient summary for display.
     pub recipients: Vec<TxRecipientSummary>,
+    /// CT-5d ([`docs/design/CT5D_REANCHOR.md`] §4): consumer-visible content
+    /// generation. A fresh build is `0`; a submit-time re-anchor that changes the
+    /// realized `(fee, recipients, change)` advances it and **withholds
+    /// broadcast** — `submit` returns [`SubmitError::ContentChanged`] carrying the
+    /// advanced generation, and the reservation stays `consumer_held` with the
+    /// fresh proof (it is *not* auto-released and no new handle is returned). The
+    /// consumer resubmits with the advanced `content_gen` as `submit(id, seen_gen)`
+    /// to broadcast; a `seen_gen` that does not match the current generation means
+    /// the authorized content changed since the consumer last reviewed it and must
+    /// be re-confirmed first. (Reviewing the re-anchored `(fee, change)` before
+    /// re-confirming needs a pending-tx read accessor — tracked in `FOLLOWUPS.md`.)
+    ///
+    /// [`SubmitError::ContentChanged`]: super::error::SubmitError::ContentChanged
+    pub content_gen: u64,
+    /// CT-5d: the height of the reference block this proof is anchored to
+    /// (`tip − REF_ANCHOR_AGE` at build). Diagnostics-only — lets a UI surface
+    /// the anchor age without parsing `tx_bytes`.
+    pub reference_height: u64,
 }
 
 /// Default reservation TTL used by both
@@ -490,20 +511,28 @@ impl Default for ReservationTTLConfig {
 /// `dead_code` allow: no V3.0-time reader until C5β wires the
 /// `in_flight` collection. Pattern matches the
 /// `ReservationTTLConfig` allow above.
+///
+/// # Why the full [`ConsumerHeldEntry`] rides along
+///
+/// The `consumer_held → in_flight` move preserves the **entire** held
+/// entry (not a `tx_bytes`/`snapshot_id`/`created_at` projection):
+/// `DAEMON_SUBMIT_VERDICT.md` §2.5's retryable rejections
+/// (`StaleRoot` / `ReferenceTooRecent` / `ReferenceNotFound`) return
+/// the reservation to `consumer_held` with its re-anchor substrate
+/// (`request` / `reference` / `content_gen` / `fingerprint`) intact,
+/// so a subsequent `submit(rid, seen_gen)` can reprove against a
+/// fresh root without a lossy round-trip. A projection here would
+/// make that restoration reconstruct fields it no longer has.
+/// `tx_bytes` / `snapshot_id` / `created_at` are reached through
+/// [`Self::entry`]; V3.0's uniform "age from creation" TTL policy
+/// reads `entry.created_at` for both collections.
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct InFlightSubmit {
-    /// [`SnapshotId`] the reservation was built against;
-    /// preserved verbatim from the source `Reservation` at the
-    /// `consumer_held → in_flight` transition.
-    pub snapshot_id: SnapshotId,
-    /// When the reservation was originally built (the
-    /// `consumer_held` insert timestamp). Preserved across the
-    /// `consumer_held → in_flight` move so the `consumer_held`
-    /// TTL semantics are not lost. V3.0's uniform "age from
-    /// creation" aging policy reads this field for both
-    /// collections.
-    pub created_at: Instant,
+    /// The full held entry preserved across the
+    /// `consumer_held → in_flight` transition (bytes, snapshot pin,
+    /// build timestamps, and the CT-5d re-anchor substrate).
+    pub entry: super::local_pending_tx::ConsumerHeldEntry,
     /// When the reservation entered `in_flight` (the submit-
     /// dispatch timestamp). V3.x's `ReservationTTLActor`
     /// age-from-submission policy reads this field for
@@ -544,7 +573,7 @@ pub(crate) fn build_pending_tx_in_state(
         });
     };
 
-    let mut total_amount: u64 = 0;
+    let mut total_amount = AtomicUnits::ZERO;
     for r in &request.recipients {
         total_amount =
             total_amount
@@ -565,8 +594,8 @@ pub(crate) fn build_pending_tx_in_state(
         .flat_map(|r| r.selected_transfer_indices.iter().copied())
         .collect();
 
-    let mut candidates: Vec<(usize, u64)> = ledger
-        .spendable_outputs(synced, request.from_subaddress, None)
+    let mut candidates: Vec<(usize, AtomicUnits)> = ledger
+        .spendable_outputs(synced, None)
         .into_iter()
         .filter(|(idx, _)| !reserved.contains(idx))
         .map(|(idx, td)| (idx, td.amount()))
@@ -574,18 +603,23 @@ pub(crate) fn build_pending_tx_in_state(
     candidates.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
 
     let mut selected = Vec::new();
-    let mut covered: u64 = 0;
+    let mut covered = AtomicUnits::ZERO;
     for (idx, amount) in candidates.iter().copied() {
         if covered >= needed {
             break;
         }
         selected.push(idx);
-        covered = covered.saturating_add(amount);
+        // Accumulating owned outputs; total wallet balance is bounded by
+        // supply (< u64::MAX), so overflow here is a corrupted-state
+        // invariant violation, not a recoverable condition.
+        covered = covered
+            .checked_add(amount)
+            .expect("selected-output sum overflowed total supply bound");
     }
     if covered < needed {
         return Err(SendError::InsufficientFunds {
-            needed,
-            available: covered,
+            needed: needed.to_raw(),
+            available: covered.to_raw(),
         });
     }
     selected.sort();
@@ -635,6 +669,16 @@ pub(crate) fn build_pending_tx_in_state(
         snapshot_id,
         tx_bytes: Vec::new(),
         recipients: summary,
+        // Legacy free-function helper (no curve tree); CT-5d re-anchor is
+        // exercised through `LocalPendingTx`. Report the canonical anchor height
+        // (`tip − REF_ANCHOR_AGE`) the production path would compute, so this
+        // diagnostics field stays a real height consistent with its doc. A built
+        // tx implies a selected spendable output, hence `synced >= SPENDABLE_AGE >
+        // REF_ANCHOR_AGE`, so the canonical height always exists — no `0`
+        // (genesis-looking) fallback.
+        content_gen: 0,
+        reference_height: shekyl_curve_tree::select_reference_height(synced)
+            .expect("a built tx implies synced >= SPENDABLE_AGE > REF_ANCHOR_AGE"),
     };
 
     reservations.insert(id, reservation);
@@ -693,7 +737,7 @@ pub(crate) fn submit_pending_tx_in_state(
 
     let mut bytes = [0u8; 32];
     bytes[..8].copy_from_slice(&id.0.to_le_bytes());
-    Ok(TxHash(bytes))
+    Ok(TxHash::from_bytes(bytes))
 }
 
 /// Discard a reservation. Returns `true` if the handle was known,
@@ -709,7 +753,7 @@ pub(crate) fn discard_pending_tx_in_state(
 }
 
 // ---------------------------------------------------------------------------
-// `Engine<S, D, L, R, P>` pending dispatch (C6).
+// `Engine<S, D, L, E, R, P, F>` pending dispatch.
 // ---------------------------------------------------------------------------
 
 use std::future::Future;
@@ -762,10 +806,11 @@ impl<
         S: EngineSignerKind,
         D: DaemonEngine,
         L: LedgerEngine,
+        E: super::traits::EconomicsEngine,
         R: RefreshEngine,
         P: PendingTxEngine,
         F: super::traits::PersistenceEngine,
-    > Engine<S, D, L, R, P, F>
+    > Engine<S, D, L, E, R, P, F>
 {
     /// Number of in-flight reservations on this wallet handle.
     ///
@@ -782,8 +827,41 @@ impl<
     }
 
     /// Submit a [`PendingTx`] handle via [`PendingTxEngine::submit`].
-    pub fn submit_pending_tx(&mut self, id: ReservationId) -> Result<TxHash, SubmitError> {
-        poll_immediate_submit(id, self.pending.submit(id))
+    ///
+    /// `seen_gen` is the [`PendingTx::content_gen`] the consumer last reviewed;
+    /// it gates broadcast against a submit-time re-anchor that changed the
+    /// authorized content (CT-5d, [`docs/design/CT5D_REANCHOR.md`] §4).
+    pub fn submit_pending_tx(
+        &mut self,
+        id: ReservationId,
+        seen_gen: u64,
+    ) -> Result<TxHash, SubmitError> {
+        poll_immediate_submit(id, self.pending.submit(id, seen_gen))
+    }
+
+    /// Async counterpart to [`Self::build_pending_tx`].
+    ///
+    /// The production [`LocalPendingTx`](super::local_pending_tx::LocalPendingTx)
+    /// `build` performs real async I/O — it awaits the curve-tree actor's
+    /// `AssembleTx` to assemble the FCMP++ membership path — so the sync wrapper's
+    /// immediate-ready contract ([`poll_immediate_build`]) cannot drive it and
+    /// returns `CannotSign`. Callers already on an async runtime use this method
+    /// (the "async `Engine` methods" pairing the sync wrapper's doc anticipates).
+    pub async fn build_pending_tx_async(
+        &mut self,
+        request: &TxRequest,
+    ) -> Result<PendingTx, SendError> {
+        self.pending.build(request.clone()).await
+    }
+
+    /// Async counterpart to [`Self::submit_pending_tx`] — the production submit
+    /// awaits the daemon RPC. See [`Self::build_pending_tx_async`].
+    pub async fn submit_pending_tx_async(
+        &mut self,
+        id: ReservationId,
+        seen_gen: u64,
+    ) -> Result<TxHash, SubmitError> {
+        self.pending.submit(id, seen_gen).await
     }
 
     /// Discard a reservation via [`PendingTxEngine::discard`].
@@ -811,11 +889,12 @@ mod tests {
 
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
     use shekyl_address::Network;
-    use shekyl_oxide::primitives::Commitment;
+    use shekyl_curve_primitives::Commitment;
     use shekyl_scanner::{
         LedgerBlock, LedgerIndexes, LedgerIndexesExt, RecoveredWalletOutput, Timelocked,
         WalletOutput,
     };
+    use shekyl_units::AtomicUnits;
 
     use super::{
         build_pending_tx_in_state, discard_pending_tx_in_state, submit_pending_tx_in_state,
@@ -839,7 +918,6 @@ mod tests {
                 mask: Scalar::ONE,
                 amount,
             },
-            None,
         );
         RecoveredWalletOutput::new_for_test(base, amount)
     }
@@ -869,10 +947,9 @@ mod tests {
         TxRequest {
             recipients: vec![TxRecipient {
                 address: "test_address".to_string(),
-                amount_atomic_units: amount,
+                amount_atomic_units: AtomicUnits::from_raw(amount),
             }],
             priority: FeePriority::Standard,
-            from_subaddress: None,
         }
     }
 
@@ -986,7 +1063,6 @@ mod tests {
         let req = TxRequest {
             recipients: Vec::new(),
             priority: FeePriority::Economy,
-            from_subaddress: None,
         };
         let err =
             build_pending_tx_in_state(&ledger, &mut reservations, &mut next_id, &req).unwrap_err();
@@ -1215,7 +1291,7 @@ mod tests {
         );
 
         // Stub TxHash encodes the reservation id in the first 8 bytes.
-        assert_eq!(&tx_hash.0[..8], &pending.id.raw().to_le_bytes());
+        assert_eq!(&tx_hash.as_bytes()[..8], &pending.id.raw().to_le_bytes());
     }
 
     #[test]
@@ -1280,10 +1356,9 @@ mod tests {
         let req = TxRequest {
             recipients: vec![TxRecipient {
                 address: "addr".into(),
-                amount_atomic_units: 1_000,
+                amount_atomic_units: AtomicUnits::from_raw(1_000),
             }],
             priority: FeePriority::Custom(NonZeroU64::new(42).unwrap()),
-            from_subaddress: None,
         };
         let pending =
             build_pending_tx_in_state(&ledger, &mut reservations, &mut next_id, &req).unwrap();

@@ -6,9 +6,14 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+# rlib only: this crate is never linked as its own staticlib. It reaches
+# the daemon inside the single Rust image built by
+# `rust/shekyl-daemon-image` (one archive, one `tracing-core`
+# dispatcher; see V3_WALLET_DECISION_LOG.md single-image contract and
+# the nm gate in src/daemon/CMakeLists.txt).
 [lib]
 name = "shekyl_daemon_rpc"
-crate-type = ["staticlib", "lib"]
+crate-type = ["lib"]
 
 [dependencies]
 serde = { workspace = true }
@@ -17,3 +22,50 @@ tokio = { version = "1", features = ["full"] }
 axum = "0.8"
 tower-http = { version = "0.6", features = ["cors", "limit"] }
 tracing = "0.1"
+thiserror = { workspace = true }
+# Phase-A hex decode of the submitted tx blob (DAEMON_SUBMIT_VERDICT.md §3.1).
+# Same 0.4 pin as the existing workspace consumers (shekyl-engine-core et al.).
+hex = "0.4"
+# Phase-A key-image domain check (§8 row M8): decompress + identity +
+# prime-order-subgroup. Same version/feature shape as the workspace's other
+# curve25519-dalek pins (shekyl-wire, shekyl-engine-core).
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+# The §2 wire contract (SubmitVerdict / RejectCause) — single Rust definition.
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+# Typed identities (TxHash / BlockHash / BlockHeight) per rule 18.
+shekyl-types = { path = "../shekyl-types" }
+# Phase-A parse + structural validation + canonical txid (§3.1, §3.4).
+shekyl-wire = { path = "../shekyl-wire" }
+# Phase-C production crypto battery (DAEMON_SUBMIT_VERDICT.md §8 rows K12/K13/
+# N8/O6), all native workspace crates — the same backends the C++ oracle
+# dispatches to over FFI, called here without the FFI hop:
+#   shekyl-fcmp          — K12 FCMP++ membership+SAL verify (`proof::verify`)
+#   shekyl-crypto-pq     — K13 hybrid Ed25519+ML-DSA / multisig verify
+#   shekyl-bulletproofs  — N8 Bp+ aggregate range proof
+#   shekyl-ct-balance    — N8 CT cleartext balance (single-sourced equation)
+#   shekyl-curve-io      — CompressedPoint for the Bp+ commitment inputs
+#   shekyl-units         — AtomicUnits for the balance fee term
+shekyl-fcmp = { path = "../shekyl-fcmp" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-ct-balance = { path = "../shekyl-ct-balance" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
+shekyl-units = { path = "../shekyl-units" }
+# Bp+ batch verification takes a CSPRNG for the batch weights; same 0.6 pin
+# and `std` (OsRng) feature as shekyl-fcmp's own verify path.
+rand_core = { version = "0.6", features = ["std"] }
+
+[dev-dependencies]
+# Real consensus-valid spend fixture for the production-verifier oracle test
+# (tests/submit_verifier.rs) — the same dev-only construction stack as
+# shekyl-wire's fcmp_spend_e2e.rs (tree build, path assembly, signing).
+shekyl-tx-builder = { path = "../shekyl-tx-builder" }
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
+shekyl-consensus = { path = "../shekyl-consensus" }
+rand_chacha = { workspace = true }
+
+[build-dependencies]
+# Consensus-constant generation from config/consensus_constants.json (the
+# JSON authority; same pattern as shekyl-engine-core/build.rs).
+serde_json = "1"

@@ -28,14 +28,14 @@ it explicitly.
   near-term deadline compounds. The queue can grow indefinitely without
   pre-genesis cost. Items here include rules-queue work (consolidated
   as 1–2 PRs per §11.3 of
-  [`docs/design/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)),
+  [`docs/completed/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)),
   post-genesis architecture work (wallet-RPC cutover, `KeyImage`
   `Option`-promotion, `transfer_details` C++ → Rust migration), and
   structural design passes that warrant their own pre-flight
   (non-`Clone` ban re-evaluation).
 
 The calibration shift recorded at the M3e boundary (per
-[`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+[`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)
 §11) bends the V3.0 queue's accumulation trajectory: closing PRs in a
 migration series fold their own mechanical residue (path renames,
 comment-level rationale rewrites, doc-string past-tensing) rather than
@@ -47,54 +47,1796 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **Stage 1 trait-extraction chain — closeout audit (2026-05-29;
-  post–PR #88 update).** The §8.1 critical-path chain is landed on `dev`:
+- **Economics C2a′ layer gate — stacked silent failures; layer verdicts
+  currently vacuous** (surfaced 2026-07-04 when PR #241's hardened rustup
+  install turned the first layer of it loud). Three independent silent
+  failures stack in `economics-c2a-prime.yml`'s layer jobs, verified in the
+  last green `dev` run (28669067396): (1) the layer containers never had
+  `curl`, so the `curl | sh` rustup install exited 0 having installed
+  nothing — **fixed in PR #241** (curl + ca-certificates added; the
+  hardened form now fails loud); (2) `run_economics_c2a_prime.sh layer1`
+  dies with `FATAL: no C2a′ Layer 1 gtest cases (filter
+  'EconomicsC2aPrime.Layer1*')` — the §5.8 harness it checks for has not
+  landed; (3) the workflow invokes the script as `script 2>&1 | tee log`
+  under `sh -e` WITHOUT pipefail, so tee's exit status swallows the die
+  and the job reports success. Net: every Layer 1/2 verdict to date was
+  green-by-construction — the dual-leg KAT gate is armed with no trigger,
+  the same theater class as the RandomX audit's findings. **Disposition
+  needed (deliberately NOT flipped in PR #241** — a RandomX-surface PR,
+  and making the pipe loud turns `dev` red on the un-landed harness,
+  which is a policy call): land the §5.8 gtest harness (or descope the
+  layer legs), then make the pipe verdict-preserving
+  (`shell: bash` + `set -o pipefail`, or drop the tee). *Target: V3.0*
+  (the economics consensus KAT gate must be real before genesis).
+
+- **[Done 2026-07-01] CT-balance FFI cutover — `verRctSemanticsSimple` +
+  `verRctSemanticsFeeOnly` → `shekyl_verify_ct_balance` (flagged 2026-06-30).** The commitment-sum balance
+  is the last native-C++ island in an otherwise-FFI'd FCMP++ verify path
+  (`src/fcmp/rctSigs.cpp`); the bond-post sibling already routes through the
+  single-sourced `shekyl-ct-balance::verify_ct_balance`. Cut both general balance
+  verifiers over to it.
+  - **Gate F-1 [ratified 2026-06-30]:** the canonical prime-order
+    commitment-point rule is a binding genesis decision —
+    `GENESIS_TX_WIRE_FORMAT.md` §2.3 (CT section). Consistency-restoring (BP+
+    clears the cofactor on `out_masks` at `bulletproofs_plus.cc:931`; the balance
+    sums raw points), closing a torsion-**malleability** surface (matched order-8
+    `T` → second tx-hash for the same economic tx); adversarial-only.
+  - **Gate F-2 [built + green — export + corpus landed ahead of the re-point]:** a
+    three-class differential corpus (C++ oracle vs Rust FFI), green on the
+    **aarch64 determinism lane**:
+    1. **valid canonical** → both accept. Bulk: large batches, the empty-pseudoOut
+       fee-only shape, **and the live bond-post path as a regression anchor** (the
+       cutover + rename share `verify_ct_balance`/the FFI helpers — bond-post is
+       the proof the shared code did not move under it).
+    2. **torsion-laden, matched `T` both sides** (sum still balances) → C++ accept
+       / Rust reject. The malleability vector; must-have. Sub-case: torsion on a
+       `pseudoOut` with **no** matching `out_mask` `T` (sum does **not** balance)
+       → both reject, but pins that Rust rejects for the right reason —
+       `INVALID_POINT` (decompress) ordered **ahead of** `SUM_MISMATCH` (FFI
+       error-precedence determinism; the C++ oracle need not match the *reason*).
+    3. **non-canonical field encoding** (non-reduced `y`, sign-bit edges) →
+       *characterized* against `ge_frombytes_vartime`, not assumed; any divergence
+       is ratified, not discovered post-flip.
+  - **[Result 2026-06-30]** Built as the `shekyl_verify_ct_balance` export
+    (`ct_balance_ffi.rs`, dormant until the swap) + the C++<->Rust corpus
+    `tests/unit_tests/ct_balance_differential.cpp` (8 cases). Green on x86_64 (the
+    aarch64 CI lane is the cross-arch determinism confirmation). Class 2
+    empirically confirms the §2.3 divergence (C++ accepts the torsion-laden
+    balanced tx, Rust rejects). **Class 3 caught a live gap:** Rust accepted a
+    non-canonical `y = p + 1` (dalek reduces `y` mod `p` → the identity) that C++
+    rejects — closed by a canonical `compress()` round-trip check in
+    `shekyl-ct-balance::decompress_point`; both sides now reject, in agreement.
+  - **Sequence [rule 07 atomic] — completed:** ratify (§2.3) → rename (PR #218) →
+    corpus + dormant export (PR #219) → construct self-verify + BondTerm (PR #220)
+    → **the two `rctSigs.cpp` re-points landed here**: `verRctSemanticsSimple` and
+    `verRctSemanticsFeeOnly` now call `shekyl_verify_ct_balance`, the native
+    `addKeys`/`equalKeys` balance blocks are deleted, and the C++ balance oracle is
+    retired from the verifiers. The export was dormant on `dev` since #219, so the
+    re-point is a single atomic swap with no dual-path drift window. C++ suites
+    green (fcmp, tx-verification, `archival_bond_post`, `CtBalanceDifferential`).
+  - **Tradeoff [noted, not accidental]:** per-rv FFI call inside the batch
+    verifier (N× boundary crossings/batch); correctness over perf (priority
+    hierarchy); a batched FFI is deferred, not overlooked.
+  - Coinbase emission is a different equation — out of scope.
+  - **Depends on** the `rct`→`ct` Rust rename landing first (its own PR,
+    resolving the former "Archival RCT naming review" item), so the new export is
+    born on clean `ct` names (avoids F-6 double-churn). **Target: V3.0.**
+
+- **[Done] Canonical `shekyl_wire::Transaction::weight()` + fee-model re-validation
+  against the canonical spend format (flagged 2026-06-23, the tx-builder
+  shekyl-wire spend cutover; resolved 2026-06-24).** `shekyl_wire::Transaction::weight()`
+  now returns the serialized size **plus** the Bp+ clawback — mirroring the C++
+  `get_transaction_weight` (`blob_size + get_transaction_weight_clawback`, a
+  verification-cost *penalty* added for >2 padded outputs; weight ≥ size, **not** a
+  discount — the original "size minus discount" framing was wrong). Re-validating
+  exposed that `tx_fee_model::predict_weight` was under-estimating by **~2025 bytes**,
+  far more than the ~24-byte format delta: `PER_INPUT` counted the PQC signature but
+  **omitted the entire per-input hybrid public key + PQC framing** (~2004 B/input),
+  plus the tx-pubkey + extra TLV framing — a real fee *under-payment* that pre-dated
+  the cutover. `predict_weight` was rewritten as a byte-for-byte mirror of
+  `Transaction::write` (+ the same clawback); it now equals `weight()` exactly. The
+  two build-path cross-checks are restored, and `predict_weight_matches_wire_weight`
+  pins `predict_weight == weight()` across input/output/clawback scaling (real `Extra`
+  serializer, real PQC pk/sig lengths, KAT fcmp proof). This raises the real fee on
+  every spend (correctly). Landed on `feat/wire-tx-weight`.
+
+- **`shekyl_wire::Transaction::validate()` does not bound the Bp+ `|L|` against the
+  output count (consensus-parity gap, flagged 2026-06-24 on `feat/wire-tx-weight`).**
+  `BpPlus::read` caps `|L|`/`|R|` only at the loose `READ_LEN_CAP`, and `validate()`
+  bounds the output *count* (`MAX_OUTPUTS`) but not `|L|` — yet for a well-formed
+  proof `|L| == |R| == 6 + ceil(log2(next_pow2(n_out)))` is *fully determined* by the
+  output count (and at genesis `nbp == 1`). So a tx with a valid `n_out` but an
+  inconsistent/oversize `|L|` parses **and passes local `validate()`**, while the C++
+  daemon rejects it (it derives `n_padded` from `|L|` and enforces the tight bound +
+  `bp_base*n_padded >= bp_size`). That is a local↔daemon divergence: the wallet would
+  treat a tx as valid that fails at submit. PR #179 made `weight()` *panic-safe* on
+  such input (clamping `n_padded` to `MAX_OUTPUTS`), but that is DoS hardening, **not**
+  a reject. **Reopen-now criterion:** `validate()` should reject a spend whose Bp+
+  `|L|`/`|R|` ≠ `6 + ceil(log2(next_pow2(n_out)))` (and `nbp != 1`), matching the
+  daemon's `n_bulletproof_plus_max_amounts` + clawback assertions. Belongs in a
+  parse/validate consensus-parity pass, not the fee surface. Target: V3.0
+  (pre-genesis consensus parity).
+
+- **Difficulty-surface newtypes — type `shekyl-difficulty`'s primitive PoW
+  arithmetic (flagged 2026-06-24, the `check_hash` C++ → Rust port).** The ported
+  predicate `check_hash(hash: &[u8; 32], difficulty: u128) -> bool`
+  (`shekyl-difficulty/src/check_hash.rs`) and its sibling
+  `lwma1_next(..) -> Result<u128, Error>` (`lwma1.rs`) both pass the PoW hash and
+  the difficulty as bare primitives — two anonymous values that are trivially
+  arg-swappable and carry no meaning in the type system, against
+  [`18-type-placement`](../.cursor/rules/18-type-placement.mdc) and the "new code
+  with proper types" mandate. The *proper* fix is **transform-shaped**
+  `Difficulty` and `PowHash`/`Hash256` newtypes in the foundational layer
+  (`shekyl-types`/`shekyl-units`), with the predicate expressed as a named method
+  (`difficulty.is_met_by(&hash)`) so the relation has a name and the swap is
+  unrepresentable. Doing this *right* also retires the mislayered, **state-shaped**
+  `Difficulty(pub u128)` in [`shekyl-consensus/src/types.rs`](../rust/shekyl-consensus/src/types.rs)
+  (serde-carrying, in a crate that *consumes* `shekyl-difficulty` — it cannot be
+  imported back into the `no_std` transform crate without inverting the dependency),
+  unifying both crates on one definition. Deferred from the `check_hash` port to keep
+  that consensus flip primitive-consistent with `lwma1_next` and small/atomic — a
+  half-typed crate is worse than a uniformly-primitive one. **Scope note:** the FFI
+  seam stays primitive regardless — `extern "C"` cannot carry a newtype (cf. the
+  typed-`Leaf` entry's "the C ABI cannot carry newtypes"); `ShekylU128`/`*const u8`
+  remain the marshalling layer, and the FFI shim becomes the adapter that
+  reconstructs the domain types. Same pattern as the bounded-count newtype item
+  above. Target: V3.1+ (maintainability / type-safety).
+
+- **External cryptographic review of the `FcmpMembershipOnly` soundness
+  reduction (2026-06-12).**
+  [`completed/FCMP_MEMBERSHIP_ONLY.md`](./completed/FCMP_MEMBERSHIP_ONLY.md) §5.5:
+  the (a0)–(c) reduction re-establishes soundness of the subtracted
+  sub-proof, but §7.2 of the emission leg names the proof-type confusion
+  surface load-bearing, and soundness of a sub-proof in isolation is not
+  inherited from the Cypher-Stack review of the full composition. The
+  in-repo argument is necessary, not sufficient: an external eye on §5
+  (the G-preserving rerandomization premise, the binding/extraction step,
+  and the cross-leg `O~` identity) is a named pre-genesis criterion.
+  Until it lands, `FcmpMembershipOnly` is implemented-but-not-genesis-final.
+  Target: V3.0 (genesis freeze gate; schedule with the broader FCMP++
+  audit window so the reviewer has the full-composition context in hand).
+
+- **Emission leg: verify reward→identity binding is structural, not
+  key-equality (forward-dependency surfaced building PR 0 of the archival-bond
+  construction flow, 2026-06-17).** The `ARCHIVAL_P_DERIVE_V1` freeze
+  ([`design/ARCHIVAL_FIREWALL_GATE6.md`](./design/ARCHIVAL_FIREWALL_GATE6.md)
+  §9.3, [`rust/shekyl-crypto-pq/src/archival_p.rs`](../rust/shekyl-crypto-pq/src/archival_p.rs))
+  **removed** the latent equality `hybrid_sign_pk.ed25519 == spend_pk` (the
+  identity's Ed25519 half now derives from a dedicated `account_sign_seed`,
+  independent of the receive-address spend scalar — privacy-positive,
+  decoupling the public `P_pubkey` from the reward address). When the
+  emission/reward leg lands (PR #123 reward-emission path; rebased
+  reward-arithmetic surface), it must tie a shard's reward to `P`'s identity
+  **structurally** — via the record/leaf/in-circuit-ML-DSA signature chain
+  (`p_canonical_id` over the hybrid pubkey, §9.5; leaf-bound emission, C-1) —
+  and **must not** lean on the now-deleted cross-layer key equality between the
+  identity Ed25519 half and the receive-address spend key. The §9.5/§9.6
+  layering (identity vs. receive address as "a separate presentation layer")
+  and the membership-based emission model both indicate the binding is already
+  structural, so the expected outcome is a **confirmation**, not a fix — but a
+  silent dependency on the equality would surface much later as "emission can't
+  tie rewards to identity anymore," which is exactly the class of latent
+  assumption a forward-dep note exists to catch. **Reopening / discharge
+  criterion:** the emission-leg verify+construct PR explicitly checks (at
+  source) that no reward-binding path reads `hybrid_sign_pk.ed25519` as the
+  address spend pubkey; discharge by citing the structural binding it uses
+  instead. Target: V3.0 (must discharge before the emission leg freezes).
+
+- **FCMP++ circuit: confirm `incomplete_add_pub` need not constrain `c`
+  on-curve (relocated from a vendored-code marker, 2026-06-24).** Upstream
+  `crypto/fcmps/src/gadgets/mod.rs` carries `// TODO: Do we need to constrain c
+  on-curve? That may be redundant` on `Circuit::incomplete_add_pub` (checked
+  incomplete addition for a public point and an on-curve point). The Shekyl fork
+  had escalated this to a `RELEASE-BLOCKER` comment; the crypto re-baseline
+  ([`completed/SHEKYL_OXIDE_UNVENDOR.md`](./completed/SHEKYL_OXIDE_UNVENDOR.md) §6 A0)
+  reset the subtree to the pristine upstream tip and keeps the kept-vendored
+  crypto diff-minimal — so the open question is tracked here rather than as a
+  divergent comment in vendored upstream code. The concern: if `c`'s
+  on-curve-ness is **not** already implied by the surrounding constraints, an
+  unconstrained `c` is an FCMP++ circuit soundness gap (a prover could supply an
+  off-curve `c`). **Reopening / discharge criterion:** the FCMP++ soundness review
+  (the same external-review window as the `FcmpMembershipOnly` item above)
+  confirms whether the on-curve property is redundant given the gadget's other
+  constraints; discharge by citing the constraint that implies it, or by adding
+  the explicit constraint. Target: V3.0 (FCMP++ circuit soundness; bundle with the
+  EC-membership / FCMP++ audit).
+
+- **Corpus-freeze guards: align `address_derivation_freeze` error message
+  with `archival_p_freeze` (Copilot PR #152, 2026-06-17).** PR #152 enriched
+  `archival_p_derive_manifest_self_check` to emit the computed and pinned
+  digests in hex on mismatch ([`rust/shekyl-crypto-pq/src/archival_p_freeze.rs`](../rust/shekyl-crypto-pq/src/archival_p_freeze.rs)),
+  because that guard's primary failure mode is platform-drift on the aarch64
+  qemu lane and self-diagnosing output speeds CI triage. The sibling
+  `address_derivation_manifest_self_check`
+  ([`rust/shekyl-crypto-pq/src/address_derivation_freeze.rs`](../rust/shekyl-crypto-pq/src/address_derivation_freeze.rs))
+  still carries the terse "hash mismatch" form; the two freeze guards should
+  read as mirror images. Kept out of PR #152's `archival_p` scope per
+  `15-deletion-and-debt` ("while we're here is the enemy"). **Discharge:** a
+  one-line consistency commit applying the same `hex32` treatment (or a shared
+  helper) to the address-derivation guard. Target: V3.0 (cosmetic/diagnostic;
+  not genesis-blocking, but cheap to land before the freeze gate).
+
+- **[Done] `ringct` residue rename in `shekyl-oxide` — landed via the §8 step-4
+  scanner slice (raised 2026-06-14; superseded 2026-06-22; **landed 2026-06-23**,
+  `feat/scan-refresh-wire-migration`).** The original action was to rename
+  `ScannableBlock.output_index_for_first_ringct_output`
+  (`shekyl-oxide/.../rpc/src/lib.rs`) and drop the vacuous `Transaction::V2` scanner
+  guard (`shekyl-scanner/src/scan.rs`). It became moot and is now realized: §8
+  step-4's scanner/refresh slice replaced shekyl-oxide block/tx with `shekyl-wire`, so
+  the legacy `shekyl-rpc` `ScannableBlock` (and its ringct-named field) was **removed,
+  not renamed** — `shekyl-scanner` now owns a `shekyl-wire`-typed `ScannableBlock`
+  whose global-index field is `first_output_index`, and the scanner consumes
+  `shekyl-wire`'s types directly. No standalone work remained; subsumed by the
+  umbrella `rct → CT` sweep above. *(Did not repair shekyl-oxide — it was cut away.)*
+
+  *Version-concept disambiguation (kept — **corrects an earlier stale "tx-format=2"
+  claim**; recorded so the "is `V2` a protocol bug?" question does not recur).* Shekyl
+  carries distinct, orthogonal "version" notions:
+  - **Product / cryptographic-era generation = "V3"** — FCMP++ + hybrid PQC from
+    genesis ("V4" = lattice-only); `00-mission.mdc` branding.
+  - **Transaction version field = `3`** — the tx's first varint, kept deliberately at
+    `3` (Q12 of `GENESIS_TX_WIRE_FORMAT.md`: the number is *load-bearing* — it
+    carries Shekyl meaning and slots into the V3→V4 roadmap). `CURRENT_TRANSACTION_VERSION
+    = 3` (`cryptonote_config.h:48`), `shekyl-wire::TX_VERSION = 3`, and the daemon
+    rejects `version != 3`. So the on-chain tx version **does** equal 3, deliberately
+    aligned with the V3 branding. *(The legacy `Transaction::V2` / "version 2" naming in
+    shekyl-oxide is pre-decision and stale; it disappears with the step-4 cut — do not
+    read "2" as the tx version.)*
+  - **Block hard-fork version (`major_version`) = 1 at genesis** — deliberately reset
+    (no Monero HF history).
+  - **CT proof type = `FcmpPlusPlusPqc`** — the only type accepted from genesis.
+
+  "V3 at genesis" is realized on-chain as **tx-version=3 + hardfork=1 +
+  proof=FcmpPlusPlusPqc**.
+
+- **[Done] `get_scannable_block_by_number` → `fetch_scannable_block` name residue in
+  untouched files (flagged 2026-06-23; resolved 2026-06-25, slice-1 loose-ends cleanup).**
+  The `DaemonOp::GetScannableBlockByNumber` variant was renamed to `FetchScannableBlock`
+  (def + doc + the one construction site in `diagnostics.rs`) and the stale
+  `refresh.rs` test-doc reference corrected. **Scope: the code rename.** The
+  `STAGE_1_PR_4_REFRESH_ENGINE.md` design doc still names the old variant — deliberately:
+  it is a *point-in-time PR-4 design record* (DRAFT, with dated Round-N decision tables,
+  e.g. the 2026-05-13 "Round 2 close-out" that seeded the `DaemonOp` set), so its
+  references record the variant *as designed then*; rewriting those dated decision records
+  to a name that post-dates them would falsify the history. The canonical current name is
+  `FetchScannableBlock` (code). Original finding: The §8
+  step-4 scanner/refresh slice replaced the legacy `Rpc::get_scannable_block_by_number`
+  call with `DaemonEngine::fetch_scannable_block`. Two stale references survive in files
+  the slice did not substantively edit and were therefore held out of its scope (kept
+  tight per `15-deletion-and-debt.mdc` "while we're here"):
+  - `shekyl-engine-core/src/engine/diagnostics.rs` — the `pub enum DaemonOp` carries a
+    `GetScannableBlockByNumber` variant (def + doc at ~160/172/174, one construction site
+    at ~1477). Renaming it to `FetchScannableBlock` is a small refactor across its
+    use/construction sites, not a doc-only edit, so it belongs in its own change. The
+    variant's *meaning* (the per-block fetch op, timeout-classified) is unchanged; only
+    the name is stale.
+  - `shekyl-engine-core/src/engine/refresh.rs:~3218` — a test-module doc comment still
+    names `get_scannable_block_by_number` as the wired per-block fetch.
+
+  Naming-only; no behavior change (the in-scope production docs in `daemon.rs`,
+  `local_refresh.rs`, `merge.rs`, `block_fetch.rs`, `mod.rs` were already corrected, and
+  their remaining `get_scannable_block_by_*` mentions are intentional "this replaces the
+  legacy X" history). Not genesis-blocking. **Target: V3.0** (cheap pre-genesis rename
+  that completes the step-4 deletion cleanly). Reopen-now criterion: fold into any PR
+  that next touches `diagnostics.rs`'s `DaemonOp` for substantive reasons, or land
+  standalone before the genesis freeze gate.
+
+- **Block-height-only `unlock_time`: native `Timelock`, a pruned-safe context-free
+  ingestion validator, and daemon-side enforcement (flagged 2026-06-23,
+  `feat/scan-refresh-wire-migration`).** Shekyl is block-height-only: the
+  CryptoNote/Monero *timestamp* form of `unlock_time` (`>=
+  shekyl_wire::transaction::UNLOCK_TIME_BLOCK_SENTINEL`) is a deleted inheritance — a
+  "creation cut" per `GENESIS_TX_WIRE_FORMAT.md` §9 — that
+  `shekyl_wire::Transaction::validate` rejects. The step-4 slice closed the *scan-path*
+  exposure in three layers but left two un-vendor-scoped follow-ups:
+  - **[Done 2026-06-25, un-vendor slice-2 dissolve] Native `Timelock` is now
+    block-height-only.** `Timelock` moved native to `shekyl-types` as `None`/`Block`
+    only (the `Time` variant dropped); `Block` wraps `BlockHeight` (rule 18).
+    Serialization is decoupled — the scanner's `Metadata` wire format encodes
+    `Timelock::to_unlock_raw()` as a varint (byte-identical to the old encoding for
+    the values ever produced), so `shekyl-types` stays free of an io/curve dep. The
+    timestamp form is no longer representable, so it can never be materialized
+    regardless of caller; `timelock_from_unlock_time`'s `>= sentinel → None` arm is
+    now belt-and-suspenders. (The scanner's `MAX_OUTPUTS` / timestamp-form gates were
+    likewise reviewed and *kept* as belt-and-suspenders — see the validator sub-item's
+    resolution below.)
+  - **[Done 2026-06-23, this slice] A pruned-safe context-free ingestion validator now
+    lives in `shekyl-wire`, called from `block_fetch.rs`.**
+    `Transaction::validate_context_free_pruned` enforces the full context-free reject set
+    that is safe on a *pruned* tx — resource bounds, the §2.5 coinbase shape + arm-mixing
+    matrix, the §12 key-image canonical form, block-height-only `unlock_time`, and the
+    committed-base arity — i.e. everything except the prunable-coupled checks (`nbp == 1`,
+    the per-input `pqc_auths` / `pseudoOuts` counts, `>= 2` outputs for a spend, the
+    fee-only no-prunable shape), which stay in `Transaction::validate` (the complete-tx
+    validator) because the wallet ingests pruned txs (the prunable proof dropped).
+    `parse_block_blob` (coinbase) and `parse_pruned_tx` (non-miner) both call it, and
+    `parse_pruned_tx` additionally rejects a coinbase-shaped tx (`Transaction::is_coinbase`)
+    on the `get_transactions` path — the coinbase belongs in the block blob, never here.
+    The scattered ad-hoc checks (the standalone `unlock_time` reject) are retired into the
+    validator. **[Resolved 2026-06-30, un-vendor follow-up] The scanner's defense-in-depth
+    gates are kept, not removed.** A source-anchored review found the "redundant" framing
+    holds only on the wire-sourced live path: `scan_transaction_with_cancel` accepts an
+    in-memory `Transaction` (the unit tests construct one directly; likewise any future
+    cache-replay caller) with no type-level proof it came through the wire reader, so the
+    `MAX_OUTPUTS` / timestamp-form gates remain the scanner's input-boundary self-protection.
+    They are demoted to true belt-and-suspenders behind the primary parse-time
+    (`Transaction::read`) and ingestion (`validate_context_free_pruned`) gates, and the size
+    bound is now single-sourced to the parse bound by a `const _` assertion
+    (`MAX_OUTPUTS == shekyl_wire::transaction::MAX_OUTPUTS`) so the secondary gate cannot
+    silently drift below the primary one. Rule-21 reopen for *true* removal: when the scanner
+    input is newtyped at the parse edge (a `ParsedTransaction` minted only by
+    `Transaction::read`), making an unbounded-output tx unrepresentable at the scanner
+    boundary.
+  - **Daemon-side enforcement.** A canonical daemon should reject timestamp-form
+    `unlock_time` at consensus so it can never *serve* one; the wallet's ingestion
+    reject is then pure defense against a buggy/adversarial node. (User: "bring the
+    daemon just that little bit closer to where it should be.") This is the
+    consensus-side companion to the wallet-side gate and rides the daemon's own
+    block-height-only audit.
+
+  Not genesis-blocking (the scan path is already safe end-to-end; the pruned-safe
+  validator above now enforces the full context-free reject set at ingestion). **Target:
+  V3.x**, landing with the rest of the `shekyl-oxide` application-layer un-vendor.
+  Reopen-now criterion: the one genuinely-remaining sub-item is daemon-side enforcement
+  (consensus-side, C++), which rides the daemon's own block-height-only audit; the native
+  `Timelock` and scanner-gate sub-items are now resolved above.
+
+- **Repo-wide `RingCT`/`rct`/`RCT` → `CT` semantic sweep — a Shekyl tx is simply a
+  confidential transaction (flagged 2026-06-22).** FCMP++ (full-chain membership
+  proof) replaces ring signatures entirely: there is no ring, no RingCT-vs-pre-RingCT
+  split, no V1 tx — yet the inherited CryptoNote surface still carries `rct` naming
+  throughout (`transaction.rct_signatures`, `rct::rctSig*`, `RCTTypeFcmpPlusPlusPqc`,
+  the `rct::` C++ namespace, plus assorted Rust residue). **Naming-only — no
+  wire-format / consensus / behavior change** (the wire carries a `ct_type`
+  discriminant byte, never the string "rct"; `shekyl-wire` already uses the correct
+  `Ct` / `CT_TYPE_*` vocabulary, which is the target). Scope: sweep the residue to
+  `CT`/`ct` across C++ + Rust; the `ScannableBlock.output_index_for_first_ringct_output`
+  rename (the entry above) is one instance of this umbrella. **Standing rule until the
+  sweep lands: do NOT introduce new `rct`/`RCT`/`RingCT` names — new code uses `CT`, so
+  the debt does not grow.** Public-surface renames (RPC/FFI types, enum variants) are
+  free pre-genesis and breaking after, so the public-API portion belongs in V3.0; the
+  bulk internal rename can ride V3.1+. Not genesis-blocking. Target: V3.0 (public API) /
+  V3.1+ (internal).
+
+- **~~Pin the consensus `g(age)` age normalization, then map the sealed `g`
+  band onto `archival_reward_age_weight_milli` (spawned Layer-2 band run,
+  2026-06-11).~~** **CLOSED 2026-06-11** (same day, pre-genesis discount):
+  normalization pinned as **relative depth** —
+  `age_milli = floor(age_epochs · 1000 / chain_epochs) ∈ [0, 1000]` — in
+  [`design/ARCHIVAL_REWARD_ARITHMETIC.md`](./design/ARCHIVAL_REWARD_ARITHMETIC.md)
+  §Shard age, matching the sim semantics the Layer-2 band run sealed
+  (`g` spans `[1, 1 + w]` for the life of the chain; the prior raw-epoch
+  form grew `g` without bound — `≈ 700·w` at 10 years — a shape no sim run
+  validated). `shard_age_milli` reimplemented (signature unchanged; callers
+  already pass `close_block_height`); `archival_reward_age_weight_milli`
+  set to **2000** (sealed target `g* ≈ 2`, calibration band `[1500, 2500]`);
+  `consensus_state_kat_v1.json` epoch-close vector re-derived by hand
+  (`Σwork` 3500 → 2590, derivation in the fixture description).
+
+- **Store-backed / pruned-tree path assembly (CT-3 pre-flight F5,
+  2026-06-11).** Target: V3.0, with the prune-policy work
+  (`CURVE_TREE_CLIENT.md` §8 #9). `assemble` reads the in-memory entry vec
+  (`rust/shekyl-curve-tree/src/assemble.rs:84-89`); whole-tree-in-memory is
+  correct at Tier-A scale and wrong at mainnet scale. CT-3 keeps the
+  in-memory vec as the V3.0 assembly substrate (resume rebuilds it from the
+  store) and must not foreclose store-backed assembly — the store already
+  persists `owned_identities`. **Reopening trigger:** the prune-policy PR
+  (minimal wallets prune non-owned leaves of frozen segments) lands, at
+  which point in-memory-only assembly breaks for pruned wallets by
+  construction. See [`docs/completed/CT3_SYNC.md`](./completed/CT3_SYNC.md) §3
+  R1-Q6.
+  - **Per-input reconstruction reuse (CT-5c, 2026-06-18).** `assemble_path` is
+    called once per input by the `AssembleTx` actor handler, and each call
+    re-runs `drained_sorted` + `build_layers` (O(n log n)) and a linear
+    `gindex` `.position()` scan (O(n)) over the whole drained set. For a tx with
+    `k` inputs that is O(k·n log n). When this perf item is taken up, fold the
+    reconstruction to **once per transaction** (the batch shares one tree
+    snapshot) and resolve each input's drain-position via an ingest-time
+    `gindex → position` index, bringing per-input lookup to O(log n)/O(1). A
+    binary search alone does **not** apply: `drained` is sorted by
+    `(maturity, gindex)`, so `gindex` is not monotonic across maturity buckets.
+    **Reopening trigger:** a measured send-latency budget where per-input
+    reconstruction is material (multi-input spends at mainnet tree size), or the
+    Track-2 regtest surfaces it as a hotspot — not before (rules 21/70: no
+    speculative perf ahead of its trigger). CT-5 Round 1 deferred; see
+    [`CT5_ROUND1_CLOSEOUT.md`](./completed/CT5_ROUND1_CLOSEOUT.md) §5.
+
+- **C++ path RPC computes a crypto contract (`hash_to_p3`) inline —
+  Rust-forward (CT audit, 2026-06-13).** Target: Stage 4/5 daemon migration.
+  `on_get_curve_tree_path` (`src/rpc/core_rpc_server.cpp`, ≈ line 3756) derives the
+  per-output key-image generator `I = Hp(O)` with `rct::hash_to_p3` /
+  `ge_p3_tobytes` while building `chunk_outputs_blob`, recomputing in C++ a
+  crypto contract the Rust side already owns
+  (`shekyl_fcmp::tree::key_image_generator`, at the FFI boundary as
+  `shekyl_compute_output_key_image`). Per `20-rust-vs-cpp-policy.mdc` §2 (a
+  crypto contract belongs in Rust) this should route through the FFI, not
+  recompute in C++. **Not fixed in the CT audit cleanup:** swapping it in
+  isolation is a "while we're here" daemon change
+  (`15-deletion-and-debt.mdc`) touching consensus-adjacent C++ without the
+  daemon test harness. It folds into the daemon path-assembler migration that
+  already owns this surface (the `assemble_tree_path_for_output` historical-
+  reference / multi-source routing resolution below). **Reopening trigger:**
+  the daemon path-assembler PR opens, **or** any PR touches
+  `on_get_curve_tree_path` for another reason (route the new logic through the
+  FFI per the rule-20 daemon clause then).
+
+- **[Done] FCMP++ spend wire format divergence between `shekyl-tx-builder` and
+  `shekyl-wire` — resolved 2026-06-24 by the tx-builder spend cutover (PR #178), which
+  cut `shekyl-tx-builder` onto the `shekyl-wire` encoder and deleted its shekyl-oxide
+  spend serializer, so there is now one canonical on-wire FCMP++ spend layout and the
+  genesis hazard is closed. Residual **resolved 2026-06-25** (slice-1 loose-ends cleanup):
+  `fcmp_spend_e2e.rs` now feeds the real signed spend through the production
+  `shekyl_tx_builder::encode_final_tx` and asserts it emits the consensus-validated
+  `shekyl-wire` bytes **byte-for-byte** (the cross-crate identity), in addition to the
+  existing hand-assembled round-trip — no longer waiting on the live KAT. Original
+  finding (surfaced 2026-06-21 building the Rust e2e spend
+  round-trip):** Two Rust serializers
+  emit structurally different bytes for the *same* FCMP++ spend:
+  - **`reference_block`** — `shekyl-oxide`
+    ([`rust/shekyl-oxide/shekyl-oxide/src/fcmp.rs`](../rust/shekyl-oxide/shekyl-oxide/src/fcmp.rs)
+    `PrunableProof`, line 182) carries it as a `u64` height varint;
+    `shekyl-wire`
+    ([`rust/shekyl-wire/src/transaction.rs`](../rust/shekyl-wire/src/transaction.rs)
+    `Ct::Fcmp`, line 689) carries it as a 32-byte block hash.
+  - **`pqc_auths`** — `shekyl-oxide` (same file, line 191) carries them as
+    signature-only `Vec<Vec<u8>>` blobs; `shekyl-wire` (`PqcAuth`, line 510)
+    carries the full `auth_version·scheme_id·flags·pubkey·signature` record
+    (the hybrid public key is part of the wire auth, not just the signature).
+
+  `shekyl-wire` is the designated **canonical migration target** (it landed on
+  `dev` as the genesis block/tx serializer, PR #168). The e2e test
+  ([`rust/shekyl-wire/tests/fcmp_spend_e2e.rs`](../rust/shekyl-wire/tests/fcmp_spend_e2e.rs))
+  sidesteps the divergence by assembling the `shekyl-wire` transaction directly
+  from the validated proof fields rather than re-serializing the
+  `shekyl-tx-builder` output, so it does not cross the two formats. This is a
+  **consensus hazard at genesis**: there can be exactly one on-wire FCMP++ spend
+  layout, so `shekyl-tx-builder`'s send path must emit (or round-trip through)
+  the `shekyl-wire` format before genesis, and the `shekyl-oxide` transaction
+  serializer's spend path is then a deletion target per
+  [`60-no-monero-legacy`](../.cursor/rules/60-no-monero-legacy.mdc) /
+  [`10-shekyl-first`](../.cursor/rules/10-shekyl-first.mdc). **Reopening /
+  closure:** lands when `shekyl-tx-builder` is cut over to the `shekyl-wire`
+  encoder and a cross-crate byte-identity assertion (tx-builder output ==
+  `shekyl-wire` round-trip) replaces the assemble-direct shim in the e2e test.
+  Target: **V3.0** (genesis wire-format freeze; one canonical spend layout).
+  *(Both conditions met — cutover #178, byte-identity 2026-06-25; resolved, see the
+  `[Done]` header and residual note above.)*
+
+- **[Done] Rust/Axum daemon RPC: curve-tree endpoints missing from the FFI dispatch
+  table (404) — resolved 2026-06-23 by PR #174, which wired
+  `get_curve_tree_path`/`_info`/`_checkpoint` into `core_rpc_ffi.cpp get_jsonrpc_table()`
+  and landed the handler fixes (out-of-range `output_index` → skip; branch-layer loop
+  emits exactly `depth` layers). A default-configured daemon now serves the endpoints.
+  Original finding (surfaced 2026-06-21 debugging the C++ FCMP++ spend capture).**
+  The `on_get_curve_tree_path` / `on_get_curve_tree_info` /
+  `on_get_curve_tree_checkpoint` handlers exist and are registered in the
+  **legacy epee** dispatch (`src/rpc/core_rpc_server.h` ≈ line 193,
+  `MAP_JON_RPC_WE`), but are **not** registered in the Rust/Axum FFI JSON-RPC
+  dispatch table (`src/rpc/core_rpc_ffi.cpp` `get_jsonrpc_table()`). The Rust
+  RPC server is the **default** transport
+  ([`DAEMON_RPC_RUST.md`](./DAEMON_RPC_RUST.md)), so every `get_curve_tree_path`
+  call to a default-configured daemon returns **404** — this (not the
+  "stale-`.o`" theory in commit `588d8d30f`) is the real reason the live FCMP++
+  spend capture stayed blocked. `DAEMON_RPC_RUST.md` previously claimed these
+  endpoints were "implemented"; corrected 2026-06-21.
+
+  **Handler-side fixes that surfaced alongside (also reverted; same future
+  PR):** in `on_get_curve_tree_path`, (a) an `output_index >= ref_leaf_count`
+  request must **skip** that index (`continue`), not fail the whole batch — a
+  wallet asks for paths for all its unspent outputs and some are still inside
+  the maturity + reorg window, so not yet drained into the reference tree; and
+  (b) the branch-layer emit loop must produce **exactly `depth`** layers
+  (`layer = 1; layer <= depth`) — the parser/signer expect `branch_count =
+  depth`, and `< depth` dropped the top layer (parsed zero layers for a
+  depth-1 tree → "0 C1 layers and 0 C2 layers" from the signer).
+
+  **Disposition.** Wiring the endpoints into the FFI dispatch + the handler
+  fixes is daemon-RPC work for a focused daemon-RPC PR (route new logic through
+  the FFI per [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+  §"daemon"), not bundled into the Rust wire KAT-replacement PR
+  ([`15-deletion-and-debt`](../.cursor/rules/15-deletion-and-debt.mdc), scope).
+  Folds with the `on_get_curve_tree_path` `hash_to_p3` Rust-forward item above
+  and the daemon path-assembler migration. **Reopening trigger:** the daemon
+  path-assembler / daemon-RPC PR opens, or the Track-2 regtest harness
+  ([`design/TRACK2_REGTEST_PARITY.md`](./design/TRACK2_REGTEST_PARITY.md)) needs
+  a live `get_curve_tree_path` against a default daemon. **Target: V3.0**
+  (prerequisite for any live wallet↔daemon FCMP++ spend).
+
+- **C++ FCMP++ wallet send path is incomplete; 2026-06-21 debugging
+  exploration reverted (findings preserved for the Rust send-path).** While
+  attempting to capture a live FCMP++ spend (to un-ignore the wire KAT, since
+  abandoned for the in-process Rust e2e — see the wire-format entry above), a
+  series of C++ `wallet2.cpp` + C++/Rust FFI fixes were prototyped and then
+  **reverted** as out-of-scope C++ debt per the maintainer's "stop paying C++
+  debt" call ([`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc),
+  [`15-deletion-and-debt`](../.cursor/rules/15-deletion-and-debt.mdc)). Even
+  with all of them applied the capture still failed at transfer construction
+  (recipient-balance mismatch), so the C++ path is **not** a working oracle.
+  The findings the Rust send-path (`shekyl-tx-builder` / `shekyl-engine-core`,
+  [`design/PHASE_2A_SEND_PATH.md`](./design/PHASE_2A_SEND_PATH.md)) must
+  reproduce:
+  - **FFI signing contract (`shekyl_sign_fcmp_transaction`):** the prover's 4th
+    Selene leaf scalar is `h_pqc = H(pqc_pk)` (the PQC leaf-hash scalar); the
+    key-image generator `Hp(O)` is **recomputed in Rust** from `output_key`,
+    not passed in. The old contract passed `hp_of_O` (an Ed25519 point) and
+    mis-used it as the leaf scalar → "invalid scalar: h_pqc" prove failure.
+    (Masking bug: the FFI round-trip test sent the correct leaf scalar under
+    the name `hp_of_O`, so it passed while production sent the real `Hp(O)` and
+    failed.)
+  - **Branch layers are node *points*, projected to cycle *scalars* in Rust:**
+    `get_curve_tree_path` emits each branch layer as compressed curve-tree node
+    points (C1 = Helios points, C2 = Selene points); the prover consumes the
+    sibling **x-coordinates** as cycle scalars (Helios point → Selene scalar
+    for C1, Selene point → Helios scalar for C2). The projection belongs in
+    Rust at the FFI boundary (rules 20/36), mirroring
+    `CurveTreeClient::assemble_path`.
+  - **Boundary-chunk zero padding must be dropped before projection:** the
+    daemon pads incomplete branch chunks with 32 zero bytes ("absent
+    sibling"). The adapter must drop these and hand `prove` the narrow chunk
+    (which zero-**scalar**-pads to width — zero scalars vanish in the layer
+    multiexp). Projecting a zero-**byte** point to a scalar yields a non-zero
+    x-coordinate that does **not** vanish → wrong branch hash →
+    `BatchVerificationFailed`. Same class as the CT-5 `pad_branch_chunk` fix,
+    now at the C++/Rust boundary.
+  - **Output amounts:** `tx.vout[i].amount` is `0` on the wire for
+    FCMP++ (confidential amounts); the signer needs the real cleartext amounts from
+    `splitted_dsts[i].amount` (vout-aligned after the in-place shuffle).
+  - **Per-tx weight cap:** FCMP++ txs (membership proof + per-input PQC auth)
+    far exceed the legacy `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V1` (~20
+    KB) cap, which rejected every spend before build. Cap at half the daemon's
+    `block_weight_limit` (queried once + cached), fallback half the V5 zone.
+  - **Coin-selection spendability gate:** only outputs already drained into the
+    reference tree have a usable membership path; maturity-unlocked-but-not-yet-
+    in-tree outputs must be excluded from selection (else
+    `transfer_selected_rct` fails with "No precomputed FCMP++ tree path").
+  - **`get_curve_tree_path` 64-index batching:** the daemon caps the request at
+    64 indices (DoS guard); a wallet with more unspent outputs must batch.
+
+  The one fix that **graduated** (validated by the Rust e2e test, kept on this
+  branch) is the output-commitment form in `shekyl-tx-builder::sign`: output
+  commitments are the real Pedersen `C = mask·G + amount·H` (×1), **not**
+  cofactor-scaled `8·C` — the consensus balance check
+  `sum(pseudoOuts) == sum(outPk) + fee·H` sums points directly and pseudo-outs
+  are real `C`. **Reopening / closure:** the findings land with the Rust
+  send-path build/sign/encode work (`PHASE_2A_SEND_PATH.md` / Phase 6 regtest).
+  **Target: V3.0** (Rust send-path is the genesis spend constructor).
+
+- **`get_curve_tree_leaves` daemon endpoint + KAT (CT-3 R1-Q1 deferral
+  artifact, 2026-06-11).** Target: V3.0, bound to the prune-policy work
+  (`CURVE_TREE_CLIENT.md` §8 #9) — the endpoint's only V3.0 consumer is
+  post-prune segment refetch. CT-3 Round 1 confirmed block-derived forward
+  sync as the default (the §6 reversion criterion fired: CT-2 landed the
+  drain replication, KAT-verified), repositioning the bulk-leaf RPC to
+  non-forward catch-up + archival. The C++ endpoint and its §6
+  reconstruct-root KAT (`SHEKYLD_PREREQUISITES.md` shape) land with the
+  prune-policy PR, which makes refetch reachable. The **`SegmentSource` seam
+  (R1-Q5)** rides this row: B3 forbids a public trait without a caller, and
+  this refetch path is its first consumer, so the recorded trait shape
+  (`CT3_SYNC.md` §3 R1-Q5) lands here too. **Reopening trigger:** either R1-Q1
+  reversion criterion (forward-sync latency budget breach; pre-genesis
+  refetch demand) pulls it earlier. See
+  [`docs/completed/CT3_SYNC.md`](./completed/CT3_SYNC.md) §3 R1-Q1 / R1-Q5 and
+  [`docs/completed/CT3_ROUND1_CLOSEOUT.md`](./completed/CT3_ROUND1_CLOSEOUT.md) §4.
+
+- **Rollback-adjacent frozen-`R_k` recheck on plain resume (CT-3c C1
+  disposition, 2026-06-12).** Target: V3.0, with prune-policy / store
+  startup hardening. CT-3c intentionally runs the bounded
+  `verify_frozen_tail` check only on the rollback path so it does not
+  retroactively add an O(segment) startup cost to CT-3b's plain
+  `open(path)` / resume behavior. The DoD's resume-side corruption
+  clause remains tracked here. **Reopening trigger:** measured wallet
+  startup budget leaves room for one segment recomputation, or a
+  corruption/torn-write finding makes startup verification load-bearing
+  before prune-policy lands.
+
+- **Full all-segment frozen-`R_k` recheck (CT-3c bounded-check deferral,
+  2026-06-12).** Target: V3.0, with prune-policy / store-backed
+  assembly. CT-3c verifies only the boundary-adjacent frozen tail after
+  rollback; full frozen-row verification is O(all frozen leaves) and
+  belongs with the mainnet-scale pruned-store policy rather than the
+  rollback wiring PR. **Reopening trigger:** store-backed assembly or
+  pruned resume needs an all-segment integrity sweep, or audit requires a
+  startup/maintenance mode that pays the full scan cost explicitly.
+
+- **Refresh-over-spend reorg: optimistic-spend `spent_height` invariant +
+  orphaned-spend un-mark (Track-2-surfaced + FIXED 2026-06-27).**
+  Two coupled defects in the wallet's *unconfirmed-spent* state model, latent until
+  Track 2 first refreshed a wallet across a reorg that touched a spend:
+  1. `local_pending_tx::finalize_submit_accept` marks the selected inputs
+     `spent = true` at **submit** but never sets `spent_height` (the tx is not yet
+     in a block). That state — `spent && spent_height.is_none()` — violates the
+     documented ledger invariant (`invariants.rs`: "spent ⇒ spent_height = Some")
+     and is caught the next time a refresh runs `LedgerIndexes::ingest_block` (its
+     `debug_assert!(check_invariants)`), panicking `transfers[i] is spent but
+     spent_height is None`.
+  2. `LedgerIndexes::handle_reorg` removes transfers *received* at ≥ `fork_height`
+     but never un-marks an output *spent* at ≥ `fork_height` (a spend orphaned by
+     the reorg) — that output stays incorrectly `spent` (it should return to the
+     spendable pool, as `unmark_spent` does on submit-finalize failure).
+  **Fix (this branch):** `spent = true` with `spent_height = None` is now modeled
+  explicitly as the **in-flight spend** shape (an unconfirmed spend genuinely has no
+  confirming height), not a placeholder (a guessed height breaks the reorg un-mark).
+  The valid set becomes: `(spent=false, no height)` not-yet-spent; `(spent=true,
+  key_image=Some)` spent — in-flight (`spent_height=None`) or confirmed
+  (`spent_height=Some`). Both invariant checkers relaxed accordingly
+  (`invariants::check_spend_triple`, `LedgerIndexes::check_invariants`), keeping the
+  key-image requirement on any spend. `LedgerIndexes::handle_reorg` now un-marks
+  confirmed spends orphaned by the reorg (`spent_height ≥ fork_height` → back to
+  unspent; in-flight spends untouched). Tests: `spent_in_flight_without_height_is_allowed`,
+  `spent_in_flight_without_key_image_is_refused`,
+  `handle_reorg_unmarks_orphaned_confirmed_spend_keeps_in_flight`, and the live e2e
+  (`generate_ct2_tier_b_fixture`'s wallet-driven reorg — `submit` then `refresh`
+  across `pop_blocks`, the exact original repro, now green). **First refresh-over-spend
+  layer (bug #1) also fixed this branch:** refresh could not even *parse* a pruned
+  spend block (`Ct::read` rejected the storage-pruned FCMP++ form) — EOF-tolerant
+  prunable after `pqc_auths`; regression `pruned_fcmp_spend_round_trips_and_ingests`.
+
+- **`AlreadyInChain` submit verdict: distinct lock-lifecycle disposition —
+  DESIGN DECIDED 2026-07-04 (F40, `AlreadyInChain { height }`); interim
+  implementation landed #252; F40 conformance LANDED 2026-07-05 (#254);
+  targeted re-scan executor + F40-R2 breaker LANDED 2026-07-05
+  (`feat/submit-lifecycle-driver`) — RESOLVED.**
+  Original finding: `transaction_submitter::outcome_to_result` collapses
+  `AlreadyInChain` into `Ok(hash)` identically to `Submitted` /
+  `AlreadyInPool`, so `finalize_submit_accept` places a fresh F14
+  awaiting-confirmation lock (baseline = current height) on a tx that is
+  already on-chain, relying on a future refresh `mark_spent` to clear it.
+  For an `AlreadyInChain` whose confirming block is at/below the wallet's
+  synced height with no reorg re-scan, refresh never re-observes the spend
+  and the lock is never cleared — permanent "awaiting confirmation" on a
+  confirmed tx. The 2c design round found the pinned fix ("place no lock,
+  let refresh settle") **under-specified against the behind-the-daemon
+  case**: a unit variant cannot distinguish "confirming block above my
+  synced height" (lock needed until refresh catches up) from "at/below it"
+  (path-1 release unreachable), and an adversary who slows the wallet's own
+  daemon's block delivery steers the guess into a selectable-input leak →
+  same-key-image rebuild → `DoubleSpendConflict` → F28/F37 alarm fatigue on
+  demand. **Decision (binding record: `DAEMON_SUBMIT_VERDICT.md` §2.1/§2.2
+  carve-out/§2.5 row/§7.2 rider row/§10 item 1):** restore
+  `AlreadyInChain { height: u64 }`. Lock is placed in **both** height cases
+  (no selectable window either way); `height` decides the **release path**
+  — `> synced`: §2.6 path-1 refresh catch-up, lock baselined at `height`;
+  `≤ synced`: targeted re-scan around `height` (reorg-heal), falling through
+  to the F31 status query if the re-scan finds nothing. The carve-out is
+  admitted through the §5 inform-never-drive principle and holds only with
+  its two pinned rules: **F40-R1** — a `height ≤ synced` claim authorizes a
+  re-scan, never a release (release is refresh-/watchdog-authoritative
+  only; a failed re-scan must not release); **F40-R2** — consecutive
+  fruitless daemon-directed re-scans are breaker-bounded (F28/F37 family)
+  → operator alarm, closing the lie-low wallet-work amplifier. Misuse is
+  damage-capped both directions (§7.2 row — no lie can force a linkage
+  event); pre-genesis the field lands required with fixtures updated
+  atomically (§2.3 third-category rule, new). **Interim implementation
+  (#252, predates the F40 design merge):** `TransactionSubmitter::submit`
+  now returns `transaction_submitter::SubmitSuccess`, splitting the `Ok`
+  arm by disposition — `Broadcast` (`Accepted` / `AlreadyInPool`) takes the
+  `finalize_submit_accept` path and places the F14 awaiting-confirmation
+  lock; `AlreadyInChain` takes the new `finalize_submit_already_in_chain`
+  path. **F40 conformance (#254, 2026-07-05):** the wire type is
+  `SubmitVerdict::AlreadyInChain { height }` (required field; frozen
+  fixture updated atomically per §2.3 third-category rule, skew test D pins
+  the field-less form to the `Err` arm); the FFI snapshot grows
+  `in_chain_height` (size 88, offset 80, read under the same lock scope as
+  the membership fact; fill/check field 11); `SubmitFacts.in_chain` is
+  `Option<BlockHeight>` so the validity gate is structural; the admission
+  engine emits the height at both the Phase-B short-circuit and the
+  Phase-D `classify_race` settled-identity arm; wallet-side,
+  `SubmitSuccess::AlreadyInChain { hash, height }` reaches
+  `finalize_submit_already_in_chain`, which places the F14 lock in
+  **both** height cases baselined at the claimed `height` and routes the
+  release path — `> synced` waits for §2.6 path-1 refresh catch-up;
+  `≤ synced` emits the new `PendingTxDiagnostic::TargetedRescanRequested`
+  for the reorg-heal re-scan. F40-R1 is structural (the request path
+  releases nothing; regressions
+  `submit_already_in_chain_above_synced_locks_at_claimed_height` and
+  `submit_already_in_chain_at_or_below_synced_requests_rescan_never_releases`).
+  **Re-scan executor + F40-R2 breaker (`feat/submit-lifecycle-driver`,
+  2026-07-05):** the §5.3 `SubmitLifecycleDriver` drains the
+  `PendingTxState` rescan queue on tick and executes the cheap-check-then-
+  escalate re-scan (`DAEMON_SUBMIT_VERDICT.md` §2.5/§5.3): fetch the single
+  block at the claimed height (`DaemonEngine::get_block_hash`), compare
+  against the ledger's stored hash. Match + spend still unobserved =
+  fruitless (per-txid consecutive counter); divergence = defer to the
+  refresh reorg-heal machinery, counter untouched — capping a lying
+  daemon's per-lie cost at one block fetch. The **fruitless-soundness
+  guard** (`claimed_height ≤ synced_height`, re-checked at execution time)
+  keeps the inference sound: an above-synced request re-routes to the §2.6
+  path-1 wait, never the fruitless counter (executor/refresh race would
+  otherwise feed false positives). F40-R2 trips at
+  `FRUITLESS_RESCAN_BREAKER_THRESHOLD` (default 3) consecutive fruitless
+  re-scans → `PendingTxDiagnostic::FruitlessRescanBreakerTripped` operator
+  alarm; F40-R1 is structural (the lock stays placed — no path here
+  releases it). Regressions in `submit_lifecycle::tests`:
+  `r2_breaker_trips_after_threshold_never_releases`,
+  `divergent_hash_never_counts_or_releases`,
+  `above_synced_never_fruitless_until_scanned`,
+  `missing_ledger_hash_defers_without_counting`,
+  `confirmation_reaps_the_rescan_target`. *Target:* V3.0 — **RESOLVED.**
+
+- **Watchdog probe bytes: ephemeral in-memory held-bytes store — reversion
+  clause (rule 21), two independent axes, only one reopens. DECIDED
+  2026-07-05 (`feat/submit-lifecycle-driver`, decision 2).** The §5.3 rung-1
+  resubmit-same-bytes probe needs the original tx bytes; `finalize_submit_accept`
+  drops the in-flight record at accept, so the driver retains bytes in an
+  in-memory `PendingTxState::held_bytes` (`HashMap<TxHash, Vec<u8>>`), populated
+  at finalize-accept / finalize-already-in-chain and pruned when the hash leaves
+  the held projection. **Rejection (current substrate):** the store is *not*
+  persisted. After a wallet restart the bytes are gone and the probe rung
+  degrades to the operator-alarm rung — still satisfying §2.6's "every exit is
+  verdict, confirmation, or operator alarm." Persistence's only real product
+  would be a **silent cross-restart re-broadcast of a signed key-image spend**;
+  the ephemeral design correctly converts that into a human decision.
+  **Reopening criteria — durability axis only:** reopen *iff* evidence shows
+  restart-mid-await with a stuck tx is operationally common enough that
+  alarm-degradation is a real burden. The clause names **two independent axes**
+  and pins that only the first reopens: (1) *durability* (bytes survive restart)
+  and (2) *auto-action policy* (probe auto-fires vs. requires human
+  confirmation). **Even a reopened, persisted-bytes design keeps the auto-vs-
+  confirm axis a separate, explicitly-argued decision whose default stays
+  human-in-the-loop across a restart** — a future "we needed durability so we
+  persisted and auto-probed" must not quietly buy the whole package the
+  ephemeral design was avoiding. **Re-evaluation shape:** the durability reopen
+  is a persistence-schema change → a rule-42 schema-bump design round (the store
+  is off the rule-42 surface precisely because it is ephemeral); the auto-vs-
+  confirm axis, if ever raised, is a separate threat-model round, not folded in.
+  *Target:* V3.0 disposition stable; reopen substrate-anchored per above.
+
+- **Submit-error reservation-id placeholder: split submitter error from
+  orchestrator error (PR-4 / #248 review, deferred to 2c) — RESOLVED
+  2026-07-04 (2c pre-wiring).** `TransactionSubmitter::submit` now returns
+  the reservation-unaware `transaction_submitter::SubmitterError`
+  (`RejectedTerminal` / `RejectedRetryable` / `Ambiguous` — a closed enum
+  carrying **no** `ReservationId`); the reservation-bound `SubmitError`
+  arms are constructed only by `LocalPendingTx`'s finalizers, which bind
+  the reservation under submit. The `ReservationId::new(0)` sentinel is
+  unrepresentable rather than trusted-then-discarded, so the 2c
+  `StakeEngine` submit consumer (which has no orchestrator re-binder) can
+  consume the seam without observing a fabricated reservation. Original
+  finding: `submit_error_from_cause` (now `submitter_error_from_cause`)
+  embedded rid `0` in its retryable/ambiguous arms, meaningful only because
+  the one caller destructured `{ .. }` and re-bound the real id.
+
+- **F41 constant-work-on-Conceal: invariant NAMED + enforcement DECOMPOSED
+  (2c design round 2026-07-04, `DAEMON_SUBMIT_VERDICT.md` §3.1) — four
+  implementation obligations open, and a hard ordering constraint.** The
+  stem-presence oracle closure holds only because the `Conceal` path runs the
+  full Phase-C battery (the fall-through in `submit/engine.rs`) and the Rust
+  engine has no verification cache — a security property previously held by
+  the *absence of an optimization*, now asserted as F41 and enforced by the
+  §3.1 three-layer decomposition (each vector matched to what its layer can
+  prove; the honest boundary — types don't prove timing — stated in the doc).
+  *Open obligations:* **(a)** the disclosure-capability tokens —
+  `disclose_pool_presence` yields move-only `MustFullyVerify` (Conceal arm) /
+  `FastPathEligible` (Reveal/Absent arms); cache lookups accept only
+  `FastPathEligible`; the Conceal route consumes `MustFullyVerify` by
+  exchanging it for the §3.3 certificate — carried-never-reconstructed (the
+  P-1/P-2 idiom applied to a capability), making cache-on-Conceal a compile
+  error; **sole-origin pinned structurally** (both tokens `pub(crate)`,
+  private fields, single constructor each, reachable only from
+  `disclose_pool_presence`, inheriting the F25 write-site enumeration per
+  §3.5 item 4 — no test-helper/`Default`/`From` side doors; tests construct
+  facts, not tokens); plus a compile-fail (`trybuild`-style) pin — target:
+  with the submit-path implementation PRs, **structurally before any perf
+  work**;
+  **(b)** the §10 item-9a invocation-count tripwire (Conceal-path and
+  fresh-bytes submits both run the full battery; guards the layer-3
+  battery-timing residual, necessary-not-sufficient seam documented) —
+  target: PR-3-adjacent; **(c)** the §10 item-9b transport no-memoization
+  test (two Conceal submits of the same bytes both reach the engine — pins
+  the layer-2 named assumption the engine types cannot reach) — target:
+  PR-3-adjacent; **(d)** per-source rate limiting at the transport/handler
+  layer (Owner never limited — F31 status queries are legitimate; Foreign
+  per-source-limited — no honest resubmit-spam case exists), the DoS-relief
+  sibling that removes the pressure to cache — target: V3.0, with the
+  daemon-rpc transport hardening. **Ordering constraint (the named reopen):
+  (a)–(c) must precede the first perf/caching PR touching the submit route**
+  — a capability retrofitted after a cache lands is a lock installed after
+  the door has been used. A cache PR arriving first must cite F41; a
+  Reveal-path cache type-checks and is the anticipated safe form; touching
+  Conceal requires the compile-visible `MustFullyVerify` conversion per the
+  §11 clause, with the §10 obligations green (a red is a rejected PR, not a
+  test to update). *Target:* V3.0.
+
+- **CT-2 Tier B reconstruct-root KATs (staked / non-coinbase maturity
+  classes) — post-CT-5 (CT-2 Round 1 deferral, tracked 2026-06-13).**
+  Target: V3.0, ordered after CT-5. `recon_tier_b.rs` carries five
+  `#[ignore]` Tier-B tests (mixed-maturity gindex ordering, multi-tx
+  coinbase-first + tx-hash order, staked max-lock/spendable, reorg-with-spend,
+  adversarial `tx_extra 0x07` daemon parity) as compile-time drift canaries —
+  no fake passes. Tier B is blocked on a fixture (`ct2_tier_b.json`) that
+  requires minting real regular/staked outputs, which needs real local path
+  assembly (CT-3 + CT-5), not the synthetic `TreeContext` vectors 2a-4's
+  `TestDaemon` uses (a real regtest daemon rejects synthetic proofs).
+  **Reopening trigger:** CT-5 lands the engine wiring so a regtest can mint a
+  non-coinbase output and append the Tier-B oracle; then un-ignore the tests
+  and (for the adversarial `0x07` case) add the C++ duplicate/malformed-tag
+  oracle. See [`docs/completed/CT2_ROUND1_CLOSEOUT.md`](./completed/CT2_ROUND1_CLOSEOUT.md)
+  §3 / §5 and [`docs/design/CT2_DRAIN_ORDER.md`](./design/CT2_DRAIN_ORDER.md)
+  §8.2.
+  **Update 2026-06-27 (3 of 5 landed).** The Track-2 keystone (first
+  daemon-accepted FCMP++ spend) unblocked this: `ct2_tier_b.json` is now generated
+  from a live regtest by `shekyl-engine-core`'s `generate_ct2_tier_b_fixture` (mints
+  a real multi-tx spend block + a daemon `pop_blocks` reorg, captures the
+  deterministic projection — per-height root + per-output leaf identity — via full
+  txs). **Un-ignored + green:** `mixed_maturity_collision_orders_by_gindex`,
+  `multi_tx_block_respects_coinbase_first_and_tx_hashes_order`,
+  `reorg_with_spend_mixed_leaves`. **Still deferred** (no fake passes):
+  `staked_output_uses_max_lock_and_spendable` (needs the engine staking *send* path —
+  built separately — to mint a staked output) and
+  `scanner_extra_0x07_matches_daemon_on_adversarial_extra` (needs a hand-crafted C++
+  duplicate/malformed-`0x07` oracle). Generating the fixture surfaced + fixed a
+  refresh-over-spends parse bug (`Ct::read` could not parse a storage-pruned FCMP++
+  spend) and surfaced the reorg optimistic-spend state bug (separate FOLLOWUP above).
+
+- **CT-5 real-tree FCMP++ verify — deeper-tree + pin validation (depth-2 case
+  RESOLVED 2026-06-19).** The real-tree prove→verify roundtrip
+  (`join_market_bond_post_fcmp_verify_over_real_tree`, now un-ignored and
+  passing) was failing `BatchVerificationFailed` because
+  `shekyl-curve-tree::assemble` emits **partial (narrow) branch chunks** for
+  incomplete tree nodes while the FCMP membership circuit requires the full
+  `chunk_width`. Fixed by **zero-padding branch chunks** in
+  `shekyl_fcmp::proof::prove` / `prove_with_sal` — zero scalars vanish in the
+  layer hash (`hash_grow([c]) == hash_grow([c, 0…])`), so the **consensus root is
+  unchanged** (no daemon/consensus change, no CT-2 Tier-A regression), and the
+  daemon's `shekyl_fcmp_verify` (the same Rust `verify` via FFI) accepts it.
+  Regression: `ct5_partial_branch_chunk_is_padded_and_verifies` (shekyl-fcmp).
+  **Remaining:** the fix + KAT cover **depth-2** (one Helios branch; the narrow
+  *leaf* chunk verified without padding). Validate **depth-3+** (a Selene branch
+  layer, and whether the leaf chunk needs padding at scale) once larger real-tree
+  fixtures exist (Track-2 regtest / Tier-B). Separately, advance the
+  `monero-oxide@3933664d` pin (synced 2026-04-25) as routine maintenance — ruled
+  out as the cause: the pinned crate's own `test_single_input` passes layers 1-9.
+  **Reopening trigger:** a depth-3+ real-tree verify, or the Tier-B fixture.
+  Target: V3.0 with the CT-5 series.
+  **✓ RESOLVED 2026-06-27 (PR #197).** Both `grow` and `trim` recompose narrow
+  (`== build_layers`); validated end-to-end against a locally-built daemon. The
+  consensus cutover is documented in
+  [`docs/completed/DEPTH3_CURVE_TREE_CUTOVER.md`](completed/DEPTH3_CURVE_TREE_CUTOVER.md)
+  and the binding decision in `V3_WALLET_DECISION_LOG.md` (2026-06-27). This was the
+  **last open CT-5 validation gate** — the CT-5 series is now closed; see
+  [`docs/completed/CT5_SERIES_CLOSEOUT.md`](completed/CT5_SERIES_CLOSEOUT.md). The
+  diagnosis below is retained for the record.
+  **⚠ TRIGGER FIRED — REOPENED 2026-06-27 (Track-2 depth-3 regtest).** The depth-3
+  regtest gate (`regtest_e2e::e2e_fcmp_spend_over_depth3_tree`) mined the daemon's
+  curve tree to depth-3 (daemon depth 2 = 3 layers; 701 drained leaves, height 760)
+  and the wallet `refresh` then **failed**: `CurveTreeIngest { context: "curve-tree
+  root mismatch vs header" }`. The wallet's `CurveTreeClient` reconstruction (built
+  on the narrow-from-init `build_layers`) diverges from the daemon's header root at
+  the **layer-2 Selene branch**. **This is consensus-critical: a wallet cannot sync
+  once the chain exceeds 684 outputs** — the 685th output (`SELENE_CHUNK_WIDTH *
+  HELIOS_CHUNK_WIDTH + 1`) forces the first layer-2 Selene root; reached fast on mainnet.
+  **ROOT-CAUSED 2026-06-27 (all-Rust triangulation, no mining) — the DAEMON is the
+  bug, NOT `build_layers`.** `build_layers` is the narrow reference by definition
+  (`try_build_upper_layers` tree.rs:330-348 — `hash_grow(init, 0, ZERO, [all converted
+  children])`, no padding). The consensus defect is `BlockchainLMDB::grow_curve_tree`'s
+  **deepening propagation** (db_lmdb.cpp:6594-6719): it propagates only *updated*
+  chunks, so when the 685th leaf forces the first layer-2 Selene root, the pre-existing
+  Helios sibling (chunk 0 = the first 684 leaves) is omitted (fine cadence) or
+  phantom-subtracted (coarse cadence: a fresh parent chunk wrongly uses
+  `old_scalar = conv(child.old_hash)` instead of ZERO). Confirmed in-process by a
+  faithful `grow_curve_tree` replica in `shekyl-fcmp/tests/curve_tree_freeze.rs`
+  (`daemon_incremental_matches_batch_through_depth2` = faithfulness floor;
+  `daemon_incremental_drops_existing_sibling_at_depth3_deepen` = the layer-2 divergence,
+  with the exact omission pinned). **Do NOT conform `build_layers` to the daemon —
+  that would freeze a consensus defect at genesis (#162-retraction discipline).
+  Fix the producer:** a newly-created parent chunk must build from ALL its children
+  (old_scalar ZERO), reachable via deepen. Best disposition (rules 20 / consensus-port):
+  move the tree-grow orchestration into Rust (a correct `shekyl_curve_tree_grow` that
+  mirrors `build_layers`) rather than patch the C++. Changes the genesis header root ⇒
+  consensus cutover; regenerate any depth-3 fixtures. Repro/acceptance: the depth-3
+  regtest gate (`e2e_fcmp_spend_over_depth3_tree`) + the curve_tree_freeze replica.
+  **GROW FIX VALIDATED (PR #197):** the Rust grow FFI `shekyl_curve_tree_grow_upper_layers`
+  (== `build_layers`, round-trip tested) + the C header decl + the `db_lmdb`
+  `grow_curve_tree` rewiring (reads the leaf-chunk layer, calls the FFI, persists the
+  recomposed upper layers + root + depth). Validated end-to-end 2026-06-27 against a
+  **locally-built fixed `shekyld`**: the depth-3 regtest reached daemon depth 2 (701
+  leaves), the wallet `refresh` succeeded over the depth-3 tree (the root mismatch is
+  gone), and the daemon **accepted** a wallet-built FCMP++ spend over that tree
+  (`e2e_fcmp_spend_over_depth3_tree` is green). **TRIM FIX VALIDATED (PR #197):**
+  `BlockchainLMDB::trim_curve_tree` (the reorg path) had the identical buggy
+  incremental-upper propagation; it now uses the **same FFI recompose** as grow, plus
+  a cursor delete of every `layer >= 1` chunk before rewriting (trim shrinks the tree,
+  so stale upper chunks must not survive). Validated by `e2e_trim_curve_tree_restores_grow_root`:
+  grow to depth-2 across a leaf-chunk boundary, grow further, then `pop_blocks` back —
+  the trimmed root equals the grow root exactly (`trim == grow⁻¹`; grow is the proven
+  `== build_layers` reference). The dead in-place propagation + the now-unused
+  `ct_layer_is_selene` helper were removed.
+  **PERF FOLLOW-UP (not a consensus change):** `grow`/`trim` currently recompose ALL
+  upper layers each block — O(num_leaf_chunks) LMDB reads + O(num_leaf_chunks/17)
+  hashing — fine at genesis/early scale but a bottleneck on a long-lived chain.
+  Optimize to recompose only the affected *ancestor* chunks (bounded by depth ×
+  chunk-width) using the same narrow composition. This produces the **identical root**,
+  so it is a pure perf optimization, sequenced AFTER the correct version (and must be
+  proven `== build_layers` to telescope — the #162-retraction discipline).
+
+- **Output-class numbering-equivalence re-verification (CT-5c X3 standing
+  precondition, tracked 2026-06-18).** Target: standing — applies to any future
+  PR that adds an output class to the curve tree. CT-5c resolves owned outputs
+  by `gindex`, which is sound only because the tree's `next_output_seq`
+  numbering is identical to the scanner's `global_output_index` numbering; the
+  `(O, C)` post-resolution check (`ClientError::IdentityMismatch`) is the only
+  runtime guard of that unowned inter-component invariant. The classic way the
+  two diverge is a new output class shifting the drain-order count (coinbase
+  forced exactly this alignment; bond-post / archival outputs are the next
+  candidates). **Reopening trigger (rule-21):** any PR that adds an output class
+  the curve tree indexes must re-verify `global_output_index ↔ tree gindex`
+  equivalence — ideally with a mixed-output-class numbering KAT (the curve-tree
+  `assemble_kat` is coinbase-only; the scanner side is engine-local) — *before*
+  merge. See [`docs/completed/CT5C_ASSEMBLER_CUTOVER.md`](./completed/CT5C_ASSEMBLER_CUTOVER.md)
+  §5 / §10.
+
+- **CT-5d reselect: content-changing re-anchor (lock-transplant), tracked
+  2026-06-18.** Target: V3.1+ (the clean-fail fallback is genesis-safe).
+  CT-5d ships the *reprove* re-anchor (content-preserving: same inputs, fresh
+  reference, re-assemble + re-sign). The *reselect* path — re-anchoring when a
+  deep reorg orphaned a *selected* output, or the fresh-depth fee exceeds the
+  selected inputs' coverage (F-I) — is deferred: it requires releasing the old
+  rid's `output_locks` and acquiring new ones under the same stable rid while
+  holding both across the prover (a temp-rid selection that ignores the old
+  rid's own locks, then a lock₂ rekey + fail-clean restore — materially larger
+  and riskier than reprove over the money path). Today these surface as a clean
+  `SubmitError::ReselectionRequired`; the consumer discards and rebuilds — never
+  a bad proof, never a silent mutation. **Reopening trigger (rule-21):** an
+  observed rate of deep-reorg-orphaned-selected-output / fee-escalation submit
+  failures that makes discard-and-rebuild a real UX cost, or an audit requiring
+  in-place reselection. See [`docs/completed/CT5D_REANCHOR.md`](./completed/CT5D_REANCHOR.md)
+  §3 (F-I) and the deferred-reselect KATs (d/g).
+
+- **CT-5d background opportunistic re-anchor + the eager reorg mark, tracked
+  2026-06-18.** Target: V3.1+ (measurement-gated). CT-5d is submit-centric:
+  staleness is re-derived authoritatively at submit, so the slice carries no
+  `merge.rs` reorg-branch coupling and no `stale` flag. A throttled background
+  task could proactively re-anchor stale `consumer_held` entries (off the reorg
+  handler and a timer) so submit usually finds a fresh tx — trading wasted
+  prover work on abandoned txs for lower submit latency. **This is the home for
+  the eager `merge.rs` mark** (the advisory `stale` flag + `PendingTxEngine`
+  reorg method) the lazy slice deliberately omitted; the mark is scaffolding the
+  rebuilder consumes, useless without it. **Reopening trigger:** the built-tx
+  submit-vs-abandon rate (currently unmeasured) shows proactive rebuild wins.
+  See [`docs/completed/CT5D_REANCHOR.md`](./completed/CT5D_REANCHOR.md) §5 (F-D) / §7.
+
+- **CT-5d broadcast-but-unmined reference orphan, tracked 2026-06-18.** Target:
+  V3.0 (send-path money-loss hazard). A tx broadcast *before* a reorg that then
+  orphans its reference is evicted from the daemon mempool: the wallet believes
+  it is in-flight, but the payment silently dies. CT-5d's re-anchor stops at the
+  `consumer_held → in_flight` boundary (re-anchoring a live proof would be a
+  double-spend + correlation surface), so this lives past CT-5d's scope — but it
+  is a real pre-genesis robustness gap in `in_flight` resolution (the daemon owns
+  it only until the daemon drops it). **Reopening trigger:** the `in_flight`
+  daemon-resolution / mempool-monitor work (Stage 4 `MempoolMonitorActor`) lands,
+  or a reorg-storm wargame surfaces silent payment loss. See §7.
+
+- **CT-5d re-confirm UX: handle accessor + `(fee, change)` delta on
+  `ContentChanged`, tracked 2026-06-18.** Target: V3.0 (consent UX completeness).
+  The engine's consent gate is sound — broadcast requires `seen_gen ==
+  content_gen`, and `content_gen` advances only on a real content change — but
+  `SubmitError::ContentChanged` carries only the advanced `content_gen`, and
+  there is no accessor to read the re-anchored artifact's new `(fee, change)`.
+  A front-end that blindly resubmits with the returned `content_gen` would
+  auto-confirm without showing the user the delta, weakening the consent
+  property in practice. Add a `peek_pending(id) -> PendingTx` accessor (or carry
+  the new fee/change on `ContentChanged`) so the front-end can surface the delta
+  for genuine re-approval. **Reopening trigger:** the wallet-RPC / front-end send
+  surface wires `submit(id, seen_gen)`. See §4.
+
+- **CT-5d: retire the vestigial `SnapshotId` / `SnapshotInvalidated` submit path,
+  tracked 2026-06-18.** Target: V3.1+ (cleanup). CT-5d makes the *reference* the
+  submit staleness authority for the curve-tree-enforced path (every
+  `consumer_held` entry), so `SubmitError::SnapshotInvalidated` and
+  `PendingTxDiagnostic::SubmitSnapshotInvalidated` are no longer constructed on
+  the money path. They are retained as `pub` API to avoid an enum break mid-stage.
+  **Reopening trigger:** the Stage-4 `PendingTxActor` rework, which re-decides the
+  staleness surface wholesale and can drop the dead variants. See §5.
+
+- **Full-segment freeze + prune-retention KAT at production `j=2` leaf count
+  (CT-1 Round 1 deferral, tracked 2026-06-13).** Target: V3.0, with the
+  prune-policy / store-backed assembly work (`CURVE_TREE_CLIENT.md` §8 #9).
+  CT-1's freeze/prune mechanism is KAT'd at CI scale (`upper_layers_kat` at
+  `j=0`; `store_kat` Tier A ~150 leaves), but the production segment layer is
+  `j=2` (~26k leaves/segment), which no current fixture exercises. The
+  mechanism is layer-agnostic by construction, so this is coverage at scale,
+  not an unverified code path. **Reopening trigger:** store-backed assembly or
+  the prune-policy PR lands (it operates on real `j=2` segments), or an audit
+  requires the full-scale freeze/prune KAT explicitly. See
+  [`docs/completed/CT1_ROUND1_CLOSEOUT.md`](./completed/CT1_ROUND1_CLOSEOUT.md) §3
+  and the `CURVE_TREE_CLIENT.md` §9 CT-1 row.
+
+- **Wallet-local `O.x → position` match index (`CurveTreeClient` §4.3 scan
+  cost, CT Round 0 Q2, tracked 2026-06-13).** Target: V3.x performance work
+  (`15-deletion-and-debt.mdc` V3.2). Output matching (§4.3) is a linear `O.x`
+  scan over the drained-leaf range; at a multi-million-leaf mainnet tree that
+  is the naive cost. An in-store `O.x → position` index built locally from
+  downloaded leaves (never queried, so it leaks nothing — a perf/memory
+  tradeoff, not a privacy one) would cut it. Deferred because correctness does
+  not depend on it and the index is additive to the store schema. **Reopening
+  trigger:** profiling shows the linear match scan is a wallet-refresh
+  bottleneck at projected mainnet leaf counts. See
+  [`docs/design/CURVE_TREE_CLIENT.md`](./design/CURVE_TREE_CLIENT.md) §4.3 /
+  §8 #2.
+
+- **Confirm segment layer `j` / shard size `E` against mainnet leaf growth
+  (CT Round 0 Q8, tracked 2026-06-13).** Target: V3.x, with the archival
+  shard-count policy (`CURVE_TREE_CLIENT.md` §7.2.2 / §7.6; the `ArchivalEngine`
+  is out of CT scope). Segments are subtree-aligned, so `E` (outputs per frozen
+  segment) is a coarse function of the chosen level: 38 / 684 / 25,992 / …
+  leaves. Level 2 (≈26k) is the provisional pin (`CT1_ROUND1_PINS.md`); there
+  is no clean ~10k level. The right level trades shard count against per-shard
+  storage and depends on mainnet leaf-growth data not yet available.
+  **Reopening trigger:** mainnet (or representative testnet) leaf-growth data
+  exists, or the `ArchivalEngine` shard-count/storage policy lands and needs
+  the level fixed. See [`docs/design/CURVE_TREE_CLIENT.md`](./design/CURVE_TREE_CLIENT.md)
+  §7.2.2 / §8 #8.
+
+- **Anonymized (Tor/I2P) routing for non-forward segment fetch (CT Round 0
+  Q11, tracked 2026-06-13).** Target: V3.0, with the `SegmentSource` seam /
+  bulk-leaf refetch path (the `get_curve_tree_leaves` row above). The
+  source-agnostic segment fetch (§7.4) must inherit mandatory anonymization so
+  a wallet's catch-up / archival fetches do not deanonymize it at the network
+  layer; the seam belongs against `ANONYMITY_NETWORKS.md`, not bolted on at
+  V3.x. The `get_curve_tree_leaves` / `SegmentSource` row tracks the *seam*;
+  this item tracks wiring it to the routing layer. **Reopening trigger:** the
+  `SegmentSource` seam lands (its first consumer is the refetch path) — wire
+  the fetch to the anonymity transport in the same PR. See
+  [`docs/design/CURVE_TREE_CLIENT.md`](./design/CURVE_TREE_CLIENT.md) §7.4 /
+  §8 #11.
+
+- **Single-dispatcher nm gate: extend beyond `shekyld` (2026-06-11
+  single-image amendment).** The per-binary Rust-image selection in
+  `cmake/BuildRust.cmake` structurally gives every binary one Rust
+  archive, but the post-link `nm` gate asserting exactly one
+  `tracing-core` `GLOBAL_DISPATCH` runs only on the `daemon` target.
+  Factor the gate into a CMake function and apply it to the wallet-side
+  executables (`shekyl-wallet-cli`, `shekyl-wallet-rpc`) so a future
+  link-topology regression on those binaries fails the build instead of
+  silently dropping their engine tracing events. **Target: V3.0 (the
+  gate is the contract's enforcement surface).** Cross-link:
+  decision-log single-image entries (2026-06-10, 2026-06-11).
+
+- **`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` dedup (CT-1).** Target: PHASE_2B /
+  consensus codegen. CT-1 hardcodes `720` in `shekyl-curve-tree` while
+  [`config/consensus_constants.json`](../config/consensus_constants.json)
+  carries `archival_reorg_depth_blocks`. **Reopening trigger:** replace the
+  hardcode with generated constant when PHASE_2B wires
+  `ARCHIVAL_REORG_DEPTH_BLOCKS` into Rust codegen. Until then, cross-ref only;
+  two copies are drift debt, not permanent. See
+  [`docs/design/CT1_ROUND1_PINS.md`](./design/CT1_ROUND1_PINS.md).
+
+- **Gate-6 synchronized-exit wargame round (swan-2/W8, 2026-06-11).** A black
+  swan is a **correlation oracle** against the gate-6 firewall: mass exit
+  compresses many loud `bond_floor` Unbond refunds into a few epochs, and the
+  decorrelation discipline (jitter, drain spacing) was designed against
+  steady-state cadence — a crisis blows through jitter windows by synchronizing
+  the population. An A2 analyst gets a time-boxed cohort of P-side releases to
+  correlate against principal-side activity, plus the mirrored re-entry wave
+  later. The wargame: replay the gate-6 adversary models against an L17-shaped
+  synchronized exit/re-entry event (`STAKER_ARCHIVAL_SIM.md` §L17 swan table —
+  troughs 9–25, re-entry over ~10–20 epochs); the open mechanism question is
+  whether `RELEASE_COOLDOWN_EPOCHS = 2` **smears** the cohort or merely
+  **delays** it intact, and whether a release-cooldown *queue* (spreading
+  crisis unbonds over a randomized multi-epoch window) is needed. Couples to
+  the T-A1 regime bound
+  ([`design/F1_TA3_TA7_LIFETIME_WINDOW.md`](./design/F1_TA3_TA7_LIFETIME_WINDOW.md)
+  §7): trough populations make the intersection surface maximally cheap, so the
+  exit-event channel is the binding one. Priority-2 (privacy) per
+  `00-mission.mdc` — ranked above the other swan-2 exports. Target: **V3.0**
+  (gate-6 wargame round, before the firewall constants freeze).
+
+- **Foundation treasury diversification — floor capacity must not be
+  pro-cyclical (swan-2/W4, 2026-06-11; re-scoped swan-3/W12–W13; re-anchored
+  swan-4).** The L17 fatal channel (permanent price collapse × fiat opex) is
+  bridged by the adaptive servo *plus the foundation floor* — but a
+  token-denominated treasury loses ~75 % of its fiat purchasing power in the
+  same event it must absorb. **swan-4 correction:** the retention guarantee
+  (`V3_STAKER_ARCHIVAL.md` §*Foundation complete-tree seeds* authority pin —
+  complete trees held permanently, no sunset) means market trough wipe-outs
+  are foundation-as-sole-source transitions, **not data loss**; the
+  swan-2/-3 "deep-set completeness requirement" is converted to
+  *documentation of the existing guarantee + its single-organization threat
+  model* (landed in the authority pin, with the W12/W13 completeness
+  questions parked against the no-sunset pin's reversion clause). What
+  remains for this item: (1) foundation operations policy holds
+  floor-operating reserves **fiat-diversified** (or otherwise
+  crisis-uncorrelated with the token price) at a level sized to carry the
+  serving floor + re-seed duty through the L17 servo-400 impaired window
+  (~114 epochs) at crisis-time costs — this funds both the guarantee's
+  internal redundancy and the crisis serving load; (2) **foundation seeding
+  capacity provisioned at the crisis multiple — ~4× steady-state flow**
+  (swan-4 recommendation, not just measurement: at ~1 seeding flow per seat
+  the V-trough costs ~429 sole-source shard-epochs, worst window 10 epochs;
+  4× provisioning halves exposure **and cuts trough wipe-outs 40 → 10** by
+  interrupting the cascade; surge seeding is the foundation's own action,
+  not adversary-triggerable, so the `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`
+  §3.3 static-margin objection doesn't apply — `STAKER_ARCHIVAL_SIM.md`
+  §L17 Finding 4); (3) **`N_active` seats domain-diverse**: during a
+  sole-source window internal redundancy counts toward the L15 diversity
+  floor only if the three seats sit in distinct failure domains.
+  Operations-document requirements with authority, not code; citing
+  `STAKER_ARCHIVAL_SIM.md` §L17 Findings 3–4. Target: **V3.0** (gate-5
+  floor sizing close).
+
+- **Re-derive genesis-sealed redundancy params against the integer backend
+  (+1 deep-tail margin) before seal (tail-margin finding, 2026-06-13).** PR 1.5's
+  second-pass scan (`ARCHIVAL_SIM_ECONOMICS_VERDICT.md` §tail-margin) found the
+  float sim over-reads worst-shard redundancy by up to one replica: integer
+  flooring discards work-credit float counted as fractional atomic units, so
+  `min_r` biases down and `sole_source_shard_epochs` up, *in-envelope*. Any
+  redundancy/coverage parameter that (a) gates sole-sourcing and (b) is **genesis-
+  sealed** therefore inherits a +1 over-optimism if it was calibrated against the
+  float sim. Concretely, the **genesis-sealed** subset — the L12 genesis deep-
+  replica floor `r_target_deep` and any genesis-sealed `R_target`/redundancy floor
+  (`STAKER_ARCHIVAL_SIM.md` §L12 disposition; the floor size is currently a
+  "post-testnet calibration" pinned *provisionally* against the float sim) — must
+  be **re-derived against the integer backend with a +1 deep-tail replica margin
+  before the genesis seal**, not watched after. This is distinct from the
+  *testnet-tunable* redundancy/`R_target` operating bands, which the verdict doc's
+  reopen criteria already route to "tune against integer + watch
+  `sole_source_shard_epochs` on testnet" — those can move post-genesis; the sealed
+  floor cannot. **Scope (right-sizing):** a sole-source market shard is an
+  *availability* item, not data-loss — the Foundation complete-tree (B+C) seeds are
+  the durability backstop (`V3_STAKER_ARCHIVAL.md` §*Foundation complete-tree
+  seeds*). The +1 carry is therefore a pre-seal correctness step for the sealed
+  floor only, not a durability escalation. **Reversion:** if the final band review
+  re-derives `r_target_deep` (and any sealed redundancy floor) against the integer
+  backend with the +1 margin, this item closes; if a redundancy param that gates
+  sole-sourcing is found to be testnet-tunable rather than genesis-sealed, it moves
+  to the verdict doc's testnet-watch list instead. Cross-refs:
+  `ARCHIVAL_SIM_ECONOMICS_VERDICT.md` §tail-margin + reopen criteria,
+  `REWARD_EMISSION_VIN_PLAN.md` §9, `STAKER_ARCHIVAL_SIM.md` §L12. **Target: V3.0
+  (pre-genesis; blocks the final redundancy-band seal).**
+
+- **Funding-seam entry-standoff: consensus surface, wallet conformance, and the
+  cold-start cover residual (standoff sim review pass, 2026-06-13).** The
+  `--standoff` sim (`STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff*,
+  `ARCHIVAL_FIREWALL_GATE6.md` §10.12) recommends a 600-block uniform-independent
+  window with inversion on, but the review pass surfaced four carries, two of
+  which are consensus-rule / genesis-seal surfaces:
+  (1) **Consensus surface (Gate 4 timing).** Support **announce-before-bond**
+  (inversion); the max announce↔bond separation is an **anti-griefing ceiling**,
+  *not* a privacy control — label it as such in the consensus rule. **Open:**
+  whether a per-block bond-post smoothing rate-limit is worth adding as the one
+  consensus-side surge backstop — it is *partial* (smooths the chain bond-post,
+  not the network announce) and *not free* (saturable as a liveness-griefing
+  vector), so the decision trades a privacy-surge risk for a liveness risk.
+  (2) **Wallet conformance (genesis privacy floor).** The uniform-independent
+  draw is wallet-only and consensus-unenforceable; a shared trigger collapses the
+  set to ~1 and injects a cover-degrading surge. Promote it from "default" to a
+  **hard conformance requirement with a published test vector**, with the
+  reference wallet nailing and documenting it. The test vector must specifically
+  reject the **independent-double-jitter construction** (jittering two event-times
+  around a common anchor → triangular, zero-peaked separation that clusters the
+  events while passing the ±600 bound): the gap must be **drawn directly**
+  (`s ~ U[0,600]`, fair per-`P` order-coin). The vector asserts on the realized
+  `(spread, order)` *distribution* over a sample (uniform spread via
+  **discrete chi-square GoF** + excess-mass-near-zero; balanced independent order — and
+  order-balance alone is insufficient, since the trap's coin still looks fair).
+  Executable reference single-sourced into `rust/shekyl-standoff` (2026-06-16):
+  the float-free `draw::draw_entry_gap` (default features, wallet-importable) +
+  the feature-gated `conformance` instruments (`summarize_gaps`,
+  `population_bond_time`, `max_bin_share`, the double-jitter trap) and the
+  RNG-generic `conformance::certify_draw<R: GapRng>` self-cert harness; the
+  generic goodness-of-fit primitives (`chi_square_upper_crit`, `Z_ALPHA_1E6`,
+  discrete-uniform chi-square, `lag1_autocorr`) live in the dependency-free
+  `rust/shekyl-stats`. The published test vector is split along the determinism
+  boundary: `tests/golden_vector.rs` (default features, the **integer**
+  `(spread, order)` sequence — bit-identical and verified on the aarch64
+  qemu-user lane), and `tests/conformance_grading.rs` (`conformance` feature,
+  the float grading — **x86-only**, because float is not bit-identical across
+  arches; the lane's cross-arch guarantee is the integer sequence, the float
+  stats are graded by margin). **Framing: conformance is wallet self-test, not
+  consensus enforcement** — the anchor is consumer-side and FCMP++-hidden, so
+  nothing on-chain can police the draw; the population/anchor instrument
+  demonstrates "here is what a shared anchor does to you" (paired with the
+  operator-education item), and `certify_draw` is the tool a wallet runs against
+  *its own* CSPRNG. **"Uniform-*independent*" has two
+  independence dimensions a marginal gap test cannot see, both now in the suite:**
+  (i) **population anchor-independence** — the catastrophic shared-trigger mode
+  (epoch-snapped anchors pass the gap test but cluster absolute bond times → set
+  ~1.01); separate harness on absolute times with an epoch-snapped negative
+  (`population_bond_time` / `max_bin_share` +
+  `population_anchor_independence_disperses_shared_trigger_clusters`); (ii)
+  **serial independence** — load-bearing now that rebond/partial-unbond/re-entry
+  make a `P` draw several gaps over its life; a lag-1 autocorrelation / runs probe
+  (`lag1_autocorr` + `serial_independence_reference_passes_correlated_fails`),
+  required for a *cross-wallet* vector that cannot assume SplitMix64. **Grade
+  form:** discrete chi-square (not continuous KS — the gap is integer blocks) at a
+  **strict grading alpha ~1e-6** (`chi_square_uniform` / `chi_square_upper_crit` /
+  `Z_ALPHA_1E6`; `chi_square_grades_uniform_at_strict_alpha`), so a correct wallet
+  essentially never false-fails while the trap fails by orders of magnitude. The
+  fixed seed is **reference-determinism, not a PRNG mandate** — grade the property,
+  not the implementation.
+  (2b) **Exit-seam standoff geometry (separate envelope; ties GF-4 + the
+  partial-unbond genesis item).** The ±600 entry envelope does *not* cover the
+  exit seam. Pin a **separate** standoff for terminal drain *and* recurring
+  partial-unbond (`HoldingsUpdate`): **one-sided** (no inversion — collateral is
+  not spendable before the 20_000-block release cooldown), latency measured **from
+  cooldown expiry** (the cooldown deterministically pins the earliest spend, so
+  the standoff's job is to break that fixed-offset tell), cost ≤ 600 blocks on top
+  of cooldown = 0.06 epoch additional availability latency. Weaker cover per unit
+  latency than the entry seam (600-block search width, not 1200) — so the
+  thin-regime gap-toward-max bias matters more here.
+  (3) **Cold-start weak-cover residual (pre-seal, tied to L12). RATIFIED 2026-06-16:
+  accept documented weak early-`P` cover for V3.0.** Thinnest genesis traffic +
+  longest-lived foundational `P`s coincide, so the entry-seam cover is at its
+  structural worst case at cold start. The alternative — foundation-inject decoy
+  funding — was rejected because it is **self-undercutting**: foundation decoys are
+  attributable and thus discounted by a sophisticated adversary (carry 4), so the
+  injection buys a foundation-trust/centralization cost for cover that the very
+  adversary it targets can subtract back out. No **non-attributable** decoy source
+  exists short of reopening confidential staking (S-5), which is closed. The residual
+  is **bounded and self-resolving**: it is a transient of the cold-start window —
+  cover strengthens monotonically as organic funding traffic accrues, so the weak
+  period is finite, not a standing property. **Disposition:** ship V3.0 with the
+  documented residual; do **not** add decoy-injection machinery (a permanent attack
+  surface and trust cost for a finite problem, per
+  [`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)). **Reopen
+  criterion (rule-21):** only if carry-4's testnet **effective**-cover measurement shows
+  the cold-start residual is *not* self-resolving (cover does not strengthen with
+  organic traffic as modeled) **and** a non-attributable cover source becomes available
+  (which today requires reopening S-5). Operator-facing consequence: the earliest
+  foundational `P`s carry the thinnest cover and should be the most opsec-conservative —
+  routed to the operator-opsec guide, not a protocol change.
+  (4) **Effective-vs-nominal cover (testnet, S-3 modeled observer).** The sim
+  measures *nominal* cover under honest Poisson traffic — an upper bound. Testnet
+  must probe **effective** cover against an observe-and-inject adversary, and must
+  measure the **network-event rate of the actual post-§10.9-isolation channel**,
+  not the on-chain funding-spend rate the sim proxied. Cover is `P(link |
+  isolation holds)` — a multiplier on §10.9, never additive. Cross-refs:
+  `STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff* → *Conditionality and
+  caveats*, `ARCHIVAL_FIREWALL_GATE6.md` §10.12 / §10.9. **Target: V3.0** (carries
+  1–3 are pre-genesis; carry 4 is the testnet measurement that calibrates them).
+
+- **Wallet bond-funding/standoff call site (tracks the `shekyl-standoff`
+  importable surface; 2026-06-16).** The `shekyl-standoff` crate is now
+  wallet-importable (default-feature `draw_entry_gap`, CSPRNG-ready via the
+  `GapRng` trait, self-cert harness under `conformance`), but the V3.0 funding
+  flow is unbuilt, so there is **no wallet call site yet** — this is the
+  tracking item so the wiring is not lost. **Feature split, spelled so the
+  wiring is unambiguous:** the wallet's **production build depends on
+  `shekyl-standoff` with default features** (draw only — float-free, zero
+  cast-allows, the lean production surface); **self-certification runs in the
+  wallet's test build with `features = ["conformance"]` as a dev-feature**,
+  which is where `certify_draw` and the negative-control harnesses
+  (`reference_correlated_sequence`, `shared_anchor_population`) are available.
+  Lands with the funding flow. **Target: V3.0** (with the funding flow).
+
+- **`shekyl-stats` `Z_ALPHA_1E6` provenance vs. the `enc_label` test's
+  sensitivity need (separate question; 2026-06-16).** The dedup that moved
+  `chi_square_upper_crit` + `Z_ALPHA_1E6` out of `crypto-pq/label.rs` into
+  `shekyl-stats` is **byte-identical** — `label.rs`'s indistinguishability test
+  keeps the exact `1e-6` it had. But `1e-6` is the **conformance-gate** alpha
+  (chosen strict so a *correct wallet* essentially never false-fails a gross
+  antipattern). Whether `1e-6` is the right alpha for `label.rs`'s
+  uniformity-of-ciphertext test is a **different** question: a guard against
+  *subtle* derivation bias wants a **more powerful (less strict)** alpha, since
+  `1e-6` only rejects gross non-uniformity. If the label test's `1e-6` was
+  inherited by copying the standoff helper rather than chosen for its own
+  sensitivity need, that should be examined — flagged here so canonicalizing the
+  constant in `shekyl-stats` does not silently launder an unexamined alpha
+  choice. **Not the dedup PR's scope. Target: V3.x.**
+
+- **`HoldingsUpdate` (partial-unbond/rebond) promoted to genesis scope + pre-seal
+  sim reconciliation (decided 2026-06-15).** The full bond lifecycle
+  (`JoinMarket / Rebond / HoldingsUpdate / Unbond`) ships at **V3.0**, not deferred-V3.1
+  (gate-4 §4.4; `ARCHIVAL_BOND_GATE4.md` revision 2026-06-15). Rationale: bond balance is
+  consensus-state-machine state, so mid-life shard adjustment added post-genesis is a hard
+  fork; and without it the only way to add/shed one shard is `Unbond` + re-`JoinMarket`,
+  tearing down a working multi-shard operation to swap one slot. **All bond-lifecycle
+  verify/connect logic is Rust-native** (`shekyl-archival-retention`) — each kind gets its
+  own `verify_*_bond_post` surface + FFI error-code cluster mirroring JoinMarket; the C++
+  daemon retains only thin glue (LMDB `record_exists`, hybrid-pubkey bounds, `P_canonical_id`
+  recompute) and FFI delegation, moved where needed. There is **no C++→Rust port** — these
+  kinds are Rust from genesis, and wallet-side construction is Rust per the 100%-Rust wallet.
+  Three sub-items, in order:
+  (1) **FSM friction pin — spec landed (2026-06-15) as `PHASE_2B_FSM_RETOOL.md` §P2B-7.**
+  The doc now carries the voluntary add/drop transition edges + actions, per-shard
+  release-cooldown semantics on drop (`collateral-in-cooldown` sub-condition held *inside*
+  `Bonded`), the slashable-when boundary (Pin 3: dropped collateral stays liable through
+  cooldown — no drop-and-run; forecloses T-A15b), drop-last-shard-rejected (use `Unbond`),
+  and per-shard `E_add+1` counting. These are the *inputs* to (2). **Mutable-holdings
+  consequence — read rule pinned (P2B-7 Pin 4), implementation open:**
+  `BlockchainLMDB::has_archival_bond_shard` (`db_lmdb.cpp`) currently returns *tip* holdings
+  and ignores `at_height` — sound only while holdings were immutable. With mid-life add/drop,
+  "holds shard now" ≠ "held shard at `at_height`", so the serve-credit-window membership check
+  must read the per-`(P,s,E)` retention bits / `bond_event_log` intervals (gate-4 §4.4 ground
+  truth) rather than the mutable descriptor. **Open:** land the `at_height`-honoring read (or
+  contract-restrict the function to current-membership questions and reroute historical
+  callers) in the `shekyl-archival-retention` connect paths; land the per-shard `E_add+1`
+  verify/connect rule.
+  (2) **~~Age-stratified sim reconciliation (pre-seal dependency).~~ DONE 2026-06-16 —
+  `STAKER_ARCHIVAL_SIM.md` §L18.** The reconciliation landed as the
+  `--axis=holdingsupdate_cooldown` sweep: released collateral frozen for the release
+  cooldown (fresh capital required to re-bond) is modeled in `World.cooling`, subtracted
+  from spendable budget in `best_response`. Two source-faithfulness corrections were made
+  against `ARCHIVAL_BOND_GATE4.md` before the sweep was trusted: **the frozen amount is flat
+  `ARCHIVAL_BOND_FLOOR`** (§8.1 — per-shard capital is flat, not age-scaled; the first-draft
+  `bond_age(s)` escrow would have over-stated the deep-band freeze exactly where the margin
+  lives, sealing a higher floor on an artifact), and **the cooldown anchors at per-shard
+  last-served** (§4.4 — faithful under the sim's serve-until-drop behavior). The friction is
+  **flat in amount, age-stratified in incidence** (legs 1+3: `bond_duration(age)` immobility
+  + thin deep-tail coverage), not a re-tuned flat scalar. Escrow is voluntary-drops-only
+  (slash burns, never cools; clean `Unbond` pre-elapses the cooldown so exit→re-entry is not
+  re-frozen); the drop-and-re-add 2× capital bite (P2B-7 Pin 3 anti-dodge) is preserved.
+  (3) **~~What it gates: the genesis-seal redundancy-floor re-derivation.~~ RE-DERIVED
+  2026-06-16 — `r_target_deep` unchanged.** The L18 sweep settles the mobility-reconciliation
+  leg of the three-corrections pre-seal (the integer-backend + `+1`-margin legs are the
+  sibling tail-margin item above). Findings: (a) genesis `RELEASE_COOLDOWN` (`c2`) passes all
+  three absolute gates — `committed_deep_under < 0.10`, `sole_source = 0` (lag-free),
+  `oldest_margin ≥ 0` (committed oldest-band floor held at `r_target_deep`) — on **both**
+  duration arms; the **binding seal number is the faithful age-scaled arm**
+  (`committed_deep_under = 0.0138`, gate-4 §3.4 makes `bond_duration(age)` genuinely
+  age-scaled; the rosier flat `0.0064` is the optimistic contrast, not the headline); (b) the
+  flat-floor freeze costs `~0` floor erosion at `c2`, so **no freeze-driven `r_target_deep`
+  increase is required**; (c) the `+1` redundancy is a **provisioning** property, not emergent
+  — and **no market lever buys slack**: neither budget (`hu_buf_*`) nor deep-tail reward
+  premium (`hu_lever_*`, `age_weight` 3→12) lifts `oldest_min_committed` above `r_target_deep`,
+  because the `1/R` reward is anti-over-replication by construction. A wider band is
+  provisioning-only (`r_target_deep += 1`, or the foundation complete-tree backstop), both
+  priced (entry-barrier vs. trust-concentration); (d) cliff check — the `2→4` gradient is
+  super-linear under *flat* duration (21.6×, floor `6→5`) but bounded under the faithful
+  *age-scaled* composition (4.9×, floor holds), so genesis `c2` is not on a bifurcation edge;
+  the duration-shape × cooldown sign reversal is positive evidence the model captures real
+  dynamics. **Inference correction:** "harmless at `c2`" is the **conjunction**
+  (`freeze_harm_co` bounded AND `oldest_min` holds), **not** `causal = 0` — the causal/transient
+  detector reads `0` in every epoch of every arm (incl. `c4` where the floor eroded). The `0`
+  is **precluded under cooldown-aware optimization, not by construction**: `best_response`
+  budgets on `capital − Σfrozen`, so it never makes the stranding drop-to-reallocate move
+  (validated by positive/negative control tests `freeze_predicate_*`); the state stays
+  **reachable by a naive operator** who drops A to immediately rebond B without modeling the
+  cooldown — which is also the mechanism by which the named rebond/unbond churn would erode the
+  band, so "precluded under optimization" (consistent with a reopen path) is the correct
+  framing. The freeze's real harm mode is **structural**, caught by `oldest_min`, invisible to
+  the transient detector. *Standing reopen (rule 21), widened to **any newly-discovered
+  friction that erodes the deep band** (no emergent cushion beneath the provisioned `+1`):*
+  `RELEASE_COOLDOWN` past `~3` epochs; `BOND_DURATION_AGE_SCALE` sealed at/near `0` (flat
+  becomes faithful → cliff moves into the realistic arm); the rebond/unbond recurring surface
+  (R-2/R-3); the cooldown last-served-anchor edge case. *Routed residuals (naive-operator
+  scope):* the precluded transient is reachable by a naive drop-to-reallocate, routed to
+  operator behavior + wallet conformance, **not the consensus floor** (network harm is
+  structural/bounded; the naive transient is individual and self-correcting within the
+  cooldown) — (i) **operator-education:** don't drop a shard to fund another within the release
+  cooldown (freed collateral is frozen ~2 epochs, stranding the new shard; the lean regime
+  can't backfill fast); (ii) **wallet-conformance guard (candidate, wallet-side, V3.1):** warn
+  or refuse a `HoldingsUpdate` drop whose freed capital is visibly being redeployed within the
+  cooldown — same conformance posture as the standoff draw above. **Target: V3.0 — closed for
+  the mobility leg** (the wallet guard is the one V3.1 wallet-side spur).
+  **Correction (faithful-freeze, Copilot PR#148 #4/#5, 2026-06-16):** the freeze model above
+  was one epoch too lenient *and* let `best_response` recycle a dropped bond in the same epoch
+  (the drop-to-reallocate move finding (d) claimed was precluded). The fix pre-charges held
+  deep collateral so a same-epoch drop cannot refund a fresh acquisition (pre-charge + escrow
+  span the full `RELEASE_COOLDOWN_EPOCHS`; `c0` arms stay byte-identical). **Calibration is
+  unchanged** — both models clear every `c2` gate, so `RELEASE_COOLDOWN = 2`, `r_target_deep =
+  floor + 1`, `age_weight = 3`, and the no-foundation-widening disposition all stand; the
+  binding `committed_deep_under` only *improves* (`0.0138 → 0.0000`), strengthening the seal.
+  Two findings above are superseded: the finding-(d) `c4` "cliff" was an **artifact** of the
+  spurious churn (gone; floor holds at `6` at `c4`, churn flat across all cooldown durations),
+  confirming the finding-(c)/rationality-preclusion thesis in the budget arithmetic; and
+  finding (c)'s "no market lever buys slack" no longer holds — see the new mid-band-lever item
+  below. Detail: `STAKER_ARCHIVAL_SIM.md` §L18 "Faithful-freeze reconciliation". Cross-refs:
+  `ARCHIVAL_BOND_GATE4.md` §3.4/§4.4/§8.1, `PHASE_2B_FSM_RETOOL.md` §P2B-7,
+  `STAKER_ARCHIVAL_SIM.md` §L18, `ARCHIVAL_FIREWALL_GATE6.md` R2.
+  **Closure (adversarial-dodge two-leg seal, 2026-06-16):** the faithful fix left the seal on
+  the rational (good-actor / lower-bound) leg only, under which the cooldown is *inert* — so a
+  bad-actor / upper-bound leg was built (`dodge_pref`: a non-cooldown-aware operator that
+  *wants* the drop-and-refund dodge). On the committed channel the dodge premise **inverts**:
+  at `c0` the dodge is pure churn with **no** committed-coverage harm (`oMinCmtR` holds at `6`,
+  instant re-seat); at `c2` the cooldown *causes* the only committed breach in the sweep
+  (`oMinCmtR 6 → 4`, 37 % capital stranded) — defeating the dodge by stranding capital costs
+  more coverage than the dodge. **The coverage defense is the L9 retention lock, not the
+  cooldown** (every `ship`/locks-on arm holds `oMinCmtR = 7` at both `c0` and `c2`). Corrected
+  mechanism: the cooldown is a **cost/deterrent** (Pin 3 anti-dodge property, *demonstrated*
+  not asserted), **complementary** to the retention lock, not a coverage protector; **alone
+  (`nolock`) it backfires.** Two-leg seal holds against the `ship` config: good-actor costless,
+  bad-actor bounded-safe (`oMinCmtR 7`, `frzCo 0.107`, no breach). **New load-bearing
+  operating-envelope constraint + rule-21 reopen:** never ship the cooldown without the L9
+  retention lock; if `BOND_DURATION_AGE_SCALE`/`BOND_DURATION_BASE → 0` the cooldown's coverage
+  effect inverts and `RELEASE_COOLDOWN_EPOCHS` must be re-evaluated (the two are coupled). No
+  shipped parameter moved. Detail: `STAKER_ARCHIVAL_SIM.md` §L18 "Adversarial-dodge arm".
+
+- **Mid-band `age_weight` lever — CLOSED: the cushion is not robust, keep the minimal
+  floor+no-cushion posture (decision, 2026-06-16).** The faithful-freeze fix reopened
+  economics finding 6 with an apparent emergent 7th replica at `age_weight ≥ 7`, and the
+  pre-seal lean was to price it into genesis. A fine characterization sweep (`hu_cushion_*`
+  in `scenarios.rs`: `age_weight` 3→8 × three seeds) refuted that lean and was ratified:
+  - **The 7th replica is seed-dependent, not a cushion.** Across seeds `{0x5EED_1234,
+    0x5EED_2222, 0x5EED_9999}`, `oldest_min_committed` reaches 7 in only **two of three**
+    worlds at any `age_weight ≥ 5`; seed `0x5EED_2222` never reaches 7 even at `age_weight = 8`.
+    A replica that one realization in three does not have is not slack the network can lean on.
+  - **The lever is inert on the metrics that matter.** `committed_deep_under` is already
+    `0.0000` at `age_weight = 3` (the deep band is fully covered without the lever), and
+    `gini_actor_window` (0.1942) and `max_actor_share_window` (0.0190) are flat across the
+    entire 3→8 range — confirming `age_weight` is a redistribution knob, not an emission
+    scaler, with no concentration cost *and* no dependable benefit here.
+  So the lever moves no genesis number, costs nothing to leave alone, and buys no reliable
+  redundancy. **Disposition: genesis keeps `age_weight = 3`, `r_target_deep = floor + 1`, no
+  cushion** — the same minimal posture economics finding 6 reached "by construction" (correct
+  in practice even though the mechanism was reopened). **Reopen criterion (rule-21):** only if
+  (a) a newly-discovered friction erodes the deep band below `floor + 1`, *and* (b) a sweep
+  shows the 7th replica robust across seeds at a tolerable concentration cost — both required,
+  not either. Closed for V3.0; not deferred to V3.1 (there is nothing to defer — the lever
+  was characterized and declined, not postponed). Cross-refs: `STAKER_ARCHIVAL_SIM.md`
+  §L18 finding 6 + "Faithful-freeze reconciliation".
+
+- **Staker-archival settings are FROZEN; the remaining work is the operator experience, not
+  the parameters (decision, 2026-06-16).** Five independent stress passes — the overstated
+  model, the faithful-freeze model, the dodge sweep, the lever sweep, and the cooldown sweep —
+  all converge on the same result: **the system holds at the existing genesis settings**
+  (`RELEASE_COOLDOWN_EPOCHS = 2`, `r_target_deep = availability_floor + 1`, `age_weight = 3`,
+  foundation floor unchanged), usually with more margin than the math first suggested. Not one
+  parameter moved across the entire L18/dodge/lever investigation. This is a **dependability**
+  result, not a tuning one — and dependability across a wide input range, not performance
+  across a narrow band, is the design goal. Critically, **every agent in the sim is a
+  financial wizard** (`best_response` re-optimizes every epoch, churns to chase basis points,
+  actively dodges); every harm characterized *requires* that hyperactivity (the freeze only
+  bites under churn, the dodge only exists under active rotation, the stranding only under
+  drop-to-reallocate). The real target user is the opposite — set-up-and-walk-away, i.e. **low
+  churn, the safest corner of every envelope drawn** — so the system is *more* dependable for
+  real operators than the adversarial sim suggests. **Disposition:** stop tuning the protocol
+  parameters; the seal is done. The genuine residuals all live in **operator behavior and the
+  wallet/ops surface**, where the sim is silent: (i) sane, hard-to-mis-set defaults; (ii) a
+  wallet that catches the naive footguns *before* the user inflicts them (the drop-to-reallocate
+  capital strand; the shared-anchor entry-standoff clustering — both already tracked above as
+  wallet-conformance candidates); (iii) graceful recovery from crash / restart / reorg;
+  (iv) the operator opsec + setup guide a non-wizard can complete without stranding capital.
+  **Target: V3.0 (the operator-experience work is the critical path out of Gate 6 R2, not more
+  sweeps).** Cross-refs: `STAKER_ARCHIVAL_SIM.md` §L18 "Adversarial-dodge arm" (the honest
+  scope note), the entry-standoff wallet-conformance item above, `ARCHIVAL_FIREWALL_GATE6.md` R2.
+  **Slice 1 landed (2026-06-17, `chore/staker-operator-guide`):** sub-item (iv), the
+  operator opsec + setup guide, is published as
+  [`docs/STAKER_OPERATOR_GUIDE.md`](STAKER_OPERATOR_GUIDE.md) -- it consolidates the
+  routed residuals (the drop-to-reallocate strand, the shared-anchor funding tell, the
+  anonymity-transport/`P`-isolation opsec, and the cold-start thin-cover consequence) into
+  one authoritative, audience-scoped doc. The guide is also the **spec the V3.1 wallet
+  guards implement against** (sub-items (i) sane defaults and (ii) footgun warnings, both
+  marked `[operator-enforced until V3.1]` in the guide). Sequencing: slices (i)/(ii) attach
+  to the wallet funding/bond-construction flow (not yet built -- no wallet call site for the
+  standoff draw), and (iii) graceful recovery follows the running wallet/node surface; the
+  guide is the only currently-unblocked slice and was taken first.
+
+- **Wallet-side archival bond-post construction (design + JoinMarket, PR 0-2a
+  landed; PR 2b in progress as part of a 2a-2d sub-PR chain).** The construction
+  counterpart to the genesis-frozen `shekyl-archival-retention` verify side.
+  Design doc:
+  [`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md`](design/ARCHIVAL_BOND_CONSTRUCTION.md)
+  (Round 1 closed on `dev`). Sequence: **PR 0 (landed, #152)**
+  `shekyl-crypto-pq::archival_p` (the `P`-identity + `bond_spend_pk` derivation,
+  gate-6 §9.3/§9.4) with an `ARCHIVAL_P_DERIVE_V1` KAT on the **aarch64 qemu
+  lane** (third cross-arch-deterministic primitive) + a label-sensitivity
+  negative; **PR 1 (landed, #155, merged 2026-06-18)**
+  `shekyl-archival-bond-builder` (JoinMarket vin +
+  hybrid signature + credit funding rule) **plus the single-sourced
+  `shekyl-rct-balance` crate** -- the §11.1 Q2 upgrade: the cleartext balance
+  equation and its typed-side terms (`InputTerm`/`OutputTerm`) live once and are
+  imported by *both* `shekyl-tx-builder` (construct, via
+  `sign_transaction_with_terms`) and `shekyl-archival-retention` (verify, via
+  `bond_rct_balance`), so a genesis-frozen consensus equation cannot diverge
+  across the two. **PR 2** (StakeEngine orchestration) exceeded the branching
+  guidance and was decomposed into a sequenced sub-PR chain, each landing inert
+  until the chain closes: **PR 2a (landed #156, `feat/archival-bond-roundtrip-kat`)**
+  the full-prover synthetic-tree round-trip KAT -- the JoinMarket bond drives the
+  *real* FCMP++ prover (`sign_transaction_with_terms`, `bond_credit` as the sole
+  output-side cleartext term) and checks the prover-emitted commitments against
+  the verify side, plus accept/reject negatives (wrong `bond_credit`, tampered
+  commitment, tampered preimage, replay); **PR 2b (landed #157,
+  `feat/archival-stake-engine`)** the `StakeEngine` kameo actor
+  (`shekyl-engine-core::engine::stake_engine`): lazy per-`P` `ArchivalPKeys`
+  (`!Clone`/`ZeroizeOnDrop`), `spawn_blocking` derivation, atomic slot rotation,
+  re-derive-on-restart, fail-stop `StakeActorUnavailable` diagnostic; typed
+  domain values (`PSlot`, `StakeMasterSeed`, `PersonaIdentity` carrying only the
+  public `HybridPublicKey`); landed inert (tests only, no `Engine` wiring until
+  2c). **PR 2c was split into 2c-1 / 2c-2** when CT-5c made the real
+  `assemble_path` available earlier than planned: **PR 2c-1 (in progress,
+  `feat/archival-bond-realtree-kat`)** the real-tree composition KAT --
+  `local_pending_tx::join_market_bond_post_signs_and_verifies_over_real_tree`
+  drives the bond's cleartext `credit_term` through
+  `sign_transaction_with_terms` over a *real* depth-2 `assemble_path` tree (the
+  `funded_ledger_and_tree` fixture, the same path
+  `build_then_submit_marks_outputs_spent` drives), asserting BP+, the RCT
+  balance over prover-emitted commitments, and vin/signature accept+reject. The
+  **construct→prove half over genuine branch layers is proved**; the FCMP++
+  **verify-accept half is the one piece gated on CT-5** (see the dedicated
+  "real-tree FCMP++ verify" item below) and rides as an `#[ignore]`d sibling
+  KAT.   **PR 2c-2** was itself **split into 2c-2a / 2c-2b** for review isolation of the
+  persisted formats (not size): **PR 2c-2a (landed inert,
+  `feat/archival-stake-wiring`)** the security-critical genesis-adjacent
+  foundation under **Model D** — the `StakeEngine` no longer owns the seed; at
+  `assemble()` a staker-flagged wallet derives the **derive-forward set**
+  (`{personas with live bonds} ∪ {p_slot ..= p_slot + k}`, `k = 2`), hands the
+  pre-derived `ArchivalPKeys` bundles to the actor, and drops the borrowed seed —
+  with a new sealed **`StakingBlock` in `WalletLedger`**
+  (`STAKING_BLOCK_VERSION = 1`; `WALLET_LEDGER_FORMAT_VERSION` bumped) carrying
+  `staking_enabled`, the scan-reconciled-monotone `p_slot` cursor, and the
+  `bonded_slots` reconcilable hint; the **`PersistedBondTicket` persist-before-use
+  typestate** (the cross-split seam, produced here, consumed by 2c-2b's
+  `sign_bond`); the operation-scoped `PersonaHandle` (minted only for held
+  personas, generation-validated); and `HeldPersona` Bonded/Ephemeral with
+  wipe-only-ephemeral. Inert — wired, derived, spawned, test-exercised, no
+  JoinMarket request path. **PR 2c-2b (branches off dev after 2c-2a)** the
+  parallel JoinMarket bond request + funding selection + the two timing seams as
+  two types (`NetworkGap(BlockSpan)` `draw_entry_gap(600)` vs.
+  `EconomicSpacing(SebSpan)` >=1 SEB / ramp, cross-apply = compile error; entry
+  seam only, exit seam deferred to the unbond slice) + `CoverAmount` (cold-start
+  amount-decorrelation, wire-2d) + the float-free live degeneracy check
+  (fail-loud) + the `certify_draw` self-cert **design** (session-wiring deferred —
+  see "Archival bond request path — deferred items" below) + the milestone KAT,
+  with broadcast structurally gated on 2d. PR 2a's
+  KAT is the *synthetic-tree* composition milestone (the A4-retained `local_keys`
+  signing-KAT surface of `CT5C_ASSEMBLER_CUTOVER.md`); the real-tree bond KAT's
+  prove half is unblocked by CT-5c, but its **verify half is gated on CT-5
+  closing the FCMP++ prove↔verify roundtrip over real multi-layer branch
+  layers** (the prior "not on CT-5" note was correct only for the prove side).
+  **PR 2d** the `arti-client`
+  security-critical pre-flight (guard isolation verified at source, `cargo audit`,
+  Guix repro, `AUDIT_SCOPE.md`) + the `P`-isolated outbound `DaemonEngine`,
+  outbound-only (inbound onion-service HS deferred to the announce-wire item).
+  Honest milestone for the unit: the **round-trip KAT** -- PR 1 closed it against
+  a synthetic balance witness (`tests/join_market_round_trip.rs`); PR 2a
+  strengthens it to the real prover over a synthetic depth-1 tree
+  (`shekyl-engine-core::engine::local_keys::tests`) -- **not** an on-chain bond,
+  which is gated on the real `CurveTreeClient` (CT-5). This unblocks
+  operator-experience slices (i)/(ii) (the funding/bond-construction call site
+  they attach to). **Target: V3.0.** Rebond/Unbond/HoldingsUpdate construction is
+  **provisional** until their verify side lands (reopening trigger: the paired
+  verify+construct PR for each kind).
+
+- **StakeEngine Model D wiring — deferred work + rule-21 reopens (PR 2c-2a,
+  landed inert 2026-06-18).** The 2c-2a freeze (`STAKING_BLOCK_VERSION = 1`,
+  `WALLET_LEDGER_FORMAT_VERSION` bump) is a **pre-genesis recreate, no migration
+  code** (rules 15/60) — the `StakingBlock` format is frozen at genesis, so the
+  items below must land before V3.0 launch or be explicitly correctable without a
+  second bump. Substrate-anchored reopens (rule 21):
+  - **2d full-scan reconciliation of `bonded_slots` / `p_slot`.** `bonded_slots`
+    is a derive-time *hint*, not truth: persist-before-use admits phantom records
+    (crash between commit and sign). 2d scans posted + `consumer_held`, drops
+    slots with no real bond, and feeds `monotone_current_slot` the real
+    `highest_bonded_slot_seen`. The flat `Vec<u32>` + documented hint semantics
+    are deliberately chosen so this GC needs **no second `STAKING_BLOCK_VERSION`
+    bump**. **Reopen when** persona scanning lands (the reconcile needs personas
+    derived first — chicken-and-egg forces it post-derive, hence 2d not 2c-2).
+    **Target: V3.0** (must land before genesis freezes the absence of GC).
+  - **Broadcast / re-anchor wiring activates the CT-5d persona-pin.** The CT-5d
+    finding (persona signature binds `tx_prefix_hash`, not the proof, so a
+    content-changing re-anchor re-signs the persona — the *common* path over a
+    600-block window) is pinned in the schema and derive-forward set now, but does
+    not execute until 2d wires submission + re-anchor. **Reopen when** the 2d
+    broadcast/re-anchor path lands; verify the bonded-set spans `consumer_held`
+    plus posted, not posted-only. **Target: V3.0.**
+  - **Arbitrary / policy-driven slot rotation.** Model D's derive-forward set and
+    `monotone_current_slot` assume **sequential** rotation (`p_slot' = p_slot + 1`,
+    per `ARCHIVAL_FIREWALL_GATE6.md` §9.2). **Reopen if** rotation ever becomes
+    policy-driven to arbitrary slots — the derive-ahead set must then widen to
+    cover the reachable slots. No such design is known. **Target: V3.x.**
+  - **Re-auth without reopen (rule-21 polish).** Lookahead exhaustion / first-stake
+    mid-session currently resolve via wallet **reopen** (re-runs `assemble()` with
+    the transient seed) — correct and root-free, but a one-time UX friction. A
+    smoother re-derive-without-reopen is purely *additive* (remove the reopen
+    friction), not a different corner of the seed-lifetime trilemma. **Reopen
+    when** the friction is measured as worth the re-auth machinery. **Target:
+    V3.x.**
+  - **Intra-call parallel persona derivation (perf).** 2c-2a derives the
+    derive-forward `union` **synchronously and sequentially** inside the sync
+    `create` / `open_full` call (`Engine::spawn_stake_engine_if_staker`). That
+    call is the blocking unit async callers already wrap in `spawn_blocking`, so
+    the keygens are off the *async* hot path, but a staker with a large bonded
+    `union` pays `|union|` PQ keygens serially at open. Deriving the (small,
+    `k`-bounded) set in parallel is a wall-clock optimization with no correctness
+    or security bearing. **Reopen if** open latency for high-`union` stakers is
+    measured as user-visible. **Target: V3.x.**
+
+- **Archival bond request path — deferred items (PR 2c-2b, landed inert
+  2026-06-19).** 2c-2b landed the `SignBond` message, the persist-before-use
+  consumer (`sign_bond` consumes `PersistedBondTicket` by value), the two timing
+  seams + `CoverAmount` (`stake_timing.rs`), the float-free live degeneracy guard
+  (`draw_entry_gap_guarded`), and the S7 own-surface negatives — all inert (no
+  user-invocable caller; broadcast gated on 2d, §1.4 of
+  `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`). The roadmap bullet above listed
+  `certify_draw` self-cert and the full KAT as in-2c-2b; implementation settled
+  the **design** for those and **deferred the wiring**. Deferred items:
+  - **S6 — `certify_draw` session self-cert wiring.** The design is settled
+    (`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §3.3): a session-start, `conformance`-
+    gated `certify_draw` over the `OsRngGapAdapter`, catching the correlated-walk
+    pattern the per-draw degeneracy guard cannot. The live degeneracy guard
+    **ships now**; only the stronger statistical session check is deferred (two
+    `TODO(S6)` markers at the call sites in `stake_engine.rs`). **Reopen when**
+    the session-lifecycle hook exists to run it (the actor has no session-start
+    seam wired yet). **Target: V3.0** (RNG-quality gate, not consensus-frozen —
+    correctable post-genesis without a format bump).
+  - **S7(c) — `trybuild` compile-fail tests — RETIRED (R0-D1, 2026-06-19).** The
+    tokens (`SignBond` / `PersonaHandle` / `PersistedBondTicket`) are `pub(crate)`
+    with module-private fields, so `trybuild` — which compiles each case as an
+    external crate — cannot name them without a re-export that re-exposes the
+    firewall internals S1/S2 exist to encapsulate. The unrepresentability is
+    instead enforced unconditionally by the type system (module-private fields +
+    `!Clone` + by-value consumption in `sign_bond`); the `!Clone` half is pinned
+    by an always-on, dependency-free `const _` compile-time guard in
+    `stake_engine.rs` (verified to bite — `E0283` on a stray `#[derive(Clone)]`).
+    The runtime negatives (slot-mismatch, degeneracy-guard-fires) cover the
+    cross-check and RNG surfaces. See `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §4.1.
+    **Reopen iff** these tokens ever become `pub` for an independent reason.
+  - **`CoverAmount` bond-transaction orchestration (wire-2d).** The type ships
+    inert; the orchestration that sends `bond_floor + cover`, stakes the floor,
+    and threads the cover as a `P`-change output lands with 2d's bond-transaction
+    assembly. The recommended random cover value is computed and presented by the
+    GUI/CLI, not the engine. **Reopen when** 2d bond-transaction orchestration
+    lands. **Target: V3.0** (cover is the cold-start amount-decorrelation
+    mechanism — genesis-adjacent privacy; see §3.4).
+  - **Opt-in cover recovery (GUI/CLI).** The stake-once-and-recover path —
+    an independently-timed, privacy-cost-disclosed `P`→principal transfer that
+    re-creates the principal↔`P` link — is **not** the default (default is
+    cover-stays-with-`P`). It must be a named, separately-gated GUI/CLI operation
+    that never shares code paths with the bond request or unbond, and warns the
+    user at opt-in. **Reopen when** a concrete floor-only-staking need surfaces in
+    `shekyl-gui-wallet` / `shekyl-web`. **Target: V3.x** (post-launch UX, not
+    genesis-frozen).
+
+- **~~Derivation-freeze hardening: dedicated `ADDRESS_DERIVATION_V1` KAT
+  corpus (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch
+  `chore/address-derivation-v1-freeze`: published
+  `docs/test_vectors/ADDRESS_DERIVATION_V1/{manifest.json,vectors.json}`
+  and `rust/shekyl-crypto-pq/tests/kat_address_derivation_v1.rs` with an
+  `#[ignore]` regenerator; Tier-2 golden tests removed from inline
+  `account.rs` tests. The consumer also verifies the manifest's
+  self-describing fields (`vectors_sha256_hex` = `sha256sum
+  vectors.json`, tier counts) and asserts pairwise Tier-2 account
+  distinctness (network/format/passphrase separation).
+
+- **~~Derivation-freeze hardening: wire `scripts/lint_cpp_clamp_ban.sh`
+  into CI (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on branch
+  `chore/address-derivation-v1-freeze`: `rust-audit-and-test` job in
+  `.github/workflows/build.yml` runs the clamp-ban lint on every PR.
+
+- **~~Derivation-freeze hardening: `ADDRESS_DERIVATION_MANIFEST_HASH`
+  freeze tripwire (2026-06-10 doc sweep).~~** **CLOSED 2026-06-11** on
+  branch `chore/address-derivation-v1-freeze`:
+  `rust/shekyl-crypto-pq/src/address_derivation_freeze.rs` pins the corpus
+  SHA-256; `shekyl-cli derivation-freeze-self-check` exposes the offline
+  check. No C FFI export: no C++ consumer exists, and an uncalled export
+  is deleted per `15-deletion-and-debt.mdc`; re-add when a named C++
+  caller (genesis ceremony tooling or a wallet2 startup check) lands.
+
+- **Genesis ceremony tooling: `generate-genesis-address` CLI
+  (2026-06-11 derivation-freeze closeout).** The freeze tripwire landed
+  as a standalone `shekyl-cli derivation-freeze-self-check` subcommand;
+  the genesis-address generator that the ceremony will wrap around it
+  (generate the genesis address from ceremony entropy, run the
+  derivation-freeze self-check as a precondition, emit the address +
+  audit transcript) does not exist yet. Must land before the genesis
+  ceremony, together with `docs/MID_REWIRE_HARDENING.md` §6.4's
+  freeze-manifest tuple extension (`format_version`, `block_versions`,
+  `payload_version`), which lands "with the freeze commit" per that
+  spec. **Target: V3.0 (pre-genesis; blocks the genesis ceremony).**
+
+- **USER_GUIDE realignment to the Rust CLI surface (2026-06-10 doc
+  sweep).** `docs/USER_GUIDE.md` still documents the legacy C++ CLI
+  surface (`--restore-deterministic-wallet`, `--generate-from-*-key`
+  flag family, interactive `[wallet]:` commands) while the Rust
+  `shekyl-cli` ships a different command shape (`restore <filename>
+  <seed...>`, subcommand model). The 2026-06-10 sweep fixed the
+  seed-format copy (24-word BIP-39, passphrase opt-in, no
+  encrypted-seed); the full command-surface rewrite is deferred to the
+  wallet-rewrite Phase 5/6 cutover when the Rust CLI becomes the shipped
+  binary. **Target: V3.0 (rewrite Phase 6 docs gate,
+  `docs/design/WALLET_REWRITE_PLAN.md`).**
+
+- **Stage 1 trait-extraction chain — closeout audit (2026-05-29,
+  post–PR #88; economics-trait update 2026-05-31, post–PR #94).** The
+  §8.1 critical-path chain is landed on `dev`:
   `DaemonEngine` → `LedgerEngine` → (`RefreshEngine` ∥
-  `PendingTxEngine`), with `KeyEngine` trait + `LocalKeys` implementor
-  in parallel; `PersistenceEngine` substrate also landed (PR #83).
-  Inventory, orchestrator shape (`Engine<S, D, L, R, P>`), ordered
+  `PendingTxEngine`), with the `KeyEngine` trait + `LocalKeys`
+  implementor in parallel (landed but not orchestrator-wired at Stage 1
+  closeout — **wired in Stage 2, RESOLVED 2026-05-31**; see the `KeyEngine`
+  inline-integration entry below); `PersistenceEngine` landed (PR #83) and `EconomicsEngine`
+  landed (PR #94), so the orchestrator is now the seven-parameter
+  `Engine<S, D, L, E, R, P, F>`.
+  Inventory, orchestrator shape (`Engine<S, D, L, E, R, P, F>`), ordered
   next steps, and off-critical-path trait status:
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md) §8.1 /
   §1 status banner; per-PR design docs under `docs/design/STAGE_1_PR_*`.
   **Dedicated audit markdown landed:**
-  [`docs/design/STAGE_1_COMPLETION_AUDIT.md`](./design/STAGE_1_COMPLETION_AUDIT.md).
+  [`docs/completed/STAGE_1_COMPLETION_AUDIT.md`](./completed/STAGE_1_COMPLETION_AUDIT.md).
   **Still V3.0 pre-genesis but not “missing Stage 1 PR”:** wallet
-  BIP-39 FFI, optional persistence/economics trait PRs, economics
-  §3.3 benches (P1 async refresh post-pass closed 2026-05-29 by
-  `refresh/p1-async-path-post-pass`). **Rewrite plan:**
+  BIP-39 FFI, economics §3.3 benches (the persistence and economics
+  trait PRs both landed — PR #83 / PR #94; P1 async refresh post-pass
+  closed 2026-05-29 by `refresh/p1-async-path-post-pass`).
+  **Rewrite plan:**
   [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
   Phases 0–6; Stage 1 was prerequisite, Phase 1+ continues `Engine`.
 
-- **Base emission migration (Stage 1 PR 7 §5.8) — C2/C2a′ landed; C2c still
-  open (updated 2026-05-29).** PR #88 landed C2 and C2a′ on `dev`:
-  Rust `base_block_reward` + `projected_already_generated`, dual-leg KAT
-  harnesses (`tests/unit_tests/economics_c2a_prime.cpp`,
-  `tests/core_tests/economics_c2a_prime.cpp`), and required CI checks.
-  `shekyl_base_block_reward` FFI now exists
-  (`rust/shekyl-ffi/src/lib.rs`, `src/shekyl/shekyl_ffi.h`).
+- **`KeyEngine` inline orchestrator integration — rejected for Stage 1;
+  RESOLVED 2026-05-31 by the Stage 2 actor migration.** Shape per
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc).
 
-  **Still open:** C2c cutover. Live consensus path
-  `cryptonote::get_block_reward` in
-  `src/cryptonote_basic/cryptonote_basic_impl.cpp` still computes base subsidy
-  in C++; production callsites do not yet route through
-  `shekyl_base_block_reward`.
+  *Resolution (2026-05-31).* The reversion clause's positive decision was
+  taken exactly as specified: the orchestrator now holds
+  `key: KeyEngineHandle` (not an inline `K: KeyEngine` parameter) — `Engine`
+  stays seven-parameter `Engine<S, D, L, E, R, P, F>`, the
+  `Arc<AllKeysBlob>` field is gone, and the blob lives solely in the
+  `KeyActor`. See `docs/completed/STAGE_2_KEY_ENGINE_ACTOR.md` §6 (steps 3–4)
+  and the "Stage 2 — `KeyEngine` migration to actor" entry below, which
+  records the completed DoD (including the B9 dispatch-overhead benchmark —
+  PASS, ratio 1.039). The reject-the-inline-shape rationale below is retained
+  as the historical record of why the deferral was correct.
 
-  **Disposition (unchanged):** migration path; C++ cutover in V3.0.
-  `base_block_reward` in `shekyl-economics` is canonical; `get_block_reward`
-  becomes a thin wrapper (`shekyl_base_block_reward` + release multiplier).
-  Wallet-only permanent cross-check bridge remains rejected.
+  *Rejection (current substrate).* `KeyEngine` is the one extracted Stage 1
+  trait deliberately **not** wired into the orchestrator. `Engine` holds
+  `keys: Arc<AllKeysBlob>`
+  (`rust/shekyl-engine-core/src/engine/mod.rs:344`) rather than a
+  `K: KeyEngine` generic parameter with a `LocalKeys` field, and `KeyEngine`
+  is the only `engine/traits/` module not re-exported from
+  `engine/traits/mod.rs`. `LocalKeys` exists and is exercised by tests but
+  carries `#[allow(dead_code)]` in production builds. Wiring an inline
+  `K: KeyEngine = LocalKeys` parameter now is rejected on two
+  substrate-anchored grounds:
+  1. *Throwaway shape.* The Stage 2 end-state holds key material behind a
+     `KeyEngineHandle` actor handle, **not** an inline field (see the
+     "Stage 2 — `KeyEngine` migration to actor" entry below). An inline `K`
+     parameter would be added in Stage 1 and deleted in Stage 2 — the
+     pre-provision-for-flexibility failure mode the discipline rejects, and
+     the cost-benefit-defer inversion `16-architectural-inheritance.mdc`
+     names.
+  2. *No production work to dispatch.* The two workflow methods that would
+     make an integrated `KeyEngine` load-bearing — `try_claim_output` and
+     `sign_transaction` — depend on Phase 2 tx-construction/signing that
+     does not exist yet (`sign_transaction` is a stub; output-claim is
+     currently served by `derive_output_handle` on the scanner merge path).
 
-  **Close this FOLLOWUPS item when:** C2c is merged on `dev` with C2a′
-  ancestor and duplicated C++ base-subsidy body removed. **Design:**
+  *Reopening criteria (substrate-anchored).* The rejection reverts to a
+  positive decision when **all** of: (a) the Stage 1 actor-friendly
+  trait-boundary refactor lands (between Branch 2 close and Phase 2b); (b)
+  `kameo` becomes a live workspace consumer (pin / MSRV / bounded-mailbox
+  preconditions already satisfied — see the `kameo` dependency-pin entry
+  below); and (c) Stage 2 opens the `KeyEngine`→actor migration. The
+  orchestrator then gains a `KeyEngineHandle`, **not** an inline `K`
+  parameter — the deferral is against the inline shape specifically, not
+  against integration as such.
+
+  *Re-evaluation shape.* The Stage 2 `KeyEngine`-actor PR (design-doc-first
+  per `05-system-thinking.mdc`, reviewed against the `00-mission.mdc`
+  security hierarchy) takes the decision; its definition of done is the
+  "Stage 2 — `KeyEngine` migration to actor" entry below. The trait surface
+  is frozen now precisely so the migration swaps in-process composition for
+  an actor-mailbox dispatcher without touching method signatures (per
+  [`STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md) §3.1.2
+  handle-indirected workflow contract).
+
+  *Target:* before Phase 2b stake-lifecycle work begins (same gate as the
+  Stage 2 actor migration it reopens into).
+
+- **Base emission migration (Stage 1 PR 7 §5.8) — CLOSED 2026-05-30 by
+  C2c cutover.** PR #88 landed C2 and C2a′ on `dev` (Rust `base_block_reward`
+  + `projected_already_generated`, dual-leg KAT harnesses
+  `tests/unit_tests/economics_c2a_prime.cpp` /
+  `tests/core_tests/economics_c2a_prime.cpp`, required CI checks, and the
+  `shekyl_base_block_reward` FFI). C2c (`feat/stage-1-pr7-economics-cutover`,
+  off the post–7-base `dev` tip; 7-base merge `fed6f594b`, C2a′ ancestor by
+  topology) completes the migration:
+
+  - `cryptonote::get_block_reward` (4-arg) now delegates the base subsidy to
+    `shekyl_base_block_reward` via the `shekyl::base_subsidy_before_penalty`
+    thin wrapper in `src/shekyl/economics.h` (same shape as
+    `compute_fee_burn` / `compute_emission_split`);
+  - the duplicated C++ ESF body (`(MONEY_SUPPLY - already_generated) >> esf`
+    + tail floor) is deleted from
+    `src/cryptonote_basic/cryptonote_basic_impl.cpp`;
+  - the weight penalty (`mul128` / `div128_64`) and the 5-arg release
+    multiplier path stay in C++ (per §5.8, behavior-identical to C2a′
+    witnesses);
+  - fix α (`:1608–1609` un-overwrite) was already landed in 7-base.
+
+  No production path computes the ESF curve in C++ after this cutover. The
+  C2a′ dual-leg KAT (`leg A` compares `get_block_reward` to
+  `shekyl_base_block_reward`) remains bit-identical post-cutover.
+
+  **Design:**
   [`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](./design/STAGE_1_PR_7_ECONOMICS_ENGINE.md)
-  §5.8. **Target:** V3.0 (PR 7 completion).
+  §5.8 / §6.2 item 1 (7-cutover). **Delivered:** V3.0 (PR 7 base-emission
+  completion). Wallet-only permanent cross-check bridge remains rejected.
 
 - **Post-2g adversarial-corpus methodology + implementation
   (trigger: RandomX v2 Phase 2g Round 7 R7-D1/R7-D2 reopening
   of R1-D5 + R1-D6; *closed by Phase 2h implementation PR*).**
   *Phase 2h closes this item by replacement: the methodology
   lands as the recipe-based adversarial corpus per
-  [`docs/design/RANDOMX_V2_PHASE2H_PLAN.md`](./design/RANDOMX_V2_PHASE2H_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2H_PLAN.md`](./completed/RANDOMX_V2_PHASE2H_PLAN.md)
   R1-D1 (specified-outliers composition); the accessor lands
   at C2 as `PreparedCache::from_raw_for_testing`
   (`rust/shekyl-pow-randomx/src/prepared_cache.rs` under the
@@ -123,7 +1865,7 @@ sustainability is unaffected by the recalibration.
   gates) discharges the activation-surface contract recorded
   above. Original framing preserved below for historical
   context.* Phase 2g
-  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2G_PLAN.md`](./completed/RANDOMX_V2_PHASE2G_PLAN.md)
   §3.19 R7-D1 reopens R1-D5 (adversarial seedhash corpus) under
   two independent substrate findings: (i) the verifier-accessor
   gap (the grinding methodology requires a `test-internals`-gated
@@ -175,7 +1917,7 @@ sustainability is unaffected by the recalibration.
   + cache-equivalence). Rare-path coverage is carried in the
   interim by legs 1 (spec-faithful implementation discipline)
   and 2 (C-reference audit). Per
-  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2G_PLAN.md`](./completed/RANDOMX_V2_PHASE2G_PLAN.md)
   §2.5's corpus-coverage-as-leg-3-completeness pin, the deferral
   reduces leg-3's residual catch capacity until the post-2g
   round lands. Landing pre-genesis preserves the "Shekyl's
@@ -190,7 +1932,7 @@ sustainability is unaffected by the recalibration.
   V3.0 target version.
 
   **Cross-references.**
-  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2G_PLAN.md`](./completed/RANDOMX_V2_PHASE2G_PLAN.md)
   §3.19 R7-D1 + R7-D2 + R7-D3 + R7-D4 + R7-D5; §2.5 Round 7
   amplification; §3 R1-D5 / R1-D6 / R1-D8 close annotations
   (reopened banners); §6 T2 / T6 (deferred); §8.1 C5b / C7
@@ -279,7 +2021,7 @@ sustainability is unaffected by the recalibration.
   carryout `Vec<usize>` back through a trait method would split the
   merge and post-pass across the trait boundary, violating the
   single-write-guard atomicity the M3b disposition requires
-  (`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md` §3 rejected
+  (`docs/completed/STAGE_1_PR_3_M3B_PREFLIGHT.md` §3 rejected
   alternative (ζ)). The ledger-side `FaultInjecting<LocalLedger>`
   test wrapper (whose only purpose was injecting `ConcurrentMutation`
   at the removed trait seam) and the now-dead `replace_ledger`
@@ -387,9 +2129,14 @@ sustainability is unaffected by the recalibration.
   `sync_state.restore_from_height` plus
   `WalletFile::effective_skip_to_height` /
   `effective_refresh_from_block_height`; `scan_start_floor` on
-  `LocalRefresh::new`; `ensure_birthday_anchor` before refresh;
-  producer `scan_range_start` and progress `blocks_total` use the
-  effective start. `Engine::create` seeds
+  `LocalRefresh::new`; `ensure_birthday_anchor` before refresh.
+  The producer derives its scan start from the anchored snapshot
+  (`snapshot.synced_height + 1`) rather than re-deriving a floor at
+  producer time, and progress `blocks_total` reflects the post-anchor
+  range — this closed the residual TOCTOU race between the anchor's
+  daemon-height read and the producer's start computation (the
+  earlier `scan_range_start` / `effective_floor_at_tip` helpers were
+  removed in commit `87264a3a2`). `Engine::create` seeds
   `sync_state.restore_from_height` from `restore_height_hint`.
 
   **Reopening criteria (unchanged).** Reopens as P1 if a binary
@@ -602,7 +2349,7 @@ sustainability is unaffected by the recalibration.
     `derive_source_secrets_bundle_byte_identical_against_legacy_chain`
     at `rust/shekyl-engine-core/src/engine/local_keys.rs:1258`.
     Pre-flight specification:
-    `docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md` §D5
+    `docs/completed/STAGE_1_PR_3_M3B_PREFLIGHT.md` §D5
     (`rust/shekyl-engine-core/tests/byte_identical_derivation.rs`).
     Pins bundle-byte identity between engine and legacy derivation
     paths field-by-field. The pre-flight estimated a separate
@@ -615,7 +2362,7 @@ sustainability is unaffected by the recalibration.
     `engine_derived_bundle_signs_through_tx_builder_end_to_end`
     at `rust/shekyl-engine-core/src/engine/local_keys.rs:1554`.
     Pre-flight specification:
-    `docs/design/STAGE_1_PR_3_M3C_PREFLIGHT.md` §2.1 (Option C
+    `docs/completed/STAGE_1_PR_3_M3C_PREFLIGHT.md` §2.1 (Option C
     disposition; `rust/shekyl-engine-core/tests/` integration
     placement, suggested name `key_engine_sign_e2e.rs`). Pins
     end-to-end recovery-correctness through
@@ -798,6 +2545,11 @@ sustainability is unaffected by the recalibration.
     `STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md` §1.2. Baseline transcription
     to `PERFORMANCE_BASELINE.md` deferred to first CI
     workflow_dispatch capture under N=3 invariance.
+    **Capture-script gap (noted 2026-05-31, Stage 2 close-out audit):**
+    this pair is absent from `scripts/bench/capture_rust_baseline.sh`'s
+    `BENCHES` array, so the CI captures to date (incl. run 26732235292)
+    did not include it. Closing this slot requires adding the row before
+    a capture run — out of Stage 2 scope, owned by this entry.
 
   Remaining slots:
   - `engine_trait_bench_economics_current_emission` — pinned to
@@ -858,15 +2610,19 @@ sustainability is unaffected by the recalibration.
      default + per-actor override convention documented inline at the
      `kameo` `[workspace.dependencies]` entry.
 
-  **Status (2026-05-29).** All three preconditions are satisfied by
-  the `chore/stage_1_cleanup` verification commit. The pin is
-  declared-only (no workspace member consumes `kameo` yet, so it is
-  inert in the build graph). **This entry stays open** until Stage 2's
-  first commit adds the live `kameo = { workspace = true }` consumer
-  (the `KeyEngine` actor crate), verifies the supervision/mailbox API
-  surface at source per `17-dependency-discipline.mdc` at that
-  consumption point, and closes this follow-up. Target: V3.0,
-  pre-Stage-2.
+  **CLOSED 2026-05-31 (Stage 2 `KeyActor` migration).** All three
+  preconditions were satisfied by the `chore/stage_1_cleanup`
+  verification commit; the close condition — Stage 2's first commit
+  adds the live `kameo = { workspace = true }` consumer and verifies
+  the supervision/mailbox API surface at source — is now met.
+  `shekyl-engine-core` consumes `kameo` via the `KeyActor`
+  (`rust/shekyl-engine-core/src/engine/key_actor.rs`), so the pin is
+  no longer inert in the build graph. The API surface was verified at
+  source per `17-dependency-discipline.mdc` and the `#[actor(mailbox =
+  …)]` convention drift corrected (kameo 0.20.0 has no such attribute;
+  `spawn` is bounded-64 by default, overrides via `spawn_with_mailbox`)
+  — recorded at `STAGE_2_KEY_ENGINE_ACTOR.md` §0.5 (B6 finding) and the
+  `rust/Cargo.toml` `kameo` note.
 
 - **View/HW lifecycle bodies in `shekyl-wallet-core`.**
   `Wallet::open_view_only` and `Wallet::open_hardware_offload` ship as
@@ -885,19 +2641,29 @@ sustainability is unaffected by the recalibration.
   is grep-able from the code site, not only from this file. Target:
   V3.0.
 
-- **`Wallet::change_password` integration tests against
-  `WalletFile::rotate_password`.** The lifecycle commit's unit tests
+- ~~**`Wallet::change_password` integration tests against
+  `WalletFile::rotate_password`.**~~ **Landed 2026-06-10 for FULL
+  capability** (Phase 1 closeout). The lifecycle commit's unit tests
   for `change_password` exercise the orchestrator path (rotate, then
   reopen with the new password and refuse the old one) but rely on
   `WalletFile::rotate_password`'s own test coverage for the underlying
-  envelope rewrap correctness. A small integration suite in
-  `shekyl-wallet-core` should drive `change_password` against a real
-  on-disk wallet across all three capabilities (FULL today; ViewOnly /
-  HardwareOffload once their `open_*` bodies land), verifying that the
-  rotated envelope round-trips against an independently-constructed
-  `WalletFile::open` call rather than only against `Wallet::open_full`.
-  This pins the full I/O ↔ KDF ↔ AEAD chain at the orchestrator layer.
-  Target: V3.0.
+  envelope rewrap correctness. Closed by two integration tests in
+  `shekyl-engine-core::engine::lifecycle::tests`:
+  `change_password_round_trips_via_independent_wallet_file_open`
+  (rotate via `Engine::change_password`, close, then open the on-disk
+  pair through an independently-constructed `WalletFile::open` — new
+  password loads state, old password fails with the envelope's
+  `InvalidPasswordOrCorrupt`) and
+  `change_password_with_new_kdf_rewrites_envelope_header` (rotation
+  with `Some(KdfParams)` verified via `inspect_keys_file` on the raw
+  on-disk header, not just open-success). This pins the full
+  I/O ↔ KDF ↔ AEAD chain at the orchestrator layer for FULL.
+  **Remaining scope:** the same two assertions for ViewOnly /
+  HardwareOffload. **Reopen when:** the View/HW lifecycle bodies land
+  (entry above); the capability-dispatch commit that deletes
+  `OpenError::CapabilityNotYetImplemented` extends both tests across
+  capabilities in the same PR. Target for remainder: V3.0 (tracks the
+  View/HW entry).
 
 - **Revisit `rust/hard-coded-cryptographic-value` CodeQL suppression
   when the Rust extractor gains `cfg(test)` awareness.** The repo-wide
@@ -938,7 +2704,7 @@ sustainability is unaffected by the recalibration.
   message channels; never reveals raw key material outside its
   own task. The "no secret material crosses the trait boundary"
   property activated by the M3-series (per
-  [`STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §3.1.2 handle-indirected workflow contract) survives the
   Stage-1-to-actor transition by construction — the trait surface
   is unchanged; Stage 2 swaps the in-process composition for an
@@ -953,11 +2719,12 @@ sustainability is unaffected by the recalibration.
   if framework limitations surface here, the cost of switching is
   bounded because only one actor exists.
 
-  *Blocks on:* Stage 1 actor-friendly trait boundaries (the
-  framework-agnostic refactor that lands between Branch 2 closing
-  and Phase 2b cutting).
+  *Blocks on:* Stage 1 actor-friendly trait boundaries — **satisfied**
+  (the framework-agnostic trait refactor landed on `dev`; see STAGE_2
+  §0.3).
 
-  *Target:* before Phase 2b stake-lifecycle work begins.
+  *Target:* before Phase 2b stake-lifecycle work begins — **met** (this
+  entry RESOLVED; see status below).
 
   *Definition of done:* `KeyEngine` runs as a `kameo` actor with
   its own task; `Engine<S>` holds a `KeyEngineHandle` instead of
@@ -976,7 +2743,293 @@ sustainability is unaffected by the recalibration.
 
   *Reference:* `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
   Engine architecture: actor model with staged migration from
-  composition*.
+  composition*. Design: `docs/completed/STAGE_2_KEY_ENGINE_ACTOR.md`.
+
+  **Status (2026-05-31) — RESOLVED; all six §10 DoD items met; pending merge
+  to `dev`.** The actor migration is on the branch (`torvaldsl/stage-2-key-engine-actor`):
+  `KeyActor` owns `AllKeysBlob` in its own task with fail-stop-on-panic
+  zeroization (`key_actor.rs`); `Engine<S, …>` holds `key:
+  KeyEngineHandle` plus the construction-time `HandleDerivationViewSecret`
+  for the 6-i merge post-pass; `LocalSigner` holds the handle, not the
+  blob; no `&AllKeysBlob` escapes the actor. The §5.2 contract/protocol
+  tests landed (equivalence vs `LocalKeys`, no-secret-crosses, post-stop
+  handle resolution, panic→fail-stop→zeroize, terminal-non-retryable).
+  Runtime hosting took the **require-ambient** disposition (§4.2, Round 8):
+  `KeyEngineHandle::spawn` asserts an ambient runtime rather than self-hosting
+  an owned one (an owned long-lived runtime panics on drop inside the
+  production async context); `rt-multi-thread` is promoted to production deps
+  as an *independent* `block_in_place` fix, decoupled from the spawn decision.
+  **DoD residue — RESOLVED 2026-05-31 (B9 benches landed).** The §5.3
+  **B9 dispatch-overhead benchmark** is in the harness behind
+  `bench-internals`: `engine_trait_bench_key_dispatch` (criterion — three
+  IDs: `baseline_claim_mine`, `actor_claim_mine`, `actor_claim_not_mine`),
+  `engine_trait_bench_key_dispatch_baseline_iai` (iai, deterministic-crypto
+  baseline only), and the 6-i merge-path pair
+  `engine_trait_bench_key_merge_projection` (criterion) +
+  `engine_trait_bench_key_merge_projection_iai` (iai). The
+  `KeyDispatchBenchHarness` / `KeyBaselineBenchFixture` /
+  `MergeProjectionBenchFixture` shims are exported through
+  `__bench_internals`. The actor `ask` paths are **criterion-only** (no iai
+  actor sibling — a cross-thread async round-trip's Callgrind count folds in
+  nondeterministic scheduling; reversion-claused: reopen if a deterministic
+  async-dispatch measurement method lands); only the synchronous crypto
+  baseline and the merge projection get iai siblings. `compare.py` routes
+  all five IDs into the `engine_trait_bench` class by prefix (no script
+  change). Baselines **captured by CI `workflow_dispatch`** (run
+  26732235292, SHA `d377edfdb`, AMD EPYC 9V74 / rustc 1.96.0 / valgrind
+  3.22.0) and transcribed into `docs/PERFORMANCE_BASELINE.md`: **B9 ratio =
+  1.039 — PASS** (actor 1.386 ms / baseline 1.334 ms, ≤ 1.05); baseline iai
+  15,163,668 instr; merge projection ≈ 1.71 µs/output (iai 5,160,059),
+  confirming eager-6-i. The baseline iai driver was corrected from a
+  current-thread Tokio `block_on` (which collapsed the Callgrind count to
+  ~4.8k handshake instructions under valgrind) to a no-op-waker single
+  poll. Re-confirm at the merge SHA if the branch tip advances materially.
+  *Entry
+  resolved; the CI baseline capture rides the merge per the deferred-capture
+  pattern.* Target: V3.0, before Phase 2b.
+
+- **Subaddress mechanism under PQC — dedicated design round (2026-05-31,
+  surfaced during Stage 2 `KeyEngine`-actor pre-flight).** The scanner and
+  the address format have made *incoherent* choices about where the KEM lives,
+  and the incoherence is currently masked only because the recipient-context
+  subaddress path is an unimplemented stub
+  (`KeyEngineError::RecipientSubaddressKemKeygenNotImplemented`,
+  `error.rs:615`). This round must resolve the incoherence **before** that stub
+  is implemented.
+
+  *Design doc:* `docs/design/SUBADDRESS_UNDER_PQC.md` — **Round 3** (2026-05-31).
+  **T2 PINNED (§4.6):** counterparty collusion **out of mandatory V3.0
+  scope** — pit of success. **Ship decision: End-state 5 minimal** — one
+  account + payment requests; **no subaddresses at V3.0** (R2-F2 **closed** —
+  `R2_F2_WALKTHROUGH.md` §6). **R2-F9 closed** (§5.7.12): address-knowledge /
+  phishing pin; classical dust-tracking oracle **rejected** (FCMP++); T6 harvest
+  via phishing named (§4.8). **5-T adopted** (§6.4): mandatory `enc_label`;
+  sentinel-only wallet at launch. FA-11 RCT wire landed (PR #100). **FA-6 spec
+  (revised 2026-06-01):** `docs/design/FA-6_VIEW_TAG_ML_KEM.md` — re-key
+  on-wire **pre-filter** (`view_tag_prefilter` from `ml_kem_ss`; §3.1
+  per-output wire inventory must be **verified**, not tag-only).   **FA-9 closed** (2026-06-09): `docs/THREAT_MODEL_WALLET.md` (Round 4).
+  **Active parallel:** FA-6 implementation after spec
+  §11 sign-off; **FA-6b** multisig `view_tag_hints` audit (§3.2, separate from
+  account-path T6 closure). **FA-7** (End-state 5 wallet plan; PR #111
+  closed without merge — content on `dev` as direct commits, e.g.
+  `58407f565`). **FA-2 subaddress deletion**
+  ([#112](https://github.com/Shekyl-Foundation/shekyl-core/pull/112)):
+  End-state 5 scanner, bookkeeping v3, ledger v5, `WALLET_LEDGER_FORMAT_VERSION`
+  5 — **merged to `dev` 2026-06-08**. **FA-8 payment requests +
+  cooperative attribution**
+  ([#113](https://github.com/Shekyl-Foundation/shekyl-core/pull/113)): bookkeeping
+  v4, ledger v6, `ReceiveAttribution`, inbound merge matching, `shekyl-address`
+  URI parse, outbound `construct_output_labeled` + C++ send-path hook; product
+  flag `operational.cooperative_payment_requests` / env
+  `SHEKYL_COOPERATIVE_PAYMENT_REQUESTS` (default off) — **merged to `dev`
+  2026-06-08**. **Gate retired 2026-06-15** (`feat/enc-label-ungate`): the
+  flag, env var, `payment_request_flag.rs`, and the `cooperative_enabled`
+  FFI/Rust parameters were deleted. Real-label population is now ungated —
+  send echoes `rid` when the URI carries one; receive always classifies/matches.
+  Justification: the `enc_label` indistinguishability invariant
+  (`SUBADDRESS_UNDER_PQC.md` §5.7.10, statistical KAT
+  `real_label_indistinguishable_from_sentinel`) proves the real-label wire is
+  indistinguishable from the sentinel to a non-recipient, so the gate had no
+  privacy/consensus value — only the test-coverage interlock it has now
+  discharged. GUI tooling emitting `rid` URIs is the de-facto feature boundary.
+  **Does not block Phase 2a-3** (sentinel `enc_label` only). **Post-merge product gaps
+  (Phase 2c / 4b, not cleanup):** Rust cooperative outbound in `build_pending_tx`;
+  `Wallet::match_transfer_to_request`; attribution tiers 2–4 + expiry enforcement;
+  `shekyl-wallet-rpc` methods (not C++ `wallet2_ffi`); GUI reconcile. See
+  `WALLET_REWRITE_PLAN.md` End-state 5 sequencing table.
+
+  *The finding.* Monero's subaddress scheme is cheap because ECDH composes: the
+  scanner computes `a·R` with the single account view secret `a` regardless of
+  which subaddress an output targeted (one scalar-mult per output, then recover
+  `B'`, then table lookup; scan cost is independent of subaddress count).
+  ML-KEM has **no** such homomorphism — each KEM keypair is independent, and a
+  ciphertext encapsulated against `pk_i` requires exactly `sk_i` to decapsulate.
+  There is no account-level secret that decapsulates ciphertexts for all
+  subaddress public keys. This forces a choice with no clean Monero analogue:
+  - **Option A — account-level KEM + classical subaddress diversity** (what the
+    scanner implements today, `scan.rs:525-528`): one decap per output
+    (account-level `ml_kem_dk`), then `B' = O − ho·G − y·T` recovery gives the
+    subaddress via the `HashMap<CompressedPoint, Option<SubaddressIndex>>`
+    lookup. Scan cost is independent of subaddress count; on-chain
+    unlinkability holds (distinct `B'_i = D + m_i·G`). But every subaddress
+    encoding shares the *same* account ML-KEM PK bytes, so two of the wallet's
+    own addresses are linkable by byte comparison.
+  - **Option B — per-subaddress KEM** (what `RecipientSubaddress` /
+    `STAGE_1_PR_3_KEY_ENGINE.md` §3.1.3 currently assume, and what the address
+    layer already decided — "carrying a wallet-level ML-KEM PK… would make any
+    two encodings… trivially linkable; per-subaddress derivation is rule-forced
+    by `00-mission.mdc`"): each subaddress gets its own KEM keypair from
+    `(view_secret, idx)`; addresses are byte-unlinkable. But scanning must try
+    **every active subaddress's `sk_i`** per output — `O(active_subaddresses)`
+    ML-KEM decaps per output, with no Monero-style shortcut and no help from
+    the X25519 view-tag pre-filter unless it too is made per-subaddress (which
+    re-introduces the cost). **Unpriced, unbounded per-output scan-cost
+    multiplier.**
+
+  *The sharp question to put on the table.* The threat Option B closes —
+  comparing two of *your own* addresses byte-for-byte — requires an adversary
+  who already holds two addresses you handed out (an off-chain, weaker
+  adversary than the chain observer). The on-chain threat is already closed by
+  classical `B'` diversity under Option A. So: is per-subaddress KEM buying
+  privacy worth an unbounded scan-cost multiplier, or is it hardening an
+  out-of-scope (address-collection) threat model? Monero gets address-byte
+  distinctness for free because ECDH composes; Shekyl cannot, so it must decide
+  whether it actually wants it. At least three coherent end-states exist and the
+  current design assumes the most expensive one without pricing it:
+  1. Classical-only subaddresses + account KEM (Option A): cheap,
+     on-chain-unlinkable, accept address-byte linkability.
+  2. Per-subaddress KEM with a bounded active-window (Option B, mitigated):
+     pre-derive KEM keys only for the last N issued subaddresses; scan tries
+     those N. Bounds cost but caps concurrent active subaddresses — a real
+     merchant-UX constraint.
+  3. Drop subaddresses entirely; recipient diversity via a different primitive
+     (one-address-per-wallet + out-of-band channel, or stealth-address-style
+     diversity needing no per-recipient KEM key). Most "not just copying
+     Monero."
+
+  *Scope boundary with Stage 2.* This round is **explicitly out of scope** for
+  the Stage 2 `KeyEngine`-actor migration. Stage 2 takes the faithful
+  Option-(a) handle fix (the handle serves non-primary audit derivation from a
+  secret-bearing `AuditSubaddressSecret` projection; see
+  `STAGE_2_KEY_ENGINE_ACTOR.md` §2.4/§3.1) and does **not** reshape the
+  subaddress mechanism. `derive_subaddress` is cold (zero production callers),
+  so a faithful actor port is correct regardless of how this round resolves.
+  The Stage-2 pre-flight surfaced the finding (even "read-only inspection"
+  cannot be served from public material alone, because the view secret enters
+  the non-primary derivation); it does not own the fix.
+
+  *Why a dedicated round (not a mechanical port).* This is the same shape as the
+  Stage 1 "do we copy Monero's subaddresses?" question, but sharper: *the
+  cryptographic property that made Monero's subaddresses cheap does not exist in
+  our KEM, so the inherited design is quietly buying something expensive.* That
+  is exactly the inherited-assumption interrogation that
+  `05-system-thinking.mdc` ("why is this here?") and
+  `16-architectural-inheritance.mdc` (inheriting code ≠ inheriting
+  architecture) require, and it deserves its own adversarial round.
+
+  *Blocks:* implementation of `RecipientSubaddress` / per-subaddress KEM keygen
+  (`derive_subaddress(_, Recipient)`); the `RecipientSubaddressKemKeygenNotImplemented`
+  stub stays until this round resolves.
+
+  *Target:* V3.0 pre-genesis — the choice is structural and the cost is bounded
+  pre-genesis, unbounded after launch (a subaddress reshape or drop is a
+  consensus-and-wallet-format decision). Must resolve before the Recipient stub
+  is implemented; does not block the Stage 2 actor migration.
+
+  *Sequencing (decided 2026-05-31, post–Stage 2 close-out).* This round runs
+  **before Stage 3 / Phase 2b**, ahead of the Phase 2b planning session. The
+  rationale: `StakeEngine` and the stake-lifecycle wallet surface assume a
+  settled recipient/subaddress model; resolving the Option-A/B/3 incoherence
+  first avoids designing the Phase 2b state machine and persistence against a
+  subaddress shape that may still change. Pre-genesis the cost is bounded; doing
+  it after Stage 3 risks reworking Phase 2b's wallet-format decisions.
+
+  *Definition of done:* a design doc (spec-first per `05-system-thinking.mdc`)
+  that (a) prices each of the three end-states against scan cost, on-chain
+  unlinkability, address-byte linkability, and merchant UX; (b) names the
+  binding `00-mission.mdc` priority and why the alternatives were rejected;
+  (c) reconciles the scanner (`scan.rs`) and address-format choices so they are
+  coherent; (d) pins the disposition for the `RecipientSubaddress` stub. Carries
+  its own review cycle (4–6 rounds) per `20-rust-vs-cpp-policy.mdc`'s
+  migration-is-a-planning-activity discipline.
+
+  *Reference:* `docs/completed/STAGE_2_KEY_ENGINE_ACTOR.md` §2.4 (the
+  secret-touching audit finding that surfaced this); `STAGE_1_PR_3_KEY_ENGINE.md`
+  §3.1.3 (the per-subaddress KEM assumption being interrogated).
+
+- **FA-6 — PQ-safe view-tag pre-filter (T6 closure, V3.0 genesis).**
+  Adversary-track work parallel to the subaddress round; not closed by End-state
+  5 or 5-T. **Spec:** `docs/design/FA-6_VIEW_TAG_ML_KEM.md` (revised 2026-06-01).
+
+  *Closure condition.* No per-output wire byte computable from quantum-recoverable
+  view material on the **account-output** main path — §3.1 inventory table is the
+  completeness artifact (`view_tag` re-key + verify `amount_tag` / FA-11
+  `label_tag` are post-decap hybrid-leg; no second classical pre-filter).
+
+  *Implementation (post spec §11 sign-off).* Scanner leg-swap (universal ML-KEM
+  decap → `derive_view_tag_prefilter` → X25519 on match); HKDF
+  `shekyl-view-tag-prefilter-v1`; genesis-locked (coinbase tags affect genesis
+  hash). **Merge gate (§8):** absolute UX budgets (A/B) on **Pi 4 4GB** vs
+  forward-dated `N_outputs`; `O_per_block` pinned pessimistically **before**
+  restore-time math (§8.3.1); `M_margin` for clean vs marginal pass (§8.7);
+  scenario B = genesis restore worst case. Pins before benches (§8.6). FA-6b
+  budgeted separately. §3.1.1 verified post–PR #100.
+  **Close-out (2026-06-08):** `docs/completed/FA-6_CLOSEOUT.md` — §8.7 budget
+  **fail**, ship FA-6; §10.1 rejected (classical slower on Pi 4); FA-6b
+  genesis-lock vs no-V3.0-user-leak pinned. Round 3 closed; **Round 4 closed**
+  (2026-06-09): FA-9 `THREAT_MODEL_WALLET.md`, FA-10 pin in
+  `POST_QUANTUM_CRYPTOGRAPHY.md`.
+  **§11 sign-off (2026-06-02):** S1–S4, S6–S9 ✅; S5 ratified; S8 on impl PR.
+
+  *Post-genesis perf (wire-preserving, V3.1+):* faster ML-KEM decap within
+  `fips203` pin; reduce-N via birthday / restore-height / checkpointing.
+  §8.5.2 end-to-end restore bench (integration, not micro gate).
+
+  *Target:* V3.0 pre-genesis, separate PR from FA-11 / FA-2.
+
+- **FA-6b — v31 multisig `tx_extra_pqc_view_tag_hints` (V3.0).** Separate from
+  FA-6 account-path closure. Audit whether hints are classical-linkable today
+  (including per-wallet-constant clustering without view key). Spec pointer:
+  `FA-6_VIEW_TAG_ML_KEM.md` §3.2, §5.1. **Target:** V3.0 pre-genesis before
+  multisig receive path is production-load-bearing (or explicit waiver).
+
+- **Phase 2a send path — engine substrate (closed 2026-06).** `LocalPendingTx`
+  build/sign/wire/submit on `Engine<S>` with production daemon fee snapshot +
+  submitter, reservation-before-async-sign, and `TestDaemon` integration tests
+  (2a-1…2a-4). **Design/audit:** `docs/design/PHASE_2A_SEND_PATH.md`,
+  `PHASE_2A_SEND_PATH_AUDIT.md` §2a-4 post-verdict. **Residual (reopen before
+  wallet build against untrusted daemon):** daemon-tier fee sanity ceiling —
+  `DaemonFeeUnreasonable` applies to `Custom` only today; named buckets unchecked
+  (`tx_fee_model.rs`). **Still open (orchestrator):** `WALLET_REWRITE_PLAN.md`
+  `phase2_ops_refresh_send` — `Wallet::refresh` / `build_pending_tx` / … pending
+  Phase 1. **Does not block:** Phase 2b design (parallel).
+
+- **Phase 2b planning session — stake state-machine shape (gate for
+  Stage 3).** Pin the design of the stake lifecycle before any `StakeEngine`
+  code lands. This is named as a *Blocks on* in the Stage 3 entry below but had
+  no tracked row of its own; this entry is that row (added 2026-05-31, Stage 2
+  close-out audit).
+
+  *Scope.* Spec-first (per `05-system-thinking.mdc`): the explicit
+  `StakeState` enum and its transitions (`PendingBroadcast` → `Unconfirmed` →
+  `Locked` → `Accruing` → `Claimable` → `Unstaking` → `FullyUnstaked`);
+  refresh-time reconciliation in `apply_scan_result` (scanned-height vs
+  lock/accrual rules advance each `StakeInstance.state`); `StakeInstance` as a
+  first-class persisted type in `WalletLedger`; the user-facing surface
+  (`Wallet::stakes(filter)`, `claimable_rewards`, `stake`/`claim`/`unstake`
+  each returning `PendingTx`, not a finalized tx); and the `StakeEvent` merge
+  protocol into `LedgerEngine`. Per `WALLET_REWRITE_PLAN.md` Phase 2b this is
+  "the largest single sub-phase by scope" — *not* thin wrappers — so budget the
+  review accordingly (4–6 rounds per `20-rust-vs-cpp-policy.mdc`).
+
+  *Consumes:* `EconomicsEngine` (trait landed, PR #94) for stake parameters and
+  derived yield values — a dependency, not a sub-trait (per
+  `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.7).
+
+  *Blocks on:* (1) Stage 2 merged to `dev` (validates `kameo`); (2) the
+  **subaddress-under-PQC design round** above — decided 2026-05-31 to run
+  before Stage 3, so the stake state machine and `WalletLedger` persistence are
+  designed against a settled recipient/subaddress model.
+
+  *Status (2026-06-10).* In flight as
+  [`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) (+
+  [`PHASE_2B_FSM_RETOOL.md`](design/PHASE_2B_FSM_RETOOL.md)). The claim-centric
+  state list in *Scope* above (`Claimable`; `claim` returning `PendingTx`) is
+  superseded by the retool — claim wire retired; rewards are emission-paid
+  against the bond record; the `StakeState` FSM re-spec is pending per that
+  doc's §3. Remaining before Stage 3, per its §"Open before Stage 3": archival
+  consensus-state schema (PR #123), §2.4 close-conditions (ii)–(iii),
+  reward-emission implementation, `P` HKDF (gate 6), `Σwork` hook (gate 1).
+
+  *Target:* before the first Stage 3 / Phase 2b commit.
+
+  *Definition of done:* a Phase 2b stake-lifecycle design doc whose spec the
+  Stage 3 `StakeEngine` implementation targets; the `StakeState` FSM,
+  reconciliation rules, persistence schema, and user-facing method signatures
+  are pinned and reviewed before code.
+
+  *Reference:* `docs/design/WALLET_REWRITE_PLAN.md` Phase 2b;
+  `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2.7 / §10.5.1.
 
 - **Stage 3 — `StakeEngine` native actor build.** Build the Phase
   2b stake-lifecycle subsystem as a native actor from inception,
@@ -994,9 +3047,14 @@ sustainability is unaffected by the recalibration.
   actor-shaped from the start avoids a redundant migration later
   and lets Phase 2b's design surface inform Stage 4 sequencing.
 
-  *Blocks on:* Stage 2 `KeyEngine` migration complete (validates
-  the pattern); Phase 2b planning session pinning stake
-  state-machine shape.
+  *Blocks on:* (1) Stage 2 `KeyEngine` migration complete (validates
+  the pattern) — RESOLVED, merged to `dev`; (2) the **Phase 2b
+  planning session** row above (stake state-machine shape) — design doc
+  in flight; remaining gates per `PHASE_2B_STAKE_LIFECYCLE.md`
+  §"Open before Stage 3" (archival consensus-state schema / PR #123,
+  §2.4 close-conditions (ii)–(iii), reward-emission implementation,
+  gate 6, gate 1); (3) the **subaddress-under-PQC design round** above —
+  RESOLVED (End-state 5 ship decision; rounds closed 2026-06-09).
 
   *Target:* as the first major commit in Phase 2b.
 
@@ -1013,6 +3071,134 @@ sustainability is unaffected by the recalibration.
 
   *Reference:* `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
   Engine architecture: actor model with staged migration*.
+
+- ~~**Confidential staking subtree + 5-scalar leaf (Decision 3C — spawned 2026-06-04).**~~
+  **SUPERSEDED 2026-06-10 by the Phase 2b retool.** The rebased stake design pins
+  **3C / `h_bind` / the 5-scalar leaf as design-docs-only — never ship for genesis** —
+  and deletes the surfaces this deliverable existed to serve: the claim wire
+  (`txin_stake_claim_v2`, cleartext `txin_stake_claim`) and the entitlement stack
+  (`entitlement.rs` / `tiers.rs` / `rewards.rs` are deletion targets). Genesis staking
+  uses main-tree stealth outputs with membership-only control on the reward leg; no
+  separate staking subtree exists. See
+  [`docs/design/PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md)
+  §2.4 "Delete — dead code, not adapted" + §"Retired for genesis";
+  [`docs/design/CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §6.4.3 is
+  retained as historical substrate. Original scope (separate staking curve tree with
+  own root + LMDB tables; 160-byte `{O, I, C, h_pqc, h_bind}` leaf; `SCALARS_PER_LEAF`
+  per-tree parameterization; 5th-position Selene NUMS generator + KATs; cross-tree
+  `pop_block` atomicity; entitlement FS domain + bounded-remainder relation) is
+  preserved in git history at this entry's 2026-06-04 introduction.
+
+  *Backstop note superseded with the entry.* The claim-window nullifier-pruning
+  dependency recorded here rode on the active stake-claim nullifier set; under the
+  retool, claim-tag nullifiers (`N_{i,S} = x·G_S`, `G_arch`, `N_arch`) do not ship —
+  reward double-claim dedup is the per-`P` claimed-epoch set on the bond record
+  (`ArchivalBondValue` v4, landed 2026-06-12), which reverts with `pop_block` — so no
+  global claim-nullifier set exists to bound or prune.
+
+  *Reopening criterion:* a workstream reviving a separate staking subtree or claim
+  wire (e.g. a V4 lattice-era staking redesign) re-derives from
+  `CONFIDENTIAL_STAKING.md` §6.4.3 as historical substrate via its own design rounds —
+  not by reviving this entry. *Re-evaluation shape:* that workstream's own spec-first
+  design rounds per `05-system-thinking.mdc`.
+
+- ~~**`AtomicUnits` amount-newtype — interim PR before broad wallet wiring (spawned
+  2026-06-05, Phase 2b §6 sign-off).**~~ **CLOSED 2026-06-05 by the `AtomicUnits`
+  interim PR.** The `shekyl-units` crate now owns `AtomicUnits(u64)` — checked-only
+  arithmetic (no operator traits; `a + b` does not compile), `serde`/`repr(transparent)`
+  wire- and ABI-identical to the `u64` it replaced (no format-version bump), `Zeroize`,
+  unit-marker `Display`/`Debug`, and `to_skl_string`/`from_skl_str` single-sourcing the
+  `10^9` denomination from `config/economics_params.json` via `build.rs`. The amount
+  domain (`shekyl-engine-state`, `-prefs`, `-scanner`, `-staking`, `-engine-core` incl.
+  the `OutputClaim` secret site, `-tx-builder`, `-engine-rpc`) carries `AtomicUnits`;
+  raw `u64` survives only at the enumerated edges (oxide `Commitment`/fee/outputs,
+  multisig signed-hash sites, FFI `#[repr(C)]`, postcard `commitment_bytes`, the verified
+  JSON-number RPC field). The CLI's inherited `10^12` `format_amount`/`parse_amount` is
+  reconciled to `10^9` through the newtype. Design + complete edge inventory:
+  [`docs/completed/ATOMIC_UNITS_NEWTYPE.md`](completed/ATOMIC_UNITS_NEWTYPE.md). Spawned the
+  three follow-ups below.
+
+- **Owned `AtomicUnits::mul_div_rem` — deferred (rule-21 reversion clause; spawned
+  2026-06-05 by the `AtomicUnits` interim PR).** The interim PR ships a consumer-driven
+  operation set (`checked_add`/`checked_sub`/`checked_sum`); it deliberately omits a
+  `mul_div_rem` primitive. The exact reward+remainder math already exists, u128-native and
+  power-of-two-`D`-exact, in the consensus module `entitlement.rs::reward_and_remainder`
+  (out of the interim PR's file set), and `rewards.rs` does a *different* proportional split
+  that keeps its existing u128 intermediate with `to_raw`/`from_raw` at the boundary. Adding
+  a duplicate `mul_div_rem` to `AtomicUnits` now would be pre-provisioning + a rule-18
+  consensus-surface duplication.
+
+  *Reopening criterion (substrate-anchored):* introduce an owned
+  `AtomicUnits::mul_div_rem` when the entitlement / confidential-staking reward path is
+  migrated to `AtomicUnits` — at that point the u128 intermediate becomes an `AtomicUnits`
+  internal and the primitive earns its place. *Re-evaluation shape:* design round of the
+  reward-path migration PR. *Target:* **V3.0 pre-genesis**, paired with that migration.
+
+  *Re-anchor (2026-06-10, Phase 2b retool).* `entitlement.rs::reward_and_remainder`
+  and `rewards.rs` — the u128-native split sites the criterion above pointed at — are
+  deletion targets under the retool
+  ([`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §2.4); the
+  proportional reward arithmetic is being rebuilt as the rebased reward-emission /
+  archival-consensus-state surface (epoch-close reward splits, PR #123). The reopening
+  criterion re-anchors there: introduce an owned `AtomicUnits::mul_div_rem` when that
+  rebased arithmetic carries `AtomicUnits` and its u128 intermediate becomes an
+  `AtomicUnits` internal. *Re-evaluation shape:* design round of the reward-emission
+  implementation PR. *Target:* unchanged — **V3.0 pre-genesis**, paired with that
+  landing.
+
+- **Consolidate hand-copied `10^9` / decimal-point constants onto the `shekyl-units`
+  single source (spawned 2026-06-05 by the `AtomicUnits` interim PR).** `shekyl-units` is
+  now the canonical Rust owner of the `coin = 10^9` / `display_decimal_point = 9`
+  relationship (generated from `config/economics_params.json`). Remaining hand-copies and
+  inherited-Monero `12`s should route through it: `entitlement/tests` `COIN: u128`,
+  `DEFAULT_DISPLAY_DECIMAL_POINT = 12` (`wallet_state/settings.rs:74`), and prefs
+  `default_decimal_point` (inherited `12` → JSON's `9`). **`economics-sim` `COIN: f64` is a
+  float on a money path** (violates the design's no-float rule): source the value from the
+  generated constant *and* separately assess whether the sim's `f64` modeling math is
+  acceptable at all.
+
+  *Liveness (verified):* no live Rust formatter reads `default_decimal_point` or
+  `DEFAULT_DISPLAY_DECIMAL_POINT`; every reference is a store/default/test-assert, and the
+  sole live Rust display path (CLI `format_amount`) is already corrected to `10^9` by the
+  interim PR — so this is hygiene against a future formatter picking up the inherited `12`,
+  not a live display bug. *Target:* **V3.0 pre-genesis** — inherited-`12` reconciliation is
+  cheapest before genesis.
+
+- **JSON-RPC large-amount precision — string-amount serde at the RPC edge (spawned
+  2026-06-05 by the `AtomicUnits` interim PR).** `TransferDestination.amount` and the other
+  RPC amount fields serialize as JSON **numbers**; amounts up to `~4.29e18` atomic units
+  exceed JavaScript's `2^53` safe-integer ceiling, so a JS client silently loses precision.
+  This is a **pre-existing latent bug** — `#[serde(transparent)]` on `AtomicUnits` preserves
+  the JSON-number representation exactly, so the interim PR neither introduced nor fixed it.
+  *Disposition:* serialize amounts as decimal strings at the RPC edge (the Monero/Bitcoin
+  mitigation). That is a wire-format change, so it gets its own PR; `AtomicUnits` is the
+  natural home for the string serializer when it lands. *Target:* **V3.0 pre-genesis** —
+  format changes are cheapest before there are clients to migrate.
+
+- **Confidential stake-UTXO transfer (privacy-compatible; compounds (C)).**
+  FCMP spend of bonded principal + re-stake as a bonded output — **not** receipt-token
+  liquid staking (public fungible receipts remain out of scope). **`creation_height` is
+  inherited** across transfer (accrual window follows the original bond).
+
+  *Re-anchored 2026-06-10 (Phase 2b retool).* The 3C-specific mechanics this entry
+  originally cited (consensus-stamped `h_bind` spend continuity in a staking-subtree
+  leaf; a claim verifier accepting re-inserted leaves) are retired — 3C and the claim
+  wire are docs-only / deleted per
+  [`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §2.4. The
+  product question survives unchanged: move bonded principal without resetting the
+  accrual window. It re-derives against the rebased substrate (bond records +
+  main-tree stealth outputs + per-`P` claimed-epoch set), where the open design
+  question becomes how a transfer carries `creation` forward in the bond record
+  rather than how a subtree leaf re-stamps `h_bind`. Historical substrate:
+  [`docs/design/CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §6.4.3
+  transfer note.
+
+  *Blocks on:* Stage 3 `StakeEngine` + the rebased bond/reward-emission path on `dev`.
+
+  *Target:* **V3.2** wallet surface (unchanged).
+
+  *Definition of done:* wallet + consensus spec for bonded-principal FCMP spend with
+  creation inheritance under the rebased bond model; no receipt-token mint.
 
 - **Stage 4 — Remaining-subsystem migrations.** Migrate
   `LedgerEngine`, `RefreshEngine`, `PendingTxEngine`,
@@ -1059,6 +3245,35 @@ sustainability is unaffected by the recalibration.
 
   *Reference:* `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
   Engine architecture: actor model with staged migration*.
+
+  *Named landmine — `drive_persistence` owned-runtime vs. the ambient
+  `KeyActor` (cross-runtime `ask`).* Surfaced during the Stage 2
+  `KeyEngine`-actor runtime-hosting round (`STAGE_2_KEY_ENGINE_ACTOR.md`
+  §4.2). In Stage 2 it is **latent**: `try_claim_output` is cold and the
+  scanner-merge post-pass reads the synchronous `HandleDerivationViewSecret`
+  projection (the 6-i disposition), so the `KeyActor` and `drive_persistence`
+  never interact. But `drive_persistence`'s *else*-branch
+  (`lifecycle.rs:811-822`, the non-multi-thread / sync-`close` path reached
+  when no ambient runtime or a current-thread one is present) spawns an
+  **owned current-thread runtime on a scoped thread**, while the `KeyActor`
+  lives on the **outer ambient runtime**. When a Stage-4 migration makes the
+  actor path hot and a persistence-driven path needs to `ask` the
+  `KeyActor` (or any other actor), an `ask` issued from inside the owned
+  scoped runtime targets an `ActorRef` whose task is parked on the *outer*
+  runtime — the cross-runtime-`ask` mismatch (`block_on` waiting on a oneshot
+  that only the other runtime drives). This is the same substrate-contract
+  mismatch the Stage 2 runtime round was about (sync entry point vs. async
+  actor), one altitude up. Stage 4 must reconcile it explicitly — e.g. route
+  the sync `close`/`change_password` path's actor interactions through the
+  ambient runtime rather than the owned scoped one, or eliminate the
+  owned-runtime else-branch entirely once the `PersistenceEngine` actor
+  migration (sequence item 2) removes the sync-driven flush. Open Stage 4
+  with this named, not rediscovered.
+
+  *Blocks on (this sub-item):* nothing in Stage 2 (latent); becomes live the
+  first time a Stage-4 actor `ask` is reachable from a `drive_persistence`
+  else-branch caller. *Target:* reconcile in the Stage 4 `PersistenceEngine`
+  migration (sequence item 2) at the latest.
 
 - **RPC boundary refinements — idle eviction, `engine_lock`,
   multi-engine registry, snapshot reads, multi-peer archival
@@ -1196,8 +3411,8 @@ sustainability is unaffected by the recalibration.
   average with LWMA-1 (sequencing trigger: A-4/A-5/A-7/A-8 PoW
   workstream PR; pre-genesis).**~~ **CLOSED 2026-05-18 by the LWMA-1
   Phase 4 C++ cutover (`feat/daa-lwma1-phase4`).** The four-phase
-  migration spec'd in [`docs/design/DAA_LWMA1_PLAN.md`](design/DAA_LWMA1_PLAN.md)
-  and [`docs/design/DAA_LWMA1.md`](design/DAA_LWMA1.md) is fully
+  migration spec'd in [`docs/completed/DAA_LWMA1_PLAN.md`](completed/DAA_LWMA1_PLAN.md)
+  and [`docs/completed/DAA_LWMA1.md`](completed/DAA_LWMA1.md) is fully
   landed on `dev`:
   - Phase 0 (design): `dev` SHA `b0eb29b` (2026-05-15), spec +
     integration plan.
@@ -1531,7 +3746,7 @@ sustainability is unaffected by the recalibration.
   `query_key("mnemonic")` post-creation returns the §4.10 hard
   error). This is a callable-but-mainnet-broken FFI surface that
   the Electrum-words-removal series leaves in place per
-  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  [`docs/completed/ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §4.10's "Why `wallet2_ffi_create_wallet`'s mainnet-broken
   state is out of B-1 scope" sub-paragraph: the brokenness
   derives from the raw-seed restriction in `account.cpp`, not
@@ -1564,14 +3779,40 @@ sustainability is unaffected by the recalibration.
   [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).
   If the cleanup slips past Stage 1 PR 4 kickoff without
   explicit re-justification, the
-  [§6.1 "Keep Electrum-words for backward compat"](./design/ELECTRUM_WORDS_REMOVAL.md#61-keep-electrum-words-for-backward-compat-rejected)
+  [§6.1 "Keep Electrum-words for backward compat"](./completed/ELECTRUM_WORDS_REMOVAL.md#61-keep-electrum-words-for-backward-compat-rejected)
   rejection-shape recurs (callable-but-discouraged surface that
   creates a permanent attack surface), the
   [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc) §"The
   'cost-benefit-defer-to-later' anti-pattern" classification
   fires, and the
-  [`ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  [`ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §4.10 disposition reopens.
+
+  **Re-disposition (2026-06-10) — trigger fired; standalone cleanup
+  superseded by the wallet-rewrite Phase 5 deletion.** Stage 1 PR 4
+  landed without this cleanup, so the criterion above has fired; this
+  paragraph is the explicit re-justification it demands. The standalone
+  cleanup (a new `wallet2_ffi_create_wallet_from_bip39` + two delete
+  sites) is **rejected**: both entry points' homes —
+  `wallet2_ffi.{h,cpp}` and `wallet_rpc_server*.{h,cpp}` — are deleted
+  wholesale by the Phase 5 single commit
+  ([`WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md) §Phase 5),
+  and authoring a *new* C++ FFI entry whose deletion is already
+  scheduled is itself the dead-code-creation shape
+  `15-deletion-and-debt.mdc` rejects. Until then the surface stays
+  reachable-but-loud (Mainnet/Stagenet calls reject at
+  `account.cpp`'s raw-seed restriction; nothing silently corrupts) —
+  acceptable pre-genesis posture, since production wallet creation is
+  the Rust BIP-39 path. **Reopening criteria:** (a) a new consumer
+  wires to `wallet2_ffi_create_wallet` / `on_create_wallet` before
+  Phase 5 — the disposition reopens at that PR's review; (b) Phase 5
+  slips past stressnet start while `shekyl-engine-rpc`'s legacy bridge
+  (`rust/shekyl-engine-rpc/src/engine.rs` create-wallet call site) is
+  a stressnet-exposed surface — the BIP-39-aware FFI ships then as a
+  bounded stopgap. *Re-evaluation shape:* the introducing PR's review
+  for (a); the stressnet-readiness review for (b). *Target:* closed by
+  the Phase 5 deletion commit, or at whichever reopening criterion
+  fires first.
 
   **Cross-references.**
   [`src/wallet/wallet2_ffi.cpp:299`](../src/wallet/wallet2_ffi.cpp)
@@ -1583,7 +3824,7 @@ sustainability is unaffected by the recalibration.
   brokenness);
   [`rust/shekyl-engine-rpc/src/ffi.rs`](../rust/shekyl-engine-rpc/src/ffi.rs)
   (in-tree Rust consumer that needs the new FFI rewire);
-  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  [`docs/completed/ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §4.10 (substrate disposition).
 
   *Audit-doc link.* Surfaced during Electrum-words-removal
@@ -1609,7 +3850,7 @@ sustainability is unaffected by the recalibration.
   swap-eligible during the brief window between user input and
   BIP-39 normalization and during `query_key("mnemonic")`
   regeneration. Earlier substrate text in
-  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  [`docs/completed/ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §4.8 claimed `wipeable_string` was mlock-wrapped on the C++
   side; that claim was factually incorrect and has been
   corrected in the substrate-amendment PR that produced this
@@ -1645,6 +3886,30 @@ sustainability is unaffected by the recalibration.
   is reopened to either commit to the residual permanently or
   schedule the cleanup to a different bounded milestone.
 
+  **Re-disposition (2026-06-10) — trigger fired; residual committed
+  until the Phase 5 deletion.** Stage 1 PR 4 landed without the
+  allocator cleanup, so the criterion above has fired; per its own
+  terms, the residual is re-recorded against a different bounded
+  milestone. The phrase-string transit buffers this entry hardens
+  exist only on the C++ BIP-39 FFI path (`wallet2_ffi` seed-phrase
+  ingestion; `query_key("mnemonic")` regeneration), which the
+  wallet-rewrite Phase 5 single commit deletes wholesale
+  ([`WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md) §Phase 5).
+  `epee::wipeable_string` itself survives Phase 5 in the daemon, but
+  the surviving uses are outside this entry's seed-material scope.
+  The `ELECTRUM_WORDS_REMOVAL.md` §4.8 residual is therefore
+  **committed as documented-not-mitigated for the remaining life of
+  the C++ wallet path** (exposure stays bounded: microsecond-scale
+  transit windows; `m_bip39_entropy` independently mlocked).
+  **Reopening criteria:** (a) Phase 5 slips past stressnet start
+  while the C++ wallet path is a stressnet-exposed surface — the
+  mlock-backed allocator lands then; (b) a new C++ consumer routes
+  seed or passphrase material through `wipeable_string` before
+  Phase 5 — the allocator lands at that PR. *Re-evaluation shape:*
+  the stressnet-readiness review for (a); the introducing PR's
+  review for (b). *Target:* retired by the Phase 5 deletion commit,
+  or implemented at whichever reopening criterion fires first.
+
   **Cross-references.**
   [`contrib/epee/include/wipeable_string.h:83`](../contrib/epee/include/wipeable_string.h)
   (`std::vector<char>` backing store);
@@ -1655,7 +3920,7 @@ sustainability is unaffected by the recalibration.
   allocator wrapper);
   [`.cursor/rules/35-secure-memory.mdc`](../.cursor/rules/35-secure-memory.mdc)
   §"OS-level protection" (canonical mitigation discipline);
-  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  [`docs/completed/ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §4.8 (corrected substrate disposition).
 
   *Audit-doc link.* Surfaced during Electrum-words-removal
@@ -1666,72 +3931,126 @@ sustainability is unaffected by the recalibration.
   phrase-string-wipe-on-drop split, and explicitly named this
   FOLLOWUPS entry as the bounded closure path for the residual.
 
-- **RandomX v2 Phase 3c — `aes`-crate symbol-surface check on the
-  linked `shekyld` binary** (trigger: Phase 2b PR landing; target:
-  V3.0 / Phase 3c PR closes this item). Phase 2b added `aes-0.9.0`
-  as a workspace dependency of `shekyl-pow-randomx`. The Rust-
-  mangled symbols (`_ZN3aes...`) and AES-NI intrinsics
-  (`_mm_aesenc_si128`, which lowers to a bare `aesenc` CPU
-  instruction without an external symbol) **never match any of the
-  10 banned `randomx_*` names** in
-  [`docs/design/RANDOMX_V2_RUST.md`](design/RANDOMX_V2_RUST.md) §7.1
-  by construction — §7.1 uses an explicit-list grep, not an
-  `aes*` or `randomx_*` glob. The structural concern about
-  symbol collision is precluded.
+- **CryptoNote fossil — hardcoded key-image fixup for Monero blocks
+  202612 / 685498** (surfaced 2026-06-22, RandomX v2 Phase 3b consensus
+  cutover).
+  [`src/blockchain_db/blockchain_db.cpp`](../src/blockchain_db/blockchain_db.cpp)
+  `BlockchainDB::fixup()` carries two arrays of hardcoded key images
+  (`key_images_202612`, 511 entries; `key_images_685498`, 13 entries) for
+  two inherited Monero mainnet blocks whose output-less transactions
+  tripped an upstream spent-key-image accounting bug. The whole block is
+  gated on `get_block_hash_from_height(0) == mainnet_genesis_hash`, where
+  `mainnet_genesis_hex` is Monero's genesis hash — never true on Shekyl,
+  so the fixup is unreachable dead code. Pure CryptoNote fossil under
+  `60-no-monero-legacy.mdc`.
 
-  **Runnable check** (one-shot, when Phase 3c links the verifier
-  through the daemon for the first time). The Shekyl daemon
-  (`shekyld`) is built via CMake, not `cargo`, per
-  [`docs/COMPILING_DEBUGGING_TESTING.md`](COMPILING_DEBUGGING_TESTING.md);
-  the canonical command from a clean checkout is:
+  **Why deferred from Phase 3.** Out of the cutover PR's enumerated scope:
+  [`docs/design/RANDOMX_V2_PHASE3_PLAN.md`](./design/RANDOMX_V2_PHASE3_PLAN.md)
+  §2.5 names only the two block-202612 *longhash* fossils (both deleted in
+  the cutover). The sibling block-202612 *block-id* fossil in
+  `cryptonote_format_utils.cpp` `calculate_block_hash` was deleted
+  opportunistically as same-file "leave it better" cleanup
+  (`15-deletion-and-debt.mdc`), but `blockchain_db.cpp` is not otherwise
+  touched by the cutover, so its deletion is a separate scope per the same
+  rule's "while we're here is the enemy."
 
-  ```bash
-  make release && \
-    nm build/$(uname -s)/release/bin/shekyld | grep -iE '(aes|randomx)'
-  ```
+  **Scope when picked up.** Delete the `key_images_202612` /
+  `key_images_685498` arrays, the `mainnet_genesis_hex` constant +
+  `mainnet_genesis_hash` resolution, and the
+  `if (get_block_hash_from_height(0) == mainnet_genesis_hash)` /
+  `if (height() > 202612|685498)` fixup branches; confirm no other
+  `fixup()` logic depends on the batch transaction opened around them.
 
-  (Substitute the appropriate `<platform>` segment manually if
-  `uname -s` doesn't match the CMake output directory — the
-  pattern is `build/<platform>/release/bin/shekyld`.)
-
-  **Expected disposition.** No matches against any name in §7.1's
-  10-symbol banned list. AES-crate symbols (Rust-mangled
-  `_ZN3aes...`) are expected to appear and are benign — they are
-  the `aes-0.9.0` crate's internal surface, not the C-ABI banned
-  `randomx_*` symbols §7.1 forbids. The check confirms nothing
-  leaks into the daemon by surprise; a regression that surfaces
-  here is a Phase 3c rewire bug, not a Phase 2b correctness defect.
-
-  **Why deferred.** The check is by definition a post-link
-  observation; pre-Phase-3c there is no `shekyld` binary that
-  links the Rust verifier. Recording the disposition in
-  FOLLOWUPS.md (rather than in the Phase 2b PR description) makes
-  the Phase 3c author's runbook auditable without "rely on the
-  Phase 3c author re-reading the Phase 2b PR description months
-  later" failure mode per `21-reversion-clause-discipline.mdc`'s
-  named-criteria principle.
-
-  **Sequencing relationship to the existing Phase 2f symbol-
-  isolation item.** The V3.1+ entry "Binary-level `nm`-on-
-  `shekyld` symbol-isolation invariant for the deleted CryptoNote
-  DAA functions" (see V3.1+) names the same post-link `nm` shape
-  as the natural landing site for the Phase 2f symbol-isolation
-  binary check. Phase 3c can fold this F7 check into the same
-  post-link CI step or run it as a one-shot at PR-open time; the
-  disposition is "no `randomx_*` matches" either way.
+  **Target.** V3.0 (Monero-legacy deletion, cheap pre-genesis per the
+  `15-deletion-and-debt.mdc` pre-genesis discount). Not load-bearing — the
+  code is inert on Shekyl, so it does not block the genesis freeze; if it
+  slips, it is a clean follow-up deletion at any later version.
 
   **Cross-references.**
-  [`docs/design/RANDOMX_V2_RUST.md`](design/RANDOMX_V2_RUST.md) §7.1
-  (10-symbol explicit-list grep);
-  [`docs/design/RANDOMX_V2_PHASE2B_PLAN.md`](design/RANDOMX_V2_PHASE2B_PLAN.md)
-  §5.7 (F7 finding and forward-action rationale);
-  [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
-  Phase 3c (the wiring PR that closes this item).
+  [`src/blockchain_db/blockchain_db.cpp`](../src/blockchain_db/blockchain_db.cpp)
+  `fixup()`;
+  [`.cursor/rules/60-no-monero-legacy.mdc`](../.cursor/rules/60-no-monero-legacy.mdc).
 
-  **Target.** V3.0 / Phase 3c. Closes when the post-link `nm`
-  check above runs against the verifier-linked `shekyld` with
-  zero `randomx_*` matches and aes-crate symbols visibly present
-  per the expected disposition.
+- **RandomX v2 Phase 3c / Phase 4 — PoW C-core + abstraction deletion**
+  (deferred from the Phase 3 consensus cutover, 2026-06). The cutover
+  collapsed the *consensus* PoW path to RandomX v2 (registry
+  RandomX-only; CryptoNight, `RX_BLOCK_VERSION` guards, and the longhash
+  `202612` fossils removed; `pow_cryptonight.cpp` + `get_cryptonight_*`
+  deleted) but left the *implementation* C and the now-unused abstraction
+  layer in place, because deleting them was tangled with the RPC-payment
+  subsystem and the `wallet2.cpp` PoW touchpoints
+  ([`docs/design/RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §15;
+  [`docs/design/RANDOMX_V2_PHASE3_PLAN.md`](./design/RANDOMX_V2_PHASE3_PLAN.md)
+  §13).
+
+  **Status (2026-06-22): partially resolved + re-split.** Sub-item (1) (the
+  RPC-payment subsystem) **landed** on `chore/rpc-payment-deletion`, removing
+  the wallet-tree PoW touchpoints and unblocking the rest. The cluster is
+  re-split per
+  [`docs/completed/LEGACY_POW_CLEANUP_PLAN.md`](./completed/LEGACY_POW_CLEANUP_PLAN.md)
+  to **separate RandomX v1 (retained — rollback hatch) from CryptoNight
+  (deletable)** — the prior item (2) wrongly bundled them — and to re-home the
+  `RX_BLOCK_VERSION` `#define` onto the PoW-dispatch surface where its surviving
+  references actually live. Remaining work, dependency-ordered:
+
+  1. ~~**Delete the RPC-payment subsystem**~~ **DONE (V3.0,
+     `chore/rpc-payment-deletion`).** Wholesale-deleted `rpc_payment.{cpp,h}`,
+     `rpc_payment_costs.h`, `rpc_payment_signature.{cpp,h}`,
+     `wallet_rpc_payments.cpp`, `wallet_rpc_helpers.h` + all daemon/wallet
+     wiring; collapsed the `rpc_access_*_base` wire contract
+     (`CORE_RPC_VERSION_MINOR` 15→16); removed the orphaned Rust `RpcPrefs`
+     bucket (`PREFS_SCHEMA_VERSION` 2→3). This removed the two surviving
+     RPC-payment `RX_BLOCK_VERSION` guards and their
+     `cn_slow_hash`/`rx_slow_hash` calls. See the `[Unreleased]` `### Removed`
+     changelog entry.
+  2. **Wallet KDF → Rust (argon2id) migration, then delete CryptoNight
+     `src/crypto/slow-hash.c`** + the `cn_slow_hash` / `cn_slow_hash_prehashed`
+     / `cn_variant1_check` decls (`hash.h`, `hash-ops.h`) + the CryptoNight
+     tests. Blocked by **live, non-PoW C++ KDF callers** that survive (1):
+     `src/crypto/chacha.h` (`generate_chacha_key`) and
+     `src/cryptonote_basic/cryptonote_format_utils.cpp:1452,1460` (passphrase
+     `encrypt_key`/`decrypt_key`). Replacing the `cn_slow_hash`-KDF with
+     argon2id is a crypto-contract change touching secrets → Rust, own design
+     doc + review (`20-rust-vs-cpp-policy.mdc`; `36-secret-locality.mdc`).
+     **Target V3.0.**
+  3. **PoW-abstraction collapse** — delete `pow_schema.h` (`IPowSchema`),
+     `pow_registry.{h,cpp}`, the `rust/shekyl-consensus` crate
+     (`70-modular-consensus.mdc`), and the dead `shekyl_rust_init` /
+     `shekyl_active_consensus_module` FFI exports, inlining RandomX into the
+     **live** dispatch sites (`miner.cpp:582`, `cryptonote_tx_utils.cpp:886`).
+     **Includes deleting the `RX_BLOCK_VERSION` `#define`** (`hash-ops.h:95`):
+     after (1), its only surviving references are
+     `tests/unit_tests/mining_parity.cpp:104,137` and
+     `tests/core_tests/chaingen.cpp:465` — the PoW-dispatch/test surface, *not*
+     the RPC-payment files the prior cluster assumed, so it is removed here
+     (one touch of those test files) rather than with (1). **Target V3.0.**
+  4. ~~**RandomX v1 retention (reversion clause,
+     `21-reversion-clause-discipline.mdc`).**~~ **CLOSED — reversion clause
+     struck by PR #235 (2026-07).** The retention premise (v1 as the
+     consensus rollback escape hatch) was invalidated at source: the v1
+     surface's only live runtime effect was a deterministic release-mode
+     miner-thread crash (every `start_mining` allocated a ~2 GiB v1 dataset
+     against a NULL cache), and its schedule half (`rx_seedheight`) was live
+     consensus that belonged in Rust. PR #235 deleted `rx-slow-hash.c` +
+     `c_threads.h`, unlinked the v1 `randomx` lib from the daemon, and
+     ported the seed-epoch schedule to `shekyl-pow-randomx::seed_epoch`
+     (the formerly deferred `shekyl_pow_randomx_v2_seedheight` export landed
+     with it). The v1 *submodule* stays checked out as independent-provenance
+     vector source for the spec-anchor test work (tevador's v1 test suite),
+     not as a build target — re-adding a build target requires a consumer.
+
+  The `aes`-crate symbol-surface check and the verifier-linked `shekyld`
+  `nm` symbol-isolation invariant **landed** (test-regime hardening PR-1,
+  2026-07): `scripts/ci/check_randomx_symbol_isolation.sh`, run against
+  the linked daemon in the `full-parity` cron job of
+  `.github/workflows/randomx-v2-differential.yml`.
+
+  **Cross-references.**
+  [`docs/design/RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md)
+  `phase3-cutover` / `phase4-delete-abstractions` tasks;
+  [`docs/design/RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §13, §15;
+  [`docs/design/RANDOMX_V2_PHASE3_PLAN.md`](./design/RANDOMX_V2_PHASE3_PLAN.md)
+  §5, §11, §13.
 
 - **Promote 2c-emergent sub-PR design disciplines to project-level
   documentation** — **Closed (V3.0).** Landed in
@@ -1754,10 +4073,10 @@ sustainability is unaffected by the recalibration.
   audit-trail IDs only).
 
   **Substrate artifacts (historical).**
-  [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](./design/RANDOMX_V2_PHASE2C_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2C_PLAN.md`](./completed/RANDOMX_V2_PHASE2C_PLAN.md)
   (R3-D1, F4, Round 4 addenda, forward-path, R0-D5–R0-D12, R5-D1);
-  [`docs/design/RANDOMX_V2_PHASE2C_AUDIT.md`](./design/RANDOMX_V2_PHASE2C_AUDIT.md);
-  [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](./design/RANDOMX_V2_PHASE2D_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2C_AUDIT.md`](./completed/RANDOMX_V2_PHASE2C_AUDIT.md);
+  [`docs/completed/RANDOMX_V2_PHASE2D_PLAN.md`](./completed/RANDOMX_V2_PHASE2D_PLAN.md)
   R1-D3 (post-promotion audit example). Downstream authors cite
   `26-sub-pr-design-discipline.mdc` explicitly for process shape.
 
@@ -1775,9 +4094,409 @@ sustainability is unaffected by the recalibration.
   the next `26-sub-pr-design-discipline.mdc` amendment PR (sibling off
   `dev`, separate from 2g implementation PR).
 
+- **CL-7 forward-compat audit of trait-owned value/error types
+  (`PendingTxEngine` / `PersistenceEngine`).** The seven-lens
+  conformance pass on the three trait surfaces (branch
+  `docs/engine-trait-cip-triad`) brought `PersistenceEngine`,
+  `PendingTxEngine`, and `KeyEngine` to CL-1…CL-6 conformance, but
+  was scoped doc-only to the three **trait files**. CL-7
+  (forward-compat on public value/error types — `#[non_exhaustive]`
+  on value structs/enums, the unit-variant-only pin on error types
+  intended to stay payload-free) covers types defined **off** the
+  trait files: `PendingTxEngine`'s `SendError` / `SubmitError` /
+  `PendingTxError` / `DiscardReason` (in
+  [`engine/error.rs`](../rust/shekyl-engine-core/src/engine/error.rs)
+  and [`engine/pending.rs`](../rust/shekyl-engine-core/src/engine/pending.rs))
+  and `PersistenceEngine`'s `PersistenceError`. The audit: for each
+  trait-owned value/error type, confirm it carries the appropriate
+  forward-compat attribute **with a documented rationale** per CL-7's
+  pass criterion, or document why it is exempt. Tracked as the
+  `—³` cells in the
+  [`V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md`](./V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md)
+  §2 scorecard (footnote 3).
+
+  **Target.** V3.0 pre-genesis. Forward-compat attributes are a
+  pre-genesis-cheap / post-genesis-forever decision (per
+  `16-architectural-inheritance.mdc`'s pre-genesis discount): adding
+  `#[non_exhaustive]` before the API ossifies is bounded work, while
+  retrofitting it after external consumers exist is a breaking change.
+  Scoped as its own doc/attribute PR (touches `engine/error.rs` +
+  `engine/pending.rs`, outside the trait-file-only scope of the
+  conformance pass that surfaced it).
+
+- **`shekyl-tx-builder::SpendInput` derives plain `#[derive(Debug)]` over
+  secret scalars.** `SpendInput` (in
+  [`rust/shekyl-tx-builder/src/types.rs`](../rust/shekyl-tx-builder/src/types.rs))
+  has an explicit `Drop` wiping `spend_key_x` / `spend_key_y` /
+  `commitment_mask` / `combined_ss`, but its derived `Debug` renders those
+  secret scalars verbatim — any `{:?}` or panic-formatting of a `SpendInput`
+  prints the spend secrets. The CI debug-macro lint does **not** catch a derived
+  `Debug` impl invoked indirectly (e.g. via a panic message or an enclosing
+  struct's `Debug`). `key.rs` redacts its secret-bearing message shapes; the
+  builder-side `SpendInput` does not. **Fix:** a manual redacted `Debug` on
+  `SpendInput` (`[REDACTED]` for the four secret fields, public fields verbatim)
+  matching the `35-secure-memory.mdc` discipline, plus a redaction test.
+
+  **Target.** V3.0 pre-genesis. Surfaced during Phase 2a F2's source review of
+  the builder (per `docs/design/PHASE_2A_SEND_PATH.md` §3.7); kept **out** of the
+  2A edit per "while we're here" — separate small item in the builder crate, not
+  the 2A type-design PR.
+
+- **Migrate inherited `cn_fast_hash` (Keccak / CryptoNote padding) to cSHAKE256 /
+  SHA3-family (modern-not-inherited posture).** `cn_fast_hash`
+  ([`shekyl-crypto-hash`](../rust/shekyl-crypto-hash/src/lib.rs)) is **inherited**
+  Keccak-256 with CryptoNote `0x01` padding — a consensus-compat primitive whose
+  purpose is byte-identity with `src/crypto/keccak.c` / upstream Monero. Per
+  [`00-mission.mdc`](../.cursor/rules/00-mission.mdc)'s modern-not-inherited /
+  PQC-hardened posture, **new** derivations should use **cSHAKE256** (FIPS 202 /
+  SP 800-185) — the workspace's already-present PQC-aligned hash (`sha3 = "0.10"`,
+  `CShake256`; used by `shekyl-crypto-pq/handle.rs`'s `derive_output_handle`,
+  `key_actor`, `local_keys`, `traits::key`). The `StakeId` pin
+  (`docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §3.3.3) is the first derivation to
+  adopt this; the residual `cn_fast_hash` call sites should be evaluated for the
+  same migration, classified by what the hash is a contract *with*:
+
+  - **Wallet-local, non-consensus — clear migration candidate.**
+    `derive_snapshot_id` / `SnapshotId`
+    ([`refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs), doc'd in
+    [`pending.rs`](../rust/shekyl-engine-core/src/engine/pending.rs)). It is a
+    runtime dedup key recomputed from the ledger snapshot on load, so the swap is
+    behavior-local with no persisted-format break — the direct analog of the
+    `StakeId` decision. Migrate to cSHAKE256 with a versioned customization
+    (`"shekyl/snapshot-id-v1"`), updating the `STAGE_1_PR_5_PENDING_TX_ENGINE.md`
+    §4 Phase 0b pin.
+
+  - **Cross-party protocol contracts — migrate *only* via the owning spec, and
+    *only* pre-genesis.** The v31 multisig hashes — `intent_hash`,
+    `fcmp_proof_commitment`
+    ([`multisig/v31/{intent,prover}.rs`](../rust/shekyl-engine-core/src/multisig/v31/)),
+    the key-container / `prover_index` derivations
+    ([`crypto-pq/multisig.rs`](../rust/shekyl-crypto-pq/src/multisig.rs)), and the
+    address fingerprint
+    ([`shekyl-address/multisig_address.rs`](../rust/shekyl-address/src/multisig_address.rs))
+    — are interop contracts pinned in the PQC_MULTISIG / v31 multisig spec
+    (SS6.3, SS9.4, SS12.2.1). All signers and the human address-verification flow
+    must agree byte-for-byte, so a change is a **spec change** requiring its own
+    review, and is only free pre-genesis (post-genesis it breaks exchanged
+    fingerprints). Flagged here so the multisig spec owners decide deliberately,
+    not as a unilateral swap.
+
+  - **Consensus primitive — largest scope, its own spec-first pass; *not* excluded.**
+    Block id, tx id, `tree_hash` (Merkle), any consensus transcript, and the
+    `shekyl_cn_fast_hash` FFI export
+    ([`shekyl-crypto-hash/lib.rs`](../rust/shekyl-crypto-hash/src/lib.rs),
+    [`shekyl-ffi/lib.rs`](../rust/shekyl-ffi/src/lib.rs)). **Pre-genesis we *are*
+    the hard fork** — there is no deployed consensus to break and nothing is
+    grandfathered, so "genesis-locked, change it later" would be the
+    cost-benefit-defer-to-later anti-pattern
+    ([`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)):
+    inheriting Keccak-with-CryptoNote-`0x01`-padding as the consensus hash *is*
+    inheriting architecture from CryptoNote, and the cheap window to modernize is
+    now. **Important scoping nuance:** Keccak-256 is *not* cryptographically weak
+    (it is the SHA-3 permutation; quantum posture is Grover-only, same as
+    SHA3/SHAKE), so this is a **priority-3 standards-alignment / modern-not-inherited**
+    decision, **not** a priority-1 security fix — the inherited smell is the
+    non-FIPS `0x01` padding and the `cn_fast_hash`/CryptoNote lineage, not a
+    vulnerability. Because it is a consensus-rule change across the C++
+    (`src/crypto/keccak.c`, `hash.c`, `tree-hash.c`) **and** Rust + FFI surface, it
+    needs its **own design doc + review** (spec-first, `05-system-thinking.mdc`;
+    `20-rust-vs-cpp-policy.mdc`), candidate being SHA3-256 / cSHAKE256 (FIPS 202).
+    The RandomX PoW is a **separate** hash path (its own internal Blake2b/AES) and
+    is unaffected. The `TestDaemon` tx-hash helper
+    ([`test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs))
+    follows whatever the consensus tx hash becomes; it is test-only scaffolding,
+    not an independent decision.
+
+  **Target.** V3.0 pre-genesis. Pre-genesis is the only free window for *all three*
+  buckets (consensus and cross-party contracts both become forever-cost after
+  genesis), and the modern-not-inherited posture is a genesis-defining property.
+  The three buckets do **not** share a PR: the `SnapshotId` swap is a normal small
+  PR, the multisig-contract migration rides its spec, and the consensus-primitive
+  modernization is its own spec-first consensus-design pass. Surfaced during the
+  Phase 2b `StakeId` derivation pin (§3.3.3) when an intermediate pass wrongly
+  reused `cn_fast_hash` for a new wallet-local id; the correction generalized first
+  to the non-consensus sites, then — once the "we are the hard fork" framing was
+  applied — to the consensus primitive itself.
+
+- **Multisig FROST spend path needs the single-sig spend-path consensus fixes.**
+  PR #193 (first daemon-accepted FCMP++ spend) fixed four spend-path properties on
+  the *single-sig* path (`sign_bridge.rs`): (1) inputs sorted strictly descending
+  by key image before proving, (2) the biased key-image generator
+  (`shekyl_fcmp::tree::key_image_generator`), (3) `curve_trees_tree_depth =
+  layers − 1` on the wire, and (4) change paid to the base spend key
+  (`x = ho + b`, no `m₀` offset). The multisig FROST sign path
+  (`shekyl-engine-core/src/engine/signer.rs` → `shekyl-fcmp/src/frost_sal.rs`) was
+  **not** exercised by the north-star. Properties (2)/(3) ride along for free —
+  `signer.rs` routes through `tx_builder::encode_final_tx` → `build_wire_tx`, which
+  owns the depth encoding, and the key image is whatever the proof binds — but the
+  **input ordering** (does the multisig assembly sort vin descending by key image?)
+  and the **change-output destination** (does it pay to the base key?) must be
+  audited before a multisig spend can be daemon-accepted. A multisig regtest
+  spend (analogous to `e2e_fcmp_spend_accepted_by_daemon`) is the natural gate.
+
+  **Target.** Confirm against multisig's genesis scope: the spend-path rules are
+  genesis-frozen consensus, so if multisig ships at V3.0 this is pre-genesis; if
+  multisig is V3.1+, re-file there. Surfaced by PR #193's review/audit.
+
 ---
 
 ## V3.1 — audit response and stressnet gates
+
+- **`tests/performance_tests/` — rule-15 deletion-or-adoption audit**
+  (surfaced 2026-07-03, RandomX v2 test-regime benchmark review). The
+  inherited Monero performance suite is wired into **zero workflows**
+  (workflow-reference grep: no CI consumer) and mostly measures legacy
+  CryptoNote primitives — a dormant surface of the same class as the
+  armed gates the test-regime program closed. Disposition per
+  `15-deletion-and-debt.mdc`: audit each benchmark for
+  delete (legacy-primitive measurements with no v3 subject) vs adopt
+  (anything measuring a live v3 surface moves to a wired harness — the
+  Rust side's gungraun benches are the house pattern). *Target: V3.1*
+  (not genesis-gating; the live perf gates are T5/T6, wired 2026-07).
+
+- **Re-evaluate the inert `(1 + stake_ratio)` factor in `calc_burn_pct`
+  (spawned gate-7 iteration 5, 2026-06-11).** The gate-7 locked-supply
+  re-pricing ([`design/STAKER_ARCHIVAL_SIM.md`](./design/STAKER_ARCHIVAL_SIM.md)
+  §*Gate 7 iteration-5 — results*) showed the derived V3 archival lock holds
+  `stake_ratio` at 10⁻⁷–10⁻⁴ of `SCALE`, so the `stake_factor` term in
+  `shekyl-economics::burn::calc_burn_pct` is effectively inert — it was
+  designed for the retired tier-staking model, whose 5–35 % asserted ratios
+  inflated burn ~22 % in the legacy sim scenarios. Decide: keep (inert but
+  harmless; preserves the lever if a future lock class materializes) or
+  delete (smaller consensus surface per `15-deletion-and-debt.mdc`). This is
+  consensus burn math — it needs its own review against `00-mission.mdc`,
+  not a ride-along edit. Target: V3.1. *Reopen sooner if:* any V3.0 change
+  introduces a lock class large enough to move `stake_ratio` above ~10⁻³ of
+  `SCALE` (the gate-7 reversion threshold).
+
+- **Typed epoch/height parameters across the archival FFI (spawned PR 123,
+  2026-06-10).** `shekyl_archival_good_through(join_settlement_epoch,
+  settlement_epoch, …)` takes two adjacent `u64`s; the PR 123 C++ rewire
+  initially transposed them and compiled clean — caught only by the
+  `bond_record_roundtrip` unit test. Same hazard class as the curve-tree
+  leaf-tuple typing disposition (PR 121): adjacent same-width integers
+  carrying different consensus meanings. Scope: introduce
+  `SettlementEpoch(u64)` / `BlockHeight(u64)` newtypes inside
+  `shekyl-archival-retention::consensus_state` (Rust-side call sites get
+  compile-time checking; the C ABI stays `uint64_t` — C++ callers are a
+  deletion target per the wallet rewrite, so no C-side typing investment).
+  Target: V3.1, bundled with the next consensus_state-touching PR rather
+  than as a standalone churn PR. *Reopen sooner if:* another transposition
+  bug surfaces at this boundary before V3.1.
+  The Round 3 threat-model-exhaustion + wider-substrate wargame
+  ([`PHASE_2B_STAKE_LIFECYCLE.md`](./design/PHASE_2B_STAKE_LIFECYCLE.md) §7.5,
+  executed 2026-06-05) dispositioned every T/G item; seven carry **V3.1**
+  FOLLOWUP dispositions (each with a reopening trigger). **Work:**
+  1. **Broadcast jitter / Dandelion++ / circuit hygiene (T1/T4/T14).** Pin a concrete
+     randomized-delay distribution + Dandelion++ default for claim broadcast;
+     forbid fixed epoch-boundary cadence and chained stake→auto-claim→auto-unstake
+     at deterministic offsets. **Acceptance criteria added by the §7.5.3 synthesis:**
+     (a) origin obfuscation **beyond "send over Tor"** — a Dandelion++-equivalent
+     stem/fluff phase under the anonymity network; (b) **circuit hygiene per-claim** —
+     a fresh circuit per broadcast (circuit reuse re-links the whole claim sequence
+     regardless of on-chain unlinkability). *Reopen when:* testnet shows residual
+     `(tier, contiguous-window)` serial correlation, or same-circuit egress linkage,
+     under a passive observer despite full-window batching.
+  2. **Thin-cohort warning — stake *and* claim (T3 + F0).** Wallet surfaces a warning
+     when the observable cohort is small (estimable from public participation):
+     **(a)** before a stake lands, on the band cohort; **(b) elevated by the §7.5.3
+     synthesis top finding F0** — also before a **claim**, on the `{tier ×
+     creation_height}` cohort, because a claim's effective anonymity set is that cohort
+     (`tier` + `creation_height` are cleartext wire fields, §6.4.8) and at cold start it
+     can approach one. The wallet warning is the honest-UX half and **does not
+     substitute** for the consensus fix. *Cross-track companion:* confirm the consensus
+     cohort-floor/suppression (`CONFIDENTIAL_STAKING.md` §14.1/§14.4) is active at
+     genesis — **do not assume it**; and see the F0 cross-track asks below.
+  3. **Dust / fee-starved claim UX (G4).** Compare `claimable` to the estimated
+     claim-tx fee; never auto-broadcast an uneconomic claim — warn / defer /
+     accrue more epochs.
+  4. **Lock-up surfacing UX (G3).** Show lock duration + `unlock_height` at stake
+     time; warn on long tier-3 locks. *Reopen when:* usability testing shows lock
+     surprise.
+  5. **HW-wallet claim-prove latency measurement (G8).** Measure the `Signer`
+     round-trip for claim-prove (`x` transiently). Not a Stage-3 blocker (claims
+     are not deadline-tight). *Reopen when:* a HW path's claim-prove exceeds a
+     settlement epoch.
+  6. **Locked-wallet claim reminder (G9).** Optional reminder; claims do not
+     expire in v1, so a locked wallet simply claims when next unlocked.
+  7. **Claim-tx canonical-ordering fingerprint pin (G12).** `settlement_epochs[]`
+     / `nullifiers[]` sorted canonically; no wallet-specific padding (Monero
+     wallet2-fingerprint lesson). *Reopen when:* non-canonical ordering or a
+     wallet-specific field appears in the claim/stake wire (cross-ref the upstream
+     byte-exact wire, §8.0).
+  **§7.5.3 dual-wargamer synthesis additions (2026-06-05).**
+  8. **Claim epoch-count leak — accept-vs-pad decision (T10/G12).** A claim's
+     `nullifier count == epoch count`, leaking the stake's age and claim cadence off
+     the wire. Decide explicitly: accept the leak, or pad `nullifiers[]` to a fixed
+     count with dummies (uniform but expensive). *Reopen when:* clustering on
+     epoch-count + timing is demonstrated against a passive observer.
+  9. **Advisory-claimability wallet pin (T9).** Treat any daemon-reported nullifier
+     status as **advisory, never a license to reveal a second nullifier** — a lying
+     daemon that reports `N_S` unused can otherwise induce a duplicate-claim broadcast
+     that re-reveals `N_S` and links the two attempts. Wallet's own derived
+     `{x·G_S} ∩ chain` is authoritative.
+
+  **Cross-track asks** (tracked in the design doc with reopening triggers, not
+  FOLLOWUPS-graveyard items): **F0 (new, gating) — the `{tier × creation_height}`
+  cohort partition**. **Reveal-vs-ZK resolved at source 2026-06-05:** `tier` (u8) and
+  `creation_height` (u64) are **cleartext wire fields** (`CONFIDENTIAL_STAKING.md`
+  §6.4.8), revealed-by-design and load-bearing for inflation-safety (§6.4.3 — the single
+  revealed `tier` drives both `h_bind` and the multiplier; the 3C-over-3A "no new
+  primitive" win). So claim↔claim linkage is **deterministic exact-match** and the open
+  item is a **consensus policy decision — three-way, not binary**: (1) **accept-exact**
+  for v1 (high, eyes-open product bar — P1>P2 licenses the reveal but does *not* price the
+  residual; this is materially weaker than the spend path's whole-chain set for stakers);
+  (2) **cleartext `creation` bucketing** (the cheap middle — bind a bucketed creation into
+  `h_bind`, cohort → `{tier × bucket}`, width `W` = cohort ⇄ cost dial, *all cleartext, no
+  circuit/primitive*; **hard inflation constraint: round creation UP** to the bucket
+  ceiling and make it the single canonical value for lower-bound + `eff_lock` + lock-
+  enforcement — round-down silently inflates by admitting pre-stake epochs; cost = bounded
+  ≤W lock-shift; the **tier axis stays** — irreducible without V4); or (3) **V4 in-circuit
+  hiding** (only path that removes the tier axis, at 3A circuit cost + 8a re-audit cost).
+  **Baseline-budget calibration (2026-06-05) de-escalates the decision:** F0 is the **same
+  category** of cost the project accepted *before* confidential staking (staking is the
+  exposed overlay; spend path untouched; core promise intact); it exceeds baseline only in
+  **scale-resistance** (block-granular cohort does not dilute with growth — a *steady-state*
+  thinness, not just cold-start) and **targeted-cascade** (one foothold cascades to the whole
+  claim history). Marginal delta over the realistic already-linkable counterfactual
+  (timing/fingerprint/circuit-reuse) is "exact-vs-statistical" + the creation-anchor, **most
+  penalizing the privacy-conscious staker**. **So option 2 (bucketing) is the *recommended
+  v1 disposition*** — it restores dilution-with-growth, bringing the cost back toward the
+  membership-shaped baseline; the residual within-tier within-bucket cohort **probably sits
+  inside the accepted budget**. The remaining consensus decision **shrinks to: ratify
+  bucketing + pick width `W`** (the k-anonymity gate and V4 remain available, not the v1 ask).
+  **The §14 `band_sum` floor does *not* close this** — it smooths the public-rate readout (a
+  different leak). **The reveal also shrinks the 8a entitlement circuit** (cleartext checks
+  stay out of the circuit → tighter soundness perimeter on the existential item); a V4 hide
+  grows the 8a re-audit surface — a named security cost on the V4 design. This **re-opens**
+  `CONFIDENTIAL_STAKING.md` §14.4 item-9 and re-gates Round 3 closure. **T7 (DDH /
+  `G_S`-NUMS-independence) is elevated by F0** to the soundness tier — with cohort linkage
+  now chain-owned, DDH is the *sole on-chain protection* for within-cohort claim
+  unlinkability (network circuit-hygiene re-scoped to "don't let the network undo DDH,"
+  not "break the sequence"). **Economic-redesign alternative (de-tiering) — deferred
+  V-future, decided 2026-06-05, *not* a forced move:** if reward were *derivative*
+  (uniform/global rate, not a declared tier) the `tier` field could leave the wire (cohort →
+  `{creation_bucket}`, tier axis gone) — but `creation`/height stays (time-accrued reward
+  needs a provable accrual-start = the same 3C-vs-3A choice); "nothing" only if reward stops
+  being time-accrued. The economics are a **designed counterweight** (not to be unbalanced),
+  and bucketing likely already closes the gap, so per `21-reversion-clause-discipline.mdc`
+  this is **reject-now-with-reopening-criterion: reopen only if a high-value-target threat
+  model shows the within-tier within-bucket residual is unacceptable.** If reopened, spec-first
+  consensus-economics round per `05-system-thinking.mdc`. Also: the
+  **band-declaration binding (T8/8b)** — the
+  band↔`C_stake` range proof must carry the **same rigor as the value range proof**
+  (silent-inflation surface co-equal with entitlement soundness); and the **A5
+  mass-unstaking simulation** — confirm the burn-servo / decaying-emission / `ρ_cap`
+  self-stabilize under a coordinated rational-exit shock (cross-track to economics).
+  The prior L4-hide-tier/window-for-V4 ask folds into F0. **T11 principal-commitment
+  re-randomization was investigated and resolved at source 2026-06-05 (§7.5.1 #2), so
+  it is not an open ask.** **Stage-3 load-bearing pins:** bulk-fetch-only nullifier
+  scan T13; `OutputRef`-keying T12; prover-bundle zeroization T5; **constant-time
+  claim-build crypto (Schnorr / membership / nullifier scalar work — new, T5/§7.5.3)**;
+  claim via `PendingTxEngine` staleness gate G6; canonical wire ordering G12.
+  **Bucketing quantified (2026-06-05):** cohort `≈ W·λ/3`; the exact-height baseline is
+  `W=1` (per-block, scale-resistant); `W>1` is a tunable multiplier *and* restores
+  dilution-with-growth (cohort rises with `λ`). Cost = bounded, **tier-relative**
+  lock-shift (flat `W=720` ≈ +72 % on a tier-1 1,000-block lock vs ~0.5 % on tier-3
+  150k) → **scale `W` per tier** (smallest for hot-set tier-1, largest for tier-3, all
+  publicly derived from the revealed `tier`, no new leak). **`W`-choice — fixed vs.
+  adaptive (open):** the floor `k` (min participants) is the target; *hard*
+  count-closed buckets are **rejected** (ceiling becomes a future-state function →
+  non-causal binding, reorg-unstable membership, cold-start deadlock, and a new
+  high-resolution `λ(t)` width-leak + Sybil binning-knob); the *soft* DAA-style
+  `W(tier,epoch)=clamp(⌈k·B/λ̂_tier⌉,W_min,W_max)` frozen-at-binding is the **candidate**
+  (past-state → reorg-stable, no new aggregate leak since `λ̂_tier`/`tier` already public,
+  adapts cost to need) but inherits **servo-stability discipline** (clamp+lag+slew per
+  `75-system-autonomy.mdc`); honest limit — no scheme makes `k`-anonymity from `<k`
+  total stakers. **`λ̂_tier` estimator: reuse the LWMA-1 difficulty algorithm,
+  estimator-half only** (no setpoint/retarget; over per-tier *height-keyed creation
+  counts* → immune to the timestamp surface difficulty defends; window `N` re-tuned
+  *longer* than difficulty's since responsiveness is double-edged here — fast tracking
+  aids cold-start but eases Sybil flood-thinning). Defer `k`/clamps/slew/**LWMA-window**
+  to consensus-policy review + the `V3_STAKER_ARCHIVAL.md` population simulation. **Self-advertisement threat-model input
+  (2026-06-05):** Shekyl ships shareable shard-art (`V3_SHARD_VISUALIZATION.md`,
+  "print/share rendering") and tier↔archival-role legibility (`V3_STAKER_ARCHIVAL.md`,
+  tier-3=deep archivist) → a large fraction of stakers will **self-doxx**. For them F0's
+  marginal cost ≈ 0 (reinforces "F0 penalizes the privacy-conscious"); for the silent
+  tail, self-doxx by others **erodes the cohort by elimination** (sharpest in thin
+  cohorts) → `W` must clear the floor *after* self-doxx attrition. **Cross-track:** the
+  share feature + an on-chain holder-registry (archival open question) + distinctive
+  held-shard-sets can bridge real-world-identity → on-chain-holder → (composed with F0)
+  claim-cohort — an **archival / `shekyl-shard-visual` privacy review item** before that
+  ships, not Phase 2B wallet scope. **F-ARCHIVAL (2026-06-05) — outranks and *gates* the F0
+  `W`-choice.** Archival *is* staking ("if you stake, you archive"), so archival visibility =
+  membership disclosure; the **portfolio is a tier oracle by economic design** (tier-sorted shards →
+  held shards ⇒ tier), a channel *separate from the claim wire* → **whole-system tier privacy needs
+  both the claim-wire tier (F0) *and* the archival tier-weighted pricing weakened**, which **further
+  devalues de-tiering-alone** (reinforces parking, does not reopen); gamification selects high-value
+  targets (rarest = most shareable = most identifying). **Undecided load-bearing question: archival
+  commitment *public address-bound* vs. *privately membership-proof-bound*?** Draft mechanisms
+  (on-chain challenge-response, holder registry, identified reward routing) **lean public**; public +
+  mandatory archival + tier-sorted shards = **every staker's membership + tier public by
+  construction, no sharing** (dwarfs F0). **Presumption = private** (consistency with the
+  privacy-first claim/unstake model; public = inherited "easier to count" convenience per
+  `16-architectural-inheritance.mdc`); **hard part = private replication counting** for `1/R`
+  pricing (private set cardinality). Priority actionable set: **(1) resolve public-vs-private binding
+  (gates all)**; (2) weaken tier-weighted pricing (economics-vs-privacy); (3) HKDF-separate archival
+  identity from claim/spend; (4) share-UX privacy warnings. **Non-sharer bucketing privacy is
+  conditional on (1)+(2)** — bucketing softens only the last cascade link, nothing for
+  membership/tier/portfolio. Decide **before `ArchivalEngine` ships** (pre-genesis discount: design
+  private from the start). Cross-track to `V3_STAKER_ARCHIVAL.md` / `V3_SHARD_VISUALIZATION.md`
+  (both updated 2026-06-05).
+  **RESOLVED IN DESIGN (2026-06-05) — private, via pay-for-service rebasing + firewalled pseudonym;
+  pending sim/soundness ratification.** Enumeration: **archival is the only service staking provides**
+  (consensus = PoW's job; the capital "bond" is slashable for nothing; supply effects = just-holding;
+  governance = downstream) → the staking reward **is** payment for archival → **no opt-out tier**
+  (it re-creates the *Problem 1* rent). Model: one archiver type; one **work-paid** reward
+  (retention-based, scarcity-weighted, **banded plateau-cap**); principal = never-slashed collateral
+  = (small) eligibility gate; **firewalled pseudonym P** replaces `is_active_staker(entity_id)` with
+  **membership-proof registration** + **`N_arch = x·G_arch`** (independent of `Hp(O)`/`G_S`; extends T7
+  DDH to a third base) + **HKDF-derived P** + **periodic liveness re-proof** (lapses on unstake); `P`
+  needs **unlinkability + backing, not uniqueness** (keystone carries Sybil); firewall is a **4-layer
+  stack** (crypto + network + timing + output). **Keystone — per-shard retention bonds:** slashable
+  per-shard collateral gives the *future*-retention commitment longevity (a past signal) cannot;
+  **replaces the staker tier** (so F0 + portfolio oracle close *because bonds replace tier*); makes
+  Sybil-splitting worthless (`total bond = shards × rate`, pseudonym-count-independent); de-overloads
+  the lock (small eligibility lock vs. scaling bonds). Re-bases capital from "yield multiplier" to
+  "**slashable service-collateral**" — slogan corrected to "pay for work, where doing the work requires
+  proportional capital-at-risk that bonds the work." **Dissolves (replace, not converge):** the
+  entitlement machinery (reserve-DLEQ/bounded-remainder/`entitlement.rs`/`tiers.rs`/`rewards.rs`)
+  becomes **dead code**; publicly-computable reward dissolves **F0**, the **portfolio tier-oracle**, and
+  **8a → a loud 8c** (retention-proof unforgeability — silent inflation becomes detectable).
+  **Gate-list before consensus-real** (full text in `V3_STAKER_ARCHIVAL.md` §*Pay-for-service
+  rebasing*): (1) **`Σwork` servo** — supply-safe **and** differencing-clean (its inputs are public, so
+  the `band_sum`-differencing leak does *not* transfer); (2) retention-proof soundness + per-P/per-shard
+  **consensus state-cost** (8a → loud 8c); (3) **`R_market` derived ledger count** (gate 3 ν
+  **dissolved** 2026-06-07 — see [`ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md)
+  §2); (4) **per-shard retention bond replacing tier** (keystone — collapses the
+  old tier-decision + Sybil-overloaded-lock gates; residual = bond-rate calibration); (5) bootstrap
+  shape = **flat per-bonded-shard, foundation-overlapped, sunset**; (6) **`P` backing+firewall** unbuilt
+  (uniqueness relaxed); (7) **economic sim re-priced** for capital-collateralizes-work (the foundational
+  gate — genesis-class: capital-bonded yield cannot re-justify itself in the fee-only era). **Scope:**
+  this **replaces** the confidential-yield subsystem (`CONFIDENTIAL_STAKING.md` + `rust/shekyl-staking/`
+  `entitlement.rs`/`tiers.rs`/`rewards.rs`), a large audit-surface deletion; `CONFIDENTIAL_STAKING.md`
+  not edited until gates 4 + 1 settle. Nutshell: **staking = archiving.** Resolution recorded in
+  `PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3 (F-ARCHIVAL resolution) and `V3_STAKER_ARCHIVAL.md`.
+  **Next step (active): the sim.** Spec-first, pre-code, in
+  [`design/STAKER_ARCHIVAL_SIM.md`](./design/STAKER_ARCHIVAL_SIM.md); iteration 1 isolates
+  **coverage dynamics** (`1/R` + plateau-cap + per-shard bonds → "covered, spread,
+  none-holds-everything, deep-history held"), gates 1/4/5/7 layered as later iterations.
+  **Target:** V3.1. **Ref:**
+  [`PHASE_2B_STAKE_LIFECYCLE.md`](./design/PHASE_2B_STAKE_LIFECYCLE.md) §7.5 / §7.5.3.
+
+- **Axum daemon RPC: IPv6 dual-bind parity with epee (PR #103).** When the
+  Rust/Axum transport is the sole RPC server, `daemon.cpp` `run()` binds a
+  single listener on the resolved IPv4 host (`--rpc-bind-ip` /
+  `--rpc-restricted-bind-ip`, now honored). The epee acceptor additionally bound
+  the IPv6 address (`--rpc-bind-ipv6-address`, default `::1`) when `use_ipv6`;
+  the Axum path drops that second listener. **Work:** start a second Axum
+  listener (or dual-stack bind) for the configured IPv6 address when IPv6 is
+  enabled, and plumb the resolved IPv6 host the way `get_rpc_bind_ip()` plumbs
+  the IPv4 host. **Target:** V3.1. **Reopen when:** the daemon-RPC hardening
+  pass runs, or a user reports the missing IPv6 listener.
+  **Ref:** [`src/daemon/daemon.cpp`](../src/daemon/daemon.cpp) `run()`;
+  [`src/rpc/core_rpc_server.cpp`](../src/rpc/core_rpc_server.cpp)
+  `core_rpc_server::init` (bind-IP resolution).
 
 - **Wallet file backup-exclusion markers (PR 6 lessons canvass §5.12 F1).**
   Users sync `~/.shekyl` via Dropbox/iCloud; encrypted blobs still leak to
@@ -1825,7 +4544,7 @@ sustainability is unaffected by the recalibration.
   outright in Phase 2 of the Electrum-words removal series
   (PR #58, `feat/electrum-words-removal-phase2-rpc-deletion`).
   Pre-flight investigation (recorded in
-  [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./design/ELECTRUM_WORDS_REMOVAL_PLAN.md)
+  [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./completed/ELECTRUM_WORDS_REMOVAL_PLAN.md)
   Phase 2 work item 9 reassessed) found four blockers that
   flipped the disposition from migrate to delete: (a) the harness
   invoked `monerod` / `monero-wallet-rpc` binaries that don't
@@ -1907,6 +4626,23 @@ sustainability is unaffected by the recalibration.
   otherwise. Cross-reference:
   [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §22.
 
+- **Rules-queue: reconcile the priority-ordering statements across
+  scopes (2026-06-12, `FcmpMembershipOnly` review round).** The
+  ordering is currently stated three ways: project memory carries
+  "privacy > security," the privacy/security rule material carries
+  "quantum #1, classical security #2, privacy #3," and
+  [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) carries
+  "security and quantum resilience #1, privacy #2." These are
+  plausibly all correct at different scopes (cross-domain product
+  positioning vs. within-crypto-primitive-selection vs. mission
+  arbitration), but a privacy-maximalist chain with three numberings
+  will trip an external reviewer. Disposition: a one-line
+  reconciliation in `00-mission.mdc` (the single source of truth on
+  priority ordering, by its own statement) naming which ranking is
+  canonical at which scope. Non-blocking; fold into the next rules
+  touch. Target: V3.1 (sibling to the other rules-queue entries in
+  this section).
+
 - **Rules-queue: elevate per-gate reviewer-discipline calibration
   into a workspace-wide rule (trigger: RandomX v2 Phase 0 review
   signs off on `RANDOMX_V2_RUST.md` §23).** Probable home:
@@ -1947,7 +4683,7 @@ sustainability is unaffected by the recalibration.
   `.cursor/rules/18-type-placement.mdc` (in-queue draft), with the
   public-material exclusion as a sub-clause. The rule statement,
   drawn from
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §3.5's closure subsection: _typed wrappers attach to
   identity-bearing primitives where rule-grounded; uniformity-driven
   wrapping of public material is the wrapper-shape recapitulation of
@@ -1991,11 +4727,11 @@ sustainability is unaffected by the recalibration.
   "remove fallback" bullet's vacuousness against the PR-5-pinned stub).
   All three share one root cause: the migration plan was written before
   the M3a Round 4a workflow-shape pivot (per
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §2.1.1), which deferred the bridge impl past every subsequent PR; the
   surgical shape is consistent across all three. The framework-
   attribution observation is captured in
-  [`docs/design/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3D_PREFLIGHT.md)
   §11 with cross-references to the three precedents; future similar PRs
   (likely candidates: PR-3's M3e docs-realignment commit; future per-trait
   extraction PRs' pre-flight passes) can cite the precedent without
@@ -2143,13 +4879,13 @@ sustainability is unaffected by the recalibration.
   the premise carried forward as stale framing._
 
   Cross-references:
-  [`docs/design/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3D_PREFLIGHT.md)
   §2 D1 + §11;
-  [`docs/design/STAGE_1_PR_3_M3C_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3C_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3C_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3C_PREFLIGHT.md)
   §2.1.1 (Trim-1 disposition);
-  [`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3B_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3B_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3B_PREFLIGHT.md)
   §D5 (test-placement divergence);
-  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  [`docs/completed/STAGE_1_PR_3_MIGRATION_PLAN.md`](./completed/STAGE_1_PR_3_MIGRATION_PLAN.md)
   §3.3.1 (M3c landing-notes cross-reference) and §3.4.1 (M3d landing-notes
   cross-reference, landed 2026-05-11);
   [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
@@ -2167,7 +4903,7 @@ sustainability is unaffected by the recalibration.
   review-response commits `5ab5b43a2`/`67be1c0b3` — the
   commit-history-level instance at the 4-vs-6-vs-8 plan-state
   divergence);
-  [`docs/design/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)
   §4 (amended commit-decomposition table) and §11 (the calibration
   shift recording the divergence pattern as forward-template
   content). Target: V3.1 (the rules-queue work's expected landing
@@ -2189,7 +4925,7 @@ sustainability is unaffected by the recalibration.
   M3 sub-PRs); reading the rule strictly would defer mode-2 residue
   indefinitely, generating exactly the V3.0-queue accumulation pattern
   the M3e preflight §11.1 records. The calibration shift, recorded in
-  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)
   §11.1, distinguishes three modes:
 
   - **Mode 1: in-scope substantive.** Direct PR-scope work; lands in
@@ -2249,13 +4985,13 @@ sustainability is unaffected by the recalibration.
   `18-type-placement.mdc` (public-material exclusion sub-clause) +
   `19-plan-vs-state-divergence.mdc` (or sub-clause of 18).
   Cross-references:
-  [`docs/design/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)
   §11.1 (trinary reading), §11.3 (rules-queue consolidation guidance);
   M3e D5 disposition (the concrete mode-2 precedent);
   PR #40 applied-disposition table above (eight on-tree applications
   of the trinary calibration across two review-response cycles + a
   post-merge audit; the worked-examples surface for the rule body);
-  [`docs/design/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./design/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./completed/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md)
   §1.3 (the V3.1-prep extension surfacing where the applied
   dispositions get pinned);
   [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
@@ -2280,7 +5016,7 @@ sustainability is unaffected by the recalibration.
   small), reduces context-switching across reviews, and ships the
   rules as a coherent corpus rather than scattering them. The
   consolidation target, per
-  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)
   §11.3:
 
   - **PR 1: rules-corpus consolidation** (likely 4–6 commits, one per
@@ -2301,7 +5037,7 @@ sustainability is unaffected by the recalibration.
   by the per-entry V3.1 targets without an explicit consolidation
   pin — would land each rule as its own PR by default; the
   consolidation pin reverses the default. Cross-references:
-  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)
   §11.3; the §18, §19, and rule-15-trinary-reading FOLLOWUPS above.
   Target: V3.1 (queue-internal coordination decision; lands as the
   rules-queue's first PR or as a planning artifact ahead of it).
@@ -2365,7 +5101,7 @@ sustainability is unaffected by the recalibration.
   the higher-abstraction instance of); the rules-queue-
   consolidation FOLLOWUP above (this folds into the V3.1 rules-
   corpus PR's scope);
-  [`docs/design/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./design/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./completed/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md)
   §2 D3 + §6.7 (the closeout PR's discipline binding language
   satisfying the KeyEngine slot of L353-379, written explicitly
   so future trait-introducing PRs inherit the pattern). Target:
@@ -2447,7 +5183,7 @@ sustainability is unaffected by the recalibration.
   `rust/shekyl-engine-state/src/transfer.rs::TransferDetails` doc
   (post-`ad7f6ba7a` rewrite is the entry-point text the design pass
   refines);
-  [`docs/design/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md)
+  [`docs/completed/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3D_PREFLIGHT.md)
   §3.3 (post-M3d engine-confined-secrets property delivery framing,
   which makes the `Option`-secret-field memory-safety rationale
   vacuous);
@@ -2480,7 +5216,7 @@ sustainability is unaffected by the recalibration.
   going through `into_bytes` (potentially via `unsafe` over
   `#[repr(transparent)]` if `fips203` documents that guarantee).
   Cross-references:
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §3.5 closure;
   [`.cursor/rules/35-secure-memory.mdc`](../.cursor/rules/35-secure-memory.mdc)
   §21–22; PR #33 round-4 Copilot finding closure narrative
@@ -2528,7 +5264,7 @@ sustainability is unaffected by the recalibration.
   the use case in this file and re-evaluate the lifetime of the
   wrapper. The path of least surprise is (a). Cross-references:
   Stage 1 PR 2 commit 2 pre-flight survey;
-  [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md`](completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
   §7. Target: V3.1.
 
 - **PQC Multisig V3.1: external adversarial review (Phase 5).**
@@ -2953,6 +5689,38 @@ sustainability is unaffected by the recalibration.
 
 ## V3.1.x — dependency migrations
 
+- **Retire the iai-callgrind→gungraun bench-flake bisect harness once gungraun
+  proves out (spawned by the gungraun 0.19 migration, 2026-06-16).** The
+  migration from `iai-callgrind 0.16` to `gungraun 0.19`
+  (`docs/investigation/2026-05-09-bench-baseline-flake.md`) was justified on
+  supported-upstream / debt grounds; whether it *also* fixes the
+  `instructions=0` capture flake is **speculative** (root cause unknown,
+  §3.3). Two artifacts exist only to bridge that uncertainty and should be
+  removed once it resolves:
+  - `.github/workflows/bench-runner-bisect.yml` — a `workflow_dispatch`-only,
+    deliberately-`iai-callgrind 0.16`-pinned runner-bisection harness for the
+    *original* flake. Post-migration it pins a dependency the tree no longer
+    uses; it gates nothing and pushes nowhere.
+  - The per-bench capture retry (`GUNGRAUN_CAPTURE_ATTEMPTS`, default 3) in
+    `scripts/bench/capture_rust_baseline.sh` — a belt-and-suspenders absorber
+    for the transient zero; harmless to keep but redundant if the flake is
+    genuinely gone.
+  **Trigger:** retire the bisect workflow (and reconsider the retry) once
+  gungraun has run **~100 capture/CI cycles** (per-PR `capture-pr` + post-merge
+  `update-baseline` runs) with **zero `instructions=0` recurrences** — at which
+  point the upgrade is empirically the fix, not a speculative one. *Reopen /
+  escalate sooner if:* a zero recurs under gungraun, which would reopen §3.3's
+  candidate list (cause is runner-host- or Callgrind-side, not the crate) with
+  fresh evidence and argue for *keeping* both artifacts.
+  **Watch item — baseline drift on first regeneration:** the post-merge
+  `update-baseline` job reseeds `bench-baseline` wholesale under gungraun, so
+  steady-state comparison is gungraun-vs-gungraun (no cross-tool diff). Local
+  spot-check shows gungraun 0.19.2 instruction counts within <1% of the
+  iai-callgrind 0.16 numbers (e.g. ledger serialize 4,416,897 vs ~4.45M), far
+  inside the ±10% slowdown gate — but the bench set has grown since the
+  original cross-check, so confirm the first full gungraun baseline lands
+  clean across *all* current entries before trusting the gate.
+
 - **rand 0.9 migration and curve25519-dalek 5 cascade.**
   Seven Dependabot alerts on `shekyl-core` cite
   [GHSA-cq8v-f236-94qc](https://github.com/advisories/GHSA-cq8v-f236-94qc)
@@ -3039,8 +5807,9 @@ sustainability is unaffected by the recalibration.
   ### Residual: digest_auth transitive
 
   Even after our workspace crates migrate, `digest_auth v0.3.1` (a
-  transitive dependency of `shekyl-simple-request-rpc` via the
-  `shekyl-oxide` vendor tree) selects rand 0.8.5 for cnonce generation.
+  transitive dependency of `shekyl-rpc-transport`, the first-party crate
+  relocated from the old `shekyl-oxide` `rpc/simple-request`) selects rand
+  0.8.5 for cnonce generation.
   It has no newer crates.io release. Alerts #3 and #4 (the two
   `Cargo.lock` alerts) will reappear until `digest_auth` is either:
 
@@ -3308,13 +6077,84 @@ sustainability is unaffected by the recalibration.
 ## V3.1+ — Legacy C++ → Rust rewrite scope
 
 Items captured from the
-[shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)
-(2026-04-25) when the `wallet-state-promotion` plan halted at 2k.c
+[shekyl-v3-wallet-rust-rewrite plan](./design/WALLET_REWRITE_PLAN.md)
+(2026-04-25; in-repo continuation of the original Cursor plan) when the
+`wallet-state-promotion` plan halted at 2k.c
 on the basis that further `wallet2.cpp` rewires generate audit
 surface for a file scheduled for deletion. The rewrite plan deletes
 `wallet2.cpp` wholesale at its Phase 5 — these items name the
 scoped follow-ups that ride alongside that deletion or land in
 its wake.
+
+- **Daemon PQC phase-1 payload assembly duplicates
+  `shekyl_wire::Transaction::pqc_signing_payload_hashes` — route through a
+  `shekyl_*` FFI entry point and delete the C++ copy.** Surfaced 2026-07-05
+  during the WI-2 bond-assembly pseudoOuts coupling closure
+  (`GENESIS_TX_WIRE_FORMAT.md` §1.1): `get_transaction_signed_payload` in
+  `src/cryptonote_core/tx_pqc_verify.cpp` hand-assembles the phase-1 signed
+  payload (prefix blob + rctSigBase blob + prunable hash + PQC header + all-key
+  hashes) in C++, byte-for-byte parallel to the Rust assembly that already
+  exists and is tested on the signing side
+  (`shekyl_wire::Transaction::pqc_signing_payload_hashes`, consumed by
+  `shekyl-tx-builder::phase1_payload_hashes` / `sign_pqc_auths`). Two
+  implementations of the same consensus-critical preimage must agree
+  byte-for-byte forever; every serialization-shape change (e.g. the
+  spend-subset pseudoOuts sizing, closed 2026-07-05) has to be applied twice.
+
+  **Disposition.** Per
+  [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+  ("advance the boundary, don't thicken it") the verify path should call a
+  `shekyl_*` FFI entry point that takes the canonical tx blob and returns the
+  per-input phase-1 payload hashes (or performs the full hybrid-signature
+  verification in Rust, which also satisfies "crypto contracts belong in
+  Rust"), with `tx_pqc_verify.cpp` reduced to a marshaling shim. This is a
+  consensus-verification-path migration, so it is a planned activity with its
+  own design round and test gates (byte-parity KATs between the C++ assembly
+  and the Rust entry point before the C++ copy is deleted), not a ride-along.
+
+  **Closure point / target: V3.0+** (rides the daemon Rust-forward track; the
+  duplicated assembly is tested against the Rust side by the existing
+  end-to-end spend tests in the interim, so the risk is drift-on-change, not
+  present-day divergence).
+
+- **FCMP++ sender-side output verification — inherited `wallet2::sanity_check`
+  receipt check is non-functional; cryptographic re-derivation belongs in
+  Rust.** Surfaced 2026-06-21 debugging the C++ FCMP++ spend path. The
+  inherited Monero per-destination receipt check
+  (`get_tx_proof`/`check_tx_proof`) is non-functional in Shekyl: the
+  pre-broadcast overload `get_tx_proof(tx, tx_key, …)` is deprecated and throws
+  unconditionally (`src/wallet/wallet2.cpp`), the live `get_tx_proof(txid, …)`
+  requires the tx on-chain (it is not, during construction), and the mechanism
+  is classic-ECDH only — it cannot reconstruct FCMP++/PQC output secrets
+  (HKDF + ML-KEM). The check is dead per
+  [`16-architectural-inheritance`](../.cursor/rules/16-architectural-inheritance.mdc) /
+  [`60-no-monero-legacy`](../.cursor/rules/60-no-monero-legacy.mdc).
+
+  **Current state.** A prototype that replaced the dead receipt check with a
+  cleartext destination-bookkeeping check (constructed tx `dests` + `change`
+  must cover every required recipient amount) was written during the 2026-06-21
+  spend-path debugging but **reverted** as out-of-scope C++ debt (the
+  KAT-replacement PR is Rust-only; see "C++ FCMP++ wallet send path incomplete"
+  above). The inherited dead check therefore **remains** in C++
+  `wallet2::sanity_check` unchanged. The bookkeeping shape is recorded here as
+  the minimum the Rust send-path should adopt: cleartext-bookkeeping at
+  minimum, ideally full cryptographic re-derivation.
+
+  **Disposition.** A proper sender-side output verification — re-derive each
+  output's one-time key, open its commitment to `(amount, mask)`, and verify
+  the amount-encryption against the intended `(address, amount)` — is crypto
+  that belongs in Rust per
+  [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc), in
+  the `shekyl-tx-builder` / `shekyl-engine-core` send path, not in
+  `wallet2.cpp` (scheduled for deletion at the rewrite's Phase 5). The
+  daemon re-verifies the membership proof, key images, and balance on relay
+  — the authoritative oracle — so the wallet self-check is defense-in-depth,
+  not the security boundary.
+
+  **Reopening / closure.** Lands with the Rust send-path verification (or
+  with the `wallet2.cpp` Phase-5 deletion, whichever is first). **Target:
+  V3.1+** (defense-in-depth; no chain-state migration cost; daemon relay is
+  the authoritative validator).
 
 - **`wallet2` has no `generate_from_bip39` entry point — by design;
   do not add one.** Surfaced 2026-05-05 (Bug 4 in
@@ -3410,7 +6250,7 @@ its wake.
 
   **Closure point:** V3.2 alongside the `shekyl-wallet-rpc` Rust
   cutover. Cross-references: PR #58 (Phase 2 RPC deletion);
-  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  [`docs/completed/ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §2.4 G1; commit `255ea0abb` (`wallet-rpc: drop seed-recovery
   branch from stop_background_sync`).
 
@@ -3477,11 +6317,12 @@ by the rewrite plan's half-day review gate, item 3):
 | --- | --- | --- |
 | Absorbed (already by rewrite plan) | `wallet2.cpp` absorption (2l/2m/2n) | Phase 5 deletion |
 | Absorbed | `WalletPrefs` round-trip property test (2k.a2) | Phase 1 (`RuntimeWalletState` audit) |
-| Absorbed | `shekyl-daemon-rpc` staticlib `tracing` silently dropped (V3.2 below) | Phase 1 (logging deliverable, re-targeted from V3.2) |
+| Landed 2026-06-10 | `shekyl-daemon-rpc` staticlib `tracing` silently dropped (V3.2 below) | Phase 1 (logging deliverable, re-targeted from V3.2) — closed via single-Rust-image link contract, decision log 2026-06-10 |
 | Closed by Phase 5 | `shekyl-cli` key image export binary format (V3.2 below) | Phase 5 — Monero binary format dies with `wallet2.cpp`; air-gapped flow uses `UnsignedTxBundle`/`SignedTxBundle` |
 | Closed by Phase 5 | `wallet_tools.cpp` mixin/decoy infrastructure (V3.2 below) | Phase 5 — swept with `tests/unit_tests/wallet*.cpp` |
 | Closed (Operation A) | `monero-oxide` vendor-bump `87acb57` → `3933664` | Phase 0 PR 0.6 (mechanical, fork-tip only) |
 | Cross-linked, not absorbed | `shekyld` `fee_policy_version` daemon-side exposure | V3.1 daemon release (wallet uses `Option<u32>` forward-compat) |
+| Closed 2026-07 (submit-verdict series) | `shekyld` stale-FCMP++-root signal on `send_raw_transaction` | Shipped early as `RejectCause::StaleRoot` in the typed `SubmitVerdict` contract (`DAEMON_SUBMIT_VERDICT.md` §2.1); reopening criterion fired, variant constructed |
 | Cross-linked, not absorbed | `tx_pool` / `blockchain_db` LMDB transactional wrapper | V3.1.x peer plan (separate from rewrite) |
 | Cross-linked, not absorbed | `monero-oxide` un-pin Operation B (40 upstream commits) | V3.1.x un-pin plan (peer to rewrite, parallelizable) |
 | Cross-linked, not absorbed | Workspace clippy `-D warnings` cleanup | V3.1.x dedicated pass (after rewrite stabilizes) |
@@ -3499,7 +6340,9 @@ one place to confirm each item's relationship to the wallet stack.
 
 - **`wallet2.cpp` absorption — sub-commits 2l/2m/2n.** The
   `wallet-state-promotion` plan's
-  [2l cache rewire](../.cursor/plans/2l-cache-rewire_80a08559.plan.md)
+  2l cache rewire (Cursor plan `2l-cache-rewire_80a08559`, absorbed —
+  see the deferral note in
+  [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md))
   (sub-commits 2l.b, 2l.c, 2l.d, 2l.e), 2m-keys (legacy keys-side
   ser/des deletion), 2m-cache (legacy boost-cache deletion), and 2n
   (transitional `pub use ... as WalletState` alias deletion) are
@@ -3612,6 +6455,79 @@ one place to confirm each item's relationship to the wallet stack.
   ([`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md),
   2026-04-25).**
 
+- ~~**`shekyld` stale-FCMP++-root signal on `send_raw_transaction`.**~~
+  **CLOSED (2026-07, submit-verdict series — ahead of its V3.1 target
+  and in a stronger shape than specced).** The reactive stale-root
+  signal shipped as `RejectCause::StaleRoot` in the typed
+  `SubmitVerdict` contract
+  ([`docs/design/DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md)
+  §2.1) rather than as a `fcmp_root_stale: bool` bolted onto the legacy
+  reply: the Rust admission engine classifies not-found
+  (`ReferenceNotFound`), too-recent (`ReferenceTooRecent`), and
+  stale/depth-moved (`StaleRoot`) as *distinct* causes — finer than the
+  single flag this item asked for — and the wallet's per-cause
+  disposition table (§2.5, PR-4) preserves the reservation and drives
+  the bounded rebuild. The `ProofStale` reopening criterion fired
+  exactly as written ("a daemon-side stale-root signal"); the variant
+  is constructed via `RejectCause::StaleRoot`, and the legacy
+  `send_raw_transaction` endpoint this item targeted was deleted
+  (§9.3, PR-5). Steps 1–3 below are the historical spec; superseded.
+  Surfaced by the Phase 2a send-path audit
+  ([`docs/SHEKYLD_PREREQUISITES.md`](SHEKYLD_PREREQUISITES.md) §5,
+  appended 2026-06; line citations re-verified 2026-06). The daemon
+  **already detects** the staleness conditions as distinct points in
+  `Blockchain::check_tx_inputs`
+  (`src/cryptonote_core/blockchain.cpp:3801–3855`): referenceBlock
+  not-found (`:3803`), too-recent (`:3811`), too-old (`:3822`), and
+  curve-tree-depth out-of-range (`:3846`). It just funnels all of them
+  into the generic `tvc.m_verifivation_failed = true; return false` with
+  **no dedicated sub-flag**, and `on_send_raw_transaction`
+  (`src/rpc/core_rpc_server.cpp`) consequently maps a stale FCMP++ root to
+  `status == "Failed"` with **no flag set and an empty `reason`** —
+  indistinguishable from a genuinely malformed transaction. Because the
+  detection already exists, surfacing the signal is **mechanical** (add a
+  flag + set it at the existing points), not a verification rewrite.
+  The wallet therefore cannot reactively detect the *recoverable*
+  stale-root case (rebuild-against-fresh-root, re-sign, re-submit) and
+  currently maps it to `DaemonRejectedTerminal { Malformed }`
+  (`PHASE_2A_SEND_PATH.md` §3.6 honest-subset mapping).
+
+  This is the substrate-anchored **reopening criterion** for the
+  deferred `TxSubmitOutcome::ProofStale` detection (rejected now per
+  `21-reversion-clause-discipline.mdc`; the variant exists unconstructed
+  from 2a-1).
+
+  Scope of the daemon work (**its own design doc + review cycle** — it
+  touches the consensus-critical `check_tx_inputs` path even though the
+  change is verdict-observability only, not a consensus-rule change, per
+  `20-rust-vs-cpp-policy.mdc` migration-is-a-planning-activity):
+  1. Add a `tvc.m_fcmp_root_stale` flag to `tx_verification_context`
+     (`src/cryptonote_basic/verification_context.h`) and a dedicated
+     rejection flag (`fcmp_root_stale: bool`) to the `send_raw_transaction`
+     reply (`COMMAND_RPC_SEND_RAW_TX::response_t`), optionally with a
+     sub-reason discriminating not-found / too-old / depth-grew.
+  2. Set `tvc.m_fcmp_root_stale` at the **recoverable** staleness points
+     in `blockchain.cpp` — not-found (`:3803`), too-old (`:3822`),
+     depth-out-of-range (`:3846`) — but **not** too-recent (`:3811`),
+     which is a too-fresh reference (rebuilding against a fresher root
+     makes it worse, so it is *not* a `ProofStale` rebuild case). Plumb
+     it through `on_send_raw_transaction`. Additive; no consensus-rule
+     change; no breaking RPC change.
+  3. The Rust wallet's `submit_outcome_from_response`
+     (`rust/shekyl-engine-core/src/engine/transaction_submitter.rs`) adds
+     `fcmp_root_stale` to the consumed `TxRelayResponse` subset and splits
+     `ProofStale` out of the generic `Malformed` bucket; the orchestrator
+     drives the §3.6 bounded rebuild loop.
+
+  **Not a Phase 2a blocker.** The proactive `reference.rs` validity
+  horizon (`should_reanchor`/`select_reference_height`,
+  `PHASE_2A_SEND_PATH.md` §5.4) is the
+  interim guard; the reactive path lights up additively when the daemon
+  flag lands, with no wallet wire-format break. **Target: V3.1 daemon
+  release (Phase 6 end-to-end harness consumes it). Cross-link:
+  [`docs/SHEKYLD_PREREQUISITES.md`](SHEKYLD_PREREQUISITES.md) §5,
+  `PHASE_2A_SEND_PATH.md` §3.6.**
+
 - **`ActivityMetric` producer actor (wallet-side coherent bundle).** Surfaced by
   Stage 1 PR 7 segment **2i** G4 disposition
   ([`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](design/STAGE_1_PR_7_ECONOMICS_ENGINE.md)
@@ -3716,7 +6632,7 @@ one place to confirm each item's relationship to the wallet stack.
     re-evaluation regardless). Cross-links: PR 0.4 audit
     [`docs/MONERO_OXIDE_VENDOR_STATUS.md`](MONERO_OXIDE_VENDOR_STATUS.md);
     PR 0.6 vendor-bump in the rewrite plan
-    [`.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md`](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md).**
+    [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md).**
 
 - **`shekyl_difficulty_lwma1_next` FFI shim allocates `Vec<u128>` per
   call.** Surfaced 2026-05-18 (Phase 2 PR
@@ -3728,7 +6644,7 @@ one place to confirm each item's relationship to the wallet stack.
   layout, align 8) to `&[u128]` (align 16) violates Rust's slice
   alignment invariant; the materialized copy is unavoidable under
   the Round 5 ABI choice
-  ([`docs/design/DAA_LWMA1.md`](design/DAA_LWMA1.md) §6.1).
+  ([`docs/completed/DAA_LWMA1.md`](completed/DAA_LWMA1.md) §6.1).
 
   **Performance impact.** ~1.5 KiB per call (`91 × 16` bytes),
   satisfied from the system allocator's small-object freelist.
@@ -3823,57 +6739,6 @@ one place to confirm each item's relationship to the wallet stack.
   Closure record retained for traceability; no V3.x work remains
   for this item.
 
-- **Binary-level `nm`-on-`shekyld` symbol-isolation invariant for the
-  deleted CryptoNote DAA functions.** Surfaced 2026-05-18 (LWMA-1
-  Phase 4 PR, Commit 10 design discussion). The current
-  consensus-invariants CI gate
-  ([`.github/workflows/consensus-invariants.yml`](../.github/workflows/consensus-invariants.yml)
-  +
-  [`scripts/ci/check_consensus_invariants.sh`](../scripts/ci/check_consensus_invariants.sh))
-  invariant 1 is a **source-level** grep: it verifies there are no
-  live `next_difficulty` or `next_difficulty_64` call sites in
-  `src/**`. This is a necessary precondition for binary absence but
-  is not the strongest available statement of the invariant: the
-  load-bearing property the threat model wants is that *the linked
-  daemon binary* doesn't contain a reachable
-  `cryptonote::next_difficulty(...)` symbol from which a future code
-  path could resurrect the deleted DAA.
-
-  **Disposition.** Add a binary-level CI step to the existing
-  workflow once CI infrastructure exposes a linked `shekyld` to a
-  post-link grep:
-
-  ```bash
-  if nm shekyld | rg -q '^.* (T|U) (next_difficulty_64|next_difficulty)\b'; then
-    echo "ERROR: linked daemon contains deleted DAA symbol"
-    exit 1
-  fi
-  ```
-
-  The check fails on either a defined (`T`) or referenced (`U`)
-  symbol matching the deleted DAA family. `nm` is preferred over
-  `readelf -s` for cross-toolchain portability (works on the
-  upcoming MSVC Windows build via `llvm-nm` and on macOS via
-  Apple's `nm`).
-
-  **Why not now.** The PR's reviewer-attention budget is loaded with
-  the consensus-rule changes (FTL/MTP/DAA); the source-level
-  invariant catches the same defection class with zero binary
-  artifact wrangling. The binary-level enhancement is value-add but
-  not load-bearing; deferred to a V3.x CI-hygiene pass.
-
-  **Target: V3.x** (CI hygiene). Closes when the
-  consensus-invariants workflow is extended with a post-build job
-  that links `shekyld` for the host triple and runs the `nm` check
-  above. The same job is the natural landing site for the upcoming
-  RandomX v2 Phase 2f symbol-isolation binary check; sharing the
-  job amortizes the link cost and avoids two parallel sub-workflows
-  doing similar things. No correctness issue exists today — the
-  source-level grep gives strong evidence the binary won't contain
-  the symbols, since unreferenced functions in C++ translation
-  units that lack `extern "C"` exports are eligible for dead-code
-  elimination.
-
 - **RandomX v2 `ExternalProject_Add`: per-`CONFIG` install path and
   `IMPORTED_LOCATION_<CONFIG>` for multi-config generators.**
   Surfaced 2026-05-18 (RandomX v2 Phase 1 PR #54, Copilot review
@@ -3914,7 +6779,7 @@ one place to confirm each item's relationship to the wallet stack.
   `FATAL_ERROR` with the per-`CONFIG` split alongside the first
   real consumer (`rust/shekyl-pow-randomx/` cross-check tests
   against the canonical v2 implementation, per
-  [`docs/design/RANDOMX_V2_PHASE1_PLAN.md`](design/RANDOMX_V2_PHASE1_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE1_PLAN.md`](completed/RANDOMX_V2_PHASE1_PLAN.md)
   §6.3). The minimal correct shape is:
   
   - Make `RANDOMX_V2_INSTALL` include `$<CONFIG>` (or, since
@@ -4003,6 +6868,27 @@ one place to confirm each item's relationship to the wallet stack.
   wallet rewrite plan, where `wallet2.cpp` retirement lands). Cross-
   references: decision log *"Wallet → Engine rename"* (2026-04-27)
   §"Deferred work" entry 1; CHANGELOG `[Unreleased]` BREAKING block.
+
+- **Rename inherited `rct::` / `rctSig` / `rctSigs` C++ surface after
+  `wallet2` cutover (Monero-era misnomer).** Disposition pinned in
+  [`docs/design/CT_SURFACE_NAMING_PIN.md`](./design/CT_SURFACE_NAMING_PIN.md)
+  (2026-06-09). Summary: April `ct_signatures` alias fixes RCT→CT only;
+  verifier module target is `ct_semantics` (not `ct_signatures`); wire tags,
+  C++ identifiers, and Rust vocabulary have separate cost curves; Rust uses
+  Shekyl-native names now and maps at FFI only.
+
+  *Trigger:* **`wallet2.cpp` retirement** (Phase 5) — not a rename PR before
+  then. Rust-side naming discipline is effective immediately per the pin.
+
+  *Target:* **V3.2** — [`WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
+  Phase 5. Scoped rename PR(s) at cutover; no rename riding feature work.
+
+  *Definition of done:* per pin §5 — delete construction stubs; C++ rename
+  gated on byte-identical round-trip; wire-tag changes update KATs at genesis
+  definition; `STRUCTURAL_TODO` updated.
+
+  *Reopening criterion:* new production `rctSigs` / `rct::` accretion after
+  Phase 5 → immediate rename PR (`21-reversion-clause-discipline.mdc`).
 
 - **C++ JSON-RPC method-name rename: `wallet_*` → engine-shaped names
   (folded into Phase 4b's Shekyl-native RPC method-set work).** The
@@ -4316,15 +7202,29 @@ one place to confirm each item's relationship to the wallet stack.
   codebase is cleaner than solving it for the wallet rewrite and
   re-solving it for the daemon. **Re-target: V3.1 / Phase 1 of wallet
   rewrite (was V3.2). Cross-link: rewrite plan
-  [`.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md`](
-  ../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)
+  [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
   Phase 1 deliverables.**
+
+  **Closed 2026-06-10 (mechanism amended 2026-06-11).** Neither of the
+  two shapes sketched above survived implementation: `nm` on the linked
+  `shekyld` showed *two* `tracing-core` `GLOBAL_DISPATCH` copies (one
+  per Rust staticlib image), which no in-process subscriber install can
+  bridge — and the wallet binaries carried the same split. Landed shape
+  is the per-binary single-Rust-image link contract: `shekyl-ffi` folds
+  in `shekyl-logging` (wallet-side image), the link-image crate
+  `rust/shekyl-daemon-image` combines `shekyl-ffi` + `shekyl-daemon-rpc`
+  (daemon image, selected per binary in `cmake/BuildRust.cmake`), a
+  post-link `nm` gate asserts exactly one dispatcher in `shekyld`,
+  and `shekyl_log_install_tracing_forwarder` (decision log
+  2026-04-25) ships as the runtime ordering/idempotency contract,
+  called from `src/daemon/main.cpp` after `mlog_configure`. See
+  `V3_WALLET_DECISION_LOG.md` 2026-06-10 + 2026-06-11 amendments.
 
 - **Re-examine `/FIiso646.h` and `rct::` → `ct::` deferrals.** Both
   deferrals rest on the same "upstream cherry-pick preservation"
   framing that
-  [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md) §"Why this matters
-  more than it used to" calls largely notional given Shekyl's actual
+  [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md)'s framing note
+  (top of file) calls largely notional given Shekyl's actual
   divergence from Monero (~3 substantive commits across 8 inherited
   files in the last 2 years; several files 88–100% diverged by line
   count). At V3.2 the question is no longer "cherry-pick risk vs.
@@ -4346,34 +7246,779 @@ one place to confirm each item's relationship to the wallet stack.
      so a fourth "defer again to V3.3" disposition is allowed only
      with a written reason that does not reduce to cherry-pick-risk.
 
-  2. **`rct::` → `ct::` namespace rename** — the type-alias bridge
-     `using ct_signatures = rct::rctSig;` ships today
-     ([`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md):578–584); the
-     full caller migration and the namespace rename in
-     `src/fcmp/rctTypes.h` / `rctOps.h` / `rctSigs.h` are currently
-     V4-targeted on the same "end of Monero upstream activity"
-     premise. Disposition rule for V3.2: confirm or revise the V4
-     target. If the framing-note premise holds, the rename is
-     orthogonal to V3.2 ship-readiness and can stay V4. If the V3.x
-     line accumulates more `rct::` sightings in fresh code, the
-     rename's deferral cost is rising and the V4 target should
-     compress to V3.x.
+  2. **`rct::` → `ct::` namespace rename** — disposition **revised**
+     (2026-06-09): full pin at
+     [`docs/design/CT_SURFACE_NAMING_PIN.md`](./design/CT_SURFACE_NAMING_PIN.md).
+     `ct_signatures` alias is not the verifier-module answer; `rctSigs` →
+     `ct_semantics` at cutover. Trigger: `wallet2` gone (V3.2 Phase 5).
+     Rust vocabulary effective now; no rename PR pre-cutover.
 
-  Cross-references:
-  [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md):17–18 (framing
-  note),
-  [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md):24–38 (alternative
-  tokens decision),
-  [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md):565–600 (rct/ct
-  rename status). Exit criteria: each of the two items has a written
-  V3.2 disposition (do, defer-with-reason, or stay-on-workaround); the
-  STRUCTURAL_TODO citations point at a real section header. Target:
-  V3.2.
+  Cross-references (by section header, robust against line drift):
+  [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md) framing note (top of
+  file; cousin-not-downstream premise),
+  §"C++ alternative tokens (`not`, `and`, `or`) used extensively"
+  (alternative-tokens decision),
+  §"`rct_signatures` field name is a Monero-era misnomer — partially
+  addressed" (rct/ct rename status). Exit criteria: each of the two
+  items has a written V3.2 disposition (do, defer-with-reason, or
+  stay-on-workaround); the STRUCTURAL_TODO citations point at a real
+  section header. Target: V3.2.
+
+- **MSVC / Windows build-debt cluster (migrated from
+  `STRUCTURAL_TODO.md`, 2026-05-30).** Consolidated here so open debt
+  lives in one tracker; `STRUCTURAL_TODO.md` is now a structural-
+  reference doc (32-bit security argument, migration-on-touch rubric,
+  naming reference), not an open-todo list. Three Windows/MSVC items:
+
+  1. **`libunbound` stubbed on MSVC (V3.2).** `dns_utils.cpp` is wrapped
+     in `#ifdef HAVE_DNS_UNBOUND` with no-op stubs in the `#else`
+     branch, so wallet DNS resolution (OpenAlias lookup, DNS checkpoint
+     fetch) silently does nothing on MSVC/Windows builds. Options:
+     (a) port `libunbound` to vcpkg; (b) Windows-native DNS backend
+     (`DnsQuery_A` / `DnsQueryEx`); (c) accept the limitation
+     (GUI-wallet-first posture; Tor/I2P transports are independent).
+     Option (c) is lowest-effort and likely correct, but unratified.
+     Whichever wins, the `#else` stubs must declare the contract
+     explicitly rather than silently returning empty strings. Target:
+     V3.2.
+
+  2. **MSVC warnings in vendored dependencies (V3.2).**
+     `liblmdb/mdb.c:1745` (C4172: returning address of local `buf` —
+     genuine dangling-pointer bug, debug-only path) is the only one with
+     correctness risk and deserves an upstream report + local patch;
+     `mdb.c:8417` (C4333), `mdb.c:939,7840` (C4146),
+     `randomx/blake2.h:82,84` (C4804) are cosmetic. None are in
+     wallet-core hot paths. Target: V3.2 (address the dangling-pointer
+     case; cosmetic ones may stay open).
+
+  3. **vcpkg builds take 45+ minutes — partially resolved (V3.3).** Even
+     with `actions/cache`, vcpkg install is 45+ min cold / 10–15 min
+     warm. A root `vcpkg.json` manifest was attempted (April 2026) but
+     broke MSVC CI and was reverted; packages are listed explicitly in
+     `.github/workflows/build.yml`. Manifest-mode migration remains
+     possible but low priority — CI timing is acceptable with warm
+     caches and the explicit YAML list is easier to audit. No action
+     unless CI times degrade or the package list grows. Target: V3.3.
 
 ---
 
 ## V3.x — staker archival and visualization ship
 
+- **Principal-side default-on Tor — flip `--proxy` from opt-in to default, opt-out loud.**
+  Source-verified at the WI-4 arc closure (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §18.13):
+  the persona side is Tor-mandatory **by construction** (`shekyl-p-transport` fails the
+  build without its SOCKS connector), but the principal side is opt-in — `shekyl-cli`'s
+  `--proxy` is `Option<String>` defaulting to `None`, so the principal's daemon
+  connection dials clearnet by default. Until flipped, a passive network observer needs
+  **no user error** to correlate principal daemon traffic with on-chain events — the
+  vantage is granted by our default, not by a user mistake. This is the network half of
+  the principal↔user seam and the one standing unmade security-over-features call on
+  the archival leg: opt-in isolation protects the educated user and abandons the
+  un-educated one, the inversion of who privacy-first defaults are for. Shape: default-on
+  Tor for all principal daemon connections; opt-out explicit and loud in the UI (the
+  runtime analogue of the persona side's `compile_error!`), never ambient. Caveat
+  recorded in §18.13: under default-on the opt-out set remains a distinguishable
+  minority — acceptable as informed choice. Interacts with (but does not wait for) the
+  principal-side `IsolateSOCKSAuth` item below and the embedded-Arti-vs-external-Tor
+  fork in the transport PR. **Target: V3.0 pre-genesis (defaults are what genesis users
+  inherit; a post-genesis flip re-partitions the population into before/after cohorts).**
+- **Principal-side `IsolateSOCKSAuth` — give the principal's `DaemonClient`s isolated circuits
+  (2d-2 Round 0, deliberately a separate ticket).** Today the principal's two daemon surfaces
+  (`cli/daemon.rs::DaemonClient` ureq/SOCKS + `engine-core::DaemonClient` over `SimpleRequestRpc`)
+  share **one no-auth circuit** — *within-principal* correlation, not a firewall leak (both
+  endpoints are already principal-side), so it was kept out of the firewall round. **Implementation
+  precondition (load-bearing — this is *why* it was deferred, not a nice-to-have):** giving the
+  principal **non-empty** SOCKS usernames introduces a **namespace-collision obligation** with `P`'s
+  `SocksUsername` space — a `P`/principal username collision puts both on **one circuit**, which
+  *is* the firewall break. Any principal-side wiring must keep the principal username space
+  **provably disjoint** from `derive_socks_user(p_canonical_id)`'s range (a reserved,
+  structurally-distinct prefix — not "different by convention"). Until this lands, the safe
+  invariant is *principal = empty, `P` = non-empty*. **Target:** V3.x (with the 2d-2 transport
+  build). See [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md)
+  §11 / §13(b).
+- **2d-2 SP-R0 — reconcile GC of phantom `bonded_slots`/`p_slot` over the per-`P` transport (gated
+  on SP-6).** Half (B) of 2d-2: consume the `P`-scan reconcile set to garbage-collect archival
+  state no longer on chain. **Gate:** cannot land until 2d-1 **SP-6** (`PReconcileSet`) exists —
+  downstream of PR-B; SP-6 is unbuilt (0 files on dev, 2026-06-28). **Rule (load-bearing — travels
+  with the item):** GC **only** on *confirmed-absence within `covered`* (the range the reconcile set
+  can vouch for), **never** on absence-from-one-source — the SP-6 "absence ≠ unscanned" discipline;
+  an over-eager GC against a partial/withholding source drops live state. **Target:** V3.x (after
+  SP-6). See [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §12
+  (SP-R0) / §16 and [`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](design/ARCHIVAL_BOND_2D1_PSCAN_PLAN.md)
+  SP-6/SP-7.
+- **2d-1 WI-2 — durable removal of SPENT funding outputs from `PScanState::funding_outputs`
+  (SP-R0-adjacent, gated on SP-6).** `PScanAccrual::ingest` only ever *extends* `funding_outputs`;
+  nothing removes an output once a confirmed bond post spends it. `select_funding_outputs` excludes
+  only the *transiently-reserved* set (a live pending post's `funding_gindexes`), so once a post
+  confirms and its pending record clears, the spent output is un-reserved **and** still present — a
+  later assembly can re-select it and the daemon rejects the double-spend (duplicate key image).
+  **Interim-safety invariant (load-bearing):** the WI-2 assemble/dispatch path is
+  `#[allow(dead_code)]` today (no live consumer, per the `select_funding_outputs` /
+  `AssembleBond` annotations), so nothing double-spends now; it **must not go live** until either
+  (a) spent outputs are durably removed here, or (b) the reservation set is extended to durably
+  retain confirmed-spent gindexes. Durable removal must follow the SP-R0 discipline —
+  *positive-confirmation, confirmed-absence within `covered`, never absence-from-one-source* (an
+  over-eager drop of a not-yet-confirmed-spent output strands live funds), which is why it rides
+  SP-6/SP-R0 rather than a naive "saw our own bond post" seam. **If WI-2 assemble must be live at
+  genesis, this item is pulled into the V3.0 pre-genesis queue.** **Target:** V3.x (with SP-R0).
+  See [`ARCHIVAL_BOND_WI2_ASSEMBLY.md`](design/ARCHIVAL_BOND_WI2_ASSEMBLY.md) §3.2/§3.5 and
+  [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §12 (SP-R0).
+- **2d-1 SP-3 — borrow the block in the dual extractor instead of cloning per bonded scanner
+  (perf, non-gating; own PR).** `run_dual_extractor` calls `scanner.scan(block.clone())` inside the
+  per-block loop, so each block is deep-copied once per bonded persona (N×B full-block copies per
+  catch-up sweep). The `scan` API consumes `ScannableBlock` by value; the fix is a borrowing entry
+  point (`scan(&ScannableBlock)`) so one decoded block serves all scanners. **Deferred to its own
+  PR** because it reworks `shekyl-scanner`'s secret-safe-point / zeroize internals
+  (`scan_with_cancel` destructures the block by value and threads the §5.4.9 F11-S cancellation
+  checkpoints), which want isolated review against the scanner's own tests — not folded into an
+  unrelated cleanup batch. Correctness is unaffected today (N bonded personas is small); this is
+  throughput only. **Target:** V3.1+ (post-genesis; pull forward only if catch-up scan profiles
+  hot). See `rust/shekyl-engine-core/src/engine/pscan/scan_step.rs::run_dual_extractor` and
+  `rust/shekyl-scanner/src/scan.rs`.
+- **[Done] 2d-2 SP-T1 — take `shekyl-types::PCanonicalId` and delete `PCircuitTag` (was gated on #205).**
+  Done on branch `feat/2d2-sp-t1-pcanonicalid`: #205 landed, so `PCanonicalId` exists;
+  `derive_socks_user`/`for_persona` now take `&PCanonicalId` and `PCircuitTag` is deleted. The change
+  is **byte-preserving** — the pinned SOCKS-username KATs are unchanged (same 32 bytes → same
+  cSHAKE256) — and `shekyl-types` was confirmed a serde+zeroize leaf, so the `21` criterion held (not
+  reopened). Original rationale: `shekyl-p-transport` (SP-T1, PR #204) takes the persona id as raw
+  `[u8; 32]` and mints a local
+  `PCircuitTag` wrapper — correct against *today's* dev, but PR-B (#205) promotes `p_canonical_id` to
+  a `shekyl_types::PCanonicalId` newtype (used across `pscan_state`/`accrual`/`stake_engine`). Once
+  #205 lands, **change `derive_socks_user`/`for_persona` to take `&PCanonicalId` and delete
+  `PCircuitTag`** — keeping both is two newtypes over the same 32 bytes (the uniformity-driven
+  re-wrap of public material this file warns against). **Named criterion (`21`):** `shekyl-types` is
+  verified a serde+zeroize leaf (no engine-core, no weight), so the dependency is free → take
+  `&PCanonicalId`, drop `PCircuitTag`; **reopen only if** `shekyl-types` grows a heavy transitive
+  dep. **Target:** V3.x (immediately after #205). See
+  [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §15 and
+  `rust/shekyl-p-transport/src/lib.rs`.
+- **2d-2 SP-T0 — DQ-T0.4 circuit-isolation measurement has no CI binary source (BLOCKED, not
+  deferred-by-choice).** The `tor-pin-verify` lane now runs the SP-T0 `--lib` live lifecycle tests
+  (actor + supervisor) against the GPG-verified Expert Bundle `tor`, but `tests/circuit_isolation.rs`
+  (DQ-T0.4) also needs **`tor-gencert`** to stand up its hermetic owned-net directory authority, and
+  the Tor Expert Bundle ships only `tor` (verified: no `tor-gencert` in the bundle). So the firewall
+  network-axis measurement still runs only on a dev box with a full tor install. **Reopen when** a
+  pinned `tor-gencert` source exists (a distro `tor` package, or a second hash-pinned artifact) —
+  then add a `SHEKYL_TEST_TOR_GENCERT` step to `tor-pin-verify.yml`. Stated in the workflow header.
+- **Workspace-wide `rustdoc -D warnings` CI lane (BLOCKED on pre-existing cross-crate warnings).**
+  `build.yml` now gates **shekyl-tor** rustdoc at `-D warnings` (its docs carry load-bearing security
+  contracts and its reviews repeatedly surfaced public→private intra-doc links). Widening to
+  `--workspace` currently fails on pre-existing warnings unrelated to 2d-2 (e.g. an unresolved
+  intra-doc link in the `randomx-v2-sys`/`shekyl-pow-randomx` docs, `generic_array::as_slice`
+  deprecations in vendored crypto). **Reopen as** a standalone doc-hygiene sweep: fix those warnings,
+  then swap the shekyl-tor-scoped step for `cargo doc --workspace --no-deps` under `-D warnings`.
+- **M1 reward gate — design rounds 1–3 CLOSED (`ARCHIVAL_REWARD_GATE_M1.md` §9/§10/§11, 2026-07-06;
+  consensus rule, genesis-frozen, builds first per the WI-4 ranked path).** The launch
+  posture's cold-start refusal in structural form: zero accrual to every `(P, s, E)` for
+  epochs where `shard_count < K_COVER` — uniform, global, blind (no founder marking),
+  keyed on the monotone-in-height shard count so it is non-gameable and sensorless. Spec
+  pins: zero-at-top enforcement locus in `epoch_close_compute` (no consensus quantity from
+  a gated epoch survives), the zero-accrual/no-seniority invariant table with named
+  source-verification checks, the activation-boundary KAT (G-1..G-5, first-class
+  deliverable, parameterized over `K_COVER`), and the spec/constant split — **the rule's
+  machinery may land after pre-flight, but `K_COVER`'s finalization gates on the §14.4
+  partition-adversary run with the widened hypothesis class** (WI-4 §16.2 obligations
+  1–3). **Round 1 closed against an adversarial wargame (doc §9):** the consumer walk
+  found zero pre-gate readers of `Σwork`/`R_market` (only future PR-E3, whose plan
+  already forbids row-absence proxies) and confirmed `join_settlement_epoch` is
+  eligibility-only at source; the non-claimable rule was **amended to the uniform
+  positive-share form** (every claimed epoch's recomputed share strictly positive — the
+  vin never consults `K_COVER`, and the previously-representable zero-amount claim row
+  for a legitimately-empty epoch becomes unrepresentable as a side effect); the
+  provisional sentinel hardened from checklist-blocker to **compile-time refusal in
+  non-test builds** (`k_cover_provisional` flag, `shekyl-p-transport` `compile_error!`
+  precedent); and the reorg-across-activation argument written out (connect/revert
+  pairing + citing-emissions-strictly-above-`h_close` + 720 ≪ 10_000 depth bound — no
+  sixth KAT case needed). Error-genericity residual rejected with a mechanism argument
+  (gatedness is publicly computable ex ante; named errors stay per rule 82). Forward
+  obligation pinned: the future wallet claim builder derives claimable epochs from the
+  same positive-share recompute. **Round 2 closed against a second independent review
+  (doc §10, M1-1..M1-9, 2026-07-06):** the positive-share rule resited to the wire —
+  strictly positive `reward_amount_plain` enforced at `validate()`, making the
+  zero-amount beacon *unencodable* and leaving exactly **one** `K_COVER` comparison site
+  in the codebase (CI grep tripwire pinned; M1-1's two-site premise dissolved at N=1);
+  §2.1 wording reconciled to the real two-field `EpochCloseResult` (M1-3, no per-`P`
+  widening); "zero through the normal close path, never skip the close" pinned (M1-5:
+  close-log revert symmetry, prune advance, stored-zero sigma) plus the
+  zero-accrual≠zero-accountability invariant (serve credits / bad intervals / slashing
+  live during gated epochs — no free-misbehavior sandbox); the §4.5 lagged-`Σwork`-read
+  discipline recorded as doubly load-bearing (M1-4 — a primaries-recompute refactor
+  would silently bypass the gate; reopens the round); KATs extended G-6..G-9 + C++
+  stored-shape and boundary-reorg tests (M1-7); reorg-argument reversion clause (M1-8:
+  corpus/participation-triggered activation rebuilds the argument from zero) and
+  gated-epoch prune optimization rejected with reopening criteria (M1-9, rule 21).
+  **Round 3 closed (doc §11, 2026-07-06; two parallel reviews, R2-1..R2-4 + M2-1..M2-5) —
+  critical re-anchor:** §1.1's anchor pinned the credit-derived *gather* count (a
+  participation sensor: non-monotone, withdraw-service griefing lever) where every
+  argument assumed the *segment-table* count; re-anchored to `m_archival_shard_segment`
+  with the explicit `freeze_height ≤ H_close(E)` filter, threaded as
+  `EpochCloseInputs::frozen_shard_count` + FFI param + C++ count pass (§6 "FFI
+  zero-change" corrected; G-10 participation-independence KAT). Segment-freeze substrate
+  confirmed unbuilt (no production `put_archival_shard_segment` caller, no delete path):
+  §1.3 names obligations **O-1 determinism / O-2 per-branch monotonicity / O-3
+  pop-symmetry** on the future freeze-pipeline design round — **the gate's
+  implementation PR is conditioned on them** (fixture-driven KATs allowed; pipeline
+  round must discharge O-1..O-3, and landing segment writes without O-3 reopens §9.4 and
+  breaks retention-proof correctness generally). WI-4 doc provenance = merge-ordering
+  dependency — **resolved 2026-07-06: WI-4 merged to `dev` (#262, `1e89df832`), sequence
+  slot 0 satisfied**. Pre-flight pattern recorded: verify every consensus-predicate
+  *operand* at its production site, not just the predicate's consumers.
+  **Target: V3.0 pre-genesis — IMPLEMENTED (doc §11.10 record, 2026-07-06): steps 1–5
+  of the §11.9 pinned sequence executed on `feat/m1-reward-gate-design` after the
+  pre-flight pass held the §6 enumeration (re-verified post-WI-4-merge; M3-3
+  discharged — the `K_COVER` calibration derives against segment count per WI-4 §16.3).
+  Constants + armed compile refusal (`a2292b23c`, sentinel refined to gate-identity `0`
+  in `6194ab7a7`); count helper + FFI threading + zero-at-top gate (`f65d3d89d`); wire
+  positivity + corpus digest regeneration (`cc28bee37`); KATs G-1..G-10 + C++
+  count-pass/store tests (`e0a0cfd11`); predicate/operand tripwire as
+  consensus-invariants invariant 5 (`31f133e5e`). Outstanding before the PR merges:
+  the segment-freeze pipeline design round OPENS (§1.3 condition, entry below).
+  Deferred to `K_COVER` sealing: the direct gated-path C++ close test (unreachable
+  under the gate-identity sentinel; the stored shape is covered via the
+  bitwise-identical legitimately-empty epoch, doc §11.10 delta 4).**
+- **M1 reward-gate C++ test-support surface — fold the corruption-injection seam off the
+  production DB API at reward-gate completion (code-review #263, 2026-07-07).** `db_lmdb.h`
+  exposes three reward-gate members on the public `BlockchainLMDB` surface for the
+  count-pass / store KATs: `count_frozen_shards_at_close` (one production caller),
+  `has_archival_sigma_work_row` (stored-shape probe past the `MDB_NOTFOUND` launder), and
+  `put_archival_shard_segment_raw_for_corruption_test` (raw undecodable-row writer, **no
+  production caller** — recorded as accepted test-support in §11.6 R2-2 / §11.10 delta 3).
+  Per rule 20 a corruption-injection primitive on the shipping DB class is scaffolding that
+  belongs behind a test-only seam (friend accessor) or exercised at the Rust/FFI layer.
+  Deferred rather than churned now: this is the reward-gate slice still being wired (PR
+  #264), and the real rule-20 endpoint is the LMDB store's Rust migration, not a
+  friend-declaration in the inherited C++. Fold the seam in with that completion.
+- **Segment-freeze pipeline — design round required (opened by `ARCHIVAL_REWARD_GATE_M1.md`
+  §1.3, 2026-07-06).** The production writer for `m_archival_shard_segment` does not exist
+  (`put_archival_shard_segment`: unit-test fixture only; the `LMDB_SCHEMA.md` "curve-tree
+  checkpoint / genesis seed" writer is unbuilt) and **no delete path exists** — segment
+  writes are not connect/revert-paired. The M1 gate, the retention-proof read path, and
+  the §9.4 reorg argument all consume this table; its design round must discharge the
+  named obligations **O-1 (determinism: freezing is a pure function of chain content),
+  O-2 (per-branch monotonicity: never unfrozen/deleted on one branch), O-3 (pop-symmetry:
+  connect/revert-paired writes — a stale `segment_subroot_rk` from an orphaned branch
+  breaks retention-proof correctness generally)**. Discharge is recorded in that round's
+  record and cross-referenced from M1 §1.3. **Target: V3.0 pre-genesis. Per the M1 §1.3
+  decision (§11.9, 2026-07-06): the gate implements now on fixture rows (second branch —
+  the count helper binds to the `LMDB_SCHEMA.md`-fixed table schema, not pipeline
+  behavior), and this design round OPENS before the M1 gate PR merges, so a surprise
+  discovered here can still reopen the M1 spec cheaply.**
+  **ROUND 1 OPENED (2026-07-06):**
+  [`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](design/ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md) —
+  the M1 §1.3 merge condition is satisfied. Substrate survey found the daemon already
+  delivers O-1..O-3 for the driving quantity (curve-tree leaf count: consensus,
+  drain-journaled, pop-symmetric via `trim_curve_tree`), so freezing is a
+  **first-crossing rule** (`frozen = ⌊leaf_count / SEGMENT_LEAF_COUNT⌋`, doc §3) with
+  `R_k` read from the layer-2 chunk the same-txn grow just computed (no new crypto).
+  Under the maintainer's pre-genesis schema/FFI authorization the round also pins
+  `SEGMENT_LEAF_COUNT = 25 992` (level-2; gate-2 fixture placeholder `26 000` to be
+  regenerated), puts the boundary arithmetic in a single Rust FFI entry point called by
+  both connect and pop hooks (M1-1 single-source shape), and **deletes
+  `archival_shard_leaf`** (derived copy of `m_curve_tree_leaves`; challenge path reads
+  the leaf chunk directly, doc §6.2). Adversarial review of the round-1 draft pending.
+  **Efficiency follow-on lands with this pipeline, not before (code-review #263,
+  2026-07-07):** `count_frozen_shards_at_close` currently walks and decodes the whole
+  `m_archival_shard_segment` table on every epoch close — O(total frozen shards), repeated
+  each close, unbounded as the chain ages. The right fix is a persisted **pop-symmetric
+  counter** (increment on freeze, decrement on revert), which is a persisted-schema surface
+  (rule 42 version bump) whose reorg symmetry *is* this pipeline's O-3 connect/revert
+  pairing — it can only be built and differential-tested against the walk once the
+  freeze/pop hooks exist. Building it now would be a consensus counter with no symmetric
+  writer. Keep the walk (correct, only linear at epoch boundaries) until then; add the
+  counter in the same PR that introduces the segment-freeze writer.
+  **Counter LANDED (2026-07-07, `feat/segment-freeze-pipeline`, #264 — closes the
+  efficiency follow-on above):** persisted `properties["archival_frozen_shard_count"]`
+  (schema V8, rule-42 bump; pre-V8 DBs refused loudly in `migrate`, no pre-genesis
+  migration code). +1 in `put_archival_shard_segment` (now `MDB_NOOVERWRITE`,
+  CREATE-only enforced at the mutation site), −1 per deleted row in
+  `revert_archival_segment_freezes` (underflow-aborted) — O-3 pop-symmetry is
+  structural, which is exactly what M1 §11.8 M3-1's cached-counter adversary lacked.
+  `count_frozen_shards_at_close` is O(1): counter read + `MDB_LAST` frontier check
+  (decode + `freeze_height ≤ h_close`; future-dated frontier and counter/table
+  divergence are loud aborts). The walk survives only as the differential test oracle
+  `count_frozen_shard_rows_by_walk_for_test` (zero production callers,
+  tripwire-enforced); `archival_segment_freeze.cpp` drives counter == walk across
+  freeze/pop/re-apply. Tripwire: cursor accounting 4→5, new invariant 6 pins the
+  counter's mutation surface. Spec: `ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §4.4,
+  M1 §11.11.
+  **Follow-on surfaced by the counter (target: V3.0 pre-genesis):**
+  `BlockchainLMDB::reset()` predates the FCMP/archival substrate — it drops the
+  legacy tables (including `m_properties`, so the counter resets to absent ⇒ 0)
+  but none of the curve-tree or archival tables (`m_archival_shard_segment`,
+  `m_curve_tree_*`, close-log, sigma-work, …). A `reset()` on a chain with frozen
+  segments leaves orphaned rows that the counter no longer accounts for — the
+  O(1) reader's divergence abort would fire on the next close (loud, so the gap
+  cannot corrupt silently, but the fix belongs in `reset()`: drop every live
+  table). Out of #264's scope (`reset()` is not on the connect/pop/close path);
+  fix as its own small PR.
+  **IMPLEMENTED (2026-07-06, `feat/segment-freeze-pipeline`, steps 1–7 of doc §7):**
+  constants + Rust helpers, FFI exports, connect/pop hooks in `db_lmdb`,
+  `archival_shard_leaf` deletion with challenge-path rewire to `m_curve_tree_leaves`,
+  the §9 C++ suite (`archival_segment_freeze.cpp`: first-crossing, multi-segment,
+  independent `R_k` recomposition, O-3 bit-identical pop-symmetry, pop-above-boundary,
+  missing-layer-2-chunk loud abort; M1 operand counted against production rows — the
+  §11.10 fixture caveat retired), gate-2 fixture regenerated at `25 992` with
+  chunk-bounds pins, and the §8 tripwire extensions (writer one-site, cursor
+  accounting 2→4, division one-site). O-1..O-3 discharged; cross-referenced in M1
+  §1.3. Pre-flight additions folded in: PF-8 transposition-distinguishing epoch-close
+  FFI fixture (S=3/H=40000/F=2, exact-sigma pin), PF-6a `KCover` capability newtype
+  (`consensus()` sole production constructor; `for_kat` behind the permanent dev-only
+  `consensus-kat` feature + tripwire).
+- **M1 reward gate — pre-flight process BREACH (PF-1, recorded 2026-07-06; a breach,
+  not a precedent).** The M1 spec's own sequencing text (§11.9) conditioned the
+  implementation sequence on "after the pre-flight pass," and the implementing agent
+  committed the sequence (`899ebf7..cc28bee` on `feat/m1-reward-gate-design`) before
+  the pass ran — the handoff document's halt condition existed and did not bite
+  because nothing mechanical checks it. The retroactive audit held (range ratified
+  2026-07-06 conditioned on PF-2 remediation, PF-3 merge-block, PF-4 round-open, and
+  this record) and a branch reset was rejected as negative-information ceremony
+  (force-pushing destroys the SHAs the findings anchor to; re-landing byte-identical
+  code re-audits nothing). **Disposition:** ratify with the process record armed —
+  `26-sub-pr-design-discipline.mdc` now carries the explicit halt condition (*no
+  implementation commits on a branch whose governing design doc names an undischarged
+  pre-flight pass*), so the agent's own compliance check has a named tripwire instead
+  of a written rule with no trigger. Any future agent citing this arc to skip a named
+  pre-flight is citing a breach record. **Closed by this entry + the rule amendment;
+  no code action.** Companion pre-flight dispositions recorded at their homes:
+  PF-2 compile-refusal accepted-residual (out-of-band hand-built artifact; scoped out
+  by Guix-reproducible builds + signed-tag release path — `ARCHIVAL_REWARD_GATE_M1.md`
+  §4) and PF-9 seal-before-stressnet ordering pin (`K_COVER` finalization is a
+  prerequisite of Phase 7.7 stressnet entry — M1 §4 rule-21 entry +
+  `RELEASE_CHECKLIST.md` stressnet-entry prerequisite).
+- **2d-2 SP-T4a — GF-7 principal-timeline timing correlation is a GENESIS GATE (measure
+  `P(link | T_obs)` before launch).** SP-T4a *draws* the narrow funding-seam entry-gap jitter
+  (`draw_entry_gap`, `spread ~ U[0, 600 blocks]`) but does **not** wire it into any broadcast — the
+  draw stays on `_`-prefixed locals (`stake_engine.rs`) *(historical: since consumed into
+  `plan_entry_seam` — see the 2c-2b landing below)*, and no bond-post broadcast exists until the
+  **2c-2a/2c-2b** scheduler consumes it. SP-T4a forbids broadcast-③ by type but does **not**
+  decorrelate `P`'s broadcast from the **principal's lifecycle timeline** (nor from `P`'s other
+  broadcasts). That correlation is **GF-7** (GATE6 §10.12 — S-1: *the* load-bearing principal↔`P`
+  unlinkability seam, least-developed, deferred R3/R4; S-3: **zero** simulated privacy scenarios,
+  i.e. **unmeasured**). Shipping the write-side firewall to genesis with its core timing axis
+  unmeasured is exactly what *get-it-right-not-get-it-now* forbids for a privacy coin. **This is a
+  genesis blocker, not a deferred round: genesis cannot ship until GF-7's `P(link | T_obs)` is
+  measured against a modeled observer (as a function of standoff window / entry jitter / batch size)
+  and meets threshold.** **2c is the first point at which GF-7 becomes *measurable*** — it builds the
+  real broadcast consumer to correlate against a principal timeline, so 2c's scheduler design must
+  leave a measurement hook (observability-to-a-modeled-adversary) and is the **only** home for the
+  cross-broadcast + principal-timeline decorrelation the two open axes need (see the 2c tracked
+  obligation below). The measurement round inherits: `DEFAULT_ENTRY_GAP_WINDOW = 600` as the grading
+  parameter; the entry/bond-post as the broadcast the jitter is *drawn for* (wiring pending 2c); the
+  open principal-timeline + cross-broadcast decorrelation that no built primitive addresses.
+  **Hook spec LANDED (2c design round, 2026-07-04):**
+  [`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](design/ARCHIVAL_BOND_2C_GF7_HOOKS.md) pins the scheduler's
+  observer seam (injected, `ScanSchedule`-discipline), the three-axis **joint** event vocabulary
+  (principal lifecycle / bond-post with draw parameters / `P`'s other broadcasts — never
+  per-axis-multiplied, per the co-triggered-firewalls principle), the **funding-seam-blind
+  adversary** as a first-class grading arm (the named wrong-gate failure mode), and the
+  three-layer build-time **no-emit guard** (inert trait; sim-only impl + CI dependency-graph
+  assertion; non-default `gf7-hooks` feature, the `shekyl-standoff` `conformance` containment
+  shape). **The 2c-2b wiring PR is gated on that spec's §6 acceptance criteria.**
+  **2c-2b wiring LANDED (2026-07-05): all five §6 criteria.** `plan_entry_seam` single-sources
+  the draw consumption (`shekyl-standoff::plan`); the `SignBond` handler consumes both draw
+  values into the plan, replies `SignedBondPost` (vin + plan, never decoupled), and emits to the
+  injected observer (§6.1/§6.2); `shekyl-staking-sim --gf7-timeline` drives all three axes
+  through one recorded timeline with the funding-seam-blind arm first-class (§6.3);
+  `ci/gf7-no-emit-guard` asserts the dependency graph + feature containment (§6.4); the
+  no-behavioral-delta argument lives in the `stake_engine` module docs (§6.5). **What remains
+  open on this entry is exactly the measurement round** (threshold-setting, S-3 modeled
+  observer, sim-side) — plus the live-dispatch emission (`BondPostDispatched` from the real
+  broadcast consumer) which lands with the 2c-2a assemble / 2d dispatch wiring; the sim
+  synthesizes it from the schedule meanwhile.
+  **UPDATE 2026-07-05 (WI-4 graded, `feat/wi4-gf7-measurement`) + 2026-07-06 (adversarial
+  review re-grade): PROVISIONAL-PASS (local-daemon posture only; remote-daemon posture unmet,
+  named residual; wall-clock leg (b) open).** The measurement round landed: a-priori threshold
+  `r = P(link)·N < 2` committed *before* grading
+  ([`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](design/ARCHIVAL_BOND_WI4_MEASUREMENT.md) §3,
+  provenance settled §13.4), then the posture-conditioned S-3 correlator, funding-seam-blind
+  null, oracle-panel stress arm, validity controls, and the pre-committed sweep
+  (`shekyl-staking-sim/src/gf7_timeline.rs`, `--gf7-timeline`). The 2026-07-06 review forced
+  three strengthenings, all landed and re-graded: **(1) posture-conditioned observer (§4.1.1)**
+  — the wallet session/refresh-marker exclusion is a *posture theorem* (loopback under the
+  local-daemon posture; D-B1 2d-2 reopen family), **not** a chain-visibility convention; a
+  remote/non-isolated daemon makes the markers live anchors and re-grades toward the pre-fix
+  `r ≈ 5` fail — that posture is a **named unmet residual on the verdict**. The *indirect*
+  session channel is coupled in the generator and graded (blind `0.237` at window 0 →
+  `≈ 0.13` under full jitter). **(2) Oracle-panel stress arm (§4.3.1)** — {MAP,
+  density-corrected MAP, exact seam-consistency-gated MAP}; `lr` now strictly exceeds `s3` on
+  every gate row; worst gate row `r = 1.86` (honestly thin 7% margin). **(3) D-B3 resume
+  channel swept** — session-lattice resubmit exposure graded (`r = 1.57`, under the bound).
+  Controls valid; every gate-relevant row clears the bound on all three arms (§13.1).
+  **Cold-start RECLASSIFIED (§13.2, was "accepted residual"):** low-activity/cold-start
+  **fails** (`lr` panel `r = 3.54`) and cold-start *is* the genesis regime — disposition is
+  the **§14 founder-cover launch posture** (refuse to enter the regime: founder wallets
+  provide real production-path-identical staggered cover with permanent consented
+  attributability; privacy-critical staking structurally gated on the shard schedule until
+  cover accumulates; founder/user **partition-adversary arm** with a-priori bounds specified
+  in §14.4 — hypothesis class widened pre-implementation 2026-07-06 to a max-statistic over
+  a named rule family {k-swept clustering, per-feature outlier set, most-cohesive-subset
+  enumeration} against the permutation null of the maximized statistic, with a marked
+  control per failure mode). §14 is spec-committed, **implementation gated on review**
+  (§3.5 ordering); a §14.4 bound-1 fail is a launch blocker. **Remote-daemon disposition
+  made explicit (§15, proposed, review-gated):** structural refusal at the dispatch driver
+  (bond path unavailable on a non-local daemon endpoint; no warned override — privacy is
+  not a setting), honest-user protection scope named (tunneled circumvention a residual),
+  reversion on a measured decorrelated remote transport. The §4.3.1/§13.1 in-model ceiling
+  is pinned: `r = 1.86` is against the strongest observer of the *modeled* channel, not the
+  strongest adversary. **Mechanization addendum (§16, proposed, review-gated):** the launch
+  posture converted from policy to structure under the global-and-blind constraint (sort on
+  structure, never identity — an observable founder marker *is* the partition that destroys
+  cover). Seven items, M1 first: **M1 reward-eligibility-by-shard-count is a genesis-frozen
+  CONSENSUS rule** — no reward accrues to any `(P,s,E)` for epochs with
+  `shard_count < K_COVER`; substrate verified at source (shards are frozen chain segments,
+  `shard_count` a deterministic monotone function of height ⇒ non-manipulable,
+  non-stallable; cumulative-bond-count rejected as sybil-inflatable); sharp pin: **zero
+  accrual, not deferred payout** (defer-payout preserves the early-staking yield and
+  hollows the gate); synergy: zero accrual ⇒ zero thin-window claims ⇒ the cold-start
+  claim-cohort hazard above is refused in the same window. Needs its own design doc +
+  round before any code (`epoch_close_compute`, `consensus_constants.json`, existing
+  reward-gates CI shape). **Two obligations pinned for M1's round (§16.2):** (1) the
+  once-firing rule's **activation-boundary test** is a first-class deliverable (accrual
+  provably zero at `K_COVER − 1`, non-zero at `K_COVER`, at the boundary epoch, KAT
+  shape) — the dead-rule acceptance relocates armed-gate-with-no-trigger risk to time
+  and runtime never re-exercises the boundary; (2) **`K_COVER` finalization gates on the
+  §14.4 widened-class measurement** (derivation chain: `K_COVER` ← cover model ←
+  founder-cover soundness ← partition-at-chance ← hypothesis class matches the
+  adversary's) — rule shape specs immediately, the constant waits; the two reviews must
+  not proceed independently. M2 resolved into M1; M3 single-dispatch-path CI enumeration
+  (gate-11 shape); M4 global launch-window bond rate cap (WI-3 D-B2 item, three named
+  wargames incl. re-measuring *under* the cap); M5 never-serialized local
+  `PublicByConsent` marker (mechanizes the non-assumption, not the consent); M6 coupling
+  control added to the §5 controls family (blind@window-0 ≥ 2× chance or INVALID) +
+  leg-(b) wall-clock emission; M7 F25-style daemon-tip trust-site enumeration.
+  Irreducible three named (isolation conditioning, live network rate, founder consent).
+  **Scheduling note (2026-07-06): the §14.4 implementation round is SEALING-PATH work,
+  not ordinary validation** — via Pin 2 it gates `K_COVER`, a genesis-immutable constant,
+  so it inherits the reward rule's own "must be right before seal, cannot be changed
+  after" weight. Do not schedule it as deferrable measurement. Its output feeds **two
+  consumers with opposite dispositions** (§14.4 "Two consumers" pin): a
+  distinguishability fail ⇒ posture redesign, never a bar move; a sound-but-thin cover
+  result ⇒ `K_COVER` calibrates higher, not a posture failure. **Seal-time wording pin
+  (§13.5):** the sealed claim stays conditional by construction — isolation conditioning
+  is transport-layer and never discharges; two-of-three-measured must not read as
+  three-of-three-cleared. **Review-closure bar (§16.10):** the §§14–16 closure is the
+  adversarial read of the bounds themselves (is `r < 2` honest under the 1.86 panel; is
+  the widened null the adversary's class or a subset; does the `K_COVER` derivation
+  circle through the arm it gates), not a consistency rubber stamp.
+  **Review-closure round R1 conducted (2026-07-06, §17; ratification pending):** all
+  three §16.10 attacks run to land. Attack 1 — the `r < 2` bar survives (claim-anchored,
+  observer-independent) but the *measured* `r(N)`'s N-invariance is unswept: **N-sweep
+  added** (§16.7 item 4, `N ∈ {10, 20, 50}`, `r < 2` at every swept `N`, a-priori).
+  Attack 2 — the family was still a proper subset: **members 4–5 added** (spectral
+  graph partition; seeded nearest-neighbor expansion — one leaked founder label must
+  not unravel the rest), and two **label-free channels** closed structurally: post-gate
+  claim-absence sorts non-claiming founders ⇒ M3 extended to the full lifecycle
+  (post/serve/claim/drain, §16.4); actualized enumeration collapses cover
+  **retroactively** for recorded history ⇒ new wargame §14.3.4, P4 gains a
+  **non-disclosure commitment** (consent-to-risk is not license-to-disclose; voluntary
+  disclosure is a named cover-collapse event), and the `K_COVER` cover model gains a
+  **founder-strip sensitivity row** (§16.2 obligation 3). Attack 3 — the `K_COVER`
+  cycle does not close: the validation projection (exchangeability) is `K`-independent
+  (the breaking joint); the calibration projection is a monotone fixed point, not a
+  vicious circle; the cover model must additionally carry **gate-open cohort dynamics**
+  with its demand assumption as a named conditional (§16.2 obligation 3). No bound
+  relaxed; all amendments adversary-strengthening, inside the pre-code window.
+  **Distinct-position round R2 conducted (2026-07-06, §17.5):** the standing reviewer's
+  post-merge pass (WI-3 PR #260 traced at source — all seven dispositions faithful;
+  finding A-1 landed as the two-tip-consumer marker fix in `dispatch.rs` + WI3 doc §3.1:
+  the alarm horizon is a second tip consumer with **inverted** sensitivity, so the 2d-2
+  clamp must cover both reads). Two structural findings on the newest pins, both landed:
+  **B-1** — the no-cross-subsidy pin armed no trigger; now §9 criterion 9, the report's
+  aggregate verdict is a **computed conjunction** over every committed bound (INVALID on
+  absence, FAIL on any miss) — cross-subsidy unrepresentable in the artifact. **B-2** —
+  attack-shaped review was satisfiable by self-attack; §16.10 now requires a distinct
+  adversarial position + the attack recorded as the specific construction. Its concrete
+  instance, the **r < 2 mean-vs-max challenge**, run to land in §17.5: the bound survives
+  (exchangeability makes it per-persona in-model; the untargeted reading was conceded at
+  the floor) but forces the §3.2 pin naming exchangeability as the load-bearing step and
+  regime-splitting as the mean-to-max lift in deployment (the discipline that already
+  surfaced cold-start as a fail rather than averaging it in). §17 closure now requires
+  §§17.1–17.5 ratified together.
+  **Distinct-position round R3 conducted (2026-07-06, §18):** the mean-vs-max
+  disposition is sound but incomplete — it captured the max for the axis it split on
+  (activity) and assumed the heterogeneity enumeration complete. Five surfaces
+  enumerated, scoping what the honest `1.86` means: it is a bound on **one seam**
+  (entry; the exit/drain seam is **GF-4, unmeasured** — §18.1), at **one scope**
+  (per-**post**, not the per-**principal** property S-1 names — §18.2), along **one
+  channel** (timing, not the loud reward-amount value channel — §18.5), at **one
+  instant** (per-post, not lifetime-cumulative — §18.4), for **one stratum**
+  (unstratified by observable bond attributes — §18.3). **Landed now (verdict-line
+  honesty):** the cross-seam/per-principal conditional (§18.2) on the verdict line
+  (§13.1) and sealed-claim ledger (§13.5) — `r < 2` promotes from per-post to
+  per-principal **only where persona mutual-unlinkability (GF-4) holds**, structurally
+  parallel to isolation conditioning; the single most important previously-unstated
+  dependency, since S-1 is per-principal and the bound is per-post. **Verified at
+  source:** the reward **value channel** is loud by design (`reward_amount_plain`
+  cleartext, `P`-tied via `p_pubkey`/`P_canonical_id`, per-settlement-epoch recurring;
+  confidential reward explicitly deleted — `emission_wire.rs`, `REWARD_EMISSION_LEG.md`
+  §2/§5.5; consensus-inert until PR-E3/C-1) — **orthogonal to the timing gate, open by
+  design, needs its own measurement** (§18.5); and the attribute-strata coupling is
+  real but via **`holdings`/`bond_floor`** (lock-tier multipliers are the *retired*
+  confidential path, deleted from the archival leg — §18.3 correction). **New
+  sealing-path measurement rounds (a-priori-then-attack-shaped, like GF-7):** GF-4 exit
+  seam as a **co-equal genesis gate** (jointly with persona rotation — same drain event,
+  cannot multiply independently) and the value channel (folded into GF-4 or its own).
+  **Extensions riding the §14.4 round:** attribute-stratified grading (§18.3) and
+  lifetime-accumulation sweep (§18.4). No bound reopened; §18 records so the seal cannot
+  read the entry-seam number as the whole claim.
+  **R3 addendum (§18.7): tiers-vs-continuous-accrual design question answered at source.**
+  The shipped leg already embodies the strong form — no persona-duration accrual at all
+  (`g(age) = 1 + age_weight·age` reads **shard age**, a public data property, not the
+  persona; linear, no knees), and duration is structurally quantized at settlement-epoch
+  granularity (`settlement_epochs` cleartext ⇒ the exit→entry back-solve bridge is capped
+  at class width by construction). Four pins, all routed to existing rounds: **P-curve**
+  (`g_age_milli`/`curve_milli` shape is a privacy parameter — knees on the age axis or
+  moved `Curve` breakpoints re-shape incentive clustering on observable attributes;
+  reopen on any PR touching them; note `Curve`'s existing plateau breakpoints cluster
+  the **holdings** stratum, direction ambiguous — §18.3 measures); **P-width**
+  (`SETTLEMENT_EPOCH_BLOCKS = 10_000` is the duration-class width — GF-4 round derives
+  the adversary-advantage bound as a function of width before 10k is accepted as a
+  privacy value); **P-claim-timing** (per-epoch emission submission is a recurring
+  entry-gap-shaped timing observable at the claim seam; batching ≤15 / forfeiture W=26
+  as sweep axes; GF-4/value-channel round); **P-correlated-exit** (duration-class
+  anonymity must hold under co-triggered mass unbonding — cold-start thinness relocated
+  to the exit seam; named GF-4 wargame).
+  **R3 correction round (§18.8, the P-is-public reframing):** `P` is the pseudonym —
+  public by construction, with no anonymity to lose; the only protected object is the
+  **`P`→user link**, so every exposure re-asks as "does this observable bridge `P` to
+  the user?" **Retracted:** §18.3's intrinsic-stratification claim (holdings
+  distinctiveness partitions the *pseudonym* set — a non-finding absent a user-side
+  correlate; stratified grading narrows to bridge-axis screening) and §18.7's P-curve
+  "privacy-primary" escalation (the curve is economic; bridge-check contingent).
+  **Re-anchored on user-rhythm/user-event correlation:** claim-timing, lifetime
+  accumulation, correlated-exit. **Amount-bridge trace verified at source — closed at
+  entry, structurally:** the bond's public amount is consensus-forced to
+  `bond_floor(holdings)` (`bond_post.rs` FloorMismatch; builder pins
+  `bonded_total_atomic == bond_credit == bond_floor`), carrying zero bits beyond the
+  already-public holdings; funding and change are FCMP++-hidden; no principal
+  reach-across exists in the assemble path (`bond_assembly.rs`). **Surviving residuals
+  (GF-4 round):** V-2a staker-membership prior (universal funding constant is visible
+  to off-chain user-side amount surfaces — subsumed in-model by
+  adversary-knows-candidates, named); V-2b exit lifetime-total match (`bond_floor·k +
+  Σ reward_amount_plain` publicly computable to the atomic unit; matchable against
+  user-side amount surfaces at exit — the value channel's surviving form, an
+  amount-certainty bridge independent of timing mitigations).
+  **Mechanism pin (§18.9, 2026-07-06):** a follow-on reading proposed the bond amount is
+  CT-hidden above the floor with a user-configurable blinding mask; verified at source
+  **wrong in mechanism** — the bond term enters the CT balance as a transparent `amount·H`
+  cleartext term (`bond_ct_balance.rs`; funding inputs and change are the hidden legs),
+  and `commitment_mask` is HKDF-derived per output, never user-chosen. The closure is
+  loud-but-constant, not hidden; the proposed cross-persona mask-consistency wargame is
+  unrepresentable-by-construction (reopen: any PR introducing a user-supplied blinding
+  factor or above-floor bonding). Remaining `P`→user bridges are timing-only **on-chain**;
+  V-2a/V-2b survive off-chain (loud rewards + universal constant vs. user-side surfaces).
+  **R4 exit-seam inventory (§18.10, 2026-07-06), both source checks resolved:** the reward
+  payout is **cleartext by genesis disposition** (`REWARD_EMISSION_LEG.md` §5.5 loud
+  inflation check; §9 "Confidential reward amount — Delete") and **exact** (integer floor,
+  no grid) — and sharper than anticipated: `reward_P(E)` is a deterministic function of
+  public consensus state that every verifier recomputes at zero tolerance, so the amount
+  is **ex-ante computable for every `P`**. R-1 confirmed as the dominant exit-seam amount
+  residual, reach-bounded: pinned at mint, severed at first spend (all post-mint movement
+  FCMP++/CT-hidden), zero partition bits among pseudonyms; all bits live at the off-chain
+  user-side matching surface (V-2b upgraded to targeted-search-with-computed-target).
+  Defense classes: CT-committing the payout is **foreclosed** (priority-1 inflation-audit
+  posture, recorded rejected surface); open classes are **quantization** (R-3, compatible
+  with the loud audit — grid width a-priori derived, a consensus economics candidate for
+  the GF-4 round) and **routing** (gate-6 backing ladder, partially exists). R-4
+  claim-cadence + reward-amount + holdings stratum graded **jointly** on GF-4
+  (no-per-axis-multiplication). GF-4 pinned as a different problem class from GF-7: its
+  amount half is defended by coarsening and routing, never decorrelation.
+  **R-1 disposition (§18.11, 2026-07-06):** the R4 open question — does FCMP++ hide the
+  amount or only the linkage — resolved at source: **both, at every on-chain hop** (no
+  non-mint output carries a cleartext amount, `output.rs` `enc_amount`/commitment; and
+  `P`'s spend set is unenumerable — membership proofs give the sequence signature no
+  anchor after hop one). R-1 is a **managed residual**: the off-chain crossing is
+  economically guaranteed, defended in layers — (1) firewall-routing primary, complete
+  on-chain by construction; (2) **new gate-6 pin candidate: drain-amount decoupling**
+  (drain amounts never computable reward subsums — the accumulate-then-move exact-subsum
+  match is a wallet-policy footgun, not structural; change absorbs the difference);
+  (3) quantization as defense-in-depth for the lifetime-aggregate band (which is
+  approximate — fees/retention ride unattributable txs, so V-2b's exact form needs
+  drain-side visibility the chain denies). GF-4 wargame: precomputed-`reward_P(E)`
+  adversary vs user-side value events, graded at the off-chain boundary under layers
+  2–3, jointly with the timing axes.
+  **R4 closure (§18.12, 2026-07-06):** the whole-path routing obligation retracted —
+  already discharged by the base transfer format (no on-chain residual exists to
+  manage). **Drain-decoupling pin tightened to input-level:** the drain-amount
+  computation must not read the reward sequence (or reward-derived accounting) as an
+  input — user target / cadence / randomness only; checked at the function's inputs,
+  not its outputs (P-1/P-2 discipline). Acceptance test for the gate-6 policy PR: does
+  the drain-amount selection path read any reward-sequence-derived value? Verification
+  at source of the landed path's inputs is a named obligation of that PR. **Why-loud
+  recorded:** the mint is loud by deliberate priority-1 decision (inflation audit); R-1
+  is a priority-ordered tradeoff driven to its floor, not an unclosed defect — a future
+  reviewer must not "fix" it by CT-committing the mint. Floor: the fee-widened lifetime-
+  aggregate band at the definitional off-chain crossing; inventory closed to its floor.
+  **Arc closure (§18.13, 2026-07-06):** theory ceiling declared — remaining work is
+  implementation, not seam analysis. Tor-default trace resolved (split verdict: persona
+  side Tor-mandatory by `compile_error!`; principal side opt-in, `--proxy` default
+  `None` — default flip is the named V3.0 item, see the principal-side default-on Tor
+  entry). Drain-inputs trace rides the gate-6 PR. Principal↔user closing frame recorded:
+  chain-only adversary sees nothing by construction; the three boundary classes are the
+  irreducible on-ramp witness, the network default (ours until flipped), and the
+  enumerated mistake set (closed by safe-by-default coverage, §18.12 pin as template).
+  **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
+  GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
+  seams, not just entry).**
+  **Open leg-(b) residual (rule 21), severity sharpened:** the *block-time* sealing re-run is
+  confirmatory by construction (live `BondPostDispatched.at` is the due block — dispersal is
+  sub-block, `U[0,60s)`, never entering `at`; `gf7_emits_bond_post_dispatched_per_submit`),
+  so **no block-resolution live re-run can close leg (b)** — the wall-clock sweep-phase
+  channel (WI-3 §3.2), the one dispersal exists to defend, is the **primary open uncertainty**
+  and compounds with the remote-posture residual (the same network-position adversary holds
+  both capabilities). **Closing requirement (named):** sub-block wall-clock emission (finer
+  hook or harness timestamp) + re-grade. **Reopen leg (b) when:** that emission exists.
+  **Target: pre-genesis (blocks the seal).** See
+  [`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](design/ARCHIVAL_BOND_WI4_MEASUREMENT.md) §13 (result),
+  §14 (launch posture), [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md)
+  §4 and [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (the S-3 privacy-sim home).
+- **2d-2 2c-2a — submit-outcome handling: the wallet CONSUMES `SubmitVerdict`; the partition is
+  no longer a design object (SUPERSEDED 2026-07-04 by
+  [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md), D4; absorbed remainders
+  CLOSED 2026-07-05 — §12 series fully landed).** This entry originally
+  tasked 2c-2a with designing a wallet-side three-bucket relay partition
+  ({definitely-relayed / definitely-not-relayed / ambiguous}) reconstructed from the inherited
+  lossy reply surface, plus a TTL exit and an on-chain disambiguation step. That framing is
+  retired: the daemon-submit design round concluded the daemon was destroying facts it holds
+  (the wallet was being designed to be clever about a daemon that is needlessly stupid, and we
+  own the daemon), so the daemon now computes one atomic truthful
+  `SubmitVerdict{Accepted|AlreadyInPool|AlreadyInChain|Rejected{cause}}` and the wallet's
+  handling reduces to the per-cause disposition table (`DAEMON_SUBMIT_VERDICT.md` §2.5), the
+  persisted awaiting-confirmation lock state with dual release paths (§2.6/F14), and the
+  role-aware watchdog (§5.3). **Both correctness-bin bugs this entry filed dissolve rather than
+  get patched**: (1) the fee-floor false-terminal — under identity-first ordering
+  `Rejected{FeeTooLow}` carries proof the tx is in neither pool nor chain, so release is safe by
+  construction (single-egress theorem; F37 bounds the fee-driven rebuild to once); (2) the
+  delivered-4xx no-TTL wedge — verdicts are definite, `Err(RpcError)` is the only ambiguity
+  (Two Generals) and gets TTL-then-resubmit with every stable state resolving on the resubmit
+  (§2.5/F31; a **cancelled** submit remains ambiguity-shaped — the consumer must not wrap
+  `submit` in a cancelling combinator, carried as a PR-4 obligation). **CLOSED 2026-07-05 —
+  every absorbed remainder landed with the daemon-doc PR sequence (§12, all six PRs merged):**
+  the `AlreadyKnown` fiction is retired from `traits/daemon.rs` (PR-4, #248) and from
+  `V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md` / `V3_ENGINE_TRAIT_BOUNDARIES.md` (the CL-4 exemplar
+  and §4 idempotency rows now carry the resubmit-is-a-status-query contract; docs sweep,
+  #254 branch — the PR-6 sweep #250 missed these two files); the shared
+  `RpcError → AmbiguousErrorKind` classifier + the `submit_via_rpc<R: Rpc>` dedup landed
+  (PR-4, "both submitters share the mapping"); the `TxSubmitOutcome` reshape + `ProofStale`
+  construction + spent-marking moved off submit-accept landed (PR-4). The dispatch-shape
+  prerequisite froze and landed 2026-07-04 (next entry).
+- **2d-2 2c-2a — posture→submitter dispatch shape: FROZEN 2026-07-04 (user-ratified) —
+  [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md) §3.1 is the
+  binding record.** The API question this entry posed (`TransactionSubmitter` is RPITIT-non-dyn;
+  the two impls share no nameable type) is decided: a **closed-set enum**
+  `BroadcastSubmitter<D> { Local(DaemonTransactionSubmitter<D>), PerP(PTransactionSubmitter) }`
+  with match-delegation — RPITIT compatibility **verified by compile probe on the MSRV toolchain
+  (1.94.0)** over the exact shapes (generic + concrete arm, `+ Send`), no `Box`/`async_trait`;
+  a **single constructor choke point** (posture in, submitter out; `select_broadcast` stays
+  posture-only) carrying the **routing guard** (②→`PerP`, never the principal submitter); and the
+  **byte↔persona pairing** as a `PBoundBytes` newtype equality-checked at that choke point
+  (`validate_handle` discipline: `debug_assert` loud, fail-closed in release) — per-persona type
+  *branding* rejected for the dynamic persona set, rule-21 reopen in §3.1. The shape survives
+  [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md) PR-4's `SubmitVerdict` reshape
+  (match-delegation is output-agnostic), unblocking PR-4's "both submitters share the mapping."
+  **Post-freeze wargame (2026-07-04, §3.1.1): freeze CONFIRMED against the byte-holder
+  enumeration** (assemble path / F31 resubmit / watchdog probe rung), with **two
+  freeze-compatible provenance pins added as implementation obligations**: **P-1** `PBoundBytes`
+  has exactly one constructor, private to the assemble/sign module — possession is proof of
+  provenance, no re-wrap site exists; **P-2** the held/pending record for a `P`-bound tx stores
+  the `PBoundBytes` value itself (not `Vec<u8>`), so F31/watchdog resubmits re-send the stored
+  value through the same choke path — the retry axis cannot route `P`'s probe over the principal
+  connection. The pins are recorded as **§3.1 part 6** (mint-once / store-wrapped) — an addition
+  *beside* the frozen five parts, not a reopen; the adversary they close is the
+  future-maintainer refactor that stores raw bytes and threads persona separately, silently
+  converting the part-4 equality check into a rubber stamp.
+  **Implementation LANDED 2026-07-04** (`transaction_submitter.rs`): the enum + `for_posture`
+  choke point + `PBoundBytes` + `BroadcastSubmitError`, with `PTransactionSubmitter` tightened to
+  `for_persona` (persona↔circuit binding by construction; the retained `PCanonicalId` feeds the
+  pairing check). Landed inert (`allow(dead_code)`, proving tests are the callers) — the lift
+  condition is the 2c-2b request path, which also owns the §3.1 part-6 P-1 (mint-site migration)
+  and P-2 (store `PBoundBytes`, not raw bytes) provenance pins. **Target: the design decision and
+  the dispatch code are closed; remaining obligations ride 2c-2b.**
+  **Watchdog probe rung — principal path LANDED 2026-07-05
+  (`feat/submit-lifecycle-driver`):** the §5.3 `SubmitLifecycleDriver`'s rung-1
+  resubmit-same-bytes probe now has its principal-path consumer — it re-offers the
+  ephemeral held bytes (`PendingTxState::held_bytes`, decision 2) through the existing
+  principal submitter. This closes the "watchdog probe rung" byte-holder from the §3.1.1
+  enumeration **for principal-path txs only**. The **`P`-bound probe remains a 2c-2b
+  obligation (P-2 unchanged):** a `P`-bound tx's retry must re-send the stored
+  `PBoundBytes` through the `for_posture` choke (②→`PerP`), never the principal
+  connection; the driver's principal-path probe deliberately does not route `P`-bound
+  bytes, per decision 5 (P-bound probes out of scope, named seam).
+- **2d-2 2c — `DaemonUrl` newtype: validate `base_url` at construction + house the S1 disclosure.**
+  `base_url` is a bare `String` across three sites (`BroadcastPosture::OwnRemote`,
+  `PTransactionSubmitter::for_persona`, `PBlockSource::new`) with no validation and an unredacted
+  `derive(Debug)`. A `DaemonUrl` newtype (parse/validate at construction: scheme, host,
+  **.onion-or-loopback**, no trailing slash; redacting `Debug`) closes: (a) the trailing-slash wedge
+  (`http://x.onion:18081/` → `…//submit_transaction` → both daemons 404 → `DaemonAmbiguous` wedge,
+  verified at source); (b) the **clearnet-`OwnRemote`** residual (a clearnet `base_url` through
+  `socks5h` exits Tor at an exit relay, which then sees the plaintext P-bound broadcast — the S1
+  disclosure as written *affirms* this, "a node you control"); (c) the `Debug` credential/onion leak
+  (PRpc pre-provisions creds-in-`base_url`; `SocksUsername` already has a redacting `Debug`). Most
+  importantly it gives the S1 trust-on-user-assertion warning a **structural home** — the
+  constructor is where "this must be a node you control" belongs, a type boundary not a doc-comment.
+  Precedent in-subsystem: `TorSocksEndpoint`, `SocksUsername`, `VerifiedTorBinary`. Scope note
+  (updated 2026-07-04): the delivered-4xx flattening this caveat used to defer to the partition
+  obligation is now resolved daemon-side ([`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md)
+  §2.4: every verdict rides HTTP 200; transport-level codes mean availability, and the `Err` arm's
+  TTL-then-resubmit handles them) — the newtype's job is narrower and unchanged: reject the malformed
+  URL at construction so the wedge never forms. 2c owns the config source, so this folds in there.
+  **Target: 2c config-source slice.**
+- **2d-2 2c — the `OwnRemote` config-point disclosure is a mandated duty with no home yet.** The S1
+  disclosure ("the choice site MUST disclose at the point of entry: *this must be a node you
+  control; pointing it at a third party defeats the broadcast firewall — first-seen-origin is a
+  permanent, categorical link*") is the **sole compensating control** for the conceded
+  user-mislabeled-③ path (`posture.rs` `OwnRemote` doc; `ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`
+  §3(B)) — but its only home is rustdoc on a `dead_code` variant. When 2c builds the config/UX
+  surface, the point-of-entry warning **must** ship (silent-compliance lens: a mechanism needing
+  sustained correct user behavior is already failing — convert to a loud default). Fold into the
+  `DaemonUrl` constructor + the config/UX slice. **Target: 2c config-source slice.**
+- **2d-2 SP-T3 — onion-route end-to-end validation (the property DQ-T0.4 *cannot* prove).**
+  DQ-T0.4 (the SP-T0 circuit-isolation measurement) proves exactly one thing: `IsolateSOCKSAuth`
+  puts per-persona SOCKS streams on **distinct circuits** — read as the attach-time `CircID` at
+  `SENTCONNECT`. It measures that over a **general-purpose exit circuit** on purpose: the dial's
+  destination is irrelevant (the CircID is captured at attach, *before* the exit connects — the dial
+  is expected to fail with a 0-byte result), and an exit circuit is simply the **cheapest circuit a
+  SOCKS dial builds**, which makes the per-username isolation observable with the least apparatus.
+  Crucially, the isolation it measures is **transport-agnostic**: it is a property of the SOCKS
+  port's per-username circuit *selection*, not of where the circuit *terminates*, so the result
+  transfers to onion (rendezvous) circuits for free — if usernames yield distinct exit circuits they
+  yield distinct rendezvous circuits too. **What it therefore does NOT prove, and SP-T3 owns:** that
+  the **onion path itself works end-to-end** — `ADD_ONION` service publication, HSDir descriptor
+  upload/lookup, the rendezvous handshake, and isolation measured *over rendezvous circuits to a
+  reachable `.onion`*. That is a genuinely different test (onion reachability + isolation-over-
+  rendezvous), with more moving parts in the hermetic net (a descriptor-publishing hidden service)
+  and a more-confounded signal (the service side participates in circuit construction) — which is
+  exactly why DQ-T0.4 does **not** fold it in. Production peer transport is **onion-to-onion and
+  never builds exit circuits** (client → 3 hops → rendezvous → 3 hops → service, no exit seeing
+  plaintext or destination); the exit circuit appears in the DQ-T0.4 harness **only as a measurement
+  scaffold**, pinned as such in the harness comments so it never reads as a production egress path.
+  **Rule-`21` framing (reject-now-with-reopening-criteria, not pre-provisioned flexibility):** keep
+  the exit-circuit dial for DQ-T0.4 (right measurement of the right property, cheapest observable);
+  the onion-route validation lands **when SP-T3 builds the onion serving surface**, not before — it
+  has nothing to validate until `ADD_ONION` exists. **Target:** V3.x (with the SP-T3 onion-service
+  build). See [`ARCHIVAL_BOND_2D2_SP_T0_TOR.md`](design/ARCHIVAL_BOND_2D2_SP_T0_TOR.md) (DQ-T0.4
+  measurement + the exit-as-scaffold note) and
+  [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) (SP-T3 onion
+  surface).
+- **2d-2 SP-T3 — inbound onion serving-side hardening (the implementation threat model).** The onion
+  is SP-T3's first **inbound** surface: it accepts connections from **untrusted** peers over
+  high-latency circuits — unlike SP-T0's *trusted loopback* control client or SP-T1/T2's *outbound*
+  dials — so it does **not** inherit SP-T0a's single-mailbox actor pattern (the SP-T0a head-of-line
+  note is benign on loopback control but a real DoS on an inbound listener). Three protections, the
+  inbound analogues of client-side ones already shipped, must land **with** the serving actor:
+  (1) a **decoupled accept loop** — the listener on its own `tokio::spawn`, each connection handled
+  *off* the mailbox (spawn-per-connection), so a slow peer or stalled rendezvous can't
+  head-of-line-block the service; (2) **per-connection `tokio::time::timeout`s** on accept→read, so a
+  stalled peer is dropped rather than holding a file descriptor (bounds FD exhaustion — the client
+  side is already bounded via `HANDSHAKE_READ_TIMEOUT` / DQ-T0.4's `CAPTURE_TIMEOUT`); (3) a
+  **`max_request_size`** capping an inbound payload *before* allocation (the inbound mirror of the
+  control framer's `MAX_REPLY_BYTES`, already an "adversarial-network bound"). **Rule-`21`:** pinned
+  for SP-T3's build, **not code now** — the inbound listener has no consumer until the onion serving
+  surface exists, so provisioning it earlier is the speculation the `owned_net`-extraction discipline
+  avoided. **Target:** V3.x (with the SP-T3 onion-service build). See
+  [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §6a and
+  [`ARCHIVAL_BOND_2D2_SP_T0_TOR.md`](design/ARCHIVAL_BOND_2D2_SP_T0_TOR.md) DQ-T0.2 (the `ADD_ONION`
+  command that creates the service).
 - **`ReorgAmplificationDetector` consumer actor (Stage 1 PR 4 R5
   composition home; supersedes the Round 2 first-pass "extend
   checkpoint 3" deferral).** PR 4's Round 2 reframe of
@@ -6297,7 +9942,7 @@ one place to confirm each item's relationship to the wallet stack.
   (likely co-landing with Stage 4 actor wiring, where `kameo` is
   already in scope and the runtime handle is available) or an
   alternative trait-shape decision.   Cross-references:
-  [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md`](completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
   §1.2 (partial-generalization framing) and §7 (out-of-scope
   refinement). Target: V3.x.
 
@@ -6326,7 +9971,7 @@ one place to confirm each item's relationship to the wallet stack.
   ownership rework happens once for all per-trait implementors,
   not per-trait). Surfaced via Copilot review on PR #26 (Stage 1
   PR 2). Cross-references:
-  [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md`](completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
   §3.4 (engine ownership of `L`) and §5 commit-7 row
   (refresh-path generalization scope). Target: V3.x — co-lands
   with Stage 4 `LedgerEngine` actor cutover.
@@ -6371,7 +10016,7 @@ one place to confirm each item's relationship to the wallet stack.
   workaround in PR 2 is the doc-only fix: drop the broken
   intra-doc link target so the rustdoc warning silences while
   the field-type structure stays the same. Cross-references:
-  [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md`](completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
   §3.4 (engine ownership / visibility decision tree).
   Target: V3.x — gated on `mapped_lock_guards` stabilization
   (preferred) or a separate decision to adopt
@@ -6418,6 +10063,18 @@ one place to confirm each item's relationship to the wallet stack.
   gate is the message, not shared state). The `LedgerEngine`
   consumes `ArchivalEvent` values via the merge protocol the same
   way it consumes `StakeEvent` values.
+
+  *E-factoring trigger breadcrumb (Phase 2b §8.9):* when designing
+  the **archival-yield disbursement** path, check whether it adds a
+  **staker-initiated claim tx**. If it does, that is the first clause
+  of the `PHASE_2B_STAKE_LIFECYCLE.md` §8.9 reversion trigger firing
+  (third claim-tx-type) — factor the shared staleness/broadcast
+  primitive then, which the wallet duplicated (E shape) precisely to
+  defer until a third consumer appeared. A pointer, not a task:
+  archival is otherwise additive and does not reopen the stake FSM;
+  this only flags the staleness-gate factoring as coming due if
+  disbursement is claim-tx-shaped (protocol-side `ArchivalEvent`
+  merge with no staker-initiated tx does not trip it).
 
   *Why sibling, not child of `StakeEngine`:* slashing-domain
   integrity (a bug in archival logic that slashes archival-yield
@@ -6509,6 +10166,253 @@ one place to confirm each item's relationship to the wallet stack.
   visualization design home); `docs/V3_STAKER_ARCHIVAL.md`
   (companion archival design that produces the shards).
 
+- **Transport selection for the staker-archival path (gate 6 /
+  networking; forward consideration, NOT yet scheduled).** The
+  firewalled-pseudonym requirement forces the heavy archival
+  fetch onto an onion-service↔Tor-client **rendezvous** path
+  (the pseudonym `P`'s network location must not link to the
+  principal, so — unlike Monero's public chain sync — there is no
+  clearnet fallback for the archival serving path). This couples
+  the transport choice to the staker-archival sim's latency axis:
+  the `L2–L6` band in `docs/design/STAKER_ARCHIVAL_SIM.md` (§*L10*,
+  §*L10 hardening*) is the **operating regime by construction**, not
+  a stress corner, and `fetch_latency_per_unit` is the
+  onion-rendezvous latency. The sim has already designed around the
+  worst case (age-scaled duration win-or-harmless across `L2–L6`;
+  foundation floor backstops the `L6` ceiling), so transport latency
+  is a **bounded, modeled** constraint rather than a discovery.
+
+  Disposition: **Tor primary** (maturity + TCP + persistent-
+  reachable-service + longevity; the inherited Levin/TCP stack drops
+  in without impedance mismatch — note the Tor↔TCP commitment is
+  *coupled*, so a future UDP/QUIC sync would reopen it). I2P is a
+  defensible secondary (dual-support à la Monero); Lokinet
+  (Oxen-tied, UDP — the longevity risk Tor avoids) and Nym (mixnet,
+  latency-disqualifying for heavy fetch) are out.
+
+  Three forks deferred to the transport PR: (1) **embed Arti
+  in-process** (Rust-canonical; claimed viable on the Arti 2.x LTS
+  line with onion-service *hosting*) **vs. external Tor daemon over
+  SOCKS** (Monero's model, more battle-tested, external dependency);
+  (2) whether to keep the **I2P secondary door open** architecturally
+  even if not built at genesis (reversion-clause shape per
+  `21-reversion-clause-discipline.mdc`); (3) a **dedicated privacy
+  threat pass** on the rendezvous-forced heavy path — Monero flags
+  its anonymity-network support experimental and does *not* lean on
+  the rendezvous config, so this is no-inheritance-by-assumption, not
+  "does Tor exist."
+
+  **Dependency-discipline gate (binding):** every maturity/capability
+  claim above (Arti onion-service hosting, the 2.x LTS branch,
+  Monero's over-Tor traffic split) is **to be re-verified at source**
+  when the PR opens, per `17-dependency-discipline.mdc` — recorded
+  here as rationale to test, not banked fact.
+
+  *The one transport input that feeds the sim:* whether the heavy
+  path stays **pure-rendezvous** (worst-case L-regime, maximal
+  firewall) or admits a **bandwidth-buying relaxation that does not
+  link `P`** — the lever that sets where Shekyl lands on the `L2–L6`
+  curve.
+
+  *Target:* V3.x (gate 6 / transport pass) — sequenced after the
+  staker-archival economics gates (4/5) close; no work until then.
+
+  *Reference:* `docs/ANONYMITY_NETWORKS.md` §*Transport for the
+  staker-archival path* (full analysis); `docs/design/STAKER_ARCHIVAL_SIM.md`
+  ledger item L16 + §*Transport coupling* + §*L16*; `docs/design/V3_STAKER_ARCHIVAL.md`.
+
+- **Soundness pass step 0: pin retrieval SLA per class (gate 4–6;
+  soundness pass — upstream of L15).** **Closed (spec).** Pinned in
+  `docs/V3_STAKER_ARCHIVAL.md` §*Service promise — genesis-pinned
+  commitments* (2026-06): hard permanent retention + soft best-effort
+  latency; foundation complete-tree as public durability anchor; market
+  additive; `market_R` vs `durability_count`; foundation fully outside
+  reward formula; permanent floor (no L12 decay). L15d/L16d rescore
+  (`docs/design/STAKER_ARCHIVAL_SIM.md` §*Step 1 result*) validated
+  the split.
+
+  *Remaining pre-genesis lifecycle (not soundness):* foundation key-
+  rotation shape (master+subkey vs over-enumeration — **pin before
+  genesis seals identity set**); legal review of immutable genesis
+  foundation-enumeration disclosure; uniform nominal vs full foundation
+  bond policy.
+
+  *Reference:* `docs/design/STAKER_ARCHIVAL_SIM.md` §*Soundness pass*.
+
+- **Foundation archiver key rotation (gate 4–6; pre-genesis).** **Closed
+  (spec).** Pure **over-enumeration** at genesis — reserve slots activated
+  through normal staking/serving; no cross-authorizing master. Reversion:
+  per-root subkey lineage only if rotation frequency forces it; cross-
+  minting master **never**. *Reference:* `V3_STAKER_ARCHIVAL.md` §*Key
+  rotation — over-enumeration*.
+
+- **Foundation bond posture (gate 4–6; pre-genesis).** **Closed (spec).**
+  **Nominal uniform bond** — `ARCHIVAL_BOND_FLOOR` × 1 per active genesis
+  `P`; **whole-bond slash → unbond → `durability_count` removal** until
+  re-bond (no fractional/no-op slash). *Reference:* `V3_STAKER_ARCHIVAL.md`
+  §*Accountability* / *CompleteTree slash semantics*;
+  `docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md` §3.
+
+- **`ARCHIVAL_BOND_FLOOR` numeric pin + genesis `bond_floor_atomic`
+  (gate 4 iteration-2; pre-genesis).** **Closed (2026-06-07).** Sim pin
+  `bond_rate* = 0.75`; atomic floor `750_000_000` (`0.75 SKL`) via
+  `config/consensus_constants.json` per
+  `FOUNDATION_GENESIS_IDENTITY_SET.md` §9.3 (1 sim capital unit ≡ 1 SKL).
+  Reversion: reopen if spread threshold, whale model, or mainnet endowment
+  calibration shifts the intersection or the capital-scale anchor.
+
+  *Reference:* `docs/design/STAKER_ARCHIVAL_SIM.md` §*Gate 4 iteration-2*;
+  `gate4_fine_*` scenarios in `shekyl-staking-sim`.
+
+- **Archival data scope — sets A/B/C (gate 4–6; pre-genesis).** **Closed
+  (spec).** Deep shard substrate (B), block/tx corpus (C), wallet-minimum
+  (A); user promise and challenges mapped. Gates counsel/FAQ lock.
+  *Reference:* `V3_STAKER_ARCHIVAL.md` §*Archival data scope*.
+
+- **Foundation genesis-enumeration — legal / regulatory disclosure
+  (gate 4–6; pre-genesis).** Draft:
+  `docs/design/FOUNDATION_ARCHIVAL_DISCLOSURE.md`. Public narrative:
+  `docs/PUBLIC_NARRATIVE_FAQ.md` §*Archival*. **Requires counsel review
+  before genesis** — unblocked on data-scope pin (above).
+
+  *Target:* before genesis. *Reference:* `V3_STAKER_ARCHIVAL.md`
+  §*Service promise*; `docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md`.
+
+- **Archiver seeding-path transport relaxation (gate 6 / firewall;
+  soundness pass step 2).** L16 closes the Tor thread: user historical
+  queries can stay pure rendezvous under a durability SLA; the
+  **archiver-to-archiver seeding path** (both ends pseudonymous, not
+  external querier) is where bandwidth-buying relaxation that does not
+  link `P` may live — smaller, contained firewall question than clearnet
+  on the user-query path. Sequenced after step 0 SLA pin.
+
+  *Target:* gate 6 transport pass, after step 0. *Reference:*
+  `docs/design/STAKER_ARCHIVAL_SIM.md` §*Soundness pass* step 2;
+  `docs/ANONYMITY_NETWORKS.md` §*Transport for the staker-archival path*.
+
+- **L14 read-credit soundness: per-(holder, shard), never shard-global
+  (gate 4 / consensus crypto; soundness pass step 3).** The iteration-3 sim
+  validated retrieval-as-proof economics **conditional** on read-credit
+  being unforgeable. Soundness requires crediting only **reader-verified,
+  successful serves** that reduce **that holder's** challenge burden —
+  never a shard-global `p_read` that would let one holder's fake
+  self-reads shield a dropping co-holder by inflating popularity for
+  everyone. Secondary check: a credible slash that minimizes oversight
+  traffic must still leave an acceptable `a*` at the L11-feasible bond
+  (penalty couples to bond/APR denominator).
+
+  *Target:* gate 4 soundness pass step 3, before genesis challenge-cadence pin.
+  *Reference:* `docs/design/STAKER_ARCHIVAL_SIM.md` §*Soundness pass*
+  step 3, §*L14×L15*, ledger L14.
+
+- **L15 diversity under location-hiding (gate 4–6 / architecture;
+  soundness pass step 1 — conditional on step 0).** **Historical/audit
+  class: closed** — L15d rescore + SLA pin; wall shrinks to foundation
+  observable floor + market tail. **Seeding/instantaneous class:**
+  still load-bearing under rendezvous (L16); bounded seeding SLO and
+  optional archiver-to-archiver transport (step 2 — reduced if fetch
+  from public foundation complete copies).
+
+- **Permanent fee-era backstop must be a trustless terminal subsidy,
+  not the foundation floor (gate 7 / consensus monetary policy;
+  GENESIS-CLASS decision).** The L13 sim (`docs/design/STAKER_ARCHIVAL_SIM.md`
+  §*L13*) shows the fee-era death spiral is dampable *conditional on*
+  (a) a smoothed trust signal and (b) an adequate fee-market ceiling
+  (~115); below the ceiling the adaptive servo saturates (graceful
+  loud failure) and the **permanent foundation complete-tree floor**
+  catches coverage (L13 `bDUf` read — re-engagement is tautological
+  when the floor no longer decays). Chained, these create a structural
+  hazard: **if the fee market never clears ~115 — the live existential
+  fee-era question, not a corner — reliance on the foundation floor
+  stops being a transient bootstrap artifact and becomes sustained
+  foundation-centrism** — a **decentralization failure**, not data
+  loss (SLA pin: durability rests on foundation; terminal subsidy
+  funds market redundancy above the floor).
+  P2 hardening sharpens the stakes: the death spiral has a
+  *second, level-driven leg* (fiat flow cost ÷ token price) that a
+  token-denominated servo damps only partially even at 2× ceiling, so
+  the steady-state risk is worse than the one-leg model showed.
+
+  Disposition (to ratify at gate 7): **separate the two backstops by
+  trust model.** The *permanent* floor is a **protocol terminal
+  subsidy funded by a trustless source** — a Monero-style perpetual
+  tail emission sized **above** the ~80–100 coverage knee with margin
+  (so the *market* keeps providing capacity perpetually, and the
+  irreplaceable tail does not sit in the residual `fee_deep_under_peak`
+  ~0.21 that persists even with the full apparatus). The **foundation
+  floor stays strictly transient** — bootstrap (L12) plus short
+  fee-volatility dips — and is **architecturally barred** from becoming
+  the steady-state floor. This is a **consensus-visible, genesis-class
+  monetary decision** (tail-emission rate and floor): its *funding
+  source*, not just its post-testnet magnitude, is the gate-7 call.
+  The L13→gate-7 handoff.
+
+  The terminal subsidy must additionally carry the **P3 floor-tilt**
+  (below — *not* L9/L10 bond-duration age-scaling): it is the
+  *permanent* capacity source for the irreplaceable tail, so its
+  per-shard reward weight is age-stratified the same way the
+  foundation floor is, concentrating the perpetual subsidy on the
+  oldest band that the fee market abandons first.
+
+  *Target:* gate 7 (terminal monetary policy), before genesis (the
+  emission schedule is consensus-pinned). *Reference:*
+  `docs/design/STAKER_ARCHIVAL_SIM.md` §*L13*, ledger L13 + the
+  iteration-3 hardening headline (P2/P4).
+
+- **Age-stratify the foundation floor AND the terminal subsidy toward
+  the irreplaceable oldest band (gate 5 + gate 7; shape derived,
+  magnitude post-testnet).** *Disposition note:* this is
+  **`foundation_floor_aged` floor-tilt**, a mean-preserving capacity
+  reallocation — **not** the L9/L10 bond-duration age-scaling
+  disposition (tilting the floor is unambiguously good where tilting
+  duration was ambiguous). P3 band-resolved the L12/L13 residual with
+  a new oldest-band metric (`boOld`, age ≥ 0.8) and found the exposure
+  is **asymmetric across the two temporal ends**: the **fee-era**
+  floored residual concentrates in the oldest band (`l13_floor`:
+  `boOld 0.612 > bDUf 0.425` — L13#2's oscillation is the
+  least-replaceable band thinning), but the **bootstrap** residual does
+  **not** (the genesis core is covered earliest, so the L12 hand-off
+  slice `bDUf 0.019` lands on the freshly-deepened, *most* re-derivable
+  band, `boOld≈0`). So the irreplaceable-tail risk is a fee-era
+  phenomenon, and uniform treatment of "deep" is the wrong granularity
+  there. The lever — `participation::foundation_floor_aged`, a
+  **mean-preserving** oldest-ward tilt (`factor 1+tilt·(2x−1)` over the
+  deep range, mirroring `R_target(age)`, at equal total foundation
+  cost) — cuts the oldest-band gap ~80% (`p3_fee_tilt_*`: tilt 0/0.6/0.9
+  → `boOld 0.612/0.391/0.125`) at the cost of a modest aggregate rise
+  (`0.425→0.467`, the re-derivable band under-floors). **Disposition:**
+  both the (transient) foundation floor and the (permanent, trustless —
+  see P4 above) terminal subsidy carry an age-stratified per-shard
+  weight tilted toward the oldest band, the same shape `R_target(age)`
+  already uses. The *shape* is the genesis decision; the live tilt
+  magnitude is a post-testnet calibration. *Target:* gate 5 (floor
+  tilt) + gate 7 (terminal-subsidy tilt), shape pre-genesis. *Reference:*
+  `docs/design/STAKER_ARCHIVAL_SIM.md` §*L13*, ledger L13 HARDENED (P3) +
+  the iteration-3 hardening headline (P3).
+
+- **L12 floor-decay schedule should be coupled to the growth↔entry
+  crossover, not a free constant (gate 5 / economics; substrate
+  note).** L12 finding 6 is a *race*: deep history forms as the chain
+  grows (≈12 shards/epoch fast, 3 slow) while archiver entry seats it
+  (≈6/epoch). The foundation-floor decay schedule (`floor_decay_pop`)
+  currently a free constant must persist *at least* as long as the
+  growth-minus-entry gap takes to close — so the decay should be
+  derived from the measured genesis growth rate vs. entry rate, not
+  tuned independently. *Target:* gate 5, post-testnet (needs the live
+  chain-growth and entry rates). *Reference:*
+  `docs/design/STAKER_ARCHIVAL_SIM.md` §*L12* findings 5–6.
+
+- **Bootstrap APR overshoot is a purse-efficiency note, not a
+  correctness one (gate 5 / economics; substrate note).** L12 finding
+  1: on slow growth the prolonged high-APR phase over-pays during
+  bootstrap (peak `bondA` 83–97 vs steady 76–78), and the subsequent
+  shed is *coverage-neutral* (`oUmx=0`, benign rotation). So it costs
+  purse, not durability. Candidate mitigation (gate 5): a
+  growth-indexed early-budget taper so the genesis purse tracks the
+  thin early population instead of over-paying it. *Target:* gate 5,
+  post-testnet. *Reference:* `docs/design/STAKER_ARCHIVAL_SIM.md`
+  §*L12* finding 1.
+
 ---
 
 ## V4+ — horizontal scaling
@@ -6530,6 +10434,47 @@ one place to confirm each item's relationship to the wallet stack.
   *Reference:* `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
   Engine architecture: actor model with staged migration*
   §"Future-version benefits enabled by actor architecture".
+
+- **Typed `Leaf` for the 128-byte curve-tree leaf tuple (spawned
+  2026-06-10, PR #121 review round).** The consensus leaf tuple
+  `[O][I][C][h_pqc]` crosses four crates as a bare `[u8; 128]`:
+  `shekyl-fcmp` builds it; `shekyl-curve-tree` persists and flattens it
+  (`LeafEntry.leaf`, `segment.rs::leaf_bytes_to_scalars`, redb
+  `LEAVES_TABLE`); `shekyl-archival-retention` carries it in `wire.rs`;
+  `shekyl-ffi` slices it from C buffers. Per `20-rust-vs-cpp-policy.mdc`
+  a cryptographic contract wants type enforcement, and a `Leaf` newtype
+  with `scalars(&self) -> [[u8; 32]; SCALARS_PER_LEAF]` would make
+  shape/capacity bugs structurally impossible (cf. the PR #121
+  `leaf_bytes_to_scalars` over-reservation, fixed in `ed351932f`).
+
+  **Rejected for V3** per
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc):
+  the bare array is load-bearing at three boundaries (redb's `Value`
+  impl is free on byte arrays; the C ABI cannot carry newtypes; the
+  archival wire format is bytes by definition), the KAT lattice
+  (`store_kat` / `assemble_kat` / `upper_layers_kat` / gate-2) already
+  gates wrong-stream bugs byte-exactly, only two production
+  flatten sites exist (`segment.rs`, `leaf_bytes_are_canonical`), and
+  leaves are public material — no `35-secure-memory.mdc` /
+  `36-secret-locality.mdc` typing pressure.
+
+  *Reopening criteria:* (a) a third production flatten/unflatten site
+  appears; (b) a wrong-shape bug escapes the KAT lattice; (c) the V4
+  lattice transition rewrites the leaf tuple — the anchor case: two
+  coexisting leaf layouts are a genuine type-confusion hazard, and the
+  type becomes load-bearing rather than ceremonial. *Re-evaluation
+  shape:* dedicated chore PR introducing the type in `shekyl-fcmp` (the
+  producer crate) and converting consumers; under (c), part of the V4
+  leaf-layout design rounds.
+
+  *Bounded interim option (no criteria required):* a derived
+  `pub const LEAF_BYTES: usize = SCALARS_PER_LEAF * 32;` in
+  `shekyl-fcmp::tree`, used as `[u8; LEAF_BYTES]` at signatures
+  (~22 sites) — same type, zero runtime change, makes the 128 ↔ 4×32
+  tie visible at every signature and turns future layout drift into
+  compile errors. Standalone chore if wanted before V4.
+
+  *Target:* **V4** (criterion (c)), or earlier if (a)/(b) fire.
 
 ---
 
@@ -6635,7 +10580,7 @@ one place to confirm each item's relationship to the wallet stack.
      [`account_base::generate_from_bip39`](../src/cryptonote_basic/account.cpp)
      pipeline (entropy → cSHAKE-256 normalize → spend/view secret
      derivation per
-     [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+     [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
      §7.12) must match what the device firmware derives at the
      corresponding `m/44'/<coin-type>'/<account>'/<change>/<index>`
      path. Today's pipeline is Shekyl-specific (PBKDF2-HMAC-SHA512
@@ -6659,7 +10604,7 @@ one place to confirm each item's relationship to the wallet stack.
   Electrum-words, or any other mnemonic scheme. They belong to
   the hardware-wallet integration workstream, which does not
   yet have a substrate document. Per
-  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  [`docs/completed/ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §4.10's "Hardware-wallet BIP-39 derivation parity"
   sub-paragraph, B-1 does not introduce the question and does
   not resolve it.
@@ -6695,7 +10640,7 @@ one place to confirm each item's relationship to the wallet stack.
   `shekyl_account_generate_from_bip39` pipeline changes shape
   in a way that affects derivation alignment (e.g., the cSHAKE
   customization string changes per
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §7.12), forcing fresh alignment analysis.
 
   **Cross-references.**
@@ -6705,10 +10650,10 @@ one place to confirm each item's relationship to the wallet stack.
   (host-side BIP-39 entropy / seed derivation);
   [`src/cryptonote_basic/account.cpp`](../src/cryptonote_basic/account.cpp)
   (account-keys derivation from seed);
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §7.12 (cSHAKE-256 pipeline that's downstream of BIP-39 in
   Shekyl's host-side derivation);
-  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  [`docs/completed/ELECTRUM_WORDS_REMOVAL.md`](./completed/ELECTRUM_WORDS_REMOVAL.md)
   §4.10 ("Hardware-wallet BIP-39 derivation parity"
   forward-reference sub-paragraph);
   the PQC multisig hardware-wallet integration entry above
@@ -6776,7 +10721,7 @@ reference.
   Not-Clone precedent at
   [`rust/shekyl-crypto-pq/src/account.rs:480-494`](../rust/shekyl-crypto-pq/src/account.rs)
   and the
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §5.4.8 #1 reject-with-reopening precedent):
 
   1. **Upstream `sha2` adds a `zeroize` feature** (in any minor or
@@ -7001,7 +10946,7 @@ Retained for citation in review; each links to the canonical record.
   flag distinction).
 
   **Cross-references.**
-  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
+  [`docs/completed/RANDOMX_V2_PHASE2G_PLAN.md`](./completed/RANDOMX_V2_PHASE2G_PLAN.md)
   §11 Round history Round 8 entry (post-merge substrate-triage
   amendment — R8-D1 verifier-divergence root-cause closure +
   R8-D2 cache-vs-VM-flag asymmetry pin + R8-D3 missed-altitude
@@ -7089,7 +11034,7 @@ Retained for citation in review; each links to the canonical record.
   canonical `apply_scan_result_to_state`.
 
   Cross-references (historical):
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §2.1.2 (broader Mock-X rejection rationale), §6.4 (per-PR-3
   substrate disposition), §7.9 (test-substrate disposition open
   question);
@@ -7125,7 +11070,7 @@ Retained for citation in review; each links to the canonical record.
   Round 5 amendment.
 
   Cross-references (historical):
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  [`docs/completed/STAGE_1_PR_3_KEY_ENGINE.md`](completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §2.1.2 (broader Mock-X rejection rationale);
   [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
   Status banner, §6 no-Mock substrate inheritance discipline,
@@ -7134,7 +11079,7 @@ Retained for citation in review; each links to the canonical record.
 - **Stage 1 PR 3 architectural-inheritance migration: "secrets confined
   to engine" property activated at M3d (2026-05-11).** The
   headline property of the
-  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  [`docs/completed/STAGE_1_PR_3_MIGRATION_PLAN.md`](./completed/STAGE_1_PR_3_MIGRATION_PLAN.md)
   M3-series (see §3.4 / §3.4.1) — orchestrator-side `TransferDetails`
   no longer carries derived per-output secrets — activated with the
   M3d landing on `feat/stage-1-pr3-m3d`. The five legacy
@@ -7144,24 +11089,24 @@ Retained for citation in review; each links to the canonical record.
   postcard schema mirror; the engine re-derives the spend material
   inside the signing-session boundary from `(view_secret,
   source_ciphertext)` via `LocalKeys::derive_source_secrets_bundle`
-  per [`STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  per [`STAGE_1_PR_3_KEY_ENGINE.md`](./completed/STAGE_1_PR_3_KEY_ENGINE.md)
   §7.10–§7.12.
 
   **Scope and audit trail.** Five-PR sequence (M3a–M3e) per
-  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  [`docs/completed/STAGE_1_PR_3_MIGRATION_PLAN.md`](./completed/STAGE_1_PR_3_MIGRATION_PLAN.md)
   §3.1–§3.5; M3d activated the property and M3e completed the
   documentation-realignment-of-the-whole (M3-series complete,
   2026-05-11). Audit table in
-  [`docs/design/STAGE_1_PR_3_MIGRATION_AUDIT.md`](./design/STAGE_1_PR_3_MIGRATION_AUDIT.md)
+  [`docs/completed/STAGE_1_PR_3_MIGRATION_AUDIT.md`](./completed/STAGE_1_PR_3_MIGRATION_AUDIT.md)
   §2.1 row 1 marks the five legacy fields "Removed at M3d (landed
   2026-05-11)". `LEDGER_BLOCK_VERSION` and
   `WALLET_LEDGER_FORMAT_VERSION` both bumped 3 → 4; two `.snap`
   schema snapshots regenerated; `.zeroize-allowlist` cleaned. Per-PR
   pre-flight investigations:
   [`STAGE_1_PR_3_M3A_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3A_PREFLIGHT.md),
-  [`STAGE_1_PR_3_M3B_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3B_PREFLIGHT.md),
-  [`STAGE_1_PR_3_M3C_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3C_PREFLIGHT.md),
-  [`STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md).
+  [`STAGE_1_PR_3_M3B_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3B_PREFLIGHT.md),
+  [`STAGE_1_PR_3_M3C_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3C_PREFLIGHT.md),
+  [`STAGE_1_PR_3_M3D_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3D_PREFLIGHT.md).
 
   **Threat-model delta.** Orchestrator compromise no longer discloses
   output-secret material (capability disclosure via `AllKeysBlob`
@@ -7202,7 +11147,7 @@ Retained for citation in review; each links to the canonical record.
   [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
   ("while we're here is the enemy") then folded into M3e per the
   rule-15 trinary-reading calibration shift recorded in
-  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./completed/STAGE_1_PR_3_M3E_PREFLIGHT.md)
   §11.1 — the realignment is mode-2 mechanical-residue (mechanically
   derivable from the substrate rename; directly traceable; bounded;
   surfaced inside M3e's review window) and folds into the closing PR
@@ -7339,3 +11284,92 @@ Retained for citation in review; each links to the canonical record.
   `ref_leaf_count`, and applying boundary-chunk hash trimming via
   `shekyl_curve_tree_hash_trim_{selene,helios}` for sibling chunks that
   grew since the reference block.
+
+- **RESOLVED (PR #229, 2026-07-02, r2+r3): bond-post hybrid-pubkey length
+  tightened to exact canonical equality on ALL parsers.** Verified at source:
+  every parser only upper-bounded, so a truncated non-empty key was
+  structurally accepted everywhere. Fixed pre-genesis to
+  `== config::PQC_HYBRID_SINGLE_KEY_LEN` (`== SINGLE_KEY_CANONICAL_LEN` in Rust)
+  across all four entrypoints of the 0x03 vin: `bond_wire.rs` write+read
+  (`HybridPubkeyLenNotCanonical`), `shekyl-wire` `BondPost` read+validate (both
+  `hybrid_public_key` and `bond_spend_pk`), the C++ binary serializer
+  (`cryptonote_basic.h`), the C++ structural verify
+  (`blockchain.cpp check_archival_bond_post_input`), and — caught by Copilot in
+  r3 after r2 claimed "all three" — the C++ JSON/RPC parser
+  (`json_object.cpp fromJsonValue`, which had stayed `> LEN`). Lesson: "all the
+  parsers" needs an exhaustive grep, not a mental inventory — a fourth
+  entrypoint existed.
+
+- **RESOLVED (PR #229, 2026-07-02): `shekyl_fcmp_verify` (full path) now has
+  the same arity hardening as its membership-only sibling.** Rust `verify()`
+  caps `num_inputs` (0 or > `MAX_INPUTS` → `DeserializationFailed`); the FFI
+  rejects count mismatches and over-cap arity before slicing and guards the
+  ×32 length multiplies with `checked_mul` — all reject paths keep the
+  existing invalid-parameters code (1), so no error-surface change. The
+  original deferral reason ("mid-review of #224") expired with #224's merge;
+  fixed on-find per the fix-as-we-find rule.
+
+- **Pre-existing: `total_burned` stat undercounts realized fee-burn (PR-4 review,
+  2026-07-02).** The add-block accounting path
+  (`blockchain.cpp` `handle_block_to_main_chain`) computes its burn with
+  `compute_fee_burn(fee_summary, /*tx_volume*/ 0, …)`, forcing `burn_pct = 0` for
+  the fee portion, while `validate_miner_transaction` uses `tx_volume_avg` (real
+  burn_pct). So the persisted `block_burn` record + `total_burned` stat capture
+  only the staker-inflow burn, never the consensus fee-burn. PRE-EXISTING (the
+  old accrual path passed 0 too); PR-4 only made it a persisted per-height
+  record. It is internally symmetric (pop removes exactly what add wrote — no
+  reorg drift) and `total_burned` is a stat, not consensus, so no fork. Fix:
+  feed the add-path `compute_fee_burn` the same `tx_volume_avg` validation uses,
+  or record `fee - effective_fee` explicitly. Own PR (touches burn-stat
+  semantics, not claim-era).
+
+- **Pre-existing: `shekyl_engine_core::error::EngineCoreError` still carries dead
+  claim-era variants (PR-4 review):** `NotStaked`, `NoBacklog`, `NotMatured`,
+  `ClaimRangeTooLarge`, `InsufficientPoolData`, `ZeroReward`, `InvalidTier`,
+  `NoClaimableOutputs`. `pub`, so no dead-code lint fires. Orphaned by the
+  claim-era retirement; sweep with the next engine-core error-surface pass.
+
+- **RESOLVED (CI-hygiene PR, 2026-07-02): deleted the M5 citation gate
+  (`scripts/ci/check_phase2h_citations.sh` + its workflow step).** The gate is
+  convention theater: it validates that cited `*_PLAN.md` files EXIST (never
+  reads them — blank/gibberish files pass) and that source cites are within
+  `wc -l` (never the content). Any element of the spec or the code can change
+  and it cannot fire — "that's not the behavior of a rigorously coded program,
+  that's the signature of a virus or trojan." Real spec enforcement in this
+  crate is the differential harness itself (T2 adversarial corpus byte-equality
+  vs the C reference, verifier tests, crate-invariant fork-pin check) — tests
+  that fire on behavioral change. The gate's only yield has been blocking CI on
+  a doc archival (`docs/design/` → `docs/completed/`, 13 false FATALs on #232).
+  #232 carries the minimal unblock (basename resolution + rustdoc link
+  repoints); the deletion PR removes the script, the `M5 citation-validation
+  script` workflow step, and the script's `paths:` trigger entries. Kept
+  `check_randomx_crate_invariants.sh` (the fork-pin-sha check is a real
+  substrate pin). Same PR also added superseded-run `concurrency` groups to
+  the 10 pull_request-triggered workflows that lacked them (house pattern
+  from economics-c2a-prime.yml) — repeated pushes no longer stack full
+  matrices behind each other on the shared runner pool.
+
+- **RESOLVED (RandomX v2 test-regime hardening PR-1, 2026-07-03): four
+  RandomX symbol/provenance items discharged with the Hole-1 gate wiring.**
+  (1) *Phase 3a full-dataset parity gate wired into CI* — the gate existed
+  since the cutover but no automation ran it (armed gate, no trigger); the
+  `full-parity` cron job in `randomx-v2-differential.yml` now builds
+  `-DBUILD_RANDOMX_V2_MINER_LIB=ON` daily and runs
+  `ctest -L randomx_v2_full_parity_daily` (weekly: the full
+  `randomx_v2_full_parity` sweep re-checking all 1024 Phase 2g canonical
+  pins under C-full-dataset via the `gen-parity-corpus` file + `corpus`
+  harness mode). (2) *Separate-process miner-run KAT* — discharged by
+  `tests/randomx_v2_parity/randomx_v2_miner_kat.cpp` (miner-shaped
+  consumer, links only `shekyl_randomx_v2`), which re-derives
+  `kFrozenKatHashHex` on every gate run. (3) *Vendored-library teardown
+  double-free* — recorded **benign-at-teardown, won't-fix** (gdb evidence
+  and reopening criterion at the parity-harness header; reopen only if
+  observed before teardown). (4) *`nm` symbol isolation on the linked
+  `shekyld`* (both the Phase 3c `aes`/`randomx_*` item and the V3.x
+  DAA-family item) — landed as
+  `scripts/ci/check_randomx_symbol_isolation.sh` in the same cron job:
+  §7.1 banned 10-symbol list absent, demangled
+  `cryptonote::next_difficulty` family absent (the original entry's
+  unmangled grep could never match a mangled C++ symbol — corrected),
+  `shekyl_pow_randomx_v2_hash` + `_ZN3aes` present (falsifiability
+  anchors; empirically verified against a Release static build).

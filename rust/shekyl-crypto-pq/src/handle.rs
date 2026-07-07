@@ -63,6 +63,7 @@ use sha3::digest::core_api::CoreWrapper;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{CShake256, CShake256Core};
 use std::fmt;
+use zeroize::Zeroize;
 
 /// SP 800-185 customization string for `derive_output_handle`.
 ///
@@ -118,6 +119,13 @@ pub const OUTPUT_HANDLE_LEN: usize = 16;
 /// `STAGE_1_PR_3_M3B_PREFLIGHT.md` §2 D3 (disposition α), persisting
 /// types like `shekyl_engine_state::TransferDetails` reference
 /// `OutputHandle` directly rather than a mirror struct.
+// `Zeroize` (not `ZeroizeOnDrop`: the type is `Copy`, so it cannot carry a
+// `Drop`) lets containers that move a handle across a non-zeroizing boundary —
+// notably the `OutputClaim` actor reply traversing kameo's mailbox/oneshot
+// channel — wipe the handle bytes on their own `ZeroizeOnDrop`. The handle is a
+// per-output capability reference; a copy lingering in a freed channel buffer
+// is a wallet fingerprint even though the bytes are a deterministic cSHAKE256
+// derivation.
 #[derive(
     Clone,
     Copy,
@@ -129,6 +137,7 @@ pub const OUTPUT_HANDLE_LEN: usize = 16;
     Serialize,
     Deserialize,
     postcard_schema::Schema,
+    Zeroize,
 )]
 #[serde(transparent)]
 pub struct OutputHandle([u8; OUTPUT_HANDLE_LEN]);

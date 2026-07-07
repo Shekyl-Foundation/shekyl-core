@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! iai-callgrind companion to `benches/transfer_e2e.rs`.
+//! gungraun companion to `benches/transfer_e2e.rs`.
 //!
 //! Measures the same two components (BP+ 2-output range proof and one
 //! hybrid Ed25519 + ML-DSA-65 signature) under Valgrind's Callgrind
@@ -21,7 +21,7 @@
 //! internally draws from `OsRng` for the ML-DSA-65 rejection-sampling
 //! loop. The number of rejection iterations is variance-heavy across
 //! runs (observed ~16% instruction-count drift on a clean machine),
-//! which violates the iai-callgrind exit criterion from
+//! which violates the gungraun exit criterion from
 //! `docs/MID_REWIRE_HARDENING.md` §3.2 ("two runs back-to-back agree
 //! to the instruction"). FIPS 204 permits a deterministic-seed
 //! variant (`try_sign_with_seed`) that exercises the same code path
@@ -33,9 +33,9 @@
 //! absorbs the variance; only the instruction-count metric needs
 //! this treatment. The BP+ side is deterministic by construction
 //! (no rejection sampling), but also uses a seeded RNG here as
-//! defense in depth — so both iai sub-benches are hermetic.
+//! defense in depth — so both gungraun sub-benches are hermetic.
 
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use std::hint::black_box;
 
 use curve25519_dalek::scalar::Scalar;
@@ -47,7 +47,7 @@ use rand::{RngCore, SeedableRng};
 
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::signature::{HybridSecretKey, HybridSignature, ML_DSA_65_SECRET_KEY_LENGTH};
-use shekyl_primitives::Commitment;
+use shekyl_curve_primitives::Commitment;
 
 /// Fixed seed for all deterministic RNG draws in this bench. The
 /// value has no cryptographic meaning; it is pinned so re-runs produce

@@ -92,6 +92,33 @@ pub mod engine_file_ffi;
 // (Phase 3 onward) by the daemon's difficulty path.
 pub mod difficulty_ffi;
 
+// RandomX v2 light-cache PoW verification FFI. Wraps `shekyl_pow_randomx`
+// (`compute_hash` + `CacheStore`) in a C-ABI surface — the consensus
+// PoW hash (`shekyl_pow_randomx_v2_hash`) plus the canonical-seedhash
+// pin/eager-derive entry point (`shekyl_pow_randomx_v2_set_canonical`).
+// Replaces the inherited C RandomX v1 path (`crypto::rx_slow_hash` /
+// `rx_set_main_seedhash`) on the daemon block-verification boundary per
+// `docs/design/RANDOMX_V2_PHASE3_PLAN.md`.
+pub mod pow_randomx_ffi;
+
+// Archival serve-credit verification FFI (`ARCHIVAL_RETENTION_GATE2.md` §10).
+pub mod archival_ffi;
+
+// General CT cleartext-balance verification FFI (`GENESIS_TX_WIRE_FORMAT.md` §2.3).
+pub mod ct_balance_ffi;
+
+// Single-Rust-image contract: re-export shekyl-logging so its
+// `#[no_mangle]` C exports (`shekyl_log_init_*`, `shekyl_log_emit`,
+// `shekyl_log_install_tracing_forwarder`, …) are compiled into
+// `libshekyl_ffi.a`. Every wallet-side binary then links exactly one
+// Rust archive whose single `tracing-core` GLOBAL_DISPATCH is shared by
+// the C++-installed subscriber and every `tracing::*` call site in this
+// crate graph (engine-file, fcmp, …). Without this, those events
+// dispatch into a dispatcher no subscriber is installed on and are
+// silently dropped. See V3_WALLET_DECISION_LOG.md (single-image
+// contract).
+pub use shekyl_logging;
+
 static CONSENSUS_REGISTRY: Mutex<Option<shekyl_consensus::ConsensusRegistry>> = Mutex::new(None);
 
 /// Fixed-size witness header per input in the FCMP++ prove/verify FFI.
@@ -122,7 +149,9 @@ pub struct ShekylOutputData {
     pub commitment: [u8; 32],
     pub enc_amount: [u8; 8],
     pub amount_tag: u8,
-    pub view_tag_x25519: u8,
+    pub enc_label: [u8; 8],
+    pub label_tag: u8,
+    pub view_tag_prefilter: u8,
     pub kem_ciphertext_x25519: [u8; 32],
     pub kem_ciphertext_ml_kem: ShekylBuffer,
     pub pqc_public_key: ShekylBuffer,
@@ -672,120 +701,6 @@ pub extern "C" fn shekyl_compute_burn_split(
     }
 }
 
-// ─── Staking ────────────────────────────────────────────────────────────────
-
-/// Compute the weighted stake for a single entry.
-///
-/// Returns: amount * yield_multiplier / SCALE
-#[no_mangle]
-pub extern "C" fn shekyl_stake_weight(amount: u64, tier_id: u8) -> u64 {
-    use shekyl_staking::tiers::tier_by_id;
-    let Some(tier) = tier_by_id(tier_id) else {
-        return 0;
-    };
-    #[allow(clippy::cast_possible_truncation)]
-    {
-        ((u128::from(amount) * u128::from(tier.yield_multiplier))
-            / u128::from(shekyl_economics::params::SCALE)) as u64
-    }
-}
-
-/// Get lock duration in blocks for a given tier.
-///
-/// Returns 0 if tier_id is invalid.
-#[no_mangle]
-pub extern "C" fn shekyl_stake_lock_blocks(tier_id: u8) -> u64 {
-    use shekyl_staking::tiers::tier_by_id;
-    match tier_by_id(tier_id) {
-        Some(t) => t.lock_blocks,
-        None => 0,
-    }
-}
-
-/// Get the yield multiplier for a given tier (fixed-point SCALE).
-///
-/// Returns 0 if tier_id is invalid.
-#[no_mangle]
-pub extern "C" fn shekyl_stake_yield_multiplier(tier_id: u8) -> u64 {
-    use shekyl_staking::tiers::tier_by_id;
-    match tier_by_id(tier_id) {
-        Some(t) => t.yield_multiplier,
-        None => 0,
-    }
-}
-
-/// Per-block share of the staker pool for one weighted stake entry:
-/// `(total_reward_at_height * stake_weight) / total_weighted_stake` using `u128` math.
-///
-/// `total_weighted_stake` is passed as a 128-bit value split into lo/hi u64 halves.
-/// If `total_weighted_stake == 0`, returns `0`.
-/// If the quotient does not fit in `u64`, returns `0` and sets `*overflow_out` to `1` when
-/// `overflow_out` is non-null.
-///
-/// # Safety
-/// Caller must ensure all pointer arguments are valid or null.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_calc_per_block_staker_reward(
-    total_reward_at_height: u64,
-    stake_weight: u64,
-    total_weighted_stake_lo: u64,
-    total_weighted_stake_hi: u64,
-    overflow_out: *mut u8,
-) -> u64 {
-    if !overflow_out.is_null() {
-        *overflow_out = 0;
-    }
-    let total_weighted_stake =
-        u128::from(total_weighted_stake_hi) << 64 | u128::from(total_weighted_stake_lo);
-    if total_weighted_stake == 0 {
-        return 0;
-    }
-    let num = u128::from(total_reward_at_height) * u128::from(stake_weight);
-    let q = num / total_weighted_stake;
-    if q > u128::from(u64::MAX) {
-        if !overflow_out.is_null() {
-            *overflow_out = 1;
-        }
-        return 0;
-    }
-    #[allow(clippy::cast_possible_truncation)]
-    {
-        q as u64
-    }
-}
-
-/// Number of staking lock tiers (length of `TIERS`).
-#[no_mangle]
-pub extern "C" fn shekyl_stake_tier_count() -> u32 {
-    #[allow(clippy::cast_possible_truncation)]
-    {
-        shekyl_staking::tiers::TIERS.len() as u32
-    }
-}
-
-/// UTF-8 tier display name, null-terminated. Returns null for invalid `tier_id`.
-#[no_mangle]
-pub extern "C" fn shekyl_stake_tier_name(tier_id: u8) -> *const c_char {
-    match tier_id {
-        0 => c"Short".as_ptr(),
-        1 => c"Medium".as_ptr(),
-        2 => c"Long".as_ptr(),
-        _ => std::ptr::null(),
-    }
-}
-
-/// Maximum `to_height - from_height` allowed for a stake claim (from economics config).
-#[no_mangle]
-pub extern "C" fn shekyl_stake_max_claim_range() -> u64 {
-    shekyl_staking::MAX_CLAIM_RANGE
-}
-
-/// Compute stake_ratio = total_staked / circulating_supply (fixed-point SCALE).
-#[no_mangle]
-pub extern "C" fn shekyl_calc_stake_ratio(total_staked: u64, circulating_supply: u64) -> u64 {
-    shekyl_economics::calc_stake_ratio(total_staked, circulating_supply)
-}
-
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 ///
 /// Saturating at `money_supply`: past full emission the base curve yields the
@@ -1050,7 +965,7 @@ pub unsafe extern "C" fn shekyl_generator_T(out_ptr: *mut u8) {
     if out_ptr.is_null() {
         return;
     }
-    let t_bytes: [u8; 32] = shekyl_generators::T.to_bytes();
+    let t_bytes: [u8; 32] = shekyl_curve_generators::T.to_bytes();
     std::ptr::copy_nonoverlapping(t_bytes.as_ptr(), out_ptr, 32);
 }
 
@@ -1180,27 +1095,27 @@ pub unsafe extern "C" fn shekyl_derive_output_secrets(
     true
 }
 
-/// Derive the X25519-only view tag for scanner pre-filtering.
+/// Derive the ML-KEM-keyed view-tag pre-filter byte (FA-6).
 ///
-/// `x25519_ss_ptr` must point to exactly 32 bytes. Returns the 1-byte tag.
+/// `ml_kem_ss_ptr` must point to exactly 32 bytes. Returns the 1-byte wire tag.
 /// Returns 0 if the pointer is null (callers should check for null separately).
 ///
 /// # Safety
 /// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_derive_view_tag_x25519(
-    x25519_ss_ptr: *const u8,
+pub unsafe extern "C" fn shekyl_derive_view_tag_prefilter(
+    ml_kem_ss_ptr: *const u8,
     output_index: u64,
 ) -> u8 {
-    if x25519_ss_ptr.is_null() {
+    if ml_kem_ss_ptr.is_null() {
         return 0;
     }
     let ss: [u8; 32] = unsafe {
         let mut buf = [0u8; 32];
-        std::ptr::copy_nonoverlapping(x25519_ss_ptr, buf.as_mut_ptr(), 32);
+        std::ptr::copy_nonoverlapping(ml_kem_ss_ptr, buf.as_mut_ptr(), 32);
         buf
     };
-    shekyl_crypto_pq::derivation::derive_view_tag_x25519(&ss, output_index)
+    shekyl_crypto_pq::derivation::derive_view_tag_prefilter(&ss, output_index)
 }
 
 /// Compute the expected FCMP++ proof size given input count and tree depth.
@@ -1478,24 +1393,38 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
     tree_depth: u8,
     signable_tx_hash_ptr: *const u8,
 ) -> u8 {
+    // Mirror of the membership-only entry point's hardening (PR #229 r2): reject
+    // count mismatches and out-of-range arity BEFORE slicing or allocating, and
+    // guard the ×32 byte-length multiplies against usize overflow. All reject
+    // paths keep this function's existing invalid-parameters code (1), so the
+    // error surface is unchanged.
+    if ki_count != po_count || ki_count != pqc_hash_count {
+        return 1; // DeserializationFailed (invalid parameters)
+    }
+    if ki_count == 0 || ki_count > shekyl_fcmp::MAX_INPUTS {
+        return 1;
+    }
+    let (Some(ki_len), Some(po_len), Some(ph_len)) = (
+        ki_count.checked_mul(32),
+        po_count.checked_mul(32),
+        pqc_hash_count.checked_mul(32),
+    ) else {
+        return 1;
+    };
     let Some(proof_bytes) = (unsafe { slice_from_ptr(proof_ptr, proof_len) }) else {
         return 1; // DeserializationFailed
     };
-    let Some(ki_bytes) = (unsafe { slice_from_ptr(key_images_ptr, ki_count * 32) }) else {
+    let Some(ki_bytes) = (unsafe { slice_from_ptr(key_images_ptr, ki_len) }) else {
         return 1;
     };
-    let Some(po_bytes) = (unsafe { slice_from_ptr(pseudo_outs_ptr, po_count * 32) }) else {
+    let Some(po_bytes) = (unsafe { slice_from_ptr(pseudo_outs_ptr, po_len) }) else {
         return 1;
     };
-    let Some(ph_bytes) = (unsafe { slice_from_ptr(pqc_pk_hashes_ptr, pqc_hash_count * 32) }) else {
+    let Some(ph_bytes) = (unsafe { slice_from_ptr(pqc_pk_hashes_ptr, ph_len) }) else {
         return 1;
     };
-    if tree_root_ptr.is_null()
-        || signable_tx_hash_ptr.is_null()
-        || ki_count != po_count
-        || ki_count != pqc_hash_count
-    {
-        return 1; // DeserializationFailed (invalid parameters)
+    if tree_root_ptr.is_null() || signable_tx_hash_ptr.is_null() {
+        return 1;
     }
     let tree_root: [u8; 32] = unsafe {
         let mut buf = [0u8; 32];
@@ -1552,6 +1481,231 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
             tracing::debug!(error = ?e, tree_depth, "verify error");
             e.discriminant()
         }
+    }
+}
+
+/// Verify a **membership-only** FCMP++ proof (reward-emission backing; **no key
+/// image**). Mirror of [`shekyl_fcmp_verify`] with the key-image array removed — the
+/// ABI the C++ emission-vin shim (PR-E3) calls. Returns `0` on success, else the
+/// [`shekyl_fcmp::proof::VerifyError`] discriminant: `1=Deserialization` (also a null
+/// pointer, a count that is `0` or exceeds [`shekyl_fcmp::MAX_INPUTS`], or a `× 32`
+/// byte-length `usize` overflow), `2=InvalidTreeRoot`, `3=PqcCommitmentMismatch`,
+/// `5=UpstreamError`, `6=BatchVerificationFailed`, `7=TreeDepthTooLarge`,
+/// `8=InputCountMismatch` (`po_count != pqc_hash_count`, checked before any slicing). Never
+/// `4` (`KeyImageCountMismatch`) — this path has no key images. Anti-replay is the
+/// emission per-epoch dedup, not a key image; the ML-DSA leaf gate is the sibling
+/// [`shekyl_emission_hybrid_auth_verify`].
+///
+/// # Safety
+/// Every pointer must be valid for its stated length; `tree_root_ptr` and
+/// `signable_tx_hash_ptr` must each point to 32 readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_fcmp_membership_only_verify(
+    proof_ptr: *const u8,
+    proof_len: usize,
+    pseudo_outs_ptr: *const u8,
+    po_count: usize,
+    pqc_pk_hashes_ptr: *const u8,
+    pqc_hash_count: usize,
+    tree_root_ptr: *const u8,
+    tree_depth: u8,
+    signable_tx_hash_ptr: *const u8,
+) -> u8 {
+    // Reject a per-input count mismatch up front — before slicing either buffer, so a mismatch
+    // never touches the (attacker-controlled, potentially large) `pqc_pk_hashes_ptr` buffer.
+    if po_count != pqc_hash_count {
+        return 8; // VerifyError::InputCountMismatch
+    }
+    // Cap the per-input arity at MAX_INPUTS, mirroring `shekyl_fcmp_prove`: a valid proof never
+    // exceeds it, so this rejects an oversized attacker-controlled count before any allocation,
+    // bounds the `.collect()`s below, and makes `po_count as u32` a lossless narrowing (no
+    // truncation). `po_count == pqc_hash_count` is already established, so this bounds both.
+    if po_count == 0 || po_count > shekyl_fcmp::MAX_INPUTS {
+        return 1; // DeserializationFailed — malformed / oversized request
+    }
+    // Byte-length multiply is now bounded (<= MAX_INPUTS * 32); keep the checked form as
+    // defense-in-depth against a future cap change.
+    let (Some(po_len), Some(ph_len)) = (po_count.checked_mul(32), pqc_hash_count.checked_mul(32))
+    else {
+        return 1;
+    };
+    let Some(proof_bytes) = (unsafe { slice_from_ptr(proof_ptr, proof_len) }) else {
+        return 1;
+    };
+    let Some(po_bytes) = (unsafe { slice_from_ptr(pseudo_outs_ptr, po_len) }) else {
+        return 1;
+    };
+    let Some(ph_bytes) = (unsafe { slice_from_ptr(pqc_pk_hashes_ptr, ph_len) }) else {
+        return 1;
+    };
+    if tree_root_ptr.is_null() || signable_tx_hash_ptr.is_null() {
+        return 1;
+    }
+    let tree_root: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(tree_root_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let signable_tx_hash: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(signable_tx_hash_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+
+    let proof = shekyl_fcmp::proof::ShekylFcmpProof {
+        data: proof_bytes.to_vec(),
+        #[allow(clippy::cast_possible_truncation)]
+        num_inputs: po_count as u32,
+        tree_depth,
+    };
+
+    // `po_count == pqc_hash_count` and each slice is exactly that many 32-byte chunks, so
+    // `chunks_exact` consumes them fully — no manual indexing, no out-of-bounds risk.
+    let pseudo_outs: Vec<[u8; 32]> = po_bytes
+        .chunks_exact(32)
+        .map(|c| {
+            let mut b = [0u8; 32];
+            b.copy_from_slice(c);
+            b
+        })
+        .collect();
+    let pqc_hashes: Vec<shekyl_fcmp::leaf::PqcLeafScalar> = ph_bytes
+        .chunks_exact(32)
+        .map(|c| {
+            let mut b = [0u8; 32];
+            b.copy_from_slice(c);
+            shekyl_fcmp::leaf::PqcLeafScalar(b)
+        })
+        .collect();
+
+    match shekyl_fcmp::proof::verify_membership_only(
+        &proof,
+        &pseudo_outs,
+        &pqc_hashes,
+        &tree_root,
+        tree_depth,
+        signable_tx_hash,
+    ) {
+        Ok(true) => 0,
+        // `verify_membership_only` returns `Ok(true)` or `Err`, so `Ok(false)` is
+        // unreachable today; mapped defensively to a non-success code (never 0) so a
+        // future `Ok(false)` outcome can never be read as acceptance.
+        Ok(false) => 6,
+        Err(e) => {
+            tracing::debug!(error = ?e, tree_depth, "membership-only verify error");
+            e.discriminant()
+        }
+    }
+}
+
+/// Reward-emission **hybrid** vin-auth verify primitive (PR-E1; the C-1 hard-gate core).
+///
+/// The auth is hybrid (Ed25519 + ML-DSA-65), matching every other signature in the
+/// system, **not** ML-DSA-only. This is the ratified posture: the emission auth is a
+/// proof-of-possession-plus-binding, and the live threat the Ed25519 leg closes is a
+/// *classical cryptanalytic break of ML-DSA-65* (orthogonal to seed compromise, where
+/// the jointly-derived halves are possession-equivalent). Auth-P (stake-side) has **no**
+/// membership-proof classical fallback, so ML-DSA-only there would be a single point of
+/// cryptographic failure — disqualifying on a quantum-posture-priority system. See
+/// `REWARD_EMISSION_VIN_PLAN.md` R1.A(2) (retracted) / §8.0.2.
+pub const SHEKYL_EMISSION_HYBRID_AUTH_OK: u8 = 0;
+/// A required pointer was null.
+pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR: u8 = 1;
+/// The supplied `P_pubkey` bytes are not a canonical hybrid public key.
+pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_PUBKEY_DESER: u8 = 2;
+/// The supplied signature bytes are not a canonical hybrid signature.
+pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER: u8 = 3;
+/// `H(pqc_pk)` of the supplied key does not equal the in-circuit committed leaf hash.
+pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_LEAF_HASH_MISMATCH: u8 = 4;
+/// The hybrid (Ed25519 + ML-DSA-65) signature did not verify over the message.
+pub const SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY: u8 = 5;
+
+/// Verify one reward-emission hybrid vin-auth (C-1 calls this per auth: Auth-B backing,
+/// Auth-P pseudonym). Given `P`'s canonical hybrid pubkey, the binding message, a
+/// canonical hybrid signature, and the in-circuit committed leaf hash:
+///  1. recompute `hash_pqc_public_key(pubkey)` and demand equality with `leaf_hash`
+///     — this binds the auth to the **proven leaf**, not merely *a* leaf (gate-6 §9.6);
+///  2. verify the hybrid signature (Ed25519 **and** ML-DSA-65) over `msg`.
+///
+/// **Leaf-hash input — do not get this wrong:** despite the `pqc_pk` naming,
+/// `hash_pqc_public_key` hashes the **full canonical hybrid** public key bytes
+/// (Ed25519 ‖ ML-DSA-65), exactly what curve-tree leaves commit
+/// (`shekyl_crypto_pq::derivation::derive_pqc_leaf_hash`). A caller hashing only the ML-DSA
+/// component computes a *different* `leaf_hash` and gets systematic `LEAF_HASH_MISMATCH`.
+///
+/// Because the leaf commits `H(full hybrid pubkey)` and step 2 exercises **both** halves,
+/// the auth binds `P` exactly as tightly as the leaf — no committed-vs-authenticated
+/// asymmetry, so soundness does not rest on any "Ed25519 non-distinguishing" invariant.
+/// Order matters: the leaf-hash equality is checked first so a signature over an
+/// unrelated (but valid) key cannot pass. Returns [`SHEKYL_EMISSION_HYBRID_AUTH_OK`] or an
+/// `SHEKYL_EMISSION_HYBRID_AUTH_ERR_*` discriminant. `pubkey_len` / `sig_len` must equal the
+/// canonical hybrid pubkey / signature lengths — a non-canonical length returns
+/// `PUBKEY_DESER` / `SIG_DESER` up front, before the buffer is read (an FFI DoS guard).
+///
+/// # Safety
+/// Every pointer must be valid for its stated length; `leaf_hash_ptr` must point to
+/// 32 readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_emission_hybrid_auth_verify(
+    pubkey_ptr: *const u8,
+    pubkey_len: usize,
+    msg_ptr: *const u8,
+    msg_len: usize,
+    sig_ptr: *const u8,
+    sig_len: usize,
+    leaf_hash_ptr: *const u8,
+) -> u8 {
+    use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
+    use shekyl_crypto_pq::signature::{
+        HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
+    };
+
+    // FFI DoS guard: `scheme_id = 1` hybrid pubkey/signature are fixed-length canonical, so
+    // reject any other length up front — before slicing, hashing, or parsing an oversized
+    // untrusted buffer. Correct by contract (this function requires canonical encodings), and
+    // cheap: it bounds the subsequent `hash_pqc_public_key` and `from_canonical_bytes` to the
+    // fixed canonical size.
+    if pubkey_len != SINGLE_KEY_CANONICAL_LEN {
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_PUBKEY_DESER;
+    }
+    if sig_len != SINGLE_SIG_CANONICAL_LEN {
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER;
+    }
+
+    let Some(pubkey_bytes) = (unsafe { slice_from_ptr(pubkey_ptr, pubkey_len) }) else {
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
+    };
+    let Some(msg) = (unsafe { slice_from_ptr(msg_ptr, msg_len) }) else {
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
+    };
+    let Some(sig_bytes) = (unsafe { slice_from_ptr(sig_ptr, sig_len) }) else {
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
+    };
+    if leaf_hash_ptr.is_null() {
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
+    }
+    let leaf_hash: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(leaf_hash_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+
+    // (1) Leaf-binding first: the auth must be over the *proven leaf*'s pqc_pk.
+    if shekyl_crypto_pq::derivation::hash_pqc_public_key(pubkey_bytes) != leaf_hash {
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_LEAF_HASH_MISMATCH;
+    }
+
+    let Ok(pubkey) = HybridPublicKey::from_canonical_bytes(pubkey_bytes) else {
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_PUBKEY_DESER;
+    };
+    let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
+        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER;
+    };
+
+    // (2) Hybrid verify (Ed25519 && ML-DSA-65).
+    match HybridEd25519MlDsa.verify(&pubkey, msg, &sig) {
+        Ok(true) => SHEKYL_EMISSION_HYBRID_AUTH_OK,
+        _ => SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY,
     }
 }
 
@@ -2915,6 +3069,132 @@ pub extern "C" fn shekyl_curve_tree_helios_chunk_width() -> u32 {
     }
 }
 
+/// Compose every curve-tree layer **above the leaf layer** from the leaf-chunk
+/// layer, the narrow way [`shekyl_fcmp::tree::build_layers`] does — the correct
+/// producer-side grow that telescopes to the reference root.
+///
+/// This is the consensus fix for the depth-3 layer-2 divergence: the daemon's
+/// in-place incremental deepening built a newly-created parent chunk from only the
+/// deepening child (db_lmdb.cpp `grow_curve_tree`), dropping the pre-existing
+/// sibling. The daemon keeps maintaining the **leaf** layer with
+/// [`shekyl_curve_tree_hash_grow_selene`] (which telescopes — proven), then calls
+/// this to recompose every layer above it and obtain the consensus root, retiring
+/// the C++ upper-layer propagation entirely.
+///
+/// Output sizes are deterministic from `num_leaf_chunks` via the
+/// SELENE/HELIOS chunk-width ladder, so the caller pre-allocates:
+/// - `out_chunks_ptr` / `out_chunks_capacity`: capacity is a **count of 32-byte
+///   chunks** (not bytes); upper-layer chunk hashes are written layer 1 first then
+///   layer 2…, 32B each;
+/// - `out_layer_sizes_ptr` / `out_layer_sizes_capacity`: capacity is a **count of
+///   `u64` entries**; one chunk-count per upper layer (`*out_num_upper_layers` total);
+/// - `out_num_upper_layers`: number of upper layers written;
+/// - `out_root_ptr`: the 32B consensus root.
+///
+/// Returns false on null pointers, insufficient output capacity, or a malformed
+/// leaf node (a node that fails the cycle-scalar conversion).
+///
+/// # Safety
+/// Caller must ensure every pointer is valid for its declared length/capacity.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_curve_tree_grow_upper_layers(
+    leaf_chunks_ptr: *const u8,
+    num_leaf_chunks: u64,
+    out_chunks_ptr: *mut u8,
+    out_chunks_capacity: u64,
+    out_layer_sizes_ptr: *mut u64,
+    out_layer_sizes_capacity: u64,
+    out_num_upper_layers: *mut u64,
+    out_root_ptr: *mut u8,
+) -> bool {
+    if out_chunks_ptr.is_null()
+        || out_layer_sizes_ptr.is_null()
+        || out_num_upper_layers.is_null()
+        || out_root_ptr.is_null()
+        || (num_leaf_chunks > 0 && leaf_chunks_ptr.is_null())
+    {
+        return false;
+    }
+
+    // Every count must fit usize, and the input byte length must not overflow —
+    // fail closed rather than silently treating overflow as 0 (this is an exported,
+    // untrusted-caller boundary).
+    let (Ok(n), Ok(out_chunks_cap), Ok(out_sizes_cap)) = (
+        usize::try_from(num_leaf_chunks),
+        usize::try_from(out_chunks_capacity),
+        usize::try_from(out_layer_sizes_capacity),
+    ) else {
+        return false;
+    };
+    let Some(in_bytes) = n.checked_mul(32) else {
+        return false;
+    };
+
+    // Read the leaf-chunk layer through a slice — no raw pointer arithmetic, and no
+    // `from_raw_parts` on a null pointer when `n == 0`.
+    let leaf_chunks: Vec<[u8; 32]> = if n == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(leaf_chunks_ptr, in_bytes) }
+            .chunks_exact(32)
+            .map(|c| {
+                let mut b = [0u8; 32];
+                b.copy_from_slice(c);
+                b
+            })
+            .collect()
+    };
+
+    let Some(layers) = shekyl_fcmp::tree::try_build_upper_layers(leaf_chunks, 0) else {
+        return false;
+    };
+    // `layers[0]` is the leaf layer the caller passed; the upper layers are `[1..]`.
+    // The root is the top layer's sole node (or the empty-tree leaf-init sentinel
+    // `build_layers` defines).
+    let root = layers
+        .last()
+        .and_then(|l| l.first())
+        .copied()
+        .unwrap_or_else(shekyl_fcmp::tree::selene_hash_init);
+    let upper = &layers[1..];
+    let total: usize = upper.iter().map(Vec::len).sum();
+    let Some(out_bytes) = total.checked_mul(32) else {
+        return false;
+    };
+    // Capacities are counts (32-byte chunks / u64 entries), validated before writing.
+    if total > out_chunks_cap || upper.len() > out_sizes_cap {
+        return false;
+    }
+
+    // Write outputs through slices (the out pointers are non-null per the guard
+    // above; a zero-length slice on a non-null pointer is well-defined).
+    let sizes_out = unsafe { std::slice::from_raw_parts_mut(out_layer_sizes_ptr, upper.len()) };
+    let chunks_out = unsafe { std::slice::from_raw_parts_mut(out_chunks_ptr, out_bytes) };
+    let mut written = 0usize;
+    for (li, layer) in upper.iter().enumerate() {
+        // Fail closed on the (practically impossible) usize->u64 overflow rather than
+        // emitting a sentinel size at this fallible FFI boundary. layer.len() <= total
+        // <= num_leaf_chunks (all derived from a u64), so this never trips in practice.
+        let Ok(layer_len) = u64::try_from(layer.len()) else {
+            return false;
+        };
+        sizes_out[li] = layer_len;
+        for node in layer {
+            chunks_out[written * 32..written * 32 + 32].copy_from_slice(node);
+            written += 1;
+        }
+    }
+    // Same fail-closed discipline for the upper-layer count out-param.
+    let Ok(num_upper) = u64::try_from(upper.len()) else {
+        return false;
+    };
+    unsafe {
+        *out_num_upper_layers = num_upper;
+        std::slice::from_raw_parts_mut(out_root_ptr, 32).copy_from_slice(&root);
+    }
+    true
+}
+
 // ─── FCMP++: Ed25519 → Selene scalar conversion ────────────────────────────
 
 /// Convert a compressed Ed25519 point (32 bytes) to a Selene scalar
@@ -3141,7 +3421,13 @@ pub unsafe extern "C" fn shekyl_sign_transaction(
         tree_depth,
     };
 
-    match shekyl_tx_builder::sign_transaction(tx_prefix_hash, &inputs, &outputs, fee, &tree) {
+    match shekyl_tx_builder::sign_transaction(
+        tx_prefix_hash,
+        &inputs,
+        &outputs,
+        shekyl_units::AtomicUnits::from_raw(fee),
+        &tree,
+    ) {
         Ok(proofs) => match serde_json::to_vec(&proofs) {
             Ok(json) => ShekylSignResult::ok(json),
             Err(e) => ShekylSignResult::err(-3, format!("result serialization error: {e}")),
@@ -3174,6 +3460,10 @@ fn tx_builder_error_code(e: &shekyl_tx_builder::TxBuilderError) -> i32 {
         TxBuilderError::FcmpProveError(_) => -25,
         TxBuilderError::PqcSignError { .. } => -26,
         TxBuilderError::TreeDepthTooLarge(_) => -27,
+        TxBuilderError::WireError(_) => -28,
+        // Appended (codes are a stable C++-facing contract; never renumber).
+        TxBuilderError::TreeTooShallow { .. } => -29,
+        TxBuilderError::BalanceSelfCheck(_) => -30,
     }
 }
 
@@ -3322,7 +3612,7 @@ pub unsafe extern "C" fn shekyl_sign_fcmp_transaction(
         spend_inputs.push(shekyl_tx_builder::SpendInput {
             output_key: inp.output_key,
             commitment: inp.commitment,
-            amount: inp.amount,
+            amount: shekyl_units::AtomicUnits::from_raw(inp.amount),
             spend_key_x: x_bytes,
             spend_key_y: secrets.y,
             commitment_mask: inp.commitment_mask,
@@ -3349,7 +3639,7 @@ pub unsafe extern "C" fn shekyl_sign_fcmp_transaction(
         tx_prefix_hash,
         &spend_inputs,
         &outputs,
-        fee,
+        shekyl_units::AtomicUnits::from_raw(fee),
         &tree,
     ) {
         Ok(proofs) => match serde_json::to_vec(&proofs) {
@@ -3423,7 +3713,9 @@ pub unsafe extern "C" fn shekyl_construct_output(
         commitment: [0; 32],
         enc_amount: [0; 8],
         amount_tag: 0,
-        view_tag_x25519: 0,
+        enc_label: [0; 8],
+        label_tag: 0,
+        view_tag_prefilter: 0,
         kem_ciphertext_x25519: [0; 32],
         kem_ciphertext_ml_kem: ShekylBuffer::null(),
         pqc_public_key: ShekylBuffer::null(),
@@ -3449,24 +3741,167 @@ pub unsafe extern "C" fn shekyl_construct_output(
 
     use shekyl_crypto_pq::output::construct_output;
     match construct_output(&tx_key, &x_pk, ek, &sk, amount, output_index) {
-        Ok(out) => ShekylOutputData {
-            output_key: out.output_key,
-            commitment: out.commitment,
-            enc_amount: out.enc_amount,
-            amount_tag: out.amount_tag,
-            view_tag_x25519: out.view_tag_x25519,
-            kem_ciphertext_x25519: out.kem_ciphertext_x25519,
-            kem_ciphertext_ml_kem: ShekylBuffer::from_vec(out.kem_ciphertext_ml_kem.clone()),
-            pqc_public_key: ShekylBuffer::from_vec(out.pqc_public_key.clone()),
-            h_pqc: out.h_pqc,
-            y: out.y,
-            z: out.z,
-            k_amount: out.k_amount,
-            success: true,
-            // out drops here — ZeroizeOnDrop wipes y, z, k_amount
-        },
+        Ok(mut out) => {
+            let kem_ciphertext_ml_kem = std::mem::take(&mut out.kem_ciphertext_ml_kem);
+            let pqc_public_key = std::mem::take(&mut out.pqc_public_key);
+            ShekylOutputData {
+                output_key: out.output_key,
+                commitment: out.commitment,
+                enc_amount: out.enc_amount,
+                amount_tag: out.amount_tag,
+                enc_label: out.enc_label,
+                label_tag: out.label_tag,
+                view_tag_prefilter: out.view_tag_prefilter,
+                kem_ciphertext_x25519: out.kem_ciphertext_x25519,
+                kem_ciphertext_ml_kem: ShekylBuffer::from_vec(kem_ciphertext_ml_kem),
+                pqc_public_key: ShekylBuffer::from_vec(pqc_public_key),
+                h_pqc: out.h_pqc,
+                y: out.y,
+                z: out.z,
+                k_amount: out.k_amount,
+                success: true,
+            }
+        }
         Err(_) => fail,
     }
+}
+
+/// Like [`shekyl_construct_output`] but encrypts the supplied 8-byte label plaintext.
+///
+/// # Safety
+/// Same as `shekyl_construct_output`; `label_plaintext` must point to 8 bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_construct_output_labeled(
+    tx_key_secret_ptr: *const u8,
+    x25519_pk: *const u8,
+    ml_kem_ek: *const u8,
+    ml_kem_ek_len: usize,
+    spend_key: *const u8,
+    amount: u64,
+    output_index: u64,
+    label_plaintext: *const u8,
+) -> ShekylOutputData {
+    let fail = ShekylOutputData {
+        output_key: [0; 32],
+        commitment: [0; 32],
+        enc_amount: [0; 8],
+        amount_tag: 0,
+        enc_label: [0; 8],
+        label_tag: 0,
+        view_tag_prefilter: 0,
+        kem_ciphertext_x25519: [0; 32],
+        kem_ciphertext_ml_kem: ShekylBuffer::null(),
+        pqc_public_key: ShekylBuffer::null(),
+        h_pqc: [0; 32],
+        y: [0; 32],
+        z: [0; 32],
+        k_amount: [0; 32],
+        success: false,
+    };
+
+    let Some(tx_key) = arr32_from_ptr(tx_key_secret_ptr) else {
+        return fail;
+    };
+    let Some(x_pk) = arr32_from_ptr(x25519_pk) else {
+        return fail;
+    };
+    let Some(sk) = arr32_from_ptr(spend_key) else {
+        return fail;
+    };
+    let Some(ek) = (unsafe { slice_from_ptr(ml_kem_ek, ml_kem_ek_len) }) else {
+        return fail;
+    };
+    let Some(label_slice) = (unsafe { slice_from_ptr(label_plaintext, 8) }) else {
+        return fail;
+    };
+    let mut label_pt = [0u8; 8];
+    label_pt.copy_from_slice(label_slice);
+
+    use shekyl_crypto_pq::output::construct_output_with_label_plaintext;
+    match construct_output_with_label_plaintext(
+        &tx_key,
+        &x_pk,
+        ek,
+        &sk,
+        amount,
+        output_index,
+        &label_pt,
+    ) {
+        Ok(mut out) => {
+            let kem_ciphertext_ml_kem = std::mem::take(&mut out.kem_ciphertext_ml_kem);
+            let pqc_public_key = std::mem::take(&mut out.pqc_public_key);
+            ShekylOutputData {
+                output_key: out.output_key,
+                commitment: out.commitment,
+                enc_amount: out.enc_amount,
+                amount_tag: out.amount_tag,
+                enc_label: out.enc_label,
+                label_tag: out.label_tag,
+                view_tag_prefilter: out.view_tag_prefilter,
+                kem_ciphertext_x25519: out.kem_ciphertext_x25519,
+                kem_ciphertext_ml_kem: ShekylBuffer::from_vec(kem_ciphertext_ml_kem),
+                pqc_public_key: ShekylBuffer::from_vec(pqc_public_key),
+                h_pqc: out.h_pqc,
+                y: out.y,
+                z: out.z,
+                k_amount: out.k_amount,
+                success: true,
+            }
+        }
+        Err(_) => fail,
+    }
+}
+
+/// Select the 8-byte `enc_label` plaintext for a payment URI.
+///
+/// Echoes the `rid` REQUEST tag when the `shekyl:` URI carries a valid
+/// (u48-encodable) `rid`; a missing or out-of-range `rid` falls back to the
+/// sentinel plaintext. Ungated: the `enc_label` indistinguishability
+/// invariant (`SUBADDRESS_UNDER_PQC.md` §5.7.10) makes the real-label wire
+/// octets indistinguishable from the sentinel to any non-recipient, so there is
+/// no privacy/consensus gate — emitting a `rid` URI (a GUI/product choice) is
+/// the only feature boundary. (The R2-F8 `cooperative_enabled` flag was retired
+/// 2026-06-15.)
+///
+/// Returns `0` on success and writes plaintext to `out_plaintext` (8 bytes).
+/// Returns `-4` on null pointer (output untouched). On all other returns the
+/// output is the sentinel plaintext so C callers never read uninitialized bytes.
+/// Returns `-3` on UTF-8 / URI parse failure.
+///
+/// # Safety
+/// `uri` must be a valid pointer to a NUL-terminated C string (readable
+/// through the NUL); `out_plaintext` must point to 8 writable bytes. UTF-8 is
+/// **not** a safety precondition — a non-UTF-8 `uri` is a normal `-3` return
+/// (with the sentinel already written), not undefined behavior.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_label_plaintext_for_payment_uri(
+    uri: *const std::ffi::c_char,
+    out_plaintext: *mut u8,
+) -> i32 {
+    if uri.is_null() || out_plaintext.is_null() {
+        return -4;
+    }
+    use shekyl_crypto_pq::label::{encode_request_plaintext, sentinel_plaintext};
+    let sentinel = sentinel_plaintext();
+    unsafe {
+        std::ptr::copy_nonoverlapping(sentinel.as_ptr(), out_plaintext, 8);
+    }
+    let cstr = unsafe { std::ffi::CStr::from_ptr(uri) };
+    let Ok(uri_str) = cstr.to_str() else {
+        return -3;
+    };
+    let parsed = match shekyl_address::parse_payment_uri(uri_str) {
+        Ok(p) => p,
+        Err(_) => return -3,
+    };
+    let pt = parsed
+        .rid
+        .and_then(encode_request_plaintext)
+        .unwrap_or_else(sentinel_plaintext);
+    unsafe {
+        std::ptr::copy_nonoverlapping(pt.as_ptr(), out_plaintext, 8);
+    }
+    0
 }
 
 /// Free a ShekylOutputData's heap-allocated buffer fields.
@@ -3512,6 +3947,8 @@ pub unsafe extern "C" fn shekyl_scan_output(
     commitment: *const u8,
     enc_amount: *const u8,
     amount_tag_on_chain: u8,
+    enc_label: *const u8,
+    label_tag_on_chain: u8,
     view_tag_on_chain: u8,
     spend_key: *const u8,
     output_index: u64,
@@ -3549,6 +3986,14 @@ pub unsafe extern "C" fn shekyl_scan_output(
         }
         None => return false,
     };
+    let el = match unsafe { slice_from_ptr(enc_label, 8) } {
+        Some(v) => {
+            let mut arr = [0u8; 8];
+            arr.copy_from_slice(v);
+            arr
+        }
+        None => return false,
+    };
     let Some(sk) = arr32_from_ptr(spend_key) else {
         return false;
     };
@@ -3574,6 +4019,8 @@ pub unsafe extern "C" fn shekyl_scan_output(
         &c,
         &ea,
         amount_tag_on_chain,
+        &el,
+        label_tag_on_chain,
         view_tag_on_chain,
         &sk,
         output_index,
@@ -3597,7 +4044,7 @@ pub unsafe extern "C" fn shekyl_scan_output(
 ///
 /// Unlike `shekyl_scan_output`, this function does NOT take a `spend_key`
 /// parameter. Instead, it returns the recovered spend key so the caller
-/// can look it up in a subaddress table.
+/// can compare against the account primary spend public key (FA-2).
 ///
 /// # Safety
 /// - Same pointer requirements as `shekyl_scan_output`.
@@ -3614,6 +4061,8 @@ pub unsafe extern "C" fn shekyl_scan_output_recover(
     commitment: *const u8,
     enc_amount: *const u8,
     amount_tag_on_chain: u8,
+    enc_label: *const u8,
+    label_tag_on_chain: u8,
     view_tag_on_chain: u8,
     output_index: u64,
     ho_out: *mut u8,
@@ -3652,6 +4101,14 @@ pub unsafe extern "C" fn shekyl_scan_output_recover(
         }
         None => return false,
     };
+    let el = match unsafe { slice_from_ptr(enc_label, 8) } {
+        Some(v) => {
+            let mut arr = [0u8; 8];
+            arr.copy_from_slice(v);
+            arr
+        }
+        None => return false,
+    };
 
     if ho_out.is_null()
         || y_out.is_null()
@@ -3676,6 +4133,8 @@ pub unsafe extern "C" fn shekyl_scan_output_recover(
         &c,
         &ea,
         amount_tag_on_chain,
+        &el,
+        label_tag_on_chain,
         view_tag_on_chain,
         output_index,
     ) {
@@ -3791,6 +4250,8 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
     commitment: *const u8,
     enc_amount: *const u8,
     amount_tag_on_chain: u8,
+    enc_label: *const u8,
+    label_tag_on_chain: u8,
     view_tag_on_chain: u8,
     output_index: u64,
     spend_secret_key: *const u8,
@@ -3834,6 +4295,14 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
         }
         None => return false,
     };
+    let el = match unsafe { slice_from_ptr(enc_label, 8) } {
+        Some(v) => {
+            let mut arr = [0u8; 8];
+            arr.copy_from_slice(v);
+            arr
+        }
+        None => return false,
+    };
     let have_spend_key = !spend_secret_key.is_null() && !hp_of_O.is_null();
 
     if ho_out.is_null()
@@ -3864,6 +4333,8 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
         &c,
         &ea,
         amount_tag_on_chain,
+        &el,
+        label_tag_on_chain,
         view_tag_on_chain,
         output_index,
     ) else {
@@ -4508,7 +4979,7 @@ pub unsafe extern "C" fn shekyl_verify_tx_proof_inbound(
 /// - `spend_secret_key`: 32 bytes.
 /// - `address`: `address_len` bytes.
 /// - `proof_secrets`: `output_count * 128` bytes.
-/// - `key_images`, `spend_secrets`, `output_keys`: `output_count * 32` each.
+/// - `key_images`, `output_keys`: `output_count * 32` each.
 /// - `proof_out`: writable `ShekylBuffer`.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_generate_reserve_proof(
@@ -4519,12 +4990,15 @@ pub unsafe extern "C" fn shekyl_generate_reserve_proof(
     message_len: usize,
     proof_secrets_ptr: *const u8,
     key_images: *const u8,
-    spend_secrets: *const u8,
     output_keys: *const u8,
     output_count: u32,
     proof_out: *mut ShekylBuffer,
 ) -> bool {
-    let Some(bsk) = arr32_from_ptr(spend_secret_key) else {
+    // Master spend secret: read the C bytes *directly* into a `Zeroizing`
+    // buffer so no intermediate plaintext stack copy ever exists (rule 30
+    // direct-write; rule 35 wipe-on-drop). `&bsk` deref-coerces to `&[u8; 32]`
+    // at the `generate_reserve_proof` call site below.
+    let Some(bsk) = zeroizing_arr32_from_ptr(spend_secret_key) else {
         return false;
     };
     let Some(addr) = (unsafe { slice_from_ptr(address, address_len) }) else {
@@ -4549,13 +5023,11 @@ pub unsafe extern "C" fn shekyl_generate_reserve_proof(
     let Some(ki_bytes) = (unsafe { slice_from_ptr(key_images, n * 32) }) else {
         return false;
     };
-    let Some(ss_bytes) = (unsafe { slice_from_ptr(spend_secrets, n * 32) }) else {
-        return false;
-    };
     let Some(ok_bytes) = (unsafe { slice_from_ptr(output_keys, n * 32) }) else {
         return false;
     };
 
+    use zeroize::Zeroize;
     let entries: Vec<shekyl_proofs::reserve_proof::ReserveOutputEntry> = (0..n)
         .map(|i| {
             let base = i * 128;
@@ -4569,18 +5041,26 @@ pub unsafe extern "C" fn shekyl_generate_reserve_proof(
             k_amount.copy_from_slice(&ps_bytes[base + 96..base + 128]);
 
             let mut ki = [0u8; 32];
-            let mut ss = [0u8; 32];
             let mut ok = [0u8; 32];
             ki.copy_from_slice(&ki_bytes[i * 32..(i + 1) * 32]);
-            ss.copy_from_slice(&ss_bytes[i * 32..(i + 1) * 32]);
             ok.copy_from_slice(&ok_bytes[i * 32..(i + 1) * 32]);
 
-            shekyl_proofs::reserve_proof::ReserveOutputEntry {
+            let entry = shekyl_proofs::reserve_proof::ReserveOutputEntry {
                 proof_secrets: shekyl_crypto_pq::output::ProofSecrets { ho, y, z, k_amount },
                 key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(ki),
-                spend_secret: ss,
                 output_key: ok,
-            }
+            };
+            // The entry now owns its own copies; `ProofSecrets` is
+            // `ZeroizeOnDrop`. Wipe the plain `[u8; 32]` stack copies of the
+            // *secret* inputs (the HKDF scalars) so no unprotected duplicate
+            // outlives this iteration; `zeroize()` uses volatile writes the
+            // optimizer cannot elide. `ki`/`ok` are public (key image, output
+            // key) and need no wipe.
+            ho.zeroize();
+            y.zeroize();
+            z.zeroize();
+            k_amount.zeroize();
+            entry
         })
         .collect();
 
@@ -4693,6 +5173,20 @@ fn arr32_from_ptr(ptr: *const u8) -> Option<[u8; 32]> {
     Some(arr)
 }
 
+/// Read 32 **secret** bytes from a C pointer directly into a `Zeroizing`
+/// buffer, so no intermediate plaintext stack copy ever exists (rule 30
+/// direct-write) and the bytes wipe on drop (rule 35). Use this instead of
+/// [`arr32_from_ptr`] for key material (e.g. a wallet spend secret); the
+/// non-secret variant is fine for public 32-byte values.
+fn zeroizing_arr32_from_ptr(ptr: *const u8) -> Option<zeroize::Zeroizing<[u8; 32]>> {
+    if ptr.is_null() {
+        return None;
+    }
+    let mut buf = zeroize::Zeroizing::new([0u8; 32]);
+    unsafe { std::ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), 32) };
+    Some(buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4710,87 +5204,327 @@ mod tests {
         assert_eq!(m, 1_000_000);
     }
 
+    // ---- PR-E1: reward-emission membership-only + ML-DSA gate primitives ----
+
+    #[test]
+    fn emission_hybrid_auth_verify_positive_and_negatives() {
+        use shekyl_crypto_pq::derivation::hash_pqc_public_key;
+        use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
+
+        let (pk, sk) = HybridEd25519MlDsa.keypair_generate().unwrap();
+        let pk_bytes = pk.to_canonical_bytes().unwrap();
+        let leaf = hash_pqc_public_key(&pk_bytes);
+        let msg = b"shekyl-emission-auth-msg: payout + epoch binding".to_vec();
+        let sig_bytes = HybridEd25519MlDsa
+            .sign(&sk, &msg)
+            .unwrap()
+            .to_canonical_bytes()
+            .unwrap();
+
+        let call = |pk: &[u8], m: &[u8], sig: &[u8], leaf: &[u8; 32]| -> u8 {
+            unsafe {
+                shekyl_emission_hybrid_auth_verify(
+                    pk.as_ptr(),
+                    pk.len(),
+                    m.as_ptr(),
+                    m.len(),
+                    sig.as_ptr(),
+                    sig.len(),
+                    leaf.as_ptr(),
+                )
+            }
+        };
+
+        // Positive.
+        assert_eq!(
+            call(&pk_bytes, &msg, &sig_bytes, &leaf),
+            SHEKYL_EMISSION_HYBRID_AUTH_OK,
+            "valid gate must accept"
+        );
+
+        // Negative: wrong leaf hash (auth over an unrelated key) — checked first.
+        assert_eq!(
+            call(&pk_bytes, &msg, &sig_bytes, &[0u8; 32]),
+            SHEKYL_EMISSION_HYBRID_AUTH_ERR_LEAF_HASH_MISMATCH
+        );
+
+        // Negative: signature valid but over a *different* message.
+        assert_eq!(
+            call(&pk_bytes, b"a different binding message", &sig_bytes, &leaf),
+            SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY,
+            "sig must not verify over a different message"
+        );
+
+        // Negative: tampered signature (leaf matches; verify or deser must reject).
+        let mut bad_sig = sig_bytes.clone();
+        *bad_sig.last_mut().unwrap() ^= 0x01;
+        let r = call(&pk_bytes, &msg, &bad_sig, &leaf);
+        assert!(
+            r == SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY
+                || r == SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER,
+            "tampered sig must reject, got {r}"
+        );
+
+        // Negative: null pointer with a nonzero length (len==0 is a valid empty slice,
+        // so the null guard only fires when a length is actually claimed).
+        let r = unsafe {
+            shekyl_emission_hybrid_auth_verify(
+                std::ptr::null(),
+                pk_bytes.len(),
+                msg.as_ptr(),
+                msg.len(),
+                sig_bytes.as_ptr(),
+                sig_bytes.len(),
+                leaf.as_ptr(),
+            )
+        };
+        assert_eq!(r, SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR);
+
+        // Negative: non-canonical pubkey / signature length is rejected up front (the FFI
+        // DoS guard) — before any hash or parse touches the oversized buffer. A too-long
+        // pubkey would otherwise fall through to a LEAF_HASH_MISMATCH after hashing it.
+        let mut long_pk = pk_bytes.clone();
+        long_pk.push(0);
+        assert_eq!(
+            call(&long_pk, &msg, &sig_bytes, &leaf),
+            SHEKYL_EMISSION_HYBRID_AUTH_ERR_PUBKEY_DESER,
+            "non-canonical pubkey length must reject with PUBKEY_DESER"
+        );
+        let mut long_sig = sig_bytes.clone();
+        long_sig.push(0);
+        assert_eq!(
+            call(&pk_bytes, &msg, &long_sig, &leaf),
+            SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER,
+            "non-canonical signature length must reject with SIG_DESER"
+        );
+    }
+
+    /// The full-path FFI shares the membership-only hardening: matched-but-huge
+    /// or over-cap counts reject with code 1 before any slice/allocation.
+    #[test]
+    fn full_verify_ffi_rejects_hostile_counts() {
+        let root = [0u8; 32];
+        let txh = [0u8; 32];
+        let proof = [0u8; 8];
+        let b32 = [1u8; 32];
+
+        // usize::MAX matched counts: rejected by the arity cap, pointers never
+        // dereferenced (small buffers are safe to pass).
+        let r = unsafe {
+            shekyl_fcmp_verify(
+                proof.as_ptr(),
+                proof.len(),
+                b32.as_ptr(),
+                usize::MAX,
+                b32.as_ptr(),
+                usize::MAX,
+                b32.as_ptr(),
+                usize::MAX,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_eq!(
+            r, 1,
+            "hostile matched counts must reject without dereferencing"
+        );
+
+        // MAX_INPUTS + 1, buffers sized to the declared count.
+        let over = shekyl_fcmp::MAX_INPUTS + 1;
+        let big = vec![2u8; over * 32];
+        let r = unsafe {
+            shekyl_fcmp_verify(
+                proof.as_ptr(),
+                proof.len(),
+                big.as_ptr(),
+                over,
+                big.as_ptr(),
+                over,
+                big.as_ptr(),
+                over,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_eq!(r, 1, "count over MAX_INPUTS must reject via the arity cap");
+    }
+
+    #[test]
+    fn membership_only_verify_rejects_malformed_and_mismatched_inputs() {
+        let root = [0u8; 32];
+        let txh = [0u8; 32];
+
+        // Null proof pointer with a nonzero length -> DeserializationFailed (1).
+        let po1 = [1u8; 32];
+        let ph1 = [2u8; 32];
+        let r = unsafe {
+            shekyl_fcmp_membership_only_verify(
+                std::ptr::null(),
+                8,
+                po1.as_ptr(),
+                1,
+                ph1.as_ptr(),
+                1,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_eq!(r, 1, "null proof must reject");
+
+        // Count mismatch po_count != pqc_hash_count -> 8 (InputCountMismatch). Buffers
+        // sized to the declared counts (po = 2×32, ph = 1×32) so no out-of-bounds read.
+        let po2 = [1u8; 64];
+        let proof = [0u8; 8];
+        let r = unsafe {
+            shekyl_fcmp_membership_only_verify(
+                proof.as_ptr(),
+                proof.len(),
+                po2.as_ptr(),
+                2,
+                ph1.as_ptr(),
+                1,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_eq!(
+            r, 8,
+            "po/pqc count mismatch must reject as InputCountMismatch"
+        );
+
+        // A huge (matched) count must reject BEFORE any slice read or allocation — no panic
+        // across the FFI. `usize::MAX` is caught by the MAX_INPUTS arity cap (which fires ahead
+        // of the checked_mul defense-in-depth). The pointer is never dereferenced on this path.
+        let r = unsafe {
+            shekyl_fcmp_membership_only_verify(
+                proof.as_ptr(),
+                proof.len(),
+                po1.as_ptr(),
+                usize::MAX,
+                ph1.as_ptr(),
+                usize::MAX,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_eq!(r, 1, "oversized count must reject without dereferencing");
+
+        // Boundary: a within-`usize`, matched count just over MAX_INPUTS must reject via the
+        // arity cap (mirrors shekyl_fcmp_prove) before allocating the per-input Vecs. Buffers
+        // are sized to the declared count so there is no out-of-bounds read on the reject path.
+        let over = shekyl_fcmp::MAX_INPUTS + 1;
+        let big = vec![3u8; over * 32];
+        let r = unsafe {
+            shekyl_fcmp_membership_only_verify(
+                proof.as_ptr(),
+                proof.len(),
+                big.as_ptr(),
+                over,
+                big.as_ptr(),
+                over,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_eq!(r, 1, "count over MAX_INPUTS must reject via the arity cap");
+
+        // Well-formed call over junk proof bytes must NEVER vacuously verify.
+        let junk = vec![0xABu8; 512];
+        let r = unsafe {
+            shekyl_fcmp_membership_only_verify(
+                junk.as_ptr(),
+                junk.len(),
+                po1.as_ptr(),
+                1,
+                ph1.as_ptr(),
+                1,
+                root.as_ptr(),
+                1,
+                txh.as_ptr(),
+            )
+        };
+        assert_ne!(r, 0, "junk membership-only proof must never verify");
+    }
+
+    #[test]
+    fn grow_upper_layers_ffi_equals_build_layers() {
+        // The producer-side fix: the FFI grow over the leaf-chunk layer reproduces
+        // build_layers' upper layers + root EXACTLY, including the depth-3 layer-2
+        // Selene root the daemon's incremental deepening gets wrong. Sizes span
+        // depth-1 (≤38), depth-2 (39..684) and depth-3 (685, 701).
+        use shekyl_fcmp::tree::{build_layers, SCALARS_PER_LEAF};
+        for &n_outputs in &[1usize, 38, 39, 684, 685, 701] {
+            // Small little-endian integers are canonical Selene field elements.
+            let leaf_scalars: Vec<[u8; 32]> = (0..n_outputs * SCALARS_PER_LEAF)
+                .map(|i| {
+                    let mut b = [0u8; 32];
+                    let v = u64::try_from(i % 251).unwrap() + 1;
+                    b[..8].copy_from_slice(&v.to_le_bytes());
+                    b
+                })
+                .collect();
+            let reference = build_layers(&leaf_scalars);
+            let leaf_layer = &reference[0];
+            let leaf_flat: Vec<u8> = leaf_layer.iter().flatten().copied().collect();
+
+            let upper_total: usize = reference[1..].iter().map(Vec::len).sum();
+            let mut out_chunks = vec![0u8; (upper_total + 1) * 32];
+            let mut out_sizes = vec![0u64; 16];
+            let mut num_upper = 0u64;
+            let mut root = [0u8; 32];
+            let ok = unsafe {
+                shekyl_curve_tree_grow_upper_layers(
+                    leaf_flat.as_ptr(),
+                    u64::try_from(leaf_layer.len()).unwrap(),
+                    out_chunks.as_mut_ptr(),
+                    u64::try_from(out_chunks.len() / 32).unwrap(),
+                    out_sizes.as_mut_ptr(),
+                    u64::try_from(out_sizes.len()).unwrap(),
+                    std::ptr::addr_of_mut!(num_upper),
+                    root.as_mut_ptr(),
+                )
+            };
+            assert!(ok, "FFI grow returned false at n={n_outputs}");
+
+            let mut got: Vec<Vec<[u8; 32]>> = Vec::new();
+            let mut off = 0usize;
+            for &sz in out_sizes.iter().take(usize::try_from(num_upper).unwrap()) {
+                let sz = usize::try_from(sz).unwrap();
+                let layer: Vec<[u8; 32]> = (0..sz)
+                    .map(|k| {
+                        let mut b = [0u8; 32];
+                        b.copy_from_slice(&out_chunks[(off + k) * 32..(off + k + 1) * 32]);
+                        b
+                    })
+                    .collect();
+                off += sz;
+                got.push(layer);
+            }
+            assert_eq!(
+                got,
+                reference[1..],
+                "FFI upper layers != build_layers at n={n_outputs}"
+            );
+            assert_eq!(
+                &root,
+                reference.last().unwrap().first().unwrap(),
+                "FFI root != build_layers root at n={n_outputs}"
+            );
+        }
+    }
+
     #[test]
     fn test_burn_split_ffi() {
         let split = shekyl_compute_burn_split(1_000_000_000, 400_000, 200_000);
         assert_eq!(split.miner_fee_income, 600_000_000);
         assert_eq!(split.staker_pool_amount, 80_000_000);
         assert_eq!(split.actually_destroyed, 320_000_000);
-    }
-
-    #[test]
-    fn test_stake_weight_ffi() {
-        assert_eq!(shekyl_stake_weight(1_000_000_000, 0), 1_000_000_000); // 1.0x
-        assert_eq!(shekyl_stake_weight(1_000_000_000, 2), 2_000_000_000); // 2.0x
-        assert_eq!(shekyl_stake_weight(1_000_000_000, 99), 0); // invalid tier
-    }
-
-    #[test]
-    fn test_per_block_staker_reward_ffi() {
-        unsafe {
-            let mut overflow = 0u8;
-            let q = shekyl_calc_per_block_staker_reward(
-                1_000_000,
-                500_000,
-                2_000_000,
-                0,
-                &raw mut overflow,
-            );
-            assert_eq!(overflow, 0);
-            assert_eq!(q, 250_000);
-            assert_eq!(
-                shekyl_calc_per_block_staker_reward(100, 0, 50, 0, std::ptr::null_mut()),
-                0
-            );
-            let q2 = shekyl_calc_per_block_staker_reward(10, 10, 1, 0, std::ptr::null_mut());
-            assert_eq!(q2, 100);
-        }
-    }
-
-    #[test]
-    fn test_per_block_staker_reward_overflow_flag() {
-        unsafe {
-            let mut overflow = 0u8;
-            let q =
-                shekyl_calc_per_block_staker_reward(u64::MAX, u64::MAX, 1, 0, &raw mut overflow);
-            assert_eq!(q, 0);
-            assert_eq!(overflow, 1);
-        }
-    }
-
-    #[test]
-    fn test_per_block_staker_reward_u128_denominator() {
-        unsafe {
-            let mut overflow = 0u8;
-            let q =
-                shekyl_calc_per_block_staker_reward(1_000_000, 1_000_000, 0, 1, &raw mut overflow);
-            assert_eq!(overflow, 0);
-            assert_eq!(q, 0);
-
-            let q2 = shekyl_calc_per_block_staker_reward(u64::MAX, 2, 100, 1, &raw mut overflow);
-            assert_eq!(overflow, 0);
-            assert_eq!(q2, 1);
-        }
-    }
-
-    #[test]
-    fn test_stake_tier_enum_ffi() {
-        assert_eq!(shekyl_stake_tier_count(), 3);
-        assert!(shekyl_stake_max_claim_range() > 0);
-        use std::ffi::CStr;
-        unsafe {
-            assert_eq!(
-                CStr::from_ptr(shekyl_stake_tier_name(0)).to_str().unwrap(),
-                shekyl_staking::tiers::TIERS[0].name
-            );
-            assert!(shekyl_stake_tier_name(99).is_null());
-        }
-    }
-
-    #[test]
-    fn test_stake_ratio_ffi() {
-        let ratio = shekyl_calc_stake_ratio(500_000_000, 1_000_000_000);
-        assert_eq!(ratio, 500_000); // 0.5
     }
 
     #[test]
@@ -5203,5 +5937,59 @@ mod tests {
                 "vector {i}: parsed a mismatch"
             );
         }
+    }
+
+    #[test]
+    fn label_plaintext_for_payment_uri_null_out_returns_minus_four() {
+        let uri = std::ffi::CString::new("shekyl:addr?rid=1").unwrap();
+        // SAFETY: valid uri; out is null (the case under test).
+        let rc =
+            unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), std::ptr::null_mut()) };
+        assert_eq!(rc, -4);
+    }
+
+    #[test]
+    fn label_plaintext_for_payment_uri_null_uri_leaves_out_untouched() {
+        // The "-4 on null pointer, output untouched" contract is only
+        // observable when a real out buffer is passed: a null `uri` must
+        // return -4 before any write, so the caller's buffer is preserved.
+        let mut out = [0x42u8; 8];
+        // SAFETY: out is a valid 8-byte buffer; uri is null (the case under test).
+        let rc =
+            unsafe { shekyl_label_plaintext_for_payment_uri(std::ptr::null(), out.as_mut_ptr()) };
+        assert_eq!(rc, -4);
+        assert_eq!(out, [0x42; 8], "output untouched on -4 (null uri)");
+    }
+
+    #[test]
+    fn label_plaintext_for_payment_uri_no_rid_writes_sentinel() {
+        use shekyl_crypto_pq::label::sentinel_plaintext;
+        let mut out = [0u8; 8];
+        let uri = std::ffi::CString::new("shekyl:addr1abc?amount=1").unwrap();
+        // SAFETY: valid pointers.
+        let rc = unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), out.as_mut_ptr()) };
+        assert_eq!(rc, 0);
+        assert_eq!(out, sentinel_plaintext());
+    }
+
+    #[test]
+    fn label_plaintext_for_payment_uri_rid_echo() {
+        use shekyl_crypto_pq::label::encode_request_plaintext;
+        let rid = 0x1234_u64;
+        let uri = std::ffi::CString::new(format!("shekyl:addr1abc?rid={rid}")).unwrap();
+        let mut out = [0u8; 8];
+        let rc = unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), out.as_mut_ptr()) };
+        assert_eq!(rc, 0);
+        assert_eq!(out, encode_request_plaintext(rid).unwrap());
+    }
+
+    #[test]
+    fn label_plaintext_for_payment_uri_parse_fail_writes_sentinel() {
+        use shekyl_crypto_pq::label::sentinel_plaintext;
+        let uri = std::ffi::CString::new("shekyl:").unwrap();
+        let mut out = [0u8; 8];
+        let rc = unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), out.as_mut_ptr()) };
+        assert_eq!(rc, -3);
+        assert_eq!(out, sentinel_plaintext());
     }
 }

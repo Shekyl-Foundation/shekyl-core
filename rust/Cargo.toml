@@ -6,34 +6,89 @@ members = [
     "shekyl-crypto-pq",
     "shekyl-crypto-hash",
     "shekyl-consensus",
+
+    # Canonical genesis block/tx binary wire-format serializer — the clean,
+    # Shekyl-owned replacement for the vendored shekyl-oxide block/tx/ct modules
+    # (docs/design/GENESIS_TX_WIRE_FORMAT.md, Decision 1 / §4).
+    "shekyl-wire",
     "shekyl-economics",
-    "shekyl-staking",
     "shekyl-economics-sim",
+
+    # Agent-based staker-archival coverage simulation (iteration 1).
+    # Epoch-granular agent dynamics; distinct instrument from the
+    # year-granular macro `shekyl-economics-sim`. See
+    # docs/design/STAKER_ARCHIVAL_SIM.md.
+    "shekyl-staking-sim",
+
+    # Funding-seam entry-standoff draw, single-sourced and build-float-free
+    # (docs/design/ARCHIVAL_FIREWALL_GATE6.md §10.12), plus its generic
+    # goodness-of-fit home. `shekyl-standoff` carries the wallet-importable
+    # draw + feature-gated conformance; `shekyl-stats` is the dependency-free
+    # statistics utility both it and `shekyl-crypto-pq` reuse (rule 18).
+    "shekyl-standoff",
+    "shekyl-stats",
+    "shekyl-archival-retention",
     "shekyl-engine-rpc",
     "shekyl-tx-builder",
     "shekyl-daemon-rpc",
+
+    # Single-sourced CT cleartext balance equation + typed-side terms, imported
+    # by both construct (shekyl-tx-builder) and verify (shekyl-archival-retention)
+    # (docs/design/ARCHIVAL_BOND_CONSTRUCTION.md §7.2 / §11.1 Q2)
+    "shekyl-ct-balance",
+
+    # Construct side of the archival bond: JoinMarket vin + hybrid signature +
+    # credit balance term, mirroring the shekyl-archival-retention verify side
+    # (docs/design/ARCHIVAL_BOND_CONSTRUCTION.md §7)
+    "shekyl-archival-bond-builder",
+
+    # Link-image crate: the daemon's single Rust archive (shekyl-ffi +
+    # shekyl-daemon-rpc → one tracing-core dispatcher). No logic; see
+    # its crate docs and src/daemon/CMakeLists.txt's nm gate.
+    "shekyl-daemon-image",
     "shekyl-encoding",
     "shekyl-address",
     "shekyl-difficulty",
 
-    # Vendored monero-oxide protocol crates
-    "shekyl-oxide/crypto/helioselene",
-    "shekyl-oxide/crypto/divisors",
-    "shekyl-oxide/crypto/generalized-bulletproofs",
-    "shekyl-oxide/crypto/fcmps/circuit-abstraction",
-    "shekyl-oxide/crypto/fcmps/ec-gadgets",
-    "shekyl-oxide/crypto/fcmps",
-    "shekyl-oxide/shekyl-oxide/io",
-    "shekyl-oxide/shekyl-oxide/generators",
-    "shekyl-oxide/shekyl-oxide/primitives",
-    "shekyl-oxide/shekyl-oxide/fcmp/bulletproofs",
-    "shekyl-oxide/shekyl-oxide/fcmp/fcmp++",
-    "shekyl-oxide/shekyl-oxide",
-    "shekyl-oxide/shekyl-oxide/rpc",
-    "shekyl-oxide/shekyl-oxide/rpc/simple-request",
+    # Foundational monetary-amount newtype (docs/completed/ATOMIC_UNITS_NEWTYPE.md)
+    "shekyl-units",
+
+    # Foundational state-shaped domain newtypes — heights, indices, hashes,
+    # timestamps (docs/design/RAW_TYPE_NEWTYPE_MIGRATION.md PR 0)
+    "shekyl-types",
+
+    # First-party crates relocated out of the vendored shekyl-oxide tree in the
+    # un-vendor slice-2 Track B (docs/design/SHEKYL_OXIDE_UNVENDOR.md §6 B2): the
+    # FCMP++ application/support layer is ours, no longer upstream-tracked. Renamed
+    # to role-honest names; provenance stamped per file. The pristine FCMP++ crypto
+    # research crates remain workspace-excluded (see the `exclude` list below) and
+    # vendored — those are the only "vendored" crates left.
+    "shekyl-curve-io",
+    "shekyl-curve-generators",
+    "shekyl-curve-primitives",
+    "shekyl-bulletproofs",
+    "shekyl-fcmp-proofs",
+    "shekyl-rpc-client",
+    "shekyl-rpc-transport",
+
+    # Wallet↔daemon wire-contract types: the SubmitVerdict/RejectCause submit
+    # contract (docs/design/DAEMON_SUBMIT_VERDICT.md §2) — the single Rust
+    # definition consumed by shekyl-daemon-rpc (server) and shekyl-rpc-client
+    # (wallet). Draft until the §8 parity matrix clears.
+    "shekyl-rpc-types",
+
+    # Per-P archival-firewall network transport (2d-2 SP-T1)
+    "shekyl-p-transport",
+
+    # Wallet-owned Tor integration: control client + lifecycle (2d-2 SP-T0)
+    "shekyl-tor",
 
     # Shekyl-native scanner crate
     "shekyl-scanner",
+
+    # Wallet-side FCMP++ curve-tree client (docs/design/CURVE_TREE_CLIENT.md):
+    # local membership-path assembly and block-derived root reconstruction.
+    "shekyl-curve-tree",
 
     # Canonical engine state types (transfers, runtime state, staker pool)
     "shekyl-engine-state",
@@ -76,6 +131,7 @@ members = [
     # `shekyl-pow-randomx` `test-internals` feature (per R5-D1).
     # See `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.1 + §8.
     "shekyl-randomx-differential",
+    "shekyl-shard-visual",
 ]
 # Local-only harnesses that must not participate in the parent
 # workspace. Excluded here (rather than relying on the nested
@@ -85,26 +141,41 @@ members = [
 # commit 8 (`docs/MID_REWIRE_HARDENING.md` §3.8).
 exclude = [
     "shekyl-engine-state/fuzz",
+    # FCMP++ research crypto, vendored from the monero-oxide fork (pinned by
+    # UPSTREAM_MONERO_OXIDE_COMMIT). The clean upstream-formatted mirror lives on
+    # the fork — the EC-membership review artifact; this vendored copy is
+    # reformatted to the workspace rustfmt style (the fork uses nightly-only
+    # rustfmt options Shekyl's stable toolchain can't replicate). Excluded from
+    # the workspace so upstream code is not subjected to Shekyl's clippy `-D`
+    # gate (it builds as a path-dep of consumers; `cargo fmt --all` still formats
+    # it to workspace style). The A1 content gate (CRYPTO_CONTENT_MANIFEST.sha256)
+    # verifies its integrity. See docs/design/SHEKYL_OXIDE_UNVENDOR.md §6 (A0/A1).
+    "shekyl-oxide/crypto/helioselene",
+    "shekyl-oxide/crypto/divisors",
+    "shekyl-oxide/crypto/generalized-bulletproofs",
+    "shekyl-oxide/crypto/fcmps/circuit-abstraction",
+    "shekyl-oxide/crypto/fcmps/ec-gadgets",
+    "shekyl-oxide/crypto/fcmps",
 ]
 resolver = "2"
 
 [workspace.package]
 version = "3.1.0"
 edition = "2021"
-# MSRV binding constraint: `kameo = "=0.20.0"` declares `rust-version
-# = 1.88.0` (verified at source via the crates.io index, 2026-05-29:
-# kameo 0.20.0, msrv 1.88.0, not yanked). This raises the floor above
-# the previous `aes = "0.9"` (edition 2024) driver of 1.85. Per
-# `RANDOMX_V2_PHASE2B_PLAN.md` §9: locking the pin produces a clean
-# "your rustc is too old" message from cargo rather than a cryptic
-# compile failure deep in the dependency graph. CI builds on
-# `dtolnay/rust-toolchain@stable` (≥ 1.88 in 2026), so no
-# `rust-toolchain.toml` is added — pinning a fixed channel would
-# change both CI and local build behavior without serving the gate's
-# intent, which is the MSRV *declaration* below. The Guix substrate
-# does not exist today per `RANDOMX_V2_RUST.md` §22 ("forward work");
-# when Guix lands, its rustc must already be ≥ 1.88 to build this
-# workspace.
+# MSRV binding constraints (workspace floor = max of consumers):
+#   - `kameo = "=0.20.0"`: 1.88.0 (crates.io index, 2026-05-29)
+#   - `redb = "4.1.0"` (CT-1 LeafStore): 1.89.0
+#   - `shekyl-pow-randomx`: `Box::new_zeroed_slice` (stable 1.92.0)
+# Workspace pins 1.94.0 intentionally (RandomX PoW + CT-1 redb) and
+# aligns with `shekyl-gui-wallet/src-tauri/
+# rust-toolchain.toml`. Per `RANDOMX_V2_PHASE2B_PLAN.md` §9: the
+# declared floor produces a clean cargo MSRV error rather than a
+# cryptic compile failure deep in the graph. CI runs an explicit
+# `rust-msrv-gate` job at 1.94.0 in addition to `@stable`; no
+# workspace `rust-toolchain.toml` — the gate is the declaration plus
+# the job, not a pinned local channel. Guix substrate does not exist
+# today per `RANDOMX_V2_RUST.md` §22; when it lands, its rustc must
+# be ≥ MSRV.
 #
 # Enforcement: this declaration is inherited by every first-party crate
 # via `rust-version.workspace = true` in each member's `[package]`. The
@@ -113,13 +184,19 @@ edition = "2021"
 # `rust-version` (literal or `.workspace = true`). Propagating the
 # inherit to all members makes the gate real per-crate rather than a
 # virtual-root annotation; a future bump touches only the value here.
-rust-version = "1.88"
+rust-version = "1.94"
 license = "BSD-3-Clause"
 repository = "https://github.com/radawson/Shekyl"
 
 [workspace.dependencies]
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
+# Single source of truth for the secret-wiping crate, replacing the
+# per-crate pins that had drifted across two version floors (`1` / `^1.5`)
+# and two derive-feature spellings (`derive` / `zeroize_derive`). First-party
+# crates reference this as `{ workspace = true }`; the vendored `shekyl-oxide/crypto/*`
+# crates keep their own `default-features = false` pins (rule 10).
+zeroize = { version = "1.5", features = ["derive"] }
 
 # RandomX v2 verifier primitives (Phase 2b). Both verified at source
 # in `RANDOMX_V2_PHASE2B_PLAN.md` §4 and §5.6.
@@ -149,7 +226,7 @@ blake2 = { version = "0.10", default-features = false }
 # independent per-crate pins (`sha2` in `shekyl-engine-core`,
 # `shekyl-crypto-pq`, `shekyl-proofs`, `shekyl-engine-prefs`;
 # `rand_chacha` in `shekyl-engine-core`, `shekyl-crypto-pq`,
-# `shekyl-fcmp`, `shekyl-oxide/fcmp/fcmp++`; `serde_json` across
+# `shekyl-fcmp`, `shekyl-fcmp-proofs`; `serde_json` across
 # ~14 crates). This section adds them to `[workspace.dependencies]`
 # so the new `shekyl-randomx-differential` crate can reference them
 # via `{ workspace = true }` and inherit a single shared pin; the
@@ -195,6 +272,13 @@ sha2 = "0.10"
 # asserts all 11 fields are present in the parsed map.
 serde_json = "1"
 
+# CT-1 `shekyl-curve-tree` LeafStore persistence (`docs/design/CT1_ROUND1_PINS.md`).
+# Verified at source (redb 4.1.0): `Database::create`, `begin_write`/`begin_read`,
+# `TableDefinition`, `ReadableTable` range scan; public chain data only — no
+# `Zeroize` requirement (`17-dependency-discipline.mdc`). Pre-genesis greenfield:
+# v3 file format only (no v2 migration path).
+redb = "4.1.0"
+
 # `kameo` actor framework — Stage 2 gate (per `docs/FOLLOWUPS.md`
 # "kameo dependency pin and MSRV alignment before Stage 2 cuts" and
 # the 2026-04-27 *Engine binary boundary* decision in
@@ -202,26 +286,29 @@ serde_json = "1"
 # crates.io index 2026-05-29: 0.20.0 is the newest stable (released
 # 2026-04-07, not yanked); supervision support shipped in 0.20.0 and
 # the v0.19.x/v0.20.0 line carries the no-cycle-DAG deadlock fixes
-# this project's topology depends on. MSRV 1.88.0 (reflected in the
-# workspace `rust-version` bump above). Pinned with an exact
+# this project's topology depends on. Crate MSRV 1.88.0 (below the
+# workspace floor). Pinned with an exact
 # patch-level cap (`=0.20.0`) per the FOLLOWUP precondition: an actor
 # framework is a coordination-load-bearing dependency where a silent
 # minor bump could alter mailbox/supervision semantics under us.
 #
-# Declared here only; no workspace member consumes it yet, so it is
-# inert in the build graph. Stage 2's first commit adds the live
-# `kameo = { workspace = true }` consumer (the `KeyEngine` actor crate)
-# and closes the FOLLOWUP. The supervision/mailbox API surface is
+# Live consumer (Stage 2): `shekyl-engine-core` consumes
+# `kameo = { workspace = true }` as of the `KeyActor` migration
+# (`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`); the pin is no longer
+# inert in the build graph. The supervision/mailbox API surface was
 # verified at source at that consumption point per
-# `17-dependency-discipline.mdc` (the pin alone calls no API).
+# `17-dependency-discipline.mdc` (§0.5 B6 finding below).
 #
 # Bounded-mailbox default convention (FOLLOWUP precondition 3): every
-# actor declares a bounded mailbox; the workspace default is
-# `mailbox(64)` unless an actor documents a measured reason to differ.
+# actor uses a bounded mailbox; the workspace default is **capacity 64**.
 # Unbounded mailboxes are forbidden under Path B for memory-pressure
-# reasons. Per-actor overrides carry an inline rationale at the
-# `#[actor(mailbox = ...)]` site naming the back-pressure or
-# throughput measurement that justifies the deviation.
+# reasons. The *mechanism*, verified at source in kameo 0.20.0 (§0.5 B6):
+# `Spawn::spawn(args)` is already bounded at 64 by default — there is **no
+# `#[actor(mailbox = ...)]` attribute** (the earlier convention text named
+# one that does not exist). Per-actor overrides pass an explicit mailbox to
+# `spawn_with_mailbox(args, kameo::mailbox::bounded(n))` with an inline
+# rationale naming the back-pressure or throughput measurement that
+# justifies the deviation. `KeyActor` takes the default-64 `spawn` path.
 kameo = "=0.20.0"
 
 # Compile crypto-heavy crates with optimizations even in dev
@@ -239,12 +326,11 @@ generalized-bulletproofs = { opt-level = 3 }
 generalized-bulletproofs-circuit-abstraction = { opt-level = 3 }
 generalized-bulletproofs-ec-gadgets = { opt-level = 3 }
 full-chain-membership-proofs = { opt-level = 3 }
-shekyl-io = { opt-level = 3 }
-shekyl-generators = { opt-level = 3 }
-shekyl-primitives = { opt-level = 3 }
+shekyl-curve-io = { opt-level = 3 }
+shekyl-curve-generators = { opt-level = 3 }
+shekyl-curve-primitives = { opt-level = 3 }
 shekyl-bulletproofs = { opt-level = 3 }
-shekyl-fcmp-plus-plus = { opt-level = 3 }
-shekyl-oxide = { opt-level = 3 }
+shekyl-fcmp-proofs = { opt-level = 3 }
 
 [profile.dev]
 panic = "abort"

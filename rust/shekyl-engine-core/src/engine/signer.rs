@@ -28,8 +28,11 @@
 //! V3.x HW-wallet / `SigningActor` integration plugs in as an
 //! alternative [`Signer`] impl without re-opening the trait
 //! surface. The default V3.0 impl is [`LocalSigner`] (synchronous,
-//! in-process); [`LocalSigner`] is the sole holder of spend
-//! material per R11 (b) — `LocalPendingTx` never touches the
+//! in-process). Since Stage 2 (`STAGE_2_KEY_ENGINE_ACTOR.md` §6
+//! step 4) the spend material lives in the `KeyActor`, not in the
+//! signer: [`LocalSigner`] holds a [`KeyEngineHandle`] and routes the
+//! future signing path through the actor's `SignTransaction` message,
+//! so neither `LocalPendingTx` nor the signer ever touches the
 //! `AllKeysBlob` directly.
 //!
 //! The two surfaces ([`EngineSignerKind`] and [`Signer`]) are
@@ -38,11 +41,9 @@
 //! pending-tx engine over the secret-holding signer instance. They
 //! share a name family but are layered, not overlapping.
 
-use std::sync::Arc;
-
-use shekyl_crypto_pq::account::AllKeysBlob;
-
 use super::error::SignerError;
+use super::key_actor::KeyEngineHandle;
+use super::traits::key::KeyEngine;
 
 mod private {
     pub trait Sealed {}
@@ -106,17 +107,16 @@ impl EngineSignerKind for SoloSigner {}
 /// decomposition (i.e., here / now).
 #[derive(Debug)]
 pub struct TransferSigningContext {
-    /// Phase 1 stub field. Phase 2a fills the context shape; for
-    /// now the type carries a unit placeholder so the newtype is
-    /// constructible without exposing a public init surface.
-    pub(crate) _phase1_stub: (),
+    /// Populated signing message (§3.4 / §3.9). Phase 2a-3 consumes
+    /// this in `LocalSigner::sign_transfer` via `KeyEngine::sign_transaction`.
+    #[allow(dead_code)] // read in 2a-3 `LocalSigner::sign_transfer`.
+    pub(crate) tx: super::traits::key::TxToSign,
 }
 
 impl TransferSigningContext {
-    /// Construct a Phase 1 stub context. Crate-internal only —
-    /// `LocalPendingTx::build_sync` is the production caller.
-    pub(crate) fn phase1_stub() -> Self {
-        Self { _phase1_stub: () }
+    /// Construct from an assembled [`TxToSign`]. Crate-internal only.
+    pub(crate) fn from_tx(tx: super::traits::key::TxToSign) -> Self {
+        Self { tx }
     }
 }
 
@@ -139,16 +139,6 @@ pub struct SignedTransfer {
 }
 
 impl SignedTransfer {
-    /// Construct an empty Phase 1 stub. The `_context` parameter
-    /// is unused at V3.0; Phase 2a's tx-builder will consume it.
-    /// Crate-internal only.
-    #[allow(clippy::needless_pass_by_value)]
-    pub(crate) fn empty_phase1_stub(_context: &TransferSigningContext) -> Self {
-        Self {
-            tx_bytes: Vec::new(),
-        }
-    }
-
     /// Borrow the serialized signed-transaction bytes. Crate-
     /// internal accessor; C5β's `submit` body forwards them to
     /// `DaemonEngine::submit_tx`.
@@ -246,122 +236,155 @@ pub trait Signer: Send + Sync + 'static {
     /// sensitive material.
     fn sign_transfer(
         &self,
-        context: &TransferSigningContext,
-    ) -> Result<SignedTransfer, Self::Error>;
+        context: TransferSigningContext,
+    ) -> impl std::future::Future<Output = Result<SignedTransfer, Self::Error>> + Send;
 }
 
-/// V3.0 default [`Signer`] implementor: the wallet holds the
-/// [`AllKeysBlob`] in-process and signs synchronously.
+/// V3.0 default [`Signer`] implementor: a handle to the wallet's
+/// `KeyActor`, which signs on the orchestrator's behalf.
 ///
 /// Phase 0h binding form per `STAGE_1_PR_5_PENDING_TX_ENGINE.md`
-/// §4 segment-2g closure. The `Arc<AllKeysBlob>` is the sole
-/// holder of spend material in Stage 1 per R11 (b); Stage 4's
-/// `SigningActor` will hold the same `Arc` behind an `ActorRef`
-/// indirection (substitution-not-refactor at the V3.x
-/// migration).
+/// §4 segment-2g closure, **as amended by Stage 2**
+/// (`STAGE_2_KEY_ENGINE_ACTOR.md` §6 step 4). The signer no longer
+/// holds `Arc<AllKeysBlob>`: the blob lives inside the
+/// [`KeyActor`](super::key_actor::KeyActor), and the signer carries a
+/// [`KeyEngineHandle`] clone. When Phase 2a wires real signing, the
+/// body routes through the actor's `SignTransaction` message rather
+/// than reaching into a local blob — the `SigningActor` substitution
+/// the original Stage-1 note anticipated is now structural.
 ///
 /// # Secret-locality
 ///
-/// The `keys: Arc<AllKeysBlob>` field is `pub(crate)`. External
-/// callers never reach into a [`LocalSigner`] to extract spend
-/// material; the `Arc` is constructed from the engine's
-/// open-time `AllKeysBlob` (which lives behind the engine's
-/// `RwLock<EngineState>`) and handed to the signer at engine-
-/// construction time. The signer never re-publishes the
-/// material.
-///
-/// # Refcount discipline (C4α test)
-///
-/// The Phase-1 invariant: each [`LocalSigner`] instance holds
-/// exactly one strong refcount of its `Arc<AllKeysBlob>`. The
-/// `local_signer_holds_keys` test pins this — clone-and-drop
-/// behavior across the signer's lifetime stays within the
-/// secret-locality contract per R11 (b).
+/// The `key: KeyEngineHandle` field is `pub(crate)`. The handle
+/// reaches secret material only by message-passing to the actor;
+/// there is no `&AllKeysBlob` reachable through it. This is a
+/// strictly stronger secret-locality posture than the Stage-1
+/// `Arc<AllKeysBlob>` field (which exposed the blob to anything
+/// holding the signer): the spend secret is confined to the actor
+/// task per `36-secret-locality.mdc` and the engine-isolation
+/// property of `16-architectural-inheritance.mdc`.
 ///
 /// # Not `Debug`
 ///
 /// [`LocalSigner`] does NOT derive `Debug`. The held
-/// [`AllKeysBlob`] carries spend / view / KEM material that
-/// must not project to logs per
-/// [`35-secure-memory.mdc`](https://github.com/shekyl/shekyl-core/blob/dev/.cursor/rules/35-secure-memory.mdc)
-/// and `AllKeysBlob`'s own `Debug` opt-out. Wrapping
-/// orchestrator types (the engine top-level struct;
+/// [`KeyEngineHandle`] transitively reaches the actor's
+/// `AllKeysBlob` and a view-secret projection; neither implements
+/// `Debug`, per
+/// [`35-secure-memory.mdc`](https://github.com/shekyl/shekyl-core/blob/dev/.cursor/rules/35-secure-memory.mdc).
+/// Wrapping orchestrator types (the engine top-level struct;
 /// `LocalPendingTx`'s eventual Debug impl) project the signer
 /// as a redacted placeholder rather than including its `Debug`
 /// transitively.
 pub struct LocalSigner {
-    /// The wallet's key material. `Arc` so the engine can share
-    /// the same blob with [`LocalSigner`] without copying secret
-    /// bytes; `AllKeysBlob` is not `Clone` per its V3.0 not-clone
-    /// discipline, so `Arc` is the only valid sharing shape.
-    pub(crate) keys: Arc<AllKeysBlob>,
+    /// Handle to the wallet's `KeyActor`. `KeyEngineHandle` is
+    /// `Clone` (it wraps an `ActorRef` plus `Arc`'d public/secret
+    /// projections), so the engine shares the one actor with the
+    /// signer by cloning the handle — no secret bytes are copied and
+    /// no `&AllKeysBlob` is exposed.
+    pub(crate) key: KeyEngineHandle,
 }
 
 impl LocalSigner {
-    /// Construct a [`LocalSigner`] from the engine's shared key
-    /// blob. Crate-internal: only the engine's open / construct
-    /// pipeline calls this; external `Signer` impls are independent.
-    pub(crate) fn new(keys: Arc<AllKeysBlob>) -> Self {
-        Self { keys }
-    }
-
-    /// Borrow the held key blob. Crate-internal accessor —
-    /// callers within the crate use this only when the signing
-    /// path needs structural key material (Phase 2a's tx-builder
-    /// integration); `pub(crate)` rather than `pub` because no
-    /// external API requires it.
-    #[allow(dead_code)]
-    pub(crate) fn keys(&self) -> &AllKeysBlob {
-        &self.keys
-    }
-
-    /// Test-only refcount accessor. Returns the strong count of
-    /// the held `Arc<AllKeysBlob>` for the
-    /// `local_signer_holds_keys` test below; gated to test
-    /// builds so the production surface does not expose the
-    /// refcount.
-    #[cfg(test)]
-    pub(crate) fn keys_strong_count(&self) -> usize {
-        Arc::strong_count(&self.keys)
+    /// Construct a [`LocalSigner`] from a clone of the engine's
+    /// [`KeyEngineHandle`]. Crate-internal: only the engine's open /
+    /// construct pipeline calls this; external `Signer` impls are
+    /// independent.
+    pub(crate) fn new(key: KeyEngineHandle) -> Self {
+        Self { key }
     }
 }
 
 impl Signer for LocalSigner {
     type Error = SignerError;
 
-    fn sign_transfer(
+    async fn sign_transfer(
         &self,
-        context: &TransferSigningContext,
+        context: TransferSigningContext,
     ) -> Result<SignedTransfer, Self::Error> {
-        // Phase 1 stub: returns SignedTransfer with empty body
-        // bytes. Matches existing build_pending_tx_in_state
-        // which sets tx_bytes: Vec::new() per the existing
-        // pending.rs stub. Phase 2a wires shekyl-tx-builder
-        // against `self.keys`.
-        Ok(SignedTransfer::empty_phase1_stub(context))
+        let expected_tree_depth = context.tx.fcmp_plus_plus_context.tree.tree_depth;
+        let signatures = self
+            .key
+            .sign_transaction(context.tx)
+            .await
+            .map_err(SignerError::from)?;
+
+        debug_assert_eq!(signatures.tree_depth, expected_tree_depth);
+
+        let bulletproof = shekyl_bulletproofs::Bulletproof::read_plus(
+            &mut signatures.bulletproof_plus.as_slice(),
+        )
+        .map_err(|_| SignerError::RemoteFailure {
+            reason: "bulletproof parse failed during wire encode",
+        })?;
+
+        let wire_input = shekyl_tx_builder::WireEncodeInput {
+            extra_inputs: Vec::new(),
+            key_images: signatures
+                .per_input
+                .iter()
+                .map(|i| *i.key_image.as_bytes())
+                .collect(),
+            output_keys: signatures.output_keys,
+            view_tags: signatures.view_tags,
+            tx_extra: signatures.tx_extra,
+            fee: signatures.fee,
+            enc_amounts: signatures.enc_amounts,
+            enc_labels: signatures.enc_labels,
+            out_commitments: signatures.out_commitments,
+            pseudo_outs: signatures.per_input.iter().map(|i| i.pseudo_out).collect(),
+            bulletproof,
+            reference_block: signatures.reference_block,
+            fcmp_proof: signatures.fcmp_proof,
+            pqc_auths: signatures
+                .per_input
+                .iter()
+                .map(|i| i.pqc_auth.clone())
+                .collect(),
+            // `signatures.tree_depth` is the FCMP++ layer count `L`; the encoder
+            // serializes the consensus `curve_trees_tree_depth = L - 1`.
+            fcmp_layers: signatures.tree_depth,
+        };
+
+        let tx_bytes = shekyl_tx_builder::encode_final_tx(&wire_input).map_err(|_| {
+            SignerError::RemoteFailure {
+                reason: "final wire encode failed",
+            }
+        })?;
+
+        Ok(SignedTransfer { tx_bytes })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    //! C4α `Signer` / `LocalSigner` regression tests.
+    //! `Signer` / `LocalSigner` regression tests, as amended by
+    //! Stage 2 (`STAGE_2_KEY_ENGINE_ACTOR.md` §6 step 4).
     //!
-    //! Coverage scope (per `STAGE_1_PR_5_PENDING_TX_ENGINE.md`
-    //! §7.X C4α):
+    //! Coverage scope:
     //!
-    //! - `local_signer_holds_keys` — the `Arc<AllKeysBlob>`
-    //!   refcount discipline matches the design-time pin
-    //!   (one strong refcount per signer instance).
+    //! - `local_signer_holds_handle_not_blob` — replaces the Stage-1
+    //!   `local_signer_holds_keys` `Arc<AllKeysBlob>` refcount test.
+    //!   The secret-locality invariant is now structural: the signer
+    //!   holds a [`KeyEngineHandle`], and dropping the engine's own
+    //!   handle clone does **not** stop the actor while the signer's
+    //!   clone is alive. Liveness is asserted via an actor-routed
+    //!   `sign_transaction` `ask` (not `account_public_address`, which
+    //!   is projection-served and would pass even after actor stop).
     //! - `local_signer_phase1_stub_succeeds` — the Phase 1 stub
     //!   returns `Ok` for any well-formed context.
     //!
-    //! Stage 4 actor-pattern tests (`SigningActor` topology)
-    //! land in the V3.x consumer-actor PR, not here. The Phase
-    //! 1 substrate is what C4α tests against.
+    //! Each test spawns a real [`KeyActor`](super::super::key_actor::KeyActor)
+    //! over a real [`AllKeysBlob`]. `KeyEngineHandle::spawn` is require-ambient
+    //! (§4.2 — a [`KeyActor`] is an async task and must be spawned inside a
+    //! runtime), so these are `#[tokio::test]`s; the default current-thread
+    //! runtime hosts the actor task fine (`kameo`'s spawn is `tokio::spawn`).
     use super::*;
+    use crate::engine::error::KeyEngineError;
+    use crate::engine::traits::key::{FcmpPlusPlusContext, FeeDirective, KeyEngine, TxToSign};
     use shekyl_crypto_pq::account::{
-        rederive_account, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
+        rederive_account, AllKeysBlob, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
     };
+    use shekyl_tx_builder::TreeContext;
 
     /// Deterministic test seed. Distinct from
     /// `DEFAULT_TEST_SEED` (daemon-side, 32 bytes) and from
@@ -387,30 +410,58 @@ mod tests {
         .expect("rederive_account against fakechain raw32 seed")
     }
 
-    #[test]
-    fn local_signer_holds_keys() {
-        let keys = Arc::new(deterministic_keys());
-        // The outer Arc is the only strong refcount before
-        // constructing the signer.
-        assert_eq!(Arc::strong_count(&keys), 1);
-        let signer = LocalSigner::new(Arc::clone(&keys));
-        // R11 (b) invariant: the signer adds exactly one strong
-        // refcount of the shared key material per instance.
-        assert_eq!(signer.keys_strong_count(), 2);
-        // Dropping the signer returns the refcount to baseline.
-        drop(signer);
-        assert_eq!(Arc::strong_count(&keys), 1);
+    fn empty_tx_to_sign() -> TxToSign {
+        use shekyl_address::Network;
+        TxToSign {
+            network: Network::Mainnet,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            fcmp_plus_plus_context: FcmpPlusPlusContext {
+                tree: TreeContext {
+                    reference_block: [0; 32],
+                    tree_root: [0; 32],
+                    tree_depth: 1,
+                },
+            },
+            fee: FeeDirective {
+                fee_no_change: 0,
+                fee_with_change: 0,
+                dust_threshold: 0,
+            },
+        }
     }
 
-    #[test]
-    fn local_signer_phase1_stub_succeeds() {
-        let keys = Arc::new(deterministic_keys());
-        let signer = LocalSigner::new(keys);
-        let context = TransferSigningContext::phase1_stub();
-        let result = signer.sign_transfer(&context);
-        let signed = result.expect("Phase 1 stub returns Ok unconditionally");
-        // Phase 1 stub invariant: body bytes are empty (matches
-        // build_pending_tx_in_state's tx_bytes: Vec::new()).
-        assert!(signed.tx_bytes().is_empty());
+    #[tokio::test]
+    async fn local_signer_holds_handle_not_blob() {
+        // The engine builds the handle, then hands the signer a clone
+        // (mirrors `assemble`: `LocalSigner::new(key.clone())`).
+        let engine_handle = KeyEngineHandle::spawn(deterministic_keys());
+        let signer = LocalSigner::new(engine_handle.clone());
+
+        // Dropping the engine's own clone must NOT stop the actor: the
+        // signer's clone keeps it alive. Use an actor-routed `ask`
+        // (`sign_transaction`), not `account_public_address` (projection-
+        // served and would still resolve after actor stop).
+        drop(engine_handle);
+        let err = signer
+            .key
+            .sign_transaction(empty_tx_to_sign())
+            .await
+            .expect_err("empty inputs are rejected by the live actor");
+        assert!(
+            matches!(err, KeyEngineError::Primitive { .. }),
+            "expected primitive rejection from live actor, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn local_signer_sign_transfer_rejects_empty_inputs() {
+        let signer = LocalSigner::new(KeyEngineHandle::spawn(deterministic_keys()));
+        let context = TransferSigningContext::from_tx(empty_tx_to_sign());
+        let err = signer
+            .sign_transfer(context)
+            .await
+            .expect_err("empty TxToSign cannot be signed");
+        assert!(matches!(err, SignerError::RemoteFailure { .. }));
     }
 }

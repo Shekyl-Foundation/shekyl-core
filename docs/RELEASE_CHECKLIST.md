@@ -1,4 +1,5 @@
 - [ ] **Stressnet stable for 4 consecutive weeks** (Phase 7.7)
+  - [ ] **Prerequisite of stressnet ENTRY: `K_COVER` sealed** (§14.4-derived value landed, `k_cover_provisional` cleared — `docs/design/ARCHIVAL_REWARD_GATE_M1.md` §4 seal-before-stressnet pin). While provisional the M1 gate runs as identity, so only a post-seal stressnet exercises the activation boundary live; sealing after stressnet entry would leave mainnet genesis as the boundary's first live execution.
   - [ ] All stressnet acceptance criteria met (see `tests/stressnet/README.md`)
   - [ ] Zero tree root divergences for full 4-week run
   - [ ] Block validation p95 < 500ms sustained
@@ -92,6 +93,15 @@ further changes to the interface.
   - [ ] RPC consumer regression testing for larger transactions
 - [ ] CLI reproducible builds validated
 - [ ] Rust/PQC reproducible build inputs documented
+- [ ] **Bundled Tor pin current** (2d-2 archival firewall, SP-T0c — `rust/shekyl-tor/src/binary.rs`)
+  - The wallet's *managed* tor launch is hash-pin gated (`binary.rs` mints the `VerifiedTorBinary` witness a launch requires); a stale or unverified pin is a mission-#1 (security-precondition) gap, so this is a **recurring** duty, not a one-time step.
+  - [ ] Watch <https://www.torproject.org/download/tor/> for a new **stable Tor Expert Bundle** or a security advisory since the recorded pin.
+  - [ ] Ensure the signing key is in your keyring (fresh machine): `gpg --auto-key-locate nodefault,wkd --locate-keys torbrowser@torproject.org`, then confirm the primary fingerprint is `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290` (`TOR_SIGNING_KEY_FPR` in `binary.rs`).
+  - [ ] On a new stable / advisory, per supported target: download the Expert Bundle tarball **and** its `.asc`, then `gpg --verify <file>.asc <file>` — require a **Good signature** whose primary key is that fingerprint (the durable pin is *this key*, not any single hash).
+  - [ ] Extract and record `sha256sum` of the **extracted `tor` binary** (not the tarball) into `CURRENT_PIN` for each target `cfg` arm (`hex!("…")` — paste the digest verbatim).
+  - [ ] Update the other two pin records so no copy drifts: the "Current pin" paragraph in `docs/design/ARCHIVAL_BOND_2D2_SP_T0_TOR.md` (move the old pin to its "Superseded pin" note **with** its tarball hash) and the "Current pin" line below.
+  - [ ] Re-verify: run `SHEKYL_TEST_PINNED_TOR_BINARY=<new extracted tor> cargo test -p shekyl-tor --lib binary -- --ignored` — `bundled_tor_matches_recorded_pin` must pass against the new binary. (The test is not `cfg`-gated: on a target missing its pin arm it fails loudly instead of reporting a vacuous 0-test green.) The `tor-pin-verify` workflow (`.github/workflows/tor-pin-verify.yml`, manual dispatch) runs the same download → GPG-verify → re-verify chain in CI, and against that one verified binary also runs the SP-T0 `--lib` live lifecycle tests (actor + supervisor) — dispatch it after a bump.
+  - Current pin: **Expert Bundle 15.0.17 (tor 0.4.9.11)**, recorded 2026-07-01 (see `CURRENT_PIN` for the gate value — code is canonical; this line is a pointer, not a second source of truth).
 - [ ] CLI released
   - [ ] Project downloads page updated
   - [ ] Update hashes.txt on website

@@ -12,7 +12,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-zeroize = { version = "^1.5", features = ["zeroize_derive"] }
+zeroize = { workspace = true }
 curve25519-dalek = { version = "4", features = ["alloc", "zeroize"] }
 hex = { version = "0.4", features = ["alloc"] }
 serde.workspace = true
@@ -20,6 +20,7 @@ serde_bytes = "0.11"
 thiserror.workspace = true
 tracing = "0.1"
 postcard = { version = "1", features = ["alloc"] }
+getrandom = { version = "0.2", features = ["std"] }
 
 # Hardening-pass commit 3.4 (`docs/MID_REWIRE_HARDENING.md` §3.4):
 # `postcard-schema` turns the `block_version` discipline from cultural
@@ -34,8 +35,18 @@ shekyl-address = { path = "../shekyl-address" }
 # type-system protection at the engine-state boundary; serialization
 # is `#[serde(transparent)]` so the on-disk format is unchanged.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
-shekyl-staking = { path = "../shekyl-staking" }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
+# `AtomicUnits` amount newtype (docs/completed/ATOMIC_UNITS_NEWTYPE.md). The
+# `TransferDetails::amount()` accessor returns it; the stored `commitment`
+# stays fork-`u64` and converts at the `commitment_bytes` serializer edge.
+shekyl-units = { path = "../shekyl-units", features = ["schema"] }
+# Canonical newtypes. `TxHash` (`TransferDetails::tx_hash` /
+# `PaymentRequest::matched_tx_hash`) is transparent over `[u8; 32]` via
+# wire-native mirror structs, so it alone needed no `schema`. `PScanCursor`
+# (SP-2) carries a `BlockHeight` field in a `Schema`-deriving persisted struct,
+# so the `schema` feature is now required (it gates `BlockHeight`'s
+# `postcard_schema::Schema` derive).
+shekyl-types = { path = "../shekyl-types", features = ["schema"] }
 
 [dev-dependencies]
 serde_json = "1"
@@ -43,19 +54,18 @@ proptest = "1"
 
 # Hardening-pass commit 2 (`docs/MID_REWIRE_HARDENING.md` §3.2): criterion for
 # wall-clock metrics on the two engine-state hot paths (`ledger`, `balance`),
-# and iai-callgrind for deterministic instruction-count metrics mirroring the
+# and gungraun for deterministic instruction-count metrics mirroring the
 # same hot paths (suffix `_iai`). The criterion harness runs on any host;
-# iai-callgrind requires Valgrind plus `cargo install iai-callgrind-runner`
+# gungraun requires Valgrind plus `cargo install gungraun-runner`
 # and is the metric the §3.3 CI gate enforces against.
 criterion = { version = "0.5", features = ["html_reports"] }
-iai-callgrind = "0.16"
+gungraun = "0.19"
 
 # Used only by `benches/balance.rs` — the canonical `BalanceSummary::compute`
 # lives in the scanner crate; the bench lives in `shekyl-engine-state` because
 # that is where the `TransferDetails` input type is defined. Dev-only, does
 # not widen the crate's runtime dep graph.
 shekyl-scanner = { path = "../shekyl-scanner" }
-shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 curve25519-dalek = { version = "4", features = ["alloc", "zeroize"] }
 
 [[bench]]

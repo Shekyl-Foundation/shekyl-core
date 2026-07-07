@@ -13,18 +13,30 @@ license.workspace = true
 
 [dependencies]
 shekyl-fcmp = { path = "../shekyl-fcmp" }
+# `AtomicUnits` amount-newtype (`docs/completed/ATOMIC_UNITS_NEWTYPE.md`).
+# Carries `SpendInput`/`OutputInfo` amounts and validate/sign totals; raw
+# `u64` reappears only at the oxide `Commitment::new` edge (§4.1).
+shekyl-units = { path = "../shekyl-units" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
-shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
-shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
-shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
-shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
+# Single-sourced CT cleartext balance terms (InputTerm / OutputTerm). Construct
+# consumes the same typed-side terms verify checks
+# (docs/design/ARCHIVAL_BOND_CONSTRUCTION.md §7.2); the builder stays bond-agnostic.
+shekyl-ct-balance = { path = "../shekyl-ct-balance" }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
+# Canonical genesis spend serializer + signing hashes (the wire authority). The wire
+# adapter (`wire.rs`) maps onto this. (Bp+ crypto comes from `shekyl-bulletproofs`
+# above; the dissolved `shekyl-oxide` crate is no longer a dependency.)
+shekyl-wire = { path = "../shekyl-wire" }
 
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 fips204 = "0.4.6"
 rand_core = { version = "0.6", features = ["std"] }
-zeroize = { version = "1", features = ["derive"] }
+zeroize = { workspace = true }
 thiserror.workspace = true
 serde.workspace = true
 hex = { version = "0.4", features = ["serde"] }
@@ -33,7 +45,7 @@ hex = { version = "0.4", features = ["serde"] }
 rand = "0.8"
 
 # Hardening-pass commit 2 (`docs/MID_REWIRE_HARDENING.md` §3.2):
-# criterion + iai-callgrind harness for `transfer_e2e_1in_2out`. The
+# criterion + gungraun harness for `transfer_e2e_1in_2out`. The
 # bench composes the two crypto pieces we can exercise without a
 # synthetic FCMP++ curve-tree fixture — BP+ range proof over 2 output
 # commitments and one ML-DSA-65 hybrid signature. The manifest
@@ -42,8 +54,8 @@ rand = "0.8"
 # `sign_transaction` call with a valid tree fixture is tracked as a
 # known gap for a future commit (see §3.2 "Known gaps").
 criterion = { version = "0.5", features = ["html_reports"] }
-iai-callgrind = "0.16"
-shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
+gungraun = "0.19"
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 rand_core = { version = "0.6", features = ["std"] }
 

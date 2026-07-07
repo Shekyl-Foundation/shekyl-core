@@ -42,6 +42,8 @@ set(unit_tests_sources
   crypto.cpp
   cryptonote_format_utils.cpp
   daemon_default_data_dir.cpp
+  daemon_submit_ffi_roundtrip.cpp
+  daemon_submit_shims.cpp
   decompose_amount_into_digits.cpp
   device.cpp
   difficulty.cpp
@@ -81,6 +83,7 @@ set(unit_tests_sources
   rpc_target_wire_contract.cpp
   rolling_median.cpp
   scaling_2021.cpp
+  seed_epoch.cpp
   serialization.cpp
   sha256.cpp
   slow_memmem.cpp
@@ -104,9 +107,16 @@ set(unit_tests_sources
   wipeable_string.cpp
   is_hdd.cpp
   aligned.cpp
-  staking.cpp
+  archival_serve_credit.cpp
+  archival_serve_credit_integration.cpp
+  archival_bond_post.cpp
+  archival_bond_post_integration.cpp
+  archival_segment_freeze.cpp
+  archival_substrate_lmdb.cpp
+  ct_balance_differential.cpp
   deferred_insertion.cpp
   tx_data_pruning_lmdb.cpp
+  txpool_ref_age.cpp
   pending_tree_fuzz.cpp
   )
 
@@ -128,7 +138,18 @@ target_link_libraries(unit_tests
     serialization
     wallet
     p2p
-    shekyl_ffi
+    # Resolves to libshekyl_daemon_image.a (not libshekyl_ffi.a) because of
+    # the SHEKYL_RUST_IMAGE_DAEMON property set below. The daemon image is
+    # the superset (shekyl-ffi + shekyl-daemon-rpc), needed since
+    # daemon_submit_ffi_roundtrip.cpp calls the Rust-side layout twins that
+    # live in shekyl-daemon-rpc. Never name shekyl_ffi literally here — two
+    # Rust archives on one link line is the split-dispatcher regression.
+    ${SHEKYL_FFI_LINK_LIBS}
+    # rpc repeats after the Rust image (same shape as src/daemon): the
+    # daemon image's members import core_rpc_ffi_* / shekyl_submit_*, which
+    # live in rpc — left-to-right static-archive resolution needs a
+    # post-image occurrence.
+    rpc
     version
     ${Boost_CHRONO_LIBRARY}
     ${Boost_THREAD_LIBRARY}
@@ -137,6 +158,16 @@ target_link_libraries(unit_tests
     ${EXTRA_LIBRARIES})
 if(UNIX AND NOT APPLE)
   target_link_libraries(unit_tests PRIVATE pthread dl)
+endif()
+# Select the daemon Rust image for this binary (see the per-binary
+# image-selection comment in cmake/BuildRust.cmake): every occurrence of the
+# Rust archive in the link closure — including copies inherited transitively
+# from cryptonote_core / cryptonote_basic — resolves to the daemon image.
+set_property(TARGET unit_tests PROPERTY SHEKYL_RUST_IMAGE_DAEMON ON)
+if(TARGET shekyl_daemon_image_rust)
+  # Generator-expression-resolved link items do not carry the imported
+  # target's build-order dependency; add the edge explicitly.
+  add_dependencies(unit_tests shekyl_daemon_image_rust)
 endif()
 set_property(TARGET unit_tests
   PROPERTY
@@ -150,6 +181,10 @@ if (NOT MSVC)
 endif ()
 
 SET_PROPERTY(SOURCE main.cpp PROPERTY COMPILE_FLAGS -DDEFAULT_DATA_DIR="\\"${CMAKE_SOURCE_DIR}/tests/data\\"")
+SET_PROPERTY(SOURCE archival_serve_credit_integration.cpp PROPERTY COMPILE_FLAGS
+  -DGATE2_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json\\"")
+SET_PROPERTY(SOURCE archival_bond_post_integration.cpp PROPERTY COMPILE_FLAGS
+  -DGATE4_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate4_lifecycle_kat_v1.json\\"")
 
 SET_PROPERTY(SOURCE memwipe.cpp PROPERTY COMPILE_FLAGS -Ofast)
 SET_PROPERTY(SOURCE transfer_details_wipe.cpp PROPERTY COMPILE_FLAGS -Ofast)

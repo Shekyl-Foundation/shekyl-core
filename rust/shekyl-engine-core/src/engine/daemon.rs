@@ -7,10 +7,10 @@
 //!
 //! [`DaemonClient`] is the [`Engine`](super::Engine)-facing type for
 //! reaching `shekyld` over HTTP(S). It is a thin wrapper around
-//! [`shekyl_simple_request_rpc::SimpleRequestRpc`], chosen as the
+//! [`shekyl_rpc_transport::SimpleRequestRpc`], chosen as the
 //! default transport because it is the only daemon-RPC client crate
 //! already in the workspace and it implements
-//! [`shekyl_rpc::Rpc`].
+//! [`shekyl_rpc_client::Rpc`].
 //!
 //! # Why a wrapper rather than `pub use`
 //!
@@ -41,10 +41,103 @@
 
 use std::future::Future;
 
-use shekyl_rpc::{Rpc, RpcError};
-use shekyl_simple_request_rpc::SimpleRequestRpc;
+use serde_json::{json, Value};
+use shekyl_rpc_client::{FeeRate, RejectCause, Rpc, RpcError};
+use shekyl_rpc_transport::SimpleRequestRpc;
+use shekyl_wire::Transaction;
 
-use crate::engine::traits::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
+use crate::engine::pending::TxHash;
+use crate::engine::traits::{DaemonEngine, DaemonHealth, FeeEstimates, TxSubmitOutcome};
+use crate::engine::transaction_submitter::submit_outcome_from_verdict;
+
+/// Grace-block horizon passed to the daemon's `get_fee_estimate`
+/// JSON-RPC (matches `shekyl_rpc_client`'s private
+/// `GRACE_BLOCKS_FOR_FEE_ESTIMATE`). The daemon estimates a fee rate
+/// expected to stay above the relay floor for this many blocks. Held
+/// here (rather than reaching for the upstream constant, which is not
+/// `pub`) so the single-RPC snapshot path (§3.3) does not re-export
+/// vendored internals.
+const GRACE_BLOCKS_FOR_FEE_ESTIMATE: u64 = 10;
+
+/// Map a daemon `get_fee_estimate` JSON-RPC `result` object onto the
+/// three-tier [`FeeEstimates`] snapshot (§3.3), deriving every tier
+/// and the rounding mask from this **one** response.
+///
+/// Mirrors `shekyl_rpc_client::Rpc::get_fee_rate`'s response handling but
+/// resolves **all three** non-`Custom` tiers from a single call
+/// rather than one tier per call:
+///
+/// - **`fees` array present** (V3 daemon): tiers map to array indices
+///   `0` (economy), `1` (standard), `3` (priority) per
+///   `V3_WALLET_DECISION_LOG.md` (index `2`, "elevated", has no
+///   wallet tier). Requires `fees.len() >= 4`.
+/// - **`fees` absent** (scalar `fee` only): the canonical upstream
+///   multiplier ladder `[1, 5, 25, 1000]` applies at the same indices,
+///   i.e. economy `×1`, standard `×5`, priority `×1000`.
+///
+/// A `fees` field that is **present but not an array** (string, number,
+/// object) is a malformed reply, not an absent one: it is rejected as
+/// [`RpcError::InvalidFee`] rather than silently falling back to the
+/// scalar path. Only an absent field (or explicit JSON `null`) selects
+/// the scalar ladder.
+///
+/// Untrusted-daemon input is parsed defensively (rule
+/// `20-rust-vs-cpp-policy.mdc` §3): every field is validated, missing
+/// or non-numeric fields and `status != "OK"` map to
+/// [`RpcError::InvalidFee`] / [`RpcError::InvalidPriority`], and the
+/// scalar-`fee` multiply is `checked_mul` (rule §4).
+fn fee_estimates_from_value(result: &Value) -> Result<FeeEstimates, RpcError> {
+    if result.get("status").and_then(Value::as_str) != Some("OK") {
+        return Err(RpcError::InvalidFee);
+    }
+
+    let mask = result
+        .get("quantization_mask")
+        .and_then(Value::as_u64)
+        .ok_or(RpcError::InvalidFee)?;
+
+    // `FeeRate::new` already rejects `mask == 0` / `per_weight == 0`;
+    // surface a per-tier rate or the upstream error verbatim.
+    let rate = |per_weight: u64| FeeRate::new(per_weight, mask);
+
+    // Distinguish "`fees` absent" (legacy scalar daemon → multiplier
+    // ladder) from "`fees` present but not an array" (malformed reply).
+    // Collapsing both to the scalar path — as `and_then(as_array)` would —
+    // lets a daemon send `fees: "oops"` and silently get scalar fallback,
+    // violating the validate-every-field contract above.
+    let (economy, standard, priority) = match result.get("fees") {
+        Some(Value::Array(fees)) => {
+            // Indices 0/1/3 must exist; a short array is a malformed
+            // estimate, not a silently-clamped one.
+            let at = |idx: usize| -> Result<u64, RpcError> {
+                fees.get(idx)
+                    .and_then(Value::as_u64)
+                    .ok_or(RpcError::InvalidPriority)
+            };
+            (rate(at(0)?)?, rate(at(1)?)?, rate(at(3)?)?)
+        }
+        // Absent (`None`) or explicit JSON `null`: legacy scalar `fee`.
+        None | Some(Value::Null) => {
+            let fee = result
+                .get("fee")
+                .and_then(Value::as_u64)
+                .ok_or(RpcError::InvalidFee)?;
+            let scaled = |mult: u64| -> Result<u64, RpcError> {
+                fee.checked_mul(mult).ok_or(RpcError::InvalidFee)
+            };
+            (rate(scaled(1)?)?, rate(scaled(5)?)?, rate(scaled(1000)?)?)
+        }
+        // Present but not an array (string/number/object): malformed.
+        Some(_) => return Err(RpcError::InvalidFee),
+    };
+
+    Ok(FeeEstimates {
+        economy,
+        standard,
+        priority,
+        quantization_mask: mask,
+    })
+}
 
 /// Engine's view of the daemon RPC connection.
 ///
@@ -53,7 +146,7 @@ use crate::engine::traits::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
 /// [`SimpleRequestRpc`] is `Clone + Send + Sync`; cloning it is cheap
 /// (an `Arc`-wrapped HTTP client + URL string).
 ///
-/// `DaemonClient` implements [`shekyl_rpc::Rpc`] (delegating `post` to
+/// `DaemonClient` implements [`shekyl_rpc_client::Rpc`] (delegating `post` to
 /// the wrapped transport) and the crate-internal `DaemonEngine` Stage 1
 /// trait (in `crate::engine::traits`); callers reach the upstream
 /// `Rpc` methods (block / height / output / mempool) via the
@@ -90,37 +183,237 @@ impl Rpc for DaemonClient {
 impl DaemonEngine for DaemonClient {
     type Error = RpcError;
 
-    /// Phase 2a target. The Stage 1 surface defines the contract; the
-    /// production wiring composes [`Rpc::get_fee_rate`] for each of
-    /// the three non-`Custom`
-    /// [`FeePriority`](super::FeePriority) tiers and assembles the
-    /// [`FeeEstimates`] snapshot. Phase 2a lands the body alongside
-    /// `Engine::build_pending_tx`'s fee-priority resolution.
+    /// Atomic single-RPC fee snapshot (§3.3).
+    ///
+    /// Issues **one** `get_fee_estimate` JSON-RPC call and maps its
+    /// response onto all three non-`Custom`
+    /// [`FeePriority`](super::FeePriority) tiers plus the snapshot
+    /// `quantization_mask` via [`fee_estimates_from_value`] — not
+    /// three per-tier [`Rpc::get_fee_rate`] calls, so the tier band
+    /// carries no tier-vs-tier skew from interleaved reads.
     fn get_fee_estimates(&self) -> impl Send + Future<Output = Result<FeeEstimates, Self::Error>> {
         async move {
-            todo!(
-                "Phase 2a: compose three Rpc::get_fee_rate calls (Economy/Standard/Priority) \
-                 into a FeeEstimates snapshot per docs/V3_ENGINE_TRAIT_BOUNDARIES.md §2.5"
-            )
+            let result: Value = self
+                .json_rpc_call(
+                    "get_fee_estimate",
+                    Some(json!({ "grace_blocks": GRACE_BLOCKS_FOR_FEE_ESTIMATE })),
+                )
+                .await?;
+            fee_estimates_from_value(&result)
         }
     }
 
-    /// Phase 2a target. The Stage 1 surface defines the contract; the
-    /// production wiring parses `tx_bytes`, calls
-    /// [`Rpc::publish_transaction`], and observes the daemon's response
-    /// to distinguish [`TxSubmitOutcome::Submitted`] from
-    /// [`TxSubmitOutcome::AlreadyKnown`]. Phase 2a lands the body
-    /// alongside `Engine::submit_pending_tx`'s real-broadcast wiring.
+    /// Offer `tx_bytes` to the daemon over the typed submit route and
+    /// map its [`SubmitVerdict`](shekyl_rpc_client::SubmitVerdict) to a
+    /// [`TxSubmitOutcome`].
+    ///
+    /// 1. Parse `tx_bytes` back into a [`Transaction`]. A round-trip
+    ///    failure is a malformed-tx rejection — these are the wallet's
+    ///    *own* serialized bytes, so a parse failure is a build-path
+    ///    defect, not a daemon verdict; no round-trip is issued
+    ///    (mirrors the daemon's own Phase-A `Rejected{Malformed}`, so
+    ///    the local guard and the wire verdict agree).
+    /// 2. Compute the tx id **locally** from the parsed transaction;
+    ///    never read it back from a daemon field, so an untrusted
+    ///    daemon cannot influence the id the wallet records.
+    /// 3. [`Rpc::publish_transaction`]; a transport/protocol failure
+    ///    (including an unknown top-level verdict tag per the §2.3 skew
+    ///    rules) surfaces as [`Self::Error`] — the orchestrator maps it
+    ///    to the ambiguous-reservation path, not to an outcome.
+    /// 4. Map the daemon verdict via [`submit_outcome_from_verdict`].
     fn submit_transaction(
         &self,
         tx_bytes: Vec<u8>,
     ) -> impl Send + Future<Output = Result<TxSubmitOutcome, Self::Error>> {
         async move {
-            let _ = tx_bytes;
-            todo!(
-                "Phase 2a: parse tx_bytes, call Rpc::publish_transaction, observe daemon response \
-                 for AlreadyKnown vs Submitted distinction per docs/V3_ENGINE_TRAIT_BOUNDARIES.md §2.5"
-            )
+            let Ok(tx) = Transaction::from_bytes(&tx_bytes) else {
+                return Ok(TxSubmitOutcome::Rejected {
+                    cause: RejectCause::Malformed,
+                });
+            };
+
+            let hash = TxHash::from_bytes(tx.hash());
+
+            let verdict = self.publish_transaction(&tx_bytes).await?;
+            Ok(submit_outcome_from_verdict(&verdict, hash))
         }
+    }
+
+    /// Snapshot daemon health via **one** `get_info` JSON-RPC read
+    /// (§5.2 item 3) — the same info surface `Engine::open_*` already
+    /// queries for network verification, so this adds no new RPC method.
+    ///
+    /// The summed outgoing/incoming connection counts and the sync
+    /// position feed the §5.3 escape ladder's health gate. Untrusted-
+    /// daemon input is parsed defensively (rule `20-rust-vs-cpp-policy`
+    /// §3): a response missing the mandatory `height` field is a
+    /// malformed reply ([`RpcError::InvalidNode`]), not a silently
+    /// defaulted zero (a false "synced at height 0" would mislead the
+    /// ladder's sync gate). Absent connection counts map to `0` — the
+    /// safe direction, since a peerless reading only ever routes to the
+    /// operator-alarm rung, never to a rebuild. `target_height` follows
+    /// the info surface's "0 when synced" convention, so its absence
+    /// maps to `0`, and the connection sum is `saturating_add` (rule §4).
+    fn get_health(&self) -> impl Send + Future<Output = Result<DaemonHealth, Self::Error>> {
+        async move {
+            let info: Value = self.json_rpc_call("get_info", None).await?;
+            let height = info
+                .get("height")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| RpcError::InvalidNode("get_info missing height".to_string()))?;
+            let target_height = info
+                .get("target_height")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let outgoing = info
+                .get("outgoing_connections_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let incoming = info
+                .get("incoming_connections_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            Ok(DaemonHealth {
+                connections: outgoing.saturating_add(incoming),
+                height,
+                target_height,
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! `fee_estimates_from_value` mapping regression (§3.3).
+    //!
+    //! The single-RPC snapshot's daemon-response mapping is a pure
+    //! function, so it is exercised directly against synthetic
+    //! `result` objects without a live daemon. The `DaemonClient`
+    //! transport (`json_rpc_call` → `post`) is covered by the Phase 6
+    //! live-`shekyld` harness, not here.
+    use super::*;
+
+    /// V3 daemon: `fees` array present, tiers map to indices 0/1/3
+    /// and the shared `quantization_mask` lands on the snapshot.
+    #[test]
+    fn fee_estimates_array_maps_indices_0_1_3() {
+        let result = json!({
+            "status": "OK",
+            "fees": [100u64, 200, 300, 400],
+            "fee": 100,
+            "quantization_mask": 8u64,
+        });
+        let est = fee_estimates_from_value(&result).expect("well-formed fee array");
+        assert_eq!(est.economy, FeeRate::new(100, 8).unwrap());
+        assert_eq!(est.standard, FeeRate::new(200, 8).unwrap());
+        // Index 3, *not* 2 — the "elevated" tier (index 2) has no
+        // wallet `FeePriority`.
+        assert_eq!(est.priority, FeeRate::new(400, 8).unwrap());
+        assert_eq!(est.quantization_mask, 8);
+        // Tiers are distinct (regression for a collapsed mapping).
+        assert_ne!(est.economy, est.priority);
+    }
+
+    /// Legacy daemon: scalar `fee` only → upstream multiplier ladder
+    /// `[1, 5, _, 1000]` at the economy/standard/priority tiers.
+    #[test]
+    fn fee_estimates_scalar_fallback_multipliers() {
+        let result = json!({
+            "status": "OK",
+            "fee": 10u64,
+            "quantization_mask": 4u64,
+        });
+        let est = fee_estimates_from_value(&result).expect("well-formed scalar fee");
+        assert_eq!(est.economy, FeeRate::new(10, 4).unwrap());
+        assert_eq!(est.standard, FeeRate::new(50, 4).unwrap());
+        assert_eq!(est.priority, FeeRate::new(10_000, 4).unwrap());
+        assert_eq!(est.quantization_mask, 4);
+    }
+
+    #[test]
+    fn fee_estimates_rejects_non_ok_status() {
+        let result = json!({
+            "status": "BUSY",
+            "fees": [100u64, 200, 300, 400],
+            "quantization_mask": 8u64,
+        });
+        assert!(matches!(
+            fee_estimates_from_value(&result),
+            Err(RpcError::InvalidFee)
+        ));
+    }
+
+    /// A `fees` array too short to carry the priority tier (index 3)
+    /// is malformed, not silently clamped to a lower tier.
+    #[test]
+    fn fee_estimates_rejects_short_fees_array() {
+        let result = json!({
+            "status": "OK",
+            "fees": [100u64, 200],
+            "quantization_mask": 8u64,
+        });
+        assert!(matches!(
+            fee_estimates_from_value(&result),
+            Err(RpcError::InvalidPriority)
+        ));
+    }
+
+    /// A present-but-non-array `fees` (e.g. a string) is malformed, not a
+    /// legacy scalar reply: it must not silently fall back to the `fee`
+    /// path (validate-every-field contract).
+    #[test]
+    fn fee_estimates_rejects_non_array_fees() {
+        let result = json!({
+            "status": "OK",
+            "fees": "oops",
+            "fee": 10u64,
+            "quantization_mask": 8u64,
+        });
+        assert!(matches!(
+            fee_estimates_from_value(&result),
+            Err(RpcError::InvalidFee)
+        ));
+    }
+
+    /// Explicit JSON `null` for `fees` is treated as absent → legacy
+    /// scalar ladder (lenient where a string/number/object is rejected).
+    #[test]
+    fn fee_estimates_null_fees_uses_scalar() {
+        let result = json!({
+            "status": "OK",
+            "fees": null,
+            "fee": 10u64,
+            "quantization_mask": 4u64,
+        });
+        let est = fee_estimates_from_value(&result).expect("null fees → scalar");
+        assert_eq!(est.economy, FeeRate::new(10, 4).unwrap());
+        assert_eq!(est.priority, FeeRate::new(10_000, 4).unwrap());
+    }
+
+    #[test]
+    fn fee_estimates_rejects_missing_mask() {
+        let result = json!({
+            "status": "OK",
+            "fees": [100u64, 200, 300, 400],
+        });
+        assert!(matches!(
+            fee_estimates_from_value(&result),
+            Err(RpcError::InvalidFee)
+        ));
+    }
+
+    /// `quantization_mask == 0` would make `FeeRate::new` reject; the
+    /// mapping surfaces that as `InvalidFee` rather than panicking.
+    #[test]
+    fn fee_estimates_rejects_zero_mask() {
+        let result = json!({
+            "status": "OK",
+            "fees": [100u64, 200, 300, 400],
+            "quantization_mask": 0u64,
+        });
+        assert!(matches!(
+            fee_estimates_from_value(&result),
+            Err(RpcError::InvalidFee)
+        ));
     }
 }

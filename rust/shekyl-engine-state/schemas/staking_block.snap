@@ -1,0 +1,40 @@
+{
+  "name": "StakingBlock",
+  "ty": {
+    "Struct": [
+      {
+        "name": "block_version",
+        "ty": {
+          "name": "u32",
+          "ty": "U32"
+        }
+      },
+      {
+        "name": "staking_enabled",
+        "ty": {
+          "name": "bool",
+          "ty": "Bool"
+        }
+      },
+      {
+        "name": "p_slot",
+        "ty": {
+          "name": "u32",
+          "ty": "U32"
+        }
+      },
+      {
+        "name": "bonded_slots",
+        "ty": {
+          "name": "Vec<T>",
+          "ty": {
+            "Seq": {
+              "name": "u32",
+              "ty": "U32"
+            }
+          }
+        }
+      }
+    ]
+  }
+}

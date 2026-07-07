@@ -5,16 +5,23 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+autoexamples = false
 
 [dependencies]
 thiserror.workspace = true
 serde.workspace = true
-zeroize = { version = "1", features = ["derive"] }
+zeroize = { workspace = true }
 rand = "0.8"
 rand_chacha = "0.3"
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
 ciphersuite = "0.4"
-curve25519-dalek = "4"
+# `zeroize` feature gates `impl Zeroize for Scalar` (verified at source:
+# curve25519-dalek-4.1.3 `src/scalar.rs:555` `#[cfg(feature = "zeroize")]`).
+# Required so secret-derived `Scalar` locals in `output.rs::scan_output_recover`
+# (the view scalar, per-output `ho`/`y`/`z`) can be `Zeroizing`-wrapped and wiped
+# on every exit path. Without the feature `Scalar: Zeroize` does not exist and
+# the secrets are guaranteed-resident on the stack.
+curve25519-dalek = { version = "4", features = ["zeroize"] }
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 fips204 = "0.4.6"
@@ -113,17 +120,13 @@ argon2 = { version = "0.5", default-features = false, features = ["alloc", "zero
 # AAD) tuples, never the cipher.
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
-shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 # `keccak256_to_scalar` for the classical Edwards-curve component of Shekyl
-# subaddress derivation (`crate::subaddress`), relocated from `shekyl-scanner`
-# per `STAGE_1_PR_3_KEY_ENGINE.md` Commit 4a so the path from KeyEngine trait
-# surface to the cryptographic primitive is stateless end-to-end (no
-# intermediate `ViewPair` state-bearing object). The derivation is
-# Shekyl-genesis-locked; the structural similarity to upstream Monero's
-# subaddress derivation is intentional but is not a Monero-compatibility
-# shim — see `crate::subaddress`'s "Classical Edwards-curve, not
-# classical-Monero" section and `60-no-monero-legacy.mdc`.
-shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
+# primary output-claim offset (`crate::output_claim`), relocated from
+# `shekyl-scanner` per `STAGE_1_PR_3_KEY_ENGINE.md` Commit 4a. V3.0
+# hardcodes index `0` for signing (`output_spend_offset_scalar`); see
+# `docs/completed/PRIMARY_CLAIM_DERIVATION_RENAME.md`.
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 # Typed wallet-state JSON ser/des (WALLET_FILE_FORMAT_V1 region 2). Versioned
 # by `state_schema_version`; mismatched version refuses to load, never silently
 # migrates. JSON field names are the wire format; see wallet_state.rs.
@@ -142,13 +145,31 @@ postcard-schema = { version = "0.2", default-features = false, features = ["deri
 
 [dev-dependencies]
 hex = "0.4"
+# Note: the ARCHIVAL_P_DERIVE_V1 KAT computes its p_canonical_id via an inline
+# cSHAKE256 (so the `shekyl-archival-retention` cross-check proves the two
+# cSHAKE paths agree). It uses `sha3` directly, which is already a normal
+# `[dependencies]` entry and is therefore available to tests without a separate
+# dev-dependency entry (a duplicate would only risk version/feature drift).
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1"
+# Wilson-Hilferty chi-square critical value + strict-alpha normal quantile for
+# the `enc_label` indistinguishability test. Single-sourced from the generic,
+# lint-clean statistics utility (not duplicated as literals, and not a dep on a
+# sim/domain crate); see `rust/shekyl-stats`.
+shekyl-stats = { path = "../shekyl-stats" }
 
 [[bench]]
 name = "pqc_rederivation"
 harness = false
+
+[[bench]]
+name = "fa6_decap_prefilter"
+harness = false
+
+[[bin]]
+name = "fa6_decap_prefilter_gate"
+path = "examples/fa6_decap_prefilter_gate.rs"
 
 [lints]
 workspace = true

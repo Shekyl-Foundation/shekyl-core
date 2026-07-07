@@ -244,17 +244,45 @@ estimates; the wallet should consume them, not invent them.
 
 ### Subaddress hierarchy: flat, no account level
 
-The subaddress index space is flat: `SubaddressIndex(u32)`. There is
-no account level. The RPC contract surfaces subaddresses as `{"index":
-u32, "label": Option<String>}`, not `{"account": u32, "index": u32}`.
+**Superseded 2026-06-07 (FA-7).** End-state 5 in
+[`docs/design/SUBADDRESS_UNDER_PQC.md`](design/SUBADDRESS_UNDER_PQC.md) §5.7
+(closed R2-F2, 2026-05-31) replaces this decision. V3.0 ships **one primary
+address per account**; no `SubaddressIndex` user-facing surface; no
+`create_subaddress`. Invoice attribution uses **payment requests** +
+mandatory wire `enc_label` (5-T substrate). Optional seed-derived
+multi-account (T2) is P3, not V3.0. See the 2026-06-07 entry below and
+[`docs/design/WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md)
+(cross-cutting decisions, Phase 1–2c).
 
-**Why drop the account level?** Most users use one account; the
-two-level hierarchy is wallet2 baggage from the era before
-subaddresses existed. Exchanges that need stronger isolation than
-"subaddresses share keys" use multiple wallet files (which have
-independent keys), which is genuinely stronger isolation than
-account-level subaddresses ever provided. Locking the flat shape now
-keeps the JSON contract simple for the next decade.
+---
+
+### Receive addressing: End-state 5 — one primary, payment requests (2026-06-07)
+
+**Decision.** One reusable primary address per account at V3.0. No
+subaddresses. Merchants create **payment requests** (`PaymentRequest` in
+`BookkeepingBlock`) and share `shekyl:<primary>?amount=&label=&expiry=`
+URIs. Inbound transfers gain `ReceiveAttribution` (Tier 1–4 per
+`R2_F2_WALKTHROUGH.md`). Wire `enc_label` is always present (FA-11);
+sentinel-only wallets default to Tier-4 unattributed on the label axis
+until the product flag enables meaningful REQUEST tags.
+
+**Supersedes.** "Subaddress hierarchy: flat, no account level" (above) and
+the Phase 1–2 `create_subaddress` / flat-`SubaddressIndex` plan in
+`WALLET_REWRITE_PLAN.md`.
+
+**Alternatives considered.** Flat subaddress namespace (prior plan);
+per-subaddress KEM (Option B in `SUBADDRESS_UNDER_PQC.md` §4); Monero-style
+subaddress registry + `derive_subaddress` (End-state 1 — rejected).
+
+**Rationale.** ML-KEM has no ECDH-style homomorphism; per-subaddress KEM
+implies O(N) scan. Account-level KEM + classical subaddress diversity
+shares one `ml_kem_ek` across indices (address-byte linkability). End-state
+5 deletes subaddress machinery entirely; on-chain privacy stays at the
+output layer; J2/J3 moves off-chain to payment requests. Pit-of-success UX:
+"reuse is private — paste anywhere" (§5.7.8).
+
+**Links.** `SUBADDRESS_UNDER_PQC.md` §5.7.7, §5.7.9; FA-2 (delete impl),
+FA-8 (payment-request persistence + reconcile).
 
 ### `RefreshHandle`: cancel-on-drop RAII, one-at-a-time, scanner checkpoints between blocks
 
@@ -2715,7 +2743,12 @@ when"):**
    message protocol; remaining subsystems continue as composition.
    **Stage 2 must complete before Phase 2b cuts** because Phase
    2b's StakeEngine work (Stage 3) depends on the actor framework
-   being present.
+   being present. *(Implementation status, 2026-05-31: landed on
+   `torvaldsl/stage-2-key-engine-actor` — `KeyActor` owns the blob,
+   `Engine` holds `KeyEngineHandle`, `kameo` is now a live
+   `shekyl-engine-core` consumer; design and remaining DoD residue
+   (the §5.3 B9 dispatch-overhead benchmark) tracked in
+   `docs/completed/STAGE_2_KEY_ENGINE_ACTOR.md` and `docs/FOLLOWUPS.md`.)*
 6. **Phase 2b begins.**
 7. **Stage 3 — `StakeEngine` native-as-actor**, lands within Phase
    2b. Built actor-shaped from inception (not
@@ -3955,6 +3988,442 @@ method). Phase 0c is **removed** (R12 (a) closure).
   G8 wallet-locked-during-`in_flight`; G5 `LedgerEngine`
   maturity-filter forward-template; G2 `LedgerDiagnostic::TxReorgedOut`
   amendment).
+
+---
+
+## 2026-05-31 — KeyActor runtime hosting: require-ambient, not engine-owned
+
+**Decision.** `KeyEngineHandle::spawn` (the Stage-2 `KeyActor` spawn point in
+`assemble`) **requires an ambient Tokio runtime and asserts it** — present →
+`tokio::spawn` the actor onto it; absent → `panic!` with a contract message.
+The engine owns no runtime. This reverses the same-day Round-7 "ambient-or-owned"
+disposition, which built and stored a single-worker multi-thread runtime in a
+`KeyActorRuntimeHost` when no ambient runtime existed.
+
+**Rationale.** The owned-runtime path mirrored `drive_persistence`'s
+flavor-branch, but that resemblance is a false friend: `drive_persistence` is
+**one-shot** (run a future to completion on a worker thread, drop the runtime,
+return), so its owned runtime lives and dies inside one synchronous call. The
+`KeyActor` is **long-lived** — it never completes, so its runtime must be stored
+and dropped when the handle drops. A Tokio runtime **cannot be dropped from
+within an async context** ("Cannot drop a runtime in a context where blocking is
+not allowed"), and in production the `Engine` is created and dropped *inside* the
+ambient runtime (async RPC server / CLI), so an `Engine` owning a nested runtime
+would panic on drop in exactly the production scenario the owned path was meant
+to serve. The flavor-branch also mis-handled current-thread ambients (every
+`#[tokio::test]`): they fell into the owned branch and built a runtime while
+already inside an async context — a nested-runtime panic. An actor is an async
+task by definition; introducing it makes the open path's runtime-agnosticism
+impossible rather than breaking a preservable property, so asserting the
+requirement is the honest shape. It preserves the by-construction
+no-`&AllKeysBlob`-escapes property and carries no drop-panic landmine.
+
+**Alternatives rejected.** (a) *Owned runtime* — the drop-panic above. (b)
+*Force the sync `create`/`open_full` API async* — a frozen-surface change with
+FFI + all-caller ripple, contradicting the deliberately-sync lifecycle. (c)
+*Lazy-spawn at first async use* — retained only as the **reversion clause**: it
+reopens if a production caller must construct the `Engine` from a context where
+no runtime exists and cannot be made to exist, and is recorded explicitly as a
+by-construction → by-timing weakening of the §binding-constraint, not adopted
+silently.
+
+**Cargo consequence (decoupled).** Under require-ambient the spawn needs only
+`rt` (`kameo`'s spawn is `tokio::spawn`, hosted by any flavor). `rt-multi-thread`
+is promoted to production `[dependencies]` as an **independent** fix for the
+pre-existing `drive_persistence::block_in_place` feature-unification bug, not as
+a spawn entailment.
+
+**Caller/test migration.** Tests reaching `spawn` use `#[tokio::test]`; sync
+tests that drive a post-create method forbidding an ambient runtime (e.g.
+`refresh(&opts, handle)` → `Handle::block_on`) stay plain `#[test]` and enter a
+leaked runtime only around `create` (`refresh.rs::make_wallet`, the bench
+`build_engine_fixture`). No production caller of the orchestrator `Engine` exists
+yet; the assertion is the contract future CLI/RPC wiring must satisfy.
+
+**Reference.** `docs/completed/STAGE_2_KEY_ENGINE_ACTOR.md` §4.2 (Round-8
+disposition); supersedes the §4.2 Round-7 ambient-or-owned text.
+
+---
+
+## 2026-06-10 — Tracing forwarder mechanism: single-Rust-image link contract (amends 2026-04-25)
+
+**Decision.** The `shekyl_log_install_tracing_forwarder` export keeps
+the 2026-04-25 name, signature, location (`shekyl-logging::ffi`), and
+error-code semantics (`SHEKYL_LOG_OK` / `SHEKYL_LOG_ERR_ALREADY_INSTALLED = -12`
+/ `SHEKYL_LOG_ERR_NOT_INITIALIZED`), but the *mechanism* is superseded:
+there is no cross-image forwarding subscriber. Instead:
+
+- `shekyl-daemon-rpc` gains `shekyl-logging` as a crate dependency, so
+  `libshekyl_daemon_rpc.a` is a single Rust image carrying the
+  `shekyl_log_*` C exports and exactly one `tracing-core`
+  `GLOBAL_DISPATCH` shared with the crate's own `tracing::*` macros.
+- The daemon force-loads that archive ahead of the standalone
+  `libshekyl_logging.a` that `SHEKYL_FFI_LINK_LIBS` drags in
+  transitively (`SHEKYL_DAEMON_RPC_WHOLE_ARCHIVE` in
+  `cmake/BuildRust.cmake`), so every `shekyl_log_*` reference in the
+  binary resolves into the merged image.
+- A post-link `nm` gate on the `daemon` target asserts exactly one
+  `GLOBAL_DISPATCH` definition in `shekyld`; the split-image regression
+  fails the build.
+- The export itself becomes the runtime half of the contract: it pins
+  call ordering (`shekyl_log_init_*` first) and install idempotency.
+  A failed pre-init call does not consume the one-shot pin.
+
+**Why the amendment.** Implementation surfaced that the 2026-04-25
+"forwarder install" framing presupposed one Rust image. Empirically
+(`nm` on the pre-change `shekyld`) the daemon linked *two* staticlib
+images — `libshekyl_logging.a` and `libshekyl_daemon_rpc.a` — each
+with its own `tracing-core` dispatcher copy at a distinct address. No
+in-process subscriber install can bridge two dispatcher statics: the
+forwarder would have installed into whichever image's objects the
+linker happened to pull, leaving the other dark. A cross-image
+event-forwarding bridge (C-ABI re-entry through `shekyl_log_emit`)
+was considered and rejected: it flattens structured fields to strings,
+double-formats, and builds permanent plumbing for a link topology the
+Rust-daemon migration is actively eliminating. Merging the images
+moves the FFI seam in the direction the daemon rewrite is already
+heading — one Rust image per binary, with C++ calling into it — and
+makes the dispatcher question disappear rather than get bridged.
+
+**Consequences.**
+
+- The FOLLOWUPS.md V3.2 item *"`shekyl-daemon-rpc` staticlib:
+  `tracing::*` calls silently dropped"* (absorbed into Phase 1) is
+  closed by this shape.
+- Future Rust staticlib crates linked into C/C++ binaries follow the
+  same pattern: depend on `shekyl-logging` (one image), force-load,
+  nm-gate. The forwarder export is already shared infrastructure; no
+  per-crate symbol is added.
+- Reversion clause: if a future binary genuinely must link two Rust
+  images (e.g., a third-party Rust archive that cannot grow a
+  `shekyl-logging` dependency), the cross-image bridge question
+  reopens via a fresh decision-log entry with that binary's link map
+  as the substrate; the in-place mechanism is not silently extended.
+
+**Reference.** `rust/shekyl-logging/src/ffi.rs`
+(`shekyl_log_install_tracing_forwarder` doc comment),
+`cmake/BuildRust.cmake` (`SHEKYL_DAEMON_RPC_WHOLE_ARCHIVE`),
+`src/daemon/CMakeLists.txt` (nm gate), `src/daemon/main.cpp`
+(call site after `mlog_configure`).
+
+---
+
+## 2026-06-10 — Key & signature stabilization: the frozen v1 seed→address pipeline (retroactive anchor)
+
+**Decision.** The full seed → address derivation pipeline is frozen as
+**v1** and is a pure function of `(seed input, network, seed format)`.
+Landed 2026-04-22 (`f46ddaf56`, "land v1 account-derivation Rust
+foundation + FFI surface") from the `stabilize_key_signature_15d8e48a`
+plan; this entry is the retroactive decision-log anchor so the binding
+surface survives the plan document. The frozen surface:
+
+- **Per-network seed policy.** Mainnet/stagenet: BIP-39 24-word English
+  mnemonic (NFKD-normalized PBKDF2-HMAC-SHA512 @ 2048 iterations →
+  64 bytes), passphrase **opt-in only** (defaults to empty, never
+  stored). Testnet/fakechain: raw 32-byte seed, no mnemonic printed.
+  Network-inappropriate seed flags are rejected at argument parse.
+- **Normalization.** `master_seed_64 = HKDF-SHA-512(salt =
+  "shekyl-seed-normalize-v1", ikm = seed-input output, L = 64)`.
+  `master_seed_64` is format-independent on disk and is the **only**
+  secret the wallet file persists (`docs/WALLET_FILE_FORMAT_V1.md`).
+- **Sub-derivations.** HKDF-SHA-512 with salt
+  `"shekyl-master-derive-v1-<network>-<format>"` and info strings
+  `shekyl-ed25519-spend` / `shekyl-ed25519-view` / `shekyl-ml-kem-768`,
+  each expanded to **64 bytes**.
+- **Scalar construction.** Ed25519 secrets via
+  `Scalar::from_bytes_mod_order_wide` (wide reduce, uniform
+  distribution), **unclamped**. RFC 7748 clamping is banned repo-wide
+  (`36-secret-locality.mdc`; `scripts/lint_cpp_clamp_ban.sh`); the view
+  scalar is reused as the Montgomery scalar at ECDH sites
+  (`docs/POST_QUANTUM_CRYPTOGRAPHY.md` "DH Semantics").
+- **Deterministic ML-KEM-768 keygen.** `chacha_seed =
+  SHA3-256("shekyl-mlkem-chacha-seed" || d_z)` →
+  `ChaCha20Rng::from_seed` → `ml_kem_768::KG::try_keygen_with_rng`. The
+  SHA3→ChaCha intermediary commits all 64 bytes of `d_z` and exists only
+  because `fips203 = "=0.4.3"` does not expose FIPS 203 §7.1
+  `KeyGen_internal(d, z)`; when upstream lands it, the swap shifts no
+  consumer-visible bytes (tracked in `docs/FOLLOWUPS.md`).
+- **Single source of truth.** `rust/shekyl-crypto-pq/src/account.rs`.
+  C++ receives derived material exclusively over FFI
+  (`shekyl_account_rederive`, `shekyl_kem_keypair_from_master_seed`,
+  the BIP-39 surface); no C++ site hashes, reduces, slices, or
+  transforms secret bytes ("Rust owns secrets",
+  `36-secret-locality.mdc`).
+- **Wallet-open contract.** Every open rederives the keypair set from
+  `master_seed_64` and verifies the recomputed classical address against
+  the AAD-bound expected-address bytes; the six wallet-open failure
+  modes are distinct typed errors (`docs/WALLET_FILE_FORMAT_V1.md`).
+
+**Rationale.** Pre-freeze, address generation was
+non-deterministic across restores (ML-KEM keypairs were generated with
+ambient randomness and persisted, so seed-only restore could not
+reproduce the address), derivation logic was split across C++ and Rust,
+and 32-byte `from_bytes_mod_order` carried a (negligible but
+audit-visible) distribution bias. Genesis address regeneration was
+blocked on exactly this freeze. Determinism + single-source-of-truth +
+network/format domain separation close all three, and the KAT tiers pin
+the bytes (Tier-1/2 derivation vectors inline in `account.rs`, Tier-3
+BIP-39 official vectors in `bip39.rs`, Tier-4
+`docs/test_vectors/KEM_DERIVE_V1_KAT.json` + `WALLET_FILE_FORMAT_V1/`).
+
+**Alternatives rejected.** (a) *Electrum 25-word seeds* — removed
+wholesale (`docs/completed/ELECTRUM_WORDS_REMOVAL.md`); BIP-39 is the
+only mnemonic format. (b) *32-byte HKDF expansions with
+`from_bytes_mod_order`* — rejected for the distribution-bias caveat; 64
+bytes + wide reduce is frozen. (c) *RFC 7748 clamping* — rejected;
+already-reduced Ed25519 scalars would be mutated by clamping, and the
+small-subgroup concern clamping addresses is handled structurally
+(`POST_QUANTUM_CRYPTOGRAPHY.md` "DH Semantics"). (d) *Persisting derived
+per-output or account PQC secrets* — rejected per
+`16-architectural-inheritance.mdc`; everything rederives from
+`master_seed_64`.
+
+**Residues (tracked, not blocking the freeze).** Three hardening
+accessories from the plan's acceptance criteria **landed 2026-06-11**
+(`chore/address-derivation-v1-freeze`): the CODEOWNERS-protected
+`docs/test_vectors/ADDRESS_DERIVATION_V1/` corpus +
+`kat_address_derivation_v1.rs` (the consumer also verifies the
+manifest's self-describing fields and Tier-2 account distinctness),
+CI wiring for `scripts/lint_cpp_clamp_ban.sh`, and the
+`ADDRESS_DERIVATION_MANIFEST_HASH` tripwire
+(`address_derivation_freeze.rs`, `shekyl-cli
+derivation-freeze-self-check`). No C FFI export ships: no C++ consumer
+exists, so the export was deleted per `15-deletion-and-debt.mdc`;
+re-add when a named C++ caller (genesis ceremony tooling or a wallet2
+startup check) lands. Still deferred, tracked in `docs/FOLLOWUPS.md`
+§"Genesis ceremony tooling" (target V3.0): full
+`generate-genesis-address` CLI, and `MID_REWIRE_HARDENING.md` §6.4
+tuple extension hashing `(format_version, block_versions,
+payload_version)`. The pipeline bytes themselves remain frozen as of
+the 2026-06-10 entry; the landed items harden enforcement, not
+definition.
+
+**Reference.** `rust/shekyl-crypto-pq/src/account.rs` module docstring
+(authoritative diagram); `docs/WALLET_FILE_FORMAT_V1.md`;
+`docs/design/WALLET_REWRITE_PLAN.md` §"Key signature";
+`.cursor/rules/36-secret-locality.mdc`; plan of record
+`stabilize_key_signature_15d8e48a` (Cursor plan, decisions merged here).
+
+---
+
+## 2026-06-11 — Single-Rust-image contract: per-binary image selection (amends 2026-06-10)
+
+**Decision.** The single-Rust-image contract from the 2026-06-10
+amendment stands, but its *mechanism* and *scope* are superseded:
+
+- **Scope extends to every binary, not just the daemon.** `nm` against
+  the pre-change archives showed wallet-side binaries had the same
+  split-image defect the daemon did: `SHEKYL_FFI_LINK_LIBS` linked both
+  `libshekyl_ffi.a` (engine/fcmp `tracing::*` call sites, one
+  dispatcher) and the standalone `libshekyl_logging.a` (subscriber +
+  forwarder, a second dispatcher). A forwarder installed through the
+  logging image could never see engine events. `shekyl-ffi` now folds
+  in `shekyl-logging` as a crate dependency, so `libshekyl_ffi.a` is
+  the complete wallet-side image (146 `shekyl_*` exports incl. the 11
+  `shekyl_log_*`, exactly one `GLOBAL_DISPATCH`). The standalone
+  `libshekyl_logging.a` CMake build is deleted.
+- **The daemon's image is a dedicated link-image crate.**
+  `rust/shekyl-daemon-image` (staticlib only, no logic) depends on
+  `shekyl-ffi` + `shekyl-daemon-rpc`; Cargo unifies the graph into one
+  image with one dispatcher. It replaces the daemon-rpc staticlib +
+  force-load arrangement.
+- **Force-load (`WHOLEARCHIVE`/`-force_load`/`--whole-archive`) is
+  deleted.** It existed to win a symbol-resolution race between two
+  archives that both defined `shekyl_log_*`; with one archive per
+  binary there is no race. (It was also the MSVC CI failure:
+  `/WHOLEARCHIVE:` passed through `target_link_libraries` is
+  misparsed as a library path → `LNK1104`.)
+- **Per-binary image selection is a link-time generator expression.**
+  `SHEKYL_FFI_LINK_LIBS` propagates transitively through static C++
+  libraries, so the daemon would inherit `shekyl_ffi` regardless of its
+  own link line. The Rust-archive entry in that list is now
+  `$<IF:$<BOOL:$<TARGET_PROPERTY:SHEKYL_RUST_IMAGE_DAEMON>>,shekyl_daemon_image,shekyl_ffi>`,
+  evaluated against the head target of each link line: the daemon (the
+  only target setting that property) resolves every occurrence to
+  `shekyl_daemon_image`; everything else resolves to `shekyl_ffi`.
+  Verified by inspection of the generated link lines (`shekyld` links
+  exactly one Rust archive; wallet binaries link only
+  `libshekyl_ffi.a`) and by the unchanged post-link `nm` gate.
+
+**Why the amendment.** The 2026-06-10 mechanism (force-load the
+daemon-rpc archive ahead of the standalone logging archive) treated the
+symptom — which archive wins resolution — rather than the cause: two
+images in one binary. It failed on MSVC at the linker-flag level, and
+it left the wallet-side split-image defect in place. Deleting the
+second image per binary removes the failure class instead of arbitrating
+it; this is the architectural-integrity-now disposition
+(`16-architectural-inheritance.mdc`) applied to link topology. It also
+moves in the direction the Rust-daemon migration is heading: the
+per-binary Rust image grows; the C++ side shrinks.
+
+**Consequences.**
+
+- Functionality gain, not just a CI fix: engine/fcmp `tracing::*`
+  events inside wallet binaries and the daemon now reach the
+  C++-installed subscriber; previously they dispatched into a
+  subscriber-less dispatcher and were dropped.
+- Future Rust crates that need linking into a binary join that
+  binary's image crate (wallet side: a `shekyl-ffi` dependency; daemon:
+  `shekyl-daemon-image`); they do not get their own staticlib link
+  entry. The 2026-06-10 "depend on shekyl-logging, force-load, nm-gate"
+  pattern guidance is superseded by "join the image".
+- The nm gate currently covers `shekyld` only. Extending it to
+  wallet-side binaries is filed in `docs/FOLLOWUPS.md` (V3.0 queue).
+- Reversion clause unchanged from 2026-06-10: a binary that genuinely
+  cannot share an image reopens the cross-image question via a fresh
+  decision-log entry with that binary's link map as substrate.
+
+**Reference.** `rust/shekyl-daemon-image/src/lib.rs` (crate docs),
+`rust/shekyl-ffi/src/lib.rs` (`pub use shekyl_logging` comment),
+`cmake/BuildRust.cmake` (per-binary image selection),
+`src/daemon/CMakeLists.txt` (`SHEKYL_RUST_IMAGE_DAEMON` property + nm
+gate).
+
+---
+
+## 2026-06-14 — Time fields: block-height vs wall-clock dichotomy + the `BlockHeight`/`Timestamp`/`BlockCount` type trio
+
+**Decision.** Every time-shaped field in the wallet stack is classified onto
+exactly one of two clocks, carried by a distinct newtype so the clock is
+visible in the field's signature and cross-clock arithmetic does not compile:
+
+- **`BlockHeight`** (absolute chain instant) for any deadline that is
+  evaluated by consensus or compared against on-chain events — output
+  maturity/spendability, stake-claim windows (`from_height`/`to_height`,
+  `stake_lock_until`), `eligible_height`, `spent_height`, reorg `fork_height`,
+  `built_at_height`.
+- **`Timestamp`** (wall-clock Unix seconds, UTC) for off-chain, human-facing,
+  cross-party, or wallet-local-audit deadlines — `PaymentRequest.created_at` /
+  `expiry`, `SpendIntent.created_at` / `expires_at`,
+  `AddressProvenance.first_imported_at` / `last_used_at`.
+- **`BlockCount`** (relative block duration, à la `Duration` vs `Instant`),
+  distinct from `BlockHeight`, for spans such as `StakeTier.lock_blocks`.
+  Permitted arithmetic: `BlockHeight + BlockCount = BlockHeight`,
+  `BlockHeight − BlockHeight = BlockCount`; `BlockHeight + BlockHeight` and
+  `BlockHeight − Timestamp` do not compile.
+
+Two consequential deletions follow from the classification:
+
+- **`oxide::Timelock::Time(u64)` is removed.** Consensus output locks are
+  block-height only (`Timelock::None | Block(BlockHeight)`).
+- **The RPC `TransferParams.unlock_time: u64` field is dropped**, not
+  newtyped. The V3 `TxRequest` is `{dest, amount, priority}` with no unlock
+  field; the legacy CryptoNote dual-mode `unlock_time` contradicts that
+  design. If a send-time lock is ever wanted it returns as
+  `unlock_height: BlockHeight`.
+
+**Rationale.** CryptoNote represented two fundamentally different kinds of
+deadline with one `uint64`, and even let a single field be *either* clock
+(`Timelock::Block | Time`, the `unlock_time` overload) — a value whose clock
+you cannot tell from its type. The classification test is: (1) who evaluates
+the deadline — consensus → height, a local wallet or a cross-party message →
+wall-clock candidate; (2) what it is compared against — on-chain events →
+height, human intent → wall-clock; (3) what breaks if the clock is wrong — a
+fork or a *manipulable* lock → height (block timestamps are miner-influenced
+within the median-time-past window, so a time-based consensus lock is fuzzy
+and attackable — the rejected Monero `Timelock::Time` precedent), versus a
+cosmetic "invoice expired 4 minutes early" → wall-clock, whose blast radius is
+contained to non-consensus UX. Wall-clock wins for invoice/intent/provenance
+fields specifically because they must be evaluable by an *unsynced* or
+*third-party* wallet (a payer reading a `shekyl:…?expiry=` URI) and chain
+binding for the one case that needs it (multisig `SpendIntent`) is already
+carried separately by `reference_block_height` + `reference_block_hash` +
+`chain_state_fingerprint` + `tx_counter`. This extends the established
+`PendingTx` decision ("**No clock-based TTL** — the real expiration condition
+is chain state") by naming the *other* class explicitly rather than treating
+every deadline as chain state.
+
+**Reference.**
+[`docs/design/RAW_TYPE_NEWTYPE_MIGRATION.md`](design/RAW_TYPE_NEWTYPE_MIGRATION.md)
+§7 (PR D — the work plan this decision governs);
+[`docs/design/WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md)
+(`PendingTx` no-clock-TTL precedent; V3 `TxRequest` shape). Implementation
+sites: `rust/shekyl-oxide/shekyl-oxide/src/transaction.rs` (`Timelock`,
+`StakeClaim`), `rust/shekyl-engine-state/src/payment_request.rs`,
+`rust/shekyl-engine-core/src/multisig/v31/intent.rs`,
+`rust/shekyl-address/src/multisig_address.rs`,
+`rust/shekyl-engine-rpc/src/types.rs` (`unlock_time` removal).
+
+---
+
+## 2026-06-25 — shekyl-oxide un-vendor slice 2: the upstream-relationship test
+
+**Decision.** Scope vendoring by a single question, applied per crate — *"Do we
+realistically expect to ever re-vendor an upstream change into this?"* — not by a
+"primitives vs application" heuristic. **Yes → keep vendored** (diffable against the
+fork, divergence CI, EC-review-scoped). **No → it's ours**: move it into a normal
+`shekyl-*` crate, drop the tracking machinery, stamp the monero-oxide provenance,
+stop pretending. The end state is unambiguous: *vendored* = "pristine, tracked,
+external-review-scoped"; *`shekyl-*` crate* = "ours, no upstream."
+
+**The split this produced.**
+
+- **KEEP-VENDORED** — the FCMP++ research crypto only:
+  `crypto/{helioselene, divisors, generalized-bulletproofs, fcmps, fcmps/ec-gadgets,
+  fcmps/circuit-abstraction}`. Security-critical, headed for the divisor EC-membership
+  external review (a genesis gate), and carrying genesis-frozen format by reference
+  (Q6). Re-pinned to the upstream tip `2753111c50` with the Shekyl delta reapplied
+  (Track A, PR #181); an A1 content gate verifies the local subtree byte-for-byte.
+- **MOVED-OUT → first-party** (relocate, PR #188 / dissolve, PR #189), renamed to
+  role-honest names: `io → shekyl-curve-io`, `generators → shekyl-curve-generators`,
+  `primitives → shekyl-curve-primitives` (kept distinct from `shekyl-types` — these
+  are transform-shaped, rule 18), `fcmp/bulletproofs → shekyl-bulletproofs` (name
+  kept; Q6 path label updated), `fcmp/fcmp++ → shekyl-fcmp-proofs`, `rpc →
+  shekyl-rpc-client`, `rpc/simple-request → shekyl-rpc-transport`. The main crate
+  **dissolved**: `Timelock → shekyl-types` (block-height-only — the CryptoNote `Time`
+  variant dropped, now unrepresentable), `StakingMeta → shekyl-staking`, the live
+  lock-window consts → `shekyl-consensus`, dead consts dropped.
+- **`divisors` drift goes upstream into the fork**, not patch-overlaid in place: the
+  two genuine logic changes were re-based onto the upstream tip so the local copy is a
+  pristine mirror again, restoring diffability for the EC-membership review (which is
+  itself the review target).
+
+**Binding facts.** RPC crates are *moved, not deleted* — B0 refuted the §7 hypothesis;
+the `Rpc` trait is still the live wallet→daemon surface (delete tracked for the Axum
+cutover). The `b"Monero …"` generator domain separators are consensus-frozen and are
+**not** rule-93 targets (a backstopping release KAT + `docs/FROZEN_DOMAIN_SEPARATORS.md`
+make this explicit). The reorg is reversible (rule 21); only the genesis-format-adjacent
+`Timelock`/freeze-label touches carry consensus weight.
+
+**Reference.**
+[`docs/completed/SHEKYL_OXIDE_UNVENDOR.md`](completed/SHEKYL_OXIDE_UNVENDOR.md) (the binding
+plan; §0 posture, §6 Tracks A/B, §8 the two-PR split);
+[`docs/FROZEN_DOMAIN_SEPARATORS.md`](FROZEN_DOMAIN_SEPARATORS.md);
+[`docs/SHEKYL_OXIDE_VENDORING.md`](SHEKYL_OXIDE_VENDORING.md) (crypto-only workflow).
+PRs #181 (Track A re-pin), #188 (relocations), #189 (dissolve).
+
+---
+
+## 2026-06-27 — Depth-3+ curve-tree root: narrow recompose (`== build_layers`), producer-side
+
+**Decision.** The curve-tree header root for depth-3+ trees is computed by
+recomposing every upper layer **narrow** — `hash_grow(init, 0, ZERO, [all converted
+children])`, i.e. exactly `shekyl-fcmp`'s `build_layers` — via the Rust
+`shekyl_curve_tree_grow_upper_layers` FFI, for **both** `grow_curve_tree` and
+`trim_curve_tree`. The daemon's prior in-place incremental upper-layer propagation
+(editing each parent by its changed child's `old→new` difference) dropped the
+pre-existing sibling when it created a new parent at a layer boundary (a *deepen*),
+so its header root diverged from the wallet's `build_layers` at depth-3+ — the #162
+reopening trigger. Per rule 16 / the #162-retraction discipline, we fixed the
+**producer** (the daemon), not the reference: conforming `build_layers` to the
+daemon would freeze a consensus defect at genesis.
+
+**Scope.** Changes depth-3+ header roots only. Depth-0/1/2 are unaffected (the daemon
+was already correct there — the Tier-A/B fixtures and `recon_kat`/`recon_tier_b`
+reconstruct unchanged against the fixed code). **No persisted-wire-format change**
+(the block/header serialization is byte-identical; only the depth-3+ root *value*
+differs, derived from blocks by the fixed code), so **no schema-version bump and no
+migration** — pre-genesis, no live chain past depth-2 exists; only ephemeral regtest
+DBs, which are wiped, not upgraded.
+
+**Validation.** `e2e_fcmp_spend_over_depth3_tree` (a wallet refreshes + the daemon
+accepts a spend over a real depth-3 tree), `e2e_trim_curve_tree_restores_grow_root`
+(`trim == grow⁻¹`), and the `curve_tree_freeze` daemon-replica tests — all against a
+locally-built daemon. The dead in-place propagation + the now-unused
+`ct_layer_is_selene` helper were removed.
+
+**Reference.** PR #197;
+[`docs/completed/DEPTH3_CURVE_TREE_CUTOVER.md`](completed/DEPTH3_CURVE_TREE_CUTOVER.md).
 
 ---
 

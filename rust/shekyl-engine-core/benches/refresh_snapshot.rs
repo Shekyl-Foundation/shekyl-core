@@ -37,14 +37,13 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
 use shekyl_crypto_pq::handle::derive_output_handle;
 use shekyl_crypto_pq::kem::HybridCiphertext;
+use shekyl_curve_primitives::Commitment;
 use shekyl_engine_core::__bench_internals::LedgerSnapshot;
 use shekyl_engine_state::{
     payment_id::PaymentId,
-    subaddress::SubaddressIndex,
     transfer::{TransferDetails, SPENDABLE_AGE},
     BlockchainTip, LedgerBlock, ReorgBlocks,
 };
-use shekyl_oxide::primitives::Commitment;
 
 /// Mirrors `shekyl-engine-state::ledger_block::tests::sample_transfer`
 /// — the canonical "lightweight transfer for tests" shape. Reproduced
@@ -65,24 +64,22 @@ fn sample_transfer(seed: u64) -> TransferDetails {
     let tx_hash = [lo; 32];
     let internal_output_index = seed;
     TransferDetails {
-        tx_hash,
+        // keep the raw `[u8; 32]` local for the `derive_output_handle` call
+        // below (crypto takes `&[u8; 32]`); wrap only at the typed field.
+        tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
         internal_output_index,
         global_output_index: 1_000 + seed,
         block_height: 100,
         key: ED25519_BASEPOINT_POINT,
         key_offset: Scalar::ONE,
         commitment: Commitment::new(Scalar::ONE, 1_000_000 + seed),
-        subaddress: Some(SubaddressIndex::new((seed & 0xffff_ffff) as u32)),
         payment_id: Some(PaymentId([lo; 8])),
         spent: false,
         spent_height: None,
         key_image: Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
             [lo ^ 0xFF; 32],
         )),
-        staked: false,
-        stake_tier: 0,
-        stake_lock_until: 0,
-        last_claimed_height: 0,
+        awaiting_confirmation: None,
         source_ciphertext: Some(HybridCiphertext {
             x25519: [lo.wrapping_add(1); 32],
             ml_kem: vec![lo.wrapping_add(2); 1088],
@@ -95,6 +92,7 @@ fn sample_transfer(seed: u64) -> TransferDetails {
         eligible_height: 100 + SPENDABLE_AGE,
         frozen: false,
         fcmp_precomputed_path: None,
+        receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
     }
 }
 

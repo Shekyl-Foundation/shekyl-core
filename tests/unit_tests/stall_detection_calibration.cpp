@@ -52,7 +52,7 @@
 // correct — the existing daemon-integration tests cover the runtime
 // path).
 //
-// See docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md §7.
+// See docs/completed/DAA_LWMA1_PHASE4_PREFLIGHT.md §7.
 
 #include "gtest/gtest.h"
 

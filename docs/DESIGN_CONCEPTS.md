@@ -28,32 +28,6 @@ generation). See that doc for `CALIBRATION-PENDING` code markers and the
 
 ---
 
-## CALIBRATION gate (pre-genesis)
-
-**Mechanism is structural; coefficient values are provisional until the
-CALIBRATION milestone closes.**
-
-Structural choices (trait surfaces, injection seams, primitive locations,
-JSON-authority loading patterns, conservation invariants) are designed to
-last — changing them after genesis is a planning failure. Tunable coefficients
-(`burn_base_rate`, release-multiplier clamps, staker-pool shares, `FINAL_SUBSIDY`
-floor, and the specific numeric values behind them) live behind
-`config/economics_params.json` / `EconomicParams` so recalibration is a config
-regen, not a code-shape or hard-fork event.
-
-The **CALIBRATION** milestone (distinct from stressnet / Phase 7.7 load testing)
-answers: *are the coefficients economically right on testnet?* Stressnet answers:
-*does the stack survive load?* Exit criteria differ.
-
-Implementation and tests for economics surfaces are split per
-[`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](design/STAGE_1_PR_7_ECONOMICS_ENGINE.md):
-generation-invariant differential tests (engine vs `shekyl-economics-sim` on the
-shared primitive) vs calibration-tagged value vectors (expected to churn each
-generation). See that doc for `CALIBRATION-PENDING` code markers and the
-`as_of` / param-epoch calibration-generation tag.
-
----
-
 ## Monetary Supply and Denomination Policy (Next Generation Shekyl)
 
 This document proposes a concrete monetary design set for next-generation Shekyl, with rationale grounded in:
@@ -364,7 +338,7 @@ The decay is multiplicative per year, causing the emission share to decline expo
 
 - **No new coins created.** The emission share redirects a portion of each block's reward from the miner to stakers. Total emission per block is unchanged. The `2^32` ceiling is unaffected.
 - **Self-retiring.** At 15% initial share with 10%/year decay: year 1 = 15%, year 5 = 8.9%, year 10 = 5.2%, year 20 = 1.8%. The subsidy naturally fades, transitioning staker income to fee-based sources.
-- **Modest miner impact.** At peak (year 0), miners receive 85% of emission instead of 100%. By year 10, they receive ~95%. With multiple PoW algorithms fragmenting hash power, the effective per-miner impact is further diluted.
+- **Modest miner impact.** At peak (year 0), miners receive 85% of emission instead of 100%. By year 10, they receive ~95%, so the long-run effect on mining incentives is small.
 - **Bridges the yield gap.** Produces 1.7% staker yield at year 10 under baseline conditions, and 4–6% during years 1–5, making staking genuinely attractive from launch.
 
 #### Staker yield composition over time

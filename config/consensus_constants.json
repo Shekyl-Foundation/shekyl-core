@@ -3,12 +3,38 @@
 
   "fcmp_reference_block_min_age": 5,
   "fcmp_reference_block_max_age": 100,
-  "rct_type_fcmp_plus_plus_pqc": 7,
+  "rct_type_fcmp_plus_plus_pqc": 1,
 
-  "_comment_daa": "LWMA-1 difficulty adjustment parameters per docs/design/DAA_LWMA1.md §4. Consumed by rust/shekyl-difficulty (Phase 1, ratified 2026-05-18). Window-shape constants only: N, T, FTL, MTP window length, and the genesis difficulty constant. The bias factor 99/200, the solvetime clamp 6, and the min-L floor 1/20 deliberately do NOT live here per the Round 3 disposition (DAA_LWMA1.md §4) — they appear as bare integer literals inside src/lwma1.rs because changing them is a deviation from the canonical zawy12 reference, not a tunable parameter.",
+  "_comment_daa": "LWMA-1 difficulty adjustment parameters per docs/completed/DAA_LWMA1.md §4. Consumed by rust/shekyl-difficulty (Phase 1, ratified 2026-05-18). Window-shape constants only: N, T, FTL, MTP window length, and the genesis difficulty constant. The bias factor 99/200, the solvetime clamp 6, and the min-L floor 1/20 deliberately do NOT live here per the Round 3 disposition (DAA_LWMA1.md §4) — they appear as bare integer literals inside src/lwma1.rs because changing them is a deviation from the canonical zawy12 reference, not a tunable parameter.",
   "daa_window_n": 90,
   "daa_target_seconds": 120,
   "daa_ftl_seconds": 540,
   "daa_mtp_window": 11,
-  "daa_genesis_difficulty": 100
+  "daa_genesis_difficulty": 100,
+
+  "_comment_archival": "Per-shard archival retention bond floor (ARCHIVAL_BOND_FLOOR). Calibrated from bond_rate* = 0.75 per docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md §9.3 (1 sim capital unit ≡ 1 SKL). Foundation CompleteTree holders post one nominal bond at this floor.",
+  "archival_bond_floor_atomic": 750000000,
+
+  "_comment_archival_timing": "Archival timing cluster per docs/design/ARCHIVAL_TIMING_CONSTANTS.md §6 (pinned 2026-06-07). max_claim_age_w wired into KEYS_INTEGER / generate_consensus_constants.py (ArchivalBondValue v4 decode invariants) and rust/shekyl-archival-retention/build.rs; remaining keys wire at their consumers during PHASE_2B implementation.",
+  "settlement_epoch_blocks": 10000,
+  "max_settlement_epochs_per_emission": 15,
+  "max_claim_age_w": 26,
+  "retention_horizon_blocks": 420000,
+  "archival_reorg_depth_blocks": 720,
+  "release_cooldown_epochs": 2,
+  "challenge_resolution_blocks": 10000,
+
+  "_comment_archival_reward_curve": "Provisional banded PL Curve (REWARD_EMISSION_LEG.md §4). Milli scale; stressnet reopening clause. plateau_work = 2 × plateau_value.",
+  "archival_reward_plateau_value_milli": 8000,
+  "archival_reward_plateau_work_milli": 16000,
+
+  "_comment_archival_reward_age_weight": "g(age) slope on relative-depth age (ARCHIVAL_REWARD_ARITHMETIC.md §Shard age). Sealed target g* ≈ 2; calibration band [1500, 2500] per the Layer-2 margin-robustness run (STAKER_ARCHIVAL_SIM.md).",
+  "archival_reward_age_weight_milli": 2000,
+
+  "_comment_archival_segment": "Segment/shard geometry (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.2). SEGMENT_LEAF_COUNT is the level-2 subtree leaf count under the production curve-tree widths — 38 * 18 * 38 = 25992 (CURVE_TREE_CLIENT.md §7.2.2; gate-2 §2 'Genesis provisional: subtree level 2'). NOT a tunable: rust/shekyl-archival-retention/src/segment_freeze.rs carries a compile-time assert tying this value to the shekyl-fcmp width constants, so a width change cannot silently strand it. Consumed by the freeze first-crossing rule (frozen = leaf_count / segment_leaf_count) and the challenge-path leaf-chunk derivation; the boundary division lives ONLY in the Rust entry point (both C++ hooks call the FFI — division one-site tripwire).",
+  "segment_leaf_count": 25992,
+
+  "_comment_archival_launch": "M1 reward-gate cover threshold (ARCHIVAL_REWARD_GATE_M1.md §4). PROVISIONAL — NOT GENESIS-READY: k_cover finalizes only from the WI-4 §14.4 partition run (widened hypothesis class) feeding the dynamic cover model; the genesis-readiness checklist (WI-4 §13.5) carries the finalization as a blocker. While k_cover_provisional is true, the ONLY permitted k_cover value is 0 — the gate-identity degenerate whose semantics the G-9 KAT pins executably (frozen_shard_count < 0 is never true, so pre-seal behavior is exactly the pre-gate behavior and the r_market/sigma store paths stay exercised end-to-end). A plausible-looking provisional value is unrepresentable, not merely discouraged: rust/shekyl-archival-retention/build.rs refuses any other provisional value, refuses a sealed 0, and shekyl-archival-retention refuses to compile without the explicit provisional-k-cover feature acknowledgment — the shipping guard is the compile refusal, never the sentinel value. Sealing: set the §14.4-derived value (>= 1), flip k_cover_provisional to false, and delete the provisional-k-cover feature machinery (deletion target named in the spec §4).",
+  "k_cover": 0,
+  "k_cover_provisional": true
 }

@@ -43,13 +43,22 @@ from the Rust FFI.
 
 ## Endpoint Coverage
 
-- **33 JSON REST** endpoints (`/get_info`, `/send_raw_transaction`, etc.)
+- **31 JSON REST** endpoints (`/get_info`, `/get_transactions`, etc.)
   - Accept both **GET and POST** (matching epee behavior)
-- **8 binary** endpoints (`/get_blocks.bin`, `/get_o_indexes.bin`, etc.)
+  - The legacy `/send_raw_transaction` + `/sendrawtransaction` pair was
+    deleted (`design/DAEMON_SUBMIT_VERDICT.md` §9.3); transaction submit
+    is the native `/submit_transaction` route below, not an FFI proxy
+- **1 native Rust** endpoint: `POST /submit_transaction` — served
+  directly by the Rust admission engine (`src/submit/`), never crossing
+  the C++ dispatch tables (`design/DAEMON_SUBMIT_VERDICT.md` §2–§3)
+- **9 binary** endpoints (`/get_blocks.bin`, `/get_o_indexes.bin`, etc.)
   - POST-only; return **400 Bad Request** on parse failure (matching epee)
-- **48 JSON-RPC 2.0** methods (`get_block_count`, `get_block_template`, etc.)
+- **36 JSON-RPC 2.0** methods (`get_block_count`, `get_block_template`, etc.)
   - POST-only (per JSON-RPC 2.0 spec)
-- **90 total** dispatcher registrations (74 unique handlers)
+- **76 total** FFI dispatcher registrations (62 unique C++ handlers),
+  plus the native Rust submit route (counts as of the 2026-07
+  submit-verdict series; earlier snapshots predate the RPC-payment and
+  legacy-submit deletions)
 
 All URI aliases (e.g. `/getheight` ↔ `/get_height`) are registered.
 
@@ -71,7 +80,14 @@ In restricted mode (`--restricted-rpc`):
   strings and binary blobs without interpretation.
 - `get_outs` / `get_outs.bin` endpoints are removed — FCMP++ uses
   full-chain membership proofs, so there is no ring member fetching.
-- Curve tree RPC endpoints are implemented:
+- Curve tree RPC endpoints — the C++ `on_get_curve_tree_*` handlers exist and
+  are registered in the **legacy epee** dispatch (`src/rpc/core_rpc_server.h`),
+  but are **not yet registered in this Axum/FFI JSON-RPC dispatch table**
+  (`src/rpc/core_rpc_ffi.cpp` `get_jsonrpc_table()`), so under the default Rust
+  RPC server they currently return **404**. Wiring them into the FFI dispatch
+  (plus the `on_get_curve_tree_path` handler fixes that surfaced alongside) is
+  tracked in [`FOLLOWUPS.md`](FOLLOWUPS.md) — "Rust/Axum daemon RPC: curve-tree
+  endpoints missing from the FFI dispatch table". The endpoints:
   - `get_curve_tree_path` — retrieve a Merkle path for a given leaf
   - `get_curve_tree_info` — retrieve the current curve tree root hash, depth, and leaf count
   - `get_curve_tree_checkpoint` — retrieve a curve tree snapshot at a given height

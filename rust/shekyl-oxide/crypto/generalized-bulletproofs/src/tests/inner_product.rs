@@ -3,7 +3,7 @@
 use rand_core::OsRng;
 
 use ciphersuite::{
-    group::{ff::Field, Group},
+    group::{ff::Field as _, Group as _},
     Ciphersuite, Ristretto,
 };
 

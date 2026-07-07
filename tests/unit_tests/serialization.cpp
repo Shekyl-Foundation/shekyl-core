@@ -664,7 +664,7 @@ TEST(Serialization, pqc_authentication_multisig_size_regression)
   }
 }
 
-TEST(Serialization, rctsig_base_null_round_trip_with_outpk_and_enc_amounts)
+TEST(Serialization, rctsig_base_null_round_trip_with_outpk_enc_amounts_and_enc_labels)
 {
   using namespace cryptonote;
 
@@ -691,6 +691,7 @@ TEST(Serialization, rctsig_base_null_round_trip_with_outpk_and_enc_amounts)
   rv.type = rct::RCTTypeNull;
   rv.outPk.resize(2);
   rv.enc_amounts.resize(2);
+  rv.enc_labels.resize(2);
 
   for (size_t i = 0; i < 2; ++i)
   {
@@ -698,6 +699,9 @@ TEST(Serialization, rctsig_base_null_round_trip_with_outpk_and_enc_amounts)
     for (size_t b = 0; b < 8; ++b)
       rv.enc_amounts[i][b] = static_cast<uint8_t>(0x30 + i * 8 + b);
     rv.enc_amounts[i][8] = static_cast<uint8_t>(0xF0 + i);
+    for (size_t b = 0; b < 8; ++b)
+      rv.enc_labels[i][b] = static_cast<uint8_t>(0x50 + i * 8 + b);
+    rv.enc_labels[i][8] = static_cast<uint8_t>(0xE0 + i);
   }
   tx0.invalidate_hashes();
 
@@ -712,6 +716,7 @@ TEST(Serialization, rctsig_base_null_round_trip_with_outpk_and_enc_amounts)
   EXPECT_EQ(tx1.rct_signatures.type, rct::RCTTypeNull);
   ASSERT_EQ(tx1.rct_signatures.outPk.size(), 2u);
   ASSERT_EQ(tx1.rct_signatures.enc_amounts.size(), 2u);
+  ASSERT_EQ(tx1.rct_signatures.enc_labels.size(), 2u);
 
   for (size_t i = 0; i < 2; ++i)
   {
@@ -719,6 +724,8 @@ TEST(Serialization, rctsig_base_null_round_trip_with_outpk_and_enc_amounts)
       << "outPk[" << i << "].mask mismatch after round-trip";
     EXPECT_EQ(tx1.rct_signatures.enc_amounts[i], rv.enc_amounts[i])
       << "enc_amounts[" << i << "] mismatch after round-trip (8-byte amount + 1-byte tag)";
+    EXPECT_EQ(tx1.rct_signatures.enc_labels[i], rv.enc_labels[i])
+      << "enc_labels[" << i << "] mismatch after round-trip (8-byte label + 1-byte tag)";
   }
 
   EXPECT_EQ(tx1.rct_signatures.txnFee, 0u)

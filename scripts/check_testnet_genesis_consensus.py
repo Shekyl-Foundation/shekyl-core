@@ -48,8 +48,6 @@ def get_info_fields(base_url: str):
     keys = [
         "release_multiplier",
         "burn_pct",
-        "stake_ratio",
-        "staker_pool_balance",
         "staker_emission_share_effective",
         "total_burned",
     ]
@@ -115,8 +113,6 @@ def main():
         required = {
             "release_multiplier",
             "burn_pct",
-            "stake_ratio",
-            "staker_pool_balance",
             "staker_emission_share_effective",
             "total_burned",
         }

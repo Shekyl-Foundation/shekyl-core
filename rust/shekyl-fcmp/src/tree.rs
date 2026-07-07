@@ -16,6 +16,16 @@
 //! - Odd layers: Helios. Children are x-coordinates of Selene points from the layer below.
 //! - Even layers (>0): Selene. Children are x-coordinates of Helios points from the layer below.
 //! - Root: the single point at the topmost layer.
+//!
+//! The Selene leaf layer (layer 0) is never itself the root: the daemon's
+//! `grow_curve_tree` always propagates the leaf chunk into at least the
+//! layer-1 Helios node before its root-stop check, so every non-empty tree is
+//! depth ≥ 2 (a `1..=SELENE_CHUNK_WIDTH`-leaf tree roots at the single-child
+//! layer-1 Helios node). Reconstruction must match this convention; it is
+//! pinned against a real consensus header root by the CT-2 reconstruct-root
+//! KAT (`shekyl-curve-tree`, `docs/design/CT2_DRAIN_ORDER.md` §5). The empty
+//! tree is the sole layer-0 case and is the `selene_hash_init()` sentinel,
+//! handled by the caller, not an indexed `build_layers` result.
 
 use crate::leaf::ShekylLeaf;
 
@@ -25,8 +35,8 @@ use ciphersuite::{
 };
 use ec_divisors::DivisorCurve;
 use helioselene::{Helios, Selene};
-use shekyl_fcmp_plus_plus::fcmps;
-use shekyl_generators::{HELIOS_HASH_INIT, SELENE_HASH_INIT};
+use shekyl_curve_generators::{HELIOS_HASH_INIT, SELENE_HASH_INIT};
+use shekyl_fcmp_proofs::fcmps;
 
 /// Number of scalars per output in the leaf layer.
 /// Shekyl uses 4-scalar leaves: {O.x, I.x, C.x, H(pqc_pk)}.
@@ -93,7 +103,7 @@ pub fn hash_grow_selene(
     existing_child_at_offset: &[u8; 32],
     new_children: &[[u8; 32]],
 ) -> Option<[u8; 32]> {
-    let generators = &shekyl_fcmp_plus_plus::SELENE_FCMP_GENERATORS.generators;
+    let generators = &shekyl_fcmp_proofs::SELENE_FCMP_GENERATORS.generators;
     let existing = <Selene as Ciphersuite>::G::from_bytes(existing_hash);
     if bool::from(existing.is_none()) {
         return None;
@@ -119,7 +129,7 @@ pub fn hash_trim_selene(
     children_to_remove: &[[u8; 32]],
     child_to_grow_back: &[u8; 32],
 ) -> Option<[u8; 32]> {
-    let generators = &shekyl_fcmp_plus_plus::SELENE_FCMP_GENERATORS.generators;
+    let generators = &shekyl_fcmp_proofs::SELENE_FCMP_GENERATORS.generators;
     let existing = <Selene as Ciphersuite>::G::from_bytes(existing_hash);
     if bool::from(existing.is_none()) {
         return None;
@@ -149,7 +159,7 @@ pub fn hash_grow_helios(
     existing_child_at_offset: &[u8; 32],
     new_children: &[[u8; 32]],
 ) -> Option<[u8; 32]> {
-    let generators = &shekyl_fcmp_plus_plus::HELIOS_FCMP_GENERATORS.generators;
+    let generators = &shekyl_fcmp_proofs::HELIOS_FCMP_GENERATORS.generators;
     let existing = <Helios as Ciphersuite>::G::from_bytes(existing_hash);
     if bool::from(existing.is_none()) {
         return None;
@@ -175,7 +185,7 @@ pub fn hash_trim_helios(
     children_to_remove: &[[u8; 32]],
     child_to_grow_back: &[u8; 32],
 ) -> Option<[u8; 32]> {
-    let generators = &shekyl_fcmp_plus_plus::HELIOS_FCMP_GENERATORS.generators;
+    let generators = &shekyl_fcmp_proofs::HELIOS_FCMP_GENERATORS.generators;
     let existing = <Helios as Ciphersuite>::G::from_bytes(existing_hash);
     if bool::from(existing.is_none()) {
         return None;
@@ -220,6 +230,225 @@ pub fn helios_point_to_selene_scalar(helios_point: &[u8; 32]) -> Option<[u8; 32]
     }
     let (x, _y) = <<Helios as Ciphersuite>::G as DivisorCurve>::to_xy(point.unwrap())?;
     Some(x.to_repr())
+}
+
+// ---------------------------------------------------------------------------
+// Batch layer composition
+// ---------------------------------------------------------------------------
+
+/// Compose every curve-tree layer from a flat leaf-scalar stream, batch-style.
+///
+/// Each node is built from its init point over its full child set via
+/// [`hash_grow_selene`] / [`hash_grow_helios`] (offset 0, zero old-child) — no
+/// stateful frontier is carried. `layers[0]` is the leaf (Selene) layer; layers
+/// alternate Helios (odd) and Selene (even) above; the final layer holds the
+/// single root. The leaf layer chunks the scalar stream by [`LEAF_CHUNK_SCALARS`];
+/// internal layers chunk the converted child nodes by [`SELENE_CHUNK_WIDTH`] /
+/// [`HELIOS_CHUNK_WIDTH`].
+///
+/// # Single-composition discipline
+///
+/// This is the canonical wallet-side composition. The wallet's segment assembler
+/// (forward sync and truncate-and-rebuild reorg), the CT-0 freeze gate, and
+/// CT-2's reconstruct-root KAT all call this exact function rather than
+/// reimplementing the composition — otherwise the "two implementations must
+/// agree" trap reopens (see `docs/design/CURVE_TREE_CLIENT.md` §7.7). Agreement
+/// with the daemon's *incremental* `hash_grow`/`hash_trim` path is a separate
+/// property, proven within Rust by the `curve_tree_freeze` integration test and
+/// end-to-end by CT-2's KAT against a real header root.
+///
+/// Fallible variant of [`build_layers`]: returns `None` when any leaf scalar or
+/// intermediate node fails deserialization or hash growth (e.g. corrupted
+/// persisted bytes on the CT-1 store path).
+pub fn try_build_layers(leaf_scalars: &[[u8; 32]]) -> Option<Vec<Vec<[u8; 32]>>> {
+    const ZERO: [u8; 32] = [0u8; 32];
+
+    let leaf_nodes: Vec<[u8; 32]> = leaf_scalars
+        .chunks(LEAF_CHUNK_SCALARS)
+        .map(|c| hash_grow_selene(&selene_hash_init(), 0, &ZERO, c))
+        .collect::<Option<Vec<_>>>()?;
+    try_build_upper_layers(leaf_nodes, 0)
+}
+
+/// Returns `vec![vec![]]` for an empty input; callers handle the empty tree. The
+/// point↔scalar conversions are total for legitimately-occurring nodes (asserted
+/// by the `node_conversions_are_total` test), so the internal `expect`s do not
+/// fire on valid leaf sets.
+pub fn build_layers(leaf_scalars: &[[u8; 32]]) -> Vec<Vec<[u8; 32]>> {
+    try_build_layers(leaf_scalars).expect("valid leaf scalars")
+}
+
+/// Hash a layer of nodes up to the root, returning every layer from
+/// `initial_layer` (inclusive) to the root.
+///
+/// Factored out of [`build_layers`] so the two consumers share one composition
+/// (`docs/design/CURVE_TREE_CLIENT.md` §7.7, open question #12): the from-leaves
+/// path calls `build_layers` (which computes the leaf layer then delegates
+/// here), and the wallet's steady-state from-cached-`R_k` hot path calls this
+/// directly with its cached frozen sub-roots as `initial_layer`. Keeping a
+/// single upper-layer composition prevents the "two implementations must agree"
+/// trap from reopening above the leaf layer.
+///
+/// `start_layer_idx` is the absolute tree-layer index of `initial_layer`
+/// itself; it determines the Selene/Helios parity of each layer built on top
+/// (the layer constructed directly above `initial_layer` is layer
+/// `start_layer_idx + 1`, and its parity selects the hash). For the from-leaves
+/// path the leaf layer is layer 0, so `build_layers` passes 0. A caller passing
+/// cached sub-roots must pass the layer index those sub-roots occupy.
+///
+/// The Selene leaf layer (`start_layer_idx == 0`) is never the root: a single
+/// node at layer 0 is promoted into the layer-1 Helios root rather than
+/// returned bare, matching the daemon's `grow_curve_tree` (see the module-level
+/// "Tree topology" note and `docs/design/CT2_DRAIN_ORDER.md` §5). The stop
+/// condition is therefore "single node at layer `>= 1`", so:
+/// - a non-empty `initial_layer` at layer 0 yields depth `>= 2`;
+/// - an `initial_layer` already at layer `>= 1` with `<= 1` node returns
+///   `vec![initial_layer]` (the caller's cached sub-root is already a root);
+/// - the empty tree returns `vec![initial_layer]` with an empty top layer and
+///   its root is the `selene_hash_init` sentinel handled by the caller (see
+///   `build_layers`).
+///
+/// In the non-empty cases the root is `result.last()[0]`.
+pub fn try_build_upper_layers(
+    initial_layer: Vec<[u8; 32]>,
+    start_layer_idx: u8,
+) -> Option<Vec<Vec<[u8; 32]>>> {
+    const ZERO: [u8; 32] = [0u8; 32];
+
+    let mut layers = vec![initial_layer];
+    let mut current_layer_idx = start_layer_idx;
+    loop {
+        let top_len = layers.last()?.len();
+        if top_len == 0 {
+            break;
+        }
+        if top_len == 1 && current_layer_idx >= 1 {
+            break;
+        }
+        let built_layer_idx = current_layer_idx.checked_add(1)?;
+        let prev = layers.last()?;
+        let next: Vec<[u8; 32]> = if layer_is_selene(built_layer_idx) {
+            let scalars: Vec<[u8; 32]> = prev
+                .iter()
+                .map(helios_point_to_selene_scalar)
+                .collect::<Option<Vec<_>>>()?;
+            scalars
+                .chunks(SELENE_CHUNK_WIDTH)
+                .map(|c| hash_grow_selene(&selene_hash_init(), 0, &ZERO, c))
+                .collect::<Option<Vec<_>>>()?
+        } else {
+            let scalars: Vec<[u8; 32]> = prev
+                .iter()
+                .map(selene_point_to_helios_scalar)
+                .collect::<Option<Vec<_>>>()?;
+            scalars
+                .chunks(HELIOS_CHUNK_WIDTH)
+                .map(|c| hash_grow_helios(&helios_hash_init(), 0, &ZERO, c))
+                .collect::<Option<Vec<_>>>()?
+        };
+        layers.push(next);
+        current_layer_idx = built_layer_idx;
+    }
+    Some(layers)
+}
+
+pub fn build_upper_layers(initial_layer: Vec<[u8; 32]>, start_layer_idx: u8) -> Vec<Vec<[u8; 32]>> {
+    try_build_upper_layers(initial_layer, start_layer_idx).expect("valid layer nodes")
+}
+
+/// Curve-tree depth (number of layers) for a tree of `leaf_count` leaves,
+/// computed without building the tree.
+///
+/// Tree depth is a **pure function of the leaf count** — it depends only on how
+/// many times `leaf_count` reduces through the fixed [`SELENE_CHUNK_WIDTH`] /
+/// [`HELIOS_CHUNK_WIDTH`] ladder, never on the leaf *values*. This mirrors the
+/// exact reduction in [`try_build_upper_layers`] (leaf layer packs
+/// `SELENE_CHUNK_WIDTH` leaves per node; the stop condition is "single node at a
+/// layer `>= 1`", so a non-empty tree is depth `>= 2` and the bare Selene leaf
+/// layer is never the root), and is pinned equal to `build_layers(..).len()` by
+/// the `layer_count_for_leaves_matches_build_layers` KAT.
+///
+/// It exists so a caller that needs the depth but not the tree — the CT-5c fee
+/// path, which must size the FCMP++ proof weight *before* assembling any path —
+/// reads it cheaply from the leaf count alone, while the assembler keeps taking
+/// its depth from the layers it already builds. The KAT is the single-source
+/// guard: this arithmetic and `build_layers` cannot drift.
+///
+/// `leaf_count == 0` returns `1`, matching `build_layers(&[]).len()` (the
+/// empty-tree sentinel layer); callers handle the empty tree separately.
+#[must_use]
+pub fn layer_count_for_leaves(leaf_count: u64) -> u8 {
+    if leaf_count == 0 {
+        return 1;
+    }
+    // Layer 0 (leaf, Selene): each node packs SELENE_CHUNK_WIDTH leaves.
+    let mut nodes = leaf_count.div_ceil(SELENE_CHUNK_WIDTH as u64);
+    let mut layer_idx: u8 = 0;
+    let mut layers: u8 = 1;
+    // Reduce upward until a single node at a layer >= 1 (the root) — the same
+    // stop condition as `try_build_upper_layers`.
+    while !(nodes == 1 && layer_idx >= 1) {
+        layer_idx = layer_idx.checked_add(1).expect("curve-tree depth fits u8");
+        nodes = nodes.div_ceil(chunk_width(layer_idx) as u64);
+        layers = layers.checked_add(1).expect("curve-tree depth fits u8");
+    }
+    layers
+}
+
+/// Hash upward from `start_layer_idx` until layer `target_layer_idx`, returning
+/// that layer's nodes.
+///
+/// Unlike [`build_upper_layers`], does not treat a single node at layer `>= 1`
+/// as the root — mixed segment composition needs the sub-root at an absolute
+/// depth even when the partial tail is still shallow (`shekyl-curve-tree` CT-1).
+#[must_use]
+pub fn try_promote_to_layer(
+    mut current: Vec<[u8; 32]>,
+    mut current_layer_idx: u8,
+    target_layer_idx: u8,
+) -> Option<Vec<[u8; 32]>> {
+    const ZERO: [u8; 32] = [0u8; 32];
+
+    if current.is_empty() || current_layer_idx >= target_layer_idx {
+        return Some(current);
+    }
+
+    while current_layer_idx < target_layer_idx {
+        if current.is_empty() {
+            break;
+        }
+        let built_layer_idx = current_layer_idx.checked_add(1)?;
+        current = if layer_is_selene(built_layer_idx) {
+            let scalars: Vec<[u8; 32]> = current
+                .iter()
+                .map(helios_point_to_selene_scalar)
+                .collect::<Option<Vec<_>>>()?;
+            scalars
+                .chunks(SELENE_CHUNK_WIDTH)
+                .map(|c| hash_grow_selene(&selene_hash_init(), 0, &ZERO, c))
+                .collect::<Option<Vec<_>>>()?
+        } else {
+            let scalars: Vec<[u8; 32]> = current
+                .iter()
+                .map(selene_point_to_helios_scalar)
+                .collect::<Option<Vec<_>>>()?;
+            scalars
+                .chunks(HELIOS_CHUNK_WIDTH)
+                .map(|c| hash_grow_helios(&helios_hash_init(), 0, &ZERO, c))
+                .collect::<Option<Vec<_>>>()?
+        };
+        current_layer_idx = built_layer_idx;
+    }
+    Some(current)
+}
+
+#[must_use]
+pub fn promote_to_layer(
+    current: Vec<[u8; 32]>,
+    current_layer_idx: u8,
+    target_layer_idx: u8,
+) -> Vec<[u8; 32]> {
+    try_promote_to_layer(current, current_layer_idx, target_layer_idx).expect("valid layer nodes")
 }
 
 // ---------------------------------------------------------------------------
@@ -270,7 +499,7 @@ pub fn construct_leaf(
     commitment: &[u8; 32],
     h_pqc: &[u8; 32],
 ) -> Option<[u8; 128]> {
-    let hp_point = shekyl_generators::biased_hash_to_point(*output_key);
+    let hp_point = shekyl_curve_generators::biased_hash_to_point(*output_key);
     let hp_bytes: [u8; 32] = hp_point.compress().to_bytes();
 
     let o_x = ed25519_point_to_selene_scalar(output_key)?;
@@ -283,6 +512,24 @@ pub fn construct_leaf(
     leaf[64..96].copy_from_slice(&c_x);
     leaf[96..128].copy_from_slice(h_pqc);
     Some(leaf)
+}
+
+/// Derive the compressed key-image generator `I = Hp(O)` from a compressed
+/// Ed25519 output key, using the same `biased_hash_to_point` that
+/// [`construct_leaf`] hashes into the leaf's `I.x` scalar.
+///
+/// [`construct_leaf`] caches only `I`'s Wei25519 x-coordinate (a Selene
+/// scalar), which cannot be decompressed back to a point. The FCMP++
+/// membership prover's `Path.leaves` consumes `O`/`I`/`C` as compressed
+/// **points**, so path assembly re-derives the compressed `I` here rather
+/// than depending on `shekyl-curve-generators` / `curve25519-dalek` directly
+/// (`17-dependency-discipline.mdc`: reuse the crate that already owns the
+/// primitive). Infallible: `biased_hash_to_point` always yields a point.
+#[must_use]
+pub fn key_image_generator(output_key: &[u8; 32]) -> [u8; 32] {
+    shekyl_curve_generators::biased_hash_to_point(*output_key)
+        .compress()
+        .to_bytes()
 }
 
 // ---------------------------------------------------------------------------
@@ -300,8 +547,8 @@ pub fn leaves_to_bytes(leaves: &[ShekylLeaf]) -> Vec<u8> {
 
 /// Compute the expected proof size for a given number of inputs and tree depth.
 pub fn proof_size(num_inputs: usize, tree_depth: usize) -> usize {
-    use shekyl_fcmp_plus_plus::fcmps::Fcmp;
-    type ShekylFcmp = Fcmp<shekyl_fcmp_plus_plus::Curves>;
+    use shekyl_fcmp_proofs::fcmps::Fcmp;
+    type ShekylFcmp = Fcmp<shekyl_fcmp_proofs::Curves>;
     ShekylFcmp::proof_size(num_inputs, tree_depth)
 }
 
@@ -442,6 +689,35 @@ mod tests {
         assert_eq!(chunk_width(3), HELIOS_CHUNK_WIDTH);
     }
 
+    /// Drift guard (CT-5c Q1): `layer_count_for_leaves(n)` must equal the depth
+    /// `build_layers` actually produces for `n` leaves, so the fee path can read
+    /// depth from the leaf count without building the tree. Covers the empty
+    /// tree and both reduction boundaries (SELENE_CHUNK_WIDTH=38,
+    /// HELIOS_CHUNK_WIDTH=18 ⇒ depth 2 up to n=684, depth 3 from n=685).
+    #[test]
+    fn layer_count_for_leaves_matches_build_layers() {
+        // Distinct, canonical leaf scalars (small values < field modulus); the
+        // depth is value-independent, so any valid scalars exercise the count.
+        fn leaf_scalars_for(n: usize) -> Vec<[u8; 32]> {
+            (0..n * SCALARS_PER_LEAF)
+                .map(|i| {
+                    let mut s = [0u8; 32];
+                    s[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                    s
+                })
+                .collect()
+        }
+
+        for n in [0usize, 1, 2, 37, 38, 39, 100, 683, 684, 685, 700, 1000] {
+            let expected = build_layers(&leaf_scalars_for(n)).len();
+            assert_eq!(
+                usize::from(layer_count_for_leaves(n as u64)),
+                expected,
+                "layer_count_for_leaves({n}) must equal build_layers depth",
+            );
+        }
+    }
+
     #[test]
     fn hash_grow_selene_multiple_scalars() {
         let init = selene_hash_init();
@@ -541,6 +817,18 @@ mod tests {
     }
 
     #[test]
+    fn key_image_generator_matches_construct_leaf_i_scalar() {
+        use curve25519_dalek::constants::ED25519_BASEPOINT_COMPRESSED;
+        let o = ED25519_BASEPOINT_COMPRESSED.to_bytes();
+        // The compressed I = Hp(O), reduced to its Selene x-coordinate, must
+        // equal the I.x scalar `construct_leaf` writes at leaf[32..64].
+        let i_compressed = key_image_generator(&o);
+        let i_x = ed25519_point_to_selene_scalar(&i_compressed).expect("I.x");
+        let leaf = construct_leaf(&o, &o, &[0u8; 32]).expect("leaf");
+        assert_eq!(&leaf[32..64], &i_x);
+    }
+
+    #[test]
     fn layer_is_selene_alternates() {
         assert!(layer_is_selene(0));
         assert!(!layer_is_selene(1));
@@ -560,5 +848,10 @@ mod tests {
         let s_d8 = proof_size(1, 8);
         let s_d16 = proof_size(1, 16);
         assert!(s_d16 > s_d8, "deeper tree should produce larger proof");
+    }
+
+    #[test]
+    fn promote_to_layer_empty_input_is_no_op() {
+        assert!(promote_to_layer(Vec::new(), 0, 2).is_empty());
     }
 }

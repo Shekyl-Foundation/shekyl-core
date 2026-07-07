@@ -31,7 +31,7 @@ use dkg_pedpop::{
 };
 use modular_frost::{Participant, ThresholdKeys, ThresholdParams};
 
-use shekyl_fcmp_plus_plus::sal::multisig::Ed25519T;
+use shekyl_fcmp_proofs::sal::multisig::Ed25519T;
 
 use crate::proof::ProveError;
 

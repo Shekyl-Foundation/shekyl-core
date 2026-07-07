@@ -2,6 +2,11 @@ name: ci/gh-actions/cli
 
 on:
   push:
+    # dev/main only. PR branches are covered by the pull_request event
+    # (which tests the PR merged into its base — the stronger signal);
+    # an unrestricted push trigger double-runs every job on each push
+    # to an open PR. Branches without a PR get CI by opening a draft PR.
+    branches: [dev, main]
     paths-ignore:
       - 'docs/**'
       - '**/README.md'
@@ -9,6 +14,15 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**/README.md'
+
+# Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
+# Without a concurrency group, every push to an open PR stacks a full new
+# run behind the old one — with the shared runner pool, repeated pushes
+# queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
+# unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -19,9 +33,6 @@ env:
   # ARCH="default" (not "native") ensures, that a different execution host can execute binaries compiled elsewhere.
   BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
   APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev miniupnpc libunbound-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl'
-  INSTALL_RUST: |
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    echo "$HOME/.cargo/bin" >> $GITHUB_PATH
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";
@@ -57,12 +68,25 @@ jobs:
           # to print. The exclusion is the same shape as `main.rs` (also
           # excluded above): binary-target source whose `println!` /
           # `eprintln!` calls are part of the documented surface.
+          # `tests.rs` and any file under a `src/**/tests/` directory are
+          # excluded: these are test modules gated at the parent via
+          # `#[cfg(test)] mod tests;`, so the file itself carries no in-file
+          # `#[cfg(test)]` marker for the scan below to key on and would
+          # otherwise be scanned as production. The `#[cfg(test)] mod tests;`
+          # declaration is the out-of-file equivalent of the in-file
+          # `#[cfg(test)]` gate the scan already honors; both mean "test code,
+          # debug macros allowed". The scan keys on BOTH the outer `#[cfg(test)]`
+          # (gating a lower test module/fn) and the module-level inner
+          # `#![cfg(test)]` (whole-file test modules, e.g. the engine's
+          # `regtest_e2e.rs` harness) — so such files self-declare as test code and
+          # need no per-name exclusion here.
           FOUND=0
           for f in $(find rust/shekyl-*/src -name '*.rs' \
                      ! -name 'build.rs' ! -name 'main.rs' ! -path '*/examples/*' \
                      ! -path '*/src/bin/*' \
+                     ! -name 'tests.rs' ! -path '*/tests/*' \
                      ! -path '*/shekyl-cli/*'); do
-            TEST_LINE=$(grep -n '#\[cfg(test)\]' "$f" | head -1 | cut -d: -f1)
+            TEST_LINE=$(grep -n '#!\?\[cfg(test)\]' "$f" | head -1 | cut -d: -f1)
             if [ -n "$TEST_LINE" ]; then
               HITS=$(head -n "$((TEST_LINE - 1))" "$f" \
                      | sed 's|//.*||' \
@@ -151,7 +175,9 @@ jobs:
           brew uninstall cmake
           brew update
           brew install --quiet cmake boost hidapi openssl unbound libpgm miniupnpc expat libunwind-headers protobuf abseil ccache zstd
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
+      # auto-install race in the daemon build). Bump both together.
+      - uses: dtolnay/rust-toolchain@1.94.0
       - name: build
         run: |
           ${{env.CCACHE_SETTINGS}}
@@ -230,13 +256,21 @@ jobs:
         run: apt update
       - name: install build dependencies
         run: ${{env.APT_INSTALL_LINUX}}
-      - name: install Rust
-        run: ${{env.INSTALL_RUST}}
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
         with:
           submodules: recursive
+      - name: install Rust
+        # Composite action (.github/actions/install-rust): the one
+        # hardened download-then-run recipe, installing the
+        # rust-toolchain.toml pin + components up front so the daemon
+        # build's parallel cargos (cmake -j over BuildRust targets)
+        # find the toolchain present instead of racing to auto-install
+        # it (which corrupts ~/.rustup/downloads). Must come AFTER
+        # checkout — a `./`-referenced local action does not exist on
+        # the runner until the repo is checked out.
+        uses: ./.github/actions/install-rust
       - uses: actions/cache@v5
         with:
           path: ~/.ccache
@@ -278,8 +312,6 @@ jobs:
         run: apt update
       - name: install build dependencies
         run: ${{env.APT_INSTALL_LINUX}}
-      - name: install Rust
-        run: ${{env.INSTALL_RUST}}
       - name: install Python dependencies
         run: apt install -y python3-requests python3-psutil python3-monotonic python3-deepdiff
       - name: configure git
@@ -287,6 +319,10 @@ jobs:
       - uses: actions/checkout@v5
         with:
           submodules: recursive
+      - name: install Rust
+        # Composite action (.github/actions/install-rust), after
+        # checkout — see the build job's step comment.
+        uses: ./.github/actions/install-rust
       - uses: actions/cache@v5
         with:
           path: ~/.ccache
@@ -312,7 +348,9 @@ jobs:
       - uses: actions/checkout@v5
         with:
           submodules: recursive
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
+      # auto-install race in the daemon build). Bump both together.
+      - uses: dtolnay/rust-toolchain@1.94.0
       - name: restore vcpkg cache
         uses: actions/cache/restore@v5
         id: vcpkg-cache
@@ -464,6 +502,26 @@ jobs:
           name: ${{ env.OUTPUT }}
           path: ${{ env.OUTPUT }}
 
+  rust-msrv-gate:
+    name: "Rust: MSRV gate (1.94)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+      - name: cargo check at declared MSRV
+        working-directory: rust
+        # Compiles every workspace crate except the differential harness,
+        # which needs a CMake-built C RandomX install and has its own
+        # workflow. Same exclusion shape as `rust-audit-and-test`'s test
+        # step — the MSRV gate asserts the declared floor builds, not
+        # that every integration test runs at MSRV.
+        run: cargo check --locked --workspace --exclude shekyl-randomx-differential
+
   rust-audit-and-test:
     name: "Rust: audit, test, determinism"
     runs-on: ubuntu-latest
@@ -477,14 +535,17 @@ jobs:
       - name: update apt
         run: apt update
       - name: install dependencies
-        run: apt -y install build-essential git curl pkg-config libssl-dev
-      - name: install Rust
-        run: ${{env.INSTALL_RUST}}
+        # ripgrep: hard-required by scripts/lint_cpp_clamp_ban.sh below.
+        run: apt -y install build-essential git curl pkg-config libssl-dev ripgrep
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
         with:
           submodules: recursive
+      - name: install Rust
+        # Composite action (.github/actions/install-rust), after
+        # checkout — see the build job's step comment.
+        uses: ./.github/actions/install-rust
       - name: guard against absolute local Cargo paths
         shell: bash
         run: |
@@ -517,7 +578,6 @@ jobs:
             rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_curve_tree_leaf_hash.rs
             rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_block_header_tree_root.rs
             rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_tx_deserialize_fcmp_type7.rs
-            rust/shekyl-staking/fuzz/fuzz_targets/fuzz_claim_reward.rs
             rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_kem_decapsulate.rs
             rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_bech32m_address_decode.rs
             rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_verify.rs
@@ -604,6 +664,15 @@ jobs:
         # workspace in one pass instead of stopping at the first crate's
         # first error, so reviewers see the full triage in one log.
         run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
+      - name: rustdoc -D warnings (shekyl-tor)
+        working-directory: rust
+        # shekyl-tor's docs carry load-bearing security contracts (the trust
+        # gate, the §3c supervisor posture, the pin-time/runtime split) and its
+        # reviews repeatedly turned up public→private intra-doc links that only a
+        # `-D warnings` doc build catches. Scoped to shekyl-tor (not `--workspace`)
+        # because other crates carry pre-existing rustdoc warnings; widening this
+        # to the workspace is a separate hygiene task, tracked in FOLLOWUPS.
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --locked -p shekyl-tor --no-deps --lib
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp
@@ -624,6 +693,35 @@ jobs:
         # bare-Rust environment passes; the differential harness asserts
         # under its own substrate-correct environment.
         run: cargo test --locked --workspace --exclude shekyl-randomx-differential
+      - name: shekyl-standoff conformance suite (x86_64 only)
+        working-directory: rust
+        # `shekyl-standoff`'s conformance grading + negative controls
+        # (`tests/conformance_grading.rs`) are gated behind the `conformance`
+        # feature, so the default-feature workspace-wide test above does NOT
+        # compile or run them. Run them explicitly here so the chi-square /
+        # order-balance / serial-independence grader and its triangular-trap
+        # negative control are exercised in CI (ARCHIVAL_FIREWALL_GATE6.md
+        # §10.12). x86_64 only by design: these are float goodness-of-fit
+        # probes, and float is not bit-identical across arches — the
+        # cross-arch guarantee is the integer golden vector run under qemu in
+        # depends.yml, not these probes (which pass by margin, not by
+        # determinism). The aarch64 lane deliberately builds default features
+        # only for the same reason.
+        run: cargo test --locked -p shekyl-standoff --features conformance
+      - name: shekyl-engine-core conformance suite — StakeEngine RNG self-cert (x86_64 only)
+        working-directory: rust
+        # S6 (ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md): `shekyl-engine-core`'s
+        # `conformance` feature wires `shekyl-standoff`'s `certify_draw` grader
+        # into `StakeEngine::on_start` over the production `OsRngGapAdapter`, so
+        # the staker actor fail-stops on a non-conformant CSPRNG. It is NOT in the
+        # default feature set (the grader is float + pulls `shekyl-stats`;
+        # production stays float-free), so the workspace-wide test above does not
+        # compile or run it. Run it explicitly here. x86_64 only by the same
+        # reason as the standoff lane above — the grade is a float goodness-of-fit,
+        # not bit-identical across arches; a module-level `compile_error!` in
+        # `stake_engine.rs` rejects the `conformance` feature on non-x86 targets so
+        # the skip is loud, never a silent false "conformance passed".
+        run: cargo test --locked -p shekyl-engine-core --features conformance
       - name: "Gate 1: proptest (--release for speed)"
         working-directory: rust
         run: cargo test --locked --release -p shekyl-crypto-pq --test prop_round_trip
@@ -659,6 +757,8 @@ jobs:
       - name: Bech32m address encoding tests
         working-directory: rust
         run: cargo test --locked -p shekyl-crypto-pq -- address
+      - name: C++ clamp-ban lint (address-freeze)
+        run: bash scripts/lint_cpp_clamp_ban.sh
       - name: "CI grep gate: no shekyl_y in C++ source"
         run: |
           if grep -rn 'shekyl_y' src/crypto/ src/wallet/ --include='*.cpp' --include='*.h'; then

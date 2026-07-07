@@ -1,0 +1,42 @@
+name: vendored crypto content
+
+# Content-integrity gate for the vendored crypto subtree (rust/shekyl-oxide/crypto/):
+# fails if any tracked file there differs from the checked-in manifest. Catches
+# in-place edits to the pristine, genesis-frozen, externally-review-scoped crypto that
+# bypass the fork workflow — the failure mode that let the `divisors` drift land
+# undetected (there was no automated local-content check; the staleness canary only
+# compares commit hashes). Pure sha256, no toolchain — fast; runs on every PR and on
+# pushes to dev/main.
+#
+# This is the "gate everyone assumed existed" from docs/design/SHEKYL_OXIDE_UNVENDOR.md
+# §5/§6 (Track A, A1), in its drift-from-snapshot form; it upgrades to byte-exact-vs-pin
+# once A0 re-syncs the subtree to a clean fork baseline.
+
+on:
+  push:
+    # dev/main only. PR branches are covered by the pull_request event (which
+    # tests the PR merged into its base); an unrestricted push trigger would
+    # double-run the job on every push to an open PR. Mirrors build.yml.
+    branches: [dev, main]
+  pull_request:
+
+# Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
+# Without a concurrency group, every push to an open PR stacks a full new
+# run behind the old one — with the shared runner pool, repeated pushes
+# queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
+# unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
+concurrency:
+  group: vendored-crypto-content-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  crypto-content:
+    name: vendored crypto matches manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: verify vendored crypto content
+        run: scripts/ci/check_vendored_crypto_manifest.sh --check

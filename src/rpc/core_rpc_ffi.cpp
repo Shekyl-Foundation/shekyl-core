@@ -27,6 +27,7 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "core_rpc_ffi.h"
+#include "core_rpc_ffi_internal.h"
 #include "core_rpc_server.h"
 #include "core_rpc_server_commands_defs.h"
 #include "storages/portable_storage_template_helper.h"
@@ -42,10 +43,6 @@
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon.rpc.ffi"
 
 using namespace cryptonote;
-
-struct core_rpc_handle {
-    core_rpc_server* rpc;
-};
 
 // ─── Template Helpers ────────────────────────────────────────────────────────
 
@@ -199,8 +196,6 @@ const std::unordered_map<std::string, json_fn>& get_json_table() {
         DJSON("/gettransactions",                   on_get_transactions,             COMMAND_RPC_GET_TRANSACTIONS),
         DJSON("/get_alt_blocks_hashes",             on_get_alt_blocks_hashes,        COMMAND_RPC_GET_ALT_BLOCKS_HASHES),
         DJSON("/is_key_image_spent",                on_is_key_image_spent,           COMMAND_RPC_IS_KEY_IMAGE_SPENT),
-        DJSON("/send_raw_transaction",              on_send_raw_tx,                  COMMAND_RPC_SEND_RAW_TX),
-        DJSON("/sendrawtransaction",                on_send_raw_tx,                  COMMAND_RPC_SEND_RAW_TX),
         DJSON("/get_public_nodes",                  on_get_public_nodes,             COMMAND_RPC_GET_PUBLIC_NODES),
         DJSON("/get_transaction_pool",              on_get_transaction_pool,         COMMAND_RPC_GET_TRANSACTION_POOL),
         DJSON("/get_transaction_pool_hashes.bin",   on_get_transaction_pool_hashes_bin, COMMAND_RPC_GET_TRANSACTION_POOL_HASHES_BIN),
@@ -407,14 +402,14 @@ const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
         DJRPC_WE("get_output_distribution", on_get_output_distribution,   COMMAND_RPC_GET_OUTPUT_DISTRIBUTION),
         DJRPC_WE("prune_blockchain",       on_prune_blockchain,           COMMAND_RPC_PRUNE_BLOCKCHAIN),
         DJRPC_WE("flush_cache",            on_flush_cache,                COMMAND_RPC_FLUSH_CACHE),
-        DJRPC_WE("get_staking_info",       on_get_staking_info,           COMMAND_RPC_GET_STAKING_INFO),
-        DJRPC_WE("estimate_claim_reward",  on_estimate_claim_reward,      COMMAND_RPC_ESTIMATE_CLAIM_REWARD),
-        DJRPC_WE("rpc_access_info",        on_rpc_access_info,            COMMAND_RPC_ACCESS_INFO),
-        DJRPC_WE("rpc_access_submit_nonce", on_rpc_access_submit_nonce,   COMMAND_RPC_ACCESS_SUBMIT_NONCE),
-        DJRPC_WE("rpc_access_pay",         on_rpc_access_pay,             COMMAND_RPC_ACCESS_PAY),
-        DJRPC_WE("rpc_access_tracking",    on_rpc_access_tracking,        COMMAND_RPC_ACCESS_TRACKING),
-        DJRPC_WE("rpc_access_data",        on_rpc_access_data,            COMMAND_RPC_ACCESS_DATA),
-        DJRPC_WE("rpc_access_account",     on_rpc_access_account,         COMMAND_RPC_ACCESS_ACCOUNT),
+        // FCMP++ curve-tree membership-path endpoints. The handlers + KV-serializable
+        // request/response structs already exist and are registered in the legacy epee
+        // map (core_rpc_server.h); they were missing here, so on the default Rust/Axum
+        // transport every get_curve_tree_path returned 404 — blocking the wallet from
+        // fetching a spend membership path. See docs/FOLLOWUPS.md + FCMP_SPEND_SIGNING_PREIMAGE.md.
+        DJRPC_WE("get_curve_tree_path",       on_get_curve_tree_path,        COMMAND_RPC_GET_CURVE_TREE_PATH),
+        DJRPC_WE("get_curve_tree_info",       on_get_curve_tree_info,        COMMAND_RPC_GET_CURVE_TREE_INFO),
+        DJRPC_WE("get_curve_tree_checkpoint", on_get_curve_tree_checkpoint,  COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT),
     };
     return t;
 }

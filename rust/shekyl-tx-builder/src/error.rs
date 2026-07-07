@@ -42,19 +42,25 @@ pub enum TxBuilderError {
     #[error("output {index} has zero amount")]
     ZeroOutputAmount { index: usize },
 
-    /// Summing all input amounts would overflow `u64`.
-    #[error("total input amount overflows u64")]
+    /// Summing the input-side amounts (inputs plus any input-side cleartext
+    /// balance terms, `extra_inputs`) would overflow `u64`.
+    #[error("total input-side amount overflows u64")]
     InputAmountOverflow,
 
-    /// Summing all output amounts plus the fee would overflow `u64`.
-    #[error("total output amount + fee overflows u64")]
+    /// Summing the output-side amounts (outputs, fee, and any output-side
+    /// cleartext balance terms, `extra_outputs`) would overflow `u64`.
+    #[error("total output-side amount overflows u64")]
     OutputAmountOverflow,
 
-    /// The total input value is less than outputs + fee (cannot balance).
-    #[error("input total {input_total} less than output total + fee {output_plus_fee}")]
+    /// The value available (inputs + input-side cleartext terms) is less than
+    /// the value required (outputs + fee + output-side cleartext terms), so the
+    /// transaction cannot balance.
+    #[error("available total {available_total} less than required total {required_total}")]
     InsufficientFunds {
-        input_total: u64,
-        output_plus_fee: u64,
+        /// Inputs plus input-side cleartext terms (`extra_inputs`).
+        available_total: u64,
+        /// Outputs plus fee plus output-side cleartext terms (`extra_outputs`).
+        required_total: u64,
     },
 
     /// An input's leaf chunk is empty (must contain at least the input itself).
@@ -72,6 +78,15 @@ pub enum TxBuilderError {
     /// The tree depth must be at least 1.
     #[error("tree depth is 0")]
     ZeroTreeDepth,
+
+    /// The FCMP++ layer count is below the spendable minimum. A spend needs at
+    /// least 2 layers so the on-chain `curve_trees_tree_depth` (layers − 1) is
+    /// ≥ 1; the daemon rejects `curve_trees_tree_depth == 0` as out of range.
+    #[error("FCMP++ layer count {layers} is below the spendable minimum of 2")]
+    TreeTooShallow {
+        /// The provided FCMP++ layer count (`< 2`).
+        layers: u8,
+    },
 
     /// The tree depth exceeds the protocol maximum.
     #[error("tree depth {0} exceeds maximum {MAX_TREE_DEPTH}")]
@@ -109,4 +124,18 @@ pub enum TxBuilderError {
     /// PQC (hybrid Ed25519 + ML-DSA-65) signing failed for a specific input.
     #[error("PQC signing failed for input {index}: {reason}")]
     PqcSignError { index: usize, reason: String },
+
+    /// Wire encoding / phase-1 payload construction failed.
+    #[error("wire encoding failed: {0}")]
+    WireError(String),
+
+    /// The constructed transaction failed the construct-side CT balance
+    /// self-check: the built pseudo-outputs + output masks do not satisfy the
+    /// commitment-sum balance equation the daemon verifies. This is a local,
+    /// fail-fast catch for a construction/masking bug that the cleartext
+    /// funds-sufficiency check in `validate_inputs` cannot see (amounts correct,
+    /// blinding factors don't balance on the curve) — caught before sign +
+    /// broadcast rather than as a daemon rejection.
+    #[error("construct-side CT balance self-check failed: {0}")]
+    BalanceSelfCheck(#[from] shekyl_ct_balance::CtBalanceError),
 }

@@ -4,27 +4,39 @@ overview: "Re-interpret `wallet2.cpp` (and the C++ wallet binaries that ride on 
 todos:
   - id: phase0_closeout
     content: "Phase 0 (6 PRs + half-day review gate): PR 0.1 bookkeeping (defer-header on 2l sub-plan, delete MID_REWIRE_WARNING_WINDOW.active sentinel + rotate bench baseline, add 'Legacy C++ -> Rust rewrite scope' section to FOLLOWUPS.md, create docs/V3_WALLET_DECISION_LOG.md with all initial binding decisions, add CODEOWNERS for docs/test_vectors/** AND tests/kat_*.rs, add branch-protection rule on dev requiring PR for all changes); PR 0.2 mechanical rename shekyl-wallet-file::WalletFileHandle -> WalletFile (shorter name; frees `Wallet` ident for Phase 1 orchestrator; `Handle` suffix was inherited cruft); PR 0.3 shekyld prerequisites audit covering THREE items — (a) instant-mining regtest mode (Phase 6 prereq), (b) get_fee_estimates daemon RPC with named-bucket shape (Phase 2a prereq), (c) fee policy / rules version exposure (does shekyld expose its current fee policy version, either as a field in get_fee_estimates or as a separate RPC; if absent file as daemon-side follow-up but NOT a Phase 0 blocker — V3.0 launches with whatever shekyld has and changes via hardfork); output to docs/SHEKYLD_PREREQUISITES.md (singular file, plural name leaves room for future Phase 0 audits to append); PR 0.4 monero-oxide vendor freshness vs BOTH upstreams (kayabaNerve + Shekyl-Foundation), output to docs/MONERO_OXIDE_VENDOR_STATUS.md, baseline only — do NOT un-pin; PR 0.5 scoped cargo fmt cleanup (five pre-existing fmt-drifted files surfaced by `cargo fmt --all --check`: rust/shekyl-ffi/src/wallet_file_ffi.rs, rust/shekyl-ffi/src/wallet_ledger_ffi.rs, rust/shekyl-scanner/benches/scan_block.rs, rust/shekyl-tx-builder/benches/transfer_e2e.rs, rust/shekyl-wallet-file/src/handle.rs; mechanical `cargo fmt --all` run; verified to be hand-edits that bypassed fmt, not a rustfmt-version disagreement, so no `#[rustfmt::skip]` is warranted; lands before Phase 1 starts so the workspace is fmt-clean baseline for Phase 1 PRs that will need `cargo fmt --check` green; resets the branch-hygiene signal so fmt-check failures aren't normalized on dev for the duration of the rewrite); PR 0.6 mechanical vendor-bump 87acb57 -> 3933664 (Operation A only — sync vendored shekyl-oxide tree to Shekyl-Foundation/monero-oxide fcmp++ HEAD; five commits, none crypto-substantive except 182b648 base58 hardening which gets reviewed against shekyl-address parsing semantics; Operation B = 40-commit upstream merge stays as the un-pin V3.1.x plan, NOT scoped here); then expanded half-day review gate to (1) read PR 0.4 vendor-status findings, (2) read PR 0.3 daemon-side findings, (3) read FOLLOWUPS V3.1+ section to confirm rewrite-touching items are absorbed/cross-linked/closed, (4) confirm cross-cutting locks before any Phase 1 method signature lands, (5) confirm whether any un-merged-upstream commits in PR 0.4's substantive list affects Phase 1 Wallet API shape (cba7117 cypherstack response and 00bafcf HelioseleneField::invert are below the wallet stack's API surface — confirm explicitly)"
-    status: pending
+    status: completed
   - id: phase1_domain_model
-    content: "Phase 1: shekyl-wallet-core::Wallet orchestrator type — composition over god-object; lifecycle (create/open_full/open_view_only/open_hardware_offload/change_password/close); RefreshHandle for cancellable scan; Wallet<SoloSigner|MultisigSigner> shape so V3.1 multisig is a feature flip; RuntimeWalletState audit (keep/rename/fold-into-WalletLedger; default lean fold); answer 'why now / can we do better' for address book, tx_keys, tx_notes, account-vs-subaddress, background sync; lock binding decisions: payment IDs DROPPED, air-gapped flow KEPT but reshaped as UnsignedTxBundle/SignedTxBundle"
-    status: pending
+    content: "Phase 1 CLOSED 2026-06-10 (see docs/design/PHASE_1_ORCHESTRATOR_STATUS.md for the full done-matrix). Landed as shekyl-engine-core::Engine<S: EngineSignerKind> (naming superseded per V3_WALLET_DECISION_LOG.md 2026-04-27 — NOT shekyl-wallet-core::Wallet; production shape Engine<S, D, L, E, R, P, F>): composition over god-object; lifecycle create/open_full/change_password/close; RefreshHandle cancel-on-drop + single-flight slot; apply_scan_result strict merge; PendingTx chain-state pinning + close-refuses-outstanding; primary_address accessor + documented ledger()-guard query patterns; tracing forwarder single-Rust-image contract; RuntimeWalletState folded into (WalletLedger, LedgerIndexes); payment IDs DROPPED, air-gapped flow reshaped as UnsignedTxBundle/SignedTxBundle (Phase 2d). Residue: open_view_only / open_hardware_offload stubs blocked on shekyl-crypto-pq view-only/HW constructors — FOLLOWUPS.md V3.0 entry carries the reversion clause; change_password on-disk tests extend to ViewOnly/HW in the same capability-dispatch commit."
+    status: completed
   - id: phase2_ops_refresh_send
-    content: "Phase 2a: Wallet::refresh() over shekyl-scanner using typed ScanResult merge via Wallet::apply_scan_result (additive, slice-scoped, snapshot-consistency-checked); three-method send lifecycle build_pending_tx / submit_pending_tx / discard_pending_tx with reservation semantics on input outputs; PendingTx anchored on (built_at_height, built_at_tip_hash, fee_atomic_units); fee priority resolved via daemon get_fee_estimates with sanity ceiling (TxError::DaemonFeeUnreasonable); TxRequest has no payment_id field; depends on shekyld get_fee_estimates audit (PR 0.3)"
-    status: pending
+    content: "Phase 2a: Wallet::refresh() over shekyl-scanner using typed ScanResult merge via Wallet::apply_scan_result (additive, slice-scoped, snapshot-consistency-checked); three-method send lifecycle build_pending_tx / submit_pending_tx / discard_pending_tx with reservation semantics on input outputs; PendingTx anchored on (built_at_height, built_at_tip_hash, fee_atomic_units); fee priority resolved via daemon get_fee_estimates with sanity ceiling (TxError::DaemonFeeUnreasonable); TxRequest has no payment_id field; depends on shekyld get_fee_estimates audit (PR 0.3). Engine send substrate (2a-1…2a-4: LocalPendingTx daemon fee/build/sign/submit + TestDaemon integration) landed; orchestrator methods (Engine::refresh / start_refresh / apply_scan_result / build_pending_tx / submit_pending_tx / discard_pending_tx) landed with the Phase 1 closeout (2026-06-10) — remaining 2a residue is tracked in PHASE_2A_SEND_PATH.md §10, not Phase 1. UPDATE 2026-07-01: 2a is DONE for its phase scope. Engine substrate + orchestrator landed AND the wallet-local curve-tree client (rust/shekyl-curve-tree/) is built + KAT-verified AND wired into the send path — CT-5c retired the synthetic membership vectors; production spends assemble a real reconstructed path via CurveTreeActor (signing_assembly.rs → sign_bridge.rs → local_pending_tx.rs, no synthetic fallback). Depth-3 recon consensus bug CLOSED (PR #197). Real-root MAINNET validity now gated only on Phase 6 / Track-2 live-daemon parity + minor residuals (CT5_SERIES_CLOSEOUT.md §5: per-input reconstruction perf at scale, pruned-store assembly, reactive ProofStale → Phase 6). get_curve_tree_leaves bulk RPC is OFF the critical path (block-derived forward sync is the shipped default, CT-3). Remaining 2a-proper residue: open_view_only / open_hardware_offload capability stubs."
+    status: completed
   - id: phase2_ops_stake_history
-    content: "Phase 2b (SUBSTANTIVE — not 'thin wrappers'): StakeInstance as first-class persisted type in WalletLedger with explicit StakeState enum (PendingBroadcast / Unconfirmed / Locked / Accruing / Claimable / Unstaking / FullyUnstaked); refresh-time reconciliation in apply_scan_result advances state based on scanned heights vs lock+accrual rules; user-facing methods Wallet::stakes(filter), Wallet::claimable_rewards, Wallet::stake/claim/unstake (each returns PendingTx, not finalized tx); plus balance + history + tx-by-id queries. Largest single sub-phase by scope; budget accordingly"
+    content: "Phase 2b (SUBSTANTIVE): transfer-shaped admission (PHASE_2B §2.4) → reward-emission leg spec → Round 3–4 close-conditions → Stage 3 StakeEngine. One ship target — no entitlement/3C subtree. Blocks Stage 3, not 2a."
     status: pending
-  - id: phase2_ops_addresses_proofs
-    content: "Phase 2c: primary_address/create_subaddress/list_addresses; tx_proof + reserve_proof via shekyl-proofs; sign/verify_message; restore-from-keys constructors"
+  - id: phase2b_round3_rebased
+    content: "Phase 2b gate — Round 3–4: ratify gate-list; §2.4 close-conditions (i) reward-emission spec + state dedup, (ii) per-reward aggregate sim, (iii) admission principal + gate 7 re-pricing. F0 dissolved. Next: reward-emission leg."
     status: pending
-  - id: phase2_ops_cold_wallet
+  - id: phase2b_reward_emission_spec
+    content: "Phase 2b design — Layer 1 emission spec closed; consensus-state schema landed. Decided 2026-06-11: bond-duration shape (age-scaled-constant; sim L10) + ClaimedEpochSet encoding (inline list, ArchivalBondValue v4). Iteration-5 gate-7 RUN: all gauges insensitive → (iii) CLOSED bonds-only (ledger G7); cross-doc spec edits LANDED 2026-06-11 (emission §10.2 + admission_proof/§7.4 deletion, PHASE_2B §2.4 (iii) closed, gate-6 §2.5 sole-owner note + no-minimum policy pin, V3_STAKER_ARCHIVAL). Byte aggregate (ii) CLOSED same day (worked sweep, ledger AGG: ≤ 0.11 % of penalty-free zone across the N_P envelope) — ALL THREE §2.4 close-conditions resolved. Layer-2 margin-robustness band RUN + CLOSED 2026-06-11 (layer2_* axes): decomposition confirmed (giniW tracks leanness, whale gauges flat ≥11× margin) → spread gate re-anchored on direct whale gauges, g sealed as band [1.5,2.5] target ≈2 (g≥3.0 fails coloc coverage at any purse), Curve reserve untriggered, bond 0.75 pin stands; 2026-06-07 gate4 readings superseded by banded-Curve substrate drift (Finding 0); g-units normalization gap → FOLLOWUPS V3.0. Remaining: FcmpMembershipOnly; schema implementation."
+    status: in_progress
+  - id: phase2b_gate6_p_registration
+    content: "Phase 2b design — gate 6: ARCHIVAL_FIREWALL_GATE6.md Round 0 opened; rounds 1–5 before Stage 3. Off-chain backing, HKDF P, firewall (network/timing/output/bond-funding), rotation, decorrelated drain. UPDATE 2026-06-30: Round 1 CLOSED (2026-06-13 — crypto + P hybrid derivation, §9); Round 2 (network + transport) = the in-progress 2d-2 work (ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md); R3 (timing/rotation/W), R4 (output + bond-funding hygiene, recurring), R5 (cross-layer sign-off) open; archival_p derivation + ARCHIVAL_P_DERIVE_V1 KAT LANDED, the emission-vin verifier (C-1 ML-DSA equality + membership-only verify) remains the hard blocker (§9.8)."
+    status: in_progress
+  - id: phase2b_stage3_stake_engine
+    content: "Phase 2b implementation — Stage 3: StakeEngine, ordinary principal↔P transfers, reward emission, bond lifecycle, Σwork path. Gated on §2.4 closure. entitlement.rs / 3C / cleartext stake-claim deletion targets. UPDATE 2026-06-30: StakeEngine persona/bond/scan surface + P-scan SP-0…SP-7 LANDED (rust/shekyl-engine-core/src/engine/{stake_engine.rs,pscan/}); genuinely unbuilt = the emission-vin verifier (C-1 ML-DSA equality + shekyl_fcmp_membership_only_verify + emission codec/builder + StakeEngine emission handler; archival_p derivation+KAT already landed) — HOMED in REWARD_EMISSION_LEG.md + REWARD_EMISSION_VIN_PLAN.md (PR-E0 done; E1/E2/E3, C-1 = PR-E3 step 8); the principal stake/unstake/drain lifecycle (NOT yet homed in any plan doc); SP-R0 durable-removal GC; Gate 6 Rounds 2–5. In progress via the 2d-2 transport track."
+    status: in_progress
+  - id: phase2c_ops_addresses_proofs
+    content: "Phase 2c (End-state 5): primary_address; create_payment_request / list_payment_requests / match_transfer_to_request; real enc_label outbound when paying a payment URI carrying a rid (ungated as of feat/enc-label-ungate 2026-06-15 — the indistinguishability invariant, SUBADDRESS_UNDER_PQC.md §5.7.10, retired the operational.cooperative_payment_requests gate; GUI rid-URI tooling is the de-facto feature boundary); tx_proof + reserve_proof via shekyl-proofs; sign/verify_message; restore-from-keys constructors. Engine substrate lands FA-8 (PR #113) before Wallet orchestrator methods. Does not block Phase 2a (2a-3 uses sentinel enc_label only)."
+    status: pending
+  - id: phase2d_ops_cold_wallet
     content: "Phase 2d: air-gapped flow as UnsignedTxBundle/SignedTxBundle (Phase 1 binding decision) — Wallet::export_unsigned, Wallet::sign_unsigned (offline-only), Wallet::submit_signed (network-only, refuses unknown bundle hash); wallet2's four-call export_outputs/import_outputs/export_key_images/import_key_images dance is NOT ported"
     status: pending
   - id: phase3_cli_scaffold
     content: "Phase 3a: shekyl-cli binary scaffold under Shape B (CLI is always a thin client to shekyl-wallet-rpc; one-shot commands self-host an in-process rpc) — clap subcommands + rustyline REPL; open/status/balance/address"
     status: pending
   - id: phase3_cli_commands
-    content: "Phase 3b: shekyl-cli command set — transfer/stake/unstake/claim/history/tx/refresh/proofs/sign/verify/change_password/export_view_key/export_unsigned/submit_signed; confirmation prompts for sends (CLI-side, not RPC-side)"
+    content: "Phase 3b: shekyl-cli command set — transfer/stake/unstake/claim/history/tx/refresh/proofs/sign/verify/change_password/export_view_key/export_unsigned/submit_signed; request new / requests list / history incoming --unattributed (require Phase 2c Wallet API + Phase 4a in-process rpc — stubs until wired); confirmation prompts for sends (CLI-side, not RPC-side)"
     status: pending
   - id: phase4_rpc_scaffold
     content: "Phase 4a: shekyl-wallet-rpc binary scaffold — axum + tower JSON-RPC; HTTP basic auth + UDS auth path (UDS recommended default); tenant isolation type; in-process spawn entry point in lib.rs for Shape B CLI to consume"
@@ -47,6 +59,16 @@ isProject: false
 
 # Shekyl v3 Wallet — Rust Rewrite
 
+> **Naming supersession (2026-04-27, binding):** this plan predates the
+> orchestrator/actor design and still says `shekyl-wallet-core::Wallet`
+> in original prose. The landed naming is
+> `shekyl-engine-core::Engine<S: EngineSignerKind>` and the crates are
+> `shekyl-engine-{core,file,state,rpc,prefs}` — per
+> [`V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md)
+> ("Wallet<S> renamed to Engine<S>"). Read every remaining
+> `shekyl-wallet-*` / `Wallet::` reference in this plan as
+> `shekyl-engine-*` / `Engine::`. The user-facing term is "engine".
+
 ## Scope and non-goals
 
 - **In scope:** `shekyl-core` only. The Rust wallet stack (`rust/shekyl-wallet-*`, `shekyl-tx-builder`, `shekyl-scanner`, `shekyl-proofs`, `shekyl-cli`, `shekyl-wallet-rpc`, `shekyl-daemon-rpc`) is completed to feature parity with the daily-use surface of `simplewallet` + `wallet_rpc_server`. The C++ `wallet2` stack is deleted.
@@ -56,9 +78,10 @@ isProject: false
 ## Locked design (from prior plans, do not re-litigate)
 
 - **Wallet file format:** v1 split-file envelope (`.wallet.keys` + `.wallet`) per [docs/WALLET_FILE_FORMAT_V1.md](../WALLET_FILE_FORMAT_V1.md). Stance Minimum-Leak AAD, two-level KEK (DK → file_kek → wrap_key), capability-discriminated region 1, Poly1305 cross-file binding via `state_tag_of_seed_block`. Region 1 write-once; region 2 free to rewrite. Already landed in `rust/shekyl-crypto-pq/src/wallet_envelope.rs` + `rust/shekyl-engine-file/`.
-- **Key signature:** master_seed_64 → HKDF with `shekyl-master-derive-v1-<network>-<format>` salt → wide-reduce Ed25519 scalars → ML-KEM-768 via SHA3-256(`shekyl-mlkem-chacha-seed` || d_z) → ChaCha20Rng. BIP-39 mainnet/stagenet (passphrase opt-in only), raw 32-byte seed testnet/fakechain. Already landed in `rust/shekyl-crypto-pq` per [stabilize_key_signature_15d8e48a](../plans/stabilize_key_signature_15d8e48a.plan.md).
+- **Key signature:** master_seed_64 → HKDF with `shekyl-master-derive-v1-<network>-<format>` salt → wide-reduce Ed25519 scalars → ML-KEM-768 via SHA3-256(`shekyl-mlkem-chacha-seed` || d_z) → ChaCha20Rng. BIP-39 mainnet/stagenet (passphrase opt-in only), raw 32-byte seed testnet/fakechain. Already landed in `rust/shekyl-crypto-pq`; binding surface anchored in the [decision log](../V3_WALLET_DECISION_LOG.md) "Key & signature stabilization" entry (2026-06-10, from Cursor plan `stabilize_key_signature_15d8e48a`).
 - **Transaction shape:** `RCTTypeFcmpPlusPlusPqc` only (and `RCTTypeNull` for coinbase). FCMP++ membership proofs from genesis, hybrid PQC (Ed25519 + ML-DSA-65) on signing, ML-KEM-768 in addresses.
 - **Multisig:** modified FROST scaffold lives behind `shekyl-wallet-core/multisig` feature; full V3.1 ship-readiness is a separate plan. The Rust wallet API is shaped FROST-aware from day 1 so V3.1 is a feature flip, not a refactor.
+- **Genesis-affecting wire lock before stressnet (Phase 7.7):** Any change that alters genesis block bytes — including FA-6 `view_tag` re-key (`docs/design/FA-6_VIEW_TAG_ML_KEM.md`) — must land on `dev` and genesis must be regenerated **before** the Phase 7.7 stressnet genesis is cut. A stressnet built on pre-FA-6 tags does not exercise the mainnet wallet scan wire format and cannot serve as the representative 4-week privacy/wire validation gate. Track genesis-affecting PRs explicitly in release/stressnet planning; the FA-6 spec is correctly scoped to FA-6 internals and does not own this sequencing, but the program plan does.
 
 ## Inventory: what exists, what's the gap
 
@@ -79,7 +102,7 @@ This is "we're pretty far, tbh." The phase plan below assumes this baseline. Dis
 
 ### Gap
 
-- **Wallet domain API:** `shekyl-wallet-core` has stake/unstake/claim transaction builders, but no `Wallet` orchestrator type that composes file + state + prefs + scanner + tx-builder + RPC client into one cohesive surface for binaries to consume. This is the heart of the rewrite.
+- **Wallet domain API:** ~~no orchestrator type composing file + state + prefs + scanner + tx-builder + RPC client~~ — **closed 2026-06-10**: `shekyl-engine-core::Engine<S>` landed with lifecycle, refresh, scan merge, and pending-tx send lifecycle (see Phase 1 closeout banner below and [`PHASE_1_ORCHESTRATOR_STATUS.md`](../completed/PHASE_1_ORCHESTRATOR_STATUS.md)).
 - **CLI feature parity:** `shekyl-cli` exists but does not yet implement the daily-use command set.
 - **RPC feature parity:** `shekyl-engine-rpc` exists but does not yet implement the JSON-RPC method set the GUI/mobile clients will eventually depend on.
 - **Wallet flows:** wallet creation (generate / restore-from-bip39 / restore-from-raw / restore-from-view-key / watch-only / hardware-offload), open with password rotation, lost-state rescan path are partially in [shekyl-engine-file](rust/shekyl-engine-file/) but not exposed as a clean `Wallet::*` API.
@@ -184,13 +207,13 @@ Decisions that propagate across every phase. Each is one paragraph; rationale li
 
 - **Error types — per-domain in core, unified at the RPC boundary.** Domain layer (`shekyl-wallet-core`) ships per-domain error enums (`SendError`, `RefreshError`, `KeyError`, `IoError`, etc.) with `thiserror` + `#[from]` conversions for ergonomic `?` propagation. The RPC layer (`shekyl-wallet-rpc`) defines a single `WalletRpcError` enum that every domain error converts into. JSON-RPC error code allocation is **co-located with the OpenAPI spec** at [docs/api/wallet_rpc.yaml](docs/api/wallet_rpc.yaml), with stable code ranges (e.g., -29000..-29999 for wallet domain, -32xxx for protocol per JSON-RPC 2.0). Per-method codes can land alongside each method, but the ranges and error-shape contract are set in the spec from the first commit of Phase 4b.
 
-- **Locking discipline — `&self` queries / `&mut self` mutations; writer-preferred `RwLock<Wallet>` at the RPC boundary; refresh via typed `ScanResult` merge.** Type-layer rule: query methods (`balance`, `primary_address`, `list_addresses`, `transfers`) take `&self`; mutating methods (`refresh`, `send`, `submit`, `create_subaddress`, `change_password`) take `&mut self`. Binary-layer wrapper: `Arc<RwLock<Wallet>>` with a **writer-preferred** implementation (e.g., `parking_lot::RwLock` or explicit lock-ordering on `tokio::sync::RwLock`) so refresh isn't starved by sustained reader load from a polling GUI. Refresh holds the write lock only briefly: take read lock to snapshot scan cursor and tip hash → release → network IO + scan to local `ScanResult` buffer with no lock held → take write lock briefly to call `Wallet::apply_scan_result(result)` → release. **`apply_scan_result` is additive-only and scoped to the scan-result slice** of `WalletLedger` (scanned transfers, sync cursor, scanned-pool cache); it never touches `unconfirmed_txs`, `address_book`, key-image caches, or any field owned by the send/lifecycle paths. The merge verifies `wallet.synced_height == result.start_height`; mismatch (concurrent mutation, second refresh raced ahead) is `RefreshError::ConcurrentMutation`, caller retries. The constraint is enforceable in the type system: the scanner produces a typed `ScanResult` value, not a `&mut Wallet` mutation; only `Wallet::apply_scan_result` consumes it, and that method's body is the single audited site for the merge contract.
+- **Locking discipline — `&self` queries / `&mut self` mutations; writer-preferred `RwLock<Wallet>` at the RPC boundary; refresh via typed `ScanResult` merge.** Type-layer rule: query methods (`balance`, `primary_address`, `list_payment_requests`, `transfers`) take `&self`; mutating methods (`refresh`, `send`, `submit`, `create_payment_request`, `change_password`) take `&mut self`. Binary-layer wrapper: `Arc<RwLock<Wallet>>` with a **writer-preferred** implementation (e.g., `parking_lot::RwLock` or explicit lock-ordering on `tokio::sync::RwLock`) so refresh isn't starved by sustained reader load from a polling GUI. Refresh holds the write lock only briefly: take read lock to snapshot scan cursor and tip hash → release → network IO + scan to local `ScanResult` buffer with no lock held → take write lock briefly to call `Wallet::apply_scan_result(result)` → release. **`apply_scan_result` is additive-only and scoped to the scan-result slice** of `WalletLedger` (scanned transfers, sync cursor, scanned-pool cache); it never touches `unconfirmed_txs`, `address_book`, key-image caches, or any field owned by the send/lifecycle paths. The merge verifies `wallet.synced_height == result.start_height`; mismatch (concurrent mutation, second refresh raced ahead) is `RefreshError::ConcurrentMutation`, caller retries. The constraint is enforceable in the type system: the scanner produces a typed `ScanResult` value, not a `&mut Wallet` mutation; only `Wallet::apply_scan_result` consumes it, and that method's body is the single audited site for the merge contract.
 
-- **`PendingTx` lifetime — process-local handle, chain-state-tagged, reservation-bearing, three-method lifecycle.** `PendingTx` lives in process memory only; not serialized to disk. Each `PendingTx` carries `(built_at_height: u64, built_at_tip_hash: BlockHash, fee_atomic_units: u64)`. Submit verifies (a) `built_at_height` is within the wallet's current reorg window, and (b) the wallet's recorded block hash at `built_at_height` equals `built_at_tip_hash`. Window failure = `PendingTxError::TooOld`; hash mismatch = `PendingTxError::ChainStateChanged`. The `fee_atomic_units` field is informational — submit does not refuse on stale fee, but the CLI/GUI can surface it for re-confirmation. **No clock-based TTL** — the real expiration condition is chain state, which is what the reorg-window + tip-hash check captures. Three-method lifecycle: `build_pending_tx(req) -> PendingTx`, `submit_pending_tx(handle) -> TxHash`, `discard_pending_tx(handle) -> ()`. **Reservation semantics:** `build_pending_tx` reserves the input outputs it selected (so a second build doesn't double-spend in-process); `submit_pending_tx` converts the reservation to "unconfirmed-spent" in `WalletLedger`; `discard_pending_tx` releases the reservation. `discard` is **idempotent and silent on unknown handles** (so a client that crashed mid-flow can safely call it for cleanup). `Wallet::close` returns an error if any `PendingTx` is in flight; the caller must submit or discard first. Air-gapped flows (Phase 2d) use `UnsignedTxBundle` / `SignedTxBundle` as the **explicitly persisted** form; that's a different concept with a different lifetime, and the persisted bundles carry their own height/hash/fee anchoring.
+- **`PendingTx` lifetime — process-local handle, chain-state-tagged, reservation-bearing, three-method lifecycle.** `PendingTx` lives in process memory only; not serialized to disk. Each `PendingTx` carries `(built_at_height: u64, built_at_tip_hash: BlockHash, fee_atomic_units: u64)`. Submit verifies (a) `built_at_height` is within the wallet's current reorg window, and (b) the wallet's recorded block hash at `built_at_height` equals `built_at_tip_hash`. Window failure = `PendingTxError::TooOld`; hash mismatch = `PendingTxError::ChainStateChanged`. The `fee_atomic_units` field is informational — submit does not refuse on stale fee, but the CLI/GUI can surface it for re-confirmation. **No clock-based TTL** — the real expiration condition is chain state, which is what the reorg-window + tip-hash check captures. Three-method lifecycle: `build_pending_tx(req) -> PendingTx`, `submit_pending_tx(handle) -> TxHash`, `discard_pending_tx(handle) -> ()`. **Reservation semantics (refined 2026-07-04 by [`DAEMON_SUBMIT_VERDICT.md`](DAEMON_SUBMIT_VERDICT.md) §2.6/F14):** `build_pending_tx` reserves the input outputs it selected (so a second build doesn't double-spend in-process); `submit_pending_tx` on an `Accepted`/`AlreadyInPool` verdict converts the reservation to the **persisted awaiting-confirmation lock state** in `WalletLedger` — *not* spent-at-submit; ledger `spent` finality is refresh-authoritative, and the awaiting-confirmation state has the two mandatory release paths (confirmed-present via refresh; confirmed-absent via the §5.3 watchdog horizon — no silent stranding); `discard_pending_tx` releases the reservation. `discard` is **idempotent and silent on unknown handles** (so a client that crashed mid-flow can safely call it for cleanup). `Wallet::close` returns an error if any `PendingTx` is in flight; the caller must submit or discard first. Air-gapped flows (Phase 2d) use `UnsignedTxBundle` / `SignedTxBundle` as the **explicitly persisted** form; that's a different concept with a different lifetime, and the persisted bundles carry their own height/hash/fee anchoring.
 
 - **`Network` — closed enum, no feature flags, mismatch is a typed error.** `Network = { Mainnet, Testnet, Stagenet, Fakechain }`. No Cargo feature flags excluding networks at compile time (they create matrix complexity for no real benefit; runtime enforcement is sufficient). The wallet file authoritatively declares its network in region 1 (capability + network field). `Wallet::open` requires a `DaemonRpcClient` whose declared network matches; mismatch is `OpenError::NetworkMismatch`, never a warning. The daemon URL's network is **verified via `get_info` before any wallet operation** — defends against DNS hijack pointing a testnet wallet at a mainnet daemon.
 
-- **Subaddress hierarchy — flat, not two-level.** `SubaddressIndex(u32)` newtype, single namespace per wallet. Index 0 reserved for primary address. JSON shape is `{"index": u32}`, not `{"account": u32, "index": u32}`. Exchanges that want stronger isolation use multiple wallet files (separate keys → stronger than wallet2's account-level subaddresses, which shared keys). The wallet2 two-level "account/subaddress" hierarchy is dropped from genesis. This decision propagates into the OpenAPI spec from Phase 4b's first method.
+- **Receive addressing — End-state 5 (one primary per account, no subaddresses at V3.0).** Per [`docs/design/SUBADDRESS_UNDER_PQC.md`](SUBADDRESS_UNDER_PQC.md) §5.7 (closed R2-F2, 2026-05-31): each account exposes **one reusable primary address**; on-chain privacy is output-layer (per-output `ho`, account hybrid KEM), not address rotation. Invoice attribution (J2/J3) moves to **payment requests** + mandatory wire `enc_label` (5-T substrate; FA-11 landed). There is **no** `create_subaddress` at V3.0. Optional seed-derived multi-account (T2 / §5.7.3) is **P3**, not V3.0. Exchanges that want stronger isolation use multiple wallet files (independent keys). Supersedes the prior flat-`SubaddressIndex` decision — see [`docs/V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md) (2026-06-07 entry). This decision propagates into the OpenAPI spec from Phase 4b's first method.
 
 - **`RefreshHandle` semantics — cancel-on-drop, single-flight.** `RefreshHandle` returned from `Wallet::refresh()` aborts the underlying `tokio::task::JoinHandle` on drop (RAII). Single-flight is enforced by `&mut self` on `refresh`: a second call while a refresh is in flight is a compile error or returns `RefreshError::AlreadyRunning` (whichever the borrow checker permits given the call site). The scanner loop **checkpoints between blocks** so cancellation is clean — mid-block cancellation is not allowed.
 
@@ -316,6 +339,21 @@ If all five items pass without surfacing new questions, Phase 1 begins.
 
 ## Phase 1 — Wallet domain model
 
+> **Closed 2026-06-10 — naming and structure superseded.** This section
+> is preserved as the original design statement. The landed orchestrator
+> is `shekyl-engine-core::Engine<S: EngineSignerKind>` (production shape
+> `Engine<S, D, L, E, R, P, F>`), **not** `shekyl-wallet-core::Wallet` —
+> binding rename per [`V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md)
+> (2026-04-27, "Wallet<S> renamed to Engine<S>"); the crates are
+> `shekyl-engine-{core,file,state,rpc,prefs}`. The struct sketch below is
+> the pre-Stage-1 shape; the landed field set (trait-generic engines,
+> `KeyEngineHandle` key actor, `LocalLedger` RwLock state) is documented
+> in `rust/shekyl-engine-core/src/engine/mod.rs`. The deliverable-by-
+> deliverable done/blocked matrix is
+> [`PHASE_1_ORCHESTRATOR_STATUS.md`](../completed/PHASE_1_ORCHESTRATOR_STATUS.md).
+> Open residue (View/HW lifecycle bodies) is tracked in
+> [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) with a reversion clause.
+
 The crate is `shekyl-wallet-core`; the type is `Wallet`. The naming collision with the file orchestrator was resolved in Phase 0 (renamed to `WalletFile`).
 
 ### What's a `Wallet`?
@@ -349,9 +387,9 @@ Default lean: option 3 unless the audit surfaces a behavioral distinction. Which
 - **Address book:** *Why now?* Daily-use convenience for "who is this address?". *Can we do better?* It's a privacy hazard if labels correlate addresses; type the field as `LocalLabel(Zeroizing<String>)` and document that labels never cross the FFI or RPC boundary unredacted. Carry forward, hardened.
 - **`tx_keys` storage:** *Why now?* `get_tx_proof`. *Can we do better?* Re-derive per-call from view secret + tx pubkey when we have it; only persist when the user has requested an explicit proof artifact. Open question — answer empirically by checking the tx_proof derivation in [shekyl-proofs](rust/shekyl-proofs/).
 - **`tx_notes`:** *Why now?* User memory aid. *Can we do better?* Same locality discipline as labels; never on the wire.
-- **Integrated addresses / payment IDs: dropped.** Locked in. Integrated addresses are a Monero compatibility wart — they exist because Monero had no subaddresses originally and needed a way to attach a payment ID to "send to this address." Subaddresses solved that; modern Monero only carries them for backwards compatibility with old exchange integrations. Shekyl is pre-launch with zero users depending on payment IDs by definition. `TxRequest` has no `payment_id` field. The `PaymentId` type stays in `shekyl-engine-state` only as long as the on-disk schema requires it; it gets removed at the next schema bump. If a future exchange complains, the answer is "subaddresses give per-recipient tracking with stronger privacy properties than payment IDs ever did." Decision binding for Phase 2a.
-- **Subaddress account vs subaddress:** wallet2 has a two-level "account / subaddress" hierarchy. Most users use one account. *Drop the account level entirely?* Ship one flat subaddress namespace per wallet; revisit if exchanges need account separation.
-- **Hot-wallet view-key auto-import on receive:** wallet2 has a thing where receiving on a new subaddress auto-creates the entry. *Keep* — usability win with no privacy cost.
+- **Integrated addresses / payment IDs: dropped.** Locked in. Integrated addresses are a Monero compatibility wart — they exist because Monero had no subaddresses originally and needed a way to attach a payment ID to "send to this address." Shekyl is pre-launch with zero users depending on payment IDs by definition. `TxRequest` has no `payment_id` field. The `PaymentId` type stays in `shekyl-engine-state` only as long as the on-disk schema requires it; it gets removed at the next schema bump. **Per-recipient tracking at V3.0** uses payment-request labels in the URI + cooperative `enc_label` echo — not payment IDs, not derived subaddresses. Decision binding for Phase 2a. See [`SUBADDRESS_UNDER_PQC.md`](SUBADDRESS_UNDER_PQC.md) §5.7.2 (labels are advisory, off-chain; no consensus field).
+- **Subaddresses: dropped at V3.0 (End-state 5).** wallet2's flat subaddress namespace and two-level account/subaddress hierarchy are both rejected. V3.0 ships one primary address per account; merchants create **payment requests** (`amount` + `label` + optional `expiry`) and share `shekyl:<primary>?amount=&label=&expiry=` URIs. Optional seed-derived multi-account (T2) is deferred to P3 (§5.7.3) — not a flat `SubaddressIndex` namespace.
+- **Hot-wallet auto-import on receive:** wallet2 auto-creates subaddress registry entries when receiving on a new index. Under End-state 5 there is no subaddress registry — scan claims outputs to the primary account directly. Payment-request bookkeeping is separate (FA-8).
 - **Background sync:** wallet2's "background sync" feature is an attempt at decoupled scan from foreground. *Replace with structured concurrency:* `tokio::spawn` a scan task whose lifecycle is tied to the `Wallet` handle; cancellation on drop is type-enforced.
 - **Cold-wallet flow distinction (decision binding for Phase 2d):** "cold wallet" means two distinct things and they need separate code paths.
   - **Hardware-offload mode** (Ledger/Trezor signing in real-time over USB) is covered by the `HARDWARE_OFFLOAD` capability and does not use file-based handoff.
@@ -366,7 +404,7 @@ Default lean: option 3 unless the audit surfaces a behavioral distinction. Which
 - Per-domain error enums (`OpenError`, `RefreshError`, `SendError`, `PendingTxError`, `KeyError`, `IoError`, etc.) under `rust/shekyl-wallet-core/src/error.rs`, `thiserror`-shaped, with `#[from]` conversions. `RefreshError::ConcurrentMutation`, `PendingTxError::TooOld`, `PendingTxError::ChainStateChanged`, `TxError::DaemonFeeUnreasonable` all named here.
 - **Typed `ScanResult` value** (`rust/shekyl-wallet-core/src/scan.rs` or in `shekyl-scanner`'s public surface): the scanner produces `ScanResult { start_height, start_tip_hash, end_height, end_tip_hash, scanned_transfers, scanned_pool_updates }` and **does not** mutate `Wallet` directly. `Wallet::apply_scan_result(&mut self, result: ScanResult) -> Result<RefreshSummary, RefreshError>` is the single audited merge site: verifies `wallet.synced_height == result.start_height`, performs an additive merge into the scan-result slice (`LedgerBlock` transfers, sync cursor, scanned-pool cache) and never touches `unconfirmed_txs` / `address_book` / key-image caches. The type system enforces the constraint — `shekyl-scanner` has no `&mut Wallet`.
 - `PendingTx` type with `(built_at_height, built_at_tip_hash, fee_atomic_units)` anchoring and reservation ledger entry on input outputs. **The engine-actor-bearing implementation of the `PendingTx` lifetime + reservation surface lives in `PendingTxEngine` per [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](STAGE_1_PR_5_PENDING_TX_ENGINE.md)** — the cross-cutting decision pinned the trait surface and the (γ) lean three-collection state shape (`output_locks` + `consumer_held` + `in_flight`); the design doc holds the eight-commit C0–C8 decomposition that ships this surface under PR 5 of Stage 1. Snapshot identity is content-derived (`SnapshotId` via `cn_fast_hash` over `LedgerSnapshot` deterministic fields, 16-byte truncation), and chain-state-pinning lives there end-to-end. Reservations and submit-side staleness checks land in `LocalPendingTx` (the Stage 1 implementor); Stage 4's `PendingTxActor` swap is invariant per the trait surface.
-- `SubaddressIndex(u32)` newtype lands here. Index 0 is the primary address.
+- **`PaymentRequest` store** (types in `shekyl-engine-state` / `BookkeepingBlock`; FA-8) replaces the interim `subaddress_registry` shape. One **primary address** per account — no `SubaddressIndex` user-facing surface at V3.0. `LocalLabel` wraps persisted request labels.
 - `Network` closed enum lands here. `Wallet::open` takes a `DaemonRpcClient` and verifies network match against the wallet file's region 1 declaration; the `DaemonRpcClient` itself verifies daemon network via `get_info` on first call.
 - `LocalLabel(Zeroizing<String>)` (and peer types) with redacting `Debug` **and** `Display` impls, no `Serialize`/`Deserialize` derives, `expose() -> &SecretStr` accessor where `SecretStr` is also redacting.
 - `tracing` setup + per-crate spans wired up (no `RUST_LOG` parsing here — that's binary-side, but the spans exist for binaries to consume); subscriber-level redacting field formatter ships alongside. **Absorbs the daemon-side staticlib follow-up**: per [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md) §V3.2 → "shekyl-daemon-rpc staticlib: tracing::* calls silently dropped", today every `tracing::*` event from `rust/shekyl-daemon-rpc` linked into `shekyld` goes to the no-op global dispatcher because no C++ caller installs a subscriber. Phase 1's tracing layer is the natural fix site — it ships a `shekyl_daemon_rpc_init_logging` FFI export (or an equivalent shared-subscriber install path) that `shekyld`'s C++ entry point calls after `mlog_configure` runs. Solving the subscriber question once for the whole codebase is cleaner than solving it for the wallet rewrite and re-solving it for the daemon. Closes the V3.2 entry — re-target to V3.1 / Phase 1 in the FOLLOWUPS file with a closure note when this lands.
@@ -376,35 +414,195 @@ Default lean: option 3 unless the audit surfaces a behavioral distinction. Which
 
 ## Phase 2 — Core operations
 
+> **Fossil-sweep — source-verified against `dev` 2026-06-30 (supersedes the mid-June status rows further down this section).**
+> Phase 2 splits into 2a/2b/2c/2d. Verified state:
+>
+> - **2a (send / refresh) — done for its phase scope.** Engine substrate + orchestrator methods (`refresh` / `build_pending_tx` / `submit_pending_tx` / `discard_pending_tx`) landed, **and** the wallet-local curve-tree client (`rust/shekyl-curve-tree/`) is built + KAT-verified **and wired into the send path** — **CT-5c** retired the synthetic membership vectors; production spends assemble a real reconstructed path via `CurveTreeActor` (`signing_assembly.rs` → `sign_bridge.rs` → `local_pending_tx.rs`, no synthetic fallback). The depth-3 recon consensus bug is **CLOSED** (PR #197; the daemon was the bug, the wallet oracle correct). Real-root **mainnet** validity is now gated only on **Phase 6 / Track-2 live-daemon parity** plus minor residuals ([`CT5_SERIES_CLOSEOUT.md`](../completed/CT5_SERIES_CLOSEOUT.md) §5: per-input reconstruction perf at scale, pruned-store assembly, reactive `ProofStale` → Phase 6). The `get_curve_tree_leaves` bulk RPC is **off the critical path** (block-derived forward sync is the shipped default, CT-3). Remaining 2a-proper residue: the `open_view_only` / `open_hardware_offload` capability stubs.
+> - **2b (stake + `P` + emission) — the bulk of remaining Phase 2, far more built than the rows below claim.** *Landed:* `StakeEngine` (persona/bond/scan surface — `spawn` / `mint_handle` / `activate_persona` / `sign_bond` / `scan_step` / `retire_bonded_persona` in `rust/shekyl-engine-core/src/engine/stake_engine.rs`) and the full `P`-scan **SP-0…SP-7** firewall layer (`rust/shekyl-engine-core/src/engine/pscan/`, including SP-6 `VerifiedRange` / `PReconcileSet` — now built despite older docs calling it "future"); Gate 6 **Round 1 closed** (2026-06-13). *In progress:* the **2d-2 network transport** (`SP-T0…T5`, Tor) = Gate 6 **Round 2**; the SP-5 driving-task wiring (`Engine::start_pscan`, PR-B). *Genuinely unbuilt:* the **reward-emission leg** (no `emit` / `reward` / `payout` methods yet — but **homed** in [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) + [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md), PR-E1/E2/E3) and its **emission-vin verifier** (the **C-1** recompute-`H(pqc_pk)`-and-equate + ML-DSA-65 verify + `shekyl_fcmp_membership_only_verify` FFI — hard emission blocker at PR-E3 step 8; note `archival_p` derivation + KAT are **already landed**); the **principal stake / unstake / drain lifecycle** (engine is persona/bond-only; **now scoped** Round 0 in [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md), genesis-seal-blocked on the rebond/unbond FSM); **SP-R0 durable-removal GC**; the **rebond/unbond FSM** (promoted V3.1→V3.0); and **Gate 6 Rounds 2–5**.
+> - **2c (receive / addresses / proofs) — partial.** *Wired Engine methods:* `create_payment_request`, `list_payment_requests`, URI format/parse, `try_from_keys`; inbound reconcile is auto-applied during merge (no explicit `match_transfer_to_request`). *Not wired:* `Engine::tx_proof` / `Engine::reserve_proof` (primitives exist in `rust/shekyl-proofs/` + FFI but no Engine wrapper), `sign_message` / `verify_message` (CLI stubs only).
+> - **2d (air-gapped bundles) — greenfield.** `UnsignedTxBundle` / `SignedTxBundle` + `export_unsigned` / `sign_unsigned` / `submit_signed` exist only as a doc-comment (`rust/shekyl-engine-core/src/engine/mod.rs:45`).
+>
+> **Where the "2d-1 / 2d-2 / SP-\*" work lives:** the Gate-6 firewall spun out into the **archival-bond sub-plan track** — [`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`](ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md) (request layer), [`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](ARCHIVAL_BOND_2D1_PSCAN_PLAN.md) (`P`-scan, SP-0…SP-7), [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) (Tor transport, current front) + [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md). That track's `2d-1` / `2d-2` numbering is **internal to Phase 2b's gate-6 firewall — it is NOT** this plan's Phase 2d (cold wallet).
+
+### Phase 2b critical path — one genesis substrate (pay-for-archival + `P`)
+
+Pre-genesis discipline: **one ship target at genesis** — pay-for-service archival
+rebasing ([`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §*Pay-for-service rebasing*).
+**Do not** implement the entitlement claim path then replace it. **`PHASE_2B_STAKE_LIFECYCLE.md`
+§2** is the authoritative scope statement; §3–§7 body is still claim-centric until
+retooled.
+
+**Identity — three-way split (not "P solves F0"):**
+
+1. **Pay-for-service dissolves F0** — deletes the confidential claim wire; no bucketing gate.
+2. **`P` firewalls archival's public-holder problem** — different from F0; pseudonymity
+   not anonymity.
+3. **Gate 6 firewall is the unbuilt privacy work** — budget it; no production code yet.
+
+**Retool order (2026-06-07):** §2.4 transfer-shaped form (landed) → **reward-emission
+leg spec** (Layer 1 closed) → **`ARCHIVAL_CONSENSUS_STATE.md`** (gate 2/3 schema + `W`;
+blocks emission **implementation**) → gate 6 firewall ∥ §3 FSM retool (unblocked) →
+admission principal + gate 7 → §7 threat model.
+
+**Scope cut:** 2b owns the **staking form**, not the whole archival system — but
+**gate 6 is staking form** (replaces `is_active_staker(entity_id)`). Archival-internal
+items (set-B shards, challenge construction, transport, foundation sizing, `Σwork`/`R`
+internals) are **interface-only** unless one decision is load-bearing on a staking
+interface (e.g. retention-proof shape at `P` registration).
+
+Policy pins (foundation floor, bond floor, SLA) largely **closed in spec**. Stage 3
+gates: **gate 6 soundness** + Round 3–5 on rebased substrate + principal-wire decision.
+
+**Discipline:** verify against `dev` before treating any row as build vs finish
+(`rg`, `cargo test -p <crate>`, design-doc §0 audits).
+
+#### Genesis substrate — single table (transfer-shaped §2.4)
+
+| Layer | Ship at genesis | Retired / never-ship |
+|-------|-----------------|----------------------|
+| Principal | Main-tree FCMP++ transfer principal ↔ **`P`** (no consensus minimum — gate 7 closed bonds-only); decorrelated unstake drain | `txout_to_staked_key`, 3C subtree, cleartext watermark, `ADMISSION_MIN_ATOMIC` |
+| Reward accounting | Public work under **`P`**; **reward emission** (special leg) to stealth | Entitlement claims; `txin_stake_claim`; F0 (**dissolved**) |
+| Reward dedup | Per-`P` claimed-epoch bitmap on **bond record** | `N_arch` / `G_arch` published tags |
+| Privacy (reward path) | **Gate 6 firewall** (unbuilt) + bond-funding hygiene | Hidden entitlement amounts |
+| Reward economics | `Σwork` servo, per-shard bonds, loud 8c retention | Reserve-DLEQ, `tier_num`, `band_sum` on reward |
+| Crypto (reward leg) | Membership-only control (no key image) | ClaimLinkability sibling; separate registration tx |
+| Engine split | `StakeEngine` owns transfer + `P` + bond + emission; `ArchivalEngine` (Stage 5) | `entitlement.rs` on `dev` |
+
+| Workstream | Plan home | Blocks 2a / 2c / 2d? |
+|------------|-----------|----------------------|
+| **Phase 2b — stake + `P` + rebased reward** | [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) | **No** (2a send independent) |
+| **Tier 1 crypto + genesis structure** | [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) step 3; [`FOUNDATION_GENESIS_IDENTITY_SET.md`](FOUNDATION_GENESIS_IDENTITY_SET.md) | **Yes for Stage 3** — same substrate, not a later cutover |
+| **Tier 3 economics pins** | Sim ledger L2+; `ARCHIVAL_BOND_FLOOR_ATOMIC` landed | Feeds consensus constants; gate 1 `Σwork` still open |
+
+#### Archival tiers (reference — same genesis gate)
+
+| Tier | What | Status (2026-06) | Blocks Stage 3? |
+|------|------|------------------|-----------------|
+| **1 — Crypto soundness** | Archival read contract (gate 3 ν dissolved), L14 crediting, **reward emission + membership-only control**, gate 6 firewall, retention 8c | Emission **spec** closed; contract **pinned**, implementation open ([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)) | **Yes — schema impl + gate 6** |
+| **2 — Consensus structure** | Genesis identity block, `HoldingsDescriptor`, set-B shards | Mostly pinned in spec | Partially (wire shapes) |
+| **3 — Economics → params** | Gate 4 bond floor **closed**; gate 1 `Σwork` | Mixed | Gate 1 for reward servo |
+| **4 — Ops / transport** | Arti, firewall ops, UI | Defer post-genesis | No |
+
+**Verified code state (re-checked on `dev` 2026-06-30 — supersedes the mid-June reading):**
+
+- `StakeEngine` — **present and structurally complete** for the persona/bond/scan surface (`rust/shekyl-engine-core/src/engine/stake_engine.rs`): `spawn`, `mint_handle`, `activate_persona`, `sign_bond`, `scan_step`, `retire_bonded_persona`. **Inert** (no submission path yet — the `TODO(2d)` at `stake_engine.rs:1095` is the broadcast-timing seam). **No** reward-emission or principal stake/unstake/drain methods exist — that economic surface is the genuinely-unbuilt part of 2b.
+- `P`-scan **SP-0…SP-7** — **built** in `rust/shekyl-engine-core/src/engine/pscan/` (`block_source`, `persona_scanner`, `scan_step`, `accrual`, `cadence`, `task`, `exhaustiveness` = `VerifiedRange`, `reconcile` = `PReconcileSet`, `cover_discovery`). Remaining wiring: the SP-5 driving task (`Engine::start_pscan`, PR-B) + SP-7 cold-start lifecycle.
+- `shekyl-staking` `entitlement.rs` — **do not extend for genesis**; deletion target (unchanged).
+- `archival_p` registration crypto — **landed** (`rust/shekyl-crypto-pq/src/archival_p.rs` + the `ARCHIVAL_P_DERIVE_V1` KAT corpus / freeze tripwire / suite). What is **unbuilt** is the **emission-vin verifier** that consumes it: the `shekyl_fcmp_membership_only_verify` FFI, the **C-1** recompute-`H(pqc_pk)`-and-equate + ML-DSA-65 verify step, and the emission codec/builder — all net-new, scoped in [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) (PR-E1/E2/E3; C-1 = PR-E3 step 8, [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §9.8).
+- `ARCHIVAL_BOND_FLOOR_ATOMIC` — **landed** (`config/consensus_constants.json`) (unchanged).
+
+#### Phase 2b wallet program — what we build
+
+Ship the **wallet stake surface** on **`StakeEngine`** implementing the **rebased**
+substrate. **Authoritative scope:** [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md)
+**§2** (carry-over retain/delete, staking-form vs archival-internal, principal-wire
+open question). §3–§6 are **pending retool** — use for intent, not wire shapes, until
+gate 6 lands. Historical `StakeState` sketch below is **obsolete**.
+
+**Design round status** (PHASE_2B rounds + Gate-6 rounds; re-checked 2026-06-30):
+
+| Round | Status | Wallet-rewrite implication |
+|-------|--------|---------------------------|
+| 0–2 | **Closed** | Principal FSM, persistence, §4.7, §5, §6 — carried forward (landed) |
+| 3 | **Closed** (2026-06-11) | §2.4 (i)–(iii) all resolved: reward-emission *spec*, per-reward aggregate sim, admission + gate 7 (bonds-only). |
+| 4 | **Largely closed** | Archival consensus-state schema landed; gate-4 bond floor closed. Residual: gate-1 `Σwork` reward servo. |
+| 5 | Deferred | Stage 3 PR map — folded into the archival-bond track's PR sequence (2c-2b / 2d-1 / 2d-2). |
+| **Gate 6 (firewall) — the live design front** | **R1 closed** (2026-06-13: crypto + `P` derivation); **R2 open = network + transport (the 2d-2 work, in progress)**; R3 = timing + rotation + `W`; R4 = output + bond-funding hygiene (recurring); R5 = cross-layer sign-off | Gate-6 rounds now gate Stage-3 emission; the §2.4 rounds no longer do |
+| Stage 3 | **Partially landed** — `StakeEngine` persona/bond/scan + pscan SP-0…7 built; reward path still **blocked** on the emission leg + C-1 + Gate 6 R2–5 | `StakeEngine` + `P` + emission — **not** entitlement claims |
+
+**Build sequence:**
+
+```mermaid
+flowchart TD
+  subgraph design [Phase 2b design]
+    S24["§2.4 transfer-shaped form"]
+    REW["Reward-emission leg spec"]
+    G6["Gate 6: firewall + off-chain backing"]
+    R3["Round 3-4: close-conditions i-iii"]
+    R5["Round 5: Stage 3 PR map"]
+  end
+  subgraph stage3 [Stage 3]
+    SE["StakeEngine + P lifecycle"]
+    SCAN["Scanner: bond + archival events"]
+    ECON["Reward emission + Σwork"]
+  end
+  subgraph wallet [Wallet Phase 2b]
+    LEDGER["StakeInstance persist"]
+    MERGE["apply_scan_result"]
+    API["stake-in / bond / emit / drain / unstake"]
+  end
+  S24 --> REW --> G6 --> R3 --> R5 --> SE
+  SE --> SCAN --> ECON
+  SE --> LEDGER --> MERGE --> API
+```
+
+1. **§2.4** — transfer-shaped form authoritative. **(closed)**
+2. **Reward-emission leg** — membership-only backing, bond-record epoch dedup (no tag). **(spec closed; implementation UNBUILT — no `emit`/`reward` methods on `StakeEngine`)**
+3. **Gate 6** — off-chain backing, firewall, bond-funding hygiene. **(R1 closed; R2 = 2d-2 transport in progress; R3–5 open)**
+4. **Close Round 3–4** — §2.4 conditions (i)–(iii) incl. gate 7 re-pricing. **(closed 2026-06-11)**
+5. **Stage 3** — `stake_engine.rs`; ordinary transfers + emission path. **(engine substrate + pscan SP-0…7 LANDED; emission leg + principal stake/unstake/drain lifecycle still to build)**
+
+**Phase 2b PR shape — SUPERSEDED (reconciled 2026-06-30).** The original entitlement-era
+map — (2b-1) ledger + `StakeId`; (2b-2) reorg; (2b-3) query API; (2b-4) stake/unstake/`P`/payout —
+predates the transfer-shaped rebase and the gate-6 firewall spin-out, and does **not** match
+what was built. The actual PR sequence, by sub-track (≤ ~10 files per PR):
+
+- **`P`-scan firewall (SP-0…SP-7)** — [`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](ARCHIVAL_BOND_2D1_PSCAN_PLAN.md). SP-0…SP-6 **landed** (incl. #194 CT compare, #195 view-pair adapter, #201 dual-extractor scan-step, #215 non-empty BlockRange); SP-5 driving task (**PR-B, in flight**) + SP-7 cold-start remain.
+- **Network transport + reconcile (SP-T0…SP-T5, SP-R0 GC)** — [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md). SP-T0/SP-T1 **in progress** (incl. #204, #212); SP-R0 durable-removal GC consumes SP-6's `PReconcileSet`.
+- **Bond request layer** — [`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`](ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md). Design rounds 1–6 closed; implementation open (lands inert — no submission path).
+- **Reward-emission leg** — **homed** in [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) (consensus spec) + [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) (PR-E0 landed = F-S1 writer-wipe fix; PR-E1/E2/E3 open, **C-1** = PR-E3 step-8 hard merge gate, [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §9.8). Unbuilt = the emission-vin verifier + the StakeEngine emission handler; `archival_p` + KAT already landed.
+- **Principal stake/unstake/drain lifecycle** — **now scoped** (Round 0) in [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md): the user-facing economic surface (`StakeEngine` is persona/bond-only today). Genesis-seal-blocked on the rebond/unbond FSM pin + Gate 6 R4 (GF-4/GF-7) + the emission leg; the scoping doc + its Round-1 ratification are the buildable-now slice.
+
+#### What not to do in Phase 2b
+
+- Do **not** implement `txin_stake_claim_v2` entitlement claims or extend
+  `entitlement.rs` as the genesis reward path.
+- Do **not** close Round 3 on F0 bucketing — that gate applied to the **retired** wire.
+- Do **not** treat archival Tier 1 as "Stage 5 only, stake can ship first" — Tier 1
+  spec **gates** Stage 3 on the rebased substrate.
+- Do **not** port wallet2 stake tracking; chain-driven FSM via scan + `StakeEngine`.
+- Do **not** use `pool_weighted_total` — retired.
+
+#### Cross-reference — wallet phases vs genesis staking
+
+| Wallet phase | Interaction |
+|--------------|-------------|
+| 2a send | Independent |
+| **2b stake** | Staking form incl. **gate 6**; not whole archival system; not entitlement interim |
+| 2c / 2d | Independent |
+| 4b RPC stake methods | After 2b orchestrator |
+| Stage 5 `ArchivalEngine` | Query/challenge **serving** surface; registration backing still flows through `StakeEngine` at genesis |
+
+---
+
+**Phase 2a implementation spec:** [`docs/design/PHASE_2A_SEND_PATH.md`](PHASE_2A_SEND_PATH.md)
+(Round 0, 2026-05-31) — PR sequence 2a-1…2a-4. **Engine substrate complete**
+(2026-06): daemon fee snapshot, signing context, wire encode/submit, and
+`TestDaemon` fee-bound build→submit integration on `LocalPendingTx`. **Orchestrator
+methods landed with the Phase 1 closeout** (2026-06-10): `Engine::refresh` /
+`start_refresh` / `apply_scan_result` / `build_pending_tx` / `submit_pending_tx` /
+`discard_pending_tx` ship on `Engine<S>` (see
+[`PHASE_1_ORCHESTRATOR_STATUS.md`](../completed/PHASE_1_ORCHESTRATOR_STATUS.md)); remaining 2a
+residue is tracked in `PHASE_2A_SEND_PATH.md` §10.
+
 Each operation is a method on `Wallet` with a focused signature. No mode flags; if behavior diverges meaningfully (full vs view-only), it lives in different methods.
 
 - **Refresh / scan:** `Wallet::refresh()` drives `shekyl-scanner`. Returns `RefreshSummary { blocks_scanned, transfers_added, reorg_height }`. Async; cancellable. Implements the brief-write-lock pattern from the cross-cutting locks (read snapshot → release → scan → brief write to merge → release).
-- **Send (three-method lifecycle):** `Wallet::build_pending_tx(req: TxRequest) -> PendingTx`, `Wallet::submit_pending_tx(handle) -> TxHash`, `Wallet::discard_pending_tx(handle) -> ()`. `PendingTx` carries `built_at_height: u64`; submit verifies wallet tip is `>= built_at_height` with no reorg below. `TxRequest` is `{ dest: Address, amount: AtomicUnits, priority: FeePriority }`. **No `payment_id` field.** Fee priority is `Economy | Standard | Priority | Custom(NonZeroU64)`; the named buckets are resolved to feerate via a `get_fee_estimates` daemon call at build time, not via hardcoded multipliers. **The build/submit/discard methods on `Wallet` orchestrate against `PendingTxEngine`** per [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](STAGE_1_PR_5_PENDING_TX_ENGINE.md): the engine owns the per-output lock set and the per-reservation `consumer_held` / `in_flight` collection-state lifecycle; the orchestrator translates `TxRequest` into the `build` call and exposes the `submit` / `discard` results back to the binary-layer caller. Output selection delegates to `OutputSelector` (Phase 0i; `Wallet2GreedySelector` V3.0 default); fee estimation to `FeeEstimator` (Phase 0j; `DaemonRecommendationEstimator` V3.0 default with `ExplicitFeeEstimator` alternative). Daemon-rejection / daemon-ambiguous / snapshot-invalidated outcomes surface through the engine's `SubmitError { TerminalErrorKind | AmbiguousErrorKind | SnapshotInvalidated | ... }` enum (segment-2h reshape).
-- **Stake / unstake / claim (Phase 2b — substantive scope, not "thin wrappers"):** A stake has a multi-step asynchronous lifecycle driven by chain progress, not by wallet operations: built-but-not-broadcast → broadcast-unconfirmed → confirmed-locked → accruing → claimable → unstaking → fully-unstaked. Wallet2 had no first-class concept for this; the wallet was a pure tx builder and the user tracked state mentally. Shekyl V3 makes the state machine explicit. Concrete shape:
+- **Send (three-method lifecycle):** `Wallet::build_pending_tx(req: TxRequest) -> PendingTx`, `Wallet::submit_pending_tx(handle) -> TxHash`, `Wallet::discard_pending_tx(handle) -> ()`. `PendingTx` carries `built_at_height: u64`; submit verifies wallet tip is `>= built_at_height` with no reorg below. `TxRequest` is `{ dest: Address, amount: AtomicUnits, priority: FeePriority }`. **No `payment_id` field.** Fee priority is `Economy | Standard | Priority | Custom(NonZeroU64)`; the named buckets are resolved to feerate via a `get_fee_estimates` daemon call at build time, not via hardcoded multipliers. **The build/submit/discard methods on `Wallet` orchestrate against `PendingTxEngine`** per [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](STAGE_1_PR_5_PENDING_TX_ENGINE.md): the engine owns the per-output lock set and the per-reservation `consumer_held` / `in_flight` collection-state lifecycle; the orchestrator translates `TxRequest` into the `build` call and exposes the `submit` / `discard` results back to the binary-layer caller. Output selection delegates to `OutputSelector` (Phase 0i; `Wallet2GreedySelector` V3.0 default); fee estimation to `FeeEstimator` (Phase 0j; `DaemonRecommendationEstimator` V3.0 default with `ExplicitFeeEstimator` alternative). Daemon-rejection / daemon-ambiguous / snapshot-invalidated outcomes surface through the engine's `SubmitError { TerminalErrorKind | AmbiguousErrorKind | SnapshotInvalidated | ... }` enum (segment-2h reshape) — reshaped by [`DAEMON_SUBMIT_VERDICT.md`](DAEMON_SUBMIT_VERDICT.md) PR-4 into a **projection of the wire `SubmitVerdict`**: verdicts are definite and map per the §2.5 per-cause disposition table (with the `Malformed`/`FeeTooLow` one-shot rebuild loop-breakers, F28/F37); `Err(RpcError)` is the only ambiguity (TTL-then-resubmit; a resubmit of held bytes is the status query, §2.5/F31). The engine never reconstructs relay state from reply heuristics — that partition is retired (D4).
+- **Stake / unstake / archival reward (Phase 2b — substantive scope):** Chain-driven lifecycle on the **rebased genesis substrate** (`P` + pay-for-archival), not wallet2 bookkeeping and **not** the retired entitlement claim wire. **Authoritative spec:** [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §3–§6. `StakeInstance` persists public fields per Round 4 rebased pins; opening `(amount, z)` in-memory only (§3.3.1). Refresh via stake + archival events + `StakeEngine`; orchestrator exposes stakes, reward under `P`, stake / unstake / registration / payout paths. **Stage 3 before orchestrator** (§Phase 2b critical path). Multiple PRs after Stage 3.
+- **Receive / addresses (Phase 2c — End-state 5):** `Wallet::primary_address()`, `Wallet::create_payment_request(req) -> PaymentRequestId`, `Wallet::list_payment_requests(filter)`, `Wallet::match_transfer_to_request(transfer_id, request_id)` (or equivalent reconcile API). Incoming history exposes `ReceiveAttribution` tiers per [`SUBADDRESS_UNDER_PQC.md`](SUBADDRESS_UNDER_PQC.md) §5.7.9. **No** `create_subaddress`. Meaningful request labels + merchant reconcile UX ship behind a product flag at V3.0 launch; sentinel-only wallets produce Tier-4 unattributed receive on the label axis (wire `enc_label` slot is always present per §6.4). Integrated addresses do not exist (Phase 1 decision).
 
-  ```rust
-  pub struct StakeInstance {
-      pub txid: TxHash,
-      pub amount: AtomicUnits,
-      pub tier: StakeTier,
-      pub state: StakeState,
-      pub accrued_rewards: AtomicUnits,
-      pub next_claim_height: Option<u64>,
-  }
+**End-state 5 implementation sequencing (doc pin, 2026-06-07).** Foundation (types, scanner, inbound merge) lands in the FA stack before the wallet rewrite surfaces it. **Does not block Phase 2a-3.**
 
-  pub enum StakeState {
-      PendingBroadcast,
-      Unconfirmed { broadcast_at: u64 },
-      Locked { confirmed_at: u64, unlocks_at: u64 },
-      Accruing { since: u64 },
-      Claimable { since: u64, expires_at: Option<u64> },
-      Unstaking { initiated_at: u64, completes_at: u64 },
-      FullyUnstaked,
-  }
-  ```
-
-  `StakeInstance` is a first-class persisted type in `WalletLedger`. Refresh-time reconciliation: `apply_scan_result` (per Decision 3) advances each `StakeInstance.state` based on the scanned blocks' height vs each stake's lock periods and accrual rules. The wallet exposes `Wallet::stakes(filter)`, `Wallet::claimable_rewards() -> AtomicUnits`, `Wallet::stake(amount, tier) -> PendingTx`, `Wallet::claim(stake_id) -> PendingTx`, `Wallet::unstake(stake_id) -> PendingTx`. The build/claim/unstake methods enter the state machine; they do not return a finalized tx. **Phase 2b is the largest single sub-phase by scope** — implementing the state machine, refresh-time reconciliation, persistence in `WalletLedger`, and the user-facing query/build methods. Plan budget accordingly; "thin wrappers" was the wrong framing.
-- **Receive / addresses:** `Wallet::primary_address()`, `Wallet::create_subaddress(label) -> SubaddressIndex`, `Wallet::list_addresses(filter)`. Integrated addresses do not exist (Phase 1 decision).
+| Work | Where it lands | Notes |
+|------|----------------|-------|
+| FA-7 plan amendment | `dev` | End-state 5 binding in this doc |
+| FA-2 subaddress deletion | PR [#112](https://github.com/Shekyl-Foundation/shekyl-core/pull/112) → `dev` | Scanner + schema; merge before FA-8 |
+| FA-8 engine substrate | PR [#113](https://github.com/Shekyl-Foundation/shekyl-core/pull/113) → `dev` | `PaymentRequest`, attribution merge, URI parse; flag default off |
+| Cooperative outbound (`enc_label` echo on send) | **Phase 2c** (with `OutputDestination`) | **Not** 2a-3 — 2a ships sentinel labels only (`PHASE_2A_SEND_PATH.md` §3.7.2) |
+| `Wallet::create_payment_request` / reconcile API | **Phase 2c** | Orchestrator wraps engine already in FA-8 |
+| `shekyl-wallet-rpc` payment-request methods | **Phase 4b** | Rust CLI supersedes C++ `wallet2_ffi`; do not wire C++ prefs |
+| Legacy C++ cooperative send hook | Until Phase 5 delete | Env-only bridge in `cryptonote_tx_utils`; not the product path |
 - **History:** `Wallet::transfers(filter) -> impl Iterator<&TransferDetails>`. Filter on direction/state/account/since-height.
 - **Balance:** `Wallet::balance() -> Balance { unlocked, locked, pending }`. Computed from `WalletLedger`.
 - **Proofs:** `Wallet::tx_proof(txid, dest) -> TxProof`, `Wallet::reserve_proof(amount) -> ReserveProof`. Delegate to [shekyl-proofs](rust/shekyl-proofs/).
@@ -458,7 +656,7 @@ shekyl-cli transfer ...                                       # one-shot: spawns
 
 Target ≤ ~25 commands, vs simplewallet's ~150:
 
-`open`, `create`, `restore`, `close`, `status`, `refresh`, `balance`, `address`, `address new <label>`, `addresses`, `transfer`, `stake`, `unstake`, `claim`, `history`, `tx <id>`, `tx_proof`, `reserve_proof`, `verify_proof`, `sign`, `verify`, `change_password`, `export_view_key`, `export_unsigned`, `submit_signed`, `quit`.
+`open`, `create`, `restore`, `close`, `status`, `refresh`, `balance`, `address`, `request new <amount> <label>`, `requests list`, `transfer`, `stake`, `unstake`, `claim`, `history`, `history incoming [--unattributed]`, `tx <id>`, `tx_proof`, `reserve_proof`, `verify_proof`, `sign`, `verify`, `change_password`, `export_view_key`, `export_unsigned`, `submit_signed`, `quit`.
 
 ### Hard design questions for the CLI
 
@@ -486,7 +684,7 @@ Locked. The temptation to "make the JSON shape kind of look like `wallet_rpc_ser
 Concrete Shekyl-native shapes to make first-class:
 
 - **Amounts:** atomic units only (`u64` strings to dodge JSON 53-bit int limits). No floats. No "monero unit" conversions. No `XMR` / coin-name strings.
-- **Subaddress index:** `{"account": u32, "index": u32}` everywhere it appears (subject to Phase 1's "drop the account level?" decision — if the account hierarchy goes, this collapses to `{"index": u32}` and the JSON shape reflects that).
+- **Payment requests:** `{"id": "u64", "label": "<redacted or omitted>", "amount_atomic": "u64", "state": "PENDING|MATCHED|EXPIRED|CANCELLED", ...}` — not subaddress indices. Primary address responses carry a single `address` string; no `index` field.
 - **Balance:** `{"liquid": "u64", "staked": "u64", "unlocked": "u64", "claimable_rewards": "u64", "pending": "u64"}`. Staking is first-class.
 - **Capability mode:** `"FULL" | "VIEW_ONLY" | "HARDWARE_OFFLOAD"` on every wallet handle response — never inferred.
 - **PQC auth surface:** `{"ed25519": "<hex>", "ml_dsa_65": "<hex>"}` for hybrid signatures. Never a single opaque "signature" blob.
@@ -508,7 +706,7 @@ OpenAPI 3.1 spec at [docs/api/wallet_rpc.yaml](docs/api/wallet_rpc.yaml) lands *
 - `rust/shekyl-wallet-rpc/src/lib.rs` with an in-process spawn entry point so `shekyl-cli` (Shape B) can host one without subprocess overhead.
 - **Layered config** via `figment` (or equivalent): TOML at `~/.config/shekyl/wallet-rpc.toml`, env vars with `SHEKYL_WALLET_RPC_*` prefix, CLI args. Precedence: CLI > env > file > built-in default. Documented in [docs/WALLET_RPC_README.md](docs/WALLET_RPC_README.md).
 - `WalletRpcError` enum at the boundary; every domain error from `shekyl-wallet-core` converts. JSON-RPC error code ranges allocated in the OpenAPI spec (e.g., -29000..-29099 wallet lifecycle, -29100..-29199 send/build, -29200..-29299 refresh, -29300..-29399 proofs, etc.). Per-method codes land alongside each method.
-- Method set (subject to refinement; each refinement updates the spec first): `create_wallet`, `open_wallet`, `close_wallet`, `change_password`, `get_balance`, `get_addresses`, `create_subaddress`, `build_pending_tx`, `submit_pending_tx`, `discard_pending_tx`, `stake`, `unstake`, `claim`, `get_transfers`, `get_transfer_by_id`, `get_stakes`, `get_tx_key`, `get_tx_proof`, `check_tx_proof`, `get_reserve_proof`, `check_reserve_proof`, `sign`, `verify`, `export_unsigned`, `submit_signed`, `refresh`, `rescan_blockchain`, `get_height`, `get_version`.
+- Method set (subject to refinement; each refinement updates the spec first): `create_wallet`, `open_wallet`, `close_wallet`, `change_password`, `get_balance`, `get_primary_address`, `create_payment_request`, `list_payment_requests`, `match_transfer_to_request`, `build_pending_tx`, `submit_pending_tx`, `discard_pending_tx`, `stake`, `unstake`, `claim`, `get_transfers`, `get_transfer_by_id`, `get_stakes`, `get_tx_key`, `get_tx_proof`, `check_tx_proof`, `get_reserve_proof`, `check_reserve_proof`, `sign`, `verify`, `export_unsigned`, `submit_signed`, `refresh`, `rescan_blockchain`, `get_height`, `get_version`. Full RPC cutover can land V3.2 per this plan; FA-8 lands types + engine first.
 - OpenAPI 3.1 spec under [docs/api/wallet_rpc.yaml](docs/api/wallet_rpc.yaml), landed before or alongside the first method. Includes the error-code allocation table.
 
 ## Phase 5 — C++ deletion
@@ -599,3 +797,4 @@ Cross-references that need to land after some upstream PR merges, formatting tou
 - Does not un-pin or re-fork monero-oxide. That's a separate plan; this plan only verifies the vendored tree is current for what the wallet stack consumes.
 - Does not complete PQC-FROST multisig. The Rust wallet API is shaped to support it; the implementation lands in V3.1.
 - Does not address `tx_pool.cpp` / `blockchain_db.cpp` LMDB transactional wrapper redesign (the Dandelion-class lesson). That's filed in [docs/FOLLOWUPS.md](docs/FOLLOWUPS.md) under "Legacy C++ → Rust rewrite scope" as its own future plan.
+- Does not implement full **ArchivalEngine query-serving (Stage 5)** or genesis blob **authoring ceremony** in the wallet rewrite alone. **Does** require Tier 1 crypto spec + `P` lifecycle in Stage 3 `StakeEngine` — genesis staking and archival reward identity are **one substrate** (§Phase 2b critical path), not a build-then-replace sequence.

@@ -20,17 +20,43 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-address = { path = "../shekyl-address" }
 shekyl-encoding = { path = "../shekyl-encoding" }
 shekyl-fcmp = { path = "../shekyl-fcmp" }
-shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-consensus = { path = "../shekyl-consensus" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
+# RandomX v2 light-cache PoW verifier. Consumed by `pow_randomx_ffi.rs`
+# (the `shekyl_pow_randomx_v2_*` exports) which is the consensus PoW
+# verification boundary per `RANDOMX_V2_PHASE3_PLAN.md` §6. Default
+# features only; the `internal-pool-bench` / `test-internals` features are
+# never enabled in production builds.
+shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-economics = { path = "../shekyl-economics" }
-shekyl-staking = { path = "../shekyl-staking" }
+# `provisional-k-cover`: K_COVER unsealed-sentinel acknowledgment
+# (ARCHIVAL_REWARD_GATE_M1.md §4) — delete this feature at the §14.4 seal.
+shekyl-archival-retention = { path = "../shekyl-archival-retention", features = ["provisional-k-cover"] }
+# Single-sourced CT cleartext balance equation (`shekyl_verify_ct_balance`
+# general export in `ct_balance_ffi.rs`). Same crate the bond-post path reaches
+# via archival-retention; depended on directly here for the no-bond-term shape.
+shekyl-ct-balance = { path = "../shekyl-ct-balance" }
+# `AtomicUnits` amount-newtype (`docs/completed/ATOMIC_UNITS_NEWTYPE.md`).
+# FFI structs stay `#[repr(C)] u64`; this is used only to wrap raw `u64` at
+# the `SpendInput`/`sign_transaction` edge (§4.3).
+shekyl-units = { path = "../shekyl-units" }
 shekyl-proofs = { path = "../shekyl-proofs" }
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }
+# Single-Rust-image contract: every binary links exactly one Rust archive,
+# and that archive must carry the `shekyl_log_*` exports plus the one
+# `tracing-core` GLOBAL_DISPATCH that this crate graph's `tracing::*`
+# macros dispatch through. Folding shekyl-logging into shekyl-ffi makes
+# `libshekyl_ffi.a` that single image for wallet-side binaries; without
+# it, the forwarder installs into a standalone logging image while
+# engine/fcmp events dispatch into this image's dispatcher and are
+# silently dropped. See V3_WALLET_DECISION_LOG.md (single-image contract)
+# and the nm gate in src/daemon/CMakeLists.txt.
+shekyl-logging = { path = "../shekyl-logging" }
 curve25519-dalek = "4"
 postcard = { version = "1", features = ["alloc"] }
 # OsRng for the testnet/fakechain raw-seed generation FFI. The feature set is
@@ -40,7 +66,7 @@ rcgen = "0.14"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
-zeroize = "1"
+zeroize = { workspace = true }
 libc = "0.2"
 dalek-ff-group = "0.5"
 ciphersuite = "0.4"
@@ -54,7 +80,7 @@ ec-divisors = { path = "../shekyl-oxide/crypto/divisors" }
 multiexp = "0.4"
 ciphersuite = "0.4"
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
-shekyl-fcmp-plus-plus = { path = "../shekyl-oxide/shekyl-oxide/fcmp/fcmp++" }
+shekyl-fcmp-proofs = { path = "../shekyl-fcmp-proofs" }
 
 [lints]
 workspace = true

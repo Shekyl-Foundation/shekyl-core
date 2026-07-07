@@ -14,8 +14,9 @@
 //!
 //! - "This really is a Shekyl wallet state payload, not random bytes a
 //!   future bug happened to feed to `open_state_file`." (`SWSP` magic)
-//! - "Which payload schema am I?" (`payload_kind`, currently only
-//!   `WalletLedgerPostcard = 0x01`)
+//! - "Which payload schema am I?" (`payload_kind`:
+//!   `WalletLedgerPostcard = 0x01`, `PScanStatePostcard = 0x02`,
+//!   `PendingPostBlockPostcard = 0x03`)
 //! - "Which version of that schema?" (`payload_version`, currently `0x01`)
 //! - "How long is the body?" (`body_len`, u32 LE)
 //!
@@ -32,8 +33,13 @@
 //!    them: envelope owns AEAD/binding; SWSP owns "what kind of
 //!    plaintext does this wallet file carry".
 //!
-//! 2. **Payload kinds.** V3.0 writes exactly one kind
-//!    (`WalletLedgerPostcard`). V3.1+ may introduce variants for
+//! 2. **Payload kinds.** V3.0 writes three kinds: `WalletLedgerPostcard`
+//!    (the principal `.wallet`), `PScanStatePostcard` (the
+//!    `P`-isolated `.wallet.pscan`, 2d-1 SP-5), and
+//!    `PendingPostBlockPostcard` (the `P`-isolated `.wallet.pending`
+//!    pending-bond-post record, WI-2 D-A4). All ride the *same*
+//!    region-2 envelope; the kind byte is what makes a swapped file a
+//!    loud refusal. V3.1+ may introduce further variants for
 //!    hardware-offload state, multisig rounds, or streaming-chunked
 //!    ledgers. `payload_kind` lets the orchestrator refuse an unknown
 //!    kind loudly instead of feeding it to postcard and watching the
@@ -53,7 +59,7 @@
 //! |--------|-------|-------------------|---------------------------------|
 //! | 0      | 4     | `magic = "SWSP"`  | ASCII, fixed                    |
 //! | 4      | 1     | `payload_version` | `0x01` for V3.0                 |
-//! | 5      | 1     | `payload_kind`    | `0x01` = `WalletLedgerPostcard` |
+//! | 5      | 1     | `payload_kind`    | `0x01`=ledger, `0x02`=pscan-state, `0x03`=pending-post |
 //! | 6      | 2     | `_reserved = 00`  | must be zero on V3.0            |
 //! | 8      | 4     | `body_len` (LE)   | u32, length of `body` in bytes  |
 //! | 12     | N     | `body`            | kind-specific bytes             |
@@ -109,9 +115,22 @@ pub const PAYLOAD_BODY_MAX: usize = 64 * 1024 * 1024;
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PayloadKind {
-    /// `body` is a postcard-encoded [`shekyl_engine_state::WalletLedger`].
-    /// This is the only kind V3.0 writes and reads.
+    /// `body` is a postcard-encoded [`shekyl_engine_state::WalletLedger`] — the
+    /// principal wallet's state file (`.wallet`).
     WalletLedgerPostcard = 0x01,
+    /// `body` is a postcard-encoded `shekyl_engine_state::pscan_state::PScanState`
+    /// — the `P`-isolated archival-scan state file (`.wallet.pscan`, 2d-1 SP-5).
+    /// Sealed under the *same* region-2 envelope; the distinct kind byte is what
+    /// makes a swapped `.wallet` / `.wallet.pscan` a loud refusal, not a postcard
+    /// decode at a random offset.
+    PScanStatePostcard = 0x02,
+    /// `body` is a postcard-encoded
+    /// `shekyl_engine_state::pending_post_block::PendingPostBlock` — the
+    /// `P`-isolated durable pending-bond-post record (`.wallet.pending`,
+    /// WI-2 D-A4). A sibling seal beside `.wallet.pscan` with its own
+    /// writer (the assemble path, not the pscan task); the distinct kind
+    /// byte keeps a swapped sibling a loud refusal.
+    PendingPostBlockPostcard = 0x03,
 }
 
 impl PayloadKind {
@@ -120,6 +139,8 @@ impl PayloadKind {
     pub fn from_byte(byte: u8) -> Result<Self, PayloadError> {
         match byte {
             0x01 => Ok(Self::WalletLedgerPostcard),
+            0x02 => Ok(Self::PScanStatePostcard),
+            0x03 => Ok(Self::PendingPostBlockPostcard),
             other => Err(PayloadError::UnknownPayloadKind(other)),
         }
     }
@@ -457,5 +478,73 @@ mod tests {
         assert_eq!(ok.len(), PAYLOAD_HEADER_LEN);
         let ok = encode_payload(PayloadKind::WalletLedgerPostcard, &[0u8; 32]).unwrap();
         assert_eq!(ok.len(), PAYLOAD_HEADER_LEN + 32);
+    }
+
+    /// KAT: the P-scan-state kind encodes the frozen `0x02` kind byte and
+    /// round-trips. Bumping the byte is a format-breaking change.
+    #[test]
+    fn kat_pscan_state_kind_byte_is_byte_stable() {
+        let encoded = encode_payload(PayloadKind::PScanStatePostcard, b"pscan").unwrap();
+        assert_eq!(
+            encoded,
+            [
+                b'S', b'W', b'S', b'P', // magic
+                0x01, // payload_version
+                0x02, // payload_kind = PScanStatePostcard
+                0x00, 0x00, // reserved
+                0x05, 0x00, 0x00, 0x00, // body_len = 5 (LE)
+                b'p', b's', b'c', b'a', b'n',
+            ],
+            "PScanState kind byte 0x02 is frozen; bumping it is a format-breaking change"
+        );
+        let decoded = decode_payload(&encoded).unwrap();
+        assert_eq!(decoded.payload_kind, PayloadKind::PScanStatePostcard);
+        assert_eq!(decoded.body, b"pscan");
+    }
+
+    /// KAT: the pending-post kind encodes the frozen `0x03` kind byte and
+    /// round-trips. Bumping the byte is a format-breaking change.
+    #[test]
+    fn kat_pending_post_kind_byte_is_byte_stable() {
+        let encoded = encode_payload(PayloadKind::PendingPostBlockPostcard, b"post").unwrap();
+        assert_eq!(
+            encoded,
+            [
+                b'S', b'W', b'S', b'P', // magic
+                0x01, // payload_version
+                0x03, // payload_kind = PendingPostBlockPostcard
+                0x00, 0x00, // reserved
+                0x04, 0x00, 0x00, 0x00, // body_len = 4 (LE)
+                b'p', b'o', b's', b't',
+            ],
+            "PendingPostBlock kind byte 0x03 is frozen; bumping it is a format-breaking change"
+        );
+        let decoded = decode_payload(&encoded).unwrap();
+        assert_eq!(decoded.payload_kind, PayloadKind::PendingPostBlockPostcard);
+        assert_eq!(decoded.body, b"post");
+    }
+
+    /// The kinds are distinguished on decode — the swap-detection guarantee
+    /// for `.wallet` vs `.wallet.pscan` vs `.wallet.pending` (all ride the
+    /// same envelope).
+    #[test]
+    fn kinds_are_distinguished_on_decode() {
+        let ledger = encode_payload(PayloadKind::WalletLedgerPostcard, b"x").unwrap();
+        let pscan = encode_payload(PayloadKind::PScanStatePostcard, b"x").unwrap();
+        let pending = encode_payload(PayloadKind::PendingPostBlockPostcard, b"x").unwrap();
+        assert_ne!(ledger[5], pscan[5], "kind bytes differ");
+        assert_ne!(pscan[5], pending[5], "kind bytes differ");
+        assert_eq!(
+            decode_payload(&ledger).unwrap().payload_kind,
+            PayloadKind::WalletLedgerPostcard
+        );
+        assert_eq!(
+            decode_payload(&pscan).unwrap().payload_kind,
+            PayloadKind::PScanStatePostcard
+        );
+        assert_eq!(
+            decode_payload(&pending).unwrap().payload_kind,
+            PayloadKind::PendingPostBlockPostcard
+        );
     }
 }

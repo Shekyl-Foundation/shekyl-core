@@ -9,30 +9,28 @@
 //! using the Shekyl V3 two-component key derivation:
 //!
 //! 1. Parse `tx_extra` for PQC KEM ciphertext (tag 0x06)
-//! 2. X25519 DH pre-filter via view tag (rejects ~99.6% of non-matching outputs)
-//! 3. Full hybrid KEM decap + HKDF via `scan_output_recover`
-//! 4. Subaddress lookup via recovered spend key `B' = O - ho*G - y*T`
+//! 2. ML-KEM decap + FA-6 pre-filter tag compare (every output; rejects non-mine)
+//! 3. X25519 ECDH + HKDF + recovery via `scan_output_recover_with_ml_kem_dk` on match
+//! 4. Primary-account claim via recovered spend key `B' = O - ho*G - y*T`
 //! 5. Key image computation via native Rust (no FFI)
-
-use std::collections::HashMap;
 
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-use shekyl_oxide::{
-    io::CompressedPoint,
-    primitives::Commitment,
-    transaction::{Pruned, Transaction},
-};
-use shekyl_rpc::ScannableBlock;
+use shekyl_curve_io::CompressedPoint;
+use shekyl_curve_primitives::Commitment;
+use shekyl_types::{BlockHeight, Timelock};
+use shekyl_wire::{transaction::UNLOCK_TIME_BLOCK_SENTINEL, Block, Ct, Transaction};
 
 use shekyl_crypto_pq::{
     kem::{HybridCiphertext, ML_KEM_768_CT_LEN},
     key_image::KeyImage,
-    output::{compute_output_key_image, scan_output_recover},
+    output::{compute_output_key_image, scan_output_recover_with_ml_kem_dk},
 };
-use shekyl_generators::hash_to_point;
+use shekyl_curve_generators::biased_hash_to_point;
+use shekyl_units::AtomicUnits;
+use subtle::ConstantTimeEq;
 
-use crate::{extra::Extra, output::*, GuaranteedViewPair, SubaddressIndex, ViewPair};
+use crate::{extra::Extra, output::*, GuaranteedViewPair, ViewPair};
 
 const X25519_CT_BYTES: usize = 32;
 const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_LEN;
@@ -62,7 +60,7 @@ const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_LEN;
 ///
 /// Three mirror sites name the same `16` constant in the workspace.
 /// The canonical source of truth is
-/// [`shekyl_generators::MAX_BULLETPROOF_COMMITMENTS`] — the value the
+/// [`shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS`] — the value the
 /// Bulletproofs+ CRS is generated against; loosening it without
 /// regenerating generators would break verification. The other
 /// mirrors are:
@@ -80,16 +78,113 @@ const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_LEN;
 pub const MAX_OUTPUTS: usize = 16;
 
 // Single-direction enforcement against the canonical source of truth.
-// `shekyl_generators::MAX_BULLETPROOF_COMMITMENTS` is the
+// `shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS` is the
 // Bulletproofs+ CRS size; the scanner gate must agree by construction.
 // `shekyl-tx-builder` carries its own assertion against the same
 // canonical, so a future loosening of the canonical bound fires CI in
 // every mirror crate independently rather than triangulating through
 // any single crate.
 const _: () = assert!(
-    MAX_OUTPUTS == shekyl_generators::MAX_BULLETPROOF_COMMITMENTS,
-    "shekyl-scanner MAX_OUTPUTS must match shekyl_generators::MAX_BULLETPROOF_COMMITMENTS (Bulletproofs+ CRS size)",
+    MAX_OUTPUTS == shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS,
+    "shekyl-scanner MAX_OUTPUTS must match shekyl_curve_generators::MAX_BULLETPROOF_COMMITMENTS (Bulletproofs+ CRS size)",
 );
+
+// Pin the belt-and-suspenders gate to the *primary* bound. The wire reader
+// (`shekyl_wire::Transaction::read`) rejects `n_outputs > MAX_OUTPUTS` at parse,
+// and `validate_context_free_pruned` re-checks it at ingestion — those are the
+// authoritative gates on the live (wire-sourced) path. This scanner gate is the
+// library's input-boundary self-protection for callers that hand it an in-memory
+// `Transaction` the wire reader never saw (the type system does not yet prove
+// wire provenance). Asserting equality with the wire constant keeps the secondary
+// gate from silently drifting below the primary one. `shekyl-wire` cannot mirror
+// the curve-generators assertion itself (it deps the crate only as a dev-dep), so
+// the scanner — which deps both — is where wire ↔ CRS-size agreement is pinned.
+const _: () = assert!(
+    MAX_OUTPUTS == shekyl_wire::transaction::MAX_OUTPUTS,
+    "shekyl-scanner MAX_OUTPUTS must match shekyl_wire::transaction::MAX_OUTPUTS (the parse-time primary bound)",
+);
+
+/// A block paired with its wallet-scannable transaction set and the global
+/// output index of its first output.
+///
+/// The spec-faithful successor to the vendored `shekyl_rpc_client::ScannableBlock`
+/// (`docs/design/SHEKYL_OXIDE_UNVENDOR.md` step 4): it carries `shekyl-wire`
+/// block/transaction types, which parse the coinbase `Ct::Null` committed base
+/// (`enc_amounts`/`enc_labels`/`outPk`, GENESIS_TX_WIRE_FORMAT.md §9.7)
+/// correctly. The vendored reader returned no base for a `Null` coinbase and
+/// mis-aligned on a live block — the `RpcError::InvalidNode("invalid block")`
+/// this migration closes.
+///
+/// `first_output_index` replaces the vendored
+/// `output_index_for_first_ringct_output` (`docs/FOLLOWUPS.md`): every genesis
+/// output is confidential (FCMP++ from genesis), so the "ringct" qualifier
+/// named a distinction that no longer exists. It is the global (chain-wide)
+/// index of the block's first output — the miner transaction's output 0 —
+/// sourced from the daemon's `get_o_indexes`, or `None` when the daemon has
+/// not yet indexed the block's outputs (the scanner then recovers nothing).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ScannableBlock {
+    /// The block: header, inline miner (coinbase) transaction, and the
+    /// non-miner transaction hashes.
+    pub block: Block,
+    /// The block's non-miner transactions, in block order. Paired positionally
+    /// with `block.transaction_hashes`; the scanner enforces the length match.
+    pub transactions: Vec<Transaction>,
+    /// Global index of the block's first output, or `None` if unindexed.
+    pub first_output_index: Option<u64>,
+}
+
+/// Split a `shekyl-wire` `enc_amount` / `enc_label` (`[u8; 9]` = an 8-byte
+/// value followed by a 1-byte HKDF integrity tag, GENESIS_TX_WIRE_FORMAT.md
+/// §9.7) into the `(value, tag)` pair the KEM recovery path consumes. The
+/// wire crate stores the array raw for round-trip fidelity; the wallet splits
+/// it into the typed scan inputs at the consumption boundary.
+fn split_enc9(bytes: &[u8; 9]) -> ([u8; 8], u8) {
+    let mut value = [0u8; 8];
+    value.copy_from_slice(&bytes[..8]);
+    (value, bytes[8])
+}
+
+/// Interpret a transaction's raw `unlock_time` varint
+/// (`shekyl_wire::TxPrefix::unlock_time`) as the wallet-domain [`Timelock`].
+///
+/// Shekyl is **block-height-only**: `0` is no timelock and a value below
+/// [`UNLOCK_TIME_BLOCK_SENTINEL`] is a block height. The CryptoNote/Monero
+/// *timestamp* form (`>= UNLOCK_TIME_BLOCK_SENTINEL`) is a deleted inheritance
+/// — a "creation cut" per `GENESIS_TX_WIRE_FORMAT.md` §9 — that consensus
+/// rejects (`shekyl_wire::Transaction::validate`), so it can never appear on
+/// canonical chain data. [`InternalScanner::scan_transaction_with_cancel`]
+/// already skips any tx whose `unlock_time` is in the timestamp form before
+/// this lifter runs, so the final arm is unreachable on the scan path; it is
+/// mapped to [`Timelock::None`]. `Timelock` is block-height-only — the CryptoNote
+/// `Time` variant was removed in the un-vendor dissolve — so the timestamp form is
+/// not representable and can never be materialized from chain bytes regardless of
+/// caller.
+///
+/// `shekyl-wire` owns the wire-format sentinel and keeps the raw varint; the
+/// scanner binds to that constant (so scanner ↔ wire unlock-time semantics
+/// cannot drift) and lifts the varint into the typed [`Timelock`] — a wallet
+/// concern, not a wire concern.
+///
+/// This is the **canonical** raw-`u64` → [`Timelock`] lift for the wallet: the scan
+/// path uses it, and so does `WalletOutput` metadata deserialization
+/// ([`crate::output`]). Both go through here precisely so the block-height-only
+/// invariant (the timestamp form is never materialized as a `Block`) is enforced in
+/// one consensus-aware place rather than re-decided at each call site.
+pub(crate) fn timelock_from_unlock_time(raw: u64) -> Timelock {
+    if raw == 0 {
+        Timelock::None
+    } else if raw < UNLOCK_TIME_BLOCK_SENTINEL {
+        Timelock::Block(BlockHeight::from_raw(raw))
+    } else {
+        // Timestamp form: deleted Monero-legacy Shekyl does not honor. The scan
+        // path gates this out per-tx (see the function doc), so this is unreachable
+        // on canonical data; `None` keeps the lifter total. `Timelock` is now
+        // block-height-only (no `Time` variant), so the timestamp form cannot be
+        // materialized regardless of caller — this arm is belt-and-suspenders.
+        Timelock::None
+    }
+}
 
 /// A recovered output with all PQC secrets populated at scan time.
 ///
@@ -126,7 +221,7 @@ pub struct RecoveredWalletOutput {
     pub(crate) key_image: KeyImage,
     /// Recovered amount from KEM decryption.
     #[zeroize(skip)]
-    pub(crate) amount: u64,
+    pub(crate) amount: AtomicUnits,
     /// Per-output hybrid ciphertext (X25519 || ML-KEM-768). Public
     /// on-chain residue. The engine post-pass re-decapsulates against
     /// it to produce the deterministic `OutputHandle`.
@@ -142,6 +237,8 @@ pub struct RecoveredWalletOutput {
     /// One-byte amount tag carried alongside `enc_amount`. Public.
     #[zeroize(skip)]
     pub(crate) amount_tag: u8,
+    /// Decrypted label plaintext (sentinel or cooperative `REQUEST` tag).
+    pub(crate) label_plaintext: [u8; 8],
 }
 
 impl Zeroize for RecoveredWalletOutput {
@@ -152,6 +249,7 @@ impl Zeroize for RecoveredWalletOutput {
         self.z.zeroize();
         self.k_amount.zeroize();
         self.combined_shared_secret.zeroize();
+        self.label_plaintext.zeroize();
         // `self.key_image`, `self.amount`, `self.source_ciphertext`,
         // `self.view_tag`, `self.enc_amount`, `self.amount_tag` are
         // public on-chain data, not secret — they deliberately skip
@@ -181,7 +279,7 @@ impl RecoveredWalletOutput {
     pub fn key_image(&self) -> &KeyImage {
         &self.key_image
     }
-    pub fn amount(&self) -> u64 {
+    pub fn amount(&self) -> AtomicUnits {
         self.amount
     }
     /// The public on-chain hybrid ciphertext (X25519 || ML-KEM-768)
@@ -204,6 +302,11 @@ impl RecoveredWalletOutput {
         self.amount_tag
     }
 
+    /// Decrypted 8-byte label plaintext from scan (FA-8 attribution).
+    pub fn label_plaintext(&self) -> &[u8; 8] {
+        &self.label_plaintext
+    }
+
     #[cfg(any(test, feature = "test-utils"))]
     pub fn new_for_test(base: WalletOutput, amount: u64) -> Self {
         Self {
@@ -214,7 +317,7 @@ impl RecoveredWalletOutput {
             k_amount: Zeroizing::new([0u8; 32]),
             combined_shared_secret: Zeroizing::new([0u8; 64]),
             key_image: KeyImage::from_canonical_bytes([0u8; 32]),
-            amount,
+            amount: AtomicUnits::from_raw(amount),
             // Synthetic test fixtures don't exercise the engine
             // post-pass: residue is carried through `RecoveredWalletOutput`
             // → `DetectedTransfer` → `ScanResult` for the post-pass
@@ -234,6 +337,7 @@ impl RecoveredWalletOutput {
             view_tag: 0,
             enc_amount: [0u8; 8],
             amount_tag: 0,
+            label_plaintext: shekyl_crypto_pq::label::sentinel_plaintext(),
         }
     }
 }
@@ -352,17 +456,14 @@ impl std::fmt::Debug for ScanOutcome {
 struct InternalScanner {
     pair: ViewPair,
     spend_secret: Zeroizing<[u8; 32]>,
-    subaddresses: HashMap<CompressedPoint, Option<SubaddressIndex>>,
+    primary_spend_compressed: CompressedPoint,
 }
 
 impl Zeroize for InternalScanner {
     fn zeroize(&mut self) {
         self.pair.zeroize();
         self.spend_secret.zeroize();
-        for (mut key, mut value) in self.subaddresses.drain() {
-            key.zeroize();
-            value.zeroize();
-        }
+        self.primary_spend_compressed.zeroize();
     }
 }
 impl Drop for InternalScanner {
@@ -374,26 +475,18 @@ impl ZeroizeOnDrop for InternalScanner {}
 
 impl InternalScanner {
     fn new(pair: ViewPair, spend_secret: Zeroizing<[u8; 32]>) -> Self {
-        let mut subaddresses = HashMap::new();
-        subaddresses.insert(pair.spend().compress().into(), None);
         Self {
+            primary_spend_compressed: pair.spend().compress().into(),
             pair,
             spend_secret,
-            subaddresses,
         }
-    }
-
-    fn register_subaddress(&mut self, subaddress: SubaddressIndex) {
-        let (spend, _) = self.pair.subaddress_keys(subaddress);
-        self.subaddresses
-            .insert(spend.compress().into(), Some(subaddress));
     }
 
     fn scan_transaction_with_cancel(
         &self,
-        output_index_for_first_ringct_output: u64,
+        first_output_index: u64,
         tx_hash: [u8; 32],
-        tx: &Transaction<Pruned>,
+        tx: &Transaction,
         is_cancelled: &mut dyn FnMut() -> bool,
     ) -> Result<ScanOutcome, ScanError> {
         // Defense-in-depth size gate (PR 4 §3.1 / F11-S substrate). The
@@ -401,8 +494,24 @@ impl InternalScanner {
         // hostile daemon could (pre-consensus rejection) deliver
         // transactions whose output count exceeds the FCMP++
         // Bulletproofs+ CRS size and inflate the per-tx scan budget
-        // arbitrarily. Bound the per-tx work at the scanner's own
-        // entry rather than depending on consensus validation timing.
+        // arbitrarily.
+        //
+        // The *primary* bound is now enforced upstream of the scanner:
+        // `shekyl_wire::Transaction::read` rejects `n_outputs > MAX_OUTPUTS`
+        // at parse, and `validate_context_free_pruned` re-checks it at
+        // ingestion (`block_fetch`), so no wire-sourced tx reaching the live
+        // refresh path can exceed the bound. This gate is retained — not
+        // retired — as the scanner's own input-boundary self-protection: the
+        // scan API accepts an in-memory `Transaction` (see the unit tests, and
+        // any future cache-replay caller) that the wire reader never parsed,
+        // and the type system does not yet prove wire provenance. `MAX_OUTPUTS`
+        // is pinned to that primary bound by the `const _` assertions above, so
+        // the secondary gate cannot silently drift below the parse-time one.
+        // (True retirement is gated on newtyping the scanner input at the parse
+        // edge — minting a `ParsedTransaction` only via `Transaction::read`, so an
+        // unbounded-output tx is unrepresentable at the scanner boundary — the
+        // rule-21 reopen recorded under the block-height-only `unlock_time` entry
+        // in docs/FOLLOWUPS.md.)
         //
         // Skip-and-log shape: an oversized transaction is silently
         // skipped (returns the empty `Timelocked`) and a `WARN` event
@@ -417,7 +526,7 @@ impl InternalScanner {
         // is O(1) at function entry and fires before any per-output
         // secret derivation, so it cannot inflate the lock-latency
         // budget the cancellation discipline bounds.
-        let output_count = tx.prefix().outputs.len();
+        let output_count = tx.prefix.outputs.len();
         if output_count > MAX_OUTPUTS {
             tracing::warn!(
                 target: "shekyl_scanner::scan",
@@ -428,11 +537,37 @@ impl InternalScanner {
             return Ok(ScanOutcome::Completed(Timelocked(vec![])));
         }
 
-        if tx.version() != 2 {
+        // Defense-in-depth consensus gate: Shekyl is block-height-only for
+        // `unlock_time`. The CryptoNote/Monero timestamp form
+        // (`>= UNLOCK_TIME_BLOCK_SENTINEL`) is a deleted inheritance — a
+        // "creation cut" per `GENESIS_TX_WIRE_FORMAT.md` §9 — that
+        // `validate_context_free_pruned` rejects at ingestion, so a canonical
+        // daemon can never serve such a tx and no wire-sourced tx on the live
+        // path carries it. An adversarial daemon could (pre-consensus rejection),
+        // and recovering outputs from a consensus-invalid tx would surface
+        // phantom balance. As with the size gate above, this is the scanner's own
+        // self-protection for the in-memory caller path the ingestion validator
+        // never saw — refuse to recover ANY output, same skip-and-warn shape.
+        // It also keeps `timelock_from_unlock_time` unreachable with
+        // timestamp-form input — belt-and-suspenders, since `Timelock` is
+        // block-height-only and the timestamp form is not representable anyway.
+        //
+        // Like the size gate, this is O(1) at function entry and not subject to
+        // the cancellation check (it fires before any per-output derivation).
+        if tx.prefix.unlock_time >= UNLOCK_TIME_BLOCK_SENTINEL {
+            tracing::warn!(
+                target: "shekyl_scanner::scan",
+                unlock_time = tx.prefix.unlock_time,
+                sentinel = UNLOCK_TIME_BLOCK_SENTINEL,
+                "scanner: skipping transaction with timestamp-form unlock_time (block-height-only; consensus would also reject)"
+            );
             return Ok(ScanOutcome::Completed(Timelocked(vec![])));
         }
 
-        let Ok(extra) = Extra::read(&mut tx.prefix().extra.as_slice()) else {
+        // `shekyl-wire` parses only v3 transactions (`Transaction::read` rejects
+        // any other version), so the vendored `tx.version() != 3` early-return is
+        // dead under the wire types and is removed (no-monero-legacy).
+        let Ok(extra) = Extra::read(&mut tx.prefix.extra.as_slice()) else {
             return Ok(ScanOutcome::Completed(Timelocked(vec![])));
         };
 
@@ -440,7 +575,7 @@ impl InternalScanner {
         let payment_id = extra.payment_id();
 
         let mut res = vec![];
-        for (o, output) in tx.prefix().outputs.iter().enumerate() {
+        for (o, output) in tx.prefix.outputs.iter().enumerate() {
             // §5.4.9 F11-S per-output safe-point check (PR 4 §7.Y
             // measurement binds per-output granularity at C4).
             //
@@ -462,36 +597,51 @@ impl InternalScanner {
                 return Ok(ScanOutcome::Cancelled);
             }
 
-            let Some(output_key_point) = output.key.decompress() else {
+            let Some(output_key_point) = CompressedPoint(output.key).decompress() else {
                 continue;
             };
             let output_key_bytes = output_key_point.compress().to_bytes();
 
-            let view_tag_on_chain: u8 = output.view_tag.unwrap_or(0);
+            // `view_tag` is mandatory at genesis — tagged_key is the sole output
+            // type (GENESIS §9.6), so `shekyl-wire::Output::view_tag` is a `u8`,
+            // not the vendored `Option<u8>`; there is no absent case to default.
+            let view_tag_on_chain: u8 = output.view_tag;
 
-            let (enc_amount, amount_tag_on_chain, commitment_bytes) = match &tx {
-                Transaction::V2 {
-                    proofs: Some(ref proofs),
-                    ..
-                } => match proofs.base.encrypted_amounts.get(o) {
+            // Both the coinbase (`Ct::Null`) and the spend (`Ct::Fcmp`) carry the
+            // committed CT base — `enc_amounts`/`enc_labels`/`outPk`, sized by the
+            // output count (GENESIS §9.7) — so read them uniformly. The vendored
+            // reader returned no base for a `Null` coinbase, forcing a zero-fill
+            // that this replaces (and that broke coinbase amount recovery).
+            let base = match &tx.ct {
+                Ct::Null(base) | Ct::Fcmp { base, .. } => base,
+            };
+            let (enc_amount, amount_tag_on_chain, enc_label, label_tag_on_chain, commitment) =
+                match base.enc_amounts.get(o) {
                     Some(ea) => {
-                        let c = proofs.base.commitments.get(o).ok_or(
-                            ScanError::InvalidScannableBlock(
-                                "proofs without a commitment per output",
-                            ),
-                        )?;
-                        (ea.amount, ea.amount_tag, c.0)
+                        let el = base
+                            .enc_labels
+                            .get(o)
+                            .ok_or(ScanError::InvalidScannableBlock(
+                                "ct base without an encrypted label per output",
+                            ))?;
+                        let c = base
+                            .commitments
+                            .get(o)
+                            .ok_or(ScanError::InvalidScannableBlock(
+                                "ct base without a commitment per output",
+                            ))?;
+                        let (enc_amount, amount_tag) = split_enc9(ea);
+                        let (enc_label, label_tag) = split_enc9(el);
+                        (
+                            enc_amount,
+                            amount_tag,
+                            enc_label,
+                            label_tag,
+                            CompressedPoint(*c),
+                        )
                     }
                     None => continue,
-                },
-                _ => {
-                    if output.amount.is_some() {
-                        ([0u8; 8], 0u8, [0u8; 32])
-                    } else {
-                        continue;
-                    }
-                }
-            };
+                };
 
             // --- Try KEM path (tag 0x06) ---
             let Some(blob) = kem_ct_blob else { continue };
@@ -507,28 +657,42 @@ impl InternalScanner {
             let ct_ml_kem = &ct_slice[X25519_CT_BYTES..];
             debug_assert_eq!(ct_ml_kem.len(), ML_KEM_768_CT_LEN);
 
-            let Ok(recovered) = scan_output_recover(
+            let Ok(recovered) = scan_output_recover_with_ml_kem_dk(
                 self.pair.x25519_sk(),
-                self.pair.ml_kem_dk(),
+                self.pair.parsed_ml_kem_dk(),
                 ct_x25519,
                 ct_ml_kem,
                 &output_key_bytes,
-                &commitment_bytes,
+                &commitment.0,
                 &enc_amount,
                 amount_tag_on_chain,
+                &enc_label,
+                label_tag_on_chain,
                 view_tag_on_chain,
                 o as u64,
             ) else {
                 continue;
             };
 
-            // --- Subaddress lookup via recovered spend key B' ---
+            // --- Primary-account claim via recovered spend key B' ---
+            // Constant-time compare: `recovered_spend_key` is derived from secret
+            // scan material, so a variable-time `!=` would leak, via per-byte
+            // timing, whether this output is ours. The result branch ("is it ours")
+            // is the inherent ownership decision; what must not leak is *where* the
+            // bytes first differ. (SP-1a, `ARCHIVAL_BOND_2D1_PSCAN_PLAN.md` §6 —
+            // the cheap, correct-regardless half of the DQ1 third option. The
+            // dominant pre-filter early-exit channel is addressed separately, by
+            // the deferred no-early-exit extractor behind the SP-1a seam.)
             let recovered_b_compressed: CompressedPoint =
                 CompressedPoint(recovered.recovered_spend_key);
-            let Some(subaddress) = self.subaddresses.get(&recovered_b_compressed) else {
+            let is_ours: bool = recovered_b_compressed
+                .0
+                .as_slice()
+                .ct_eq(self.primary_spend_compressed.0.as_slice())
+                .into();
+            if !is_ours {
                 continue;
-            };
-            let subaddress = *subaddress;
+            }
 
             let amount = recovered.amount;
             let commitment = Commitment::new(
@@ -538,7 +702,11 @@ impl InternalScanner {
             );
 
             // --- Key image: KI = x * Hp(O) where x = ho + b ---
-            let hp_of_o = hash_to_point(output_key_bytes);
+            // `Hp` is the *biased* hash-to-point — the canonical FCMP++ key-image
+            // generator (`shekyl_fcmp::tree::key_image_generator`, the leaf `I`
+            // the proof and daemon bind to). The non-biased `hash_to_point` would
+            // produce a key image the SAL linkability check rejects (`ed_ok=false`).
+            let hp_of_o = biased_hash_to_point(output_key_bytes);
             let hp_bytes = hp_of_o.compress().to_bytes();
 
             let ki_result = compute_output_key_image(
@@ -555,11 +723,11 @@ impl InternalScanner {
             // V3 does not use encrypted payment IDs. Pass through as-is.
             let decrypted_payment_id = payment_id;
 
-            let global_index = output_index_for_first_ringct_output
-                .checked_add(o as u64)
-                .ok_or(ScanError::InvalidScannableBlock(
+            let global_index = first_output_index.checked_add(o as u64).ok_or(
+                ScanError::InvalidScannableBlock(
                     "transaction's output's index isn't representable as a u64",
-                ))?;
+                ),
+            )?;
 
             let base_output = WalletOutput {
                 absolute_id: AbsoluteId {
@@ -576,12 +744,10 @@ impl InternalScanner {
                     commitment,
                 },
                 metadata: Metadata {
-                    additional_timelock: tx.prefix().additional_timelock,
-                    subaddress,
+                    additional_timelock: timelock_from_unlock_time(tx.prefix.unlock_time),
                     payment_id: decrypted_payment_id,
                     arbitrary_data: extra.arbitrary_data(),
                 },
-                staking: output.staking,
             };
 
             res.push(RecoveredWalletOutput {
@@ -592,7 +758,10 @@ impl InternalScanner {
                 k_amount: Zeroizing::new(recovered.k_amount),
                 combined_shared_secret: Zeroizing::new(recovered.combined_ss),
                 key_image,
-                amount,
+                // Edge: `recovered.amount` is the raw `u64` recovered from KEM
+                // decryption (also fed to the fork `Commitment::new` above,
+                // which stays `u64`). Wrap as it enters the wallet domain.
+                amount: AtomicUnits::from_raw(amount),
                 source_ciphertext: HybridCiphertext {
                     x25519: *ct_x25519,
                     ml_kem: ct_ml_kem.to_vec(),
@@ -600,6 +769,7 @@ impl InternalScanner {
                 view_tag: view_tag_on_chain,
                 enc_amount,
                 amount_tag: amount_tag_on_chain,
+                label_plaintext: recovered.label_plaintext,
             });
         }
 
@@ -644,29 +814,30 @@ impl InternalScanner {
         let ScannableBlock {
             block,
             transactions,
-            output_index_for_first_ringct_output,
+            first_output_index,
         } = block;
-        if block.transactions.len() != transactions.len() {
+        if block.transaction_hashes.len() != transactions.len() {
             Err(ScanError::InvalidScannableBlock(
                 "scanning a ScannableBlock with more/less transactions than it should have",
             ))?;
         }
-        let Some(mut output_index_for_first_ringct_output) = output_index_for_first_ringct_output
-        else {
+        let Some(mut first_output_index) = first_output_index else {
             return Ok(ScanOutcome::Completed(Timelocked(vec![])));
         };
 
-        if block.header.hardfork_version < 1 {
-            Err(ScanError::UnsupportedProtocol(
-                block.header.hardfork_version,
-            ))?;
+        if block.header.major_version < 1 {
+            Err(ScanError::UnsupportedProtocol(block.header.major_version))?;
         }
 
+        // The miner (coinbase) transaction is embedded inline in the
+        // `shekyl-wire` block and is already a `Transaction` — there is no
+        // pruned/not-pruned conversion (the vendored split is gone). It scans
+        // alongside the non-miner transactions, paired with its hash.
         let mut txs_with_hashes = vec![(
-            block.miner_transaction().hash(),
-            Transaction::<Pruned>::from(block.miner_transaction().clone()),
+            block.miner_transaction.hash(),
+            block.miner_transaction.clone(),
         )];
-        for (hash, tx) in block.transactions.iter().zip(transactions) {
+        for (hash, tx) in block.transaction_hashes.iter().zip(transactions) {
             txs_with_hashes.push((*hash, tx));
         }
 
@@ -681,8 +852,8 @@ impl InternalScanner {
         // `scan_transaction_with_cancel`'s per-output check
         // (iter 0) is necessary but not sufficient on its own —
         // for transactions where the per-output loop never runs
-        // (zero outputs; `tx.version() != 2`; malformed `extra`;
-        // oversized per the defense-in-depth size gate) the
+        // (zero outputs; malformed `extra`; oversized per the
+        // defense-in-depth size gate) the
         // inner check is bypassed by the early-return paths
         // before any per-output iteration. Without this outer
         // check, cancellation could be deferred by N_txs ×
@@ -704,12 +875,7 @@ impl InternalScanner {
             if is_cancelled() {
                 return Ok(ScanOutcome::Cancelled);
             }
-            match self.scan_transaction_with_cancel(
-                output_index_for_first_ringct_output,
-                hash,
-                &tx,
-                is_cancelled,
-            )? {
+            match self.scan_transaction_with_cancel(first_output_index, hash, &tx, is_cancelled)? {
                 ScanOutcome::Completed(mut this_tx) => {
                     res.0.append(&mut this_tx.0);
                 }
@@ -725,10 +891,23 @@ impl InternalScanner {
                 }
             }
 
-            if matches!(tx, Transaction::V2 { .. }) {
-                output_index_for_first_ringct_output += u64::try_from(tx.prefix().outputs.len())
-                    .expect("couldn't convert amount of outputs (usize) to u64")
-            }
+            // Advance the global output index past this transaction's outputs.
+            // Every `shekyl-wire` transaction is v3 with a confidential output
+            // set, so the advance is unconditional — the vendored
+            // `Transaction::V3` match guard is dead (no other variant exists).
+            //
+            // Use `checked_add` (not `+=`), consistent with the per-output
+            // `global_index` computation above: a hostile/buggy daemon could
+            // serve a block whose cumulative output count overflows `u64`, which
+            // would silently wrap in release builds and corrupt every subsequent
+            // `index_on_blockchain`. Surface `InvalidScannableBlock` instead.
+            let tx_output_count = u64::try_from(tx.prefix.outputs.len())
+                .expect("couldn't convert amount of outputs (usize) to u64");
+            first_output_index = first_output_index.checked_add(tx_output_count).ok_or(
+                ScanError::InvalidScannableBlock(
+                    "cumulative output index isn't representable as a u64",
+                ),
+            )?;
         }
 
         // Note: Shekyl V3 dropped the legacy unencrypted PaymentId variant outright.
@@ -759,11 +938,6 @@ impl Scanner {
     /// (KI = (ho + b) * Hp(O)).
     pub fn new(pair: ViewPair, spend_secret: Zeroizing<[u8; 32]>) -> Self {
         Self(InternalScanner::new(pair, spend_secret))
-    }
-
-    /// Register a subaddress to scan for.
-    pub fn register_subaddress(&mut self, subaddress: SubaddressIndex) {
-        self.0.register_subaddress(subaddress)
     }
 
     /// Scan a block for outputs belonging to this wallet.
@@ -833,11 +1007,6 @@ impl GuaranteedScanner {
         Self(InternalScanner::new(pair.0, spend_secret))
     }
 
-    /// Register a subaddress to scan for.
-    pub fn register_subaddress(&mut self, subaddress: SubaddressIndex) {
-        self.0.register_subaddress(subaddress)
-    }
-
     /// Scan a block for outputs belonging to this wallet.
     pub fn scan(&mut self, block: ScannableBlock) -> Result<Timelocked, ScanError> {
         self.0.scan(block)
@@ -854,6 +1023,17 @@ impl GuaranteedScanner {
     ) -> Result<ScanOutcome, ScanError> {
         self.0.scan_with_cancel(block, is_cancelled)
     }
+}
+
+#[cfg(test)]
+fn test_placeholder_ml_kem_dk() -> Zeroizing<Vec<u8>> {
+    use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
+
+    let kem = HybridX25519MlKem;
+    let (_pk, sk) = kem
+        .keypair_generate()
+        .expect("HybridX25519MlKem::keypair_generate is infallible under OsRng");
+    Zeroizing::new(sk.ml_kem.clone())
 }
 
 /// Tests for the scanner-side defense-in-depth size gate on
@@ -878,9 +1058,7 @@ mod gate_tests {
         Event, Level, Metadata, Subscriber,
     };
 
-    use shekyl_oxide::transaction::{
-        Input, Output, Pruned, Timelock, Transaction, TransactionPrefix,
-    };
+    use shekyl_wire::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
     use super::*;
     use crate::view_pair::ViewPair;
@@ -922,53 +1100,61 @@ mod gate_tests {
     /// Build an [`InternalScanner`] with placeholder keys. The gate
     /// fires before any cryptographic state is touched, so the
     /// scanner only needs to construct successfully — the
-    /// [`ViewPair`] torsion check is satisfied by the basepoint, and
-    /// the empty PQC key material is never read on the gate path.
+    /// [`ViewPair`] torsion check is satisfied by the basepoint; valid
+    /// ML-KEM DK bytes are required at construction but not read on the gate path.
     fn placeholder_scanner() -> InternalScanner {
         let pair = ViewPair::new(
             ED25519_BASEPOINT_POINT,
             Zeroizing::new(Scalar::ONE),
             Zeroizing::new([0u8; 32]),
-            Zeroizing::new(Vec::new()),
+            test_placeholder_ml_kem_dk(),
         )
         .expect("basepoint is torsion-free");
         InternalScanner::new(pair, Zeroizing::new([0u8; 32]))
     }
 
-    /// Build a non-miner v2 `Transaction<Pruned>` with the requested
+    /// Build a non-miner `shekyl-wire` [`Transaction`] with the requested
     /// number of outputs. The output bytes themselves are placeholder
-    /// (zero key, no view tag); they are never inspected on the gate
+    /// (zero key, zero view tag); they are never inspected on the gate
     /// path (the gate fires before per-output decap), and on the
-    /// at-boundary test path the zero key fails to decompress so
-    /// each output iteration `continue`s without recovering anything.
-    fn synthesize_tx(output_count: usize) -> Transaction<Pruned> {
+    /// at-boundary test path the zero key fails to decompress so each
+    /// output iteration `continue`s before the ct base is read — so the
+    /// `Ct::Fcmp` base is left empty.
+    fn synthesize_tx(output_count: usize) -> Transaction {
         let outputs = (0..output_count)
             .map(|_| Output {
-                amount: None,
-                key: CompressedPoint([0u8; 32]),
-                view_tag: None,
-                staking: None,
+                amount: 0,
+                key: [0u8; 32],
+                view_tag: 0,
             })
             .collect();
-        Transaction::V2 {
-            prefix: TransactionPrefix {
-                additional_timelock: Timelock::None,
-                // Non-miner classification — [`Input::ToKey`] (rather
-                // than [`Input::Gen`]) so the tx is treated as a
-                // normal user transaction subject to the per-tx
-                // output cap documented on [`MAX_OUTPUTS`]. The
-                // input fields are placeholders;
-                // `scan_transaction_with_cancel` never inspects the
-                // input vector.
+        Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
+                // Non-miner classification — [`Input::ToKey`] (rather than
+                // [`Input::Gen`]) so the tx is treated as a normal user
+                // transaction subject to the per-tx output cap documented on
+                // [`MAX_OUTPUTS`]. The input fields are placeholders;
+                // `scan_transaction_with_cancel` never inspects the input vector.
                 inputs: vec![Input::ToKey {
-                    amount: None,
+                    amount: 0,
                     key_offsets: vec![1],
-                    key_image: CompressedPoint([0u8; 32]),
+                    key_image: [0u8; 32],
                 }],
                 outputs,
                 extra: vec![],
             },
-            proofs: None,
+            ct: Ct::Fcmp {
+                fee: 0,
+                reference_block: [0u8; 32],
+                base: CtBase {
+                    enc_amounts: vec![],
+                    enc_labels: vec![],
+                    commitments: vec![],
+                },
+                pqc_auths: vec![],
+                prunable: None,
+            },
         }
     }
 
@@ -1050,6 +1236,103 @@ mod gate_tests {
             "gate must NOT fire at the boundary (output_count == MAX_OUTPUTS); WARN events seen: {events:?}"
         );
     }
+
+    #[test]
+    fn skips_transaction_with_timestamp_form_unlock_time() {
+        // Block-height-only: a tx whose `unlock_time` is the CryptoNote/Monero
+        // timestamp form (`>= UNLOCK_TIME_BLOCK_SENTINEL`) is non-canonical
+        // (consensus rejects it — GENESIS §9 creation cut). Defense-in-depth:
+        // the scanner skips it with the same skip-and-WARN shape as the size
+        // gate, so the timestamp form is never lifted even if a caller bypassed
+        // the ingestion-boundary reject (`Timelock` has no `Time` variant anyway).
+        let scanner = placeholder_scanner();
+        let mut tx = synthesize_tx(1);
+        tx.prefix.unlock_time = UNLOCK_TIME_BLOCK_SENTINEL;
+
+        let capture = EventCapture::default();
+        let result = tracing::subscriber::with_default(capture.clone(), || {
+            scanner.scan_transaction_with_cancel(0, [0u8; 32], &tx, &mut || false)
+        });
+
+        let timelocked = match result.expect("gate skips the tx without a ScanError") {
+            ScanOutcome::Completed(t) => t,
+            ScanOutcome::Cancelled => {
+                panic!("never-cancelling closure must not produce ScanOutcome::Cancelled")
+            }
+        };
+        assert!(
+            timelocked.is_empty(),
+            "gate must return Timelocked::empty() for timestamp-form unlock_time"
+        );
+
+        let events = capture
+            .events
+            .lock()
+            .expect("event-capture mutex poisoned")
+            .clone();
+        assert!(
+            events
+                .iter()
+                .any(|(level, target)| *level == Level::WARN && *target == "shekyl_scanner::scan"),
+            "gate must emit a WARN at `shekyl_scanner::scan` (events seen: {events:?})"
+        );
+    }
+
+    #[test]
+    fn admits_transaction_at_largest_block_form_unlock_time() {
+        // Boundary: the gate fires on `>= UNLOCK_TIME_BLOCK_SENTINEL`, so the
+        // largest block-form value (`SENTINEL - 1`) proceeds past the gate into
+        // the normal scan path (placeholder keys recover nothing, no WARN).
+        let scanner = placeholder_scanner();
+        let mut tx = synthesize_tx(1);
+        tx.prefix.unlock_time = UNLOCK_TIME_BLOCK_SENTINEL - 1;
+
+        let capture = EventCapture::default();
+        let result = tracing::subscriber::with_default(capture.clone(), || {
+            scanner.scan_transaction_with_cancel(0, [0u8; 32], &tx, &mut || false)
+        });
+
+        let timelocked = match result.expect("block-form tx scans without ScanError") {
+            ScanOutcome::Completed(t) => t,
+            ScanOutcome::Cancelled => {
+                panic!("never-cancelling closure must not produce ScanOutcome::Cancelled")
+            }
+        };
+        assert!(timelocked.is_empty(), "placeholder keys recover no outputs");
+
+        let events = capture
+            .events
+            .lock()
+            .expect("event-capture mutex poisoned")
+            .clone();
+        assert!(
+            !events
+                .iter()
+                .any(|(level, target)| *level == Level::WARN && *target == "shekyl_scanner::scan"),
+            "gate must NOT fire at the largest block-form value; WARN events seen: {events:?}"
+        );
+    }
+
+    #[test]
+    fn timelock_from_unlock_time_maps_block_height_and_never_time() {
+        // `0` → no timelock; below the sentinel → block height; the sentinel
+        // and above (the deleted timestamp form) → `None` — `Timelock` has no
+        // `Time` variant, so the timestamp form cannot be materialized.
+        assert_eq!(timelock_from_unlock_time(0), Timelock::None);
+        assert_eq!(
+            timelock_from_unlock_time(1),
+            Timelock::Block(BlockHeight::from_raw(1))
+        );
+        assert_eq!(
+            timelock_from_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL - 1),
+            Timelock::Block(BlockHeight::from_raw(UNLOCK_TIME_BLOCK_SENTINEL - 1))
+        );
+        assert_eq!(
+            timelock_from_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL),
+            Timelock::None
+        );
+        assert_eq!(timelock_from_unlock_time(u64::MAX), Timelock::None);
+    }
 }
 
 /// Tests for the [`Scanner::scan_with_cancel`] /
@@ -1080,7 +1363,7 @@ mod gate_tests {
 ///   `is_cancelled()` check before delegating to the inner
 ///   helper. This delivers the F11-S between-tx safe-point even
 ///   when the inner per-output loop never runs (zero outputs,
-///   `tx.version() != 2`, malformed `extra`, or oversized per
+///   `tx.version() != 3`, malformed `extra`, or oversized per
 ///   the defense-in-depth size gate); without it cancellation
 ///   could be deferred by `N_txs × O(1)-per-tx-skip` cost.
 /// - **Never-cancels equivalence:** a closure that returns
@@ -1093,9 +1376,7 @@ mod cancel_tests {
 
     use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
 
-    use shekyl_oxide::transaction::{
-        Input, Output, Pruned, Timelock, Transaction, TransactionPrefix,
-    };
+    use shekyl_wire::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
     use super::*;
     use crate::view_pair::ViewPair;
@@ -1111,38 +1392,47 @@ mod cancel_tests {
             ED25519_BASEPOINT_POINT,
             Zeroizing::new(Scalar::ONE),
             Zeroizing::new([0u8; 32]),
-            Zeroizing::new(Vec::new()),
+            test_placeholder_ml_kem_dk(),
         )
         .expect("basepoint is torsion-free");
         InternalScanner::new(pair, Zeroizing::new([0u8; 32]))
     }
 
-    /// Mirror of `gate_tests::synthesize_tx`: a non-miner v2
-    /// `Transaction<Pruned>` with the requested number of
-    /// placeholder outputs. Placeholder keys fail to decompress;
-    /// each per-output iteration `continue`s after the (now
-    /// pre-decompress) cancellation check fires once.
-    fn synthesize_tx(output_count: usize) -> Transaction<Pruned> {
+    /// Mirror of `gate_tests::synthesize_tx`: a non-miner `shekyl-wire`
+    /// [`Transaction`] with the requested number of placeholder outputs.
+    /// Placeholder keys fail to decompress; each per-output iteration
+    /// `continue`s after the (pre-decompress) cancellation check fires
+    /// once. The `Ct::Fcmp` base is left empty (never read on this path).
+    fn synthesize_tx(output_count: usize) -> Transaction {
         let outputs = (0..output_count)
             .map(|_| Output {
-                amount: None,
-                key: CompressedPoint([0u8; 32]),
-                view_tag: None,
-                staking: None,
+                amount: 0,
+                key: [0u8; 32],
+                view_tag: 0,
             })
             .collect();
-        Transaction::V2 {
-            prefix: TransactionPrefix {
-                additional_timelock: Timelock::None,
+        Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
                 inputs: vec![Input::ToKey {
-                    amount: None,
+                    amount: 0,
                     key_offsets: vec![1],
-                    key_image: CompressedPoint([0u8; 32]),
+                    key_image: [0u8; 32],
                 }],
                 outputs,
                 extra: vec![],
             },
-            proofs: None,
+            ct: Ct::Fcmp {
+                fee: 0,
+                reference_block: [0u8; 32],
+                base: CtBase {
+                    enc_amounts: vec![],
+                    enc_labels: vec![],
+                    commitments: vec![],
+                },
+                pqc_auths: vec![],
+                prunable: None,
+            },
         }
     }
 
@@ -1257,7 +1547,7 @@ mod cancel_tests {
     /// outer `scan_with_cancel` per-tx loop.
     ///
     /// Build a `ScannableBlock` consisting of a miner-only block
-    /// (V2 miner-tx with `Input::Gen(0)` and no outputs; no
+    /// (v3 miner-tx with `Input::Gen(0)` and no outputs; no
     /// additional non-miner transactions). With this shape, the
     /// inner `scan_transaction_with_cancel`'s per-output loop
     /// runs zero iterations for the miner tx — so the inner
@@ -1285,39 +1575,50 @@ mod cancel_tests {
     /// Copilot PR #60 review comment 3278452877.
     #[test]
     fn outer_per_tx_loop_cancellation_fires_for_zero_output_tx() {
-        use shekyl_oxide::block::{Block, BlockHeader};
+        use shekyl_wire::{Block, BlockHeader};
 
         let pair = ViewPair::new(
             ED25519_BASEPOINT_POINT,
             Zeroizing::new(Scalar::ONE),
             Zeroizing::new([0u8; 32]),
-            Zeroizing::new(Vec::new()),
+            test_placeholder_ml_kem_dk(),
         )
         .expect("basepoint is torsion-free");
         let mut scanner = InternalScanner::new(pair, Zeroizing::new([0u8; 32]));
 
         let header = BlockHeader {
-            hardfork_version: 1,
-            hardfork_signal: 0,
+            major_version: 1,
+            minor_version: 0,
             timestamp: 0,
             previous: [0u8; 32],
             nonce: 0,
+            curve_tree_root: [0u8; 32],
         };
-        let miner_tx: Transaction<shekyl_oxide::transaction::NotPruned> = Transaction::V2 {
-            prefix: TransactionPrefix {
-                additional_timelock: Timelock::None,
+        // Coinbase-shaped miner tx: a sole `gen` input and a `Null` ct (§2.5),
+        // no outputs — so the inner per-output loop runs zero iterations and
+        // only the outer per-tx-loop check can deliver cancellation.
+        let miner_tx = Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
                 inputs: vec![Input::Gen(0)],
                 outputs: vec![],
                 extra: vec![],
             },
-            proofs: None,
+            ct: Ct::Null(CtBase {
+                enc_amounts: vec![],
+                enc_labels: vec![],
+                commitments: vec![],
+            }),
         };
-        let block = Block::new(header, miner_tx, vec![])
-            .expect("Block::new accepts a V2 miner-tx + zero additional tx hashes");
+        let block = Block {
+            header,
+            miner_transaction: miner_tx,
+            transaction_hashes: vec![],
+        };
         let scannable = ScannableBlock {
             block,
             transactions: vec![],
-            output_index_for_first_ringct_output: Some(0),
+            first_output_index: Some(0),
         };
 
         let (mut closure, counter) = cancel_on_nth_call(1);
@@ -1334,6 +1635,66 @@ mod cancel_tests {
             *counter.lock().expect("call-count mutex poisoned"),
             1,
             "outer per-tx-loop check fires exactly once before delegating to the inner helper"
+        );
+    }
+
+    /// The per-tx global-index advance must use `checked_add`, consistent with
+    /// the per-output `global_index` computation: a block whose cumulative
+    /// output count would push the running index past `u64::MAX` surfaces
+    /// `InvalidScannableBlock` rather than silently wrapping (release builds) and
+    /// corrupting subsequent `index_on_blockchain` values.
+    ///
+    /// Shape: `first_output_index = u64::MAX` and a one-output coinbase with an
+    /// empty CT base. Output 0 short-circuits (`enc_amounts.get(0)` is `None`)
+    /// before the per-output `checked_add`, so the only overflow that can fire is
+    /// the per-tx advance (`u64::MAX + 1`).
+    #[test]
+    fn per_tx_index_advance_overflow_is_rejected() {
+        use shekyl_wire::{Block, BlockHeader};
+
+        let mut scanner = placeholder_scanner();
+        let header = BlockHeader {
+            major_version: 1,
+            minor_version: 0,
+            timestamp: 0,
+            previous: [0u8; 32],
+            nonce: 0,
+            curve_tree_root: [0u8; 32],
+        };
+        let miner_tx = Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
+                inputs: vec![Input::Gen(0)],
+                outputs: vec![Output {
+                    amount: 0,
+                    key: [1u8; 32],
+                    view_tag: 0,
+                }],
+                extra: vec![],
+            },
+            ct: Ct::Null(CtBase {
+                enc_amounts: vec![],
+                enc_labels: vec![],
+                commitments: vec![],
+            }),
+        };
+        let scannable = ScannableBlock {
+            block: Block {
+                header,
+                miner_transaction: miner_tx,
+                transaction_hashes: vec![],
+            },
+            transactions: vec![],
+            first_output_index: Some(u64::MAX),
+        };
+
+        let mut never = || false;
+        let err = scanner
+            .scan_with_cancel(scannable, &mut never)
+            .expect_err("cumulative index overflow must surface InvalidScannableBlock");
+        assert!(
+            matches!(err, ScanError::InvalidScannableBlock(_)),
+            "expected InvalidScannableBlock, got {err:?}"
         );
     }
 

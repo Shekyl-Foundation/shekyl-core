@@ -33,10 +33,6 @@ const SCANNER_METHODS: &[&str] = &[
     "get_payments",
     "get_bulk_payments",
     "get_height",
-    "get_staked_outputs",
-    "get_staked_balance",
-    "get_claimable_stakes",
-    "get_unstakeable_outputs",
     "freeze",
     "thaw",
 ];
@@ -79,10 +75,6 @@ fn dispatch_scanner_method(
         "get_height" => scanner_get_height(scanner),
         "get_transfers" => scanner_get_transfers(scanner, params),
         "incoming_transfers" => scanner_incoming_transfers(scanner, params),
-        "get_staked_outputs" => scanner_get_staked_outputs(scanner),
-        "get_staked_balance" => scanner_get_staked_balance(scanner),
-        "get_claimable_stakes" => scanner_get_claimable_stakes(scanner),
-        "get_unstakeable_outputs" => scanner_get_unstakeable_outputs(scanner),
         "freeze" => scanner_freeze(scanner, params),
         "thaw" => scanner_thaw(scanner, params),
         "get_transfer_by_txid" | "get_payments" | "get_bulk_payments" => Err(EngineError {
@@ -132,10 +124,15 @@ fn scanner_get_transfers(scanner: &ScannerState, params: Value) -> Result<Value,
     let mut result = serde_json::Map::new();
 
     if want_in {
+        // Exclude outputs under an F14 awaiting-confirmation lock (§2.6):
+        // their spend is already broadcast (submitted, unconfirmed), so
+        // listing them as available received funds misrepresents the
+        // spendable balance. They surface under `out` instead — exactly where
+        // they appeared when submit-accept marked them `spent`.
         let incoming: Vec<Value> = ledger
             .transfers()
             .iter()
-            .filter(|td| !td.spent)
+            .filter(|td| !td.spent && td.awaiting_confirmation.is_none())
             .map(transfer_to_json)
             .collect();
         result.insert("in".to_string(), Value::Array(incoming));
@@ -145,7 +142,7 @@ fn scanner_get_transfers(scanner: &ScannerState, params: Value) -> Result<Value,
         let outgoing: Vec<Value> = ledger
             .transfers()
             .iter()
-            .filter(|td| td.spent)
+            .filter(|td| td.spent || td.awaiting_confirmation.is_some())
             .map(transfer_to_json)
             .collect();
         result.insert("out".to_string(), Value::Array(outgoing));
@@ -177,100 +174,6 @@ fn scanner_incoming_transfers(scanner: &ScannerState, params: Value) -> Result<V
         .collect();
 
     Ok(serde_json::json!({ "transfers": transfers }))
-}
-
-#[cfg(feature = "rust-scanner")]
-fn scanner_get_staked_outputs(scanner: &ScannerState) -> Result<Value, EngineError> {
-    let state = lock_state(scanner)?;
-    let (ledger, _indexes) = &*state;
-    let height = ledger.height();
-
-    let staked: Vec<Value> = ledger
-        .staked_outputs()
-        .iter()
-        .map(|td| {
-            serde_json::json!({
-                "tx_hash": hex::encode(td.tx_hash),
-                "output_index": td.internal_output_index,
-                "amount": td.amount(),
-                "tier": td.stake_tier,
-                "lock_until": td.stake_lock_until,
-                "matured": td.is_matured_stake(height),
-            })
-        })
-        .collect();
-
-    Ok(serde_json::json!({ "staked_outputs": staked }))
-}
-
-#[cfg(feature = "rust-scanner")]
-fn scanner_get_staked_balance(scanner: &ScannerState) -> Result<Value, EngineError> {
-    let state = lock_state(scanner)?;
-    let (ledger, _indexes) = &*state;
-    let height = ledger.height();
-    let summary = ledger.balance(height);
-
-    Ok(serde_json::json!({
-        "staked_total": summary.staked_total,
-        "staked_matured": summary.staked_matured,
-        "staked_locked": summary.staked_locked,
-    }))
-}
-
-#[cfg(feature = "rust-scanner")]
-fn scanner_get_claimable_stakes(scanner: &ScannerState) -> Result<Value, EngineError> {
-    let state = lock_state(scanner)?;
-    let (ledger, _indexes) = &*state;
-    let height = ledger.height();
-
-    let claimable: Vec<Value> = ledger
-        .claimable_outputs(height)
-        .iter()
-        .map(|td| {
-            let accrual_cap = std::cmp::min(height, td.stake_lock_until);
-            let watermark = if td.last_claimed_height > 0 {
-                td.last_claimed_height
-            } else {
-                td.block_height
-            };
-            serde_json::json!({
-                "tx_hash": hex::encode(td.tx_hash),
-                "global_output_index": td.global_output_index,
-                "amount": td.amount(),
-                "tier": td.stake_tier,
-                "lock_until": td.stake_lock_until,
-                "from_height": watermark,
-                "to_height": accrual_cap,
-                "accrual_frozen": height >= td.stake_lock_until,
-            })
-        })
-        .collect();
-
-    Ok(serde_json::json!({ "claimable_stakes": claimable }))
-}
-
-#[cfg(feature = "rust-scanner")]
-fn scanner_get_unstakeable_outputs(scanner: &ScannerState) -> Result<Value, EngineError> {
-    let state = lock_state(scanner)?;
-    let (ledger, _indexes) = &*state;
-    let height = ledger.height();
-
-    let unstakeable: Vec<Value> = ledger
-        .unstakeable_outputs(height)
-        .iter()
-        .map(|td| {
-            serde_json::json!({
-                "tx_hash": hex::encode(td.tx_hash),
-                "global_output_index": td.global_output_index,
-                "amount": td.amount(),
-                "tier": td.stake_tier,
-                "lock_until": td.stake_lock_until,
-                "has_unclaimed_backlog": td.has_claimable_rewards(height),
-            })
-        })
-        .collect();
-
-    Ok(serde_json::json!({ "unstakeable_outputs": unstakeable }))
 }
 
 #[cfg(feature = "rust-scanner")]
@@ -324,13 +227,7 @@ fn transfer_to_json(td: &shekyl_scanner::TransferDetails) -> Value {
         "height": td.block_height,
         "amount": td.amount(),
         "spent": td.spent,
-        "staked": td.staked,
-        "stake_tier": td.stake_tier,
-        "stake_lock_until": td.stake_lock_until,
         "frozen": td.frozen,
         "global_index": td.global_output_index,
-        "subaddr_index": td.subaddress.map(|s| {
-            serde_json::json!({ "index": s.get() })
-        }),
     })
 }

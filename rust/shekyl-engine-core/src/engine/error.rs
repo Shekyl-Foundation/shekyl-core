@@ -145,6 +145,45 @@ pub enum OpenError {
         /// Capability the stub method represents.
         capability: super::Capability,
     },
+
+    /// **Conformance build only (S6).** The StakeEngine's session RNG self-cert
+    /// failed at spawn: the OS CSPRNG graded non-conformant for the entry-gap
+    /// timing draws (or the entropy source failed mid-draw). A degenerate timing
+    /// RNG defeats the gate-6 decorrelation firewall, so the staker actor refuses
+    /// to start and wallet-open fails loudly rather than staking on a CSPRNG that
+    /// cannot produce unlinkable timing. This variant does not exist in the
+    /// default (non-`conformance`) build — production carries no float/stats
+    /// grader (`ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md` §0).
+    ///
+    /// Carries the **structured** [`StakeSelfCertFailure`] (not a pre-rendered
+    /// string), keeping the grade detail — the `CertifyReport` — available for
+    /// logging / programmatic handling, per the module's no-stringly-typed-error
+    /// rule. The `#[source]` chains it; `Display` still renders the human message.
+    #[cfg(feature = "conformance")]
+    #[error("wallet open refused: StakeEngine session RNG self-cert failed at startup: {0}")]
+    StakeRngSelfCertFailed(#[source] StakeSelfCertFailure),
+}
+
+/// **Conformance build only (S6).** Why the StakeEngine startup session RNG
+/// self-cert failed — structured so the grade detail survives to logging /
+/// handling instead of being stringified at the actor boundary (the wallet-core
+/// API does not return stringly-typed errors; see the module doc). Surfaced
+/// through [`OpenError::StakeRngSelfCertFailed`].
+#[cfg(feature = "conformance")]
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum StakeSelfCertFailure {
+    /// The OS CSPRNG graded **non-conformant** for the entry-gap timing draws.
+    /// Carries the full [`CertifyReport`](shekyl_standoff::conformance::CertifyReport)
+    /// (chi-square, the three property verdicts) — the data worth keeping.
+    #[error("the OS CSPRNG graded non-conformant for entry-gap timing draws: {0:?}")]
+    NonConformant(shekyl_standoff::conformance::CertifyReport),
+
+    /// `on_start` failed before the grade completed — typically a panic from the
+    /// OS entropy source failing mid-draw, or (future) another startup error.
+    /// A panic / foreign start error has no richer structure than its rendered
+    /// cause, so this case is honestly a string.
+    #[error("StakeEngine startup failed before the self-cert completed: {0}")]
+    StartupFailed(String),
 }
 
 // --- Persistence -----------------------------------------------------------
@@ -321,6 +360,52 @@ pub enum RefreshError {
         /// message.
         context: &'static str,
     },
+
+    /// Curve-tree ingest failed while feeding the tree the result's
+    /// height range **ahead of** the ledger merge — the
+    /// ack-before-commit half of CT-5 §3.2 (R1-Q2) under the fork-three
+    /// genesis-anchored feed (§3.2.1). The tree is updated and
+    /// acknowledged before [`super::Engine::apply_scan_result`] advances
+    /// the ledger, so the ledger tip never outruns the tree (O2).
+    ///
+    /// **Terminal, not retried.** The refresh retry loop retries only
+    /// [`Self::ConcurrentMutation`]; a retry would re-run the same
+    /// cursor-driven ingest and hit the same failure. Surfacing here
+    /// keeps the ledger from advancing past an un-updated tree rather
+    /// than silently diverging the two tips.
+    ///
+    /// `context` is a compile-time-fixed classification named at the
+    /// call site — no daemon/scanner bytes flow in, matching the
+    /// `&'static str`-only discipline of
+    /// [`Self::InternalInvariantViolation`]. Daemon transport failures
+    /// during the genesis/birthday backfill fetch surface through
+    /// [`Self::Io`] (the established `fetch_block_hash_at` mapping), not
+    /// here; this variant covers the tree-feed-specific steps (backfill
+    /// block decode, the actor ingest/rollback handshake).
+    ///
+    /// A fail-stopped actor ([`super::curve_tree_actor::CurveTreeHandleError::Unavailable`])
+    /// or a [`ClientError::Poisoned`](shekyl_curve_tree::ClientError::Poisoned)
+    /// client maps here with `recoverable_by_respawn = true`: the CT-5a commit-5
+    /// engine-side respawn (R1-Q4) drops and reopens the actor and retries the
+    /// cursor-driven ingest once
+    /// ([`Engine::ingest_scan_result_with_respawn`](super::Engine::ingest_scan_result_with_respawn)).
+    /// Every other ingest failure (producer-contract, decode, a tree-state
+    /// client error a reopen would reproduce) is `false` and surfaces
+    /// terminally.
+    #[error("curve-tree ingest failed: {context}")]
+    CurveTreeIngest {
+        /// Compile-time-fixed name of the ingest failure class, named
+        /// at the call site so audit can read every distinguishable
+        /// case from source.
+        context: &'static str,
+        /// `true` when a drop-and-reopen respawn (R1-Q4) can heal the
+        /// failure (fail-stopped actor or `ClientError::Poisoned`); `false`
+        /// for failures a reopen would reproduce. Read by
+        /// [`Engine::ingest_scan_result_with_respawn`](super::Engine::ingest_scan_result_with_respawn)
+        /// to decide whether to respawn-and-retry. The bounded retry budget +
+        /// escalation for a deterministically-corrupt store (O3-sub) is CT-5d.
+        recoverable_by_respawn: bool,
+    },
 }
 
 // --- Ledger ----------------------------------------------------------------
@@ -406,6 +491,113 @@ pub enum SendError {
     CannotSign {
         /// Human-readable reason as named at the call site.
         reason: &'static str,
+    },
+
+    /// The wallet holds enough matured, non-reserved balance to cover the
+    /// spend, but the funds are **not yet spendable** because the FCMP++
+    /// curve tree is still rebuilding the membership data behind the
+    /// already-synced ledger tip (CT-5 §3.2.1, D3). This is the
+    /// adopting-wallet / tree-store-rebuild case: `synced_height` is ahead
+    /// of the tree's `ingested_tip_height`, so a membership proof cannot be
+    /// built for outputs the tree has not yet covered.
+    ///
+    /// Distinct from [`Self::InsufficientFunds`] precisely so the wallet does
+    /// **not** show a misleading "insufficient funds" when the real, honest
+    /// state is "spending temporarily unavailable while membership data
+    /// rebuilds" (`82-failure-mode-ux.mdc`). The shortfall resolves on its
+    /// own as the background backfill catches the tree up to `synced_height`;
+    /// no user action is required beyond waiting for the rebuild to finish.
+    #[error(
+        "spending temporarily unavailable: rebuilding membership data \
+         (need {needed} atomic units, {spendable_now} spendable now, \
+         {pending_rebuild} pending rebuild)"
+    )]
+    SpendUnavailableRebuilding {
+        /// Total amount-plus-fee the build attempted to cover.
+        needed: u64,
+        /// Balance spendable right now — matured, non-reserved, **and**
+        /// already covered by the curve tree.
+        spendable_now: u64,
+        /// Matured, non-reserved balance that is blocked only by the
+        /// in-progress tree rebuild and becomes spendable as the backfill
+        /// advances the tree to `synced_height`.
+        pending_rebuild: u64,
+    },
+
+    /// The FCMP++ curve-tree actor could not be queried for its
+    /// `ingested_tip_height` at build time, so the spendable set cannot be
+    /// computed (CT-5 §3.2.1). Distinct from
+    /// [`Self::SpendUnavailableRebuilding`]: that is the *benign, self-healing*
+    /// "tree is behind" state (the cursor read **succeeded** and returned a
+    /// height below `synced_height`); this is a *hard* infrastructure failure
+    /// (the cursor read **failed** — the actor is fail-stopped). It is terminal
+    /// until the engine-side actor respawn (R1-Q4) lands; a retry against a
+    /// dead actor reproduces it.
+    #[error("curve-tree unavailable: {detail}")]
+    CurveTreeUnavailable {
+        /// Stringified [`CurveTreeHandleError`](super::curve_tree_actor::CurveTreeHandleError).
+        detail: String,
+    },
+
+    /// An output the wallet would otherwise spend is **not yet spendable at the
+    /// reference block** (C2; 2A §3.7.5, CT-5 §3.2): its `eligible_height` lands
+    /// *after* the reference height (`tip − REF_ANCHOR_AGE`), so although the
+    /// output is matured at the tip its leaf is absent from the curve tree as of
+    /// the reference block the proof anchors to. A clean wait-N-blocks signal —
+    /// **not** an opaque assembly miss. Distinct from
+    /// [`Self::SpendUnavailableRebuilding`] (tree lag, self-heals as the backfill
+    /// advances) and [`Self::InsufficientFunds`] (genuinely short): the funds
+    /// exist and the tree covers them; they are simply too fresh for the
+    /// reference anchor and become spendable as the tip advances.
+    #[error(
+        "output not yet spendable at the reference block: eligible at height \
+         {eligible_height}, reference block at {reference_block_height} \
+         (spendable in ~{wait_blocks} block(s))"
+    )]
+    OutputNotYetSpendable {
+        /// The height at which the output enters the tree (matures).
+        eligible_height: u64,
+        /// The reference-block height the proof anchors to (`tip − REF_ANCHOR_AGE`).
+        reference_block_height: u64,
+        /// Blocks the tip must still advance before the output's
+        /// `eligible_height` reaches the reference height and it becomes
+        /// spendable (`eligible_height − reference_block_height`).
+        wait_blocks: u64,
+    },
+
+    /// The chain is too short to anchor a reference block: `synced_height <
+    /// REF_ANCHOR_AGE`, so [`select_reference_height`](shekyl_curve_tree::select_reference_height)
+    /// returns `None` and no output can be proven yet (the pre-maturity window).
+    /// A clean "wait for the chain to mature" signal rather than a misleading
+    /// insufficiency; resolves on its own as the tip advances past
+    /// `REF_ANCHOR_AGE`.
+    #[error(
+        "wallet too young to spend: synced height {synced_height} is below the \
+         reference-anchor depth {ref_anchor_age} (no reference block yet)"
+    )]
+    WalletTooYoungToSpend {
+        /// The wallet's current synced height.
+        synced_height: u64,
+        /// `REF_ANCHOR_AGE` — the minimum synced height to anchor a reference.
+        ref_anchor_age: u64,
+    },
+
+    /// The F28/F37 rebuild-loop circuit breaker is tripped
+    /// (`DAEMON_SUBMIT_VERDICT.md` §2.5): two consecutive daemon
+    /// rejections of the same kind (`Malformed`, `FeeTooLow`, or
+    /// `Unrecognized`) indicate a systematic wallet/daemon disagreement,
+    /// and further automatic builds are refused — a third build burns
+    /// fees and multiplies linking artifacts (§7.1) without resolving
+    /// the disagreement. The operator investigates the alarm and resets
+    /// via `acknowledge_submit_loop_breaker`.
+    #[error(
+        "submit loop-breaker tripped: two consecutive daemon rejections \
+         of the same kind ({kind:?}); builds refused until the operator \
+         acknowledges"
+    )]
+    SubmitLoopBreakerTripped {
+        /// The rejection kind the breaker tripped on.
+        kind: TerminalErrorKind,
     },
 }
 
@@ -575,46 +767,7 @@ pub enum KeyError {
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum KeyEngineError {
-    /// [`KeyEngine::sign_transaction`](super::traits::key::KeyEngine::sign_transaction)
-    /// cannot be bridged in M3a: the public on-chain per-input data
-    /// (`output_key`, `commitment`, `amount`, `h_pqc`) and the
-    /// FCMP++ tree-branch context required by
-    /// [`shekyl_tx_builder::sign_transaction`] are carried on
-    /// `TxToSign` fields (`outputs: Vec<TxOutputContext>`,
-    /// `fcmp_plus_plus_context: FcmpPlusPlusContext`) that are
-    /// forward-declared as empty stubs in M3a Commit 3 and pinned
-    /// in PR 5 (`PendingTxEngine`) per
-    /// `STAGE_1_PR_3_KEY_ENGINE.md`'s "TxToSign's exact field shape
-    /// … is finalized in PR 5" framing.
-    /// [`LocalKeys::sign_transaction`](super::local_keys::LocalKeys::sign_transaction)
-    /// returns this variant until PR 5's shape lands.
-    #[error(
-        "sign_transaction trait surface is PR-5-pinned; LocalKeys cannot bridge in M3a (TxToSign's public-data and FCMP++ branch carriers are forward-declared)"
-    )]
-    SignTransactionTraitSurfaceIncomplete,
-
-    /// [`KeyEngine::derive_subaddress`](super::traits::key::KeyEngine::derive_subaddress)
-    /// with [`SubaddressPurpose::Recipient`](super::traits::key::SubaddressPurpose::Recipient)
-    /// requires per-subaddress hybrid KEM keypair derivation
-    /// (X25519 + ML-KEM-768 keyed by `(view_secret, subaddress_idx)`),
-    /// which is **not yet implemented** in `shekyl-crypto-pq`. The
-    /// account-level KEM keypair derivation
-    /// (`shekyl_crypto_pq::account::ml_kem_keypair_from_d_z`) does
-    /// not parameterize over a subaddress index. Per
-    /// `STAGE_1_PR_3_KEY_ENGINE.md` §3.1.3 / §6.4, the
-    /// per-subaddress derivation lands alongside the relocated
-    /// classical Edwards-curve primitives in
-    /// `shekyl_crypto_pq::subaddress` as
-    /// `derive_subaddress_kem_keypair` once its infrastructure
-    /// exists; until then,
-    /// [`LocalKeys::derive_subaddress`](super::local_keys::LocalKeys::derive_subaddress)
-    /// with `Recipient` purpose returns this variant.
-    #[error(
-        "recipient-context subaddress derivation requires per-subaddress hybrid KEM keygen (shekyl_crypto_pq::subaddress::derive_subaddress_kem_keypair, not yet implemented)"
-    )]
-    RecipientSubaddressKemKeygenNotImplemented,
-
-    /// The deterministic-handle re-decap path (`LocalKeys::derive_source_secrets_bundle`,
+    /// The deterministic-handle re-decap path (`LocalKeys::derive_primary_source_secrets_bundle`,
     /// Layer 2 of M3b D1 per `STAGE_1_PR_3_M3B_PREFLIGHT.md` §2)
     /// failed to recover `combined_ss` from the persisted
     /// [`shekyl_crypto_pq::kem::HybridCiphertext`] using the wallet's
@@ -647,6 +800,53 @@ pub(crate) enum KeyEngineError {
     /// step rejected the input.
     #[error("source ciphertext re-decapsulation failed: {0}")]
     SourceCiphertextDecapsulationFailed(#[from] shekyl_crypto_pq::CryptoError),
+
+    /// The key actor task has stopped — clean shutdown, panic, or
+    /// fail-stop (`on_panic` → `ControlFlow::Break`). Surfaced by
+    /// [`KeyEngineHandle`](super::key_actor::KeyEngineHandle) when a
+    /// `kameo` `ask` against the actor returns a transport failure
+    /// (`SendError::ActorNotRunning` / `ActorStopped` / `Timeout`, and
+    /// — though unreachable on the awaiting `ask` path —
+    /// `MailboxFull`), as opposed to a `HandlerError` carrying a real
+    /// crypto/engine failure.
+    ///
+    /// **Terminal and non-retryable.** The actor is fail-stop by
+    /// construction (`STAGE_2_KEY_ENGINE_ACTOR.md` §4.5): a stopped key
+    /// actor is unrecoverable in-session because its `AllKeysBlob` is
+    /// already zeroized. The only recovery is a full wallet close +
+    /// re-open (`open_full` re-derives the blob from the encrypted
+    /// envelope). Callers must **propagate**, not retry: every
+    /// subsequent `ask` on the same handle returns this same error, so
+    /// a retry loop against a dead actor spins forever. This is the
+    /// inverse of the live-actor bounded-mailbox backpressure case,
+    /// where the `ask` future simply blocks the sender until capacity
+    /// frees (recoverable, and never surfaces as this variant).
+    ///
+    /// Distinguishable from crypto faults by being its own variant
+    /// (not folded into a `CryptoError` wrapper), so the refresh/RPC
+    /// tier can branch on "session-ended" vs "operation-failed." Per
+    /// `35-secure-memory.mdc`, the variant carries only a discriminant
+    /// — no secret material in its `Debug`/`Display`.
+    #[error(
+        "key actor unavailable: the key actor task has stopped (terminal, non-retryable; recover via wallet close + re-open)"
+    )]
+    KeyActorUnavailable,
+
+    /// Dust-fold pre-prove variant selection failed (§3.8.2 F4/F8).
+    #[error("insufficient funds for fee variant: shortfall {shortfall} atomic units")]
+    InsufficientFunds { shortfall: u64 },
+
+    /// Spendable input lacks a canonical key image at assembly time (C7 PF8).
+    #[error("missing key image for spend input at output index {output_index}")]
+    MissingKeyImage { output_index: u64 },
+
+    /// Handle does not match `derive_output_handle(view_sk, tx_hash, index)` (PF2).
+    #[error("output handle mismatch for spend input at output index {output_index}")]
+    HandleMismatch { output_index: u64 },
+
+    /// Non-crypto structural failure during signing (address decode, wire encode, …).
+    #[error("key engine primitive failure: {detail}")]
+    Primitive { detail: &'static str },
 }
 
 // --- IO --------------------------------------------------------------------
@@ -698,8 +898,8 @@ pub enum IoError {
     },
 }
 
-impl From<shekyl_rpc::RpcError> for IoError {
-    /// Map the upstream `shekyl_rpc::RpcError` into an
+impl From<shekyl_rpc_client::RpcError> for IoError {
+    /// Map the upstream `shekyl_rpc_client::RpcError` into an
     /// [`IoError::Daemon`] by stringifying the upstream variant.
     ///
     /// This conversion exists so the crate-internal `DaemonEngine`
@@ -720,7 +920,7 @@ impl From<shekyl_rpc::RpcError> for IoError {
     /// canonical stringification rather than `Debug`, which would
     /// leak variant names and bracket-quoted field shapes that are
     /// brittle to upstream refactors.
-    fn from(err: shekyl_rpc::RpcError) -> Self {
+    fn from(err: shekyl_rpc_client::RpcError) -> Self {
         IoError::Daemon {
             detail: err.to_string(),
         }
@@ -834,6 +1034,50 @@ pub enum TerminalErrorKind {
     /// exists so audit can distinguish the structural-defect class from
     /// the spend-conflict and economic-policy classes.
     Malformed,
+
+    /// The daemon rejected with a cause this wallet build does not
+    /// know ([`RejectCause::Unrecognized`] per the §2.3 version-skew
+    /// rules — an additive daemon-side cause landed before this wallet
+    /// updated). Fail-safe disposition per `DAEMON_SUBMIT_VERDICT.md`
+    /// §2.5: release + one-shot rebuild, same shape as [`Self::Malformed`]
+    /// but named distinctly so audit and telemetry can see skew events.
+    ///
+    /// [`RejectCause::Unrecognized`]: shekyl_rpc_client::RejectCause::Unrecognized
+    Unrecognized,
+}
+
+/// Retryable daemon-rejection sub-discriminant
+/// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.5).
+///
+/// A **definite** verdict (the tx is in neither pool nor chain — not
+/// ambiguity), but one whose remedy preserves the reservation: the
+/// input selection stays sound, so the engine returns the entry to
+/// `consumer_held` with its `output_locks` retained and the consumer
+/// resubmits after the per-cause wait. This is the third lifecycle
+/// class next to [`TerminalErrorKind`] (reservation gone) and
+/// [`AmbiguousErrorKind`] (reservation held awaiting a verdict).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RetryableRejectCause {
+    /// The FCMP++ reference is no longer canonical / the curve-tree
+    /// root moved (reorg). Disposition (§2.5): rebuild the **proof**
+    /// over the same input selection against a fresh root — the CT-5d
+    /// re-anchor path — then resubmit. This is the formerly-deferred
+    /// `ProofStale` signal, now daemon-attested.
+    StaleRoot,
+
+    /// The reference block is canonical but younger than the FCMP++
+    /// reference minimum age (the wallet built too close to the tip).
+    /// Disposition: timed backoff, then resubmit the same bytes.
+    ReferenceTooRecent,
+
+    /// The reference block hash is unknown to this daemon (typically:
+    /// daemon not yet synced to it). Disposition: sync-gated — consult
+    /// daemon health context; wait for sync and resubmit-same-bytes,
+    /// or treat as [`Self::StaleRoot`] if the daemon is synced and
+    /// still does not know the reference (§2.5, own-daemon-gated per
+    /// §7.2).
+    ReferenceNotFound,
 }
 
 /// Ambiguous submit-side daemon-rejection sub-discriminant. R9
@@ -923,6 +1167,27 @@ pub enum SubmitError {
         reservation_id: ReservationId,
     },
 
+    /// The daemon returned a definite rejection whose remedy preserves
+    /// the reservation (`DAEMON_SUBMIT_VERDICT.md` §2.5): the entry is
+    /// returned to `consumer_held` with its `output_locks` retained and
+    /// its full re-anchor substrate intact; the consumer resubmits via
+    /// `submit(rid, seen_gen)` after the per-cause wait. Unlike
+    /// [`Self::DaemonAmbiguous`] this **is** a verdict — under
+    /// single-egress it proves the bytes are in neither pool nor chain
+    /// — so waiting on chain observation is unnecessary; unlike
+    /// [`Self::DaemonRejectedTerminal`] the input selection remains
+    /// sound, so releasing the locks would only invite a competing
+    /// build over the same inputs (a same-key-image artifact, §7.1).
+    #[error(
+        "daemon rejected retryably: {cause:?} (reservation {reservation_id:?} returned to consumer-held)"
+    )]
+    DaemonRejectedRetryable {
+        /// The retryable sub-discriminant.
+        cause: RetryableRejectCause,
+        /// The reservation returned to `consumer_held`.
+        reservation_id: ReservationId,
+    },
+
     /// P3: rid was in neither `consumer_held` nor `in_flight` at
     /// submit entry. Either the rid was never issued, or it was
     /// already resolved (terminal-error path or successful
@@ -939,6 +1204,54 @@ pub enum SubmitError {
     #[error("submit already pending for reservation {reservation_id:?}")]
     SubmitAlreadyPending {
         /// The rid whose duplicate submit was refused.
+        reservation_id: ReservationId,
+    },
+
+    /// CT-5d ([`docs/design/CT5D_REANCHOR.md`] §4): the submitted `seen_gen` does
+    /// not match the reservation's current `content_gen`, so broadcast is
+    /// **withheld**. This covers both cases by the same gate: a re-anchor *during
+    /// this submit* advanced the content, or a *prior* re-anchor advanced it and
+    /// the consumer resubmitted with a stale generation. The reservation stays
+    /// `consumer_held` with the current `content_gen` and its (fresh) `tx_bytes`;
+    /// the consumer reviews the current `(fee, change)` and resubmits with the
+    /// current `content_gen`. This makes "broadcast content the user did not
+    /// authorize" unrepresentable.
+    #[error(
+        "content generation mismatch for reservation {reservation_id:?}: submitted seen_gen is stale; re-confirm at content_gen {content_gen}"
+    )]
+    ContentChanged {
+        /// The reservation whose authorized content the consumer must re-confirm.
+        reservation_id: ReservationId,
+        /// The reservation's current `content_gen` — the value to resubmit with.
+        content_gen: u64,
+    },
+
+    /// CT-5d (§3 / §3b): the proof needs re-anchoring but the re-anchor could not
+    /// complete right now. Either the curve tree cannot yet anchor a fresh
+    /// reference — still resyncing (e.g. post-reorg) or lagging the chain tip too
+    /// far to anchor a submittable reference (§3b) — or a transient build/sign
+    /// step failed (fee-snapshot fetch, signer, or an internal re-anchor error).
+    /// In all cases the reservation is preserved (`consumer_held`); the consumer
+    /// retries (or discards).
+    #[error(
+        "reservation {reservation_id:?} cannot re-anchor right now; reservation preserved, retry later"
+    )]
+    ReanchorUnavailable {
+        /// The reservation whose re-anchor could not complete; preserved.
+        reservation_id: ReservationId,
+    },
+
+    /// CT-5d (§3, F-I): the proof cannot be content-preservingly re-anchored —
+    /// a deep reorg orphaned a selected input, or the fresh-depth fee exceeds the
+    /// selected inputs' coverage. Reselection is the CT-5d-deferred path
+    /// (`docs/FOLLOWUPS.md` "CT-5d reselect"); the consumer discards and rebuilds.
+    /// The reservation is preserved so the consumer can review it before
+    /// discarding.
+    #[error(
+        "reservation {reservation_id:?} needs reselection (deep reorg / fee escalation); discard and rebuild"
+    )]
+    ReselectionRequired {
+        /// The reservation that must be discarded and rebuilt.
         reservation_id: ReservationId,
     },
 }
@@ -1065,4 +1378,76 @@ pub enum SignerError {
         /// Compile-time-fixed description of the downstream failure.
         reason: &'static str,
     },
+}
+
+impl From<KeyEngineError> for SignerError {
+    fn from(err: KeyEngineError) -> Self {
+        match err {
+            KeyEngineError::KeyActorUnavailable => Self::Unavailable,
+            KeyEngineError::Primitive { detail } => Self::RemoteFailure { reason: detail },
+            KeyEngineError::InsufficientFunds { .. } => Self::RemoteFailure {
+                reason: "insufficient funds for fee variant",
+            },
+            KeyEngineError::HandleMismatch { .. } => Self::RemoteFailure {
+                reason: "output handle mismatch",
+            },
+            KeyEngineError::MissingKeyImage { .. } => Self::RemoteFailure {
+                reason: "missing key image on spend input",
+            },
+            KeyEngineError::SourceCiphertextDecapsulationFailed(_) => Self::RemoteFailure {
+                reason: "source ciphertext re-decapsulation failed",
+            },
+        }
+    }
+}
+
+// --- Economics (PR 7) ------------------------------------------------------
+
+/// Per-domain error for
+/// [`EconomicsEngine`](super::traits::economics::EconomicsEngine), the
+/// §2.7 trait that owns canonical economic derivation (base subsidy,
+/// adaptive burn) for governance / display.
+///
+/// The trait declares `type Error: Into<EconomicsError>`; the V3.0
+/// implementor [`LocalEconomics`](super::local_economics::LocalEconomics)
+/// uses `Error = EconomicsError` directly, so the variants below are the
+/// full failure surface of the trait at V3.0.
+///
+/// `#[non_exhaustive]` per the Stage 1 trait-error convention
+/// (`LedgerError`, `KeyEngineError`): variants accrete additively as
+/// V3.x consumers reveal new failure modes without re-opening the §2.7
+/// trait surface.
+///
+/// # Two altitudes of failure (§6.3 G4)
+///
+/// - [`Self::Emission`] — the neutral-trajectory projection
+///   (`base_emission_at`) hit an arithmetic boundary
+///   (`already_generated` over supply, accumulation overflow). These
+///   are structural impossibilities for a well-formed chain; the
+///   variant exists so the projection cannot silently wrap.
+/// - [`Self::ActivityInvariantViolation`] — an
+///   [`ActivityMetric`](shekyl_economics::ActivityMetric) presented to
+///   `burn_amount` carried a field combination impossible for any single
+///   chain state. This is the implementor-side discriminator naming
+///   *which* structural invariant the producer broke. **Coherence**
+///   failures (four fields sampled from different chain views) are
+///   **not** caught here — that is the producer's obligation per the
+///   `ActivityMetric` rustdoc, and the V3.0 consequence is wrong
+///   advisory display, not a typed error.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum EconomicsError {
+    /// Neutral-trajectory emission projection failed at an arithmetic
+    /// boundary. Wraps [`shekyl_economics::EmissionError`] (over-supply
+    /// `already_generated`, or accumulation overflow).
+    #[error("emission projection failure: {0}")]
+    Emission(#[from] shekyl_economics::EmissionError),
+
+    /// An [`ActivityMetric`](shekyl_economics::ActivityMetric) violated a
+    /// structural invariant. Wraps
+    /// [`shekyl_economics::ActivityInvariantViolation`] so the caller can
+    /// tell which invariant (`circulating ≤ supply`,
+    /// `staked ≤ circulating`, genesis-zero) the producer broke.
+    #[error("activity metric invariant violation: {0}")]
+    ActivityInvariantViolation(#[from] shekyl_economics::ActivityInvariantViolation),
 }

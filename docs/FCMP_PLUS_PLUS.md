@@ -773,19 +773,51 @@ the secret key — no secret material is returned.
 
 ### Wallet Restore from Seed
 
-The wallet master seed derives three sub-keys:
+Key derivation follows the frozen v1 pipeline implemented in
+`rust/shekyl-crypto-pq/src/account.rs` (the single source of truth; see
+the crate docstring for the full diagram and the
+`docs/V3_WALLET_DECISION_LOG.md` key-signature freeze entry for the
+rationale). In outline:
 
 ```text
-spend_key   = HKDF-Expand(master, "shekyl-spend", 32)
-view_key    = HKDF-Expand(master, "shekyl-view", 32)
-ml_kem_key  = HKDF-Expand(master, "shekyl-ml-kem", 32)
+seed input            mainnet/stagenet: BIP-39 24-word mnemonic
+                        (NFKD, PBKDF2-HMAC-SHA512 @ 2048 iters -> 64 B;
+                         passphrase opt-in, defaults to empty)
+                      testnet/fakechain: raw 32-byte seed
+
+master_seed_64      = HKDF-SHA-512(salt="shekyl-seed-normalize-v1",
+                                   ikm=seed-input output, L=64)
+                      (the only secret the wallet file persists)
+
+salt                = "shekyl-master-derive-v1-<network>-<format>"
+spend_wide          = HKDF-SHA-512(salt, ikm=master_seed_64,
+                                   info="shekyl-ed25519-spend", L=64)
+view_wide           = HKDF-SHA-512(salt, ikm=master_seed_64,
+                                   info="shekyl-ed25519-view",  L=64)
+d_z                 = HKDF-SHA-512(salt, ikm=master_seed_64,
+                                   info="shekyl-ml-kem-768",    L=64)
+
+spend_sk, view_sk   = Scalar::from_bytes_mod_order_wide(...)   (unclamped)
+ml_kem_768 (ek,dk)  = keygen(ChaCha20Rng::from_seed(
+                        SHA3-256("shekyl-mlkem-chacha-seed" || d_z)))
 ```
 
-On restore, the wallet scans the chain for owned outputs (using classical
-stealth address derivation), then rederives the PQC keypair for each output
-using the stored combined shared secret (`m_combined_shared_secret` in
-`transfer_details`). The function `rederive_all_pqc_keys()` handles this
-during the first refresh after restore.
+All key material — classical and PQC — is therefore a pure function of
+the master seed, the network, and the seed format. On wallet open the
+full keypair set is rederived from `master_seed_64` via
+`shekyl_account_rederive`, and the recomputed classical address is
+checked against the wallet file's expected-address bytes (see
+`docs/WALLET_FILE_FORMAT_V1.md` for the failure taxonomy).
+
+On restore, the wallet re-scans the chain for owned outputs. Per-output
+PQC shared secrets are recomputed during the scan by decapsulating with
+the account-level ML-KEM decapsulation key; nothing per-output needs to
+be present in the wallet file for restore to succeed. (The legacy C++
+`wallet2` scan path still caches a per-output combined shared secret in
+`transfer_details` as an implementation detail; that cache — and
+`wallet2.cpp` itself — is a deletion target at Phase 5 of
+`docs/design/WALLET_REWRITE_PLAN.md` and is not part of this
+specification.)
 
 ---
 
@@ -993,11 +1025,52 @@ previously in the mempool) pay the full verification cost.
 
 ## 15. Staking and FCMP++
 
-Staked outputs (`txout_to_staked_key`) use the same 4-scalar leaf format:
+**Genesis disposition (2026-06 — transfer-shaped admission).** The leading genesis
+staking form ([`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §2.4)
+does **not** ship Decision **3C** below. Admission principal lives on the **main tree**
+as ordinary FCMP++ transfers (principal ↔ HKDF-derived **`P`** sub-wallet); only
+**bond** (gate 4) and **reward emission** are consensus-special. Cleartext
+`txout_to_staked_key` and the separate staking subtree are **deletion targets** for
+genesis — the subtree was **docs-only**, never implemented in production Rust/C++.
+
+**Historical — Decision 3C (confidential-claim path; not genesis):**
+
+Staked outputs (`txout_to_staked_key`) were designed to live in a **separate staking
+subtree** with a **160-byte / 5-scalar** leaf (Decision 3C —
+[`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §2, §6.4.3). The **main tree**
+(all non-staked outputs) keeps the **128-byte / 4-scalar** leaf, unchanged.
 
 ```text
-Leaf = { O.x, I.x, C.x, H(pqc_pk) }
+Staking-subtree leaf (160 B):
+  [  0: 32]  O.x
+  [ 32: 64]  I.x
+  [ 64: 96]  C.x       // C_stake = z·G + amount·H   (plain Pedersen — no τ·H_t)
+  [ 96:128]  h_pqc      = shekyl_fcmp_pqc_leaf_hash(ml_dsa_pk)
+  [128:160]  h_bind     = H("stake-bind" ‖ tier ‖ creation_height)   // consensus-set at inclusion
 ```
+
+**Tier + creation** are bound by `h_bind` (5th scalar): consensus stamps exact
+`creation_height` at inclusion (the staker does not know mining height at build time), and
+the claim proves subtree membership + `h_bind` equality against the **revealed**
+`(tier, creation)`. The accrual window is then **pure arithmetic**
+(`creation < S ≤ creation + tier_lock`) — no historical-root checkpointing.
+
+**Implementation notes (Round 2):**
+
+- `SCALARS_PER_LEAF` generalizes from a const to a **per-tree parameter** (`=5` for the
+  staking subtree, `=4` for the main tree); the 5th-position Selene generator is a **NUMS
+  consensus constant** under the cbindgen consensus-constant guard, with a KAT.
+- The leaf-layer Selene MSM grows from `4·W` to `5·W` terms **for the staking subtree only**
+  (~+25% on that hash); main-tree hashing and all Helios/Selene layers above the leaf are
+  untouched. Off the wallet-scan/decap path (no block-loading impact).
+- The **locked witness header** `[O][I][C][h_pqc][x][y][z][a]` is **untouched** — `h_bind` is
+  a public membership input recomputed by the verifier, **not** a witness field.
+- Stake-creation and unstake are **cross-tree transitions** (main↔subtree); `pop_block`
+  rewinds both atomically. Leaves are append-only, so claim-after-unstake works.
+
+**Legacy note:** cleartext-claim code compared `H(pqc_pk)` on all output types; confidential
+claims require the staking-subtree `h_bind` binding above. No compatibility shim for
+pre-genesis implementations.
 
 **Universal deferred curve-tree insertion:** All outputs (coinbase, regular,
 and staked) are deferred: they enter a pending table at creation time and
@@ -1042,11 +1115,14 @@ claim is rejected. After retrieval, the stored leaf is bytewise-compared
 to a recomputed leaf from the output's `(output_key, commitment, h_pqc)`
 to bind the claim to the actual output data in the tree.
 
-**PQC ownership cross-check:** For each stake claim input `i`, the
-`H(pqc_pk)` stored at bytes 96–128 of the curve tree leaf must match
-`shekyl_fcmp_pqc_leaf_hash(pqc_auths[i].hybrid_public_key)`. This
-prevents an attacker from claiming rewards for an output they do not
-control the PQC key for.
+**PQC ownership cross-check:** For staked outputs and claim inputs:
+
+1. Assert `h_pqc == shekyl_fcmp_pqc_leaf_hash(pqc_auths[i].hybrid_public_key)`.
+2. Assert `leaf[96:128] == h_pqc` (fourth scalar unchanged under **(C_tier)**).
+3. **(C_tier):** verify opened `C~` tier leg matches public claim `tier` via `C~_amt` path
+   (upstream §6.4.1) — not raw `h_stake_bind` unless **(C1)** fallback is active.
+
+For **regular** outputs, `leaf[96:128] == shekyl_fcmp_pqc_leaf_hash(pqc_pk)` unchanged.
 
 **Claim reward outputs must be indistinguishable from regular outputs.**
 Claim reward outputs MUST be regular `txout_to_tagged_key` outputs (not
@@ -1150,8 +1226,8 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Verification caching (mempool FCMP++ hash) | **Done** | `tx_pool.cpp`, `blockchain.cpp` |
 | `genRctFcmpPlusPlus` (wallet-side proof) | **Deprecated** | `rctSigs.cpp` (test-only; production uses `shekyl_sign_fcmp_transaction`) |
 | Wallet tree-path precomputation | **Done** | `wallet2.cpp` |
-| PQC key rederivation from stored secret | **Done** | `wallet2.cpp` |
-| Restore-from-seed PQC rederivation | **Done** | `wallet2.cpp` |
+| PQC key rederivation from stored secret | **Done** (legacy C++ scan cache; deletion target at rewrite Phase 5) | `wallet2.cpp` |
+| Restore-from-seed PQC rederivation | **Done** (frozen v1 pipeline; `shekyl_account_rederive`) | `rust/shekyl-crypto-pq/src/account.rs` |
 | `prune_tx_data` + `txs_pqc_auths` split | **Done** | `db_lmdb.cpp`, `cryptonote_basic.h` |
 | `get_curve_tree_path` RPC | **Done** | `core_rpc_server.cpp` |
 | `get_curve_tree_info` RPC | **Done** | `core_rpc_server.cpp` |
@@ -1431,16 +1507,18 @@ cd rust/shekyl-crypto-pq && cargo bench --bench pqc_rederivation
 
 ## monero-oxide Fork Integration Status
 
-The FCMP++ Rust crypto stack depends on the
+The FCMP++ Rust crypto stack descends from the
 [Shekyl Foundation monero-oxide fork](https://github.com/Shekyl-Foundation/monero-oxide)
-(`fcmp++` branch). In `shekyl-core`, these crates are now vendored under
-`rust/shekyl-oxide/` and consumed through path dependencies from
-`rust/shekyl-fcmp/Cargo.toml`:
+(`fcmp++` branch). After the un-vendor (slice 2, `SHEKYL_OXIDE_UNVENDOR.md`), the
+proof/generator/support crates are **first-party** `shekyl-*` crates (relocated out
+of the vendored tree, no longer upstream-tracked); only the research crypto remains
+vendored under `rust/shekyl-oxide/crypto/`. `rust/shekyl-fcmp/Cargo.toml` consumes
+them by path:
 
-- `shekyl-fcmp-plus-plus`
-- `shekyl-generators`
-- `helioselene`
-- `ec-divisors`
+- `shekyl-fcmp-proofs` (first-party — the FCMP++ SAL/membership proofs; was `shekyl-fcmp-plus-plus`)
+- `shekyl-curve-generators` (first-party; was `shekyl-generators`)
+- `helioselene` (vendored crypto)
+- `ec-divisors` (vendored crypto)
 
 ### Current Pin
 
@@ -1456,7 +1534,7 @@ vendored crate copy.
 The `full-chain-membership-proofs` circuit in the monero-oxide fork has been
 modified to support Shekyl's 4-scalar leaf format. The `FcmpCurves` trait now
 includes `const EXTRA_LEAF_SCALARS: usize = 1`, and `Curves` in the
-`shekyl-fcmp-plus-plus` wrapper sets this to `1`. The `FcmpPlusPlus::verify`
+`shekyl-fcmp-proofs` wrapper sets this to `1`. The `FcmpPlusPlus::verify`
 accepts `pqc_pk_hashes: Vec<SeleneF>` to pass the 4th scalar through to the
 circuit.
 
@@ -1659,6 +1737,35 @@ the legacy `ecdhInfo` (`ecdhTuple`):
 - `ecdhTuple`, `ecdhEncode`, and `ecdhDecode` have been removed from the codebase
 - Production signing uses `shekyl_sign_fcmp_transaction` which receives
   pre-computed 9-byte `enc_amount` values from `shekyl_construct_output`
+
+### Encrypted Labels Wire Format (5-T, FA-11)
+
+Per-output logical labels use `enc_labels` in `rctSigBase` (9 bytes each),
+serialized immediately after `enc_amounts` and before `outPk`:
+
+```
+[8 bytes: label_plaintext XOR k_label[..8]] [1 byte: label_tag]
+```
+
+- Launch default **plaintext** is the sentinel block `0xFF…` (`SENTINEL_PLAINTEXT`);
+  on-wire `enc_label` is `plaintext XOR k_label[..8]` per output — **never**
+  a fixed `0xFF` wire constant (that would fingerprint all non-merchant pays).
+- `label_tag` is the first byte of HKDF-Expand(`shekyl-output-label-tag` ‖ index);
+  verified at scan like `amount_tag` (integrity / fast-reject only — **not** a
+  cleartext sentinel-vs-tag discriminator).
+- Included in `serialize_rctsig_base` (transaction binding / prehash). **Not** part of the FCMP++ leaf witness.
+- Label ciphertext has **no** Pedersen commitment backstop (unlike amounts). Prehash binding is the sole relay-tamper defense; AEAD is redundant once bound. CI: `fcmp.enc_label_binds_rctsig_base_prehash`.
+- `genRctFcmpPlusPlus` rejects all-zero `enc_labels` outside fake/test device mode (stub builder must not reach production).
+- KAT: `PQC_OUTPUT_SECRETS.json` includes `enc_label_sentinel` / `enc_label_sentinel_9` wire octets.
+- `construct_output` / wallet signing supply pre-computed 9-byte values parallel to `enc_amount`.
+- **Indistinguishability invariant (normative home: `SUBADDRESS_UNDER_PQC.md`
+  §5.7.10).** `enc_label` octets are computationally indistinguishable from
+  uniform to any non-recipient, *independent of plaintext*; the real-label and
+  sentinel wire distributions are identical. Real-label population is therefore
+  **ungated** (the R2-F8 `cooperative_payment_requests` wallet flag was retired
+  2026-06-15) — it withholds nothing from an observer that the sentinel does
+  not. The mandatory-uniform-wire pin is unchanged. Enforced by the
+  `real_label_indistinguishable_from_sentinel` statistical KAT.
 
 ### Witness Header (256 bytes)
 

@@ -1,4 +1,4 @@
-use ciphersuite::{group::ff::Field, Ciphersuite};
+use ciphersuite::{group::ff::Field as _, Ciphersuite};
 
 use crate::*;
 

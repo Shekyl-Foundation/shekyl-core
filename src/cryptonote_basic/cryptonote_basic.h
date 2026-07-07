@@ -102,25 +102,6 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-  // outputs >= HF_VERSION_SHEKYL_NG — staked outputs with enforced lock period
-  struct txout_to_staked_key
-  {
-    txout_to_staked_key() : lock_tier(0) { }
-    txout_to_staked_key(const crypto::public_key &_key, const crypto::view_tag &_view_tag, uint8_t _tier)
-      : key(_key), view_tag(_view_tag), lock_tier(_tier) { }
-    crypto::public_key key;
-    crypto::view_tag view_tag;
-    uint8_t lock_tier;       // 0=short, 1=medium, 2=long
-    // effective_lock_until is computed dynamically as creation_height + tier_lock_blocks.
-    // Not stored on-chain — eliminates the signing-time/mining-time mismatch.
-
-    BEGIN_SERIALIZE_OBJECT()
-      FIELD(key)
-      FIELD(view_tag)
-      FIELD(lock_tier)
-    END_SERIALIZE()
-  };
-
   /* inputs */
 
   struct txin_gen
@@ -173,27 +154,151 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-  struct txin_stake_claim
+  struct archival_leaf_bytes
   {
-    uint64_t amount;                // claimed reward amount
-    uint64_t staked_output_index;   // global output index of the staked output
-    uint64_t from_height;           // claim range start (exclusive: last_claimed_height)
-    uint64_t to_height;             // claim range end (inclusive)
-    crypto::key_image k_image;      // prevents double-claim for this range
+    uint8_t data[config::ARCHIVAL_LEAF_BYTES];
+
+    bool operator==(const archival_leaf_bytes& o) const
+    {
+      for (size_t i = 0; i < sizeof(data); ++i)
+        if (data[i] != o.data[i])
+          return false;
+      return true;
+    }
+  };
+
+  struct archival_segment_path_opening
+  {
+    std::vector<std::vector<crypto::hash>> c1_layers;
+    std::vector<std::vector<crypto::hash>> c2_layers;
 
     BEGIN_SERIALIZE_OBJECT()
-      VARINT_FIELD(amount)
-      VARINT_FIELD(staked_output_index)
-      VARINT_FIELD(from_height)
-      VARINT_FIELD(to_height)
-      FIELD(k_image)
+      FIELD(c1_layers)
+      if (c1_layers.size() > config::ARCHIVAL_MAX_PATH_LAYERS_PER_KIND)
+        return false;
+      for (const auto& branch : c1_layers)
+        if (branch.size() > config::ARCHIVAL_MAX_BRANCH_SCALARS)
+          return false;
+      FIELD(c2_layers)
+      if (c2_layers.size() > config::ARCHIVAL_MAX_PATH_LAYERS_PER_KIND)
+        return false;
+      for (const auto& branch : c2_layers)
+        if (branch.size() > config::ARCHIVAL_MAX_BRANCH_SCALARS)
+          return false;
+    END_SERIALIZE()
+  };
+
+  enum class archival_bond_post_kind : uint8_t
+  {
+    JoinMarket = 0,
+    Rebond = 1,
+    Unbond = 2,
+    HoldingsUpdate = 3,
+  };
+
+  enum class archival_holdings_kind : uint8_t
+  {
+    ShardSetCompact = 0,
+    CompleteTree = 1,
+  };
+
+  struct archival_holdings_descriptor
+  {
+    archival_holdings_kind kind = archival_holdings_kind::ShardSetCompact;
+    std::vector<uint64_t> shard_ids;
+
+    BEGIN_SERIALIZE_OBJECT()
+      uint8_t kind_u8 = static_cast<uint8_t>(kind);
+      FIELD(kind_u8)
+      if (kind_u8 > static_cast<uint8_t>(archival_holdings_kind::CompleteTree))
+        return false;
+      kind = static_cast<archival_holdings_kind>(kind_u8);
+      if (kind == archival_holdings_kind::ShardSetCompact)
+      {
+        FIELD(shard_ids)
+        if (shard_ids.size() > config::ARCHIVAL_MAX_HOLDINGS_SHARDS)
+          return false;
+      }
+      else if (!shard_ids.empty())
+        return false;
+    END_SERIALIZE()
+  };
+
+  // Gate-4 §3.4.1 — archival bond-post vin (dense tag 0x03; see VARIANT_TAG below).
+  struct txin_archival_bond_post
+  {
+    std::vector<uint8_t> hybrid_public_key;
+    crypto::hash p_canonical_id;
+    uint8_t post_kind;
+    archival_holdings_descriptor holdings;
+    uint64_t bonded_total_atomic;
+    uint64_t bond_credit;
+    uint64_t bond_debit;
+
+    BEGIN_SERIALIZE_OBJECT()
+      FIELD(hybrid_public_key)
+      // Exact canonical single-key length: a truncated key is malformed, not a
+      // shorter valid key (matches the Rust bond wire + blockchain.cpp's
+      // structural check; PR #229 review).
+      if (hybrid_public_key.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
+        return false;
+      FIELD(p_canonical_id)
+      FIELD(post_kind)
+      if (post_kind > static_cast<uint8_t>(archival_bond_post_kind::HoldingsUpdate))
+        return false;
+      FIELD(holdings)
+      VARINT_FIELD(bonded_total_atomic)
+      VARINT_FIELD(bond_credit)
+      VARINT_FIELD(bond_debit)
+    END_SERIALIZE()
+  };
+
+  // Gate-2 §5.1 — archival serve-credit response vin (dense tag 0x02; see VARIANT_TAG below).
+  struct txin_archival_serve_credit_response
+  {
+    crypto::hash p_canonical_id;
+    uint64_t shard_id;
+    uint64_t settlement_epoch;
+    crypto::hash segment_subroot_rk;
+    uint32_t leaf_index_in_segment;
+    archival_leaf_bytes leaf_bytes;
+    archival_segment_path_opening path;
+    std::vector<uint8_t> hybrid_signature;
+
+    BEGIN_SERIALIZE_OBJECT()
+      FIELD(p_canonical_id)
+      VARINT_FIELD(shard_id)
+      VARINT_FIELD(settlement_epoch)
+      FIELD(segment_subroot_rk)
+      FIELD(leaf_index_in_segment)
+      FIELD(leaf_bytes)
+      FIELD(path)
+      FIELD(hybrid_signature)
+      if (hybrid_signature.size() > config::PQC_HYBRID_SINGLE_SIG_LEN)
+        return false;
     END_SERIALIZE()
   };
 
 
-  typedef std::variant<txin_gen, txin_to_script, txin_to_scripthash, txin_to_key, txin_stake_claim> txin_v;
+  typedef std::variant<txin_gen, txin_to_script, txin_to_scripthash, txin_to_key, txin_archival_serve_credit_response, txin_archival_bond_post> txin_v;
 
-  typedef std::variant<txout_to_script, txout_to_scripthash, txout_to_key, txout_to_tagged_key, txout_to_staked_key> txout_target_v;
+  // The txin_to_key (spend) subset of vin. This count — not vin.size() — sizes
+  // the prunable pseudoOuts array: an archival bond-post vin occupies a
+  // pqc_auths slot but carries no pseudo-out (its cleartext bond_credit rides
+  // the CT balance instead; see rctTypes.h serialize_rctsig_prunable). For a
+  // pure spend every vin is txin_to_key, so the two counts coincide. The
+  // authoritative wire definition is Rust-side (shekyl-wire, GENESIS_TX_WIRE_FORMAT.md
+  // §9.9); this helper keeps the C++ parser byte-aligned with it.
+  inline size_t count_spend_inputs(const std::vector<txin_v>& vin)
+  {
+    size_t n = 0;
+    for (const auto& in : vin)
+      if (std::holds_alternative<txin_to_key>(in))
+        ++n;
+    return n;
+  }
+
+  typedef std::variant<txout_to_script, txout_to_scripthash, txout_to_key, txout_to_tagged_key> txout_target_v;
 
   //typedef std::pair<uint64_t, txout> out_t;
   struct tx_out
@@ -400,9 +505,12 @@ namespace cryptonote
 
           if (!pruned && rct_signatures.type != rct::RCTTypeNull)
           {
+            // pseudoOuts are sized by the spend subset, not vin.size() — see
+            // count_spend_inputs. Matches the consensus pins in blockchain.cpp
+            // / tx_verification_utils.cpp (`pseudoOuts.size() == num_spend`).
             ar.tag("rctsig_prunable");
             ar.begin_object();
-            bool r = rct_signatures.p.serialize_rctsig_prunable(ar, rct_signatures.type, vin.size(), vout.size());
+            bool r = rct_signatures.p.serialize_rctsig_prunable(ar, rct_signatures.type, count_spend_inputs(vin), vout.size());
             if (!r || !ar.good()) return false;
             ar.end_object();
           }
@@ -578,7 +686,8 @@ namespace cryptonote
       size_t operator()(const txin_to_script& txin) const{return 0;}
       size_t operator()(const txin_to_scripthash& txin) const{return 0;}
       size_t operator()(const txin_to_key& txin) const {return txin.key_offsets.size();}
-      size_t operator()(const txin_stake_claim& txin) const {return 1;}
+      size_t operator()(const txin_archival_serve_credit_response& txin) const {return 0;}
+      size_t operator()(const txin_archival_bond_post& txin) const {return 0;}
     };
 
     return std::visit(txin_signature_size_visitor(), tx_in);
@@ -721,17 +830,24 @@ namespace std {
 
 BLOB_SERIALIZER(cryptonote::txout_to_key);
 BLOB_SERIALIZER(cryptonote::txout_to_scripthash);
+BLOB_SERIALIZER(cryptonote::archival_leaf_bytes);
 
-VARIANT_TAG(binary_archive, cryptonote::txin_gen, 0xff);
-VARIANT_TAG(binary_archive, cryptonote::txin_to_script, 0x0);
-VARIANT_TAG(binary_archive, cryptonote::txin_to_scripthash, 0x1);
-VARIANT_TAG(binary_archive, cryptonote::txin_to_key, 0x2);
-VARIANT_TAG(binary_archive, cryptonote::txin_stake_claim, 0x3);
-VARIANT_TAG(binary_archive, cryptonote::txout_to_script, 0x0);
-VARIANT_TAG(binary_archive, cryptonote::txout_to_scripthash, 0x1);
-VARIANT_TAG(binary_archive, cryptonote::txout_to_key, 0x2);
-VARIANT_TAG(binary_archive, cryptonote::txout_to_tagged_key, 0x3);
-VARIANT_TAG(binary_archive, cryptonote::txout_to_staked_key, 0x4);
+// Genesis dense tag scheme (GENESIS_TX_WIRE_FORMAT.md §2.0 / §5 gate-(c) item 2).
+// Surviving genesis arms are numbered dense from 0x00; the shed CryptoNote/legacy
+// arms (no genesis producer) are parked at 0xf0+ so they never collide with the
+// active low tag space. Full type-removal of the parked arms is §5 item 1 — its
+// own rule-60 cut (heavy consensus refactor; the dead types stay compile-present
+// but off-wire until then).
+VARIANT_TAG(binary_archive, cryptonote::txin_gen, 0x00);
+VARIANT_TAG(binary_archive, cryptonote::txin_to_script, 0xf0);          // shed (parked)
+VARIANT_TAG(binary_archive, cryptonote::txin_to_scripthash, 0xf1);      // shed (parked)
+VARIANT_TAG(binary_archive, cryptonote::txin_to_key, 0x01);             // fcmp spend
+VARIANT_TAG(binary_archive, cryptonote::txin_archival_serve_credit_response, 0x02);
+VARIANT_TAG(binary_archive, cryptonote::txin_archival_bond_post, 0x03);
+VARIANT_TAG(binary_archive, cryptonote::txout_to_script, 0xf0);         // shed (parked)
+VARIANT_TAG(binary_archive, cryptonote::txout_to_scripthash, 0xf1);     // shed (parked)
+VARIANT_TAG(binary_archive, cryptonote::txout_to_key, 0xf2);            // shed (parked)
+VARIANT_TAG(binary_archive, cryptonote::txout_to_tagged_key, 0x00);     // sole genesis output
 VARIANT_TAG(binary_archive, cryptonote::transaction, 0xcc);
 VARIANT_TAG(binary_archive, cryptonote::block, 0xbb);
 
@@ -739,12 +855,12 @@ VARIANT_TAG(json_archive, cryptonote::txin_gen, "gen");
 VARIANT_TAG(json_archive, cryptonote::txin_to_script, "script");
 VARIANT_TAG(json_archive, cryptonote::txin_to_scripthash, "scripthash");
 VARIANT_TAG(json_archive, cryptonote::txin_to_key, "key");
-VARIANT_TAG(json_archive, cryptonote::txin_stake_claim, "stake_claim");
+VARIANT_TAG(json_archive, cryptonote::txin_archival_serve_credit_response, "archival_serve_credit_response");
+VARIANT_TAG(json_archive, cryptonote::txin_archival_bond_post, "archival_bond_post");
 VARIANT_TAG(json_archive, cryptonote::txout_to_script, "script");
 VARIANT_TAG(json_archive, cryptonote::txout_to_scripthash, "scripthash");
 VARIANT_TAG(json_archive, cryptonote::txout_to_key, "key");
 VARIANT_TAG(json_archive, cryptonote::txout_to_tagged_key, "tagged_key");
-VARIANT_TAG(json_archive, cryptonote::txout_to_staked_key, "staked_key");
 VARIANT_TAG(json_archive, cryptonote::transaction, "tx");
 VARIANT_TAG(json_archive, cryptonote::block, "block");
 
@@ -752,11 +868,11 @@ VARIANT_TAG(debug_archive, cryptonote::txin_gen, "gen");
 VARIANT_TAG(debug_archive, cryptonote::txin_to_script, "script");
 VARIANT_TAG(debug_archive, cryptonote::txin_to_scripthash, "scripthash");
 VARIANT_TAG(debug_archive, cryptonote::txin_to_key, "key");
-VARIANT_TAG(debug_archive, cryptonote::txin_stake_claim, "stake_claim");
+VARIANT_TAG(debug_archive, cryptonote::txin_archival_serve_credit_response, "archival_serve_credit_response");
+VARIANT_TAG(debug_archive, cryptonote::txin_archival_bond_post, "archival_bond_post");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_script, "script");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_scripthash, "scripthash");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_key, "key");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_tagged_key, "tagged_key");
-VARIANT_TAG(debug_archive, cryptonote::txout_to_staked_key, "staked_key");
 VARIANT_TAG(debug_archive, cryptonote::transaction, "tx");
 VARIANT_TAG(debug_archive, cryptonote::block, "block");

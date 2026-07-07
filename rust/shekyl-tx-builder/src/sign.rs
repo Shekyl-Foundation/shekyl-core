@@ -17,9 +17,10 @@ use curve25519_dalek::scalar::Scalar;
 use rand_core::OsRng;
 use zeroize::Zeroizing;
 
+use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm};
+use shekyl_curve_primitives::Commitment;
 use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
 use shekyl_fcmp::PqcLeafScalar;
-use shekyl_primitives::Commitment;
 
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext};
@@ -47,19 +48,49 @@ use crate::validate::validate_inputs;
 /// - All intermediate secret material (masks, blindings) is wrapped in
 ///   [`Zeroizing`] and wiped on drop.
 /// - Randomness comes from [`OsRng`] (OS-provided CSPRNG).
-/// - The `tree_root` in `TreeContext` must be the Selene curve tree root
-///   from the block header, **not** the block hash. Passing the block hash
-///   will produce an invalid proof that the verifier rejects.
-#[allow(clippy::cast_possible_truncation)]
+/// - The `tree_root` in `TreeContext` must be the curve tree root from the
+///   block header's `curve_tree_root` field (the topmost-layer node, whose
+///   curve depends on tree depth), **not** the block hash. Passing the block
+///   hash will produce an invalid proof that the verifier rejects.
 pub fn sign_transaction(
     tx_prefix_hash: [u8; 32],
     inputs: &[SpendInput],
     outputs: &[OutputInfo],
-    fee: u64,
+    fee: shekyl_units::AtomicUnits,
+    tree: &TreeContext,
+) -> Result<SignedProofs, TxBuilderError> {
+    // The common transfer path carries no extra cleartext balance terms.
+    sign_transaction_with_terms(tx_prefix_hash, inputs, outputs, fee, &[], &[], tree)
+}
+
+/// Construct the proof portion of an FCMP++ transaction that carries extra
+/// cleartext balance terms (e.g. an archival bond's `bond_credit`).
+///
+/// Identical to [`sign_transaction`] except for the single-sourced
+/// [`InputTerm`] / [`OutputTerm`] slices, which are cleartext `amount * H`
+/// contributions on the input / output side of the balance — the same terms the
+/// verify side checks (`shekyl-ct-balance`). Because each rides with implicit
+/// mask 0 (like `fee`), they affect only the funds-sufficiency validation, not
+/// the pseudo-output mask balancing or the Bulletproof+ range proofs (which
+/// cover only the real output commitments). The caller is responsible for
+/// making the amount balance *exact* (typically via a change output) so the
+/// consensus equality
+/// `sum(pseudoOuts) + extra_inputs = sum(out_masks) + fee + extra_outputs`
+/// holds; this builder enforces only sufficiency.
+///
+/// This crate stays bond-agnostic: it never names "bond", it consumes generic
+/// typed-side terms (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §7.2).
+pub fn sign_transaction_with_terms(
+    tx_prefix_hash: [u8; 32],
+    inputs: &[SpendInput],
+    outputs: &[OutputInfo],
+    fee: shekyl_units::AtomicUnits,
+    extra_inputs: &[InputTerm],
+    extra_outputs: &[OutputTerm],
     tree: &TreeContext,
 ) -> Result<SignedProofs, TxBuilderError> {
     // ── 1. Validate ──────────────────────────────────────────────────
-    validate_inputs(inputs, outputs, fee, tree)?;
+    validate_inputs(inputs, outputs, fee, extra_inputs, extra_outputs, tree)?;
 
     let n_in = inputs.len();
     let n_out = outputs.len();
@@ -73,7 +104,7 @@ pub fn sign_transaction(
             let mask = Scalar::from_canonical_bytes(out.commitment_mask)
                 .expect("commitment_mask is not a valid scalar");
             masks.push(mask);
-            Commitment::new(mask, out.amount)
+            Commitment::new(mask, out.amount.to_raw())
         })
         .collect();
 
@@ -84,21 +115,27 @@ pub fn sign_transaction(
     bp.write(&mut bp_bytes)
         .map_err(|e| TxBuilderError::BulletproofError(format!("serialization: {e}")))?;
 
-    // ── 3. Output commitments (8*C) ──────────────────────────────────
-    // Multiply each commitment point by the cofactor (8) for subgroup safety.
+    // ── 3. Output commitments (real C = mask*G + amount*H) ───────────
+    // `outPk[i].mask` carries the real Pedersen commitment, matching the C++
+    // consensus convention `rv.outPk[i].mask = scalarmult8(bp.V[i])` (the BP+
+    // V is the C/8 form, so scalarmult8 recovers the real C) and the
+    // pseudo-out side `genC(...)` (also real C). The balance check
+    // `sum(pseudoOuts) == sum(outPk) + fee*H` (`verRctSemanticsSimple`) sums
+    // these points directly, so both sides must be the real ×1 commitment;
+    // `pseudo_outs` below are `C_tilde = a*G + amount_in*H` (real ×1), so the
+    // output side must not be cofactor-scaled.
     let out_commitments: Vec<[u8; 32]> = outputs
         .iter()
         .zip(masks.iter())
         .map(|(out, mask)| {
-            let c = Commitment::new(*mask, out.amount);
-            let point = c.calculate();
-            let cofactored = point.mul_by_cofactor();
-            cofactored.compress().to_bytes()
+            let c = Commitment::new(*mask, out.amount.to_raw());
+            c.calculate().compress().to_bytes()
         })
         .collect();
 
     // ── 4. Pre-computed encrypted amounts (HKDF k_amount XOR + tag) ─
     let enc_amounts: Vec<[u8; 9]> = outputs.iter().map(|out| out.enc_amount).collect();
+    let enc_labels: Vec<[u8; 9]> = outputs.iter().map(|out| out.enc_label).collect();
 
     // ── 5. Pseudo-output balancing ───────────────────────────────────
     // Generate random blindings for all-but-last input; the last mask is
@@ -169,11 +206,35 @@ pub fn sign_transaction(
     )
     .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
 
-    // ── 8. Assemble SignedProofs ──────────────────────────────────────
+    // ── 8. Construct-side balance self-verify ────────────────────────
+    // Run the *same* commitment-sum balance equation the daemon runs, over the
+    // commitments we just built, under the identical single-home code
+    // (`shekyl_ct_balance::verify_ct_balance`) with the identical terms construct
+    // was handed. `validate_inputs` (step 1) only checks amount-level funds
+    // sufficiency in cleartext; it cannot see a masking bug where the amounts are
+    // correct but the blinding factors don't balance on the curve. That bug would
+    // otherwise surface only as a daemon rejection after sign + broadcast (wasted
+    // round-trip, a malformed tx briefly on the wire). Catch it here — locally,
+    // fail-fast — realizing the single-home guarantee symmetrically: construct
+    // proves its own output balances under the same definitions verify uses.
+    // Pure and synchronous (a few point ops), so it is a direct call, not an
+    // actor round-trip.
+    // `?` maps `CtBalanceError` into `TxBuilderError::BalanceSelfCheck` via its
+    // `#[from]`; this is the only `CtBalanceError` source in the function.
+    verify_ct_balance(
+        prove_result.pseudo_outs.as_flattened(),
+        out_commitments.as_flattened(),
+        fee,
+        extra_inputs,
+        extra_outputs,
+    )?;
+
+    // ── 9. Assemble SignedProofs ──────────────────────────────────────
     Ok(SignedProofs {
         bulletproof_plus: bp_bytes,
         commitments: out_commitments,
         enc_amounts,
+        enc_labels,
         pseudo_outs: prove_result.pseudo_outs,
         fcmp_proof: prove_result.proof.data,
         pqc_auths: Vec::new(),
@@ -249,7 +310,7 @@ pub fn sign_pqc_auths(
 /// Uses `biased_hash_to_point(O)` which matches the C++ `hash_to_p3(O)`.
 /// This is the same deterministic hash-to-curve used in leaf construction.
 fn compute_key_image_gen(output_key: &[u8; 32]) -> [u8; 32] {
-    shekyl_generators::biased_hash_to_point(*output_key)
+    shekyl_curve_generators::biased_hash_to_point(*output_key)
         .compress()
         .to_bytes()
 }

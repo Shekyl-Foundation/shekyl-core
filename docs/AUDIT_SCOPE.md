@@ -303,6 +303,148 @@ This scope overlaps with Phase 5 (adversarial review) and Phase 6
 
 ---
 
+## Confidential stake claim verifier (Round 1 pin)
+
+> **Status:** Round 1 closed on economics and **(B)**; **(C)** **closed on 3C** (2026-06-04)
+> per [`design/CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §6.4.3; implementation
+> Round 2. Pre-mainnet review gate (same class as the leaf-layout audit).
+
+### Summary
+
+Shekyl's confidential staking model replaces cleartext `txin_stake_claim` + watermark
+validation with **non-spending** claim transactions (`txin_stake_claim_v2`) that prove
+**staking-subtree** FCMP++ membership (current root, **5-scalar leaf**), per-epoch
+**stake-claim nullifiers** `N_S = x·G_S`, **`h_bind`** binding of `(tier, creation)`,
+**arithmetic** window enforcement, and a **verifier-recomputed rational multiplier**
+`N/D = tier_num·ΣK_S / SCALE`.
+
+The verifier is a **derivative** of upstream FCMP++ + SAL machinery; it must not
+weaken soundness, zero-knowledge, or inflation bounds established for spends.
+
+### In-scope (review targets)
+
+1. **`h_bind` binding (P1)** — Staking-subtree membership (5-scalar leaf) + verify the 5th
+   scalar equals `H("stake-bind" ‖ tier ‖ creation)` for the **revealed** `(tier, creation)`.
+   The **single revealed `tier`** must drive both the `h_bind` recompute and `tier_num`
+   (loud-reject invariant; KAT). `creation` stamped into `h_bind` is the canonical
+   **`eligible_height`** (item 2a), identical between the consensus stamp and the claim's
+   window arithmetic.
+
+2. **Window arithmetic (P1)** — `creation < S ≤ creation + tier_lock(tier)` for every claimed
+   `S`, with **`creation ≜ eligible_height`** (matures past `MIN_AGE = 5`). No historical-root
+   checkpointing (3C subsumes the former lower-bound mechanism).
+
+2a. **Canonical stake-creation height — cross-subsystem conservation (P1).** The accrual
+   anchor (claim verifier, in `h_bind`) and the `band_sum`-entry height (servo/economics)
+   **must be one named definition** (`eligible_height`), referenced by both so they cannot
+   drift. **`accrual-before-counted` is forbidden** — accrual anchored earlier than
+   `band_sum` entry silently breaks §9 step-2 conservation (`Σ accrued > budget`, no reject;
+   inflation). The dangerous drift is **cross-subsystem** (verifier vs servo, different code
+   paths), not within the verifier; audit the single-source definition, not two hand-matched
+   formulas. See [`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §2 (canonical
+   block), §4.1, §9 step 2.
+
+3. **Multiplier integrity (P1)** — Recompute `N = tier_num_reduced(tier)·Σ_S K_S_scaled`,
+   `D = D_tier·SCALE_rate = 2⁴⁹` (**not** `D = SCALE` — `D` is a product of the tier-LCD
+   `D_tier = 2` and the rate-precision scale `SCALE_rate = 2⁴⁸`, both powers of two; Round-2
+   correction, data-determined `k = 48` at the **floor-dominated knee** of the precision sweep —
+   post-1(b) the proof width is fixed at 64, so precision is free up to the field-wrap margin
+   and `k` is pinned where rate quantization stops improving, not at the obsolete 0.1 % floor
+   that gave the former `k = 38`; `entitlement.rs::SCALE_RATE_K`);
+   `reward = floor(N·amount/D)` ([`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md)
+   §6.4.1, §9). **`D` is a consensus constant** with a reversion clause (re-pin only on
+   tier-set or rate-magnitude change, or a reward-output range-width change).
+
+4. **Entitlement (A) — reserve-DLEQ class + bounded remainder** — Relation
+   `N·C~ − D·C_claim − C_ρ ∈ ⟨G⟩` with **committed** remainder `C_ρ`. **Decision 1(b):**
+   `C_ρ` is **folded into the reward output's native 64-bit `AggregateRangeProof`** as one
+   additional aggregated commitment (`mask·G + amount·H` matches `C_ρ = ρ_blind·G + ρ·H`,
+   `ρ < 2⁴⁹` fits `u64`), **not** a separate/tight proof; the folded `C_ρ` is the **same group
+   element** the entitlement relation consumes, bound across both sub-proofs in one transcript
+   (decision 3), not a free-floating commitment. The inflation-critical bound is the
+   **lower** bound `ρ ≥ 0` — over-claim forces `ρ < 0`, and a field-wrap escape needs
+   `reward > 2²⁰³` while the reward output's own range proof bounds it `< 2⁶⁴` (**139-bit
+   margin** at the pinned `k = 48`; `entitlement.rs::wraparound_over_claim_margin_bits`,
+   test-locked). A *tight*
+   `ρ < D` is **not load-bearing** — it would only forbid under-claim (mints less; self-harm;
+   `Σ reward ≤ budget` preserved). Rounding toward under-claim, FS domain
+   `shekyl-stake-entitlement-v1`. **Audit the soundness chain:** integer cancel (no field
+   wrap, `N·amount ≈ 2¹⁰⁶ ≪ ℓ`) ⇒ `max mint = floor`. **Two traps:** (a) omitting `C_ρ` →
+   rounding over-claim (P1 inflation), closed by `ρ ≥ 0`; (b) revealing `ρ` →
+   `amount mod (D/gcd)` deanonymization (P2), closed by committing `C_ρ` (the looser 64-bit
+   range leaks strictly less about `ρ` than a tight one). (§6.4.1)
+
+5. **Claim linkability (B1)** — `G_S`, `S_le64`, `MAX_EPOCHS_PER_CLAIM = 15`,
+   ClaimLinkability vs SAL separation. **DDH split** (§6.3): `x·G_S` unlinkable from
+   `x·Hp(O)` across independent NUMS bases — explicit audit assumption.
+
+5a. **Transcript composition / anti-splicing (P1) — decision 3.** All four claim components
+   (subtree membership, ClaimLinkability, entitlement Schnorr, folded remainder range proof)
+   bind to **one shared root `μ_claim = signable_tx_hash`** — not a monolithic transcript.
+   `μ_claim` must cover the full claim: `txin_stake_claim_v2` prefix (`tier`, `creation`,
+   `settlement_epochs`, the **nullifier vector**, subtree **root**), rct base (`C~`, `C_claim`,
+   `C_ρ`), and the folded BP+ hash; it excludes the three signing responses (no circularity).
+   The entitlement Schnorr challenge is
+   `keccak256_to_scalar("shekyl-stake-entitlement-v1" ‖ G ‖ H ‖ N_le ‖ D_le ‖ C~ ‖ C_claim ‖ C_ρ ‖ R ‖ μ_claim)`;
+   its **field set and order** are locked in
+   [`entitlement::transcript`](../rust/shekyl-staking/src/entitlement/transcript.rs) (KAT) so the
+   prover and C++/FFI verifier cannot drift. **Audit:** (i) every public input and `μ_claim` is
+   absorbed by each component (a dropped field is a splice hole); (ii) distinct domain separators
+   prevent cross-component challenge reuse; (iii) `C~`/`C_claim`/`C_ρ` are single public points
+   referenced by all consuming components (no second copy to disagree); (iv) verifier recomputes
+   `μ_claim` and binds all three signing proofs to it (§6.4.8 ordering). (§6.4.1)
+
+6. **Nullifier set separation + cross-tree atomicity** — Stake-claim table; reorg rewind;
+   cross-tree stake/unstake `pop_block` atomicity (append-only leaves; claim-after-unstake).
+
+7. **Inflation backstop (layered)** — Range proof; **(A)** bounded remainder; **`ρ_cap`** —
+   separate failure modes; **`ρ_cap` does not fix tier/window forgery**.
+
+8. **Consensus constants** — `SCALARS_PER_LEAF` per-tree param (`=5` subtree); 5th-position
+   Selene NUMS generator (cbindgen guard + KAT); `h_bind` hash-to-field canonical/collision-safe (KAT).
+
+9. **Rejected paths** — **3A** non-membership (novel ZK primitive); **3B** coarse window
+   (P1 inflation); spend-and-restake; B2-primary; reveal remainder `ρ`; wire-supplied
+   multiplier without recompute; persist `x` in wallet sealed blob; receipt-token liquid
+   staking (distinct from confidential stake-UTXO transfer — see upstream §6.4.3).
+
+### Out-of-scope
+
+- Full re-audit of upstream Veridise FCMP++ (reference their report; review delta only).
+- Economics calibration (LWMA window length, band count) — engineering/simulation, not
+  proof soundness.
+- Wallet actor FSM (see Phase 2b design doc); except where wallet bugs could broadcast
+  structurally invalid claims caught by consensus.
+
+### Deliverables
+
+- Threat model + proof sketches for **`h_bind` binding**, **window arithmetic**, **rational
+  multiplier**, **(A) bounded-remainder**, **(B1)**, and **transcript composition /
+  anti-splicing** (decision 3) with verifier ordering.
+- Test vectors: `STAKE_CLAIM_GS.json`, **`h_bind` / `creation` encoding**, 5th-position
+  Selene generator + `SCALARS_PER_LEAF=5`, bounded-remainder entitlement vectors, and the
+  **entitlement challenge-preimage KAT** (domain ‖ field order ‖ `μ_claim`; field set/order
+  already locked in `entitlement::transcript`, Round 2). **Negative anti-splice vectors
+  (must reject):** (i) entitlement from claim A spliced onto claim B's membership; (ii)
+  mutated nullifier vector with unchanged proofs; (iii) `C_ρ` mismatched between the
+  entitlement and the range proof; (iv) cross-component challenge reuse.
+  **Drop:** former `τ·H_t` / `C~_amt` encoding and historical-root-checkpoint vectors (3C
+  supersedes).
+- C++ verifier entry point (name TBD Round 2, e.g. `shekyl_fcmp_verify_stake_claim`)
+  listed in release checklist when implemented.
+
+### Related design pins
+
+| Pin | Doc |
+|-----|-----|
+| Wire sketch | `CONFIDENTIAL_STAKING.md` §6.4.8 |
+| Wallet mirror | `PHASE_2B_STAKE_LIFECYCLE.md` §8.5, §3.3.1 (R0-D8) |
+| Staked leaf amendment | `FCMP_PLUS_PLUS.md` §15 |
+| Inflation / `M` | `CONFIDENTIAL_STAKING.md` §9 |
+| **(C) tier/window** | `CONFIDENTIAL_STAKING.md` §6.4.3 |
+
+---
+
 ## Related Documents
 
 - `docs/FCMP_PLUS_PLUS.md` — Full FCMP++ specification

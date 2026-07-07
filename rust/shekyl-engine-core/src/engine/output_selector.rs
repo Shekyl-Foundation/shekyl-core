@@ -42,7 +42,7 @@
 //! # F4 caller-side subset re-verification discipline
 //!
 //! Per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §5.6.5 F4 closure,
-//! the caller (`LocalPendingTx::build`, C5β) MUST re-verify
+//! the caller (`LocalPendingTx::build`) MUST re-verify
 //! that each index returned in [`SelectedOutputs::indices`] is
 //! present in the [`OutputCandidate`] slice passed to
 //! `select_outputs`. A faulty or malicious selector returning
@@ -55,12 +55,14 @@
 //! [`OutputSelector::select_outputs`] doc-comment for the
 //! caller-side discipline pin.
 
+use shekyl_units::AtomicUnits;
+
 use super::error::OutputSelectorError;
 
 /// Per-output candidate record consumed by
 /// [`OutputSelector::select_outputs`].
 ///
-/// The caller (`LocalPendingTx::build`, C5β) builds these
+/// The caller (`LocalPendingTx::build`) builds these
 /// from the engine's snapshot of spendable outputs, filtered
 /// against the engine's `output_locks` map (per §5.6.6 P6
 /// / γ three-collection lean shape's per-output lock
@@ -86,12 +88,12 @@ pub struct OutputCandidate {
     /// Output amount in atomic units. The selector reasons
     /// about coverage against this value; the caller's
     /// total-coverage check uses [`SelectedOutputs::total_covered`].
-    pub amount: u64,
+    pub amount: AtomicUnits,
 }
 
 /// Successful selection result.
 ///
-/// The caller (`LocalPendingTx::build`, C5β) consumes both
+/// The caller (`LocalPendingTx::build`) consumes both
 /// fields: `indices` to construct the
 /// `Reservation::selected_transfer_indices` vector and
 /// `total_covered` to validate the selector's own coverage
@@ -111,7 +113,7 @@ pub struct SelectedOutputs {
     /// invariant violation (the caller can re-sum from
     /// `indices` against the candidate slice to double-check
     /// in audit builds).
-    pub total_covered: u64,
+    pub total_covered: AtomicUnits,
 }
 
 /// Trait isolating output-selection algorithm from the
@@ -160,7 +162,7 @@ pub trait OutputSelector: Send + Sync + 'static {
     /// The trait surface cannot syntactically enforce that
     /// the indices returned in [`SelectedOutputs::indices`]
     /// are a subset of `candidates`. **The caller**
-    /// (`LocalPendingTx::build`, C5β) MUST verify that each
+    /// (`LocalPendingTx::build`) MUST verify that each
     /// returned index is present in `candidates` and reject
     /// via
     /// [`OutputSelectorError::ReturnedIndicesNotSubset { offending_index }`]
@@ -192,7 +194,7 @@ pub trait OutputSelector: Send + Sync + 'static {
     fn select_outputs(
         &self,
         candidates: &[OutputCandidate],
-        target: u64,
+        target: AtomicUnits,
     ) -> Result<SelectedOutputs, Self::Error>;
 }
 
@@ -231,7 +233,7 @@ impl OutputSelector for WalletGreedyOutputSelector {
     fn select_outputs(
         &self,
         candidates: &[OutputCandidate],
-        target: u64,
+        target: AtomicUnits,
     ) -> Result<SelectedOutputs, OutputSelectorError> {
         // Empty candidate set: distinct from "candidates sum
         // < target". Caller (`LocalPendingTx::build`) sees
@@ -256,13 +258,18 @@ impl OutputSelector for WalletGreedyOutputSelector {
         sorted.sort_by(|a, b| b.amount.cmp(&a.amount).then(a.index.cmp(&b.index)));
 
         let mut indices = Vec::new();
-        let mut covered: u64 = 0;
+        let mut covered = AtomicUnits::ZERO;
         for c in &sorted {
             if covered >= target {
                 break;
             }
             indices.push(c.index);
-            covered = covered.saturating_add(c.amount);
+            // Accumulating owned-output amounts; the wallet's total
+            // balance is bounded by supply (< u64::MAX), so overflow is a
+            // corrupted-state invariant violation, not a recoverable error.
+            covered = covered
+                .checked_add(c.amount)
+                .expect("selected-output sum overflowed total supply bound");
         }
 
         if covered < target {
@@ -272,11 +279,14 @@ impl OutputSelector for WalletGreedyOutputSelector {
             // of the candidate set); the engine-wide
             // `SendError::InsufficientFunds`'s `available`
             // matches this for the V3.0 default selector
-            // (the engine doesn't re-aggregate).
-            let available: u64 = candidates.iter().map(|c| c.amount).sum();
+            // (the engine doesn't re-aggregate). The error
+            // payload carries raw `u64` (per the design note's
+            // error-payload disposition), so convert at the edge.
+            let available = AtomicUnits::checked_sum(candidates.iter().map(|c| c.amount))
+                .expect("candidate sum overflowed total supply bound");
             return Err(OutputSelectorError::InsufficientFunds {
-                needed: target,
-                available,
+                needed: target.to_raw(),
+                available: available.to_raw(),
             });
         }
 
@@ -323,7 +333,10 @@ mod tests {
     use super::*;
 
     fn candidate(index: usize, amount: u64) -> OutputCandidate {
-        OutputCandidate { index, amount }
+        OutputCandidate {
+            index,
+            amount: AtomicUnits::from_raw(amount),
+        }
     }
 
     #[test]
@@ -334,7 +347,7 @@ mod tests {
             candidate(2, 3_000),
             candidate(3, 2_000),
         ];
-        let target = 6_000;
+        let target = AtomicUnits::from_raw(6_000);
         let selected = WalletGreedyOutputSelector
             .select_outputs(&candidates, target)
             .expect("greedy selector covers target");
@@ -342,13 +355,13 @@ mod tests {
         // (3_000) → covered = 8_000 ≥ 6_000. `indices` is
         // sorted ascending for deterministic consumption.
         assert_eq!(selected.indices, vec![1, 2]);
-        assert_eq!(selected.total_covered, 8_000);
+        assert_eq!(selected.total_covered, AtomicUnits::from_raw(8_000));
     }
 
     #[test]
     fn wallet_greedy_insufficient_funds() {
         let candidates = vec![candidate(0, 1_000), candidate(1, 2_000)];
-        let target = 10_000;
+        let target = AtomicUnits::from_raw(10_000);
         let err = WalletGreedyOutputSelector
             .select_outputs(&candidates, target)
             .expect_err("under-coverage fires InsufficientFunds");
@@ -364,7 +377,7 @@ mod tests {
     #[test]
     fn wallet_greedy_no_eligible_outputs() {
         let candidates: Vec<OutputCandidate> = Vec::new();
-        let target = 1_000;
+        let target = AtomicUnits::from_raw(1_000);
         let err = WalletGreedyOutputSelector
             .select_outputs(&candidates, target)
             .expect_err("empty candidate set fires NoEligibleOutputs");
@@ -382,14 +395,14 @@ mod tests {
             candidate(0, 1_000),
             candidate(1, 1_000),
         ];
-        let target = 1_000;
+        let target = AtomicUnits::from_raw(1_000);
         let selected = WalletGreedyOutputSelector
             .select_outputs(&candidates, target)
             .expect("greedy selector covers target");
         // Only one candidate needed; ties broken by
         // ascending index → index 0.
         assert_eq!(selected.indices, vec![0]);
-        assert_eq!(selected.total_covered, 1_000);
+        assert_eq!(selected.total_covered, AtomicUnits::from_raw(1_000));
     }
 
     #[test]
@@ -399,7 +412,7 @@ mod tests {
             candidate(2, 4_000),
             candidate(9, 2_000),
         ];
-        let target = 10_000;
+        let target = AtomicUnits::from_raw(10_000);
         let selected = WalletGreedyOutputSelector
             .select_outputs(&candidates, target)
             .expect("greedy selector covers target");
@@ -417,8 +430,9 @@ mod tests {
                         "selected index appears in candidates (F4 caller-side check is structural)",
                     )
                     .amount
+                    .to_raw()
             })
             .sum();
-        assert_eq!(selected.total_covered, recomputed);
+        assert_eq!(selected.total_covered, AtomicUnits::from_raw(recomputed));
     }
 }

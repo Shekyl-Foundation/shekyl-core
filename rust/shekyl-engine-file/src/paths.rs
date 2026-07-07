@@ -90,6 +90,92 @@ pub fn state_path_from(base: &Path) -> PathBuf {
     base.to_path_buf()
 }
 
+/// Extension suffix appended to the user-provided base path to derive
+/// the FCMP++ curve-tree store path (CT-5). Appended as raw bytes (same
+/// rule as [`KEYS_FILE_SUFFIX`]) so a base like `primary.wallet` becomes
+/// `primary.wallet.curvetree`, keeping the store a visible sibling of the
+/// `.wallet` / `.wallet.keys` pair rather than a hidden cache elsewhere.
+pub const CURVE_TREE_STORE_SUFFIX: &str = ".curvetree";
+
+/// Derive the curve-tree store path from a user-provided base, per the
+/// CT-5 engine-wiring design (`docs/design/CT5_ENGINE_WIRING.md` §3.1):
+/// the `redb`-backed `shekyl_curve_tree::LeafStore` lives **beside the
+/// wallet files**, sharing their base name. The base is the `.wallet`
+/// path; we append [`CURVE_TREE_STORE_SUFFIX`] to the full path including
+/// any extensions, exactly as [`keys_path_from`] does.
+///
+/// # Examples
+///
+/// ```
+/// use shekyl_engine_file::paths::curve_tree_store_path_from;
+/// use std::path::Path;
+/// assert_eq!(
+///     curve_tree_store_path_from(Path::new("/tmp/primary.wallet")),
+///     Path::new("/tmp/primary.wallet.curvetree"),
+/// );
+/// ```
+pub fn curve_tree_store_path_from(base: &Path) -> PathBuf {
+    let mut os: OsString = base.as_os_str().to_owned();
+    os.push(CURVE_TREE_STORE_SUFFIX);
+    PathBuf::from(os)
+}
+
+/// Extension suffix appended to the base path to derive the `P`-isolated
+/// archival-scan state path (2d-1 SP-5). Appended as raw bytes (same rule as
+/// [`KEYS_FILE_SUFFIX`]) so a base like `primary.wallet` becomes
+/// `primary.wallet.pscan` — a visible sibling of the `.wallet` / `.wallet.keys`
+/// pair, structurally separate from the principal ledger (the firewall keeps the
+/// `P` scan state out of the principal state file).
+pub const PSCAN_STATE_SUFFIX: &str = ".pscan";
+
+/// Derive the `.wallet.pscan` `P`-scan state path from a user-provided base, the
+/// same way [`keys_path_from`] / [`curve_tree_store_path_from`] do (append to the
+/// full base, not `set_extension`).
+///
+/// # Examples
+///
+/// ```
+/// use shekyl_engine_file::paths::pscan_state_path_from;
+/// use std::path::Path;
+/// assert_eq!(
+///     pscan_state_path_from(Path::new("/tmp/primary.wallet")),
+///     Path::new("/tmp/primary.wallet.pscan"),
+/// );
+/// ```
+pub fn pscan_state_path_from(base: &Path) -> PathBuf {
+    let mut os: OsString = base.as_os_str().to_owned();
+    os.push(PSCAN_STATE_SUFFIX);
+    PathBuf::from(os)
+}
+
+/// Extension suffix appended to the base path to derive the `P`-isolated
+/// pending-bond-post path (WI-2 D-A4, `ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.5).
+/// Appended as raw bytes (same rule as [`KEYS_FILE_SUFFIX`]) so a base like
+/// `primary.wallet` becomes `primary.wallet.pending` — a sibling of
+/// `.wallet.pscan`, deliberately a *separate* sealed file because its writer
+/// (the bond-assemble path) is not the pscan task's single-flight loop.
+pub const PENDING_POST_SUFFIX: &str = ".pending";
+
+/// Derive the `.wallet.pending` pending-bond-post path from a user-provided
+/// base, the same way [`pscan_state_path_from`] does (append to the full
+/// base, not `set_extension`).
+///
+/// # Examples
+///
+/// ```
+/// use shekyl_engine_file::paths::pending_post_path_from;
+/// use std::path::Path;
+/// assert_eq!(
+///     pending_post_path_from(Path::new("/tmp/primary.wallet")),
+///     Path::new("/tmp/primary.wallet.pending"),
+/// );
+/// ```
+pub fn pending_post_path_from(base: &Path) -> PathBuf {
+    let mut os: OsString = base.as_os_str().to_owned();
+    os.push(PENDING_POST_SUFFIX);
+    PathBuf::from(os)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +216,31 @@ mod tests {
         let k = keys_path_from(base);
         let s = state_path_from(base);
         assert_eq!(k.parent(), s.parent());
+    }
+
+    #[test]
+    fn curve_tree_path_appends_suffix() {
+        assert_eq!(
+            curve_tree_store_path_from(Path::new("/tmp/a.wallet")),
+            Path::new("/tmp/a.wallet.curvetree"),
+        );
+    }
+
+    #[test]
+    fn curve_tree_path_is_not_set_extension() {
+        // set_extension would drop ".wallet" and give "/tmp/a.curvetree";
+        // we preserve the full base, as for the keys file.
+        let got = curve_tree_store_path_from(Path::new("/tmp/a.wallet"));
+        assert_ne!(got, Path::new("/tmp/a.curvetree"));
+    }
+
+    #[test]
+    fn curve_tree_store_is_sibling_of_wallet_files() {
+        let base = Path::new("/home/alice/wallets/x.wallet");
+        let k = keys_path_from(base);
+        let s = state_path_from(base);
+        let c = curve_tree_store_path_from(base);
+        assert_eq!(c.parent(), s.parent());
+        assert_eq!(c.parent(), k.parent());
     }
 }

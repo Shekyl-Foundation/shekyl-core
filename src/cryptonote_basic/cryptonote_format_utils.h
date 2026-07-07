@@ -90,8 +90,6 @@ namespace cryptonote
   bool get_payment_id_from_tx_extra_nonce(const blobdata& extra_nonce, crypto::hash& payment_id);
   bool get_encrypted_payment_id_from_tx_extra_nonce(const blobdata& extra_nonce, crypto::hash8& payment_id);
   void set_tx_out(const uint64_t amount, const crypto::public_key& output_public_key, const bool use_view_tags, const crypto::view_tag& view_tag, tx_out& out);
-  void set_staked_tx_out(const uint64_t amount, const crypto::public_key& output_public_key, const crypto::view_tag& view_tag, uint8_t lock_tier, tx_out& out);
-  bool get_output_staking_info(const tx_out& out, uint8_t& lock_tier);
   bool check_output_types(const transaction& tx, const uint8_t hf_version);
   struct subaddress_receive_info
   {
@@ -116,7 +114,7 @@ namespace cryptonote
   crypto::hash get_pruned_transaction_hash(const transaction& t, const crypto::hash &pruned_data_hash);
 
   blobdata get_block_hashing_blob(const block& b);
-  bool calculate_block_hash(const block& b, crypto::hash& res, const blobdata_ref *blob = NULL);
+  bool calculate_block_hash(const block& b, crypto::hash& res);
   bool get_block_hash(const block& b, crypto::hash& res);
   crypto::hash get_block_hash(const block& b);
   bool parse_and_validate_block_from_blob(const blobdata_ref& b_blob, block& b, crypto::hash *block_hash);
@@ -126,6 +124,7 @@ namespace cryptonote
   uint64_t get_outs_money_amount(const transaction& tx);
   bool get_output_public_key(const cryptonote::tx_out& out, crypto::public_key& output_public_key);
   std::optional<crypto::view_tag> get_output_view_tag(const cryptonote::tx_out& out);
+  uint64_t archival_bond_floor(const archival_holdings_descriptor& holdings);
   bool check_inputs_types_supported(const transaction& tx);
   bool check_outs_valid(const transaction& tx);
   bool parse_amount(uint64_t& amount, const std::string& str_amount);
@@ -256,10 +255,6 @@ namespace cryptonote
   void get_tx_tree_hash(const std::vector<crypto::hash>& tx_hashes, crypto::hash& h);
   crypto::hash get_tx_tree_hash(const std::vector<crypto::hash>& tx_hashes);
   crypto::hash get_tx_tree_hash(const block& b);
-  crypto::hash get_block_longhash(const blobdata_ref block_hashing_blob,
-    const uint64_t height,
-    const uint8_t major_version,
-    const crypto::hash &seed_hash);
   bool is_valid_decomposed_amount(uint64_t amount);
   void get_hash_stats(uint64_t &tx_hashes_calculated, uint64_t &tx_hashes_cached, uint64_t &block_hashes_calculated, uint64_t & block_hashes_cached);
 

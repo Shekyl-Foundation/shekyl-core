@@ -6,12 +6,13 @@
 //! REPL command loop, dispatch, and shared helpers for shekyl-cli.
 
 mod balance;
+mod chain;
 mod keys;
 mod lifecycle;
 mod offline;
+mod payment_requests;
 mod proofs;
 mod sign;
-mod staking;
 mod transfers;
 
 use crate::daemon::DaemonClient;
@@ -36,27 +37,26 @@ Accounts and addresses:
   account show                        List accounts (default marked with *)
   account default <N>                 Set session default account
   account new [label]                 Create a new account
-  address [--subaddr-index N]         Show address
-  address new [label]                 Create a new subaddress
+  address                             Show primary address
+  address new [label]                 Alias for account new
   balance [--account N]               Show balance (unlocked, locked)
 
 Transfers:
   transfer <amount> <address>         Send SKL to an address
     [--account N] [--priority N]      (optional flags)
-    [--subaddr-indices N,M,...]       Source subaddresses
     [--do-not-relay]                  Create but don't broadcast (offline use)
     [--no-confirm]                    Skip confirmation (non-TTY only)
   transfers [--account N]             Show recent transactions
   show_transfer <txid>                Show details for a transaction
   sweep_all <address>                 Sweep all outputs to address
     [--account N] [--priority N]      (explicit --account required)
-    [--subaddr-indices N,M,...]       Source subaddresses
+
+Payment requests (FA-8, feature-flagged cooperative path):
+  request new <amount> <label>        Create off-chain payment request (stub)
+  requests list                       List payment requests (stub)
+  history incoming --unattributed     Show unattributed receives (stub)
 
 Staking:
-  stake <amount> [tier]               Stake SKL
-  unstake [--account N]               Unstake
-  claim [--account N]                 Claim staking rewards
-  staking_info [--account N]          Show staking status
   chain_health                        Show daemon/chain health (separate conn)
 
 Keys (secret-displaying commands excluded from history):
@@ -92,9 +92,7 @@ Meta:
   exit / quit                         Exit shekyl-cli
 
 Global flags (use with any command):
-  --account N                         Override session default account
-  --subaddr-index N                   Specific subaddress
-  --subaddr-indices N,M,...           Multiple source subaddresses";
+  --account N                         Override session default account";
 
 pub fn repl(
     ctx: EngineContext,
@@ -225,7 +223,7 @@ pub fn repl(
                                 } else {
                                     session.default_account = index;
                                     println!("Session default account is now {index}.");
-                                    println!("Destructive operations (sweep, stake, unstake, key export) still require --account explicitly.");
+                                    println!("Destructive operations (sweep, key export) still require --account explicitly.");
                                 }
                             }
                             Err(e) => eprintln!("Failed to get accounts: {e}"),
@@ -264,6 +262,15 @@ pub fn repl(
                     ResolvedCommand::Transfers { account_index } => {
                         transfers::cmd_transfers(&ctx, account_index);
                     }
+                    ResolvedCommand::RequestNew { amount, label } => {
+                        payment_requests::cmd_request_new(&ctx, amount, &label);
+                    }
+                    ResolvedCommand::RequestsList => {
+                        payment_requests::cmd_requests_list(&ctx);
+                    }
+                    ResolvedCommand::HistoryIncomingUnattributed { account_index } => {
+                        payment_requests::cmd_history_incoming_unattributed(&ctx, account_index);
+                    }
 
                     // Keys
                     ResolvedCommand::Seed => keys::cmd_seed(&ctx),
@@ -276,38 +283,14 @@ pub fn repl(
                     }
                     ResolvedCommand::SweepAll {
                         account_index,
-                        subaddr_indices,
                         dest,
                         priority,
                     } => {
-                        transfers::cmd_sweep_all(
-                            &ctx,
-                            account_index,
-                            &subaddr_indices,
-                            &dest,
-                            priority,
-                        );
+                        transfers::cmd_sweep_all(&ctx, account_index, &dest, priority);
                     }
 
-                    // Staking
-                    ResolvedCommand::Stake {
-                        account_index,
-                        tier,
-                        amount,
-                    } => {
-                        staking::cmd_stake(&ctx, account_index, tier, amount);
-                    }
-                    ResolvedCommand::Unstake { account_index } => {
-                        staking::cmd_unstake(&ctx, account_index);
-                    }
-                    ResolvedCommand::Claim { account_index } => {
-                        staking::cmd_claim(&ctx, account_index);
-                    }
-                    ResolvedCommand::StakingInfo { account_index } => {
-                        staking::cmd_staking_info(&ctx, account_index);
-                    }
                     ResolvedCommand::ChainHealth => {
-                        staking::cmd_chain_health(_daemon_client.as_ref());
+                        chain::cmd_chain_health(_daemon_client.as_ref());
                     }
 
                     // Keys
@@ -507,33 +490,29 @@ pub(crate) fn read_password(prompt: &str) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Amount formatting and parsing (12-digit piconero precision)
+// Amount formatting and parsing (9-decimal SKL precision, 10^9 atomic units)
 // ---------------------------------------------------------------------------
 
+/// Render a raw atomic-unit amount as a fixed-precision SKL string.
+///
+/// Routes through [`shekyl_units::AtomicUnits::to_skl_string`] so the
+/// atomic-units-per-SKL relationship (`10^9`) is single-sourced from
+/// `config/economics_params.json`. This replaces the inherited Monero `10^12`
+/// constant, which overflowed `u64` on Shekyl's `2^32` whole-SKL supply.
 pub fn format_amount(atomic: u64) -> String {
-    let whole = atomic / 1_000_000_000_000;
-    let frac = atomic % 1_000_000_000_000;
-    if frac == 0 {
-        format!("{whole}.000000000000")
-    } else {
-        format!("{whole}.{frac:012}")
-    }
+    shekyl_units::AtomicUnits::from_raw(atomic).to_skl_string()
 }
 
+/// Parse a user-entered SKL string into raw atomic units.
+///
+/// Routes through [`shekyl_units::AtomicUnits::from_skl_str`], which rejects
+/// (rather than truncates) over-precise input and errors on overflow. Returns
+/// `None` on any parse error to preserve the existing `Option`-based call
+/// sites.
 pub fn parse_amount(s: &str) -> Option<u64> {
-    if let Some(dot_pos) = s.find('.') {
-        let whole: u64 = s[..dot_pos].parse().ok()?;
-        let frac_str = &s[dot_pos + 1..];
-        if frac_str.len() > 12 {
-            return None;
-        }
-        let padded = format!("{frac_str:0<12}");
-        let frac: u64 = padded.parse().ok()?;
-        whole.checked_mul(1_000_000_000_000)?.checked_add(frac)
-    } else {
-        let whole: u64 = s.parse().ok()?;
-        whole.checked_mul(1_000_000_000_000)
-    }
+    shekyl_units::AtomicUnits::from_skl_str(s)
+        .ok()
+        .map(|a| a.to_raw())
 }
 
 #[cfg(test)]
@@ -542,31 +521,26 @@ mod tests {
 
     #[test]
     fn test_format_amount() {
-        assert_eq!(format_amount(0), "0.000000000000");
-        assert_eq!(format_amount(1_000_000_000_000), "1.000000000000");
-        assert_eq!(format_amount(1_500_000_000_000), "1.500000000000");
-        assert_eq!(format_amount(123_456_789), "0.000123456789");
+        // 9-decimal (10^9) SKL display, single-sourced via `shekyl-units`.
+        assert_eq!(format_amount(0), "0.000000000");
+        assert_eq!(format_amount(1_000_000_000), "1.000000000");
+        assert_eq!(format_amount(1_500_000_000), "1.500000000");
+        assert_eq!(format_amount(123_456_789), "0.123456789");
     }
 
     #[test]
     fn test_parse_amount() {
-        assert_eq!(parse_amount("1"), Some(1_000_000_000_000));
-        assert_eq!(parse_amount("1.5"), Some(1_500_000_000_000));
-        assert_eq!(parse_amount("0.000000000001"), Some(1));
-        assert_eq!(parse_amount("1.0"), Some(1_000_000_000_000));
+        assert_eq!(parse_amount("1"), Some(1_000_000_000));
+        assert_eq!(parse_amount("1.5"), Some(1_500_000_000));
+        assert_eq!(parse_amount("0.000000001"), Some(1));
+        assert_eq!(parse_amount("1.0"), Some(1_000_000_000));
         assert_eq!(parse_amount("abc"), None);
-        assert_eq!(parse_amount("1.0000000000001"), None); // >12 decimal places
+        assert_eq!(parse_amount("1.0000000001"), None); // >9 decimal places
     }
 
     #[test]
     fn test_parse_format_roundtrip() {
-        for val in [
-            0,
-            1,
-            999_999_999_999,
-            1_000_000_000_000,
-            123_456_789_012_345,
-        ] {
+        for val in [0, 1, 999_999_999, 1_000_000_000, 123_456_789_012_345] {
             let formatted = format_amount(val);
             let parsed = parse_amount(&formatted).expect("roundtrip should succeed");
             assert_eq!(val, parsed, "roundtrip failed for {val}");

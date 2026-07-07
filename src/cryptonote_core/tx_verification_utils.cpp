@@ -28,6 +28,7 @@
 
 #include <boost/iterator/transform_iterator.hpp>
 
+#include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_core/blockchain.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/tx_verification_utils.h"
@@ -40,16 +41,6 @@
 #define VER_ASSERT(cond, msgexpr) CHECK_AND_ASSERT_MES(cond, false, msgexpr)
 
 using namespace cryptonote;
-
-static bool is_canonical_bulletproof_plus_layout(const std::vector<rct::BulletproofPlus> &proofs)
-{
-    if (proofs.size() != 1)
-        return false;
-    const size_t sz = proofs[0].V.size();
-    if (sz == 0 || sz > BULLETPROOF_PLUS_MAX_OUTPUTS)
-        return false;
-    return true;
-}
 
 template <class TxForwardIt>
 static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt tx_end,
@@ -100,19 +91,77 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
         if (!Blockchain::check_tx_outputs(tx, tvc, hf_version) || tvc.m_verifivation_failed)
             return false;
 
-        // Stake-claim transactions use RCTTypeFcmpPlusPlusPqc but have an empty
-        // FCMP++ proof (ownership is proven via PQC auth on public amounts, not
-        // membership proofs). Exclude them from the RCT semantics batch which
-        // rejects empty fcmp_pp_proof.
+        // Serve-credit txs are non-spending: they carry no RCT output material
+        // and verify BP+/balance on a dedicated fee-only path (the hybrid
+        // signature lives on the vin), so they are excluded from the RCT
+        // semantics batch (which would reject their empty fcmp_pp_proof).
+        // Bond-post txs are handled by their own semantics check below.
         if (tx.version >= 2)
         {
-            bool is_stake_claim_only = !tx.vin.empty();
-            for (const auto& in : tx.vin)
+            bool archival_serve_credit_only = !tx.vin.empty();
+            bool is_archival_bond_post_tx = false;
+            size_t archival_bond_post_index = 0;
+            size_t bond_post_count = 0;
+            for (size_t i = 0; i < tx.vin.size(); ++i)
             {
-                if (!std::holds_alternative<txin_stake_claim>(in))
-                { is_stake_claim_only = false; break; }
+                const auto& in = tx.vin[i];
+                if (!std::holds_alternative<txin_archival_serve_credit_response>(in))
+                    archival_serve_credit_only = false;
+                if (std::holds_alternative<txin_archival_bond_post>(in))
+                {
+                    ++bond_post_count;
+                    archival_bond_post_index = i;
+                }
+                else if (!std::holds_alternative<txin_to_key>(in)
+                    && !std::holds_alternative<txin_gen>(in))
+                    bond_post_count = 2;
             }
-            if (!is_stake_claim_only)
+            is_archival_bond_post_tx = (bond_post_count == 1);
+            if (archival_serve_credit_only)
+            {
+                const rct::rctSig& rv = tx.rct_signatures;
+                // Non-spending vin: no chain outputs, no fee, no RCT output material (gate-2 §5).
+                if (!tx.pqc_auths.empty()
+                    || !tx.vout.empty()
+                    || rv.txnFee != 0
+                    || !rv.outPk.empty()
+                    || !rv.p.bulletproofs_plus.empty()
+                    || !rv.p.fcmp_pp_proof.empty()
+                    || !rv.pseudoOuts.empty()
+                    || !rv.p.pseudoOuts.empty()
+                    || rv.type != rct::RCTTypeFcmpPlusPlusPqc
+                    || !rct::verRctSemanticsFeeOnly(rv))
+                {
+                    tvc.m_verifivation_failed = true;
+                    tvc.m_invalid_input = true;
+                    return false;
+                }
+            }
+            else if (is_archival_bond_post_tx)
+            {
+                const txin_archival_bond_post& bond =
+                    std::get<txin_archival_bond_post>(tx.vin[archival_bond_post_index]);
+                const rct::rctSig& rv = tx.rct_signatures;
+                size_t spend_input_count = 0;
+                for (const auto& in : tx.vin)
+                {
+                    if (std::holds_alternative<txin_to_key>(in))
+                        ++spend_input_count;
+                }
+                if (tx.pqc_auths.size() != tx.vin.size()
+                    || spend_input_count == 0
+                    || rv.p.pseudoOuts.size() != spend_input_count
+                    || rv.p.fcmp_pp_proof.empty()
+                    || !rv.pseudoOuts.empty()
+                    || rv.type != rct::RCTTypeFcmpPlusPlusPqc
+                    || !rct::verRctSemanticsBondPost(rv, bond.bond_credit, bond.bond_debit))
+                {
+                    tvc.m_verifivation_failed = true;
+                    tvc.m_invalid_input = true;
+                    return false;
+                }
+            }
+            else
                 rvv.push_back(&tx.rct_signatures);
         }
     }
@@ -158,7 +207,7 @@ bool ver_mixed_rct_semantics(std::vector<const rct::rctSig*> rvv)
             return false;
             break;
         case rct::RCTTypeFcmpPlusPlusPqc:
-            if (!is_canonical_bulletproof_plus_layout(rv.p.bulletproofs_plus))
+            if (!rct::is_canonical_bulletproof_plus_layout(rv.p.bulletproofs_plus))
             {
                 MERROR("Bulletproof_plus does not have canonical form");
                 return false;

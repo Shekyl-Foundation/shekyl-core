@@ -43,16 +43,21 @@
 //!
 //! ## Cadence
 //!
-//! Per R1-D6 close Reframe 2: T6 runs **nightly** during pre-genesis
-//! (constants still drifting; recipes being added; noise margin
-//! being baselined) and **release-gate** post-genesis. The
+//! T6 runs **weekly** (Tuesday 06:00 UTC cron in
+//! `randomx-v2-adversarial-ratio.yml`, on both active branches via a
+//! main + dev matrix) plus `workflow_dispatch`, per
+//! the test-regime hardening runtime-mode change (2026-07; M3
+//! cadence-amendment citation in that workflow's header). R1-D6
+//! close Reframe 2 originally specified nightly, but no schedule was
+//! ever wired — the cadence lived only in doc comments (the
+//! armed-gate audit finding) — and the ratified re-wiring chose
+//! weekly. Release-gate cadence still lands post-genesis. The
 //! per-recipe sample cost (~100 samples × 25 ms × 8 recipes × 2
 //! sides ≈ 40 s on the C4 corpus) is too heavy for per-PR cadence.
 //!
 //! Mechanically: the test is `#[ignore]`-gated; `cargo test
-//! --ignored worst_case_ratio` invokes it. The C8 CI workflow runs
-//! this on `workflow_dispatch` and on the nightly schedule per R1-D7
-//! close's separate-workflow disposition.
+//! --ignored worst_case_ratio` invokes it, per R1-D7 close's
+//! separate-workflow disposition.
 //!
 //! ## Post-PR-#79 substrate note (FOLLOWUP closed)
 //!

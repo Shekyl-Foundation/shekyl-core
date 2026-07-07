@@ -282,3 +282,121 @@ leak information to hidden services if done improperly.
 At the current time, if users need to frequently make transactions, I2P/Tor
 will improve privacy from ISPs and other common adversaries, but still have
 some metadata leakages to unknown hidden service operators.
+
+## Transport for the staker-archival path (forward consideration — NOT a genesis commitment)
+
+> **Status:** captured for consideration; no transport work is scheduled. This
+> section records the analysis so the eventual transport-selection PR starts from
+> a stated position rather than a blank page. Every maturity / capability claim
+> below (Arti onion-service support, the Arti 2.x LTS line, Monero's
+> over-Tor traffic split) is **to be re-verified at source** when the transport
+> PR opens, per [`17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc) —
+> recorded here as the rationale to test, not as banked fact.
+
+The transaction-broadcast transport above is inherited from Monero and is a
+*light, latency-tolerant, public-content* path. The **staker-archival** subsystem
+(see [`design/V3_STAKER_ARCHIVAL.md`](design/V3_STAKER_ARCHIVAL.md) and the sim in
+[`design/STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md)) introduces a
+*second* traffic class with a different threat profile, and the transport choice
+turns out to be coupled to the sim's latency findings rather than independent of
+them.
+
+### Two traffic classes
+
+- **Light / privacy-critical (latency-tolerant).** Stake claims, archival
+  registration, the firewalled pseudonym's liveness re-proofs, and
+  challenge–response retention proofs. Small, infrequent, delay-insensitive —
+  exactly the class Monero already routes over the anonymity network (handshakes,
+  timed syncs, transaction broadcast), with the bulk left on IPv4 to make
+  surrounding-node sybil attacks harder. **Tor is a direct, battle-tested fit
+  here.**
+
+- **Heavy / archival data path (bandwidth-sensitive).** Deep-shard fetch (the
+  retrieval side of coverage). This is where Shekyl **cannot reuse Monero's
+  escape hatch.** Monero keeps bulk chain-sync on clearnet because that content
+  is public and IP exposure is an accepted leak in its threat model. Shekyl's
+  **firewalled-pseudonym requirement** is precisely that the pseudonym `P`'s
+  network location not link to the principal, so the archival *serving* path
+  must be the onion service, not clearnet. Combined with the query-privacy
+  requirement (the fetcher is also over Tor), the heavy fetch becomes
+  **onion-service-to-Tor-client** — the rendezvous configuration, the slowest
+  path Tor has (three hops each side plus the rendezvous).
+
+### The coupling to the sim (this is the load-bearing point)
+
+The privacy model **structurally forces the heavy data path onto worst-case Tor
+latency.** That means the `L2–L6` latency band in
+[`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) (§*L10*, §*L10
+hardening*) is **not a stress-test corner — it is the operating regime by
+construction.** The transport choice and the L10 latency findings are the same
+physical fact seen from two sides:
+
+- The "real Tor deep-fetch latency" the sim flagged as the post-testnet empirical
+  unknown **is** Monero's documented heavy-over-Tor bandwidth pain.
+- The sim has **already designed around it**: age-scaled bond duration is
+  *win-or-harmless* across `L2–L6` (L10 H1/H4), and the foundation floor backstops
+  the `L6` ceiling where backfill cannot keep pace regardless of incentive.
+
+So Tor's heavy-path bandwidth weakness is a **known, bounded, already-modeled**
+constraint, not a discovery waiting to happen. The post-testnet measurement only
+tells us *where on the L-curve* we sit; it does not reopen the transport choice.
+
+### TCP coupling
+
+Tor carries TCP streams and has **no native UDP transport** (the UDP-oriented
+designs are the *alternatives* — Lokinet/LLARP, I2P datagram mode). So the
+inherited Levin/TCP P2P stack drops in without an impedance mismatch, and
+**TCP-sync and Tor reinforce each other.** The flip side is that the commitment
+is coupled: **if UDP/QUIC sync ever returns to the table, it reopens the transport
+question**, because it fights Tor's grain. The TCP commitment and the Tor
+commitment stand or fall together.
+
+### Candidate transports (Tor primary; rationale to verify)
+
+- **Tor — primary.** Maturity + TCP + persistent-reachable-service + longevity.
+  The Rust-native angle is the clincher to verify: **Arti** (Rust Tor) is claimed
+  to support *hosting* onion services as of early 2026 (Arti 2.x, committed LTS
+  branch), which would let the archival pseudonym run a `.onion` responder
+  **in-process** without a C dependency — fitting the Rust-canonical posture
+  ([`20-rust-vs-cpp-policy.mdc`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)). The
+  older "Arti has no onion-service support" notes are claimed stale (client-only
+  1.x line). **Verify at source before relying on it.**
+- **I2P — reasonable secondary.** Inward-facing (good for a closed P2P overlay),
+  DHT-based with no directory authorities, datagram-capable. But smaller network,
+  the mature implementation (i2pd) is C++ with no Arti-equivalent Rust story, and
+  Monero's own I2P integration carries known privacy-leak edge cases. Dual-support
+  à la Monero is defensible; primary it is not.
+- **Lokinet — rejected.** Monero-lineage onion router on LLARP, UDP/layer-3
+  (lower latency) — but UDP is wrong for TCP sync, the network is small, and it is
+  tied to the Oxen ecosystem, which is exactly the **longevity risk** Tor is chosen
+  to avoid. The thing Tor is valued for (it is not going anywhere) is Lokinet's
+  weakest axis.
+- **Nym — orthogonal, not a competitor.** A mixnet trades latency for
+  flow-correlation resistance (which Tor genuinely lacks), at a delay cost that is
+  disqualifying for heavy fetch by design. The only conceivable fit is stronger
+  traffic-analysis resistance on the light *async* class (claim/broadcast) — V4+
+  exotica, not a sync transport.
+
+### Forks to decide at the transport PR (not now)
+
+1. **Embed Arti in-process** (Rust-canonical, viable on the LTS line *if the
+   onion-service-hosting claim verifies*) **vs. external Tor daemon over SOCKS**
+   (Monero's model, more battle-tested, but an external dependency). Philosophy
+   leans embed; conservatism leans external — a deliberate call, not drift.
+2. **Whether to keep the I2P secondary-transport door open** architecturally even
+   if it is not built at genesis (a reversion-clause-shaped decision per
+   [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).
+3. **The integration's privacy edge cases are the real soundness work**, not "does
+   Tor exist." Monero still flags its anonymity-network support as experimental with
+   cases where source privacy can leak (this doc, §*Privacy Limitations*), and the
+   **rendezvous-forced heavy path is a configuration Monero does not lean on** — so
+   it needs its **own threat pass**, not inheritance-by-assumption.
+
+### The one question that feeds the sim
+
+When the transport pass runs, the single transport parameter that actually moves
+the model is: **does the heavy path stay pure-rendezvous (worst-case L-regime,
+maximal firewall), or is there an acceptable relaxation that buys bandwidth without
+linking `P`?** That is the lever that moves where Shekyl lands on the `L2–L6`
+curve — and therefore the only transport input the staker-archival sim needs
+before the rest of the transport design is settled.

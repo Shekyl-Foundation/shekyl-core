@@ -81,7 +81,7 @@ impl<C: Ciphersuite> Circuit<C> {
     }
 
     pub(crate) fn constrain_equal_to_zero(&mut self, lincomb: LinComb<C::F>) {
-        self.0.constrain_equal_to_zero(lincomb)
+        self.0.constrain_equal_to_zero(lincomb);
     }
 }
 
@@ -116,8 +116,8 @@ where
         c_blind: PointWithDlog<Parameters>,
         C: (Variable, Variable),
 
-        extra_leaf_vars: &[Variable],
-        extra_leaf_public_values: &[C::F],
+        extra_leaf_vars: Vec<Variable>,
+        extra_leaf_public_values: Vec<C::F>,
 
         branch: Vec<Vec<Variable>>,
     ) {
@@ -164,7 +164,7 @@ where
 
         // Membership tuple: x-coordinates of O, I, C plus any extra leaf scalars
         let mut member = vec![O.x(), I.x(), C.x()];
-        member.extend(extra_leaf_vars.iter().copied());
+        member.extend(extra_leaf_vars.iter().cloned());
         self.tuple_member_of_list(transcript, member, branch);
     }
 

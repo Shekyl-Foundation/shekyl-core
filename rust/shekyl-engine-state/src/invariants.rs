@@ -39,7 +39,6 @@
 //! |--------------------------------------|---------------------------------------------------------------------------------------|
 //! | `tip-height-not-below-transfer`      | `ledger.tip.synced_height >= max(ledger.transfers[*].block_height)`                   |
 //! | `tx-keys-no-orphans`                 | Every tx-hash in `tx_meta.tx_keys` appears in a live reference (transfers, pool, or pending) |
-//! | `subaddress-registry-dense`          | Per-account minor indices in `bookkeeping.subaddress_registry` are gap-free           |
 //! | `reorg-trail-monotonic`              | `ledger.reorg_blocks.blocks` is strictly ascending and capped by `tip.synced_height`  |
 //! | `spent-state-consistent`             | Within `ledger.transfers`: spend-triple self-consistency + key-image uniqueness       |
 //!
@@ -52,14 +51,13 @@
 //! commit-3.2 benchmark — far below the Argon2id cost already paid on
 //! the open path, and not a concern for any `crypto_bench_*` threshold.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 
 use shekyl_crypto_pq::key_image::KeyImage;
 
 use crate::{
-    bookkeeping_block::BookkeepingBlock, error::WalletLedgerError, ledger_block::LedgerBlock,
-    sync_state_block::SyncStateBlock, transfer::TransferDetails, tx_meta_block::TxMetaBlock,
-    wallet_ledger::WalletLedger,
+    error::WalletLedgerError, ledger_block::LedgerBlock, sync_state_block::SyncStateBlock,
+    transfer::TransferDetails, tx_meta_block::TxMetaBlock, wallet_ledger::WalletLedger,
 };
 
 /// Stable machine-readable name for invariant I-1.
@@ -69,12 +67,9 @@ pub const INV_TIP_NOT_BELOW_TRANSFER: &str = "tip-height-not-below-transfer";
 pub const INV_TX_KEYS_NO_ORPHANS: &str = "tx-keys-no-orphans";
 
 /// Stable machine-readable name for invariant I-3.
-pub const INV_SUBADDRESS_REGISTRY_DENSE: &str = "subaddress-registry-dense";
-
-/// Stable machine-readable name for invariant I-4.
 pub const INV_REORG_TRAIL_MONOTONIC: &str = "reorg-trail-monotonic";
 
-/// Stable machine-readable name for invariant I-5.
+/// Stable machine-readable name for invariant I-4.
 pub const INV_SPENT_STATE_CONSISTENT: &str = "spent-state-consistent";
 
 impl WalletLedger {
@@ -89,7 +84,6 @@ impl WalletLedger {
     pub fn check_invariants(&self) -> Result<(), WalletLedgerError> {
         check_tip_not_below_transfer(&self.ledger)?;
         check_tx_keys_no_orphans(&self.ledger, &self.tx_meta, &self.sync_state)?;
-        check_subaddress_registry_dense(&self.bookkeeping)?;
         check_reorg_trail_monotonic(&self.ledger)?;
         check_spent_state_consistent(&self.ledger)?;
         Ok(())
@@ -183,7 +177,9 @@ fn check_tx_keys_no_orphans(
             + sync_state.pending_tx_hashes.len(),
     );
     for t in &ledger.transfers {
-        live.insert(t.tx_hash);
+        // `live` unifies typed transfer hashes with the still-raw `tx_meta` /
+        // `pending_tx_hashes` keys; convert at this boundary.
+        live.insert(t.tx_hash.to_bytes());
     }
     for h in tx_meta.scanned_pool_txs.keys() {
         live.insert(*h);
@@ -205,69 +201,7 @@ fn check_tx_keys_no_orphans(
     Ok(())
 }
 
-/// I-3. The set of indices that appears in
-/// `bookkeeping.subaddress_registry` must be contiguous — no gaps
-/// between the observed minimum and maximum. Shekyl's subaddress
-/// generation walks the index axis monotonically and never deletes a
-/// prior entry; a hole is therefore evidence that either a registry
-/// entry was lost after generation (corruption) or two processes
-/// raced on the same registry (bug we have not yet written, but
-/// would like the check to catch on sight).
-///
-/// The check permits the observed minimum to be anything: a wallet
-/// that has only ever generated subaddresses beyond the lookahead
-/// window may legitimately start its registry at a non-zero index.
-/// What cannot happen under normal generation is a hole *inside* the
-/// observed range.
-fn check_subaddress_registry_dense(
-    bookkeeping: &BookkeepingBlock,
-) -> Result<(), WalletLedgerError> {
-    if bookkeeping.subaddress_registry.is_empty() {
-        return Ok(());
-    }
-
-    let indices: BTreeSet<u32> = bookkeeping
-        .subaddress_registry
-        .values()
-        .map(crate::subaddress::SubaddressIndex::get)
-        .collect();
-
-    let Some(&min) = indices.iter().next() else {
-        return Ok(());
-    };
-    let Some(&max) = indices.iter().next_back() else {
-        return Ok(());
-    };
-    let expected_len = u64::from(max - min) + 1;
-    if (indices.len() as u64) != expected_len {
-        // Find the first gap so the diagnostic is pointed. Walk
-        // the sorted set in lockstep with the expected sequence
-        // `min, min+1, …`; the first mismatch is the hole.
-        let mut expected = min;
-        let gap = indices
-            .iter()
-            .find_map(|&n| {
-                if n == expected {
-                    expected = expected.saturating_add(1);
-                    None
-                } else {
-                    Some(expected)
-                }
-            })
-            .unwrap_or(min);
-        return Err(invariant_error(
-            INV_SUBADDRESS_REGISTRY_DENSE,
-            format!(
-                "subaddress registry is not dense in [{min}, {max}]; \
-                 missing index {gap} (observed {count} of expected {expected_len})",
-                count = indices.len()
-            ),
-        ));
-    }
-    Ok(())
-}
-
-/// I-4. The reorg-detection window is a rolling `(height, hash)`
+/// I-3. The reorg-detection window is a rolling `(height, hash)`
 /// tail the scanner keeps just behind the tip. Two invariants are
 /// bundled here because they fail the same way (the window is
 /// corrupt, whatever the cause): strict ascending order on height
@@ -312,16 +246,19 @@ fn check_reorg_trail_monotonic(ledger: &LedgerBlock) -> Result<(), WalletLedgerE
     Ok(())
 }
 
-/// I-5. Spend-tracking fields on [`TransferDetails`] are three
+/// I-4. Spend-tracking fields on [`TransferDetails`] are three
 /// independent `Option<…>` + `bool` slots, but the valid shapes form
 /// a small closed set:
 ///
 /// * `spent = false` → `spent_height = None`. Any other combination
 ///   is incoherent (we cannot have a "not spent" output with a spend
 ///   height).
-/// * `spent = true`  → `spent_height = Some` AND `key_image = Some`.
-///   A spent output without a recorded key image cannot have been
-///   spent by this wallet in the first place.
+/// * `spent = true`  → `key_image = Some`. `spent_height` is `None`
+///   while the spend is **in flight** — optimistically marked when the
+///   wallet submits the spending tx, before any block confirms it — and
+///   `Some` once a refresh scans the confirming block (a reorg that
+///   orphans that block reverts the output to unspent). A spent output
+///   without a recorded key image cannot have been spent by this wallet.
 ///
 /// Separately, no two transfers may share the same `Some(key_image)`:
 /// a key image uniquely identifies the output being spent, and two
@@ -351,10 +288,15 @@ fn check_spent_state_consistent(ledger: &LedgerBlock) -> Result<(), WalletLedger
 
 fn check_spend_triple(idx: usize, t: &TransferDetails) -> Result<(), WalletLedgerError> {
     match (t.spent, t.spent_height.is_some(), t.key_image.is_some()) {
-        // `spent = false` with no spent_height is the one valid
-        // not-yet-spent shape; key_image may be None or Some (the
-        // scanner derives it before spend).
-        (false, false, _) | (true, true, true) => Ok(()),
+        // Two valid shapes. (a) not-yet-spent: `spent = false`, no height; key_image
+        // may be None or Some (the scanner derives it before spend). (b) a spend by
+        // this wallet: `spent = true` with a key image — `spent_height` is `None`
+        // while the spend is **in flight** (optimistically marked at submit by
+        // `finalize_submit_accept`, before any block confirms it) and `Some` once a
+        // refresh scans the confirming block. The scan fills in the height; a reorg
+        // that orphans the confirming block reverts a confirmed spend to unspent
+        // (`LedgerIndexes::handle_reorg`).
+        (false, false, _) | (true, _, true) => Ok(()),
         (false, true, _) => Err(invariant_error(
             INV_SPENT_STATE_CONSISTENT,
             format!(
@@ -362,14 +304,7 @@ fn check_spend_triple(idx: usize, t: &TransferDetails) -> Result<(), WalletLedge
                  output cannot carry a spend height"
             ),
         )),
-        (true, false, _) => Err(invariant_error(
-            INV_SPENT_STATE_CONSISTENT,
-            format!(
-                "transfers[{idx}] has spent = true but spent_height = None; a spent output \
-                 must record the height at which it was spent"
-            ),
-        )),
-        (true, true, false) => Err(invariant_error(
+        (true, _, false) => Err(invariant_error(
             INV_SPENT_STATE_CONSISTENT,
             format!(
                 "transfers[{idx}] has spent = true but key_image = None; a spent output must \
@@ -389,12 +324,12 @@ fn check_spend_triple(idx: usize, t: &TransferDetails) -> Result<(), WalletLedge
 mod tests {
     use super::*;
     use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
-    use shekyl_oxide::primitives::Commitment;
+    use shekyl_curve_primitives::Commitment;
 
     use crate::{
         bookkeeping_block::BookkeepingBlock,
         ledger_block::{BlockchainTip, LedgerBlock, ReorgBlocks},
-        subaddress::SubaddressIndex,
+        staking_block::StakingBlock,
         sync_state_block::SyncStateBlock,
         transfer::{TransferDetails, SPENDABLE_AGE},
         tx_meta_block::{ScannedPoolTx, TxMetaBlock, TxSecretKey, TxSecretKeys},
@@ -407,27 +342,24 @@ mod tests {
     /// override whatever field(s) they need.
     fn mk_transfer(seed: u8, block_height: u64) -> TransferDetails {
         TransferDetails {
-            tx_hash: [seed; 32],
+            tx_hash: shekyl_types::TxHash::from_bytes([seed; 32]),
             internal_output_index: u64::from(seed),
             global_output_index: u64::from(seed),
             block_height,
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1_000),
-            subaddress: Some(SubaddressIndex::new(u32::from(seed).saturating_add(1))),
             payment_id: None,
             spent: false,
             spent_height: None,
             key_image: None,
-            staked: false,
-            stake_tier: 0,
-            stake_lock_until: 0,
-            last_claimed_height: 0,
+            awaiting_confirmation: None,
             source_ciphertext: None,
             output_handle: None,
             eligible_height: block_height + SPENDABLE_AGE,
             frozen: false,
             fcmp_precomputed_path: None,
+            receive_attribution: crate::ReceiveAttribution::default(),
         }
     }
 
@@ -465,6 +397,7 @@ mod tests {
             BookkeepingBlock::empty(),
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
+            StakingBlock::empty(),
         );
         w.check_invariants().expect("populated-consistent bundle");
     }
@@ -482,6 +415,7 @@ mod tests {
             BookkeepingBlock::empty(),
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
+            StakingBlock::empty(),
         );
         assert_invariant(
             w.check_invariants().unwrap_err(),
@@ -506,6 +440,7 @@ mod tests {
             BookkeepingBlock::empty(),
             tx_meta,
             SyncStateBlock::empty(),
+            StakingBlock::empty(),
         );
         assert_invariant(w.check_invariants().unwrap_err(), INV_TX_KEYS_NO_ORPHANS);
     }
@@ -529,6 +464,7 @@ mod tests {
             BookkeepingBlock::empty(),
             tx_meta,
             sync,
+            StakingBlock::empty(),
         );
         w.check_invariants().expect("pending ref satisfies I-2");
     }
@@ -552,57 +488,9 @@ mod tests {
             BookkeepingBlock::empty(),
             tx_meta,
             SyncStateBlock::empty(),
+            StakingBlock::empty(),
         );
         w.check_invariants().expect("pool ref satisfies I-2");
-    }
-
-    #[test]
-    fn sparse_subaddress_registry_is_refused() {
-        // Indices {1, 2, 4} — missing `3` inside the range.
-        let mut registry = BTreeMap::new();
-        registry.insert([1u8; 32], SubaddressIndex::new(1));
-        registry.insert([2u8; 32], SubaddressIndex::new(2));
-        registry.insert([4u8; 32], SubaddressIndex::new(4));
-        let bookkeeping = BookkeepingBlock {
-            block_version: BookkeepingBlock::empty().block_version,
-            subaddress_registry: registry,
-            ..Default::default()
-        };
-        let w = WalletLedger::new(
-            LedgerBlock::empty(),
-            bookkeeping,
-            TxMetaBlock::empty(),
-            SyncStateBlock::empty(),
-        );
-        assert_invariant(
-            w.check_invariants().unwrap_err(),
-            INV_SUBADDRESS_REGISTRY_DENSE,
-        );
-    }
-
-    #[test]
-    fn dense_subaddress_registry_is_accepted() {
-        // Indices {1, 2, 3, 4, 5} — gap-free across the observed range.
-        // The primary index (0) is permitted as a registry entry but is
-        // not required to be present.
-        let mut registry = BTreeMap::new();
-        registry.insert([1u8; 32], SubaddressIndex::new(1));
-        registry.insert([2u8; 32], SubaddressIndex::new(2));
-        registry.insert([3u8; 32], SubaddressIndex::new(3));
-        registry.insert([4u8; 32], SubaddressIndex::new(4));
-        registry.insert([5u8; 32], SubaddressIndex::new(5));
-        let bookkeeping = BookkeepingBlock {
-            block_version: BookkeepingBlock::empty().block_version,
-            subaddress_registry: registry,
-            ..Default::default()
-        };
-        let w = WalletLedger::new(
-            LedgerBlock::empty(),
-            bookkeeping,
-            TxMetaBlock::empty(),
-            SyncStateBlock::empty(),
-        );
-        w.check_invariants().expect("dense registry satisfies I-3");
     }
 
     #[test]
@@ -619,6 +507,7 @@ mod tests {
             BookkeepingBlock::empty(),
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
+            StakingBlock::empty(),
         );
         assert_invariant(w.check_invariants().unwrap_err(), INV_REORG_TRAIL_MONOTONIC);
     }
@@ -637,6 +526,7 @@ mod tests {
             BookkeepingBlock::empty(),
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
+            StakingBlock::empty(),
         );
         assert_invariant(w.check_invariants().unwrap_err(), INV_REORG_TRAIL_MONOTONIC);
     }
@@ -655,12 +545,16 @@ mod tests {
             BookkeepingBlock::empty(),
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
+            StakingBlock::empty(),
         );
         assert_invariant(w.check_invariants().unwrap_err(), INV_REORG_TRAIL_MONOTONIC);
     }
 
     #[test]
-    fn spent_without_height_is_refused() {
+    fn spent_in_flight_without_height_is_allowed() {
+        // The in-flight (optimistically-spent) shape: marked spent at submit, with a
+        // key image, but no confirming height until a refresh scans the block. This is
+        // the state `finalize_submit_accept` produces; the invariant must admit it.
         let mut t = mk_transfer(1, 10);
         t.spent = true;
         t.spent_height = None;
@@ -675,6 +569,33 @@ mod tests {
             BookkeepingBlock::empty(),
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
+            StakingBlock::empty(),
+        );
+        assert!(
+            w.check_invariants().is_ok(),
+            "in-flight spend (spent, no height, key_image present) must be valid"
+        );
+    }
+
+    #[test]
+    fn spent_in_flight_without_key_image_is_refused() {
+        // In flight or confirmed, a spent output must carry the key image it was spent
+        // by — relaxing the height requirement must not relax the key-image one.
+        let mut t = mk_transfer(1, 10);
+        t.spent = true;
+        t.spent_height = None;
+        t.key_image = None;
+        let ledger = LedgerBlock::new(
+            vec![t],
+            BlockchainTip::new(100, [0xAA; 32]),
+            ReorgBlocks::default(),
+        );
+        let w = WalletLedger::new(
+            ledger,
+            BookkeepingBlock::empty(),
+            TxMetaBlock::empty(),
+            SyncStateBlock::empty(),
+            StakingBlock::empty(),
         );
         assert_invariant(
             w.check_invariants().unwrap_err(),
@@ -698,6 +619,7 @@ mod tests {
             BookkeepingBlock::empty(),
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
+            StakingBlock::empty(),
         );
         assert_invariant(
             w.check_invariants().unwrap_err(),
@@ -720,6 +642,7 @@ mod tests {
             BookkeepingBlock::empty(),
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
+            StakingBlock::empty(),
         );
         assert_invariant(
             w.check_invariants().unwrap_err(),
@@ -747,6 +670,7 @@ mod tests {
             BookkeepingBlock::empty(),
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
+            StakingBlock::empty(),
         );
         assert_invariant(
             w.check_invariants().unwrap_err(),
@@ -771,6 +695,7 @@ mod tests {
             BookkeepingBlock::empty(),
             TxMetaBlock::empty(),
             SyncStateBlock::empty(),
+            StakingBlock::empty(),
         );
         // preflight_save runs debug_assert! in debug builds; skip the
         // assertion there to keep the test identical across profiles.

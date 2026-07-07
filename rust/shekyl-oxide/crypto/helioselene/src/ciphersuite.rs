@@ -6,7 +6,7 @@ use std_shims::prelude::*;
 
 use zeroize::Zeroize;
 
-use blake2::{Blake2b512, Digest};
+use blake2::{Blake2b512, Digest as _};
 
 use crate::{Field25519, HeliosPoint, HelioseleneField, SelenePoint};
 use group::Group;
@@ -15,6 +15,7 @@ use group::GroupEncoding;
 
 use ciphersuite::Ciphersuite;
 
+/// The ciphersuite definition for the Helios elliptic curve.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize)]
 pub struct Helios;
 impl Ciphersuite for Helios {
@@ -31,7 +32,7 @@ impl Ciphersuite for Helios {
     fn hash_to_F(dst: &[u8], msg: &[u8]) -> Self::F {
         let mut uniform = [0; 64];
         let mut hash = Blake2b512::digest([dst, msg].concat());
-        uniform.copy_from_slice(hash.as_ref());
+        uniform.copy_from_slice(hash.as_slice());
         let hash_as_mut: &mut [u8] = hash.as_mut();
         hash_as_mut.zeroize();
         let res = HelioseleneField::wide_reduce(uniform);
@@ -40,7 +41,7 @@ impl Ciphersuite for Helios {
     }
 
     // We override the provided impl, which compares against the reserialization, because
-    // Helios::G::from_bytes already enforces canonically encoded points
+    // `<Helios::G as GroupEncoding>::from_bytes` already enforces canonically encoded points.
     #[cfg(feature = "alloc")]
     #[allow(non_snake_case)]
     fn read_G<R: Read>(reader: &mut R) -> io::Result<Self::G> {
@@ -53,6 +54,7 @@ impl Ciphersuite for Helios {
     }
 }
 
+/// The ciphersuite definition for the Selene elliptic curve.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize)]
 pub struct Selene;
 impl Ciphersuite for Selene {
@@ -69,7 +71,7 @@ impl Ciphersuite for Selene {
     fn hash_to_F(dst: &[u8], msg: &[u8]) -> Self::F {
         let mut uniform = [0; 64];
         let mut hash = Blake2b512::digest([dst, msg].concat());
-        uniform.copy_from_slice(hash.as_ref());
+        uniform.copy_from_slice(hash.as_slice());
         let hash_as_mut: &mut [u8] = hash.as_mut();
         hash_as_mut.zeroize();
         let res = Field25519::wide_reduce(uniform);
@@ -78,7 +80,7 @@ impl Ciphersuite for Selene {
     }
 
     // We override the provided impl, which compares against the reserialization, because
-    // Selene::G::from_bytes already enforces canonically encoded points
+    // `<Selene::G as GroupEncoding>::from_bytes` already enforces canonically encoded points.
     #[cfg(feature = "alloc")]
     #[allow(non_snake_case)]
     fn read_G<R: Read>(reader: &mut R) -> io::Result<Self::G> {

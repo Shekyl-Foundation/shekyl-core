@@ -3,18 +3,18 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! iai-callgrind companion to `benches/scan_block.rs`.
+//! gungraun companion to `benches/scan_block.rs`.
 //!
 //! Post-fold note: input setup (constructing `LedgerBlock::empty()` +
 //! `LedgerIndexes::empty()`) happens inside `build_state_and_outputs`,
-//! which iai-callgrind counts as setup, not measurement. The measured
+//! which gungraun counts as setup, not measurement. The measured
 //! region is only `indexes.process_scanned_outputs(&mut ledger, …)`.
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use std::hint::black_box;
 
-use shekyl_oxide::primitives::Commitment;
+use shekyl_curve_primitives::Commitment;
 use shekyl_scanner::{
     output::WalletOutput,
     scan::{RecoveredWalletOutput, Timelocked},
@@ -38,7 +38,6 @@ fn build_state_and_outputs(k: usize) -> (LedgerBlock, LedgerIndexes, Timelocked)
                 unique_point(1_000 + i),
                 Scalar::ZERO,
                 Commitment::new(Scalar::ONE, 1_000 + i),
-                None,
             );
             RecoveredWalletOutput::new_for_test(wo, 1_000 + i)
         })

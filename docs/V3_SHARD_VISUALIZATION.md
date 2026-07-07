@@ -199,6 +199,67 @@ the shard rather than being a pure hash visualization. A shard from a
 high-activity chain period looks visibly different from a quiet-period
 shard; experienced stakers learn to read this.
 
+## Candidate compositor (candidate.v1) — leading V3.x design
+
+Empirical exploration in `shekyl-dev/visualization/` (2026-05) converged on a
+**two-stage difference compositor** rather than the single-algorithm 3-bit
+bucket assignment described below. This pipeline is the **leading design** for
+the V3.x `shekyl-shard-visual` reference implementation pending formal palette
+closure:
+
+1. **Foreground composite** — `aperiodic_tile` ⊖ `phyllotaxis`, difference
+   blend, opacity from `candidate.v1.fg.opacity` (bell curve, mean 0.5).
+2. **Background composite** — `truchet` ⊖ `crystalline`, difference blend,
+   opacity from `candidate.v1.bg.opacity` (same bell shape).
+3. **Final composite** — background ⊖ foreground, difference blend, opacity
+   from `candidate.v1.final.opacity` (high bell, mean ~0.80).
+
+Palettes and per-layer opacities are hash-derived via SHAKE256 namespaces
+(`candidate.v1.fg`, `candidate.v1.bg`, `candidate.v1.*.opacity`). Feature
+scalars from the shard aggregate drive renderer aesthetics inside each
+algorithm. The single-algorithm palette in the sections below remains the
+**fallback spec shape** if candidate.v1 fails mobile budget or continuity
+review; disposition closes during V3.x implementation.
+
+#### Structural entropy: one SHAKE256 namespace per renderer
+
+Each of the four renderers draws its **structural** parameters (orientation,
+divergence perturbation, foreground tone, circle-map ω/K/phase, scatter seed,
+palette-spread jitter) from its own namespaced stream:
+
+| Renderer         | Namespace                        | Indices used        |
+|------------------|----------------------------------|---------------------|
+| `aperiodic_tile` | `shard.v1.render.aperiodic_tile` | `unit(0)`, `unit(1)`|
+| `phyllotaxis`    | `shard.v1.render.phyllotaxis`    | `unit(0..2)`        |
+| `truchet`        | `shard.v1.render.truchet`        | `unit(0)` + per-cell `Sha256`|
+| `crystalline`    | `shard.v1.render.crystalline`    | `unit(0..2)`, `uint32(3..4)`|
+
+Rationale: the legacy layout carved the 256-bit hash into eight little-endian
+`uint32` words and let every renderer index the *same* pool, so renderers that
+both read word 0 produced structurally-correlated geometry for the same shard,
+and the eight-word budget did not stretch across all four algorithms without
+reuse. SHAKE256 is an XOF, so each `(shard_hash ‖ 0x01 ‖ namespace)` seed
+yields an independent, unbounded stream — distinct indices in distinct
+namespaces are statistically uncorrelated. `aperiodic_tile` previously consumed
+**zero** hash entropy (identical feature vectors produced identical geometry);
+it now draws a rosette rotation and palette-spread jitter so every shard is
+visually distinct. The Rust reference and the Python explorer use byte-identical
+derivation (same primitive, same domain separator, same little-endian word
+layout), so the two implementations agree on the structural draws.
+
+### Pre-archival preview exception (GUI wallet)
+
+Before `ArchivalEngine` (Stage 5) ships, the GUI wallet may expose a
+**beta preview** on the Staking page that renders **fixture aggregates**
+(illustrative fake-chain samples) and optional user-supplied shard hashes with
+preset feature vectors. This is **not** production archival UI; it validates
+the `shekyl-shard-visual` library and gives stakers a tangible preview of
+deterministic shard identity. Production cutover replaces fixtures with real
+archived shards from `ArchivalEngine`; cache keys use `(shard_id,
+shard_content_hash)` per below.
+
+---
+
 ### Visualization palette: hybrid approach
 
 A single visualization algorithm risks "they all look the same kind
@@ -460,6 +521,71 @@ The default should be conservative: start with shard hash + block
 count + time range only, add other parameters only if they pass
 review. This is safer than starting rich and trimming.
 
+**Distinct concern — the *sharing behavior*, not the parameters.** The
+analysis above establishes that the rendered visual leaks nothing the
+chain doesn't already publish. A separate concern is that this feature
+*exists to be shared* ("Print/share rendering," Open design questions),
+so it manufactures a population of stakers who voluntarily reveal they
+stake. That voluntary disclosure composes with the confidential-staking
+**claim-cohort leak** (`docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3,
+finding F0): a shared portfolio bridges real-world identity → "a staker
+holding shard-set `{S}`," and — composed with F0's cleartext
+`(tier, creation)` and a candidate on-chain holder registry
+(`docs/V3_STAKER_ARCHIVAL.md`) — to that staker's claim cohort. The
+elimination effect matters for the privacy-conscious minority: in a thin
+cohort, self-doxxing by other members shrinks the silent members'
+anonymity set. This is **not** a parameter-derivation issue (so it does
+not change the "always safe / never derive from" lists), but it **is** a
+real deanonymization vector that the archival/visualization privacy
+review must weigh against claim-cohort linkage before ship. Tracked in
+`docs/FOLLOWUPS.md` under the F0 V3.1 entry.
+
+Two structural sharpenings make the sharing vector worse than "reveals
+membership" (full analysis: `docs/design/PHASE_2B_STAKE_LIFECYCLE.md`
+§7.5.3, finding **F-ARCHIVAL**):
+
+- **A shared portfolio is a tier oracle.** Archival sorts tiers onto shard
+  types (`docs/V3_STAKER_ARCHIVAL.md`: tier-1 → hot/recent, tier-3 →
+  deep/historical), so *which shards a staker holds is strong evidence of
+  their tier* — the same tier the confidential-staking claim wire reveals,
+  re-exposed through portfolio composition. Sharing a portfolio therefore
+  leaks tier, not just membership.
+- **Rare = shareable = identifying.** "Legible rarity" gamifies showing off
+  the rarest shard, which is by definition the *most* identifying (few others
+  hold it), and rare-shard hunters skew toward larger, engaged stakers — the
+  high-value targets. The feature's social appeal is mechanically a
+  fingerprint disclosure, concentrated where it hurts most.
+
+**Share-UX is a privacy surface (graceful-degradation requirement).** A user
+who shares should disclose only *what they chose* — "I stake, here's cool
+art" — and not have it silently cascade into tier, claim history, and
+inferable amounts. The share/export path should **warn** that posting a
+portfolio links social identity to staking history, and that the rarer the
+shard, the more uniquely it identifies the holder. This is a V3.x share-UX
+design item, gated with the archival commitment-binding decision.
+
+**Resolution — the firewalled-pseudonym model achieves graceful degradation
+(F-ARCHIVAL resolution; `docs/V3_STAKER_ARCHIVAL.md` §*Pay-for-service rebasing
+and the firewalled-pseudonym identity model*).** The visualization **composes
+cleanly** under the resolved model, which retroactively validates the
+share-feature instinct. The image is shard-keyed and identical across holders,
+so it does not identify the holder by itself; sharing it discloses "I am
+pseudonym **P**, I hold these shards" — *the pseudonym's own public facts* — and
+with the firewall in place (membership-proof binding, HKDF-separated identity,
+network/timing/output isolation) that disclosure **does not cascade** to claims,
+spends, principal, or tier. The two cascade-drivers above are closed at the
+source: **tier** is neutralized by tier-neutral / longevity-based shard pricing
+(so a portfolio is no longer a tier oracle), and the **claim-cohort bridge**
+(F0) dissolves because the pay-for-service reward removes `tier`/`creation` from
+the claim wire. Net: a sharer reveals exactly the pseudonym they chose to attach
+to a social identity, and nothing behind it. The shared portfolio is still a
+fingerprint *of P*, but fingerprinting a firewalled pseudonym only yields the
+pseudonym the sharer already surfaced — the cost of sharing is **bounded to the
+pseudonym**, which is the right place for a voluntary, social, opt-in feature to
+spend privacy. The share-UX **warning still applies** (the disclosure is real, it
+is just bounded), and the guarantee is contingent on the firewall holding across
+all four layers and on the gate-list in `V3_STAKER_ARCHIVAL.md` ratifying.
+
 ---
 
 ## Implementation notes
@@ -602,9 +728,11 @@ begins.
 These gate the V3.x ship dot-version. Each closes against design
 review and performance testing during the V3.x implementation cycle.
 
-**Final algorithm palette.** The candidate list above is a starting
-set; the actual palette ships after performance testing and continuity
-review. Some candidates may drop; others may be added.
+**Final algorithm palette.** The **candidate.v1** two-stage difference
+compositor (see above) is the leading design from empirical exploration.
+The single-algorithm list below remains the documented fallback if
+candidate.v1 fails review. Final disposition closes during V3.x
+implementation against mobile budget and continuity testing.
 
 **Color palette specifications.** The exact RGB values for each palette
 family. Candidates: hand-curated by a designer; algorithmically

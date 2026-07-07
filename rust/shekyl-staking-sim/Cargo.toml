@@ -1,0 +1,37 @@
+[package]
+name = "shekyl-staking-sim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Agent-based staker-archival coverage simulation (docs/design/STAKER_ARCHIVAL_SIM.md; gate4 fine sweep + L8–L16)"
+
+# NOTE: this crate intentionally does NOT set `[lints] workspace = true`.
+# Like `shekyl-economics-sim`, it is a numeric simulation harness (not
+# consensus/crypto code), so the workspace's strict cast/float clippy denies
+# (cast_precision_loss, float_cmp, ...) would be pure friction here. The crate
+# is excluded from the consensus-critical lint surface by the same reasoning
+# the economics sim is.
+
+[dependencies]
+serde = { workspace = true }
+serde_json = "1"
+# `provisional-k-cover`: K_COVER unsealed-sentinel acknowledgment
+# (ARCHIVAL_REWARD_GATE_M1.md §4) — delete this feature at the §14.4 seal.
+shekyl-archival-retention = { path = "../shekyl-archival-retention", features = ["provisional-k-cover"] }
+# GF-7 measurement pipeline (`docs/design/ARCHIVAL_BOND_2C_GF7_HOOKS.md` §4/§5):
+# this crate is the ONLY home of a recording `BroadcastTimelineObserver` impl
+# (layer 2 of the no-emit guard — a standalone binary no production crate
+# depends on; CI asserts the dependency graph). The `gf7-hooks` feature pulls
+# the observer trait + event vocabulary; the `--gf7-timeline` mode drives the
+# joint three-axis scenario through the recorded timeline (§6.3). The sim also
+# imports the single-sourced `draw_entry_gap` + `plan_entry_seam` so it grades
+# the same draw/planner the wallet runs ("what we validated is what ships").
+shekyl-standoff = { path = "../shekyl-standoff", features = ["gf7-hooks"] }
+
+# The `conformance` feature (float grading + self-cert harness) stays dev-only:
+# it backs the smoke test that the sim's `SplitMix64` conforms through the
+# shared `certify_draw`; the sim binary itself does not grade.
+[dev-dependencies]
+shekyl-standoff = { path = "../shekyl-standoff", features = ["conformance"] }

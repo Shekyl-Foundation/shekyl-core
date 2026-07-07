@@ -8,7 +8,8 @@
 //! JSON (via the `hex_bytes` module), matching the C++ FFI convention.
 
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+use shekyl_units::AtomicUnits;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Serde helper: hex-encode/decode `[u8; 32]`.
 pub mod hex_bytes32 {
@@ -236,7 +237,7 @@ pub struct SpendInput {
     #[serde(with = "hex_bytes32")]
     pub commitment: [u8; 32],
     /// Cleartext amount in atomic units. Must be non-zero.
-    pub amount: u64,
+    pub amount: AtomicUnits,
     /// Ephemeral spend secret key x where O = x*G + y*T.
     #[serde(with = "hex_bytes32")]
     pub spend_key_x: [u8; 32],
@@ -279,31 +280,38 @@ impl Drop for SpendInput {
 }
 
 /// A transaction output with the data needed for commitment and ECDH encoding.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ZeroizeOnDrop)]
 pub struct OutputInfo {
     /// Compressed one-time destination key (Ed25519).
     #[serde(with = "hex_bytes32")]
     pub dest_key: [u8; 32],
     /// Amount in atomic units. Must be non-zero.
-    pub amount: u64,
+    pub amount: AtomicUnits,
     /// HKDF-derived commitment mask z where C = z*G + amount*H.
     /// Pre-derived by `shekyl_construct_output` via HKDF from the shared secret.
     #[serde(with = "hex_bytes32")]
+    #[zeroize]
     pub commitment_mask: [u8; 32],
     /// Pre-computed encrypted amount (9 bytes): [0..8] = amount XOR k_amount,
     /// [8] = amount_tag (HKDF-derived integrity byte).
     /// Created by `shekyl_construct_output`.
     #[serde(with = "hex_bytes9")]
     pub enc_amount: [u8; 9],
+    /// Pre-computed encrypted label (9 bytes): [0..8] = plaintext XOR k_label,
+    /// [8] = label_tag. Sentinel plaintext at V3.0 launch.
+    #[serde(with = "hex_bytes9")]
+    pub enc_label: [u8; 9],
 }
 
 /// Curve tree context at the reference block height.
 ///
 /// # Important distinction
 ///
-/// `tree_root` is the Selene hash root extracted from the block header's
-/// `curve_tree_root` field. It is **not** the block hash. Confusing these
-/// was the root cause of the prover bug this crate was created to fix.
+/// `tree_root` is the curve tree root extracted from the block header's
+/// `curve_tree_root` field (the topmost-layer node — Helios or Selene
+/// depending on tree depth, per `shekyl-fcmp/src/tree.rs`). It is **not** the
+/// block hash. Confusing these was the root cause of the prover bug this
+/// crate was created to fix.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TreeContext {
     /// Hash of the reference block (stored in rctSig.referenceBlock).
@@ -343,12 +351,21 @@ pub struct SignedProofs {
     /// Serialized Bulletproof+ range proof.
     #[serde(with = "hex_blob")]
     pub bulletproof_plus: Vec<u8>,
-    /// Per-output Pedersen commitments (compressed points, scalarmult8 applied).
+    /// Per-output Pedersen commitments: the real prime-order `C = mask*G +
+    /// amount*H` (compressed points, **no** cofactor scaling). This is the form
+    /// consensus stores in `outPk[i].mask` and the form the wallet scanner
+    /// recomputes and byte-compares against
+    /// (`shekyl-crypto-pq` `scan_output_recover_with_ml_kem_dk`), so it must
+    /// not be `8*C`. The Bulletproof+ `V` vector carries the cofactored `C/8`
+    /// form internally; the two are reconciled inside the BP+ verifier.
     #[serde(with = "hex_vec32")]
     pub commitments: Vec<[u8; 32]>,
     /// Per-output encrypted amounts (9 bytes each: [0..8] = XOR-encrypted, [8] = HKDF tag).
     #[serde(with = "hex_vec9")]
     pub enc_amounts: Vec<[u8; 9]>,
+    /// Per-output encrypted labels (9 bytes each).
+    #[serde(with = "hex_vec9")]
+    pub enc_labels: Vec<[u8; 9]>,
     /// Per-input pseudo-output commitments (from FCMP prover).
     #[serde(with = "hex_vec32")]
     pub pseudo_outs: Vec<[u8; 32]>,

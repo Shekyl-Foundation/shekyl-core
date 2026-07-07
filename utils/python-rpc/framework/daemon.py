@@ -89,15 +89,15 @@ class Daemon(object):
         }
         return self.rpc.send_json_rpc_request(add_aux_pow)
 
-    def send_raw_transaction(self, tx_as_hex, do_not_relay = False, do_sanity_checks = True, client = ""):
-        send_raw_transaction = {
-            'client': client,
-            'tx_as_hex': tx_as_hex,
-            'do_not_relay': do_not_relay,
-            'do_sanity_checks': do_sanity_checks,
+    def submit_transaction(self, tx_as_hex):
+        # Native typed submit route (DAEMON_SUBMIT_VERDICT.md sec. 2.4): the
+        # response body is the serde-tagged SubmitVerdict. Transport-level
+        # failures (HTTP 400/500) raise, mirroring the wallet client's Err
+        # arm; verdicts including Rejected come back as HTTP 200 JSON.
+        submit_transaction = {
+            'tx_blob': tx_as_hex,
         }
-        return self.rpc.send_request("/send_raw_transaction", send_raw_transaction)
-    sendrawtransaction = send_raw_transaction
+        return self.rpc.send_request("/submit_transaction", submit_transaction)
 
     def submitblock(self, block):
         submitblock = {
@@ -599,73 +599,3 @@ class Daemon(object):
             'id': '0'
         }
         return self.rpc.send_json_rpc_request(sync_txpool)
-
-    def rpc_access_info(self, client):
-        rpc_access_info = {
-            'method': 'rpc_access_info',
-            'params': {
-                'client': client,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(rpc_access_info)
-
-    def rpc_access_submit_nonce(self, client, nonce, cookie):
-        rpc_access_submit_nonce = {
-            'method': 'rpc_access_submit_nonce',
-            'params': {
-                'client': client,
-                'nonce': nonce,
-                'cookie': cookie,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(rpc_access_submit_nonce)
-
-    def rpc_access_pay(self, client, paying_for, payment):
-        rpc_access_pay = {
-            'method': 'rpc_access_pay',
-            'params': {
-                'client': client,
-                'paying_for': paying_for,
-                'payment': payment,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(rpc_access_pay)
-
-    def rpc_access_tracking(self, clear = False):
-        rpc_access_tracking = {
-            'method': 'rpc_access_tracking',
-            'params': {
-                'clear': clear,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(rpc_access_tracking)
-
-    def rpc_access_data(self):
-        rpc_access_data = {
-            'method': 'rpc_access_data',
-            'params': {
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(rpc_access_data)
-
-    def rpc_access_account(self, client, delta_balance = 0):
-        rpc_access_account = {
-            'method': 'rpc_access_account',
-            'params': {
-                'client': client,
-                'delta_balance': delta_balance,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(rpc_access_account)

@@ -9,7 +9,7 @@
 //! `LedgerIndexes::process_scanned_outputs` ingesting `K` synthetic
 //! `RecoveredWalletOutput`s for a single block into a fresh
 //! `(LedgerBlock, LedgerIndexes)` pair. The cryptographic half —
-//! `scan_output_recover` (X25519 view-tag pre-filter + ML-KEM-768 decap +
+//! `scan_output_recover_with_ml_kem_dk` (ML-KEM decap + FA-6 pre-filter, then
 //! HKDF + leaf-hash rederivation) — lives in
 //! `shekyl-crypto-pq/benches/pqc_rederivation.rs`; the two together span
 //! the "owned output lands in wallet state" pipeline.
@@ -34,7 +34,7 @@ use std::hint::black_box;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
 
-use shekyl_oxide::primitives::Commitment;
+use shekyl_curve_primitives::Commitment;
 use shekyl_scanner::{
     output::WalletOutput,
     scan::{RecoveredWalletOutput, Timelocked},
@@ -58,7 +58,6 @@ fn build_owned_outputs(k: usize) -> Timelocked {
                 unique_point(1_000 + i),
                 Scalar::ZERO,
                 Commitment::new(Scalar::ONE, 1_000 + i),
-                None,
             );
             RecoveredWalletOutput::new_for_test(wo, 1_000 + i)
         })

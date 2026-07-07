@@ -34,7 +34,7 @@ hkdf = "0.12"
 thiserror.workspace = true
 
 # Zeroize HMAC key material on drop.
-zeroize = { version = "^1.5", features = ["zeroize_derive"] }
+zeroize = { workspace = true }
 
 # Structured warnings on tamper / quarantine events.
 tracing = "0.1"
@@ -51,6 +51,11 @@ rustix = { version = "1", features = ["fs"] }
 # gated to avoid pulling macros into consumers that only need
 # load/save by bytes.
 serde = { version = "1", features = ["derive"] }
+
+# `AtomicUnits` amount newtype for the coin-selection / RPC-credit amount
+# fields (docs/completed/ATOMIC_UNITS_NEWTYPE.md). TOML stays byte-identical
+# via `#[serde(transparent)]`.
+shekyl-units = { path = "../shekyl-units" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.60", features = [

@@ -9,7 +9,7 @@
 //! ## Why this module lives in `src/` (not `benches/`)
 //!
 //! Two bench binaries (`scan_transaction` criterion harness and
-//! `scan_transaction_iai` iai-callgrind companion) share the same
+//! `scan_transaction_iai` gungraun companion) share the same
 //! transaction-shape fixtures. Cargo compiles each `benches/*.rs` file
 //! as an independent binary, so a shared fixture has to live somewhere
 //! both binaries can `use`. The crate's `[[bench]]` entries depend on
@@ -54,18 +54,15 @@
 //! ### `build_typical_case_scannable_block` — contextual, NOT F11-S
 //!
 //! Outputs are encapsulated against a *different* wallet's hybrid
-//! public keys. The scanner's X25519 ECDH against the on-chain
-//! ephemeral produces a different shared secret than the encapsulator
-//! used, so the wallet-side view tag derivation diverges from the
-//! on-chain value and every output exits via fast-path filter
-//! rejection (the wire-format byte compare after view-tag derivation
-//! returns false, short-circuiting before ML-KEM decap).
+//! public keys. After universal ML-KEM decap with the bench wallet's DK,
+//! the FA-6 pre-filter tag does not match and every output exits before
+//! X25519 ECDH (wire-byte compare after `derive_view_tag_prefilter`).
 //!
 //! This documents the typical-case UX cost (which dominates real
 //! wallet refresh time, since most outputs aren't for the wallet) and
 //! provides a sanity-check ratio against the worst-case measurement:
 //! if `worst_case_p99 / typical_case_p99` falls outside the expected
-//! ML-KEM-decap-to-view-tag-check cost ratio, the methodology is
+//! post-decap prefilter-to-full-recovery cost ratio, the methodology is
 //! suspect and the F11-S decision should not bind until the anomaly
 //! is investigated.
 //!
@@ -96,17 +93,12 @@ use shekyl_crypto_pq::{
     kem::{HybridKemPublicKey, HybridX25519MlKem, KeyEncapsulation, ML_KEM_768_CT_LEN},
     output::construct_output,
 };
-use shekyl_oxide::{
-    block::{Block, BlockHeader},
-    fcmp::{EncryptedAmount, ProofBase, PrunedProofs},
-    io::CompressedPoint,
-    transaction::{Input, Output, Pruned, Timelock, Transaction, TransactionPrefix},
-};
-use shekyl_rpc::ScannableBlock;
+use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
 use crate::{
     extra::{Extra, ExtraField},
     view_pair::ViewPair,
+    ScannableBlock,
 };
 
 /// Bytes per X25519 ephemeral public key on the wire. Mirrors the
@@ -256,54 +248,64 @@ fn fake_spend_key_bytes() -> [u8; 32] {
     two_g.compress().to_bytes()
 }
 
-/// Assemble a [`ScannableBlock`] holding a single non-miner v2
-/// transaction whose N outputs were all constructed via
+/// Join a crypto-layer `(value, tag)` amount/label pair into the
+/// `shekyl-wire` `[u8; 9]` on-wire encoding (8-byte value ‖ 1-byte
+/// HKDF tag, GENESIS §9.7) — the inverse of the scanner's `split_enc9`.
+fn join_enc9(value: &[u8; 8], tag: u8) -> [u8; 9] {
+    let mut out = [0u8; 9];
+    out[..8].copy_from_slice(value);
+    out[8] = tag;
+    out
+}
+
+/// Assemble a [`ScannableBlock`] holding a single non-miner
+/// `shekyl-wire` transaction whose N outputs were all constructed via
 /// [`construct_output`] against `recipient_pk`.
 ///
-/// The block contains a minimal miner-tx (Input::Gen with no outputs)
-/// so [`Block::new`] accepts it. The non-miner transaction carries
-/// the per-output `view_tag`, `key`, encrypted amount, and commitment
+/// The block contains a minimal coinbase miner-tx (a sole `gen` input,
+/// a `Null` ct, no outputs). The non-miner transaction carries the
+/// per-output `view_tag`, `key`, encrypted amount, and commitment
 /// fields the scanner reads, plus a `tx_extra` blob carrying the
 /// concatenated KEM ciphertexts behind tag `0x06`.
 ///
-/// `output_index_for_first_ringct_output: Some(0)` is set so the
-/// scanner walks the non-miner transaction's outputs (the value is
-/// not load-bearing for the fixture; the scanner's per-output loop
-/// uses the local index `o`).
-fn assemble_scannable_block(n_outputs: usize, recipient_pk: &HybridKemPublicKey) -> ScannableBlock {
+/// `first_output_index: Some(0)` is set so the scanner walks the
+/// non-miner transaction's outputs (the value is not load-bearing for
+/// the fixture; the scanner's per-output loop uses the local index `o`).
+fn assemble_scannable_block(
+    n_outputs: usize,
+    recipient_pk: &HybridKemPublicKey,
+    recipient_spend_pub: &[u8; 32],
+) -> ScannableBlock {
     // Pre-allocate the on-wire fields.
     let mut outputs: Vec<Output> = Vec::with_capacity(n_outputs);
-    let mut commitments: Vec<CompressedPoint> = Vec::with_capacity(n_outputs);
-    let mut encrypted_amounts: Vec<EncryptedAmount> = Vec::with_capacity(n_outputs);
+    let mut commitments: Vec<[u8; 32]> = Vec::with_capacity(n_outputs);
+    let mut enc_amounts: Vec<[u8; 9]> = Vec::with_capacity(n_outputs);
+    let mut enc_labels: Vec<[u8; 9]> = Vec::with_capacity(n_outputs);
     let mut kem_ct_blob: Vec<u8> = Vec::with_capacity(n_outputs * HYBRID_KEM_CT_BYTES);
-
-    let spend_key = fake_spend_key_bytes();
 
     for output_index in 0..n_outputs {
         let out = construct_output(
             &BENCH_TX_KEY,
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
-            &spend_key,
+            recipient_spend_pub,
             BENCH_AMOUNT,
             output_index as u64,
         )
-        .expect(
-            "construct_output is infallible for torsion-free spend keys and \
-             valid KEM public keys; both are guaranteed by the fixture",
-        );
+        // Precondition of this fixture: `recipient_pk` is a valid hybrid KEM
+        // public key and `recipient_spend_pub` a torsion-free compressed Edwards
+        // point. Both hold for any derived persona/wallet keys; a malformed key
+        // is a test bug and panics loudly (the intended failure for a fixture).
+        .expect("construct_output succeeds for valid recipient KEM + spend-pub key material");
 
         outputs.push(Output {
-            amount: None,
-            key: CompressedPoint(out.output_key),
-            view_tag: Some(out.view_tag_x25519),
-            staking: None,
+            amount: 0,
+            key: out.output_key,
+            view_tag: out.view_tag_prefilter,
         });
-        commitments.push(CompressedPoint(out.commitment));
-        encrypted_amounts.push(EncryptedAmount {
-            amount: out.enc_amount,
-            amount_tag: out.amount_tag,
-        });
+        commitments.push(out.commitment);
+        enc_amounts.push(join_enc9(&out.enc_amount, out.amount_tag));
+        enc_labels.push(join_enc9(&out.enc_label, out.label_tag));
         // Per `scan.rs::scan_transaction`, the KEM ciphertext blob
         // for output `o` is read at offset `o * HYBRID_KEM_CT_BYTES`
         // and consists of `X25519_CT_BYTES || ML_KEM_768_CT_LEN`.
@@ -327,67 +329,72 @@ fn assemble_scannable_block(n_outputs: usize, recipient_pk: &HybridKemPublicKey)
     // production daemon → scanner path).
     let extra_serialized = Extra(vec![ExtraField::PqcKemCiphertext(kem_ct_blob)]).serialize();
 
-    let tx_prefix = TransactionPrefix {
-        additional_timelock: Timelock::None,
-        inputs: vec![Input::ToKey {
-            amount: None,
-            key_offsets: vec![1],
-            key_image: CompressedPoint([0u8; 32]),
-        }],
-        outputs,
-        extra: extra_serialized,
-    };
-
-    let tx: Transaction<Pruned> = Transaction::V2 {
-        prefix: tx_prefix,
-        proofs: Some(PrunedProofs {
-            base: ProofBase {
-                fee: 0,
-                encrypted_amounts,
+    let tx = Transaction {
+        prefix: TxPrefix {
+            unlock_time: 0,
+            inputs: vec![Input::ToKey {
+                amount: 0,
+                key_offsets: vec![1],
+                key_image: [0u8; 32],
+            }],
+            outputs,
+            extra: extra_serialized,
+        },
+        ct: Ct::Fcmp {
+            fee: 0,
+            reference_block: [0u8; 32],
+            base: CtBase {
+                enc_amounts,
+                enc_labels,
                 commitments,
             },
-        }),
+            pqc_auths: vec![],
+            prunable: None,
+        },
     };
 
-    // We need the wire-level tx hash to put into `block.transactions`,
-    // but `Transaction<Pruned>::hash` doesn't exist (only
-    // `Transaction<NotPruned>` has `hash` — pruned txs are
-    // reconstructed from the block-level merkle path in real
-    // operation). For bench-fixture purposes the value of the
-    // tx-hash element of `block.transactions` is not read by
-    // `Scanner::scan` (only the count is, via the structural
-    // invariant in `scan.rs::InternalScanner::scan`), so a
-    // placeholder value is sufficient and structurally invariant
-    // across iterations.
+    // The scanner reads only the *count* of `block.transaction_hashes` (it
+    // must equal `transactions.len()`), never the hash values themselves, so
+    // a placeholder hash is structurally sufficient and invariant across
+    // iterations.
     let placeholder_tx_hash = [0xAAu8; 32];
 
     let header = BlockHeader {
-        hardfork_version: 1,
-        hardfork_signal: 0,
+        major_version: 1,
+        minor_version: 0,
         timestamp: 0,
         previous: [0u8; 32],
         nonce: 0,
+        curve_tree_root: [0u8; 32],
     };
 
-    // Minimal miner-tx: V2, single Input::Gen, no outputs (per the
-    // `make_synthetic_block` precedent in engine-core's test_support).
-    let miner_tx: Transaction<shekyl_oxide::transaction::NotPruned> = Transaction::V2 {
-        prefix: TransactionPrefix {
-            additional_timelock: Timelock::None,
+    // Minimal coinbase miner-tx: a sole `gen` input and a `Null` ct (§2.5),
+    // no outputs (per the `make_synthetic_block` precedent in engine-core's
+    // test_support).
+    let miner_tx = Transaction {
+        prefix: TxPrefix {
+            unlock_time: 0,
             inputs: vec![Input::Gen(0)],
             outputs: vec![],
             extra: vec![],
         },
-        proofs: None,
+        ct: Ct::Null(CtBase {
+            enc_amounts: vec![],
+            enc_labels: vec![],
+            commitments: vec![],
+        }),
     };
 
-    let block = Block::new(header, miner_tx, vec![placeholder_tx_hash])
-        .expect("Block::new accepts a V2 miner-tx + one tx hash");
+    let block = Block {
+        header,
+        miner_transaction: miner_tx,
+        transaction_hashes: vec![placeholder_tx_hash],
+    };
 
     ScannableBlock {
         block,
         transactions: vec![tx],
-        output_index_for_first_ringct_output: Some(0),
+        first_output_index: Some(0),
     }
 }
 
@@ -406,7 +413,39 @@ pub fn build_worst_case_scannable_block(
     n_outputs: usize,
     wallet_keys: &BenchWalletKeys,
 ) -> ScannableBlock {
-    assemble_scannable_block(n_outputs, &wallet_keys.wallet_kem_pk)
+    assemble_scannable_block(
+        n_outputs,
+        &wallet_keys.wallet_kem_pk,
+        &fake_spend_key_bytes(),
+    )
+}
+
+/// Build a [`ScannableBlock`] of `n_outputs` outputs addressed to a
+/// **caller-supplied recipient** — encapsulated to `recipient_kem` with the
+/// one-time output key derived against `recipient_spend_pub`.
+///
+/// Unlike [`build_worst_case_scannable_block`] (which targets the bench wallet
+/// with a placeholder spend key), this lets a caller target real key material —
+/// e.g. an archival persona's `(x25519_pk, ml_kem_ek)` and `spend_pk` — so a
+/// scanner built from the *matching* secrets recovers the output, and one built
+/// from any other secrets does not. Used to prove view-key/scanner adapters.
+///
+/// # Preconditions (test fixture — fails loud, does not return `Result`)
+///
+/// `recipient_kem` must be a valid hybrid KEM public key and `recipient_spend_pub`
+/// a torsion-free compressed Edwards point — i.e. the conditions
+/// [`shekyl_crypto_pq::output::construct_output`] requires. Any key material
+/// produced by a derivation path (`derive_archival_p_keys`, `make_bench_wallet`)
+/// satisfies this. Malformed input is a **test bug** and **panics** — the
+/// intended loud failure for a fixture; this is not a `Result`-returning API,
+/// because threading an impossible-in-tests error through every call site would
+/// add noise for no real branch.
+pub fn scannable_block_for_recipient(
+    n_outputs: usize,
+    recipient_kem: &HybridKemPublicKey,
+    recipient_spend_pub: &[u8; 32],
+) -> ScannableBlock {
+    assemble_scannable_block(n_outputs, recipient_kem, recipient_spend_pub)
 }
 
 /// Build a [`ScannableBlock`] whose single non-miner transaction
@@ -426,7 +465,7 @@ pub fn build_typical_case_scannable_block(n_outputs: usize) -> ScannableBlock {
     // wallet's view-pair never sees a matching view-tag, so every
     // output exits via fast-path rejection.
     let other = make_bench_wallet();
-    assemble_scannable_block(n_outputs, &other.wallet_kem_pk)
+    assemble_scannable_block(n_outputs, &other.wallet_kem_pk, &fake_spend_key_bytes())
 }
 
 #[cfg(test)]
@@ -494,7 +533,9 @@ mod tests {
             &out.commitment,
             &out.enc_amount,
             out.amount_tag,
-            out.view_tag_x25519,
+            &out.enc_label,
+            out.label_tag,
+            out.view_tag_prefilter,
             /* output_index */ 0,
         )
         .expect(
@@ -513,10 +554,9 @@ mod tests {
 
     #[test]
     fn typical_case_first_output_exits_via_view_tag_mismatch() {
-        // The on-chain view tag was computed from the OTHER wallet's
-        // X25519 SS; the bench wallet's view-pair derives a different
-        // view tag, so the wire-byte compare in scan_output_recover
-        // fails and the function returns Err before ML-KEM decap.
+        // The on-chain pre-filter tag was derived from the OTHER wallet's
+        // ML-KEM SS; after universal decap with the bench wallet's DK the
+        // tag compare fails and scan_output_recover returns Err before X25519.
         let wallet = make_bench_wallet();
         let other = make_bench_wallet();
         let out = first_output_data(&other.wallet_kem_pk);
@@ -530,7 +570,9 @@ mod tests {
             &out.commitment,
             &out.enc_amount,
             out.amount_tag,
-            out.view_tag_x25519,
+            &out.enc_label,
+            out.label_tag,
+            out.view_tag_prefilter,
             /* output_index */ 0,
         );
 
@@ -567,8 +609,8 @@ mod tests {
             );
         };
         assert!(
-            msg.contains("X25519 view tag mismatch"),
-            "expected view-tag-mismatch in DecapsulationFailed inner message; \
+            msg.contains("view tag pre-filter mismatch"),
+            "expected pre-filter mismatch in DecapsulationFailed inner message; \
              got {msg:?} — if this is a sibling DecapsulationFailed reason \
              (invalid ML-KEM ciphertext length, invalid decap key, ML-KEM \
              decap rejection) the typical-case fixture is mis-classified"
@@ -586,7 +628,7 @@ mod tests {
                 "worst-case block must contain exactly one non-miner tx"
             );
             assert_eq!(
-                sb.transactions[0].prefix().outputs.len(),
+                sb.transactions[0].prefix.outputs.len(),
                 n,
                 "worst-case block's non-miner tx output count must match requested N={n}"
             );
@@ -603,7 +645,7 @@ mod tests {
                 "typical-case block must contain exactly one non-miner tx"
             );
             assert_eq!(
-                sb.transactions[0].prefix().outputs.len(),
+                sb.transactions[0].prefix.outputs.len(),
                 n,
                 "typical-case block's non-miner tx output count must match requested N={n}"
             );

@@ -17,3 +17,15 @@ pub use proof::{ConsensusProof, ProofType};
 pub use randomx::RandomXProof;
 pub use registry::ConsensusRegistry;
 pub use types::{BlockHeader, ChainState, Difficulty};
+
+/// The minimum number of blocks a non-coinbase output is locked for before it is
+/// spendable.
+///
+/// Under Shekyl's FCMP++ design, outputs are proven against the full UTXO curve tree
+/// rather than individual decoy rings. This lock window prevents chain reorganizations
+/// from invalidating proofs that reference recently-added outputs. Brought native off
+/// the vendored `shekyl-oxide` in the un-vendor slice-2 dissolve.
+pub const DEFAULT_LOCK_WINDOW: usize = 10;
+
+/// The minimum number of blocks a coinbase output is locked for (coinbase maturity).
+pub const COINBASE_LOCK_WINDOW: usize = 60;

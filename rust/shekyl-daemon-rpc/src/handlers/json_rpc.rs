@@ -51,9 +51,6 @@ const RESTRICTED_METHODS: &[&str] = &[
     "sync_info",
     "prune_blockchain",
     "flush_cache",
-    "rpc_access_tracking",
-    "rpc_access_data",
-    "rpc_access_account",
 ];
 
 pub async fn handle(

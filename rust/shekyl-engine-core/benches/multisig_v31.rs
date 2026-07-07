@@ -23,9 +23,9 @@ fn bench_intent_hash(c: &mut Criterion) {
         reference_block_hash: [0xCC; 32],
         recipients: vec![IntentRecipient {
             address: vec![0x01; 4],
-            amount: 1_000_000_000,
+            amount: shekyl_units::AtomicUnits::from_raw(1_000_000_000),
         }],
-        fee: 1_000_000,
+        fee: shekyl_units::AtomicUnits::from_raw(1_000_000),
         input_global_indices: vec![12345],
         kem_randomness_seed: [0xDD; 32],
         chain_state_fingerprint: [0xEE; 32],
@@ -54,9 +54,9 @@ fn bench_intent_serialization(c: &mut Criterion) {
         reference_block_hash: [0xCC; 32],
         recipients: vec![IntentRecipient {
             address: vec![0x01; 4],
-            amount: 1_000_000_000,
+            amount: shekyl_units::AtomicUnits::from_raw(1_000_000_000),
         }],
-        fee: 1_000_000,
+        fee: shekyl_units::AtomicUnits::from_raw(1_000_000),
         input_global_indices: vec![12345],
         kem_randomness_seed: [0xDD; 32],
         chain_state_fingerprint: [0xEE; 32],
@@ -140,7 +140,7 @@ fn bench_chain_state_fingerprint(c: &mut Criterion) {
         reference_block_hash: [0xAA; 32],
         input_global_indices: (0..16).collect(),
         input_eligible_heights: (900..916).collect(),
-        input_amounts: vec![1_000_000; 16],
+        input_amounts: vec![shekyl_units::AtomicUnits::from_raw(1_000_000); 16],
         input_assigned_prover_indices: (0..16).map(|i| (i % 3) as u8).collect(),
     };
 

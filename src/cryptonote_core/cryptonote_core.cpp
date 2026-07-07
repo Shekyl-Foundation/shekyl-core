@@ -937,23 +937,15 @@ namespace cryptonote
   {
     size_t res = block_sync_size > 0 ? block_sync_size : BLOCKS_SYNCHRONIZING_DEFAULT_COUNT;
 
+    // Single source for the effective epoch length: the same clamped
+    // value the seed-epoch schedule itself uses (mainnet default, or
+    // the SEEDHASH_EPOCH_BLOCKS regtest override). This replaces an
+    // independent env parse with different clamp semantics (round-up,
+    // unbounded) that could let a sync batch span a seed-epoch
+    // boundary while the schedule silently ran the default.
     static size_t max_block_size = 0;
     if (max_block_size == 0)
-    {
-      const char *env = getenv("SEEDHASH_EPOCH_BLOCKS");
-      if (env)
-      {
-        int n = atoi(env);
-        if (n <= 0)
-          n = BLOCKS_SYNCHRONIZING_MAX_COUNT;
-        size_t p = 1;
-        while (p < (size_t)n)
-          p <<= 1;
-        max_block_size = p;
-      }
-      else
-        max_block_size = BLOCKS_SYNCHRONIZING_MAX_COUNT;
-    }
+      max_block_size = shekyl_pow_randomx_v2_seed_epoch_blocks();
     if (res > max_block_size)
     {
       static bool warned = false;
@@ -1012,10 +1004,13 @@ namespace cryptonote
         if(!ki.insert(std::get<txin_to_key>(in).k_image).second)
           return false;
       }
-      else if (std::holds_alternative<txin_stake_claim>(in))
+      else if (std::holds_alternative<txin_archival_serve_credit_response>(in))
       {
-        if(!ki.insert(std::get<txin_stake_claim>(in).k_image).second)
-          return false;
+        continue;
+      }
+      else if (std::holds_alternative<txin_archival_bond_post>(in))
+      {
+        continue;
       }
       else
       {
@@ -1031,7 +1026,9 @@ namespace cryptonote
   {
     for(const auto& in: tx.vin)
     {
-      if (std::holds_alternative<txin_stake_claim>(in))
+      if (std::holds_alternative<txin_archival_serve_credit_response>(in))
+        continue;
+      if (std::holds_alternative<txin_archival_bond_post>(in))
         continue;
       CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, tokey_in, false);
       for (size_t n = 1; n < tokey_in.key_offsets.size(); ++n)
@@ -1046,15 +1043,10 @@ namespace cryptonote
     std::unordered_set<crypto::key_image> ki;
     for(const auto& in: tx.vin)
     {
-      if (std::holds_alternative<txin_stake_claim>(in))
-      {
-        const auto& claim = std::get<txin_stake_claim>(in);
-        if (rct::ki2rct(claim.k_image) == rct::identity())
-          return false;
-        if (!(rct::scalarmultKey(rct::ki2rct(claim.k_image), rct::curveOrder()) == rct::identity()))
-          return false;
+      if (std::holds_alternative<txin_archival_serve_credit_response>(in))
         continue;
-      }
+      if (std::holds_alternative<txin_archival_bond_post>(in))
+        continue;
       CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, tokey_in, false);
       if (rct::ki2rct(tokey_in.k_image) == rct::identity())
         return false;
@@ -1820,10 +1812,10 @@ namespace cryptonote
     // for the {5400, 3600, 1800, 1200, 600}-second windows assume
     // SHEKYL_DAA_TARGET_SECONDS == 120. If T ever changes, both the
     // threshold and the expected counts must be re-derived per
-    // docs/design/DAA_LWMA1.md §11, not silently scaled. The regression
+    // docs/completed/DAA_LWMA1.md §11, not silently scaled. The regression
     // test that pins this calibration lives at
     // tests/unit_tests/stall_detection_calibration.cpp; see
-    // docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md §7.
+    // docs/completed/DAA_LWMA1_PHASE4_PREFLIGHT.md §7.
     static_assert(SHEKYL_DAA_TARGET_SECONDS == 120,
         "Stall-detection calibration: the 1/7200 false-positive "
         "threshold and the {45, 30, 15, 10, 5} expected-block counts "

@@ -1,0 +1,105 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# GF-7 no-emit guard — `docs/design/ARCHIVAL_BOND_2C_GF7_HOOKS.md` §4 / §6.4.
+#
+# The GF-7 measurement hooks are sim-facing against a modeled adversary,
+# never production telemetry. The containment is build-structural, three
+# layers; this workflow is the CI-mechanical half of layers 2 and 3
+# (layer 1 — the observer trait being inert by type — is a code property,
+# reviewed where the trait lives, `rust/shekyl-standoff/src/gf7.rs`):
+#
+#   layer 2 (dependency graph): the ONLY recording
+#     `BroadcastTimelineObserver` impl lives in `shekyl-staking-sim`, a
+#     standalone binary crate. Assert nothing in the workspace depends on
+#     it (the no-import guard, sibling of the DQ6 injectable-cadence
+#     discipline).
+#
+#   layer 3 (feature containment): the `gf7-hooks` feature is non-default
+#     and must never resolve on the normal/build edges of any crate except
+#     the sim. The release lane never enables it — `cmake/BuildRust.cmake`
+#     builds `-p shekyl-ffi` / `-p shekyl-daemon-image` with no
+#     `--features` — and this check catches *transitive* enablement (a
+#     manifest anywhere adding `shekyl-standoff` or `shekyl-engine-core`
+#     with the feature on). Dev edges are deliberately out of scope:
+#     test lanes may enable the feature (`cargo test --features
+#     gf7-hooks`); production artifacts resolve normal+build only.
+#
+# Feature enablement can only enter through a manifest or the lockfile, so
+# the trigger paths are the manifests — the check itself is metadata-only
+# (`cargo tree`), no compilation.
+
+name: ci/gf7-no-emit-guard
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "rust/**/Cargo.toml"
+      - "rust/Cargo.toml"
+      - "rust/Cargo.lock"
+      - ".github/workflows/gf7-no-emit-guard.yml"
+
+# Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
+concurrency:
+  group: gf7-no-emit-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  no-emit-guard:
+    name: "GF-7 hooks: dependency-graph + feature containment"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+
+      - name: "Layer 2: no crate depends on shekyl-staking-sim"
+        working-directory: rust
+        run: |
+          set -euo pipefail
+          # Inverse tree over ALL edge kinds (normal, build, dev): the sim
+          # must have no dependents at all — the only line cargo prints is
+          # the package itself.
+          INVERSE=$(cargo tree -q -i shekyl-staking-sim -e normal,build,dev)
+          echo "${INVERSE}"
+          COUNT=$(echo "${INVERSE}" | grep -c .)
+          if [ "${COUNT}" -ne 1 ]; then
+            echo "::error::shekyl-staking-sim has dependents — the GF-7 recording observer must stay in a crate no production code can reach (hooks-spec §4 layer 2)."
+            exit 1
+          fi
+          echo "OK: shekyl-staking-sim has no dependents."
+
+      - name: "Layer 3: gf7-hooks never resolves outside the sim (normal+build edges)"
+        working-directory: rust
+        run: |
+          set -euo pipefail
+          FAIL=0
+          for member in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name'); do
+            if [ "${member}" = "shekyl-staking-sim" ]; then
+              continue
+            fi
+            if cargo tree -q -p "${member}" -e normal,build,features | grep -q 'gf7-hooks'; then
+              echo "::error::${member} resolves the gf7-hooks feature on its production (normal/build) edges — release artifacts must compile the GF-7 emit path out (hooks-spec §4 layer 3)."
+              FAIL=1
+            fi
+          done
+
+          # Positive control: the sim itself MUST resolve the feature. This
+          # guards the guard — if the feature is renamed, the greps above go
+          # silently vacuous unless this line fails loudly.
+          if ! cargo tree -q -p shekyl-staking-sim -e normal,build,features | grep -q 'gf7-hooks'; then
+            echo "::error::positive control failed — shekyl-staking-sim no longer resolves gf7-hooks; the containment greps above are checking a stale feature name."
+            FAIL=1
+          fi
+
+          if [ "${FAIL}" -ne 0 ]; then
+            exit 1
+          fi
+          echo "OK: gf7-hooks resolves in shekyl-staking-sim only."

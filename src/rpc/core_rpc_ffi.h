@@ -50,7 +50,7 @@ void core_rpc_ffi_destroy(core_rpc_handle* h);
 // True if the wrapped server was created with restricted=true.
 bool core_rpc_ffi_is_restricted(const core_rpc_handle* h);
 
-// JSON REST endpoints (/get_info, /send_raw_transaction, etc.).
+// JSON REST endpoints (/get_info, /get_transactions, etc.).
 // Returns serialized JSON response body, or NULL if the URI is unknown.
 char* core_rpc_ffi_json_endpoint(core_rpc_handle* h,
     const char* uri, const char* body_json);

@@ -423,8 +423,6 @@ namespace cryptonote
      */
     bool get_miner_data(uint8_t& major_version, uint64_t& height, crypto::hash& prev_id, crypto::hash& seed_hash, difficulty_type& difficulty, uint64_t& median_weight, uint64_t& already_generated_coins, std::vector<tx_block_template_backlog_entry>& tx_backlog);
     uint64_t get_tx_volume_avg(uint64_t height) const;
-    uint64_t get_stake_ratio(uint64_t height) const;
-    uint64_t get_total_staked(uint64_t height) const;
 
     /**
      * @brief checks if a block is known about with a given hash
@@ -544,15 +542,6 @@ namespace cryptonote
      * @return true unless any blocks or transactions are missing
      */
     bool handle_get_objects(NOTIFY_REQUEST_GET_OBJECTS::request& arg, NOTIFY_RESPONSE_GET_OBJECTS::request& rsp);
-
-    /**
-     * @brief get number of outputs of an amount past the minimum spendable age
-     *
-     * @param amount the output amount
-     *
-     * @return the number of mature outputs
-     */
-    uint64_t get_num_mature_outputs(uint64_t amount) const;
 
     /**
      * @brief get the public key for an output
@@ -716,6 +705,20 @@ namespace cryptonote
      * @return true if the fee is enough, false otherwise
      */
     bool check_fee(size_t tx_weight, uint64_t fee) const;
+
+    /**
+     * @brief gets the current dynamic per-byte fee floor parameter
+     *
+     * The exact fee-floor parameter check_fee() gates on, extracted so the
+     * submit-shim fact snapshot (daemon_submit_ffi.cpp) marshals the same
+     * value the Phase-D check_fee re-gate consumes (DAEMON_SUBMIT_VERDICT.md
+     * §4.1, parity row P2). Reads per-block state; call under the same
+     * blockchain lock scope as the rest of the snapshot.
+     *
+     * @return the fee-per-byte floor parameter, or 0 if the block reward
+     *         computation failed (check_fee() returns false in that case)
+     */
+    uint64_t get_current_fee_per_byte() const;
 
     /**
      * @brief check that a transaction's outputs conform to current standards
@@ -1170,16 +1173,10 @@ namespace cryptonote
      */
     static crypto::hash compute_fcmp_verification_hash(const transaction& tx);
 
-    /**
-     * @brief validate a staking claim input
-     *
-     * @param claim the stake claim input to validate
-     * @param current_height the current blockchain height
-     * @param out_leaf_h_pqc optional output for the PQC leaf hash
-     *
-     * @return true if the claim is valid
-     */
-    bool check_stake_claim_input(const txin_stake_claim& claim, uint64_t current_height, uint8_t* out_leaf_h_pqc = nullptr) const;
+    bool check_archival_serve_credit_input(const txin_archival_serve_credit_response& resp,
+      uint64_t current_height) const;
+
+    bool check_archival_bond_post_input(const txin_archival_bond_post& bond) const;
 
 #ifndef IN_UNIT_TESTS
   private:
@@ -1230,16 +1227,6 @@ namespace cryptonote
     uint64_t m_long_term_effective_median_block_weight;
     mutable crypto::hash m_long_term_block_weights_cache_tip_hash;
     mutable epee::misc_utils::rolling_median_t<uint64_t> m_long_term_block_weights_cache_rolling_median;
-    // Cached state for incremental stake-ratio computation (component 3 inputs).
-    mutable bool m_stake_ratio_cache_initialized;
-    mutable uint64_t m_stake_ratio_cache_height;
-    mutable uint64_t m_stake_ratio_cache_total_staked;         // raw amounts (for stake_ratio), bounded by supply
-    mutable uint64_t m_stake_ratio_cache_total_weighted_lo;   // tier-weighted amounts (for accrual), low 64 bits
-    mutable uint64_t m_stake_ratio_cache_total_weighted_hi;   // tier-weighted amounts (for accrual), high 64 bits
-    mutable crypto::hash m_stake_ratio_cache_last_block_hash;
-    mutable std::unordered_map<uint64_t, uint64_t> m_stake_unlock_schedule;                              // raw per unlock height
-    mutable std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t>> m_stake_unlock_schedule_weighted; // weighted per unlock height (lo, hi)
-
     epee::critical_section m_difficulty_lock;
     crypto::hash m_difficulty_for_next_block_top_hash;
     difficulty_type m_difficulty_for_next_block;

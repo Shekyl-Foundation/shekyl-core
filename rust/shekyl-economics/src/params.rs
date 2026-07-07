@@ -6,6 +6,51 @@ include!(concat!(env!("OUT_DIR"), "/params_generated.rs"));
 
 pub const SCALE: u64 = GENERATED_SCALE;
 
+/// Total coin supply ceiling in atomic units (`money_supply` from
+/// `config/economics_params.json`). Exposed for structural-invariant
+/// validation in [`crate::activity::ActivityMetric::new`]
+/// (`circulating_supply ≤ MONEY_SUPPLY`).
+pub const MONEY_SUPPLY: u64 = GENERATED_MONEY_SUPPLY;
+
+/// Base staker emission share in fixed-point [`SCALE`] units
+/// (`shekyl_staker_emission_share`; `150_000` = 15%). This is the
+/// **base** share before the height-dependent decay in
+/// [`crate::emission_share::calc_effective_emission_share`]; consumers
+/// that need the effective share apply the decay themselves. Surfaced
+/// for the `EconomicsParametersSnapshot` rulebook (PR 7 §5.3 R2).
+pub const STAKER_EMISSION_SHARE: u64 = GENERATED_STAKER_EMISSION_SHARE;
+
+/// Per-year staker emission decay factor in fixed-point [`SCALE`] units
+/// (`shekyl_staker_emission_decay`; `900_000` = 0.90/year). Snapshot
+/// rulebook constant (PR 7 §5.3 R2).
+pub const STAKER_EMISSION_DECAY: u64 = GENERATED_STAKER_EMISSION_DECAY;
+
+/// Blocks per year at the configured DAA target
+/// (`shekyl_blocks_per_year`). Used with [`STAKER_EMISSION_DECAY`] to
+/// project the effective staker emission share at a height.
+pub const BLOCKS_PER_YEAR: u64 = GENERATED_BLOCKS_PER_YEAR;
+
+/// Calibration generation index for the resolved economic parameter set
+/// (**CALIBRATION-PENDING**).
+///
+/// The monotonic configuration-epoch tag surfaced through
+/// `CalibrationStamp::generation` (PR 7 §6.3 G5). At V3.0 it is a
+/// build-time constant, **not** a chain height: it increments on each
+/// pre-genesis testnet recalibration of `config/economics_params.json`,
+/// so a consumer holding an older snapshot can detect "estimate from
+/// generation N; current is N+1" without a bit-exact digest compare.
+///
+/// Pre-genesis the parameter set is still under calibration, so this
+/// starts at `0`. Bump it whenever the resolved `EconomicParams` change
+/// in a way operators should treat as a new epoch.
+///
+/// **Reopening criteria (`21-reversion-clause-discipline.mdc`):** at V3.x
+/// Component 3 adaptive burn may bind calibration epochs to heights
+/// (`generation_active_at(height)`); that is a FOLLOWUPS item and would
+/// move the generation out of this build-time constant into engine-held
+/// state. Until then it stays a constant.
+pub const CALIBRATION_GENERATION: u32 = 0;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EconomicParams {
     pub release_min: u64,

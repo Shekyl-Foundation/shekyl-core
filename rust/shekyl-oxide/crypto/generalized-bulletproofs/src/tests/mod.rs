@@ -1,6 +1,6 @@
 use rand_core::RngCore;
 
-use ciphersuite::{group::Group, Ciphersuite};
+use ciphersuite::{group::Group as _, Ciphersuite};
 
 use crate::{Generators, GeneratorsError};
 

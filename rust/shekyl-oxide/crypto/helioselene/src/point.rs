@@ -1,15 +1,16 @@
 use core::{
     iter::Sum,
-    ops::{Add, AddAssign, DerefMut, Mul, MulAssign, Neg, Sub, SubAssign},
+    ops::{Add, AddAssign, DerefMut as _, Mul, MulAssign, Neg, Sub, SubAssign},
 };
 
 use rand_core::RngCore;
 
-use subtle::{Choice, ConditionallyNegatable, ConditionallySelectable, ConstantTimeEq, CtOption};
 use zeroize::Zeroize;
+#[rustfmt::skip]
+use subtle::{Choice, CtOption, ConstantTimeEq, ConditionallySelectable, ConditionallyNegatable as _};
 
 use group::{
-    ff::{Field, PrimeField, PrimeFieldBits},
+    ff::{Field as _, PrimeField, PrimeFieldBits as _},
     prime::PrimeGroup,
     Group, GroupEncoding,
 };

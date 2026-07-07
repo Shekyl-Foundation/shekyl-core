@@ -1,0 +1,32 @@
+# cargo-audit configuration
+# See https://github.com/rustsec/rustsec/tree/main/cargo-audit
+#
+# This file MUST live at `.cargo/audit.toml` relative to the directory
+# `cargo audit` runs in (the `rust/` workspace root). cargo-audit only
+# auto-loads `.cargo/audit.toml`; a bare `audit.toml` is NOT read and any
+# ignores placed there are silently inert. Do not move this back to
+# `rust/audit.toml`.
+
+[advisories]
+# rand 0.8.5 -- RUSTSEC-2026-0097: unsound with custom logger using
+# `rand::rng()`. Does not apply to Shekyl: we use `OsRng` directly and
+# never call `rand::rng()` with a custom logger. No 0.8.x patch exists;
+# the 0.8 line is pulled transitively by vendored serai/ciphersuite.
+#
+# paste 1.0.15 -- RUSTSEC-2024-0436: unmaintained (not a vulnerability).
+# `paste` is a compile-time-only proc-macro for token concatenation; it
+# emits no runtime code and never appears in the shipped artifact. It is
+# pulled transitively only by `shekyl-shard-visual`'s `imageproc 0.25`
+# dependency, via two paths that both terminate at `imageproc`:
+#   imageproc -> nalgebra -> simba -> paste
+#   imageproc -> image (default features) -> ravif -> rav1e -> paste
+# Neither path is removable without dropping `imageproc` (a rasterizer
+# rewrite); our direct `image` dep is already `default-features = false,
+# features = ["png"]`, but `imageproc` re-enables image's defaults under
+# additive feature unification. The advisory is an "unmaintained" notice
+# with no known unsoundness, the dependency is not security- or
+# consensus-load-bearing (aesthetic shard previews only), and it executes
+# only at build time. Reopen when `imageproc`/`nalgebra` drop `paste`, or
+# when `shekyl-shard-visual` replaces `imageproc` with hand-rolled
+# rasterization.
+ignore = ["RUSTSEC-2026-0097", "RUSTSEC-2024-0436"]

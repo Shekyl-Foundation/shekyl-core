@@ -256,7 +256,6 @@ pub(crate) trait RefreshEngine: Send + Sync + 'static {
     /// state.
     ///
     /// [`LocalRefresh`]: super::super::LocalRefresh
-    #[allow(dead_code)] // C5 lands the first orchestrator-side dispatch through this method.
     #[allow(clippy::too_many_arguments)] // 6 explicit args is the Phase 0a binding form.
     fn produce_scan_result<D: DaemonEngine>(
         &self,

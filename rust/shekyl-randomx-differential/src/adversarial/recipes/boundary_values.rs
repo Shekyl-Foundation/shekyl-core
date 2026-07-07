@@ -7,7 +7,7 @@
 //! configuration constants.
 //!
 //! Per
-//! [`RANDOMX_V2_PHASE2H_PLAN.md`](../../../../../docs/design/RANDOMX_V2_PHASE2H_PLAN.md)
+//! [`RANDOMX_V2_PHASE2H_PLAN.md`](../../../../../docs/completed/RANDOMX_V2_PHASE2H_PLAN.md)
 //! Round 1 R1-D8 close, Category 3 recipes cite a specific V2
 //! configuration constant or boundary value (e.g.,
 //! `configuration.h:88 RANDOMX_FREQ_IADD_RS = ...`, `randomx.h:36

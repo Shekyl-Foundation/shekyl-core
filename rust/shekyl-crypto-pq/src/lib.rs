@@ -48,6 +48,9 @@ compile_error!(
 );
 
 pub mod account;
+pub mod address_derivation_freeze;
+pub mod archival_p;
+pub mod archival_p_freeze;
 pub mod bip39;
 pub mod derivation;
 pub mod error;
@@ -55,14 +58,14 @@ pub mod handle;
 pub mod kem;
 pub mod key_image;
 pub mod keys;
+pub mod label;
 pub mod montgomery;
 pub mod multisig;
 pub mod multisig_receiving;
 pub mod output;
+pub mod output_claim;
 pub mod signature;
-pub mod subaddress;
 pub mod wallet_envelope;
-pub mod wallet_state;
 
 pub use error::CryptoError;
 pub use shekyl_address as address;

@@ -77,19 +77,24 @@ endif()
 
 add_subdirectory(db_drivers)
 add_subdirectory(qrcodegen)
-add_subdirectory(randomx EXCLUDE_FROM_ALL)
+# external/randomx (v1) is no longer configured: its last linker
+# (cncrypto's rx-slow-hash.c) was deleted with the claim-era v1 hashing
+# machinery. The submodule itself stays checked out — tevador's v1 test
+# suite is the independent-provenance vector source for the RandomX v2
+# spec-anchor test work. Re-adding a build target requires a consumer.
 
 # RandomX v2 (Shekyl-Foundation fork) — out-of-tree build.
 #
-# Both external/randomx (v1.2.1) and external/randomx-v2 (v2.0.1)
-# declare project(RandomX) and add_library(randomx ...). CMake target
-# names and most CACHE variables are global within a single configure
-# run, so add_subdirectory(randomx-v2) after add_subdirectory(randomx)
-# above would produce a duplicate-target error. ExternalProject_Add
+# external/randomx-v2 (v2.0.1) declares project(RandomX) and
+# add_library(randomx ...) — the same names the v1 submodule used while
+# it was still configured (its add_subdirectory was removed with the
+# claim-era v1 hashing machinery; see the note above). ExternalProject_Add
 # builds the v2 fork in an isolated configure pass under
-# ${CMAKE_BINARY_DIR}/external/randomx-v2-build/, then exposes the
-# resulting static library plus its include directory through a
-# Shekyl-side IMPORTED target shekyl_randomx_v2.
+# ${CMAKE_BINARY_DIR}/external/randomx-v2-build/ — originally to avoid
+# the v1/v2 duplicate-target collision, still correct today because it
+# keeps the fork's global CACHE variables out of the parent configure —
+# then exposes the resulting static library plus its include directory
+# through a Shekyl-side IMPORTED target shekyl_randomx_v2.
 #
 # Patching the v2 fork's CMakeLists.txt is prohibited per
 # 10-shekyl-first.mdc (never contort upstream); see

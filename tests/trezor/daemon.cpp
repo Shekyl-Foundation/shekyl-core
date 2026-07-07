@@ -33,11 +33,37 @@ using namespace std;
 using namespace daemonize;
 namespace po = boost::program_options;
 
-bool mock_rpc_daemon::on_send_raw_tx_2(const cryptonote::COMMAND_RPC_SEND_RAW_TX::request& req, cryptonote::COMMAND_RPC_SEND_RAW_TX::response& res, const cryptonote::core_rpc_server::connection_context *ctx)
+bool mock_rpc_daemon::on_submit_transaction_2(const cryptonote::COMMAND_RPC_SUBMIT_TRANSACTION::request& req, cryptonote::COMMAND_RPC_SUBMIT_TRANSACTION::response& res, const cryptonote::core_rpc_server::connection_context *ctx)
 {
-  cryptonote::COMMAND_RPC_SEND_RAW_TX::request req2(req);
-  req2.do_not_relay = true;  // Do not relay in test setup, only one daemon running.
-  return cryptonote::core_rpc_server::on_send_raw_tx(req2, res, ctx);
+  // Test-only projection of the typed submit contract
+  // (DAEMON_SUBMIT_VERDICT.md §2.1): pool-admit without relay (single
+  // daemon in the test setup), mapped onto the verdict/cause strings the
+  // wallet's marshaling shim reads. Not the Rust admission engine — the
+  // trezor harness exercises device signing, not daemon admission.
+  (void)ctx;
+  std::string tx_blob;
+  if (!epee::string_tools::parse_hexstr_to_binbuff(req.tx_blob, tx_blob))
+  {
+    res.verdict = "rejected";
+    res.cause = "malformed";
+    return true;
+  }
+
+  cryptonote::tx_verification_context tvc{};
+  const bool accepted = m_core_ref.handle_incoming_tx(tx_blob, tvc, cryptonote::relay_method::none, false)
+      && !tvc.m_verifivation_failed;
+  if (accepted)
+  {
+    res.verdict = "accepted";
+  }
+  else
+  {
+    res.verdict = "rejected";
+    res.cause = tvc.m_double_spend ? "double_spend_conflict"
+              : tvc.m_fee_too_low  ? "fee_too_low"
+              : "malformed";
+  }
+  return true;
 }
 
 void mock_daemon::init_options(boost::program_options::options_description & option_spec)

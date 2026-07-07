@@ -5,9 +5,10 @@
 
 //! Shekyl FCMP++ wrapper crate.
 //!
-//! Wraps the upstream `shekyl-fcmp-plus-plus` crate with Shekyl-specific
-//! extensions: 4-scalar curve tree leaves `{O.x, I.x, C.x, H(pqc_pk)}`,
-//! Shekyl domain separators, and per-output PQC commitment integration.
+//! Wraps the first-party `shekyl-fcmp-proofs` crate (the FCMP++ SAL/membership
+//! proof system) with Shekyl-specific extensions: 4-scalar curve tree leaves
+//! `{O.x, I.x, C.x, H(pqc_pk)}`, Shekyl domain separators, and per-output PQC
+//! commitment integration.
 
 #![deny(unsafe_code)]
 
@@ -28,8 +29,8 @@ pub use tree::{
     TreeOp, HELIOS_CHUNK_WIDTH, LEAF_CHUNK_SCALARS, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
 };
 
-pub use shekyl_fcmp_plus_plus::sal::SpendAuthAndLinkability;
-pub use shekyl_fcmp_plus_plus::{Input, Output};
+pub use shekyl_fcmp_proofs::sal::SpendAuthAndLinkability;
+pub use shekyl_fcmp_proofs::{Input, Output};
 
 /// Domain separator for Shekyl's PQC leaf hash: H(pqc_pk) -> 4th scalar.
 pub const DOMAIN_PQC_LEAF: &[u8] = b"shekyl-pqc-leaf";

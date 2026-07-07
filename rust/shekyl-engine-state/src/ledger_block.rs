@@ -10,8 +10,7 @@
 //! `.wallet` side of the two-file wallet envelope (commits 2d–2g):
 //!
 //! * [`LedgerBlock`] — this module: on-chain-derived scanner state.
-//! * `BookkeepingBlock` (2e) — subaddress registry, labels, address book,
-//!   account tags.
+//! * `BookkeepingBlock` (2e) — primary label and external address book.
 //! * `TxMetaBlock` (2f) — per-transaction keys, notes, attributes, and
 //!   the scanned-pool cache.
 //! * `SyncStateBlock` (2g) — unconfirmed / confirmed tx tracking plus
@@ -36,18 +35,15 @@
 //!
 //! # What is *not* in this block
 //!
-//! * `StakerPoolState` — the scanner's per-block accrual cache is
-//!   explicitly **not** persisted in `LEDGER_BLOCK_VERSION = 1`. The
-//!   daemon RPC can rebuild it by replaying the scan range, and
-//!   persisting it would couple the wallet's ledger schema to the
-//!   staking accounting format. If a future UX benchmark shows that
-//!   the RPC-refill cost is unacceptable, a follow-up block version
-//!   can add it without migrating existing wallets (the version gate
-//!   will refuse a 1-vs-2 mismatch, forcing users to rescan once).
+//! * Runtime lookup indexes (`LedgerIndexes`) — rebuilt from this block
+//!   at open; never persisted. (The claim-era `StakerPoolState` accrual
+//!   cache that once shared this note was retired with the
+//!   confidential-staking sweep.)
 
 use serde::{Deserialize, Serialize};
+use shekyl_units::AtomicUnits;
 
-use crate::{error::WalletLedgerError, subaddress::SubaddressIndex, transfer::TransferDetails};
+use crate::{error::WalletLedgerError, transfer::TransferDetails};
 
 /// Schema version of the ledger block.
 ///
@@ -62,15 +58,19 @@ use crate::{error::WalletLedgerError, subaddress::SubaddressIndex, transfer::Tra
 /// - Version `2` was the pre-M3b shape: each `TransferDetails`
 ///   persisted `combined_shared_secret`, `ho`, `y`, `z`, `k_amount`
 ///   inline as the canonical re-derivation source.
-/// - Version `3` (this version) adds
-///   `TransferDetails::source_ciphertext` and
-///   `TransferDetails::output_handle`, the M3b deterministic-handle
-///   pathway's persisted state. The pre-M3b secret-bearing fields
-///   remain alongside the new fields transitionally; M3c's
-///   `TxInputSigningContext` swap (per
-///   `STAGE_1_PR_3_MIGRATION_PLAN.md` §3.3) flips the source of truth
-///   to the new fields, and M3d/M3e remove the legacy fields,
-///   triggering further version bumps each time.
+/// - Version `3` adds `TransferDetails::source_ciphertext` and
+///   `TransferDetails::output_handle` (M3b deterministic-handle pathway).
+/// - Version `4` removes the M3a–M3c per-output secret fields from
+///   `TransferDetails` (M3d).
+/// - Version `5` removes `TransferDetails::subaddress` per FA-2 End-state 5
+///   (`SUBADDRESS_UNDER_PQC.md` §5.7.4).
+/// - Version `6` adds `TransferDetails::receive_attribution`
+///   (FA-8, §5.7.9).
+/// - Version `7` retires the confidential-staking (claim-era) fields
+///   (PR-3 of the staking sweep).
+/// - Version `8` (this version) adds
+///   `TransferDetails::awaiting_confirmation` — the F14 persisted
+///   awaiting-confirmation lock (`DAEMON_SUBMIT_VERDICT.md` §2.6).
 ///
 /// Any field addition / removal / renaming inside the block, or any
 /// transitive change in a nested type's serialized shape, bumps this;
@@ -78,7 +78,7 @@ use crate::{error::WalletLedgerError, subaddress::SubaddressIndex, transfer::Tra
 /// the `.cursor/rules/15-deletion-and-debt.mdc` "no in-Shekyl
 /// migration code" rule (Shekyl is pre-genesis; `rm -rf ~/.shekyl` is
 /// the migration path).
-pub const LEDGER_BLOCK_VERSION: u32 = 4;
+pub const LEDGER_BLOCK_VERSION: u32 = 8;
 
 /// Maximum number of `(height, hash)` pairs the scanner should keep in
 /// [`ReorgBlocks`]. The value is informational — the persistence layer
@@ -265,58 +265,21 @@ impl LedgerBlock {
             .map(|(_, hash)| hash)
     }
 
-    /// Get staked outputs that have unclaimed reward backlog.
-    pub fn claimable_outputs(&self, current_height: u64) -> Vec<&TransferDetails> {
-        self.transfers
-            .iter()
-            .filter(|td| td.has_claimable_rewards(current_height))
-            .collect()
-    }
-
-    /// Get staked outputs that are eligible for unstaking (matured,
-    /// unspent).
-    pub fn unstakeable_outputs(&self, current_height: u64) -> Vec<&TransferDetails> {
-        self.transfers
-            .iter()
-            .filter(|td| td.is_unstakeable(current_height))
-            .collect()
-    }
-
-    /// Get unspent, unfrozen transfers.
+    /// Get unspent, unfrozen transfers whose spend is not already
+    /// network-exposed.
+    ///
+    /// Outputs under an F14 awaiting-confirmation lock (§2.6) are excluded,
+    /// matching [`TransferDetails::is_spendable`]: their spend is already
+    /// broadcast, so treating them as unspent/available would invite a second
+    /// tx bearing the same key image (the §7.1 self-linkage the lock prevents).
     pub fn unspent_transfers(&self) -> Vec<&TransferDetails> {
         self.transfers
             .iter()
-            .filter(|td| !td.spent && !td.frozen)
+            .filter(|td| !td.spent && !td.frozen && td.awaiting_confirmation.is_none())
             .collect()
     }
 
-    /// Get staked outputs (all states).
-    pub fn staked_outputs(&self) -> Vec<&TransferDetails> {
-        self.transfers
-            .iter()
-            .filter(|td| td.staked && !td.spent)
-            .collect()
-    }
-
-    /// Get matured staked outputs (lock period expired, still
-    /// unspent).
-    pub fn matured_staked_outputs(&self, current_height: u64) -> Vec<&TransferDetails> {
-        self.transfers
-            .iter()
-            .filter(|td| td.is_matured_stake(current_height) && !td.spent)
-            .collect()
-    }
-
-    /// Get locked staked outputs (still within lock period).
-    pub fn locked_staked_outputs(&self, current_height: u64) -> Vec<&TransferDetails> {
-        self.transfers
-            .iter()
-            .filter(|td| td.is_locked_stake(current_height) && !td.spent)
-            .collect()
-    }
-
-    /// Get spendable outputs with optional subaddress / amount
-    /// filters.
+    /// Get spendable outputs with an optional minimum-amount filter.
     ///
     /// Only returns outputs where `current_height >= eligible_height`
     /// — the daemon has no curve-tree path for immature outputs, so
@@ -324,8 +287,7 @@ impl LedgerBlock {
     pub fn spendable_outputs(
         &self,
         current_height: u64,
-        subaddress: Option<SubaddressIndex>,
-        min_amount: Option<u64>,
+        min_amount: Option<AtomicUnits>,
     ) -> Vec<(usize, &TransferDetails)> {
         self.transfers
             .iter()
@@ -333,11 +295,6 @@ impl LedgerBlock {
             .filter(|(_, td)| {
                 if !td.is_spendable(current_height) {
                     return false;
-                }
-                if let Some(sub) = subaddress {
-                    if td.subaddress != Some(sub) {
-                        return false;
-                    }
                 }
                 if let Some(min) = min_amount {
                     if td.amount() < min {
@@ -358,29 +315,6 @@ impl LedgerBlock {
     /// (`key`, `key_image`).
     pub fn transfer_mut(&mut self, idx: usize) -> Option<&mut TransferDetails> {
         self.transfers.get_mut(idx)
-    }
-
-    /// Set staking info for a transfer at the given index.
-    pub fn set_staking_info(&mut self, transfer_idx: usize, tier: u8) {
-        if let Some(td) = self.transfers.get_mut(transfer_idx) {
-            td.staked = true;
-            td.stake_tier = tier;
-            let lock_blocks = shekyl_staking::tiers::tier_by_id(tier)
-                .map(|t| t.lock_blocks)
-                .unwrap_or(0);
-            td.stake_lock_until = td.block_height + lock_blocks;
-        }
-    }
-
-    /// Update the claim watermark for a staked output identified by
-    /// global output index. No-op if no staked output matches.
-    pub fn update_claim_watermark(&mut self, global_output_index: u64, to_height: u64) {
-        for td in &mut self.transfers {
-            if td.staked && td.global_output_index == global_output_index {
-                td.last_claimed_height = to_height;
-                return;
-            }
-        }
     }
 
     /// Freeze an output by its [`Self::transfers`] index, preventing
@@ -417,32 +351,33 @@ mod tests {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
     use proptest::prelude::*;
     use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
-    use shekyl_oxide::primitives::Commitment;
+    use shekyl_curve_primitives::Commitment;
 
-    use crate::{payment_id::PaymentId, subaddress::SubaddressIndex, transfer::SPENDABLE_AGE};
+    use crate::{payment_id::PaymentId, transfer::SPENDABLE_AGE};
 
     fn sample_transfer(seed: u8) -> TransferDetails {
         let tx_hash = [seed; 32];
         let internal_output_index = u64::from(seed);
         TransferDetails {
-            tx_hash,
+            tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
             internal_output_index,
             global_output_index: 1_000 + u64::from(seed),
             block_height: 100,
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1_000_000 + u64::from(seed)),
-            subaddress: Some(SubaddressIndex::new(u32::from(seed))),
             payment_id: Some(PaymentId([seed; 8])),
             spent: false,
             spent_height: None,
             key_image: Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
                 [seed ^ 0xFF; 32],
             )),
-            staked: false,
-            stake_tier: 0,
-            stake_lock_until: 0,
-            last_claimed_height: 0,
+            // Exercise the Some leg of the F14 lock in the round-trip
+            // tests; the None leg is covered by every other fixture.
+            awaiting_confirmation: Some(crate::transfer::AwaitingConfirmation {
+                tx_hash: shekyl_types::TxHash::from_bytes([seed.wrapping_add(4); 32]),
+                accepted_at_height: 100 + u64::from(seed),
+            }),
             // Post-M3d: per-output secrets are no longer persisted on
             // `TransferDetails`; the M3b deterministic-handle pathway
             // (`source_ciphertext`, `output_handle`) carries the
@@ -461,6 +396,7 @@ mod tests {
             eligible_height: 100 + SPENDABLE_AGE,
             frozen: false,
             fcmp_precomputed_path: None,
+            receive_attribution: crate::ReceiveAttribution::default(),
         }
     }
 
@@ -523,6 +459,10 @@ mod tests {
                     t.key_image,
                     t.source_ciphertext.clone(),
                     t.output_handle,
+                    // F14 (§2.6): the awaiting-confirmation lock is
+                    // persisted — a restart between accept and
+                    // confirmation must not resurrect spendability.
+                    t.awaiting_confirmation.clone(),
                 )
             })
             .collect();
@@ -537,6 +477,14 @@ mod tests {
             assert_eq!(t.global_output_index, orig.2);
             assert_eq!(t.amount(), orig.3);
             assert_eq!(t.key_image, orig.4);
+            assert_eq!(
+                t.awaiting_confirmation, orig.7,
+                "F14 lock must survive the persistence round-trip"
+            );
+            assert!(
+                t.awaiting_confirmation.is_some(),
+                "fixture exercises the Some leg"
+            );
             assert_eq!(
                 t.source_ciphertext.as_ref().map(|c| &c.x25519),
                 orig.5.as_ref().map(|c| &c.x25519)

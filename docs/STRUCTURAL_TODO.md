@@ -1,9 +1,20 @@
-# Structural TODOs — shekyl-core
+# Structural reference & reviewer rubric — shekyl-core
 
-Open structural weaknesses in shekyl-core. Items tracked here survive
-branch switches. Resolved items have been moved to
-`docs/audit_trail/` (see `RESOLVED_260419.md` for the April 2026
-sweep); git history is the authoritative archive of the code changes.
+> **This is no longer an open-todo tracker.** As of 2026-05-30, open
+> structural-debt *tracking* (status, target version, disposition) lives
+> in a single place — [`docs/FOLLOWUPS.md`](./FOLLOWUPS.md). This document
+> is retained for the **reviewer-facing reference material** that other
+> docs and code comments cite as canonical: the 32-bit "bit-width
+> carve-out without coverage" security argument and its **migration-on-
+> touch rubric** (referenced by `docs/CHANGELOG.md`, `docs/USER_GUIDE.md`,
+> `contrib/depends/README.md`, `docs/CPP_INHERITANCE_INVENTORY.md`, the
+> four 32-bit tripwire comment blocks, and `FOLLOWUPS.md`), the
+> `rct::`/`ct::` naming reference, the C++ alternative-tokens decision,
+> the deliberately-coupled test-surface items, and the upstream-technique
+> tracking table. Resolved items have been swept to `docs/audit_trail/`
+> (see `RESOLVED_260419.md`); git history is the authoritative archive of
+> the code changes. **Adding a new open todo? Put it in `FOLLOWUPS.md`,
+> not here.**
 
 > **Framing note (April 2026).** Several decisions below cite "upstream
 > Monero cherry-pick risk" as a constraint. The merge base with
@@ -41,47 +52,11 @@ merits, tracked in `docs/FOLLOWUPS.md` §"Re-examine `/FIiso646.h` and
 
 ## Third-Party / Dependency Issues
 
-### `libunbound` completely stubbed on MSVC
-**Priority**: Medium — feature regression on Windows.
-**Target**: V3.2 (pick one of the three options below).
-
-`dns_utils.cpp` is wrapped in `#ifdef HAVE_DNS_UNBOUND` with no-op stubs
-in the `#else` branch. This means wallet DNS resolution (OpenAlias
-address lookup, DNS checkpoint fetching) silently does nothing on
-MSVC/Windows builds. Options:
-
-1. Port `libunbound` to vcpkg (it exists in some forks).
-2. Implement a Windows-native DNS backend using `DnsQuery_A` /
-   `DnsQueryEx`.
-3. Accept the limitation — the GUI wallet may not need CLI-style DNS
-   features, and Tor/I2P transports are independent of this.
-
-Option 3 is the lowest-effort path and arguably the right call for
-Shekyl's GUI-wallet-first posture, but the decision has not been
-ratified. Defer to V3.2 for a design pass; whichever option wins, the
-`#else` stubs should gain a comment that declares the contract
-explicitly rather than silently returning empty strings.
-
-### MSVC warnings in vendored dependencies
-**Priority**: Low — external code, but worth tracking.
-**Target**: V3.2 (address the dangling-pointer case; others are
-cosmetic and may stay open).
-
-MSVC CI reveals several warnings in vendored/external code:
-
-- **`liblmdb/mdb.c:1745`** — C4172: returning address of local `buf`
-  (dangling pointer — genuine bug, but in a debug-only code path).
-  This one deserves an upstream bug report and a local patch if
-  upstream is unresponsive.
-- **`liblmdb/mdb.c:8417`** — C4333: right shift too large (data loss).
-- **`liblmdb/mdb.c:939,7840`** — C4146: unsigned negation.
-- **`randomx/blake2.h:82,84`** — C4804: bool used in division.
-
-None are in hot paths for wallet-core. The `liblmdb` dangling pointer
-is the only one with genuine correctness risk; the rest are warnings
-MSVC raises on patterns other compilers accept silently. Patch
-upstream where possible; otherwise, carry a local diff and note it in
-`contrib/` or the relevant `external/` README.
+> **`libunbound` MSVC stub, MSVC vendored-code warnings, and vcpkg
+> manifest-mode migration moved to [`docs/FOLLOWUPS.md`](./FOLLOWUPS.md)
+> §"V3.2 — Rust cutover and cleanup" (MSVC / Windows build-debt cluster,
+> 2026-05-30).** They were open todos, not reviewer reference; open-debt
+> tracking now lives in one place.
 
 ### 32-bit targets cannot safely run Shekyl, and the wider "bit-width carve-out without coverage" pattern
 **Priority**: **High** — the 32-bit branches of the PQC pair
@@ -468,20 +443,6 @@ Cross-refs:
   the actual MSYS2 CI repair). CI runs `24720803048`,
   `24723150982`, `24728543538` trace the misdiagnosis-to-fix arc.
 
-### vcpkg builds take 45+ minutes — partially resolved
-**Priority**: Low — CI timing is acceptable with warm caches.
-**Target**: V3.3 (manifest-mode migration, if it happens).
-
-Even with `actions/cache` for binary packages, the vcpkg install step
-takes 45+ minutes on cold runs and 10-15 minutes on warm cache hits. A
-root `vcpkg.json` manifest was attempted (April 2026) but broke MSVC
-CI and was reverted; packages are listed explicitly in
-`.github/workflows/build.yml`. A manifest-mode migration remains
-possible but is low priority — CI timing is acceptable with warm
-caches, and the explicit YAML list is easier to audit. No action
-required unless CI times degrade or the package list grows
-significantly.
-
 ---
 
 ## Test Surface
@@ -559,8 +520,9 @@ audit finding.
 
 ### `rct_signatures` field name is a Monero-era misnomer — partially addressed
 **Priority**: Low — cosmetic, but misleading.
-**Target**: V4 (full namespace rename deferred; revisit for V3.2
-scheduled in `docs/FOLLOWUPS.md`).
+**Target**: V3.2 Phase 5 (`wallet2.cpp` retirement). **Disposition pin:**
+[`docs/design/CT_SURFACE_NAMING_PIN.md`](./design/CT_SURFACE_NAMING_PIN.md)
+(2026-06-09). No rename PR before cutover; Rust vocabulary effective now.
 
 `transaction::rct_signatures` (typed `rct::rctSig`) no longer holds ring
 signatures. In Shekyl v3, the only accepted types are `RCTTypeNull`
@@ -577,13 +539,12 @@ All ring signature types (`RCTTypeFull`, `RCTTypeSimple`, `RCTTypeCLSAG`,
 deserialization. The name "rct" (Ring Confidential Transactions) is
 misleading since the ring component no longer exists.
 
-**Status (April 2026):** `using ct_signatures = rct::rctSig;` type alias
-added in `cryptonote_basic.h`. New code should use `ct_signatures` for
-the type. The full caller migration and `rct::` namespace rename to
-`ct::` are deferred to V4. The rationale cited "end of Monero upstream
-cherry-picks" as a trigger; per the framing note above that cost is
-largely notional, and the decision is scheduled for a V3.2 revisit
-tracked in `docs/FOLLOWUPS.md`.
+**Status (April 2026, revised June 2026):** `using ct_signatures =
+rct::rctSig;` in `cryptonote_basic.h` fixes **RCT → CT** (no ring). It does
+**not** fix **signatures** in the verifier module name — `rctSigs` targets
+`ct_semantics`, not `ct_signatures`. Three surfaces (wire tags, C++ ids,
+Rust/FFI) have different timing; see the pin. C++ rename triggers on
+`wallet2` gone; new Rust code uses Shekyl-native names and maps at FFI.
 
 The `rct::` namespace (`src/fcmp/rctTypes.h`, `rctOps.h`, `rctSigs.h`)
 has the same problem — it was renamed from `ringct/` to `fcmp/` at the
