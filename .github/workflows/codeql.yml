@@ -66,7 +66,7 @@ jobs:
   analyze-cpp:
     name: Analyze C/C++
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 30
     permissions:
       security-events: write
       contents: read
@@ -74,32 +74,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          # Buildless extraction never compiles the tree, but `src/` headers
+          # still #include vendored headers (lmdb.h, boost, …); keeping the
+          # submodules present lets the extractor resolve those includes and
+          # extract `src/` at full fidelity. External sources are dropped from
+          # results via `paths-ignore` in .github/codeql/config.yml, not by
+          # withholding them from the checkout.
           submodules: recursive
-
-      - name: Install Rust toolchain
-        # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
-        # auto-install race in the daemon build). Bump both together.
-        uses: dtolnay/rust-toolchain@1.94.0
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config \
-            libboost-all-dev libssl-dev libunbound-dev \
-            libsodium-dev libhidapi-dev libprotobuf-dev protobuf-compiler \
-            libusb-1.0-0-dev libudev-dev libreadline-dev
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: c-cpp
+          # Buildless C/C++ extraction (no compiler trace). This is what makes
+          # `paths-ignore: external/**` effective: the config-file path filters
+          # only apply to compiled languages analyzed WITHOUT a build (per the
+          # CodeQL "Specifying directories to scan" docs). A trace-based build
+          # would ignore `paths-ignore` and re-surface the vendored `external/`
+          # highs. The consensus/crypto/amount logic that would justify a deep
+          # trace-based build now lives in Rust (shekyl-units, -consensus,
+          # -difficulty, -economics, -wire, -fcmp*, -crypto-pq, …), covered by
+          # the separate `analyze-rust` job; C/C++ `src/` is daemon/RPC/LMDB
+          # orchestration with zero open Shekyl-owned CodeQL highs. Reversion
+          # (rule 21): restore a trace-based build if a real `src/` high ever
+          # appears that buildless would miss, or if a substantial
+          # non-migrated C++ subsystem grows.
+          build-mode: none
           config-file: ./.github/codeql/config.yml
-
-      - name: Configure and Build C++
-        run: |
-          mkdir -p build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
-          cmake --build . -- -j$(nproc)
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4

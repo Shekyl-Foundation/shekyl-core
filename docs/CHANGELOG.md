@@ -485,16 +485,26 @@
 
 ### Changed
 
-- **ci: CodeQL ignores vendored `external/` code**
-  (`.github/codeql/config.yml`). Added `paths-ignore: [external]` so the
-  scanner no longer reports on third-party vendored deps (LMDB,
-  qrcodegen, RandomX, unbound, …), which Shekyl never patches in place.
-  Clears the standing vendored highs (`external/db_drivers/liblmdb/mdb.c`
-  integer-multiplication/wider-type-comparison,
-  `external/qrcodegen/QrCode.cpp`) while keeping those queries live on
-  Shekyl-owned `src/` and `rust/`. Generalizes the per-id
-  `cpp/upcast-array-pointer-arithmetic` filter; prevents dev→main release
-  PRs from re-attributing pre-existing library alerts as PR-introduced.
+- **ci: CodeQL C/C++ runs buildless; ignores vendored `external/` code**
+  (`.github/workflows/codeql.yml`, `.github/codeql/config.yml`). Switched
+  the `analyze-cpp` job to `build-mode: none` and added `paths-ignore:
+  ['external/**']`. The path filter is the goal — dropping the standing
+  vendored highs in `external/db_drivers/liblmdb/mdb.c`
+  (`cpp/integer-multiplication-cast-to-long`,
+  `cpp/comparison-with-wider-type`) and `external/qrcodegen/QrCode.cpp`,
+  which Shekyl never patches in place — but config-file `paths-ignore`
+  only applies to a compiled language analyzed without a build, so the
+  buildless switch is what makes it effective (a trace-based build
+  silently ignores it). Those queries stay live on Shekyl-owned `src/`;
+  the crypto/consensus/amount logic that once justified a deep
+  trace-based build now lives in Rust (covered by the separate
+  `analyze-rust` job), and C/C++ `src/` currently has zero open
+  Shekyl-owned CodeQL highs. Side benefit: drops the ~150-minute C++
+  build from CI. Prevents dev→main release PRs from re-attributing
+  pre-existing library alerts as PR-introduced. The pre-existing per-id
+  `query-filters` (`rust/hard-coded-cryptographic-value`,
+  `cpp/upcast-array-pointer-arithmetic`) are unchanged and remain a
+  distinct, results-stage safety net.
 
 ### Documentation
 
