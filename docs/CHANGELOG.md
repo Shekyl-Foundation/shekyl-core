@@ -150,6 +150,201 @@
   before there is anything to guard), then helper + threading, wire
   positivity + corpus fix in the same commit, KATs + C++ store
   tests, tripwire scripts last.
+- **sim: GF-7 graded genesis gate — WI-4 (PROVISIONAL-PASS, local-daemon
+  posture only)** (`ARCHIVAL_BOND_WI4_MEASUREMENT.md`;
+  `IMPLEMENTATION_INDEX.md` §4 WI-4 row). The GF-7 principal↔`P`
+  funding-seam unlinkability property is now *measured*, not just hooked.
+  The a-priori bound `r = P(link)·N < 2` (the modeled observer may at most
+  double blind guessing) is committed in the reviewed acceptance doc
+  **before** any grading code (§3; provenance settled §13.4), then graded
+  by a real S-3 correlator replacing the `nearest_principal` placeholder
+  (`shekyl-staking-sim/src/gf7_timeline.rs`, `--gf7-timeline`). The
+  2026-07-06 adversarial review re-grade hardened the round: the observer
+  is **posture-conditioned** (§4.1.1 — session/refresh markers are
+  loopback-invisible under the local-daemon posture and excluded as direct
+  anchors; the **remote/non-isolated-daemon posture is a named unmet
+  residual** on the verdict, D-B1 2d-2 reopen family; the *indirect*
+  session channel is coupled in the generator and graded — blind `0.237`
+  at window 0 → `≈0.13` under full jitter); the stress arm is an
+  **oracle-panel** with an exact seam-consistency-gated member (§4.3.1;
+  `lr > s3` on every gate row); the **D-B3 resume channel** is swept
+  (session-lattice resubmit, `r = 1.57`, under bound). Controls valid;
+  every gate-relevant row clears the bound on all three arms; worst gate
+  row `r = 1.86` (honestly thin margin; per §4.3.1's pinned ceiling the
+  margin holds against the strongest observer of the *modeled* channel,
+  not the strongest adversary). **Cold-start reclassified:**
+  low-activity **fails** the bound (panel `r = 3.54`) and is the genesis
+  regime — disposition is the **§14 founder-cover launch posture** (refuse
+  the regime: production-path-identical staggered founder cover under
+  permanent consented attributability; shard-schedule structural gate;
+  §14.4 partition-adversary arm spec-committed with a-priori bounds and a
+  pre-implementation-widened hypothesis class — max-statistic over a named
+  rule family vs the permutation null of the maximized statistic, one
+  marked control per failure mode; implementation gated on review).
+  **Remote-daemon disposition made explicit (§15, proposed, review-gated):**
+  structural refusal at the dispatch driver rather than a warned override
+  — privacy is not a setting; tunneled circumvention the named residual;
+  reversion on a measured decorrelated remote transport.
+  **Mechanization addendum (§16, proposed, review-gated):** the launch
+  posture converted from policy to structure under the global-and-blind
+  constraint (mechanisms sort on structure, never identity). M1 —
+  reward-eligibility-by-shard-count as a genesis-frozen consensus rule
+  (zero accrual pre-`K_COVER`, not deferred payout; shard count verified
+  at source as a deterministic monotone function of height; refuses the
+  cold-start claim-cohort hazard in the same window) — is the build-first
+  item and gets its own design round, with two obligations pinned for
+  that round: the activation-boundary consensus test as a first-class
+  deliverable (the once-firing rule's boundary is never re-exercised at
+  runtime), and `K_COVER` finalization gated on the §14.4 widened-class
+  measurement (rule shape specs immediately; the constant waits on the
+  cover model that measurement validates). Three closing pins (§13.5,
+  §14.4, §16.10): the sealed claim stays conditional by construction
+  (isolation conditioning never discharges — two-of-three-measured is
+  not three-of-three-cleared); the partition arm's output feeds two
+  consumers with opposite dispositions (distinguishability fail ⇒
+  posture redesign; sound-but-thin cover ⇒ `K_COVER` calibrates
+  higher); and the §§14–16 review closure is held to an adversarial
+  read of the bounds themselves, not a consistency check. M3/M7 CI enumerations (gate-11 /
+  F25 shape), M4 global launch-window bond rate cap (WI-3 D-B2), M5
+  never-serialized `PublicByConsent` marker, M6 generator-coupling
+  control (blind@window-0 ≥ 2× chance or INVALID) + leg-(b) wall-clock
+  emission. Irreducible three named.
+  **Review-closure round R1 conducted (§17, 2026-07-06; ratification
+  pending):** the three §16.10 attacks run to land, each answered
+  attack-shaped on the record. Attack 1: `r < 2` survives
+  (claim-anchored, observer-independent) but measured `r(N)` is only
+  known at `N = 10` — **N-sweep added** (§16.7 item 4, `r < 2` at every
+  swept `N`, a-priori). Attack 2: the widened family was still a proper
+  subset — **members 4–5 added** (spectral graph partition; seeded
+  nearest-neighbor expansion with one granted founder label), and two
+  label-free channels closed: M3 extended to the **full persona
+  lifecycle** (claim-absence sorts non-claiming founders, §16.4/§14.3.4)
+  and **P4 gains a non-disclosure commitment** (consent-to-risk ≠
+  license-to-disclose; enumeration collapses recorded cover
+  *retroactively* — §14.3.4, founder-strip sensitivity row in the
+  `K_COVER` cover model). Attack 3: the `K_COVER` cycle traced and
+  **does not close** — the validation projection is `K`-independent
+  (the breaking joint), the calibration projection a monotone fixed
+  point; the cover model gains a gate-open cohort-dynamics row with its
+  demand assumption as a named conditional (§16.2 obligation 3). No
+  bound relaxed; all amendments adversary-strengthening, pre-code.
+  **Distinct-position round R2 (§17.5, 2026-07-06):** the standing
+  reviewer's post-merge pass. WI-3 (PR #260) traced at source against
+  D-B1..D-B7 — faithful; one finding (A-1): the R2-1 clock-trust marker
+  reasoned about one of two tip consumers, and the alarm horizon's
+  sensitivity is inverted (inflation ⇒ premature alarm, not
+  benign-later) — marker + WI3 doc amended so the 2d-2 clamp covers
+  both reads. On the WI-4 pins: B-1 converts the no-cross-subsidy pin
+  to structure (§9 criterion 9 — aggregate verdict is a computed
+  conjunction over every committed bound, INVALID on absence, FAIL on
+  any miss); B-2 pins that §16.10 attacks come from a distinct
+  adversarial position with the construction recorded; its concrete
+  instance — the `r < 2` **mean-vs-max challenge** — survives
+  (exchangeability makes the bound per-persona in-model; the untargeted
+  reading was conceded at the floor) and forces the §3.2 pin naming
+  exchangeability as the load-bearing step and regime-splitting as the
+  mean-to-max carrier in deployment. Closure requires §§17.1–17.5
+  ratified together.
+  **Distinct-position round R3 (§18, 2026-07-06):** the mean-vs-max
+  disposition is sound but incomplete (captured the max for the split
+  axis, assumed the heterogeneity enumeration complete). Five surfaces
+  scope what `1.86` means — one seam (entry; exit/drain is GF-4,
+  unmeasured), one scope (per-post, not per-principal), one channel
+  (timing, not the loud reward-amount value channel), one instant (not
+  lifetime-cumulative), one stratum (unstratified by observable bond
+  attributes). **Landed on the verdict line:** the cross-seam
+  conditional (§13.1/§13.5) — `r < 2` promotes per-post → per-principal
+  **only where persona mutual-unlinkability (GF-4) holds**, parallel to
+  isolation conditioning; the most important previously-unstated
+  dependency (S-1 is per-principal; the bound is per-post). **Verified
+  at source:** the archival reward value channel is loud by design
+  (`reward_amount_plain` cleartext, P-tied, per-epoch recurring;
+  confidential reward deleted — `emission_wire.rs`,
+  `REWARD_EMISSION_LEG.md`; consensus-inert until PR-E3/C-1) — orthogonal
+  to the timing gate, needs its own measurement; the attribute-strata
+  coupling is real but via `holdings`/`bond_floor`, not the retired
+  lock-tier multipliers. **New sealing-path rounds:** GF-4 exit seam
+  (co-equal genesis gate, graded jointly with persona rotation) + the
+  value channel. **Ride the §14.4 round:** attribute-stratified grading,
+  lifetime-accumulation sweep. No bound reopened.
+  **R3 addendum (§18.7):** tiers-vs-continuous-accrual answered at
+  source — the shipped leg already embodies the strong form (accrual
+  reads shard age, not persona duration; `g(age)` linear, no knees;
+  duration structurally quantized at settlement-epoch granularity, so
+  the exit→entry back-solve is capped at class width by construction).
+  Four pins routed to existing rounds: curve shape as privacy parameter
+  (reopen on any `g_age_milli`/`curve_milli` change; `Curve` plateau
+  breakpoints cluster the holdings stratum — §18.3 measures direction),
+  `SETTLEMENT_EPOCH_BLOCKS` as a-priori duration-class width (GF-4
+  derives the bound before 10k is a privacy value), per-epoch claim
+  submission as a recurring entry-gap-shaped timing observable
+  (GF-4/value-channel round), and correlated mass-unbonding as a named
+  GF-4 wargame (duration-class anonymity under co-triggered exits).
+  **R3 correction round (§18.8):** the P-is-public reframing — `P` is
+  the pseudonym, public by construction; only the `P`→user link is
+  protected. Retracted §18.3's intrinsic-stratification claim and
+  §18.7's P-curve privacy-primary escalation; re-anchored claim-timing,
+  lifetime accumulation, and correlated-exit on user-rhythm/user-event
+  correlation. Amount-bridge trace verified at source: **closed at
+  entry structurally** — the bond's public amount is consensus-forced
+  to `bond_floor(holdings)` (`bond_post.rs` FloorMismatch), funding and
+  change FCMP++-hidden, no principal reach-across in the assemble path.
+  Surviving residuals routed to GF-4: V-2a staker-membership prior
+  (universal funding constant vs off-chain user-side amount surfaces)
+  and V-2b exit lifetime-total match (`P`'s lifetime value publicly
+  computable to the atomic unit — the value channel's surviving form).
+  **Mechanism pin (§18.9):** a follow-on CT reading (bond amount hidden
+  above the floor behind a user-configurable mask) verified at source
+  wrong in mechanism — the bond term is a transparent `amount·H`
+  cleartext term in the CT balance (`bond_ct_balance.rs`; funding and
+  change are the hidden legs), `commitment_mask` is HKDF-derived and
+  never user-chosen; closure is loud-but-constant, the proposed
+  mask-consistency wargame unrepresentable-by-construction (reopen on
+  any user-supplied blinding factor or above-floor bonding). On-chain
+  bridges are timing-only; V-2a/V-2b survive off-chain.
+  **R4 exit-seam inventory (§18.10):** both determinative source
+  checks resolved — the reward payout is cleartext by genesis
+  disposition (`REWARD_EMISSION_LEG.md` §5.5/§9) and exact (no grid),
+  and `reward_P(E)` is ex-ante computable from public consensus state.
+  R-1 confirmed dominant but reach-bounded (severed at first spend by
+  FCMP++/CT; all bits at the off-chain matching surface — V-2b in
+  sharpest form). CT-committing the payout foreclosed (priority-1
+  inflation audit); open defenses: quantization (grid width a-priori
+  derived, GF-4 candidate) + gate-6 routing. Claim-cadence, reward
+  amount, and holdings stratum graded jointly on GF-4.
+  **R-1 disposition (§18.11):** FCMP++ hides amount AND linkage at
+  every on-chain hop (no non-mint cleartext amounts; `P`'s spend set
+  unenumerable — the precomputed sequence has no anchor after hop
+  one). R-1 is a managed residual at the economically-guaranteed
+  off-chain boundary, defended in layers: firewall-routing (primary,
+  complete on-chain), new gate-6 pin candidate **drain-amount
+  decoupling** (exact-subsum match is a wallet-policy footgun — drain
+  amounts never computable reward subsums), quantization as
+  defense-in-depth for the approximate lifetime-aggregate band.
+  **R4 closure (§18.12):** whole-path routing obligation retracted
+  (discharged by the base transfer format); drain-decoupling pin
+  tightened to input-level — the drain-amount computation must not
+  read the reward sequence as an input (user target/cadence/randomness
+  only; verified at the selection path's inputs when the gate-6 policy
+  lands). Why-loud recorded: the mint is loud by priority-1 decision
+  (inflation audit) — R-1 is a priority-ordered tradeoff at its floor,
+  not an unclosed defect; do not "fix" it by CT-committing the mint.
+  **Arc closure (§18.13):** theory ceiling declared; Tor-default trace
+  resolved at source — persona side Tor-mandatory by construction
+  (`shekyl-p-transport` `compile_error!` without SOCKS), principal
+  side opt-in (`--proxy` default `None`); principal-side default-on
+  Tor added to FOLLOWUPS as a V3.0 pre-genesis item. Principal↔user
+  seam closing frame recorded: chain-only adversary blind by
+  construction; residual boundaries are the irreducible on-ramp
+  witness, the network default (until flipped), and the enumerated
+  user-mistake set closed by safe-by-default coverage.
+  **PROVISIONAL:** the block-time sealing
+  re-run is confirmatory by construction (live `BondPostDispatched.at` is
+  the due block; dispersal is sub-block `U[0,60s)`), so no block-resolution
+  re-run can close reconvergence leg (b); the wall-clock sweep-phase
+  channel is the primary open uncertainty — closing requires sub-block
+  wall-clock emission + re-grade (`docs/FOLLOWUPS.md`). Sim-only, feature
+  `gf7-hooks` (non-default); no production telemetry.
 
 - **wallet: block-timed bond-post dispatch driver — WI-3**
   (`ARCHIVAL_BOND_WI3_DISPATCH.md`; `IMPLEMENTATION_INDEX.md` §4 WI-3

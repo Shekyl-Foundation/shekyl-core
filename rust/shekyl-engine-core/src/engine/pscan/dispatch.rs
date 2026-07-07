@@ -429,7 +429,16 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
     /// this is the daemon's **claimed** tip — sound under local-daemon
     /// posture; reopens under 2d-2 (§3.1 named invariant; the
     /// sweep-corroborated clamp is the pre-designed mitigation held in
-    /// reserve for that reopen).
+    /// reserve for that reopen). The tip has **two consumers in this tick
+    /// with opposite sensitivities to a lying daemon** (finding A-1,
+    /// 2026-07-06): the *due-check* (`due_height(p) <= tip`), where
+    /// inflation is benign-later (monotone noise, posts dispatch late);
+    /// and the *alarm horizon* (`tip < at + alarm_horizon_blocks`), where
+    /// inflation is **premature-alarm** — a tip reported
+    /// `alarm_horizon_blocks` ahead trips the operator alarm on posts
+    /// that are propagating normally. The 2d-2 clamp must therefore cover
+    /// **both** tip reads, not just the due-check the invariant's
+    /// monotone-noise argument was written against.
     ///
     /// `confirmed` is the set of personas whose bond post the pscan has
     /// **observed on-chain, reorg-deep** (JoinMarket `BondPostMatch`es from
