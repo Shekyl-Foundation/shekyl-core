@@ -5723,6 +5723,11 @@ uint64_t BlockchainLMDB::count_frozen_shards_at_close(uint64_t h_close) const
   int rc = mdb_cursor_open(*m_write_txn, m_archival_shard_segment, &cur);
   if (rc)
     throw0(DB_ERROR(lmdb_error("Failed to open archival_shard_segment cursor for frozen-shard count: ", rc).c_str()));
+  // RAII close so the loud-abort throws below cannot strand the cursor.
+  // A write-txn cursor is also reclaimed at txn end (lmdb.h mdb_cursor_open
+  // docs), but the guard keeps this function correct if it is ever adapted
+  // to a read-only txn, where explicit close is mandatory.
+  const std::unique_ptr<MDB_cursor, decltype(&mdb_cursor_close)> cur_guard(cur, &mdb_cursor_close);
 
   uint64_t count = 0;
   MDB_val k, v;
@@ -5745,7 +5750,6 @@ uint64_t BlockchainLMDB::count_frozen_shards_at_close(uint64_t h_close) const
   }
   if (rc != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("archival_shard_segment cursor error at frozen-shard count: ", rc).c_str()));
-  mdb_cursor_close(cur);
   return count;
 }
 
