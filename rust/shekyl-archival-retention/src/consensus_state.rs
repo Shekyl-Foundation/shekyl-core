@@ -7,6 +7,7 @@
 //! own (`20-rust-vs-cpp-policy.mdc` §4; `40-ffi-discipline.mdc` coarse-call rule).
 
 use crate::constants::SETTLEMENT_EPOCH_BLOCKS;
+use crate::k_cover::KCover;
 use crate::reward_arithmetic::{
     curve_milli, mul_div_floor, scarcity_milli, BandedCurveParams, WORK_MILLI_SCALE,
 };
@@ -272,12 +273,13 @@ pub struct EpochCloseInputs<'a> {
     /// refuses, §11 M2-1); the segment-table count is structural and
     /// monotone per branch.
     pub frozen_shard_count: u64,
-    /// The M1 cover threshold. Production callers (the FFI shim) thread
-    /// [`crate::k_cover::K_COVER`] here verbatim; the KAT injects per-case
-    /// values so the fixtures survive the §4 constant finalization without
+    /// The M1 cover threshold, as the PF-6a capability newtype. Production
+    /// callers (the FFI shim) thread [`KCover::consensus`]; the KATs inject
+    /// per-case values via `KCover::for_kat` (dev-only `consensus-kat`
+    /// feature) so the fixtures survive the §4 constant finalization without
     /// rewrite. The *comparison* lives only in [`epoch_close_compute`]
     /// (§6 tripwire) — threading the value is not a second predicate site.
-    pub k_cover: u64,
+    pub k_cover: KCover,
 }
 
 /// Epoch-close outputs: `R_market` per input shard (parallel to
@@ -343,7 +345,7 @@ pub fn epoch_close_compute(
         }
     }
 
-    if inputs.frozen_shard_count < inputs.k_cover {
+    if inputs.frozen_shard_count < inputs.k_cover.get() {
         return Ok(EpochCloseResult {
             r_market_by_shard: vec![0u64; shards.len()],
             sigma_work_milli: 0,
@@ -480,7 +482,7 @@ mod tests {
             // Ungated by data (1 ≥ 1), not by the k_cover = 0 degenerate:
             // these tests pin the pre-gate computation through a live gate.
             frozen_shard_count: 1,
-            k_cover: 1,
+            k_cover: KCover::for_kat(1),
         }
     }
 

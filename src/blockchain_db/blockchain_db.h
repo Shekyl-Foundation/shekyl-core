@@ -1960,9 +1960,6 @@ public:
   virtual uint64_t archival_bond_join_epoch(const crypto::hash& p_id) const;
   virtual bool get_archival_shard_segment_at_height(uint64_t shard_id, uint64_t at_height,
     crypto::hash& out_rk, uint64_t& out_leaf_count) const;
-  virtual bool get_archival_shard_leaf_layer_scalars(uint64_t shard_id,
-    uint32_t leaf_index_in_segment, uint64_t at_height,
-    std::vector<uint8_t>& out_flat_scalars) const;
 
   // Gate-4 bond-post / registry writers (substrate seeding until bond vin lands).
   virtual void put_archival_bond_record(const crypto::hash& p_id,
@@ -1980,8 +1977,27 @@ public:
   virtual void remove_archival_bond_record(const crypto::hash& p_id);
   virtual void put_archival_shard_segment(uint64_t shard_id, uint64_t freeze_height,
     const crypto::hash& segment_subroot_rk, uint64_t segment_leaf_count);
-  virtual void put_archival_shard_leaf_layer_scalars(uint64_t shard_id,
-    uint32_t leaf_index_in_segment, const std::vector<uint8_t>& flat_scalars);
+
+  // ─── Segment-freeze pipeline (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4) ─────
+  //
+  // The production writer/deleter for the shard-segment registry. Freezing
+  // is a first-crossing rule over the consensus curve-tree leaf count
+  // (frozen = floor(leaf_count / SEGMENT_LEAF_COUNT), computed ONLY by the
+  // Rust entry point shekyl_archival_frozen_segment_count). Both hooks run
+  // inside the block's write txn: the connect hook immediately after
+  // grow_curve_tree, the pop hook after trim_curve_tree — partial commit on
+  // either path is a consensus split (M1 §1.3 obligations O-1..O-3).
+
+  /// Connect hook (§4.1): write a registry row for every level-2 subtree the
+  /// same-txn grow completed, with `freeze_height = block_height` and `R_k`
+  /// read from the layer-2 chunk the grow just wrote. No-op when no segment
+  /// boundary was crossed.
+  virtual void process_archival_segment_freezes_at_height(uint64_t block_height);
+  /// Pop hook (§4.2): delete every registry row with
+  /// `shard_id >= frozen_segment_count(post-trim leaf count)`. The delete
+  /// rule is derived from the same function as the write rule, so re-applied
+  /// blocks recreate rows bit-identically (O-3 pop-symmetry).
+  virtual void revert_archival_segment_freezes();
 
   /// Gate-2 §6 / gate-4 §4.2: slash scheduler at `H_slash_deadline` (LMDB impl).
   virtual void process_archival_slash_at_height(uint64_t block_height);
@@ -2218,6 +2234,25 @@ public:
    * @return true if the output has a tree leaf (i.e., it has been drained)
    */
   virtual bool get_curve_tree_leaf_by_output_index(uint64_t output_index, uint8_t* leaf_out) const = 0;
+
+  /**
+   * @brief get a contiguous run of leaves by tree position in one read.
+   *
+   * Reads `count` leaves starting at `first_tree_position` into `out`
+   * (count × 128 bytes, densely packed). Returns false — leaving `out`
+   * unspecified — if any leaf in the run is missing or malformed; callers
+   * must not read `out` on false.
+   *
+   * The base implementation loops over get_curve_tree_leaf_by_tree_position();
+   * LMDB overrides it with a single cursor scan (one B-tree traversal instead
+   * of one per leaf) for the serve-credit verification hot path.
+   *
+   * @param first_tree_position  tree position of the first leaf in the run
+   * @param count                number of contiguous leaves to read
+   * @param out                  output buffer of count × 128 bytes
+   * @return true iff every leaf in the run was present and full
+   */
+  virtual bool get_curve_tree_leaf_chunk(uint64_t first_tree_position, uint64_t count, uint8_t* out) const;
 
   // ─── FCMP++ Per-Height Curve Tree Root ──────────────────────────────────
 

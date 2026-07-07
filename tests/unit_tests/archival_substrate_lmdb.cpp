@@ -328,9 +328,6 @@ TEST(archival_substrate_lmdb, shard_registry_roundtrip)
   const crypto::hash rk = make_hash(0x22);
   BlockchainDB& db = fixture.db;
   db.put_archival_shard_segment(42, 100, rk, 26000);
-
-  std::vector<uint8_t> scalars(128, 0x33);
-  db.put_archival_shard_leaf_layer_scalars(42, 1234, scalars);
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
@@ -340,10 +337,6 @@ TEST(archival_substrate_lmdb, shard_registry_roundtrip)
   ASSERT_TRUE(db.get_archival_shard_segment_at_height(42, 100, out_rk, leaf_count));
   EXPECT_EQ(out_rk, rk);
   EXPECT_EQ(leaf_count, 26000u);
-
-  std::vector<uint8_t> out_scalars;
-  ASSERT_TRUE(db.get_archival_shard_leaf_layer_scalars(42, 1234, 100, out_scalars));
-  EXPECT_EQ(out_scalars, scalars);
 }
 
 // Storage-flow coverage for the gather → Rust compute → store epoch-close
@@ -351,6 +344,25 @@ TEST(archival_substrate_lmdb, shard_registry_roundtrip)
 // (consensus_state_kat_v1.json §epoch_close); this test asserts the LMDB
 // orchestration: row gathering, missing-bond skips, stale-epoch filtering,
 // persistence, revert, and replay determinism.
+//
+// PF-8 transposition pin: shekyl_archival_epoch_close_compute's three
+// leading operands (settlement_epoch, close_block_height,
+// frozen_shard_count) are consecutive u64s at an extern "C" boundary where
+// a swap compiles silently on both sides, and the Rust KAT structurally
+// cannot catch it (it injects EpochCloseInputs, never crossing FFI). This
+// fixture is the only production-shaped traversal of the seam, so its
+// values are chosen pairwise distinct AND swap-flipping:
+//   S = 3, H = 40000, F = 2, with join_settlement_epoch = S-1 = 2 and
+//   freeze_height = 100.
+//   swap(S,F): Rust sees settlement_epoch = 2 < join+1 — every bond drops
+//     out of membership; r_market and sigma collapse to zero, failing the
+//     r_market assertions.
+//   swap(S,H) / swap(H,F): Rust sees close_block_height ∈ {3, 2}, both
+//     ≤ freeze_height = 100 — shard-7 age collapses 750 → 0 milli, so
+//     sigma drops 3500 → 2000, failing the exact-sigma pin (a bare
+//     sigma > 0 would NOT catch these two swaps; the exact pin is
+//     load-bearing).
+// Any single transposition therefore fails an assertion below.
 TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
 {
   TempLMDB fixture;
@@ -359,21 +371,29 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
   // SETTLEMENT_EPOCH_BLOCKS is KAT-pinned at 10000; epoch E closes when the
   // first block of epoch E+1 connects.
   const uint64_t seb = 10000;
-  const uint64_t settlement_epoch = 1;
+  const uint64_t settlement_epoch = 3;
   const uint64_t close_height = (settlement_epoch + 1) * seb;
+  // Membership starts exactly at the settlement epoch (join+1 == S): the
+  // PF-8 S↔F swap check depends on this being tight.
+  const uint64_t join_epoch = settlement_epoch - 1;
 
   const crypto::hash p1 = make_hash(0x51);
   const crypto::hash p2 = make_hash(0x52);
   const crypto::hash p_missing = make_hash(0x53);
   const std::vector<uint8_t> pubkey = {0x01};
 
-  db.put_archival_bond_record(p1, pubkey, 0, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+  db.put_archival_bond_record(p1, pubkey, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
-  db.put_archival_bond_record(p2, pubkey, 0, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+  db.put_archival_bond_record(p2, pubkey, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7, 9}, {});
 
-  // Aged segment for shard 7; shard 9 stays segment-less (age 0).
-  db.put_archival_shard_segment(7, 0, make_hash(0x60), 26000);
+  // Aged segment for shard 7; shard 9 stays segment-less (age 0). A second
+  // segment row (shard 1234, no credits) makes frozen_shard_count = 2 —
+  // pairwise distinct from S = 3 and H = 40000 (PF-8). freeze_height = 100
+  // exceeds every swapped-in close_height candidate (S or F), so an H-swap
+  // collapses shard age.
+  db.put_archival_shard_segment(7, 100, make_hash(0x60), 26000);
+  db.put_archival_shard_segment(1234, 100, make_hash(0x66), 26000);
 
   db.set_archival_serve_credit_bit(p1, 7, settlement_epoch);
   db.set_archival_serve_credit_bit(p2, 7, settlement_epoch);
@@ -392,8 +412,17 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
   EXPECT_EQ(db.get_archival_r_market(7, settlement_epoch), 2u);
   EXPECT_EQ(db.get_archival_r_market(9, settlement_epoch), 1u);
   EXPECT_EQ(db.get_archival_r_market(7, settlement_epoch + 1), 0u);
+  // Exact-sigma PF-8 pin (KAT-pinned constants: age_weight = 2000,
+  // plateau = 8000/16000 milli, WORK_MILLI_SCALE = 1000):
+  //   shard 7: age = floor(3/4 epochs · 1000) = 750, g = 1000 + 2000·750/1000
+  //            = 2500, scarcity(r=2) = 1000·2500/2000 = 1250
+  //   shard 9: no segment, age = 0, scarcity(r=1) = 1000
+  //   work_p1 = 1250, work_p2 = 1250 + 1000 = 2250; both below the first
+  //   curve breakpoint (4000), so Curve is identity: sigma = 3500.
+  // An H-position swap collapses shard-7 age to 0 (scarcity 500), giving
+  // sigma = 2000 — nonzero, so only this exact pin distinguishes it.
   const uint64_t sigma = db.get_archival_sigma_work_milli(settlement_epoch);
-  EXPECT_GT(sigma, 0u);
+  EXPECT_EQ(sigma, 3500u);
 
   db.revert_archival_epoch_close_at_height(close_height);
   fixture.db.batch_stop();
@@ -415,36 +444,45 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
 // ── M1 reward gate: count pass + stored shape (ARCHIVAL_REWARD_GATE_M1.md) ──
 //
 // The Rust activation-boundary KAT (tests/reward_gate_kat.rs, G-1..G-10)
-// injects frozen_shard_count and never executes the C++ filter, so the
-// count-pass cases live here (§11.8 M3-1/M3-2): the freeze_height ≤ H_close
-// boundary (equality counts — an off-by-one here is a consensus fork at
-// exactly the boundary class), the malformed-row loud abort (a lenient skip
-// silently lowers the count on one node — a fork in the gating direction),
-// and the write-txn precondition.
+// injects frozen_shard_count and never executes the C++ operand reader, so
+// the count-pass cases live here (§11.8 M3-1/M3-2, amended §11.11 for the
+// O(1) counter): the freeze_height ≤ H_close frontier boundary (equality
+// counts — an off-by-one here is a consensus fork at exactly the boundary
+// class), the malformed-frontier loud abort (a lenient skip silently lowers
+// the count on one node — a fork in the gating direction), counter/table
+// divergence aborts, and the write-txn precondition.
 
-TEST(archival_substrate_lmdb, frozen_shard_count_filter_boundary)
+TEST(archival_substrate_lmdb, frozen_shard_count_frontier_boundary)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
   BlockchainLMDB& lmdb = fixture.db;
   const uint64_t h_close = 10000;
 
-  // Non-dense shard IDs (walk-not-watermark, §1.1): strictly below, exactly
-  // equal, and strictly above the close height.
-  db.put_archival_shard_segment(7, h_close - 1, make_hash(0x61), 26000);
-  db.put_archival_shard_segment(1000000, h_close, make_hash(0x62), 26000);
-  db.put_archival_shard_segment(42, h_close + 1, make_hash(0x63), 26000);
+  // Production-shaped rows: dense IDs, per-branch-monotone freeze heights
+  // (O-2), the frontier frozen exactly at the close.
+  db.put_archival_shard_segment(0, h_close - 1, make_hash(0x61), 26000);
+  db.put_archival_shard_segment(1, h_close, make_hash(0x62), 26000);
 
-  // Equality counts (freeze_height <= h_close); the future row does not.
+  // Equality counts (frontier freeze_height <= h_close, §1.1): the row
+  // frozen AT the close boundary is frozen at the close.
   EXPECT_EQ(lmdb.count_frozen_shards_at_close(h_close), 2u);
-  // One below the boundary the equal row drops out.
-  EXPECT_EQ(lmdb.count_frozen_shards_at_close(h_close - 1), 1u);
-  // Below every freeze the count is zero; above every freeze it is total.
-  EXPECT_EQ(lmdb.count_frozen_shards_at_close(h_close - 2), 0u);
-  EXPECT_EQ(lmdb.count_frozen_shards_at_close(h_close + 1), 3u);
+  EXPECT_EQ(lmdb.count_frozen_shards_at_close(h_close + 5), 2u);
+
+  // A frontier row above the close height is tree/registry disagreement —
+  // impossible under the production writer (rows freeze at the writing
+  // block's height, before the same-txn close) — and aborts loudly
+  // (M1 §11.11: the fixture-branch "future rows are filtered out"
+  // disposition is superseded; lenient filtering would mask a divergent
+  // DB in the gating direction).
+  EXPECT_THROW(lmdb.count_frozen_shards_at_close(h_close - 1), std::runtime_error);
+
+  // Differential oracle (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4): the
+  // full-decode walk agrees with the persisted counter.
+  EXPECT_EQ(lmdb.count_frozen_shard_rows_by_walk_for_test(), 2u);
 }
 
-TEST(archival_substrate_lmdb, frozen_shard_count_malformed_row_aborts)
+TEST(archival_substrate_lmdb, frozen_shard_count_malformed_frontier_aborts)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
@@ -452,19 +490,38 @@ TEST(archival_substrate_lmdb, frozen_shard_count_malformed_row_aborts)
 
   db.put_archival_shard_segment(7, 100, make_hash(0x64), 26000);
   // Correct length, wrong version byte: decodable length, undecodable row.
+  // Written at shard_id 8 > 7 so it is the MDB_LAST frontier the O(1)
+  // reader probes.
   std::vector<uint8_t> bad(1 + 8 + 8 + 32, 0);
   bad[0] = 99;
   lmdb.put_archival_shard_segment_raw_for_corruption_test(8, bad);
 
   // Loud abort, never a lenient skip that returns 1 (§1.1 decode-failure
   // pin: two nodes disagreeing on the count is a fork in the gating
-  // direction).
+  // direction). The differential walk aborts on the same row.
   EXPECT_THROW(lmdb.count_frozen_shards_at_close(200), std::runtime_error);
+  EXPECT_THROW(lmdb.count_frozen_shard_rows_by_walk_for_test(), std::runtime_error);
 
   // A truncated row aborts identically.
   std::vector<uint8_t> truncated(10, 0);
   truncated[0] = 1;
   lmdb.put_archival_shard_segment_raw_for_corruption_test(8, truncated);
+  EXPECT_THROW(lmdb.count_frozen_shards_at_close(200), std::runtime_error);
+}
+
+TEST(archival_substrate_lmdb, frozen_shard_counter_table_divergence_aborts)
+{
+  TempLMDB fixture;
+  BlockchainLMDB& lmdb = fixture.db;
+
+  // The raw corruption writer bypasses the counter: a decodable row with the
+  // counter still at zero is exactly the rows-without-counter divergence the
+  // reader must refuse (a silently-wrong operand is a consensus fork in the
+  // gating direction).
+  shekyl::db::ArchivalShardSegmentValue seg{};
+  seg.freeze_height = 100;
+  seg.segment_leaf_count = 26000;
+  lmdb.put_archival_shard_segment_raw_for_corruption_test(0, seg.encode());
   EXPECT_THROW(lmdb.count_frozen_shards_at_close(200), std::runtime_error);
 }
 

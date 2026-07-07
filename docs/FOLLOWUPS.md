@@ -7526,6 +7526,65 @@ one place to confirm each item's relationship to the wallet stack.
   freeze/pop hooks exist. Building it now would be a consensus counter with no symmetric
   writer. Keep the walk (correct, only linear at epoch boundaries) until then; add the
   counter in the same PR that introduces the segment-freeze writer.
+  **Counter LANDED (2026-07-07, `feat/segment-freeze-pipeline`, #264 — closes the
+  efficiency follow-on above):** persisted `properties["archival_frozen_shard_count"]`
+  (schema V8, rule-42 bump; pre-V8 DBs refused loudly in `migrate`, no pre-genesis
+  migration code). +1 in `put_archival_shard_segment` (now `MDB_NOOVERWRITE`,
+  CREATE-only enforced at the mutation site), −1 per deleted row in
+  `revert_archival_segment_freezes` (underflow-aborted) — O-3 pop-symmetry is
+  structural, which is exactly what M1 §11.8 M3-1's cached-counter adversary lacked.
+  `count_frozen_shards_at_close` is O(1): counter read + `MDB_LAST` frontier check
+  (decode + `freeze_height ≤ h_close`; future-dated frontier and counter/table
+  divergence are loud aborts). The walk survives only as the differential test oracle
+  `count_frozen_shard_rows_by_walk_for_test` (zero production callers,
+  tripwire-enforced); `archival_segment_freeze.cpp` drives counter == walk across
+  freeze/pop/re-apply. Tripwire: cursor accounting 4→5, new invariant 6 pins the
+  counter's mutation surface. Spec: `ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §4.4,
+  M1 §11.11.
+  **Follow-on surfaced by the counter (target: V3.0 pre-genesis):**
+  `BlockchainLMDB::reset()` predates the FCMP/archival substrate — it drops the
+  legacy tables (including `m_properties`, so the counter resets to absent ⇒ 0)
+  but none of the curve-tree or archival tables (`m_archival_shard_segment`,
+  `m_curve_tree_*`, close-log, sigma-work, …). A `reset()` on a chain with frozen
+  segments leaves orphaned rows that the counter no longer accounts for — the
+  O(1) reader's divergence abort would fire on the next close (loud, so the gap
+  cannot corrupt silently, but the fix belongs in `reset()`: drop every live
+  table). Out of #264's scope (`reset()` is not on the connect/pop/close path);
+  fix as its own small PR.
+  **IMPLEMENTED (2026-07-06, `feat/segment-freeze-pipeline`, steps 1–7 of doc §7):**
+  constants + Rust helpers, FFI exports, connect/pop hooks in `db_lmdb`,
+  `archival_shard_leaf` deletion with challenge-path rewire to `m_curve_tree_leaves`,
+  the §9 C++ suite (`archival_segment_freeze.cpp`: first-crossing, multi-segment,
+  independent `R_k` recomposition, O-3 bit-identical pop-symmetry, pop-above-boundary,
+  missing-layer-2-chunk loud abort; M1 operand counted against production rows — the
+  §11.10 fixture caveat retired), gate-2 fixture regenerated at `25 992` with
+  chunk-bounds pins, and the §8 tripwire extensions (writer one-site, cursor
+  accounting 2→4, division one-site). O-1..O-3 discharged; cross-referenced in M1
+  §1.3. Pre-flight additions folded in: PF-8 transposition-distinguishing epoch-close
+  FFI fixture (S=3/H=40000/F=2, exact-sigma pin), PF-6a `KCover` capability newtype
+  (`consensus()` sole production constructor; `for_kat` behind the permanent dev-only
+  `consensus-kat` feature + tripwire).
+- **M1 reward gate — pre-flight process BREACH (PF-1, recorded 2026-07-06; a breach,
+  not a precedent).** The M1 spec's own sequencing text (§11.9) conditioned the
+  implementation sequence on "after the pre-flight pass," and the implementing agent
+  committed the sequence (`899ebf7..cc28bee` on `feat/m1-reward-gate-design`) before
+  the pass ran — the handoff document's halt condition existed and did not bite
+  because nothing mechanical checks it. The retroactive audit held (range ratified
+  2026-07-06 conditioned on PF-2 remediation, PF-3 merge-block, PF-4 round-open, and
+  this record) and a branch reset was rejected as negative-information ceremony
+  (force-pushing destroys the SHAs the findings anchor to; re-landing byte-identical
+  code re-audits nothing). **Disposition:** ratify with the process record armed —
+  `26-sub-pr-design-discipline.mdc` now carries the explicit halt condition (*no
+  implementation commits on a branch whose governing design doc names an undischarged
+  pre-flight pass*), so the agent's own compliance check has a named tripwire instead
+  of a written rule with no trigger. Any future agent citing this arc to skip a named
+  pre-flight is citing a breach record. **Closed by this entry + the rule amendment;
+  no code action.** Companion pre-flight dispositions recorded at their homes:
+  PF-2 compile-refusal accepted-residual (out-of-band hand-built artifact; scoped out
+  by Guix-reproducible builds + signed-tag release path — `ARCHIVAL_REWARD_GATE_M1.md`
+  §4) and PF-9 seal-before-stressnet ordering pin (`K_COVER` finalization is a
+  prerequisite of Phase 7.7 stressnet entry — M1 §4 rule-21 entry +
+  `RELEASE_CHECKLIST.md` stressnet-entry prerequisite).
 - **2d-2 SP-T4a — GF-7 principal-timeline timing correlation is a GENESIS GATE (measure
   `P(link | T_obs)` before launch).** SP-T4a *draws* the narrow funding-seam entry-gap jitter
   (`draw_entry_gap`, `spread ~ U[0, 600 blocks]`) but does **not** wire it into any broadcast — the

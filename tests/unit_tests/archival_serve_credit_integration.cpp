@@ -7,6 +7,7 @@
 
 #include "gtest/gtest.h"
 
+#include <array>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -54,6 +55,8 @@ struct IntegrationKat {
   uint64_t h_seal = 0;
   uint64_t current_height = 0;
   uint64_t join_epoch = 0;
+  uint64_t chunk_first_leaf_position = 0;
+  uint64_t chunk_leaf_count = 0;
 };
 
 IntegrationKat load_integration_kat()
@@ -82,6 +85,8 @@ IntegrationKat load_integration_kat()
   kat.h_seal = i["h_seal"].GetUint64();
   kat.current_height = i["current_height"].GetUint64();
   kat.join_epoch = i["join_settlement_epoch"].GetUint64();
+  kat.chunk_first_leaf_position = i["chunk_first_leaf_position"].GetUint64();
+  kat.chunk_leaf_count = i["chunk_leaf_count"].GetUint64();
   return kat;
 }
 
@@ -194,18 +199,17 @@ public:
     return out_leaf_count > 0;
   }
 
-  bool get_archival_shard_leaf_layer_scalars(uint64_t shard_id,
-    uint32_t leaf_index_in_segment, uint64_t /*at_height*/,
-    std::vector<uint8_t>& out_flat_scalars) const override
+  // Consensus reads the challenge chunk straight from the curve-tree leaf
+  // table (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §6.2); the test DB models
+  // that table as a position → 128-byte-leaf map.
+  bool get_curve_tree_leaf_by_tree_position(uint64_t tree_position,
+    uint8_t* leaf_out) const override
   {
-    const auto shard_it = m_leaf_scalars.find(shard_id);
-    if (shard_it == m_leaf_scalars.end())
+    const auto it = m_tree_leaves.find(tree_position);
+    if (it == m_tree_leaves.end())
       return false;
-    const auto leaf_it = shard_it->second.find(leaf_index_in_segment);
-    if (leaf_it == shard_it->second.end())
-      return false;
-    out_flat_scalars = leaf_it->second;
-    return !out_flat_scalars.empty();
+    memcpy(leaf_out, it->second.data(), it->second.size());
+    return true;
   }
 
   void put_bond(const crypto::hash& p_id, shekyl::db::ArchivalBondValue bond)
@@ -218,9 +222,11 @@ public:
     m_segments[shard_id] = std::move(segment);
   }
 
-  void put_leaf_scalars(uint64_t shard_id, uint32_t leaf_index, std::vector<uint8_t> scalars)
+  void put_tree_leaf(uint64_t tree_position, const uint8_t* leaf_128)
   {
-    m_leaf_scalars[shard_id][leaf_index] = std::move(scalars);
+    std::array<uint8_t, 128> leaf{};
+    memcpy(leaf.data(), leaf_128, leaf.size());
+    m_tree_leaves[tree_position] = leaf;
   }
 
 private:
@@ -249,7 +255,7 @@ private:
   std::set<CreditKey> m_credit_bits;
   std::map<crypto::hash, shekyl::db::ArchivalBondValue, HashLess> m_bonds;
   std::map<uint64_t, shekyl::db::ArchivalShardSegmentValue> m_segments;
-  std::map<uint64_t, std::map<uint32_t, std::vector<uint8_t>>> m_leaf_scalars;
+  std::map<uint64_t, std::array<uint8_t, 128>> m_tree_leaves;
 };
 
 struct BlockchainAndPool
@@ -285,10 +291,22 @@ void seed_substrate(ArchivalServeCreditIntegrationDB& db, const IntegrationKat& 
   memcpy(segment.segment_subroot_rk.data(), segment_rk.data, 32);
   db.put_segment(kat.shard_id, std::move(segment));
 
-  std::vector<uint8_t> leaf_scalars = bytes_from_hex(kat.leaf_scalars_hex);
-  if (leaf_scalars.size() % 32 != 0)
-    throw std::runtime_error("leaf scalars not multiple of 32 bytes");
-  db.put_leaf_scalars(kat.shard_id, kat.leaf_index, std::move(leaf_scalars));
+  // Seed the curve-tree leaf table at the chunk positions the consensus read
+  // derives via the FFI — and pin that derivation against the fixture's
+  // Rust-side values (cross-language tripwire on the chunk arithmetic).
+  uint64_t chunk_first = 0;
+  uint64_t chunk_leaves = 0;
+  if (!shekyl_archival_challenge_leaf_chunk_bounds(kat.shard_id, kat.leaf_index,
+        &chunk_first, &chunk_leaves))
+    throw std::runtime_error("challenged index out of segment range");
+  if (chunk_first != kat.chunk_first_leaf_position || chunk_leaves != kat.chunk_leaf_count)
+    throw std::runtime_error("FFI chunk bounds disagree with fixture pin");
+
+  const std::vector<uint8_t> leaf_scalars = bytes_from_hex(kat.leaf_scalars_hex);
+  if (leaf_scalars.size() != chunk_leaves * 128)
+    throw std::runtime_error("leaf chunk must be exactly chunk_leaf_count * 128 bytes");
+  for (uint64_t i = 0; i < chunk_leaves; ++i)
+    db.put_tree_leaf(chunk_first + i, leaf_scalars.data() + i * 128);
 
   db.set_seal_hash(kat.h_seal, seal_hash);
 }

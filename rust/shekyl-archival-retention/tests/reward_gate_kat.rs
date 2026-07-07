@@ -29,8 +29,8 @@
 use shekyl_archival_retention::{
     curve_milli, epoch_close_compute, reward_share_floor, ArchivalRewardEmissionVin,
     BandedCurveParams, CreditPair, EmissionWireError, EpochCloseInputs, EpochCloseResult,
-    EpochCloseShard, HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking, ShardWorkEntry,
-    WorkEpochClaim,
+    EpochCloseShard, HoldingsDescriptor, HoldingsKind, KCover, MembershipOnlyBacking,
+    ShardWorkEntry, WorkEpochClaim,
 };
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 
@@ -79,7 +79,10 @@ impl Scenario {
             shards: &self.shards,
             credit_pairs: &self.credit_pairs,
             frozen_shard_count,
-            k_cover,
+            // PF-6a: per-case injection is the KAT's contract (the fixture
+            // survives the §4 seal); `for_kat` rides the dev-only
+            // consensus-kat feature.
+            k_cover: KCover::for_kat(k_cover),
         })
         .expect("well-formed fixture indices")
     }

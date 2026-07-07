@@ -85,7 +85,11 @@ is not the predicate, per §11 M2-3).
 
 **Count-pass discipline (round-3 amendment, §11.8 M3-1/M3-2).** The
 count pass is the gate operand's *production site* and gets the same
-structural protection as the predicate site:
+structural protection as the predicate site. (§11.11 later replaces
+the O(N) walk *mechanism* with a persisted pop-symmetric counter +
+O(1) frontier check; every discipline below survives the swap — the
+one-site guarantee, the `≤` boundary, and the loud-abort class all
+transfer to the counter reader.)
 
 - **One named helper, one call site.** The filter lives in a single
   function — `count_frozen_shards_at_close(h_close)` — called only
@@ -211,6 +215,20 @@ discharge finalizes when that round's rounds close and the tests
 land. Its §6.2 additionally retires the `archival_shard_leaf` table
 (derived copy of `m_curve_tree_leaves`) under the maintainer's
 schema-restructure authorization for that round.
+
+**Discharged (implementation landed, `feat/segment-freeze-pipeline`):**
+the production writer (`process_archival_segment_freezes_at_height`)
+and revert (`revert_archival_segment_freezes`) run inside the block
+write txn per the pipeline doc's §4 hooks; O-3 is armed by the
+`pop_symmetry_row_bit_identical_after_reapply` case in
+`tests/unit_tests/archival_segment_freeze.cpp` (encoded-byte
+comparison after trim + regrow), O-1/O-2 by the first-crossing and
+multi-segment cases in the same suite. The §11.10 fixture caveat is
+retired: `multi_segment_single_grow_writes_both_rows` counts the M1
+operand (`count_frozen_shards_at_close`) against production-written
+rows end-to-end. The `archival_shard_leaf` table is deleted and the
+challenge path reads the 38-leaf chunk from `m_curve_tree_leaves`
+via `shekyl_archival_challenge_leaf_chunk_bounds`.
 
 ---
 
@@ -500,6 +518,48 @@ above):** mirror the frozen-constant tripwire already in
 release/genesis profile that fails until the §14.4-sealed value
 lands, so the refusal lives next to the constant it guards in the
 same shape the crate already uses for `WORK_MILLI_SCALE`.
+
+**Accepted residual of the compile refusal (PF-2, pre-flight
+2026-07-06).** The refusal's mechanics survived adversarial re-wargame:
+feature unification works *for* the refusal (any crate enabling
+`provisional-k-cover` anywhere in the graph is an explicit,
+grep-visible acknowledgment; the `compile_error!` cannot be silently
+defeated by adding features); deleting the feature makes the CI
+negative test fail loudly on an unknown-feature error (fails closed);
+flipping `k_cover_provisional` with value `0` hits the `build.rs`
+refusal; sealing requires `≥ 1`. **Named residual:** an artifact built
+by hand outside the runbook/tag path fires no refusal — a compile gate
+cannot reach a build invocation that never evaluates the flag. That
+residual is scoped out by the release disciplines upstream of this
+gate: Guix-reproducible builds and the hardware-backed signed-tag path
+(`docs/SIGNING.md`); an out-of-band binary is unsigned and
+non-reproducible, a release-discipline violation before it is a
+`K_COVER` violation. Recorded as **accepted-residual with that
+dependency named** — if either upstream discipline is ever weakened,
+this residual reopens with it.
+
+**Seal-before-stressnet ordering pin (PF-9, pre-flight 2026-07-06;
+rule-21 entry on the WI-4 §13.5 sealing conditions).** A consequence
+of the gate-identity sentinel (`0`) that the sealing checklist alone
+does not order: while provisional, the gating branch never executes
+outside KATs on any network — pre-seal testnets run the gate as
+identity (`< 0` is never true). The first *network-level* execution of
+the gated path — real reorgs at the activation boundary, real
+close/revert timing — therefore happens only after seal. If sealing
+landed after Phase 7.7 stressnet entry, the boundary's only
+pre-genesis exercise would be fixtures and the first live activation
+would be mainnet genesis: exactly the one-shot class §5 exists to
+refuse. **Pin: `K_COVER` finalization (the §14.4-derived value landed
+and `k_cover_provisional` cleared) is a prerequisite of Phase 7.7
+stressnet entry.** Each stressnet/testnet reset then re-exercises the
+activation boundary naturally, for free, for the 4-week minimum
+(`docs/RELEASE_CHECKLIST.md`). WI-4 §13.5 lists finalization as a
+genesis blocker; this pin adds the *ordering* against the stressnet
+gate, which is the whole value. Reopening criteria (rule 21): the pin
+relaxes only if the sentinel mechanics change such that the gated
+branch is exercised at network level pre-seal (e.g., a testnet-only
+sealed value distinct from mainnet's), with a design-round record
+demonstrating the activation boundary gets equivalent live exercise.
 
 **Genesis-frozen.** Both the rule and the constant must be right the
 first time — post-activation there is no runtime signal (§7). This is
@@ -1374,6 +1434,52 @@ the segment-freeze pipeline design round **opens** (§1.3 condition;
 `docs/FOLLOWUPS.md` entry); `K_COVER` sealing remains gated on the
 WI-4 §14.4 partition run and is not blocked by (and does not block)
 the PR itself — the compile refusal holds the seam.
+
+### 11.11 Operand mechanism swap: O(N) walk → persisted counter (2026-07-07)
+
+Landed with the segment-freeze pipeline PR (#264), closing the
+`FOLLOWUPS.md` O(1)-operand efficiency item. The gate operand
+`frozen_shard_count` is now read from a persisted counter
+(`properties["archival_frozen_shard_count"]`, schema V8) instead of
+a full-table cursor walk. Specification and soundness argument:
+`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §4.4.
+
+**Why this is not M3-1's adversary.** §11.8 M3-1 named "a cached
+counter lacking O-3 pop-symmetry" as a drift adversary. The landed
+counter is defined by having exactly the property the adversary
+lacked: it moves ±1 in the same write transaction as the one-site
+row writer (+1, `MDB_NOOVERWRITE`-guarded CREATE-only put) and the
+pop revert (−1 per deleted row, underflow-aborted), its mutation
+surface is tripwire-pinned (invariant 6: key literal exactly twice,
+setter call sites exactly two, differential oracle zero production
+callers), and it is differential-tested against the walk across
+freeze/pop/re-apply cycles. The adversary was drift; the defense is
+structural lockstep plus a CI-pinned mutation surface.
+
+**Discipline transfer.** The §1 count-pass disciplines survive
+mechanically:
+
+- *One-site:* still one counting read (`count_frozen_shards_at_close`),
+  one production call site; the invariant-2 cursor accounting now
+  admits 5 pinned cursor sites (the reader's frontier probe replaced
+  its walk; the test-only differential walk is the 5th).
+- *Boundary inclusivity:* the frontier check pins
+  `freeze_height ≤ h_close` at the `MDB_LAST` row; per-branch
+  monotone `freeze_height` over dense CREATE-only ids extends the
+  bound to every row. A **future-dated frontier is now a loud
+  abort** rather than a filtered-out row — under the production
+  writer (same-txn freeze at the connect hook) a row above the
+  close height cannot exist in the close's snapshot, so observing
+  one is snapshot/counter divergence, not a countable state. The
+  boundary unit tests moved from sparse fixture heights to
+  production-shaped dense rows accordingly.
+- *Loud abort on corruption:* the frontier row must decode (M3-2's
+  class, preserved at the frontier); counter/table divergence
+  (either direction) aborts the close.
+
+**Schema consequence.** V7 → V8 bump with a loud pre-V8 refusal in
+`migrate` (no pre-genesis migration code, `15-deletion-and-debt.mdc`);
+`LMDB_SCHEMA.md` "Schema v7 → v8" records the break.
 
 ---
 

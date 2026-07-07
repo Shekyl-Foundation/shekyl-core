@@ -419,7 +419,17 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
       collect_outputs(tx_pair.first, false);
 
     if (new_output_count > 0)
+    {
       grow_curve_tree(leaf_data, new_output_count);
+
+      // Segment-freeze connect hook (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.1):
+      // runs after grow so a segment completed at this height is countable by
+      // an epoch close at this height (`freeze_height <= H_close`, inclusive).
+      // Gated on the same leaf-count-change condition as grow: with no new
+      // leaves the frozen-segment count cannot cross a boundary, so the hook
+      // would be a pure no-op — and a wasted per-block DB read across sync.
+      process_archival_segment_freezes_at_height(prev_height + 1);
+    }
 
     // TODO(optimization): checkpoint save + intermediate layer pruning run
     // synchronously here.  For trees with millions of outputs this could add
@@ -527,6 +537,16 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
       // Step 3: Trim the tree.
       trim_curve_tree(drained_count);
     }
+
+    // Segment-freeze pop hook (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.2):
+    // after the trim, delete every registry row above the post-trim
+    // frozen-segment count. Runs after revert_archival_epoch_close_at_height
+    // (above) so the close revert saw the rows the close saw. Gated on the same
+    // leaf-count-change condition as trim: with no leaves trimmed the
+    // frozen-segment count cannot un-cross a boundary, so the hook is a pure
+    // no-op — and a wasted per-block DB read across a reorg-free pop.
+    if (drained_count > 0)
+      revert_archival_segment_freezes();
 
     // Step 4: Restore drained leaves back to the pending table.
     for (const auto& entry : drain_entries)
@@ -1303,13 +1323,6 @@ bool BlockchainDB::get_archival_shard_segment_at_height(uint64_t /*shard_id*/, u
   return false;
 }
 
-bool BlockchainDB::get_archival_shard_leaf_layer_scalars(uint64_t /*shard_id*/,
-  uint32_t /*leaf_index_in_segment*/, uint64_t /*at_height*/,
-  std::vector<uint8_t>& /*out_flat_scalars*/) const
-{
-  return false;
-}
-
 void BlockchainDB::put_archival_bond_record(const crypto::hash& /*p_id*/,
   const std::vector<uint8_t>& /*hybrid_pubkey*/, uint64_t /*join_settlement_epoch*/,
   uint64_t /*bonded_total_atomic*/, uint8_t /*holdings_kind*/,
@@ -1332,8 +1345,24 @@ void BlockchainDB::put_archival_shard_segment(uint64_t /*shard_id*/, uint64_t /*
 {
 }
 
-void BlockchainDB::put_archival_shard_leaf_layer_scalars(uint64_t /*shard_id*/,
-  uint32_t /*leaf_index_in_segment*/, const std::vector<uint8_t>& /*flat_scalars*/)
+bool BlockchainDB::get_curve_tree_leaf_chunk(uint64_t first_tree_position, uint64_t count, uint8_t* out) const
+{
+  // Portable fallback: one lookup per leaf. LMDB overrides this with a single
+  // cursor scan over the contiguous positions.
+  for (uint64_t i = 0; i < count; ++i)
+  {
+    if (!get_curve_tree_leaf_by_tree_position(first_tree_position + i,
+          out + i * shekyl::db::kLeafSize))
+      return false;
+  }
+  return true;
+}
+
+void BlockchainDB::process_archival_segment_freezes_at_height(uint64_t /*block_height*/)
+{
+}
+
+void BlockchainDB::revert_archival_segment_freezes()
 {
 }
 

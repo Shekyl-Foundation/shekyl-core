@@ -1,4 +1,5 @@
 - [ ] **Stressnet stable for 4 consecutive weeks** (Phase 7.7)
+  - [ ] **Prerequisite of stressnet ENTRY: `K_COVER` sealed** (§14.4-derived value landed, `k_cover_provisional` cleared — `docs/design/ARCHIVAL_REWARD_GATE_M1.md` §4 seal-before-stressnet pin). While provisional the M1 gate runs as identity, so only a post-seal stressnet exercises the activation boundary live; sealing after stressnet entry would leave mainnet genesis as the boundary's first live execution.
   - [ ] All stressnet acceptance criteria met (see `tests/stressnet/README.md`)
   - [ ] Zero tree root divergences for full 4-week run
   - [ ] Block validation p95 < 500ms sustained

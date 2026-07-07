@@ -52,6 +52,14 @@ KEYS_INTEGER = {
     # src/blockchain_db/shekyl_types.h. Rust mirror:
     # rust/shekyl-archival-retention/build.rs (MAX_CLAIM_AGE_W).
     "max_claim_age_w": "u64",
+    # Segment/shard geometry (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.2):
+    # level-2 subtree leaf count, 38 * 18 * 38. C++ consumer: the freeze
+    # writer's row value field ONLY — the boundary division lives solely
+    # in the Rust entry point (shekyl_archival_frozen_segment_count);
+    # the division-one-site tripwire refuses `/`- or `%`-adjacent uses
+    # in src/. Rust mirror: rust/shekyl-archival-retention/build.rs
+    # (SEGMENT_LEAF_COUNT, width-product compile assert).
+    "segment_leaf_count": "u64",
 }
 
 # Inclusive [min, max] range for each declared type.
@@ -188,6 +196,18 @@ def main() -> int:
 // rust/shekyl-archival-retention/build.rs (MAX_CLAIM_AGE_W).
 #define SHEKYL_ARCHIVAL_MAX_CLAIM_AGE_W \
     {emit("max_claim_age_w")}
+
+// Segment/shard geometry (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.2):
+// SEGMENT_LEAF_COUNT, the level-2 subtree leaf count under the
+// production curve-tree widths (38 * 18 * 38 = 25992). C++ consumes
+// this macro ONLY as the registry row's segment_leaf_count value field
+// in the freeze writer; the first-crossing boundary division lives
+// solely in the Rust entry point (shekyl_archival_frozen_segment_count)
+// and the division-one-site tripwire refuses `/`/`%` spellings against
+// this macro in src/. Rust mirror + width-product compile assert:
+// rust/shekyl-archival-retention (segment_freeze.rs).
+#define SHEKYL_ARCHIVAL_SEGMENT_LEAF_COUNT \
+    {emit("segment_leaf_count")}
 """
     out_path.write_text(content, encoding="utf-8")
     return 0

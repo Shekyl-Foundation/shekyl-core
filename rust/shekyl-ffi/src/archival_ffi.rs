@@ -12,15 +12,16 @@
 use std::io::Cursor;
 
 use shekyl_archival_retention::{
-    challenge_fire_height, challenge_seal_height, epoch_close_compute, epoch_close_due_at_height,
-    good_through, p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height,
-    serve_credit_epoch_ok, settlement_epoch_at_height, verify_bond_post_ct_balance,
-    verify_join_market_bond_post, verify_leaf_index, verify_segment_path, ArchivalBondPostVin,
-    ArchivalServeCreditResponse, BadInterval, BandedCurveParams, BondCtBalanceError, BondPostError,
-    BondPostKind, BondTerm, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
-    HoldingsDescriptor, HoldingsKind, WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+    challenge_fire_height, challenge_leaf_chunk_bounds, challenge_seal_height, epoch_close_compute,
+    epoch_close_due_at_height, frozen_segment_count, good_through,
+    p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height, serve_credit_epoch_ok,
+    settlement_epoch_at_height, verify_bond_post_ct_balance, verify_join_market_bond_post,
+    verify_leaf_index, verify_segment_path, ArchivalBondPostVin, ArchivalServeCreditResponse,
+    BadInterval, BandedCurveParams, BondCtBalanceError, BondPostError, BondPostKind, BondTerm,
+    CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
+    HoldingsKind, KCover, WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
     ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-    CHALLENGE_RESOLUTION_BLOCKS, K_COVER, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
+    CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -209,6 +210,45 @@ pub extern "C" fn shekyl_archival_challenge_fire_height(
     let mut p = [0u8; 32];
     p.copy_from_slice(pid);
     challenge_fire_height(h_open, h_close, &hash, &p, shard_id, settlement_epoch)
+}
+
+/// Frozen-segment count at a curve-tree leaf count — the first-crossing
+/// rule (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §1/§5.1).
+///
+/// Both daemon hooks (the `add_block` freeze processor and the
+/// `pop_block` revert) call this; C++ never performs the boundary
+/// division inline (division-one-site tripwire, pipeline doc §8).
+#[no_mangle]
+pub extern "C" fn shekyl_archival_frozen_segment_count(leaf_count: u64) -> u64 {
+    frozen_segment_count(leaf_count)
+}
+
+/// Leaf-layer chunk backing challenged index `leaf_index_in_segment` of
+/// frozen shard `shard_id`, as a global position range over the daemon's
+/// leaf table (pipeline doc §6.2). Returns 1 and writes the bounds; 0
+/// (no write) when the index is out of segment range, the position
+/// overflows, or an out pointer is null — verifier-input rejection, not
+/// abort.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_challenge_leaf_chunk_bounds(
+    shard_id: u64,
+    leaf_index_in_segment: u64,
+    out_first_leaf_position: *mut u64,
+    out_leaf_count: *mut u64,
+) -> u8 {
+    if out_first_leaf_position.is_null() || out_leaf_count.is_null() {
+        return 0;
+    }
+    match challenge_leaf_chunk_bounds(shard_id, leaf_index_in_segment) {
+        Some(bounds) => {
+            unsafe {
+                *out_first_leaf_position = bounds.first_leaf_position;
+                *out_leaf_count = bounds.leaf_count;
+            }
+            1
+        }
+        None => 0,
+    }
 }
 
 /// Verify vin payload bytes (after the type tag) for steps 4–9 of gate-2 §5.3.
@@ -555,8 +595,10 @@ unsafe fn gather_bad_intervals(ptr: *const u64, pair_len: usize) -> Option<Vec<B
 /// `H_close(E)`, produced by the C++ gather's single
 /// `count_frozen_shards_at_close` helper (`freeze_height ≤ H_close(E)`,
 /// equality counts, decode failure aborts loudly) inside the close's write
-/// transaction. The `K_COVER` threshold itself is threaded here from the
-/// crate constant — the comparison lives only in `epoch_close_compute`.
+/// transaction. The `K_COVER` threshold itself is threaded here through the
+/// PF-6a `KCover::consensus()` capability constructor — the only production
+/// path to a threshold value — and the comparison lives only in
+/// `epoch_close_compute`.
 ///
 /// `out_r_market_ptr` must address `shards_len` writable `u64`s; outputs are
 /// zeroed before computation so a failure never leaves stale values.
@@ -683,7 +725,9 @@ pub unsafe extern "C" fn shekyl_archival_epoch_close_compute(
         shards: &shards,
         credit_pairs: &pairs,
         frozen_shard_count,
-        k_cover: K_COVER,
+        // PF-6a: the consensus() constructor is the only production path to
+        // a threshold value; a divergent threshold is a type error here.
+        k_cover: KCover::consensus(),
     };
     let result = match epoch_close_compute(&inputs) {
         Ok(r) => r,
@@ -1144,7 +1188,7 @@ mod tests {
             shards: &rust_shards,
             credit_pairs: &rust_pairs,
             frozen_shard_count: 1,
-            k_cover: K_COVER,
+            k_cover: KCover::consensus(),
         })
         .unwrap();
         assert_eq!(sigma, expected.sigma_work_milli);

@@ -74,10 +74,14 @@ width).
 
 **Shard ids are dense from 0** on every branch: segment `k` freezes
 only after `k−1` (leaf count is one number). The registry rows are
-`0..frozen_segment_count` with no holes — but consumers keep the
-walk-not-watermark discipline anyway (M1 §11.8 M3-1: the cached
-counter is a named drift adversary; density is a property, not a
-license).
+`0..frozen_segment_count` with no holes. M1 §11.8 M3-1 named the
+*cached counter* as a drift adversary; the persisted counter that
+backs the gate operand (§4.4) is admissible because it carries the
+property M3-1's adversary lacked — O-3 pop-symmetry enforced at the
+row-mutation sites, differential-tested against the walk, with the
+mutation surface tripwire-pinned. Density is a property, not a
+license: the reader still frontier-checks (§4.4) rather than
+trusting the count blindly.
 
 ---
 
@@ -244,6 +248,48 @@ expectation is left to the §9 tests, not silently tolerated.
   seed (genesis has zero leaves ⇒ zero segments ⇒
   `frozen_shard_count = 0` ⇒ early epochs gated once `K_COVER`
   seals, which is exactly M1's cold-start refusal).
+
+### 4.4 Persisted pop-symmetric counter (the O(1) operand, V8)
+
+The M1 gate operand `frozen_shard_count` is backed by a persisted
+counter in the `properties` table under `"archival_frozen_shard_count"`
+(schema V8; pre-V8 databases are refused at open with a
+delete-and-resync directive — `15-deletion-and-debt.mdc`, no
+pre-genesis migration code).
+
+M1 §11.8's M3-1 named a *cached counter* as a drift adversary and
+refused it. What M3-1's adversary lacked — and this counter has —
+is **O-3 pop-symmetry enforced structurally**:
+
+- **+1 in the row writer.** `put_archival_shard_segment` puts with
+  `MDB_NOOVERWRITE` (rows are CREATE-only; `MDB_KEYEXIST` is a loud
+  abort, discharging O-2 at the mutation site) and increments the
+  counter in the same write transaction. One production caller
+  (§4.1's connect hook); the tripwire pins the site count.
+- **−1 per deleted row in the pop revert.** §4.2's reverse walk
+  counts its deletions and decrements by exactly that number, with
+  an underflow abort. Counter and table move in lockstep or the
+  transaction dies.
+- **No third mutation site.** The key literal and the setter call
+  sites are tripwire-pinned (M1 script invariant 6); a new mutation
+  site is a CI failure, not a review-attention item.
+
+The reader `count_frozen_shards_at_close(h_close)` becomes O(1):
+read the counter, then run a one-row **frontier check** — the
+`MDB_LAST` row must decode (walk-not-watermark's corruption
+tripwire, preserved at the frontier) and must satisfy
+`freeze_height ≤ h_close` (a future-dated frontier means the
+caller's transaction snapshot and the counter disagree — loud
+abort, not a filtered count). Counter/table divergence (counter
+nonzero with empty table, or vice versa) is likewise a loud abort.
+This is sound *because* rows are dense-id CREATE-only with
+monotonically non-decreasing `freeze_height` (§1.1, O-2): if the
+frontier row satisfies the boundary, every row does.
+
+The O(N) walk survives as `count_frozen_shard_rows_by_walk_for_test`
+— a test-support differential oracle with zero production callers
+(tripwire-enforced). §9's differential test drives freeze/pop/
+re-apply cycles and asserts counter == walk at every step.
 
 ---
 
@@ -427,9 +473,15 @@ sibling under the same consensus-invariants umbrella):
   (the freeze processor). The corruption-test raw writer keeps its
   existing named exemption.
 - **Cursor accounting:** the invariant-2 expected cursor count over
-  the segment table goes from 2 to 4 (count helper, slash scan,
-  freeze processor's resume peek, pop revert walk) — each pinned by
-  name, same shape as today's list.
+  the segment table goes from 2 to 5 (operand frontier probe, slash
+  scan, freeze processor's resume peek, pop revert walk, and the
+  §4.4 differential-walk test oracle) — each pinned by name, same
+  shape as today's list.
+- **Counter mutation surface (invariant 6):** the
+  `"archival_frozen_shard_count"` key literal appears exactly twice
+  in `src/` (getter + setter definitions); the setter has exactly
+  two call sites (writer +1, revert −1); the differential-walk
+  oracle has zero production callers.
 - **Division one-site:** no `SEGMENT_LEAF_COUNT`-adjacent `/` or `%`
   in `src/` — the boundary arithmetic lives only in the Rust entry
   point (positive control: the FFI call site exists in both hooks).
