@@ -483,6 +483,19 @@
   staker auto-start, non-staker quiet path, double-start refusal
   (single-flight), shutdown-releases-engine, and restart-after-stop.
 
+### Changed
+
+- **ci: CodeQL ignores vendored `external/` code**
+  (`.github/codeql/config.yml`). Added `paths-ignore: [external]` so the
+  scanner no longer reports on third-party vendored deps (LMDB,
+  qrcodegen, RandomX, unbound, …), which Shekyl never patches in place.
+  Clears the standing vendored highs (`external/db_drivers/liblmdb/mdb.c`
+  integer-multiplication/wider-type-comparison,
+  `external/qrcodegen/QrCode.cpp`) while keeping those queries live on
+  Shekyl-owned `src/` and `rust/`. Generalizes the per-id
+  `cpp/upcast-array-pointer-arithmetic` filter; prevents dev→main release
+  PRs from re-attributing pre-existing library alerts as PR-introduced.
+
 ### Documentation
 
 - **docs: submit-verdict / 2c completion-status sweep (rule 91).** Landed

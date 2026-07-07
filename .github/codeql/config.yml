@@ -56,6 +56,33 @@ name: "Shekyl CodeQL config"
 # surface we can fix without forking LMDB. Large release PRs (e.g. dev→main)
 # re-attribute these pre-existing library alerts as PR-introduced; suppressing
 # the query keeps CodeQL signal on findings we can actually act on.
+
+# ----------------------------------------------------------------------
+# Vendored-code path exclusion
+# ----------------------------------------------------------------------
+#
+# `external/**` is third-party vendored code (LMDB, qrcodegen, RandomX,
+# unbound, etc.), tracked as submodules/imports. Shekyl does not patch
+# these in place — the remediation path for a real finding is a dep
+# update or a fork, never a local edit — so CodeQL alerts anchored in
+# `external/` are not an actionable Shekyl surface. Analyzing them only
+# produces noise that large dev→main release PRs re-attribute as
+# PR-introduced (the same failure mode documented for the
+# `cpp/upcast-array-pointer-arithmetic` filter above, generalized).
+#
+# Concretely this drops the standing vendored highs in
+# `external/db_drivers/liblmdb/mdb.c` (integer-multiplication /
+# wider-type-comparison) and `external/qrcodegen/QrCode.cpp`, while
+# keeping those same queries live on Shekyl-owned `src/` and `rust/`
+# where the findings would be real. The per-id `query-filters` below are
+# retained deliberately: `rust/hard-coded-cryptographic-value` targets
+# `rust/` test code (outside `external/`), and
+# `cpp/upcast-array-pointer-arithmetic` traces dataflow through a
+# Shekyl-owned wrapper in `src/blockchain_db/lmdb/db_lmdb.cpp`, so
+# neither is made redundant by this path filter.
+paths-ignore:
+  - external
+
 query-filters:
   - exclude:
       id: rust/hard-coded-cryptographic-value
