@@ -7,6 +7,7 @@
 //! own (`20-rust-vs-cpp-policy.mdc` §4; `40-ffi-discipline.mdc` coarse-call rule).
 
 use crate::constants::SETTLEMENT_EPOCH_BLOCKS;
+use crate::k_cover::KCover;
 use crate::reward_arithmetic::{
     curve_milli, mul_div_floor, scarcity_milli, BandedCurveParams, WORK_MILLI_SCALE,
 };
@@ -262,6 +263,23 @@ pub struct EpochCloseInputs<'a> {
     pub bonds: &'a [EpochCloseBond<'a>],
     pub shards: &'a [EpochCloseShard],
     pub credit_pairs: &'a [CreditPair],
+    /// M1 reward-gate input (`ARCHIVAL_REWARD_GATE_M1.md` §1.1): the
+    /// segment-table count at `H_close(E)` — rows in
+    /// `m_archival_shard_segment` with `freeze_height ≤ H_close(E)`, counted
+    /// by the C++ gather's single `count_frozen_shards_at_close` helper
+    /// inside the close's write transaction. **Not** derivable from
+    /// [`Self::shards`]: the gather enumerates credit-bearing shards (a
+    /// participation measurement — exactly the sensor class the gate
+    /// refuses, §11 M2-1); the segment-table count is structural and
+    /// monotone per branch.
+    pub frozen_shard_count: u64,
+    /// The M1 cover threshold, as the PF-6a capability newtype. Production
+    /// callers (the FFI shim) thread [`KCover::consensus`]; the KATs inject
+    /// per-case values via `KCover::for_kat` (dev-only `consensus-kat`
+    /// feature) so the fixtures survive the §4 constant finalization without
+    /// rewrite. The *comparison* lives only in [`epoch_close_compute`]
+    /// (§6 tripwire) — threading the value is not a second predicate site.
+    pub k_cover: KCover,
 }
 
 /// Epoch-close outputs: `R_market` per input shard (parallel to
@@ -294,6 +312,16 @@ impl std::error::Error for CreditIndexOutOfRange {}
 ///
 /// Composes the pinned semantics in one deterministic pass:
 ///
+/// 0. **M1 reward gate** (`ARCHIVAL_REWARD_GATE_M1.md` §2.1) — for epochs
+///    whose `frozen_shard_count` is below `k_cover` (threaded from
+///    [`K_COVER`](crate::k_cover::K_COVER) by the production FFI caller),
+///    the result is the zero output (`r_market_by_shard: [0; n]`,
+///    `sigma_work_milli: 0`) **without computing the internal derivation** —
+///    zero-at-top, so no consensus quantity derived from a gated epoch is
+///    ever non-zero. This is the **only** `K_COVER` comparison site in the
+///    codebase (§6 tripwire); the claimability rule inherits through the
+///    zeroed stored `Σwork` + wire positivity, never through a second
+///    predicate.
 /// 1. **Market membership** per bond — [`market_member_at_epoch`].
 /// 2. **`R_market(shard, E)`** — count of serve-credit rows whose `P` is a
 ///    market member (§3.3 pinned measure).
@@ -302,7 +330,9 @@ impl std::error::Error for CreditIndexOutOfRange {}
 /// 4. **`Σwork(E)`** — [`sigma_work_milli`] over per-bond `Curve(work_P)`.
 ///
 /// Errors (rather than panics) on malformed gather indices so the FFI shim
-/// can map the failure to a loud daemon-side abort.
+/// can map the failure to a loud daemon-side abort. The gather-index check
+/// runs **before** the gate so a malformed gather aborts loudly on gated
+/// epochs too (the gate zeroes outputs, never accountability — §3.1).
 pub fn epoch_close_compute(
     inputs: &EpochCloseInputs<'_>,
 ) -> Result<EpochCloseResult, CreditIndexOutOfRange> {
@@ -313,6 +343,13 @@ pub fn epoch_close_compute(
         if pair.bond_idx >= bonds.len() || pair.shard_idx >= shards.len() {
             return Err(CreditIndexOutOfRange { pair_index });
         }
+    }
+
+    if inputs.frozen_shard_count < inputs.k_cover.get() {
+        return Ok(EpochCloseResult {
+            r_market_by_shard: vec![0u64; shards.len()],
+            sigma_work_milli: 0,
+        });
     }
 
     let member: Vec<bool> = bonds
@@ -334,20 +371,11 @@ pub fn epoch_close_compute(
         }
     }
 
-    let age_milli_by_shard: Vec<u64> = shards
-        .iter()
-        .map(|s| {
-            if s.has_segment {
-                shard_age_milli(
-                    inputs.close_block_height,
-                    s.freeze_height,
-                    inputs.settlement_epoch_blocks,
-                )
-            } else {
-                0
-            }
-        })
-        .collect();
+    // Shard age feeds `shard_work_milli` only for member-held credited shards
+    // (the guarded branch below), so compute it lazily and memoize per shard
+    // index — a shard whose only credit comes from a non-member or non-holding
+    // bond never pays the two `shard_age_milli` divisions.
+    let mut age_milli_by_shard: Vec<Option<u64>> = vec![None; shards.len()];
 
     let mut work_by_bond = vec![0u64; bonds.len()];
     for pair in inputs.credit_pairs {
@@ -361,9 +389,20 @@ pub fn epoch_close_compute(
         {
             continue;
         }
+        let age_milli = *age_milli_by_shard[pair.shard_idx].get_or_insert_with(|| {
+            if shard.has_segment {
+                shard_age_milli(
+                    inputs.close_block_height,
+                    shard.freeze_height,
+                    inputs.settlement_epoch_blocks,
+                )
+            } else {
+                0
+            }
+        });
         let contribution = shard_work_milli(
             r_market_by_shard[pair.shard_idx],
-            age_milli_by_shard[pair.shard_idx],
+            age_milli,
             inputs.age_weight_milli,
             true,
         );
@@ -440,6 +479,10 @@ mod tests {
             bonds,
             shards,
             credit_pairs: pairs,
+            // Ungated by data (1 ≥ 1), not by the k_cover = 0 degenerate:
+            // these tests pin the pre-gate computation through a live gate.
+            frozen_shard_count: 1,
+            k_cover: KCover::for_kat(1),
         }
     }
 

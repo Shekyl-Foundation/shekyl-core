@@ -52,6 +52,8 @@
     "close_block_height": 110000,
     "settlement_epoch_blocks": 10000,
     "age_weight_milli": 500,
+    "frozen_shard_count": 2,
+    "k_cover": 1,
     "bonds": [
       { "join_epoch": 0, "complete_tree": false, "bad_intervals": [], "held_shard_ids": [42, 43] },
       { "join_epoch": 0, "complete_tree": false, "bad_intervals": [{ "start": 8, "end_exclusive": 18446744073709551615 }], "held_shard_ids": [42] },

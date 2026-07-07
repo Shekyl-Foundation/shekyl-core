@@ -31,7 +31,9 @@ shekyl-difficulty = { path = "../shekyl-difficulty" }
 # never enabled in production builds.
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-economics = { path = "../shekyl-economics" }
-shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# `provisional-k-cover`: K_COVER unsealed-sentinel acknowledgment
+# (ARCHIVAL_REWARD_GATE_M1.md §4) — delete this feature at the §14.4 seal.
+shekyl-archival-retention = { path = "../shekyl-archival-retention", features = ["provisional-k-cover"] }
 # Single-sourced CT cleartext balance equation (`shekyl_verify_ct_balance`
 # general export in `ct_balance_ffi.rs`). Same crate the bond-post path reaches
 # via archival-retention; depended on directly here for the no-bond-term shape.

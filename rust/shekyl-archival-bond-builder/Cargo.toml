@@ -14,7 +14,9 @@ license.workspace = true
 [dependencies]
 # Verify-side types + floor + the term-side definitions (single-sourced; the
 # builder constructs exactly what verify checks — §4 single-sourcing-by-import).
-shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# `provisional-k-cover`: K_COVER unsealed-sentinel acknowledgment
+# (ARCHIVAL_REWARD_GATE_M1.md §4) — delete this feature at the §14.4 seal.
+shekyl-archival-retention = { path = "../shekyl-archival-retention", features = ["provisional-k-cover"] }
 # `ArchivalPKeys` (P identity + bond-spend hybrid keys) and hybrid signing.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # Typed-side cleartext balance terms (bond_credit -> OutputTerm — §7.2).

@@ -7,23 +7,17 @@
 
 use shekyl_archival_retention::{
     curve_milli, epoch_close_compute, r_market_count, sigma_work_milli, BadInterval,
-    BandedCurveParams, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
-    ServeCreditRow, WORK_MILLI_SCALE,
+    BandedCurveParams, EpochCloseInputs, KCover, ServeCreditRow, WORK_MILLI_SCALE,
 };
+
+mod common;
 
 const KAT: &str = include_str!("fixtures/consensus_state_kat_v1.json");
 
 #[test]
 fn consensus_state_kat_v1() {
     let doc: serde_json::Value = serde_json::from_str(KAT).expect("kat json");
-    let curve = BandedCurveParams {
-        plateau_work_milli: doc["curve"]["plateau_work_milli"]
-            .as_u64()
-            .expect("plateau_work"),
-        plateau_value_milli: doc["curve"]["plateau_value_milli"]
-            .as_u64()
-            .expect("plateau_value"),
-    };
+    let curve = common::parse_curve(&doc["curve"]);
     let e = doc["settlement_epoch"].as_u64().expect("epoch");
     let shard = doc["shard_id"].as_u64().expect("shard");
 
@@ -92,64 +86,10 @@ fn consensus_state_kat_v1() {
         "fixture must carry the composed epoch_close section"
     );
 
-    struct BondOwned {
-        join: u64,
-        complete: bool,
-        bad: Vec<BadInterval>,
-        held: Vec<u64>,
-    }
-    let bonds_owned: Vec<BondOwned> = ec["bonds"]
-        .as_array()
-        .expect("bonds")
-        .iter()
-        .map(|b| BondOwned {
-            join: b["join_epoch"].as_u64().expect("join_epoch"),
-            complete: b["complete_tree"].as_bool().expect("complete_tree"),
-            bad: b["bad_intervals"]
-                .as_array()
-                .expect("bad_intervals")
-                .iter()
-                .map(|iv| BadInterval {
-                    start_epoch: iv["start"].as_u64().expect("start"),
-                    end_exclusive: iv["end_exclusive"].as_u64().expect("end_exclusive"),
-                })
-                .collect(),
-            held: b["held_shard_ids"]
-                .as_array()
-                .expect("held_shard_ids")
-                .iter()
-                .map(|v| v.as_u64().expect("shard id"))
-                .collect(),
-        })
-        .collect();
-    let bonds: Vec<EpochCloseBond<'_>> = bonds_owned
-        .iter()
-        .map(|b| EpochCloseBond {
-            join_settlement_epoch: b.join,
-            is_foundation_complete_tree: b.complete,
-            bad_intervals: &b.bad,
-            held_shard_ids: &b.held,
-        })
-        .collect();
-    let shards: Vec<EpochCloseShard> = ec["shards"]
-        .as_array()
-        .expect("shards")
-        .iter()
-        .map(|s| EpochCloseShard {
-            shard_id: s["shard_id"].as_u64().expect("shard_id"),
-            has_segment: s["has_segment"].as_bool().expect("has_segment"),
-            freeze_height: s["freeze_height"].as_u64().expect("freeze_height"),
-        })
-        .collect();
-    let pairs: Vec<CreditPair> = ec["credit_pairs"]
-        .as_array()
-        .expect("credit_pairs")
-        .iter()
-        .map(|p| CreditPair {
-            bond_idx: usize::try_from(p["bond"].as_u64().expect("bond idx")).unwrap(),
-            shard_idx: usize::try_from(p["shard"].as_u64().expect("shard idx")).unwrap(),
-        })
-        .collect();
+    let bonds_owned = common::parse_bonds(&ec["bonds"]);
+    let bonds = common::bonds_as_slice(&bonds_owned);
+    let shards = common::parse_shards(&ec["shards"]);
+    let pairs = common::parse_pairs(&ec["credit_pairs"]);
 
     let out = epoch_close_compute(&EpochCloseInputs {
         settlement_epoch: ec["settlement_epoch"].as_u64().expect("epoch"),
@@ -160,6 +100,13 @@ fn consensus_state_kat_v1() {
         bonds: &bonds,
         shards: &shards,
         credit_pairs: &pairs,
+        // M1 gate inputs (ARCHIVAL_REWARD_GATE_M1.md §2.1). The fixture
+        // carries them explicitly — parameterized, never baked from the
+        // provisional constant — so the KAT survives the §4 seal unchanged.
+        frozen_shard_count: ec["frozen_shard_count"]
+            .as_u64()
+            .expect("frozen_shard_count"),
+        k_cover: KCover::for_kat(ec["k_cover"].as_u64().expect("k_cover")),
     })
     .expect("well-formed fixture indices");
 

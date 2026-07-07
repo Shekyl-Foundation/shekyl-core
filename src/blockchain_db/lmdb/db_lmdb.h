@@ -464,9 +464,6 @@ private:
   virtual uint64_t archival_bond_join_epoch(const crypto::hash& p_id) const override;
   virtual bool get_archival_shard_segment_at_height(uint64_t shard_id, uint64_t at_height,
     crypto::hash& out_rk, uint64_t& out_leaf_count) const override;
-  virtual bool get_archival_shard_leaf_layer_scalars(uint64_t shard_id,
-    uint32_t leaf_index_in_segment, uint64_t at_height,
-    std::vector<uint8_t>& out_flat_scalars) const override;
 
   virtual void put_archival_bond_record(const crypto::hash& p_id,
     const std::vector<uint8_t>& hybrid_pubkey, uint64_t join_settlement_epoch,
@@ -478,11 +475,11 @@ private:
   virtual void remove_archival_bond_record(const crypto::hash& p_id) override;
   virtual void put_archival_shard_segment(uint64_t shard_id, uint64_t freeze_height,
     const crypto::hash& segment_subroot_rk, uint64_t segment_leaf_count) override;
-  virtual void put_archival_shard_leaf_layer_scalars(uint64_t shard_id,
-    uint32_t leaf_index_in_segment, const std::vector<uint8_t>& flat_scalars) override;
 
   virtual void process_archival_slash_at_height(uint64_t block_height) override;
   virtual void revert_archival_slashes_at_height(uint64_t block_height) override;
+  virtual void process_archival_segment_freezes_at_height(uint64_t block_height) override;
+  virtual void revert_archival_segment_freezes() override;
   virtual void process_archival_epoch_close_at_height(uint64_t block_height) override;
   virtual void revert_archival_epoch_close_at_height(uint64_t block_height) override;
   virtual uint64_t get_archival_r_market(uint64_t shard_id,
@@ -517,6 +514,7 @@ private:
   virtual bool get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, uint8_t* hash_out) const override;
   virtual bool get_curve_tree_leaf_by_tree_position(uint64_t tree_position, uint8_t* leaf_out) const override;
   virtual bool get_curve_tree_leaf_by_output_index(uint64_t output_index, uint8_t* leaf_out) const override;
+  virtual bool get_curve_tree_leaf_chunk(uint64_t first_tree_position, uint64_t count, uint8_t* out) const override;
 
   virtual void store_curve_tree_root_at_height(uint64_t block_height, const std::array<uint8_t, 32>& root) override;
   virtual std::array<uint8_t, 32> get_curve_tree_root_at_height(uint64_t block_height) const override;
@@ -535,26 +533,9 @@ private:
   virtual uint64_t get_last_pruned_tx_data_height() const override;
   virtual bool tx_has_verification_data(const crypto::hash& tx_hash) const override;
 
-  // migrate from older DB version to current
+  // migrate from older DB version to current (pre-V8 DBs are refused loudly;
+  // no in-Shekyl migration path exists — 15-deletion-and-debt / 60-no-monero-legacy)
   void migrate(const uint32_t oldversion);
-
-  // migrate from DB version 0 to 1
-  void migrate_0_1();
-
-  // migrate from DB version 1 to 2
-  void migrate_1_2();
-
-  // migrate from DB version 2 to 3
-  void migrate_2_3();
-
-  // migrate from DB version 3 to 4
-  void migrate_3_4();
-
-  // migrate from DB version 4 to 5
-  void migrate_4_5();
-
-  // migrate from DB version 5 to 6 (split pqc_auths from txs_pruned)
-  void migrate_5_6();
 
   void cleanup_batch();
 
@@ -599,11 +580,81 @@ private:
   void delete_archival_sigma_work_for_epoch(uint64_t settlement_epoch);
   void delete_archival_sigma_work_before_epoch(uint64_t prune_below_epoch);
   void delete_archival_serve_credit_before_epoch(uint64_t prune_below_epoch);
+  /** M1 reward-gate operand (ARCHIVAL_REWARD_GATE_M1.md §1.1): the single
+   * counting read over m_archival_shard_segment, O(1) via the persisted
+   * pop-symmetric counter (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4) plus
+   * two frontier checks on the MDB_LAST row: decode must succeed and its
+   * freeze_height must satisfy `<= h_close` (equality counts; a frontier
+   * row above the close is corruption and aborts loudly — M1 §11.11).
+   * One call site (process_archival_epoch_close_at_height); the §6
+   * tripwire refuses any other counting read over the segment table.
+   *
+   * Public (with the test-support members below) so the count-pass
+   * boundary and decode-failure cases — unreachable from the Rust KAT,
+   * which injects the count — are pinned in archival_substrate_lmdb.cpp
+   * per §11.8 M3-1/M3-2. */
+public:
+  uint64_t count_frozen_shards_at_close(uint64_t h_close) const;
+  /** Differential oracle for the O(1) counter
+   * (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4): the pre-counter full-table
+   * walk with per-row decode, counting every registry row. Tests assert
+   * walk == counter across freeze/pop/re-apply cycles; a divergence is the
+   * counter-drift adversary made visible. Test-support only; no production
+   * caller (tripwire-pinned). */
+  uint64_t count_frozen_shard_rows_by_walk_for_test() const;
+  /** Stored-shape probe (ARCHIVAL_REWARD_GATE_M1.md §5 round-2 additions):
+   * distinguishes a present-and-zero sigma row from MDB_NOTFOUND, which
+   * get_archival_sigma_work_milli deliberately launders to 0. Test-support
+   * reader; recorded in the spec's §11.6 R2-2 stored-close reader
+   * enumeration. */
+  bool has_archival_sigma_work_row(uint64_t settlement_epoch) const;
+  /** Corruption-simulation writer (ARCHIVAL_REWARD_GATE_M1.md §11.8 M3-2):
+   * plants a raw (undecodable) segment-table row so the count-pass
+   * decode-failure loud abort is armed by a test. put_archival_shard_segment
+   * funnels through encode() and can only write decodable rows, so the
+   * malformed-row consensus-divergence case is unreachable without this
+   * bypass. Test-support only; no production caller. */
+  void put_archival_shard_segment_raw_for_corruption_test(uint64_t shard_id,
+    const std::vector<uint8_t>& blob);
+  /** Raw segment-row reader (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §9): the
+   * O-3 pop-symmetry pin compares re-applied rows bit-identically (encoded
+   * bytes, not decoded fields), which no production reader exposes.
+   * Test-support only; no production caller. */
+  bool get_archival_shard_segment_raw_for_test(uint64_t shard_id,
+    std::vector<uint8_t>& out_blob) const;
+  /** Corruption-simulation deleter (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §9):
+   * removes a curve-tree layer chunk so the freeze processor's
+   * missing-layer-2-chunk loud abort is armed by a test. The grow path can
+   * only ever leave the layers table consistent with the leaf count, so the
+   * corruption case is unreachable without this bypass. Test-support only;
+   * no production caller. */
+  void remove_curve_tree_layer_chunk_for_corruption_test(uint8_t layer, uint64_t chunk);
 
 private:
   // Prefer the active write txn when present so uncommitted archival bits are visible
   // during block connect (slash scheduling, same-block idempotency after prior txs).
   int archival_db_get(MDB_dbi dbi, MDB_val* k, MDB_val* v) const;
+
+  /** Strict "leaf_count" curve-tree meta read on the active write txn
+   * (same-txn tree-mutation visibility): absent row → empty tree (0), a
+   * present-but-malformed row is a loud corruption abort. Single canonical
+   * same-txn reader so the freeze hooks cannot drift from the meta encoding. */
+  uint64_t read_curve_tree_leaf_count_on_write_txn() const;
+
+  /** Shared operand of the two segment-freeze hooks
+   * (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4): post-grow / post-trim leaf
+   * count read on the block's write txn, passed through the Rust
+   * first-crossing entry point (shekyl_archival_frozen_segment_count —
+   * the only site allowed to perform the boundary division, §5.1). */
+  uint64_t frozen_segment_count_on_write_txn() const;
+
+  /** Persisted pop-symmetric frozen-shard counter (§4.4): properties key
+   * `archival_frozen_shard_count`, +1 in put_archival_shard_segment (the
+   * CREATE-only row writer), −1 per row revert_archival_segment_freezes
+   * deletes. Exactly those two mutation sites (tripwire-pinned); the M1
+   * gate operand reads it O(1) via count_frozen_shards_at_close. */
+  uint64_t get_archival_frozen_shard_count_on_write_txn() const;
+  void set_archival_frozen_shard_count_on_write_txn(uint64_t count);
 
   MDB_env* m_env;
 
@@ -639,7 +690,6 @@ private:
   MDB_dbi m_archival_serve_credit;    // P_id[32]||BE(shard)||BE(E) [48B] -> uint8_t 0x01 flag
   MDB_dbi m_archival_bond;            // P_id[32] -> ArchivalBondValue blob
   MDB_dbi m_archival_shard_segment;   // BE(shard_id) -> segment metadata
-  MDB_dbi m_archival_shard_leaf;      // BE(shard)||BE(leaf_idx) -> flat scalars
   MDB_dbi m_archival_slash_applied;   // P_id||shard||E -> slash idempotency bit
   MDB_dbi m_archival_slash_log;       // BE(height)||BE(seq) -> revert journal
   MDB_dbi m_archival_r_market;        // BE(shard)||BE(E) -> BE(count)

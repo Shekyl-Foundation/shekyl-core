@@ -23,7 +23,215 @@
   reversion shape) — their error-code ranges are allocated now so the
   contract never shifts under clients. No implementation crate yet; the
   first `rust/shekyl-wallet-rpc` sub-PR conforms to this file.
+- **archival: segment-freeze pipeline design round 1 opened**
+  ([`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](design/ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md))
+  — the production writer/deleter for `m_archival_shard_segment`,
+  satisfying the M1 §1.3 merge condition. Substrate survey (doc §2):
+  the daemon already maintains the curve tree inside the block write
+  txn with a drain-journaled, pop-symmetric leaf count, so freezing
+  reduces to a **first-crossing rule** — segment `k` freezes at the
+  first height where `leaf_count ≥ (k+1)·SEGMENT_LEAF_COUNT`, `R_k`
+  read from the layer-2 chunk the same-txn grow computed — and
+  O-1..O-3 discharge by inheritance (doc §3), with the pop hook a
+  derived delete (no freeze journal). Pins
+  `SEGMENT_LEAF_COUNT = 25 992` (level-2 subtree, `38·18·38`) into
+  the constants pipeline with the boundary division in a single Rust
+  FFI entry point called by both connect and pop hooks (M1-1
+  single-source shape). Exercises the maintainer's pre-genesis
+  schema-restructure authorization once: **`archival_shard_leaf` is
+  deleted** (doc §6.2) — it is a derived copy of
+  `m_curve_tree_leaves`; the gate-2 challenge path reads the
+  38-leaf chunk directly from the tree's own leaf table. Adversarial
+  review of the round-1 draft pending; implementation gated on round
+  closure.
+- **archival: segment-freeze pipeline implemented — steps 1–7 of the
+  round-1 plan** ([`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](design/ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)
+  §7, on `feat/segment-freeze-pipeline`). (1) `SEGMENT_LEAF_COUNT =
+  25 992` through the constants pipeline + Rust first-crossing
+  arithmetic (`frozen_segment_count`, `challenge_leaf_chunk_bounds`)
+  with boundary/overflow unit tests; (2) FFI exports for both; (3)
+  connect/pop hooks in `db_lmdb` inside the block write txn —
+  `process_archival_segment_freezes_at_height` writes newly-crossed
+  segment rows reading `R_k` from the layer-2 chunk the same-txn grow
+  computed, `revert_archival_segment_freezes` is the derived delete
+  (O-3 pop-symmetry); (4) **`archival_shard_leaf` deleted** — the
+  gate-2 challenge path reads the 38-leaf chunk directly from
+  `m_curve_tree_leaves`; (5) the §9 C++ suite
+  (`archival_segment_freeze.cpp`: first-crossing, multi-segment
+  catch-up, independent `R_k` recomposition, bit-identical
+  pop/re-apply, pop-above-boundary no-op, missing-layer-2-chunk loud
+  abort, M1 operand against production rows — the §11.10 fixture
+  caveat retired) + gate-2 fixture regenerated at `25 992`; (6)
+  tripwire extensions (`check_reward_gate_predicate_sites.sh`: writer
+  one-site, cursor accounting, division one-site, `for_kat`
+  containment); (7) docs (`LMDB_SCHEMA.md` v7 note, M1 §1.3
+  discharge record). O-1..O-3 discharged. Pre-flight additions folded
+  in: **PF-8** transposition-distinguishing epoch-close FFI fixture
+  (exact-sigma pin catches any swap of the three leading `u64`s);
+  **PF-6a** `KCover` capability newtype (`consensus()` sole
+  production constructor; KAT injection behind the permanent
+  dev-only `consensus-kat` feature).
+- **archival: O(1) pop-symmetric frozen-shard counter — the M1 gate
+  operand's persisted backing store (schema V8)**
+  ([`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](design/ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)
+  §4.4; M1 §11.11; closes the `FOLLOWUPS.md` efficiency follow-on
+  from code-review #263). `properties["archival_frozen_shard_count"]`
+  moves in structural lockstep with the segment table: +1 in
+  `put_archival_shard_segment` (now `MDB_NOOVERWRITE` — rows are
+  CREATE-only, enforced at the mutation site), −1 per deleted row in
+  `revert_archival_segment_freezes` (underflow-aborted).
+  `count_frozen_shards_at_close` drops its full-table walk for an
+  O(1) counter read + `MDB_LAST` frontier check (row must decode;
+  `freeze_height ≤ h_close`; future-dated frontier and counter/table
+  divergence are loud aborts). This is *not* M1 §11.8 M3-1's
+  cached-counter adversary — the adversary lacked O-3 pop-symmetry,
+  which this counter has by construction, differential-tested against
+  the retained walk oracle (`count_frozen_shard_rows_by_walk_for_test`,
+  zero production callers) across freeze/pop/re-apply cycles. Tripwire:
+  segment-table cursor accounting 4→5; new invariant 6 pins the
+  counter's mutation surface (key literal ×2, setter call sites ×2,
+  walk oracle unreferenced in production). **Breaking (rule 42):** DB
+  `VERSION` 7→8; `migrate` refuses pre-V8 databases loudly
+  (delete-and-resync; no pre-genesis migration code per
+  `15-deletion-and-debt.mdc`).
+- **archival: M1 pre-flight dispositions recorded — PF-1 breach
+  record, PF-2 accepted residual, PF-9 seal-before-stressnet pin.**
+  PF-1: the §11.9 sequencing breach recorded in `FOLLOWUPS.md` as a
+  breach (not a precedent); `26-sub-pr-design-discipline.mdc` gains
+  the explicit halt condition — no implementation commits on a branch
+  whose governing design doc names an undischarged pre-flight pass.
+  PF-2: the compile-refusal's out-of-band hand-built-artifact residual
+  recorded as accepted with its upstream dependency named
+  (Guix-reproducible builds + signed-tag release path — M1 §4). PF-9:
+  `K_COVER` finalization pinned as a **prerequisite of Phase 7.7
+  stressnet entry** (M1 §4 rule-21 entry + `RELEASE_CHECKLIST.md`) —
+  while provisional the gate runs as identity, so only a post-seal
+  stressnet exercises the activation boundary live before genesis.
+- **archival: M1 reward gate implemented — steps 1–5 of the §11.9
+  pinned sequence** ([`ARCHIVAL_REWARD_GATE_M1.md`](design/ARCHIVAL_REWARD_GATE_M1.md)
+  §11.10 implementation record). Executed on
+  `feat/m1-reward-gate-design` after the pre-flight pass held the §6
+  enumeration at the audit pin (re-verified post-WI-4-merge at
+  `1e89df832`; M3-3 discharged — WI-4 §16.3 pins `shard_count` as
+  structural, the `K_COVER` calibration derives against segment
+  count). (1) `k_cover` + `k_cover_provisional` constants with
+  `build.rs` validation and a `compile_error!` refusal absent the
+  `provisional-k-cover` feature — armed before the identifier existed
+  anywhere else; sentinel refined in-arc from fail-closed `u64::MAX`
+  to gate-identity `0` (provisional ⇔ `0`, sealed ⇒ `≥ 1`) so the
+  pre-seal corpus stays live end-to-end while the compile refusal
+  remains the shipping guard. (2) `count_frozen_shards_at_close`
+  (single production call site in the close gather; `freeze_height ≤
+  H_close` filter, decode failure aborts loudly) threaded as an FFI
+  `frozen_shard_count` parameter into
+  `EpochCloseInputs::{frozen_shard_count, k_cover}` with the
+  zero-at-top gate factor in `epoch_close_compute`. (3) Wire-level
+  positivity: `WireError::RewardAmountZero` at both `validate()` and
+  `read_payload()` — the zero-amount row is unencodable *and*
+  undecodable; the `EMISSION_AUTH_MSG_V1` corpus zero row replaced
+  and its four pinned digests regenerated in the same commit.
+  (4) `reward_gate_kat.rs` G-1..G-10 plus C++ store-side cases:
+  count-filter boundary (equality counts), malformed-row loud abort,
+  write-txn precondition, and the zero-output stored shape + reorg
+  round-trip via a legitimately-empty epoch (bitwise-identical to a
+  gated close per §2.1; direct gated-path test deferred to `K_COVER`
+  sealing). (5) `scripts/ci/check_reward_gate_predicate_sites.sh` as
+  consensus-invariants invariant 5: single `K_COVER` comparison site,
+  single counting read over `m_archival_shard_segment` (`mdb_stat`
+  refused), `≤` boundary pinned with strict-`<` refused, positive
+  controls guarding the guards. Outstanding before the PR merges:
+  the segment-freeze pipeline design round opens (§1.3 condition).
 
+- **docs: M1 reward-gate consensus rule — design rounds 1–3 spec + closure**
+  ([`ARCHIVAL_REWARD_GATE_M1.md`](design/ARCHIVAL_REWARD_GATE_M1.md)).
+  The WI-4 launch posture's cold-start refusal in consensus-rule form:
+  zero reward accrual for every persona in epochs where
+  `shard_count < K_COVER`, enforced as a uniform zero-at-top factor in
+  `epoch_close_compute` and inherited by the emission zero-tolerance
+  compare through the zeroed stored `Σwork`. Spec-first per
+  `05-system-thinking` and `26-sub-pr-design-discipline` (cited).
+  Carries the WI-4 §16.2 obligations — activation-boundary KAT as a
+  first-class deliverable, the zero-accrual/no-seniority invariant
+  enumeration with source-verification checks, and the spec/constant
+  split (`K_COVER` finalization gates on the §14.4 partition run).
+  **Round 1 closed against an adversarial wargame (§9):** consumer walk
+  verified zero pre-gate readers of the epoch-close outputs and
+  `join_settlement_epoch` as eligibility-only; the non-claimable rule
+  amended to the uniform positive-share form; the provisional
+  `k_cover` sentinel hardened to a compile-time refusal in non-test
+  builds; the reorg-across-activation-boundary argument written out
+  against the existing connect/revert pairing.
+  **Round 2 closed against a second independent review (§10, findings
+  M1-1..M1-9):** the non-claimable rule resited to the **wire level**
+  (strictly positive `reward_amount_plain`, rejected at `validate()`
+  — the zero-row beacon becomes unencodable, and `K_COVER` is
+  compared at exactly one code site, guarded by a new CI grep
+  tripwire); §2.1 output naming corrected to the real two-field
+  `EpochCloseResult` (no per-`P` surface widening); the gate pinned
+  to run **through the normal close path, never an early-return skip**
+  (close-log/revert symmetry, prune advance, stored-zero sigma), with
+  the zero-accrual-is-not-zero-accountability invariant (serve
+  credits, bad intervals, slashing stay live during gated epochs);
+  the §4.5 lagged-read discipline recorded as load-bearing for
+  non-claimability (never recompute `Σwork` from primaries); KAT
+  extended G-6..G-9 plus C++ store-shape and boundary-reorg tests;
+  reorg-argument and prune-optimization reversion clauses added
+  (rule 21). Surface enumeration updated; wallet-claim-builder
+  obligation pinned forward.
+  **Round 3 closed against two parallel reviews (§11, R2-1..R2-4 +
+  M2-1..M2-5), surfacing a critical defect the earlier rounds
+  missed:** §1.1's concrete anchor pinned the epoch-close *gather*
+  count — credit-derived, a participation measurement (the sensor
+  class §1.2 forbids: non-monotone, withdraw-service griefing lever)
+  — while the security argument, dead-rule acceptance, and reorg
+  triviality are proofs about the *segment-table* count. §1.1
+  re-anchored to `m_archival_shard_segment` filtered on
+  `freeze_height ≤ H_close(E)`, threaded as a new
+  `EpochCloseInputs::frozen_shard_count` field + FFI parameter + C++
+  gather count pass (the §6 "FFI zero-change" row corrected); G-10
+  participation-independence KAT added. The segment-freeze substrate
+  is confirmed unbuilt (`put_archival_shard_segment` has no
+  production caller, no delete path) — §1.3 restates the substrate
+  properties as named obligations O-1..O-3 (determinism, per-branch
+  monotonicity, pop-symmetry) on the future freeze-pipeline design
+  round, with implementation conditioned on them and the §9.4 reorg
+  argument explicitly conditioned on O-3. WI-4 provenance resolved as
+  a merge-ordering dependency (`feat/wi4-gf7-measurement`, pushed,
+  unmerged). Closure-review items: lagged-read tripwire made a
+  standing pre-flight check, stored-close reader enumeration
+  recorded, reorg-crossing-claim-attempt pinned as a wallet-builder
+  forward obligation, claim-era-retirement (`2615c0d`) interaction
+  closed at source (no shared wire/table/path).
+  **Round-3 amendment (§11.8, M3-1..M3-3, post-closure pin):** the
+  count pass — the surface round 3 itself created — armed to the
+  same standard as the predicate site. Single named helper
+  (`count_frozen_shards_at_close`, one call site) owns the
+  `freeze_height ≤ H_close(E)` filter; the CI tripwire extended to
+  refuse any other counting read over `m_archival_shard_segment`;
+  C++ unit cases pin the filter boundary (equality counts, per `≤` —
+  the off-by-one the Rust KAT structurally cannot reach) and the
+  decode-failure discipline (undecodable segment row aborts the
+  close loudly, same class as the gather's FATAL — a lenient skip
+  would be a consensus fork in the gating direction); G-1..G-3
+  rebound to `frozen_shard_count`; named pre-flight item added
+  requiring the WI-4 §14.4 `K_COVER` calibration to derive against
+  the segment count, not any served/participation quantity.
+  **Implementation gates decided (§11.9):** §1.3 fork resolved to
+  the second branch — the gate implements now on fixture rows
+  (wargamed: the count helper binds to the `LMDB_SCHEMA.md`-fixed
+  schema, not pipeline behavior; future-dated freezes handled by
+  `≤`, non-dense IDs by walk-not-watermark, versioned segments
+  unrepresentable under the existing key; O-3 is chain-wide, so
+  serializing the gate behind the pipeline buys almost nothing while
+  delaying the unpatchable-after-seal item), with O-1..O-3 blocking
+  on the pipeline round and that round opening before the gate PR
+  merges. Pre-flight audit pin = dev head at pre-flight time, not
+  `69af41a`. WI-4 doc merge holds sequence slot 0. Intra-PR order
+  pinned: constants + compile-refusal before the `k_cover`
+  identifier exists anywhere else in the tree (the refusal armed
+  before there is anything to guard), then helper + threading, wire
+  positivity + corpus fix in the same commit, KATs + C++ store
+  tests, tripwire scripts last.
 - **sim: GF-7 graded genesis gate — WI-4 (PROVISIONAL-PASS, local-daemon
   posture only)** (`ARCHIVAL_BOND_WI4_MEASUREMENT.md`;
   `IMPLEMENTATION_INDEX.md` §4 WI-4 row). The GF-7 principal↔`P`

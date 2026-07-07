@@ -96,8 +96,11 @@ using namespace crypto;
 // Increase when the DB structure changes.
 // V7: curve-tree tables restructured — composite keys replace DUPSORT,
 // bidirectional output↔leaf mapping tables and block-pending journal added.
-// Nodes with V6 data dirs must delete and resync.
-#define VERSION 7
+// V8: persisted pop-symmetric frozen-shard counter added to `properties`
+// (`archival_frozen_shard_count`, ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4);
+// a pre-V8 DB has segment rows the counter does not account for.
+// Nodes with pre-V8 data dirs must delete and resync.
+#define VERSION 8
 
 namespace
 {
@@ -287,7 +290,6 @@ const char* const LMDB_BLOCK_BURN = "block_burn";
 const char* const LMDB_ARCHIVAL_SERVE_CREDIT = "archival_serve_credit";
 const char* const LMDB_ARCHIVAL_BOND = "archival_bond";
 const char* const LMDB_ARCHIVAL_SHARD_SEGMENT = "archival_shard_segment";
-const char* const LMDB_ARCHIVAL_SHARD_LEAF = "archival_shard_leaf";
 const char* const LMDB_ARCHIVAL_SLASH_APPLIED = "archival_slash_applied";
 const char* const LMDB_ARCHIVAL_SLASH_LOG = "archival_slash_log";
 const char* const LMDB_ARCHIVAL_R_MARKET = "archival_r_market";
@@ -1633,8 +1635,6 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
     "Failed to open db handle for m_archival_bond");
   lmdb_db_open(txn, LMDB_ARCHIVAL_SHARD_SEGMENT, MDB_CREATE, m_archival_shard_segment,
     "Failed to open db handle for m_archival_shard_segment");
-  lmdb_db_open(txn, LMDB_ARCHIVAL_SHARD_LEAF, MDB_CREATE, m_archival_shard_leaf,
-    "Failed to open db handle for m_archival_shard_leaf");
   lmdb_db_open(txn, LMDB_ARCHIVAL_SLASH_APPLIED, MDB_CREATE, m_archival_slash_applied,
     "Failed to open db handle for m_archival_slash_applied");
   lmdb_db_open(txn, LMDB_ARCHIVAL_SLASH_LOG, MDB_CREATE, m_archival_slash_log,
@@ -5066,27 +5066,6 @@ bool BlockchainLMDB::get_archival_shard_segment_at_height(uint64_t shard_id, uin
   return out_leaf_count > 0;
 }
 
-bool BlockchainLMDB::get_archival_shard_leaf_layer_scalars(uint64_t shard_id,
-  uint32_t leaf_index_in_segment, uint64_t /*at_height*/,
-  std::vector<uint8_t>& out_flat_scalars) const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  shekyl::db::ArchivalShardLeafKey key(shard_id, leaf_index_in_segment);
-  MDB_val k = key.as_mdb_val();
-  TXN_PREFIX_RDONLY();
-  MDB_val v;
-  const int get_result = mdb_get(m_txn, m_archival_shard_leaf, &k, &v);
-  TXN_POSTFIX_RDONLY();
-  if (get_result != 0 || v.mv_size == 0 || (v.mv_size % 32) != 0)
-    return false;
-
-  out_flat_scalars.assign(static_cast<const uint8_t*>(v.mv_data),
-    static_cast<const uint8_t*>(v.mv_data) + v.mv_size);
-  return true;
-}
-
 void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
   const std::vector<uint8_t>& hybrid_pubkey, uint64_t join_settlement_epoch,
   uint64_t bonded_total_atomic, uint8_t holdings_kind,
@@ -5710,6 +5689,327 @@ void BlockchainLMDB::prune_archival_epochs_before(uint64_t prune_below_epoch)
   delete_archival_sigma_work_before_epoch(prune_below_epoch);
 }
 
+uint64_t BlockchainLMDB::get_archival_frozen_shard_count_on_write_txn() const
+{
+  // Persisted pop-symmetric frozen-shard counter
+  // (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4): +1 in the CREATE-only row
+  // writer, −1 per row the pop revert deletes, so it moves in lockstep with
+  // the segment table by construction. Read on the write txn so the close
+  // sees same-txn freezes (the M1 §1.1 same-snapshot pin).
+  const std::string key = "archival_frozen_shard_count";
+  MDB_val k = {key.size(), const_cast<char*>(key.data())};
+  MDB_val v;
+  const int rc = mdb_get(*m_write_txn, m_properties, &k, &v);
+  if (rc == MDB_NOTFOUND)
+    return 0;
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to read archival frozen-shard counter: ", rc).c_str()));
+  if (v.mv_size != sizeof(uint64_t))
+    throw std::runtime_error("FATAL: archival frozen-shard counter size mismatch");
+  uint64_t count = 0;
+  memcpy(&count, v.mv_data, sizeof(count));
+  return count;
+}
+
+void BlockchainLMDB::set_archival_frozen_shard_count_on_write_txn(uint64_t count)
+{
+  const std::string key = "archival_frozen_shard_count";
+  MDB_val k = {key.size(), const_cast<char*>(key.data())};
+  MDB_val v = {sizeof(count), &count};
+  const int rc = mdb_put(*m_write_txn, m_properties, &k, &v, 0);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to set archival frozen-shard counter: ", rc).c_str()));
+}
+
+uint64_t BlockchainLMDB::count_frozen_shard_rows_by_walk_for_test() const
+{
+  // Differential oracle for the O(1) counter (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md
+  // §4.4): the pre-counter full-table walk, retained as the test-side truth
+  // the counter is differential-tested against across freeze/pop/re-apply
+  // cycles. Counts every decodable row (per-row decode failure is the same
+  // loud abort as the old count pass); the close-boundary height check lives
+  // in the production reader's frontier probe, not here — every production
+  // row satisfies it by construction. Test-support only; no production
+  // caller (tripwire-pinned).
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: frozen-shard walk requires active write txn");
+
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(*m_write_txn, m_archival_shard_segment, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_shard_segment cursor for frozen-shard walk: ", rc).c_str()));
+  // RAII close so the loud-abort throws below cannot strand the cursor.
+  const std::unique_ptr<MDB_cursor, decltype(&mdb_cursor_close)> cur_guard(cur, &mdb_cursor_close);
+
+  uint64_t count = 0;
+  MDB_val k, v;
+  MDB_cursor_op op = MDB_FIRST;
+  while ((rc = mdb_cursor_get(cur, &k, &v, op)) == 0)
+  {
+    op = MDB_NEXT;
+    if (k.mv_size != shekyl::db::kArchivalShardKeySize)
+      throw std::runtime_error("FATAL: archival_shard_segment key size mismatch at frozen-shard walk");
+    shekyl::db::ArchivalShardSegmentValue segment{};
+    if (!shekyl::db::ArchivalShardSegmentValue::decode(v.mv_data, v.mv_size, segment))
+      throw std::runtime_error("FATAL: archival_shard_segment decode failed at frozen-shard walk");
+    ++count;
+  }
+  if (rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("archival_shard_segment cursor error at frozen-shard walk: ", rc).c_str()));
+  return count;
+}
+
+uint64_t BlockchainLMDB::count_frozen_shards_at_close(uint64_t h_close) const
+{
+  // The single counting read over m_archival_shard_segment
+  // (ARCHIVAL_REWARD_GATE_M1.md §1.1 count-pass discipline), now O(1): the
+  // persisted pop-symmetric counter (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md
+  // §4.4) replaces the full-table walk the pre-counter implementation
+  // repeated at every close. Runs on the close's write txn so the count and
+  // the close see the same snapshot. Two O(1) frontier checks on the
+  // MDB_LAST row keep the §1.1 pins armed: the row must decode (the M3-2
+  // loud abort, exercised at the frontier), and its freeze_height must
+  // satisfy the close boundary — equality counts, and under the production
+  // writer (rows freeze at or below the writing block's height, O-2
+  // monotone) a frontier row above h_close is tree/registry disagreement:
+  // corruption, aborted as loudly as a decode failure, never leniently
+  // filtered (the fixture-branch "future rows don't count yet" disposition
+  // is superseded — M1 §11.11).
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: frozen-shard count requires active write txn");
+
+  const uint64_t count = get_archival_frozen_shard_count_on_write_txn();
+
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(*m_write_txn, m_archival_shard_segment, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_shard_segment cursor for frozen-shard frontier check: ", rc).c_str()));
+  const std::unique_ptr<MDB_cursor, decltype(&mdb_cursor_close)> cur_guard(cur, &mdb_cursor_close);
+
+  MDB_val k, v;
+  rc = mdb_cursor_get(cur, &k, &v, MDB_LAST);
+  if (rc == MDB_NOTFOUND)
+  {
+    // Counter/table divergence in either direction is a loud abort: a
+    // silently-wrong operand is a consensus fork in the gating direction.
+    if (count != 0)
+      throw std::runtime_error("FATAL: frozen-shard counter nonzero over an empty segment table");
+    return 0;
+  }
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("archival_shard_segment cursor error at frozen-shard frontier check: ", rc).c_str()));
+  if (count == 0)
+    throw std::runtime_error("FATAL: frozen-shard counter zero with segment rows present");
+  if (k.mv_size != shekyl::db::kArchivalShardKeySize)
+    throw std::runtime_error("FATAL: archival_shard_segment key size mismatch at frozen-shard frontier check");
+  shekyl::db::ArchivalShardSegmentValue segment{};
+  if (!shekyl::db::ArchivalShardSegmentValue::decode(v.mv_data, v.mv_size, segment))
+    throw std::runtime_error("FATAL: archival_shard_segment decode failed at frozen-shard frontier check");
+  if (!(segment.freeze_height <= h_close))
+    throw std::runtime_error("FATAL: frontier segment row frozen above the close height");
+  return count;
+}
+
+bool BlockchainLMDB::has_archival_sigma_work_row(uint64_t settlement_epoch) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  shekyl::db::ArchivalSigmaWorkKey key(settlement_epoch);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v;
+  const int result = archival_db_get(m_archival_sigma_work, &k, &v);
+  if (result && result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to probe archival_sigma_work row: ", result).c_str()));
+  return result == 0;
+}
+
+namespace
+{
+  // Defined in the curve-tree anonymous-namespace block below; declared here
+  // so the freeze hooks (and the layer-chunk corruption helper) can address
+  // the layer rows the same-txn grow wrote.
+  uint64_t ct_layer_chunk_key(uint8_t layer, uint64_t chunk);
+}
+
+void BlockchainLMDB::put_archival_shard_segment_raw_for_corruption_test(uint64_t shard_id,
+  const std::vector<uint8_t>& blob)
+{
+  check_open();
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: raw segment write requires active write txn");
+  shekyl::db::ArchivalShardKey key(shard_id);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v = { blob.size(), const_cast<uint8_t*>(blob.data()) };
+  const int result = mdb_put(*m_write_txn, m_archival_shard_segment, &k, &v, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to put raw archival shard segment: ", result).c_str()));
+}
+
+bool BlockchainLMDB::get_archival_shard_segment_raw_for_test(uint64_t shard_id,
+  std::vector<uint8_t>& out_blob) const
+{
+  check_open();
+  shekyl::db::ArchivalShardKey key(shard_id);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v;
+  const int result = archival_db_get(m_archival_shard_segment, &k, &v);
+  if (result == MDB_NOTFOUND)
+    return false;
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to get raw archival shard segment: ", result).c_str()));
+  out_blob.assign(static_cast<const uint8_t*>(v.mv_data),
+    static_cast<const uint8_t*>(v.mv_data) + v.mv_size);
+  return true;
+}
+
+void BlockchainLMDB::remove_curve_tree_layer_chunk_for_corruption_test(uint8_t layer, uint64_t chunk)
+{
+  check_open();
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: layer-chunk corruption delete requires active write txn");
+  uint64_t layer_key = ct_layer_chunk_key(layer, chunk);
+  MDB_val k = {sizeof(layer_key), (void *)&layer_key};
+  const int result = mdb_del(*m_write_txn, m_curve_tree_layers, &k, nullptr);
+  if (result && result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to delete curve tree layer chunk for corruption test: ", result).c_str()));
+}
+
+uint64_t BlockchainLMDB::read_curve_tree_leaf_count_on_write_txn() const
+{
+  // Single canonical same-txn "leaf_count" reader (the freeze hooks' only
+  // meta access): read on the block's write txn so post-grow / post-trim
+  // mutations are visible. Absent row is a legitimately-empty tree (0 leaves).
+  const std::string lc_key = "leaf_count";
+  MDB_val k = {lc_key.size(), const_cast<char*>(lc_key.data())};
+  MDB_val v;
+  const int rc = mdb_get(*m_write_txn, m_curve_tree_meta, &k, &v);
+  if (rc == MDB_NOTFOUND)
+    return 0;
+  // A present-but-malformed row is corruption, not an LMDB error — abort with
+  // an accurate message (lmdb_error(rc=0) would say "Success").
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to get curve tree leaf count on write txn: ", rc).c_str()));
+  if (v.mv_size != sizeof(uint64_t))
+    throw0(DB_ERROR("FATAL: malformed curve tree leaf_count row on write txn (wrong size)"));
+  uint64_t leaf_count = 0;
+  memcpy(&leaf_count, v.mv_data, sizeof(uint64_t));
+  return leaf_count;
+}
+
+uint64_t BlockchainLMDB::frozen_segment_count_on_write_txn() const
+{
+  // Post-grow / post-trim leaf count, read on the block's write txn so the
+  // hook sees the same-txn tree mutation. The boundary division lives ONLY
+  // in the Rust entry point (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.1
+  // division-one-site discipline).
+  return shekyl_archival_frozen_segment_count(read_curve_tree_leaf_count_on_write_txn());
+}
+
+void BlockchainLMDB::process_archival_segment_freezes_at_height(uint64_t block_height)
+{
+  // Segment-freeze connect hook (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.1):
+  // for every level-2 subtree the same-txn grow completed, write a registry
+  // row with freeze_height = block_height and R_k read from the layer-2
+  // chunk the grow just wrote (which IS the frozen sub-root — MMR finality).
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: segment freeze requires active write txn");
+
+  const uint64_t complete = frozen_segment_count_on_write_txn();
+
+  // Resume point: one-row reverse peek over the table this writer owns
+  // (empty table => 0). This is the writer deriving its own frontier from
+  // its own rows — not a second count pass (tripwire-exempt by name).
+  uint64_t next = 0;
+  {
+    MDB_cursor* cur = nullptr;
+    int rc = mdb_cursor_open(*m_write_txn, m_archival_shard_segment, &cur);
+    if (rc)
+      throw0(DB_ERROR(lmdb_error("Failed to open archival_shard_segment cursor for freeze resume peek: ", rc).c_str()));
+    const std::unique_ptr<MDB_cursor, decltype(&mdb_cursor_close)> cur_guard(cur, &mdb_cursor_close);
+    MDB_val k, v;
+    rc = mdb_cursor_get(cur, &k, &v, MDB_LAST);
+    if (rc == 0)
+    {
+      if (k.mv_size != shekyl::db::kArchivalShardKeySize)
+        throw std::runtime_error("FATAL: archival_shard_segment key size mismatch at freeze resume peek");
+      next = shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data)) + 1;
+    }
+    else if (rc != MDB_NOTFOUND)
+      throw0(DB_ERROR(lmdb_error("archival_shard_segment cursor error at freeze resume peek: ", rc).c_str()));
+  }
+
+  for (uint64_t shard_id = next; shard_id < complete; ++shard_id)
+  {
+    // A missing layer-2 chunk for a completed segment means the tree and
+    // the freeze rule disagree — corruption, not a skippable row (same
+    // loud-abort class as the M1 count pass's decode failure).
+    const uint64_t layer_key = ct_layer_chunk_key(2, shard_id);
+    MDB_val lk = {sizeof(layer_key), (void *)&layer_key};
+    MDB_val lv;
+    const int rc = mdb_get(*m_write_txn, m_curve_tree_layers, &lk, &lv);
+    if (rc)
+      throw0(DB_ERROR(lmdb_error(
+        "FATAL: missing layer-2 chunk for completed segment at freeze: ", rc).c_str()));
+    if (lv.mv_size != 32)
+      throw0(DB_ERROR("FATAL: malformed layer-2 chunk for completed segment at freeze (wrong size)"));
+    crypto::hash rk{};
+    memcpy(rk.data, lv.mv_data, 32);
+    put_archival_shard_segment(shard_id, block_height, rk, SHEKYL_ARCHIVAL_SEGMENT_LEAF_COUNT);
+  }
+}
+
+void BlockchainLMDB::revert_archival_segment_freezes()
+{
+  // Segment-freeze pop hook (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.2):
+  // delete every row with shard_id >= frozen_segment_count(post-trim leaf
+  // count). Derived from the same Rust entry point as the connect hook, so
+  // re-applied blocks recreate rows bit-identically (O-3 pop-symmetry). No
+  // journal: the drain journal already restores the leaf count exactly.
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: segment freeze revert requires active write txn");
+
+  const uint64_t complete = frozen_segment_count_on_write_txn();
+
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(*m_write_txn, m_archival_shard_segment, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_shard_segment cursor for freeze revert: ", rc).c_str()));
+  const std::unique_ptr<MDB_cursor, decltype(&mdb_cursor_close)> cur_guard(cur, &mdb_cursor_close);
+  MDB_val k, v;
+  uint64_t deleted = 0;
+  while ((rc = mdb_cursor_get(cur, &k, &v, MDB_LAST)) == 0)
+  {
+    if (k.mv_size != shekyl::db::kArchivalShardKeySize)
+      throw std::runtime_error("FATAL: archival_shard_segment key size mismatch at freeze revert");
+    const uint64_t shard_id = shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data));
+    if (shard_id < complete)
+      break;
+    rc = mdb_cursor_del(cur, 0);
+    if (rc)
+      throw0(DB_ERROR(lmdb_error("Failed to delete archival_shard_segment row at freeze revert: ", rc).c_str()));
+    ++deleted;
+  }
+  if (rc != 0 && rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("archival_shard_segment cursor error at freeze revert: ", rc).c_str()));
+
+  // Persisted pop-symmetric counter, pop side
+  // (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4): decrement by the rows this
+  // walk actually deleted — the symmetric writer the counter could not have
+  // before this pipeline existed.
+  if (deleted > 0)
+  {
+    const uint64_t frozen_count = get_archival_frozen_shard_count_on_write_txn();
+    if (frozen_count < deleted)
+      throw std::runtime_error("FATAL: archival frozen-shard counter underflow on freeze revert");
+    set_archival_frozen_shard_count_on_write_txn(frozen_count - deleted);
+  }
+}
+
 void BlockchainLMDB::process_archival_epoch_close_at_height(uint64_t block_height)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
@@ -5830,10 +6130,16 @@ void BlockchainLMDB::process_archival_epoch_close_at_height(uint64_t block_heigh
     bond_ffi.push_back(b);
   }
 
+  // M1 reward-gate operand (ARCHIVAL_REWARD_GATE_M1.md §1.1): the
+  // segment-table count at H_close(E), from the single helper, inside the
+  // same write txn as the close. Structural and participation-independent —
+  // deliberately NOT derived from the credit-bearing `shards` gather above.
+  const uint64_t frozen_shard_count = count_frozen_shards_at_close(block_height);
+
   std::vector<uint64_t> r_market(shards.size(), 0);
   uint64_t sigma_work_milli = 0;
   const uint8_t compute_rc = shekyl_archival_epoch_close_compute(
-    settlement_epoch, block_height,
+    settlement_epoch, block_height, frozen_shard_count,
     bond_ffi.empty() ? nullptr : bond_ffi.data(), bond_ffi.size(),
     shards.empty() ? nullptr : shards.data(), shards.size(),
     pairs.empty() ? nullptr : pairs.data(), pairs.size(),
@@ -5953,26 +6259,23 @@ void BlockchainLMDB::put_archival_shard_segment(uint64_t shard_id, uint64_t free
   shekyl::db::ArchivalShardKey key(shard_id);
   MDB_val k = key.as_mdb_val();
   MDB_val v = { encoded.size(), const_cast<uint8_t*>(encoded.data()) };
-  const int result = mdb_put(*m_write_txn, m_archival_shard_segment, &k, &v, 0);
+  // MDB_NOOVERWRITE makes the CREATE-only registry contract structural
+  // (LMDB_SCHEMA.md: single row per shard; the overwrite-the-frozen-row
+  // adversary O-2 refuses), and is what keeps the +1 below in lockstep with
+  // the table: every successful put is exactly one new row.
+  const int result = mdb_put(*m_write_txn, m_archival_shard_segment, &k, &v, MDB_NOOVERWRITE);
+  if (result == MDB_KEYEXIST)
+    throw std::runtime_error("FATAL: archival shard segment row overwrite refused (rows are CREATE-only, O-2)");
   if (result)
     throw0(DB_ERROR(lmdb_error("Failed to put archival shard segment: ", result).c_str()));
-}
 
-void BlockchainLMDB::put_archival_shard_leaf_layer_scalars(uint64_t shard_id,
-  uint32_t leaf_index_in_segment, const std::vector<uint8_t>& flat_scalars)
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  if (flat_scalars.empty() || (flat_scalars.size() % 32) != 0)
-    throw0(DB_ERROR("Archival shard leaf scalars must be a non-empty multiple of 32 bytes"));
-
-  shekyl::db::ArchivalShardLeafKey key(shard_id, leaf_index_in_segment);
-  MDB_val k = key.as_mdb_val();
-  MDB_val v = { flat_scalars.size(), const_cast<uint8_t*>(flat_scalars.data()) };
-  const int result = mdb_put(*m_write_txn, m_archival_shard_leaf, &k, &v, 0);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to put archival shard leaf scalars: ", result).c_str()));
+  // Persisted pop-symmetric counter, freeze side
+  // (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4): increment where the row is
+  // created, so counter and table cannot drift apart.
+  const uint64_t frozen_count = get_archival_frozen_shard_count_on_write_txn();
+  if (frozen_count == std::numeric_limits<uint64_t>::max())
+    throw std::runtime_error("FATAL: archival frozen-shard counter overflow");
+  set_archival_frozen_shard_count_on_write_txn(frozen_count + 1);
 }
 
 // ─── Deferred Staked Leaf Insertion ─────────────────────────────────────────
@@ -6367,7 +6670,7 @@ namespace {
   static constexpr uint32_t CT_SCALARS_PER_LEAF = 4;
   static constexpr uint32_t CT_SELENE_CHUNK_WIDTH = 38;  // LAYER_ONE_LEN
   static constexpr uint32_t CT_HELIOS_CHUNK_WIDTH = 18;  // LAYER_TWO_LEN
-  static constexpr size_t CT_LEAF_SIZE = 128;             // 4 * 32 bytes
+  static constexpr size_t CT_LEAF_SIZE = shekyl::db::kLeafSize;  // 4 Selene scalars × 32B
 
   // LMDB key for m_curve_tree_layers (MDB_INTEGERKEY, native uint64_t order).
   // High 8 bits: layer index (0 = leaf/Selene, 1 = Helios, 2 = Selene, ...;
@@ -6984,6 +7287,55 @@ bool BlockchainLMDB::get_curve_tree_leaf_by_tree_position(uint64_t tree_position
   return found;
 }
 
+bool BlockchainLMDB::get_curve_tree_leaf_chunk(uint64_t first_tree_position, uint64_t count, uint8_t* out) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  if (!out) return false;
+  if (count == 0) return true;
+
+  TXN_PREFIX_RDONLY();
+  MDB_cursor* cur = nullptr;
+  int result = mdb_cursor_open(m_txn, m_curve_tree_leaves, &cur);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to open curve tree leaf cursor: ", result).c_str()));
+  const std::unique_ptr<MDB_cursor, decltype(&mdb_cursor_close)> cur_guard(cur, &mdb_cursor_close);
+
+  // One root-to-leaf traversal to position at first_tree_position, then a
+  // sequential page walk for the rest — the keys are contiguous and
+  // integer-ordered (m_curve_tree_leaves is MDB_INTEGERKEY). Every leaf in the
+  // run must be present and full; a gap or short row is registry/tree
+  // disagreement, reported as a whole-chunk miss (false).
+  uint64_t pos = first_tree_position;
+  MDB_val k = {sizeof(pos), (void *)&pos};
+  MDB_val v;
+  MDB_cursor_op op = MDB_SET;
+  for (uint64_t i = 0; i < count; ++i)
+  {
+    result = mdb_cursor_get(cur, &k, &v, op);
+    if (result == MDB_NOTFOUND)
+    {
+      TXN_POSTFIX_RDONLY();
+      return false;
+    }
+    if (result)
+      throw0(DB_ERROR(lmdb_error("Curve tree leaf cursor error at chunk read: ", result).c_str()));
+    // MDB_NEXT can walk past the run's end into an unrelated key; pin each row
+    // to its expected contiguous position.
+    if (k.mv_size != sizeof(uint64_t) ||
+        *static_cast<const uint64_t*>(k.mv_data) != first_tree_position + i ||
+        v.mv_size != CT_LEAF_SIZE)
+    {
+      TXN_POSTFIX_RDONLY();
+      return false;
+    }
+    memcpy(out + i * CT_LEAF_SIZE, v.mv_data, CT_LEAF_SIZE);
+    op = MDB_NEXT;
+  }
+  TXN_POSTFIX_RDONLY();
+  return true;
+}
+
 bool BlockchainLMDB::get_curve_tree_leaf_by_output_index(uint64_t output_index, uint8_t* leaf_out) const
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
@@ -7518,1232 +7870,17 @@ bool BlockchainLMDB::prune_tx_data(uint64_t depth)
   return true;
 }
 
-#define RENAME_DB(name) do { \
-    char n2[] = name; \
-    MDB_dbi tdbi; \
-    n2[sizeof(n2)-2]--; \
-    /* play some games to put (name) on a writable page */ \
-    result = mdb_dbi_open(txn, n2, MDB_CREATE, &tdbi); \
-    if (result) \
-      throw0(DB_ERROR(lmdb_error("Failed to create " + std::string(n2) + ": ", result).c_str())); \
-    result = mdb_drop(txn, tdbi, 1); \
-    if (result) \
-      throw0(DB_ERROR(lmdb_error("Failed to delete " + std::string(n2) + ": ", result).c_str())); \
-    k.mv_data = (void *)name; \
-    k.mv_size = sizeof(name)-1; \
-    result = mdb_cursor_open(txn, 1, &c_cur); \
-    if (result) \
-      throw0(DB_ERROR(lmdb_error("Failed to open a cursor for " name ": ", result).c_str())); \
-    result = mdb_cursor_get(c_cur, &k, NULL, MDB_SET_KEY); \
-    if (result) \
-      throw0(DB_ERROR(lmdb_error("Failed to get DB record for " name ": ", result).c_str())); \
-    ptr = (char *)k.mv_data; \
-    ptr[sizeof(name)-2]++; } while(0)
-
-#define LOGIF(y)    if (ELPP->vRegistry()->allowed(y, "global"))
-
-void BlockchainLMDB::migrate_0_1()
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  uint64_t i, z, m_height;
-  int result;
-  mdb_txn_safe txn(false);
-  MDB_val k, v;
-  char *ptr;
-
-  MGINFO_YELLOW("Migrating blockchain from DB version 0 to 1 - this may take a while:");
-  MINFO("updating blocks, hf_versions, outputs, txs, and spent_keys tables...");
-
-  do {
-    result = mdb_txn_begin(m_env, NULL, 0, txn);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-
-    MDB_stat db_stats;
-    if ((result = mdb_stat(txn, m_blocks, &db_stats)))
-      throw0(DB_ERROR(lmdb_error("Failed to query m_blocks: ", result).c_str()));
-    m_height = db_stats.ms_entries;
-    MINFO("Total number of blocks: " << m_height);
-    MINFO("block migration will update block_heights, block_info, and hf_versions...");
-
-    MINFO("migrating block_heights:");
-    MDB_dbi o_heights;
-
-    unsigned int flags;
-    result = mdb_dbi_flags(txn, m_block_heights, &flags);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to retrieve block_heights flags: ", result).c_str()));
-    /* if the flags are what we expect, this table has already been migrated */
-    if ((flags & (MDB_INTEGERKEY|MDB_DUPSORT|MDB_DUPFIXED)) == (MDB_INTEGERKEY|MDB_DUPSORT|MDB_DUPFIXED)) {
-      txn.abort();
-      LOG_PRINT_L1("  block_heights already migrated");
-      break;
-    }
-
-    /* the block_heights table name is the same but the old version and new version
-     * have incompatible DB flags. Create a new table with the right flags. We want
-     * the name to be similar to the old name so that it will occupy the same location
-     * in the DB.
-     */
-    o_heights = m_block_heights;
-    lmdb_db_open(txn, "block_heightr", MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED, m_block_heights, "Failed to open db handle for block_heightr");
-    mdb_set_dupsort(txn, m_block_heights, compare_hash32);
-
-    MDB_cursor *c_old, *c_cur;
-    blk_height bh;
-    MDB_val_set(nv, bh);
-
-    /* old table was k(hash), v(height).
-     * new table is DUPFIXED, k(zeroval), v{hash, height}.
-     */
-    i = 0;
-    z = m_height;
-    while(1) {
-      if (!(i % 2000)) {
-        if (i) {
-          LOGIF(el::Level::Info) {
-            std::cout << i << " / " << z << "  \r" << std::flush;
-          }
-          txn.commit();
-          result = mdb_txn_begin(m_env, NULL, 0, txn);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-        }
-        result = mdb_cursor_open(txn, m_block_heights, &c_cur);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for block_heightr: ", result).c_str()));
-        result = mdb_cursor_open(txn, o_heights, &c_old);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for block_heights: ", result).c_str()));
-        if (!i) {
-          MDB_stat ms;
-          result = mdb_stat(txn, m_block_heights, &ms);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to query block_heights table: ", result).c_str()));
-          i = ms.ms_entries;
-        }
-      }
-      result = mdb_cursor_get(c_old, &k, &v, MDB_NEXT);
-      if (result == MDB_NOTFOUND) {
-        txn.commit();
-        break;
-      }
-      else if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to get a record from block_heights: ", result).c_str()));
-      bh.bh_hash = *(crypto::hash *)k.mv_data;
-      bh.bh_height = *(uint64_t *)v.mv_data;
-      result = mdb_cursor_put(c_cur, (MDB_val *)&zerokval, &nv, MDB_APPENDDUP);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to put a record into block_heightr: ", result).c_str()));
-      /* we delete the old records immediately, so the overall DB and mapsize should not grow.
-       * This is a little slower than just letting mdb_drop() delete it all at the end, but
-       * it saves a significant amount of disk space.
-       */
-      result = mdb_cursor_del(c_old, 0);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to delete a record from block_heights: ", result).c_str()));
-      i++;
-    }
-
-    result = mdb_txn_begin(m_env, NULL, 0, txn);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-    /* Delete the old table */
-    result = mdb_drop(txn, o_heights, 1);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to delete old block_heights table: ", result).c_str()));
-
-    RENAME_DB("block_heightr");
-
-    /* close and reopen to get old dbi slot back */
-    mdb_dbi_close(m_env, m_block_heights);
-    lmdb_db_open(txn, "block_heights", MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED, m_block_heights, "Failed to open db handle for block_heights");
-    mdb_set_dupsort(txn, m_block_heights, compare_hash32);
-    txn.commit();
-
-  } while(0);
-
-  /* old tables are k(height), v(value).
-   * new table is DUPFIXED, k(zeroval), v{height, values...}.
-   */
-  do {
-    LOG_PRINT_L1("migrating block info:");
-
-    MDB_dbi coins;
-    result = mdb_txn_begin(m_env, NULL, 0, txn);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-    result = mdb_dbi_open(txn, "block_coins", 0, &coins);
-    if (result == MDB_NOTFOUND) {
-      txn.abort();
-      LOG_PRINT_L1("  block_info already migrated");
-      break;
-    }
-    MDB_dbi diffs, hashes, sizes, timestamps;
-    mdb_block_info_1 bi;
-    MDB_val_set(nv, bi);
-
-    lmdb_db_open(txn, "block_diffs", 0, diffs, "Failed to open db handle for block_diffs");
-    lmdb_db_open(txn, "block_hashes", 0, hashes, "Failed to open db handle for block_hashes");
-    lmdb_db_open(txn, "block_sizes", 0, sizes, "Failed to open db handle for block_sizes");
-    lmdb_db_open(txn, "block_timestamps", 0, timestamps, "Failed to open db handle for block_timestamps");
-    MDB_cursor *c_cur, *c_coins, *c_diffs, *c_hashes, *c_sizes, *c_timestamps;
-    i = 0;
-    z = m_height;
-    while(1) {
-      MDB_val k, v;
-      if (!(i % 2000)) {
-        if (i) {
-          LOGIF(el::Level::Info) {
-            std::cout << i << " / " << z << "  \r" << std::flush;
-          }
-          txn.commit();
-          result = mdb_txn_begin(m_env, NULL, 0, txn);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-        }
-        result = mdb_cursor_open(txn, m_block_info, &c_cur);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for block_info: ", result).c_str()));
-        result = mdb_cursor_open(txn, coins, &c_coins);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for block_coins: ", result).c_str()));
-        result = mdb_cursor_open(txn, diffs, &c_diffs);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for block_diffs: ", result).c_str()));
-        result = mdb_cursor_open(txn, hashes, &c_hashes);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for block_hashes: ", result).c_str()));
-        result = mdb_cursor_open(txn, sizes, &c_sizes);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for block_coins: ", result).c_str()));
-        result = mdb_cursor_open(txn, timestamps, &c_timestamps);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for block_timestamps: ", result).c_str()));
-        if (!i) {
-          MDB_stat ms;
-          result = mdb_stat(txn, m_block_info, &ms);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to query block_info table: ", result).c_str()));
-          i = ms.ms_entries;
-        }
-      }
-      result = mdb_cursor_get(c_coins, &k, &v, MDB_NEXT);
-      if (result == MDB_NOTFOUND) {
-        break;
-      } else if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to get a record from block_coins: ", result).c_str()));
-      bi.bi_height = *(uint64_t *)k.mv_data;
-      bi.bi_coins = *(uint64_t *)v.mv_data;
-      result = mdb_cursor_get(c_diffs, &k, &v, MDB_NEXT);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to get a record from block_diffs: ", result).c_str()));
-      bi.bi_diff = *(uint64_t *)v.mv_data;
-      result = mdb_cursor_get(c_hashes, &k, &v, MDB_NEXT);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to get a record from block_hashes: ", result).c_str()));
-      bi.bi_hash = *(crypto::hash *)v.mv_data;
-      result = mdb_cursor_get(c_sizes, &k, &v, MDB_NEXT);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to get a record from block_sizes: ", result).c_str()));
-      if (v.mv_size == sizeof(uint32_t))
-        bi.bi_weight = *(uint32_t *)v.mv_data;
-      else
-        bi.bi_weight = *(uint64_t *)v.mv_data;  // this is a 32/64 compat bug in version 0
-      result = mdb_cursor_get(c_timestamps, &k, &v, MDB_NEXT);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to get a record from block_timestamps: ", result).c_str()));
-      bi.bi_timestamp = *(uint64_t *)v.mv_data;
-      result = mdb_cursor_put(c_cur, (MDB_val *)&zerokval, &nv, MDB_APPENDDUP);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to put a record into block_info: ", result).c_str()));
-      result = mdb_cursor_del(c_coins, 0);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to delete a record from block_coins: ", result).c_str()));
-      result = mdb_cursor_del(c_diffs, 0);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to delete a record from block_diffs: ", result).c_str()));
-      result = mdb_cursor_del(c_hashes, 0);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to delete a record from block_hashes: ", result).c_str()));
-      result = mdb_cursor_del(c_sizes, 0);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to delete a record from block_sizes: ", result).c_str()));
-      result = mdb_cursor_del(c_timestamps, 0);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to delete a record from block_timestamps: ", result).c_str()));
-      i++;
-    }
-    mdb_cursor_close(c_timestamps);
-    mdb_cursor_close(c_sizes);
-    mdb_cursor_close(c_hashes);
-    mdb_cursor_close(c_diffs);
-    mdb_cursor_close(c_coins);
-    result = mdb_drop(txn, timestamps, 1);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to delete block_timestamps from the db: ", result).c_str()));
-    result = mdb_drop(txn, sizes, 1);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to delete block_sizes from the db: ", result).c_str()));
-    result = mdb_drop(txn, hashes, 1);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to delete block_hashes from the db: ", result).c_str()));
-    result = mdb_drop(txn, diffs, 1);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to delete block_diffs from the db: ", result).c_str()));
-    result = mdb_drop(txn, coins, 1);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to delete block_coins from the db: ", result).c_str()));
-    txn.commit();
-  } while(0);
-
-  do {
-    LOG_PRINT_L1("migrating hf_versions:");
-    MDB_dbi o_hfv;
-
-    unsigned int flags;
-    result = mdb_txn_begin(m_env, NULL, 0, txn);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-    result = mdb_dbi_flags(txn, m_hf_versions, &flags);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to retrieve hf_versions flags: ", result).c_str()));
-    /* if the flags are what we expect, this table has already been migrated */
-    if (flags & MDB_INTEGERKEY) {
-      txn.abort();
-      LOG_PRINT_L1("  hf_versions already migrated");
-      break;
-    }
-
-    /* the hf_versions table name is the same but the old version and new version
-     * have incompatible DB flags. Create a new table with the right flags.
-     */
-    o_hfv = m_hf_versions;
-    lmdb_db_open(txn, "hf_versionr", MDB_INTEGERKEY | MDB_CREATE, m_hf_versions, "Failed to open db handle for hf_versionr");
-
-    MDB_cursor *c_old, *c_cur;
-    i = 0;
-    z = m_height;
-
-    while(1) {
-      if (!(i % 2000)) {
-        if (i) {
-          LOGIF(el::Level::Info) {
-            std::cout << i << " / " << z << "  \r" << std::flush;
-          }
-          txn.commit();
-          result = mdb_txn_begin(m_env, NULL, 0, txn);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-        }
-        result = mdb_cursor_open(txn, m_hf_versions, &c_cur);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for spent_keyr: ", result).c_str()));
-        result = mdb_cursor_open(txn, o_hfv, &c_old);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for spent_keys: ", result).c_str()));
-        if (!i) {
-          MDB_stat ms;
-          result = mdb_stat(txn, m_hf_versions, &ms);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to query hf_versions table: ", result).c_str()));
-          i = ms.ms_entries;
-        }
-      }
-      result = mdb_cursor_get(c_old, &k, &v, MDB_NEXT);
-      if (result == MDB_NOTFOUND) {
-        txn.commit();
-        break;
-      }
-      else if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to get a record from hf_versions: ", result).c_str()));
-      result = mdb_cursor_put(c_cur, &k, &v, MDB_APPEND);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to put a record into hf_versionr: ", result).c_str()));
-      result = mdb_cursor_del(c_old, 0);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to delete a record from hf_versions: ", result).c_str()));
-      i++;
-    }
-
-    result = mdb_txn_begin(m_env, NULL, 0, txn);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-    /* Delete the old table */
-    result = mdb_drop(txn, o_hfv, 1);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to delete old hf_versions table: ", result).c_str()));
-    RENAME_DB("hf_versionr");
-    mdb_dbi_close(m_env, m_hf_versions);
-    lmdb_db_open(txn, "hf_versions", MDB_INTEGERKEY, m_hf_versions, "Failed to open db handle for hf_versions");
-
-    txn.commit();
-  } while(0);
-
-  do {
-    LOG_PRINT_L1("deleting old indices:");
-
-    /* Delete all other tables, we're just going to recreate them */
-    MDB_dbi dbi;
-    result = mdb_txn_begin(m_env, NULL, 0, txn);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-
-    result = mdb_dbi_open(txn, "tx_unlocks", 0, &dbi);
-    if (result == MDB_NOTFOUND) {
-        txn.abort();
-        LOG_PRINT_L1("  old indices already deleted");
-        break;
-    }
-    txn.abort();
-
-#define DELETE_DB(x) do {   \
-    LOG_PRINT_L1("  " x ":"); \
-    result = mdb_txn_begin(m_env, NULL, 0, txn); \
-    if (result) \
-      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str())); \
-    result = mdb_dbi_open(txn, x, 0, &dbi); \
-    if (!result) { \
-      result = mdb_drop(txn, dbi, 1); \
-      if (result) \
-        throw0(DB_ERROR(lmdb_error("Failed to delete " x ": ", result).c_str())); \
-    txn.commit(); \
-    } } while(0)
-
-    DELETE_DB("tx_heights");
-    DELETE_DB("output_txs");
-    DELETE_DB("output_indices");
-    DELETE_DB("output_keys");
-    DELETE_DB("spent_keys");
-    DELETE_DB("output_amounts");
-    DELETE_DB("tx_outputs");
-    DELETE_DB("tx_unlocks");
-
-    /* reopen new DBs with correct flags */
-    result = mdb_txn_begin(m_env, NULL, 0, txn);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-    lmdb_db_open(txn, LMDB_OUTPUT_TXS, MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED, m_output_txs, "Failed to open db handle for m_output_txs");
-    mdb_set_dupsort(txn, m_output_txs, compare_uint64);
-    lmdb_db_open(txn, LMDB_TX_OUTPUTS, MDB_INTEGERKEY | MDB_CREATE, m_tx_outputs, "Failed to open db handle for m_tx_outputs");
-    lmdb_db_open(txn, LMDB_SPENT_KEYS, MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED, m_spent_keys, "Failed to open db handle for m_spent_keys");
-    mdb_set_dupsort(txn, m_spent_keys, compare_hash32);
-    lmdb_db_open(txn, LMDB_OUTPUT_AMOUNTS, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_CREATE, m_output_amounts, "Failed to open db handle for m_output_amounts");
-    mdb_set_dupsort(txn, m_output_amounts, compare_uint64);
-    txn.commit();
-  } while(0);
-
-  do {
-    LOG_PRINT_L1("migrating txs and outputs:");
-
-    unsigned int flags;
-    result = mdb_txn_begin(m_env, NULL, 0, txn);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-    result = mdb_dbi_flags(txn, m_txs, &flags);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to retrieve txs flags: ", result).c_str()));
-    /* if the flags are what we expect, this table has already been migrated */
-    if (flags & MDB_INTEGERKEY) {
-      txn.abort();
-      LOG_PRINT_L1("  txs already migrated");
-      break;
-    }
-
-    MDB_dbi o_txs;
-    blobdata_ref bd;
-    block b;
-    MDB_val hk;
-
-    o_txs = m_txs;
-    mdb_set_compare(txn, o_txs, compare_hash32);
-    lmdb_db_open(txn, "txr", MDB_INTEGERKEY | MDB_CREATE, m_txs, "Failed to open db handle for txr");
-
-    txn.commit();
-
-    MDB_cursor *c_blocks, *c_txs, *c_props, *c_cur;
-    i = 0;
-    z = m_height;
-
-    hk.mv_size = sizeof(crypto::hash);
-    set_batch_transactions(true);
-    batch_start(1000);
-    txn.m_txn = m_write_txn->m_txn;
-    m_height = 0;
-
-    while(1) {
-      if (!(i % 1000)) {
-        if (i) {
-          LOGIF(el::Level::Info) {
-            std::cout << i << " / " << z << "  \r" << std::flush;
-          }
-          MDB_val_set(pk, "txblk");
-          MDB_val_set(pv, m_height);
-          result = mdb_cursor_put(c_props, &pk, &pv, 0);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to update txblk property: ", result).c_str()));
-          txn.commit();
-          result = mdb_txn_begin(m_env, NULL, 0, txn);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-          m_write_txn->m_txn = txn.m_txn;
-          m_write_batch_txn->m_txn = txn.m_txn;
-          memset(&m_wcursors, 0, sizeof(m_wcursors));
-        }
-        result = mdb_cursor_open(txn, m_blocks, &c_blocks);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for blocks: ", result).c_str()));
-        result = mdb_cursor_open(txn, m_properties, &c_props);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for properties: ", result).c_str()));
-        result = mdb_cursor_open(txn, o_txs, &c_txs);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for txs: ", result).c_str()));
-        if (!i) {
-          MDB_stat ms;
-          result = mdb_stat(txn, m_txs, &ms);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to query txs table: ", result).c_str()));
-          i = ms.ms_entries;
-          if (i) {
-            MDB_val_set(pk, "txblk");
-            result = mdb_cursor_get(c_props, &pk, &k, MDB_SET);
-            if (result)
-              throw0(DB_ERROR(lmdb_error("Failed to get a record from properties: ", result).c_str()));
-            m_height = *(uint64_t *)k.mv_data;
-          }
-        }
-        if (i) {
-          result = mdb_cursor_get(c_blocks, &k, &v, MDB_SET);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to get a record from blocks: ", result).c_str()));
-        }
-      }
-      result = mdb_cursor_get(c_blocks, &k, &v, MDB_NEXT);
-      if (result == MDB_NOTFOUND) {
-        MDB_val_set(pk, "txblk");
-        result = mdb_cursor_get(c_props, &pk, &v, MDB_SET);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to get a record from props: ", result).c_str()));
-        result = mdb_cursor_del(c_props, 0);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to delete a record from props: ", result).c_str()));
-        batch_stop();
-        break;
-      } else if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to get a record from blocks: ", result).c_str()));
-
-      bd = {reinterpret_cast<char*>(v.mv_data), v.mv_size};
-      if (!parse_and_validate_block_from_blob(bd, b))
-        throw0(DB_ERROR("Failed to parse block from blob retrieved from the db"));
-
-      add_transaction(null_hash, std::make_pair(b.miner_tx, tx_to_blob(b.miner_tx)));
-      for (unsigned int j = 0; j<b.tx_hashes.size(); j++) {
-        transaction tx;
-        hk.mv_data = &b.tx_hashes[j];
-        result = mdb_cursor_get(c_txs, &hk, &v, MDB_SET);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to get record from txs: ", result).c_str()));
-        bd = {reinterpret_cast<char*>(v.mv_data), v.mv_size};
-        if (!parse_and_validate_tx_from_blob(bd, tx))
-          throw0(DB_ERROR("Failed to parse tx from blob retrieved from the db"));
-        add_transaction(null_hash, std::make_pair(std::move(tx), bd), &b.tx_hashes[j]);
-        result = mdb_cursor_del(c_txs, 0);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to get record from txs: ", result).c_str()));
-      }
-      i++;
-      m_height = i;
-    }
-    result = mdb_txn_begin(m_env, NULL, 0, txn);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-    result = mdb_drop(txn, o_txs, 1);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to delete txs from the db: ", result).c_str()));
-
-    RENAME_DB("txr");
-
-    mdb_dbi_close(m_env, m_txs);
-
-    lmdb_db_open(txn, "txs", MDB_INTEGERKEY, m_txs, "Failed to open db handle for txs");
-
-    txn.commit();
-  } while(0);
-
-  uint32_t version = 1;
-  v.mv_data = (void *)&version;
-  v.mv_size = sizeof(version);
-  MDB_val_str(vk, "version");
-  result = mdb_txn_begin(m_env, NULL, 0, txn);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-  result = mdb_put(txn, m_properties, &vk, &v, 0);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to update version for the db: ", result).c_str()));
-  txn.commit();
-}
-
-void BlockchainLMDB::migrate_1_2()
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  uint64_t i;
-  int result;
-  mdb_txn_safe txn(false);
-  MDB_val v;
-
-  MGINFO_YELLOW("Migrating blockchain from DB version 1 to 2 - this may take a while:");
-  MINFO("updating txs_pruned and txs_prunable tables...");
-
-  do {
-    result = mdb_txn_begin(m_env, NULL, 0, txn);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-
-    MDB_stat db_stats_txs;
-    MDB_stat db_stats_txs_pruned;
-    MDB_stat db_stats_txs_prunable;
-    MDB_stat db_stats_txs_prunable_hash;
-    if ((result = mdb_stat(txn, m_txs, &db_stats_txs)))
-      throw0(DB_ERROR(lmdb_error("Failed to query m_txs: ", result).c_str()));
-    if ((result = mdb_stat(txn, m_txs_pruned, &db_stats_txs_pruned)))
-      throw0(DB_ERROR(lmdb_error("Failed to query m_txs_pruned: ", result).c_str()));
-    if ((result = mdb_stat(txn, m_txs_prunable, &db_stats_txs_prunable)))
-      throw0(DB_ERROR(lmdb_error("Failed to query m_txs_prunable: ", result).c_str()));
-    if ((result = mdb_stat(txn, m_txs_prunable_hash, &db_stats_txs_prunable_hash)))
-      throw0(DB_ERROR(lmdb_error("Failed to query m_txs_prunable_hash: ", result).c_str()));
-    if (db_stats_txs_pruned.ms_entries != db_stats_txs_prunable.ms_entries)
-      throw0(DB_ERROR("Mismatched sizes for txs_pruned and txs_prunable"));
-    if (db_stats_txs_pruned.ms_entries == db_stats_txs.ms_entries)
-    {
-      txn.commit();
-      MINFO("txs already migrated");
-      break;
-    }
-
-    MINFO("updating txs tables:");
-
-    MDB_cursor *c_old, *c_cur0, *c_cur1, *c_cur2;
-    i = 0;
-
-    while(1) {
-      if (!(i % 1000)) {
-        if (i) {
-          result = mdb_stat(txn, m_txs, &db_stats_txs);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to query m_txs: ", result).c_str()));
-          LOGIF(el::Level::Info) {
-            std::cout << i << " / " << (i + db_stats_txs.ms_entries) << "  \r" << std::flush;
-          }
-          txn.commit();
-          result = mdb_txn_begin(m_env, NULL, 0, txn);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-        }
-        result = mdb_cursor_open(txn, m_txs_pruned, &c_cur0);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for txs_pruned: ", result).c_str()));
-        result = mdb_cursor_open(txn, m_txs_prunable, &c_cur1);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for txs_prunable: ", result).c_str()));
-        result = mdb_cursor_open(txn, m_txs_prunable_hash, &c_cur2);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for txs_prunable_hash: ", result).c_str()));
-        result = mdb_cursor_open(txn, m_txs, &c_old);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for txs: ", result).c_str()));
-        if (!i) {
-          i = db_stats_txs_pruned.ms_entries;
-        }
-      }
-      MDB_val_set(k, i);
-      result = mdb_cursor_get(c_old, &k, &v, MDB_SET);
-      if (result == MDB_NOTFOUND) {
-        txn.commit();
-        break;
-      }
-      else if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to get a record from txs: ", result).c_str()));
-
-      cryptonote::blobdata bd{reinterpret_cast<char*>(v.mv_data), v.mv_size};
-      transaction tx;
-      if (!parse_and_validate_tx_from_blob(bd, tx))
-        throw0(DB_ERROR("Failed to parse tx from blob retrieved from the db"));
-      std::stringstream ss;
-      binary_archive<true> ba(ss);
-      bool r = tx.serialize_base(ba);
-      if (!r)
-        throw0(DB_ERROR("Failed to serialize pruned tx"));
-      std::string pruned = ss.str();
-
-      if (pruned.size() > bd.size())
-        throw0(DB_ERROR("Pruned tx is larger than raw tx"));
-      if (memcmp(pruned.data(), bd.data(), pruned.size()))
-        throw0(DB_ERROR("Pruned tx is not a prefix of the raw tx"));
-
-      MDB_val nv;
-      nv.mv_data = (void*)pruned.data();
-      nv.mv_size = pruned.size();
-      result = mdb_cursor_put(c_cur0, (MDB_val *)&k, &nv, 0);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to put a record into txs_pruned: ", result).c_str()));
-
-      nv.mv_data = (void*)(bd.data() + pruned.size());
-      nv.mv_size = bd.size() - pruned.size();
-      result = mdb_cursor_put(c_cur1, (MDB_val *)&k, &nv, 0);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to put a record into txs_prunable: ", result).c_str()));
-
-      if (tx.version > 1)
-      {
-        crypto::hash prunable_hash = get_transaction_prunable_hash(tx);
-        MDB_val_set(val_prunable_hash, prunable_hash);
-        result = mdb_cursor_put(c_cur2, (MDB_val *)&k, &val_prunable_hash, 0);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to put a record into txs_prunable_hash: ", result).c_str()));
-      }
-
-      result = mdb_cursor_del(c_old, 0);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to delete a record from txs: ", result).c_str()));
-
-      i++;
-    }
-  } while(0);
-
-  uint32_t version = 2;
-  v.mv_data = (void *)&version;
-  v.mv_size = sizeof(version);
-  MDB_val_str(vk, "version");
-  result = mdb_txn_begin(m_env, NULL, 0, txn);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-  result = mdb_put(txn, m_properties, &vk, &v, 0);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to update version for the db: ", result).c_str()));
-  txn.commit();
-}
-
-void BlockchainLMDB::migrate_2_3()
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  uint64_t i;
-  int result;
-  mdb_txn_safe txn(false);
-  MDB_val k, v;
-  char *ptr;
-
-  MGINFO_YELLOW("Migrating blockchain from DB version 2 to 3 - this may take a while:");
-
-  do {
-    LOG_PRINT_L1("migrating block info:");
-
-    result = mdb_txn_begin(m_env, NULL, 0, txn);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-
-    MDB_stat db_stats;
-    if ((result = mdb_stat(txn, m_blocks, &db_stats)))
-      throw0(DB_ERROR(lmdb_error("Failed to query m_blocks: ", result).c_str()));
-    const uint64_t blockchain_height = db_stats.ms_entries;
-
-    MDEBUG("enumerating rct outputs...");
-    std::vector<uint64_t> distribution(blockchain_height, 0);
-    bool r = for_all_outputs(0, [&](uint64_t height) {
-      if (height >= blockchain_height)
-      {
-        MERROR("Output found claiming height >= blockchain height");
-        return false;
-      }
-      distribution[height]++;
-      return true;
-    });
-    if (!r)
-      throw0(DB_ERROR("Failed to build rct output distribution"));
-    for (size_t i = 1; i < distribution.size(); ++i)
-      distribution[i] += distribution[i - 1];
-
-    /* the block_info table name is the same but the old version and new version
-     * have incompatible data. Create a new table. We want the name to be similar
-     * to the old name so that it will occupy the same location in the DB.
-     */
-    MDB_dbi o_block_info = m_block_info;
-    lmdb_db_open(txn, "block_infn", MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED, m_block_info, "Failed to open db handle for block_infn");
-    mdb_set_dupsort(txn, m_block_info, compare_uint64);
-
-    MDB_cursor *c_old, *c_cur;
-    i = 0;
-    while(1) {
-      if (!(i % 1000)) {
-        if (i) {
-          LOGIF(el::Level::Info) {
-            std::cout << i << " / " << blockchain_height << "  \r" << std::flush;
-          }
-          txn.commit();
-          result = mdb_txn_begin(m_env, NULL, 0, txn);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-        }
-        result = mdb_cursor_open(txn, m_block_info, &c_cur);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for block_infn: ", result).c_str()));
-        result = mdb_cursor_open(txn, o_block_info, &c_old);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for block_info: ", result).c_str()));
-        if (!i) {
-          result = mdb_stat(txn, m_block_info, &db_stats);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to query m_block_info: ", result).c_str()));
-          i = db_stats.ms_entries;
-        }
-      }
-      result = mdb_cursor_get(c_old, &k, &v, MDB_NEXT);
-      if (result == MDB_NOTFOUND) {
-        txn.commit();
-        break;
-      }
-      else if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to get a record from block_info: ", result).c_str()));
-      const mdb_block_info_1 *bi_old = (const mdb_block_info_1*)v.mv_data;
-      mdb_block_info_2 bi;
-      bi.bi_height = bi_old->bi_height;
-      bi.bi_timestamp = bi_old->bi_timestamp;
-      bi.bi_coins = bi_old->bi_coins;
-      bi.bi_weight = bi_old->bi_weight;
-      bi.bi_diff = bi_old->bi_diff;
-      bi.bi_hash = bi_old->bi_hash;
-      if (bi_old->bi_height >= distribution.size())
-        throw0(DB_ERROR("Bad height in block_info record"));
-      bi.bi_cum_rct = distribution[bi_old->bi_height];
-      MDB_val_set(nv, bi);
-      result = mdb_cursor_put(c_cur, (MDB_val *)&zerokval, &nv, MDB_APPENDDUP);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to put a record into block_infn: ", result).c_str()));
-      /* we delete the old records immediately, so the overall DB and mapsize should not grow.
-       * This is a little slower than just letting mdb_drop() delete it all at the end, but
-       * it saves a significant amount of disk space.
-       */
-      result = mdb_cursor_del(c_old, 0);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to delete a record from block_info: ", result).c_str()));
-      i++;
-    }
-
-    result = mdb_txn_begin(m_env, NULL, 0, txn);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-    /* Delete the old table */
-    result = mdb_drop(txn, o_block_info, 1);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to delete old block_info table: ", result).c_str()));
-
-    RENAME_DB("block_infn");
-    mdb_dbi_close(m_env, m_block_info);
-
-    lmdb_db_open(txn, "block_info", MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED, m_block_info, "Failed to open db handle for block_infn");
-    mdb_set_dupsort(txn, m_block_info, compare_uint64);
-
-    txn.commit();
-  } while(0);
-
-  uint32_t version = 3;
-  v.mv_data = (void *)&version;
-  v.mv_size = sizeof(version);
-  MDB_val_str(vk, "version");
-  result = mdb_txn_begin(m_env, NULL, 0, txn);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-  result = mdb_put(txn, m_properties, &vk, &v, 0);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to update version for the db: ", result).c_str()));
-  txn.commit();
-}
-
-void BlockchainLMDB::migrate_3_4()
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  uint64_t i;
-  int result;
-  mdb_txn_safe txn(false);
-  MDB_val k, v;
-  char *ptr;
-  bool past_long_term_weight = false;
-
-  MGINFO_YELLOW("Migrating blockchain from DB version 3 to 4 - this may take a while:");
-
-  do {
-    LOG_PRINT_L1("migrating block info:");
-
-    result = mdb_txn_begin(m_env, NULL, 0, txn);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-
-    MDB_stat db_stats;
-    if ((result = mdb_stat(txn, m_blocks, &db_stats)))
-      throw0(DB_ERROR(lmdb_error("Failed to query m_blocks: ", result).c_str()));
-    const uint64_t blockchain_height = db_stats.ms_entries;
-
-    boost::circular_buffer<uint64_t> long_term_block_weights(CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE);
-
-    /* the block_info table name is the same but the old version and new version
-     * have incompatible data. Create a new table. We want the name to be similar
-     * to the old name so that it will occupy the same location in the DB.
-     */
-    MDB_dbi o_block_info = m_block_info;
-    lmdb_db_open(txn, "block_infn", MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED, m_block_info, "Failed to open db handle for block_infn");
-    mdb_set_dupsort(txn, m_block_info, compare_uint64);
-
-
-    MDB_cursor *c_blocks;
-    result = mdb_cursor_open(txn, m_blocks, &c_blocks);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to open a cursor for blocks: ", result).c_str()));
-
-    MDB_cursor *c_old, *c_cur;
-    i = 0;
-    while(1) {
-      if (!(i % 1000)) {
-        if (i) {
-          LOGIF(el::Level::Info) {
-            std::cout << i << " / " << blockchain_height << "  \r" << std::flush;
-          }
-          txn.commit();
-          result = mdb_txn_begin(m_env, NULL, 0, txn);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-        }
-        result = mdb_cursor_open(txn, m_block_info, &c_cur);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for block_infn: ", result).c_str()));
-        result = mdb_cursor_open(txn, o_block_info, &c_old);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for block_info: ", result).c_str()));
-        result = mdb_cursor_open(txn, m_blocks, &c_blocks);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for blocks: ", result).c_str()));
-        if (!i) {
-          result = mdb_stat(txn, m_block_info, &db_stats);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to query m_block_info: ", result).c_str()));
-          i = db_stats.ms_entries;
-        }
-      }
-      result = mdb_cursor_get(c_old, &k, &v, MDB_NEXT);
-      if (result == MDB_NOTFOUND) {
-        txn.commit();
-        break;
-      }
-      else if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to get a record from block_info: ", result).c_str()));
-      const mdb_block_info_2 *bi_old = (const mdb_block_info_2*)v.mv_data;
-      mdb_block_info_3 bi;
-      bi.bi_height = bi_old->bi_height;
-      bi.bi_timestamp = bi_old->bi_timestamp;
-      bi.bi_coins = bi_old->bi_coins;
-      bi.bi_weight = bi_old->bi_weight;
-      bi.bi_diff = bi_old->bi_diff;
-      bi.bi_hash = bi_old->bi_hash;
-      bi.bi_cum_rct = bi_old->bi_cum_rct;
-
-      // get block major version to determine which rule is in place
-      if (!past_long_term_weight)
-      {
-        MDB_val_copy<uint64_t> kb(bi.bi_height);
-        MDB_val vb;
-        result = mdb_cursor_get(c_blocks, &kb, &vb, MDB_SET);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to query m_blocks: ", result).c_str()));
-        if (vb.mv_size == 0)
-          throw0(DB_ERROR("Invalid data from m_blocks"));
-        const uint8_t block_major_version = *((const uint8_t*)vb.mv_data);
-        if (block_major_version >= HF_VERSION_LONG_TERM_BLOCK_WEIGHT)
-          past_long_term_weight = true;
-      }
-
-      uint64_t long_term_block_weight;
-      if (past_long_term_weight)
-      {
-        std::vector<uint64_t> weights(long_term_block_weights.begin(), long_term_block_weights.end());
-        uint64_t long_term_effective_block_median_weight = std::max<uint64_t>(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5, epee::misc_utils::median(weights));
-        long_term_block_weight = std::min<uint64_t>(bi.bi_weight, long_term_effective_block_median_weight + long_term_effective_block_median_weight * 2 / 5);
-      }
-      else
-      {
-        long_term_block_weight = bi.bi_weight;
-      }
-      long_term_block_weights.push_back(long_term_block_weight);
-      bi.bi_long_term_block_weight = long_term_block_weight;
-
-      MDB_val_set(nv, bi);
-      result = mdb_cursor_put(c_cur, (MDB_val *)&zerokval, &nv, MDB_APPENDDUP);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to put a record into block_infn: ", result).c_str()));
-      /* we delete the old records immediately, so the overall DB and mapsize should not grow.
-       * This is a little slower than just letting mdb_drop() delete it all at the end, but
-       * it saves a significant amount of disk space.
-       */
-      result = mdb_cursor_del(c_old, 0);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to delete a record from block_info: ", result).c_str()));
-      i++;
-    }
-
-    result = mdb_txn_begin(m_env, NULL, 0, txn);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-    /* Delete the old table */
-    result = mdb_drop(txn, o_block_info, 1);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to delete old block_info table: ", result).c_str()));
-
-    RENAME_DB("block_infn");
-    mdb_dbi_close(m_env, m_block_info);
-
-    lmdb_db_open(txn, "block_info", MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED, m_block_info, "Failed to open db handle for block_infn");
-    mdb_set_dupsort(txn, m_block_info, compare_uint64);
-
-    txn.commit();
-  } while(0);
-
-  uint32_t version = 4;
-  v.mv_data = (void *)&version;
-  v.mv_size = sizeof(version);
-  MDB_val_str(vk, "version");
-  result = mdb_txn_begin(m_env, NULL, 0, txn);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-  result = mdb_put(txn, m_properties, &vk, &v, 0);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to update version for the db: ", result).c_str()));
-  txn.commit();
-}
-
-void BlockchainLMDB::migrate_4_5()
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  uint64_t i;
-  int result;
-  mdb_txn_safe txn(false);
-  MDB_val k, v;
-  char *ptr;
-
-  MGINFO_YELLOW("Migrating blockchain from DB version 4 to 5 - this may take a while:");
-
-  do {
-    LOG_PRINT_L1("migrating block info:");
-
-    result = mdb_txn_begin(m_env, NULL, 0, txn);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-
-    MDB_stat db_stats;
-    if ((result = mdb_stat(txn, m_blocks, &db_stats)))
-      throw0(DB_ERROR(lmdb_error("Failed to query m_blocks: ", result).c_str()));
-    const uint64_t blockchain_height = db_stats.ms_entries;
-
-    /* the block_info table name is the same but the old version and new version
-     * have incompatible data. Create a new table. We want the name to be similar
-     * to the old name so that it will occupy the same location in the DB.
-     */
-    MDB_dbi o_block_info = m_block_info;
-    lmdb_db_open(txn, "block_infn", MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED, m_block_info, "Failed to open db handle for block_infn");
-    mdb_set_dupsort(txn, m_block_info, compare_uint64);
-
-
-    MDB_cursor *c_blocks;
-    result = mdb_cursor_open(txn, m_blocks, &c_blocks);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to open a cursor for blocks: ", result).c_str()));
-
-    MDB_cursor *c_old, *c_cur;
-    i = 0;
-    while(1) {
-      if (!(i % 1000)) {
-        if (i) {
-          LOGIF(el::Level::Info) {
-            std::cout << i << " / " << blockchain_height << "  \r" << std::flush;
-          }
-          txn.commit();
-          result = mdb_txn_begin(m_env, NULL, 0, txn);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-        }
-        result = mdb_cursor_open(txn, m_block_info, &c_cur);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for block_infn: ", result).c_str()));
-        result = mdb_cursor_open(txn, o_block_info, &c_old);
-        if (result)
-          throw0(DB_ERROR(lmdb_error("Failed to open a cursor for block_info: ", result).c_str()));
-        if (!i) {
-          result = mdb_stat(txn, m_block_info, &db_stats);
-          if (result)
-            throw0(DB_ERROR(lmdb_error("Failed to query m_block_info: ", result).c_str()));
-          i = db_stats.ms_entries;
-        }
-      }
-      result = mdb_cursor_get(c_old, &k, &v, MDB_NEXT);
-      if (result == MDB_NOTFOUND) {
-        txn.commit();
-        break;
-      }
-      else if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to get a record from block_info: ", result).c_str()));
-      const mdb_block_info_3 *bi_old = (const mdb_block_info_3*)v.mv_data;
-      mdb_block_info_4 bi;
-      bi.bi_height = bi_old->bi_height;
-      bi.bi_timestamp = bi_old->bi_timestamp;
-      bi.bi_coins = bi_old->bi_coins;
-      bi.bi_weight = bi_old->bi_weight;
-      bi.bi_diff_lo = bi_old->bi_diff;
-      bi.bi_diff_hi = 0;
-      bi.bi_hash = bi_old->bi_hash;
-      bi.bi_cum_rct = bi_old->bi_cum_rct;
-      bi.bi_long_term_block_weight = bi_old->bi_long_term_block_weight;
-
-      MDB_val_set(nv, bi);
-      result = mdb_cursor_put(c_cur, (MDB_val *)&zerokval, &nv, MDB_APPENDDUP);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to put a record into block_infn: ", result).c_str()));
-      /* we delete the old records immediately, so the overall DB and mapsize should not grow.
-       * This is a little slower than just letting mdb_drop() delete it all at the end, but
-       * it saves a significant amount of disk space.
-       */
-      result = mdb_cursor_del(c_old, 0);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to delete a record from block_info: ", result).c_str()));
-      i++;
-    }
-
-    result = mdb_txn_begin(m_env, NULL, 0, txn);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-    /* Delete the old table */
-    result = mdb_drop(txn, o_block_info, 1);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to delete old block_info table: ", result).c_str()));
-
-    RENAME_DB("block_infn");
-    mdb_dbi_close(m_env, m_block_info);
-
-    lmdb_db_open(txn, "block_info", MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED, m_block_info, "Failed to open db handle for block_infn");
-    mdb_set_dupsort(txn, m_block_info, compare_uint64);
-
-    txn.commit();
-  } while(0);
-
-  uint32_t version = 5;
-  v.mv_data = (void *)&version;
-  v.mv_size = sizeof(version);
-  MDB_val_str(vk, "version");
-  result = mdb_txn_begin(m_env, NULL, 0, txn);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
-  result = mdb_put(txn, m_properties, &vk, &v, 0);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to update version for the db: ", result).c_str()));
-  txn.commit();
-}
-
-void BlockchainLMDB::migrate_5_6()
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  MGINFO_YELLOW("Migrating blockchain from DB version 5 to 6 (split pqc_auths from txs_pruned)...");
-
-  mdb_txn_safe txn(false);
-  int result = mdb_txn_begin(m_env, NULL, 0, txn);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to create a transaction for migrate_5_6: ", result).c_str()));
-
-  lmdb_db_open(txn, LMDB_TXS_PQC_AUTHS, MDB_INTEGERKEY | MDB_CREATE, m_txs_pqc_auths, "Failed to open txs_pqc_auths during migration");
-  mdb_set_compare(txn, m_txs_pqc_auths, compare_uint64);
-
-  MDB_stat st{};
-  if ((result = mdb_stat(txn, m_txs_pruned, &st)))
-    throw0(DB_ERROR(lmdb_error("Failed to query m_txs_pruned: ", result).c_str()));
-  const uint64_t n_tx = st.ms_entries;
-
-  MDB_cursor *c_pruned = nullptr;
-  if ((result = mdb_cursor_open(txn, m_txs_pruned, &c_pruned)))
-    throw0(DB_ERROR(lmdb_error("Failed to open cursor txs_pruned: ", result).c_str()));
-  MDB_cursor *c_pqc = nullptr;
-  if ((result = mdb_cursor_open(txn, m_txs_pqc_auths, &c_pqc)))
-    throw0(DB_ERROR(lmdb_error("Failed to open cursor txs_pqc_auths: ", result).c_str()));
-
-  MDB_val k{}, v{};
-  MDB_cursor_op op = MDB_FIRST;
-  uint64_t processed = 0;
-  while ((result = mdb_cursor_get(c_pruned, &k, &v, op)) == 0)
-  {
-    op = MDB_NEXT;
-    cryptonote::blobdata blob(reinterpret_cast<const char*>(v.mv_data), v.mv_size);
-    cryptonote::transaction tx;
-    binary_archive<false> ba{epee::strspan<std::uint8_t>(blob)};
-    if (!tx.serialize_base(ba))
-    {
-      mdb_cursor_close(c_pqc);
-      mdb_cursor_close(c_pruned);
-      throw0(DB_ERROR("migrate_5_6: serialize_base parse failed"));
-    }
-    const unsigned int unp = tx.unprunable_size.load();
-    const unsigned int pqc_off = tx.pqc_auths_offset.load();
-    const bool split = tx.version >= 3 && !tx.vin.empty()
-        && !std::holds_alternative<cryptonote::txin_gen>(tx.vin[0]);
-    if (split && pqc_off < unp)
-    {
-      MDB_val nv1 = {pqc_off, (void*)blob.data()};
-      MDB_val nv2 = {static_cast<size_t>(unp - pqc_off), (void*)(blob.data() + pqc_off)};
-      if ((result = mdb_cursor_put(c_pruned, &k, &nv1, MDB_CURRENT)))
-      {
-        mdb_cursor_close(c_pqc);
-        mdb_cursor_close(c_pruned);
-        throw0(DB_ERROR(lmdb_error("migrate_5_6: put txs_pruned: ", result).c_str()));
-      }
-      if ((result = mdb_cursor_put(c_pqc, &k, &nv2, 0)))
-      {
-        mdb_cursor_close(c_pqc);
-        mdb_cursor_close(c_pruned);
-        throw0(DB_ERROR(lmdb_error("migrate_5_6: put txs_pqc_auths: ", result).c_str()));
-      }
-    }
-    ++processed;
-    if (processed % 10000 == 0)
-      LOG_PRINT_L0("migrate_5_6: " << processed << " / " << n_tx);
-  }
-  if (result != MDB_NOTFOUND)
-  {
-    mdb_cursor_close(c_pqc);
-    mdb_cursor_close(c_pruned);
-    throw0(DB_ERROR(lmdb_error("migrate_5_6: cursor walk: ", result).c_str()));
-  }
-  mdb_cursor_close(c_pqc);
-  mdb_cursor_close(c_pruned);
-
-  uint32_t version = 6;
-  MDB_val vk{};
-  MDB_val_str(vks, "version");
-  vk.mv_data = &version;
-  vk.mv_size = sizeof(version);
-  if ((result = mdb_put(txn, m_properties, &vks, &vk, 0)))
-    throw0(DB_ERROR(lmdb_error("migrate_5_6: version property: ", result).c_str()));
-
-  txn.commit();
-  MGINFO("migrate_5_6: finished processing " << processed << " pruned transaction blobs");
-}
-
 void BlockchainLMDB::migrate(const uint32_t oldversion)
 {
-  if (oldversion < 1)
-    migrate_0_1();
-  if (oldversion < 2)
-    migrate_1_2();
-  if (oldversion < 3)
-    migrate_2_3();
-  if (oldversion < 4)
-    migrate_3_4();
-  if (oldversion < 5)
-    migrate_4_5();
-  if (oldversion < 6)
-    migrate_5_6();
+  // Pre-genesis posture (15-deletion-and-debt.mdc, 60-no-monero-legacy.mdc):
+  // no in-Shekyl migration code; `rm -rf` and resync is the migration path.
+  // V8 added the persisted frozen-shard counter (properties
+  // `archival_frozen_shard_count`); a pre-V8 DB carries segment rows the
+  // counter does not account for, and proceeding would feed the M1 reward
+  // gate a wrong operand. Refuse loudly. (The Monero-era migrate_0_1..
+  // migrate_5_6 ladder was unreachable from this guard and has been deleted.)
+  if (oldversion < 8)
+    throw0(DB_ERROR("Database schema is pre-V8; no pre-genesis migration path exists. Delete the data directory and resync."));
 }
 
 }  // namespace cryptonote

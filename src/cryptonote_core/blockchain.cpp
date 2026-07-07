@@ -4320,11 +4320,35 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
     return false;
   }
 
-  std::vector<uint8_t> leaf_layer_scalars;
-  if (!m_db->get_archival_shard_leaf_layer_scalars(resp.shard_id, resp.leaf_index_in_segment,
-        h_fire, leaf_layer_scalars))
+  // Challenge-path leaf chunk (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §6.2): the
+  // leaf-layer scalars are read straight from the consensus curve-tree leaf
+  // table. A frozen segment's leaves are immutable on the branch (freezing is
+  // a first-crossing rule over the append-only leaf count), so the live rows
+  // ARE the as-of-H_fire chunk; no snapshot table exists. Chunk-bounds
+  // arithmetic lives in Rust only (same one-site family as the freeze rule).
+  uint64_t chunk_first_leaf = 0;
+  uint64_t chunk_leaf_count = 0;
+  if (!shekyl_archival_challenge_leaf_chunk_bounds(resp.shard_id, resp.leaf_index_in_segment,
+        &chunk_first_leaf, &chunk_leaf_count))
   {
-    MERROR_VER("Archival serve-credit: leaf-layer scalars unavailable for challenged index");
+    MERROR_VER("Archival serve-credit: challenged leaf index out of segment range");
+    return false;
+  }
+  // Leaf byte-width is the shared shekyl::db::kLeafSize (4 Selene scalars × 32B);
+  // no local re-declaration to drift against the DB's leaf-record contract. The
+  // buffer is left uninitialised — the chunk read overwrites every byte or fails
+  // wholesale (no partial-fill path reaches the FFI verifier).
+  const size_t leaf_layer_scalars_len = chunk_leaf_count * shekyl::db::kLeafSize;
+  std::unique_ptr<uint8_t[]> leaf_layer_scalars(new uint8_t[leaf_layer_scalars_len]);
+  // One cursor scan over the contiguous chunk positions (a single B-tree
+  // traversal), not one root-to-leaf lookup per leaf. Every chunk of a frozen
+  // segment is full (segment bases are chunk-aligned; freezing requires the
+  // whole segment present), so a short/missing chunk is registry/tree
+  // disagreement, not a benign partial chunk.
+  if (!m_db->get_curve_tree_leaf_chunk(chunk_first_leaf, chunk_leaf_count, leaf_layer_scalars.get()))
+  {
+    MERROR_VER("Archival serve-credit: leaf chunk read failed at tree position "
+      << chunk_first_leaf << " (frozen-segment registry disagrees with curve tree)");
     return false;
   }
 
@@ -4352,8 +4376,8 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   ctx.segment_leaf_count = segment_leaf_count;
   ctx.pqc_pubkey_ptr = bond_pubkey.data();
   ctx.pqc_pubkey_len = bond_pubkey.size();
-  ctx.leaf_layer_scalars_ptr = leaf_layer_scalars.data();
-  ctx.leaf_layer_scalars_len = leaf_layer_scalars.size();
+  ctx.leaf_layer_scalars_ptr = leaf_layer_scalars.get();
+  ctx.leaf_layer_scalars_len = leaf_layer_scalars_len;
 
   const uint8_t verify_rc = shekyl_archival_verify_serve_credit_vin(
     reinterpret_cast<const uint8_t*>(wire.data() + 1), wire.size() - 1, &ctx);

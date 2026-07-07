@@ -1832,6 +1832,28 @@ uint8_t shekyl_archival_serve_credit_epoch_ok(
     uint64_t join_settlement_epoch);
 
 // ---------------------------------------------------------------------------
+// Segment-freeze pipeline (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.1). The
+// first-crossing boundary division lives ONLY here; both daemon hooks
+// (add_block freeze processor, pop_block revert) call the entry point and
+// C++ never divides by SHEKYL_ARCHIVAL_SEGMENT_LEAF_COUNT inline
+// (division-one-site tripwire, pipeline doc §8).
+
+/// Frozen-segment count at a curve-tree leaf count:
+/// floor(leaf_count / SEGMENT_LEAF_COUNT).
+uint64_t shekyl_archival_frozen_segment_count(uint64_t leaf_count);
+
+/// Leaf-layer chunk backing challenged index `leaf_index_in_segment` of
+/// frozen shard `shard_id`, as a global position range over the daemon's
+/// curve-tree leaf table (pipeline doc §6.2). Returns 1 and writes the
+/// bounds; 0 (no write) on out-of-segment index, overflow, or null out
+/// pointer — verifier-input rejection, not abort.
+uint8_t shekyl_archival_challenge_leaf_chunk_bounds(
+    uint64_t shard_id,
+    uint64_t leaf_index_in_segment,
+    uint64_t* out_first_leaf_position,
+    uint64_t* out_leaf_count);
+
+// ---------------------------------------------------------------------------
 // Archival epoch-close consensus computation (ARCHIVAL_CONSENSUS_STATE.md §3.3,
 // §3.5). The daemon gathers raw LMDB rows and delegates the entire consensus
 // computation — membership, R_market counting, age weighting, scarcity, curve,
@@ -1904,9 +1926,16 @@ struct shekyl_archival_credit_pair
 /// `out_sigma_work_milli_ptr`. Outputs are zeroed before computation; a
 /// non-zero return never leaves stale values. Credit pairs must be distinct
 /// (the serve-credit ledger key `(P, shard, E)` guarantees this at gather).
+///
+/// `frozen_shard_count` is the M1 reward-gate input
+/// (ARCHIVAL_REWARD_GATE_M1.md §1.1): the segment-table count at
+/// `H_close(E)` from the single `count_frozen_shards_at_close` helper,
+/// inside the close's write txn. Epochs below `K_COVER` compute to the
+/// all-zero result (the §2.1 zero-at-top gate, applied inside Rust).
 uint8_t shekyl_archival_epoch_close_compute(
     uint64_t settlement_epoch,
     uint64_t close_block_height,
+    uint64_t frozen_shard_count,
     const struct shekyl_archival_epoch_close_bond* bonds_ptr,
     size_t bonds_len,
     const struct shekyl_archival_epoch_close_shard* shards_ptr,
