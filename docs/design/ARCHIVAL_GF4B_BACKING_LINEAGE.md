@@ -1,9 +1,10 @@
 # GF-4b — Backing-lineage wiring: sweep, `MintLineageOutput`, `BackingSet`
 
 > **Status: design round 1 + review round, 2026-07-08.** Review-round
-> findings GF4b-1…GF4b-5 (§6) are incorporated into §3.2–§3.5 and §5; the
+> findings GF4b-1…GF4b-6 (§6) are incorporated into §3.1–§3.6 and §5; the
 > ladder and sweep conversion were verified correct as designed and are
-> unchanged. The short spec-first round (rule
+> unchanged, except that GF4b-6 tightens the sweep's eligible-set
+> definition to *spendable* eligible (§3.6). The short spec-first round (rule
 > `05-system-thinking`: specification first) for the wallet-side half of the
 > [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) §8.0.3 C-1
 > activation precondition: the gate-6 backing-lineage **ladder + sweep**,
@@ -33,10 +34,12 @@ Land the three wallet-side GF-4b artifacts, smallest coherent cuts:
 
 1. **`MintLineageOutput`** — the scan-provenance enum, classified at the
    SP-3 dual-extract seam, propagated into the persisted funding records
+   alongside the `spendable_height` field (§3.6)
    (`PSCAN_STATE_VERSION` 4 → 5, rule 42).
 2. **Sweep conversion** — `select_funding_outputs` (oldest-first greedy
    *subset* accumulation, WI-2 D-A2) becomes `sweep_funding_outputs`
-   (full-unreserved-set consumption; no subset parameter exists).
+   (full-unreserved-**spendable**-set consumption, §3.1/§3.6; no subset
+   parameter exists).
 3. **`BackingSet`** — the constructor-gated pre-join type over
    lineage-typed records (`JoinMarketVin` mint pattern), plus the
    zero-pre-bond-output test.
@@ -93,7 +96,8 @@ design constraints untouched).
 renamed `sweep_funding_outputs` (the rename makes the non-sweep state
 grep-dead — `select_funding_outputs` ceases to exist, satisfying the GF-4b
 "a function that never gets written" pin as nearly as a landed function can).
-The function consumes the **full** unreserved, slot-scoped eligible set:
+The function consumes the **full** unreserved, slot-scoped, **spendable**
+eligible set:
 
 - **Keeps:** slot scoping (load-bearing for single-persona key derivation),
   reserved-gindex exclusion (the pending record stays the single source of
@@ -102,9 +106,15 @@ The function consumes the **full** unreserved, slot-scoped eligible set:
   refuses), checked amount arithmetic, and the deterministic oldest-first
   `(height, gindex)` ordering — D-A2's determinism/auditability rationale
   survives as the ordering of the swept input list.
+- **Adds (GF4b-6, §3.6):** spendability exclusion — a record whose
+  `spendable_height` exceeds the sweep's reference height is not in the
+  eligible set. "Consume everything" means everything *spendable*;
+  consuming an unspendable output is a bug regardless of how it arrived
+  (§3.6 records both the ordinary-flow and adversarial arrival paths).
 - **Removes:** the early break at `sum ≥ required`. The signature keeps
   `required` (the ramp check needs it) but there is **no way to express a
-  subset**: every unreserved eligible record is in the returned selection.
+  subset** of the spendable eligible set: every unreserved spendable
+  eligible record is in the returned selection.
 - **Change math:** unchanged. `funding == change + fee + credit` (WI-2 §3.2
   rule 4, `verify_credit_funding`) absorbs the larger remainder; the
   two-output change split is unaffected.
@@ -165,7 +175,14 @@ without pruning" therefore **fails to compile** rather than fails review.
 KATs exercise the sweep through a `#[cfg(test)]` constructor, documented at
 the type as the only non-SP-R0 mint. §5 item 4's C-1 review obligation
 becomes a confirmation ("the witness still has zero production
-constructors") instead of a thing the reviewer must remember. Reversion
+constructors") instead of a thing the reviewer must remember.
+**Chokepoint completeness (review round, minor note):** the witness gates
+`sweep_funding_outputs`, which is the right chokepoint only while sweep is
+the *sole* funding-selection path into bond assembly — the gate is exactly
+as complete as sweep's monopoly. Implementation carries a grep check
+(recorded in the test-plan gate, §4 item 2) that no other funding-selection
+entry reaches the assemble path around the witness, and the C-1 §5 item 4
+confirmation re-runs it. Reversion
 clause (rule 21): the token is deleted by the SP-R0 PR itself if SP-R0
 chooses disposition (b) above (durable reservation retention), which makes
 the precondition unconditional; otherwise SP-R0 adds the sole production
@@ -234,13 +251,14 @@ backing eligibility; it can never admit an unsafe one. The dual is never
 acceptable.
 
 **Propagation.** `FundingOutputMatch` and `PFundingOutputRecord` each gain a
-`lineage: MintLineageOutput` field; both `From` impls are exhaustive struct
-literals, so the compiler forces the twin update (the documented
-duplication guard doing its job).
+`lineage: MintLineageOutput` field **and a `spendable_height` field
+(GF4b-6, §3.6)**; both `From` impls are exhaustive struct literals, so the
+compiler forces the twin update (the documented duplication guard doing
+its job).
 
 **Rule-42 schema impact.** `PFundingOutputRecord` is persisted state:
-`PSCAN_STATE_VERSION` **4 → 5**, snapshot regenerated, CI snapshot check
-covers it. Pre-genesis: loads refuse on mismatch, no migration code,
+`PSCAN_STATE_VERSION` **4 → 5** (one bump covers both new fields),
+snapshot regenerated, CI snapshot check covers it. Pre-genesis: loads refuse on mismatch, no migration code,
 `rm -rf ~/.shekyl` is the path (rules 15/16).
 
 **`EmissionReward` reserved-variant justification (rule-21 check: this is
@@ -311,7 +329,18 @@ sibling shape `RetirementWitness`):
   record at or below it is present — the sweep-bug case fails loudly in
   debug/test builds, the legal tranche case is untouched, and release
   builds keep filter semantics (a wallet must not crash on a state it can
-  filter).
+  filter). **The assert's premise is not airtight (review round, minor
+  note on GF4b-3):** because `P`'s funding set is adversary-influenceable
+  (§3.3 — anyone can mine or send to `P`'s public pubkey), a rung-3 output
+  at `height ≤ last_sweep_height` can also arrive *legitimately after* the
+  sweep — a reorg-resurfaced output, or an adversarial low-height output
+  discovered late. The assert's doc-comment says "a fire means a sweep bug
+  **or** a late-surfaced low-height output — investigate, do not assume
+  the sweep," rather than asserting the bug unconditionally. The GF4b-6
+  spendability filter (§3.6) removes the *immature* subset of these false
+  positives before they reach the constructor; the mature-but-late subset
+  remains a benign, debug-only false positive and is accepted as the cost
+  of keeping the sweep-regression tripwire armed.
 - `#[allow(dead_code)]` transient, annotated with the C-1 consumer by name
   — the same posture as `select_funding_outputs`/`AssembleBond`, and the
   same review discipline applies.
@@ -340,10 +369,13 @@ sweep + the funding-record set (the bond-post path's data plane; the
   modeled post-confirmation spendable set (records minus swept gindexes —
   the reservation/spent exclusion applied, since durable pruning is
   SP-R0-gated).
-- **Asserts:** (1) the sweep selection **is** the full unreserved eligible
-  set — including records a greedy subset selector would have left behind;
-  (2) the post-sweep spendable remainder is **empty** — in particular, zero
-  `ExternalTransfer` records survive; (3) the post-bond state (the bond-post
+- **Asserts:** (1) the sweep selection **is** the full unreserved
+  *spendable* eligible set (§3.6) — including records a greedy subset
+  selector would have left behind; (2) the post-sweep **spendable**
+  remainder is **empty** — in particular, zero spendable
+  `ExternalTransfer` records survive (an immature record may survive a
+  sweep by design, §3.6, and is a between-sweeps tranche `BackingSet`
+  already drops); (3) the post-bond state (the bond-post
   change record, lineage `BondPostChange`) yields a `BackingSet` containing
   it, while an `ExternalTransfer` record (above `last_sweep_height` — the
   legal-tranche case) injected into the same input set is **not** in the
@@ -396,6 +428,92 @@ sweep + the funding-record set (the bond-post path's data plane; the
    the SP-3/SP-5 dual-extract (funding + bond-post as two scanned events) —
    beside, not against.
 
+### 3.6 (f) Sweep × spendability — the eligible set is the *spendable* set (GF4b-6)
+
+**The finding.** The sweep's defining property — consume everything, no
+subset — collides with output maturity, and nothing in the funding path
+catches it: `select_funding_outputs` filters on `p_slot` and `reserved`
+only (verified §2), with no maturity/spendability check anywhere between
+scan ingestion and selection. Two arrival paths for an unspendable record,
+one mundane, one adversarial:
+
+- **Ordinary flow, no adversary (substrate check — stronger than the
+  finding as raised).** Shekyl's maturity model is **universal deferred
+  tree insertion** (`cryptonote_config.h` FCMP++ parameters;
+  `shekyl-curve-tree` `recon.rs::maturity_height`): an output enters the
+  curve tree only at `height + COINBASE_LOCK_WINDOW` (60, coinbase) or
+  `height + DEFAULT_LOCK_WINDOW` (10, regular). *Regular outputs carry a
+  lock too* — so `P` funded within 10 blocks of bonding holds an immature
+  record, and the sweep must include it, with **zero** adversarial input.
+  The subset selector masked this by accident (an immature record was
+  selected only when among the oldest sufficient); the sweep's rigidity
+  converts "an immature output exists in `P`'s set" into "`P` cannot
+  bond."
+- **Adversarial (the §3.3 anomaly's second-order consequence).** The same
+  fact the coinbase-anomaly classification leans on — `P`'s hybrid pubkey
+  is on-chain, so a third party can mine to it — means `P`'s funding set
+  is adversary-influenceable. An adversary mines a coinbase to `P` (cost:
+  one block of PoW); the scanner recovers it; accrual ingests it as an
+  `ExternalTransfer` funding record (no coinbase filter, and per §3.3 none
+  is wanted — lineage is not spendability); the next sweep must consume
+  it, and the bond is denied for up to 60 blocks. Cost-bounded targeted
+  griefing, but real, and *introduced by the sweep conversion*.
+
+**The failure locus (daemon-side confirmation, as requested).** The
+reviewer's chain assumed a daemon `unlock_time` rejection; the substrate
+is one step harsher. Under deferred tree insertion the immature output's
+**leaf is not in the curve tree at all** until maturity, so the bond
+post's membership path cannot be constructed against any reference block
+that precedes maturity — assembly fails client-side before a rejectable
+tx even exists. (The daemon-side coinbase-maturity rule also exists:
+`blockchain.cpp` enforces coinbase `unlock_time = height + 60`, and
+nonzero `unlock_time` on regular txs is pool-rejected, so the lock
+windows above are the entire spendability surface.) Either locus yields
+the same denial; deferred insertion just moves it earlier.
+
+**Decision.** The sweep's eligible set is defined as the full unreserved
+**spendable** eligible set (§3.1 Adds). Mechanism, mirroring the
+already-landed transfer-path solution rather than inventing one:
+
+- `TransferDetails` already carries `eligible_height =
+  max(height + SPENDABLE_AGE, timelock_block)` (`ledger_ext.rs` X5/CT-5c),
+  documented as *agreeing with the tree-insertion height by construction*.
+  `PFundingOutputRecord` gains the same concept: a **`spendable_height`**
+  field, computed at the scan seam.
+- **Computation site: `run_dual_extractor`,** which already holds both
+  inputs: the block height, and the recovered output's
+  `additional_timelock()` (the scanner captures `tx.prefix.unlock_time`,
+  which for a coinbase *is* the +60 lock — consensus-enforced shape — so
+  **no miner-tx-hash comparison returns**; the deleted lineage arm stays
+  deleted, and coinbase maturity arrives through the timelock channel).
+  `spendable_height = max(height + DEFAULT_LOCK_WINDOW,
+  timelock_block_height)`, same formula as X5.
+- **Filter site: `sweep_funding_outputs`,** which takes the reference
+  height the assembly anchors at and excludes records with
+  `spendable_height > reference_height`. The exclusion is *deferral*, not
+  loss: an excluded record stays in the funding set and is consumed by the
+  next sweep after maturity — exactly the multi-tranche legal state §3.5
+  item 2 already models.
+- **GF-4b interaction — none, by the fail-toward-forbidden shape.** An
+  immature record excluded from the sweep is a between-sweeps rung-3
+  tranche; `BackingSet` (§3.4) already drops it from backing eligibility.
+  Spendability filtering can only *shrink* the swept set, never lift
+  anything onto rungs 1/2, so the firewall property is untouched. The
+  structural-emptiness claim is refined, not weakened: "nothing raw
+  survives backing-eligible" was always enforced by `BackingSet`, not by
+  the sweep's totality; the sweep's totality claim is now "nothing raw
+  *and spendable* survives," which is the strongest claim a consensus-
+  valid transaction can deliver.
+
+**Reversion clause (rule 21).** The `spendable_height` formula reopens
+**iff** the deferred-insertion maturity parameters change (a consensus
+change to `COINBASE_LOCK_WINDOW`/`DEFAULT_LOCK_WINDOW` or the insertion
+rule itself); re-evaluation shape: the consensus PR amends the X5
+`eligible_height` computation and this field's computation in the same
+pass (they must stay in lockstep — a divergence recreates the unprovable-
+spend bug X5 exists to prevent). Not reopenable on wallet-convenience
+grounds.
+
 ## 4. Test plan (gates)
 
 1. **Lineage classification KATs** (`scan_step.rs`): output in a tx
@@ -404,15 +522,25 @@ sweep + the funding-record set (the bond-post path's data plane; the
    held persona's `BondPost` → `ExternalTransfer` (conservative default);
    a coinbase output recovered by `P`'s scanner → `ExternalTransfer` (the
    anomaly pin, §3.3 — `P` never mines, so a coinbase-to-`P` must land on
-   the forbidden rung); lineage survives the
-   `FundingOutputMatch ↔ PFundingOutputRecord` round-trip.
+   the forbidden rung); lineage **and `spendable_height`** survive the
+   `FundingOutputMatch ↔ PFundingOutputRecord` round-trip; a
+   timelocked (coinbase-shaped, `unlock_time = height + 60`) recovery
+   yields `spendable_height = height + 60` while a plain transfer yields
+   `height + DEFAULT_LOCK_WINDOW` (§3.6 formula, lockstep with X5).
 2. **Sweep KATs** (`bond_assembly.rs`): full-set consumption (the
    multi-record case greedy would have truncated); reserved exclusion
    retained; slot scoping retained; `InsufficientFunding` ramp refusal
-   retained; deterministic oldest-first ordering of the swept list. KATs
-   mint the `SpentRecordsDurablyPruned` witness through its `#[cfg(test)]`
-   constructor (§3.2 GF4b-5); a compile-time check that no production
-   constructor exists is the witness's own doc-comment contract.
+   retained; deterministic oldest-first ordering of the swept list;
+   **spendability exclusion (GF4b-6): an immature record (coinbase-shaped
+   `spendable_height` above the reference height) in the record set is
+   excluded from the sweep and the returned selection is otherwise the
+   full spendable set — the bond post stays buildable with the injected
+   record present**. KATs mint the `SpentRecordsDurablyPruned` witness
+   through its `#[cfg(test)]` constructor (§3.2 GF4b-5); a compile-time
+   check that no production constructor exists is the witness's own
+   doc-comment contract. Implementation-time grep gate (§3.2 chokepoint
+   note): no funding-selection entry other than `sweep_funding_outputs`
+   reaches the assemble path.
 3. **Zero-pre-bond-output test + `BackingSet` gates** (§3.4 definition):
    the four assertions, plus the constructor filter (`ExternalTransfer`
    in, not present), the survivor `debug_assert!` firing on a pre-sweep
@@ -438,7 +566,7 @@ The residue riding C-1, citable by the C-1 PR:
 ## 6. Review round (2026-07-08)
 
 Substrate re-verified at `c72d2ec` with zero Phase-0 drift; the ladder and
-sweep conversion were confirmed correct as designed. Five findings, all
+sweep conversion were confirmed correct as designed. Six findings, all
 dispositioned in place:
 
 | Finding | Class | Disposition |
@@ -448,6 +576,7 @@ dispositioned in place:
 | GF4b-3 — filter-not-fail-closed masks sweep regressions | correctness / silent-failure | **Accepted**: survivor check armed (§3.4) — `debug_assert!` that no rung-3 with `height ≤ last_sweep_height` reaches `BackingSet` construction; tranche case untouched |
 | GF4b-4 — reserved `EmissionReward` eligible before its classifier exists | privacy / firewall | **Accepted**: fail-toward-forbidden bound to the C-1 arm as a checkable acceptance criterion (§5 item 2) |
 | GF4b-5 — go-live gate was review-discipline against poison-severity | structural preference | **Accepted**: `SpentRecordsDurablyPruned` witness token, sole production constructor reserved to SP-R0 (§3.2); §5 item 4 becomes compiler-enforced |
+| GF4b-6 — sweep totality collides with spendability; adversary-influenceable funding set | correctness + cost-bounded griefing | **Accepted, and strengthened at source** (§3.6): the substrate check found the bug fires with *zero* adversary (regular outputs carry the +10 `DEFAULT_LOCK_WINDOW` under deferred tree insertion, so a fresh funding transfer is immature too), and the failure locus is client-side (the immature leaf is absent from the curve tree — no membership path — before any daemon rejection). Fix: `PFundingOutputRecord` gains `spendable_height` (X5 `eligible_height` formula, computed at the scan seam via the timelock channel — no miner-hash arm returns), and the sweep's eligible set is the *spendable* eligible set. KAT added (§4 item 2). Two minor notes absorbed: the GF4b-3 survivor assert's doc-comment names its adversarial/reorg false-positive mode (§3.4), and the witness gate carries a chokepoint-monopoly grep check (§3.2, §4 item 2) |
 
 Hygiene: the WI-2 §3.2 amendment carried a design-doc fossil-sweep — the
 one live dependent found is `ARCHIVAL_BOND_WI4_MEASUREMENT.md`'s
@@ -459,7 +588,7 @@ bump-avoidance is demoted to a parenthetical.
 
 ## 7. Round closure
 
-Round 1 + review round close with dispositions §3.1–§3.5 (as amended by
+Round 1 + review round close with dispositions §3.1–§3.6 (as amended by
 §6) ratified by landing. Reopening criteria are per-disposition (each §3.x
 carries its own rule-21 clause); substrate findings, not sequential
 numbering, reopen the round.
