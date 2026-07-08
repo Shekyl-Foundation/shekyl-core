@@ -691,6 +691,16 @@ mempool/explorer must read without the Rust parser; append to `txin_v`; three
 `get_signature_size → 0`; boost serialize; JSON. The C++ side does **no**
 semantic validation — it transports bytes the Rust codec owns.
 
+> **Landed-state note (2026-07-07).** The Rust half of PR-E2 (codec + wire
+> freeze, field set A) **has landed** (`emission_wire.rs`; commits `c6b4d0ab6`
+> …`cc28bee37`). The **C++ transport shim above was reassigned to C-1**, not
+> landed as residual PR-E2: the landed codec pins the Rust wire tag **`0x04`**
+> and the C++ oracle `VARIANT_TAG` **`0x06`** to the C-1 dispatch
+> (`emission_wire.rs:44–46`), because under gate-last the whitelist rejects the
+> vin on both mempool and block paths, so an early inert C++ struct buys nothing.
+> See [`REWARD_EMISSION_E3_GATING_ROUND.md`](REWARD_EMISSION_E3_GATING_ROUND.md)
+> §1.2.
+
 Inert: `check_inputs_types_supported` continues to reject the type until
 PR-E3. **Gates:** Rust canonical-encoding roundtrip + property/fuzz parse
 (the untrusted-input surface); C++ epee/boost/JSON transport roundtrip
