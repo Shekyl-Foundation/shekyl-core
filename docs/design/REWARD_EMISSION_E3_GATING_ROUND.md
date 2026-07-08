@@ -1,10 +1,11 @@
 # Reward-emission E3 gating round — pre-flight audit + policy-trio closure
 
-**Status:** Round 3 — **CLOSED for design (2026-07-07).** Q3/Q12 resolved;
-**Q11 ACCEPT ratified**; **WS-1 (Q10/M-2/Q7 two-conjunct held-sourcing)
-ratified** (§5); **WS-2 (Q9/F-E3 dedup atomicity) is the sole remaining open
-design** (§6, parallel). PR-E3 implementation pre-flight opens next, re-pinned to
-current `dev` (see §7).
+**Status:** Round 3 (2026-07-07). Q3/Q12 resolved; **Q11 ACCEPT ratified**;
+**WS-1 (Q10/M-2/Q7 two-conjunct held-sourcing) ratified** (§5); **WS-2 (Q9/F-E3
+dedup atomicity) closure PROPOSED — awaiting ratification** (§6: block-level
+`(P,E)` pass + journaled claimed-set revert). On WS-2 sign-off the leg's design
+is complete; the PR-E3 implementation pre-flight opens re-pinned to current
+`dev` (see §7.1).
 **Process:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 (A2 audit-against-actual-code; the pre-flight substrate re-check).
 Dispositions follow [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).
@@ -199,9 +200,8 @@ reopens in the same PR.
 
 ## 3. Unblocked PR-E3 scope (implementation, not design)
 
-On trio **and §5 WS-1** ratification, WS-2 (§6 dedup plumbing) is the only design
-item left; everything below is implementation, in dependency order (the verify
-body's dedup step, item 3, additionally awaits WS-2):
+With the trio and WS-1 ratified and WS-2's closure proposed (§6), everything
+below is implementation, in dependency order:
 
 1. **`held(P,E)` as-of-E sourcing — the WS-1 build item (§5, corrects §8.0's
    "one build item").** M-2 closes under the **two-conjunct** rule (§5.4). Four
@@ -235,10 +235,17 @@ body's dedup step, item 3, additionally awaits WS-2):
 3. **`shekyl_emission_vin_verify` — verify body, steps 1–7** (KAT-tested; **not**
    on the consensus dispatch — still unwhitelisted). Recompute `work_P(E)` ==
    `work_claim`; `reward_P(E)` via `reward_arithmetic` == `reward_amount_plain` +
-   Σvout; dedup via `claimed_epochs_check_and_set`; backing via membership-only +
-   the two hybrid auths. The auth result enters as an **unforgeable
-   `AuthVerified` witness** the body cannot mint itself (fail-closed by type,
-   §3.0) — E3 physically cannot accept an authed emission.
+   Σvout; dedup per the WS-2 layering (§6.2): verify does the **read-only**
+   `claimed_epochs_contains` against the pre-block bond record; backing via
+   membership-only + the two hybrid auths. The auth result enters as an
+   **unforgeable `AuthVerified` witness** the body cannot mint itself
+   (fail-closed by type, §3.0) — E3 physically cannot accept an authed emission.
+3a. **WS-2 dedup plumbing (§6).** The block-level `(P,E)` uniqueness pass in
+   `handle_block_to_main_chain` (mirror of `:4882`, every `(P, E_i)` pair);
+   connect-path `claimed_epochs_check_and_set` FFI wrapper as the single writer
+   (`Ok(false)` at connect = hard error); the claimed-set revert **journal** +
+   pop-path restore (slash-log idiom, §6.3), covering
+   `first_paying_emission_height`; the three §6.4 KATs.
 4. **C-1 — the activating cut** (separate PR; [`07-consensus-atomic-cutovers.mdc`](../../.cursor/rules/07-consensus-atomic-cutovers.mdc)):
    ML-DSA witness minter + `check_inputs_types_supported` whitelist flip + C++
    shim dispatch + `VARIANT_TAG 0x06`. Merge blocker = ML-DSA present/tested **and**
@@ -479,25 +486,125 @@ the credit-implies-held proof re-examined at source.
 
 ---
 
-## 6. WS-2 — Q9/F-E3 dedup atomicity (parallel; open)
+## 6. WS-2 — Q9/F-E3 dedup atomicity — **PROPOSED closure**
 
-Independent of WS-1 (different mechanism; shared only in the PR-E3 verify/connect
-split). Recorded here as the second open surface; its detailed pin is its own
-closure.
+Independent of WS-1 (different mechanism; shared only in the PR-E3
+verify/connect split). Closed here at source (operands re-verified at `dev`
+`90e790c9c`; the `1f67652b0→90e790c9c` delta touched only CI config + CHANGELOG
+— zero operand drift).
 
-**The function is not where the bug is.** `claimed_epochs_check_and_set(&mut set,
-…)` (`claimed_epochs.rs:99`) is atomic on its *passed-in* set and correctly
+### 6.1 The straddle, at source — architectural, not accidental
+
+**The function is not where the bug is.** `claimed_epochs_check_and_set(&mut
+set, …)` (`claimed_epochs.rs:99`) is atomic on its *passed-in* set and correctly
 returns `Ok(false)` on the second call for the same epoch (its own tests,
-`:137–138`). The double-mint is in the **plumbing**: the set is loaded from LMDB
-at verify-time and written back at connect-time, so two same-block emissions from
-the same `P` claiming the same `E` both load the same pre-state set, both
-check-and-set their own copy, both see `E` unset, both commit.
+`:137–138`). The straddle is in the **plumbing**, and it is by design:
 
-**Two structural options** (the plan's §8 pair), to be settled in WS-2's closure:
-(1) the set is applied within the connecting tx's LMDB scope so tx2 sees tx1's
-mark; or (2) an explicit block-level `(P,E)` uniqueness pass across all emission
-vins before connect. Both are tx-scoping designs, not sourcing ones — hence
-parallelizable with WS-1.
+- The set is an **inline field on the per-P bond record** —
+  `ArchivalBondValue::claimed_settlement_epochs` (`shekyl_types.h:613`, v4
+  codec: at-rest cap/order/span validation only; semantics live in Rust,
+  mirroring the `good_through` split).
+- The mutation site is **connect**: "The FFI wrapper lands with its first
+  caller, the emission vin's **connect path**" (`claimed_epochs.rs:16`).
+- Verify therefore reads the bond record from **pre-block DB state** — which is
+  exactly what the ratified Q7 pin demands (verify = pure function of the
+  marshaled pre-block frozen snapshot).
+
+So two same-block emissions from the same `P` claiming the same `E` both load
+the same pre-state set, both check their own copy, both see `E` unset — the
+double-mint window, purely intra-block.
+
+### 6.2 Disposition — the block-level `(P,E)` pass (option 2); option 1 foreclosed by Q7
+
+**PROPOSED (consensus acceptance rule; priority-1, awaiting ratification):**
+dedup is delivered by **three layers, one per scope**, of which only the middle
+one is new:
+
+| Scope | Mechanism | Status |
+|-------|-----------|--------|
+| **Intra-tx** | Wire: `settlement_epochs` strictly increasing ⇒ duplicates **unencodable** (`emission_wire.rs:427–428`/`:564–565`, `EpochsNotStrictlyIncreasing`) | **Landed** |
+| **Intra-block, cross-tx** | **Block-level `(P,E)` uniqueness pass** in `handle_block_to_main_chain`, over every `(P, E_i)` of every emission vin in the block, before connect | **The WS-2 build item** |
+| **Cross-block** | Verify: read-only `claimed_epochs_contains` against the pre-block bond record; connect: `claimed_epochs_check_and_set` as the single writer | Function landed; FFI wrapper lands with connect |
+
+**Option 2 is not merely preferred — it is the landed house idiom for this exact
+straddle.** The serve-credit leg hit the identical shape and solved it with the
+identical pass: `blockchain.cpp:4882–4901` in `handle_block_to_main_chain`
+(`:4504`), commented verbatim "Per-tx serve-credit idempotency checks run
+against pre-block DB state; reject duplicate (P, shard, E) credits across
+multiple txs in the same block." The emission pass mirrors it with key `(P,E)`
+instead of `(P,s,E)`, with one difference that widens the loop: an emission vin
+claims a **vector** of epochs, so the pass inserts every `(P, E_i)` pair, not
+one key per vin.
+
+**Option 1 (intra-block write-visibility) is rejected on keystone coherence,
+not taste:** letting tx2's verify see tx1's connect-scope write makes the verify
+**order-dependent within the block**, destroying the Q7-ratified
+pure-function-of-frozen-snapshot property that the supply-conservation audit
+argument rests on (§5.5 — one sourcing function over one frozen input set).
+The pass keeps per-tx verify order-independent and pushes the ordering question
+into one structural, auditable site.
+
+**Connect-time `Ok(false)` is an invariant breach, not a reject.** With the
+three layers in place, `claimed_epochs_check_and_set` returning `Ok(false)` at
+connect is unreachable (verify's contains-check + the block pass already
+foreclosed it). The connect path treats it as a hard error (`throw`, matching
+the connect-path `FATAL:` style at `blockchain_db.cpp:230`), never a soft skip
+— a silent skip would connect a block whose emission paid without marking `E`.
+
+### 6.3 Reorg-symmetry of the claimed-set — journaled revert, not a bespoke inverse
+
+The connect mutation is **insert `E` + prune entries below the window floor**
+(`claimed_epochs.rs:114–116`). The prune makes the naive disconnect inverse
+("remove `E`") **not bit-identical**: entries pruned at connect are not
+resurrected by a remove, so a pop would leave the bond record byte-different
+from its pre-connect state — exactly the drift class the §5.6 discipline
+exists to catch. (The module's own prune-safety note — reorg depth 720 ≪ epoch
+length 10 000, so pruned entries are dead weight for *claimability* — is
+correct but answers a different question than at-rest bit-identity.)
+
+**Disposition: journaled revert, inheriting the slash-log precedent.** The bond
+record already has a connect-time mutation with a pop-exact restore: the slash
+path journals per-height revert rows (`m_archival_slash_log`, "BE(height)‖BE(seq)
+→ revert journal", `db_lmdb.h:694`) and `revert_archival_slashes_at_height`
+runs in the pop path (`blockchain_db.cpp:478`). The emission connect journals
+the pre-mutation `claimed_settlement_epochs` (equivalently: the inserted `E` +
+the pruned entries) keyed by height; disconnect restores it exactly. One reorg
+mechanism, many tables — the same O-3 inheritance §5.5-3 uses for the
+serve-credit bits. (`first_paying_emission_height`, set-once at first emission
+per `shekyl_types.h:615–619`, rides the same journal row: unset on pop iff this
+emission was the setter.)
+
+### 6.4 Armed KATs
+
+1. **Same-block double-claim KAT (the double-mint trigger).** Two txs from the
+   same `P`, overlapping claimed epoch `E`, same block → block **rejected** by
+   the `(P,E)` pass. The direct regression test on the straddle.
+2. **Cross-block double-claim KAT.** `E` claimed at height `h`; a second claim
+   of `E` at `h' > h` → tx rejected at verify (`claimed_epochs_contains`
+   against the connected bond record).
+3. **Prune-straddle reorg KAT (the journal's load-bearing case).** A connect
+   whose insert **prunes** old entries, then a pop spanning it → the bond
+   record's `claimed_settlement_epochs` (and `first_paying_emission_height`)
+   restore **bit-identically**, pruned entries included. The naive
+   remove-inverse fails exactly this case; the journal is proven by it.
+
+### 6.5 Reopening (rule 21)
+
+- Reopens iff a **second claimer** of `claimed_settlement_epochs` appears (any
+  vin type other than the emission vin writing the set): the block pass is
+  scope-bounded to emission vins and must widen to the union of writers, or the
+  intra-block window reopens between claimer types.
+- Reopens iff per-tx verify is ever made **order-dependent within a block**
+  (option-1 shape) — which *first* reopens the Q7 pure-function pin (§5.5);
+  WS-2 cannot flip to option 1 without the keystone reopening ahead of it,
+  the same dependency shape as Q3's arity coupling (§2.1).
+- The window constants (`MAX_CLAIM_AGE_W = 26`, cap 32, reorg depth 720 ≪
+  epoch 10 000) are load-bearing for the prune-safety argument; the
+  `claimed_epochs.rs:39–43` const assertion is the armed guard, and a change
+  to any of the three re-runs §6.3's bit-identity analysis in its own PR.
+**Re-evaluation shape.** Design-round 1 of the PR introducing the second
+claimer / the ordering change / the constant move, with this section's
+straddle analysis re-run at source.
 
 ---
 
@@ -516,19 +623,27 @@ parallelizable with WS-1.
   (§5.6, reorg KAT pins the composition).** The supply-conservation keystone,
   the one obligation with no backstop under it (§5.5). Corrects the Round-2
   Q10/M-2 closure.
-- **WS-2 (Q9 / F-E3)** — **OPEN, the sole remaining design surface**; parallel
-  (tx-scoping, no shared surface with the sourcing keystone); two options
-  enumerated (§6), its own closure next.
+- **WS-2 (Q9 / F-E3)** — **PROPOSED closure, awaiting ratification (§6):**
+  three dedup layers (wire strictly-increasing landed; **block-level `(P,E)`
+  uniqueness pass** mirroring the landed `:4882` serve-credit idiom; per-tx
+  contains-check at verify + connect `check_and_set` single writer). Option 1
+  (intra-block write-visibility) rejected on Q7 pure-function coherence.
+  Claimed-set reorg-symmetry via **journaled revert** (slash-log idiom — the
+  connect-time window prune makes the naive remove-inverse non-bit-identical);
+  three armed KATs (§6.4). The last open design on the leg.
 
 ### 7.1 Next action — PR-E3 implementation pre-flight (re-pin to current `dev`)
 
-Both keystone decisions are ratified; WS-1's build (§3 items 1–2) is unblocked
-and the verify body (§3 item 3) additionally awaits WS-2's closure. When the
-PR-E3 implementation pre-flight opens against the §3 build list, **run it against
-the current `dev` head, not the `1f67652b0` round pin** — `dev` has already moved
-to **`90e790c9c`** (twice mid-round in this arc). The **§11.1 pattern — read
-every operand at its production site** — is precisely what turned the last two
-"closed" premises (PR-E2's landed-not-open state; Q10's descriptor-vs-bits
-conflation), so the pre-flight re-verifies the §3 file:line anchors
-(`consensus_state.rs:386–389`, `:4307`, `:5270`, `blockchain_db.cpp:224`/`:586`,
-`archival_serve_credit`) at the branch head before the build lands.
+Both keystone decisions are ratified; WS-1's build (§3 items 1–2) is unblocked;
+the verify body + dedup plumbing (§3 items 3/3a) additionally await WS-2
+ratification (§6). When the PR-E3 implementation pre-flight opens against the
+§3 build list, **run it against the current `dev` head, not the `1f67652b0`
+round pin** — `dev` has already moved to **`90e790c9c`** (twice mid-round in
+this arc; the WS-2 closure's operands were re-verified at `90e790c9c` and the
+delta was CI/CHANGELOG-only, §6). The **§11.1 pattern — read every operand at
+its production site** — is precisely what turned the last two "closed" premises
+(PR-E2's landed-not-open state; Q10's descriptor-vs-bits conflation), so the
+pre-flight re-verifies the §3 file:line anchors (`consensus_state.rs:386–389`,
+`:4307`, `:5270`, `:4882`, `blockchain_db.cpp:224`/`:586`,
+`claimed_epochs.rs:99`, `shekyl_types.h:613`, `archival_serve_credit`) at the
+branch head before the build lands.
