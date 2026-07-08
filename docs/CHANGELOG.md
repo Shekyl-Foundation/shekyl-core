@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+### Added
+
+- **archival: as-of-E emission epoch snapshot — the M-2/Q7 verify-side
+  work channel** (`REWARD_EMISSION_E3_GATING_ROUND.md` §3 item 2;
+  `REWARD_EMISSION_VIN_PLAN.md` §8.0.2(B)). The substrate PR-E3's verify
+  shim will consume: a by-value snapshot (Q7: no callbacks across the FFI)
+  carrying the same rows the epoch close computed from, plus the
+  **persisted** `Σwork(E)` denominator — never a recompute, since the M1
+  `K_COVER` gate's operand (`frozen_shard_count` as-of-close) is a
+  close-only quantity whose outcome reaches verify only through the stored
+  value. Three coupled cuts:
+  - *One gather routine, two consumers.* The epoch close's inline
+    serve-credit/bond/shard row gather is extracted into
+    `BlockchainLMDB::gather_archival_epoch_rows`; the close and the new
+    `gather_archival_emission_epoch_snapshot` both call it, so row-selection
+    divergence between close and verify is unrepresentable (WS-1 §5.5
+    single sourcing, C++ side). The close-processing boundary `(E+1)·SEB`
+    is single-sourced through the new
+    `shekyl_archival_epoch_close_processing_height` FFI wrapper rather than
+    re-derived by hand.
+  - *One decoder, one work function.* `shekyl_archival_emission_epoch_work`
+    (`archival_ffi.rs` / `shekyl_ffi.h`) computes claimant `work_P(E)` and
+    its `Curve(work_P)` term via `as_of_e_served_work` — the same sourcing
+    function whose output built the persisted denominator — over arrays
+    decoded by the same `decode_epoch_rows` helper the close FFI uses.
+  - *Identity KATs.* Sum-of-capped-terms == persisted `Σwork(E)` at the
+    Rust FFI layer (`emission_epoch_work_sums_to_persisted_sigma`) and at
+    the LMDB layer over a production-shaped close
+    (`emission_snapshot_identity_and_descriptor_immunity`), which also pins
+    live-descriptor immunity: mutating tip holdings after the close (the
+    M2-1 drop-after-serve mutation) leaves every snapshot output
+    bit-identical, and a bonded-but-never-credited claimant resolves to the
+    no-credit sentinel with zero work.
+
 ### Changed
 
 - **archival: WS-1 held-sourcing correction — serve-credit ledger is the

@@ -444,6 +444,171 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
   EXPECT_EQ(db.get_archival_sigma_work_milli(settlement_epoch), sigma);
 }
 
+// ── M-2/Q7 emission snapshot identity KATs ──────────────────────────────────
+// (REWARD_EMISSION_E3_GATING_ROUND.md §3 item 2)
+//
+// Three properties over the same fixture as the epoch-close test above (its
+// exact per-P arithmetic is derived in that test's PF-8 comment: work_p1 =
+// 1250, work_p2 = 2250, both curve-identity, sigma = 3500):
+//
+// 1. Snapshot == close gather. The emission snapshot carries the
+//    close-processing height the close ran at and the persisted Σwork(E),
+//    and its rows — gathered by the same shared routine the close used —
+//    drive shekyl_archival_emission_epoch_work to each P's exact term in
+//    the persisted sigma.
+// 2. Sum-of-capped == persisted sigma (M-2 supply conservation at the
+//    substrate layer): Σ_P Curve(work_P) over the claimants equals the
+//    stored denominator exactly.
+// 3. Live-descriptor immunity (WS-1 §5): mutating tip holdings after the
+//    close — the M2-1 drop-after-serve mutation — leaves every snapshot
+//    output bit-identical. Holdings never enter the work channel.
+TEST(archival_substrate_lmdb, emission_snapshot_identity_and_descriptor_immunity)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+
+  const uint64_t seb = 10000;
+  const uint64_t settlement_epoch = 3;
+  const uint64_t close_height = (settlement_epoch + 1) * seb;
+  const uint64_t join_epoch = settlement_epoch - 1;
+
+  const crypto::hash p1 = make_hash(0x51);
+  const crypto::hash p2 = make_hash(0x52);
+  const crypto::hash p_no_credit = make_hash(0x53);
+  const std::vector<uint8_t> pubkey = {0x01};
+
+  db.put_archival_bond_record(p1, pubkey, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
+  db.put_archival_bond_record(p2, pubkey, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7, 9}, {});
+  // Bonded but never credited in E: claimant_bond_idx must come back as the
+  // no-credit sentinel, zero work by construction.
+  db.put_archival_bond_record(p_no_credit, pubkey, join_epoch,
+    2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
+
+  db.put_archival_shard_segment(7, 100, make_hash(0x60), 26000);
+  db.put_archival_shard_segment(1234, 100, make_hash(0x66), 26000);
+
+  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch);
+  db.set_archival_serve_credit_bit(p2, 7, settlement_epoch);
+  db.set_archival_serve_credit_bit(p2, 9, settlement_epoch);
+
+  db.process_archival_epoch_close_at_height(close_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  const uint64_t sigma = db.get_archival_sigma_work_milli(settlement_epoch);
+  ASSERT_EQ(sigma, 3500u);
+
+  // Gather + marshal + FFI compute for one claimant. The marshaling mirrors
+  // what PR-E3's verify shim will do: FFI pointers into the snapshot's
+  // vectors, by value, no callbacks (Q7).
+  const auto emission_work = [&](const crypto::hash& p, uint64_t& out_work,
+    uint64_t& out_capped, size_t& out_claimant_idx) {
+    ArchivalEmissionEpochSnapshot snap;
+    lmdb.gather_archival_emission_epoch_snapshot(p, settlement_epoch, snap);
+
+    EXPECT_EQ(snap.settlement_epoch, settlement_epoch);
+    EXPECT_EQ(snap.close_block_height, close_height);
+    EXPECT_EQ(snap.sigma_work_milli, sigma);
+    // Property 1, row identity with the close's gather: two credited bonds,
+    // two credited shards (7 and 9 — never the credit-less 1234), three
+    // credit pairs.
+    EXPECT_EQ(snap.bonds.size(), 2u);
+    EXPECT_EQ(snap.shards.size(), 2u);
+    EXPECT_EQ(snap.credit_pairs.size(), 3u);
+    out_claimant_idx = snap.claimant_bond_idx;
+
+    std::vector<shekyl_archival_epoch_close_bond> bonds;
+    bonds.reserve(snap.bonds.size());
+    for (const ArchivalEmissionEpochSnapshot::BondRow& row : snap.bonds)
+    {
+      shekyl_archival_epoch_close_bond b{};
+      b.join_settlement_epoch = row.join_settlement_epoch;
+      b.is_foundation_complete_tree = row.is_foundation_complete_tree ? 1 : 0;
+      b.bad_intervals_ptr = row.bad_intervals_flat.empty()
+        ? nullptr : row.bad_intervals_flat.data();
+      b.bad_intervals_len = row.bad_intervals_flat.size() / 2;
+      bonds.push_back(b);
+    }
+    std::vector<shekyl_archival_epoch_close_shard> shards;
+    shards.reserve(snap.shards.size());
+    for (const ArchivalEmissionEpochSnapshot::ShardRow& row : snap.shards)
+    {
+      shekyl_archival_epoch_close_shard s{};
+      s.shard_id = row.shard_id;
+      s.freeze_height = row.freeze_height;
+      s.has_segment = row.has_segment ? 1 : 0;
+      shards.push_back(s);
+    }
+    std::vector<shekyl_archival_credit_pair> pairs;
+    pairs.reserve(snap.credit_pairs.size());
+    for (const ArchivalEmissionEpochSnapshot::CreditPair& pair : snap.credit_pairs)
+      pairs.push_back({ pair.bond_idx, pair.shard_idx });
+
+    shekyl_archival_emission_epoch_snapshot ffi{};
+    ffi.settlement_epoch = snap.settlement_epoch;
+    ffi.close_block_height = snap.close_block_height;
+    ffi.sigma_work_milli = snap.sigma_work_milli;
+    ffi.bonds_ptr = bonds.empty() ? nullptr : bonds.data();
+    ffi.bonds_len = bonds.size();
+    ffi.shards_ptr = shards.empty() ? nullptr : shards.data();
+    ffi.shards_len = shards.size();
+    ffi.credit_pairs_ptr = pairs.empty() ? nullptr : pairs.data();
+    ffi.credit_pairs_len = pairs.size();
+    ffi.claimant_bond_idx = snap.claimant_bond_idx;
+
+    return shekyl_archival_emission_epoch_work(&ffi, &out_work, &out_capped);
+  };
+
+  uint64_t work_p1 = 0, capped_p1 = 0;
+  uint64_t work_p2 = 0, capped_p2 = 0;
+  uint64_t work_none = 0, capped_none = 0;
+  size_t idx_p1 = 0, idx_p2 = 0, idx_none = 0;
+
+  ASSERT_EQ(emission_work(p1, work_p1, capped_p1, idx_p1), SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
+  ASSERT_EQ(emission_work(p2, work_p2, capped_p2, idx_p2), SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
+  ASSERT_EQ(emission_work(p_no_credit, work_none, capped_none, idx_none),
+    SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
+
+  // Property 1 exact per-P pins (arithmetic per the PF-8 comment above).
+  EXPECT_NE(idx_p1, SIZE_MAX);
+  EXPECT_NE(idx_p2, SIZE_MAX);
+  EXPECT_NE(idx_p1, idx_p2);
+  EXPECT_EQ(work_p1, 1250u);
+  EXPECT_EQ(capped_p1, 1250u);
+  EXPECT_EQ(work_p2, 2250u);
+  EXPECT_EQ(capped_p2, 2250u);
+
+  // No-credit claimant: sentinel index, zero outputs, OK status.
+  EXPECT_EQ(idx_none, SIZE_MAX);
+  EXPECT_EQ(work_none, 0u);
+  EXPECT_EQ(capped_none, 0u);
+
+  // Property 2: M-2 supply conservation — sum of capped terms is the
+  // persisted denominator exactly.
+  EXPECT_EQ(capped_p1 + capped_p2, sigma);
+
+  // Property 3: live-descriptor immunity. p2 drops shard 9 from its tip
+  // holdings after the close — the exact M2-1 drop-after-serve mutation.
+  // Every snapshot output must be bit-identical: the work channel reads the
+  // serve-credit ledger, never the holdings descriptor.
+  db.put_archival_bond_record(p2, pubkey, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  uint64_t work_p2_after = 0, capped_p2_after = 0;
+  size_t idx_p2_after = 0;
+  ASSERT_EQ(emission_work(p2, work_p2_after, capped_p2_after, idx_p2_after),
+    SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
+  EXPECT_EQ(work_p2_after, work_p2);
+  EXPECT_EQ(capped_p2_after, capped_p2);
+  EXPECT_EQ(idx_p2_after, idx_p2);
+}
+
 // ── M1 reward gate: count pass + stored shape (ARCHIVAL_REWARD_GATE_M1.md) ──
 //
 // The Rust activation-boundary KAT (tests/reward_gate_kat.rs, G-1..G-10)

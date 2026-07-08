@@ -181,6 +181,50 @@ struct mdb_txn_safe
 };
 
 
+/// The as-of-E consensus snapshot for one claimed settlement epoch, gathered
+/// by `BlockchainLMDB::gather_archival_emission_epoch_snapshot` (M-2/Q7,
+/// REWARD_EMISSION_E3_GATING_ROUND.md §3 item 2). Plain-value rows mirroring
+/// the epoch-close gather shape; the consumer marshals them into the
+/// `shekyl_archival_emission_epoch_snapshot` FFI struct (pointers into these
+/// vectors) for `shekyl_archival_emission_epoch_work`.
+///
+/// Deliberately carries no holdings descriptor (WS-1 §5): the held-and-served
+/// set is the serve-credit rows themselves; tip holdings never enter the work
+/// channel.
+struct ArchivalEmissionEpochSnapshot
+{
+  uint64_t settlement_epoch = 0;
+  /// H_close(E) — the close-processing boundary (E+1)·SEB the close ran at.
+  uint64_t close_block_height = 0;
+  /// Persisted finalized Σwork(E) milli (0 when the epoch closed empty or
+  /// was M1-gated) — the stored denominator, never a recompute.
+  uint64_t sigma_work_milli = 0;
+  struct BondRow
+  {
+    uint64_t join_settlement_epoch = 0;
+    bool is_foundation_complete_tree = false;
+    /// Flattened (start_epoch, end_exclusive) pairs.
+    std::vector<uint64_t> bad_intervals_flat;
+  };
+  struct ShardRow
+  {
+    uint64_t shard_id = 0;
+    uint64_t freeze_height = 0;
+    bool has_segment = false;
+  };
+  struct CreditPair
+  {
+    size_t bond_idx = 0;
+    size_t shard_idx = 0;
+  };
+  std::vector<BondRow> bonds;
+  std::vector<ShardRow> shards;
+  std::vector<CreditPair> credit_pairs;
+  /// Claimant P's index into `bonds`; SIZE_MAX when P has no serve-credit
+  /// row in E (its work is then zero by construction).
+  size_t claimant_bond_idx = SIZE_MAX;
+};
+
 // If m_batch_active is set, a batch transaction exists beyond this class, such
 // as a batch import with verification enabled, or possibly (later) a batch
 // network sync.
@@ -577,7 +621,29 @@ public:
   void apply_archival_slash_one(uint64_t block_height, uint32_t& seq, const crypto::hash& p_id,
     uint64_t shard_id, uint64_t settlement_epoch, uint64_t slashed_amount);
 
+  /// Re-derive the as-of-E consensus snapshot for a claimed settlement epoch
+  /// (M-2/Q7, REWARD_EMISSION_E3_GATING_ROUND.md §3 item 2): the same
+  /// serve-credit/bond/shard row gather the close ran at H_close(E) — via the
+  /// one shared gather routine — plus the **persisted** Σwork(E) denominator.
+  /// Sound because every gathered row is immutable for a claimable E: credit
+  /// acceptance rejects responses past H_close, pruning deletes only below
+  /// the claim window's floor, and reorg pops revert close and credits
+  /// symmetrically. Caller gates claimability (epoch closed, claim window)
+  /// before calling; PR-E3's verify shim is the production consumer, the
+  /// snapshot identity KATs the test consumer. Lives on BlockchainLMDB (not
+  /// the BlockchainDB interface) until the verify shim lands and fixes the
+  /// interface-level signature.
+  void gather_archival_emission_epoch_snapshot(const crypto::hash& p_id,
+    uint64_t settlement_epoch, ArchivalEmissionEpochSnapshot& out) const;
+
 private:
+  /// Single gather routine over the serve-credit rows for `settlement_epoch`
+  /// (WS-1 §5.5 single sourcing, C++ side): the epoch close and the emission
+  /// snapshot both call this, so the two consumers of the as-of-E gather
+  /// cannot diverge on row selection. `p_id` (optional) sets
+  /// `out.claimant_bond_idx` to that bond's gather index.
+  void gather_archival_epoch_rows(uint64_t settlement_epoch, const crypto::hash* p_id,
+    ArchivalEmissionEpochSnapshot& out) const;
   void process_archival_slash_for_epoch(uint64_t block_height, uint64_t settlement_epoch,
     uint32_t& seq);
   void prune_archival_epochs_before(uint64_t prune_below_epoch);
