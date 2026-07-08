@@ -56,6 +56,45 @@ name: "Shekyl CodeQL config"
 # surface we can fix without forking LMDB. Large release PRs (e.g. dev→main)
 # re-attribute these pre-existing library alerts as PR-introduced; suppressing
 # the query keeps CodeQL signal on findings we can actually act on.
+
+# ----------------------------------------------------------------------
+# Vendored-code path exclusion
+# ----------------------------------------------------------------------
+#
+# `external/**` is third-party vendored code (LMDB, qrcodegen, RandomX,
+# unbound, etc.), tracked as submodules/imports. Shekyl does not patch
+# these in place — the remediation path for a real finding is a dep
+# update or a fork, never a local edit — so CodeQL alerts anchored in
+# `external/` are not an actionable Shekyl surface. Analyzing them only
+# produces noise that large dev→main release PRs re-attribute as
+# PR-introduced.
+#
+# This filter is load-bearing ONLY because the C/C++ analysis runs
+# buildless (`build-mode: none` in codeql.yml): the config-file
+# `paths`/`paths-ignore` keywords apply to a compiled language solely
+# when it is analyzed WITHOUT a build. A trace-based build ignores them,
+# so a path filter under trace-based extraction would silently do
+# nothing. See codeql.yml's `analyze-cpp` for why buildless is the right
+# posture (the dangerous logic is in Rust).
+#
+# Concretely this drops the standing vendored highs in
+# `external/db_drivers/liblmdb/mdb.c` (`cpp/integer-multiplication-cast-to-long`
+# / `cpp/comparison-with-wider-type`) and `external/qrcodegen/QrCode.cpp`,
+# while keeping those same queries live on Shekyl-owned `src/` (and, via
+# the separate Rust job, on `rust/`) where the findings would be real.
+#
+# The per-id `query-filters` below are a distinct mechanism (they exclude
+# by query id at the results stage, regardless of build mode) and are
+# retained deliberately, not made redundant by this path filter:
+# `rust/hard-coded-cryptographic-value` targets `rust/` test code
+# (outside `external/`), and `cpp/upcast-array-pointer-arithmetic` traces
+# dataflow through a Shekyl-owned wrapper in
+# `src/blockchain_db/lmdb/db_lmdb.cpp` — if buildless anchors that finding
+# on the `src/` side, `paths-ignore` would not catch it, so the id filter
+# remains the safety net.
+paths-ignore:
+  - 'external/**'
+
 query-filters:
   - exclude:
       id: rust/hard-coded-cryptographic-value

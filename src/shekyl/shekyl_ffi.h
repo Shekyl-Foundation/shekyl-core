@@ -1747,6 +1747,9 @@ uint8_t shekyl_archival_p_canonical_id_from_pubkey(
 
 uint64_t shekyl_archival_epoch_open_height(uint64_t settlement_epoch);
 uint64_t shekyl_archival_epoch_close_height(uint64_t settlement_epoch);
+/// The close-processing boundary (E+1)·SEB — the height the close runs at
+/// and the shard-age operand it received; 0 for the overflowing epoch.
+uint64_t shekyl_archival_epoch_close_processing_height(uint64_t settlement_epoch);
 uint64_t shekyl_archival_challenge_resolution_blocks(void);
 uint64_t shekyl_archival_epoch_slash_deadline_height(uint64_t settlement_epoch);
 uint64_t shekyl_archival_challenge_seal_height(uint64_t h_open);
@@ -1884,6 +1887,32 @@ uint8_t shekyl_archival_prune_below_epoch(
     uint64_t block_height,
     uint64_t* out_prune_below_epoch);
 
+/* `epoch` inserted into the claimed set (stale entries pruned in place). */
+#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_INSERTED        0
+/* `epoch` already claimed — hard error on the connect path (WS-2 §6.2). */
+#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ALREADY_CLAIMED 1
+/* `epoch >= current_settled_epoch`: not yet settled. */
+#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_NOT_SETTLED 2
+/* `epoch` below the claim window (`MAX_CLAIM_AGE_W`). */
+#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_EXPIRED     3
+/* Null pointer, capacity overflow, or non-strictly-increasing set. */
+#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_INVALID     4
+
+/// Record `epoch` as claimed in the caller-owned claimed-epoch buffer — the
+/// single writer for `ArchivalBondValue::claimed_settlement_epochs` (WS-2
+/// §6.2; the emission connect path is the only caller). Window maintenance
+/// (prune below `current_settled_epoch − W`) happens on insert, so on
+/// `INSERTED` the buffer contents *and* `*set_len` change in place; on any
+/// other return both are untouched. `set_ptr` must address `set_cap`
+/// writable `uint64_t`s with `*set_len <= set_cap <= 32` (the
+/// `kMaxClaimedEpochs` cap).
+uint8_t shekyl_archival_claimed_epochs_check_and_set(
+    uint64_t* set_ptr,
+    size_t* set_len,
+    size_t set_cap,
+    uint64_t epoch,
+    uint64_t current_settled_epoch);
+
 #define SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK                0
 #define SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_NULL_PTR      1
 #define SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_LEN_OVERFLOW  2
@@ -1891,6 +1920,10 @@ uint8_t shekyl_archival_prune_below_epoch(
 
 /// One gathered bond. Layout must match `ShekylArchivalEpochCloseBond` in
 /// `rust/shekyl-ffi/src/archival_ffi.rs`.
+///
+/// Carries no holdings descriptor (WS-1): the held-and-served set is sourced
+/// solely from the serve-credit ledger rows the gather passes as credit
+/// pairs, so tip holdings never cross into the work channel.
 struct shekyl_archival_epoch_close_bond
 {
   uint64_t join_settlement_epoch;
@@ -1898,8 +1931,6 @@ struct shekyl_archival_epoch_close_bond
   const uint64_t* bad_intervals_ptr;
   /// Pair count (not u64 count).
   size_t bad_intervals_len;
-  const uint64_t* held_shard_ids_ptr;
-  size_t held_shard_ids_len;
   uint8_t is_foundation_complete_tree;
 };
 
@@ -1944,6 +1975,63 @@ uint8_t shekyl_archival_epoch_close_compute(
     size_t credit_pairs_len,
     uint64_t* out_r_market_ptr,
     uint64_t* out_sigma_work_milli_ptr);
+
+/// The M-2/Q7 as-of-E consensus snapshot for one claimed settlement epoch
+/// (REWARD_EMISSION_E3_GATING_ROUND.md §3 item 2; REWARD_EMISSION_VIN_PLAN.md
+/// §8.0.2(B)). Layout must match `ShekylArchivalEmissionEpochSnapshot` in
+/// `rust/shekyl-ffi/src/archival_ffi.rs`.
+///
+/// Marshaled by value from the frozen E-close materialization: the
+/// serve-credit rows for E (the WS-1 §5 held source), the credited bonds'
+/// standing fields, shard freeze heights, and the **persisted** Σwork(E) —
+/// never the live bond holdings descriptor. Every row is immutable for a
+/// claimable E, so a re-gather at any height in the claim window reproduces
+/// the close's gather exactly
+/// (`BlockchainLMDB::gather_archival_emission_epoch_snapshot` performs it).
+///
+/// `sigma_work_milli` must be the persisted close output, not a recompute:
+/// the M1 K_COVER gate's operand (`frozen_shard_count` as-of-close) is a
+/// close-only quantity, so the gate's outcome reaches verify only through
+/// the stored denominator.
+struct shekyl_archival_emission_epoch_snapshot
+{
+  uint64_t settlement_epoch;
+  /// The close-processing height (E+1)·SEB the gather froze at (shard-age
+  /// operand; must equal the height the close ran at). NOT H_close(E) =
+  /// shekyl_archival_epoch_close_height(E) = the epoch's last block =
+  /// (E+1)·SEB − 1, one block lower.
+  uint64_t close_block_height;
+  /// Persisted finalized Σwork(E) milli — the stored denominator.
+  uint64_t sigma_work_milli;
+  const struct shekyl_archival_epoch_close_bond* bonds_ptr;
+  size_t bonds_len;
+  const struct shekyl_archival_epoch_close_shard* shards_ptr;
+  size_t shards_len;
+  const struct shekyl_archival_credit_pair* credit_pairs_ptr;
+  size_t credit_pairs_len;
+  /// Claimant P's index into `bonds`, or SIZE_MAX when P has no serve-credit
+  /// row in E (its work is then zero by construction).
+  size_t claimant_bond_idx;
+};
+
+/// Claimant work over the as-of-E snapshot: writes P's `work_P(E)` milli to
+/// `out_work_milli` and its `Curve(work_P)` term to `out_capped_work_milli` —
+/// the emission verify numerator (REWARD_EMISSION_VIN_PLAN.md §8.0.2 step 4).
+///
+/// Sources via the same single sourcing function whose output built the
+/// persisted Σwork(E) denominator at close, over the same frozen gather, so
+/// the capped output is P's exact per-P term of that denominator by
+/// construction (WS-1 §5.5). Note this is the numerator only: it does NOT
+/// consult `snapshot->sigma_work_milli` and does NOT re-apply the M1 K_COVER
+/// gate — a gated (or empty) epoch persists Σwork(E) == 0 while this may still
+/// return a positive capped term, so the consumer MUST divide through the
+/// persisted denominator (reward is 0 when Σwork(E) == 0). Both outputs are
+/// zero when P has no credit row in E or is not a market member at E. Errors
+/// reuse the SHEKYL_ARCHIVAL_EPOCH_CLOSE_* codes; outputs are zeroed on entry.
+uint8_t shekyl_archival_emission_epoch_work(
+    const struct shekyl_archival_emission_epoch_snapshot* snapshot,
+    uint64_t* out_work_milli,
+    uint64_t* out_capped_work_milli);
 
 // ---------------------------------------------------------------------------
 // LWMA-1 difficulty-adjustment FFI surface

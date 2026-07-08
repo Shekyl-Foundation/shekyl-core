@@ -1333,15 +1333,21 @@ sustainability is unaffected by the recalibration.
   `Bonded`), the slashable-when boundary (Pin 3: dropped collateral stays liable through
   cooldown — no drop-and-run; forecloses T-A15b), drop-last-shard-rejected (use `Unbond`),
   and per-shard `E_add+1` counting. These are the *inputs* to (2). **Mutable-holdings
-  consequence — read rule pinned (P2B-7 Pin 4), implementation open:**
-  `BlockchainLMDB::has_archival_bond_shard` (`db_lmdb.cpp`) currently returns *tip* holdings
-  and ignores `at_height` — sound only while holdings were immutable. With mid-life add/drop,
-  "holds shard now" ≠ "held shard at `at_height`", so the serve-credit-window membership check
-  must read the per-`(P,s,E)` retention bits / `bond_event_log` intervals (gate-4 §4.4 ground
-  truth) rather than the mutable descriptor. **Open:** land the `at_height`-honoring read (or
-  contract-restrict the function to current-membership questions and reroute historical
-  callers) in the `shekyl-archival-retention` connect paths; land the per-shard `E_add+1`
-  verify/connect rule.
+  consequence — read rule pinned (P2B-7 Pin 4); accessor read LANDED (WS-1, 2026-07-07):**
+  `BlockchainLMDB::archival_bond_holds_shard` now honors `at_height` by reconstructing from
+  tip holdings + the (v2, pre-kind-carrying) slash log — sound because at the current
+  substrate holdings only shrink post-join (slash-apply erase/demotion is the sole mutation),
+  so "held at `h`" = "held at tip, or removed by a logged slash strictly above `h`". Both
+  consumers (serve-credit acceptance `blockchain.cpp` and slash eligibility `db_lmdb.cpp`,
+  whose leading tip-holdings pre-filter was deleted) now read as-of-fire-height
+  (`REWARD_EMISSION_E3_GATING_ROUND.md` §5; KATs in `archival_substrate_lmdb.cpp`).
+  **Still open, owned by the HoldingsUpdate connect-path PR:** voluntary *adds* break the
+  shrink-only premise — that PR's pre-flight must extend the reconstruction (journal adds the
+  way slashes are journaled, or move to `bond_event_log` intervals) **and** fix the slash
+  candidate enumeration in `process_archival_slash_for_epoch`, which iterates *tip*
+  `held_shard_ids` (behavior-neutral today: the only drop is slash-apply itself, which sets
+  the slash-applied bit + `[E, ∞)` bad interval; a voluntary drop would let the dropped
+  shard escape enumeration). Also land the per-shard `E_add+1` verify/connect rule.
   (2) **~~Age-stratified sim reconciliation (pre-seal dependency).~~ DONE 2026-06-16 —
   `STAKER_ARCHIVAL_SIM.md` §L18.** The reconciliation landed as the
   `--axis=holdingsupdate_cooldown` sweep: released collateral frozen for the release
@@ -1431,6 +1437,49 @@ sustainability is unaffected by the recalibration.
   retention lock; if `BOND_DURATION_AGE_SCALE`/`BOND_DURATION_BASE → 0` the cooldown's coverage
   effect inverts and `RELEASE_COOLDOWN_EPOCHS` must be re-evaluated (the two are coupled). No
   shipped parameter moved. Detail: `STAKER_ARCHIVAL_SIM.md` §L18 "Adversarial-dodge arm".
+
+- **Archival serve-credit / emission LMDB scans — bound the two unindexed table
+  scans (own schema-round PR).** PR #269 review (WS-1 held-sourcing) surfaced two
+  linear scans on consensus paths, both keyed so the wanted rows cannot be
+  range-seeked: (a) `archival_slash_removed_holding_after` (`db_lmdb.cpp`) forward-
+  scans the whole slash-log tail above `at_height` on every not-held-at-tip
+  `archival_bond_holds_shard` query, so a serve-credit input citing a shard the bond
+  never held costs `O(slash-log tail)` at acceptance — **confirmed live** (cheap to
+  trigger pre-crypto-gate; correctness preserved, cost is unbounded by the query);
+  (b) `gather_archival_epoch_rows` (`db_lmdb.cpp`) `MDB_FIRST→MDB_NEXT` scans the
+  **entire** serve-credit table filtering `epoch` at key offset 40 (epoch is the
+  trailing key field) once per epoch close / emission gather, so per-claim cost grows
+  with the whole table, not the one epoch's rows. Both fixes are a **persisted-schema
+  change** (rule 42 version bump + snapshot check): an epoch-/`p_id`-prefixed secondary
+  index, or reorder the serve-credit key to `epoch‖p_id‖shard` and add a per-`p_id`
+  slash-log index, so the scans become `MDB_SET_RANGE` seeks bounded to the relevant
+  rows. Deferred to a dedicated schema round (not this PR's WS-1 scope); (a)'s live
+  cost is bounded in practice pre-genesis (slashes are rare, the log is small).
+
+- **Emission-path micro-efficiency cluster — address with C-1 wiring / the schema
+  round (post-build tuning).** PR #269 re-review surfaced four bounded efficiency
+  items on the emission verify/connect paths, none a live consensus-hot path yet
+  (verify is unwired until C-1; connect/claim counts are small), so they are
+  deferred to the batch where the emission leg is wired rather than hand-optimized
+  now: (a) `shekyl_archival_emission_epoch_work` re-decodes the whole epoch gather
+  on every claimant call — once C-1 wires per-claimant verification this is
+  M-claimants × full re-gather, so batch the decode across a block's claims
+  (`archival_ffi.rs`); (b) `emission_vin_verify_claims` dedups shard ids with a
+  `Vec` + linear `contains` (O(k²), k = shards/claim) — a set/sort if k grows
+  (`emission_verify.rs`); (c) the same fn runs a full `as_of_e_served_work` pass then
+  a per-entry rescan (`emission_verify.rs`); (d) `apply_archival_emission_claim`
+  probes the journal seq from 0 on each append (O(seq)/block) — seek the last key
+  instead (`db_lmdb.cpp`). All CONFIRMED/PLAUSIBLE as efficiency (no wrong output).
+
+- **~~PR-E3 emission verify — reject `sigma_work_milli == 0` at the consumer (M1-gate
+  belt).~~ SATISFIED by landed code (PR #269).** The M1 `K_COVER` reward gate reaches
+  verify through the persisted `Σwork(E)` denominator: `shekyl_archival_emission_epoch_work`
+  deliberately does not re-gate the numerator (`frozen_shard_count: 0`; documented at
+  `archival_ffi.rs`). When PR-E3's verify body landed in this same PR, the belt landed
+  with it — `reward_arithmetic::reward_share_floor` returns 0 whenever
+  `sigma_work_milli == 0`, so a gated/empty epoch yields expected_reward 0 and any nonzero
+  claim is rejected via `RewardMismatch`; no division by zero. The numerator FFI docstring
+  now states the denominator caveat explicitly.
 
 - **Mid-band `age_weight` lever — CLOSED: the cushion is not robust, keep the minimal
   floor+no-cushion posture (decision, 2026-06-16).** The faithful-freeze fix reopened

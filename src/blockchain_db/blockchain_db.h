@@ -2003,6 +2003,20 @@ public:
   virtual void process_archival_slash_at_height(uint64_t block_height);
   /// Revert slash journal rows recorded when `block_height` connected.
   virtual void revert_archival_slashes_at_height(uint64_t block_height);
+  /// Emission-claim dedup writer (WS-2 §6.2, the connect-path single writer):
+  /// records every epoch in `settlement_epochs` in `P`'s claimed set via the
+  /// windowed `claimed_epochs_check_and_set` FFI, sets
+  /// `first_paying_emission_height` if unset, and journals the pre-image for
+  /// pop-revert. A dedup hit or an unclaimable epoch is a hard error, never a
+  /// soft skip — verify's contains-check and the block-level `(P,E)` pass
+  /// (C-1) foreclose both, so reaching either means a dedup layer was
+  /// bypassed. Caller: the emission vin connect dispatch (C-1).
+  virtual void apply_archival_emission_claim(uint64_t block_height, const crypto::hash& p_id,
+    const std::vector<uint64_t>& settlement_epochs);
+  /// Restore the pre-image journal rows recorded when `block_height`
+  /// connected (§6.3: the naive remove-inverse leaves prune-evicted
+  /// already-claimed epochs out of the restored set — the double-mint).
+  virtual void revert_archival_emission_claims_at_height(uint64_t block_height);
   /// Finalize `R_market` / `Σwork` at settlement-epoch close (`ARCHIVAL_CONSENSUS_STATE.md` §3.3–§3.5).
   virtual void process_archival_epoch_close_at_height(uint64_t block_height);
   /// Revert epoch-close materialization when `block_height` is popped.

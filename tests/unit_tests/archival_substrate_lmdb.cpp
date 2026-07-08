@@ -12,6 +12,9 @@
 
 #include "blockchain_db/lmdb/db_lmdb.h"
 #include "blockchain_db/shekyl_types.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
+#include "cryptonote_basic/hardfork.h"
+#include "shekyl/shekyl_ffi.h"
 
 using namespace cryptonote;
 
@@ -215,6 +218,52 @@ TEST(archival_substrate_lmdb, bond_v4_encode_version_byte)
   const std::vector<uint8_t> encoded = bond.encode();
   ASSERT_FALSE(encoded.empty());
   EXPECT_EQ(encoded[0], shekyl::db::ArchivalBondValue::kVersion);
+}
+
+TEST(archival_substrate_lmdb, slash_revert_value_round_trips)
+{
+  // Direct codec round-trip for the WS-1 v2 slash-revert value: encode →
+  // decode reproduces every field, and the version byte is v2. Guards the
+  // encode/decode symmetry independently of the slash apply/pop flow.
+  shekyl::db::ArchivalSlashRevertValue v{};
+  std::memset(v.p_id, 0xAB, sizeof(v.p_id));
+  v.shard_id = 0x0102030405060708ull;
+  v.settlement_epoch = 42;
+  v.slashed_amount = 7 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  v.holdings_pre_kind = shekyl::db::ArchivalSlashRevertValue::kPreKindCompleteTree;
+
+  const std::vector<uint8_t> encoded = v.encode();
+  ASSERT_EQ(encoded.size(), shekyl::db::ArchivalSlashRevertValue::kEncodedSize);
+  EXPECT_EQ(encoded[0], shekyl::db::ArchivalSlashRevertValue::kVersion);
+
+  shekyl::db::ArchivalSlashRevertValue decoded{};
+  ASSERT_TRUE(
+    shekyl::db::ArchivalSlashRevertValue::decode(encoded.data(), encoded.size(), decoded));
+  EXPECT_EQ(std::memcmp(decoded.p_id, v.p_id, 32), 0);
+  EXPECT_EQ(decoded.shard_id, v.shard_id);
+  EXPECT_EQ(decoded.settlement_epoch, v.settlement_epoch);
+  EXPECT_EQ(decoded.slashed_amount, v.slashed_amount);
+  EXPECT_EQ(decoded.holdings_pre_kind, v.holdings_pre_kind);
+}
+
+TEST(archival_substrate_lmdb, emission_claim_revert_value_round_trips)
+{
+  // Direct codec round-trip for the WS-2 emission-claim revert value, incl. a
+  // multi-entry pre-claimed set (the variable-length tail).
+  shekyl::db::ArchivalEmissionClaimRevertValue v{};
+  std::memset(v.p_id, 0xCD, sizeof(v.p_id));
+  v.pre_first_paying_emission_height = 30000;
+  v.pre_claimed_epochs = {2, 5, 9};
+
+  const std::vector<uint8_t> encoded = v.encode();
+  EXPECT_EQ(encoded[0], shekyl::db::ArchivalEmissionClaimRevertValue::kVersion);
+
+  shekyl::db::ArchivalEmissionClaimRevertValue decoded{};
+  ASSERT_TRUE(shekyl::db::ArchivalEmissionClaimRevertValue::decode(
+    encoded.data(), encoded.size(), decoded));
+  EXPECT_EQ(std::memcmp(decoded.p_id, v.p_id, 32), 0);
+  EXPECT_EQ(decoded.pre_first_paying_emission_height, v.pre_first_paying_emission_height);
+  EXPECT_EQ(decoded.pre_claimed_epochs, v.pre_claimed_epochs);
 }
 
 TEST(archival_substrate_lmdb, bond_v4_empty_claimed_defaults)
@@ -439,6 +488,150 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
   EXPECT_EQ(db.get_archival_r_market(7, settlement_epoch), 2u);
   EXPECT_EQ(db.get_archival_r_market(9, settlement_epoch), 1u);
   EXPECT_EQ(db.get_archival_sigma_work_milli(settlement_epoch), sigma);
+}
+
+// ── M-2/Q7 emission snapshot identity KATs ──────────────────────────────────
+// (REWARD_EMISSION_E3_GATING_ROUND.md §3 item 2)
+//
+// Three properties over the same fixture as the epoch-close test above (its
+// exact per-P arithmetic is derived in that test's PF-8 comment: work_p1 =
+// 1250, work_p2 = 2250, both curve-identity, sigma = 3500):
+//
+// 1. Snapshot == close gather. The emission snapshot carries the
+//    close-processing height the close ran at and the persisted Σwork(E),
+//    and its rows — gathered by the same shared routine the close used —
+//    drive shekyl_archival_emission_epoch_work to each P's exact term in
+//    the persisted sigma.
+// 2. Sum-of-capped == persisted sigma (M-2 supply conservation at the
+//    substrate layer): Σ_P Curve(work_P) over the claimants equals the
+//    stored denominator exactly.
+// 3. Live-descriptor immunity (WS-1 §5): mutating tip holdings after the
+//    close — the M2-1 drop-after-serve mutation — leaves every snapshot
+//    output bit-identical. Holdings never enter the work channel.
+TEST(archival_substrate_lmdb, emission_snapshot_identity_and_descriptor_immunity)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+
+  const uint64_t seb = 10000;
+  const uint64_t settlement_epoch = 3;
+  const uint64_t close_height = (settlement_epoch + 1) * seb;
+  const uint64_t join_epoch = settlement_epoch - 1;
+
+  const crypto::hash p1 = make_hash(0x51);
+  const crypto::hash p2 = make_hash(0x52);
+  const crypto::hash p_no_credit = make_hash(0x53);
+  const std::vector<uint8_t> pubkey = {0x01};
+
+  db.put_archival_bond_record(p1, pubkey, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
+  db.put_archival_bond_record(p2, pubkey, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7, 9}, {});
+  // Bonded but never credited in E: claimant_bond_idx must come back as the
+  // no-credit sentinel, zero work by construction.
+  db.put_archival_bond_record(p_no_credit, pubkey, join_epoch,
+    2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
+
+  db.put_archival_shard_segment(7, 100, make_hash(0x60), 26000);
+  db.put_archival_shard_segment(1234, 100, make_hash(0x66), 26000);
+
+  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch);
+  db.set_archival_serve_credit_bit(p2, 7, settlement_epoch);
+  db.set_archival_serve_credit_bit(p2, 9, settlement_epoch);
+
+  db.process_archival_epoch_close_at_height(close_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  const uint64_t sigma = db.get_archival_sigma_work_milli(settlement_epoch);
+  ASSERT_EQ(sigma, 3500u);
+
+  // Gather + marshal + FFI compute for one claimant. The marshaling mirrors
+  // what PR-E3's verify shim will do: FFI pointers into the snapshot's
+  // vectors, by value, no callbacks (Q7).
+  const auto emission_work = [&](const crypto::hash& p, uint64_t& out_work,
+    uint64_t& out_capped, size_t& out_claimant_idx) {
+    ArchivalEmissionEpochSnapshot snap;
+    lmdb.gather_archival_emission_epoch_snapshot(p, settlement_epoch, snap);
+
+    EXPECT_EQ(snap.settlement_epoch, settlement_epoch);
+    EXPECT_EQ(snap.close_block_height, close_height);
+    EXPECT_EQ(snap.sigma_work_milli, sigma);
+    // Property 1, row identity with the close's gather: two credited bonds,
+    // two credited shards (7 and 9 — never the credit-less 1234), three
+    // credit pairs.
+    EXPECT_EQ(snap.bonds.size(), 2u);
+    EXPECT_EQ(snap.shards.size(), 2u);
+    EXPECT_EQ(snap.credit_pairs.size(), 3u);
+    out_claimant_idx = snap.claimant_bond_idx;
+
+    // Same struct→FFI marshaling the close path and PR-E3 verify shim use,
+    // via the snapshot's shared helpers (single source — WS-1 §5.5).
+    const std::vector<shekyl_archival_epoch_close_bond> bonds = snap.to_ffi_bonds();
+    const std::vector<shekyl_archival_epoch_close_shard> shards = snap.to_ffi_shards();
+    const std::vector<shekyl_archival_credit_pair> pairs = snap.to_ffi_credit_pairs();
+
+    shekyl_archival_emission_epoch_snapshot ffi{};
+    ffi.settlement_epoch = snap.settlement_epoch;
+    ffi.close_block_height = snap.close_block_height;
+    ffi.sigma_work_milli = snap.sigma_work_milli;
+    ffi.bonds_ptr = bonds.empty() ? nullptr : bonds.data();
+    ffi.bonds_len = bonds.size();
+    ffi.shards_ptr = shards.empty() ? nullptr : shards.data();
+    ffi.shards_len = shards.size();
+    ffi.credit_pairs_ptr = pairs.empty() ? nullptr : pairs.data();
+    ffi.credit_pairs_len = pairs.size();
+    ffi.claimant_bond_idx = snap.claimant_bond_idx;
+
+    return shekyl_archival_emission_epoch_work(&ffi, &out_work, &out_capped);
+  };
+
+  uint64_t work_p1 = 0, capped_p1 = 0;
+  uint64_t work_p2 = 0, capped_p2 = 0;
+  uint64_t work_none = 0, capped_none = 0;
+  size_t idx_p1 = 0, idx_p2 = 0, idx_none = 0;
+
+  ASSERT_EQ(emission_work(p1, work_p1, capped_p1, idx_p1), SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
+  ASSERT_EQ(emission_work(p2, work_p2, capped_p2, idx_p2), SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
+  ASSERT_EQ(emission_work(p_no_credit, work_none, capped_none, idx_none),
+    SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
+
+  // Property 1 exact per-P pins (arithmetic per the PF-8 comment above).
+  EXPECT_NE(idx_p1, SIZE_MAX);
+  EXPECT_NE(idx_p2, SIZE_MAX);
+  EXPECT_NE(idx_p1, idx_p2);
+  EXPECT_EQ(work_p1, 1250u);
+  EXPECT_EQ(capped_p1, 1250u);
+  EXPECT_EQ(work_p2, 2250u);
+  EXPECT_EQ(capped_p2, 2250u);
+
+  // No-credit claimant: sentinel index, zero outputs, OK status.
+  EXPECT_EQ(idx_none, SIZE_MAX);
+  EXPECT_EQ(work_none, 0u);
+  EXPECT_EQ(capped_none, 0u);
+
+  // Property 2: M-2 supply conservation — sum of capped terms is the
+  // persisted denominator exactly.
+  EXPECT_EQ(capped_p1 + capped_p2, sigma);
+
+  // Property 3: live-descriptor immunity. p2 drops shard 9 from its tip
+  // holdings after the close — the exact M2-1 drop-after-serve mutation.
+  // Every snapshot output must be bit-identical: the work channel reads the
+  // serve-credit ledger, never the holdings descriptor.
+  db.put_archival_bond_record(p2, pubkey, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  uint64_t work_p2_after = 0, capped_p2_after = 0;
+  size_t idx_p2_after = 0;
+  ASSERT_EQ(emission_work(p2, work_p2_after, capped_p2_after, idx_p2_after),
+    SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK);
+  EXPECT_EQ(work_p2_after, work_p2);
+  EXPECT_EQ(capped_p2_after, capped_p2);
+  EXPECT_EQ(idx_p2_after, idx_p2);
 }
 
 // ── M1 reward gate: count pass + stored shape (ARCHIVAL_REWARD_GATE_M1.md) ──
@@ -728,4 +921,529 @@ TEST(archival_substrate_lmdb, bond_v4_claimed_set_survives_reorg_revert)
   // "dedup reverts with pop_block" invariant (FOLLOWUPS.md:1652) holds.
   EXPECT_EQ(read.claimed_settlement_epochs, seed.claimed_settlement_epochs);
   EXPECT_EQ(read.first_paying_emission_height, seed.first_paying_emission_height);
+}
+
+// ── WS-1: as-of-height holdings accessor (REWARD_EMISSION_E3_GATING_ROUND.md §5) ──
+//
+// archival_bond_holds_shard(P, s, at_height) answers "did P hold s at
+// at_height?", not "does P hold s now". Both consumers — serve-credit
+// acceptance (blockchain.cpp, check_archival_serve_credit_input) and slash
+// eligibility (db_lmdb.cpp, archival_challenge_failed_at_height) — pass the
+// challenge fire height, so the accessor's boundary is the shared consensus
+// boundary for reward and punishment alike. Holdings only shrink post-join at
+// the current substrate (slash-apply's erase/demotion is the sole mutation,
+// journaled per-block in the slash log), so the accessor reconstructs
+// "held-at-height" from tip holdings plus logged removals strictly above
+// at_height. The inverse boundary case — held at tip but NOT at h_fire — is
+// structurally unrepresentable until a holdings-add path (HoldingsUpdate)
+// lands; that path's pre-flight owns extending the reconstruction.
+
+// Acceptance-gate KAT, accessor boundary (§5.6 #2): a shard removed by a
+// slash at height H was held at every height < H and not held at ≥ H.
+// This is the exact read the serve-credit acceptance gate performs at
+// h_fire, and the read the slash-eligibility mirror bottoms out in — the
+// tip-read defect ("drop after fire escapes accounting") is dead only if
+// this boundary holds.
+TEST(archival_substrate_lmdb, holds_shard_honors_at_height_across_slash_removal)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+  const crypto::hash p_id = make_hash(0x76);
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const uint64_t slash_height = 6000;
+
+  db.put_archival_bond_value(p_id, bond_with_v4_fields({7, 9}, 2 * floor));
+  db.set_total_bonded_atomic(2 * floor);
+  db.set_total_burned(0);
+
+  uint32_t seq = 0;
+  lmdb.apply_archival_slash_one(slash_height, seq, p_id, /*shard_id*/ 7, /*epoch*/ 3, floor);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // Tip no longer holds 7 (the slash erased it) — the old tip-read returned
+  // false for every at_height, the drop-after-fire under-count/escape.
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_FALSE(read.holds_shard(7));
+
+  // Held at every height strictly below the slash …
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 7, slash_height - 1));
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 7, 0));
+  // … and not held at the slash height or after (holdings at h are the
+  // post-connect state of block h).
+  EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 7, slash_height));
+  EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 7, slash_height + 1000));
+
+  // A shard never slashed reads from tip at any height.
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 9, 0));
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 9, slash_height + 1000));
+  // Max-height sentinel: nothing exists strictly above it, so the answer is
+  // the tip state — and the log-scan start key must not wrap to 0 and
+  // resurrect the slashed shard from the whole-log scan.
+  EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 7, std::numeric_limits<uint64_t>::max()));
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 9, std::numeric_limits<uint64_t>::max()));
+  // A shard never held is not resurrected by someone else's log rows.
+  EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 42, slash_height - 1));
+}
+
+// Complete-tree demotion reconstruction: the slash cleared *every* holding,
+// so the pre-image held every shard. The v2 log row records the pre-slash
+// holdings kind — without it the log could not distinguish "demoted
+// complete-tree" from "compact bond that lost its last shard", and
+// reconstruction (plus pop-revert, below) had to guess.
+TEST(archival_substrate_lmdb, holds_shard_reconstructs_complete_tree_demotion)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+  const crypto::hash p_id = make_hash(0x77);
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const uint64_t slash_height = 6000;
+
+  shekyl::db::ArchivalBondValue seed{};
+  seed.hybrid_pubkey = {0x0A};
+  seed.join_settlement_epoch = 2;
+  seed.bonded_total_atomic = 2 * floor;
+  seed.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsCompleteTree;
+  db.put_archival_bond_value(p_id, seed);
+  db.set_total_bonded_atomic(2 * floor);
+  db.set_total_burned(0);
+
+  uint32_t seq = 0;
+  lmdb.apply_archival_slash_one(slash_height, seq, p_id, /*shard_id*/ 7, /*epoch*/ 3, floor);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // Demoted at tip: compact, empty.
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_FALSE(read.is_complete_tree());
+  EXPECT_TRUE(read.held_shard_ids.empty());
+
+  // Before the demotion the bond held every shard — including ones the
+  // slash row does not name.
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 7, slash_height - 1));
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 999, slash_height - 1));
+  EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 7, slash_height));
+  EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 999, slash_height));
+}
+
+// Pop-revert restores the recorded pre-image, not a heuristic's guess. The
+// v1 log format forced the revert to infer the pre-slash shape from
+// (slashed_amount == floor && holdings empty && !complete_tree) — which
+// mis-restored a slashed single-shard compact bond to complete-tree
+// whenever the amounts coincided. The v2 row records holdings_pre_kind, so
+// the compact single-shard case round-trips exactly.
+TEST(archival_substrate_lmdb, slash_revert_restores_single_shard_compact_bond)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+  const crypto::hash p_id = make_hash(0x78);
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const uint64_t slash_height = 6000;
+
+  // Single-shard compact bond slashed for exactly the floor: the v1
+  // heuristic's trigger shape.
+  db.put_archival_bond_value(p_id, bond_with_v4_fields({7}, 2 * floor));
+  db.set_total_bonded_atomic(2 * floor);
+  db.set_total_burned(0);
+
+  uint32_t seq = 0;
+  lmdb.apply_archival_slash_one(slash_height, seq, p_id, /*shard_id*/ 7, /*epoch*/ 3, floor);
+  db.revert_archival_slashes_at_height(slash_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_FALSE(read.is_complete_tree());
+  EXPECT_EQ(read.held_shard_ids, std::vector<uint64_t>({7}));
+  EXPECT_EQ(read.bonded_total_atomic, 2 * floor);
+  // The revert also consumed the log row: reconstruction no longer sees a
+  // removal, so as-of-height reads fall through to (restored) tip.
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 7, slash_height + 1));
+}
+
+// Complete-tree pop-revert restores the demotion from the recorded pre-kind
+// (previously inferred from the amount/emptiness heuristic).
+TEST(archival_substrate_lmdb, slash_revert_restores_complete_tree_demotion)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+  const crypto::hash p_id = make_hash(0x79);
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const uint64_t slash_height = 6000;
+
+  shekyl::db::ArchivalBondValue seed{};
+  seed.hybrid_pubkey = {0x0A};
+  seed.join_settlement_epoch = 2;
+  seed.bonded_total_atomic = 2 * floor;
+  seed.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsCompleteTree;
+  db.put_archival_bond_value(p_id, seed);
+  db.set_total_bonded_atomic(2 * floor);
+  db.set_total_burned(0);
+
+  uint32_t seq = 0;
+  lmdb.apply_archival_slash_one(slash_height, seq, p_id, /*shard_id*/ 7, /*epoch*/ 3, floor);
+  db.revert_archival_slashes_at_height(slash_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_TRUE(read.is_complete_tree());
+  EXPECT_EQ(read.bonded_total_atomic, 2 * floor);
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 7, slash_height + 1));
+}
+
+namespace {
+
+/// Append `count` minimal miner-only blocks (heights `height()` upward).
+/// Each block carries a unique coinbase (txin_gen height) and no outputs, so
+/// the curve-tree path is a no-op and the per-block cost is a handful of LMDB
+/// puts — cheap enough to reach archival epoch heights (SEB = 10 000) in a
+/// unit test. add_block runs the production connect hooks, including
+/// process_archival_slash_at_height, which is the point: the slash KAT below
+/// exercises the scheduler at its production call site, not via a test shim.
+void append_minimal_blocks(BlockchainDB& db, uint64_t count)
+{
+  crypto::hash prev = db.height() == 0
+    ? crypto::null_hash : db.get_block_hash_from_height(db.height() - 1);
+  for (uint64_t i = 0; i < count; ++i)
+  {
+    const uint64_t height = db.height();
+    block blk{};
+    blk.major_version = 1;
+    blk.minor_version = 1;
+    blk.timestamp = 1500000000 + height;
+    blk.prev_id = prev;
+    blk.curve_tree_root = crypto::null_hash;
+    blk.nonce = 0;
+
+    transaction miner_tx{};
+    miner_tx.version = 1;
+    miner_tx.unlock_time = height + 60;
+    txin_gen gen{};
+    gen.height = height;
+    miner_tx.vin.push_back(gen);
+    blk.miner_tx = std::move(miner_tx);
+
+    db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
+      height + 1, 0, {});
+    prev = get_block_hash(blk);
+  }
+}
+
+} // namespace
+
+// ── WS-1 slash-side mirror KAT (REWARD_EMISSION_E3_GATING_ROUND.md §5.6) ──
+//
+// Full production path: blocks connect through add_block, whose slash hook
+// crosses epoch 1's deadline and runs eligibility — good_through, the
+// serve-credit bit, the slash-applied bit, then the h_fire derivation from
+// the real seal-hash block and the as-of-fire holdings read (the same
+// accessor and the same derived height the serve-credit acceptance gate
+// uses). "Held at fire, didn't respond → slash" and "responded → no slash"
+// are the two polarities of the shared boundary; the accessor fix that
+// changed the reward side changed this consensus rule too, so it is
+// validated here at its own production site.
+TEST(archival_substrate_lmdb, slash_scheduler_slashes_missed_challenge_at_deadline)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const uint64_t settlement_epoch = 1;
+
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  // Two bonds, both joined at epoch 0 and holding shard 7 through epoch 1's
+  // challenge. P_miss never responds; P_served earned the (P, 7, E=1) credit.
+  const crypto::hash p_miss = make_hash(0x7B);
+  const crypto::hash p_served = make_hash(0x7C);
+  shekyl::db::ArchivalBondValue seed{};
+  seed.hybrid_pubkey = {0x0A};
+  seed.join_settlement_epoch = 0;
+  seed.bonded_total_atomic = 2 * floor;
+  seed.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
+  seed.held_shard_ids = {7};
+  db.put_archival_bond_value(p_miss, seed);
+  db.put_archival_bond_value(p_served, seed);
+  db.set_total_bonded_atomic(4 * floor);
+  db.set_total_burned(0);
+  db.set_archival_serve_credit_bit(p_served, 7, settlement_epoch);
+
+  // Connect blocks through epoch 1's slash deadline. The deadline block's
+  // connect hook processes the epoch-1 slash pass.
+  const uint64_t h_deadline =
+    shekyl_archival_epoch_slash_deadline_height(settlement_epoch);
+  append_minimal_blocks(db, h_deadline + 2);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // P_miss: held at the fire height (derivable from the real seal block) and
+  // never responded — slashed. The bond lost the shard at tip, standing is
+  // gone from E onward, and the stake was burned.
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_miss, read));
+  EXPECT_FALSE(read.holds_shard(7));
+  EXPECT_EQ(read.bonded_total_atomic, 2 * floor - floor);
+  EXPECT_FALSE(db.archival_bond_good_through(p_miss, settlement_epoch));
+  EXPECT_EQ(db.get_total_burned(), floor);
+
+  // The as-of-fire read the eligibility bottomed out in still answers "held"
+  // for the fire height after the slash emptied the tip holdings — the
+  // "regardless of tip holdings" half of the mirror, reconstructed from the
+  // slash log the production pass just wrote.
+  const uint64_t h_open = shekyl_archival_epoch_open_height(settlement_epoch);
+  const uint64_t h_close = shekyl_archival_epoch_close_height(settlement_epoch);
+  const uint64_t h_seal = shekyl_archival_challenge_seal_height(h_open);
+  const crypto::hash seal_hash = db.get_block_hash_from_height(h_seal);
+  const uint64_t h_fire = shekyl_archival_challenge_fire_height(
+    h_open, h_close, reinterpret_cast<const uint8_t*>(seal_hash.data),
+    reinterpret_cast<const uint8_t*>(p_miss.data), 7, settlement_epoch);
+  ASSERT_NE(h_fire, 0u);
+  ASSERT_LE(h_fire, h_close);
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_miss, 7, h_fire));
+
+  // P_served: same holdings, same epoch — the serve-credit bit
+  // short-circuits eligibility, so no slash and standing intact.
+  ASSERT_TRUE(db.get_archival_bond_value(p_served, read));
+  EXPECT_TRUE(read.holds_shard(7));
+  EXPECT_EQ(read.bonded_total_atomic, 2 * floor);
+  EXPECT_TRUE(db.archival_bond_good_through(p_served, settlement_epoch + 1));
+}
+
+// One-strike invariant (cascade guard): a slash for epoch E appends the
+// open-ended bad interval [E, ∞), so good_through(E') is false for every
+// E' ≥ E. With the tip-holdings pre-filter deleted from slash eligibility
+// (WS-1: eligibility reads holdings as-of-fire), this interval — not the
+// deleted tip read — is what makes a multi-epoch slash cascade against one
+// missed challenge unreachable. If the interval semantics ever change, this
+// KAT fails and the cascade question reopens.
+TEST(archival_substrate_lmdb, slash_bad_interval_blocks_later_epochs)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+  const crypto::hash p_id = make_hash(0x7A);
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const uint64_t settlement_epoch = 3;
+
+  db.put_archival_bond_value(p_id, bond_with_v4_fields({7, 9}, 2 * floor));
+  db.set_total_bonded_atomic(2 * floor);
+  db.set_total_burned(0);
+
+  ASSERT_TRUE(db.archival_bond_good_through(p_id, settlement_epoch));
+
+  uint32_t seq = 0;
+  lmdb.apply_archival_slash_one(6000, seq, p_id, /*shard_id*/ 7, settlement_epoch, floor);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // Standing is gone from the slashed epoch onward — eligibility's
+  // good_through gate rejects before any holdings question is asked.
+  EXPECT_FALSE(db.archival_bond_good_through(p_id, settlement_epoch));
+  EXPECT_FALSE(db.archival_bond_good_through(p_id, settlement_epoch + 1));
+  EXPECT_FALSE(db.archival_bond_good_through(p_id, settlement_epoch + 100));
+}
+
+// ── WS-2: emission-claim dedup connect/revert (REWARD_EMISSION_E3_GATING_ROUND.md §6) ──
+//
+// apply_archival_emission_claim is the connect-path single writer for the
+// claimed-epoch set (§6.2 layer 3); revert_archival_emission_claims_at_height
+// restores the journaled pre-image on pop (§6.3). The journal row carries the
+// full pre-mutation set + first_paying_emission_height — the pre-image delta's
+// closure — because the connect mutation is insert *plus window prune*, and an
+// insert-only inverse cannot restore what the prune evicted.
+
+namespace {
+
+constexpr uint64_t kSeb = 10000; // SETTLEMENT_EPOCH_BLOCKS, KAT-pinned in constants.rs
+constexpr uint64_t kClaimW = SHEKYL_ARCHIVAL_MAX_CLAIM_AGE_W;
+
+/// Fresh bond with an empty claimed set and unset first_paying height.
+shekyl::db::ArchivalBondValue unclaimed_bond()
+{
+  shekyl::db::ArchivalBondValue bond{};
+  bond.hybrid_pubkey = {0x0A, 0x0B, 0x0C};
+  bond.join_settlement_epoch = 0;
+  bond.bonded_total_atomic = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
+  bond.held_shard_ids = {7};
+  return bond;
+}
+
+} // namespace
+
+// Apply/revert symmetry: connect mutates {claimed set, first_paying}, the
+// journaled revert restores both byte-identically and consumes the journal
+// row (a second revert at the same height is a no-op).
+TEST(archival_substrate_lmdb, emission_claim_apply_journal_and_revert_roundtrip)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  const crypto::hash p_id = make_hash(0x7B);
+  const uint64_t claim_height = 12 * kSeb + 3; // tip epoch 12
+
+  db.put_archival_bond_value(p_id, unclaimed_bond());
+  db.apply_archival_emission_claim(claim_height, p_id, {10, 11});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.claimed_settlement_epochs, (std::vector<uint64_t>{10, 11}));
+  EXPECT_EQ(read.first_paying_emission_height, claim_height);
+
+  db.revert_archival_emission_claims_at_height(claim_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_TRUE(read.claimed_settlement_epochs.empty());
+  EXPECT_EQ(read.first_paying_emission_height, 0u);
+  // Holdings and bond totals were untouched by the claim and its revert.
+  EXPECT_EQ(read.held_shard_ids, (std::vector<uint64_t>{7}));
+  EXPECT_EQ(read.bonded_total_atomic, SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC);
+
+  // The journal row was consumed: a second revert finds nothing to restore.
+  db.apply_archival_emission_claim(claim_height, p_id, {9});
+  db.revert_archival_emission_claims_at_height(claim_height);
+  db.revert_archival_emission_claims_at_height(claim_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_TRUE(read.claimed_settlement_epochs.empty());
+}
+
+// Connect-time Ok(false) is an invariant breach, not a reject (§6.2): with
+// verify's contains-check and the block-level (P,E) pass in place a dedup
+// hit at connect is unreachable, so the writer throws rather than silently
+// connecting a block whose emission paid without marking E. Unclaimable
+// epochs (unsettled / expired) are hard errors by the same argument.
+TEST(archival_substrate_lmdb, emission_claim_connect_breaches_hard_error)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  const crypto::hash p_id = make_hash(0x7C);
+  const uint64_t claim_height = 12 * kSeb; // tip epoch 12
+
+  db.put_archival_bond_value(p_id, unclaimed_bond());
+  db.apply_archival_emission_claim(claim_height, p_id, {10});
+
+  // Dedup hit (same epoch, later block) — layer-3 breach.
+  EXPECT_THROW(db.apply_archival_emission_claim(claim_height + 1, p_id, {10}),
+    std::runtime_error);
+  // Not yet settled (epoch == tip epoch) — verify's F-E1 bound was bypassed.
+  EXPECT_THROW(db.apply_archival_emission_claim(claim_height, p_id, {12}),
+    std::runtime_error);
+  // Expired (below the claim window) — verify's claim-age bound was bypassed.
+  const uint64_t far_height = (kClaimW + 50) * kSeb;
+  EXPECT_THROW(db.apply_archival_emission_claim(far_height, p_id, {1}),
+    std::runtime_error);
+  // Unknown P — connect of an emission whose posture verify never checked.
+  EXPECT_THROW(db.apply_archival_emission_claim(claim_height, make_hash(0x7D), {10}),
+    std::runtime_error);
+}
+
+// Prune-straddle double-mint KAT (§6.4 #3 — the journal's load-bearing case,
+// a property test): E_old is claimed and paid; a later claim's window prune
+// evicts it; a boundary-crossing pop lowers the floor so E_old re-enters the
+// claim window. Under the naive remove-inverse E_old would be absent from
+// the restored set and a fresh claim of E_old would mint its reward a second
+// time. The property asserted: the fresh claim is REJECTED. Byte-identity of
+// the restored set is the corollary.
+TEST(archival_substrate_lmdb, emission_claim_prune_straddle_no_double_mint)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  const crypto::hash p_id = make_hash(0x7E);
+  const uint64_t e_old = 1;
+
+  // E_old was claimed and its reward minted long ago.
+  shekyl::db::ArchivalBondValue seed = unclaimed_bond();
+  seed.claimed_settlement_epochs = {e_old};
+  seed.first_paying_emission_height = 2 * kSeb + 5;
+  db.put_archival_bond_value(p_id, seed);
+
+  // A claim of E_new connects with the tip epoch just past the point where
+  // the window floor (tip − W) passes E_old: the insert's prune evicts it.
+  // The geometry is the tightest straddle — one epoch boundary — because a
+  // processable reorg (720 blocks « SETTLEMENT_EPOCH_BLOCKS) can lower the
+  // tip epoch by at most one.
+  const uint64_t tip_epoch = e_old + kClaimW + 1; // floor = e_old + 1 > e_old
+  const uint64_t claim_height = tip_epoch * kSeb + 1;
+  const uint64_t e_new = tip_epoch - 1;
+  db.apply_archival_emission_claim(claim_height, p_id, {e_new});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.claimed_settlement_epochs, (std::vector<uint64_t>{e_new}))
+    << "the window prune must have evicted the already-claimed E_old";
+
+  // Reorg: the claiming block pops. The journaled pre-image restores the
+  // evicted entry — the exact step the naive remove-inverse gets wrong.
+  db.revert_archival_emission_claims_at_height(claim_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.claimed_settlement_epochs, seed.claimed_settlement_epochs)
+    << "pop must restore the claimed set byte-identically";
+  EXPECT_EQ(read.first_paying_emission_height, seed.first_paying_emission_height);
+
+  // Post-reorg the chain rebuilds along a branch one epoch earlier — the
+  // straddle: the window floor drops back to E_old, so E_old is claimable
+  // again window-wise. A fresh emission claiming E_old must be rejected —
+  // its reward already minted on the surviving history.
+  const uint64_t rebuilt_height = (tip_epoch - 1) * kSeb + 7;
+  EXPECT_THROW(db.apply_archival_emission_claim(rebuilt_height, p_id, {e_old}),
+    std::runtime_error)
+    << "double-mint: a pruned-then-restored claimed epoch was re-claimable";
+}
+
+// first_paying_emission_height is set-once across claims, and the revert
+// un-sets it iff the popped emission was the setter (§6.3's journal covers
+// the field alongside the claimed set).
+TEST(archival_substrate_lmdb, emission_claim_first_paying_set_once_and_pop_symmetric)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  const crypto::hash p_id = make_hash(0x7F);
+  const uint64_t h_first = 7 * kSeb + 1;
+  const uint64_t h_second = 8 * kSeb + 2;
+
+  db.put_archival_bond_value(p_id, unclaimed_bond());
+  db.apply_archival_emission_claim(h_first, p_id, {5});
+  db.apply_archival_emission_claim(h_second, p_id, {6});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.first_paying_emission_height, h_first) << "set-once: the second claim must not move it";
+  EXPECT_EQ(read.claimed_settlement_epochs, (std::vector<uint64_t>{5, 6}));
+
+  // Popping the non-setter leaves the height; popping the setter unsets it.
+  db.revert_archival_emission_claims_at_height(h_second);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.first_paying_emission_height, h_first);
+  EXPECT_EQ(read.claimed_settlement_epochs, (std::vector<uint64_t>{5}));
+
+  db.revert_archival_emission_claims_at_height(h_first);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.first_paying_emission_height, 0u);
+  EXPECT_TRUE(read.claimed_settlement_epochs.empty());
 }

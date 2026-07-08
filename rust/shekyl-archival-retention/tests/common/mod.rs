@@ -22,14 +22,13 @@ use shekyl_archival_retention::{
     BadInterval, BandedCurveParams, CreditPair, EpochCloseBond, EpochCloseResult, EpochCloseShard,
 };
 
-/// Owned bond storage. `EpochCloseBond` borrows its interval/held-id slices, so
-/// the fixture-owned vectors must outlive the `epoch_close_compute` call that
+/// Owned bond storage. `EpochCloseBond` borrows its interval slice, so the
+/// fixture-owned vectors must outlive the `epoch_close_compute` call that
 /// borrows them — decode into this, then [`bonds_as_slice`] to borrow.
 pub struct BondOwned {
     pub join: u64,
     pub complete: bool,
     pub bad: Vec<BadInterval>,
-    pub held: Vec<u64>,
 }
 
 impl BondOwned {
@@ -38,7 +37,6 @@ impl BondOwned {
             join_settlement_epoch: self.join,
             is_foundation_complete_tree: self.complete,
             bad_intervals: &self.bad,
-            held_shard_ids: &self.held,
         }
     }
 }
@@ -67,12 +65,6 @@ pub fn parse_bonds(v: &Value) -> Vec<BondOwned> {
             join: b["join_epoch"].as_u64().expect("join_epoch"),
             complete: b["complete_tree"].as_bool().expect("complete_tree"),
             bad: parse_bad_intervals(&b["bad_intervals"]),
-            held: b["held_shard_ids"]
-                .as_array()
-                .expect("held_shard_ids")
-                .iter()
-                .map(|v| v.as_u64().expect("shard id"))
-                .collect(),
         })
         .collect()
 }

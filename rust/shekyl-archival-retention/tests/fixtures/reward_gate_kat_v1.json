@@ -1,66 +1,167 @@
 {
-  "format_version": 1,
-  "description": "ARCHIVAL_REWARD_GATE_M1.md §5 activation-boundary KAT fixture (cases G-1..G-10). The base scenario is the consensus_state_kat_v1.json epoch_close replay (same hand-derived values: age_milli(s42)=floor(4·1000/11)=363, g=1181, scarcity=590, Σ=(590+500)+500+1000=2590) with `frozen_shard_count` and `k_cover` supplied per case by the test — parameterized, never baked from the provisional constant, so the corpus survives the §4 seal without rewrite (§5: 'parameterized over K_COVER'). Per §11 M2-5, shard 42 freezes at height 70000 — inside the would-be-gated window of the G-3 story — so the boundary identity is exercised with the age term live (363), not degenerately zero.",
-  "k_cover": 3,
-  "base": {
-    "settlement_epoch": 10,
-    "close_block_height": 110000,
-    "settlement_epoch_blocks": 10000,
-    "age_weight_milli": 500,
-    "curve": { "plateau_work_milli": 16000, "plateau_value_milli": 8000 },
-    "bonds": [
-      { "join_epoch": 0, "complete_tree": false, "bad_intervals": [], "held_shard_ids": [42, 43] },
-      { "join_epoch": 0, "complete_tree": false, "bad_intervals": [{ "start": 8, "end_exclusive": 18446744073709551615 }], "held_shard_ids": [42] },
-      { "join_epoch": 9, "complete_tree": false, "bad_intervals": [], "held_shard_ids": [43] },
-      { "join_epoch": 0, "complete_tree": true, "bad_intervals": [], "held_shard_ids": [] },
-      { "join_epoch": 0, "complete_tree": false, "bad_intervals": [], "held_shard_ids": [44] }
-    ],
-    "shards": [
-      { "shard_id": 42, "has_segment": true, "freeze_height": 70000 },
-      { "shard_id": 43, "has_segment": true, "freeze_height": 105000 },
-      { "shard_id": 44, "has_segment": false, "freeze_height": 0 }
-    ],
-    "credit_pairs": [
-      { "bond": 0, "shard": 0 },
-      { "bond": 0, "shard": 1 },
-      { "bond": 1, "shard": 0 },
-      { "bond": 2, "shard": 1 },
-      { "bond": 3, "shard": 0 },
-      { "bond": 4, "shard": 2 },
-      { "bond": 2, "shard": 0 }
+ "format_version": 1,
+ "description": "ARCHIVAL_REWARD_GATE_M1.md §5 activation-boundary KAT fixture (cases G-1..G-10). The base scenario is the consensus_state_kat_v1.json epoch_close replay (same hand-derived values, WS-1 ledger-sourced work: age_milli(s42)=floor(4·1000/11)=363, g=1181, scarcity=590, Σ=(590+500)+(500+590)+1000=3180) with `frozen_shard_count` and `k_cover` supplied per case by the test — parameterized, never baked from the provisional constant, so the corpus survives the §4 seal without rewrite (§5: 'parameterized over K_COVER'). Per §11 M2-5, shard 42 freezes at height 70000 — inside the would-be-gated window of the G-3 story — so the boundary identity is exercised with the age term live (363), not degenerately zero.",
+ "k_cover": 3,
+ "base": {
+  "settlement_epoch": 10,
+  "close_block_height": 110000,
+  "settlement_epoch_blocks": 10000,
+  "age_weight_milli": 500,
+  "curve": {
+   "plateau_work_milli": 16000,
+   "plateau_value_milli": 8000
+  },
+  "bonds": [
+   {
+    "join_epoch": 0,
+    "complete_tree": false,
+    "bad_intervals": []
+   },
+   {
+    "join_epoch": 0,
+    "complete_tree": false,
+    "bad_intervals": [
+     {
+      "start": 8,
+      "end_exclusive": 18446744073709551615
+     }
     ]
-  },
+   },
+   {
+    "join_epoch": 9,
+    "complete_tree": false,
+    "bad_intervals": []
+   },
+   {
+    "join_epoch": 0,
+    "complete_tree": true,
+    "bad_intervals": []
+   },
+   {
+    "join_epoch": 0,
+    "complete_tree": false,
+    "bad_intervals": []
+   }
+  ],
+  "shards": [
+   {
+    "shard_id": 42,
+    "has_segment": true,
+    "freeze_height": 70000
+   },
+   {
+    "shard_id": 43,
+    "has_segment": true,
+    "freeze_height": 105000
+   },
+   {
+    "shard_id": 44,
+    "has_segment": false,
+    "freeze_height": 0
+   }
+  ],
+  "credit_pairs": [
+   {
+    "bond": 0,
+    "shard": 0
+   },
+   {
+    "bond": 0,
+    "shard": 1
+   },
+   {
+    "bond": 1,
+    "shard": 0
+   },
+   {
+    "bond": 2,
+    "shard": 1
+   },
+   {
+    "bond": 3,
+    "shard": 0
+   },
+   {
+    "bond": 4,
+    "shard": 2
+   },
+   {
+    "bond": 2,
+    "shard": 0
+   }
+  ]
+ },
+ "ungated_expected": {
+  "r_market_by_shard": [
+   2,
+   2,
+   1
+  ],
+  "sigma_work_milli": 3180
+ },
+ "genesis_edge": {
+  "description": "G-4 variant: close_block_height 5000 < settlement_epoch_blocks 10000 ⇒ chain_epochs = 0 ⇒ shard_age_milli's genesis branch fires ('everything is hot'). Freeze heights lowered below the close so the branch — not the close≤freeze short-circuit — produces the zero. Hand-derived ungated values (WS-1 ledger-sourced work): ages all 0 ⇒ g = 1000 ⇒ scarcity = 1000/R per shard (500, 500, 1000); work b0 = 1000, b2 = 500+500 = 1000, b4 = 1000; curve identity below 4000; Σ = 3000.",
+  "close_block_height": 5000,
+  "shards": [
+   {
+    "shard_id": 42,
+    "has_segment": true,
+    "freeze_height": 2000
+   },
+   {
+    "shard_id": 43,
+    "has_segment": true,
+    "freeze_height": 3000
+   },
+   {
+    "shard_id": 44,
+    "has_segment": false,
+    "freeze_height": 0
+   }
+  ],
   "ungated_expected": {
-    "r_market_by_shard": [2, 2, 1],
-    "sigma_work_milli": 2590
-  },
-  "genesis_edge": {
-    "description": "G-4 variant: close_block_height 5000 < settlement_epoch_blocks 10000 ⇒ chain_epochs = 0 ⇒ shard_age_milli's genesis branch fires ('everything is hot'). Freeze heights lowered below the close so the branch — not the close≤freeze short-circuit — produces the zero. Hand-derived ungated values: ages all 0 ⇒ g = 1000 ⇒ scarcity = 1000/R per shard (500, 500, 1000); work b0 = 1000, b2 = 500, b4 = 1000; curve identity below 4000; Σ = 2500.",
-    "close_block_height": 5000,
-    "shards": [
-      { "shard_id": 42, "has_segment": true, "freeze_height": 2000 },
-      { "shard_id": 43, "has_segment": true, "freeze_height": 3000 },
-      { "shard_id": 44, "has_segment": false, "freeze_height": 0 }
-    ],
-    "ungated_expected": {
-      "r_market_by_shard": [2, 2, 1],
-      "sigma_work_milli": 2500
-    }
-  },
-  "single_shard_variant": {
-    "description": "G-10 variant: credits touch exactly one distinct shard (index 0, shard 42) — fewer than k_cover = 3 — while frozen_shard_count is injected well above threshold. Hand-derived: members b0/b2 (b1 bad-interval, b3 foundation); R_market(s42) = 2; b0 holds 42 ⇒ work = scarcity(R=2, age=363) = 590; b2 holds only 43 ⇒ 0; Σ = curve(590) = 590.",
-    "frozen_shard_count": 10,
-    "credit_pairs": [
-      { "bond": 0, "shard": 0 },
-      { "bond": 1, "shard": 0 },
-      { "bond": 2, "shard": 0 },
-      { "bond": 3, "shard": 0 }
-    ],
-    "expected": {
-      "r_market_by_shard": [2, 0, 0],
-      "sigma_work_milli": 590
-    }
-  },
-  "g3_frozen_counts_by_epoch": [1, 2, 3],
-  "g3_first_nonzero_index": 2
+   "r_market_by_shard": [
+    2,
+    2,
+    1
+   ],
+   "sigma_work_milli": 3000
+  }
+ },
+ "single_shard_variant": {
+  "description": "G-10 variant: credits touch exactly one distinct shard (index 0, shard 42) — fewer than k_cover = 3 — while frozen_shard_count is injected well above threshold. Hand-derived (WS-1 ledger-sourced work): members b0/b2 (b1 bad-interval, b3 foundation); R_market(s42) = 2; both member credits on s42 earn scarcity(R=2, age=363) = 590 from the ledger alone; Σ = curve(590) + curve(590) = 1180.",
+  "frozen_shard_count": 10,
+  "credit_pairs": [
+   {
+    "bond": 0,
+    "shard": 0
+   },
+   {
+    "bond": 1,
+    "shard": 0
+   },
+   {
+    "bond": 2,
+    "shard": 0
+   },
+   {
+    "bond": 3,
+    "shard": 0
+   }
+  ],
+  "expected": {
+   "r_market_by_shard": [
+    2,
+    0,
+    0
+   ],
+   "sigma_work_milli": 1180
+  }
+ },
+ "g3_frozen_counts_by_epoch": [
+  1,
+  2,
+  3
+ ],
+ "g3_first_nonzero_index": 2
 }

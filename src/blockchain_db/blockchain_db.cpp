@@ -477,6 +477,14 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   const uint64_t removed_block_height = height();
   revert_archival_slashes_at_height(removed_block_height);
   revert_archival_epoch_close_at_height(removed_block_height);
+  // Emission-claim pre-image restore (WS-2 §6.3): claims connect at
+  // tx-connect time — before the slash/close hooks — so their revert runs
+  // after those two, completing the mirror of the connect order. The
+  // restored fields (claimed set, first_paying_emission_height) are disjoint
+  // from what the slash revert touches, and the journal is empty for any
+  // block without emission vins, so this is a no-op until C-1 wires the
+  // connect-side caller.
+  revert_archival_emission_claims_at_height(removed_block_height);
   remove_block();
 
   const uint64_t block_height = removed_block_height;
@@ -1371,6 +1379,15 @@ void BlockchainDB::process_archival_slash_at_height(uint64_t /*block_height*/)
 }
 
 void BlockchainDB::revert_archival_slashes_at_height(uint64_t /*block_height*/)
+{
+}
+
+void BlockchainDB::apply_archival_emission_claim(uint64_t /*block_height*/,
+  const crypto::hash& /*p_id*/, const std::vector<uint64_t>& /*settlement_epochs*/)
+{
+}
+
+void BlockchainDB::revert_archival_emission_claims_at_height(uint64_t /*block_height*/)
 {
 }
 

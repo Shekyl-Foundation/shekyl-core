@@ -173,9 +173,16 @@ The pipeline has two phases:
    pre-built binaries, generates a source archive and `SHA256SUMS`, then
    publishes the GitHub Release.
 
-Each Gitian build descriptor installs the Rust toolchain via `rustup` with
-the appropriate cross-compilation targets (aarch64, RISC-V for Linux;
-64-bit MinGW for Windows; Darwin targets for macOS). 32-bit targets were
+Each Gitian build descriptor installs the Rust toolchain via `rustup`,
+pinned to the workspace toolchain (`--default-toolchain 1.94.0`, kept in
+lockstep with `rust/rust-toolchain.toml`) with the minimal profile and the
+appropriate cross-compilation targets (aarch64, RISC-V for Linux; 64-bit
+MinGW for Windows; Darwin targets for macOS). The pin is serial and
+up-front by design: the parallel `make` build invokes many `cargo`
+processes at once, and letting them auto-install the toolchain concurrently
+races `~/.rustup/downloads` and aborts the build (`component download
+failed … could not rename`). The minimal profile omits clippy/rustfmt —
+a release build compiles the Rust FFI, it never lints. 32-bit targets were
 permanently retired in v3.1.0-alpha.5 (Chore #3) on PQC constant-time
 grounds — see `docs/CHANGELOG.md` entry "Retired 32-bit build targets".
 

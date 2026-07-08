@@ -4,6 +4,106 @@
 
 ### Added
 
+- **archival: WS-2 emission-claim dedup plumbing — connect-side writer +
+  journaled revert** (`REWARD_EMISSION_E3_GATING_ROUND.md` §3 item 3a /
+  §6.2–§6.4). The write side of the three-layer dedup, landing beneath the
+  verify body's read-only layer:
+  - *Single writer FFI.* `shekyl_archival_claimed_epochs_check_and_set`
+    (`archival_ffi.rs` / `shekyl_ffi.h`) wraps the windowed Rust
+    `claimed_epochs_check_and_set` — validated write-back over a
+    caller-owned buffer, distinct status codes for inserted / already
+    claimed / not-settled / expired / invalid. C++ stores bytes, Rust
+    decides (the `good_through` split).
+  - *Connect path + journal.* `BlockchainLMDB::apply_archival_emission_claim`
+    loads the bond, journals the **full pre-image** (`claimed_settlement_epochs`
+    + `first_paying_emission_height`) into the new
+    `archival_emission_claim_log` table (`BE(height)||BE(seq)`, slash-log
+    idiom), then runs the FFI writer per claimed epoch. A dedup hit or
+    unclaimable epoch at connect is a **hard error**, not a reject —
+    verify's contains-check and the block-level pass make it unreachable,
+    so reaching it means an emission paid without marking `E`
+    (§6.2's Ok(false)-at-connect posture). `first_paying_emission_height`
+    is set-once on the first claim.
+  - *Pop path.* `revert_archival_emission_claims_at_height` restores the
+    journaled pre-image (reverse-`seq`) and consumes the rows; wired into
+    `BlockchainDB::pop_block` after the slash/close reverts. The pre-image
+    shape (not an insert-inverse) is what closes §6.3's double-mint: the
+    connect mutation is insert **plus window prune**, and removing the
+    inserted epoch cannot restore what the prune evicted.
+  - *KATs* (`archival_substrate_lmdb.cpp`): apply/journal/revert roundtrip
+    (byte-identical restore, journal consumed), connect-breach hard errors
+    (dedup hit, unsettled, expired, unknown P), the §6.4 prune-straddle
+    property test — claimed `E_old` evicted by a later claim's prune, popped
+    across the epoch boundary, then **re-claim of `E_old` rejected** (the
+    assertion the naive remove-inverse fails) — and first-paying set-once /
+    pop-symmetric.
+  - *Deferred to C-1:* the block-level `(P,E)` uniqueness pass and its KATs
+    — it iterates `txin_archival_reward_emission`, whose C++ variant type
+    lands with C-1's transport shim.
+
+- **archival: emission vin verify body, §7.1 steps 1–6 — KAT-tested, not on
+  the consensus dispatch** (`REWARD_EMISSION_E3_GATING_ROUND.md` §3 item 3;
+  `REWARD_EMISSION_VIN_PLAN.md` §7.1 / PR-E3). New
+  `shekyl-archival-retention::emission_verify` module implementing the
+  fail-fast verify: finalization + claim-age bounds (F-E1, explicit
+  structural checks), bond posture, the WS-2 **read-only** dedup layer
+  (`claimed_epochs_contains` against the pre-block record; the write side
+  stays on the connect path, item 3a), work recompute through
+  `as_of_e_served_work` with **per-shard exactness** (`serve_credit_bit`
+  must equal the ledger fact, `scarcity_milli` must equal the
+  member-masked recompute — a wrong split cannot hide behind a right
+  total), three-channel economics over the **persisted** `Σwork(E)` via
+  `reward_share_floor` plus the loud Σvout zero-tolerance compare, and the
+  membership-only backing gate (leaf-hash equality + `verify_membership_only`).
+  Fail-closed by type (§3.0 gate-last): the accept verdict
+  (`EmissionVerified`) is only constructible from three sealed witnesses —
+  `ClaimsVerified` and `BackingVerified` minted by the verify functions,
+  and `AuthVerified`, which has **no production constructor in the crate**;
+  the ML-DSA witness minter lands with C-1, so an authed acceptance is
+  unrepresentable until the activating cut. No FFI entry point yet, by the
+  same gate-last discipline (deferred to C-1 with the dispatch wiring).
+  Twelve KATs (`tests/emission_verify_kat.rs`): honest-claim accept built
+  from the same sourcing functions (the numerator-is-a-denominator-term
+  identity), F-E1 boundary (reject at `h_close(E)`, accept at
+  `h_close(E)+1`), claim-age boundary at `C − W`, read-only dedup
+  rejection, wrong-epoch / wrong-claimant polarity, per-entry work-claim
+  polarity (scarcity drift, false/denied credit bits, omission, duplicates,
+  nonzero scarcity on an unserved shard), no-credit-sentinel rejection
+  (the Q12 economic leg), economics zero-tolerance (±1 atomic unit, vout
+  drift), and the step-6 negative paths (leaf mismatch, garbage proof).
+
+- **archival: as-of-E emission epoch snapshot — the M-2/Q7 verify-side
+  work channel** (`REWARD_EMISSION_E3_GATING_ROUND.md` §3 item 2;
+  `REWARD_EMISSION_VIN_PLAN.md` §8.0.2(B)). The substrate PR-E3's verify
+  shim will consume: a by-value snapshot (Q7: no callbacks across the FFI)
+  carrying the same rows the epoch close computed from, plus the
+  **persisted** `Σwork(E)` denominator — never a recompute, since the M1
+  `K_COVER` gate's operand (`frozen_shard_count` as-of-close) is a
+  close-only quantity whose outcome reaches verify only through the stored
+  value. Three coupled cuts:
+  - *One gather routine, two consumers.* The epoch close's inline
+    serve-credit/bond/shard row gather is extracted into
+    `BlockchainLMDB::gather_archival_epoch_rows`; the close and the new
+    `gather_archival_emission_epoch_snapshot` both call it, so row-selection
+    divergence between close and verify is unrepresentable (WS-1 §5.5
+    single sourcing, C++ side). The close-processing boundary `(E+1)·SEB`
+    is single-sourced through the new
+    `shekyl_archival_epoch_close_processing_height` FFI wrapper rather than
+    re-derived by hand.
+  - *One decoder, one work function.* `shekyl_archival_emission_epoch_work`
+    (`archival_ffi.rs` / `shekyl_ffi.h`) computes claimant `work_P(E)` and
+    its `Curve(work_P)` term via `as_of_e_served_work` — the same sourcing
+    function whose output built the persisted denominator — over arrays
+    decoded by the same `decode_epoch_rows` helper the close FFI uses.
+  - *Identity KATs.* Sum-of-capped-terms == persisted `Σwork(E)` at the
+    Rust FFI layer (`emission_epoch_work_sums_to_persisted_sigma`) and at
+    the LMDB layer over a production-shaped close
+    (`emission_snapshot_identity_and_descriptor_immunity`), which also pins
+    live-descriptor immunity: mutating tip holdings after the close (the
+    M2-1 drop-after-serve mutation) leaves every snapshot output
+    bit-identical, and a bonded-but-never-credited claimant resolves to the
+    no-credit sentinel with zero work.
+
 - **emission: E3 gating design round closed — leg design complete**
   ([`REWARD_EMISSION_E3_GATING_ROUND.md`](design/REWARD_EMISSION_E3_GATING_ROUND.md)).
   Pre-flight found PR-E2 already landed (stale-doc corrections to
@@ -22,6 +122,93 @@
   journaled revert whose row is the pre-image delta `{inserted E, evicted
   members}`; prune-against-finalized recorded as the rule-21 reopen that
   retires the journal. PR-E3 build list unblocked (round §3).
+
+### Changed
+
+- **archival: WS-1 held-sourcing correction — serve-credit ledger is the
+  sole `work_P(E)` source; holdings reads are as-of-fire-height**
+  (`REWARD_EMISSION_E3_GATING_ROUND.md` §5, item 1 of the PR-E3 §3 build
+  list; closes the M-2/Q10 two-conjunct condition "bits-sourcing ∧
+  as-of-fire-height acceptance"). Four coupled cuts, one validation
+  surface:
+  - *Single sourcing function.* `as_of_e_served_work`
+    (`rust/shekyl-archival-retention/src/consensus_state.rs`) now derives
+    market membership, `R_market`, and per-bond work from the frozen
+    serve-credit pairs alone; `epoch_close_compute` delegates to it, and
+    the PR-E3 verify body will call the same function — numerator/denominator
+    sourcing divergence (the M-2 silent over/under-mint) is unrepresentable,
+    not tested-against.
+  - *Descriptor out of the work channel.* `held_shard_ids` is removed from
+    `EpochCloseBond`, the FFI struct (`shekyl_archival_epoch_close_bond` in
+    `shekyl_ffi.h` / `archival_ffi.rs`), and the LMDB gather marshal — the
+    tip-holdings re-filter that produced the drop-after-serve under-count
+    no longer compiles. Fixture `sigma_work_milli` values recomputed
+    (`consensus_state_kat_v1.json`, `reward_gate_kat_v1.json`).
+  - *As-of-height accessor, one implementation, both consumers.*
+    `BlockchainLMDB::archival_bond_holds_shard` honors `at_height` by
+    reconstructing from tip holdings + the slash log (holdings are
+    shrink-only post-join at the current substrate); the slash log gains a
+    v2 `holdings_pre_kind` field (pre-genesis posture: v1 rejected at
+    decode) which also fixes the pop-revert heuristic that mis-restored a
+    slashed single-shard compact bond to complete-tree. Serve-credit
+    acceptance (`blockchain.cpp`) and slash eligibility (`db_lmdb.cpp`,
+    tip-holdings pre-filter deleted per the round's third-consumer finding)
+    now answer "held at the challenge fire height" identically, with the
+    `h_fire` guard aligned (`h_fire == 0 || h_fire > h_close`) on both
+    sides.
+  - *KATs armed on the new sole gate.* Drop-after-serve
+    (`consensus_state.rs`), acceptance-gate both polarities
+    (`archival_serve_credit_integration.cpp`, asserting the gate queries
+    exactly the derived `h_fire`), slash-side mirror through the production
+    `add_block` → slash-scheduler path plus as-of-fire reconstruction and
+    revert KATs (`archival_substrate_lmdb.cpp`), and the one-strike
+    bad-interval cascade guard.
+
+### Fixed
+
+- **gitian: pre-install the pinned Rust toolchain serially so release builds
+  stop racing rustup** (`contrib/gitian/gitian-{linux,osx,win,freebsd,android}.yml`).
+  The gitian containers installed rustup with its *default* toolchain, but
+  `rust/rust-toolchain.toml` pins `1.94.0`; the first `cargo` under the parallel
+  `make` then auto-installed `1.94.0` with the *default profile* from several
+  processes at once, and the concurrent writes to `~/.rustup/downloads`
+  aborted every platform build with `component download failed for clippy-…:
+  could not rename 'downloaded' file`. All four `v3.1.0-alpha.6` gitian jobs
+  (Linux/macOS/Windows/FreeBSD) died this way. The rustup installer now pins
+  `--default-toolchain 1.94.0 --profile minimal`: the pinned toolchain is
+  present before `make`, so no build-time auto-install races, and the minimal
+  profile drops clippy/rustfmt — a gitian build only compiles the Rust FFI, it
+  never lints. The install is also hardened to the house download-then-run form
+  (`curl --retry … -o /tmp/rustup-init.sh` then `sh …`, mirroring
+  `.github/actions/install-rust`) rather than `curl | sh`, which can mask a
+  partial/empty download as an exit-0 no-op. The `1.94.0` pin is added to
+  `rust/rust-toolchain.toml`'s bump-policy lockstep list. `RELEASE_PROMOTION.md` §4 gains a **gitian dry-run
+  gate**: dispatch the gitian workflow against the frozen SHA (no tag pushed)
+  and require all four platforms green before the cut/promote/tag, so
+  release-only build breakage is caught pre-tag instead of forcing a bump.
+
+### Security
+
+- **deps: clear the `cargo audit` warning backlog** (`rust/Cargo.lock`,
+  `rust/.cargo/audit.toml`). Bumped `anyhow` `1.0.102 → 1.0.103`, closing the
+  soundness notice RUSTSEC-2026-0190 (the only *unsound* advisory in the tree;
+  patched `>= 1.0.103`). Dropped the now-stale ignore for RUSTSEC-2026-0097
+  (`rand` unsoundness): the tree already resolves to `rand` `0.8.6`/`0.9.4`,
+  both in the patched ranges (`>= 0.8.6`, `>= 0.9.3`), so the advisory no
+  longer applies. The two remaining notices are crate-level *unmaintained*
+  INFO advisories on transitive, non-consensus, render/build-time deps that
+  cannot be dropped without an upstream move — `atomic-polyfill`
+  (RUSTSEC-2023-0089, via `postcard 1.1.3 → heapless 0.7`, and not even
+  compiled on native-atomic targets) and `ttf-parser` (RUSTSEC-2026-0192, via
+  the `imageproc` chain, same root as `paste`). Both are now documented in
+  `audit.toml` with explicit reopen criteria per
+  `21-reversion-clause-discipline.mdc`, alongside the existing `paste` entry.
+  `cargo audit` is fully green with zero unexplained warnings.
+
+## [3.1.0-alpha.6] - 2026-07-07
+
+### Added
+
 - **wallet-rpc: OpenAPI 3.1 contract for `shekyl-wallet-rpc` (Phase 4
   spec-first gate)** (`docs/api/wallet_rpc.yaml`;
   `WALLET_REWRITE_PLAN.md` §"Phase 4"; `IMPLEMENTATION_INDEX.md` §3 Phase 4
@@ -516,6 +703,26 @@
   re-sync change with no migration path (per `15-deletion-and-debt.mdc`).
   Gates the next testnet rehearsal release, which must run
   `TESTNET_REHEARSAL_CHECKLIST.md` from clean datadirs per §6.
+- **ci: CodeQL C/C++ runs buildless; ignores vendored `external/` code**
+  (`.github/workflows/codeql.yml`, `.github/codeql/config.yml`). Switched
+  the `analyze-cpp` job to `build-mode: none` and added `paths-ignore:
+  ['external/**']`. The path filter is the goal — dropping the standing
+  vendored highs in `external/db_drivers/liblmdb/mdb.c`
+  (`cpp/integer-multiplication-cast-to-long`,
+  `cpp/comparison-with-wider-type`) and `external/qrcodegen/QrCode.cpp`,
+  which Shekyl never patches in place — but config-file `paths-ignore`
+  only applies to a compiled language analyzed without a build, so the
+  buildless switch is what makes it effective (a trace-based build
+  silently ignores it). Those queries stay live on Shekyl-owned `src/`;
+  the crypto/consensus/amount logic that once justified a deep
+  trace-based build now lives in Rust (covered by the separate
+  `analyze-rust` job), and C/C++ `src/` currently has zero open
+  Shekyl-owned CodeQL highs. Side benefit: drops the ~150-minute C++
+  build from CI. Prevents dev→main release PRs from re-attributing
+  pre-existing library alerts as PR-introduced. The pre-existing per-id
+  `query-filters` (`rust/hard-coded-cryptographic-value`,
+  `cpp/upcast-array-pointer-arithmetic`) are unchanged and remain a
+  distinct, results-stage safety net.
 
 ### Documentation
 
