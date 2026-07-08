@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **gitian: pre-install the pinned Rust toolchain serially so release builds
+  stop racing rustup** (`contrib/gitian/gitian-{linux,osx,win,freebsd,android}.yml`).
+  The gitian containers installed rustup with its *default* toolchain, but
+  `rust/rust-toolchain.toml` pins `1.94.0`; the first `cargo` under the parallel
+  `make` then auto-installed `1.94.0` with the *default profile* from several
+  processes at once, and the concurrent writes to `~/.rustup/downloads`
+  aborted every platform build with `component download failed for clippy-…:
+  could not rename 'downloaded' file`. All four `v3.1.0-alpha.6` gitian jobs
+  (Linux/macOS/Windows/FreeBSD) died this way. The rustup installer now pins
+  `--default-toolchain 1.94.0 --profile minimal`: the pinned toolchain is
+  present before `make`, so no build-time auto-install races, and the minimal
+  profile drops clippy/rustfmt — a gitian build only compiles the Rust FFI, it
+  never lints. The install is also hardened to the house download-then-run form
+  (`curl --retry … -o /tmp/rustup-init.sh` then `sh …`, mirroring
+  `.github/actions/install-rust`) rather than `curl | sh`, which can mask a
+  partial/empty download as an exit-0 no-op. The `1.94.0` pin is added to
+  `rust/rust-toolchain.toml`'s bump-policy lockstep list. `RELEASE_PROMOTION.md` §4 gains a **gitian dry-run
+  gate**: dispatch the gitian workflow against the frozen SHA (no tag pushed)
+  and require all four platforms green before the cut/promote/tag, so
+  release-only build breakage is caught pre-tag instead of forcing a bump.
+
 ## [3.1.0-alpha.6] - 2026-07-07
 
 ### Added

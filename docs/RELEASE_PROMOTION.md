@@ -93,6 +93,21 @@ then tag** (avoids the "tag not on the default branch" trap that
    - [ ] `Cargo.lock` and vendored-dep state are exactly the green-on-`dev`
          state (reproducible-build inputs must match what was reviewed).
    - [ ] **Frozen-tuple diff-check** (highest severity — see §6).
+   - [ ] **Gitian dry-run gate** — dispatch the gitian workflow against the
+         frozen SHA and confirm **all four platforms** (Linux/Windows/FreeBSD/macOS)
+         build green *before* the cut/promote/tag:
+         `gh workflow run gitian.yml --ref <dev-or-release-branch> -f tag=<frozen-SHA>`.
+         The `tag` value **must be a commit SHA** (or a slash-free tag): gitian-builder's
+         `gbuild sanitize` rejects any ref containing `/`, so passing a branch
+         name like `fix/…` aborts every platform at ref-parse with `unsanitary
+         string` before the build even starts. A frozen SHA is hex, so it passes.
+         Gitian builds the checked-out ref, not a tag object, so this runs with
+         **no tag pushed** — it catches release-only build breakage that the
+         normal PR CI never exercises (the depends cross-build and the container's
+         rustup/toolchain setup) *before* a signed tag exists, instead of after.
+         This gate is why `v3.1.0-alpha.6`'s post-tag gitian failure (a rustup
+         toolchain race in the descriptors) forced a bump to `alpha.7`; running it
+         here would have caught it pre-tag. Only proceed once green.
 3. **Cut the release branch:** `git switch -c release-v3.0 <frozen-SHA>`.
 4. **Stabilize on the release branch.** Run `RELEASE_CHECKLIST.md` gates
    applicable to a testnet rehearsal (PQC spec frozen, reproducible-build inputs
