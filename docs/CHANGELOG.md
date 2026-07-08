@@ -4,6 +4,37 @@
 
 ### Added
 
+- **archival: emission vin verify body, §7.1 steps 1–6 — KAT-tested, not on
+  the consensus dispatch** (`REWARD_EMISSION_E3_GATING_ROUND.md` §3 item 3;
+  `REWARD_EMISSION_VIN_PLAN.md` §7.1 / PR-E3). New
+  `shekyl-archival-retention::emission_verify` module implementing the
+  fail-fast verify: finalization + claim-age bounds (F-E1, explicit
+  structural checks), bond posture, the WS-2 **read-only** dedup layer
+  (`claimed_epochs_contains` against the pre-block record; the write side
+  stays on the connect path, item 3a), work recompute through
+  `as_of_e_served_work` with **per-shard exactness** (`serve_credit_bit`
+  must equal the ledger fact, `scarcity_milli` must equal the
+  member-masked recompute — a wrong split cannot hide behind a right
+  total), three-channel economics over the **persisted** `Σwork(E)` via
+  `reward_share_floor` plus the loud Σvout zero-tolerance compare, and the
+  membership-only backing gate (leaf-hash equality + `verify_membership_only`).
+  Fail-closed by type (§3.0 gate-last): the accept verdict
+  (`EmissionVerified`) is only constructible from three sealed witnesses —
+  `ClaimsVerified` and `BackingVerified` minted by the verify functions,
+  and `AuthVerified`, which has **no production constructor in the crate**;
+  the ML-DSA witness minter lands with C-1, so an authed acceptance is
+  unrepresentable until the activating cut. No FFI entry point yet, by the
+  same gate-last discipline (deferred to C-1 with the dispatch wiring).
+  Twelve KATs (`tests/emission_verify_kat.rs`): honest-claim accept built
+  from the same sourcing functions (the numerator-is-a-denominator-term
+  identity), F-E1 boundary (reject at `h_close(E)`, accept at
+  `h_close(E)+1`), claim-age boundary at `C − W`, read-only dedup
+  rejection, wrong-epoch / wrong-claimant polarity, per-entry work-claim
+  polarity (scarcity drift, false/denied credit bits, omission, duplicates,
+  nonzero scarcity on an unserved shard), no-credit-sentinel rejection
+  (the Q12 economic leg), economics zero-tolerance (±1 atomic unit, vout
+  drift), and the step-6 negative paths (leaf mismatch, garbage proof).
+
 - **archival: as-of-E emission epoch snapshot — the M-2/Q7 verify-side
   work channel** (`REWARD_EMISSION_E3_GATING_ROUND.md` §3 item 2;
   `REWARD_EMISSION_VIN_PLAN.md` §8.0.2(B)). The substrate PR-E3's verify
