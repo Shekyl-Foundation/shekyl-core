@@ -1,7 +1,10 @@
 # Reward-emission E3 gating round — pre-flight audit + policy-trio closure
 
-**Status:** Round 3 — policy trio + **Q10/M-2 held-sourcing (§5, reopened by
-source audit)** — **open for ratification** (2026-07-07).
+**Status:** Round 3 — **CLOSED for design (2026-07-07).** Q3/Q12 resolved;
+**Q11 ACCEPT ratified**; **WS-1 (Q10/M-2/Q7 two-conjunct held-sourcing)
+ratified** (§5); **WS-2 (Q9/F-E3 dedup atomicity) is the sole remaining open
+design** (§6, parallel). PR-E3 implementation pre-flight opens next, re-pinned to
+current `dev` (see §7).
 **Process:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 (A2 audit-against-actual-code; the pre-flight substrate re-check).
 Dispositions follow [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).
@@ -150,9 +153,17 @@ ever publishes a key image.
 if real, the mitigation lands at the **gate-6 wallet-policy** layer first
 (consensus cannot enforce it), escalating to consensus only if wallet policy is
 demonstrably insufficient.
-**Ratification flag.** This is the one trio item that is a genuine decision rather
-than a substrate readout; it is consensus-acceptance-path (priority-1). Recorded
-**PROPOSED** pending sign-off.
+**Ratification.** **RATIFIED (2026-07-07)** — the one trio item that is a genuine
+decision rather than a substrate readout (consensus-acceptance-path, priority-1),
+signed off with its arming KAT below.
+**Arming KAT (backing-pseudo-out balance-exclusion).** The ACCEPT rests on
+reason 1 (no value path): the membership-only backing contributes **no
+pseudo-output** to the FCMP++ balance/inflation check. A KAT pins exactly that —
+a tx mixing the same output as backing **and** a key-imaged fee spend balances
+**identically** to one with a distinct backing, i.e. the backing adds nothing to
+the summed pseudo-outs. If the backing primitive ever contributes a pseudo-out
+(so the mix could add mintable value), the KAT breaks — that is the reopen
+signal, made mechanical rather than prose.
 
 ### 2.3 Q12 / F-E8 — zero-work / zero-reward emission — RESOLVED (foreclosed)
 
@@ -203,10 +214,16 @@ body's dedup step, item 3, additionally awaits WS-2):
    sourcing the shard set from `archival_serve_credit` (keyed
    `ArchivalServeCreditKey(P,shard,E)`), marshaled by value at the claimed `E`
    (keyed by `E` — point read, no reconstruction); **(c)** the **one
-   `at_height`-honoring accessor** (FOLLOWUPS P2B-7 Pin 4) fixing `:4307`
-   acceptance (conjunct 2) and shared with the V3.0 mutable-holdings read —
-   co-designed in the bond-lifecycle connect-path work, not a duplicate
-   emission-only reader; **(d)** the **three armed KATs** (§5.6:
+   `at_height`-honoring accessor** (FOLLOWUPS P2B-7 Pin 4) fixing conjunct 2,
+   **with two consumers to satisfy, not one** — both currently ride the broken
+   tip read: `blockchain.cpp:4307` (serve-credit *acceptance*) **and**
+   `db_lmdb.cpp:5270` in `archival_challenge_failed_at_height` (slash
+   *eligibility* — a challenge counts as failed/slashable only if `P` held at
+   `h_fire`; the tip read under-slashes a held-then-dropped `P` and wrongfully
+   slashes an acquired-after-fire `P`). The corrected accessor must be validated
+   against **both** meanings (credit-admit and slash-eligibility), and is shared
+   with the V3.0 mutable-holdings read — co-designed in the bond-lifecycle
+   connect-path work, not a duplicate emission-only reader; **(d)** the **three armed KATs** (§5.6:
    drop-after-serve, acceptance-gate, ledger reorg-symmetry). **Standing** stays
    as-is: `bad_intervals` + `join` → `market_member_at_epoch`
    (`consensus_state.rs:98`) is genuinely as-of-E.
@@ -409,13 +426,22 @@ KATs arm that — the load-bearing test set the WS-1 build lands with:
    `P` did not hold at `h_fire` (even if held at tip); **accepted** when `P` held
    at `h_fire` (even if dropped by tip). Forecloses the only case that could put
    a credit in the ledger without a real as-of-E hold.
-3. **Ledger reorg-symmetry KAT (now load-bearing, not corroborating).** Credit
-   set-on-connect / removed-on-disconnect round-trips **bit-identically** across
-   a pop spanning the serve height. Sites verified this round:
-   `blockchain_db.cpp:224` (set, `set_archival_serve_credit_bit`) / `:586`
-   (remove, `remove_archival_serve_credit_bit`). The set is unconditional on
-   `(P, s, E)` with no refcount, so the KAT must also cover connect/disconnect
-   *ordering* under duplicate-`(P,s,E)` credits, not only the single round-trip.
+3. **Ledger reorg-symmetry KAT (now load-bearing, not corroborating) — pins the
+   *composition*, not a duplicate that can occur.** The unconditional set/remove
+   has **no refcount**, and that is *sound because duplicates are structurally
+   unreachable*: `(P,s,E)` multiplicity is provably ≤ 1 on any canonical chain —
+   `blockchain.cpp:4247` rejects a credit whose `(P,s,E)` bit is already set
+   ("Duplicate archival serve-credit", against pre-block DB state), and
+   `blockchain.cpp:4882` rejects two `(P,s,E)` credits across txs in one block
+   (48-byte `(P,shard,E)` block set). So the block whose connect set the bit is
+   the *only* block whose disconnect can clear it; a refcount would be dead
+   machinery. The KAT therefore proves the composition: **(a)** a second
+   `(P,s,E)` credit is rejected both intra-block (`:4882`) and against prior DB
+   state (`:4247`), **and** **(b)** given that rejection, the single credit's bit
+   round-trips **bit-identically** across a pop spanning its set height
+   (`blockchain_db.cpp:224` set / `:586` remove, keyed `(P,s,E)`). It proves
+   duplicates are *unreachable* and that their unreachability is the load-bearing
+   reason no-refcount is sound — not that a duplicate is handled.
 
 ### 5.7 Reopening (rule 21)
 
@@ -424,6 +450,17 @@ as-of-E — i.e., the §5.3 segment-path binding **or** conjunct-2 acceptance is
 ever weakened so `credit ⇏ held` (then the descriptor filter, or a dedicated
 held interval log, returns as a real requirement); or (b) `work_P` is redefined
 to count held-but-**unserved** shards (none such today — work requires credit).
+
+**No-refcount ↔ dedup coupling (armed trigger).** The bit's reorg-symmetry
+(§5.6) is not self-contained — it is a theorem with a dependency on the two
+dedup guards. **Reopens iff serve-credit dedup at `blockchain.cpp:4247` or
+`:4882` is ever relaxed to admit multiple `(P,s,E)` credits:** the unconditional
+remove-on-disconnect then becomes a reorg **under-count** (pop the second
+crediting block → its disconnect clears a bit the first block's still-live credit
+justifies → `work_P(E)` silently drops it), so **the bit must gain a refcount or
+the disconnect must become conditional.** Recording this ties the two decisions
+together; without it the coupling lives only in review and a future dedup change
+breaks reorg-symmetry with nothing biting.
 
 **Proof-carrying acceptance — named reopen, not now.** The purist "derive, don't
 hold state" would have the serve-credit response **carry a proof** it held `s` at
@@ -468,19 +505,30 @@ parallelizable with WS-1.
 
 - **Q3** — RESOLVED (vacuous at arity 1).
 - **Q12 / F-E8** — RESOLVED (foreclosed by wire positivity + zero-tolerance recompute).
-- **Q11 / F-E7** — **PROPOSED: ACCEPT** — awaiting ratification (consensus-acceptance-path).
-- **WS-1 (Q10 → M-2 → Q7)** — **PROPOSED: M-2 closes under bits-sourcing ∧
+- **Q11 / F-E7** — **RATIFIED: ACCEPT** — with the backing-pseudo-out
+  balance-exclusion arming KAT as its reopen (§2.2).
+- **WS-1 (Q10 → M-2 → Q7)** — **RATIFIED: M-2 closes under bits-sourcing ∧
   as-of-fire-height acceptance (§5.4, the conjunction); one shared
   `as_of_E_served_work` sourcing function both sides; `held_shard_ids` out of
-  the work-channel type; one `at_height` accessor for :4307 + mutable-holdings;
-  reorg-symmetry inherited from M1 O-3; three armed KATs (§5.6)** — awaiting
-  ratification (consensus sourcing rule; the supply-conservation hard blocker,
-  M-2 = the keystone with no backstop under it, §5.5). Corrects the Round-2
+  the work-channel type; one `at_height` accessor with two consumers
+  (`:4307` acceptance + `:5270` slash-eligibility); reorg-symmetry inherited from
+  M1 O-3 with the no-refcount↔dedup coupling armed (§5.7); three armed KATs
+  (§5.6, reorg KAT pins the composition).** The supply-conservation keystone,
+  the one obligation with no backstop under it (§5.5). Corrects the Round-2
   Q10/M-2 closure.
-- **WS-2 (Q9 / F-E3)** — OPEN, parallel; two options enumerated (§6), own closure.
+- **WS-2 (Q9 / F-E3)** — **OPEN, the sole remaining design surface**; parallel
+  (tx-scoping, no shared surface with the sourcing keystone); two options
+  enumerated (§6), its own closure next.
 
-On Q11 **and** WS-1 ratification, the leg's remaining open design is WS-2 (dedup
-plumbing). PR-E3 body items depending on WS-1 (held-sourcing, §3 items 1–2) are
-ratified; the verify body (§3 item 3) additionally depends on WS-2's closure for
-the dedup step. Next action after ratification: close WS-2, then open the PR-E3
-implementation pre-flight against §3's build list.
+### 7.1 Next action — PR-E3 implementation pre-flight (re-pin to current `dev`)
+
+Both keystone decisions are ratified; WS-1's build (§3 items 1–2) is unblocked
+and the verify body (§3 item 3) additionally awaits WS-2's closure. When the
+PR-E3 implementation pre-flight opens against the §3 build list, **run it against
+the current `dev` head, not the `1f67652b0` round pin** — `dev` has already moved
+to **`90e790c9c`** (twice mid-round in this arc). The **§11.1 pattern — read
+every operand at its production site** — is precisely what turned the last two
+"closed" premises (PR-E2's landed-not-open state; Q10's descriptor-vs-bits
+conflation), so the pre-flight re-verifies the §3 file:line anchors
+(`consensus_state.rs:386–389`, `:4307`, `:5270`, `blockchain_db.cpp:224`/`:586`,
+`archival_serve_credit`) at the branch head before the build lands.
