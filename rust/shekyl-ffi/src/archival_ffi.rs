@@ -528,6 +528,10 @@ pub const SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_INDEX_RANGE: u8 = 3;
 /// One gathered bond for `shekyl_archival_epoch_close_compute`.
 ///
 /// Layout must match `struct shekyl_archival_epoch_close_bond` in `shekyl_ffi.h`.
+///
+/// Carries no holdings descriptor (WS-1): the held-and-served set is sourced
+/// solely from the serve-credit ledger rows the gather passes as credit
+/// pairs, so tip holdings never cross into the work channel.
 #[repr(C)]
 pub struct ShekylArchivalEpochCloseBond {
     pub join_settlement_epoch: u64,
@@ -535,8 +539,6 @@ pub struct ShekylArchivalEpochCloseBond {
     pub bad_intervals_ptr: *const u64,
     /// Pair count (not u64 count).
     pub bad_intervals_len: usize,
-    pub held_shard_ids_ptr: *const u64,
-    pub held_shard_ids_len: usize,
     pub is_foundation_complete_tree: u8,
 }
 
@@ -608,7 +610,7 @@ unsafe fn gather_bad_intervals(ptr: *const u64, pair_len: usize) -> Option<Vec<B
 /// All pointers must satisfy their stated lengths for the duration of the call:
 /// `bonds_ptr[0..bonds_len]`, `shards_ptr[0..shards_len]`,
 /// `credit_pairs_ptr[0..credit_pairs_len]`, `out_r_market_ptr[0..shards_len]`,
-/// and each bond's interval/held buffers per its embedded lengths.
+/// and each bond's interval buffer per its embedded lengths.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_archival_epoch_close_compute(
     settlement_epoch: u64,
@@ -655,13 +657,12 @@ pub unsafe extern "C" fn shekyl_archival_epoch_close_compute(
         unsafe { std::slice::from_raw_parts(credit_pairs_ptr, credit_pairs_len) }
     };
 
-    struct GatheredBond<'a> {
+    struct GatheredBond {
         join: u64,
         complete: bool,
         bad: Vec<BadInterval>,
-        held: &'a [u64],
     }
-    let mut gathered: Vec<GatheredBond<'_>> = Vec::with_capacity(raw_bonds.len());
+    let mut gathered: Vec<GatheredBond> = Vec::with_capacity(raw_bonds.len());
     for bond in raw_bonds {
         let Some(bad) =
             (unsafe { gather_bad_intervals(bond.bad_intervals_ptr, bond.bad_intervals_len) })
@@ -672,18 +673,10 @@ pub unsafe extern "C" fn shekyl_archival_epoch_close_compute(
                 SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_LEN_OVERFLOW
             };
         };
-        let held: &[u64] = if bond.held_shard_ids_len == 0 {
-            &[]
-        } else if bond.held_shard_ids_ptr.is_null() {
-            return SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_NULL_PTR;
-        } else {
-            unsafe { std::slice::from_raw_parts(bond.held_shard_ids_ptr, bond.held_shard_ids_len) }
-        };
         gathered.push(GatheredBond {
             join: bond.join_settlement_epoch,
             complete: bond.is_foundation_complete_tree != 0,
             bad,
-            held,
         });
     }
 
@@ -693,7 +686,6 @@ pub unsafe extern "C" fn shekyl_archival_epoch_close_compute(
             join_settlement_epoch: b.join,
             is_foundation_complete_tree: b.complete,
             bad_intervals: &b.bad,
-            held_shard_ids: b.held,
         })
         .collect();
     let shards: Vec<EpochCloseShard> = raw_shards
@@ -1054,39 +1046,30 @@ mod tests {
     fn epoch_close_compute_ffi_full_pipeline() {
         // Two members share shard 7; one slashed bond and one foundation
         // complete-tree contribute neither market count nor work.
-        let held = [7u64];
         let slashed = [0u64, u64::MAX];
         let bonds = [
             ShekylArchivalEpochCloseBond {
                 join_settlement_epoch: 0,
                 bad_intervals_ptr: ptr::null(),
                 bad_intervals_len: 0,
-                held_shard_ids_ptr: held.as_ptr(),
-                held_shard_ids_len: held.len(),
                 is_foundation_complete_tree: 0,
             },
             ShekylArchivalEpochCloseBond {
                 join_settlement_epoch: 0,
                 bad_intervals_ptr: ptr::null(),
                 bad_intervals_len: 0,
-                held_shard_ids_ptr: held.as_ptr(),
-                held_shard_ids_len: held.len(),
                 is_foundation_complete_tree: 0,
             },
             ShekylArchivalEpochCloseBond {
                 join_settlement_epoch: 0,
                 bad_intervals_ptr: slashed.as_ptr(),
                 bad_intervals_len: 1,
-                held_shard_ids_ptr: held.as_ptr(),
-                held_shard_ids_len: held.len(),
                 is_foundation_complete_tree: 0,
             },
             ShekylArchivalEpochCloseBond {
                 join_settlement_epoch: 0,
                 bad_intervals_ptr: ptr::null(),
                 bad_intervals_len: 0,
-                held_shard_ids_ptr: ptr::null(),
-                held_shard_ids_len: 0,
                 is_foundation_complete_tree: 1,
             },
         ];
@@ -1143,25 +1126,21 @@ mod tests {
                 join_settlement_epoch: 0,
                 is_foundation_complete_tree: false,
                 bad_intervals: &[],
-                held_shard_ids: &held,
             },
             EpochCloseBond {
                 join_settlement_epoch: 0,
                 is_foundation_complete_tree: false,
                 bad_intervals: &[],
-                held_shard_ids: &held,
             },
             EpochCloseBond {
                 join_settlement_epoch: 0,
                 is_foundation_complete_tree: false,
                 bad_intervals: &bad,
-                held_shard_ids: &held,
             },
             EpochCloseBond {
                 join_settlement_epoch: 0,
                 is_foundation_complete_tree: true,
                 bad_intervals: &[],
-                held_shard_ids: &[],
             },
         ];
         let rust_shards = [EpochCloseShard {

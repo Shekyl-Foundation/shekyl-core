@@ -1891,6 +1891,10 @@ uint8_t shekyl_archival_prune_below_epoch(
 
 /// One gathered bond. Layout must match `ShekylArchivalEpochCloseBond` in
 /// `rust/shekyl-ffi/src/archival_ffi.rs`.
+///
+/// Carries no holdings descriptor (WS-1): the held-and-served set is sourced
+/// solely from the serve-credit ledger rows the gather passes as credit
+/// pairs, so tip holdings never cross into the work channel.
 struct shekyl_archival_epoch_close_bond
 {
   uint64_t join_settlement_epoch;
@@ -1898,8 +1902,6 @@ struct shekyl_archival_epoch_close_bond
   const uint64_t* bad_intervals_ptr;
   /// Pair count (not u64 count).
   size_t bad_intervals_len;
-  const uint64_t* held_shard_ids_ptr;
-  size_t held_shard_ids_len;
   uint8_t is_foundation_complete_tree;
 };
 

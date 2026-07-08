@@ -2,6 +2,47 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **archival: WS-1 held-sourcing correction — serve-credit ledger is the
+  sole `work_P(E)` source; holdings reads are as-of-fire-height**
+  (`REWARD_EMISSION_E3_GATING_ROUND.md` §5, item 1 of the PR-E3 §3 build
+  list; closes the M-2/Q10 two-conjunct condition "bits-sourcing ∧
+  as-of-fire-height acceptance"). Four coupled cuts, one validation
+  surface:
+  - *Single sourcing function.* `as_of_e_served_work`
+    (`rust/shekyl-archival-retention/src/consensus_state.rs`) now derives
+    market membership, `R_market`, and per-bond work from the frozen
+    serve-credit pairs alone; `epoch_close_compute` delegates to it, and
+    the PR-E3 verify body will call the same function — numerator/denominator
+    sourcing divergence (the M-2 silent over/under-mint) is unrepresentable,
+    not tested-against.
+  - *Descriptor out of the work channel.* `held_shard_ids` is removed from
+    `EpochCloseBond`, the FFI struct (`shekyl_archival_epoch_close_bond` in
+    `shekyl_ffi.h` / `archival_ffi.rs`), and the LMDB gather marshal — the
+    tip-holdings re-filter that produced the drop-after-serve under-count
+    no longer compiles. Fixture `sigma_work_milli` values recomputed
+    (`consensus_state_kat_v1.json`, `reward_gate_kat_v1.json`).
+  - *As-of-height accessor, one implementation, both consumers.*
+    `BlockchainLMDB::archival_bond_holds_shard` honors `at_height` by
+    reconstructing from tip holdings + the slash log (holdings are
+    shrink-only post-join at the current substrate); the slash log gains a
+    v2 `holdings_pre_kind` field (pre-genesis posture: v1 rejected at
+    decode) which also fixes the pop-revert heuristic that mis-restored a
+    slashed single-shard compact bond to complete-tree. Serve-credit
+    acceptance (`blockchain.cpp`) and slash eligibility (`db_lmdb.cpp`,
+    tip-holdings pre-filter deleted per the round's third-consumer finding)
+    now answer "held at the challenge fire height" identically, with the
+    `h_fire` guard aligned (`h_fire == 0 || h_fire > h_close`) on both
+    sides.
+  - *KATs armed on the new sole gate.* Drop-after-serve
+    (`consensus_state.rs`), acceptance-gate both polarities
+    (`archival_serve_credit_integration.cpp`, asserting the gate queries
+    exactly the derived `h_fire`), slash-side mirror through the production
+    `add_block` → slash-scheduler path plus as-of-fire reconstruction and
+    revert KATs (`archival_substrate_lmdb.cpp`), and the one-strike
+    bad-interval cascade guard.
+
 ## [3.1.0-alpha.6] - 2026-07-07
 
 ### Added

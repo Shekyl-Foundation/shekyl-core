@@ -559,6 +559,12 @@ private:
     uint64_t settlement_epoch);
   void append_archival_slash_log(uint64_t block_height, uint32_t seq,
     const shekyl::db::ArchivalSlashRevertValue& entry);
+  /// True when a logged slash at a height strictly above `at_height` removed
+  /// `shard_id` from `p_id`'s holdings (compact erase of that shard, or a
+  /// complete-tree demotion, whose pre-image held every shard). Backs
+  /// archival_bond_holds_shard's as-of-height reconstruction (WS-1).
+  bool archival_slash_removed_holding_after(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t at_height) const;
   bool archival_challenge_failed_at_height(uint64_t block_height, const crypto::hash& p_id,
     const shekyl::db::ArchivalBondValue& bond, uint64_t shard_id,
     uint64_t settlement_epoch) const;

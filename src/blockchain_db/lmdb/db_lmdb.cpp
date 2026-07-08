@@ -4972,8 +4972,62 @@ bool BlockchainLMDB::get_archival_bond_value(const crypto::hash& p_id,
   return load_archival_bond_value(p_id, out);
 }
 
+bool BlockchainLMDB::archival_slash_removed_holding_after(const crypto::hash& p_id,
+  uint64_t shard_id, uint64_t at_height) const
+{
+  // Range-scan the slash log strictly above at_height. A v2 log row proves
+  // what the slash destroyed: a compact erase of exactly `shard_id`, or a
+  // complete-tree demotion (pre-image held every shard). Either shape at a
+  // height > at_height proves the bond still held `shard_id` at at_height.
+  const auto scan = [&](MDB_txn* txn) -> bool {
+    MDB_cursor* cur = nullptr;
+    const int open_rc = mdb_cursor_open(txn, m_archival_slash_log, &cur);
+    if (open_rc)
+      throw0(DB_ERROR(lmdb_error("Failed to open archival_slash_log cursor: ", open_rc).c_str()));
+
+    bool removed = false;
+    shekyl::db::ArchivalSlashLogKey start_key(at_height + 1, 0);
+    MDB_val k = start_key.as_mdb_val();
+    MDB_val v;
+    int rc = mdb_cursor_get(cur, &k, &v, MDB_SET_RANGE);
+    while (rc == 0)
+    {
+      shekyl::db::ArchivalSlashRevertValue entry{};
+      if (!shekyl::db::ArchivalSlashRevertValue::decode(v.mv_data, v.mv_size, entry))
+      {
+        mdb_cursor_close(cur);
+        throw std::runtime_error("FATAL: archival slash log decode failed during holdings scan");
+      }
+      if (!entry.is_epoch_marker()
+        && std::memcmp(entry.p_id, p_id.data, 32) == 0
+        && (entry.holdings_pre_kind
+              == shekyl::db::ArchivalSlashRevertValue::kPreKindCompleteTree
+            || entry.shard_id == shard_id))
+      {
+        removed = true;
+        break;
+      }
+      rc = mdb_cursor_get(cur, &k, &v, MDB_NEXT);
+    }
+    if (rc && rc != MDB_NOTFOUND)
+    {
+      mdb_cursor_close(cur);
+      throw0(DB_ERROR(lmdb_error("archival_slash_log cursor error during holdings scan: ", rc).c_str()));
+    }
+    mdb_cursor_close(cur);
+    return removed;
+  };
+
+  if (m_write_txn)
+    return scan(*m_write_txn);
+  TXN_PREFIX_RDONLY();
+  const bool removed = scan(m_txn);
+  TXN_POSTFIX_RDONLY();
+  return removed;
+}
+
 bool BlockchainLMDB::archival_bond_holds_shard(const crypto::hash& p_id, uint64_t shard_id,
-  uint64_t /*at_height*/) const
+  uint64_t at_height) const
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
@@ -4981,13 +5035,29 @@ bool BlockchainLMDB::archival_bond_holds_shard(const crypto::hash& p_id, uint64_
   shekyl::db::ArchivalBondValue bond{};
   if (!load_archival_bond_value(p_id, bond))
     return false;
-  // NOTE: returns tip holdings (ignores at_height). This was sound while holdings were
-  // immutable, but HoldingsUpdate is now genesis-scoped (V3.0, 2026-06-15) — a P can add/drop
-  // shards mid-life, so "holds shard now" no longer implies "held shard at at_height". The
-  // serve-credit window check must be reconciled with mutable holdings when the
-  // Rebond/Unbond/HoldingsUpdate connect paths land (PHASE_2B_FSM_RETOOL.md; FOLLOWUPS V3.0
-  // bond-lifecycle item). Behavior unchanged here pending that work.
-  return bond.holds_shard(shard_id);
+
+  // As-of-height semantics (WS-1, REWARD_EMISSION_E3_GATING_ROUND.md §5):
+  // both consumers — serve-credit acceptance and slash eligibility — ask
+  // "did P hold s at the challenge fire height?", so this answers at
+  // at_height, not at tip. Holdings only shrink after join at the current
+  // substrate (the sole post-join mutation is slash-apply's erase/demotion,
+  // journaled per-block in the slash log), which yields the two-step read:
+  //
+  //   held at tip            ⇒ held at every height back to join, and both
+  //                            callers' epoch gating (E ≥ join_epoch + 1)
+  //                            puts every fire height after join;
+  //   not held at tip        ⇒ held at at_height iff a logged slash strictly
+  //                            above at_height removed it (a slash *at*
+  //                            at_height means already-removed: holdings at
+  //                            h are the post-connect state of block h).
+  //
+  // When voluntary HoldingsUpdate lands, adds break the shrink-only premise
+  // and its connect path must extend this reconstruction (its own pre-flight
+  // owns that; FOLLOWUPS V3.0 bond-lifecycle item).
+  if (bond.holds_shard(shard_id))
+    return true;
+
+  return archival_slash_removed_holding_after(p_id, shard_id, at_height);
 }
 
 namespace {
@@ -5080,6 +5150,15 @@ void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
   bond.bonded_total_atomic = bonded_total_atomic;
   bond.holdings_kind = holdings_kind;
   bond.held_shard_ids = held_shard_ids;
+  // Join-time invariant: a fresh compact bond must hold at least one shard
+  // (JoinMarket rejects empty holdings). This is a precondition of *this*
+  // writer, not of the record shape — post-slash records can be legitimately
+  // compact-and-empty and write through put_archival_bond_value below.
+  if (holdings_kind == shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact
+    && held_shard_ids.empty())
+  {
+    throw std::runtime_error("FATAL: ShardSetCompact bond record requires shard ids");
+  }
   bond.bad_intervals.reserve(bad_intervals.size());
   for (const auto& iv : bad_intervals)
   {
@@ -5106,11 +5185,12 @@ void BlockchainLMDB::put_archival_bond_value(const crypto::hash& p_id,
   {
     throw std::runtime_error("FATAL: CompleteTree bond record must not carry shard ids");
   }
-  if (bond.holdings_kind == shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact
-    && bond.held_shard_ids.empty())
-  {
-    throw std::runtime_error("FATAL: ShardSetCompact bond record requires shard ids");
-  }
+  // Deliberately NO "compact requires shard ids" guard here: a compact record
+  // with empty holdings is the legitimate post-slash shape (complete-tree
+  // demotion clears every holding; a compact bond slashed on its last shard
+  // ends empty), and both slash paths write through this function. The
+  // non-empty requirement is a JoinMarket precondition and lives in
+  // put_archival_bond_record, the join-time writer.
 
   const std::vector<uint8_t> encoded = bond.encode();
   shekyl::db::ArchivalBondKey key(reinterpret_cast<const uint8_t*>(p_id.data));
@@ -5232,13 +5312,16 @@ bool BlockchainLMDB::archival_challenge_failed_at_height(uint64_t block_height,
 {
   // good_through covers both the join-epoch gate and bad-interval exclusion
   // (ARCHIVAL_INCENTIVES §3.4); computed in Rust.
+  //
+  // Deliberately no tip-holdings pre-filter here (WS-1): eligibility is
+  // "held at the challenge fire height and didn't respond", answered by the
+  // as-of-height read at the bottom. A tip read ahead of it let a P drop the
+  // shard after the fire and escape the slash.
   if (!archival_bond_good_through_ffi(bond, settlement_epoch))
     return false;
   if (has_archival_serve_credit_bit(p_id, shard_id, settlement_epoch))
     return false;
   if (has_archival_slash_applied(p_id, shard_id, settlement_epoch))
-    return false;
-  if (!bond.holds_shard(shard_id))
     return false;
 
   const uint64_t h_open = shekyl_archival_epoch_open_height(settlement_epoch);
@@ -5288,6 +5371,12 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
   if (!load_archival_bond_value(p_id, bond))
     throw std::runtime_error("FATAL: archival slash without bond record");
 
+  // Captured pre-mutation: the slash log's revert row records what the slash
+  // destroyed (WS-1). Complete-tree demotion clears every holding, so the
+  // pre-image kind — not the post-image shape — is what pop-revert and
+  // as-of-height reconstruction need.
+  const uint8_t holdings_pre_kind = bond.holdings_kind;
+
   auto& shards = bond.held_shard_ids;
   if (bond.is_complete_tree())
   {
@@ -5335,6 +5424,7 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
   log_entry.shard_id = shard_id;
   log_entry.settlement_epoch = settlement_epoch;
   log_entry.slashed_amount = slashed_amount;
+  log_entry.holdings_pre_kind = holdings_pre_kind;
   append_archival_slash_log(block_height, seq++, log_entry);
 }
 
@@ -5496,11 +5586,15 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
     if (!load_archival_bond_value(p_id, bond))
       throw std::runtime_error("FATAL: archival slash revert without bond record");
 
-    if (entry.slashed_amount == SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC
-      && bond.held_shard_ids.empty()
-      && !bond.is_complete_tree())
+    // The v2 log row records the pre-slash holdings kind, so the revert
+    // restores the recorded pre-image directly — no amount/emptiness
+    // heuristic (which mis-restored a slashed single-shard compact bond to
+    // complete-tree whenever the amounts coincided).
+    if (entry.holdings_pre_kind
+      == shekyl::db::ArchivalSlashRevertValue::kPreKindCompleteTree)
     {
       bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsCompleteTree;
+      bond.held_shard_ids.clear();
       bond.bad_intervals.erase(
         std::remove_if(bond.bad_intervals.begin(), bond.bad_intervals.end(),
           [&](const shekyl::db::ArchivalBondValue::BadInterval& iv) {
@@ -6118,12 +6212,14 @@ void BlockchainLMDB::process_archival_epoch_close_at_height(uint64_t block_heigh
   bond_ffi.reserve(bonds.size());
   for (const GatheredBond& gathered : bonds)
   {
+    // WS-1: no holdings descriptor crosses into the work channel. The
+    // held-and-served set is the serve-credit ledger rows gathered above —
+    // each credit was acceptance-gated on holding at the challenge fire
+    // height, so the pairs are the as-of-E witness; re-filtering them against
+    // tip holdings was the M2-1 drop-after-serve under-count.
     shekyl_archival_epoch_close_bond b{};
     b.join_settlement_epoch = gathered.value.join_settlement_epoch;
     b.is_foundation_complete_tree = gathered.value.is_complete_tree() ? 1 : 0;
-    b.held_shard_ids_ptr = gathered.value.held_shard_ids.empty()
-      ? nullptr : gathered.value.held_shard_ids.data();
-    b.held_shard_ids_len = gathered.value.held_shard_ids.size();
     b.bad_intervals_ptr = gathered.bad_intervals_flat.empty()
       ? nullptr : gathered.bad_intervals_flat.data();
     b.bad_intervals_len = gathered.bad_intervals_flat.size() / 2;

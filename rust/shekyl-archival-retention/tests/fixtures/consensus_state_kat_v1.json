@@ -1,83 +1,173 @@
 {
-  "format_version": 1,
-  "description": "ARCHIVAL_CONSENSUS_STATE §3.3 R_market + §4.5 Σwork fixture (pure replay).",
-  "settlement_epoch": 10,
-  "shard_id": 42,
-  "curve": {
-    "plateau_work_milli": 16000,
-    "plateau_value_milli": 8000
+ "format_version": 1,
+ "description": "ARCHIVAL_CONSENSUS_STATE §3.3 R_market + §4.5 Σwork fixture (pure replay).",
+ "settlement_epoch": 10,
+ "shard_id": 42,
+ "curve": {
+  "plateau_work_milli": 16000,
+  "plateau_value_milli": 8000
+ },
+ "serve_credit_rows": [
+  {
+   "p_id_hex": "01",
+   "shard_id": 42,
+   "serve_credit": true,
+   "join_epoch": 0,
+   "bad_intervals": [],
+   "foundation": false
   },
-  "serve_credit_rows": [
+  {
+   "p_id_hex": "02",
+   "shard_id": 42,
+   "serve_credit": false,
+   "join_epoch": 0,
+   "bad_intervals": [],
+   "foundation": false
+  },
+  {
+   "p_id_hex": "03",
+   "shard_id": 42,
+   "serve_credit": true,
+   "join_epoch": 0,
+   "bad_intervals": [
     {
-      "p_id_hex": "01",
-      "shard_id": 42,
-      "serve_credit": true,
-      "join_epoch": 0,
-      "bad_intervals": [],
-      "foundation": false
-    },
-    {
-      "p_id_hex": "02",
-      "shard_id": 42,
-      "serve_credit": false,
-      "join_epoch": 0,
-      "bad_intervals": [],
-      "foundation": false
-    },
-    {
-      "p_id_hex": "03",
-      "shard_id": 42,
-      "serve_credit": true,
-      "join_epoch": 0,
-      "bad_intervals": [{ "start": 8, "end_exclusive": 18446744073709551615 }],
-      "foundation": false
+     "start": 8,
+     "end_exclusive": 18446744073709551615
     }
+   ],
+   "foundation": false
+  }
+ ],
+ "expected": {
+  "r_market": 1,
+  "sigma_work_milli": 4000
+ },
+ "per_p_work_milli": [
+  4000,
+  0,
+  12000
+ ],
+ "market_mask": [
+  true,
+  false,
+  false
+ ],
+ "curve_cases": [
+  {
+   "work_milli": 0,
+   "capped_milli": 0
+  },
+  {
+   "work_milli": 4000,
+   "capped_milli": 4000
+  },
+  {
+   "work_milli": 8000,
+   "capped_milli": 6000
+  },
+  {
+   "work_milli": 16000,
+   "capped_milli": 8000
+  },
+  {
+   "work_milli": 32000,
+   "capped_milli": 8000
+  }
+ ],
+ "epoch_close": {
+  "description": "Composed epoch_close_compute replay: membership, R_market counting, ledger-sourced work (WS-1: the credit pairs ARE the held-and-served set; no holdings descriptor participates), age weighting, Σwork. Values derived from §3.3/§3.5 by hand with relative-depth age (ARCHIVAL_REWARD_ARITHMETIC.md §Shard age): age_milli=floor(age_epochs·1000/chain_epochs); shard 42 → floor(4·1000/11)=363; g(age)=1000+floor(age_weight·age/1000)=1181; scarcity=floor(1000·g/(R·1000)) → 590; curve below first band is identity. work b0 = 590+500 = 1090, b2 = 500+590 = 1090 (b2's credit on shard 42 counts from the ledger alone — the retired tip-holdings filter dropped it, the M2-1 under-count), b4 = 1000. Σ = 1090 + 1090 + 1000 = 3180.",
+  "settlement_epoch": 10,
+  "close_block_height": 110000,
+  "settlement_epoch_blocks": 10000,
+  "age_weight_milli": 500,
+  "frozen_shard_count": 2,
+  "k_cover": 1,
+  "bonds": [
+   {
+    "join_epoch": 0,
+    "complete_tree": false,
+    "bad_intervals": []
+   },
+   {
+    "join_epoch": 0,
+    "complete_tree": false,
+    "bad_intervals": [
+     {
+      "start": 8,
+      "end_exclusive": 18446744073709551615
+     }
+    ]
+   },
+   {
+    "join_epoch": 9,
+    "complete_tree": false,
+    "bad_intervals": []
+   },
+   {
+    "join_epoch": 0,
+    "complete_tree": true,
+    "bad_intervals": []
+   },
+   {
+    "join_epoch": 0,
+    "complete_tree": false,
+    "bad_intervals": []
+   }
+  ],
+  "shards": [
+   {
+    "shard_id": 42,
+    "has_segment": true,
+    "freeze_height": 70000
+   },
+   {
+    "shard_id": 43,
+    "has_segment": true,
+    "freeze_height": 105000
+   },
+   {
+    "shard_id": 44,
+    "has_segment": false,
+    "freeze_height": 0
+   }
+  ],
+  "credit_pairs": [
+   {
+    "bond": 0,
+    "shard": 0
+   },
+   {
+    "bond": 0,
+    "shard": 1
+   },
+   {
+    "bond": 1,
+    "shard": 0
+   },
+   {
+    "bond": 2,
+    "shard": 1
+   },
+   {
+    "bond": 3,
+    "shard": 0
+   },
+   {
+    "bond": 4,
+    "shard": 2
+   },
+   {
+    "bond": 2,
+    "shard": 0
+   }
   ],
   "expected": {
-    "r_market": 1,
-    "sigma_work_milli": 4000
-  },
-  "per_p_work_milli": [4000, 0, 12000],
-  "market_mask": [true, false, false],
-  "curve_cases": [
-    { "work_milli": 0, "capped_milli": 0 },
-    { "work_milli": 4000, "capped_milli": 4000 },
-    { "work_milli": 8000, "capped_milli": 6000 },
-    { "work_milli": 16000, "capped_milli": 8000 },
-    { "work_milli": 32000, "capped_milli": 8000 }
-  ],
-  "epoch_close": {
-    "description": "Composed epoch_close_compute replay: membership, R_market counting, held-shard intersection, age weighting, Σwork. Values derived from §3.3/§3.5 by hand with relative-depth age (ARCHIVAL_REWARD_ARITHMETIC.md §Shard age): age_milli=floor(age_epochs·1000/chain_epochs); shard 42 → floor(4·1000/11)=363; g(age)=1000+floor(age_weight·age/1000)=1181; scarcity=floor(1000·g/(R·1000)) → 590; curve below first band is identity. Σ = (590+500) + 500 + 1000 = 2590.",
-    "settlement_epoch": 10,
-    "close_block_height": 110000,
-    "settlement_epoch_blocks": 10000,
-    "age_weight_milli": 500,
-    "frozen_shard_count": 2,
-    "k_cover": 1,
-    "bonds": [
-      { "join_epoch": 0, "complete_tree": false, "bad_intervals": [], "held_shard_ids": [42, 43] },
-      { "join_epoch": 0, "complete_tree": false, "bad_intervals": [{ "start": 8, "end_exclusive": 18446744073709551615 }], "held_shard_ids": [42] },
-      { "join_epoch": 9, "complete_tree": false, "bad_intervals": [], "held_shard_ids": [43] },
-      { "join_epoch": 0, "complete_tree": true, "bad_intervals": [], "held_shard_ids": [] },
-      { "join_epoch": 0, "complete_tree": false, "bad_intervals": [], "held_shard_ids": [44] }
-    ],
-    "shards": [
-      { "shard_id": 42, "has_segment": true, "freeze_height": 70000 },
-      { "shard_id": 43, "has_segment": true, "freeze_height": 105000 },
-      { "shard_id": 44, "has_segment": false, "freeze_height": 0 }
-    ],
-    "credit_pairs": [
-      { "bond": 0, "shard": 0 },
-      { "bond": 0, "shard": 1 },
-      { "bond": 1, "shard": 0 },
-      { "bond": 2, "shard": 1 },
-      { "bond": 3, "shard": 0 },
-      { "bond": 4, "shard": 2 },
-      { "bond": 2, "shard": 0 }
-    ],
-    "expected": {
-      "r_market_by_shard": [2, 2, 1],
-      "sigma_work_milli": 2590
-    }
+   "r_market_by_shard": [
+    2,
+    2,
+    1
+   ],
+   "sigma_work_milli": 3180
   }
+ }
 }

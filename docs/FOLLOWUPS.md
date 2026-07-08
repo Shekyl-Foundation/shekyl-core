@@ -1333,15 +1333,21 @@ sustainability is unaffected by the recalibration.
   `Bonded`), the slashable-when boundary (Pin 3: dropped collateral stays liable through
   cooldown — no drop-and-run; forecloses T-A15b), drop-last-shard-rejected (use `Unbond`),
   and per-shard `E_add+1` counting. These are the *inputs* to (2). **Mutable-holdings
-  consequence — read rule pinned (P2B-7 Pin 4), implementation open:**
-  `BlockchainLMDB::has_archival_bond_shard` (`db_lmdb.cpp`) currently returns *tip* holdings
-  and ignores `at_height` — sound only while holdings were immutable. With mid-life add/drop,
-  "holds shard now" ≠ "held shard at `at_height`", so the serve-credit-window membership check
-  must read the per-`(P,s,E)` retention bits / `bond_event_log` intervals (gate-4 §4.4 ground
-  truth) rather than the mutable descriptor. **Open:** land the `at_height`-honoring read (or
-  contract-restrict the function to current-membership questions and reroute historical
-  callers) in the `shekyl-archival-retention` connect paths; land the per-shard `E_add+1`
-  verify/connect rule.
+  consequence — read rule pinned (P2B-7 Pin 4); accessor read LANDED (WS-1, 2026-07-07):**
+  `BlockchainLMDB::archival_bond_holds_shard` now honors `at_height` by reconstructing from
+  tip holdings + the (v2, pre-kind-carrying) slash log — sound because at the current
+  substrate holdings only shrink post-join (slash-apply erase/demotion is the sole mutation),
+  so "held at `h`" = "held at tip, or removed by a logged slash strictly above `h`". Both
+  consumers (serve-credit acceptance `blockchain.cpp` and slash eligibility `db_lmdb.cpp`,
+  whose leading tip-holdings pre-filter was deleted) now read as-of-fire-height
+  (`REWARD_EMISSION_E3_GATING_ROUND.md` §5; KATs in `archival_substrate_lmdb.cpp`).
+  **Still open, owned by the HoldingsUpdate connect-path PR:** voluntary *adds* break the
+  shrink-only premise — that PR's pre-flight must extend the reconstruction (journal adds the
+  way slashes are journaled, or move to `bond_event_log` intervals) **and** fix the slash
+  candidate enumeration in `process_archival_slash_for_epoch`, which iterates *tip*
+  `held_shard_ids` (behavior-neutral today: the only drop is slash-apply itself, which sets
+  the slash-applied bit + `[E, ∞)` bad interval; a voluntary drop would let the dropped
+  shard escape enumeration). Also land the per-shard `E_add+1` verify/connect rule.
   (2) **~~Age-stratified sim reconciliation (pre-seal dependency).~~ DONE 2026-06-16 —
   `STAKER_ARCHIVAL_SIM.md` §L18.** The reconciliation landed as the
   `--axis=holdingsupdate_cooldown` sweep: released collateral frozen for the release

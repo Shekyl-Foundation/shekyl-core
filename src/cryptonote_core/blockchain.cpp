@@ -4298,7 +4298,12 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
     h_open, h_close, reinterpret_cast<const uint8_t*>(seal_hash.data),
     reinterpret_cast<const uint8_t*>(resp.p_canonical_id.data),
     resp.shard_id, resp.settlement_epoch);
-  if (h_fire == 0)
+  // Same guard as the slash-eligibility consumer (db_lmdb.cpp,
+  // archival_challenge_failed_at_height): both sides derive h_fire from the
+  // identical deterministic inputs, and both reject a derivation outside
+  // (0, h_close] — the two consumers of "held at fire height" must agree on
+  // which height that is (WS-1 h_fire symmetry).
+  if (h_fire == 0 || h_fire > h_close)
   {
     MERROR_VER("Archival serve-credit: challenge fire height derivation failed");
     return false;

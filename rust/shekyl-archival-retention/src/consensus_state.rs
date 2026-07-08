@@ -222,12 +222,19 @@ pub fn shard_age_milli(
 /// holding at least one serve-credit row for the settlement epoch. Bonded `P`s
 /// without credit rows contribute zero to `R_market` and `Σwork` by
 /// construction and may be omitted.
+///
+/// Deliberately **not** carrying the bond's current holdings descriptor
+/// (WS-1, `REWARD_EMISSION_E3_GATING_ROUND.md` §5): a serve-credit row is
+/// admitted only after the acceptance gate proves `P` held the shard at the
+/// challenge fire height, so the credit ledger *is* the as-of-`E`
+/// held-and-served witness. Re-filtering credits against tip holdings here
+/// was the M2-1 drop-after-serve under-count; the descriptor is out of the
+/// work channel's scope entirely so no future edit can reintroduce it.
 #[derive(Debug, Clone)]
 pub struct EpochCloseBond<'a> {
     pub join_settlement_epoch: u64,
     pub is_foundation_complete_tree: bool,
     pub bad_intervals: &'a [BadInterval],
-    pub held_shard_ids: &'a [u64],
 }
 
 /// One shard's registry row at epoch close.
@@ -308,6 +315,107 @@ impl core::fmt::Display for CreditIndexOutOfRange {
 
 impl std::error::Error for CreditIndexOutOfRange {}
 
+/// Per-bond served-work derivation over the frozen serve-credit ledger — the
+/// **single sourcing function** for every consensus quantity built from
+/// "which shards did `P` hold-and-serve in `E`" (WS-1,
+/// `REWARD_EMISSION_E3_GATING_ROUND.md` §5).
+///
+/// Epoch close calls [`as_of_e_served_work`] to build the stored `Σwork(E)`
+/// denominator; the PR-E3 emission verify body calls it with the same frozen
+/// gather to build `P`'s `capped_P` numerator. Because both sides run this
+/// one function over the same as-of-`E` inputs, the numerator is `P`'s exact
+/// term in the denominator *by definition* — sourcing divergence (the M-2
+/// silent over/under-mint) is unrepresentable rather than tested-against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServedWork {
+    /// Market membership per input bond (parallel to `EpochCloseInputs::bonds`).
+    pub member: Vec<bool>,
+    /// `R_market(shard, E)` per input shard (parallel to `EpochCloseInputs::shards`).
+    pub r_market_by_shard: Vec<u64>,
+    /// `work_P(E)` milli per input bond (parallel to `EpochCloseInputs::bonds`).
+    pub work_by_bond: Vec<u64>,
+}
+
+/// Derive [`ServedWork`] from the gathered as-of-`E` inputs.
+///
+/// The held-and-served set is sourced **solely** from `inputs.credit_pairs`
+/// (the serve-credit ledger rows for `E`): acceptance gates every credit on
+/// holding at the challenge fire height, so each pair is a proven
+/// held-and-served fact for `E`. No holdings descriptor participates — see
+/// the [`EpochCloseBond`] doc for the WS-1 rationale.
+///
+/// Errors on malformed gather indices; performs no reward-gate comparison
+/// (the M1 gate is [`epoch_close_compute`]'s zero-at-top concern).
+pub fn as_of_e_served_work(
+    inputs: &EpochCloseInputs<'_>,
+) -> Result<ServedWork, CreditIndexOutOfRange> {
+    let bonds = inputs.bonds;
+    let shards = inputs.shards;
+
+    for (pair_index, pair) in inputs.credit_pairs.iter().enumerate() {
+        if pair.bond_idx >= bonds.len() || pair.shard_idx >= shards.len() {
+            return Err(CreditIndexOutOfRange { pair_index });
+        }
+    }
+
+    let member: Vec<bool> = bonds
+        .iter()
+        .map(|b| {
+            market_member_at_epoch(
+                b.join_settlement_epoch,
+                inputs.settlement_epoch,
+                b.bad_intervals,
+                b.is_foundation_complete_tree,
+            )
+        })
+        .collect();
+
+    let mut r_market_by_shard = vec![0u64; shards.len()];
+    for pair in inputs.credit_pairs {
+        if member[pair.bond_idx] {
+            r_market_by_shard[pair.shard_idx] = r_market_by_shard[pair.shard_idx].saturating_add(1);
+        }
+    }
+
+    // Shard age feeds `shard_work_milli` only for member-credited shards (the
+    // guarded branch below), so compute it lazily and memoize per shard
+    // index — a shard whose only credit comes from a non-member bond never
+    // pays the two `shard_age_milli` divisions.
+    let mut age_milli_by_shard: Vec<Option<u64>> = vec![None; shards.len()];
+
+    let mut work_by_bond = vec![0u64; bonds.len()];
+    for pair in inputs.credit_pairs {
+        if !member[pair.bond_idx] {
+            continue;
+        }
+        let shard = &shards[pair.shard_idx];
+        let age_milli = *age_milli_by_shard[pair.shard_idx].get_or_insert_with(|| {
+            if shard.has_segment {
+                shard_age_milli(
+                    inputs.close_block_height,
+                    shard.freeze_height,
+                    inputs.settlement_epoch_blocks,
+                )
+            } else {
+                0
+            }
+        });
+        let contribution = shard_work_milli(
+            r_market_by_shard[pair.shard_idx],
+            age_milli,
+            inputs.age_weight_milli,
+            true,
+        );
+        work_by_bond[pair.bond_idx] = work_by_bond[pair.bond_idx].saturating_add(contribution);
+    }
+
+    Ok(ServedWork {
+        member,
+        r_market_by_shard,
+        work_by_bond,
+    })
+}
+
 /// Full epoch-close consensus computation (ARCHIVAL_CONSENSUS_STATE.md §3.3, §3.5).
 ///
 /// Composes the pinned semantics in one deterministic pass:
@@ -325,8 +433,10 @@ impl std::error::Error for CreditIndexOutOfRange {}
 /// 1. **Market membership** per bond — [`market_member_at_epoch`].
 /// 2. **`R_market(shard, E)`** — count of serve-credit rows whose `P` is a
 ///    market member (§3.3 pinned measure).
-/// 3. **`work_P`** — Σ over credited *held* shards of
-///    [`shard_work_milli`] (scarcity × age weighting), saturating.
+/// 3. **`work_P`** — Σ over credited shards of [`shard_work_milli`]
+///    (scarcity × age weighting), saturating. The held-and-served set is the
+///    serve-credit ledger itself (WS-1 §5) via [`as_of_e_served_work`], the
+///    single sourcing function shared with the emission verify body.
 /// 4. **`Σwork(E)`** — [`sigma_work_milli`] over per-bond `Curve(work_P)`.
 ///
 /// Errors (rather than panics) on malformed gather indices so the FFI shim
@@ -352,67 +462,11 @@ pub fn epoch_close_compute(
         });
     }
 
-    let member: Vec<bool> = bonds
-        .iter()
-        .map(|b| {
-            market_member_at_epoch(
-                b.join_settlement_epoch,
-                inputs.settlement_epoch,
-                b.bad_intervals,
-                b.is_foundation_complete_tree,
-            )
-        })
-        .collect();
-
-    let mut r_market_by_shard = vec![0u64; shards.len()];
-    for pair in inputs.credit_pairs {
-        if member[pair.bond_idx] {
-            r_market_by_shard[pair.shard_idx] = r_market_by_shard[pair.shard_idx].saturating_add(1);
-        }
-    }
-
-    // Shard age feeds `shard_work_milli` only for member-held credited shards
-    // (the guarded branch below), so compute it lazily and memoize per shard
-    // index — a shard whose only credit comes from a non-member or non-holding
-    // bond never pays the two `shard_age_milli` divisions.
-    let mut age_milli_by_shard: Vec<Option<u64>> = vec![None; shards.len()];
-
-    let mut work_by_bond = vec![0u64; bonds.len()];
-    for pair in inputs.credit_pairs {
-        if !member[pair.bond_idx] {
-            continue;
-        }
-        let shard = &shards[pair.shard_idx];
-        if !bonds[pair.bond_idx]
-            .held_shard_ids
-            .contains(&shard.shard_id)
-        {
-            continue;
-        }
-        let age_milli = *age_milli_by_shard[pair.shard_idx].get_or_insert_with(|| {
-            if shard.has_segment {
-                shard_age_milli(
-                    inputs.close_block_height,
-                    shard.freeze_height,
-                    inputs.settlement_epoch_blocks,
-                )
-            } else {
-                0
-            }
-        });
-        let contribution = shard_work_milli(
-            r_market_by_shard[pair.shard_idx],
-            age_milli,
-            inputs.age_weight_milli,
-            true,
-        );
-        work_by_bond[pair.bond_idx] = work_by_bond[pair.bond_idx].saturating_add(contribution);
-    }
-
-    let sigma = sigma_work_milli(&work_by_bond, &inputs.curve, &member);
+    let served = as_of_e_served_work(inputs)?;
+    let sigma = sigma_work_milli(&served.work_by_bond, &inputs.curve, &served.member);
 
     Ok(EpochCloseResult {
-        r_market_by_shard,
+        r_market_by_shard: served.r_market_by_shard,
         sigma_work_milli: sigma,
     })
 }
@@ -496,12 +550,10 @@ mod tests {
 
     #[test]
     fn epoch_close_single_member_full_pipeline() {
-        let held = [7u64];
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
             is_foundation_complete_tree: false,
             bad_intervals: &[],
-            held_shard_ids: &held,
         }];
         let shards = [shard(7, 0)];
         let pairs = [CreditPair {
@@ -516,12 +568,10 @@ mod tests {
 
     #[test]
     fn epoch_close_complete_tree_excluded_from_market_and_sigma() {
-        let held: [u64; 0] = [];
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
             is_foundation_complete_tree: true,
             bad_intervals: &[],
-            held_shard_ids: &held,
         }];
         let shards = [shard(7, 0)];
         let pairs = [CreditPair {
@@ -534,15 +584,18 @@ mod tests {
     }
 
     #[test]
-    fn epoch_close_credit_on_unheld_shard_counts_market_not_work() {
-        // Member credit on a shard outside its holdings inflates R_market for
-        // that shard (§3.3 counts member credits) but earns the bond no work.
-        let held = [9u64];
+    fn drop_after_serve_credit_counts_toward_work() {
+        // WS-1 drop-after-serve KAT (REWARD_EMISSION_E3_GATING_ROUND.md §5.6):
+        // a serve-credit row is a proven held-and-served-at-fire fact, so it
+        // earns work even when `P` no longer holds the shard by close. The
+        // retired descriptor filter got exactly this case wrong (under-count →
+        // M2-1 over/under-mint once verify copies the sourcing); the work
+        // channel now carries no holdings descriptor for any filter to
+        // consult, and this KAT is the regression guard on that deletion.
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
             is_foundation_complete_tree: false,
             bad_intervals: &[],
-            held_shard_ids: &held,
         }];
         let shards = [shard(7, 0)];
         let pairs = [CreditPair {
@@ -551,12 +604,58 @@ mod tests {
         }];
         let out = epoch_close_compute(&close_inputs(&bonds, &shards, &pairs)).unwrap();
         assert_eq!(out.r_market_by_shard, vec![1]);
-        assert_eq!(out.sigma_work_milli, 0);
+        // R=1, age_weight=0 → scarcity 1000 milli; the credit's work is
+        // counted from the ledger alone.
+        assert_eq!(out.sigma_work_milli, 1_000);
+    }
+
+    #[test]
+    fn close_and_verify_source_identical_served_work() {
+        // WS-1 §5.3 move 1: `epoch_close_compute` (denominator side) and the
+        // future emission verify body (numerator side) share
+        // `as_of_e_served_work` — this pins that the close's Σwork is exactly
+        // the curve-fold of the shared function's per-bond vector, so a
+        // verify-side caller reading `work_by_bond[P]` gets P's exact term in
+        // the stored denominator by construction.
+        let bonds = [
+            EpochCloseBond {
+                join_settlement_epoch: 0,
+                is_foundation_complete_tree: false,
+                bad_intervals: &[],
+            },
+            EpochCloseBond {
+                join_settlement_epoch: 0,
+                is_foundation_complete_tree: false,
+                bad_intervals: &[],
+            },
+        ];
+        let shards = [shard(7, 0), shard(9, 0)];
+        let pairs = [
+            CreditPair {
+                bond_idx: 0,
+                shard_idx: 0,
+            },
+            CreditPair {
+                bond_idx: 1,
+                shard_idx: 0,
+            },
+            CreditPair {
+                bond_idx: 1,
+                shard_idx: 1,
+            },
+        ];
+        let inputs = close_inputs(&bonds, &shards, &pairs);
+        let served = as_of_e_served_work(&inputs).unwrap();
+        let close = epoch_close_compute(&inputs).unwrap();
+        assert_eq!(close.r_market_by_shard, served.r_market_by_shard);
+        assert_eq!(
+            close.sigma_work_milli,
+            sigma_work_milli(&served.work_by_bond, &inputs.curve, &served.member)
+        );
     }
 
     #[test]
     fn epoch_close_bad_interval_excludes_bond_everywhere() {
-        let held = [7u64];
         let bad = [BadInterval {
             start_epoch: 4,
             end_exclusive: u64::MAX,
@@ -565,7 +664,6 @@ mod tests {
             join_settlement_epoch: 0,
             is_foundation_complete_tree: false,
             bad_intervals: &bad,
-            held_shard_ids: &held,
         }];
         let shards = [shard(7, 0)];
         let pairs = [CreditPair {
@@ -579,12 +677,10 @@ mod tests {
 
     #[test]
     fn epoch_close_missing_segment_zeroes_age_not_scarcity() {
-        let held = [7u64];
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
             is_foundation_complete_tree: false,
             bad_intervals: &[],
-            held_shard_ids: &held,
         }];
         let shards = [EpochCloseShard {
             shard_id: 7,
@@ -604,12 +700,10 @@ mod tests {
 
     #[test]
     fn epoch_close_shared_shard_splits_scarcity() {
-        let held = [7u64];
         let bond = EpochCloseBond {
             join_settlement_epoch: 0,
             is_foundation_complete_tree: false,
             bad_intervals: &[],
-            held_shard_ids: &held,
         };
         let bonds = [bond.clone(), bond];
         let shards = [shard(7, 0)];

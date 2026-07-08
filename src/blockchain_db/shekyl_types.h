@@ -479,16 +479,41 @@ private:
 };
 
 struct ArchivalSlashRevertValue {
-    static constexpr uint8_t kVersion = 1;
-    static constexpr size_t kEncodedSize = 1 + 32 + 8 + 8 + 8;
+    // v2 (WS-1, REWARD_EMISSION_E3_GATING_ROUND.md §5) appends the pre-slash
+    // holdings kind. v1 could not distinguish a complete-tree demotion (which
+    // cleared *all* holdings) from a compact erase of a bond's last shard, so
+    // (a) pop-revert restored the pre-image by an amount/emptiness heuristic
+    // that mis-restores a slashed single-shard compact bond to complete-tree,
+    // and (b) as-of-height holdings reconstruction from the log was ambiguous.
+    // v1 is rejected at decode per the pre-genesis posture: no migration,
+    // reset the data directory.
+    static constexpr uint8_t kVersion = 2;
+    static constexpr size_t kEncodedSize = 1 + 32 + 8 + 8 + 8 + 1;
+
+    // Pre-slash holdings kind. Values mirror ArchivalBondValue's
+    // kHoldingsShardSetCompact / kHoldingsCompleteTree (pinned by the
+    // static_assert following that struct's definition below).
+    static constexpr uint8_t kPreKindShardSetCompact = 0;
+    static constexpr uint8_t kPreKindCompleteTree = 1;
 
     uint8_t p_id[32]{};
     uint64_t shard_id = 0;
     uint64_t settlement_epoch = 0;
     uint64_t slashed_amount = 0;
+    /// Holdings kind of the bond *before* this slash applied. Complete-tree
+    /// means the slash demoted the bond and cleared every holding (the bond
+    /// held all shards at every height up to the slash); compact means the
+    /// slash erased exactly `shard_id` from the held set.
+    uint8_t holdings_pre_kind = kPreKindShardSetCompact;
 
     [[nodiscard]] std::vector<uint8_t> encode() const
     {
+        if (holdings_pre_kind != kPreKindShardSetCompact
+            && holdings_pre_kind != kPreKindCompleteTree)
+        {
+            throw std::runtime_error(
+                "ArchivalSlashRevertValue encode: unknown holdings_pre_kind");
+        }
         std::vector<uint8_t> out(kEncodedSize);
         out[0] = kVersion;
         std::memcpy(out.data() + 1, p_id, 32);
@@ -498,6 +523,7 @@ struct ArchivalSlashRevertValue {
             out[1 + 32 + 8 + (7 - i)] = static_cast<uint8_t>((settlement_epoch >> (i * 8)) & 0xFF);
         for (int i = 7; i >= 0; --i)
             out[1 + 32 + 16 + (7 - i)] = static_cast<uint8_t>((slashed_amount >> (i * 8)) & 0xFF);
+        out[1 + 32 + 24] = holdings_pre_kind;
         return out;
     }
 
@@ -512,6 +538,10 @@ struct ArchivalSlashRevertValue {
         out.shard_id = load_be64(p + 33);
         out.settlement_epoch = load_be64(p + 41);
         out.slashed_amount = load_be64(p + 49);
+        out.holdings_pre_kind = p[57];
+        if (out.holdings_pre_kind != kPreKindShardSetCompact
+            && out.holdings_pre_kind != kPreKindCompleteTree)
+            return false;
         return true;
     }
 
@@ -813,6 +843,15 @@ struct ArchivalBondValue {
         return false;
     }
 };
+
+// The slash log's pre-image kind field copies the bond's holdings_kind byte
+// verbatim (apply writes `bond.holdings_kind` pre-mutation); pin the two
+// enums together so neither can drift.
+static_assert(ArchivalSlashRevertValue::kPreKindShardSetCompact
+        == ArchivalBondValue::kHoldingsShardSetCompact
+    && ArchivalSlashRevertValue::kPreKindCompleteTree
+        == ArchivalBondValue::kHoldingsCompleteTree,
+    "slash-log holdings_pre_kind must mirror ArchivalBondValue holdings_kind");
 
 // ─── ArchivalShardSegmentValue ─────────────────────────────────────────────
 
