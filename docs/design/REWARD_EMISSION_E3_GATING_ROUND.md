@@ -329,6 +329,29 @@ implementation, in dependency order:
    insert-only journal leaves the §6.3 double-mint alive), covering
    `first_paying_emission_height`; the three §6.4 KATs (prune-straddle KAT
    asserts post-reorg re-claim **rejection**).
+   **IMPLEMENTED (2026-07-08, `feat/emission-ws1-held-sourcing` — same PR),
+   minus one C-1-blocked piece.** The single writer is
+   `shekyl_archival_claimed_epochs_check_and_set` (validated write-back over a
+   caller-owned buffer; five status codes); the connect path is
+   `BlockchainLMDB::apply_archival_emission_claim`, the journal is the new
+   `archival_emission_claim_log` table (`BE(height)||BE(seq)`), and the pop
+   restore is `revert_archival_emission_claims_at_height`, wired into
+   `pop_block` after the slash/close reverts. Two implementation pins beyond
+   the round text: (a) the journal row widened from the pre-image *delta* to
+   the **full pre-image** (`claimed_settlement_epochs` + `first_paying_emission_height`
+   before the mutation, ≤ 301 bytes at the 32-entry cap) — restoration is a
+   byte-identical overwrite with no reconstruct step, which closes the same
+   §6.3 double-mint with strictly less revert logic to audit; (b) *all* FFI
+   non-insert codes at connect are hard errors, not just the dedup hit —
+   unsettled/expired at connect equally mean a vin bypassed verify. The four
+   KATs landed (`archival_substrate_lmdb.cpp`): apply/revert roundtrip with
+   journal consumption, connect-breach hard errors, the §6.4 prune-straddle
+   double-mint property (post-reorg re-claim of the evicted-then-restored
+   `E_old` **rejected**), and first-paying set-once/pop-symmetric. The
+   **block-level `(P,E)` pass defers to C-1**: it iterates
+   `txin_archival_reward_emission`, whose C++ variant type is C-1's transport
+   shim — there is no type to iterate until the activating cut. Its KATs
+   defer with it; C-1's merge blocker list grows by this item.
 4. **C-1 — the activating cut** (separate PR; [`07-consensus-atomic-cutovers.mdc`](../../.cursor/rules/07-consensus-atomic-cutovers.mdc)):
    ML-DSA witness minter + `check_inputs_types_supported` whitelist flip + C++
    shim dispatch + `VARIANT_TAG 0x06`. Merge blocker = ML-DSA present/tested **and**
@@ -780,7 +803,14 @@ close-only M1 operand make the stored denominator load-bearing). §3 item 3
 2026-07-08 on the same branch** — see the item-3 status note for the three
 implementation pins (per-shard exactness; the tip-epoch claim-window
 operand shared with the connect writer; FFI entry point deferred to C-1
-with the dispatch wiring). Items 3a, 4, 5 remain open in dependency order.
+with the dispatch wiring). §3 item 3a (the WS-2 write side: single-writer
+FFI, connect-path journal, pop restore, four KATs including the §6.4
+prune-straddle double-mint property) **implemented 2026-07-08 on the same
+branch** — see the item-3a status note for the two pins (full-pre-image
+journal row; all non-insert codes fatal at connect) and the one
+C-1-blocked piece (the block-level `(P,E)` pass, which iterates a variant
+type that doesn't exist until C-1's transport shim). Items 4, 5 remain
+open in dependency order.
 
 ### 7.1 Next action — PR-E3 implementation pre-flight (re-pin to current `dev`)
 
