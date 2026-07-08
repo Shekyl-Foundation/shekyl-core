@@ -291,6 +291,35 @@ implementation, in dependency order:
    membership-only + the two hybrid auths. The auth result enters as an
    **unforgeable `AuthVerified` witness** the body cannot mint itself
    (fail-closed by type, §3.0) — E3 physically cannot accept an authed emission.
+   **IMPLEMENTED (2026-07-08, `feat/emission-ws1-held-sourcing` — same PR by
+   validation-surface bundling).** New
+   `shekyl-archival-retention::emission_verify` module; steps 1–5 in
+   `emission_vin_verify_claims` (minting a sealed `ClaimsVerified`), step 6
+   in `emission_vin_verify_backing` (leaf-hash equality +
+   `verify_membership_only`; minting `BackingVerified`), and the infallible
+   assembly `emission_vin_verify(claims, backing, auth)` — three witnesses
+   or no verdict. Step 7 (fee-input FCMP balance) stays at the C++ tx layer
+   via the existing `shekyl_fcmp_verify`; step 8's `AuthVerified` has **no
+   production constructor** (the ML-DSA minter is C-1's; KATs use a
+   `consensus-kat`-gated forge, PF-6a shape, named `kat_forge` so the
+   KCover tripwire grep stays scoped). Implementation pins beyond the round
+   text: (a) **per-shard exactness** — each `ShardWorkEntry`'s
+   `serve_credit_bit` must equal the ledger fact and `scarcity_milli` the
+   member-masked recompute, so a wrong split can't hide behind a right
+   total, and duplicates reject outright; (b) the **claim-window operand**
+   is the tip epoch index (`settlement_epoch_at_height(H)`) — the same `C`
+   the connect-time `claimed_epochs_check_and_set` windows against, so
+   verify and connect cannot disagree about expiry, while F-E1's strict
+   `H > h_close(E)` remains the tighter same-block boundary; (c) **no FFI
+   entry point in E3** — gate-last extends to the FFI seam: an exported
+   pre-auth verify would be an un-gated path C++ could mistake for full
+   verification, and the witness types cannot cross the C ABI un-minted, so
+   the entry point lands with C-1's dispatch wiring. Twelve KATs in
+   `tests/emission_verify_kat.rs` (honest-accept identity over the same
+   sourcing functions, F-E1 + claim-age boundaries, read-only dedup,
+   wrong-epoch/wrong-claimant polarity, entry-level work-claim polarity,
+   no-credit sentinel = the Q12 economic leg, economics ±1 / vout drift,
+   step-6 negatives).
 3a. **WS-2 dedup plumbing (§6).** The block-level `(P,E)` uniqueness pass in
    `handle_block_to_main_chain` (mirror of `:4882`, every `(P, E_i)` pair);
    connect-path `claimed_epochs_check_and_set` FFI wrapper as the single writer
@@ -746,8 +775,12 @@ item-1 status note in §3 for the two implementation findings (slash-log v2
 snapshot struct) **implemented 2026-07-08 on the same branch** — same PR
 by validation-surface bundling; see the item-2 status note for the
 persisted-`Σwork` finding (post-close `bad_intervals` growth + the
-close-only M1 operand make the stored denominator load-bearing). Items 3,
-3a, 4, 5 remain open in dependency order.
+close-only M1 operand make the stored denominator load-bearing). §3 item 3
+(the verify body, steps 1–6 + witness-typed assembly) **implemented
+2026-07-08 on the same branch** — see the item-3 status note for the three
+implementation pins (per-shard exactness; the tip-epoch claim-window
+operand shared with the connect writer; FFI entry point deferred to C-1
+with the dispatch wiring). Items 3a, 4, 5 remain open in dependency order.
 
 ### 7.1 Next action — PR-E3 implementation pre-flight (re-pin to current `dev`)
 
