@@ -205,7 +205,16 @@ With the trio, WS-1, and WS-2 all ratified (§7), everything below is
 implementation, in dependency order:
 
 1. **`held(P,E)` as-of-E sourcing — the WS-1 build item (§5, corrects §8.0's
-   "one build item").** M-2 closes under the **two-conjunct** rule (§5.4). Four
+   "one build item").** **IMPLEMENTED 2026-07-07 on
+   `feat/emission-ws1-held-sourcing`** — all four pieces (a)–(d) below, with
+   two implementation findings recorded there: the slash log gained a v2
+   `holdings_pre_kind` field (the as-of-height reconstruction *and* the
+   pop-revert both needed the pre-slash holdings kind; the v1
+   amount/emptiness revert heuristic mis-restored a slashed single-shard
+   compact bond to complete-tree), and the compact-requires-shards encode
+   invariant moved from the general bond writer to the join-time writer
+   (post-slash compact-and-empty is a legitimate record shape both slash
+   paths write). M-2 closes under the **two-conjunct** rule (§5.4). Four
    concrete pieces: **(a)** a single `as_of_E_served_work(frozen_ledger, P, E)`
    sourcing function called by **both** `epoch_close_compute` (denominator) and
    the verify body (numerator) — divergence unrepresentable, M-3 pushed one layer
@@ -703,6 +712,13 @@ straddle analysis re-run at source.
   **rejection**, the property, not byte round-trip, the mechanism);
   prune-against-finalized recorded as the rule-21 reopen that retires the
   journal (§6.5). **The round's design work is complete.**
+
+**Build progress:** §3 item 1 (the WS-1 sourcing correction, all four
+pieces including the three-consumer accessor cut and both KAT sides)
+**implemented 2026-07-07 on `feat/emission-ws1-held-sourcing`** — see the
+item-1 status note in §3 for the two implementation findings (slash-log v2
+`holdings_pre_kind`; encode-invariant relocation). Items 2, 3, 3a, 4, 5
+remain open in dependency order.
 
 ### 7.1 Next action — PR-E3 implementation pre-flight (re-pin to current `dev`)
 
