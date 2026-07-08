@@ -33,7 +33,7 @@ use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind};
 use shekyl_engine_state::pending_post_block::PendingBondPost;
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_tx_builder::{encode_final_tx, LeafEntry, WireEncodeInput};
-use shekyl_types::PCanonicalId;
+use shekyl_types::{BlockHeight, PCanonicalId};
 use shekyl_wire::{BondPost, BondPostKind as WireBondPostKind, Holdings, Input};
 
 // ---------------------------------------------------------------------------
@@ -314,7 +314,7 @@ pub(crate) fn sweep_funding_outputs(
     p_slot: u32,
     reserved: &std::collections::BTreeSet<u64>,
     required: u64,
-    reference_height: u64,
+    reference_height: BlockHeight,
 ) -> Result<FundingSelection, BondAssemblyError> {
     let mut eligible: Vec<&PFundingOutputRecord> = records
         .iter()
@@ -465,7 +465,7 @@ mod tests {
             // computation — the GF4b-6 sweep KATs override this for the
             // immature-exclusion case.
             spendable_height: shekyl_engine_state::transfer::eligible_height(
-                height,
+                BlockHeight::from_raw(height),
                 shekyl_types::Timelock::None,
             ),
         }
@@ -483,6 +483,7 @@ mod tests {
         required: u64,
         reference_height: u64,
     ) -> Result<FundingSelection, BondAssemblyError> {
+        let reference_height = BlockHeight::from_raw(reference_height);
         sweep_funding_outputs(
             &SpentRecordsDurablyPruned::for_test(),
             records,
@@ -600,7 +601,7 @@ mod tests {
         // Coinbase-shaped arrival: same height as the mature record, but the
         // +60 lock (via spendable_height) keeps it out until height 70.
         let mut coinbase_shaped = record(3, 10, 600);
-        coinbase_shaped.spendable_height = 10 + 60;
+        coinbase_shaped.spendable_height = BlockHeight::from_raw(10 + 60);
         let records = vec![record(1, 10, 600), coinbase_shaped];
         let selection = sweep(&records, 0, &Default::default(), 500, 25).expect("sweeps");
         let picked: Vec<u64> = selection.records.iter().map(|r| r.gindex).collect();
@@ -620,7 +621,7 @@ mod tests {
     fn sweep_leaves_no_spendable_eligible_remainder() {
         let reserved: std::collections::BTreeSet<u64> = [4u64].into_iter().collect();
         let mut immature = record(5, 90, 250);
-        immature.spendable_height = 150;
+        immature.spendable_height = BlockHeight::from_raw(150);
         let records = vec![
             record(1, 10, 300),
             record(2, 20, 400),
@@ -633,7 +634,11 @@ mod tests {
             selection.records.iter().map(|r| r.gindex).collect();
         let remainder: Vec<u64> = records
             .iter()
-            .filter(|r| r.p_slot == 0 && !reserved.contains(&r.gindex) && r.spendable_height <= 100)
+            .filter(|r| {
+                r.p_slot == 0
+                    && !reserved.contains(&r.gindex)
+                    && r.spendable_height <= BlockHeight::from_raw(100)
+            })
             .map(|r| r.gindex)
             .filter(|g| !swept.contains(g))
             .collect();

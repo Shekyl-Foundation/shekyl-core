@@ -18,6 +18,7 @@
 //! rather than remembered.
 
 use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
+use shekyl_types::BlockHeight;
 
 /// The backing-eligible subset of a persona's **spendable** funding records
 /// — possession is proof that every member's lineage is rung 1 or rung 2
@@ -84,13 +85,15 @@ impl BackingSet {
     /// subset of these false positives; the mature-but-late subset remains a
     /// benign, debug-only false positive, accepted as the cost of keeping
     /// the sweep-regression tripwire armed.
-    pub(crate) fn from_spendable(records: &[PFundingOutputRecord], last_sweep_height: u64) -> Self {
+    pub(crate) fn from_spendable(
+        records: &[PFundingOutputRecord],
+        last_sweep_height: BlockHeight,
+    ) -> Self {
         debug_assert!(
             !records.iter().any(|r| {
-                r.lineage == MintLineageOutput::ExternalTransfer
-                    && r.height.to_raw() <= last_sweep_height
+                r.lineage == MintLineageOutput::ExternalTransfer && r.height <= last_sweep_height
             }),
-            "rung-3 record at or below last_sweep_height ({last_sweep_height}) reached \
+            "rung-3 record at or below last_sweep_height ({last_sweep_height:?}) reached \
              BackingSet construction: a sweep bug OR a late-surfaced low-height output \
              (reorg / adversarial mine discovered late) — investigate, do not assume the sweep \
              (GF4b-3, ARCHIVAL_GF4B_BACKING_LINEAGE.md §3.4)"
@@ -145,7 +148,7 @@ mod tests {
             epoch: SettlementEpoch::from_raw(0),
             lineage,
             spendable_height: shekyl_engine_state::transfer::eligible_height(
-                height,
+                BlockHeight::from_raw(height),
                 shekyl_types::Timelock::None,
             ),
         }
@@ -156,7 +159,7 @@ mod tests {
     /// dropped — no assert, no error (GF-4b §3.4 filter-not-fail-closed).
     #[test]
     fn filters_to_backing_eligible_lineages() {
-        let last_sweep_height = 100;
+        let last_sweep_height = BlockHeight::from_raw(100);
         let records = vec![
             record(1, 90, 500, MintLineageOutput::BondPostChange),
             record(2, 95, 700, MintLineageOutput::EmissionReward),
@@ -178,7 +181,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "rung-3 record at or below last_sweep_height")]
     fn survivor_trips_the_debug_assert() {
-        let last_sweep_height = 100;
+        let last_sweep_height = BlockHeight::from_raw(100);
         let records = vec![
             record(1, 90, 500, MintLineageOutput::BondPostChange),
             // Survivor: rung 3 that a sweep should have consumed.
@@ -209,7 +212,7 @@ mod tests {
     /// `survivor_trips_the_debug_assert` above.)
     #[test]
     fn zero_pre_bond_output_survives_the_sweep() {
-        let reference_height = 1_000;
+        let reference_height = BlockHeight::from_raw(1_000);
 
         // Pre-sweep state: three raw funding outputs (rung 3) and one
         // change record from a prior post (rung 2). Amounts chosen so a
@@ -260,7 +263,7 @@ mod tests {
         // (rung 2) at the post's height; a later rung-3 tranche arrives
         // above last_sweep_height. The BackingSet contains exactly the
         // change record.
-        let last_sweep_height = 200; // The confirmed post's height.
+        let last_sweep_height = BlockHeight::from_raw(200); // The confirmed post's height.
         let post_bond = vec![
             record(20, 200, 750, MintLineageOutput::BondPostChange),
             // Legal between-sweeps tranche (height > last_sweep_height).

@@ -200,7 +200,7 @@ pub struct PFundingOutputRecord {
     /// tree, so no membership path exists), whether it arrived by ordinary
     /// fresh funding (+`SPENDABLE_AGE`) or an adversarial coinbase-to-`P`
     /// (+60 via the consensus-enforced `unlock_time` shape).
-    pub spendable_height: u64,
+    pub spendable_height: BlockHeight,
 }
 
 impl std::fmt::Debug for PFundingOutputRecord {
@@ -455,7 +455,7 @@ mod tests {
             epoch: SettlementEpoch::from_raw(2),
             lineage: MintLineageOutput::ExternalTransfer,
             spendable_height: crate::transfer::eligible_height(
-                height,
+                BlockHeight::from_raw(height),
                 shekyl_types::Timelock::None,
             ),
         }

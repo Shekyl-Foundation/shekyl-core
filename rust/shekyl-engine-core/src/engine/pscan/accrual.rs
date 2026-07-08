@@ -813,7 +813,7 @@ mod tests {
             epoch: epoch(0),
             lineage: MintLineageOutput::ExternalTransfer,
             spendable_height: shekyl_engine_state::transfer::eligible_height(
-                5,
+                BlockHeight::from_raw(5),
                 shekyl_types::Timelock::None,
             ),
         };

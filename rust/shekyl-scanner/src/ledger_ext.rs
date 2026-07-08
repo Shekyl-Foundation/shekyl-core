@@ -98,8 +98,13 @@ impl TransferDetailsExt for TransferDetails {
             // computation is the shared `transfer::eligible_height` — the
             // single definition of "in the tree yet," also stored by the
             // pscan funding path as `spendable_height` (GF4b-6,
-            // ARCHIVAL_GF4B_BACKING_LINEAGE.md §3.6).
-            eligible_height: eligible_height(block_height, output.additional_timelock()),
+            // ARCHIVAL_GF4B_BACKING_LINEAGE.md §3.6). This legacy field is
+            // `u64`-shaped, so the typed result converts at this edge.
+            eligible_height: eligible_height(
+                shekyl_types::BlockHeight::from_raw(block_height),
+                output.additional_timelock(),
+            )
+            .to_raw(),
             frozen: false,
             fcmp_precomputed_path: None,
             receive_attribution: ReceiveAttribution::default(),

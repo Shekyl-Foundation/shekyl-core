@@ -4352,6 +4352,27 @@ sustainability is unaffected by the recalibration.
   Target: V3.1, bundled with the next consensus_state-touching PR rather
   than as a standalone churn PR. *Reopen sooner if:* another transposition
   bug surfaces at this boundary before V3.1.
+
+- **Domain-newtype the residual raw fields on `PFundingOutputRecord` and
+  the WI-2 sweep amounts (spawned GF-4b audit sweep, 2026-07-08).** The
+  GF-4b PR typed its *new* surfaces (`spendable_height: BlockHeight`
+  end-to-end; `eligible_height` is `BlockHeight → BlockHeight`), but the
+  record's **pre-existing v4 fields** still carry raws that have landed
+  newtypes elsewhere: `p_slot: u32` (`stake_engine::PSlot` exists),
+  `tx_hash: [u8; 32]` (`shekyl_types::TxHash` exists; sibling
+  `PBondPostMatch` already carries typed `PCanonicalId`), and
+  `gindex: u64` (`shekyl_curve_tree::Gindex` exists). Adjacent to it, the
+  WI-2 sweep's `required: u64` / `FundingSelection::total: u64` are raw
+  amounts one seam away from typed `AtomicUnits` records (rule-20 amount
+  arithmetic; the checked-add is already explicit). All are wire-transparent
+  (`#[serde(transparent)]`/`#[repr(transparent)]`) so the postcard bytes are
+  unchanged; the pscan schema *snapshot* changes name-only, which pre-genesis
+  costs one `PSCAN_STATE_VERSION` bump. Deliberately **not** folded into the
+  GF-4b PR (rule 15: pre-existing fields are outside its stated scope).
+  Target: V3.1, bundled with the next pscan-schema-touching PR (piggyback
+  the bump). *Reopen sooner if:* a pscan-schema-touching PR lands first
+  (fold it in), or a slot/hash/gindex transposition bug surfaces at this
+  seam before V3.1.
   The Round 3 threat-model-exhaustion + wider-substrate wargame
   ([`PHASE_2B_STAKE_LIFECYCLE.md`](./design/PHASE_2B_STAKE_LIFECYCLE.md) §7.5,
   executed 2026-06-05) dispositioned every T/G item; seven carry **V3.1**

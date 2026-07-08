@@ -12,7 +12,7 @@ use curve25519_dalek::{EdwardsPoint, Scalar};
 
 use shekyl_crypto_pq::{handle::OutputHandle, kem::HybridCiphertext, key_image::KeyImage};
 use shekyl_curve_primitives::Commitment;
-use shekyl_types::{Timelock, TxHash};
+use shekyl_types::{BlockCount, BlockHeight, Timelock, TxHash};
 use shekyl_units::AtomicUnits;
 
 use crate::{
@@ -54,12 +54,19 @@ pub const SPENDABLE_AGE: u64 = shekyl_consensus::DEFAULT_LOCK_WINDOW as u64;
 /// `height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW` (`blockchain.cpp` block
 /// validation), and a regular tx's nonzero `unlock_time` is pool-rejected.
 /// That contingency is recorded here, once — not per call site. [`Timelock`]
-/// is block-height-only ([`Timelock::to_unlock_raw`] returns the block height
-/// for [`Timelock::Block`], `0` for [`Timelock::None`]; the CryptoNote
-/// timestamp form is not representable).
+/// is block-height-only ([`Timelock::Block`] wraps a [`BlockHeight`]; the
+/// CryptoNote timestamp form is not representable).
+///
+/// Typed in and out ([`BlockHeight`] → [`BlockHeight`], rule 18): the pscan
+/// funding path stores the result directly; the legacy `u64`-shaped
+/// [`TransferDetails::eligible_height`] field converts at its own edge.
 #[must_use]
-pub fn eligible_height(block_height: u64, additional_timelock: Timelock) -> u64 {
-    (block_height + SPENDABLE_AGE).max(additional_timelock.to_unlock_raw())
+pub fn eligible_height(block_height: BlockHeight, additional_timelock: Timelock) -> BlockHeight {
+    let maturity = block_height + BlockCount::from_raw(SPENDABLE_AGE);
+    match additional_timelock {
+        Timelock::None => maturity,
+        Timelock::Block(unlock) => maturity.max(unlock),
+    }
 }
 
 /// The F14 awaiting-confirmation lock state
@@ -419,12 +426,18 @@ impl std::fmt::Debug for TransferDetails {
 #[cfg(test)]
 mod eligible_height_tests {
     use super::*;
-    use shekyl_types::BlockHeight;
+
+    fn h(raw: u64) -> BlockHeight {
+        BlockHeight::from_raw(raw)
+    }
 
     /// Baseline: no additional timelock → `block + SPENDABLE_AGE`.
     #[test]
     fn baseline_is_spendable_age() {
-        assert_eq!(eligible_height(100, Timelock::None), 100 + SPENDABLE_AGE);
+        assert_eq!(
+            eligible_height(h(100), Timelock::None),
+            h(100 + SPENDABLE_AGE)
+        );
     }
 
     /// A coinbase-shaped block timelock (`unlock_time = height + 60`, the
@@ -434,8 +447,8 @@ mod eligible_height_tests {
     #[test]
     fn coinbase_shaped_timelock_floors() {
         assert_eq!(
-            eligible_height(100, Timelock::Block(BlockHeight::from_raw(160))),
-            160,
+            eligible_height(h(100), Timelock::Block(h(160))),
+            h(160),
             "block timelock (160) floors above block + SPENDABLE_AGE (110)"
         );
     }
@@ -444,8 +457,8 @@ mod eligible_height_tests {
     #[test]
     fn low_timelock_is_subsumed() {
         assert_eq!(
-            eligible_height(100, Timelock::Block(BlockHeight::from_raw(105))),
-            100 + SPENDABLE_AGE
+            eligible_height(h(100), Timelock::Block(h(105))),
+            h(100 + SPENDABLE_AGE)
         );
     }
 }

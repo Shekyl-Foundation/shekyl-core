@@ -1195,8 +1195,13 @@
                   {
                     "name": "spendable_height",
                     "ty": {
-                      "name": "u64",
-                      "ty": "U64"
+                      "name": "BlockHeight",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "u64",
+                          "ty": "U64"
+                        }
+                      }
                     }
                   }
                 ]

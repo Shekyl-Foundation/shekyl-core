@@ -252,7 +252,7 @@ pub(crate) struct FundingOutputMatch {
     /// here at the seam from the block height and the output's
     /// `additional_timelock` (GF4b-6, `ARCHIVAL_GF4B_BACKING_LINEAGE.md`
     /// §3.6). The GF-4b sweep filters on it.
-    pub(crate) spendable_height: u64,
+    pub(crate) spendable_height: BlockHeight,
 }
 
 impl std::fmt::Debug for FundingOutputMatch {
@@ -502,7 +502,7 @@ pub(crate) fn run_dual_extractor(
                 // transfer path (X5) — never a local formula. The coinbase
                 // +60 arrives through `additional_timelock` (its consensus-
                 // enforced `unlock_time` shape); no miner-tx arm exists.
-                let spendable_height = eligible_height(height.to_raw(), wo.additional_timelock());
+                let spendable_height = eligible_height(height, wo.additional_timelock());
 
                 funding_outputs.push(FundingOutputMatch {
                     p_slot: *slot,
@@ -910,10 +910,13 @@ mod tests {
         .expect("extract");
 
         let rec = res.funding_outputs.first().expect("one record");
-        assert_eq!(rec.spendable_height, 20_001 + SPENDABLE_AGE);
         assert_eq!(
             rec.spendable_height,
-            eligible_height(20_001, shekyl_types::Timelock::None),
+            BlockHeight::from_raw(20_001 + SPENDABLE_AGE)
+        );
+        assert_eq!(
+            rec.spendable_height,
+            eligible_height(BlockHeight::from_raw(20_001), shekyl_types::Timelock::None),
             "the seam stores literally the shared eligible_height result"
         );
     }
@@ -939,7 +942,8 @@ mod tests {
 
         let rec = res.funding_outputs.first().expect("one record");
         assert_eq!(
-            rec.spendable_height, 20_061,
+            rec.spendable_height,
+            BlockHeight::from_raw(20_061),
             "coinbase-shaped timelock floors above the +SPENDABLE_AGE baseline"
         );
     }
@@ -965,7 +969,7 @@ mod tests {
         let m = res.funding_outputs.first().expect("one record");
         let persisted = PFundingOutputRecord::from(m);
         assert_eq!(persisted.lineage, MintLineageOutput::BondPostChange);
-        assert_eq!(persisted.spendable_height, 20_061);
+        assert_eq!(persisted.spendable_height, BlockHeight::from_raw(20_061));
         let back = FundingOutputMatch::from(&persisted);
         assert_eq!(&back, m, "state→transform restores the exact match");
     }
