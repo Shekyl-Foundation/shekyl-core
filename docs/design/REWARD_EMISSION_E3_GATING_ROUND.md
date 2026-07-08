@@ -4,7 +4,8 @@
 ratified**; **WS-1 (Q10/M-2/Q7 two-conjunct held-sourcing) ratified** (§5);
 **WS-2 (Q9/F-E3 dedup atomicity) ratified** (§6: block-level `(P,E)` pass +
 journaled claimed-set revert, severity-upgraded — the prune straddle is a
-**double-mint**, journal row = pre-image delta `{inserted E, evicted members}`).
+**double-mint**, journal row = the full claimed-set pre-image, restoring the
+prune-evicted members atomically with the inserted `E`; §3a pin (a)).
 The leg's design is complete; the PR-E3 implementation pre-flight runs against
 current `dev` (§7.1, §8).
 **Process:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
@@ -324,9 +325,9 @@ implementation, in dependency order:
    `handle_block_to_main_chain` (mirror of `:4882`, every `(P, E_i)` pair);
    connect-path `claimed_epochs_check_and_set` FFI wrapper as the single writer
    (`Ok(false)` at connect = hard error); the claimed-set revert **journal** +
-   pop-path restore (slash-log idiom, §6.3) — **the journal row is the
-   pre-image delta `{inserted E, evicted set members}` as one unit** (an
-   insert-only journal leaves the §6.3 double-mint alive), covering
+   pop-path restore (slash-log idiom, §6.3) — **the journal row must restore
+   the prune-evicted set members atomically with reversing the inserted
+   `E`** (an insert-only journal leaves the §6.3 double-mint alive), covering
    `first_paying_emission_height`; the three §6.4 KATs (prune-straddle KAT
    asserts post-reorg re-claim **rejection**).
    **IMPLEMENTED (2026-07-08, `feat/emission-ws1-held-sourcing` — same PR),
@@ -337,8 +338,9 @@ implementation, in dependency order:
    `archival_emission_claim_log` table (`BE(height)||BE(seq)`), and the pop
    restore is `revert_archival_emission_claims_at_height`, wired into
    `pop_block` after the slash/close reverts. Two implementation pins beyond
-   the round text: (a) the journal row widened from the pre-image *delta* to
-   the **full pre-image** (`claimed_settlement_epochs` + `first_paying_emission_height`
+   the round text: (a) the journal row widened from the minimal delta
+   `{inserted E, evicted set members}` the round originally ratified to the
+   **full pre-image** (`claimed_settlement_epochs` + `first_paying_emission_height`
    before the mutation, ≤ 301 bytes at the 32-entry cap) — restoration is a
    byte-identical overwrite with no reconstruct step, which closes the same
    §6.3 double-mint with strictly less revert logic to audit; (b) *all* FFI
@@ -684,8 +686,12 @@ keystone:
    not the pruned dedup state.)
 
 **Disposition (RATIFIED): journaled revert, inheriting the slash-log
-precedent — and the journal row is pinned as the pre-image delta, one unit:
-`{inserted E, evicted set members}`.** A journal that reverses only the insert
+precedent — and the journal row is pinned as a pre-image sufficient to
+restore the prune-evicted set members atomically with reversing the inserted
+`E`.** (Ratified here as the minimal delta `{inserted E, evicted set
+members}`; the implementation widened it to the full claimed-set pre-image
+per §3a pin (a) — same double-mint closure, simpler byte-identical restore.)
+A journal that reverses only the insert
 still leaves the pruned-already-claimed `E_old` gone and the double-mint alive
 — the *point* of the journal is restoring what the prune removed. The slash
 path already carries full pre-image revert rows (`m_archival_slash_log`,
@@ -783,8 +789,9 @@ straddle analysis re-run at source.
   The prune-straddle is a **double-mint** (the floor keys on
   `current_settled_epoch`, non-monotonic under reorg — a pop resurrects a
   pruned already-claimed epoch into the window), so claimed-set
-  reorg-symmetry is via **journaled revert** with the row pinned as the
-  pre-image delta `{inserted E, evicted members}` as one unit (slash-log
+  reorg-symmetry is via **journaled revert** whose row restores the
+  prune-evicted members atomically with the inserted `E` — implemented as
+  the full claimed-set pre-image per §3a pin (a) (slash-log
   idiom); three armed KATs (§6.4, the prune-straddle KAT asserts re-claim
   **rejection**, the property, not byte round-trip, the mechanism);
   prune-against-finalized recorded as the rule-21 reopen that retires the

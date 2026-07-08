@@ -119,9 +119,10 @@
   `(P,E)` dedup (wire / block-level pass / verify-read + connect single
   writer), with the prune-straddle identified as a **double-mint** (window
   floor keys on reorg-non-monotonic `current_settled_epoch`) closed by a
-  journaled revert whose row is the pre-image delta `{inserted E, evicted
-  members}`; prune-against-finalized recorded as the rule-21 reopen that
-  retires the journal. PR-E3 build list unblocked (round §3).
+  journaled revert whose row restores the prune-evicted members atomically
+  with the inserted `E` (implemented as the full claimed-set pre-image, per
+  the round's §3a pin); prune-against-finalized recorded as the rule-21
+  reopen that retires the journal. PR-E3 build list unblocked (round §3).
 
 ### Changed
 
