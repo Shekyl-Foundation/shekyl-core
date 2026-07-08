@@ -7410,6 +7410,16 @@ one place to confirm each item's relationship to the wallet stack.
   over-eager drop of a not-yet-confirmed-spent output strands live funds), which is why it rides
   SP-6/SP-R0 rather than a naive "saw our own bond post" seam. **If WI-2 assemble must be live at
   genesis, this item is pulled into the V3.0 pre-genesis queue.** **Target:** V3.x (with SP-R0).
+  **UPDATE 2026-07-08 (GF-4b sweep amendment):** `select_funding_outputs` is now
+  `sweep_funding_outputs` with **sweep semantics** (consumes the persona's entire unreserved
+  spendable eligible set — `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.1), which *raises* this item's
+  severity: under sweep, one stale confirmed-spent record poisons **every** later bond post for
+  the persona, not just posts whose greedy prefix happened to reach it (§3.2 of the GF-4b doc).
+  The go-live gate is now **structural**, not review-borne: `sweep_funding_outputs` requires a
+  `SpentRecordsDurablyPruned` witness token constructible only by the SP-R0 pruning code
+  (test-only constructor aside), so wiring assemble live without durable pruning fails to
+  compile (GF4b-5). Landing this item = implementing the pruning per the SP-R0 discipline above
+  **and** minting the witness at that seam.
   See [`ARCHIVAL_BOND_WI2_ASSEMBLY.md`](design/ARCHIVAL_BOND_WI2_ASSEMBLY.md) §3.2/§3.5 and
   [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §12 (SP-R0).
 - **2d-1 SP-3 — borrow the block in the dual extractor instead of cloning per bonded scanner

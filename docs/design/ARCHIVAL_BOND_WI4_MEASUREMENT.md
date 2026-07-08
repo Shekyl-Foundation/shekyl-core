@@ -2121,9 +2121,12 @@ rule, in the strongest form (quantization to a protocol constant):**
    chosen before the user decided how much to fund.
 2. The funding side is hidden and change is hidden: user→`P` funding
    is ordinary FCMP++ (Pedersen commitments); the assemble path
-   (`bond_assembly.rs::select_funding_outputs`) greedily selects
-   `P`-local outputs until `sum ≥ bond_floor + fee` and returns excess
-   to `P` as an ordinary hidden output.
+   (`bond_assembly.rs::sweep_funding_outputs` — renamed from
+   `select_funding_outputs` and converted to full-set sweep semantics by
+   the GF-4b amendment, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.1; this
+   point's hiddenness argument is extent-independent) consumes `P`-local
+   spendable outputs and returns excess to `P` as ordinary hidden
+   outputs.
 3. No principal reach-across exists in code: the
    `InsufficientFunding` refusal arm names the rule — `P` bonds from
    `P`-local outputs only ("no reach-across to principal outputs;
