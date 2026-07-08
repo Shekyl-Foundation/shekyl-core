@@ -1456,6 +1456,21 @@ sustainability is unaffected by the recalibration.
   rows. Deferred to a dedicated schema round (not this PR's WS-1 scope); (a)'s live
   cost is bounded in practice pre-genesis (slashes are rare, the log is small).
 
+- **Emission-path micro-efficiency cluster — address with C-1 wiring / the schema
+  round (post-build tuning).** PR #269 re-review surfaced four bounded efficiency
+  items on the emission verify/connect paths, none a live consensus-hot path yet
+  (verify is unwired until C-1; connect/claim counts are small), so they are
+  deferred to the batch where the emission leg is wired rather than hand-optimized
+  now: (a) `shekyl_archival_emission_epoch_work` re-decodes the whole epoch gather
+  on every claimant call — once C-1 wires per-claimant verification this is
+  M-claimants × full re-gather, so batch the decode across a block's claims
+  (`archival_ffi.rs`); (b) `emission_vin_verify_claims` dedups shard ids with a
+  `Vec` + linear `contains` (O(k²), k = shards/claim) — a set/sort if k grows
+  (`emission_verify.rs`); (c) the same fn runs a full `as_of_e_served_work` pass then
+  a per-entry rescan (`emission_verify.rs`); (d) `apply_archival_emission_claim`
+  probes the journal seq from 0 on each append (O(seq)/block) — seek the last key
+  instead (`db_lmdb.cpp`). All CONFIRMED/PLAUSIBLE as efficiency (no wrong output).
+
 - **~~PR-E3 emission verify — reject `sigma_work_milli == 0` at the consumer (M1-gate
   belt).~~ SATISFIED by landed code (PR #269).** The M1 `K_COVER` reward gate reaches
   verify through the persisted `Σwork(E)` denominator: `shekyl_archival_emission_epoch_work`
