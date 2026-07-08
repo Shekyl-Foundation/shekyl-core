@@ -954,6 +954,11 @@ TEST(archival_substrate_lmdb, holds_shard_honors_at_height_across_slash_removal)
   // A shard never slashed reads from tip at any height.
   EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 9, 0));
   EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 9, slash_height + 1000));
+  // Max-height sentinel: nothing exists strictly above it, so the answer is
+  // the tip state — and the log-scan start key must not wrap to 0 and
+  // resurrect the slashed shard from the whole-log scan.
+  EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 7, std::numeric_limits<uint64_t>::max()));
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 9, std::numeric_limits<uint64_t>::max()));
   // A shard never held is not resurrected by someone else's log rows.
   EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 42, slash_height - 1));
 }

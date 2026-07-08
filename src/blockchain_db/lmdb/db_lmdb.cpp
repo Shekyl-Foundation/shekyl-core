@@ -4979,6 +4979,14 @@ bool BlockchainLMDB::archival_slash_removed_holding_after(const crypto::hash& p_
   // what the slash destroyed: a compact erase of exactly `shard_id`, or a
   // complete-tree demotion (pre-image held every shard). Either shape at a
   // height > at_height proves the bond still held `shard_id` at at_height.
+  //
+  // No height strictly above the maximum exists, so the answer at
+  // at_height == max is false by construction — and the early return keeps
+  // the scan start key `at_height + 1` from wrapping to 0 (which would
+  // range-scan the whole log and report a false positive).
+  if (at_height == std::numeric_limits<uint64_t>::max())
+    return false;
+
   const auto scan = [&](MDB_txn* txn) -> bool {
     MDB_cursor* cur = nullptr;
     const int open_rc = mdb_cursor_open(txn, m_archival_slash_log, &cur);
