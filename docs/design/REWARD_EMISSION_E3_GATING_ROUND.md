@@ -215,17 +215,33 @@ implementation, in dependency order:
    sourcing the shard set from `archival_serve_credit` (keyed
    `ArchivalServeCreditKey(P,shard,E)`), marshaled by value at the claimed `E`
    (keyed by `E` — point read, no reconstruction); **(c)** the **one
-   `at_height`-honoring accessor** (FOLLOWUPS P2B-7 Pin 4) fixing conjunct 2,
-   **with two consumers to satisfy, not one** — both currently ride the broken
-   tip read: `blockchain.cpp:4307` (serve-credit *acceptance*) **and**
+   `at_height`-honoring accessor** (FOLLOWUPS P2B-7 Pin 4) fixing conjunct 2.
+   **This is not a pure emission-leg change — the accessor is shared between
+   the reward side and the slash side, so fixing it silently changes slash
+   consensus too.** The consumer inventory is **three sites** (§8.1), all
+   riding tip descriptor reads today: `blockchain.cpp:4307` (serve-credit
+   *acceptance* — credit if `P` held-and-served at `h_fire`),
    `db_lmdb.cpp:5270` in `archival_challenge_failed_at_height` (slash
-   *eligibility* — a challenge counts as failed/slashable only if `P` held at
-   `h_fire`; the tip read under-slashes a held-then-dropped `P` and wrongfully
-   slashes an acquired-after-fire `P`). The corrected accessor must be validated
-   against **both** meanings (credit-admit and slash-eligibility), and is shared
+   *eligibility* — punish if `P` held-and-didn't-serve at `h_fire`; the tip
+   read under-slashes a held-then-dropped `P` and wrongfully slashes an
+   acquired-after-fire `P`), **and `db_lmdb.cpp:5241`** — a direct
+   `bond.holds_shard(shard_id)` tip read that early-outs slash eligibility
+   *before* `h_fire` is even derived (§8.1 finding: the tip-drop-escapes-slash
+   leak survives an accessor-only fix). Item 1(c)'s scope is therefore **"the
+   accessor + all three consumers + both KAT sides"**: the fix must be
+   validated against slash KATs ("P held at fire, didn't respond → slash,
+   regardless of tip holdings"), not just serve-credit acceptance. The
+   **coherence dividend** that makes this the right shape rather than a
+   burden: one as-of-fire read makes reward and slash consistent by
+   construction, foreclosing the asymmetry exploit the tip read admits under
+   mutable holdings (credited on as-of-fire while escaping slash on a
+   tip-drop, or the inverse) — but only if all sites move together. Shared
    with the V3.0 mutable-holdings read — co-designed in the bond-lifecycle
-   connect-path work, not a duplicate emission-only reader; **(d)** the **three armed KATs** (§5.6:
-   drop-after-serve, acceptance-gate, ledger reorg-symmetry). **Standing** stays
+   connect-path work, not a duplicate emission-only reader; **(d)** the
+   **armed KATs on both sides** (§5.6: drop-after-serve, acceptance-gate,
+   ledger reorg-symmetry — **plus the slash-side mirror of the acceptance-gate
+   KAT**: slashed when held-at-fire-and-silent despite a tip drop; not slashed
+   when acquired-after-fire despite tip holding). **Standing** stays
    as-is: `bad_intervals` + `join` → `market_member_at_epoch`
    (`consensus_state.rs:98`) is genuinely as-of-E.
 2. **M-2/Q7 as-of-E snapshot struct.** Marshaled by value, each field from the
@@ -666,7 +682,9 @@ straddle analysis re-run at source.
   as-of-fire-height acceptance (§5.4, the conjunction); one shared
   `as_of_E_served_work` sourcing function both sides; `held_shard_ids` out of
   the work-channel type; one `at_height` accessor with two consumers
-  (`:4307` acceptance + `:5270` slash-eligibility); reorg-symmetry inherited from
+  (`:4307` acceptance + `:5270` slash-eligibility — **post-closure pin: the
+  §8.1 pre-flight found a third, `db_lmdb.cpp:5241`, expanding item 1(c)'s
+  inventory**); reorg-symmetry inherited from
   M1 O-3 with the no-refcount↔dedup coupling armed (§5.7); three armed KATs
   (§5.6, reorg KAT pins the composition).** The supply-conservation keystone,
   the one obligation with no backstop under it (§5.5). Corrects the Round-2
@@ -715,6 +733,7 @@ commit — all **confirmations**, no discoveries, plus one path correction:
 | 1(b) deletion target | `held_shard_ids` filter | **Present** at `consensus_state.rs:386–389` (`.held_shard_ids.contains(&shard.shard_id)` inside the `credit_pairs` loop at `:381`) — the WS-1 build removes the field from the work-channel input type |
 | 1(c) consumer 1 | serve-credit acceptance gate | `blockchain.cpp:4307` — `archival_bond_holds_shard(p, shard, h_fire)`, `h_fire` passed |
 | 1(c) consumer 2 | slash eligibility | `db_lmdb.cpp:5270` — forwards `h_fire` to the same accessor |
+| 1(c) consumer 3 (§8.1 finding) | slash-eligibility early-out | `db_lmdb.cpp:5241` — **direct** `bond.holds_shard` tip read before `h_fire` derivation; the tip-drop-escapes-slash leak an accessor-only fix misses |
 | 1(c) defect site | tip accessor | `db_lmdb.cpp:4975–4976` — parameter literally `uint64_t /*at_height*/` (ignored) |
 | 1(d)/§5.7 coupling | duplicate-bit guard | `blockchain.cpp:4247` — `has_archival_serve_credit_bit` reject |
 | 3a block-pass idiom | serve-credit cross-tx pass | `blockchain.cpp:4880–4886` — `block_serve_credits` set over `txs`, the mirror template |
@@ -724,11 +743,71 @@ commit — all **confirmations**, no discoveries, plus one path correction:
 | 1(d)/§5.6 KAT 3 | bit set/remove symmetry | `blockchain_db.cpp:224` (connect set) / `:586` (disconnect remove) |
 
 **Build order** is §3's dependency order: item 1 (WS-1 sourcing: accessor +
-`as_of_E_served_work` + field removal + 3 KATs) → item 2 (snapshot struct) →
-items 3/3a (verify body + dedup plumbing + journal + 3 KATs), with item 4
-(C-1 activating cut) and item 5 (E4/E5 deletions) as separate PRs per their
-own gates. Test gates per `45`/`50`: `cargo fmt --check`, `clippy -D
-warnings`, workspace tests, plus the six armed KATs (§5.6 + §6.4) and the
-Q11 balance-exclusion KAT (§2.2). Implementation proceeds on fresh
+`as_of_E_served_work` + field removal + KATs both sides) → item 2 (snapshot
+struct) → items 3/3a (verify body + dedup plumbing + journal + 3 KATs), with
+item 4 (C-1 activating cut) and item 5 (E4/E5 deletions) as separate PRs per
+their own gates. Test gates per `45`/`50`: `cargo fmt --check`, `clippy -D
+warnings`, workspace tests, plus the armed KATs (§5.6 both sides + §6.4) and
+the Q11 balance-exclusion KAT (§2.2). Implementation proceeds on fresh
 short-lived branches off `dev` per `06-branching.mdc`; this round branch
 carries docs only.
+
+### 8.1 The `h_fire` symmetry check — CONFIRMED, with one new consumer found
+
+The item-1 gating source-check ("do `:4307` and `:5270` derive the same
+`h_fire` for the same `(P,s,E)`?") was run at `90e790c9c` ahead of the build,
+because a divergence would predate the accessor fix and need its own
+disposition.
+
+**Symmetry CONFIRMS.** Both sides derive `h_fire` identically and
+deterministically, with no tx-supplied component: `h_open`/`h_close` from
+`settlement_epoch`, `h_seal = shekyl_archival_challenge_seal_height(h_open)`,
+`seal_hash = get_block_hash_from_height(h_seal)` from the chain, then the same
+`shekyl_archival_challenge_fire_height(h_open, h_close, seal_hash, p_id,
+shard_id, settlement_epoch)` FFI call (`blockchain.cpp:4278–4300`;
+`db_lmdb.cpp:5250–5266`). The response tx carries no fire height — nothing
+attacker-influenceable on the reward side; a reorg replacing the seal block
+changes both sides identically. One cosmetic guard asymmetry to align in
+item 1: the slash side additionally rejects `h_fire > h_close`
+(`db_lmdb.cpp:5267`) where acceptance checks only `h_fire == 0`
+(`blockchain.cpp:4301`) — harmless if the derivation guarantees range, but the
+two sites should carry byte-identical guards.
+
+**Finding — a third tip-read consumer at `db_lmdb.cpp:5241`.**
+`archival_challenge_failed_at_height` early-outs on a **direct**
+`bond.holds_shard(shard_id)` tip read *before* deriving `h_fire`. Today it
+doubles as a re-slash guard (slash-apply *removes* the shard from
+`held_shard_ids`; the revert at `:5513` pushes it back), but per-epoch
+double-slash is already blocked by `has_archival_slash_applied` at `:5239` —
+so under mutable holdings the `:5241` read is a pure eligibility leak: `P`
+held at fire, stayed silent, drops the shard before the slash sweep →
+`:5241` returns false → **escapes slash even after `:5270` is fixed.** The
+accessor-only fix does not close the asymmetry exploit; `:5241` must be
+dispositioned (delete as redundant, or convert to the as-of-fire read) inside
+item 1, and the disposition interacts with the slash-apply-mutates-holdings
+coupling: post-slash, tip `holds_shard` is false *by construction*, so any
+surviving tip read in an eligibility path conflates "voluntarily dropped"
+with "already slashed." Item 1(c)'s consumer inventory is updated to three
+sites (§3).
+
+### 8.2 Forward notes (recorded, non-blocking)
+
+- **The 720-finality reconciliation (extends the §6.5 reopen).**
+  `ARCHIVAL_REORG_DEPTH_BLOCKS` = 720 is already a *de-facto* finality
+  assumption the wallet trusts (pscan ceiling, bond assembly, segment cache)
+  while consensus enforces no pop bound — that wallet/consensus gap exists
+  today, independent of emission. When a finality boundary lands (the §6.5
+  trigger), setting it to 720 closes **both at once**: it makes
+  prune-against-finalized available (retiring the claimed-set journal) *and*
+  retroactively converts the wallet's 720 heuristic into a consensus-enforced
+  invariant. Whoever lands finality reconciles two things, not one.
+- **Shared-surface ledger for the §3 build.** This pre-flight came back
+  all-confirmations — credible, since each operand was verified at its
+  production site as it landed — but it checked operands *individually*, and
+  the residual risk in a multi-item build is the seams. Items 1, 2, and 3a
+  all touch the **connect path**; items 2 and 3a both touch the **bond-record
+  struct** (`src/blockchain_db/shekyl_types.h:613`); items 1 and 2 share the
+  **FFI snapshot**. As the items land, those three surfaces go into one
+  shared-surface ledger (the parallel-tracks discipline): a collision, if
+  there is one, shows up at the seam between items, which an operand
+  pre-flight structurally cannot see.
