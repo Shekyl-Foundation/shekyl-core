@@ -12,7 +12,7 @@ use curve25519_dalek::{EdwardsPoint, Scalar};
 
 use shekyl_crypto_pq::{handle::OutputHandle, kem::HybridCiphertext, key_image::KeyImage};
 use shekyl_curve_primitives::Commitment;
-use shekyl_types::TxHash;
+use shekyl_types::{Timelock, TxHash};
 use shekyl_units::AtomicUnits;
 
 use crate::{
@@ -22,8 +22,45 @@ use crate::{
 };
 
 /// Outputs must mature this many blocks before the daemon inserts them into
-/// the curve tree. Mirrors `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE` (C++).
-pub const SPENDABLE_AGE: u64 = 10;
+/// the curve tree.
+///
+/// Defined as [`shekyl_consensus::DEFAULT_LOCK_WINDOW`] — the same constant
+/// `shekyl-curve-tree`'s `recon::maturity_height` uses for tree insertion —
+/// rather than an independent literal, so the wallet's eligibility math and
+/// the daemon's deferred insertion cannot drift (GF4b-6 single-source
+/// sharpening, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.6). Mirrors
+/// `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE` (C++).
+pub const SPENDABLE_AGE: u64 = shekyl_consensus::DEFAULT_LOCK_WINDOW as u64;
+
+/// The height at which an output's leaf is present in the curve tree and the
+/// output becomes spendable — the **single** wallet-side definition of "in
+/// the tree yet" (X5/CT-5c).
+///
+/// `max(block_height + SPENDABLE_AGE, timelock_block)`: the daemon inserts an
+/// output at the *maximum* of its spendable-age maturity and its additional
+/// timelock. Both wallet consumers resolve through this one function so they
+/// cannot drift from each other or from tree insertion
+/// (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.6):
+///
+/// - the transfer path (`TransferDetails::eligible_height`, set at the
+///   `ledger_ext` construction seam), and
+/// - the pscan funding path (`PFundingOutputRecord::spendable_height`, set at
+///   the dual-extract seam; the GF-4b sweep filters on it).
+///
+/// **The coinbase +60 arrives through the timelock channel, contingently.**
+/// Tree insertion computes the coinbase window from `is_miner`
+/// (`recon::maturity_height`); this function sees only `unlock_time`. The two
+/// agree via two consensus invariants: a coinbase's `unlock_time` is exactly
+/// `height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW` (`blockchain.cpp` block
+/// validation), and a regular tx's nonzero `unlock_time` is pool-rejected.
+/// That contingency is recorded here, once — not per call site. [`Timelock`]
+/// is block-height-only ([`Timelock::to_unlock_raw`] returns the block height
+/// for [`Timelock::Block`], `0` for [`Timelock::None`]; the CryptoNote
+/// timestamp form is not representable).
+#[must_use]
+pub fn eligible_height(block_height: u64, additional_timelock: Timelock) -> u64 {
+    (block_height + SPENDABLE_AGE).max(additional_timelock.to_unlock_raw())
+}
 
 /// The F14 awaiting-confirmation lock state
 /// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.6).
@@ -376,6 +413,40 @@ impl std::fmt::Debug for TransferDetails {
             .field("eligible_height", &self.eligible_height)
             .field("frozen", &self.frozen)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod eligible_height_tests {
+    use super::*;
+    use shekyl_types::BlockHeight;
+
+    /// Baseline: no additional timelock → `block + SPENDABLE_AGE`.
+    #[test]
+    fn baseline_is_spendable_age() {
+        assert_eq!(eligible_height(100, Timelock::None), 100 + SPENDABLE_AGE);
+    }
+
+    /// A coinbase-shaped block timelock (`unlock_time = height + 60`, the
+    /// consensus-enforced shape) floors the result above the flat
+    /// `+SPENDABLE_AGE` — the channel through which coinbase maturity
+    /// reaches both consumers of this function (GF4b-6 §3.6).
+    #[test]
+    fn coinbase_shaped_timelock_floors() {
+        assert_eq!(
+            eligible_height(100, Timelock::Block(BlockHeight::from_raw(160))),
+            160,
+            "block timelock (160) floors above block + SPENDABLE_AGE (110)"
+        );
+    }
+
+    /// A timelock at or below the spendable-age maturity is subsumed by it.
+    #[test]
+    fn low_timelock_is_subsumed() {
+        assert_eq!(
+            eligible_height(100, Timelock::Block(BlockHeight::from_raw(105))),
+            100 + SPENDABLE_AGE
+        );
     }
 }
 

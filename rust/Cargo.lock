@@ -4051,6 +4051,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "shekyl-address",
+ "shekyl-consensus",
  "shekyl-crypto-pq",
  "shekyl-curve-primitives",
  "shekyl-scanner",
