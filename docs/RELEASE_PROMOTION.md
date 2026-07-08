@@ -97,6 +97,10 @@ then tag** (avoids the "tag not on the default branch" trap that
          frozen SHA and confirm **all four platforms** (Linux/Windows/FreeBSD/macOS)
          build green *before* the cut/promote/tag:
          `gh workflow run gitian.yml --ref <dev-or-release-branch> -f tag=<frozen-SHA>`.
+         The `tag` value **must be a commit SHA** (or a slash-free tag): gitian-builder's
+         `gbuild sanitize` rejects any ref containing `/`, so passing a branch
+         name like `fix/…` aborts every platform at ref-parse with `unsanitary
+         string` before the build even starts. A frozen SHA is hex, so it passes.
          Gitian builds the checked-out ref, not a tag object, so this runs with
          **no tag pushed** — it catches release-only build breakage that the
          normal PR CI never exercises (the depends cross-build and the container's
