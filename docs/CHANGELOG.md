@@ -4,6 +4,44 @@
 
 ### Added
 
+- **wallet: GF-4b backing-lineage pre-join wiring — sweep, lineage ladder,
+  `BackingSet`; the `REWARD_EMISSION_VIN_PLAN.md` §8.0.3 C-1 activation
+  precondition is satisfied**
+  (`ARCHIVAL_GF4B_BACKING_LINEAGE.md`, design + review round GF4b-1…6):
+  - *Shared maturity math.* `eligible_height` extracted to
+    `shekyl_engine_state::transfer` — the single wallet-side definition of
+    "leaf in the curve tree yet" — with `SPENDABLE_AGE` unified onto
+    `shekyl_consensus::DEFAULT_LOCK_WINDOW` (X5's transfer path and the
+    scan seam now call one function; two-constants-both-10 drift seam
+    closed).
+  - *Lineage + spendability at the scan seam (schema v5).*
+    `PFundingOutputRecord` gains `MintLineageOutput` (`EmissionReward` /
+    `BondPostChange` / `ExternalTransfer`; **no miner rung** — `P` is
+    shard-serving only, coinbase-to-`P` classifies rung 3) and
+    `spendable_height` (the shared `eligible_height` result).
+    `PSCAN_STATE_VERSION` 4 → 5; snapshot regenerated; lineage and
+    spendable-height KATs at the dual-extract seam.
+  - *Sweep conversion.* `select_funding_outputs` →
+    `sweep_funding_outputs`: consumes the persona's **entire** unreserved
+    **spendable** eligible set (no early break; a subset is
+    inexpressible) — GF-4b's structural-emptiness claim rests on it.
+    Spendability filter per GF4b-6 (an immature record — fresh funding or
+    adversarial coinbase-to-`P` — survives to the next sweep instead of
+    denying the bond). Gated on the new `SpentRecordsDurablyPruned`
+    witness token (GF4b-5): zero production constructors until SP-R0
+    durable pruning lands, so premature go-live fails to compile.
+  - *`BackingSet`* (`engine/backing_set.rs`): constructor-gated
+    backing-eligibility type — possession proves every member is rung
+    1/2; filter-not-fail-closed on legal between-sweeps tranches; GF4b-3
+    survivor `debug_assert!` armed (doc names its late-surfaced-output
+    false-positive mode). Zero-pre-bond-output test landed.
+  - *Docs.* WI-2 §3.2 extent amendment + WI-4 measurement citation
+    updated; lifecycle GF-4b sequencing corrected to wired state;
+    FOLLOWUPS: "2d-1 WI-2 durable removal" annotated with sweep severity
+    + structural gate, and the GF4b-2 genesis gate added to the V3.0
+    pre-genesis queue (`stake_in` single-structured-output funding;
+    common-case sweep consumes exactly one input).
+
 - **archival: WS-2 emission-claim dedup plumbing — connect-side writer +
   journaled revert** (`REWARD_EMISSION_E3_GATING_ROUND.md` §3 item 3a /
   §6.2–§6.4). The write side of the three-layer dedup, landing beneath the

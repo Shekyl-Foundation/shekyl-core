@@ -1059,6 +1059,21 @@ is unblocked — its wire freeze is (A).**
   §3 GF-4b) **and wired in the wallet's pre-join path** (the `BackingSet` type + zero-pre-bond-output
   test). Guards against the mechanism going live with its privacy mitigation still on paper.
 
+  **UPDATE 2026-07-08 — precondition SATISFIED** (design + landing:
+  [`ARCHIVAL_GF4B_BACKING_LINEAGE.md`](ARCHIVAL_GF4B_BACKING_LINEAGE.md)). Ladder specified
+  and classified at the scan seam (`MintLineageOutput` on `PFundingOutputRecord`, schema v5;
+  no miner rung exists — GF4b-1 owner ruling); sweep specified **and implemented**
+  (`sweep_funding_outputs`, spendability-filtered per GF4b-6, go-live structurally gated on
+  the `SpentRecordsDurablyPruned` witness per GF4b-5); pre-join wiring **landed**
+  (`engine/backing_set.rs` `BackingSet` + the zero-pre-bond-output test, GF4b-3 survivor
+  tripwire armed). The remaining **C-1-scope residue is enumerated with named checkable
+  criteria** at the GF-4b doc §5 (arity-1 selector exclusively through `BackingSet`;
+  `EmissionReward` scan arm fail-toward-forbidden per GF4b-4; emission-path integration
+  test; witness-token zero-production-constructors confirmation) — the rule-21 shape this
+  guard requires. Launch-window note: GF4b-2 (funding-input-count leak) does **not** gate
+  C-1 merge but **does** gate genesis readiness on `stake_in` single-structured-output
+  funding (FOLLOWUPS V3.0 pre-genesis queue, 2026-07-08).
+
 1. **ML-DSA vin auth shape (F-E4) — RESOLVED 2026-07-01; PR-E2 wire freeze unblocked.**
    Binding message pinned in R1.A (cSHAKE family). Auth *count* = **two** (Q1 ratified,
    §8.0.1: rotation-forced, Auth-B + Auth-P). Auth *algorithm* = **hybrid** (Ed25519 +
