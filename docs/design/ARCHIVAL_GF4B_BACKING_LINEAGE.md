@@ -472,22 +472,49 @@ windows above are the entire spendability surface.) Either locus yields
 the same denial; deferred insertion just moves it earlier.
 
 **Decision.** The sweep's eligible set is defined as the full unreserved
-**spendable** eligible set (§3.1 Adds). Mechanism, mirroring the
-already-landed transfer-path solution rather than inventing one:
+**spendable** eligible set (§3.1 Adds). Mechanism: **share the
+already-landed transfer-path computation — one function, not a parallel
+formula** (review-round sharpening; two mirrors of tree-insertion would
+be the derive-don't-cache anti-pattern, and the sweep's copy drifting is
+silent because the transfer path's tests would not catch it):
 
 - `TransferDetails` already carries `eligible_height =
   max(height + SPENDABLE_AGE, timelock_block)` (`ledger_ext.rs` X5/CT-5c),
   documented as *agreeing with the tree-insertion height by construction*.
-  `PFundingOutputRecord` gains the same concept: a **`spendable_height`**
-  field, computed at the scan seam.
+  The X5 expression is **extracted into a shared
+  `pub fn eligible_height(block_height, additional_timelock)`** whose home
+  is `shekyl_engine_state::transfer`, beside `SPENDABLE_AGE` — the deepest
+  crate both consumers already depend on directly (`shekyl-scanner` and
+  `shekyl-engine-core` each dep `shekyl-engine-state`; `Timelock` is
+  `shekyl-types`, which it also deps). X5's `ledger_ext.rs` call site
+  converts to call it (mechanical, exact-expression extraction), and
+  `PFundingOutputRecord`'s **`spendable_height`** field stores *literally*
+  the same function's result. The sweep-filter's correctness thereby
+  reduces transitively to the guarantee the transfer path already tests
+  (X5 == tree-insertion): if `maturity_height` ever changes, X5 breaks the
+  transfer path loudly and the sweep inherits the fix — one definition of
+  "in the tree," caught in one place.
+- **The constant unifies too (the residual drift seam under the shared
+  formula, closed).** `SPENDABLE_AGE` is today an independent literal
+  `10` in `shekyl-engine-state`, while tree insertion
+  (`recon.rs::maturity_height`) uses `shekyl_consensus::DEFAULT_LOCK_WINDOW`
+  — two constants that happen to agree. `shekyl-engine-state` gains the
+  `shekyl-consensus` dep (featherweight: `thiserror` + `serde` only, no
+  reverse dep, no cycle — rule-17 verified at source) and `SPENDABLE_AGE`
+  is redefined as `DEFAULT_LOCK_WINDOW as u64`, so the regular-output
+  insertion age has exactly one definition. The coinbase +60 remains
+  *contingent* on two consensus invariants — coinbase
+  `unlock_time == height + 60` exactly (`blockchain.cpp:1534`) and regular
+  `unlock_time == 0` (pool-rejected otherwise) — which is inherent to the
+  timelock channel; the contingency is recorded once, in the shared
+  function's doc-comment, not copied per call site.
 - **Computation site: `run_dual_extractor`,** which already holds both
   inputs: the block height, and the recovered output's
   `additional_timelock()` (the scanner captures `tx.prefix.unlock_time`,
   which for a coinbase *is* the +60 lock — consensus-enforced shape — so
   **no miner-tx-hash comparison returns**; the deleted lineage arm stays
   deleted, and coinbase maturity arrives through the timelock channel).
-  `spendable_height = max(height + DEFAULT_LOCK_WINDOW,
-  timelock_block_height)`, same formula as X5.
+  The seam calls the shared `eligible_height`, never a local formula.
 - **Filter site: `sweep_funding_outputs`,** which takes the reference
   height the assembly anchors at and excludes records with
   `spendable_height > reference_height`. The exclusion is *deferral*, not
@@ -505,14 +532,14 @@ already-landed transfer-path solution rather than inventing one:
   *and spendable* survives," which is the strongest claim a consensus-
   valid transaction can deliver.
 
-**Reversion clause (rule 21).** The `spendable_height` formula reopens
+**Reversion clause (rule 21).** The `spendable_height` mechanism reopens
 **iff** the deferred-insertion maturity parameters change (a consensus
 change to `COINBASE_LOCK_WINDOW`/`DEFAULT_LOCK_WINDOW` or the insertion
-rule itself); re-evaluation shape: the consensus PR amends the X5
-`eligible_height` computation and this field's computation in the same
-pass (they must stay in lockstep — a divergence recreates the unprovable-
-spend bug X5 exists to prevent). Not reopenable on wallet-convenience
-grounds.
+rule itself); re-evaluation shape: the consensus PR amends the shared
+`eligible_height` function — there is exactly one computation to amend,
+by construction (the lockstep is structural, not discipline; a divergence
+would recreate the unprovable-spend bug X5 exists to prevent). Not
+reopenable on wallet-convenience grounds.
 
 ## 4. Test plan (gates)
 
@@ -526,7 +553,9 @@ grounds.
    `FundingOutputMatch ↔ PFundingOutputRecord` round-trip; a
    timelocked (coinbase-shaped, `unlock_time = height + 60`) recovery
    yields `spendable_height = height + 60` while a plain transfer yields
-   `height + DEFAULT_LOCK_WINDOW` (§3.6 formula, lockstep with X5).
+   `height + SPENDABLE_AGE` (both values produced by the *shared*
+   `eligible_height` function, §3.6 — the KAT pins the seam calls it, not
+   a local formula).
 2. **Sweep KATs** (`bond_assembly.rs`): full-set consumption (the
    multi-record case greedy would have truncated); reserved exclusion
    retained; slot scoping retained; `InsufficientFunding` ramp refusal
@@ -576,7 +605,7 @@ dispositioned in place:
 | GF4b-3 — filter-not-fail-closed masks sweep regressions | correctness / silent-failure | **Accepted**: survivor check armed (§3.4) — `debug_assert!` that no rung-3 with `height ≤ last_sweep_height` reaches `BackingSet` construction; tranche case untouched |
 | GF4b-4 — reserved `EmissionReward` eligible before its classifier exists | privacy / firewall | **Accepted**: fail-toward-forbidden bound to the C-1 arm as a checkable acceptance criterion (§5 item 2) |
 | GF4b-5 — go-live gate was review-discipline against poison-severity | structural preference | **Accepted**: `SpentRecordsDurablyPruned` witness token, sole production constructor reserved to SP-R0 (§3.2); §5 item 4 becomes compiler-enforced |
-| GF4b-6 — sweep totality collides with spendability; adversary-influenceable funding set | correctness + cost-bounded griefing | **Accepted, and strengthened at source** (§3.6): the substrate check found the bug fires with *zero* adversary (regular outputs carry the +10 `DEFAULT_LOCK_WINDOW` under deferred tree insertion, so a fresh funding transfer is immature too), and the failure locus is client-side (the immature leaf is absent from the curve tree — no membership path — before any daemon rejection). Fix: `PFundingOutputRecord` gains `spendable_height` (X5 `eligible_height` formula, computed at the scan seam via the timelock channel — no miner-hash arm returns), and the sweep's eligible set is the *spendable* eligible set. KAT added (§4 item 2). Two minor notes absorbed: the GF4b-3 survivor assert's doc-comment names its adversarial/reorg false-positive mode (§3.4), and the witness gate carries a chokepoint-monopoly grep check (§3.2, §4 item 2) |
+| GF4b-6 — sweep totality collides with spendability; adversary-influenceable funding set | correctness + cost-bounded griefing | **Accepted, and strengthened at source** (§3.6): the substrate check found the bug fires with *zero* adversary (regular outputs carry the +10 `DEFAULT_LOCK_WINDOW` under deferred tree insertion, so a fresh funding transfer is immature too), and the failure locus is client-side (the immature leaf is absent from the curve tree — no membership path — before any daemon rejection). Fix: `PFundingOutputRecord` gains `spendable_height`, stored at the scan seam as the result of the **shared** X5 `eligible_height` computation — extracted to `shekyl_engine_state::transfer` and called by both the transfer path and the seam, never re-implemented (single-source sharpening, this round); `SPENDABLE_AGE` is unified onto `shekyl_consensus::DEFAULT_LOCK_WINDOW` to close the two-constants-both-10 drift seam. The sweep's eligible set is the *spendable* eligible set. KATs added (§4 items 1–2). Two minor notes absorbed: the GF4b-3 survivor assert's doc-comment names its adversarial/reorg false-positive mode (§3.4), and the witness gate carries a chokepoint-monopoly grep check (§3.2, §4 item 2) |
 
 Hygiene: the WI-2 §3.2 amendment carried a design-doc fossil-sweep — the
 one live dependent found is `ARCHIVAL_BOND_WI4_MEASUREMENT.md`'s
