@@ -592,7 +592,7 @@ path already carries full pre-image revert rows (`m_archival_slash_log`,
 the emission journal rides the same idiom, keyed by height, restored exactly on
 disconnect. One reorg mechanism, many tables — the same O-3 inheritance §5.5-3
 uses for the serve-credit bits. (`first_paying_emission_height`, set-once per
-`shekyl_types.h:615–619`, rides the same journal row: unset on pop iff this
+`shekyl_types.h:614–619`, rides the same journal row: unset on pop iff this
 emission was the setter.)
 
 ### 6.4 Armed KATs
@@ -699,4 +699,36 @@ its production site** — is precisely what turned the last two "closed" premise
 pre-flight re-verifies the §3 file:line anchors (`consensus_state.rs:386–389`,
 `:4307`, `:5270`, `:4882`, `blockchain_db.cpp:224`/`:586`,
 `claimed_epochs.rs:99`, `shekyl_types.h:613`, `archival_serve_credit`) at the
-branch head before the build lands.
+branch head before the build lands. **Executed in §8.**
+
+---
+
+## 8. PR-E3 implementation pre-flight — anchors confirmed at `dev` `90e790c9c`
+
+Run 2026-07-07, after round closure. `origin/dev` fetched and confirmed
+**unmoved at `90e790c9c`** (the head the WS-2 operands were already
+re-verified against). Every §3 operand read at its production site at that
+commit — all **confirmations**, no discoveries, plus one path correction:
+
+| §3 item | Operand | At `90e790c9c` |
+|---------|---------|----------------|
+| 1(b) deletion target | `held_shard_ids` filter | **Present** at `consensus_state.rs:386–389` (`.held_shard_ids.contains(&shard.shard_id)` inside the `credit_pairs` loop at `:381`) — the WS-1 build removes the field from the work-channel input type |
+| 1(c) consumer 1 | serve-credit acceptance gate | `blockchain.cpp:4307` — `archival_bond_holds_shard(p, shard, h_fire)`, `h_fire` passed |
+| 1(c) consumer 2 | slash eligibility | `db_lmdb.cpp:5270` — forwards `h_fire` to the same accessor |
+| 1(c) defect site | tip accessor | `db_lmdb.cpp:4975–4976` — parameter literally `uint64_t /*at_height*/` (ignored) |
+| 1(d)/§5.7 coupling | duplicate-bit guard | `blockchain.cpp:4247` — `has_archival_serve_credit_bit` reject |
+| 3a block-pass idiom | serve-credit cross-tx pass | `blockchain.cpp:4880–4886` — `block_serve_credits` set over `txs`, the mirror template |
+| 3a single writer | `check_and_set` | `claimed_epochs.rs:99` — signature `(set, epoch, current_settled_epoch)`; prune-on-insert at `:114–116` (`set.retain(|&e| e >= window_floor)`) |
+| 3a journal substrate | claimed set + set-once height | **`src/blockchain_db/shekyl_types.h`** `:613` / `:619` — *path correction: the file is `src/blockchain_db/`, not `src/cryptonote_basic/`; line anchors unchanged* |
+| 3a revert slot | pop-path revert order | `blockchain_db.cpp:478–480` — `revert_archival_slashes_at_height` → `revert_archival_epoch_close_at_height` → `remove_block()`; the emission-claim journal revert slots into this per-height sequence |
+| 1(d)/§5.6 KAT 3 | bit set/remove symmetry | `blockchain_db.cpp:224` (connect set) / `:586` (disconnect remove) |
+
+**Build order** is §3's dependency order: item 1 (WS-1 sourcing: accessor +
+`as_of_E_served_work` + field removal + 3 KATs) → item 2 (snapshot struct) →
+items 3/3a (verify body + dedup plumbing + journal + 3 KATs), with item 4
+(C-1 activating cut) and item 5 (E4/E5 deletions) as separate PRs per their
+own gates. Test gates per `45`/`50`: `cargo fmt --check`, `clippy -D
+warnings`, workspace tests, plus the six armed KATs (§5.6 + §6.4) and the
+Q11 balance-exclusion KAT (§2.2). Implementation proceeds on fresh
+short-lived branches off `dev` per `06-branching.mdc`; this round branch
+carries docs only.
