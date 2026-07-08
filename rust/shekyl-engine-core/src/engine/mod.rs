@@ -189,11 +189,17 @@ pub(crate) mod curve_tree_decode;
 // Native `ScannableBlock` fetch over the `shekyl-wire` parse — the engine-side
 // replacement for the legacy `shekyl_rpc_client::Rpc::get_scannable_block_by_*` path.
 // Backs `DaemonEngine::fetch_scannable_block`'s default impl.
+/// GF-4b (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.4): the `BackingSet`
+/// constructor-mint gate — the sole enforcement layer for backing-lineage
+/// eligibility (consensus is lineage-blind and spend-blind for backing).
+/// The C-1 designated-backing selector consumes candidates exclusively
+/// through it.
+pub(crate) mod backing_set;
 pub(crate) mod block_fetch;
 /// WI-2 (`ARCHIVAL_BOND_WI2_ASSEMBLY.md`): production bond assembly — the
 /// `PBoundBytes` P-1 provenance boundary (single private mint site), the D-A2
-/// funding-selection policy over the sealed `PFundingOutputRecord` set, and
-/// the assemble path's typed failure surface.
+/// funding-sweep policy over the sealed `PFundingOutputRecord` set (GF-4b
+/// sweep semantics), and the assemble path's typed failure surface.
 pub(crate) mod bond_assembly;
 pub mod daemon;
 pub(crate) mod diagnostics;
