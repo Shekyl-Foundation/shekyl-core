@@ -84,15 +84,21 @@ script: |
   # gcc 7+ honors SOURCE_DATE_EPOCH, no faketime needed
   export SOURCE_DATE_EPOCH=`date -d 2000-01-01T12:00:00 +%s`
 
-  # Install rustup and the workspace-pinned toolchain (rust/rust-toolchain.toml)
-  # up front, serially, with the minimal profile. A gitian build only *compiles*
-  # the Rust FFI (cargo build --release); it never lints, so clippy/rustfmt are
-  # omitted. This is load-bearing: the parallel `make` below runs many cargo
-  # processes at once, and if 1.94.0 were not already present each would race to
-  # auto-install rustup's default profile into the shared ~/.rustup/downloads dir
-  # ("component download failed ... could not rename"). Keep 1.94.0 in lockstep
-  # with rust/rust-toolchain.toml (see its bump-policy note).
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.94.0
+  # Hardened rustup install — download-then-run, NOT `curl | sh` (mirrors
+  # .github/actions/install-rust). In a pipe the line's exit status is sh's, so
+  # a failed/partial curl leaves sh reading empty stdin and exiting 0: a silent
+  # no-op that only surfaces later at the first rustc use (PR #236/#241). The
+  # file form with an explicit failure guard aborts here instead, and --retry
+  # rides transients. Pin the workspace toolchain (rust/rust-toolchain.toml) up
+  # front with the minimal profile: a gitian build compiles the Rust FFI
+  # (cargo build --release) and never lints, so clippy/rustfmt are omitted —
+  # which also keeps the parallel `make` below from racing several cargo
+  # processes to auto-install rustup's default profile into the shared
+  # ~/.rustup/downloads dir ("component download failed ... could not rename",
+  # the alpha.6 gitian failure). Keep 1.94.0 in lockstep with
+  # rust/rust-toolchain.toml (see its bump-policy note).
+  curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs || { echo 'FATAL: rustup-init download failed' >&2; exit 1; }
+  sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain 1.94.0
   export PATH="$HOME/.cargo/bin:$PATH"
   rustup target add x86_64-pc-windows-gnu
 
