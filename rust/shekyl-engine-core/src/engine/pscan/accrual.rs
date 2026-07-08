@@ -450,6 +450,7 @@ impl PScanAccrual {
 mod tests {
     use super::*;
     use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
+    use shekyl_engine_state::pscan_state::MintLineageOutput;
 
     use crate::engine::pscan::reconcile::ReconcileVerdict;
     use crate::engine::pscan::scan_step::{BlockRange, EpochInflowDelta, ScanStepResult};
@@ -810,6 +811,11 @@ mod tests {
             amount: AtomicUnits::from_raw(500),
             height: BlockHeight::from_raw(5),
             epoch: epoch(0),
+            lineage: MintLineageOutput::ExternalTransfer,
+            spendable_height: shekyl_engine_state::transfer::eligible_height(
+                5,
+                shekyl_types::Timelock::None,
+            ),
         };
         let mut acc = PScanAccrual::genesis();
         let mut step = step(0, 10, &[(0, 500)]);

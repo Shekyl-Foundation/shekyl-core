@@ -50,7 +50,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::consensus_state::settlement_epoch_at_height;
-use shekyl_engine_state::pscan_state::PFundingOutputRecord;
+use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
+use shekyl_engine_state::transfer::eligible_height;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
 use shekyl_units::AtomicUnits;
@@ -238,6 +239,20 @@ pub(crate) struct FundingOutputMatch {
     pub(crate) height: BlockHeight,
     /// The settlement epoch `height` falls in.
     pub(crate) epoch: SettlementEpoch,
+    /// GF-4b mint-lineage rung, classified structurally from the carrying
+    /// tx while the block is in hand (`ARCHIVAL_GF4B_BACKING_LINEAGE.md`
+    /// §3.3): a tx carrying the owning persona's own `BondPost` input →
+    /// `BondPostChange`; anything else fails toward the forbidden rung,
+    /// `ExternalTransfer` (which structurally covers the anomalous
+    /// coinbase-to-`P` case — `P` never mines, and a coinbase tx cannot
+    /// carry a `BondPost` input).
+    pub(crate) lineage: MintLineageOutput,
+    /// The height this output becomes spendable (its curve-tree insertion
+    /// height) — the shared `transfer::eligible_height` result, computed
+    /// here at the seam from the block height and the output's
+    /// `additional_timelock` (GF4b-6, `ARCHIVAL_GF4B_BACKING_LINEAGE.md`
+    /// §3.6). The GF-4b sweep filters on it.
+    pub(crate) spendable_height: u64,
 }
 
 impl std::fmt::Debug for FundingOutputMatch {
@@ -262,6 +277,8 @@ impl From<&FundingOutputMatch> for PFundingOutputRecord {
             amount: m.amount,
             height: m.height,
             epoch: m.epoch,
+            lineage: m.lineage,
+            spendable_height: m.spendable_height,
         }
     }
 }
@@ -281,6 +298,8 @@ impl From<&PFundingOutputRecord> for FundingOutputMatch {
             amount: r.amount,
             height: r.height,
             epoch: r.epoch,
+            lineage: r.lineage,
+            spendable_height: r.spendable_height,
         }
     }
 }
@@ -373,11 +392,15 @@ fn post_kind_byte(kind: &BondPostKind) -> u8 {
 ///
 /// `scanners` is the bonded union's slot-tagged scanner set (the tag attributes
 /// each recovered output to its owning persona slot for the WI-2 D-A1 funding
-/// records); `known_ids` is the union's cleartext `p_canonical_id` set; `range`
-/// and `blocks` are aligned (`blocks[i]` at `range.start + i`).
+/// records); `known_personas` maps the union's cleartext `p_canonical_id`s to
+/// their slot ordinals — the id set drives the bond-post match exactly as the
+/// former set-shaped input did, and the slot half attributes a matched
+/// `BondPost` to the recovered output's **own** persona for the GF-4b lineage
+/// classification (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3); `range` and
+/// `blocks` are aligned (`blocks[i]` at `range.start + i`).
 pub(crate) fn run_dual_extractor(
     mut scanners: Vec<(u32, GuaranteedScanner)>,
-    known_ids: &BTreeSet<PCanonicalId>,
+    known_personas: &BTreeMap<PCanonicalId, u32>,
     range: BlockRange,
     blocks: &[ScannableBlock],
 ) -> Result<ScanStepResult, DualExtractError> {
@@ -410,19 +433,33 @@ pub(crate) fn run_dual_extractor(
         let height = range.height_at(i);
         let epoch = SettlementEpoch::from_raw(settlement_epoch_at_height(height.to_raw()));
 
+        // GF-4b lineage pre-pass (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3),
+        // public data only: the per-tx set of *our* persona slots posting a
+        // `BondPost` in that tx. `transaction_hashes` is positionally paired
+        // with `transactions` (the scanner enforces the length match); a tx
+        // whose hash is missing simply gains no map entry, so its outputs fail
+        // toward the forbidden rung below. There is no miner/coinbase arm:
+        // `P` never mines (owner ruling, §3.3), and a coinbase tx carries only
+        // `Input::Gen` — an anomalous coinbase-to-`P` output lands on
+        // `ExternalTransfer` structurally.
+        let mut bond_post_slots: BTreeMap<[u8; 32], BTreeSet<u32>> = BTreeMap::new();
+
         // (b) public bond-post match — reads inputs, no secret, no clone.
-        for tx in &block.transactions {
+        for (j, tx) in block.transactions.iter().enumerate() {
             for input in &tx.prefix.inputs {
                 if let Input::BondPost(bp) = input {
                     // Lift the wire `[u8; 32]` into the domain id once, at the
                     // wire→domain boundary, then match + carry the typed value.
                     let id = PCanonicalId::from_bytes(bp.p_canonical_id);
-                    if known_ids.contains(&id) {
+                    if let Some(slot) = known_personas.get(&id) {
                         bond_post_matches.push(BondPostMatch {
                             height,
                             p_canonical_id: id,
                             post_kind: post_kind_byte(&bp.kind),
                         });
+                        if let Some(tx_hash) = block.block.transaction_hashes.get(j) {
+                            bond_post_slots.entry(*tx_hash).or_default().insert(*slot);
+                        }
                     }
                 }
             }
@@ -446,9 +483,30 @@ pub(crate) fn run_dual_extractor(
 
                 let wo = out.wallet_output();
                 let ct = out.source_ciphertext();
+
+                // GF-4b classification (§3.3), fail-toward-the-forbidden-rung:
+                // only a structural proof (the *owning* persona's own bond post
+                // in the carrying tx) lifts an output off rung 3.
+                let tx_hash = wo.transaction();
+                let lineage = if bond_post_slots
+                    .get(&tx_hash)
+                    .is_some_and(|slots| slots.contains(slot))
+                {
+                    MintLineageOutput::BondPostChange
+                } else {
+                    MintLineageOutput::ExternalTransfer
+                };
+
+                // GF4b-6 (§3.6): the *shared* eligible-height computation —
+                // the one definition of "in the tree yet," also used by the
+                // transfer path (X5) — never a local formula. The coinbase
+                // +60 arrives through `additional_timelock` (its consensus-
+                // enforced `unlock_time` shape); no miner-tx arm exists.
+                let spendable_height = eligible_height(height.to_raw(), wo.additional_timelock());
+
                 funding_outputs.push(FundingOutputMatch {
                     p_slot: *slot,
-                    tx_hash: wo.transaction(),
+                    tx_hash,
                     index_in_transaction: wo.index_in_transaction(),
                     gindex: wo.index_on_blockchain(),
                     output_key: wo.key().compress().to_bytes(),
@@ -458,6 +516,8 @@ pub(crate) fn run_dual_extractor(
                     amount: out.amount(),
                     height,
                     epoch,
+                    lineage,
+                    spendable_height,
                 });
             }
         }
@@ -562,7 +622,7 @@ mod tests {
         // Height 20_001 → settlement epoch 2 (SETTLEMENT_EPOCH_BLOCKS = 10_000).
         let res = run_dual_extractor(
             vec![(0, scanner)],
-            &BTreeSet::new(),
+            &BTreeMap::new(),
             range(20_001, 20_002),
             &[funding_block(&p)],
         )
@@ -587,7 +647,7 @@ mod tests {
         let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
         let res = run_dual_extractor(
             vec![(7, scanner)],
-            &BTreeSet::new(),
+            &BTreeMap::new(),
             range(20_001, 20_002),
             &[funding_block(&p)],
         )
@@ -627,7 +687,7 @@ mod tests {
         let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
         let res = run_dual_extractor(
             vec![(0, scanner)],
-            &BTreeSet::new(),
+            &BTreeMap::new(),
             range(20_001, 20_002),
             &[funding_block(&p)],
         )
@@ -656,7 +716,7 @@ mod tests {
             .push(Input::BondPost(Box::new(bond_post_for(&other))));
 
         let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
-        let known = BTreeSet::from([canonical_id(&mine)]);
+        let known = BTreeMap::from([(canonical_id(&mine), 0)]);
         let res =
             run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
 
@@ -695,7 +755,7 @@ mod tests {
         tx.prefix.inputs.push(Input::BondPost(Box::new(post)));
 
         let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
-        let known = BTreeSet::from([canonical_id(&mine)]);
+        let known = BTreeMap::from([(canonical_id(&mine), 0)]);
         let res =
             run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
 
@@ -716,7 +776,7 @@ mod tests {
             .push(Input::BondPost(Box::new(bond_post_for(&p))));
 
         let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
-        let known = BTreeSet::from([canonical_id(&p)]);
+        let known = BTreeMap::from([(canonical_id(&p), 0)]);
         let res =
             run_dual_extractor(vec![(0, scanner)], &known, range(7, 8), &[block]).expect("extract");
 
@@ -731,7 +791,7 @@ mod tests {
         // Range covers 3 blocks; only 1 supplied.
         let err = run_dual_extractor(
             vec![(0, scanner)],
-            &BTreeSet::new(),
+            &BTreeMap::new(),
             range(0, 3),
             &[funding_block(&p)],
         )
@@ -751,7 +811,7 @@ mod tests {
         // on the range size, so no oversized block vec is needed to exercise it.
         let err = run_dual_extractor(
             Vec::new(),
-            &BTreeSet::new(),
+            &BTreeMap::new(),
             range(0, MAX_SCAN_STEP_BLOCKS + 1),
             &[],
         )
@@ -761,5 +821,152 @@ mod tests {
             DualExtractError::StepTooLarge { block_count, max }
                 if block_count == MAX_SCAN_STEP_BLOCKS + 1 && max == MAX_SCAN_STEP_BLOCKS
         ));
+    }
+
+    // ---- GF-4b lineage-classification KATs (§3.3 / §4 item 1) ----
+
+    /// Rung 2: the carrying tx bears the recovered output's **own** persona's
+    /// `BondPost`, so the output classifies `BondPostChange`.
+    #[test]
+    fn lineage_bond_post_change_for_own_bond_post_tx() {
+        let p = persona(0);
+        let mut block = funding_block(&p);
+        block.transactions[0]
+            .prefix
+            .inputs
+            .push(Input::BondPost(Box::new(bond_post_for(&p))));
+
+        let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
+        let known = BTreeMap::from([(canonical_id(&p), 0)]);
+        let res =
+            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+
+        let rec = res.funding_outputs.first().expect("one record");
+        assert_eq!(rec.lineage, MintLineageOutput::BondPostChange);
+    }
+
+    /// Fail-toward-the-forbidden-rung: a plain transfer (no `BondPost` at
+    /// all) classifies `ExternalTransfer` — rung 3, never backing-eligible.
+    #[test]
+    fn lineage_fails_toward_forbidden_for_plain_transfer() {
+        let p = persona(0);
+        let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &BTreeMap::new(),
+            range(5, 6),
+            &[funding_block(&p)],
+        )
+        .expect("extract");
+
+        let rec = res.funding_outputs.first().expect("one record");
+        assert_eq!(rec.lineage, MintLineageOutput::ExternalTransfer);
+    }
+
+    /// Owning-persona attribution (§3.3): a `BondPost` from a *different*
+    /// held persona in the carrying tx does **not** lift this persona's
+    /// output off rung 3 — the structural proof must be the owner's own
+    /// bond post, not any bond post we recognize.
+    #[test]
+    fn lineage_fails_toward_forbidden_for_another_personas_bond_post() {
+        let mine = persona(0);
+        let other = persona(1);
+        let mut block = funding_block(&mine);
+        block.transactions[0]
+            .prefix
+            .inputs
+            .push(Input::BondPost(Box::new(bond_post_for(&other))));
+
+        let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
+        let known = BTreeMap::from([(canonical_id(&mine), 0), (canonical_id(&other), 1)]);
+        let res =
+            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+
+        let rec = res.funding_outputs.first().expect("one record");
+        assert_eq!(
+            rec.lineage,
+            MintLineageOutput::ExternalTransfer,
+            "another persona's bond post is not a structural proof for this output"
+        );
+    }
+
+    // ---- GF4b-6 spendable-height KATs (§3.6 / §4 item 1) ----
+
+    /// A plain transfer's `spendable_height` is the shared X5 computation's
+    /// baseline — `height + SPENDABLE_AGE` — pinned against the *shared
+    /// function itself* so the seam cannot drift to a local formula.
+    #[test]
+    fn spendable_height_plain_transfer_is_the_shared_baseline() {
+        use shekyl_engine_state::transfer::SPENDABLE_AGE;
+
+        let p = persona(0);
+        let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &BTreeMap::new(),
+            range(20_001, 20_002),
+            &[funding_block(&p)],
+        )
+        .expect("extract");
+
+        let rec = res.funding_outputs.first().expect("one record");
+        assert_eq!(rec.spendable_height, 20_001 + SPENDABLE_AGE);
+        assert_eq!(
+            rec.spendable_height,
+            eligible_height(20_001, shekyl_types::Timelock::None),
+            "the seam stores literally the shared eligible_height result"
+        );
+    }
+
+    /// A coinbase-shaped recovery (`unlock_time = height + 60`, the
+    /// consensus-enforced coinbase shape) floors `spendable_height` at the
+    /// timelock — the channel through which coinbase maturity reaches the
+    /// sweep filter (no miner-tx arm exists).
+    #[test]
+    fn spendable_height_coinbase_shaped_timelock_floors() {
+        let p = persona(0);
+        let mut block = funding_block(&p);
+        block.transactions[0].prefix.unlock_time = 20_001 + 60;
+
+        let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &BTreeMap::new(),
+            range(20_001, 20_002),
+            &[block],
+        )
+        .expect("extract");
+
+        let rec = res.funding_outputs.first().expect("one record");
+        assert_eq!(
+            rec.spendable_height, 20_061,
+            "coinbase-shaped timelock floors above the +SPENDABLE_AGE baseline"
+        );
+    }
+
+    /// Both new fields survive the rule-18 transform↔state seam round-trip
+    /// (the `From` impls are exhaustive struct literals; this pins the
+    /// values, not just the compile).
+    #[test]
+    fn lineage_and_spendable_height_round_trip_the_state_seam() {
+        let p = persona(0);
+        let mut block = funding_block(&p);
+        block.transactions[0].prefix.unlock_time = 20_001 + 60;
+        block.transactions[0]
+            .prefix
+            .inputs
+            .push(Input::BondPost(Box::new(bond_post_for(&p))));
+
+        let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
+        let known = BTreeMap::from([(canonical_id(&p), 0)]);
+        let res = run_dual_extractor(vec![(0, scanner)], &known, range(20_001, 20_002), &[block])
+            .expect("extract");
+
+        let m = res.funding_outputs.first().expect("one record");
+        let persisted = PFundingOutputRecord::from(m);
+        assert_eq!(persisted.lineage, MintLineageOutput::BondPostChange);
+        assert_eq!(persisted.spendable_height, 20_061);
+        let back = FundingOutputMatch::from(&persisted);
+        assert_eq!(&back, m, "state→transform restores the exact match");
     }
 }

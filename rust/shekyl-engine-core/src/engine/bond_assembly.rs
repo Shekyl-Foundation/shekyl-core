@@ -383,6 +383,7 @@ pub(crate) fn finalize_bond_tx(
 mod tests {
     use super::*;
     use shekyl_engine_state::pending_post_block::PendingPostState;
+    use shekyl_engine_state::pscan_state::MintLineageOutput;
     use shekyl_types::{BlockHeight, SettlementEpoch};
     use shekyl_units::AtomicUnits;
 
@@ -403,6 +404,17 @@ mod tests {
             amount: AtomicUnits::from_raw(amount),
             height: BlockHeight::from_raw(height),
             epoch: SettlementEpoch::from_raw(0),
+            // The sweep is lineage-blind (it consumes *all* spendable funding
+            // regardless of rung — GF-4b §3.1); rung 3 is the representative
+            // fixture lineage.
+            lineage: MintLineageOutput::ExternalTransfer,
+            // Plain-transfer maturity (no timelock) via the shared X5
+            // computation — the GF4b-6 sweep KATs override this for the
+            // immature-exclusion case.
+            spendable_height: shekyl_engine_state::transfer::eligible_height(
+                height,
+                shekyl_types::Timelock::None,
+            ),
         }
     }
 

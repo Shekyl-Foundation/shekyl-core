@@ -40,17 +40,74 @@ use shekyl_units::AtomicUnits;
 use crate::error::WalletLedgerError;
 use crate::pscan_cursor::PScanCursor;
 
-/// Schema version of the durable P-scan state. **v4** adds the durable
-/// `funding_outputs` (WI-2 D-A1, `ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.1 — the
-/// per-output funding-discovery records bond assembly selects from); **v3** added
-/// the durable `bond_post_matches` (SP-6 reconcile evidence); **v2** tracked the
-/// nested [`PScanCursor`] gaining its verified-frontier `frontier_hash`. Any field
-/// addition / removal / renaming bumps this; loads that see a different version
-/// **refuse rather than migrate** (the `StakingBlock` precedent). No migration at any
-/// step: pre-genesis, a version mismatch means re-scan (rule 15). Distinct from the
-/// inner [`PScanCursor`]'s own version (nested, like the wallet ledger over its
-/// sub-blocks).
-pub const PSCAN_STATE_VERSION: u32 = 4;
+/// Schema version of the durable P-scan state. **v5** adds the
+/// [`MintLineageOutput`] `lineage` field and the `spendable_height` field on
+/// [`PFundingOutputRecord`] (GF-4b backing-lineage ladder + sweep
+/// spendability filter, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3/§3.6 — one
+/// bump covers both); **v4** added
+/// the durable `funding_outputs` (WI-2 D-A1, `ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.1
+/// — the per-output funding-discovery records bond assembly selects from); **v3**
+/// added the durable `bond_post_matches` (SP-6 reconcile evidence); **v2** tracked
+/// the nested [`PScanCursor`] gaining its verified-frontier `frontier_hash`. Any
+/// field addition / removal / renaming bumps this; loads that see a different
+/// version **refuse rather than migrate** (the `StakingBlock` precedent). No
+/// migration at any step: pre-genesis, a version mismatch means re-scan (rule 15).
+/// Distinct from the inner [`PScanCursor`]'s own version (nested, like the wallet
+/// ledger over its sub-blocks).
+pub const PSCAN_STATE_VERSION: u32 = 5;
+
+/// The GF-4b mint-lineage ladder for a `P`-owned funding output — the
+/// scan-provenance classification (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3;
+/// ladder: `ARCHIVAL_FIREWALL_GATE6.md` §2.4 GF-4b), most→least safe as an
+/// emission backing output. The emission vin reveals the backing output's
+/// `pqc_pk` in cleartext, deterministically identifying that one output and
+/// its creating tx; the ladder classifies what that identification newly
+/// reveals.
+///
+/// **Classification is structural and fails toward the forbidden rung:**
+/// anything not structurally proven rung 1/2 at the scan seam classifies
+/// [`ExternalTransfer`](Self::ExternalTransfer). A misclassification in that
+/// direction can only *exclude* a safe output from backing eligibility, never
+/// admit an unsafe one.
+///
+/// **There is no miner/coinbase rung.** `P` is a shard-serving persona only;
+/// mining is conducted under the principal (adding capability to `P` adds
+/// identification surface — owner ruling, `ARCHIVAL_GF4B_BACKING_LINEAGE.md`
+/// §3.3). A coinbase output recovered by `P`'s scanner is an anomaly (wallet
+/// bug or adversarial tag — `P`'s hybrid pubkey is on-chain in the bond
+/// post), and it classifies [`ExternalTransfer`](Self::ExternalTransfer)
+/// structurally: a coinbase tx carries only `Input::Gen`, never a `BondPost`
+/// input.
+///
+/// Consensus is lineage-blind (`REWARD_EMISSION_VIN_PLAN.md` §8.0.3 —
+/// unenforceable by construction), so this wallet-side type is the **only**
+/// enforcement layer; the `BackingSet` pre-join type consumes it.
+///
+/// Plain derived `Debug`: a rung tag alone is not a row of `P`'s funding
+/// history — the records carrying it stay redacted wholesale.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
+pub enum MintLineageOutput {
+    /// Rung 1 — recovered from a transaction carrying `P`'s own
+    /// `txin_archival_reward_emission`. Present for **ladder-completeness**
+    /// (the persisted vocabulary encodes the full GF-4b spec ladder), with
+    /// the consumer named and scheduled: **reserved — never constructed
+    /// until C-1's emission-vin scan arm lands**, and that arm is bound to
+    /// the fail-toward-forbidden rule as a C-1 acceptance criterion
+    /// (GF4b-4, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §5 residue item 2;
+    /// rule-21 justification in §3.3).
+    EmissionReward,
+    /// Rung 2 — recovered from a transaction carrying a `BondPost` input whose
+    /// `p_canonical_id` is the recovered output's **own** persona: bond-post
+    /// change. The creating tx is already `P`-public and its backward lineage
+    /// is FCMP++-hidden — the bond post is itself one churn hop.
+    BondPostChange,
+    /// Rung 3 — everything else: raw pre-bond-post principal funding, the
+    /// **forbidden** backing rung (its reveal newly identifies the funding tx
+    /// and its timing — funding-height → off-chain-principal correlation).
+    /// The GF-4b sweep makes this rung structurally empty post-bond; the
+    /// `BackingSet` constructor makes it unrepresentable as backing.
+    ExternalTransfer,
+}
 
 /// A persisted archival bond-post match (SP-6 reconcile evidence): an on-chain
 /// bond-post whose `p_canonical_id` is one of `P`'s personas. The **durable, sealed
@@ -130,6 +187,20 @@ pub struct PFundingOutputRecord {
     pub height: BlockHeight,
     /// The settlement epoch `height` falls in.
     pub epoch: SettlementEpoch,
+    /// GF-4b mint-lineage rung, classified at the scan seam
+    /// (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3). Persisted so the C-1
+    /// backing-eligibility gate (`BackingSet`) survives restart.
+    pub lineage: MintLineageOutput,
+    /// The height at which this output's leaf is present in the curve tree
+    /// and the output becomes spendable — **literally** the shared
+    /// [`crate::transfer::eligible_height`] result, stored at the scan seam
+    /// (GF4b-6, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.6). The GF-4b sweep
+    /// excludes records above its reference height: consuming an unspendable
+    /// output would deny bonding until maturity (the leaf is absent from the
+    /// tree, so no membership path exists), whether it arrived by ordinary
+    /// fresh funding (+`SPENDABLE_AGE`) or an adversarial coinbase-to-`P`
+    /// (+60 via the consensus-enforced `unlock_time` shape).
+    pub spendable_height: u64,
 }
 
 impl std::fmt::Debug for PFundingOutputRecord {
@@ -382,6 +453,11 @@ mod tests {
             amount: AtomicUnits::from_raw(amount),
             height: BlockHeight::from_raw(height),
             epoch: SettlementEpoch::from_raw(2),
+            lineage: MintLineageOutput::ExternalTransfer,
+            spendable_height: crate::transfer::eligible_height(
+                height,
+                shekyl_types::Timelock::None,
+            ),
         }
     }
 

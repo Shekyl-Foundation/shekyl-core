@@ -604,8 +604,12 @@ pub(crate) enum StakeEngineError {
 
 /// The bonded union's transient scan inputs (SP-3 dual extractor): one
 /// slot-tagged [`GuaranteedScanner`] per bonded persona plus their cleartext
-/// `p_canonical_id` set. Built per [`ScanStep`] and dropped with it (DQ5).
-pub(crate) type BondedScanInputs = (Vec<(u32, GuaranteedScanner)>, BTreeSet<PCanonicalId>);
+/// `p_canonical_id` → slot map (the id half drives the bond-post match; the
+/// slot half attributes a matched `BondPost` to the recovered output's own
+/// persona for GF-4b lineage classification,
+/// `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3). Built per [`ScanStep`] and
+/// dropped with it (DQ5).
+pub(crate) type BondedScanInputs = (Vec<(u32, GuaranteedScanner)>, BTreeMap<PCanonicalId, u32>);
 
 /// Why building a [`ScanStep`]'s bonded-union scan inputs failed. Both arms are a
 /// **malformed resident persona key** (corrupted in-memory state) — fail closed,
@@ -869,16 +873,16 @@ impl StakeEngine {
     /// Fails closed if a resident key is malformed: a silently-weakened scanner
     /// would mis-size the privacy parameter `C_min` (DQ7).
     ///
-    /// `known_ids` is recomputed here **on purpose**, not cached: it rides the
-    /// same loop that rebuilds the transient secret scanners, which *must* be
-    /// rebuilt every batch (DQ5). Caching only the public id set would save one
-    /// `persona_canonical_id` per bonded persona per batch (marginal, since
+    /// `known_personas` is recomputed here **on purpose**, not cached: it rides
+    /// the same loop that rebuilds the transient secret scanners, which *must*
+    /// be rebuilt every batch (DQ5). Caching only the public id map would save
+    /// one `persona_canonical_id` per bonded persona per batch (marginal, since
     /// bonded personas are few) at the cost of a stale-cache invalidation surface
     /// on a firewall-critical set — a missed invalidation would silently drop a
     /// newly-bonded persona's bond-post matches. Recompute is the safe trade.
     fn bonded_scan_inputs(&self) -> Result<BondedScanInputs, ScanSetupError> {
         let mut scanners = Vec::new();
-        let mut known_ids = BTreeSet::new();
+        let mut known_personas = BTreeMap::new();
         for (slot, held) in &self.held {
             if let HeldPersona::Bonded(_) = held {
                 let keys = held.keys();
@@ -889,10 +893,10 @@ impl StakeEngine {
                     guaranteed_scanner_for_persona(keys).map_err(ScanSetupError::Scanner)?,
                 ));
                 let id = persona_canonical_id(keys).map_err(ScanSetupError::CanonicalId)?;
-                known_ids.insert(id);
+                known_personas.insert(id, slot.0);
             }
         }
-        Ok((scanners, known_ids))
+        Ok((scanners, known_personas))
     }
 
     /// Retire a now-terminal bonded persona (2d-1 DQ8): wipe its key and drop it
@@ -1800,7 +1804,7 @@ impl Message<ScanStep> for StakeEngine {
         msg: ScanStep,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let (scanners, known_ids) = self.bonded_scan_inputs()?;
+        let (scanners, known_personas) = self.bonded_scan_inputs()?;
         let ScanStep { range, blocks } = msg;
         // The secret `scanners` are MOVED into the closure; they never reach the
         // actor task again and are dropped at the closure's end. The two `?`
@@ -1808,7 +1812,7 @@ impl Message<ScanStep> for StakeEngine {
         // (`ScanStep`) via their `#[from]` conversions — structured, not
         // stringified.
         let result = tokio::task::spawn_blocking(move || {
-            run_dual_extractor(scanners, &known_ids, range, &blocks)
+            run_dual_extractor(scanners, &known_personas, range, &blocks)
         })
         .await??;
         Ok(result)
