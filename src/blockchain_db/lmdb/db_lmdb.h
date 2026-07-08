@@ -31,6 +31,7 @@
 #include "blockchain_db/blockchain_db.h"
 #include "cryptonote_basic/blobdatatype.h" // for type blobdata
 #include "fcmp/rctTypes.h"
+#include "shekyl/shekyl_ffi.h" // epoch-close FFI row structs for ArchivalEmissionEpochSnapshot::to_ffi_*
 #include <boost/thread/tss.hpp>
 
 #include <lmdb.h>
@@ -194,7 +195,11 @@ struct mdb_txn_safe
 struct ArchivalEmissionEpochSnapshot
 {
   uint64_t settlement_epoch = 0;
-  /// H_close(E) — the close-processing boundary (E+1)·SEB the close ran at.
+  /// The close-processing height (E+1)·SEB the close ran at (the shard-age
+  /// operand). NOT H_close(E): that is `shekyl_archival_epoch_close_height(E)`
+  /// = the epoch's last block / credit deadline = (E+1)·SEB − 1, one block
+  /// lower. Source this from `shekyl_archival_epoch_close_processing_height`,
+  /// never the lookalike `shekyl_archival_epoch_close_height`.
   uint64_t close_block_height = 0;
   /// Persisted finalized Σwork(E) milli (0 when the epoch closed empty or
   /// was M1-gated) — the stored denominator, never a recompute.
@@ -223,6 +228,17 @@ struct ArchivalEmissionEpochSnapshot
   /// Claimant P's index into `bonds`; SIZE_MAX when P has no serve-credit
   /// row in E (its work is then zero by construction).
   size_t claimant_bond_idx = SIZE_MAX;
+
+  // Marshal the plain-value rows into the epoch-close FFI arrays. Single
+  // source for the struct→FFI field mapping so the close path
+  // (`process_archival_epoch_close_at_height`), the emission-verify shim, and
+  // the KATs cannot drift on it (WS-1 §5.5 single sourcing — the row *gather*
+  // is single-sourced in `gather_archival_epoch_rows`, this is the marshaling
+  // half). The returned vectors' `bad_intervals_ptr`s alias this snapshot's
+  // `BondRow::bad_intervals_flat`, so the snapshot must outlive them.
+  std::vector<shekyl_archival_epoch_close_bond> to_ffi_bonds() const;
+  std::vector<shekyl_archival_epoch_close_shard> to_ffi_shards() const;
+  std::vector<shekyl_archival_credit_pair> to_ffi_credit_pairs() const;
 };
 
 // If m_batch_active is set, a batch transaction exists beyond this class, such

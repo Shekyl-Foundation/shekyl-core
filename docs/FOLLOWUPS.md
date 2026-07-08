@@ -1438,6 +1438,34 @@ sustainability is unaffected by the recalibration.
   effect inverts and `RELEASE_COOLDOWN_EPOCHS` must be re-evaluated (the two are coupled). No
   shipped parameter moved. Detail: `STAKER_ARCHIVAL_SIM.md` §L18 "Adversarial-dodge arm".
 
+- **Archival serve-credit / emission LMDB scans — bound the two unindexed table
+  scans (own schema-round PR).** PR #269 review (WS-1 held-sourcing) surfaced two
+  linear scans on consensus paths, both keyed so the wanted rows cannot be
+  range-seeked: (a) `archival_slash_removed_holding_after` (`db_lmdb.cpp`) forward-
+  scans the whole slash-log tail above `at_height` on every not-held-at-tip
+  `archival_bond_holds_shard` query, so a serve-credit input citing a shard the bond
+  never held costs `O(slash-log tail)` at acceptance — **confirmed live** (cheap to
+  trigger pre-crypto-gate; correctness preserved, cost is unbounded by the query);
+  (b) `gather_archival_epoch_rows` (`db_lmdb.cpp`) `MDB_FIRST→MDB_NEXT` scans the
+  **entire** serve-credit table filtering `epoch` at key offset 40 (epoch is the
+  trailing key field) once per epoch close / emission gather, so per-claim cost grows
+  with the whole table, not the one epoch's rows. Both fixes are a **persisted-schema
+  change** (rule 42 version bump + snapshot check): an epoch-/`p_id`-prefixed secondary
+  index, or reorder the serve-credit key to `epoch‖p_id‖shard` and add a per-`p_id`
+  slash-log index, so the scans become `MDB_SET_RANGE` seeks bounded to the relevant
+  rows. Deferred to a dedicated schema round (not this PR's WS-1 scope); (a)'s live
+  cost is bounded in practice pre-genesis (slashes are rare, the log is small).
+
+- **PR-E3 emission verify — reject `sigma_work_milli == 0` at the consumer (M1-gate
+  belt).** `shekyl_archival_emission_epoch_work` deliberately routes the M1 `K_COVER`
+  reward gate through the persisted `Σwork(E)` denominator carried in the snapshot
+  (`frozen_shard_count: 0`; the numerator function never re-gates — documented at
+  `archival_ffi.rs` ~923). Sound by construction: a gated epoch persists `Σwork = 0`,
+  and no correct verify can divide by a zero denominator. The defense-in-depth belt
+  (explicitly reject/zero a claim whose snapshot `sigma_work_milli == 0` rather than
+  relying on the divide) belongs in the PR-E3 verify body that consumes this numerator,
+  not in the sourcing FFI. Land it with PR-E3. (PR #269 review, kept-as-designed here.)
+
 - **Mid-band `age_weight` lever — CLOSED: the cushion is not robust, keep the minimal
   floor+no-cushion posture (decision, 2026-06-16).** The faithful-freeze fix reopened
   economics finding 6 with an apparent emergent 7th replica at `age_weight ≥ 7`, and the

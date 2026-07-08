@@ -1970,8 +1970,10 @@ uint8_t shekyl_archival_epoch_close_compute(
 struct shekyl_archival_emission_epoch_snapshot
 {
   uint64_t settlement_epoch;
-  /// H_close(E) — the close-processing boundary (E+1)·SEB the gather froze
-  /// at (shard-age operand; must equal the height the close ran at).
+  /// The close-processing height (E+1)·SEB the gather froze at (shard-age
+  /// operand; must equal the height the close ran at). NOT H_close(E) =
+  /// shekyl_archival_epoch_close_height(E) = the epoch's last block =
+  /// (E+1)·SEB − 1, one block lower.
   uint64_t close_block_height;
   /// Persisted finalized Σwork(E) milli — the stored denominator.
   uint64_t sigma_work_milli;

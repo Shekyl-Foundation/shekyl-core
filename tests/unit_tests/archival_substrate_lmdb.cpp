@@ -521,32 +521,11 @@ TEST(archival_substrate_lmdb, emission_snapshot_identity_and_descriptor_immunity
     EXPECT_EQ(snap.credit_pairs.size(), 3u);
     out_claimant_idx = snap.claimant_bond_idx;
 
-    std::vector<shekyl_archival_epoch_close_bond> bonds;
-    bonds.reserve(snap.bonds.size());
-    for (const ArchivalEmissionEpochSnapshot::BondRow& row : snap.bonds)
-    {
-      shekyl_archival_epoch_close_bond b{};
-      b.join_settlement_epoch = row.join_settlement_epoch;
-      b.is_foundation_complete_tree = row.is_foundation_complete_tree ? 1 : 0;
-      b.bad_intervals_ptr = row.bad_intervals_flat.empty()
-        ? nullptr : row.bad_intervals_flat.data();
-      b.bad_intervals_len = row.bad_intervals_flat.size() / 2;
-      bonds.push_back(b);
-    }
-    std::vector<shekyl_archival_epoch_close_shard> shards;
-    shards.reserve(snap.shards.size());
-    for (const ArchivalEmissionEpochSnapshot::ShardRow& row : snap.shards)
-    {
-      shekyl_archival_epoch_close_shard s{};
-      s.shard_id = row.shard_id;
-      s.freeze_height = row.freeze_height;
-      s.has_segment = row.has_segment ? 1 : 0;
-      shards.push_back(s);
-    }
-    std::vector<shekyl_archival_credit_pair> pairs;
-    pairs.reserve(snap.credit_pairs.size());
-    for (const ArchivalEmissionEpochSnapshot::CreditPair& pair : snap.credit_pairs)
-      pairs.push_back({ pair.bond_idx, pair.shard_idx });
+    // Same struct→FFI marshaling the close path and PR-E3 verify shim use,
+    // via the snapshot's shared helpers (single source — WS-1 §5.5).
+    const std::vector<shekyl_archival_epoch_close_bond> bonds = snap.to_ffi_bonds();
+    const std::vector<shekyl_archival_epoch_close_shard> shards = snap.to_ffi_shards();
+    const std::vector<shekyl_archival_credit_pair> pairs = snap.to_ffi_credit_pairs();
 
     shekyl_archival_emission_epoch_snapshot ffi{};
     ffi.settlement_epoch = snap.settlement_epoch;

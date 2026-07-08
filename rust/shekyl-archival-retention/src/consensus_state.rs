@@ -609,50 +609,14 @@ mod tests {
         assert_eq!(out.sigma_work_milli, 1_000);
     }
 
-    #[test]
-    fn close_and_verify_source_identical_served_work() {
-        // WS-1 §5.3 move 1: `epoch_close_compute` (denominator side) and the
-        // future emission verify body (numerator side) share
-        // `as_of_e_served_work` — this pins that the close's Σwork is exactly
-        // the curve-fold of the shared function's per-bond vector, so a
-        // verify-side caller reading `work_by_bond[P]` gets P's exact term in
-        // the stored denominator by construction.
-        let bonds = [
-            EpochCloseBond {
-                join_settlement_epoch: 0,
-                is_foundation_complete_tree: false,
-                bad_intervals: &[],
-            },
-            EpochCloseBond {
-                join_settlement_epoch: 0,
-                is_foundation_complete_tree: false,
-                bad_intervals: &[],
-            },
-        ];
-        let shards = [shard(7, 0), shard(9, 0)];
-        let pairs = [
-            CreditPair {
-                bond_idx: 0,
-                shard_idx: 0,
-            },
-            CreditPair {
-                bond_idx: 1,
-                shard_idx: 0,
-            },
-            CreditPair {
-                bond_idx: 1,
-                shard_idx: 1,
-            },
-        ];
-        let inputs = close_inputs(&bonds, &shards, &pairs);
-        let served = as_of_e_served_work(&inputs).unwrap();
-        let close = epoch_close_compute(&inputs).unwrap();
-        assert_eq!(close.r_market_by_shard, served.r_market_by_shard);
-        assert_eq!(
-            close.sigma_work_milli,
-            sigma_work_milli(&served.work_by_bond, &inputs.curve, &served.member)
-        );
-    }
+    // The close/verify shared-sourcing identity — that summing the emission
+    // numerator's per-P `Curve(work_P)` terms reproduces the persisted Σwork(E)
+    // denominator exactly — is pinned end-to-end through the real FFI numerator
+    // in `shekyl-ffi::archival_ffi::emission_epoch_work_sums_to_persisted_sigma`
+    // (distinct per-P terms, non-members zeroed). A unit-level restatement here
+    // could only re-run `epoch_close_compute`'s own `sigma_work_milli` +
+    // `as_of_e_served_work` expressions against themselves (tautological), so it
+    // is deliberately not duplicated at this layer.
 
     #[test]
     fn epoch_close_bad_interval_excludes_bond_everywhere() {
