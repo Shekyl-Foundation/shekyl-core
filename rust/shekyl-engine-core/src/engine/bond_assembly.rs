@@ -13,10 +13,11 @@
 //!
 //! The module carries the Engine-side **public** halves of WI-2:
 //!
-//! - **D-A2 funding selection** ([`select_funding_outputs`]): deterministic
-//!   oldest-first greedy accumulation over the assembling persona's slice of the
-//!   sealed [`PFundingOutputRecord`] set, excluding records reserved by a live
-//!   pending post.
+//! - **D-A2 funding sweep** ([`sweep_funding_outputs`]): deterministic
+//!   oldest-first consumption of the assembling persona's **entire**
+//!   unreserved spendable slice of the sealed [`PFundingOutputRecord`] set
+//!   (GF-4b sweep semantics, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.1 —
+//!   subset selection ceased to exist with the rename).
 //! - The **error surface** ([`BondAssemblyError`]) for the assemble path's
 //!   named failure modes (§3.6, rule 82).
 //!
@@ -32,7 +33,7 @@ use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind};
 use shekyl_engine_state::pending_post_block::PendingBondPost;
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_tx_builder::{encode_final_tx, LeafEntry, WireEncodeInput};
-use shekyl_types::PCanonicalId;
+use shekyl_types::{BlockHeight, PCanonicalId};
 use shekyl_wire::{BondPost, BondPostKind as WireBondPostKind, Holdings, Input};
 
 // ---------------------------------------------------------------------------
@@ -200,27 +201,65 @@ impl BondAssemblyError {
 }
 
 // ---------------------------------------------------------------------------
-// D-A2 — funding selection (§3.2)
+// D-A2 — funding sweep (WI-2 §3.2 as amended by GF-4b §3.1)
 // ---------------------------------------------------------------------------
 
-/// The outcome of D-A2 selection: the chosen funding records (oldest-first
+/// Witness that durable removal of confirmed-spent funding records has
+/// landed (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.2, GF4b-5 structural gate).
+///
+/// [`sweep_funding_outputs`] cannot be called without one, and this type has
+/// **zero production constructors**: the sole intended production mint site
+/// is the SP-R0 durable-pruning code (FOLLOWUPS "2d-1 WI-2 — durable removal
+/// of SPENT funding outputs"), which does not exist yet. "Assemble goes live
+/// without pruning" therefore fails to compile rather than fails review —
+/// load-bearing under sweep semantics, where **any single** stale spent
+/// record is in *every* subsequent sweep, so one confirmed post would poison
+/// every later bond post for that persona (daemon-rejected duplicate key
+/// image) until pruning lands.
+///
+/// The `#[cfg(test)]` constructor below is the **only** non-SP-R0 mint; KATs
+/// exercise the sweep through it. The C-1 §5-item-4 review obligation is a
+/// confirmation that this type still has zero production constructors, plus
+/// a grep that `sweep_funding_outputs` remains the sole funding-selection
+/// entry into the assemble path (the gate is exactly as complete as sweep's
+/// monopoly).
+///
+/// Reversion clause (rule 21): the SP-R0 PR either adds the sole production
+/// constructor (disposition (a), durable pruning) or deletes this token
+/// (disposition (b), durable reservation retention, which makes the
+/// precondition unconditional).
+pub(crate) struct SpentRecordsDurablyPruned {
+    _sealed: (),
+}
+
+impl SpentRecordsDurablyPruned {
+    /// Test-only mint — the only non-SP-R0 constructor (see the type docs).
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Self {
+        Self { _sealed: () }
+    }
+}
+
+/// The outcome of the D-A2 sweep: the consumed funding records (oldest-first
 /// order preserved) and their exact sum.
 ///
 /// Redacted `Debug` via the contained records' own redaction; the struct adds
 /// nothing renderable beyond the total, so it derives nothing.
 pub(crate) struct FundingSelection {
-    /// The selected records, in selection (oldest-first) order.
+    /// The swept records, in deterministic (oldest-first) order.
     #[allow(dead_code)] // transient — read by the Engine-side WI-2 orchestrator as it lands.
     pub records: Vec<PFundingOutputRecord>,
-    /// Exact sum of the selected records' amounts.
+    /// Exact sum of the swept records' amounts.
     #[allow(dead_code)] // transient — read by the Engine-side WI-2 orchestrator as it lands.
     pub total: u64,
 }
 
-/// D-A2 funding selection (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.2), Engine-side
-/// over public data only:
+/// D-A2 funding **sweep** (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.2 as amended by
+/// `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.1), Engine-side over public data
+/// only. Consumes the assembling persona's **entire** unreserved spendable
+/// eligible set — there is no way to express a subset:
 ///
-/// 1. **Eligibility.** Selection is scoped to `p_slot` — the assembling
+/// 1. **Eligibility.** The sweep is scoped to `p_slot` — the assembling
 ///    persona's outputs only. This is load-bearing, not a filter of
 ///    convenience: the `AssembleBond` handler re-derives every input's spend
 ///    secrets with **one** persona's keys ([`derive_p_source_secrets_bundle`]
@@ -228,73 +267,89 @@ pub(crate) struct FundingSelection {
 ///    bonded persona would derive a wrong key image and the daemon would reject
 ///    the post. The sealed set mixes every bonded persona's records
 ///    (`bonded_scan_inputs` slot-tags each), so the slot filter is what keeps
-///    the selection self-consistent with the single-persona derivation.
+///    the sweep self-consistent with the single-persona derivation.
 ///    Every persisted record is already final (the pscan ingest horizon is
 ///    `tip − ARCHIVAL_REORG_DEPTH_BLOCKS`). Records whose `gindex` appears in
 ///    `reserved` — the union of live pending posts' reservation sets — are
 ///    excluded; the pending record is the single source of reservation truth.
+///    Records whose `spendable_height` exceeds `reference_height` are
+///    excluded (GF4b-6, §3.6): "consume everything" means everything
+///    *spendable* — an immature record's leaf is absent from the curve tree,
+///    so no membership proof exists and consuming it would deny bonding
+///    until maturity, whether it arrived by ordinary fresh funding
+///    (+`SPENDABLE_AGE`) or an adversarial coinbase-to-`P` (+60). Immature
+///    records survive the sweep **by design** and join the next one.
 ///
 /// [`derive_p_source_secrets_bundle`]: super::stake_engine::derive_p_source_secrets_bundle
-/// 2. **Ramp.** If the unreserved sum is below `required`, refuse with
+/// 2. **Ramp.** If the swept total is below `required`, refuse with
 ///    [`BondAssemblyError::InsufficientFunding`].
-/// 3. **Order.** Oldest-first (height, then gindex) greedy accumulation until
-///    `sum ≥ required`. Deterministic and auditable; input-selection
-///    unlinkability pressure does not apply here — these are P-local outputs
-///    spent to P's own bond, and the post names `P` in cleartext anyway.
+/// 3. **Extent + order.** *All* eligible records, oldest-first
+///    `(height, gindex)` — D-A2's determinism/auditability rationale survives
+///    as the ordering of the swept input list. The early break at
+///    `sum ≥ required` is gone: a subset selector leaves rung-3 funding
+///    outputs alive in `P`'s spendable set, and GF-4b's structural-emptiness
+///    claim ("nothing raw survives backing-eligible") rests on the bond
+///    post consuming everything (§3.1's recorded argument; priority-2 binds
+///    over assembly convenience). The change-split math absorbs the larger
+///    remainder unchanged (`funding == change + fee + credit`).
 ///
 /// `required` is `bond_floor(holdings) + fee`, computed by the caller with
-/// checked arithmetic.
+/// checked arithmetic. `reference_height` is the sweep's spendability
+/// anchor: the chain height the assemble path builds against (a record is in
+/// the tree iff `spendable_height <= reference_height`).
 ///
-/// **Interim-safety (tracked, do not remove without the FOLLOWUP):** `reserved`
-/// covers only *live pending posts*. A funding output spent by a bond post that
-/// has since **confirmed** is un-reserved (its pending record cleared) yet still
-/// present in `records` — nothing prunes `funding_outputs` on spend today. So a
-/// live assemble path could re-select an already-spent output and the daemon
-/// would reject the double-spend. Durable removal of confirmed-spent outputs is
-/// SP-R0-gated (confirmed-absence-within-`covered` discipline); until it lands
-/// the WI-2 assemble/dispatch path must stay dead-code (it is — see the
-/// `#[allow(dead_code)]` below and on `AssembleBond`). See FOLLOWUPS "2d-1 WI-2
-/// — durable removal of SPENT funding outputs".
+/// **Why the witness parameter (do not remove without the FOLLOWUP):**
+/// `reserved` covers only *live pending posts*. A funding output spent by a
+/// bond post that has since **confirmed** is un-reserved (its pending record
+/// cleared) yet still present in `records` — nothing prunes
+/// `funding_outputs` on spend today, and under sweep semantics such a record
+/// is in **every** subsequent sweep, poisoning every later bond post for the
+/// persona until durable removal lands. [`SpentRecordsDurablyPruned`] makes
+/// that sequencing compile-enforced. See FOLLOWUPS "2d-1 WI-2 — durable
+/// removal of SPENT funding outputs".
 #[allow(dead_code)] // transient — consumed by the Engine-side WI-2 orchestrator as it lands.
-pub(crate) fn select_funding_outputs(
+pub(crate) fn sweep_funding_outputs(
+    _pruning_landed: &SpentRecordsDurablyPruned,
     records: &[PFundingOutputRecord],
     p_slot: u32,
     reserved: &std::collections::BTreeSet<u64>,
     required: u64,
+    reference_height: BlockHeight,
 ) -> Result<FundingSelection, BondAssemblyError> {
     let mut eligible: Vec<&PFundingOutputRecord> = records
         .iter()
-        .filter(|r| r.p_slot == p_slot && !reserved.contains(&r.gindex))
+        .filter(|r| {
+            r.p_slot == p_slot
+                && !reserved.contains(&r.gindex)
+                && r.spendable_height <= reference_height
+        })
         .collect();
     // Oldest-first: height, then gindex. Distinct outputs have distinct
     // gindexes, so the order is total and deterministic.
     eligible.sort_by_key(|r| (r.height, r.gindex));
 
-    let mut selected = Vec::new();
+    // Sweep: the entire eligible set, no early break — a subset is
+    // inexpressible from here down. One pass sums and materializes the
+    // records together, so the reported `total` cannot drift from the
+    // `records` actually returned (the change-split invariant
+    // `funding == change + fee + credit` relies on that agreement).
     let mut total: u64 = 0;
-    for record in &eligible {
-        if total >= required {
-            break;
-        }
+    let mut records = Vec::with_capacity(eligible.len());
+    for record in eligible {
         total = total
             .checked_add(record.amount.to_raw())
             .ok_or(BondAssemblyError::AmountOverflow)?;
-        selected.push((*record).clone());
+        records.push(record.clone());
     }
 
     if total < required {
-        // `total` here is the full unreserved sum (the loop only stops early
-        // once `required` is met), so it doubles as `available`.
         return Err(BondAssemblyError::InsufficientFunding {
             available: total,
             required,
         });
     }
 
-    Ok(FundingSelection {
-        records: selected,
-        total,
-    })
+    Ok(FundingSelection { records, total })
 }
 
 // ---------------------------------------------------------------------------
@@ -382,34 +437,59 @@ pub(crate) fn finalize_bond_tx(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::test_support::funding_record;
     use shekyl_engine_state::pending_post_block::PendingPostState;
-    use shekyl_types::{BlockHeight, SettlementEpoch};
-    use shekyl_units::AtomicUnits;
+    use shekyl_engine_state::pscan_state::MintLineageOutput;
+    use shekyl_types::BlockHeight;
 
+    // The sweep is lineage-blind (it consumes *all* spendable funding
+    // regardless of rung — GF-4b §3.1), so these helpers pin rung 3 as the
+    // representative fixture lineage; both delegate to the crate's single
+    // `funding_record` builder (the immature-exclusion KATs override
+    // `spendable_height` on the returned record).
     fn record(gindex: u64, height: u64, amount: u64) -> PFundingOutputRecord {
         record_for_slot(0, gindex, height, amount)
     }
 
     fn record_for_slot(p_slot: u32, gindex: u64, height: u64, amount: u64) -> PFundingOutputRecord {
-        PFundingOutputRecord {
+        funding_record(
             p_slot,
-            tx_hash: [u8::try_from(gindex & 0xFF).expect("masked to a byte"); 32],
-            index_in_transaction: 0,
             gindex,
-            output_key: [1u8; 32],
-            commitment: [2u8; 32],
-            ciphertext_x25519: [3u8; 32],
-            ciphertext_ml_kem: vec![4u8; 8],
-            amount: AtomicUnits::from_raw(amount),
-            height: BlockHeight::from_raw(height),
-            epoch: SettlementEpoch::from_raw(0),
-        }
+            height,
+            amount,
+            MintLineageOutput::ExternalTransfer,
+        )
     }
 
-    /// §3.2 rule 3: oldest-first (height, then gindex) greedy accumulation,
-    /// stopping at the first record that satisfies `required`.
+    /// A far-future reference height: every plain-maturity fixture record is
+    /// spendable, so tests exercising non-spendability concerns are
+    /// unaffected by the GF4b-6 filter.
+    const REF_HEIGHT: u64 = 1_000_000;
+
+    fn sweep(
+        records: &[PFundingOutputRecord],
+        p_slot: u32,
+        reserved: &std::collections::BTreeSet<u64>,
+        required: u64,
+        reference_height: u64,
+    ) -> Result<FundingSelection, BondAssemblyError> {
+        let reference_height = BlockHeight::from_raw(reference_height);
+        sweep_funding_outputs(
+            &SpentRecordsDurablyPruned::for_test(),
+            records,
+            p_slot,
+            reserved,
+            required,
+            reference_height,
+        )
+    }
+
+    /// GF-4b §3.1: the sweep consumes the **entire** spendable eligible set
+    /// oldest-first — no early break at `required`, no expressible subset.
+    /// (Formerly the subset selector's stop-when-satisfied test; the sweep
+    /// conversion inverts the expectation.)
     #[test]
-    fn selection_is_oldest_first_and_stops_when_satisfied() {
+    fn sweep_consumes_the_entire_eligible_set_oldest_first() {
         // Deliberately unsorted input; heights 30/10/20, and a same-height
         // pair (10) discriminated by gindex.
         let records = vec![
@@ -418,12 +498,12 @@ mod tests {
             record(1, 10, 300),
             record(4, 20, 500),
         ];
-        let selection =
-            select_funding_outputs(&records, 0, &Default::default(), 1_000).expect("selects");
-        // Oldest-first: (10,1) then (10,3) then (20,4); 300+400+500 ≥ 1000.
+        let selection = sweep(&records, 0, &Default::default(), 1_000, REF_HEIGHT).expect("sweeps");
+        // Oldest-first over *everything*: 300+400 ≥ 1000 would have stopped
+        // the old selector at [1, 3]; the sweep consumes all four.
         let picked: Vec<u64> = selection.records.iter().map(|r| r.gindex).collect();
-        assert_eq!(picked, vec![1, 3, 4]);
-        assert_eq!(selection.total, 1_200);
+        assert_eq!(picked, vec![1, 3, 4, 5], "the full eligible set, ordered");
+        assert_eq!(selection.total, 2_200);
     }
 
     /// §3.2 rule 1: records reserved by a live pending post are excluded —
@@ -432,19 +512,19 @@ mod tests {
     fn reserved_gindexes_are_excluded() {
         let records = vec![record(1, 10, 600), record(2, 20, 600)];
         let reserved = [1u64].into_iter().collect();
-        let selection = select_funding_outputs(&records, 0, &reserved, 500).expect("selects");
+        let selection = sweep(&records, 0, &reserved, 500, REF_HEIGHT).expect("sweeps");
         let picked: Vec<u64> = selection.records.iter().map(|r| r.gindex).collect();
-        assert_eq!(picked, vec![2], "the reserved record must not be selected");
+        assert_eq!(picked, vec![2], "the reserved record must not be swept");
     }
 
     /// §3.2 rule 1 (persona scoping): the sealed set mixes every bonded
-    /// persona's records, but selection funds **one** persona's bond — records
-    /// owned by a different `p_slot` must never be selected (they would derive a
+    /// persona's records, but the sweep funds **one** persona's bond — records
+    /// owned by a different `p_slot` must never be swept (they would derive a
     /// wrong key image under the single-persona `AssembleBond` derivation).
     #[test]
-    fn selection_excludes_other_personas_records() {
+    fn sweep_excludes_other_personas_records() {
         // Persona 0 alone has just under the requirement; persona 1 has plenty.
-        // A slot-blind selector would reach across and "succeed" with persona
+        // A slot-blind sweep would reach across and "succeed" with persona
         // 1's outputs — the exact mis-keying this filter closes.
         let records = vec![
             record_for_slot(0, 1, 10, 400),
@@ -452,7 +532,7 @@ mod tests {
             record_for_slot(1, 3, 20, 5_000),
         ];
         // Assembling for persona 0: only its own 400 is eligible → refuse.
-        let err = select_funding_outputs(&records, 0, &Default::default(), 1_000)
+        let err = sweep(&records, 0, &Default::default(), 1_000, REF_HEIGHT)
             .err()
             .expect("persona 0 cannot reach across to persona 1's outputs");
         match err {
@@ -461,24 +541,23 @@ mod tests {
             }
             other => panic!("expected InsufficientFunding, got {other:?}"),
         }
-        // Assembling for persona 1: selects only persona 1's records.
-        let selection =
-            select_funding_outputs(&records, 1, &Default::default(), 1_000).expect("selects");
+        // Assembling for persona 1: sweeps persona 1's records — all of them.
+        let selection = sweep(&records, 1, &Default::default(), 1_000, REF_HEIGHT).expect("sweeps");
         let picked: Vec<u64> = selection.records.iter().map(|r| r.gindex).collect();
         assert_eq!(
             picked,
-            vec![2],
-            "persona 1 funds from its own oldest record"
+            vec![2, 3],
+            "persona 1's entire eligible set, never persona 0's"
         );
     }
 
-    /// §3.2 rule 2 (fund-from-earnings ramp): an unreserved sum below the
+    /// §3.2 rule 2 (fund-from-earnings ramp): a swept total below the
     /// requirement refuses with the exact `available`/`required` pair.
     #[test]
     fn insufficient_funding_refuses_with_available_and_required() {
         let records = vec![record(1, 10, 300), record(2, 20, 200)];
         let reserved = [2u64].into_iter().collect();
-        let err = select_funding_outputs(&records, 0, &reserved, 1_000)
+        let err = sweep(&records, 0, &reserved, 1_000, REF_HEIGHT)
             .err()
             .expect("must refuse");
         match err {
@@ -491,6 +570,77 @@ mod tests {
             }
             other => panic!("expected InsufficientFunding, got {other:?}"),
         }
+    }
+
+    /// GF4b-6 (§3.6): an immature record — `spendable_height` above the
+    /// sweep's reference height — is excluded, and the sweep over the mature
+    /// remainder still succeeds. Exercises both arrival paths: ordinary
+    /// fresh funding (plain +`SPENDABLE_AGE` maturity) and a coinbase-shaped
+    /// +60 lock (the adversarial mine-to-`P` griefing vector the sweep's
+    /// totality would otherwise convert into a bonding denial).
+    #[test]
+    fn sweep_excludes_immature_records() {
+        // reference_height 25: record at height 10 matured at 20 (in);
+        // record at height 20 matures at 30 (out, ordinary +10 flow).
+        let records = vec![record(1, 10, 600), record(2, 20, 600)];
+        let selection = sweep(&records, 0, &Default::default(), 500, 25).expect("sweeps");
+        let picked: Vec<u64> = selection.records.iter().map(|r| r.gindex).collect();
+        assert_eq!(picked, vec![1], "the immature record is not in the sweep");
+        assert_eq!(selection.total, 600);
+
+        // Coinbase-shaped arrival: same height as the mature record, but the
+        // +60 lock (via spendable_height) keeps it out until height 70.
+        let mut coinbase_shaped = record(3, 10, 600);
+        coinbase_shaped.spendable_height = BlockHeight::from_raw(10 + 60);
+        let records = vec![record(1, 10, 600), coinbase_shaped];
+        let selection = sweep(&records, 0, &Default::default(), 500, 25).expect("sweeps");
+        let picked: Vec<u64> = selection.records.iter().map(|r| r.gindex).collect();
+        assert_eq!(
+            picked,
+            vec![1],
+            "an adversarially-mined immature coinbase cannot deny the bond"
+        );
+    }
+
+    /// GF-4b §3.1 structural emptiness at the sweep boundary: the swept set
+    /// **is** the spendable eligible set — filtering the input by the sweep's
+    /// own eligibility predicate and subtracting the selection leaves
+    /// nothing. (The state-level zero-pre-bond-output test extends this to
+    /// the post-sweep record set; this KAT pins the function's totality.)
+    #[test]
+    fn sweep_leaves_no_spendable_eligible_remainder() {
+        let reserved: std::collections::BTreeSet<u64> = [4u64].into_iter().collect();
+        let mut immature = record(5, 90, 250);
+        immature.spendable_height = BlockHeight::from_raw(150);
+        let records = vec![
+            record(1, 10, 300),
+            record(2, 20, 400),
+            record_for_slot(7, 3, 15, 999), // other persona
+            record(4, 25, 500),             // reserved
+            immature,                       // survives by design (GF4b-6)
+        ];
+        let selection = sweep(&records, 0, &reserved, 100, 100).expect("sweeps");
+        let swept: std::collections::BTreeSet<u64> =
+            selection.records.iter().map(|r| r.gindex).collect();
+        let remainder: Vec<u64> = records
+            .iter()
+            .filter(|r| {
+                r.p_slot == 0
+                    && !reserved.contains(&r.gindex)
+                    && r.spendable_height <= BlockHeight::from_raw(100)
+            })
+            .map(|r| r.gindex)
+            .filter(|g| !swept.contains(g))
+            .collect();
+        assert!(
+            remainder.is_empty(),
+            "a spendable eligible record survived the sweep: {remainder:?}"
+        );
+        assert_eq!(
+            swept.len(),
+            2,
+            "exactly the two spendable, unreserved, own-slot records"
+        );
     }
 
     /// Pin P-2 round-trip: a sealed [`PendingBondPost`]'s `(persona, tx_bytes)`

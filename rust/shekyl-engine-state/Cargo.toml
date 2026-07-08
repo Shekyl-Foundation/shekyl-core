@@ -31,6 +31,13 @@ getrandom = { version = "0.2", features = ["std"] }
 postcard-schema = { version = "0.2", default-features = false, features = ["derive", "use-std"] }
 
 shekyl-address = { path = "../shekyl-address" }
+# Single source for the tree-insertion lock windows: `SPENDABLE_AGE` is
+# defined as `DEFAULT_LOCK_WINDOW` so the wallet's eligibility math and the
+# daemon's deferred tree insertion share one constant instead of two
+# literals that happen to agree (GF4b-6 single-source sharpening,
+# docs/design/ARCHIVAL_GF4B_BACKING_LINEAGE.md §3.6). Featherweight dep
+# (thiserror + serde only, no reverse dep).
+shekyl-consensus = { path = "../shekyl-consensus" }
 # `KeyImage` newtype consumed by `TransferDetails::key_image` for
 # type-system protection at the engine-state boundary; serialization
 # is `#[serde(transparent)]` so the on-disk format is unchanged.

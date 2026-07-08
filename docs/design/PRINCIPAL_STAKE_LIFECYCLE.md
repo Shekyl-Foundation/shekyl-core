@@ -174,12 +174,27 @@ that owns it (§4a PR map) — no signature churn between "surface" and "impleme
   `stake_engine.rs:1231` already reasons about **funding↔bond-post decorrelation** ("defeating
   the gate-6 firewall") and the SP-3/SP-5 dual-extract reconciles funding + bond-post as two
   scanned events — the sweep must land beside that reasoning, not against it (seams verified
-  intact post-#225). **Sequencing:** the `MintLineageOutput` scan-provenance enum (upgrading the
-  `is_miner` bool; `scan.rs:507` — "the type system does not yet prove wire provenance") is the
-  one *existing-code* change and is independently useful — it can land **ahead** of `stake_in`;
-  `BackingSet` (constructor-gated over `MintLineageOutput` ∪ `BondPostChange`, sibling of
-  `RetirementWitness` §0.2) lands with E3-adjacent backing selection; plus a test that
-  post-bond-post `P`'s spendable set contains **zero** pre-bond outputs.
+  intact post-#225). **Sequencing (as corrected by
+  `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §2.1 items 2–3):** the
+  `MintLineageOutput` mint-lineage enum is a **new** classification at the
+  dual-extract seam, not an upgrade of an existing field — `is_miner` lives
+  on `OwnedTxLeaves` and never reaches the pscan pipeline, and the
+  `scan.rs` "provenance" comment previously cited here is about
+  *wire-parse* provenance (`ParsedTransaction`), a different concept. The
+  "can land ahead of `stake_in`" claim was confirmed correct and has landed.
+  **UPDATE 2026-07-08 (wired state, GF-4b PR):** landed — `MintLineageOutput`
+  classified at the scan seam and persisted on `PFundingOutputRecord`
+  (schema v5, with `spendable_height` via the shared `eligible_height`);
+  `sweep_funding_outputs` (sweep semantics, spendability-filtered,
+  `SpentRecordsDurablyPruned`-witness-gated); `BackingSet`
+  (`engine/backing_set.rs`, constructor-gated over
+  `{EmissionReward, BondPostChange}`, GF4b-3 survivor tripwire armed) and
+  the zero-pre-bond-output test. The C-1 residue (arity-1 selector,
+  `EmissionReward` scan arm, integration test) is enumerated with named
+  criteria at the GF-4b doc §5. Note the eligible-lineage set is
+  `{EmissionReward, BondPostChange}` — **no miner rung exists**: `P` is
+  shard-serving only, mining stays under the principal, and
+  coinbase-to-`P` is an anomaly classifying rung 3 (GF4b-1 owner ruling).
   Make-bad-states-unrepresentable on the funding shape — designed in at birth.
 - **GF-7 — principal→`P` bond-funding structural distinguishability.** Lump funding
   from a fresh principal output immediately before first emission/join is a correlation

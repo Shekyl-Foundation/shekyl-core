@@ -31,9 +31,8 @@
 use std::ops::Range;
 
 use shekyl_engine_state::{
-    LedgerBlock, LedgerIndexes, ReceiveAttribution, TransferDetails, SPENDABLE_AGE,
+    transfer::eligible_height, LedgerBlock, LedgerIndexes, ReceiveAttribution, TransferDetails,
 };
-use shekyl_types::Timelock;
 
 use crate::{balance::BalanceSummary, output::WalletOutput, scan::Timelocked};
 
@@ -48,14 +47,6 @@ pub trait TransferDetailsExt {
     /// not hold the `view_secret` required by `derive_output_handle`, by
     /// design.
     fn from_wallet_output(output: &WalletOutput, block_height: u64) -> Self;
-}
-
-/// The absolute block height an output's additional timelock unlocks at, for
-/// the `eligible_height` floor (X5). [`Timelock`] is block-height-only, so this is
-/// exactly its raw unlock value: the block height for [`Timelock::Block`], `0` for
-/// [`Timelock::None`]. (The CryptoNote timestamp form is not representable.)
-fn additional_timelock_block(timelock: Timelock) -> u64 {
-    timelock.to_unlock_raw()
 }
 
 impl TransferDetailsExt for TransferDetails {
@@ -103,9 +94,17 @@ impl TransferDetailsExt for TransferDetails {
             // +SPENDABLE_AGE). `eligible_height` must agree with that insertion
             // height — otherwise selection would treat a coinbase as spendable
             // at +SPENDABLE_AGE while its leaf is absent from the tree until
-            // the coinbase lock expires, attempting an unprovable spend.
-            eligible_height: (block_height + SPENDABLE_AGE)
-                .max(additional_timelock_block(output.additional_timelock())),
+            // the coinbase lock expires, attempting an unprovable spend. The
+            // computation is the shared `transfer::eligible_height` — the
+            // single definition of "in the tree yet," also stored by the
+            // pscan funding path as `spendable_height` (GF4b-6,
+            // ARCHIVAL_GF4B_BACKING_LINEAGE.md §3.6). This legacy field is
+            // `u64`-shaped, so the typed result converts at this edge.
+            eligible_height: eligible_height(
+                shekyl_types::BlockHeight::from_raw(block_height),
+                output.additional_timelock(),
+            )
+            .to_raw(),
             frozen: false,
             fcmp_precomputed_path: None,
             receive_attribution: ReceiveAttribution::default(),
@@ -194,6 +193,7 @@ mod x5_eligible_height_tests {
     use crate::output::WalletOutput;
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
     use shekyl_curve_primitives::Commitment;
+    use shekyl_engine_state::transfer::SPENDABLE_AGE;
     use shekyl_types::{BlockHeight, Timelock};
 
     fn dummy_output() -> WalletOutput {

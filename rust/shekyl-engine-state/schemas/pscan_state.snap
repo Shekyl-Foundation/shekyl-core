@@ -1169,6 +1169,40 @@
                         }
                       }
                     }
+                  },
+                  {
+                    "name": "lineage",
+                    "ty": {
+                      "name": "MintLineageOutput",
+                      "ty": {
+                        "Enum": [
+                          {
+                            "name": "EmissionReward",
+                            "ty": "UnitVariant"
+                          },
+                          {
+                            "name": "BondPostChange",
+                            "ty": "UnitVariant"
+                          },
+                          {
+                            "name": "ExternalTransfer",
+                            "ty": "UnitVariant"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "name": "spendable_height",
+                    "ty": {
+                      "name": "BlockHeight",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "u64",
+                          "ty": "U64"
+                        }
+                      }
+                    }
                   }
                 ]
               }

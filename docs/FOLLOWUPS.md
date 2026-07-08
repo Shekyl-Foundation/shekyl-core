@@ -47,6 +47,51 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **GF4b-2 genesis gate — bond-post funding-input-count leak; `stake_in`
+  single-structured-output funding must land before genesis** (added
+  2026-07-08, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.5 residual 1 /
+  review-round GF4b-2). Until `stake_in` exists, every bond post exposes the
+  raw funding-input *count* on the `P`-public post, and the count correlates
+  to how the principal funded `P` (a principal→user-adjacent signal, same
+  class as WI-4's V-2a amount prior). Priority-1 disposition, answered not
+  deferred: **C-1 merge does not gate** (pre-genesis codebase — no chain, no
+  principals, nothing to leak from), **genesis readiness does gate** —
+  per `00-mission.mdc` priority-2 the leak cannot be traded for launch
+  schedule. **Criterion (checkable):** the common-case bond-post sweep
+  consumes exactly **one** funding input — `stake_in` funds each admission
+  as a single structured `bond_floor + cover` output
+  (`PRINCIPAL_STAKE_LIFECYCLE.md` §3.1), or an equivalent input-count
+  discipline reviewed against the same threat. Reversion clause (rule 21):
+  reopens **iff** a gate-6 round scores the input-count exposure and accepts
+  it explicitly (e.g. finds the count carries no marginal bits over the
+  already-public holdings descriptor); re-evaluation shape: gate-6 round
+  entry plus closure of this item citing it. *Target: V3.0 (pre-genesis).*
+
+- **Domain-newtype the residual raw fields on `PFundingOutputRecord` and
+  the WI-2 sweep amounts (spawned GF-4b audit sweep, 2026-07-08).** The
+  GF-4b PR typed its *new* surfaces (`spendable_height: BlockHeight`
+  end-to-end; `eligible_height` is `BlockHeight → BlockHeight`), but the
+  record's **pre-existing v4 fields** still carry raws that have landed
+  newtypes elsewhere: `p_slot: u32` (`stake_engine::PSlot` exists),
+  `tx_hash: [u8; 32]` (`shekyl_types::TxHash` exists; sibling
+  `PBondPostMatch` already carries typed `PCanonicalId`), and
+  `gindex: u64` (`shekyl_curve_tree::Gindex` exists). Adjacent to it, the
+  WI-2 sweep's `required: u64` / `FundingSelection::total: u64` are raw
+  amounts one seam away from typed `AtomicUnits` records (rule-20 amount
+  arithmetic; the checked-add is already explicit). All are wire-transparent
+  (`#[serde(transparent)]`/`#[repr(transparent)]`) so the postcard bytes are
+  unchanged; the pscan schema *snapshot* changes name-only, which pre-genesis
+  costs one `PSCAN_STATE_VERSION` bump. Deliberately **not** folded into the
+  GF-4b PR (rule 15: pre-existing fields are outside its stated scope).
+  **Carrier: the WI-2 orchestrator wiring work** — the Engine-side
+  assemble/dispatch consumer named on the `#[allow(dead_code)]` markers in
+  `bond_assembly.rs` is the next PR that touches every one of these seams
+  and the pscan schema, so the retyping and the bump ride it rather than a
+  standalone churn PR. *Target: V3.0 (pre-genesis — ships complete at
+  genesis, not deferred to a post-launch version).* *Fold in sooner if:*
+  any other pscan-schema-touching PR lands first (piggyback its bump), or
+  a slot/hash/gindex transposition bug surfaces at this seam.
+
 - **Economics C2a′ layer gate — stacked silent failures; layer verdicts
   currently vacuous** (surfaced 2026-07-04 when PR #241's hardened rustup
   install turned the first layer of it loud). Three independent silent
@@ -4332,6 +4377,7 @@ sustainability is unaffected by the recalibration.
   Target: V3.1, bundled with the next consensus_state-touching PR rather
   than as a standalone churn PR. *Reopen sooner if:* another transposition
   bug surfaces at this boundary before V3.1.
+
   The Round 3 threat-model-exhaustion + wider-substrate wargame
   ([`PHASE_2B_STAKE_LIFECYCLE.md`](./design/PHASE_2B_STAKE_LIFECYCLE.md) §7.5,
   executed 2026-06-05) dispositioned every T/G item; seven carry **V3.1**
@@ -7410,6 +7456,16 @@ one place to confirm each item's relationship to the wallet stack.
   over-eager drop of a not-yet-confirmed-spent output strands live funds), which is why it rides
   SP-6/SP-R0 rather than a naive "saw our own bond post" seam. **If WI-2 assemble must be live at
   genesis, this item is pulled into the V3.0 pre-genesis queue.** **Target:** V3.x (with SP-R0).
+  **UPDATE 2026-07-08 (GF-4b sweep amendment):** `select_funding_outputs` is now
+  `sweep_funding_outputs` with **sweep semantics** (consumes the persona's entire unreserved
+  spendable eligible set — `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.1), which *raises* this item's
+  severity: under sweep, one stale confirmed-spent record poisons **every** later bond post for
+  the persona, not just posts whose greedy prefix happened to reach it (§3.2 of the GF-4b doc).
+  The go-live gate is now **structural**, not review-borne: `sweep_funding_outputs` requires a
+  `SpentRecordsDurablyPruned` witness token constructible only by the SP-R0 pruning code
+  (test-only constructor aside), so wiring assemble live without durable pruning fails to
+  compile (GF4b-5). Landing this item = implementing the pruning per the SP-R0 discipline above
+  **and** minting the witness at that seam.
   See [`ARCHIVAL_BOND_WI2_ASSEMBLY.md`](design/ARCHIVAL_BOND_WI2_ASSEMBLY.md) §3.2/§3.5 and
   [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §12 (SP-R0).
 - **2d-1 SP-3 — borrow the block in the dual extractor instead of cloning per bonded scanner
