@@ -25,6 +25,24 @@
   and require all four platforms green before the cut/promote/tag, so
   release-only build breakage is caught pre-tag instead of forcing a bump.
 
+### Security
+
+- **deps: clear the `cargo audit` warning backlog** (`rust/Cargo.lock`,
+  `rust/.cargo/audit.toml`). Bumped `anyhow` `1.0.102 → 1.0.103`, closing the
+  soundness notice RUSTSEC-2026-0190 (the only *unsound* advisory in the tree;
+  patched `>= 1.0.103`). Dropped the now-stale ignore for RUSTSEC-2026-0097
+  (`rand` unsoundness): the tree already resolves to `rand` `0.8.6`/`0.9.4`,
+  both in the patched ranges (`>= 0.8.6`, `>= 0.9.3`), so the advisory no
+  longer applies. The two remaining notices are crate-level *unmaintained*
+  INFO advisories on transitive, non-consensus, render/build-time deps that
+  cannot be dropped without an upstream move — `atomic-polyfill`
+  (RUSTSEC-2023-0089, via `postcard 1.1.3 → heapless 0.7`, and not even
+  compiled on native-atomic targets) and `ttf-parser` (RUSTSEC-2026-0192, via
+  the `imageproc` chain, same root as `paste`). Both are now documented in
+  `audit.toml` with explicit reopen criteria per
+  `21-reversion-clause-discipline.mdc`, alongside the existing `paste` entry.
+  `cargo audit` is fully green with zero unexplained warnings.
+
 ## [3.1.0-alpha.6] - 2026-07-07
 
 ### Added
