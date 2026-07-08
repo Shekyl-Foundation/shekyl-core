@@ -78,6 +78,24 @@ inline uint32_t load_be32(const uint8_t* in) noexcept
     return v;
 }
 
+// Append helpers for variable-length encoders (mirror store_be*, but grow a
+// vector instead of writing a fixed offset). Fixed-size values/keys use
+// store_be* into a pre-sized buffer; these are the canonical BE writer for the
+// push_back-append idiom, so no encoder need hand-roll the byte loop.
+inline void push_be64(std::vector<uint8_t>& out, uint64_t v)
+{
+    uint8_t be[8];
+    store_be64(be, v);
+    out.insert(out.end(), be, be + 8);
+}
+
+inline void push_be32(std::vector<uint8_t>& out, uint32_t v)
+{
+    uint8_t be[4];
+    store_be32(be, v);
+    out.insert(out.end(), be, be + 4);
+}
+
 // ─── Strong identifiers ────────────────────────────────────────────────────
 //
 // Each Tag creates a distinct type. Passing OutputIndex where TreePosition
@@ -517,13 +535,10 @@ struct ArchivalSlashRevertValue {
         std::vector<uint8_t> out(kEncodedSize);
         out[0] = kVersion;
         std::memcpy(out.data() + 1, p_id, 32);
-        for (int i = 7; i >= 0; --i)
-            out[1 + 32 + (7 - i)] = static_cast<uint8_t>((shard_id >> (i * 8)) & 0xFF);
-        for (int i = 7; i >= 0; --i)
-            out[1 + 32 + 8 + (7 - i)] = static_cast<uint8_t>((settlement_epoch >> (i * 8)) & 0xFF);
-        for (int i = 7; i >= 0; --i)
-            out[1 + 32 + 16 + (7 - i)] = static_cast<uint8_t>((slashed_amount >> (i * 8)) & 0xFF);
-        out[1 + 32 + 24] = holdings_pre_kind;
+        store_be64(out.data() + 33, shard_id);
+        store_be64(out.data() + 41, settlement_epoch);
+        store_be64(out.data() + 49, slashed_amount);
+        out[57] = holdings_pre_kind;
         return out;
     }
 
@@ -600,17 +615,10 @@ struct ArchivalEmissionClaimRevertValue {
         out.reserve(kFixedSize + pre_claimed_epochs.size() * 8);
         out.push_back(kVersion);
         out.insert(out.end(), p_id, p_id + 32);
-        for (int i = 7; i >= 0; --i)
-            out.push_back(static_cast<uint8_t>(
-                (pre_first_paying_emission_height >> (i * 8)) & 0xFF));
-        const uint32_t count = static_cast<uint32_t>(pre_claimed_epochs.size());
-        for (int i = 3; i >= 0; --i)
-            out.push_back(static_cast<uint8_t>((count >> (i * 8)) & 0xFF));
+        push_be64(out, pre_first_paying_emission_height);
+        push_be32(out, static_cast<uint32_t>(pre_claimed_epochs.size()));
         for (const uint64_t epoch : pre_claimed_epochs)
-        {
-            for (int i = 7; i >= 0; --i)
-                out.push_back(static_cast<uint8_t>((epoch >> (i * 8)) & 0xFF));
-        }
+            push_be64(out, epoch);
         return out;
     }
 

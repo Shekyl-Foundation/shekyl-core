@@ -349,6 +349,21 @@ pub struct ServedWork {
     pub work_by_bond: Vec<u64>,
 }
 
+/// Reject a gather whose credit pairs index outside the bond/shard arrays —
+/// the single validation both [`as_of_e_served_work`] and the M1-gated
+/// early-return in [`epoch_close_compute`] share, so a malformed gather fails
+/// loudly on every path (gated or not) from one source of truth.
+fn validate_credit_pair_indices(
+    inputs: &EpochCloseInputs<'_>,
+) -> Result<(), CreditIndexOutOfRange> {
+    for (pair_index, pair) in inputs.credit_pairs.iter().enumerate() {
+        if pair.bond_idx >= inputs.bonds.len() || pair.shard_idx >= inputs.shards.len() {
+            return Err(CreditIndexOutOfRange { pair_index });
+        }
+    }
+    Ok(())
+}
+
 /// Derive [`ServedWork`] from the gathered as-of-`E` inputs.
 ///
 /// The held-and-served set is sourced **solely** from `inputs.credit_pairs`
@@ -365,11 +380,7 @@ pub fn as_of_e_served_work(
     let bonds = inputs.bonds;
     let shards = inputs.shards;
 
-    for (pair_index, pair) in inputs.credit_pairs.iter().enumerate() {
-        if pair.bond_idx >= bonds.len() || pair.shard_idx >= shards.len() {
-            return Err(CreditIndexOutOfRange { pair_index });
-        }
-    }
+    validate_credit_pair_indices(inputs)?;
 
     let member: Vec<bool> = bonds
         .iter()
@@ -476,22 +487,19 @@ pub fn shard_contribution_milli(
 pub fn epoch_close_compute(
     inputs: &EpochCloseInputs<'_>,
 ) -> Result<EpochCloseResult, CreditIndexOutOfRange> {
-    let bonds = inputs.bonds;
     let shards = inputs.shards;
 
-    for (pair_index, pair) in inputs.credit_pairs.iter().enumerate() {
-        if pair.bond_idx >= bonds.len() || pair.shard_idx >= shards.len() {
-            return Err(CreditIndexOutOfRange { pair_index });
-        }
-    }
-
     if inputs.frozen_shard_count < inputs.k_cover.get() {
+        // Gated: `as_of_e_served_work` is never reached, so validate the gather
+        // here too — a malformed one is rejected, not silently zeroed.
+        validate_credit_pair_indices(inputs)?;
         return Ok(EpochCloseResult {
             r_market_by_shard: vec![0u64; shards.len()],
             sigma_work_milli: 0,
         });
     }
 
+    // Non-gated: `as_of_e_served_work` validates the same indices internally.
     let served = as_of_e_served_work(inputs)?;
     let sigma = sigma_work_milli(&served.work_by_bond, &inputs.curve, &served.member);
 

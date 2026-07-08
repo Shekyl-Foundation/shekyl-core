@@ -220,6 +220,52 @@ TEST(archival_substrate_lmdb, bond_v4_encode_version_byte)
   EXPECT_EQ(encoded[0], shekyl::db::ArchivalBondValue::kVersion);
 }
 
+TEST(archival_substrate_lmdb, slash_revert_value_round_trips)
+{
+  // Direct codec round-trip for the WS-1 v2 slash-revert value: encode →
+  // decode reproduces every field, and the version byte is v2. Guards the
+  // encode/decode symmetry independently of the slash apply/pop flow.
+  shekyl::db::ArchivalSlashRevertValue v{};
+  std::memset(v.p_id, 0xAB, sizeof(v.p_id));
+  v.shard_id = 0x0102030405060708ull;
+  v.settlement_epoch = 42;
+  v.slashed_amount = 7 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  v.holdings_pre_kind = shekyl::db::ArchivalSlashRevertValue::kPreKindCompleteTree;
+
+  const std::vector<uint8_t> encoded = v.encode();
+  ASSERT_EQ(encoded.size(), shekyl::db::ArchivalSlashRevertValue::kEncodedSize);
+  EXPECT_EQ(encoded[0], shekyl::db::ArchivalSlashRevertValue::kVersion);
+
+  shekyl::db::ArchivalSlashRevertValue decoded{};
+  ASSERT_TRUE(
+    shekyl::db::ArchivalSlashRevertValue::decode(encoded.data(), encoded.size(), decoded));
+  EXPECT_EQ(std::memcmp(decoded.p_id, v.p_id, 32), 0);
+  EXPECT_EQ(decoded.shard_id, v.shard_id);
+  EXPECT_EQ(decoded.settlement_epoch, v.settlement_epoch);
+  EXPECT_EQ(decoded.slashed_amount, v.slashed_amount);
+  EXPECT_EQ(decoded.holdings_pre_kind, v.holdings_pre_kind);
+}
+
+TEST(archival_substrate_lmdb, emission_claim_revert_value_round_trips)
+{
+  // Direct codec round-trip for the WS-2 emission-claim revert value, incl. a
+  // multi-entry pre-claimed set (the variable-length tail).
+  shekyl::db::ArchivalEmissionClaimRevertValue v{};
+  std::memset(v.p_id, 0xCD, sizeof(v.p_id));
+  v.pre_first_paying_emission_height = 30000;
+  v.pre_claimed_epochs = {2, 5, 9};
+
+  const std::vector<uint8_t> encoded = v.encode();
+  EXPECT_EQ(encoded[0], shekyl::db::ArchivalEmissionClaimRevertValue::kVersion);
+
+  shekyl::db::ArchivalEmissionClaimRevertValue decoded{};
+  ASSERT_TRUE(shekyl::db::ArchivalEmissionClaimRevertValue::decode(
+    encoded.data(), encoded.size(), decoded));
+  EXPECT_EQ(std::memcmp(decoded.p_id, v.p_id, 32), 0);
+  EXPECT_EQ(decoded.pre_first_paying_emission_height, v.pre_first_paying_emission_height);
+  EXPECT_EQ(decoded.pre_claimed_epochs, v.pre_claimed_epochs);
+}
+
 TEST(archival_substrate_lmdb, bond_v4_empty_claimed_defaults)
 {
   const std::vector<uint8_t> encoded = baseline_bond().encode();

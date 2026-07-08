@@ -1570,7 +1570,7 @@ mod tests {
             claimant_bond_idx,
         };
 
-        let mut capped_sum: u64 = 0;
+        let mut capped_terms: Vec<u64> = Vec::with_capacity(bonds.len());
         for idx in 0..bonds.len() {
             let snap = snapshot_for(idx);
             let mut work = u64::MAX;
@@ -1592,39 +1592,18 @@ mod tests {
             } else {
                 assert!(work > 0, "member bond {idx} must have nonzero work");
             }
-            capped_sum += capped;
+            capped_terms.push(capped);
         }
+        let capped_sum: u64 = capped_terms.iter().sum();
         assert_eq!(
             capped_sum, sigma,
             "sum of per-P capped terms must equal the persisted Σwork(E)"
         );
+        // Reuse the per-bond terms already computed above rather than
+        // re-invoking the FFI: the two members must differ for the identity to
+        // be non-trivial.
         assert_ne!(
-            {
-                let snap = snapshot_for(0);
-                let mut w = 0u64;
-                let mut c0 = 0u64;
-                unsafe {
-                    shekyl_archival_emission_epoch_work(
-                        ptr::from_ref(&snap),
-                        ptr::from_mut(&mut w),
-                        ptr::from_mut(&mut c0),
-                    )
-                };
-                c0
-            },
-            {
-                let snap = snapshot_for(1);
-                let mut w = 0u64;
-                let mut c1 = 0u64;
-                unsafe {
-                    shekyl_archival_emission_epoch_work(
-                        ptr::from_ref(&snap),
-                        ptr::from_mut(&mut w),
-                        ptr::from_mut(&mut c1),
-                    )
-                };
-                c1
-            },
+            capped_terms[0], capped_terms[1],
             "fixture must produce distinct per-P terms for the identity to be non-trivial"
         );
 
