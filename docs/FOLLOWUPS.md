@@ -47,6 +47,26 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **GF4b-2 genesis gate — bond-post funding-input-count leak; `stake_in`
+  single-structured-output funding must land before genesis** (added
+  2026-07-08, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.5 residual 1 /
+  review-round GF4b-2). Until `stake_in` exists, every bond post exposes the
+  raw funding-input *count* on the `P`-public post, and the count correlates
+  to how the principal funded `P` (a principal→user-adjacent signal, same
+  class as WI-4's V-2a amount prior). Priority-1 disposition, answered not
+  deferred: **C-1 merge does not gate** (pre-genesis codebase — no chain, no
+  principals, nothing to leak from), **genesis readiness does gate** —
+  per `00-mission.mdc` priority-2 the leak cannot be traded for launch
+  schedule. **Criterion (checkable):** the common-case bond-post sweep
+  consumes exactly **one** funding input — `stake_in` funds each admission
+  as a single structured `bond_floor + cover` output
+  (`PRINCIPAL_STAKE_LIFECYCLE.md` §3.1), or an equivalent input-count
+  discipline reviewed against the same threat. Reversion clause (rule 21):
+  reopens **iff** a gate-6 round scores the input-count exposure and accepts
+  it explicitly (e.g. finds the count carries no marginal bits over the
+  already-public holdings descriptor); re-evaluation shape: gate-6 round
+  entry plus closure of this item citing it. *Target: V3.0 (pre-genesis).*
+
 - **Economics C2a′ layer gate — stacked silent failures; layer verdicts
   currently vacuous** (surfaced 2026-07-04 when PR #241's hardened rustup
   install turned the first layer of it loud). Three independent silent
