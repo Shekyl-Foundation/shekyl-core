@@ -388,6 +388,29 @@ fn wrong_claimant_rejects() {
 }
 
 #[test]
+fn out_of_range_claimant_index_rejects_not_panics() {
+    // A malformed gather whose claimant_bond_idx exceeds the bond rows must be
+    // a structured consensus rejection, never an indexing panic on the verify
+    // path (mirrors the FFI numerator's ERR_INDEX_RANGE guard).
+    let fx = Fixture::new(E);
+    let vin = honest_vin(&fx);
+    let ctx = Ctx::accepting(&fx);
+
+    let mut src = source(&fx);
+    // One bond row in the fixture gather; index 99 is out of range.
+    src.claimant_bond_idx = Some(99);
+    let err = emission_vin_verify_claims(&vin, &ctx.as_context(), &[src]).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            EmissionVerifyError::ClaimantIndexOutOfRange { epoch, claimant_bond_idx, .. }
+                if epoch == E && claimant_bond_idx == 99
+        ),
+        "out-of-range claimant index: {err}"
+    );
+}
+
+#[test]
 fn work_claim_entry_polarity() {
     let fx = Fixture::new(E);
     let ctx = Ctx::accepting(&fx);

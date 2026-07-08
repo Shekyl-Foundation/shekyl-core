@@ -42,10 +42,11 @@
 
 use crate::claimed_epochs::{claim_window_floor, claimed_epochs_contains};
 use crate::consensus_state::{
-    as_of_e_served_work, epoch_close_height, settlement_epoch_at_height, EpochCloseInputs,
+    as_of_e_served_work, capped_work_milli, epoch_close_height, settlement_epoch_at_height,
+    shard_contribution_milli, EpochCloseInputs,
 };
 use crate::emission_wire::{ArchivalRewardEmissionVin, WireError};
-use crate::reward_arithmetic::{curve_milli, reward_share_floor};
+use crate::reward_arithmetic::reward_share_floor;
 use shekyl_crypto_pq::derivation::hash_pqc_public_key;
 use shekyl_fcmp::proof::{verify_membership_only, ShekylFcmpProof};
 use shekyl_fcmp::PqcLeafScalar;
@@ -110,6 +111,19 @@ pub enum EmissionVerifyError {
     GatherMalformed {
         epoch: u64,
         source_err: crate::consensus_state::CreditIndexOutOfRange,
+    },
+
+    /// Step 4: the source's `claimant_bond_idx` indexes outside the gathered
+    /// bond rows — a marshaling bug or malformed gather. A structured
+    /// fail-closed rejection, mirroring the FFI numerator's `ERR_INDEX_RANGE`
+    /// guard, rather than an indexing panic on the consensus verify path.
+    #[error(
+        "epoch {epoch}: claimant bond index {claimant_bond_idx} out of range ({bonds_len} bonds)"
+    )]
+    ClaimantIndexOutOfRange {
+        epoch: u64,
+        claimant_bond_idx: usize,
+        bonds_len: usize,
     },
 
     /// Step 4: a work-claim entry repeats a `shard_id` within one epoch.
@@ -401,8 +415,18 @@ pub fn emission_vin_verify_claims(
         let served = as_of_e_served_work(&source.inputs)
             .map_err(|source_err| EmissionVerifyError::GatherMalformed { epoch, source_err })?;
 
-        // Claimant work + market-masked per-shard expectations.
+        // Claimant work + market-masked per-shard expectations. Bounds-check
+        // the caller-supplied index before indexing so a malformed gather is a
+        // clean consensus rejection, not a daemon-aborting panic (fail-closed,
+        // as the FFI numerator's ERR_INDEX_RANGE guard does).
         let (work_p, is_member) = match source.claimant_bond_idx {
+            Some(idx) if idx >= served.work_by_bond.len() => {
+                return Err(EmissionVerifyError::ClaimantIndexOutOfRange {
+                    epoch,
+                    claimant_bond_idx: idx,
+                    bonds_len: served.work_by_bond.len(),
+                });
+            }
             Some(idx) => (served.work_by_bond[idx], served.member[idx]),
             None => (0, false),
         };
@@ -447,7 +471,7 @@ pub fn emission_vin_verify_claims(
                     .iter()
                     .position(|s| s.shard_id == entry.shard_id)
                     .expect("credited pair implies the shard row exists");
-                per_shard_contribution(&source.inputs, &served.r_market_by_shard, shard_idx)
+                shard_contribution_milli(&source.inputs, &served.r_market_by_shard, shard_idx)
             } else {
                 0
             };
@@ -464,6 +488,13 @@ pub fn emission_vin_verify_claims(
 
         // Completeness: an omitted credited shard leaves `entry_sum` short
         // of the recompute; a padded one was already rejected per entry.
+        // Soundness of the per-shard (`entry_sum`, deduped by `shard_id`) vs
+        // per-pair (`work_p`, one term per credit pair) comparison rests on the
+        // serve-credit key `P‖shard‖E` being unique: the gather yields at most
+        // one credit pair per (claimant, shard) in an epoch, so `work_p` counts
+        // each shard once — the same multiplicity `entry_sum` uses. Relaxing
+        // that key's uniqueness would double-count `work_p` and must revisit
+        // this check (dedup `work_p` by shard).
         if entry_sum != work_p {
             return Err(EmissionVerifyError::WorkTotalMismatch {
                 epoch,
@@ -474,13 +505,9 @@ pub fn emission_vin_verify_claims(
 
         // Step 5 — three-channel economics over the persisted denominator
         // (R1.B: canonical `reward_arithmetic`, u128 numerator-before-divide,
-        // floor + burn-the-dust). Mirrors `sigma_work_milli`'s per-P term:
-        // non-members and zero-work members have a zero capped term.
-        let capped = if is_member && work_p > 0 {
-            curve_milli(work_p, &source.inputs.curve)
-        } else {
-            0
-        };
+        // floor + burn-the-dust). The capped term is the same single-sourced
+        // per-P definition that built the persisted `Σwork(E)` denominator.
+        let capped = capped_work_milli(work_p, is_member, &source.inputs.curve);
         let expected_reward =
             reward_share_floor(source.budget, capped, source.persisted_sigma_work_milli);
         let claimed_reward = vin.reward_amount_plain[i];
@@ -509,31 +536,6 @@ pub fn emission_vin_verify_claims(
         epochs_to_commit: vin.settlement_epochs.clone(),
         total_reward,
     })
-}
-
-/// The per-shard work term exactly as [`as_of_e_served_work`] accumulates it
-/// (member-credited pairs only — the caller has already established both).
-fn per_shard_contribution(
-    inputs: &EpochCloseInputs<'_>,
-    r_market_by_shard: &[u64],
-    shard_idx: usize,
-) -> u64 {
-    let shard = &inputs.shards[shard_idx];
-    let age_milli = if shard.has_segment {
-        crate::consensus_state::shard_age_milli(
-            inputs.close_block_height,
-            shard.freeze_height,
-            inputs.settlement_epoch_blocks,
-        )
-    } else {
-        0
-    };
-    crate::consensus_state::shard_work_milli(
-        r_market_by_shard[shard_idx],
-        age_milli,
-        inputs.age_weight_milli,
-        true,
-    )
 }
 
 /// §7.1 step 6 — membership-only backing (PR-E1 seam; **not**

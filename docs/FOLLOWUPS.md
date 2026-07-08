@@ -1456,15 +1456,15 @@ sustainability is unaffected by the recalibration.
   rows. Deferred to a dedicated schema round (not this PR's WS-1 scope); (a)'s live
   cost is bounded in practice pre-genesis (slashes are rare, the log is small).
 
-- **PR-E3 emission verify — reject `sigma_work_milli == 0` at the consumer (M1-gate
-  belt).** `shekyl_archival_emission_epoch_work` deliberately routes the M1 `K_COVER`
-  reward gate through the persisted `Σwork(E)` denominator carried in the snapshot
-  (`frozen_shard_count: 0`; the numerator function never re-gates — documented at
-  `archival_ffi.rs` ~923). Sound by construction: a gated epoch persists `Σwork = 0`,
-  and no correct verify can divide by a zero denominator. The defense-in-depth belt
-  (explicitly reject/zero a claim whose snapshot `sigma_work_milli == 0` rather than
-  relying on the divide) belongs in the PR-E3 verify body that consumes this numerator,
-  not in the sourcing FFI. Land it with PR-E3. (PR #269 review, kept-as-designed here.)
+- **~~PR-E3 emission verify — reject `sigma_work_milli == 0` at the consumer (M1-gate
+  belt).~~ SATISFIED by landed code (PR #269).** The M1 `K_COVER` reward gate reaches
+  verify through the persisted `Σwork(E)` denominator: `shekyl_archival_emission_epoch_work`
+  deliberately does not re-gate the numerator (`frozen_shard_count: 0`; documented at
+  `archival_ffi.rs`). When PR-E3's verify body landed in this same PR, the belt landed
+  with it — `reward_arithmetic::reward_share_floor` returns 0 whenever
+  `sigma_work_milli == 0`, so a gated/empty epoch yields expected_reward 0 and any nonzero
+  claim is rejected via `RewardMismatch`; no division by zero. The numerator FFI docstring
+  now states the denominator caveat explicitly.
 
 - **Mid-band `age_weight` lever — CLOSED: the cushion is not robust, keep the minimal
   floor+no-cushion posture (decision, 2026-06-16).** The faithful-freeze fix reopened

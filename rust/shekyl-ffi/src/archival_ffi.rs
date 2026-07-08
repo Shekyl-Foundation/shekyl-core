@@ -12,13 +12,13 @@
 use std::io::Cursor;
 
 use shekyl_archival_retention::{
-    as_of_e_served_work, challenge_fire_height, challenge_leaf_chunk_bounds, challenge_seal_height,
-    claimed_epochs_check_and_set, curve_milli, epoch_close_compute, epoch_close_due_at_height,
-    epoch_close_height, frozen_segment_count, good_through, p_canonical_id_from_hybrid_pubkey,
-    prune_below_epoch_at_height, serve_credit_epoch_ok, settlement_epoch_at_height,
-    verify_bond_post_ct_balance, verify_join_market_bond_post, verify_leaf_index,
-    verify_segment_path, ArchivalBondPostVin, ArchivalServeCreditResponse, BadInterval,
-    BandedCurveParams, BondCtBalanceError, BondPostError, BondPostKind, BondTerm,
+    as_of_e_served_work, capped_work_milli, challenge_fire_height, challenge_leaf_chunk_bounds,
+    challenge_seal_height, claimed_epochs_check_and_set, epoch_close_compute,
+    epoch_close_due_at_height, epoch_close_height, frozen_segment_count, good_through,
+    p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height, serve_credit_epoch_ok,
+    settlement_epoch_at_height, verify_bond_post_ct_balance, verify_join_market_bond_post,
+    verify_leaf_index, verify_segment_path, ArchivalBondPostVin, ArchivalServeCreditResponse,
+    BadInterval, BandedCurveParams, BondCtBalanceError, BondPostError, BondPostKind, BondTerm,
     ClaimedEpochsError, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
     HoldingsDescriptor, HoldingsKind, KCover, WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
     ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
@@ -857,10 +857,14 @@ pub struct ShekylArchivalEmissionEpochSnapshot {
 ///
 /// Sources via [`as_of_e_served_work`], the same single sourcing function
 /// whose output built the persisted `Σwork(E)` denominator at close, over the
-/// same frozen gather — so `out_capped_work_milli` is `P`'s exact term in
-/// `snapshot.sigma_work_milli` by construction (WS-1 §5.5: sourcing
-/// divergence, the M-2 silent over/under-mint, is unrepresentable rather
-/// than tested-against).
+/// same frozen gather — so `out_capped_work_milli` is `P`'s exact per-P term
+/// of that denominator by construction (WS-1 §5.5: sourcing divergence, the
+/// M-2 silent over/under-mint, is unrepresentable rather than tested-against).
+/// This is the numerator only — it does not read `snapshot.sigma_work_milli`
+/// or re-apply the M1 `K_COVER` gate, so a gated/empty epoch persists
+/// `Σwork(E) == 0` while this may return a positive capped term; the consumer
+/// divides through the persisted denominator (reward is 0 at `Σwork(E) == 0`,
+/// enforced by `reward_share_floor`).
 ///
 /// Both outputs are zero when `claimant_bond_idx == SIZE_MAX` (no credit row
 /// for `P` in `E`) or when `P` is not a market member at `E` (foundation
@@ -936,14 +940,10 @@ pub unsafe extern "C" fn shekyl_archival_emission_epoch_work(
     };
 
     let work = served.work_by_bond[snap.claimant_bond_idx];
-    // Mirrors `sigma_work_milli`'s per-P term exactly: non-members and
-    // zero-work members contribute nothing to the stored denominator, so
-    // their capped term is zero here too.
-    let capped = if served.member[snap.claimant_bond_idx] && work > 0 {
-        curve_milli(work, &inputs.curve)
-    } else {
-        0
-    };
+    // The single-sourced per-P capped term: non-members and zero-work members
+    // contribute nothing to the stored denominator, so their capped term is
+    // zero here too.
+    let capped = capped_work_milli(work, served.member[snap.claimant_bond_idx], &inputs.curve);
     unsafe {
         *out_work_milli = work;
         *out_capped_work_milli = capped;
@@ -1005,7 +1005,14 @@ pub unsafe extern "C" fn shekyl_archival_claimed_epochs_check_and_set(
     }
     match claimed_epochs_check_and_set(&mut set, epoch, current_settled_epoch) {
         Ok(true) => {
-            debug_assert!(set.len() <= set_cap);
+            // Fail closed rather than overrun: the window prune bounds the set
+            // below `set_cap` in practice, but a debug_assert vanishes in
+            // release, so guard the write at runtime — an insert that grew the
+            // set past the caller's buffer is a structured error, never a
+            // copy_nonoverlapping past the end.
+            if set.len() > set_cap {
+                return SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_INVALID;
+            }
             unsafe {
                 std::ptr::copy_nonoverlapping(set.as_ptr(), set_ptr, set.len());
                 *set_len_ptr = set.len();

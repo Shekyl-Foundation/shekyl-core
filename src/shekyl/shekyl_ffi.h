@@ -2020,10 +2020,14 @@ struct shekyl_archival_emission_epoch_snapshot
 ///
 /// Sources via the same single sourcing function whose output built the
 /// persisted Σwork(E) denominator at close, over the same frozen gather, so
-/// the capped output is P's exact term in `snapshot->sigma_work_milli` by
-/// construction (WS-1 §5.5). Both outputs are zero when P has no credit row
-/// in E or is not a market member at E. Errors reuse the
-/// SHEKYL_ARCHIVAL_EPOCH_CLOSE_* codes; outputs are zeroed on entry.
+/// the capped output is P's exact per-P term of that denominator by
+/// construction (WS-1 §5.5). Note this is the numerator only: it does NOT
+/// consult `snapshot->sigma_work_milli` and does NOT re-apply the M1 K_COVER
+/// gate — a gated (or empty) epoch persists Σwork(E) == 0 while this may still
+/// return a positive capped term, so the consumer MUST divide through the
+/// persisted denominator (reward is 0 when Σwork(E) == 0). Both outputs are
+/// zero when P has no credit row in E or is not a market member at E. Errors
+/// reuse the SHEKYL_ARCHIVAL_EPOCH_CLOSE_* codes; outputs are zeroed on entry.
 uint8_t shekyl_archival_emission_epoch_work(
     const struct shekyl_archival_emission_epoch_snapshot* snapshot,
     uint64_t* out_work_milli,

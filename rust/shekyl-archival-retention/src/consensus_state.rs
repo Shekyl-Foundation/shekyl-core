@@ -174,12 +174,25 @@ pub fn sigma_work_milli(
     );
     let mut sum = 0u64;
     for (&work, &in_market) in per_p_work_milli.iter().zip(market_mask.iter()) {
-        if !in_market || work == 0 {
-            continue;
-        }
-        sum = sum.saturating_add(curve_milli(work, curve));
+        sum = sum.saturating_add(capped_work_milli(work, in_market, curve));
     }
     sum
+}
+
+/// One `P`'s capped work term `Curve(work_P)` — the single definition of the
+/// per-`P` contribution to `Σwork(E)`. Non-members and zero-work members
+/// contribute nothing. Sourced here so the persisted denominator
+/// ([`sigma_work_milli`]), the emission numerator FFI
+/// (`shekyl_archival_emission_epoch_work`), and the verify body
+/// (`emission_verify`) cannot drift on the guard — the M-2 sourcing-divergence
+/// the WS-1 design makes unrepresentable rather than tested-against.
+#[must_use]
+pub fn capped_work_milli(work_milli: u64, is_member: bool, curve: &BandedCurveParams) -> u64 {
+    if is_member && work_milli > 0 {
+        curve_milli(work_milli, curve)
+    } else {
+        0
+    }
 }
 
 /// Shard age as a **relative depth fraction** in milli at `close_block_height`
@@ -377,35 +390,21 @@ pub fn as_of_e_served_work(
         }
     }
 
-    // Shard age feeds `shard_work_milli` only for member-credited shards (the
-    // guarded branch below), so compute it lazily and memoize per shard
-    // index — a shard whose only credit comes from a non-member bond never
-    // pays the two `shard_age_milli` divisions.
-    let mut age_milli_by_shard: Vec<Option<u64>> = vec![None; shards.len()];
+    // A member-credited shard's contribution is a pure function of its index
+    // (its `r_market`, age, and the epoch's age-weight), so compute it via the
+    // single `shard_contribution_milli` source and memoize per shard index — a
+    // shard whose only credit comes from a non-member bond never pays the two
+    // `shard_age_milli` divisions.
+    let mut contribution_by_shard: Vec<Option<u64>> = vec![None; shards.len()];
 
     let mut work_by_bond = vec![0u64; bonds.len()];
     for pair in inputs.credit_pairs {
         if !member[pair.bond_idx] {
             continue;
         }
-        let shard = &shards[pair.shard_idx];
-        let age_milli = *age_milli_by_shard[pair.shard_idx].get_or_insert_with(|| {
-            if shard.has_segment {
-                shard_age_milli(
-                    inputs.close_block_height,
-                    shard.freeze_height,
-                    inputs.settlement_epoch_blocks,
-                )
-            } else {
-                0
-            }
+        let contribution = *contribution_by_shard[pair.shard_idx].get_or_insert_with(|| {
+            shard_contribution_milli(inputs, &r_market_by_shard, pair.shard_idx)
         });
-        let contribution = shard_work_milli(
-            r_market_by_shard[pair.shard_idx],
-            age_milli,
-            inputs.age_weight_milli,
-            true,
-        );
         work_by_bond[pair.bond_idx] = work_by_bond[pair.bond_idx].saturating_add(contribution);
     }
 
@@ -414,6 +413,37 @@ pub fn as_of_e_served_work(
         r_market_by_shard,
         work_by_bond,
     })
+}
+
+/// The per-shard work term for a member-credited shard, exactly as
+/// [`as_of_e_served_work`] accumulates it into `work_by_bond`. Single source
+/// for the per-shard math so the close's denominator and the verify body's
+/// per-shard `ScarcityMismatch` recompute cannot drift (WS-1 §5.5): a shard's
+/// contribution is `shard_work_milli(r_market[s], age[s], age_weight)` with
+/// `age[s] = 0` for a shard with no frozen segment. The caller establishes
+/// membership and credit; this computes the term those two facts imply.
+#[must_use]
+pub fn shard_contribution_milli(
+    inputs: &EpochCloseInputs<'_>,
+    r_market_by_shard: &[u64],
+    shard_idx: usize,
+) -> u64 {
+    let shard = &inputs.shards[shard_idx];
+    let age_milli = if shard.has_segment {
+        shard_age_milli(
+            inputs.close_block_height,
+            shard.freeze_height,
+            inputs.settlement_epoch_blocks,
+        )
+    } else {
+        0
+    };
+    shard_work_milli(
+        r_market_by_shard[shard_idx],
+        age_milli,
+        inputs.age_weight_milli,
+        true,
+    )
 }
 
 /// Full epoch-close consensus computation (ARCHIVAL_CONSENSUS_STATE.md §3.3, §3.5).
