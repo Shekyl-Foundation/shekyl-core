@@ -17,7 +17,10 @@
   present before `make`, so no build-time auto-install races, and the minimal
   profile drops clippy/rustfmt — a gitian build only compiles the Rust FFI, it
   never lints. The `1.94.0` pin is added to `rust/rust-toolchain.toml`'s
-  bump-policy lockstep list.
+  bump-policy lockstep list. `RELEASE_PROMOTION.md` §4 gains a **gitian dry-run
+  gate**: dispatch the gitian workflow against the frozen SHA (no tag pushed)
+  and require all four platforms green before the cut/promote/tag, so
+  release-only build breakage is caught pre-tag instead of forcing a bump.
 
 ## [3.1.0-alpha.6] - 2026-07-07
 
