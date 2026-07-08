@@ -4,6 +4,43 @@
 
 ### Added
 
+- **archival: WS-2 emission-claim dedup plumbing — connect-side writer +
+  journaled revert** (`REWARD_EMISSION_E3_GATING_ROUND.md` §3 item 3a /
+  §6.2–§6.4). The write side of the three-layer dedup, landing beneath the
+  verify body's read-only layer:
+  - *Single writer FFI.* `shekyl_archival_claimed_epochs_check_and_set`
+    (`archival_ffi.rs` / `shekyl_ffi.h`) wraps the windowed Rust
+    `claimed_epochs_check_and_set` — validated write-back over a
+    caller-owned buffer, distinct status codes for inserted / already
+    claimed / not-settled / expired / invalid. C++ stores bytes, Rust
+    decides (the `good_through` split).
+  - *Connect path + journal.* `BlockchainLMDB::apply_archival_emission_claim`
+    loads the bond, journals the **full pre-image** (`claimed_settlement_epochs`
+    + `first_paying_emission_height`) into the new
+    `archival_emission_claim_log` table (`BE(height)||BE(seq)`, slash-log
+    idiom), then runs the FFI writer per claimed epoch. A dedup hit or
+    unclaimable epoch at connect is a **hard error**, not a reject —
+    verify's contains-check and the block-level pass make it unreachable,
+    so reaching it means an emission paid without marking `E`
+    (§6.2's Ok(false)-at-connect posture). `first_paying_emission_height`
+    is set-once on the first claim.
+  - *Pop path.* `revert_archival_emission_claims_at_height` restores the
+    journaled pre-image (reverse-`seq`) and consumes the rows; wired into
+    `BlockchainDB::pop_block` after the slash/close reverts. The pre-image
+    shape (not an insert-inverse) is what closes §6.3's double-mint: the
+    connect mutation is insert **plus window prune**, and removing the
+    inserted epoch cannot restore what the prune evicted.
+  - *KATs* (`archival_substrate_lmdb.cpp`): apply/journal/revert roundtrip
+    (byte-identical restore, journal consumed), connect-breach hard errors
+    (dedup hit, unsettled, expired, unknown P), the §6.4 prune-straddle
+    property test — claimed `E_old` evicted by a later claim's prune, popped
+    across the epoch boundary, then **re-claim of `E_old` rejected** (the
+    assertion the naive remove-inverse fails) — and first-paying set-once /
+    pop-symmetric.
+  - *Deferred to C-1:* the block-level `(P,E)` uniqueness pass and its KATs
+    — it iterates `txin_archival_reward_emission`, whose C++ variant type
+    lands with C-1's transport shim.
+
 - **archival: emission vin verify body, §7.1 steps 1–6 — KAT-tested, not on
   the consensus dispatch** (`REWARD_EMISSION_E3_GATING_ROUND.md` §3 item 3;
   `REWARD_EMISSION_VIN_PLAN.md` §7.1 / PR-E3). New

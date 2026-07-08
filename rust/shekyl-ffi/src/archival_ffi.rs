@@ -13,15 +13,16 @@ use std::io::Cursor;
 
 use shekyl_archival_retention::{
     as_of_e_served_work, challenge_fire_height, challenge_leaf_chunk_bounds, challenge_seal_height,
-    curve_milli, epoch_close_compute, epoch_close_due_at_height, epoch_close_height,
-    frozen_segment_count, good_through, p_canonical_id_from_hybrid_pubkey,
+    claimed_epochs_check_and_set, curve_milli, epoch_close_compute, epoch_close_due_at_height,
+    epoch_close_height, frozen_segment_count, good_through, p_canonical_id_from_hybrid_pubkey,
     prune_below_epoch_at_height, serve_credit_epoch_ok, settlement_epoch_at_height,
     verify_bond_post_ct_balance, verify_join_market_bond_post, verify_leaf_index,
     verify_segment_path, ArchivalBondPostVin, ArchivalServeCreditResponse, BadInterval,
-    BandedCurveParams, BondCtBalanceError, BondPostError, BondPostKind, BondTerm, CreditPair,
-    EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, KCover,
-    WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-    ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIM_AGE_W,
+    BandedCurveParams, BondCtBalanceError, BondPostError, BondPostKind, BondTerm,
+    ClaimedEpochsError, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
+    HoldingsDescriptor, HoldingsKind, KCover, WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+    ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
+    CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
     SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
@@ -950,6 +951,73 @@ pub unsafe extern "C" fn shekyl_archival_emission_epoch_work(
     SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK
 }
 
+/// `epoch` was inserted into the claimed set (and stale entries pruned).
+pub const SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_INSERTED: u8 = 0;
+/// `epoch` was already claimed — the connect path treats this as a hard
+/// error, never a soft skip (WS-2 §6.2: verify's contains-check plus the
+/// block-level `(P,E)` pass foreclose it; reaching it means a dedup layer
+/// was bypassed).
+pub const SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ALREADY_CLAIMED: u8 = 1;
+/// `epoch >= current_settled_epoch`: not yet settled, unclaimable.
+pub const SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_NOT_SETTLED: u8 = 2;
+/// `epoch` has fallen below the claim window (`MAX_CLAIM_AGE_W`).
+pub const SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_EXPIRED: u8 = 3;
+/// Null pointer, capacity overflow, or a set that is not strictly increasing.
+pub const SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_INVALID: u8 = 4;
+
+/// Record `epoch` as claimed in the caller-owned claimed-epoch buffer — the
+/// **single writer** for `ArchivalBondValue::claimed_settlement_epochs`
+/// (WS-2 §6.2; the read side is `claimed_epochs_contains` on the verify
+/// path). Wraps [`claimed_epochs_check_and_set`]: window maintenance
+/// (prune below `current_settled_epoch − W`) happens on insert, so the
+/// buffer contents *and* length change on success.
+///
+/// `set_ptr[0..*set_len_ptr]` is the strictly increasing claimed set on
+/// entry; on `INSERTED` the updated set is written back in place and
+/// `*set_len_ptr` holds the new length (never exceeding the entry cap, so
+/// a `MAX_CLAIMED_EPOCH_ENTRIES`-sized buffer is always sufficient). On any
+/// other return the buffer and length are unchanged.
+///
+/// # Safety
+///
+/// `set_ptr` must address `set_cap` valid, writable `u64`s; `set_len_ptr`
+/// must be a valid writable `usize` pointer with `*set_len_ptr <= set_cap`.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_claimed_epochs_check_and_set(
+    set_ptr: *mut u64,
+    set_len_ptr: *mut usize,
+    set_cap: usize,
+    epoch: u64,
+    current_settled_epoch: u64,
+) -> u8 {
+    if set_ptr.is_null() || set_len_ptr.is_null() {
+        return SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_INVALID;
+    }
+    let len = unsafe { *set_len_ptr };
+    if len > set_cap || set_cap > MAX_CLAIMED_EPOCH_ENTRIES as usize {
+        return SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_INVALID;
+    }
+    let mut set: Vec<u64> = unsafe { std::slice::from_raw_parts(set_ptr, len) }.to_vec();
+    // The at-rest codec enforces strict ordering; re-check here so a
+    // corrupted buffer cannot silently satisfy the binary-search contract.
+    if !set.windows(2).all(|w| w[0] < w[1]) {
+        return SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_INVALID;
+    }
+    match claimed_epochs_check_and_set(&mut set, epoch, current_settled_epoch) {
+        Ok(true) => {
+            debug_assert!(set.len() <= set_cap);
+            unsafe {
+                std::ptr::copy_nonoverlapping(set.as_ptr(), set_ptr, set.len());
+                *set_len_ptr = set.len();
+            }
+            SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_INSERTED
+        }
+        Ok(false) => SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ALREADY_CLAIMED,
+        Err(ClaimedEpochsError::NotSettled) => SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_NOT_SETTLED,
+        Err(ClaimedEpochsError::Expired) => SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_EXPIRED,
+    }
+}
+
 fn map_bond_ct_balance_error(err: BondCtBalanceError) -> u8 {
     match err {
         BondCtBalanceError::InvalidPoint => SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT,
@@ -1654,5 +1722,100 @@ mod tests {
             )
         };
         assert_eq!(code, SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_NULL_PTR);
+    }
+
+    #[test]
+    fn claimed_epochs_check_and_set_ffi_write_back_and_polarity() {
+        const CAP: usize = MAX_CLAIMED_EPOCH_ENTRIES as usize;
+        let mut buf = [0u64; CAP];
+        let mut len: usize = 0;
+
+        // Insert into an empty set.
+        let code = unsafe {
+            shekyl_archival_claimed_epochs_check_and_set(
+                buf.as_mut_ptr(),
+                ptr::from_mut(&mut len),
+                CAP,
+                10,
+                12,
+            )
+        };
+        assert_eq!(code, SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_INSERTED);
+        assert_eq!(&buf[..len], &[10]);
+
+        // Dedup hit leaves the buffer untouched.
+        let code = unsafe {
+            shekyl_archival_claimed_epochs_check_and_set(
+                buf.as_mut_ptr(),
+                ptr::from_mut(&mut len),
+                CAP,
+                10,
+                12,
+            )
+        };
+        assert_eq!(code, SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ALREADY_CLAIMED);
+        assert_eq!(&buf[..len], &[10]);
+
+        // Not-settled and expired map to their own codes without mutation.
+        let code = unsafe {
+            shekyl_archival_claimed_epochs_check_and_set(
+                buf.as_mut_ptr(),
+                ptr::from_mut(&mut len),
+                CAP,
+                12,
+                12,
+            )
+        };
+        assert_eq!(code, SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_NOT_SETTLED);
+        let far_future = MAX_CLAIM_AGE_W + 100;
+        let code = unsafe {
+            shekyl_archival_claimed_epochs_check_and_set(
+                buf.as_mut_ptr(),
+                ptr::from_mut(&mut len),
+                CAP,
+                1,
+                far_future,
+            )
+        };
+        assert_eq!(code, SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_EXPIRED);
+        assert_eq!(&buf[..len], &[10]);
+
+        // A window-advancing insert prunes stale entries in the write-back:
+        // epoch 10 falls below `far_future − W` and is evicted.
+        let code = unsafe {
+            shekyl_archival_claimed_epochs_check_and_set(
+                buf.as_mut_ptr(),
+                ptr::from_mut(&mut len),
+                CAP,
+                far_future - 1,
+                far_future,
+            )
+        };
+        assert_eq!(code, SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_INSERTED);
+        assert_eq!(&buf[..len], &[far_future - 1]);
+
+        // Null pointers and a non-increasing buffer reject as invalid.
+        let code = unsafe {
+            shekyl_archival_claimed_epochs_check_and_set(
+                ptr::null_mut(),
+                ptr::from_mut(&mut len),
+                CAP,
+                5,
+                12,
+            )
+        };
+        assert_eq!(code, SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_INVALID);
+        let mut bad = [7u64, 7u64];
+        let mut bad_len: usize = 2;
+        let code = unsafe {
+            shekyl_archival_claimed_epochs_check_and_set(
+                bad.as_mut_ptr(),
+                ptr::from_mut(&mut bad_len),
+                2,
+                5,
+                12,
+            )
+        };
+        assert_eq!(code, SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_INVALID);
     }
 }

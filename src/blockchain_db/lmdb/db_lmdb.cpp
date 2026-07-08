@@ -292,6 +292,7 @@ const char* const LMDB_ARCHIVAL_BOND = "archival_bond";
 const char* const LMDB_ARCHIVAL_SHARD_SEGMENT = "archival_shard_segment";
 const char* const LMDB_ARCHIVAL_SLASH_APPLIED = "archival_slash_applied";
 const char* const LMDB_ARCHIVAL_SLASH_LOG = "archival_slash_log";
+const char* const LMDB_ARCHIVAL_EMISSION_CLAIM_LOG = "archival_emission_claim_log";
 const char* const LMDB_ARCHIVAL_R_MARKET = "archival_r_market";
 const char* const LMDB_ARCHIVAL_SIGMA_WORK = "archival_sigma_work";
 const char* const LMDB_ARCHIVAL_EPOCH_CLOSE_LOG = "archival_epoch_close_log";
@@ -1639,6 +1640,8 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
     "Failed to open db handle for m_archival_slash_applied");
   lmdb_db_open(txn, LMDB_ARCHIVAL_SLASH_LOG, MDB_CREATE, m_archival_slash_log,
     "Failed to open db handle for m_archival_slash_log");
+  lmdb_db_open(txn, LMDB_ARCHIVAL_EMISSION_CLAIM_LOG, MDB_CREATE, m_archival_emission_claim_log,
+    "Failed to open db handle for m_archival_emission_claim_log");
   lmdb_db_open(txn, LMDB_ARCHIVAL_R_MARKET, MDB_CREATE, m_archival_r_market,
     "Failed to open db handle for m_archival_r_market");
   lmdb_db_open(txn, LMDB_ARCHIVAL_SIGMA_WORK, MDB_CREATE, m_archival_sigma_work,
@@ -5658,6 +5661,153 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
       else
         set_archival_last_slash_epoch(epoch_marker - 1);
     }
+  }
+}
+
+void BlockchainLMDB::apply_archival_emission_claim(uint64_t block_height,
+  const crypto::hash& p_id, const std::vector<uint64_t>& settlement_epochs)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  // Exposed for direct invocation (C-1 connect dispatch + unit tests), so the
+  // open-DB / active-write-txn preconditions are enforced here (every
+  // mutating helper below dereferences *m_write_txn).
+  check_open();
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: archival emission claim requires active write txn");
+  if (settlement_epochs.empty())
+    throw std::runtime_error("FATAL: archival emission claim with no settlement epochs");
+
+  shekyl::db::ArchivalBondValue bond{};
+  if (!load_archival_bond_value(p_id, bond))
+    throw std::runtime_error("FATAL: archival emission claim without bond record");
+
+  // Journal the full pre-image BEFORE mutating (WS-2 §6.3): the connect
+  // mutation is insert + window prune, and the prune's floor keys on the tip
+  // settled epoch — non-monotonic under reorg. Recording only the inserted
+  // epochs cannot restore what the prune evicted; a floor-lowering pop then
+  // leaves an already-claimed epoch absent from the restored set and its
+  // reward mints twice. The full pre-image restores byte-identically.
+  shekyl::db::ArchivalEmissionClaimRevertValue log_entry{};
+  std::memcpy(log_entry.p_id, p_id.data, 32);
+  log_entry.pre_claimed_epochs = bond.claimed_settlement_epochs;
+  log_entry.pre_first_paying_emission_height = bond.first_paying_emission_height;
+
+  // The claim-window operand is the tip epoch index — the same `C` the
+  // verify-side claim-age bound uses, so verify and connect cannot disagree
+  // about expiry (E3 gating round §3 item 3 pin (b)).
+  const uint64_t current_settled_epoch =
+    shekyl_archival_settlement_epoch_at_height(block_height);
+
+  constexpr size_t cap = shekyl::db::ArchivalBondValue::kMaxClaimedEpochs;
+  uint64_t set_buf[cap] = {};
+  size_t set_len = bond.claimed_settlement_epochs.size();
+  // Unreachable through the codec (decode enforces the cap), kept as a
+  // buffer-bounds guard for direct callers.
+  if (set_len > cap)
+    throw std::runtime_error("FATAL: archival emission claim set exceeds cap");
+  std::copy(bond.claimed_settlement_epochs.begin(), bond.claimed_settlement_epochs.end(),
+    set_buf);
+
+  for (const uint64_t epoch : settlement_epochs)
+  {
+    const uint8_t rc = shekyl_archival_claimed_epochs_check_and_set(
+      set_buf, &set_len, cap, epoch, current_settled_epoch);
+    if (rc == SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_INSERTED)
+      continue;
+    // Never a soft skip (§6.2): a dedup hit here means verify's
+    // contains-check and the block-level (P,E) pass were both bypassed, and
+    // an unclaimable epoch means verify's finalization/age bounds were —
+    // either way the block must not connect with a paid-but-unmarked epoch.
+    if (rc == SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ALREADY_CLAIMED)
+      throw std::runtime_error("FATAL: archival emission claim dedup breach at connect");
+    throw std::runtime_error("FATAL: archival emission claim unclaimable epoch at connect");
+  }
+  bond.claimed_settlement_epochs.assign(set_buf, set_buf + set_len);
+  // Set-once: 0 is the unset sentinel (unreachable as a real value — no
+  // emission can pay before the first epoch closes at height SEB).
+  if (bond.first_paying_emission_height == 0)
+    bond.first_paying_emission_height = block_height;
+  put_archival_bond_value(p_id, bond);
+
+  // Append the journal row at the next free seq for this height. More than
+  // one emission per block is legal (distinct P); more than one per (P,
+  // block) is foreclosed by the block-level pass, but the probe + the
+  // reverse-order restore in the revert keep this correct regardless.
+  uint32_t seq = 0;
+  for (;; ++seq)
+  {
+    shekyl::db::ArchivalEmissionClaimLogKey key(block_height, seq);
+    MDB_val k = key.as_mdb_val();
+    MDB_val v;
+    const int get_result = mdb_get(*m_write_txn, m_archival_emission_claim_log, &k, &v);
+    if (get_result == MDB_NOTFOUND)
+      break;
+    if (get_result)
+      throw0(DB_ERROR(lmdb_error("Failed to probe archival emission claim log: ",
+        get_result).c_str()));
+  }
+  const std::vector<uint8_t> encoded = log_entry.encode();
+  shekyl::db::ArchivalEmissionClaimLogKey key(block_height, seq);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v = {encoded.size(), const_cast<uint8_t*>(encoded.data())};
+  const int put_result = mdb_put(*m_write_txn, m_archival_emission_claim_log, &k, &v, 0);
+  if (put_result)
+    throw0(DB_ERROR(lmdb_error("Failed to append archival emission claim log: ",
+      put_result).c_str()));
+}
+
+void BlockchainLMDB::revert_archival_emission_claims_at_height(uint64_t block_height)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: archival emission claim revert requires active write txn");
+
+  std::vector<shekyl::db::ArchivalEmissionClaimRevertValue> rows;
+  for (uint32_t seq = 0; ; ++seq)
+  {
+    shekyl::db::ArchivalEmissionClaimLogKey key(block_height, seq);
+    MDB_val k = key.as_mdb_val();
+    MDB_val v;
+    const int get_result = mdb_get(*m_write_txn, m_archival_emission_claim_log, &k, &v);
+    if (get_result == MDB_NOTFOUND)
+      break;
+    if (get_result)
+      throw0(DB_ERROR(lmdb_error("Failed to read archival emission claim log on pop: ",
+        get_result).c_str()));
+
+    shekyl::db::ArchivalEmissionClaimRevertValue entry{};
+    if (!shekyl::db::ArchivalEmissionClaimRevertValue::decode(v.mv_data, v.mv_size, entry))
+      throw std::runtime_error("FATAL: archival emission claim log decode failed on pop");
+    rows.push_back(std::move(entry));
+  }
+
+  // Restore in reverse connect order so the earliest pre-image lands last —
+  // correct even if multiple rows exist for the same P at this height.
+  for (auto it = rows.rbegin(); it != rows.rend(); ++it)
+  {
+    crypto::hash p_id{};
+    std::memcpy(p_id.data, it->p_id, 32);
+
+    shekyl::db::ArchivalBondValue bond{};
+    if (!load_archival_bond_value(p_id, bond))
+      throw std::runtime_error("FATAL: archival emission claim revert without bond record");
+
+    bond.claimed_settlement_epochs = it->pre_claimed_epochs;
+    bond.first_paying_emission_height = it->pre_first_paying_emission_height;
+    // Write the record whole so holdings / bad intervals / bonded totals
+    // (untouched by the claim) survive the restore (F-S1 / F-E5 shape).
+    put_archival_bond_value(p_id, bond);
+  }
+
+  for (uint32_t seq = 0; seq < rows.size(); ++seq)
+  {
+    shekyl::db::ArchivalEmissionClaimLogKey key(block_height, seq);
+    MDB_val k = key.as_mdb_val();
+    const int del_result = mdb_del(*m_write_txn, m_archival_emission_claim_log, &k, nullptr);
+    if (del_result)
+      throw0(DB_ERROR(lmdb_error("Failed to delete archival emission claim log on pop: ",
+        del_result).c_str()));
   }
 }
 

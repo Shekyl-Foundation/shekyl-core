@@ -552,6 +552,97 @@ struct ArchivalSlashRevertValue {
     }
 };
 
+// ─── ArchivalEmissionClaimLogKey / ArchivalEmissionClaimRevertValue ────────
+//
+// Per-block journal for the emission-claim dedup revert on `pop_block`
+// (REWARD_EMISSION_E3_GATING_ROUND.md §6.3, WS-2). Same BE(height)||BE(seq)
+// idiom as the slash log — one reorg mechanism, many tables.
+
+using ArchivalEmissionClaimLogKey = ArchivalSlashLogKey;
+
+struct ArchivalEmissionClaimRevertValue {
+    // §6.3 pins the row as the pre-image of what the connect mutation
+    // destroyed, as one unit: an insert-only journal (record just the
+    // inserted `E`) cannot restore the entries the same connect's window
+    // prune evicted, and a floor-lowering pop then leaves an
+    // already-claimed epoch absent from the restored set — the double-mint.
+    // The row therefore carries the *full* pre-mutation claimed set plus
+    // the pre-mutation `first_paying_emission_height`: the delta's closure,
+    // restored byte-identically by a single write with no reconstruction.
+    static constexpr uint8_t kVersion = 1;
+    /// Same derivation as `ArchivalBondValue::kMaxClaimedEpochs` (that struct
+    /// is defined further down this header; the static_assert after it pins
+    /// the two to the same value).
+    static constexpr size_t kMaxClaimedEpochs =
+        static_cast<size_t>(SHEKYL_ARCHIVAL_MAX_CLAIM_AGE_W) + 6;
+    static constexpr size_t kFixedSize = 1 + 32 + 8 + 4; // ver, p_id, first_paying, count
+
+    uint8_t p_id[32]{};
+    /// `claimed_settlement_epochs` as it stood before the emission connect
+    /// mutated it (strictly increasing; may be empty).
+    std::vector<uint64_t> pre_claimed_epochs;
+    /// `first_paying_emission_height` before the connect (0 = was unset, so
+    /// the revert un-sets it iff this emission was the setter).
+    uint64_t pre_first_paying_emission_height = 0;
+
+    [[nodiscard]] std::vector<uint8_t> encode() const
+    {
+        if (pre_claimed_epochs.size() > kMaxClaimedEpochs)
+            throw std::runtime_error(
+                "ArchivalEmissionClaimRevertValue encode: claimed set exceeds cap");
+        for (size_t i = 1; i < pre_claimed_epochs.size(); ++i)
+        {
+            if (pre_claimed_epochs[i] <= pre_claimed_epochs[i - 1])
+                throw std::runtime_error(
+                    "ArchivalEmissionClaimRevertValue encode: claimed set not strictly increasing");
+        }
+        std::vector<uint8_t> out;
+        out.reserve(kFixedSize + pre_claimed_epochs.size() * 8);
+        out.push_back(kVersion);
+        out.insert(out.end(), p_id, p_id + 32);
+        for (int i = 7; i >= 0; --i)
+            out.push_back(static_cast<uint8_t>(
+                (pre_first_paying_emission_height >> (i * 8)) & 0xFF));
+        const uint32_t count = static_cast<uint32_t>(pre_claimed_epochs.size());
+        for (int i = 3; i >= 0; --i)
+            out.push_back(static_cast<uint8_t>((count >> (i * 8)) & 0xFF));
+        for (const uint64_t epoch : pre_claimed_epochs)
+        {
+            for (int i = 7; i >= 0; --i)
+                out.push_back(static_cast<uint8_t>((epoch >> (i * 8)) & 0xFF));
+        }
+        return out;
+    }
+
+    static bool decode(const void* data, size_t len, ArchivalEmissionClaimRevertValue& out)
+    {
+        if (!data || len < kFixedSize)
+            return false;
+        const auto* p = static_cast<const uint8_t*>(data);
+        if (p[0] != kVersion)
+            return false;
+        std::memcpy(out.p_id, p + 1, 32);
+        out.pre_first_paying_emission_height = load_be64(p + 33);
+        const uint32_t count = (static_cast<uint32_t>(p[41]) << 24)
+            | (static_cast<uint32_t>(p[42]) << 16)
+            | (static_cast<uint32_t>(p[43]) << 8)
+            | static_cast<uint32_t>(p[44]);
+        if (count > kMaxClaimedEpochs || len != kFixedSize + static_cast<size_t>(count) * 8)
+            return false;
+        out.pre_claimed_epochs.clear();
+        out.pre_claimed_epochs.reserve(count);
+        size_t off = kFixedSize;
+        for (uint32_t i = 0; i < count; ++i, off += 8)
+        {
+            const uint64_t epoch = load_be64(p + off);
+            if (!out.pre_claimed_epochs.empty() && epoch <= out.pre_claimed_epochs.back())
+                return false;
+            out.pre_claimed_epochs.push_back(epoch);
+        }
+        return true;
+    }
+};
+
 // ─── ArchivalBondKey ───────────────────────────────────────────────────────
 //
 // Gate-4 bond record keyed by P_canonical_id (ARCHIVAL_CONSENSUS_STATE.md §3.4).
@@ -852,6 +943,10 @@ static_assert(ArchivalSlashRevertValue::kPreKindShardSetCompact
     && ArchivalSlashRevertValue::kPreKindCompleteTree
         == ArchivalBondValue::kHoldingsCompleteTree,
     "slash-log holdings_pre_kind must mirror ArchivalBondValue holdings_kind");
+
+static_assert(ArchivalEmissionClaimRevertValue::kMaxClaimedEpochs
+        == ArchivalBondValue::kMaxClaimedEpochs,
+    "emission-claim journal cap must mirror ArchivalBondValue::kMaxClaimedEpochs");
 
 // ─── ArchivalShardSegmentValue ─────────────────────────────────────────────
 

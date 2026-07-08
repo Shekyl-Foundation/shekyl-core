@@ -1206,3 +1206,198 @@ TEST(archival_substrate_lmdb, slash_bad_interval_blocks_later_epochs)
   EXPECT_FALSE(db.archival_bond_good_through(p_id, settlement_epoch + 1));
   EXPECT_FALSE(db.archival_bond_good_through(p_id, settlement_epoch + 100));
 }
+
+// ── WS-2: emission-claim dedup connect/revert (REWARD_EMISSION_E3_GATING_ROUND.md §6) ──
+//
+// apply_archival_emission_claim is the connect-path single writer for the
+// claimed-epoch set (§6.2 layer 3); revert_archival_emission_claims_at_height
+// restores the journaled pre-image on pop (§6.3). The journal row carries the
+// full pre-mutation set + first_paying_emission_height — the pre-image delta's
+// closure — because the connect mutation is insert *plus window prune*, and an
+// insert-only inverse cannot restore what the prune evicted.
+
+namespace {
+
+constexpr uint64_t kSeb = 10000; // SETTLEMENT_EPOCH_BLOCKS, KAT-pinned in constants.rs
+constexpr uint64_t kClaimW = SHEKYL_ARCHIVAL_MAX_CLAIM_AGE_W;
+
+/// Fresh bond with an empty claimed set and unset first_paying height.
+shekyl::db::ArchivalBondValue unclaimed_bond()
+{
+  shekyl::db::ArchivalBondValue bond{};
+  bond.hybrid_pubkey = {0x0A, 0x0B, 0x0C};
+  bond.join_settlement_epoch = 0;
+  bond.bonded_total_atomic = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
+  bond.held_shard_ids = {7};
+  return bond;
+}
+
+} // namespace
+
+// Apply/revert symmetry: connect mutates {claimed set, first_paying}, the
+// journaled revert restores both byte-identically and consumes the journal
+// row (a second revert at the same height is a no-op).
+TEST(archival_substrate_lmdb, emission_claim_apply_journal_and_revert_roundtrip)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  const crypto::hash p_id = make_hash(0x7B);
+  const uint64_t claim_height = 12 * kSeb + 3; // tip epoch 12
+
+  db.put_archival_bond_value(p_id, unclaimed_bond());
+  db.apply_archival_emission_claim(claim_height, p_id, {10, 11});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.claimed_settlement_epochs, (std::vector<uint64_t>{10, 11}));
+  EXPECT_EQ(read.first_paying_emission_height, claim_height);
+
+  db.revert_archival_emission_claims_at_height(claim_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_TRUE(read.claimed_settlement_epochs.empty());
+  EXPECT_EQ(read.first_paying_emission_height, 0u);
+  // Holdings and bond totals were untouched by the claim and its revert.
+  EXPECT_EQ(read.held_shard_ids, (std::vector<uint64_t>{7}));
+  EXPECT_EQ(read.bonded_total_atomic, SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC);
+
+  // The journal row was consumed: a second revert finds nothing to restore.
+  db.apply_archival_emission_claim(claim_height, p_id, {9});
+  db.revert_archival_emission_claims_at_height(claim_height);
+  db.revert_archival_emission_claims_at_height(claim_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_TRUE(read.claimed_settlement_epochs.empty());
+}
+
+// Connect-time Ok(false) is an invariant breach, not a reject (§6.2): with
+// verify's contains-check and the block-level (P,E) pass in place a dedup
+// hit at connect is unreachable, so the writer throws rather than silently
+// connecting a block whose emission paid without marking E. Unclaimable
+// epochs (unsettled / expired) are hard errors by the same argument.
+TEST(archival_substrate_lmdb, emission_claim_connect_breaches_hard_error)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  const crypto::hash p_id = make_hash(0x7C);
+  const uint64_t claim_height = 12 * kSeb; // tip epoch 12
+
+  db.put_archival_bond_value(p_id, unclaimed_bond());
+  db.apply_archival_emission_claim(claim_height, p_id, {10});
+
+  // Dedup hit (same epoch, later block) — layer-3 breach.
+  EXPECT_THROW(db.apply_archival_emission_claim(claim_height + 1, p_id, {10}),
+    std::runtime_error);
+  // Not yet settled (epoch == tip epoch) — verify's F-E1 bound was bypassed.
+  EXPECT_THROW(db.apply_archival_emission_claim(claim_height, p_id, {12}),
+    std::runtime_error);
+  // Expired (below the claim window) — verify's claim-age bound was bypassed.
+  const uint64_t far_height = (kClaimW + 50) * kSeb;
+  EXPECT_THROW(db.apply_archival_emission_claim(far_height, p_id, {1}),
+    std::runtime_error);
+  // Unknown P — connect of an emission whose posture verify never checked.
+  EXPECT_THROW(db.apply_archival_emission_claim(claim_height, make_hash(0x7D), {10}),
+    std::runtime_error);
+}
+
+// Prune-straddle double-mint KAT (§6.4 #3 — the journal's load-bearing case,
+// a property test): E_old is claimed and paid; a later claim's window prune
+// evicts it; a boundary-crossing pop lowers the floor so E_old re-enters the
+// claim window. Under the naive remove-inverse E_old would be absent from
+// the restored set and a fresh claim of E_old would mint its reward a second
+// time. The property asserted: the fresh claim is REJECTED. Byte-identity of
+// the restored set is the corollary.
+TEST(archival_substrate_lmdb, emission_claim_prune_straddle_no_double_mint)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  const crypto::hash p_id = make_hash(0x7E);
+  const uint64_t e_old = 1;
+
+  // E_old was claimed and its reward minted long ago.
+  shekyl::db::ArchivalBondValue seed = unclaimed_bond();
+  seed.claimed_settlement_epochs = {e_old};
+  seed.first_paying_emission_height = 2 * kSeb + 5;
+  db.put_archival_bond_value(p_id, seed);
+
+  // A claim of E_new connects with the tip epoch just past the point where
+  // the window floor (tip − W) passes E_old: the insert's prune evicts it.
+  // The geometry is the tightest straddle — one epoch boundary — because a
+  // processable reorg (720 blocks « SETTLEMENT_EPOCH_BLOCKS) can lower the
+  // tip epoch by at most one.
+  const uint64_t tip_epoch = e_old + kClaimW + 1; // floor = e_old + 1 > e_old
+  const uint64_t claim_height = tip_epoch * kSeb + 1;
+  const uint64_t e_new = tip_epoch - 1;
+  db.apply_archival_emission_claim(claim_height, p_id, {e_new});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.claimed_settlement_epochs, (std::vector<uint64_t>{e_new}))
+    << "the window prune must have evicted the already-claimed E_old";
+
+  // Reorg: the claiming block pops. The journaled pre-image restores the
+  // evicted entry — the exact step the naive remove-inverse gets wrong.
+  db.revert_archival_emission_claims_at_height(claim_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.claimed_settlement_epochs, seed.claimed_settlement_epochs)
+    << "pop must restore the claimed set byte-identically";
+  EXPECT_EQ(read.first_paying_emission_height, seed.first_paying_emission_height);
+
+  // Post-reorg the chain rebuilds along a branch one epoch earlier — the
+  // straddle: the window floor drops back to E_old, so E_old is claimable
+  // again window-wise. A fresh emission claiming E_old must be rejected —
+  // its reward already minted on the surviving history.
+  const uint64_t rebuilt_height = (tip_epoch - 1) * kSeb + 7;
+  EXPECT_THROW(db.apply_archival_emission_claim(rebuilt_height, p_id, {e_old}),
+    std::runtime_error)
+    << "double-mint: a pruned-then-restored claimed epoch was re-claimable";
+}
+
+// first_paying_emission_height is set-once across claims, and the revert
+// un-sets it iff the popped emission was the setter (§6.3's journal covers
+// the field alongside the claimed set).
+TEST(archival_substrate_lmdb, emission_claim_first_paying_set_once_and_pop_symmetric)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  const crypto::hash p_id = make_hash(0x7F);
+  const uint64_t h_first = 7 * kSeb + 1;
+  const uint64_t h_second = 8 * kSeb + 2;
+
+  db.put_archival_bond_value(p_id, unclaimed_bond());
+  db.apply_archival_emission_claim(h_first, p_id, {5});
+  db.apply_archival_emission_claim(h_second, p_id, {6});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.first_paying_emission_height, h_first) << "set-once: the second claim must not move it";
+  EXPECT_EQ(read.claimed_settlement_epochs, (std::vector<uint64_t>{5, 6}));
+
+  // Popping the non-setter leaves the height; popping the setter unsets it.
+  db.revert_archival_emission_claims_at_height(h_second);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.first_paying_emission_height, h_first);
+  EXPECT_EQ(read.claimed_settlement_epochs, (std::vector<uint64_t>{5}));
+
+  db.revert_archival_emission_claims_at_height(h_first);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.first_paying_emission_height, 0u);
+  EXPECT_TRUE(read.claimed_settlement_epochs.empty());
+}

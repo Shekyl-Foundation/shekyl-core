@@ -1887,6 +1887,32 @@ uint8_t shekyl_archival_prune_below_epoch(
     uint64_t block_height,
     uint64_t* out_prune_below_epoch);
 
+/* `epoch` inserted into the claimed set (stale entries pruned in place). */
+#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_INSERTED        0
+/* `epoch` already claimed — hard error on the connect path (WS-2 §6.2). */
+#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ALREADY_CLAIMED 1
+/* `epoch >= current_settled_epoch`: not yet settled. */
+#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_NOT_SETTLED 2
+/* `epoch` below the claim window (`MAX_CLAIM_AGE_W`). */
+#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_EXPIRED     3
+/* Null pointer, capacity overflow, or non-strictly-increasing set. */
+#define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_INVALID     4
+
+/// Record `epoch` as claimed in the caller-owned claimed-epoch buffer — the
+/// single writer for `ArchivalBondValue::claimed_settlement_epochs` (WS-2
+/// §6.2; the emission connect path is the only caller). Window maintenance
+/// (prune below `current_settled_epoch − W`) happens on insert, so on
+/// `INSERTED` the buffer contents *and* `*set_len` change in place; on any
+/// other return both are untouched. `set_ptr` must address `set_cap`
+/// writable `uint64_t`s with `*set_len <= set_cap <= 32` (the
+/// `kMaxClaimedEpochs` cap).
+uint8_t shekyl_archival_claimed_epochs_check_and_set(
+    uint64_t* set_ptr,
+    size_t* set_len,
+    size_t set_cap,
+    uint64_t epoch,
+    uint64_t current_settled_epoch);
+
 #define SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK                0
 #define SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_NULL_PTR      1
 #define SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_LEN_OVERFLOW  2
