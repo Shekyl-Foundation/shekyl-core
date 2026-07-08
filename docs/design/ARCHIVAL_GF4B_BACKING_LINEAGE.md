@@ -19,12 +19,13 @@
 >
 > **Timeframes (rule 05):** *now* — the pre-genesis wallet pre-join path;
 > discharges the §8.0.3 wallet half so C-1's precondition check is mechanical.
-> *Mining-era end* — the lineage vocabulary already carries both rung-1 mint
-> forms (`MinerReward`, `EmissionReward`); the rung structure is unchanged by
-> the reward transition to fee-plus-terminal-subsidy. *V4* — lineage
-> classification is structural (transaction shape: coinbase position,
-> `BondPost` input presence), with no cryptographic-primitive coupling; it
-> survives the lattice-only migration unmodified.
+> *Mining-era end* — `P` is a shard-serving persona **only**; mining happens
+> under the principal in every era, so the reward transition to
+> fee-plus-terminal-subsidy never touches the ladder (rung 1 is `P`'s own
+> emissions, which persist as long as archival serving does). *V4* — lineage
+> classification is structural (transaction shape: `BondPost` / emission-vin
+> input presence), with no cryptographic-primitive coupling; it survives the
+> lattice-only migration unmodified.
 
 ## 1. Scope
 
@@ -183,10 +184,22 @@ outputs" and the `BackingSet` (§3.4) is the enforcement layer.
 
 | Variant | Rung | Meaning | Constructed by |
 | --- | --- | --- | --- |
-| `MinerReward` | 1 | Recovered from the block's inline miner (coinbase) transaction; **excluded from backing eligibility for the launch window** (§3.4, GF4b-1) — the rung records provenance, eligibility is `BackingSet`'s decision | this PR (scan classification) |
 | `EmissionReward` | 1 | Recovered from a transaction carrying `P`'s own `txin_archival_reward_emission` | **reserved — C-1** (see below) |
 | `BondPostChange` | 2 | Recovered from a transaction carrying a `BondPost` input whose `p_canonical_id` is the recovered output's **own persona** | this PR (scan classification) |
 | `ExternalTransfer` | 3 | Everything else — raw pre-bond-post funding; **forbidden as emission backing** | this PR (the conservative default) |
+
+**There is no miner/coinbase rung (owner ruling, review round).** `P` is a
+shard-serving persona **only**; mining is conducted under the principal, as
+it always has been — adding capability to `P` adds identification surface,
+and gate-6's rung-1 text ("reveals nothing beyond P's own public *emission*
+history") never covered coinbase. A coinbase output recovered by `P`'s
+scanner is therefore an **anomaly, not a lineage**: either a wallet bug or
+an adversarial tag (`P`'s hybrid pubkey is on-chain in the bond post, so a
+third party *can* mine to it). It needs no dedicated classifier arm — a
+coinbase tx carries only `Input::Gen`, never a `BondPost` input, so it
+falls to `ExternalTransfer` **structurally** under the
+fail-toward-the-forbidden-rung rule, which is exactly where an
+unmodeled-origin output belongs (never backing-eligible; a KAT pins this).
 
 **Home.** `shekyl-engine-state::pscan_state`, alongside
 `PFundingOutputRecord` — it is persisted vocabulary (`Serialize` /
@@ -197,14 +210,14 @@ carrying it stay redacted wholesale).
 **Classification seam: `run_dual_extractor`,** per block, before the scan
 loop:
 
-1. Compute the miner-tx hash once (`block.block.miner_transaction.hash()`).
-2. Build the per-block map *tx-hash → set of our persona slots posting a
+1. Build the per-block map *tx-hash → set of our persona slots posting a
    `BondPost` in that tx*, from the existing `Input::BondPost` iteration —
    `block.block.transaction_hashes` is positionally paired with
    `.transactions`, so no non-miner tx is hashed.
-3. Classify each recovered output by its carrying tx:
-   `tx == miner` → `MinerReward`; else *our own slot posted a `BondPost` in
-   this tx* → `BondPostChange`; else `ExternalTransfer`.
+2. Classify each recovered output by its carrying tx: *our own slot posted
+   a `BondPost` in this tx* → `BondPostChange`; else `ExternalTransfer`
+   (which structurally covers the anomalous coinbase-to-`P` case — a
+   coinbase tx cannot carry a `BondPost` input).
 
 To attribute a bond post to the recovered output's **own** persona, the
 extractor's id input widens from `BTreeSet<PCanonicalId>` to
@@ -260,34 +273,24 @@ sibling shape `RetirementWitness`):
 
 - `BackingSet::from_spendable(records, last_sweep_height)` **filters** to
   the backing-eligible lineages — `EmissionReward` and `BondPostChange` —
-  and drops `ExternalTransfer` **and `MinerReward`** (the latter per
-  GF4b-1, below). Possession of a `BackingSet` is proof every member is
-  backing-eligible; an ineligible record inside one is unrepresentable.
-- **`MinerReward` is excluded for the launch window (GF4b-1).** The
-  ladder's real axis is "does the origin reveal anything outside the
-  P-public envelope." `EmissionReward` (P's loud emissions) and
-  `BondPostChange` (P's loud bond posts) reveal only facts already
-  P-public. `MinerReward` does not: because the backing reveal
-  deterministically identifies exactly one output (`emission_wire.rs`
-  arity-1 pin), backing with a coinbase output **publishes "persona P
-  solo-mined block N"** — an identity-class disclosure with two unscored
-  residuals: (a) solo-mining implies meaningful hashrate, and "controls
-  hashrate ∧ is a staking persona" narrows P's anonymity set among
-  principals; (b) mining timing can correlate to the user's out-of-band rig
-  uptime, a principal→user bridge. The GF-7 reduction was checked and does
-  **not** hold — GF-7's standoff machinery decorrelates funding↔bond-post
-  *timing*; it has no surface covering mining-participation disclosure,
-  which is identity-class, not timing-class. Exclusion is **free**: the
-  wire pin itself designates the backing as "bond-post change at bootstrap,
-  mint output at steady state," so no emission flow ever needs a coinbase
-  backing, and every emitting persona has a bond post by definition.
-  Priority-2 binds; the unwargamed rung is out. Reversion clause
-  (rule 21): readmitted **iff** a dedicated wargame round scores residuals
-  (a) and (b) and either reduces each to a named standoff surface or
-  accepts them via threat-model review recorded in a gate-6 round entry;
-  re-evaluation shape: gate-6 round amending §2.4 GF-4b, cascading here.
-  Not reopenable on "rung 1 by symmetry" grounds — symmetry of *mint
-  provenance* is not symmetry of *disclosure surface*.
+  and drops `ExternalTransfer`. Possession of a `BackingSet` is proof every
+  member is backing-eligible; an ineligible record inside one is
+  unrepresentable.
+- **Why there is no coinbase rung to weigh (GF4b-1, resolved by owner
+  ruling).** GF4b-1 flagged a miner-reward rung as admitted-but-unwargamed:
+  the backing reveal deterministically identifies exactly one output
+  (`emission_wire.rs` arity-1 pin), so a coinbase backing would publish
+  "persona `P` solo-mined block N" — an identity-class disclosure
+  (hashrate-set narrowing; rig-uptime timing bridge) that no standoff
+  surface covers. The resolution is stronger than exclusion: **the rung
+  does not exist** (§3.3) — `P` is shard-serving only, mining stays under
+  the principal, and gate-6 rung 1 never covered coinbase. The eligible set
+  is `{EmissionReward, BondPostChange}` — both reveal only facts already
+  `P`-public (`P`'s loud emissions; `P`'s loud bond posts). Reversion
+  clause (rule 21): a mining capability is added to `P` **only** via a
+  gate-6 round that wargames the mining-participation disclosure above and
+  amends §2.4 GF-4b; absent that, coinbase-to-`P` stays an anomaly that
+  classifies rung 3.
 - **Filter, not fail-closed, on rung-3 input — deliberately.** Post-bond,
   `P` may legitimately hold *new* raw funding outputs awaiting the next
   re-bond sweep (the multi-tranche exception, §3.5); their presence in the
@@ -332,20 +335,21 @@ sweep + the funding-record set (the bond-post path's data plane; the
 `AssembleBond` handler stays dead code, so no end-to-end tx is built):
 
 - **State inspected:** a mixed-lineage `PFundingOutputRecord` set for one
-  persona slot (raw funding = `ExternalTransfer`, plus a miner-reward
-  record), the sweep's returned selection, and the modeled post-confirmation
-  spendable set (records minus swept gindexes — the reservation/spent
-  exclusion applied, since durable pruning is SP-R0-gated).
+  persona slot (raw funding = `ExternalTransfer`, plus a `BondPostChange`
+  record from a prior post), the sweep's returned selection, and the
+  modeled post-confirmation spendable set (records minus swept gindexes —
+  the reservation/spent exclusion applied, since durable pruning is
+  SP-R0-gated).
 - **Asserts:** (1) the sweep selection **is** the full unreserved eligible
   set — including records a greedy subset selector would have left behind;
   (2) the post-sweep spendable remainder is **empty** — in particular, zero
   `ExternalTransfer` records survive; (3) the post-bond state (the bond-post
   change record, lineage `BondPostChange`) yields a `BackingSet` containing
   it, while an `ExternalTransfer` record (above `last_sweep_height` — the
-  legal-tranche case) and a `MinerReward` record injected into the same
-  input set are **not** in the resulting `BackingSet`; (4) a rung-3 record
-  at or below `last_sweep_height` trips the GF4b-3 survivor
-  `debug_assert!` (`#[should_panic]` in debug builds).
+  legal-tranche case) injected into the same input set is **not** in the
+  resulting `BackingSet`; (4) a rung-3 record at or below
+  `last_sweep_height` trips the GF4b-3 survivor `debug_assert!`
+  (`#[should_panic]` in debug builds).
 
 ### 3.5 (e) Wargamed residuals — preserved, untouched
 
@@ -394,11 +398,13 @@ sweep + the funding-record set (the bond-post path's data plane; the
 
 ## 4. Test plan (gates)
 
-1. **Lineage classification KATs** (`scan_step.rs`): miner-tx output →
-   `MinerReward`; output in a tx carrying the *same* persona's `BondPost` →
-   `BondPostChange`; plain transfer → `ExternalTransfer`; output in a tx
-   carrying a *different* held persona's `BondPost` → `ExternalTransfer`
-   (conservative default); lineage survives the
+1. **Lineage classification KATs** (`scan_step.rs`): output in a tx
+   carrying the *same* persona's `BondPost` → `BondPostChange`; plain
+   transfer → `ExternalTransfer`; output in a tx carrying a *different*
+   held persona's `BondPost` → `ExternalTransfer` (conservative default);
+   a coinbase output recovered by `P`'s scanner → `ExternalTransfer` (the
+   anomaly pin, §3.3 — `P` never mines, so a coinbase-to-`P` must land on
+   the forbidden rung); lineage survives the
    `FundingOutputMatch ↔ PFundingOutputRecord` round-trip.
 2. **Sweep KATs** (`bond_assembly.rs`): full-set consumption (the
    multi-record case greedy would have truncated); reserved exclusion
@@ -409,9 +415,9 @@ sweep + the funding-record set (the bond-post path's data plane; the
    constructor exists is the witness's own doc-comment contract.
 3. **Zero-pre-bond-output test + `BackingSet` gates** (§3.4 definition):
    the four assertions, plus the constructor filter (`ExternalTransfer`
-   and `MinerReward` in, not present — GF4b-1), the survivor
-   `debug_assert!` firing on a pre-sweep rung-3 (GF4b-3), and standard
-   redaction/`Debug` discipline if the type carries record contents.
+   in, not present), the survivor `debug_assert!` firing on a pre-sweep
+   rung-3 (GF4b-3), and standard redaction/`Debug` discipline if the type
+   carries record contents.
 4. **Schema**: `PSCAN_STATE_VERSION` 5 load-refusal test (the existing
    version-gate test pattern); snapshot regenerated; CI snapshot check.
 
@@ -437,7 +443,7 @@ dispositioned in place:
 
 | Finding | Class | Disposition |
 | --- | --- | --- |
-| GF4b-1 — `MinerReward` admitted without its own wargame | privacy, priority-1 | **Accepted, strong form**: excluded from `BackingSet` eligibility for the launch window (§3.4). The GF-7 reduction was checked and does not hold (identity-class vs timing-class disclosure); exclusion is free (the wire pin never designates a coinbase backing). Rule-21 readmission clause at §3.4 |
+| GF4b-1 — a miner-reward rung admitted without its own wargame | privacy, priority-1 | **Resolved by owner ruling, strongest form: the rung does not exist** (§3.3/§3.4). `P` is shard-serving only; mining stays under the principal (adding capability to `P` adds identification surface), and gate-6 rung 1 ("public *emission* history") never covered coinbase. Coinbase-to-`P` is an anomaly that classifies rung 3 structurally; the GF-7-reduction check (fails: identity-class vs timing-class) is recorded at §3.4 as the wargame any future readmission must answer |
 | GF4b-2 — sweep input-count leak live until `stake_in` | privacy, priority-1 | **Answered directly** (§3.5 residual 1): tolerable for the pre-genesis C-1 window (no principals exist), **not acceptable at genesis** — `stake_in` (or equivalent input-count discipline) gates genesis readiness; FOLLOWUPS V3.0 pre-genesis-queue item added |
 | GF4b-3 — filter-not-fail-closed masks sweep regressions | correctness / silent-failure | **Accepted**: survivor check armed (§3.4) — `debug_assert!` that no rung-3 with `height ≤ last_sweep_height` reaches `BackingSet` construction; tranche case untouched |
 | GF4b-4 — reserved `EmissionReward` eligible before its classifier exists | privacy / firewall | **Accepted**: fail-toward-forbidden bound to the C-1 arm as a checkable acceptance criterion (§5 item 2) |
