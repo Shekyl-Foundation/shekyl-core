@@ -253,11 +253,36 @@ implementation, in dependency order:
    when acquired-after-fire despite tip holding). **Standing** stays
    as-is: `bad_intervals` + `join` → `market_member_at_epoch`
    (`consensus_state.rs:98`) is genuinely as-of-E.
-2. **M-2/Q7 as-of-E snapshot struct.** Marshaled by value, each field from the
+2. **M-2/Q7 as-of-E snapshot struct.** **IMPLEMENTED 2026-07-08 on
+   `feat/emission-ws1-held-sourcing`** (same PR as item 1 — one validation
+   surface: the snapshot's work channel consumes item 1's sourcing function,
+   and the close==verify row identity is only checkable with both in one
+   diff). Three cuts, with one implementation finding: **(a)** the close's
+   inline row gather extracted into the shared
+   `BlockchainLMDB::gather_archival_epoch_rows`, called by both the close
+   and the new `gather_archival_emission_epoch_snapshot` — row-selection
+   divergence unrepresentable (§5.5's shape at the C++ layer); the
+   `(E+1)·SEB` boundary single-sourced via the new
+   `shekyl_archival_epoch_close_processing_height` FFI wrapper; **(b)**
+   `shekyl_archival_emission_epoch_work` computes `work_P(E)` +
+   `Curve(work_P)` via `as_of_e_served_work` over arrays decoded by the
+   same `decode_epoch_rows` helper the close FFI uses; **(c)** identity
+   KATs at both layers (sum-of-capped == persisted `Σwork`;
+   live-descriptor-immunity under the M2-1 tip mutation; no-credit
+   sentinel). **Finding — the snapshot carries the *persisted* `Σwork(E)`,
+   never a recompute:** `bad_intervals` grow after E's close (an E-slash
+   applies `[E, ∞)` post-close), so a live re-derivation of the denominator
+   at verify time could diverge from the close's; and the M1 `K_COVER`
+   gate's operand (`frozen_shard_count` as-of-close) is close-only, so the
+   gate's outcome reaches verify only through the stored value. Per-P work
+   recomputes from the frozen credit rows; a claimant slashed after close
+   under-mints itself (policy-acceptable direction), never over-mints
+   another. Marshaled by value, each field from the
    frozen E-close materialization (invariant 2: `R_market(s,E)`, `Σwork(E)`,
    shard `freeze_height`) **plus** the per-`(P,s,E)` serve-credit bits for the
    claimed epoch (the §5 held source); never the live bond descriptor; carries
-   the two Q1 auth fields.
+   the two Q1 auth fields (auth fields ride the verify body, item 3 — the
+   substrate snapshot is consensus rows only).
 3. **`shekyl_emission_vin_verify` — verify body, steps 1–7** (KAT-tested; **not**
    on the consensus dispatch — still unwhitelisted). Recompute `work_P(E)` ==
    `work_claim`; `reward_P(E)` via `reward_arithmetic` == `reward_amount_plain` +
@@ -717,8 +742,12 @@ straddle analysis re-run at source.
 pieces including the three-consumer accessor cut and both KAT sides)
 **implemented 2026-07-07 on `feat/emission-ws1-held-sourcing`** — see the
 item-1 status note in §3 for the two implementation findings (slash-log v2
-`holdings_pre_kind`; encode-invariant relocation). Items 2, 3, 3a, 4, 5
-remain open in dependency order.
+`holdings_pre_kind`; encode-invariant relocation). §3 item 2 (the M-2/Q7
+snapshot struct) **implemented 2026-07-08 on the same branch** — same PR
+by validation-surface bundling; see the item-2 status note for the
+persisted-`Σwork` finding (post-close `bad_intervals` growth + the
+close-only M1 operand make the stored denominator load-bearing). Items 3,
+3a, 4, 5 remain open in dependency order.
 
 ### 7.1 Next action — PR-E3 implementation pre-flight (re-pin to current `dev`)
 
