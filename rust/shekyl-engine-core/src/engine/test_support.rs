@@ -71,8 +71,11 @@ use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use sha2::Sha256;
 
+use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
 use shekyl_rpc_client::{FeeRate, Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
+use shekyl_types::{BlockHeight, SettlementEpoch};
+use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Transaction, TxPrefix};
 
 use crate::engine::pending::TxHash;
@@ -745,6 +748,40 @@ pub(crate) fn make_synthetic_block(height: u64, parent_hash: [u8; 32]) -> Scanna
         },
         transactions: vec![],
         first_output_index: None,
+    }
+}
+
+/// Canonical [`PFundingOutputRecord`] test fixture — the single owner of the
+/// full field list, so a field added to the record is applied here once
+/// rather than hand-mirrored across every module's local builder.
+/// `spendable_height` is derived through the same shared X5 maturity math the
+/// production paths use (`transfer::eligible_height`, plain no-timelock
+/// maturity); tests exercising the immature-exclusion case override the field
+/// on the returned record.
+pub(crate) fn funding_record(
+    p_slot: u32,
+    gindex: u64,
+    height: u64,
+    amount: u64,
+    lineage: MintLineageOutput,
+) -> PFundingOutputRecord {
+    PFundingOutputRecord {
+        p_slot,
+        tx_hash: [u8::try_from(gindex & 0xFF).expect("masked to a byte"); 32],
+        index_in_transaction: 0,
+        gindex,
+        output_key: [1u8; 32],
+        commitment: [2u8; 32],
+        ciphertext_x25519: [3u8; 32],
+        ciphertext_ml_kem: vec![4u8; 8],
+        amount: AtomicUnits::from_raw(amount),
+        height: BlockHeight::from_raw(height),
+        epoch: SettlementEpoch::from_raw(0),
+        lineage,
+        spendable_height: shekyl_engine_state::transfer::eligible_height(
+            BlockHeight::from_raw(height),
+            shekyl_types::Timelock::None,
+        ),
     }
 }
 

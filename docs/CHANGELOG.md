@@ -41,6 +41,19 @@
     + structural gate, and the GF4b-2 genesis gate added to the V3.0
     pre-genesis queue (`stake_in` single-structured-output funding;
     common-case sweep consumes exactly one input).
+  - *Review-round hardening (2026-07-08).* `BackingSet::from_spendable`
+    now **enforces** the GF4b-6 spendability filter itself (new
+    `reference_height` arg) rather than trusting a caller contract, so the
+    type's "spendable" guarantee holds by construction and immature records
+    are dropped before the survivor tripwire; the GF-4b scan pre-pass
+    `debug_assert!`s the `transaction_hashes ↔ transactions` positional
+    pairing (an invariant violation now fails loudly in debug instead of
+    silently degrading lineage to `ExternalTransfer`, release keeps
+    fail-toward-forbidden); `sweep_funding_outputs` folds its sum + collect
+    into one pass; the `PFundingOutputRecord` test fixture is single-sourced
+    in `engine::test_support::funding_record`. The removed-subset-bound
+    tx-size facet and the `reference_height` freshness contract are recorded
+    as C-1 residue criteria (§5 items 5–6).
 
 - **archival: WS-2 emission-claim dedup plumbing — connect-side writer +
   journaled revert** (`REWARD_EMISSION_E3_GATING_ROUND.md` §3 item 3a /

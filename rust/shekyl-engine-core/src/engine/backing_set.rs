@@ -53,13 +53,15 @@ impl BackingSet {
     /// records, filtering to the rung-1/rung-2 lineages and dropping
     /// `ExternalTransfer`.
     ///
-    /// **Precondition (caller contract, named by the function name):**
-    /// `records` is the persona's *spendable* slice — the GF4b-6 filter
-    /// (`spendable_height ≤` the caller's reference height) already applied,
-    /// exactly as the sweep applies it. Immature records must not reach this
-    /// constructor: they would inflate the survivor tripwire below with
-    /// false positives the spendability filter is designed to remove
-    /// (GF-4b §3.4, minor note on GF4b-3).
+    /// **Spendability is enforced here, not assumed of the caller.** The
+    /// constructor applies the GF4b-6 filter itself — `spendable_height ≤
+    /// reference_height`, exactly as the sweep applies it — so the `spendable`
+    /// in the name is a guarantee the type owns rather than a precondition a
+    /// future caller must remember. `reference_height` is the caller's
+    /// spendability anchor (the chain height the backing decision is made
+    /// against). Because the filter runs *before* the survivor tripwire,
+    /// immature records cannot inflate it with false positives (GF-4b §3.4,
+    /// minor note on GF4b-3).
     ///
     /// `last_sweep_height` is the max height of the persona's own
     /// **confirmed** bond posts (durable in `bond_post_matches`) — the
@@ -81,16 +83,28 @@ impl BackingSet {
     /// pubkey, GF-4b §3.3), so a fire means a sweep bug **or** a
     /// late-surfaced low-height output (reorg-resurfaced, or an adversarial
     /// low-height output discovered late) — investigate, do not assume the
-    /// sweep. The spendability precondition above removes the *immature*
+    /// sweep. The enforced spendability filter above removes the *immature*
     /// subset of these false positives; the mature-but-late subset remains a
     /// benign, debug-only false positive, accepted as the cost of keeping
     /// the sweep-regression tripwire armed.
     pub(crate) fn from_spendable(
         records: &[PFundingOutputRecord],
+        reference_height: BlockHeight,
         last_sweep_height: BlockHeight,
     ) -> Self {
+        // Enforce the spendability precondition here rather than trust the
+        // caller (GF4b-6): a record is in the tree iff `spendable_height <=
+        // reference_height`, exactly as the sweep applies it. Filtering
+        // before the survivor tripwire drops the immature subset of its false
+        // positives by construction, and makes the type's "spendable"
+        // guarantee hold for every member rather than by remembered contract.
+        let spendable: Vec<&PFundingOutputRecord> = records
+            .iter()
+            .filter(|r| r.spendable_height <= reference_height)
+            .collect();
+
         debug_assert!(
-            !records.iter().any(|r| {
+            !spendable.iter().any(|r| {
                 r.lineage == MintLineageOutput::ExternalTransfer && r.height <= last_sweep_height
             }),
             "rung-3 record at or below last_sweep_height ({last_sweep_height:?}) reached \
@@ -100,8 +114,8 @@ impl BackingSet {
         );
 
         Self {
-            records: records
-                .iter()
+            records: spendable
+                .into_iter()
                 .filter(|r| {
                     matches!(
                         r.lineage,
@@ -125,33 +139,18 @@ impl BackingSet {
 mod tests {
     use super::*;
     use crate::engine::bond_assembly::{sweep_funding_outputs, SpentRecordsDurablyPruned};
-    use shekyl_types::{BlockHeight, SettlementEpoch};
-    use shekyl_units::AtomicUnits;
+    use crate::engine::test_support::funding_record;
+    use shekyl_types::BlockHeight;
 
+    /// Slot-0 wrapper over the crate's single `funding_record` fixture — this
+    /// module varies `lineage`, so it threads that through.
     fn record(
         gindex: u64,
         height: u64,
         amount: u64,
         lineage: MintLineageOutput,
     ) -> PFundingOutputRecord {
-        PFundingOutputRecord {
-            p_slot: 0,
-            tx_hash: [u8::try_from(gindex & 0xFF).expect("masked to a byte"); 32],
-            index_in_transaction: 0,
-            gindex,
-            output_key: [1u8; 32],
-            commitment: [2u8; 32],
-            ciphertext_x25519: [3u8; 32],
-            ciphertext_ml_kem: vec![4u8; 8],
-            amount: AtomicUnits::from_raw(amount),
-            height: BlockHeight::from_raw(height),
-            epoch: SettlementEpoch::from_raw(0),
-            lineage,
-            spendable_height: shekyl_engine_state::transfer::eligible_height(
-                BlockHeight::from_raw(height),
-                shekyl_types::Timelock::None,
-            ),
-        }
+        funding_record(0, gindex, height, amount, lineage)
     }
 
     /// Lineage filter: rung 1 and rung 2 are admitted; rung 3 above
@@ -159,6 +158,10 @@ mod tests {
     /// dropped — no assert, no error (GF-4b §3.4 filter-not-fail-closed).
     #[test]
     fn filters_to_backing_eligible_lineages() {
+        // Far-future reference height: every fixture record is spendable, so
+        // this test isolates the lineage filter from the GF4b-6 spendability
+        // filter.
+        let reference_height = BlockHeight::from_raw(1_000_000);
         let last_sweep_height = BlockHeight::from_raw(100);
         let records = vec![
             record(1, 90, 500, MintLineageOutput::BondPostChange),
@@ -167,7 +170,7 @@ mod tests {
             record(3, 150, 900, MintLineageOutput::ExternalTransfer),
         ];
 
-        let set = BackingSet::from_spendable(&records, last_sweep_height);
+        let set = BackingSet::from_spendable(&records, reference_height, last_sweep_height);
         let gindexes: Vec<u64> = set.records().iter().map(|r| r.gindex).collect();
         assert_eq!(
             gindexes,
@@ -181,13 +184,45 @@ mod tests {
     #[test]
     #[should_panic(expected = "rung-3 record at or below last_sweep_height")]
     fn survivor_trips_the_debug_assert() {
+        // Far-future reference: the survivor is spendable, so it reaches the
+        // tripwire (the spendability filter does not mask a mature survivor).
+        let reference_height = BlockHeight::from_raw(1_000_000);
         let last_sweep_height = BlockHeight::from_raw(100);
         let records = vec![
             record(1, 90, 500, MintLineageOutput::BondPostChange),
             // Survivor: rung 3 that a sweep should have consumed.
             record(2, 80, 700, MintLineageOutput::ExternalTransfer),
         ];
-        let _ = BackingSet::from_spendable(&records, last_sweep_height);
+        let _ = BackingSet::from_spendable(&records, reference_height, last_sweep_height);
+    }
+
+    /// GF4b-6 enforcement: the constructor applies the spendability filter
+    /// itself, so (a) an immature rung-1/2 record is excluded from the set,
+    /// and (b) an immature rung-3 at or below `last_sweep_height` does **not**
+    /// trip the survivor tripwire — the immature subset of false positives is
+    /// removed before the assert, exactly as the type doc claims. Contrast
+    /// `survivor_trips_the_debug_assert`, whose survivor is *spendable*.
+    #[test]
+    fn immature_records_are_excluded_before_the_tripwire() {
+        // reference_height sits far below every record's spendable_height
+        // (height + SPENDABLE_AGE), so both records are immature regardless of
+        // the exact lock window.
+        let reference_height = BlockHeight::from_raw(100);
+        let last_sweep_height = BlockHeight::from_raw(250);
+        let records = vec![
+            // Immature rung-2: backing-eligible by lineage, but not yet in the
+            // tree at reference_height → excluded.
+            record(1, 200, 500, MintLineageOutput::BondPostChange),
+            // Immature rung-3 at/below last_sweep_height: a survivor by height,
+            // but the spendability filter removes it before the tripwire.
+            record(2, 200, 700, MintLineageOutput::ExternalTransfer),
+        ];
+
+        let set = BackingSet::from_spendable(&records, reference_height, last_sweep_height);
+        assert!(
+            set.records().is_empty(),
+            "immature records — including the rung-2 — are excluded by the enforced spendability filter"
+        );
     }
 
     /// The zero-pre-bond-output test (GF-4b §3.4 definition, §4 item 3) —
@@ -269,7 +304,7 @@ mod tests {
             // Legal between-sweeps tranche (height > last_sweep_height).
             record(21, 250, 123, MintLineageOutput::ExternalTransfer),
         ];
-        let set = BackingSet::from_spendable(&post_bond, last_sweep_height);
+        let set = BackingSet::from_spendable(&post_bond, reference_height, last_sweep_height);
         let eligible: Vec<u64> = set.records().iter().map(|r| r.gindex).collect();
         assert_eq!(
             eligible,

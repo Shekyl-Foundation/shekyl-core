@@ -329,12 +329,17 @@ pub(crate) fn sweep_funding_outputs(
     eligible.sort_by_key(|r| (r.height, r.gindex));
 
     // Sweep: the entire eligible set, no early break — a subset is
-    // inexpressible from here down.
+    // inexpressible from here down. One pass sums and materializes the
+    // records together, so the reported `total` cannot drift from the
+    // `records` actually returned (the change-split invariant
+    // `funding == change + fee + credit` relies on that agreement).
     let mut total: u64 = 0;
-    for record in &eligible {
+    let mut records = Vec::with_capacity(eligible.len());
+    for record in eligible {
         total = total
             .checked_add(record.amount.to_raw())
             .ok_or(BondAssemblyError::AmountOverflow)?;
+        records.push(record.clone());
     }
 
     if total < required {
@@ -344,10 +349,7 @@ pub(crate) fn sweep_funding_outputs(
         });
     }
 
-    Ok(FundingSelection {
-        records: eligible.into_iter().cloned().collect(),
-        total,
-    })
+    Ok(FundingSelection { records, total })
 }
 
 // ---------------------------------------------------------------------------
@@ -435,40 +437,28 @@ pub(crate) fn finalize_bond_tx(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::test_support::funding_record;
     use shekyl_engine_state::pending_post_block::PendingPostState;
     use shekyl_engine_state::pscan_state::MintLineageOutput;
-    use shekyl_types::{BlockHeight, SettlementEpoch};
-    use shekyl_units::AtomicUnits;
+    use shekyl_types::BlockHeight;
 
+    // The sweep is lineage-blind (it consumes *all* spendable funding
+    // regardless of rung — GF-4b §3.1), so these helpers pin rung 3 as the
+    // representative fixture lineage; both delegate to the crate's single
+    // `funding_record` builder (the immature-exclusion KATs override
+    // `spendable_height` on the returned record).
     fn record(gindex: u64, height: u64, amount: u64) -> PFundingOutputRecord {
         record_for_slot(0, gindex, height, amount)
     }
 
     fn record_for_slot(p_slot: u32, gindex: u64, height: u64, amount: u64) -> PFundingOutputRecord {
-        PFundingOutputRecord {
+        funding_record(
             p_slot,
-            tx_hash: [u8::try_from(gindex & 0xFF).expect("masked to a byte"); 32],
-            index_in_transaction: 0,
             gindex,
-            output_key: [1u8; 32],
-            commitment: [2u8; 32],
-            ciphertext_x25519: [3u8; 32],
-            ciphertext_ml_kem: vec![4u8; 8],
-            amount: AtomicUnits::from_raw(amount),
-            height: BlockHeight::from_raw(height),
-            epoch: SettlementEpoch::from_raw(0),
-            // The sweep is lineage-blind (it consumes *all* spendable funding
-            // regardless of rung — GF-4b §3.1); rung 3 is the representative
-            // fixture lineage.
-            lineage: MintLineageOutput::ExternalTransfer,
-            // Plain-transfer maturity (no timelock) via the shared X5
-            // computation — the GF4b-6 sweep KATs override this for the
-            // immature-exclusion case.
-            spendable_height: shekyl_engine_state::transfer::eligible_height(
-                BlockHeight::from_raw(height),
-                shekyl_types::Timelock::None,
-            ),
-        }
+            height,
+            amount,
+            MintLineageOutput::ExternalTransfer,
+        )
     }
 
     /// A far-future reference height: every plain-maturity fixture record is

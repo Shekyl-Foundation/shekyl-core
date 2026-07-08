@@ -442,6 +442,20 @@ pub(crate) fn run_dual_extractor(
         // `P` never mines (owner ruling, §3.3), and a coinbase tx carries only
         // `Input::Gen` — an anomalous coinbase-to-`P` output lands on
         // `ExternalTransfer` structurally.
+        //
+        // The positional pairing is a scanner invariant; assert it loudly in
+        // debug/test so an upstream violation surfaces as a failure rather
+        // than a silent lineage downgrade, while release keeps the
+        // fail-toward-forbidden `get(j)` (a wallet must not crash on a state
+        // it can safely under-classify — same posture as the GF4b-3 survivor
+        // tripwire, §3.4).
+        debug_assert_eq!(
+            block.block.transaction_hashes.len(),
+            block.transactions.len(),
+            "transaction_hashes must be positionally paired with transactions \
+             (scanner invariant); a mismatch would silently degrade GF-4b lineage \
+             attribution to ExternalTransfer"
+        );
         let mut bond_post_slots: BTreeMap<[u8; 32], BTreeSet<u32>> = BTreeMap::new();
 
         // (b) public bond-post match — reads inputs, no secret, no clone.
