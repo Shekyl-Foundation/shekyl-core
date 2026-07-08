@@ -4,6 +4,24 @@
 
 ### Added
 
+- **emission: E3 gating design round closed — leg design complete**
+  ([`REWARD_EMISSION_E3_GATING_ROUND.md`](design/REWARD_EMISSION_E3_GATING_ROUND.md)).
+  Pre-flight found PR-E2 already landed (stale-doc corrections to
+  `IMPLEMENTATION_INDEX.md` / `REWARD_EMISSION_VIN_PLAN.md`); policy trio
+  closed (Q3 vacuous at arity 1; Q11 same-tx backing+fee ACCEPT with
+  balance-exclusion KAT; Q12 zero-work rejected as foreclosed). **WS-1
+  ratified:** M-2 supply conservation closes under *bits-sourcing ∧
+  as-of-fire-height acceptance* — `work_P(E)` sources the per-`(P,s,E)`
+  serve-credit bits, not the tip-mutable `held_shard_ids`; one shared
+  `as_of_E_served_work` both sides; one `at_height`-honoring accessor with
+  two consumers (`blockchain.cpp:4307` acceptance, `db_lmdb.cpp:5270`
+  slash-eligibility); three armed KATs. **WS-2 ratified:** three-layer
+  `(P,E)` dedup (wire / block-level pass / verify-read + connect single
+  writer), with the prune-straddle identified as a **double-mint** (window
+  floor keys on reorg-non-monotonic `current_settled_epoch`) closed by a
+  journaled revert whose row is the pre-image delta `{inserted E, evicted
+  members}`; prune-against-finalized recorded as the rule-21 reopen that
+  retires the journal. PR-E3 build list unblocked (round §3).
 - **wallet-rpc: OpenAPI 3.1 contract for `shekyl-wallet-rpc` (Phase 4
   spec-first gate)** (`docs/api/wallet_rpc.yaml`;
   `WALLET_REWRITE_PLAN.md` §"Phase 4"; `IMPLEMENTATION_INDEX.md` §3 Phase 4

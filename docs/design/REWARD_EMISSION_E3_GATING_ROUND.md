@@ -1,11 +1,12 @@
 # Reward-emission E3 gating round — pre-flight audit + policy-trio closure
 
-**Status:** Round 3 (2026-07-07). Q3/Q12 resolved; **Q11 ACCEPT ratified**;
-**WS-1 (Q10/M-2/Q7 two-conjunct held-sourcing) ratified** (§5); **WS-2 (Q9/F-E3
-dedup atomicity) closure PROPOSED — awaiting ratification** (§6: block-level
-`(P,E)` pass + journaled claimed-set revert). On WS-2 sign-off the leg's design
-is complete; the PR-E3 implementation pre-flight opens re-pinned to current
-`dev` (see §7.1).
+**Status:** Round 3 **CLOSED** (2026-07-07). Q3/Q12 resolved; **Q11 ACCEPT
+ratified**; **WS-1 (Q10/M-2/Q7 two-conjunct held-sourcing) ratified** (§5);
+**WS-2 (Q9/F-E3 dedup atomicity) ratified** (§6: block-level `(P,E)` pass +
+journaled claimed-set revert, severity-upgraded — the prune straddle is a
+**double-mint**, journal row = pre-image delta `{inserted E, evicted members}`).
+The leg's design is complete; the PR-E3 implementation pre-flight runs against
+current `dev` (§7.1, §8).
 **Process:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 (A2 audit-against-actual-code; the pre-flight substrate re-check).
 Dispositions follow [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).
@@ -100,9 +101,9 @@ before C-1) — decided in that consumer's PR, not by default.
 
 The trio is the last open *design* on the leg (plan §8 table row
 `Q3 / Q11 (F-E7) / Q12 (F-E8)` — "acceptance-path policy; round-closable; not
-deep"). Two are resolved-by-landed-substrate; one (Q11) is a genuine — if
-shallow — decision, marked **PROPOSED** for human ratification because it is
-consensus-acceptance-path (priority-1).
+deep"). Two are resolved-by-landed-substrate; one (Q11) was a genuine — if
+shallow — decision, proposed for human ratification because it is
+consensus-acceptance-path (priority-1), and **ratified** (§7).
 
 ### 2.1 Q3 — backing-input distinctness — RESOLVED (vacuous at arity 1)
 
@@ -118,7 +119,7 @@ cannot reopen without the auth-arity pin reopening ahead of it.
 **Re-evaluation shape.** Design-round 1 of the PR that raises backing arity, with
 the auth-arity reopen and call-graph evidence.
 
-### 2.2 Q11 / F-E7 — same-tx backing + key-imaged fee double-use — **PROPOSED: ACCEPT**
+### 2.2 Q11 / F-E7 — same-tx backing + key-imaged fee double-use — **RATIFIED: ACCEPT**
 
 **Threat (plan §8 open item 11).** §5.2 permits ≥0 fee `txin_to_key` inputs (with
 key images) alongside the one membership-only backing; the threat model names
@@ -200,8 +201,8 @@ reopens in the same PR.
 
 ## 3. Unblocked PR-E3 scope (implementation, not design)
 
-With the trio and WS-1 ratified and WS-2's closure proposed (§6), everything
-below is implementation, in dependency order:
+With the trio, WS-1, and WS-2 all ratified (§7), everything below is
+implementation, in dependency order:
 
 1. **`held(P,E)` as-of-E sourcing — the WS-1 build item (§5, corrects §8.0's
    "one build item").** M-2 closes under the **two-conjunct** rule (§5.4). Four
@@ -244,8 +245,11 @@ below is implementation, in dependency order:
    `handle_block_to_main_chain` (mirror of `:4882`, every `(P, E_i)` pair);
    connect-path `claimed_epochs_check_and_set` FFI wrapper as the single writer
    (`Ok(false)` at connect = hard error); the claimed-set revert **journal** +
-   pop-path restore (slash-log idiom, §6.3), covering
-   `first_paying_emission_height`; the three §6.4 KATs.
+   pop-path restore (slash-log idiom, §6.3) — **the journal row is the
+   pre-image delta `{inserted E, evicted set members}` as one unit** (an
+   insert-only journal leaves the §6.3 double-mint alive), covering
+   `first_paying_emission_height`; the three §6.4 KATs (prune-straddle KAT
+   asserts post-reorg re-claim **rejection**).
 4. **C-1 — the activating cut** (separate PR; [`07-consensus-atomic-cutovers.mdc`](../../.cursor/rules/07-consensus-atomic-cutovers.mdc)):
    ML-DSA witness minter + `check_inputs_types_supported` whitelist flip + C++
    shim dispatch + `VARIANT_TAG 0x06`. Merge blocker = ML-DSA present/tested **and**
@@ -350,9 +354,9 @@ the correction below is that it is **not a fourth input**: it collapses into the
 E-indexed serve-credit bit (input #2, §5.3), and the descriptor was a phantom
 fifth source.
 
-**PROPOSED (consensus sourcing rule; priority-1, awaiting ratification):** M-2
-closes under **bits-sourcing ∧ as-of-fire-height acceptance** — the conjunction,
-not bits-sourcing alone.
+**RATIFIED (consensus sourcing rule; priority-1):** M-2 closes under
+**bits-sourcing ∧ as-of-fire-height acceptance** — the conjunction, not
+bits-sourcing alone.
 
 - **Conjunct 1 — bits-sourcing.** `work_P(E)`'s held-and-served shard set is
   sourced from the per-`(P,s,E)` serve-credit bits (`archival_serve_credit`),
@@ -486,7 +490,7 @@ the credit-implies-held proof re-examined at source.
 
 ---
 
-## 6. WS-2 — Q9/F-E3 dedup atomicity — **PROPOSED closure**
+## 6. WS-2 — Q9/F-E3 dedup atomicity — **RATIFIED**
 
 Independent of WS-1 (different mechanism; shared only in the PR-E3
 verify/connect split). Closed here at source (operands re-verified at `dev`
@@ -516,9 +520,8 @@ double-mint window, purely intra-block.
 
 ### 6.2 Disposition — the block-level `(P,E)` pass (option 2); option 1 foreclosed by Q7
 
-**PROPOSED (consensus acceptance rule; priority-1, awaiting ratification):**
-dedup is delivered by **three layers, one per scope**, of which only the middle
-one is new:
+**RATIFIED (consensus acceptance rule; priority-1):** dedup is delivered by
+**three layers, one per scope**, of which only the middle one is new:
 
 | Scope | Mechanism | Status |
 |-------|-----------|--------|
@@ -551,27 +554,45 @@ foreclosed it). The connect path treats it as a hard error (`throw`, matching
 the connect-path `FATAL:` style at `blockchain_db.cpp:230`), never a soft skip
 — a silent skip would connect a block whose emission paid without marking `E`.
 
-### 6.3 Reorg-symmetry of the claimed-set — journaled revert, not a bespoke inverse
+### 6.3 The prune-resurrection double-mint — the journal is mandatory, not hygiene
 
 The connect mutation is **insert `E` + prune entries below the window floor**
-(`claimed_epochs.rs:114–116`). The prune makes the naive disconnect inverse
-("remove `E`") **not bit-identical**: entries pruned at connect are not
-resurrected by a remove, so a pop would leave the bond record byte-different
-from its pre-connect state — exactly the drift class the §5.6 discipline
-exists to catch. (The module's own prune-safety note — reorg depth 720 ≪ epoch
-length 10 000, so pruned entries are dead weight for *claimability* — is
-correct but answers a different question than at-rest bit-identity.)
+(`claimed_epochs.rs:114–116`), and the floor keys on `current_settled_epoch` —
+**a quantity that is non-monotonic under reorg.** Verified at source: the
+epoch-close revert **definalizes `E`** when its boundary block pops
+(`ARCHIVAL_CONSENSUS_STATE.md:224–239`, "a pop sequence removes all of them
+before `revert_archival_epoch_close_at_height` definalizes `E` at
+`h_close(E)`"). The failure is therefore **not** a bit-identity blemish; it is
+a **double-mint**, the same priority-1 supply-violation class as the WS-1
+keystone:
 
-**Disposition: journaled revert, inheriting the slash-log precedent.** The bond
-record already has a connect-time mutation with a pop-exact restore: the slash
-path journals per-height revert rows (`m_archival_slash_log`, "BE(height)‖BE(seq)
-→ revert journal", `db_lmdb.h:694`) and `revert_archival_slashes_at_height`
-runs in the pop path (`blockchain_db.cpp:478`). The emission connect journals
-the pre-mutation `claimed_settlement_epochs` (equivalently: the inserted `E` +
-the pruned entries) keyed by height; disconnect restores it exactly. One reorg
-mechanism, many tables — the same O-3 inheritance §5.5-3 uses for the
-serve-credit bits. (`first_paying_emission_height`, set-once at first emission
-per `shekyl_types.h:615–619`, rides the same journal row: unset on pop iff this
+1. `E_old` is claimed and its reward **mints** (block long since connected).
+2. A later claim of `E_new` connects in a boundary-crossing region; its
+   `check_and_set` prunes `E_old` at the then-current window edge
+   (`E_old < floor(S)`).
+3. A pop spanning the boundary definalizes a settled epoch → `S′ < S` → the
+   floor lowers → **`E_old` re-enters the claim window** (a one-block pop past
+   a boundary suffices: `E_old = floor(S) − 1 ≥ floor(S−1)`).
+4. Under the naive inverse ("remove the inserted `E`"), `E_old` is absent from
+   the restored set → a fresh emission claiming `E_old` passes dedup → **the
+   reward mints twice.** (The module's own prune-safety note — reorg depth
+   720 ≪ epoch length 10 000 — answers pruned-entry *claimability at tip*,
+   not resurrectability under a floor-lowering pop; and `:224–239`'s
+   no-stranded-emission argument covers citing emissions above `h_close`,
+   not the pruned dedup state.)
+
+**Disposition (RATIFIED): journaled revert, inheriting the slash-log
+precedent — and the journal row is pinned as the pre-image delta, one unit:
+`{inserted E, evicted set members}`.** A journal that reverses only the insert
+still leaves the pruned-already-claimed `E_old` gone and the double-mint alive
+— the *point* of the journal is restoring what the prune removed. The slash
+path already carries full pre-image revert rows (`m_archival_slash_log`,
+"BE(height)‖BE(seq) → revert journal", `db_lmdb.h:694`;
+`revert_archival_slashes_at_height` in the pop path, `blockchain_db.cpp:478`);
+the emission journal rides the same idiom, keyed by height, restored exactly on
+disconnect. One reorg mechanism, many tables — the same O-3 inheritance §5.5-3
+uses for the serve-credit bits. (`first_paying_emission_height`, set-once per
+`shekyl_types.h:615–619`, rides the same journal row: unset on pop iff this
 emission was the setter.)
 
 ### 6.4 Armed KATs
@@ -582,14 +603,40 @@ emission was the setter.)
 2. **Cross-block double-claim KAT.** `E` claimed at height `h`; a second claim
    of `E` at `h' > h` → tx rejected at verify (`claimed_epochs_contains`
    against the connected bond record).
-3. **Prune-straddle reorg KAT (the journal's load-bearing case).** A connect
-   whose insert **prunes** old entries, then a pop spanning it → the bond
-   record's `claimed_settlement_epochs` (and `first_paying_emission_height`)
-   restore **bit-identically**, pruned entries included. The naive
-   remove-inverse fails exactly this case; the journal is proven by it.
+3. **Prune-straddle double-mint KAT (the journal's load-bearing case — a
+   property test, not a mechanism test).** Claim `E_new` in a
+   boundary-crossing block whose connect **prunes** the already-claimed
+   `E_old`; pop past the boundary (floor lowers, `E_old` re-enters the
+   window); submit a fresh emission claiming `E_old` → **rejected**
+   (`Ok(false)` / vin-reject). Byte-identity of the restored
+   `claimed_settlement_epochs` (and `first_paying_emission_height`) is
+   asserted as a corollary, but "no second mint of `E_old` post-reorg" is the
+   property — it is the assertion the naive remove-inverse fails (§6.3 step
+   4) and the reason the journal exists.
 
 ### 6.5 Reopening (rule 21)
 
+- **Prune-against-finalized retires the journal** — reopens iff a
+  **reorg-immune finalized settled epoch becomes a first-class quantity
+  plumbable to the prune site** (e.g. a checkpoint/finality boundary lands
+  for other reasons). The §6.3 root cause is that the prune keys on the tip
+  settled epoch, which is non-monotonic under reorg; pruning against a
+  reorg-immune floor instead would make the resurrectable state
+  **unrepresentable** (the prune only ever evicts epochs no legal reorg can
+  bring back into the window), the naive remove-inverse becomes correct, and
+  the journal, its bond-record row, and its KAT all retire. **Rejected now**
+  because the invariant it needs does not currently exist: settled epochs
+  themselves definalize under reorg (`ARCHIVAL_CONSENSUS_STATE.md:224–239`),
+  so "finalized settled epoch" is not reorg-immune without a hard *enforced*
+  reorg-depth limit — and none is plumbed to the prune site
+  (`claimed_epochs_check_and_set` receives only `current_settled_epoch`,
+  `claimed_epochs.rs:99`; `ARCHIVAL_REORG_DEPTH_BLOCKS` = 720 is a wallet-side
+  scan-ceiling constant, not a consensus pop bound). The journal is correct
+  for **any** reorg depth; prune-against-finalized is correct only up to a
+  bound it would newly depend on — in a priority-1 double-mint context,
+  self-contained-and-depth-independent beats clever-but-coupled.
+  **Re-evaluation shape:** design round of the PR that lands the finality
+  boundary, with the §6.3 straddle re-run against the new floor.
 - Reopens iff a **second claimer** of `claimed_settlement_epochs` appears (any
   vin type other than the emission vin writing the set): the block pass is
   scope-bounded to emission vins and must widen to the union of writers, or the
@@ -601,7 +648,8 @@ emission was the setter.)
 - The window constants (`MAX_CLAIM_AGE_W = 26`, cap 32, reorg depth 720 ≪
   epoch 10 000) are load-bearing for the prune-safety argument; the
   `claimed_epochs.rs:39–43` const assertion is the armed guard, and a change
-  to any of the three re-runs §6.3's bit-identity analysis in its own PR.
+  to any of the three re-runs §6.3's double-mint straddle analysis in its own
+  PR.
 **Re-evaluation shape.** Design-round 1 of the PR introducing the second
 claimer / the ordering change / the constant move, with this section's
 straddle analysis re-run at source.
@@ -623,22 +671,27 @@ straddle analysis re-run at source.
   (§5.6, reorg KAT pins the composition).** The supply-conservation keystone,
   the one obligation with no backstop under it (§5.5). Corrects the Round-2
   Q10/M-2 closure.
-- **WS-2 (Q9 / F-E3)** — **PROPOSED closure, awaiting ratification (§6):**
-  three dedup layers (wire strictly-increasing landed; **block-level `(P,E)`
+- **WS-2 (Q9 / F-E3)** — **RATIFIED (§6), with a severity upgrade:** three
+  dedup layers (wire strictly-increasing landed; **block-level `(P,E)`
   uniqueness pass** mirroring the landed `:4882` serve-credit idiom; per-tx
   contains-check at verify + connect `check_and_set` single writer). Option 1
   (intra-block write-visibility) rejected on Q7 pure-function coherence.
-  Claimed-set reorg-symmetry via **journaled revert** (slash-log idiom — the
-  connect-time window prune makes the naive remove-inverse non-bit-identical);
-  three armed KATs (§6.4). The last open design on the leg.
+  The prune-straddle is a **double-mint** (the floor keys on
+  `current_settled_epoch`, non-monotonic under reorg — a pop resurrects a
+  pruned already-claimed epoch into the window), so claimed-set
+  reorg-symmetry is via **journaled revert** with the row pinned as the
+  pre-image delta `{inserted E, evicted members}` as one unit (slash-log
+  idiom); three armed KATs (§6.4, the prune-straddle KAT asserts re-claim
+  **rejection**, the property, not byte round-trip, the mechanism);
+  prune-against-finalized recorded as the rule-21 reopen that retires the
+  journal (§6.5). **The round's design work is complete.**
 
 ### 7.1 Next action — PR-E3 implementation pre-flight (re-pin to current `dev`)
 
-Both keystone decisions are ratified; WS-1's build (§3 items 1–2) is unblocked;
-the verify body + dedup plumbing (§3 items 3/3a) additionally await WS-2
-ratification (§6). When the PR-E3 implementation pre-flight opens against the
-§3 build list, **run it against the current `dev` head, not the `1f67652b0`
-round pin** — `dev` has already moved to **`90e790c9c`** (twice mid-round in
+All design on the leg is ratified (Q3/Q12 resolved, Q11 accepted, WS-1 and
+WS-2 ratified); the full §3 build list is unblocked. The PR-E3 implementation
+pre-flight opens against the §3 build list and **runs against the current
+`dev` head, not the `1f67652b0` round pin** — `dev` has already moved to **`90e790c9c`** (twice mid-round in
 this arc; the WS-2 closure's operands were re-verified at `90e790c9c` and the
 delta was CI/CHANGELOG-only, §6). The **§11.1 pattern — read every operand at
 its production site** — is precisely what turned the last two "closed" premises
