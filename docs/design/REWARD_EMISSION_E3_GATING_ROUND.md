@@ -1174,7 +1174,10 @@ V3.0 audit" refers to the serve-credit pass; the emission pass ships at
 C-1 and is never deferred.
 
 ### 9.6 Finding F-C1c — signable-hash circularity — pinned exclusion rule
-**(for ratification)**
+**(RATIFIED 2026-07-09** — full-binding wargame verified: reward
+redirection, non-vin alteration, vin-swap, and cross-tx transplant all
+foreclosed; the zero-fee case checked hardest and holds via the
+emission slot's own pqc_auth, see the why-notes below**)**
 
 Surfaced building item 5. The vin's two binding surfaces — the Q1 auth
 message (`emission_wire.rs::auth_msg_input`, field inventory 1–7 +
@@ -1209,6 +1212,36 @@ the *reduced* signable; the fee-input FCMP proof binds the *full*
 prefix. A tx whose vin is swapped post-signing fails the tx-level
 hybrid auth; a tx whose non-vin bytes are altered fails both the Q1
 auths and (when fee inputs exist) the FCMP proof.
+
+**Why-note 1 — the two-hash split is forced, not arbitrary.** The
+tx-level pqc_auth escapes the circularity the Q1 auths hit because
+`pqc_auths` lives in the **signature section, outside the prefix**
+(like the CT sigs), so it signs the full prefix without sitting inside
+its own preimage. The Q1 auths are carried **in the vin, inside the
+prefix** — which is the whole reason they need the reduced hash.
+Out-of-prefix signs full; in-prefix signs reduced.
+
+**Why-note 2 — row 3's tx-level auth is the emission slot's own, not
+the fee inputs'.** `check_tx_inputs` requires `pqc_auths.size() ==
+num_inputs` for every non-serve-credit tx (the `:3580` sizing), and
+`num_inputs ≥ 1` for the emission vin itself — so the emission vin
+carries its own tx-level pqc_auth **present regardless of fee inputs**.
+The dispatch binds that slot's hybrid key to the vin's
+`P_canonical_id`, and `tx_pqc_verify.cpp` signature-verifies it over
+the complete prefix. P therefore signs the assembled tx as a whole
+under P's key even in the zero-fee case; a swapped vin changes the
+prefix and fails a signature no attacker can re-produce. (The natural
+reading — "the tx-level binding rides the fee inputs" — invites a
+spurious zero-fee gap; it does not exist.)
+
+**Ordering pin (implementation invariant).** `erase(vin[emission_index])`
+is deterministic only because Q3 arity (exactly one emission vin) is
+enforced **before** the hash is computed: the verifier's classification
+(`emission_count == 1`) gates entry to the dispatch branch, and the
+hash is constructed inside it. The wallet-side builder, when it lands,
+must order identically — classify/assert arity, then compute the
+signable. Two candidate emission vins must never reach the removal
+rule.
 
 ### 9.7 Non-blocking notes
 
