@@ -55,9 +55,13 @@
   function rather than mirroring the C++ `std::set` idiom; the connect
   arm's dedup decision is already Rust (`claimed_epochs_check_and_set`),
   and the mint application stays C++. The three C++ serve-credit
-  decisions are queued in `FOLLOWUPS.md` (V3.0, post-C-1) as
-  equivalence-proven extraction candidates (mirror → prove
-  bit-equivalent → flip, the `recon.rs` precedent).
+  decisions are queued in `FOLLOWUPS.md` as extraction candidates with
+  the audit and the flip **decoupled at the genesis boundary**: the
+  Rust mirror + equivalence proof + standing KAT is V3.0 pre-genesis
+  (a verification task — divergences found are free fixes before
+  genesis; mirror-then-fix, never mirror-a-fixed-version), and the
+  behavior-preserving decision-site flip is V3.1 (unblocked when the
+  equivalence KAT is green and the flip carries no behavior delta).
 
 - **wallet: GF-4b backing-lineage pre-join wiring — sweep, lineage ladder,
   `BackingSet`; the `REWARD_EMISSION_VIN_PLAN.md` §8.0.3 C-1 activation

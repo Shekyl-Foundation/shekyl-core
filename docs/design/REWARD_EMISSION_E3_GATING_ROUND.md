@@ -1145,9 +1145,19 @@ is already foreclosed by single-evaluator (the arithmetic has one Rust
 implementation; C++ passes operands) — "more Rust" is not what forecloses
 it; "one evaluator" is. The older serve-credit decisions
 (`:4247`/`:4312`/`:4904`) are queued as post-C-1 extraction candidates
-under the equivalence-proof discipline (`docs/FOLLOWUPS.md` V3.0 queue):
-mirror in Rust, prove behavior-equivalent against the C++ (the `recon.rs`
-/ `collect_outputs` pattern), then flip the decision site — never
+under the equivalence-proof discipline, **decoupled at the genesis
+boundary** (`docs/FOLLOWUPS.md`): the *audit half* — mirror in Rust,
+prove behavior-equivalent against the C++ (the `recon.rs` /
+`collect_outputs` pattern), install as a standing equivalence KAT — is
+V3.0 pre-genesis, because it is a verification task whose findings are
+free fixes before genesis and hard forks after; the *decision-site
+flip* is V3.1, because a behavior-preserving flip buys genesis nothing
+on safety while putting fresh decision-sites on the critical path in
+place of the archival path's most battle-tested code. Mirror-then-fix
+ordering: the mirror reproduces the C++ including any reachable bad
+state (never mirror a fixed version); an audit-surfaced bug is fixed in
+the C++ as its own behavior-change commit, and the flip stays
+behavior-preserving against the fixed C++ — never
 reimplement-and-hope, because a divergence in a replaced consensus
 decision is the fork the extraction exists to prevent.
 
