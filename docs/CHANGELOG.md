@@ -32,6 +32,48 @@
   testnet). Error mapping covers `-29000..-29005`. Remaining SPECIFIED
   methods still return `-32601` until later 4b slices.
 
+- **docs: emission claim-builder design round 1 opened
+  (`docs/design/EMISSION_CLAIM_BUILDER.md`).** The E4-gate part-1 work
+  unit after C-1 (#277) landed: the wallet-side builder that assembles
+  authed `txin_archival_reward_emission` transactions — the piece the
+  Track-2 regtest e2e (E4-gate part 2) is blocked on. Spec: seven-step
+  assembly over landed substrate only (verifier-exact positive-share
+  recompute for claimable-epoch derivation; backing exclusively through
+  `BackingSet` at arity 1 per GF-4b §5; `prove_membership_only`; the
+  shared `auth_msgs` builder + dual hybrid sign; build-time self-check
+  against the landed verify functions), the GF-4b §5 / M1
+  inherited-obligation discharge table, and round-1 questions CB-1…CB-5
+  with CB-1 (archival-state recompute sourcing: new daemon RPC vs
+  wallet-side re-derivation vs regtest shortcut — recommended (a), the
+  RPC shaped as `EmissionEpochSource`) as the gating decision.
+  `IMPLEMENTATION_INDEX.md` registers the `CB-` family and refreshes
+  the stale #263/#264/#277 "in review" rows to landed with
+  code-anchored verification stamps. **Round 1 CLOSED (2026-07-09) —
+  Round-1 dispositions + CB-4 tripwire strengthening:** CB-1…CB-5 all
+  ratified at source with two builder-PR pins (sign within `StakeEngine`'s
+  seed-gone-after-`assemble()` discipline; `SelfCheckFailed` refuses
+  cause-blind) and CB-3's joint-grading reopen (GF-4 grades cadence +
+  amount + holdings stratum jointly). The CB-4 source pass found the Q11
+  balance-exclusion arming KAT
+  (`tests/unit_tests/archival_emission_ct_balance.cpp`) was
+  necessary-not-sufficient: the exclusion is enforced by a **structural
+  three-leg guard** (backing in the vin's opaque `canonical_bytes` never
+  deserialized into `pseudoOuts`; dispatch + leaf size checks at
+  `tx_verification_utils.cpp:175` + `rctSigs.cpp:362`), and CB-4 ratifies on
+  that guard — not on the KAT. Fixed **in this PR** (cheap, in-surface,
+  known-wrong): arm 1 strengthened to derive operands through the
+  **production** functions the dispatch uses (`classify_archival_tx` +
+  `shekyl_checked_sum_amounts`, replacing a test-local mirror), arming the
+  guard's operand + leaf legs; the E3 §2.2 rationale corrected (its claimed
+  identity-catch was green-by-construction — the backing never reaches
+  `verCtSemanticsEmission`); and a general test-doc discipline pinned in
+  `50-testing.mdc` ("Test rationales state their coverage boundary"). The
+  remaining **blob-boundary invariant** arm (drive the full dispatch, assert
+  CT-balance verdict invariant under `canonical_bytes` variation) is
+  harness-gated and homed to the claim-builder PR where the valid-proof
+  emission-tx harness is born (`FOLLOWUPS.md`) — tripwire-completeness, not
+  a consensus change.
+
 ### Fixed
 
 - **consensus: C-1 emission review hardening (PR #277 review,
@@ -180,6 +222,29 @@
   the real connect height, and pops it back off.
 
 ### Added
+
+- **sim: F-B1c-c2 disposition-(b) reopen evidence + closure — swing
+  tolerable, (a) stands permanently
+  (`REWARD_EMISSION_E3_GATING_ROUND.md` §9.9 reopen-resolution
+  addendum).** Two companion sim modes produce the rule-21 reopen
+  evidence the c2 adjudication gated on: `shekyl-economics-sim
+  --fb1c-c2` measures the per-epoch `budget(E)` swing under
+  disposition (a) against the demand-insulated (b) counterfactual
+  across six volume regimes (throttle floors at exactly 0.8× — the
+  `release_min` clamp, never zero; (b)'s worst-window uplift bounded
+  at 25 % of the emission leg; the gap decays to ~nothing at the
+  fee-era handoff), and `shekyl-staking-sim --budget-throttle`
+  cross-checks coverage on the L11 `budget → APR → entry → coverage`
+  transfer curve, 8-seed-averaged, with the emis_frac-weighted
+  effective multiplier (the fee leg is disposition-neutral). No real
+  operating point materially degrades: the deep-throttle regime
+  (mining era, saturated purse) and the coverage-knee regime (fee era,
+  emission leg decayed to ~1 % of budget) are disjoint under the
+  0.90/yr share decay — the honest counterfactual (full 0.8× on a lean
+  purse, a regime that does not occur) does cross the knee, so the
+  recorded safety is regime separation, not throttle harmlessness.
+  Reopen closed: FOLLOWUPS V3.0 item moved to the audit trail;
+  consequence note updated in `ARCHIVAL_BUDGET_SCHEDULE.md` §1.
 
 - **docs: C-1 review closure recorded — blocks 3 and 5 pass at file:line;
   `IMPLEMENTATION_INDEX.md` emission rows updated to code (rule 94).**

@@ -49,11 +49,17 @@ staker_inflow(h) = em_split.staker_emission + burn.staker_pool_amount
   is by construction: `base_reward = miner_emission (coinbase) +
   staker leg (burned | accrued)`, so `budget(E)` is exactly "ledger
   minus coinbase" and claiming cannot inflate. Consequence: `budget(E)`
-  floats with the release multiplier and weight penalty — whether
-  archival funding should instead be demand-insulated is the §9.9
-  (b)-reopen sim question. Genesis (h = 0) computes no inflow: its
-  emission is the hardcoded `GENESIS_TX` amount, paid whole by the
-  genesis coinbase.
+  floats with the release multiplier and weight penalty — the §9.9
+  (b)-reopen sim question, **resolved 2026-07-09: the swing is
+  tolerable and (a) stands permanently** (the float is clamped to
+  `[release_min, release_max]` = a 0.8× floor on the emission leg only,
+  and the deep-throttle regime and the coverage-knee regime are
+  disjoint under the 0.90/yr share decay — gating round §9.9
+  reopen-resolution addendum; evidence:
+  `shekyl-economics-sim --fb1c-c2`,
+  `shekyl-staking-sim --budget-throttle`). Genesis (h = 0) computes no
+  inflow: its emission is the hardcoded `GENESIS_TX` amount, paid whole
+  by the genesis coinbase.
 - `staker_pool_amount`: the staker share of the fee burn,
   `compute_fee_burn` (`economics.h:55–60`) — **fee-dependent, per-block,
   not recomputable from schedule alone.**

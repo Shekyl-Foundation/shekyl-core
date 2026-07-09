@@ -1309,33 +1309,6 @@ sustainability is unaffected by the recalibration.
   §9.9 (F-B1b hardening + fast-follow bullets),
   `ARCHIVAL_BUDGET_SCHEDULE.md` §2.2.
 
-- **Archival-funding demand-insulation sim — the F-B1c-c2 (b)-reopen
-  evidence (post-closure pin, 2026-07-09).** The c2 adjudication
-  (`REWARD_EMISSION_E3_GATING_ROUND.md` §9.9) fixed the budget's
-  emission leg to disposition (a): the staker leg is a share of
-  verify's modulated `base_reward` (release multiplier + weight
-  penalty), making `budget(E)` conservation-exact ("ledger minus
-  coinbase") but demand-responsive — archival funding throttles when
-  tx volume is low, and archival retention is a baseline availability
-  function whose need doesn't obviously scale down with volume.
-  Disposition (b) (demand-insulated budget via the unmodulated
-  subsidy) was **rejected now** — it amends the supply-ledger advance
-  rule and the Q11-guarded conservation identity, the most
-  catastrophic-if-wrong genesis-frozen surface — with a rule-21
-  reopen gated on evidence: run the sim (companion to the
-  servo/fee-era sim) measuring how much `budget(E)` swings with tx
-  volume under (a) and whether the swing plausibly starves the serving
-  incentive during plausible low-volume windows. **Reversion:** if the
-  sim shows material underfunding, (b) reopens as a deliberate
-  supply-accounting amendment (threat-model review + Q11-identity KAT
-  amendment in the same PR) — pre-genesis if it lands in the window, a
-  named post-genesis-blocked item if not; if the swing is tolerable,
-  (a) stands permanently and this item closes. Cross-refs:
-  `REWARD_EMISSION_E3_GATING_ROUND.md` §9.9 (c2),
-  `ARCHIVAL_BUDGET_SCHEDULE.md` §1, `STAKER_ARCHIVAL_SIM.md` (harness).
-  **Target: V3.0 (pre-genesis; the economics question gates genesis —
-  distinct from the (a) correctness fix, which gated the C-1 PR).**
-
 - **Funding-seam entry-standoff: consensus surface, wallet conformance, and the
   cold-start cover residual (standoff sim review pass, 2026-06-13).** The
   `--standoff` sim (`STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff*,
@@ -4536,7 +4509,46 @@ sustainability is unaffected by the recalibration.
   (`txin_stake_claim`/`C_stake` deletion) stays gated on this item per
   §4 item 5. **Target: V3.0 pre-genesis. Reopening trigger: claim
   builder lands → e2e rides the Track-2 regtest harness
-  (`regtest_e2e` family).**
+  (`regtest_e2e` family).** UPDATE 2026-07-09: the claim-builder
+  design round opened —
+  [`EMISSION_CLAIM_BUILDER.md`](./design/EMISSION_CLAIM_BUILDER.md)
+  (assembly spec + CB-1…CB-5; CB-1 recompute sourcing is the gating
+  question).
+
+- **Q11 balance-exclusion KAT — blob-boundary invariant arm**
+  (surfaced 2026-07-09, CB-4 source pass —
+  [`EMISSION_CLAIM_BUILDER.md`](./design/EMISSION_CLAIM_BUILDER.md) §3
+  CB-4). The Q11 same-tx-backing exclusion is enforced **structurally**, a
+  three-leg guard: **(i)** nothing deserializes the emission vin's opaque
+  `canonical_bytes` into `rv.p.pseudoOuts`; **(ii)** the dispatch size
+  check (`tx_verification_utils.cpp:175`); **(iii)** the leaf size check
+  (`rctSigs.cpp:362`). CB-4 ratifies on that structural guard; the KAT
+  (`tests/unit_tests/archival_emission_ct_balance.cpp`) is its
+  **necessary-not-sufficient tripwire**.
+  **Done in the round-1 PR (not deferred):** arm 1 was strengthened to
+  derive operands through the **production** functions the dispatch uses
+  (`classify_archival_tx` + `shekyl_checked_sum_amounts`, replacing the
+  test-local mirror), arming leg (i) *operand side* and leg (iii); the E3
+  §2.2 rationale was corrected (its claimed identity-catch was
+  green-by-construction — `verCtSemanticsEmission` never receives the
+  blob-resident backing); and the general discipline was pinned in
+  `50-testing.mdc` ("Test rationales state their coverage boundary").
+  **Remaining (this item):** the leg (i) *`pseudoOuts` side* + leg (ii) —
+  the **blob-boundary invariant** — is still unarmed. Add an arm that drives
+  the full production dispatch (`ver_non_input_consensus_templated`) with a
+  valid FCMP++ emission tx and asserts the **CT-balance verdict is invariant
+  under `canonical_bytes` variation** (the balance-relevant `pseudoOuts` set
+  is exactly the fee inputs, *unaffected* by blob contents). This is the arm
+  that fails if a future deserialization change parsed the backing out of
+  the blob into `pseudoOuts` — the actually-dangerous refactor, which the
+  size-check arms cannot catch (they fire only once something is already in
+  `pseudoOuts`). **Not** a consensus change (the Q11 reversion clause is
+  untouched); tripwire-completeness, not a safety gate.
+  **Target: V3.0 pre-genesis, homed to the claim-builder PR** — it is
+  harness-gated on a valid-proof emission-tx builder, which that PR's
+  step-7 self-check builds anyway, so it lands where the harness is born
+  rather than in this queue. **Reopening trigger: closed when the
+  blob-boundary arm lands green.**
 
 ---
 
@@ -11215,6 +11227,33 @@ reference.
 ## Recently resolved (audit trail)
 
 Retained for citation in review; each links to the canonical record.
+
+- **Archival-funding demand-insulation sim — F-B1c-c2 (b)-reopen
+  CLOSED, (a) stands permanently (closed 2026-07-09, resolution staged
+  on `sim/fb1c-c2-budget-throttling`; merge SHA backfilled on `dev`
+  merge).** The §9.9 rule-21 reopen gated disposition (b)
+  (demand-insulated budget via the unmodulated subsidy) on sim
+  evidence of material low-volume underfunding under the shipped
+  disposition (a). The evidence ran as two companion modes —
+  `shekyl-economics-sim --fb1c-c2` (budget-swing magnitude) and
+  `shekyl-staking-sim --budget-throttle` (coverage cross-check on the
+  L11 transfer curve, 8-seed-averaged) — and found the swing
+  **tolerable**: the throttle floors at exactly 0.8× (release_min
+  clamp, never zero; (b)'s worst-window uplift bounded at 25 % of the
+  emission leg); the deep-throttle regime (mining-era low volume,
+  emission leg ≈ all of budget) and the coverage-knee regime (fee era,
+  emission leg decayed to ~1 % of budget) are **disjoint by the
+  0.90/yr decay schedule** — 0.8× of the co-location-saturated
+  mining purse stays fully covered, and the fee-era throttle is
+  ~0.24 %, under the material bar and within seed noise. The honest
+  counterfactual (full 0.8× on a lean purse, a regime that does not
+  occur) does cross the knee — the safety is regime separation, not
+  throttle harmlessness — and fee-era lean coverage is marginal under
+  *both* dispositions (the already-dispositioned L13 servo + backstop
+  question, which (b) would not fix). Canonical record:
+  `REWARD_EMISSION_E3_GATING_ROUND.md` §9.9 (reopen-resolution
+  addendum); consequence note updated in
+  `ARCHIVAL_BUDGET_SCHEDULE.md` §1.
 
 - **RandomX v2 Phase 2g "Investigate `shekyl-pow-randomx::compute_hash`
   divergence from C reference at large data sizes" — substrate-
