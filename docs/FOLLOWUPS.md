@@ -4428,6 +4428,27 @@ sustainability is unaffected by the recalibration.
   they are free. **Target: V3.0 pre-genesis, after C-1 lands** (C-1's
   emission leg establishes the Rust-decision template).
 
+  **UPDATE 2026-07-09: the V3.0 audit half is IMPLEMENTED** (design
+  PR #274; implementation on `feat/serve-credit-equivalence-mirror`,
+  per [`ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md`](./design/ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md)).
+  Mirrors live at
+  `rust/shekyl-archival-retention/src/serve_credit_decisions.rs`
+  (D-SC-A key + membership, D-SC-B **wide** gate with ordered
+  first-failing-branch reasons, D-SC-C block uniqueness); the standing
+  equivalence KAT runs both legs over the shared fixture
+  `serve_credit_equivalence_kat_v1.json` (Rust:
+  `serve_credit_equivalence_kat.rs` asserts verdict + reason; C++:
+  `tests/unit_tests/archival_serve_credit_equivalence.cpp` drives the
+  live gate over seeded state and asserts the verdict `bool` only);
+  fuzz targets `fuzz_serve_credit_gate` /
+  `fuzz_serve_credit_block_unique` are wired into the CI smoke gate.
+  Both audited decision sites in `blockchain.cpp` carry guard comments
+  naming the fixture. Finding **SCE-1** (BE/native-endian `(P,s,E)`
+  key split) was proven behavior-irrelevant and then **resolved** by
+  the post-equivalence unify commit (D-SC-C now keys with
+  `ArchivalServeCreditKey`). No divergence between the C++ and the
+  mirrors was found. The V3.1 flip entry is unchanged.
+
   The **decision-site flip** (Rust becomes the primary decision site,
   the C++ decision is dropped) is deliberately **not** part of this
   item — see the V3.1 entry. A behavior-preserving flip changes no

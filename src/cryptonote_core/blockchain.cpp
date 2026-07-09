@@ -4566,6 +4566,14 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
   return true;
 }
 //------------------------------------------------------------------
+// AUDITED DECISION (ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md, D-SC-B wide /
+// D-SC-A dedup): this gate's ordered predicate sequence is mirrored in Rust
+// (shekyl-archival-retention::serve_credit_decisions) and pinned by the
+// standing equivalence KAT (serve_credit_equivalence_kat_v1.json; Rust leg
+// serve_credit_equivalence_kat.rs, C++ leg archival_serve_credit_equivalence.cpp).
+// Reordering predicates, adding one, or changing a reject condition requires
+// re-authoring the fixture's expected-reason column and updating the mirror
+// in the same change.
 bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_credit_response& resp,
   uint64_t current_height) const
 {
@@ -5235,6 +5243,14 @@ leave:
 
   // Per-tx serve-credit idempotency checks run against pre-block DB state; reject
   // duplicate (P, shard, E) credits across multiple txs in the same block.
+  //
+  // AUDITED DECISION (ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md, D-SC-C):
+  // mirrored in Rust (serve_credit_decisions::serve_credit_block_unique) and
+  // transcribed verbatim in archival_serve_credit_equivalence.cpp. The key is
+  // ArchivalServeCreditKey — the same big-endian encoding D-SC-A persists
+  // (SCE-1 unified post-equivalence; db_lmdb.cpp:1657–1659 forbids
+  // native-endian composite keys) — do not change it independently of the
+  // mirror, the transcription, and the fixture's key pins.
   {
     std::unordered_set<std::string> block_serve_credits;
     block_serve_credits.reserve(txs.size());
@@ -5245,12 +5261,11 @@ leave:
         if (!std::holds_alternative<txin_archival_serve_credit_response>(vin))
           continue;
         const auto& resp = std::get<txin_archival_serve_credit_response>(vin);
-        std::string key(48, '\0');
-        memcpy(key.data(), resp.p_canonical_id.data, 32);
-        const uint64_t shard_id = resp.shard_id;
-        const uint64_t settlement_epoch = resp.settlement_epoch;
-        memcpy(key.data() + 32, &shard_id, sizeof(shard_id));
-        memcpy(key.data() + 40, &settlement_epoch, sizeof(settlement_epoch));
+        const shekyl::db::ArchivalServeCreditKey credit_key(
+          reinterpret_cast<const uint8_t*>(resp.p_canonical_id.data),
+          resp.shard_id, resp.settlement_epoch);
+        std::string key(reinterpret_cast<const char*>(credit_key.bytes().data()),
+          credit_key.bytes().size());
         if (!block_serve_credits.insert(std::move(key)).second)
         {
           MERROR_VER("Block " << id << " has duplicate archival serve-credit (P, shard, E)");

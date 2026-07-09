@@ -416,6 +416,14 @@ public:
         return { bytes_.size(), const_cast<uint8_t*>(bytes_.data()) };
     }
 
+    // Raw key bytes for non-LMDB consumers (the block-level uniqueness pass in
+    // blockchain.cpp shares this encoding per SCE-1,
+    // ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md §6).
+    const std::array<uint8_t, kArchivalServeCreditKeySize>& bytes() const noexcept
+    {
+        return bytes_;
+    }
+
 private:
     std::array<uint8_t, kArchivalServeCreditKeySize> bytes_{};
 };
