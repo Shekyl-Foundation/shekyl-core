@@ -22,7 +22,7 @@ use shekyl_crypto_pq::account::{
 use shekyl_crypto_pq::bip39::{mnemonic_from_entropy, SHEKYL_BIP39_ENTROPY_BYTES};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::{
-    Capability, CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams, Network,
+    CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams, Network, OpenError,
     OpenedEngine, SoloSigner,
 };
 use shekyl_engine_file::paths::keys_path_from;
@@ -32,8 +32,9 @@ use shekyl_rpc_transport::SimpleRequestRpc;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::WalletRpcError;
-use crate::tenant::TenantState;
-use crate::types::{WalletHandle, CAPABILITY_FULL};
+use crate::params::{parse_required_object, require_empty_object};
+use crate::tenant::{require_open_engine, TenantState};
+use crate::types::{capability_mode_str, WalletHandle};
 
 /// Params for `create_wallet`.
 #[derive(Debug, Deserialize)]
@@ -62,28 +63,12 @@ struct ChangePasswordParams {
     new_password: String,
 }
 
-/// Dispatch a lifecycle method against `tenants`.
-pub async fn dispatch(
-    tenants: &tokio::sync::Mutex<TenantState>,
-    method: &str,
-    params: &Value,
-    kdf: KdfParams,
-) -> Result<Value, WalletRpcError> {
-    match method {
-        "create_wallet" => create_wallet(tenants, params, kdf).await,
-        "open_wallet" => open_wallet(tenants, params).await,
-        "close_wallet" => close_wallet(tenants, params).await,
-        "change_password" => change_password(tenants, params).await,
-        _ => Err(WalletRpcError::MethodNotFound(method.to_owned())),
-    }
-}
-
-async fn create_wallet(
+pub(crate) async fn create_wallet(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,
     kdf: KdfParams,
 ) -> Result<Value, WalletRpcError> {
-    let p: CreateWalletParams = parse_object(params, "create_wallet")?;
+    let p: CreateWalletParams = parse_required_object(params, "create_wallet")?;
     validate_wallet_name(&p.name)?;
     if p.language != "en" {
         return Err(WalletRpcError::InvalidParams(
@@ -152,11 +137,11 @@ async fn create_wallet(
     Ok(result)
 }
 
-async fn open_wallet(
+pub(crate) async fn open_wallet(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
-    let p: OpenWalletParams = parse_object(params, "open_wallet")?;
+    let p: OpenWalletParams = parse_required_object(params, "open_wallet")?;
     validate_wallet_name(&p.name)?;
 
     let mut state = tenants.lock().await;
@@ -192,25 +177,41 @@ async fn open_wallet(
     Ok(json!({ "wallet": handle }))
 }
 
-async fn close_wallet(
+pub(crate) async fn close_wallet(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     require_empty_object(params, "close_wallet")?;
 
     let mut state = tenants.lock().await;
-    let Some((_name, shared)) = state.tenant.take_open() else {
+    let Some((name, shared)) = state.tenant.take_open() else {
         return Err(WalletRpcError::WalletNotOpen);
     };
-    // Drop the tenant slot before awaiting close. Fail loud if another
-    // Arc clone still holds the Engine (e.g. in-flight refresh).
-    let engine = Arc::try_unwrap(shared)
-        .map_err(|_| {
-            WalletRpcError::InternalError(
+
+    // Reclaim sole ownership before closing. If another task still holds a
+    // clone (e.g. an in-flight refresh), restore the slot and fail loud rather
+    // than evicting a still-live wallet we cannot actually close.
+    let lock = match Arc::try_unwrap(shared) {
+        Ok(lock) => lock,
+        Err(shared) => {
+            state.tenant.restore_open(name, shared);
+            return Err(WalletRpcError::InternalError(
                 "cannot close: wallet engine still in use by another task".into(),
-            )
-        })?
-        .into_inner();
+            ));
+        }
+    };
+    let engine = lock.into_inner();
+
+    // `Engine::close` consumes `self` and refuses when reservations are
+    // outstanding — a refusal there would drop the engine and lose the wallet.
+    // Check first (non-consuming) and re-install the wallet unchanged on refusal.
+    let outstanding = engine.outstanding_pending_txs();
+    if outstanding > 0 {
+        state.tenant.set_open(name, engine);
+        return Err(WalletRpcError::from(OpenError::OutstandingPendingTx {
+            count: outstanding,
+        }));
+    }
 
     // `credentials` is ignored on the steady-state close path.
     let creds = Credentials::password_only(b"");
@@ -218,16 +219,13 @@ async fn close_wallet(
     Ok(json!({}))
 }
 
-async fn change_password(
+pub(crate) async fn change_password(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
-    let p: ChangePasswordParams = parse_object(params, "change_password")?;
+    let p: ChangePasswordParams = parse_required_object(params, "change_password")?;
 
-    let shared = {
-        let state = tenants.lock().await;
-        state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?
-    };
+    let shared = require_open_engine(tenants).await?;
 
     let old = Zeroizing::new(p.old_password.into_bytes());
     let new = Zeroizing::new(p.new_password.into_bytes());
@@ -264,11 +262,11 @@ fn generate_seed_material(
         Network::Testnet => {
             let mut raw = [0u8; RAW_SEED_BYTES];
             OsRng.fill_bytes(&mut raw);
-            let hex = hex_encode_lower(&raw);
+            let seed_hex = hex::encode(raw);
             let (master, _blob) = generate_account_from_raw_seed(&raw, derivation)
                 .map_err(|e| WalletRpcError::InternalError(format!("raw account: {e}")))?;
             raw.zeroize();
-            Ok((master, SeedFormat::Raw32, SeedBackup::RawHex(hex)))
+            Ok((master, SeedFormat::Raw32, SeedBackup::RawHex(seed_hex)))
         }
     }
 }
@@ -288,17 +286,9 @@ fn wallet_handle(
 ) -> WalletHandle {
     WalletHandle {
         name: name.to_owned(),
-        capability: capability_str(engine.capability()).to_owned(),
+        capability: capability_mode_str(engine.capability()).to_owned(),
         network: network_str(engine.network()).to_owned(),
         restore_height_hint,
-    }
-}
-
-fn capability_str(cap: Capability) -> &'static str {
-    match cap {
-        Capability::Full => CAPABILITY_FULL,
-        Capability::ViewOnly => "VIEW_ONLY",
-        Capability::HardwareOffload => "HARDWARE_OFFLOAD",
     }
 }
 
@@ -333,48 +323,9 @@ fn validate_wallet_name(name: &str) -> Result<(), WalletRpcError> {
     Ok(())
 }
 
-fn parse_object<T: for<'de> Deserialize<'de>>(
-    params: &Value,
-    method: &str,
-) -> Result<T, WalletRpcError> {
-    match params {
-        Value::Null => Err(WalletRpcError::InvalidParams(format!(
-            "{method} requires a params object"
-        ))),
-        Value::Object(_) => serde_json::from_value(params.clone())
-            .map_err(|e| WalletRpcError::InvalidParams(format!("{method} params: {e}"))),
-        _ => Err(WalletRpcError::InvalidParams(format!(
-            "{method} params must be an object"
-        ))),
-    }
-}
-
-fn require_empty_object(params: &Value, method: &str) -> Result<(), WalletRpcError> {
-    match params {
-        Value::Null => Ok(()),
-        Value::Object(map) if map.is_empty() => Ok(()),
-        Value::Object(_) => Err(WalletRpcError::InvalidParams(format!(
-            "{method} takes no parameters"
-        ))),
-        _ => Err(WalletRpcError::InvalidParams(format!(
-            "{method} params must be an object or omitted"
-        ))),
-    }
-}
-
 async fn make_daemon(daemon_address: &str) -> Result<DaemonClient, WalletRpcError> {
     let rpc = SimpleRequestRpc::new(daemon_address.to_owned())
         .await
         .map_err(|_e| WalletRpcError::DaemonUnreachable)?;
     Ok(DaemonClient::new(rpc))
-}
-
-fn hex_encode_lower(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0xf) as usize] as char);
-    }
-    out
 }

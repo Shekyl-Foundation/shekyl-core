@@ -676,3 +676,68 @@ async fn spawn_in_process_with_lifecycle() {
 
     handle.shutdown().await.expect("shutdown");
 }
+
+/// Regression: a `close_wallet` that races an in-flight Engine clone (e.g. a
+/// running `refresh`) must fail loud WITHOUT evicting the still-live wallet.
+/// Before the fix, `close_wallet` cleared the tenant slot before the
+/// `Arc::try_unwrap` liveness check, so a failed close permanently orphaned
+/// the wallet (subsequent queries returned `-29001 WalletNotOpen`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn close_wallet_racing_inflight_clone_does_not_evict() {
+    let dir = TempDir::new().expect("tempdir");
+    let state = lifecycle_state(&dir);
+
+    let created = rpc(
+        state.clone(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "create_wallet",
+            "params": { "name": "race", "password": "pw" }
+        }),
+    )
+    .await;
+    assert!(created.get("error").is_none(), "{created}");
+
+    // Simulate an in-flight refresh by holding a clone of the shared Engine.
+    let inflight = {
+        let ts = state.tenants.lock().await;
+        ts.tenant.engine().expect("wallet open")
+    };
+
+    // close_wallet cannot reclaim sole ownership → fail loud (-32603).
+    let closed = rpc(
+        state.clone(),
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "close_wallet", "params": {} }),
+    )
+    .await;
+    assert_eq!(closed["error"]["code"], -32603, "{closed}");
+
+    // ...but the wallet must remain open and operable (not evicted).
+    let bal = rpc(
+        state.clone(),
+        json!({ "jsonrpc": "2.0", "id": 3, "method": "get_balance", "params": {} }),
+    )
+    .await;
+    assert!(
+        bal.get("error").is_none(),
+        "wallet was evicted by a failed close: {bal}"
+    );
+
+    // Once the in-flight clone drops, close succeeds cleanly.
+    drop(inflight);
+    let closed2 = rpc(
+        state.clone(),
+        json!({ "jsonrpc": "2.0", "id": 4, "method": "close_wallet", "params": {} }),
+    )
+    .await;
+    assert!(closed2.get("error").is_none(), "{closed2}");
+
+    // And the wallet is now genuinely closed.
+    let after = rpc(
+        state.clone(),
+        json!({ "jsonrpc": "2.0", "id": 5, "method": "get_balance", "params": {} }),
+    )
+    .await;
+    assert_eq!(after["error"]["code"], -29001, "{after}");
+}

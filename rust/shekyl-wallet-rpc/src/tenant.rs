@@ -18,6 +18,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::error::WalletRpcError;
+
 /// Shared handle to the open Engine (read/write under the inner lock).
 pub type SharedEngine = Arc<RwLock<Engine<SoloSigner>>>;
 
@@ -70,12 +72,42 @@ impl Tenant {
     ///
     /// The caller should [`Arc::try_unwrap`](std::sync::Arc::try_unwrap) the
     /// returned handle before close. If other clones still exist (e.g. an
-    /// in-flight refresh), close must fail loud rather than racing.
+    /// in-flight refresh), the caller must [`restore_open`](Self::restore_open)
+    /// the handle and fail loud rather than evicting the still-live wallet.
     pub fn take_open(&mut self) -> Option<(String, SharedEngine)> {
         let name = self.open_name.take()?;
         let engine = self.engine.take()?;
         Some((name, engine))
     }
+
+    /// Re-install a handle previously removed by [`take_open`](Self::take_open)
+    /// when the close attempt could not proceed (another task still holds a
+    /// clone, or reservations are outstanding). Inverse of `take_open`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a wallet is already open — the slot must be empty, which it is
+    /// on the close path that just called `take_open`.
+    pub fn restore_open(&mut self, name: String, engine: SharedEngine) {
+        assert!(
+            self.engine.is_none(),
+            "restore_open called while a wallet is already open"
+        );
+        self.open_name = Some(name);
+        self.engine = Some(engine);
+    }
+}
+
+/// Clone the open Engine handle under a short tenant-mutex hold, or map the
+/// no-wallet-open case to [`WalletRpcError::WalletNotOpen`].
+///
+/// The tenant mutex is released before the caller awaits the Engine lock, so a
+/// long-running RPC never holds the process-level mutex across its work.
+pub(crate) async fn require_open_engine(
+    tenants: &tokio::sync::Mutex<TenantState>,
+) -> Result<SharedEngine, WalletRpcError> {
+    let state = tenants.lock().await;
+    state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)
 }
 
 /// Process-level wallet directory + tenant slot + daemon/network binding.

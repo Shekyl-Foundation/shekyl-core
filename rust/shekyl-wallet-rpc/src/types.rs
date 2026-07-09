@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use shekyl_engine_core::Capability;
 
 use crate::error::WalletRpcError;
 
@@ -199,6 +200,19 @@ pub struct GetVersionResult {
 
 /// OpenAPI `CapabilityMode` for FULL wallets (Phase 4b create/open).
 pub const CAPABILITY_FULL: &str = "FULL";
+
+/// Map an Engine [`Capability`] to its OpenAPI `CapabilityMode` string.
+///
+/// Single source of truth for the `WalletHandle.capability` response field and
+/// the `CapabilityForbids` (`-29005`) `error.data.capability` field, so the two
+/// never disagree when a new capability variant lands.
+pub fn capability_mode_str(cap: Capability) -> &'static str {
+    match cap {
+        Capability::Full => CAPABILITY_FULL,
+        Capability::ViewOnly => "VIEW_ONLY",
+        Capability::HardwareOffload => "HARDWARE_OFFLOAD",
+    }
+}
 
 /// `WalletHandle` returned by lifecycle methods that leave a wallet open.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

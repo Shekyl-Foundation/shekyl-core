@@ -15,8 +15,9 @@ use shekyl_engine_core::{FeePriority, ReservationId, TxRecipient, TxRequest};
 use shekyl_units::AtomicUnits;
 
 use crate::error::WalletRpcError;
+use crate::params::parse_required_object;
 use crate::project::pending_tx_result;
-use crate::tenant::TenantState;
+use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{DiscardPendingTxResult, SubmitPendingTxResult, SubmitVerdictView};
 
 /// One recipient in `build_pending_tx` params.
@@ -54,21 +55,7 @@ struct DiscardPendingTxParams {
     pending_tx_id: String,
 }
 
-/// Dispatch a send-lifecycle method against `tenants`.
-pub async fn dispatch(
-    tenants: &tokio::sync::Mutex<TenantState>,
-    method: &str,
-    params: &Value,
-) -> Result<Value, WalletRpcError> {
-    match method {
-        "build_pending_tx" => build_pending_tx(tenants, params).await,
-        "submit_pending_tx" => submit_pending_tx(tenants, params).await,
-        "discard_pending_tx" => discard_pending_tx(tenants, params).await,
-        _ => Err(WalletRpcError::MethodNotFound(method.to_owned())),
-    }
-}
-
-async fn build_pending_tx(
+pub(crate) async fn build_pending_tx(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
@@ -92,10 +79,7 @@ async fn build_pending_tx(
         priority: parse_fee_priority(p.priority)?,
     };
 
-    let shared = {
-        let state = tenants.lock().await;
-        state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?
-    };
+    let shared = require_open_engine(tenants).await?;
     let mut engine = shared.write().await;
     let pending = engine.build_pending_tx_async(&request).await?;
     let result = pending_tx_result(&pending);
@@ -103,7 +87,7 @@ async fn build_pending_tx(
         .map_err(|e| WalletRpcError::InternalError(format!("serialize build_pending_tx: {e}")))
 }
 
-async fn submit_pending_tx(
+pub(crate) async fn submit_pending_tx(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
@@ -113,10 +97,7 @@ async fn submit_pending_tx(
         WalletRpcError::InvalidParams("seen_gen must be a non-negative integer".into())
     })?;
 
-    let shared = {
-        let state = tenants.lock().await;
-        state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?
-    };
+    let shared = require_open_engine(tenants).await?;
     let mut engine = shared.write().await;
     let tx_hash = engine.submit_pending_tx_async(id, seen_gen).await?;
     let result = SubmitPendingTxResult {
@@ -128,17 +109,14 @@ async fn submit_pending_tx(
         .map_err(|e| WalletRpcError::InternalError(format!("serialize submit_pending_tx: {e}")))
 }
 
-async fn discard_pending_tx(
+pub(crate) async fn discard_pending_tx(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     let p: DiscardPendingTxParams = parse_required_object(params, "discard_pending_tx")?;
     let id = parse_reservation_id(&p.pending_tx_id)?;
 
-    let shared = {
-        let state = tenants.lock().await;
-        state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?
-    };
+    let shared = require_open_engine(tenants).await?;
     let mut engine = shared.write().await;
     // Engine maps unknown handles to Ok(()) (idempotent discard).
     engine.discard_pending_tx(id)?;
@@ -181,22 +159,6 @@ fn parse_reservation_id(s: &str) -> Result<ReservationId, WalletRpcError> {
         WalletRpcError::InvalidParams("pending_tx_id must be a decimal reservation id".into())
     })?;
     Ok(ReservationId::from_raw(raw))
-}
-
-fn parse_required_object<T: for<'de> Deserialize<'de>>(
-    params: &Value,
-    method: &str,
-) -> Result<T, WalletRpcError> {
-    match params {
-        Value::Null => Err(WalletRpcError::InvalidParams(format!(
-            "{method} requires a params object"
-        ))),
-        Value::Object(_) => serde_json::from_value(params.clone())
-            .map_err(|e| WalletRpcError::InvalidParams(format!("{method} params: {e}"))),
-        _ => Err(WalletRpcError::InvalidParams(format!(
-            "{method} params must be an object"
-        ))),
-    }
 }
 
 #[cfg(test)]

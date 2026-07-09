@@ -22,6 +22,7 @@ pub mod auth;
 pub mod error;
 pub mod handlers;
 pub mod lifecycle;
+pub mod params;
 pub mod project;
 pub mod queries;
 pub mod send;

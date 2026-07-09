@@ -4396,6 +4396,7 @@ dependencies = [
  "axum",
  "base64",
  "clap",
+ "hex",
  "http",
  "http-body-util",
  "rand 0.8.6",

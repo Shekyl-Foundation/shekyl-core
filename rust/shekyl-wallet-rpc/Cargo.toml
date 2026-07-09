@@ -35,6 +35,7 @@ subtle = "2"
 tracing = "0.1"
 clap = { version = "4", features = ["derive"] }
 rand = "0.8"
+hex = "0.4"
 zeroize = { workspace = true }
 shekyl-logging = { path = "../shekyl-logging" }
 shekyl-engine-core = { path = "../shekyl-engine-core" }

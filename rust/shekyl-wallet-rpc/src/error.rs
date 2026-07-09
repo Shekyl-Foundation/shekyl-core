@@ -10,8 +10,8 @@ use serde_json::{json, Value};
 use shekyl_engine_core::engine::error::{RetryableRejectCause, TerminalErrorKind};
 use shekyl_engine_core::engine::SubmitError;
 use shekyl_engine_core::{
-    Capability, ChangePasswordError, IoError, OpenError, PendingTxError, PersistenceError,
-    RefreshError, SendError,
+    ChangePasswordError, IoError, OpenError, PendingTxError, PersistenceError, RefreshError,
+    SendError,
 };
 use shekyl_engine_file::WalletFileError;
 use shekyl_rpc_client::{RejectCause, SubmitVerdict};
@@ -224,7 +224,7 @@ impl From<OpenError> for WalletRpcError {
             OpenError::CapabilityMismatch { found }
             | OpenError::CapabilityNotYetImplemented { capability: found } => {
                 Self::CapabilityForbids {
-                    capability: capability_mode_str(found).to_owned(),
+                    capability: crate::types::capability_mode_str(found).to_owned(),
                 }
             }
             OpenError::OutstandingPendingTx { count } => Self::InternalError(format!(
@@ -392,14 +392,6 @@ fn classify_wallet_file_detail(detail: &str) -> WalletRpcError {
         WalletRpcError::InvalidPassword
     } else {
         WalletRpcError::InternalError(detail.to_owned())
-    }
-}
-
-fn capability_mode_str(cap: Capability) -> &'static str {
-    match cap {
-        Capability::Full => "FULL",
-        Capability::ViewOnly => "VIEW_ONLY",
-        Capability::HardwareOffload => "HARDWARE_OFFLOAD",
     }
 }
 

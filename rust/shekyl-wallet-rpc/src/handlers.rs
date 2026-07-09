@@ -27,20 +27,26 @@ pub async fn dispatch(
     params: &Value,
     kdf: KdfParams,
 ) -> Result<Value, WalletRpcError> {
+    // Single routing table: method name → leaf handler. Keeping this the only
+    // place method names are matched avoids the drift a per-module second
+    // dispatch would invite (a new method silently 404ing on a missed arm).
+    // `rescan_blockchain` stays `-32601` (RESERVED) until Engine grows a
+    // rescan API — it falls through to the `MethodNotFound` arm.
     match method {
         "get_version" => get_version(params),
-        "create_wallet" | "open_wallet" | "close_wallet" | "change_password" => {
-            lifecycle::dispatch(tenants, method, params, kdf).await
-        }
-        "get_balance"
-        | "get_primary_address"
-        | "get_transfers"
-        | "get_transfer_by_id"
-        | "get_height" => queries::dispatch(tenants, method, params).await,
-        "refresh" | "rescan_blockchain" => sync::dispatch(tenants, method, params).await,
-        "build_pending_tx" | "submit_pending_tx" | "discard_pending_tx" => {
-            send::dispatch(tenants, method, params).await
-        }
+        "create_wallet" => lifecycle::create_wallet(tenants, params, kdf).await,
+        "open_wallet" => lifecycle::open_wallet(tenants, params).await,
+        "close_wallet" => lifecycle::close_wallet(tenants, params).await,
+        "change_password" => lifecycle::change_password(tenants, params).await,
+        "get_balance" => queries::get_balance(tenants, params).await,
+        "get_primary_address" => queries::get_primary_address(tenants, params).await,
+        "get_transfers" => queries::get_transfers(tenants, params).await,
+        "get_transfer_by_id" => queries::get_transfer_by_id(tenants, params).await,
+        "get_height" => queries::get_height(tenants, params).await,
+        "refresh" => sync::refresh(tenants, params).await,
+        "build_pending_tx" => send::build_pending_tx(tenants, params).await,
+        "submit_pending_tx" => send::submit_pending_tx(tenants, params).await,
+        "discard_pending_tx" => send::discard_pending_tx(tenants, params).await,
         other => Err(WalletRpcError::MethodNotFound(other.to_owned())),
     }
 }
