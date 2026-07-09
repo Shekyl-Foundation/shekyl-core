@@ -1437,6 +1437,43 @@ structural fix.
     an adopting amendment requires a threat-model review of the
     supply-accounting change plus a Q11-identity KAT amendment in the
     same PR.
+
+    **Reopen RESOLVED — swing tolerable, (a) stands permanently
+    (2026-07-09, sim evidence).** The demand-insulation sim ran as two
+    companion modes: `shekyl-economics-sim --fb1c-c2` (the budget-swing
+    magnitude, per-SEB-epoch, (a) vs the (b) counterfactual over six
+    volume regimes) and `shekyl-staking-sim --budget-throttle` (the
+    coverage cross-check on the L11 `budget → APR → entry → coverage`
+    transfer curve, 8-seed-averaged). Three findings close the
+    criterion:
+    1. **The swing is floored, not open.** The (a)-vs-(b) delta is the
+       release multiplier on the emission leg only, clamped to
+       `[release_min, release_max]` — the worst sustained-low-volume
+       throttle is exactly 0.8000, never zero, so (b) could restore at
+       most 25 % of the emission leg in the worst window. The fee leg
+       (`staker_pool_amount`) is disposition-neutral.
+    2. **The throttle and the coverage knee live in disjoint regimes.**
+       Where the throttle is deep (mining-era low volume,
+       `emis_frac ≈ 1.0`), the purse sits far above the co-location-
+       saturated ceiling (L11 `b200 ≡ b400`): 0.8× of a saturated purse
+       stays fully covered (cDeepU 0.000 both arms). Where the purse is
+       knee-adjacent (fee era), the emission share has decayed to
+       ~1 % of budget, so the worst throttle moves total funding by
+       ~0.24 % — coverage delta +0.023, under the 0.05 material bar and
+       within seed noise. The honest counterfactual (a full 0.8× on a
+       *lean* purse, a combination that does not occur) *does* cross
+       the knee (+0.354 cDeepU): the safety is **regime separation**,
+       decay-guaranteed by the 0.90/yr emission-share schedule, not
+       throttle harmlessness.
+    3. **The residual low-funding risk is shared, not (a)-specific.**
+       Fee-era lean coverage is marginal under *both* dispositions
+       (cDeepU ≈ 0.15 at the lean attractor) — that is the L13
+       servo + backstop disposition's problem, which (b) would not fix.
+    Per the reopening criteria: the swing is tolerable ⇒ disposition
+    (a) stands permanently and the reopen closes. Evidence artifacts:
+    `rust/shekyl-economics-sim/src/budget.rs`,
+    `rust/shekyl-staking-sim/src/budget_throttle.rs` (both
+    reproducible: `cargo run -p <crate> -- <flag>`).
 - **Armed KAT:**
   `budget_epoch_boundary_includes_final_block_through_real_block_path`
   (`tests/unit_tests/archival_substrate_lmdb.cpp`) drives per-block

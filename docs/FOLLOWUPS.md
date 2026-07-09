@@ -1252,33 +1252,6 @@ sustainability is unaffected by the recalibration.
   §9.9 (F-B1b hardening + fast-follow bullets),
   `ARCHIVAL_BUDGET_SCHEDULE.md` §2.2.
 
-- **Archival-funding demand-insulation sim — the F-B1c-c2 (b)-reopen
-  evidence (post-closure pin, 2026-07-09).** The c2 adjudication
-  (`REWARD_EMISSION_E3_GATING_ROUND.md` §9.9) fixed the budget's
-  emission leg to disposition (a): the staker leg is a share of
-  verify's modulated `base_reward` (release multiplier + weight
-  penalty), making `budget(E)` conservation-exact ("ledger minus
-  coinbase") but demand-responsive — archival funding throttles when
-  tx volume is low, and archival retention is a baseline availability
-  function whose need doesn't obviously scale down with volume.
-  Disposition (b) (demand-insulated budget via the unmodulated
-  subsidy) was **rejected now** — it amends the supply-ledger advance
-  rule and the Q11-guarded conservation identity, the most
-  catastrophic-if-wrong genesis-frozen surface — with a rule-21
-  reopen gated on evidence: run the sim (companion to the
-  servo/fee-era sim) measuring how much `budget(E)` swings with tx
-  volume under (a) and whether the swing plausibly starves the serving
-  incentive during plausible low-volume windows. **Reversion:** if the
-  sim shows material underfunding, (b) reopens as a deliberate
-  supply-accounting amendment (threat-model review + Q11-identity KAT
-  amendment in the same PR) — pre-genesis if it lands in the window, a
-  named post-genesis-blocked item if not; if the swing is tolerable,
-  (a) stands permanently and this item closes. Cross-refs:
-  `REWARD_EMISSION_E3_GATING_ROUND.md` §9.9 (c2),
-  `ARCHIVAL_BUDGET_SCHEDULE.md` §1, `STAKER_ARCHIVAL_SIM.md` (harness).
-  **Target: V3.0 (pre-genesis; the economics question gates genesis —
-  distinct from the (a) correctness fix, which gated the C-1 PR).**
-
 - **Funding-seam entry-standoff: consensus surface, wallet conformance, and the
   cold-start cover residual (standoff sim review pass, 2026-06-13).** The
   `--standoff` sim (`STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff*,
@@ -11158,6 +11131,33 @@ reference.
 ## Recently resolved (audit trail)
 
 Retained for citation in review; each links to the canonical record.
+
+- **Archival-funding demand-insulation sim — F-B1c-c2 (b)-reopen
+  CLOSED, (a) stands permanently (closed 2026-07-09, resolution staged
+  on `sim/fb1c-c2-budget-throttling`; merge SHA backfilled on `dev`
+  merge).** The §9.9 rule-21 reopen gated disposition (b)
+  (demand-insulated budget via the unmodulated subsidy) on sim
+  evidence of material low-volume underfunding under the shipped
+  disposition (a). The evidence ran as two companion modes —
+  `shekyl-economics-sim --fb1c-c2` (budget-swing magnitude) and
+  `shekyl-staking-sim --budget-throttle` (coverage cross-check on the
+  L11 transfer curve, 8-seed-averaged) — and found the swing
+  **tolerable**: the throttle floors at exactly 0.8× (release_min
+  clamp, never zero; (b)'s worst-window uplift bounded at 25 % of the
+  emission leg); the deep-throttle regime (mining-era low volume,
+  emission leg ≈ all of budget) and the coverage-knee regime (fee era,
+  emission leg decayed to ~1 % of budget) are **disjoint by the
+  0.90/yr decay schedule** — 0.8× of the co-location-saturated
+  mining purse stays fully covered, and the fee-era throttle is
+  ~0.24 %, under the material bar and within seed noise. The honest
+  counterfactual (full 0.8× on a lean purse, a regime that does not
+  occur) does cross the knee — the safety is regime separation, not
+  throttle harmlessness — and fee-era lean coverage is marginal under
+  *both* dispositions (the already-dispositioned L13 servo + backstop
+  question, which (b) would not fix). Canonical record:
+  `REWARD_EMISSION_E3_GATING_ROUND.md` §9.9 (reopen-resolution
+  addendum); consequence note updated in
+  `ARCHIVAL_BUDGET_SCHEDULE.md` §1.
 
 - **RandomX v2 Phase 2g "Investigate `shekyl-pow-randomx::compute_hash`
   divergence from C reference at large data sizes" — substrate-

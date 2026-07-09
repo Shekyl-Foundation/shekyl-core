@@ -151,6 +151,29 @@
 
 ### Added
 
+- **sim: F-B1c-c2 disposition-(b) reopen evidence + closure — swing
+  tolerable, (a) stands permanently
+  (`REWARD_EMISSION_E3_GATING_ROUND.md` §9.9 reopen-resolution
+  addendum).** Two companion sim modes produce the rule-21 reopen
+  evidence the c2 adjudication gated on: `shekyl-economics-sim
+  --fb1c-c2` measures the per-epoch `budget(E)` swing under
+  disposition (a) against the demand-insulated (b) counterfactual
+  across six volume regimes (throttle floors at exactly 0.8× — the
+  `release_min` clamp, never zero; (b)'s worst-window uplift bounded
+  at 25 % of the emission leg; the gap decays to ~nothing at the
+  fee-era handoff), and `shekyl-staking-sim --budget-throttle`
+  cross-checks coverage on the L11 `budget → APR → entry → coverage`
+  transfer curve, 8-seed-averaged, with the emis_frac-weighted
+  effective multiplier (the fee leg is disposition-neutral). No real
+  operating point materially degrades: the deep-throttle regime
+  (mining era, saturated purse) and the coverage-knee regime (fee era,
+  emission leg decayed to ~1 % of budget) are disjoint under the
+  0.90/yr share decay — the honest counterfactual (full 0.8× on a lean
+  purse, a regime that does not occur) does cross the knee, so the
+  recorded safety is regime separation, not throttle harmlessness.
+  Reopen closed: FOLLOWUPS V3.0 item moved to the audit trail;
+  consequence note updated in `ARCHIVAL_BUDGET_SCHEDULE.md` §1.
+
 - **docs: C-1 review closure recorded — blocks 3 and 5 pass at file:line;
   `IMPLEMENTATION_INDEX.md` emission rows updated to code (rule 94).**
   Block 3 (F-C1c `signable_tx_hash`, §9.6 pin): the emission vin is
