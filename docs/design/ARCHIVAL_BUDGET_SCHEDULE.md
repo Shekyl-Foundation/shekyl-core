@@ -48,16 +48,41 @@ recorded in the per-height burn row, accumulated into `total_burned`
 redirect that funds `txin_archival_reward_emission` payouts.
 
 **Provenance of the amounts.** The constants (15% emission share, 0.90/yr
-decay, 25% fee-pool share — `config/economics_params.json`) are the
-Component-4 bootstrap-subsidy economics (`DESIGN_CONCEPTS.md`: the ~50×
-fee-yield-gap analysis). [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)
-consumed this purse as a sim-unit abstraction and validated its
-**structure** — gate-1 supply safety (`Σreward ≤ budget` under growth),
-the `budget → APR → entry → coverage` and `budget → bondA → spread`
-transfer curves, and the fee-era thinning behavior (L11/L13) — but did
-**not** derive the absolute values; the sim's own residue lines name the
-absolute calibrations as post-testnet work. This spec defines how the
-purse **accrues and freezes**; the amount inside it is Component-4's.
+decay, 25% fee-pool share) are the Component-4 bootstrap-subsidy economics
+(`DESIGN_CONCEPTS.md`: the ~50× fee-yield-gap analysis).
+[`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) consumed this purse as
+a sim-unit abstraction and validated its **structure** — gate-1 supply
+safety (`Σreward ≤ budget` under growth), the
+`budget → APR → entry → coverage` and `budget → bondA → spread` transfer
+curves, and the fee-era thinning behavior (L11/L13) — but did **not**
+derive the absolute values; the sim's own residue lines name the absolute
+calibrations as post-testnet work. This spec defines how the purse
+**accrues and freezes**; the amount inside it is Component-4's.
+
+**Source chain (verified at source, 2026-07-08).** The single source of
+truth is `config/economics_params.json`
+(`shekyl_staker_emission_share: 150000`, `shekyl_staker_emission_decay:
+900000`, `shekyl_staker_pool_share: 250000`; scale 10⁶). Two build-time
+generators consume it — no hand-written copy exists on either side of the
+FFI:
+
+- **C++ consensus path:** `cmake/generate_economics_params.py`
+  (wired at `CMakeLists.txt:776–778`) emits
+  `economics_params_generated.h`, included by `cryptonote_config.h:37`;
+  the write site passes the macros to the FFI **as arguments**
+  (`compute_emission_split`, `economics.h:79–85` →
+  `shekyl_calc_emission_share(…, initial_share, annual_decay,
+  blocks_per_year)`, `shekyl-ffi/src/lib.rs:727–733`; same shape for
+  `SHEKYL_STAKER_POOL_SHARE` at `economics.h:57`). The Rust FFI computes
+  from what it is handed — it holds no second copy of the values on the
+  consensus path.
+- **Rust-side consumers (sim / local economics):**
+  `shekyl-economics/build.rs` reads the **same JSON** at build time into
+  `GENERATED_STAKER_EMISSION_{SHARE,DECAY}` (`params.rs:21–26`), with the
+  in-file comment citing the 2026-05 FFI constant-drift audit as the
+  reason it reads the JSON rather than literal-coding.
+
+To change the amounts, edit the JSON; both generators rebuild from it.
 
 **Definition.**
 
@@ -263,7 +288,23 @@ omission test when the claim-builder lands.
   empirics): the servo modifies the **amount** computed at the same
   single write site (`staker_inflow(h)` → `budget_eff(h)`), never adds
   a second write; §2.2's invariant and B1 re-run are the re-evaluation
-  gate.
+  gate. **Topup-source pin (same-site is necessary, not sufficient):**
+  the servo raises `budget_eff` above `base`, and the topup is not
+  created from nothing — per L13/L17 it is a **larger draw on available
+  fees**, bounded by the fee-market ceiling (below it the servo
+  saturates; the sim's graceful loud failure). The marginal draw must
+  ride the **same removed-from-circulation-once discipline as the base
+  redirect**: every fee unit the servo pulls into the purse is a fee
+  unit *not* paid to the miner and *not* burned — the §2.2 conservation
+  invariant extends to
+  `budget_eff(h) ≤ redirected staker_inflow(h) + marginal fee draw(h)`,
+  with each addend landing in exactly one of {miner income, destroyed,
+  emittable}. A servo implementation that writes at the single site but
+  draws its topup from fees that the coinbase also pays to the miner
+  double-counts the fee — one write site while re-minting the same
+  unit. This is the coinbase-forecloses-staker-payout pin applied one
+  level up, to the servo's marginal draw; the servo's design round must
+  arm a B1-shaped conservation KAT over the widened three-way split.
 - **Per-height row retention** — reopens iff the finality boundary lands
   (the round's §6.5/§8.2 trigger): prune-against-finalized may shorten
   accrual-row retention to the finality depth; same round that retires the
