@@ -51,6 +51,33 @@ One inherited module name covers two roles. They diverge at rename time.
 | `rctSigs.h` / `.cpp` | **Semantics verification** | `ct_semantics.h` / `.cpp` |
 | `rct::rctSig` (field type) | Passive wire container | Keep `ct_signatures` alias for now; de-"sig" the type noun is lower priority |
 | `genRctFcmpPlusPlus`, `fill_construct_tx_rct_stub` | Legacy C++ construction | **Delete** with `wallet2` / chaingen migration — do not rename |
+| `rctSigBase::pseudoOuts` (base slot) | Dead legacy field — never populated on any live type | **Delete outright — do not rename** (see below) |
+
+**`rctSigBase::pseudoOuts` deletes; renaming it is scope failure.** The rename
+sweep's mechanical RCT→CT pass could carry the base-slot field straight
+through — renamed container, same dead field — leaving a dead-guarded slot
+under a new name in permanence. The accessor is the proof the field is dead:
+`get_pseudo_outs()` (`rctTypes.h:430–438`) returns the base slot only for
+non-`RCTTypeFcmpPlusPlusPqc` types, the only such type is `RCTTypeNull`
+(coinbase), and coinbase never carries pseudo-outs — the slot is a constant
+empty vector everywhere it is reachable. Deletion scope (the field and its
+guards leave together, none is separable):
+
+- the field itself (`rctTypes.h:174`) and its ctor init (`:194`);
+- the `type != RCTTypeFcmpPlusPlusPqc` wire branch (`:288–291`) — note this
+  is a **wire change for `RCTTypeNull`** (one varint-0 byte leaves the
+  coinbase blob), so it rides the wire-format step (step 3 below) with the
+  serialization-version bump per `42-serialization-policy.mdc`, **not** the
+  byte-identical rename step (step 2);
+- the boost-serialization line (`cryptonote_boost_serialization.h:428`);
+- the accessor's base arm — `get_pseudo_outs()` collapses to `p.pseudoOuts`
+  (or the accessor deletes with its callers repointed);
+- every `rv.pseudoOuts.empty()` dead-field guard (`rctSigs.cpp:212`, `:280`,
+  `:348`, `:420`; `tx_verification_utils.cpp:139`, `:158`, `:192`) — these
+  exist only to assert the dead slot stayed dead and retire with it.
+
+The sweep's exit check for this row is grep-mechanical: after the sweep, no
+identifier for a base-slot pseudo-out container exists under any name.
 
 Verifier entry points already use "semantics" vocabulary:
 `verRctSemanticsSimple`, `verRctSemanticsFeeOnly`, `verRctSemanticsBondPost`
@@ -133,9 +160,15 @@ binding trigger**, not upstream cherry-pick calendar.
 1. Delete `genRctFcmpPlusPlus` / `fill_construct_tx_rct_stub` (if not already
    gone).
 2. C++ namespace/module rename (`rct::` → `ct::`, `rctSigs` → `ct_semantics`,
-   etc.) — rename-only, gated on tx blob round-trip / determinism CI.
+   etc.) — rename-only, gated on tx blob round-trip / determinism CI. **Scope
+   guard:** `rctSigBase::pseudoOuts` is *excluded* from this step — it deletes
+   (per §2's deletion row), it does not rename. A renamed base slot surviving
+   step 2 is a step-2 review rejection.
 3. Wire tag rename (`rct_signatures` → successor) — pre-genesis or coordinated
-   hard fork; updates KATs once at genesis definition time.
+   hard fork; updates KATs once at genesis definition time. The
+   `rctSigBase::pseudoOuts` deletion's wire-visible half (the `RCTTypeNull`
+   branch at `rctTypes.h:288–291`) lands here with the serialization-version
+   bump; the dead-field guards and the accessor's base arm go with it.
 
 **Log / RPC strings:** internal identifiers may become descriptive; verifier
 failure messages stay coarse (no proof-component detail to log observers). Same

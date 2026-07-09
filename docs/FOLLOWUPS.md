@@ -7087,6 +7087,22 @@ one place to confirm each item's relationship to the wallet stack.
   gated on byte-identical round-trip; wire-tag changes update KATs at genesis
   definition; `STRUCTURAL_TODO` updated.
 
+  *Deletion, not rename — `rctSigBase::pseudoOuts` (pinned 2026-07-09, pin
+  §2).* The sweep **deletes the base-slot field outright; renaming it is a
+  scope failure**. A mechanical RCT→CT pass would carry the field through as
+  a renamed container with the same dead slot — dead-guarded under a new
+  name, in permanence. The accessor proves it dead: `get_pseudo_outs()`
+  (`rctTypes.h:430–438`) reaches the base slot only for
+  non-`RCTTypeFcmpPlusPlusPqc` types; the only other live type is
+  `RCTTypeNull` (coinbase), which never carries pseudo-outs — the slot is a
+  constant empty vector on every reachable path. The field, its
+  `RCTTypeNull` wire branch (a wire change — rides pin §5 step 3 with the
+  serialization-version bump, not the byte-identical rename step), its
+  boost-serialization line, the accessor's base arm, and every
+  `rv.pseudoOuts.empty()` dead-field guard leave together; none is
+  separable. Exit check is grep-mechanical: post-sweep, no base-slot
+  pseudo-out container exists under any name.
+
   *Reopening criterion:* new production `rctSigs` / `rct::` accretion after
   Phase 5 → immediate rename PR (`21-reversion-clause-discipline.mdc`).
 
