@@ -4485,6 +4485,36 @@ sustainability is unaffected by the recalibration.
   (assembly spec + CB-1…CB-5; CB-1 recompute sourcing is the gating
   question).
 
+- **Q11 balance-exclusion KAT — dispatch-level arm + E3 doc correction**
+  (surfaced 2026-07-09, CB-4 source pass —
+  [`EMISSION_CLAIM_BUILDER.md`](./design/EMISSION_CLAIM_BUILDER.md) §3
+  CB-4). The Q11 same-tx-backing exclusion is enforced **structurally**
+  (the backing lives in the emission vin's opaque `canonical_bytes`; the CT
+  balance reads only `rv.p.pseudoOuts`; two redundant size checks —
+  dispatch `tx_verification_utils.cpp:175` and leaf `rctSigs.cpp:362` —
+  each require `pseudoOuts` to cover exactly the fee inputs). The arming KAT
+  (`tests/unit_tests/archival_emission_ct_balance.cpp`) is
+  **necessary-not-sufficient**: both arms call the leaf functions directly,
+  never the dispatch, so (a) arm 1's headline identity assertion
+  `EXPECT_EQ(verdict_O, verdict_O_prime)` (`:200`) is
+  **green-by-construction** — the backing is never an input to
+  `verCtSemanticsEmission`, so the E3 §2.2 stated mechanism ("with the
+  backing in the sum, O and O′ cannot both balance") does not occur; the
+  assertion that actually bites is `EXPECT_TRUE(verdict_O)` (`:199`),
+  pinning the *leaf* size check only; and (b) no test drives the dispatch
+  (`tx_verification_utils.cpp:151-183`) with a backing-inclusion attempt.
+  Two fixes: **(1)** add a dispatch-level KAT arm that constructs an
+  emission tx and runs it through `tx_verification_utils`, asserting
+  rejection when the backing is routed into `pseudoOuts` (the arm that
+  bites against the full regression); **(2)** correct the E3 §2.2 arm-1
+  rationale to name the green-by-construction identity assertion and the
+  actually-biting `EXPECT_TRUE`. Test-strengthening + doc-correction only —
+  **not** a consensus change (the Q11 reversion clause is untouched).
+  **Target: V3.0 pre-genesis** (rides the claim-builder PR chain, whose
+  step-7 self-check calls these same verify functions). **Reopening
+  trigger: closed when the dispatch-level arm lands green and the E3 doc
+  reads correctly.**
+
 ---
 
 ## V3.1 — audit response and stressnet gates

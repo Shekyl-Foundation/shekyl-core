@@ -1,6 +1,12 @@
 # Wallet-side emission claim builder (E4-gate, part 1 of 2)
 
-**Status: design round 1 — OPEN (2026-07-09).**
+**Status: design round 1 — CLOSED (2026-07-09).** CB-1…CB-5 all ratified
+at source (§3): CB-1 (new daemon RPC as `EmissionEpochSource`, single-
+evaluator invariant the ratifying reason); CB-2 (StakeEngine actor,
+sign-within-seed-gone-after-`assemble()` pin); CB-3 (routing-not-closure,
+joint-grading reopen); CB-4 (structural exclusion ratified, arming KAT
+necessary-not-sufficient — follow-up filed); CB-5 (cause-blind refusal,
+`SelfCheckFailed`-blind pin). Implementation proceeds on the pins below.
 
 **Provenance.** C-1 (the emission activating cut) merged to `dev` 2026-07-09
 via PR #277 (`13c368707`); consensus now accepts authed
@@ -201,6 +207,23 @@ with the pure assembly steps (1, 2, 5, 7) in a new
 does not need an actor harness. The membership-prover input (the backing
 output's opening) is already persona-side state.
 
+**Disposition: RATIFIED (2026-07-09), verified at source.** The Model-D
+header (`stake_engine.rs:16-50`) is the rule-35/36 shape: the master seed
+is borrowed at `assemble()`, derives the bundles, and is dropped at
+function end (`:18-22`); the actor holds only *derived* bundles and never
+re-acquires the seed, so there is "no re-auth/KEK machinery" — no
+session-long secret to re-authenticate (`:26-28`). The secret-locality
+note (`:43-50`) is the make-bad-states-unrepresentable form: the custody
+boundary is enforced by the seed **not existing past `assemble()`** and the
+bundle type having no secret field, not by the handler being careful.
+Locating emission-claim signing in this same actor inherits that property
+structurally. **Builder-PR pin (the one thing that would break the
+inherited property):** the claim-signing path must sign **within** the
+seed-gone-after-`assemble()` discipline — it must use a *derived bundle*
+like every other handler and must **not** re-borrow the master seed.
+Checkable at the builder's PR: does the claim-signing path re-acquire the
+seed, or does it consume a derived bundle?
+
 ### CB-3 — claim cadence and the GF-7/GF-4 seams
 
 *When* to claim is a privacy parameter: claim timing is an entry-seam
@@ -213,6 +236,18 @@ dispatch driver consuming WI-2's sealed posts. The builder must not
 foreclose quantization (batching is already first-class via the
 15-epoch cap). Reversion: if GF-4 grades a mandatory cadence rule, it
 lands in the scheduler, not here.
+
+**Disposition: RATIFIED AS A ROUTING, NOT A CLOSURE (2026-07-09).** Claim
+cadence is precisely the recurring-timing residual (R-4 from the WI-4 exit
+arc: per-epoch claim-submission timing against principal rhythm, the
+accumulation surface); routing it to the GF-4 round is correct, but the
+routing *defers* the grading — it does not discharge it. **Joint-grading
+reopen (rule 21):** the GF-4 round must grade claim cadence **jointly**
+with the reward-amount sequence and the holdings stratum, **not**
+independently — those three are co-present on one persona, and an
+independent per-axis grade multiplies as if they were independent (the
+per-axis-multiplication error WI-4 §11 already flags). CB-3 is "named and
+routed with a joint-grading obligation," not "closed."
 
 ### CB-4 — fee sourcing for the claim tx
 
@@ -227,6 +262,68 @@ from the fee-selection candidate set only when the Q11 same-output case
 would otherwise be exercised unintentionally — make the Q11 case an
 explicit choice, not an accident.
 
+**Disposition: RATIFIED ON THE STRUCTURAL EXCLUSION; the arming KAT is
+necessary-not-sufficient (2026-07-09, verified at source).** The Q11 ACCEPT
+(same-tx backing + key-imaged fee) is correct, but its verified strength is
+**structural**, not the arming KAT. Source pass:
+
+- **The exclusion is structural, and strong.** The backing pseudo-out lives
+  inside the emission vin's opaque `canonical_bytes` blob
+  (`emission_wire.rs` `MembershipOnlyBacking.pseudo_out`); the CT-balance
+  path reads only `rv.p.pseudoOuts`, and **nothing deserializes
+  `canonical_bytes` into `pseudoOuts`.** Two independent size checks each
+  require `pseudoOuts` to cover *exactly* the fee inputs, leaving no slot
+  for the backing: the dispatch (`tx_verification_utils.cpp:175`,
+  `rv.p.pseudoOuts.size() != spend_input_count`) and the leaf
+  (`rctSigs.cpp:362`, `rv.p.pseudoOuts.size() == fee_input_count`). Routing
+  the backing into the balance is not a line-removal — it is *adding* a
+  blob-parse + append + a **lockstep bump of both** size checks.
+- **The arming KAT (`tests/unit_tests/archival_emission_ct_balance.cpp`) is
+  necessary-not-sufficient, and its headline assertion is
+  green-by-construction.** Both arms call the leaf `verCtSemanticsEmission`
+  / the balance FFI **directly**, never the dispatch. Consequently:
+  - Arm 1's identity assertion `EXPECT_EQ(verdict_O, verdict_O_prime)`
+    (`:200`) is **green-by-construction**: the backing lives in
+    `vin.canonical_bytes`, which `verCtSemanticsEmission` never reads, so
+    both txs feed an *identical* `rv` and the equal verdict is trivial. The
+    E3 doc's stated mechanism ("with the backing in the sum, O and O′
+    cannot both balance", §2.2) does **not** occur — the backing never
+    reaches the sum in this test.
+  - The assertion that *does* bite is arm 1's `EXPECT_TRUE(verdict_O)`
+    (`:199`): it pins the leaf size check `== fee_input_count`
+    (`rctSigs.cpp:362`). Bumping that to `+ 1` (the size-check half of the
+    coordinated regression) breaks the legitimate 1-pseudo-out emission tx
+    → verdict false → the test fails. This is a real, necessary catch (you
+    cannot sum the backing without a `pseudoOuts` slot, and opening the
+    slot breaks legit txs) — but it covers only the **leaf** check, not the
+    dispatch check (`:175`).
+  - Arm 2 (`backing_inclusion_shape_rejects_in_production`) bites against
+    **weakening the balance equation itself** (the short-by-backing fixture
+    must reject), and its second half proves the fixture is a genuine
+    backing-closes-it shape, not an unrelated malformation. Valuable, but
+    "the balance function rejects an unbalanced set" is necessary, not the
+    exclusion.
+  - **No test drives the dispatch** (`tx_verification_utils.cpp:151-183`)
+    with a backing-inclusion attempt (verified: `verCtSemanticsEmission`
+    has exactly one test caller, this KAT). The dispatch-level exclusion
+    (`:175` + the "never parse `canonical_bytes` into `pseudoOuts`"
+    property) is therefore not exercised by any test; the redundant leaf
+    check (`:362`) is the pinned backstop.
+- **Ratification.** CB-4 ratifies on the **structural** exclusion (the
+  separate opaque field + two redundant size checks), with the KAT as a
+  necessary-not-sufficient leaf backstop — the same posture as CB-1's
+  single-evaluator invariant with its step-7 self-check
+  necessary-not-sufficient. The Q11 ACCEPT stands.
+- **Follow-up (FOLLOWUPS, V3.0 pre-genesis).** (a) Add a dispatch-level
+  arm that constructs an emission tx and runs it through
+  `tx_verification_utils`, asserting rejection when the backing is routed
+  into `pseudoOuts` — the arm that would bite against the *full* regression
+  the E3 doc claims arm 1 catches. (b) Correct the E3 §2.2 arm-1 rationale:
+  the identity assertion is green-by-construction; the biting assertion is
+  `EXPECT_TRUE(verdict_O)` pinning the leaf size check. This is a
+  test-strengthening + doc-correction, **not** a consensus change (the Q11
+  reversion clause is untouched).
+
 ### CB-5 — refusal taxonomy
 
 Rule 82: every refusal is a named, actionable error — `NoClaimableEpochs`
@@ -237,6 +334,26 @@ from `InsufficientFunding` for fees), `WindowExpired` (per epoch),
 **not** surface as "gated" vs "no work" — gatedness is publicly
 computable ex ante but the share recompute doesn't distinguish the causes
 (M1: the vin never consults `K_COVER`), and the builder must not either.
+
+**Disposition: RATIFIED (2026-07-09), verified at source.** The named-error
+set exists (`EpochAlreadyClaimed` at `emission_verify.rs:107,416`; the rest
+per §3), and the load-bearing property — the cause-blind zero-share — is
+structural: `K_COVER` is compared at **exactly one site**,
+`epoch_close_compute` (`k_cover.rs:11`, `consensus_state.rs:470`, "the
+**only** `K_COVER` comparison site"). The vin/claim path never consults
+`K_COVER`, so a zero-reward epoch is indistinguishable at the claim layer
+from any other zero — the wallet cannot tell "zero because pre-`K_COVER`
+gate" from "zero because no serve credit," and *neither can an observer of
+the refusal*. If the claim path branched on `K_COVER`, the refusal would
+leak whether the epoch was gated — a launch-window observable. The
+single-comparison-site pin makes the cause-blindness structural (the same
+one-evaluator discipline as CB-1's `capped_work_milli`). **Builder-PR pin:**
+`SelfCheckFailed` (step-7 self-check) must **also** refuse cause-blind — it
+must not emit *which* operand the assembled vin failed verify on in any
+form an observer can read, since "self-check failed on operand X" leaks
+which operand the daemon mis-sourced. Refuse-blind, log-local: the refusal
+is visible, the cause is not (same shape as the cause-blind zero-share, and
+necessary-not-sufficient against the lying daemon per CB-1's wargame).
 
 ---
 
@@ -284,6 +401,13 @@ Builder + e2e green → **PR-E4** (delete `txin_stake_claim`/`C_stake`,
 the one irreversible step) → **PR-E5** (constants + KAT completion +
 audit-scope + doc sweep) → the emission leg closes.
 
-Round-1 review requests: ratify CB-1(a) (or name the unviability),
-CB-2 locus, CB-4 fee-exclusion shape; confirm CB-3's
-builder/scheduler split and CB-5's cause-blind zero-share refusal.
+Round-1 closure (2026-07-09): CB-1(a) ratified (RPC as
+`EmissionEpochSource`); CB-2 locus ratified (StakeEngine actor, sign-within
+the seed-gone-after-`assemble()` discipline); CB-3 ratified as a routing
+with the joint-grading reopen named; CB-4 ratified on the structural
+exclusion with the arming KAT recorded as necessary-not-sufficient (§3
+CB-4 + `FOLLOWUPS.md` Q11-KAT item); CB-5 ratified with the
+`SelfCheckFailed`-blind pin. Builder-PR pins to carry: sign within
+seed-gone-after-`assemble()` (CB-2); `SelfCheckFailed` refuses cause-blind
+(CB-5); the E4-gate GF-4 round grades cadence jointly with amount +
+holdings stratum (CB-3).
