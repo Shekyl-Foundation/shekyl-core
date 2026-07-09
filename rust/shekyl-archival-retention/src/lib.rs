@@ -64,7 +64,8 @@ pub use challenge::{
 };
 pub use claimed_epochs::{
     claim_window_floor, claimed_epochs_check_and_set, claimed_epochs_contains,
-    epoch_is_claim_expired, ClaimedEpochsError, MAX_CLAIMED_EPOCH_ENTRIES,
+    emission_block_claims_unique, epoch_is_claim_expired, ClaimedEpochsError,
+    MAX_CLAIMED_EPOCH_ENTRIES,
 };
 pub use consensus_state::{
     as_of_e_served_work, capped_work_milli, epoch_close_compute, epoch_close_due_at_height,

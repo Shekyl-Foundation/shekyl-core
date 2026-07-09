@@ -28,6 +28,8 @@
 
 #include <boost/iterator/transform_iterator.hpp>
 
+#include <limits>
+
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_core/blockchain.h"
 #include "cryptonote_core/cryptonote_core.h"
@@ -99,9 +101,10 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
         if (tx.version >= 2)
         {
             bool archival_serve_credit_only = !tx.vin.empty();
-            bool is_archival_bond_post_tx = false;
             size_t archival_bond_post_index = 0;
             size_t bond_post_count = 0;
+            size_t emission_count = 0;
+            size_t spend_input_count = 0;
             for (size_t i = 0; i < tx.vin.size(); ++i)
             {
                 const auto& in = tx.vin[i];
@@ -112,11 +115,17 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                     ++bond_post_count;
                     archival_bond_post_index = i;
                 }
-                else if (!std::holds_alternative<txin_to_key>(in)
-                    && !std::holds_alternative<txin_gen>(in))
-                    bond_post_count = 2;
+                else if (std::holds_alternative<txin_archival_reward_emission>(in))
+                    ++emission_count;
+                else if (std::holds_alternative<txin_to_key>(in))
+                    ++spend_input_count;
             }
-            is_archival_bond_post_tx = (bond_post_count == 1);
+            // Exactly one special vin; every other vin a key-imaged spend —
+            // mirroring the check_tx_inputs classification (blockchain.cpp).
+            const bool is_archival_bond_post_tx = bond_post_count == 1
+                && emission_count == 0 && spend_input_count + 1 == tx.vin.size();
+            const bool is_archival_emission_tx = emission_count == 1
+                && bond_post_count == 0 && spend_input_count + 1 == tx.vin.size();
             if (archival_serve_credit_only)
             {
                 const rct::rctSig& rv = tx.rct_signatures;
@@ -142,12 +151,6 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                 const txin_archival_bond_post& bond =
                     std::get<txin_archival_bond_post>(tx.vin[archival_bond_post_index]);
                 const rct::rctSig& rv = tx.rct_signatures;
-                size_t spend_input_count = 0;
-                for (const auto& in : tx.vin)
-                {
-                    if (std::holds_alternative<txin_to_key>(in))
-                        ++spend_input_count;
-                }
                 if (tx.pqc_auths.size() != tx.vin.size()
                     || spend_input_count == 0
                     || rv.p.pseudoOuts.size() != spend_input_count
@@ -155,6 +158,40 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                     || !rv.pseudoOuts.empty()
                     || rv.type != rct::RCTTypeFcmpPlusPlusPqc
                     || !rct::verRctSemanticsBondPost(rv, bond.bond_credit, bond.bond_debit))
+                {
+                    tvc.m_verifivation_failed = true;
+                    tvc.m_invalid_input = true;
+                    return false;
+                }
+            }
+            else if (is_archival_emission_tx)
+            {
+                // C-1 emission CT semantics (E3 gating round §9.5 item 4). The
+                // reward vouts are loud: their plaintext sum is the mint
+                // credit, entering the CT balance on the input side. The deep
+                // check that this sum equals the Rust-arithmetic reward total
+                // is check_tx_inputs' (the vout_reward_sum operand); here only
+                // the balance-equation shape is enforced. Fee inputs optional
+                // (Q11): with zero, the fee is paid out of the mint.
+                const rct::rctSig& rv = tx.rct_signatures;
+                uint64_t total_reward = 0;
+                bool reward_overflow = false;
+                for (const auto& o : tx.vout)
+                {
+                    if (o.amount > std::numeric_limits<uint64_t>::max() - total_reward)
+                    {
+                        reward_overflow = true;
+                        break;
+                    }
+                    total_reward += o.amount;
+                }
+                if (reward_overflow
+                    || total_reward == 0
+                    || tx.pqc_auths.size() != tx.vin.size()
+                    || rv.p.pseudoOuts.size() != spend_input_count
+                    || !rv.pseudoOuts.empty()
+                    || rv.type != rct::RCTTypeFcmpPlusPlusPqc
+                    || !rct::verCtSemanticsEmission(rv, total_reward, spend_input_count))
                 {
                     tvc.m_verifivation_failed = true;
                     tvc.m_invalid_input = true;

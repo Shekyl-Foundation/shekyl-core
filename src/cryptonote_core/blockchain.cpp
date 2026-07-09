@@ -3282,11 +3282,26 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
     return false;
   }
 
-  // All v3+ outputs must have 0 amount (amounts are encrypted in RingCT)
-  for (auto &o: tx.vout) {
-    if (o.amount != 0) {
-      tvc.m_invalid_output = true;
-      return false;
+  // All v3+ outputs must have 0 amount (amounts are encrypted in RingCT) —
+  // except the archival emission tx's reward vouts, which are loud by design
+  // (REWARD_EMISSION_VIN_PLAN.md §4: plaintext reward amounts are the
+  // priority-1 inflation-audit surface). Their sum is bound three ways: the
+  // CT balance equation (verCtSemanticsEmission), the Rust arithmetic
+  // cross-check (check_tx_inputs' vout_reward_sum operand), and P's Q1
+  // field-7 signed commit set.
+  {
+    size_t emission_vins = 0;
+    for (const auto& in : tx.vin)
+      if (std::holds_alternative<txin_archival_reward_emission>(in))
+        ++emission_vins;
+    if (emission_vins != 1)
+    {
+      for (auto &o: tx.vout) {
+        if (o.amount != 0) {
+          tvc.m_invalid_output = true;
+          return false;
+        }
+      }
     }
   }
 
@@ -5265,6 +5280,59 @@ leave:
           return false;
         }
       }
+    }
+  }
+
+  // Block-level emission (P,E) uniqueness pass (E3 gating round §6.2 layer 2).
+  // Per-tx emission verify runs against pre-block DB state (the Q7
+  // frozen-snapshot purity property), so two txs in this block claiming the
+  // same (P, E) each pass verify independently; this pass is the layer that
+  // rejects the block. C++ only marshals the block's claim pairs — one
+  // 40-byte entry (P_canonical_id || epoch_le) per (P, E_i) of every emission
+  // vin — and takes the duplicate verdict from Rust (decision-placement pin,
+  // §9.5 item 6).
+  {
+    std::vector<uint8_t> emission_claim_pairs;
+    for (const auto& tx_pair : txs)
+    {
+      for (const auto& vin : tx_pair.first.vin)
+      {
+        if (!std::holds_alternative<txin_archival_reward_emission>(vin))
+          continue;
+        const auto& emission = std::get<txin_archival_reward_emission>(vin);
+        crypto::hash p_canonical_id{};
+        uint64_t vin_epochs[SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS] = {};
+        size_t vin_epochs_len = 0;
+        const uint8_t extract_rc = shekyl_archival_emission_vin_extract(
+          emission.canonical_bytes.data(), emission.canonical_bytes.size(),
+          reinterpret_cast<uint8_t*>(p_canonical_id.data),
+          vin_epochs, SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS, &vin_epochs_len);
+        if (extract_rc != SHEKYL_EMISSION_VIN_OK || vin_epochs_len == 0)
+        {
+          // check_tx_inputs already parsed this blob; a failure here means the
+          // per-tx pass was skipped (checkpoint fast path) — fail closed.
+          MERROR_VER("Block " << id << " has an unparseable archival emission vin");
+          bvc.m_verifivation_failed = true;
+          return_txs_to_pool();
+          return false;
+        }
+        for (size_t e = 0; e < vin_epochs_len; ++e)
+        {
+          const size_t off = emission_claim_pairs.size();
+          emission_claim_pairs.resize(off + 40);
+          memcpy(emission_claim_pairs.data() + off, p_canonical_id.data, 32);
+          memcpy(emission_claim_pairs.data() + off + 32, &vin_epochs[e], 8);
+        }
+      }
+    }
+    const size_t num_pairs = emission_claim_pairs.size() / 40;
+    if (num_pairs > 0
+        && shekyl_emission_block_claims_unique(emission_claim_pairs.data(), num_pairs) != 1)
+    {
+      MERROR_VER("Block " << id << " has duplicate archival emission (P, E) claims");
+      bvc.m_verifivation_failed = true;
+      return_txs_to_pool();
+      return false;
     }
   }
 

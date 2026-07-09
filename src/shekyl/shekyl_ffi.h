@@ -2107,6 +2107,18 @@ uint8_t shekyl_archival_emission_vin_extract(
     size_t epochs_cap,
     size_t* out_epochs_len);
 
+/// Block-level intra-block cross-tx (P, E) uniqueness verdict (E3 gating
+/// round §6.2 layer 2; decision-placement pin §9.5 item 6 — C++ marshals the
+/// block's claim pairs, Rust decides). `pairs_ptr` is a flattened array of
+/// `num_pairs` 40-byte entries: p_canonical_id[32] || epoch[8] (LE; any
+/// consistent injective encoding preserves the verdict), one entry per
+/// (P, E_i) of every emission vin in the block, in block order. Returns 1
+/// when every pair is distinct, 0 on any duplicate or on a null pointer
+/// with num_pairs > 0 (fail closed).
+uint8_t shekyl_emission_block_claims_unique(
+    const uint8_t* pairs_ptr,
+    size_t num_pairs);
+
 /// The full §7.1 emission verify body in one coarse crossing. Operands:
 /// - vin bytes: the opaque blob, tag included (C++ never parses inside it).
 /// - Bond record: the claimant's PRE-BLOCK ArchivalBondValue fields keyed by

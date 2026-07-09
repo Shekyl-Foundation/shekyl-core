@@ -690,6 +690,7 @@ namespace cryptonote
     size_t bond_posts = 0;
     size_t serve_credits = 0;
     size_t spend_keys = 0;
+    size_t emissions = 0;
     for (const auto& in : tx.vin)
     {
       if (std::holds_alternative<txin_gen>(in))
@@ -702,6 +703,8 @@ namespace cryptonote
         ++serve_credits;
       else if (std::holds_alternative<txin_archival_bond_post>(in))
         ++bond_posts;
+      else if (std::holds_alternative<txin_archival_reward_emission>(in))
+        ++emissions;
       else if (std::holds_alternative<txin_to_key>(in))
         ++spend_keys;
       else
@@ -711,15 +714,30 @@ namespace cryptonote
         return false;
       }
     }
-    if (serve_credits > 0 && (bond_posts + spend_keys) > 0)
+    if (serve_credits > 0 && (bond_posts + spend_keys + emissions) > 0)
     {
-      MERROR("archival serve-credit vins cannot mix with spend/bond inputs, tx id="
+      MERROR("archival serve-credit vins cannot mix with spend/bond/emission inputs, tx id="
         << get_transaction_hash(tx));
       return false;
     }
     if (bond_posts > 1)
     {
       MERROR("archival bond-post tx has multiple bond vins, tx id=" << get_transaction_hash(tx));
+      return false;
+    }
+    // C-1 activation (REWARD_EMISSION_E3_GATING_ROUND.md §9.5 item 4): Q3
+    // arity 1, Q11 mixing — key-imaged txin_to_key fee inputs are the only
+    // permitted co-residents.
+    if (emissions > 1)
+    {
+      MERROR("archival emission tx has multiple emission vins, tx id="
+        << get_transaction_hash(tx));
+      return false;
+    }
+    if (emissions == 1 && bond_posts > 0)
+    {
+      MERROR("archival emission cannot mix with bond-post vins, tx id="
+        << get_transaction_hash(tx));
       return false;
     }
     if (bond_posts == 1 && serve_credits > 0)
@@ -764,6 +782,8 @@ namespace cryptonote
         continue;
       else if (std::holds_alternative<txin_archival_bond_post>(in))
         continue;
+      else if (std::holds_alternative<txin_archival_reward_emission>(in))
+        continue; // mint amounts live inside the opaque blob; balance is CT-side
       else
         return false;
       if(money > amount + money)

@@ -100,6 +100,11 @@ namespace rct {
     // Bond-post CT balance: sum(pseudoOuts) + bond_debit = sum(out masks) + fee + bond_credit
     // (gate-4 ARCHIVAL_BOND_GATE4.md section 3.2).
     bool verRctSemanticsBondPost(const rctSig &rv, uint64_t bond_credit, uint64_t bond_debit);
+    // Archival emission CT balance: sum(pseudoOuts) + total_reward = sum(out masks) + fee —
+    // the mint enters on the input side (the debit slot of the shared balance FFI). Fee
+    // inputs are optional: the FCMP++ proof is present iff fee_input_count > 0
+    // (REWARD_EMISSION_E3_GATING_ROUND.md §9.5 item 4).
+    bool verCtSemanticsEmission(const rctSig &rv, uint64_t total_reward, size_t fee_input_count);
     key get_tx_prehash(const rctSig &rv, hw::device &hwdev);
 }
 #endif  /* RCTSIGS_H */

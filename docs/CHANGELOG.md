@@ -4,6 +4,40 @@
 
 ### Added
 
+- **consensus: C-1 commit-block 4 — activation cut: whitelist flip, CT
+  semantics, block-level `(P,E)` Rust-decided pass (§9.5 items 4 + 6 and
+  the item-5 CT cross-checks).** `check_inputs_types_supported` now
+  admits `txin_archival_reward_emission` under the Q3/Q11 gates —
+  exactly one emission vin per tx, co-residence with key-imaged
+  `txin_to_key` fee inputs only (no bond-post, no serve-credit mixing);
+  the block-3 dispatch branch becomes live consensus. CT semantics:
+  new `rct::verCtSemanticsEmission` (`fcmp/rctSigs.cpp`) verifies the
+  emission balance `Σ pseudoOuts + total_reward·H = Σ out commitments +
+  fee·H` by reusing the bond-post credit/debit balance FFI with
+  `bond_credit = 0`, `bond_debit = total_reward` (the mint enters the
+  equation as a debit-side credit), FCMP++ proof presence keyed to the
+  fee-input count (absent when zero fee inputs), BP+ range proofs over
+  all outputs; `ver_non_input_consensus` dispatches emission txs to it
+  (overflow-checked plaintext `total_reward` sum, `pqc_auths` sized to
+  all inputs). `check_tx_outputs` exempts the emission tx's non-zero
+  plaintext reward vouts from the v3 zero-amount rule (they are the
+  claim's public mint; change vouts stay CT), and
+  `check_inputs_overflow` skips the amountless vin. Block-level `(P,E)`
+  uniqueness (§6.2 third layer, item 6): the **decision** is Rust —
+  `emission_block_claims_unique` (`claimed_epochs.rs`, sort +
+  adjacent-compare over the block's flattened `(P_canonical_id, epoch)`
+  pairs) via new FFI `shekyl_emission_block_claims_unique` — C++ in
+  `handle_block_to_main_chain` only extracts each emission vin's pairs
+  (reusing `shekyl_archival_emission_vin_extract`) and marshals; a
+  duplicate verdict rejects the block (per-tx layers cannot see
+  cross-tx duplicates pre-connect; without this the second claim
+  double-mints inside one block). Key-image bookkeeping loops in
+  `cryptonote_core.cpp` skip the key-image-less emission vin. KATs: the
+  block-2 whitelist tripwire flips to admit-at-arity-1, plus
+  two-emission-vins and emission×bond-post / emission×serve-credit
+  mixing rejections (§6.4's dedup KATs), and Rust-side
+  same-`(P,E)`-duplicate / distinct-pairs / FFI negative-surface tests.
+
 - **consensus/ffi: C-1 commit-block 3 — emission verify FFI + dispatch
   wiring (§9.5 items 3 + 5; gate-last, still dead code).** Rust side:
   the production `AuthVerified` minter `emission_vin_verify_auth`

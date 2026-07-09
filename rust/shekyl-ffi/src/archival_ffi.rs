@@ -13,20 +13,20 @@ use std::io::Cursor;
 
 use shekyl_archival_retention::{
     as_of_e_served_work, capped_work_milli, challenge_fire_height, challenge_leaf_chunk_bounds,
-    challenge_seal_height, claimed_epochs_check_and_set, emission_vin_verify,
-    emission_vin_verify_auth, emission_vin_verify_backing, emission_vin_verify_claims,
-    epoch_close_compute, epoch_close_due_at_height, epoch_close_height, frozen_segment_count,
-    good_through, p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height,
-    serve_credit_epoch_ok, settlement_epoch_at_height, verify_bond_post_ct_balance,
-    verify_join_market_bond_post, verify_leaf_index, verify_segment_path, ArchivalBondPostVin,
-    ArchivalRewardEmissionVin, ArchivalServeCreditResponse, BadInterval, BandedCurveParams,
-    BondCtBalanceError, BondPostError, BondPostKind, BondTerm, ClaimantBondRecord,
-    ClaimedEpochsError, CreditPair, EmissionEpochSource, EmissionVerifyContext,
-    EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
-    HoldingsKind, KCover, RewardCommit, WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-    ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-    CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
-    SETTLEMENT_EPOCH_BLOCKS,
+    challenge_seal_height, claimed_epochs_check_and_set, emission_block_claims_unique,
+    emission_vin_verify, emission_vin_verify_auth, emission_vin_verify_backing,
+    emission_vin_verify_claims, epoch_close_compute, epoch_close_due_at_height, epoch_close_height,
+    frozen_segment_count, good_through, p_canonical_id_from_hybrid_pubkey,
+    prune_below_epoch_at_height, serve_credit_epoch_ok, settlement_epoch_at_height,
+    verify_bond_post_ct_balance, verify_join_market_bond_post, verify_leaf_index,
+    verify_segment_path, ArchivalBondPostVin, ArchivalRewardEmissionVin,
+    ArchivalServeCreditResponse, BadInterval, BandedCurveParams, BondCtBalanceError, BondPostError,
+    BondPostKind, BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair,
+    EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError, EpochCloseBond,
+    EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, KCover, RewardCommit,
+    WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
+    ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIMED_EPOCH_ENTRIES,
+    MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -1113,6 +1113,49 @@ pub unsafe extern "C" fn shekyl_archival_emission_vin_extract(
         *out_epochs_len = vin.settlement_epochs.len();
     }
     SHEKYL_EMISSION_VIN_OK
+}
+
+/// Block-level intra-block cross-tx `(P, E)` uniqueness verdict
+/// (`REWARD_EMISSION_E3_GATING_ROUND.md` §6.2 layer 2; decision-placement
+/// pin §9.5 item 6 — C++ marshals the block's claim pairs, Rust decides).
+///
+/// `pairs_ptr` is a flattened array of `num_pairs` 40-byte entries:
+/// `p_canonical_id[32] ‖ epoch_le[8]`, one entry per `(P, E_i)` of every
+/// emission vin in the block, in block order.
+///
+/// Returns 1 when every pair is distinct (block passes this layer), 0 on any
+/// duplicate — or on a null pointer with `num_pairs > 0` (fail closed).
+///
+/// # Safety
+///
+/// When `num_pairs > 0`, `pairs_ptr` must address `num_pairs * 40` readable
+/// bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_emission_block_claims_unique(
+    pairs_ptr: *const u8,
+    num_pairs: usize,
+) -> u8 {
+    if num_pairs == 0 {
+        return 1;
+    }
+    if pairs_ptr.is_null() {
+        return 0;
+    }
+    let Some(byte_len) = num_pairs.checked_mul(40) else {
+        return 0;
+    };
+    if byte_len > isize::MAX as usize {
+        return 0;
+    }
+    let flat = unsafe { std::slice::from_raw_parts(pairs_ptr, byte_len) };
+    let mut pairs = Vec::with_capacity(num_pairs);
+    for entry in flat.chunks_exact(40) {
+        let mut pid = [0u8; 32];
+        pid.copy_from_slice(&entry[..32]);
+        let epoch = u64::from_le_bytes(entry[32..40].try_into().expect("8-byte chunk"));
+        pairs.push((pid, epoch));
+    }
+    u8::from(emission_block_claims_unique(&pairs))
 }
 
 /// The full §7.1 emission verify body in one coarse FFI crossing: wire parse,
@@ -2535,6 +2578,47 @@ mod tests {
             )
         };
         assert_eq!(code, SHEKYL_EMISSION_VIN_ERR_NULL_PTR);
+    }
+
+    /// Block-level (P,E) uniqueness FFI over flattened 40-byte pairs — the
+    /// §6.4 KAT-1 shape (same-block double-claim) through the marshaling
+    /// boundary, plus the fail-closed null case.
+    #[test]
+    fn emission_block_claims_unique_ffi() {
+        let flat = |pairs: &[([u8; 32], u64)]| -> Vec<u8> {
+            let mut out = Vec::with_capacity(pairs.len() * 40);
+            for (pid, epoch) in pairs {
+                out.extend_from_slice(pid);
+                out.extend_from_slice(&epoch.to_le_bytes());
+            }
+            out
+        };
+        let p = [0xaa; 32];
+        let q = [0xbb; 32];
+
+        // Distinct pairs (same P different E; different P same E) pass.
+        let ok = flat(&[(p, 7), (p, 8), (q, 7)]);
+        assert_eq!(
+            unsafe { shekyl_emission_block_claims_unique(ok.as_ptr(), 3) },
+            1
+        );
+
+        // Same-block duplicate (P, E) — non-adjacent — rejects.
+        let dup = flat(&[(p, 7), (q, 3), (p, 7)]);
+        assert_eq!(
+            unsafe { shekyl_emission_block_claims_unique(dup.as_ptr(), 3) },
+            0
+        );
+
+        // Empty block trivially unique; null with non-zero count fails closed.
+        assert_eq!(
+            unsafe { shekyl_emission_block_claims_unique(ptr::null(), 0) },
+            1
+        );
+        assert_eq!(
+            unsafe { shekyl_emission_block_claims_unique(ptr::null(), 1) },
+            0
+        );
     }
 
     /// End-to-end coarse verify over the honest fixture: claims (steps 1–5)

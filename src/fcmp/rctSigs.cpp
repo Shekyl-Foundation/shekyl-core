@@ -334,6 +334,82 @@ namespace
       }
     }
 
+    bool verCtSemanticsEmission(const rctSig &rv, const uint64_t total_reward, const size_t fee_input_count)
+    {
+      try
+      {
+        CHECK_AND_ASSERT_MES(rv.type == RCTTypeFcmpPlusPlusPqc, false,
+            "verCtSemanticsEmission called on unsupported rctSig type");
+        // Q11: fee inputs are optional. The FCMP++ proof authorizes exactly the
+        // txin_to_key co-residents — present iff there are any (a proof with no
+        // spends, or spends with no proof, are both malformed).
+        CHECK_AND_ASSERT_MES(rv.p.fcmp_pp_proof.empty() == (fee_input_count == 0), false,
+            "emission FCMP++ proof presence must match fee-input count");
+        CHECK_AND_ASSERT_MES(rv.pseudoOuts.empty(), false, "legacy pseudoOuts must be empty");
+        CHECK_AND_ASSERT_MES(rv.p.pseudoOuts.size() == fee_input_count, false,
+            "emission pseudoOuts must match fee-input count");
+        CHECK_AND_ASSERT_MES(total_reward > 0, false,
+            "emission total_reward must be positive (wire positivity)");
+        CHECK_AND_ASSERT_MES(rv.outPk.size() == n_bulletproof_plus_amounts(rv.p.bulletproofs_plus),
+            false, "Mismatched sizes of outPk and bulletproofs_plus");
+        CHECK_AND_ASSERT_MES(rv.outPk.size() == rv.enc_amounts.size(), false,
+            "Mismatched sizes of outPk and rv.enc_amounts");
+        CHECK_AND_ASSERT_MES(rv.enc_labels.size() == rv.enc_amounts.size(), false,
+            "Mismatched sizes of enc_labels and rv.enc_amounts");
+        if (!rv.p.bulletproofs_plus.empty()
+            && !is_canonical_bulletproof_plus_layout(rv.p.bulletproofs_plus))
+        {
+          LOG_PRINT_L1("Emission bulletproof_plus is not canonical");
+          return false;
+        }
+        // CT balance with the mint on the input side:
+        //   sum(pseudoOuts) + total_reward*H = sum(out masks) + fee*H.
+        // Same single-sourced balance FFI as bond-post; the mint rides the
+        // debit slot (left-hand side), credit stays 0.
+        std::vector<uint8_t> pseudo_flat;
+        pseudo_flat.reserve(rv.p.pseudoOuts.size() * 32);
+        for (const key &k : rv.p.pseudoOuts)
+          pseudo_flat.insert(pseudo_flat.end(), k.bytes, k.bytes + 32);
+        std::vector<uint8_t> mask_flat;
+        mask_flat.reserve(rv.outPk.size() * 32);
+        for (const ctkey &op : rv.outPk)
+          mask_flat.insert(mask_flat.end(), op.mask.bytes, op.mask.bytes + 32);
+        const uint8_t balance_rc = shekyl_archival_verify_bond_post_ct_balance(
+            pseudo_flat.empty() ? nullptr : pseudo_flat.data(),
+            rv.p.pseudoOuts.size(),
+            mask_flat.empty() ? nullptr : mask_flat.data(),
+            rv.outPk.size(),
+            rv.txnFee,
+            /*bond_credit=*/0,
+            /*bond_debit=*/total_reward);
+        if (balance_rc != SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK)
+        {
+          LOG_PRINT_L1("Emission sum check failed (rc=" << static_cast<unsigned>(balance_rc) << ")");
+          return false;
+        }
+
+        std::vector<const BulletproofPlus*> bpp_proofs;
+        for (size_t i = 0; i < rv.p.bulletproofs_plus.size(); ++i)
+          bpp_proofs.push_back(&rv.p.bulletproofs_plus[i]);
+        if (!bpp_proofs.empty() && !verBulletproofPlus(bpp_proofs))
+        {
+          LOG_PRINT_L1("Emission aggregate range proof verification failed");
+          return false;
+        }
+        return true;
+      }
+      catch (const std::exception &e)
+      {
+        LOG_PRINT_L1("Error in verCtSemanticsEmission: " << e.what());
+        return false;
+      }
+      catch (...)
+      {
+        LOG_PRINT_L1("Error in verCtSemanticsEmission, but not an actual exception");
+        return false;
+      }
+    }
+
     bool verRctSemanticsFeeOnly(const rctSig &rv)
     {
       try

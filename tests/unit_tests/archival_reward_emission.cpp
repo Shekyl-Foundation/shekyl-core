@@ -131,12 +131,43 @@ TEST(archival_reward_emission, txin_rejects_out_of_bounds_blob_sizes)
   EXPECT_FALSE(serialize_vin(make_vin(config::ARCHIVAL_EMISSION_VIN_MAX_BYTES + 1), unused));
 }
 
-// Gate-last (C-1 block-4 flip pending): the input-type whitelist still
-// rejects the emission vin, so the transport shim landing does not activate
-// anything. This test is the tripwire that block 4 will intentionally flip.
-TEST(archival_reward_emission, input_type_whitelist_still_rejects_emission_vin)
+// C-1 block-4 activation: the input-type whitelist now admits the emission
+// vin under the Q3 arity-1 / Q11 mixing rules (this test is the block-2
+// gate-last tripwire, intentionally flipped by the activating cut).
+TEST(archival_reward_emission, input_type_whitelist_admits_emission_vin_arity_1)
 {
   transaction tx;
   tx.vin.push_back(make_vin(64));
+  EXPECT_TRUE(check_inputs_types_supported(tx));
+
+  // Q11: key-imaged txin_to_key fee inputs are the only permitted
+  // co-residents.
+  tx.vin.push_back(txin_to_key{});
+  EXPECT_TRUE(check_inputs_types_supported(tx));
+}
+
+// Q3 arity 1: a second emission vin rejects.
+TEST(archival_reward_emission, input_type_whitelist_rejects_two_emission_vins)
+{
+  transaction tx;
+  tx.vin.push_back(make_vin(64));
+  tx.vin.push_back(make_vin(64));
   EXPECT_FALSE(check_inputs_types_supported(tx));
+}
+
+// Q11 mixing: emission cannot co-reside with bond-post or serve-credit vins.
+TEST(archival_reward_emission, input_type_whitelist_rejects_emission_mixes)
+{
+  {
+    transaction tx;
+    tx.vin.push_back(make_vin(64));
+    tx.vin.push_back(txin_archival_bond_post{});
+    EXPECT_FALSE(check_inputs_types_supported(tx));
+  }
+  {
+    transaction tx;
+    tx.vin.push_back(make_vin(64));
+    tx.vin.push_back(txin_archival_serve_credit_response{});
+    EXPECT_FALSE(check_inputs_types_supported(tx));
+  }
 }
