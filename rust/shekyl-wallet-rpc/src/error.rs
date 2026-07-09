@@ -7,12 +7,14 @@
 //! `docs/api/wallet_rpc.yaml` (`WalletRpcErrorCode`).
 
 use serde_json::{json, Value};
+use shekyl_engine_core::engine::error::{RetryableRejectCause, TerminalErrorKind};
 use shekyl_engine_core::engine::SubmitError;
 use shekyl_engine_core::{
     Capability, ChangePasswordError, IoError, OpenError, PendingTxError, PersistenceError,
     RefreshError, SendError,
 };
 use shekyl_engine_file::WalletFileError;
+use shekyl_rpc_client::{RejectCause, SubmitVerdict};
 use thiserror::Error;
 
 /// Allocated application / protocol error codes (spec enum).
@@ -150,8 +152,8 @@ pub enum WalletRpcError {
     /// Submit: definite daemon rejection.
     #[error("submit rejected")]
     SubmitRejected {
-        /// Optional structured detail for `error.data`.
-        detail: Option<String>,
+        /// OpenAPI `error.data`: serde-tagged [`SubmitVerdict`] projection.
+        data: Value,
     },
     /// Submit: transport-level ambiguity.
     #[error("submit ambiguous")]
@@ -202,11 +204,16 @@ impl WalletRpcError {
         match self {
             Self::CapabilityForbids { capability } => Some(json!({ "capability": capability })),
             Self::ContentGenMismatch { content_gen } => Some(json!({ "content_gen": content_gen })),
-            Self::SubmitRejected {
-                detail: Some(detail),
-            } => Some(json!({ "verdict": detail })),
+            Self::SubmitRejected { data } => Some(data.clone()),
             _ => None,
         }
+    }
+
+    fn submit_rejected(cause: RejectCause) -> Self {
+        let verdict = SubmitVerdict::Rejected { cause };
+        let data = serde_json::to_value(verdict)
+            .unwrap_or_else(|_| json!({ "verdict": "rejected", "cause": "unrecognized" }));
+        Self::SubmitRejected { data }
     }
 }
 
@@ -311,12 +318,12 @@ impl From<SubmitError> for WalletRpcError {
             SubmitError::ContentChanged { content_gen, .. } => {
                 Self::ContentGenMismatch { content_gen }
             }
-            SubmitError::DaemonRejectedTerminal { kind } => Self::SubmitRejected {
-                detail: Some(format!("{kind:?}")),
-            },
-            SubmitError::DaemonRejectedRetryable { cause, .. } => Self::SubmitRejected {
-                detail: Some(format!("{cause:?}")),
-            },
+            SubmitError::DaemonRejectedTerminal { kind } => {
+                Self::submit_rejected(terminal_to_reject_cause(kind))
+            }
+            SubmitError::DaemonRejectedRetryable { cause, .. } => {
+                Self::submit_rejected(retryable_to_reject_cause(cause))
+            }
             SubmitError::DaemonAmbiguous { .. } => Self::SubmitAmbiguous,
             SubmitError::SubmitAlreadyPending { .. } => {
                 Self::InternalError("submit already pending for this reservation".into())
@@ -329,6 +336,29 @@ impl From<SubmitError> for WalletRpcError {
             }
             other => Self::InternalError(other.to_string()),
         }
+    }
+}
+
+/// Map Engine terminal reject kinds onto the wire [`RejectCause`] vocabulary.
+fn terminal_to_reject_cause(kind: TerminalErrorKind) -> RejectCause {
+    match kind {
+        TerminalErrorKind::DoubleSpend => RejectCause::DoubleSpendConflict,
+        TerminalErrorKind::FeeTooLow => RejectCause::FeeTooLow,
+        TerminalErrorKind::Malformed => RejectCause::Malformed,
+        TerminalErrorKind::Unrecognized => RejectCause::Unrecognized,
+        // `TerminalErrorKind` is `#[non_exhaustive]`; unknown future kinds
+        // take the fail-safe Unrecognized disposition (DAEMON_SUBMIT_VERDICT §2.5).
+        _ => RejectCause::Unrecognized,
+    }
+}
+
+/// Map Engine retryable reject causes onto the wire [`RejectCause`] vocabulary.
+fn retryable_to_reject_cause(cause: RetryableRejectCause) -> RejectCause {
+    match cause {
+        RetryableRejectCause::StaleRoot => RejectCause::StaleRoot,
+        RetryableRejectCause::ReferenceTooRecent => RejectCause::ReferenceTooRecent,
+        RetryableRejectCause::ReferenceNotFound => RejectCause::ReferenceNotFound,
+        _ => RejectCause::Unrecognized,
     }
 }
 
@@ -404,5 +434,20 @@ mod tests {
         })
         .into();
         assert_eq!(err.code(), WalletRpcErrorCode::DaemonUnreachable);
+    }
+
+    #[test]
+    fn submit_rejected_data_is_wire_submit_verdict() {
+        use shekyl_engine_core::engine::error::TerminalErrorKind;
+        use shekyl_engine_core::engine::SubmitError;
+
+        let err: WalletRpcError = SubmitError::DaemonRejectedTerminal {
+            kind: TerminalErrorKind::FeeTooLow,
+        }
+        .into();
+        assert_eq!(err.code(), WalletRpcErrorCode::SubmitRejected);
+        let data = err.data().expect("data");
+        assert_eq!(data["verdict"], "rejected");
+        assert_eq!(data["cause"], "fee_too_low");
     }
 }

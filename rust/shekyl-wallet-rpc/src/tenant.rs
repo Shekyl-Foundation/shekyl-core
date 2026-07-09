@@ -6,11 +6,20 @@
 //! Tenant isolation type for wallet-dir multi-tenancy.
 //!
 //! Phase 4b: single-tenant process holds at most one open
-//! [`Engine`](shekyl_engine_core::Engine). Multi-tenant `--wallet-dir`
-//! exchanges extend this seam later (`WALLET_REWRITE_PLAN.md`).
+//! [`Engine`](shekyl_engine_core::Engine). The Engine is stored behind
+//! `Arc<RwLock<_>>` so long-running work (`refresh` via
+//! [`Engine::start_refresh`]) does not hold the process-level tenant
+//! mutex, and so concurrent read RPCs can share the Engine under a
+//! read lock. Multi-tenant `--wallet-dir` exchanges extend this seam
+//! later (`WALLET_REWRITE_PLAN.md`).
 
 use shekyl_engine_core::{Engine, SoloSigner};
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+/// Shared handle to the open Engine (read/write under the inner lock).
+pub type SharedEngine = Arc<RwLock<Engine<SoloSigner>>>;
 
 /// One wallet-bearing tenant inside the RPC process.
 #[derive(Debug, Default)]
@@ -18,7 +27,7 @@ pub struct Tenant {
     /// Wallet file stem currently open, if any.
     open_name: Option<String>,
     /// Open Engine handle (FULL capability, SoloSigner).
-    engine: Option<Engine<SoloSigner>>,
+    engine: Option<SharedEngine>,
 }
 
 impl Tenant {
@@ -37,14 +46,9 @@ impl Tenant {
         self.open_name.as_deref()
     }
 
-    /// Borrow the open engine, if any.
-    pub fn engine(&self) -> Option<&Engine<SoloSigner>> {
-        self.engine.as_ref()
-    }
-
-    /// Mutably borrow the open engine, if any.
-    pub fn engine_mut(&mut self) -> Option<&mut Engine<SoloSigner>> {
-        self.engine.as_mut()
+    /// Clone the shared Engine handle, if a wallet is open.
+    pub fn engine(&self) -> Option<SharedEngine> {
+        self.engine.clone()
     }
 
     /// Install a freshly created / opened engine as the open wallet.
@@ -59,11 +63,15 @@ impl Tenant {
             "set_open called while a wallet is already open"
         );
         self.open_name = Some(name.into());
-        self.engine = Some(engine);
+        self.engine = Some(Arc::new(RwLock::new(engine)));
     }
 
     /// Take the open engine (for [`Engine::close`]), clearing the tenant slot.
-    pub fn take_open(&mut self) -> Option<(String, Engine<SoloSigner>)> {
+    ///
+    /// The caller should [`Arc::try_unwrap`](std::sync::Arc::try_unwrap) the
+    /// returned handle before close. If other clones still exist (e.g. an
+    /// in-flight refresh), close must fail loud rather than racing.
+    pub fn take_open(&mut self) -> Option<(String, SharedEngine)> {
         let name = self.open_name.take()?;
         let engine = self.engine.take()?;
         Some((name, engine))

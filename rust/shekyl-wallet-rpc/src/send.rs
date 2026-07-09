@@ -92,11 +92,11 @@ async fn build_pending_tx(
         priority: parse_fee_priority(p.priority)?,
     };
 
-    let mut state = tenants.lock().await;
-    let engine = state
-        .tenant
-        .engine_mut()
-        .ok_or(WalletRpcError::WalletNotOpen)?;
+    let shared = {
+        let state = tenants.lock().await;
+        state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?
+    };
+    let mut engine = shared.write().await;
     let pending = engine.build_pending_tx_async(&request).await?;
     let result = pending_tx_result(&pending);
     serde_json::to_value(result)
@@ -113,11 +113,11 @@ async fn submit_pending_tx(
         WalletRpcError::InvalidParams("seen_gen must be a non-negative integer".into())
     })?;
 
-    let mut state = tenants.lock().await;
-    let engine = state
-        .tenant
-        .engine_mut()
-        .ok_or(WalletRpcError::WalletNotOpen)?;
+    let shared = {
+        let state = tenants.lock().await;
+        state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?
+    };
+    let mut engine = shared.write().await;
     let tx_hash = engine.submit_pending_tx_async(id, seen_gen).await?;
     let result = SubmitPendingTxResult {
         tx_hash: format!("{tx_hash}"),
@@ -135,11 +135,11 @@ async fn discard_pending_tx(
     let p: DiscardPendingTxParams = parse_required_object(params, "discard_pending_tx")?;
     let id = parse_reservation_id(&p.pending_tx_id)?;
 
-    let mut state = tenants.lock().await;
-    let engine = state
-        .tenant
-        .engine_mut()
-        .ok_or(WalletRpcError::WalletNotOpen)?;
+    let shared = {
+        let state = tenants.lock().await;
+        state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?
+    };
+    let mut engine = shared.write().await;
     // Engine maps unknown handles to Ok(()) (idempotent discard).
     engine.discard_pending_tx(id)?;
     let result = DiscardPendingTxResult {};

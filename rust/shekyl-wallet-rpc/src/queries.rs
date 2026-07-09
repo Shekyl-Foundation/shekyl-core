@@ -56,8 +56,11 @@ async fn get_balance(
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     require_empty_object(params, "get_balance")?;
-    let state = tenants.lock().await;
-    let engine = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
+    let engine = {
+        let state = tenants.lock().await;
+        state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?
+    };
+    let engine = engine.read().await;
     let ledger = engine.ledger();
     let height = ledger.ledger.height();
     let summary = ledger.ledger.balance(height);
@@ -71,8 +74,11 @@ async fn get_primary_address(
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     require_empty_object(params, "get_primary_address")?;
-    let state = tenants.lock().await;
-    let engine = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
+    let engine = {
+        let state = tenants.lock().await;
+        state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?
+    };
+    let engine = engine.read().await;
     let address = engine
         .primary_address()
         .encode()
@@ -87,10 +93,18 @@ async fn get_transfers(
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     let filters: GetTransfersParams = parse_optional_object(params, "get_transfers")?;
-    let since = filters.since_height.map(|h| u64::try_from(h).unwrap_or(0));
+    let since = match filters.since_height {
+        None => None,
+        Some(h) => Some(u64::try_from(h).map_err(|_| {
+            WalletRpcError::InvalidParams("since_height must be a non-negative integer".into())
+        })?),
+    };
 
-    let state = tenants.lock().await;
-    let engine = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
+    let engine = {
+        let state = tenants.lock().await;
+        state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?
+    };
+    let engine = engine.read().await;
     let ledger = engine.ledger();
 
     let transfers: Vec<TransferView> = ledger
@@ -134,8 +148,11 @@ async fn get_transfer_by_id(
         ));
     }
 
-    let state = tenants.lock().await;
-    let engine = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
+    let engine = {
+        let state = tenants.lock().await;
+        state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?
+    };
+    let engine = engine.read().await;
     let ledger = engine.ledger();
 
     let found = ledger
@@ -164,6 +181,7 @@ async fn get_height(
     let (wallet_height, daemon) = {
         let state = tenants.lock().await;
         let engine = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
+        let engine = engine.read().await;
         let wallet_height = i64::try_from(engine.ledger().ledger.height()).unwrap_or(i64::MAX);
         (wallet_height, engine.daemon().clone())
     };

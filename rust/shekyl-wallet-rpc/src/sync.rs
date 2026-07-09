@@ -5,11 +5,16 @@
 
 //! Sync JSON-RPC methods (Phase 4b).
 //!
-//! `refresh` is implemented. `rescan_blockchain` stays `-32601` until
-//! Engine grows an explicit rescan API (see `docs/FOLLOWUPS.md`).
+//! `refresh` is implemented via [`Engine::start_refresh`] so the
+//! process-level tenant mutex is not held across the scan. The Engine
+//! lives behind `Arc<RwLock<_>>` (see [`crate::tenant`]); single-flight
+//! is Engine-owned (`RefreshError::AlreadyRunning` → `-29200`).
+//!
+//! `rescan_blockchain` stays `-32601` until Engine grows an explicit
+//! rescan API (see `docs/FOLLOWUPS.md`).
 
 use serde_json::Value;
-use shekyl_engine_core::RefreshOptions;
+use shekyl_engine_core::{Engine, RefreshOptions};
 
 use crate::error::WalletRpcError;
 use crate::project::refresh_result;
@@ -34,12 +39,17 @@ async fn refresh(
 ) -> Result<Value, WalletRpcError> {
     require_empty_object(params, "refresh")?;
 
-    let state = tenants.lock().await;
-    let engine = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
+    // Clone the shared Engine handle under a short tenant-mutex hold;
+    // do not keep the tenant mutex across the refresh await.
+    let engine = {
+        let state = tenants.lock().await;
+        state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?
+    };
+
     let opts = RefreshOptions::default();
-    let handle = tokio::runtime::Handle::current();
-    let summary = tokio::task::block_in_place(|| engine.refresh(&opts, &handle))?;
-    let synced_height = engine.ledger().ledger.height();
+    let handle = Engine::start_refresh(engine.clone(), opts).await?;
+    let summary = handle.join().await?;
+    let synced_height = engine.read().await.ledger().ledger.height();
     let result = refresh_result(&summary, synced_height);
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize refresh: {e}")))

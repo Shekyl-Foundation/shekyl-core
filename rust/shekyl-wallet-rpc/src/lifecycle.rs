@@ -8,6 +8,7 @@
 //! `create_wallet`, `open_wallet`, `close_wallet`, `change_password`.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rand::rngs::OsRng;
@@ -198,9 +199,18 @@ async fn close_wallet(
     require_empty_object(params, "close_wallet")?;
 
     let mut state = tenants.lock().await;
-    let Some((_name, engine)) = state.tenant.take_open() else {
+    let Some((_name, shared)) = state.tenant.take_open() else {
         return Err(WalletRpcError::WalletNotOpen);
     };
+    // Drop the tenant slot before awaiting close. Fail loud if another
+    // Arc clone still holds the Engine (e.g. in-flight refresh).
+    let engine = Arc::try_unwrap(shared)
+        .map_err(|_| {
+            WalletRpcError::InternalError(
+                "cannot close: wallet engine still in use by another task".into(),
+            )
+        })?
+        .into_inner();
 
     // `credentials` is ignored on the steady-state close path.
     let creds = Credentials::password_only(b"");
@@ -214,9 +224,9 @@ async fn change_password(
 ) -> Result<Value, WalletRpcError> {
     let p: ChangePasswordParams = parse_object(params, "change_password")?;
 
-    let mut state = tenants.lock().await;
-    let Some(engine) = state.tenant.engine_mut() else {
-        return Err(WalletRpcError::WalletNotOpen);
+    let shared = {
+        let state = tenants.lock().await;
+        state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?
     };
 
     let old = Zeroizing::new(p.old_password.into_bytes());
@@ -224,6 +234,7 @@ async fn change_password(
     let old_creds = Credentials::password_only(old.as_slice());
     let new_creds = Credentials::password_only(new.as_slice());
 
+    let mut engine = shared.write().await;
     tokio::task::block_in_place(|| engine.change_password(&old_creds, &new_creds, None))
         .map_err(WalletRpcError::from)?;
     Ok(json!({}))

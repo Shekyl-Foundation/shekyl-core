@@ -602,6 +602,10 @@ components:
         since_height:
           type: integer
           format: int64
+          minimum: 0
+          description: >
+            Inclusive lower bound on transfer `block_height`. Negative values
+            are rejected with `-32602 InvalidParams`.
 
     GetTransfersResult:
       type: object

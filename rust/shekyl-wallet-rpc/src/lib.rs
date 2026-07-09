@@ -36,7 +36,7 @@ pub use server::{
     build_router, run_server, spawn_in_process, spawn_in_process_with, AppState, InProcessHandle,
     ListenAddr, ServerConfig,
 };
-pub use tenant::{Tenant, TenantState};
+pub use tenant::{SharedEngine, Tenant, TenantState};
 pub use types::{GetVersionResult, JsonRpcRequest, JsonRpcResponse, WalletHandle, API_VERSION};
 
 /// Crate / binary semver (`CARGO_PKG_VERSION`).

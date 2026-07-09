@@ -451,11 +451,7 @@ async fn queries_balance_address_transfers_after_create() {
     // Unreachable daemon → fee estimation fails (-29102); bad address
     // may also surface as -29100 / invalid params / internal.
     assert!(
-        code == -29100
-            || code == -29101
-            || code == -29102
-            || code == -32602
-            || code == -32603,
+        code == -29100 || code == -29101 || code == -29102 || code == -32602 || code == -32603,
         "unexpected build error code {code}: {build}"
     );
 }
