@@ -817,7 +817,16 @@ branch** — see the item-3a status note for the two pins (full-pre-image
 journal row; all non-insert codes fatal at connect) and the one
 C-1-blocked piece (the block-level `(P,E)` pass, which iterates a variant
 type that doesn't exist until C-1's transport shim). Items 4, 5 remain
-open in dependency order.
+open in dependency order. **The C-1 pre-flight ran 2026-07-08 against
+`dev` `6671d565b` (after #269/#271/#272 landed) — executed in §9**: all
+merge blockers green, dispatch anchors confirmed, two findings — both
+dispositioned same day. F-C1b (`VARIANT_TAG 0x06 → 0x04`) **ratified**
+(§9.4). F-C1a (`budget(E)` production source) ratified in direction but
+**gated on a spec-first round**:
+[`ARCHIVAL_BUDGET_SCHEDULE.md`](ARCHIVAL_BUDGET_SCHEDULE.md) pins the
+redirect-the-write straddle transition, reorg-across-fork symmetry, and
+zero-budget-epoch handling (§9.3 disposition); **item 4 does not open
+until that spec is ratified.**
 
 ### 7.1 Next action — PR-E3 implementation pre-flight (re-pin to current `dev`)
 
@@ -926,3 +935,255 @@ sites (§3).
   shared-surface ledger (the parallel-tracks discipline): a collision, if
   there is one, shows up at the seam between items, which an operand
   pre-flight structurally cannot see.
+
+---
+
+## 9. C-1 pre-flight — operands at production sites, `dev` `6671d565b`
+
+Run 2026-07-08, after **#269** (E3 verify body + WS-1/WS-2 write side),
+**#271** (round docs), and **#272** (GF-4b backing-lineage pre-join) all
+landed on `dev`. Same §11.1 pattern as §8: every C-1 operand read at its
+production site at the branch head. Outcome: **all merge blockers green,
+all dispatch anchors confirmed, plus two findings** — one design gap that
+blocks the cut (§9.3, `budget(E)` has no production source) and one stale
+consensus-facing pin that needs a ratified correction before the wire
+freezes around it (§9.4, the `VARIANT_TAG 0x06`). *Both dispositioned
+2026-07-08 — see the ratification boxes in §9.3 (spec-first:
+[`ARCHIVAL_BUDGET_SCHEDULE.md`](ARCHIVAL_BUDGET_SCHEDULE.md)) and §9.4
+(`0x04` ratified).*
+
+### 9.1 Merge-blocker status — all green
+
+| §3-item-4 blocker | Status at `6671d565b` | Evidence |
+|---|---|---|
+| ML-DSA / hybrid auth primitive (E1) | **landed** | `shekyl-ffi/src/lib.rs:1649` `shekyl_emission_hybrid_auth_verify`; role-separated binding messages `emission_wire.rs` `auth_msgs()` (`:706–713`, customizations `:65`/`:69`) |
+| Verify body, steps 1–6 (E3 item 3) | **landed** | `emission_verify.rs:321` (claims), `:548` (backing), `:587` (assembly) |
+| WS-2 write side (item 3a) | **landed** | `db_lmdb.cpp:5667` `apply_archival_emission_claim`; pop revert wired `blockchain_db.cpp` (after slash + close reverts) |
+| As-of-E snapshot gather (item 2) | **landed** | `db_lmdb.cpp:6434` `gather_archival_emission_epoch_snapshot`; persisted `Σwork` read `:6451` |
+| §8.0.3 GF-4b ladder + sweep precondition | **landed** | #272: `rust/shekyl-engine-core/src/engine/backing_set.rs`, `docs/design/ARCHIVAL_GF4B_BACKING_LINEAGE.md` |
+
+### 9.2 Dispatch-anchor table — where each C-1 cut lands
+
+| C-1 piece | Anchor at `6671d565b` | Note |
+|---|---|---|
+| C++ transport shim | `cryptonote_basic.h:841–846` — txin `VARIANT_TAG` registry (`gen 0x00`, `to_key 0x01`, `serve_credit 0x02`, `bond_post 0x03`) | length-bounded blob after the bond-post `hybrid_public_key` pattern (plan PR-E2 §); tag per §9.4 |
+| Whitelist flip | `cryptonote_format_utils.cpp:688` `check_inputs_types_supported` | mixing rule per Q11 (§2.2): emission vin **may** co-reside with key-imaged `txin_to_key` fee inputs; arity 1 per Q3 (§2.1) |
+| Per-tx verify seam | `blockchain.cpp:3579` (serve-credit branch) / `:3630–3700` (bond-post branch) in `check_tx_inputs` | emission gets its own branch, marshaling per the serve-credit FFI idiom (`:4360–4394`: serialize vin, strip the C++ tag byte, pass payload + ctx to Rust) |
+| Backing root sourcing | `blockchain.cpp:3630–3653` — `rv.referenceBlock` → `block_exists` → min/max age windows → `get_curve_tree_root_at_height(ref_height)` + `get_curve_tree_depth()` | exactly the operands `emission_vin_verify_backing` takes (`tree_root`, `tree_depth`, `signable_tx_hash`); `MembershipOnlyBacking` carries no height — the tx-level reference is the source, as for bond-post |
+| `AuthVerified` minter | Rust-side only: `auth_msgs()` (`emission_wire.rs:706`) → `shekyl_emission_hybrid_auth_verify` internals → mint | the witness **never crosses FFI**; C-1's single FFI entry (`shekyl_emission_vin_verify`) runs the three minters in §7.1 fail-fast order and returns verdict + `epochs_to_commit` + `total_reward` |
+| Block-level `(P,E)` pass | `blockchain.cpp:4887–4913` — the `block_serve_credits` set over `txs` | mirror with key = `P_canonical_id ‖ E` per settlement epoch in each emission vin |
+| Connect-side apply | `blockchain_db.cpp:221–232` — the `add_transaction_data` vin loop (serve-credit `:221`, bond-post `:226`) | emission arm calls `apply_archival_emission_claim(height, p_id, settlement_epochs)`; the pop side needs **no** vin arm — the journal revert is already height-keyed in `pop_block` |
+
+### 9.3 Finding F-C1a — `budget(E)` has no production source — **BLOCKER**
+
+The verify body consumes `EmissionEpochSource.budget` per claimed epoch
+(`emission_verify.rs:223`), and Form-C distributes
+`floor(budget·capped_P/Σwork)` — but nothing in the tree **produces** a
+per-epoch budget. The leg spec scopes it out ("gate 1 `Σwork` budget
+schedule source" — `REWARD_EMISSION_LEG.md:20–21`), and no gate-1 schedule
+spec exists.
+
+What exists instead is the redirect promise at the burn site,
+`blockchain.cpp:5011–5041`: every block computes
+`staker_inflow = em_split.staker_emission + burn.staker_pool_amount`
+(`:5026`) and **burns it**, with the comment that "the archival
+reward-emission leg (2b, C-1 activation) is where this inflow gets
+redirected to fund `txin_archival_reward_emission` payouts."
+
+Two consequences:
+
+1. **The natural definition** is `budget(E) = Σ staker_inflow` over `E`'s
+   blocks `[E·SEB, (E+1)·SEB)`. That sum is **not recomputable cheaply** —
+   `staker_pool_amount` depends on per-block fees — so it needs persistence:
+   a per-block (or running) accumulator maintained at connect and reverted
+   at pop, frozen into a per-epoch row at close. The recommended shape
+   mirrors the persisted-`Σwork` pattern §3-item-2 already landed: **persist
+   `budget(E)` alongside `Σwork(E)` at close materialization**
+   (`db_lmdb.cpp:6486–6520` writes sigma; the budget row is its sibling),
+   so verify reads both operands from the same frozen close row and the
+   supply-conservation conjunction (§5.4) gains no new live operand.
+2. **The redirect itself is a consensus change** to the burn bookkeeping
+   (`actually_destroyed`, `block_burn` rows, `total_burned`) with its own
+   operand set and reorg symmetry (accumulator must pop with the block).
+   It is C-1-scope by the burn comment's own framing, but it is a
+   *separable, consensus-safe-inert* piece: the accrual can land and
+   persist budget rows while the whitelist still rejects the vin —
+   nothing reads the row until the flip. Recommended: **land the budget
+   accrual as the first commit-block of the C-1 PR** (still one PR — the
+   accrual without the consumer is inert, the consumer without the
+   accrual is unbuildable, and the flip is atomic per §3 item 4).
+
+**Open sub-question the disposition must pin:** does the burn *stop* at
+C-1 (inflow accrues to the budget purse from the flip height), and what
+happens to budget in epochs where `Σwork(E) = 0` or no claim arrives
+before `MAX_CLAIM_AGE_W` expiry — burn-on-expiry, roll-forward, or
+implicit under-mint (unminted stays unminted, the R1.B remainder posture
+extended to whole epochs)? The R1.B floor-remainder precedent
+(under-mint, never over-mint; remainder simply never minted) extends
+naturally to expiry: **recommend implicit under-mint** — no roll-forward
+state, no expiry sweep, the unclaimed budget is supply never created.
+That keeps the purse stateless beyond the per-epoch row.
+
+**Rule-21 shape:** reopen the roll-forward question iff a measured
+genesis-era claim-rate shows systematic budget stranding that changes the
+archival-incentive calculus (economics evidence, not preference), via a
+design round on the economics doc with `STAKER_ARCHIVAL_SIM.md` re-run.
+
+> **Disposition (ratified 2026-07-08): direction ratified, NOT
+> build-ready — spec-first.** The accumulator + frozen-close-row +
+> under-mint-on-expiry shape is ratified, but the recommendation as
+> written carried a supply-conservation gap: "`budget(E)` = sum of
+> staker inflow over E's blocks" taken literally includes the
+> **pre-activation burned portion** in the epoch straddling the
+> activation height — emitting coins that were already destroyed, a
+> genesis-frozen over-mint. The ratified structure that dissolves it is
+> **redirect-the-write**: the fork switches the *target* of the existing
+> per-height `staker_inflow` write (pre-activation → burn record;
+> post-activation → budget accrual), per each block's own height —
+> making the straddle correct by construction, burn-stop/accrual-start
+> atomic (one write, redirected), and reorg symmetry inherited from the
+> landed burn-record pop idiom. "Consensus-inert until the flip" is
+> re-scoped accordingly: the accrual **starts at activation**, never
+> runs pre-flip recording budget for burned inflow. Budget is the other
+> half of the supply-conservation equation the M-2 arc protected, so it
+> gets what the emission half got: a spec —
+> [`ARCHIVAL_BUDGET_SCHEDULE.md`](ARCHIVAL_BUDGET_SCHEDULE.md) (gate 1),
+> pinning the straddle transition (§2), the three pop-symmetric writes
+> (§3), expiry under-mint (§4), zero-budget epochs as structurally
+> non-claimable via the M1 §2.3 positivity path with the builder's
+> single omission predicate covering the budget factor (§5), and four
+> armed KATs including reorg-across-the-fork (§6). **C-1's §9.5 build
+> list does not open until that spec is ratified** — every downstream
+> piece assumes `budget(E)` means "emittable inflow for E," which is
+> exactly what the spec pins.
+
+### 9.4 Finding F-C1b — the `VARIANT_TAG 0x06` pin is stale — recommend **`0x04`**
+
+The `0x06` pin derives from the plan's tag inventory
+(`REWARD_EMISSION_VIN_PLAN.md:118`: "serve_credit (`0x4`), bond_post
+(`0x5`). Next free binary tag: `0x06`") — a **pre-renumber** snapshot.
+The gate-(c) dense renumber (`0b7a93c23`, 2026-06-21) moved the C++
+oracle to the dense scheme (`serve_credit 0x02`, `bond_post 0x03` —
+`cryptonote_basic.h:845–846`), which makes **`0x04` the next free txin
+tag**, and the genesis dense registry already assigns it:
+`GENESIS_TX_WIRE_FORMAT.md:443` — "`+ deferred 04 reward_emission`". The
+"`0x06` C++" references that survive in the plan (`:690`, the 2026-07-07
+landed-state note) and the genesis doc's dual-scheme rows (`:44`, `:286`,
+`:288`, `:291`) are drift carried forward from the pre-renumber era — the
+same class as the serve-credit oracle comment's own history
+(`blockchain.cpp:4370`: "renumbered from the legacy 0x04 in PR #168").
+
+**Recommend:** C-1 pins `VARIANT_TAG(binary_archive,
+txin_archival_reward_emission, 0x04)` — dense, aligned with the Rust wire
+tag (`emission_wire.rs:47`), and lands the stale-doc corrections in the
+plan + genesis registry as §1.1-class fixes inside the C-1 PR. This is a
+consensus-facing wire byte: the pin is presented here for ratification,
+not silently flipped.
+
+> **Disposition (ratified 2026-07-08): `0x04`.** Independently verified:
+> the claim-era retirement removed `txin_stake_claim` (`0xf2`/`0xf3`
+> retired-never-reassigned), `0x04` is the next free dense txin tag, and
+> it is the value the landed Rust wire already uses — the plan's `0x06`
+> is the pre-renumber inventory, stale. The byte-for-byte alignment with
+> the Rust wire tag is the tell. C-1 pins `VARIANT_TAG 0x04` and carries
+> the plan/genesis-registry stale-doc corrections.
+
+### 9.5 C-1 scope enumeration (the build list, in dependency order)
+
+1. **Budget accrual + redirect** (F-C1a disposition): per-block staker-inflow
+   accumulator (connect/pop symmetric), per-epoch `budget(E)` row persisted
+   at close beside `Σwork(E)`, burn-site redirect at `blockchain.cpp:5026`.
+2. **C++ transport shim**: `txin_archival_reward_emission` blob struct,
+   `txin_v` append, three `VARIANT_TAG`s (binary `0x04` per §9.4), epee/
+   boost/JSON transport, `get_signature_size → 0`, cross-parse drift KAT.
+3. **FFI entry** `shekyl_emission_vin_verify`: parse (Rust codec) → claims
+   minter (snapshot marshal per epoch + bond record + budget row) → backing
+   minter (root/depth/signable-hash) → auth minter (`auth_msgs` + hybrid
+   verify, both roles) → assembly; verdict + `epochs_to_commit` +
+   `total_reward` out.
+4. **Whitelist flip** in `check_inputs_types_supported` (Q11 mixing rule,
+   arity 1) — the activation byte.
+5. **Dispatch wiring** in `check_tx_inputs` (serve-credit idiom) +
+   `vout_reward_sum` cross-check + reference-block age windows.
+6. **Block-level `(P,E)` pass** (§6.2's deferred third layer) at the
+   `blockchain.cpp:4887` *placement* — but the duplicate **decision** is
+   a Rust function over the block's marshaled `(P,E)` claim pairs, not a
+   mirror of the C++ `std::set` idiom (decision-placement pin below) —
+   + its two §6.4 KATs.
+7. **Connect arm** in `add_transaction_data` calling
+   `apply_archival_emission_claim` (single writer, §6.3 journal already
+   armed).
+8. **Regtest end-to-end**: emission accepted-and-applied through the real
+   path; then E4/E5 per item 5.
+
+**Decision-placement pin (ratified 2026-07-08).** Verified split at this
+head: **computation is uniformly Rust; decisions are mixed.** The
+emission leg already Rust-decides — the verify body returns typed errors
+that `archival_ffi.rs:130` (`map_verify_error`) merely maps to FFI codes,
+and C++ never re-decides — while the older serve-credit path decides in
+C++ directly against LMDB: the dedup if-check (`blockchain.cpp:4247`),
+the holds check (`:4312`), and the block-level `(P,E)` set-insert loop
+(`:4889–4910`, reject at `:4904`). C-1 builds every new consensus
+**decision** in Rust with
+C++ as the mechanical applier/marshaler:
+
+- **Item 6** marshals the block's claim pairs and takes its verdict from
+  a Rust function; only the placement mirrors `:4887`.
+- **Item 7's** dedup decision is already Rust
+  (`claimed_epochs_check_and_set` via FFI); C++ journals the pre-image
+  and writes the bond — application, not decision. The mint application
+  to supply is mechanical and stays C++.
+
+Rationale (not aesthetic): the arc's enforcement mechanism —
+make-bad-states-unrepresentable via the type system (`K_COVER`
+const-assert, wire positivity, sealed witnesses, the WS-2 single-writer
+framing) — is a Rust capability. A consensus decision in C++ can be
+protected only by convention + KAT + review, the armed-gate-with-no-trigger
+pattern that produced the tip-vs-as-of and dedup findings this round
+spent itself catching. The determinism seam is a *separate* concern and
+is already foreclosed by single-evaluator (the arithmetic has one Rust
+implementation; C++ passes operands) — "more Rust" is not what forecloses
+it; "one evaluator" is. The older serve-credit decisions
+(`:4247`/`:4312`/`:4904`) are queued as post-C-1 extraction candidates
+under the equivalence-proof discipline, **decoupled at the genesis
+boundary (ratified 2026-07-08)** (`docs/FOLLOWUPS.md`): the *audit
+half* — mirror in Rust,
+prove behavior-equivalent against the C++ (the `recon.rs` /
+`collect_outputs` pattern), install as a standing equivalence KAT — is
+V3.0 pre-genesis, because it is a verification task whose findings are
+free fixes before genesis and hard forks after; the *decision-site
+flip* is V3.1, because a behavior-preserving flip buys genesis nothing
+on safety while putting fresh decision-sites on the critical path in
+place of the archival path's most battle-tested code. Mirror-then-fix
+ordering: the mirror reproduces the C++ including any reachable bad
+state (never mirror a fixed version); an audit-surfaced bug is fixed in
+the C++ as its own behavior-change commit, and the flip stays
+behavior-preserving against the fixed C++ — never
+reimplement-and-hope, because a divergence in a replaced consensus
+decision is the fork the extraction exists to prevent.
+
+**Boundary note (do not blur).** The extraction queue covers *only* the
+three existing **serve-credit** decisions above. Item 6's block-level
+**emission** `(P,E)` pass is not among them: it is new C-1 code with no
+C++ predecessor, built Rust-decided from the start — there is nothing
+to mirror, prove equivalent, or flip. The two passes will look nearly
+identical in the code (same shape, same placement idiom, adjacent
+concerns — serve-credit dedups `(P,s,E)` at `:4904`, emission dedups
+`(P,E)`), so the disambiguation lives here in prose: "block-level pass,
+V3.0 audit" refers to the serve-credit pass; the emission pass ships at
+C-1 and is never deferred.
+
+### 9.6 Non-blocking notes
+
+- **E4 shrinkage.** `txin_stake_claim` and its C++ wire are already gone —
+  deleted by PR-4 of the claim-era retirement (`2615c0dae`, tags
+  `0xf2`/`0xf3` retired-never-reassigned). Item-5's deletion surface is
+  now `C_stake` residue + constants/audit-scope/docs only.
+- **The §8.1 guard asymmetry landed fixed.** `blockchain.cpp:4301` now
+  carries the `h_fire > h_close` guard symmetric with `db_lmdb.cpp:5267`
+  (landed in #269 with item 1).
+- **Rule 07 check re-confirmed at this head:** C-1 remains a normal
+  atomic acceptance flip — the inert-until-flip decomposition exists
+  (accrual and shim are consensus-inert before the whitelist byte), so
+  criterion 2 fails and the exception is not invoked. The PR carries this
+  §9 operand enumeration as its §11.1-pattern evidence.

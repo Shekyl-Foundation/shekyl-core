@@ -4332,9 +4332,93 @@ sustainability is unaffected by the recalibration.
   genesis-frozen consensus, so if multisig ships at V3.0 this is pre-genesis; if
   multisig is V3.1+, re-file there. Surfaced by PR #193's review/audit.
 
+- **Serve-credit C++ consensus decisions — Rust equivalence audit +
+  standing KAT (the flip is V3.1, filed separately there)** (surfaced
+  2026-07-08, C-1 pre-flight decision-placement review,
+  [`REWARD_EMISSION_E3_GATING_ROUND.md`](./design/REWARD_EMISSION_E3_GATING_ROUND.md)
+  §9.5; audit/flip decoupling ratified same day). Three archival vin
+  consensus decisions are C++ if-checks made directly against LMDB: the
+  serve-credit `(P,s,E)` dedup (`blockchain.cpp:4247`), the
+  holds-at-`h_fire` check (`:4312`), and the block-level serve-credit
+  `(P,s,E)` uniqueness pass (`:4889–4910`). These are the sites where
+  the tip-vs-as-of and dedup-atomicity findings of the E3 gating round
+  lived; a C++ decision can be protected only by convention + KAT +
+  review, not by the type system (`20-rust-vs-cpp-policy.mdc` "Rust if
+  any of" #2/#3). **Scope disambiguation (load-bearing):** the C-1
+  block-level *emission* `(P,E)` pass (§9.5 item 6 of the round doc) is
+  **not** in this item's scope — it is new C-1 code with no C++
+  predecessor, built Rust-decided from the start, and ships at C-1. The
+  two block-level passes will look nearly identical in the code
+  (serve-credit dedups `(P,s,E)` at `:4904`; emission dedups `(P,E)`);
+  only the *serve-credit* pass is an audit candidate here. The
+  migration discipline is mirror → prove-equivalent → flip, and its two
+  halves have **opposite risk profiles at the genesis boundary**, so
+  they are queued separately:
+
+  **This item (V3.0): the mirror + equivalence proof — the audit half.**
+  Mirror each decision as a pure Rust function over marshaled inputs
+  (the `epoch_close_compute` / emission-verify shape) and prove behavior
+  equivalence with KATs/fuzzing against the live C++ (the `recon.rs` /
+  `collect_outputs` precedent). This is the strongest possible audit of
+  the three decisions — stronger than the WS-1 manual review that found
+  the `:4312` tip-vs-as-of bug, because you can't mirror what you can't
+  precisely specify, and the equivalence fuzzing hunts edge-case
+  divergences a review won't hit. Any divergence it surfaces is a free
+  fix pre-genesis and a hard fork after. The mirror + proof then remain
+  installed as a **standing equivalence KAT**, which also locks the
+  frozen C++ behavior against accidental drift. **Mirror-then-fix
+  ordering is mandatory:** the mirror reproduces the C++ *including any
+  reachable bad state* — never mirror a fixed version, or the
+  "equivalence" is against a thing the C++ never did. If the audit
+  finds a bug, the fix is a behavior change and lands in the C++
+  (pre-genesis, free) as its own commit; the mirror then re-proves
+  against the fixed C++. This item is a verification task, not a
+  consensus change — it puts no new consensus code on the genesis
+  critical path; it gates genesis only on *finding* divergences while
+  they are free. **Target: V3.0 pre-genesis, after C-1 lands** (C-1's
+  emission leg establishes the Rust-decision template).
+
+  The **decision-site flip** (Rust becomes the primary decision site,
+  the C++ decision is dropped) is deliberately **not** part of this
+  item — see the V3.1 entry. A behavior-preserving flip changes no
+  consensus behavior, so it buys genesis nothing on safety; what it
+  would cost is three fresh consensus decision-sites on the genesis
+  critical path replacing the most battle-tested code in the archival
+  path (the WS-1/WS-2 arc's subject). The genesis safety property
+  (double-mint prevention) is carried by the WS-2 journal regardless of
+  which language decides; the type-level single-writer guarantee makes
+  it un-reintroducible by future edits, which is a post-genesis concern.
+
 ---
 
 ## V3.1 — audit response and stressnet gates
+
+- **Serve-credit decision-site flip: Rust becomes the primary decision
+  site for `blockchain.cpp:4247`/`:4312`/`:4889–4910`** (surfaced
+  2026-07-08 with the V3.0 equivalence-audit item above, which is its
+  prerequisite; audit/flip decoupling ratified same day). Once the V3.0
+  mirror + standing equivalence KAT is green, flip each decision site:
+  the C++ marshals inputs, the Rust mirror's verdict becomes
+  authoritative, and the C++ if-check is deleted — one flip per
+  decision, individually ratified, never a bulk port. Because the
+  mirror is equivalence-proven against the frozen C++ behavior, the
+  flip is **behavior-preserving by construction** — the safest class of
+  hard fork, provably behavior-identical, no time pressure. What it
+  buys is enforcement style: the type-level single-writer /
+  make-bad-states-unrepresentable guarantee replaces convention + KAT +
+  review at the three sites where the tip-vs-as-of and dedup-atomicity
+  bugs actually lived, making them un-reintroducible by future edits.
+  **The flip must never bundle a behavior change:** any divergence the
+  audit surfaces is fixed in the C++ under the V3.0 item first; the
+  flip is then proven against the fixed C++. Bundling would blur which
+  part is the free pre-genesis correction and which is the deferrable
+  refactor — and blurring that is how a "refactor" silently ships a
+  behavior change. Scope boundary: the decision moves; LMDB mutation,
+  serialization, and network stay C++ (over-extraction adds FFI surface
+  with its own bug class). **Target: V3.1.** *Unblocked the moment the
+  V3.0 equivalence KAT is green and the flip carries no behavior delta
+  (rule-21 reopening criteria: both named, both mechanically
+  checkable).*
 
 - **`tests/performance_tests/` — rule-15 deletion-or-adoption audit**
   (surfaced 2026-07-03, RandomX v2 test-regime benchmark review). The

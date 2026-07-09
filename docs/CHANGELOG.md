@@ -4,6 +4,76 @@
 
 ### Added
 
+- **docs: C-1 pre-flight executed against `dev` `6671d565b`
+  (`REWARD_EMISSION_E3_GATING_ROUND.md` §9)** — every C-1 operand read at
+  its production site after #269/#271/#272 landed. All merge blockers
+  green (E1 hybrid auth, E3 verify body, WS-2 write side, as-of-E
+  snapshot, GF-4b §8.0.3 precondition) and all dispatch anchors confirmed
+  (whitelist, `check_tx_inputs` seam, reference-block root sourcing,
+  block-level `(P,E)` pass template, connect-arm slot). Two findings for
+  ratification: **F-C1a** — `budget(E)` has no production source (the
+  burn site `blockchain.cpp:5026` destroys the staker inflow with a
+  redirect promise; recommended: connect/pop-symmetric accrual persisted
+  beside `Σwork(E)` at close, implicit under-mint on claim expiry);
+  **F-C1b** — the C++ `VARIANT_TAG 0x06` pin is pre-renumber drift
+  (dense scheme makes `0x04` next-free and the genesis registry already
+  assigns it; recommended: pin `0x04`, aligned with the Rust wire tag).
+  C-1 scope enumerated in §9.5; E4's deletion surface shrank
+  (`txin_stake_claim` already deleted by the claim-era retirement PR-4).
+  **Both findings dispositioned same day:** F-C1b **ratified at `0x04`**;
+  F-C1a ratified in direction but gated on a spec-first round — the
+  as-recommended phrasing carried a straddle-epoch over-mint (the epoch
+  containing the activation height mixes burned and emittable inflow;
+  activation is HF-gated, not epoch-aligned).
+
+- **docs: `ARCHIVAL_BUDGET_SCHEDULE.md` — gate-1 `budget(E)` spec (DRAFT,
+  awaiting ratification; unblocks C-1 item 4)**. Pins: `budget(E)` =
+  post-activation staker inflow over E's blocks, via **redirect-the-write**
+  (the fork switches the target of the single per-height `staker_inflow`
+  write — pre-activation → burn record, post-activation → budget accrual,
+  by each block's own height) so the straddle is correct by construction,
+  burn-stop/accrual-start are atomic, and pop symmetry is inherited from
+  the landed burn-record idiom; three pop-symmetric writes (per-height
+  accrual row mirroring `block_burn`; frozen `archival_budget` close row
+  beside `Σwork(E)`, deleted by the close revert, pruned with the epoch
+  family; verify reads the frozen row in the snapshot gather — no new
+  live operand); expiry = implicit under-mint (R1.B posture, rule-21
+  reopen on economics evidence); zero-budget epochs structurally
+  non-claimable through the M1 §2.3 positivity path, with the builder's
+  single positive-share omission predicate named to cover the budget
+  factor; five armed KATs (straddle conservation, reorg-across-the-fork,
+  close/revert symmetry, zero-budget omission/rejection, fee-bearing
+  coinbase foreclosure). The §2.2 coinbase-foreclosure pin names its
+  cross-function dependency (`validate_miner_transaction`'s
+  exact-equality check is what makes the redirect supply-safe; nothing
+  in the budget code references it) and the standing
+  `economics_c2a_prime` assertions that hold it today, with the
+  fee-side coverage gap closed by KAT B5 at the C-1 build. The §8 servo
+  clause carries a scale note: the servo is a design round, not a
+  commit (it reopens conservation, one-write-one-target, the §6
+  determinism pins, and the digest surface at once).
+
+- **docs: C-1 decision-placement pin ratified
+  (`REWARD_EMISSION_E3_GATING_ROUND.md` §9.5)** — source-verified split:
+  computation is uniformly Rust; decisions are mixed (emission verify
+  Rust-decides via typed errors that `archival_ffi.rs` only maps; the
+  older serve-credit path decides in C++ against LMDB at
+  `blockchain.cpp:4247`/`:4312`/`:4889–4910`). C-1 builds every new
+  consensus **decision** in Rust with C++ as marshaler/applier — the
+  block-level `(P,E)` pass (item 6) takes its verdict from a Rust
+  function rather than mirroring the C++ `std::set` idiom; the connect
+  arm's dedup decision is already Rust (`claimed_epochs_check_and_set`),
+  and the mint application stays C++. The three C++ **serve-credit**
+  decisions — and only those; the C-1 emission block-pass is new code
+  with no C++ predecessor and ships at C-1, never deferred — are queued
+  in `FOLLOWUPS.md` as extraction candidates with
+  the audit and the flip **decoupled at the genesis boundary**: the
+  Rust mirror + equivalence proof + standing KAT is V3.0 pre-genesis
+  (a verification task — divergences found are free fixes before
+  genesis; mirror-then-fix, never mirror-a-fixed-version), and the
+  behavior-preserving decision-site flip is V3.1 (unblocked when the
+  equivalence KAT is green and the flip carries no behavior delta).
+
 - **wallet: GF-4b backing-lineage pre-join wiring — sweep, lineage ladder,
   `BackingSet`; the `REWARD_EMISSION_VIN_PLAN.md` §8.0.3 C-1 activation
   precondition is satisfied**
