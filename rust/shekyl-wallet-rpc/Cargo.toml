@@ -1,0 +1,42 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-wallet-rpc"
+description = "Shekyl-native wallet JSON-RPC server (Phase 4; Engine-backed)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "shekyl_wallet_rpc"
+crate-type = ["lib"]
+
+[[bin]]
+name = "shekyl-wallet-rpc"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "limit"] }
+http = "1"
+base64 = "0.22"
+# Constant-time credential compare for HTTP basic auth (password is a
+# secret under 35-secure-memory.mdc). Same pin as shekyl-scanner.
+subtle = "2"
+tracing = "0.1"
+clap = { version = "4", features = ["derive"] }
+shekyl-logging = { path = "../shekyl-logging" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

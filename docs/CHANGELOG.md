@@ -30,6 +30,18 @@
   the fixture re-pins `expect_equal: true` so a reintroduced split fails
   both legs.
 
+- **wallet-rpc: Phase 4a scaffold — `rust/shekyl-wallet-rpc`**
+  (`WALLET_REWRITE_PLAN.md` Phase 4a; `docs/api/wallet_rpc.yaml`). New
+  Engine-native crate (not the transitional `shekyl-engine-rpc` wallet2
+  FFI bridge): axum JSON-RPC on `POST /` (TCP or `uds://`),
+  `WalletRpcError` / allocated `-29xxx` codes from the OpenAPI contract,
+  single-tenant `Tenant` type, HTTP basic auth middleware, UDS listener,
+  `spawn_in_process` for Shape B CLI, and `get_version` (`api_version: 1`).
+  Other SPECIFIED methods return `-32601 method not found` until their 4b
+  sub-PRs. Binary name `shekyl-wallet-rpc` (coexists with the C++ binary
+  of the same name until Phase 5 deletion — operators must not confuse
+  them).
+
 - **docs: serve-credit C++-decision equivalence audit — design
   (`ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md`, rounds 1–3 + post-closure
   pins CLOSED; implementation go issued 2026-07-09)**. Specifies the V3.0

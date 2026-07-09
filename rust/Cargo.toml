@@ -29,6 +29,12 @@ members = [
     "shekyl-stats",
     "shekyl-archival-retention",
     "shekyl-engine-rpc",
+
+    # Phase 4 Engine-native wallet RPC (docs/api/wallet_rpc.yaml). Replaces
+    # C++ wallet_rpc_server; distinct from transitional shekyl-engine-rpc
+    # (wallet2 FFI bridge, deleted at Phase 5).
+    "shekyl-wallet-rpc",
+
     "shekyl-tx-builder",
     "shekyl-daemon-rpc",
 
