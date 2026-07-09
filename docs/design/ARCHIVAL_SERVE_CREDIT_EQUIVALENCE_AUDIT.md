@@ -1,7 +1,7 @@
 # Archival serve-credit — C++ decision equivalence audit (V3.0)
 
-**Status:** design round 1 (draft for review) — *no implementation yet; awaiting
-go.*
+**Status:** design round 2 — decisions resolved (§9); *no implementation yet;
+awaiting implementation go.*
 **Created:** 2026-07-08
 **Branch / worktree:** `chore/serve-credit-equivalence-audit`
 **Substrate verified at:** `origin/dev` = `ca8edce6b` (PR #273 merged).
@@ -41,9 +41,17 @@ The three C++-decided serve-credit sites, all in
 
 | ID | Site | Decision |
 | --- | --- | --- |
-| **D-SC-A** | `:4247` | per-tx `(P, shard, E)` dedup vs **pre-block LMDB** state (`has_archival_serve_credit_bit`) |
-| **D-SC-B** | `:4297–4317` | derive `H_fire`, guard `H_fire ∈ (0, H_close]`, then **holds-shard-at-`H_fire`** (`archival_bond_holds_shard`) |
+| **D-SC-A** | `:4247` | per-tx `(P, shard, E)` dedup vs **pre-block LMDB** state (`has_archival_serve_credit_bit`) — the key-construction + dedup verdict unit; **composes into D-SC-B as its step-2 predicate** (round 2) |
+| **D-SC-B** | `:4224–4396` | the **full per-tx acceptance-gate decision** `check_archival_serve_credit_input` — the ordered predicate sequence, incl. `H_fire` derivation, `(0, H_close]` guard, and holds-at-`H_fire` (`:4312`) at its core (**wide scope ratified round 2**) |
 | **D-SC-C** | `:4889–4910` | block-level cross-tx `(P, shard, E)` **uniqueness** pass (in-memory set) |
+
+**Round-2 scope note.** D-SC-B was ratified at **wide** scope: rather than the
+minimal derivation-guard-holds triple at `:4297–4317`, the mirror reproduces the
+**entire ordered predicate sequence** of `check_archival_serve_credit_input`
+(§2.2), which pins every reject branch and the branch *ordering*. D-SC-A's dedup
+is one predicate inside that sequence; it stays a **named sub-unit** (the mirror
+composes it) because its `(P,s,E)` key is the object of finding SCE-1 and is
+shared conceptually with D-SC-C's key.
 
 Deliverables: pure-Rust mirrors, a shared KAT fixture + Rust standing KAT, Rust
 fuzz targets, a C++-side equivalence exercise over the same vectors, a findings
@@ -117,35 +125,43 @@ if (m_db->has_archival_serve_credit_bit(resp.p_canonical_id, resp.shard_id, resp
   A-path key. **See finding SCE-1 (§7): the block-level pass builds the same
   logical key little-endian.**
 
-### 2.2 D-SC-B — `H_fire` derivation + guard + holds-at-`H_fire` (`:4297–4317`)
+### 2.2 D-SC-B — the full per-tx acceptance-gate decision (`check_archival_serve_credit_input`, `:4224–4396`)
 
-```cpp
-h_fire = shekyl_archival_challenge_fire_height(h_open, h_close, seal_hash, P_id, shard_id, E);
-if (h_fire == 0 || h_fire > h_close) return false;
-if (!m_db->archival_bond_holds_shard(P_id, shard_id, h_fire)) return false;
-```
+**Wide scope (round 2).** The mirror reproduces the gate's ordered predicate
+sequence and returns the **first failing branch** (as a reason enum) or `Accept`.
+Reproducing the *ordering* is itself audited: a reorder is a behavior change (it
+changes which `MERROR_VER` a malformed vin trips, and can change accept/reject
+when two conditions disagree). The ordered predicates:
 
-- **Decision content that is mirror-worthy:** the `(0, H_close]` guard and the
-  *as-of-`H_fire`* holds decision. This is where the **WS-1 tip-vs-as-of bug**
-  lived (the holds must be evaluated at `H_fire`, never at tip); a mirror makes
-  the as-of semantics explicit and fuzzable.
-- **`H_fire` derivation itself is already Rust** (`challenge.rs::challenge_fire_height`,
-  reached via `shekyl_archival_challenge_fire_height`) and the epoch heights are
-  Rust (`shekyl_archival_epoch_{open,close}_height`). The mirror **calls the same
-  functions** — it does not re-derive `H_fire` (single-source; re-implementing it
-  would be a second copy to drift, the anti-pattern GF4b-6 caught for
-  `eligible_height`).
-- **Marshaled inputs:** `h_open`, `h_close`, `seal_hash: [u8;32]`,
-  `p_canonical_id`, `shard_id`, `settlement_epoch`, and the holdings-as-of query
-  result — modeled as "the set of shards `P` held at height `H_fire`" (a
-  `&BTreeSet<u64>` or a `holds(shard, height) -> bool` closure the C++ backs with
-  `archival_bond_holds_shard`).
-- **Boundary question for review (§10):** how much of the surrounding gate
-  (`:4276–4283` `H_close`-deadline, the `:4261` epoch-ok, `:4269` `good_through`)
-  is part of D-SC-B's mirror vs. left as separate C++ predicates? The FOLLOWUPS
-  item names `:4312` specifically (holds-at-fire); the minimal faithful mirror is
-  the derivation-guard-holds triple. Larger scope = more of the gate audited, but
-  more marshaled surface.
+| # | Site | Predicate | Marshaled input to the mirror |
+| --- | --- | --- | --- |
+| 1 | `:4224–4245` | path-layer / branch-scalar bounds | `c1_layers.len`, `c2_layers.len`, per-branch scalar counts; the `ARCHIVAL_MAX_*` consts |
+| 2 | `:4247` | **(P,s,E) dedup vs pre-block LMDB** (D-SC-A) | the `(P,s,E)` key + `preblock_present: bool` |
+| 3 | `:4254` | bond-record substrate present for `P` | `bond_substrate_present: bool` (C++ backs with `get_archival_bond_hybrid_pubkey`) |
+| 4 | `:4261` | epoch-ok (`E ≥ E_join + 1`) | `settlement_epoch`, `join_epoch` — **reuse `serve_credit_epoch_ok`** (already the Rust mirror) |
+| 5 | `:4269` | `good_through` at `E` | `good_through: bool` (C++ backs with `archival_bond_good_through`) |
+| 6 | `:4279` | `H_close` credit-deadline (`current_height ≤ H_close`) | `current_height`, `h_close` (from `shekyl_archival_epoch_close_height`) |
+| 7 | `:4288` | seal block hash loadable at `H_seal` | `seal_load_ok: bool` (C++ backs with `get_block_hash_from_height`) |
+| 8 | `:4297–4310` | `H_fire` derivation + `(0, H_close]` guard | `h_open`, `h_close`, `seal_hash`, `P_id`, `shard_id`, `E` → **call `challenge_fire_height`** (do not re-derive) |
+| 9 | `:4312` | **holds-shard-at-`H_fire`** | `held_at_fire: bool` (C++ backs with `archival_bond_holds_shard(P, shard, H_fire)`) — the WS-1 tip-vs-as-of site |
+| 10 | `:4321` | shard-registry substrate at `H_fire` | `registry_present: bool` (C++ backs with `get_archival_shard_segment_at_height`) |
+| 11 | `:4336` | challenge leaf-chunk bounds in range | `shard_id`, `leaf_index_in_segment` → **call `shekyl_archival_challenge_leaf_chunk_bounds`** |
+| 12 | `:4353` | leaf-chunk read ok | `leaf_chunk_ok: bool` (C++ backs with `get_curve_tree_leaf_chunk`) |
+| 13 | `:4371` | vin wire tag `== 0x02` | derivable / provided |
+| 14 | `:4387` | **crypto/path/sig FFI verify** | `verify_ok: bool` — **already Rust + already KAT'd (gate-2); provided as a bool, not re-audited here** |
+
+- **The WS-1 as-of semantics** (step 9: holds evaluated at `H_fire`, never at
+  tip) become explicit and fuzzable in the mirror — this is the audit's sharpest
+  target, the site where the tip-vs-as-of bug actually lived.
+- **Single-source, no re-derivation:** steps 4, 8, 11, 14 are *already* Rust; the
+  mirror **calls the same functions** rather than re-implementing them (GF4b-6
+  derive-don't-cache discipline). The mirror's own new logic is the **ordering**
+  and the **first-failing-branch** selection over booleans/values C++ marshals.
+- **Boundary held:** the mirror decides accept/reject *up to and including* the
+  crypto-verify boolean; it does **not** re-implement the crypto verify, the LMDB
+  I/O, or the wire (de)serialization — those stay C++ (and, for verify, existing
+  Rust). This is the "decision moves, marshaling stays" line the V3.1 flip entry
+  draws, applied to the audit.
 
 ### 2.3 D-SC-C — block-level `(P,s,E)` uniqueness (`:4889–4910`)
 
@@ -184,19 +200,25 @@ name `serve_credit_decisions.rs`. No new crate; no new workspace dependency
 **Shape (illustrative signatures, subject to review — not yet written):**
 
 ```rust
-/// D-SC-A: the (P,s,E) LMDB dedup key + membership verdict.
+/// D-SC-A sub-unit: the (P,s,E) LMDB dedup key (BE) + membership verdict.
 pub fn serve_credit_key_be(p_id: &[u8; 32], shard_id: u64, settlement_epoch: u64) -> [u8; 48];
-pub fn serve_credit_dedup_a(key: &[u8; 48], preblock_present: bool) -> DedupVerdict;
 
-/// D-SC-B: guard + holds-at-fire, over an as-of-H_fire holdings oracle.
-pub fn serve_credit_holds_at_fire(inputs: &FireHoldsInputs, held_at_fire: bool) -> HoldsVerdict;
+/// D-SC-B (wide): the full per-tx acceptance-gate decision as the ordered
+/// predicate sequence over marshaled inputs; returns the first failing branch
+/// or Accept. Composes the D-SC-A dedup as step 2 and reuses
+/// `serve_credit_epoch_ok` as step 4; calls (not re-derives) `H_fire`,
+/// leaf-chunk bounds, and takes the crypto-verify result as a bool.
+pub fn serve_credit_gate_decision(inputs: &ServeCreditGateInputs) -> GateVerdict;
 
-/// D-SC-C: block-level (P,s,E) uniqueness over the ordered vin list.
+/// D-SC-C: block-level (P,s,E) uniqueness over the ordered vin list (LE key,
+/// first-collision-wins).
 pub fn serve_credit_block_unique(triples: &[(/*P*/[u8;32], /*s*/u64, /*E*/u64)]) -> BlockUniqueVerdict;
 ```
 
-The verdict enums carry the *reason* (mirroring each C++ `MERROR_VER` branch) so
-the KAT can assert not just accept/reject but which branch fired — a stronger
+`ServeCreditGateInputs` is the round-2 §2.2 table as a struct (the values/booleans
+C++ marshals at each step). `GateVerdict` and `BlockUniqueVerdict` carry the
+*reason* — one variant per C++ `MERROR_VER` branch — so the KAT asserts not just
+accept/reject but **which branch fired and in what order**, a strictly stronger
 equivalence than a bool.
 
 ---
@@ -233,22 +255,19 @@ key-encoding cross-check.
 - **Rust leg (standing KAT):** `tests/serve_credit_equivalence_kat.rs` runs each
   mirror over the fixture, asserts the expected verdict + reason.
 - **C++ leg (live-behavior anchor):** the fixture's "expected" column is what the
-  **live C++ actually does**. Two sub-options — a **decision for review (§10)**:
-  - **(6-A) Shared-JSON-KAT** (the gate-2 shape): a C++ gtest drives the live C++
-    decision over the same vectors and asserts the same expected column. D-SC-C is
-    trivially isolatable (pure, no DB). D-SC-A/B touch `m_db`, so the C++ leg runs
-    them through the existing `archival_serve_credit_integration.cpp` harness
-    (real DB, seeded state) rather than in isolation. **No new FFI.**
-  - **(6-B) Dual-leg FFI** (the economics C2a′ shape): export the mirrors via a
-    test-oriented FFI and have a C++ gtest assert `cpp_decision == ffi_mirror` on
-    identical marshaled inputs — including fuzz-generated ones. **Strongest**
-    equivalence, but adds FFI surface now (the flip warns against exactly this;
-    for an *audit* the surface is test-only and does not route production
-    decisions through Rust, so it stays on the audit side of the audit/flip line).
+  **live C++ actually does**. **Ratified round 2: shared-JSON KAT (6-A), no new
+  FFI.** A C++ gtest drives the live C++ decision over the same vectors and
+  asserts the same expected column. D-SC-C is trivially isolatable (pure, no DB).
+  The wide D-SC-B gate and its D-SC-A dedup touch `m_db`, so the C++ leg runs them
+  through the existing `archival_serve_credit_integration.cpp` harness (real DB,
+  seeded state) rather than in isolation. Any boundary vector the harness cannot
+  reach is recorded in §10 as an escalation trigger, **not** silently dropped.
 
-  **Recommendation:** 6-A for A/B (no premature FFI; the flip owns FFI), plus a
-  direct C++ unit for C. Revisit toward 6-B only if the integration harness can't
-  reach a boundary vector.
+  *Rejected (kept for the record):* the economics-C2a′ **dual-leg FFI** shape
+  (export mirrors via test-only FFI; C++ gtest asserts `cpp == mirror` on
+  identical inputs, incl. fuzz). Strongest, but adds FFI surface now; the flip
+  (V3.1) owns FFI, so the audit stays FFI-free. Reopen only if a boundary vector
+  proves unreachable through the integration harness.
 
 **Fuzz (Rust side, `20-rust-vs-cpp-policy.mdc` #3):** fuzz targets over each
 mirror hunting panics and invariant violations (e.g. D-SC-C: no false-negative on
@@ -279,13 +298,16 @@ collision. Registry row and this doc land in the same PR.
   exists to surface — two byte-level specs for "the `(P,s,E)` key." It also means
   the mirror cannot have one canonical key encoding for free; under §4 it
   reproduces **both** (BE for A, LE for C) faithfully first.
-- **Disposition (proposed, for review):** raise as SCE-1; **do not normalize in
-  the mirror** (mirror-then-fix). Candidate C++ hygiene fix — unify D-SC-C onto
-  `ArchivalServeCreditKey` so one type owns the encoding — is a **behavior-preserving**
-  change (C's set stays internally consistent) and, being free pre-genesis and a
-  latent-hazard removal, is a reasonable standalone commit *after* the mirror
-  proves equivalence against today's split. Alternatively: document the two sets
-  as deliberately independent and leave the encodings. **Owner call.**
+- **Disposition (ratified round 2 — unify-after):** raise as SCE-1; **do not
+  normalize in the mirror** (mirror-then-fix — the mirror reproduces BE for A and
+  LE for C faithfully first). Once the standing equivalence KAT is green against
+  today's split, land a **standalone behavior-preserving C++ commit** unifying
+  D-SC-C's inline key onto `ArchivalServeCreditKey` so one type owns the encoding
+  (C's set stays internally consistent; the change removes the latent drift hazard
+  and is free pre-genesis). The mirror's C-path key then re-points to the BE
+  encoding and the KAT re-proves against the unified C++. Sequencing is
+  load-bearing: **equivalence-proof-first, unify-second** keeps the free
+  pre-genesis correction distinct from the mirror.
 
 Further findings append here as SCE-2, SCE-3, … as the mirror + fuzz surface
 them.
@@ -320,20 +342,25 @@ Same PR adds:
 5. FOLLOWUPS V3.0 item updated to "in progress / landed" with the standing-KAT
    pointer when it lands (rule 91).
 
-## 9. Open decisions for review (the go/no-go questions)
+## 9. Decisions (resolved round 2, 2026-07-08)
 
-1. **D-SC-B scope** (§2.2): minimal derivation-guard-holds triple, or fold in the
-   surrounding `H_close`-deadline / epoch-ok / `good_through` predicates?
-2. **Equivalence mechanism** (§5): 6-A shared-JSON-KAT (recommended, no new FFI) vs
-   6-B dual-leg FFI (strongest, adds test-only FFI now)?
-3. **SCE-1 disposition** (§6): unify the C++ key encoding (standalone
-   behavior-preserving commit, after equivalence proof) vs document-and-leave?
-4. **Identifier family**: confirm `SCE-` (vs folding findings into an existing
-   family).
-5. **Module/name**: `shekyl-archival-retention::serve_credit_decisions` acceptable?
+1. **D-SC-B scope** — **WIDE.** Mirror the full `check_archival_serve_credit_input`
+   ordered predicate sequence (§2.2), with D-SC-A composing in as step 2. ✓
+2. **Equivalence mechanism** — **6-A shared-JSON-KAT, no new FFI** (§5). Dual-leg
+   FFI rejected; reopen only on an unreachable boundary vector. ✓
+3. **SCE-1 disposition** — **unify-after** (§6): mirror faithfully → prove
+   equivalence → standalone behavior-preserving C++ unify commit → re-prove. ✓
+4. **Identifier family** — `SCE-` (collision-free vs §2 registry). *Confirm at
+   go.* 
+5. **Module/name** — `shekyl-archival-retention::serve_credit_decisions`.
+   *Confirm at go.*
+
+Items 4–5 are naming confirmations, not blockers; absent objection they stand as
+written when implementation begins.
 
 ## 10. Review rounds (rule 26 scaffold)
 
 | Round | Date | Outcome |
 | --- | --- | --- |
-| 1 | 2026-07-08 | This draft. Substrate verified at `ca8edce6b`; SCE-1 surfaced on first read. **Awaiting review + go.** |
+| 1 | 2026-07-08 | Draft. Substrate verified at `ca8edce6b`; SCE-1 surfaced on first read. |
+| 2 | 2026-07-08 | Design decisions resolved (§9): D-SC-B **wide** (full gate mirror), equivalence via **shared-JSON KAT** (no FFI), SCE-1 **unify-after**. Doc updated §1.1/§2.2/§3/§5/§6/§9. **Awaiting implementation go.** |
