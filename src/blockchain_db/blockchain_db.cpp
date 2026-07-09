@@ -188,6 +188,7 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
   const transaction &tx = txp.first;
 
   bool miner_tx = false;
+  bool emission_tx = false;
   crypto::hash tx_hash, tx_prunable_hash;
   if (!tx_hash_ptr)
   {
@@ -238,6 +239,28 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
         throw std::runtime_error("FATAL: total_bonded_atomic overflow on bond credit");
       set_total_bonded_atomic(bonded_total + bond.bond_credit);
     }
+    else if (std::holds_alternative<txin_archival_reward_emission>(tx_input))
+    {
+      // C-1 connect arm (REWARD_EMISSION_E3_GATING_ROUND.md §9.5 item 7):
+      // re-extract the claim operands from the opaque blob (the Rust codec is
+      // its only parser) and hand them to the single writer. The pop side
+      // needs no vin arm — the §6.3 journal revert is height-keyed in
+      // pop_block.
+      const auto& emission = std::get<txin_archival_reward_emission>(tx_input);
+      crypto::hash p_canonical_id{};
+      uint64_t vin_epochs[SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS] = {};
+      size_t vin_epochs_len = 0;
+      const uint8_t extract_rc = shekyl_archival_emission_vin_extract(
+        emission.canonical_bytes.data(), emission.canonical_bytes.size(),
+        reinterpret_cast<uint8_t*>(p_canonical_id.data),
+        vin_epochs, SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS, &vin_epochs_len);
+      if (extract_rc != SHEKYL_EMISSION_VIN_OK || vin_epochs_len == 0)
+        throw std::runtime_error("FATAL: unparseable archival emission vin at connect");
+      const uint64_t block_height = get_block_height(blk_hash);
+      apply_archival_emission_claim(block_height, p_canonical_id,
+        std::vector<uint64_t>(vin_epochs, vin_epochs + vin_epochs_len));
+      emission_tx = true;
+    }
     else
     {
       LOG_PRINT_L1("Unsupported input type, aborting transaction addition");
@@ -255,11 +278,17 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
   {
     // Shekyl: minimum tx version is 2, all outputs have on-chain outPk.
     // Coinbase (v3+) stores real Pedersen commitments in outPk via construct_output.
-    if (miner_tx)
+    // Archival emission reward vouts share the coinbase shape — plaintext
+    // amount in the tx (the loud mint), real Pedersen commitment in outPk
+    // (verCtSemanticsEmission verified the balance against it) — so both
+    // store as amount-0 RCT records with the commitment kept, keeping the
+    // output in the FCMP++-spendable class. Emission change vouts are
+    // already amount 0 and are unaffected by the zeroing.
+    if (miner_tx || emission_tx)
     {
       cryptonote::tx_out vout = tx.vout[i];
       CHECK_AND_ASSERT_THROW_MES(i < tx.rct_signatures.outPk.size(),
-        "miner tx outPk missing for output " + std::to_string(i));
+        "tx outPk missing for output " + std::to_string(i));
       rct::key commitment = tx.rct_signatures.outPk[i].mask;
       vout.amount = 0;
       amount_output_indices[i] = add_output(tx_hash, vout, i, tx.unlock_time,
@@ -312,9 +341,14 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   {
     tx_hash = blk.tx_hashes[tx_i];
     add_transaction(blk_hash, tx, &tx_hash);
+    // Emission reward vouts carry a plaintext amount but store as amount-0
+    // RCT records with their outPk commitment (see add_transaction), so they
+    // count as RCT outputs — same treatment as coinbase vouts above.
+    const bool is_emission_tx = std::any_of(tx.first.vin.begin(), tx.first.vin.end(),
+      [](const txin_v& in) { return std::holds_alternative<txin_archival_reward_emission>(in); });
     for (const auto &vout: tx.first.vout)
     {
-      if (vout.amount == 0)
+      if (vout.amount == 0 || is_emission_tx)
         ++num_rct_outs;
     }
     ++tx_i;

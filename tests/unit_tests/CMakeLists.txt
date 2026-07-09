@@ -112,6 +112,7 @@ set(unit_tests_sources
   archival_bond_post.cpp
   archival_bond_post_integration.cpp
   archival_reward_emission.cpp
+  archival_emission_connect.cpp
   archival_segment_freeze.cpp
   archival_substrate_lmdb.cpp
   ct_balance_differential.cpp
@@ -186,6 +187,8 @@ SET_PROPERTY(SOURCE archival_serve_credit_integration.cpp PROPERTY COMPILE_FLAGS
   -DGATE2_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json\\"")
 SET_PROPERTY(SOURCE archival_bond_post_integration.cpp PROPERTY COMPILE_FLAGS
   -DGATE4_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate4_lifecycle_kat_v1.json\\"")
+SET_PROPERTY(SOURCE archival_emission_connect.cpp PROPERTY COMPILE_FLAGS
+  -DEMISSION_CONNECT_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/emission_connect_kat_v1.json\\"")
 
 SET_PROPERTY(SOURCE memwipe.cpp PROPERTY COMPILE_FLAGS -Ofast)
 SET_PROPERTY(SOURCE transfer_details_wipe.cpp PROPERTY COMPILE_FLAGS -Ofast)

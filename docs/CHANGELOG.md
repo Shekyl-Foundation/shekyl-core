@@ -4,6 +4,34 @@
 
 ### Added
 
+- **consensus: C-1 commit-block 5 — connect arm: emission-claim single
+  writer + vout storage shape (§9.5 item 7).** `BlockchainDB::add_transaction`
+  gains the `txin_archival_reward_emission` arm: re-extract
+  `(P_canonical_id, settlement_epochs)` from the opaque blob through
+  `shekyl_archival_emission_vin_extract` (the Rust codec is the only
+  parser; an unparseable vin at connect is a hard error, never a soft
+  skip) and hand them to `apply_archival_emission_claim` — the WS-2
+  single writer whose §6.3 pre-image journal and height-keyed
+  `pop_block` revert are already armed, so the pop side needs no vin
+  arm. Vout storage: emission reward vouts share the coinbase shape
+  (plaintext amount in the tx — the loud mint — real Pedersen
+  commitment in `outPk`, balance already verified by
+  `verCtSemanticsEmission`), so both store as amount-0 RCT records with
+  the commitment kept, keeping them FCMP++-spendable; `add_block`'s
+  `num_rct_outs` counts them and `remove_tx_outputs` keys their removal
+  on amount 0 (connect/pop symmetric). Mint accounting needs no new
+  counter: the staker subsidy entered `already_generated_coins` at
+  accrual (F-C1a), fee-derived budget is recycled circulation, and
+  unclaimed budget is supply never created. KATs: deterministic
+  connect fixture (`emission_connect_kat_v1.json`, length-canonical
+  filler — extraction parses structure, no crypto) generated and
+  drift-pinned by `emission_connect_kat.rs`; C++ side
+  (`archival_emission_connect.cpp`) proves the arm extracts the
+  fixture's operands and calls the single writer once with the
+  connect height, stores both reward and change vouts amount-0 with
+  their `outPk` commitments preserved, and hard-errors on a
+  tag-correct garbage blob without reaching the writer.
+
 - **consensus: C-1 commit-block 4 — activation cut: whitelist flip, CT
   semantics, block-level `(P,E)` Rust-decided pass (§9.5 items 4 + 6 and
   the item-5 CT cross-checks).** `check_inputs_types_supported` now
