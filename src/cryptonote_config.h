@@ -188,6 +188,7 @@
 #define HF_VERSION_2021_SCALING                 1
 #define HF_VERSION_SHEKYL_NG                    1  // Three-component economics: release rate, burn, staking
 #define HF_VERSION_FCMP_PLUS_PLUS_PQC           1  // FCMP++ full-chain membership proofs + per-output PQC keys
+#define HF_VERSION_ARCHIVAL_EMISSION            1  // C-1: staker-inflow redirect (burn -> budget accrual) + archival reward emission claims (ARCHIVAL_BUDGET_SCHEDULE.md §2.2)
 
 // FCMP++ consensus parameters
 //
@@ -299,6 +300,13 @@ namespace config
   constexpr size_t ARCHIVAL_MAX_PATH_LAYERS_PER_KIND = 64;
   constexpr size_t ARCHIVAL_MAX_BRANCH_SCALARS = 256;
   constexpr size_t ARCHIVAL_MAX_HOLDINGS_SHARDS = 4096;
+  // Archival reward-emission vin transport cap (C-1; REWARD_EMISSION_VIN_PLAN.md
+  // PR-E2 shim). The C++ side carries the Rust canonical encoding as an opaque
+  // blob; the real structural bounds live in emission_wire.rs. This cap only
+  // bounds the deserializer's allocation: the wire maximum is dominated by
+  // work_claim (15 epochs x 4096 shard entries x <=14B ~ 860 KiB) + backing
+  // proof (64 KiB) + hybrid keys/sigs (~9 KiB) < 1 MiB.
+  constexpr size_t ARCHIVAL_EMISSION_VIN_MAX_BYTES = 1024 * 1024;
 
   namespace testnet
   {

@@ -31,7 +31,6 @@
 #include "blockchain_db/blockchain_db.h"
 #include "cryptonote_basic/blobdatatype.h" // for type blobdata
 #include "fcmp/rctTypes.h"
-#include "shekyl/shekyl_ffi.h" // epoch-close FFI row structs for ArchivalEmissionEpochSnapshot::to_ffi_*
 #include <boost/thread/tss.hpp>
 
 #include <lmdb.h>
@@ -182,64 +181,9 @@ struct mdb_txn_safe
 };
 
 
-/// The as-of-E consensus snapshot for one claimed settlement epoch, gathered
-/// by `BlockchainLMDB::gather_archival_emission_epoch_snapshot` (M-2/Q7,
-/// REWARD_EMISSION_E3_GATING_ROUND.md §3 item 2). Plain-value rows mirroring
-/// the epoch-close gather shape; the consumer marshals them into the
-/// `shekyl_archival_emission_epoch_snapshot` FFI struct (pointers into these
-/// vectors) for `shekyl_archival_emission_epoch_work`.
-///
-/// Deliberately carries no holdings descriptor (WS-1 §5): the held-and-served
-/// set is the serve-credit rows themselves; tip holdings never enter the work
-/// channel.
-struct ArchivalEmissionEpochSnapshot
-{
-  uint64_t settlement_epoch = 0;
-  /// The close-processing height (E+1)·SEB the close ran at (the shard-age
-  /// operand). NOT H_close(E): that is `shekyl_archival_epoch_close_height(E)`
-  /// = the epoch's last block / credit deadline = (E+1)·SEB − 1, one block
-  /// lower. Source this from `shekyl_archival_epoch_close_processing_height`,
-  /// never the lookalike `shekyl_archival_epoch_close_height`.
-  uint64_t close_block_height = 0;
-  /// Persisted finalized Σwork(E) milli (0 when the epoch closed empty or
-  /// was M1-gated) — the stored denominator, never a recompute.
-  uint64_t sigma_work_milli = 0;
-  struct BondRow
-  {
-    uint64_t join_settlement_epoch = 0;
-    bool is_foundation_complete_tree = false;
-    /// Flattened (start_epoch, end_exclusive) pairs.
-    std::vector<uint64_t> bad_intervals_flat;
-  };
-  struct ShardRow
-  {
-    uint64_t shard_id = 0;
-    uint64_t freeze_height = 0;
-    bool has_segment = false;
-  };
-  struct CreditPair
-  {
-    size_t bond_idx = 0;
-    size_t shard_idx = 0;
-  };
-  std::vector<BondRow> bonds;
-  std::vector<ShardRow> shards;
-  std::vector<CreditPair> credit_pairs;
-  /// Claimant P's index into `bonds`; SIZE_MAX when P has no serve-credit
-  /// row in E (its work is then zero by construction).
-  size_t claimant_bond_idx = SIZE_MAX;
-
-  // Marshal the plain-value rows into the epoch-close FFI arrays. Single
-  // source for the struct→FFI field mapping so the close path
-  // (`process_archival_epoch_close_at_height`), the emission-verify shim, and
-  // the KATs cannot drift on it (WS-1 §5.5 single sourcing — the row *gather*
-  // is single-sourced in `gather_archival_epoch_rows`, this is the marshaling
-  // half). The returned vectors' `bad_intervals_ptr`s alias this snapshot's
-  // `BondRow::bad_intervals_flat`, so the snapshot must outlive them.
-  std::vector<shekyl_archival_epoch_close_bond> to_ffi_bonds() const;
-  std::vector<shekyl_archival_epoch_close_shard> to_ffi_shards() const;
-  std::vector<shekyl_archival_credit_pair> to_ffi_credit_pairs() const;
-};
+// ArchivalEmissionEpochSnapshot (the as-of-E gather's value type) lives on
+// the BlockchainDB interface (blockchain_db.h) since the C-1 verify shim
+// fixed the interface-level signature.
 
 // If m_batch_active is set, a batch transaction exists beyond this class, such
 // as a batch import with verification enabled, or possibly (later) a batch
@@ -393,6 +337,7 @@ public:
                             , uint64_t long_term_block_weight
                             , const difficulty_type& cumulative_difficulty
                             , const uint64_t& coins_generated
+                            , uint64_t archival_budget_accrual
                             , const std::vector<std::pair<transaction, blobdata>>& txs
                             );
 
@@ -501,6 +446,9 @@ private:
   virtual void add_block_burn(uint64_t height, uint64_t amount) override;
   virtual uint64_t get_block_burn(uint64_t height) const override;
   virtual void remove_block_burn(uint64_t height) override;
+  virtual void add_archival_budget_accrual(uint64_t height, uint64_t amount) override;
+  virtual uint64_t get_archival_budget_accrual(uint64_t height) const override;
+  virtual void remove_archival_budget_accrual(uint64_t height) override;
   virtual void set_total_bonded_atomic(uint64_t balance) override;
   virtual uint64_t get_total_bonded_atomic() const override;
   virtual void set_total_burned(uint64_t amount) override;
@@ -548,6 +496,7 @@ private:
   virtual uint64_t get_archival_r_market(uint64_t shard_id,
     uint64_t settlement_epoch) const override;
   virtual uint64_t get_archival_sigma_work_milli(uint64_t settlement_epoch) const override;
+  virtual uint64_t get_archival_budget(uint64_t settlement_epoch) const override;
 
   // Deferred tree leaf insertion (universal: all outputs go through pending)
   virtual void add_pending_tree_leaf(shekyl::db::MaturityHeight maturity, shekyl::db::OutputIndex output, const uint8_t* leaf_data) override;
@@ -640,20 +589,11 @@ public:
   void apply_archival_slash_one(uint64_t block_height, uint32_t& seq, const crypto::hash& p_id,
     uint64_t shard_id, uint64_t settlement_epoch, uint64_t slashed_amount);
 
-  /// Re-derive the as-of-E consensus snapshot for a claimed settlement epoch
-  /// (M-2/Q7, REWARD_EMISSION_E3_GATING_ROUND.md §3 item 2): the same
-  /// serve-credit/bond/shard row gather the close ran at H_close(E) — via the
-  /// one shared gather routine — plus the **persisted** Σwork(E) denominator.
-  /// Sound because every gathered row is immutable for a claimable E: credit
-  /// acceptance rejects responses past H_close, pruning deletes only below
-  /// the claim window's floor, and reorg pops revert close and credits
-  /// symmetrically. Caller gates claimability (epoch closed, claim window)
-  /// before calling; PR-E3's verify shim is the production consumer, the
-  /// snapshot identity KATs the test consumer. Lives on BlockchainLMDB (not
-  /// the BlockchainDB interface) until the verify shim lands and fixes the
-  /// interface-level signature.
-  void gather_archival_emission_epoch_snapshot(const crypto::hash& p_id,
-    uint64_t settlement_epoch, ArchivalEmissionEpochSnapshot& out) const;
+  /// As-of-E consensus snapshot gather — see the BlockchainDB base
+  /// declaration (blockchain_db.h) for the soundness argument and the
+  /// caller contract.
+  virtual void gather_archival_emission_epoch_snapshot(const crypto::hash& p_id,
+    uint64_t settlement_epoch, ArchivalEmissionEpochSnapshot& out) const override;
 
 private:
   /// Single gather routine over the serve-credit rows for `settlement_epoch`
@@ -671,6 +611,9 @@ private:
   void delete_archival_sigma_work_for_epoch(uint64_t settlement_epoch);
   void delete_archival_sigma_work_before_epoch(uint64_t prune_below_epoch);
   void delete_archival_serve_credit_before_epoch(uint64_t prune_below_epoch);
+  void delete_archival_budget_for_epoch(uint64_t settlement_epoch);
+  void delete_archival_budget_before_epoch(uint64_t prune_below_epoch);
+  void delete_archival_budget_accrual_before_height(uint64_t prune_below_height);
   /** M1 reward-gate operand (ARCHIVAL_REWARD_GATE_M1.md §1.1): the single
    * counting read over m_archival_shard_segment, O(1) via the persisted
    * pop-symmetric counter (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4) plus
@@ -699,6 +642,14 @@ public:
    * reader; recorded in the spec's §11.6 R2-2 stored-close reader
    * enumeration. */
   bool has_archival_sigma_work_row(uint64_t settlement_epoch) const;
+  /** Stored-shape probe for the frozen budget row
+   * (ARCHIVAL_BUDGET_SCHEDULE.md §3.3): distinguishes a present-and-zero
+   * `archival_budget` row (closed zero-budget epoch — claimable-shaped but
+   * structurally rejected at wire positivity) from MDB_NOTFOUND (never
+   * closed / pruned — gather failure, reject), which get_archival_budget
+   * deliberately launders to 0. Production consumer is the C-1 emission
+   * verify shim's snapshot gather; also a KAT reader. */
+  bool has_archival_budget_row(uint64_t settlement_epoch) const;
   /** Corruption-simulation writer (ARCHIVAL_REWARD_GATE_M1.md §11.8 M3-2):
    * plants a raw (undecodable) segment-table row so the count-pass
    * decode-failure loud abort is armed by a test. put_archival_shard_segment
@@ -787,6 +738,8 @@ private:
   MDB_dbi m_archival_r_market;        // BE(shard)||BE(E) -> BE(count)
   MDB_dbi m_archival_sigma_work;      // BE(E) -> BE(sigma_milli)
   MDB_dbi m_archival_epoch_close_log; // block_height -> settlement_epoch finalized
+  MDB_dbi m_archival_budget_accrual;  // BE(height) -> BE(staker_inflow) (redirected write, §3.1)
+  MDB_dbi m_archival_budget;          // BE(E) -> BE(budget) frozen at close (§3.2)
 
   MDB_dbi m_pending_tree_leaves;      // BE(maturity)||BE(output) [16B] -> leaf [128B]
   MDB_dbi m_pending_tree_drain;       // BE(block_height)||BE(output) [16B] -> maturity[8]||leaf[128] [136B]

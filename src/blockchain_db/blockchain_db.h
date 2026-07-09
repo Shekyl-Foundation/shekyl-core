@@ -43,6 +43,7 @@
 #include "cryptonote_basic/hardfork.h"
 #include "cryptonote_protocol/enums.h"
 #include "blockchain_db/shekyl_types.h"
+#include "shekyl/shekyl_ffi.h" // epoch-close FFI row structs for ArchivalEmissionEpochSnapshot::to_ffi_*
 
 /** \file
  * Cryptonote Blockchain Database Interface
@@ -392,6 +393,76 @@ class KEY_IMAGE_EXISTS : public DB_EXCEPTION
  * End of Exception Definitions
  ***********************************/
 
+
+/// The as-of-E consensus snapshot for one claimed settlement epoch, gathered
+/// by `gather_archival_emission_epoch_snapshot` (M-2/Q7,
+/// REWARD_EMISSION_E3_GATING_ROUND.md §3 item 2). Plain-value rows mirroring
+/// the epoch-close gather shape; the consumer marshals them into the
+/// `shekyl_archival_emission_epoch_snapshot` FFI struct (pointers into these
+/// vectors) for `shekyl_emission_vin_verify` /
+/// `shekyl_archival_emission_epoch_work`.
+///
+/// Deliberately carries no holdings descriptor (WS-1 §5): the held-and-served
+/// set is the serve-credit rows themselves; tip holdings never enter the work
+/// channel.
+struct ArchivalEmissionEpochSnapshot
+{
+  uint64_t settlement_epoch = 0;
+  /// The close-processing height (E+1)·SEB the close ran at (the shard-age
+  /// operand). NOT H_close(E): that is `shekyl_archival_epoch_close_height(E)`
+  /// = the epoch's last block / credit deadline = (E+1)·SEB − 1, one block
+  /// lower. Source this from `shekyl_archival_epoch_close_processing_height`,
+  /// never the lookalike `shekyl_archival_epoch_close_height`.
+  uint64_t close_block_height = 0;
+  /// Persisted finalized Σwork(E) milli (0 when the epoch closed empty or
+  /// was M1-gated) — the stored denominator, never a recompute.
+  uint64_t sigma_work_milli = 0;
+  /// Frozen `budget(E)` (ARCHIVAL_BUDGET_SCHEDULE.md §3.3): the stored
+  /// close-row value — budget and denominator freeze in the same close
+  /// event; verify never re-sums the accrual rows. Meaningful only when
+  /// `has_budget_row`.
+  uint64_t budget_atomic = 0;
+  /// Whether the frozen `archival_budget` row exists. Absent (never closed
+  /// or pruned) is a gather failure → the verify shim rejects; a
+  /// present-and-zero row is a closed zero-budget epoch, rejected
+  /// downstream by wire positivity, not by the gather.
+  bool has_budget_row = false;
+  struct BondRow
+  {
+    uint64_t join_settlement_epoch = 0;
+    bool is_foundation_complete_tree = false;
+    /// Flattened (start_epoch, end_exclusive) pairs.
+    std::vector<uint64_t> bad_intervals_flat;
+  };
+  struct ShardRow
+  {
+    uint64_t shard_id = 0;
+    uint64_t freeze_height = 0;
+    bool has_segment = false;
+  };
+  struct CreditPair
+  {
+    size_t bond_idx = 0;
+    size_t shard_idx = 0;
+  };
+  std::vector<BondRow> bonds;
+  std::vector<ShardRow> shards;
+  std::vector<CreditPair> credit_pairs;
+  /// Claimant P's index into `bonds`; SIZE_MAX when P has no serve-credit
+  /// row in E (its work is then zero by construction).
+  size_t claimant_bond_idx = SIZE_MAX;
+
+  // Marshal the plain-value rows into the epoch-close FFI arrays. Single
+  // source for the struct→FFI field mapping so the close path
+  // (`process_archival_epoch_close_at_height`), the emission-verify shim, and
+  // the KATs cannot drift on it (WS-1 §5.5 single sourcing — the row *gather*
+  // is single-sourced in `gather_archival_epoch_rows`, this is the marshaling
+  // half). The returned vectors' `bad_intervals_ptr`s alias this snapshot's
+  // `BondRow::bad_intervals_flat`, so the snapshot must outlive them.
+  std::vector<shekyl_archival_epoch_close_bond> to_ffi_bonds() const;
+  std::vector<shekyl_archival_epoch_close_shard> to_ffi_shards() const;
+  std::vector<shekyl_archival_credit_pair> to_ffi_credit_pairs() const;
+};
 
 /**
  * @brief The BlockchainDB backing store interface declaration/contract
@@ -860,6 +931,12 @@ public:
    * @param long_term_block_weight the long term weight of the block (transactions and all)
    * @param cumulative_difficulty the accumulated difficulty after this block
    * @param coins_generated the number of coins generated total after this block
+   * @param archival_budget_accrual the block's redirected staker inflow
+   *   (ARCHIVAL_BUDGET_SCHEDULE.md §3.1); 0 pre-activation or when the inflow
+   *   is zero. Computed by the caller BEFORE add_block so the hardfork
+   *   operand is the connecting block's own validated version, and written
+   *   here (keyed at the block's index) before the epoch-close hook fires,
+   *   so the close of an epoch sees its final block's row (F-B1a/F-B1b).
    * @param txs the transactions in the block
    *
    * @return the height of the chain post-addition
@@ -869,6 +946,7 @@ public:
                             , uint64_t long_term_block_weight
                             , const difficulty_type& cumulative_difficulty
                             , const uint64_t& coins_generated
+                            , uint64_t archival_budget_accrual
                             , const std::vector<std::pair<transaction, blobdata>>& txs
                             );
 
@@ -1929,6 +2007,18 @@ public:
   virtual uint64_t get_block_burn(uint64_t height) const = 0;
   virtual void remove_block_burn(uint64_t height) = 0;
 
+  // Per-height staker-inflow accrual row (`archival_budget_accrual`,
+  // ARCHIVAL_BUDGET_SCHEDULE.md §3.1) — the post-activation target of the
+  // single `staker_inflow` write whose pre-activation target is the burn
+  // record above (§2.2 redirect-the-write; exactly one target per block).
+  // Same idiom as the burn record: written only when nonzero, absent height
+  // reads as 0, pop removes the height row. The rows are summed once per
+  // epoch into the frozen `archival_budget` close row and pruned with the
+  // epoch family.
+  virtual void add_archival_budget_accrual(uint64_t height, uint64_t amount) = 0;
+  virtual uint64_t get_archival_budget_accrual(uint64_t height) const = 0;
+  virtual void remove_archival_budget_accrual(uint64_t height) = 0;
+
   virtual void set_total_bonded_atomic(uint64_t balance) = 0;
   virtual uint64_t get_total_bonded_atomic() const = 0;
 
@@ -2023,6 +2113,26 @@ public:
   virtual void revert_archival_epoch_close_at_height(uint64_t block_height);
   virtual uint64_t get_archival_r_market(uint64_t shard_id, uint64_t settlement_epoch) const;
   virtual uint64_t get_archival_sigma_work_milli(uint64_t settlement_epoch) const;
+  /// Frozen `budget(E)` close row (ARCHIVAL_BUDGET_SCHEDULE.md §3.2): the
+  /// bounded accrual-row sum the close materialized in the same txn as the
+  /// sigma row. NOTFOUND is laundered to 0 like the sigma getter; the
+  /// verify-side gather distinguishes absent-row (never closed / pruned →
+  /// reject) via the stored-shape probe on the LMDB class.
+  virtual uint64_t get_archival_budget(uint64_t settlement_epoch) const;
+  /// Re-derive the as-of-E consensus snapshot for a claimed settlement epoch
+  /// (M-2/Q7, REWARD_EMISSION_E3_GATING_ROUND.md §3 item 2): the same
+  /// serve-credit/bond/shard row gather the close ran at H_close(E) — via the
+  /// one shared gather routine — plus the **persisted** Σwork(E) and
+  /// budget(E) close rows. Sound because every gathered row is immutable for
+  /// a claimable E: credit acceptance rejects responses past H_close, pruning
+  /// deletes only below the claim window's floor, and reorg pops revert close
+  /// and credits symmetrically. Caller gates claimability (epoch closed,
+  /// claim window) before calling; the C-1 emission dispatch in
+  /// `Blockchain::check_tx_inputs` is the production consumer, the snapshot
+  /// identity KATs the test consumer. Default resets `out` (has_budget_row
+  /// false → the dispatch rejects).
+  virtual void gather_archival_emission_epoch_snapshot(const crypto::hash& p_id,
+    uint64_t settlement_epoch, ArchivalEmissionEpochSnapshot& out) const;
 
   // ─── Deferred Staked Leaf Insertion ─────────────────────────────────────────
 

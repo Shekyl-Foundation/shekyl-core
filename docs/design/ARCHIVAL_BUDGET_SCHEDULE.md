@@ -1,12 +1,13 @@
 # Archival budget schedule (gate 1) — `budget(E)` production
 
-**Status:** DRAFT — spec-first round opened 2026-07-08 per the F-C1a
-ratification ([`REWARD_EMISSION_E3_GATING_ROUND.md`](REWARD_EMISSION_E3_GATING_ROUND.md)
-§9.3: direction ratified — accumulator, frozen-close-row, under-mint-on-expiry
-— **not build-ready** until this spec pins the straddle transition, the
-reorg-across-fork KAT, and zero-budget-epoch handling). Awaiting ratification;
-C-1's budget commit-block builds against this document, not against §9.3's
-recommendation bullet.
+**Status:** RATIFIED 2026-07-08 — spec-first round opened same day per the
+F-C1a ratification ([`REWARD_EMISSION_E3_GATING_ROUND.md`](REWARD_EMISSION_E3_GATING_ROUND.md)
+§9.3: direction ratified — accumulator, frozen-close-row, under-mint-on-expiry),
+refined through review (provenance/source-chain verification, §6
+integer-determinism pins, §2.2 coinbase-foreclosure pin + KAT B5, servo-scale
+note), and ratified with the C-1 build opening (PR #273 merged; the C-1
+budget commit-block builds against this document, not against §9.3's
+recommendation bullet).
 
 **Scope:** the gate-1 budget schedule source that
 [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) (:20–21) scopes out of the
@@ -27,8 +28,11 @@ cryptographic dependence).
 
 ## 1. The quantity
 
-Every block already computes a **staker inflow** at its connect site
-(`blockchain.cpp:5011–5041`):
+Every block computes a **staker inflow** at its connect site — since the
+F-B1a/F-B1b remediation, in `handle_block_to_main_chain`'s pre-`add_block`
+redirect block (`blockchain.cpp:5352–5398`), so the fork operand is the
+connecting block's own validated version and the amount can ride into
+`add_block` ahead of the epoch-close hook:
 
 ```text
 staker_inflow(h) = em_split.staker_emission + burn.staker_pool_amount
@@ -37,15 +41,35 @@ staker_inflow(h) = em_split.staker_emission + burn.staker_pool_amount
 - `staker_emission`: the staking share of block emission,
   `compute_emission_split` (`src/shekyl/economics.h:69–91`) — zero when
   `hf_version < HF_VERSION_SHEKYL_NG` or `block_emission == 0`, else the
-  decayed share (`shekyl_calc_emission_share`).
+  decayed share (`shekyl_calc_emission_share`). The split operand is
+  verify's **modulated** `base_reward` (6-arg `get_block_reward`:
+  weight-penalized, release-scaled — the F-B1c-c2 disposition-(a)
+  remediation, gating round §9.9), the same quantity the coinbase is
+  bound against and `already_generated_coins` advances by. Conservation
+  is by construction: `base_reward = miner_emission (coinbase) +
+  staker leg (burned | accrued)`, so `budget(E)` is exactly "ledger
+  minus coinbase" and claiming cannot inflate. Consequence: `budget(E)`
+  floats with the release multiplier and weight penalty — whether
+  archival funding should instead be demand-insulated is the §9.9
+  (b)-reopen sim question. Genesis (h = 0) computes no inflow: its
+  emission is the hardcoded `GENESIS_TX` amount, paid whole by the
+  genesis coinbase.
 - `staker_pool_amount`: the staker share of the fee burn,
   `compute_fee_burn` (`economics.h:55–60`) — **fee-dependent, per-block,
   not recomputable from schedule alone.**
 
-Today the inflow is **destroyed**: added to `burn.actually_destroyed`,
-recorded in the per-height burn row, accumulated into `total_burned`
-(`:5026–5040`), with the in-code comment naming the C-1 activation as the
-redirect that funds `txin_archival_reward_emission` payouts.
+Pre-activation the inflow is **destroyed**: added to the block's burn
+amount, recorded in the per-height burn row, accumulated into
+`total_burned`. Post-activation (the landed C-1 redirect) it is
+**accrued**: passed into `BlockchainDB::add_block` as the
+`archival_budget_accrual` operand and written to the per-height accrual
+row before the connect hooks fire (§3.1), funding
+`txin_archival_reward_emission` payouts. Both targets take the same
+modulated quantity, so the redirect is a **pure destination switch** —
+one write, one target, identical amount on either side of the
+activation boundary (§2.2's invariant; the pre-F-B1c-c2 shape burned
+an unmodulated, over-sized leg, which was benignly deflationary as a
+burn but would have been an inflation surface as a budget).
 
 **Provenance of the amounts.** The constants (15% emission share, 0.90/yr
 decay, 25% fee-pool share) are the Component-4 bootstrap-subsidy economics
@@ -145,9 +169,26 @@ pre-activation block:   staker_inflow(h) → burn record      (destroyed;   land
 post-activation block:  staker_inflow(h) → budget accrual   (emittable;   this spec)
 ```
 
-Target selection is by **that block's own height's fork status** —
-`m_hardfork->get_version(h)`, not tip state. Three properties follow by
-construction:
+Target selection is by **that block's own height's fork status** — never
+the tip's. Implementation note (F-B1b, hardened during the c2 review):
+the connect site keys the redirect on **`bl.major_version`** — the
+block's own declared version, consensus-bound by `m_hardfork->check(bl)`
+(`do_check`: `bl.major_version ==` the voted current version) before the
+redirect block is reachable. This is explicit per-block anchoring with no
+API convention to reason about. The rejected alternatives:
+`get_current_version()` read pre-`add_block` *happens* to equal
+`bl.major_version` (the previous block's `HardFork::add` advanced
+`current_fork_index` via `get_voted_fork_index(height + 1)`, the
+connecting block's own voted version) — correct-but-fragile, resting on
+the height+1 advance convention this pin was written to stop depending
+on, and outright wrong if read post-add (the original F-B1b bug: the
+*next* block's version, one-block-early flip at activation).
+`get_ideal_version(h)` is the static-table lookup and ignores the vote
+threshold, so it can disagree with the version the block was validated
+as. A CI tripwire (`scripts/ci/check_archival_reward_gates.sh`) fails
+the gate on any `get_current_version` / `get_ideal_version` /
+`get_block_reward` reintroduction inside the redirect block. Three
+properties follow by construction:
 
 1. **The straddle is correct.** Each block's inflow lands in exactly one
    of {destroyed, emittable}; `budget(E_flip)` is automatically the
@@ -160,10 +201,12 @@ construction:
 3. **Reorg symmetry is inherited, not re-proven.** The burn record's
    pop path (`blockchain.cpp:820–827`: read the height row, decrement
    `total_burned`, remove the row) is the landed idiom; the accrual row
-   mirrors it (§3.1). A parallel always-running accumulator would need
-   its own symmetry proof and would record emittable budget for blocks
-   whose inflow was actually burned — the precise ambiguity this section
-   forecloses.
+   mirrors it at the DB layer (§3.1: connect write in
+   `BlockchainDB::add_block`, pop removal in `BlockchainDB::pop_block`,
+   both inside the block's wtxn). A parallel always-running accumulator
+   would need its own symmetry proof and would record emittable budget
+   for blocks whose inflow was actually burned — the precise ambiguity
+   this section forecloses.
 
 **Conservation invariant (armed by KAT B1):** for every connected block,
 
@@ -221,13 +264,20 @@ Mirror of the burn record (`add_block_burn` / `get_block_burn` /
 
 - **Table** `archival_budget_accrual`: key `BE(height)` → value `u64-BE`
   amount.
-- **Connect:** written only when `staker_inflow(h) > 0` (absent key reads
-  as 0, the burn-row convention). The burn row for the same block carries
-  only the genuinely destroyed portion — `staker_inflow` is **not** added
-  to `actually_destroyed` post-activation, and `total_burned` no longer
+- **Connect:** the amount rides into `BlockchainDB::add_block` as the
+  `archival_budget_accrual` parameter and is written **before the
+  slash/close hooks fire**, in the same wtxn — so the close of epoch E
+  (fired while connecting E's final block) sees that block's row in its
+  range-sum (F-B1a: writing after `add_block` returned dropped the final
+  block of every epoch from its own `budget(E)`). Written only when
+  `staker_inflow(h) > 0` (absent key reads as 0, the burn-row
+  convention). The burn row for the same block carries only the
+  genuinely destroyed portion — `staker_inflow` is **not** added to
+  `actually_destroyed` post-activation, and `total_burned` no longer
   includes it.
-- **Pop:** remove the height row (exact mirror of `remove_block_burn` at
-  `blockchain.cpp:827`).
+- **Pop:** remove the height row in `BlockchainDB::pop_block` (keyed at
+  the block's index, the claim-journal convention), mirroring the
+  connect-side write in the same layer and wtxn.
 
 No running total is kept for the accrual side pre-close: the per-height
 rows *are* the state, and their pop symmetry is key deletion — nothing to
@@ -358,11 +408,20 @@ the FFI.
 | **B4** | **Zero-budget epoch.** `budget(E) = 0` (no accrual rows in E): builder predicate omits E; a hand-built vin claiming E rejects at wire positivity (zero row unencodable) and a positive-amount forgery rejects at the economics compare. | §5; the M1 §2.3 timing-window closure extended to the budget factor |
 | **B5** | **Fee-bearing coinbase foreclosure.** A fee-bearing block whose coinbase pays exactly `miner_emission + miner_fee_income` accepts; a coinbase additionally claiming `staker_pool_amount` (or `staker_emission`) rejects at `validate_miner_transaction`'s exact-equality check. Closes the fee-side gap the standing `economics_c2a_prime` tests leave (they run fee-free blocks; §2.2's pin). | §2.2's coinbase-foreclosure pin; the cross-function dependency nothing in the budget code references |
 
-B1/B2/B3 are C++ substrate KATs (`archival_substrate_lmdb.cpp` family);
+B1/B2/B3 are C++ substrate KATs (`archival_substrate_lmdb.cpp` family)
+that drive the accrual/close/revert DB API directly — which is why none
+of them could see the F-B1a connect-*ordering* bug. The production-path
+complement
+(`budget_epoch_boundary_includes_final_block_through_real_block_path`,
+same file) drives accrual amounts through the real
+`add_block`/`pop_block` and asserts the close of epoch E includes E's
+final block's row, plus pop/re-connect byte-identity of the frozen row.
 B4 spans the Rust wire/verify KATs (landed classes) plus the builder-side
-omission test when the claim-builder lands. B5 is a core-tests
-connect-path KAT (`economics_c2a_prime.cpp` family) armed by the C-1
-build.
+omission test when the claim-builder lands. B5 landed as unit-level KATs
+(`economics_b5_fee_coinbase.cpp`) driving `validate_miner_transaction`
+directly; the connect-path block form defers with the chaingen FCMP++
+fee-transaction gap (see the commit-block 6 landed status in §2.2's
+follow-on notes below).
 
 ## 8. Rule-21 reopenings
 
@@ -441,3 +500,29 @@ reads `archival_budget` until dispatch lands — so the atomic-flip shape of
 the round's §9.6 rule-07 check is unchanged). The rest of the §9.5 build
 list consumes `budget(E)` **as defined here**: "emittable inflow for E,"
 never "all inflow for E."
+
+**Landed status (C-1 commit-block 1, 2026-07-08):** §3.1 accrual row
+(`add/get/remove_archival_budget_accrual`, burn-record idiom, pop wired
+beside `remove_block_burn`), §2.2 redirect-the-write at the connect site
+(gated on `HF_VERSION_ARCHIVAL_EMISSION`, the connecting block's own fork
+version), §3.2 frozen close row (bounded range-sum in the sigma txn;
+revert deletes with the close family; prune joins the epoch family), §3.3
+snapshot gather (`has_budget_row` stored-shape probe + `budget_atomic`),
+and KATs **B1/B2/B3** (`archival_substrate_lmdb.cpp` budget family). B4's
+builder half arms with the claim-builder.
+
+**Landed status (C-1 commit-block 6, 2026-07-09):** KAT **B5** landed as
+unit-level KATs (`economics_b5_fee_coinbase.cpp`) driving the production
+decision site `validate_miner_transaction` directly (via the standing
+`IN_UNIT_TESTS` seam) with fee-bearing operands recomposed through the
+same single-evaluator helpers the check calls
+(`compute_emission_split`/`compute_fee_burn`): exact
+`miner_emission + miner_fee_income` accepts (with the fix-α full-subsidy
+out-param pinned), coinbase additionally claiming `staker_pool_amount`
+or `staker_emission` rejects, and an underclaim rejects — §2.2's
+"exactly" is two-sided. The connect-path *block* vehicle
+(`economics_c2a_prime.cpp` family) defers with the chaingen FCMP++
+fee-transaction gap: the harness cannot build fee-paying FCMP++
+transactions, so a fee-bearing block cannot be assembled there; the
+*decision* B5 arms is the same `:1611`/`:1616` exact-equality check the
+connect path calls with the block's fee summary.

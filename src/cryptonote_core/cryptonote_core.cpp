@@ -1012,6 +1012,10 @@ namespace cryptonote
       {
         continue;
       }
+      else if (std::holds_alternative<txin_archival_reward_emission>(in))
+      {
+        continue;
+      }
       else
       {
         CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, tokey_in, false);
@@ -1030,6 +1034,8 @@ namespace cryptonote
         continue;
       if (std::holds_alternative<txin_archival_bond_post>(in))
         continue;
+      if (std::holds_alternative<txin_archival_reward_emission>(in))
+        continue;
       CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, tokey_in, false);
       for (size_t n = 1; n < tokey_in.key_offsets.size(); ++n)
         if (tokey_in.key_offsets[n] == 0)
@@ -1046,6 +1052,8 @@ namespace cryptonote
       if (std::holds_alternative<txin_archival_serve_credit_response>(in))
         continue;
       if (std::holds_alternative<txin_archival_bond_post>(in))
+        continue;
+      if (std::holds_alternative<txin_archival_reward_emission>(in))
         continue;
       CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, tokey_in, false);
       if (rct::ki2rct(tokey_in.k_image) == rct::identity())

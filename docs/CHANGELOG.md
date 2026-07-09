@@ -2,7 +2,359 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **consensus: C-1 emission review hardening (PR #277 review,
+  `REWARD_EMISSION_E3_GATING_ROUND.md` §9.5).** Batch of
+  correctness/robustness fixes from the high-effort review of the
+  reward-emission activating cut:
+  - *Raw unverified import fails closed on emission-active blocks.*
+    The `--dangerous-unverified-import` path called `add_block` with
+    `archival_budget_accrual = 0`, so the epoch close froze a
+    present-and-zero (structurally non-claimable) `budget(E)` for every
+    epoch — an import-synced node would then *reject* live emission txs
+    the network accepts (a silent consensus split, not the bookkeeping
+    parity the old comment claimed). Since emission is active from
+    genesis, raw import cannot produce the accrual (verify's
+    `base_reward` + fee summary) without re-deriving the operands the
+    connect path deliberately single-sources (F-B1b); it now aborts on
+    any non-genesis block with a message pointing to verifying import.
+    Whether the fast unverified path is worth re-deriving the split for
+    is a testnet-stress-test question.
+  - *Zero-plaintext-vout ban gated on the full emission classification.*
+    `check_tx_outputs` skipped the v3 zero-amount-vout ban on a bare
+    `emission_vins == 1` count, which also exempted a malformed tx
+    pairing an emission vin with a bond-post; it now uses the same
+    strict classification as `check_tx_inputs`.
+  - *Archival tx-kind predicate single-sourced.* The
+    bond-post/emission/serve-credit taxonomy was open-coded in
+    `check_tx_inputs`, `check_tx_outputs`, and `ver_non_input_consensus`;
+    it now lives once in `classify_archival_tx` (`cryptonote_basic.h`),
+    so the three consensus sites cannot drift on what a tx *is*.
+  - *Emission-vout storage predicate single-sourced.* The
+    store (`add_transaction`) and remove (`remove_tx_outputs`) sides of
+    the amount-0 emission-vout treatment now share
+    `tx_has_archival_emission_vin`, so a pop cannot disagree with the
+    add.
+  - *CT-balance tail de-duplicated.* `verCtSemanticsEmission` and
+    `verRctSemanticsBondPost` shared a near-verbatim flatten +
+    balance-FFI + Bulletproof+ tail; extracted to
+    `verArchivalCtBalanceAndRange`, called with each path's
+    (credit, debit) operands.
+  - *Emission reward-sum arithmetic moved to Rust (rule 20).* The
+    hand-rolled C++ overflow-checked vout-amount summation (two copies)
+    now routes through `shekyl_checked_sum_amounts`, single-sourcing the
+    inflation-audit operand across `check_tx_inputs` and the CT-balance
+    shape check.
+  - *Emission wire tag named.* The bare `0x04` literal at three C++
+    sites (transport guard, `VARIANT_TAG`, JSON echo) is now
+    `TXIN_ARCHIVAL_REWARD_EMISSION_WIRE_TAG`, mirroring Rust's wire tag.
+  - *Stale dispatch comment corrected:* the C-1 emission branch is LIVE
+    from genesis (the whitelist flip landed in this cut), not the
+    "gate-last / unreachable" the old comment claimed.
+  Two review items were assessed as refuted, not deferred: the
+  block-level (P,E) re-parse is load-bearing (the sole parse on the
+  `PER_BLOCK_CHECKPOINT` fast path, where `check_tx_inputs` is skipped),
+  and the `canonical_bytes` container serializer has no pre-allocation
+  DoS (`remaining_bytes() < cnt` guard + no-op reserve) — changing it
+  would be a rule-42 wire change for a micro-opt. The FFI-surface
+  ergonomics finding (grouping `shekyl_emission_vin_verify`'s 22
+  positional args into `#[repr(C)]` structs) is a separate follow-up on
+  its own validation surface.
+
+- **consensus: redirect keys on bl.major_version + CI tripwire (F-B1b
+  hardening, `REWARD_EMISSION_E3_GATING_ROUND.md` §9.9,
+  `ARCHIVAL_BUDGET_SCHEDULE.md` §2.2).** The burn-vs-accrue decision
+  read `get_current_version()` — correct pre-`add_block` (verified at
+  source: the previous block's `HardFork::add` advances to the
+  connecting block's own voted version, and `m_hardfork->check(bl)`
+  enforces `bl.major_version == get_current_version()` upstream), but
+  resting on the height+1 advance convention §2.2 pins against, and
+  keyed to a different height notion than the split it gates. Now keys
+  on `bl.major_version` — the block's own consensus-checked version,
+  explicit and convention-free. New grep tripwire in
+  `scripts/ci/check_archival_reward_gates.sh` (consensus-invariants
+  gate) fails on `get_block_reward` / `get_current_version` /
+  `get_ideal_version(` inside the redirect block, with positive anchor
+  checks so block moves can't silently retire it; verified armed. The
+  end-to-end conservation KAT (activation-boundary fixture, core-tests
+  harness) is the prioritized fast-follow — `docs/FOLLOWUPS.md` V3.0.
+
+- **consensus: budget emission leg uses verify's modulated base_reward
+  (F-B1c-c2 disposition (a), `REWARD_EMISSION_E3_GATING_ROUND.md` §9.9,
+  `ARCHIVAL_BUDGET_SCHEDULE.md` §1).** The staker-inflow emission leg
+  derived from the 5-arg `get_block_reward` (no release multiplier, no
+  weight penalty) while the coinbase and the supply-ledger advance use
+  the 6-arg modulated `base_reward`. The unmodulated leg predates C-1
+  and was benignly deflationary as a burn (over-destroying); the C-1
+  redirect inverted its sign — an over-sized accrual makes the excess
+  re-mintable through emission claims, coins `already_generated_coins`
+  never counted (an inflation surface, merge-blocker class). Both legs
+  (pre-activation burn, post-activation accrual) now split verify's
+  `base_reward` itself: conservation by construction
+  (`base_reward = coinbase + staker leg`), and the redirect becomes a
+  pure destination switch — same quantity, burn-vs-accrue on the
+  block's own version. Genesis computes no inflow (its hardcoded
+  emission is paid whole by the genesis coinbase). Disposition (b)
+  (demand-insulated budget) rejected with a rule-21 sim-gated reopen —
+  see §9.9 and the `docs/FOLLOWUPS.md` V3.0 item.
+
+- **consensus: budget accrual ordering and redirect operands (F-B1a /
+  F-B1b / F-B1c-c1, `REWARD_EMISSION_E3_GATING_ROUND.md` §9.9,
+  `ARCHIVAL_BUDGET_SCHEDULE.md` §§1–3).** The staker-inflow accrual row
+  was written after `m_db->add_block` returned — after the epoch-close
+  hook had already range-summed the epoch — so every `budget(E)` dropped
+  its final block's inflow (F-B1a, per-epoch under-mint and a §2.2
+  conservation violation). The redirect gate read
+  `get_current_version()` post-add, the *next* block's version, flipping
+  the redirect one block early at an activation boundary (F-B1b). And
+  the accrual site called `compute_fee_burn` with `tx_volume = 0`,
+  zeroing the fee-pool half of the inflow and the destroyed share's
+  burn record (F-B1c-c1). Structural fix: the computation moved before
+  `add_block` (block's own validated version; verify's exact
+  `get_tx_volume_avg` operand), the amount rides into
+  `BlockchainDB::add_block` as a new `archival_budget_accrual`
+  parameter written before the connect hooks, and the pop-side removal
+  moved into `BlockchainDB::pop_block` (same layer, same wtxn). New
+  production-path KAT
+  (`budget_epoch_boundary_includes_final_block_through_real_block_path`)
+  crosses the epoch-0 boundary through real `add_block`/`pop_block`,
+  verified armed against the F-B1a ordering. The emission-quantity
+  operand drift (F-B1c-c2, 5-arg vs 6-arg `get_block_reward`) was
+  initially parked pending spec adjudication and is resolved by the
+  entry above.
+
+- **consensus: emission connect-arm height operands (F-B5a / F-B5b,
+  `REWARD_EMISSION_E3_GATING_ROUND.md` §9.8).** The emission arm in
+  `BlockchainDB::add_transaction` derived its height via
+  `get_block_height(blk_hash)` before the block's `block_heights` row
+  exists, throwing `BLOCK_DNE` on every block carrying an emission vin
+  (F-B5a) — it now reads `height()`, the connecting block's index and
+  verify's pin-(b) operand. `pop_block` passed its post-block chain
+  height (N+1) to the claim-journal revert keyed on the block index N,
+  making the revert a silent no-op that left the claimed-epoch set
+  standing across a pop (F-B5b) — it now reverts at
+  `removed_block_height - 1`. New real-LMDB KAT
+  (`emission_connect_pop_roundtrip_through_real_block_path`) drives the
+  shared fixture vin through the real `add_block → pop_block` machinery
+  and was verified armed against each finding independently; the
+  fixture's claimed epochs moved to {1, 2} to keep the chain build
+  short.
+
+- **consensus: bond-post connect arm carried the same latent
+  `get_block_height`-before-write crash (F-B5a sibling, pre-dating
+  C-1)** — same `height()` fix, so a JoinMarket bond-post vin connects
+  instead of throwing `BLOCK_DNE`. New real-LMDB KAT
+  (`bond_post_connect_pop_roundtrip_through_real_block_path`) connects a
+  bond-post through the real `add_block` path, pins the join epoch to
+  the real connect height, and pops it back off.
+
 ### Added
+
+- **docs: C-1 review closure recorded — blocks 3 and 5 pass at file:line;
+  `IMPLEMENTATION_INDEX.md` emission rows updated to code (rule 94).**
+  Block 3 (F-C1c `signable_tx_hash`, §9.6 pin): the emission vin is
+  removed wholesale from a `transaction_prefix` copy
+  (`blockchain.cpp:3889–3894`, true structural erase, not a
+  zeroed placeholder), and the arity-1 classification gates the branch
+  ahead of the hash by control flow (`:3388–3421` → `:3779`), with the
+  whitelist's `emissions > 1` reject as the second independent layer.
+  Block 5 (WS-2 journal, §6.3): the connect writer journals the full
+  pre-mutation claim state before mutating (`db_lmdb.cpp:5748–5757`,
+  same write txn — atomic), and the prune-straddle KAT's primary
+  assertion is re-claim *rejection* after pop + rebuild
+  (`archival_substrate_lmdb.cpp:1628–1631`), byte-identity the
+  corollary. No findings; the C-1 consensus surface is reviewed end to
+  end. The `IMPLEMENTATION_INDEX.md` §2 PR-E row and §5 emission-leg
+  row now lead with **C-1 IMPLEMENTED — in review (PR #277)**, blocks
+  4–6 recorded (previously listed as "still missing"), residue named
+  (wallet-side claim builder + regtest e2e, conservation-KAT
+  fast-follow).
+
+- **consensus: Q11 balance-exclusion arming KAT — the ratified reopen
+  trigger (`REWARD_EMISSION_E3_GATING_ROUND.md` §2.2).** New unit KATs
+  (`archival_emission_ct_balance.cpp`) pin that the emission vin's
+  membership-only backing pseudo-out is structurally excluded from the
+  CT balance: `backing_identity_O_vs_O_prime` asserts two txs differing
+  only in the backing commitment (backing-on-O vs backing-on-O′) balance
+  bit-identically through the production `verCtSemanticsEmission` with
+  dispatch-derived operands — catching the coordinated regression where
+  the backing is summed and the `pseudoOuts.size() == fee_input_count`
+  check is bumped in lockstep (the naive append already trips the size
+  assert). `backing_inclusion_shape_rejects_in_production` proves the
+  teeth: a fixture balanced *only* with the backing on the pseudo side
+  rejects in production while the manually-included shape passes the
+  underlying single-sourced balance FFI, so the rejection is the Q11
+  exclusion working, not an unrelated malformation. Flipping these
+  tests is the §2.2 reopen signal, not a test to update in lockstep.
+
+- **economics: C-1 commit-block 6 — KAT B5 fee-bearing coinbase
+  foreclosure; regtest e2e deferral recorded (§9.5 item 8,
+  `ARCHIVAL_BUDGET_SCHEDULE.md` §7).** New unit KATs
+  (`economics_b5_fee_coinbase.cpp`) drive the production decision site
+  `validate_miner_transaction` directly (standing `IN_UNIT_TESTS` seam)
+  with fee-bearing operands recomposed through the same single-evaluator
+  helpers the check calls: exact `miner_emission + miner_fee_income`
+  accepts (fix-α full-subsidy out-param pinned), coinbase additionally
+  claiming `staker_pool_amount` or `staker_emission` rejects, and an
+  underclaim rejects — the §2.2 coinbase-foreclosure pin's "exactly" is
+  two-sided. Closes the fee-side gap the `economics_c2a_prime` tests
+  leave (fee-free blocks). The connect-path block vehicle defers with
+  the chaingen FCMP++ fee-transaction gap, and the §9.5 item 8 regtest
+  e2e defers on the wallet-side claim builder (no production path can
+  assemble an emission tx yet; a hand-rolled test builder would prove a
+  parallel path) — filed in `docs/FOLLOWUPS.md` (V3.0 pre-genesis, E4/E5
+  gate) with the claim-builder landing as the reopening trigger.
+
+- **consensus: C-1 commit-block 5 — connect arm: emission-claim single
+  writer + vout storage shape (§9.5 item 7).** `BlockchainDB::add_transaction`
+  gains the `txin_archival_reward_emission` arm: re-extract
+  `(P_canonical_id, settlement_epochs)` from the opaque blob through
+  `shekyl_archival_emission_vin_extract` (the Rust codec is the only
+  parser; an unparseable vin at connect is a hard error, never a soft
+  skip) and hand them to `apply_archival_emission_claim` — the WS-2
+  single writer whose §6.3 pre-image journal and height-keyed
+  `pop_block` revert are already armed, so the pop side needs no vin
+  arm. Vout storage: emission reward vouts share the coinbase shape
+  (plaintext amount in the tx — the loud mint — real Pedersen
+  commitment in `outPk`, balance already verified by
+  `verCtSemanticsEmission`), so both store as amount-0 RCT records with
+  the commitment kept, keeping them FCMP++-spendable; `add_block`'s
+  `num_rct_outs` counts them and `remove_tx_outputs` keys their removal
+  on amount 0 (connect/pop symmetric). Mint accounting needs no new
+  counter: the staker subsidy entered `already_generated_coins` at
+  accrual (F-C1a), fee-derived budget is recycled circulation, and
+  unclaimed budget is supply never created. KATs: deterministic
+  connect fixture (`emission_connect_kat_v1.json`, length-canonical
+  filler — extraction parses structure, no crypto) generated and
+  drift-pinned by `emission_connect_kat.rs`; C++ side
+  (`archival_emission_connect.cpp`) proves the arm extracts the
+  fixture's operands and calls the single writer once with the
+  connect height, stores both reward and change vouts amount-0 with
+  their `outPk` commitments preserved, and hard-errors on a
+  tag-correct garbage blob without reaching the writer.
+
+- **consensus: C-1 commit-block 4 — activation cut: whitelist flip, CT
+  semantics, block-level `(P,E)` Rust-decided pass (§9.5 items 4 + 6 and
+  the item-5 CT cross-checks).** `check_inputs_types_supported` now
+  admits `txin_archival_reward_emission` under the Q3/Q11 gates —
+  exactly one emission vin per tx, co-residence with key-imaged
+  `txin_to_key` fee inputs only (no bond-post, no serve-credit mixing);
+  the block-3 dispatch branch becomes live consensus. CT semantics:
+  new `rct::verCtSemanticsEmission` (`fcmp/rctSigs.cpp`) verifies the
+  emission balance `Σ pseudoOuts + total_reward·H = Σ out commitments +
+  fee·H` by reusing the bond-post credit/debit balance FFI with
+  `bond_credit = 0`, `bond_debit = total_reward` (the mint enters the
+  equation as a debit-side credit), FCMP++ proof presence keyed to the
+  fee-input count (absent when zero fee inputs), BP+ range proofs over
+  all outputs; `ver_non_input_consensus` dispatches emission txs to it
+  (overflow-checked plaintext `total_reward` sum, `pqc_auths` sized to
+  all inputs). `check_tx_outputs` exempts the emission tx's non-zero
+  plaintext reward vouts from the v3 zero-amount rule (they are the
+  claim's public mint; change vouts stay CT), and
+  `check_inputs_overflow` skips the amountless vin. Block-level `(P,E)`
+  uniqueness (§6.2 third layer, item 6): the **decision** is Rust —
+  `emission_block_claims_unique` (`claimed_epochs.rs`, sort +
+  adjacent-compare over the block's flattened `(P_canonical_id, epoch)`
+  pairs) via new FFI `shekyl_emission_block_claims_unique` — C++ in
+  `handle_block_to_main_chain` only extracts each emission vin's pairs
+  (reusing `shekyl_archival_emission_vin_extract`) and marshals; a
+  duplicate verdict rejects the block (per-tx layers cannot see
+  cross-tx duplicates pre-connect; without this the second claim
+  double-mints inside one block). Key-image bookkeeping loops in
+  `cryptonote_core.cpp` skip the key-image-less emission vin. KATs: the
+  block-2 whitelist tripwire flips to admit-at-arity-1, plus
+  two-emission-vins and emission×bond-post / emission×serve-credit
+  mixing rejections (§6.4's dedup KATs), and Rust-side
+  same-`(P,E)`-duplicate / distinct-pairs / FFI negative-surface tests.
+
+- **consensus/ffi: C-1 commit-block 3 — emission verify FFI + dispatch
+  wiring (§9.5 items 3 + 5; gate-last, still dead code).** Rust side:
+  the production `AuthVerified` minter `emission_vin_verify_auth`
+  (`emission_verify.rs`) verifies both Q1 hybrid auths — Auth-B under
+  `backing_pubkey` with the leaf-gate pin (`hash_pqc_public_key` must
+  equal the committed `pqc_pk_hash`), Auth-P under `P_pubkey` — over the
+  domain-separated `auth_msgs` binding messages; new
+  `AuthMalformed`/`AuthRejected{role}` diagnostics. Two FFI entries in
+  `archival_ffi.rs` (mirrored in `shekyl_ffi.h`):
+  `shekyl_archival_emission_vin_extract` (pre-parse: `P_canonical_id` +
+  claimed epochs, for C++ operand gathering) and
+  `shekyl_emission_vin_verify` (the full §7.1 body — claims 1–5,
+  membership-only backing 6, hybrid auth 8, auth-before-backing for DoS
+  ordering — one coarse crossing returning verdict + `total_reward` +
+  `epochs_to_commit`); `shekyl_archival_emission_epoch_snapshot` gains
+  `budget_atomic`. C++ side: `ArchivalEmissionEpochSnapshot` +
+  `gather_archival_emission_epoch_snapshot` lifted to the `BlockchainDB`
+  interface (LMDB overrides; default backend rejects via
+  `has_budget_row=false`), and the `check_tx_inputs` emission branch —
+  classify (exactly one emission vin, `txin_to_key` co-residents only),
+  fee-input pre-gates, PQC-slot binding (`pqc_auths[emission_index]`'s
+  hybrid key must derive the vin's `P_canonical_id`), pseudoOuts sized
+  by the fee subset, reference-block age windows + curve-tree context
+  shared by both proofs, **F-C1c signable hash** (prefix hash with the
+  emission vin removed wholesale — circularity exclusion, re-bound per
+  the §9.6 table), per-epoch frozen snapshot gather (absent budget row
+  rejects), ordered reward commit set (non-zero plaintext vouts:
+  commitment ‖ amount LE ‖ one-time key), the coarse verify call, and
+  step-7 fee-input FCMP++ verification (proof must be absent with zero
+  fee inputs). **Gate-last:** `check_inputs_types_supported` still
+  rejects the vin type — the whole branch is unreachable until the
+  block-4 whitelist flip. FFI KATs cover extract/verify round-trips and
+  the negative surface; the 79 C++ archival tests pass unchanged.
+
+- **docs: F-C1c pinned in `REWARD_EMISSION_E3_GATING_ROUND.md` §9.6
+  (for ratification)** — the emission vin's auth messages and backing
+  proof bind `signable_tx_hash`, but the full tx prefix contains the vin
+  itself (its own signatures in the preimage — circular). Pin:
+  `signable_tx_hash` = prefix hash of the tx with the emission vin
+  removed wholesale; every dropped property re-bound (Q1 fields 1–6, the
+  field-7 commit set, tx-level hybrid auth over the complete prefix,
+  fee-input FCMP++ over the unmodified `tx_prefix_hash`).
+
+- **consensus: C-1 commit-block 2 — `txin_archival_reward_emission`
+  transport shim (dense tag `0x04`, F-C1b pin).** New vin variant in
+  `cryptonote_basic.h` carrying the complete Rust canonical encoding as an
+  opaque `canonical_bytes` blob — `emission_wire.rs` owns the codec, the
+  parse, and every structural bound; C++ never reads inside the blob.
+  Transport-layer checks only: `ARCHIVAL_EMISSION_VIN_MAX_BYTES` (1 MiB
+  deserializer allocation cap, `cryptonote_config.h`) and the leading-byte
+  echo of the Rust wire tag `0x04`, enforced identically on the binary
+  serializer and the JSON/RPC entrypoint (`json_object.cpp`) so no admission
+  skew between parsers (the PR #229 r3 lesson). Boost archive, JSON/debug
+  `VARIANT_TAG`s, and the signature-size visitor (0 — auths live inside the
+  Rust-verified blob) complete the surface; `check_for_double_spend` passes
+  it through (no key image — emission dedup is the WS-2 journaled
+  check-and-set plus the block-level `(P,E)` pass). **Gate-last:**
+  `check_inputs_types_supported` still rejects the type (the block-4 flip is
+  the activating cut), pinned by a standing tripwire KAT. Transport KATs in
+  `archival_reward_emission.cpp`: dense-tag round-trip byte-identity,
+  wire-tag-echo rejection on both serialize and deserialize, size-bound
+  fail-closed, whitelist-still-rejects.
+
+- **consensus/db: C-1 commit-block 1 — `budget(E)` production per
+  `ARCHIVAL_BUDGET_SCHEDULE.md` (ratified; F-C1a closed).** The
+  redirect-the-write lands at the connect site (`blockchain.cpp`): the
+  single per-height `staker_inflow` write switches target on the
+  connecting block's own fork version (`HF_VERSION_ARCHIVAL_EMISSION`,
+  genesis feature set) — pre-activation → burn record (unchanged),
+  post-activation → new `archival_budget_accrual` LMDB row
+  (`add/get/remove_archival_budget_accrual`, burn-record idiom: BE keys,
+  written only when nonzero, pop removes the height row beside
+  `remove_block_burn`). The epoch close materializes the frozen
+  `archival_budget` row (bounded accrual range-sum over
+  `[E·SEB, (E+1)·SEB)`, same write txn as the `Σwork(E)` sigma row — the
+  M1 same-snapshot pin; written unconditionally so present-and-zero ≠
+  NOTFOUND), the close revert deletes it, and both tables join
+  `prune_archival_epochs_before`. The emission snapshot gather now
+  carries `budget_atomic` + `has_budget_row` (stored-shape probe), so
+  the verify shim reads budget and denominator from the same close
+  event — no new live operand. KATs **B1** (straddle partition /
+  conservation: burned inflow never enters `budget(E_flip)`), **B2**
+  (reorg across the fork: pop symmetry of both targets, `total_burned`
+  untouched by the accrual side), **B3** (close/revert/re-close
+  byte-identity; §3.3 present-and-zero vs never-closed shape) landed in
+  `archival_substrate_lmdb.cpp`. Consensus-inert until the C-1
+  whitelist flip: nothing reads `archival_budget` until dispatch lands.
 
 - **archival: serve-credit equivalence audit — mirrors, standing KAT, fuzz,
   and the SCE-1 unify (implements
@@ -89,8 +441,8 @@
   containing the activation height mixes burned and emittable inflow;
   activation is HF-gated, not epoch-aligned).
 
-- **docs: `ARCHIVAL_BUDGET_SCHEDULE.md` — gate-1 `budget(E)` spec (DRAFT,
-  awaiting ratification; unblocks C-1 item 4)**. Pins: `budget(E)` =
+- **docs: `ARCHIVAL_BUDGET_SCHEDULE.md` — gate-1 `budget(E)` spec
+  (RATIFIED 2026-07-08 with the C-1 build opening; unblocks C-1 item 4)**. Pins: `budget(E)` =
   post-activation staker inflow over E's blocks, via **redirect-the-write**
   (the fork switches the target of the single per-height `staker_inflow`
   write — pre-activation → burn record, post-activation → budget accrual,

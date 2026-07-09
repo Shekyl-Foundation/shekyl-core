@@ -42,8 +42,9 @@ use crate::id::p_canonical_id_from_hybrid_pubkey;
 /// Dense genesis tag scheme (`GENESIS_TX_WIRE_FORMAT.md` §tag registry;
 /// `REWARD_EMISSION_VIN_PLAN.md` :118): `0x04` dense — the next free tag after
 /// `gen 0x00`, `to_key 0x01`, `serve_credit 0x02`, `bond_post 0x03`. The C++
-/// oracle's `VARIANT_TAG` is pinned `0x06` and lands with the C-1 dispatch, not
-/// this codec.
+/// transport shim's `VARIANT_TAG` landed as the same `0x04` (F-C1b: the design
+/// docs' `0x06` was stale after the dense-tag renumbering), so the epee variant
+/// tag and this wire tag agree.
 pub const VIN_TYPE_ARCHIVAL_REWARD_EMISSION: u8 = 0x04;
 
 /// Per-emission settlement-epoch batch cap (`REWARD_EMISSION_LEG.md` §5.3

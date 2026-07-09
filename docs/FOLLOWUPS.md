@@ -1229,6 +1229,56 @@ sustainability is unaffected by the recalibration.
   `REWARD_EMISSION_VIN_PLAN.md` §9, `STAKER_ARCHIVAL_SIM.md` §L12. **Target: V3.0
   (pre-genesis; blocks the final redundancy-band seal).**
 
+- **End-to-end supply-conservation KAT with an activation-boundary block
+  — the C-1 budget fast-follow (c2 review round, 2026-07-09).** The
+  F-B1c-c2 fix makes the accrual's operand identity with verify hold by
+  construction (same `base_reward` variable), and the redirect's version
+  operand is now `bl.major_version` with a CI tripwire
+  (`scripts/ci/check_archival_reward_gates.sh`). What no existing guard
+  covers is the **branch-selection class**: a wrong burn-vs-accrue
+  decision fires with byte-identical operands, invisible to operand
+  KATs and to the grep tripwire's negative checks alone. The
+  independent guard is the conservation identity —
+  `accrual + burn + coinbase == already_generated_coins advance` —
+  driven through the **real connect path** (`handle_block_to_main_chain`,
+  not the LMDB-substrate harness), with an **activation-boundary block
+  in the fixture** (multi-entry fork table): burn-when-should-accrue
+  breaks the identity at exactly the boundary block. This is the KAT
+  that would have caught the F-B1b class directly, and it also guards
+  the genesis exclusion and the split. Needs a core-tests-level
+  harness. **Target: V3.0 (prioritized fast-follow to the C-1 budget
+  PR — lands before the emission leg's Stage-3 close, not deferred to
+  post-genesis).** Cross-refs: `REWARD_EMISSION_E3_GATING_ROUND.md`
+  §9.9 (F-B1b hardening + fast-follow bullets),
+  `ARCHIVAL_BUDGET_SCHEDULE.md` §2.2.
+
+- **Archival-funding demand-insulation sim — the F-B1c-c2 (b)-reopen
+  evidence (post-closure pin, 2026-07-09).** The c2 adjudication
+  (`REWARD_EMISSION_E3_GATING_ROUND.md` §9.9) fixed the budget's
+  emission leg to disposition (a): the staker leg is a share of
+  verify's modulated `base_reward` (release multiplier + weight
+  penalty), making `budget(E)` conservation-exact ("ledger minus
+  coinbase") but demand-responsive — archival funding throttles when
+  tx volume is low, and archival retention is a baseline availability
+  function whose need doesn't obviously scale down with volume.
+  Disposition (b) (demand-insulated budget via the unmodulated
+  subsidy) was **rejected now** — it amends the supply-ledger advance
+  rule and the Q11-guarded conservation identity, the most
+  catastrophic-if-wrong genesis-frozen surface — with a rule-21
+  reopen gated on evidence: run the sim (companion to the
+  servo/fee-era sim) measuring how much `budget(E)` swings with tx
+  volume under (a) and whether the swing plausibly starves the serving
+  incentive during plausible low-volume windows. **Reversion:** if the
+  sim shows material underfunding, (b) reopens as a deliberate
+  supply-accounting amendment (threat-model review + Q11-identity KAT
+  amendment in the same PR) — pre-genesis if it lands in the window, a
+  named post-genesis-blocked item if not; if the swing is tolerable,
+  (a) stands permanently and this item closes. Cross-refs:
+  `REWARD_EMISSION_E3_GATING_ROUND.md` §9.9 (c2),
+  `ARCHIVAL_BUDGET_SCHEDULE.md` §1, `STAKER_ARCHIVAL_SIM.md` (harness).
+  **Target: V3.0 (pre-genesis; the economics question gates genesis —
+  distinct from the (a) correctness fix, which gated the C-1 PR).**
+
 - **Funding-seam entry-standoff: consensus surface, wallet conformance, and the
   cold-start cover residual (standoff sim review pass, 2026-06-13).** The
   `--standoff` sim (`STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff*,
@@ -4410,9 +4460,45 @@ sustainability is unaffected by the recalibration.
   which language decides; the type-level single-writer guarantee makes
   it un-reintroducible by future edits, which is a post-genesis concern.
 
+- **Emission regtest end-to-end — the E4/E5 gate** (surfaced 2026-07-09,
+  C-1 commit-block 6,
+  [`REWARD_EMISSION_E3_GATING_ROUND.md`](./design/REWARD_EMISSION_E3_GATING_ROUND.md)
+  §9.5 item 8). An emission claim accepted-and-applied on a regtest
+  chain through the real C-1 path (whitelist → CT semantics → dispatch
+  verify → block-level `(P,E)` pass → connect arm → WS-2 single writer).
+  **Blocked on the wallet-side claim builder** (the gate-6
+  backing-lineage ladder + claim assembly, §4 item 4's unlanded
+  merge-blocker half): no production path can assemble a
+  `txin_archival_reward_emission` transaction yet, and a hand-rolled
+  test builder would exercise a parallel path — the opposite of what
+  the e2e exists to prove. Everything the e2e would drive is
+  individually KAT-covered at C-1 (transport round-trip, FFI verify
+  minters, dispatch classification, block-level dedup, connect-arm
+  extraction/single-writer/vout-shape, B5 fee-side coinbase
+  foreclosure); the e2e adds the composition proof. E4/E5
+  (`txin_stake_claim`/`C_stake` deletion) stays gated on this item per
+  §4 item 5. **Target: V3.0 pre-genesis. Reopening trigger: claim
+  builder lands → e2e rides the Track-2 regtest harness
+  (`regtest_e2e` family).**
+
 ---
 
 ## V3.1 — audit response and stressnet gates
+
+- **Raw-import archival/burn bookkeeping parity** (surfaced 2026-07-09,
+  F-B1a remediation). The non-verifying import path
+  (`blockchain_import.cpp` direct `db.add_block`) bypasses
+  `handle_block_to_main_chain`, so it writes neither the per-height burn
+  rows / `total_burned` (pre-existing) nor the staker-inflow accrual
+  amount (it passes `archival_budget_accrual = 0`) — an imported chain's
+  frozen `budget(E)` rows and burn bookkeeping diverge from a synced
+  node's. The close/slash hooks *do* run on import, so the divergence is
+  silent, not a crash. Disposition options: compute the economics legs
+  at import time (duplicates connect-path logic), record the amounts in
+  the export format, or gate raw import to verified mode for
+  post-genesis chains. Target: V3.1 (the importer is an operator
+  utility, not a genesis-gating consensus surface; verified-mode import
+  and full sync are unaffected).
 
 - **Serve-credit decision-site flip: Rust becomes the primary decision
   site for `blockchain.cpp:4247`/`:4312`/`:4889–4910`** (surfaced
@@ -7086,6 +7172,22 @@ one place to confirm each item's relationship to the wallet stack.
   *Definition of done:* per pin §5 — delete construction stubs; C++ rename
   gated on byte-identical round-trip; wire-tag changes update KATs at genesis
   definition; `STRUCTURAL_TODO` updated.
+
+  *Deletion, not rename — `rctSigBase::pseudoOuts` (pinned 2026-07-09, pin
+  §2).* The sweep **deletes the base-slot field outright; renaming it is a
+  scope failure**. A mechanical RCT→CT pass would carry the field through as
+  a renamed container with the same dead slot — dead-guarded under a new
+  name, in permanence. The accessor proves it dead: `get_pseudo_outs()`
+  (`rctTypes.h:430–438`) reaches the base slot only for
+  non-`RCTTypeFcmpPlusPlusPqc` types; the only other live type is
+  `RCTTypeNull` (coinbase), which never carries pseudo-outs — the slot is a
+  constant empty vector on every reachable path. The field, its
+  `RCTTypeNull` wire branch (a wire change — rides pin §5 step 3 with the
+  serialization-version bump, not the byte-identical rename step), its
+  boost-serialization line, the accessor's base arm, and every
+  `rv.pseudoOuts.empty()` dead-field guard leave together; none is
+  separable. Exit check is grep-mechanical: post-sweep, no base-slot
+  pseudo-out container exists under any name.
 
   *Reopening criterion:* new production `rctSigs` / `rct::` accretion after
   Phase 5 → immediate rename PR (`21-reversion-clause-discipline.mdc`).

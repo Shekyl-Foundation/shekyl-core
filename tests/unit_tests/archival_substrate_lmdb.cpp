@@ -7,14 +7,21 @@
 
 #include <boost/filesystem.hpp>
 #include <cstring>
+#include <fstream>
 #include <limits>
+#include <stdexcept>
+#include <string>
 #include <vector>
+
+#include <rapidjson/document.h>
+#include <rapidjson/istreamwrapper.h>
 
 #include "blockchain_db/lmdb/db_lmdb.h"
 #include "blockchain_db/shekyl_types.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_basic/hardfork.h"
 #include "shekyl/shekyl_ffi.h"
+#include "string_tools.h"
 
 using namespace cryptonote;
 
@@ -783,6 +790,217 @@ TEST(archival_substrate_lmdb, zero_output_close_stored_shape_and_reorg_roundtrip
   EXPECT_EQ(db.get_archival_r_market(7, settlement_epoch), 0u);
 }
 
+// ── Budget schedule KATs B1/B2/B3 (ARCHIVAL_BUDGET_SCHEDULE.md §7) ──────────
+//
+// The redirect's target-selection branch itself lives at the connect site
+// (blockchain.cpp, gated on the connecting block's own HF version) and is
+// exercised end-to-end by the C-1 regtest arm. These substrate KATs pin the
+// storage-layer properties the branch relies on: the straddle partition
+// (burn-side rows never leak into budget(E_flip) — the over-mint class),
+// pop symmetry of both targets, and the frozen close row's revert/re-close
+// byte-identity.
+
+// KAT B1 — straddle / conservation (§2.2). One epoch whose blocks straddle
+// the activation: pre-activation heights carry burn rows, post-activation
+// heights carry accrual rows (the exactly-one-target invariant, simulated at
+// the substrate layer exactly as the connect site writes it). The close must
+// sum only the accrual side.
+TEST(archival_substrate_lmdb, budget_straddle_partition_and_conservation)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+
+  const uint64_t seb = 10000;
+  const uint64_t settlement_epoch = 3;  // E_flip
+  const uint64_t epoch_start = settlement_epoch * seb;
+  const uint64_t close_height = (settlement_epoch + 1) * seb;
+  // Synthetic activation mid-epoch: fork-height injection at the substrate
+  // layer — heights below burn, heights at/above accrue.
+  const uint64_t activation_height = epoch_start + 4000;
+
+  const uint64_t inflow = 250;
+  const std::vector<uint64_t> pre_heights = { epoch_start + 100, epoch_start + 3999 };
+  const std::vector<uint64_t> post_heights = { activation_height, epoch_start + 7000,
+    close_height - 1 };
+
+  uint64_t total_burned = 0;
+  for (const uint64_t h : pre_heights)
+  {
+    db.add_block_burn(h, inflow);
+    total_burned += inflow;
+  }
+  db.set_total_burned(total_burned);
+  for (const uint64_t h : post_heights)
+    db.add_archival_budget_accrual(h, inflow);
+
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // Per-block exactly-one-target: no height carries both rows.
+  for (const uint64_t h : pre_heights)
+  {
+    EXPECT_EQ(db.get_block_burn(h), inflow);
+    EXPECT_EQ(db.get_archival_budget_accrual(h), 0u);
+  }
+  for (const uint64_t h : post_heights)
+  {
+    EXPECT_EQ(db.get_block_burn(h), 0u);
+    EXPECT_EQ(db.get_archival_budget_accrual(h), inflow);
+  }
+
+  db.process_archival_epoch_close_at_height(close_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // budget(E_flip) is the post-activation-only portion; the pre-activation
+  // portion sits in block_burn/total_burned. Σ inflow = destroyed +
+  // emittable, no overlap, no gap.
+  EXPECT_TRUE(lmdb.has_archival_budget_row(settlement_epoch));
+  EXPECT_EQ(db.get_archival_budget(settlement_epoch), inflow * post_heights.size());
+  EXPECT_EQ(db.get_total_burned(), inflow * pre_heights.size());
+  EXPECT_EQ(db.get_archival_budget(settlement_epoch) + db.get_total_burned(),
+    inflow * (pre_heights.size() + post_heights.size()));
+}
+
+// KAT B2 — reorg across the fork (§2.2 property 3). Pop a post-activation
+// block → accrual row removed, total_burned untouched; pop through the
+// activation → burn rows roll back by the landed idiom; reconnect re-applies
+// burn-or-redirect per height, byte-identical end state.
+TEST(archival_substrate_lmdb, budget_reorg_across_fork_pop_symmetry)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+
+  const uint64_t seb = 10000;
+  const uint64_t settlement_epoch = 2;
+  const uint64_t epoch_start = settlement_epoch * seb;
+  const uint64_t close_height = (settlement_epoch + 1) * seb;
+
+  const uint64_t h_pre = epoch_start + 10;    // pre-activation: burn target
+  const uint64_t h_post = epoch_start + 20;   // post-activation: accrual target
+  const uint64_t burn_amt = 111;
+  const uint64_t accrual_amt = 222;
+
+  // Connect both blocks (the per-height writes the connect site issues).
+  db.add_block_burn(h_pre, burn_amt);
+  db.set_total_burned(burn_amt);
+  db.add_archival_budget_accrual(h_post, accrual_amt);
+  db.process_archival_epoch_close_at_height(close_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  const uint64_t frozen_budget = db.get_archival_budget(settlement_epoch);
+  EXPECT_EQ(frozen_budget, accrual_amt);
+
+  // Pop the close block, then h_post (the production pop calls both removes
+  // for every popped height; the side the block didn't write is a tolerated
+  // missing key).
+  db.revert_archival_epoch_close_at_height(close_height);
+  db.remove_block_burn(h_post);              // missing key — must tolerate
+  db.remove_archival_budget_accrual(h_post); // removes the accrual row
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  EXPECT_FALSE(lmdb.has_archival_budget_row(settlement_epoch));
+  EXPECT_EQ(db.get_archival_budget_accrual(h_post), 0u);
+  // total_burned untouched by the accrual-side pop.
+  EXPECT_EQ(db.get_total_burned(), burn_amt);
+
+  // Pop through the activation: h_pre rolls back by the landed burn idiom.
+  const uint64_t destroyed = db.get_block_burn(h_pre);
+  EXPECT_EQ(destroyed, burn_amt);
+  db.set_total_burned(db.get_total_burned() - destroyed);
+  db.remove_block_burn(h_pre);
+  db.remove_archival_budget_accrual(h_pre);  // missing key — must tolerate
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  EXPECT_EQ(db.get_total_burned(), 0u);
+  EXPECT_EQ(db.get_block_burn(h_pre), 0u);
+
+  // Reconnect: re-apply burn-or-redirect per block height, re-close —
+  // byte-identical end state.
+  db.add_block_burn(h_pre, burn_amt);
+  db.set_total_burned(burn_amt);
+  db.add_archival_budget_accrual(h_post, accrual_amt);
+  db.process_archival_epoch_close_at_height(close_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  EXPECT_TRUE(lmdb.has_archival_budget_row(settlement_epoch));
+  EXPECT_EQ(db.get_archival_budget(settlement_epoch), frozen_budget);
+  EXPECT_EQ(db.get_total_burned(), burn_amt);
+}
+
+// KAT B3 — close/revert symmetry (§3.2). Close E → frozen row written in the
+// same txn as sigma; pop the close → row deleted by the close revert while
+// the accrual rows survive (they revert per popped block, not per close);
+// re-close → byte-identical row re-created from the retained accrual rows.
+// Also pins the §3.3 stored shape: a closed zero-budget epoch is
+// present-and-zero, distinguishable from never-closed (NOTFOUND).
+TEST(archival_substrate_lmdb, budget_close_row_revert_and_reclose_symmetry)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+
+  const uint64_t seb = 10000;
+  const uint64_t settlement_epoch = 3;
+  const uint64_t epoch_start = settlement_epoch * seb;
+  const uint64_t close_height = (settlement_epoch + 1) * seb;
+
+  // Accrual rows inside E, plus boundary probes just outside on each side:
+  // the close's range-sum is [E·SEB, (E+1)·SEB) — first-in, last-in,
+  // one-below-out, close-height-out.
+  db.add_archival_budget_accrual(epoch_start, 500);            // first block of E: in
+  db.add_archival_budget_accrual(close_height - 1, 700);       // last block of E: in
+  db.add_archival_budget_accrual(epoch_start - 1, 300);        // epoch E-1: out
+  db.add_archival_budget_accrual(close_height, 900);           // epoch E+1: out
+
+  // Zero-budget epoch first: E-1 has one accrual row (300) — close it to
+  // prove the row freezes per epoch; then an epoch with NO rows would be
+  // present-and-zero. Close E-2 (no rows at all) for the zero shape.
+  db.process_archival_epoch_close_at_height((settlement_epoch - 1) * seb); // closes E-2
+  db.process_archival_epoch_close_at_height(close_height);                 // closes E
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // Present-and-zero vs NOTFOUND (§3.3): E-2 closed with no accrual rows.
+  EXPECT_TRUE(lmdb.has_archival_budget_row(settlement_epoch - 2));
+  EXPECT_EQ(db.get_archival_budget(settlement_epoch - 2), 0u);
+  // Never-closed epoch: NOTFOUND, laundered to 0 by the getter only.
+  EXPECT_FALSE(lmdb.has_archival_budget_row(settlement_epoch + 5));
+  EXPECT_EQ(db.get_archival_budget(settlement_epoch + 5), 0u);
+
+  // The frozen row is the bounded range-sum: 500 + 700, neighbors excluded.
+  EXPECT_TRUE(lmdb.has_archival_budget_row(settlement_epoch));
+  EXPECT_EQ(db.get_archival_budget(settlement_epoch), 1200u);
+
+  // Pop the close block: the frozen row reverts with the close family, the
+  // accrual rows do not.
+  db.revert_archival_epoch_close_at_height(close_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  EXPECT_FALSE(lmdb.has_archival_budget_row(settlement_epoch));
+  EXPECT_EQ(db.get_archival_budget_accrual(epoch_start), 500u);
+  EXPECT_EQ(db.get_archival_budget_accrual(close_height - 1), 700u);
+
+  // Re-close: byte-identical row from the retained accrual rows.
+  db.process_archival_epoch_close_at_height(close_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  EXPECT_TRUE(lmdb.has_archival_budget_row(settlement_epoch));
+  EXPECT_EQ(db.get_archival_budget(settlement_epoch), 1200u);
+
+  // The emission snapshot gather reads the frozen row (§3.3): same close
+  // event as the sigma row, no re-sum of the live accrual table.
+  ArchivalEmissionEpochSnapshot snap;
+  lmdb.gather_archival_emission_epoch_snapshot(make_hash(0x77), settlement_epoch, snap);
+  EXPECT_TRUE(snap.has_budget_row);
+  EXPECT_EQ(snap.budget_atomic, 1200u);
+}
+
 // ── F-S1: v4 fields survive the load-modify-store writers ───────────────────
 //
 // put_archival_bond_record rebuilds a fresh ArchivalBondValue from scalar args
@@ -1109,7 +1327,10 @@ namespace {
 /// unit test. add_block runs the production connect hooks, including
 /// process_archival_slash_at_height, which is the point: the slash KAT below
 /// exercises the scheduler at its production call site, not via a test shim.
-void append_minimal_blocks(BlockchainDB& db, uint64_t count)
+/// `accrual_per_block` rides into add_block as the redirected staker inflow
+/// (F-B1a): the DB layer writes the accrual row before the epoch-close hook,
+/// so the epoch-boundary KAT below can assert the close sums it.
+void append_minimal_blocks(BlockchainDB& db, uint64_t count, uint64_t accrual_per_block = 0)
 {
   crypto::hash prev = db.height() == 0
     ? crypto::null_hash : db.get_block_hash_from_height(db.height() - 1);
@@ -1133,7 +1354,7 @@ void append_minimal_blocks(BlockchainDB& db, uint64_t count)
     blk.miner_tx = std::move(miner_tx);
 
     db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
-      height + 1, 0, {});
+      height + 1, 0, accrual_per_block, {});
     prev = get_block_hash(blk);
   }
 }
@@ -1446,4 +1667,320 @@ TEST(archival_substrate_lmdb, emission_claim_first_paying_set_once_and_pop_symme
   ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
   EXPECT_EQ(read.first_paying_emission_height, 0u);
   EXPECT_TRUE(read.claimed_settlement_epochs.empty());
+}
+
+// ── F-B5a/F-B5b regression: real add_block → add_transaction → pop_block ──
+//
+// The KATs above call apply/revert directly with explicit heights, so they
+// cannot see a defect in how the two production call sites derive those
+// heights. This one drives the emission vin through the real LMDB block
+// machinery and catches both findings:
+//
+//  - F-B5a: the connect arm ran inside add_transaction, before the subclass
+//    add_block writes the block_heights row, so deriving the height via
+//    get_block_height(blk_hash) threw BLOCK_DNE — every block carrying an
+//    emission vin failed to connect. The arm now reads height(), which at
+//    that point IS the connecting block's index (and verify's pin-(b)
+//    operand).
+//  - F-B5b: the connect journal keys on the block's index N, but pop_block's
+//    removed_block_height is the post-block chain height N+1 (the slash/close
+//    hooks' convention). Passing it through unconverted made the claim revert
+//    read an empty journal slot and silently no-op — the claimed set survived
+//    the pop and the journal row leaked. pop_block now reverts claims at
+//    removed_block_height - 1.
+
+namespace {
+
+/// Emission-vin operands from the shared connect KAT fixture
+/// (rust/shekyl-archival-retention/tests/fixtures/emission_connect_kat_v1.json,
+/// epochs {1, 2} — claimable once the chain reaches settled epoch 3).
+struct EmissionVinFixture {
+  std::vector<uint8_t> wire;
+  crypto::hash p_id{};
+  std::vector<uint64_t> settlement_epochs;
+  uint64_t total_reward = 0;
+};
+
+EmissionVinFixture load_emission_vin_fixture()
+{
+  std::ifstream ifs(EMISSION_CONNECT_KAT_FIXTURE_PATH);
+  if (!ifs.good())
+    throw std::runtime_error(std::string("missing emission-connect KAT fixture at ")
+      + EMISSION_CONNECT_KAT_FIXTURE_PATH);
+  rapidjson::IStreamWrapper wrapper(ifs);
+  rapidjson::Document doc;
+  doc.ParseStream(wrapper);
+  if (doc.HasParseError() || !doc.HasMember("emission_vin"))
+    throw std::runtime_error("invalid emission-connect KAT fixture");
+
+  const auto& vin = doc["emission_vin"];
+  EmissionVinFixture out{};
+  std::string bin;
+  if (!epee::string_tools::parse_hexstr_to_binbuff(std::string(vin["wire_hex"].GetString()), bin))
+    throw std::runtime_error("invalid wire hex in emission-connect KAT fixture");
+  out.wire.assign(bin.begin(), bin.end());
+  std::string pid_bin;
+  if (!epee::string_tools::parse_hexstr_to_binbuff(std::string(vin["p_canonical_id_hex"].GetString()), pid_bin)
+      || pid_bin.size() != sizeof(out.p_id.data))
+    throw std::runtime_error("invalid p_canonical_id in emission-connect KAT fixture");
+  std::memcpy(out.p_id.data, pid_bin.data(), pid_bin.size());
+  for (const auto& e : vin["settlement_epochs"].GetArray())
+    out.settlement_epochs.push_back(e.GetUint64());
+  for (const auto& a : vin["reward_amount_plain"].GetArray())
+    out.total_reward += a.GetUint64();
+  return out;
+}
+
+/// Minimal connectable emission tx: the fixture vin, one plaintext reward
+/// vout + one amount-0 change vout, an outPk commitment per vout (the vout
+/// loop in add_transaction requires it). rct type stays Null — nothing on
+/// this path verifies CT semantics (verify ran at check_tx_inputs in
+/// production; this KAT targets the connect/pop machinery).
+transaction make_connectable_emission_tx(const EmissionVinFixture& fx)
+{
+  transaction tx{};
+  tx.version = 2;
+
+  txin_archival_reward_emission vin{};
+  vin.canonical_bytes = fx.wire;
+  tx.vin.push_back(vin);
+
+  const uint64_t amounts[2] = {fx.total_reward, 0};
+  for (size_t i = 0; i < 2; ++i)
+  {
+    tx_out vout{};
+    vout.amount = amounts[i];
+    txout_to_tagged_key tagged{};
+    memset(&tagged.key, 0x60 + static_cast<int>(i), sizeof(tagged.key));
+    tagged.view_tag.data = 0;
+    vout.target = tagged;
+    tx.vout.push_back(vout);
+
+    rct::ctkey out_pk{};
+    memset(out_pk.mask.bytes, 0x70 + static_cast<int>(i), sizeof(out_pk.mask.bytes));
+    tx.rct_signatures.outPk.push_back(out_pk);
+    // The rctSigBase serializer requires one enc_amounts/enc_labels entry per
+    // vout regardless of type; filler is fine, nothing decrypts them here.
+    tx.rct_signatures.enc_amounts.push_back({});
+    tx.rct_signatures.enc_labels.push_back({});
+  }
+  return tx;
+}
+
+} // namespace
+
+TEST(archival_substrate_lmdb, emission_connect_pop_roundtrip_through_real_block_path)
+{
+  const EmissionVinFixture fx = load_emission_vin_fixture();
+  ASSERT_FALSE(fx.settlement_epochs.empty());
+  const uint64_t max_epoch = fx.settlement_epochs.back();
+
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  // Reach a height where every fixture epoch is settled and inside the claim
+  // window: the connect block's index N needs floor(N / SEB) > max_epoch.
+  const uint64_t target_height = (max_epoch + 1) * kSeb + 5;
+  append_minimal_blocks(db, target_height);
+  db.put_archival_bond_value(fx.p_id, unclaimed_bond());
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // Connect a block carrying the emission tx through the real add_block path
+  // (F-B5a: this call threw BLOCK_DNE from the connect arm before the fix).
+  const uint64_t connect_height = db.height();
+  const transaction tx = make_connectable_emission_tx(fx);
+
+  block blk{};
+  blk.major_version = 1;
+  blk.minor_version = 1;
+  blk.timestamp = 1500000000 + connect_height;
+  blk.prev_id = db.get_block_hash_from_height(connect_height - 1);
+  blk.curve_tree_root = crypto::null_hash;
+  blk.nonce = 0;
+  transaction miner_tx{};
+  miner_tx.version = 1;
+  miner_tx.unlock_time = connect_height + 60;
+  txin_gen gen{};
+  gen.height = connect_height;
+  miner_tx.vin.push_back(gen);
+  blk.miner_tx = std::move(miner_tx);
+  blk.tx_hashes.push_back(get_transaction_hash(tx));
+
+  db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
+    connect_height + 1, 0, 0, {std::make_pair(tx, tx_to_blob(tx))});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(fx.p_id, read));
+  EXPECT_EQ(read.claimed_settlement_epochs, fx.settlement_epochs)
+    << "connect arm must have applied the claim at the real block height";
+  EXPECT_EQ(read.first_paying_emission_height, connect_height);
+
+  // Pop through the real path (F-B5b: before the fix the claim revert ran at
+  // N+1, found an empty journal slot, and the claimed set survived the pop).
+  block popped{};
+  std::vector<transaction> popped_txs;
+  fixture.db.pop_block(popped, popped_txs);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_EQ(popped_txs.size(), 1u);
+  ASSERT_TRUE(db.get_archival_bond_value(fx.p_id, read));
+  EXPECT_TRUE(read.claimed_settlement_epochs.empty())
+    << "pop must restore the journaled pre-image (empty claimed set)";
+  EXPECT_EQ(read.first_paying_emission_height, 0u);
+}
+
+// F-B5a sibling: the bond-post connect arm carried the identical
+// get_block_height-before-write crash (pre-dating C-1) and, like the
+// emission arm, had never been driven through the real add_block path — its
+// integration tests call add_transaction directly on a mock. This KAT
+// connects a JoinMarket bond-post through real LMDB (BLOCK_DNE before the
+// fix), checks the join epoch derives from the real connect height, and pops
+// it back off (the vin-driven arm in remove_transaction).
+TEST(archival_substrate_lmdb, bond_post_connect_pop_roundtrip_through_real_block_path)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  // One settlement epoch of blocks, so the expected join epoch is nonzero —
+  // a zero-height operand bug cannot hide behind a zero expectation.
+  append_minimal_blocks(db, kSeb + 3);
+  db.set_total_bonded_atomic(0);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  const uint64_t connect_height = db.height();
+  const uint64_t expected_join_epoch =
+    shekyl_archival_settlement_epoch_at_height(connect_height);
+  ASSERT_GT(expected_join_epoch, 0u);
+
+  transaction tx{};
+  tx.version = 2;
+  txin_archival_bond_post vin{};
+  vin.hybrid_public_key.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5A);
+  vin.p_canonical_id = make_hash(0xB5);
+  vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::JoinMarket);
+  vin.holdings.kind = archival_holdings_kind::ShardSetCompact;
+  vin.holdings.shard_ids = {7};
+  vin.bonded_total_atomic = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  vin.bond_credit = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  vin.bond_debit = 0;
+  tx.vin.push_back(vin);
+
+  block blk{};
+  blk.major_version = 1;
+  blk.minor_version = 1;
+  blk.timestamp = 1500000000 + connect_height;
+  blk.prev_id = db.get_block_hash_from_height(connect_height - 1);
+  blk.curve_tree_root = crypto::null_hash;
+  transaction miner_tx{};
+  miner_tx.version = 1;
+  miner_tx.unlock_time = connect_height + 60;
+  txin_gen gen{};
+  gen.height = connect_height;
+  miner_tx.vin.push_back(gen);
+  blk.miner_tx = std::move(miner_tx);
+  blk.tx_hashes.push_back(get_transaction_hash(tx));
+
+  db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
+    connect_height + 1, 0, 0, {std::make_pair(tx, tx_to_blob(tx))});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(vin.p_canonical_id, read));
+  EXPECT_EQ(read.join_settlement_epoch, expected_join_epoch)
+    << "join epoch must derive from the real connect height";
+  EXPECT_EQ(read.bonded_total_atomic, vin.bonded_total_atomic);
+  EXPECT_EQ(db.get_total_bonded_atomic(), vin.bond_credit);
+
+  block popped{};
+  std::vector<transaction> popped_txs;
+  fixture.db.pop_block(popped, popped_txs);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_EQ(popped_txs.size(), 1u);
+  EXPECT_FALSE(db.get_archival_bond_value(vin.p_canonical_id, read))
+    << "pop must remove the bond record";
+  EXPECT_EQ(db.get_total_bonded_atomic(), 0u);
+}
+
+// ── F-B1a: production-path epoch boundary — budget(E) includes E's final block ──
+//
+// The substrate KATs B1–B3 above drive add_archival_budget_accrual and the
+// close hook directly, so they cannot see a connect-ORDERING bug. Before
+// F-B1a the accrual row was written by the Blockchain layer after
+// m_db->add_block returned — i.e., after the epoch-close hook had already
+// range-summed [E·SEB, (E+1)·SEB) — so the final block of every epoch was
+// missing from its own budget(E): a one-block under-mint per epoch and a
+// conservation gap against §2.2's redirect identity. The fix threads the
+// amount through add_block, which writes the row before the hooks fire.
+// This KAT drives the rows through the REAL add_block path and asserts the
+// close sums all SEB rows including the boundary block's; then pops the
+// boundary block and re-connects it, asserting the budget reproduces
+// byte-identically (the close revert retains prior accrual rows; the popped
+// block's own row reverts with the pop and is re-written on re-connect).
+TEST(archival_substrate_lmdb, budget_epoch_boundary_includes_final_block_through_real_block_path)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  // Per-block inflow. Any nonzero value makes an off-by-one sum distinct
+  // from the correct one; SEB·kAccrual vs (SEB-1)·kAccrual differ by kAccrual.
+  constexpr uint64_t kAccrual = 41;
+
+  // Epoch 0 closes while connecting block index SEB-1 (close operand SEB).
+  // Connect the first SEB-1 blocks, then the boundary block separately so
+  // the pre-close and post-close states are both observable.
+  append_minimal_blocks(db, kSeb - 1, kAccrual);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  ASSERT_FALSE(lmdb.has_archival_budget_row(0)) << "epoch 0 must not close early";
+
+  append_minimal_blocks(db, 1, kAccrual); // block index SEB-1: fires the close
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_TRUE(lmdb.has_archival_budget_row(0));
+  EXPECT_EQ(db.get_archival_budget(0), kSeb * kAccrual)
+    << "budget(0) must include the final block's accrual row (F-B1a)";
+  EXPECT_EQ(db.get_archival_budget_accrual(kSeb - 1), kAccrual)
+    << "the boundary block's row must exist (written before the close hook)";
+
+  // Pop the boundary block: the frozen budget row reverts with the close
+  // family; the block's own accrual row reverts with the pop (the DB-layer
+  // mirror of the connect-side write); prior blocks' rows are untouched.
+  block popped{};
+  std::vector<transaction> popped_txs;
+  fixture.db.pop_block(popped, popped_txs);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  EXPECT_FALSE(lmdb.has_archival_budget_row(0));
+  EXPECT_EQ(db.get_archival_budget_accrual(kSeb - 1), 0u)
+    << "pop must remove the popped block's accrual row";
+  EXPECT_EQ(db.get_archival_budget_accrual(kSeb - 2), kAccrual)
+    << "prior blocks' rows survive the pop";
+
+  // Re-connect the boundary block: its row is re-written pre-hook and the
+  // re-close reproduces the frozen budget byte-identically.
+  append_minimal_blocks(db, 1, kAccrual);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  ASSERT_TRUE(lmdb.has_archival_budget_row(0));
+  EXPECT_EQ(db.get_archival_budget(0), kSeb * kAccrual)
+    << "pop + re-connect must reproduce budget(0) byte-identically";
 }

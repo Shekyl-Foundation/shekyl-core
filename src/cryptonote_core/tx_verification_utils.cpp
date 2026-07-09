@@ -28,12 +28,15 @@
 
 #include <boost/iterator/transform_iterator.hpp>
 
+#include <limits>
+
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_core/blockchain.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/tx_verification_utils.h"
 #include "hardforks/hardforks.h"
 #include "fcmp/rctSigs.h"
+#include "shekyl/shekyl_ffi.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "blockchain"
@@ -98,25 +101,15 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
         // Bond-post txs are handled by their own semantics check below.
         if (tx.version >= 2)
         {
-            bool archival_serve_credit_only = !tx.vin.empty();
-            bool is_archival_bond_post_tx = false;
-            size_t archival_bond_post_index = 0;
-            size_t bond_post_count = 0;
-            for (size_t i = 0; i < tx.vin.size(); ++i)
-            {
-                const auto& in = tx.vin[i];
-                if (!std::holds_alternative<txin_archival_serve_credit_response>(in))
-                    archival_serve_credit_only = false;
-                if (std::holds_alternative<txin_archival_bond_post>(in))
-                {
-                    ++bond_post_count;
-                    archival_bond_post_index = i;
-                }
-                else if (!std::holds_alternative<txin_to_key>(in)
-                    && !std::holds_alternative<txin_gen>(in))
-                    bond_post_count = 2;
-            }
-            is_archival_bond_post_tx = (bond_post_count == 1);
+            // Shared archival-tx taxonomy (classify_archival_tx,
+            // cryptonote_basic.h) — single-sourced with check_tx_inputs and
+            // check_tx_outputs so all three agree on the tx kind.
+            const archival_tx_classification archival_class = classify_archival_tx(tx.vin);
+            const bool archival_serve_credit_only = (archival_class.kind == archival_tx_kind::serve_credit_only);
+            const size_t archival_bond_post_index = archival_class.special_index;
+            const size_t spend_input_count = archival_class.spend_input_count;
+            const bool is_archival_bond_post_tx = (archival_class.kind == archival_tx_kind::bond_post);
+            const bool is_archival_emission_tx = (archival_class.kind == archival_tx_kind::emission);
             if (archival_serve_credit_only)
             {
                 const rct::rctSig& rv = tx.rct_signatures;
@@ -142,12 +135,6 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                 const txin_archival_bond_post& bond =
                     std::get<txin_archival_bond_post>(tx.vin[archival_bond_post_index]);
                 const rct::rctSig& rv = tx.rct_signatures;
-                size_t spend_input_count = 0;
-                for (const auto& in : tx.vin)
-                {
-                    if (std::holds_alternative<txin_to_key>(in))
-                        ++spend_input_count;
-                }
                 if (tx.pqc_auths.size() != tx.vin.size()
                     || spend_input_count == 0
                     || rv.p.pseudoOuts.size() != spend_input_count
@@ -155,6 +142,40 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                     || !rv.pseudoOuts.empty()
                     || rv.type != rct::RCTTypeFcmpPlusPlusPqc
                     || !rct::verRctSemanticsBondPost(rv, bond.bond_credit, bond.bond_debit))
+                {
+                    tvc.m_verifivation_failed = true;
+                    tvc.m_invalid_input = true;
+                    return false;
+                }
+            }
+            else if (is_archival_emission_tx)
+            {
+                // C-1 emission CT semantics (E3 gating round §9.5 item 4). The
+                // reward vouts are loud: their plaintext sum is the mint
+                // credit, entering the CT balance on the input side. The deep
+                // check that this sum equals the Rust-arithmetic reward total
+                // is check_tx_inputs' (the vout_reward_sum operand); here only
+                // the balance-equation shape is enforced. Fee inputs optional
+                // (Q11): with zero, the fee is paid out of the mint.
+                const rct::rctSig& rv = tx.rct_signatures;
+                // Amount arithmetic in Rust (rule 20): single-sourced checked
+                // sum, the SAME primitive check_tx_inputs uses for its reward
+                // operand — the two totals cannot drift.
+                std::vector<uint64_t> vout_amounts;
+                vout_amounts.reserve(tx.vout.size());
+                for (const auto& o : tx.vout)
+                    vout_amounts.push_back(o.amount);
+                uint64_t total_reward = 0;
+                const bool reward_overflow = shekyl_checked_sum_amounts(
+                    vout_amounts.empty() ? nullptr : vout_amounts.data(),
+                    vout_amounts.size(), &total_reward) != 0;
+                if (reward_overflow
+                    || total_reward == 0
+                    || tx.pqc_auths.size() != tx.vin.size()
+                    || rv.p.pseudoOuts.size() != spend_input_count
+                    || !rv.pseudoOuts.empty()
+                    || rv.type != rct::RCTTypeFcmpPlusPlusPqc
+                    || !rct::verCtSemanticsEmission(rv, total_reward, spend_input_count))
                 {
                     tvc.m_verifivation_failed = true;
                     tvc.m_invalid_input = true;

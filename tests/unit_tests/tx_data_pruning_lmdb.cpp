@@ -199,8 +199,8 @@ TEST(tx_data_pruning_lmdb, prune_clears_verification_data_and_is_idempotent)
 
   {
     db_wtxn_guard w(&db);
-    db.add_block(std::make_pair(b0, block_to_blob(b0)), w0, w0, cum0, coins0, {});
-    db.add_block(std::make_pair(b1, block_to_blob(b1)), w1, w1, cum1, coins1, {});
+    db.add_block(std::make_pair(b0, block_to_blob(b0)), w0, w0, cum0, coins0, 0, {});
+    db.add_block(std::make_pair(b1, block_to_blob(b1)), w1, w1, cum1, coins1, 0, {});
   }
 
   ASSERT_EQ(db.height(), 2u);

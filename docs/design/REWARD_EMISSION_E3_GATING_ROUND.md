@@ -167,6 +167,23 @@ a tx mixing the same output as backing **and** a key-imaged fee spend balances
 the summed pseudo-outs. If the backing primitive ever contributes a pseudo-out
 (so the mix could add mintable value), the KAT breaks — that is the reopen
 signal, made mechanical rather than prose.
+**Arming KAT landed (2026-07-09,
+`tests/unit_tests/archival_emission_ct_balance.cpp`).** Two arms:
+`backing_identity_O_vs_O_prime` runs the production
+`verCtSemanticsEmission` on two txs differing **only** in the vin's backing
+pseudo-out (backing-on-O vs backing-on-O′, different committed values) with
+operands derived the dispatch's way, asserting bit-identical verdicts — the
+naive regression (backing appended to `pseudoOuts`) already trips the
+`pseudoOuts.size() == fee_input_count` assert, and the identity arm catches
+the **coordinated** regression (backing summed *and* the size check bumped
+to `fee_input_count + 1` in lockstep), because with the backing in the sum,
+O and O′ cannot both balance. `backing_inclusion_shape_rejects_in_production`
+constructs a fixture whose balance closes **only** with the backing on the
+pseudo side: production rejects it, and the same fixture with the backing
+manually appended passes the underlying single-sourced balance FFI — proving
+the rejection is the exclusion working, not an unrelated malformation. Any
+edit that flips these tests is the reopen signal and requires this round's
+re-evaluation shape, not a lockstep test update.
 
 ### 2.3 Q12 / F-E8 — zero-work / zero-reward emission — RESOLVED (foreclosed)
 
@@ -1115,6 +1132,21 @@ not silently flipped.
    armed).
 8. **Regtest end-to-end**: emission accepted-and-applied through the real
    path; then E4/E5 per item 5.
+   **PARTIALLY LANDED (2026-07-09, commit-block 6).** The fee-side
+   decision KAT (budget-schedule **B5**) landed at unit level
+   (`economics_b5_fee_coinbase.cpp`): `validate_miner_transaction` driven
+   directly with fee-bearing operands — exact
+   `miner_emission + miner_fee_income` accepts (fix-α full-subsidy
+   out-param pinned), staker-pool / staker-emission overclaims and
+   underclaims reject. The regtest e2e itself **defers on the wallet-side
+   claim builder** (gate-6 backing-lineage ladder + claim assembly, the
+   §4 item 4 merge-blocker half that has not landed): there is no
+   production path that can assemble a `txin_archival_reward_emission`
+   transaction to feed a regtest chain, and hand-rolling one in the test
+   would exercise a parallel builder, not the real path — the opposite of
+   what item 8 exists to prove. Reopening trigger: claim builder lands →
+   e2e rides the Track-2 regtest harness → E4/E5 unblocks per item 5.
+   Tracked in `docs/FOLLOWUPS.md` (V3.0 pre-genesis queue).
 
 **Decision-placement pin (ratified 2026-07-08).** Verified split at this
 head: **computation is uniformly Rust; decisions are mixed.** The
@@ -1173,7 +1205,77 @@ concerns — serve-credit dedups `(P,s,E)` at `:4904`, emission dedups
 V3.0 audit" refers to the serve-credit pass; the emission pass ships at
 C-1 and is never deferred.
 
-### 9.6 Non-blocking notes
+### 9.6 Finding F-C1c — signable-hash circularity — pinned exclusion rule
+**(RATIFIED 2026-07-09** — full-binding wargame verified: reward
+redirection, non-vin alteration, vin-swap, and cross-tx transplant all
+foreclosed; the zero-fee case checked hardest and holds via the
+emission slot's own pqc_auth, see the why-notes below**)**
+
+Surfaced building item 5. The vin's two binding surfaces — the Q1 auth
+message (`emission_wire.rs::auth_msg_input`, field inventory 1–7 +
+`signable_tx_hash`) and the backing membership proof — both take
+`signable_tx_hash` as an operand. The plan glosses it as "tx prefix +
+pseudo-outs" (§7.1), but the full prefix **contains the emission vin
+itself**, and the vin carries the very signatures and proof being
+verified: the signer cannot compute the hash its own signature must
+cover. Bond-post never hit this because its vin-level artifacts bind
+vin-local fields only; the tx-wide binding lives solely in the tx-level
+hybrid auth, which signs *after* assembly.
+
+**Pinned rule (consensus-visible, hence flagged):**
+`signable_tx_hash` = the transaction-prefix hash of the tx with the
+emission vin **removed wholesale** (erase `vin[emission_index]`, hash the
+result — `blockchain.cpp` emission dispatch, item 5). Wallet and verifier
+compute it identically; the vin's serialized position is recoverable
+(emission txs carry exactly one emission vin, Q3 arity).
+
+Nothing the exclusion drops goes unbound — each property is re-bound by
+a surface that does not sit inside the hash's own preimage:
+
+| dropped from the hash | re-bound by |
+|---|---|
+| vin claim fields (P, epochs, holdings, amounts) | Q1 auth message fields 1–6 (signed directly) |
+| reward destinations | Q1 field 7's ordered commit set (commitment ‖ amount ‖ one-time key) |
+| the assembled vin inside the full prefix | tx-level hybrid auth (`tx_pqc_verify.cpp`) signs the complete prefix post-assembly |
+| full-prefix binding for fee spends | fee-input FCMP++ proof binds the unmodified `tx_prefix_hash` |
+
+The two hashes deliberately differ: the emission vin's artifacts bind
+the *reduced* signable; the fee-input FCMP proof binds the *full*
+prefix. A tx whose vin is swapped post-signing fails the tx-level
+hybrid auth; a tx whose non-vin bytes are altered fails both the Q1
+auths and (when fee inputs exist) the FCMP proof.
+
+**Why-note 1 — the two-hash split is forced, not arbitrary.** The
+tx-level pqc_auth escapes the circularity the Q1 auths hit because
+`pqc_auths` lives in the **signature section, outside the prefix**
+(like the CT sigs), so it signs the full prefix without sitting inside
+its own preimage. The Q1 auths are carried **in the vin, inside the
+prefix** — which is the whole reason they need the reduced hash.
+Out-of-prefix signs full; in-prefix signs reduced.
+
+**Why-note 2 — row 3's tx-level auth is the emission slot's own, not
+the fee inputs'.** `check_tx_inputs` requires `pqc_auths.size() ==
+num_inputs` for every non-serve-credit tx (the `:3580` sizing), and
+`num_inputs ≥ 1` for the emission vin itself — so the emission vin
+carries its own tx-level pqc_auth **present regardless of fee inputs**.
+The dispatch binds that slot's hybrid key to the vin's
+`P_canonical_id`, and `tx_pqc_verify.cpp` signature-verifies it over
+the complete prefix. P therefore signs the assembled tx as a whole
+under P's key even in the zero-fee case; a swapped vin changes the
+prefix and fails a signature no attacker can re-produce. (The natural
+reading — "the tx-level binding rides the fee inputs" — invites a
+spurious zero-fee gap; it does not exist.)
+
+**Ordering pin (implementation invariant).** `erase(vin[emission_index])`
+is deterministic only because Q3 arity (exactly one emission vin) is
+enforced **before** the hash is computed: the verifier's classification
+(`emission_count == 1`) gates entry to the dispatch branch, and the
+hash is constructed inside it. The wallet-side builder, when it lands,
+must order identically — classify/assert arity, then compute the
+signable. Two candidate emission vins must never reach the removal
+rule.
+
+### 9.7 Non-blocking notes
 
 - **E4 shrinkage.** `txin_stake_claim` and its C++ wire are already gone —
   deleted by PR-4 of the claim-era retirement (`2615c0dae`, tags
@@ -1187,3 +1289,201 @@ C-1 and is never deferred.
   (accrual and shim are consensus-inert before the whitelist byte), so
   criterion 2 fails and the exception is not invoked. The PR carries this
   §9 operand enumeration as its §11.1-pattern evidence.
+
+### 9.8 Findings F-B5a / F-B5b — connect-arm height operands — **FIXED**
+
+Block-5 file:line review of the connect arm surfaced two defects in how
+the production call sites derive the heights the §6.3 journal keys on.
+The WS-2 KATs could not see either: they call apply/revert directly with
+explicit heights, bypassing the derivation under test.
+
+- **F-B5a (connect crash).** The emission arm in
+  `BlockchainDB::add_transaction` derived the block height via
+  `get_block_height(blk_hash)` — but `add_transaction` runs from
+  `add_block` *before* the LMDB subclass writes the `block_heights` row,
+  so the lookup threw `BLOCK_DNE` and every block carrying an emission
+  vin failed to connect. **Fix:** the arm reads `height()`, which at that
+  point is the connecting block's index N — also verify's pin-(b)
+  operand (`chain_height = height()` read at the same pre-connect
+  point), so connect and verify derive the same settled epoch by
+  construction. The bond-post arm carried the identical latent crash
+  (pre-dating C-1); fixed in its own commit.
+- **F-B5b (revert no-op → double-mint).** The connect journal keys on
+  the block index N, but `pop_block`'s `removed_block_height` is the
+  post-block chain height N+1 (the slash/close hooks' convention).
+  Passed through unconverted, the claim revert read an empty journal
+  slot and silently no-opped: the claimed-epoch set survived the pop,
+  the journal row leaked, and a re-mined claim for the same epochs
+  would be rejected while a *different* epoch set double-counted
+  `first_paying_emission_height`. **Fix:** `pop_block` reverts claims
+  at `removed_block_height - 1`. Convert, don't unify — journaling at
+  N+1 instead would shift the connect-side settled-epoch operand off
+  verify's at every epoch boundary.
+- **Armed KAT:** `emission_connect_pop_roundtrip_through_real_block_path`
+  (`tests/unit_tests/archival_substrate_lmdb.cpp`) drives the shared
+  fixture vin through the real `add_block → add_transaction → pop_block`
+  machinery against real LMDB. Verified armed against both findings
+  independently: unfixed F-B5a reproduces the `BLOCK_DNE` throw at
+  connect; unfixed F-B5b (with F-B5a fixed) fails the post-pop
+  pre-image assertions. The fixture's claimed epochs moved from
+  {10, 11} to {1, 2} so the KAT reaches claimability after ~3
+  settlement epochs of appended blocks (~2 s), matching the slash
+  scheduler KAT's scale.
+
+### 9.9 Findings F-B1a / F-B1b / F-B1c — budget accrual and redirect — **FIXED** (incl. c2, disposition (a))
+
+Block-1 file:line review of the budget-accrual/redirect write
+(`ARCHIVAL_BUDGET_SCHEDULE.md` §§2–3). The substrate KATs B1–B3 drive
+`add_archival_budget_accrual` and the close hook directly, so none of
+them could see defects in *when* and *with which operands* the connect
+path performs the write. Three findings; the first two share one
+structural fix.
+
+- **F-B1a (budget misses the last block of every epoch).** The accrual
+  row was written by `handle_block_to_main_chain` **after**
+  `m_db->add_block` returned — but the epoch-close hook runs *inside*
+  `add_block`, so when the close of epoch E fired (while connecting E's
+  final block, close operand `(E+1)·SEB`), the range-sum over
+  `[E·SEB, (E+1)·SEB)` found no row for the final block. Every epoch's
+  `budget(E)` silently dropped one block's inflow: a per-epoch
+  under-mint and a standing violation of §2.2's conservation identity
+  (the dropped inflow was neither burned nor emittable). Live on
+  mainnet-shaped chains from the first close.
+- **F-B1b (redirect flips on the next block's version).** The redirect
+  gate read `m_hardfork->get_current_version()` **after** `add_block` —
+  by which point `HardFork::add` has advanced `current_fork_index` via
+  `get_voted_fork_index(height + 1)`, the *next* block's version. At an
+  activation boundary the boundary block's inflow accrued under the next
+  block's rules — one block over-mint against §2.2's per-block pin.
+  Latent on mainnet (single-entry fork table, active-from-genesis);
+  armed on any testnet or post-genesis fork. Independently discovered
+  and confirmed by the maintainer during review.
+- **Structural fix (both):** the staker-inflow computation and target
+  decision moved **before** `m_db->add_block`
+  (`blockchain.cpp:5352–5398`), where `get_current_version()` is exactly
+  the connecting block's validated version — the same operand
+  `validate_miner_transaction` received. The accrual amount rides into
+  `add_block` as a new `archival_budget_accrual` parameter
+  (`blockchain_db.h`), and `BlockchainDB::add_block` writes the row
+  **before** the slash/close hooks fire, same wtxn. The pop-side removal
+  moved into `BlockchainDB::pop_block` (keyed at the block index,
+  the §9.8 claim-journal convention), so both sides of the row live in
+  the same layer inside the block's txn. The burn-record write stays in
+  the Blockchain layer (its landed idiom), now fed by the pre-add
+  computation.
+- **F-B1c (accrual-site operand drift vs verify).** Two operand
+  mismatches between the accrual computation and
+  `validate_miner_transaction`:
+  - **c1 (fee leg) — fixed.** The accrual site called
+    `compute_fee_burn` with `tx_volume = 0`, which zeroes `burn_pct`
+    (`burn.rs:46–79`) and with it both `staker_pool_amount` (the fee
+    half of the inflow never accrued anywhere) and `actually_destroyed`
+    (the destroyed share never reached `block_burn`/`total_burned`).
+    Fix: the site passes `get_tx_volume_avg(blockchain_height)` — the
+    verify path's exact operand at the same pre-add read point.
+  - **c2 (emission leg) — adjudicated as post-closure pin, disposition
+    (a), merge blocker.** The accrual site derived `full_block_emission`
+    from the 5-arg `get_block_reward` (no release multiplier, no weight
+    penalty), while verify's `base_reward` comes from the 6-arg form
+    (volume-run release multiplier + weight penalty). This operand shape
+    predates C-1: at the merge base the same unmodulated quantity fed
+    the staker-leg **burn**, where the mismatch was benignly
+    deflationary (over-destroying removes more from circulation). The
+    C-1 redirect inverted its sign: redirecting the over-sized staker
+    leg into `budget(E)` makes the excess (unmodulated − modulated)
+    *re-mintable* — coins the emission claim can mint that
+    `already_generated_coins` never counted as emitted. An open
+    inflation surface of the same class as F-B1a, hence the
+    merge-blocker classification (it gates this PR; the economics
+    question below gates genesis and must not be conflated with it).
+
+    **Adjudicated disposition (a), applied to both legs.** The split
+    operand is now verify's `base_reward` itself — the modulated
+    quantity the coinbase was just bound against and that
+    `already_generated_coins` advances by. Conservation is then by
+    construction: the ledger advance decomposes as
+    `base_reward = miner_emission (coinbase) + staker leg
+    (burned | accrued)`, so `budget(E)` is provably "ledger minus
+    coinbase" and claiming cannot inflate. Both the pre-activation burn
+    and the post-activation accrual take the modulated leg, which makes
+    the redirect a **pure destination switch** — same quantity,
+    burn-vs-accrue on the block's own version — restoring §2.2's "one
+    write, one target" invariant in full (fixing only the accrual would
+    have changed both destination *and* quantity across the boundary).
+    Bonus: the pre-activation burn becomes conservation-exact instead
+    of benignly deflationary. Genesis is excluded from the split
+    (its emission is the hardcoded `GENESIS_TX` amount, paid whole by
+    the genesis coinbase; splitting would accrue a share of coins the
+    coinbase already fully paid).
+
+    **Dispositions (b) and (c) rejected now, (b) with a rule-21
+    reopen.** (c) — split first, modulate the miner leg only — touches
+    the coinbase-binding rule for no offsetting gain over (a). (b) —
+    the staker leg as the unmodulated subsidy, demand-insulated —
+    is not economically wrong but economically *unproven*, and it pays
+    the highest-risk price: it amends the supply-ledger advance rule
+    and the conservation identity the Q11 KAT guards, the most
+    catastrophic-if-wrong genesis-frozen surface in the system.
+    **Reopening criteria (rule 21):** the archival-funding
+    demand-insulation sim (companion to the servo/fee-era sim; see
+    `docs/FOLLOWUPS.md`, V3.0 pre-genesis queue) measures how much
+    `budget(E)` swings with tx volume under (a) and whether that swing
+    plausibly starves the serving incentive in low-volume scenarios.
+    If it does, (b) reopens as a deliberate, evidence-backed
+    supply-accounting amendment — pre-genesis if it lands in the
+    window, a named post-genesis-blocked item if not. If the swing is
+    tolerable, (a) stands permanently and the reopen closes.
+    **Re-evaluation shape:** sim results reviewed against this section;
+    an adopting amendment requires a threat-model review of the
+    supply-accounting change plus a Q11-identity KAT amendment in the
+    same PR.
+- **Armed KAT:**
+  `budget_epoch_boundary_includes_final_block_through_real_block_path`
+  (`tests/unit_tests/archival_substrate_lmdb.cpp`) drives per-block
+  accrual amounts through the real `add_block` across the epoch-0
+  boundary: asserts `budget(0)` equals all `SEB` rows including the
+  boundary block's (verified armed: re-ordering the write after the
+  hooks reproduces the one-row-short sum, `409959` vs `410000`), then
+  pops the boundary block (frozen row reverts with the close family,
+  the block's own accrual row reverts with the pop, prior rows
+  survive) and re-connects it (byte-identical re-close).
+- **F-B1b hardening (c2 review round).** The maintainer's review of the
+  c2 fix flagged the redirect's version operand — still
+  `get_current_version()`, the tip-relative API — as fragile even in
+  its pre-add position: the split two lines below keys on
+  `blockchain_height` explicitly, while the burn-vs-accrue decision
+  keyed on an API whose correctness rests on the height+1 advance
+  convention (§2.2 was written to stop depending on exactly that).
+  Verified at source before changing: the pre-add read *is* correct —
+  `HardFork::add` for block `h−1` advances `current_fork_index` via
+  `get_voted_fork_index(h)`, the connecting block's own voted version
+  (`hardfork.cpp:155`), and independently `m_hardfork->check(bl)`
+  (`blockchain.cpp:4915`, `do_check` at `hardfork.cpp:111`) enforces
+  `bl.major_version == get_current_version()` before the redirect is
+  reachable — so the activation block **accrues** under the current
+  form and no one-epoch budget error exists. The operand is
+  nevertheless replaced with **`bl.major_version`**: the block's own
+  declared, consensus-checked version — explicit, convention-free,
+  matching the `blockchain_height` anchoring the split already uses.
+  (`get_ideal_version(h)` was considered and rejected: it is the
+  static-table lookup, ignores the vote threshold, and can disagree
+  with the version the block was validated as.) A **CI tripwire**
+  (`scripts/ci/check_archival_reward_gates.sh`, wired into the
+  consensus-invariants gate) extracts the redirect block by its
+  comment anchor and fails on any `get_block_reward`,
+  `get_current_version`, or `get_ideal_version(` reintroduction inside
+  it, with positive anchor checks (`bl.major_version`,
+  `compute_emission_split`) so a refactor that moves the block cannot
+  silently retire the gate — verified armed (reverting the operand
+  fails the gate on both the negative and anchor checks).
+- **Fast-follow (prioritized): end-to-end conservation KAT.** The
+  operand-identity construction cannot cover the *branch-selection*
+  class — a wrong burn-vs-accrue decision fires with identical
+  operands. The independent guard is the conservation identity
+  `accrual + burn + coinbase == ledger advance` driven through the
+  real connect path with an **activation-boundary block in the
+  fixture** (burn-when-should-accrue breaks the identity at exactly
+  that block). Needs a core-tests-level harness (multi-entry fork
+  table + real block flow), out of this PR's LMDB-substrate KAT
+  reach — tracked in `docs/FOLLOWUPS.md` V3.0 queue as the C-1
+  fast-follow.

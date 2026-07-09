@@ -280,7 +280,37 @@ namespace cryptonote
   };
 
 
-  typedef std::variant<txin_gen, txin_to_script, txin_to_scripthash, txin_to_key, txin_archival_serve_credit_response, txin_archival_bond_post> txin_v;
+  // C-1 (REWARD_EMISSION_VIN_PLAN.md PR-E2 shim, reassigned to C-1) — archival
+  // reward-emission vin (dense tag 0x04; see VARIANT_TAG below). Thin transport
+  // only: the field is the complete Rust canonical encoding (leading wire tag
+  // 0x04 included — emission_wire.rs owns the codec, the parse, and every
+  // structural bound; single source of truth). C++ never reads inside the blob;
+  // consensus code that needs fields (the block-level (P,E) pass, dispatch)
+  // obtains them through the shekyl_emission_* FFI parse, never a C++ decode.
+  // Wire tag for the archival reward-emission vin — the single C++ source for
+  // the three sites that MUST agree on the byte: this struct's transport guard,
+  // the VARIANT_TAG registration (below), and json_object.cpp's tag echo.
+  // Mirrors Rust's VIN_TYPE_ARCHIVAL_REWARD_EMISSION (emission_wire.rs owns the
+  // codec). The dense-tag registry has renumbered before (0x06 -> 0x04); a named
+  // constant means a future renumber touches one line, not three scattered ones.
+  constexpr uint8_t TXIN_ARCHIVAL_REWARD_EMISSION_WIRE_TAG = 0x04;
+
+  struct txin_archival_reward_emission
+  {
+    std::vector<uint8_t> canonical_bytes;
+
+    BEGIN_SERIALIZE_OBJECT()
+      FIELD(canonical_bytes)
+      // Transport-layer shape only (allocation bound + wire-tag echo); a blob
+      // passing here can still be garbage — the Rust parser is the validator.
+      if (canonical_bytes.size() < 2 || canonical_bytes.size() > config::ARCHIVAL_EMISSION_VIN_MAX_BYTES)
+        return false;
+      if (canonical_bytes[0] != TXIN_ARCHIVAL_REWARD_EMISSION_WIRE_TAG)
+        return false;
+    END_SERIALIZE()
+  };
+
+  typedef std::variant<txin_gen, txin_to_script, txin_to_scripthash, txin_to_key, txin_archival_serve_credit_response, txin_archival_bond_post, txin_archival_reward_emission> txin_v;
 
   // The txin_to_key (spend) subset of vin. This count — not vin.size() — sizes
   // the prunable pseudoOuts array: an archival bond-post vin occupies a
@@ -296,6 +326,83 @@ namespace cryptonote
       if (std::holds_alternative<txin_to_key>(in))
         ++n;
     return n;
+  }
+
+  // Archival special-vin taxonomy. A tx is exactly one of: a pure serve-credit
+  // response (every vin a serve-credit), a bond-post, a reward-emission (each
+  // carrying ONE special vin with every co-resident a key-imaged spend — the
+  // Q11 mixing rule, arity 1 per Q3 §2.1), or `none` (a regular FCMP++ spend,
+  // which the special branches fall through to). This classification is
+  // consensus and is consumed by three sites that MUST agree on what a given tx
+  // is — check_tx_inputs (CT dispatch), check_tx_outputs (the v3
+  // zero-plaintext-vout carve-out for emission reward vouts), and
+  // ver_non_input_consensus (RCT semantics) — so the predicate lives here once
+  // (REWARD_EMISSION_E3_GATING_ROUND.md §2.2 / §9.5). Do not re-open-code it: a
+  // second copy that drifts splits validators on whether a tx is an emission tx.
+  enum class archival_tx_kind { none, serve_credit_only, bond_post, emission };
+
+  struct archival_tx_classification
+  {
+    archival_tx_kind kind = archival_tx_kind::none;
+    size_t special_index = 0;      // index of the bond-post / emission vin (kind-dependent)
+    size_t spend_input_count = 0;  // co-resident txin_to_key spends
+  };
+
+  inline archival_tx_classification classify_archival_tx(const std::vector<txin_v>& vin)
+  {
+    archival_tx_classification c;
+    if (vin.empty())
+      return c;
+    bool serve_credit_only = true;
+    size_t bond_post_count = 0, emission_count = 0, to_key_count = 0;
+    size_t bond_post_index = 0, emission_index = 0;
+    for (size_t i = 0; i < vin.size(); ++i)
+    {
+      const auto& in = vin[i];
+      if (!std::holds_alternative<txin_archival_serve_credit_response>(in))
+        serve_credit_only = false;
+      if (std::holds_alternative<txin_archival_bond_post>(in))
+      {
+        ++bond_post_count;
+        bond_post_index = i;
+      }
+      else if (std::holds_alternative<txin_archival_reward_emission>(in))
+      {
+        ++emission_count;
+        emission_index = i;
+      }
+      else if (std::holds_alternative<txin_to_key>(in))
+        ++to_key_count;
+    }
+    c.spend_input_count = to_key_count;
+    if (serve_credit_only)
+      c.kind = archival_tx_kind::serve_credit_only;
+    else if (bond_post_count == 1 && emission_count == 0 && to_key_count + 1 == vin.size())
+    {
+      c.kind = archival_tx_kind::bond_post;
+      c.special_index = bond_post_index;
+    }
+    else if (emission_count == 1 && bond_post_count == 0 && to_key_count + 1 == vin.size())
+    {
+      c.kind = archival_tx_kind::emission;
+      c.special_index = emission_index;
+    }
+    return c;
+  }
+
+  // Whether a tx carries any archival reward-emission vin. Emission reward vouts
+  // store (add_transaction) and remove (remove_tx_outputs) as amount-0 RCT
+  // records with their outPk commitment kept; the store and remove sides MUST
+  // gate on the SAME predicate or a block pop corrupts the output index, so the
+  // check lives here once (C-1, REWARD_EMISSION_E3_GATING_ROUND.md §9.5 item 7).
+  // Deliberately the loose "has an emission vin" storage predicate, distinct
+  // from classify_archival_tx's strict well-formedness used in consensus verify.
+  inline bool tx_has_archival_emission_vin(const std::vector<txin_v>& vin)
+  {
+    for (const auto& in : vin)
+      if (std::holds_alternative<txin_archival_reward_emission>(in))
+        return true;
+    return false;
   }
 
   typedef std::variant<txout_to_script, txout_to_scripthash, txout_to_key, txout_to_tagged_key> txout_target_v;
@@ -688,6 +795,9 @@ namespace cryptonote
       size_t operator()(const txin_to_key& txin) const {return txin.key_offsets.size();}
       size_t operator()(const txin_archival_serve_credit_response& txin) const {return 0;}
       size_t operator()(const txin_archival_bond_post& txin) const {return 0;}
+      // Emission auths live inside the canonical blob (Rust-verified), not in
+      // the C++ signatures array.
+      size_t operator()(const txin_archival_reward_emission& txin) const {return 0;}
     };
 
     return std::visit(txin_signature_size_visitor(), tx_in);
@@ -844,6 +954,7 @@ VARIANT_TAG(binary_archive, cryptonote::txin_to_scripthash, 0xf1);      // shed 
 VARIANT_TAG(binary_archive, cryptonote::txin_to_key, 0x01);             // fcmp spend
 VARIANT_TAG(binary_archive, cryptonote::txin_archival_serve_credit_response, 0x02);
 VARIANT_TAG(binary_archive, cryptonote::txin_archival_bond_post, 0x03);
+VARIANT_TAG(binary_archive, cryptonote::txin_archival_reward_emission, cryptonote::TXIN_ARCHIVAL_REWARD_EMISSION_WIRE_TAG);  // F-C1b: dense next-free, = Rust wire tag
 VARIANT_TAG(binary_archive, cryptonote::txout_to_script, 0xf0);         // shed (parked)
 VARIANT_TAG(binary_archive, cryptonote::txout_to_scripthash, 0xf1);     // shed (parked)
 VARIANT_TAG(binary_archive, cryptonote::txout_to_key, 0xf2);            // shed (parked)
@@ -857,6 +968,7 @@ VARIANT_TAG(json_archive, cryptonote::txin_to_scripthash, "scripthash");
 VARIANT_TAG(json_archive, cryptonote::txin_to_key, "key");
 VARIANT_TAG(json_archive, cryptonote::txin_archival_serve_credit_response, "archival_serve_credit_response");
 VARIANT_TAG(json_archive, cryptonote::txin_archival_bond_post, "archival_bond_post");
+VARIANT_TAG(json_archive, cryptonote::txin_archival_reward_emission, "archival_reward_emission");
 VARIANT_TAG(json_archive, cryptonote::txout_to_script, "script");
 VARIANT_TAG(json_archive, cryptonote::txout_to_scripthash, "scripthash");
 VARIANT_TAG(json_archive, cryptonote::txout_to_key, "key");
@@ -870,6 +982,7 @@ VARIANT_TAG(debug_archive, cryptonote::txin_to_scripthash, "scripthash");
 VARIANT_TAG(debug_archive, cryptonote::txin_to_key, "key");
 VARIANT_TAG(debug_archive, cryptonote::txin_archival_serve_credit_response, "archival_serve_credit_response");
 VARIANT_TAG(debug_archive, cryptonote::txin_archival_bond_post, "archival_bond_post");
+VARIANT_TAG(debug_archive, cryptonote::txin_archival_reward_emission, "archival_reward_emission");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_script, "script");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_scripthash, "scripthash");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_key, "key");

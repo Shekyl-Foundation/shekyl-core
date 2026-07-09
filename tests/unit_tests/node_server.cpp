@@ -543,6 +543,7 @@ TEST(cryptonote_protocol_handler, race_condition)
       ),
       stat.diff,
       stat.reward,
+      0,
       {}
     );
     core.get_blockchain_storage().get_db().batch_stop();

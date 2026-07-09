@@ -277,6 +277,12 @@ namespace boost
   }
 
   template <class Archive>
+  inline void serialize(Archive &a, cryptonote::txin_archival_reward_emission &x, const boost::serialization::version_type ver)
+  {
+    a & x.canonical_bytes;
+  }
+
+  template <class Archive>
   inline void serialize(Archive &a, cryptonote::tx_out &x, const boost::serialization::version_type ver)
   {
     a & x.amount;

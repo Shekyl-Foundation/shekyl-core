@@ -483,6 +483,20 @@ private:
     std::array<uint8_t, kArchivalEpochCloseLogKeySize> bytes_{};
 };
 
+// ─── ArchivalBudgetKey / ArchivalBudgetAccrualKey (ARCHIVAL_BUDGET_SCHEDULE.md §3)
+//
+// Same byte shapes as the sigma / close-log keys they sit beside: the frozen
+// per-epoch budget row is keyed `BE(E)` and the per-height accrual row
+// `BE(height)` — big-endian so cursor order is numeric order (the close's
+// bounded range-sum over `[E·SEB, (E+1)·SEB)` and the prune walk depend on
+// it). Aliased, not redefined, per the ArchivalEmissionClaimLogKey precedent.
+
+static constexpr size_t kArchivalBudgetKeySize = kArchivalSigmaWorkKeySize;                // BE(E)
+static constexpr size_t kArchivalBudgetAccrualKeySize = kArchivalEpochCloseLogKeySize;    // BE(height)
+
+using ArchivalBudgetKey = ArchivalSigmaWorkKey;
+using ArchivalBudgetAccrualKey = ArchivalEpochCloseLogKey;
+
 // ─── ArchivalSlashLogKey / ArchivalSlashRevertValue ───────────────────────
 //
 // Per-block journal for gate-4 slash revert on `pop_block` (gate-2 §8).

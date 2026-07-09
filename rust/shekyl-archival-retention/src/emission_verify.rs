@@ -18,18 +18,16 @@
 //! | 5. economics (three-channel, R1.B) | [`emission_vin_verify_claims`] |
 //! | 6. membership-only backing | [`emission_vin_verify_backing`] |
 //! | 7. FCMP balance for fee inputs | C++ tx layer (existing `shekyl_fcmp_verify` over the fee `txin_to_key`s; not this module) |
-//! | 8. hybrid auth gate (§2, R1.A) | **C-1** — the [`AuthVerified`] minter does not exist yet |
+//! | 8. hybrid auth gate (§2, R1.A) | [`emission_vin_verify_auth`] (landed with C-1 block 3) |
 //!
 //! ## Fail-closed by type (§3.0 gate-last)
 //!
 //! The final verdict [`EmissionVerified`] is only constructible through
 //! [`emission_vin_verify`], which consumes three **sealed witnesses**:
 //! [`ClaimsVerified`] (steps 1–5), [`BackingVerified`] (step 6), and
-//! [`AuthVerified`] (step 8). The first two are minted by this module's
-//! verify functions; `AuthVerified` has **no production constructor in this
-//! crate at all** — the ML-DSA witness minter lands with C-1 (the activating
-//! cut). Until then an authed acceptance is unrepresentable: E3 physically
-//! cannot accept an emission, not merely "does not".
+//! [`AuthVerified`] (step 8) — each mintable only by its verify function in
+//! this module. The dispatch cannot skip a step: an acceptance without all
+//! three witnesses is unrepresentable, not merely rejected.
 //!
 //! ## Dedup layering (WS-2 §6.2)
 //!
@@ -45,9 +43,12 @@ use crate::consensus_state::{
     as_of_e_served_work, capped_work_milli, epoch_close_height, settlement_epoch_at_height,
     shard_contribution_milli, EpochCloseInputs,
 };
-use crate::emission_wire::{ArchivalRewardEmissionVin, WireError};
+use crate::emission_wire::{ArchivalRewardEmissionVin, EmissionAuthRole, RewardCommit, WireError};
 use crate::reward_arithmetic::reward_share_floor;
 use shekyl_crypto_pq::derivation::hash_pqc_public_key;
+use shekyl_crypto_pq::signature::{
+    HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
+};
 use shekyl_fcmp::proof::{verify_membership_only, ShekylFcmpProof};
 use shekyl_fcmp::PqcLeafScalar;
 use thiserror::Error;
@@ -187,6 +188,18 @@ pub enum EmissionVerifyError {
     /// Step 6: membership-only proof rejected.
     #[error("membership-only backing rejected: {0}")]
     BackingRejected(#[from] shekyl_fcmp::proof::VerifyError),
+
+    /// Step 8: a hybrid pubkey or signature field failed canonical
+    /// deserialization for the named auth role (wire lengths were canonical —
+    /// [`ArchivalRewardEmissionVin::validate`] pinned those — but the bytes
+    /// are not a well-formed hybrid encoding).
+    #[error("{role:?} auth pubkey/signature failed canonical deserialization")]
+    AuthMalformed { role: EmissionAuthRole },
+
+    /// Step 8: the hybrid (Ed25519 **and** ML-DSA-65) signature did not
+    /// verify over the role's Q1 domain-separated binding message.
+    #[error("{role:?} hybrid auth signature rejected")]
+    AuthRejected { role: EmissionAuthRole },
 }
 
 /// The claimant's **pre-block** bond record — step 2/3 operands, marshaled
@@ -279,11 +292,12 @@ impl BackingVerified {
 
 /// Sealed witness: the §2/R1.A hybrid auth gate passed (§7.1 step 8).
 ///
-/// **No production constructor exists in this crate.** The minter — two
-/// `shekyl_emission_hybrid_auth_verify` calls over the Q1 domain-separated
-/// binding messages — lands with **C-1**, the activating cut. Until then,
-/// [`emission_vin_verify`] cannot be called outside KATs: fail-closed by
-/// type (§3.0), the same shape as `KCover::for_kat`.
+/// The only production minter is [`emission_vin_verify_auth`] — both hybrid
+/// auths (Auth-B stake-side, Auth-P claim-side) verified over the Q1
+/// domain-separated binding messages, with the Auth-B leaf gate checked
+/// first. Fail-closed by type (§3.0): dispatch cannot assemble a verdict
+/// without this witness, so an unauthenticated acceptance is
+/// unrepresentable.
 #[derive(Debug)]
 pub struct AuthVerified {
     _sealed: (),
@@ -576,6 +590,83 @@ pub fn emission_vin_verify_backing(
         ));
     }
     Ok(BackingVerified { _sealed: () })
+}
+
+/// §7.1 step 8 — the §2/R1.A hybrid auth gate (the C-1 `AuthVerified`
+/// production minter).
+///
+/// Recomputes both Q1 binding messages through the vin's own
+/// [`ArchivalRewardEmissionVin::auth_msgs`] (the single builder signer and
+/// verifier share, so they cannot drift), then verifies:
+///
+/// 1. **Auth-B (stake-side)** — the leaf gate first
+///    (`hash_pqc_public_key(backing_pubkey) == pqc_pk_hash`, the same
+///    order the PR-E1 `shekyl_emission_hybrid_auth_verify` primitive pins:
+///    a signature over an unrelated-but-valid key must not pass), then the
+///    hybrid signature `auth_backing` under `backing_pubkey` over the
+///    backing-role message. This binds the auth to the **proven leaf**, not
+///    merely *a* leaf (gate-6 §9.6).
+/// 2. **Auth-P (claim-side)** — the hybrid signature `auth_claim` under
+///    `p_pubkey` over the claim-role message. No leaf gate: `P`'s binding is
+///    `P_canonical_id`, field 1 of the message inventory (§6.1).
+///
+/// Both signatures are hybrid (Ed25519 **and** ML-DSA-65) per the ratified
+/// R1.A posture — Auth-P has no membership-proof classical fallback, so an
+/// ML-DSA-only auth would be a single point of cryptographic failure.
+///
+/// `reward_commits` and `signable_tx_hash` are the same tx-level context the
+/// wallet builder signed over; a destination swap or cross-tx replay changes
+/// the recomputed message and both signatures reject.
+pub fn emission_vin_verify_auth(
+    vin: &ArchivalRewardEmissionVin,
+    reward_commits: &[RewardCommit],
+    signable_tx_hash: &[u8; 32],
+) -> Result<AuthVerified, EmissionVerifyError> {
+    let msgs = vin.auth_msgs(reward_commits, signable_tx_hash)?;
+
+    // Auth-B: leaf-binding first (order pinned by the PR-E1 primitive).
+    if hash_pqc_public_key(&vin.backing.backing_pubkey) != vin.backing.pqc_pk_hash {
+        return Err(EmissionVerifyError::BackingLeafMismatch);
+    }
+    verify_hybrid_auth(
+        &vin.backing.backing_pubkey,
+        &msgs.backing,
+        &vin.auth_backing,
+        EmissionAuthRole::Backing,
+    )?;
+
+    // Auth-P: pseudonym key, message-bound via P_canonical_id.
+    verify_hybrid_auth(
+        &vin.p_pubkey,
+        &msgs.claim,
+        &vin.auth_claim,
+        EmissionAuthRole::Claim,
+    )?;
+
+    Ok(AuthVerified { _sealed: () })
+}
+
+/// One hybrid (Ed25519 + ML-DSA-65) auth verification with role-tagged
+/// rejections. Lengths are already canonical (`validate` pinned them);
+/// deserialization can still fail on malformed component encodings.
+fn verify_hybrid_auth(
+    pubkey_bytes: &[u8],
+    msg: &[u8; 64],
+    sig_bytes: &[u8],
+    role: EmissionAuthRole,
+) -> Result<(), EmissionVerifyError> {
+    let Ok(pubkey) = HybridPublicKey::from_canonical_bytes(pubkey_bytes) else {
+        return Err(EmissionVerifyError::AuthMalformed { role });
+    };
+    let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
+        return Err(EmissionVerifyError::AuthMalformed { role });
+    };
+    match HybridEd25519MlDsa.verify(&pubkey, msg, &sig) {
+        Ok(true) => Ok(()),
+        // Ok(false) and Err collapse to one rejection: the split is a
+        // library-reporting detail, not a consensus distinction.
+        _ => Err(EmissionVerifyError::AuthRejected { role }),
+    }
 }
 
 /// The fail-closed assembly: all three witnesses, or no verdict.
