@@ -6019,14 +6019,13 @@ void BlockchainLMDB::delete_archival_budget_before_epoch(uint64_t prune_below_ep
     if (k.mv_size != shekyl::db::kArchivalBudgetKeySize)
       throw std::runtime_error("FATAL: archival_budget key size mismatch on prune");
     const uint64_t epoch = shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data));
-    if (epoch < prune_below_epoch)
-    {
-      rc = mdb_cursor_del(cur, 0);
-      if (rc)
-        throw0(DB_ERROR(lmdb_error("Failed to delete archival_budget row on prune: ", rc).c_str()));
-    }
+    if (epoch >= prune_below_epoch)
+      break;  // BE keys iterate in numeric order; everything past here is retained.
+    rc = mdb_cursor_del(cur, 0);
+    if (rc)
+      throw0(DB_ERROR(lmdb_error("Failed to delete archival_budget row on prune: ", rc).c_str()));
   }
-  if (rc != MDB_NOTFOUND)
+  if (rc && rc != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("archival_budget cursor error on prune: ", rc).c_str()));
   mdb_cursor_close(cur);
 }
