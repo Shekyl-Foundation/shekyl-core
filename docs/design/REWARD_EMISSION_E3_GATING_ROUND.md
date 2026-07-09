@@ -167,6 +167,23 @@ a tx mixing the same output as backing **and** a key-imaged fee spend balances
 the summed pseudo-outs. If the backing primitive ever contributes a pseudo-out
 (so the mix could add mintable value), the KAT breaks — that is the reopen
 signal, made mechanical rather than prose.
+**Arming KAT landed (2026-07-09,
+`tests/unit_tests/archival_emission_ct_balance.cpp`).** Two arms:
+`backing_identity_O_vs_O_prime` runs the production
+`verCtSemanticsEmission` on two txs differing **only** in the vin's backing
+pseudo-out (backing-on-O vs backing-on-O′, different committed values) with
+operands derived the dispatch's way, asserting bit-identical verdicts — the
+naive regression (backing appended to `pseudoOuts`) already trips the
+`pseudoOuts.size() == fee_input_count` assert, and the identity arm catches
+the **coordinated** regression (backing summed *and* the size check bumped
+to `fee_input_count + 1` in lockstep), because with the backing in the sum,
+O and O′ cannot both balance. `backing_inclusion_shape_rejects_in_production`
+constructs a fixture whose balance closes **only** with the backing on the
+pseudo side: production rejects it, and the same fixture with the backing
+manually appended passes the underlying single-sourced balance FFI — proving
+the rejection is the exclusion working, not an unrelated malformation. Any
+edit that flips these tests is the reopen signal and requires this round's
+re-evaluation shape, not a lockstep test update.
 
 ### 2.3 Q12 / F-E8 — zero-work / zero-reward emission — RESOLVED (foreclosed)
 

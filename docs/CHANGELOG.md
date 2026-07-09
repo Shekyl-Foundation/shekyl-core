@@ -4,6 +4,23 @@
 
 ### Added
 
+- **consensus: Q11 balance-exclusion arming KAT — the ratified reopen
+  trigger (`REWARD_EMISSION_E3_GATING_ROUND.md` §2.2).** New unit KATs
+  (`archival_emission_ct_balance.cpp`) pin that the emission vin's
+  membership-only backing pseudo-out is structurally excluded from the
+  CT balance: `backing_identity_O_vs_O_prime` asserts two txs differing
+  only in the backing commitment (backing-on-O vs backing-on-O′) balance
+  bit-identically through the production `verCtSemanticsEmission` with
+  dispatch-derived operands — catching the coordinated regression where
+  the backing is summed and the `pseudoOuts.size() == fee_input_count`
+  check is bumped in lockstep (the naive append already trips the size
+  assert). `backing_inclusion_shape_rejects_in_production` proves the
+  teeth: a fixture balanced *only* with the backing on the pseudo side
+  rejects in production while the manually-included shape passes the
+  underlying single-sourced balance FFI, so the rejection is the Q11
+  exclusion working, not an unrelated malformation. Flipping these
+  tests is the §2.2 reopen signal, not a test to update in lockstep.
+
 - **economics: C-1 commit-block 6 — KAT B5 fee-bearing coinbase
   foreclosure; regtest e2e deferral recorded (§9.5 item 8,
   `ARCHIVAL_BUDGET_SCHEDULE.md` §7).** New unit KATs

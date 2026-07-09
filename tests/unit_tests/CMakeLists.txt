@@ -113,6 +113,7 @@ set(unit_tests_sources
   archival_bond_post_integration.cpp
   archival_reward_emission.cpp
   archival_emission_connect.cpp
+  archival_emission_ct_balance.cpp
   archival_segment_freeze.cpp
   archival_substrate_lmdb.cpp
   ct_balance_differential.cpp
