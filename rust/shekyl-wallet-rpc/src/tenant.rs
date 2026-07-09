@@ -30,6 +30,12 @@ pub struct Tenant {
     open_name: Option<String>,
     /// Open Engine handle (FULL capability, SoloSigner).
     engine: Option<SharedEngine>,
+    /// True while `create_wallet` / `open_wallet` is doing slow work
+    /// (daemon connect, Argon2) *outside* the tenant mutex. Prevents a
+    /// concurrent create/open from racing past `is_open` while the first
+    /// call has released the mutex. Cleared on success (`set_open`) or
+    /// failure ([`Self::clear_opening`]).
+    opening: bool,
 }
 
 impl Tenant {
@@ -41,6 +47,25 @@ impl Tenant {
     /// Whether a wallet is currently open on this tenant.
     pub fn is_open(&self) -> bool {
         self.engine.is_some()
+    }
+
+    /// Whether create/open is in flight or a wallet is already open.
+    ///
+    /// Lifecycle create/open refuse with `-29000` when this is true.
+    pub fn is_busy(&self) -> bool {
+        self.is_open() || self.opening
+    }
+
+    /// Mark create/open in flight. Caller must hold the tenant mutex and
+    /// have already checked [`Self::is_busy`].
+    pub fn begin_opening(&mut self) {
+        debug_assert!(!self.is_busy());
+        self.opening = true;
+    }
+
+    /// Clear the in-flight create/open reservation (error path).
+    pub fn clear_opening(&mut self) {
+        self.opening = false;
     }
 
     /// Open wallet stem, if any.
@@ -64,6 +89,7 @@ impl Tenant {
             self.engine.is_none(),
             "set_open called while a wallet is already open"
         );
+        self.opening = false;
         self.open_name = Some(name.into());
         self.engine = Some(Arc::new(RwLock::new(engine)));
     }

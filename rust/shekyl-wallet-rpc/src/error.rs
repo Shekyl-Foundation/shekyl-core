@@ -227,9 +227,9 @@ impl From<OpenError> for WalletRpcError {
                     capability: crate::types::capability_mode_str(found).to_owned(),
                 }
             }
-            OpenError::OutstandingPendingTx { count } => Self::InternalError(format!(
-                "cannot close: {count} pending transaction(s) still outstanding"
-            )),
+            OpenError::OutstandingPendingTx { count } => {
+                Self::InternalError(format!("outstanding pending transaction(s): {count}"))
+            }
             OpenError::NetworkMismatch { wallet, expected } => Self::InternalError(format!(
                 "network mismatch: wallet={wallet}, expected={expected}"
             )),

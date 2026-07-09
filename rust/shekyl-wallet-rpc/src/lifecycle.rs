@@ -76,19 +76,56 @@ pub(crate) async fn create_wallet(
         ));
     }
 
-    let mut state = tenants.lock().await;
-    if state.tenant.is_open() {
-        return Err(WalletRpcError::WalletAlreadyOpen);
-    }
+    // Short critical section: refuse if busy, reserve the opening slot,
+    // snapshot config, then release the tenant mutex before slow work.
+    let (base, network, daemon_address) = {
+        let mut state = tenants.lock().await;
+        if state.tenant.is_busy() {
+            return Err(WalletRpcError::WalletAlreadyOpen);
+        }
+        let base = wallet_base(&state.wallet_dir, &p.name);
+        if keys_path_from(&base).exists() {
+            return Err(WalletRpcError::WalletFileExists);
+        }
+        state.tenant.begin_opening();
+        (base, state.network, state.daemon_address.clone())
+    };
 
-    let base = wallet_base(&state.wallet_dir, &p.name);
-    if keys_path_from(&base).exists() {
-        return Err(WalletRpcError::WalletFileExists);
-    }
+    let created = create_wallet_engine(&base, network, &daemon_address, &p, kdf).await;
+    let (engine, backup) = match created {
+        Ok(v) => v,
+        Err(e) => {
+            tenants.lock().await.tenant.clear_opening();
+            return Err(e);
+        }
+    };
 
-    let network = state.network;
-    let daemon = make_daemon(&state.daemon_address).await?;
-    let password = Zeroizing::new(p.password.into_bytes());
+    let handle = wallet_handle(&p.name, &engine, None);
+    tenants.lock().await.tenant.set_open(p.name, engine);
+
+    let mut result = json!({ "wallet": handle });
+    match backup {
+        SeedBackup::Mnemonic(m) => {
+            result["mnemonic"] = Value::String(m);
+        }
+        SeedBackup::RawHex(h) => {
+            result["raw_seed_hex"] = Value::String(h);
+        }
+    }
+    Ok(result)
+}
+
+/// Slow half of create: daemon connect + seed gen + Argon2 `Engine::create`.
+/// Runs without holding the tenant mutex.
+async fn create_wallet_engine(
+    base: &Path,
+    network: Network,
+    daemon_address: &str,
+    p: &CreateWalletParams,
+    kdf: KdfParams,
+) -> Result<(Engine<SoloSigner>, SeedBackup), WalletRpcError> {
+    let daemon = make_daemon(daemon_address).await?;
+    let password = Zeroizing::new(p.password.clone().into_bytes());
     let creds = Credentials::password_only(password.as_slice());
 
     let (master_seed, seed_format, backup) = generate_seed_material(network)?;
@@ -99,7 +136,7 @@ pub(crate) async fn create_wallet(
         .unwrap_or(0);
 
     let create_params = EngineCreateParams {
-        base_path: &base,
+        base_path: base,
         credentials: &creds,
         network,
         capability: CapabilityInput::Full {
@@ -121,20 +158,7 @@ pub(crate) async fn create_wallet(
 
     // Drop master seed as soon as create returns (Zeroizing on drop).
     drop(master_seed);
-
-    let handle = wallet_handle(&p.name, &engine, None);
-    state.tenant.set_open(p.name, engine);
-
-    let mut result = json!({ "wallet": handle });
-    match backup {
-        SeedBackup::Mnemonic(m) => {
-            result["mnemonic"] = Value::String(m);
-        }
-        SeedBackup::RawHex(h) => {
-            result["raw_seed_hex"] = Value::String(h);
-        }
-    }
-    Ok(result)
+    Ok((engine, backup))
 }
 
 pub(crate) async fn open_wallet(
@@ -144,37 +168,56 @@ pub(crate) async fn open_wallet(
     let p: OpenWalletParams = parse_required_object(params, "open_wallet")?;
     validate_wallet_name(&p.name)?;
 
-    let mut state = tenants.lock().await;
-    if state.tenant.is_open() {
-        return Err(WalletRpcError::WalletAlreadyOpen);
-    }
+    let (base, network, daemon_address) = {
+        let mut state = tenants.lock().await;
+        if state.tenant.is_busy() {
+            return Err(WalletRpcError::WalletAlreadyOpen);
+        }
+        let base = wallet_base(&state.wallet_dir, &p.name);
+        if !keys_path_from(&base).exists() {
+            return Err(WalletRpcError::WalletFileNotFound);
+        }
+        state.tenant.begin_opening();
+        (base, state.network, state.daemon_address.clone())
+    };
 
-    let base = wallet_base(&state.wallet_dir, &p.name);
-    if !keys_path_from(&base).exists() {
-        return Err(WalletRpcError::WalletFileNotFound);
-    }
+    let opened = open_wallet_engine(&base, network, &daemon_address, &p).await;
+    let (engine, restore_hint) = match opened {
+        Ok(v) => v,
+        Err(e) => {
+            tenants.lock().await.tenant.clear_opening();
+            return Err(e);
+        }
+    };
 
-    let network = state.network;
-    let daemon = make_daemon(&state.daemon_address).await?;
-    let password = Zeroizing::new(p.password.into_bytes());
+    let handle = wallet_handle(&p.name, &engine, restore_hint);
+    tenants.lock().await.tenant.set_open(p.name, engine);
+    Ok(json!({ "wallet": handle }))
+}
+
+/// Slow half of open: daemon connect + Argon2 `Engine::open_full`.
+async fn open_wallet_engine(
+    base: &Path,
+    network: Network,
+    daemon_address: &str,
+    p: &OpenWalletParams,
+) -> Result<(Engine<SoloSigner>, Option<i64>), WalletRpcError> {
+    let daemon = make_daemon(daemon_address).await?;
+    let password = Zeroizing::new(p.password.clone().into_bytes());
     let creds = Credentials::password_only(password.as_slice());
 
     let opened = tokio::task::block_in_place(|| {
-        Engine::<SoloSigner>::open_full(&base, &creds, network, daemon, SafetyOverrides::none())
+        Engine::<SoloSigner>::open_full(base, &creds, network, daemon, SafetyOverrides::none())
     })
     .map_err(WalletRpcError::from)?;
 
-    let (engine, restore_hint) = match opened {
+    Ok(match opened {
         OpenedEngine::Loaded(w) => (w, None),
         OpenedEngine::Restored {
             wallet,
             from_height,
         } => (wallet, Some(from_height as i64)),
-    };
-
-    let handle = wallet_handle(&p.name, &engine, restore_hint);
-    state.tenant.set_open(p.name, engine);
-    Ok(json!({ "wallet": handle }))
+    })
 }
 
 pub(crate) async fn close_wallet(
@@ -183,9 +226,15 @@ pub(crate) async fn close_wallet(
 ) -> Result<Value, WalletRpcError> {
     require_empty_object(params, "close_wallet")?;
 
-    let mut state = tenants.lock().await;
-    let Some((name, shared)) = state.tenant.take_open() else {
-        return Err(WalletRpcError::WalletNotOpen);
+    // Take the slot under a short mutex hold, then drop the guard before
+    // try_unwrap / outstanding check / Engine::close (fsync / Argon2-free
+    // but still file IO). Restore under a fresh lock if close cannot proceed.
+    let (name, shared) = {
+        let mut state = tenants.lock().await;
+        state
+            .tenant
+            .take_open()
+            .ok_or(WalletRpcError::WalletNotOpen)?
     };
 
     // Reclaim sole ownership before closing. If another task still holds a
@@ -194,7 +243,7 @@ pub(crate) async fn close_wallet(
     let lock = match Arc::try_unwrap(shared) {
         Ok(lock) => lock,
         Err(shared) => {
-            state.tenant.restore_open(name, shared);
+            tenants.lock().await.tenant.restore_open(name, shared);
             return Err(WalletRpcError::InternalError(
                 "cannot close: wallet engine still in use by another task".into(),
             ));
@@ -207,7 +256,7 @@ pub(crate) async fn close_wallet(
     // Check first (non-consuming) and re-install the wallet unchanged on refusal.
     let outstanding = engine.outstanding_pending_txs();
     if outstanding > 0 {
-        state.tenant.set_open(name, engine);
+        tenants.lock().await.tenant.set_open(name, engine);
         return Err(WalletRpcError::from(OpenError::OutstandingPendingTx {
             count: outstanding,
         }));

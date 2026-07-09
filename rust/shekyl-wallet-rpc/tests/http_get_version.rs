@@ -58,6 +58,23 @@ fn lifecycle_state(dir: &TempDir) -> Arc<AppState> {
     })
 }
 
+/// Redact one-shot backup secrets from a `create_wallet` JSON-RPC response
+/// before formatting it into an assertion failure message (CI logs).
+fn redact_create_wallet_response(v: &Value) -> Value {
+    let mut out = v.clone();
+    if let Some(result) = out.get_mut("result") {
+        if let Some(obj) = result.as_object_mut() {
+            if obj.contains_key("mnemonic") {
+                obj.insert("mnemonic".into(), Value::String("[REDACTED]".into()));
+            }
+            if obj.contains_key("raw_seed_hex") {
+                obj.insert("raw_seed_hex".into(), Value::String("[REDACTED]".into()));
+            }
+        }
+    }
+    out
+}
+
 async fn post_json(auth: AuthConfig, body: Value) -> (StatusCode, Value) {
     let state = test_state(auth);
     let app = build_router(state);
@@ -332,7 +349,11 @@ async fn queries_balance_address_transfers_after_create() {
         }),
     )
     .await;
-    assert!(created.get("error").is_none(), "{created}");
+    assert!(
+        created.get("error").is_none(),
+        "{:?}",
+        redact_create_wallet_response(&created)
+    );
 
     let bal = rpc(
         state.clone(),
@@ -474,7 +495,11 @@ async fn lifecycle_create_open_close_change_password() {
         }),
     )
     .await;
-    assert!(created.get("error").is_none(), "{created}");
+    assert!(
+        created.get("error").is_none(),
+        "{:?}",
+        redact_create_wallet_response(&created)
+    );
     assert_eq!(created["result"]["wallet"]["name"], "alice");
     assert_eq!(created["result"]["wallet"]["capability"], "FULL");
     assert_eq!(created["result"]["wallet"]["network"], "STAGENET");
@@ -697,7 +722,11 @@ async fn close_wallet_racing_inflight_clone_does_not_evict() {
         }),
     )
     .await;
-    assert!(created.get("error").is_none(), "{created}");
+    assert!(
+        created.get("error").is_none(),
+        "{:?}",
+        redact_create_wallet_response(&created)
+    );
 
     // Simulate an in-flight refresh by holding a clone of the shared Engine.
     let inflight = {
