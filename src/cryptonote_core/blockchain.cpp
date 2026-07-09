@@ -5365,23 +5365,39 @@ leave:
   //    written before the epoch-close hook fires, so the close of epoch E
   //    sees its final block's row in the [E·SEB, (E+1)·SEB) range-sum.
   //
-  // Burn-split operands match verify's (F-B1c): the same prev-cumulative
-  // supply and the same tx_volume_avg validate_miner_transaction used — a
-  // zero volume operand zeroes burn_pct, which silently zeroed the fee-pool
-  // half of the inflow (accrued nowhere, burn-recorded nowhere). The emission
-  // quantity stays the site-4 shape (5-arg get_block_reward, no release
-  // multiplier) pending the PR-7 Q-taxonomy adjudication (F-B1c-c2).
+  // Both legs use verify's exact operands (F-B1c, both sub-findings):
+  //  - Emission leg (c2, disposition (a)): the split operand is base_reward —
+  //    the SAME modulated (weight-penalized, release-scaled) quantity
+  //    validate_miner_transaction just bound the coinbase against and that
+  //    already_generated_coins advances by below. Conservation is then by
+  //    construction: staker leg = base_reward − miner_emission, so
+  //    ledger = coinbase + (burned | accrued) exactly. The pre-fix shape
+  //    (5-arg get_block_reward, unmodulated) over-sized the staker leg
+  //    whenever the release multiplier or weight penalty fired — benignly
+  //    deflationary as a burn, an inflation surface once redirected into
+  //    budget(E) (coins claimable that the ledger never counted as emitted).
+  //    Both targets take the modulated leg, so the fork switch below is a
+  //    pure destination switch — same quantity, burn vs accrue (§2.2's
+  //    "one write, one target"). Whether budget(E) should instead be
+  //    demand-insulated is the (b)-reopen sim question (gating round §9.9).
+  //  - Fee leg (c1): the same prev-cumulative supply and tx_volume_avg
+  //    validate_miner_transaction used — a zero volume operand zeroes
+  //    burn_pct, which silently zeroed the fee-pool half of the inflow
+  //    (accrued nowhere, burn-recorded nowhere).
+  //
+  // Genesis (blockchain_height == 0) has no staker leg: its emission is the
+  // hardcoded GENESIS_TX amount, validate_miner_transaction returns it whole
+  // as base_reward, and the genesis coinbase pays ALL of it — splitting here
+  // would accrue a share of coins the coinbase already fully paid.
   uint64_t archival_budget_accrual = 0;
   uint64_t block_burn_amount = 0;
+  if (blockchain_height > 0)
   {
     const uint64_t genesis_ng_height = m_hardfork->get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
     const uint8_t connect_hf_version = m_hardfork->get_current_version();
 
-    uint64_t full_block_emission = 0;
-    get_block_reward(0, 0, already_generated_coins, full_block_emission, connect_hf_version);
-
     const shekyl::EmissionSplit em_split = shekyl::compute_emission_split(
-        full_block_emission, blockchain_height, genesis_ng_height, connect_hf_version);
+        base_reward, blockchain_height, genesis_ng_height, connect_hf_version);
 
     const shekyl::BurnResult burn = shekyl::compute_fee_burn(
         fee_summary, get_tx_volume_avg(blockchain_height), already_generated_coins,
