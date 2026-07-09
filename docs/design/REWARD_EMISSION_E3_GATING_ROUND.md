@@ -1330,7 +1330,7 @@ explicit heights, bypassing the derivation under test.
   settlement epochs of appended blocks (~2 s), matching the slash
   scheduler KAT's scale.
 
-### 9.9 Findings F-B1a / F-B1b / F-B1c — budget accrual and redirect — **FIXED** (c2 parked)
+### 9.9 Findings F-B1a / F-B1b / F-B1c — budget accrual and redirect — **FIXED** (incl. c2, disposition (a))
 
 Block-1 file:line review of the budget-accrual/redirect write
 (`ARCHIVAL_BUDGET_SCHEDULE.md` §§2–3). The substrate KATs B1–B3 drive
@@ -1381,19 +1381,62 @@ structural fix.
     (the destroyed share never reached `block_burn`/`total_burned`).
     Fix: the site passes `get_tx_volume_avg(blockchain_height)` — the
     verify path's exact operand at the same pre-add read point.
-  - **c2 (emission leg) — parked, adjudication question surfaced.** The
-    accrual site derives `full_block_emission` from the 5-arg
-    `get_block_reward` (no release multiplier, no weight penalty),
-    while verify's `base_reward` comes from the 6-arg form (volume-run
-    release multiplier + weight penalty). The two emission quantities
-    diverge whenever the multiplier ≠ RELEASE_MIN-baseline or a penalty
-    applies, so the accrued `staker_emission` is a share of a
-    *different* quantity than the ledger's. Which quantity the budget
-    should share is a spec question (the Q taxonomy of
-    `ARCHIVAL_BUDGET_SCHEDULE.md` §1's "the amount inside the purse is
-    Component-4's"), not an operand bug — parked for adjudication
-    rather than silently re-anchored. The in-code comment at the
-    redirect block names the parked state.
+  - **c2 (emission leg) — adjudicated as post-closure pin, disposition
+    (a), merge blocker.** The accrual site derived `full_block_emission`
+    from the 5-arg `get_block_reward` (no release multiplier, no weight
+    penalty), while verify's `base_reward` comes from the 6-arg form
+    (volume-run release multiplier + weight penalty). This operand shape
+    predates C-1: at the merge base the same unmodulated quantity fed
+    the staker-leg **burn**, where the mismatch was benignly
+    deflationary (over-destroying removes more from circulation). The
+    C-1 redirect inverted its sign: redirecting the over-sized staker
+    leg into `budget(E)` makes the excess (unmodulated − modulated)
+    *re-mintable* — coins the emission claim can mint that
+    `already_generated_coins` never counted as emitted. An open
+    inflation surface of the same class as F-B1a, hence the
+    merge-blocker classification (it gates this PR; the economics
+    question below gates genesis and must not be conflated with it).
+
+    **Adjudicated disposition (a), applied to both legs.** The split
+    operand is now verify's `base_reward` itself — the modulated
+    quantity the coinbase was just bound against and that
+    `already_generated_coins` advances by. Conservation is then by
+    construction: the ledger advance decomposes as
+    `base_reward = miner_emission (coinbase) + staker leg
+    (burned | accrued)`, so `budget(E)` is provably "ledger minus
+    coinbase" and claiming cannot inflate. Both the pre-activation burn
+    and the post-activation accrual take the modulated leg, which makes
+    the redirect a **pure destination switch** — same quantity,
+    burn-vs-accrue on the block's own version — restoring §2.2's "one
+    write, one target" invariant in full (fixing only the accrual would
+    have changed both destination *and* quantity across the boundary).
+    Bonus: the pre-activation burn becomes conservation-exact instead
+    of benignly deflationary. Genesis is excluded from the split
+    (its emission is the hardcoded `GENESIS_TX` amount, paid whole by
+    the genesis coinbase; splitting would accrue a share of coins the
+    coinbase already fully paid).
+
+    **Dispositions (b) and (c) rejected now, (b) with a rule-21
+    reopen.** (c) — split first, modulate the miner leg only — touches
+    the coinbase-binding rule for no offsetting gain over (a). (b) —
+    the staker leg as the unmodulated subsidy, demand-insulated —
+    is not economically wrong but economically *unproven*, and it pays
+    the highest-risk price: it amends the supply-ledger advance rule
+    and the conservation identity the Q11 KAT guards, the most
+    catastrophic-if-wrong genesis-frozen surface in the system.
+    **Reopening criteria (rule 21):** the archival-funding
+    demand-insulation sim (companion to the servo/fee-era sim; see
+    `docs/FOLLOWUPS.md`, V3.0 pre-genesis queue) measures how much
+    `budget(E)` swings with tx volume under (a) and whether that swing
+    plausibly starves the serving incentive in low-volume scenarios.
+    If it does, (b) reopens as a deliberate, evidence-backed
+    supply-accounting amendment — pre-genesis if it lands in the
+    window, a named post-genesis-blocked item if not. If the swing is
+    tolerable, (a) stands permanently and the reopen closes.
+    **Re-evaluation shape:** sim results reviewed against this section;
+    an adopting amendment requires a threat-model review of the
+    supply-accounting change plus a Q11-identity KAT amendment in the
+    same PR.
 - **Armed KAT:**
   `budget_epoch_boundary_includes_final_block_through_real_block_path`
   (`tests/unit_tests/archival_substrate_lmdb.cpp`) drives per-block

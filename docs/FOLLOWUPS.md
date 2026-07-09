@@ -1229,6 +1229,33 @@ sustainability is unaffected by the recalibration.
   `REWARD_EMISSION_VIN_PLAN.md` §9, `STAKER_ARCHIVAL_SIM.md` §L12. **Target: V3.0
   (pre-genesis; blocks the final redundancy-band seal).**
 
+- **Archival-funding demand-insulation sim — the F-B1c-c2 (b)-reopen
+  evidence (post-closure pin, 2026-07-09).** The c2 adjudication
+  (`REWARD_EMISSION_E3_GATING_ROUND.md` §9.9) fixed the budget's
+  emission leg to disposition (a): the staker leg is a share of
+  verify's modulated `base_reward` (release multiplier + weight
+  penalty), making `budget(E)` conservation-exact ("ledger minus
+  coinbase") but demand-responsive — archival funding throttles when
+  tx volume is low, and archival retention is a baseline availability
+  function whose need doesn't obviously scale down with volume.
+  Disposition (b) (demand-insulated budget via the unmodulated
+  subsidy) was **rejected now** — it amends the supply-ledger advance
+  rule and the Q11-guarded conservation identity, the most
+  catastrophic-if-wrong genesis-frozen surface — with a rule-21
+  reopen gated on evidence: run the sim (companion to the
+  servo/fee-era sim) measuring how much `budget(E)` swings with tx
+  volume under (a) and whether the swing plausibly starves the serving
+  incentive during plausible low-volume windows. **Reversion:** if the
+  sim shows material underfunding, (b) reopens as a deliberate
+  supply-accounting amendment (threat-model review + Q11-identity KAT
+  amendment in the same PR) — pre-genesis if it lands in the window, a
+  named post-genesis-blocked item if not; if the swing is tolerable,
+  (a) stands permanently and this item closes. Cross-refs:
+  `REWARD_EMISSION_E3_GATING_ROUND.md` §9.9 (c2),
+  `ARCHIVAL_BUDGET_SCHEDULE.md` §1, `STAKER_ARCHIVAL_SIM.md` (harness).
+  **Target: V3.0 (pre-genesis; the economics question gates genesis —
+  distinct from the (a) correctness fix, which gated the C-1 PR).**
+
 - **Funding-seam entry-standoff: consensus surface, wallet conformance, and the
   cold-start cover residual (standoff sim review pass, 2026-06-13).** The
   `--standoff` sim (`STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff*,

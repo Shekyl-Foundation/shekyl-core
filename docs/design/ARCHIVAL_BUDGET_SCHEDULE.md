@@ -41,7 +41,19 @@ staker_inflow(h) = em_split.staker_emission + burn.staker_pool_amount
 - `staker_emission`: the staking share of block emission,
   `compute_emission_split` (`src/shekyl/economics.h:69–91`) — zero when
   `hf_version < HF_VERSION_SHEKYL_NG` or `block_emission == 0`, else the
-  decayed share (`shekyl_calc_emission_share`).
+  decayed share (`shekyl_calc_emission_share`). The split operand is
+  verify's **modulated** `base_reward` (6-arg `get_block_reward`:
+  weight-penalized, release-scaled — the F-B1c-c2 disposition-(a)
+  remediation, gating round §9.9), the same quantity the coinbase is
+  bound against and `already_generated_coins` advances by. Conservation
+  is by construction: `base_reward = miner_emission (coinbase) +
+  staker leg (burned | accrued)`, so `budget(E)` is exactly "ledger
+  minus coinbase" and claiming cannot inflate. Consequence: `budget(E)`
+  floats with the release multiplier and weight penalty — whether
+  archival funding should instead be demand-insulated is the §9.9
+  (b)-reopen sim question. Genesis (h = 0) computes no inflow: its
+  emission is the hardcoded `GENESIS_TX` amount, paid whole by the
+  genesis coinbase.
 - `staker_pool_amount`: the staker share of the fee burn,
   `compute_fee_burn` (`economics.h:55–60`) — **fee-dependent, per-block,
   not recomputable from schedule alone.**
@@ -52,7 +64,12 @@ amount, recorded in the per-height burn row, accumulated into
 **accrued**: passed into `BlockchainDB::add_block` as the
 `archival_budget_accrual` operand and written to the per-height accrual
 row before the connect hooks fire (§3.1), funding
-`txin_archival_reward_emission` payouts.
+`txin_archival_reward_emission` payouts. Both targets take the same
+modulated quantity, so the redirect is a **pure destination switch** —
+one write, one target, identical amount on either side of the
+activation boundary (§2.2's invariant; the pre-F-B1c-c2 shape burned
+an unmodulated, over-sized leg, which was benignly deflationary as a
+burn but would have been an inflation surface as a budget).
 
 **Provenance of the amounts.** The constants (15% emission share, 0.90/yr
 decay, 25% fee-pool share) are the Component-4 bootstrap-subsidy economics

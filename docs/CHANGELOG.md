@@ -4,6 +4,25 @@
 
 ### Fixed
 
+- **consensus: budget emission leg uses verify's modulated base_reward
+  (F-B1c-c2 disposition (a), `REWARD_EMISSION_E3_GATING_ROUND.md` §9.9,
+  `ARCHIVAL_BUDGET_SCHEDULE.md` §1).** The staker-inflow emission leg
+  derived from the 5-arg `get_block_reward` (no release multiplier, no
+  weight penalty) while the coinbase and the supply-ledger advance use
+  the 6-arg modulated `base_reward`. The unmodulated leg predates C-1
+  and was benignly deflationary as a burn (over-destroying); the C-1
+  redirect inverted its sign — an over-sized accrual makes the excess
+  re-mintable through emission claims, coins `already_generated_coins`
+  never counted (an inflation surface, merge-blocker class). Both legs
+  (pre-activation burn, post-activation accrual) now split verify's
+  `base_reward` itself: conservation by construction
+  (`base_reward = coinbase + staker leg`), and the redirect becomes a
+  pure destination switch — same quantity, burn-vs-accrue on the
+  block's own version. Genesis computes no inflow (its hardcoded
+  emission is paid whole by the genesis coinbase). Disposition (b)
+  (demand-insulated budget) rejected with a rule-21 sim-gated reopen —
+  see §9.9 and the `docs/FOLLOWUPS.md` V3.0 item.
+
 - **consensus: budget accrual ordering and redirect operands (F-B1a /
   F-B1b / F-B1c-c1, `REWARD_EMISSION_E3_GATING_ROUND.md` §9.9,
   `ARCHIVAL_BUDGET_SCHEDULE.md` §§1–3).** The staker-inflow accrual row
@@ -25,8 +44,9 @@
   (`budget_epoch_boundary_includes_final_block_through_real_block_path`)
   crosses the epoch-0 boundary through real `add_block`/`pop_block`,
   verified armed against the F-B1a ordering. The emission-quantity
-  operand drift (F-B1c-c2, 5-arg vs 6-arg `get_block_reward`) is
-  parked pending spec adjudication — see §9.9.
+  operand drift (F-B1c-c2, 5-arg vs 6-arg `get_block_reward`) was
+  initially parked pending spec adjudication and is resolved by the
+  entry above.
 
 - **consensus: emission connect-arm height operands (F-B5a / F-B5b,
   `REWARD_EMISSION_E3_GATING_ROUND.md` §9.8).** The emission arm in
