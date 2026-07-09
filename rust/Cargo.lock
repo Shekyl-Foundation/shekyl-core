@@ -4390,6 +4390,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-wallet-rpc"
+version = "3.1.0"
+dependencies = [
+ "axum",
+ "base64",
+ "clap",
+ "http",
+ "http-body-util",
+ "serde",
+ "serde_json",
+ "shekyl-logging",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+]
+
+[[package]]
 name = "shekyl-wire"
 version = "3.1.0"
 dependencies = [

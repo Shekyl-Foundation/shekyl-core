@@ -4,6 +4,18 @@
 
 ### Added
 
+- **wallet-rpc: Phase 4a scaffold — `rust/shekyl-wallet-rpc`**
+  (`WALLET_REWRITE_PLAN.md` Phase 4a; `docs/api/wallet_rpc.yaml`). New
+  Engine-native crate (not the transitional `shekyl-engine-rpc` wallet2
+  FFI bridge): axum JSON-RPC on `POST /` (TCP or `uds://`),
+  `WalletRpcError` / allocated `-29xxx` codes from the OpenAPI contract,
+  single-tenant `Tenant` type, HTTP basic auth middleware, UDS listener,
+  `spawn_in_process` for Shape B CLI, and `get_version` (`api_version: 1`).
+  Other SPECIFIED methods return `-32601 method not found` until their 4b
+  sub-PRs. Binary name `shekyl-wallet-rpc` (coexists with the C++ binary
+  of the same name until Phase 5 deletion — operators must not confuse
+  them).
+
 - **docs: C-1 pre-flight executed against `dev` `6671d565b`
   (`REWARD_EMISSION_E3_GATING_ROUND.md` §9)** — every C-1 operand read at
   its production site after #269/#271/#272 landed. All merge blockers

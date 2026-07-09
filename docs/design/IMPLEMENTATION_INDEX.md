@@ -10,11 +10,10 @@ the known disagreements at the verification date rather than editing those
 docs from here).
 
 **Verification stamp.** Statuses below were verified against landed code at
-`dev` = `e22549a79` (merge of PR #257), 2026-07-05. Since the prior stamp
-(`13ccb1ddb`, PR #254) the GF-7 scheduler seam (PR #255) and the submit
-lifecycle driver (PR #257) have landed and are reflected below. When you
-update a status here, re-verify against code (`git grep`, not plan prose) and
-move this stamp.
+`dev` tip as of 2026-07-09 for the Phase 4 row (Phase 4a scaffold on
+`feat/wallet-rpc-phase4a-scaffold`); other rows retain their prior
+code-anchored stamps unless noted. When you update a status here,
+re-verify against code (`git grep`, not plan prose) and move this stamp.
 
 **Maintenance discipline** (institutionalized as
 [`.cursor/rules/94-tracking-index.mdc`](../../.cursor/rules/94-tracking-index.mdc) —
@@ -107,7 +106,7 @@ should say "request path" or "GF-7 seam" explicitly.
 | 2c | Addresses / proofs | Per plan doc |
 | 2d | Air-gapped flow (`UnsignedTxBundle`/`SignedTxBundle`) | Per plan doc — **not** the bond chain's 2d-1/2d-2 |
 | 3 | `shekyl-cli` binary | Per plan doc |
-| 4 | `shekyl-wallet-rpc` binary | **Spec-first contract landed (as of 2026-07-06)** — OpenAPI 3.1 contract at `docs/api/wallet_rpc.yaml` (JSON-RPC envelope, error-code range allocation, 15 SPECIFIED methods over landed Phase 1/2a orchestrator surface; stake / payment-request / proofs / sign / bundle methods RESERVED with named engine-layer prerequisites per rule 21). Implementation crate not started. UPDATE 2026-07-06: spec landed `feat/wallet-rpc-openapi-spec` (decision-anchored: the spec commit; no code artifact yet — first implementation sub-PR verifies against it) |
+| 4 | `shekyl-wallet-rpc` binary | **Phase 4a scaffold landed (as of 2026-07-09)** — `rust/shekyl-wallet-rpc/` Engine-native crate: axum `POST /` JSON-RPC, `WalletRpcError` code table from `docs/api/wallet_rpc.yaml`, single-tenant `Tenant`/`TenantState`, HTTP basic auth + UDS listener, `spawn_in_process` (Shape B), `get_version` only. Remaining SPECIFIED methods return `-32601` until 4b. Distinct from transitional `shekyl-engine-rpc` (wallet2 FFI). UPDATE 2026-07-09: Phase 4a scaffold (verified: `cargo test -p shekyl-wallet-rpc`; `git grep spawn_in_process` → `shekyl-wallet-rpc/src/server.rs`). UPDATE 2026-07-06: OpenAPI contract landed #265 (decision-anchored) |
 | 5 | C++ deletion (single commit) | Not started; gated on 1–4 completeness |
 | 6 | Tests and docs | Per plan doc |
 
