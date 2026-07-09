@@ -93,6 +93,26 @@
 
 ### Added
 
+- **docs: C-1 review closure recorded — blocks 3 and 5 pass at file:line;
+  `IMPLEMENTATION_INDEX.md` emission rows updated to code (rule 94).**
+  Block 3 (F-C1c `signable_tx_hash`, §9.6 pin): the emission vin is
+  removed wholesale from a `transaction_prefix` copy
+  (`blockchain.cpp:3889–3894`, true structural erase, not a
+  zeroed placeholder), and the arity-1 classification gates the branch
+  ahead of the hash by control flow (`:3388–3421` → `:3779`), with the
+  whitelist's `emissions > 1` reject as the second independent layer.
+  Block 5 (WS-2 journal, §6.3): the connect writer journals the full
+  pre-mutation claim state before mutating (`db_lmdb.cpp:5748–5757`,
+  same write txn — atomic), and the prune-straddle KAT's primary
+  assertion is re-claim *rejection* after pop + rebuild
+  (`archival_substrate_lmdb.cpp:1628–1631`), byte-identity the
+  corollary. No findings; the C-1 consensus surface is reviewed end to
+  end. The `IMPLEMENTATION_INDEX.md` §2 PR-E row and §5 emission-leg
+  row now lead with **C-1 IMPLEMENTED — in review (PR #277)**, blocks
+  4–6 recorded (previously listed as "still missing"), residue named
+  (wallet-side claim builder + regtest e2e, conservation-KAT
+  fast-follow).
+
 - **consensus: Q11 balance-exclusion arming KAT — the ratified reopen
   trigger (`REWARD_EMISSION_E3_GATING_ROUND.md` §2.2).** New unit KATs
   (`archival_emission_ct_balance.cpp`) pin that the emission vin's
