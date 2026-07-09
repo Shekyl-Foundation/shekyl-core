@@ -389,7 +389,7 @@
   "vectors": [
    {
     "id": "C-01-unique",
-    "note": "Distinct triples across two personas: unique. Pins the first triple's native-endian (LE) key bytes (blockchain.cpp block pass).",
+    "note": "Distinct triples across two personas: unique. Pins the first triple's ArchivalServeCreditKey big-endian bytes -- post-SCE-1-unify the blockchain.cpp block pass and the D-SC-A persistent key share this one encoding (audit doc section 6).",
     "triples": [
      [
       "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f",

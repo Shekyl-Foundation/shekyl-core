@@ -26,6 +26,7 @@ use shekyl_archival_retention::serve_credit_decisions::{
     serve_credit_gate_decision, GateReject, GateVerdict, ServeCreditGateInputs,
 };
 use shekyl_archival_retention::serve_credit_epoch_ok;
+use shekyl_archival_retention::wire::{MAX_BRANCH_SCALARS, MAX_PATH_LAYERS_PER_KIND};
 use shekyl_archival_retention::VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE;
 
 struct Cursor<'a> {
@@ -61,7 +62,8 @@ impl Cursor<'_> {
     }
 
     /// Length 0..=80 of counts 0..=300 — straddles both step-1 bounds
-    /// (64 layers, 256 scalars) from both sides.
+    /// (`MAX_PATH_LAYERS_PER_KIND` = 64 layers, `MAX_BRANCH_SCALARS` = 256
+    /// scalars) from both sides; retune these ranges if those bounds move.
     fn counts(&mut self) -> Vec<usize> {
         let len = usize::from(self.u8()) % 81;
         (0..len)
@@ -122,13 +124,22 @@ fuzz_target!(|data: &[u8]| {
 fn assert_reason_is_red(i: &ServeCreditGateInputs<'_>, reason: GateReject) {
     match reason {
         GateReject::PathLayerCountExceedsBound => {
-            assert!(i.c1_branch_scalar_counts.len() > 64 || i.c2_branch_scalar_counts.len() > 64);
+            assert!(
+                i.c1_branch_scalar_counts.len() > MAX_PATH_LAYERS_PER_KIND
+                    || i.c2_branch_scalar_counts.len() > MAX_PATH_LAYERS_PER_KIND
+            );
         }
         GateReject::C1BranchScalarCountExceedsBound => {
-            assert!(i.c1_branch_scalar_counts.iter().any(|&n| n > 256));
+            assert!(i
+                .c1_branch_scalar_counts
+                .iter()
+                .any(|&n| n > MAX_BRANCH_SCALARS));
         }
         GateReject::C2BranchScalarCountExceedsBound => {
-            assert!(i.c2_branch_scalar_counts.iter().any(|&n| n > 256));
+            assert!(i
+                .c2_branch_scalar_counts
+                .iter()
+                .any(|&n| n > MAX_BRANCH_SCALARS));
         }
         GateReject::DuplicatePreBlock => assert!(i.preblock_present),
         GateReject::BondSubstrateMissing => assert!(!i.bond_substrate_present),
@@ -158,10 +169,7 @@ fn assert_reason_is_red(i: &ServeCreditGateInputs<'_>, reason: GateReject) {
 /// an earlier one (first-failure ordering).
 fn single_flip_first_failure(green: &ServeCreditGateInputs<'_>) {
     // (mutator, expected reason), in gate order.
-    type Flip = (
-        fn(&mut ServeCreditGateInputs<'_>),
-        GateReject,
-    );
+    type Flip = (fn(&mut ServeCreditGateInputs<'_>), GateReject);
     let flips: &[Flip] = &[
         (|i| i.preblock_present = true, GateReject::DuplicatePreBlock),
         (
@@ -189,7 +197,10 @@ fn single_flip_first_failure(green: &ServeCreditGateInputs<'_>) {
             |i| i.wire_serialize_ok = false,
             GateReject::VinSerializeFailed,
         ),
-        (|i| i.wire_first_byte = None, GateReject::UnexpectedVinWireTag),
+        (
+            |i| i.wire_first_byte = None,
+            GateReject::UnexpectedVinWireTag,
+        ),
         (|i| i.verify_ok = false, GateReject::FfiVerifyFailed),
     ];
 
