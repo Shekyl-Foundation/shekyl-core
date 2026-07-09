@@ -196,6 +196,11 @@ jobs:
             subcommand: layer3
             needs_rust: false
             needs_disks: true
+          - layer: conservation
+            label: archival budget conservation KAT
+            subcommand: conservation
+            needs_rust: false
+            needs_disks: true
     container:
       image: ubuntu:22.04
       env:

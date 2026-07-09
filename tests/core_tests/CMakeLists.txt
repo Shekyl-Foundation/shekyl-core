@@ -27,6 +27,7 @@
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 set(core_tests_sources
+  archival_budget_conservation.cpp
   block_reward.cpp
   block_validation.cpp
   chain_split_1.cpp
@@ -42,6 +43,7 @@ set(core_tests_sources
   wallet_tools.cpp)
 
 set(core_tests_headers
+  archival_budget_conservation.h
   block_reward.h
   block_validation.h
   chain_split_1.h

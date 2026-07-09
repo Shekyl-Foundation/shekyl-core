@@ -8,11 +8,14 @@
 #
 # Invoked by `.github/workflows/economics-c2a-prime.yml`. Subcommands:
 #
-#   preflight   — oracle-constant guards (no harness required; passes today)
-#   layer1      — Layer 1 per-quantity dual-leg KAT (legs A + B)
-#   layer2      — Layer 2 multi-block accumulation + cap invariant + A vs B
-#   layer3      — Layer 3 pop-replay reorg coupling
-#   all         — preflight + layers 1–3 (local developer convenience)
+#   preflight    — oracle-constant guards (no harness required; passes today)
+#   layer1       — Layer 1 per-quantity dual-leg KAT (legs A + B)
+#   layer2       — Layer 2 multi-block accumulation + cap invariant + A vs B
+#   layer3       — Layer 3 pop-replay reorg coupling
+#   conservation — archival budget supply-conservation KAT (C-1 fast-follow,
+#                  REWARD_EMISSION_E3_GATING_ROUND.md §9.9): labeled-row
+#                  identity through the real connect path + pop/reconnect
+#   all          — preflight + layers 1–3 + conservation (local convenience)
 #
 # Harness naming contract (implementer MUST match — CI selects by these filters):
 #
@@ -22,6 +25,7 @@
 #
 #   core_tests (--filter glob):
 #     economics_c2a_prime_layer3*
+#     archival_budget_conservation*
 #
 #   Rust (cargo test filter on test fn name):
 #     c2a_prime_layer1*
@@ -269,8 +273,23 @@ Land pop-replay harness per STAGE_1_PR_7 §5.8."
   run_core_tests_layer "$filter"
 }
 
+cmd_conservation() {
+  require_repo_root
+  verify_build_artifact_layout
+  require_build_tree
+  local filter='archival_budget_conservation*'
+  local count
+  count="$(count_core_tests "$filter")"
+  if [[ "$count" -eq 0 ]]; then
+    die "no archival budget conservation core_tests (filter '${filter}'). \
+Land the C-1 conservation KAT per REWARD_EMISSION_E3_GATING_ROUND.md §9.9."
+  fi
+  echo "Conservation: found ${count} core_tests case(s) matching ${filter}"
+  run_core_tests_layer "$filter"
+}
+
 usage() {
-  echo "Usage: $(basename "$0") {preflight|layer1|layer2|layer3|all}" >&2
+  echo "Usage: $(basename "$0") {preflight|layer1|layer2|layer3|conservation|all}" >&2
   exit 2
 }
 
@@ -281,11 +300,13 @@ main() {
     layer1) cmd_layer1 ;;
     layer2) cmd_layer2 ;;
     layer3) cmd_layer3 ;;
+    conservation) cmd_conservation ;;
     all)
       cmd_preflight
       cmd_layer1
       cmd_layer2
       cmd_layer3
+      cmd_conservation
       ;;
     *) usage ;;
   esac

@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+### Added
+
+- **tests: end-to-end archival budget conservation KAT — the C-1
+  fast-follow (`REWARD_EMISSION_E3_GATING_ROUND.md` §9.9;
+  `ARCHIVAL_BUDGET_SCHEDULE.md` §7 B1's connect-path counterpart).**
+  New chaingen core test `archival_budget_conservation_boundary`
+  (`tests/core_tests/archival_budget_conservation.{h,cpp}`) drives the
+  real connect path (`handle_block_to_main_chain`) across a v1→v2 fork
+  table and asserts the §2.2 conservation identity per block in
+  **labeled-row form**: accrual row and burn row each checked against
+  the block's own `major_version` — the only form that catches the
+  branch-selection class (F-B1b: wrong burn-vs-accrue branch with
+  byte-identical operands, invisible to operand KATs and the grep
+  tripwire, and sum-invariant because the redirect is a pure
+  destination switch). Also asserts the genesis exclusion, coinbase =
+  `miner_emission`, ledger advance = an independently recomputed
+  modulated subsidy, and byte-identical row restoration after
+  pop/reconnect across the fork boundary. Arming-verified (inverted
+  redirect branch fails at height 1). Wired into CI as the
+  `conservation` subcommand of `run_economics_c2a_prime.sh` with its
+  own workflow matrix entry. Genesis-posture caveat recorded in the
+  test header: `HF_VERSION_ARCHIVAL_EMISSION == 1` leaves the burn leg
+  compile-alive but unexercised; a post-genesis activation bump arms it
+  through the same fixture with no test change. Closes the FOLLOWUPS
+  V3.0 conservation-KAT item.
+
 ### Fixed
 
 - **consensus: C-1 emission review hardening (PR #277 review,
