@@ -229,7 +229,9 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
       const auto& bond = std::get<txin_archival_bond_post>(tx_input);
       if (bond.post_kind != static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
         throw std::runtime_error("FATAL: bond-post connect supports JoinMarket only at genesis");
-      const uint64_t block_height = get_block_height(blk_hash);
+      // F-B5a sibling: the block_heights row for blk_hash does not exist yet
+      // at add_transaction time — height() is the connecting block's index.
+      const uint64_t block_height = height();
       const uint64_t join_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
       put_archival_bond_record(bond.p_canonical_id, bond.hybrid_public_key, join_epoch,
         bond.bonded_total_atomic, static_cast<uint8_t>(bond.holdings.kind),

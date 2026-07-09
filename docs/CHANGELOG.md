@@ -21,6 +21,14 @@
   fixture's claimed epochs moved to {1, 2} to keep the chain build
   short.
 
+- **consensus: bond-post connect arm carried the same latent
+  `get_block_height`-before-write crash (F-B5a sibling, pre-dating
+  C-1)** — same `height()` fix, so a JoinMarket bond-post vin connects
+  instead of throwing `BLOCK_DNE`. New real-LMDB KAT
+  (`bond_post_connect_pop_roundtrip_through_real_block_path`) connects a
+  bond-post through the real `add_block` path, pins the join epoch to
+  the real connect height, and pops it back off.
+
 ### Added
 
 - **consensus: Q11 balance-exclusion arming KAT — the ratified reopen

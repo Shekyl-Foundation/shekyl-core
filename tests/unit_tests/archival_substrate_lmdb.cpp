@@ -1832,3 +1832,82 @@ TEST(archival_substrate_lmdb, emission_connect_pop_roundtrip_through_real_block_
     << "pop must restore the journaled pre-image (empty claimed set)";
   EXPECT_EQ(read.first_paying_emission_height, 0u);
 }
+
+// F-B5a sibling: the bond-post connect arm carried the identical
+// get_block_height-before-write crash (pre-dating C-1) and, like the
+// emission arm, had never been driven through the real add_block path — its
+// integration tests call add_transaction directly on a mock. This KAT
+// connects a JoinMarket bond-post through real LMDB (BLOCK_DNE before the
+// fix), checks the join epoch derives from the real connect height, and pops
+// it back off (the vin-driven arm in remove_transaction).
+TEST(archival_substrate_lmdb, bond_post_connect_pop_roundtrip_through_real_block_path)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  // One settlement epoch of blocks, so the expected join epoch is nonzero —
+  // a zero-height operand bug cannot hide behind a zero expectation.
+  append_minimal_blocks(db, kSeb + 3);
+  db.set_total_bonded_atomic(0);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  const uint64_t connect_height = db.height();
+  const uint64_t expected_join_epoch =
+    shekyl_archival_settlement_epoch_at_height(connect_height);
+  ASSERT_GT(expected_join_epoch, 0u);
+
+  transaction tx{};
+  tx.version = 2;
+  txin_archival_bond_post vin{};
+  vin.hybrid_public_key.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5A);
+  vin.p_canonical_id = make_hash(0xB5);
+  vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::JoinMarket);
+  vin.holdings.kind = archival_holdings_kind::ShardSetCompact;
+  vin.holdings.shard_ids = {7};
+  vin.bonded_total_atomic = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  vin.bond_credit = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  vin.bond_debit = 0;
+  tx.vin.push_back(vin);
+
+  block blk{};
+  blk.major_version = 1;
+  blk.minor_version = 1;
+  blk.timestamp = 1500000000 + connect_height;
+  blk.prev_id = db.get_block_hash_from_height(connect_height - 1);
+  blk.curve_tree_root = crypto::null_hash;
+  transaction miner_tx{};
+  miner_tx.version = 1;
+  miner_tx.unlock_time = connect_height + 60;
+  txin_gen gen{};
+  gen.height = connect_height;
+  miner_tx.vin.push_back(gen);
+  blk.miner_tx = std::move(miner_tx);
+  blk.tx_hashes.push_back(get_transaction_hash(tx));
+
+  db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
+    connect_height + 1, 0, {std::make_pair(tx, tx_to_blob(tx))});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(vin.p_canonical_id, read));
+  EXPECT_EQ(read.join_settlement_epoch, expected_join_epoch)
+    << "join epoch must derive from the real connect height";
+  EXPECT_EQ(read.bonded_total_atomic, vin.bonded_total_atomic);
+  EXPECT_EQ(db.get_total_bonded_atomic(), vin.bond_credit);
+
+  block popped{};
+  std::vector<transaction> popped_txs;
+  fixture.db.pop_block(popped, popped_txs);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_EQ(popped_txs.size(), 1u);
+  EXPECT_FALSE(db.get_archival_bond_value(vin.p_canonical_id, read))
+    << "pop must remove the bond record";
+  EXPECT_EQ(db.get_total_bonded_atomic(), 0u);
+}
