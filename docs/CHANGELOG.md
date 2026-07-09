@@ -325,6 +325,22 @@
 
 ### Fixed
 
+- **staking: S6 session self-cert chi-square graded against flat expected
+  counts, miscalibrating the advertised α=1e-6 to ~1.5e-2**
+  (`rust/shekyl-standoff/src/conformance.rs`, `rust/shekyl-stats`;
+  `ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md` §2 R0-D3 UPDATE 2026-07-09).
+  `grade_sample` bins the 601 discrete outcomes of `window = 600` into 60
+  bins — one bin is 11 outcomes wide — but scored the histogram against a
+  flat `n / n_bins` expected count, injecting a noncentrality of ≈ 32.7 at
+  `n = 200 000`. A **correct** `OsRng` therefore failed the wallet-open
+  self-cert (and the dedicated S6 CI test) about once per 70 grades; the
+  R0-D3 false-fail previously attributed to the legitimate α tail was this
+  bug. Expected counts are now proportional to the exact bin widths (new
+  `chi_square_counts_expected` in `shekyl-stats`, fail-closed on degenerate
+  expecteds; exact `u128` binning replaces the `f64` index map, which also
+  lost integer precision above 2^53), restoring the advertised calibration.
+  Regression test pins an exactly-uniform sample to a chi-square of zero.
+
 - **gitian: pre-install the pinned Rust toolchain serially so release builds
   stop racing rustup** (`contrib/gitian/gitian-{linux,osx,win,freebsd,android}.yml`).
   The gitian containers installed rustup with its *default* toolchain, but

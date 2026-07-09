@@ -169,6 +169,31 @@ fn serial_independence_reference_passes_correlated_fails() {
 }
 
 #[test]
+fn exactly_uniform_sample_scores_zero_despite_unequal_bin_widths() {
+    // Regression: 601 outcomes over 60 bins leaves one bin 11 outcomes wide.
+    // A sample that hits every outcome equally often is *perfectly* uniform,
+    // yet grading it against flat per-bin expected counts scored it ~32 above
+    // zero — a noncentrality that grows linearly with n and raised the S6
+    // self-cert's false-fail rate from the advertised 1e-6 to ~1.5e-2 at
+    // n = 200 000 (the OsRng CI flake). With width-proportional expected
+    // counts the statistic is exactly zero.
+    let window = 600u64;
+    let reps = 333usize;
+    let exact: Vec<(u64, bool)> = (0..reps)
+        .flat_map(|r| (0..=window).map(move |s| (s, (s + r as u64) & 1 == 0)))
+        .collect();
+    let report = grade_sample(&exact, window);
+    assert!(
+        report.chi_square.abs() < 1e-9,
+        "exactly uniform sample must score ~0, got {report:?}"
+    );
+    assert!(report.uniform_ok, "uniform grade failed: {report:?}");
+
+    let chi = chi_square_uniform(&exact, window, 60);
+    assert!(chi.abs() < 1e-9, "chi_square_uniform reports {chi}");
+}
+
+#[test]
 fn self_cert_passes_reference_rng() {
     // The RNG-generic self-certification a wallet runs against its own CSPRNG:
     // the reference stream passes all three property grades.

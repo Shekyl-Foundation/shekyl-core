@@ -75,6 +75,44 @@ pub fn chi_square_uniform_counts(observed: &[u64]) -> f64 {
         .sum()
 }
 
+/// Pearson chi-square statistic for a histogram against **explicit expected
+/// counts** (a fully specified null; degrees of freedom are `k - 1`): `sum
+/// (oi - ei)^2 / ei`. Use this instead of [`chi_square_uniform_counts`]
+/// whenever the null does not put equal mass in every bin — e.g. a discrete
+/// uniform bucketed into bins of unequal width, where assuming `n/k` per bin
+/// injects a noncentrality that silently inflates the false-positive rate far
+/// above the advertised alpha.
+///
+/// Returns `0.0` for fewer than two bins or zero total observed count (no
+/// question to ask). Returns `NaN` — failing any `statistic < crit` check
+/// closed — when the slice lengths differ or any expected count is
+/// non-positive or non-finite (caller bugs; a zero-expected bin has no valid
+/// Pearson term).
+#[must_use]
+pub fn chi_square_counts_expected(observed: &[u64], expected: &[f64]) -> f64 {
+    let k = observed.len();
+    if k != expected.len() {
+        return f64::NAN;
+    }
+    if k < 2 {
+        return 0.0;
+    }
+    if observed.iter().sum::<u64>() == 0 {
+        return 0.0;
+    }
+    if expected.iter().any(|&e| !e.is_finite() || e <= 0.0) {
+        return f64::NAN;
+    }
+    observed
+        .iter()
+        .zip(expected)
+        .map(|(&o, &e)| {
+            let d = o as f64 - e;
+            d * d / e
+        })
+        .sum()
+}
+
 /// Lag-1 autocorrelation of a real-valued series — the serial-independence
 /// probe. Approximately `0` (order `1/sqrt(m)`) for independent draws; large in
 /// magnitude for a correlated sequence (e.g. a weak-PRNG walk) even when its
@@ -146,6 +184,43 @@ mod tests {
         // All mass in one bin of four -> 3*expected^2/expected + (n-e)^2/e.
         let chi = chi_square_uniform_counts(&[400, 0, 0, 0]);
         assert!(chi > 100.0, "chi = {chi}");
+    }
+
+    #[test]
+    fn expected_counts_zero_when_observed_matches_expected_exactly() {
+        // Unequal expected mass (e.g. unequal-width bins under a discrete
+        // uniform): an exactly proportional sample scores 0, where the
+        // equal-expected statistic would report a spurious deviation.
+        assert_eq!(
+            chi_square_counts_expected(&[110, 100, 100], &[110.0, 100.0, 100.0]),
+            0.0
+        );
+        let equal_assumption = chi_square_uniform_counts(&[110, 100, 100]);
+        assert!(equal_assumption > 0.5, "chi = {equal_assumption}");
+    }
+
+    #[test]
+    fn expected_counts_matches_hand_computed_statistic() {
+        // (120-100)^2/100 + (80-100)^2/100 = 8.0
+        assert_eq!(chi_square_counts_expected(&[120, 80], &[100.0, 100.0]), 8.0);
+    }
+
+    #[test]
+    fn expected_counts_zero_for_degenerate_inputs() {
+        assert_eq!(chi_square_counts_expected(&[], &[]), 0.0);
+        assert_eq!(chi_square_counts_expected(&[5], &[5.0]), 0.0);
+        assert_eq!(chi_square_counts_expected(&[0, 0], &[1.0, 1.0]), 0.0);
+    }
+
+    #[test]
+    fn expected_counts_fails_closed_on_caller_bugs() {
+        // Length mismatch, a zero/negative expected bin, or a non-finite
+        // expected count: NaN, so any `statistic < crit` check is false.
+        assert!(chi_square_counts_expected(&[1, 2], &[1.0]).is_nan());
+        assert!(chi_square_counts_expected(&[1, 2], &[0.0, 3.0]).is_nan());
+        assert!(chi_square_counts_expected(&[1, 2], &[-1.0, 3.0]).is_nan());
+        assert!(chi_square_counts_expected(&[1, 2], &[f64::INFINITY, 3.0]).is_nan());
+        assert!(chi_square_counts_expected(&[1, 2], &[f64::NAN, 3.0]).is_nan());
     }
 
     #[test]

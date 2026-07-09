@@ -33,7 +33,7 @@
 
 use std::collections::HashMap;
 
-use shekyl_stats::{chi_square_uniform_counts, chi_square_upper_crit, lag1_autocorr, Z_ALPHA_1E6};
+use shekyl_stats::{chi_square_counts_expected, chi_square_upper_crit, lag1_autocorr, Z_ALPHA_1E6};
 
 use crate::draw::{bounded_uniform, draw_entry_gap, GapRng};
 
@@ -108,11 +108,51 @@ pub fn summarize_gaps(samples: &[(u64, bool)], window: u64) -> GapSampleStats {
     }
 }
 
+/// Exact bin index for outcome `s` of the discrete space `[0, window]` split
+/// into `n_bins` blocks: `floor(s * n_bins / (window + 1))`. Computed in
+/// `u128` so it is exact for every `u64` window and every `s <= window` (an
+/// `f64` mapping loses integer precision above 2^53). The result is always
+/// `< n_bins`.
+fn uniform_bin_index(s: u64, window: u64, n_bins: usize) -> usize {
+    let outcomes = u128::from(window) + 1;
+    ((u128::from(s) * n_bins as u128) / outcomes) as usize
+}
+
+/// Exact per-bin outcome counts (bin widths) for that split. Bin `i` covers
+/// `s` in `[ceil(i*(window+1)/n_bins), ceil((i+1)*(window+1)/n_bins))`, so
+/// when `n_bins` does not divide `window + 1` the widths differ by one — the
+/// null hypothesis must put proportionally more mass in the wide bins, or the
+/// chi-square acquires a noncentrality that grows linearly with the sample
+/// size and silently blows the advertised alpha (the S6 self-cert flake this
+/// fixes: 601 outcomes over 60 bins at n = 200 000 raised the false-fail rate
+/// from 1e-6 to ~1.5e-2).
+fn uniform_bin_widths(window: u64, n_bins: usize) -> Vec<u64> {
+    let outcomes = u128::from(window) + 1;
+    let lower = |i: usize| -> u128 { (i as u128 * outcomes).div_ceil(n_bins as u128) };
+    (0..n_bins)
+        .map(|i| (lower(i + 1) - lower(i)) as u64)
+        .collect()
+}
+
+/// Expected per-bin counts for `n` draws of the discrete uniform on
+/// `[0, window]` under that split: `n * width_i / (window + 1)`.
+fn uniform_bin_expected(n: usize, window: u64, n_bins: usize) -> Vec<f64> {
+    let outcomes = u128::from(window) + 1;
+    uniform_bin_widths(window, n_bins)
+        .into_iter()
+        .map(|w| n as f64 * (w as f64 / outcomes as f64))
+        .collect()
+}
+
 /// Chi-square goodness-of-fit against the **discrete** uniform on `[0, window]`
-/// with `n_bins` equal-width bins; returns the statistic (df = `n_bins - 1`).
-/// Reject uniformity when it exceeds
-/// [`shekyl_stats::chi_square_upper_crit`]`(n_bins - 1, Z_ALPHA_1E6)`. Bins the
-/// sample, then delegates the statistic to [`shekyl_stats`].
+/// with `n_bins` near-equal-width bins; returns the statistic (df =
+/// `n_bins - 1`). Reject uniformity when it exceeds
+/// [`shekyl_stats::chi_square_upper_crit`]`(n_bins - 1, Z_ALPHA_1E6)`. Expected
+/// counts are proportional to the exact bin widths (see
+/// [`uniform_bin_widths`]), so the statistic is centrally calibrated even when
+/// `n_bins` does not divide `window + 1`. `NaN` (failing any `statistic <
+/// crit` check closed) when `n_bins > window + 1` leaves a bin with zero
+/// width — ask for at most one bin per outcome.
 #[must_use]
 pub fn chi_square_uniform(samples: &[(u64, bool)], window: u64, n_bins: usize) -> f64 {
     if n_bins == 0 {
@@ -120,10 +160,12 @@ pub fn chi_square_uniform(samples: &[(u64, bool)], window: u64, n_bins: usize) -
     }
     let mut counts = vec![0u64; n_bins];
     for &(s, _) in samples {
-        let idx = ((s as f64 / (window as f64 + 1.0)) * n_bins as f64) as usize;
-        counts[idx.min(n_bins - 1)] += 1;
+        counts[uniform_bin_index(s, window, n_bins)] += 1;
     }
-    chi_square_uniform_counts(&counts)
+    chi_square_counts_expected(
+        &counts,
+        &uniform_bin_expected(samples.len(), window, n_bins),
+    )
 }
 
 /// The conformance **trap**, kept here so the vector is validated to *reject* it
@@ -328,15 +370,20 @@ pub fn grade_sample(samples: &[(u64, bool)], window: u64) -> CertifyReport {
     let mut bond_first = 0usize;
     let mut spreads = Vec::with_capacity(n);
     for &(s, bf) in samples {
-        let idx = ((s as f64 / (window as f64 + 1.0)) * n_bins as f64) as usize;
-        counts[idx.min(n_bins - 1)] += 1;
+        counts[uniform_bin_index(s, window, n_bins)] += 1;
         if bf {
             bond_first += 1;
         }
         spreads.push(s as f64);
     }
 
-    let chi_square = chi_square_uniform_counts(&counts);
+    // Expected counts follow the exact bin widths: with `n_bins` capped at the
+    // outcome count above, every width is >= 1, and when `n_bins` does not
+    // divide `window + 1` the wide bins legitimately carry more mass. Grading
+    // those against a flat `n / n_bins` is the miscalibration that made a
+    // correct OsRng fail this cert ~1.5% of the time (window 600, n 200 000)
+    // against an advertised alpha of 1e-6.
+    let chi_square = chi_square_counts_expected(&counts, &uniform_bin_expected(n, window, n_bins));
     let chi_square_crit = chi_square_upper_crit((n_bins as f64 - 1.0).max(1.0), Z_ALPHA_1E6);
     // A uniformity claim needs observations to stand on: an empty sample gives a
     // chi-square of 0 (every bin empty), which would otherwise clear the critical value
