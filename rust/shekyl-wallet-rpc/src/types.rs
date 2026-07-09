@@ -214,6 +214,100 @@ pub struct WalletHandle {
     pub restore_height_hint: Option<i64>,
 }
 
+/// Atomic-units amount as a decimal string (OpenAPI `AtomicUnits`).
+pub type AtomicUnitsString = String;
+
+/// `get_balance` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetBalanceResult {
+    /// Spendable liquid balance (maps from unlocked until staking lands).
+    pub liquid: AtomicUnitsString,
+    /// Staked principal; `"0"` until Stage 3 stake methods land.
+    pub staked: AtomicUnitsString,
+    /// Unlocked / spendable now.
+    pub unlocked: AtomicUnitsString,
+    /// Claimable staking rewards; `"0"` until Stage 3.
+    pub claimable_rewards: AtomicUnitsString,
+    /// Awaiting-confirmation / in-flight spend lock.
+    pub pending: AtomicUnitsString,
+}
+
+/// `get_primary_address` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetPrimaryAddressResult {
+    /// Canonical Shekyl address string.
+    pub address: String,
+}
+
+/// `get_height` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetHeightResult {
+    /// Wallet synced height.
+    pub wallet_height: i64,
+    /// Daemon chain height.
+    pub daemon_height: i64,
+}
+
+/// Transfer direction (OpenAPI `Transfer.direction`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TransferDirection {
+    /// Received output.
+    Incoming,
+    /// Spent / sent (reserved for future outgoing projection).
+    Outgoing,
+}
+
+/// Transfer confirmation state (OpenAPI `Transfer.state`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TransferState {
+    /// Network-exposed spend awaiting confirmation.
+    Pending,
+    /// Confirmed on chain, unspent.
+    Confirmed,
+    /// Spent.
+    Spent,
+}
+
+/// Client-facing transfer projection (OpenAPI `Transfer`).
+///
+/// Accounting facts only — no key material, offsets, or commitments.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TransferView {
+    /// Stable per-wallet id (`{tx_hash_hex}:{internal_output_index}`).
+    pub id: String,
+    /// Incoming / outgoing.
+    pub direction: TransferDirection,
+    /// Transaction hash (lowercase hex).
+    pub tx_hash: String,
+    /// Output amount.
+    pub amount: AtomicUnitsString,
+    /// Fee when known; `"0"` for receive-side ledger rows.
+    pub fee: AtomicUnitsString,
+    /// Inclusion height.
+    pub block_height: i64,
+    /// Confirmation / spend state.
+    pub state: TransferState,
+    /// Height at which the output was spent, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spent_height: Option<i64>,
+}
+
+/// `get_transfers` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetTransfersResult {
+    /// Matching transfers.
+    pub transfers: Vec<TransferView>,
+}
+
+/// `get_transfer_by_id` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetTransferByIdResult {
+    /// The matching transfer.
+    pub transfer: TransferView,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

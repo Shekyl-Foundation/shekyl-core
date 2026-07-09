@@ -5,15 +5,15 @@
 
 //! JSON-RPC method dispatch.
 //!
-//! Phase 4b slice 1: `get_version` + lifecycle
-//! (`create_wallet` / `open_wallet` / `close_wallet` / `change_password`).
-//! Remaining SPECIFIED names return `-32601` until their sub-PR lands.
+//! Phase 4b: `get_version`, lifecycle, and read queries. Remaining
+//! SPECIFIED names return `-32601` until their sub-commit lands.
 
 use serde_json::Value;
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 
 use crate::error::WalletRpcError;
 use crate::lifecycle;
+use crate::queries;
 use crate::tenant::TenantState;
 use crate::types::{GetVersionResult, API_VERSION};
 use crate::VERSION;
@@ -30,25 +30,19 @@ pub async fn dispatch(
         "create_wallet" | "open_wallet" | "close_wallet" | "change_password" => {
             lifecycle::dispatch(tenants, method, params, kdf).await
         }
-        // SPECIFIED in the OpenAPI contract but not yet implemented.
         "get_balance"
         | "get_primary_address"
-        | "build_pending_tx"
-        | "submit_pending_tx"
-        | "discard_pending_tx"
         | "get_transfers"
         | "get_transfer_by_id"
-        | "refresh"
-        | "rescan_blockchain"
-        | "get_height" => Err(WalletRpcError::MethodNotFound(method.to_owned())),
+        | "get_height" => queries::dispatch(tenants, method, params).await,
+        // SPECIFIED but not yet implemented (refresh / send / rescan).
+        "build_pending_tx" | "submit_pending_tx" | "discard_pending_tx" | "refresh"
+        | "rescan_blockchain" => Err(WalletRpcError::MethodNotFound(method.to_owned())),
         other => Err(WalletRpcError::MethodNotFound(other.to_owned())),
     }
 }
 
 fn get_version(params: &Value) -> Result<Value, WalletRpcError> {
-    // Spec: GetVersionParams is an empty object (or omitted). Reject
-    // unexpected non-object / non-null params so clients cannot smuggle
-    // fields that later become load-bearing.
     match params {
         Value::Null => {}
         Value::Object(map) if map.is_empty() => {}
@@ -132,7 +126,7 @@ mod tests {
     #[tokio::test]
     async fn unimplemented_specified_method_is_method_not_found() {
         let tenants = test_tenants();
-        let err = dispatch(&tenants, "get_balance", &json!({}), KdfParams::default())
+        let err = dispatch(&tenants, "refresh", &json!({}), KdfParams::default())
             .await
             .unwrap_err();
         assert_eq!(err.code(), WalletRpcErrorCode::MethodNotFound);
@@ -145,5 +139,14 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code(), WalletRpcErrorCode::MethodNotFound);
+    }
+
+    #[tokio::test]
+    async fn query_without_open_wallet_is_wallet_not_open() {
+        let tenants = test_tenants();
+        let err = dispatch(&tenants, "get_balance", &json!({}), KdfParams::default())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
     }
 }

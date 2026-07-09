@@ -4,6 +4,12 @@
 
 ### Added
 
+- **wallet-rpc: Phase 4b read queries** (`get_balance`,
+  `get_primary_address`, `get_transfers`, `get_transfer_by_id`,
+  `get_height`). Typed OpenAPI result structs + ledger projections
+  (no secrets on the wire). Empty-wallet balance is zeros; unknown
+  transfer id → `-29400`; daemon height failure → `-29201`.
+
 - **wallet-rpc: Phase 4b lifecycle slice 1** (`WALLET_REWRITE_PLAN.md`
   Phase 4b; `docs/api/wallet_rpc.yaml`). `create_wallet`, `open_wallet`,
   `close_wallet`, and `change_password` on `rust/shekyl-wallet-rpc`,

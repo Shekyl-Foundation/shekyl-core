@@ -40,8 +40,13 @@ shekyl-logging = { path = "../shekyl-logging" }
 shekyl-engine-core = { path = "../shekyl-engine-core" }
 shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
+shekyl-engine-state = { path = "../shekyl-engine-state" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
+shekyl-rpc-client = { path = "../shekyl-rpc-client", features = ["std"] }
+shekyl-scanner = { path = "../shekyl-scanner" }
+shekyl-units = { path = "../shekyl-units" }
+shekyl-types = { path = "../shekyl-types" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }

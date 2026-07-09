@@ -9,11 +9,11 @@
 //! This crate is Engine-backed and Shekyl-native — it is **not** the transitional
 //! `shekyl-engine-rpc` wallet2 FFI bridge (deleted at Phase 5).
 //!
-//! # Phase 4b slice 1 (lifecycle)
+//! # Phase 4b
 //!
-//! `create_wallet`, `open_wallet`, `close_wallet`, `change_password`, plus the
-//! Phase 4a scaffold (`get_version`, axum transport, auth, UDS, in-process
-//! spawn). Remaining SPECIFIED methods return `-32601` until later 4b slices.
+//! Lifecycle + read queries (`get_balance`, `get_primary_address`,
+//! `get_transfers`, `get_transfer_by_id`, `get_height`), plus the Phase 4a
+//! scaffold. Refresh / send / `rescan_blockchain` land in later commits.
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
@@ -22,6 +22,8 @@ pub mod auth;
 pub mod error;
 pub mod handlers;
 pub mod lifecycle;
+pub mod project;
+pub mod queries;
 pub mod server;
 pub mod tenant;
 pub mod types;

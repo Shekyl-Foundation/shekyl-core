@@ -119,6 +119,9 @@ pub enum WalletRpcError {
     /// Daemon RPC unreachable / failed.
     #[error("daemon unreachable")]
     DaemonUnreachable,
+    /// `get_transfer_by_id`: no match.
+    #[error("unknown transfer id")]
+    UnknownTransferId,
 }
 
 impl WalletRpcError {
@@ -138,6 +141,7 @@ impl WalletRpcError {
             Self::InvalidPassword => WalletRpcErrorCode::InvalidPassword,
             Self::CapabilityForbids { .. } => WalletRpcErrorCode::CapabilityForbids,
             Self::DaemonUnreachable => WalletRpcErrorCode::DaemonUnreachable,
+            Self::UnknownTransferId => WalletRpcErrorCode::UnknownTransferId,
         }
     }
 

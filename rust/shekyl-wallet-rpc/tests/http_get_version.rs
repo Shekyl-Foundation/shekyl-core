@@ -176,7 +176,7 @@ async fn method_not_found_for_unimplemented_specified() {
         json!({
             "jsonrpc": "2.0",
             "id": 2,
-            "method": "get_balance",
+            "method": "refresh",
             "params": {}
         }),
     )
@@ -315,6 +315,96 @@ async fn spawn_in_process_serves_get_version() {
     assert_eq!(json["id"], 42);
 
     handle.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn queries_balance_address_transfers_after_create() {
+    let dir = TempDir::new().expect("tempdir");
+    let state = lifecycle_state(&dir);
+
+    let created = rpc(
+        state.clone(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "create_wallet",
+            "params": { "name": "q", "password": "pw" }
+        }),
+    )
+    .await;
+    assert!(created.get("error").is_none(), "{created}");
+
+    let bal = rpc(
+        state.clone(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "get_balance",
+            "params": {}
+        }),
+    )
+    .await;
+    assert!(bal.get("error").is_none(), "{bal}");
+    assert_eq!(bal["result"]["unlocked"], "0");
+    assert_eq!(bal["result"]["liquid"], "0");
+    assert_eq!(bal["result"]["staked"], "0");
+    assert_eq!(bal["result"]["claimable_rewards"], "0");
+    assert_eq!(bal["result"]["pending"], "0");
+
+    let addr = rpc(
+        state.clone(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "get_primary_address",
+            "params": {}
+        }),
+    )
+    .await;
+    assert!(addr.get("error").is_none(), "{addr}");
+    let address = addr["result"]["address"].as_str().expect("address");
+    assert!(!address.is_empty());
+
+    let transfers = rpc(
+        state.clone(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "get_transfers",
+            "params": {}
+        }),
+    )
+    .await;
+    assert!(transfers.get("error").is_none(), "{transfers}");
+    assert_eq!(
+        transfers["result"]["transfers"].as_array().unwrap().len(),
+        0
+    );
+
+    let missing = rpc(
+        state.clone(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "get_transfer_by_id",
+            "params": { "id": "deadbeef:0" }
+        }),
+    )
+    .await;
+    assert_eq!(missing["error"]["code"], -29400);
+
+    // Unreachable daemon → -29201 for get_height.
+    let height = rpc(
+        state,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "get_height",
+            "params": {}
+        }),
+    )
+    .await;
+    assert_eq!(height["error"]["code"], -29201);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
