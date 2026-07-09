@@ -1,7 +1,8 @@
 # Archival serve-credit — C++ decision equivalence audit (V3.0)
 
-**Status:** design round 3 — review points resolved (§10); *no implementation
-yet; awaiting implementation go.*
+**Status:** design rounds CLOSED (§10, round 3 + post-closure pins);
+**implementation go issued 2026-07-09** — mirrors + standing KAT + fuzz land in
+the follow-on implementation PR.
 **Created:** 2026-07-08
 **Branch / worktree:** `chore/serve-credit-equivalence-audit`
 **Substrate verified at:** `origin/dev` = `ca8edce6b` (PR #273 merged).
@@ -122,8 +123,9 @@ if (m_db->has_archival_serve_credit_bit(resp.p_canonical_id, resp.shard_id, resp
   (`shekyl_types.h:405–412`).
 - **Faithful-reproduction note:** `ArchivalServeCreditKey` encodes `shard_id`
   and `E` **big-endian** (`store_be64`). The mirror reproduces BE for the
-  A-path key. **See finding SCE-1 (§7): the block-level pass builds the same
-  logical key little-endian.**
+  A-path key. **See finding SCE-1 (§6): the block-level pass builds the same
+  logical key native-endian** (`memcpy` of the `u64`s — little-endian on all
+  supported platforms).
 
 ### 2.2 D-SC-B — the full per-tx acceptance-gate decision (`check_archival_serve_credit_input`, `:4224–4396`)
 
@@ -152,7 +154,11 @@ when two conditions disagree). The ordered predicates:
 
 - **The WS-1 as-of semantics** (step 9: holds evaluated at `H_fire`, never at
   tip) become explicit and fuzzable in the mirror — this is the audit's sharpest
-  target, the site where the tip-vs-as-of bug actually lived.
+  target, the site where the tip-vs-as-of bug historically lived. Note the
+  substrate at the pinned commit is already the WS-1-**corrected** as-of
+  reconstruction (see the §5 step-9 substrate note): the mirror snapshots the
+  corrected behavior, and the reconstruction's strictly-above slash boundary is
+  audited through seeded-state verdict vectors on the C++ leg.
 - **Single-source, no re-derivation:** steps 4, 8, 11, 14 are *already* Rust; the
   mirror **calls the same functions** rather than re-implementing them (GF4b-6
   derive-don't-cache discipline). The mirror's own new logic is the **ordering**
@@ -210,7 +216,10 @@ pub fn serve_credit_key_be(p_id: &[u8; 32], shard_id: u64, settlement_epoch: u64
 /// leaf-chunk bounds, and takes the crypto-verify result as a bool.
 pub fn serve_credit_gate_decision(inputs: &ServeCreditGateInputs) -> GateVerdict;
 
-/// D-SC-C: block-level (P,s,E) uniqueness over the ordered vin list (LE key,
+/// D-SC-C: block-level (P,s,E) uniqueness over the ordered vin list
+/// (native-endian key in the C++ — the mirror pins LE explicitly, which is
+/// what native resolves to on every supported platform; the §5 SCE-1
+/// decision-invariance fuzz covers the encoding's irrelevance to the verdict;
 /// first-collision-wins).
 pub fn serve_credit_block_unique(triples: &[(/*P*/[u8;32], /*s*/u64, /*E*/u64)]) -> BlockUniqueVerdict;
 ```
@@ -247,8 +256,43 @@ separated (blurring them is how a "refactor" silently ships a behavior change).
 row: marshaled inputs + expected verdict (incl. reason branch) for each decision.
 Vectors cover: fresh accept; A dedup hit; C in-block collision (first-wins,
 ordering-sensitive); B guard boundaries (`H_fire == 0`, `H_fire == H_close`,
-`H_fire == H_close + 1`); B holds/not-holds at fire; and the SCE-1 A-vs-C
-key-encoding cross-check.
+`H_fire == H_close + 1`); B holds/not-holds at fire — including the step-9
+slash-boundary rows below; and the SCE-1 A-vs-C key-encoding cross-check.
+
+**Fixture staleness guards (post-closure pins, 2026-07-09):**
+
+- **The fixture header pins the substrate commit** the expected-reason column
+  was authored against (`substrate_commit` field; first authoring is
+  `ca8edce6b`). The reason column is a snapshot of a specific C++ predicate
+  ordering: if `dev` reorders `check_archival_serve_credit_input` or inserts a
+  predicate before the mirror lands, the bool equivalence still holds but the
+  branch assertions go silently stale — the header makes the anchor explicit
+  and re-authoring a deliberate act.
+- **The C++ gate carries a guard comment naming this fixture** (implementation
+  deliverable): a one-liner at the top of `check_archival_serve_credit_input`
+  and at the `:4889` block pass stating the predicate order is audited by
+  `serve_credit_equivalence_kat_v1.json`, so a future edit to the decision
+  order trips a "you changed an audited decision" signal at the edit site, not
+  at KAT-failure time.
+
+**Step-9 substrate note (post-closure pin, 2026-07-09).** The holds accessor at
+the pinned substrate is **already the WS-1-corrected as-of-`H_fire`
+reconstruction**, not a tip read: `archival_bond_holds_shard`
+(`db_lmdb.cpp:5040–5072`, landed with the WS-1 held-sourcing correction, PR
+#269) answers at `at_height` via the two-step read — held at tip ⇒ held at every
+height back to join (holdings shrink-only at the current substrate); not held at
+tip ⇒ held at `at_height` iff a logged slash **strictly above** `at_height`
+removed it (a slash *at* `at_height` means already-removed). Mirror-then-fix
+therefore snapshots the **corrected** behavior; the fixture's step-9
+`held_at_fire` expectations say so explicitly. The strictly-above boundary is
+the off-by-one seam worth vectors of its own: the C++ leg seeds a slash at
+exactly `H_fire` (expect reject) and at `H_fire + 1` (expect accept) and asserts
+the verdict flips. The reconstruction logic itself stays C++-side marshaling
+(it is entangled with the slash-log scan); its boundary is audited through
+these seeded-state verdict vectors, not by re-implementing the scan in the
+mirror. Reopen trigger: voluntary `HoldingsUpdate` landing breaks the
+shrink-only premise (the accessor's own doc comment names this; FOLLOWUPS V3.0
+bond-lifecycle item) — the fixture re-authors when that lands.
 
 **Two legs, both green on the shared fixture — with an explicit
 leg-responsibility split (pinned round 3, SCE-B-1):**
@@ -300,12 +344,15 @@ strengthening, not a V3.0 deliverable.
 
 ---
 
-## 6. Findings ledger — family **SCE-N** (to register)
+## 6. Findings ledger — family **SCE-N**
 
-Per rule 94 §1 this PR registers a new identifier family. `SCE-` (serve-credit
-equivalence) up to its first digit is unique against the §2 registry
+This doc mints the `SCE-` family (serve-credit equivalence), so per rule 94 §1
+("new identifier families register at birth") the `IMPLEMENTATION_INDEX.md` §2
+registry row lands **in this same design PR** — see §8 for the exact split of
+which bookkeeping rides this PR vs the implementation PR. Collision check:
+`SCE-` up to its first digit is unique against the §2 registry
 (Phase/Stage/M/Bond-PR/SP/SP-T/PR-A/PR-B/PR-E/CT/GF/S/R/F/DQ/WI/M1) — no token
-collision. Registry row and this doc land in the same PR.
+of `SCE-N` can parse as a token of an existing family.
 
 ### SCE-1 (candidate) — two byte encodings for the `(P,s,E)` key
 
@@ -325,7 +372,7 @@ collision. Registry row and this doc land in the same PR.
   normalize in the mirror** (mirror-then-fix — the mirror reproduces BE for A and
   LE for C faithfully first). Once the standing equivalence KAT is green against
   today's split, land a **standalone behavior-preserving C++ commit** unifying
-  D-SC-C's inline key   onto `ArchivalServeCreditKey` so one type owns the encoding
+  D-SC-C's inline key onto `ArchivalServeCreditKey` so one type owns the encoding
   (C's set stays internally consistent; the change removes the latent drift hazard
   and is free pre-genesis). The unify's value is not mere consistency: a
   native-endian `memcpy` of `u64`s in consensus-adjacent key construction is the
@@ -358,19 +405,26 @@ them.
   (rule 42) trigger. (If SCE-1's C++ hygiene fix is taken, it is behavior-preserving
   and rides its own commit with its own justification.)
 
-## 8. Tracking-index registration (rule 94)
+## 8. Tracking-index registration (rule 94) — what lands where
 
-Same PR adds:
+**This design PR** (rule 94 §1 birth-registration + rule 94 §5 start-registered,
+since implementation begins on the go):
 
 1. **§2 registry row:** `**SCE-N** | serve-credit C++-decision equivalence-audit
    findings | ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md`.
-2. **Inventory row** (§4 front table or a §5 note): "Serve-credit C++ decision
-   equivalence audit (D-SC-A/B/C mirrors + standing KAT) — *verification only, no
-   consensus change*; V3.0; flip deferred to V3.1 FOLLOWUPS."
+2. **§5 inventory row:** "Serve-credit C++ decision equivalence audit
+   (D-SC-A/B/C mirrors + standing KAT) — *verification only, no consensus
+   change*; design rounds closed, implementation starting; flip deferred to
+   V3.1 FOLLOWUPS."
 3. **§7 doc-directory row** for this file.
-4. `CHANGELOG.md` unreleased entry.
-5. FOLLOWUPS V3.0 item updated to "in progress / landed" with the standing-KAT
-   pointer when it lands (rule 91).
+4. `CHANGELOG.md` unreleased entry for the design.
+
+**The implementation PR** (rule 91 doc task):
+
+5. Inventory-row status `UPDATE` when the mirrors + standing KAT land.
+6. FOLLOWUPS V3.0 item updated with the standing-KAT pointer.
+7. `CHANGELOG.md` entry for the landed mirrors/KAT; SCE-1 unify commit noted
+   when it lands.
 
 ## 9. Decisions (resolved round 2, 2026-07-08)
 
@@ -380,13 +434,10 @@ Same PR adds:
    FFI rejected; reopen only on an unreachable boundary vector. ✓
 3. **SCE-1 disposition** — **unify-after** (§6): mirror faithfully → prove
    equivalence → standalone behavior-preserving C++ unify commit → re-prove. ✓
-4. **Identifier family** — `SCE-` (collision-free vs §2 registry). *Confirm at
-   go.* 
+4. **Identifier family** — `SCE-` (collision-free vs §2 registry). **Confirmed
+   at go (2026-07-09)**; registered in `IMPLEMENTATION_INDEX.md` §2 in this PR.
 5. **Module/name** — `shekyl-archival-retention::serve_credit_decisions`.
-   *Confirm at go.*
-
-Items 4–5 are naming confirmations, not blockers; absent objection they stand as
-written when implementation begins.
+   **Confirmed at go (2026-07-09).**
 
 ## 10. Review rounds (rule 26 scaffold)
 
@@ -394,4 +445,5 @@ written when implementation begins.
 | --- | --- | --- |
 | 1 | 2026-07-08 | Draft. Substrate verified at `ca8edce6b`; SCE-1 surfaced on first read. |
 | 2 | 2026-07-08 | Design decisions resolved (§9): D-SC-B **wide** (full gate mirror), equivalence via **shared-JSON KAT** (no FFI), SCE-1 **unify-after**. Doc updated §1.1/§2.2/§3/§5/§6/§9. |
-| 3 | 2026-07-09 | PR #274 review (SCE-B-1..B-3). **SCE-B-1 pinned (§5):** leg-responsibility split made explicit — C++ leg asserts the verdict `bool` only (all the C++ contract exposes; the consensus-relevant property); reason/branch asserted on the Rust mirror against a source-inspection-authored expected column; no `MERROR_VER` log-parsing anywhere (rejected mechanisms named with reopen criterion). **SCE-B-2 conceded by reviewer** (step-1 grouping of the `:4224–4245` bounds is internally consistent; reason enum keeps the sub-branches distinct) — no change. **SCE-B-3 addressed (§6):** SCE-1 unify rationale sharpened — the native-endian `memcpy` is the representation smell `db_lmdb.cpp:1657–1659` deliberately forbids for composite DB keys, not mere consistency. **Awaiting implementation go.** |
+| 3 | 2026-07-09 | PR #274 review (SCE-B-1..B-3). **SCE-B-1 pinned (§5):** leg-responsibility split made explicit — C++ leg asserts the verdict `bool` only (all the C++ contract exposes; the consensus-relevant property); reason/branch asserted on the Rust mirror against a source-inspection-authored expected column; no `MERROR_VER` log-parsing anywhere (rejected mechanisms named with reopen criterion). **SCE-B-2 conceded by reviewer** (step-1 grouping of the `:4224–4245` bounds is internally consistent; reason enum keeps the sub-branches distinct) — no change. **SCE-B-3 addressed (§6):** SCE-1 unify rationale sharpened — the native-endian `memcpy` is the representation smell `db_lmdb.cpp:1657–1659` deliberately forbids for composite DB keys, not mere consistency. **Round CLOSED — implementation go issued.** |
+| 3a (post-closure pins) | 2026-07-09 | Copilot findings on PR #274 resolved: §6/§8 wording made accurate by **doing** the rule-94 birth registration in this PR (registry + inventory + doc-directory rows in `IMPLEMENTATION_INDEX.md`, CHANGELOG entry) rather than deferring; §2.1 cross-ref §7→§6 fixed; LE→native-endian wording corrected in §2.1/§3 (mirror pins LE explicitly; decision-invariance fuzz covers it). Reviewer markers carried into §5 as post-closure pins: fixture `substrate_commit` header + C++ gate guard comment (staleness guards), and the **step-9 substrate correction** — the holds accessor at the pinned commit is already the WS-1-corrected as-of-`H_fire` reconstruction (`db_lmdb.cpp:5040–5072`, PR #269), so the mirror snapshots the corrected behavior, with strictly-above slash-boundary vectors on the C++ leg. Not a design reopen (rule 21: substrate-completeness amendments). |
