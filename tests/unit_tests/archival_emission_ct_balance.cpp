@@ -133,7 +133,10 @@ rct::rctSig make_balanced_emission_rv()
 transaction make_emission_tx(const rct::rctSig& rv, const rct::key& backing_pseudo_out)
 {
   transaction tx{};
-  tx.version = 2;
+  // Real emission txs are version 3 (min accepted version, blockchain.cpp);
+  // the CT-balance / dispatch surface under test doesn't branch on it, but
+  // the fixture matches the production surface so it cannot drift from it.
+  tx.version = 3;
 
   txin_archival_reward_emission vin{};
   vin.canonical_bytes.assign(128, 0x5a);
