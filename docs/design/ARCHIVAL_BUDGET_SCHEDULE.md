@@ -47,6 +47,18 @@ recorded in the per-height burn row, accumulated into `total_burned`
 (`:5026–5040`), with the in-code comment naming the C-1 activation as the
 redirect that funds `txin_archival_reward_emission` payouts.
 
+**Provenance of the amounts.** The constants (15% emission share, 0.90/yr
+decay, 25% fee-pool share — `config/economics_params.json`) are the
+Component-4 bootstrap-subsidy economics (`DESIGN_CONCEPTS.md`: the ~50×
+fee-yield-gap analysis). [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md)
+consumed this purse as a sim-unit abstraction and validated its
+**structure** — gate-1 supply safety (`Σreward ≤ budget` under growth),
+the `budget → APR → entry → coverage` and `budget → bondA → spread`
+transfer curves, and the fee-era thinning behavior (L11/L13) — but did
+**not** derive the absolute values; the sim's own residue lines name the
+absolute calibrations as post-testnet work. This spec defines how the
+purse **accrues and freezes**; the amount inside it is Component-4's.
+
 **Definition.**
 
 ```text
@@ -232,6 +244,26 @@ omission test when the claim-builder lands.
   `staker_inflow(h)` at the same single write site, preserving §2.2's
   one-write-one-target invariant; re-evaluation is a design round on this
   document with B1 re-run.
+- **Adaptive budget servo (the sim's L13 disposition).** Genesis ships
+  the **passive** schedule (Component-4 constants: emission share 15%
+  decaying 0.90/yr + 25% of the burned fee pool —
+  `config/economics_params.json`; the sim consumed this purse as an
+  abstraction and validated its transfer curves, it did **not** derive
+  the constants). [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) L13
+  names the fee-era durability requirement as an **adaptive
+  reward-share servo + backstop** (`budget_eff = base·(1 +
+  gain·shortfall)`), with hard conditionals the sim measured: the servo
+  must key off a *sticky/smoothed* trust signal (a raw-shortfall servo
+  oscillates and underperforms a constant purse) and needs an adequate
+  fee-market ceiling (below it, saturation → graceful loud failure) —
+  and the fiat-cost leg (L17 P2) is only partially dampable by any
+  token-denominated servo. Reopens when the fee-era servo lands (its
+  own design round on this document, `75-system-autonomy` jurisdiction —
+  the servo's gain/signal/ceiling are the sim's named post-testnet
+  empirics): the servo modifies the **amount** computed at the same
+  single write site (`staker_inflow(h)` → `budget_eff(h)`), never adds
+  a second write; §2.2's invariant and B1 re-run are the re-evaluation
+  gate.
 - **Per-height row retention** — reopens iff the finality boundary lands
   (the round's §6.5/§8.2 trigger): prune-against-finalized may shorten
   accrual-row retention to the finality depth; same round that retires the
