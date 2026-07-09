@@ -158,7 +158,10 @@ fn assert_reason_is_red(i: &ServeCreditGateInputs<'_>, reason: GateReject) {
 /// an earlier one (first-failure ordering).
 fn single_flip_first_failure(green: &ServeCreditGateInputs<'_>) {
     // (mutator, expected reason), in gate order.
-    type Flip = (fn(&mut ServeCreditGateInputs<'_>), GateReject);
+    type Flip = (
+        fn(&mut ServeCreditGateInputs<'_>),
+        GateReject,
+    );
     let flips: &[Flip] = &[
         (|i| i.preblock_present = true, GateReject::DuplicatePreBlock),
         (
@@ -186,10 +189,7 @@ fn single_flip_first_failure(green: &ServeCreditGateInputs<'_>) {
             |i| i.wire_serialize_ok = false,
             GateReject::VinSerializeFailed,
         ),
-        (
-            |i| i.wire_first_byte = None,
-            GateReject::UnexpectedVinWireTag,
-        ),
+        (|i| i.wire_first_byte = None, GateReject::UnexpectedVinWireTag),
         (|i| i.verify_ok = false, GateReject::FfiVerifyFailed),
     ];
 

@@ -9,7 +9,7 @@
 //! Runs the three decision mirrors (`serve_credit_decisions`) over the shared
 //! fixture `serve_credit_equivalence_kat_v1.json` and asserts **verdict and
 //! reason** for every vector. The C++ leg
-//! (`tests/unit_tests/archival_serve_credit_integration.cpp`) drives the live
+//! (`tests/unit_tests/archival_serve_credit_equivalence.cpp`) drives the live
 //! `check_archival_serve_credit_input` over the same vectors' `cpp_setup`
 //! seeded-state mutations and asserts the `bool` verdict only — the §5
 //! leg-responsibility split: the reason column here is authored by source

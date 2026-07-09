@@ -184,8 +184,11 @@ endif ()
 SET_PROPERTY(SOURCE main.cpp PROPERTY COMPILE_FLAGS -DDEFAULT_DATA_DIR="\\"${CMAKE_SOURCE_DIR}/tests/data\\"")
 SET_PROPERTY(SOURCE archival_serve_credit_integration.cpp PROPERTY COMPILE_FLAGS
   -DGATE2_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json\\"")
-SET_PROPERTY(SOURCE archival_serve_credit_equivalence.cpp PROPERTY COMPILE_FLAGS
-  "-DGATE2_KAT_FIXTURE_PATH=\"\\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json\\\"\" -DSERVE_CREDIT_EQUIVALENCE_KAT_FIXTURE_PATH=\"\\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/serve_credit_equivalence_kat_v1.json\\\"\"")
+# COMPILE_DEFINITIONS (not COMPILE_FLAGS) so CMake owns the per-generator
+# quoting of the string-literal values.
+SET_PROPERTY(SOURCE archival_serve_credit_equivalence.cpp PROPERTY COMPILE_DEFINITIONS
+  GATE2_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json"
+  SERVE_CREDIT_EQUIVALENCE_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/serve_credit_equivalence_kat_v1.json")
 SET_PROPERTY(SOURCE archival_bond_post_integration.cpp PROPERTY COMPILE_FLAGS
   -DGATE4_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate4_lifecycle_kat_v1.json\\"")
 
