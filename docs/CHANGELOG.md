@@ -4,6 +4,23 @@
 
 ### Added
 
+- **docs: C-1 pre-flight executed against `dev` `6671d565b`
+  (`REWARD_EMISSION_E3_GATING_ROUND.md` §9)** — every C-1 operand read at
+  its production site after #269/#271/#272 landed. All merge blockers
+  green (E1 hybrid auth, E3 verify body, WS-2 write side, as-of-E
+  snapshot, GF-4b §8.0.3 precondition) and all dispatch anchors confirmed
+  (whitelist, `check_tx_inputs` seam, reference-block root sourcing,
+  block-level `(P,E)` pass template, connect-arm slot). Two findings for
+  ratification: **F-C1a** — `budget(E)` has no production source (the
+  burn site `blockchain.cpp:5026` destroys the staker inflow with a
+  redirect promise; recommended: connect/pop-symmetric accrual persisted
+  beside `Σwork(E)` at close, implicit under-mint on claim expiry);
+  **F-C1b** — the C++ `VARIANT_TAG 0x06` pin is pre-renumber drift
+  (dense scheme makes `0x04` next-free and the genesis registry already
+  assigns it; recommended: pin `0x04`, aligned with the Rust wire tag).
+  C-1 scope enumerated in §9.5; E4's deletion surface shrank
+  (`txin_stake_claim` already deleted by the claim-era retirement PR-4).
+
 - **wallet: GF-4b backing-lineage pre-join wiring — sweep, lineage ladder,
   `BackingSet`; the `REWARD_EMISSION_VIN_PLAN.md` §8.0.3 C-1 activation
   precondition is satisfied**
