@@ -159,31 +159,53 @@ demonstrably insufficient.
 **Ratification.** **RATIFIED (2026-07-07)** — the one trio item that is a genuine
 decision rather than a substrate readout (consensus-acceptance-path, priority-1),
 signed off with its arming KAT below.
-**Arming KAT (backing-pseudo-out balance-exclusion).** The ACCEPT rests on
-reason 1 (no value path): the membership-only backing contributes **no
-pseudo-output** to the FCMP++ balance/inflation check. A KAT pins exactly that —
-a tx mixing the same output as backing **and** a key-imaged fee spend balances
-**identically** to one with a distinct backing, i.e. the backing adds nothing to
-the summed pseudo-outs. If the backing primitive ever contributes a pseudo-out
-(so the mix could add mintable value), the KAT breaks — that is the reopen
-signal, made mechanical rather than prose.
-**Arming KAT landed (2026-07-09,
-`tests/unit_tests/archival_emission_ct_balance.cpp`).** Two arms:
-`backing_identity_O_vs_O_prime` runs the production
-`verCtSemanticsEmission` on two txs differing **only** in the vin's backing
-pseudo-out (backing-on-O vs backing-on-O′, different committed values) with
-operands derived the dispatch's way, asserting bit-identical verdicts — the
-naive regression (backing appended to `pseudoOuts`) already trips the
-`pseudoOuts.size() == fee_input_count` assert, and the identity arm catches
-the **coordinated** regression (backing summed *and* the size check bumped
-to `fee_input_count + 1` in lockstep), because with the backing in the sum,
-O and O′ cannot both balance. `backing_inclusion_shape_rejects_in_production`
-constructs a fixture whose balance closes **only** with the backing on the
-pseudo side: production rejects it, and the same fixture with the backing
-manually appended passes the underlying single-sourced balance FFI — proving
-the rejection is the exclusion working, not an unrelated malformation. Any
-edit that flips these tests is the reopen signal and requires this round's
-re-evaluation shape, not a lockstep test update.
+**What actually protects the ACCEPT: the structural exclusion (three legs).**
+The ACCEPT rests on reason 1 (no value path), and the *guard* that delivers it
+is structural, not a test: (i) the backing lives in the emission vin's opaque
+`canonical_bytes` and **nothing deserializes the blob into `rv.p.pseudoOuts`**;
+(ii) the dispatch size check (`tx_verification_utils.cpp:175`,
+`rv.p.pseudoOuts.size() != spend_input_count`); and (iii) the leaf size check
+(`rctSigs.cpp:362`, `rv.p.pseudoOuts.size() == fee_input_count`). Routing the
+backing into the balance is not a line-removal — it is a blob-parse **plus** an
+append **plus** a lockstep bump of *both* size checks: a make-bad-states-
+unrepresentable guard. The KAT below is the **tripwire on that guard**, not the
+guard itself; it is necessary-not-sufficient, and its coverage boundary is
+stated per arm so a reader does not credit a leaf-check test with a dispatch-
+level proof.
+**Arming KAT landed (2026-07-09, strengthened same day,
+`tests/unit_tests/archival_emission_ct_balance.cpp`).** Two arms, each with its
+coverage boundary:
+- `backing_identity_O_vs_O_prime` — **bites** against a refactor that parsed
+  the blob into the balance *operands* (leg i, operand side): it derives
+  `spend_input_count`/`total_reward` through the **same production functions the
+  dispatch uses** (`classify_archival_tx` + `shekyl_checked_sum_amounts`, not a
+  test-local mirror) on two txs differing **only** in the backing bytes, and
+  asserts the operands do not move. It also pins leg (iii) via
+  `EXPECT_TRUE(verdict_O)` — bumping the leaf size check to `+ 1` breaks the
+  legitimate 1-pseudo-out tx. **Does NOT cover:** the `verdict_O ==
+  verdict_O_prime` identity is **green-by-construction** —
+  `verCtSemanticsEmission`'s signature `(rv, total_reward, fee_input_count)` has
+  no parameter the blob-resident backing can enter, so equal verdicts document
+  the *signature-level* exclusion; they are **not** the coordinated-regression
+  catch this paragraph previously claimed.
+- `backing_inclusion_shape_rejects_in_production` — **bites** against weakening
+  the balance *equation* (leg iii, value side): a fixture whose balance closes
+  **only** with the backing summed must reject through the production leaf, and
+  the same fixture with the backing appended passes the single-sourced balance
+  FFI — proving the rejection is the exclusion working, not an unrelated
+  malformation. **Does NOT cover:** the blob boundary (leg i, `pseudoOuts` side)
+  or the dispatch check (leg ii).
+- **Not covered by either arm:** driving the full production dispatch
+  (`ver_non_input_consensus_templated`) with a valid FCMP++ emission tx and
+  asserting the CT-balance verdict is **invariant under `canonical_bytes`
+  variation** — the arm that catches a future deserialization change parsing the
+  backing out of the blob into `pseudoOuts`. That arm is harness-gated on a
+  valid-proof emission-tx builder and rides the claim-builder PR
+  (`FOLLOWUPS.md` Q11-KAT item, `EMISSION_CLAIM_BUILDER.md` §3 CB-4 follow-up
+  (a)).
+
+Any edit that flips a *biting* assertion above is the reopen signal and requires
+this round's re-evaluation shape, not a lockstep test update.
 
 ### 2.3 Q12 / F-E8 — zero-work / zero-reward emission — RESOLVED (foreclosed)
 
