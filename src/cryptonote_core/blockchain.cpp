@@ -5355,12 +5355,20 @@ leave:
   // are atomic and the straddle epoch cannot double-count (§2.1).
   //
   // Computed HERE, before m_db->add_block, for two load-bearing reasons:
-  //  - Version operand (F-B1b): pre-add, get_current_version() is the
-  //    connecting block's own validated version — the operand
-  //    validate_miner_transaction received above. Post-add, HardFork::add has
-  //    advanced current_fork_index via get_voted_fork_index(height + 1), the
-  //    NEXT block's version, which flips the redirect one block early at an
-  //    activation boundary (§2.2 pins per-block fork status, not tip state).
+  //  - Version operand (F-B1b): the operand is bl.major_version — the block's
+  //    OWN declared version, consensus-bound by m_hardfork->check(bl) above
+  //    (do_check: bl.major_version == the voted current version) before this
+  //    point is reachable. Explicit per-block anchoring per §2.2: no
+  //    dependence on where get_current_version() sits relative to add_block
+  //    (post-add it has advanced to the NEXT block's voted version — the
+  //    original F-B1b bug; pre-add it happens to equal bl.major_version, but
+  //    only via the height+1 advance convention this operand choice retires).
+  //    NOT get_ideal_version(height): that is the static-table lookup and
+  //    ignores the vote threshold, so it can disagree with the version the
+  //    block was validated as. Do NOT reintroduce a get_block_reward call or
+  //    a second version read in this block — verify's base_reward and
+  //    bl.major_version ARE the operands (tripwire-guarded:
+  //    scripts/ci/check_archival_reward_gates.sh).
   //  - Write ordering (F-B1a): the accrual amount rides into add_block and is
   //    written before the epoch-close hook fires, so the close of epoch E
   //    sees its final block's row in the [E·SEB, (E+1)·SEB) range-sum.
@@ -5394,7 +5402,7 @@ leave:
   if (blockchain_height > 0)
   {
     const uint64_t genesis_ng_height = m_hardfork->get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-    const uint8_t connect_hf_version = m_hardfork->get_current_version();
+    const uint8_t connect_hf_version = bl.major_version;
 
     const shekyl::EmissionSplit em_split = shekyl::compute_emission_split(
         base_reward, blockchain_height, genesis_ng_height, connect_hf_version);
