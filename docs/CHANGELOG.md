@@ -16,6 +16,31 @@
   of the same name until Phase 5 deletion — operators must not confuse
   them).
 
+- **docs: serve-credit C++-decision equivalence audit — design
+  (`ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md`, rounds 1–3 + post-closure
+  pins CLOSED; implementation go issued 2026-07-09)**. Specifies the V3.0
+  verification task from the FOLLOWUPS queue: pure-Rust mirrors of the three
+  C++ serve-credit consensus decisions (`blockchain.cpp:4247` (P,s,E) LMDB
+  dedup; `:4224–4396` full acceptance gate, **wide** scope with ordered
+  first-failing-branch reasons; `:4889–4910` block-level uniqueness),
+  equivalence via a **shared-JSON standing KAT with no new FFI** (C++ leg
+  asserts the verdict `bool` only — all the C++ contract exposes; the
+  reason/branch is a Rust-mirror fidelity assertion against a
+  source-inspection-authored column, no `MERROR_VER` log-parsing), Rust fuzz
+  targets, and **mirror-then-fix** discipline throughout. First finding
+  **SCE-1**: the `(P,s,E)` key is built big-endian for the persistent LMDB
+  set (`ArchivalServeCreditKey`) but native-endian for the in-block set — no
+  live bug (the sets never cross), dispositioned **unify-after** (prove
+  equivalence against today's split, then a standalone behavior-preserving
+  C++ commit unifies onto the BE type). Post-closure pins: fixture
+  `substrate_commit` header + C++ gate guard comment as staleness guards;
+  step-9 holds-at-`H_fire` mirrors the **WS-1-corrected as-of reconstruction**
+  already live at `db_lmdb.cpp:5040–5072` (PR #269), with strictly-above
+  slash-boundary vectors on the C++ leg. `SCE-` family registered at birth in
+  `IMPLEMENTATION_INDEX.md` §2 (rule 94 §1) with §5 inventory + §7
+  doc-directory rows. The decision-site flip stays **V3.1** (FOLLOWUPS),
+  decoupled at the genesis boundary.
+
 - **docs: C-1 pre-flight executed against `dev` `6671d565b`
   (`REWARD_EMISSION_E3_GATING_ROUND.md` §9)** — every C-1 operand read at
   its production site after #269/#271/#272 landed. All merge blockers
