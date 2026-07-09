@@ -56,6 +56,36 @@ by someone who didn't write the code.
 A reader scanning test names should be able to enumerate the properties the
 system maintains without reading test bodies.
 
+## Test rationales state their coverage boundary, not their association
+
+A test's recorded rationale — the doc line, the discharge-table entry, the
+comment a reviewer reads instead of the body — must state **what breaks if
+this test is removed**, not **what property the test is associated with**.
+The two are not the same, and conflating them is how a leaf-check test gets
+credited with proving a mechanism it never exercises.
+
+Write every guard-test's rationale in the necessary-not-sufficient-explicit
+form: **"this bites against X; it does NOT cover Y."** The negative half is
+load-bearing — it tells the next reviewer the coverage boundary rather than
+letting them infer completeness from the association ("this test is about
+the exclusion" → "the exclusion is tested").
+
+The motivating instance is the Q11 balance-exclusion KAT
+(`tests/unit_tests/archival_emission_ct_balance.cpp`,
+`REWARD_EMISSION_E3_GATING_ROUND.md` §2.2). Its recorded rationale claimed an
+identity assertion proved the backing-exclusion mechanism; a source read
+found the assertion was green-by-construction (the backing is never an input
+to the balance function whose verdict is compared) and the test actually
+pinned only the *leaf* size check. The rationale described what the test was
+*for*, not what it *exercises* — so a leaf-check test was credited with a
+dispatch-level proof. The fix was not just correcting that one line but
+stating each arm's coverage boundary in the test header and the discharge
+table.
+
+This is the same discipline as a tripwire caveat or a cause-blindness note:
+**state the boundary of what the guard covers, in the guard's own record**,
+so a green test suite is not read as a complete one.
+
 ## Diagnostic output: verbose on failure, never leaking secrets
 
 Tests should produce maximum useful diagnostic output when they fail —

@@ -13,37 +13,62 @@
 // value: sum(pseudoOuts) + total_reward*H = sum(out masks) + fee*H, where
 // pseudoOuts covers exactly the fee inputs.
 //
-// Two arms:
+// The guard is STRUCTURAL and has three parts (EMISSION_CLAIM_BUILDER.md §3
+// CB-4). Routing the backing into the balance is not a line-removal — it is
+// a coordinated change across all three:
 //
-//  1. backing_identity — two transactions differing ONLY in the vin's
-//     backing pseudo-out (backing-on-O vs backing-on-O', different
-//     committed values) must produce bit-identical balance verdicts
-//     through the production dispatch derivation. The naive regression
-//     (append the backing to pseudoOuts) already trips the
-//     `pseudoOuts.size() == fee_input_count` assert; this arm catches the
-//     COORDINATED regression — backing added to the sum and the size
-//     check bumped to fee_input_count + 1 in lockstep — because with the
-//     backing in the sum, O and O' (different values) cannot both
-//     balance, and the identity assertion fails.
+//   (i)   blob boundary — the backing lives in the vin's opaque
+//         `canonical_bytes`; the balance path reads only `rv.p.pseudoOuts`
+//         and NOTHING deserializes the blob into pseudoOuts;
+//   (ii)  dispatch size check — `tx_verification_utils.cpp:175`
+//         (`rv.p.pseudoOuts.size() != spend_input_count`); and
+//   (iii) leaf size check — `rctSigs.cpp:362`
+//         (`rv.p.pseudoOuts.size() == fee_input_count`).
 //
-//  2. backing_inclusion_rejects — a fixture whose balance closes ONLY if
-//     the backing enters the pseudo side must reject through the
-//     production function, and the same fixture with the backing manually
-//     appended must pass the underlying single-sourced balance FFI. The
-//     second half proves the fixture is byte-for-byte the coordinated
-//     regression's accepting shape, so the production rejection is the
-//     exclusion working — not an unrelated malformation.
+// This KAT is the TRIPWIRE on the guard, not the guard itself. It is
+// necessary-not-sufficient, and its coverage boundary is stated per arm so
+// the next reviewer reads what each arm does and does NOT exercise:
 //
-// A future edit that routes the backing into the balance MUST flip these
-// tests; per the Q11 reversion clause that edit is a consensus change
-// requiring a design-round reopen, not a "completeness" cleanup.
+//  1. backing_identity_O_vs_O_prime — BITES against a refactor that parsed
+//     the blob into the balance OPERANDS (leg i, operand side): it derives
+//     `spend_input_count`/`total_reward` through the SAME production
+//     functions the dispatch uses (classify_archival_tx +
+//     shekyl_checked_sum_amounts), on two txs differing ONLY in the
+//     backing bytes, and asserts the operands do not move. Also pins leg
+//     (iii): `EXPECT_TRUE(verdict_O)` fails if the leaf size check is
+//     bumped to `+ 1`. Does NOT cover: the `verdict_O == verdict_O_prime`
+//     identity is green-by-construction — `verCtSemanticsEmission`'s
+//     signature `(rv, total_reward, fee_input_count)` has no parameter the
+//     blob-resident backing can enter, so equal verdicts document the
+//     signature-level exclusion, they are not the coordinated-regression
+//     catch.
+//
+//  2. backing_inclusion_shape_rejects_in_production — BITES against
+//     weakening the balance EQUATION (leg iii, value side): a fixture whose
+//     balance closes ONLY with the backing summed must reject through the
+//     production leaf, and the same fixture with the backing appended must
+//     pass the single-sourced balance FFI — proving the rejection is the
+//     exclusion working, not an unrelated malformation. Does NOT cover:
+//     the blob boundary (leg i, pseudoOuts side) or the dispatch check
+//     (leg ii).
+//
+//  NOT COVERED by any arm here: driving the full production dispatch
+//  (`ver_non_input_consensus_templated`) with a valid FCMP++ emission tx
+//  and asserting the CT-balance verdict is INVARIANT under `canonical_bytes`
+//  variation — the arm that would fail if a future deserialization change
+//  parsed the backing out of the blob into `pseudoOuts` (leg i, pseudoOuts
+//  side + leg ii). That arm is harness-gated on a valid-proof emission-tx
+//  builder; it rides the claim-builder PR (CB-4 follow-up (a)).
+//
+// A future edit that routes the backing into the balance MUST flip the
+// biting assertions here; per the Q11 reversion clause that edit is a
+// consensus change requiring a design-round reopen, not a "completeness"
+// cleanup.
 
 #include "gtest/gtest.h"
 
 #include <cstdint>
 #include <cstring>
-#include <limits>
-#include <variant>
 #include <vector>
 
 extern "C"
@@ -63,36 +88,25 @@ namespace {
 constexpr uint64_t kFee = 7;
 constexpr uint64_t kReward = 100;
 
-// Mirrors tx_verification_utils.cpp's emission-branch operand derivation:
-// total_reward is the overflow-checked plaintext vout sum; fee_input_count
-// is the txin_to_key count. Nothing is read from the emission vin — that
-// absence is the property under guard.
-struct DispatchOperands {
-  uint64_t total_reward = 0;
-  size_t fee_input_count = 0;
-  bool emission_shape = false;
-};
-
-DispatchOperands derive_dispatch_operands(const transaction& tx)
+// Production reward-total derivation: the SAME overflow-checked FFI the
+// dispatch emission branch uses (tx_verification_utils.cpp), fed the
+// plaintext vout amounts. The vin blob is never an input, so the mint
+// credit cannot be perturbed by the backing bytes. Calling the production
+// FFI (not a test-local sum) is the point — a mirror would verify the
+// mirror, not the code the dispatch runs (50-testing.mdc "Test the
+// production code, not a local re-implementation").
+uint64_t checked_reward_sum(const transaction& tx)
 {
-  DispatchOperands ops{};
-  size_t emission_count = 0;
-  for (const auto& in : tx.vin)
-  {
-    if (std::holds_alternative<txin_archival_reward_emission>(in))
-      ++emission_count;
-    else if (std::holds_alternative<txin_to_key>(in))
-      ++ops.fee_input_count;
-  }
-  ops.emission_shape = emission_count == 1
-    && ops.fee_input_count + 1 == tx.vin.size();
+  std::vector<uint64_t> vout_amounts;
+  vout_amounts.reserve(tx.vout.size());
   for (const auto& o : tx.vout)
-  {
-    if (o.amount > std::numeric_limits<uint64_t>::max() - ops.total_reward)
-      return ops;
-    ops.total_reward += o.amount;
-  }
-  return ops;
+    vout_amounts.push_back(o.amount);
+  uint64_t total = 0;
+  const uint8_t overflow = shekyl_checked_sum_amounts(
+    vout_amounts.empty() ? nullptr : vout_amounts.data(),
+    vout_amounts.size(), &total);
+  EXPECT_EQ(overflow, 0u);
+  return total;
 }
 
 rct::key add_scalars(const rct::key& a, const rct::key& b)
@@ -172,8 +186,10 @@ std::vector<uint8_t> flatten(const rct::keyV& ks)
 } // namespace
 
 // Arm 1: backing-on-O and backing-on-O' (different committed values, the
-// only delta between the two transactions) balance bit-identically —
-// both accept, same verdict. The backing moves no value.
+// only delta between the two transactions). The balance operands, derived
+// through the PRODUCTION operand functions, are invariant under the
+// backing bytes (leg i operand side); the balanced tx verifies (leg iii);
+// the verdict identity documents the signature-level exclusion.
 TEST(archival_emission_ct_balance, backing_identity_O_vs_O_prime)
 {
   const rct::rctSig rv = make_balanced_emission_rv();
@@ -183,19 +199,35 @@ TEST(archival_emission_ct_balance, backing_identity_O_vs_O_prime)
   const transaction tx_O = make_emission_tx(rv, backing_O);
   const transaction tx_O_prime = make_emission_tx(rv, backing_O_prime);
 
-  const DispatchOperands ops_O = derive_dispatch_operands(tx_O);
-  const DispatchOperands ops_O_prime = derive_dispatch_operands(tx_O_prime);
-  ASSERT_TRUE(ops_O.emission_shape);
-  ASSERT_TRUE(ops_O_prime.emission_shape);
-  // The operands the balance sees are identical: the backing never
-  // reaches them. This is the structural half of the exclusion.
-  EXPECT_EQ(ops_O.total_reward, ops_O_prime.total_reward);
-  EXPECT_EQ(ops_O.fee_input_count, ops_O_prime.fee_input_count);
+  // Operand derivation through the PRODUCTION single-source classifier
+  // (classify_archival_tx, cryptonote_basic.h) — the same call the
+  // dispatch emission branch makes. It inspects only the vin variant
+  // TYPE, never `canonical_bytes`, so the fee-input-count operand cannot
+  // move when the backing bytes change. A future refactor that parsed the
+  // blob into the operand derivation (leg i, operand side) flips these.
+  const archival_tx_classification cls_O = classify_archival_tx(tx_O.vin);
+  const archival_tx_classification cls_O_prime = classify_archival_tx(tx_O_prime.vin);
+  ASSERT_EQ(cls_O.kind, archival_tx_kind::emission);
+  ASSERT_EQ(cls_O_prime.kind, archival_tx_kind::emission);
+  EXPECT_EQ(cls_O.spend_input_count, cls_O_prime.spend_input_count);
+  EXPECT_EQ(cls_O.special_index, cls_O_prime.special_index);
 
+  const uint64_t total_reward = checked_reward_sum(tx_O);
+  EXPECT_EQ(total_reward, checked_reward_sum(tx_O_prime));
+
+  // verCtSemanticsEmission's signature (rv, total_reward, fee_input_count)
+  // has NO parameter through which the blob-resident backing could enter,
+  // so verdict_O == verdict_O_prime is green-by-construction and documents
+  // that signature-level exclusion — it is NOT the coordinated-regression
+  // catch. The biting assertion is EXPECT_TRUE(verdict_O): the balanced
+  // 1-pseudo-out tx passes only while pseudoOuts covers exactly the fee
+  // inputs (leaf size check rctSigs.cpp:362); bumping that check to `+ 1`
+  // breaks it. The dispatch check (:175) and the blob→pseudoOuts boundary
+  // are the harness-gated follow-up (see header).
   const bool verdict_O = rct::verCtSemanticsEmission(
-    tx_O.rct_signatures, ops_O.total_reward, ops_O.fee_input_count);
+    tx_O.rct_signatures, total_reward, cls_O.spend_input_count);
   const bool verdict_O_prime = rct::verCtSemanticsEmission(
-    tx_O_prime.rct_signatures, ops_O_prime.total_reward, ops_O_prime.fee_input_count);
+    tx_O_prime.rct_signatures, total_reward, cls_O_prime.spend_input_count);
   EXPECT_TRUE(verdict_O);
   EXPECT_EQ(verdict_O, verdict_O_prime);
 }
