@@ -188,6 +188,7 @@
 #define HF_VERSION_2021_SCALING                 1
 #define HF_VERSION_SHEKYL_NG                    1  // Three-component economics: release rate, burn, staking
 #define HF_VERSION_FCMP_PLUS_PLUS_PQC           1  // FCMP++ full-chain membership proofs + per-output PQC keys
+#define HF_VERSION_ARCHIVAL_EMISSION            1  // C-1: staker-inflow redirect (burn -> budget accrual) + archival reward emission claims (ARCHIVAL_BUDGET_SCHEDULE.md §2.2)
 
 // FCMP++ consensus parameters
 //

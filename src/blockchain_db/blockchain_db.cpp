@@ -1410,6 +1410,11 @@ uint64_t BlockchainDB::get_archival_sigma_work_milli(uint64_t /*settlement_epoch
   return 0;
 }
 
+uint64_t BlockchainDB::get_archival_budget(uint64_t /*settlement_epoch*/) const
+{
+  return 0;
+}
+
 bool BlockchainDB::txpool_tx_matches_category(const crypto::hash& tx_hash, relay_category category)
 {
   try

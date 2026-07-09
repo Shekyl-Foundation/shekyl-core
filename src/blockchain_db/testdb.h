@@ -168,6 +168,9 @@ public:
   virtual void add_block_burn(uint64_t height, uint64_t amount) override {}
   virtual uint64_t get_block_burn(uint64_t height) const override { return 0; }
   virtual void remove_block_burn(uint64_t height) override {}
+  virtual void add_archival_budget_accrual(uint64_t height, uint64_t amount) override {}
+  virtual uint64_t get_archival_budget_accrual(uint64_t height) const override { return 0; }
+  virtual void remove_archival_budget_accrual(uint64_t height) override {}
   virtual void set_total_bonded_atomic(uint64_t balance) override {}
   virtual uint64_t get_total_bonded_atomic() const override { return 0; }
 

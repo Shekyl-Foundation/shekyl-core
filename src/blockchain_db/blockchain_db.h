@@ -1929,6 +1929,18 @@ public:
   virtual uint64_t get_block_burn(uint64_t height) const = 0;
   virtual void remove_block_burn(uint64_t height) = 0;
 
+  // Per-height staker-inflow accrual row (`archival_budget_accrual`,
+  // ARCHIVAL_BUDGET_SCHEDULE.md §3.1) — the post-activation target of the
+  // single `staker_inflow` write whose pre-activation target is the burn
+  // record above (§2.2 redirect-the-write; exactly one target per block).
+  // Same idiom as the burn record: written only when nonzero, absent height
+  // reads as 0, pop removes the height row. The rows are summed once per
+  // epoch into the frozen `archival_budget` close row and pruned with the
+  // epoch family.
+  virtual void add_archival_budget_accrual(uint64_t height, uint64_t amount) = 0;
+  virtual uint64_t get_archival_budget_accrual(uint64_t height) const = 0;
+  virtual void remove_archival_budget_accrual(uint64_t height) = 0;
+
   virtual void set_total_bonded_atomic(uint64_t balance) = 0;
   virtual uint64_t get_total_bonded_atomic() const = 0;
 
@@ -2023,6 +2035,12 @@ public:
   virtual void revert_archival_epoch_close_at_height(uint64_t block_height);
   virtual uint64_t get_archival_r_market(uint64_t shard_id, uint64_t settlement_epoch) const;
   virtual uint64_t get_archival_sigma_work_milli(uint64_t settlement_epoch) const;
+  /// Frozen `budget(E)` close row (ARCHIVAL_BUDGET_SCHEDULE.md §3.2): the
+  /// bounded accrual-row sum the close materialized in the same txn as the
+  /// sigma row. NOTFOUND is laundered to 0 like the sigma getter; the
+  /// verify-side gather distinguishes absent-row (never closed / pruned →
+  /// reject) via the stored-shape probe on the LMDB class.
+  virtual uint64_t get_archival_budget(uint64_t settlement_epoch) const;
 
   // ─── Deferred Staked Leaf Insertion ─────────────────────────────────────────
 

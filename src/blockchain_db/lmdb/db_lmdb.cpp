@@ -296,6 +296,8 @@ const char* const LMDB_ARCHIVAL_EMISSION_CLAIM_LOG = "archival_emission_claim_lo
 const char* const LMDB_ARCHIVAL_R_MARKET = "archival_r_market";
 const char* const LMDB_ARCHIVAL_SIGMA_WORK = "archival_sigma_work";
 const char* const LMDB_ARCHIVAL_EPOCH_CLOSE_LOG = "archival_epoch_close_log";
+const char* const LMDB_ARCHIVAL_BUDGET_ACCRUAL = "archival_budget_accrual";
+const char* const LMDB_ARCHIVAL_BUDGET = "archival_budget";
 
 const char* const LMDB_PENDING_TREE_LEAVES = "pending_tree_leaves";
 const char* const LMDB_PENDING_TREE_DRAIN = "pending_tree_drain";
@@ -1541,7 +1543,7 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
     throw0(DB_ERROR(lmdb_error("Failed to create lmdb environment: ", result).c_str()));
   // Six gate-2/gate-4 archival subdbs (serve-credit, bond, shard segment/leaf,
   // slash applied/log) require headroom above the v7 curve-tree layout (36).
-  if ((result = mdb_env_set_maxdbs(m_env, 42)))
+  if ((result = mdb_env_set_maxdbs(m_env, 44)))
     throw0(DB_ERROR(lmdb_error("Failed to set max number of dbs: ", result).c_str()));
 
   int threads = tools::get_max_concurrency();
@@ -1648,6 +1650,10 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
     "Failed to open db handle for m_archival_sigma_work");
   lmdb_db_open(txn, LMDB_ARCHIVAL_EPOCH_CLOSE_LOG, MDB_CREATE, m_archival_epoch_close_log,
     "Failed to open db handle for m_archival_epoch_close_log");
+  lmdb_db_open(txn, LMDB_ARCHIVAL_BUDGET_ACCRUAL, MDB_CREATE, m_archival_budget_accrual,
+    "Failed to open db handle for m_archival_budget_accrual");
+  lmdb_db_open(txn, LMDB_ARCHIVAL_BUDGET, MDB_CREATE, m_archival_budget,
+    "Failed to open db handle for m_archival_budget");
 
   // INVARIANT: Shekyl curve-tree state uses composite keys. No DUPSORT.
   // If you're reaching for MDB_DUPSORT, stop and use a composite key instead.
@@ -4801,6 +4807,59 @@ void BlockchainLMDB::remove_block_burn(uint64_t height)
     throw0(DB_ERROR(lmdb_error("Failed to remove block burn: ", result).c_str()));
 }
 
+// ─── Archival budget accrual (ARCHIVAL_BUDGET_SCHEDULE.md §3.1) ─────────────
+//
+// The burn-record idiom over the archival table family's byte conventions:
+// BE(height) key → BE(amount) value (big-endian so the close's bounded
+// range-sum and the prune walk iterate in numeric height order — the family
+// comment at the table opens applies; MDB_INTEGERKEY would be wrong here).
+
+void BlockchainLMDB::add_archival_budget_accrual(uint64_t height, uint64_t amount)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  shekyl::db::ArchivalBudgetAccrualKey key(height);
+  uint8_t val_be[8];
+  shekyl::db::store_be64(val_be, amount);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v = { sizeof(val_be), val_be };
+  int result = mdb_put(*m_write_txn, m_archival_budget_accrual, &k, &v, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to add archival budget accrual: ", result).c_str()));
+}
+
+uint64_t BlockchainLMDB::get_archival_budget_accrual(uint64_t height) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  shekyl::db::ArchivalBudgetAccrualKey key(height);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v;
+  const int get_result = archival_db_get(m_archival_budget_accrual, &k, &v);
+  if (get_result == MDB_NOTFOUND)
+    return 0;
+  if (get_result)
+    throw0(DB_ERROR(lmdb_error("Failed to get archival budget accrual: ", get_result).c_str()));
+  if (v.mv_size != 8)
+    throw0(DB_ERROR(("Bad archival budget accrual record at height " + std::to_string(height)
+      + ": expected 8 bytes, got " + std::to_string(v.mv_size)).c_str()));
+  return shekyl::db::load_be64(static_cast<const uint8_t*>(v.mv_data));
+}
+
+void BlockchainLMDB::remove_archival_budget_accrual(uint64_t height)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  shekyl::db::ArchivalBudgetAccrualKey key(height);
+  MDB_val k = key.as_mdb_val();
+  int result = mdb_del(*m_write_txn, m_archival_budget_accrual, &k, nullptr);
+  if (result && result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to remove archival budget accrual: ", result).c_str()));
+}
+
 
 
 
@@ -5931,6 +5990,68 @@ void BlockchainLMDB::delete_archival_serve_credit_before_epoch(uint64_t prune_be
   mdb_cursor_close(cur);
 }
 
+void BlockchainLMDB::delete_archival_budget_for_epoch(uint64_t settlement_epoch)
+{
+  shekyl::db::ArchivalBudgetKey key(settlement_epoch);
+  MDB_val k = key.as_mdb_val();
+  const int result = mdb_del(*m_write_txn, m_archival_budget, &k, nullptr);
+  if (result && result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to delete archival_budget row: ", result).c_str()));
+}
+
+void BlockchainLMDB::delete_archival_budget_before_epoch(uint64_t prune_below_epoch)
+{
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(*m_write_txn, m_archival_budget, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_budget cursor for prune: ", rc).c_str()));
+
+  MDB_val k, v;
+  MDB_cursor_op op = MDB_FIRST;
+  while ((rc = mdb_cursor_get(cur, &k, &v, op)) == 0)
+  {
+    op = MDB_NEXT;
+    if (k.mv_size != shekyl::db::kArchivalBudgetKeySize)
+      throw std::runtime_error("FATAL: archival_budget key size mismatch on prune");
+    const uint64_t epoch = shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data));
+    if (epoch < prune_below_epoch)
+    {
+      rc = mdb_cursor_del(cur, 0);
+      if (rc)
+        throw0(DB_ERROR(lmdb_error("Failed to delete archival_budget row on prune: ", rc).c_str()));
+    }
+  }
+  if (rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("archival_budget cursor error on prune: ", rc).c_str()));
+  mdb_cursor_close(cur);
+}
+
+void BlockchainLMDB::delete_archival_budget_accrual_before_height(uint64_t prune_below_height)
+{
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(*m_write_txn, m_archival_budget_accrual, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_budget_accrual cursor for prune: ", rc).c_str()));
+
+  MDB_val k, v;
+  MDB_cursor_op op = MDB_FIRST;
+  while ((rc = mdb_cursor_get(cur, &k, &v, op)) == 0)
+  {
+    op = MDB_NEXT;
+    if (k.mv_size != shekyl::db::kArchivalBudgetAccrualKeySize)
+      throw std::runtime_error("FATAL: archival_budget_accrual key size mismatch on prune");
+    const uint64_t height = shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data));
+    if (height >= prune_below_height)
+      break;  // BE keys iterate in numeric order; everything past here is retained.
+    rc = mdb_cursor_del(cur, 0);
+    if (rc)
+      throw0(DB_ERROR(lmdb_error("Failed to delete archival_budget_accrual row on prune: ", rc).c_str()));
+  }
+  if (rc && rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("archival_budget_accrual cursor error on prune: ", rc).c_str()));
+  mdb_cursor_close(cur);
+}
+
 void BlockchainLMDB::prune_archival_epochs_before(uint64_t prune_below_epoch)
 {
   if (prune_below_epoch == 0)
@@ -5939,6 +6060,12 @@ void BlockchainLMDB::prune_archival_epochs_before(uint64_t prune_below_epoch)
   delete_archival_serve_credit_before_epoch(prune_below_epoch);
   delete_archival_r_market_before_epoch(prune_below_epoch);
   delete_archival_sigma_work_before_epoch(prune_below_epoch);
+  delete_archival_budget_before_epoch(prune_below_epoch);
+  // Accrual rows below the pruned epochs' first height: only needed for a
+  // re-close within the reorg window, which the retention window dominates
+  // (ARCHIVAL_BUDGET_SCHEDULE.md §3.2).
+  delete_archival_budget_accrual_before_height(
+    shekyl_archival_epoch_open_height(prune_below_epoch));
 }
 
 uint64_t BlockchainLMDB::get_archival_frozen_shard_count_on_write_txn() const
@@ -6073,6 +6200,39 @@ bool BlockchainLMDB::has_archival_sigma_work_row(uint64_t settlement_epoch) cons
   const int result = archival_db_get(m_archival_sigma_work, &k, &v);
   if (result && result != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("Failed to probe archival_sigma_work row: ", result).c_str()));
+  return result == 0;
+}
+
+uint64_t BlockchainLMDB::get_archival_budget(uint64_t settlement_epoch) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  shekyl::db::ArchivalBudgetKey key(settlement_epoch);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v;
+  const int get_result = archival_db_get(m_archival_budget, &k, &v);
+  if (get_result == MDB_NOTFOUND)
+    return 0;
+  if (get_result)
+    throw0(DB_ERROR(lmdb_error("Failed to get archival_budget: ", get_result).c_str()));
+  if (v.mv_size != 8)
+    throw0(DB_ERROR(("Bad archival_budget record at epoch " + std::to_string(settlement_epoch)
+      + ": expected 8 bytes, got " + std::to_string(v.mv_size)).c_str()));
+  return shekyl::db::load_be64(static_cast<const uint8_t*>(v.mv_data));
+}
+
+bool BlockchainLMDB::has_archival_budget_row(uint64_t settlement_epoch) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  shekyl::db::ArchivalBudgetKey key(settlement_epoch);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v;
+  const int result = archival_db_get(m_archival_budget, &k, &v);
+  if (result && result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to probe archival_budget row: ", result).c_str()));
   return result == 0;
 }
 
@@ -6449,6 +6609,14 @@ void BlockchainLMDB::gather_archival_emission_epoch_snapshot(const crypto::hash&
   // is a close-only quantity, so the gate's outcome reaches verify only
   // through this value.
   out.sigma_work_milli = get_archival_sigma_work_milli(settlement_epoch);
+  // The frozen budget(E) close row (ARCHIVAL_BUDGET_SCHEDULE.md §3.3):
+  // budget and denominator were frozen in the same close event, so the
+  // gather reads them from the same table family — no new live operand.
+  // Absent row (never closed / pruned) is a gather failure the verify shim
+  // rejects on; present-and-zero is a closed zero-budget epoch, rejected
+  // downstream by wire positivity, not here.
+  out.has_budget_row = has_archival_budget_row(settlement_epoch);
+  out.budget_atomic = out.has_budget_row ? get_archival_budget(settlement_epoch) : 0;
   gather_archival_epoch_rows(settlement_epoch, &p_id, out);
 }
 
@@ -6518,6 +6686,55 @@ void BlockchainLMDB::process_archival_epoch_close_at_height(uint64_t block_heigh
   if (sigma_put)
     throw0(DB_ERROR(lmdb_error("Failed to put archival_sigma_work: ", sigma_put).c_str()));
 
+  // Frozen budget(E) close row (ARCHIVAL_BUDGET_SCHEDULE.md §3.2): the
+  // bounded range-sum of the redirected per-height accrual rows over
+  // [E·SEB, (E+1)·SEB), written in the same txn as the sigma row so budget
+  // and denominator freeze in the same close event (the M1 same-snapshot
+  // pin). `block_height` is the close-processing height (E+1)·SEB — the
+  // exclusive upper bound. Written unconditionally: a present-and-zero row
+  // is a closed zero-budget epoch (§5, structurally non-claimable),
+  // distinguishable from never-closed (gather failure at verify).
+  uint64_t budget_atomic = 0;
+  {
+    const uint64_t start_height = shekyl_archival_epoch_open_height(settlement_epoch);
+    MDB_cursor* cur = nullptr;
+    int rc = mdb_cursor_open(*m_write_txn, m_archival_budget_accrual, &cur);
+    if (rc)
+      throw0(DB_ERROR(lmdb_error("Failed to open archival_budget_accrual cursor for close: ", rc).c_str()));
+    shekyl::db::ArchivalBudgetAccrualKey start_key(start_height);
+    MDB_val ak = start_key.as_mdb_val();
+    MDB_val av;
+    rc = mdb_cursor_get(cur, &ak, &av, MDB_SET_RANGE);
+    while (rc == 0)
+    {
+      if (ak.mv_size != shekyl::db::kArchivalBudgetAccrualKeySize)
+        throw std::runtime_error("FATAL: archival_budget_accrual key size mismatch on close");
+      const uint64_t h = shekyl::db::load_be64(static_cast<const uint8_t*>(ak.mv_data));
+      if (h >= block_height)
+        break;
+      if (av.mv_size != 8)
+        throw std::runtime_error("FATAL: archival_budget_accrual value size mismatch on close");
+      const uint64_t amount = shekyl::db::load_be64(static_cast<const uint8_t*>(av.mv_data));
+      if (amount > std::numeric_limits<uint64_t>::max() - budget_atomic)
+        // Impossible for well-formed rows (Σ inflow is supply-bounded); a
+        // wrap here is row corruption and must abort, not mint.
+        throw std::runtime_error("FATAL: archival budget accrual sum overflow on close");
+      budget_atomic += amount;
+      rc = mdb_cursor_get(cur, &ak, &av, MDB_NEXT);
+    }
+    if (rc && rc != MDB_NOTFOUND)
+      throw0(DB_ERROR(lmdb_error("archival_budget_accrual cursor error on close: ", rc).c_str()));
+    mdb_cursor_close(cur);
+  }
+  uint8_t budget_be[8];
+  shekyl::db::store_be64(budget_be, budget_atomic);
+  shekyl::db::ArchivalBudgetKey budget_key(settlement_epoch);
+  MDB_val bk = budget_key.as_mdb_val();
+  MDB_val bv = { sizeof(budget_be), budget_be };
+  const int budget_put = mdb_put(*m_write_txn, m_archival_budget, &bk, &bv, 0);
+  if (budget_put)
+    throw0(DB_ERROR(lmdb_error("Failed to put archival_budget: ", budget_put).c_str()));
+
   uint8_t epoch_be[8];
   shekyl::db::store_be64(epoch_be, settlement_epoch);
   shekyl::db::ArchivalEpochCloseLogKey log_key(block_height);
@@ -6554,6 +6771,12 @@ void BlockchainLMDB::revert_archival_epoch_close_at_height(uint64_t block_height
   const uint64_t settlement_epoch = shekyl::db::load_be64(static_cast<const uint8_t*>(log_v.mv_data));
   delete_archival_r_market_for_epoch(settlement_epoch);
   delete_archival_sigma_work_for_epoch(settlement_epoch);
+  // The frozen budget row reverts with the close family; the per-height
+  // accrual rows do NOT (they revert per popped block, blockchain.cpp pop
+  // path) — a pop-and-re-close re-sums the retained accrual rows and
+  // reproduces the row byte-identically (ARCHIVAL_BUDGET_SCHEDULE.md §3.2,
+  // KAT B3).
+  delete_archival_budget_for_epoch(settlement_epoch);
   const int log_del = mdb_del(*m_write_txn, m_archival_epoch_close_log, &log_k, nullptr);
   if (log_del && log_del != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("Failed to delete archival_epoch_close_log on pop: ", log_del).c_str()));

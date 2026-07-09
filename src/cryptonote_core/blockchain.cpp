@@ -825,6 +825,13 @@ block Blockchain::pop_block_from_blockchain()
       m_db->set_total_burned(total_burned);
     }
     m_db->remove_block_burn(popped_height);
+    // Pop side of the redirected staker-inflow write
+    // (ARCHIVAL_BUDGET_SCHEDULE.md §2.2/§3.1): the accrual row exists only
+    // for post-activation blocks with nonzero inflow — key deletion,
+    // tolerant of the missing key. Note the burn row above can coexist
+    // post-activation (it carries the genuinely destroyed portion; the
+    // inflow itself lands in exactly one of the two).
+    m_db->remove_archival_budget_accrual(popped_height);
   }
 
   return popped_block;
@@ -5017,14 +5024,31 @@ leave:
     shekyl::BurnResult burn = shekyl::compute_fee_burn(
         fee_summary, 0, prev_already_generated, /*stake_ratio*/ 0, m_hardfork->get_current_version());
 
-    // The staker inflow (emission split share + fee-pool share) is burned:
-    // the claim-era pool that once accrued it is retired, and the archival
-    // reward-emission leg (2b, C-1 activation) is where this inflow gets
-    // redirected to fund `txin_archival_reward_emission` payouts. Until that
-    // cutover the shares are destroyed, exactly as the no-staker branch
-    // always did on a chain with no claim-era staked outputs.
+    // The staker inflow (emission split share + fee-pool share) funds the
+    // archival reward-emission leg (2b, C-1): one per-height write whose
+    // TARGET the fork switches (ARCHIVAL_BUDGET_SCHEDULE.md §2.2
+    // redirect-the-write) — pre-activation blocks burn it (the retired
+    // claim-era posture), post-activation blocks accrue it into the
+    // `archival_budget_accrual` row the epoch close freezes into budget(E).
+    // Exactly one target per block, so burn-stop and accrual-start are
+    // atomic and the straddle epoch cannot double-count (§2.1). Target
+    // selection is this block's own fork status: at this point in connect
+    // the block IS the tip, so get_current_version() is the connecting
+    // block's version — per-block semantics, not stale-tip state.
     const uint64_t staker_inflow = em_split.staker_emission + burn.staker_pool_amount;
-    burn.actually_destroyed += staker_inflow;
+    const bool emission_redirect_active =
+      m_hardfork->get_current_version() >= HF_VERSION_ARCHIVAL_EMISSION;
+    if (emission_redirect_active)
+    {
+      // Only written when nonzero, mirroring the burn row: absent height
+      // reads as 0, and pop's remove tolerates the missing key.
+      if (staker_inflow > 0)
+        m_db->add_archival_budget_accrual(blockchain_height, staker_inflow);
+    }
+    else
+    {
+      burn.actually_destroyed += staker_inflow;
+    }
 
     if (burn.actually_destroyed > 0)
     {

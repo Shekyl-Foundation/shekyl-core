@@ -4,6 +4,31 @@
 
 ### Added
 
+- **consensus/db: C-1 commit-block 1 — `budget(E)` production per
+  `ARCHIVAL_BUDGET_SCHEDULE.md` (ratified; F-C1a closed).** The
+  redirect-the-write lands at the connect site (`blockchain.cpp`): the
+  single per-height `staker_inflow` write switches target on the
+  connecting block's own fork version (`HF_VERSION_ARCHIVAL_EMISSION`,
+  genesis feature set) — pre-activation → burn record (unchanged),
+  post-activation → new `archival_budget_accrual` LMDB row
+  (`add/get/remove_archival_budget_accrual`, burn-record idiom: BE keys,
+  written only when nonzero, pop removes the height row beside
+  `remove_block_burn`). The epoch close materializes the frozen
+  `archival_budget` row (bounded accrual range-sum over
+  `[E·SEB, (E+1)·SEB)`, same write txn as the `Σwork(E)` sigma row — the
+  M1 same-snapshot pin; written unconditionally so present-and-zero ≠
+  NOTFOUND), the close revert deletes it, and both tables join
+  `prune_archival_epochs_before`. The emission snapshot gather now
+  carries `budget_atomic` + `has_budget_row` (stored-shape probe), so
+  the verify shim reads budget and denominator from the same close
+  event — no new live operand. KATs **B1** (straddle partition /
+  conservation: burned inflow never enters `budget(E_flip)`), **B2**
+  (reorg across the fork: pop symmetry of both targets, `total_burned`
+  untouched by the accrual side), **B3** (close/revert/re-close
+  byte-identity; §3.3 present-and-zero vs never-closed shape) landed in
+  `archival_substrate_lmdb.cpp`. Consensus-inert until the C-1
+  whitelist flip: nothing reads `archival_budget` until dispatch lands.
+
 - **docs: C-1 pre-flight executed against `dev` `6671d565b`
   (`REWARD_EMISSION_E3_GATING_ROUND.md` §9)** — every C-1 operand read at
   its production site after #269/#271/#272 landed. All merge blockers
@@ -26,8 +51,8 @@
   containing the activation height mixes burned and emittable inflow;
   activation is HF-gated, not epoch-aligned).
 
-- **docs: `ARCHIVAL_BUDGET_SCHEDULE.md` — gate-1 `budget(E)` spec (DRAFT,
-  awaiting ratification; unblocks C-1 item 4)**. Pins: `budget(E)` =
+- **docs: `ARCHIVAL_BUDGET_SCHEDULE.md` — gate-1 `budget(E)` spec
+  (RATIFIED 2026-07-08 with the C-1 build opening; unblocks C-1 item 4)**. Pins: `budget(E)` =
   post-activation staker inflow over E's blocks, via **redirect-the-write**
   (the fork switches the target of the single per-height `staker_inflow`
   write — pre-activation → burn record, post-activation → budget accrual,

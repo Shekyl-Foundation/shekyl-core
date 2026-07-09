@@ -1,12 +1,13 @@
 # Archival budget schedule (gate 1) — `budget(E)` production
 
-**Status:** DRAFT — spec-first round opened 2026-07-08 per the F-C1a
-ratification ([`REWARD_EMISSION_E3_GATING_ROUND.md`](REWARD_EMISSION_E3_GATING_ROUND.md)
-§9.3: direction ratified — accumulator, frozen-close-row, under-mint-on-expiry
-— **not build-ready** until this spec pins the straddle transition, the
-reorg-across-fork KAT, and zero-budget-epoch handling). Awaiting ratification;
-C-1's budget commit-block builds against this document, not against §9.3's
-recommendation bullet.
+**Status:** RATIFIED 2026-07-08 — spec-first round opened same day per the
+F-C1a ratification ([`REWARD_EMISSION_E3_GATING_ROUND.md`](REWARD_EMISSION_E3_GATING_ROUND.md)
+§9.3: direction ratified — accumulator, frozen-close-row, under-mint-on-expiry),
+refined through review (provenance/source-chain verification, §6
+integer-determinism pins, §2.2 coinbase-foreclosure pin + KAT B5, servo-scale
+note), and ratified with the C-1 build opening (PR #273 merged; the C-1
+budget commit-block builds against this document, not against §9.3's
+recommendation bullet).
 
 **Scope:** the gate-1 budget schedule source that
 [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) (:20–21) scopes out of the
@@ -441,3 +442,14 @@ reads `archival_budget` until dispatch lands — so the atomic-flip shape of
 the round's §9.6 rule-07 check is unchanged). The rest of the §9.5 build
 list consumes `budget(E)` **as defined here**: "emittable inflow for E,"
 never "all inflow for E."
+
+**Landed status (C-1 commit-block 1, 2026-07-08):** §3.1 accrual row
+(`add/get/remove_archival_budget_accrual`, burn-record idiom, pop wired
+beside `remove_block_burn`), §2.2 redirect-the-write at the connect site
+(gated on `HF_VERSION_ARCHIVAL_EMISSION`, the connecting block's own fork
+version), §3.2 frozen close row (bounded range-sum in the sigma txn;
+revert deletes with the close family; prune joins the epoch family), §3.3
+snapshot gather (`has_budget_row` stored-shape probe + `budget_atomic`),
+and KATs **B1/B2/B3** (`archival_substrate_lmdb.cpp` budget family). B4's
+builder half and B5 arm with the later C-1 commit-blocks (claim-builder
+and fee-bearing core test respectively).

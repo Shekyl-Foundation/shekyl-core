@@ -204,6 +204,16 @@ struct ArchivalEmissionEpochSnapshot
   /// Persisted finalized Σwork(E) milli (0 when the epoch closed empty or
   /// was M1-gated) — the stored denominator, never a recompute.
   uint64_t sigma_work_milli = 0;
+  /// Frozen `budget(E)` (ARCHIVAL_BUDGET_SCHEDULE.md §3.3): the stored
+  /// close-row value — budget and denominator freeze in the same close
+  /// event; verify never re-sums the accrual rows. Meaningful only when
+  /// `has_budget_row`.
+  uint64_t budget_atomic = 0;
+  /// Whether the frozen `archival_budget` row exists. Absent (never closed
+  /// or pruned) is a gather failure → the verify shim rejects; a
+  /// present-and-zero row is a closed zero-budget epoch, rejected
+  /// downstream by wire positivity, not by the gather.
+  bool has_budget_row = false;
   struct BondRow
   {
     uint64_t join_settlement_epoch = 0;
@@ -501,6 +511,9 @@ private:
   virtual void add_block_burn(uint64_t height, uint64_t amount) override;
   virtual uint64_t get_block_burn(uint64_t height) const override;
   virtual void remove_block_burn(uint64_t height) override;
+  virtual void add_archival_budget_accrual(uint64_t height, uint64_t amount) override;
+  virtual uint64_t get_archival_budget_accrual(uint64_t height) const override;
+  virtual void remove_archival_budget_accrual(uint64_t height) override;
   virtual void set_total_bonded_atomic(uint64_t balance) override;
   virtual uint64_t get_total_bonded_atomic() const override;
   virtual void set_total_burned(uint64_t amount) override;
@@ -548,6 +561,7 @@ private:
   virtual uint64_t get_archival_r_market(uint64_t shard_id,
     uint64_t settlement_epoch) const override;
   virtual uint64_t get_archival_sigma_work_milli(uint64_t settlement_epoch) const override;
+  virtual uint64_t get_archival_budget(uint64_t settlement_epoch) const override;
 
   // Deferred tree leaf insertion (universal: all outputs go through pending)
   virtual void add_pending_tree_leaf(shekyl::db::MaturityHeight maturity, shekyl::db::OutputIndex output, const uint8_t* leaf_data) override;
@@ -671,6 +685,9 @@ private:
   void delete_archival_sigma_work_for_epoch(uint64_t settlement_epoch);
   void delete_archival_sigma_work_before_epoch(uint64_t prune_below_epoch);
   void delete_archival_serve_credit_before_epoch(uint64_t prune_below_epoch);
+  void delete_archival_budget_for_epoch(uint64_t settlement_epoch);
+  void delete_archival_budget_before_epoch(uint64_t prune_below_epoch);
+  void delete_archival_budget_accrual_before_height(uint64_t prune_below_height);
   /** M1 reward-gate operand (ARCHIVAL_REWARD_GATE_M1.md §1.1): the single
    * counting read over m_archival_shard_segment, O(1) via the persisted
    * pop-symmetric counter (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §4.4) plus
@@ -699,6 +716,14 @@ public:
    * reader; recorded in the spec's §11.6 R2-2 stored-close reader
    * enumeration. */
   bool has_archival_sigma_work_row(uint64_t settlement_epoch) const;
+  /** Stored-shape probe for the frozen budget row
+   * (ARCHIVAL_BUDGET_SCHEDULE.md §3.3): distinguishes a present-and-zero
+   * `archival_budget` row (closed zero-budget epoch — claimable-shaped but
+   * structurally rejected at wire positivity) from MDB_NOTFOUND (never
+   * closed / pruned — gather failure, reject), which get_archival_budget
+   * deliberately launders to 0. Production consumer is the C-1 emission
+   * verify shim's snapshot gather; also a KAT reader. */
+  bool has_archival_budget_row(uint64_t settlement_epoch) const;
   /** Corruption-simulation writer (ARCHIVAL_REWARD_GATE_M1.md §11.8 M3-2):
    * plants a raw (undecodable) segment-table row so the count-pass
    * decode-failure loud abort is armed by a test. put_archival_shard_segment
@@ -787,6 +812,8 @@ private:
   MDB_dbi m_archival_r_market;        // BE(shard)||BE(E) -> BE(count)
   MDB_dbi m_archival_sigma_work;      // BE(E) -> BE(sigma_milli)
   MDB_dbi m_archival_epoch_close_log; // block_height -> settlement_epoch finalized
+  MDB_dbi m_archival_budget_accrual;  // BE(height) -> BE(staker_inflow) (redirected write, §3.1)
+  MDB_dbi m_archival_budget;          // BE(E) -> BE(budget) frozen at close (§3.2)
 
   MDB_dbi m_pending_tree_leaves;      // BE(maturity)||BE(output) [16B] -> leaf [128B]
   MDB_dbi m_pending_tree_drain;       // BE(block_height)||BE(output) [16B] -> maturity[8]||leaf[128] [136B]
