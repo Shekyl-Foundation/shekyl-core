@@ -1105,13 +1105,51 @@ not silently flipped.
    arity 1) — the activation byte.
 5. **Dispatch wiring** in `check_tx_inputs` (serve-credit idiom) +
    `vout_reward_sum` cross-check + reference-block age windows.
-6. **Block-level `(P,E)` pass** (§6.2's deferred third layer) mirroring
-   `blockchain.cpp:4887` + its two §6.4 KATs.
+6. **Block-level `(P,E)` pass** (§6.2's deferred third layer) at the
+   `blockchain.cpp:4887` *placement* — but the duplicate **decision** is
+   a Rust function over the block's marshaled `(P,E)` claim pairs, not a
+   mirror of the C++ `std::set` idiom (decision-placement pin below) —
+   + its two §6.4 KATs.
 7. **Connect arm** in `add_transaction_data` calling
    `apply_archival_emission_claim` (single writer, §6.3 journal already
    armed).
 8. **Regtest end-to-end**: emission accepted-and-applied through the real
    path; then E4/E5 per item 5.
+
+**Decision-placement pin (ratified 2026-07-08).** Verified split at this
+head: **computation is uniformly Rust; decisions are mixed.** The
+emission leg already Rust-decides — the verify body returns typed errors
+that `archival_ffi.rs:130` (`map_verify_error`) merely maps to FFI codes,
+and C++ never re-decides — while the older serve-credit path decides in
+C++ directly against LMDB: the dedup if-check (`blockchain.cpp:4247`),
+the holds check (`:4312`), and the block-level `(P,E)` set-insert loop
+(`:4889–4910`, reject at `:4904`). C-1 builds every new consensus
+**decision** in Rust with
+C++ as the mechanical applier/marshaler:
+
+- **Item 6** marshals the block's claim pairs and takes its verdict from
+  a Rust function; only the placement mirrors `:4887`.
+- **Item 7's** dedup decision is already Rust
+  (`claimed_epochs_check_and_set` via FFI); C++ journals the pre-image
+  and writes the bond — application, not decision. The mint application
+  to supply is mechanical and stays C++.
+
+Rationale (not aesthetic): the arc's enforcement mechanism —
+make-bad-states-unrepresentable via the type system (`K_COVER`
+const-assert, wire positivity, sealed witnesses, the WS-2 single-writer
+framing) — is a Rust capability. A consensus decision in C++ can be
+protected only by convention + KAT + review, the armed-gate-with-no-trigger
+pattern that produced the tip-vs-as-of and dedup findings this round
+spent itself catching. The determinism seam is a *separate* concern and
+is already foreclosed by single-evaluator (the arithmetic has one Rust
+implementation; C++ passes operands) — "more Rust" is not what forecloses
+it; "one evaluator" is. The older serve-credit decisions
+(`:4247`/`:4312`/`:4904`) are queued as post-C-1 extraction candidates
+under the equivalence-proof discipline (`docs/FOLLOWUPS.md` V3.0 queue):
+mirror in Rust, prove behavior-equivalent against the C++ (the `recon.rs`
+/ `collect_outputs` pattern), then flip the decision site — never
+reimplement-and-hope, because a divergence in a replaced consensus
+decision is the fork the extraction exists to prevent.
 
 ### 9.6 Non-blocking notes
 

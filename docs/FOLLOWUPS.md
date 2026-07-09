@@ -4332,6 +4332,34 @@ sustainability is unaffected by the recalibration.
   genesis-frozen consensus, so if multisig ships at V3.0 this is pre-genesis; if
   multisig is V3.1+, re-file there. Surfaced by PR #193's review/audit.
 
+- **Extract the serve-credit C++ consensus decisions to Rust
+  (equivalence-proven), sequenced after C-1** (surfaced 2026-07-08, C-1
+  pre-flight decision-placement review,
+  [`REWARD_EMISSION_E3_GATING_ROUND.md`](./design/REWARD_EMISSION_E3_GATING_ROUND.md)
+  §9.5). Three archival vin consensus decisions are C++ if-checks made
+  directly against LMDB: the serve-credit `(P,s,E)` dedup
+  (`blockchain.cpp:4247`), the holds-at-`h_fire` check (`:4312`), and the
+  block-level serve-credit `(P,s,E)` uniqueness pass (`:4889–4910`).
+  These are the sites where the tip-vs-as-of and dedup-atomicity findings
+  of the E3 gating round lived; a C++ decision can be protected only by
+  convention + KAT + review, not by the type system
+  (`20-rust-vs-cpp-policy.mdc` "Rust if any of" #2/#3). Disposition:
+  extract each **decision** into a pure Rust function over marshaled
+  inputs (the `epoch_close_compute` / emission-verify shape), leaving the
+  C++ as marshaler + mechanical LMDB applier. **Migration discipline is
+  the load-bearing part:** each extraction mirrors the C++ decision in
+  Rust, proves behavior equivalence with KATs/fuzzing against the C++ it
+  replaces (the `recon.rs` / `collect_outputs` precedent), then flips the
+  decision site — a sequence of individually-ratified cut-overs, never a
+  bulk port, because a divergence in a replaced consensus decision is a
+  fork. Scope boundary: the decision moves; LMDB mutation, serialization,
+  and network stay C++ (over-extraction adds FFI surface with its own bug
+  class). **Target: V3.0 pre-genesis, after C-1 lands** — C-1's emission
+  leg establishes the Rust-decision template these three then follow, and
+  any latent divergence the equivalence proof surfaces is a free fix
+  pre-genesis and a hard fork after. *Structural deferral to V3.1
+  requires the explicit queue-pass decision per §Queue structure.*
+
 ---
 
 ## V3.1 — audit response and stressnet gates

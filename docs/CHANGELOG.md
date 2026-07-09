@@ -44,6 +44,21 @@
   factor; four armed KATs (straddle conservation, reorg-across-the-fork,
   close/revert symmetry, zero-budget omission/rejection).
 
+- **docs: C-1 decision-placement pin ratified
+  (`REWARD_EMISSION_E3_GATING_ROUND.md` §9.5)** — source-verified split:
+  computation is uniformly Rust; decisions are mixed (emission verify
+  Rust-decides via typed errors that `archival_ffi.rs` only maps; the
+  older serve-credit path decides in C++ against LMDB at
+  `blockchain.cpp:4247`/`:4312`/`:4889–4910`). C-1 builds every new
+  consensus **decision** in Rust with C++ as marshaler/applier — the
+  block-level `(P,E)` pass (item 6) takes its verdict from a Rust
+  function rather than mirroring the C++ `std::set` idiom; the connect
+  arm's dedup decision is already Rust (`claimed_epochs_check_and_set`),
+  and the mint application stays C++. The three C++ serve-credit
+  decisions are queued in `FOLLOWUPS.md` (V3.0, post-C-1) as
+  equivalence-proven extraction candidates (mirror → prove
+  bit-equivalent → flip, the `recon.rs` precedent).
+
 - **wallet: GF-4b backing-lineage pre-join wiring — sweep, lineage ladder,
   `BackingSet`; the `REWARD_EMISSION_VIN_PLAN.md` §8.0.3 C-1 activation
   precondition is satisfied**
