@@ -17,7 +17,7 @@
 // substrate_commit):
 //   D-SC-A  :4247        (P,s,E) dedup vs pre-block LMDB state (BE key)
 //   D-SC-B  :4224–4396   check_archival_serve_credit_input (wide gate)
-//   D-SC-C  :4889–4910   block-level (P,s,E) uniqueness (native-endian key)
+//   D-SC-C  :4889–4910   block-level (P,s,E) uniqueness (BE key, post-SCE-1)
 
 #define IN_UNIT_TESTS
 
@@ -602,9 +602,10 @@ TEST(serve_credit_equivalence, dedup_vectors_key_bytes_and_membership)
 // connecting full blocks. Per §5 ("D-SC-C is trivially isolatable — pure, no
 // DB") this leg runs a VERBATIM transcription of that loop: the same
 // std::unordered_set<std::string> over the same 48-byte
-// P ‖ memcpy(shard) ‖ memcpy(E) native-endian key, first-collision-wins.
-// The guard comment at the blockchain.cpp site names this test; an edit to
-// the live loop must update both in the same commit.
+// ArchivalServeCreditKey bytes (the unified big-endian encoding, post-SCE-1
+// unify), first-collision-wins. The guard comment at the blockchain.cpp site
+// names this test; an edit to the live loop must update both in the same
+// commit.
 
 namespace {
 
@@ -623,13 +624,13 @@ BlockUniqueOutcome run_block_unique_transcription(
   size_t index = 0;
   for (const auto& t : triples)
   {
-    // Transcribed from blockchain.cpp:4898–4903 (D-SC-C key construction).
-    std::string key(48, '\0');
-    memcpy(key.data(), std::get<0>(t).data, 32);
-    const uint64_t shard_id = std::get<1>(t);
-    const uint64_t settlement_epoch = std::get<2>(t);
-    memcpy(key.data() + 32, &shard_id, sizeof(shard_id));
-    memcpy(key.data() + 40, &settlement_epoch, sizeof(settlement_epoch));
+    // Transcribed from blockchain.cpp:4898–4903 (D-SC-C key construction,
+    // post-SCE-1-unify: ArchivalServeCreditKey, the D-SC-A encoding).
+    const shekyl::db::ArchivalServeCreditKey credit_key(
+      reinterpret_cast<const uint8_t*>(std::get<0>(t).data),
+      std::get<1>(t), std::get<2>(t));
+    std::string key(reinterpret_cast<const char*>(credit_key.bytes().data()),
+      credit_key.bytes().size());
     if (index == 0)
       out.first_key_hex = hex_from_bytes(
         reinterpret_cast<const uint8_t*>(key.data()), key.size());
@@ -671,12 +672,12 @@ TEST(serve_credit_equivalence, block_unique_vectors_verdict_and_key_pin)
       EXPECT_FALSE(out.unique) << id;
       EXPECT_EQ(out.duplicate_index, vec["duplicate_index"].GetUint64()) << id;
     }
-    if (vec.HasMember("expected_first_key_le_hex"))
+    if (vec.HasMember("expected_first_key_be_hex"))
     {
-      // Native-endian on every supported platform resolves to LE — the
-      // encoding split vs D-SC-A's BE key is SCE-1 (audit doc §6).
+      // Post-SCE-1-unify: the block key is the same BE ArchivalServeCreditKey
+      // encoding D-SC-A persists (audit doc §6).
       EXPECT_EQ(out.first_key_hex,
-        std::string(vec["expected_first_key_le_hex"].GetString())) << id;
+        std::string(vec["expected_first_key_be_hex"].GetString())) << id;
     }
   }
 }
@@ -700,11 +701,12 @@ TEST(serve_credit_equivalence, sce1_key_encoding_crosscheck)
 
   const BlockUniqueOutcome out =
     run_block_unique_transcription({{p_id, shard_id, epoch}});
-  const std::string le_hex = out.first_key_hex;
+  const std::string block_hex = out.first_key_hex;
 
   EXPECT_EQ(be_hex, std::string(x["key_be_hex"].GetString()));
-  EXPECT_EQ(le_hex, std::string(x["key_le_hex"].GetString()));
-  // expect_equal flips to true when the SCE-1 unify commit re-points D-SC-C
-  // onto ArchivalServeCreditKey; the fixture re-pins at that point.
-  EXPECT_EQ(be_hex == le_hex, x["expect_equal"].GetBool());
+  EXPECT_EQ(block_hex, std::string(x["key_block_hex"].GetString()));
+  // Post-unify, expect_equal is true and load-bearing: the two decision
+  // paths must key with the one ArchivalServeCreditKey encoding — a
+  // reintroduced split (SCE-1, audit doc §6) fails here.
+  EXPECT_EQ(be_hex == block_hex, x["expect_equal"].GetBool());
 }

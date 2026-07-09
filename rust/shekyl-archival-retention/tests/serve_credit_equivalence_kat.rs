@@ -261,21 +261,22 @@ fn block_unique_vectors_verdict_and_key_pin() {
             other => panic!("unknown expected kind {other}"),
         }
 
-        if let Some(pin) = vector["expected_first_key_le_hex"].as_str() {
+        if let Some(pin) = vector["expected_first_key_be_hex"].as_str() {
             let (p, shard_id, epoch) = triples[0];
             assert_eq!(
                 serve_credit_block_key(&p, shard_id, epoch).to_vec(),
                 hex_bytes(&serde_json::Value::String(pin.to_owned())),
-                "vector {id}: LE key bytes"
+                "vector {id}: unified BE key bytes"
             );
         }
     }
 }
 
-/// SCE-1 executable record: the same logical `(P, shard, E)` triple encodes
-/// to *different* bytes on the two decision paths at the pinned substrate.
-/// When the post-equivalence unify commit lands (audit doc §6), the fixture's
-/// `expect_equal` flips to `true` and this test enforces the unified state.
+/// SCE-1 executable record, post-unify: the two decision paths (D-SC-A
+/// persistent, D-SC-C block-level) key the same logical `(P, shard, E)`
+/// triple with the *same* bytes — the unify commit re-pointed D-SC-C onto
+/// `ArchivalServeCreditKey` (audit doc §6). `expect_equal` is now `true` and
+/// load-bearing: a reintroduced encoding split fails here.
 #[test]
 fn sce1_key_encoding_crosscheck() {
     let doc = fixture();
@@ -287,12 +288,12 @@ fn sce1_key_encoding_crosscheck() {
     let key_be = serve_credit_key_be(&p, shard_id, epoch);
     let key_block = serve_credit_block_key(&p, shard_id, epoch);
     assert_eq!(key_be.to_vec(), hex_bytes(&x["key_be_hex"]));
-    assert_eq!(key_block.to_vec(), hex_bytes(&x["key_le_hex"]));
+    assert_eq!(key_block.to_vec(), hex_bytes(&x["key_block_hex"]));
 
     let expect_equal = x["expect_equal"].as_bool().expect("expect_equal");
     assert_eq!(
         key_be == key_block,
         expect_equal,
-        "SCE-1 pin: A-vs-C key encodings (expect_equal flips with the unify commit)"
+        "SCE-1 pin: the unified A/C key encoding must not re-split"
     );
 }

@@ -14,12 +14,12 @@
 //!   always `Unique` (checked against a field-level set, independent of the
 //!   key encoding).
 //! - **SCE-1 decision-invariance:** the uniqueness verdict computed over the
-//!   native-endian block keys equals the verdict computed over the
-//!   big-endian persistent keys — the A-vs-C encoding split is
-//!   behavior-irrelevant for the decision (the finding is a drift hazard,
-//!   not a live bug; this is the §3 cross-check as an executable property).
-//! - Both encodings of one triple are injective on the triple (field-swap
-//!   never collides).
+//!   unified big-endian keys equals the verdict computed over the *retired*
+//!   native-endian encoding the pre-unify C++ used — the property that
+//!   licensed the SCE-1 unify commit as behavior-preserving, held standing
+//!   (the §3 cross-check as an executable property).
+//! - The key encoding is injective on the triple (field-swap never
+//!   collides).
 
 #![no_main]
 
@@ -70,31 +70,43 @@ fuzz_target!(|data: &[u8]| {
         );
     }
 
-    // SCE-1 decision-invariance: the same uniqueness pass over the BE
-    // (D-SC-A) encoding reaches the same verdict as the native-endian
-    // (D-SC-C) encoding the mirror uses.
-    let mut be_set = BTreeSet::new();
-    let mut be_verdict = BlockUniqueVerdict::Unique;
+    // SCE-1 decision-invariance, held standing: the verdict over the unified
+    // BE keys (what the mirror and the post-unify C++ use) equals the verdict
+    // over the retired pre-unify native-endian encoding, reconstructed here
+    // as the invariance oracle.
+    let le_key = |p: &[u8; 32], shard: u64, epoch: u64| {
+        let mut key = [0u8; 48];
+        key[..32].copy_from_slice(p);
+        key[32..40].copy_from_slice(&shard.to_le_bytes());
+        key[40..48].copy_from_slice(&epoch.to_le_bytes());
+        key
+    };
+    let mut le_set = BTreeSet::new();
+    let mut le_verdict = BlockUniqueVerdict::Unique;
     for (index, (p, shard, epoch)) in triples.iter().enumerate() {
-        if !be_set.insert(serve_credit_key_be(p, *shard, *epoch)) {
-            be_verdict = BlockUniqueVerdict::DuplicateAt { index };
+        if !le_set.insert(le_key(p, *shard, *epoch)) {
+            le_verdict = BlockUniqueVerdict::DuplicateAt { index };
             break;
         }
     }
     assert_eq!(
-        verdict, be_verdict,
+        verdict, le_verdict,
         "SCE-1: uniqueness verdict must not depend on the key encoding"
     );
 
     // Encoding injectivity on the triple: distinct triples never share a key
-    // in either encoding (field-swap safety at the byte level).
-    let mut le_keys = BTreeSet::new();
+    // (field-swap safety at the byte level); the block key must be the
+    // unified BE key.
     let mut be_keys = BTreeSet::new();
     let mut distinct = BTreeSet::new();
     for (p, shard, epoch) in &triples {
         if distinct.insert((*p, *shard, *epoch)) {
-            assert!(le_keys.insert(serve_credit_block_key(p, *shard, *epoch)));
             assert!(be_keys.insert(serve_credit_key_be(p, *shard, *epoch)));
         }
+        assert_eq!(
+            serve_credit_block_key(p, *shard, *epoch),
+            serve_credit_key_be(p, *shard, *epoch),
+            "post-unify: one encoding for the logical key"
+        );
     }
 });

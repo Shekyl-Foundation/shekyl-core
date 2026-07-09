@@ -26,8 +26,9 @@
 //!   mirrored **wide**: the ordered predicate sequence returns the first
 //!   failing branch. A reorder is a behavior change; the ordering is audited.
 //! - **D-SC-C** — block-level cross-tx `(P, shard, E)` uniqueness
-//!   (`blockchain.cpp:4889–4910`; inline 48-byte key, **native-endian**
-//!   `memcpy` of the `u64`s — finding SCE-1, audit doc §6).
+//!   (`blockchain.cpp:4889–4910`; keyed with `ArchivalServeCreditKey` — the
+//!   same **big-endian** encoding D-SC-A persists, since the SCE-1 unify
+//!   commit replaced the original native-endian `memcpy` key, audit doc §6).
 //!
 //! Single-source rule (audit doc §2.2): predicates that already exist in Rust
 //! are *called*, never re-implemented — [`serve_credit_epoch_ok`] (step 4),
@@ -352,29 +353,23 @@ pub fn serve_credit_gate_decision(inputs: &ServeCreditGateInputs<'_>) -> GateVer
 // ─── D-SC-C — block-level (P, shard, E) uniqueness ─────────────────────────
 
 /// The in-block serve-credit key, byte-for-byte as the C++ block pass builds
-/// it (`blockchain.cpp:4898–4903`): `P_id[32] ‖ memcpy(shard_id) ‖
-/// memcpy(settlement_epoch)` — **native-endian** in the C++, pinned
-/// little-endian here (what native resolves to on every supported platform;
-/// Rust must be deterministic).
+/// it: since the SCE-1 unify commit (audit doc §6) the block pass keys with
+/// `ArchivalServeCreditKey` — the same **big-endian** encoding as the
+/// persistent D-SC-A key — so this delegates to [`serve_credit_key_be`].
 ///
-/// **Finding SCE-1** (audit doc §6): this is the *other* encoding of the
-/// same logical key — D-SC-A's persistent key is big-endian. The split is
-/// behavior-irrelevant for this self-contained per-block set (the
-/// decision-invariance fuzz target proves the verdict does not depend on the
-/// encoding), but the mirror reproduces the actual bytes first;
-/// post-equivalence, a standalone behavior-preserving C++ commit unifies
-/// onto `ArchivalServeCreditKey` and this function re-points to BE.
+/// **Finding SCE-1** (audit doc §6), for the record: pre-unify the C++ built
+/// a native-endian `memcpy` key here, the *other* encoding of the same
+/// logical key. Equivalence was proven against those bytes first
+/// (mirror-then-fix); the decision-invariance fuzz target established the
+/// verdict does not depend on the encoding, which is what licensed the unify
+/// as behavior-preserving.
 #[must_use]
 pub fn serve_credit_block_key(
     p_canonical_id: &[u8; 32],
     shard_id: u64,
     settlement_epoch: u64,
 ) -> [u8; SERVE_CREDIT_KEY_LEN] {
-    let mut key = [0u8; SERVE_CREDIT_KEY_LEN];
-    key[..32].copy_from_slice(p_canonical_id);
-    key[32..40].copy_from_slice(&shard_id.to_le_bytes());
-    key[40..48].copy_from_slice(&settlement_epoch.to_le_bytes());
-    key
+    serve_credit_key_be(p_canonical_id, shard_id, settlement_epoch)
 }
 
 /// Verdict of the block-level uniqueness pass.
@@ -457,22 +452,16 @@ mod tests {
     }
 
     #[test]
-    fn block_key_is_little_endian_of_the_same_fields() {
-        // blockchain.cpp:4898–4903 — P ‖ memcpy(shard) ‖ memcpy(E); LE on
-        // all supported platforms (SCE-1: differs from the BE key above).
+    fn block_key_is_unified_onto_the_be_key() {
+        // Post-SCE-1-unify (audit doc §6): the block pass keys with
+        // ArchivalServeCreditKey, so D-SC-C's key IS D-SC-A's key —
+        // P ‖ BE64(shard) ‖ BE64(E), one encoding for the logical triple.
         let key = serve_credit_block_key(&P, 0x0102_0304_0506_0708, 0x1112_1314_1516_1718);
-        assert_eq!(&key[..32], &P);
-        assert_eq!(&key[32..40], &[8, 7, 6, 5, 4, 3, 2, 1]);
         assert_eq!(
-            &key[40..48],
-            &[0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11]
-        );
-        // The SCE-1 split, as an executable fact: same triple, different
-        // bytes, until the unify commit re-points this to BE.
-        assert_ne!(
             key,
             serve_credit_key_be(&P, 0x0102_0304_0506_0708, 0x1112_1314_1516_1718)
         );
+        assert_eq!(&key[32..40], &[1, 2, 3, 4, 5, 6, 7, 8]);
     }
 
     #[test]
@@ -667,9 +656,8 @@ mod tests {
 
     #[test]
     fn block_unique_field_swap_is_not_a_collision() {
-        // (shard, E) = (1, 100) vs (100, 1): distinct keys in both
-        // encodings; a mirror bug that compared fields loosely would fail
-        // here.
+        // (shard, E) = (1, 100) vs (100, 1): distinct keys; a mirror bug
+        // that compared fields loosely would fail here.
         let triples = [(P, 1, 100), (P, 100, 1)];
         assert_eq!(
             serve_credit_block_unique(&triples),
