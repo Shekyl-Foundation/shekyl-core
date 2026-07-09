@@ -117,6 +117,7 @@ set(unit_tests_sources
   archival_substrate_lmdb.cpp
   ct_balance_differential.cpp
   deferred_insertion.cpp
+  economics_b5_fee_coinbase.cpp
   tx_data_pruning_lmdb.cpp
   txpool_ref_age.cpp
   pending_tree_fuzz.cpp

@@ -1115,6 +1115,21 @@ not silently flipped.
    armed).
 8. **Regtest end-to-end**: emission accepted-and-applied through the real
    path; then E4/E5 per item 5.
+   **PARTIALLY LANDED (2026-07-09, commit-block 6).** The fee-side
+   decision KAT (budget-schedule **B5**) landed at unit level
+   (`economics_b5_fee_coinbase.cpp`): `validate_miner_transaction` driven
+   directly with fee-bearing operands — exact
+   `miner_emission + miner_fee_income` accepts (fix-α full-subsidy
+   out-param pinned), staker-pool / staker-emission overclaims and
+   underclaims reject. The regtest e2e itself **defers on the wallet-side
+   claim builder** (gate-6 backing-lineage ladder + claim assembly, the
+   §4 item 4 merge-blocker half that has not landed): there is no
+   production path that can assemble a `txin_archival_reward_emission`
+   transaction to feed a regtest chain, and hand-rolling one in the test
+   would exercise a parallel builder, not the real path — the opposite of
+   what item 8 exists to prove. Reopening trigger: claim builder lands →
+   e2e rides the Track-2 regtest harness → E4/E5 unblocks per item 5.
+   Tracked in `docs/FOLLOWUPS.md` (V3.0 pre-genesis queue).
 
 **Decision-placement pin (ratified 2026-07-08).** Verified split at this
 head: **computation is uniformly Rust; decisions are mixed.** The

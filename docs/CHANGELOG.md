@@ -4,6 +4,24 @@
 
 ### Added
 
+- **economics: C-1 commit-block 6 — KAT B5 fee-bearing coinbase
+  foreclosure; regtest e2e deferral recorded (§9.5 item 8,
+  `ARCHIVAL_BUDGET_SCHEDULE.md` §7).** New unit KATs
+  (`economics_b5_fee_coinbase.cpp`) drive the production decision site
+  `validate_miner_transaction` directly (standing `IN_UNIT_TESTS` seam)
+  with fee-bearing operands recomposed through the same single-evaluator
+  helpers the check calls: exact `miner_emission + miner_fee_income`
+  accepts (fix-α full-subsidy out-param pinned), coinbase additionally
+  claiming `staker_pool_amount` or `staker_emission` rejects, and an
+  underclaim rejects — the §2.2 coinbase-foreclosure pin's "exactly" is
+  two-sided. Closes the fee-side gap the `economics_c2a_prime` tests
+  leave (fee-free blocks). The connect-path block vehicle defers with
+  the chaingen FCMP++ fee-transaction gap, and the §9.5 item 8 regtest
+  e2e defers on the wallet-side claim builder (no production path can
+  assemble an emission tx yet; a hand-rolled test builder would prove a
+  parallel path) — filed in `docs/FOLLOWUPS.md` (V3.0 pre-genesis, E4/E5
+  gate) with the claim-builder landing as the reopening trigger.
+
 - **consensus: C-1 commit-block 5 — connect arm: emission-claim single
   writer + vout storage shape (§9.5 item 7).** `BlockchainDB::add_transaction`
   gains the `txin_archival_reward_emission` arm: re-extract

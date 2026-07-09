@@ -4389,6 +4389,27 @@ sustainability is unaffected by the recalibration.
   which language decides; the type-level single-writer guarantee makes
   it un-reintroducible by future edits, which is a post-genesis concern.
 
+- **Emission regtest end-to-end — the E4/E5 gate** (surfaced 2026-07-09,
+  C-1 commit-block 6,
+  [`REWARD_EMISSION_E3_GATING_ROUND.md`](./design/REWARD_EMISSION_E3_GATING_ROUND.md)
+  §9.5 item 8). An emission claim accepted-and-applied on a regtest
+  chain through the real C-1 path (whitelist → CT semantics → dispatch
+  verify → block-level `(P,E)` pass → connect arm → WS-2 single writer).
+  **Blocked on the wallet-side claim builder** (the gate-6
+  backing-lineage ladder + claim assembly, §4 item 4's unlanded
+  merge-blocker half): no production path can assemble a
+  `txin_archival_reward_emission` transaction yet, and a hand-rolled
+  test builder would exercise a parallel path — the opposite of what
+  the e2e exists to prove. Everything the e2e would drive is
+  individually KAT-covered at C-1 (transport round-trip, FFI verify
+  minters, dispatch classification, block-level dedup, connect-arm
+  extraction/single-writer/vout-shape, B5 fee-side coinbase
+  foreclosure); the e2e adds the composition proof. E4/E5
+  (`txin_stake_claim`/`C_stake` deletion) stays gated on this item per
+  §4 item 5. **Target: V3.0 pre-genesis. Reopening trigger: claim
+  builder lands → e2e rides the Track-2 regtest harness
+  (`regtest_e2e` family).**
+
 ---
 
 ## V3.1 — audit response and stressnet gates

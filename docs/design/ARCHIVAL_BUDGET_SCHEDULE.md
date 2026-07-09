@@ -361,9 +361,11 @@ the FFI.
 
 B1/B2/B3 are C++ substrate KATs (`archival_substrate_lmdb.cpp` family);
 B4 spans the Rust wire/verify KATs (landed classes) plus the builder-side
-omission test when the claim-builder lands. B5 is a core-tests
-connect-path KAT (`economics_c2a_prime.cpp` family) armed by the C-1
-build.
+omission test when the claim-builder lands. B5 landed as unit-level KATs
+(`economics_b5_fee_coinbase.cpp`) driving `validate_miner_transaction`
+directly; the connect-path block form defers with the chaingen FCMP++
+fee-transaction gap (see the commit-block 6 landed status in §2.2's
+follow-on notes below).
 
 ## 8. Rule-21 reopenings
 
@@ -451,5 +453,20 @@ version), §3.2 frozen close row (bounded range-sum in the sigma txn;
 revert deletes with the close family; prune joins the epoch family), §3.3
 snapshot gather (`has_budget_row` stored-shape probe + `budget_atomic`),
 and KATs **B1/B2/B3** (`archival_substrate_lmdb.cpp` budget family). B4's
-builder half and B5 arm with the later C-1 commit-blocks (claim-builder
-and fee-bearing core test respectively).
+builder half arms with the claim-builder.
+
+**Landed status (C-1 commit-block 6, 2026-07-09):** KAT **B5** landed as
+unit-level KATs (`economics_b5_fee_coinbase.cpp`) driving the production
+decision site `validate_miner_transaction` directly (via the standing
+`IN_UNIT_TESTS` seam) with fee-bearing operands recomposed through the
+same single-evaluator helpers the check calls
+(`compute_emission_split`/`compute_fee_burn`): exact
+`miner_emission + miner_fee_income` accepts (with the fix-α full-subsidy
+out-param pinned), coinbase additionally claiming `staker_pool_amount`
+or `staker_emission` rejects, and an underclaim rejects — §2.2's
+"exactly" is two-sided. The connect-path *block* vehicle
+(`economics_c2a_prime.cpp` family) defers with the chaingen FCMP++
+fee-transaction gap: the harness cannot build fee-paying FCMP++
+transactions, so a fee-bearing block cannot be assembled there; the
+*decision* B5 arms is the same `:1611`/`:1616` exact-equality check the
+connect path calls with the block's fee summary.
