@@ -1146,7 +1146,8 @@ implementation; C++ passes operands) — "more Rust" is not what forecloses
 it; "one evaluator" is. The older serve-credit decisions
 (`:4247`/`:4312`/`:4904`) are queued as post-C-1 extraction candidates
 under the equivalence-proof discipline, **decoupled at the genesis
-boundary** (`docs/FOLLOWUPS.md`): the *audit half* — mirror in Rust,
+boundary (ratified 2026-07-08)** (`docs/FOLLOWUPS.md`): the *audit
+half* — mirror in Rust,
 prove behavior-equivalent against the C++ (the `recon.rs` /
 `collect_outputs` pattern), install as a standing equivalence KAT — is
 V3.0 pre-genesis, because it is a verification task whose findings are
@@ -1160,6 +1161,17 @@ the C++ as its own behavior-change commit, and the flip stays
 behavior-preserving against the fixed C++ — never
 reimplement-and-hope, because a divergence in a replaced consensus
 decision is the fork the extraction exists to prevent.
+
+**Boundary note (do not blur).** The extraction queue covers *only* the
+three existing **serve-credit** decisions above. Item 6's block-level
+**emission** `(P,E)` pass is not among them: it is new C-1 code with no
+C++ predecessor, built Rust-decided from the start — there is nothing
+to mirror, prove equivalent, or flip. The two passes will look nearly
+identical in the code (same shape, same placement idiom, adjacent
+concerns — serve-credit dedups `(P,s,E)` at `:4904`, emission dedups
+`(P,E)`), so the disambiguation lives here in prose: "block-level pass,
+V3.0 audit" refers to the serve-credit pass; the emission pass ships at
+C-1 and is never deferred.
 
 ### 9.6 Non-blocking notes
 

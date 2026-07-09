@@ -174,6 +174,32 @@ staker_inflow(h) = burn-side share(h) + accrual-side share(h),  exactly one term
 so over any chain prefix, `Σ inflow = total destroyed + total emittable`
 holds with no overlap and no gap.
 
+**Coinbase-foreclosure pin (cross-function dependency — the invariant's
+silent-break point).** The redirect is supply-safe only because the
+staker portion **never enters the coinbase**: `validate_miner_transaction`
+(`blockchain.cpp:1595–1613`) rejects any coinbase that is not *exactly*
+`em_split.miner_emission + burn.miner_fee_income` — both staker halves
+are structurally excluded from what the miner may claim. This pin lives
+in the coinbase validation, **not** in the budget code; nothing in the
+accrual path references it, so a C-1-era edit to the emission split or
+coinbase validation is where it breaks without any budget test noticing.
+Standing assertions that hold it today:
+`tests/unit_tests/economics_c2a_prime.cpp`
+(`Layer1PerQuantityLegAComposesSplitAndCoinbase`: split conservation
+`Q_miner_base + Q_staker_emission = Q_full` with the fee legs
+independently pinned to zero) and `tests/core_tests/economics_c2a_prime.cpp`
+(connect-path `already_generated` delta equals the *full* subsidy, with
+the defense-in-depth `Q_full > miner_coinbase` proving the carve-out is
+real through the production path). **Coverage gap → C-1 build KAT:**
+both run fee-free blocks, so the fee-side half (`staker_pool_amount`
+excluded from a *fee-bearing* block's coinbase through
+`validate_miner_transaction`) is pinned only at the helper level. The
+C-1 build arms a fee-bearing-block KAT: coinbase paying exactly
+`miner_emission + miner_fee_income` accepts; a coinbase additionally
+claiming `staker_pool_amount` (or `staker_emission`) rejects at `:1609`.
+KAT B1's per-block conservation check then closes the loop on the
+accrual side.
+
 ### 2.3 Pre-genesis posture note
 
 The mainnet fork table is single-entry, all-features-from-genesis
@@ -330,10 +356,13 @@ the FFI.
 | **B2** | **Reorg across the fork.** Pop a post-activation block → accrual row removed, `total_burned` untouched; pop through the activation height → earlier blocks' burn rows roll back by the landed idiom; reconnect (same or alt chain) re-applies burn-or-redirect per block height, byte-identical end state. | §2.2 property 3; the one place burn-record × budget-accrual interaction is exercised |
 | **B3** | **Close/revert symmetry.** Close `E` → frozen `archival_budget` row written in the same txn as sigma; pop the close block → row deleted by the close revert; re-close → byte-identical row re-created from the retained accrual rows. | §3.2; the frozen-operand discipline |
 | **B4** | **Zero-budget epoch.** `budget(E) = 0` (no accrual rows in E): builder predicate omits E; a hand-built vin claiming E rejects at wire positivity (zero row unencodable) and a positive-amount forgery rejects at the economics compare. | §5; the M1 §2.3 timing-window closure extended to the budget factor |
+| **B5** | **Fee-bearing coinbase foreclosure.** A fee-bearing block whose coinbase pays exactly `miner_emission + miner_fee_income` accepts; a coinbase additionally claiming `staker_pool_amount` (or `staker_emission`) rejects at `validate_miner_transaction`'s exact-equality check. Closes the fee-side gap the standing `economics_c2a_prime` tests leave (they run fee-free blocks; §2.2's pin). | §2.2's coinbase-foreclosure pin; the cross-function dependency nothing in the budget code references |
 
 B1/B2/B3 are C++ substrate KATs (`archival_substrate_lmdb.cpp` family);
 B4 spans the Rust wire/verify KATs (landed classes) plus the builder-side
-omission test when the claim-builder lands.
+omission test when the claim-builder lands. B5 is a core-tests
+connect-path KAT (`economics_c2a_prime.cpp` family) armed by the C-1
+build.
 
 ## 8. Rule-21 reopenings
 
@@ -389,6 +418,16 @@ omission test when the claim-builder lands.
   evaluator behind the FFI. "Same write site" without "same pinned
   rounding" is half the invariant. The servo's parameters also join the
   §1 digest surface (format-version bump per `digest.rs`).
+  **Scale note: the servo is a design round, not a commit.** Count what
+  this clause already obligates: it reopens the §2.2 conservation
+  invariant (fee-draw source, three-way split), the one-write-one-target
+  invariant, the §6 integer-determinism pins (a new composed
+  fixed-point expression crossing into consensus), and the §1 digest
+  surface (a fourth generated field family with a format-version bump)
+  — four load-bearing surfaces at once, the same shape at which the
+  budget schedule itself turned from "a finding disposition" into this
+  document. Whoever picks it up budgets for a spec-first round with its
+  own review cycle, not a PR.
 - **Per-height row retention** — reopens iff the finality boundary lands
   (the round's §6.5/§8.2 trigger): prune-against-finalized may shorten
   accrual-row retention to the finality depth; same round that retires the

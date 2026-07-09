@@ -41,8 +41,17 @@
   reopen on economics evidence); zero-budget epochs structurally
   non-claimable through the M1 §2.3 positivity path, with the builder's
   single positive-share omission predicate named to cover the budget
-  factor; four armed KATs (straddle conservation, reorg-across-the-fork,
-  close/revert symmetry, zero-budget omission/rejection).
+  factor; five armed KATs (straddle conservation, reorg-across-the-fork,
+  close/revert symmetry, zero-budget omission/rejection, fee-bearing
+  coinbase foreclosure). The §2.2 coinbase-foreclosure pin names its
+  cross-function dependency (`validate_miner_transaction`'s
+  exact-equality check is what makes the redirect supply-safe; nothing
+  in the budget code references it) and the standing
+  `economics_c2a_prime` assertions that hold it today, with the
+  fee-side coverage gap closed by KAT B5 at the C-1 build. The §8 servo
+  clause carries a scale note: the servo is a design round, not a
+  commit (it reopens conservation, one-write-one-target, the §6
+  determinism pins, and the digest surface at once).
 
 - **docs: C-1 decision-placement pin ratified
   (`REWARD_EMISSION_E3_GATING_ROUND.md` §9.5)** — source-verified split:
@@ -54,8 +63,10 @@
   block-level `(P,E)` pass (item 6) takes its verdict from a Rust
   function rather than mirroring the C++ `std::set` idiom; the connect
   arm's dedup decision is already Rust (`claimed_epochs_check_and_set`),
-  and the mint application stays C++. The three C++ serve-credit
-  decisions are queued in `FOLLOWUPS.md` as extraction candidates with
+  and the mint application stays C++. The three C++ **serve-credit**
+  decisions — and only those; the C-1 emission block-pass is new code
+  with no C++ predecessor and ships at C-1, never deferred — are queued
+  in `FOLLOWUPS.md` as extraction candidates with
   the audit and the flip **decoupled at the genesis boundary**: the
   Rust mirror + equivalence proof + standing KAT is V3.0 pre-genesis
   (a verification task — divergences found are free fixes before

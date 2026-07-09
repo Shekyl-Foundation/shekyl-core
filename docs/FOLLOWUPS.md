@@ -4344,9 +4344,16 @@ sustainability is unaffected by the recalibration.
   the tip-vs-as-of and dedup-atomicity findings of the E3 gating round
   lived; a C++ decision can be protected only by convention + KAT +
   review, not by the type system (`20-rust-vs-cpp-policy.mdc` "Rust if
-  any of" #2/#3). The migration discipline is mirror → prove-equivalent
-  → flip, and its two halves have **opposite risk profiles at the
-  genesis boundary**, so they are queued separately:
+  any of" #2/#3). **Scope disambiguation (load-bearing):** the C-1
+  block-level *emission* `(P,E)` pass (§9.5 item 6 of the round doc) is
+  **not** in this item's scope — it is new C-1 code with no C++
+  predecessor, built Rust-decided from the start, and ships at C-1. The
+  two block-level passes will look nearly identical in the code
+  (serve-credit dedups `(P,s,E)` at `:4904`; emission dedups `(P,E)`);
+  only the *serve-credit* pass is an audit candidate here. The
+  migration discipline is mirror → prove-equivalent → flip, and its two
+  halves have **opposite risk profiles at the genesis boundary**, so
+  they are queued separately:
 
   **This item (V3.0): the mirror + equivalence proof — the audit half.**
   Mirror each decision as a pure Rust function over marshaled inputs
