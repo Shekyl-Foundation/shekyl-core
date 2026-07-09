@@ -114,8 +114,8 @@ pub fn summarize_gaps(samples: &[(u64, bool)], window: u64) -> GapSampleStats {
 /// `f64` mapping loses integer precision above 2^53). The result is always
 /// `< n_bins`.
 fn uniform_bin_index(s: u64, window: u64, n_bins: usize) -> usize {
-    let outcomes = u128::from(window) + 1;
-    ((u128::from(s) * n_bins as u128) / outcomes) as usize
+    let outcomes = window as u128 + 1;
+    ((s as u128 * n_bins as u128) / outcomes) as usize
 }
 
 /// Exact per-bin outcome counts (bin widths) for that split. Bin `i` covers
@@ -127,7 +127,7 @@ fn uniform_bin_index(s: u64, window: u64, n_bins: usize) -> usize {
 /// fixes: 601 outcomes over 60 bins at n = 200 000 raised the false-fail rate
 /// from 1e-6 to ~1.5e-2).
 fn uniform_bin_widths(window: u64, n_bins: usize) -> Vec<u64> {
-    let outcomes = u128::from(window) + 1;
+    let outcomes = window as u128 + 1;
     let lower = |i: usize| -> u128 { (i as u128 * outcomes).div_ceil(n_bins as u128) };
     (0..n_bins)
         .map(|i| (lower(i + 1) - lower(i)) as u64)
@@ -137,7 +137,7 @@ fn uniform_bin_widths(window: u64, n_bins: usize) -> Vec<u64> {
 /// Expected per-bin counts for `n` draws of the discrete uniform on
 /// `[0, window]` under that split: `n * width_i / (window + 1)`.
 fn uniform_bin_expected(n: usize, window: u64, n_bins: usize) -> Vec<f64> {
-    let outcomes = u128::from(window) + 1;
+    let outcomes = window as u128 + 1;
     uniform_bin_widths(window, n_bins)
         .into_iter()
         .map(|w| n as f64 * (w as f64 / outcomes as f64))
@@ -162,10 +162,7 @@ pub fn chi_square_uniform(samples: &[(u64, bool)], window: u64, n_bins: usize) -
     for &(s, _) in samples {
         counts[uniform_bin_index(s, window, n_bins)] += 1;
     }
-    chi_square_counts_expected(
-        &counts,
-        &uniform_bin_expected(samples.len(), window, n_bins),
-    )
+    chi_square_counts_expected(&counts, &uniform_bin_expected(samples.len(), window, n_bins))
 }
 
 /// The conformance **trap**, kept here so the vector is validated to *reject* it

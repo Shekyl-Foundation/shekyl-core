@@ -97,7 +97,7 @@ pub fn chi_square_counts_expected(observed: &[u64], expected: &[f64]) -> f64 {
     if k < 2 {
         return 0.0;
     }
-    if observed.iter().sum::<u64>() == 0 {
+    if observed.iter().all(|&o| o == 0) {
         return 0.0;
     }
     if expected.iter().any(|&e| !e.is_finite() || e <= 0.0) {
