@@ -5,13 +5,15 @@
 
 //! Domain → OpenAPI projections (accounting facts only; no secrets).
 
+use shekyl_engine_core::PendingTx;
 use shekyl_engine_core::RefreshSummary;
 use shekyl_engine_state::TransferDetails;
 use shekyl_scanner::BalanceSummary;
 use shekyl_units::AtomicUnits;
 
 use crate::types::{
-    GetBalanceResult, RefreshResult, TransferDirection, TransferState, TransferView,
+    BuildPendingTxResult, GetBalanceResult, RefreshResult, TransferDirection, TransferState,
+    TransferView,
 };
 
 /// Decimal string for OpenAPI `AtomicUnits`.
@@ -80,6 +82,26 @@ pub fn refresh_result(summary: &RefreshSummary, synced_height: u64) -> RefreshRe
             .as_ref()
             .map(|r| i64::try_from(r.fork_height).unwrap_or(i64::MAX)),
     }
+}
+
+/// Project [`PendingTx`] to OpenAPI `BuildPendingTxResult`.
+pub fn pending_tx_result(tx: &PendingTx) -> BuildPendingTxResult {
+    BuildPendingTxResult {
+        pending_tx_id: tx.id.raw().to_string(),
+        built_at_height: i64::try_from(tx.built_at_height).unwrap_or(i64::MAX),
+        built_at_tip_hash: encode_hex32(&tx.built_at_tip_hash),
+        fee: atomic_units_string(tx.fee_atomic_units),
+        content_gen: i64::try_from(tx.content_gen).unwrap_or(i64::MAX),
+    }
+}
+
+fn encode_hex32(bytes: &[u8; 32]) -> String {
+    let mut out = String::with_capacity(64);
+    for b in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }
 
 #[cfg(test)]

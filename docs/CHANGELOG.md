@@ -4,6 +4,13 @@
 
 ### Added
 
+- **wallet-rpc: Phase 4b send lifecycle** (`build_pending_tx`,
+  `submit_pending_tx`, `discard_pending_tx`). Async Engine methods;
+  `SendError` / `SubmitError` / `PendingTxError` map to
+  `-29100..-29107`. Discard is idempotent. `rescan_blockchain` remains
+  `-32601` (FOLLOWUPS). Phase 4b SPECIFIED methods complete except
+  rescan.
+
 - **wallet-rpc: Phase 4b refresh** (`refresh`). Calls
   `Engine::refresh` with default `RefreshOptions`; maps
   `RefreshError::AlreadyRunning` → `-29200` and daemon/scanner IO →

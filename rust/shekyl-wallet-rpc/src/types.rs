@@ -322,6 +322,53 @@ pub struct RefreshResult {
     pub reorg_fork_height: Option<i64>,
 }
 
+/// `build_pending_tx` result (OpenAPI `BuildPendingTxResult`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BuildPendingTxResult {
+    /// Opaque reservation handle (`ReservationId::raw` decimal string).
+    pub pending_tx_id: String,
+    /// Engine synced height at build time.
+    pub built_at_height: i64,
+    /// Tip hash at build height (lowercase hex).
+    pub built_at_tip_hash: String,
+    /// Fee in atomic units.
+    pub fee: AtomicUnitsString,
+    /// CT-5d content generation; pass back as `seen_gen` on submit.
+    pub content_gen: i64,
+}
+
+/// Success verdict projection for `submit_pending_tx`.
+///
+/// Engine's async submit returns [`shekyl_engine_core::TxHash`] on the
+/// success path; pool/chain duplicate distinctions are not yet exposed
+/// on that surface, so successful submits project as [`Self::Accepted`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SubmitVerdictView {
+    /// Fresh accept / broadcast success.
+    Accepted,
+    /// Already in the mempool (reserved for when Engine surfaces it).
+    AlreadyInPool,
+    /// Already confirmed on chain (reserved for when Engine surfaces it).
+    AlreadyInChain,
+}
+
+/// `submit_pending_tx` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SubmitPendingTxResult {
+    /// Transaction hash (lowercase hex).
+    pub tx_hash: String,
+    /// Success verdict.
+    pub verdict: SubmitVerdictView,
+    /// Present iff verdict is `ALREADY_IN_CHAIN`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmed_height: Option<i64>,
+}
+
+/// `discard_pending_tx` result (empty object).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct DiscardPendingTxResult {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

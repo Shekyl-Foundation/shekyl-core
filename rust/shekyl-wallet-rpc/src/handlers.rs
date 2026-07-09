@@ -5,8 +5,8 @@
 
 //! JSON-RPC method dispatch.
 //!
-//! Phase 4b: `get_version`, lifecycle, read queries, and `refresh`.
-//! Remaining SPECIFIED names return `-32601` until their sub-commit lands.
+//! Phase 4b: `get_version`, lifecycle, read queries, `refresh`, and
+//! send lifecycle. `rescan_blockchain` stays `-32601`.
 
 use serde_json::Value;
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
@@ -14,6 +14,7 @@ use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use crate::error::WalletRpcError;
 use crate::lifecycle;
 use crate::queries;
+use crate::send;
 use crate::sync;
 use crate::tenant::TenantState;
 use crate::types::{GetVersionResult, API_VERSION};
@@ -37,9 +38,8 @@ pub async fn dispatch(
         | "get_transfer_by_id"
         | "get_height" => queries::dispatch(tenants, method, params).await,
         "refresh" | "rescan_blockchain" => sync::dispatch(tenants, method, params).await,
-        // SPECIFIED but not yet implemented (send lifecycle).
         "build_pending_tx" | "submit_pending_tx" | "discard_pending_tx" => {
-            Err(WalletRpcError::MethodNotFound(method.to_owned()))
+            send::dispatch(tenants, method, params).await
         }
         other => Err(WalletRpcError::MethodNotFound(other.to_owned())),
     }
@@ -138,6 +138,20 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.code(), WalletRpcErrorCode::MethodNotFound);
+    }
+
+    #[tokio::test]
+    async fn send_without_open_wallet_is_wallet_not_open() {
+        let tenants = test_tenants();
+        let err = dispatch(
+            &tenants,
+            "discard_pending_tx",
+            &json!({ "pending_tx_id": "1" }),
+            KdfParams::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
     }
 
     #[tokio::test]

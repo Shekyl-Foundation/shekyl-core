@@ -11,8 +11,9 @@
 //!
 //! # Phase 4b
 //!
-//! Lifecycle, read queries, and `refresh`, plus the Phase 4a scaffold.
-//! Send lifecycle and `rescan_blockchain` land in later commits.
+//! Lifecycle, read queries, refresh, and send lifecycle, plus the
+//! Phase 4a scaffold. `rescan_blockchain` stays `-32601` until Engine
+//! grows an explicit rescan API.
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
@@ -23,6 +24,7 @@ pub mod handlers;
 pub mod lifecycle;
 pub mod project;
 pub mod queries;
+pub mod send;
 pub mod server;
 pub mod sync;
 pub mod tenant;

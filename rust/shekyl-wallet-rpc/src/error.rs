@@ -7,8 +7,10 @@
 //! `docs/api/wallet_rpc.yaml` (`WalletRpcErrorCode`).
 
 use serde_json::{json, Value};
+use shekyl_engine_core::engine::SubmitError;
 use shekyl_engine_core::{
-    Capability, ChangePasswordError, IoError, OpenError, PersistenceError, RefreshError,
+    Capability, ChangePasswordError, IoError, OpenError, PendingTxError, PersistenceError,
+    RefreshError, SendError,
 };
 use shekyl_engine_file::WalletFileError;
 use thiserror::Error;
@@ -124,6 +126,36 @@ pub enum WalletRpcError {
     /// Refresh already in flight (single-flight).
     #[error("refresh already running")]
     RefreshInProgress,
+    /// Build: address parse / network check failed.
+    #[error("invalid recipient")]
+    InvalidRecipient,
+    /// Build: spendable balance too low.
+    #[error("insufficient funds")]
+    InsufficientFunds,
+    /// Build: daemon fee query failed.
+    #[error("fee estimation failed")]
+    FeeEstimationFailed,
+    /// Submit: unknown / expired reservation handle.
+    #[error("reservation not found")]
+    ReservationNotFound,
+    /// Submit: reorg raced the reservation.
+    #[error("snapshot invalidated")]
+    SnapshotInvalidated,
+    /// Submit: `seen_gen` ≠ `content_gen` (CT-5d).
+    #[error("content generation mismatch")]
+    ContentGenMismatch {
+        /// Current content generation the client must re-confirm.
+        content_gen: u64,
+    },
+    /// Submit: definite daemon rejection.
+    #[error("submit rejected")]
+    SubmitRejected {
+        /// Optional structured detail for `error.data`.
+        detail: Option<String>,
+    },
+    /// Submit: transport-level ambiguity.
+    #[error("submit ambiguous")]
+    SubmitAmbiguous,
     /// `get_transfer_by_id`: no match.
     #[error("unknown transfer id")]
     UnknownTransferId,
@@ -147,6 +179,14 @@ impl WalletRpcError {
             Self::CapabilityForbids { .. } => WalletRpcErrorCode::CapabilityForbids,
             Self::DaemonUnreachable => WalletRpcErrorCode::DaemonUnreachable,
             Self::RefreshInProgress => WalletRpcErrorCode::RefreshInProgress,
+            Self::InvalidRecipient => WalletRpcErrorCode::InvalidRecipient,
+            Self::InsufficientFunds => WalletRpcErrorCode::InsufficientFunds,
+            Self::FeeEstimationFailed => WalletRpcErrorCode::FeeEstimationFailed,
+            Self::ReservationNotFound => WalletRpcErrorCode::ReservationNotFound,
+            Self::SnapshotInvalidated => WalletRpcErrorCode::SnapshotInvalidated,
+            Self::ContentGenMismatch { .. } => WalletRpcErrorCode::ContentGenMismatch,
+            Self::SubmitRejected { .. } => WalletRpcErrorCode::SubmitRejected,
+            Self::SubmitAmbiguous => WalletRpcErrorCode::SubmitAmbiguous,
             Self::UnknownTransferId => WalletRpcErrorCode::UnknownTransferId,
         }
     }
@@ -161,6 +201,10 @@ impl WalletRpcError {
     pub fn data(&self) -> Option<Value> {
         match self {
             Self::CapabilityForbids { capability } => Some(json!({ "capability": capability })),
+            Self::ContentGenMismatch { content_gen } => Some(json!({ "content_gen": content_gen })),
+            Self::SubmitRejected {
+                detail: Some(detail),
+            } => Some(json!({ "verdict": detail })),
             _ => None,
         }
     }
@@ -225,6 +269,85 @@ impl From<RefreshError> for WalletRpcError {
             RefreshError::CurveTreeIngest { context, .. } => {
                 Self::InternalError(format!("curve-tree ingest: {context}"))
             }
+        }
+    }
+}
+
+impl From<SendError> for WalletRpcError {
+    fn from(err: SendError) -> Self {
+        match err {
+            SendError::InvalidRecipient { .. } => Self::InvalidRecipient,
+            SendError::InsufficientFunds { .. } => Self::InsufficientFunds,
+            SendError::Io(IoError::Daemon { .. }) => Self::FeeEstimationFailed,
+            SendError::Io(other) => Self::InternalError(other.to_string()),
+            SendError::Tx(e) => Self::InternalError(e.to_string()),
+            SendError::CannotSign { reason } => {
+                Self::InternalError(format!("cannot sign: {reason}"))
+            }
+            SendError::SpendUnavailableRebuilding { .. } => Self::InternalError(
+                "spending temporarily unavailable while membership data rebuilds".into(),
+            ),
+            SendError::CurveTreeUnavailable { detail } => {
+                Self::InternalError(format!("curve-tree unavailable: {detail}"))
+            }
+            SendError::OutputNotYetSpendable { .. } => {
+                Self::InternalError("output not yet spendable at the reference block".into())
+            }
+            SendError::WalletTooYoungToSpend { .. } => {
+                Self::InternalError("wallet too young to spend".into())
+            }
+            SendError::SubmitLoopBreakerTripped { .. } => {
+                Self::InternalError("submit loop-breaker tripped".into())
+            }
+        }
+    }
+}
+
+impl From<SubmitError> for WalletRpcError {
+    fn from(err: SubmitError) -> Self {
+        match err {
+            SubmitError::ReservationNotFound { .. } => Self::ReservationNotFound,
+            SubmitError::SnapshotInvalidated { .. } => Self::SnapshotInvalidated,
+            SubmitError::ContentChanged { content_gen, .. } => {
+                Self::ContentGenMismatch { content_gen }
+            }
+            SubmitError::DaemonRejectedTerminal { kind } => Self::SubmitRejected {
+                detail: Some(format!("{kind:?}")),
+            },
+            SubmitError::DaemonRejectedRetryable { cause, .. } => Self::SubmitRejected {
+                detail: Some(format!("{cause:?}")),
+            },
+            SubmitError::DaemonAmbiguous { .. } => Self::SubmitAmbiguous,
+            SubmitError::SubmitAlreadyPending { .. } => {
+                Self::InternalError("submit already pending for this reservation".into())
+            }
+            SubmitError::ReanchorUnavailable { .. } => {
+                Self::InternalError("re-anchor unavailable; retry later".into())
+            }
+            SubmitError::ReselectionRequired { .. } => {
+                Self::InternalError("reselection required; discard and rebuild".into())
+            }
+            other => Self::InternalError(other.to_string()),
+        }
+    }
+}
+
+impl From<PendingTxError> for WalletRpcError {
+    fn from(err: PendingTxError) -> Self {
+        match err {
+            PendingTxError::ReservationNotFound { .. } | PendingTxError::UnknownHandle => {
+                Self::ReservationNotFound
+            }
+            PendingTxError::ChainStateChanged { .. } | PendingTxError::TooOld { .. } => {
+                Self::SnapshotInvalidated
+            }
+            PendingTxError::DiscardBlockedPendingDaemonAck { .. } => Self::SubmitAmbiguous,
+            PendingTxError::SubmitAlreadyPending { .. } => {
+                Self::InternalError("submit already pending for this reservation".into())
+            }
+            PendingTxError::Io(IoError::Daemon { .. }) => Self::SubmitAmbiguous,
+            PendingTxError::Io(other) => Self::InternalError(other.to_string()),
+            other => Self::InternalError(other.to_string()),
         }
     }
 }

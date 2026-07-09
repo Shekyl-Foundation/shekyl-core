@@ -408,7 +408,7 @@ async fn queries_balance_address_transfers_after_create() {
 
     // Unreachable daemon → -29201 for refresh.
     let refreshed = rpc(
-        state,
+        state.clone(),
         json!({
             "jsonrpc": "2.0",
             "id": 7,
@@ -418,6 +418,40 @@ async fn queries_balance_address_transfers_after_create() {
     )
     .await;
     assert_eq!(refreshed["error"]["code"], -29201);
+
+    // Discard unknown id is idempotent success (no open funds needed).
+    let discarded = rpc(
+        state.clone(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "discard_pending_tx",
+            "params": { "pending_tx_id": "999" }
+        }),
+    )
+    .await;
+    assert!(discarded.get("error").is_none(), "{discarded}");
+
+    // Build with invalid recipient → -29100 (or invalid params / funds).
+    let build = rpc(
+        state,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "build_pending_tx",
+            "params": {
+                "recipients": [{ "address": "not-an-address", "amount": "1" }],
+                "priority": "STANDARD"
+            }
+        }),
+    )
+    .await;
+    assert!(build.get("error").is_some(), "{build}");
+    let code = build["error"]["code"].as_i64().unwrap();
+    assert!(
+        code == -29100 || code == -32602 || code == -32603 || code == -29101,
+        "unexpected build error code {code}: {build}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
