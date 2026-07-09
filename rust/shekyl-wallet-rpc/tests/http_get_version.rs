@@ -176,7 +176,7 @@ async fn method_not_found_for_unimplemented_specified() {
         json!({
             "jsonrpc": "2.0",
             "id": 2,
-            "method": "refresh",
+            "method": "rescan_blockchain",
             "params": {}
         }),
     )
@@ -395,7 +395,7 @@ async fn queries_balance_address_transfers_after_create() {
 
     // Unreachable daemon → -29201 for get_height.
     let height = rpc(
-        state,
+        state.clone(),
         json!({
             "jsonrpc": "2.0",
             "id": 6,
@@ -405,6 +405,19 @@ async fn queries_balance_address_transfers_after_create() {
     )
     .await;
     assert_eq!(height["error"]["code"], -29201);
+
+    // Unreachable daemon → -29201 for refresh.
+    let refreshed = rpc(
+        state,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "refresh",
+            "params": {}
+        }),
+    )
+    .await;
+    assert_eq!(refreshed["error"]["code"], -29201);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

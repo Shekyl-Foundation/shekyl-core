@@ -5,11 +5,14 @@
 
 //! Domain → OpenAPI projections (accounting facts only; no secrets).
 
+use shekyl_engine_core::RefreshSummary;
 use shekyl_engine_state::TransferDetails;
 use shekyl_scanner::BalanceSummary;
 use shekyl_units::AtomicUnits;
 
-use crate::types::{GetBalanceResult, TransferDirection, TransferState, TransferView};
+use crate::types::{
+    GetBalanceResult, RefreshResult, TransferDirection, TransferState, TransferView,
+};
 
 /// Decimal string for OpenAPI `AtomicUnits`.
 pub fn atomic_units_string(amount: AtomicUnits) -> String {
@@ -63,6 +66,19 @@ pub fn transfer_view(td: &TransferDetails) -> TransferView {
         spent_height: td
             .spent_height
             .map(|h| i64::try_from(h).unwrap_or(i64::MAX)),
+    }
+}
+
+/// Project [`RefreshSummary`] + post-refresh ledger tip to OpenAPI.
+pub fn refresh_result(summary: &RefreshSummary, synced_height: u64) -> RefreshResult {
+    RefreshResult {
+        blocks_processed: i64::try_from(summary.blocks_processed).unwrap_or(i64::MAX),
+        transfers_detected: i64::try_from(summary.transfers_detected).unwrap_or(i64::MAX),
+        synced_height: i64::try_from(synced_height).unwrap_or(i64::MAX),
+        reorg_fork_height: summary
+            .reorg
+            .as_ref()
+            .map(|r| i64::try_from(r.fork_height).unwrap_or(i64::MAX)),
     }
 }
 

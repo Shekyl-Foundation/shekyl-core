@@ -308,6 +308,20 @@ pub struct GetTransferByIdResult {
     pub transfer: TransferView,
 }
 
+/// `refresh` result (OpenAPI `RefreshResult`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RefreshResult {
+    /// Heights scanned this call.
+    pub blocks_processed: i64,
+    /// Detected transfers ingested this call.
+    pub transfers_detected: i64,
+    /// Wallet synced height after the refresh.
+    pub synced_height: i64,
+    /// Present iff a reorg was detected and rewound this refresh.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reorg_fork_height: Option<i64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

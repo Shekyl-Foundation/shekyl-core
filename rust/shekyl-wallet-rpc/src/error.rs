@@ -7,7 +7,9 @@
 //! `docs/api/wallet_rpc.yaml` (`WalletRpcErrorCode`).
 
 use serde_json::{json, Value};
-use shekyl_engine_core::{Capability, ChangePasswordError, IoError, OpenError, PersistenceError};
+use shekyl_engine_core::{
+    Capability, ChangePasswordError, IoError, OpenError, PersistenceError, RefreshError,
+};
 use shekyl_engine_file::WalletFileError;
 use thiserror::Error;
 
@@ -119,6 +121,9 @@ pub enum WalletRpcError {
     /// Daemon RPC unreachable / failed.
     #[error("daemon unreachable")]
     DaemonUnreachable,
+    /// Refresh already in flight (single-flight).
+    #[error("refresh already running")]
+    RefreshInProgress,
     /// `get_transfer_by_id`: no match.
     #[error("unknown transfer id")]
     UnknownTransferId,
@@ -141,6 +146,7 @@ impl WalletRpcError {
             Self::InvalidPassword => WalletRpcErrorCode::InvalidPassword,
             Self::CapabilityForbids { .. } => WalletRpcErrorCode::CapabilityForbids,
             Self::DaemonUnreachable => WalletRpcErrorCode::DaemonUnreachable,
+            Self::RefreshInProgress => WalletRpcErrorCode::RefreshInProgress,
             Self::UnknownTransferId => WalletRpcErrorCode::UnknownTransferId,
         }
     }
@@ -199,6 +205,30 @@ impl From<ChangePasswordError> for WalletRpcError {
     }
 }
 
+impl From<RefreshError> for WalletRpcError {
+    fn from(err: RefreshError) -> Self {
+        match err {
+            RefreshError::AlreadyRunning => Self::RefreshInProgress,
+            RefreshError::Io(IoError::Daemon { .. })
+            | RefreshError::Io(IoError::Scanner { .. }) => Self::DaemonUnreachable,
+            RefreshError::Io(other) => Self::InternalError(other.to_string()),
+            RefreshError::ConcurrentMutation { wallet, result } => Self::InternalError(format!(
+                "refresh concurrent mutation: wallet={wallet}, result={result}"
+            )),
+            RefreshError::MalformedScanResult { reason } => {
+                Self::InternalError(format!("malformed scan result: {reason}"))
+            }
+            RefreshError::Cancelled => Self::InternalError("refresh cancelled".into()),
+            RefreshError::InternalInvariantViolation { context } => {
+                Self::InternalError(format!("refresh invariant: {context}"))
+            }
+            RefreshError::CurveTreeIngest { context, .. } => {
+                Self::InternalError(format!("curve-tree ingest: {context}"))
+            }
+        }
+    }
+}
+
 fn classify_wallet_file_detail(detail: &str) -> WalletRpcError {
     let lower = detail.to_ascii_lowercase();
     if lower.contains("already exists") || lower.contains("refusing to overwrite") {
@@ -236,5 +266,20 @@ mod tests {
             "refusing to overwrite existing keys file at /tmp/x.wallet.keys",
         );
         assert_eq!(err.code(), WalletRpcErrorCode::WalletFileExists);
+    }
+
+    #[test]
+    fn maps_refresh_already_running() {
+        let err: WalletRpcError = RefreshError::AlreadyRunning.into();
+        assert_eq!(err.code(), WalletRpcErrorCode::RefreshInProgress);
+    }
+
+    #[test]
+    fn maps_refresh_daemon_io() {
+        let err: WalletRpcError = RefreshError::Io(IoError::Daemon {
+            detail: "connection refused".into(),
+        })
+        .into();
+        assert_eq!(err.code(), WalletRpcErrorCode::DaemonUnreachable);
     }
 }

@@ -47,6 +47,20 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Phase 4b: `rescan_blockchain` needs an Engine rescan API** (added
+  2026-07-09). Wallet-rpc OpenAPI specifies `rescan_blockchain` (full
+  rescan from restore height, rebuild scan-derived state). Today Engine
+  only exposes `restore_from_height` + `refresh`; there is no
+  `Engine::rescan_*` that resets scan-derived ledger state to
+  `restore_from_height` before scanning. Phase 4b therefore leaves the
+  RPC method as `-32601` rather than inventing a silent
+  “set height + refresh” shim. **Reopening criterion:** Engine grows an
+  explicit rescan that resets scan-derived state to
+  `restore_from_height` (named API, tested). **Re-evaluation shape:**
+  wire `shekyl-wallet-rpc` `rescan_blockchain` to that API in a scoped
+  Phase 4b follow-up (or Phase 4c) PR; update OpenAPI only if the
+  projection differs. *Target: V3.0 / Phase 4b.*
+
 - **GF4b-2 genesis gate — bond-post funding-input-count leak; `stake_in`
   single-structured-output funding must land before genesis** (added
   2026-07-08, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.5 residual 1 /

@@ -11,9 +11,8 @@
 //!
 //! # Phase 4b
 //!
-//! Lifecycle + read queries (`get_balance`, `get_primary_address`,
-//! `get_transfers`, `get_transfer_by_id`, `get_height`), plus the Phase 4a
-//! scaffold. Refresh / send / `rescan_blockchain` land in later commits.
+//! Lifecycle, read queries, and `refresh`, plus the Phase 4a scaffold.
+//! Send lifecycle and `rescan_blockchain` land in later commits.
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
@@ -25,6 +24,7 @@ pub mod lifecycle;
 pub mod project;
 pub mod queries;
 pub mod server;
+pub mod sync;
 pub mod tenant;
 pub mod types;
 

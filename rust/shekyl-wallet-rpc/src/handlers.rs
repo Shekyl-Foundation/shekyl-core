@@ -5,8 +5,8 @@
 
 //! JSON-RPC method dispatch.
 //!
-//! Phase 4b: `get_version`, lifecycle, and read queries. Remaining
-//! SPECIFIED names return `-32601` until their sub-commit lands.
+//! Phase 4b: `get_version`, lifecycle, read queries, and `refresh`.
+//! Remaining SPECIFIED names return `-32601` until their sub-commit lands.
 
 use serde_json::Value;
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
@@ -14,6 +14,7 @@ use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use crate::error::WalletRpcError;
 use crate::lifecycle;
 use crate::queries;
+use crate::sync;
 use crate::tenant::TenantState;
 use crate::types::{GetVersionResult, API_VERSION};
 use crate::VERSION;
@@ -35,9 +36,11 @@ pub async fn dispatch(
         | "get_transfers"
         | "get_transfer_by_id"
         | "get_height" => queries::dispatch(tenants, method, params).await,
-        // SPECIFIED but not yet implemented (refresh / send / rescan).
-        "build_pending_tx" | "submit_pending_tx" | "discard_pending_tx" | "refresh"
-        | "rescan_blockchain" => Err(WalletRpcError::MethodNotFound(method.to_owned())),
+        "refresh" | "rescan_blockchain" => sync::dispatch(tenants, method, params).await,
+        // SPECIFIED but not yet implemented (send lifecycle).
+        "build_pending_tx" | "submit_pending_tx" | "discard_pending_tx" => {
+            Err(WalletRpcError::MethodNotFound(method.to_owned()))
+        }
         other => Err(WalletRpcError::MethodNotFound(other.to_owned())),
     }
 }
@@ -126,10 +129,24 @@ mod tests {
     #[tokio::test]
     async fn unimplemented_specified_method_is_method_not_found() {
         let tenants = test_tenants();
+        let err = dispatch(
+            &tenants,
+            "rescan_blockchain",
+            &json!({}),
+            KdfParams::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::MethodNotFound);
+    }
+
+    #[tokio::test]
+    async fn refresh_without_open_wallet_is_wallet_not_open() {
+        let tenants = test_tenants();
         let err = dispatch(&tenants, "refresh", &json!({}), KdfParams::default())
             .await
             .unwrap_err();
-        assert_eq!(err.code(), WalletRpcErrorCode::MethodNotFound);
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
     }
 
     #[tokio::test]

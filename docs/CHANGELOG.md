@@ -4,6 +4,12 @@
 
 ### Added
 
+- **wallet-rpc: Phase 4b refresh** (`refresh`). Calls
+  `Engine::refresh` with default `RefreshOptions`; maps
+  `RefreshError::AlreadyRunning` → `-29200` and daemon/scanner IO →
+  `-29201`. `rescan_blockchain` stays `-32601` until Engine grows an
+  explicit rescan API (`docs/FOLLOWUPS.md`).
+
 - **wallet-rpc: Phase 4b read queries** (`get_balance`,
   `get_primary_address`, `get_transfers`, `get_transfer_by_id`,
   `get_height`). Typed OpenAPI result structs + ledger projections
