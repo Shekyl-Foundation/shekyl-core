@@ -738,7 +738,7 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_reward
   // admit blobs the binary path rejects.
   if (txin.canonical_bytes.size() < 2 || txin.canonical_bytes.size() > config::ARCHIVAL_EMISSION_VIN_MAX_BYTES)
     throw WRONG_TYPE("archival reward-emission canonical_bytes length out of bounds");
-  if (txin.canonical_bytes[0] != 0x04)
+  if (txin.canonical_bytes[0] != cryptonote::TXIN_ARCHIVAL_REWARD_EMISSION_WIRE_TAG)
     throw WRONG_TYPE("archival reward-emission canonical_bytes wire tag mismatch");
 }
 

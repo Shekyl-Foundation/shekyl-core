@@ -1271,8 +1271,7 @@ void BlockchainLMDB::remove_tx_outputs(const uint64_t tx_id, const transaction& 
   // their outPk commitment regardless of the plaintext amount in the tx (see
   // BlockchainDB::add_transaction), so their removal keys on amount 0 too.
   bool is_pseudo_rct = tx.version >= 2 && tx.vin.size() == 1 && std::holds_alternative<txin_gen>(tx.vin[0]);
-  const bool is_emission_tx = std::any_of(tx.vin.begin(), tx.vin.end(),
-    [](const txin_v& in) { return std::holds_alternative<txin_archival_reward_emission>(in); });
+  const bool is_emission_tx = tx_has_archival_emission_vin(tx.vin);
   for (size_t i = tx.vout.size(); i-- > 0;)
   {
     uint64_t amount = (is_pseudo_rct || is_emission_tx) ? 0 : tx.vout[i].amount;

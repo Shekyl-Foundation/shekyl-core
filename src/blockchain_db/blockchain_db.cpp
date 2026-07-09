@@ -188,7 +188,9 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
   const transaction &tx = txp.first;
 
   bool miner_tx = false;
-  bool emission_tx = false;
+  // Shared storage predicate (cryptonote_basic.h) — the SAME check the remove
+  // side uses, so amount-0 emission-vout storage and removal cannot drift.
+  const bool emission_tx = tx_has_archival_emission_vin(tx.vin);
   crypto::hash tx_hash, tx_prunable_hash;
   if (!tx_hash_ptr)
   {
@@ -269,7 +271,6 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
       const uint64_t block_height = height();
       apply_archival_emission_claim(block_height, p_canonical_id,
         std::vector<uint64_t>(vin_epochs, vin_epochs + vin_epochs_len));
-      emission_tx = true;
     }
     else
     {
@@ -355,8 +356,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     // Emission reward vouts carry a plaintext amount but store as amount-0
     // RCT records with their outPk commitment (see add_transaction), so they
     // count as RCT outputs — same treatment as coinbase vouts above.
-    const bool is_emission_tx = std::any_of(tx.first.vin.begin(), tx.first.vin.end(),
-      [](const txin_v& in) { return std::holds_alternative<txin_archival_reward_emission>(in); });
+    const bool is_emission_tx = tx_has_archival_emission_vin(tx.first.vin);
     for (const auto &vout: tx.first.vout)
     {
       if (vout.amount == 0 || is_emission_tx)

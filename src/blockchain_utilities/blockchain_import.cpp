@@ -458,6 +458,30 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
         }
         else
         {
+          // Raw (non-verifying) import cannot produce the redirected
+          // staker-inflow accrual that freezes budget(E)
+          // (ARCHIVAL_BUDGET_SCHEDULE.md §3.1): that operand is
+          // validate_miner_transaction's base_reward + fee summary, computed
+          // only on the verifying connect path (Blockchain::
+          // handle_block_to_main_chain). Importing an emission-active block
+          // here writes no accrual row, so the epoch close freezes a
+          // present-and-zero budget(E) — a structurally non-claimable row
+          // (§5) that then makes this node REJECT valid emission txs the
+          // network accepts (a silent consensus split, not mere bookkeeping).
+          // Fail closed: emission is active from genesis
+          // (HF_VERSION_ARCHIVAL_EMISSION), so raw import is refused for any
+          // non-genesis block. Re-run without --dangerous-unverified-import
+          // to use the verifying path, which computes the accrual correctly.
+          if ((h - 1) > 0 && b.major_version >= HF_VERSION_ARCHIVAL_EMISSION)
+          {
+            std::cout << refresh_string;
+            MFATAL("Raw unverified import cannot produce archival budget(E) "
+              "accrual rows for emission-active block " << (h - 1)
+              << "; re-run without --dangerous-unverified-import");
+            quit = 2; // make sure we don't commit partial block data
+            break;
+          }
+
           std::vector<std::pair<transaction, blobdata>> txs;
           std::vector<transaction> archived_txs;
 
@@ -489,10 +513,10 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
           try
           {
             uint64_t long_term_block_weight = core.get_blockchain_storage().get_next_long_term_block_weight(block_weight);
-            // Raw (non-verifying) import bypasses the Blockchain connect path,
-            // so the staker-inflow accrual amount is not computed here — same
-            // pre-existing gap as the burn/total_burned rows this path also
-            // skips (FOLLOWUPS: raw-import archival/burn bookkeeping parity).
+            // Only the genesis block (height 0) reaches add_block on the raw
+            // path — emission-active blocks are refused above. Genesis has no
+            // staker leg (its coinbase pays the whole hardcoded emission), so
+            // a zero accrual is correct here, not a gap.
             core.get_blockchain_storage().get_db().add_block(std::make_pair(b, block_to_blob(b)), block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, 0, txs);
           }
           catch (const std::exception& e)

@@ -165,6 +165,40 @@ pub unsafe extern "C" fn shekyl_archival_p_canonical_id_from_pubkey(
     1
 }
 
+/// Overflow-checked sum of plaintext output amounts (rule 20: integer
+/// arithmetic on untrusted tx amounts lives behind the FFI, single-sourced so
+/// the emission reward total cannot drift between the check_tx_inputs operand
+/// and the CT-balance shape check). Writes the sum to `*out_sum` and returns
+/// `0` on success, `1` on `u64` overflow or invalid arguments — the caller must
+/// reject the tx on any non-zero return. `amounts_ptr` may be null iff `len == 0`.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_checked_sum_amounts(
+    amounts_ptr: *const u64,
+    len: usize,
+    out_sum: *mut u64,
+) -> u8 {
+    if out_sum.is_null() {
+        return 1;
+    }
+    if len == 0 {
+        unsafe { *out_sum = 0 };
+        return 0;
+    }
+    if amounts_ptr.is_null() {
+        return 1;
+    }
+    let amounts = unsafe { std::slice::from_raw_parts(amounts_ptr, len) };
+    let mut sum: u64 = 0;
+    for &a in amounts {
+        match sum.checked_add(a) {
+            Some(s) => sum = s,
+            None => return 1,
+        }
+    }
+    unsafe { *out_sum = sum };
+    0
+}
+
 /// First block of settlement epoch `E` (`H_open`).
 #[no_mangle]
 pub extern "C" fn shekyl_archival_epoch_open_height(settlement_epoch: u64) -> u64 {
@@ -1566,6 +1600,45 @@ mod tests {
     fn ffi_rejects_null_context() {
         let code = unsafe { shekyl_archival_verify_serve_credit_vin(ptr::null(), 0, ptr::null()) };
         assert_eq!(code, SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR);
+    }
+
+    #[test]
+    fn checked_sum_amounts_sums_overflows_and_guards() {
+        // Empty set (null allowed iff len == 0) sums to 0.
+        let mut out: u64 = 7;
+        assert_eq!(
+            unsafe { shekyl_checked_sum_amounts(ptr::null(), 0, &raw mut out) },
+            0
+        );
+        assert_eq!(out, 0);
+
+        // Normal sum.
+        let amounts = [1u64, 2, 3, 4];
+        let mut sum: u64 = 0;
+        assert_eq!(
+            unsafe { shekyl_checked_sum_amounts(amounts.as_ptr(), amounts.len(), &raw mut sum) },
+            0
+        );
+        assert_eq!(sum, 10);
+
+        // Overflow rejects (non-zero return, caller must reject the tx).
+        let overflow = [u64::MAX, 1];
+        let mut bad: u64 = 0;
+        assert_eq!(
+            unsafe { shekyl_checked_sum_amounts(overflow.as_ptr(), overflow.len(), &raw mut bad) },
+            1
+        );
+
+        // Null out pointer and null data with non-zero len both reject.
+        assert_eq!(
+            unsafe { shekyl_checked_sum_amounts(amounts.as_ptr(), amounts.len(), ptr::null_mut()) },
+            1
+        );
+        let mut o: u64 = 0;
+        assert_eq!(
+            unsafe { shekyl_checked_sum_amounts(ptr::null(), 3, &raw mut o) },
+            1
+        );
     }
 
     #[test]

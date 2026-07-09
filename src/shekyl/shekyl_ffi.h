@@ -2107,6 +2107,16 @@ uint8_t shekyl_archival_emission_vin_extract(
     size_t epochs_cap,
     size_t* out_epochs_len);
 
+/// Overflow-checked sum of plaintext output amounts (rule 20: amount
+/// arithmetic on untrusted tx data lives behind the FFI). Writes the sum to
+/// *out_sum; returns 0 on success, 1 on u64 overflow or invalid args (the
+/// caller MUST reject the tx on any non-zero return). `amounts_ptr` may be
+/// null iff `len == 0`.
+uint8_t shekyl_checked_sum_amounts(
+    const uint64_t* amounts_ptr,
+    size_t len,
+    uint64_t* out_sum);
+
 /// Block-level intra-block cross-tx (P, E) uniqueness verdict (E3 gating
 /// round §6.2 layer 2; decision-placement pin §9.5 item 6 — C++ marshals the
 /// block's claim pairs, Rust decides). `pairs_ptr` is a flattened array of

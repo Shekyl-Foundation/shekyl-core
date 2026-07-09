@@ -3287,18 +3287,16 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
   // CT balance equation (verCtSemanticsEmission), the Rust arithmetic
   // cross-check (check_tx_inputs' vout_reward_sum operand), and P's Q1
   // field-7 signed commit set.
+  // Skip the ban ONLY for a well-formed emission tx (the SAME classification
+  // check_tx_inputs uses — not a bare emission-vin count, which would also
+  // exempt a malformed tx pairing an emission vin with a bond-post or extra
+  // special vin and leak the zero-amount enforcement to a distant FCMP assert).
+  if (classify_archival_tx(tx.vin).kind != archival_tx_kind::emission)
   {
-    size_t emission_vins = 0;
-    for (const auto& in : tx.vin)
-      if (std::holds_alternative<txin_archival_reward_emission>(in))
-        ++emission_vins;
-    if (emission_vins != 1)
-    {
-      for (auto &o: tx.vout) {
-        if (o.amount != 0) {
-          tvc.m_invalid_output = true;
-          return false;
-        }
+    for (auto &o: tx.vout) {
+      if (o.amount != 0) {
+        tvc.m_invalid_output = true;
+        return false;
       }
     }
   }
@@ -3380,45 +3378,18 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   const uint8_t hf_version = m_hardfork->get_current_version();
   const bool is_fcmp_pp = rct::is_rct_fcmp_pp_pqc(tx.rct_signatures.type);
 
-  bool is_archival_serve_credit_only = false;
-  bool is_archival_bond_post_tx = false;
-  bool is_archival_emission_tx = false;
-  size_t archival_bond_post_index = 0;
-  size_t archival_emission_index = 0;
-  if (!tx.vin.empty())
-  {
-    is_archival_serve_credit_only = true;
-    size_t bond_post_count = 0;
-    size_t emission_count = 0;
-    size_t to_key_count = 0;
-    for (size_t i = 0; i < tx.vin.size(); ++i)
-    {
-      const auto& vin = tx.vin[i];
-      if (!std::holds_alternative<txin_archival_serve_credit_response>(vin))
-        is_archival_serve_credit_only = false;
-      if (std::holds_alternative<txin_archival_bond_post>(vin))
-      {
-        ++bond_post_count;
-        archival_bond_post_index = i;
-      }
-      else if (std::holds_alternative<txin_archival_reward_emission>(vin))
-      {
-        ++emission_count;
-        archival_emission_index = i;
-      }
-      else if (std::holds_alternative<txin_to_key>(vin))
-        ++to_key_count;
-    }
-    // Exactly one special vin; key-imaged txin_to_key spends are the only
-    // permitted co-residents (bond-post funding inputs / emission fee inputs,
-    // the Q11 mixing rule — REWARD_EMISSION_E3_GATING_ROUND.md §2.2; arity 1
-    // per Q3 §2.1). Any other vin combination falls through to the regular
-    // FCMP++ path, whose txin_to_key assertion rejects it.
-    is_archival_bond_post_tx =
-      (bond_post_count == 1 && emission_count == 0 && to_key_count + 1 == tx.vin.size());
-    is_archival_emission_tx =
-      (emission_count == 1 && bond_post_count == 0 && to_key_count + 1 == tx.vin.size());
-  }
+  // Shared archival-tx taxonomy (classify_archival_tx, cryptonote_basic.h):
+  // one special vin with key-imaged spends as the only permitted co-residents
+  // (the Q11 mixing rule — REWARD_EMISSION_E3_GATING_ROUND.md §2.2; arity 1 per
+  // Q3 §2.1); any other combination is `none` and falls through to the regular
+  // FCMP++ path, whose txin_to_key assertion rejects it. Single-sourced with
+  // check_tx_outputs and ver_non_input_consensus so all three agree on the kind.
+  const archival_tx_classification archival_class = classify_archival_tx(tx.vin);
+  const bool is_archival_serve_credit_only = (archival_class.kind == archival_tx_kind::serve_credit_only);
+  const bool is_archival_bond_post_tx = (archival_class.kind == archival_tx_kind::bond_post);
+  const bool is_archival_emission_tx = (archival_class.kind == archival_tx_kind::emission);
+  const size_t archival_bond_post_index = archival_class.special_index;
+  const size_t archival_emission_index = archival_class.special_index;
 
   if (tx.version >= 2 && !is_archival_serve_credit_only)
   {
@@ -3779,9 +3750,12 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       else if (is_archival_emission_tx)
       {
         // ── C-1 emission dispatch (REWARD_EMISSION_E3_GATING_ROUND.md §9.5
-        // item 5). Gate-last: unreachable until the item-4 whitelist flip —
-        // check_inputs_types_supported still rejects the vin type, so no tx
-        // reaches this branch on any chain yet.
+        // item 5). LIVE from genesis: the item-4 whitelist flip landed in
+        // this cut (check_inputs_types_supported now accepts a single emission
+        // vin — cryptonote_format_utils.cpp) and HF_VERSION_ARCHIVAL_EMISSION
+        // is active from block 1, so a well-formed txin_archival_reward_emission
+        // reaches full verify+connect here. This branch mints coins on
+        // acceptance — treat every check below as load-bearing consensus.
         const txin_archival_reward_emission& emission =
           std::get<txin_archival_reward_emission>(tx.vin[archival_emission_index]);
 
@@ -3946,20 +3920,15 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         }
         std::vector<uint8_t> commits_flat;
         commits_flat.reserve(tx.vout.size() * 72);
-        uint64_t vout_reward_sum = 0;
+        std::vector<uint64_t> reward_amounts;
+        reward_amounts.reserve(tx.vout.size());
         size_t reward_commit_count = 0;
         for (size_t i = 0; i < tx.vout.size(); ++i)
         {
           const uint64_t amount = tx.vout[i].amount;
           if (amount == 0)
             continue;
-          if (amount > std::numeric_limits<uint64_t>::max() - vout_reward_sum)
-          {
-            MERROR_VER("Archival emission reward vout sum overflows");
-            tvc.m_verifivation_failed = true;
-            return false;
-          }
-          vout_reward_sum += amount;
+          reward_amounts.push_back(amount);
           crypto::public_key one_time_key;
           if (!get_output_public_key(tx.vout[i], one_time_key))
           {
@@ -3974,6 +3943,18 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
             commits_flat[off + 32 + b] = static_cast<uint8_t>((amount >> (8 * b)) & 0xff);
           memcpy(commits_flat.data() + off + 40, &one_time_key, 32);
           ++reward_commit_count;
+        }
+        // Amount arithmetic in Rust (rule 20): the reward total is the
+        // inflation-audit operand, checked-summed once and single-sourced with
+        // the CT-balance shape check (tx_verification_utils.cpp).
+        uint64_t vout_reward_sum = 0;
+        if (shekyl_checked_sum_amounts(
+              reward_amounts.empty() ? nullptr : reward_amounts.data(),
+              reward_amounts.size(), &vout_reward_sum) != 0)
+        {
+          MERROR_VER("Archival emission reward vout sum overflows");
+          tvc.m_verifivation_failed = true;
+          return false;
         }
 
         // The coarse verify crossing: §7.1 claims 1–5, membership-only

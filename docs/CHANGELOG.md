@@ -4,6 +4,64 @@
 
 ### Fixed
 
+- **consensus: C-1 emission review hardening (PR #277 review,
+  `REWARD_EMISSION_E3_GATING_ROUND.md` §9.5).** Batch of
+  correctness/robustness fixes from the high-effort review of the
+  reward-emission activating cut:
+  - *Raw unverified import fails closed on emission-active blocks.*
+    The `--dangerous-unverified-import` path called `add_block` with
+    `archival_budget_accrual = 0`, so the epoch close froze a
+    present-and-zero (structurally non-claimable) `budget(E)` for every
+    epoch — an import-synced node would then *reject* live emission txs
+    the network accepts (a silent consensus split, not the bookkeeping
+    parity the old comment claimed). Since emission is active from
+    genesis, raw import cannot produce the accrual (verify's
+    `base_reward` + fee summary) without re-deriving the operands the
+    connect path deliberately single-sources (F-B1b); it now aborts on
+    any non-genesis block with a message pointing to verifying import.
+    Whether the fast unverified path is worth re-deriving the split for
+    is a testnet-stress-test question.
+  - *Zero-plaintext-vout ban gated on the full emission classification.*
+    `check_tx_outputs` skipped the v3 zero-amount-vout ban on a bare
+    `emission_vins == 1` count, which also exempted a malformed tx
+    pairing an emission vin with a bond-post; it now uses the same
+    strict classification as `check_tx_inputs`.
+  - *Archival tx-kind predicate single-sourced.* The
+    bond-post/emission/serve-credit taxonomy was open-coded in
+    `check_tx_inputs`, `check_tx_outputs`, and `ver_non_input_consensus`;
+    it now lives once in `classify_archival_tx` (`cryptonote_basic.h`),
+    so the three consensus sites cannot drift on what a tx *is*.
+  - *Emission-vout storage predicate single-sourced.* The
+    store (`add_transaction`) and remove (`remove_tx_outputs`) sides of
+    the amount-0 emission-vout treatment now share
+    `tx_has_archival_emission_vin`, so a pop cannot disagree with the
+    add.
+  - *CT-balance tail de-duplicated.* `verCtSemanticsEmission` and
+    `verRctSemanticsBondPost` shared a near-verbatim flatten +
+    balance-FFI + Bulletproof+ tail; extracted to
+    `verArchivalCtBalanceAndRange`, called with each path's
+    (credit, debit) operands.
+  - *Emission reward-sum arithmetic moved to Rust (rule 20).* The
+    hand-rolled C++ overflow-checked vout-amount summation (two copies)
+    now routes through `shekyl_checked_sum_amounts`, single-sourcing the
+    inflation-audit operand across `check_tx_inputs` and the CT-balance
+    shape check.
+  - *Emission wire tag named.* The bare `0x04` literal at three C++
+    sites (transport guard, `VARIANT_TAG`, JSON echo) is now
+    `TXIN_ARCHIVAL_REWARD_EMISSION_WIRE_TAG`, mirroring Rust's wire tag.
+  - *Stale dispatch comment corrected:* the C-1 emission branch is LIVE
+    from genesis (the whitelist flip landed in this cut), not the
+    "gate-last / unreachable" the old comment claimed.
+  Two review items were assessed as refuted, not deferred: the
+  block-level (P,E) re-parse is load-bearing (the sole parse on the
+  `PER_BLOCK_CHECKPOINT` fast path, where `check_tx_inputs` is skipped),
+  and the `canonical_bytes` container serializer has no pre-allocation
+  DoS (`remaining_bytes() < cnt` guard + no-op reserve) — changing it
+  would be a rule-42 wire change for a micro-opt. The FFI-surface
+  ergonomics finding (grouping `shekyl_emission_vin_verify`'s 22
+  positional args into `#[repr(C)]` structs) is a separate follow-up on
+  its own validation surface.
+
 - **consensus: redirect keys on bl.major_version + CI tripwire (F-B1b
   hardening, `REWARD_EMISSION_E3_GATING_ROUND.md` §9.9,
   `ARCHIVAL_BUDGET_SCHEDULE.md` §2.2).** The burn-vs-accrue decision
