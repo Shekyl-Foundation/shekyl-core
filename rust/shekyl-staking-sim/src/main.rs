@@ -23,6 +23,7 @@
 
 mod agent;
 mod audit;
+mod budget_throttle;
 mod clustering;
 mod cover;
 mod curve;
@@ -1283,6 +1284,11 @@ fn main() {
 
     if std::env::args().any(|a| a == "--clustering") {
         print_clustering_report();
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--budget-throttle") {
+        budget_throttle::run_budget_throttle_report();
         return;
     }
 
