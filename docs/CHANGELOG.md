@@ -20,19 +20,31 @@
   RPC shaped as `EmissionEpochSource`) as the gating decision.
   `IMPLEMENTATION_INDEX.md` registers the `CB-` family and refreshes
   the stale #263/#264/#277 "in review" rows to landed with
-  code-anchored verification stamps. **Round 1 CLOSED (2026-07-09):**
-  CB-1…CB-5 all ratified at source with two builder-PR pins (sign within
-  `StakeEngine`'s seed-gone-after-`assemble()` discipline; `SelfCheckFailed`
-  refuses cause-blind) and CB-3's joint-grading reopen (GF-4 grades cadence
-  + amount + holdings stratum jointly). The CB-4 source pass found the Q11
+  code-anchored verification stamps. **Round 1 CLOSED (2026-07-09) —
+  Round-1 dispositions + CB-4 tripwire strengthening:** CB-1…CB-5 all
+  ratified at source with two builder-PR pins (sign within `StakeEngine`'s
+  seed-gone-after-`assemble()` discipline; `SelfCheckFailed` refuses
+  cause-blind) and CB-3's joint-grading reopen (GF-4 grades cadence +
+  amount + holdings stratum jointly). The CB-4 source pass found the Q11
   balance-exclusion arming KAT
-  (`tests/unit_tests/archival_emission_ct_balance.cpp`) is
-  necessary-not-sufficient — the exclusion is enforced structurally
-  (backing in the vin's opaque `canonical_bytes`; redundant size checks at
-  `tx_verification_utils.cpp:175` + `rctSigs.cpp:362`), but arm 1's headline
-  identity assertion is green-by-construction and no test drives the
-  dispatch — filed as a V3.0 test-strengthening + E3 doc-correction
-  follow-up (`FOLLOWUPS.md`), not a consensus change.
+  (`tests/unit_tests/archival_emission_ct_balance.cpp`) was
+  necessary-not-sufficient: the exclusion is enforced by a **structural
+  three-leg guard** (backing in the vin's opaque `canonical_bytes` never
+  deserialized into `pseudoOuts`; dispatch + leaf size checks at
+  `tx_verification_utils.cpp:175` + `rctSigs.cpp:362`), and CB-4 ratifies on
+  that guard — not on the KAT. Fixed **in this PR** (cheap, in-surface,
+  known-wrong): arm 1 strengthened to derive operands through the
+  **production** functions the dispatch uses (`classify_archival_tx` +
+  `shekyl_checked_sum_amounts`, replacing a test-local mirror), arming the
+  guard's operand + leaf legs; the E3 §2.2 rationale corrected (its claimed
+  identity-catch was green-by-construction — the backing never reaches
+  `verCtSemanticsEmission`); and a general test-doc discipline pinned in
+  `50-testing.mdc` ("Test rationales state their coverage boundary"). The
+  remaining **blob-boundary invariant** arm (drive the full dispatch, assert
+  CT-balance verdict invariant under `canonical_bytes` variation) is
+  harness-gated and homed to the claim-builder PR where the valid-proof
+  emission-tx harness is born (`FOLLOWUPS.md`) — tripwire-completeness, not
+  a consensus change.
 
 ### Fixed
 

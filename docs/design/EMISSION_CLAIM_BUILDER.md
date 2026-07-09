@@ -4,9 +4,11 @@
 at source (§3): CB-1 (new daemon RPC as `EmissionEpochSource`, single-
 evaluator invariant the ratifying reason); CB-2 (StakeEngine actor,
 sign-within-seed-gone-after-`assemble()` pin); CB-3 (routing-not-closure,
-joint-grading reopen); CB-4 (structural exclusion ratified, arming KAT
-necessary-not-sufficient — follow-up filed); CB-5 (cause-blind refusal,
-`SelfCheckFailed`-blind pin). Implementation proceeds on the pins below.
+joint-grading reopen); CB-4 (structural three-leg exclusion ratified; arming
+KAT strengthened to production operand functions + E3/rationale doc fixes
+done in-PR; blob-boundary arm homed to the builder PR); CB-5 (cause-blind
+refusal, `SelfCheckFailed`-blind pin). Implementation proceeds on the pins
+below.
 
 **Provenance.** C-1 (the emission activating cut) merged to `dev` 2026-07-09
 via PR #277 (`13c368707`); consensus now accepts authed
@@ -267,62 +269,85 @@ necessary-not-sufficient (2026-07-09, verified at source).** The Q11 ACCEPT
 (same-tx backing + key-imaged fee) is correct, but its verified strength is
 **structural**, not the arming KAT. Source pass:
 
-- **The exclusion is structural, and strong.** The backing pseudo-out lives
-  inside the emission vin's opaque `canonical_bytes` blob
-  (`emission_wire.rs` `MembershipOnlyBacking.pseudo_out`); the CT-balance
-  path reads only `rv.p.pseudoOuts`, and **nothing deserializes
-  `canonical_bytes` into `pseudoOuts`.** Two independent size checks each
-  require `pseudoOuts` to cover *exactly* the fee inputs, leaving no slot
-  for the backing: the dispatch (`tx_verification_utils.cpp:175`,
-  `rv.p.pseudoOuts.size() != spend_input_count`) and the leaf
-  (`rctSigs.cpp:362`, `rv.p.pseudoOuts.size() == fee_input_count`). Routing
-  the backing into the balance is not a line-removal — it is *adding* a
-  blob-parse + append + a **lockstep bump of both** size checks.
+- **The exclusion is structural, and strong — a three-leg guard.** The
+  backing pseudo-out lives inside the emission vin's opaque
+  `canonical_bytes` blob (`emission_wire.rs`
+  `MembershipOnlyBacking.pseudo_out`); the CT-balance path reads only
+  `rv.p.pseudoOuts`. Routing the backing into the balance is not a
+  line-removal — it is a blob-parse **plus** an append **plus** a lockstep
+  bump of *both* size checks, coordinated across three legs:
+  - **(i) blob boundary** — **nothing deserializes `canonical_bytes` into
+    `rv.p.pseudoOuts`.** The backing bytes never reach the balance-relevant
+    pseudo-out set.
+  - **(ii) dispatch size check** — `tx_verification_utils.cpp:175`
+    (`rv.p.pseudoOuts.size() != spend_input_count`).
+  - **(iii) leaf size check** — `rctSigs.cpp:362`
+    (`rv.p.pseudoOuts.size() == fee_input_count`).
+
+  This is a make-bad-states-unrepresentable guard: the double-use isn't
+  *prevented by a test*, it is *unrepresentable* without a coordinated
+  multi-site change, exactly like CB-1's single-evaluator
+  `capped_work_milli`.
 - **The arming KAT (`tests/unit_tests/archival_emission_ct_balance.cpp`) is
-  necessary-not-sufficient, and its headline assertion is
-  green-by-construction.** Both arms call the leaf `verCtSemanticsEmission`
-  / the balance FFI **directly**, never the dispatch. Consequently:
-  - Arm 1's identity assertion `EXPECT_EQ(verdict_O, verdict_O_prime)`
-    (`:200`) is **green-by-construction**: the backing lives in
-    `vin.canonical_bytes`, which `verCtSemanticsEmission` never reads, so
-    both txs feed an *identical* `rv` and the equal verdict is trivial. The
-    E3 doc's stated mechanism ("with the backing in the sum, O and O′
-    cannot both balance", §2.2) does **not** occur — the backing never
-    reaches the sum in this test.
-  - The assertion that *does* bite is arm 1's `EXPECT_TRUE(verdict_O)`
-    (`:199`): it pins the leaf size check `== fee_input_count`
-    (`rctSigs.cpp:362`). Bumping that to `+ 1` (the size-check half of the
-    coordinated regression) breaks the legitimate 1-pseudo-out emission tx
-    → verdict false → the test fails. This is a real, necessary catch (you
-    cannot sum the backing without a `pseudoOuts` slot, and opening the
-    slot breaks legit txs) — but it covers only the **leaf** check, not the
-    dispatch check (`:175`).
+  the tripwire on the guard — necessary-not-sufficient — and its coverage
+  boundary is now stated per arm** (`50-testing.mdc` "Test rationales state
+  their coverage boundary"). Both arms call the leaf
+  `verCtSemanticsEmission` / balance FFI, not the full dispatch:
+  - Arm 1 (`backing_identity_O_vs_O_prime`) **now bites** against a refactor
+    that parsed the blob into the balance *operands* (leg i, operand side):
+    strengthened this PR to derive `spend_input_count`/`total_reward` through
+    the **same production functions the dispatch uses** (`classify_archival_tx`
+    + `shekyl_checked_sum_amounts`) — the prior test-local mirror was replaced
+    (`50-testing.mdc` "Test the production code, not a local
+    re-implementation") — and asserts the operands do not move when the
+    backing bytes change. It also pins leg (iii): `EXPECT_TRUE(verdict_O)`
+    (`:199`) fails if the leaf size check is bumped to `+ 1`. **Does NOT
+    cover:** the `verdict_O == verdict_O_prime` identity is
+    **green-by-construction** — `verCtSemanticsEmission`'s signature has no
+    parameter the blob-resident backing can enter, so it documents the
+    signature-level exclusion, it is not the coordinated-regression catch the
+    E3 doc previously claimed.
   - Arm 2 (`backing_inclusion_shape_rejects_in_production`) bites against
-    **weakening the balance equation itself** (the short-by-backing fixture
-    must reject), and its second half proves the fixture is a genuine
-    backing-closes-it shape, not an unrelated malformation. Valuable, but
-    "the balance function rejects an unbalanced set" is necessary, not the
-    exclusion.
-  - **No test drives the dispatch** (`tx_verification_utils.cpp:151-183`)
-    with a backing-inclusion attempt (verified: `verCtSemanticsEmission`
-    has exactly one test caller, this KAT). The dispatch-level exclusion
-    (`:175` + the "never parse `canonical_bytes` into `pseudoOuts`"
-    property) is therefore not exercised by any test; the redundant leaf
-    check (`:362`) is the pinned backstop.
+    **weakening the balance equation** (leg iii, value side): the
+    short-by-backing fixture must reject, and the second half proves the
+    fixture is a genuine backing-closes-it shape, not an unrelated
+    malformation. **Does NOT cover:** the blob boundary (leg i,
+    `pseudoOuts` side) or the dispatch check (leg ii).
+  - **Armed status:** leg (iii) is armed (arm 1 + arm 2); leg (i) *operand
+    side* is armed (arm 1, production classifier); leg (i) *`pseudoOuts`
+    side* and leg (ii) are **not** armed here — no test drives the full
+    dispatch (`tx_verification_utils.cpp:151-183`) with a valid emission tx.
+    That is the follow-up.
 - **Ratification.** CB-4 ratifies on the **structural** exclusion (the
-  separate opaque field + two redundant size checks), with the KAT as a
-  necessary-not-sufficient leaf backstop — the same posture as CB-1's
+  separate opaque field + two redundant size checks), *not* on the KAT —
+  holding ratified-*pending* the follow-up would treat the test as the
+  guard, the inversion this round corrects. The guard is present and
+  verified now; the KAT is its tripwire. Same posture as CB-1's
   single-evaluator invariant with its step-7 self-check
   necessary-not-sufficient. The Q11 ACCEPT stands.
-- **Follow-up (FOLLOWUPS, V3.0 pre-genesis).** (a) Add a dispatch-level
-  arm that constructs an emission tx and runs it through
-  `tx_verification_utils`, asserting rejection when the backing is routed
-  into `pseudoOuts` — the arm that would bite against the *full* regression
-  the E3 doc claims arm 1 catches. (b) Correct the E3 §2.2 arm-1 rationale:
-  the identity assertion is green-by-construction; the biting assertion is
-  `EXPECT_TRUE(verdict_O)` pinning the leaf size check. This is a
-  test-strengthening + doc-correction, **not** a consensus change (the Q11
-  reversion clause is untouched).
+- **Done in this PR.** (b) The E3 §2.2 arm-1 rationale is corrected (it
+  claimed a green-by-construction identity proved the mechanism; it does
+  not — the biting assertion is `EXPECT_TRUE(verdict_O)` + the production
+  operand-invariance). (c) The general discipline that let a leaf-check
+  test be credited with a dispatch-level proof is pinned in
+  `50-testing.mdc` ("Test rationales state their coverage boundary"). Both
+  are known-false / known-incomplete doc fixes with zero bisect risk, fixed
+  in the flow that found them.
+- **Follow-up — homed to the claim-builder PR, not deferred to a queue.**
+  (a) Add the arm that protects the **blob-boundary invariant** directly:
+  drive the full production dispatch (`ver_non_input_consensus_templated`)
+  with a valid FCMP++ emission tx and assert the **CT-balance verdict is
+  invariant under `canonical_bytes` variation** — i.e., the balance-relevant
+  `pseudoOuts` set is exactly the fee inputs and is *unaffected* by the blob
+  contents. This is the arm that fails if a future deserialization change
+  parsed the backing out of the blob into `pseudoOuts` (leg i `pseudoOuts`
+  side + leg ii) — the actually-dangerous refactor, which the size-check
+  arms cannot catch because they only fire once something is already in
+  `pseudoOuts`. It is **harness-gated** on a valid-proof emission-tx builder,
+  which the claim-builder PR's step-7 self-check builds anyway — so it lands
+  where the harness is born, not in an undrained queue. **Not** a consensus
+  change (the Q11 reversion clause is untouched); tripwire-completeness, not
+  a safety gate.
 
 ### CB-5 — refusal taxonomy
 
@@ -405,8 +430,11 @@ Round-1 closure (2026-07-09): CB-1(a) ratified (RPC as
 `EmissionEpochSource`); CB-2 locus ratified (StakeEngine actor, sign-within
 the seed-gone-after-`assemble()` discipline); CB-3 ratified as a routing
 with the joint-grading reopen named; CB-4 ratified on the structural
-exclusion with the arming KAT recorded as necessary-not-sufficient (§3
-CB-4 + `FOLLOWUPS.md` Q11-KAT item); CB-5 ratified with the
+three-leg exclusion, with the arming KAT strengthened to production operand
+functions (leg-i operand side + leg-iii armed in-PR), the E3 §2.2 rationale
+and the `50-testing.mdc` coverage-boundary discipline corrected in-PR, and
+the blob-boundary invariant arm homed to the builder PR (§3 CB-4 +
+`FOLLOWUPS.md` Q11-KAT item); CB-5 ratified with the
 `SelfCheckFailed`-blind pin. Builder-PR pins to carry: sign within
 seed-gone-after-`assemble()` (CB-2); `SelfCheckFailed` refuses cause-blind
 (CB-5); the E4-gate GF-4 round grades cadence jointly with amount +
