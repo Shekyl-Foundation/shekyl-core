@@ -320,6 +320,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
                                 , uint64_t long_term_block_weight
                                 , const difficulty_type& cumulative_difficulty
                                 , const uint64_t& coins_generated
+                                , uint64_t archival_budget_accrual
                                 , const std::vector<std::pair<transaction, blobdata>>& txs
                                 )
 {
@@ -498,6 +499,17 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
 
   m_hardfork->add(blk, prev_height);
 
+  // Redirected staker-inflow accrual row (ARCHIVAL_BUDGET_SCHEDULE.md §3.1),
+  // keyed at the connecting block's index (prev_height). Written BEFORE the
+  // epoch-close hook below: the close of epoch E fires while connecting E's
+  // last block (operand prev_height + 1 = (E+1)·SEB) and range-sums accrual
+  // keys over [E·SEB, (E+1)·SEB) — a window that includes this block. The
+  // pre-F-B1a shape (blockchain.cpp writing the row after add_block returned)
+  // left the final block of every epoch out of its own budget(E). Zero is not
+  // written: absent key reads as 0 (§3.1's burn-row convention).
+  if (archival_budget_accrual > 0)
+    add_archival_budget_accrual(prev_height, archival_budget_accrual);
+
   process_archival_slash_at_height(prev_height + 1);
   process_archival_epoch_close_at_height(prev_height + 1);
 
@@ -537,6 +549,12 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   // the journal to N + 1 would shift the connect-side settled-epoch operand
   // off verify's at every epoch boundary.
   revert_archival_emission_claims_at_height(removed_block_height - 1);
+  // Mirror of the accrual write in add_block, keyed at the block's INDEX
+  // N = removed_block_height - 1 (the claim-journal convention above, not
+  // the hook convention). Runs inside the same wtxn as the pop — key
+  // deletion, tolerant of the missing key (the row exists only for
+  // post-activation blocks with nonzero inflow).
+  remove_archival_budget_accrual(removed_block_height - 1);
   remove_block();
 
   const uint64_t block_height = removed_block_height;

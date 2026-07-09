@@ -825,13 +825,11 @@ block Blockchain::pop_block_from_blockchain()
       m_db->set_total_burned(total_burned);
     }
     m_db->remove_block_burn(popped_height);
-    // Pop side of the redirected staker-inflow write
-    // (ARCHIVAL_BUDGET_SCHEDULE.md §2.2/§3.1): the accrual row exists only
-    // for post-activation blocks with nonzero inflow — key deletion,
-    // tolerant of the missing key. Note the burn row above can coexist
-    // post-activation (it carries the genuinely destroyed portion; the
-    // inflow itself lands in exactly one of the two).
-    m_db->remove_archival_budget_accrual(popped_height);
+    // The accrual-row removal (the pop side of the §2.2 redirected
+    // staker-inflow write) lives in BlockchainDB::pop_block, mirroring the
+    // connect-side write that add_block performs before the epoch-close
+    // hook (F-B1a) — both sides of that row are DB-layer and share the
+    // pop's wtxn.
   }
 
   return popped_block;
@@ -5348,6 +5346,55 @@ leave:
   }
 
   TIME_MEASURE_FINISH(vmt);
+
+  // Staker-inflow redirect (ARCHIVAL_BUDGET_SCHEDULE.md §2.2): one per-height
+  // write whose TARGET the fork switches — pre-activation blocks burn the
+  // inflow (the retired claim-era posture), post-activation blocks accrue it
+  // into the `archival_budget_accrual` row the epoch close freezes into
+  // budget(E). Exactly one target per block, so burn-stop and accrual-start
+  // are atomic and the straddle epoch cannot double-count (§2.1).
+  //
+  // Computed HERE, before m_db->add_block, for two load-bearing reasons:
+  //  - Version operand (F-B1b): pre-add, get_current_version() is the
+  //    connecting block's own validated version — the operand
+  //    validate_miner_transaction received above. Post-add, HardFork::add has
+  //    advanced current_fork_index via get_voted_fork_index(height + 1), the
+  //    NEXT block's version, which flips the redirect one block early at an
+  //    activation boundary (§2.2 pins per-block fork status, not tip state).
+  //  - Write ordering (F-B1a): the accrual amount rides into add_block and is
+  //    written before the epoch-close hook fires, so the close of epoch E
+  //    sees its final block's row in the [E·SEB, (E+1)·SEB) range-sum.
+  //
+  // Burn-split operands match verify's (F-B1c): the same prev-cumulative
+  // supply and the same tx_volume_avg validate_miner_transaction used — a
+  // zero volume operand zeroes burn_pct, which silently zeroed the fee-pool
+  // half of the inflow (accrued nowhere, burn-recorded nowhere). The emission
+  // quantity stays the site-4 shape (5-arg get_block_reward, no release
+  // multiplier) pending the PR-7 Q-taxonomy adjudication (F-B1c-c2).
+  uint64_t archival_budget_accrual = 0;
+  uint64_t block_burn_amount = 0;
+  {
+    const uint64_t genesis_ng_height = m_hardfork->get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
+    const uint8_t connect_hf_version = m_hardfork->get_current_version();
+
+    uint64_t full_block_emission = 0;
+    get_block_reward(0, 0, already_generated_coins, full_block_emission, connect_hf_version);
+
+    const shekyl::EmissionSplit em_split = shekyl::compute_emission_split(
+        full_block_emission, blockchain_height, genesis_ng_height, connect_hf_version);
+
+    const shekyl::BurnResult burn = shekyl::compute_fee_burn(
+        fee_summary, get_tx_volume_avg(blockchain_height), already_generated_coins,
+        /*stake_ratio*/ 0, connect_hf_version);
+
+    const uint64_t staker_inflow = em_split.staker_emission + burn.staker_pool_amount;
+    block_burn_amount = burn.actually_destroyed;
+    if (connect_hf_version >= HF_VERSION_ARCHIVAL_EMISSION)
+      archival_budget_accrual = staker_inflow;
+    else
+      block_burn_amount += staker_inflow;
+  }
+
   size_t block_weight;
   difficulty_type cumulative_difficulty;
 
@@ -5375,7 +5422,7 @@ leave:
     {
       uint64_t long_term_block_weight = get_next_long_term_block_weight(block_weight);
       cryptonote::blobdata bd = cryptonote::block_to_blob(bl);
-      new_height = m_db->add_block(std::make_pair(std::move(bl), std::move(bd)), block_weight, long_term_block_weight, cumulative_difficulty, already_generated_coins, txs);
+      new_height = m_db->add_block(std::make_pair(std::move(bl), std::move(bd)), block_weight, long_term_block_weight, cumulative_difficulty, already_generated_coins, archival_budget_accrual, txs);
     }
     catch (const KEY_IMAGE_EXISTS& e)
     {
@@ -5427,58 +5474,20 @@ leave:
     return false;
   }
 
-  if (new_height > 0)
+  if (new_height > 0 && block_burn_amount > 0)
   {
-    const uint64_t genesis_ng_height = m_hardfork->get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-    const uint64_t prev_already_generated = blockchain_height ? m_db->get_block_already_generated_coins(blockchain_height - 1) : 0;
-
-    uint64_t full_block_emission = 0;
-    get_block_reward(0, 0, prev_already_generated, full_block_emission, m_hardfork->get_current_version());
-
-    shekyl::EmissionSplit em_split = shekyl::compute_emission_split(
-        full_block_emission, blockchain_height, genesis_ng_height, m_hardfork->get_current_version());
-
-    shekyl::BurnResult burn = shekyl::compute_fee_burn(
-        fee_summary, 0, prev_already_generated, /*stake_ratio*/ 0, m_hardfork->get_current_version());
-
-    // The staker inflow (emission split share + fee-pool share) funds the
-    // archival reward-emission leg (2b, C-1): one per-height write whose
-    // TARGET the fork switches (ARCHIVAL_BUDGET_SCHEDULE.md §2.2
-    // redirect-the-write) — pre-activation blocks burn it (the retired
-    // claim-era posture), post-activation blocks accrue it into the
-    // `archival_budget_accrual` row the epoch close freezes into budget(E).
-    // Exactly one target per block, so burn-stop and accrual-start are
-    // atomic and the straddle epoch cannot double-count (§2.1). Target
-    // selection is this block's own fork status: at this point in connect
-    // the block IS the tip, so get_current_version() is the connecting
-    // block's version — per-block semantics, not stale-tip state.
-    const uint64_t staker_inflow = em_split.staker_emission + burn.staker_pool_amount;
-    const bool emission_redirect_active =
-      m_hardfork->get_current_version() >= HF_VERSION_ARCHIVAL_EMISSION;
-    if (emission_redirect_active)
-    {
-      // Only written when nonzero, mirroring the burn row: absent height
-      // reads as 0, and pop's remove tolerates the missing key.
-      if (staker_inflow > 0)
-        m_db->add_archival_budget_accrual(blockchain_height, staker_inflow);
-    }
-    else
-    {
-      burn.actually_destroyed += staker_inflow;
-    }
-
-    if (burn.actually_destroyed > 0)
-    {
-      // Per-height burn record — the sole persisted per-block bookkeeping this
-      // path needs, so pop_block_from_blockchain can roll total_burned back.
-      // Only written when nonzero: get_block_burn returns 0 for an absent
-      // height, so a zero row would carry no information (and pop's
-      // remove_block_burn tolerates the missing key).
-      m_db->add_block_burn(blockchain_height, burn.actually_destroyed);
-      uint64_t total_burned = m_db->get_total_burned();
-      total_burned += burn.actually_destroyed;
-      m_db->set_total_burned(total_burned);
-    }
+    // Per-height burn record for the destroyed portion (fee-burn share plus,
+    // pre-activation, the staker inflow) — the sole persisted per-block
+    // bookkeeping this path needs, so pop_block_from_blockchain can roll
+    // total_burned back. The amount was computed pre-add alongside the
+    // accrual target (see the staker-inflow redirect block above). Only
+    // written when nonzero: get_block_burn returns 0 for an absent height,
+    // so a zero row would carry no information (and pop's remove_block_burn
+    // tolerates the missing key).
+    m_db->add_block_burn(blockchain_height, block_burn_amount);
+    uint64_t total_burned = m_db->get_total_burned();
+    total_burned += block_burn_amount;
+    m_db->set_total_burned(total_burned);
   }
 
   MINFO("+++++ BLOCK SUCCESSFULLY ADDED" << std::endl << "id:\t" << id << std::endl << "PoW:\t" << proof_of_work << std::endl << "HEIGHT " << new_height-1 << ", difficulty:\t" << current_diffic << std::endl << "block reward: " << print_money(fee_summary + base_reward) << "(" << print_money(base_reward) << " + " << print_money(fee_summary) << "), coinbase_weight: " << coinbase_weight << ", cumulative weight: " << cumulative_block_weight << ", " << block_processing_time << "(" << target_calculating_time << "/" << longhash_calculating_time << ")ms");

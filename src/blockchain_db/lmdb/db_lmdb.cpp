@@ -4276,7 +4276,7 @@ void BlockchainLMDB::block_rtxn_abort() const
 }
 
 uint64_t BlockchainLMDB::add_block(const std::pair<block, blobdata>& blk, size_t block_weight, uint64_t long_term_block_weight, const difficulty_type& cumulative_difficulty, const uint64_t& coins_generated,
-    const std::vector<std::pair<transaction, blobdata>>& txs)
+    uint64_t archival_budget_accrual, const std::vector<std::pair<transaction, blobdata>>& txs)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
@@ -4294,7 +4294,7 @@ uint64_t BlockchainLMDB::add_block(const std::pair<block, blobdata>& blk, size_t
 
   try
   {
-    BlockchainDB::add_block(blk, block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, txs);
+    BlockchainDB::add_block(blk, block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, archival_budget_accrual, txs);
   }
   catch (const DB_ERROR_TXN_START& e)
   {
@@ -6733,10 +6733,11 @@ void BlockchainLMDB::revert_archival_epoch_close_at_height(uint64_t block_height
   delete_archival_r_market_for_epoch(settlement_epoch);
   delete_archival_sigma_work_for_epoch(settlement_epoch);
   // The frozen budget row reverts with the close family; the per-height
-  // accrual rows do NOT (they revert per popped block, blockchain.cpp pop
-  // path) — a pop-and-re-close re-sums the retained accrual rows and
-  // reproduces the row byte-identically (ARCHIVAL_BUDGET_SCHEDULE.md §3.2,
-  // KAT B3).
+  // accrual rows do NOT (each reverts with its own block's pop, in
+  // BlockchainDB::pop_block) — a pop-and-re-close re-sums the retained
+  // accrual rows plus the re-connecting block's freshly written row and
+  // reproduces the budget byte-identically (ARCHIVAL_BUDGET_SCHEDULE.md
+  // §3.2, KAT B3 and the epoch-boundary round-trip KAT).
   delete_archival_budget_for_epoch(settlement_epoch);
   const int log_del = mdb_del(*m_write_txn, m_archival_epoch_close_log, &log_k, nullptr);
   if (log_del && log_del != MDB_NOTFOUND)

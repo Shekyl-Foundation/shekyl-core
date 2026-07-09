@@ -489,7 +489,11 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
           try
           {
             uint64_t long_term_block_weight = core.get_blockchain_storage().get_next_long_term_block_weight(block_weight);
-            core.get_blockchain_storage().get_db().add_block(std::make_pair(b, block_to_blob(b)), block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, txs);
+            // Raw (non-verifying) import bypasses the Blockchain connect path,
+            // so the staker-inflow accrual amount is not computed here — same
+            // pre-existing gap as the burn/total_burned rows this path also
+            // skips (FOLLOWUPS: raw-import archival/burn bookkeeping parity).
+            core.get_blockchain_storage().get_db().add_block(std::make_pair(b, block_to_blob(b)), block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, 0, txs);
           }
           catch (const std::exception& e)
           {

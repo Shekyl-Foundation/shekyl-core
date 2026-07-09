@@ -931,6 +931,12 @@ public:
    * @param long_term_block_weight the long term weight of the block (transactions and all)
    * @param cumulative_difficulty the accumulated difficulty after this block
    * @param coins_generated the number of coins generated total after this block
+   * @param archival_budget_accrual the block's redirected staker inflow
+   *   (ARCHIVAL_BUDGET_SCHEDULE.md §3.1); 0 pre-activation or when the inflow
+   *   is zero. Computed by the caller BEFORE add_block so the hardfork
+   *   operand is the connecting block's own validated version, and written
+   *   here (keyed at the block's index) before the epoch-close hook fires,
+   *   so the close of an epoch sees its final block's row (F-B1a/F-B1b).
    * @param txs the transactions in the block
    *
    * @return the height of the chain post-addition
@@ -940,6 +946,7 @@ public:
                             , uint64_t long_term_block_weight
                             , const difficulty_type& cumulative_difficulty
                             , const uint64_t& coins_generated
+                            , uint64_t archival_budget_accrual
                             , const std::vector<std::pair<transaction, blobdata>>& txs
                             );
 

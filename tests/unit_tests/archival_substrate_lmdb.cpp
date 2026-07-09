@@ -1327,7 +1327,10 @@ namespace {
 /// unit test. add_block runs the production connect hooks, including
 /// process_archival_slash_at_height, which is the point: the slash KAT below
 /// exercises the scheduler at its production call site, not via a test shim.
-void append_minimal_blocks(BlockchainDB& db, uint64_t count)
+/// `accrual_per_block` rides into add_block as the redirected staker inflow
+/// (F-B1a): the DB layer writes the accrual row before the epoch-close hook,
+/// so the epoch-boundary KAT below can assert the close sums it.
+void append_minimal_blocks(BlockchainDB& db, uint64_t count, uint64_t accrual_per_block = 0)
 {
   crypto::hash prev = db.height() == 0
     ? crypto::null_hash : db.get_block_hash_from_height(db.height() - 1);
@@ -1351,7 +1354,7 @@ void append_minimal_blocks(BlockchainDB& db, uint64_t count)
     blk.miner_tx = std::move(miner_tx);
 
     db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
-      height + 1, 0, {});
+      height + 1, 0, accrual_per_block, {});
     prev = get_block_hash(blk);
   }
 }
@@ -1808,7 +1811,7 @@ TEST(archival_substrate_lmdb, emission_connect_pop_roundtrip_through_real_block_
   blk.tx_hashes.push_back(get_transaction_hash(tx));
 
   db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
-    connect_height + 1, 0, {std::make_pair(tx, tx_to_blob(tx))});
+    connect_height + 1, 0, 0, {std::make_pair(tx, tx_to_blob(tx))});
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
@@ -1889,7 +1892,7 @@ TEST(archival_substrate_lmdb, bond_post_connect_pop_roundtrip_through_real_block
   blk.tx_hashes.push_back(get_transaction_hash(tx));
 
   db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
-    connect_height + 1, 0, {std::make_pair(tx, tx_to_blob(tx))});
+    connect_height + 1, 0, 0, {std::make_pair(tx, tx_to_blob(tx))});
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
@@ -1910,4 +1913,74 @@ TEST(archival_substrate_lmdb, bond_post_connect_pop_roundtrip_through_real_block
   EXPECT_FALSE(db.get_archival_bond_value(vin.p_canonical_id, read))
     << "pop must remove the bond record";
   EXPECT_EQ(db.get_total_bonded_atomic(), 0u);
+}
+
+// ── F-B1a: production-path epoch boundary — budget(E) includes E's final block ──
+//
+// The substrate KATs B1–B3 above drive add_archival_budget_accrual and the
+// close hook directly, so they cannot see a connect-ORDERING bug. Before
+// F-B1a the accrual row was written by the Blockchain layer after
+// m_db->add_block returned — i.e., after the epoch-close hook had already
+// range-summed [E·SEB, (E+1)·SEB) — so the final block of every epoch was
+// missing from its own budget(E): a one-block under-mint per epoch and a
+// conservation gap against §2.2's redirect identity. The fix threads the
+// amount through add_block, which writes the row before the hooks fire.
+// This KAT drives the rows through the REAL add_block path and asserts the
+// close sums all SEB rows including the boundary block's; then pops the
+// boundary block and re-connects it, asserting the budget reproduces
+// byte-identically (the close revert retains prior accrual rows; the popped
+// block's own row reverts with the pop and is re-written on re-connect).
+TEST(archival_substrate_lmdb, budget_epoch_boundary_includes_final_block_through_real_block_path)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  // Per-block inflow. Any nonzero value makes an off-by-one sum distinct
+  // from the correct one; SEB·kAccrual vs (SEB-1)·kAccrual differ by kAccrual.
+  constexpr uint64_t kAccrual = 41;
+
+  // Epoch 0 closes while connecting block index SEB-1 (close operand SEB).
+  // Connect the first SEB-1 blocks, then the boundary block separately so
+  // the pre-close and post-close states are both observable.
+  append_minimal_blocks(db, kSeb - 1, kAccrual);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  ASSERT_FALSE(lmdb.has_archival_budget_row(0)) << "epoch 0 must not close early";
+
+  append_minimal_blocks(db, 1, kAccrual); // block index SEB-1: fires the close
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_TRUE(lmdb.has_archival_budget_row(0));
+  EXPECT_EQ(db.get_archival_budget(0), kSeb * kAccrual)
+    << "budget(0) must include the final block's accrual row (F-B1a)";
+  EXPECT_EQ(db.get_archival_budget_accrual(kSeb - 1), kAccrual)
+    << "the boundary block's row must exist (written before the close hook)";
+
+  // Pop the boundary block: the frozen budget row reverts with the close
+  // family; the block's own accrual row reverts with the pop (the DB-layer
+  // mirror of the connect-side write); prior blocks' rows are untouched.
+  block popped{};
+  std::vector<transaction> popped_txs;
+  fixture.db.pop_block(popped, popped_txs);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  EXPECT_FALSE(lmdb.has_archival_budget_row(0));
+  EXPECT_EQ(db.get_archival_budget_accrual(kSeb - 1), 0u)
+    << "pop must remove the popped block's accrual row";
+  EXPECT_EQ(db.get_archival_budget_accrual(kSeb - 2), kAccrual)
+    << "prior blocks' rows survive the pop";
+
+  // Re-connect the boundary block: its row is re-written pre-hook and the
+  // re-close reproduces the frozen budget byte-identically.
+  append_minimal_blocks(db, 1, kAccrual);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  ASSERT_TRUE(lmdb.has_archival_budget_row(0));
+  EXPECT_EQ(db.get_archival_budget(0), kSeb * kAccrual)
+    << "pop + re-connect must reproduce budget(0) byte-identically";
 }

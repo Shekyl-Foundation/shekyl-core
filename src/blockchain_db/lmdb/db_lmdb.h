@@ -337,6 +337,7 @@ public:
                             , uint64_t long_term_block_weight
                             , const difficulty_type& cumulative_difficulty
                             , const uint64_t& coins_generated
+                            , uint64_t archival_budget_accrual
                             , const std::vector<std::pair<transaction, blobdata>>& txs
                             );
 
