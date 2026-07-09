@@ -197,7 +197,7 @@ pub fn scenario_7_bootstrap(params: &SimParams) -> ScenarioConfig {
     }
 }
 
-pub fn scenario_8_late_tail(_params: &SimParams) -> ScenarioConfig {
+pub fn scenario_8_late_tail(params: &SimParams) -> ScenarioConfig {
     ScenarioConfig {
         name: "late_chain_tail".into(),
         description: "95%+ supply already emitted, high burn, fee-market-dominated economy over 5 years (starting at ~year 30)".into(),
@@ -219,7 +219,10 @@ pub fn scenario_8_late_tail(_params: &SimParams) -> ScenarioConfig {
         },
         fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.95,
-        genesis_height_offset: 30 * 262_800, // ~year 30
+        // ~year 30 in the configured chain timing (derived, not a literal —
+        // byte-identical at the default 262_800; see `fee_era` in
+        // budget_scenarios.rs for the drift rationale).
+        genesis_height_offset: 30 * params.blocks_per_year,
         archival_lock: None,
     }
 }

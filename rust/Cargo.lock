@@ -4308,6 +4308,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-archival-retention",
+ "shekyl-economics",
  "shekyl-standoff",
 ]
 
