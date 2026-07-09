@@ -7,14 +7,21 @@
 
 #include <boost/filesystem.hpp>
 #include <cstring>
+#include <fstream>
 #include <limits>
+#include <stdexcept>
+#include <string>
 #include <vector>
+
+#include <rapidjson/document.h>
+#include <rapidjson/istreamwrapper.h>
 
 #include "blockchain_db/lmdb/db_lmdb.h"
 #include "blockchain_db/shekyl_types.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_basic/hardfork.h"
 #include "shekyl/shekyl_ffi.h"
+#include "string_tools.h"
 
 using namespace cryptonote;
 
@@ -1657,4 +1664,171 @@ TEST(archival_substrate_lmdb, emission_claim_first_paying_set_once_and_pop_symme
   ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
   EXPECT_EQ(read.first_paying_emission_height, 0u);
   EXPECT_TRUE(read.claimed_settlement_epochs.empty());
+}
+
+// ── F-B5a/F-B5b regression: real add_block → add_transaction → pop_block ──
+//
+// The KATs above call apply/revert directly with explicit heights, so they
+// cannot see a defect in how the two production call sites derive those
+// heights. This one drives the emission vin through the real LMDB block
+// machinery and catches both findings:
+//
+//  - F-B5a: the connect arm ran inside add_transaction, before the subclass
+//    add_block writes the block_heights row, so deriving the height via
+//    get_block_height(blk_hash) threw BLOCK_DNE — every block carrying an
+//    emission vin failed to connect. The arm now reads height(), which at
+//    that point IS the connecting block's index (and verify's pin-(b)
+//    operand).
+//  - F-B5b: the connect journal keys on the block's index N, but pop_block's
+//    removed_block_height is the post-block chain height N+1 (the slash/close
+//    hooks' convention). Passing it through unconverted made the claim revert
+//    read an empty journal slot and silently no-op — the claimed set survived
+//    the pop and the journal row leaked. pop_block now reverts claims at
+//    removed_block_height - 1.
+
+namespace {
+
+/// Emission-vin operands from the shared connect KAT fixture
+/// (rust/shekyl-archival-retention/tests/fixtures/emission_connect_kat_v1.json,
+/// epochs {1, 2} — claimable once the chain reaches settled epoch 3).
+struct EmissionVinFixture {
+  std::vector<uint8_t> wire;
+  crypto::hash p_id{};
+  std::vector<uint64_t> settlement_epochs;
+  uint64_t total_reward = 0;
+};
+
+EmissionVinFixture load_emission_vin_fixture()
+{
+  std::ifstream ifs(EMISSION_CONNECT_KAT_FIXTURE_PATH);
+  if (!ifs.good())
+    throw std::runtime_error(std::string("missing emission-connect KAT fixture at ")
+      + EMISSION_CONNECT_KAT_FIXTURE_PATH);
+  rapidjson::IStreamWrapper wrapper(ifs);
+  rapidjson::Document doc;
+  doc.ParseStream(wrapper);
+  if (doc.HasParseError() || !doc.HasMember("emission_vin"))
+    throw std::runtime_error("invalid emission-connect KAT fixture");
+
+  const auto& vin = doc["emission_vin"];
+  EmissionVinFixture out{};
+  std::string bin;
+  if (!epee::string_tools::parse_hexstr_to_binbuff(std::string(vin["wire_hex"].GetString()), bin))
+    throw std::runtime_error("invalid wire hex in emission-connect KAT fixture");
+  out.wire.assign(bin.begin(), bin.end());
+  std::string pid_bin;
+  if (!epee::string_tools::parse_hexstr_to_binbuff(std::string(vin["p_canonical_id_hex"].GetString()), pid_bin)
+      || pid_bin.size() != sizeof(out.p_id.data))
+    throw std::runtime_error("invalid p_canonical_id in emission-connect KAT fixture");
+  std::memcpy(out.p_id.data, pid_bin.data(), pid_bin.size());
+  for (const auto& e : vin["settlement_epochs"].GetArray())
+    out.settlement_epochs.push_back(e.GetUint64());
+  for (const auto& a : vin["reward_amount_plain"].GetArray())
+    out.total_reward += a.GetUint64();
+  return out;
+}
+
+/// Minimal connectable emission tx: the fixture vin, one plaintext reward
+/// vout + one amount-0 change vout, an outPk commitment per vout (the vout
+/// loop in add_transaction requires it). rct type stays Null — nothing on
+/// this path verifies CT semantics (verify ran at check_tx_inputs in
+/// production; this KAT targets the connect/pop machinery).
+transaction make_connectable_emission_tx(const EmissionVinFixture& fx)
+{
+  transaction tx{};
+  tx.version = 2;
+
+  txin_archival_reward_emission vin{};
+  vin.canonical_bytes = fx.wire;
+  tx.vin.push_back(vin);
+
+  const uint64_t amounts[2] = {fx.total_reward, 0};
+  for (size_t i = 0; i < 2; ++i)
+  {
+    tx_out vout{};
+    vout.amount = amounts[i];
+    txout_to_tagged_key tagged{};
+    memset(&tagged.key, 0x60 + static_cast<int>(i), sizeof(tagged.key));
+    tagged.view_tag.data = 0;
+    vout.target = tagged;
+    tx.vout.push_back(vout);
+
+    rct::ctkey out_pk{};
+    memset(out_pk.mask.bytes, 0x70 + static_cast<int>(i), sizeof(out_pk.mask.bytes));
+    tx.rct_signatures.outPk.push_back(out_pk);
+    // The rctSigBase serializer requires one enc_amounts/enc_labels entry per
+    // vout regardless of type; filler is fine, nothing decrypts them here.
+    tx.rct_signatures.enc_amounts.push_back({});
+    tx.rct_signatures.enc_labels.push_back({});
+  }
+  return tx;
+}
+
+} // namespace
+
+TEST(archival_substrate_lmdb, emission_connect_pop_roundtrip_through_real_block_path)
+{
+  const EmissionVinFixture fx = load_emission_vin_fixture();
+  ASSERT_FALSE(fx.settlement_epochs.empty());
+  const uint64_t max_epoch = fx.settlement_epochs.back();
+
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  // Reach a height where every fixture epoch is settled and inside the claim
+  // window: the connect block's index N needs floor(N / SEB) > max_epoch.
+  const uint64_t target_height = (max_epoch + 1) * kSeb + 5;
+  append_minimal_blocks(db, target_height);
+  db.put_archival_bond_value(fx.p_id, unclaimed_bond());
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // Connect a block carrying the emission tx through the real add_block path
+  // (F-B5a: this call threw BLOCK_DNE from the connect arm before the fix).
+  const uint64_t connect_height = db.height();
+  const transaction tx = make_connectable_emission_tx(fx);
+
+  block blk{};
+  blk.major_version = 1;
+  blk.minor_version = 1;
+  blk.timestamp = 1500000000 + connect_height;
+  blk.prev_id = db.get_block_hash_from_height(connect_height - 1);
+  blk.curve_tree_root = crypto::null_hash;
+  blk.nonce = 0;
+  transaction miner_tx{};
+  miner_tx.version = 1;
+  miner_tx.unlock_time = connect_height + 60;
+  txin_gen gen{};
+  gen.height = connect_height;
+  miner_tx.vin.push_back(gen);
+  blk.miner_tx = std::move(miner_tx);
+  blk.tx_hashes.push_back(get_transaction_hash(tx));
+
+  db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
+    connect_height + 1, 0, {std::make_pair(tx, tx_to_blob(tx))});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(fx.p_id, read));
+  EXPECT_EQ(read.claimed_settlement_epochs, fx.settlement_epochs)
+    << "connect arm must have applied the claim at the real block height";
+  EXPECT_EQ(read.first_paying_emission_height, connect_height);
+
+  // Pop through the real path (F-B5b: before the fix the claim revert ran at
+  // N+1, found an empty journal slot, and the claimed set survived the pop).
+  block popped{};
+  std::vector<transaction> popped_txs;
+  fixture.db.pop_block(popped, popped_txs);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_EQ(popped_txs.size(), 1u);
+  ASSERT_TRUE(db.get_archival_bond_value(fx.p_id, read));
+  EXPECT_TRUE(read.claimed_settlement_epochs.empty())
+    << "pop must restore the journaled pre-image (empty claimed set)";
+  EXPECT_EQ(read.first_paying_emission_height, 0u);
 }

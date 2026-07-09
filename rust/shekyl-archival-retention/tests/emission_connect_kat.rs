@@ -44,9 +44,14 @@ fn decode_hex(s: &str) -> Vec<u8> {
 /// Deterministic structurally-valid vin: two claimed epochs, one shard,
 /// canonical-length filler keys/sigs. Mirrors `validate()`'s invariants
 /// (strictly increasing epochs, aligned work claims, positive amounts).
+///
+/// The epochs are the lowest claimable pair ({1, 2}, settled at tip epoch 3)
+/// so the real-LMDB connect/pop round-trip KAT
+/// (`tests/unit_tests/archival_substrate_lmdb.cpp`) only has to append
+/// ~3 settlement epochs of blocks to make them claimable at connect.
 fn build_connect_vin() -> ArchivalRewardEmissionVin {
     const SHARD: u64 = 7;
-    let epochs = [10u64, 11];
+    let epochs = [1u64, 2];
     let backing_pubkey = vec![0x22u8; SINGLE_KEY_CANONICAL_LEN];
     let pqc_pk_hash = hash_pqc_public_key(&backing_pubkey);
     ArchivalRewardEmissionVin {

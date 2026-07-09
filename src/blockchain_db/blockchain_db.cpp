@@ -256,7 +256,15 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
         vin_epochs, SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS, &vin_epochs_len);
       if (extract_rc != SHEKYL_EMISSION_VIN_OK || vin_epochs_len == 0)
         throw std::runtime_error("FATAL: unparseable archival emission vin at connect");
-      const uint64_t block_height = get_block_height(blk_hash);
+      // Height operand (F-B5a): height() here is the connecting block's index
+      // N — add_transaction runs from add_block before the subclass writes the
+      // block_heights row, so get_block_height(blk_hash) would throw BLOCK_DNE.
+      // N is also the pin-(b) operand: verify's claim-age bound read
+      // chain_height = height() at the same pre-connect point, so the two
+      // sides derive the same settled epoch. The claim journal keys on N; the
+      // pop-side revert converts from its N+1 chain-height convention
+      // (see pop_block).
+      const uint64_t block_height = height();
       apply_archival_emission_claim(block_height, p_canonical_id,
         std::vector<uint64_t>(vin_epochs, vin_epochs + vin_epochs_len));
       emission_tx = true;
@@ -516,9 +524,17 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   // after those two, completing the mirror of the connect order. The
   // restored fields (claimed set, first_paying_emission_height) are disjoint
   // from what the slash revert touches, and the journal is empty for any
-  // block without emission vins, so this is a no-op until C-1 wires the
-  // connect-side caller.
-  revert_archival_emission_claims_at_height(removed_block_height);
+  // block without emission vins.
+  //
+  // Height convention (F-B5b): the slash/close hooks key on the chain height
+  // AFTER the block (connect fires them at prev_height + 1), which equals
+  // removed_block_height here. The claim journal keys on the block's INDEX
+  // N = removed_block_height - 1, because the connect arm must journal at
+  // the same operand verify's claim-age bound used (pin (b): both read
+  // height() before the block row exists). Convert, don't unify — moving
+  // the journal to N + 1 would shift the connect-side settled-epoch operand
+  // off verify's at every epoch boundary.
+  revert_archival_emission_claims_at_height(removed_block_height - 1);
   remove_block();
 
   const uint64_t block_height = removed_block_height;

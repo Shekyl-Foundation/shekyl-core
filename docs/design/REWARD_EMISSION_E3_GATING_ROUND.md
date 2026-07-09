@@ -1289,3 +1289,43 @@ rule.
   (accrual and shim are consensus-inert before the whitelist byte), so
   criterion 2 fails and the exception is not invoked. The PR carries this
   §9 operand enumeration as its §11.1-pattern evidence.
+
+### 9.8 Findings F-B5a / F-B5b — connect-arm height operands — **FIXED**
+
+Block-5 file:line review of the connect arm surfaced two defects in how
+the production call sites derive the heights the §6.3 journal keys on.
+The WS-2 KATs could not see either: they call apply/revert directly with
+explicit heights, bypassing the derivation under test.
+
+- **F-B5a (connect crash).** The emission arm in
+  `BlockchainDB::add_transaction` derived the block height via
+  `get_block_height(blk_hash)` — but `add_transaction` runs from
+  `add_block` *before* the LMDB subclass writes the `block_heights` row,
+  so the lookup threw `BLOCK_DNE` and every block carrying an emission
+  vin failed to connect. **Fix:** the arm reads `height()`, which at that
+  point is the connecting block's index N — also verify's pin-(b)
+  operand (`chain_height = height()` read at the same pre-connect
+  point), so connect and verify derive the same settled epoch by
+  construction. The bond-post arm carried the identical latent crash
+  (pre-dating C-1); fixed in its own commit.
+- **F-B5b (revert no-op → double-mint).** The connect journal keys on
+  the block index N, but `pop_block`'s `removed_block_height` is the
+  post-block chain height N+1 (the slash/close hooks' convention).
+  Passed through unconverted, the claim revert read an empty journal
+  slot and silently no-opped: the claimed-epoch set survived the pop,
+  the journal row leaked, and a re-mined claim for the same epochs
+  would be rejected while a *different* epoch set double-counted
+  `first_paying_emission_height`. **Fix:** `pop_block` reverts claims
+  at `removed_block_height - 1`. Convert, don't unify — journaling at
+  N+1 instead would shift the connect-side settled-epoch operand off
+  verify's at every epoch boundary.
+- **Armed KAT:** `emission_connect_pop_roundtrip_through_real_block_path`
+  (`tests/unit_tests/archival_substrate_lmdb.cpp`) drives the shared
+  fixture vin through the real `add_block → add_transaction → pop_block`
+  machinery against real LMDB. Verified armed against both findings
+  independently: unfixed F-B5a reproduces the `BLOCK_DNE` throw at
+  connect; unfixed F-B5b (with F-B5a fixed) fails the post-pop
+  pre-image assertions. The fixture's claimed epochs moved from
+  {10, 11} to {1, 2} so the KAT reaches claimability after ~3
+  settlement epochs of appended blocks (~2 s), matching the slash
+  scheduler KAT's scale.

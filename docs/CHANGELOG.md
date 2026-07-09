@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **consensus: emission connect-arm height operands (F-B5a / F-B5b,
+  `REWARD_EMISSION_E3_GATING_ROUND.md` §9.8).** The emission arm in
+  `BlockchainDB::add_transaction` derived its height via
+  `get_block_height(blk_hash)` before the block's `block_heights` row
+  exists, throwing `BLOCK_DNE` on every block carrying an emission vin
+  (F-B5a) — it now reads `height()`, the connecting block's index and
+  verify's pin-(b) operand. `pop_block` passed its post-block chain
+  height (N+1) to the claim-journal revert keyed on the block index N,
+  making the revert a silent no-op that left the claimed-epoch set
+  standing across a pop (F-B5b) — it now reverts at
+  `removed_block_height - 1`. New real-LMDB KAT
+  (`emission_connect_pop_roundtrip_through_real_block_path`) drives the
+  shared fixture vin through the real `add_block → pop_block` machinery
+  and was verified armed against each finding independently; the
+  fixture's claimed epochs moved to {1, 2} to keep the chain build
+  short.
+
 ### Added
 
 - **consensus: Q11 balance-exclusion arming KAT — the ratified reopen

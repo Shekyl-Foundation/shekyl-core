@@ -99,7 +99,10 @@ public:
 
   EmissionConnectDB() { m_open = true; }
 
-  uint64_t get_block_height(const crypto::hash&) const override { return CONNECT_HEIGHT; }
+  // The connect arm reads height() — the count of stored blocks, which at
+  // add_transaction time is the connecting block's index (F-B5a: the
+  // block_heights row does not exist yet, so a hash lookup would throw).
+  uint64_t height() const override { return CONNECT_HEIGHT; }
 
   void apply_archival_emission_claim(uint64_t block_height, const crypto::hash& p_id,
     const std::vector<uint64_t>& settlement_epochs) override
