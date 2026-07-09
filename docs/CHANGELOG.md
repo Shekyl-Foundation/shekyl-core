@@ -4,6 +4,24 @@
 
 ### Fixed
 
+- **consensus: redirect keys on bl.major_version + CI tripwire (F-B1b
+  hardening, `REWARD_EMISSION_E3_GATING_ROUND.md` §9.9,
+  `ARCHIVAL_BUDGET_SCHEDULE.md` §2.2).** The burn-vs-accrue decision
+  read `get_current_version()` — correct pre-`add_block` (verified at
+  source: the previous block's `HardFork::add` advances to the
+  connecting block's own voted version, and `m_hardfork->check(bl)`
+  enforces `bl.major_version == get_current_version()` upstream), but
+  resting on the height+1 advance convention §2.2 pins against, and
+  keyed to a different height notion than the split it gates. Now keys
+  on `bl.major_version` — the block's own consensus-checked version,
+  explicit and convention-free. New grep tripwire in
+  `scripts/ci/check_archival_reward_gates.sh` (consensus-invariants
+  gate) fails on `get_block_reward` / `get_current_version` /
+  `get_ideal_version(` inside the redirect block, with positive anchor
+  checks so block moves can't silently retire it; verified armed. The
+  end-to-end conservation KAT (activation-boundary fixture, core-tests
+  harness) is the prioritized fast-follow — `docs/FOLLOWUPS.md` V3.0.
+
 - **consensus: budget emission leg uses verify's modulated base_reward
   (F-B1c-c2 disposition (a), `REWARD_EMISSION_E3_GATING_ROUND.md` §9.9,
   `ARCHIVAL_BUDGET_SCHEDULE.md` §1).** The staker-inflow emission leg

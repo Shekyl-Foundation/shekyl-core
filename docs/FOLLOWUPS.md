@@ -1229,6 +1229,29 @@ sustainability is unaffected by the recalibration.
   `REWARD_EMISSION_VIN_PLAN.md` §9, `STAKER_ARCHIVAL_SIM.md` §L12. **Target: V3.0
   (pre-genesis; blocks the final redundancy-band seal).**
 
+- **End-to-end supply-conservation KAT with an activation-boundary block
+  — the C-1 budget fast-follow (c2 review round, 2026-07-09).** The
+  F-B1c-c2 fix makes the accrual's operand identity with verify hold by
+  construction (same `base_reward` variable), and the redirect's version
+  operand is now `bl.major_version` with a CI tripwire
+  (`scripts/ci/check_archival_reward_gates.sh`). What no existing guard
+  covers is the **branch-selection class**: a wrong burn-vs-accrue
+  decision fires with byte-identical operands, invisible to operand
+  KATs and to the grep tripwire's negative checks alone. The
+  independent guard is the conservation identity —
+  `accrual + burn + coinbase == already_generated_coins advance` —
+  driven through the **real connect path** (`handle_block_to_main_chain`,
+  not the LMDB-substrate harness), with an **activation-boundary block
+  in the fixture** (multi-entry fork table): burn-when-should-accrue
+  breaks the identity at exactly the boundary block. This is the KAT
+  that would have caught the F-B1b class directly, and it also guards
+  the genesis exclusion and the split. Needs a core-tests-level
+  harness. **Target: V3.0 (prioritized fast-follow to the C-1 budget
+  PR — lands before the emission leg's Stage-3 close, not deferred to
+  post-genesis).** Cross-refs: `REWARD_EMISSION_E3_GATING_ROUND.md`
+  §9.9 (F-B1b hardening + fast-follow bullets),
+  `ARCHIVAL_BUDGET_SCHEDULE.md` §2.2.
+
 - **Archival-funding demand-insulation sim — the F-B1c-c2 (b)-reopen
   evidence (post-closure pin, 2026-07-09).** The c2 adjudication
   (`REWARD_EMISSION_E3_GATING_ROUND.md` §9.9) fixed the budget's

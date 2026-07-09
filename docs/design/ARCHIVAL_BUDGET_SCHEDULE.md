@@ -170,13 +170,24 @@ post-activation block:  staker_inflow(h) → budget accrual   (emittable;   this
 ```
 
 Target selection is by **that block's own height's fork status** — never
-the tip's. Implementation note (F-B1b): the connect site reads
-`m_hardfork->get_current_version()` **before** `m_db->add_block`, where it
-is exactly the connecting block's validated version (the operand
-`validate_miner_transaction` received). Reading it after `add_block` is
-wrong — `HardFork::add` advances `current_fork_index` via
-`get_voted_fork_index(height + 1)`, the *next* block's version, which
-flips the redirect one block early at an activation boundary. Three
+the tip's. Implementation note (F-B1b, hardened during the c2 review):
+the connect site keys the redirect on **`bl.major_version`** — the
+block's own declared version, consensus-bound by `m_hardfork->check(bl)`
+(`do_check`: `bl.major_version ==` the voted current version) before the
+redirect block is reachable. This is explicit per-block anchoring with no
+API convention to reason about. The rejected alternatives:
+`get_current_version()` read pre-`add_block` *happens* to equal
+`bl.major_version` (the previous block's `HardFork::add` advanced
+`current_fork_index` via `get_voted_fork_index(height + 1)`, the
+connecting block's own voted version) — correct-but-fragile, resting on
+the height+1 advance convention this pin was written to stop depending
+on, and outright wrong if read post-add (the original F-B1b bug: the
+*next* block's version, one-block-early flip at activation).
+`get_ideal_version(h)` is the static-table lookup and ignores the vote
+threshold, so it can disagree with the version the block was validated
+as. A CI tripwire (`scripts/ci/check_archival_reward_gates.sh`) fails
+the gate on any `get_current_version` / `get_ideal_version` /
+`get_block_reward` reintroduction inside the redirect block. Three
 properties follow by construction:
 
 1. **The straddle is correct.** Each block's inflow lands in exactly one

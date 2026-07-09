@@ -1446,7 +1446,44 @@ structural fix.
   hooks reproduces the one-row-short sum, `409959` vs `410000`), then
   pops the boundary block (frozen row reverts with the close family,
   the block's own accrual row reverts with the pop, prior rows
-  survive) and re-connects it (byte-identical re-close). F-B1b's proof
-  is by construction — the operand is read at the same pre-add point
-  verify reads it — and is pinned by the redirect block's comment and
-  §2.2's implementation note.
+  survive) and re-connects it (byte-identical re-close).
+- **F-B1b hardening (c2 review round).** The maintainer's review of the
+  c2 fix flagged the redirect's version operand — still
+  `get_current_version()`, the tip-relative API — as fragile even in
+  its pre-add position: the split two lines below keys on
+  `blockchain_height` explicitly, while the burn-vs-accrue decision
+  keyed on an API whose correctness rests on the height+1 advance
+  convention (§2.2 was written to stop depending on exactly that).
+  Verified at source before changing: the pre-add read *is* correct —
+  `HardFork::add` for block `h−1` advances `current_fork_index` via
+  `get_voted_fork_index(h)`, the connecting block's own voted version
+  (`hardfork.cpp:155`), and independently `m_hardfork->check(bl)`
+  (`blockchain.cpp:4915`, `do_check` at `hardfork.cpp:111`) enforces
+  `bl.major_version == get_current_version()` before the redirect is
+  reachable — so the activation block **accrues** under the current
+  form and no one-epoch budget error exists. The operand is
+  nevertheless replaced with **`bl.major_version`**: the block's own
+  declared, consensus-checked version — explicit, convention-free,
+  matching the `blockchain_height` anchoring the split already uses.
+  (`get_ideal_version(h)` was considered and rejected: it is the
+  static-table lookup, ignores the vote threshold, and can disagree
+  with the version the block was validated as.) A **CI tripwire**
+  (`scripts/ci/check_archival_reward_gates.sh`, wired into the
+  consensus-invariants gate) extracts the redirect block by its
+  comment anchor and fails on any `get_block_reward`,
+  `get_current_version`, or `get_ideal_version(` reintroduction inside
+  it, with positive anchor checks (`bl.major_version`,
+  `compute_emission_split`) so a refactor that moves the block cannot
+  silently retire the gate — verified armed (reverting the operand
+  fails the gate on both the negative and anchor checks).
+- **Fast-follow (prioritized): end-to-end conservation KAT.** The
+  operand-identity construction cannot cover the *branch-selection*
+  class — a wrong burn-vs-accrue decision fires with identical
+  operands. The independent guard is the conservation identity
+  `accrual + burn + coinbase == ledger advance` driven through the
+  real connect path with an **activation-boundary block in the
+  fixture** (burn-when-should-accrue breaks the identity at exactly
+  that block). Needs a core-tests-level harness (multi-entry fork
+  table + real block flow), out of this PR's LMDB-substrate KAT
+  reach — tracked in `docs/FOLLOWUPS.md` V3.0 queue as the C-1
+  fast-follow.
