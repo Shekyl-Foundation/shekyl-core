@@ -62,9 +62,14 @@ calibrations as post-testnet work. This spec defines how the purse
 **Source chain (verified at source, 2026-07-08).** The single source of
 truth is `config/economics_params.json`
 (`shekyl_staker_emission_share: 150000`, `shekyl_staker_emission_decay:
-900000`, `shekyl_staker_pool_share: 250000`; scale 10⁶). Two build-time
-generators consume it — no hand-written copy exists on either side of the
-FFI:
+900000`, `shekyl_staker_pool_share: 250000`). The values are **scaled
+fixed-point integers**, `SCALE = 1 000 000` (`SHEKYL_FIXED_POINT_SCALE`;
+`shekyl-economics/src/params.rs` `SCALE`) — `150000` ≡ 15 %, `900000` ≡
+0.90, `250000` ≡ 25 %. This is the same `SCALE` the write site's
+`mul_scale` divides by (`params.rs:110–113`), so a grep for the decimal
+forms will not find them; grep the fixed-point integers. Two build-time
+generators consume the JSON — no hand-written copy exists on either side
+of the FFI:
 
 - **C++ consensus path:** `cmake/generate_economics_params.py`
   (wired at `CMakeLists.txt:776–778`) emits
@@ -77,12 +82,35 @@ FFI:
   from what it is handed — it holds no second copy of the values on the
   consensus path.
 - **Rust-side consumers (sim / local economics):**
-  `shekyl-economics/build.rs` reads the **same JSON** at build time into
-  `GENERATED_STAKER_EMISSION_{SHARE,DECAY}` (`params.rs:21–26`), with the
-  in-file comment citing the 2026-05 FFI constant-drift audit as the
-  reason it reads the JSON rather than literal-coding.
+  `shekyl-economics/build.rs` reads the **same JSON** at build time and
+  writes `GENERATED_STAKER_EMISSION_{SHARE,DECAY}` into
+  `OUT_DIR/params_generated.rs`; `params.rs:21–26` merely **aliases**
+  those generated consts. The in-file comment cites the 2026-05 FFI
+  constant-drift audit as the reason it reads the JSON rather than
+  literal-coding.
 
-To change the amounts, edit the JSON; both generators rebuild from it.
+**To change the amounts, edit the JSON — never the consts.** The
+`GENERATED_*` values are build artifacts regenerated on every build
+(`cargo:rerun-if-changed` on the JSON); a maintainer who traces
+`STAKER_EMISSION_SHARE` to `params.rs`, sees `= GENERATED_…`, and edits
+there has found an alias of the artifact, not the source.
+
+**Drift binding (why the source-of-truth claim is durable, not just true
+today).** `shekyl-economics/src/digest.rs` hashes the **resolved**
+`EconomicParams` values — canonical fixed-width LE preimage, Blake2b-256,
+format-version tag; it deliberately does **not** hash the raw JSON bytes
+(whitespace/key-order drift would false-positive, per the module's
+rejected-alternatives note). `params_digest` covers `staker_pool_share`
+directly; the emission share/decay ride the **composed**
+`snapshot_calibration_digest` (`shekyl-engine-core`), which layers the
+staker-emission constants and tier table on top. Today this binding is a
+**calibration-drift detector and C4 fixture-lineage guard**
+(`CalibrationStamp.params_digest`), not a consensus check — so it catches
+a JSON⁄build divergence at fixture/test time, not at block validation.
+When the servo lands (§8) its gain/signal parameters become a **new
+generated field family** and must join this digest surface (a breaking
+layout change per `digest.rs`'s format-version rule); whether the digest
+should also be consensus-checked is a question for that round.
 
 **Definition.**
 
@@ -247,7 +275,54 @@ The handling is already structural, inherited from M1:
   the builder must not beacon a zero row into the thin timing window the
   M1 arc closed (KAT B4 arms the omission).
 
-## 6. Armed KATs
+## 6. Integer determinism — three pins
+
+All budget arithmetic is integer fixed-point, and that is load-bearing,
+not hygiene: the conservation argument (§2.2, and Form-C's
+`reward_P = floor(budget · capped_P / Σwork)`) is a theorem about integer
+arithmetic with a fixed rounding direction. Two nodes must compute the
+**bit-identical** mint or the zero-tolerance recompute rejects honest
+claims (or admits divergent ones) — floats do not reproduce across
+compilers/architectures/optimization levels, and a last-ULP divergence is
+a fork. Being integer is necessary but not sufficient; three seams can
+lose determinism with every value still nominally an integer:
+
+1. **Rounding direction is pinned per operation, not per policy.**
+   `reward_share_floor` floors and the dust never mints
+   (`reward_arithmetic.rs:128–134`); `mul_scale` floors by `/SCALE`
+   (`params.rs:110–113`). Every future consensus-visible fixed-point
+   operation — the servo's mul and division first among them — pins its
+   direction the same way at spec time. "It's integer division" is not a
+   pin; *which way, at which step* is.
+2. **Evaluation order is part of the consensus rule.** `a·b/d` and
+   `(a/d)·b` produce different integers under floor, so the operand
+   order of every composed fixed-point expression is **frozen — do not
+   reassociate**. A "simplify this expression" refactor that
+   reassociates changes the rounding without changing any type; treat it
+   as a consensus change (the integer analogue of the transcript-ordering
+   discipline). The landed shapes are the templates: `mul_div_floor(a,
+   b, d)` = multiply-then-divide, one divide, last
+   (`reward_arithmetic.rs:119–125`); `burn.rs:73–76` chains `mul_scale`
+   in documented order.
+3. **One evaluator across the FFI; intermediates at pinned width.** Both
+   helpers promote to **u128 before the divide** (verified:
+   `mul_div_floor` `u128::from(a).saturating_mul(…) / u128::from(d)`;
+   `mul_scale` likewise), so the multiply cannot wrap at u64 on any
+   platform. The C++/Rust seam is foreclosed **structurally**: the
+   consensus arithmetic has exactly one implementation (Rust); C++
+   passes operands as FFI arguments and consumes results
+   (`compute_emission_split` → `shekyl_calc_emission_share`), it never
+   re-evaluates the formula. **Pin:** if any future work gives C++ a
+   parallel evaluation of any budget/emission expression, it requires a
+   cross-language KAT running identical inputs through both paths and
+   asserting bit-equality — but the preferred disposition is to never
+   create the second evaluator.
+
+The servo (§8's reopening) is the next place all three pins apply at
+once: a new composed fixed-point expression, consensus-visible, crossing
+the FFI.
+
+## 7. Armed KATs
 
 | # | KAT | Property armed |
 |---|-----|----------------|
@@ -260,7 +335,7 @@ B1/B2/B3 are C++ substrate KATs (`archival_substrate_lmdb.cpp` family);
 B4 spans the Rust wire/verify KATs (landed classes) plus the builder-side
 omission test when the claim-builder lands.
 
-## 7. Rule-21 reopenings
+## 8. Rule-21 reopenings
 
 - **Roll-forward on expiry** — §4's clause (economics evidence).
 - **Budget source composition** — reopens iff a second inflow stream is
@@ -305,12 +380,21 @@ omission test when the claim-builder lands.
   unit. This is the coinbase-forecloses-staker-payout pin applied one
   level up, to the servo's marginal draw; the servo's design round must
   arm a B1-shaped conservation KAT over the widened three-way split.
+  **Arithmetic pin:** `budget_eff` is the numerator cap, so a one-unit
+  divergence between nodes computing it independently is a consensus
+  split — the servo's new mul and division carry §6's three pins in
+  full: rounding direction pinned per operation (the
+  `reward_share_floor` discipline — u128 intermediate, floor, dust
+  never mints), evaluation order frozen at spec time, and a single Rust
+  evaluator behind the FFI. "Same write site" without "same pinned
+  rounding" is half the invariant. The servo's parameters also join the
+  §1 digest surface (format-version bump per `digest.rs`).
 - **Per-height row retention** — reopens iff the finality boundary lands
   (the round's §6.5/§8.2 trigger): prune-against-finalized may shorten
   accrual-row retention to the finality depth; same round that retires the
   claimed-set journal.
 
-## 8. Relation to C-1
+## 9. Relation to C-1
 
 This spec is **commit-block 1 of the C-1 PR** once ratified (the accrual
 and frozen rows are consensus-inert until the whitelist flip — nothing
