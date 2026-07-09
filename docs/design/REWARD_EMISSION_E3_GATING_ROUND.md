@@ -819,9 +819,14 @@ C-1-blocked piece (the block-level `(P,E)` pass, which iterates a variant
 type that doesn't exist until C-1's transport shim). Items 4, 5 remain
 open in dependency order. **The C-1 pre-flight ran 2026-07-08 against
 `dev` `6671d565b` (after #269/#271/#272 landed) — executed in §9**: all
-merge blockers green, dispatch anchors confirmed, two findings for
-ratification (`budget(E)` production source, §9.3; `VARIANT_TAG`
-`0x06 → 0x04` correction, §9.4).
+merge blockers green, dispatch anchors confirmed, two findings — both
+dispositioned same day. F-C1b (`VARIANT_TAG 0x06 → 0x04`) **ratified**
+(§9.4). F-C1a (`budget(E)` production source) ratified in direction but
+**gated on a spec-first round**:
+[`ARCHIVAL_BUDGET_SCHEDULE.md`](ARCHIVAL_BUDGET_SCHEDULE.md) pins the
+redirect-the-write straddle transition, reorg-across-fork symmetry, and
+zero-budget-epoch handling (§9.3 disposition); **item 4 does not open
+until that spec is ratified.**
 
 ### 7.1 Next action — PR-E3 implementation pre-flight (re-pin to current `dev`)
 
@@ -942,7 +947,10 @@ production site at the branch head. Outcome: **all merge blockers green,
 all dispatch anchors confirmed, plus two findings** — one design gap that
 blocks the cut (§9.3, `budget(E)` has no production source) and one stale
 consensus-facing pin that needs a ratified correction before the wire
-freezes around it (§9.4, the `VARIANT_TAG 0x06`).
+freezes around it (§9.4, the `VARIANT_TAG 0x06`). *Both dispositioned
+2026-07-08 — see the ratification boxes in §9.3 (spec-first:
+[`ARCHIVAL_BUDGET_SCHEDULE.md`](ARCHIVAL_BUDGET_SCHEDULE.md)) and §9.4
+(`0x04` ratified).*
 
 ### 9.1 Merge-blocker status — all green
 
@@ -1021,6 +1029,34 @@ genesis-era claim-rate shows systematic budget stranding that changes the
 archival-incentive calculus (economics evidence, not preference), via a
 design round on the economics doc with `STAKER_ARCHIVAL_SIM.md` re-run.
 
+> **Disposition (ratified 2026-07-08): direction ratified, NOT
+> build-ready — spec-first.** The accumulator + frozen-close-row +
+> under-mint-on-expiry shape is ratified, but the recommendation as
+> written carried a supply-conservation gap: "`budget(E)` = sum of
+> staker inflow over E's blocks" taken literally includes the
+> **pre-activation burned portion** in the epoch straddling the
+> activation height — emitting coins that were already destroyed, a
+> genesis-frozen over-mint. The ratified structure that dissolves it is
+> **redirect-the-write**: the fork switches the *target* of the existing
+> per-height `staker_inflow` write (pre-activation → burn record;
+> post-activation → budget accrual), per each block's own height —
+> making the straddle correct by construction, burn-stop/accrual-start
+> atomic (one write, redirected), and reorg symmetry inherited from the
+> landed burn-record pop idiom. "Consensus-inert until the flip" is
+> re-scoped accordingly: the accrual **starts at activation**, never
+> runs pre-flip recording budget for burned inflow. Budget is the other
+> half of the supply-conservation equation the M-2 arc protected, so it
+> gets what the emission half got: a spec —
+> [`ARCHIVAL_BUDGET_SCHEDULE.md`](ARCHIVAL_BUDGET_SCHEDULE.md) (gate 1),
+> pinning the straddle transition (§2), the three pop-symmetric writes
+> (§3), expiry under-mint (§4), zero-budget epochs as structurally
+> non-claimable via the M1 §2.3 positivity path with the builder's
+> single omission predicate covering the budget factor (§5), and four
+> armed KATs including reorg-across-the-fork (§6). **C-1's §9.5 build
+> list does not open until that spec is ratified** — every downstream
+> piece assumes `budget(E)` means "emittable inflow for E," which is
+> exactly what the spec pins.
+
 ### 9.4 Finding F-C1b — the `VARIANT_TAG 0x06` pin is stale — recommend **`0x04`**
 
 The `0x06` pin derives from the plan's tag inventory
@@ -1043,6 +1079,14 @@ tag (`emission_wire.rs:47`), and lands the stale-doc corrections in the
 plan + genesis registry as §1.1-class fixes inside the C-1 PR. This is a
 consensus-facing wire byte: the pin is presented here for ratification,
 not silently flipped.
+
+> **Disposition (ratified 2026-07-08): `0x04`.** Independently verified:
+> the claim-era retirement removed `txin_stake_claim` (`0xf2`/`0xf3`
+> retired-never-reassigned), `0x04` is the next free dense txin tag, and
+> it is the value the landed Rust wire already uses — the plan's `0x06`
+> is the pre-renumber inventory, stale. The byte-for-byte alignment with
+> the Rust wire tag is the tell. C-1 pins `VARIANT_TAG 0x04` and carries
+> the plan/genesis-registry stale-doc corrections.
 
 ### 9.5 C-1 scope enumeration (the build list, in dependency order)
 

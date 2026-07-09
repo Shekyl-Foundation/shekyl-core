@@ -20,6 +20,29 @@
   assigns it; recommended: pin `0x04`, aligned with the Rust wire tag).
   C-1 scope enumerated in §9.5; E4's deletion surface shrank
   (`txin_stake_claim` already deleted by the claim-era retirement PR-4).
+  **Both findings dispositioned same day:** F-C1b **ratified at `0x04`**;
+  F-C1a ratified in direction but gated on a spec-first round — the
+  as-recommended phrasing carried a straddle-epoch over-mint (the epoch
+  containing the activation height mixes burned and emittable inflow;
+  activation is HF-gated, not epoch-aligned).
+
+- **docs: `ARCHIVAL_BUDGET_SCHEDULE.md` — gate-1 `budget(E)` spec (DRAFT,
+  awaiting ratification; unblocks C-1 item 4)**. Pins: `budget(E)` =
+  post-activation staker inflow over E's blocks, via **redirect-the-write**
+  (the fork switches the target of the single per-height `staker_inflow`
+  write — pre-activation → burn record, post-activation → budget accrual,
+  by each block's own height) so the straddle is correct by construction,
+  burn-stop/accrual-start are atomic, and pop symmetry is inherited from
+  the landed burn-record idiom; three pop-symmetric writes (per-height
+  accrual row mirroring `block_burn`; frozen `archival_budget` close row
+  beside `Σwork(E)`, deleted by the close revert, pruned with the epoch
+  family; verify reads the frozen row in the snapshot gather — no new
+  live operand); expiry = implicit under-mint (R1.B posture, rule-21
+  reopen on economics evidence); zero-budget epochs structurally
+  non-claimable through the M1 §2.3 positivity path, with the builder's
+  single positive-share omission predicate named to cover the budget
+  factor; four armed KATs (straddle conservation, reorg-across-the-fork,
+  close/revert symmetry, zero-budget omission/rejection).
 
 - **wallet: GF-4b backing-lineage pre-join wiring — sweep, lineage ladder,
   `BackingSet`; the `REWARD_EMISSION_VIN_PLAN.md` §8.0.3 C-1 activation
