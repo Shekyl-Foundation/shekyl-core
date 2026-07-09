@@ -15,6 +15,7 @@ use axum::http::{header, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use base64::Engine as _;
+use subtle::ConstantTimeEq;
 
 /// Auth configuration for the RPC listener.
 #[derive(Debug, Clone)]
@@ -25,7 +26,8 @@ pub enum AuthConfig {
     Basic {
         /// Username.
         username: String,
-        /// Password.
+        /// Password. Compared constant-time against the Authorization
+        /// header; treat as a secret under `35-secure-memory.mdc`.
         password: String,
     },
 }
@@ -63,19 +65,23 @@ impl AuthConfig {
                 else {
                     return false;
                 };
-                let Ok(decoded) = String::from_utf8(bytes) else {
-                    return false;
-                };
-                let Some((u, p)) = decoded.split_once(':') else {
-                    return false;
-                };
-                // Phase 4a: byte equality. Constant-time compare is a
-                // follow-up when credential material is treated as a
-                // long-lived secret under 35-secure-memory.mdc.
-                u == username && p == password
+                // Compare the full `user:pass` blob constant-time so we do
+                // not leak which field mismatched. Length mismatch still
+                // short-circuits (inherent to variable-length secrets);
+                // content comparison uses `subtle::ConstantTimeEq`.
+                let expected = format!("{username}:{password}");
+                ct_eq_bytes(&bytes, expected.as_bytes())
             }
         }
     }
+}
+
+/// Constant-time equality for equal-length slices; `false` on length mismatch.
+fn ct_eq_bytes(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    bool::from(a.ct_eq(b))
 }
 
 /// Axum middleware: reject unauthorized requests with HTTP 401.
@@ -100,5 +106,42 @@ pub async fn require_basic_auth(
             Body::from("unauthorized"),
         )
             .into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn basic_header(user: &str, pass: &str) -> String {
+        let enc = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
+        format!("Basic {enc}")
+    }
+
+    #[test]
+    fn accepts_matching_credentials() {
+        let auth = AuthConfig::Basic {
+            username: "alice".into(),
+            password: "secret".into(),
+        };
+        assert!(auth.check(Some(&basic_header("alice", "secret"))));
+    }
+
+    #[test]
+    fn rejects_wrong_password() {
+        let auth = AuthConfig::Basic {
+            username: "alice".into(),
+            password: "secret".into(),
+        };
+        assert!(!auth.check(Some(&basic_header("alice", "wrong"))));
+    }
+
+    #[test]
+    fn rejects_missing_header() {
+        let auth = AuthConfig::Basic {
+            username: "alice".into(),
+            password: "secret".into(),
+        };
+        assert!(!auth.check(None));
     }
 }

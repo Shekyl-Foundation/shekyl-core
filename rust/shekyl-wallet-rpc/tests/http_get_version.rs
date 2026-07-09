@@ -42,6 +42,22 @@ async fn post_json(auth: AuthConfig, body: Value) -> (StatusCode, Value) {
     (status, json)
 }
 
+async fn post_raw(auth: AuthConfig, body: &'static [u8]) -> (StatusCode, Value) {
+    let state = test_state(auth);
+    let app = build_router(state);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/")
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    let response = app.oneshot(req).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, json)
+}
+
 async fn post_json_with_auth(user: &str, pass: &str, body: Value) -> (StatusCode, Value) {
     use base64::Engine as _;
     let cred = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
@@ -62,6 +78,13 @@ async fn post_json_with_auth(user: &str, pass: &str, body: Value) -> (StatusCode
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let json: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     (status, json)
+}
+
+/// Split an HTTP/1.1 response into (headers, body) on the `\r\n\r\n` terminator.
+fn http_body(raw: &str) -> &str {
+    raw.split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .expect("HTTP response missing header terminator")
 }
 
 #[tokio::test]
@@ -130,23 +153,47 @@ async fn invalid_jsonrpc_version() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["error"]["code"], -32600);
+    // Valid id is still echoed on structural invalid-request.
+    assert_eq!(json["id"], 3);
 }
 
 #[tokio::test]
 async fn malformed_json_is_parse_error() {
-    let state = test_state(AuthConfig::Disabled);
-    let app = build_router(state);
-    let req = Request::builder()
-        .method("POST")
-        .uri("/")
-        .header("content-type", "application/json")
-        .body(Body::from("{not-json"))
-        .unwrap();
-    let response = app.oneshot(req).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    let (status, json) = post_raw(AuthConfig::Disabled, b"{not-json").await;
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(json["error"]["code"], -32700);
+    assert!(json["id"].is_null());
+}
+
+#[tokio::test]
+async fn missing_required_fields_is_invalid_request_not_parse_error() {
+    // Syntactically valid JSON, structurally incomplete → -32600, not -32700.
+    let (status, json) = post_json(
+        AuthConfig::Disabled,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["error"]["code"], -32600);
+    assert_eq!(json["id"], 1);
+}
+
+#[tokio::test]
+async fn invalid_id_type_responds_with_null_id() {
+    let (status, json) = post_json(
+        AuthConfig::Disabled,
+        json!({
+            "jsonrpc": "2.0",
+            "id": true,
+            "method": "get_version"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["error"]["code"], -32600);
     assert!(json["id"].is_null());
 }
 
@@ -217,8 +264,7 @@ async fn spawn_in_process_serves_get_version() {
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).await.unwrap();
     let text = String::from_utf8_lossy(&buf);
-    let json_start = text.find('{').expect("json body");
-    let json: Value = serde_json::from_str(&text[json_start..]).expect("parse");
+    let json: Value = serde_json::from_str(http_body(&text)).expect("parse body");
     assert_eq!(json["result"]["api_version"], API_VERSION);
     assert_eq!(json["id"], 42);
 

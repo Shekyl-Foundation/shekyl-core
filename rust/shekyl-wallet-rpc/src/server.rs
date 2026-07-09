@@ -12,6 +12,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
@@ -24,7 +25,6 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tracing::info;
 
 use crate::auth::{require_basic_auth, AuthConfig};
-use crate::error::WalletRpcError;
 use crate::handlers;
 use crate::tenant::TenantState;
 use crate::types::{JsonRpcRequest, JsonRpcResponse};
@@ -101,41 +101,48 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             require_basic_auth,
         ))
         .layer(RequestBodyLimitLayer::new(DEFAULT_BODY_LIMIT))
-        .layer(CorsLayer::permissive())
+        // Default-deny CORS. This process will host spend operations; a
+        // permissive ACAO on loopback TCP would let a malicious web page
+        // drive-by the wallet. Reopen only for an explicit web-client
+        // deployment (rule 21).
+        .layer(CorsLayer::new())
         .with_state(state)
 }
 
 async fn json_rpc_handler(
     State(_state): State<Arc<AppState>>,
-    body: Result<Json<JsonRpcRequest>, axum::extract::rejection::JsonRejection>,
+    body: Bytes,
 ) -> (StatusCode, Json<JsonRpcResponse>) {
-    // HTTP status is 200 for every well-formed JSON-RPC exchange (spec).
-    // Malformed JSON still returns 200 with a JSON-RPC parse error so
-    // clients can use a single response path.
-    let req = match body {
-        Ok(Json(req)) => req,
+    // HTTP status is 200 for every JSON-RPC exchange (spec). Distinguish
+    // invalid JSON syntax (-32700) from structurally invalid requests
+    // (-32600) per JSON-RPC 2.0 §5 / OpenAPI WalletRpcErrorCode.
+    let value: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
         Err(_) => {
             return (StatusCode::OK, Json(JsonRpcResponse::parse_error()));
         }
     };
 
+    let req = match JsonRpcRequest::try_from_value(value) {
+        Ok(req) => req,
+        Err((id, err)) => {
+            return (StatusCode::OK, Json(JsonRpcResponse::from_error(id, &err)));
+        }
+    };
+
     let id = req.id.clone();
-    if req.jsonrpc != "2.0" {
-        let err = WalletRpcError::InvalidRequest(format!(
-            "jsonrpc must be \"2.0\", got {:?}",
-            req.jsonrpc
-        ));
-        return (StatusCode::OK, Json(JsonRpcResponse::from_error(id, &err)));
-    }
-
-    if req.method.is_empty() {
-        let err = WalletRpcError::InvalidRequest("method must be non-empty".into());
-        return (StatusCode::OK, Json(JsonRpcResponse::from_error(id, &err)));
-    }
-
     match handlers::dispatch(&req.method, &req.params) {
         Ok(result) => (StatusCode::OK, Json(JsonRpcResponse::success(id, result))),
         Err(err) => (StatusCode::OK, Json(JsonRpcResponse::from_error(id, &err))),
+    }
+}
+
+/// Removes a UDS path on drop so serve errors cannot leave a stale socket.
+struct UdsCleanup(PathBuf);
+
+impl Drop for UdsCleanup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
     }
 }
 
@@ -162,13 +169,15 @@ pub async fn run_server(
         ListenAddr::Uds(path) => {
             prepare_uds_path(path)?;
             let listener = UnixListener::bind(path)?;
+            // Always unlink on exit — success or serve error — so the next
+            // bind is not blocked by a leftover path.
+            let _cleanup = UdsCleanup(path.clone());
             info!(path = %path.display(), "shekyl-wallet-rpc listening (UDS)");
             axum::serve(listener, app)
                 .with_graceful_shutdown(async move {
                     shutdown.notified().await;
                 })
                 .await?;
-            let _ = std::fs::remove_file(path);
         }
     }
     Ok(())

@@ -4401,6 +4401,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-logging",
+ "subtle",
  "thiserror",
  "tokio",
  "tower",

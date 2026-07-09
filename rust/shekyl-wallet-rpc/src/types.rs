@@ -6,7 +6,7 @@
 //! JSON-RPC 2.0 wire types conforming to `docs/api/wallet_rpc.yaml`.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::error::WalletRpcError;
 
@@ -15,17 +15,16 @@ use crate::error::WalletRpcError;
 /// context inversion; `GetVersionResult.api_version` in the OpenAPI spec).
 pub const API_VERSION: u32 = 1;
 
-/// Incoming JSON-RPC 2.0 request.
-#[derive(Debug, Deserialize)]
+/// Incoming JSON-RPC 2.0 request (validated against the OpenAPI contract).
+#[derive(Debug, Clone)]
 pub struct JsonRpcRequest {
     /// Must be `"2.0"`.
     pub jsonrpc: String,
-    /// Client-supplied id (string or integer per the spec).
+    /// Client-supplied id: string or integer only (OpenAPI `oneOf`).
     pub id: Value,
     /// Method name.
     pub method: String,
-    /// Per-method params object; defaults to `null` when omitted.
-    #[serde(default)]
+    /// Per-method params object; `null` when omitted.
     pub params: Value,
 }
 
@@ -35,7 +34,8 @@ pub struct JsonRpcRequest {
 pub struct JsonRpcResponse {
     /// Always `"2.0"`.
     pub jsonrpc: &'static str,
-    /// Echo of the request id (may be null for notifications; we always echo).
+    /// Echo of the request id, or `null` when the request id was absent /
+    /// invalid (JSON-RPC 2.0 §5 / §5.1).
     pub id: Value,
     /// Success payload.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -82,10 +82,110 @@ impl JsonRpcResponse {
         }
     }
 
-    /// Build an error response when the request id is unknown (parse error).
+    /// `-32700` parse error (invalid JSON syntax). Always `id: null`.
     pub fn parse_error() -> Self {
         Self::from_error(Value::Null, &WalletRpcError::ParseError)
     }
+}
+
+impl JsonRpcRequest {
+    /// Validate a parsed JSON value as a JSON-RPC request.
+    ///
+    /// On failure returns `(response_id, error)` where `response_id` is the
+    /// request's id when it was a valid string/integer, otherwise `null`
+    /// (JSON-RPC 2.0 §5.1 — do not echo an invalid id).
+    pub fn try_from_value(value: Value) -> Result<Self, (Value, WalletRpcError)> {
+        let Value::Object(map) = value else {
+            return Err((
+                Value::Null,
+                WalletRpcError::InvalidRequest("request must be a JSON object".into()),
+            ));
+        };
+
+        let response_id = extract_valid_id(&map).unwrap_or(Value::Null);
+
+        let jsonrpc = match map.get("jsonrpc") {
+            Some(Value::String(s)) if s == "2.0" => s.clone(),
+            Some(Value::String(_)) => {
+                return Err((
+                    response_id,
+                    WalletRpcError::InvalidRequest("jsonrpc must be \"2.0\"".into()),
+                ));
+            }
+            Some(_) => {
+                return Err((
+                    response_id,
+                    WalletRpcError::InvalidRequest("jsonrpc must be a string".into()),
+                ));
+            }
+            None => {
+                return Err((
+                    response_id,
+                    WalletRpcError::InvalidRequest("missing jsonrpc".into()),
+                ));
+            }
+        };
+
+        // OpenAPI requires `id`. Absent → invalid request with id:null.
+        // Present but wrong type → invalid request with id:null (do not echo).
+        let id = match map.get("id") {
+            None => {
+                return Err((
+                    Value::Null,
+                    WalletRpcError::InvalidRequest("missing id".into()),
+                ));
+            }
+            Some(v) if is_valid_request_id(v) => v.clone(),
+            Some(_) => {
+                return Err((
+                    Value::Null,
+                    WalletRpcError::InvalidRequest("id must be a string or integer".into()),
+                ));
+            }
+        };
+
+        let method = match map.get("method") {
+            Some(Value::String(s)) if !s.is_empty() => s.clone(),
+            Some(Value::String(_)) => {
+                return Err((
+                    id,
+                    WalletRpcError::InvalidRequest("method must be non-empty".into()),
+                ));
+            }
+            Some(_) => {
+                return Err((
+                    id,
+                    WalletRpcError::InvalidRequest("method must be a string".into()),
+                ));
+            }
+            None => {
+                return Err((id, WalletRpcError::InvalidRequest("missing method".into())));
+            }
+        };
+
+        let params = map.get("params").cloned().unwrap_or(Value::Null);
+
+        Ok(Self {
+            jsonrpc,
+            id,
+            method,
+            params,
+        })
+    }
+}
+
+/// OpenAPI / JSON-RPC request `id`: string or integer (not float, bool,
+/// null, object, or array).
+fn is_valid_request_id(v: &Value) -> bool {
+    match v {
+        Value::String(_) => true,
+        Value::Number(n) => n.is_i64() || n.is_u64(),
+        _ => false,
+    }
+}
+
+fn extract_valid_id(map: &Map<String, Value>) -> Option<Value> {
+    map.get("id").filter(|v| is_valid_request_id(v)).cloned()
 }
 
 /// `get_version` result (`GetVersionResult` in the OpenAPI spec).
@@ -95,4 +195,72 @@ pub struct GetVersionResult {
     pub version: String,
     /// Monotonic API contract version (see [`API_VERSION`]).
     pub api_version: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::WalletRpcErrorCode;
+    use serde_json::json;
+
+    #[test]
+    fn accepts_string_and_integer_ids() {
+        let r = JsonRpcRequest::try_from_value(json!({
+            "jsonrpc": "2.0",
+            "id": "abc",
+            "method": "get_version"
+        }))
+        .expect("string id");
+        assert_eq!(r.id, json!("abc"));
+
+        let r = JsonRpcRequest::try_from_value(json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "get_version"
+        }))
+        .expect("int id");
+        assert_eq!(r.id, json!(7));
+    }
+
+    #[test]
+    fn rejects_null_id_with_null_response_id() {
+        let (id, err) = JsonRpcRequest::try_from_value(json!({
+            "jsonrpc": "2.0",
+            "id": null,
+            "method": "get_version"
+        }))
+        .unwrap_err();
+        assert!(id.is_null());
+        assert_eq!(err.code(), WalletRpcErrorCode::InvalidRequest);
+    }
+
+    #[test]
+    fn rejects_float_id() {
+        let (id, err) = JsonRpcRequest::try_from_value(json!({
+            "jsonrpc": "2.0",
+            "id": 1.5,
+            "method": "get_version"
+        }))
+        .unwrap_err();
+        assert!(id.is_null());
+        assert_eq!(err.code(), WalletRpcErrorCode::InvalidRequest);
+    }
+
+    #[test]
+    fn missing_method_echoes_valid_id() {
+        let (id, err) = JsonRpcRequest::try_from_value(json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+        }))
+        .unwrap_err();
+        assert_eq!(id, json!(9));
+        assert_eq!(err.code(), WalletRpcErrorCode::InvalidRequest);
+    }
+
+    #[test]
+    fn non_object_is_invalid_request() {
+        let (id, err) = JsonRpcRequest::try_from_value(json!([1, 2, 3])).unwrap_err();
+        assert!(id.is_null());
+        assert_eq!(err.code(), WalletRpcErrorCode::InvalidRequest);
+    }
 }

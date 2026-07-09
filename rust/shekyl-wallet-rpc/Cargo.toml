@@ -29,6 +29,9 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "limit"] }
 http = "1"
 base64 = "0.22"
+# Constant-time credential compare for HTTP basic auth (password is a
+# secret under 35-secure-memory.mdc). Same pin as shekyl-scanner.
+subtle = "2"
 tracing = "0.1"
 clap = { version = "4", features = ["derive"] }
 shekyl-logging = { path = "../shekyl-logging" }
