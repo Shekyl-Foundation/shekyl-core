@@ -339,6 +339,19 @@ the open DQs resolved as predicted, plus one substantive R0-D# finding.
   S6 is the first repeated-fresh-sample consumer, so the α=1e-6 tail is reachable;
   hence the skip-default.)*
 
+  **UPDATE 2026-07-09 — the R0-D3 false-fail was misattributed.** The observed
+  `chi_square 126.49` vs `crit 126.05` was not the legitimate α=1e-6 tail: it
+  was a **binning miscalibration** in `grade_sample`. 601 discrete outcomes
+  (`window` 600) over 60 bins leaves one bin 11 outcomes wide, but the
+  statistic graded against flat `n / n_bins` expected counts — a noncentrality
+  of ≈ 32.7 at `n = 200 000` that raised the actual false-fail rate to
+  ~1.5e-2 per grade. Fixed by grading against width-proportional expected
+  counts (`chi_square_counts_expected` in `shekyl-stats`; exact `u128`
+  binning + expected-widths in `conformance.rs`), which restores the
+  advertised α ≈ 1e-6. The `TestSelfCert::Skip` default remains correct —
+  the tail is small but nonzero and the grade is still ~15 ms — but the
+  dedicated `RealOsRng` S6 test is no longer a ~1-in-70 CI flake.
+
 **Tests landed:** `run_session_self_cert_rejects_stuck_rng` (the decision);
 `session_self_cert_passes_over_os_rng_at_spawn` (`RealOsRng` pass + actor serves);
 `degenerate_self_cert_fail_stops_spawn` (full fail-stop → `StakeActorUnavailable`).
