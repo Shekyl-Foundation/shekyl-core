@@ -325,13 +325,15 @@ a test convenience). Reopen only if a divergence investigation needs
 branch-level C++ evidence that the bool + seeded-state construction cannot give.
 
 - **Leg mechanics:** `tests/serve_credit_equivalence_kat.rs` (Rust) runs each
-  mirror over the fixture, asserting verdict **and** reason. A C++ gtest drives
-  the live C++ decision over the same vectors, asserting verdict. D-SC-C is
-  trivially isolatable (pure, no DB). The wide D-SC-B gate and its D-SC-A dedup
-  touch `m_db`, so the C++ leg runs them through the existing
-  `archival_serve_credit_integration.cpp` harness (real DB, seeded state) rather
-  than in isolation. Any boundary vector the harness cannot reach is recorded in
-  §10 as an escalation trigger, **not** silently dropped.
+  mirror over the fixture, asserting verdict **and** reason. A C++ gtest
+  (`tests/unit_tests/archival_serve_credit_equivalence.cpp`) drives the live
+  C++ decision over the same vectors, asserting verdict. D-SC-C is trivially
+  isolatable (pure, no DB). The wide D-SC-B gate and its D-SC-A dedup touch
+  `m_db`, so the C++ leg reuses the gate-2 integration substrate (the
+  `gate2_serve_credit_kat_v1.json` wire + seeding that
+  `archival_serve_credit_integration.cpp` established) over a seeded mock DB
+  rather than in isolation. Any boundary vector the harness cannot reach is
+  recorded in §10 as an escalation trigger, **not** silently dropped.
 
   *Rejected (kept for the record):* the economics-C2a′ **dual-leg FFI** shape
   (export mirrors via test-only FFI; C++ gtest asserts `cpp == mirror` on
