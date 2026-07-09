@@ -1,7 +1,7 @@
 # Archival serve-credit — C++ decision equivalence audit (V3.0)
 
-**Status:** design round 2 — decisions resolved (§9); *no implementation yet;
-awaiting implementation go.*
+**Status:** design round 3 — review points resolved (§10); *no implementation
+yet; awaiting implementation go.*
 **Created:** 2026-07-08
 **Branch / worktree:** `chore/serve-credit-equivalence-audit`
 **Substrate verified at:** `origin/dev` = `ca8edce6b` (PR #273 merged).
@@ -250,18 +250,41 @@ ordering-sensitive); B guard boundaries (`H_fire == 0`, `H_fire == H_close`,
 `H_fire == H_close + 1`); B holds/not-holds at fire; and the SCE-1 A-vs-C
 key-encoding cross-check.
 
-**Two legs, both green on the shared fixture:**
+**Two legs, both green on the shared fixture — with an explicit
+leg-responsibility split (pinned round 3, SCE-B-1):**
 
-- **Rust leg (standing KAT):** `tests/serve_credit_equivalence_kat.rs` runs each
-  mirror over the fixture, asserts the expected verdict + reason.
-- **C++ leg (live-behavior anchor):** the fixture's "expected" column is what the
-  **live C++ actually does**. **Ratified round 2: shared-JSON KAT (6-A), no new
-  FFI.** A C++ gtest drives the live C++ decision over the same vectors and
-  asserts the same expected column. D-SC-C is trivially isolatable (pure, no DB).
-  The wide D-SC-B gate and its D-SC-A dedup touch `m_db`, so the C++ leg runs them
-  through the existing `archival_serve_credit_integration.cpp` harness (real DB,
-  seeded state) rather than in isolation. Any boundary vector the harness cannot
-  reach is recorded in §10 as an escalation trigger, **not** silently dropped.
+The C++ gate returns a bare `bool`; its reject reasons exist only as
+`MERROR_VER` **log strings**, not as a return value. The equivalence harness
+must therefore never parse log text — a reworded message would break
+branch-detection with zero behavior change. The split that follows from what
+each side actually exposes:
+
+- **C++ leg asserts the verdict (`bool`) only.** That is the whole of what the
+  C++ contract exposes, and it is the consensus-relevant property — accept/reject
+  is what forks. The fixture's expected-verdict column is anchored to what the
+  live C++ does.
+- **The reason/branch is asserted on the Rust mirror only**, against an
+  **authored** expected-reason column — authored by *source inspection* of which
+  `MERROR_VER` branch each vector trips at the pinned substrate commit, never
+  extracted from running-C++ log output. This is a **mirror-fidelity check** (it
+  catches ordering bugs and wrong-branch divergence), layered on top of the
+  verdict equivalence, with no log-parser anywhere.
+
+*Rejected mechanisms for C++-side reason confirmation* (named so the harness is
+built right the first time): log-parsing `MERROR_VER` output (couples equivalence
+to message text; would additionally require KAT-pinning the strings themselves),
+and audit-only reason-enum instrumentation of the C++ (touches the frozen C++ for
+a test convenience). Reopen only if a divergence investigation needs
+branch-level C++ evidence that the bool + seeded-state construction cannot give.
+
+- **Leg mechanics:** `tests/serve_credit_equivalence_kat.rs` (Rust) runs each
+  mirror over the fixture, asserting verdict **and** reason. A C++ gtest drives
+  the live C++ decision over the same vectors, asserting verdict. D-SC-C is
+  trivially isolatable (pure, no DB). The wide D-SC-B gate and its D-SC-A dedup
+  touch `m_db`, so the C++ leg runs them through the existing
+  `archival_serve_credit_integration.cpp` harness (real DB, seeded state) rather
+  than in isolation. Any boundary vector the harness cannot reach is recorded in
+  §10 as an escalation trigger, **not** silently dropped.
 
   *Rejected (kept for the record):* the economics-C2a′ **dual-leg FFI** shape
   (export mirrors via test-only FFI; C++ gtest asserts `cpp == mirror` on
@@ -302,12 +325,19 @@ collision. Registry row and this doc land in the same PR.
   normalize in the mirror** (mirror-then-fix — the mirror reproduces BE for A and
   LE for C faithfully first). Once the standing equivalence KAT is green against
   today's split, land a **standalone behavior-preserving C++ commit** unifying
-  D-SC-C's inline key onto `ArchivalServeCreditKey` so one type owns the encoding
+  D-SC-C's inline key   onto `ArchivalServeCreditKey` so one type owns the encoding
   (C's set stays internally consistent; the change removes the latent drift hazard
-  and is free pre-genesis). The mirror's C-path key then re-points to the BE
-  encoding and the KAT re-proves against the unified C++. Sequencing is
-  load-bearing: **equivalence-proof-first, unify-second** keeps the free
-  pre-genesis correction distinct from the mirror.
+  and is free pre-genesis). The unify's value is not mere consistency: a
+  native-endian `memcpy` of `u64`s in consensus-adjacent key construction is the
+  exact representation smell the DB layer deliberately forbids for its own
+  composite keys (`db_lmdb.cpp:1657–1659`: "composite keys are multi-field
+  big-endian byte arrays, not native-endian integers" — the guard against
+  `MDB_INTEGERKEY` silently breaking sort order on little-endian machines);
+  unifying onto the BE `ArchivalServeCreditKey` removes the one remaining
+  native-endian construction of this key shape. The mirror's C-path key then
+  re-points to the BE encoding and the KAT re-proves against the unified C++.
+  Sequencing is load-bearing: **equivalence-proof-first, unify-second** keeps the
+  free pre-genesis correction distinct from the mirror.
 
 Further findings append here as SCE-2, SCE-3, … as the mirror + fuzz surface
 them.
@@ -363,4 +393,5 @@ written when implementation begins.
 | Round | Date | Outcome |
 | --- | --- | --- |
 | 1 | 2026-07-08 | Draft. Substrate verified at `ca8edce6b`; SCE-1 surfaced on first read. |
-| 2 | 2026-07-08 | Design decisions resolved (§9): D-SC-B **wide** (full gate mirror), equivalence via **shared-JSON KAT** (no FFI), SCE-1 **unify-after**. Doc updated §1.1/§2.2/§3/§5/§6/§9. **Awaiting implementation go.** |
+| 2 | 2026-07-08 | Design decisions resolved (§9): D-SC-B **wide** (full gate mirror), equivalence via **shared-JSON KAT** (no FFI), SCE-1 **unify-after**. Doc updated §1.1/§2.2/§3/§5/§6/§9. |
+| 3 | 2026-07-09 | PR #274 review (SCE-B-1..B-3). **SCE-B-1 pinned (§5):** leg-responsibility split made explicit — C++ leg asserts the verdict `bool` only (all the C++ contract exposes; the consensus-relevant property); reason/branch asserted on the Rust mirror against a source-inspection-authored expected column; no `MERROR_VER` log-parsing anywhere (rejected mechanisms named with reopen criterion). **SCE-B-2 conceded by reviewer** (step-1 grouping of the `:4224–4245` bounds is internally consistent; reason enum keeps the sub-branches distinct) — no change. **SCE-B-3 addressed (§6):** SCE-1 unify rationale sharpened — the native-endian `memcpy` is the representation smell `db_lmdb.cpp:1657–1659` deliberately forbids for composite DB keys, not mere consistency. **Awaiting implementation go.** |
