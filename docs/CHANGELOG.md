@@ -4,6 +4,26 @@
 
 ### Added
 
+- **consensus: C-1 commit-block 2 — `txin_archival_reward_emission`
+  transport shim (dense tag `0x04`, F-C1b pin).** New vin variant in
+  `cryptonote_basic.h` carrying the complete Rust canonical encoding as an
+  opaque `canonical_bytes` blob — `emission_wire.rs` owns the codec, the
+  parse, and every structural bound; C++ never reads inside the blob.
+  Transport-layer checks only: `ARCHIVAL_EMISSION_VIN_MAX_BYTES` (1 MiB
+  deserializer allocation cap, `cryptonote_config.h`) and the leading-byte
+  echo of the Rust wire tag `0x04`, enforced identically on the binary
+  serializer and the JSON/RPC entrypoint (`json_object.cpp`) so no admission
+  skew between parsers (the PR #229 r3 lesson). Boost archive, JSON/debug
+  `VARIANT_TAG`s, and the signature-size visitor (0 — auths live inside the
+  Rust-verified blob) complete the surface; `check_for_double_spend` passes
+  it through (no key image — emission dedup is the WS-2 journaled
+  check-and-set plus the block-level `(P,E)` pass). **Gate-last:**
+  `check_inputs_types_supported` still rejects the type (the block-4 flip is
+  the activating cut), pinned by a standing tripwire KAT. Transport KATs in
+  `archival_reward_emission.cpp`: dense-tag round-trip byte-identity,
+  wire-tag-echo rejection on both serialize and deserialize, size-bound
+  fail-closed, whitelist-still-rejects.
+
 - **consensus/db: C-1 commit-block 1 — `budget(E)` production per
   `ARCHIVAL_BUDGET_SCHEDULE.md` (ratified; F-C1a closed).** The
   redirect-the-write lands at the connect site (`blockchain.cpp`): the

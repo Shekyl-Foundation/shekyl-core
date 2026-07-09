@@ -280,7 +280,29 @@ namespace cryptonote
   };
 
 
-  typedef std::variant<txin_gen, txin_to_script, txin_to_scripthash, txin_to_key, txin_archival_serve_credit_response, txin_archival_bond_post> txin_v;
+  // C-1 (REWARD_EMISSION_VIN_PLAN.md PR-E2 shim, reassigned to C-1) — archival
+  // reward-emission vin (dense tag 0x04; see VARIANT_TAG below). Thin transport
+  // only: the field is the complete Rust canonical encoding (leading wire tag
+  // 0x04 included — emission_wire.rs owns the codec, the parse, and every
+  // structural bound; single source of truth). C++ never reads inside the blob;
+  // consensus code that needs fields (the block-level (P,E) pass, dispatch)
+  // obtains them through the shekyl_emission_* FFI parse, never a C++ decode.
+  struct txin_archival_reward_emission
+  {
+    std::vector<uint8_t> canonical_bytes;
+
+    BEGIN_SERIALIZE_OBJECT()
+      FIELD(canonical_bytes)
+      // Transport-layer shape only (allocation bound + wire-tag echo); a blob
+      // passing here can still be garbage — the Rust parser is the validator.
+      if (canonical_bytes.size() < 2 || canonical_bytes.size() > config::ARCHIVAL_EMISSION_VIN_MAX_BYTES)
+        return false;
+      if (canonical_bytes[0] != 0x04)
+        return false;
+    END_SERIALIZE()
+  };
+
+  typedef std::variant<txin_gen, txin_to_script, txin_to_scripthash, txin_to_key, txin_archival_serve_credit_response, txin_archival_bond_post, txin_archival_reward_emission> txin_v;
 
   // The txin_to_key (spend) subset of vin. This count — not vin.size() — sizes
   // the prunable pseudoOuts array: an archival bond-post vin occupies a
@@ -688,6 +710,9 @@ namespace cryptonote
       size_t operator()(const txin_to_key& txin) const {return txin.key_offsets.size();}
       size_t operator()(const txin_archival_serve_credit_response& txin) const {return 0;}
       size_t operator()(const txin_archival_bond_post& txin) const {return 0;}
+      // Emission auths live inside the canonical blob (Rust-verified), not in
+      // the C++ signatures array.
+      size_t operator()(const txin_archival_reward_emission& txin) const {return 0;}
     };
 
     return std::visit(txin_signature_size_visitor(), tx_in);
@@ -844,6 +869,7 @@ VARIANT_TAG(binary_archive, cryptonote::txin_to_scripthash, 0xf1);      // shed 
 VARIANT_TAG(binary_archive, cryptonote::txin_to_key, 0x01);             // fcmp spend
 VARIANT_TAG(binary_archive, cryptonote::txin_archival_serve_credit_response, 0x02);
 VARIANT_TAG(binary_archive, cryptonote::txin_archival_bond_post, 0x03);
+VARIANT_TAG(binary_archive, cryptonote::txin_archival_reward_emission, 0x04);  // F-C1b: dense next-free, = Rust wire tag
 VARIANT_TAG(binary_archive, cryptonote::txout_to_script, 0xf0);         // shed (parked)
 VARIANT_TAG(binary_archive, cryptonote::txout_to_scripthash, 0xf1);     // shed (parked)
 VARIANT_TAG(binary_archive, cryptonote::txout_to_key, 0xf2);            // shed (parked)
@@ -857,6 +883,7 @@ VARIANT_TAG(json_archive, cryptonote::txin_to_scripthash, "scripthash");
 VARIANT_TAG(json_archive, cryptonote::txin_to_key, "key");
 VARIANT_TAG(json_archive, cryptonote::txin_archival_serve_credit_response, "archival_serve_credit_response");
 VARIANT_TAG(json_archive, cryptonote::txin_archival_bond_post, "archival_bond_post");
+VARIANT_TAG(json_archive, cryptonote::txin_archival_reward_emission, "archival_reward_emission");
 VARIANT_TAG(json_archive, cryptonote::txout_to_script, "script");
 VARIANT_TAG(json_archive, cryptonote::txout_to_scripthash, "scripthash");
 VARIANT_TAG(json_archive, cryptonote::txout_to_key, "key");
@@ -870,6 +897,7 @@ VARIANT_TAG(debug_archive, cryptonote::txin_to_scripthash, "scripthash");
 VARIANT_TAG(debug_archive, cryptonote::txin_to_key, "key");
 VARIANT_TAG(debug_archive, cryptonote::txin_archival_serve_credit_response, "archival_serve_credit_response");
 VARIANT_TAG(debug_archive, cryptonote::txin_archival_bond_post, "archival_bond_post");
+VARIANT_TAG(debug_archive, cryptonote::txin_archival_reward_emission, "archival_reward_emission");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_script, "script");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_scripthash, "scripthash");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_key, "key");

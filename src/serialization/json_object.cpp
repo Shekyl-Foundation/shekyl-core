@@ -407,6 +407,10 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
     {
       INSERT_INTO_JSON_OBJECT(dest, archival_bond_post, input);
     }
+    void operator()(cryptonote::txin_archival_reward_emission const& input) const
+    {
+      INSERT_INTO_JSON_OBJECT(dest, archival_reward_emission, input);
+    }
   };
   std::visit(add_input{dest}, txin);
   dest.EndObject();
@@ -460,6 +464,12 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_v& txin)
     else if (elem.name == "archival_bond_post")
     {
       cryptonote::txin_archival_bond_post tmpVal;
+      fromJsonValue(elem.value, tmpVal);
+      txin = std::move(tmpVal);
+    }
+    else if (elem.name == "archival_reward_emission")
+    {
+      cryptonote::txin_archival_reward_emission tmpVal;
       fromJsonValue(elem.value, tmpVal);
       txin = std::move(tmpVal);
     }
@@ -708,6 +718,28 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_bond_p
   GET_FROM_JSON_OBJECT(val, txin.bonded_total_atomic, bonded_total_atomic);
   GET_FROM_JSON_OBJECT(val, txin.bond_credit, bond_credit);
   GET_FROM_JSON_OBJECT(val, txin.bond_debit, bond_debit);
+}
+
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::txin_archival_reward_emission& txin)
+{
+  dest.StartObject();
+  INSERT_INTO_JSON_OBJECT(dest, canonical_bytes, txin.canonical_bytes);
+  dest.EndObject();
+}
+
+void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_reward_emission& txin)
+{
+  if (!val.IsObject())
+    throw WRONG_TYPE("json object");
+  GET_FROM_JSON_OBJECT(val, txin.canonical_bytes, canonical_bytes);
+  // Transport-shape bounds matching the binary serializer (cryptonote_basic.h):
+  // allocation cap + Rust wire-tag echo. Semantic validation is the Rust
+  // parser's alone (emission_wire.rs) — the JSON/RPC entrypoint must not
+  // admit blobs the binary path rejects.
+  if (txin.canonical_bytes.size() < 2 || txin.canonical_bytes.size() > config::ARCHIVAL_EMISSION_VIN_MAX_BYTES)
+    throw WRONG_TYPE("archival reward-emission canonical_bytes length out of bounds");
+  if (txin.canonical_bytes[0] != 0x04)
+    throw WRONG_TYPE("archival reward-emission canonical_bytes wire tag mismatch");
 }
 
 

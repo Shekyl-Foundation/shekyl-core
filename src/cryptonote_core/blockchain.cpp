@@ -3130,6 +3130,13 @@ bool Blockchain::check_for_double_spend(const transaction& tx, key_images_contai
       (void)in;
       return true;
     }
+    bool operator()(const txin_archival_reward_emission& in) const
+    {
+      // No key image: emission dedup is claimed_settlement_epochs (WS-2 journaled
+      // check-and-set) + the block-level (P,E) pass, not this container.
+      (void)in;
+      return true;
+    }
   };
 
   for (const txin_v& in : tx.vin)
