@@ -1236,6 +1236,110 @@ fn print_cover_dial_report() {
     }
 }
 
+/// F-B1c-c2 disposition-(b) coverage cross-check (`--budget-throttle`) —
+/// renders `budget_throttle`'s computed evidence: table to stderr, verdict to
+/// stderr, full per-point JSON to stdout. See `budget_throttle.rs` for the
+/// model, the emis_frac weighting, and the reopen framing.
+fn print_budget_throttle_report() {
+    use budget_throttle::{
+        evaluate_point, read_budget, transfer_template, BudgetThrottleReport, COVERED_BAR,
+        POINTS_SPEC, SEEDS, TRANSFER_BUDGETS,
+    };
+
+    let release_min = budget_throttle::release_min_floor();
+    let template = transfer_template();
+
+    eprintln!(
+        "shekyl-staking-sim --budget-throttle — F-B1c-c2 disposition-(b) coverage cross-check"
+    );
+    eprintln!("(Part 2; Part 1 = shekyl-economics-sim --fb1c-c2. See budget_throttle.rs header.)");
+    eprintln!(
+        "Each cell is the mean over {} seeds (knee is a chaotic knife-edge single-seed).",
+        SEEDS.len()
+    );
+    eprintln!();
+    eprintln!(
+        "m_eff = 1 - emis_frac*(1-{release_min}); (a) budget = base*m_eff, (b) budget = base."
+    );
+    eprintln!(
+        "cDeepU = windowed committed deep under-target (lower better); covered < {COVERED_BAR}."
+    );
+    eprintln!();
+    eprintln!(
+        "{:<19} {:>4} {:>8} {:>7} {:>7} {:>8} {:>8} {:>8} {:>8}",
+        "regime", "real", "emisFrac", "bud_a", "bud_b", "cDeepU_a", "cDeepU_b", "delta", "verdict"
+    );
+
+    let mut points = Vec::new();
+    let mut any_material = false;
+    for (regime, base, emis_frac, real) in POINTS_SPEC {
+        let point = evaluate_point(&template, regime, base, emis_frac, real);
+        any_material |= point.material_starvation;
+        let verdict = if !real {
+            "counterfact"
+        } else if point.material_starvation {
+            "MATERIAL"
+        } else {
+            "tolerable"
+        };
+        eprintln!(
+            "{:<19} {:>4} {:>8.3} {:>7.2} {:>7.1} {:>8.4} {:>8.4} {:>+8.4} {:>8}",
+            point.regime,
+            if real { "yes" } else { "no" },
+            point.emis_frac,
+            point.read_a.budget,
+            point.read_b.budget,
+            point.read_a.cdeepu_mean,
+            point.read_b.cdeepu_mean,
+            point.coverage_delta,
+            verdict,
+        );
+        points.push(point);
+    }
+
+    eprintln!();
+    eprintln!("Transfer curve (seed-averaged; locates the knee):");
+    eprintln!(
+        "{:>7} {:>9} {:>10} {:>9} {:>9}",
+        "budget", "bondA", "cDeepU", "cDeepUmax", "oUmx"
+    );
+    let mut transfer_curve = Vec::new();
+    for budget in TRANSFER_BUDGETS {
+        let r = read_budget(&template, &format!("bt_curve_{budget}"), budget);
+        eprintln!(
+            "{:>7.1} {:>9.1} {:>10.4} {:>9.4} {:>9.4}",
+            r.budget, r.bonda_mean, r.cdeepu_mean, r.cdeepu_max, r.oumx_mean
+        );
+        transfer_curve.push(r);
+    }
+
+    eprintln!();
+    if any_material {
+        eprintln!(
+            "VERDICT: a real operating point shows material starvation under (a) —\n\
+             the swing is MATERIAL; disposition (b) reopens (§9.9 rule-21 criterion)."
+        );
+    } else {
+        eprintln!(
+            "VERDICT: no real operating point materially degrades under (a).\n\
+             - mining_saturated: 0.8x of a co-location-saturated purse stays covered.\n\
+             - fee_era_lean: the decayed emission leg makes the throttle ~0.24% — below\n\
+               the knee's ~20% and below the seed-noise floor.\n\
+             - mining_lean_stress (counterfactual): a full 0.8x on a LEAN purse WOULD\n\
+               cross the knee, but that regime does not occur (mining is saturated).\n\
+             Swing TOLERABLE => disposition (a) stands."
+        );
+    }
+
+    let report = BudgetThrottleReport {
+        points,
+        transfer_curve,
+        any_material_starvation: any_material,
+    };
+    let json = serde_json::to_string_pretty(&report).expect("JSON serialization failed");
+    println!("{json}");
+}
+
 fn main() {
     if std::env::args().any(|a| a == "--timing-cluster") {
         print_timing_cluster_report();
@@ -1288,7 +1392,7 @@ fn main() {
     }
 
     if std::env::args().any(|a| a == "--budget-throttle") {
-        budget_throttle::run_budget_throttle_report();
+        print_budget_throttle_report();
         return;
     }
 

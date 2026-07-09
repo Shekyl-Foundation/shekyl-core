@@ -123,7 +123,7 @@ fn prolonged_bust(params: &SimParams) -> BudgetScenario {
 /// 30 — where `staker_emission` has decayed toward zero, so the (a)-vs-(b) gap
 /// (an *emission-leg* phenomenon) should vanish and `budget(E)` becomes
 /// fee-driven under both. Confirms the reopen question is bounded in time.
-fn fee_era(_params: &SimParams) -> BudgetScenario {
+fn fee_era(params: &SimParams) -> BudgetScenario {
     BudgetScenario {
         name: "fee_era_late_tail".into(),
         description: "95% emitted, low volume, ~year 30 onward (emission share ~decayed; a ~ b)"
@@ -142,7 +142,12 @@ fn fee_era(_params: &SimParams) -> BudgetScenario {
         }),
         fee_per_tx: 100_000_000,
         initial_emitted_fraction: 0.95,
-        genesis_height_offset: 30 * 262_800, // ~year 30
+        // ~year 30 in the configured chain timing. Derived from
+        // `blocks_per_year` (not a literal) because the emission-share decay —
+        // the quantity this scenario exists to read — is itself computed from
+        // `params.blocks_per_year`; a hardcoded offset would silently
+        // represent a different number of decay-years if the config changed.
+        genesis_height_offset: 30 * params.blocks_per_year,
     }
 }
 
