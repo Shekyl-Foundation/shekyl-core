@@ -278,6 +278,43 @@
   `archival_substrate_lmdb.cpp`. Consensus-inert until the C-1
   whitelist flip: nothing reads `archival_budget` until dispatch lands.
 
+- **wallet-rpc: Phase 4a scaffold — `rust/shekyl-wallet-rpc`**
+  (`WALLET_REWRITE_PLAN.md` Phase 4a; `docs/api/wallet_rpc.yaml`). New
+  Engine-native crate (not the transitional `shekyl-engine-rpc` wallet2
+  FFI bridge): axum JSON-RPC on `POST /` (TCP or `uds://`),
+  `WalletRpcError` / allocated `-29xxx` codes from the OpenAPI contract,
+  single-tenant `Tenant` type, HTTP basic auth middleware, UDS listener,
+  `spawn_in_process` for Shape B CLI, and `get_version` (`api_version: 1`).
+  Other SPECIFIED methods return `-32601 method not found` until their 4b
+  sub-PRs. Binary name `shekyl-wallet-rpc` (coexists with the C++ binary
+  of the same name until Phase 5 deletion — operators must not confuse
+  them).
+
+- **docs: serve-credit C++-decision equivalence audit — design
+  (`ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md`, rounds 1–3 + post-closure
+  pins CLOSED; implementation go issued 2026-07-09)**. Specifies the V3.0
+  verification task from the FOLLOWUPS queue: pure-Rust mirrors of the three
+  C++ serve-credit consensus decisions (`blockchain.cpp:4247` (P,s,E) LMDB
+  dedup; `:4224–4396` full acceptance gate, **wide** scope with ordered
+  first-failing-branch reasons; `:4889–4910` block-level uniqueness),
+  equivalence via a **shared-JSON standing KAT with no new FFI** (C++ leg
+  asserts the verdict `bool` only — all the C++ contract exposes; the
+  reason/branch is a Rust-mirror fidelity assertion against a
+  source-inspection-authored column, no `MERROR_VER` log-parsing), Rust fuzz
+  targets, and **mirror-then-fix** discipline throughout. First finding
+  **SCE-1**: the `(P,s,E)` key is built big-endian for the persistent LMDB
+  set (`ArchivalServeCreditKey`) but native-endian for the in-block set — no
+  live bug (the sets never cross), dispositioned **unify-after** (prove
+  equivalence against today's split, then a standalone behavior-preserving
+  C++ commit unifies onto the BE type). Post-closure pins: fixture
+  `substrate_commit` header + C++ gate guard comment as staleness guards;
+  step-9 holds-at-`H_fire` mirrors the **WS-1-corrected as-of reconstruction**
+  already live at `db_lmdb.cpp:5040–5072` (PR #269), with strictly-above
+  slash-boundary vectors on the C++ leg. `SCE-` family registered at birth in
+  `IMPLEMENTATION_INDEX.md` §2 (rule 94 §1) with §5 inventory + §7
+  doc-directory rows. The decision-site flip stays **V3.1** (FOLLOWUPS),
+  decoupled at the genesis boundary.
+
 - **docs: C-1 pre-flight executed against `dev` `6671d565b`
   (`REWARD_EMISSION_E3_GATING_ROUND.md` §9)** — every C-1 operand read at
   its production site after #269/#271/#272 landed. All merge blockers
@@ -561,6 +598,22 @@
     bad-interval cascade guard.
 
 ### Fixed
+
+- **staking: S6 session self-cert chi-square graded against flat expected
+  counts, miscalibrating the advertised α=1e-6 to ~1.5e-2**
+  (`rust/shekyl-standoff/src/conformance.rs`, `rust/shekyl-stats`;
+  `ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md` §2 R0-D3 UPDATE 2026-07-09).
+  `grade_sample` bins the 601 discrete outcomes of `window = 600` into 60
+  bins — one bin is 11 outcomes wide — but scored the histogram against a
+  flat `n / n_bins` expected count, injecting a noncentrality of ≈ 32.7 at
+  `n = 200 000`. A **correct** `OsRng` therefore failed the wallet-open
+  self-cert (and the dedicated S6 CI test) about once per 70 grades; the
+  R0-D3 false-fail previously attributed to the legitimate α tail was this
+  bug. Expected counts are now proportional to the exact bin widths (new
+  `chi_square_counts_expected` in `shekyl-stats`, fail-closed on degenerate
+  expecteds; exact `u128` binning replaces the `f64` index map, which also
+  lost integer precision above 2^53), restoring the advertised calibration.
+  Regression test pins an exactly-uniform sample to a chi-square of zero.
 
 - **gitian: pre-install the pinned Rust toolchain serially so release builds
   stop racing rustup** (`contrib/gitian/gitian-{linux,osx,win,freebsd,android}.yml`).

@@ -10,11 +10,10 @@ the known disagreements at the verification date rather than editing those
 docs from here).
 
 **Verification stamp.** Statuses below were verified against landed code at
-`dev` = `e22549a79` (merge of PR #257), 2026-07-05. Since the prior stamp
-(`13ccb1ddb`, PR #254) the GF-7 scheduler seam (PR #255) and the submit
-lifecycle driver (PR #257) have landed and are reflected below. When you
-update a status here, re-verify against code (`git grep`, not plan prose) and
-move this stamp.
+`dev` tip as of 2026-07-09 for the Phase 4 row (Phase 4a scaffold on
+`feat/wallet-rpc-phase4a-scaffold`); other rows retain their prior
+code-anchored stamps unless noted. When you update a status here,
+re-verify against code (`git grep`, not plan prose) and move this stamp.
 
 **Maintenance discipline** (institutionalized as
 [`.cursor/rules/94-tracking-index.mdc`](../../.cursor/rules/94-tracking-index.mdc) —
@@ -92,6 +91,7 @@ should say "request path" or "GF-7 seam" explicitly.
 | **Round N / R N** | Per-doc adversarial design rounds; each design doc numbers its own | Owning doc's round table | Gate-6 R1 closed; R2 = the 2d-2 work; R3–R5 open | |
 | **F-N** | Findings within a specific design doc's review (e.g. F40 `AlreadyInChain`, F41 `Conceal` constant-work in the daemon-submit series) | The doc that numbered them, e.g. [`DAEMON_SUBMIT_VERDICT.md`](DAEMON_SUBMIT_VERDICT.md) | F-numbers are doc-scoped, not global | |
 | **DQ-N** | Design questions in the 2d-2 transport plan | [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) | — | |
+| **SCE-N** | Serve-credit C++-decision equivalence-audit findings (D-SC-A/B/C mirror + standing KAT; SCE-1 = the `(P,s,E)` key BE/native-endian encoding split) | [`ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md`](ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md) | Registered 2026-07-09 at birth (rule 94 §1); prefix `SCE-` passes the uniqueness check against Phase/Stage/M/Bond-PR/SP/SP-T/PR-A/PR-B/PR-E/CT/GF/S/R/F/DQ/WI/M1 | |
 | **WI-1…WI-4** | Post-#255 archival-bond work items: 1 `start_pscan` lifecycle wiring, 2 production bond assembly + pending-post persistence, 3 block-timed dispatch driver, 4 GF-7 measurement round | This index §4 (rows) + the carrying design docs per row | Registered 2026-07-05; prefix `WI` passes the rule-94 uniqueness check against Phase/Stage/M/Bond-PR/SP/SP-T/PR-A/PR-B/PR-E/CT/GF/S/F/DQ. **Ephemeral family (rule 21 retire criterion):** one plan's work breakdown over already-durable §5 gaps, not a durable cross-doc family — the row retires when WI-4 lands (its items live on as the §5 gap closures and per-doc rows they map to) | W2 Pending |
 
 ---
@@ -107,7 +107,7 @@ should say "request path" or "GF-7 seam" explicitly.
 | 2c | Addresses / proofs | Per plan doc |
 | 2d | Air-gapped flow (`UnsignedTxBundle`/`SignedTxBundle`) | Per plan doc — **not** the bond chain's 2d-1/2d-2 |
 | 3 | `shekyl-cli` binary | Per plan doc |
-| 4 | `shekyl-wallet-rpc` binary | **Spec-first contract landed (as of 2026-07-06)** — OpenAPI 3.1 contract at `docs/api/wallet_rpc.yaml` (JSON-RPC envelope, error-code range allocation, 15 SPECIFIED methods over landed Phase 1/2a orchestrator surface; stake / payment-request / proofs / sign / bundle methods RESERVED with named engine-layer prerequisites per rule 21). Implementation crate not started. UPDATE 2026-07-06: spec landed `feat/wallet-rpc-openapi-spec` (decision-anchored: the spec commit; no code artifact yet — first implementation sub-PR verifies against it) |
+| 4 | `shekyl-wallet-rpc` binary | **Phase 4a scaffold landed (as of 2026-07-09)** — `rust/shekyl-wallet-rpc/` Engine-native crate: axum `POST /` JSON-RPC, `WalletRpcError` code table from `docs/api/wallet_rpc.yaml`, single-tenant `Tenant`/`TenantState`, HTTP basic auth + UDS listener, `spawn_in_process` (Shape B), `get_version` only. Remaining SPECIFIED methods return `-32601` until 4b. Distinct from transitional `shekyl-engine-rpc` (wallet2 FFI). UPDATE 2026-07-09: Phase 4a scaffold (verified: `cargo test -p shekyl-wallet-rpc`; `git grep spawn_in_process` → `shekyl-wallet-rpc/src/server.rs`). UPDATE 2026-07-06: OpenAPI contract landed #265 (decision-anchored) |
 | 5 | C++ deletion (single commit) | Not started; gated on 1–4 completeness |
 | 6 | Tests and docs | Per plan doc |
 
@@ -153,6 +153,7 @@ Verified at `dev` = `e22549a79`:
 | GF-4b backing-lineage pre-join wiring (ladder + sweep + `BackingSet`) | **Built, unwired (as of 2026-07-08)** — the `REWARD_EMISSION_VIN_PLAN.md` §8.0.3 C-1 activation precondition is **satisfied**: `MintLineageOutput` + `spendable_height` classified/stored at the scan seam (`PSCAN_STATE_VERSION` 5), `sweep_funding_outputs` (sweep semantics, GF4b-6 spendability filter, `SpentRecordsDurablyPruned` witness gate — go-live fails to compile until SP-R0 mints the witness), `BackingSet` + zero-pre-bond-output test. C-1 residue enumerated with named criteria at the GF-4b doc §5; GF4b-2 genesis gate in FOLLOWUPS V3.0 queue | `ARCHIVAL_GF4B_BACKING_LINEAGE.md`; `engine/backing_set.rs`, `engine/bond_assembly.rs` (`sweep_funding_outputs`), `pscan_state.rs` (v5) |
 | Reward-emission leg (PR-E1…E3, C-1 verifier) | **PR-E3 verify body + WS-2 write-side landed, C-1 unwired** (PR #269) — the §7.1 steps 1–6 verify module (`emission_verify`, KAT-tested) and the LMDB emission-claim connect / pre-image journal / pop-restore path ship here; the emission numerator FFI (`shekyl_archival_emission_epoch_work`) and the as-of-`E` snapshot gather are live. The gating design round CLOSED 2026-07-07 (`REWARD_EMISSION_E3_GATING_ROUND.md`): policy trio Q3/Q11/Q12 resolved, **WS-1 ratified** (M-2 supply conservation under _bits-sourcing ∧ as-of-fire-height acceptance_; serve-credit bits as sole `work_P` source; one `at_height` accessor, two consumers), **WS-2 ratified** (three-layer `(P,E)` dedup; prune-straddle double-mint closed by journaled pre-image revert). **C-1 build opened 2026-07-09**: commit-block 1 landed — `budget(E)` production per `ARCHIVAL_BUDGET_SCHEDULE.md` (RATIFIED; F-C1a closed): redirect-the-write at the connect site (`HF_VERSION_ARCHIVAL_EMISSION`), `archival_budget_accrual` per-height row (burn-record idiom, pop-symmetric), frozen `archival_budget` close row in the sigma txn, snapshot gather carries `budget_atomic`/`has_budget_row`, KATs B1/B2/B3. Commit-block 2 landed — `txin_archival_reward_emission` transport shim (dense tag `0x04` per F-C1b; opaque `canonical_bytes`, `emission_wire.rs` owns the codec; binary + JSON parsers enforce identical transport bounds; gate-last: `check_inputs_types_supported` still rejects, pinned by tripwire KAT). Commit-block 3 landed — emission verify FFI + dispatch: `emission_vin_verify_auth` production `AuthVerified` minter (both Q1 hybrid auths, leaf-gate pin), `shekyl_archival_emission_vin_extract` / `shekyl_emission_vin_verify` FFI entries, `ArchivalEmissionEpochSnapshot` + gather lifted to the `BlockchainDB` interface, the full `check_tx_inputs` emission branch (classification → PQC-slot binding → reference-block context → F-C1c signable hash → frozen snapshot gather → coarse verify → fee-input FCMP++), F-C1c signable-hash pin (§9.6, for ratification) — all still dead code behind the whitelist. Still missing: the **C-1 activation** (whitelist flip + RCT semantics + `check_tx_outputs` exemption, block-level `(P,E)` Rust-decided pass, connect arm, regtest e2e) — the remaining hard Stage-3 blocker | `REWARD_EMISSION_LEG.md`, `REWARD_EMISSION_VIN_PLAN.md`, `REWARD_EMISSION_E3_GATING_ROUND.md`, `ARCHIVAL_BUDGET_SCHEDULE.md`; `shekyl-archival-retention/src/emission_verify.rs` |
 | Principal stake/unstake/drain lifecycle | **Missing — not yet homed in any plan doc** | `WALLET_REWRITE_PLAN.md` timeline note |
+| Serve-credit C++-decision equivalence audit (D-SC-A/B/C mirrors + standing KAT) | **Design closed, implementation starting (as of 2026-07-09)** — *verification only, no consensus change*; mirrors the three C++ serve-credit decisions (`blockchain.cpp:4247`/`:4312` wide-gate/`:4889–4910`) as pure Rust + shared-fixture equivalence KAT; the behavior-preserving decision-site **flip is V3.1** (FOLLOWUPS). UPDATE 2026-07-09: design rounds 1–3 + post-closure pins closed, PR #274 (decision-anchored: the design-doc commits; no code artifact yet — the implementation PR updates this row) | `ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md`; `FOLLOWUPS.md` V3.0 queue item |
 
 ---
 
@@ -183,6 +184,7 @@ this index:
 | [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) / [`REWARD_EMISSION_VIN_PLAN.md`](REWARD_EMISSION_VIN_PLAN.md) | Emission leg (PR-E0…E3, C-1) |
 | [`REWARD_EMISSION_E3_GATING_ROUND.md`](REWARD_EMISSION_E3_GATING_ROUND.md) | E3 gating round: pre-flight audit + policy-trio (Q3/Q11/Q12) closure |
 | [`DAEMON_SUBMIT_VERDICT.md`](DAEMON_SUBMIT_VERDICT.md) | Daemon submit-verdict series (F-N findings incl. F40/F41) |
+| [`ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md`](ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md) | Serve-credit C++-decision equivalence audit: D-SC-A/B/C mirror spec, shared-fixture standing KAT + leg-responsibility split, mirror-then-fix discipline, SCE-N findings ledger (SCE-1 key-encoding split), V3.1 flip deferral |
 | [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) | Principal-side stake lifecycle design |
 | [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Staking/archival simulation harness |
 | `docs/completed/` | Closed-out tracks (CT series, DAA/LWMA-1, RandomX v2 phases, …) |
