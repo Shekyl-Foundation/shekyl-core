@@ -197,6 +197,23 @@ pub struct GetVersionResult {
     pub api_version: u32,
 }
 
+/// OpenAPI `CapabilityMode` for FULL wallets (Phase 4b create/open).
+pub const CAPABILITY_FULL: &str = "FULL";
+
+/// `WalletHandle` returned by lifecycle methods that leave a wallet open.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WalletHandle {
+    /// Wallet file stem within the served wallet directory.
+    pub name: String,
+    /// Capability mode (`FULL` / `VIEW_ONLY` / `HARDWARE_OFFLOAD`).
+    pub capability: String,
+    /// Network (`MAINNET` / `TESTNET` / `STAGENET`).
+    pub network: String,
+    /// Present when open reconstructed state from `restore_height_hint`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restore_height_hint: Option<i64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

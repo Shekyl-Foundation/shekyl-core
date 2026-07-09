@@ -4398,15 +4398,23 @@ dependencies = [
  "clap",
  "http",
  "http-body-util",
+ "rand 0.8.6",
  "serde",
  "serde_json",
+ "shekyl-crypto-pq",
+ "shekyl-engine-core",
+ "shekyl-engine-file",
+ "shekyl-engine-prefs",
  "shekyl-logging",
+ "shekyl-rpc-transport",
  "subtle",
+ "tempfile",
  "thiserror",
  "tokio",
  "tower",
  "tower-http",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]

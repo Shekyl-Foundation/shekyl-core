@@ -34,9 +34,17 @@ base64 = "0.22"
 subtle = "2"
 tracing = "0.1"
 clap = { version = "4", features = ["derive"] }
+rand = "0.8"
+zeroize = { workspace = true }
 shekyl-logging = { path = "../shekyl-logging" }
+shekyl-engine-core = { path = "../shekyl-engine-core" }
+shekyl-engine-file = { path = "../shekyl-engine-file" }
+shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+tempfile = "3"

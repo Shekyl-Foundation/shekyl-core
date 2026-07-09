@@ -6,7 +6,9 @@
 //! `WalletRpcError` and the stable JSON-RPC error-code table from
 //! `docs/api/wallet_rpc.yaml` (`WalletRpcErrorCode`).
 
-use serde_json::Value;
+use serde_json::{json, Value};
+use shekyl_engine_core::{Capability, ChangePasswordError, IoError, OpenError, PersistenceError};
+use shekyl_engine_file::WalletFileError;
 use thiserror::Error;
 
 /// Allocated application / protocol error codes (spec enum).
@@ -72,8 +74,7 @@ impl WalletRpcErrorCode {
 }
 
 /// Unified RPC-boundary error. Domain errors from `shekyl-engine-core`
-/// convert into this enum in Phase 4b; Phase 4a only needs protocol /
-/// scaffold variants.
+/// convert into this enum at the lifecycle / send boundary.
 #[derive(Debug, Error)]
 pub enum WalletRpcError {
     /// JSON body could not be parsed.
@@ -94,6 +95,30 @@ pub enum WalletRpcError {
     /// HTTP basic auth failed or was missing when required.
     #[error("unauthorized")]
     Unauthorized,
+    /// A wallet is already open on this tenant.
+    #[error("wallet already open")]
+    WalletAlreadyOpen,
+    /// No wallet is open on this tenant.
+    #[error("wallet not open")]
+    WalletNotOpen,
+    /// Create refused: keys file already exists.
+    #[error("wallet file exists")]
+    WalletFileExists,
+    /// Open failed: keys file not found.
+    #[error("wallet file not found")]
+    WalletFileNotFound,
+    /// Open / change_password: wrong password (or corrupt envelope).
+    #[error("invalid password")]
+    InvalidPassword,
+    /// Operation requires a capability the open wallet lacks.
+    #[error("capability forbids this operation")]
+    CapabilityForbids {
+        /// OpenAPI capability mode string (`FULL` / `VIEW_ONLY` / …).
+        capability: String,
+    },
+    /// Daemon RPC unreachable / failed.
+    #[error("daemon unreachable")]
+    DaemonUnreachable,
 }
 
 impl WalletRpcError {
@@ -105,9 +130,14 @@ impl WalletRpcError {
             Self::MethodNotFound(_) => WalletRpcErrorCode::MethodNotFound,
             Self::InvalidParams(_) => WalletRpcErrorCode::InvalidParams,
             Self::InternalError(_) => WalletRpcErrorCode::InternalError,
-            // Auth failures are transport-level (HTTP 401), not JSON-RPC codes.
-            // Callers that need a JSON-RPC code for tests use InvalidRequest.
             Self::Unauthorized => WalletRpcErrorCode::InvalidRequest,
+            Self::WalletAlreadyOpen => WalletRpcErrorCode::WalletAlreadyOpen,
+            Self::WalletNotOpen => WalletRpcErrorCode::WalletNotOpen,
+            Self::WalletFileExists => WalletRpcErrorCode::WalletFileExists,
+            Self::WalletFileNotFound => WalletRpcErrorCode::WalletFileNotFound,
+            Self::InvalidPassword => WalletRpcErrorCode::InvalidPassword,
+            Self::CapabilityForbids { .. } => WalletRpcErrorCode::CapabilityForbids,
+            Self::DaemonUnreachable => WalletRpcErrorCode::DaemonUnreachable,
         }
     }
 
@@ -119,6 +149,88 @@ impl WalletRpcError {
 
     /// Optional structured `error.data` object.
     pub fn data(&self) -> Option<Value> {
-        None
+        match self {
+            Self::CapabilityForbids { capability } => Some(json!({ "capability": capability })),
+            _ => None,
+        }
+    }
+}
+
+impl From<OpenError> for WalletRpcError {
+    fn from(err: OpenError) -> Self {
+        match err {
+            OpenError::IncorrectPassword => Self::InvalidPassword,
+            OpenError::CapabilityMismatch { found }
+            | OpenError::CapabilityNotYetImplemented { capability: found } => {
+                Self::CapabilityForbids {
+                    capability: capability_mode_str(found).to_owned(),
+                }
+            }
+            OpenError::OutstandingPendingTx { count } => Self::InternalError(format!(
+                "cannot close: {count} pending transaction(s) still outstanding"
+            )),
+            OpenError::NetworkMismatch { wallet, expected } => Self::InternalError(format!(
+                "network mismatch: wallet={wallet}, expected={expected}"
+            )),
+            OpenError::Io(IoError::WalletFile { detail }) => classify_wallet_file_detail(&detail),
+            OpenError::Io(IoError::Daemon { .. }) => Self::DaemonUnreachable,
+            OpenError::Io(other) => Self::InternalError(other.to_string()),
+            OpenError::Key(e) => Self::InternalError(e.to_string()),
+            OpenError::Persistence(e) => Self::InternalError(e.to_string()),
+        }
+    }
+}
+
+impl From<ChangePasswordError> for WalletRpcError {
+    fn from(err: ChangePasswordError) -> Self {
+        match err {
+            ChangePasswordError::RotateFailed(PersistenceError::WalletFile(
+                WalletFileError::Envelope(_),
+            )) => Self::InvalidPassword,
+            ChangePasswordError::RotateFailed(e) => Self::InternalError(e.to_string()),
+            ChangePasswordError::RotatedButPrefsFlushFailed(e) => {
+                Self::InternalError(format!("password rotated but prefs flush failed: {e}"))
+            }
+        }
+    }
+}
+
+fn classify_wallet_file_detail(detail: &str) -> WalletRpcError {
+    let lower = detail.to_ascii_lowercase();
+    if lower.contains("already exists") || lower.contains("refusing to overwrite") {
+        WalletRpcError::WalletFileExists
+    } else if lower.contains("not found") || lower.contains("no such file") {
+        WalletRpcError::WalletFileNotFound
+    } else if lower.contains("password") || lower.contains("corrupt") {
+        WalletRpcError::InvalidPassword
+    } else {
+        WalletRpcError::InternalError(detail.to_owned())
+    }
+}
+
+fn capability_mode_str(cap: Capability) -> &'static str {
+    match cap {
+        Capability::Full => "FULL",
+        Capability::ViewOnly => "VIEW_ONLY",
+        Capability::HardwareOffload => "HARDWARE_OFFLOAD",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_incorrect_password() {
+        let err: WalletRpcError = OpenError::IncorrectPassword.into();
+        assert_eq!(err.code(), WalletRpcErrorCode::InvalidPassword);
+    }
+
+    #[test]
+    fn maps_keys_already_exists_detail() {
+        let err = classify_wallet_file_detail(
+            "refusing to overwrite existing keys file at /tmp/x.wallet.keys",
+        );
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletFileExists);
     }
 }

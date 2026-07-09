@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- **wallet-rpc: Phase 4b lifecycle slice 1** (`WALLET_REWRITE_PLAN.md`
+  Phase 4b; `docs/api/wallet_rpc.yaml`). `create_wallet`, `open_wallet`,
+  `close_wallet`, and `change_password` on `rust/shekyl-wallet-rpc`,
+  Engine-backed (`Engine::<SoloSigner>`). Tenant holds the open Engine;
+  CLI gains `--daemon-address` and `--network`. Create returns one-shot
+  backup material (`mnemonic` on mainnet/stagenet; `raw_seed_hex` on
+  testnet). Error mapping covers `-29000..-29005`. Remaining SPECIFIED
+  methods still return `-32601` until later 4b slices.
+
 ### Fixed
 
 - **consensus: C-1 emission review hardening (PR #277 review,

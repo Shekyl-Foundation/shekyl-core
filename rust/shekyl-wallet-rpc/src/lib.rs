@@ -9,12 +9,11 @@
 //! This crate is Engine-backed and Shekyl-native — it is **not** the transitional
 //! `shekyl-engine-rpc` wallet2 FFI bridge (deleted at Phase 5).
 //!
-//! # Phase 4a scope
+//! # Phase 4b slice 1 (lifecycle)
 //!
-//! Scaffold only: axum JSON-RPC on `POST /`, `WalletRpcError` code table,
-//! single-tenant session state, HTTP basic auth + UDS listener, in-process
-//! spawn for Shape B (`shekyl-cli`), and the `get_version` method. Lifecycle
-//! and send methods land in subsequent 4b sub-PRs.
+//! `create_wallet`, `open_wallet`, `close_wallet`, `change_password`, plus the
+//! Phase 4a scaffold (`get_version`, axum transport, auth, UDS, in-process
+//! spawn). Remaining SPECIFIED methods return `-32601` until later 4b slices.
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
@@ -22,6 +21,7 @@
 pub mod auth;
 pub mod error;
 pub mod handlers;
+pub mod lifecycle;
 pub mod server;
 pub mod tenant;
 pub mod types;
@@ -29,10 +29,11 @@ pub mod types;
 pub use auth::AuthConfig;
 pub use error::{WalletRpcError, WalletRpcErrorCode};
 pub use server::{
-    build_router, run_server, spawn_in_process, AppState, InProcessHandle, ListenAddr, ServerConfig,
+    build_router, run_server, spawn_in_process, spawn_in_process_with, AppState, InProcessHandle,
+    ListenAddr, ServerConfig,
 };
 pub use tenant::{Tenant, TenantState};
-pub use types::{GetVersionResult, JsonRpcRequest, JsonRpcResponse, API_VERSION};
+pub use types::{GetVersionResult, JsonRpcRequest, JsonRpcResponse, WalletHandle, API_VERSION};
 
 /// Crate / binary semver (`CARGO_PKG_VERSION`).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

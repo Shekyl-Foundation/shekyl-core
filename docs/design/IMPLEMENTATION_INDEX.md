@@ -107,7 +107,7 @@ should say "request path" or "GF-7 seam" explicitly.
 | 2c | Addresses / proofs | Per plan doc |
 | 2d | Air-gapped flow (`UnsignedTxBundle`/`SignedTxBundle`) | Per plan doc — **not** the bond chain's 2d-1/2d-2 |
 | 3 | `shekyl-cli` binary | Per plan doc |
-| 4 | `shekyl-wallet-rpc` binary | **Phase 4a scaffold landed (as of 2026-07-09)** — `rust/shekyl-wallet-rpc/` Engine-native crate: axum `POST /` JSON-RPC, `WalletRpcError` code table from `docs/api/wallet_rpc.yaml`, single-tenant `Tenant`/`TenantState`, HTTP basic auth + UDS listener, `spawn_in_process` (Shape B), `get_version` only. Remaining SPECIFIED methods return `-32601` until 4b. Distinct from transitional `shekyl-engine-rpc` (wallet2 FFI). UPDATE 2026-07-09: Phase 4a scaffold (verified: `cargo test -p shekyl-wallet-rpc`; `git grep spawn_in_process` → `shekyl-wallet-rpc/src/server.rs`). UPDATE 2026-07-06: OpenAPI contract landed #265 (decision-anchored) |
+| 4 | `shekyl-wallet-rpc` binary | **Phase 4b lifecycle slice 1 landed (as of 2026-07-09)** — `create_wallet` / `open_wallet` / `close_wallet` / `change_password` wired to `Engine::<SoloSigner>`; Tenant holds open Engine; CLI `--daemon-address` / `--network`; create returns one-shot BIP-39 mnemonic (mainnet/stagenet) or `raw_seed_hex` (testnet). Remaining SPECIFIED methods still `-32601`. Distinct from transitional `shekyl-engine-rpc` (wallet2 FFI). UPDATE 2026-07-09: Phase 4b lifecycle (verified: `cargo test -p shekyl-wallet-rpc`; `git grep create_wallet` → `shekyl-wallet-rpc/src/lifecycle.rs`). UPDATE 2026-07-09: Phase 4a scaffold. UPDATE 2026-07-06: OpenAPI contract landed #265 (decision-anchored) |
 | 5 | C++ deletion (single commit) | Not started; gated on 1–4 completeness |
 | 6 | Tests and docs | Per plan doc |
 
