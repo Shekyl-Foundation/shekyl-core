@@ -187,12 +187,14 @@ for (tx : txs) for (vin : tx.vin if serve_credit) {
 - **Marshaled inputs:** `&[(p_canonical_id, shard_id, settlement_epoch)]` in
   block/tx/vin iteration order. Output preserves "first collision wins" (the C++
   returns on first `insert().second == false`).
-- **Faithful-reproduction note:** the C++ key here is **native-endian**
+- **Faithful-reproduction note:** the C++ key here *was* **native-endian**
   (`memcpy` of the `u64`s), *not* the BE `ArchivalServeCreditKey`. Since this set
   is self-contained (built and queried with the same encoding inside one block),
-  endianness is behavior-irrelevant *for C in isolation* — but the mirror must
-  still reproduce C's actual bytes for the equivalence proof, and the A-vs-C
-  encoding split is the substance of SCE-1.
+  endianness is behavior-irrelevant *for C in isolation* — but the mirror
+  reproduced C's actual bytes for the equivalence proof first, and the A-vs-C
+  encoding split is the substance of SCE-1. (Post-proof, the SCE-1 unify commit
+  re-keyed this pass onto `ArchivalServeCreditKey` — see §6; the snippet above
+  documents the audited pre-unify substrate.)
 
 ---
 
@@ -217,9 +219,10 @@ pub fn serve_credit_key_be(p_id: &[u8; 32], shard_id: u64, settlement_epoch: u64
 pub fn serve_credit_gate_decision(inputs: &ServeCreditGateInputs) -> GateVerdict;
 
 /// D-SC-C: block-level (P,s,E) uniqueness over the ordered vin list
-/// (native-endian key in the C++ — the mirror pins LE explicitly, which is
-/// what native resolves to on every supported platform; the §5 SCE-1
-/// decision-invariance fuzz covers the encoding's irrelevance to the verdict;
+/// (pre-unify: native-endian key in the C++, mirrored as explicit LE — what
+/// native resolves to on every supported platform; post-SCE-1-unify both
+/// paths key BE via ArchivalServeCreditKey. The §5 SCE-1 decision-invariance
+/// fuzz covers the encoding's irrelevance to the verdict;
 /// first-collision-wins).
 pub fn serve_credit_block_unique(triples: &[(/*P*/[u8;32], /*s*/u64, /*E*/u64)]) -> BlockUniqueVerdict;
 ```
@@ -322,13 +325,15 @@ a test convenience). Reopen only if a divergence investigation needs
 branch-level C++ evidence that the bool + seeded-state construction cannot give.
 
 - **Leg mechanics:** `tests/serve_credit_equivalence_kat.rs` (Rust) runs each
-  mirror over the fixture, asserting verdict **and** reason. A C++ gtest drives
-  the live C++ decision over the same vectors, asserting verdict. D-SC-C is
-  trivially isolatable (pure, no DB). The wide D-SC-B gate and its D-SC-A dedup
-  touch `m_db`, so the C++ leg runs them through the existing
-  `archival_serve_credit_integration.cpp` harness (real DB, seeded state) rather
-  than in isolation. Any boundary vector the harness cannot reach is recorded in
-  §10 as an escalation trigger, **not** silently dropped.
+  mirror over the fixture, asserting verdict **and** reason. A C++ gtest
+  (`tests/unit_tests/archival_serve_credit_equivalence.cpp`) drives the live
+  C++ decision over the same vectors, asserting verdict. D-SC-C is trivially
+  isolatable (pure, no DB). The wide D-SC-B gate and its D-SC-A dedup touch
+  `m_db`, so the C++ leg reuses the gate-2 integration substrate (the
+  `gate2_serve_credit_kat_v1.json` wire + seeding that
+  `archival_serve_credit_integration.cpp` established) over a seeded mock DB
+  rather than in isolation. Any boundary vector the harness cannot reach is
+  recorded in §10 as an escalation trigger, **not** silently dropped.
 
   *Rejected (kept for the record):* the economics-C2a′ **dual-leg FFI** shape
   (export mirrors via test-only FFI; C++ gtest asserts `cpp == mirror` on
@@ -354,7 +359,17 @@ which bookkeeping rides this PR vs the implementation PR. Collision check:
 (Phase/Stage/M/Bond-PR/SP/SP-T/PR-A/PR-B/PR-E/CT/GF/S/R/F/DQ/WI/M1) — no token
 of `SCE-N` can parse as a token of an existing family.
 
-### SCE-1 (candidate) — two byte encodings for the `(P,s,E)` key
+### SCE-1 — two byte encodings for the `(P,s,E)` key
+
+**Status: RESOLVED (as of 2026-07-09).** The unify commit landed per the
+ratified unify-after disposition below, after both KAT legs were green
+against the pre-unify split: D-SC-C's inline native-endian `memcpy` key is
+replaced by `ArchivalServeCreditKey` (via a new `bytes()` accessor on the key
+type), the mirror's `serve_credit_block_key` re-points to the BE encoding,
+and the fixture re-pins with `expect_equal: true` — a reintroduced split now
+fails both legs' cross-checks. The decision-invariance property that licensed
+the unify as behavior-preserving is held standing by the
+`fuzz_serve_credit_block_unique` target.
 
 - **Observed:** the persistent LMDB path (D-SC-A) builds the key via
   `ArchivalServeCreditKey` = `P ‖ BE64(shard) ‖ BE64(E)` (`shekyl_types.h:410–411`,
@@ -447,3 +462,4 @@ since implementation begins on the go):
 | 2 | 2026-07-08 | Design decisions resolved (§9): D-SC-B **wide** (full gate mirror), equivalence via **shared-JSON KAT** (no FFI), SCE-1 **unify-after**. Doc updated §1.1/§2.2/§3/§5/§6/§9. |
 | 3 | 2026-07-09 | PR #274 review (SCE-B-1..B-3). **SCE-B-1 pinned (§5):** leg-responsibility split made explicit — C++ leg asserts the verdict `bool` only (all the C++ contract exposes; the consensus-relevant property); reason/branch asserted on the Rust mirror against a source-inspection-authored expected column; no `MERROR_VER` log-parsing anywhere (rejected mechanisms named with reopen criterion). **SCE-B-2 conceded by reviewer** (step-1 grouping of the `:4224–4245` bounds is internally consistent; reason enum keeps the sub-branches distinct) — no change. **SCE-B-3 addressed (§6):** SCE-1 unify rationale sharpened — the native-endian `memcpy` is the representation smell `db_lmdb.cpp:1657–1659` deliberately forbids for composite DB keys, not mere consistency. **Round CLOSED — implementation go issued.** |
 | 3a (post-closure pins) | 2026-07-09 | Copilot findings on PR #274 resolved: §6/§8 wording made accurate by **doing** the rule-94 birth registration in this PR (registry + inventory + doc-directory rows in `IMPLEMENTATION_INDEX.md`, CHANGELOG entry) rather than deferring; §2.1 cross-ref §7→§6 fixed; LE→native-endian wording corrected in §2.1/§3 (mirror pins LE explicitly; decision-invariance fuzz covers it). Reviewer markers carried into §5 as post-closure pins: fixture `substrate_commit` header + C++ gate guard comment (staleness guards), and the **step-9 substrate correction** — the holds accessor at the pinned commit is already the WS-1-corrected as-of-`H_fire` reconstruction (`db_lmdb.cpp:5040–5072`, PR #269), so the mirror snapshots the corrected behavior, with strictly-above slash-boundary vectors on the C++ leg. Not a design reopen (rule 21: substrate-completeness amendments). |
+| 4 | 2026-07-09 | SCE-1 **RESOLVED** (§6): with both KAT legs green against the pre-unify split, the standalone unify commit re-keyed D-SC-C onto `ArchivalServeCreditKey` (new `bytes()` accessor), the mirror's `serve_credit_block_key` re-pointed to BE, and the fixture re-pinned `expect_equal: true`. §2.3's snippet documents the audited pre-unify substrate. |

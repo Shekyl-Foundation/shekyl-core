@@ -4,6 +4,32 @@
 
 ### Added
 
+- **archival: serve-credit equivalence audit — mirrors, standing KAT, fuzz,
+  and the SCE-1 unify (implements
+  `ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md`; FOLLOWUPS V3.0 audit-half
+  item)**. Pure-Rust mirrors of the three C++ serve-credit consensus
+  decisions land in `shekyl-archival-retention::serve_credit_decisions`
+  (D-SC-A `(P,s,E)` BE key + pre-block membership; D-SC-B wide acceptance
+  gate with ordered first-failing-branch reasons, reusing
+  `serve_credit_epoch_ok` / `challenge_fire_height` /
+  `challenge_leaf_chunk_bounds` rather than re-deriving; D-SC-C block-level
+  uniqueness, first-collision-wins). The **standing equivalence KAT** runs
+  both legs over the shared fixture `serve_credit_equivalence_kat_v1.json`:
+  the Rust leg asserts verdict + reason for every vector, the C++ leg
+  (`archival_serve_credit_equivalence.cpp`) drives the live
+  `check_archival_serve_credit_input` over seeded state and asserts the
+  verdict `bool` only (§5 leg-responsibility split; the four
+  C++-unreachable marshaling vectors are enumerated, not dropped). Fuzz
+  targets `fuzz_serve_credit_gate` and `fuzz_serve_credit_block_unique`
+  join the CI fuzz-harness smoke gate. Both audited decision sites in
+  `blockchain.cpp` carry guard comments naming the fixture. **Audit
+  outcome: no divergence found.** Finding **SCE-1 resolved** post-proof by
+  a standalone behavior-preserving commit: the block-level pass now keys
+  with `ArchivalServeCreditKey` (new `bytes()` accessor), removing the
+  native-endian composite-key construction `db_lmdb.cpp:1657–1659` forbids;
+  the fixture re-pins `expect_equal: true` so a reintroduced split fails
+  both legs.
+
 - **wallet-rpc: Phase 4a scaffold — `rust/shekyl-wallet-rpc`**
   (`WALLET_REWRITE_PLAN.md` Phase 4a; `docs/api/wallet_rpc.yaml`). New
   Engine-native crate (not the transitional `shekyl-engine-rpc` wallet2

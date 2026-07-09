@@ -108,6 +108,7 @@ set(unit_tests_sources
   is_hdd.cpp
   aligned.cpp
   archival_serve_credit.cpp
+  archival_serve_credit_equivalence.cpp
   archival_serve_credit_integration.cpp
   archival_bond_post.cpp
   archival_bond_post_integration.cpp
@@ -183,6 +184,14 @@ endif ()
 SET_PROPERTY(SOURCE main.cpp PROPERTY COMPILE_FLAGS -DDEFAULT_DATA_DIR="\\"${CMAKE_SOURCE_DIR}/tests/data\\"")
 SET_PROPERTY(SOURCE archival_serve_credit_integration.cpp PROPERTY COMPILE_FLAGS
   -DGATE2_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json\\"")
+# COMPILE_DEFINITIONS (not COMPILE_FLAGS) so CMake owns the per-generator
+# quoting of the string-literal values. The quote characters below are part
+# of each definition's value (CMake only treats quotes as delimiters at
+# argument start), so the compiler receives -DNAME="/abs/path" and the
+# macro expands to a valid C string literal — verified in build.ninja.
+SET_PROPERTY(SOURCE archival_serve_credit_equivalence.cpp PROPERTY COMPILE_DEFINITIONS
+  GATE2_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json"
+  SERVE_CREDIT_EQUIVALENCE_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/serve_credit_equivalence_kat_v1.json")
 SET_PROPERTY(SOURCE archival_bond_post_integration.cpp PROPERTY COMPILE_FLAGS
   -DGATE4_KAT_FIXTURE_PATH="\\"${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate4_lifecycle_kat_v1.json\\"")
 

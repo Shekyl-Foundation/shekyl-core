@@ -1,0 +1,479 @@
+{
+ "format_version": 1,
+ "substrate_commit": "ca8edce6b",
+ "description": "Shared serve-credit equivalence-KAT fixture (ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md section 5). Two legs: the Rust standing KAT (tests/serve_credit_equivalence_kat.rs) asserts verdict AND reason for every vector; the C++ leg (tests/unit_tests/archival_serve_credit_equivalence.cpp) drives the live check_archival_serve_credit_input over every cpp_reachable gate vector via cpp_setup seeded-state mutations and asserts the bool verdict ONLY. The expected_reason column is authored by SOURCE INSPECTION of which MERROR_VER branch each vector trips at substrate_commit -- never extracted from running C++ (section 5 leg-responsibility split). If dev reorders check_archival_serve_credit_input or inserts a predicate, re-author the reason column and bump substrate_commit. The gate base is the gate-2 integration substrate (gate2_serve_credit_kat_v1.json) so the C++ leg reuses its wire + seeding; step-9 expectations reflect the WS-1-corrected as-of-H_fire accessor at the pinned commit (PR #269) on purpose.",
+ "gate": {
+  "base": {
+   "p_canonical_id_hex": "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f",
+   "shard_id": 42,
+   "settlement_epoch": 1,
+   "join_epoch": 0,
+   "h_open": 10000,
+   "h_close": 19999,
+   "h_seal": 10001,
+   "h_fire": 19137,
+   "current_height": 19138,
+   "seal_hash_hex": "abababababababababababababababababababababababababababababababab",
+   "c1_branch_scalar_counts": [],
+   "c2_branch_scalar_counts": [
+    4
+   ],
+   "preblock_present": false,
+   "bond_substrate_present": true,
+   "good_through": true,
+   "seal_hash_available": true,
+   "held_at_fire": true,
+   "registry_present_at_fire": true,
+   "leaf_index_in_segment": 17470,
+   "leaf_chunk_ok": true,
+   "wire_serialize_ok": true,
+   "wire_first_byte": 2,
+   "verify_ok": true
+  },
+  "vectors": [
+   {
+    "id": "B-01-accept",
+    "note": "Green path: the gate-2 integration substrate verbatim.",
+    "overrides": {},
+    "expected_verdict": true,
+    "expected_reason": null,
+    "cpp_reachable": true,
+    "cpp_setup": "baseline"
+   },
+   {
+    "id": "B-02-layer-count",
+    "note": "Step 1: 65 c1 layers exceeds ARCHIVAL_MAX_PATH_LAYERS_PER_KIND (64).",
+    "overrides": {
+     "c1_branch_scalar_counts": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "expected_verdict": false,
+    "expected_reason": "PathLayerCountExceedsBound",
+    "cpp_reachable": true,
+    "cpp_setup": "inflate_c1_layers"
+   },
+   {
+    "id": "B-03-fat-c1-branch",
+    "note": "Step 1: one c1 branch of 257 scalars exceeds ARCHIVAL_MAX_BRANCH_SCALARS (256).",
+    "overrides": {
+     "c1_branch_scalar_counts": [
+      257
+     ]
+    },
+    "expected_verdict": false,
+    "expected_reason": "C1BranchScalarCountExceedsBound",
+    "cpp_reachable": true,
+    "cpp_setup": "fat_c1_branch"
+   },
+   {
+    "id": "B-04-fat-c2-branch",
+    "note": "Step 1: one c2 branch of 257 scalars; c1 clean, so the c2 loop reports.",
+    "overrides": {
+     "c2_branch_scalar_counts": [
+      257
+     ]
+    },
+    "expected_verdict": false,
+    "expected_reason": "C2BranchScalarCountExceedsBound",
+    "cpp_reachable": true,
+    "cpp_setup": "fat_c2_branch"
+   },
+   {
+    "id": "B-05-c1-before-c2",
+    "note": "Step 1 ordering fidelity: fat c1 AND fat c2 must report c1 (the C++ loops c1 first).",
+    "overrides": {
+     "c1_branch_scalar_counts": [
+      257
+     ],
+     "c2_branch_scalar_counts": [
+      257
+     ]
+    },
+    "expected_verdict": false,
+    "expected_reason": "C1BranchScalarCountExceedsBound",
+    "cpp_reachable": true,
+    "cpp_setup": "fat_c1_and_c2_branch"
+   },
+   {
+    "id": "B-06-dup-preblock",
+    "note": "Step 2 (D-SC-A): (P,42,1) already credited in pre-block LMDB state.",
+    "overrides": {
+     "preblock_present": true
+    },
+    "expected_verdict": false,
+    "expected_reason": "DuplicatePreBlock",
+    "cpp_reachable": true,
+    "cpp_setup": "seed_credit_bit"
+   },
+   {
+    "id": "B-07-no-bond",
+    "note": "Step 3: no bond record for P.",
+    "overrides": {
+     "bond_substrate_present": false
+    },
+    "expected_verdict": false,
+    "expected_reason": "BondSubstrateMissing",
+    "cpp_reachable": true,
+    "cpp_setup": "omit_bond"
+   },
+   {
+    "id": "B-08-epoch-at-join",
+    "note": "Step 4: E == join_epoch fails E >= join_epoch + 1 (rejects before any height math is consumed).",
+    "overrides": {
+     "settlement_epoch": 0
+    },
+    "expected_verdict": false,
+    "expected_reason": "EpochBeforeEFirst",
+    "cpp_reachable": true,
+    "cpp_setup": "epoch_at_join"
+   },
+   {
+    "id": "B-09-not-good-through",
+    "note": "Step 5: a bad interval covering E makes good_through false.",
+    "overrides": {
+     "good_through": false
+    },
+    "expected_verdict": false,
+    "expected_reason": "NotGoodThrough",
+    "cpp_reachable": true,
+    "cpp_setup": "seed_bad_interval"
+   },
+   {
+    "id": "B-10-deadline-inclusive",
+    "note": "Step 6 boundary: current_height == H_close accepts (the C++ compare is strict >).",
+    "overrides": {
+     "current_height": 19999
+    },
+    "expected_verdict": true,
+    "expected_reason": null,
+    "cpp_reachable": true,
+    "cpp_setup": "deadline_boundary"
+   },
+   {
+    "id": "B-11-past-deadline",
+    "note": "Step 6 boundary: current_height == H_close + 1 rejects.",
+    "overrides": {
+     "current_height": 20000
+    },
+    "expected_verdict": false,
+    "expected_reason": "PastCreditDeadline",
+    "cpp_reachable": true,
+    "cpp_setup": "past_deadline"
+   },
+   {
+    "id": "B-12-no-seal-hash",
+    "note": "Step 7: the seal-block hash load throws (production LMDB BLOCK_DNE).",
+    "overrides": {
+     "seal_hash_available": false
+    },
+    "expected_verdict": false,
+    "expected_reason": "SealHashUnavailable",
+    "cpp_reachable": true,
+    "cpp_setup": "unseeded_seal_throws"
+   },
+   {
+    "id": "B-13-fire-guard",
+    "note": "Step 8: degenerate H_close == H_open puts h_fire past H_close; defensive dead branch under the pinned epoch formulas -- unreachable through live C++ (mirror-only).",
+    "overrides": {
+     "h_close": 10000,
+     "current_height": 10000
+    },
+    "expected_verdict": false,
+    "expected_reason": "FireHeightDerivationFailed",
+    "cpp_reachable": false,
+    "cpp_setup": null
+   },
+   {
+    "id": "B-14-not-held-at-fire",
+    "note": "Step 9 (WS-1 slash boundary): holding removed AT h_fire == 19137 -- a slash at at_height means already-removed; rejects.",
+    "overrides": {
+     "held_at_fire": false
+    },
+    "expected_verdict": false,
+    "expected_reason": "ShardNotHeldAtFire",
+    "cpp_reachable": true,
+    "cpp_setup": "removed_at_fire"
+   },
+   {
+    "id": "B-15-held-dropped-after-fire",
+    "note": "Step 9 (WS-1 slash boundary): holding removed at h_fire + 1 -- held at fire, gone at tip; the credit is legitimate and accepts (the M2-1 drop-after-serve escape a tip read would re-open).",
+    "overrides": {},
+    "expected_verdict": true,
+    "expected_reason": null,
+    "cpp_reachable": true,
+    "cpp_setup": "removed_after_fire"
+   },
+   {
+    "id": "B-16-no-registry",
+    "note": "Step 10: no frozen-segment registry row at H_fire.",
+    "overrides": {
+     "registry_present_at_fire": false
+    },
+    "expected_verdict": false,
+    "expected_reason": "ShardRegistryUnavailableAtFire",
+    "cpp_reachable": true,
+    "cpp_setup": "omit_segment"
+   },
+   {
+    "id": "B-17-leaf-oob",
+    "note": "Step 11: challenged index == SEGMENT_LEAF_COUNT (25992) is out of segment range.",
+    "overrides": {
+     "leaf_index_in_segment": 25992
+    },
+    "expected_verdict": false,
+    "expected_reason": "LeafIndexOutOfSegmentRange",
+    "cpp_reachable": true,
+    "cpp_setup": "leaf_index_oob"
+   },
+   {
+    "id": "B-18-leaf-chunk-missing",
+    "note": "Step 12: curve-tree chunk read fails (frozen-segment registry disagrees with the tree).",
+    "overrides": {
+     "leaf_chunk_ok": false
+    },
+    "expected_verdict": false,
+    "expected_reason": "LeafChunkReadFailed",
+    "cpp_reachable": true,
+    "cpp_setup": "omit_leaf_chunk"
+   },
+   {
+    "id": "B-19-serialize-fail",
+    "note": "Step 13: vin do_serialize failure; unreachable through the harness (a deserialized vin always re-serializes) -- mirror-only.",
+    "overrides": {
+     "wire_serialize_ok": false
+    },
+    "expected_verdict": false,
+    "expected_reason": "VinSerializeFailed",
+    "cpp_reachable": false,
+    "cpp_setup": null
+   },
+   {
+    "id": "B-20-wrong-tag",
+    "note": "Step 13: first wire byte != 0x02; unreachable through the harness (a valid vin round-trips its own tag) -- mirror-only.",
+    "overrides": {
+     "wire_first_byte": 7
+    },
+    "expected_verdict": false,
+    "expected_reason": "UnexpectedVinWireTag",
+    "cpp_reachable": false,
+    "cpp_setup": null
+   },
+   {
+    "id": "B-21-empty-wire",
+    "note": "Step 13: empty wire folds into the tag branch, as in the C++ (wire.empty() || tag check is one condition) -- mirror-only.",
+    "overrides": {
+     "wire_first_byte": null
+    },
+    "expected_verdict": false,
+    "expected_reason": "UnexpectedVinWireTag",
+    "cpp_reachable": false,
+    "cpp_setup": null
+   },
+   {
+    "id": "B-22-verify-fail",
+    "note": "Step 14: the FFI crypto/path/sig verify rejects (corrupted hybrid signature on the C++ leg).",
+    "overrides": {
+     "verify_ok": false
+    },
+    "expected_verdict": false,
+    "expected_reason": "FfiVerifyFailed",
+    "cpp_reachable": true,
+    "cpp_setup": "corrupt_signature"
+   }
+  ]
+ },
+ "dedup": {
+  "vectors": [
+   {
+    "id": "A-01-fresh",
+    "note": "Empty pre-block set: (P,42,1) is not a duplicate. Pins the BE key bytes (shekyl_types.h ArchivalServeCreditKey).",
+    "preblock_keys_hex": [],
+    "p_canonical_id_hex": "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f",
+    "shard_id": 42,
+    "settlement_epoch": 1,
+    "expected_duplicate": false,
+    "expected_key_be_hex": "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f000000000000002a0000000000000001"
+   },
+   {
+    "id": "A-02-hit",
+    "note": "Pre-block set holds (P,42,1): duplicate.",
+    "preblock_keys_hex": [
+     "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f000000000000002a0000000000000001"
+    ],
+    "p_canonical_id_hex": "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f",
+    "shard_id": 42,
+    "settlement_epoch": 1,
+    "expected_duplicate": true,
+    "expected_key_be_hex": "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f000000000000002a0000000000000001"
+   },
+   {
+    "id": "A-03-field-swap",
+    "note": "Set holds (P,42,1); probe (P,1,42) -- field-swapped triple must not collide.",
+    "preblock_keys_hex": [
+     "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f000000000000002a0000000000000001"
+    ],
+    "p_canonical_id_hex": "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f",
+    "shard_id": 1,
+    "settlement_epoch": 42,
+    "expected_duplicate": false,
+    "expected_key_be_hex": "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f0000000000000001000000000000002a"
+   }
+  ]
+ },
+ "block_unique": {
+  "vectors": [
+   {
+    "id": "C-01-unique",
+    "note": "Distinct triples across two personas: unique. Pins the first triple's ArchivalServeCreditKey big-endian bytes -- post-SCE-1-unify the blockchain.cpp block pass and the D-SC-A persistent key share this one encoding (audit doc section 6).",
+    "triples": [
+     [
+      "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f",
+      42,
+      1
+     ],
+     [
+      "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f",
+      43,
+      1
+     ],
+     [
+      "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f",
+      42,
+      2
+     ],
+     [
+      "1111111111111111111111111111111111111111111111111111111111111111",
+      42,
+      1
+     ]
+    ],
+    "expected": "unique",
+    "expected_first_key_be_hex": "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f000000000000002a0000000000000001"
+   },
+   {
+    "id": "C-02-first-collision",
+    "note": "(P,42,1) recurs at indices 2 and 4; the C++ rejects on the FIRST insert failure (index 2).",
+    "triples": [
+     [
+      "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f",
+      42,
+      1
+     ],
+     [
+      "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f",
+      43,
+      1
+     ],
+     [
+      "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f",
+      42,
+      1
+     ],
+     [
+      "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f",
+      44,
+      1
+     ],
+     [
+      "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f",
+      42,
+      1
+     ]
+    ],
+    "expected": "duplicate_at",
+    "duplicate_index": 2
+   },
+   {
+    "id": "C-03-field-swap",
+    "note": "(shard,E) = (1,42) vs (42,1): distinct keys, no collision.",
+    "triples": [
+     [
+      "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f",
+      42,
+      1
+     ],
+     [
+      "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f",
+      1,
+      42
+     ]
+    ],
+    "expected": "unique"
+   }
+  ]
+ },
+ "sce1_crosscheck": {
+  "note": "SCE-1 (audit doc section 6) -- RESOLVED by the post-equivalence unify commit: the block-level D-SC-C pass now keys with ArchivalServeCreditKey, the same big-endian encoding D-SC-A persists (db_lmdb.cpp:1657-1659 forbids native-endian composite keys). This cross-check pins both decision paths to the one encoding; expect_equal is now true and load-bearing -- a reintroduced split fails both legs here. Equivalence was proven against the pre-unify native-endian bytes first (mirror-then-fix); the decision-invariance fuzz target holds the encoding-independence property standing.",
+  "p_canonical_id_hex": "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f",
+  "shard_id": 42,
+  "settlement_epoch": 1,
+  "key_be_hex": "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f000000000000002a0000000000000001",
+  "key_block_hex": "cf99388ec5b5ba1d340562d7e2da5f5fcc54961f1678e9b267b51239f7c3121f000000000000002a0000000000000001",
+  "expect_equal": true
+ }
+}

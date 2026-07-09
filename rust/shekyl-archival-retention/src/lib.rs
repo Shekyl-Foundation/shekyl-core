@@ -43,6 +43,7 @@ pub mod k_cover;
 pub mod path;
 pub mod reward_arithmetic;
 pub mod segment_freeze;
+pub mod serve_credit_decisions;
 pub mod serve_eligibility;
 pub mod wire;
 
@@ -104,6 +105,11 @@ pub use reward_arithmetic::{
 };
 pub use segment_freeze::{
     challenge_leaf_chunk_bounds, frozen_segment_count, LeafChunkBounds, SEGMENT_LEAF_COUNT,
+};
+pub use serve_credit_decisions::{
+    serve_credit_block_key, serve_credit_block_unique, serve_credit_gate_decision,
+    serve_credit_key_be, serve_credit_preblock_duplicate, BlockUniqueVerdict, GateReject,
+    GateVerdict, ServeCreditGateInputs, SERVE_CREDIT_KEY_LEN,
 };
 pub use serve_eligibility::serve_credit_epoch_ok;
 pub use wire::{
