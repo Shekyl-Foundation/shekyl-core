@@ -126,23 +126,68 @@ long-term payout rail):
   to loopback and is clean.
 - **(b) Extend the `P`-scan pipeline** to accrue serve-credit/work state
   wallet-side (as `pscan/accrual.rs` does for funding inflows). Pro: no
-  new RPC; offline-capable. Con: **re-derives consensus state in a
-  second implementation** — the exact divergence class WS-1 killed; the
-  scan sees blocks, but `Σwork`/budget are epoch-close *outputs* whose
-  wallet-side recompute would shadow the daemon's close pass. Rejected
-  unless (a) is shown unviable (reversion: rule 21).
+  new RPC; offline-capable. Con: it adds a **fourth evaluator** of the
+  consensus work arithmetic. `capped_work_milli`
+  (`consensus_state.rs:182-188`) is the *single definition* of the
+  per-`P` contribution to `Σwork(E)`, and its doc comment is explicit
+  that it is sourced once so the three existing consumers — the persisted
+  denominator (`sigma_work_milli`), the emission numerator FFI
+  (`shekyl_archival_emission_epoch_work`), and the verify body
+  (`emission_verify`) — **cannot drift**: "the M-2 sourcing-divergence the
+  WS-1 design makes *unrepresentable rather than tested-against*." A
+  wallet-side re-derivation is a fourth evaluator that is *not* sourced
+  from that definition (different crate, reading raw chain state), which
+  resurrects the WS-1 M-2 divergence as a **consensus-divergence** class:
+  the wallet computes a share the daemon's verifier rejects, surfacing as
+  an undiagnosable rejected claim. Rejected — not because it is a
+  divergence *risk*, but because it violates a single-evaluator invariant
+  the landed code already structurally enforces (reversion: rule 21, only
+  if (a) is shown unviable).
 - **(c) Regtest-only shortcut** (direct LMDB read or test RPC) to unblock
   the e2e now, deferring the production path. Rejected: the e2e exists
   to prove **the production path**; a test-only sourcing path is the
   parallel-builder anti-pattern the FOLLOWUPS entry names.
 
-**Round-1 recommendation: (a)**, with the RPC response shaped as the
-existing verify-side gather struct (one marshaling shape, two consumers —
-the WS-1 "one accessor" idiom at the RPC boundary). Ratification needs:
-the RPC's exact field set enumerated against `EpochCloseInputs` +
-`emission_verify.rs`'s `EmissionEpochSource`, and the gate-6 review of the
-query's linkability surface (a `(P, E)` query names `P` — public by role,
-but the *transport* must be the persona's, never the principal's session).
+**Round-1 disposition: (a) — RATIFIED (2026-07-09).** The RPC response is
+shaped as the existing verify-side gather struct (one marshaling shape,
+two consumers — the WS-1 "one accessor" idiom at the RPC boundary). The
+ratifying reason is **structural, not preference**: the operands
+(`serve_credit` bits, frozen `Σwork`, `budget(E)`) are consensus-
+authoritative values the daemon — the *sole* authoritative evaluator —
+has already computed and frozen; (a) makes the wallet *consume* those
+frozen operands, so the only arithmetic the wallet does is the share
+division over already-consensus-final values. (a) therefore **preserves**
+the single-evaluator invariant `capped_work_milli` enforces; (b) breaks
+it. That is the durable justification (it forecloses a future reviewer's
+"why not recompute wallet-side to avoid the RPC dependency" — the answer
+is that the RPC is not avoiding a hazard, it is preserving an invariant).
+
+Ratification residue (round 2): the RPC's exact field set enumerated
+against `EpochCloseInputs` + `emission_verify.rs`'s `EmissionEpochSource`,
+and the gate-6 review of the query's linkability surface (a `(P, E)` query
+names `P` — public by role, but the *transport* must be the persona's,
+never the principal's session).
+
+**Trust bound — the lying-daemon wargame (pinned).** The RPC sources
+consensus-authoritative operands from the daemon, so it inherits a trust
+posture. A daemon that returns *wrong* operands makes the wallet build a
+claim the real network rejects — a **denial-of-claim (liveness)**, never a
+theft or a false mint: every other verifier recomputes the share
+independently and rejects a bad one, so `P` **cannot be made to
+over-claim**. The RPC is therefore *safe-by-recomputation* against
+false mint and a *claim-liveness* dependency on the daemon — the same
+posture as the WI-3 tip clock, sound under the recommended local-daemon
+posture (loopback). It **joins the 2d-2 remote/untrusted-daemon reopen
+family** (the tip-clock invariant; WI-3 D-B6; WI-4 §11 named residual): a
+remote/untrusted daemon reopens "can the daemon deny my claims by feeding
+bad operands," mitigated in the same class (cross-check operands against
+independently-observable chain state where possible, else accept claim-
+liveness as a local-posture assumption). The step-7 build-time self-check
+is **necessary-not-sufficient** against this: it catches operands that
+produce a *self-inconsistent* claim, but not operands that are internally
+consistent yet wrong (a daemon lying *consistently*) — the same shape as
+the F41 tripwire being necessary-not-sufficient for the full constant-work
+claim (`DAEMON_SUBMIT_VERDICT.md` §F41).
 
 ### CB-2 — locus: which actor owns assembly?
 
@@ -197,16 +242,23 @@ computable ex ante but the share recompute doesn't distinguish the causes
 
 ## 4. Inherited obligations (pinned elsewhere, discharged here)
 
-| Obligation | Source | Discharged by |
-| --- | --- | --- |
-| Claimable epochs from the positive-share recompute | `docs/FOLLOWUPS.md` M1 round-1 forward pin | §2 step 1 |
-| Backing exclusively through `BackingSet`, arity 1 | GF-4b §5 item 1 | §2 step 3 |
-| `EmissionReward` scan arm, fail-toward-forbidden | GF-4b §5 item 2 | Companion piece: the `run_dual_extractor` arm gains its first constructor site when claim txs exist to scan; lands with this builder's PR chain (its absence would strand claim change in rung-3) |
-| First-emission backing is `BondPostChange` | GF-4b §5 item 3 | Integration test (§5) |
-| No `SpentRecordsDurablyPruned` production mint | GF-4b §5 item 4 | Review confirmation at PR boundary |
-| Change-split / tx-size bound | GF-4b §5 item 5 | §2 step 5 sizing rule (bound or split; a many-outputs persona cannot build a daemon-rejected oversize tx) |
-| `reference_height` freshness | GF-4b §5 item 6 | §2 step 3 (same-tip derivation) |
-| Wire positivity (`reward_amount_plain[i] > 0`) | M1 round 2 (M1-1, wire resiting) | §2 step 1 (share `> 0` is the claimability predicate) + `validate()` at step 7 |
+The **landed-anchor** column names the file:line the reviewer verifies the
+landed substrate against (confirmed at source, `dev` `13c368707`); the
+**discharged-by** column names where this builder's forward code satisfies
+the obligation. The two are distinct on purpose — a criterion can have
+landed substrate (verifiable now) and a forward discharge (this builder's
+PR).
+
+| Obligation | Source | Landed anchor (verify at source) | Discharged by |
+| --- | --- | --- | --- |
+| Claimable epochs from the positive-share recompute | `docs/FOLLOWUPS.md` M1 round-1 forward pin | `reward_arithmetic.rs:129` `reward_share_floor`; `consensus_state.rs:190` `capped_work_milli` (single evaluator) | §2 step 1 |
+| Backing exclusively through `BackingSet`, arity 1 | GF-4b §5 item 1 | `backing_set.rs:44` (private `records`), `:90` (`from_spendable` sole constructor), `:103` (spendability filter); arity-1 pin `emission_wire.rs:116-125` (Q3 vacuous at arity 1) | §2 step 3 |
+| `EmissionReward` scan arm, fail-toward-forbidden | GF-4b §5 item 2 | `pscan_state.rs:89` (`MintLineageOutput`; `:98` `EmissionReward`, `:103` `BondPostChange`, `:109` `ExternalTransfer`); `scan_step.rs:401` `run_dual_extractor`, `:501-511` fail-toward-forbidden default. **`EmissionReward` has zero production constructor sites today** (verified: only the enum def) — this is exactly the "gains its first constructor site" claim | Companion piece: the arm's first constructor lands with this builder's PR chain (its absence would strand claim change in rung-3) |
+| First-emission backing is `BondPostChange` | GF-4b §5 item 3 | `pscan_state.rs:103` (`BondPostChange` variant) | Integration test (§5) |
+| No `SpentRecordsDurablyPruned` production mint | GF-4b §5 item 4 | `bond_assembly.rs:231` (struct), `:238` (`for_test()` — **sole** constructor, no production mint) | Review confirmation at PR boundary (C-1 must not add one) |
+| Change-split / tx-size bound | GF-4b §5 item 5 | `bond_assembly.rs:311` `sweep_funding_outputs`, `:488` "oldest-first — no early break at required, no expressible subset" (the entire-set consumption the bound must fold/split) | §2 step 5 sizing rule (bound or split; a many-outputs persona cannot build a daemon-rejected oversize tx) |
+| `reference_height` freshness | GF-4b §5 item 6 | `backing_set.rs:96-103` (`spendable_height <= reference_height` filter, applied by the constructor itself) | §2 step 3 (same-tip derivation) |
+| Wire positivity (`reward_amount_plain[i] > 0`) | M1 round 2 (M1-1, wire resiting) | `emission_wire.rs:400` `validate()`, `:440` rejects any `reward_amount_plain[i] == 0` (the zero-row beacon unencodable) | §2 step 1 (share `> 0` is the claimability predicate) + `validate()` at step 7 |
 
 ---
 
