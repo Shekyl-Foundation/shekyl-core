@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Added
+
+- **docs: emission claim-builder design round 1 opened
+  (`docs/design/EMISSION_CLAIM_BUILDER.md`).** The E4-gate part-1 work
+  unit after C-1 (#277) landed: the wallet-side builder that assembles
+  authed `txin_archival_reward_emission` transactions — the piece the
+  Track-2 regtest e2e (E4-gate part 2) is blocked on. Spec: seven-step
+  assembly over landed substrate only (verifier-exact positive-share
+  recompute for claimable-epoch derivation; backing exclusively through
+  `BackingSet` at arity 1 per GF-4b §5; `prove_membership_only`; the
+  shared `auth_msgs` builder + dual hybrid sign; build-time self-check
+  against the landed verify functions), the GF-4b §5 / M1
+  inherited-obligation discharge table, and round-1 questions CB-1…CB-5
+  with CB-1 (archival-state recompute sourcing: new daemon RPC vs
+  wallet-side re-derivation vs regtest shortcut — recommended (a), the
+  RPC shaped as `EmissionEpochSource`) as the gating decision.
+  `IMPLEMENTATION_INDEX.md` registers the `CB-` family and refreshes
+  the stale #263/#264/#277 "in review" rows to landed with
+  code-anchored verification stamps.
+
 ### Fixed
 
 - **consensus: C-1 emission review hardening (PR #277 review,

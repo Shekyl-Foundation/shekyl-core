@@ -4479,7 +4479,11 @@ sustainability is unaffected by the recalibration.
   (`txin_stake_claim`/`C_stake` deletion) stays gated on this item per
   §4 item 5. **Target: V3.0 pre-genesis. Reopening trigger: claim
   builder lands → e2e rides the Track-2 regtest harness
-  (`regtest_e2e` family).**
+  (`regtest_e2e` family).** UPDATE 2026-07-09: the claim-builder
+  design round opened —
+  [`EMISSION_CLAIM_BUILDER.md`](./design/EMISSION_CLAIM_BUILDER.md)
+  (assembly spec + CB-1…CB-5; CB-1 recompute sourcing is the gating
+  question).
 
 ---
 
