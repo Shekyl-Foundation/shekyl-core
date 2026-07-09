@@ -1173,7 +1173,44 @@ concerns — serve-credit dedups `(P,s,E)` at `:4904`, emission dedups
 V3.0 audit" refers to the serve-credit pass; the emission pass ships at
 C-1 and is never deferred.
 
-### 9.6 Non-blocking notes
+### 9.6 Finding F-C1c — signable-hash circularity — pinned exclusion rule
+**(for ratification)**
+
+Surfaced building item 5. The vin's two binding surfaces — the Q1 auth
+message (`emission_wire.rs::auth_msg_input`, field inventory 1–7 +
+`signable_tx_hash`) and the backing membership proof — both take
+`signable_tx_hash` as an operand. The plan glosses it as "tx prefix +
+pseudo-outs" (§7.1), but the full prefix **contains the emission vin
+itself**, and the vin carries the very signatures and proof being
+verified: the signer cannot compute the hash its own signature must
+cover. Bond-post never hit this because its vin-level artifacts bind
+vin-local fields only; the tx-wide binding lives solely in the tx-level
+hybrid auth, which signs *after* assembly.
+
+**Pinned rule (consensus-visible, hence flagged):**
+`signable_tx_hash` = the transaction-prefix hash of the tx with the
+emission vin **removed wholesale** (erase `vin[emission_index]`, hash the
+result — `blockchain.cpp` emission dispatch, item 5). Wallet and verifier
+compute it identically; the vin's serialized position is recoverable
+(emission txs carry exactly one emission vin, Q3 arity).
+
+Nothing the exclusion drops goes unbound — each property is re-bound by
+a surface that does not sit inside the hash's own preimage:
+
+| dropped from the hash | re-bound by |
+|---|---|
+| vin claim fields (P, epochs, holdings, amounts) | Q1 auth message fields 1–6 (signed directly) |
+| reward destinations | Q1 field 7's ordered commit set (commitment ‖ amount ‖ one-time key) |
+| the assembled vin inside the full prefix | tx-level hybrid auth (`tx_pqc_verify.cpp`) signs the complete prefix post-assembly |
+| full-prefix binding for fee spends | fee-input FCMP++ proof binds the unmodified `tx_prefix_hash` |
+
+The two hashes deliberately differ: the emission vin's artifacts bind
+the *reduced* signable; the fee-input FCMP proof binds the *full*
+prefix. A tx whose vin is swapped post-signing fails the tx-level
+hybrid auth; a tx whose non-vin bytes are altered fails both the Q1
+auths and (when fee inputs exist) the FCMP proof.
+
+### 9.7 Non-blocking notes
 
 - **E4 shrinkage.** `txin_stake_claim` and its C++ wire are already gone —
   deleted by PR-4 of the claim-era retirement (`2615c0dae`, tags

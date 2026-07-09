@@ -80,9 +80,9 @@ pub use constants::{
     CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
 };
 pub use emission_verify::{
-    emission_vin_verify, emission_vin_verify_backing, emission_vin_verify_claims, AuthVerified,
-    BackingVerified, ClaimantBondRecord, ClaimsVerified, EmissionEpochSource, EmissionVerified,
-    EmissionVerifyContext, EmissionVerifyError,
+    emission_vin_verify, emission_vin_verify_auth, emission_vin_verify_backing,
+    emission_vin_verify_claims, AuthVerified, BackingVerified, ClaimantBondRecord, ClaimsVerified,
+    EmissionEpochSource, EmissionVerified, EmissionVerifyContext, EmissionVerifyError,
 };
 // The emission error is re-exported under a disambiguated name: the bare
 // `WireError` at this root is wire.rs's (serve-credit) type, and bond_wire's is

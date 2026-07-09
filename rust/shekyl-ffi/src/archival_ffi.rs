@@ -13,14 +13,17 @@ use std::io::Cursor;
 
 use shekyl_archival_retention::{
     as_of_e_served_work, capped_work_milli, challenge_fire_height, challenge_leaf_chunk_bounds,
-    challenge_seal_height, claimed_epochs_check_and_set, epoch_close_compute,
-    epoch_close_due_at_height, epoch_close_height, frozen_segment_count, good_through,
-    p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height, serve_credit_epoch_ok,
-    settlement_epoch_at_height, verify_bond_post_ct_balance, verify_join_market_bond_post,
-    verify_leaf_index, verify_segment_path, ArchivalBondPostVin, ArchivalServeCreditResponse,
-    BadInterval, BandedCurveParams, BondCtBalanceError, BondPostError, BondPostKind, BondTerm,
-    ClaimedEpochsError, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
-    HoldingsDescriptor, HoldingsKind, KCover, WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+    challenge_seal_height, claimed_epochs_check_and_set, emission_vin_verify,
+    emission_vin_verify_auth, emission_vin_verify_backing, emission_vin_verify_claims,
+    epoch_close_compute, epoch_close_due_at_height, epoch_close_height, frozen_segment_count,
+    good_through, p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height,
+    serve_credit_epoch_ok, settlement_epoch_at_height, verify_bond_post_ct_balance,
+    verify_join_market_bond_post, verify_leaf_index, verify_segment_path, ArchivalBondPostVin,
+    ArchivalRewardEmissionVin, ArchivalServeCreditResponse, BadInterval, BandedCurveParams,
+    BondCtBalanceError, BondPostError, BondPostKind, BondTerm, ClaimantBondRecord,
+    ClaimedEpochsError, CreditPair, EmissionEpochSource, EmissionVerifyContext,
+    EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
+    HoldingsKind, KCover, RewardCommit, WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
     ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
     CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
     SETTLEMENT_EPOCH_BLOCKS,
@@ -840,6 +843,12 @@ pub struct ShekylArchivalEmissionEpochSnapshot {
     pub close_block_height: u64,
     /// Persisted finalized `Σwork(E)` milli — the stored denominator.
     pub sigma_work_milli: u64,
+    /// Persisted frozen `budget(E)` atomic — the gate-1 numerator operand,
+    /// stored at close beside `Σwork(E)` (the `archival_budget` close row,
+    /// `ARCHIVAL_BUDGET_SCHEDULE.md` §5). Like the denominator, always the
+    /// stored value, never a recompute: the accrual accumulator is live
+    /// state; only the close row is frozen.
+    pub budget_atomic: u64,
     pub bonds_ptr: *const ShekylArchivalEpochCloseBond,
     pub bonds_len: usize,
     pub shards_ptr: *const ShekylArchivalEpochCloseShard,
@@ -949,6 +958,402 @@ pub unsafe extern "C" fn shekyl_archival_emission_epoch_work(
         *out_capped_work_milli = capped;
     }
     SHEKYL_ARCHIVAL_EPOCH_CLOSE_OK
+}
+
+// ---------------------------------------------------------------------------
+// C-1 emission-vin verify FFI (`REWARD_EMISSION_E3_GATING_ROUND.md` §9.5
+// items 3–5; `REWARD_EMISSION_VIN_PLAN.md` §7.1). Two entries: a pre-parse
+// extractor the C++ dispatch uses for operand gathering (bond record + epoch
+// snapshots are keyed by fields inside the opaque blob), and the coarse
+// verify call that runs the full §7.1 body — claims (1–5), backing (6), and
+// the hybrid auth gate (8) — in one FFI crossing (`40-ffi-discipline.mdc`).
+// ---------------------------------------------------------------------------
+
+/// Verdict: the emission vin verified end-to-end.
+pub const SHEKYL_EMISSION_VIN_OK: u8 = 0;
+/// Required pointer was null (or an output buffer was too small).
+pub const SHEKYL_EMISSION_VIN_ERR_NULL_PTR: u8 = 1;
+/// The canonical bytes failed the wire parse (tag, bounds, ordering,
+/// positivity, trailing bytes) or the in-memory structural re-validate.
+pub const SHEKYL_EMISSION_VIN_ERR_WIRE: u8 = 2;
+/// Caller marshaling is inconsistent — epoch snapshots misaligned with the
+/// claimed set, malformed gather rows, or a claimant index out of range.
+/// Never a claimant-attributable rejection: this is a daemon bug surfaced
+/// loudly (`EmissionVerifyError::EpochSourceMisaligned` and kin).
+pub const SHEKYL_EMISSION_VIN_ERR_MARSHAL: u8 = 3;
+/// Step 1: a claimed epoch is not finalized at the carrying height.
+pub const SHEKYL_EMISSION_VIN_ERR_EPOCH_NOT_FINALIZED: u8 = 4;
+/// Step 1: a claimed epoch fell below the claim window (`MAX_CLAIM_AGE_W`).
+pub const SHEKYL_EMISSION_VIN_ERR_EPOCH_EXPIRED: u8 = 5;
+/// Step 2: no bond record for the claimant.
+pub const SHEKYL_EMISSION_VIN_ERR_BOND_MISSING: u8 = 6;
+/// Step 2: vin holdings descriptor does not match the bond record.
+pub const SHEKYL_EMISSION_VIN_ERR_HOLDINGS_MISMATCH: u8 = 7;
+/// Step 2: a claimed epoch precedes the claimable range for the join epoch.
+pub const SHEKYL_EMISSION_VIN_ERR_EPOCH_BEFORE_JOIN: u8 = 8;
+/// Step 3 (WS-2 read-only layer): a claimed epoch is already in the
+/// pre-block claimed set.
+pub const SHEKYL_EMISSION_VIN_ERR_ALREADY_CLAIMED: u8 = 9;
+/// Step 4: the work claim contradicts the frozen as-of-`E` recompute
+/// (duplicate shard, credit-bit mismatch, scarcity mismatch, or total).
+pub const SHEKYL_EMISSION_VIN_ERR_WORK_MISMATCH: u8 = 10;
+/// Step 5 (R1.B zero-tolerance): a per-epoch reward amount differs from the
+/// three-channel recompute, or the total overflows.
+pub const SHEKYL_EMISSION_VIN_ERR_REWARD_MISMATCH: u8 = 11;
+/// Step 5 (loud inflation check): Σ rewards != reward vout sum.
+pub const SHEKYL_EMISSION_VIN_ERR_VOUT_SUM_MISMATCH: u8 = 12;
+/// Step 6: revealed backing pubkey does not hash to the committed leaf.
+pub const SHEKYL_EMISSION_VIN_ERR_BACKING_LEAF: u8 = 13;
+/// Step 6: membership-only proof rejected.
+pub const SHEKYL_EMISSION_VIN_ERR_BACKING_REJECTED: u8 = 14;
+/// Step 8: an auth pubkey/signature failed hybrid deserialization.
+pub const SHEKYL_EMISSION_VIN_ERR_AUTH_MALFORMED: u8 = 15;
+/// Step 8: a hybrid auth signature rejected over its Q1 binding message.
+pub const SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED: u8 = 16;
+
+/// Pure code mapping — no re-decision (the decision-placement pin: every
+/// consensus decision lives in `shekyl-archival-retention`; this collapses
+/// diagnostic detail the C ABI cannot carry).
+fn map_emission_vin_error(err: &EmissionVerifyError) -> u8 {
+    use EmissionVerifyError as E;
+    match err {
+        E::Structural(_) => SHEKYL_EMISSION_VIN_ERR_WIRE,
+        E::EpochSourceMisaligned { .. }
+        | E::GatherMalformed { .. }
+        | E::ClaimantIndexOutOfRange { .. } => SHEKYL_EMISSION_VIN_ERR_MARSHAL,
+        E::EpochNotFinalized { .. } => SHEKYL_EMISSION_VIN_ERR_EPOCH_NOT_FINALIZED,
+        E::EpochClaimExpired { .. } => SHEKYL_EMISSION_VIN_ERR_EPOCH_EXPIRED,
+        E::BondMissing => SHEKYL_EMISSION_VIN_ERR_BOND_MISSING,
+        E::HoldingsMismatch => SHEKYL_EMISSION_VIN_ERR_HOLDINGS_MISMATCH,
+        E::EpochBeforeJoin { .. } => SHEKYL_EMISSION_VIN_ERR_EPOCH_BEFORE_JOIN,
+        E::EpochAlreadyClaimed { .. } => SHEKYL_EMISSION_VIN_ERR_ALREADY_CLAIMED,
+        E::WorkClaimDuplicateShard { .. }
+        | E::ServeCreditBitMismatch { .. }
+        | E::ScarcityMismatch { .. }
+        | E::WorkTotalMismatch { .. } => SHEKYL_EMISSION_VIN_ERR_WORK_MISMATCH,
+        E::RewardMismatch { .. } | E::RewardTotalOverflow => {
+            SHEKYL_EMISSION_VIN_ERR_REWARD_MISMATCH
+        }
+        E::VoutSumMismatch { .. } => SHEKYL_EMISSION_VIN_ERR_VOUT_SUM_MISMATCH,
+        E::BackingLeafMismatch => SHEKYL_EMISSION_VIN_ERR_BACKING_LEAF,
+        E::BackingRejected(_) => SHEKYL_EMISSION_VIN_ERR_BACKING_REJECTED,
+        E::AuthMalformed { .. } => SHEKYL_EMISSION_VIN_ERR_AUTH_MALFORMED,
+        E::AuthRejected { .. } => SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED,
+    }
+}
+
+/// Length-exact parse of the canonical vin bytes (tag included): the wire
+/// codec's own tag/bounds/ordering checks plus a trailing-bytes rejection.
+fn parse_emission_vin(bytes: &[u8]) -> Result<ArchivalRewardEmissionVin, u8> {
+    let mut cursor = bytes;
+    let vin =
+        ArchivalRewardEmissionVin::read(&mut cursor).map_err(|_| SHEKYL_EMISSION_VIN_ERR_WIRE)?;
+    if !cursor.is_empty() {
+        return Err(SHEKYL_EMISSION_VIN_ERR_WIRE);
+    }
+    Ok(vin)
+}
+
+/// Pre-parse extractor for the C++ dispatch's operand gathering: parses the
+/// opaque `txin_archival_reward_emission` bytes and surfaces the two fields
+/// the daemon needs **before** it can marshal the verify call — the
+/// claimant's `P_canonical_id` (bond-record key, recomputed from `P_pubkey`
+/// per emission §6.1) and the claimed `settlement_epochs` (one as-of-`E`
+/// snapshot gather per entry).
+///
+/// Extraction implies nothing about validity beyond the wire parse; the
+/// verify call re-parses and re-validates the same bytes (the blob, not this
+/// call's outputs, is the consensus input).
+///
+/// `out_epochs_ptr` must address `epochs_cap ≥ MAX_SETTLEMENT_EPOCHS_PER_EMISSION`
+/// writable `u64`s (the parse rejects longer sets, so that capacity is always
+/// sufficient).
+///
+/// # Safety
+///
+/// `vin_ptr[0..vin_len]` must be readable; `out_p_canonical_id` must address
+/// 32 writable bytes; `out_epochs_ptr[0..epochs_cap]` and `out_epochs_len`
+/// must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_emission_vin_extract(
+    vin_ptr: *const u8,
+    vin_len: usize,
+    out_p_canonical_id: *mut u8,
+    out_epochs_ptr: *mut u64,
+    epochs_cap: usize,
+    out_epochs_len: *mut usize,
+) -> u8 {
+    if vin_ptr.is_null()
+        || vin_len == 0
+        || out_p_canonical_id.is_null()
+        || out_epochs_ptr.is_null()
+        || out_epochs_len.is_null()
+    {
+        return SHEKYL_EMISSION_VIN_ERR_NULL_PTR;
+    }
+    unsafe { *out_epochs_len = 0 };
+
+    let bytes = unsafe { std::slice::from_raw_parts(vin_ptr, vin_len) };
+    let vin = match parse_emission_vin(bytes) {
+        Ok(vin) => vin,
+        Err(code) => return code,
+    };
+    if vin.settlement_epochs.len() > epochs_cap {
+        return SHEKYL_EMISSION_VIN_ERR_NULL_PTR;
+    }
+
+    let pid = p_canonical_id_from_hybrid_pubkey(&vin.p_pubkey);
+    unsafe {
+        std::ptr::copy_nonoverlapping(pid.as_bytes().as_ptr(), out_p_canonical_id, 32);
+        std::ptr::copy_nonoverlapping(
+            vin.settlement_epochs.as_ptr(),
+            out_epochs_ptr,
+            vin.settlement_epochs.len(),
+        );
+        *out_epochs_len = vin.settlement_epochs.len();
+    }
+    SHEKYL_EMISSION_VIN_OK
+}
+
+/// The full §7.1 emission verify body in one coarse FFI crossing: wire parse,
+/// claims steps 1–5 over the marshaled as-of-`E` snapshots, membership-only
+/// backing (step 6), and the hybrid auth gate (step 8) — assembling the three
+/// sealed witnesses into the verdict. Step 7 (FCMP balance over the fee
+/// `txin_to_key`s) stays with the existing C++ tx layer.
+///
+/// Inputs mirror the operands' production sites:
+/// - `vin_ptr[0..vin_len]`: the `txin_archival_reward_emission` canonical
+///   bytes, tag included (the C++ shim's opaque blob, unparsed by C++).
+/// - Bond record (`bond_present`, `bond_join_settlement_epoch`,
+///   `bond_holdings_*`, `claimed_epochs_*`): the claimant's **pre-block**
+///   `ArchivalBondValue` fields, keyed by the extract call's
+///   `P_canonical_id`. `bond_present == 0` marshals "no record" (reject) —
+///   the remaining bond arguments are then ignored.
+/// - `snapshots_ptr[0..snapshots_len]`: one frozen as-of-`E` snapshot per
+///   claimed epoch, in claim order
+///   (`BlockchainLMDB::gather_archival_emission_epoch_snapshot`), each
+///   carrying the **persisted** `Σwork(E)` and `budget(E)` close rows.
+/// - `tree_root`/`tree_depth`: the reference block's curve-tree root context.
+/// - `signable_tx_hash`: the emission tx's signable hash (32 bytes).
+/// - `reward_commits_ptr[0..reward_commits_len]`: the ordered reward vout
+///   commit set as flattened 72-byte entries
+///   (`commitment[32] ‖ amount_plain LE u64[8] ‖ one_time_key[32]`) — the
+///   R1.A destination binding the auths signed over.
+/// - `vout_reward_sum`: Σ reward vout `amount_plain` (step 5's loud compare).
+///
+/// On `SHEKYL_EMISSION_VIN_OK`: `*out_total_reward` is the verified Σ reward
+/// (the connect arm's mint amount) and `out_epochs_ptr[0..*out_epochs_len]`
+/// holds the epochs to commit via
+/// `shekyl_archival_claimed_epochs_check_and_set`, in wire order. Outputs are
+/// zeroed on entry; a non-zero return never leaves stale values.
+///
+/// # Safety
+///
+/// All pointers must satisfy their stated lengths for the duration of the
+/// call, including each snapshot's embedded row arrays and each bond row's
+/// interval buffer per its embedded lengths. `tree_root` and
+/// `signable_tx_hash` must address 32 readable bytes each;
+/// `out_epochs_ptr[0..epochs_cap]`, `out_epochs_len`, and `out_total_reward`
+/// must be writable.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)] // coarse-call FFI: one crossing carries every §7.1 operand
+pub unsafe extern "C" fn shekyl_emission_vin_verify(
+    vin_ptr: *const u8,
+    vin_len: usize,
+    current_block_height: u64,
+    vout_reward_sum: u64,
+    bond_present: u8,
+    bond_join_settlement_epoch: u64,
+    bond_holdings_kind: u8,
+    bond_shard_ids_ptr: *const u64,
+    bond_shard_ids_len: usize,
+    claimed_epochs_ptr: *const u64,
+    claimed_epochs_len: usize,
+    snapshots_ptr: *const ShekylArchivalEmissionEpochSnapshot,
+    snapshots_len: usize,
+    tree_root: *const u8,
+    tree_depth: u8,
+    signable_tx_hash: *const u8,
+    reward_commits_ptr: *const u8,
+    reward_commits_len: usize,
+    out_total_reward: *mut u64,
+    out_epochs_ptr: *mut u64,
+    epochs_cap: usize,
+    out_epochs_len: *mut usize,
+) -> u8 {
+    if vin_ptr.is_null()
+        || vin_len == 0
+        || tree_root.is_null()
+        || signable_tx_hash.is_null()
+        || (snapshots_ptr.is_null() && snapshots_len > 0)
+        || (reward_commits_ptr.is_null() && reward_commits_len > 0)
+        || out_total_reward.is_null()
+        || out_epochs_ptr.is_null()
+        || out_epochs_len.is_null()
+    {
+        return SHEKYL_EMISSION_VIN_ERR_NULL_PTR;
+    }
+    unsafe {
+        *out_total_reward = 0;
+        *out_epochs_len = 0;
+    }
+
+    let bytes = unsafe { std::slice::from_raw_parts(vin_ptr, vin_len) };
+    let vin = match parse_emission_vin(bytes) {
+        Ok(vin) => vin,
+        Err(code) => return code,
+    };
+
+    // Bond record marshaling (step 2/3 operands, pre-block state).
+    let bond_holdings;
+    let claimed_epochs: &[u64];
+    let bond = if bond_present == 0 {
+        None
+    } else {
+        if (bond_shard_ids_ptr.is_null() && bond_shard_ids_len > 0)
+            || (claimed_epochs_ptr.is_null() && claimed_epochs_len > 0)
+        {
+            return SHEKYL_EMISSION_VIN_ERR_NULL_PTR;
+        }
+        let Ok(kind) = HoldingsKind::from_u8(bond_holdings_kind) else {
+            return SHEKYL_EMISSION_VIN_ERR_MARSHAL;
+        };
+        let shard_ids: Vec<u64> = if bond_shard_ids_len == 0 {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(bond_shard_ids_ptr, bond_shard_ids_len) }.to_vec()
+        };
+        bond_holdings = HoldingsDescriptor { kind, shard_ids };
+        claimed_epochs = if claimed_epochs_len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(claimed_epochs_ptr, claimed_epochs_len) }
+        };
+        Some(ClaimantBondRecord {
+            join_settlement_epoch: bond_join_settlement_epoch,
+            holdings: &bond_holdings,
+            claimed_settlement_epochs: claimed_epochs,
+        })
+    };
+
+    // Snapshot decode: owned rows first, then the borrowing source structs
+    // (EpochCloseInputs borrows the bond/shard/pair rows; the two-pass shape
+    // keeps every borrow anchored to this frame).
+    let raw_snaps: &[ShekylArchivalEmissionEpochSnapshot] = if snapshots_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(snapshots_ptr, snapshots_len) }
+    };
+    let mut decoded = Vec::with_capacity(raw_snaps.len());
+    for snap in raw_snaps {
+        let rows = match unsafe {
+            decode_epoch_rows(
+                snap.bonds_ptr,
+                snap.bonds_len,
+                snap.shards_ptr,
+                snap.shards_len,
+                snap.credit_pairs_ptr,
+                snap.credit_pairs_len,
+            )
+        } {
+            Ok(rows) => rows,
+            Err(_) => return SHEKYL_EMISSION_VIN_ERR_MARSHAL,
+        };
+        decoded.push(rows);
+    }
+    let bonds_per: Vec<Vec<EpochCloseBond<'_>>> =
+        decoded.iter().map(DecodedEpochRows::bonds).collect();
+    let sources: Vec<EmissionEpochSource<'_>> = raw_snaps
+        .iter()
+        .zip(&decoded)
+        .zip(&bonds_per)
+        .map(|((snap, rows), bonds)| EmissionEpochSource {
+            inputs: EpochCloseInputs {
+                settlement_epoch: snap.settlement_epoch,
+                close_block_height: snap.close_block_height,
+                settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
+                age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+                curve: BandedCurveParams {
+                    plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
+                    plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
+                },
+                bonds,
+                shards: &rows.shards,
+                credit_pairs: &rows.pairs,
+                // Close-only M1 operands, unread on the verify path (the
+                // gate's outcome arrives via the persisted Σwork denominator).
+                frozen_shard_count: 0,
+                k_cover: KCover::consensus(),
+            },
+            persisted_sigma_work_milli: snap.sigma_work_milli,
+            claimant_bond_idx: (snap.claimant_bond_idx != usize::MAX)
+                .then_some(snap.claimant_bond_idx),
+            budget: snap.budget_atomic,
+        })
+        .collect();
+
+    let ctx = EmissionVerifyContext {
+        current_block_height,
+        bond,
+        vout_reward_sum,
+    };
+
+    // Auth context: the ordered reward vout commit set, flattened 72-byte
+    // entries (commitment ‖ amount LE ‖ one-time key).
+    let commits_bytes: &[u8] = if reward_commits_len == 0 {
+        &[]
+    } else {
+        let Some(flat_len) = reward_commits_len.checked_mul(72) else {
+            return SHEKYL_EMISSION_VIN_ERR_MARSHAL;
+        };
+        unsafe { std::slice::from_raw_parts(reward_commits_ptr, flat_len) }
+    };
+    let reward_commits: Vec<RewardCommit> = commits_bytes
+        .chunks_exact(72)
+        .map(|chunk| RewardCommit {
+            commitment: chunk[0..32].try_into().expect("32-byte slice"),
+            amount_plain: u64::from_le_bytes(chunk[32..40].try_into().expect("8-byte slice")),
+            one_time_key: chunk[40..72].try_into().expect("32-byte slice"),
+        })
+        .collect();
+
+    let tree_root_arr: [u8; 32] = unsafe { *tree_root.cast::<[u8; 32]>() };
+    let tx_hash_arr: [u8; 32] = unsafe { *signable_tx_hash.cast::<[u8; 32]>() };
+
+    // Fail-fast minting of the three sealed witnesses. Claims (steps 1–5)
+    // first, then the hybrid auth gate (step 8) *before* the membership-only
+    // backing (step 6): the auths are orders of magnitude cheaper than the
+    // FCMP proof, so a forged vin is rejected before the expensive
+    // verification (DoS ordering — not consensus-visible, since every
+    // ordering rejects the same vins, and the verdict still requires all
+    // three witnesses).
+    let claims = match emission_vin_verify_claims(&vin, &ctx, &sources) {
+        Ok(claims) => claims,
+        Err(e) => return map_emission_vin_error(&e),
+    };
+    let auth = match emission_vin_verify_auth(&vin, &reward_commits, &tx_hash_arr) {
+        Ok(auth) => auth,
+        Err(e) => return map_emission_vin_error(&e),
+    };
+    let backing = match emission_vin_verify_backing(&vin, &tree_root_arr, tree_depth, tx_hash_arr) {
+        Ok(backing) => backing,
+        Err(e) => return map_emission_vin_error(&e),
+    };
+    let verdict = emission_vin_verify(claims, backing, auth);
+
+    if verdict.epochs_to_commit.len() > epochs_cap {
+        return SHEKYL_EMISSION_VIN_ERR_NULL_PTR;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            verdict.epochs_to_commit.as_ptr(),
+            out_epochs_ptr,
+            verdict.epochs_to_commit.len(),
+        );
+        *out_epochs_len = verdict.epochs_to_commit.len();
+        *out_total_reward = verdict.total_reward;
+    }
+    SHEKYL_EMISSION_VIN_OK
 }
 
 /// `epoch` was inserted into the claimed set (and stale entries pruned).
@@ -1561,6 +1966,9 @@ mod tests {
             settlement_epoch: 5,
             close_block_height: 6 * SETTLEMENT_EPOCH_BLOCKS,
             sigma_work_milli: sigma,
+            // Numerator-path test: the budget close row is not consulted by
+            // the epoch-work FFI (only the vin-verify body divides by it).
+            budget_atomic: 0,
             bonds_ptr: bonds.as_ptr(),
             bonds_len: bonds.len(),
             shards_ptr: shards.as_ptr(),
@@ -1803,5 +2211,452 @@ mod tests {
             )
         };
         assert_eq!(code, SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_ERR_INVALID);
+    }
+
+    // -----------------------------------------------------------------------
+    // C-1 emission-vin FFI (`shekyl_archival_emission_vin_extract`,
+    // `shekyl_emission_vin_verify`). The honest fixture mirrors the crate KAT
+    // (`emission_verify_kat.rs`) but is recomputed with the FFI's own pinned
+    // consensus constants (plateau curve, `KCover::consensus()`), so the test
+    // exercises the exact operand plumbing the C++ dispatch will use.
+    // -----------------------------------------------------------------------
+
+    use shekyl_archival_retention::{
+        curve_milli, reward_share_floor, sigma_work_milli, EmissionAuthRole, MembershipOnlyBacking,
+        ShardWorkEntry, WorkEpochClaim,
+    };
+    use shekyl_crypto_pq::derivation::hash_pqc_public_key;
+    use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
+
+    const EM_EPOCH: u64 = 5;
+    const EM_BUDGET: u64 = 1_000_000;
+    const EM_SHARD_A: u64 = 7;
+    const EM_SHARD_B: u64 = 9;
+
+    /// Owned honest-emission scenario: two bonds (idx 0 = claimant on shard A
+    /// only; idx 1 on A and B, so `R_market(A) = 2`), real hybrid keypairs and
+    /// signatures over the vin's own Q1 role messages, work/reward derived
+    /// through the same sourcing functions the FFI verify recomputes with.
+    /// The backing proof is garbage bytes — step 6 is pinned positive in
+    /// `shekyl-fcmp`'s KATs; here it is the terminal rejection that proves
+    /// steps 1–5 and 8 already passed through the marshaling.
+    struct EmissionFfiFixture {
+        vin_bytes: Vec<u8>,
+        p_pubkey: Vec<u8>,
+        commits_flat: Vec<u8>,
+        tx_hash: [u8; 32],
+        reward: u64,
+        sigma: u64,
+        close: u64,
+        ffi_bonds: Vec<ShekylArchivalEpochCloseBond>,
+        ffi_shards: Vec<ShekylArchivalEpochCloseShard>,
+        ffi_pairs: Vec<ShekylArchivalCreditPair>,
+    }
+
+    impl EmissionFfiFixture {
+        fn build() -> Self {
+            let close = epoch_close_height(EM_EPOCH).expect("fixture epoch closes");
+            let curve = BandedCurveParams {
+                plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
+                plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
+            };
+            let bonds = [
+                EpochCloseBond {
+                    join_settlement_epoch: 1,
+                    is_foundation_complete_tree: false,
+                    bad_intervals: &[],
+                },
+                EpochCloseBond {
+                    join_settlement_epoch: 1,
+                    is_foundation_complete_tree: false,
+                    bad_intervals: &[],
+                },
+            ];
+            let shards = [
+                EpochCloseShard {
+                    shard_id: EM_SHARD_A,
+                    has_segment: true,
+                    freeze_height: close - 5_000,
+                },
+                EpochCloseShard {
+                    shard_id: EM_SHARD_B,
+                    has_segment: true,
+                    freeze_height: close - 8_000,
+                },
+            ];
+            let pairs = [
+                CreditPair {
+                    bond_idx: 0,
+                    shard_idx: 0,
+                },
+                CreditPair {
+                    bond_idx: 1,
+                    shard_idx: 0,
+                },
+                CreditPair {
+                    bond_idx: 1,
+                    shard_idx: 1,
+                },
+            ];
+            let inputs = EpochCloseInputs {
+                settlement_epoch: EM_EPOCH,
+                close_block_height: close,
+                settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
+                age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+                curve,
+                bonds: &bonds,
+                shards: &shards,
+                credit_pairs: &pairs,
+                frozen_shard_count: 2,
+                k_cover: KCover::consensus(),
+            };
+            let served = as_of_e_served_work(&inputs).expect("well-formed fixture");
+            let work = served.work_by_bond[0];
+            assert!(served.member[0] && work > 0, "fixture claimant must earn");
+            let sigma = sigma_work_milli(&served.work_by_bond, &curve, &served.member);
+            let reward = reward_share_floor(EM_BUDGET, curve_milli(work, &curve), sigma);
+            assert!(reward > 0, "fixture reward must be wire-encodable (>0)");
+
+            let scheme = HybridEd25519MlDsa;
+            let (p_pk, p_sk) = scheme.keypair_generate().expect("P keypair");
+            let (b_pk, b_sk) = scheme.keypair_generate().expect("backing keypair");
+            let mut vin = ArchivalRewardEmissionVin {
+                p_pubkey: p_pk.to_canonical_bytes().expect("canonical P pubkey"),
+                holdings: HoldingsDescriptor {
+                    kind: HoldingsKind::ShardSetCompact,
+                    shard_ids: vec![EM_SHARD_A],
+                },
+                settlement_epochs: vec![EM_EPOCH],
+                work_claim: vec![WorkEpochClaim {
+                    epoch: EM_EPOCH,
+                    shard_entries: vec![ShardWorkEntry {
+                        shard_id: EM_SHARD_A,
+                        serve_credit_bit: true,
+                        scarcity_milli: u32::try_from(work).expect("fixture scarcity fits u32"),
+                    }],
+                }],
+                backing: MembershipOnlyBacking {
+                    proof: vec![0xAB; 64],
+                    pseudo_out: [0x22; 32],
+                    pqc_pk_hash: [0; 32],
+                    backing_pubkey: b_pk.to_canonical_bytes().expect("canonical backing pubkey"),
+                    tree_depth: 3,
+                },
+                reward_amount_plain: vec![reward],
+                auth_backing: vec![0x55; SINGLE_SIG_CANONICAL_LEN],
+                auth_claim: vec![0x66; SINGLE_SIG_CANONICAL_LEN],
+            };
+            vin.backing.pqc_pk_hash = hash_pqc_public_key(&vin.backing.backing_pubkey);
+            assert_eq!(vin.p_pubkey.len(), SINGLE_KEY_CANONICAL_LEN);
+
+            let commits = [RewardCommit {
+                commitment: [0x71; 32],
+                amount_plain: reward,
+                one_time_key: [0x72; 32],
+            }];
+            let tx_hash = [0x5F; 32];
+            let msgs = vin.auth_msgs(&commits, &tx_hash).expect("role messages");
+            vin.auth_backing = scheme
+                .sign(&b_sk, &msgs.backing)
+                .expect("backing sign")
+                .to_canonical_bytes()
+                .expect("canonical backing sig");
+            vin.auth_claim = scheme
+                .sign(&p_sk, &msgs.claim)
+                .expect("claim sign")
+                .to_canonical_bytes()
+                .expect("canonical claim sig");
+
+            let mut commits_flat = Vec::with_capacity(72);
+            commits_flat.extend_from_slice(&commits[0].commitment);
+            commits_flat.extend_from_slice(&commits[0].amount_plain.to_le_bytes());
+            commits_flat.extend_from_slice(&commits[0].one_time_key);
+
+            Self {
+                p_pubkey: vin.p_pubkey.clone(),
+                vin_bytes: vin.serialize().expect("canonical wire"),
+                commits_flat,
+                tx_hash,
+                reward,
+                sigma,
+                close,
+                ffi_bonds: bonds
+                    .iter()
+                    .map(|b| ShekylArchivalEpochCloseBond {
+                        join_settlement_epoch: b.join_settlement_epoch,
+                        bad_intervals_ptr: ptr::null(),
+                        bad_intervals_len: 0,
+                        is_foundation_complete_tree: 0,
+                    })
+                    .collect(),
+                ffi_shards: shards
+                    .iter()
+                    .map(|s| ShekylArchivalEpochCloseShard {
+                        shard_id: s.shard_id,
+                        freeze_height: s.freeze_height,
+                        has_segment: 1,
+                    })
+                    .collect(),
+                ffi_pairs: pairs
+                    .iter()
+                    .map(|p| ShekylArchivalCreditPair {
+                        bond_idx: p.bond_idx,
+                        shard_idx: p.shard_idx,
+                    })
+                    .collect(),
+            }
+        }
+
+        fn snapshot(&self) -> ShekylArchivalEmissionEpochSnapshot {
+            ShekylArchivalEmissionEpochSnapshot {
+                settlement_epoch: EM_EPOCH,
+                close_block_height: self.close,
+                sigma_work_milli: self.sigma,
+                budget_atomic: EM_BUDGET,
+                bonds_ptr: self.ffi_bonds.as_ptr(),
+                bonds_len: self.ffi_bonds.len(),
+                shards_ptr: self.ffi_shards.as_ptr(),
+                shards_len: self.ffi_shards.len(),
+                credit_pairs_ptr: self.ffi_pairs.as_ptr(),
+                credit_pairs_len: self.ffi_pairs.len(),
+                claimant_bond_idx: 0,
+            }
+        }
+
+        /// One coarse verify crossing with the honest operands, with the two
+        /// knobs the negatives vary. Returns `(code, total_reward, epochs)`.
+        fn verify(&self, bond_present: u8, tx_hash: &[u8; 32]) -> (u8, u64, Vec<u64>) {
+            let snapshots = [self.snapshot()];
+            let bond_shard_ids = [EM_SHARD_A];
+            let tree_root = [0u8; 32];
+            let mut out_total = u64::MAX;
+            let mut out_epochs = [u64::MAX; 4];
+            let mut out_len = usize::MAX;
+            let code = unsafe {
+                shekyl_emission_vin_verify(
+                    self.vin_bytes.as_ptr(),
+                    self.vin_bytes.len(),
+                    self.close + 1,
+                    self.reward,
+                    bond_present,
+                    1,
+                    HoldingsKind::ShardSetCompact as u8,
+                    bond_shard_ids.as_ptr(),
+                    bond_shard_ids.len(),
+                    ptr::null(),
+                    0,
+                    snapshots.as_ptr(),
+                    snapshots.len(),
+                    tree_root.as_ptr(),
+                    3,
+                    tx_hash.as_ptr(),
+                    self.commits_flat.as_ptr(),
+                    1,
+                    ptr::from_mut(&mut out_total),
+                    out_epochs.as_mut_ptr(),
+                    out_epochs.len(),
+                    ptr::from_mut(&mut out_len),
+                )
+            };
+            assert!(
+                out_len <= out_epochs.len(),
+                "out_epochs_len must be written"
+            );
+            (code, out_total, out_epochs[..out_len].to_vec())
+        }
+    }
+
+    /// Extract roundtrip: the pre-parse call surfaces `P_canonical_id`
+    /// (recomputed from `P_pubkey`) and the claimed epochs from the opaque
+    /// blob; truncated bytes and an undersized epoch buffer reject with
+    /// zeroed outputs.
+    #[test]
+    fn emission_vin_extract_roundtrip_and_rejects() {
+        let fx = EmissionFfiFixture::build();
+
+        let mut pid = [0u8; 32];
+        let mut epochs = [u64::MAX; 4];
+        let mut epochs_len = usize::MAX;
+        let code = unsafe {
+            shekyl_archival_emission_vin_extract(
+                fx.vin_bytes.as_ptr(),
+                fx.vin_bytes.len(),
+                pid.as_mut_ptr(),
+                epochs.as_mut_ptr(),
+                epochs.len(),
+                ptr::from_mut(&mut epochs_len),
+            )
+        };
+        assert_eq!(code, SHEKYL_EMISSION_VIN_OK);
+        assert_eq!(epochs_len, 1);
+        assert_eq!(epochs[0], EM_EPOCH);
+        assert_eq!(
+            &pid,
+            p_canonical_id_from_hybrid_pubkey(&fx.p_pubkey).as_bytes(),
+            "extract must key the bond record by the §6.1 canonical id"
+        );
+
+        // Truncated wire rejects (and a trailing byte would too: the parse is
+        // length-exact).
+        let mut epochs_len = usize::MAX;
+        let code = unsafe {
+            shekyl_archival_emission_vin_extract(
+                fx.vin_bytes.as_ptr(),
+                fx.vin_bytes.len() - 1,
+                pid.as_mut_ptr(),
+                epochs.as_mut_ptr(),
+                epochs.len(),
+                ptr::from_mut(&mut epochs_len),
+            )
+        };
+        assert_eq!(code, SHEKYL_EMISSION_VIN_ERR_WIRE);
+        assert_eq!(epochs_len, 0, "failure path must not leave stale lengths");
+
+        // Undersized epoch buffer and null pointers reject.
+        let code = unsafe {
+            shekyl_archival_emission_vin_extract(
+                fx.vin_bytes.as_ptr(),
+                fx.vin_bytes.len(),
+                pid.as_mut_ptr(),
+                epochs.as_mut_ptr(),
+                0,
+                ptr::from_mut(&mut epochs_len),
+            )
+        };
+        assert_eq!(code, SHEKYL_EMISSION_VIN_ERR_NULL_PTR);
+        let code = unsafe {
+            shekyl_archival_emission_vin_extract(
+                ptr::null(),
+                0,
+                pid.as_mut_ptr(),
+                epochs.as_mut_ptr(),
+                epochs.len(),
+                ptr::from_mut(&mut epochs_len),
+            )
+        };
+        assert_eq!(code, SHEKYL_EMISSION_VIN_ERR_NULL_PTR);
+    }
+
+    /// End-to-end coarse verify over the honest fixture: claims (steps 1–5)
+    /// and the hybrid auth gate (step 8) pass through the full FFI
+    /// marshaling — snapshots, bond record, flattened reward commits — and
+    /// the call terminates at step 6 rejecting the garbage backing proof.
+    /// Reaching `BACKING_REJECTED` (not any earlier code) is the assertion:
+    /// it proves the DoS ordering (auth before backing) and that every
+    /// marshaled operand reproduced the crate-level honest fixture.
+    #[test]
+    fn emission_vin_verify_ffi_marshals_honest_operands_to_step_6() {
+        let fx = EmissionFfiFixture::build();
+
+        let (code, total, epochs) = fx.verify(1, &fx.tx_hash);
+        assert_eq!(
+            code, SHEKYL_EMISSION_VIN_ERR_BACKING_REJECTED,
+            "honest claims + auths must reach (and stop at) the garbage proof"
+        );
+        assert_eq!(total, 0, "rejection must zero the mint output");
+        assert!(epochs.is_empty(), "rejection must zero the commit set");
+
+        // Auth-before-backing ordering: a tampered tx context breaks the Q1
+        // binding messages, so the same vin now rejects at step 8 — earlier
+        // than the backing proof it rejected at above.
+        let mut wrong_hash = fx.tx_hash;
+        wrong_hash[0] ^= 0x01;
+        let (code, total, epochs) = fx.verify(1, &wrong_hash);
+        assert_eq!(code, SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED);
+        assert_eq!(total, 0);
+        assert!(epochs.is_empty());
+
+        // Step 2: no bond record marshaled (`bond_present == 0`).
+        let (code, total, epochs) = fx.verify(0, &fx.tx_hash);
+        assert_eq!(code, SHEKYL_EMISSION_VIN_ERR_BOND_MISSING);
+        assert_eq!(total, 0);
+        assert!(epochs.is_empty());
+    }
+
+    /// Marshaling negatives for the coarse verify: truncated wire, null
+    /// pointers, and the diagnostic error-code map for the auth variants the
+    /// C ABI collapses.
+    #[test]
+    fn emission_vin_verify_ffi_rejects_bad_marshaling() {
+        let fx = EmissionFfiFixture::build();
+        let snapshots = [fx.snapshot()];
+        let tree_root = [0u8; 32];
+        let mut out_total = u64::MAX;
+        let mut out_epochs = [u64::MAX; 4];
+        let mut out_len = usize::MAX;
+
+        // Truncated vin bytes fail the length-exact parse.
+        let code = unsafe {
+            shekyl_emission_vin_verify(
+                fx.vin_bytes.as_ptr(),
+                fx.vin_bytes.len() - 1,
+                fx.close + 1,
+                fx.reward,
+                0,
+                0,
+                0,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                snapshots.as_ptr(),
+                snapshots.len(),
+                tree_root.as_ptr(),
+                3,
+                fx.tx_hash.as_ptr(),
+                fx.commits_flat.as_ptr(),
+                1,
+                ptr::from_mut(&mut out_total),
+                out_epochs.as_mut_ptr(),
+                out_epochs.len(),
+                ptr::from_mut(&mut out_len),
+            )
+        };
+        assert_eq!(code, SHEKYL_EMISSION_VIN_ERR_WIRE);
+        assert_eq!(out_total, 0, "failure path must not leave stale outputs");
+        assert_eq!(out_len, 0);
+
+        // Null vin pointer rejects before any parse.
+        let code = unsafe {
+            shekyl_emission_vin_verify(
+                ptr::null(),
+                0,
+                fx.close + 1,
+                fx.reward,
+                0,
+                0,
+                0,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                snapshots.as_ptr(),
+                snapshots.len(),
+                tree_root.as_ptr(),
+                3,
+                fx.tx_hash.as_ptr(),
+                fx.commits_flat.as_ptr(),
+                1,
+                ptr::from_mut(&mut out_total),
+                out_epochs.as_mut_ptr(),
+                out_epochs.len(),
+                ptr::from_mut(&mut out_len),
+            )
+        };
+        assert_eq!(code, SHEKYL_EMISSION_VIN_ERR_NULL_PTR);
+
+        // The C ABI's collapsed diagnostic map, pinned per auth variant.
+        assert_eq!(
+            map_emission_vin_error(&EmissionVerifyError::AuthMalformed {
+                role: EmissionAuthRole::Claim
+            }),
+            SHEKYL_EMISSION_VIN_ERR_AUTH_MALFORMED
+        );
+        assert_eq!(
+            map_emission_vin_error(&EmissionVerifyError::AuthRejected {
+                role: EmissionAuthRole::Backing
+            }),
+            SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED
+        );
     }
 }

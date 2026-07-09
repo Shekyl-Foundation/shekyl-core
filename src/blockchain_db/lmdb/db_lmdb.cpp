@@ -6547,50 +6547,6 @@ void BlockchainLMDB::gather_archival_epoch_rows(uint64_t settlement_epoch,
   TXN_POSTFIX_RDONLY();
 }
 
-std::vector<shekyl_archival_epoch_close_bond>
-  ArchivalEmissionEpochSnapshot::to_ffi_bonds() const
-{
-  std::vector<shekyl_archival_epoch_close_bond> ffi;
-  ffi.reserve(bonds.size());
-  for (const BondRow& row : bonds)
-  {
-    shekyl_archival_epoch_close_bond b{};
-    b.join_settlement_epoch = row.join_settlement_epoch;
-    b.is_foundation_complete_tree = row.is_foundation_complete_tree ? 1 : 0;
-    b.bad_intervals_ptr = row.bad_intervals_flat.empty()
-      ? nullptr : row.bad_intervals_flat.data();
-    b.bad_intervals_len = row.bad_intervals_flat.size() / 2;
-    ffi.push_back(b);
-  }
-  return ffi;
-}
-
-std::vector<shekyl_archival_epoch_close_shard>
-  ArchivalEmissionEpochSnapshot::to_ffi_shards() const
-{
-  std::vector<shekyl_archival_epoch_close_shard> ffi;
-  ffi.reserve(shards.size());
-  for (const ShardRow& row : shards)
-  {
-    shekyl_archival_epoch_close_shard s{};
-    s.shard_id = row.shard_id;
-    s.freeze_height = row.freeze_height;
-    s.has_segment = row.has_segment ? 1 : 0;
-    ffi.push_back(s);
-  }
-  return ffi;
-}
-
-std::vector<shekyl_archival_credit_pair>
-  ArchivalEmissionEpochSnapshot::to_ffi_credit_pairs() const
-{
-  std::vector<shekyl_archival_credit_pair> ffi;
-  ffi.reserve(credit_pairs.size());
-  for (const CreditPair& pair : credit_pairs)
-    ffi.push_back({ pair.bond_idx, pair.shard_idx });
-  return ffi;
-}
-
 void BlockchainLMDB::gather_archival_emission_epoch_snapshot(const crypto::hash& p_id,
   uint64_t settlement_epoch, ArchivalEmissionEpochSnapshot& out) const
 {

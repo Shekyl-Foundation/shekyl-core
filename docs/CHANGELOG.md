@@ -4,6 +4,49 @@
 
 ### Added
 
+- **consensus/ffi: C-1 commit-block 3 — emission verify FFI + dispatch
+  wiring (§9.5 items 3 + 5; gate-last, still dead code).** Rust side:
+  the production `AuthVerified` minter `emission_vin_verify_auth`
+  (`emission_verify.rs`) verifies both Q1 hybrid auths — Auth-B under
+  `backing_pubkey` with the leaf-gate pin (`hash_pqc_public_key` must
+  equal the committed `pqc_pk_hash`), Auth-P under `P_pubkey` — over the
+  domain-separated `auth_msgs` binding messages; new
+  `AuthMalformed`/`AuthRejected{role}` diagnostics. Two FFI entries in
+  `archival_ffi.rs` (mirrored in `shekyl_ffi.h`):
+  `shekyl_archival_emission_vin_extract` (pre-parse: `P_canonical_id` +
+  claimed epochs, for C++ operand gathering) and
+  `shekyl_emission_vin_verify` (the full §7.1 body — claims 1–5,
+  membership-only backing 6, hybrid auth 8, auth-before-backing for DoS
+  ordering — one coarse crossing returning verdict + `total_reward` +
+  `epochs_to_commit`); `shekyl_archival_emission_epoch_snapshot` gains
+  `budget_atomic`. C++ side: `ArchivalEmissionEpochSnapshot` +
+  `gather_archival_emission_epoch_snapshot` lifted to the `BlockchainDB`
+  interface (LMDB overrides; default backend rejects via
+  `has_budget_row=false`), and the `check_tx_inputs` emission branch —
+  classify (exactly one emission vin, `txin_to_key` co-residents only),
+  fee-input pre-gates, PQC-slot binding (`pqc_auths[emission_index]`'s
+  hybrid key must derive the vin's `P_canonical_id`), pseudoOuts sized
+  by the fee subset, reference-block age windows + curve-tree context
+  shared by both proofs, **F-C1c signable hash** (prefix hash with the
+  emission vin removed wholesale — circularity exclusion, re-bound per
+  the §9.6 table), per-epoch frozen snapshot gather (absent budget row
+  rejects), ordered reward commit set (non-zero plaintext vouts:
+  commitment ‖ amount LE ‖ one-time key), the coarse verify call, and
+  step-7 fee-input FCMP++ verification (proof must be absent with zero
+  fee inputs). **Gate-last:** `check_inputs_types_supported` still
+  rejects the vin type — the whole branch is unreachable until the
+  block-4 whitelist flip. FFI KATs cover extract/verify round-trips and
+  the negative surface; the 79 C++ archival tests pass unchanged.
+
+- **docs: F-C1c pinned in `REWARD_EMISSION_E3_GATING_ROUND.md` §9.6
+  (for ratification)** — the emission vin's auth messages and backing
+  proof bind `signable_tx_hash`, but the full tx prefix contains the vin
+  itself (its own signatures in the preimage — circular). Pin:
+  `signable_tx_hash` = prefix hash of the tx with the emission vin
+  removed wholesale; every dropped property re-bound (Q1 fields 1–6, the
+  field-7 commit set, tx-level hybrid auth over the complete prefix,
+  fee-input FCMP++ over the unmodified `tx_prefix_hash`).
+
 - **consensus: C-1 commit-block 2 — `txin_archival_reward_emission`
   transport shim (dense tag `0x04`, F-C1b pin).** New vin variant in
   `cryptonote_basic.h` carrying the complete Rust canonical encoding as an

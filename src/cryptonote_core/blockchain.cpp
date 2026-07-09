@@ -3369,11 +3369,15 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 
   bool is_archival_serve_credit_only = false;
   bool is_archival_bond_post_tx = false;
+  bool is_archival_emission_tx = false;
   size_t archival_bond_post_index = 0;
+  size_t archival_emission_index = 0;
   if (!tx.vin.empty())
   {
     is_archival_serve_credit_only = true;
     size_t bond_post_count = 0;
+    size_t emission_count = 0;
+    size_t to_key_count = 0;
     for (size_t i = 0; i < tx.vin.size(); ++i)
     {
       const auto& vin = tx.vin[i];
@@ -3384,10 +3388,23 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         ++bond_post_count;
         archival_bond_post_index = i;
       }
-      else if (!std::holds_alternative<txin_to_key>(vin) && !std::holds_alternative<txin_gen>(vin))
-        bond_post_count = 2;
+      else if (std::holds_alternative<txin_archival_reward_emission>(vin))
+      {
+        ++emission_count;
+        archival_emission_index = i;
+      }
+      else if (std::holds_alternative<txin_to_key>(vin))
+        ++to_key_count;
     }
-    is_archival_bond_post_tx = (bond_post_count == 1);
+    // Exactly one special vin; key-imaged txin_to_key spends are the only
+    // permitted co-residents (bond-post funding inputs / emission fee inputs,
+    // the Q11 mixing rule — REWARD_EMISSION_E3_GATING_ROUND.md §2.2; arity 1
+    // per Q3 §2.1). Any other vin combination falls through to the regular
+    // FCMP++ path, whose txin_to_key assertion rejects it.
+    is_archival_bond_post_tx =
+      (bond_post_count == 1 && emission_count == 0 && to_key_count + 1 == tx.vin.size());
+    is_archival_emission_tx =
+      (emission_count == 1 && bond_post_count == 0 && to_key_count + 1 == tx.vin.size());
   }
 
   if (tx.version >= 2 && !is_archival_serve_credit_only)
@@ -3490,6 +3507,30 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       }
     }
   }
+  else if (is_archival_emission_tx)
+  {
+    // Fee inputs (>= 0 permitted, Q11): same key-imaged txin_to_key pre-gates
+    // as bond-post funding inputs. The emission vin itself carries no key
+    // image — its anti-replay is the per-epoch dedup (WS-2).
+    for (const auto& txin : tx.vin)
+    {
+      if (!std::holds_alternative<txin_to_key>(txin))
+        continue;
+      const txin_to_key& in_to_key = std::get<txin_to_key>(txin);
+      if (!in_to_key.key_offsets.empty())
+      {
+        MERROR_VER("Archival emission fee input has non-empty key_offsets");
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
+      if (have_tx_keyimg_as_spent(in_to_key.k_image))
+      {
+        MERROR_VER("Archival emission fee-input key image already spent");
+        tvc.m_double_spend = true;
+        return false;
+      }
+    }
+  }
   else if (is_fcmp_pp)
   {
     // ─── FCMP++ per-input validation ────────────────────────────────────
@@ -3546,6 +3587,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       }
 
       if (!is_archival_serve_credit_only && !is_archival_bond_post_tx
+        && !is_archival_emission_tx
         && rv.p.pseudoOuts.size() != num_inputs)
       {
         MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
@@ -3718,6 +3760,306 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
               << (int)fcmp_result << ")");
             tvc.m_verifivation_failed = true;
             return false;
+          }
+        }
+      }
+      else if (is_archival_emission_tx)
+      {
+        // ── C-1 emission dispatch (REWARD_EMISSION_E3_GATING_ROUND.md §9.5
+        // item 5). Gate-last: unreachable until the item-4 whitelist flip —
+        // check_inputs_types_supported still rejects the vin type, so no tx
+        // reaches this branch on any chain yet.
+        const txin_archival_reward_emission& emission =
+          std::get<txin_archival_reward_emission>(tx.vin[archival_emission_index]);
+
+        // Pre-parse the opaque blob (the Rust codec is its only parser;
+        // C++ reads nothing past the tag byte): claimant id + claimed epochs.
+        crypto::hash p_canonical_id{};
+        uint64_t vin_epochs[SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS] = {};
+        size_t vin_epochs_len = 0;
+        const uint8_t extract_rc = shekyl_archival_emission_vin_extract(
+          emission.canonical_bytes.data(), emission.canonical_bytes.size(),
+          reinterpret_cast<uint8_t*>(p_canonical_id.data),
+          vin_epochs, SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS, &vin_epochs_len);
+        if (extract_rc != SHEKYL_EMISSION_VIN_OK || vin_epochs_len == 0)
+        {
+          MERROR_VER("Archival emission vin parse failed (code " << (int)extract_rc << ")");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+
+        // Tx-level PQC slot binding: the emission slot's hybrid key must
+        // derive the vin's P_canonical_id, so the tx-wide hybrid signature
+        // over this slot (tx_pqc_verify.cpp) is P's — mirroring bond-post's
+        // pubkey-equality pin with the id as the comparable (the vin's
+        // P_pubkey stays inside the opaque blob).
+        const auto& emission_auth = tx.pqc_auths[archival_emission_index];
+        crypto::hash auth_p_id{};
+        if (!shekyl_archival_p_canonical_id_from_pubkey(
+              emission_auth.hybrid_public_key.data(),
+              emission_auth.hybrid_public_key.size(),
+              reinterpret_cast<uint8_t*>(auth_p_id.data))
+            || auth_p_id != p_canonical_id)
+        {
+          MERROR_VER("Archival emission pqc_auths[" << archival_emission_index
+            << "] hybrid pubkey does not derive the vin's P_canonical_id");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+
+        // Fee-spend subset (Q11: >= 0 txin_to_key co-residents; with none,
+        // the fee is paid out of the mint and the balance closes in the
+        // emission RCT semantics — block 4).
+        std::vector<size_t> spend_indices;
+        spend_indices.reserve(tx.vin.size());
+        for (size_t i = 0; i < tx.vin.size(); ++i)
+        {
+          if (std::holds_alternative<txin_to_key>(tx.vin[i]))
+            spend_indices.push_back(i);
+        }
+        const size_t num_spend = spend_indices.size();
+        if (rv.p.pseudoOuts.size() != num_spend)
+        {
+          MERROR_VER("Archival emission tx pseudoOuts count " << rv.p.pseudoOuts.size()
+            << " does not match fee-input count " << num_spend);
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+
+        // Reference block + curve-tree context (bond-post idiom). Required
+        // even with zero fee inputs: the vin's membership-only backing proof
+        // verifies against this root.
+        uint64_t ref_height = 0;
+        if (!m_db->block_exists(rv.referenceBlock, &ref_height))
+        {
+          MERROR_VER("Archival emission tx referenceBlock not found");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+        if (chain_height < FCMP_REFERENCE_BLOCK_MIN_AGE ||
+            ref_height > chain_height - FCMP_REFERENCE_BLOCK_MIN_AGE)
+        {
+          MERROR_VER("Archival emission tx referenceBlock too recent");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+        if (chain_height > FCMP_REFERENCE_BLOCK_MAX_AGE &&
+            ref_height < chain_height - FCMP_REFERENCE_BLOCK_MAX_AGE)
+        {
+          MERROR_VER("Archival emission tx referenceBlock too old");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+        *pmax_used_block_height = ref_height;
+
+        std::array<uint8_t, 32> tree_root = m_db->get_curve_tree_root_at_height(ref_height);
+        const uint8_t current_depth = m_db->get_curve_tree_depth();
+        if (rv.p.curve_trees_tree_depth == 0 || rv.p.curve_trees_tree_depth > current_depth)
+        {
+          MERROR_VER("Archival emission tx curve_trees_tree_depth out of range");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+        // One tx-declared depth for both proofs, in upstream layers units
+        // (LMDB depth + 1): the backing proof's wire tree_depth must equal
+        // this (verify_membership_only pins equality), and the fee-input
+        // FCMP++ proof below takes the same value.
+        const uint8_t fcmp_layers = static_cast<uint8_t>(rv.p.curve_trees_tree_depth + 1);
+
+        // Signable hash (F-C1c): the prefix hash of the tx with the emission
+        // vin removed wholesale. The vin cannot be covered by the hash its
+        // own auths and backing proof sign (circularity); every property the
+        // exclusion could lose is re-bound explicitly by the Q1 auth message
+        // (vin fields 1–6) and the reward commit set (field 7), and the
+        // tx-level hybrid auth (tx_pqc_verify.cpp) covers the complete
+        // prefix including the assembled vin.
+        crypto::hash signable_tx_hash;
+        {
+          transaction_prefix pruned = static_cast<const transaction_prefix&>(tx);
+          pruned.vin.erase(pruned.vin.begin() + archival_emission_index);
+          signable_tx_hash = get_transaction_prefix_hash(pruned);
+        }
+
+        // Claimant's pre-block bond record (the WS-2 read side's operand).
+        shekyl::db::ArchivalBondValue bond;
+        const bool bond_present = m_db->get_archival_bond_value(p_canonical_id, bond);
+
+        // As-of-E snapshots, one per claimed epoch in claim order. An absent
+        // frozen budget row means the epoch never closed (or was pruned) —
+        // a gather failure, rejected here rather than marshaled.
+        std::vector<ArchivalEmissionEpochSnapshot> snaps(vin_epochs_len);
+        std::vector<std::vector<shekyl_archival_epoch_close_bond>> ffi_bonds(vin_epochs_len);
+        std::vector<std::vector<shekyl_archival_epoch_close_shard>> ffi_shards(vin_epochs_len);
+        std::vector<std::vector<shekyl_archival_credit_pair>> ffi_pairs(vin_epochs_len);
+        std::vector<shekyl_archival_emission_epoch_snapshot> ffi_snaps(vin_epochs_len);
+        for (size_t k = 0; k < vin_epochs_len; ++k)
+        {
+          m_db->gather_archival_emission_epoch_snapshot(p_canonical_id, vin_epochs[k], snaps[k]);
+          if (!snaps[k].has_budget_row)
+          {
+            MERROR_VER("Archival emission claimed epoch " << vin_epochs[k]
+              << " has no frozen budget row (epoch not closed, or pruned)");
+            tvc.m_verifivation_failed = true;
+            return false;
+          }
+          ffi_bonds[k] = snaps[k].to_ffi_bonds();
+          ffi_shards[k] = snaps[k].to_ffi_shards();
+          ffi_pairs[k] = snaps[k].to_ffi_credit_pairs();
+          shekyl_archival_emission_epoch_snapshot s{};
+          s.settlement_epoch = snaps[k].settlement_epoch;
+          s.close_block_height = snaps[k].close_block_height;
+          s.sigma_work_milli = snaps[k].sigma_work_milli;
+          s.budget_atomic = snaps[k].budget_atomic;
+          s.bonds_ptr = ffi_bonds[k].empty() ? nullptr : ffi_bonds[k].data();
+          s.bonds_len = ffi_bonds[k].size();
+          s.shards_ptr = ffi_shards[k].empty() ? nullptr : ffi_shards[k].data();
+          s.shards_len = ffi_shards[k].size();
+          s.credit_pairs_ptr = ffi_pairs[k].empty() ? nullptr : ffi_pairs[k].data();
+          s.credit_pairs_len = ffi_pairs[k].size();
+          s.claimant_bond_idx = snaps[k].claimant_bond_idx;
+          ffi_snaps[k] = s;
+        }
+
+        // Ordered reward vout commit set (§8.0.2 field 7): the vouts carrying
+        // loud (non-zero plaintext) amounts, in vout order. Zero-amount vouts
+        // are ordinary confidential outputs (change) and join neither the
+        // commit set nor the sum.
+        if (rv.outPk.size() != tx.vout.size())
+        {
+          MERROR_VER("Archival emission tx outPk count " << rv.outPk.size()
+            << " does not match vout count " << tx.vout.size());
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+        std::vector<uint8_t> commits_flat;
+        commits_flat.reserve(tx.vout.size() * 72);
+        uint64_t vout_reward_sum = 0;
+        size_t reward_commit_count = 0;
+        for (size_t i = 0; i < tx.vout.size(); ++i)
+        {
+          const uint64_t amount = tx.vout[i].amount;
+          if (amount == 0)
+            continue;
+          if (amount > std::numeric_limits<uint64_t>::max() - vout_reward_sum)
+          {
+            MERROR_VER("Archival emission reward vout sum overflows");
+            tvc.m_verifivation_failed = true;
+            return false;
+          }
+          vout_reward_sum += amount;
+          crypto::public_key one_time_key;
+          if (!get_output_public_key(tx.vout[i], one_time_key))
+          {
+            MERROR_VER("Archival emission reward vout " << i << " has no output public key");
+            tvc.m_verifivation_failed = true;
+            return false;
+          }
+          const size_t off = commits_flat.size();
+          commits_flat.resize(off + 72);
+          memcpy(commits_flat.data() + off, rv.outPk[i].mask.bytes, 32);
+          for (size_t b = 0; b < 8; ++b)
+            commits_flat[off + 32 + b] = static_cast<uint8_t>((amount >> (8 * b)) & 0xff);
+          memcpy(commits_flat.data() + off + 40, &one_time_key, 32);
+          ++reward_commit_count;
+        }
+
+        // The coarse verify crossing: §7.1 claims 1–5, membership-only
+        // backing 6, hybrid auth gate 8 — one FFI call, verdict + operands
+        // for the connect arm (block 5).
+        uint64_t total_reward = 0;
+        uint64_t epochs_to_commit[SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS] = {};
+        size_t epochs_to_commit_len = 0;
+        const uint8_t verify_rc = shekyl_emission_vin_verify(
+          emission.canonical_bytes.data(), emission.canonical_bytes.size(),
+          chain_height,
+          vout_reward_sum,
+          bond_present ? 1 : 0,
+          bond.join_settlement_epoch,
+          bond.holdings_kind,
+          bond.held_shard_ids.empty() ? nullptr : bond.held_shard_ids.data(),
+          bond.held_shard_ids.size(),
+          bond.claimed_settlement_epochs.empty()
+            ? nullptr : bond.claimed_settlement_epochs.data(),
+          bond.claimed_settlement_epochs.size(),
+          ffi_snaps.data(), ffi_snaps.size(),
+          tree_root.data(),
+          fcmp_layers,
+          reinterpret_cast<const uint8_t*>(signable_tx_hash.data),
+          commits_flat.empty() ? nullptr : commits_flat.data(),
+          reward_commit_count,
+          &total_reward,
+          epochs_to_commit, SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS, &epochs_to_commit_len);
+        if (verify_rc != SHEKYL_EMISSION_VIN_OK)
+        {
+          MERROR_VER("Archival emission vin verification failed (code "
+            << (int)verify_rc << ")");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+        MDEBUG("Archival emission vin verified: total_reward=" << total_reward
+          << " epochs_to_commit=" << epochs_to_commit_len);
+
+        // §7.1 step 7: fee-input FCMP++ membership/balance over the
+        // txin_to_key subset — identical to bond-post funding inputs. With
+        // zero fee inputs the prunable proof must be absent (the backing
+        // proof lives inside the vin, not here).
+        if (num_spend == 0)
+        {
+          if (!rv.p.fcmp_pp_proof.empty())
+          {
+            MERROR_VER("Archival emission tx with no fee inputs must not carry an FCMP++ proof");
+            tvc.m_verifivation_failed = true;
+            return false;
+          }
+        }
+        else
+        {
+          if (rv.p.fcmp_pp_proof.empty())
+          {
+            MERROR_VER("Archival emission tx has fee inputs but an empty FCMP++ proof");
+            tvc.m_verifivation_failed = true;
+            return false;
+          }
+
+          std::vector<uint8_t> key_images_flat(num_spend * 32);
+          std::vector<uint8_t> pseudo_outs_flat(num_spend * 32);
+          std::vector<uint8_t> pqc_hashes_flat(num_spend * 32);
+          for (size_t j = 0; j < num_spend; ++j)
+          {
+            const size_t i = spend_indices[j];
+            const txin_to_key& in_to_key = std::get<txin_to_key>(tx.vin[i]);
+            memcpy(key_images_flat.data() + j * 32, &in_to_key.k_image, 32);
+            memcpy(pseudo_outs_flat.data() + j * 32, rv.p.pseudoOuts[j].bytes, 32);
+            const auto& hpk = tx.pqc_auths[i].hybrid_public_key;
+            if (!shekyl_fcmp_pqc_leaf_hash(hpk.data(), hpk.size(), pqc_hashes_flat.data() + j * 32))
+            {
+              MERROR_VER("Archival emission tx pqc leaf hash failed for fee input " << i);
+              tvc.m_verifivation_failed = true;
+              return false;
+            }
+          }
+
+          if (!skip_fcmp_verify)
+          {
+            const uint8_t fcmp_result = shekyl_fcmp_verify(
+              rv.p.fcmp_pp_proof.data(),
+              rv.p.fcmp_pp_proof.size(),
+              key_images_flat.data(),
+              num_spend,
+              pseudo_outs_flat.data(),
+              num_spend,
+              pqc_hashes_flat.data(),
+              num_spend,
+              tree_root.data(),
+              fcmp_layers,
+              reinterpret_cast<const uint8_t*>(tx_prefix_hash.data));
+            if (fcmp_result != 0)
+            {
+              MERROR_VER("Archival emission fee-input FCMP++ proof verification failed (code "
+                << (int)fcmp_result << ")");
+              tvc.m_verifivation_failed = true;
+              return false;
+            }
           }
         }
       }

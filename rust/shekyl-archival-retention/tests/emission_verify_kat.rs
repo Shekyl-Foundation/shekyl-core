@@ -16,9 +16,9 @@
 //! re-fixtured here (step 6's negative paths are).
 
 use shekyl_archival_retention::emission_verify::{
-    emission_vin_verify, emission_vin_verify_backing, emission_vin_verify_claims, AuthVerified,
-    BackingVerified, ClaimantBondRecord, EmissionEpochSource, EmissionVerifyContext,
-    EmissionVerifyError,
+    emission_vin_verify, emission_vin_verify_auth, emission_vin_verify_backing,
+    emission_vin_verify_claims, AuthVerified, BackingVerified, ClaimantBondRecord,
+    EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError,
 };
 use shekyl_archival_retention::CreditPair as Pair;
 use shekyl_archival_retention::{
@@ -28,8 +28,10 @@ use shekyl_archival_retention::{
     ShardWorkEntry, WorkEpochClaim, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_CLAIM_AGE_W,
     SETTLEMENT_EPOCH_BLOCKS,
 };
+use shekyl_archival_retention::{EmissionAuthRole, RewardCommit};
 use shekyl_crypto_pq::derivation::hash_pqc_public_key;
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
+use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridSecretKey, SignatureScheme};
 
 /// Claimed settlement epoch for the base fixture.
 const E: u64 = 5;
@@ -597,6 +599,195 @@ fn source_count_mismatch_rejects() {
             claimed: 1,
             marshaled: 0,
             ..
+        }
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Step 8 — hybrid auth gate (the C-1 AuthVerified production minter)
+// ---------------------------------------------------------------------------
+
+/// Tx-level auth context shared by builder (signer) and verifier below.
+fn auth_tx_context() -> (Vec<RewardCommit>, [u8; 32]) {
+    (
+        vec![RewardCommit {
+            commitment: [0x71; 32],
+            amount_plain: 1_000,
+            one_time_key: [0x72; 32],
+        }],
+        [0x5F; 32],
+    )
+}
+
+/// Honest-signer fixture: real hybrid keypairs for `P` and the backing
+/// output, real signatures over the vin's own Q1 role messages. Returns the
+/// authed vin plus both secret keys for cross-signing negatives.
+fn authed_vin(
+    fx: &Fixture,
+    commits: &[RewardCommit],
+    tx_hash: &[u8; 32],
+) -> (ArchivalRewardEmissionVin, HybridSecretKey, HybridSecretKey) {
+    let scheme = HybridEd25519MlDsa;
+    let (p_pk, p_sk) = scheme.keypair_generate().expect("P keypair");
+    let (b_pk, b_sk) = scheme.keypair_generate().expect("backing keypair");
+
+    let mut vin = honest_vin(fx);
+    vin.p_pubkey = p_pk.to_canonical_bytes().expect("canonical P pubkey");
+    vin.backing.backing_pubkey = b_pk.to_canonical_bytes().expect("canonical backing pubkey");
+    vin.backing.pqc_pk_hash = hash_pqc_public_key(&vin.backing.backing_pubkey);
+
+    // The role messages span the vin body but not the auth fields themselves
+    // (a signature cannot cover itself); the canonical-length placeholders
+    // from `honest_vin` keep `validate()` satisfied while the messages are
+    // computed, exactly as the wallet builder sequences it.
+    let msgs = vin.auth_msgs(commits, tx_hash).expect("role messages");
+    vin.auth_backing = scheme
+        .sign(&b_sk, &msgs.backing)
+        .expect("backing sign")
+        .to_canonical_bytes()
+        .expect("canonical backing sig");
+    vin.auth_claim = scheme
+        .sign(&p_sk, &msgs.claim)
+        .expect("claim sign")
+        .to_canonical_bytes()
+        .expect("canonical claim sig");
+    (vin, p_sk, b_sk)
+}
+
+/// Positive path: both hybrid auths verify and the minter yields the sealed
+/// witness — the only production `AuthVerified` constructor.
+#[test]
+fn auth_accepts_honest_dual_signatures() {
+    let fx = Fixture::new(E);
+    let (commits, tx_hash) = auth_tx_context();
+    let (vin, _, _) = authed_vin(&fx, &commits, &tx_hash);
+
+    emission_vin_verify_auth(&vin, &commits, &tx_hash).expect("honest auths accept");
+}
+
+/// The Auth-B leaf gate fires before any signature work: a vin whose
+/// revealed backing pubkey does not hash to the committed leaf rejects even
+/// when both signatures are genuine over the correct messages.
+#[test]
+fn auth_rejects_backing_leaf_mismatch_before_signatures() {
+    let fx = Fixture::new(E);
+    let (commits, tx_hash) = auth_tx_context();
+    let (mut vin, _, _) = authed_vin(&fx, &commits, &tx_hash);
+    vin.backing.pqc_pk_hash[0] ^= 0x01;
+
+    assert!(matches!(
+        emission_vin_verify_auth(&vin, &commits, &tx_hash).unwrap_err(),
+        EmissionVerifyError::BackingLeafMismatch
+    ));
+}
+
+/// Role separation: each signature only verifies under its own Q1
+/// customization. Swapping the two genuine signatures rejects at Auth-B.
+#[test]
+fn auth_rejects_swapped_role_signatures() {
+    let fx = Fixture::new(E);
+    let (commits, tx_hash) = auth_tx_context();
+    let (mut vin, _, _) = authed_vin(&fx, &commits, &tx_hash);
+    std::mem::swap(&mut vin.auth_backing, &mut vin.auth_claim);
+
+    assert!(matches!(
+        emission_vin_verify_auth(&vin, &commits, &tx_hash).unwrap_err(),
+        EmissionVerifyError::AuthRejected {
+            role: EmissionAuthRole::Backing
+        }
+    ));
+}
+
+/// Key binding: a claim auth signed by the backing key (not `P`) rejects at
+/// Auth-P — holding the stake key does not let you claim as someone else's
+/// pseudonym.
+#[test]
+fn auth_rejects_claim_signed_by_wrong_key() {
+    let fx = Fixture::new(E);
+    let (commits, tx_hash) = auth_tx_context();
+    let (mut vin, _p_sk, b_sk) = authed_vin(&fx, &commits, &tx_hash);
+
+    let msgs = vin.auth_msgs(&commits, &tx_hash).expect("role messages");
+    vin.auth_claim = HybridEd25519MlDsa
+        .sign(&b_sk, &msgs.claim)
+        .expect("cross sign")
+        .to_canonical_bytes()
+        .expect("canonical sig");
+
+    assert!(matches!(
+        emission_vin_verify_auth(&vin, &commits, &tx_hash).unwrap_err(),
+        EmissionVerifyError::AuthRejected {
+            role: EmissionAuthRole::Claim
+        }
+    ));
+}
+
+/// Context binding: genuine signatures over one tx's context reject under
+/// another's — a destination swap (different reward commit) and a cross-tx
+/// replay (different signable hash) both flip the recomputed messages.
+#[test]
+fn auth_rejects_tampered_tx_context() {
+    let fx = Fixture::new(E);
+    let (commits, tx_hash) = auth_tx_context();
+    let (vin, _, _) = authed_vin(&fx, &commits, &tx_hash);
+
+    let mut swapped_dest = commits.clone();
+    swapped_dest[0].one_time_key = [0x73; 32];
+    assert!(matches!(
+        emission_vin_verify_auth(&vin, &swapped_dest, &tx_hash).unwrap_err(),
+        EmissionVerifyError::AuthRejected {
+            role: EmissionAuthRole::Backing
+        }
+    ));
+
+    let other_tx_hash = [0x60; 32];
+    assert!(matches!(
+        emission_vin_verify_auth(&vin, &commits, &other_tx_hash).unwrap_err(),
+        EmissionVerifyError::AuthRejected {
+            role: EmissionAuthRole::Backing
+        }
+    ));
+}
+
+/// Canonical-length-but-malformed bytes (the pre-C-1 placeholder fill) fail
+/// hybrid deserialization, not signature verification — the distinct
+/// `AuthMalformed` diagnostic, per role.
+#[test]
+fn auth_rejects_malformed_hybrid_encodings() {
+    let fx = Fixture::new(E);
+    let (commits, tx_hash) = auth_tx_context();
+
+    // Malformed backing signature (placeholder fill from honest_vin).
+    let (mut vin, _, _) = authed_vin(&fx, &commits, &tx_hash);
+    vin.auth_backing = vec![0x55; SINGLE_SIG_CANONICAL_LEN];
+    assert!(matches!(
+        emission_vin_verify_auth(&vin, &commits, &tx_hash).unwrap_err(),
+        EmissionVerifyError::AuthMalformed {
+            role: EmissionAuthRole::Backing
+        }
+    ));
+
+    // Malformed P pubkey: the leaf gate does not cover `p_pubkey`, so this
+    // must surface at Auth-P deserialization. Re-sign over the mutated vin so
+    // the failure isolates to the encoding, not the message.
+    let (mut vin, p_sk, b_sk) = authed_vin(&fx, &commits, &tx_hash);
+    vin.p_pubkey = vec![0x11; SINGLE_KEY_CANONICAL_LEN];
+    let msgs = vin.auth_msgs(&commits, &tx_hash).expect("role messages");
+    let scheme = HybridEd25519MlDsa;
+    vin.auth_backing = scheme
+        .sign(&b_sk, &msgs.backing)
+        .expect("backing sign")
+        .to_canonical_bytes()
+        .expect("canonical sig");
+    vin.auth_claim = scheme
+        .sign(&p_sk, &msgs.claim)
+        .expect("claim sign")
+        .to_canonical_bytes()
+        .expect("canonical sig");
+    assert!(matches!(
+        emission_vin_verify_auth(&vin, &commits, &tx_hash).unwrap_err(),
+        EmissionVerifyError::AuthMalformed {
+            role: EmissionAuthRole::Claim
         }
     ));
 }

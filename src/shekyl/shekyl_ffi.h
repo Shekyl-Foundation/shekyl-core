@@ -2003,6 +2003,12 @@ struct shekyl_archival_emission_epoch_snapshot
   uint64_t close_block_height;
   /// Persisted finalized Σwork(E) milli — the stored denominator.
   uint64_t sigma_work_milli;
+  /// Persisted frozen budget(E) atomic — the gate-1 numerator operand, stored
+  /// at close beside Σwork(E) (the archival_budget close row,
+  /// ARCHIVAL_BUDGET_SCHEDULE.md §5). Always the stored value, never a
+  /// recompute: the accrual accumulator is live state; only the close row is
+  /// frozen.
+  uint64_t budget_atomic;
   const struct shekyl_archival_epoch_close_bond* bonds_ptr;
   size_t bonds_len;
   const struct shekyl_archival_epoch_close_shard* shards_ptr;
@@ -2032,6 +2038,120 @@ uint8_t shekyl_archival_emission_epoch_work(
     const struct shekyl_archival_emission_epoch_snapshot* snapshot,
     uint64_t* out_work_milli,
     uint64_t* out_capped_work_milli);
+
+/* ---------------------------------------------------------------------------
+ * C-1 emission-vin verify FFI (REWARD_EMISSION_E3_GATING_ROUND.md §9.5 items
+ * 3–5; REWARD_EMISSION_VIN_PLAN.md §7.1). Two entries: a pre-parse extractor
+ * for operand gathering, and the coarse verify call running the full §7.1
+ * body (claims 1–5, membership-only backing 6, hybrid auth gate 8) in one
+ * FFI crossing. Step 7 (FCMP balance over fee txin_to_keys) stays with the
+ * existing C++ tx layer.
+ * ------------------------------------------------------------------------ */
+
+/* Verdict: the emission vin verified end-to-end. */
+#define SHEKYL_EMISSION_VIN_OK                        0
+/* Required pointer was null (or an output buffer too small). */
+#define SHEKYL_EMISSION_VIN_ERR_NULL_PTR              1
+/* Canonical bytes failed the wire parse or structural re-validate. */
+#define SHEKYL_EMISSION_VIN_ERR_WIRE                  2
+/* Caller marshaling inconsistent (snapshot misalignment, malformed gather,
+ * claimant index out of range) — a daemon bug surfaced loudly, never a
+ * claimant-attributable rejection. */
+#define SHEKYL_EMISSION_VIN_ERR_MARSHAL               3
+/* Step 1: claimed epoch not finalized at the carrying height. */
+#define SHEKYL_EMISSION_VIN_ERR_EPOCH_NOT_FINALIZED   4
+/* Step 1: claimed epoch below the claim window (MAX_CLAIM_AGE_W). */
+#define SHEKYL_EMISSION_VIN_ERR_EPOCH_EXPIRED         5
+/* Step 2: no bond record for the claimant. */
+#define SHEKYL_EMISSION_VIN_ERR_BOND_MISSING          6
+/* Step 2: vin holdings descriptor does not match the bond record. */
+#define SHEKYL_EMISSION_VIN_ERR_HOLDINGS_MISMATCH     7
+/* Step 2: claimed epoch precedes the join epoch's claimable range. */
+#define SHEKYL_EMISSION_VIN_ERR_EPOCH_BEFORE_JOIN     8
+/* Step 3 (WS-2 read-only layer): epoch already in the claimed set. */
+#define SHEKYL_EMISSION_VIN_ERR_ALREADY_CLAIMED       9
+/* Step 4: work claim contradicts the frozen as-of-E recompute. */
+#define SHEKYL_EMISSION_VIN_ERR_WORK_MISMATCH         10
+/* Step 5 (R1.B zero-tolerance): reward differs from the recompute. */
+#define SHEKYL_EMISSION_VIN_ERR_REWARD_MISMATCH       11
+/* Step 5 (loud inflation check): Σ rewards != reward vout sum. */
+#define SHEKYL_EMISSION_VIN_ERR_VOUT_SUM_MISMATCH     12
+/* Step 6: backing pubkey does not hash to the committed leaf. */
+#define SHEKYL_EMISSION_VIN_ERR_BACKING_LEAF          13
+/* Step 6: membership-only proof rejected. */
+#define SHEKYL_EMISSION_VIN_ERR_BACKING_REJECTED      14
+/* Step 8: auth pubkey/signature failed hybrid deserialization. */
+#define SHEKYL_EMISSION_VIN_ERR_AUTH_MALFORMED        15
+/* Step 8: hybrid auth signature rejected over its Q1 binding message. */
+#define SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED         16
+
+/* Upper bound on settlement_epochs per emission vin — mirrors the Rust wire
+ * pin MAX_SETTLEMENT_EPOCHS_PER_EMISSION (emission_wire.rs; the parse rejects
+ * longer sets), sizing the extract/verify epoch output buffers. */
+#define SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS         15
+
+/// Pre-parse extractor for dispatch operand gathering: parses the opaque
+/// txin_archival_reward_emission canonical bytes (tag included) and writes
+/// the claimant's P_canonical_id (32 bytes, recomputed from P_pubkey per
+/// emission §6.1 — the bond-record key) and the claimed settlement_epochs
+/// (one as-of-E snapshot gather per entry). Extraction implies nothing about
+/// validity beyond the wire parse; shekyl_emission_vin_verify re-parses the
+/// same bytes. `out_epochs_ptr` must address `epochs_cap` writable uint64_t
+/// with `epochs_cap >= 15` (MAX_SETTLEMENT_EPOCHS_PER_EMISSION; the parse
+/// rejects longer sets). Returns SHEKYL_EMISSION_VIN_OK or an error above.
+uint8_t shekyl_archival_emission_vin_extract(
+    const uint8_t* vin_ptr,
+    size_t vin_len,
+    uint8_t* out_p_canonical_id,
+    uint64_t* out_epochs_ptr,
+    size_t epochs_cap,
+    size_t* out_epochs_len);
+
+/// The full §7.1 emission verify body in one coarse crossing. Operands:
+/// - vin bytes: the opaque blob, tag included (C++ never parses inside it).
+/// - Bond record: the claimant's PRE-BLOCK ArchivalBondValue fields keyed by
+///   the extract call's P_canonical_id; `bond_present == 0` marshals "no
+///   record" (reject; remaining bond arguments are then ignored).
+/// - snapshots: one frozen as-of-E snapshot per claimed epoch in claim
+///   order (gather_archival_emission_epoch_snapshot), each carrying the
+///   persisted Σwork(E) and budget(E) close rows.
+/// - tree_root (32 bytes) / tree_depth: the reference block's curve-tree
+///   root context; signable_tx_hash (32 bytes): the emission tx's signable
+///   hash.
+/// - reward_commits: the ordered reward vout commit set as flattened
+///   72-byte entries (commitment[32] ‖ amount_plain LE u64[8] ‖
+///   one_time_key[32]) — the R1.A destination binding; reward_commits_len
+///   is the ENTRY count.
+/// - vout_reward_sum: Σ reward vout amount_plain (step 5's loud compare).
+///
+/// On SHEKYL_EMISSION_VIN_OK, `*out_total_reward` is the verified Σ reward
+/// (the connect arm's mint amount) and `out_epochs_ptr[0..*out_epochs_len]`
+/// the epochs to commit via shekyl_archival_claimed_epochs_check_and_set, in
+/// wire order (`epochs_cap >= 15` suffices). Outputs are zeroed on entry; a
+/// non-zero return never leaves stale values.
+uint8_t shekyl_emission_vin_verify(
+    const uint8_t* vin_ptr,
+    size_t vin_len,
+    uint64_t current_block_height,
+    uint64_t vout_reward_sum,
+    uint8_t bond_present,
+    uint64_t bond_join_settlement_epoch,
+    uint8_t bond_holdings_kind,
+    const uint64_t* bond_shard_ids_ptr,
+    size_t bond_shard_ids_len,
+    const uint64_t* claimed_epochs_ptr,
+    size_t claimed_epochs_len,
+    const struct shekyl_archival_emission_epoch_snapshot* snapshots_ptr,
+    size_t snapshots_len,
+    const uint8_t* tree_root,
+    uint8_t tree_depth,
+    const uint8_t* signable_tx_hash,
+    const uint8_t* reward_commits_ptr,
+    size_t reward_commits_len,
+    uint64_t* out_total_reward,
+    uint64_t* out_epochs_ptr,
+    size_t epochs_cap,
+    size_t* out_epochs_len);
 
 // ---------------------------------------------------------------------------
 // LWMA-1 difficulty-adjustment FFI surface
