@@ -91,7 +91,10 @@ pub(crate) async fn create_wallet(
         (base, state.network, state.daemon_address.clone())
     };
 
-    let created = create_wallet_engine(&base, network, &daemon_address, &p, kdf).await;
+    // Move password into Zeroizing before any slow work so the serde
+    // String is consumed (no residual plaintext copy beside the wipeable vec).
+    let password = Zeroizing::new(p.password.into_bytes());
+    let created = create_wallet_engine(&base, network, &daemon_address, password, kdf).await;
     let (engine, backup) = match created {
         Ok(v) => v,
         Err(e) => {
@@ -121,11 +124,10 @@ async fn create_wallet_engine(
     base: &Path,
     network: Network,
     daemon_address: &str,
-    p: &CreateWalletParams,
+    password: Zeroizing<Vec<u8>>,
     kdf: KdfParams,
 ) -> Result<(Engine<SoloSigner>, SeedBackup), WalletRpcError> {
     let daemon = make_daemon(daemon_address).await?;
-    let password = Zeroizing::new(p.password.clone().into_bytes());
     let creds = Credentials::password_only(password.as_slice());
 
     let (master_seed, seed_format, backup) = generate_seed_material(network)?;
@@ -181,7 +183,10 @@ pub(crate) async fn open_wallet(
         (base, state.network, state.daemon_address.clone())
     };
 
-    let opened = open_wallet_engine(&base, network, &daemon_address, &p).await;
+    // Same password hand-off as create: consume the serde String into
+    // Zeroizing before daemon connect / Argon2.
+    let password = Zeroizing::new(p.password.into_bytes());
+    let opened = open_wallet_engine(&base, network, &daemon_address, password).await;
     let (engine, restore_hint) = match opened {
         Ok(v) => v,
         Err(e) => {
@@ -200,10 +205,9 @@ async fn open_wallet_engine(
     base: &Path,
     network: Network,
     daemon_address: &str,
-    p: &OpenWalletParams,
+    password: Zeroizing<Vec<u8>>,
 ) -> Result<(Engine<SoloSigner>, Option<i64>), WalletRpcError> {
     let daemon = make_daemon(daemon_address).await?;
-    let password = Zeroizing::new(p.password.clone().into_bytes());
     let creds = Credentials::password_only(password.as_slice());
 
     let opened = tokio::task::block_in_place(|| {
@@ -216,7 +220,12 @@ async fn open_wallet_engine(
         OpenedEngine::Restored {
             wallet,
             from_height,
-        } => (wallet, Some(from_height as i64)),
+        } => (
+            wallet,
+            // Match other height projections in this crate (queries/project):
+            // saturate rather than wrap on values > i64::MAX.
+            Some(i64::try_from(from_height).unwrap_or(i64::MAX)),
+        ),
     })
 }
 
