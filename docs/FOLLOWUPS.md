@@ -4414,6 +4414,21 @@ sustainability is unaffected by the recalibration.
 
 ## V3.1 — audit response and stressnet gates
 
+- **Raw-import archival/burn bookkeeping parity** (surfaced 2026-07-09,
+  F-B1a remediation). The non-verifying import path
+  (`blockchain_import.cpp` direct `db.add_block`) bypasses
+  `handle_block_to_main_chain`, so it writes neither the per-height burn
+  rows / `total_burned` (pre-existing) nor the staker-inflow accrual
+  amount (it passes `archival_budget_accrual = 0`) — an imported chain's
+  frozen `budget(E)` rows and burn bookkeeping diverge from a synced
+  node's. The close/slash hooks *do* run on import, so the divergence is
+  silent, not a crash. Disposition options: compute the economics legs
+  at import time (duplicates connect-path logic), record the amounts in
+  the export format, or gate raw import to verified mode for
+  post-genesis chains. Target: V3.1 (the importer is an operator
+  utility, not a genesis-gating consensus surface; verified-mode import
+  and full sync are unaffected).
+
 - **Serve-credit decision-site flip: Rust becomes the primary decision
   site for `blockchain.cpp:4247`/`:4312`/`:4889–4910`** (surfaced
   2026-07-08 with the V3.0 equivalence-audit item above, which is its

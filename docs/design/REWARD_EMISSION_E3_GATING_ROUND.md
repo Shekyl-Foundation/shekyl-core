@@ -1329,3 +1329,81 @@ explicit heights, bypassing the derivation under test.
   {10, 11} to {1, 2} so the KAT reaches claimability after ~3
   settlement epochs of appended blocks (~2 s), matching the slash
   scheduler KAT's scale.
+
+### 9.9 Findings F-B1a / F-B1b / F-B1c — budget accrual and redirect — **FIXED** (c2 parked)
+
+Block-1 file:line review of the budget-accrual/redirect write
+(`ARCHIVAL_BUDGET_SCHEDULE.md` §§2–3). The substrate KATs B1–B3 drive
+`add_archival_budget_accrual` and the close hook directly, so none of
+them could see defects in *when* and *with which operands* the connect
+path performs the write. Three findings; the first two share one
+structural fix.
+
+- **F-B1a (budget misses the last block of every epoch).** The accrual
+  row was written by `handle_block_to_main_chain` **after**
+  `m_db->add_block` returned — but the epoch-close hook runs *inside*
+  `add_block`, so when the close of epoch E fired (while connecting E's
+  final block, close operand `(E+1)·SEB`), the range-sum over
+  `[E·SEB, (E+1)·SEB)` found no row for the final block. Every epoch's
+  `budget(E)` silently dropped one block's inflow: a per-epoch
+  under-mint and a standing violation of §2.2's conservation identity
+  (the dropped inflow was neither burned nor emittable). Live on
+  mainnet-shaped chains from the first close.
+- **F-B1b (redirect flips on the next block's version).** The redirect
+  gate read `m_hardfork->get_current_version()` **after** `add_block` —
+  by which point `HardFork::add` has advanced `current_fork_index` via
+  `get_voted_fork_index(height + 1)`, the *next* block's version. At an
+  activation boundary the boundary block's inflow accrued under the next
+  block's rules — one block over-mint against §2.2's per-block pin.
+  Latent on mainnet (single-entry fork table, active-from-genesis);
+  armed on any testnet or post-genesis fork. Independently discovered
+  and confirmed by the maintainer during review.
+- **Structural fix (both):** the staker-inflow computation and target
+  decision moved **before** `m_db->add_block`
+  (`blockchain.cpp:5352–5398`), where `get_current_version()` is exactly
+  the connecting block's validated version — the same operand
+  `validate_miner_transaction` received. The accrual amount rides into
+  `add_block` as a new `archival_budget_accrual` parameter
+  (`blockchain_db.h`), and `BlockchainDB::add_block` writes the row
+  **before** the slash/close hooks fire, same wtxn. The pop-side removal
+  moved into `BlockchainDB::pop_block` (keyed at the block index,
+  the §9.8 claim-journal convention), so both sides of the row live in
+  the same layer inside the block's txn. The burn-record write stays in
+  the Blockchain layer (its landed idiom), now fed by the pre-add
+  computation.
+- **F-B1c (accrual-site operand drift vs verify).** Two operand
+  mismatches between the accrual computation and
+  `validate_miner_transaction`:
+  - **c1 (fee leg) — fixed.** The accrual site called
+    `compute_fee_burn` with `tx_volume = 0`, which zeroes `burn_pct`
+    (`burn.rs:46–79`) and with it both `staker_pool_amount` (the fee
+    half of the inflow never accrued anywhere) and `actually_destroyed`
+    (the destroyed share never reached `block_burn`/`total_burned`).
+    Fix: the site passes `get_tx_volume_avg(blockchain_height)` — the
+    verify path's exact operand at the same pre-add read point.
+  - **c2 (emission leg) — parked, adjudication question surfaced.** The
+    accrual site derives `full_block_emission` from the 5-arg
+    `get_block_reward` (no release multiplier, no weight penalty),
+    while verify's `base_reward` comes from the 6-arg form (volume-run
+    release multiplier + weight penalty). The two emission quantities
+    diverge whenever the multiplier ≠ RELEASE_MIN-baseline or a penalty
+    applies, so the accrued `staker_emission` is a share of a
+    *different* quantity than the ledger's. Which quantity the budget
+    should share is a spec question (the Q taxonomy of
+    `ARCHIVAL_BUDGET_SCHEDULE.md` §1's "the amount inside the purse is
+    Component-4's"), not an operand bug — parked for adjudication
+    rather than silently re-anchored. The in-code comment at the
+    redirect block names the parked state.
+- **Armed KAT:**
+  `budget_epoch_boundary_includes_final_block_through_real_block_path`
+  (`tests/unit_tests/archival_substrate_lmdb.cpp`) drives per-block
+  accrual amounts through the real `add_block` across the epoch-0
+  boundary: asserts `budget(0)` equals all `SEB` rows including the
+  boundary block's (verified armed: re-ordering the write after the
+  hooks reproduces the one-row-short sum, `409959` vs `410000`), then
+  pops the boundary block (frozen row reverts with the close family,
+  the block's own accrual row reverts with the pop, prior rows
+  survive) and re-connects it (byte-identical re-close). F-B1b's proof
+  is by construction — the operand is read at the same pre-add point
+  verify reads it — and is pinned by the redirect block's comment and
+  §2.2's implementation note.

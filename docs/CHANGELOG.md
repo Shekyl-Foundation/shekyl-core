@@ -4,6 +4,30 @@
 
 ### Fixed
 
+- **consensus: budget accrual ordering and redirect operands (F-B1a /
+  F-B1b / F-B1c-c1, `REWARD_EMISSION_E3_GATING_ROUND.md` §9.9,
+  `ARCHIVAL_BUDGET_SCHEDULE.md` §§1–3).** The staker-inflow accrual row
+  was written after `m_db->add_block` returned — after the epoch-close
+  hook had already range-summed the epoch — so every `budget(E)` dropped
+  its final block's inflow (F-B1a, per-epoch under-mint and a §2.2
+  conservation violation). The redirect gate read
+  `get_current_version()` post-add, the *next* block's version, flipping
+  the redirect one block early at an activation boundary (F-B1b). And
+  the accrual site called `compute_fee_burn` with `tx_volume = 0`,
+  zeroing the fee-pool half of the inflow and the destroyed share's
+  burn record (F-B1c-c1). Structural fix: the computation moved before
+  `add_block` (block's own validated version; verify's exact
+  `get_tx_volume_avg` operand), the amount rides into
+  `BlockchainDB::add_block` as a new `archival_budget_accrual`
+  parameter written before the connect hooks, and the pop-side removal
+  moved into `BlockchainDB::pop_block` (same layer, same wtxn). New
+  production-path KAT
+  (`budget_epoch_boundary_includes_final_block_through_real_block_path`)
+  crosses the epoch-0 boundary through real `add_block`/`pop_block`,
+  verified armed against the F-B1a ordering. The emission-quantity
+  operand drift (F-B1c-c2, 5-arg vs 6-arg `get_block_reward`) is
+  parked pending spec adjudication — see §9.9.
+
 - **consensus: emission connect-arm height operands (F-B5a / F-B5b,
   `REWARD_EMISSION_E3_GATING_ROUND.md` §9.8).** The emission arm in
   `BlockchainDB::add_transaction` derived its height via
