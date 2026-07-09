@@ -433,10 +433,20 @@ boundary. The labeled form is what catches the branch-selection class
 posture: with `HF_VERSION_ARCHIVAL_EMISSION == 1` the burn leg is
 compile-alive but unexercised through the real connect path; the
 expectations are written against the constant generically, so a
-post-genesis activation bump arms the burn leg and the true straddle
-through the same fixture with no test change — until then, B1's
-synthetic unit-level fork-height injection remains the burn leg's only
-executed coverage.
+post-genesis activation bump to the fixture's top fork version (2) arms
+the burn leg and the true straddle through the same fixture with no
+test change — a `static_assert` in the test header forces a fork-table
+extension for any bump past 2, which would otherwise leave every
+fixture block pre-activation and silently de-arm the accrue leg. Until
+an activation bump lands, B1's synthetic unit-level fork-height
+injection remains the burn leg's only executed coverage. Fee-leg gap
+(disclosed): the fixture is fee-free, so the KAT exercises only the
+emission half of `staker_inflow` (`staker_emission +
+staker_pool_amount`) end-to-end — the same chaingen FCMP++
+fee-transaction gap that defers B5's connect-path block form (below)
+defers the fee-pool half here; it rides the E4/E5 regtest-e2e residue,
+with the unit-level B5 KATs and the F-B1c-c1 operand pin as the interim
+guards.
 B4 spans the Rust wire/verify KATs (landed classes) plus the builder-side
 omission test when the claim-builder lands. B5 landed as unit-level KATs
 (`economics_b5_fee_coinbase.cpp`) driving `validate_miner_transaction`

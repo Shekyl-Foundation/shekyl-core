@@ -1513,5 +1513,20 @@ structural fix.
     compile-alive but unexercised. The expectations are written against
     the constant generically and the fixture's fork table already
     crosses v1→v2 mid-chain (height 8, epoch-unaligned), so a
-    post-genesis activation bump (constant > 1) arms the burn leg and
-    the true boundary straddle with **no test change**.
+    post-genesis activation bump to the fixture's top fork version
+    (constant == 2) arms the burn leg and the true boundary straddle
+    with **no test change**. A bump PAST 2 would instead leave every
+    fixture block pre-activation — accrue leg and straddle silently
+    de-armed with CI green — so the test header carries a
+    `static_assert(HF_VERSION_ARCHIVAL_EMISSION <= k_post_fork_version)`
+    that forces the fork table to be extended first.
+  - **Fee-leg coverage gap (disclosed).** The fixture is fee-free, so
+    the KAT exercises only the emission half of production's redirected
+    quantity `staker_inflow = staker_emission + staker_pool_amount`;
+    `compute_fee_burn(0, …) == {0,0,0}` makes the fee-pool half
+    byte-invisible here. chaingen cannot construct valid FCMP++ fee
+    transactions (empty `pqc_auths` stubs reject even in FAKECHAIN —
+    `chaingen_main.cpp` disabled-tests note), so the fee-pool half's
+    end-to-end coverage rides the §9.5 item-8 regtest e2e (E4/E5)
+    carrier; until then its guards are the unit-level B5 KATs
+    (`economics_b5_fee_coinbase.cpp`) and the F-B1c-c1 operand pin.

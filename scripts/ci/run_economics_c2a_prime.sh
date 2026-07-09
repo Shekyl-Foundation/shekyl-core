@@ -258,34 +258,32 @@ cmd_layer2() {
   run_rust_layer2
 }
 
-cmd_layer3() {
+# The ONE fail-closed core_tests gate: refuses to pass green when the filter
+# matches zero registered tests (the convention-theater class). Every
+# core_tests lane goes through here — a gate fix applied to a per-lane copy
+# leaves the other lanes theater.
+run_core_tests_gate() {
+  local filter="$1" label="$2" hint="$3"
   require_repo_root
   verify_build_artifact_layout
   require_build_tree
-  local filter='economics_c2a_prime_layer3*'
   local count
   count="$(count_core_tests "$filter")"
   if [[ "$count" -eq 0 ]]; then
-    die "no C2a′ Layer 3 core_tests (filter '${filter}'). \
-Land pop-replay harness per STAGE_1_PR_7 §5.8."
+    die "no ${label} core_tests (filter '${filter}'). ${hint}"
   fi
-  echo "Layer 3: found ${count} core_tests case(s) matching ${filter}"
+  echo "${label}: found ${count} core_tests case(s) matching ${filter}"
   run_core_tests_layer "$filter"
 }
 
+cmd_layer3() {
+  run_core_tests_gate 'economics_c2a_prime_layer3*' 'C2a′ Layer 3' \
+    'Land pop-replay harness per STAGE_1_PR_7 §5.8.'
+}
+
 cmd_conservation() {
-  require_repo_root
-  verify_build_artifact_layout
-  require_build_tree
-  local filter='archival_budget_conservation*'
-  local count
-  count="$(count_core_tests "$filter")"
-  if [[ "$count" -eq 0 ]]; then
-    die "no archival budget conservation core_tests (filter '${filter}'). \
-Land the C-1 conservation KAT per REWARD_EMISSION_E3_GATING_ROUND.md §9.9."
-  fi
-  echo "Conservation: found ${count} core_tests case(s) matching ${filter}"
-  run_core_tests_layer "$filter"
+  run_core_tests_gate 'archival_budget_conservation*' 'archival budget conservation' \
+    'Land the C-1 conservation KAT per REWARD_EMISSION_E3_GATING_ROUND.md §9.9.'
 }
 
 usage() {

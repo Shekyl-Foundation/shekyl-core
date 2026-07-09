@@ -6,30 +6,10 @@
 
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
+#include "economics_chain_helpers.h"
 #include "shekyl/shekyl_ffi.h"
 
 using namespace cryptonote;
-
-namespace {
-
-bool add_block_to_core(cryptonote::core& c, const cryptonote::block& blk)
-{
-  cryptonote::block_verification_context bvc = AUTO_VAL_INIT(bvc);
-  cryptonote::blobdata bd = t_serializable_object_to_blob(blk);
-  std::vector<cryptonote::block> pblocks;
-  cryptonote::block_complete_entry bce;
-  bce.pruned = false;
-  bce.block = bd;
-  bce.txs = {};
-  if (!c.prepare_handle_incoming_blocks(std::vector<cryptonote::block_complete_entry>(1, bce), pblocks))
-    return false;
-  if (!c.handle_incoming_block(bd, &blk, bvc))
-    return false;
-  c.cleanup_handle_incoming_blocks();
-  return !bvc.m_verifivation_failed;
-}
-
-} // namespace
 
 economics_c2a_prime_layer3_pop_replay::economics_c2a_prime_layer3_pop_replay()
 {
@@ -64,31 +44,15 @@ bool economics_c2a_prime_layer3_pop_replay::verify_pop_replay(
 
   cryptonote::block prev = db.get_block_from_height(0);
   chain_blocks.push_back(prev);
-
-  {
-    const uint64_t genesis_ag = db.get_block_already_generated_coins(0);
-    std::vector<size_t> seed_weights;
-    generator.add_block(prev, 0, seed_weights, 0, genesis_ag, prev.major_version);
-  }
+  seed_generator_from_db_genesis(generator, db, prev);
 
   for (unsigned n = 0; n < k_chain_blocks; ++n)
   {
-    cryptonote::block blk;
     const uint64_t height = db.height();
     const uint64_t already_generated = db.get_block_already_generated_coins(height - 1);
-    std::vector<size_t> block_weights;
-    generator.get_last_n_block_weights(block_weights, get_block_hash(prev), CRYPTONOTE_REWARD_BLOCKS_WINDOW);
-    const uint64_t timestamp = prev.timestamp + current_difficulty_window();
-    CHECK_TEST_CONDITION(generator.construct_block(
-        blk,
-        height,
-        get_block_hash(prev),
-        m_miner,
-        timestamp,
-        already_generated,
-        block_weights,
-        std::list<cryptonote::transaction>{}));
-    CHECK_TEST_CONDITION(add_block_to_core(c, blk));
+
+    cryptonote::block blk;
+    CHECK_TEST_CONDITION(extend_chain_with_empty_block(c, generator, m_miner, prev, /*hf_ver=*/1, blk));
     const uint64_t ag_after = db.get_block_already_generated_coins(db.height() - 1);
 
     // Cap invariant (STAGE_1_PR_7 §5.8) — locks in fix α. The live
@@ -100,13 +64,7 @@ bool economics_c2a_prime_layer3_pop_replay::verify_pop_replay(
     // ever overwritten with the miner-only emission again (the :1608 regression),
     // the connect path at blockchain.cpp :4945 accumulates the miner share
     // instead of the full subsidy and this equality fails.
-    const uint64_t raw_base = shekyl_base_block_reward(already_generated);
-    const uint64_t release_mult = shekyl_calc_release_multiplier(
-        /*tx_volume_avg=*/0, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
-    uint64_t q_full = shekyl_apply_release_multiplier(raw_base, release_mult);
-    const uint64_t remaining = MONEY_SUPPLY - already_generated;
-    if (q_full > remaining)
-      q_full = remaining;
+    const uint64_t q_full = expected_full_subsidy(already_generated);
     CHECK_TEST_CONDITION(ag_after - already_generated == q_full);
 
     // Defense in depth: the staker emission share is carved out of the full
@@ -116,8 +74,6 @@ bool economics_c2a_prime_layer3_pop_replay::verify_pop_replay(
     const uint64_t miner_coinbase = get_outs_money_amount(blk.miner_tx);
     CHECK_TEST_CONDITION(q_full > miner_coinbase);
 
-    std::vector<size_t> resync_weights;
-    generator.add_block(blk, 0, resync_weights, already_generated, ag_after - already_generated, blk.major_version);
     chain_blocks.push_back(blk);
     prev = blk;
   }
@@ -131,7 +87,8 @@ bool economics_c2a_prime_layer3_pop_replay::verify_pop_replay(
 
   for (size_t i = chain_blocks.size() - k_pop_count; i < chain_blocks.size(); ++i)
   {
-    CHECK_TEST_CONDITION(add_block_to_core(c, chain_blocks[i]));
+    CHECK_AND_ASSERT_MES(add_block_to_core(c, chain_blocks[i]), false,
+        "[" << perr_context << "] " << "reconnect failed to restore block to main chain at height " << i);
   }
 
   CHECK_TEST_CONDITION(db.height() == height);

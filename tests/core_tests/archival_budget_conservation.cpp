@@ -8,46 +8,13 @@
 
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
+#include "economics_chain_helpers.h"
 #include "shekyl/economics.h"
 #include "shekyl/shekyl_ffi.h"
 
 using namespace cryptonote;
 
 namespace {
-
-bool add_block_to_core(cryptonote::core& c, const cryptonote::block& blk)
-{
-  cryptonote::block_verification_context bvc = AUTO_VAL_INIT(bvc);
-  cryptonote::blobdata bd = t_serializable_object_to_blob(blk);
-  std::vector<cryptonote::block> pblocks;
-  cryptonote::block_complete_entry bce;
-  bce.pruned = false;
-  bce.block = bd;
-  bce.txs = {};
-  if (!c.prepare_handle_incoming_blocks(std::vector<cryptonote::block_complete_entry>(1, bce), pblocks))
-    return false;
-  if (!c.handle_incoming_block(bd, &blk, bvc))
-    return false;
-  c.cleanup_handle_incoming_blocks();
-  return !bvc.m_verifivation_failed;
-}
-
-// The independent recompute of verify's modulated base_reward for an empty
-// FAKECHAIN block (the economics_c2a_prime recipe): 0h curve + release
-// multiplier at tx_volume_avg == 0 (empty blocks carry no non-coinbase txs)
-// + the MONEY_SUPPLY cap. Deliberately NOT read back from the connect path —
-// this is the identity's independent leg.
-uint64_t expected_full_subsidy(uint64_t already_generated)
-{
-  const uint64_t raw_base = shekyl_base_block_reward(already_generated);
-  const uint64_t release_mult = shekyl_calc_release_multiplier(
-      /*tx_volume_avg=*/0, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
-  uint64_t q_full = shekyl_apply_release_multiplier(raw_base, release_mult);
-  const uint64_t remaining = MONEY_SUPPLY - already_generated;
-  if (q_full > remaining)
-    q_full = remaining;
-  return q_full;
-}
 
 // Per-height snapshot recorded during the build pass, replayed after
 // pop+reconnect to assert byte-identical restoration.
@@ -110,35 +77,18 @@ bool archival_budget_conservation_boundary::verify_conservation(
   cryptonote::block prev = db.get_block_from_height(0);
   chain_blocks.push_back(prev);
   rows.push_back(height_row{db.get_block_already_generated_coins(0), 0, 0});
-
-  {
-    std::vector<size_t> seed_weights;
-    generator.add_block(prev, 0, seed_weights, 0, rows[0].already_generated, prev.major_version);
-  }
+  seed_generator_from_db_genesis(generator, db, prev);
 
   for (unsigned n = 0; n < k_chain_blocks; ++n)
   {
     const uint64_t height = db.height();
-    const uint8_t hf_ver = height >= k_fork_height ? 2 : 1;
+    const uint8_t hf_ver = height >= k_fork_height ? k_post_fork_version : 1;
     const uint64_t already_generated = db.get_block_already_generated_coins(height - 1);
 
     cryptonote::block blk;
-    std::vector<size_t> block_weights;
-    generator.get_last_n_block_weights(block_weights, get_block_hash(prev), CRYPTONOTE_REWARD_BLOCKS_WINDOW);
-    const uint64_t timestamp = prev.timestamp + current_difficulty_window();
-    CHECK_TEST_CONDITION(generator.construct_block(
-        blk,
-        height,
-        get_block_hash(prev),
-        m_miner,
-        timestamp,
-        already_generated,
-        block_weights,
-        std::list<cryptonote::transaction>{},
-        hf_ver));
+    CHECK_TEST_CONDITION(extend_chain_with_empty_block(c, generator, m_miner, prev, hf_ver, blk));
     CHECK_AND_ASSERT_MES(blk.major_version == hf_ver, false,
         "[" << perr_context << "] " << "fixture must cross the fork boundary");
-    CHECK_TEST_CONDITION(add_block_to_core(c, blk));
 
     // ── The conservation identity, in labeled form ─────────────────────────
     // Independent recompute of every leg from the block's OWN operands
@@ -150,9 +100,18 @@ bool archival_budget_conservation_boundary::verify_conservation(
     const shekyl::EmissionSplit em_split =
         shekyl::compute_emission_split(q_full, height, genesis_ng_height, blk.major_version);
 
-    // Fee-free fixture: compute_fee_burn(total_fees == 0) is {0,0,0}, so the
-    // staker leg is the emission share alone and the burn row carries only
-    // the (pre-activation) redirected inflow.
+    // Fee-free fixture — a disclosed COVERAGE GAP, not just a fixture fact:
+    // production's redirected quantity is
+    //   staker_inflow = em_split.staker_emission + burn.staker_pool_amount
+    // (blockchain.cpp connect site), but compute_fee_burn(total_fees == 0)
+    // is {0,0,0}, so this fixture only ever exercises the emission half.
+    // The fee-pool half has NO end-to-end coverage here: chaingen cannot
+    // construct valid FCMP++ fee transactions (empty pqc_auths stubs are
+    // rejected even in FAKECHAIN — see chaingen_main.cpp's disabled-tests
+    // note), so a fee-bearing connect-path block waits on the E4/E5 regtest
+    // e2e carrier (FOLLOWUPS V3.0 residue; wallet-built txs). Until then the
+    // fee leg's guards are the unit-level B5 KATs
+    // (economics_b5_fee_coinbase.cpp) and the F-B1c-c1 fix's operand pin.
     const uint64_t staker_inflow = em_split.staker_emission;
     const bool redirect_active = blk.major_version >= HF_VERSION_ARCHIVAL_EMISSION;
     const uint64_t expected_accrual = redirect_active ? staker_inflow : 0;
@@ -183,8 +142,6 @@ bool archival_budget_conservation_boundary::verify_conservation(
     // nonzero, so the row assertions above genuinely distinguish targets.
     CHECK_TEST_CONDITION(staker_inflow > 0);
 
-    std::vector<size_t> resync_weights;
-    generator.add_block(blk, 0, resync_weights, already_generated, q_full, blk.major_version);
     chain_blocks.push_back(blk);
     rows.push_back(height_row{ag_after, accrual_row, burn_row});
     prev = blk;
@@ -211,7 +168,8 @@ bool archival_budget_conservation_boundary::verify_conservation(
 
   for (size_t i = chain_blocks.size() - k_pop_count; i < chain_blocks.size(); ++i)
   {
-    CHECK_TEST_CONDITION(add_block_to_core(c, chain_blocks[i]));
+    CHECK_AND_ASSERT_MES(add_block_to_core(c, chain_blocks[i]), false,
+        "[" << perr_context << "] " << "reconnect failed to restore block to main chain at height " << i);
   }
 
   CHECK_TEST_CONDITION(db.height() == top_height);

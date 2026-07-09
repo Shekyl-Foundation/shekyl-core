@@ -51,6 +51,7 @@ set(core_tests_headers
   chaingen.h
   chaingen_tests_list.h
   economics_c2a_prime.h
+  economics_chain_helpers.h
   integer_overflow.h
   tx_pool.h
   transaction_tests.h

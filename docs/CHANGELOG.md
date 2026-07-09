@@ -22,11 +22,27 @@
   pop/reconnect across the fork boundary. Arming-verified (inverted
   redirect branch fails at height 1). Wired into CI as the
   `conservation` subcommand of `run_economics_c2a_prime.sh` with its
-  own workflow matrix entry. Genesis-posture caveat recorded in the
+  own workflow matrix entry; the workflow's paths filter covers the
+  KAT's full guarded surface (`src/blockchain_db/**`, `src/shekyl/**`,
+  `src/cryptonote_config.h`). Genesis-posture caveat recorded in the
   test header: `HF_VERSION_ARCHIVAL_EMISSION == 1` leaves the burn leg
-  compile-alive but unexercised; a post-genesis activation bump arms it
-  through the same fixture with no test change. Closes the FOLLOWUPS
-  V3.0 conservation-KAT item.
+  compile-alive but unexercised; a post-genesis activation bump to the
+  fixture's top fork version (2) arms it through the same fixture with
+  no test change, and a `static_assert` forces a fork-table extension
+  for bumps past that (no silent de-arming). Fee-leg caveat (disclosed
+  in the test header): the fee-free fixture exercises only the emission
+  half of `staker_inflow` end-to-end — the fee-pool half
+  (`staker_pool_amount`) rides the E4/E5 regtest-e2e residue (chaingen
+  cannot build valid FCMP++ fee txs), guarded meanwhile by the
+  unit-level B5 KATs and the F-B1c-c1 operand pin. Review hardening
+  (same branch): the block-injection helper, independent subsidy
+  recompute, and chain-extension scaffold are single-sourced in
+  `tests/core_tests/economics_chain_helpers.h` (shared with the Layer 3
+  harness), the helper now cleans up the incoming-blocks batch on the
+  failure path and requires main-chain placement for success, and the
+  fail-closed core_tests CI gate is one parameterized function. Closes
+  the FOLLOWUPS V3.0 conservation-KAT item (fee-leg residue carried as
+  above).
 
 ### Fixed
 

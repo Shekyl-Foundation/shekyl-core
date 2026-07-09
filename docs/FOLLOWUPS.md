@@ -1245,8 +1245,20 @@ sustainability is unaffected by the recalibration.
   subcommand in `run_economics_c2a_prime.sh` + workflow matrix entry.
   Genesis-posture caveat recorded in the test header:
   `HF_VERSION_ARCHIVAL_EMISSION == 1` makes the burn leg compile-alive but
-  unexercised today; a post-genesis activation bump arms it through the same
-  fixture with no test change. Original item follows. The
+  unexercised today; a post-genesis activation bump **to the fixture's top
+  fork version (2)** arms it through the same fixture with no test change,
+  and a `static_assert` in the test header refuses to compile a bump past
+  that until the fork table is extended (a bump past 2 would otherwise turn
+  every fixture block pre-activation and silently de-arm the accrue leg and
+  the straddle). Fee-leg caveat (disclosed in the test header + fixture
+  comment): the fixture is fee-free, so only the emission half of
+  production's `staker_inflow` (`staker_emission + staker_pool_amount`) has
+  end-to-end coverage — chaingen cannot construct valid FCMP++ fee
+  transactions (`chaingen_main.cpp` disabled-tests note), so the fee-pool
+  half rides the §9.5 item-8 **regtest e2e (E4/E5)** residue item above;
+  until then its guards are the unit-level B5 KATs
+  (`economics_b5_fee_coinbase.cpp`) and the F-B1c-c1 operand pin. Original
+  item follows. The
   F-B1c-c2 fix makes the accrual's operand identity with verify hold by
   construction (same `base_reward` variable), and the redirect's version
   operand is now `bl.major_version` with a CI tripwire

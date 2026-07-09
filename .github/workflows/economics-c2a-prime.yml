@@ -24,6 +24,14 @@ on:
       - "src/cryptonote_basic/**"
       - "src/cryptonote_core/blockchain.cpp"
       - "src/cryptonote_core/blockchain.h"
+      # Conservation-KAT guarded surface: the accrual/burn row write +
+      # pop-removal (blockchain_db), compute_emission_split /
+      # compute_fee_burn (src/shekyl), and the HF_VERSION_* activation
+      # constants (cryptonote_config.h). A regression in any of these must
+      # trigger the gate that exists to catch it.
+      - "src/blockchain_db/**"
+      - "src/shekyl/**"
+      - "src/cryptonote_config.h"
       - "rust/shekyl-economics/**"
       - "rust/shekyl-economics-sim/**"
       - "rust/shekyl-ffi/**"
@@ -39,6 +47,11 @@ on:
       - "src/cryptonote_basic/**"
       - "src/cryptonote_core/blockchain.cpp"
       - "src/cryptonote_core/blockchain.h"
+      # Keep in lockstep with the pull_request paths above (conservation-KAT
+      # guarded surface).
+      - "src/blockchain_db/**"
+      - "src/shekyl/**"
+      - "src/cryptonote_config.h"
       - "rust/shekyl-economics/**"
       - "rust/shekyl-economics-sim/**"
       - "rust/shekyl-ffi/**"
