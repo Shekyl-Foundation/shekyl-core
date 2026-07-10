@@ -1,13 +1,18 @@
 # Wallet-side emission claim builder (E4-gate, part 1 of 2)
 
-**Status: design round 2 — ratified (2026-07-09), closure pending
-reviewer confirmation of the §2 low-boundary anchor (§7.2
-bottom-boundary record).** §7.1/§7.2/§7.3/§7.4 ratified and §8 endorsed
-2026-07-09, with two record-sharpenings applied at ratification: the
-§7.1 single-gather pin is recorded as CB-1(b) itself (one invariant, two
-faces — wallet doesn't re-derive, RPC doesn't re-gather), and the §7.3
-`k_cover`/`frozen_shard_count` exclusion is recorded as CB-5-structural,
-not payload-minimization. Round 1
+**Status: design round 2 — CLOSED (2026-07-09).** §7.1/§7.2/§7.3/§7.4
+ratified and §8 endorsed, with two record-sharpenings applied at
+ratification: the §7.1 single-gather pin is recorded as CB-1(b) itself
+(one invariant, two faces — wallet doesn't re-derive, RPC doesn't
+re-gather), and the §7.3 `k_cover`/`frozen_shard_count` exclusion is
+recorded as CB-5-structural, not payload-minimization. The one open
+verification (the §2 low-boundary anchor) resolved clean-for-a-structural-reason:
+the low end anchors to `epoch_is_claim_expired`, which is single-sourced
+through `claim_window_floor` (§7.2 bottom-boundary record), and the
+builder is pinned to consume the predicate functions rather than
+re-derive boundary arithmetic. Implementation is underway on the §8
+chain, starting with PR 1 (daemon RPC); PR-1 review watch items are
+named at the end of §8. Round 1
 CLOSED (2026-07-09): CB-1…CB-5 all ratified at source (§3): CB-1 (new
 daemon RPC as `EmissionEpochSource`, single-evaluator invariant the
 ratifying reason); CB-2 (StakeEngine actor,
@@ -79,9 +84,9 @@ names the landed function it must reuse:
    §7.2): **top** — `E < current_settled_epoch`, strict
    (`E ≥ settled` rejects `NotSettled`, `claimed_epochs.rs:123`);
    **bottom** — `!epoch_is_claim_expired(E, settled)`
-   (`claimed_epochs.rs:129`), which is `E ≥ claim_window_floor(settled)`
+   (`claimed_epochs.rs:130`), which is `E ≥ claim_window_floor(settled)`
    *by definition* — expiry resolves **through** the floor
-   (`claimed_epochs.rs:83-84`), one definition, no parallel copy. The
+   (`claimed_epochs.rs:83-85`), one definition, no parallel copy. The
    builder consumes the landed predicates (`epoch_is_claim_expired`,
    `claimed_epochs_contains`) directly and never re-derives boundary
    arithmetic inline — the predicate functions are the boundary's single
@@ -563,12 +568,12 @@ against the predicate).
 **Bottom boundary — verified against the predicate on review
 (round-2 closure item).** The review asked whether §2's low end anchors
 to `epoch_is_claim_expired` (the rejecting predicate,
-`claimed_epochs.rs:129`) or to `claim_window_floor` (the pruning floor,
-`:134`) — the same association-vs-predicate trap one level deeper.
+`claimed_epochs.rs:130`) or to `claim_window_floor` (the pruning floor,
+`:135`) — the same association-vs-predicate trap one level deeper.
 Verified at source: the two quantities **cannot diverge today**, because
 expiry is *defined through* the floor —
 `epoch_is_claim_expired = epoch < claim_window_floor(settled)`
-(`claimed_epochs.rs:83-84`), one definition, no parallel copy (the
+(`claimed_epochs.rs:83-85`), one definition, no parallel copy (the
 `claim_window_floor` doc comment's "single source of the claim-window
 boundary" names exactly this). So there is no live off-by-one at the
 bottom; `E ≥ floor` is predicate-exact. The discipline correction is
@@ -714,5 +719,25 @@ Round-2 closure criteria: the §7.3 field enumeration ratified (including
 the four exclusions), the §7.2 window-batch shape ratified, the §7.4
 transport/shape/timing pins ratified, and the §8 chain shape accepted.
 All four ratified 2026-07-09; the one open verification (the §2
-low-boundary anchor) is resolved in §7.2's bottom-boundary record.
-Implementation starts on PR 1 after the reviewer confirms closure.
+low-boundary anchor) resolved in §7.2's bottom-boundary record.
+**Round 2 CLOSED 2026-07-09.**
+
+**PR-1 review watch items** (named at closure so they're checked at the
+code, not assumed from the design — the two places a PR-1
+implementation could silently weaken a ratified invariant while looking
+correct, both grep-checkable at the handler):
+
+1. **Single-gather trace (§7.1, the CB-1(b) daemon face).** The RPC
+   handler must be a serializer over
+   `gather_archival_emission_epoch_snapshot` with no second gather path
+   and no operand reconstruction. Check: grep the gather call sites,
+   assert exactly one new call (the RPC handler's), and read the handler
+   for any row read or arithmetic that isn't marshaling — the same
+   checkable shape as the wallet-side single-evaluator trace.
+2. **Transport cause-blindness (§7.2).** The request struct carries
+   `p_id` only — no field that can encode an epoch selection or the
+   claimable subset — and the handler branches on nothing
+   claimable-set-derived (the full window is serialized
+   unconditionally). Check: read the request/response types and the
+   handler's control flow; any claimability-dependent branch is a CB-5
+   transport regression.

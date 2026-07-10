@@ -4,6 +4,31 @@
 
 ### Added
 
+- **docs: emission claim-builder design round 2 opened and CLOSED
+  (2026-07-09, `docs/design/EMISSION_CLAIM_BUILDER.md` §7–§8).** The
+  CB-1 ratification residue: the daemon RPC surface + the
+  implementation PR chain. Ratified: §7.1 single-gather pin — the RPC
+  serializes the landed `gather_archival_emission_epoch_snapshot`,
+  recorded as **CB-1(b) itself, daemon-side face** (one invariant, two
+  faces: wallet doesn't re-derive, RPC doesn't re-gather; weakening
+  either reopens CB-1); §7.2 one composite window-batched query
+  (request = `p_id` only — the query cannot encode the claimable
+  subset; CB-5 cause-blindness at the transport); §7.3 field
+  enumeration with four load-bearing exclusions, the
+  `k_cover`/`frozen_shard_count` exclusion recorded as
+  **CB-5-structural** (sending the gate operands would make
+  representable the cause-distinguishing branch CB-5 makes
+  unrepresentable), not payload-minimization; §7.4 gate-6 review
+  (persona transport pin, query timing routed into CB-3's GF-4 joint
+  grade). §2 step 1's claimable range corrected against the rejection
+  predicates: top strict (`E ≥ settled` rejects `NotSettled` — a
+  round-1 off-by-one against source), bottom verified
+  clean-for-a-structural-reason (`epoch_is_claim_expired` is
+  single-sourced through `claim_window_floor`) and pinned to
+  predicate-function consumption, never inline boundary arithmetic. §8
+  four-PR chain endorsed (daemon RPC → pure assembly → StakeEngine
+  handler → regtest e2e + blob-boundary arm, PR 4 gated on #281's
+  harness), with two grep-checkable PR-1 watch items named at closure.
 - **docs: emission claim-builder design round 1 opened
   (`docs/design/EMISSION_CLAIM_BUILDER.md`).** The E4-gate part-1 work
   unit after C-1 (#277) landed: the wallet-side builder that assembles
