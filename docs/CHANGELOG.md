@@ -4,6 +4,46 @@
 
 ### Added
 
+- **tests: end-to-end archival budget conservation KAT — the C-1
+  fast-follow (`REWARD_EMISSION_E3_GATING_ROUND.md` §9.9;
+  `ARCHIVAL_BUDGET_SCHEDULE.md` §7 B1's connect-path counterpart).**
+  New chaingen core test `archival_budget_conservation_boundary`
+  (`tests/core_tests/archival_budget_conservation.{h,cpp}`) drives the
+  real connect path (`handle_block_to_main_chain`) across a v1→v2 fork
+  table and asserts the §2.2 conservation identity per block in
+  **labeled-row form**: accrual row and burn row each checked against
+  the block's own `major_version` — the only form that catches the
+  branch-selection class (F-B1b: wrong burn-vs-accrue branch with
+  byte-identical operands, invisible to operand KATs and the grep
+  tripwire, and sum-invariant because the redirect is a pure
+  destination switch). Also asserts the genesis exclusion, coinbase =
+  `miner_emission`, ledger advance = an independently recomputed
+  modulated subsidy, and byte-identical row restoration after
+  pop/reconnect across the fork boundary. Arming-verified (inverted
+  redirect branch fails at height 1). Wired into CI as the
+  `conservation` subcommand of `run_economics_c2a_prime.sh` with its
+  own workflow matrix entry; the workflow's paths filter covers the
+  KAT's full guarded surface (`src/blockchain_db/**`, `src/shekyl/**`,
+  `src/cryptonote_config.h`). Genesis-posture caveat recorded in the
+  test header: `HF_VERSION_ARCHIVAL_EMISSION == 1` leaves the burn leg
+  compile-alive but unexercised; a post-genesis activation bump to the
+  fixture's top fork version (2) arms it through the same fixture with
+  no test change, and a `static_assert` forces a fork-table extension
+  for bumps past that (no silent de-arming). Fee-leg caveat (disclosed
+  in the test header): the fee-free fixture exercises only the emission
+  half of `staker_inflow` end-to-end — the fee-pool half
+  (`staker_pool_amount`) rides the E4/E5 regtest-e2e residue (chaingen
+  cannot build valid FCMP++ fee txs), guarded meanwhile by the
+  unit-level B5 KATs and the F-B1c-c1 operand pin. Review hardening
+  (same branch): the block-injection helper, independent subsidy
+  recompute, and chain-extension scaffold are single-sourced in
+  `tests/core_tests/economics_chain_helpers.h` (shared with the Layer 3
+  harness), the helper now cleans up the incoming-blocks batch on the
+  failure path and requires main-chain placement for success, and the
+  fail-closed core_tests CI gate is one parameterized function. Closes
+  the FOLLOWUPS V3.0 conservation-KAT item (fee-leg residue carried as
+  above).
+
 - **docs: emission claim-builder design round 1 opened
   (`docs/design/EMISSION_CLAIM_BUILDER.md`).** The E4-gate part-1 work
   unit after C-1 (#277) landed: the wallet-side builder that assembles
