@@ -3599,7 +3599,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           return false;
         }
         if (!rv.outPk.empty() || !rv.p.bulletproofs_plus.empty()
-          || !rv.pseudoOuts.empty() || !rv.p.pseudoOuts.empty())
+          || !rv.p.pseudoOuts.empty())
         {
           MERROR_VER("Archival serve-credit tx " << get_transaction_hash(tx)
             << " must not carry RCT output material");
