@@ -93,6 +93,11 @@ impl ConnTracker {
     /// applicable per-IP cap (public vs private, selected by [`ip_is_local`])
     /// is already reached.
     pub fn try_acquire(self: &Arc<Self>, ip: IpAddr) -> Option<ConnGuard> {
+        // Canonicalize IPv4-mapped IPv6 (::ffff:a.b.c.d) up front so a
+        // dual-stack ([::]) listener classifies and counts a v4 client the same
+        // whether it arrives mapped or native — and so the guard releases under
+        // the same key it acquired.
+        let ip = canonical_ip(ip);
         let per_ip_cap = if ip_is_local(ip) {
             self.limits.max_per_private_ip
         } else {
@@ -121,11 +126,19 @@ impl ConnTracker {
 
     fn release(&self, ip: IpAddr) {
         let mut map = self.per_ip.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(slot) = map.get_mut(&ip) {
-            *slot -= 1;
-            if *slot == 0 {
-                map.remove(&ip);
-            }
+        let Some(slot) = map.get_mut(&ip) else {
+            // Unreachable given the guard lifecycle (a ConnGuard exists iff
+            // try_acquire inserted this canonical IP). Fail safe if that
+            // invariant is ever broken: never decrement `total` for a slot we
+            // did not find, so a desync cannot wrap the count into a huge value
+            // that would wrongly reject all connections. Surface it loudly.
+            tracing::error!("connection release for untracked IP {ip}: accounting desync");
+            return;
+        };
+        // `slot` is >= 1 here (kept only while non-zero), so this cannot wrap.
+        *slot -= 1;
+        if *slot == 0 {
+            map.remove(&ip);
         }
         self.total.fetch_sub(1, Ordering::Relaxed);
     }
@@ -144,12 +157,28 @@ impl Drop for ConnGuard {
     }
 }
 
-/// Classify an address as local/private (loopback / RFC1918 / link-local /
-/// unique-local) vs. public, which selects the per-IP cap that applies. IPv6
-/// ranges are checked by prefix to stay independent of still-evolving
-/// `std::net` classification helpers.
-fn ip_is_local(ip: IpAddr) -> bool {
+/// Canonicalize an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) to its IPv4
+/// form. A dual-stack (`[::]`) listener surfaces IPv4 clients as mapped
+/// addresses; canonicalizing means they classify under the IPv4 rules and share
+/// a per-IP slot with any native-IPv4 arrival. All other addresses are returned
+/// unchanged.
+fn canonical_ip(ip: IpAddr) -> IpAddr {
     match ip {
+        IpAddr::V6(a) => match a.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => IpAddr::V6(a),
+        },
+        v4 => v4,
+    }
+}
+
+/// Classify an address as local/private (loopback / RFC1918 / link-local /
+/// unique-local) vs. public, which selects the per-IP cap that applies. IPv4
+/// (including IPv4-mapped IPv6, via [`canonical_ip`]) uses the std helpers;
+/// other IPv6 ranges are checked by prefix to stay independent of
+/// still-evolving `std::net` classification helpers.
+fn ip_is_local(ip: IpAddr) -> bool {
+    match canonical_ip(ip) {
         IpAddr::V4(a) => a.is_loopback() || a.is_private() || a.is_link_local(),
         IpAddr::V6(a) => {
             if a.is_loopback() {
@@ -345,14 +374,37 @@ mod tests {
             "::1",
             "fd00::1",
             "fe80::1",
+            // IPv4-mapped IPv6 (as a dual-stack [::] listener surfaces v4
+            // clients) must classify by the embedded IPv4.
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.1",
         ] {
             assert!(ip_is_local(ip(local)), "{local} should classify as local");
         }
-        for public in ["8.8.8.8", "1.1.1.1", "2001:4860:4860::8888"] {
+        for public in [
+            "8.8.8.8",
+            "1.1.1.1",
+            "2001:4860:4860::8888",
+            "::ffff:8.8.8.8",
+        ] {
             assert!(
                 !ip_is_local(ip(public)),
                 "{public} should classify as public"
             );
         }
+    }
+
+    #[test]
+    fn ipv4_mapped_and_native_share_one_per_ip_slot() {
+        let t = ConnTracker::new(ConnLimits {
+            max_per_public_ip: 1,
+            ..Default::default()
+        });
+        let _mapped = t.try_acquire(ip("::ffff:8.8.8.8")).unwrap();
+        // The same underlying IPv4, arriving natively, must hit the same slot.
+        assert!(
+            t.try_acquire(ip("8.8.8.8")).is_none(),
+            "mapped and native forms of one IP must not double the cap"
+        );
     }
 }
