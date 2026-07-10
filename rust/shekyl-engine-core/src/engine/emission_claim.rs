@@ -60,6 +60,59 @@
 //! site (`epoch_close_compute`), the claim path never consults it, so the
 //! wallet cannot tell the causes apart and neither can an observer of the
 //! refusal. Do not add a branch that could.
+//!
+//! ## Steps 2 + 5 — work-claim rows, rewards, sizing
+//!
+//! [`assemble_claims`] turns the derived batch into the vin's claims-side
+//! content, integer-exact against verify (tolerance zero):
+//!
+//! - **Canonical row form.** Per epoch, one [`ShardWorkEntry`] per shard
+//!   the claimant is credited on — `serve_credit_bit = true`, sorted by
+//!   `shard_id` ascending, no other entries. Verify accepts padding
+//!   entries (`bit = false, scarcity = 0` rows pass its per-entry
+//!   equalities), but the builder never emits them: the minimal form is
+//!   the one whose entry sum equals `work_P(E)` by the same accumulation
+//!   the close ran, and padding is bytes that buy nothing. The per-entry
+//!   scarcity resolves the shard row **by first position of `shard_id`**
+//!   — byte-exactly the lookup verify's `ScarcityMismatch` recompute
+//!   performs — and the entry sum must equal the derivation's `work_P`
+//!   ([`EmissionClaimError::SourceInvalid`] otherwise: a gather whose
+//!   pair-indexed accumulation disagrees with its id-resolved recompute
+//!   is internally inconsistent, e.g. duplicate `shard_id` rows).
+//!
+//! - **The u64→u32 conversion guard.** The recompute chain is `u64`; the
+//!   wire's `scarcity_milli` is `u32`. The builder refuses at its own
+//!   conversion site ([`EmissionClaimError::ScarcityConversion`]) rather
+//!   than relying on the encoder's `ScarcityOverflow` — the encoder
+//!   catching it would mean the builder emitted an invalid value and got
+//!   saved downstream, in the wrong component. Under the compiled
+//!   constants pipeline the guard is structurally unreachable
+//!   (`verify_view` pins `age_weight_milli`; `age_milli ≤ 1000`; so
+//!   scarcity `≤ WORK_MILLI_SCALE + ARCHIVAL_REWARD_AGE_WEIGHT_MILLI` —
+//!   const-asserted below, so a constant bump that could cross the wire
+//!   field's width fails the build and reopens this analysis rather than
+//!   silently arming the path). The KAT drives the refusal with a
+//!   hostile-constants view built directly, because no daemon input can
+//!   reach it through the decode path.
+//!
+//! - **Rewards.** `reward_amount_plain[i]` is the derivation's recomputed
+//!   share, verbatim — the builder never invents an amount (§2 step 5).
+//!   Strictly positive by the claimability predicate, so the rows are
+//!   wire-encodable by construction. The batch total is `checked_add`
+//!   (overflow ⇒ [`EmissionClaimError::SourceInvalid`]: budgets are
+//!   daemon-supplied).
+//!
+//! - **Sizing (bound-or-split, GF-4b item 5).** The claims-leg projection
+//!   is measured with the **production encoder** on a vin whose
+//!   cryptographic legs are at their structural maxima (canonical-length
+//!   pubkeys/sigs, [`MAX_BACKING_PROOF_BYTES`] proof) — a worst-case
+//!   upper bound on the real vin's bytes, from the same write path, so no
+//!   shadow size model can drift. Over budget ⇒ drop the youngest epoch
+//!   ([`EpochSkip::SizeDeferred`]; oldest-first retention mirrors the
+//!   batch cap's never-strand-a-savable-epoch order) and re-measure; a
+//!   single epoch alone over budget refuses
+//!   [`EmissionClaimError::SizeBoundExceeded`]. The budget is a
+//!   parameter; [`EMISSION_CLAIMS_SIZE_BUDGET`] is the documented default.
 
 // PR-2 lands the assembly core ahead of its consumer: PR-3's `StakeEngine`
 // claim handler is the call site. This allow is deleted by PR-3
@@ -70,17 +123,48 @@
 
 use shekyl_archival_retention::{
     as_of_e_served_work, capped_work_milli, claimed_epochs_check_and_set, reward_share_floor,
-    ClaimedEpochsError, ServedWork, MAX_SETTLEMENT_EPOCHS_PER_EMISSION,
+    shard_contribution_milli, ArchivalRewardEmissionVin, ClaimedEpochsError, EmissionEpochSource,
+    EmissionWireError, HoldingsDescriptor, MembershipOnlyBacking, ServedWork, ShardWorkEntry,
+    WorkEpochClaim, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_BACKING_PROOF_BYTES,
+    MAX_SETTLEMENT_EPOCHS_PER_EMISSION, WORK_MILLI_SCALE,
 };
+use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
+use shekyl_wire::transaction::MAX_TX_SIZE;
 
 use super::emission_source::EmissionClaimSource;
 
+// The compiled-constants bound behind the conversion guard's structural-
+// unreachability claim (module doc): an honest recompute through
+// `verify_view` satisfies `scarcity ≤ WORK_MILLI_SCALE + weight` (age is
+// depth-fraction-bounded to `WORK_MILLI_SCALE`, `r_market ≥ 1` for a
+// nonzero term). A weight bump that could cross the wire field's width
+// must fail this build, not silently arm the runtime refusal.
+const _: () = assert!(
+    WORK_MILLI_SCALE + ARCHIVAL_REWARD_AGE_WEIGHT_MILLI <= u32::MAX as u64,
+    "compiled constants must keep scarcity_milli within the u32 wire field"
+);
+
+/// Bytes of the [`MAX_TX_SIZE`] envelope reserved for everything outside
+/// the emission vin: tx prefix/extra, the reward + change vouts (≤ 16
+/// commits, low single-digit kB), and — the dominant term — the fee-side
+/// FCMP++ spend legs, each the same order as the 64 KiB
+/// [`MAX_BACKING_PROOF_BYTES`] membership bound. 128 KiB reserves
+/// headroom for the expected one-to-two fee inputs (rule 75: rationale +
+/// bounds). *Reversion (rule 21):* PR-3's tx assembly owns fee-input
+/// selection and replaces this static reserve with its measured fee-side
+/// envelope; reopen sooner if a claim tx needs more than two fee inputs.
+pub const EMISSION_NON_CLAIMS_RESERVE_BYTES: usize = 131_072;
+
+/// Default claims-leg size budget for [`assemble_claims`]:
+/// [`MAX_TX_SIZE`] minus [`EMISSION_NON_CLAIMS_RESERVE_BYTES`].
+pub const EMISSION_CLAIMS_SIZE_BUDGET: usize = MAX_TX_SIZE - EMISSION_NON_CLAIMS_RESERVE_BYTES;
+
 /// Builder refusals (CB-5 taxonomy, the arms this module constructs).
 ///
-/// Staged completeness (§8 / rule 15 — no dead variants): `ScarcityConversion`
-/// and `SelfCheckFailed` land with their constructor sites (work-claim
-/// assembly and the step-7 self-check, later commits of this PR);
-/// `InsufficientBacking` lands with `BackingSet` selection (PR 3).
+/// Staged completeness (§8 / rule 15 — no dead variants): `SelfCheckFailed`
+/// lands with its constructor site (the §2 step-7 self-check, this PR's
+/// next commit); `InsufficientBacking` lands with `BackingSet` selection
+/// (PR 3).
 #[derive(Debug, thiserror::Error)]
 pub enum EmissionClaimError {
     /// Nothing claimable — an **idle state, not an error** (rule 82 /
@@ -94,12 +178,37 @@ pub enum EmissionClaimError {
     NoClaimableEpochs,
     /// The daemon's gather rows are internally inconsistent (a credit
     /// pair or the claimant index references outside the bond/shard
-    /// arrays) — malformed input from an untrusted daemon, refused
-    /// loudly (`20-rust-vs-cpp-policy.mdc` §3), never skipped-and-continued:
-    /// a daemon that mis-serializes one epoch cannot be trusted for the
-    /// window.
+    /// arrays; duplicate credited shards; an id-resolved recompute that
+    /// disagrees with the pair-indexed accumulation; a reward sum
+    /// overflowing `u64`) — malformed input from an untrusted daemon,
+    /// refused loudly (`20-rust-vs-cpp-policy.mdc` §3), never
+    /// skipped-and-continued: a daemon that mis-serializes one epoch
+    /// cannot be trusted for the window.
     #[error("epoch {epoch}: claim-source rows are internally inconsistent")]
     SourceInvalid { epoch: u64 },
+    /// The recomputed per-shard scarcity does not fit the wire's `u32`
+    /// field. The builder refuses at its own conversion site — never
+    /// relying on the encoder's `ScarcityOverflow` to be saved
+    /// downstream (module doc; structurally unreachable under the
+    /// compiled constants, const-asserted above).
+    #[error("epoch {epoch} shard {shard_id}: recomputed scarcity exceeds the u32 wire field")]
+    ScarcityConversion { epoch: u64, shard_id: u64 },
+    /// A single epoch's claim alone exceeds the claims-leg size budget —
+    /// nothing further to split (§2 step 5 bound-or-split's terminal
+    /// refusal).
+    #[error("epoch {epoch}: single-epoch claim ({projected} B) exceeds budget ({budget} B)")]
+    SizeBoundExceeded {
+        epoch: u64,
+        projected: usize,
+        budget: usize,
+    },
+    /// The builder-constructed claims rows violate a wire structural
+    /// invariant (e.g. more credited shards than
+    /// [`shekyl_archival_retention::bond_wire::MAX_HOLDINGS_SHARDS`]) —
+    /// surfaced by the production encoder during the sizing measurement,
+    /// refused before any vin leaves the builder.
+    #[error("claims rows unencodable: {0}")]
+    RowsUnencodable(#[source] EmissionWireError),
 }
 
 /// Why a window epoch was not selected — **local diagnostics**, never a
@@ -128,6 +237,12 @@ pub enum EpochSkip {
     /// the next claim tx (§6.6 F4 drain-vs-batch: `W = 26`, batch 15, so
     /// a full backlog drains in two txs before anything expires).
     BatchDeferred,
+    /// Claimable and within the batch cap, but the claims-leg size
+    /// projection exceeded the budget with this epoch included —
+    /// deferred to the next claim tx (§2 step 5 bound-or-split;
+    /// youngest-first deferral mirrors the batch cap's
+    /// never-strand-a-savable-epoch order).
+    SizeDeferred,
 }
 
 /// One claimable epoch: the boundary verdicts passed and the recomputed
@@ -272,13 +387,231 @@ pub fn derive_claimable_epochs(
     Ok(ClaimableEpochs { claimable, skipped })
 }
 
+/// Steps 2 + 5 output: the vin's claims-side content, aligned per epoch,
+/// plus the by-value holdings copy and the size-deferral diagnostics.
+///
+/// The PR-3 `StakeEngine` handler completes the vin around this (backing
+/// selection, dual auth) and runs the step-7 self-check on the whole.
+#[derive(Debug)]
+pub struct AssembledClaims {
+    /// Strictly increasing (window order) — the vin's `settlement_epochs`.
+    pub settlement_epochs: Vec<u64>,
+    /// Per-epoch canonical work-claim rows, aligned with
+    /// `settlement_epochs` (module doc: credited shards only, sorted by
+    /// `shard_id`, `serve_credit_bit = true`).
+    pub work_claim: Vec<WorkEpochClaim>,
+    /// Per-epoch recomputed shares, aligned — verbatim the derivation's
+    /// rewards (the builder never invents an amount), strictly positive.
+    pub reward_amount_plain: Vec<u64>,
+    /// The bond record's holdings descriptor, copied **by value**
+    /// (§5.3/§6.4.1: verify demands record equality; the builder never
+    /// recomputes a descriptor).
+    pub holdings: HoldingsDescriptor,
+    /// `checked_add` sum of `reward_amount_plain` — the mint the PR-3
+    /// reward-vout construction distributes.
+    pub total_reward: u64,
+    /// Epochs dropped by the size bound ([`EpochSkip::SizeDeferred`]), in
+    /// window order — same observability caveat as
+    /// [`ClaimableEpochs::skipped`].
+    pub size_deferred: Vec<(u64, EpochSkip)>,
+}
+
+/// §2 steps 2 + 5 — assemble the claims-side vin content from the derived
+/// batch (module doc: canonical row form, the u64→u32 conversion guard,
+/// rewards, and the bound-or-split size discipline).
+///
+/// Consumes the derivation's own evaluation ([`ClaimableEpoch::served`] /
+/// [`ClaimableEpoch::reward`]) — single-evaluator discipline: assembly
+/// never re-runs the recompute it was admitted on.
+///
+/// `claims_size_budget` is the claims-leg byte bound
+/// ([`EMISSION_CLAIMS_SIZE_BUDGET`] is the documented default; the
+/// parameter exists so the bound is testable at exact boundaries).
+pub fn assemble_claims(
+    source: &EmissionClaimSource,
+    derived: &ClaimableEpochs,
+    claims_size_budget: usize,
+) -> Result<AssembledClaims, EmissionClaimError> {
+    let bond = source
+        .bond
+        .as_ref()
+        .expect("derive_claimable_epochs admitted a batch, so the bond record exists");
+    debug_assert!(
+        !derived.claimable.is_empty(),
+        "derive_claimable_epochs never returns an empty batch"
+    );
+
+    // Step 2 — per-epoch canonical rows from the derivation's evaluation.
+    let mut rows: Vec<(u64, WorkEpochClaim, u64)> = Vec::with_capacity(derived.claimable.len());
+    for c in &derived.claimable {
+        let snap = &source.epochs[c.snapshot_idx];
+        let bonds = snap.bonds_view();
+        let view = snap.source(&bonds);
+        let claim = work_epoch_claim(&view, &c.served)?;
+        rows.push((c.settlement_epoch, claim, c.reward));
+    }
+
+    // Step 5 sizing — bound or split (GF-4b item 5): measure the
+    // worst-case claims leg with the production encoder; drop the
+    // youngest epoch while over budget; refuse when one epoch alone
+    // cannot fit.
+    let mut size_deferred: Vec<(u64, EpochSkip)> = Vec::new();
+    loop {
+        let projected = worst_case_claims_len(&bond.holdings, &rows)?;
+        if projected <= claims_size_budget {
+            break;
+        }
+        if rows.len() == 1 {
+            return Err(EmissionClaimError::SizeBoundExceeded {
+                epoch: rows[0].0,
+                projected,
+                budget: claims_size_budget,
+            });
+        }
+        let (epoch, _, _) = rows.pop().expect("len > 1 checked above");
+        size_deferred.push((epoch, EpochSkip::SizeDeferred));
+    }
+    // Popped youngest-first; report in window order.
+    size_deferred.reverse();
+
+    // Step 5 rewards — verbatim derivation shares; the batch total is
+    // checked (budgets are daemon-supplied; an overflowing sum is
+    // malformed source, not arithmetic to saturate through).
+    let mut total_reward: u64 = 0;
+    for (epoch, _, reward) in &rows {
+        total_reward = total_reward
+            .checked_add(*reward)
+            .ok_or(EmissionClaimError::SourceInvalid { epoch: *epoch })?;
+    }
+
+    let mut settlement_epochs = Vec::with_capacity(rows.len());
+    let mut work_claim = Vec::with_capacity(rows.len());
+    let mut reward_amount_plain = Vec::with_capacity(rows.len());
+    for (epoch, claim, reward) in rows {
+        settlement_epochs.push(epoch);
+        work_claim.push(claim);
+        reward_amount_plain.push(reward);
+    }
+    Ok(AssembledClaims {
+        settlement_epochs,
+        work_claim,
+        reward_amount_plain,
+        holdings: bond.holdings.clone(),
+        total_reward,
+        size_deferred,
+    })
+}
+
+/// One epoch's canonical [`WorkEpochClaim`] from the derivation's
+/// evaluation (module doc "Canonical row form"): one entry per credited
+/// shard, sorted by `shard_id`, `serve_credit_bit = true`, scarcity
+/// resolved by first position of `shard_id` — byte-exactly verify's
+/// `ScarcityMismatch` lookup. This is **the** builder conversion site for
+/// the wire's `u32 scarcity_milli` (checked, refusing — module doc).
+fn work_epoch_claim(
+    view: &EmissionEpochSource<'_>,
+    served: &ServedWork,
+) -> Result<WorkEpochClaim, EmissionClaimError> {
+    let epoch = view.inputs.settlement_epoch;
+    let claimant = view
+        .claimant_bond_idx
+        .expect("claimable ⇒ positive share ⇒ a serve-credit row exists");
+    debug_assert!(
+        served.member[claimant],
+        "claimable ⇒ positive capped work ⇒ market member"
+    );
+
+    let mut shard_ids: Vec<u64> = view
+        .inputs
+        .credit_pairs
+        .iter()
+        .filter(|pair| pair.bond_idx == claimant)
+        .map(|pair| view.inputs.shards[pair.shard_idx].shard_id)
+        .collect();
+    shard_ids.sort_unstable();
+    if shard_ids.windows(2).any(|pair| pair[0] == pair[1]) {
+        // Duplicate credited shards: the ledger key `P‖shard‖E` is unique,
+        // so a gather carrying two credits for one (claimant, shard) is
+        // malformed — and would double-count `work_P` besides.
+        return Err(EmissionClaimError::SourceInvalid { epoch });
+    }
+
+    let mut entry_sum: u64 = 0;
+    let mut shard_entries = Vec::with_capacity(shard_ids.len());
+    for shard_id in shard_ids {
+        let shard_idx = view
+            .inputs
+            .shards
+            .iter()
+            .position(|s| s.shard_id == shard_id)
+            .expect("credited pair implies the shard row exists");
+        let scarcity = shard_contribution_milli(&view.inputs, &served.r_market_by_shard, shard_idx);
+        let scarcity_milli = u32::try_from(scarcity)
+            .map_err(|_| EmissionClaimError::ScarcityConversion { epoch, shard_id })?;
+        entry_sum = entry_sum.saturating_add(scarcity);
+        shard_entries.push(ShardWorkEntry {
+            shard_id,
+            serve_credit_bit: true,
+            scarcity_milli,
+        });
+    }
+
+    // The id-resolved recompute must equal the pair-indexed accumulation
+    // the derivation selected on (verify's `WorkTotalMismatch` compare,
+    // run here so a doomed vin refuses at assembly, not on-chain). They
+    // diverge only on an internally inconsistent gather — e.g. duplicate
+    // `shard_id` rows shadowing the credited row's index.
+    if entry_sum != served.work_by_bond[claimant] {
+        return Err(EmissionClaimError::SourceInvalid { epoch });
+    }
+    Ok(WorkEpochClaim {
+        epoch,
+        shard_entries,
+    })
+}
+
+/// Worst-case claims-leg projection: the actual claims content inside a
+/// vin whose cryptographic legs sit at their structural maxima
+/// (canonical-length pubkeys/sigs, [`MAX_BACKING_PROOF_BYTES`] proof),
+/// serialized by the **production encoder** — an upper bound on the real
+/// vin's bytes from the same write path, so no shadow size model can
+/// drift (validate() pins the real legs to these exact lengths, proof
+/// excepted, which is `≤` the maximum used here).
+fn worst_case_claims_len(
+    holdings: &HoldingsDescriptor,
+    rows: &[(u64, WorkEpochClaim, u64)],
+) -> Result<usize, EmissionClaimError> {
+    let vin = ArchivalRewardEmissionVin {
+        p_pubkey: vec![0; SINGLE_KEY_CANONICAL_LEN],
+        holdings: holdings.clone(),
+        settlement_epochs: rows.iter().map(|(epoch, ..)| *epoch).collect(),
+        work_claim: rows.iter().map(|(_, claim, _)| claim.clone()).collect(),
+        backing: MembershipOnlyBacking {
+            proof: vec![0; MAX_BACKING_PROOF_BYTES],
+            pseudo_out: [0; 32],
+            pqc_pk_hash: [0; 32],
+            backing_pubkey: vec![0; SINGLE_KEY_CANONICAL_LEN],
+            tree_depth: u8::MAX,
+        },
+        reward_amount_plain: rows.iter().map(|(.., reward)| *reward).collect(),
+        auth_backing: vec![0; SINGLE_SIG_CANONICAL_LEN],
+        auth_claim: vec![0; SINGLE_SIG_CANONICAL_LEN],
+    };
+    Ok(vin
+        .serialize()
+        .map_err(EmissionClaimError::RowsUnencodable)?
+        .len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::engine::emission_source::{BondContext, BondRow, EpochSnapshot};
     use shekyl_archival_retention::{
-        claimed_epochs_contains, epoch_close_height, epoch_is_claim_expired, sigma_work_milli,
-        CreditPair, EpochCloseShard, HoldingsDescriptor, HoldingsKind, MAX_CLAIM_AGE_W,
+        bond_wire::MAX_HOLDINGS_SHARDS, claimed_epochs_contains, epoch_close_height,
+        epoch_is_claim_expired, sigma_work_milli, BandedCurveParams, CreditPair, EpochCloseBond,
+        EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, KCover,
+        ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, MAX_CLAIM_AGE_W,
         SETTLEMENT_EPOCH_BLOCKS,
     };
 
@@ -339,15 +672,24 @@ mod tests {
             ],
             claimant_bond_idx: Some(0),
         };
+        resigma(&mut snap);
+        assert!(
+            snap.sigma_work_milli > 0,
+            "fixture must have a live denominator"
+        );
+        snap
+    }
+
+    /// Recompute a (possibly mutated) fixture's denominator through the
+    /// same sourcing functions the close persists with.
+    fn resigma(snap: &mut EpochSnapshot) {
         let sigma = {
             let bonds = snap.bonds_view();
             let view = snap.source(&bonds);
             let served = as_of_e_served_work(&view.inputs).expect("well-formed fixture");
             sigma_work_milli(&served.work_by_bond, &view.inputs.curve, &served.member)
         };
-        assert!(sigma > 0, "fixture must have a live denominator");
         snap.sigma_work_milli = sigma;
-        snap
     }
 
     /// A zero-share snapshot in its two indistinguishable causes: gated
@@ -581,6 +923,299 @@ mod tests {
         assert!(matches!(
             derive_claimable_epochs(&source),
             Err(EmissionClaimError::SourceInvalid { epoch: 5 })
+        ));
+    }
+
+    // ── Steps 2 + 5: assembly ───────────────────────────────────────────
+
+    /// Canonical row form, integer-exact against verify's compares:
+    /// credited shards only (ascending `shard_id`, bit set), per-entry
+    /// scarcity equal to verify's `ScarcityMismatch` recompute (first-
+    /// position id resolution), entry sum equal to verify's
+    /// `WorkTotalMismatch` operand, rewards verbatim from the derivation,
+    /// and the holdings copied by value from the record.
+    #[test]
+    fn assembles_canonical_rows_rewards_and_holdings() {
+        let mut snap = snapshot(5);
+        let close = epoch_close_height(5).expect("fixture epoch closes");
+        // Shard rows deliberately in descending id order (canonicality is
+        // the builder's, not the daemon's); the claimant is credited on A
+        // and B, the other bond alone on shard 11 (must not appear).
+        snap.shards = vec![
+            EpochCloseShard {
+                shard_id: SHARD_B,
+                has_segment: true,
+                freeze_height: close - 8_000,
+            },
+            EpochCloseShard {
+                shard_id: SHARD_A,
+                has_segment: true,
+                freeze_height: close - 5_000,
+            },
+            EpochCloseShard {
+                shard_id: 11,
+                has_segment: true,
+                freeze_height: close - 2_000,
+            },
+        ];
+        snap.credit_pairs = vec![
+            CreditPair {
+                bond_idx: 0,
+                shard_idx: 1,
+            },
+            CreditPair {
+                bond_idx: 0,
+                shard_idx: 0,
+            },
+            CreditPair {
+                bond_idx: 1,
+                shard_idx: 2,
+            },
+        ];
+        resigma(&mut snap);
+        let source = source_with(10, vec![], vec![snap]);
+        let derived = derive_claimable_epochs(&source).expect("claimable");
+        let assembled =
+            assemble_claims(&source, &derived, EMISSION_CLAIMS_SIZE_BUDGET).expect("fits");
+
+        assert_eq!(assembled.settlement_epochs, vec![5]);
+        assert_eq!(
+            assembled.reward_amount_plain,
+            vec![derived.claimable[0].reward],
+            "the builder never invents an amount — verbatim the derivation share"
+        );
+        assert_eq!(assembled.total_reward, derived.claimable[0].reward);
+        assert!(assembled.size_deferred.is_empty());
+        assert_eq!(
+            assembled.holdings,
+            source.bond.as_ref().unwrap().holdings,
+            "by-value record copy (§5.3/§6.4.1), never recomputed"
+        );
+
+        let claim = &assembled.work_claim[0];
+        assert_eq!(claim.epoch, 5);
+        let ids: Vec<u64> = claim.shard_entries.iter().map(|e| e.shard_id).collect();
+        assert_eq!(
+            ids,
+            vec![SHARD_A, SHARD_B],
+            "credited shards only, ascending shard_id"
+        );
+        assert!(claim.shard_entries.iter().all(|e| e.serve_credit_bit));
+
+        // Verify's step-4 compares, run over the same view.
+        let snap = &source.epochs[0];
+        let bonds = snap.bonds_view();
+        let view = snap.source(&bonds);
+        let served = as_of_e_served_work(&view.inputs).unwrap();
+        let mut entry_sum = 0u64;
+        for entry in &claim.shard_entries {
+            let idx = view
+                .inputs
+                .shards
+                .iter()
+                .position(|s| s.shard_id == entry.shard_id)
+                .unwrap();
+            let expected = shard_contribution_milli(&view.inputs, &served.r_market_by_shard, idx);
+            assert_eq!(
+                u64::from(entry.scarcity_milli),
+                expected,
+                "verify's ScarcityMismatch compare (tolerance zero)"
+            );
+            entry_sum += expected;
+        }
+        assert_eq!(
+            entry_sum, served.work_by_bond[0],
+            "verify's WorkTotalMismatch compare (tolerance zero)"
+        );
+    }
+
+    /// The u64→u32 conversion guard bites **at the builder's conversion
+    /// site**, not the encoder's `ScarcityOverflow`. The production
+    /// decode path cannot reach it — `verify_view` pins
+    /// `age_weight_milli` to the compiled constant, bounding an honest
+    /// recompute to `WORK_MILLI_SCALE + weight` (const-asserted at module
+    /// scope) — so the KAT builds the hostile view directly and drives
+    /// the same per-epoch row builder `assemble_claims` runs.
+    #[test]
+    fn scarcity_conversion_refuses_at_the_builder() {
+        let bonds = [EpochCloseBond {
+            join_settlement_epoch: 0,
+            is_foundation_complete_tree: false,
+            bad_intervals: &[],
+        }];
+        let shards = [EpochCloseShard {
+            shard_id: SHARD_A,
+            has_segment: true,
+            freeze_height: 0,
+        }];
+        let pairs = [CreditPair {
+            bond_idx: 0,
+            shard_idx: 0,
+        }];
+        let view = EmissionEpochSource {
+            inputs: EpochCloseInputs {
+                settlement_epoch: 4,
+                close_block_height: epoch_close_height(4).unwrap(),
+                settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
+                // Hostile: unreachable through `verify_view`.
+                age_weight_milli: u64::MAX,
+                curve: BandedCurveParams {
+                    plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
+                    plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
+                },
+                bonds: &bonds,
+                shards: &shards,
+                credit_pairs: &pairs,
+                frozen_shard_count: 0,
+                k_cover: KCover::consensus(),
+            },
+            persisted_sigma_work_milli: 1,
+            claimant_bond_idx: Some(0),
+            budget: BUDGET,
+        };
+        let served = as_of_e_served_work(&view.inputs).unwrap();
+        // Premise armed: the recompute really exceeds the wire field.
+        assert!(
+            shard_contribution_milli(&view.inputs, &served.r_market_by_shard, 0)
+                > u64::from(u32::MAX),
+            "fixture must drive the recompute over u32::MAX"
+        );
+        assert!(matches!(
+            work_epoch_claim(&view, &served),
+            Err(EmissionClaimError::ScarcityConversion {
+                epoch: 4,
+                shard_id: SHARD_A
+            })
+        ));
+    }
+
+    /// Bound-or-split at exact byte boundaries: at the projection the
+    /// batch fits; one byte under, the youngest epoch defers
+    /// (`SizeDeferred`) and the older two keep their claim; one byte
+    /// under a single epoch's floor, the terminal refusal fires with the
+    /// measured projection.
+    #[test]
+    fn size_bound_defers_youngest_then_refuses() {
+        let source = source_with(10, vec![], vec![snapshot(3), snapshot(4), snapshot(5)]);
+        let derived = derive_claimable_epochs(&source).expect("three claimable");
+        let holdings = &source.bond.as_ref().unwrap().holdings;
+
+        let full =
+            assemble_claims(&source, &derived, EMISSION_CLAIMS_SIZE_BUDGET).expect("fits default");
+        assert_eq!(full.settlement_epochs, vec![3, 4, 5]);
+        let rows: Vec<(u64, WorkEpochClaim, u64)> = full
+            .settlement_epochs
+            .iter()
+            .zip(&full.work_claim)
+            .zip(&full.reward_amount_plain)
+            .map(|((&epoch, claim), &reward)| (epoch, claim.clone(), reward))
+            .collect();
+        let len3 = worst_case_claims_len(holdings, &rows).unwrap();
+        let len1 = worst_case_claims_len(holdings, &rows[..1]).unwrap();
+
+        let at = assemble_claims(&source, &derived, len3).expect("exactly at the bound");
+        assert_eq!(at.settlement_epochs, vec![3, 4, 5]);
+        assert!(at.size_deferred.is_empty());
+
+        let under = assemble_claims(&source, &derived, len3 - 1).expect("splits");
+        assert_eq!(under.settlement_epochs, vec![3, 4], "oldest retained");
+        assert_eq!(under.size_deferred, vec![(5, EpochSkip::SizeDeferred)]);
+        assert_eq!(
+            under.total_reward,
+            under.reward_amount_plain.iter().sum::<u64>()
+        );
+
+        assert!(matches!(
+            assemble_claims(&source, &derived, len1 - 1),
+            Err(EmissionClaimError::SizeBoundExceeded {
+                epoch: 3,
+                projected,
+                budget,
+            }) if projected == len1 && budget == len1 - 1
+        ));
+    }
+
+    /// A gather carrying two credits for one (claimant, shard) is
+    /// malformed (the ledger key `P‖shard‖E` is unique) — refused at
+    /// assembly, before the double-counted claim can reach a vin.
+    #[test]
+    fn duplicate_credited_shard_is_source_invalid() {
+        let mut snap = snapshot(5);
+        snap.credit_pairs.push(CreditPair {
+            bond_idx: 0,
+            shard_idx: 0,
+        });
+        resigma(&mut snap);
+        let source = source_with(10, vec![], vec![snap]);
+        let derived = derive_claimable_epochs(&source).expect("admitted (double-counted share)");
+        assert!(matches!(
+            assemble_claims(&source, &derived, EMISSION_CLAIMS_SIZE_BUDGET),
+            Err(EmissionClaimError::SourceInvalid { epoch: 5 })
+        ));
+    }
+
+    /// Duplicate `shard_id` rows where the credited row is shadowed by an
+    /// earlier one: the id-resolved recompute (verify's lookup) diverges
+    /// from the pair-indexed accumulation, so the entry-sum compare
+    /// refuses at assembly — the vin would be doomed to
+    /// `WorkTotalMismatch` on-chain.
+    #[test]
+    fn shadowed_shard_row_is_source_invalid() {
+        let mut snap = snapshot(5);
+        let close = epoch_close_height(5).expect("fixture epoch closes");
+        snap.shards = vec![
+            EpochCloseShard {
+                shard_id: SHARD_A,
+                has_segment: true,
+                freeze_height: close - 1_000,
+            },
+            EpochCloseShard {
+                shard_id: SHARD_A,
+                has_segment: true,
+                freeze_height: close - 9_000,
+            },
+        ];
+        snap.credit_pairs = vec![CreditPair {
+            bond_idx: 0,
+            shard_idx: 1,
+        }];
+        resigma(&mut snap);
+        let source = source_with(10, vec![], vec![snap]);
+        let derived = derive_claimable_epochs(&source).expect("admitted (positive share)");
+        assert!(matches!(
+            assemble_claims(&source, &derived, EMISSION_CLAIMS_SIZE_BUDGET),
+            Err(EmissionClaimError::SourceInvalid { epoch: 5 })
+        ));
+    }
+
+    /// More credited shards than the wire admits: the production encoder
+    /// refuses during the sizing measurement (`ShardEntriesExceeded` →
+    /// `RowsUnencodable`) — the structural bound is armed, not assumed
+    /// from the daemon's cardinality.
+    #[test]
+    fn oversized_shard_entries_refuse_rows_unencodable() {
+        let mut snap = snapshot(5);
+        snap.shards = (0..=MAX_HOLDINGS_SHARDS as u64)
+            .map(|shard_id| EpochCloseShard {
+                shard_id,
+                has_segment: false,
+                freeze_height: 0,
+            })
+            .collect();
+        snap.credit_pairs = (0..=MAX_HOLDINGS_SHARDS)
+            .map(|shard_idx| CreditPair {
+                bond_idx: 0,
+                shard_idx,
+            })
+            .collect();
+        resigma(&mut snap);
+        let source = source_with(10, vec![], vec![snap]);
+        let derived = derive_claimable_epochs(&source).expect("admitted");
+        assert!(matches!(
+            assemble_claims(&source, &derived, EMISSION_CLAIMS_SIZE_BUDGET),
+            Err(EmissionClaimError::RowsUnencodable(
+                EmissionWireError::ShardEntriesExceeded { got }
+            )) if got == MAX_HOLDINGS_SHARDS + 1
         ));
     }
 }

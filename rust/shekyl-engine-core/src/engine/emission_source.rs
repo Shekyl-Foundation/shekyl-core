@@ -108,8 +108,6 @@ pub struct BondContext {
     /// The record's holdings descriptor — the vin copies this **by value**
     /// (§5.3/§6.4.1: verify demands record equality; the builder never
     /// recomputes a descriptor).
-    // Staging allow: the vin-assembly commit of this PR copies it; deleted there.
-    #[allow(dead_code)]
     pub holdings: HoldingsDescriptor,
     /// Strictly increasing claimed-epoch set — the step-1 dedup operand
     /// (`claimed_epochs_contains` binary-searches it; the ordering is
