@@ -4,6 +4,23 @@
 
 ### Added
 
+- **docs: epee HTTP listener recorded as deletion-scheduled;
+  `DAEMON_RPC_RUST.md` brought current (2026-07-09).** A liveness check
+  during claim-builder PR 1 (the dual-dispatch-map registration question)
+  confirmed the epee HTTP listener no longer binds in a default daemon:
+  Axum owns the standard RPC port, a failed Axum bind is fatal, and the
+  epee acceptor binds only under the transitional `--no-rust-rpc` flag.
+  `docs/DAEMON_RPC_RUST.md` corrected accordingly (single-listener
+  architecture and port table replace the stale dual-server `+10000`
+  mode; the curve-tree-endpoints-404 section updated to reflect the
+  PR #174 resolution; dispatcher counts refreshed; the validation-results
+  section marked historical). The listener, the flag, the epee dispatch
+  macros in `core_rpc_server.h`, and the dual-server comparison harness
+  are now a named deletion target — `docs/FOLLOWUPS.md` "epee HTTP
+  listener + `--no-rust-rpc`: delete", target V3.0, with the outstanding
+  wallet-sync-over-Axum check folded in as the deletion PR's verification
+  gate (transport only; epee KV serialization and Levin P2P remain
+  separate migration phases).
 - **rpc: emission claim-source query — claim-builder PR 1
   (`EMISSION_CLAIM_BUILDER.md` §7 / §8 PR 1).** New daemon JSON-RPC
   `get_archival_emission_claim_source` (both transports; RPC minor

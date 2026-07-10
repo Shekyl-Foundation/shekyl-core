@@ -25,9 +25,19 @@ with Axum while keeping all handler logic in C++.
 ```
 
 The `core_rpc_server` class retains its `on_*` methods and still inherits from
-`epee::http_server_impl_base` (the legacy server remains available via
-`--no-rust-rpc`). The Axum server runs on a dedicated Tokio runtime started
-from the Rust FFI.
+`epee::http_server_impl_base`, but **the epee HTTP listener does not bind in a
+default daemon**: when the Rust RPC is enabled (the default), `daemon.cpp`
+passes `bind_epee_listener = false` at init and Axum owns the standard RPC
+port directly. The epee listener binds only under the explicit `--no-rust-rpc`
+flag, which exists solely as a transitional escape hatch and is **scheduled
+for deletion** — see the `FOLLOWUPS.md` entry "epee HTTP listener +
+`--no-rust-rpc`: delete". The Axum server runs on a dedicated Tokio runtime
+started from the Rust FFI; a failed Axum bind is fatal (there is no epee
+fallback — that scaffolding was removed).
+
+Note the deletion scope is the **transport** only: epee KV serialization is
+used by both dispatch paths (the FFI tables serialize via epee) and is
+replaced separately in Phase 2 below.
 
 ## Files
 
@@ -38,8 +48,8 @@ from the Rust FFI.
 | `rust/shekyl-daemon-rpc/` | Axum crate: server, routes, handlers, types; produces `libshekyl_daemon_rpc.a` |
 | `rust/shekyl-daemon-rpc/src/ffi_exports.rs` | `shekyl_daemon_rpc_start/stop` FFI exports (daemon-only) |
 | `src/shekyl/shekyl_ffi.h` | C++ declarations for Rust FFI functions |
-| `src/daemon/daemon.cpp` | Daemon lifecycle: start/stop Rust RPC alongside epee |
-| `tests/rpc_comparison/compare_rpc.sh` | Validation harness for dual-server diffing |
+| `src/daemon/daemon.cpp` | Daemon lifecycle: Axum owns the RPC listener; epee acceptor not bound unless `--no-rust-rpc` |
+| `tests/rpc_comparison/compare_rpc.sh` | Validation harness from the interim dual-server migration mode (historical; deleted with the epee listener) |
 
 ## Endpoint Coverage
 
@@ -53,11 +63,11 @@ from the Rust FFI.
   the C++ dispatch tables (`design/DAEMON_SUBMIT_VERDICT.md` §2–§3)
 - **9 binary** endpoints (`/get_blocks.bin`, `/get_o_indexes.bin`, etc.)
   - POST-only; return **400 Bad Request** on parse failure (matching epee)
-- **36 JSON-RPC 2.0** methods (`get_block_count`, `get_block_template`, etc.)
+- **37 JSON-RPC 2.0** methods (`get_block_count`, `get_block_template`, etc.)
   - POST-only (per JSON-RPC 2.0 spec)
-- **76 total** FFI dispatcher registrations (62 unique C++ handlers),
-  plus the native Rust submit route (counts as of the 2026-07
-  submit-verdict series; earlier snapshots predate the RPC-payment and
+- **77 total** FFI dispatcher registrations (63 unique C++ handlers),
+  plus the native Rust submit route (counts as of the 2026-07 emission
+  claim-source addition; earlier snapshots predate the RPC-payment and
   legacy-submit deletions)
 
 All URI aliases (e.g. `/getheight` ↔ `/get_height`) are registered.
@@ -80,14 +90,11 @@ In restricted mode (`--restricted-rpc`):
   strings and binary blobs without interpretation.
 - `get_outs` / `get_outs.bin` endpoints are removed — FCMP++ uses
   full-chain membership proofs, so there is no ring member fetching.
-- Curve tree RPC endpoints — the C++ `on_get_curve_tree_*` handlers exist and
-  are registered in the **legacy epee** dispatch (`src/rpc/core_rpc_server.h`),
-  but are **not yet registered in this Axum/FFI JSON-RPC dispatch table**
-  (`src/rpc/core_rpc_ffi.cpp` `get_jsonrpc_table()`), so under the default Rust
-  RPC server they currently return **404**. Wiring them into the FFI dispatch
-  (plus the `on_get_curve_tree_path` handler fixes that surfaced alongside) is
-  tracked in [`FOLLOWUPS.md`](FOLLOWUPS.md) — "Rust/Axum daemon RPC: curve-tree
-  endpoints missing from the FFI dispatch table". The endpoints:
+- Curve tree RPC endpoints — registered in the Axum/FFI JSON-RPC dispatch
+  table (`src/rpc/core_rpc_ffi.cpp` `get_jsonrpc_table()`) since PR #174
+  (2026-06-23), which closed the "curve-tree endpoints missing from the FFI
+  dispatch table (404)" finding in [`FOLLOWUPS.md`](FOLLOWUPS.md) and landed
+  the `on_get_curve_tree_path` handler fixes. The endpoints:
   - `get_curve_tree_path` — retrieve a Merkle path for a given leaf
   - `get_curve_tree_info` — retrieve the current curve tree root hash, depth, and leaf count
   - `get_curve_tree_checkpoint` — retrieve a curve tree snapshot at a given height
@@ -95,29 +102,33 @@ In restricted mode (`--restricted-rpc`):
 ## Running
 
 ```bash
-# Rust RPC is enabled by default on port = epee_port + 10000
-shekyld --testnet              # epee 12029, Axum 22029
-shekyld                        # epee 11029, Axum 21029
+# Axum is the sole RPC transport by default, on the standard RPC port
+shekyld                        # Axum on 11029
+shekyld --testnet              # Axum on 12029
 
-# Disable Rust RPC (legacy only)
+# Transitional escape hatch (scheduled for deletion): bind the legacy
+# epee listener instead of Axum, same port
 shekyld --no-rust-rpc
-
-# Validation: run both servers and diff responses
-./tests/rpc_comparison/compare_rpc.sh 12029 22029
 ```
 
 ### Port Mapping
 
-| Network  | P2P   | epee RPC | Axum RPC |
-|----------|-------|----------|----------|
-| Mainnet  | 11021 | 11029    | 21029    |
-| Testnet  | 12021 | 12029    | 22029    |
-| Stagenet | 13021 | 13029    | 23029    |
+| Network  | P2P   | RPC (Axum) |
+|----------|-------|------------|
+| Mainnet  | 11021 | 11029      |
+| Testnet  | 12021 | 12029      |
+| Stagenet | 13021 | 13029      |
 
-## Validation Results
+The interim migration mode ran both servers side by side with Axum on
+`port + 10000`; that mode, its epee fallback, and the `+10000` offset were
+removed when Axum became the sole listener on the standard port. The
+`tests/rpc_comparison/compare_rpc.sh` harness dates from that mode and is
+deleted with the epee listener.
 
-Tested on testnet (2026-04-02) with dual-server mode. Test data saved to
-`shekyl-dev/data/rpc_comparison/`.
+## Validation Results (historical, dual-server interim mode)
+
+Tested on testnet (2026-04-02) while both servers ran side by side. Test data
+saved to `shekyl-dev/data/rpc_comparison/`.
 
 - **23 PASS** across JSON REST, JSON-RPC, and restricted endpoints
 - **2 expected diffs** (`get_info` via both REST and JSON-RPC): `rpc_connections_count`
@@ -126,14 +137,19 @@ Tested on testnet (2026-04-02) with dual-server mode. Test data saved to
 - **2 binary SKIP**: Both servers return 400 for empty-POST binary requests
   (matching behavior confirmed); full binary validation requires wallet sync test
 
-### Cutover Remaining Work
+### Cutover status
 
-Before removing the epee HTTP listener entirely:
+Of the two items once gating epee-listener removal:
 
-1. **Wallet sync test** -- connect `shekyl-cli` to Axum-only RPC,
-   verify block sync via `/getblocks.bin` and curve tree path fetch via `/get_curve_tree_path`
-2. **Standard port binding** -- when Axum is sole server, bind to 11029/12029/13029
-   (not +10000) so existing clients and config files work unchanged
+1. **Standard port binding** — **done**: Axum binds the configured RPC port
+   directly (`daemon.cpp run()`), honoring `--rpc-bind-ip` /
+   `--rpc-restricted-bind-ip`; existing clients and config files work
+   unchanged.
+2. **Wallet sync test** (connect a wallet to Axum-only RPC, verify block sync
+   via `/getblocks.bin` and curve-tree path fetch via `get_curve_tree_path`) —
+   folded into the epee-deletion item in [`FOLLOWUPS.md`](FOLLOWUPS.md)
+   ("epee HTTP listener + `--no-rust-rpc`: delete") as the deletion PR's
+   verification gate rather than a standing precondition.
 
 ## Thread Safety
 
