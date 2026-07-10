@@ -1655,8 +1655,6 @@ namespace tools
     void register_devices();
     hw::device& lookup_device(const std::string & device_descriptor);
 
-    bool get_rct_distribution(uint64_t &start_height, std::vector<uint64_t> &distribution);
-
     uint64_t get_segregation_fork_height() const;
 
     void cache_tx_data(const cryptonote::transaction& tx, const crypto::hash &txid, tx_cache_data &tx_cache_data) const;
