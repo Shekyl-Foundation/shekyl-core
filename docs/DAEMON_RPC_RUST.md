@@ -99,11 +99,21 @@ as the remote-security story — that remains onion / reverse proxy.
 Default-deny (`CorsLayer::new()`). When `--rpc-access-control-origins` is set,
 Axum honors the comma-separated allow-list (never `*`).
 
-## Connection limits (inert)
+## Connection limits
 
-`--rpc-max-connections*` / soft-limit CLI args remain for config compatibility
-but are **not enforced by Axum** yet. `get_info.rpc_connections_count` always
-reports `0`. See FOLLOWUPS for DoS hardening and a real connection counter.
+`--rpc-max-connections` (total), `--rpc-max-connections-per-public-ip`, and
+`--rpc-max-connections-per-private-ip` are **enforced by the Axum listener**.
+The caps are parsed and cross-validated in `core_rpc_server::init` (C++) and
+handed to the Rust listener via `shekyl_daemon_rpc_start`; enforcement itself is
+a purpose-built Rust layer (`conn_limit`: `LimitedListener` + `ConnTracker`)
+that admits each accepted TCP connection against the total and the applicable
+per-IP cap (public vs. private/loopback), immediately closing any connection
+over a cap and releasing the slot when a connection closes. `0` means unlimited
+for a given dimension. The soft-limit arg remains advisory.
+
+`get_info.rpc_connections_count` reports the live tracked total from that same
+layer (both the REST and json_rpc surfaces; restricted RPC continues to
+disclose `0`, matching the other peer/connection fields).
 
 ## PQC Readiness
 

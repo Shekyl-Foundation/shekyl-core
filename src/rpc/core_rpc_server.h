@@ -82,7 +82,8 @@ namespace cryptonote
         const std::string& port,
         const std::string& proxy = {}
       );
-    //! Always 0: Axum does not yet expose an RPC connection count (FOLLOWUPS).
+    //! Reported as 0 here; the live count is owned by the Rust Axum listener
+    //! (ConnTracker) and injected into get_info's rpc_connections_count there.
     size_t get_connections_count() const { return 0; }
     network_type nettype() const { return m_core.get_nettype(); }
     // Resolved listen host for this server, valid after init(). Used by the
@@ -91,6 +92,12 @@ namespace cryptonote
     const std::vector<std::string>& get_access_control_origins() const {
       return m_access_control_origins;
     }
+    // Connection caps parsed + cross-validated in init() (0 = unlimited).
+    // Passed to the Rust Axum listener via shekyl_daemon_rpc_start, which owns
+    // enforcement; valid after init() runs.
+    std::size_t get_rpc_max_connections() const { return m_rpc_max_connections; }
+    std::size_t get_rpc_max_connections_per_public_ip() const { return m_rpc_max_connections_per_public_ip; }
+    std::size_t get_rpc_max_connections_per_private_ip() const { return m_rpc_max_connections_per_private_ip; }
     // Core access for the Rust submit shims (daemon_submit_ffi.cpp), which
     // resolve pool/blockchain/protocol from the same handle the Axum
     // transport already holds. See DAEMON_SUBMIT_VERDICT.md §4.
@@ -205,6 +212,11 @@ private:
     std::string m_rpc_bind_ip;
     // CORS allow-list from --rpc-access-control-origins (empty = deny).
     std::vector<std::string> m_access_control_origins;
+    // Connection caps (0 = unlimited); set in init(), enforced by the Rust
+    // Axum listener.
+    std::size_t m_rpc_max_connections = 0;
+    std::size_t m_rpc_max_connections_per_public_ip = 0;
+    std::size_t m_rpc_max_connections_per_private_ip = 0;
   };
 }
 

@@ -28,6 +28,7 @@
 
 //! Axum HTTP server replacing epee's http_server_impl_base for daemon RPC.
 
+use crate::conn_limit::{ConnLimits, ConnTracker, LimitedListener};
 use crate::core::CoreRpc;
 use crate::handlers::{binary, json, json_rpc, submit};
 use crate::middleware::DEFAULT_BODY_LIMIT;
@@ -49,6 +50,9 @@ pub struct AppState {
     pub submit_engine: Arc<DaemonSubmitEngine>,
     pub restricted: bool,
     pub shutdown: Arc<Notify>,
+    /// Live connection accounting; shared with the [`LimitedListener`] and read
+    /// by `get_info` to report `rpc_connections_count`.
+    pub conn_tracker: Arc<ConnTracker>,
 }
 
 pub struct ServerConfig {
@@ -57,6 +61,8 @@ pub struct ServerConfig {
     pub body_limit: usize,
     /// Allow-list from `--rpc-access-control-origins`. Empty = CORS default-deny.
     pub cors_origins: Vec<String>,
+    /// Concurrent-connection caps enforced by the [`LimitedListener`].
+    pub conn_limits: ConnLimits,
 }
 
 impl Default for ServerConfig {
@@ -66,6 +72,7 @@ impl Default for ServerConfig {
             restricted: false,
             body_limit: DEFAULT_BODY_LIMIT,
             cors_origins: Vec::new(),
+            conn_limits: ConnLimits::default(),
         }
     }
 }
@@ -258,11 +265,15 @@ pub async fn serve_with_listener(
         FfiSubmitShim::new(core.clone()),
         DaemonTxVerifier,
     ));
+    // One tracker per listener, shared between admission (the LimitedListener)
+    // and reporting (`get_info`'s rpc_connections_count).
+    let conn_tracker = ConnTracker::new(config.conn_limits);
     let state = Arc::new(AppState {
         core,
         submit_engine,
         restricted: config.restricted,
         shutdown: shutdown.clone(),
+        conn_tracker: conn_tracker.clone(),
     });
 
     let app = build_router(state, &config.cors_origins);
@@ -291,6 +302,19 @@ pub async fn serve_with_listener(
         );
     }
 
+    if config.conn_limits != ConnLimits::default() {
+        info!(
+            "RPC connection caps: total={}, per-public-ip={}, per-private-ip={} (0 = unlimited)",
+            config.conn_limits.max_total,
+            config.conn_limits.max_per_public_ip,
+            config.conn_limits.max_per_private_ip
+        );
+    }
+
+    // Wrap the bound listener so every accepted connection is admitted through
+    // (and accounted in) the shared tracker. The graceful-shutdown path is
+    // unchanged — only the listener is adapted.
+    let listener = LimitedListener::new(listener, conn_tracker);
     axum::serve(listener, app)
         .with_graceful_shutdown(async move { shutdown.notified().await })
         .await?;

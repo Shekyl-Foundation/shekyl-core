@@ -1247,12 +1247,19 @@ typedef struct ShekylDaemonRpcHandle ShekylDaemonRpcHandle;
 /// restricted: true to block admin-only endpoints.
 /// cors_origins: optional comma-separated allow-list from
 ///   --rpc-access-control-origins; NULL or empty = CORS default-deny.
+/// max_connections / max_connections_per_public_ip /
+///   max_connections_per_private_ip: concurrent-connection caps enforced by the
+///   Rust listener (0 = unlimited), already cross-validated by
+///   core_rpc_server::init.
 /// Returns an opaque handle, or NULL on failure.
 ShekylDaemonRpcHandle* shekyl_daemon_rpc_start(
     void* rpc_server_ptr,
     const char* bind_addr,
     bool restricted,
-    const char* cors_origins);
+    const char* cors_origins,
+    uint64_t max_connections,
+    uint64_t max_connections_per_public_ip,
+    uint64_t max_connections_per_private_ip);
 
 /// Gracefully stop the Axum daemon RPC server and free the handle.
 void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);

@@ -243,8 +243,8 @@ namespace cryptonote
       return false;
     }
 
-    // Validate connection-limit args for config compatibility; Axum does not
-    // enforce them yet (documented as inert in FOLLOWUPS / DAEMON_RPC_RUST).
+    // Connection-limit args: cross-validate here, then hand the values to the
+    // Rust Axum listener (via shekyl_daemon_rpc_start), which enforces them.
     const auto max_connections_public = command_line::get_arg(vm, arg_rpc_max_connections_per_public_ip);
     const auto max_connections_private = command_line::get_arg(vm, arg_rpc_max_connections_per_private_ip);
     const auto max_connections = command_line::get_arg(vm, arg_rpc_max_connections);
@@ -259,6 +259,10 @@ namespace cryptonote
       MFATAL(arg_rpc_max_connections_per_private_ip.name << " is bigger than " << arg_rpc_max_connections.name);
       return false;
     }
+
+    m_rpc_max_connections = max_connections;
+    m_rpc_max_connections_per_public_ip = max_connections_public;
+    m_rpc_max_connections_per_private_ip = max_connections_private;
 
     return true;
   }
