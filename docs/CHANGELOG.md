@@ -769,6 +769,38 @@
 
 ### Changed
 
+- **rct: delete the dead base-slot `pseudoOuts` and the three standalone
+  object serializers — byte-identical; a claimed coinbase wire bug is
+  REFUTED (`CT_SURFACE_NAMING_PIN.md` §2 correction).** The legacy
+  `rctSigBase::pseudoOuts` was never populated on any live type and — the
+  load-bearing correction — never serialized on any wire: every real byte
+  producer (transaction serializer, tx-hash paths, FCMP++ pre-hash, PQC
+  payload binding) uses the `serialize_rctsig_base` member function, which
+  never emitted it. The `FIELD(pseudoOuts)` branch previously believed to
+  put a varint-0 on every coinbase blob lived in a standalone
+  `BEGIN_SERIALIZE_OBJECT()` with no production caller — a second,
+  disagreeing definition of the rct bytes that was laxer than the real
+  wire (it round-tripped states the member serializer rejects) and whose
+  existence produced the phantom wire-format finding. Deleted together:
+  the field, its ctor init, all eight always-false emptiness guards
+  (`tx_verification_utils.cpp`, `blockchain.cpp`, `rctSigs.cpp`), the
+  base arm of `get_pseudo_outs()` (now unconditionally the prunable
+  vector), and all three caller-less object serializers (`rctSigBase`,
+  `rctSigPrunable`, `rctSig`) so the class of second-serializer phantom
+  cannot recur; the two unit tests that round-tripped the dead serializer
+  are repointed at the member function (the real path), with a new pin
+  that a no-output Null base is exactly the one type byte. The naming-pin
+  doc's step-3 routing (wire change + version bump) is retracted in
+  place, and its deletion inventory's `cryptonote_boost_serialization.h`
+  item is corrected — that line is the **prunable** field, live and
+  load-bearing, and must not be touched by the rename sweep. Verified
+  byte-identical: full unit suite (fcmp/Serialization/archival, 129
+  tests) plus the shekyl-wire live-oracle KATs
+  (`coinbase_block_and_tx_hashes_match_the_daemon`, coinbase/spend
+  round-trips) all pass against the pre-change pinned blobs; `GENESIS_TX`
+  and all hashes untouched by construction. Rule 42 does not fire (no
+  persisted engine-state block embeds the rct base).
+
 - **archival: WS-1 held-sourcing correction — serve-credit ledger is the
   sole `work_P(E)` source; holdings reads are as-of-fire-height**
   (`REWARD_EMISSION_E3_GATING_ROUND.md` §5, item 1 of the PR-E3 §3 build

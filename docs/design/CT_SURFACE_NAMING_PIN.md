@@ -51,33 +51,45 @@ One inherited module name covers two roles. They diverge at rename time.
 | `rctSigs.h` / `.cpp` | **Semantics verification** | `ct_semantics.h` / `.cpp` |
 | `rct::rctSig` (field type) | Passive wire container | Keep `ct_signatures` alias for now; de-"sig" the type noun is lower priority |
 | `genRctFcmpPlusPlus`, `fill_construct_tx_rct_stub` | Legacy C++ construction | **Delete** with `wallet2` / chaingen migration — do not rename |
-| `rctSigBase::pseudoOuts` (base slot) | Dead legacy field — never populated on any live type | **Delete outright — do not rename** (see below) |
+| `rctSigBase::pseudoOuts` (base slot) | Dead legacy field — never populated on any live type | **DELETED (standalone pre-sweep PR)** (see below) |
 
-**`rctSigBase::pseudoOuts` deletes; renaming it is scope failure.** The rename
-sweep's mechanical RCT→CT pass could carry the base-slot field straight
-through — renamed container, same dead field — leaving a dead-guarded slot
-under a new name in permanence. The accessor is the proof the field is dead:
-`get_pseudo_outs()` (`rctTypes.h:430–438`) returns the base slot only for
-non-`RCTTypeFcmpPlusPlusPqc` types, the only such type is `RCTTypeNull`
-(coinbase), and coinbase never carries pseudo-outs — the slot is a constant
-empty vector everywhere it is reachable. Deletion scope (the field and its
-guards leave together, none is separable):
+**`rctSigBase::pseudoOuts` — DELETED in a standalone pre-sweep PR
+(2026-07-09), with the two claims below corrected.** The field, its guards,
+the accessor's base arm, and the caller-less standalone object serializers
+were removed together. The sweep's exit check for this row is now
+grep-mechanical and already satisfied: no identifier for a base-slot
+pseudo-out container exists under any name.
 
-- the field itself (`rctTypes.h:174`) and its ctor init (`:194`);
-- the `type != RCTTypeFcmpPlusPlusPqc` wire branch (`:288–291`) — note this
-  is a **wire change for `RCTTypeNull`** (one varint-0 byte leaves the
-  coinbase blob), so it rides the wire-format step (step 3 below) with the
-  serialization-version bump per `42-serialization-policy.mdc`, **not** the
-  byte-identical rename step (step 2);
-- the boost-serialization line (`cryptonote_boost_serialization.h:428`);
-- the accessor's base arm — `get_pseudo_outs()` collapses to `p.pseudoOuts`
-  (or the accessor deletes with its callers repointed);
-- every `rv.pseudoOuts.empty()` dead-field guard (`rctSigs.cpp:212`, `:280`,
-  `:348`, `:420`; `tx_verification_utils.cpp:139`, `:158`, `:192`) — these
-  exist only to assert the dead slot stayed dead and retire with it.
+Two claims in this section's earlier revision were **refuted at source**
+during the deletion PR's grounding, and are corrected here so the sweep does
+not act on them:
 
-The sweep's exit check for this row is grep-mechanical: after the sweep, no
-identifier for a base-slot pseudo-out container exists under any name.
+- **The "wire change for `RCTTypeNull`" claim was wrong — the deletion was
+  byte-identical.** The `FIELD(pseudoOuts)` branch (old `rctTypes.h:288–291`)
+  lived in `rctSigBase`'s standalone `BEGIN_SERIALIZE_OBJECT()` — a second
+  serializer with **no production caller** (its only callers were two unit
+  tests round-tripping the serializer itself, since repointed to the member
+  function), not the wire. Every real byte producer — the
+  transaction serializer (`cryptonote_basic.h`), the tx-hash paths
+  (`cryptonote_format_utils.cpp`), the FCMP++ pre-hash (`rctSigs.cpp`), the
+  PQC payload binding (`tx_pqc_verify.cpp`) — uses the
+  `serialize_rctsig_base` **member function**, which never emitted the base
+  field (a coinbase's rct tail is exactly
+  `type ‖ enc_amounts ‖ enc_labels ‖ outPk`, pinned by
+  `tests/unit_tests/serialization.cpp` and the live-oracle coinbase KAT in
+  `rust/shekyl-wire`). No coinbase byte changed, no hash changed,
+  `GENESIS_TX` is untouched, and no serialization-version bump applies (the
+  `42-serialization-policy.mdc` gate governs persisted engine-state blocks,
+  none of which embed the rct base). The deletion PR also removed the three
+  caller-less standalone object serializers (`rctSigBase`, `rctSigPrunable`,
+  `rctSig`) so a second, disagreeing definition of the bytes cannot produce
+  this class of phantom finding again.
+- **The boost-serialization line (`cryptonote_boost_serialization.h:428`)
+  was never part of this deletion — do not touch it in the sweep.** That
+  line is the **prunable** field (`x.pseudoOuts` inside
+  `serialize(rctSigPrunable&)`), which is live and load-bearing; removing it
+  would corrupt the boost wallet-cache format. The boost `rctSigBase`
+  serializer never emitted the base slot at all.
 
 Verifier entry points already use "semantics" vocabulary:
 `verRctSemanticsSimple`, `verRctSemanticsFeeOnly`, `verRctSemanticsBondPost`
@@ -161,14 +173,14 @@ binding trigger**, not upstream cherry-pick calendar.
    gone).
 2. C++ namespace/module rename (`rct::` → `ct::`, `rctSigs` → `ct_semantics`,
    etc.) — rename-only, gated on tx blob round-trip / determinism CI. **Scope
-   guard:** `rctSigBase::pseudoOuts` is *excluded* from this step — it deletes
-   (per §2's deletion row), it does not rename. A renamed base slot surviving
-   step 2 is a step-2 review rejection.
+   note:** `rctSigBase::pseudoOuts` no longer exists — it was deleted in the
+   standalone pre-sweep PR (§2), byte-identically. The step-2 review check is
+   simply that the sweep introduces no new base-slot pseudo-out identifier.
 3. Wire tag rename (`rct_signatures` → successor) — pre-genesis or coordinated
-   hard fork; updates KATs once at genesis definition time. The
-   `rctSigBase::pseudoOuts` deletion's wire-visible half (the `RCTTypeNull`
-   branch at `rctTypes.h:288–291`) lands here with the serialization-version
-   bump; the dead-field guards and the accessor's base arm go with it.
+   hard fork; updates KATs once at genesis definition time. (The earlier
+   claim that the `rctSigBase::pseudoOuts` deletion had a wire-visible half
+   landing here was refuted at source and is corrected in §2 — the deletion
+   was byte-identical and has already landed; nothing from it rides step 3.)
 
 **Log / RPC strings:** internal identifiers may become descriptive; verifier
 failure messages stay coarse (no proof-component detail to log observers). Same

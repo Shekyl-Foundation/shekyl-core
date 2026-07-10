@@ -529,10 +529,11 @@ signatures. In Shekyl v3, the only accepted types are `RCTTypeNull`
 (coinbase) and `RCTTypeFcmpPlusPlusPqc`. The struct actually carries:
 
 - **`rctSigBase`**: Pedersen commitments (`outPk`), HKDF-encrypted amounts
-  (`enc_amounts`), `txnFee`, `referenceBlock` (curve tree anchor),
-  `pseudoOuts`.
+  (`enc_amounts`), `txnFee`, `referenceBlock` (curve tree anchor). (The dead
+  legacy base-slot `pseudoOuts` was deleted 2026-07-09 —
+  `CT_SURFACE_NAMING_PIN.md` §2.)
 - **`rctSigPrunable`**: BP+ range proofs, the opaque FCMP++ membership
-  proof, `curve_trees_tree_depth`.
+  proof, `curve_trees_tree_depth`, `pseudoOuts` (one per spend input).
 
 All ring signature types (`RCTTypeFull`, `RCTTypeSimple`, `RCTTypeCLSAG`,
 `RCTTypeBulletproof`, `RCTTypeBulletproofPlus`) are rejected at
