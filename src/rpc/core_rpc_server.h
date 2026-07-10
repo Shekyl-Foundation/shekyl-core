@@ -187,6 +187,7 @@ namespace cryptonote
         MAP_JON_RPC_WE("get_curve_tree_path",       on_get_curve_tree_path,        COMMAND_RPC_GET_CURVE_TREE_PATH)
         MAP_JON_RPC_WE("get_curve_tree_info",       on_get_curve_tree_info,        COMMAND_RPC_GET_CURVE_TREE_INFO)
         MAP_JON_RPC_WE("get_curve_tree_checkpoint",  on_get_curve_tree_checkpoint,  COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT)
+        MAP_JON_RPC_WE("get_archival_emission_claim_source", on_get_archival_emission_claim_source, COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE)
       END_JSON_RPC_MAP()
     END_URI_MAP2()
 
@@ -258,6 +259,7 @@ namespace cryptonote
     bool on_get_curve_tree_path(const COMMAND_RPC_GET_CURVE_TREE_PATH::request& req, COMMAND_RPC_GET_CURVE_TREE_PATH::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_get_curve_tree_info(const COMMAND_RPC_GET_CURVE_TREE_INFO::request& req, COMMAND_RPC_GET_CURVE_TREE_INFO::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_get_curve_tree_checkpoint(const COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT::request& req, COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
+    bool on_get_archival_emission_claim_source(const COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE::request& req, COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     //-----------------------
     bool is_restricted() const { return m_restricted; }
 

@@ -1,14 +1,29 @@
 # Wallet-side emission claim builder (E4-gate, part 1 of 2)
 
-**Status: design round 1 — CLOSED (2026-07-09).** CB-1…CB-5 all ratified
-at source (§3): CB-1 (new daemon RPC as `EmissionEpochSource`, single-
-evaluator invariant the ratifying reason); CB-2 (StakeEngine actor,
+**Status: design round 2 — CLOSED (2026-07-09).** §7.1/§7.2/§7.3/§7.4
+ratified and §8 endorsed, with two record-sharpenings applied at
+ratification: the §7.1 single-gather pin is recorded as CB-1(b) itself
+(one invariant, two faces — wallet doesn't re-derive, RPC doesn't
+re-gather), and the §7.3 `k_cover`/`frozen_shard_count` exclusion is
+recorded as CB-5-structural, not payload-minimization. The one open
+verification (the §2 low-boundary anchor) resolved clean-for-a-structural-reason:
+the low end anchors to `epoch_is_claim_expired`, which is single-sourced
+through `claim_window_floor` (§7.2 bottom-boundary record), and the
+builder is pinned to consume the predicate functions rather than
+re-derive boundary arithmetic. Implementation is underway on the §8
+chain, starting with PR 1 (daemon RPC); PR-1 review watch items are
+named at the end of §8. Round 1
+CLOSED (2026-07-09): CB-1…CB-5 all ratified at source (§3): CB-1 (new
+daemon RPC as `EmissionEpochSource`, single-evaluator invariant the
+ratifying reason); CB-2 (StakeEngine actor,
 sign-within-seed-gone-after-`assemble()` pin); CB-3 (routing-not-closure,
 joint-grading reopen); CB-4 (structural three-leg exclusion ratified; arming
 KAT strengthened to production operand functions + E3/rationale doc fixes
 done in-PR; blob-boundary arm homed to the builder PR); CB-5 (cause-blind
-refusal, `SelfCheckFailed`-blind pin). Implementation proceeds on the pins
-below.
+refusal, `SelfCheckFailed`-blind pin). Round 2 (§7) is the CB-1
+ratification residue — the RPC field enumeration + gate-6 linkability
+review — plus the implementation-plan PR chain (§8). Implementation is
+held until round 2 closes.
 
 **Provenance.** C-1 (the emission activating cut) merged to `dev` 2026-07-09
 via PR #277 (`13c368707`); consensus now accepts authed
@@ -62,9 +77,22 @@ names the landed function it must reuse:
 
 1. **Claimable-epoch derivation** — the pinned obligation
    (`docs/FOLLOWUPS.md` M1 round-1 record): claimable epochs are derived
-   from **the same positive-share recompute** the verifier runs. For each
-   candidate `E` in `[claim_window_floor(settled), settled]`, not already
-   in the bond record's claimed set: recompute the share via
+   from **the same positive-share recompute** the verifier runs. The
+   candidate range is bounded by the two rejection predicates of
+   `claimed_epochs_check_and_set`, **each end anchored to the predicate
+   that rejects, never to a described window** (round-2 correction,
+   §7.2): **top** — `E < current_settled_epoch`, strict
+   (`E ≥ settled` rejects `NotSettled`, `claimed_epochs.rs:123`);
+   **bottom** — `!epoch_is_claim_expired(E, settled)`
+   (`claimed_epochs.rs:130`), which is `E ≥ claim_window_floor(settled)`
+   *by definition* — expiry resolves **through** the floor
+   (`claimed_epochs.rs:83-85`), one definition, no parallel copy. The
+   builder consumes the landed predicates (`epoch_is_claim_expired`,
+   `claimed_epochs_contains`) directly and never re-derives boundary
+   arithmetic inline — the predicate functions are the boundary's single
+   source; inline `≥ floor` arithmetic would be a second copy that can
+   drift if the predicate ever changes. For each in-range `E` not
+   already in the bond record's claimed set: recompute the share via
    `as_of_e_served_work` → `capped_work_milli` → `reward_share_floor`;
    claimable ⇔ share `> 0`. No `K_COVER` consultation (the vin never
    consults it — M1 wire-positivity resiting), no row-absence proxies.
@@ -439,3 +467,296 @@ the blob-boundary invariant arm homed to the builder PR (§3 CB-4 +
 seed-gone-after-`assemble()` (CB-2); `SelfCheckFailed` refuses cause-blind
 (CB-5); the E4-gate GF-4 round grades cadence jointly with amount +
 holdings stratum (CB-3).
+
+---
+
+## 7. Round 2 — the CB-1 RPC surface (ratification residue)
+
+CB-1's round-1 ratification left two named items for round 2: *"the RPC's
+exact field set enumerated against `EpochCloseInputs` +
+`emission_verify.rs`'s `EmissionEpochSource`, and the gate-6 review of the
+query's linkability surface."* This round discharges both. Substrate
+re-verified at `dev` = `21da28864` (post-#282).
+
+### 7.1 The load-bearing discovery: the gather already exists
+
+The daemon-side work is smaller than round 1 assumed. The per-`(P, E)`
+frozen-operand gather is **already landed as a single-sourced function**:
+`BlockchainDB::gather_archival_emission_epoch_snapshot(p_id,
+settlement_epoch, out)` (`blockchain_db.h:2134`), returning
+`ArchivalEmissionEpochSnapshot` (`blockchain_db.h:408`) — the exact struct
+the verify shim marshals into the FFI
+(`ShekylArchivalEmissionEpochSnapshot`, `archival_ffi.rs:871`) and the
+Rust verify body consumes as `EmissionEpochSource`
+(`emission_verify.rs:223`). The RPC is therefore a **serializer over the
+landed gather**, not a new gather.
+
+**Pin (single-gather) — RATIFIED (2026-07-09).** The RPC handler must
+call `gather_archival_emission_epoch_snapshot` — the same function the
+verify dispatch calls — and must not re-implement any row read. A second
+gather is the same drift class WS-1's single accessor and CB-1's
+single-evaluator invariant foreclose: if the RPC gathered differently
+from verify, the wallet would build against operands the verifier never
+sees, resurrecting M-2 divergence at the RPC boundary.
+
+**Recorded as CB-1(b) itself, not a new pin.** This is the same
+invariant as round 1's CB-1(b) rejection, applied on the other side of
+the wire: the wallet does not re-derive (CB-1(b)), and the RPC does not
+re-gather (this pin) — **one invariant, two faces**, closing the
+single-evaluator property on both ends of the transport. A future PR
+cannot weaken one face while citing the other: weakening either side
+reopens the same M-2 divergence class and therefore reopens CB-1's
+ratification, not a payload or implementation detail.
+
+**Windowed form (PR-1 review hardening, 2026-07-09).** The handler calls
+`gather_archival_emission_window_snapshots(p_id, floor, settled, out)` —
+a width-N form of the *same* gather, not a second one: the one
+row-selection routine (`gather_archival_epoch_rows_window`,
+`db_lmdb.cpp`) now takes an epoch window, the per-epoch
+`gather_archival_emission_epoch_snapshot` is its width-1 delegate, and
+the epoch close funnels through the same routine, so the single-gather
+pin holds by construction. The motivation is a per-request work bound:
+the serve-credit key is `p_id | shard | epoch` (epoch is the *suffix*),
+so a per-epoch range seek is impossible and a full-table cursor pass is
+inherent — paying that pass once per window epoch (26×) on an
+unauthenticated public endpoint was attacker-drivable CPU amplification;
+the windowed form pays it once per request. The same review round moved
+the archival read helpers off their bare `if (m_write_txn)` fast path
+onto the thread-aware `block_rtxn_start` selection, so an RPC-thread
+caller can never touch the writer thread's live write transaction (LMDB
+write txns are single-thread; the old fast path let a claim-source query
+race a block connect toward crash or DB corruption).
+
+### 7.2 Query shape — one composite RPC, window-batched
+
+One new endpoint, tentatively `get_archival_emission_claim_source`:
+
+- **Request:** `p_id` (32-byte persona id). Nothing else. No epoch list,
+  no range.
+- **Response:** the claim context (§7.3 part A) + one per-epoch snapshot
+  (§7.3 part B) for **every** epoch in
+  `[claim_window_floor(current_settled_epoch), current_settled_epoch − 1]`
+  that has a close row — the full claim window, unconditionally.
+
+Why window-batched rather than per-`(P, E)`:
+
+1. **Uniform query shape (gate-6).** A per-epoch query sequence reveals
+   *which* epochs the wallet considers live candidates — an observable
+   correlated with the persona's serve history. The full-window batch is
+   shape-invariant: every claimer asks the identical question, so the
+   query leaks only "`P` ran a claim check," never the claimable subset.
+   This is CB-5's cause-blindness discipline applied at the transport
+   (the query must not encode the answer).
+2. **Chicken-and-egg.** Step 1's candidate filter needs the bond record's
+   `claimed_settlement_epochs` — which lives in the same response. A
+   per-epoch shape would force two round trips with a coherence seam
+   between them (claimed-set read at tip `T1`, snapshots at tip `T2`).
+   One composite response is one read at one tip.
+3. **Bounded.** The window is `MAX_CLAIM_AGE_W = 26`
+   (`config/consensus_constants.json`, wired via
+   `shekyl-archival-retention/build.rs`), so the response carries at most
+   27 epoch snapshots. Each snapshot's rows are the epoch-close gather
+   rows (bonds with credit in `E`, shards, credit pairs) — the same
+   volume the close itself processes. The response is DoS-bounded by
+   consensus constants, no caller-controlled amplification (the request
+   has no size knob at all).
+
+**Disposition: RATIFIED (2026-07-09).** The load-bearing argument is
+item 1: the query cannot encode the claimable subset, so the observable
+is identical for a claimant with zero claimable epochs and one with all
+of them — CB-5's cause-blindness pushed to the transport layer. A
+request shape that could ask "give me my claimable epochs" would leak
+the claimable set to any RPC observer (the daemon under remote posture,
+a network observer of un-isolated transport), and that set is exactly
+what the cause-blind refusal taxonomy exists to not reveal. The
+transport cannot distinguish what the claim path cannot distinguish.
+
+The in-progress epoch and the not-yet-settled boundary epoch are
+excluded daemon-side by the same predicate the connect path enforces:
+`claimed_epochs_check_and_set` rejects `epoch >= current_settled_epoch`
+as `NotSettled` (`claimed_epochs.rs:123`), so the claimable range is
+`[floor, settled − 1]`, top-exclusive. **Round-2 correction to §2
+step 1 (top boundary):** the round-1 text wrote the candidate range as
+`[claim_window_floor(settled), settled]`, inclusive at the top — an
+off-by-one against source (a builder that claimed `E = settled` would
+assemble a tx the connect path rejects `NotSettled`). §2 step 1 is
+corrected in this round; the coverage-boundary lesson from CB-4 applies
+(the range was stated by association with the window, not verified
+against the predicate).
+
+**Bottom boundary — verified against the predicate on review
+(round-2 closure item).** The review asked whether §2's low end anchors
+to `epoch_is_claim_expired` (the rejecting predicate,
+`claimed_epochs.rs:130`) or to `claim_window_floor` (the pruning floor,
+`:135`) — the same association-vs-predicate trap one level deeper.
+Verified at source: the two quantities **cannot diverge today**, because
+expiry is *defined through* the floor —
+`epoch_is_claim_expired = epoch < claim_window_floor(settled)`
+(`claimed_epochs.rs:83-85`), one definition, no parallel copy (the
+`claim_window_floor` doc comment's "single source of the claim-window
+boundary" names exactly this). So there is no live off-by-one at the
+bottom; `E ≥ floor` is predicate-exact. The discipline correction is
+still applied: §2 step 1 now anchors **both** ends to their governing
+rejection predicates and pins the builder to **consume the landed
+predicate functions** (`epoch_is_claim_expired`,
+`claimed_epochs_contains`) rather than re-deriving `≥ floor` inline —
+an inline copy is a second boundary source that drifts silently if the
+predicate ever changes independently of the floor.
+
+### 7.3 Field enumeration
+
+**Part A — claim context** (once per response):
+
+| Field | Type | Source of truth (daemon-side) | Consumer (wallet-side) |
+| --- | --- | --- | --- |
+| `chain_height` | u64 | tip at gather time | staleness check against the wallet's own scan tip (§2 step 3 same-tip rule); not an operand |
+| `current_settled_epoch` | u64 | `shekyl_archival_settlement_epoch_at_height` over tip (`archival_ffi.rs:520`) — the same helper consensus uses, never a second derivation | step 1 window bounds: `claim_window_floor(settled)` … `settled − 1` |
+| `has_bond_record` | bool | `archival_bond_record` row existence for `p_id` | absent ⇒ `NoClaimableEpochs` refusal (idle, not error) |
+| `join_settlement_epoch` | u64 | bond record | step 1 `E ≥ E_join + 1` filter; vin field |
+| `holdings` | `HoldingsDescriptor` (wire form) | bond record | vin holdings-equality field (§5.3/§6.4.1 — verify step 2 demands record equality; the builder copies the record's descriptor, never recomputes one) |
+| `claimed_settlement_epochs` | u64[], strictly increasing | bond record | step 1 dedup filter (`claimed_epochs_contains`); mirrors `ClaimantBondRecord.claimed_settlement_epochs` (`emission_verify.rs:217`) |
+
+**Part B — per-epoch snapshot** (0–27 entries; mirrors
+`ArchivalEmissionEpochSnapshot` field-for-field — the RPC adds **no**
+field the landed struct lacks and drops none):
+
+| Field | Mirrors | Note |
+| --- | --- | --- |
+| `settlement_epoch` | `.settlement_epoch` | echo of the row's `E` |
+| `close_block_height` | `.close_block_height` | the close-**processing** height `(E+1)·SEB`. Carries the landed struct's lookalike hazard verbatim: sourced from `shekyl_archival_epoch_close_processing_height`, **never** `shekyl_archival_epoch_close_height` (= `(E+1)·SEB − 1`). The RPC doc comment must repeat this pin |
+| `sigma_work_milli` | `.sigma_work_milli` | **persisted** `Σwork(E)` — the stored denominator, never a recompute (M1 gate outcome reaches the wallet only through this value, same as verify) |
+| `budget_atomic` | `.budget_atomic` | frozen close-row `budget(E)` |
+| `has_budget_row` | `.has_budget_row` | absent close row ⇒ wallet treats `E` as unclaimable (mirrors the verify shim's reject); present-and-zero is rejected downstream by wire positivity |
+| `bonds[]` | `.bonds` (`BondRow`) | `join_settlement_epoch`, `is_foundation_complete_tree`, `bad_intervals_flat[]` — flattened pairs, as landed |
+| `shards[]` | `.shards` (`ShardRow`) | `shard_id`, `freeze_height`, `has_segment` |
+| `credit_pairs[]` | `.credit_pairs` (`CreditPair`) | `(bond_idx, shard_idx)` index pairs into the two arrays above |
+| `claimant_bond_idx` | `.claimant_bond_idx` | `SIZE_MAX` sentinel → `Option<usize>` at the Rust decode, exactly as the verify shim does |
+
+**Deliberately NOT carried** (each exclusion is load-bearing):
+
+| Excluded | Why |
+| --- | --- |
+| `settlement_epoch_blocks`, `age_weight_milli`, `curve` (`BandedCurveParams`) | Consensus constants, already single-sourced in the shared constants pipeline (`archival_ffi.rs:820-822` builds them crate-locally). Carrying them over RPC would mint a second source that can drift from the wallet's compiled constants — the wallet must construct `EpochCloseInputs` from its own pipeline, byte-identical to the verify shim's construction |
+| `frozen_shard_count`, `k_cover` | **CB-5-structural, not payload-minimization** (re-recorded per round-2 ratification). A wallet holding `k_cover` + `frozen_shard_count` can trivially reconstruct the gate decision no matter what the refusal taxonomy says — sending these fields would make **representable** the cause-distinguishing wallet branch that CB-5 makes **unrepresentable** (the vin never consults `K_COVER`; the single comparison site is `epoch_close_compute`; the gate's outcome reaches the claim path only through the stored `sigma_work_milli`). This exclusion is therefore load-bearing for CB-5's cause-blindness: a future "include `shard_count` for diagnostics" PR reopens the cause-distinguishing branch and **trips this pin** — it is a CB-5 reopen, not a payload question |
+| per-epoch holdings descriptor | WS-1 §5: the work channel carries no holdings; the held-and-served set is the credit rows. The vin's holdings field comes from the bond record (part A), the only place verify reads it |
+| tree root / membership path for the backing output | Not this RPC's concern: sourced through the existing spend-path machinery (`curve_tree_decode.rs` / `signing_assembly.rs` family), same as every FCMP++ spend the wallet builds |
+
+**Decode locus.** The Rust response decode lands beside the wire structs
+in `shekyl-archival-retention` (or the engine's daemon-client layer —
+implementer's choice at PR time), producing exactly
+`EmissionEpochSource<'_>` + `ClaimantBondRecord<'_>` — the structs verify
+already consumes. No builder-private mirror of either struct is
+permitted (the §2 step-7 self-check must consume the same decoded values
+the assembly consumed, or the self-check tests a copy).
+
+**Disposition: RATIFIED (2026-07-09), with the `k_cover` /
+`frozen_shard_count` exclusion re-recorded as CB-5-structural** (see the
+exclusion table row): the WS-1 holdings exclusion and the
+consensus-constants exclusion are existing-invariant applications (WS-1
+§5 and CB-1's no-second-source respectively); the tree-paths exclusion
+is clean scope; the gate-operand exclusion is the load-bearing one and
+carries its own trip-wire framing so a future diagnostics-motivated
+inclusion trips CB-5, not a payload rationale.
+
+### 7.4 Gate-6 linkability review
+
+The query names `P`. `P` is public by role (WI-4 §18.8: only the
+`P`→user/principal link is protected, not `P` itself) — so the reviewed
+surface is the *transport* and the *timing*, not the query content:
+
+- **Transport pin.** Persona-side reads ride the persona's transport
+  (`PTorClient`/`PRpc`, `engine/prpc.rs`) under the 2d-2 posture rules —
+  **never** the principal's daemon session. Under the recommended
+  local-daemon posture (WI-4's graded assumption) this collapses to
+  loopback and is clean. A remote daemon sees `(P, claim-check, time)`;
+  that observation joins the **2d-2 remote/untrusted-daemon reopen
+  family** alongside CB-1's lying-daemon liveness bound (round 1) and the
+  WI-3 tip clock — same posture, same reopen, no new class.
+- **Shape pin.** §7.2's uniformity argument: the request carries no
+  epoch selection, so the daemon-visible query is identical for every
+  claimer regardless of serve history or claimable subset.
+- **Timing residual (routed, not closed).** *When* the wallet runs the
+  claim check is claim-cadence-adjacent: a check immediately followed by
+  a claim tx is a correlated pair on the persona's timeline. This is
+  CB-3's seam — the builder does not self-schedule, and the query fires
+  once per explicit claim intent (no background poll loop in the
+  builder; any polling belongs to the scheduler seam GF-4 grades). The
+  GF-4 joint-grading obligation (CB-3) therefore covers query timing as
+  a component of claim cadence; no separate grading track is opened.
+- **DoS/public posture.** The response is consensus-public state (bond
+  records and close rows any full node can enumerate); no wallet secret
+  exists daemon-side. The endpoint can be public-RPC class; response
+  size is consensus-bounded (§7.2 item 3). Restricted-mode placement is
+  an implementation detail at PR time — nothing here is
+  privacy-sensitive *content*, only privacy-sensitive *linkage*, which
+  the transport pin owns.
+
+**Disposition: RATIFIED (2026-07-09).** PRpc-never-principal-session is
+the held persona-transport pin; remote posture joins the existing 2d-2
+reopen family (no new class). Routing query timing into CB-3's GF-4
+joint-grading obligation rather than opening a fourth independent axis
+is the correct shape — the RPC query is another per-epoch-cadenced
+observable on the same persona and belongs in the joint
+cadence+amount+holdings grade (the per-axis-multiplication error
+avoided).
+
+### 7.5 Trust posture (inherited, unchanged)
+
+Round 1's lying-daemon wargame carries over verbatim: wrong operands ⇒
+denial-of-claim (liveness), never over-claim (every verifier recomputes
+independently). The step-7 self-check stays necessary-not-sufficient
+against a consistently-lying daemon. Nothing in the field enumeration
+changes that bound; the batch shape does not widen it (a daemon that
+can lie per-epoch can lie per-window identically).
+
+---
+
+## 8. Implementation plan — the PR chain
+
+Four PRs, each within the 5-day/10-commit ceiling (`06-branching.mdc`),
+split by validation surface (rule 19), ordered by dependency. Branch
+`feat/emission-claim-builder-impl` (this doc's round-2 commit is its
+first).
+
+| PR | Scope | Validation surface | Gates / pins carried |
+| --- | --- | --- | --- |
+| **1 — daemon RPC** | The §7 endpoint: C++ handler as a marshaling shim over `gather_archival_emission_epoch_snapshot` (rule 20: transport C++, no new logic) + bond-record context read; Rust client decode to `EmissionEpochSource`/`ClaimantBondRecord`; wire tests (round-trip, sentinel decode, window bounds) | RPC wire + operand fidelity (RPC-sourced operands byte-equal the verify shim's in-process gather on the same DB state) | §7.1 single-gather pin; §7.3 exclusion table; close-processing-height lookalike pin |
+| **2 — pure assembly module** | `engine/emission_claim.rs`: step 1 claimable-epoch derivation (verifier-exact via `reward_share_floor` over RPC-sourced frozen operands), step 2 work-claim rows, step 5 vouts + fee sizing (GF-4b item-5 bound-or-split), step 7 self-check, CB-5 refusal taxonomy. KAT-able with a fixture `EmissionEpochSource` — no live daemon, no actor harness | Builder-vs-verifier differential (assemble ⇒ the three landed verify functions accept; mutate any operand ⇒ reject) + refusal taxonomy (zero-share, window-floor, already-claimed, 15-cap batching) | CB-5 `SelfCheckFailed`-blind; wire positivity as the claimability predicate; no `K_COVER` read anywhere in the module |
+| **3 — StakeEngine handler** | The `SignBond`-sibling message (CB-2): backing selection via `BackingSet::from_spendable` (first live consumer — un-deadens GF-4b §5 item 1), membership proof (`prove_membership_only`), dual auth via a **derived bundle**, tx assembly + fee inputs through the existing spend machinery; the `EmissionReward` scan arm's first constructor site (§4 companion — without it claim change strands in rung-3) | Custody boundary (the checkable CB-2 pin: no master-seed re-borrow on the claim path) + scan classification (GF-4b item-3 integration test: first-emission backing = `BondPostChange`) | CB-2 sign-within-`assemble()`; GF-4b §5 items 1/2/3/6; reference-height same-tip rule |
+| **4 — regtest e2e + blob-boundary arm** | Part 2 of the E4 gate, **after #281 lands** (reuses `economics_chain_helpers.h`): mine to an epoch close with served work, build via PRs 1–3's production path, submit over real RPC, assert accepted-and-applied (claimed-set row + vout shape), pop/reorg leg; plus the CB-4 blob-boundary KAT arm (drive full dispatch, assert CT-balance verdict invariant under `canonical_bytes` variation) — landing where its harness is born | End-to-end consensus acceptance (the E4 merge gate, `REWARD_EMISSION_VIN_PLAN.md` §3.0) + CB-4 leg-i/leg-ii tripwire completeness | Q11-KAT FOLLOWUPS item closes here; e2e also carries the conservation KAT's fee-leg residue disclosed in #281 |
+
+Ordering: 1 → 2 (fixture shape) → 3 → 4 (needs 1–3 and #281). Standard
+gates per rules 45/50 on every PR; docs (index CB row, FOLLOWUPS,
+CHANGELOG) update per PR per rule 91.
+
+**Chain disposition: ENDORSED (2026-07-09), PR-4 gated on #281.** The
+gating is the same harness-locality sequencing settled for the CB-4
+blob-boundary arm — the arm and PR-4 both land where the harness
+(`economics_chain_helpers.h`) is born.
+
+Round-2 closure criteria: the §7.3 field enumeration ratified (including
+the four exclusions), the §7.2 window-batch shape ratified, the §7.4
+transport/shape/timing pins ratified, and the §8 chain shape accepted.
+All four ratified 2026-07-09; the one open verification (the §2
+low-boundary anchor) resolved in §7.2's bottom-boundary record.
+**Round 2 CLOSED 2026-07-09.**
+
+**PR-1 review watch items** (named at closure so they're checked at the
+code, not assumed from the design — the two places a PR-1
+implementation could silently weaken a ratified invariant while looking
+correct, both grep-checkable at the handler):
+
+1. **Single-gather trace (§7.1, the CB-1(b) daemon face).** The RPC
+   handler must be a serializer over
+   `gather_archival_emission_epoch_snapshot` with no second gather path
+   and no operand reconstruction. Check: grep the gather call sites,
+   assert exactly one new call (the RPC handler's), and read the handler
+   for any row read or arithmetic that isn't marshaling — the same
+   checkable shape as the wallet-side single-evaluator trace.
+2. **Transport cause-blindness (§7.2).** The request struct carries
+   `p_id` only — no field that can encode an epoch selection or the
+   claimable subset — and the handler branches on nothing
+   claimable-set-derived (the full window is serialized
+   unconditionally). Check: read the request/response types and the
+   handler's control flow; any claimability-dependent branch is a CB-5
+   transport regression.

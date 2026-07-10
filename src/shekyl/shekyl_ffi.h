@@ -1887,6 +1887,13 @@ uint8_t shekyl_archival_prune_below_epoch(
     uint64_t block_height,
     uint64_t* out_prune_below_epoch);
 
+/// The oldest still-claimable settlement epoch for `current_settled_epoch` —
+/// a thin delegate to the Rust `claim_window_floor`, the single source of the
+/// claim-window boundary. The emission claim-source RPC handler derives its
+/// window low end through this (never an inline `settled - W` copy), per
+/// `EMISSION_CLAIM_BUILDER.md` §2 step 1.
+uint64_t shekyl_archival_claim_window_floor(uint64_t current_settled_epoch);
+
 /* `epoch` inserted into the claimed set (stale entries pruned in place). */
 #define SHEKYL_ARCHIVAL_CLAIMED_EPOCHS_INSERTED        0
 /* `epoch` already claimed — hard error on the connect path (WS-2 §6.2). */

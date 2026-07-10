@@ -55,6 +55,7 @@ using namespace epee;
 #include "net/parse.h"
 #include "storages/http_abstract_invoke.h"
 #include "crypto/hash.h"
+#include "rpc/archival_claim_source.h"
 #include "rpc/rpc_args.h"
 #include "rpc/rpc_handler.h"
 #include "core_rpc_server_error_codes.h"
@@ -3454,6 +3455,43 @@ namespace cryptonote
     res.depth = checkpoint_data[32];
     memcpy(&res.leaf_count, checkpoint_data.data() + 33, sizeof(uint64_t));
     res.block_height = req.block_height;
+    res.status = CORE_RPC_STATUS_OK;
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool core_rpc_server::on_get_archival_emission_claim_source(const COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE::request& req, COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
+  {
+    RPC_TRACKER(get_archival_emission_claim_source);
+
+    // `p_id` is the ONLY request field (EMISSION_CLAIM_BUILDER.md §7.2):
+    // the handler branches on nothing claimable-set-derived — the sole
+    // request-dependent branch below is this well-formedness check.
+    crypto::hash p_id;
+    if (!parse_hash256(req.p_id, p_id))
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+      error_resp.message = "p_id must be 64 hex characters (32-byte P_canonical_id)";
+      return false;
+    }
+
+    try
+    {
+      // One read view for the whole composite (§7.2 one-read-one-tip): the
+      // tip height, the bond record, and every epoch snapshot come from the
+      // same LMDB read transaction, so the response cannot straddle a block
+      // connect.
+      auto& db = m_core.get_blockchain_storage().get_db();
+      db_rtxn_guard rtxn_guard(&db);
+      rpc::fill_archival_emission_claim_source(db, p_id, res);
+    }
+    catch (const std::exception& e)
+    {
+      MERROR("Failed to gather emission claim source: " << e.what());
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = "Failed to gather emission claim source";
+      return false;
+    }
+
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }

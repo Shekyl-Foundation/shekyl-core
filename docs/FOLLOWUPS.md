@@ -47,6 +47,37 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **epee HTTP listener + `--no-rust-rpc`: delete** (added 2026-07-09,
+  surfaced during claim-builder PR 1 when the dual-registration question —
+  "why does a new RPC method register in two dispatch maps?" — forced a
+  liveness check on the epee path). The Rust/Axum server has been the sole
+  default RPC transport since the standard-port cutover: `daemon.cpp` passes
+  `bind_epee_listener = false` whenever Rust RPC is enabled (the default),
+  a failed Axum bind is fatal (the epee fallback scaffolding is already
+  gone), and the epee acceptor binds **only** under the explicit
+  `--no-rust-rpc` escape hatch. That flag is a live-but-unused code path
+  touching untrusted input (an HTTP listener), which is exactly the dead
+  weight rule 15 says to delete — it should already have been deleted with
+  the fallback scaffolding. **Deletion scope (transport only):** the
+  `--no-rust-rpc` flag (`src/daemon/command_line_args.h`) and its `daemon.cpp`
+  consumption; the `bind_epee_listener` init plumbing; `core_rpc_server`'s
+  `epee::http_server_impl_base` inheritance and the epee dispatch macros
+  (`MAP_JON_RPC_WE` / URI auto-maps in `src/rpc/core_rpc_server.h`) — after
+  which new RPC methods register in `core_rpc_ffi.cpp`'s tables **only**;
+  `tests/rpc_comparison/compare_rpc.sh` (dual-server-era harness).
+  **Explicitly not in scope:** epee KV serialization (both dispatch paths
+  serialize through it; replaced separately per `DAEMON_RPC_RUST.md`
+  Phase 2), `epee::wipeable_string` (separate item above), Levin P2P
+  (Phase 3). **Verification gate for the deletion PR:** the outstanding
+  cutover item from `DAEMON_RPC_RUST.md` — wallet sync against an Axum-only
+  daemon (block sync via `/getblocks.bin`, curve-tree path fetch via
+  `get_curve_tree_path`), since the deletion removes the last non-Axum
+  transport. Reversion clause (rule 21): reopens **iff** that verification
+  surfaces an Axum transport gap epee currently covers; re-evaluation shape:
+  fix the Axum gap in the deletion PR (the disposition is never
+  "keep epee" — the gap is the bug). *Target: V3.0 (pre-genesis; no users,
+  no compatibility window — rule 16's user-protection-defaults inversion).*
+
 - **Phase 4b: `rescan_blockchain` needs an Engine rescan API** (added
   2026-07-09). Wallet-rpc OpenAPI specifies `rescan_blockchain` (full
   rescan from restore height, rebuild scan-derived state). Today Engine

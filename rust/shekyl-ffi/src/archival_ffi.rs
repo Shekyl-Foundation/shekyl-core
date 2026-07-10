@@ -13,13 +13,13 @@ use std::io::Cursor;
 
 use shekyl_archival_retention::{
     as_of_e_served_work, capped_work_milli, challenge_fire_height, challenge_leaf_chunk_bounds,
-    challenge_seal_height, claimed_epochs_check_and_set, emission_block_claims_unique,
-    emission_vin_verify, emission_vin_verify_auth, emission_vin_verify_backing,
-    emission_vin_verify_claims, epoch_close_compute, epoch_close_due_at_height, epoch_close_height,
-    frozen_segment_count, good_through, p_canonical_id_from_hybrid_pubkey,
-    prune_below_epoch_at_height, serve_credit_epoch_ok, settlement_epoch_at_height,
-    verify_bond_post_ct_balance, verify_join_market_bond_post, verify_leaf_index,
-    verify_segment_path, ArchivalBondPostVin, ArchivalRewardEmissionVin,
+    challenge_seal_height, claim_window_floor, claimed_epochs_check_and_set,
+    emission_block_claims_unique, emission_vin_verify, emission_vin_verify_auth,
+    emission_vin_verify_backing, emission_vin_verify_claims, epoch_close_compute,
+    epoch_close_due_at_height, epoch_close_height, frozen_segment_count, good_through,
+    p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height, serve_credit_epoch_ok,
+    settlement_epoch_at_height, verify_bond_post_ct_balance, verify_join_market_bond_post,
+    verify_leaf_index, verify_segment_path, ArchivalBondPostVin, ArchivalRewardEmissionVin,
     ArchivalServeCreditResponse, BadInterval, BandedCurveParams, BondCtBalanceError, BondPostError,
     BondPostKind, BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair,
     EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError, EpochCloseBond,
@@ -544,6 +544,18 @@ pub unsafe extern "C" fn shekyl_archival_epoch_close_due(
     }
 }
 
+/// The oldest still-claimable settlement epoch for `current_settled_epoch` —
+/// a thin delegate to [`claim_window_floor`], the **single source of the
+/// claim-window boundary** (`claimed_epochs.rs`). Exposed for the emission
+/// claim-source RPC handler so the daemon-side window derivation resolves
+/// through the one landed definition rather than an inline `settled − W`
+/// copy (`EMISSION_CLAIM_BUILDER.md` §2 step 1's consumption-not-re-derivation
+/// pin, applied daemon-side).
+#[no_mangle]
+pub extern "C" fn shekyl_archival_claim_window_floor(current_settled_epoch: u64) -> u64 {
+    claim_window_floor(current_settled_epoch)
+}
+
 /// Returns `1` and writes the prune horizon (`tip_epoch − MAX_CLAIM_AGE_W`) when the
 /// chain is older than the claim window at `block_height`; `0` (no write) otherwise.
 ///
@@ -958,25 +970,15 @@ pub unsafe extern "C" fn shekyl_archival_emission_epoch_work(
     }
 
     let bonds = rows.bonds();
-    let inputs = EpochCloseInputs {
-        settlement_epoch: snap.settlement_epoch,
-        close_block_height: snap.close_block_height,
-        settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
-        age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-        curve: BandedCurveParams {
-            plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-            plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-        },
-        bonds: &bonds,
-        shards: &rows.shards,
-        credit_pairs: &rows.pairs,
-        // M1 reward-gate operands are close-only: `as_of_e_served_work`
-        // never reads these two fields (the gate's comparison lives solely
-        // in `epoch_close_compute`, and its outcome reaches verify through
-        // the persisted Σwork denominator carried in the snapshot).
-        frozen_shard_count: 0,
-        k_cover: KCover::consensus(),
-    };
+    // Single-sourced verify-view construction (constants + stubbed close-only
+    // M1 operands) — see `EpochCloseInputs::verify_view`.
+    let inputs = EpochCloseInputs::verify_view(
+        snap.settlement_epoch,
+        snap.close_block_height,
+        &bonds,
+        &rows.shards,
+        &rows.pairs,
+    );
     let served = match as_of_e_served_work(&inputs) {
         Ok(served) => served,
         Err(_) => return SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_INDEX_RANGE,
@@ -1345,23 +1347,15 @@ pub unsafe extern "C" fn shekyl_emission_vin_verify(
         .zip(&decoded)
         .zip(&bonds_per)
         .map(|((snap, rows), bonds)| EmissionEpochSource {
-            inputs: EpochCloseInputs {
-                settlement_epoch: snap.settlement_epoch,
-                close_block_height: snap.close_block_height,
-                settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
-                age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-                curve: BandedCurveParams {
-                    plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-                    plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-                },
+            // Single-sourced verify-view construction (constants + stubbed
+            // close-only M1 operands) — see `EpochCloseInputs::verify_view`.
+            inputs: EpochCloseInputs::verify_view(
+                snap.settlement_epoch,
+                snap.close_block_height,
                 bonds,
-                shards: &rows.shards,
-                credit_pairs: &rows.pairs,
-                // Close-only M1 operands, unread on the verify path (the
-                // gate's outcome arrives via the persisted Σwork denominator).
-                frozen_shard_count: 0,
-                k_cover: KCover::consensus(),
-            },
+                &rows.shards,
+                &rows.pairs,
+            ),
             persisted_sigma_work_milli: snap.sigma_work_milli,
             claimant_bond_idx: (snap.claimant_bond_idx != usize::MAX)
                 .then_some(snap.claimant_bond_idx),

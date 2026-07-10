@@ -6,6 +6,10 @@
 //! `R_market` / `Σwork` values. C++ performs no consensus arithmetic of its
 //! own (`20-rust-vs-cpp-policy.mdc` §4; `40-ffi-discipline.mdc` coarse-call rule).
 
+use crate::bond_floor::{
+    ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
+    ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
+};
 use crate::constants::SETTLEMENT_EPOCH_BLOCKS;
 use crate::k_cover::KCover;
 use crate::reward_arithmetic::{
@@ -300,6 +304,43 @@ pub struct EpochCloseInputs<'a> {
     /// rewrite. The *comparison* lives only in [`epoch_close_compute`]
     /// (§6 tripwire) — threading the value is not a second predicate site.
     pub k_cover: KCover,
+}
+
+impl<'a> EpochCloseInputs<'a> {
+    /// The verify-view construction (`EMISSION_CLAIM_BUILDER.md` §7.3):
+    /// consensus constants come from the compiled constants pipeline —
+    /// deliberately never a wire copy, which would be a second source that
+    /// can drift — and the close-only M1 operands are stubbed
+    /// (`frozen_shard_count: 0`, [`KCover::consensus`]), which the verify
+    /// path never reads (the gate's outcome arrives via the persisted
+    /// `Σwork` denominator). Single-sourced here so the verify FFI shims and
+    /// the wallet's §2 step-7 self-check construct byte-identical views and
+    /// cannot drift; the close path threads real M1 operands and does not
+    /// use this constructor.
+    #[must_use]
+    pub fn verify_view(
+        settlement_epoch: u64,
+        close_block_height: u64,
+        bonds: &'a [EpochCloseBond<'a>],
+        shards: &'a [EpochCloseShard],
+        credit_pairs: &'a [CreditPair],
+    ) -> Self {
+        Self {
+            settlement_epoch,
+            close_block_height,
+            settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
+            age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+            curve: BandedCurveParams {
+                plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
+                plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
+            },
+            bonds,
+            shards,
+            credit_pairs,
+            frozen_shard_count: 0,
+            k_cover: KCover::consensus(),
+        }
+    }
 }
 
 /// Epoch-close outputs: `R_market` per input shard (parallel to
