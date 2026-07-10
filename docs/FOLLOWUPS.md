@@ -11810,11 +11810,17 @@ Retained for citation in review; each links to the canonical record.
   or record `fee - effective_fee` explicitly. Own PR (touches burn-stat
   semantics, not claim-era).
 
-- **Pre-existing: `shekyl_engine_core::error::EngineCoreError` still carries dead
-  claim-era variants (PR-4 review):** `NotStaked`, `NoBacklog`, `NotMatured`,
-  `ClaimRangeTooLarge`, `InsufficientPoolData`, `ZeroReward`, `InvalidTier`,
-  `NoClaimableOutputs`. `pub`, so no dead-code lint fires. Orphaned by the
-  claim-era retirement; sweep with the next engine-core error-surface pass.
+- **RESOLVED (claim-builder PR 2, 2026-07-10): deleted
+  `shekyl_engine_core::error::EngineCoreError` wholesale.** The PR-4 review
+  item scheduled the dead claim-era variants (`NotStaked`, `NoBacklog`,
+  `NotMatured`, `ClaimRangeTooLarge`, `InsufficientPoolData`, `ZeroReward`,
+  `InvalidTier`, `NoClaimableOutputs`) for "the next engine-core error-surface
+  pass"; that pass found the *entire enum* orphaned — zero construction sites,
+  zero consumers beyond the `lib.rs` re-export (verified by repo-wide grep
+  including feature-gated and FFI surfaces; the only remaining references were
+  in the stale `block-wire-format` worktree, whose claim-era
+  `claim_builder.rs`/`workflow.rs` no longer exist on `dev`). Whole `error.rs`
+  module and its re-export deleted per rule 15's default.
 
 - **RESOLVED (CI-hygiene PR, 2026-07-02): deleted the M5 citation gate
   (`scripts/ci/check_phase2h_citations.sh` + its workflow step).** The gate is
