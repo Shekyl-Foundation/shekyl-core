@@ -471,11 +471,14 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
           // emission is a genesis fact, so raw import is refused for any
           // non-genesis block. Re-run without --dangerous-unverified-import
           // to use the verifying path, which computes the accrual correctly.
-          if ((h - 1) > 0)
+          // (h is the 1-based block count at this point — ++h above — so
+          // h - 1 is the imported block's height, matching the logging.)
+          const uint64_t import_height = h - 1;
+          if (import_height > 0)
           {
             std::cout << refresh_string;
             MFATAL("Raw unverified import cannot produce archival budget(E) "
-              "accrual rows for emission-active block " << (h - 1)
+              "accrual rows for emission-active block " << import_height
               << "; re-run without --dangerous-unverified-import");
             quit = 2; // make sure we don't commit partial block data
             break;

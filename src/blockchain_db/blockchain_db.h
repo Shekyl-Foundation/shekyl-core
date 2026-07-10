@@ -2009,12 +2009,13 @@ public:
   virtual void remove_block_burn(uint64_t height) = 0;
 
   // Per-height staker-inflow accrual row (`archival_budget_accrual`,
-  // ARCHIVAL_BUDGET_SCHEDULE.md §3.1) — written unconditionally per
+  // ARCHIVAL_BUDGET_SCHEDULE.md §3.1). The amount is computed for every
   // non-genesis block since the pre-activation burn leg's deletion
-  // (emission is a genesis fact; §2.2). Same idiom as the burn record:
-  // written only when nonzero, absent height reads as 0, pop removes the
-  // height row. The rows are summed once per epoch into the frozen
-  // `archival_budget` close row and pruned with the epoch family.
+  // (emission is a genesis fact; §2.2), but the row is persisted only
+  // when the amount is nonzero — the burn-record idiom: absent height
+  // reads as 0, pop removes the height row. The rows are summed once per
+  // epoch into the frozen `archival_budget` close row and pruned with
+  // the epoch family.
   virtual void add_archival_budget_accrual(uint64_t height, uint64_t amount) = 0;
   virtual uint64_t get_archival_budget_accrual(uint64_t height) const = 0;
   virtual void remove_archival_budget_accrual(uint64_t height) = 0;
