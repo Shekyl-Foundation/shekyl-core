@@ -6592,8 +6592,24 @@ void BlockchainLMDB::gather_archival_emission_epoch_snapshot(const crypto::hash&
 {
   // Width-1 window: the windowed gather is the single implementation, so
   // the per-epoch and windowed forms cannot diverge (WS-1 §5.5).
+  //
+  // `settlement_epoch` is attacker-reachable via the emission vin's
+  // `settlement_epochs` (the wire codec bounds the count and ordering, not the
+  // value — emission_wire.rs), so it can be UINT64_MAX. There the half-open
+  // window [E, E+1) wraps to the empty [UINT64_MAX, 0) and the gather returns
+  // nothing; emit the reset "no close row" snapshot (settlement_epoch set,
+  // has_budget_row false) the verify shim already rejects, rather than
+  // front()-ing an empty vector. Same impossible-epoch semantics as the
+  // base-class stub; the claimable-window bound stays the single Rust
+  // decision (never a second C++-side epoch check here).
   std::vector<ArchivalEmissionEpochSnapshot> snaps;
   gather_archival_emission_window_snapshots(p_id, settlement_epoch, settlement_epoch + 1, snaps);
+  if (snaps.empty())
+  {
+    out = ArchivalEmissionEpochSnapshot{};
+    out.settlement_epoch = settlement_epoch;
+    return;
+  }
   out = std::move(snaps.front());
 }
 

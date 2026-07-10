@@ -990,6 +990,32 @@ shekyl::db::ArchivalBondValue bond_with_v4_fields(const std::vector<uint64_t>& s
 
 } // namespace
 
+// The single-epoch gather must be total over every u64 the emission vin can
+// carry. `settlement_epochs` is wire-bounded on count and ordering but not on
+// value (emission_wire.rs), so UINT64_MAX is attacker-reachable and lands in
+// the verify-path gather at `blockchain.cpp` before any claimability check.
+// There the width-1 window [E, E+1) wraps to the empty [UINT64_MAX, 0); the
+// gather must yield the reset "no close row" snapshot the verify shim rejects,
+// not UB from front()-ing an empty vector (PR #284 Copilot finding).
+TEST(archival_substrate_lmdb, emission_gather_impossible_epoch_is_reset_not_ub)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  const crypto::hash p_id = make_hash(0x7F);
+
+  ArchivalEmissionEpochSnapshot snap;
+  db.gather_archival_emission_epoch_snapshot(
+    p_id, std::numeric_limits<uint64_t>::max(), snap);
+
+  EXPECT_EQ(snap.settlement_epoch, std::numeric_limits<uint64_t>::max());
+  EXPECT_FALSE(snap.has_budget_row);
+  EXPECT_EQ(snap.budget_atomic, 0u);
+  EXPECT_TRUE(snap.bonds.empty());
+  EXPECT_TRUE(snap.shards.empty());
+  EXPECT_TRUE(snap.credit_pairs.empty());
+  EXPECT_EQ(snap.claimant_bond_idx, SIZE_MAX);
+}
+
 TEST(archival_substrate_lmdb, bond_v4_fields_survive_full_writer)
 {
   TempLMDB fixture;
