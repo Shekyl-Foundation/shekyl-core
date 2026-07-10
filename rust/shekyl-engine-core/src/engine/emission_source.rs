@@ -1,3 +1,8 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
 //! Emission claim-source RPC client: request shape + response decode
 //! (`EMISSION_CLAIM_BUILDER.md` §7, PR 1).
 //!
@@ -22,7 +27,12 @@
 //! bool fields are mandatory — a response missing one is a malformed reply,
 //! loudly rejected, never silently defaulted. Array fields decode absent as
 //! empty, matching epee KV serialization's omit-empty-container behavior on
-//! the daemon side (the C++ wire-contract test pins that behavior).
+//! the daemon side (the C++ wire-contract test pins that behavior). The
+//! decode also enforces `status == "OK"` (a `BUSY`/error-shaped body must
+//! never decode as a valid zeroed source) and the ordering invariants the
+//! consumers rely on: `claimed_settlement_epochs` strictly increasing (the
+//! `claimed_epochs_contains` binary-search operand) and `epochs` in strictly
+//! ascending epoch order.
 
 // PR-1 lands the decode surface ahead of its consumers: PR-2's assembly
 // core consumes the views, PR-3's `StakeEngine` handler consumes the fetch.
@@ -32,10 +42,8 @@
 
 use serde_json::{json, Value};
 use shekyl_archival_retention::{
-    BadInterval, BandedCurveParams, ClaimantBondRecord, CreditPair, EmissionEpochSource,
-    EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, KCover,
-    ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-    ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, SETTLEMENT_EPOCH_BLOCKS,
+    BadInterval, ClaimantBondRecord, CreditPair, EmissionEpochSource, EpochCloseBond,
+    EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
 };
 use shekyl_rpc_client::{Rpc, RpcError};
 
@@ -51,9 +59,15 @@ pub enum EmissionSourceError {
     Rpc(#[from] RpcError),
     /// The daemon's response is not the expected shape — an untrusted-input
     /// rejection (missing mandatory field, wrong type, odd-length interval
-    /// flattening, unknown holdings kind), never silently defaulted.
+    /// flattening, unknown holdings kind, ordering-invariant violation),
+    /// never silently defaulted.
     #[error("malformed emission claim-source response: {0}")]
     Malformed(String),
+    /// The daemon answered with a non-`OK` `status` (e.g. `BUSY`) — a
+    /// retryable daemon-side condition, never a payload: a zeroed
+    /// error-shaped body must not decode as "no claimable epochs".
+    #[error("daemon status not OK: {0}")]
+    Status(String),
 }
 
 /// One gathered bond row, owned (mirrors the wire's `bonds[]` entry; the
@@ -98,7 +112,9 @@ pub struct BondContext {
     /// (§5.3/§6.4.1: verify demands record equality; the builder never
     /// recomputes a descriptor).
     pub holdings: HoldingsDescriptor,
-    /// Strictly increasing claimed-epoch set — the step-1 dedup operand.
+    /// Strictly increasing claimed-epoch set — the step-1 dedup operand
+    /// (`claimed_epochs_contains` binary-searches it; the ordering is
+    /// enforced at decode, not assumed).
     pub claimed_settlement_epochs: Vec<u64>,
 }
 
@@ -127,7 +143,8 @@ pub struct EmissionClaimSource {
     /// `None` when the daemon has no bond record for `p_id` — the builder
     /// refuses idle (`NoClaimableEpochs`), not an error.
     pub bond: Option<BondContext>,
-    /// One entry per window epoch, in ascending epoch order.
+    /// One entry per window epoch, in strictly ascending epoch order
+    /// (enforced at decode, not assumed).
     pub epochs: Vec<EpochSnapshot>,
 }
 
@@ -148,30 +165,22 @@ impl EpochSnapshot {
     /// Second pass: the verify-side source struct over `bonds` from
     /// [`Self::bonds_view`].
     ///
-    /// Consensus constants (`settlement_epoch_blocks`, `age_weight_milli`,
-    /// curve params) and the close-only M1 operands come from the wallet's
-    /// **own compiled constants pipeline**, byte-identical to the verify
-    /// shim's construction (`archival_ffi.rs`) — they are deliberately not
-    /// on the wire (§7.3: a wire copy is a second source that can drift).
-    /// `frozen_shard_count`/`k_cover` are unread on the verify path (the
-    /// gate's outcome arrives via the persisted `Σwork` denominator).
+    /// Consensus constants and the close-only M1 operands come from the
+    /// wallet's **own compiled constants pipeline** via the single-sourced
+    /// [`EpochCloseInputs::verify_view`] constructor — the same construction
+    /// the verify FFI shims use (`archival_ffi.rs`), so the wallet's §2
+    /// step-7 self-check and consensus verify cannot drift. They are
+    /// deliberately not on the wire (§7.3: a wire copy is a second source
+    /// that can drift).
     pub fn source<'a>(&'a self, bonds: &'a [EpochCloseBond<'a>]) -> EmissionEpochSource<'a> {
         EmissionEpochSource {
-            inputs: EpochCloseInputs {
-                settlement_epoch: self.settlement_epoch,
-                close_block_height: self.close_block_height,
-                settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
-                age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-                curve: BandedCurveParams {
-                    plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-                    plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-                },
+            inputs: EpochCloseInputs::verify_view(
+                self.settlement_epoch,
+                self.close_block_height,
                 bonds,
-                shards: &self.shards,
-                credit_pairs: &self.credit_pairs,
-                frozen_shard_count: 0,
-                k_cover: KCover::consensus(),
-            },
+                &self.shards,
+                &self.credit_pairs,
+            ),
             persisted_sigma_work_milli: self.sigma_work_milli,
             claimant_bond_idx: self.claimant_bond_idx,
             budget: self.budget_atomic,
@@ -218,6 +227,21 @@ fn u64_array(v: &Value, field: &str) -> Result<Vec<u64>, EmissionSourceError> {
 fn to_usize(value: u64, field: &str) -> Result<usize, EmissionSourceError> {
     usize::try_from(value)
         .map_err(|_| EmissionSourceError::Malformed(format!("`{field}` exceeds usize")))
+}
+
+/// Ordering invariants are load-bearing downstream (`claimed_epochs_contains`
+/// binary-searches the claimed set; window iteration assumes ascending
+/// epochs), so an out-of-order reply is rejected at decode — unspecified
+/// binary-search results on unsorted data could silently skip a claimable
+/// epoch (lost emission) or wedge the claim loop on a doomed vin.
+fn require_strictly_increasing(values: &[u64], field: &str) -> Result<(), EmissionSourceError> {
+    if values.windows(2).all(|pair| pair[0] < pair[1]) {
+        Ok(())
+    } else {
+        Err(EmissionSourceError::Malformed(format!(
+            "`{field}` not strictly increasing"
+        )))
+    }
 }
 
 fn decode_bond_row(v: &Value) -> Result<BondRow, EmissionSourceError> {
@@ -287,6 +311,16 @@ fn decode_epoch(v: &Value) -> Result<EpochSnapshot, EmissionSourceError> {
 impl EmissionClaimSource {
     /// Decode the `get_archival_emission_claim_source` JSON-RPC result.
     pub fn from_json(v: &Value) -> Result<Self, EmissionSourceError> {
+        // Non-OK status first (the daemon.rs fee-estimate idiom): an
+        // error-shaped body carries zeroed payload fields that would
+        // otherwise decode as a valid "nothing claimable" source.
+        let status = v
+            .get("status")
+            .and_then(Value::as_str)
+            .ok_or_else(|| EmissionSourceError::Malformed("missing/non-string `status`".into()))?;
+        if status != "OK" {
+            return Err(EmissionSourceError::Status(status.to_owned()));
+        }
         let bond = if req_bool(v, "has_bond_record")? {
             let kind_raw = req_u64(v, "holdings_kind")?;
             let kind_byte = u8::try_from(kind_raw).map_err(|_| {
@@ -295,13 +329,15 @@ impl EmissionClaimSource {
             let kind = HoldingsKind::from_u8(kind_byte).map_err(|_| {
                 EmissionSourceError::Malformed(format!("unknown holdings_kind {kind_byte}"))
             })?;
+            let claimed_settlement_epochs = u64_array(v, "claimed_settlement_epochs")?;
+            require_strictly_increasing(&claimed_settlement_epochs, "claimed_settlement_epochs")?;
             Some(BondContext {
                 join_settlement_epoch: req_u64(v, "join_settlement_epoch")?,
                 holdings: HoldingsDescriptor {
                     kind,
                     shard_ids: u64_array(v, "held_shard_ids")?,
                 },
-                claimed_settlement_epochs: u64_array(v, "claimed_settlement_epochs")?,
+                claimed_settlement_epochs,
             })
         } else {
             None
@@ -310,6 +346,8 @@ impl EmissionClaimSource {
             .iter()
             .map(decode_epoch)
             .collect::<Result<Vec<_>, _>>()?;
+        let epoch_ids: Vec<u64> = epochs.iter().map(|e| e.settlement_epoch).collect();
+        require_strictly_increasing(&epoch_ids, "epochs[].settlement_epoch")?;
         Ok(Self {
             chain_height: req_u64(v, "chain_height")?,
             current_settled_epoch: req_u64(v, "current_settled_epoch")?,
@@ -342,6 +380,7 @@ pub async fn fetch_emission_claim_source<R: Rpc>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_archival_retention::{ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, SETTLEMENT_EPOCH_BLOCKS};
 
     /// A response as the daemon's epee KV JSON store emits it: one window
     /// epoch with rows, one empty-row epoch (absent arrays omitted, as epee
@@ -473,6 +512,7 @@ mod tests {
         // A bond-less response zeroes part-A bond fields daemon-side; the
         // decode must not read them (has_bond_record is the gate).
         let v = json!({
+            "status": "OK",
             "chain_height": 5,
             "current_settled_epoch": 0,
             "has_bond_record": false
@@ -486,6 +526,58 @@ mod tests {
     fn missing_mandatory_scalar_is_loud() {
         let mut v = fixture();
         v.as_object_mut().unwrap().remove("current_settled_epoch");
+        assert!(matches!(
+            EmissionClaimSource::from_json(&v),
+            Err(EmissionSourceError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn non_ok_status_is_status_error_not_a_payload() {
+        // A BUSY body carries zeroed payload fields that must never decode
+        // as a valid "nothing claimable" source.
+        let mut v = fixture();
+        v["status"] = json!("BUSY");
+        assert!(matches!(
+            EmissionClaimSource::from_json(&v),
+            Err(EmissionSourceError::Status(s)) if s == "BUSY"
+        ));
+    }
+
+    #[test]
+    fn missing_status_is_loud() {
+        let mut v = fixture();
+        v.as_object_mut().unwrap().remove("status");
+        assert!(matches!(
+            EmissionClaimSource::from_json(&v),
+            Err(EmissionSourceError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn unsorted_claimed_epochs_is_loud() {
+        // The claimed set is a binary-search operand downstream; unsorted
+        // input must be rejected at decode, never searched.
+        let mut v = fixture();
+        v["claimed_settlement_epochs"] = json!([5, 1]);
+        assert!(matches!(
+            EmissionClaimSource::from_json(&v),
+            Err(EmissionSourceError::Malformed(_))
+        ));
+        // Duplicates violate *strictly* increasing too.
+        let mut v = fixture();
+        v["claimed_settlement_epochs"] = json!([1, 1]);
+        assert!(matches!(
+            EmissionClaimSource::from_json(&v),
+            Err(EmissionSourceError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn unsorted_window_epochs_is_loud() {
+        let mut v = fixture();
+        v["epochs"][0]["settlement_epoch"] = json!(2);
+        v["epochs"][1]["settlement_epoch"] = json!(1);
         assert!(matches!(
             EmissionClaimSource::from_json(&v),
             Err(EmissionSourceError::Malformed(_))

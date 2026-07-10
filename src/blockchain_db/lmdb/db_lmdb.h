@@ -591,18 +591,34 @@ public:
 
   /// As-of-E consensus snapshot gather — see the BlockchainDB base
   /// declaration (blockchain_db.h) for the soundness argument and the
-  /// caller contract.
+  /// caller contract. Delegates to the windowed form with a width-1 window.
   virtual void gather_archival_emission_epoch_snapshot(const crypto::hash& p_id,
     uint64_t settlement_epoch, ArchivalEmissionEpochSnapshot& out) const override;
+
+  /// Windowed snapshot gather: one snapshot per epoch in
+  /// `[epoch_lo, epoch_hi)`, all rows collected in a SINGLE serve-credit
+  /// table pass (the epoch is the key suffix, so a per-epoch range seek is
+  /// impossible — the windowed pass is what bounds the unauthenticated
+  /// claim-source RPC to one scan per request instead of one per window
+  /// epoch).
+  virtual void gather_archival_emission_window_snapshots(const crypto::hash& p_id,
+    uint64_t epoch_lo, uint64_t epoch_hi,
+    std::vector<ArchivalEmissionEpochSnapshot>& out) const override;
 
 private:
   /// Single gather routine over the serve-credit rows for `settlement_epoch`
   /// (WS-1 §5.5 single sourcing, C++ side): the epoch close and the emission
   /// snapshot both call this, so the two consumers of the as-of-E gather
   /// cannot diverge on row selection. `p_id` (optional) sets
-  /// `out.claimant_bond_idx` to that bond's gather index.
+  /// `out.claimant_bond_idx` to that bond's gather index. Width-1 delegate
+  /// to the windowed routine below.
   void gather_archival_epoch_rows(uint64_t settlement_epoch, const crypto::hash* p_id,
     ArchivalEmissionEpochSnapshot& out) const;
+  /// The one row-selection routine (WS-1 §5.5): fills `outs[e - epoch_lo]`
+  /// for every `e` in `[epoch_lo, epoch_hi)` from one cursor pass. `outs`
+  /// must point at `epoch_hi - epoch_lo` snapshots.
+  void gather_archival_epoch_rows_window(uint64_t epoch_lo, uint64_t epoch_hi,
+    const crypto::hash* p_id, ArchivalEmissionEpochSnapshot* outs) const;
   void process_archival_slash_for_epoch(uint64_t block_height, uint64_t settlement_epoch,
     uint32_t& seq);
   void prune_archival_epochs_before(uint64_t prune_below_epoch);

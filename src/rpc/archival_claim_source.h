@@ -30,6 +30,11 @@ namespace rpc
 /// without constructing a core_rpc_server. The caller owns read-view
 /// consistency (the handler wraps the call in a `db_rtxn_guard`, so the tip
 /// height, bond record, and every epoch row come from one LMDB read view).
+///
+/// `res` must be freshly value-initialized: both transports dispatch
+/// struct_init responses and the tests construct `response{}`, so bond-less
+/// part-A fields stay zeroed without a per-field reset ladder here (which
+/// would have to grow in lockstep with every future response field).
 void fill_archival_emission_claim_source(const BlockchainDB& db,
     const crypto::hash& p_id,
     COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE::response& res);

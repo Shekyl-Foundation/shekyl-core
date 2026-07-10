@@ -29,24 +29,37 @@
   returns it) plus one as-of-`E` snapshot per epoch in
   `[claim_window_floor(settled), settled − 1]`, unconditionally. The
   marshal helper (`src/rpc/archival_claim_source.cpp`) is a serializer
-  over the single landed gather
-  (`gather_archival_emission_epoch_snapshot`) under one
-  `db_rtxn_guard` read view; the window's low end resolves through a
-  new thin FFI delegate `shekyl_archival_claim_window_floor` (the one
-  landed boundary definition, per §2 step 1's
-  consumption-not-re-derivation pin). Wallet-side decode
+  over the single landed gather in its windowed form
+  (`gather_archival_emission_window_snapshots` — same one row-selection
+  routine, all window epochs in ONE serve-credit table pass, so the
+  unauthenticated endpoint costs one scan per request instead of 26)
+  under one `db_rtxn_guard` read view; the window's low end resolves
+  through a new thin FFI delegate `shekyl_archival_claim_window_floor`
+  (the one landed boundary definition, per §2 step 1's
+  consumption-not-re-derivation pin). The archival LMDB read helpers
+  dropped their bare `if (m_write_txn)` fast path for the thread-aware
+  `block_rtxn_start` selection — the RPC (the first cross-thread
+  caller) can no longer touch the writer thread's live write txn.
+  Wallet-side decode
   (`shekyl-engine-core/src/engine/emission_source.rs`) produces the
   verify-side `EmissionEpochSource`/`ClaimantBondRecord` views via the
-  verify FFI shim's two-pass shape — no builder-private struct mirror.
+  new single-sourced `EpochCloseInputs::verify_view` constructor (also
+  adopted by both verify FFI shims — the construction previously
+  existed as three hand-aligned struct literals), and enforces the
+  untrusted-daemon decode contract loudly: `status == "OK"` required
+  (a `BUSY` body must not decode as "nothing claimable"),
+  `claimed_settlement_epochs` strictly increasing (the
+  binary-search operand), window epochs strictly ascending.
   Tests pin the two round-2 watch items mechanically: LMDB operand
-  fidelity against a direct gather (§7.1 single-gather trace),
-  identical window shape for bonded and bond-less claimants +
-  request-member-count == 1 (§7.2 transport cause-blindness), plus
-  epee wire round-trip, the `SIZE_MAX`→`u64::MAX` no-credit sentinel,
-  and the omit-empty-container behavior the Rust decode's
-  absent-equals-empty rule relies on
-  (`tests/unit_tests/archival_claim_source_rpc.cpp`, Rust decode unit
-  tests in-module).
+  fidelity against a direct gather (§7.1 single-gather trace, now also
+  proving windowed ≡ per-epoch gather), identical window shape for
+  bonded and bond-less claimants + request-member-count == 1 (§7.2
+  transport cause-blindness), plus epee wire round-trip, the
+  `SIZE_MAX`→`u64::MAX` no-credit sentinel, and the
+  omit-empty-container behavior the Rust decode's absent-equals-empty
+  rule relies on (`tests/unit_tests/archival_claim_source_rpc.cpp` —
+  fixture single-sourced with the substrate emission KAT via the new
+  `archival_lmdb_test_helpers.h`; Rust decode unit tests in-module).
 - **docs: emission claim-builder design round 2 opened and CLOSED
   (2026-07-09, `docs/design/EMISSION_CLAIM_BUILDER.md` §7–§8).** The
   CB-1 ratification residue: the daemon RPC surface + the

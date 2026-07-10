@@ -1494,6 +1494,17 @@ void BlockchainDB::gather_archival_emission_epoch_snapshot(const crypto::hash& /
   out.settlement_epoch = settlement_epoch;
 }
 
+void BlockchainDB::gather_archival_emission_window_snapshots(const crypto::hash& p_id,
+  uint64_t epoch_lo, uint64_t epoch_hi, std::vector<ArchivalEmissionEpochSnapshot>& out) const
+{
+  out.clear();
+  if (epoch_hi <= epoch_lo)
+    return;
+  out.resize(static_cast<size_t>(epoch_hi - epoch_lo));
+  for (uint64_t epoch = epoch_lo; epoch < epoch_hi; ++epoch)
+    gather_archival_emission_epoch_snapshot(p_id, epoch, out[static_cast<size_t>(epoch - epoch_lo)]);
+}
+
 std::vector<shekyl_archival_epoch_close_bond>
   ArchivalEmissionEpochSnapshot::to_ffi_bonds() const
 {

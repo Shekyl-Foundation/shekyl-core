@@ -3467,7 +3467,7 @@ namespace cryptonote
     // the handler branches on nothing claimable-set-derived — the sole
     // request-dependent branch below is this well-formedness check.
     crypto::hash p_id;
-    if (req.p_id.size() != 2 * sizeof(crypto::hash) || !epee::string_tools::hex_to_pod(req.p_id, p_id))
+    if (!parse_hash256(req.p_id, p_id))
     {
       error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
       error_resp.message = "p_id must be 64 hex characters (32-byte P_canonical_id)";
@@ -3486,6 +3486,7 @@ namespace cryptonote
     }
     catch (const std::exception& e)
     {
+      MERROR("Failed to gather emission claim source: " << e.what());
       error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
       error_resp.message = "Failed to gather emission claim source";
       return false;

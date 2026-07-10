@@ -508,6 +508,25 @@ cannot weaken one face while citing the other: weakening either side
 reopens the same M-2 divergence class and therefore reopens CB-1's
 ratification, not a payload or implementation detail.
 
+**Windowed form (PR-1 review hardening, 2026-07-09).** The handler calls
+`gather_archival_emission_window_snapshots(p_id, floor, settled, out)` —
+a width-N form of the *same* gather, not a second one: the one
+row-selection routine (`gather_archival_epoch_rows_window`,
+`db_lmdb.cpp`) now takes an epoch window, the per-epoch
+`gather_archival_emission_epoch_snapshot` is its width-1 delegate, and
+the epoch close funnels through the same routine, so the single-gather
+pin holds by construction. The motivation is a per-request work bound:
+the serve-credit key is `p_id | shard | epoch` (epoch is the *suffix*),
+so a per-epoch range seek is impossible and a full-table cursor pass is
+inherent — paying that pass once per window epoch (26×) on an
+unauthenticated public endpoint was attacker-drivable CPU amplification;
+the windowed form pays it once per request. The same review round moved
+the archival read helpers off their bare `if (m_write_txn)` fast path
+onto the thread-aware `block_rtxn_start` selection, so an RPC-thread
+caller can never touch the writer thread's live write transaction (LMDB
+write txns are single-thread; the old fast path let a claim-source query
+race a block connect toward crash or DB corruption).
+
 ### 7.2 Query shape — one composite RPC, window-batched
 
 One new endpoint, tentatively `get_archival_emission_claim_source`:

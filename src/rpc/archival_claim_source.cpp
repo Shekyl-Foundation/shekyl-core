@@ -6,6 +6,7 @@
 #include "rpc/archival_claim_source.h"
 
 #include <cstdint>
+#include <vector>
 
 #include "blockchain_db/blockchain_db.h"
 #include "shekyl/shekyl_ffi.h"
@@ -30,12 +31,12 @@ void fill_archival_emission_claim_source(const BlockchainDB& db,
   res.chain_height = chain_height;
   res.current_settled_epoch = shekyl_archival_settlement_epoch_at_height(chain_height);
 
+  // Bond-less part A stays zeroed by the fresh-response contract (see the
+  // header doc): both transports dispatch value-initialized (struct_init)
+  // responses, so no per-field reset ladder exists to fall out of sync with
+  // the response struct.
   shekyl::db::ArchivalBondValue bond{};
   res.has_bond_record = db.get_archival_bond_value(p_id, bond);
-  res.join_settlement_epoch = 0;
-  res.holdings_kind = 0;
-  res.held_shard_ids.clear();
-  res.claimed_settlement_epochs.clear();
   if (res.has_bond_record)
   {
     res.join_settlement_epoch = bond.join_settlement_epoch;
@@ -49,15 +50,16 @@ void fill_archival_emission_claim_source(const BlockchainDB& db,
   // high end is the `E < settled` rejection predicate's bound. No epoch is
   // filtered on claimability, bond state, or row presence — absent close
   // rows ride out as `has_budget_row = false` and the wallet treats them
-  // as unclaimable, mirroring the verify shim's reject.
+  // as unclaimable, mirroring the verify shim's reject. The windowed gather
+  // collects every epoch's rows in ONE serve-credit table pass — the
+  // per-request work bound for this unauthenticated RPC.
   const uint64_t settled = res.current_settled_epoch;
   const uint64_t floor = shekyl_archival_claim_window_floor(settled);
-  res.epochs.clear();
-  for (uint64_t epoch = floor; epoch < settled; ++epoch)
+  std::vector<ArchivalEmissionEpochSnapshot> snaps;
+  db.gather_archival_emission_window_snapshots(p_id, floor, settled, snaps);
+  res.epochs.reserve(snaps.size());
+  for (const ArchivalEmissionEpochSnapshot& snap : snaps)
   {
-    ArchivalEmissionEpochSnapshot snap;
-    db.gather_archival_emission_epoch_snapshot(p_id, epoch, snap);
-
     cmd::epoch_snapshot_t out{};
     out.settlement_epoch = snap.settlement_epoch;
     out.close_block_height = snap.close_block_height;

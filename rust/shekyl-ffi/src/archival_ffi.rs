@@ -970,25 +970,15 @@ pub unsafe extern "C" fn shekyl_archival_emission_epoch_work(
     }
 
     let bonds = rows.bonds();
-    let inputs = EpochCloseInputs {
-        settlement_epoch: snap.settlement_epoch,
-        close_block_height: snap.close_block_height,
-        settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
-        age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-        curve: BandedCurveParams {
-            plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-            plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-        },
-        bonds: &bonds,
-        shards: &rows.shards,
-        credit_pairs: &rows.pairs,
-        // M1 reward-gate operands are close-only: `as_of_e_served_work`
-        // never reads these two fields (the gate's comparison lives solely
-        // in `epoch_close_compute`, and its outcome reaches verify through
-        // the persisted Σwork denominator carried in the snapshot).
-        frozen_shard_count: 0,
-        k_cover: KCover::consensus(),
-    };
+    // Single-sourced verify-view construction (constants + stubbed close-only
+    // M1 operands) — see `EpochCloseInputs::verify_view`.
+    let inputs = EpochCloseInputs::verify_view(
+        snap.settlement_epoch,
+        snap.close_block_height,
+        &bonds,
+        &rows.shards,
+        &rows.pairs,
+    );
     let served = match as_of_e_served_work(&inputs) {
         Ok(served) => served,
         Err(_) => return SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_INDEX_RANGE,
@@ -1357,23 +1347,15 @@ pub unsafe extern "C" fn shekyl_emission_vin_verify(
         .zip(&decoded)
         .zip(&bonds_per)
         .map(|((snap, rows), bonds)| EmissionEpochSource {
-            inputs: EpochCloseInputs {
-                settlement_epoch: snap.settlement_epoch,
-                close_block_height: snap.close_block_height,
-                settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
-                age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-                curve: BandedCurveParams {
-                    plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-                    plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-                },
+            // Single-sourced verify-view construction (constants + stubbed
+            // close-only M1 operands) — see `EpochCloseInputs::verify_view`.
+            inputs: EpochCloseInputs::verify_view(
+                snap.settlement_epoch,
+                snap.close_block_height,
                 bonds,
-                shards: &rows.shards,
-                credit_pairs: &rows.pairs,
-                // Close-only M1 operands, unread on the verify path (the
-                // gate's outcome arrives via the persisted Σwork denominator).
-                frozen_shard_count: 0,
-                k_cover: KCover::consensus(),
-            },
+                &rows.shards,
+                &rows.pairs,
+            ),
             persisted_sigma_work_milli: snap.sigma_work_milli,
             claimant_bond_idx: (snap.claimant_bond_idx != usize::MAX)
                 .then_some(snap.claimant_bond_idx),

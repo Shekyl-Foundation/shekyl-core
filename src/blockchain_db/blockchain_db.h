@@ -2133,6 +2133,15 @@ public:
   /// false → the dispatch rejects).
   virtual void gather_archival_emission_epoch_snapshot(const crypto::hash& p_id,
     uint64_t settlement_epoch, ArchivalEmissionEpochSnapshot& out) const;
+  /// Windowed form of the snapshot gather (EMISSION_CLAIM_BUILDER.md §7):
+  /// one snapshot per epoch in `[epoch_lo, epoch_hi)`, per-epoch identical
+  /// to `gather_archival_emission_epoch_snapshot`. The LMDB override
+  /// collects every epoch's rows in a single serve-credit table pass so the
+  /// unauthenticated claim-source RPC costs one scan per request, not one
+  /// per window epoch; the default delegates to the per-epoch gather.
+  virtual void gather_archival_emission_window_snapshots(const crypto::hash& p_id,
+    uint64_t epoch_lo, uint64_t epoch_hi,
+    std::vector<ArchivalEmissionEpochSnapshot>& out) const;
 
   // ─── Deferred Staked Leaf Insertion ─────────────────────────────────────────
 

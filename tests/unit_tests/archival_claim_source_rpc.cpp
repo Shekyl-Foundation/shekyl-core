@@ -24,15 +24,15 @@
 //      behavior — the behavior the Rust decode's absent-equals-empty rule
 //      (`shekyl-engine-core/src/engine/emission_source.rs`) relies on.
 //
-// The LMDB fixture mirrors tests/unit_tests/archival_substrate_lmdb.cpp's
-// emission-snapshot KAT (same bonds/shards/credit-bits/close shape); the
-// only synthetic element is the tip height, overridden so the settled epoch
-// lands past the closed test epoch without minting 50k blocks. The gather,
-// the bond reader, and the close path are the real landed LMDB code.
+// The LMDB fixture IS tests/unit_tests/archival_substrate_lmdb.cpp's
+// emission-snapshot KAT, via the shared archival_lmdb_test_helpers.h seeder
+// (single-sourced so the two cannot drift); the only synthetic element is
+// the tip height, overridden so the settled epoch lands past the closed
+// test epoch without minting 50k blocks. The gather, the bond reader, and
+// the close path are the real landed LMDB code.
 
 #include "gtest/gtest.h"
 
-#include <boost/filesystem.hpp>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -40,6 +40,7 @@
 
 #include <rapidjson/document.h>
 
+#include "archival_lmdb_test_helpers.h"
 #include "blockchain_db/lmdb/db_lmdb.h"
 #include "blockchain_db/shekyl_types.h"
 #include "rpc/archival_claim_source.h"
@@ -50,6 +51,9 @@
 using namespace cryptonote;
 
 namespace {
+
+using archival_test::make_hash;
+using archival_test::EmissionSnapshotKat;
 
 /// The real LMDB with a synthetic tip: `height()` is the only override, so
 /// the settled-epoch operand can land past the closed test epoch while the
@@ -63,13 +67,11 @@ public:
 
 struct ClaimSourceFixture
 {
-  boost::filesystem::path tmpdir;
-  FakeTipLMDB db;
+  archival_test::TempArchivalLMDB<FakeTipLMDB> lmdb;
+  FakeTipLMDB& db = lmdb.db;
+  EmissionSnapshotKat kat;
 
-  static constexpr uint64_t kSeb = 10000;
-  static constexpr uint64_t kSettlementEpoch = 3;
-  static constexpr uint64_t kCloseHeight = (kSettlementEpoch + 1) * kSeb;
-  static constexpr uint64_t kJoinEpoch = kSettlementEpoch - 1;
+  static constexpr uint64_t kSettlementEpoch = EmissionSnapshotKat::kSettlementEpoch;
   static constexpr uint64_t kTipHeight = 50000;  // settled epoch = 5 > 3
 
   crypto::hash p1;
@@ -77,64 +79,26 @@ struct ClaimSourceFixture
 
   ClaimSourceFixture()
   {
-    tmpdir = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path();
-    boost::filesystem::create_directories(tmpdir);
-    db.open(tmpdir.string());
-    db.set_batch_transactions(true);
-    db.batch_start();
-
-    p1 = make_hash(0x51);
-    const crypto::hash p2 = make_hash(0x52);
+    // The shared emission-snapshot KAT shape — the same seed the substrate
+    // KATs drive, so the fixture arithmetic below cannot drift from them.
+    kat.seed(db);
+    p1 = kat.p1;
     p_no_bond = make_hash(0x99);
-    const std::vector<uint8_t> pubkey = {0x01};
-
-    // The archival writers are public on the BlockchainDB interface only
-    // (private overrides on BlockchainLMDB) — seed through the base ref.
-    BlockchainDB& bdb = db;
-
-    bdb.put_archival_bond_record(p1, pubkey, kJoinEpoch,
-      2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
-      shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
-    bdb.put_archival_bond_record(p2, pubkey, kJoinEpoch,
-      2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
-      shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7, 9}, {});
 
     // Give p1 a claimed epoch through the full-bond writer so part A's
-    // claimed_settlement_epochs marshaling is exercised non-empty.
+    // claimed_settlement_epochs marshaling is exercised non-empty (the
+    // claimed set is not a close operand, so post-close mutation is
+    // equivalent to pre-close seeding for every read below).
     shekyl::db::ArchivalBondValue bond{};
-    EXPECT_TRUE(bdb.get_archival_bond_value(p1, bond));
+    EXPECT_TRUE(bdb().get_archival_bond_value(p1, bond));
     bond.claimed_settlement_epochs = {1};
-    bdb.put_archival_bond_value(p1, bond);
-
-    bdb.put_archival_shard_segment(7, 100, make_hash(0x60), 26000);
-    bdb.set_archival_serve_credit_bit(p1, 7, kSettlementEpoch);
-    bdb.set_archival_serve_credit_bit(p2, 7, kSettlementEpoch);
-    bdb.set_archival_serve_credit_bit(p2, 9, kSettlementEpoch);
-
-    bdb.process_archival_epoch_close_at_height(kCloseHeight);
-    db.batch_stop();
-    db.batch_start();
+    bdb().put_archival_bond_value(p1, bond);
 
     db.fake_height = kTipHeight;
   }
 
-  ~ClaimSourceFixture()
-  {
-    try {
-      db.batch_stop();
-      db.close();
-      boost::filesystem::remove_all(tmpdir);
-    } catch (...) {}
-  }
-
-  static crypto::hash make_hash(uint8_t fill)
-  {
-    crypto::hash h{};
-    memset(h.data, fill, sizeof(h.data));
-    return h;
-  }
-
-  /// The archival readers/writers are public on the interface only.
+  /// The archival readers/writers are public on the interface only
+  /// (private overrides on BlockchainLMDB) — seed/read through the base ref.
   BlockchainDB& bdb() { return db; }
 };
 
@@ -216,8 +180,12 @@ TEST(archival_claim_source_rpc, fill_matches_single_gather_field_for_field)
   // The closed epoch is the only one with rows: two credited bonds, one
   // credited shard, three credit pairs (fixture arithmetic per the
   // substrate KAT); every other window epoch rides out as an empty
-  // has_budget_row=false row, never filtered (§7.2).
+  // has_budget_row=false row, never filtered (§7.2). Guard the index
+  // derivation: if a claim-window resize ever pushes the floor past the
+  // closed test epoch, fail loudly instead of underflowing size_t.
+  ASSERT_GE(ClaimSourceFixture::kSettlementEpoch, floor);
   const size_t closed_i = ClaimSourceFixture::kSettlementEpoch - floor;
+  ASSERT_LT(closed_i, res.epochs.size());
   EXPECT_TRUE(res.epochs[closed_i].has_budget_row);
   EXPECT_EQ(res.epochs[closed_i].bonds.size(), 2u);
   EXPECT_NE(res.epochs[closed_i].claimant_bond_idx, std::numeric_limits<uint64_t>::max());
@@ -305,8 +273,10 @@ TEST(archival_claim_source_rpc, wire_roundtrip_sentinel_and_omit_empty)
   EXPECT_EQ(back.held_shard_ids, res.held_shard_ids);
   EXPECT_EQ(back.claimed_settlement_epochs, res.claimed_settlement_epochs);
   ASSERT_EQ(back.epochs.size(), res.epochs.size());
-  const size_t ci = ClaimSourceFixture::kSettlementEpoch -
-    shekyl_archival_claim_window_floor(res.current_settled_epoch);
+  const uint64_t rt_floor = shekyl_archival_claim_window_floor(res.current_settled_epoch);
+  ASSERT_GE(ClaimSourceFixture::kSettlementEpoch, rt_floor);
+  const size_t ci = ClaimSourceFixture::kSettlementEpoch - rt_floor;
+  ASSERT_LT(ci, res.epochs.size());
   EXPECT_EQ(back.epochs[ci].sigma_work_milli, res.epochs[ci].sigma_work_milli);
   EXPECT_EQ(back.epochs[ci].budget_atomic, res.epochs[ci].budget_atomic);
   EXPECT_EQ(back.epochs[ci].bonds.size(), res.epochs[ci].bonds.size());

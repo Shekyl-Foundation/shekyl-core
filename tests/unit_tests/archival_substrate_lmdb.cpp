@@ -22,40 +22,17 @@
 #include "cryptonote_basic/hardfork.h"
 #include "shekyl/shekyl_ffi.h"
 #include "string_tools.h"
+#include "archival_lmdb_test_helpers.h"
 
 using namespace cryptonote;
 
 namespace {
 
-struct TempLMDB {
-  boost::filesystem::path tmpdir;
-  BlockchainLMDB db;
-
-  TempLMDB()
-  {
-    tmpdir = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path();
-    boost::filesystem::create_directories(tmpdir);
-    db.open(tmpdir.string());
-    db.set_batch_transactions(true);
-    db.batch_start();
-  }
-
-  ~TempLMDB()
-  {
-    try {
-      db.batch_stop();
-      db.close();
-      boost::filesystem::remove_all(tmpdir);
-    } catch (...) {}
-  }
-};
-
-crypto::hash make_hash(uint8_t fill)
-{
-  crypto::hash h{};
-  memset(h.data, fill, sizeof(h.data));
-  return h;
-}
+// Shared archival-LMDB scaffolding (also driven by the claim-source RPC
+// tests — single-sourced so the fixtures cannot drift).
+using archival_test::make_hash;
+using archival_test::EmissionSnapshotKat;
+using TempLMDB = archival_test::TempLMDB;
 
 /// Minimum-length bond LMDB value with a non-v4 version byte.
 ///
@@ -521,36 +498,18 @@ TEST(archival_substrate_lmdb, emission_snapshot_identity_and_descriptor_immunity
   BlockchainDB& db = fixture.db;
   BlockchainLMDB& lmdb = fixture.db;
 
-  const uint64_t seb = 10000;
-  const uint64_t settlement_epoch = 3;
-  const uint64_t close_height = (settlement_epoch + 1) * seb;
-  const uint64_t join_epoch = settlement_epoch - 1;
-
-  const crypto::hash p1 = make_hash(0x51);
-  const crypto::hash p2 = make_hash(0x52);
-  const crypto::hash p_no_credit = make_hash(0x53);
-  const std::vector<uint8_t> pubkey = {0x01};
-
-  db.put_archival_bond_record(p1, pubkey, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
-    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
-  db.put_archival_bond_record(p2, pubkey, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
-    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7, 9}, {});
-  // Bonded but never credited in E: claimant_bond_idx must come back as the
-  // no-credit sentinel, zero work by construction.
-  db.put_archival_bond_record(p_no_credit, pubkey, join_epoch,
-    2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
-    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
-
-  db.put_archival_shard_segment(7, 100, make_hash(0x60), 26000);
-  db.put_archival_shard_segment(1234, 100, make_hash(0x66), 26000);
-
-  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch);
-  db.set_archival_serve_credit_bit(p2, 7, settlement_epoch);
-  db.set_archival_serve_credit_bit(p2, 9, settlement_epoch);
-
-  db.process_archival_epoch_close_at_height(close_height);
-  fixture.db.batch_stop();
-  fixture.db.batch_start();
+  // The shared emission-snapshot KAT shape (archival_lmdb_test_helpers.h) —
+  // also driven by the claim-source RPC tests, single-sourced so the two
+  // cannot drift.
+  const EmissionSnapshotKat kat;
+  kat.seed(db);
+  const uint64_t settlement_epoch = EmissionSnapshotKat::kSettlementEpoch;
+  const uint64_t close_height = EmissionSnapshotKat::kCloseHeight;
+  const uint64_t join_epoch = EmissionSnapshotKat::kJoinEpoch;
+  const crypto::hash p1 = kat.p1;
+  const crypto::hash p2 = kat.p2;
+  const crypto::hash p_no_credit = kat.p_no_credit;
+  const std::vector<uint8_t>& pubkey = kat.pubkey;
 
   const uint64_t sigma = db.get_archival_sigma_work_milli(settlement_epoch);
   ASSERT_EQ(sigma, 3500u);

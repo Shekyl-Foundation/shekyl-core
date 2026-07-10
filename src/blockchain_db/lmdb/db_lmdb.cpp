@@ -4948,8 +4948,11 @@ uint64_t BlockchainLMDB::get_total_burned() const
 
 int BlockchainLMDB::archival_db_get(MDB_dbi dbi, MDB_val* k, MDB_val* v) const
 {
-  if (m_write_txn)
-    return mdb_get(*m_write_txn, dbi, k, v);
+  // No bare `if (m_write_txn)` fast path: `block_rtxn_start` (inside
+  // TXN_PREFIX_RDONLY) already returns the write txn on the writer thread,
+  // and an LMDB write txn must never be touched from any other thread — a
+  // non-writer caller (e.g. the claim-source RPC worker) gets a read
+  // snapshot instead of racing the writer's uncommitted txn.
   TXN_PREFIX_RDONLY();
   const int rc = mdb_get(m_txn, dbi, k, v);
   TXN_POSTFIX_RDONLY();
@@ -5092,8 +5095,7 @@ bool BlockchainLMDB::archival_slash_removed_holding_after(const crypto::hash& p_
     return removed;
   };
 
-  if (m_write_txn)
-    return scan(*m_write_txn);
+  // Thread-aware txn selection via block_rtxn_start — see archival_db_get.
   TXN_PREFIX_RDONLY();
   const bool removed = scan(m_txn);
   TXN_POSTFIX_RDONLY();
@@ -6428,26 +6430,49 @@ void BlockchainLMDB::revert_archival_segment_freezes()
 void BlockchainLMDB::gather_archival_epoch_rows(uint64_t settlement_epoch,
   const crypto::hash* p_id, ArchivalEmissionEpochSnapshot& out) const
 {
-  out.bonds.clear();
-  out.shards.clear();
-  out.credit_pairs.clear();
-  out.claimant_bond_idx = SIZE_MAX;
+  gather_archival_epoch_rows_window(settlement_epoch, settlement_epoch + 1, p_id, &out);
+}
 
-  // One pass over the serve-credit rows for the settlement epoch collects
-  // the (bond, shard) pairs plus the distinct bond and shard-segment records
-  // they reference. Storage reads only; all consensus semantics (market
-  // membership, scarcity, curve, r/sigma aggregation) run in Rust. Shared by
-  // the epoch close and the emission snapshot (WS-1 §5.5 single sourcing,
-  // C++ side): the two consumers of the as-of-E gather cannot diverge on row
-  // selection because there is only one row-selection routine. Deterministic
-  // re-gather: serve-credit keys are BE-ordered, cursor order is key order,
-  // and indices are assigned first-encounter, so the same table contents
-  // always produce the same arrays.
+void BlockchainLMDB::gather_archival_epoch_rows_window(uint64_t epoch_lo, uint64_t epoch_hi,
+  const crypto::hash* p_id, ArchivalEmissionEpochSnapshot* outs) const
+{
+  if (epoch_hi <= epoch_lo)
+    return;
+  const size_t window = static_cast<size_t>(epoch_hi - epoch_lo);
+  for (size_t w = 0; w < window; ++w)
+  {
+    outs[w].bonds.clear();
+    outs[w].shards.clear();
+    outs[w].credit_pairs.clear();
+    outs[w].claimant_bond_idx = SIZE_MAX;
+  }
+
+  // One pass over the serve-credit rows collects, for every settlement epoch
+  // in [epoch_lo, epoch_hi), the (bond, shard) pairs plus the distinct bond
+  // and shard-segment records they reference. Storage reads only; all
+  // consensus semantics (market membership, scarcity, curve, r/sigma
+  // aggregation) run in Rust. Shared by the epoch close, the emission
+  // snapshot, and the claim-source window (WS-1 §5.5 single sourcing, C++
+  // side): every consumer of the as-of-E gather funnels through this one
+  // row-selection routine, so none can diverge on row selection. The epoch
+  // is the key SUFFIX (p_id | shard | epoch, BE), so a range seek by epoch
+  // is impossible — the full-table pass is inherent to the key layout; the
+  // window form exists so the claim-source RPC pays it once per request,
+  // not once per window epoch. Deterministic re-gather: serve-credit keys
+  // are BE-ordered, cursor order is key order, and indices are assigned
+  // first-encounter per epoch, so the same table contents always produce
+  // the same arrays — a width-1 window is row-for-row the pre-window gather.
   const auto scan = [&](MDB_txn* txn) {
-    // SIZE_MAX marks a P with no decodable bond record so its rows are
-    // skipped without re-reading the bond table.
-    std::unordered_map<crypto::hash, size_t> bond_index;
-    std::map<uint64_t, size_t> shard_index;
+    // Per-epoch first-encounter indices. SIZE_MAX marks a P with no
+    // decodable bond record so its rows are skipped without re-reading the
+    // bond table.
+    std::vector<std::unordered_map<crypto::hash, size_t>> bond_index(window);
+    std::vector<std::map<uint64_t, size_t>> shard_index(window);
+    // Bond and shard-segment records are keyed by P / shard alone (not by
+    // epoch), so within one read view a single decode serves every epoch in
+    // the window.
+    std::unordered_map<crypto::hash, std::pair<bool, ArchivalEmissionEpochSnapshot::BondRow>> bond_cache;
+    std::map<uint64_t, ArchivalEmissionEpochSnapshot::ShardRow> shard_cache;
 
     MDB_cursor* credit_cur = nullptr;
     int rc = mdb_cursor_open(txn, m_archival_serve_credit, &credit_cur);
@@ -6465,67 +6490,83 @@ void BlockchainLMDB::gather_archival_epoch_rows(uint64_t settlement_epoch,
       }
 
       const uint64_t epoch = shekyl::db::load_be64(static_cast<const uint8_t*>(ck.mv_data) + 40);
-      if (epoch == settlement_epoch)
+      if (epoch >= epoch_lo && epoch < epoch_hi)
       {
+        const size_t w = static_cast<size_t>(epoch - epoch_lo);
+        ArchivalEmissionEpochSnapshot& out = outs[w];
         crypto::hash row_p_id{};
         std::memcpy(row_p_id.data, ck.mv_data, 32);
         const uint64_t shard_id = shekyl::db::load_be64(static_cast<const uint8_t*>(ck.mv_data) + 32);
 
-        auto bond_it = bond_index.find(row_p_id);
-        if (bond_it == bond_index.end())
+        auto bond_it = bond_index[w].find(row_p_id);
+        if (bond_it == bond_index[w].end())
         {
-          shekyl::db::ArchivalBondValue bond{};
+          auto cached = bond_cache.find(row_p_id);
+          if (cached == bond_cache.end())
+          {
+            std::pair<bool, ArchivalEmissionEpochSnapshot::BondRow> entry{false, {}};
+            shekyl::db::ArchivalBondValue bond{};
+            if (load_archival_bond_value(row_p_id, bond))
+            {
+              entry.first = true;
+              // WS-1: no holdings descriptor crosses into the work channel.
+              // The held-and-served set is the serve-credit rows themselves —
+              // each credit was acceptance-gated on holding at the challenge
+              // fire height, so the pairs are the as-of-E witness; re-filtering
+              // them against tip holdings was the M2-1 drop-after-serve
+              // under-count.
+              entry.second.join_settlement_epoch = bond.join_settlement_epoch;
+              entry.second.is_foundation_complete_tree = bond.is_complete_tree();
+              entry.second.bad_intervals_flat = archival_bad_intervals_flat(bond);
+            }
+            cached = bond_cache.emplace(row_p_id, std::move(entry)).first;
+          }
           size_t idx = std::numeric_limits<size_t>::max();
-          if (load_archival_bond_value(row_p_id, bond))
+          if (cached->second.first)
           {
             idx = out.bonds.size();
-            // WS-1: no holdings descriptor crosses into the work channel.
-            // The held-and-served set is the serve-credit rows themselves —
-            // each credit was acceptance-gated on holding at the challenge
-            // fire height, so the pairs are the as-of-E witness; re-filtering
-            // them against tip holdings was the M2-1 drop-after-serve
-            // under-count.
-            ArchivalEmissionEpochSnapshot::BondRow row;
-            row.join_settlement_epoch = bond.join_settlement_epoch;
-            row.is_foundation_complete_tree = bond.is_complete_tree();
-            row.bad_intervals_flat = archival_bad_intervals_flat(bond);
-            out.bonds.push_back(std::move(row));
+            out.bonds.push_back(cached->second.second);
             if (p_id && row_p_id == *p_id)
               out.claimant_bond_idx = idx;
           }
-          bond_it = bond_index.emplace(row_p_id, idx).first;
+          bond_it = bond_index[w].emplace(row_p_id, idx).first;
         }
         if (bond_it->second != std::numeric_limits<size_t>::max())
         {
-          auto shard_it = shard_index.find(shard_id);
-          if (shard_it == shard_index.end())
+          auto shard_it = shard_index[w].find(shard_id);
+          if (shard_it == shard_index[w].end())
           {
-            ArchivalEmissionEpochSnapshot::ShardRow shard;
-            shard.shard_id = shard_id;
+            auto scached = shard_cache.find(shard_id);
+            if (scached == shard_cache.end())
+            {
+              ArchivalEmissionEpochSnapshot::ShardRow shard;
+              shard.shard_id = shard_id;
 
-            shekyl::db::ArchivalShardKey skey(shard_id);
-            MDB_val sk = skey.as_mdb_val();
-            MDB_val sv;
-            const int seg_rc = mdb_get(txn, m_archival_shard_segment, &sk, &sv);
-            if (seg_rc && seg_rc != MDB_NOTFOUND)
-            {
-              mdb_cursor_close(credit_cur);
-              throw0(DB_ERROR(lmdb_error("Failed to get archival_shard_segment at epoch gather: ", seg_rc).c_str()));
-            }
-            if (seg_rc == 0)
-            {
-              shekyl::db::ArchivalShardSegmentValue segment{};
-              if (!shekyl::db::ArchivalShardSegmentValue::decode(sv.mv_data, sv.mv_size, segment))
+              shekyl::db::ArchivalShardKey skey(shard_id);
+              MDB_val sk = skey.as_mdb_val();
+              MDB_val sv;
+              const int seg_rc = mdb_get(txn, m_archival_shard_segment, &sk, &sv);
+              if (seg_rc && seg_rc != MDB_NOTFOUND)
               {
                 mdb_cursor_close(credit_cur);
-                throw std::runtime_error("FATAL: archival_shard_segment decode failed at epoch gather");
+                throw0(DB_ERROR(lmdb_error("Failed to get archival_shard_segment at epoch gather: ", seg_rc).c_str()));
               }
-              shard.freeze_height = segment.freeze_height;
-              shard.has_segment = true;
+              if (seg_rc == 0)
+              {
+                shekyl::db::ArchivalShardSegmentValue segment{};
+                if (!shekyl::db::ArchivalShardSegmentValue::decode(sv.mv_data, sv.mv_size, segment))
+                {
+                  mdb_cursor_close(credit_cur);
+                  throw std::runtime_error("FATAL: archival_shard_segment decode failed at epoch gather");
+                }
+                shard.freeze_height = segment.freeze_height;
+                shard.has_segment = true;
+              }
+              scached = shard_cache.emplace(shard_id, shard).first;
             }
 
-            shard_it = shard_index.emplace(shard_id, out.shards.size()).first;
-            out.shards.push_back(shard);
+            shard_it = shard_index[w].emplace(shard_id, out.shards.size()).first;
+            out.shards.push_back(scached->second);
           }
           out.credit_pairs.push_back({ bond_it->second, shard_it->second });
         }
@@ -6540,11 +6581,7 @@ void BlockchainLMDB::gather_archival_epoch_rows(uint64_t settlement_epoch,
     mdb_cursor_close(credit_cur);
   };
 
-  if (m_write_txn)
-  {
-    scan(*m_write_txn);
-    return;
-  }
+  // Thread-aware txn selection via block_rtxn_start — see archival_db_get.
   TXN_PREFIX_RDONLY();
   scan(m_txn);
   TXN_POSTFIX_RDONLY();
@@ -6553,30 +6590,49 @@ void BlockchainLMDB::gather_archival_epoch_rows(uint64_t settlement_epoch,
 void BlockchainLMDB::gather_archival_emission_epoch_snapshot(const crypto::hash& p_id,
   uint64_t settlement_epoch, ArchivalEmissionEpochSnapshot& out) const
 {
+  // Width-1 window: the windowed gather is the single implementation, so
+  // the per-epoch and windowed forms cannot diverge (WS-1 §5.5).
+  std::vector<ArchivalEmissionEpochSnapshot> snaps;
+  gather_archival_emission_window_snapshots(p_id, settlement_epoch, settlement_epoch + 1, snaps);
+  out = std::move(snaps.front());
+}
+
+void BlockchainLMDB::gather_archival_emission_window_snapshots(const crypto::hash& p_id,
+  uint64_t epoch_lo, uint64_t epoch_hi, std::vector<ArchivalEmissionEpochSnapshot>& out) const
+{
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  out = ArchivalEmissionEpochSnapshot{};
-  out.settlement_epoch = settlement_epoch;
-  // The close-processing boundary the close's gather froze at — the
-  // shard-age operand the compute received. Single-sourced from the same
-  // Rust formula the close scheduler uses; 0 (impossible epoch) cannot occur
-  // for a claimable E, which the caller has already height-gated.
-  out.close_block_height = shekyl_archival_epoch_close_processing_height(settlement_epoch);
-  // The persisted finalized Σwork(E) — the stored denominator, never a
-  // recompute: the M1 K_COVER gate's operand (frozen_shard_count as-of-close)
-  // is a close-only quantity, so the gate's outcome reaches verify only
-  // through this value.
-  out.sigma_work_milli = get_archival_sigma_work_milli(settlement_epoch);
-  // The frozen budget(E) close row (ARCHIVAL_BUDGET_SCHEDULE.md §3.3):
-  // budget and denominator were frozen in the same close event, so the
-  // gather reads them from the same table family — no new live operand.
-  // Absent row (never closed / pruned) is a gather failure the verify shim
-  // rejects on; present-and-zero is a closed zero-budget epoch, rejected
-  // downstream by wire positivity, not here.
-  out.has_budget_row = has_archival_budget_row(settlement_epoch);
-  out.budget_atomic = out.has_budget_row ? get_archival_budget(settlement_epoch) : 0;
-  gather_archival_epoch_rows(settlement_epoch, &p_id, out);
+  out.clear();
+  if (epoch_hi <= epoch_lo)
+    return;
+  out.resize(static_cast<size_t>(epoch_hi - epoch_lo));
+  for (uint64_t settlement_epoch = epoch_lo; settlement_epoch < epoch_hi; ++settlement_epoch)
+  {
+    ArchivalEmissionEpochSnapshot& snap = out[static_cast<size_t>(settlement_epoch - epoch_lo)];
+    snap.settlement_epoch = settlement_epoch;
+    // The close-processing boundary the close's gather froze at — the
+    // shard-age operand the compute received. Single-sourced from the same
+    // Rust formula the close scheduler uses; 0 (impossible epoch) cannot occur
+    // for a claimable E, which the caller has already height-gated.
+    snap.close_block_height = shekyl_archival_epoch_close_processing_height(settlement_epoch);
+    // The persisted finalized Σwork(E) — the stored denominator, never a
+    // recompute: the M1 K_COVER gate's operand (frozen_shard_count as-of-close)
+    // is a close-only quantity, so the gate's outcome reaches verify only
+    // through this value.
+    snap.sigma_work_milli = get_archival_sigma_work_milli(settlement_epoch);
+    // The frozen budget(E) close row (ARCHIVAL_BUDGET_SCHEDULE.md §3.3):
+    // budget and denominator were frozen in the same close event, so the
+    // gather reads them from the same table family — no new live operand.
+    // Absent row (never closed / pruned) is a gather failure the verify shim
+    // rejects on; present-and-zero is a closed zero-budget epoch, rejected
+    // downstream by wire positivity, not here.
+    snap.has_budget_row = has_archival_budget_row(settlement_epoch);
+    snap.budget_atomic = snap.has_budget_row ? get_archival_budget(settlement_epoch) : 0;
+  }
+  // All window epochs' rows in ONE serve-credit table pass — the
+  // unauthenticated claim-source RPC's per-request work bound.
+  gather_archival_epoch_rows_window(epoch_lo, epoch_hi, &p_id, out.data());
 }
 
 void BlockchainLMDB::process_archival_epoch_close_at_height(uint64_t block_height)
