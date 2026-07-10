@@ -34,12 +34,6 @@
 //! `claimed_epochs_contains` binary-search operand) and `epochs` in strictly
 //! ascending epoch order.
 
-// PR-1 lands the decode surface ahead of its consumers: PR-2's assembly
-// core consumes the views, PR-3's `StakeEngine` handler consumes the fetch.
-// This allow is deleted by PR-2 (`EMISSION_CLAIM_BUILDER.md` §8) — it is
-// staging, not tolerated dead code per `15-deletion-and-debt.mdc`.
-#![allow(dead_code)]
-
 use serde_json::{json, Value};
 use shekyl_archival_retention::{
     BadInterval, ClaimantBondRecord, CreditPair, EmissionEpochSource, EpochCloseBond,
@@ -107,10 +101,15 @@ pub struct EpochSnapshot {
 /// Part-A claim context: the claimant's bond record as the daemon read it.
 #[derive(Debug, Clone)]
 pub struct BondContext {
+    // Staging allow: read via `record()` by the §2 step-7 self-check
+    // (this PR's self-check commit); deleted there.
+    #[allow(dead_code)]
     pub join_settlement_epoch: u64,
     /// The record's holdings descriptor — the vin copies this **by value**
     /// (§5.3/§6.4.1: verify demands record equality; the builder never
     /// recomputes a descriptor).
+    // Staging allow: the vin-assembly commit of this PR copies it; deleted there.
+    #[allow(dead_code)]
     pub holdings: HoldingsDescriptor,
     /// Strictly increasing claimed-epoch set — the step-1 dedup operand
     /// (`claimed_epochs_contains` binary-searches it; the ordering is
@@ -120,6 +119,9 @@ pub struct BondContext {
 
 impl BondContext {
     /// The verify-side view over this record.
+    // Staging allow: consumed by the §2 step-7 self-check (this PR's
+    // self-check commit); deleted there.
+    #[allow(dead_code)]
     pub fn record(&self) -> ClaimantBondRecord<'_> {
         ClaimantBondRecord {
             join_settlement_epoch: self.join_settlement_epoch,
@@ -135,6 +137,9 @@ impl BondContext {
 pub struct EmissionClaimSource {
     /// Tip block count at gather time — the §2 step-3 same-tip staleness
     /// operand, not a computation operand.
+    // Staging allow: the staleness comparison is PR-3's `StakeEngine`
+    // handler (§2 step 3); this allow is deleted there.
+    #[allow(dead_code)]
     pub chain_height: u64,
     /// The daemon's settled-epoch operand (same helper consensus uses).
     /// Step 1's window bounds derive from this via the landed predicate
@@ -364,6 +369,11 @@ impl EmissionClaimSource {
 /// the daemon-visible query is identical for every claimant regardless of
 /// serve history. Persona-side callers pass the persona transport
 /// (`PRpc`), never the principal's daemon session (§7.4).
+// Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the call
+// site is PR-3's `StakeEngine` claim handler; this allow is deleted there.
+// PR-2 narrowed the PR-1 module-level allow to this fetch — the decode
+// surface is now live via `emission_claim`.
+#[allow(dead_code)]
 pub async fn fetch_emission_claim_source<R: Rpc>(
     rpc: &R,
     p_id: &[u8; 32],
