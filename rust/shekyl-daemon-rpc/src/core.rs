@@ -62,6 +62,9 @@ impl CoreRpc {
 
     /// Dispatch a JSON REST endpoint (e.g. "/get_info").
     pub fn json_endpoint(&self, uri: &str, body: &str) -> Option<String> {
+        if self.handle.is_null() {
+            return None;
+        }
         let c_uri = CString::new(uri).ok()?;
         let c_body = CString::new(body).ok()?;
         unsafe {
@@ -74,6 +77,9 @@ impl CoreRpc {
     /// Returns `Ok(data)` on success, `Err(rc)` with the FFI error code on failure.
     /// rc -1 = bad request (parse failure), rc -2 = internal error.
     pub fn bin_endpoint(&self, uri: &str, body: &[u8]) -> Result<Vec<u8>, i32> {
+        if self.handle.is_null() {
+            return Err(-1);
+        }
         let c_uri = CString::new(uri).map_err(|_| -2i32)?;
         let mut out_buf: *mut u8 = std::ptr::null_mut();
         let mut out_len: usize = 0;
@@ -105,6 +111,9 @@ impl CoreRpc {
     /// Dispatch a JSON-RPC 2.0 method.
     /// Returns the raw response string from C++ (contains ok/error envelope).
     pub fn json_rpc(&self, method: &str, params: &str) -> Option<String> {
+        if self.handle.is_null() {
+            return None;
+        }
         let c_method = CString::new(method).ok()?;
         let c_params = CString::new(params).ok()?;
         unsafe {
@@ -118,6 +127,17 @@ impl Drop for CoreRpc {
     fn drop(&mut self) {
         if !self.handle.is_null() {
             unsafe { ffi::core_rpc_ffi_destroy(self.handle) };
+        }
+    }
+}
+
+#[cfg(test)]
+impl CoreRpc {
+    /// Null-handle stand-in reserved for future router tests that never reach FFI.
+    #[allow(dead_code)]
+    pub(crate) fn null_for_router_tests() -> Self {
+        Self {
+            handle: std::ptr::null_mut(),
         }
     }
 }

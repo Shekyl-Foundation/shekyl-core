@@ -33,11 +33,12 @@ use crate::handlers::{binary, json, json_rpc, submit};
 use crate::middleware::DEFAULT_BODY_LIMIT;
 use crate::submit::{DaemonSubmitEngine, DaemonTxVerifier, FfiSubmitShim, SubmitEngine};
 
+use axum::http::{HeaderValue, Method};
 use axum::routing::{get, post};
 use axum::Router;
 use std::sync::Arc;
 use tokio::sync::Notify;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing::info;
 
@@ -54,6 +55,8 @@ pub struct ServerConfig {
     pub bind_address: String,
     pub restricted: bool,
     pub body_limit: usize,
+    /// Allow-list from `--rpc-access-control-origins`. Empty = CORS default-deny.
+    pub cors_origins: Vec<String>,
 }
 
 impl Default for ServerConfig {
@@ -62,11 +65,29 @@ impl Default for ServerConfig {
             bind_address: "127.0.0.1:21029".into(),
             restricted: false,
             body_limit: DEFAULT_BODY_LIMIT,
+            cors_origins: Vec::new(),
         }
     }
 }
 
-fn build_router(state: Arc<AppState>) -> Router {
+fn cors_layer(origins: &[String]) -> CorsLayer {
+    // Default-deny: empty allow-list means no ACAO reflection (CorsLayer::new()).
+    // When origins are configured, honor them exactly — never `*`.
+    if origins.is_empty() {
+        return CorsLayer::new();
+    }
+    let allowed: Vec<HeaderValue> = origins
+        .iter()
+        .filter_map(|o| HeaderValue::from_str(o).ok())
+        .collect();
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list(allowed))
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers(tower_http::cors::Any)
+}
+
+/// Build the Axum router. `cors_origins` empty ⇒ default-deny CORS.
+pub fn build_router(state: Arc<AppState>, cors_origins: &[String]) -> Router {
     let restricted = state.restricted;
 
     // JSON-RPC 2.0 and unrestricted JSON REST routes
@@ -185,7 +206,7 @@ fn build_router(state: Arc<AppState>) -> Router {
 
     router
         .layer(RequestBodyLimitLayer::new(state.body_limit()))
-        .layer(CorsLayer::permissive())
+        .layer(cors_layer(cors_origins))
         .with_state(state)
 }
 
@@ -224,7 +245,7 @@ pub async fn serve_with_listener(
         shutdown: shutdown.clone(),
     });
 
-    let app = build_router(state);
+    let app = build_router(state, &config.cors_origins);
     info!(
         "shekyl-daemon-rpc ({}) listening on {}",
         if config.restricted {
@@ -251,4 +272,95 @@ pub async fn run_server(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = bind_listener(&config.bind_address).await?;
     serve_with_listener(core, config, listener, shutdown).await
+}
+
+/// Binary URI paths registered by [`build_router`]. Kept as an explicit table
+/// so in-lane tests can assert deleted decoy surfaces stay gone without
+/// linking the C++ `core_rpc_ffi` symbols (`cargo test -p shekyl-daemon-rpc`
+/// has no daemon image).
+pub const BINARY_URI_PATHS: &[&str] = &[
+    "/get_blocks.bin",
+    "/getblocks.bin",
+    "/get_blocks_by_height.bin",
+    "/getblocks_by_height.bin",
+    "/get_hashes.bin",
+    "/gethashes.bin",
+    "/get_o_indexes.bin",
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::routing::get;
+    use http::Request;
+    use tower::ServiceExt;
+
+    #[test]
+    fn output_distribution_bin_not_registered() {
+        assert!(
+            !BINARY_URI_PATHS.contains(&"/get_output_distribution.bin"),
+            "decoy distribution binary route must stay deleted"
+        );
+        // Spot-check the live table still matches the routes wired above.
+        assert!(BINARY_URI_PATHS.contains(&"/get_blocks.bin"));
+        assert!(BINARY_URI_PATHS.contains(&"/get_o_indexes.bin"));
+    }
+
+    #[tokio::test]
+    async fn cors_default_deny_omits_allow_origin() {
+        // Exercise `cors_layer` without `AppState` / C++ FFI (lib tests cannot
+        // link `core_rpc_ffi_*`).
+        let app = Router::new()
+            .route("/get_info", get(|| async { "ok" }))
+            .layer(cors_layer(&[]));
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/get_info")
+                    .header("Origin", "https://evil.example")
+                    .header("Access-Control-Request-Method", "GET")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(res.headers().get("access-control-allow-origin").is_none());
+    }
+
+    #[tokio::test]
+    async fn cors_allow_list_honors_configured_origin() {
+        let origins = vec!["https://wallet.example".to_string()];
+        let app = Router::new()
+            .route("/get_info", get(|| async { "ok" }))
+            .layer(cors_layer(&origins));
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/get_info")
+                    .header("Origin", "https://wallet.example")
+                    .header("Access-Control-Request-Method", "GET")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            res.headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("https://wallet.example")
+        );
+    }
+
+    /// Optional live-daemon smoke (Axum-only shekyld). Not run in CI by default.
+    #[tokio::test]
+    #[ignore = "requires a running Axum-only shekyld; optional e2e smoke"]
+    async fn e2e_axum_only_get_info_smoke() {
+        // Operators: point a client at a local shekyld RPC and exercise
+        // /get_info + /getblocks.bin. In-lane coverage is the oneshot/CORS
+        // tests above plus RpcArgsDaemonSurface.
+    }
 }

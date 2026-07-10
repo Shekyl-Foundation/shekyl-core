@@ -113,7 +113,8 @@ namespace cryptonote
     command_line::add_arg(desc, arg_bootstrap_daemon_address);
     command_line::add_arg(desc, arg_bootstrap_daemon_login);
     command_line::add_arg(desc, arg_bootstrap_daemon_proxy);
-    cryptonote::rpc_args::init_options(desc, true);
+    // Daemon inbound RPC is Axum plaintext: no --rpc-login / --rpc-ssl*.
+    cryptonote::rpc_args::init_options(desc, /*any_cert_option=*/false, /*include_listener_tls_auth=*/false);
     command_line::add_arg(desc, arg_rpc_max_connections_per_public_ip);
     command_line::add_arg(desc, arg_rpc_max_connections_per_private_ip);
     command_line::add_arg(desc, arg_rpc_max_connections);
@@ -208,20 +209,18 @@ namespace cryptonote
       , const bool restricted
       , const std::string& port
       , const std::string& proxy
-      , bool bind_http_listener
     )
   {
     m_bootstrap_daemon_proxy = proxy;
     m_restricted = restricted;
-    m_net_server.set_threads_prefix("RPC");
-    m_net_server.set_connection_filter(&m_p2p);
 
-    auto rpc_config = cryptonote::rpc_args::process(vm, true);
+    // Daemon: no inbound login/ssl flags. Connection-limit CLI args remain
+    // registered for config compatibility but are inert under Axum (FOLLOWUPS).
+    auto rpc_config = cryptonote::rpc_args::process(vm, /*any_cert_option=*/false, /*include_listener_tls_auth=*/false);
     if (!rpc_config)
       return false;
 
     std::string bind_ip_str = rpc_config->bind_ip;
-    std::string bind_ipv6_str = rpc_config->bind_ipv6_address;
     if (restricted)
     {
       const auto restricted_rpc_port_arg = cryptonote::core_rpc_server::arg_rpc_restricted_bind_port;
@@ -229,14 +228,11 @@ namespace cryptonote
       if (has_restricted_rpc_port_arg && port == command_line::get_arg(vm, restricted_rpc_port_arg))
       {
         bind_ip_str = rpc_config->restricted_bind_ip;
-        bind_ipv6_str = rpc_config->restricted_bind_ipv6_address;
       }
     }
-    // Record the resolved host so the daemon can hand it to the Rust/Axum
-    // transport when the epee acceptor is skipped (see daemon.cpp run()).
     m_rpc_bind_ip = bind_ip_str;
+    m_access_control_origins = rpc_config->access_control_origins;
     disable_rpc_ban = rpc_config->disable_rpc_ban;
-    const std::string data_dir{command_line::get_arg(vm, cryptonote::arg_data_dir)};
 
     if (!set_bootstrap_daemon(
           command_line::get_arg(vm, arg_bootstrap_daemon_address),
@@ -247,32 +243,8 @@ namespace cryptonote
       return false;
     }
 
-    std::optional<epee::net_utils::http::login> http_login{};
-
-    if (rpc_config->login)
-      http_login.emplace(std::move(rpc_config->login->username), std::move(rpc_config->login->password).password());
-
-    bool store_ssl_key = !restricted && rpc_config->ssl_options && rpc_config->ssl_options.auth.certificate_path.empty();
-    const auto ssl_base_path = (std::filesystem::path{data_dir} / "rpc_ssl").string();
-    const bool ssl_cert_file_exists = std::filesystem::exists(ssl_base_path + ".crt");
-    const bool ssl_pkey_file_exists = std::filesystem::exists(ssl_base_path + ".key");
-    if (store_ssl_key)
-    {
-      // .key files are often given different read permissions as their corresponding .crt files.
-      // Consequently, sometimes the .key file wont't get copied, while the .crt file will.
-      if (ssl_cert_file_exists != ssl_pkey_file_exists)
-      {
-        MFATAL("Certificate (.crt) and private key (.key) files must both exist or both not exist at path: " << ssl_base_path);
-        return false;
-      }
-      else if (ssl_cert_file_exists) { // and ssl_pkey_file_exists
-        // load key from previous run, password prompted by OpenSSL
-        store_ssl_key = false;
-        rpc_config->ssl_options.auth =
-          epee::net_utils::ssl_authentication_t{ssl_base_path + ".key", ssl_base_path + ".crt"};
-      }
-    }
-
+    // Validate connection-limit args for config compatibility; Axum does not
+    // enforce them yet (documented as inert in FOLLOWUPS / DAEMON_RPC_RUST).
     const auto max_connections_public = command_line::get_arg(vm, arg_rpc_max_connections_per_public_ip);
     const auto max_connections_private = command_line::get_arg(vm, arg_rpc_max_connections_per_private_ip);
     const auto max_connections = command_line::get_arg(vm, arg_rpc_max_connections);
@@ -288,38 +260,7 @@ namespace cryptonote
       return false;
     }
 
-    if (!bind_http_listener)
-    {
-      // RPC has been migrated to the Rust/Axum transport, which owns the HTTP
-      // listener and binds the configured port itself (see daemon.cpp run()).
-      // Binding the epee acceptor here too would hold the port and make Axum's
-      // bind fail with EADDRINUSE. All handler/bootstrap/payment state above is
-      // still configured, and the on_* handlers remain reachable through the
-      // direct dispatch shim in core_rpc_ffi.cpp, which never uses m_net_server's
-      // acceptor — so skipping the bind is safe.
-      return true;
-    }
-
-    auto rng = [](size_t len, uint8_t *ptr){ return crypto::rand(len, ptr); };
-    const bool inited = epee::http_server_impl_base<core_rpc_server, connection_context>::init(
-      rng, std::move(port), std::move(bind_ip_str),
-      std::move(bind_ipv6_str), std::move(rpc_config->use_ipv6), std::move(rpc_config->require_ipv4),
-      std::move(rpc_config->access_control_origins), std::move(http_login), std::move(rpc_config->ssl_options),
-      max_connections_public, max_connections_private, max_connections,
-      command_line::get_arg(vm, arg_rpc_response_soft_limit)
-    );
-
-    m_net_server.get_config_object().m_max_content_length = MAX_RPC_CONTENT_LENGTH;
-
-    if (store_ssl_key && inited)
-    {
-      // new keys were generated, store for next run
-      const auto error = epee::net_utils::store_ssl_keys(m_net_server.get_ssl_context(), ssl_base_path);
-      if (error)
-        MFATAL("Failed to store HTTP SSL cert/key for " << (restricted ? "restricted " : "") << "RPC server: " << error.message());
-      return !bool(error);
-    }
-    return inited;
+    return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::check_core_ready()
@@ -3024,105 +2965,6 @@ namespace cryptonote
       error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
       error_resp.message = "Failed to get txpool backlog";
       return false;
-    }
-
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_output_distribution(const COMMAND_RPC_GET_OUTPUT_DISTRIBUTION::request& req, COMMAND_RPC_GET_OUTPUT_DISTRIBUTION::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_output_distribution);
-    bool r;
-    if (use_bootstrap_daemon_if_necessary<COMMAND_RPC_GET_OUTPUT_DISTRIBUTION>(invoke_http_mode::JON_RPC, "get_output_distribution", req, res, r))
-      return r;
-
-    const bool restricted = m_restricted && ctx;
-    if (restricted && req.amounts != std::vector<uint64_t>(1, 0))
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_RESTRICTED;
-      error_resp.message = "Restricted RPC can only get output distribution for rct outputs. Use your own node.";
-      return false;
-    }
-
-    size_t n_0 = 0, n_non0 = 0;
-    for (uint64_t amount: req.amounts)
-      if (amount) ++n_non0; else ++n_0;
-
-    try
-    {
-      // 0 is placeholder for the whole chain
-      const uint64_t req_to_height = req.to_height ? req.to_height : (m_core.get_current_blockchain_height() - 1);
-      for (uint64_t amount: req.amounts)
-      {
-        auto data = rpc::RpcHandler::get_output_distribution([this](uint64_t amount, uint64_t from, uint64_t to, uint64_t &start_height, std::vector<uint64_t> &distribution, uint64_t &base) { return m_core.get_output_distribution(amount, from, to, start_height, distribution, base); }, amount, req.from_height, req_to_height, [this](uint64_t height) { return m_core.get_blockchain_storage().get_db().get_block_hash_from_height(height); }, req.cumulative, m_core.get_current_blockchain_height());
-        if (!data)
-        {
-          error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-          error_resp.message = "Failed to get output distribution";
-          return false;
-        }
-
-        res.distributions.push_back({std::move(*data), amount, "", req.binary, req.compress});
-      }
-    }
-    catch (const std::exception &e)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = "Failed to get output distribution";
-      return false;
-    }
-
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_output_distribution_bin(const COMMAND_RPC_GET_OUTPUT_DISTRIBUTION::request& req, COMMAND_RPC_GET_OUTPUT_DISTRIBUTION::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_output_distribution_bin);
-
-    bool r;
-    if (use_bootstrap_daemon_if_necessary<COMMAND_RPC_GET_OUTPUT_DISTRIBUTION>(invoke_http_mode::BIN, "/get_output_distribution.bin", req, res, r))
-      return r;
-
-    const bool restricted = m_restricted && ctx;
-    if (restricted && req.amounts != std::vector<uint64_t>(1, 0))
-    {
-      res.status = "Restricted RPC can only get output distribution for rct outputs. Use your own node.";
-      return false;
-    }
-
-    size_t n_0 = 0, n_non0 = 0;
-    for (uint64_t amount: req.amounts)
-      if (amount) ++n_non0; else ++n_0;
-
-    res.status = "Failed";
-
-    if (!req.binary)
-    {
-      res.status = "Binary only call";
-      return true;
-    }
-    try
-    {
-      // 0 is placeholder for the whole chain
-      const uint64_t req_to_height = req.to_height ? req.to_height : (m_core.get_current_blockchain_height() - 1);
-      for (uint64_t amount: req.amounts)
-      {
-        auto data = rpc::RpcHandler::get_output_distribution([this](uint64_t amount, uint64_t from, uint64_t to, uint64_t &start_height, std::vector<uint64_t> &distribution, uint64_t &base) { return m_core.get_output_distribution(amount, from, to, start_height, distribution, base); }, amount, req.from_height, req_to_height, [this](uint64_t height) { return m_core.get_blockchain_storage().get_db().get_block_hash_from_height(height); }, req.cumulative, m_core.get_current_blockchain_height());
-        if (!data)
-        {
-          res.status = "Failed to get output distribution";
-          return true;
-        }
-
-        res.distributions.push_back({std::move(*data), amount, "", req.binary, req.compress});
-      }
-    }
-    catch (const std::exception &e)
-    {
-      res.status = "Failed to get output distribution";
-      return true;
     }
 
     res.status = CORE_RPC_STATUS_OK;

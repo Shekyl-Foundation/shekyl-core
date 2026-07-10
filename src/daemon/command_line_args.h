@@ -110,11 +110,6 @@ namespace daemon_args
   , false
   };
 
-  const command_line::arg_descriptor<bool> arg_no_rust_rpc = {
-    "no-rust-rpc"
-  , "Disable the Rust/Axum daemon RPC server (enabled by default)"
-  , false
-  };
 
   // shekyld's local --non-interactive flag. This is the only surviving piece
   // of the old daemonizer CLI on either binary: it suppresses the interactive

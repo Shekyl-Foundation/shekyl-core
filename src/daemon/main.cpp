@@ -165,7 +165,6 @@ int main(int argc, char const * argv[])
       command_line::add_arg(core_settings, daemon_args::arg_proxy);
       command_line::add_arg(core_settings, daemon_args::arg_proxy_allow_dns_leaks);
       command_line::add_arg(core_settings, daemon_args::arg_public_node);
-      command_line::add_arg(core_settings, daemon_args::arg_no_rust_rpc);
       command_line::add_arg(visible_options, daemon_args::arg_non_interactive);
 
       daemonize::Daemon::init_options(core_settings);
