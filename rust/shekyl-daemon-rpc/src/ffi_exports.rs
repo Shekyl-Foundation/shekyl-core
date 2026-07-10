@@ -41,6 +41,8 @@ pub struct ShekylDaemonRpcHandle {
 /// - `rpc_server_ptr` must be a valid pointer to an initialized `core_rpc_server`,
 ///   or null (returns null immediately).
 /// - `bind_addr` must be a valid null-terminated C string, or null (returns null).
+/// - `cors_origins` may be null (default-deny) or a null-terminated
+///   comma-separated allow-list string.
 /// - The pointed-to `core_rpc_server` must remain alive for the lifetime of the
 ///   returned handle.
 #[no_mangle]
@@ -48,6 +50,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
     rpc_server_ptr: *mut std::ffi::c_void,
     bind_addr: *const c_char,
     restricted: bool,
+    cors_origins: *const c_char,
 ) -> *mut ShekylDaemonRpcHandle {
     if rpc_server_ptr.is_null() || bind_addr.is_null() {
         return std::ptr::null_mut();
@@ -56,6 +59,35 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
     let bind = match std::ffi::CStr::from_ptr(bind_addr).to_str() {
         Ok(s) => s.to_owned(),
         Err(_) => return std::ptr::null_mut(),
+    };
+
+    let cors = if cors_origins.is_null() {
+        Vec::new()
+    } else {
+        match std::ffi::CStr::from_ptr(cors_origins).to_str() {
+            Ok("") => Vec::new(),
+            Ok(s) => {
+                let parsed: Vec<String> = s
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|o| !o.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                if parsed.is_empty() {
+                    // A non-empty value that trims to nothing (e.g. " , " or a
+                    // stray trailing comma) is almost certainly a misconfig, and
+                    // would otherwise be silently indistinguishable from unset
+                    // (CORS default-deny). Surface it instead of failing quietly.
+                    tracing::warn!(
+                        raw = %s,
+                        "--rpc-access-control-origins contained no usable origins after \
+                         trimming; CORS is default-deny (all cross-origin requests rejected)"
+                    );
+                }
+                parsed
+            }
+            Err(_) => return std::ptr::null_mut(),
+        }
     };
 
     let core = match crate::core::CoreRpc::from_raw(rpc_server_ptr) {
@@ -75,6 +107,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
     let config = crate::server::ServerConfig {
         bind_address: bind,
         restricted,
+        cors_origins: cors,
         ..Default::default()
     };
 

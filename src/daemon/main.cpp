@@ -165,7 +165,6 @@ int main(int argc, char const * argv[])
       command_line::add_arg(core_settings, daemon_args::arg_proxy);
       command_line::add_arg(core_settings, daemon_args::arg_proxy_allow_dns_leaks);
       command_line::add_arg(core_settings, daemon_args::arg_public_node);
-      command_line::add_arg(core_settings, daemon_args::arg_no_rust_rpc);
       command_line::add_arg(visible_options, daemon_args::arg_non_interactive);
 
       daemonize::Daemon::init_options(core_settings);
@@ -385,30 +384,18 @@ int main(int argc, char const * argv[])
           return 1;
         }
 
-        const char *env_rpc_login = nullptr;
-        const bool has_rpc_arg = command_line::has_arg(vm, arg.rpc_login);
-        const bool use_rpc_env = !has_rpc_arg && (env_rpc_login = getenv("RPC_LOGIN")) != nullptr && strlen(env_rpc_login) > 0;
+        // The shekyld RPC listener is plaintext loopback with no digest auth
+        // (rpc_args is registered with include_listener_tls_auth=false), so the
+        // control client connects without a login or TLS. The former
+        // --rpc-login / --rpc-ssl* flags are no longer registered for shekyld;
+        // reading them here (e.g. process_ssl) would throw boost::bad_any_cast
+        // on the unregistered variables_map entries. Remote/authenticated
+        // access is fronted by an onion service or reverse proxy outside the
+        // daemon (docs/DAEMON_RPC_RUST.md).
         std::optional<tools::login> login{};
-        if (has_rpc_arg || use_rpc_env)
-        {
-          login = tools::login::parse(
-            has_rpc_arg ? command_line::get_arg(vm, arg.rpc_login) : std::string(env_rpc_login), false, [](bool verify) {
-              PAUSE_READLINE();
-              return tools::password_container::prompt(verify, "Daemon client password");
-            }
-          );
-          if (!login)
-          {
-            std::cerr << "Failed to obtain password" << std::endl;
-            return 1;
-          }
-        }
+        epee::net_utils::ssl_options_t ssl_options{epee::net_utils::ssl_support_t::e_ssl_support_disabled};
 
-        auto ssl_options = cryptonote::rpc_args::process_ssl(vm, true);
-        if (!ssl_options)
-          return 1;
-
-        daemonize::t_command_server rpc_commands{rpc_ip, rpc_port, std::move(login), std::move(*ssl_options)};
+        daemonize::t_command_server rpc_commands{rpc_ip, rpc_port, std::move(login), std::move(ssl_options)};
         if (rpc_commands.process_command_vec(command))
         {
           return 0;

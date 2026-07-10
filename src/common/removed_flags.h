@@ -29,9 +29,10 @@
 // TODO(v3.2): delete this file and its .cpp. Coordinated with the
 // wallet_rpc_server Rust cutover (see docs/FOLLOWUPS.md §"removed_flags
 // shim"). The shim exists only to give users a friendly migration message
-// for --detach, --pidfile, and the Windows --*-service flags removed in
-// V3.1 when the daemonizer was deleted. Call sites are the two main()
-// functions in src/daemon/main.cpp and src/wallet/wallet_rpc_server.cpp;
+// for flags removed in V3.1: the daemonizer flags (--detach, --pidfile, the
+// Windows --*-service set), shekyld's inbound RPC TLS/auth flags (--rpc-login,
+// --rpc-ssl*), and the transitional --no-rust-rpc opt-out. Call sites are the
+// two main() functions in src/daemon/main.cpp and src/wallet/wallet_args.cpp;
 // both disappear at V3.2 (shekyld keeps its caller, shekyl-wallet-rpc is
 // replaced by the Rust binary).
 
@@ -41,12 +42,13 @@
 
 namespace shekyl { namespace cli {
 
-// If `ex` names one of the daemonizer flags removed in V3.1
+// If `ex` names a flag removed in V3.1 — the daemonizer flags
 // (--detach, --pidfile, --install-service, --uninstall-service,
-// --start-service, --stop-service, --run-as-service), write a
-// migration message to stderr pointing the operator at systemd /
-// launchd / Task Scheduler / Tauri sidecar, then return true.
-// Caller should exit nonzero.
+// --start-service, --stop-service, --run-as-service), shekyld's inbound
+// RPC TLS/auth flags (--rpc-login, --rpc-ssl and the --rpc-ssl-* set), or
+// the transitional --no-rust-rpc — write a migration message to stderr
+// appropriate to that flag's removal reason, then return true. Caller
+// should exit nonzero.
 //
 // Otherwise returns false — caller should re-throw / print the normal
 // parse error.

@@ -4597,46 +4597,6 @@ bool wallet2::refresh(bool trusted_daemon, uint64_t & blocks_fetched, bool& rece
   return ok;
 }
 //----------------------------------------------------------------------------------------------------
-bool wallet2::get_rct_distribution(uint64_t &start_height, std::vector<uint64_t> &distribution)
-{
-  MDEBUG("Requesting rct distribution");
-
-  cryptonote::COMMAND_RPC_GET_OUTPUT_DISTRIBUTION::request req = AUTO_VAL_INIT(req);
-  cryptonote::COMMAND_RPC_GET_OUTPUT_DISTRIBUTION::response res = AUTO_VAL_INIT(res);
-  req.amounts.push_back(0);
-  req.from_height = 0;
-  req.cumulative = false;
-  req.binary = true;
-  req.compress = true;
-
-  bool r;
-  try
-  {
-    const boost::lock_guard<boost::recursive_mutex> lock{m_daemon_rpc_mutex};
-    r = net_utils::invoke_http_bin("/get_output_distribution.bin", req, res, *m_http_client, rpc_timeout);
-    THROW_ON_RPC_RESPONSE_ERROR_GENERIC(r, {}, res, "/get_output_distribution.bin");
-  }
-  catch(...)
-  {
-    return false;
-  }
-  if (res.distributions.size() != 1)
-  {
-    MWARNING("Failed to request output distribution: not the expected single result");
-    return false;
-  }
-  if (res.distributions[0].amount != 0)
-  {
-    MWARNING("Failed to request output distribution: results are not for amount 0");
-    return false;
-  }
-  for (size_t i = 1; i < res.distributions[0].data.distribution.size(); ++i)
-    res.distributions[0].data.distribution[i] += res.distributions[0].data.distribution[i-1];
-  start_height = res.distributions[0].data.start_height;
-  distribution = std::move(res.distributions[0].data.distribution);
-  return true;
-}
-//----------------------------------------------------------------------------------------------------
 wallet2::detached_blockchain_data wallet2::detach_blockchain(uint64_t height, std::map<std::pair<uint64_t, uint64_t>, size_t> *output_tracker_cache)
 {
   LOG_PRINT_L0("Detaching blockchain on height " << height);

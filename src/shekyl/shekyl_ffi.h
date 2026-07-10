@@ -1245,11 +1245,14 @@ typedef struct ShekylDaemonRpcHandle ShekylDaemonRpcHandle;
 /// rpc_server_ptr: pointer to an initialized core_rpc_server.
 /// bind_addr: "ip:port" C string.
 /// restricted: true to block admin-only endpoints.
+/// cors_origins: optional comma-separated allow-list from
+///   --rpc-access-control-origins; NULL or empty = CORS default-deny.
 /// Returns an opaque handle, or NULL on failure.
 ShekylDaemonRpcHandle* shekyl_daemon_rpc_start(
     void* rpc_server_ptr,
     const char* bind_addr,
-    bool restricted);
+    bool restricted,
+    const char* cors_origins);
 
 /// Gracefully stop the Axum daemon RPC server and free the handle.
 void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);

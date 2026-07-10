@@ -66,14 +66,11 @@ shekyld [options] [command]
 | `--max-log-files <n>` | Number of rotated archives to retain (default 50; `0` disables pruning) |
 | `--non-interactive` | Disable interactive console (for use under a service manager) |
 | `--rpc-bind-ip <ip>` | RPC listen address (default `127.0.0.1`) |
-| `--rpc-bind-port <port>` | RPC listen port (default per network, see table above) |
+| `--rpc-bind-port <port>` | RPC listen port (default per network, see table above); Axum sole transport |
 | `--restricted-rpc` | Restrict RPC to view-only / safe methods |
 | `--rpc-restricted-bind-port <port>` | Separate restricted RPC listener |
-| `--rpc-login <user:pass>` | HTTP digest authentication for RPC |
+| `--rpc-access-control-origins <list>` | Comma-separated CORS allow-list (default: deny) |
 | `--confirm-external-bind` | Required when binding RPC to non-loopback |
-| `--rpc-ssl <mode>` | `enabled`, `disabled`, or `autodetect` |
-| `--rpc-ssl-certificate <pem>` | TLS certificate for RPC |
-| `--rpc-ssl-private-key <pem>` | TLS private key for RPC |
 | `--p2p-bind-port <port>` | P2P listen port |
 | `--add-peer <ip:port>` | Add a persistent peer |
 | `--add-priority-node <ip:port>` | Always try to connect to this peer |

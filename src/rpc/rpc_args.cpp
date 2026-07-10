@@ -110,7 +110,10 @@ namespace cryptonote
 
   const char* rpc_args::tr(const char* str) { return i18n_translate(str, "cryptonote::rpc_args"); }
 
-  void rpc_args::init_options(boost::program_options::options_description& desc, const bool any_cert_option)
+  void rpc_args::init_options(
+      boost::program_options::options_description& desc,
+      const bool any_cert_option,
+      const bool include_listener_tls_auth)
   {
     const descriptors arg{};
     command_line::add_arg(desc, arg.rpc_bind_ip);
@@ -119,21 +122,27 @@ namespace cryptonote
     command_line::add_arg(desc, arg.rpc_restricted_bind_ipv6_address);
     command_line::add_arg(desc, arg.rpc_use_ipv6);
     command_line::add_arg(desc, arg.rpc_ignore_ipv4);
-    command_line::add_arg(desc, arg.rpc_login);
     command_line::add_arg(desc, arg.confirm_external_bind);
     command_line::add_arg(desc, arg.rpc_access_control_origins);
-    command_line::add_arg(desc, arg.rpc_ssl);
-    command_line::add_arg(desc, arg.rpc_ssl_private_key);
-    command_line::add_arg(desc, arg.rpc_ssl_certificate);
-    command_line::add_arg(desc, arg.rpc_ssl_ca_certificates);
-    command_line::add_arg(desc, arg.rpc_ssl_allowed_fingerprints);
-    command_line::add_arg(desc, arg.rpc_ssl_allow_chained);
     command_line::add_arg(desc, arg.disable_rpc_ban);
-    if (any_cert_option)
-      command_line::add_arg(desc, arg.rpc_ssl_allow_any_cert);
+    if (include_listener_tls_auth)
+    {
+      command_line::add_arg(desc, arg.rpc_login);
+      command_line::add_arg(desc, arg.rpc_ssl);
+      command_line::add_arg(desc, arg.rpc_ssl_private_key);
+      command_line::add_arg(desc, arg.rpc_ssl_certificate);
+      command_line::add_arg(desc, arg.rpc_ssl_ca_certificates);
+      command_line::add_arg(desc, arg.rpc_ssl_allowed_fingerprints);
+      command_line::add_arg(desc, arg.rpc_ssl_allow_chained);
+      if (any_cert_option)
+        command_line::add_arg(desc, arg.rpc_ssl_allow_any_cert);
+    }
   }
 
-  std::optional<rpc_args> rpc_args::process(const boost::program_options::variables_map& vm, const bool any_cert_option)
+  std::optional<rpc_args> rpc_args::process(
+      const boost::program_options::variables_map& vm,
+      const bool any_cert_option,
+      const bool include_listener_tls_auth)
   {
     const descriptors arg{};
     rpc_args config{};
@@ -223,25 +232,38 @@ namespace cryptonote
       }
     }
 
-    const char *env_rpc_login = nullptr;
-    const bool has_rpc_arg = command_line::has_arg(vm, arg.rpc_login);
-    const bool use_rpc_env = !has_rpc_arg && (env_rpc_login = getenv("RPC_LOGIN")) != nullptr && strlen(env_rpc_login) > 0;
-    std::optional<tools::login> login{};
-    if (has_rpc_arg || use_rpc_env)
+    if (include_listener_tls_auth)
     {
-      config.login = tools::login::parse(
-          has_rpc_arg ? command_line::get_arg(vm, arg.rpc_login) : std::string(env_rpc_login), true, [](bool verify) {
-            return tools::password_container::prompt(verify, "RPC server password");
-          });
-
-      if (!config.login)
-        return std::nullopt;
-
-      if (config.login->username.empty())
+      const char *env_rpc_login = nullptr;
+      const bool has_rpc_arg = command_line::has_arg(vm, arg.rpc_login);
+      const bool use_rpc_env = !has_rpc_arg && (env_rpc_login = getenv("RPC_LOGIN")) != nullptr && strlen(env_rpc_login) > 0;
+      if (has_rpc_arg || use_rpc_env)
       {
-        LOG_ERROR(tr("Username specified with --") << arg.rpc_login.name << tr(" cannot be empty"));
-        return std::nullopt;
+        config.login = tools::login::parse(
+            has_rpc_arg ? command_line::get_arg(vm, arg.rpc_login) : std::string(env_rpc_login), true, [](bool verify) {
+              return tools::password_container::prompt(verify, "RPC server password");
+            });
+
+        if (!config.login)
+          return std::nullopt;
+
+        if (config.login->username.empty())
+        {
+          LOG_ERROR(tr("Username specified with --") << arg.rpc_login.name << tr(" cannot be empty"));
+          return std::nullopt;
+        }
       }
+
+      auto ssl_options = do_process_ssl(vm, arg, any_cert_option);
+      if (!ssl_options)
+        return std::nullopt;
+      config.ssl_options = std::move(*ssl_options);
+    }
+    else
+    {
+      // Daemon inbound: plaintext only; no digest auth.
+      config.login = std::nullopt;
+      config.ssl_options = epee::net_utils::ssl_support_t::e_ssl_support_disabled;
     }
 
     auto access_control_origins_input = command_line::get_arg(vm, arg.rpc_access_control_origins);
@@ -252,11 +274,6 @@ namespace cryptonote
       std::for_each(access_control_origins.begin(), access_control_origins.end(), std::bind(&boost::trim<std::string>, std::placeholders::_1, std::locale::classic()));
       config.access_control_origins = std::move(access_control_origins);
     }
-
-    auto ssl_options = do_process_ssl(vm, arg, any_cert_option);
-    if (!ssl_options)
-      return std::nullopt;
-    config.ssl_options = std::move(*ssl_options);
 
     return {std::move(config)};
   }

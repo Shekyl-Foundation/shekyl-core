@@ -47,36 +47,42 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **epee HTTP listener + `--no-rust-rpc`: delete** (added 2026-07-09,
-  surfaced during claim-builder PR 1 when the dual-registration question —
-  "why does a new RPC method register in two dispatch maps?" — forced a
-  liveness check on the epee path). The Rust/Axum server has been the sole
-  default RPC transport since the standard-port cutover: `daemon.cpp` passes
-  `bind_epee_listener = false` whenever Rust RPC is enabled (the default),
-  a failed Axum bind is fatal (the epee fallback scaffolding is already
-  gone), and the epee acceptor binds **only** under the explicit
-  `--no-rust-rpc` escape hatch. That flag is a live-but-unused code path
-  touching untrusted input (an HTTP listener), which is exactly the dead
-  weight rule 15 says to delete — it should already have been deleted with
-  the fallback scaffolding. **Deletion scope (transport only):** the
-  `--no-rust-rpc` flag (`src/daemon/command_line_args.h`) and its `daemon.cpp`
-  consumption; the `bind_epee_listener` init plumbing; `core_rpc_server`'s
-  `epee::http_server_impl_base` inheritance and the epee dispatch macros
-  (`MAP_JON_RPC_WE` / URI auto-maps in `src/rpc/core_rpc_server.h`) — after
-  which new RPC methods register in `core_rpc_ffi.cpp`'s tables **only**;
-  `tests/rpc_comparison/compare_rpc.sh` (dual-server-era harness).
-  **Explicitly not in scope:** epee KV serialization (both dispatch paths
-  serialize through it; replaced separately per `DAEMON_RPC_RUST.md`
-  Phase 2), `epee::wipeable_string` (separate item above), Levin P2P
-  (Phase 3). **Verification gate for the deletion PR:** the outstanding
-  cutover item from `DAEMON_RPC_RUST.md` — wallet sync against an Axum-only
-  daemon (block sync via `/getblocks.bin`, curve-tree path fetch via
-  `get_curve_tree_path`), since the deletion removes the last non-Axum
-  transport. Reversion clause (rule 21): reopens **iff** that verification
-  surfaces an Axum transport gap epee currently covers; re-evaluation shape:
-  fix the Axum gap in the deletion PR (the disposition is never
-  "keep epee" — the gap is the bug). *Target: V3.0 (pre-genesis; no users,
-  no compatibility window — rule 16's user-protection-defaults inversion).*
+- **Daemon Axum: onion-as-remote-RPC docs + operator story** (added
+  2026-07-10, epee HTTP listener deletion). shekyld no longer exposes
+  inbound `--rpc-login` / `--rpc-ssl*`. Local = plaintext loopback;
+  remote = onion (`has_strong_verification`) or reverse proxy outside
+  the daemon. Document the operator path (Tor HS / proxy) in USER_GUIDE
+  / ops docs. **Not** “implement x509 `--rpc-ssl` inside Axum.”
+  **Reopening criterion for in-daemon clearnet TLS/digest auth:** named
+  production need + threat-model review. *Target: V3.0.*
+
+- **Daemon Axum: enforce `--rpc-max-connections*` (currently inert)**
+  (added 2026-07-10). Connection-limit CLI args still validate at init
+  for config compatibility but Axum does not apply them. DoS hardening
+  belongs here. *Target: V3.1.*
+
+- **Daemon Axum: `rpc_connections_count` always 0** (added 2026-07-10).
+  `get_info` / related fields stub to 0 after epee listener removal.
+  Expose a real counter from the Axum server when operators need it.
+  Naturally pairs with the `--rpc-max-connections*` enforcement item
+  above: one connection-tracking Axum listener adapter (accept →
+  enforce caps + increment; connection close → decrement) supplies both
+  the caps and the live count. *Target: V3.1.*
+
+- **Trezor test harness: migrate `mock_rpc_daemon` off epee HTTP map**
+  (added 2026-07-10, epee HTTP listener deletion). `tests/trezor/daemon.h`
+  subclasses `core_rpc_server` and drives it via the epee
+  `CHAIN_HTTP_TO_MAP2` / `handle_http_request_map` request map, which was
+  removed with the listener. The harness only builds under `TREZOR_DEBUG`
+  (off in CI), so this does not gate the default build, but it must be
+  ported to exercise the Axum surface (or the in-process handler calls)
+  before `TREZOR_DEBUG` runs are restored. *Target: V3.1.*
+
+- **Daemon RPC: restricted-method dual-list single-source** (added
+  2026-07-10). Axum `RESTRICTED_METHODS` and any remaining C++ notions
+  of “admin-only” should share one table. Note-only until a consumer
+  drifts. *Target: V3.1.*
+
 
 - **Phase 4b: `rescan_blockchain` needs an Engine rescan API** (added
   2026-07-09). Wallet-rpc OpenAPI specifies `rescan_blockchain` (full
@@ -11290,6 +11296,16 @@ reference.
 ## Recently resolved (audit trail)
 
 Retained for citation in review; each links to the canonical record.
+
+- **epee HTTP listener + `--no-rust-rpc` deleted (closed 2026-07-10,
+  `chore/delete-epee-http-listener`).** Phase 1 transport cutover:
+  Axum sole daemon HTTP acceptor; `core_rpc_server` decoupled from
+  `http_server_impl_base`; MAP macros gone; daemon inbound
+  `--rpc-login`/`--rpc-ssl*` unregistered; CORS default-deny;
+  `get_output_distribution` chain deleted; `compare_rpc.sh` deleted.
+  Canonical: `docs/DAEMON_RPC_RUST.md`. Residue FOLLOWUPS: onion
+  operator docs, inert connection limits, `rpc_connections_count`,
+  restricted-method dual-list.
 
 - **Archival-funding demand-insulation sim — F-B1c-c2 (b)-reopen
   CLOSED, (a) stands permanently (closed 2026-07-09, resolution staged

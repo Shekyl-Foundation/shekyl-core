@@ -234,7 +234,6 @@ const std::unordered_map<std::string, bin_fn>& get_bin_table() {
         DBIN("/get_hashes.bin",            on_get_hashes,                  COMMAND_RPC_GET_HASHES_FAST),
         DBIN("/gethashes.bin",             on_get_hashes,                  COMMAND_RPC_GET_HASHES_FAST),
         DBIN("/get_o_indexes.bin",         on_get_indexes,                 COMMAND_RPC_GET_TX_GLOBAL_OUTPUTS_INDEXES),
-        DBIN("/get_output_distribution.bin", on_get_output_distribution_bin, COMMAND_RPC_GET_OUTPUT_DISTRIBUTION),
     };
     return t;
 }
@@ -399,7 +398,6 @@ const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
         DJRPC_WE("relay_tx",              on_relay_tx,                    COMMAND_RPC_RELAY_TX),
         DJRPC_WE("sync_info",             on_sync_info,                   COMMAND_RPC_SYNC_INFO),
         DJRPC_WE("get_txpool_backlog",     on_get_txpool_backlog,         COMMAND_RPC_GET_TRANSACTION_POOL_BACKLOG),
-        DJRPC_WE("get_output_distribution", on_get_output_distribution,   COMMAND_RPC_GET_OUTPUT_DISTRIBUTION),
         DJRPC_WE("prune_blockchain",       on_prune_blockchain,           COMMAND_RPC_PRUNE_BLOCKCHAIN),
         DJRPC_WE("flush_cache",            on_flush_cache,                COMMAND_RPC_FLUSH_CACHE),
         // FCMP++ curve-tree membership-path endpoints. The handlers + KV-serializable

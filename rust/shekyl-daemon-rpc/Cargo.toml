@@ -64,6 +64,8 @@ shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 shekyl-consensus = { path = "../shekyl-consensus" }
 rand_chacha = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+http = "1"
 
 [build-dependencies]
 # Consensus-constant generation from config/consensus_constants.json (the

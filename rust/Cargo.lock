@@ -3863,6 +3863,7 @@ dependencies = [
  "axum",
  "curve25519-dalek",
  "hex",
+ "http",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "serde",
@@ -3882,6 +3883,7 @@ dependencies = [
  "shekyl-wire",
  "thiserror",
  "tokio",
+ "tower",
  "tower-http",
  "tracing",
 ]

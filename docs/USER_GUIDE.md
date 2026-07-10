@@ -158,13 +158,15 @@ example.
 
 | Flag | Description |
 |------|-------------|
-| `--rpc-bind-port <port>` | HTTP RPC listen port (default: 11029 mainnet) |
+| `--rpc-bind-port <port>` | HTTP RPC listen port (default: 11029 mainnet); Axum is the sole transport |
 | `--rpc-bind-ip <addr>` | Bind address for RPC (default: 127.0.0.1) |
-| `--rpc-login <user:pass>` | Require HTTP digest authentication |
 | `--restricted-rpc` | Disable admin endpoints (safe for public-facing nodes) |
-| `--rpc-ssl <mode>` | `enabled`, `disabled`, or `autodetect` |
+| `--rpc-access-control-origins <list>` | Comma-separated CORS allow-list (default: deny) |
 | `--confirm-external-bind` | Required when binding RPC to 0.0.0.0 |
-| `--no-rust-rpc` | Disable the Axum-based Rust RPC transport (on by default) |
+
+shekyld does **not** accept `--rpc-login` or `--rpc-ssl*` (inbound RPC is
+plaintext). Use loopback locally; for remote access prefer an onion service
+or a reverse proxy. Wallet-RPC retains login/SSL flags for its own listener.
 
 **Peer-to-peer**
 

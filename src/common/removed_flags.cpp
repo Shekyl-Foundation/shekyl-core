@@ -41,19 +41,51 @@ namespace shekyl { namespace cli {
 
 namespace {
 
-// Flags removed in V3.1 when the daemonizer was deleted. The table is
-// the single source of truth — CHANGELOG.md and FOLLOWUPS.md reference
-// it by name rather than duplicating the list, so editing this array
-// keeps documentation in sync automatically.
-constexpr std::array<std::string_view, 7> REMOVED_FLAGS = {
-  "detach",
-  "pidfile",
-  "install-service",
-  "uninstall-service",
-  "start-service",
-  "stop-service",
-  "run-as-service",
+// Why a flag was removed — selects the migration message shown to the
+// operator. Carrying the reason in the table (rather than a second list)
+// preserves the single-source-of-truth property the docs rely on.
+enum class removed_reason
+{
+  daemonizer,   // background execution / Windows service management (V3.1)
+  rpc_tls_auth, // shekyld inbound TLS/auth surface, moved off the daemon
+  rust_rpc,     // transitional epee HTTP fallback and its opt-out flag
 };
+
+struct removed_flag
+{
+  std::string_view name;
+  removed_reason reason;
+};
+
+// Flags removed across the V3.1 daemon surface. This table is the single
+// source of truth — CHANGELOG.md and FOLLOWUPS.md reference it by name
+// rather than duplicating the list, so editing this array keeps the
+// documentation in sync automatically.
+constexpr std::array<removed_flag, 16> REMOVED_FLAGS = {{
+  // Daemonizer, deleted in V3.1 (background execution / service management).
+  {"detach",                       removed_reason::daemonizer},
+  {"pidfile",                      removed_reason::daemonizer},
+  {"install-service",              removed_reason::daemonizer},
+  {"uninstall-service",            removed_reason::daemonizer},
+  {"start-service",                removed_reason::daemonizer},
+  {"stop-service",                 removed_reason::daemonizer},
+  {"run-as-service",               removed_reason::daemonizer},
+  // shekyld inbound TLS/auth surface: the daemon RPC listener is now
+  // plaintext loopback; remote/authenticated access moves to an onion
+  // service or reverse proxy. Wallet-RPC keeps its own copies of these
+  // flags (registered there, so they never reach this shim).
+  {"rpc-login",                    removed_reason::rpc_tls_auth},
+  {"rpc-ssl",                      removed_reason::rpc_tls_auth},
+  {"rpc-ssl-private-key",          removed_reason::rpc_tls_auth},
+  {"rpc-ssl-certificate",          removed_reason::rpc_tls_auth},
+  {"rpc-ssl-ca-certificates",      removed_reason::rpc_tls_auth},
+  {"rpc-ssl-allowed-fingerprints", removed_reason::rpc_tls_auth},
+  {"rpc-ssl-allow-chained",        removed_reason::rpc_tls_auth},
+  {"rpc-ssl-allow-any-cert",       removed_reason::rpc_tls_auth},
+  // Transitional epee HTTP fallback opt-out: the Rust (Axum) listener is
+  // now the only RPC server.
+  {"no-rust-rpc",                  removed_reason::rust_rpc},
+}};
 
 // boost::program_options::unknown_option::get_option_name() returns the
 // offending flag without a leading "--" (it's stripped during parsing).
@@ -64,13 +96,13 @@ std::string_view strip_leading_dashes(std::string_view s)
   return s;
 }
 
-bool is_removed(std::string_view flag)
+removed_flag const * find_removed(std::string_view flag)
 {
-  for (std::string_view const & removed : REMOVED_FLAGS)
+  for (removed_flag const & rf : REMOVED_FLAGS)
   {
-    if (flag == removed) return true;
+    if (flag == rf.name) return &rf;
   }
-  return false;
+  return nullptr;
 }
 
 } // namespace
@@ -88,15 +120,35 @@ bool handle_removed_flag(
   auto const eq = view.find('=');
   if (eq != std::string_view::npos) view = view.substr(0, eq);
 
-  if (!is_removed(view)) return false;
+  removed_flag const * const rf = find_removed(view);
+  if (rf == nullptr) return false;
 
-  std::cerr <<
-    "Error: '--" << view << "' was removed in V3.1. Background execution is now\n"
-    "handled by systemd (Linux), launchd (macOS), Task Scheduler (Windows), or\n"
-    "the Tauri sidecar (GUI wallet). Windows service management (install /\n"
-    "uninstall / start / stop) is likewise delegated to the platform service\n"
-    "manager. See docs/INSTALLATION_GUIDE.md for process-manager examples.\n"
-    << binary_name << " exiting.\n";
+  switch (rf->reason)
+  {
+    case removed_reason::daemonizer:
+      std::cerr <<
+        "Error: '--" << view << "' was removed in V3.1. Background execution is now\n"
+        "handled by systemd (Linux), launchd (macOS), Task Scheduler (Windows), or\n"
+        "the Tauri sidecar (GUI wallet). Windows service management (install /\n"
+        "uninstall / start / stop) is likewise delegated to the platform service\n"
+        "manager. See docs/INSTALLATION_GUIDE.md for process-manager examples.\n";
+      break;
+    case removed_reason::rpc_tls_auth:
+      std::cerr <<
+        "Error: '--" << view << "' was removed in V3.1. The shekyld RPC listener is\n"
+        "plaintext loopback with no built-in TLS or digest auth. For remote or\n"
+        "authenticated access, front the daemon with an onion service or a reverse\n"
+        "proxy outside the daemon (see docs/DAEMON_RPC_RUST.md and docs/USER_GUIDE.md).\n"
+        "The wallet RPC server keeps its own --rpc-login / --rpc-ssl* flags.\n";
+      break;
+    case removed_reason::rust_rpc:
+      std::cerr <<
+        "Error: '--" << view << "' was removed in V3.1. The Rust (Axum) RPC listener\n"
+        "is now the only RPC server; the transitional epee HTTP fallback was deleted,\n"
+        "so this flag no longer has any effect (see docs/DAEMON_RPC_RUST.md).\n";
+      break;
+  }
+  std::cerr << binary_name << " exiting.\n";
   return true;
 }
 
