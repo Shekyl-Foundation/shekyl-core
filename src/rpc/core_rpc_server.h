@@ -82,10 +82,6 @@ namespace cryptonote
         const std::string& port,
         const std::string& proxy = {}
       );
-    //! No-op: Axum owns the HTTP listener; retained so daemon teardown stays uniform.
-    bool deinit() { return true; }
-    void send_stop_signal() {}
-    bool timed_wait_server_stop(uint64_t) { return true; }
     //! Always 0: Axum does not yet expose an RPC connection count (FOLLOWUPS).
     size_t get_connections_count() const { return 0; }
     network_type nettype() const { return m_core.get_nettype(); }

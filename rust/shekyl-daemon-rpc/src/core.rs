@@ -78,7 +78,9 @@ impl CoreRpc {
     /// rc -1 = bad request (parse failure), rc -2 = internal error.
     pub fn bin_endpoint(&self, uri: &str, body: &[u8]) -> Result<Vec<u8>, i32> {
         if self.handle.is_null() {
-            return Err(-1);
+            // A null handle is an internal invariant violation, not a malformed
+            // request, so report the internal-error code (-2), not -1.
+            return Err(-2);
         }
         let c_uri = CString::new(uri).map_err(|_| -2i32)?;
         let mut out_buf: *mut u8 = std::ptr::null_mut();

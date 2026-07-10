@@ -66,12 +66,26 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
     } else {
         match std::ffi::CStr::from_ptr(cors_origins).to_str() {
             Ok("") => Vec::new(),
-            Ok(s) => s
-                .split(',')
-                .map(str::trim)
-                .filter(|o| !o.is_empty())
-                .map(str::to_owned)
-                .collect(),
+            Ok(s) => {
+                let parsed: Vec<String> = s
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|o| !o.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                if parsed.is_empty() {
+                    // A non-empty value that trims to nothing (e.g. " , " or a
+                    // stray trailing comma) is almost certainly a misconfig, and
+                    // would otherwise be silently indistinguishable from unset
+                    // (CORS default-deny). Surface it instead of failing quietly.
+                    tracing::warn!(
+                        raw = %s,
+                        "--rpc-access-control-origins contained no usable origins after \
+                         trimming; CORS is default-deny (all cross-origin requests rejected)"
+                    );
+                }
+                parsed
+            }
             Err(_) => return std::ptr::null_mut(),
         }
     };

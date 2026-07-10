@@ -202,14 +202,9 @@ struct t_internals {
 
   ~t_internals()
   {
-    // rpcs: deinit via their own dtors below; explicit deinit for symmetry with
-    // the old t_rpc::~t_rpc().
-    for (auto & rpc : rpcs)
-    {
-      MGINFO("Deinitializing " << rpc.description << " RPC server...");
-      try { rpc.server->deinit(); }
-      catch (...) { MERROR("Failed to deinitialize " << rpc.description << " RPC server..."); }
-    }
+    // Axum RPC servers are already stopped via shekyl_daemon_rpc_stop() in
+    // Daemon::run()/stop(); the core_rpc_server objects are torn down when
+    // `rpcs` is destroyed below. No explicit RPC deinit step remains.
 
     MGINFO("Deinitializing p2p...");
     try { p2p.deinit(); }

@@ -64,7 +64,19 @@ sustainability is unaffected by the recalibration.
 - **Daemon Axum: `rpc_connections_count` always 0** (added 2026-07-10).
   `get_info` / related fields stub to 0 after epee listener removal.
   Expose a real counter from the Axum server when operators need it.
-  *Target: V3.1.*
+  Naturally pairs with the `--rpc-max-connections*` enforcement item
+  above: one connection-tracking Axum listener adapter (accept →
+  enforce caps + increment; connection close → decrement) supplies both
+  the caps and the live count. *Target: V3.1.*
+
+- **Trezor test harness: migrate `mock_rpc_daemon` off epee HTTP map**
+  (added 2026-07-10, epee HTTP listener deletion). `tests/trezor/daemon.h`
+  subclasses `core_rpc_server` and drives it via the epee
+  `CHAIN_HTTP_TO_MAP2` / `handle_http_request_map` request map, which was
+  removed with the listener. The harness only builds under `TREZOR_DEBUG`
+  (off in CI), so this does not gate the default build, but it must be
+  ported to exercise the Axum surface (or the in-process handler calls)
+  before `TREZOR_DEBUG` runs are restored. *Target: V3.1.*
 
 - **Daemon RPC: restricted-method dual-list single-source** (added
   2026-07-10). Axum `RESTRICTED_METHODS` and any remaining C++ notions

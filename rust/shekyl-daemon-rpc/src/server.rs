@@ -76,10 +76,27 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
     if origins.is_empty() {
         return CorsLayer::new();
     }
-    let allowed: Vec<HeaderValue> = origins
-        .iter()
-        .filter_map(|o| HeaderValue::from_str(o).ok())
-        .collect();
+    let mut allowed: Vec<HeaderValue> = Vec::with_capacity(origins.len());
+    for o in origins {
+        match HeaderValue::from_str(o) {
+            Ok(v) => allowed.push(v),
+            // Don't drop a malformed origin silently — a typo/stray space that
+            // fails header parsing would otherwise vanish with no diagnostic.
+            Err(_) => tracing::warn!(
+                origin = %o,
+                "ignoring invalid --rpc-access-control-origins entry (not a valid HTTP header value)"
+            ),
+        }
+    }
+    if allowed.is_empty() {
+        // Every configured origin failed to parse: CORS collapses to deny-all,
+        // which looks identical to default-deny. Warn so the operator can tell
+        // a broken allow-list from an unset one.
+        tracing::warn!(
+            "all configured --rpc-access-control-origins were invalid; CORS is \
+             default-deny (all cross-origin requests rejected)"
+        );
+    }
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(allowed))
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
@@ -138,21 +155,14 @@ pub fn build_router(state: Arc<AppState>, cors_origins: &[String]) -> Router {
         )
         .route("/get_info", get(json::get_info).post(json::get_info))
         .route("/getinfo", get(json::get_info).post(json::get_info))
-        .route("/get_limit", get(json::get_limit).post(json::get_limit))
-        // Binary endpoints (always available)
-        .route("/get_blocks.bin", post(binary::get_blocks))
-        .route("/getblocks.bin", post(binary::get_blocks))
-        .route(
-            "/get_blocks_by_height.bin",
-            post(binary::get_blocks_by_height),
-        )
-        .route(
-            "/getblocks_by_height.bin",
-            post(binary::get_blocks_by_height),
-        )
-        .route("/get_hashes.bin", post(binary::get_hashes))
-        .route("/gethashes.bin", post(binary::get_hashes))
-        .route("/get_o_indexes.bin", post(binary::get_o_indexes));
+        .route("/get_limit", get(json::get_limit).post(json::get_limit));
+
+    // Binary endpoints (always available) — registered from the shared
+    // `binary_routes()` table so `binary_uri_paths()` (and the guard test that
+    // uses it) stays authoritative and cannot drift from the live router.
+    for (path, handler) in binary_routes() {
+        router = router.route(path, handler);
+    }
 
     if !restricted {
         router = router
@@ -255,6 +265,21 @@ pub async fn serve_with_listener(
         },
         config.bind_address
     );
+    // Surface the CORS posture at startup. Default-deny is intentional (a
+    // browser cannot reach an unconfigured daemon cross-origin), but it changed
+    // from the old permissive reflection, so make it observable rather than a
+    // silent "my web UI stopped working after upgrade".
+    if config.cors_origins.is_empty() {
+        info!(
+            "RPC CORS: default-deny (no --rpc-access-control-origins set; browser \
+             clients cannot make cross-origin requests to this daemon)"
+        );
+    } else {
+        info!(
+            "RPC CORS: allow-list of {} configured origin(s)",
+            config.cors_origins.len()
+        );
+    }
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async move { shutdown.notified().await })
@@ -274,19 +299,35 @@ pub async fn run_server(
     serve_with_listener(core, config, listener, shutdown).await
 }
 
-/// Binary URI paths registered by [`build_router`]. Kept as an explicit table
-/// so in-lane tests can assert deleted decoy surfaces stay gone without
-/// linking the C++ `core_rpc_ffi` symbols (`cargo test -p shekyl-daemon-rpc`
-/// has no daemon image).
-pub const BINARY_URI_PATHS: &[&str] = &[
-    "/get_blocks.bin",
-    "/getblocks.bin",
-    "/get_blocks_by_height.bin",
-    "/getblocks_by_height.bin",
-    "/get_hashes.bin",
-    "/gethashes.bin",
-    "/get_o_indexes.bin",
-];
+/// Binary (`.bin`) routes as `(path, handler)` pairs. [`build_router`]
+/// registers directly from this table and [`binary_uri_paths`] derives its
+/// path list from it, so the two cannot drift: adding or removing a real
+/// binary route here updates both the router and the guard test at once.
+fn binary_routes() -> [(&'static str, axum::routing::MethodRouter<Arc<AppState>>); 7] {
+    [
+        ("/get_blocks.bin", post(binary::get_blocks)),
+        ("/getblocks.bin", post(binary::get_blocks)),
+        (
+            "/get_blocks_by_height.bin",
+            post(binary::get_blocks_by_height),
+        ),
+        (
+            "/getblocks_by_height.bin",
+            post(binary::get_blocks_by_height),
+        ),
+        ("/get_hashes.bin", post(binary::get_hashes)),
+        ("/gethashes.bin", post(binary::get_hashes)),
+        ("/get_o_indexes.bin", post(binary::get_o_indexes)),
+    ]
+}
+
+/// Binary URI paths registered by [`build_router`], derived from the same
+/// [`binary_routes`] table the router is built from. Lets in-lane tests assert
+/// deleted decoy surfaces stay gone without linking the C++ `core_rpc_ffi`
+/// symbols (`cargo test -p shekyl-daemon-rpc` has no daemon image).
+pub fn binary_uri_paths() -> Vec<&'static str> {
+    binary_routes().into_iter().map(|(path, _)| path).collect()
+}
 
 #[cfg(test)]
 mod tests {
@@ -298,13 +339,15 @@ mod tests {
 
     #[test]
     fn output_distribution_bin_not_registered() {
+        // Derived from the same `binary_routes()` table `build_router` registers
+        // from, so this tracks the live routes rather than a hand-kept copy.
+        let paths = binary_uri_paths();
         assert!(
-            !BINARY_URI_PATHS.contains(&"/get_output_distribution.bin"),
+            !paths.contains(&"/get_output_distribution.bin"),
             "decoy distribution binary route must stay deleted"
         );
-        // Spot-check the live table still matches the routes wired above.
-        assert!(BINARY_URI_PATHS.contains(&"/get_blocks.bin"));
-        assert!(BINARY_URI_PATHS.contains(&"/get_o_indexes.bin"));
+        assert!(paths.contains(&"/get_blocks.bin"));
+        assert!(paths.contains(&"/get_o_indexes.bin"));
     }
 
     #[tokio::test]
