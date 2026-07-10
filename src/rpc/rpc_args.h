@@ -73,10 +73,19 @@ namespace cryptonote
     // `allow_any_cert` bool toggles `--rpc-ssl-allow-any-cert` configuration
 
     static const char* tr(const char* str);
-    static void init_options(boost::program_options::options_description& desc, const bool any_cert_option = false);
+    //! Register RPC bind/CORS options. When `include_listener_tls_auth` is
+    //! false (daemon), `--rpc-login` and `--rpc-ssl*` are not registered —
+    //! inbound daemon RPC is Axum plaintext. Wallet-RPC passes true.
+    static void init_options(
+        boost::program_options::options_description& desc,
+        const bool any_cert_option = false,
+        const bool include_listener_tls_auth = true);
 
     //! \return Arguments specified by user, or `std::nullopt` if error
-    static std::optional<rpc_args> process(const boost::program_options::variables_map& vm, const bool any_cert_option = false);
+    static std::optional<rpc_args> process(
+        const boost::program_options::variables_map& vm,
+        const bool any_cert_option = false,
+        const bool include_listener_tls_auth = true);
 
     //! \return SSL arguments specified by user, or `std::nullopt` if error
     static std::optional<epee::net_utils::ssl_options_t> process_ssl(const boost::program_options::variables_map& vm, const bool any_cert_option = false);
