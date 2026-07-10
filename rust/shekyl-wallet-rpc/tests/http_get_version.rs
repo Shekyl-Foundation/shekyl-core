@@ -636,7 +636,11 @@ async fn create_wallet_file_exists() {
         }),
     )
     .await;
-    assert!(first.get("error").is_none(), "{first}");
+    assert!(
+        first.get("error").is_none(),
+        "{:?}",
+        redact_create_wallet_response(&first)
+    );
     let _ = rpc(
         state.clone(),
         json!({
@@ -696,7 +700,11 @@ async fn spawn_in_process_with_lifecycle() {
     stream.read_to_end(&mut buf).await.unwrap();
     let text = String::from_utf8_lossy(&buf);
     let json: Value = serde_json::from_str(http_body(&text)).expect("parse body");
-    assert!(json.get("error").is_none(), "{json}");
+    assert!(
+        json.get("error").is_none(),
+        "{:?}",
+        redact_create_wallet_response(&json)
+    );
     assert_eq!(json["result"]["wallet"]["name"], "cli");
 
     handle.shutdown().await.expect("shutdown");
