@@ -5,44 +5,53 @@
 
 //! JSON-RPC method dispatch.
 //!
-//! Phase 4a implements `get_version` only. Every other SPECIFIED name from
-//! `docs/api/wallet_rpc.yaml` returns `-32601 method not found` until its
-//! 4b sub-PR lands — the method exists in the contract but is not yet
-//! callable (rule 21: do not pre-provision fake success responses).
+//! Phase 4b: `get_version`, lifecycle, read queries, `refresh`, and
+//! send lifecycle. `rescan_blockchain` stays `-32601`.
 
 use serde_json::Value;
+use shekyl_crypto_pq::wallet_envelope::KdfParams;
 
 use crate::error::WalletRpcError;
+use crate::lifecycle;
+use crate::queries;
+use crate::send;
+use crate::sync;
+use crate::tenant::TenantState;
 use crate::types::{GetVersionResult, API_VERSION};
 use crate::VERSION;
 
 /// Dispatch a validated JSON-RPC method call.
-pub fn dispatch(method: &str, params: &Value) -> Result<Value, WalletRpcError> {
+pub async fn dispatch(
+    tenants: &tokio::sync::Mutex<TenantState>,
+    method: &str,
+    params: &Value,
+    kdf: KdfParams,
+) -> Result<Value, WalletRpcError> {
+    // Single routing table: method name → leaf handler. Keeping this the only
+    // place method names are matched avoids the drift a per-module second
+    // dispatch would invite (a new method silently 404ing on a missed arm).
+    // `rescan_blockchain` stays `-32601` (RESERVED) until Engine grows a
+    // rescan API — it falls through to the `MethodNotFound` arm.
     match method {
         "get_version" => get_version(params),
-        // SPECIFIED in the OpenAPI contract but not yet implemented (4b).
-        "create_wallet"
-        | "open_wallet"
-        | "close_wallet"
-        | "change_password"
-        | "get_balance"
-        | "get_primary_address"
-        | "build_pending_tx"
-        | "submit_pending_tx"
-        | "discard_pending_tx"
-        | "get_transfers"
-        | "get_transfer_by_id"
-        | "refresh"
-        | "rescan_blockchain"
-        | "get_height" => Err(WalletRpcError::MethodNotFound(method.to_owned())),
+        "create_wallet" => lifecycle::create_wallet(tenants, params, kdf).await,
+        "open_wallet" => lifecycle::open_wallet(tenants, params).await,
+        "close_wallet" => lifecycle::close_wallet(tenants, params).await,
+        "change_password" => lifecycle::change_password(tenants, params).await,
+        "get_balance" => queries::get_balance(tenants, params).await,
+        "get_primary_address" => queries::get_primary_address(tenants, params).await,
+        "get_transfers" => queries::get_transfers(tenants, params).await,
+        "get_transfer_by_id" => queries::get_transfer_by_id(tenants, params).await,
+        "get_height" => queries::get_height(tenants, params).await,
+        "refresh" => sync::refresh(tenants, params).await,
+        "build_pending_tx" => send::build_pending_tx(tenants, params).await,
+        "submit_pending_tx" => send::submit_pending_tx(tenants, params).await,
+        "discard_pending_tx" => send::discard_pending_tx(tenants, params).await,
         other => Err(WalletRpcError::MethodNotFound(other.to_owned())),
     }
 }
 
 fn get_version(params: &Value) -> Result<Value, WalletRpcError> {
-    // Spec: GetVersionParams is an empty object (or omitted). Reject
-    // unexpected non-object / non-null params so clients cannot smuggle
-    // fields that later become load-bearing.
     match params {
         Value::Null => {}
         Value::Object(map) if map.is_empty() => {}
@@ -78,36 +87,103 @@ pub fn get_version_result() -> GetVersionResult {
 mod tests {
     use super::*;
     use crate::error::WalletRpcErrorCode;
+    use crate::tenant::TenantState;
     use serde_json::json;
+    use shekyl_engine_core::Network;
 
-    #[test]
-    fn get_version_null_params() {
-        let v = dispatch("get_version", &Value::Null).expect("ok");
+    fn test_tenants() -> tokio::sync::Mutex<TenantState> {
+        tokio::sync::Mutex::new(TenantState::new(
+            std::env::temp_dir(),
+            Network::Stagenet,
+            "http://127.0.0.1:1".into(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn get_version_null_params() {
+        let tenants = test_tenants();
+        let v = dispatch(&tenants, "get_version", &Value::Null, KdfParams::default())
+            .await
+            .expect("ok");
         assert_eq!(v["api_version"], API_VERSION);
         assert_eq!(v["version"], VERSION);
     }
 
-    #[test]
-    fn get_version_empty_object() {
-        let v = dispatch("get_version", &json!({})).expect("ok");
+    #[tokio::test]
+    async fn get_version_empty_object() {
+        let tenants = test_tenants();
+        let v = dispatch(&tenants, "get_version", &json!({}), KdfParams::default())
+            .await
+            .expect("ok");
         assert_eq!(v["api_version"], API_VERSION);
     }
 
-    #[test]
-    fn get_version_rejects_extra_fields() {
-        let err = dispatch("get_version", &json!({"x": 1})).unwrap_err();
+    #[tokio::test]
+    async fn get_version_rejects_extra_fields() {
+        let tenants = test_tenants();
+        let err = dispatch(
+            &tenants,
+            "get_version",
+            &json!({"x": 1}),
+            KdfParams::default(),
+        )
+        .await
+        .unwrap_err();
         assert_eq!(err.code(), WalletRpcErrorCode::InvalidParams);
     }
 
-    #[test]
-    fn unimplemented_specified_method_is_method_not_found() {
-        let err = dispatch("create_wallet", &json!({})).unwrap_err();
+    #[tokio::test]
+    async fn unimplemented_specified_method_is_method_not_found() {
+        let tenants = test_tenants();
+        let err = dispatch(
+            &tenants,
+            "rescan_blockchain",
+            &json!({}),
+            KdfParams::default(),
+        )
+        .await
+        .unwrap_err();
         assert_eq!(err.code(), WalletRpcErrorCode::MethodNotFound);
     }
 
-    #[test]
-    fn unknown_method_is_method_not_found() {
-        let err = dispatch("getbalance", &Value::Null).unwrap_err();
+    #[tokio::test]
+    async fn send_without_open_wallet_is_wallet_not_open() {
+        let tenants = test_tenants();
+        let err = dispatch(
+            &tenants,
+            "discard_pending_tx",
+            &json!({ "pending_tx_id": "1" }),
+            KdfParams::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
+    }
+
+    #[tokio::test]
+    async fn refresh_without_open_wallet_is_wallet_not_open() {
+        let tenants = test_tenants();
+        let err = dispatch(&tenants, "refresh", &json!({}), KdfParams::default())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
+    }
+
+    #[tokio::test]
+    async fn unknown_method_is_method_not_found() {
+        let tenants = test_tenants();
+        let err = dispatch(&tenants, "getbalance", &Value::Null, KdfParams::default())
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), WalletRpcErrorCode::MethodNotFound);
+    }
+
+    #[tokio::test]
+    async fn query_without_open_wallet_is_wallet_not_open() {
+        let tenants = test_tenants();
+        let err = dispatch(&tenants, "get_balance", &json!({}), KdfParams::default())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
     }
 }

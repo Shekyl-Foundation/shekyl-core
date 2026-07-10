@@ -4,6 +4,34 @@
 
 ### Added
 
+- **wallet-rpc: Phase 4b send lifecycle** (`build_pending_tx`,
+  `submit_pending_tx`, `discard_pending_tx`). Async Engine methods;
+  `SendError` / `SubmitError` / `PendingTxError` map to
+  `-29100..-29107`. Discard is idempotent. `rescan_blockchain` remains
+  `-32601` (FOLLOWUPS). Phase 4b SPECIFIED methods complete except
+  rescan.
+
+- **wallet-rpc: Phase 4b refresh** (`refresh`). Calls
+  `Engine::refresh` with default `RefreshOptions`; maps
+  `RefreshError::AlreadyRunning` → `-29200` and daemon/scanner IO →
+  `-29201`. `rescan_blockchain` stays `-32601` until Engine grows an
+  explicit rescan API (`docs/FOLLOWUPS.md`).
+
+- **wallet-rpc: Phase 4b read queries** (`get_balance`,
+  `get_primary_address`, `get_transfers`, `get_transfer_by_id`,
+  `get_height`). Typed OpenAPI result structs + ledger projections
+  (no secrets on the wire). Empty-wallet balance is zeros; unknown
+  transfer id → `-29400`; daemon height failure → `-29201`.
+
+- **wallet-rpc: Phase 4b lifecycle slice 1** (`WALLET_REWRITE_PLAN.md`
+  Phase 4b; `docs/api/wallet_rpc.yaml`). `create_wallet`, `open_wallet`,
+  `close_wallet`, and `change_password` on `rust/shekyl-wallet-rpc`,
+  Engine-backed (`Engine::<SoloSigner>`). Tenant holds the open Engine;
+  CLI gains `--daemon-address` and `--network`. Create returns one-shot
+  backup material (`mnemonic` on mainnet/stagenet; `raw_seed_hex` on
+  testnet). Error mapping covers `-29000..-29005`. Remaining SPECIFIED
+  methods still return `-32601` until later 4b slices.
+
 - **tests: end-to-end archival budget conservation KAT — the C-1
   fast-follow (`REWARD_EMISSION_E3_GATING_ROUND.md` §9.9;
   `ARCHIVAL_BUDGET_SCHEDULE.md` §7 B1's connect-path counterpart).**

@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use shekyl_engine_core::Capability;
 
 use crate::error::WalletRpcError;
 
@@ -196,6 +197,191 @@ pub struct GetVersionResult {
     /// Monotonic API contract version (see [`API_VERSION`]).
     pub api_version: u32,
 }
+
+/// OpenAPI `CapabilityMode` for FULL wallets (Phase 4b create/open).
+pub const CAPABILITY_FULL: &str = "FULL";
+
+/// Map an Engine [`Capability`] to its OpenAPI `CapabilityMode` string.
+///
+/// Single source of truth for the `WalletHandle.capability` response field and
+/// the `CapabilityForbids` (`-29005`) `error.data.capability` field, so the two
+/// never disagree when a new capability variant lands.
+pub fn capability_mode_str(cap: Capability) -> &'static str {
+    match cap {
+        Capability::Full => CAPABILITY_FULL,
+        Capability::ViewOnly => "VIEW_ONLY",
+        Capability::HardwareOffload => "HARDWARE_OFFLOAD",
+    }
+}
+
+/// `WalletHandle` returned by lifecycle methods that leave a wallet open.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WalletHandle {
+    /// Wallet file stem within the served wallet directory.
+    pub name: String,
+    /// Capability mode (`FULL` / `VIEW_ONLY` / `HARDWARE_OFFLOAD`).
+    pub capability: String,
+    /// Network (`MAINNET` / `TESTNET` / `STAGENET`).
+    pub network: String,
+    /// Present when open reconstructed state from `restore_height_hint`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restore_height_hint: Option<i64>,
+}
+
+/// Atomic-units amount as a decimal string (OpenAPI `AtomicUnits`).
+pub type AtomicUnitsString = String;
+
+/// `get_balance` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetBalanceResult {
+    /// Spendable liquid balance (maps from unlocked until staking lands).
+    pub liquid: AtomicUnitsString,
+    /// Staked principal; `"0"` until Stage 3 stake methods land.
+    pub staked: AtomicUnitsString,
+    /// Unlocked / spendable now.
+    pub unlocked: AtomicUnitsString,
+    /// Claimable staking rewards; `"0"` until Stage 3.
+    pub claimable_rewards: AtomicUnitsString,
+    /// Awaiting-confirmation / in-flight spend lock.
+    pub pending: AtomicUnitsString,
+}
+
+/// `get_primary_address` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetPrimaryAddressResult {
+    /// Canonical Shekyl address string.
+    pub address: String,
+}
+
+/// `get_height` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetHeightResult {
+    /// Wallet synced height.
+    pub wallet_height: i64,
+    /// Daemon chain height.
+    pub daemon_height: i64,
+}
+
+/// Transfer direction (OpenAPI `Transfer.direction`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TransferDirection {
+    /// Received output.
+    Incoming,
+    /// Spent / sent (reserved for future outgoing projection).
+    Outgoing,
+}
+
+/// Transfer confirmation state (OpenAPI `Transfer.state`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TransferState {
+    /// Network-exposed spend awaiting confirmation.
+    Pending,
+    /// Confirmed on chain, unspent.
+    Confirmed,
+    /// Spent.
+    Spent,
+}
+
+/// Client-facing transfer projection (OpenAPI `Transfer`).
+///
+/// Accounting facts only — no key material, offsets, or commitments.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TransferView {
+    /// Stable per-wallet id (`{tx_hash_hex}:{internal_output_index}`).
+    pub id: String,
+    /// Incoming / outgoing.
+    pub direction: TransferDirection,
+    /// Transaction hash (lowercase hex).
+    pub tx_hash: String,
+    /// Output amount.
+    pub amount: AtomicUnitsString,
+    /// Fee when known; `"0"` for receive-side ledger rows.
+    pub fee: AtomicUnitsString,
+    /// Inclusion height.
+    pub block_height: i64,
+    /// Confirmation / spend state.
+    pub state: TransferState,
+    /// Height at which the output was spent, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spent_height: Option<i64>,
+}
+
+/// `get_transfers` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetTransfersResult {
+    /// Matching transfers.
+    pub transfers: Vec<TransferView>,
+}
+
+/// `get_transfer_by_id` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetTransferByIdResult {
+    /// The matching transfer.
+    pub transfer: TransferView,
+}
+
+/// `refresh` result (OpenAPI `RefreshResult`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RefreshResult {
+    /// Heights scanned this call.
+    pub blocks_processed: i64,
+    /// Detected transfers ingested this call.
+    pub transfers_detected: i64,
+    /// Wallet synced height after the refresh.
+    pub synced_height: i64,
+    /// Present iff a reorg was detected and rewound this refresh.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reorg_fork_height: Option<i64>,
+}
+
+/// `build_pending_tx` result (OpenAPI `BuildPendingTxResult`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BuildPendingTxResult {
+    /// Opaque reservation handle (`ReservationId::raw` decimal string).
+    pub pending_tx_id: String,
+    /// Engine synced height at build time.
+    pub built_at_height: i64,
+    /// Tip hash at build height (lowercase hex).
+    pub built_at_tip_hash: String,
+    /// Fee in atomic units.
+    pub fee: AtomicUnitsString,
+    /// CT-5d content generation; pass back as `seen_gen` on submit.
+    pub content_gen: i64,
+}
+
+/// Success verdict projection for `submit_pending_tx`.
+///
+/// Engine's async submit returns [`shekyl_engine_core::TxHash`] on the
+/// success path; pool/chain duplicate distinctions are not yet exposed
+/// on that surface, so successful submits project as [`Self::Accepted`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SubmitVerdictView {
+    /// Fresh accept / broadcast success.
+    Accepted,
+    /// Already in the mempool (reserved for when Engine surfaces it).
+    AlreadyInPool,
+    /// Already confirmed on chain (reserved for when Engine surfaces it).
+    AlreadyInChain,
+}
+
+/// `submit_pending_tx` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SubmitPendingTxResult {
+    /// Transaction hash (lowercase hex).
+    pub tx_hash: String,
+    /// Success verdict.
+    pub verdict: SubmitVerdictView,
+    /// Present iff verdict is `ALREADY_IN_CHAIN`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmed_height: Option<i64>,
+}
+
+/// `discard_pending_tx` result (empty object).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct DiscardPendingTxResult {}
 
 #[cfg(test)]
 mod tests {

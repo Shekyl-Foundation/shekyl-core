@@ -5,24 +5,45 @@
 
 //! Tenant isolation type for wallet-dir multi-tenancy.
 //!
-//! Phase 4a ships a single-tenant process: at most one open wallet. The
-//! `Tenant` type is the seam Phase 4b multi-tenant mode (`--wallet-dir`
-//! exchanges) will extend — separate lock + key material per wallet, no
-//! shared state (`WALLET_REWRITE_PLAN.md` §"Hard design questions for the
-//! RPC").
+//! Phase 4b: single-tenant process holds at most one open
+//! [`Engine`](shekyl_engine_core::Engine). The Engine is stored behind
+//! `Arc<RwLock<_>>` so long-running work (`refresh` via
+//! [`Engine::start_refresh`]) does not hold the process-level tenant
+//! mutex, and so concurrent read RPCs can share the Engine under a
+//! read lock. Multi-tenant `--wallet-dir` exchanges extend this seam
+//! later (`WALLET_REWRITE_PLAN.md`).
 
+use shekyl_engine_core::{Engine, SoloSigner};
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+use crate::error::WalletRpcError;
+
+/// Shared handle to the open Engine (read/write under the inner lock).
+pub type SharedEngine = Arc<RwLock<Engine<SoloSigner>>>;
 
 /// One wallet-bearing tenant inside the RPC process.
-///
-/// Phase 4a: the process holds zero or one tenant with an open wallet.
-/// The Engine handle lands in Phase 4b lifecycle; until then `open_name`
-/// records whether a wallet *would* be open (always `None` in 4a — no
-/// open/create methods yet).
 #[derive(Debug, Default)]
 pub struct Tenant {
     /// Wallet file stem currently open, if any.
     open_name: Option<String>,
+    /// Open Engine handle (FULL capability, SoloSigner).
+    engine: Option<SharedEngine>,
+    /// True while `create_wallet` / `open_wallet` is doing slow work
+    /// (daemon connect, Argon2) *outside* the tenant mutex. Prevents a
+    /// concurrent create/open from racing past `is_open` while the first
+    /// call has released the mutex. Cleared on success (`set_open`) or
+    /// failure ([`Self::clear_opening`]).
+    opening: bool,
+    /// True while `close_wallet` has taken the engine out of the slot
+    /// ([`Self::take_open`]) and is unwrapping / persisting *outside* the
+    /// tenant mutex. Prevents a concurrent create/open from claiming the
+    /// temporarily-empty slot mid-close — the close's failure path re-installs
+    /// via [`Self::set_open`] / [`Self::restore_open`], whose empty-slot
+    /// asserts would otherwise panic the server. Set by `take_open`; cleared
+    /// by the re-install paths or [`Self::clear_closing`] on close success.
+    closing: bool,
 }
 
 impl Tenant {
@@ -33,7 +54,27 @@ impl Tenant {
 
     /// Whether a wallet is currently open on this tenant.
     pub fn is_open(&self) -> bool {
-        self.open_name.is_some()
+        self.engine.is_some()
+    }
+
+    /// Whether a lifecycle transition (create/open/close) is in flight or a
+    /// wallet is already open.
+    ///
+    /// Lifecycle create/open refuse with `-29000` when this is true.
+    pub fn is_busy(&self) -> bool {
+        self.is_open() || self.opening || self.closing
+    }
+
+    /// Mark create/open in flight. Caller must hold the tenant mutex and
+    /// have already checked [`Self::is_busy`].
+    pub fn begin_opening(&mut self) {
+        debug_assert!(!self.is_busy());
+        self.opening = true;
+    }
+
+    /// Clear the in-flight create/open reservation (error path).
+    pub fn clear_opening(&mut self) {
+        self.opening = false;
     }
 
     /// Open wallet stem, if any.
@@ -41,35 +82,130 @@ impl Tenant {
         self.open_name.as_deref()
     }
 
-    /// Record an open wallet (Phase 4b lifecycle will call this).
-    pub fn set_open(&mut self, name: impl Into<String>) {
-        self.open_name = Some(name.into());
+    /// Clone the shared Engine handle, if a wallet is open.
+    pub fn engine(&self) -> Option<SharedEngine> {
+        self.engine.clone()
     }
 
-    /// Clear the open-wallet record (Phase 4b `close_wallet`).
-    pub fn clear_open(&mut self) {
-        self.open_name = None;
+    /// Install a freshly created / opened engine as the open wallet.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a wallet is already open — callers must check
+    /// [`Self::is_open`] and return `-29000` first.
+    pub fn set_open(&mut self, name: impl Into<String>, engine: Engine<SoloSigner>) {
+        assert!(
+            self.engine.is_none(),
+            "set_open called while a wallet is already open"
+        );
+        self.opening = false;
+        self.closing = false;
+        self.open_name = Some(name.into());
+        self.engine = Some(Arc::new(RwLock::new(engine)));
+    }
+
+    /// Take the open engine (for [`Engine::close`]), clearing the tenant slot.
+    ///
+    /// The name/engine pair is taken atomically: if either field is missing the
+    /// other is restored and this returns `None`, so a broken pair cannot clear
+    /// only the stem and leave an undiagnosable half-empty slot.
+    ///
+    /// On success the tenant is marked *closing* — [`Self::is_busy`] stays true
+    /// so a concurrent create/open cannot claim the emptied slot while the
+    /// close is unwrapping / persisting outside the tenant mutex. Every close
+    /// outcome must clear the reservation: the failure paths re-install via
+    /// [`set_open`](Self::set_open) / [`restore_open`](Self::restore_open)
+    /// (which clear it), and the success path calls
+    /// [`clear_closing`](Self::clear_closing).
+    ///
+    /// The caller should [`Arc::try_unwrap`](std::sync::Arc::try_unwrap) the
+    /// returned handle before close. If other clones still exist (e.g. an
+    /// in-flight refresh), the caller must [`restore_open`](Self::restore_open)
+    /// the handle and fail loud rather than evicting the still-live wallet.
+    pub fn take_open(&mut self) -> Option<(String, SharedEngine)> {
+        match (self.open_name.take(), self.engine.take()) {
+            (Some(name), Some(engine)) => {
+                self.closing = true;
+                Some((name, engine))
+            }
+            (None, None) => None,
+            (name, engine) => {
+                // Invariant: both are Some together, or both None. Restore both
+                // so a bug / future refactor cannot lose the stem alone.
+                debug_assert!(
+                    false,
+                    "tenant invariant violated: open_name/engine mismatch"
+                );
+                self.open_name = name;
+                self.engine = engine;
+                None
+            }
+        }
+    }
+
+    /// Re-install a handle previously removed by [`take_open`](Self::take_open)
+    /// when the close attempt could not proceed (another task still holds a
+    /// clone, or reservations are outstanding). Inverse of `take_open`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a wallet is already open — the slot must be empty, which it is
+    /// on the close path that just called `take_open`.
+    pub fn restore_open(&mut self, name: String, engine: SharedEngine) {
+        assert!(
+            self.engine.is_none(),
+            "restore_open called while a wallet is already open"
+        );
+        self.closing = false;
+        self.open_name = Some(name);
+        self.engine = Some(engine);
+    }
+
+    /// Clear the in-flight close reservation after the engine has been
+    /// successfully persisted and dropped (close success path). The failure
+    /// paths clear it implicitly by re-installing via
+    /// [`set_open`](Self::set_open) / [`restore_open`](Self::restore_open).
+    pub fn clear_closing(&mut self) {
+        self.closing = false;
     }
 }
 
-/// Process-level wallet directory + tenant slot.
+/// Clone the open Engine handle under a short tenant-mutex hold, or map the
+/// no-wallet-open case to [`WalletRpcError::WalletNotOpen`].
 ///
-/// Future multi-tenant mode will replace the single `tenant` with a map
-/// keyed by wallet name; Phase 4a keeps one slot so the type exists and
-/// panic-on-cross-tenant-leak checks have a place to live.
+/// The tenant mutex is released before the caller awaits the Engine lock, so a
+/// long-running RPC never holds the process-level mutex across its work.
+pub(crate) async fn require_open_engine(
+    tenants: &tokio::sync::Mutex<TenantState>,
+) -> Result<SharedEngine, WalletRpcError> {
+    let state = tenants.lock().await;
+    state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)
+}
+
+/// Process-level wallet directory + tenant slot + daemon/network binding.
 #[derive(Debug)]
 pub struct TenantState {
     /// Directory that holds wallet files for this process.
     pub wallet_dir: PathBuf,
-    /// The single tenant (Phase 4a).
+    /// Network every create/open binds to (CLI `--network`).
+    pub network: shekyl_engine_core::Network,
+    /// Daemon JSON-RPC base URL (CLI `--daemon-address`).
+    pub daemon_address: String,
+    /// The single tenant (Phase 4b).
     pub tenant: Tenant,
 }
 
 impl TenantState {
-    /// Construct tenant state for `wallet_dir`.
-    pub fn new(wallet_dir: PathBuf) -> Self {
+    /// Construct tenant state for `wallet_dir` on `network`.
+    pub fn new(
+        wallet_dir: PathBuf,
+        network: shekyl_engine_core::Network,
+        daemon_address: String,
+    ) -> Self {
         Self {
             wallet_dir,
+            network,
+            daemon_address,
             tenant: Tenant::new(),
         }
     }
