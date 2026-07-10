@@ -4,6 +4,32 @@
 
 ### Added
 
+- **rpc: emission claim-source query — claim-builder PR 1
+  (`EMISSION_CLAIM_BUILDER.md` §7 / §8 PR 1).** New daemon JSON-RPC
+  `get_archival_emission_claim_source` (both transports; RPC minor
+  bumped 17→18): request carries `p_id` **only**, response carries the
+  part-A claim context (bond record as `get_archival_bond_value`
+  returns it) plus one as-of-`E` snapshot per epoch in
+  `[claim_window_floor(settled), settled − 1]`, unconditionally. The
+  marshal helper (`src/rpc/archival_claim_source.cpp`) is a serializer
+  over the single landed gather
+  (`gather_archival_emission_epoch_snapshot`) under one
+  `db_rtxn_guard` read view; the window's low end resolves through a
+  new thin FFI delegate `shekyl_archival_claim_window_floor` (the one
+  landed boundary definition, per §2 step 1's
+  consumption-not-re-derivation pin). Wallet-side decode
+  (`shekyl-engine-core/src/engine/emission_source.rs`) produces the
+  verify-side `EmissionEpochSource`/`ClaimantBondRecord` views via the
+  verify FFI shim's two-pass shape — no builder-private struct mirror.
+  Tests pin the two round-2 watch items mechanically: LMDB operand
+  fidelity against a direct gather (§7.1 single-gather trace),
+  identical window shape for bonded and bond-less claimants +
+  request-member-count == 1 (§7.2 transport cause-blindness), plus
+  epee wire round-trip, the `SIZE_MAX`→`u64::MAX` no-credit sentinel,
+  and the omit-empty-container behavior the Rust decode's
+  absent-equals-empty rule relies on
+  (`tests/unit_tests/archival_claim_source_rpc.cpp`, Rust decode unit
+  tests in-module).
 - **docs: emission claim-builder design round 2 opened and CLOSED
   (2026-07-09, `docs/design/EMISSION_CLAIM_BUILDER.md` §7–§8).** The
   CB-1 ratification residue: the daemon RPC surface + the

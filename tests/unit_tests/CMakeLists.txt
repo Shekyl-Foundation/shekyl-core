@@ -117,6 +117,7 @@ set(unit_tests_sources
   archival_emission_ct_balance.cpp
   archival_segment_freeze.cpp
   archival_substrate_lmdb.cpp
+  archival_claim_source_rpc.cpp
   ct_balance_differential.cpp
   deferred_insertion.cpp
   economics_b5_fee_coinbase.cpp

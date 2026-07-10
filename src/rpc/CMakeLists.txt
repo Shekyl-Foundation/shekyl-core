@@ -31,6 +31,7 @@ set(rpc_base_sources
   rpc_handler.cpp)
 
 set(rpc_sources
+  archival_claim_source.cpp
   bootstrap_daemon.cpp
   bootstrap_node_selector.cpp
   core_rpc_server.cpp
@@ -47,6 +48,7 @@ set(rpc_headers
   rpc_handler.h)
 
 set(rpc_private_headers
+  archival_claim_source.h
   bootstrap_daemon.h
   core_rpc_server.h
   core_rpc_ffi.h

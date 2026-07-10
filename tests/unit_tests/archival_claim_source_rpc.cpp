@@ -1,0 +1,338 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+// PR-1 tests for the emission claim-source RPC marshaling
+// (`EMISSION_CLAIM_BUILDER.md` §7 / §8 PR 1), covering the two round-2
+// watch items plus the wire contract:
+//
+//   1. **Single-gather operand fidelity** (§7.1, CB-1(b)'s daemon face):
+//      every per-epoch field the marshal helper emits is a field-for-field
+//      copy of a direct `gather_archival_emission_epoch_snapshot` call on
+//      the same LMDB state. The helper reconstructs no operand — the test
+//      compares the RPC response against the landed gather row by row.
+//
+//   2. **Transport cause-blindness** (§7.2): the response carries the full
+//      `[claim_window_floor(settled), settled − 1]` window unconditionally.
+//      A claimant with a bond and credited epochs and a `p_id` with no bond
+//      record at all receive identically-shaped windows, and the request
+//      struct carries `p_id` only (member-count-pinned below).
+//
+//   3. **Wire contract**: epee KV JSON round-trip, the `SIZE_MAX` →
+//      `u64::MAX` no-credit sentinel, and epee's omit-empty-container
+//      behavior — the behavior the Rust decode's absent-equals-empty rule
+//      (`shekyl-engine-core/src/engine/emission_source.rs`) relies on.
+//
+// The LMDB fixture mirrors tests/unit_tests/archival_substrate_lmdb.cpp's
+// emission-snapshot KAT (same bonds/shards/credit-bits/close shape); the
+// only synthetic element is the tip height, overridden so the settled epoch
+// lands past the closed test epoch without minting 50k blocks. The gather,
+// the bond reader, and the close path are the real landed LMDB code.
+
+#include "gtest/gtest.h"
+
+#include <boost/filesystem.hpp>
+#include <cstring>
+#include <limits>
+#include <string>
+#include <vector>
+
+#include <rapidjson/document.h>
+
+#include "blockchain_db/lmdb/db_lmdb.h"
+#include "blockchain_db/shekyl_types.h"
+#include "rpc/archival_claim_source.h"
+#include "rpc/core_rpc_server_commands_defs.h"
+#include "shekyl/shekyl_ffi.h"
+#include "storages/portable_storage_template_helper.h"
+
+using namespace cryptonote;
+
+namespace {
+
+/// The real LMDB with a synthetic tip: `height()` is the only override, so
+/// the settled-epoch operand can land past the closed test epoch while the
+/// gather/bond/close paths stay the landed implementations.
+class FakeTipLMDB : public BlockchainLMDB
+{
+public:
+  uint64_t fake_height = 0;
+  uint64_t height() const override { return fake_height; }
+};
+
+struct ClaimSourceFixture
+{
+  boost::filesystem::path tmpdir;
+  FakeTipLMDB db;
+
+  static constexpr uint64_t kSeb = 10000;
+  static constexpr uint64_t kSettlementEpoch = 3;
+  static constexpr uint64_t kCloseHeight = (kSettlementEpoch + 1) * kSeb;
+  static constexpr uint64_t kJoinEpoch = kSettlementEpoch - 1;
+  static constexpr uint64_t kTipHeight = 50000;  // settled epoch = 5 > 3
+
+  crypto::hash p1;
+  crypto::hash p_no_bond;
+
+  ClaimSourceFixture()
+  {
+    tmpdir = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path();
+    boost::filesystem::create_directories(tmpdir);
+    db.open(tmpdir.string());
+    db.set_batch_transactions(true);
+    db.batch_start();
+
+    p1 = make_hash(0x51);
+    const crypto::hash p2 = make_hash(0x52);
+    p_no_bond = make_hash(0x99);
+    const std::vector<uint8_t> pubkey = {0x01};
+
+    // The archival writers are public on the BlockchainDB interface only
+    // (private overrides on BlockchainLMDB) — seed through the base ref.
+    BlockchainDB& bdb = db;
+
+    bdb.put_archival_bond_record(p1, pubkey, kJoinEpoch,
+      2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+      shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
+    bdb.put_archival_bond_record(p2, pubkey, kJoinEpoch,
+      2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+      shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7, 9}, {});
+
+    // Give p1 a claimed epoch through the full-bond writer so part A's
+    // claimed_settlement_epochs marshaling is exercised non-empty.
+    shekyl::db::ArchivalBondValue bond{};
+    EXPECT_TRUE(bdb.get_archival_bond_value(p1, bond));
+    bond.claimed_settlement_epochs = {1};
+    bdb.put_archival_bond_value(p1, bond);
+
+    bdb.put_archival_shard_segment(7, 100, make_hash(0x60), 26000);
+    bdb.set_archival_serve_credit_bit(p1, 7, kSettlementEpoch);
+    bdb.set_archival_serve_credit_bit(p2, 7, kSettlementEpoch);
+    bdb.set_archival_serve_credit_bit(p2, 9, kSettlementEpoch);
+
+    bdb.process_archival_epoch_close_at_height(kCloseHeight);
+    db.batch_stop();
+    db.batch_start();
+
+    db.fake_height = kTipHeight;
+  }
+
+  ~ClaimSourceFixture()
+  {
+    try {
+      db.batch_stop();
+      db.close();
+      boost::filesystem::remove_all(tmpdir);
+    } catch (...) {}
+  }
+
+  static crypto::hash make_hash(uint8_t fill)
+  {
+    crypto::hash h{};
+    memset(h.data, fill, sizeof(h.data));
+    return h;
+  }
+
+  /// The archival readers/writers are public on the interface only.
+  BlockchainDB& bdb() { return db; }
+};
+
+using cmd = COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE;
+
+} // anonymous namespace
+
+// Watch item 1 (§7.1): every response field is a field-for-field copy of
+// the single landed gather on the same DB state — the marshal helper owns
+// no second gather path and reconstructs no operand.
+TEST(archival_claim_source_rpc, fill_matches_single_gather_field_for_field)
+{
+  ClaimSourceFixture fx;
+
+  cmd::response res{};
+  rpc::fill_archival_emission_claim_source(fx.db, fx.p1, res);
+
+  EXPECT_EQ(res.chain_height, ClaimSourceFixture::kTipHeight);
+  const uint64_t settled =
+    shekyl_archival_settlement_epoch_at_height(ClaimSourceFixture::kTipHeight);
+  EXPECT_EQ(res.current_settled_epoch, settled);
+
+  // Part A mirrors the bond record as the full-bond reader returns it.
+  shekyl::db::ArchivalBondValue bond{};
+  ASSERT_TRUE(fx.bdb().get_archival_bond_value(fx.p1, bond));
+  EXPECT_TRUE(res.has_bond_record);
+  EXPECT_EQ(res.join_settlement_epoch, bond.join_settlement_epoch);
+  EXPECT_EQ(res.holdings_kind, bond.holdings_kind);
+  EXPECT_EQ(res.held_shard_ids, bond.held_shard_ids);
+  EXPECT_EQ(res.claimed_settlement_epochs, std::vector<uint64_t>{1});
+
+  // Part B: the full window, ascending, one entry per epoch in
+  // [claim_window_floor(settled), settled − 1].
+  const uint64_t floor = shekyl_archival_claim_window_floor(settled);
+  ASSERT_EQ(res.epochs.size(), settled - floor);
+
+  for (size_t i = 0; i < res.epochs.size(); ++i)
+  {
+    const uint64_t epoch = floor + i;
+    const auto& out = res.epochs[i];
+    EXPECT_EQ(out.settlement_epoch, epoch);
+
+    ArchivalEmissionEpochSnapshot snap;
+    fx.bdb().gather_archival_emission_epoch_snapshot(fx.p1, epoch, snap);
+
+    EXPECT_EQ(out.close_block_height, snap.close_block_height);
+    EXPECT_EQ(out.sigma_work_milli, snap.sigma_work_milli);
+    EXPECT_EQ(out.budget_atomic, snap.budget_atomic);
+    EXPECT_EQ(out.has_budget_row, snap.has_budget_row);
+
+    ASSERT_EQ(out.bonds.size(), snap.bonds.size());
+    for (size_t b = 0; b < snap.bonds.size(); ++b)
+    {
+      EXPECT_EQ(out.bonds[b].join_settlement_epoch, snap.bonds[b].join_settlement_epoch);
+      EXPECT_EQ(out.bonds[b].is_foundation_complete_tree, snap.bonds[b].is_foundation_complete_tree);
+      EXPECT_EQ(out.bonds[b].bad_intervals_flat, snap.bonds[b].bad_intervals_flat);
+    }
+    ASSERT_EQ(out.shards.size(), snap.shards.size());
+    for (size_t s = 0; s < snap.shards.size(); ++s)
+    {
+      EXPECT_EQ(out.shards[s].shard_id, snap.shards[s].shard_id);
+      EXPECT_EQ(out.shards[s].freeze_height, snap.shards[s].freeze_height);
+      EXPECT_EQ(out.shards[s].has_segment, snap.shards[s].has_segment);
+    }
+    ASSERT_EQ(out.credit_pairs.size(), snap.credit_pairs.size());
+    for (size_t p = 0; p < snap.credit_pairs.size(); ++p)
+    {
+      EXPECT_EQ(out.credit_pairs[p].bond_idx, static_cast<uint64_t>(snap.credit_pairs[p].bond_idx));
+      EXPECT_EQ(out.credit_pairs[p].shard_idx, static_cast<uint64_t>(snap.credit_pairs[p].shard_idx));
+    }
+    // SIZE_MAX sentinel → u64::MAX on the wire, exactly the verify shim's
+    // decode contract.
+    if (snap.claimant_bond_idx == SIZE_MAX)
+      EXPECT_EQ(out.claimant_bond_idx, std::numeric_limits<uint64_t>::max());
+    else
+      EXPECT_EQ(out.claimant_bond_idx, static_cast<uint64_t>(snap.claimant_bond_idx));
+  }
+
+  // The closed epoch is the only one with rows: two credited bonds, one
+  // credited shard, three credit pairs (fixture arithmetic per the
+  // substrate KAT); every other window epoch rides out as an empty
+  // has_budget_row=false row, never filtered (§7.2).
+  const size_t closed_i = ClaimSourceFixture::kSettlementEpoch - floor;
+  EXPECT_TRUE(res.epochs[closed_i].has_budget_row);
+  EXPECT_EQ(res.epochs[closed_i].bonds.size(), 2u);
+  EXPECT_NE(res.epochs[closed_i].claimant_bond_idx, std::numeric_limits<uint64_t>::max());
+  for (size_t i = 0; i < res.epochs.size(); ++i)
+  {
+    if (i == closed_i) continue;
+    EXPECT_FALSE(res.epochs[i].has_budget_row);
+    EXPECT_TRUE(res.epochs[i].bonds.empty());
+  }
+}
+
+// Watch item 2 (§7.2): the window shape is identical for a bonded,
+// credited claimant and a p_id with no bond record at all — nothing in
+// the response layout is claimable-set-derived.
+TEST(archival_claim_source_rpc, window_is_unconditional_and_cause_blind)
+{
+  ClaimSourceFixture fx;
+
+  cmd::response with_bond{};
+  rpc::fill_archival_emission_claim_source(fx.db, fx.p1, with_bond);
+  cmd::response no_bond{};
+  rpc::fill_archival_emission_claim_source(fx.db, fx.p_no_bond, no_bond);
+
+  EXPECT_FALSE(no_bond.has_bond_record);
+  EXPECT_TRUE(no_bond.held_shard_ids.empty());
+  EXPECT_TRUE(no_bond.claimed_settlement_epochs.empty());
+
+  // Same tip, same settled epoch, same window: entry count and epoch
+  // sequence are byte-identical across claimant states.
+  EXPECT_EQ(no_bond.chain_height, with_bond.chain_height);
+  EXPECT_EQ(no_bond.current_settled_epoch, with_bond.current_settled_epoch);
+  ASSERT_EQ(no_bond.epochs.size(), with_bond.epochs.size());
+  for (size_t i = 0; i < no_bond.epochs.size(); ++i)
+  {
+    EXPECT_EQ(no_bond.epochs[i].settlement_epoch, with_bond.epochs[i].settlement_epoch);
+    EXPECT_EQ(no_bond.epochs[i].has_budget_row, with_bond.epochs[i].has_budget_row);
+    // The bond-less claimant's per-epoch rows are the same gather rows —
+    // only claimant_bond_idx differs (no serve-credit row → sentinel).
+    EXPECT_EQ(no_bond.epochs[i].bonds.size(), with_bond.epochs[i].bonds.size());
+    EXPECT_EQ(no_bond.epochs[i].claimant_bond_idx, std::numeric_limits<uint64_t>::max());
+  }
+}
+
+// Wire contract: epee KV JSON round-trip, the u64::MAX sentinel on the
+// wire, and epee's omit-empty-container behavior (the Rust decode's
+// absent-equals-empty rule pins against this).
+TEST(archival_claim_source_rpc, wire_roundtrip_sentinel_and_omit_empty)
+{
+  ClaimSourceFixture fx;
+
+  cmd::response res{};
+  rpc::fill_archival_emission_claim_source(fx.db, fx.p1, res);
+  res.status = "OK";
+
+  std::string json;
+  ASSERT_TRUE(epee::serialization::store_t_to_json(res, json));
+
+  // The no-credit sentinel rides the wire as the u64 max literal.
+  EXPECT_NE(json.find("18446744073709551615"), std::string::npos) << json;
+
+  // epee omits empty containers: only the closed epoch carries rows, so
+  // "bonds" (and "shards", "credit_pairs") each appear exactly once even
+  // though the window has five epochs. This is the serializer behavior the
+  // Rust decode's absent-as-empty rule mirrors.
+  const auto count = [&json](const char* needle) {
+    size_t n = 0;
+    for (size_t pos = json.find(needle); pos != std::string::npos;
+         pos = json.find(needle, pos + 1))
+      ++n;
+    return n;
+  };
+  EXPECT_EQ(count("\"bonds\""), 1u) << json;
+  EXPECT_EQ(count("\"shards\""), 1u) << json;
+  EXPECT_EQ(count("\"credit_pairs\""), 1u) << json;
+
+  // Round-trip: the deserialized response matches the original field for
+  // field on the populated epoch and the window scalars.
+  cmd::response back{};
+  ASSERT_TRUE(epee::serialization::load_t_from_json(back, json));
+  EXPECT_EQ(back.chain_height, res.chain_height);
+  EXPECT_EQ(back.current_settled_epoch, res.current_settled_epoch);
+  EXPECT_EQ(back.has_bond_record, res.has_bond_record);
+  EXPECT_EQ(back.join_settlement_epoch, res.join_settlement_epoch);
+  EXPECT_EQ(back.holdings_kind, res.holdings_kind);
+  EXPECT_EQ(back.held_shard_ids, res.held_shard_ids);
+  EXPECT_EQ(back.claimed_settlement_epochs, res.claimed_settlement_epochs);
+  ASSERT_EQ(back.epochs.size(), res.epochs.size());
+  const size_t ci = ClaimSourceFixture::kSettlementEpoch -
+    shekyl_archival_claim_window_floor(res.current_settled_epoch);
+  EXPECT_EQ(back.epochs[ci].sigma_work_milli, res.epochs[ci].sigma_work_milli);
+  EXPECT_EQ(back.epochs[ci].budget_atomic, res.epochs[ci].budget_atomic);
+  EXPECT_EQ(back.epochs[ci].bonds.size(), res.epochs[ci].bonds.size());
+  EXPECT_EQ(back.epochs[ci].bonds[0].bad_intervals_flat,
+    res.epochs[ci].bonds[0].bad_intervals_flat);
+  EXPECT_EQ(back.epochs[ci].claimant_bond_idx, res.epochs[ci].claimant_bond_idx);
+}
+
+// Watch item 2's request half (§7.2): the request carries `p_id` and
+// nothing else — no field exists that could encode an epoch selection or
+// the claimable subset. Pinned mechanically at the serialized member count
+// so adding a request field trips this test, not just review.
+TEST(archival_claim_source_rpc, request_carries_p_id_only)
+{
+  cmd::request req{};
+  req.p_id = "aa";
+
+  std::string json;
+  ASSERT_TRUE(epee::serialization::store_t_to_json(req, json));
+
+  rapidjson::Document doc;
+  doc.Parse(json.c_str());
+  ASSERT_TRUE(doc.IsObject()) << json;
+  ASSERT_EQ(doc.MemberCount(), 1u)
+      << "the claim-source request must carry p_id ONLY "
+         "(EMISSION_CLAIM_BUILDER.md §7.2 transport cause-blindness); got:\n"
+      << json;
+  EXPECT_TRUE(doc.HasMember("p_id")) << json;
+}

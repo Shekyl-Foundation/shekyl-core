@@ -223,6 +223,11 @@ mod daemon_observability;
 #[cfg(test)]
 mod economics_differential;
 pub(crate) mod economics_snapshot;
+/// Emission claim-source RPC decode (`EMISSION_CLAIM_BUILDER.md` §7, PR 1):
+/// the wallet-side twin of the daemon's claim-source serializer, producing
+/// the verify-side `EmissionEpochSource`/`ClaimantBondRecord` views the
+/// PR-2 assembly consumes.
+pub(crate) mod emission_source;
 pub mod error;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fault_injecting_pending_tx;

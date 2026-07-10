@@ -13,13 +13,13 @@ use std::io::Cursor;
 
 use shekyl_archival_retention::{
     as_of_e_served_work, capped_work_milli, challenge_fire_height, challenge_leaf_chunk_bounds,
-    challenge_seal_height, claimed_epochs_check_and_set, emission_block_claims_unique,
-    emission_vin_verify, emission_vin_verify_auth, emission_vin_verify_backing,
-    emission_vin_verify_claims, epoch_close_compute, epoch_close_due_at_height, epoch_close_height,
-    frozen_segment_count, good_through, p_canonical_id_from_hybrid_pubkey,
-    prune_below_epoch_at_height, serve_credit_epoch_ok, settlement_epoch_at_height,
-    verify_bond_post_ct_balance, verify_join_market_bond_post, verify_leaf_index,
-    verify_segment_path, ArchivalBondPostVin, ArchivalRewardEmissionVin,
+    challenge_seal_height, claim_window_floor, claimed_epochs_check_and_set,
+    emission_block_claims_unique, emission_vin_verify, emission_vin_verify_auth,
+    emission_vin_verify_backing, emission_vin_verify_claims, epoch_close_compute,
+    epoch_close_due_at_height, epoch_close_height, frozen_segment_count, good_through,
+    p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height, serve_credit_epoch_ok,
+    settlement_epoch_at_height, verify_bond_post_ct_balance, verify_join_market_bond_post,
+    verify_leaf_index, verify_segment_path, ArchivalBondPostVin, ArchivalRewardEmissionVin,
     ArchivalServeCreditResponse, BadInterval, BandedCurveParams, BondCtBalanceError, BondPostError,
     BondPostKind, BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair,
     EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError, EpochCloseBond,
@@ -542,6 +542,18 @@ pub unsafe extern "C" fn shekyl_archival_epoch_close_due(
         }
         None => 0,
     }
+}
+
+/// The oldest still-claimable settlement epoch for `current_settled_epoch` —
+/// a thin delegate to [`claim_window_floor`], the **single source of the
+/// claim-window boundary** (`claimed_epochs.rs`). Exposed for the emission
+/// claim-source RPC handler so the daemon-side window derivation resolves
+/// through the one landed definition rather than an inline `settled − W`
+/// copy (`EMISSION_CLAIM_BUILDER.md` §2 step 1's consumption-not-re-derivation
+/// pin, applied daemon-side).
+#[no_mangle]
+pub extern "C" fn shekyl_archival_claim_window_floor(current_settled_epoch: u64) -> u64 {
+    claim_window_floor(current_settled_epoch)
 }
 
 /// Returns `1` and writes the prune horizon (`tip_epoch − MAX_CLAIM_AGE_W`) when the

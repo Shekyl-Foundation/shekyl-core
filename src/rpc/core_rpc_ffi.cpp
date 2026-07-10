@@ -410,6 +410,12 @@ const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
         DJRPC_WE("get_curve_tree_path",       on_get_curve_tree_path,        COMMAND_RPC_GET_CURVE_TREE_PATH),
         DJRPC_WE("get_curve_tree_info",       on_get_curve_tree_info,        COMMAND_RPC_GET_CURVE_TREE_INFO),
         DJRPC_WE("get_curve_tree_checkpoint", on_get_curve_tree_checkpoint,  COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT),
+        // Emission claim-source query (EMISSION_CLAIM_BUILDER.md §7): the
+        // wallet-side claim builder's one read. Registered on both
+        // transports from the start (the Rust/Axum transport is the
+        // default; a missing entry here is a 404 — see the curve-tree
+        // comment above).
+        DJRPC_WE("get_archival_emission_claim_source", on_get_archival_emission_claim_source, COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE),
     };
     return t;
 }
