@@ -422,6 +422,37 @@ complement
 same file) drives accrual amounts through the real
 `add_block`/`pop_block` and asserts the close of epoch E includes E's
 final block's row, plus pop/re-connect byte-identity of the frozen row.
+
+B1's **full-connect-path counterpart** landed 2026-07-09:
+`archival_budget_conservation_boundary`
+(`tests/core_tests/archival_budget_conservation.{h,cpp}`, chaingen
+harness; CI: the `conservation` subcommand of
+`run_economics_c2a_prime.sh`). It drives `handle_block_to_main_chain`
+across a v1→v2 fork table (fork height 8, epoch-unaligned) and asserts
+the §2.2 identity per block in **labeled-row** form — each of
+{accrual row, burn row} checked against the block's own
+`major_version`, not just their sum — plus the genesis exclusion,
+coinbase = `miner_emission`, ledger advance = independently-recomputed
+modulated subsidy, and pop/reconnect row restoration across the
+boundary. The labeled form is what catches the branch-selection class
+(F-B1b: wrong branch, identical operands, sum unchanged). Genesis
+posture: with `HF_VERSION_ARCHIVAL_EMISSION == 1` the burn leg is
+compile-alive but unexercised through the real connect path; the
+expectations are written against the constant generically, so a
+post-genesis activation bump to the fixture's top fork version (2) arms
+the burn leg and the true straddle through the same fixture with no
+test change — a `static_assert` in the test header forces a fork-table
+extension for any bump past 2, which would otherwise leave every
+fixture block pre-activation and silently de-arm the accrue leg. Until
+an activation bump lands, B1's synthetic unit-level fork-height
+injection remains the burn leg's only executed coverage. Fee-leg gap
+(disclosed): the fixture is fee-free, so the KAT exercises only the
+emission half of `staker_inflow` (`staker_emission +
+staker_pool_amount`) end-to-end — the same chaingen FCMP++
+fee-transaction gap that defers B5's connect-path block form (below)
+defers the fee-pool half here; it rides the E4/E5 regtest-e2e residue,
+with the unit-level B5 KATs and the F-B1c-c1 operand pin as the interim
+guards.
 B4 spans the Rust wire/verify KATs (landed classes) plus the builder-side
 omission test when the claim-builder lands. B5 landed as unit-level KATs
 (`economics_b5_fee_coinbase.cpp`) driving `validate_miner_transaction`

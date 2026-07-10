@@ -1286,8 +1286,36 @@ sustainability is unaffected by the recalibration.
   `REWARD_EMISSION_VIN_PLAN.md` §9, `STAKER_ARCHIVAL_SIM.md` §L12. **Target: V3.0
   (pre-genesis; blocks the final redundancy-band seal).**
 
-- **End-to-end supply-conservation KAT with an activation-boundary block
-  — the C-1 budget fast-follow (c2 review round, 2026-07-09).** The
+- **~~End-to-end supply-conservation KAT with an activation-boundary block
+  — the C-1 budget fast-follow (c2 review round, 2026-07-09).~~** **CLOSED
+  2026-07-09** on branch `feat/emission-conservation-kat`:
+  `archival_budget_conservation_boundary`
+  (`tests/core_tests/archival_budget_conservation.{h,cpp}`) drives the real
+  connect path across a v1→v2 fork table (fork at height 8, epoch-unaligned),
+  asserts the identity per block in **labeled-row** form (accrual row and burn
+  row each checked against the block's own `major_version` — the form that
+  catches burn-when-should-accrue where the sum alone cannot), plus the
+  genesis exclusion, the coinbase = `miner_emission` binding, the ledger
+  advance = independently-recomputed modulated subsidy, and pop/reconnect
+  row restoration across the boundary. Arming-verified (inverted redirect
+  branch → `accrual row mismatch at height 1`). CI: `conservation`
+  subcommand in `run_economics_c2a_prime.sh` + workflow matrix entry.
+  Genesis-posture caveat recorded in the test header:
+  `HF_VERSION_ARCHIVAL_EMISSION == 1` makes the burn leg compile-alive but
+  unexercised today; a post-genesis activation bump **to the fixture's top
+  fork version (2)** arms it through the same fixture with no test change,
+  and a `static_assert` in the test header refuses to compile a bump past
+  that until the fork table is extended (a bump past 2 would otherwise turn
+  every fixture block pre-activation and silently de-arm the accrue leg and
+  the straddle). Fee-leg caveat (disclosed in the test header + fixture
+  comment): the fixture is fee-free, so only the emission half of
+  production's `staker_inflow` (`staker_emission + staker_pool_amount`) has
+  end-to-end coverage — chaingen cannot construct valid FCMP++ fee
+  transactions (`chaingen_main.cpp` disabled-tests note), so the fee-pool
+  half rides the §9.5 item-8 **regtest e2e (E4/E5)** residue item above;
+  until then its guards are the unit-level B5 KATs
+  (`economics_b5_fee_coinbase.cpp`) and the F-B1c-c1 operand pin. Original
+  item follows. The
   F-B1c-c2 fix makes the accrual's operand identity with verify hold by
   construction (same `base_reward` variable), and the redirect's version
   operand is now `bl.major_version` with a CI tripwire

@@ -1546,3 +1546,46 @@ structural fix.
   table + real block flow), out of this PR's LMDB-substrate KAT
   reach — tracked in `docs/FOLLOWUPS.md` V3.0 queue as the C-1
   fast-follow.
+- **Fast-follow LANDED (2026-07-09, branch
+  `feat/emission-conservation-kat`):**
+  `archival_budget_conservation_boundary`
+  (`tests/core_tests/archival_budget_conservation.{h,cpp}`), registered
+  in the chaingen harness and wired into CI as the `conservation`
+  subcommand of `run_economics_c2a_prime.sh` (own workflow matrix
+  entry). Two upgrades over the bullet above, both load-bearing:
+  - **Labeled-row form, not sum form.** The redirect is a pure
+    destination switch (same `staker_inflow`, burn vs accrue), so the
+    *sum* `accrual + burn + coinbase == ledger advance` holds even when
+    the wrong branch fires. The KAT therefore checks each row against
+    its expected value given the block's **own `major_version`** —
+    row-level equality is what catches the branch-selection class. The
+    capstone sum is asserted too, plus the genesis exclusion, the
+    coinbase = `miner_emission` binding, ledger advance = an
+    independently recomputed modulated subsidy (not read back from the
+    connect path), and pop/reconnect byte-identical row restoration
+    across the fork boundary. Arming-verified: inverting the redirect
+    branch fails with `accrual row mismatch at height 1`.
+  - **Genesis-posture caveat (recorded in the test header).**
+    `HF_VERSION_ARCHIVAL_EMISSION == 1` and block versions start at 1,
+    so no pre-activation block is constructible through the real
+    connect path today — the burn leg of the expectations is
+    compile-alive but unexercised. The expectations are written against
+    the constant generically and the fixture's fork table already
+    crosses v1→v2 mid-chain (height 8, epoch-unaligned), so a
+    post-genesis activation bump to the fixture's top fork version
+    (constant == 2) arms the burn leg and the true boundary straddle
+    with **no test change**. A bump PAST 2 would instead leave every
+    fixture block pre-activation — accrue leg and straddle silently
+    de-armed with CI green — so the test header carries a
+    `static_assert(HF_VERSION_ARCHIVAL_EMISSION <= k_post_fork_version)`
+    that forces the fork table to be extended first.
+  - **Fee-leg coverage gap (disclosed).** The fixture is fee-free, so
+    the KAT exercises only the emission half of production's redirected
+    quantity `staker_inflow = staker_emission + staker_pool_amount`;
+    `compute_fee_burn(0, …) == {0,0,0}` makes the fee-pool half
+    byte-invisible here. chaingen cannot construct valid FCMP++ fee
+    transactions (empty `pqc_auths` stubs reject even in FAKECHAIN —
+    `chaingen_main.cpp` disabled-tests note), so the fee-pool half's
+    end-to-end coverage rides the §9.5 item-8 regtest e2e (E4/E5)
+    carrier; until then its guards are the unit-level B5 KATs
+    (`economics_b5_fee_coinbase.cpp`) and the F-B1c-c1 operand pin.
