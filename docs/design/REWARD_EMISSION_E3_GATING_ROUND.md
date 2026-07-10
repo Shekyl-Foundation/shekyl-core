@@ -1589,3 +1589,37 @@ structural fix.
     end-to-end coverage rides the §9.5 item-8 regtest e2e (E4/E5)
     carrier; until then its guards are the unit-level B5 KATs
     (`economics_b5_fee_coinbase.cpp`) and the F-B1c-c1 operand pin.
+
+- **Burn-leg deletion LANDED (2026-07-09, branch
+  `chore/delete-emission-burn-leg`):** the genesis-posture caveat above
+  is retired by deletion, not by arming. The pre-activation burn leg
+  (`else block_burn_amount += staker_inflow` in the connect-site
+  redirect) was unreachable-by-construction — emission is a genesis
+  fact (`HF_VERSION_ARCHIVAL_EMISSION == 1`, block version floor 1,
+  versions never decrease) — and its lineage traces to the scrapped
+  direct-distribution model's conditional no-staker burn
+  (`cebbe017b` → unconditional placeholder in PR-4 `2615c0dae` →
+  version-gated leg in C-1 block 1 `2a6f8e01a`), so rule 60's
+  delete-the-dead-branch disposition applies. Deleted with it:
+  `HF_VERSION_ARCHIVAL_EMISSION` (its two live reads — the redirect
+  gate and the raw-import guard — were both tautologies at version
+  floor 1; the import guard now refuses all non-genesis blocks
+  outright) and the conservation KAT's `static_assert`/burn-leg
+  expectations (now unconditional: whole inflow in the accrual row,
+  zero burn row in the fee-free fixture — the labeled-row form is
+  retained as the guard against inflow routed into the burn row). The
+  accrual write is now unconditional per non-genesis block. KATs
+  B1/B2 reframed to the burn-leg-free shape
+  (`budget_burn_accrual_partition_and_conservation`,
+  `budget_reorg_pop_symmetry` — the storage-layer properties they pin,
+  table independence and pop symmetry, survive the leg because fee-burn
+  rows still coexist with accrual rows). CI tripwire re-anchored to the
+  accrual block with the same banned symbols (`get_block_reward`,
+  `get_current_version`, `get_ideal_version(`) — the version operand
+  still feeds `compute_emission_split`/`compute_fee_burn`, so F-B1b's
+  operand discipline outlives the branch it originally selected;
+  arming re-verified post-rewrite. ARCHIVAL_BUDGET_SCHEDULE.md §2
+  rewritten to the one-write-one-target current form with §2.1 as the
+  historical record; a future post-genesis activation-gated inflow
+  change (the §8 servo) re-derives the redirect discipline from that
+  record rather than resurrecting the code.

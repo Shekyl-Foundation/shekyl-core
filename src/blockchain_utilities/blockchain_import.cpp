@@ -458,21 +458,20 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
         }
         else
         {
-          // Raw (non-verifying) import cannot produce the redirected
-          // staker-inflow accrual that freezes budget(E)
+          // Raw (non-verifying) import cannot produce the staker-inflow
+          // accrual that freezes budget(E)
           // (ARCHIVAL_BUDGET_SCHEDULE.md §3.1): that operand is
           // validate_miner_transaction's base_reward + fee summary, computed
           // only on the verifying connect path (Blockchain::
-          // handle_block_to_main_chain). Importing an emission-active block
-          // here writes no accrual row, so the epoch close freezes a
-          // present-and-zero budget(E) — a structurally non-claimable row
-          // (§5) that then makes this node REJECT valid emission txs the
-          // network accepts (a silent consensus split, not mere bookkeeping).
-          // Fail closed: emission is active from genesis
-          // (HF_VERSION_ARCHIVAL_EMISSION), so raw import is refused for any
+          // handle_block_to_main_chain). Importing a block here writes no
+          // accrual row, so the epoch close freezes a present-and-zero
+          // budget(E) — a structurally non-claimable row (§5) that then
+          // makes this node REJECT valid emission txs the network accepts
+          // (a silent consensus split, not mere bookkeeping). Fail closed:
+          // emission is a genesis fact, so raw import is refused for any
           // non-genesis block. Re-run without --dangerous-unverified-import
           // to use the verifying path, which computes the accrual correctly.
-          if ((h - 1) > 0 && b.major_version >= HF_VERSION_ARCHIVAL_EMISSION)
+          if ((h - 1) > 0)
           {
             std::cout << refresh_string;
             MFATAL("Raw unverified import cannot produce archival budget(E) "

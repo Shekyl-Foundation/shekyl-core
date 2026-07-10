@@ -825,8 +825,8 @@ block Blockchain::pop_block_from_blockchain()
       m_db->set_total_burned(total_burned);
     }
     m_db->remove_block_burn(popped_height);
-    // The accrual-row removal (the pop side of the §2.2 redirected
-    // staker-inflow write) lives in BlockchainDB::pop_block, mirroring the
+    // The accrual-row removal (the pop side of the §2.2 staker-inflow
+    // write) lives in BlockchainDB::pop_block, mirroring the
     // connect-side write that add_block performs before the epoch-close
     // hook (F-B1a) — both sides of that row are DB-layer and share the
     // pop's wtxn.
@@ -3752,8 +3752,8 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         // ── C-1 emission dispatch (REWARD_EMISSION_E3_GATING_ROUND.md §9.5
         // item 5). LIVE from genesis: the item-4 whitelist flip landed in
         // this cut (check_inputs_types_supported now accepts a single emission
-        // vin — cryptonote_format_utils.cpp) and HF_VERSION_ARCHIVAL_EMISSION
-        // is active from block 1, so a well-formed txin_archival_reward_emission
+        // vin — cryptonote_format_utils.cpp) and archival emission is a
+        // genesis fact, so a well-formed txin_archival_reward_emission
         // reaches full verify+connect here. This branch mints coins on
         // acceptance — treat every check below as load-bearing consensus.
         const txin_archival_reward_emission& emission =
@@ -5343,12 +5343,15 @@ leave:
 
   TIME_MEASURE_FINISH(vmt);
 
-  // Staker-inflow redirect (ARCHIVAL_BUDGET_SCHEDULE.md §2.2): one per-height
-  // write whose TARGET the fork switches — pre-activation blocks burn the
-  // inflow (the retired claim-era posture), post-activation blocks accrue it
-  // into the `archival_budget_accrual` row the epoch close freezes into
-  // budget(E). Exactly one target per block, so burn-stop and accrual-start
-  // are atomic and the straddle epoch cannot double-count (§2.1).
+  // Staker-inflow accrual (ARCHIVAL_BUDGET_SCHEDULE.md §2.2): one per-height
+  // write of the block's staker inflow into the `archival_budget_accrual`
+  // row the epoch close freezes into budget(E). Unconditional for every
+  // non-genesis block: archival emission is a genesis fact — the block
+  // version floor is 1, so the claim-era "burn the inflow pre-activation"
+  // leg that used to gate this write on HF_VERSION_ARCHIVAL_EMISSION was
+  // unreachable-by-construction and has been deleted along with the
+  // constant (rule 60; git history has the shape). The burn amount below
+  // carries ONLY the fee-burn's destroyed share.
   //
   // Computed HERE, before m_db->add_block, for two load-bearing reasons:
   //  - Version operand (F-B1b): the operand is bl.major_version — the block's
@@ -5369,21 +5372,18 @@ leave:
   //    written before the epoch-close hook fires, so the close of epoch E
   //    sees its final block's row in the [E·SEB, (E+1)·SEB) range-sum.
   //
-  // Both legs use verify's exact operands (F-B1c, both sub-findings):
-  //  - Emission leg (c2, disposition (a)): the split operand is base_reward —
-  //    the SAME modulated (weight-penalized, release-scaled) quantity
+  // Both halves of the inflow use verify's exact operands (F-B1c):
+  //  - Emission leg (c2, disposition (a) — permanent per the §9.9 sim
+  //    closure): the split operand is base_reward — the SAME modulated
+  //    (weight-penalized, release-scaled) quantity
   //    validate_miner_transaction just bound the coinbase against and that
   //    already_generated_coins advances by below. Conservation is then by
   //    construction: staker leg = base_reward − miner_emission, so
-  //    ledger = coinbase + (burned | accrued) exactly. The pre-fix shape
+  //    ledger = coinbase + accrued exactly. The pre-fix shape
   //    (5-arg get_block_reward, unmodulated) over-sized the staker leg
-  //    whenever the release multiplier or weight penalty fired — benignly
-  //    deflationary as a burn, an inflation surface once redirected into
-  //    budget(E) (coins claimable that the ledger never counted as emitted).
-  //    Both targets take the modulated leg, so the fork switch below is a
-  //    pure destination switch — same quantity, burn vs accrue (§2.2's
-  //    "one write, one target"). Whether budget(E) should instead be
-  //    demand-insulated is the (b)-reopen sim question (gating round §9.9).
+  //    whenever the release multiplier or weight penalty fired — an
+  //    inflation surface, since the accrued leg is re-mintable through
+  //    emission claims (coins the ledger never counted as emitted).
   //  - Fee leg (c1): the same prev-cumulative supply and tx_volume_avg
   //    validate_miner_transaction used — a zero volume operand zeroes
   //    burn_pct, which silently zeroed the fee-pool half of the inflow
@@ -5407,12 +5407,8 @@ leave:
         fee_summary, get_tx_volume_avg(blockchain_height), already_generated_coins,
         /*stake_ratio*/ 0, connect_hf_version);
 
-    const uint64_t staker_inflow = em_split.staker_emission + burn.staker_pool_amount;
+    archival_budget_accrual = em_split.staker_emission + burn.staker_pool_amount;
     block_burn_amount = burn.actually_destroyed;
-    if (connect_hf_version >= HF_VERSION_ARCHIVAL_EMISSION)
-      archival_budget_accrual = staker_inflow;
-    else
-      block_burn_amount += staker_inflow;
   }
 
   size_t block_weight;
@@ -5496,14 +5492,13 @@ leave:
 
   if (new_height > 0 && block_burn_amount > 0)
   {
-    // Per-height burn record for the destroyed portion (fee-burn share plus,
-    // pre-activation, the staker inflow) — the sole persisted per-block
-    // bookkeeping this path needs, so pop_block_from_blockchain can roll
-    // total_burned back. The amount was computed pre-add alongside the
-    // accrual target (see the staker-inflow redirect block above). Only
-    // written when nonzero: get_block_burn returns 0 for an absent height,
-    // so a zero row would carry no information (and pop's remove_block_burn
-    // tolerates the missing key).
+    // Per-height burn record for the fee-burn's destroyed share — the sole
+    // persisted per-block bookkeeping this path needs, so
+    // pop_block_from_blockchain can roll total_burned back. The amount was
+    // computed pre-add alongside the accrual (see the staker-inflow accrual
+    // block above). Only written when nonzero: get_block_burn returns 0 for
+    // an absent height, so a zero row would carry no information (and pop's
+    // remove_block_burn tolerates the missing key).
     m_db->add_block_burn(blockchain_height, block_burn_amount);
     uint64_t total_burned = m_db->get_total_burned();
     total_burned += block_burn_amount;

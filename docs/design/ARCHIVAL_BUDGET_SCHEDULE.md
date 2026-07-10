@@ -28,11 +28,11 @@ cryptographic dependence).
 
 ## 1. The quantity
 
-Every block computes a **staker inflow** at its connect site — since the
-F-B1a/F-B1b remediation, in `handle_block_to_main_chain`'s pre-`add_block`
-redirect block (`blockchain.cpp:5352–5398`), so the fork operand is the
-connecting block's own validated version and the amount can ride into
-`add_block` ahead of the epoch-close hook:
+Every non-genesis block computes a **staker inflow** at its connect site —
+since the F-B1a/F-B1b remediation, in `handle_block_to_main_chain`'s
+pre-`add_block` accrual block, so the version operand is the connecting
+block's own validated version and the amount can ride into `add_block`
+ahead of the epoch-close hook:
 
 ```text
 staker_inflow(h) = em_split.staker_emission + burn.staker_pool_amount
@@ -47,7 +47,7 @@ staker_inflow(h) = em_split.staker_emission + burn.staker_pool_amount
   remediation, gating round §9.9), the same quantity the coinbase is
   bound against and `already_generated_coins` advances by. Conservation
   is by construction: `base_reward = miner_emission (coinbase) +
-  staker leg (burned | accrued)`, so `budget(E)` is exactly "ledger
+  staker leg (accrued)`, so `budget(E)` is exactly "ledger
   minus coinbase" and claiming cannot inflate. Consequence: `budget(E)`
   floats with the release multiplier and weight penalty — the §9.9
   (b)-reopen sim question, **resolved 2026-07-09: the swing is
@@ -64,18 +64,21 @@ staker_inflow(h) = em_split.staker_emission + burn.staker_pool_amount
   `compute_fee_burn` (`economics.h:55–60`) — **fee-dependent, per-block,
   not recomputable from schedule alone.**
 
-Pre-activation the inflow is **destroyed**: added to the block's burn
-amount, recorded in the per-height burn row, accumulated into
-`total_burned`. Post-activation (the landed C-1 redirect) it is
-**accrued**: passed into `BlockchainDB::add_block` as the
-`archival_budget_accrual` operand and written to the per-height accrual
-row before the connect hooks fire (§3.1), funding
-`txin_archival_reward_emission` payouts. Both targets take the same
-modulated quantity, so the redirect is a **pure destination switch** —
-one write, one target, identical amount on either side of the
-activation boundary (§2.2's invariant; the pre-F-B1c-c2 shape burned
-an unmodulated, over-sized leg, which was benignly deflationary as a
-burn but would have been an inflation surface as a budget).
+The inflow is **accrued unconditionally**: passed into
+`BlockchainDB::add_block` as the `archival_budget_accrual` operand and
+written to the per-height accrual row before the connect hooks fire
+(§3.1), funding `txin_archival_reward_emission` payouts. The block's
+burn row carries only the fee-burn's `actually_destroyed` share. The
+original C-1 shape gated this write on `HF_VERSION_ARCHIVAL_EMISSION`
+with a pre-activation leg that destroyed the inflow instead (the
+claim-era posture, inherited from the scrapped direct-distribution
+model's no-staker burn); with the constant fixed at 1 and the block
+version floor at 1, that leg was unreachable-by-construction through
+the real connect path and was **deleted 2026-07-09** along with the
+constant (rule 60; §2 records the retired transition machinery). The
+pre-F-B1c-c2 shape also burned an unmodulated, over-sized leg — benignly
+deflationary as a burn, an inflation surface as a budget; the modulated
+operand fix predates and survives the leg's deletion.
 
 **Provenance of the amounts.** The constants (15% emission share, 0.90/yr
 decay, 25% fee-pool share) are the Component-4 bootstrap-subsidy economics
@@ -145,86 +148,92 @@ should also be consensus-checked is a question for that round.
 **Definition.**
 
 ```text
-budget(E) = Σ  staker_inflow(h)   over h ∈ [E·SEB, (E+1)·SEB) with redirect active at h
+budget(E) = Σ  staker_inflow(h)   over h ∈ [E·SEB, (E+1)·SEB)
 ```
 
 where `SEB = SETTLEMENT_EPOCH_BLOCKS` (10 000) and epoch membership is
 `settlement_epoch_at_height(h) = h / SEB` (`consensus_state.rs:25–27`).
-The "redirect active at h" qualifier is the load-bearing clause — §2.
 
-## 2. The transition — redirect the write, don't run a parallel accumulator
+## 2. The write discipline — one write site, one target
 
-### 2.1 The straddle problem this pins
+### 2.1 The retired transition machinery (historical record)
 
-Activation is gated on the block's hard-fork version — a height that is
-**not epoch-aligned by construction** (no epoch-boundary constraint exists
-on fork heights). The epoch containing the activation height (`E_flip`)
-has pre-activation blocks whose inflow was **burned** and post-activation
-blocks whose inflow is **emittable**. A naive
-"`budget(E) = Σ staker_inflow` over all of E's blocks" includes the burned
-portion in `budget(E_flip)`: emitting it mints coins that were already
-destroyed — **a straight over-mint, genesis-frozen.**
+The C-1 shape of this section pinned a **redirect**: one per-height
+`staker_inflow` write whose *target* the fork switched — pre-activation
+blocks destroyed the inflow (burn record), post-activation blocks
+accrued it (this spec). The pin existed to make the activation-straddle
+epoch correct (no burned inflow leaking into `budget(E_flip)` — the
+over-mint class) and to make burn-stop/accrual-start atomic.
 
-### 2.2 The pin
+Archival emission is a **genesis fact**: `HF_VERSION_ARCHIVAL_EMISSION`
+was fixed at 1, the block version floor is 1, and versions never
+decrease — so no pre-activation block was constructible through the
+real connect path, the burn leg was unreachable-by-construction, and
+both the leg and the constant were **deleted 2026-07-09** (rule 60; the
+leg's origin was the scrapped direct-distribution model's conditional
+no-staker burn, carried forward as a placeholder). Git history and the
+gating round §9.9 hold the full shape. A future *post-genesis*
+activation-gated inflow change (e.g. the §8 servo) re-derives the
+redirect discipline from this record rather than resurrecting the code.
 
-There is exactly **one per-height `staker_inflow` write**, and the fork
-switches its **target**:
+### 2.2 The pin (current form)
+
+There is exactly **one per-height `staker_inflow` write**, unconditional
+for every non-genesis block, and its target is the **budget accrual
+row**:
 
 ```text
-pre-activation block:   staker_inflow(h) → burn record      (destroyed;   landed idiom)
-post-activation block:  staker_inflow(h) → budget accrual   (emittable;   this spec)
+every non-genesis block:  staker_inflow(h) → budget accrual   (emittable; this spec)
 ```
 
-Target selection is by **that block's own height's fork status** — never
-the tip's. Implementation note (F-B1b, hardened during the c2 review):
-the connect site keys the redirect on **`bl.major_version`** — the
-block's own declared version, consensus-bound by `m_hardfork->check(bl)`
-(`do_check`: `bl.major_version ==` the voted current version) before the
-redirect block is reachable. This is explicit per-block anchoring with no
-API convention to reason about. The rejected alternatives:
+The block's burn row carries only the fee-burn's `actually_destroyed`
+share — the two tables are independent, and a fee-bearing block writes
+both.
+
+Implementation note (F-B1b, hardened during the c2 review and still
+load-bearing): the connect site's version operand is
+**`bl.major_version`** — the block's own declared version,
+consensus-bound by `m_hardfork->check(bl)` (`do_check`:
+`bl.major_version ==` the voted current version) before the accrual
+block is reachable. It feeds `compute_emission_split` /
+`compute_fee_burn`, so per-block anchoring still matters even with the
+target selection gone. The rejected alternatives:
 `get_current_version()` read pre-`add_block` *happens* to equal
 `bl.major_version` (the previous block's `HardFork::add` advanced
 `current_fork_index` via `get_voted_fork_index(height + 1)`, the
 connecting block's own voted version) — correct-but-fragile, resting on
 the height+1 advance convention this pin was written to stop depending
 on, and outright wrong if read post-add (the original F-B1b bug: the
-*next* block's version, one-block-early flip at activation).
-`get_ideal_version(h)` is the static-table lookup and ignores the vote
-threshold, so it can disagree with the version the block was validated
-as. A CI tripwire (`scripts/ci/check_archival_reward_gates.sh`) fails
-the gate on any `get_current_version` / `get_ideal_version` /
-`get_block_reward` reintroduction inside the redirect block. Three
-properties follow by construction:
+*next* block's version). `get_ideal_version(h)` is the static-table
+lookup and ignores the vote threshold, so it can disagree with the
+version the block was validated as. A CI tripwire
+(`scripts/ci/check_archival_reward_gates.sh`) fails the gate on any
+`get_current_version` / `get_ideal_version` / `get_block_reward`
+reintroduction inside the accrual block.
 
-1. **The straddle is correct.** Each block's inflow lands in exactly one
-   of {destroyed, emittable}; `budget(E_flip)` is automatically the
-   post-activation-only portion — exactly what may legitimately be
-   emitted. No block's inflow goes two places, so no epoch double-counts.
-2. **Burn-stop and accrual-start are atomic.** They are the *same write,
-   redirected* — not two separately-gated behaviors that could desync
-   (a gap between independent "stop burning" and "start accruing" flips
-   either destroys inflow twice or emits-and-burns the same inflow).
-3. **Reorg symmetry is inherited, not re-proven.** The burn record's
-   pop path (`blockchain.cpp:820–827`: read the height row, decrement
+Two properties hold by construction:
+
+1. **No parallel accumulator.** The per-height rows *are* the state; a
+   second always-running accumulator would need its own symmetry proof.
+2. **Reorg symmetry is inherited, not re-proven.** The burn record's
+   pop path (`blockchain.cpp`: read the height row, decrement
    `total_burned`, remove the row) is the landed idiom; the accrual row
    mirrors it at the DB layer (§3.1: connect write in
    `BlockchainDB::add_block`, pop removal in `BlockchainDB::pop_block`,
-   both inside the block's wtxn). A parallel always-running accumulator
-   would need its own symmetry proof and would record emittable budget
-   for blocks whose inflow was actually burned — the precise ambiguity
-   this section forecloses.
+   both inside the block's wtxn).
 
-**Conservation invariant (armed by KAT B1):** for every connected block,
+**Conservation invariant (armed by KAT B1 and the conservation core
+test):** for every connected block,
 
 ```text
-staker_inflow(h) = burn-side share(h) + accrual-side share(h),  exactly one term nonzero
+ledger advance(h) = coinbase(h) + accrual row(h)        (staker_inflow lands whole, once)
 ```
 
-so over any chain prefix, `Σ inflow = total destroyed + total emittable`
-holds with no overlap and no gap.
+with the fee-burn's destroyed share independently accounted in
+`block_burn`/`total_burned` — no overlap and no gap.
 
 **Coinbase-foreclosure pin (cross-function dependency — the invariant's
-silent-break point).** The redirect is supply-safe only because the
+silent-break point).** The accrual is supply-safe only because the
 staker portion **never enters the coinbase**: `validate_miner_transaction`
 (`blockchain.cpp:1595–1613`) rejects any coinbase that is not *exactly*
 `em_split.miner_emission + burn.miner_fee_income` — both staker halves
@@ -252,18 +261,16 @@ accrual side.
 ### 2.3 Pre-genesis posture note
 
 The mainnet fork table is single-entry, all-features-from-genesis
-(`src/hardforks/hardforks.cpp:35–37`; `HF_VERSION_SHEKYL_NG = 1`). If C-1
-ships in the genesis feature set — the expected pre-genesis outcome — the
-straddle epoch is **empty by alignment** (activation at height 1, epoch 0).
-The per-block pin is kept anyway: correctness must not depend on that
-alignment (testnets fork mid-chain; a post-genesis activation would
-reintroduce the straddle), and the pin costs nothing when the straddle is
-empty. This is the spec decision §2.1 exists to record: the semantics are
-per-block, **never** per-epoch.
+(`src/hardforks/hardforks.cpp:35–37`; `HF_VERSION_SHEKYL_NG = 1`), and
+C-1 shipped in the genesis feature set — which is what made §2.1's
+transition machinery dead-on-arrival and drove its deletion. The
+semantics remain per-block, **never** per-epoch: the accrual write and
+its pop are keyed at the block's own height, so nothing depends on
+epoch alignment.
 
 ## 3. Persistence — three writes, each pop-symmetric
 
-### 3.1 Per-height accrual row (the redirected write)
+### 3.1 Per-height accrual row (the staker-inflow write)
 
 Mirror of the burn record (`add_block_burn` / `get_block_burn` /
 `remove_block_burn`, `blockchain_db.h:1928–1930`):
@@ -278,9 +285,8 @@ Mirror of the burn record (`add_block_burn` / `get_block_burn` /
   block of every epoch from its own `budget(E)`). Written only when
   `staker_inflow(h) > 0` (absent key reads as 0, the burn-row
   convention). The burn row for the same block carries only the
-  genuinely destroyed portion — `staker_inflow` is **not** added to
-  `actually_destroyed` post-activation, and `total_burned` no longer
-  includes it.
+  genuinely destroyed fee-burn portion — `staker_inflow` never enters
+  `actually_destroyed` or `total_burned`.
 - **Pop:** remove the height row in `BlockchainDB::pop_block` (keyed at
   the block's index, the claim-journal convention), mirroring the
   connect-side write in the same layer and wtxn.
@@ -408,8 +414,8 @@ the FFI.
 
 | # | KAT | Property armed |
 |---|-----|----------------|
-| **B1** | **Straddle / conservation.** Synthetic activation mid-epoch (unit-level fork-height injection): connect blocks on both sides of the boundary; assert `budget(E_flip)` equals the post-activation-only inflow sum, the pre-activation portion sits in `block_burn`/`total_burned`, and per block exactly one of {burn row, accrual row} carries the inflow. | §2.2's redirect-the-write; the over-mint class |
-| **B2** | **Reorg across the fork.** Pop a post-activation block → accrual row removed, `total_burned` untouched; pop through the activation height → earlier blocks' burn rows roll back by the landed idiom; reconnect (same or alt chain) re-applies burn-or-redirect per block height, byte-identical end state. | §2.2 property 3; the one place burn-record × budget-accrual interaction is exercised |
+| **B1** | **Burn/accrual partition and conservation.** Heights carrying fee-burn rows, accrual rows, or both at the same height (the production shape for a fee-bearing block): assert `budget(E)` sums only the accrual side, the destroyed portion sits in `block_burn`/`total_burned`, and each table reads back its own rows independently. Reframed 2026-07-09 from the activation-straddle form (`budget_straddle_partition_and_conservation`) when the burn leg was deleted. | §2.2's table independence; the over-mint class |
+| **B2** | **Reorg pop symmetry.** Pop an accrual-carrying block → accrual row removed, `total_burned` untouched; pop a fee-burn-carrying block → burn row rolls back by the landed idiom; reconnect re-applies each height's writes, byte-identical end state; the side a block didn't write is a tolerated missing key. Reframed 2026-07-09 from the across-the-fork form (`budget_reorg_across_fork_pop_symmetry`). | §2.2 property 2; the one place burn-record × budget-accrual interaction is exercised |
 | **B3** | **Close/revert symmetry.** Close `E` → frozen `archival_budget` row written in the same txn as sigma; pop the close block → row deleted by the close revert; re-close → byte-identical row re-created from the retained accrual rows. | §3.2; the frozen-operand discipline |
 | **B4** | **Zero-budget epoch.** `budget(E) = 0` (no accrual rows in E): builder predicate omits E; a hand-built vin claiming E rejects at wire positivity (zero row unencodable) and a positive-amount forgery rejects at the economics compare. | §5; the M1 §2.3 timing-window closure extended to the budget factor |
 | **B5** | **Fee-bearing coinbase foreclosure.** A fee-bearing block whose coinbase pays exactly `miner_emission + miner_fee_income` accepts; a coinbase additionally claiming `staker_pool_amount` (or `staker_emission`) rejects at `validate_miner_transaction`'s exact-equality check. Closes the fee-side gap the standing `economics_c2a_prime` tests leave (they run fee-free blocks; §2.2's pin). | §2.2's coinbase-foreclosure pin; the cross-function dependency nothing in the budget code references |
@@ -430,29 +436,23 @@ harness; CI: the `conservation` subcommand of
 `run_economics_c2a_prime.sh`). It drives `handle_block_to_main_chain`
 across a v1→v2 fork table (fork height 8, epoch-unaligned) and asserts
 the §2.2 identity per block in **labeled-row** form — each of
-{accrual row, burn row} checked against the block's own
-`major_version`, not just their sum — plus the genesis exclusion,
-coinbase = `miner_emission`, ledger advance = independently-recomputed
-modulated subsidy, and pop/reconnect row restoration across the
-boundary. The labeled form is what catches the branch-selection class
-(F-B1b: wrong branch, identical operands, sum unchanged). Genesis
-posture: with `HF_VERSION_ARCHIVAL_EMISSION == 1` the burn leg is
-compile-alive but unexercised through the real connect path; the
-expectations are written against the constant generically, so a
-post-genesis activation bump to the fixture's top fork version (2) arms
-the burn leg and the true straddle through the same fixture with no
-test change — a `static_assert` in the test header forces a fork-table
-extension for any bump past 2, which would otherwise leave every
-fixture block pre-activation and silently de-arm the accrue leg. Until
-an activation bump lands, B1's synthetic unit-level fork-height
-injection remains the burn leg's only executed coverage. Fee-leg gap
-(disclosed): the fixture is fee-free, so the KAT exercises only the
-emission half of `staker_inflow` (`staker_emission +
-staker_pool_amount`) end-to-end — the same chaingen FCMP++
-fee-transaction gap that defers B5's connect-path block form (below)
-defers the fee-pool half here; it rides the E4/E5 regtest-e2e residue,
-with the unit-level B5 KATs and the F-B1c-c1 operand pin as the interim
-guards.
+{accrual row, burn row} checked against its own expected value, not
+just their sum — plus the genesis exclusion, coinbase =
+`miner_emission`, ledger advance = independently-recomputed modulated
+subsidy, and pop/reconnect row restoration across the boundary. With
+the burn leg deleted the expectations are unconditional (whole inflow
+in the accrual row, zero in the burn row for the fee-free fixture);
+the labeled form remains the guard against the destination-error class
+(F-B1b: inflow routed into the burn row keeps the sum identity green).
+The fork table still crosses v1→v2 because `major_version` is a live
+operand of the split/fee-burn and the pop/reconnect leg replays the
+boundary through the rewound fork machinery. Fee-leg gap (disclosed):
+the fixture is fee-free, so the KAT exercises only the emission half
+of `staker_inflow` (`staker_emission + staker_pool_amount`)
+end-to-end — the same chaingen FCMP++ fee-transaction gap that defers
+B5's connect-path block form (below) defers the fee-pool half here; it
+rides the E4/E5 regtest-e2e residue, with the unit-level B5 KATs and
+the F-B1c-c1 operand pin as the interim guards.
 B4 spans the Rust wire/verify KATs (landed classes) plus the builder-side
 omission test when the claim-builder lands. B5 landed as unit-level KATs
 (`economics_b5_fee_coinbase.cpp`) driving `validate_miner_transaction`
@@ -494,10 +494,10 @@ follow-on notes below).
   fees**, bounded by the fee-market ceiling (below it the servo
   saturates; the sim's graceful loud failure). The marginal draw must
   ride the **same removed-from-circulation-once discipline as the base
-  redirect**: every fee unit the servo pulls into the purse is a fee
+  accrual**: every fee unit the servo pulls into the purse is a fee
   unit *not* paid to the miner and *not* burned — the §2.2 conservation
   invariant extends to
-  `budget_eff(h) ≤ redirected staker_inflow(h) + marginal fee draw(h)`,
+  `budget_eff(h) ≤ accrued staker_inflow(h) + marginal fee draw(h)`,
   with each addend landing in exactly one of {miner income, destroyed,
   emittable}. A servo implementation that writes at the single site but
   draws its topup from fees that the coinbase also pays to the miner
@@ -547,6 +547,19 @@ revert deletes with the close family; prune joins the epoch family), §3.3
 snapshot gather (`has_budget_row` stored-shape probe + `budget_atomic`),
 and KATs **B1/B2/B3** (`archival_substrate_lmdb.cpp` budget family). B4's
 builder half arms with the claim-builder.
+
+**Landed status (burn-leg deletion, 2026-07-09):** §2.1's transition
+machinery retired: the pre-activation burn leg and
+`HF_VERSION_ARCHIVAL_EMISSION` deleted (rule 60 — unreachable-by-
+construction with emission a genesis fact; the leg's origin was the
+scrapped direct-distribution model's conditional no-staker burn). The
+accrual write is now unconditional per non-genesis block; the raw-import
+guard in `blockchain_import.cpp` refuses all non-genesis blocks without
+the constant; the CI tripwire re-anchored to the accrual block (same
+banned symbols — the version operand still feeds the split); KATs B1/B2
+reframed to the burn-leg-free shape and the conservation core test's
+expectations made unconditional (its fork table retained for the
+version-operand and fork-machinery coverage).
 
 **Landed status (C-1 commit-block 6, 2026-07-09):** KAT **B5** landed as
 unit-level KATs (`economics_b5_fee_coinbase.cpp`) driving the production

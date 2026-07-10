@@ -792,82 +792,81 @@ TEST(archival_substrate_lmdb, zero_output_close_stored_shape_and_reorg_roundtrip
 
 // ── Budget schedule KATs B1/B2/B3 (ARCHIVAL_BUDGET_SCHEDULE.md §7) ──────────
 //
-// The redirect's target-selection branch itself lives at the connect site
-// (blockchain.cpp, gated on the connecting block's own HF version) and is
-// exercised end-to-end by the C-1 regtest arm. These substrate KATs pin the
-// storage-layer properties the branch relies on: the straddle partition
-// (burn-side rows never leak into budget(E_flip) — the over-mint class),
-// pop symmetry of both targets, and the frozen close row's revert/re-close
-// byte-identity.
+// The accrual write itself lives at the connect site (blockchain.cpp,
+// unconditional per non-genesis block since the pre-activation burn leg's
+// deletion) and is exercised end-to-end by the conservation core test.
+// These substrate KATs pin the storage-layer properties that write relies
+// on: burn-row / accrual-row table independence (burn rows never leak into
+// budget(E) — the over-mint class), pop symmetry of both tables, and the
+// frozen close row's revert/re-close byte-identity.
 
-// KAT B1 — straddle / conservation (§2.2). One epoch whose blocks straddle
-// the activation: pre-activation heights carry burn rows, post-activation
-// heights carry accrual rows (the exactly-one-target invariant, simulated at
-// the substrate layer exactly as the connect site writes it). The close must
-// sum only the accrual side.
-TEST(archival_substrate_lmdb, budget_straddle_partition_and_conservation)
+// KAT B1 — burn/accrual partition and conservation (§2.2). One epoch whose
+// heights carry fee-burn rows, accrual rows, or BOTH at the same height (the
+// production shape: a fee-bearing block writes its destroyed fee share to
+// block_burn and its staker inflow to the accrual row). The close must sum
+// only the accrual side; the burn side sits entirely in
+// block_burn/total_burned.
+TEST(archival_substrate_lmdb, budget_burn_accrual_partition_and_conservation)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
   BlockchainLMDB& lmdb = fixture.db;
 
   const uint64_t seb = 10000;
-  const uint64_t settlement_epoch = 3;  // E_flip
+  const uint64_t settlement_epoch = 3;
   const uint64_t epoch_start = settlement_epoch * seb;
   const uint64_t close_height = (settlement_epoch + 1) * seb;
-  // Synthetic activation mid-epoch: fork-height injection at the substrate
-  // layer — heights below burn, heights at/above accrue.
-  const uint64_t activation_height = epoch_start + 4000;
 
-  const uint64_t inflow = 250;
-  const std::vector<uint64_t> pre_heights = { epoch_start + 100, epoch_start + 3999 };
-  const std::vector<uint64_t> post_heights = { activation_height, epoch_start + 7000,
+  const uint64_t inflow = 250;   // per-height accrual (staker inflow)
+  const uint64_t fee_burn = 40;  // per-height destroyed fee share
+  // Burn-only, accrual-only, and both-rows heights — the close's range-sum
+  // must count accruals exactly once each and burns never, regardless of
+  // co-location.
+  const std::vector<uint64_t> burn_heights = { epoch_start + 100, epoch_start + 3999,
+    epoch_start + 7000 };
+  const std::vector<uint64_t> accrual_heights = { epoch_start + 4000, epoch_start + 7000,
     close_height - 1 };
 
   uint64_t total_burned = 0;
-  for (const uint64_t h : pre_heights)
+  for (const uint64_t h : burn_heights)
   {
-    db.add_block_burn(h, inflow);
-    total_burned += inflow;
+    db.add_block_burn(h, fee_burn);
+    total_burned += fee_burn;
   }
   db.set_total_burned(total_burned);
-  for (const uint64_t h : post_heights)
+  for (const uint64_t h : accrual_heights)
     db.add_archival_budget_accrual(h, inflow);
 
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
-  // Per-block exactly-one-target: no height carries both rows.
-  for (const uint64_t h : pre_heights)
-  {
-    EXPECT_EQ(db.get_block_burn(h), inflow);
-    EXPECT_EQ(db.get_archival_budget_accrual(h), 0u);
-  }
-  for (const uint64_t h : post_heights)
-  {
-    EXPECT_EQ(db.get_block_burn(h), 0u);
+  // Each table reads back its own rows; absence reads as 0.
+  for (const uint64_t h : burn_heights)
+    EXPECT_EQ(db.get_block_burn(h), fee_burn);
+  for (const uint64_t h : accrual_heights)
     EXPECT_EQ(db.get_archival_budget_accrual(h), inflow);
-  }
+  EXPECT_EQ(db.get_archival_budget_accrual(epoch_start + 100), 0u);  // burn-only height
+  EXPECT_EQ(db.get_block_burn(close_height - 1), 0u);                // accrual-only height
 
   db.process_archival_epoch_close_at_height(close_height);
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
-  // budget(E_flip) is the post-activation-only portion; the pre-activation
-  // portion sits in block_burn/total_burned. Σ inflow = destroyed +
-  // emittable, no overlap, no gap.
+  // budget(E) is the accrual-side sum only; the destroyed portion sits in
+  // block_burn/total_burned. No overlap (the both-rows height contributes
+  // to each side independently), no gap.
   EXPECT_TRUE(lmdb.has_archival_budget_row(settlement_epoch));
-  EXPECT_EQ(db.get_archival_budget(settlement_epoch), inflow * post_heights.size());
-  EXPECT_EQ(db.get_total_burned(), inflow * pre_heights.size());
-  EXPECT_EQ(db.get_archival_budget(settlement_epoch) + db.get_total_burned(),
-    inflow * (pre_heights.size() + post_heights.size()));
+  EXPECT_EQ(db.get_archival_budget(settlement_epoch), inflow * accrual_heights.size());
+  EXPECT_EQ(db.get_total_burned(), fee_burn * burn_heights.size());
 }
 
-// KAT B2 — reorg across the fork (§2.2 property 3). Pop a post-activation
-// block → accrual row removed, total_burned untouched; pop through the
-// activation → burn rows roll back by the landed idiom; reconnect re-applies
-// burn-or-redirect per height, byte-identical end state.
-TEST(archival_substrate_lmdb, budget_reorg_across_fork_pop_symmetry)
+// KAT B2 — reorg pop symmetry (§2.2 property 3). Pop an accrual-carrying
+// block → accrual row removed, total_burned untouched; pop a fee-burn-
+// carrying block → burn row rolls back by the landed idiom; reconnect
+// re-applies each height's writes, byte-identical end state. The production
+// pop calls both removes for every popped height, so the side a block
+// didn't write must be a tolerated missing key.
+TEST(archival_substrate_lmdb, budget_reorg_pop_symmetry)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
@@ -878,15 +877,15 @@ TEST(archival_substrate_lmdb, budget_reorg_across_fork_pop_symmetry)
   const uint64_t epoch_start = settlement_epoch * seb;
   const uint64_t close_height = (settlement_epoch + 1) * seb;
 
-  const uint64_t h_pre = epoch_start + 10;    // pre-activation: burn target
-  const uint64_t h_post = epoch_start + 20;   // post-activation: accrual target
+  const uint64_t h_burn = epoch_start + 10;     // fee-burn-only block
+  const uint64_t h_accrual = epoch_start + 20;  // accrual-only block
   const uint64_t burn_amt = 111;
   const uint64_t accrual_amt = 222;
 
   // Connect both blocks (the per-height writes the connect site issues).
-  db.add_block_burn(h_pre, burn_amt);
+  db.add_block_burn(h_burn, burn_amt);
   db.set_total_burned(burn_amt);
-  db.add_archival_budget_accrual(h_post, accrual_amt);
+  db.add_archival_budget_accrual(h_accrual, accrual_amt);
   db.process_archival_epoch_close_at_height(close_height);
   fixture.db.batch_stop();
   fixture.db.batch_start();
@@ -894,36 +893,36 @@ TEST(archival_substrate_lmdb, budget_reorg_across_fork_pop_symmetry)
   const uint64_t frozen_budget = db.get_archival_budget(settlement_epoch);
   EXPECT_EQ(frozen_budget, accrual_amt);
 
-  // Pop the close block, then h_post (the production pop calls both removes
-  // for every popped height; the side the block didn't write is a tolerated
-  // missing key).
+  // Pop the close block, then h_accrual (the production pop calls both
+  // removes for every popped height; the side the block didn't write is a
+  // tolerated missing key).
   db.revert_archival_epoch_close_at_height(close_height);
-  db.remove_block_burn(h_post);              // missing key — must tolerate
-  db.remove_archival_budget_accrual(h_post); // removes the accrual row
+  db.remove_block_burn(h_accrual);              // missing key — must tolerate
+  db.remove_archival_budget_accrual(h_accrual); // removes the accrual row
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
   EXPECT_FALSE(lmdb.has_archival_budget_row(settlement_epoch));
-  EXPECT_EQ(db.get_archival_budget_accrual(h_post), 0u);
+  EXPECT_EQ(db.get_archival_budget_accrual(h_accrual), 0u);
   // total_burned untouched by the accrual-side pop.
   EXPECT_EQ(db.get_total_burned(), burn_amt);
 
-  // Pop through the activation: h_pre rolls back by the landed burn idiom.
-  const uint64_t destroyed = db.get_block_burn(h_pre);
+  // Pop h_burn: rolls back by the landed burn idiom.
+  const uint64_t destroyed = db.get_block_burn(h_burn);
   EXPECT_EQ(destroyed, burn_amt);
   db.set_total_burned(db.get_total_burned() - destroyed);
-  db.remove_block_burn(h_pre);
-  db.remove_archival_budget_accrual(h_pre);  // missing key — must tolerate
+  db.remove_block_burn(h_burn);
+  db.remove_archival_budget_accrual(h_burn);  // missing key — must tolerate
   fixture.db.batch_stop();
   fixture.db.batch_start();
   EXPECT_EQ(db.get_total_burned(), 0u);
-  EXPECT_EQ(db.get_block_burn(h_pre), 0u);
+  EXPECT_EQ(db.get_block_burn(h_burn), 0u);
 
-  // Reconnect: re-apply burn-or-redirect per block height, re-close —
-  // byte-identical end state.
-  db.add_block_burn(h_pre, burn_amt);
+  // Reconnect: re-apply each height's writes, re-close — byte-identical
+  // end state.
+  db.add_block_burn(h_burn, burn_amt);
   db.set_total_burned(burn_amt);
-  db.add_archival_budget_accrual(h_post, accrual_amt);
+  db.add_archival_budget_accrual(h_accrual, accrual_amt);
   db.process_archival_epoch_close_at_height(close_height);
   fixture.db.batch_stop();
   fixture.db.batch_start();
