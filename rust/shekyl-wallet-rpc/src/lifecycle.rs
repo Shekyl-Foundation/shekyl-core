@@ -22,8 +22,8 @@ use shekyl_crypto_pq::account::{
 use shekyl_crypto_pq::bip39::{mnemonic_from_entropy, SHEKYL_BIP39_ENTROPY_BYTES};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::{
-    CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams, Network, OpenError,
-    OpenedEngine, SoloSigner,
+    CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams, Network, OpenedEngine,
+    SoloSigner,
 };
 use shekyl_engine_file::paths::keys_path_from;
 use shekyl_engine_file::SafetyOverrides;
@@ -260,20 +260,15 @@ pub(crate) async fn close_wallet(
     };
     let engine = lock.into_inner();
 
-    // `Engine::close` consumes `self` and refuses when reservations are
-    // outstanding — a refusal there would drop the engine and lose the wallet.
-    // Check first (non-consuming) and re-install the wallet unchanged on refusal.
-    let outstanding = engine.outstanding_pending_txs();
-    if outstanding > 0 {
+    // Persist without consuming. `Engine::close(self)` drops `self` on any
+    // `Err` (by-value signature), which would orphan the RPC session on a
+    // transient I/O failure with no password available to reopen. Flush
+    // first; restore the tenant slot on failure; only drop on success.
+    if let Err(e) = tokio::task::block_in_place(|| engine.persist_for_close()) {
         tenants.lock().await.tenant.set_open(name, engine);
-        return Err(WalletRpcError::from(OpenError::OutstandingPendingTx {
-            count: outstanding,
-        }));
+        return Err(WalletRpcError::from(e));
     }
-
-    // `credentials` is ignored on the steady-state close path.
-    let creds = Credentials::password_only(b"");
-    tokio::task::block_in_place(|| engine.close(&creds)).map_err(WalletRpcError::from)?;
+    drop(engine);
     Ok(json!({}))
 }
 

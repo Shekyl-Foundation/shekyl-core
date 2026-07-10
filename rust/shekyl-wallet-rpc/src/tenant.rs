@@ -96,14 +96,30 @@ impl Tenant {
 
     /// Take the open engine (for [`Engine::close`]), clearing the tenant slot.
     ///
+    /// The name/engine pair is taken atomically: if either field is missing the
+    /// other is restored and this returns `None`, so a broken pair cannot clear
+    /// only the stem and leave an undiagnosable half-empty slot.
+    ///
     /// The caller should [`Arc::try_unwrap`](std::sync::Arc::try_unwrap) the
     /// returned handle before close. If other clones still exist (e.g. an
     /// in-flight refresh), the caller must [`restore_open`](Self::restore_open)
     /// the handle and fail loud rather than evicting the still-live wallet.
     pub fn take_open(&mut self) -> Option<(String, SharedEngine)> {
-        let name = self.open_name.take()?;
-        let engine = self.engine.take()?;
-        Some((name, engine))
+        match (self.open_name.take(), self.engine.take()) {
+            (Some(name), Some(engine)) => Some((name, engine)),
+            (None, None) => None,
+            (name, engine) => {
+                // Invariant: both are Some together, or both None. Restore both
+                // so a bug / future refactor cannot lose the stem alone.
+                debug_assert!(
+                    false,
+                    "tenant invariant violated: open_name/engine mismatch"
+                );
+                self.open_name = name;
+                self.engine = engine;
+                None
+            }
+        }
     }
 
     /// Re-install a handle previously removed by [`take_open`](Self::take_open)
