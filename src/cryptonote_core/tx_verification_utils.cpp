@@ -120,7 +120,6 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                     || !rv.outPk.empty()
                     || !rv.p.bulletproofs_plus.empty()
                     || !rv.p.fcmp_pp_proof.empty()
-                    || !rv.pseudoOuts.empty()
                     || !rv.p.pseudoOuts.empty()
                     || rv.type != rct::RCTTypeFcmpPlusPlusPqc
                     || !rct::verRctSemanticsFeeOnly(rv))
@@ -139,7 +138,6 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                     || spend_input_count == 0
                     || rv.p.pseudoOuts.size() != spend_input_count
                     || rv.p.fcmp_pp_proof.empty()
-                    || !rv.pseudoOuts.empty()
                     || rv.type != rct::RCTTypeFcmpPlusPlusPqc
                     || !rct::verRctSemanticsBondPost(rv, bond.bond_credit, bond.bond_debit))
                 {
@@ -173,7 +171,6 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                     || total_reward == 0
                     || tx.pqc_auths.size() != tx.vin.size()
                     || rv.p.pseudoOuts.size() != spend_input_count
-                    || !rv.pseudoOuts.empty()
                     || rv.type != rct::RCTTypeFcmpPlusPlusPqc
                     || !rct::verCtSemanticsEmission(rv, total_reward, spend_input_count))
                 {

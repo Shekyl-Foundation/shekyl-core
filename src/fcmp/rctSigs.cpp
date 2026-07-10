@@ -209,7 +209,6 @@ namespace
           CHECK_AND_ASSERT_MES(!rv.p.fcmp_pp_proof.empty(),
               false, "FCMP++ proof is empty");
           CHECK_AND_ASSERT_MES(rv.outPk.size() == n_bulletproof_plus_amounts(rv.p.bulletproofs_plus), false, "Mismatched sizes of outPk and bulletproofs_plus");
-          CHECK_AND_ASSERT_MES(rv.pseudoOuts.empty(), false, "rv.pseudoOuts is not empty");
           CHECK_AND_ASSERT_MES(rv.outPk.size() == rv.enc_amounts.size(), false, "Mismatched sizes of outPk and rv.enc_amounts");
           CHECK_AND_ASSERT_MES(rv.enc_labels.size() == rv.enc_amounts.size(), false, "Mismatched sizes of enc_labels and rv.enc_amounts");
         }
@@ -331,7 +330,6 @@ namespace
             "verRctSemanticsBondPost called on unsupported rctSig type");
         CHECK_AND_ASSERT_MES(!rv.p.fcmp_pp_proof.empty(), false,
             "verRctSemanticsBondPost requires non-empty FCMP++ proof");
-        CHECK_AND_ASSERT_MES(rv.pseudoOuts.empty(), false, "legacy pseudoOuts must be empty");
         // Bond-post CT balance: credit = bond_credit, debit = bond_debit.
         return verArchivalCtBalanceAndRange(rv, bond_credit, bond_debit, "Bond-post");
       }
@@ -358,7 +356,6 @@ namespace
         // spends, or spends with no proof, are both malformed).
         CHECK_AND_ASSERT_MES(rv.p.fcmp_pp_proof.empty() == (fee_input_count == 0), false,
             "emission FCMP++ proof presence must match fee-input count");
-        CHECK_AND_ASSERT_MES(rv.pseudoOuts.empty(), false, "legacy pseudoOuts must be empty");
         CHECK_AND_ASSERT_MES(rv.p.pseudoOuts.size() == fee_input_count, false,
             "emission pseudoOuts must match fee-input count");
         CHECK_AND_ASSERT_MES(total_reward > 0, false,
@@ -389,7 +386,6 @@ namespace
         CHECK_AND_ASSERT_MES(rv.type == RCTTypeFcmpPlusPlusPqc, false,
             "verRctSemanticsFeeOnly called on unsupported rctSig type");
         CHECK_AND_ASSERT_MES(rv.p.fcmp_pp_proof.empty(), false, "FCMP++ proof must be empty");
-        CHECK_AND_ASSERT_MES(rv.pseudoOuts.empty(), false, "legacy pseudoOuts must be empty");
         CHECK_AND_ASSERT_MES(rv.p.pseudoOuts.empty(), false, "pseudoOuts must be empty");
         CHECK_AND_ASSERT_MES(rv.outPk.size() == n_bulletproof_plus_amounts(rv.p.bulletproofs_plus),
             false, "Mismatched sizes of outPk and bulletproofs_plus");

@@ -178,15 +178,19 @@ TEST(fcmp, mul8)
 
 TEST(fcmp, RCTTypeFcmpPlusPlusPqc_serialization_roundtrip)
 {
+  // Round-trips the rct base through `serialize_rctsig_base` — the ONLY
+  // encoding of the base (the transaction serializer, the tx-hash paths, the
+  // FCMP++ pre-hash, and the PQC payload binding all call it). A standalone
+  // object serializer used to exist and was round-tripped here instead; it
+  // was caller-less in production, laxer than the real wire (it accepted
+  // states the member serializer rejects), and was deleted in the
+  // dead-serializer cleanup (CT_SURFACE_NAMING_PIN.md §2). The prunable
+  // section's real-path round-trip is covered at the transaction level
+  // (tests/unit_tests/serialization.cpp and the shekyl-wire KATs).
   rct::rctSig rv;
   rv.type = rct::RCTTypeFcmpPlusPlusPqc;
   rv.txnFee = 1000000;
   memset(&rv.referenceBlock, 0xAB, sizeof(rv.referenceBlock));
-  rv.message = rct::skGen();
-
-  rct::key pseudo_out;
-  rct::skpkGen(pseudo_out, pseudo_out);
-  rv.p.pseudoOuts.push_back(pseudo_out);
 
   std::array<uint8_t, 9> enc_amt;
   enc_amt.fill(0x42);
@@ -203,15 +207,15 @@ TEST(fcmp, RCTTypeFcmpPlusPlusPqc_serialization_roundtrip)
   outpk.mask = rct::pkGen();
   rv.outPk.push_back(outpk);
 
-  rv.p.curve_trees_tree_depth = 20;
-  rv.p.fcmp_pp_proof = {0x01, 0x02, 0x03, 0x04, 0x05};
+  const size_t inputs = 1;
+  const size_t outputs = 1;
 
-  // Serialize
+  // Serialize (real wire path)
   std::string blob;
   {
     std::ostringstream oss;
     binary_archive<true> ar(oss);
-    ASSERT_TRUE(do_serialize(ar, rv));
+    ASSERT_TRUE(rv.serialize_rctsig_base(ar, inputs, outputs));
     blob = oss.str();
   }
 
@@ -219,15 +223,16 @@ TEST(fcmp, RCTTypeFcmpPlusPlusPqc_serialization_roundtrip)
   rct::rctSig rv2;
   {
     binary_archive<false> ar({reinterpret_cast<const uint8_t*>(blob.data()), blob.size()});
-    ASSERT_TRUE(do_serialize(ar, rv2));
+    ASSERT_TRUE(rv2.serialize_rctsig_base(ar, inputs, outputs));
   }
 
   ASSERT_EQ(rv2.type, rct::RCTTypeFcmpPlusPlusPqc);
   ASSERT_EQ(rv2.txnFee, rv.txnFee);
   ASSERT_EQ(rv2.referenceBlock, rv.referenceBlock);
-  ASSERT_EQ(rv2.p.curve_trees_tree_depth, 20);
-  ASSERT_EQ(rv2.p.fcmp_pp_proof.size(), 5u);
-  ASSERT_EQ(rv2.p.fcmp_pp_proof, rv.p.fcmp_pp_proof);
+  ASSERT_EQ(rv2.enc_amounts, rv.enc_amounts);
+  ASSERT_EQ(rv2.enc_labels, rv.enc_labels);
+  ASSERT_EQ(rv2.outPk.size(), 1u);
+  ASSERT_EQ(rv2.outPk[0].mask, rv.outPk[0].mask);
 }
 
 // enc_label integrity is prehash-bound (no Pedersen commitment backstop).
@@ -264,6 +269,11 @@ TEST(fcmp, enc_label_binds_rctsig_base_prehash)
 
 TEST(fcmp, RCTTypeNull_serialization)
 {
+  // The real coinbase base encoding (`serialize_rctsig_base`, the only
+  // encoding — see the roundtrip test above) for a Null rct with no outputs
+  // is exactly the one type byte: no txnFee, no referenceBlock, no legacy
+  // pseudo-out material. The full-transaction-level pin lives in
+  // tests/unit_tests/serialization.cpp; this is the focused component read.
   rct::rctSig rv;
   rv.type = rct::RCTTypeNull;
 
@@ -271,14 +281,16 @@ TEST(fcmp, RCTTypeNull_serialization)
   {
     std::ostringstream oss;
     binary_archive<true> ar(oss);
-    ASSERT_TRUE(do_serialize(ar, rv));
+    ASSERT_TRUE(rv.serialize_rctsig_base(ar, 1, 0));
     blob = oss.str();
   }
+  ASSERT_EQ(blob.size(), 1u);
+  ASSERT_EQ(blob[0], static_cast<char>(rct::RCTTypeNull));
 
   rct::rctSig rv2;
   {
     binary_archive<false> ar({reinterpret_cast<const uint8_t*>(blob.data()), blob.size()});
-    ASSERT_TRUE(do_serialize(ar, rv2));
+    ASSERT_TRUE(rv2.serialize_rctsig_base(ar, 1, 0));
   }
 
   ASSERT_EQ(rv2.type, rct::RCTTypeNull);
@@ -302,19 +314,26 @@ TEST(fcmp, key_offsets_empty_for_fcmp_type)
   ASSERT_TRUE(txin.key_offsets.empty());
 }
 
-TEST(fcmp, get_pseudo_outs_uses_prunable_for_fcmp_type)
+TEST(fcmp, get_pseudo_outs_uses_prunable_for_all_types)
 {
+  // The pseudo-out commitments live in the prunable section for every rct
+  // type (the legacy base-side fallback field was removed in the
+  // dead-serializer cleanup): FCMP++ carries one per spend input, and a
+  // coinbase (RCTTypeNull) has none, so the accessor returns the empty
+  // prunable vector there.
   rct::rctSig rv;
   rv.type = rct::RCTTypeFcmpPlusPlusPqc;
 
   rct::key k1 = rct::skGen();
-  rct::key k2 = rct::skGen();
   rv.p.pseudoOuts.push_back(k1);
-  rv.pseudoOuts.push_back(k2);
 
   const auto &po = rv.get_pseudo_outs();
   ASSERT_EQ(po.size(), 1u);
   ASSERT_EQ(po[0], k1);
+
+  rct::rctSig coinbase;
+  coinbase.type = rct::RCTTypeNull;
+  ASSERT_TRUE(coinbase.get_pseudo_outs().empty());
 }
 
 TEST(fcmp, curve_tree_root_in_block_header)
