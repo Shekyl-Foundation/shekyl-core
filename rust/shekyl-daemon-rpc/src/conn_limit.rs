@@ -70,7 +70,10 @@ pub struct ConnTracker {
     /// Live connection total. Mutated only while `per_ip`'s lock is held so it
     /// stays coherent with the map; read lock-free for the `get_info` metric.
     total: AtomicU64,
-    per_ip: Mutex<HashMap<IpAddr, u32>>,
+    /// Per-IP live counts, in the same `u64` width as the caps so comparisons
+    /// need no cast (a per-IP count is bounded by ports/FDs far below `u32`, but
+    /// matching the limit type keeps the check clean).
+    per_ip: Mutex<HashMap<IpAddr, u64>>,
 }
 
 impl ConnTracker {
@@ -113,7 +116,7 @@ impl ConnTracker {
             return None;
         }
         let slot = map.entry(ip).or_insert(0);
-        if per_ip_cap != 0 && u64::from(*slot) >= per_ip_cap {
+        if per_ip_cap != 0 && *slot >= per_ip_cap {
             return None;
         }
         *slot += 1;
