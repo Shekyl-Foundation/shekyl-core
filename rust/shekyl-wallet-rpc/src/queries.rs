@@ -15,7 +15,7 @@ use shekyl_scanner::LedgerBlockExt;
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_optional_object, parse_required_object, require_empty_object};
-use crate::project::{transfer_id, transfer_state, transfer_view};
+use crate::project::{parse_transfer_id, transfer_state, transfer_view};
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
     GetBalanceResult, GetHeightResult, GetPrimaryAddressResult, GetTransferByIdResult,
@@ -130,6 +130,14 @@ pub(crate) async fn get_transfer_by_id(
         ));
     }
 
+    // Parse the id into its (tx_hash, index) parts once and compare typed
+    // fields, rather than formatting a fresh id string for every ledger row
+    // scanned. A non-canonical id could never match any row's transfer_id
+    // output, so it is the same UnknownTransferId the string compare gave.
+    let Some((tx_hash, out_idx)) = parse_transfer_id(&p.id) else {
+        return Err(WalletRpcError::UnknownTransferId);
+    };
+
     let engine = require_open_engine(tenants).await?;
     let engine = engine.read().await;
     let ledger = engine.ledger();
@@ -138,7 +146,7 @@ pub(crate) async fn get_transfer_by_id(
         .ledger
         .transfers()
         .iter()
-        .find(|td| transfer_id(td) == p.id)
+        .find(|td| td.tx_hash == tx_hash && td.internal_output_index == out_idx)
         .map(transfer_view);
 
     match found {

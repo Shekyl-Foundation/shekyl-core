@@ -9,6 +9,7 @@ use shekyl_engine_core::PendingTx;
 use shekyl_engine_core::RefreshSummary;
 use shekyl_engine_state::TransferDetails;
 use shekyl_scanner::BalanceSummary;
+use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
 
 use crate::types::{
@@ -42,6 +43,40 @@ impl From<&BalanceSummary> for GetBalanceResult {
 /// Stable transfer id: `{tx_hash_hex}:{internal_output_index}`.
 pub fn transfer_id(td: &TransferDetails) -> String {
     format!("{}:{}", td.tx_hash, td.internal_output_index)
+}
+
+/// Parse a transfer id back into its `(tx_hash, internal_output_index)`
+/// parts — the inverse of [`transfer_id`], kept beside it so the id format
+/// has a single home.
+///
+/// Accepts exactly the canonical form `transfer_id` emits (64 lowercase hex
+/// chars, `:`, decimal index with no leading zeros or sign). Anything else
+/// returns `None` — the same ids that per-row string equality against
+/// [`transfer_id`] output would have failed to match, so lookups by the
+/// parsed parts preserve match semantics while comparing typed fields
+/// instead of formatting a fresh id string for every ledger row scanned.
+pub fn parse_transfer_id(id: &str) -> Option<(TxHash, u64)> {
+    let (hash_hex, idx_str) = id.split_once(':')?;
+    if hash_hex.len() != 64
+        || !hash_hex
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return None;
+    }
+    // Canonical decimal only: `u64::from_str` also accepts `+` and leading
+    // zeros, which `transfer_id` never emits and string equality would
+    // therefore never have matched.
+    if idx_str.is_empty()
+        || !idx_str.bytes().all(|b| b.is_ascii_digit())
+        || (idx_str.len() > 1 && idx_str.starts_with('0'))
+    {
+        return None;
+    }
+    let idx: u64 = idx_str.parse().ok()?;
+    let mut bytes = [0u8; 32];
+    hex::decode_to_slice(hash_hex, &mut bytes).ok()?;
+    Some((TxHash::from_bytes(bytes), idx))
 }
 
 /// Confirmation / spend state of a ledger row.
@@ -105,6 +140,40 @@ pub fn pending_tx_result(tx: &PendingTx) -> BuildPendingTxResult {
 mod tests {
     use super::*;
     use shekyl_units::AtomicUnits;
+
+    #[test]
+    fn parse_transfer_id_roundtrips_canonical_form() {
+        let hash_hex = "0a".repeat(32);
+        let (hash, idx) = parse_transfer_id(&format!("{hash_hex}:7")).expect("canonical id");
+        assert_eq!(hash, TxHash::from_bytes([0x0a; 32]));
+        assert_eq!(idx, 7);
+        // The parse must accept exactly what transfer_id emits.
+        assert_eq!(format!("{hash}:{idx}"), format!("{hash_hex}:7"));
+
+        let (_, zero_idx) = parse_transfer_id(&format!("{hash_hex}:0")).expect("index 0 is valid");
+        assert_eq!(zero_idx, 0);
+    }
+
+    #[test]
+    fn parse_transfer_id_rejects_non_canonical_forms() {
+        let hash_hex = "0a".repeat(32);
+        // Everything here would also have failed per-row string equality
+        // against transfer_id output, so rejecting keeps match semantics.
+        for bad in [
+            String::new(),
+            "no-colon".to_owned(),
+            format!("{hash_hex}:"),                     // empty index
+            format!("{hash_hex}:+7"),                   // sign not emitted
+            format!("{hash_hex}:07"),                   // leading zero not emitted
+            format!("{hash_hex}:1x"),                   // non-digit
+            format!("{}:1", "0A".repeat(32)),           // uppercase hex not emitted
+            format!("{}:1", "0a".repeat(31)),           // short hash
+            format!("{}:1", "0a".repeat(33)),           // long hash
+            format!("{hash_hex}:99999999999999999999"), // > u64::MAX
+        ] {
+            assert!(parse_transfer_id(&bad).is_none(), "accepted {bad:?}");
+        }
+    }
 
     #[test]
     fn balance_maps_unlocked_to_liquid() {
