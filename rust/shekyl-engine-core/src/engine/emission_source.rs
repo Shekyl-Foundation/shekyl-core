@@ -134,8 +134,10 @@ pub struct EmissionClaimSource {
     /// verify-context height (the earliest inclusion height, and the exact
     /// operand the daemon derived `current_settled_epoch` from —
     /// `archival_claim_source.cpp` gathers both from one `db.height()`
-    /// read) and the §2 step-3 same-tip staleness operand (PR-3's
-    /// `StakeEngine` handler).
+    /// read), the derivation's strict-finalization operand
+    /// (`emission_claim` step 2: verify admits `E` one count after the
+    /// connect window does), and the §2 step-3 same-tip staleness operand
+    /// (PR-3's `StakeEngine` handler).
     pub chain_height: u64,
     /// The daemon's settled-epoch operand (same helper consensus uses).
     /// Step 1's window bounds derive from this via the landed predicate

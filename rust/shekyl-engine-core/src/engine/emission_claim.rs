@@ -51,6 +51,13 @@
 //! (`epoch_is_not_settled`) that would retire the oracle entirely is
 //! filed in `docs/FOLLOWUPS.md` (V3.1, trigger-gated).
 //!
+//! The **fourth** boundary — verify's strict finalization
+//! (`current_block_height > h_close(E)`) — is not the oracle's to give:
+//! it is the verify body's step-1 predicate, consumed via
+//! [`epoch_close_height`] (the literal function verify calls). The
+//! connect window and the verify window differ by exactly one count —
+//! see the Step 7 section for the close-boundary trace.
+//!
 //! ## Cause-blindness (CB-5)
 //!
 //! A zero-share epoch is skipped as [`EpochSkip::ZeroShare`] — one
@@ -127,13 +134,27 @@
 //!
 //! The verify-context height is the source's gather tip
 //! (`chain_height`, a block count — i.e. the next block's height, the
-//! earliest the assembled tx could be included at), so the self-check's
-//! step-1 window is byte-exactly the view the derivation selected
-//! against. The apparent strict-finalization edge (`chain_height ==
-//! h_close(E)` for the youngest admitted epoch) is structurally
-//! foreclosed: at that count the close for `E` has not connected, so
-//! the epoch had no budget row and the derivation already skipped it
-//! ([`EpochSkip::NoCloseRow`]).
+//! earliest the assembled tx could be included at), so the self-check
+//! proves the batch verifies **for next-block inclusion**.
+//!
+//! **The close-boundary count (verified at daemon source).** The close
+//! of `E` runs while connecting `E`'s **last** block — the hook operand
+//! is the next height (`blockchain_db.cpp` `add_block`:
+//! `process_archival_epoch_close_at_height(prev_height + 1)`, fired
+//! connecting height `(E+1)·SEB − 1`). So at the one count
+//! `chain_height == h_close(E)` the budget row for `E` **already
+//! exists** and the connect window admits `E` (`settled = E + 1` from
+//! the same `db.height()` read, `archival_claim_source.cpp`), while
+//! verify's strict `current_block_height > h_close(E)` still rejects a
+//! claim of `E` in the very next block. The connect and verify windows
+//! genuinely differ by one count; a `NoCloseRow` skip does **not**
+//! foreclose the edge (an earlier revision claimed it did — wrongly).
+//! The derivation therefore applies verify's own step-1 predicate, via
+//! the same [`epoch_close_height`] verify calls, and defers the epoch
+//! one block ([`EpochSkip::NotFinalized`]) — the assembled batch
+//! verifies at the gather tip by construction, and the boundary KAT's
+//! premise arm proves the deferral is load-bearing (an `E`-bearing vin
+//! at that count drives the real verifier to `EpochNotFinalized`).
 //!
 //! **Cause-blindness (CB-5 builder pin).** [`EmissionClaimError::SelfCheckFailed`]
 //! carries **no operand**: "self-check failed on operand X" would leak
@@ -160,7 +181,7 @@
 
 use shekyl_archival_retention::{
     as_of_e_served_work, capped_work_milli, claimed_epochs_check_and_set,
-    emission_vin_verify_claims, reward_share_floor, shard_contribution_milli,
+    emission_vin_verify_claims, epoch_close_height, reward_share_floor, shard_contribution_milli,
     ArchivalRewardEmissionVin, ClaimedEpochsError, EmissionEpochSource, EmissionVerifyContext,
     EmissionWireError, EpochCloseBond, HoldingsDescriptor, MembershipOnlyBacking, ServedWork,
     ShardWorkEntry, WorkEpochClaim, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_BACKING_PROOF_BYTES,
@@ -274,6 +295,14 @@ pub enum EpochSkip {
     /// `E` is already in the bond record's claimed set (the connect
     /// predicate's dedup verdict).
     AlreadyClaimed,
+    /// Settled by the connect window but not yet finalized for
+    /// next-block inclusion: `chain_height ≤ h_close(E)` — verify's
+    /// step-1 strict predicate, which admits `E` exactly one count
+    /// after the connect window does (module doc "Step 7"). Fires only
+    /// at `chain_height == h_close(E)` (the equality count); the epoch
+    /// is claimable one block later. Named after verify's
+    /// `EpochNotFinalized` rejection, whose predicate this consumes.
+    NotFinalized,
     /// No frozen close row for `E` (`has_budget_row == false`) — mirrors
     /// the verify shim's reject; there is no denominator to claim against.
     NoCloseRow,
@@ -337,9 +366,14 @@ pub struct ClaimableEpochs {
 ///    the daemon's `current_settled_epoch`, map the verdict
 ///    (`NotSettled` / `Expired` / dedup) to a skip or proceed. The clone
 ///    is discarded; the builder never mutates the decoded record.
-/// 2. **Close row** — no frozen close row (`has_budget_row == false`)
+/// 2. **Strict finalization** — verify's step-1 predicate at the
+///    earliest inclusion height (`chain_height > h_close(E)`, via
+///    [`epoch_close_height`]); the connect window admits `E` one count
+///    before verify accepts it, so the equality count defers
+///    ([`EpochSkip::NotFinalized`] — module doc "Step 7").
+/// 3. **Close row** — no frozen close row (`has_budget_row == false`)
 ///    skips ([`EpochSkip::NoCloseRow`]).
-/// 3. **Share recompute** — the verify-exact chain over the frozen rows:
+/// 4. **Share recompute** — the verify-exact chain over the frozen rows:
 ///    [`as_of_e_served_work`] → `work_P` at `claimant_bond_idx` (absent
 ///    index ⇒ zero work, exactly as verify treats it) →
 ///    [`capped_work_milli`] → [`reward_share_floor`] against the
@@ -388,6 +422,23 @@ pub fn derive_claimable_epochs(
                 continue;
             }
             Ok(true) => {}
+        }
+
+        // Verify's step-1 strict finalization at the earliest inclusion
+        // height — the fourth boundary, consumed via the same
+        // `epoch_close_height` the verify body calls (never inline
+        // arithmetic). The connect window admits `E` one count before
+        // verify accepts it (module doc "Step 7": the close runs while
+        // connecting `E`'s last block, so at `chain_height == h_close(E)`
+        // the budget row exists and the oracle says settled, but a claim
+        // of `E` in the next block is `EpochNotFinalized`). Without this
+        // skip the builder would assemble a vin its own self-check — and
+        // the chain — refuses; with it, the epoch defers one block.
+        let finalized_for_inclusion =
+            epoch_close_height(epoch).is_some_and(|h_close| source.chain_height > h_close);
+        if !finalized_for_inclusion {
+            skipped.push((epoch, EpochSkip::NotFinalized));
+            continue;
         }
 
         if !snap.has_budget_row {
@@ -728,11 +779,11 @@ mod tests {
     use super::*;
     use crate::engine::emission_source::{BondContext, BondRow, EpochSnapshot};
     use shekyl_archival_retention::{
-        bond_wire::MAX_HOLDINGS_SHARDS, claimed_epochs_contains, epoch_close_height,
-        epoch_is_claim_expired, sigma_work_milli, BandedCurveParams, CreditPair, EpochCloseBond,
-        EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, KCover,
-        ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, MAX_CLAIM_AGE_W,
-        SETTLEMENT_EPOCH_BLOCKS,
+        bond_wire::MAX_HOLDINGS_SHARDS, claimed_epochs_contains, epoch_is_claim_expired,
+        settlement_epoch_at_height, sigma_work_milli, BandedCurveParams, CreditPair,
+        EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
+        KCover, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
+        MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
     };
 
     const BUDGET: u64 = 1_000_000;
@@ -845,6 +896,19 @@ mod tests {
             }),
             epochs,
         }
+    }
+
+    /// A source gathered at an explicit tip count, the settled epoch
+    /// derived from it through the same helper the daemon uses
+    /// (`archival_claim_source.cpp`: both from one `db.height()` read).
+    fn source_at_count(
+        chain_height: u64,
+        claimed: Vec<u64>,
+        epochs: Vec<EpochSnapshot>,
+    ) -> EmissionClaimSource {
+        let mut source = source_with(settlement_epoch_at_height(chain_height), claimed, epochs);
+        source.chain_height = chain_height;
+        source
     }
 
     /// The derivation's three structural checks in one grid: boundary
@@ -1014,6 +1078,78 @@ mod tests {
             derive_claimable_epochs(&source),
             Err(EmissionClaimError::NoClaimableEpochs)
         ));
+    }
+
+    /// The close-boundary count (module doc "Step 7"): at the one count
+    /// `chain_height == h_close(E)` the connect window admits `E` and
+    /// the budget row exists (the close ran while connecting `E`'s last
+    /// block — `blockchain_db.cpp` `add_block`), but verify's strict
+    /// step-1 predicate rejects a claim of `E` in the very next block.
+    /// The derivation defers `E` ([`EpochSkip::NotFinalized`]) so the
+    /// assembled batch verifies at the gather tip; one count later `E`
+    /// is claimable.
+    #[test]
+    fn close_boundary_count_defers_the_youngest_epoch_one_block() {
+        let epoch = 5;
+        let h_close = epoch_close_height(epoch).expect("fixture epoch closes");
+        // Fixture-coherence premise: at the boundary count the connect
+        // window already admits the epoch — the deferral below is doing
+        // real work, not restating the oracle's `NotSettled`.
+        assert_eq!(settlement_epoch_at_height(h_close), epoch + 1);
+
+        // At the boundary count: epoch 4 selected, epoch 5 defers.
+        let at_boundary = source_at_count(h_close, vec![], vec![snapshot(4), snapshot(5)]);
+        let derived = derive_claimable_epochs(&at_boundary).expect("epoch 4 claimable");
+        let selected: Vec<u64> = derived
+            .claimable
+            .iter()
+            .map(|c| c.settlement_epoch)
+            .collect();
+        assert_eq!(selected, vec![4]);
+        assert_eq!(derived.skipped, vec![(5, EpochSkip::NotFinalized)]);
+
+        // The deferred batch passes the self-check at the boundary count.
+        let assembled =
+            assemble_claims(&at_boundary, &derived, EMISSION_CLAIMS_SIZE_BUDGET).expect("fits");
+        self_check_claims(
+            &at_boundary,
+            &dummy_leg_vin(&assembled),
+            assembled.total_reward,
+        )
+        .expect("the deferred batch must verify at the gather tip");
+
+        // Premise arm (the deferral is load-bearing): an `E`-bearing vin
+        // — assembled one count past the boundary, where `E` is
+        // claimable — is exactly the vin the builder would have built at
+        // the boundary count without the strict-finalization skip. The
+        // real verifier refuses it there (`EpochNotFinalized`, surfaced
+        // blind), so the skip is what stands between the builder and a
+        // spurious whole-batch `SelfCheckFailed`.
+        let past_boundary = source_at_count(h_close + 1, vec![], vec![snapshot(4), snapshot(5)]);
+        let derived_past = derive_claimable_epochs(&past_boundary).expect("both claimable");
+        let selected_past: Vec<u64> = derived_past
+            .claimable
+            .iter()
+            .map(|c| c.settlement_epoch)
+            .collect();
+        assert_eq!(
+            selected_past,
+            vec![4, 5],
+            "one count past the boundary the epoch is claimable"
+        );
+        let assembled_past =
+            assemble_claims(&past_boundary, &derived_past, EMISSION_CLAIMS_SIZE_BUDGET)
+                .expect("fits");
+        let e_bearing = dummy_leg_vin(&assembled_past);
+        self_check_claims(&past_boundary, &e_bearing, assembled_past.total_reward)
+            .expect("sanity: the E-bearing vin verifies one count past the boundary");
+        assert!(
+            matches!(
+                self_check_claims(&at_boundary, &e_bearing, assembled_past.total_reward),
+                Err(EmissionClaimError::SelfCheckFailed)
+            ),
+            "at the boundary count the same vin must refuse (verify: EpochNotFinalized)"
+        );
     }
 
     /// A window epoch without a frozen close row skips (`NoCloseRow`,
