@@ -770,3 +770,60 @@ async fn close_wallet_racing_inflight_clone_does_not_evict() {
     .await;
     assert_eq!(after["error"]["code"], -29001, "{after}");
 }
+
+/// Regression: while `close_wallet` is unwrapping / persisting outside the
+/// tenant mutex (slot temporarily empty), a concurrent `create_wallet` must
+/// be refused as busy — not claim the slot. Before the fix, the racing open
+/// could `set_open` a new wallet, and the close's failure-path restore then
+/// panicked the server on the empty-slot assert.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn open_during_inflight_close_is_refused_busy() {
+    let dir = TempDir::new().expect("tempdir");
+    let state = lifecycle_state(&dir);
+
+    let created = rpc(
+        state.clone(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "create_wallet",
+            "params": { "name": "closer", "password": "pw" }
+        }),
+    )
+    .await;
+    assert!(
+        created.get("error").is_none(),
+        "{:?}",
+        redact_create_wallet_response(&created)
+    );
+
+    // Freeze the close at its mid-flight point: slot taken, tenant mutex
+    // released, engine not yet persisted/dropped.
+    let (name, shared) = {
+        let mut ts = state.tenants.lock().await;
+        ts.tenant.take_open().expect("wallet open")
+    };
+
+    // A concurrent create must see the closing reservation and refuse busy,
+    // not claim the emptied slot.
+    let racer = rpc(
+        state.clone(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "create_wallet",
+            "params": { "name": "racer", "password": "pw" }
+        }),
+    )
+    .await;
+    assert_eq!(racer["error"]["code"], -29000, "{racer}");
+
+    // The close's failure path can therefore restore into a still-empty slot.
+    state.tenants.lock().await.tenant.restore_open(name, shared);
+    let bal = rpc(
+        state.clone(),
+        json!({ "jsonrpc": "2.0", "id": 3, "method": "get_balance", "params": {} }),
+    )
+    .await;
+    assert!(bal.get("error").is_none(), "restore failed: {bal}");
+}

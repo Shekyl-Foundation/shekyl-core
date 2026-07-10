@@ -237,7 +237,12 @@ pub(crate) async fn close_wallet(
 
     // Take the slot under a short mutex hold, then drop the guard before
     // try_unwrap / outstanding check / Engine::close (fsync / Argon2-free
-    // but still file IO). Restore under a fresh lock if close cannot proceed.
+    // but still file IO). `take_open` marks the tenant *closing* so a
+    // concurrent create/open cannot claim the emptied slot while the mutex is
+    // released — the failure paths below re-install via restore_open /
+    // set_open (whose empty-slot asserts would panic if a new wallet had
+    // slipped in). Restore under a fresh lock if close cannot proceed; clear
+    // the reservation on success.
     let (name, shared) = {
         let mut state = tenants.lock().await;
         state
@@ -269,6 +274,7 @@ pub(crate) async fn close_wallet(
         return Err(WalletRpcError::from(e));
     }
     drop(engine);
+    tenants.lock().await.tenant.clear_closing();
     Ok(json!({}))
 }
 

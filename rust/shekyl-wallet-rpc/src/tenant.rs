@@ -36,6 +36,14 @@ pub struct Tenant {
     /// call has released the mutex. Cleared on success (`set_open`) or
     /// failure ([`Self::clear_opening`]).
     opening: bool,
+    /// True while `close_wallet` has taken the engine out of the slot
+    /// ([`Self::take_open`]) and is unwrapping / persisting *outside* the
+    /// tenant mutex. Prevents a concurrent create/open from claiming the
+    /// temporarily-empty slot mid-close — the close's failure path re-installs
+    /// via [`Self::set_open`] / [`Self::restore_open`], whose empty-slot
+    /// asserts would otherwise panic the server. Set by `take_open`; cleared
+    /// by the re-install paths or [`Self::clear_closing`] on close success.
+    closing: bool,
 }
 
 impl Tenant {
@@ -49,11 +57,12 @@ impl Tenant {
         self.engine.is_some()
     }
 
-    /// Whether create/open is in flight or a wallet is already open.
+    /// Whether a lifecycle transition (create/open/close) is in flight or a
+    /// wallet is already open.
     ///
     /// Lifecycle create/open refuse with `-29000` when this is true.
     pub fn is_busy(&self) -> bool {
-        self.is_open() || self.opening
+        self.is_open() || self.opening || self.closing
     }
 
     /// Mark create/open in flight. Caller must hold the tenant mutex and
@@ -90,6 +99,7 @@ impl Tenant {
             "set_open called while a wallet is already open"
         );
         self.opening = false;
+        self.closing = false;
         self.open_name = Some(name.into());
         self.engine = Some(Arc::new(RwLock::new(engine)));
     }
@@ -100,13 +110,24 @@ impl Tenant {
     /// other is restored and this returns `None`, so a broken pair cannot clear
     /// only the stem and leave an undiagnosable half-empty slot.
     ///
+    /// On success the tenant is marked *closing* — [`Self::is_busy`] stays true
+    /// so a concurrent create/open cannot claim the emptied slot while the
+    /// close is unwrapping / persisting outside the tenant mutex. Every close
+    /// outcome must clear the reservation: the failure paths re-install via
+    /// [`set_open`](Self::set_open) / [`restore_open`](Self::restore_open)
+    /// (which clear it), and the success path calls
+    /// [`clear_closing`](Self::clear_closing).
+    ///
     /// The caller should [`Arc::try_unwrap`](std::sync::Arc::try_unwrap) the
     /// returned handle before close. If other clones still exist (e.g. an
     /// in-flight refresh), the caller must [`restore_open`](Self::restore_open)
     /// the handle and fail loud rather than evicting the still-live wallet.
     pub fn take_open(&mut self) -> Option<(String, SharedEngine)> {
         match (self.open_name.take(), self.engine.take()) {
-            (Some(name), Some(engine)) => Some((name, engine)),
+            (Some(name), Some(engine)) => {
+                self.closing = true;
+                Some((name, engine))
+            }
             (None, None) => None,
             (name, engine) => {
                 // Invariant: both are Some together, or both None. Restore both
@@ -135,8 +156,17 @@ impl Tenant {
             self.engine.is_none(),
             "restore_open called while a wallet is already open"
         );
+        self.closing = false;
         self.open_name = Some(name);
         self.engine = Some(engine);
+    }
+
+    /// Clear the in-flight close reservation after the engine has been
+    /// successfully persisted and dropped (close success path). The failure
+    /// paths clear it implicitly by re-installing via
+    /// [`set_open`](Self::set_open) / [`restore_open`](Self::restore_open).
+    pub fn clear_closing(&mut self) {
+        self.closing = false;
     }
 }
 
