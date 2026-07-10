@@ -87,7 +87,18 @@ pub async fn handle(
     match result {
         Ok(Some(raw)) => match serde_json::from_str::<FfiJsonRpcResult>(&raw) {
             Ok(ffi_result) if ffi_result.ok => {
-                let value = ffi_result.result.unwrap_or(serde_json::Value::Null);
+                let mut value = ffi_result.result.unwrap_or(serde_json::Value::Null);
+                // Rust owns `rpc_connections_count`; fill it on the json_rpc
+                // get_info surface too (unrestricted only, matching the REST
+                // handler and the C++ restricted-mode policy).
+                if method == "get_info" && !state.restricted {
+                    if let Some(obj) = value.as_object_mut() {
+                        obj.insert(
+                            "rpc_connections_count".to_owned(),
+                            state.conn_tracker.active_total().into(),
+                        );
+                    }
+                }
                 (StatusCode::OK, Json(JsonRpcResponse::success(id, value)))
             }
             Ok(ffi_result) => (

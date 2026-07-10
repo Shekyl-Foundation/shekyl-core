@@ -290,7 +290,10 @@ bool Daemon::run(bool interactive)
       }
       auto * rust_handle = shekyl_daemon_rpc_start(
         static_cast<void*>(server), bind_addr.c_str(), rpc.restricted,
-        cors_origins.empty() ? nullptr : cors_origins.c_str());
+        cors_origins.empty() ? nullptr : cors_origins.c_str(),
+        server->get_rpc_max_connections(),
+        server->get_rpc_max_connections_per_public_ip(),
+        server->get_rpc_max_connections_per_private_ip());
       if (!rust_handle)
       {
         throw std::runtime_error(

@@ -43,6 +43,10 @@ pub struct ShekylDaemonRpcHandle {
 /// - `bind_addr` must be a valid null-terminated C string, or null (returns null).
 /// - `cors_origins` may be null (default-deny) or a null-terminated
 ///   comma-separated allow-list string.
+/// - `max_connections`, `max_connections_per_public_ip`, and
+///   `max_connections_per_private_ip` are the concurrent-connection caps
+///   (0 = unlimited), already parsed and cross-validated by
+///   `core_rpc_server::init`.
 /// - The pointed-to `core_rpc_server` must remain alive for the lifetime of the
 ///   returned handle.
 #[no_mangle]
@@ -51,6 +55,9 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
     bind_addr: *const c_char,
     restricted: bool,
     cors_origins: *const c_char,
+    max_connections: u64,
+    max_connections_per_public_ip: u64,
+    max_connections_per_private_ip: u64,
 ) -> *mut ShekylDaemonRpcHandle {
     if rpc_server_ptr.is_null() || bind_addr.is_null() {
         return std::ptr::null_mut();
@@ -108,6 +115,12 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
         bind_address: bind,
         restricted,
         cors_origins: cors,
+        // Caps parsed and validated by core_rpc_server::init (0 = unlimited).
+        conn_limits: crate::conn_limit::ConnLimits {
+            max_total: max_connections,
+            max_per_public_ip: max_connections_per_public_ip,
+            max_per_private_ip: max_connections_per_private_ip,
+        },
         ..Default::default()
     };
 

@@ -40,6 +40,7 @@
 // `tracing-core` dispatcher). See V3_WALLET_DECISION_LOG.md
 // (single-image contract, 2026-06-11 amendment).
 
+pub mod conn_limit;
 pub mod core;
 pub mod ffi;
 pub mod ffi_exports;

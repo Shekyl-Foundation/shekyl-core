@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- **daemon RPC: Axum now enforces `--rpc-max-connections*` + reports a live
+  `rpc_connections_count`.** A purpose-built Rust connection layer
+  (`shekyl-daemon-rpc::conn_limit`: `LimitedListener` + `ConnTracker` over
+  `axum::serve`'s `Listener`) admits each inbound connection against the total
+  and per-IP caps (`--rpc-max-connections` = 100, `--rpc-max-connections-per-public-ip`
+  = 3, `--rpc-max-connections-per-private-ip` = 25 by default; `0` = unlimited),
+  closing connections over a cap; slots release on connection close. The same
+  tracker's live total is injected into `get_info.rpc_connections_count` (REST
+  and json_rpc, unrestricted only), replacing the hardcoded `0`. Caps flow from
+  `core_rpc_server::init` (still parsed/cross-validated in C++) through the
+  `shekyl_daemon_rpc_start` FFI. This lands the two connection-management items
+  the epee-listener deletion deferred; see `DAEMON_RPC_RUST.md`.
+
 ### Removed
 
 - **daemon RPC: epee HTTP listener + `--no-rust-rpc` deleted (Phase 1
@@ -16,7 +31,8 @@
   `wallet_errors.h::get_output_distribution`. Deleted
   `tests/rpc_comparison/compare_rpc.sh`. Opportunistic RPC SSL key
   autogen on the daemon path is gone with the epee listener.
-  Connection-limit CLI args remain inert under Axum (FOLLOWUPS).
+  (Connection-limit CLI args were inert in this Phase 1 cut; they are now
+  enforced by Axum — see the Added entry above.)
 
 - **consensus: pre-activation staker-inflow burn leg deleted (rule 60;
   `ARCHIVAL_BUDGET_SCHEDULE.md` §2.1 retirement,

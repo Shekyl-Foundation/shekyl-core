@@ -56,18 +56,15 @@ sustainability is unaffected by the recalibration.
   **Reopening criterion for in-daemon clearnet TLS/digest auth:** named
   production need + threat-model review. *Target: V3.0.*
 
-- **Daemon Axum: enforce `--rpc-max-connections*` (currently inert)**
-  (added 2026-07-10). Connection-limit CLI args still validate at init
-  for config compatibility but Axum does not apply them. DoS hardening
-  belongs here. *Target: V3.1.*
-
-- **Daemon Axum: `rpc_connections_count` always 0** (added 2026-07-10).
-  `get_info` / related fields stub to 0 after epee listener removal.
-  Expose a real counter from the Axum server when operators need it.
-  Naturally pairs with the `--rpc-max-connections*` enforcement item
-  above: one connection-tracking Axum listener adapter (accept →
-  enforce caps + increment; connection close → decrement) supplies both
-  the caps and the live count. *Target: V3.1.*
+- **Daemon Axum: connection caps + live `rpc_connections_count`** (added
+  2026-07-10, **closed 2026-07-10**). Both items landed together as one
+  purpose-built Rust connection layer (`shekyl-daemon-rpc::conn_limit`:
+  `LimitedListener` + `ConnTracker` over `axum::serve`). `--rpc-max-connections`
+  and the per-public-/per-private-IP caps are enforced at accept time
+  (over-cap connections are closed; slots release on close), and the same
+  tracker's live total is injected into `get_info.rpc_connections_count`
+  (REST + json_rpc, unrestricted only). Caps flow from `core_rpc_server::init`
+  through `shekyl_daemon_rpc_start` (0 = unlimited). See `DAEMON_RPC_RUST.md`.
 
 - **Trezor test harness: migrate `mock_rpc_daemon` off epee HTTP map**
   (added 2026-07-10, epee HTTP listener deletion). `tests/trezor/daemon.h`
