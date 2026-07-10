@@ -113,6 +113,43 @@
 //!   single epoch alone over budget refuses
 //!   [`EmissionClaimError::SizeBoundExceeded`]. The budget is a
 //!   parameter; [`EMISSION_CLAIMS_SIZE_BUDGET`] is the documented default.
+//!
+//! ## Step 7 — the build-time self-check
+//!
+//! [`self_check_claims`] runs the **landed consensus verifier**
+//! ([`emission_vin_verify_claims`] — the literal function, never a
+//! mirror) over the assembled vin and the same decoded source the
+//! assembly consumed (§7.3 decode-locus pin: a self-check over a copy
+//! tests the copy). A builder/verifier disagreement is a bug surfaced
+//! loudly at build time, never a mempool rejection to diagnose post-hoc
+//! — the differential test made a production invariant (M1's
+//! walk-vs-counter idiom applied to assembly).
+//!
+//! The verify-context height is the source's gather tip
+//! (`chain_height`, a block count — i.e. the next block's height, the
+//! earliest the assembled tx could be included at), so the self-check's
+//! step-1 window is byte-exactly the view the derivation selected
+//! against. The apparent strict-finalization edge (`chain_height ==
+//! h_close(E)` for the youngest admitted epoch) is structurally
+//! foreclosed: at that count the close for `E` has not connected, so
+//! the epoch had no budget row and the derivation already skipped it
+//! ([`EpochSkip::NoCloseRow`]).
+//!
+//! **Cause-blindness (CB-5 builder pin).** [`EmissionClaimError::SelfCheckFailed`]
+//! carries **no operand**: "self-check failed on operand X" would leak
+//! which operand the daemon mis-sourced — an observable a lying daemon
+//! could farm. The verifier's [`EmissionVerifyError`] is logged locally
+//! only; the surfaced refusal is one blind verdict for every cause.
+//!
+//! **Coverage boundary (PR 2).** This self-check is the **claims leg**
+//! (verify steps 1–5). The claims verifier reads the vin's backing/auth
+//! fields only through `validate()`'s shape pins (canonical lengths,
+//! proof-size bounds) — verified at source: `emission_vin_verify_claims`
+//! never reads their content — so the step-7 KAT's dummy canonical-length
+//! legs exercise the claims leg fully. The backing and auth legs
+//! (`emission_vin_verify_backing` / `_auth`) become checkable only when
+//! PR 3 constructs a real proof and real signatures; their self-check
+//! composition lands there, with the whole-vin differential.
 
 // PR-2 lands the assembly core ahead of its consumer: PR-3's `StakeEngine`
 // claim handler is the call site. This allow is deleted by PR-3
@@ -122,16 +159,18 @@
 #![allow(dead_code)]
 
 use shekyl_archival_retention::{
-    as_of_e_served_work, capped_work_milli, claimed_epochs_check_and_set, reward_share_floor,
-    shard_contribution_milli, ArchivalRewardEmissionVin, ClaimedEpochsError, EmissionEpochSource,
-    EmissionWireError, HoldingsDescriptor, MembershipOnlyBacking, ServedWork, ShardWorkEntry,
-    WorkEpochClaim, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_BACKING_PROOF_BYTES,
+    as_of_e_served_work, capped_work_milli, claimed_epochs_check_and_set,
+    emission_vin_verify_claims, reward_share_floor, shard_contribution_milli,
+    ArchivalRewardEmissionVin, ClaimedEpochsError, EmissionEpochSource, EmissionVerifyContext,
+    EmissionWireError, EpochCloseBond, HoldingsDescriptor, MembershipOnlyBacking, ServedWork,
+    ShardWorkEntry, WorkEpochClaim, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_BACKING_PROOF_BYTES,
     MAX_SETTLEMENT_EPOCHS_PER_EMISSION, WORK_MILLI_SCALE,
 };
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 use shekyl_wire::transaction::MAX_TX_SIZE;
+use tracing::error;
 
-use super::emission_source::EmissionClaimSource;
+use super::emission_source::{EmissionClaimSource, EpochSnapshot};
 
 // The compiled-constants bound behind the conversion guard's structural-
 // unreachability claim (module doc): an honest recompute through
@@ -161,10 +200,9 @@ pub const EMISSION_CLAIMS_SIZE_BUDGET: usize = MAX_TX_SIZE - EMISSION_NON_CLAIMS
 
 /// Builder refusals (CB-5 taxonomy, the arms this module constructs).
 ///
-/// Staged completeness (§8 / rule 15 — no dead variants): `SelfCheckFailed`
-/// lands with its constructor site (the §2 step-7 self-check, this PR's
-/// next commit); `InsufficientBacking` lands with `BackingSet` selection
-/// (PR 3).
+/// Staged completeness (§8 / rule 15 — no dead variants):
+/// `InsufficientBacking` lands with its constructor site, PR 3's
+/// `BackingSet` selection.
 #[derive(Debug, thiserror::Error)]
 pub enum EmissionClaimError {
     /// Nothing claimable — an **idle state, not an error** (rule 82 /
@@ -209,6 +247,17 @@ pub enum EmissionClaimError {
     /// refused before any vin leaves the builder.
     #[error("claims rows unencodable: {0}")]
     RowsUnencodable(#[source] EmissionWireError),
+    /// The assembled vin failed the landed consensus verifier (§2 step 7)
+    /// — a builder/verifier disagreement, i.e. a bug, surfaced loudly at
+    /// build time rather than as a mempool rejection to diagnose post-hoc.
+    ///
+    /// **Cause-blind by construction (CB-5 builder pin):** a unit variant,
+    /// no operand — "self-check failed on operand X" would leak which
+    /// operand the daemon mis-sourced, an observable a lying daemon could
+    /// farm. The verifier's rejection is logged locally only (module doc
+    /// "Step 7").
+    #[error("assembled claim failed the build-time self-check")]
+    SelfCheckFailed,
 }
 
 /// Why a window epoch was not selected — **local diagnostics**, never a
@@ -603,6 +652,77 @@ fn worst_case_claims_len(
         .len())
 }
 
+/// §2 step 7 — the build-time self-check: run the **landed consensus
+/// verifier** ([`emission_vin_verify_claims`], never a mirror) over the
+/// assembled vin and the same decoded source the assembly consumed
+/// (module doc "Step 7"; §7.3 decode-locus pin).
+///
+/// PR-3's handler calls this on the **completed** vin (real backing and
+/// auth legs). The claims verifier reads those fields only through
+/// `validate()`'s shape pins — never their content — so this module's
+/// KATs drive it with canonical-length dummies (coverage boundary,
+/// module doc).
+///
+/// `vout_reward_sum` is Σ of the tx's reward-vout `amount_plain`s — the
+/// caller passes the sum of the vouts it **actually constructed**, so
+/// verify's loud inflation compare bites on the real tx rather than on
+/// the vin's own amounts echoed back.
+///
+/// Refuses [`EmissionClaimError::SelfCheckFailed`], cause-blind: the
+/// verifier's rejection (and a vin epoch missing from the source, which
+/// forecloses even marshaling the verify call) is logged locally only.
+pub fn self_check_claims(
+    source: &EmissionClaimSource,
+    vin: &ArchivalRewardEmissionVin,
+    vout_reward_sum: u64,
+) -> Result<(), EmissionClaimError> {
+    let bond = source
+        .bond
+        .as_ref()
+        .expect("an assembled vin exists, so the bond record exists");
+
+    // Marshal one frozen snapshot per claimed epoch, in vin order — the
+    // same 1:1 alignment the consensus dispatch hands the verifier.
+    let mut snaps: Vec<&EpochSnapshot> = Vec::with_capacity(vin.settlement_epochs.len());
+    for &epoch in &vin.settlement_epochs {
+        match source.epochs.iter().find(|s| s.settlement_epoch == epoch) {
+            Some(snap) => snaps.push(snap),
+            None => {
+                error!(
+                    epoch,
+                    "step-7 self-check: claimed epoch missing from the decoded source"
+                );
+                return Err(EmissionClaimError::SelfCheckFailed);
+            }
+        }
+    }
+    let bonds_per_snap: Vec<Vec<EpochCloseBond<'_>>> =
+        snaps.iter().map(|snap| snap.bonds_view()).collect();
+    let epoch_sources: Vec<EmissionEpochSource<'_>> = snaps
+        .iter()
+        .zip(&bonds_per_snap)
+        .map(|(snap, bonds)| snap.source(bonds))
+        .collect();
+
+    // The gather tip is the verify-context height (module doc "Step 7":
+    // `chain_height` is a block count, the earliest inclusion height, and
+    // the exact operand the daemon derived `current_settled_epoch` from).
+    let ctx = EmissionVerifyContext {
+        current_block_height: source.chain_height,
+        bond: Some(bond.record()),
+        vout_reward_sum,
+    };
+    match emission_vin_verify_claims(vin, &ctx, &epoch_sources) {
+        Ok(_claims_verified) => Ok(()),
+        Err(verify_err) => {
+            // Log-local, refuse-blind (CB-5): the rejection detail never
+            // rides the surfaced error.
+            error!(%verify_err, "step-7 self-check: the landed verifier refused the assembled vin");
+            Err(EmissionClaimError::SelfCheckFailed)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,6 +851,14 @@ mod tests {
     /// verdicts come from the connect predicate (each skip reason at its
     /// exact boundary), share positivity is the claimability predicate,
     /// and the selected epochs are the survivors in window order.
+    ///
+    /// Coverage boundary (50-testing.mdc): the share equalities below
+    /// bite against **recompute-chain determinism and
+    /// builder-consumes-verify-functions** — builder and test call the
+    /// same chain, so they do NOT cover that the assembled claim
+    /// verifies. That is the step-7 differential's job
+    /// ([`self_check_accepts_assembled_and_refuses_every_mutation`]),
+    /// which drives the landed verifier over the assembled vin.
     #[test]
     fn boundary_verdicts_and_share_positivity_select_the_batch() {
         // settled = W + 10 puts the expiry floor at 10 (a real bottom
@@ -1185,6 +1313,135 @@ mod tests {
         assert!(matches!(
             assemble_claims(&source, &derived, EMISSION_CLAIMS_SIZE_BUDGET),
             Err(EmissionClaimError::SourceInvalid { epoch: 5 })
+        ));
+    }
+
+    // ── Step 7: the build-time self-check ───────────────────────────────
+
+    /// The assembled claims inside a vin whose cryptographic legs are
+    /// canonical-length dummies — sufficient for the claims leg, whose
+    /// verifier never reads their content (module doc coverage boundary;
+    /// the backing/auth legs' self-check composition is PR 3's, with real
+    /// legs).
+    fn dummy_leg_vin(assembled: &AssembledClaims) -> ArchivalRewardEmissionVin {
+        ArchivalRewardEmissionVin {
+            p_pubkey: vec![0; SINGLE_KEY_CANONICAL_LEN],
+            holdings: assembled.holdings.clone(),
+            settlement_epochs: assembled.settlement_epochs.clone(),
+            work_claim: assembled.work_claim.clone(),
+            backing: MembershipOnlyBacking {
+                proof: vec![0; 1],
+                pseudo_out: [0; 32],
+                pqc_pk_hash: [0; 32],
+                backing_pubkey: vec![0; SINGLE_KEY_CANONICAL_LEN],
+                tree_depth: 0,
+            },
+            reward_amount_plain: assembled.reward_amount_plain.clone(),
+            auth_backing: vec![0; SINGLE_SIG_CANONICAL_LEN],
+            auth_claim: vec![0; SINGLE_SIG_CANONICAL_LEN],
+        }
+    }
+
+    /// The step-7 differential: the assembled vin passes the **landed**
+    /// `emission_vin_verify_claims` (the premise — assembly is
+    /// verifier-accepted, which is what makes the derivation and assembly
+    /// KATs' determinism halves sufficient in aggregate), and every
+    /// mutation flips accept → refuse through the same verifier. Each arm
+    /// names the verify compare it arms; a mutation that did not move the
+    /// verdict would fail its assert (no dead differential arms).
+    ///
+    /// The surfaced refusal is `SelfCheckFailed` in every arm — a unit
+    /// variant, so cause-blindness is structural (CB-5: the operand the
+    /// verifier rejected on is unrepresentable in the surfaced error).
+    #[test]
+    fn self_check_accepts_assembled_and_refuses_every_mutation() {
+        // Epoch 6 is present in the source but gated (persisted Σwork = 0)
+        // — skipped by the derivation, available to the swap arm below.
+        let source = source_with(
+            10,
+            vec![],
+            vec![snapshot(4), snapshot(5), zero_share_snapshot(6, true)],
+        );
+        let derived = derive_claimable_epochs(&source).expect("epochs 4, 5 claimable");
+        let assembled =
+            assemble_claims(&source, &derived, EMISSION_CLAIMS_SIZE_BUDGET).expect("fits");
+        let base = dummy_leg_vin(&assembled);
+
+        // Premise: the unmutated assembly is verifier-accepted.
+        self_check_claims(&source, &base, assembled.total_reward)
+            .expect("assembled vin must pass the landed verifier");
+
+        type Mutation = fn(&mut ArchivalRewardEmissionVin);
+        let mutations: [(&str, Mutation); 6] = [
+            ("scarcity +1 (verify: ScarcityMismatch)", |vin| {
+                vin.work_claim[0].shard_entries[0].scarcity_milli += 1;
+            }),
+            (
+                "credit bit cleared (verify: ServeCreditBitMismatch)",
+                |vin| {
+                    vin.work_claim[0].shard_entries[0].serve_credit_bit = false;
+                },
+            ),
+            ("reward +1 (verify: RewardMismatch)", |vin| {
+                vin.reward_amount_plain[0] += 1;
+            }),
+            (
+                "credited entries dropped (verify: WorkTotalMismatch)",
+                |vin| {
+                    vin.work_claim[0].shard_entries.clear();
+                },
+            ),
+            (
+                "epoch swapped to the gated epoch (verify: RewardMismatch \
+                 — its recomputed share is zero)",
+                |vin| {
+                    vin.settlement_epochs[1] = 6;
+                    vin.work_claim[1].epoch = 6;
+                },
+            ),
+            ("holdings swapped (verify: HoldingsMismatch)", |vin| {
+                vin.holdings.shard_ids = vec![SHARD_B];
+            }),
+        ];
+        for (name, mutate) in mutations {
+            let mut vin = base.clone();
+            mutate(&mut vin);
+            assert!(
+                matches!(
+                    self_check_claims(&source, &vin, assembled.total_reward),
+                    Err(EmissionClaimError::SelfCheckFailed)
+                ),
+                "mutation must flip accept → refuse: {name}"
+            );
+        }
+
+        // Context arms: the vout sum the caller constructed (verify:
+        // VoutSumMismatch — the loud inflation check bites on the real
+        // vouts, not the vin's own amounts echoed back) …
+        assert!(matches!(
+            self_check_claims(&source, &base, assembled.total_reward + 1),
+            Err(EmissionClaimError::SelfCheckFailed)
+        ));
+        // … and the bond record's claimed set (verify: EpochAlreadyClaimed
+        // — proves the `record()` marshaling reaches the dedup compare).
+        let claimed_source = source_with(
+            10,
+            vec![4],
+            vec![snapshot(4), snapshot(5), zero_share_snapshot(6, true)],
+        );
+        assert!(matches!(
+            self_check_claims(&claimed_source, &base, assembled.total_reward),
+            Err(EmissionClaimError::SelfCheckFailed)
+        ));
+
+        // A claimed epoch missing from the source forecloses marshaling
+        // the verify call at all — same blind refusal, logged locally.
+        let mut vin = base.clone();
+        vin.settlement_epochs[1] = 99;
+        vin.work_claim[1].epoch = 99;
+        assert!(matches!(
+            self_check_claims(&source, &vin, assembled.total_reward),
+            Err(EmissionClaimError::SelfCheckFailed)
         ));
     }
 

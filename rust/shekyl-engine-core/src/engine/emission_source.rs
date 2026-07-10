@@ -101,9 +101,8 @@ pub struct EpochSnapshot {
 /// Part-A claim context: the claimant's bond record as the daemon read it.
 #[derive(Debug, Clone)]
 pub struct BondContext {
-    // Staging allow: read via `record()` by the §2 step-7 self-check
-    // (this PR's self-check commit); deleted there.
-    #[allow(dead_code)]
+    /// `E_join` — verify step 2's `E ≥ E_join + 1` operand (read via
+    /// [`Self::record`] by the §2 step-7 self-check).
     pub join_settlement_epoch: u64,
     /// The record's holdings descriptor — the vin copies this **by value**
     /// (§5.3/§6.4.1: verify demands record equality; the builder never
@@ -116,10 +115,8 @@ pub struct BondContext {
 }
 
 impl BondContext {
-    /// The verify-side view over this record.
-    // Staging allow: consumed by the §2 step-7 self-check (this PR's
-    // self-check commit); deleted there.
-    #[allow(dead_code)]
+    /// The verify-side view over this record — the §2 step-7 self-check's
+    /// `EmissionVerifyContext::bond` operand.
     pub fn record(&self) -> ClaimantBondRecord<'_> {
         ClaimantBondRecord {
             join_settlement_epoch: self.join_settlement_epoch,
@@ -133,11 +130,12 @@ impl BondContext {
 /// claim window's snapshots, exactly as the daemon serialized them.
 #[derive(Debug, Clone)]
 pub struct EmissionClaimSource {
-    /// Tip block count at gather time — the §2 step-3 same-tip staleness
-    /// operand, not a computation operand.
-    // Staging allow: the staleness comparison is PR-3's `StakeEngine`
-    // handler (§2 step 3); this allow is deleted there.
-    #[allow(dead_code)]
+    /// Tip block count at gather time — the §2 step-7 self-check's
+    /// verify-context height (the earliest inclusion height, and the exact
+    /// operand the daemon derived `current_settled_epoch` from —
+    /// `archival_claim_source.cpp` gathers both from one `db.height()`
+    /// read) and the §2 step-3 same-tip staleness operand (PR-3's
+    /// `StakeEngine` handler).
     pub chain_height: u64,
     /// The daemon's settled-epoch operand (same helper consensus uses).
     /// Step 1's window bounds derive from this via the landed predicate
