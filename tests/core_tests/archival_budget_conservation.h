@@ -8,7 +8,10 @@
 //
 //   coinbase + accrual row + burn row == already_generated_coins advance
 //
-// in LABELED form: each row is checked against its own expected value. The
+// (the fee-free reduction of the general §2.2 identity — with fees the
+// right side carries + total_fees, since fees are pre-existing coins that
+// never advance the ledger; this fixture is fee-free, see below) in
+// LABELED form: each row is checked against its own expected value. The
 // labeled form is the load-bearing choice — a destination error (staker
 // inflow routed into the burn row instead of the accrual row, the F-B1b
 // class; the deleted pre-activation burn leg's shape) keeps the *sum*

@@ -5376,10 +5376,19 @@ leave:
   //  - Emission leg (c2, disposition (a) — permanent per the §9.9 sim
   //    closure): the split operand is base_reward — the SAME modulated
   //    (weight-penalized, release-scaled) quantity
-  //    validate_miner_transaction just bound the coinbase against and that
-  //    already_generated_coins advances by below. Conservation is then by
-  //    construction: staker leg = base_reward − miner_emission, so
-  //    ledger = coinbase + accrued exactly. The pre-fix shape
+  //    validate_miner_transaction just validated the coinbase's subsidy
+  //    component against and that already_generated_coins advances by
+  //    below. Emission conservation is then by construction:
+  //    miner_emission + staker_emission = base_reward, exactly the
+  //    ledger advance — every newly created coin is either in the
+  //    coinbase's subsidy component or in the accrual row, never both,
+  //    never neither. Fees are pre-existing coins conserved by
+  //    compute_fee_burn's separate partition (miner_fee_income →
+  //    coinbase, staker_pool_amount → accrual row, actually_destroyed →
+  //    burn row), so the general per-block identity is
+  //    coinbase + accrual row + burn row = base_reward + total_fees
+  //    (fee-free it reduces to ledger advance = coinbase + accrual,
+  //    the conservation KAT's asserted form). The pre-fix shape
   //    (5-arg get_block_reward, unmodulated) over-sized the staker leg
   //    whenever the release multiplier or weight penalty fired — an
   //    inflation surface, since the accrued leg is re-mintable through

@@ -223,14 +223,28 @@ Two properties hold by construction:
    both inside the block's wtxn).
 
 **Conservation invariant (armed by KAT B1 and the conservation core
-test):** for every connected block,
+test):** for every connected block, new coins and pre-existing fee
+coins conserve on separate axes, and the destination map ties them
+together:
 
 ```text
-ledger advance(h) = coinbase(h) + accrual row(h)        (staker_inflow lands whole, once)
+new coins:     base_reward(h) = miner_emission(h) + staker_emission(h)   (= ledger advance)
+fees (pre-existing): total_fees(h) = miner_fee_income(h) + staker_pool(h) + destroyed(h)
+
+destinations:  coinbase(h)    = miner_emission(h)  + miner_fee_income(h)
+               accrual row(h) = staker_emission(h) + staker_pool(h)      (staker_inflow, whole, once)
+               burn row(h)    = destroyed(h)
+
+combined:      coinbase(h) + accrual row(h) + burn row(h)
+                 = ledger advance(h) + total_fees(h)
 ```
 
-with the fee-burn's destroyed share independently accounted in
-`block_burn`/`total_burned` — no overlap and no gap.
+no overlap and no gap. Fees do **not** advance
+`already_generated_coins` (they are coins re-entering circulation, not
+new emission), which is why the combined form carries `total_fees` on
+the ledger side; for a fee-free block it reduces to
+`ledger advance = coinbase + accrual row` — the form the (fee-free)
+conservation core test asserts directly.
 
 **Coinbase-foreclosure pin (cross-function dependency — the invariant's
 silent-break point).** The accrual is supply-safe only because the

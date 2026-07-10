@@ -128,6 +128,10 @@ bool archival_budget_conservation_boundary::verify_conservation(
     CHECK_AND_ASSERT_MES(ag_after - already_generated == q_full, false,
         "[" << perr_context << "] " << "already_generated advance != independently recomputed subsidy at height " << height);
     // Coinbase carries exactly the miner leg (coinbase-foreclosure pin).
+    // Fee-free form: with fees the coinbase would also carry
+    // miner_fee_income (validate_miner_transaction binds it to
+    // miner_emission + miner_fee_income), which is why the capstone sum
+    // below is the fee-free reduction of the general SS2.2 identity.
     CHECK_AND_ASSERT_MES(miner_coinbase == em_split.miner_emission, false,
         "[" << perr_context << "] " << "coinbase != miner_emission at height " << height);
     // The inflow lands whole in the accrual row and nowhere else.
@@ -137,7 +141,9 @@ bool archival_budget_conservation_boundary::verify_conservation(
     CHECK_AND_ASSERT_MES(burn_row == expected_burn, false,
         "[" << perr_context << "] " << "burn row mismatch at height " << height << " (v" << unsigned(blk.major_version)
         << "): got " << burn_row << ", expected " << expected_burn);
-    // Capstone sum: ledger = coinbase + accrued (+ burned), no gap, no overlap.
+    // Capstone sum (fee-free reduction; general form adds total_fees on
+    // the ledger side): ledger = coinbase + accrued (+ burned), no gap,
+    // no overlap.
     CHECK_AND_ASSERT_MES(miner_coinbase + accrual_row + burn_row == ag_after - already_generated, false,
         "[" << perr_context << "] " << "conservation identity broken at height " << height);
     // The split is real at these (pre-decay) heights — the staker leg is
