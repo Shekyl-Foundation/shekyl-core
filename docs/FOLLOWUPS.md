@@ -4582,7 +4582,13 @@ sustainability is unaffected by the recalibration.
   design round opened —
   [`EMISSION_CLAIM_BUILDER.md`](./design/EMISSION_CLAIM_BUILDER.md)
   (assembly spec + CB-1…CB-5; CB-1 recompute sourcing is the gating
-  question).
+  question). UPDATE 2026-07-10: both rounds closed and implementation
+  is underway on the §8 four-PR chain — PR 1 (daemon RPC) and PR 2
+  (pure assembly module, `engine/emission_claim.rs`: four-boundary
+  derivation, canonical work-claim rows, bound-or-split sizing,
+  step-7 self-check against the real verifier) implemented; PR 3
+  (StakeEngine handler: backing, proof, dual auth, tx assembly) is
+  the remaining builder half before this e2e unblocks.
 
 - **Q11 balance-exclusion KAT — blob-boundary invariant arm**
   (surfaced 2026-07-09, CB-4 source pass —
@@ -4635,7 +4641,12 @@ sustainability is unaffected by the recalibration.
   oracle — sound while the function is pure w.r.t. all state but the
   passed set (verified at `claimed_epochs.rs:118-146` on 2026-07-09; the
   purity pin is recorded in `engine/emission_claim.rs`'s module doc, with
-  a differential test pinning oracle/predicate agreement). Extracting
+  a differential test pinning oracle/predicate agreement). The
+  derivation's **fourth** boundary — verify's strict finalization
+  (`EMISSION_CLAIM_BUILDER.md` §2 step-1 post-closure sharpening) — is
+  not the oracle's and needs no extraction: it already consumes the
+  read-only `epoch_close_height`, the literal function verify calls.
+  Extracting
   `epoch_is_not_settled(epoch, current_settled_epoch) -> bool` —
   resolving through the same `>=` the mutator uses, with `check_and_set`
   rewritten to call it — closes the asymmetry and retires the
@@ -7905,7 +7916,16 @@ one place to confirm each item's relationship to the wallet stack.
   sixth KAT case needed). Error-genericity residual rejected with a mechanism argument
   (gatedness is publicly computable ex ante; named errors stay per rule 82). Forward
   obligation pinned: the future wallet claim builder derives claimable epochs from the
-  same positive-share recompute. **Round 2 closed against a second independent review
+  same positive-share recompute. **DISCHARGED (claim-builder PR 2, 2026-07-10):**
+  `shekyl-engine-core/src/engine/emission_claim.rs` `derive_claimable_epochs` —
+  claimable ⇔ `reward_share_floor` over the verify-exact chain `> 0`, no `K_COVER`
+  read anywhere in the module, cause-blind `ZeroShare` skip; the derivation consumes
+  **four** boundaries (top/bottom/dedup via the connect predicate on a scratch copy,
+  purity-pinned + differential-tested; strict finalization via verify's own
+  `epoch_close_height` predicate — the connect window admits the youngest epoch one
+  count before verify accepts it, verified at `blockchain_db.cpp:504-514` /
+  `archival_claim_source.cpp:30-32`, `EMISSION_CLAIM_BUILDER.md` §2 step-1
+  post-closure sharpening). **Round 2 closed against a second independent review
   (doc §10, M1-1..M1-9, 2026-07-06):** the positive-share rule resited to the wire —
   strictly positive `reward_amount_plain` enforced at `validate()`, making the
   zero-amount beacon *unencodable* and leaving exactly **one** `K_COVER` comparison site
