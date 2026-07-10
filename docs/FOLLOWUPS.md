@@ -1307,7 +1307,11 @@ sustainability is unaffected by the recalibration.
   and a `static_assert` in the test header refuses to compile a bump past
   that until the fork table is extended (a bump past 2 would otherwise turn
   every fixture block pre-activation and silently de-arm the accrue leg and
-  the straddle). Fee-leg caveat (disclosed in the test header + fixture
+  the straddle). *Superseded 2026-07-09
+  (`chore/delete-emission-burn-leg`): the caveat retired by deletion —
+  the burn leg and `HF_VERSION_ARCHIVAL_EMISSION` are gone (rule 60,
+  unreachable-by-construction), the KAT's expectations are now
+  unconditional, and the `static_assert` is removed with the constant.* Fee-leg caveat (disclosed in the test header + fixture
   comment): the fixture is fee-free, so only the emission half of
   production's `staker_inflow` (`staker_emission + staker_pool_amount`) has
   end-to-end coverage — chaingen cannot construct valid FCMP++ fee

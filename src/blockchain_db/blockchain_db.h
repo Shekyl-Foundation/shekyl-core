@@ -931,12 +931,13 @@ public:
    * @param long_term_block_weight the long term weight of the block (transactions and all)
    * @param cumulative_difficulty the accumulated difficulty after this block
    * @param coins_generated the number of coins generated total after this block
-   * @param archival_budget_accrual the block's redirected staker inflow
-   *   (ARCHIVAL_BUDGET_SCHEDULE.md §3.1); 0 pre-activation or when the inflow
-   *   is zero. Computed by the caller BEFORE add_block so the hardfork
-   *   operand is the connecting block's own validated version, and written
-   *   here (keyed at the block's index) before the epoch-close hook fires,
-   *   so the close of an epoch sees its final block's row (F-B1a/F-B1b).
+   * @param archival_budget_accrual the block's staker inflow
+   *   (ARCHIVAL_BUDGET_SCHEDULE.md §3.1); 0 when the inflow is zero (genesis,
+   *   or fully decayed). Computed by the caller BEFORE add_block so the
+   *   hardfork operand is the connecting block's own validated version, and
+   *   written here (keyed at the block's index) before the epoch-close hook
+   *   fires, so the close of an epoch sees its final block's row
+   *   (F-B1a/F-B1b).
    * @param txs the transactions in the block
    *
    * @return the height of the chain post-addition
@@ -2000,21 +2001,21 @@ public:
    */
   void set_auto_remove_logs(bool auto_remove) { m_auto_remove_logs = auto_remove; }
 
-  // Per-height destroyed-amount record (adaptive fee burn + retired-share
-  // burn), so pop_block can roll `total_burned` back without recomputing
+  // Per-height destroyed-amount record (the adaptive fee burn's destroyed
+  // share), so pop_block can roll `total_burned` back without recomputing
   // the block's burn.
   virtual void add_block_burn(uint64_t height, uint64_t amount) = 0;
   virtual uint64_t get_block_burn(uint64_t height) const = 0;
   virtual void remove_block_burn(uint64_t height) = 0;
 
   // Per-height staker-inflow accrual row (`archival_budget_accrual`,
-  // ARCHIVAL_BUDGET_SCHEDULE.md §3.1) — the post-activation target of the
-  // single `staker_inflow` write whose pre-activation target is the burn
-  // record above (§2.2 redirect-the-write; exactly one target per block).
-  // Same idiom as the burn record: written only when nonzero, absent height
+  // ARCHIVAL_BUDGET_SCHEDULE.md §3.1). The amount is computed for every
+  // non-genesis block since the pre-activation burn leg's deletion
+  // (emission is a genesis fact; §2.2), but the row is persisted only
+  // when the amount is nonzero — the burn-record idiom: absent height
   // reads as 0, pop removes the height row. The rows are summed once per
-  // epoch into the frozen `archival_budget` close row and pruned with the
-  // epoch family.
+  // epoch into the frozen `archival_budget` close row and pruned with
+  // the epoch family.
   virtual void add_archival_budget_accrual(uint64_t height, uint64_t amount) = 0;
   virtual uint64_t get_archival_budget_accrual(uint64_t height) const = 0;
   virtual void remove_archival_budget_accrual(uint64_t height) = 0;

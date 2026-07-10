@@ -2,6 +2,50 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **consensus: pre-activation staker-inflow burn leg deleted (rule 60;
+  `ARCHIVAL_BUDGET_SCHEDULE.md` §2.1 retirement,
+  `REWARD_EMISSION_E3_GATING_ROUND.md` §9.9 landed entry).** The
+  connect-site redirect's `else` branch — destroy `staker_inflow` when
+  the connecting block's version predates archival emission — was
+  unreachable by construction: emission is a genesis fact
+  (`HF_VERSION_ARCHIVAL_EMISSION == 1`, block-version floor 1, versions
+  never decrease), and the leg's lineage is the scrapped
+  direct-distribution model's conditional no-staker burn (`cebbe017b`),
+  carried forward as a placeholder (PR-4) and then version-gated (C-1
+  block 1) without ever becoming reachable. Deleted with it:
+  - `HF_VERSION_ARCHIVAL_EMISSION` (`cryptonote_config.h`) — both live
+    reads were tautologies at version floor 1. The redirect gate is
+    gone (`blockchain.cpp` now accrues unconditionally per non-genesis
+    block, same operands: verify's `base_reward`, `bl.major_version`
+    into the split/fee-burn); the raw-import guard
+    (`blockchain_import.cpp`) now refuses **all** non-genesis blocks
+    unconditionally, since every block carries emission-era
+    bookkeeping raw import cannot reproduce.
+  - The conservation KAT's burn-leg expectations and
+    `static_assert(HF_VERSION_ARCHIVAL_EMISSION <= k_post_fork_version)`
+    (`tests/core_tests/archival_budget_conservation.{h,cpp}`) —
+    expectations now unconditional (whole inflow in the accrual row,
+    zero burn row in the fee-free fixture); the labeled-row form stays
+    as the guard against inflow mis-routed into the burn row, and the
+    v1→v2 fork table stays because `major_version` remains a live
+    split/fee-burn operand and pop/reconnect replays the boundary.
+  - The unit-level straddle framing: `archival_substrate_lmdb.cpp`
+    KATs reframed as `budget_burn_accrual_partition_and_conservation`
+    (fee-burn rows and accrual rows coexisting at one height; close
+    sums only the accrual side) and `budget_reorg_pop_symmetry`
+    (pop symmetry for both tables) — the storage properties they pin
+    survive the leg.
+  - CI tripwire (`scripts/ci/check_archival_reward_gates.sh`)
+    re-anchored from the redirect block to the accrual block, same
+    banned symbols (`get_block_reward`, `get_current_version`,
+    `get_ideal_version(`) — F-B1b's version-operand discipline
+    outlives the branch it originally selected; arming re-verified.
+  A future post-genesis activation-gated inflow change re-derives the
+  redirect discipline from §2.1's historical record rather than
+  resurrecting the code.
+
 ### Added
 
 - **wallet-rpc: Phase 4b send lifecycle** (`build_pending_tx`,

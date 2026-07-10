@@ -92,10 +92,13 @@ bool archival_budget_conservation_boundary::verify_conservation(
 
     // ── The conservation identity, in labeled form ─────────────────────────
     // Independent recompute of every leg from the block's OWN operands
-    // (height, major_version, prior cumulative supply). The redirect is a
-    // pure destination switch, so the *sum* of the two rows is
-    // branch-invariant; only row-level equality catches burn-when-should-
-    // accrue (the F-B1b branch-selection class).
+    // (height, major_version, prior cumulative supply). The staker inflow
+    // accrues unconditionally (the pre-activation burn leg is deleted —
+    // emission is a genesis fact), so the labeled form now pins the
+    // destination outright: the whole inflow in the accrual row, nothing
+    // in the burn row (fee-free fixture → no fee-burn share either). A
+    // reintroduced burn routing would keep the *sum* identity green —
+    // only the row-level equality catches it (the F-B1b class).
     const uint64_t q_full = expected_full_subsidy(already_generated);
     const shekyl::EmissionSplit em_split =
         shekyl::compute_emission_split(q_full, height, genesis_ng_height, blk.major_version);
@@ -113,9 +116,8 @@ bool archival_budget_conservation_boundary::verify_conservation(
     // fee leg's guards are the unit-level B5 KATs
     // (economics_b5_fee_coinbase.cpp) and the F-B1c-c1 fix's operand pin.
     const uint64_t staker_inflow = em_split.staker_emission;
-    const bool redirect_active = blk.major_version >= HF_VERSION_ARCHIVAL_EMISSION;
-    const uint64_t expected_accrual = redirect_active ? staker_inflow : 0;
-    const uint64_t expected_burn = redirect_active ? 0 : staker_inflow;
+    const uint64_t expected_accrual = staker_inflow;
+    const uint64_t expected_burn = 0;
 
     const uint64_t ag_after = db.get_block_already_generated_coins(height);
     const uint64_t accrual_row = db.get_archival_budget_accrual(height);
@@ -126,20 +128,26 @@ bool archival_budget_conservation_boundary::verify_conservation(
     CHECK_AND_ASSERT_MES(ag_after - already_generated == q_full, false,
         "[" << perr_context << "] " << "already_generated advance != independently recomputed subsidy at height " << height);
     // Coinbase carries exactly the miner leg (coinbase-foreclosure pin).
+    // Fee-free form: with fees the coinbase would also carry
+    // miner_fee_income (validate_miner_transaction binds it to
+    // miner_emission + miner_fee_income), which is why the capstone sum
+    // below is the fee-free reduction of the general SS2.2 identity.
     CHECK_AND_ASSERT_MES(miner_coinbase == em_split.miner_emission, false,
         "[" << perr_context << "] " << "coinbase != miner_emission at height " << height);
-    // Exactly one target, selected by the block's own version.
+    // The inflow lands whole in the accrual row and nowhere else.
     CHECK_AND_ASSERT_MES(accrual_row == expected_accrual, false,
         "[" << perr_context << "] " << "accrual row mismatch at height " << height << " (v" << unsigned(blk.major_version)
         << "): got " << accrual_row << ", expected " << expected_accrual);
     CHECK_AND_ASSERT_MES(burn_row == expected_burn, false,
         "[" << perr_context << "] " << "burn row mismatch at height " << height << " (v" << unsigned(blk.major_version)
         << "): got " << burn_row << ", expected " << expected_burn);
-    // Capstone sum: ledger = coinbase + (burned | accrued), no gap, no overlap.
+    // Capstone sum (fee-free reduction; general form adds total_fees on
+    // the ledger side): ledger = coinbase + accrued (+ burned), no gap,
+    // no overlap.
     CHECK_AND_ASSERT_MES(miner_coinbase + accrual_row + burn_row == ag_after - already_generated, false,
         "[" << perr_context << "] " << "conservation identity broken at height " << height);
     // The split is real at these (pre-decay) heights — the staker leg is
-    // nonzero, so the row assertions above genuinely distinguish targets.
+    // nonzero, so the row assertions above genuinely pin the destination.
     CHECK_TEST_CONDITION(staker_inflow > 0);
 
     chain_blocks.push_back(blk);

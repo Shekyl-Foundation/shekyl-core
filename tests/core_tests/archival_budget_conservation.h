@@ -1,6 +1,6 @@
 // Copyright (c) 2025-2026, The Shekyl Foundation
 //
-// End-to-end supply-conservation KAT with an activation-boundary block —
+// End-to-end supply-conservation KAT with a fork-boundary block —
 // the C-1 budget fast-follow (REWARD_EMISSION_E3_GATING_ROUND.md §9.9;
 // ARCHIVAL_BUDGET_SCHEDULE.md §2.2 / §7 KAT B1's production-path
 // counterpart). Drives the REAL connect path (handle_block_to_main_chain)
@@ -8,25 +8,23 @@
 //
 //   coinbase + accrual row + burn row == already_generated_coins advance
 //
-// in LABELED form: each row is checked against its expected value given the
-// block's OWN major_version. The labeled form is the load-bearing choice —
-// the redirect is a pure destination switch (same staker_inflow quantity,
-// burn vs accrue), so the *sum* holds even when the wrong branch fires;
-// only row-level equality catches the branch-selection class (F-B1b) that
-// operand-identity construction and the grep tripwire cannot see.
+// (the fee-free reduction of the general §2.2 identity — with fees the
+// right side carries + total_fees, since fees are pre-existing coins that
+// never advance the ledger; this fixture is fee-free, see below) in
+// LABELED form: each row is checked against its own expected value. The
+// labeled form is the load-bearing choice — a destination error (staker
+// inflow routed into the burn row instead of the accrual row, the F-B1b
+// class; the deleted pre-activation burn leg's shape) keeps the *sum*
+// identity green, so only row-level equality catches it. The staker inflow
+// accrues unconditionally (emission is a genesis fact; the burn leg is
+// deleted per rule 60), so the expectations are unconditional: whole
+// inflow in the accrual row, zero in the burn row (fee-free fixture).
 //
-// Genesis-posture note (§2.3): HF_VERSION_ARCHIVAL_EMISSION == 1 and block
-// versions start at 1, so no pre-activation block is constructible through
-// the real connect path today — the burn leg of the expectations is
-// compile-alive but unexercised. The expectations are written against the
-// constant generically: a post-genesis activation bump to
-// k_post_fork_version (2) arms the burn leg and the boundary straddle
-// through this same fixture with no test change, because the fork table
-// below already crosses v1 -> v2 mid-chain. A bump PAST
-// k_post_fork_version would instead turn every fixture block
-// pre-activation and silently de-arm the accrue leg and the straddle —
-// the static_assert below the class forces the fork table to be extended
-// first.
+// The fork table still crosses v1 -> v2 mid-chain on purpose: the block's
+// major_version is a live operand of compute_emission_split /
+// compute_fee_burn (the F-B1b operand pin), and the pop/reconnect leg
+// replays the boundary through the rewound fork machinery — both remain
+// exercised even with the burn-vs-accrue branch gone.
 //
 // Fee-leg coverage gap (disclosed): the fixture is fee-free, so only the
 // emission half of production's staker_inflow
@@ -59,8 +57,7 @@ public:
   // boundary block is the fixture requirement named in the FOLLOWUPS pin.
   static constexpr uint64_t k_fork_height = 8;
   // The fork table's top block version — the single source for the
-  // fork-table entry, the per-block version selection in the .cpp, and the
-  // activation-coverage static_assert below.
+  // fork-table entry and the per-block version selection in the .cpp.
   static constexpr uint8_t k_post_fork_version = 2;
   // Blocks connected on top of genesis. Short by design — the identity is
   // per block; epoch close (SETTLEMENT_EPOCH_BLOCKS = 10 000) is covered by
@@ -73,18 +70,6 @@ public:
 private:
   mutable cryptonote::account_base m_miner;
 };
-
-// Activation-coverage binding: if HF_VERSION_ARCHIVAL_EMISSION ever exceeds
-// the fixture's top block version, every fixture block becomes
-// pre-activation — the accrue leg and the boundary straddle silently stop
-// being exercised while every row check keeps passing (expected_burn ==
-// staker_inflow everywhere). Refuse to compile until the fork table (and
-// k_fork_height straddle) is extended to cover the new activation version.
-static_assert(HF_VERSION_ARCHIVAL_EMISSION <= archival_budget_conservation_boundary::k_post_fork_version,
-    "archival_budget_conservation fixture fork table tops out below "
-    "HF_VERSION_ARCHIVAL_EMISSION: extend the fork table so the fixture "
-    "still straddles the activation boundary, or the conservation KAT "
-    "silently de-arms");
 
 template<>
 struct get_test_options<archival_budget_conservation_boundary>
