@@ -155,14 +155,24 @@ pub fn build_router(state: Arc<AppState>, cors_origins: &[String]) -> Router {
         )
         .route("/get_info", get(json::get_info).post(json::get_info))
         .route("/getinfo", get(json::get_info).post(json::get_info))
-        .route("/get_limit", get(json::get_limit).post(json::get_limit));
-
-    // Binary endpoints (always available) — registered from the shared
-    // `binary_routes()` table so `binary_uri_paths()` (and the guard test that
-    // uses it) stays authoritative and cannot drift from the live router.
-    for (path, handler) in binary_routes() {
-        router = router.route(path, handler);
-    }
+        .route("/get_limit", get(json::get_limit).post(json::get_limit))
+        // Binary endpoints (always available). Keep these paths in sync with
+        // BINARY_URI_PATHS below (the guard test asserts against that const,
+        // which is intentionally handler-free so the FFI-less Rust test job
+        // can link — see its doc comment).
+        .route("/get_blocks.bin", post(binary::get_blocks))
+        .route("/getblocks.bin", post(binary::get_blocks))
+        .route(
+            "/get_blocks_by_height.bin",
+            post(binary::get_blocks_by_height),
+        )
+        .route(
+            "/getblocks_by_height.bin",
+            post(binary::get_blocks_by_height),
+        )
+        .route("/get_hashes.bin", post(binary::get_hashes))
+        .route("/gethashes.bin", post(binary::get_hashes))
+        .route("/get_o_indexes.bin", post(binary::get_o_indexes));
 
     if !restricted {
         router = router
@@ -299,35 +309,22 @@ pub async fn run_server(
     serve_with_listener(core, config, listener, shutdown).await
 }
 
-/// Binary (`.bin`) routes as `(path, handler)` pairs. [`build_router`]
-/// registers directly from this table and [`binary_uri_paths`] derives its
-/// path list from it, so the two cannot drift: adding or removing a real
-/// binary route here updates both the router and the guard test at once.
-fn binary_routes() -> [(&'static str, axum::routing::MethodRouter<Arc<AppState>>); 7] {
-    [
-        ("/get_blocks.bin", post(binary::get_blocks)),
-        ("/getblocks.bin", post(binary::get_blocks)),
-        (
-            "/get_blocks_by_height.bin",
-            post(binary::get_blocks_by_height),
-        ),
-        (
-            "/getblocks_by_height.bin",
-            post(binary::get_blocks_by_height),
-        ),
-        ("/get_hashes.bin", post(binary::get_hashes)),
-        ("/gethashes.bin", post(binary::get_hashes)),
-        ("/get_o_indexes.bin", post(binary::get_o_indexes)),
-    ]
-}
-
-/// Binary URI paths registered by [`build_router`], derived from the same
-/// [`binary_routes`] table the router is built from. Lets in-lane tests assert
-/// deleted decoy surfaces stay gone without linking the C++ `core_rpc_ffi`
-/// symbols (`cargo test -p shekyl-daemon-rpc` has no daemon image).
-pub fn binary_uri_paths() -> Vec<&'static str> {
-    binary_routes().into_iter().map(|(path, _)| path).collect()
-}
+/// Binary URI paths registered by [`build_router`]. Kept as an explicit,
+/// handler-free table so in-lane tests can assert deleted decoy surfaces stay
+/// gone WITHOUT linking the C++ `core_rpc_ffi` symbols — `cargo test -p
+/// shekyl-daemon-rpc` (and the workspace Rust test job) build no daemon image,
+/// so a test that reached the real handlers would fail to link. This is a
+/// deliberate trade-off: the list is maintained in lockstep with the
+/// `.route(".../*.bin", ...)` calls in `build_router` above.
+pub const BINARY_URI_PATHS: &[&str] = &[
+    "/get_blocks.bin",
+    "/getblocks.bin",
+    "/get_blocks_by_height.bin",
+    "/getblocks_by_height.bin",
+    "/get_hashes.bin",
+    "/gethashes.bin",
+    "/get_o_indexes.bin",
+];
 
 #[cfg(test)]
 mod tests {
@@ -339,15 +336,13 @@ mod tests {
 
     #[test]
     fn output_distribution_bin_not_registered() {
-        // Derived from the same `binary_routes()` table `build_router` registers
-        // from, so this tracks the live routes rather than a hand-kept copy.
-        let paths = binary_uri_paths();
         assert!(
-            !paths.contains(&"/get_output_distribution.bin"),
+            !BINARY_URI_PATHS.contains(&"/get_output_distribution.bin"),
             "decoy distribution binary route must stay deleted"
         );
-        assert!(paths.contains(&"/get_blocks.bin"));
-        assert!(paths.contains(&"/get_o_indexes.bin"));
+        // Spot-check the live table still matches the routes wired above.
+        assert!(BINARY_URI_PATHS.contains(&"/get_blocks.bin"));
+        assert!(BINARY_URI_PATHS.contains(&"/get_o_indexes.bin"));
     }
 
     #[tokio::test]
