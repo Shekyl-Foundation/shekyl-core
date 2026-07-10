@@ -4,6 +4,20 @@
 
 ### Removed
 
+- **daemon RPC: epee HTTP listener + `--no-rust-rpc` deleted (Phase 1
+  transport cutover; `DAEMON_RPC_RUST.md`).** Axum is the sole daemon
+  HTTP transport. `core_rpc_server` no longer inherits
+  `epee::http_server_impl_base`; MAP dispatch macros are gone (FFI
+  tables only). shekyld does not register inbound `--rpc-login` /
+  `--rpc-ssl*` (unrepresentable; wallet-RPC keeps the full set). CORS
+  default-deny; `--rpc-access-control-origins` honored when set. Dead
+  decoy surface removed: `get_output_distribution` (+ `.bin`),
+  `wallet2::get_rct_distribution`, and
+  `wallet_errors.h::get_output_distribution`. Deleted
+  `tests/rpc_comparison/compare_rpc.sh`. Opportunistic RPC SSL key
+  autogen on the daemon path is gone with the epee listener.
+  Connection-limit CLI args remain inert under Axum (FOLLOWUPS).
+
 - **consensus: pre-activation staker-inflow burn leg deleted (rule 60;
   `ARCHIVAL_BUDGET_SCHEDULE.md` §2.1 retirement,
   `REWARD_EMISSION_E3_GATING_ROUND.md` §9.9 landed entry).** The
