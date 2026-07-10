@@ -1194,6 +1194,47 @@ impl<
         Ok(())
     }
 
+    /// Persist final state + prefs for close, without consuming `self`.
+    ///
+    /// Callers that must keep the live `Engine` when flush fails (e.g.
+    /// wallet-rpc `close_wallet`, which re-installs the session on I/O
+    /// error) use this before dropping. [`Self::close`] is the
+    /// consume-on-any-outcome path for CLI / tests.
+    ///
+    /// # Errors
+    ///
+    /// - [`OpenError::OutstandingPendingTx`] when one or more
+    ///   reservations are still in flight.
+    /// - [`OpenError::Persistence`] for state-save / prefs-save failures.
+    pub fn persist_for_close(&self) -> Result<(), OpenError> {
+        let count = self.outstanding_pending_txs();
+        if count > 0 {
+            return Err(OpenError::OutstandingPendingTx { count });
+        }
+
+        // Persist final state and prefs via steady-state sealing keys
+        // (F5(b)); see `docs/WALLET_FILE_FORMAT_V1.md` §4.3.
+        //
+        // Acquire a `LocalLedger` read guard for the duration of the
+        // save call so the underlying `WalletLedger` is borrowed
+        // immutably. Callers that reach here from `close` have already
+        // taken sole ownership; the read guard is structural, not for
+        // contention with other Engine writers on this instance.
+        let ledger_guard = self.ledger.read();
+        drive_persistence(
+            self.persistence
+                .save_state(self.state_wrap_key(), &ledger_guard.ledger),
+        )
+        .map_err(|e| OpenError::Persistence(e.into()))?;
+        drop(ledger_guard);
+        drive_persistence(
+            self.persistence
+                .save_prefs(self.prefs_hmac_key(), &self.prefs),
+        )
+        .map_err(|e| OpenError::Persistence(e.into()))?;
+        Ok(())
+    }
+
     /// Close the wallet. Errors if `outstanding_pending_txs() > 0`.
     ///
     /// On success, `self` is consumed and the drop sequence runs:
@@ -1223,35 +1264,16 @@ impl<
     ///   reservations are still in flight.
     /// - [`OpenError::Persistence`] for state-save / prefs-save failures.
     ///
+    /// On either error variant, `self` is still dropped (by-value `self`
+    /// cannot be returned through `Result<(), E>`). Callers that must
+    /// retain the live engine on flush failure must call
+    /// [`Self::persist_for_close`] first and only drop on `Ok`.
+    ///
     /// `credentials` is ignored on the steady-state close path (region-2 sealing
     /// uses the session [`StateWrapKey`](super::sealing_keys::StateWrapKey)); the
     /// parameter remains for API stability with pre-F5(b) callers.
     pub fn close(self, _credentials: &Credentials<'_>) -> Result<(), OpenError> {
-        let count = self.outstanding_pending_txs();
-        if count > 0 {
-            return Err(OpenError::OutstandingPendingTx { count });
-        }
-
-        // Persist final state and prefs before drop via steady-state sealing
-        // keys (F5(b)); see `docs/WALLET_FILE_FORMAT_V1.md` §4.3.
-        //
-        // Acquire a `LocalLedger` read guard for the duration of the
-        // save call so the underlying `WalletLedger` is borrowed
-        // immutably. `Engine::close` consumes `self`, so no concurrent
-        // writers exist at this point; the read guard is structural,
-        // not for contention.
-        let ledger_guard = self.ledger.read();
-        drive_persistence(
-            self.persistence
-                .save_state(self.state_wrap_key(), &ledger_guard.ledger),
-        )
-        .map_err(|e| OpenError::Persistence(e.into()))?;
-        drop(ledger_guard);
-        drive_persistence(
-            self.persistence
-                .save_prefs(self.prefs_hmac_key(), &self.prefs),
-        )
-        .map_err(|e| OpenError::Persistence(e.into()))?;
+        self.persist_for_close()?;
 
         // Explicit drop so the chain documented above runs at a
         // named program point rather than at the end of the function
@@ -1701,6 +1723,45 @@ mod tests {
             OpenError::OutstandingPendingTx { count } => assert_eq!(count, count_before),
             other => panic!("expected OutstandingPendingTx, got {other:?}"),
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn persist_for_close_keeps_engine_on_outstanding_reservation() {
+        let fix = make_create_fixture();
+        let password: &[u8] = b"correct horse";
+        let creds = Credentials::password_only(password);
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
+        let wallet =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+
+        use super::super::local_pending_tx::ConsumerHeldEntry;
+
+        let id = super::super::pending::ReservationId::new(0);
+        wallet
+            .pending
+            .state
+            .lock()
+            .expect("pending state lock not poisoned")
+            .consumer_held
+            .insert(id, ConsumerHeldEntry::for_outstanding_test(vec![0xAB; 64]));
+
+        let count_before = wallet.outstanding_pending_txs();
+        assert_eq!(count_before, 1);
+
+        // Non-consuming flush must leave `wallet` usable (RPC restore path).
+        let err = wallet
+            .persist_for_close()
+            .expect_err("persist_for_close must refuse with outstanding reservation");
+        match err {
+            OpenError::OutstandingPendingTx { count } => assert_eq!(count, count_before),
+            other => panic!("expected OutstandingPendingTx, got {other:?}"),
+        }
+        assert_eq!(wallet.outstanding_pending_txs(), count_before);
+        wallet
+            .close(&creds)
+            .expect_err("still outstanding after failed persist");
     }
 
     #[tokio::test(flavor = "multi_thread")]

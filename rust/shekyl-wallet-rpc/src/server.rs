@@ -17,6 +17,8 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
+use shekyl_crypto_pq::wallet_envelope::KdfParams;
+use shekyl_engine_core::Network;
 use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
@@ -64,8 +66,15 @@ pub struct ServerConfig {
     pub listen: ListenAddr,
     /// Directory for wallet files.
     pub wallet_dir: PathBuf,
+    /// Network every create/open binds to.
+    pub network: Network,
+    /// Daemon JSON-RPC base URL (e.g. `http://127.0.0.1:28581`).
+    pub daemon_address: String,
     /// HTTP basic auth (disabled for UDS-by-default deployments).
     pub auth: AuthConfig,
+    /// Argon2id cost for `create_wallet` / password rotation.
+    /// Production uses [`KdfParams::default`]; tests may clamp.
+    pub kdf: KdfParams,
 }
 
 /// Shared application state.
@@ -74,6 +83,8 @@ pub struct AppState {
     pub tenants: tokio::sync::Mutex<TenantState>,
     /// Auth config (also injected as middleware state).
     pub auth: AuthConfig,
+    /// Argon2id cost for create / rotate.
+    pub kdf: KdfParams,
     /// Signalled to request graceful shutdown.
     pub shutdown: Arc<Notify>,
 }
@@ -84,8 +95,13 @@ pub struct AppState {
 impl AppState {
     fn new(config: &ServerConfig) -> Arc<Self> {
         Arc::new(Self {
-            tenants: tokio::sync::Mutex::new(TenantState::new(config.wallet_dir.clone())),
+            tenants: tokio::sync::Mutex::new(TenantState::new(
+                config.wallet_dir.clone(),
+                config.network,
+                config.daemon_address.clone(),
+            )),
             auth: config.auth.clone(),
+            kdf: config.kdf,
             shutdown: Arc::new(Notify::new()),
         })
     }
@@ -110,7 +126,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 }
 
 async fn json_rpc_handler(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     body: Bytes,
 ) -> (StatusCode, Json<JsonRpcResponse>) {
     // HTTP status is 200 for every JSON-RPC exchange (spec). Distinguish
@@ -131,7 +147,7 @@ async fn json_rpc_handler(
     };
 
     let id = req.id.clone();
-    match handlers::dispatch(&req.method, &req.params) {
+    match handlers::dispatch(&state.tenants, &req.method, &req.params, state.kdf).await {
         Ok(result) => (StatusCode::OK, Json(JsonRpcResponse::success(id, result))),
         Err(err) => (StatusCode::OK, Json(JsonRpcResponse::from_error(id, &err))),
     }
@@ -225,14 +241,27 @@ impl InProcessHandle {
 /// a subprocess. Auth is disabled for the loopback in-process case (the
 /// caller is the same process); pass credentials via [`ServerConfig`] if a
 /// future caller needs them.
+///
+/// Defaults: stagenet + unreachable daemon URL (lifecycle does not dial
+/// until refresh/send). Override via [`spawn_in_process_with`].
 pub async fn spawn_in_process(
     wallet_dir: PathBuf,
 ) -> Result<InProcessHandle, Box<dyn std::error::Error + Send + Sync>> {
-    let config = ServerConfig {
+    spawn_in_process_with(ServerConfig {
         listen: ListenAddr::Tcp(SocketAddr::from(([127, 0, 0, 1], 0))),
         wallet_dir,
+        network: Network::Stagenet,
+        daemon_address: "http://127.0.0.1:1".into(),
         auth: AuthConfig::Disabled,
-    };
+        kdf: KdfParams::default(),
+    })
+    .await
+}
+
+/// Spawn an in-process server with a full [`ServerConfig`] (tests / CLI).
+pub async fn spawn_in_process_with(
+    config: ServerConfig,
+) -> Result<InProcessHandle, Box<dyn std::error::Error + Send + Sync>> {
     let state = AppState::new(&config);
     let app = build_router(state.clone());
     let listener = TcpListener::bind(config.listen_tcp_ephemeral()).await?;

@@ -78,6 +78,63 @@ sustainability is unaffected by the recalibration.
   "keep epee" — the gap is the bug). *Target: V3.0 (pre-genesis; no users,
   no compatibility window — rule 16's user-protection-defaults inversion).*
 
+- **Phase 4b: `rescan_blockchain` needs an Engine rescan API** (added
+  2026-07-09). Wallet-rpc OpenAPI specifies `rescan_blockchain` (full
+  rescan from restore height, rebuild scan-derived state). Today Engine
+  only exposes `restore_from_height` + `refresh`; there is no
+  `Engine::rescan_*` that resets scan-derived ledger state to
+  `restore_from_height` before scanning. Phase 4b therefore leaves the
+  RPC method as `-32601` rather than inventing a silent
+  “set height + refresh” shim. **Reopening criterion:** Engine grows an
+  explicit rescan that resets scan-derived state to
+  `restore_from_height` (named API, tested). **Re-evaluation shape:**
+  wire `shekyl-wallet-rpc` `rescan_blockchain` to that API in a scoped
+  Phase 4b follow-up (or Phase 4c) PR; update OpenAPI only if the
+  projection differs. *Target: V3.0 / Phase 4b.*
+
+- **Phase 4b: `get_transfers` OUTGOING filter is a no-op until an outgoing
+  history surface lands** (added 2026-07-09). The Engine ledger holds only
+  receive-side rows; `project::transfer_view` projects every row as
+  `INCOMING` (outgoing sends surface as `SPENT` state on the funding row).
+  A `get_transfers` call with `direction: OUTGOING` therefore matches nothing
+  and returns an empty list — a documented, valid enum value that silently
+  yields a wrong-looking answer (client sees "no sends"). Phase 4b keeps the
+  current behavior rather than either rejecting a spec-valid filter value or
+  faking an outgoing view. **Reopening criterion:** Engine grows a spend-side
+  transfer record (a real outgoing-history surface, tested). **Re-evaluation
+  shape:** project outgoing rows in `transfer_view` and let the existing
+  `get_transfers` filter select them; until then, consider surfacing a
+  distinct "not yet available" signal if clients depend on the filter.
+  *Target: V3.0 / Phase 4b–4c.*
+
+- **Phase 4b: `build_pending_tx` holds the Engine write lock across FCMP++
+  assembly, stalling read RPCs** (added 2026-07-09). `Engine::build_pending_tx_async`
+  takes `&mut self`, so `send::build_pending_tx` holds `SharedEngine::write()`
+  across the curve-tree actor's `AssembleTx` (real, potentially slow async
+  I/O). While a build runs, every concurrent read RPC (`get_balance`,
+  `get_height`, `get_transfers`) blocks on `read()`, and `refresh` cannot
+  proceed — contradicting the `tenant.rs` note that reads share the Engine
+  under a read lock. The `Arc<RwLock<Engine>>` seam cannot fix this from the
+  RPC layer while build needs `&mut self`. **Reopening criterion:** Engine
+  splits the slow membership-path assembly out of the exclusive-borrow window
+  (interior mutability for the reservation commit, or an assemble-then-commit
+  API). **Re-evaluation shape:** narrow the write-lock hold in
+  `send::build_pending_tx` to the commit step once Engine exposes it.
+  *Target: V3.0 / Phase 4b–4c.*
+
+- **Phase 4b: `submit_pending_tx` verdict is flattened to `ACCEPTED`** (added
+  2026-07-09). `Engine::submit_pending_tx_async` returns a bare `TxHash`,
+  collapsing the internal `SubmitSuccess` distinction (`Broadcast` vs
+  `AlreadyInChain { height }`). `send::submit_pending_tx` therefore always
+  reports `verdict: ACCEPTED` / `confirmed_height: null`, so the OpenAPI
+  `ALREADY_IN_POOL` / `ALREADY_IN_CHAIN` verdicts (and `confirmed_height`)
+  are unreachable — documented as a known limitation on
+  `types::SubmitVerdictView`. **Reopening criterion:** Engine returns a
+  richer submit success type that preserves the pool/chain distinction and
+  confirmed height. **Re-evaluation shape:** map that type onto
+  `SubmitVerdictView` in `send::submit_pending_tx` and populate
+  `confirmed_height`. *Target: V3.0 / Phase 4b–4c.*
+
 - **GF4b-2 genesis gate — bond-post funding-input-count leak; `stake_in`
   single-structured-output funding must land before genesis** (added
   2026-07-08, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.5 residual 1 /

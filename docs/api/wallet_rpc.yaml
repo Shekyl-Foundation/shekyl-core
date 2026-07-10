@@ -367,9 +367,25 @@ components:
     CreateWalletResult:
       type: object
       required: [wallet]
+      description: >
+        On success the wallet is open. Backup material is returned exactly
+        once: BIP-39 `mnemonic` on mainnet/stagenet, or `raw_seed_hex` on
+        testnet (32-byte entropy, lowercase hex). Clients must persist the
+        backup before discarding the response; the server does not re-emit it.
       properties:
         wallet:
           $ref: "#/components/schemas/WalletHandle"
+        mnemonic:
+          type: string
+          description: >
+            24-word BIP-39 English mnemonic (mainnet/stagenet). Absent on
+            testnet. Equally secret with the master seed — never log.
+        raw_seed_hex:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: >
+            32-byte raw seed as lowercase hex (testnet only). Absent on
+            mainnet/stagenet.
 
     OpenWalletParams:
       type: object
@@ -586,6 +602,10 @@ components:
         since_height:
           type: integer
           format: int64
+          minimum: 0
+          description: >
+            Inclusive lower bound on transfer `block_height`. Negative values
+            are rejected with `-32602 InvalidParams`.
 
     GetTransfersResult:
       type: object

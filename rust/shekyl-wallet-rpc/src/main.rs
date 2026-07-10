@@ -11,8 +11,11 @@
 //! is the Shekyl-native contract in `docs/api/wallet_rpc.yaml`.
 
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use clap::Parser;
+use shekyl_crypto_pq::wallet_envelope::KdfParams;
+use shekyl_engine_core::Network;
 use shekyl_wallet_rpc::{run_server, AuthConfig, ListenAddr, ServerConfig};
 
 #[derive(Parser, Debug)]
@@ -38,6 +41,14 @@ struct Cli {
     /// Disable RPC login even if `--rpc-login` is set.
     #[arg(long = "disable-rpc-login", default_value_t = false)]
     disable_rpc_login: bool,
+
+    /// Daemon JSON-RPC base URL (used by refresh / send; lifecycle holds it).
+    #[arg(long = "daemon-address", default_value = "http://127.0.0.1:28581")]
+    daemon_address: String,
+
+    /// Network every create/open binds to: mainnet | testnet | stagenet.
+    #[arg(long = "network", default_value = "mainnet")]
+    network: String,
 
     /// Optional file sink for `tracing` events.
     #[arg(long = "log-file")]
@@ -82,10 +93,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         AuthConfig::from_rpc_login(Some(&cli.rpc_login))
     };
 
+    let network = Network::from_str(&cli.network)
+        .map_err(|e| format!("invalid --network '{}': {e}", cli.network))?;
+
     let server = ServerConfig {
         listen,
         wallet_dir: cli.wallet_dir,
+        network,
+        daemon_address: cli.daemon_address,
         auth,
+        kdf: KdfParams::default(),
     };
 
     // `run_server` blocks until its listener fails or the process is

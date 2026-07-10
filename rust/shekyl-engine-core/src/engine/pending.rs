@@ -161,20 +161,31 @@ impl SnapshotId {
 pub struct ReservationId(u64);
 
 impl ReservationId {
-    /// Underlying counter value. Exposed for diagnostics and tests; not
-    /// part of any wire format.
+    /// Underlying counter value. Exposed for diagnostics, tests, and
+    /// the wallet-rpc opaque-handle round-trip (`pending_tx_id`).
     pub fn raw(self) -> u64 {
         self.0
     }
 
-    /// Construct a [`ReservationId`] from a raw counter value. Crate-
-    /// internal; production code goes through `build_pending_tx` (which
-    /// owns the monotonic counter on `Engine<S>`) or
-    /// [`super::local_pending_tx::LocalPendingTx`]. Tests in
-    /// sibling modules use this to synthesize a recognizable id without
-    /// running the full build pipeline.
-    pub(crate) fn new(v: u64) -> Self {
+    /// Reconstruct a [`ReservationId`] from a previously returned
+    /// [`Self::raw`] value (wallet-rpc `pending_tx_id` parse path).
+    ///
+    /// Values are meaningful only within the issuing `Engine` handle's
+    /// lifetime; unknown ids surface as
+    /// [`PendingTxError::ReservationNotFound`] /
+    /// [`SubmitError::ReservationNotFound`] on submit.
+    pub fn from_raw(v: u64) -> Self {
         Self(v)
+    }
+
+    /// Construct a [`ReservationId`] from a raw counter value. Crate-
+    /// internal alias of [`Self::from_raw`]; production code goes through
+    /// `build_pending_tx` (which owns the monotonic counter on
+    /// `Engine<S>`) or [`super::local_pending_tx::LocalPendingTx`]. Tests
+    /// in sibling modules use this to synthesize a recognizable id
+    /// without running the full build pipeline.
+    pub(crate) fn new(v: u64) -> Self {
+        Self::from_raw(v)
     }
 }
 
