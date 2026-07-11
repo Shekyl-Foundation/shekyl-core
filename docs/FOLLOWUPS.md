@@ -8433,7 +8433,8 @@ one place to confirm each item's relationship to the wallet stack.
   lifts `+0.46/+0.65/+0.62`); the two single-member-targeted controls (M-b, M-d) surface
   a **pinned bound-2 under-specification** (family-max `T` structurally cannot lift
   `+0.30` for a one-of-M perturbation or a mutually-dissimilar cohort; M-d's members 1–5
-  stay at chance with member 6 the only biting detector, exactly as specified) — pinned
+  stay at chance in lift terms with member 6 the only biting detector, exactly as
+  specified) — pinned
   in §14.4 with two disposition options (per-aimed-member grading), run reports
   INVALID-with-pins per bound 3, never a silent pass.
   **UPDATE 2026-07-11 — bound-2 pin RESOLVED as a detector-architecture finding, not
@@ -8452,14 +8453,36 @@ one place to confirm each item's relationship to the wallet stack.
   and add the aimed-member flag; single-member controls grade on the aimed-member
   flag — the same rule deployment uses. Re-graded 500×200: deployed clean on both
   arms (lift `+0.001`, min member p `0.264`); all five controls bite (M-b m2 and
-  M-d m6 flag at the p-floor `0.005`; M-d members 1–5 at chance). Verdict
+  M-d m6 flag at the p-floor `0.005`; M-d members 1–5 at chance in bite-magnitude
+  terms). Verdict
   **PARTITION-PASS**; no pins remain. Ratified 2026-07-11 (decision-anchored:
   PR #291, incl. its review-round dispositions — projection-form spectral
   deflation with a bit-for-bit-identical re-grade, loud geometry guards; the
   §14.4 RATIFIED block is the record). Reopen on: family-membership change
   (re-derive the Bonferroni divisor), `N`/`M` geometry change (re-derive power
-  sizing), or persistent non-aimed-member flags on a control (aggregator
-  cross-talk → detector round). **Riders landed same slice:**
+  sizing), or persistent non-aimed-member flags on a control **through a shared
+  computed intermediate** (aggregator cross-talk → detector round; the
+  shared-intermediate mechanism is the criterion's carrier — verify at source
+  before filing, per the M-d member-1 precedent below).
+  **Calibration note 2026-07-11 (record accuracy only — grading, verdict, and
+  code behavior untouched; deliberately NOT filed under the cross-talk
+  criterion, whose mechanism was verified absent):** the any-member arm at its
+  500-trial power resolves an off-aimed geometric side-signature on M-d —
+  member 1 flags at the rank-p floor (`+0.034` Jaccard over its own null,
+  persistent across seeds) while staying at chance in family-max-lift terms
+  (`+0.03 ≪ +0.30`, no bite). The two claims coexist because lift-magnitude
+  and rank-p are different axes; the record now names the axis wherever "at
+  chance" appears. Settled at source before recording: member 1 (k-means on
+  plain z-scored `trial.feat`) and member 6 (k-NN in `whitened_dist2`'s own
+  recomputed metric) share no computed intermediate — independent functions
+  of the raw features, so the flag is the jointly-unusual M-d cohort's own
+  geometry meeting a well-powered arm, not member-6 leakage. Dispositions
+  taken: axis-named corrections in §14.4 + code comments; member 1 kept OUT
+  of M-d's aimed set (coupling PASS to a `+0.03` incidental effect would
+  manufacture brittleness); the M-d factorized-rejection rationale re-anchored
+  on its surviving measured discriminator (member-6 lift dilution `+0.116` vs
+  `+0.136`) since member 1 flags under both constructions and never
+  discriminated between them. **Riders landed same slice:**
   §16.7 N-sweep (`r < 2` at every `N ∈ {10,20,50}`; measured `r` falls with `N` —
   no small-candidate-set artifact), M6.2 coupling control (blind@window-0 `0.231` ≥
   `2/N = 0.200`; the doc's `0.237` reference reproduced), §18.3-as-narrowed-by-§18.8

@@ -173,7 +173,11 @@ pub enum MarkedControl {
     Cohesion,
     /// **M-d (correlation-breaking):** every marginal in-range, feature
     /// *combinations* off the joint support. Bitten by member 6 (joint-density
-    /// isolation); members 1–5 are blind to it.
+    /// isolation); members 1–5 carry no bite against it (lift an order of
+    /// magnitude under [`BOUND2_LIFT`]), though member 1 resolves a small
+    /// (≈ `+0.03`) geometric side-signature at rank-p resolution — verified
+    /// at source as independent geometry, not cross-talk (see the
+    /// construction note in `gen_founders`).
     CorrelationBreak,
     /// **M-e (repulsed/scheduled):** five founder anchors placed by an
     /// enforced-staggering mechanism (hard-core minimum-gap process). Bitten by
@@ -784,28 +788,46 @@ fn gen_founders(rng: &mut SplitMix64, control: MarkedControl, window: u64) -> Ve
         // manifold in one direction, on it everywhere else. Marginals exactly
         // production — no band, no extreme, nothing for a per-feature ranking
         // to hold — and the five break *different* couplings, so they carry
-        // no cluster (defeats 1/3/4/5), no marginal outlier (defeats 2), and
-        // no anchor regularity (defeats 7). Member 6 (joint-density
-        // isolation) alone prices the joint. (The alternative — fully
-        // factorizing every coordinate from its own fresh ghost — was graded
-        // and rejected, PR #291 review: it breaks the equal-gaps coupling
-        // (ii) for *all five* founders — a shared off-manifold trait where
-        // the design wants five founders sharing none — and it measurably
-        // dilutes the aimed bite (member-6 lift `+0.116` factorized vs
-        // `+0.136` targeted at the evidence config) by spending the
-        // off-support budget on couplings member 6 was not aimed at. See
+        // no cluster (defeats 1/3/4/5 **at bite magnitude**: max members-1–5
+        // lift ≈ +0.03, an order of magnitude under `BOUND2_LIFT`), no
+        // marginal outlier (defeats 2), and no anchor regularity (defeats 7).
+        // Member 6 (joint-density isolation) alone *bites* the joint.
+        // Axis note (calibration, verified at source post-ratification):
+        // "defeats" is a bite-magnitude claim, not a rank-p claim — the
+        // any-member arm at its 500-trial power resolves member 1's ≈ +0.03
+        // side-signature at the rank-p floor, persistently across seeds.
+        // Member 1's and member 6's statistics are independent functions of
+        // `trial.feat` (k-means on the plain z-scored features vs k-NN in
+        // `whitened_dist2`'s own recomputed metric; no shared intermediate,
+        // no member output feeding another), so the flag is the cohort's own
+        // geometry meeting a well-powered arm — not aggregator cross-talk,
+        // and the §14.4 cross-talk reopening criterion does not fire. Aimed
+        // grading is unaffected (member 1 is not in M-d's pass condition; a
+        // +0.03 incidental signature must not gate PASS).
+        // (The alternative construction — fully factorizing every coordinate
+        // from its own fresh ghost — was graded and rejected, PR #291
+        // review: it breaks the equal-gaps coupling (ii) for *all five*
+        // founders — a shared off-manifold trait where the design wants five
+        // founders sharing none — and it measurably dilutes the aimed bite
+        // (member-6 lift `+0.116` factorized vs `+0.136` targeted at the
+        // evidence config) by spending the off-support budget on couplings
+        // member 6 was not aimed at. The lift dilution is the surviving
+        // *measured* discriminator: member 1 flags at the rank-p floor under
+        // BOTH constructions, so a member-1 flag never separated them. See
         // the defaults note in the constructor below.)
         MarkedControl::CorrelationBreak => {
             // Every marginal in-range, the **joint** off the support (§14.4
             // member 6: "plausible values in implausible pairings"). The five
             // founders are **mutually dissimilar** — each breaks a *different*
-            // deployed coupling — so they form no cluster (defeats 1/3/4), a
-            // seed finds no similar others (defeats 5), and anchors stay
-            // untouched production draws (defeats 7); every coordinate is a
-            // value the deployed marginal reaches, so no descending top-`M`
-            // ranking flags them (defeats 2). Only member 6's whitened
-            // joint-density isolation, which amplifies the deployed
-            // couplings' zero-variance directions, prices the pairings. The
+            // deployed coupling — so they form no cluster (defeats 1/3/4 at
+            // bite magnitude; see the axis note above for member 1's small
+            // rank-p side-signature), a seed finds no similar others
+            // (defeats 5), and anchors stay untouched production draws
+            // (defeats 7); every coordinate is a value the deployed marginal
+            // reaches, so no descending top-`M` ranking flags them
+            // (defeats 2). Only member 6's whitened joint-density isolation,
+            // which amplifies the deployed couplings' zero-variance
+            // directions, *bites* the pairings. The
             // deployed couplings (all derivable from `gen_at_anchor`'s
             // session-grid law, `drain = t0 + period·(⌊window/period⌋+1)`,
             // `per_p` on the next two grid points): (i) `seam + cadence >
@@ -1650,7 +1672,9 @@ pub struct PartitionScenario {
     /// aimed at its failure mode").
     pub aimed_member_lift: f64,
     /// All seven members' observed agreements (diagnostic — records members 1–5
-    /// at chance against M-d, etc., per the §14.4 recorded-per-run requirement).
+    /// at chance in bite-magnitude terms against M-d, etc., per the §14.4
+    /// recorded-per-run requirement; the rank-p axis is
+    /// [`member_p`](Self::member_p)).
     pub member_agreements: [f64; 7],
     /// All seven members' permutation-null means (the per-member chance level
     /// each observed agreement is read against).
@@ -2123,9 +2147,13 @@ mod tests {
     ///   the family max cannot move (the Q2-A adversary lives on member 6's
     ///   axis alone), certifying that deployment's rule catches the
     ///   adversaries members 6/7 were added for;
-    /// - M-d still keeps members 1–5 at chance (the §14.4 recorded-per-run
-    ///   requirement) — the flags are member-6-specific, not a family-wide
-    ///   artifact;
+    /// - M-d still keeps members 1–5 at chance **in bite-magnitude terms**
+    ///   (lift ≪ `BOUND2_LIFT`; the §14.4 recorded-per-run requirement).
+    ///   The rank-p axis is deliberately not asserted here: the powered arm
+    ///   resolves member 1's ≈ +0.03 geometric side-signature at the p-floor
+    ///   (verified at source as independent geometry, not cross-talk — see
+    ///   the M-d construction note in `gen_founders`), and pinning that
+    ///   incidental flag would couple the test to a marginal effect;
     /// - no pins remain, and bound 3's all-or-nothing verdict is
     ///   PARTITION-PASS.
     #[test]
@@ -2192,8 +2220,11 @@ mod tests {
             );
         }
 
-        // M-d keeps members 1–5 at chance (the §14.4 recorded-per-run
-        // requirement) while member 6 is the only positive detector.
+        // M-d keeps members 1–5 at chance in bite-magnitude terms (the §14.4
+        // recorded-per-run requirement) while member 6 is the only *biting*
+        // detector. Lift-axis only, deliberately: member 1's small rank-p
+        // side-signature (see the doc comment above) is real but incidental,
+        // and does not belong in M-d's pass condition.
         let md = r.controls.iter().find(|c| c.scenario == "M-d").unwrap();
         for k in 0..5 {
             let lift = md.member_agreements[k] - md.member_null_means[k];

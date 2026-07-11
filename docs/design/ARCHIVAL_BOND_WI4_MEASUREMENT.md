@@ -1186,6 +1186,10 @@ the null distribution then models.
     dispatch phase individually typical, jointly impossible). Detected
     by family member 6; members 1–5 checked at chance against it,
     recorded per-run (their blindness is the finding that motivated 6).
+    *Axis note (calibration correction 2026-07-11):* "at chance" is a
+    bite-magnitude claim; at rank-p resolution the powered any-member
+    arm resolves a small member-1 geometric side-signature — see the
+    re-graded record in the UPDATE block below for both axes.
   - **M-e (repulsed/scheduled)** — *added R4 (§17.6 Q2-B)*: five founder
     anchors placed by an enforced-staggering mechanism (hard-core
     process: minimum-gap rejection). Detected by family member 7 — the
@@ -1288,15 +1292,37 @@ the null distribution then models.
   > arms (family-max lift `+0.001`; per-member min rank-p `0.264`, no
   > flag); M-a/M-c/M-e clear family-max bound 2 (`+0.38/+0.36/+0.32`)
   > with aimed members flagging at the p-floor `0.005`; M-b's member 2
-  > and M-d's member 6 flag at `0.005` (M-d members 1–5 stay at
-  > chance, the specified single-member bite shape). Verdict:
+  > and M-d's member 6 flag at `0.005`, the specified single-member
+  > bite shape. *M-d members 1–5, both axes named (calibration
+  > correction 2026-07-11 — the two axes see different things and the
+  > record must say which lens each claim is spoken in):* in
+  > **family-max-lift** terms all five are at chance (max lift ≈
+  > `+0.03`, an order of magnitude under the `+0.30` bite — no bite);
+  > in **rank-p** terms member 1 is *resolved above its own null* at
+  > the p-floor (`+0.034` Jaccard, persistent across seeds at the
+  > 500-trial power), members 2–5 at chance on both axes. The member-1
+  > signature was settled at source before recording: member 1
+  > (k-means on the plain z-scored features) and member 6 (k-NN in
+  > `whitened_dist2`'s own recomputed metric) are **independent
+  > functions of `trial.feat`** — no shared computed intermediate, no
+  > member output feeding another — so this is the jointly-unusual
+  > M-d cohort's own geometry meeting a well-powered arm
+  > (**geometry, not aggregator cross-talk**; the cross-talk
+  > reopening criterion below does not fire, and this note must not
+  > be filed under it). Aimed-flag grading is unaffected; member 1
+  > stays out of M-d's aimed set deliberately — coupling PASS to a
+  > `+0.03` incidental signature would manufacture brittleness, not
+  > accuracy. Verdict:
   > **PARTITION-PASS** — reached by arming members 6/7's trigger,
   > never by moving a bar. Reopening criterion (rule-21 shape): any
   > family-membership change (new member `⇒` re-derive the Bonferroni
   > divisor), any `N`/`M` geometry change (re-derive the power sizing),
   > or a control observed to flag a *non-aimed* member persistently
-  > (an aggregator cross-talk finding — re-open the detector round,
-  > not the bar).
+  > **through a shared computed intermediate** (an aggregator
+  > cross-talk finding — re-open the detector round, not the bar; the
+  > shared-intermediate mechanism is the criterion's carrier, verified
+  > at source per the M-d member-1 precedent above, which resolved to
+  > geometry and correctly did *not* reopen).
   >
   > **RATIFIED 2026-07-11 (decision-anchored: PR #291,
   > `feat/sim-partition-adversary`).** The resolution above — the
