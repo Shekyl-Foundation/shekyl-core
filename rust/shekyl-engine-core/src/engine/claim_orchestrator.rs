@@ -17,7 +17,8 @@
 //!    query (§7.2: the request shape is identical for every claimant).
 //! 2. **Anchor** ([`claim_reference_height`]) — the transfer path's two-sided
 //!    reference gate (`local_pending_tx` §3b precedent): anchor
-//!    [`REF_ANCHOR_AGE`] behind `min(chain tip, ingested tip)`, refuse a
+//!    [`REF_ANCHOR_AGE`](shekyl_curve_tree::REF_ANCHOR_AGE) behind
+//!    `min(chain tip, ingested tip)`, refuse a
 //!    reference already past the [`should_reanchor`] threshold.
 //! 3. **Designate** ([`BackingSet::from_spendable`] → `designate_backing`) —
 //!    the sole backing exit, anchored at the gather tip (`source.chain_height`)
@@ -32,10 +33,14 @@
 //!
 //! ## Provability pre-filter
 //!
-//! The designation/sweep spendability anchor is the gather tip, but a
-//! membership proof exists only for outputs already **drained into the tree
-//! at the reference height** (which sits `REF_ANCHOR_AGE + 1` blocks behind
-//! the tip). Records with `spendable_height > reference_height` are spendable
+//! The designation/sweep spendability anchor is the gather tip
+//! (`source.chain_height`, a block **count**, so the true tip is
+//! `chain_height − 1`), but a membership proof exists only for outputs
+//! already **drained into the tree at the reference height** — which sits
+//! [`REF_ANCHOR_AGE`](shekyl_curve_tree::REF_ANCHOR_AGE) blocks behind the
+//! true tip ([`select_reference_height`], hence `REF_ANCHOR_AGE + 1` below
+//! the count the anchor uses). Records with
+//! `spendable_height > reference_height` are spendable
 //! but not yet provable — selecting one would assemble a claim the daemon
 //! rejects. The pipeline therefore pre-filters the record set to the provable
 //! subset before designation and sweep, the same drained-at-reference rule
@@ -52,8 +57,8 @@
 use std::collections::BTreeSet;
 
 use shekyl_curve_tree::{
-    should_reanchor, AssembleInput, BlockHeight as TreeBlockHeight, Gindex, ReferenceBlock,
-    REF_ANCHOR_AGE,
+    select_reference_height, should_reanchor, AssembleInput, BlockHeight as TreeBlockHeight,
+    Gindex, ReferenceBlock,
 };
 use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
 use shekyl_rpc_client::Rpc;
@@ -152,8 +157,9 @@ fn last_confirmed_sweep_height(posts: &[BondPostRecord], persona: &PCanonicalId)
 /// `chain_height` (a block **count**, so the tip is `chain_height − 1`) and
 /// the tree's ingested tip:
 ///
-/// - **Lower arm:** anchor [`REF_ANCHOR_AGE`] behind `min(tip, ingested)` so
-///   the root exists on both sides.
+/// - **Lower arm:** [`select_reference_height`] over `min(tip, ingested)` —
+///   the canonical `REF_ANCHOR_AGE` offset — so the root exists on both
+///   sides.
 /// - **Upper arm:** refuse a reference already at/past the re-anchor
 ///   threshold ([`should_reanchor`], inclusive at `REBUILD_AT`) — a proof
 ///   built against it could expire before submission.
@@ -170,7 +176,7 @@ fn claim_reference_height(
     let ingested = ingested_tip.ok_or(ClaimOrchestrationError::ReferenceUnanchorable {
         detail: "curve tree has not ingested any block yet",
     })?;
-    let reference_height = tip.min(ingested).checked_sub(REF_ANCHOR_AGE).ok_or(
+    let reference_height = select_reference_height(tip.min(ingested)).ok_or(
         ClaimOrchestrationError::ReferenceUnanchorable {
             detail: "chain too short to anchor a reference",
         },
@@ -336,6 +342,7 @@ pub(crate) async fn orchestrate_emission_claim<R: Rpc>(
 mod tests {
     use super::*;
 
+    use shekyl_curve_tree::REF_ANCHOR_AGE;
     use shekyl_engine_state::pscan_state::MintLineageOutput;
 
     fn post(height: u64, persona: PCanonicalId) -> BondPostRecord {
