@@ -3623,6 +3623,17 @@ finer-hook alternative is rejected with a reversion clause (rule 21):
 | Anonymity set `N` | `10, 20, 50` | §16.7 rider shape — the bound must hold at **every** swept `N` on the production posture row |
 | Wallet size `K` | `2` (gate row), `5` (context row) | per-principal promotion stays GF-4's conditional (§13.5); `K = 5` is reported context, not the gate |
 
+*Wallet-size axis note (`K > 2` scoring, pinned at PR #292 review):*
+sibling identification at every `K` scores whether the observer named a
+**distinguished sibling** (one designated wallet-mate), never "any
+wallet-mate" — chance stays `1/(N − 1)` and `r = P(link)·(N − 1)` remains
+comparable to the §19.2 `K = 2` bound across rows. At `K = 5` this
+deliberately understates the any-mate linking rate (a phase-matched
+observer splits its pick across the `K − 1` equally-locked mates, of
+which exactly one scores); an any-mate reading would carry a different
+chance baseline and a different `r`, and the context row must not be
+read as one.
+
 Trials per row: 1 000 (the `--gf7-timeline` `RunConfig` precedent);
 binomial SE at `P ≈ 0.2` is ≈ `0.013`, resolving `r` to ≈ `±0.1` at
 `N = 10` against a bound of `2` — adequate a-priori.

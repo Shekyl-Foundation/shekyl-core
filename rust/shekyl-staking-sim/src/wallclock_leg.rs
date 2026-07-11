@@ -123,14 +123,23 @@ fn circular_distance(a: f64, b: f64) -> f64 {
 }
 
 /// One trial: synthesize the wall-clock layer, run the phase observer,
-/// return whether it named the true sibling.
+/// return whether it named the **distinguished sibling** (persona 1).
 ///
-/// Persona 0 is the probe; persona 1 is the true sibling (personas
-/// `1..wallet_size` share the probe's wallet); personas `wallet_size..n`
-/// sit on independent wallets. The observer estimates each persona's
-/// cadence phase by circular mean and names the candidate closest to the
-/// probe — the strongest zero-noise network-position observer of the
-/// modeled channel (§19.2; the §4.3.1 in-model ceiling pin applies).
+/// Persona 0 is the probe; personas `1..wallet_size` share the probe's
+/// wallet; personas `wallet_size..n` sit on independent wallets. The
+/// observer estimates each persona's cadence phase by circular mean and
+/// names the candidate closest to the probe — the strongest zero-noise
+/// network-position observer of the modeled channel (§19.2; the §4.3.1
+/// in-model ceiling pin applies).
+///
+/// Scoring is always "named persona 1", never "named any wallet-mate" —
+/// persona 1 is a distinguished sibling so chance stays `1/(N − 1)` and
+/// `r = P(link)·(N − 1)` remains comparable to the `K = 2` bound at every
+/// row. For the `K = 5` context row this deliberately *understates* the
+/// any-mate linking rate (a phase-matched observer splits its pick across
+/// `K − 1` equally-locked mates, of which exactly one scores); the row
+/// reads as distinguished-sibling identification, not any-mate recall
+/// (§19.4 wallet-size axis note).
 fn trial(rng: &mut SplitMix64, sc: &Scenario) -> bool {
     let probe_wallet_phase = rng.next_u64() % TICK_MS;
     let mut phases: Vec<Vec<u64>> = Vec::with_capacity(sc.n);
