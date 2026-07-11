@@ -106,12 +106,13 @@ pub trait ShardSource {
         -> Result<ShardAggregate, ShardSourceError>;
 }
 
-/// The nine regime fixtures, built once as [`ShardSummary`]s.
+/// Regime fixtures from `shekyl-shard-visual`, built once as [`ShardSummary`]s.
 ///
-/// `shekyl_shard_visual::fixtures::all()` allocates all nine `PreviewFixture`s
-/// (labels, ids, parsed hashes) on every call; building the list once lets both
-/// `list_shards` and `aggregate_for` reuse it instead of rebuilding the whole
-/// fixture set per lookup.
+/// `shekyl_shard_visual::fixtures::all()` allocates a fresh `PreviewFixture`
+/// set (labels, ids, parsed hashes) on every call; building the list once lets
+/// both `list_shards` and `aggregate_for` reuse it instead of rebuilding the
+/// whole fixture set per lookup. The length tracks `fixtures::all()` — do not
+/// hard-code a count here.
 static FIXTURE_SUMMARIES: LazyLock<Vec<ShardSummary>> = LazyLock::new(|| {
     shekyl_shard_visual::fixtures::all()
         .into_iter()
