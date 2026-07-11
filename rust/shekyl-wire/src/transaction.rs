@@ -90,8 +90,32 @@ pub const MAX_FCMP_INPUTS: usize = 8;
 pub const MAX_OUTPUTS: usize = 16;
 /// Max `tx_extra` bytes for a non-coinbase tx (`MAX_TX_EXTRA_SIZE`).
 pub const MAX_TX_EXTRA: usize = 24_576;
-/// Max serialized transaction size (`CRYPTONOTE_MAX_TX_SIZE`).
+/// Max serialized transaction size (`CRYPTONOTE_MAX_TX_SIZE`) — the hard
+/// parse/DoS cap. The **binding** relay/consensus bound for a single tx is
+/// the (much tighter) [`TX_WEIGHT_LIMIT`].
 pub const MAX_TX_SIZE: usize = 1_000_000;
+/// Minimum block weight (`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`,
+/// `src/cryptonote_config.h`) — the full-reward zone every block gets
+/// regardless of the dynamic median.
+pub const MIN_BLOCK_WEIGHT: usize = 300_000;
+/// Coinbase blob reserve (`CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE`)
+/// subtracted from the per-tx weight limit.
+pub const COINBASE_BLOB_RESERVED_SIZE: usize = 600;
+/// Per-transaction weight limit (`get_transaction_weight_limit`,
+/// `src/cryptonote_core/tx_verification_utils.cpp`): half the minimum block
+/// weight minus the coinbase reserve. A compile-time constant on Shekyl
+/// (v3-from-genesis: `HF_VERSION_PER_BYTE_FEE = 1`, so the `/ 2` arm always
+/// applies — the daemon-rpc submit facts pin the same 149 400 value from the
+/// C++ side). Tx weight is the serialized size plus the Bp+ verification
+/// clawback ([`bp_plus_weight_clawback`]); the mempool refuses any tx whose
+/// weight exceeds this, so builders must bound against it, never against
+/// [`MAX_TX_SIZE`].
+pub const TX_WEIGHT_LIMIT: usize = MIN_BLOCK_WEIGHT / 2 - COINBASE_BLOB_RESERVED_SIZE;
+const _: () = assert!(
+    TX_WEIGHT_LIMIT == 149_400,
+    "TX_WEIGHT_LIMIT must equal the C++ get_transaction_weight_limit value \
+     pinned by the daemon-rpc submit facts"
+);
 /// `unlock_time` block-height sentinel: `>=` this is the (rejected) timestamp form.
 pub const UNLOCK_TIME_BLOCK_SENTINEL: u64 = 500_000_000;
 
