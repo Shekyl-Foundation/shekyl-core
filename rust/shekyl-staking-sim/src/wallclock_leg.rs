@@ -370,13 +370,23 @@ fn run_with(trials: u32, seed: u64) -> WallclockLegReport {
     // ceiling row's absence is a mis-built sweep surface, never a
     // measurement outcome: fail loudly, same armed-gate discipline as the
     // partition arm's `perms`-resolution guard.
+    //
+    // K-scoped (PR #292 review): the tripwire certifies the *gate posture*
+    // channel, so the filter names `wallet_size == 2` explicitly — a future
+    // context row at the same (dispersal, m, N) but K > 2 must not silently
+    // join the `.all()` and change what the tripwire requires to fail.
     let ceiling: Vec<&WallclockRow> = rows
         .iter()
-        .filter(|r| r.dispersal_ms == TICK_MS / 2 && r.posts_per_persona == 52 && r.n == 10)
+        .filter(|r| {
+            r.dispersal_ms == TICK_MS / 2
+                && r.posts_per_persona == 52
+                && r.n == 10
+                && r.wallet_size == 2
+        })
         .collect();
     assert!(
         !ceiling.is_empty(),
-        "§19.5 tripwire row (T/2, m=52, N=10) missing from the sweep surface — \
+        "§19.5 tripwire row (T/2, m=52, N=10, K=2) missing from the sweep surface — \
          the strength check has no trigger"
     );
     let observer_strength_ok = ceiling.iter().all(|r| !r.clears_bound);
@@ -462,7 +472,9 @@ mod tests {
     /// future `sweep()` edit that drops it fails here loudly — otherwise
     /// `production_passes_and_sub_tick_cliff_exists`'s
     /// `observer_strength_ok` assertion would itself pass vacuously and
-    /// the tripwire would disarm with no test noticing.
+    /// the tripwire would disarm with no test noticing. `wallet_size == 2`
+    /// mirrors the production tripwire's K-scoping: the pin and the check
+    /// must select the same row, or the pin guards the wrong thing.
     #[test]
     fn strength_tripwire_row_exists() {
         let r = small();
@@ -471,10 +483,11 @@ mod tests {
                 .iter()
                 .filter(|row| row.dispersal_ms == TICK_MS / 2
                     && row.posts_per_persona == 52
-                    && row.n == 10)
+                    && row.n == 10
+                    && row.wallet_size == 2)
                 .count(),
             1,
-            "§19.5 ceiling row (T/2, m=52, N=10) must appear exactly once in the sweep"
+            "§19.5 ceiling row (T/2, m=52, N=10, K=2) must appear exactly once in the sweep"
         );
     }
 
