@@ -66,7 +66,7 @@ use shekyl_curve_tree::{
     ReferenceBlock, TwoSidedRefusal,
 };
 use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
-use shekyl_types::{BlockHeight, PCanonicalId};
+use shekyl_types::{BlockHeight, ChainCount, PCanonicalId};
 
 use super::backing_set::{BackingSet, InsufficientBacking};
 use super::bond_assembly::{BondAssemblyError, FundingInputContext, SpentRecordsDurablyPruned};
@@ -156,35 +156,36 @@ fn last_confirmed_sweep_height(posts: &[BondPostRecord], persona: &PCanonicalId)
         .unwrap_or(BlockHeight::from_raw(0))
 }
 
-/// The claim's curve-tree reference height, or a refusal when none is
-/// submittable — the shared two-sided gate
-/// ([`two_sided_reference_height`]: the one definition the transfer path's
-/// re-anchor also consumes, §3b F-C) over the daemon-reported
-/// `chain_height` (a block **count**, so the tip is `chain_height − 1`) and
-/// the tree's ingested tip.
+/// The gather tip and the claim's curve-tree reference height, or a refusal
+/// when none is submittable — [`ChainCount::tip`] over the daemon-reported
+/// count, then the shared two-sided gate ([`two_sided_reference_height`]:
+/// the one definition the transfer path's re-anchor also consumes, §3b F-C)
+/// against the tree's ingested tip. Returned as a pair so the designation
+/// anchor (the tip) and the reference anchor come from one derivation.
 fn claim_reference_height(
-    chain_height: u64,
+    chain_height: ChainCount,
     ingested_tip: Option<u64>,
-) -> Result<u64, ClaimOrchestrationError> {
-    let tip =
-        chain_height
-            .checked_sub(1)
-            .ok_or(ClaimOrchestrationError::ReferenceUnanchorable {
-                detail: "daemon reports an empty chain",
-            })?;
+) -> Result<(BlockHeight, u64), ClaimOrchestrationError> {
+    let tip = chain_height
+        .tip()
+        .ok_or(ClaimOrchestrationError::ReferenceUnanchorable {
+            detail: "daemon reports an empty chain",
+        })?;
     let ingested = ingested_tip.ok_or(ClaimOrchestrationError::ReferenceUnanchorable {
         detail: "curve tree has not ingested any block yet",
     })?;
-    two_sided_reference_height(tip, ingested).map_err(|refusal| {
-        ClaimOrchestrationError::ReferenceUnanchorable {
-            detail: match refusal {
-                TwoSidedRefusal::ChainTooShort => "chain too short to anchor a reference",
-                TwoSidedRefusal::TreeTooFarBehind => {
-                    "tree too far behind the daemon tip to anchor a submittable reference"
-                }
-            },
-        }
-    })
+    let reference_height =
+        two_sided_reference_height(tip.to_raw(), ingested).map_err(|refusal| {
+            ClaimOrchestrationError::ReferenceUnanchorable {
+                detail: match refusal {
+                    TwoSidedRefusal::ChainTooShort => "chain too short to anchor a reference",
+                    TwoSidedRefusal::TreeTooFarBehind => {
+                        "tree too far behind the daemon tip to anchor a submittable reference"
+                    }
+                },
+            }
+        })?;
+    Ok((tip, reference_height))
 }
 
 /// The provability pre-filter (module docs): the subset of `records` already
@@ -232,26 +233,25 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     let source = source?;
     let ingested = ingested.map_err(ClaimOrchestrationError::Tree)?;
 
-    // 2b. Anchor the reference (the shared two-sided gate over daemon tip ×
-    //    ingested tip). `claim_reference_height` refused an empty chain, so
-    //    the gather tip below is well-defined.
-    let reference_height = claim_reference_height(source.chain_height, ingested.map(|h| h.0))?;
-    let gather_tip = source.chain_height - 1;
+    // 2b. Anchor: the gather tip ([`ChainCount::tip`] — typed, so the count
+    //    cannot be laundered into a height) and the reference height (the
+    //    shared two-sided gate over gather tip × ingested tip), from one
+    //    derivation.
+    let (gather_tip, reference_height) =
+        claim_reference_height(source.chain_height, ingested.map(|h| h.0))?;
 
     // Provability pre-filter (module docs): only outputs drained into the
     // tree at the reference height can carry a membership proof.
     let provable = provable_records(ctx.funding_records, reference_height);
 
     // 3. Designate the backing — the claimant slot's records only, anchored
-    //    at the gather TIP (`chain_height − 1`: the spendability filter
-    //    compares heights, and the count would admit a record one block
-    //    early) — so the handler's same-tip operand holds by construction
-    //    (`backing_set.rs` stores ONE height).
+    //    at the gather tip — so the handler's same-tip operand holds by
+    //    construction (`backing_set.rs` stores ONE height).
     let last_sweep = last_confirmed_sweep_height(ctx.bond_posts, &ctx.p_canonical_id);
     let backing = BackingSet::from_spendable(
         provable.iter().copied(),
         handle.p_slot().0,
-        BlockHeight::from_raw(gather_tip),
+        gather_tip,
         last_sweep,
     )
     .designate_backing()?;
@@ -382,34 +382,38 @@ mod tests {
     }
 
     /// The two-sided reference gate, all four arms: the happy anchor
-    /// (`min(tip, ingested) − REF_ANCHOR_AGE`), and the three refusals —
-    /// no ingest yet, chain too short, tree too far behind
-    /// (`should_reanchor` inclusive at `REBUILD_AT`).
+    /// (`min(tip, ingested) − REF_ANCHOR_AGE`, paired with the typed gather
+    /// tip), and the three refusals — no ingest yet, chain too short, tree
+    /// too far behind (`should_reanchor` inclusive at `REBUILD_AT`).
     #[test]
     fn claim_reference_height_arms() {
+        let count = |c: u64| ChainCount::from_raw(c);
+
         // Happy: tree synced to the tip; count 30_001 → tip 30_000.
         assert_eq!(
-            claim_reference_height(30_001, Some(30_000)).expect("anchorable"),
-            30_000 - REF_ANCHOR_AGE
+            claim_reference_height(count(30_001), Some(30_000)).expect("anchorable"),
+            (BlockHeight::from_raw(30_000), 30_000 - REF_ANCHOR_AGE)
         );
-        // Happy, tree one block behind: the min-arm anchors off the tree.
+        // Happy, tree one block behind: the min-arm anchors off the tree;
+        // the gather tip stays the chain's.
         assert_eq!(
-            claim_reference_height(30_001, Some(29_999)).expect("anchorable"),
-            29_999 - REF_ANCHOR_AGE
+            claim_reference_height(count(30_001), Some(29_999)).expect("anchorable"),
+            (BlockHeight::from_raw(30_000), 29_999 - REF_ANCHOR_AGE)
         );
 
         // Refusal: no ingest.
         assert!(matches!(
-            claim_reference_height(30_001, None),
+            claim_reference_height(count(30_001), None),
             Err(ClaimOrchestrationError::ReferenceUnanchorable { .. })
         ));
-        // Refusal: chain shorter than the anchor age (and the empty chain).
+        // Refusal: chain shorter than the anchor age (and the empty chain,
+        // where `ChainCount::tip()` itself is None).
         assert!(matches!(
-            claim_reference_height(REF_ANCHOR_AGE, Some(REF_ANCHOR_AGE - 1)),
+            claim_reference_height(count(REF_ANCHOR_AGE), Some(REF_ANCHOR_AGE - 1)),
             Err(ClaimOrchestrationError::ReferenceUnanchorable { .. })
         ));
         assert!(matches!(
-            claim_reference_height(0, Some(0)),
+            claim_reference_height(ChainCount::ZERO, Some(0)),
             Err(ClaimOrchestrationError::ReferenceUnanchorable { .. })
         ));
         // Refusal: the tree so far behind that the anchored reference is
@@ -418,9 +422,9 @@ mod tests {
         let tip = 30_000u64;
         let rebuild_at = shekyl_curve_tree::REBUILD_AT;
         let barely_ok = tip - rebuild_at + REF_ANCHOR_AGE + 1;
-        assert!(claim_reference_height(tip + 1, Some(barely_ok)).is_ok());
+        assert!(claim_reference_height(count(tip + 1), Some(barely_ok)).is_ok());
         assert!(matches!(
-            claim_reference_height(tip + 1, Some(barely_ok - 1)),
+            claim_reference_height(count(tip + 1), Some(barely_ok - 1)),
             Err(ClaimOrchestrationError::ReferenceUnanchorable { .. })
         ));
     }

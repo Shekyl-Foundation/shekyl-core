@@ -2015,16 +2015,21 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         //
         // Same-tip: the designation carries ONE stored anchor by
         // construction (backing_set.rs) — the chain TIP its spendability
-        // was evaluated at; here it must equal the tip the claim source
-        // was gathered at (`chain_height` is a block COUNT, so the tip is
-        // `chain_height − 1`), or backing spendability and claim-window
-        // finalization were evaluated against different chains. Refuse;
-        // the caller refetches both at one tip.
-        let anchor = msg.backing.reference_height().to_raw();
-        if msg.source.chain_height.checked_sub(1) != Some(anchor) {
+        // was evaluated at; here it must equal the claim source's gather
+        // tip (`ChainCount::tip` — the typed count/height bridge, so the
+        // block count itself cannot pose as the anchor), or backing
+        // spendability and claim-window finalization were evaluated
+        // against different chains. Refuse; the caller refetches both at
+        // one tip.
+        let anchor = msg.backing.reference_height();
+        if msg.source.chain_height.tip() != Some(anchor) {
             return Err(StakeEngineError::StaleClaimAnchor {
-                anchor,
-                tip: msg.source.chain_height.saturating_sub(1),
+                anchor: anchor.to_raw(),
+                tip: msg
+                    .source
+                    .chain_height
+                    .tip()
+                    .map_or(0, shekyl_types::BlockHeight::to_raw),
             });
         }
         // Q11: the backing must not double as a fee input. The message
@@ -4027,7 +4032,7 @@ mod tests {
         async fn stale_claim_anchor_refuses_before_any_assembly() {
             let handle = spawn_over(&[0], &[], None);
             let source = claimable_source();
-            let tip = source.chain_height - 1;
+            let tip = source.chain_height.to_raw() - 1;
             let record = || funding_record(0, 11, 5, 750_000, MintLineageOutput::BondPostChange);
 
             let h = handle.mint_handle(PSlot(0)).await.expect("slot 0 held");
@@ -4060,7 +4065,7 @@ mod tests {
                 .assemble_emission_claim(AssembleEmissionClaim {
                     handle: h,
                     source: source.clone(),
-                    backing: designate_at(record(), source.chain_height),
+                    backing: designate_at(record(), source.chain_height.to_raw()),
                     backing_path: empty_path(),
                     fee_funding: vec![],
                     tree_ctx: placeholder_tree_ctx(),
@@ -4084,7 +4089,7 @@ mod tests {
             let handle = spawn_over(&[0], &[], None);
             let h = handle.mint_handle(PSlot(0)).await.expect("slot 0 held");
             let source = claimable_source();
-            let tip = source.chain_height - 1;
+            let tip = source.chain_height.to_raw() - 1;
             let backing = funding_record(0, 11, 5, 750_000, MintLineageOutput::BondPostChange);
             let same_output = backing.clone();
 
@@ -4123,7 +4128,7 @@ mod tests {
         async fn fee_funding_is_mandatory_and_shortfall_refuses() {
             let handle = spawn_over(&[0], &[], None);
             let source = claimable_source();
-            let tip = source.chain_height - 1;
+            let tip = source.chain_height.to_raw() - 1;
             let backing = || funding_record(0, 11, 5, 750_000, MintLineageOutput::BondPostChange);
 
             // Arm 1: zero fee inputs — structural refusal, at fee 1 000 AND
@@ -4212,7 +4217,7 @@ mod tests {
             let h = handle.mint_handle(PSlot(0)).await.expect("slot 0 held");
             let keys = derive_bundle(0);
             let source = claimable_source();
-            let tip = source.chain_height - 1;
+            let tip = source.chain_height.to_raw() - 1;
 
             // Two real P-paid outputs in ONE leaf chunk — the backing
             // (rung-2 lineage) and the fee spend (rung 3) — under one

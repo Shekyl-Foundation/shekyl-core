@@ -486,7 +486,10 @@ pub fn derive_claimable_epochs(
         let Some(h_close) = epoch_close_height(epoch) else {
             return Err(EmissionClaimError::SourceInvalid { epoch });
         };
-        if source.chain_height <= h_close {
+        // Verify's operand is the block carrying the tx; assembled now,
+        // that is the chain count's next height (`ChainCount::next_height`
+        // — the typed form of "the count IS the earliest inclusion height").
+        if source.chain_height.next_height().to_raw() <= h_close {
             skipped.push((epoch, EpochSkip::NotFinalized));
             continue;
         }
@@ -836,10 +839,10 @@ pub fn self_check_claims(
         .collect();
 
     // The gather tip is the verify-context height (module doc "Step 7":
-    // `chain_height` is a block count, the earliest inclusion height, and
+    // `chain_height.next_height()` is the earliest inclusion height, and
     // the exact operand the daemon derived `current_settled_epoch` from).
     let ctx = EmissionVerifyContext {
-        current_block_height: source.chain_height,
+        current_block_height: source.chain_height.next_height().to_raw(),
         bond: Some(bond.record()),
         vout_reward_sum,
     };
@@ -869,6 +872,7 @@ pub(crate) mod test_fixtures {
         as_of_e_served_work, epoch_close_height, settlement_epoch_at_height, sigma_work_milli,
         CreditPair, EpochCloseShard, HoldingsDescriptor, HoldingsKind, EMISSION_KAT_SHAPE,
     };
+    use shekyl_types::ChainCount;
 
     pub(crate) const BUDGET: u64 = 1_000_000;
     pub(crate) const SHARD_A: u64 = EMISSION_KAT_SHAPE.shard_a;
@@ -975,7 +979,7 @@ pub(crate) mod test_fixtures {
             "fixture coherence: the pair must satisfy the decode invariant"
         );
         EmissionClaimSource {
-            chain_height,
+            chain_height: ChainCount::from_raw(chain_height),
             current_settled_epoch,
             bond: Some(BondContext {
                 join_settlement_epoch: EMISSION_KAT_SHAPE.join_settlement_epoch,
@@ -998,7 +1002,7 @@ pub(crate) mod test_fixtures {
         epochs: Vec<EpochSnapshot>,
     ) -> EmissionClaimSource {
         let mut source = source_with(settlement_epoch_at_height(chain_height), claimed, epochs);
-        source.chain_height = chain_height;
+        source.chain_height = ChainCount::from_raw(chain_height);
         source
     }
 
@@ -1096,7 +1100,7 @@ pub(crate) mod test_fixtures {
     pub(crate) fn source_json(source: &EmissionClaimSource) -> serde_json::Value {
         let mut obj = serde_json::Map::new();
         obj.insert("status".into(), "OK".into());
-        obj.insert("chain_height".into(), source.chain_height.into());
+        obj.insert("chain_height".into(), source.chain_height.to_raw().into());
         obj.insert(
             "current_settled_epoch".into(),
             source.current_settled_epoch.into(),
@@ -1136,6 +1140,8 @@ mod tests {
     };
     use super::*;
     use crate::engine::emission_source::EpochSnapshot;
+    use shekyl_types::ChainCount;
+
     use shekyl_archival_retention::{
         as_of_e_served_work, bond_wire::MAX_HOLDINGS_SHARDS, capped_work_milli,
         claimed_epochs_check_and_set, reward_share_floor, settlement_epoch_at_height,
@@ -1489,7 +1495,7 @@ mod tests {
         // window predicates (decode refuses this pair; the derivation
         // must still fail closed on it).
         source.current_settled_epoch = u64::MAX;
-        source.chain_height = u64::MAX;
+        source.chain_height = ChainCount::from_raw(u64::MAX);
         assert!(matches!(
             derive_claimable_epochs(&source),
             Err(EmissionClaimError::SourceInvalid { epoch: e }) if e == epoch

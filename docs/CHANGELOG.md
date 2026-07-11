@@ -88,7 +88,17 @@
     (`emission_claim::test_fixtures::source_json`, epee omit-empty
     faithful) feeds the decode tests and the orchestrator e2e; the
     fetch and ingested-tip awaits are joined; dead/duplicate clones and
-    the `&[0, 0]` output-amounts literal are gone.
+    the `&[0, 0]` output-amounts literal are gone. Follow-through: the
+    count/height unit family got its type —
+    `shekyl_types::ChainCount` (the daemon's `db.height()` operand)
+    with the two named bridges `tip()` / `next_height()`;
+    `EmissionClaimSource.chain_height` and `SubmitFacts.chain_height`
+    (a documented count previously stored in a `BlockHeight`) adopt
+    it, so laundering a count into a height no longer compiles. The
+    `SweptFeeInputs` designation witness (subsuming the
+    `StaleClaimAnchor`/`BackingInFeeSet` runtime pair) is a named
+    item on the CB-3 dispatch seam (`EMISSION_CLAIM_BUILDER.md` §8
+    PR-3 review record, rule-22 form with reopening criteria).
 - **sim: leg-(b) wall-clock sweep-phase arm graded in-model
   (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §19; WI-3 §3.2 part 3; WI-4
   reconvergence leg (b)).** The §13.3 closing requirement — sub-block

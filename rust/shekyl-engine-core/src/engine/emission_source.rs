@@ -43,6 +43,7 @@ use shekyl_archival_retention::{
     EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
 };
 use shekyl_rpc_client::{Rpc, RpcError};
+use shekyl_types::ChainCount;
 
 /// The daemon JSON-RPC method name (registered on both the epee and
 /// Rust/Axum transports in PR 1's daemon half).
@@ -133,15 +134,18 @@ impl BondContext {
 /// claim window's snapshots, exactly as the daemon serialized them.
 #[derive(Debug, Clone)]
 pub struct EmissionClaimSource {
-    /// Tip block count at gather time — the §2 step-7 self-check's
-    /// verify-context height (the earliest inclusion height, and the exact
-    /// operand the daemon derived `current_settled_epoch` from —
-    /// `archival_claim_source.cpp` gathers both from one `db.height()`
-    /// read), the derivation's strict-finalization operand
-    /// (`emission_claim` step 2: verify admits `E` one count after the
-    /// connect window does), and the §2 step-3 same-tip staleness operand
-    /// (the `AssembleEmissionClaim` handler's same-tip check).
-    pub chain_height: u64,
+    /// Chain block **count** at gather time ([`ChainCount`] — a count, not
+    /// a height; the type's two bridges are the two facts consumers need).
+    /// Its [`next_height`](ChainCount::next_height) is the §2 step-7
+    /// self-check's verify-context height (the earliest inclusion height)
+    /// and the derivation's strict-finalization operand (`emission_claim`
+    /// step 2: verify admits `E` one count after the connect window does);
+    /// its [`tip`](ChainCount::tip) is the designation/sweep spendability
+    /// anchor and the §2 step-3 same-tip staleness operand (the
+    /// `AssembleEmissionClaim` handler's same-tip check). The exact operand
+    /// the daemon derived `current_settled_epoch` from —
+    /// `archival_claim_source.cpp` gathers both from one `db.height()` read.
+    pub chain_height: ChainCount,
     /// The daemon's settled-epoch operand (same helper consensus uses),
     /// **decode-enforced** equal to `settlement_epoch_at_height(chain_height)`
     /// — so the step-1 window boundaries (which consume this field) and the
@@ -378,7 +382,10 @@ impl EmissionClaimSource {
             )));
         }
         Ok(Self {
-            chain_height,
+            // The typed-domain edge (rule 18): the raw wire u64 becomes a
+            // ChainCount here, so no consumer can launder the count into a
+            // BlockHeight without naming which chain fact it means.
+            chain_height: ChainCount::from_raw(chain_height),
             current_settled_epoch,
             bond,
             epochs,
@@ -427,7 +434,7 @@ mod tests {
     /// side (`archival_claim_source_rpc.cpp`).
     fn fixture() -> Value {
         source_json(&EmissionClaimSource {
-            chain_height: 30001,
+            chain_height: ChainCount::from_raw(30001),
             current_settled_epoch: 3,
             bond: Some(BondContext {
                 join_settlement_epoch: 1,
@@ -499,7 +506,7 @@ mod tests {
     #[test]
     fn decodes_fixture_field_for_field() {
         let src = EmissionClaimSource::from_json(&fixture()).unwrap();
-        assert_eq!(src.chain_height, 30001);
+        assert_eq!(src.chain_height, ChainCount::from_raw(30001));
         assert_eq!(src.current_settled_epoch, 3);
 
         let bond = src.bond.as_ref().unwrap();

@@ -956,6 +956,43 @@ debug_assert shadowing an identical typed refusal, the dead/duplicate
 clones, and the `&[0, 0]` output-amounts literal removed; rule 22
 (`22-no-lazy-deferral`) added to CLAUDE.md's rule index.
 
+**Review follow-through — the count/height newtype (landed same
+round).** The tip/count fixes above were three sightings of one unit
+family, so the family got its type: `shekyl_types::ChainCount` (the
+daemon's `db.height()` operand) with exactly two `BlockHeight` bridges
+— `tip()` (count − 1, `None` on the empty chain: the
+spendability/anchoring operand) and `next_height()` (the count *is*
+the next block's height: the earliest-inclusion / verify-context
+operand). `EmissionClaimSource.chain_height` and
+`SubmitFacts.chain_height` (which was a documented count stored in a
+`BlockHeight` — the same laundering, latent) are now `ChainCount`;
+`BlockHeight::from_raw(count)` is unwritable, and each call site names
+which chain fact it means. The ledger-tip audit that came with it:
+`LedgerBlock::height()` **is** a tip instant (set to the ingested
+block's own height) while the P-scan cursor's same-named
+`synced_height` is a count — conventions now pinned in the accessor
+doc; no bug.
+
+**Named forward item (rule 22 form) — the `SweptFeeInputs` designation
+witness, scoped to the CB-3 dispatch seam / PR 4.** The handler's two
+step-2 runtime refusals (`StaleClaimAnchor`, `BackingInFeeSet`) are one
+invariant — *these operands came from one designation event* —
+enforced as two comparisons because `AssembleEmissionClaim`'s fields
+are freely constructible. The witness form (a fee selection minted
+only by `DesignatedBacking::fee_sweep`, carrying the designation's
+gindex + anchor privately, the message taking the pair sealed) makes
+the cross-pairing unrepresentable and deletes both refusal arms — the
+house witness-token shape. **Named blocker, disclosed here:** the
+threat is a *retry/cached-selection* path, which first exists at the
+CB-3 dispatch seam, and the witness reshapes the exact message that
+seam consumes (fee records currently leave `fee_sweep` as a plain
+`FundingSelection` and are re-wrapped with membership paths in the
+orchestrator — the witness must survive that zip). Landing it with the
+seam is one message-shape change instead of two. Until then the
+runtime refusals are KAT'd and load-bearing. *Reopen sooner if:* any
+second caller of `assemble_emission_claim` appears before the seam, or
+a fee-selection cache is introduced anywhere in the claim path.
+
 Round-2 closure criteria: the §7.3 field enumeration ratified (including
 the four exclusions), the §7.2 window-batch shape ratified, the §7.4
 transport/shape/timing pins ratified, and the §8 chain shape accepted.
