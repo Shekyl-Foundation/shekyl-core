@@ -4,6 +4,33 @@
 
 ### Added
 
+- **sim: leg-(b) wall-clock sweep-phase arm graded in-model
+  (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §19; WI-3 §3.2 part 3; WI-4
+  reconvergence leg (b)).** The §13.3 closing requirement — sub-block
+  wall-clock emission + re-grade of the channel the dispersal draw
+  exists to defend, which no block-resolution re-run can see — landed
+  in its harness-timestamp form: spec + a-priori bound
+  (`r = P(link)·(N−1) < 2`, sibling identification) committed in the
+  doc one commit ahead of the grading code (§3.5 ordering), then
+  `wallclock_leg.rs` models the wallet cadence phase (`T = 60 s`,
+  mirror of `DEFAULT_PSCAN_CADENCE`) with the live driver's
+  `bounded_uniform(bound_ms − 1)` dispersal shape and grades a
+  circular-phase observer. Measured (1 000 trials/row): production
+  dispersal `U[0,T)` at `r ∈ [0.84, 1.32]` across `m ∈ {1,4,12,52}`
+  and `N ∈ {10,20,50}` — **PROVISIONAL-PASS**; the sub-`T` cliff is
+  steep (`T/4` fails at every `m`, `T/2` from `m = 4`), so the
+  production range is load-bearing, not slack; `2T` confirms
+  over-dispersal is a no-op. Controls bite (phase-lock caught at
+  `P = 1.000`; severed-wallet coupling tripwire at chance) and the
+  §19.5 observer-strength tripwire is armed (`T/2, m = 52` correctly
+  fails at `r = 5.82`). The leg's verdict joins the `--gf7-timeline`
+  criterion-9.9 **computed conjunction** — an invalid leg grades the
+  whole run INVALID. The finer-hook alternative was rejected (hooks
+  §3 wall-clock payload ban stays intact) with a §19.1 reopening
+  criterion; leg (b) **closes** only at the §19.1 sealing form
+  (receipt-timestamped live-driver re-run), the named open carrier in
+  `FOLLOWUPS.md`.
+
 - **sim: §14.4 partition-adversary arm implemented in `shekyl-staking-sim`
   (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §14.4; WI-4/GF-7).** Co-first
   deliverables landed before any grading run per the R4/R5 binding

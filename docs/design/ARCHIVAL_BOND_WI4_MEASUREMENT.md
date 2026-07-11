@@ -750,6 +750,28 @@ named. WI-3's reconvergence gate leg (a) (this threshold artifact exists)
 is satisfied; leg (b)'s block-time portion is confirmatory, its wall-clock
 portion is the tracked open item.
 
+> **UPDATE 2026-07-11 (leg-(b) wall-clock arm graded in-model; sealing
+> form open).** The closing requirement above was converted to a
+> committed spec (§19, landed one commit ahead of the grading code per
+> the §3.5 ordering) and the harness-timestamp form was implemented and
+> graded (`shekyl-staking-sim/src/wallclock_leg.rs`, folded into the
+> `--gf7-timeline` criterion-9.9 conjunction). Measured, 1 000
+> trials/row: production posture (`dispersal = T`) sits at
+> `r ∈ [0.84, 1.32]` across `m ∈ {1,4,12,52}` and `N ∈ {10,20,50}` —
+> under the committed `r < 2` at every swept point. The sub-`T` cliff
+> is real and steep: `T/4` fails at every `m` (`r ≥ 2.96`), `T/2` fails
+> from `m = 4` up (`r = 3.02…5.82`), confirming the production
+> `[0, tick)` range is load-bearing, not conservative slack; the `2T`
+> rows confirm over-dispersal buys nothing (`r ≈ 1`). Controls bit
+> (phase-lock caught at `P = 1.000`; severed-wallet tripwire at chance)
+> and the §19.5 observer-strength tripwire is armed (`T/2, m = 52`
+> measured `r = 5.82`, correctly failing). **What this does and does
+> not change:** the wall-clock channel is now *graded in-model*
+> (PROVISIONAL-PASS), so the "primary open uncertainty" is narrowed
+> from unmeasured-channel to model-fidelity; leg (b) **closes** only at
+> the §19.1 sealing form (receipt-timestamped live-driver re-run),
+> which stays the named open carrier in `docs/FOLLOWUPS.md`.
+
 ### 13.4 Threshold provenance (review item (a), settled)
 
 The review asked whether `r < 2` was a-priori or post-hoc, noting the gate
