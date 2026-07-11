@@ -884,7 +884,8 @@ fn print_partition_adversary_report() {
     // accumulation.
     let riders = riders::run_riders_report();
     eprintln!(
-        "Riders (§16.7 items 2/4, §18.3 as narrowed by §18.8, §18.4) — trials={} r-bound={:.1}:",
+        "Riders (§16.7 items 2/4, §18.3 as narrowed by §18.8, §18.4) — \
+         sweep/coupling trials={} r-bound={:.1}:",
         riders.trials, riders.ratio_bound,
     );
     eprintln!("  N-sweep (r < 2 at every swept N; growth with N = redesign signal):");
@@ -909,7 +910,11 @@ fn print_partition_adversary_report() {
             "DECOUPLED — INVALID"
         },
     );
-    eprintln!("  Attribute-bridge grading (strata as candidate bridge axes, never crowds):");
+    eprintln!(
+        "  Attribute-bridge grading (strata as candidate bridge axes, never crowds; \
+         trials={} perms={}):",
+        riders.bridge_trials, riders.bridge_perms,
+    );
     for b in &riders.bridge {
         eprintln!(
             "    {:<42} |corr|={:.3} null={:.3}  {}  [{}]",

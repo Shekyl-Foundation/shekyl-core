@@ -59,6 +59,21 @@ const LIFETIME_EVENTS: [u32; 6] = [1, 2, 6, 12, 26, 52];
 const BRIDGE_POSITIVE_MIN: f64 = 0.50;
 const BRIDGE_NULL_TOL: f64 = 0.05;
 
+/// Bridge sample sizing (rider 3) — deliberately its own, smaller than the
+/// N-sweep/coupling `trials = 400`, and reported separately so the artifact
+/// never implies one shared sample size. Rationale: the bridge statistic is
+/// a mean of `|Pearson|` over independent worlds of [`BRIDGE_N`] pairs; the
+/// per-world spread of `|corr|` under independence is ≈ `1/√BRIDGE_N` ≈
+/// 0.14, so over [`BRIDGE_TRIALS`] worlds the mean's standard error is ≈
+/// `0.14/√200` ≈ 0.01 — resolving the committed ±0.05 tolerance at ≈ 5σ.
+/// The null side only needs its **mean** (no tail quantile — the pass rule
+/// is a tolerance on means, not a rank test), and `200 × 20` permuted
+/// worlds pin that mean far below the tolerance; more permutations buy
+/// nothing the bound consumes.
+const BRIDGE_N: usize = 50;
+const BRIDGE_TRIALS: u32 = 200;
+const BRIDGE_PERMS: u32 = 20;
+
 /// One N-sweep row: the three arms re-graded at a swept `N`.
 #[derive(Serialize)]
 pub struct NSweepRow {
@@ -109,10 +124,18 @@ pub struct LifetimeRow {
 /// The riders report: every §14.4-round rider in one graded artifact.
 #[derive(Serialize)]
 pub struct RidersReport {
+    /// Trials for the N-sweep and M6.2 coupling riders. The bridge rider
+    /// has its own sizing ([`bridge_trials`](Self::bridge_trials) /
+    /// [`bridge_perms`](Self::bridge_perms)) — different statistic,
+    /// different resolution requirement (see the `BRIDGE_TRIALS` rationale).
     pub trials: u32,
     pub ratio_bound: f64,
     pub n_sweep: Vec<NSweepRow>,
     pub coupling: CouplingControl,
+    /// Bridge-rider trials (worlds per scenario) — see [`BRIDGE_TRIALS`].
+    pub bridge_trials: u32,
+    /// Permuted worlds per trial for the bridge null — see [`BRIDGE_PERMS`].
+    pub bridge_perms: u32,
     pub bridge: Vec<BridgeRow>,
     /// The per-post `p` the lifetime sweep compounds (the posture point's
     /// strongest graded arm — pessimistic per §6).
@@ -253,8 +276,8 @@ pub fn run_riders_report() -> RidersReport {
     };
 
     // Rider 3 (§18.3 narrowed by §18.8): attribute-bridge grading.
-    let (dep_stat, dep_null) = grade_bridge(false, 50, 200, 20, &mut rng);
-    let (cpl_stat, cpl_null) = grade_bridge(true, 50, 200, 20, &mut rng);
+    let (dep_stat, dep_null) = grade_bridge(false, BRIDGE_N, BRIDGE_TRIALS, BRIDGE_PERMS, &mut rng);
+    let (cpl_stat, cpl_null) = grade_bridge(true, BRIDGE_N, BRIDGE_TRIALS, BRIDGE_PERMS, &mut rng);
     let bridge = vec![
         BridgeRow {
             scenario: "deployed (holdings ⊥ session clock)",
@@ -317,6 +340,8 @@ pub fn run_riders_report() -> RidersReport {
         ratio_bound: RATIO_BOUND,
         n_sweep,
         coupling,
+        bridge_trials: BRIDGE_TRIALS,
+        bridge_perms: BRIDGE_PERMS,
         bridge,
         lifetime_per_post_p: per_post_p,
         lifetime,
