@@ -4427,4 +4427,44 @@ locally-built daemon. The dead in-place propagation + the now-unused
 
 ---
 
+## 2026-07-10 — `ShardSource::aggregate_for`: `shard_hash` is authoritative, not advisory
+
+**Decision.** The `ShardSource` trait contract requires `aggregate_for` to
+treat `handle.shard_hash` as an identity assertion, not just wire payload: it
+resolves the aggregate by `shard_id`, then **must** return an error when the
+resolved aggregate's `shard_hash` does not equal `handle.shard_hash`. A new
+`ShardSourceError::StaleHandle { shard_id, expected, found }` variant carries
+the mismatch. `FixtureShardSource` enforces this today (the fixtures are
+static, so the check always passes); the Stage 5 `ArchivalShardSource` inherits
+the contract in writing rather than rediscovering the trap. `hash_override` is
+unaffected — it remains a *separate*, explicit compositor-seed for the GUI's
+variant-explore path and is never an identity key.
+
+**Rationale.** The candidate.v1 visual *is* an identity signal: a shard's
+content hash deterministically produces its look, and that binding is the
+feature. Resolving purely by `shard_id` (the originally shipped behavior in
+PR #289) means a stale handle — a GUI holding a handle built from a previous
+shard list after the source's shard set changed — silently renders a different
+shard's aggregate under the hash the user expected, presenting one shard's
+identity under another's. Per rule 82 (failure modes are first-class), a stale
+handle is a genuine failure mode and must surface as an error, not a wrong
+render. The guard costs nothing on the fixtures path and is not speculative
+scaffolding (rule 21): it is a *contract*, written before the mutable source
+that makes the mismatch reachable exists, so the Stage 5 implementer conforms
+to it instead of reintroducing the silent-wrong-render path. Two independent
+reviewers (the high-effort review and GitHub Copilot) landed on this same
+concern.
+
+**Alternative rejected.** "Resolve-by-id is the contract; document `shard_hash`
+as renderer/wire-only." Rejected because it leaves the wrong-render failure
+mode latent through the entire fixtures era and defers the guard to a Stage 5
+author who has no written contract pointing at it — exactly the "silent trap
+rediscovered later" that a decision log exists to prevent. The mission
+hierarchy does not force this (it is UX-correctness, not a PQC/privacy
+tradeoff), but fail-closed is the cheaper and more honest default here.
+
+**Reference.** PR #289; high-effort review + Copilot review, 2026-07-10.
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

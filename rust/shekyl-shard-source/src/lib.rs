@@ -12,6 +12,8 @@
 //! See `docs/V3_SHARD_VISUALIZATION.md` and the GUI's
 //! `docs/SHARD_PREVIEW_CUTOVER.md` for the cutover contract.
 
+use std::sync::LazyLock;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -23,6 +25,17 @@ pub enum ShardSourceError {
     /// No shard with the requested id is visible to this source.
     #[error("shard not found: id {0}")]
     NotFound(u64),
+    /// The handle's `shard_hash` disagrees with the aggregate resolved for its
+    /// `shard_id`: a stale handle, built before the source's shard set changed.
+    /// The candidate.v1 visual is an identity signal, so a mismatched handle is
+    /// rejected rather than rendered under the wrong hash (2026-07-10 decision
+    /// in `docs/V3_WALLET_DECISION_LOG.md`).
+    #[error("stale shard handle: id {shard_id} expected hash {expected}, source has {found}")]
+    StaleHandle {
+        shard_id: u64,
+        expected: String,
+        found: String,
+    },
     /// The backing store (fixtures today, archival registry later) failed.
     #[error("shard source backend error: {0}")]
     Backend(String),
@@ -69,7 +82,7 @@ pub struct ShardRenderHandle {
     /// Which shard to render.
     pub shard_id: u64,
     /// The shard's own content hash (hex on the wire).
-    #[serde(with = "hex32")]
+    #[serde(with = "shekyl_shard_visual::hex_bytes")]
     pub shard_hash: [u8; 32],
     /// Optional compositor-seed override (hex on the wire).
     #[serde(with = "hex32_opt", default)]
@@ -92,6 +105,22 @@ pub trait ShardSource {
         -> Result<ShardAggregate, ShardSourceError>;
 }
 
+/// The nine regime fixtures, built once as [`ShardSummary`]s.
+///
+/// `shekyl_shard_visual::fixtures::all()` allocates all nine `PreviewFixture`s
+/// (labels, ids, parsed hashes) on every call; building the list once lets both
+/// `list_shards` and `aggregate_for` reuse it instead of rebuilding the whole
+/// fixture set per lookup.
+static FIXTURE_SUMMARIES: LazyLock<Vec<ShardSummary>> = LazyLock::new(|| {
+    shekyl_shard_visual::fixtures::all()
+        .into_iter()
+        .map(|f| ShardSummary {
+            label: f.label,
+            aggregate: f.aggregate,
+        })
+        .collect()
+});
+
 /// Fixture-backed source: the regime fixtures shipped in `shekyl-shard-visual`.
 ///
 /// This is the pre-ArchivalEngine implementation the wallet uses today.
@@ -100,24 +129,30 @@ pub struct FixtureShardSource;
 
 impl ShardSource for FixtureShardSource {
     fn list_shards(&self) -> Result<Vec<ShardSummary>, ShardSourceError> {
-        Ok(shekyl_shard_visual::fixtures::all()
-            .into_iter()
-            .map(|f| ShardSummary {
-                label: f.label,
-                aggregate: f.aggregate,
-            })
-            .collect())
+        Ok(FIXTURE_SUMMARIES.clone())
     }
 
     fn aggregate_for(
         &self,
         handle: &ShardRenderHandle,
     ) -> Result<ShardAggregate, ShardSourceError> {
-        shekyl_shard_visual::fixtures::all()
-            .into_iter()
-            .find(|f| f.aggregate.shard_id == handle.shard_id)
-            .map(|f| f.aggregate)
-            .ok_or(ShardSourceError::NotFound(handle.shard_id))
+        let summary = FIXTURE_SUMMARIES
+            .iter()
+            .find(|s| s.aggregate.shard_id == handle.shard_id)
+            .ok_or(ShardSourceError::NotFound(handle.shard_id))?;
+        // `shard_hash` is authoritative: a handle whose hash disagrees with the
+        // resolved aggregate is stale and rejected, never rendered under the
+        // wrong hash (2026-07-10 decision-log entry). Always passes on fixtures
+        // (their hashes are static); the guard is the contract Stage 5's
+        // mutable `ArchivalShardSource` must honor.
+        if summary.aggregate.shard_hash != handle.shard_hash {
+            return Err(ShardSourceError::StaleHandle {
+                shard_id: handle.shard_id,
+                expected: hex::encode(handle.shard_hash),
+                found: hex::encode(summary.aggregate.shard_hash),
+            });
+        }
+        Ok(summary.aggregate.clone())
     }
 }
 
@@ -153,28 +188,9 @@ impl ShardSource for ArchivalShardSource {
     }
 }
 
-mod hex32 {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(bytes: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&hex::encode(bytes))
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 32], D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let bytes = hex::decode(s.trim()).map_err(serde::de::Error::custom)?;
-        bytes
-            .try_into()
-            .map_err(|_| serde::de::Error::custom("expected 32 bytes"))
-    }
-}
-
+/// Optional 32-byte hash on the wire: hex when present, absent otherwise. The
+/// 32-byte decode delegates to `shekyl_shard_visual::hex_bytes` so the encoding
+/// has a single definition and cannot drift from `shard_hash`.
 mod hex32_opt {
     use serde::{Deserialize, Deserializer, Serializer};
 
@@ -192,17 +208,9 @@ mod hex32_opt {
     where
         D: Deserializer<'de>,
     {
-        let opt = Option::<String>::deserialize(deserializer)?;
-        match opt {
-            Some(s) => {
-                let bytes = hex::decode(s.trim()).map_err(serde::de::Error::custom)?;
-                let arr: [u8; 32] = bytes
-                    .try_into()
-                    .map_err(|_| serde::de::Error::custom("expected 32 bytes"))?;
-                Ok(Some(arr))
-            }
-            None => Ok(None),
-        }
+        #[derive(Deserialize)]
+        struct Hex32(#[serde(with = "shekyl_shard_visual::hex_bytes")] [u8; 32]);
+        Ok(Option::<Hex32>::deserialize(deserializer)?.map(|h| h.0))
     }
 }
 
@@ -229,6 +237,25 @@ mod tests {
         };
         let agg = src.aggregate_for(&handle).unwrap();
         assert_eq!(agg, first.aggregate);
+    }
+
+    #[test]
+    fn stale_hash_is_rejected() {
+        // A handle with a valid shard_id but a hash that no longer matches the
+        // resolved aggregate (the shard set changed under it) is rejected, not
+        // silently rendered under the wrong hash. See the 2026-07-10 decision.
+        let src = FixtureShardSource;
+        let first = src.list_shards().unwrap().remove(0);
+        let handle = ShardRenderHandle {
+            shard_id: first.shard_id(),
+            shard_hash: [0xAA_u8; 32],
+            hash_override: None,
+            size: 256,
+        };
+        assert!(matches!(
+            src.aggregate_for(&handle),
+            Err(ShardSourceError::StaleHandle { shard_id, .. }) if shard_id == first.shard_id()
+        ));
     }
 
     #[test]
