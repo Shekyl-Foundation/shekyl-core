@@ -614,7 +614,7 @@ fn gen_deployed(rng: &mut SplitMix64, window: u64) -> PairRaw {
 }
 
 /// Core pair synthesis at an explicit `(period, phase)` and optional forced
-/// cadence override (M-d's off-manifold drain). Shared by the deployed path and
+/// cadence override (M-b's outlier drain). Shared by the deployed path and
 /// every control so founders and users come off the *same* generator, perturbed
 /// only where the control names.
 fn gen_at(
@@ -633,12 +633,28 @@ fn gen_at(
 /// [`gen_at`] with an explicit dispatch anchor `t0` (M-a's shared co-trigger;
 /// M-c's common anchor band). The pair's whole observable stream rides the
 /// session grid at `period` from `t0` — drain at the first grid point past the
-/// entry window, the two per-`P` submits at the next two grid points. Session-
-/// locked dispatch is the posture (every action fires on a wallet session, per
-/// the timing law); it also gives the deployed cohort a well-defined joint
-/// manifold — features are functions of `(t0, period, seam)` — which is what
-/// makes member 6's joint-density isolation a meaningful detector and M-d's
-/// off-manifold combinations a meaningful control.
+/// entry window (slot `k`), the two per-`P` submits at grid points `k+1`,
+/// `k+2`. Session-locked dispatch is the posture (every action fires on a
+/// wallet session, per the timing law); it also gives the deployed cohort a
+/// well-defined joint manifold — features are functions of `(t0, period,
+/// seam)` — which is what makes member 6's joint-density isolation a
+/// meaningful detector and M-d's off-manifold combinations a meaningful
+/// control.
+///
+/// Under `forced_cadence` (M-b's outlier founder) the **drain alone** is
+/// displaced to `bond + c`; the submits stay at their production slots
+/// `k+1`/`k+2`, so with M-b's `c ≈ 2.5×` the deployed maximum the drain lands
+/// *after* both submits. Deliberate, verified against the production model
+/// (PR #291 review): `gf7_timeline::simulate_pair` times per-`P` submits off
+/// the *bond* (persona-timed, drain-independent), so drain-after-submits is a
+/// realizable ordering, and moving one raw event is the minimal perturbation
+/// the M-b single-marginal spec names ("perturbed only where the control
+/// names" — [`gen_at`]). Re-anchoring the submits after the forced drain
+/// would move three event times and couple the submit schedule to the
+/// displaced drain — a second, unnamed deviation. The huge trailing entry the
+/// displaced drain leaves in the sorted gap vector is the same physical
+/// quantity as the cadence outlier expressed in a second coordinate
+/// (unavoidable under either construction), not an extra perturbation.
 fn gen_at_anchor(
     rng: &mut SplitMix64,
     window: u64,
