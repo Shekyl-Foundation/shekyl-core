@@ -341,6 +341,11 @@ pub use tx_counts::{InputCount, OutputCount};
 // can name the return type without a direct `shekyl-address` dependency,
 // mirroring the `Network` re-export above.
 pub use shekyl_address::ShekylAddress;
+// Re-exported so consumers of [`DaemonClient::fetch_scannable_block`] can
+// name the return type without a direct `shekyl-scanner` dependency —
+// same shape as `ShekylAddress` above. Canonical definition stays in
+// `shekyl-scanner`; do not wrap or redefine (type-placement).
+pub use shekyl_scanner::ScannableBlock;
 
 pub use output_selector::{
     OutputCandidate, OutputSelector, SelectedOutputs, WalletGreedyOutputSelector,

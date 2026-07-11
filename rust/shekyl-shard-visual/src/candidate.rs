@@ -179,9 +179,18 @@ fn render_background_composite(
     composite(&truchet, &crystalline, CANDIDATE_BLEND, recipe.bg_opacity)
 }
 
-pub fn render_candidate(params: &RenderParameters, size: u32) -> RgbImage {
+/// Render candidate.v1 into an RGB image.
+///
+/// `size` must be in [`crate::MIN_RENDER_SIZE`]..=[`crate::MAX_RENDER_SIZE`].
+/// Zero and oversized values are rejected (algorithms use `size - 1`; allocation
+/// is `size²` pixels).
+pub fn render_candidate(
+    params: &RenderParameters,
+    size: u32,
+) -> Result<RgbImage, crate::VisualError> {
+    crate::check_render_size(size)?;
     let recipe = recipe_from_params(params);
     let bg = render_background_composite(params, size, &recipe);
     let fg = render_foreground_composite(params, size, &recipe);
-    composite(&bg, &fg, CANDIDATE_BLEND, recipe.final_opacity)
+    Ok(composite(&bg, &fg, CANDIDATE_BLEND, recipe.final_opacity))
 }

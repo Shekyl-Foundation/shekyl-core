@@ -1,5 +1,8 @@
 use shekyl_shard_visual::fixtures;
-use shekyl_shard_visual::{parameters_from_aggregate, recipe_from_params, render_candidate_png};
+use shekyl_shard_visual::{
+    parameters_from_aggregate, recipe_from_params, render_candidate_png, VisualError,
+    MAX_RENDER_SIZE,
+};
 
 #[test]
 fn genesis_fixture_renders_png() {
@@ -7,6 +10,25 @@ fn genesis_fixture_renders_png() {
     let png = render_candidate_png(&fixture.aggregate, 64).expect("png");
     assert!(png.starts_with(b"\x89PNG"));
     assert!(png.len() > 500);
+}
+
+#[test]
+fn render_rejects_zero_size() {
+    let fixture = fixtures::by_id("genesis").expect("genesis fixture");
+    assert!(matches!(
+        render_candidate_png(&fixture.aggregate, 0),
+        Err(VisualError::InvalidSize { size: 0, .. })
+    ));
+}
+
+#[test]
+fn render_rejects_oversized() {
+    let fixture = fixtures::by_id("genesis").expect("genesis fixture");
+    let too_big = MAX_RENDER_SIZE.saturating_add(1);
+    assert!(matches!(
+        render_candidate_png(&fixture.aggregate, too_big),
+        Err(VisualError::InvalidSize { size, .. }) if size == too_big
+    ));
 }
 
 #[test]

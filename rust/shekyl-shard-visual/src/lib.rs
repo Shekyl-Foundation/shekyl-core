@@ -23,7 +23,7 @@ mod palette;
 mod params;
 mod render;
 
-pub use aggregate::ShardAggregate;
+pub use aggregate::{hex_bytes, ShardAggregate};
 pub use candidate::{recipe_from_params, render_candidate, CandidateRecipe};
 pub use features::{features_from_aggregate, Features};
 pub use params::{parameters_from_aggregate, parameters_with_hash_override, RenderParameters};
@@ -37,14 +37,41 @@ use thiserror::Error;
 pub enum VisualError {
     #[error("invalid shard hash: {0}")]
     InvalidHash(String),
+    #[error("invalid render size {size}: must be in {min}..={max}")]
+    InvalidSize { size: u32, min: u32, max: u32 },
     #[error("PNG encode failed: {0}")]
     PngEncode(String),
+}
+
+/// Minimum accepted edge length for candidate.v1 renders.
+///
+/// `size == 0` underflows in several algorithms (`size - 1`) and must be
+/// rejected rather than clamped (fail closed on untrusted preview input).
+pub const MIN_RENDER_SIZE: u32 = 1;
+
+/// Maximum accepted edge length for candidate.v1 renders.
+///
+/// Caps allocation at `size²` RGB pixels (~48 MiB at 4096) so a hostile
+/// wire `size` cannot ask the preview path for a multi-gigabyte buffer.
+/// The GUI clamps further (64..=512); explorers may use larger thumbs.
+pub const MAX_RENDER_SIZE: u32 = 4096;
+
+/// Reject a render `size` outside [`MIN_RENDER_SIZE`]..=[`MAX_RENDER_SIZE`].
+pub fn check_render_size(size: u32) -> Result<(), VisualError> {
+    if !(MIN_RENDER_SIZE..=MAX_RENDER_SIZE).contains(&size) {
+        return Err(VisualError::InvalidSize {
+            size,
+            min: MIN_RENDER_SIZE,
+            max: MAX_RENDER_SIZE,
+        });
+    }
+    Ok(())
 }
 
 /// Render candidate.v1 for an aggregate at `size`×`size` and return PNG bytes.
 pub fn render_candidate_png(agg: &ShardAggregate, size: u32) -> Result<Vec<u8>, VisualError> {
     let params = parameters_from_aggregate(agg);
-    let image = render_candidate(&params, size);
+    let image = render_candidate(&params, size)?;
     encode_png(&image)
 }
 
@@ -55,7 +82,7 @@ pub fn render_candidate_png_from_features(
     size: u32,
 ) -> Result<Vec<u8>, VisualError> {
     let params = params::parameters_from_synthetic(*shard_hash, features);
-    let image = render_candidate(&params, size);
+    let image = render_candidate(&params, size)?;
     encode_png(&image)
 }
 

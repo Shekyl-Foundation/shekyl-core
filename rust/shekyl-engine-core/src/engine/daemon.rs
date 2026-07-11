@@ -44,6 +44,7 @@ use std::future::Future;
 use serde_json::{json, Value};
 use shekyl_rpc_client::{FeeRate, RejectCause, Rpc, RpcError};
 use shekyl_rpc_transport::SimpleRequestRpc;
+use shekyl_scanner::ScannableBlock;
 use shekyl_wire::Transaction;
 
 use crate::engine::pending::TxHash;
@@ -167,6 +168,23 @@ impl DaemonClient {
     /// the on-disk wallet file's network declaration.
     pub fn new(inner: SimpleRequestRpc) -> Self {
         Self { inner }
+    }
+
+    /// Fetch the block at `number` as a [`ScannableBlock`] via the native
+    /// `shekyl-wire` parse (`engine::block_fetch`).
+    ///
+    /// Public inherent wrapper around the crate-private
+    /// [`DaemonEngine::fetch_scannable_block`] default so transitional
+    /// consumers (GUI `wallet_bridge` sync loop) can use the same path as
+    /// `Engine` without depending on the private trait. Replaces the
+    /// deleted `shekyl_rpc_client::Rpc::get_scannable_block_by_number`.
+    ///
+    /// The return type is the scanner crate's [`ScannableBlock`], re-exported
+    /// from `shekyl-engine-core` so callers can name it without a direct
+    /// `shekyl-scanner` dependency. A local wrapper/newtype is rejected:
+    /// that would duplicate the canonical type and drift (type-placement).
+    pub async fn fetch_scannable_block(&self, number: usize) -> Result<ScannableBlock, RpcError> {
+        crate::engine::block_fetch::default_fetch_scannable_block(self, number).await
     }
 }
 
