@@ -162,7 +162,7 @@ use shekyl_tx_builder::{
     tx_prefix_hash_from_parts_with_extra, InputTerm, LeafEntry, PqcAuth, SpendInput, TreeContext,
     WireEncodeInput,
 };
-use shekyl_types::{PCanonicalId, SettlementEpoch};
+use shekyl_types::{GlobalOutputIndex, PCanonicalId, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Input;
 use zeroize::Zeroizing;
@@ -210,22 +210,10 @@ compile_error!(
 
 /// Archival persona slot index.
 ///
-/// A newtype over `u32` so a persona slot cannot be confused at a call site
-/// with any other index (an output index, a subaddress index, …). The
-/// `derive_archival_p_keys` boundary takes a raw `u32`; the conversion is
-/// explicit via [`PSlot::index`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[allow(dead_code)] // inert until PR 2c wiring
-pub(crate) struct PSlot(pub u32);
-
-#[allow(dead_code)] // inert until PR 2c wiring
-impl PSlot {
-    /// The raw slot index, for the `derive_archival_p_keys` boundary.
-    #[must_use]
-    pub(crate) fn index(self) -> u32 {
-        self.0
-    }
-}
+/// Persona-slot ordinal — re-exported from [`shekyl_types::PSlot`] so the
+/// stake-engine surface and the persisted pscan funding records share one
+/// domain type (WI-2 domain-newtype carrier).
+pub(crate) use shekyl_types::PSlot;
 
 /// How many slots past the current cursor `assemble()` pre-derives into the
 /// held set (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2, Model D).
@@ -489,7 +477,7 @@ impl PersonaIdentity {
     /// Project the public identity out of a (secret) persona bundle.
     fn from_keys(keys: &ArchivalPKeys) -> Self {
         Self {
-            p_slot: PSlot(keys.p_slot),
+            p_slot: PSlot::from_raw(keys.p_slot),
             bond_id: keys.hybrid_bond_id().clone(),
         }
     }
@@ -886,7 +874,7 @@ impl StakeEngine {
         // block-relative offsets, no wall-clock, no identities.
         #[cfg(feature = "gf7-hooks")]
         {
-            let persona = u64::from(handle_slot.0);
+            let persona = u64::from(handle_slot.to_raw());
             self.observer.record(TimelineEvent::EntryGapDrawConsumed {
                 persona,
                 window_blocks: DEFAULT_ENTRY_GAP.as_blocks(),
@@ -958,11 +946,11 @@ impl StakeEngine {
                 // Slot-tagged so the extractor can attribute each recovered
                 // output to its owning persona (WI-2 D-A1 funding records).
                 scanners.push((
-                    slot.0,
+                    slot.to_raw(),
                     guaranteed_scanner_for_persona(keys).map_err(ScanSetupError::Scanner)?,
                 ));
                 let id = persona_canonical_id(keys).map_err(ScanSetupError::CanonicalId)?;
-                known_personas.insert(id, slot.0);
+                known_personas.insert(id, slot.to_raw());
             }
         }
         Ok((scanners, known_personas))
@@ -1388,7 +1376,10 @@ impl Message<SignBond> for StakeEngine {
 /// this request's entry-gap draw — the same seam discipline as
 /// [`SignedBondPost`]: the caller that receives the bytes to place receives
 /// where to place them.
-#[allow(dead_code)] // inert until the WI-2 Engine-side orchestrator lands (this PR).
+///
+/// Dead_code allow: the Engine orchestrator is wired; go-live still needs
+/// SP-R0/2d-1 pruning **and** the RPC stake entry (rule-21 — neither alone).
+#[allow(dead_code)] // rule-21: SP-R0/2d-1 AND RPC entry — neither alone
 pub(crate) struct AssembleBond {
     /// Operation-scoped capability proving the slot is currently held (typed
     /// contract #2). Must match `ticket.p_slot()`.
@@ -1411,7 +1402,10 @@ pub(crate) struct AssembleBond {
 /// single P-1 site, [`finalize_bond_tx`]), the placement plan, and the
 /// funding gindexes for the caller's reservation record (§3.5). Secrets never
 /// cross the boundary.
-#[allow(dead_code)] // inert until the WI-2 Engine-side orchestrator lands (this PR).
+///
+/// Dead_code allow: reply type of the wired orchestrator; same dual gate as
+/// [`AssembleBond`].
+#[allow(dead_code)] // rule-21: SP-R0/2d-1 AND RPC entry — neither alone
 #[derive(Debug)]
 pub(crate) struct AssembledBondPost {
     /// The fully-signed, wire-encoded bond transaction, persona-bound.
@@ -1419,7 +1413,7 @@ pub(crate) struct AssembledBondPost {
     /// Relative placement of the entry event and the bond-post broadcast.
     pub plan: EntrySeamPlan,
     /// The spent funding records' gindexes — the §3.5 reservation set.
-    pub funding_gindexes: Vec<u64>,
+    pub funding_gindexes: Vec<shekyl_types::GlobalOutputIndex>,
 }
 
 impl Message<AssembleBond> for StakeEngine {
@@ -1504,7 +1498,8 @@ impl Message<AssembleBond> for StakeEngine {
         let prepared = prepare_funding_inputs(keys, msg.funding)?;
 
         let key_images: Vec<[u8; 32]> = prepared.iter().map(|p| p.key_image).collect();
-        let funding_gindexes: Vec<u64> = prepared.iter().map(|p| p.gindex).collect();
+        let funding_gindexes: Vec<shekyl_types::GlobalOutputIndex> =
+            prepared.iter().map(|p| p.gindex).collect();
 
         // ── Steps 11–12 (§3.3 actor step 2): the wire BondPost prefix input
         // from PUBLIC parts, then the prefix hash. No circularity: the wire
@@ -1701,7 +1696,7 @@ struct PreparedInput {
     spend: SpendInput,
     key_image: [u8; 32],
     pqc_pubkey: Vec<u8>,
-    gindex: u64,
+    gindex: GlobalOutputIndex,
 }
 
 /// One constructed vout batch to `P`'s base address — the shared
@@ -1986,7 +1981,7 @@ pub(crate) struct AssembledEmissionClaim {
     /// The spent **fee** funding records' gindexes — the reservation set.
     /// The backing's gindex is deliberately absent: the backing is proven
     /// (membership-only, no key image), not spent.
-    pub fee_gindexes: Vec<u64>,
+    pub fee_gindexes: Vec<GlobalOutputIndex>,
     /// The epochs this tx claims (the vin's `settlement_epochs`) — the
     /// caller's pending-dedup set.
     pub claimed_epochs: Vec<u64>,
@@ -2045,7 +2040,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             .any(|f| f.record.gindex == backing_gindex)
         {
             return Err(StakeEngineError::BackingInFeeSet {
-                gindex: backing_gindex,
+                gindex: backing_gindex.to_raw(),
             });
         }
 
@@ -2157,7 +2152,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // path (descending key-image order).
         let prepared = prepare_funding_inputs(keys, msg.fee_funding)?;
         let key_images: Vec<[u8; 32]> = prepared.iter().map(|p| p.key_image).collect();
-        let fee_gindexes: Vec<u64> = prepared.iter().map(|p| p.gindex).collect();
+        let fee_gindexes: Vec<GlobalOutputIndex> = prepared.iter().map(|p| p.gindex).collect();
 
         // ── Step 9: the SIGNABLE hash (F-C1c) — the prefix with the
         // emission vin erased WHOLESALE. The wire encoder places ToKey key
@@ -2826,6 +2821,33 @@ impl StakeEngineHandle {
             .map_err(collapse_send_error)
     }
 
+    /// Ask the actor to assemble the full, broadcast-ready JoinMarket bond
+    /// (`AssembleBond`). Engine-side caller is [`Engine::assemble_bond_post`]
+    /// (WI-2 §3.3). Dead_code allow retires only when **both** SP-R0 / 2d-1
+    /// pruning **and** the RPC stake entry land — neither alone.
+    #[allow(dead_code)] // rule-21: SP-R0/2d-1 AND RPC entry — neither alone
+    pub(crate) async fn assemble_bond(
+        &self,
+        handle: PersonaHandle,
+        ticket: super::stake_persist::PersistedBondTicket,
+        holdings: HoldingsDescriptor,
+        funding: Vec<FundingInputContext>,
+        tree_ctx: TreeContext,
+        fee: u64,
+    ) -> Result<AssembledBondPost, StakeEngineError> {
+        self.actor
+            .ask(AssembleBond {
+                handle,
+                ticket,
+                holdings,
+                funding,
+                tree_ctx,
+                fee,
+            })
+            .await
+            .map_err(collapse_send_error)
+    }
+
     /// Assemble the full, broadcast-ready emission-claim transaction
     /// ([`AssembleEmissionClaim`]) — the emission sibling of the bond
     /// assembly path. Return-bytes-only: broadcast timing is the GF-4
@@ -2949,10 +2971,12 @@ pub(crate) mod test_fixtures {
         bonded: &[u32],
         active: Option<u32>,
     ) -> StakeEngineHandle {
-        let bundles: BTreeMap<PSlot, ArchivalPKeys> =
-            held.iter().map(|&s| (PSlot(s), derive_bundle(s))).collect();
-        let bonded: BTreeSet<PSlot> = bonded.iter().map(|&s| PSlot(s)).collect();
-        StakeEngineHandle::spawn(bundles, bonded, active.map(PSlot))
+        let bundles: BTreeMap<PSlot, ArchivalPKeys> = held
+            .iter()
+            .map(|&s| (PSlot::from_raw(s), derive_bundle(s)))
+            .collect();
+        let bonded: BTreeSet<PSlot> = bonded.iter().map(|&s| PSlot::from_raw(s)).collect();
+        StakeEngineHandle::spawn(bundles, bonded, active.map(PSlot::from_raw))
     }
 
     /// A REAL P-paid output for `keys`: a funding record carrying the
@@ -3035,7 +3059,7 @@ mod tests {
         handle: &StakeEngineHandle,
         slot: u32,
     ) -> Result<PersonaIdentity, StakeEngineError> {
-        let h = handle.mint_handle(PSlot(slot)).await?;
+        let h = handle.mint_handle(PSlot::from_raw(slot)).await?;
         handle.activate_persona(h).await
     }
 
@@ -3166,7 +3190,7 @@ mod tests {
         let identity = mint_and_activate(&handle, 0)
             .await
             .expect("activation of a held persona");
-        assert_eq!(identity.p_slot, PSlot(0));
+        assert_eq!(identity.p_slot, PSlot::from_raw(0));
         assert_eq!(
             bond_id_bytes(&identity),
             oracle0,
@@ -3178,7 +3202,7 @@ mod tests {
             .await
             .expect("active query succeeds")
             .expect("a persona is active after activation");
-        assert_eq!(active.p_slot, PSlot(0));
+        assert_eq!(active.p_slot, PSlot::from_raw(0));
         assert_eq!(bond_id_bytes(&active), oracle0);
     }
 
@@ -3209,11 +3233,11 @@ mod tests {
     async fn mint_unheld_slot_is_lookahead_exhausted() {
         let handle = spawn_over(&[0, 1], &[], None);
         let err = handle
-            .mint_handle(PSlot(7))
+            .mint_handle(PSlot::from_raw(7))
             .await
             .expect_err("slot 7 is not held");
         assert!(
-            matches!(err, StakeEngineError::LookaheadExhausted { requested } if requested == PSlot(7)),
+            matches!(err, StakeEngineError::LookaheadExhausted { requested } if requested == PSlot::from_raw(7)),
             "expected LookaheadExhausted{{7}}, got {err:?}"
         );
     }
@@ -3231,14 +3255,14 @@ mod tests {
             bond_id_bytes(&id1),
             "distinct slots project distinct personas"
         );
-        assert_eq!(id1.p_slot, PSlot(1));
+        assert_eq!(id1.p_slot, PSlot::from_raw(1));
 
         let active = handle
             .active_persona()
             .await
             .expect("active query")
             .expect("a persona is active");
-        assert_eq!(active.p_slot, PSlot(1));
+        assert_eq!(active.p_slot, PSlot::from_raw(1));
         assert_eq!(bond_id_bytes(&active), bond_id_bytes(&id1));
     }
 
@@ -3255,11 +3279,11 @@ mod tests {
             .expect("rotate to 1 (wipes ephemeral 0)");
 
         let err = handle
-            .mint_handle(PSlot(0))
+            .mint_handle(PSlot::from_raw(0))
             .await
             .expect_err("retired ephemeral slot 0 was wiped");
         assert!(
-            matches!(err, StakeEngineError::LookaheadExhausted { requested } if requested == PSlot(0)),
+            matches!(err, StakeEngineError::LookaheadExhausted { requested } if requested == PSlot::from_raw(0)),
             "expected LookaheadExhausted{{0}} after ephemeral wipe, got {err:?}"
         );
 
@@ -3268,7 +3292,7 @@ mod tests {
             .await
             .expect("active query")
             .expect("slot 1 active");
-        assert_eq!(active.p_slot, PSlot(1));
+        assert_eq!(active.p_slot, PSlot::from_raw(1));
     }
 
     // Typed contract #4 — rotation keeps a retired *bonded* persona resident:
@@ -3305,7 +3329,10 @@ mod tests {
 
         // Mint a handle for slot 0 up front, then rotate via a *different*
         // handle, leaving the slot-0 handle straddling the rotation.
-        let stale = handle.mint_handle(PSlot(0)).await.expect("mint slot 0");
+        let stale = handle
+            .mint_handle(PSlot::from_raw(0))
+            .await
+            .expect("mint slot 0");
         mint_and_activate(&handle, 1)
             .await
             .expect("rotate to 1 (advances generation)");
@@ -3390,7 +3417,7 @@ mod tests {
         // Terminal + non-retryable across the message surface.
         for attempt in 0..3 {
             let err = handle
-                .mint_handle(PSlot(0))
+                .mint_handle(PSlot::from_raw(0))
                 .await
                 .expect_err("post-death mint fails");
             assert!(
@@ -3538,13 +3565,13 @@ mod tests {
             .await
             .expect("activate slot 0");
         let h0 = handle
-            .mint_handle(PSlot(0))
+            .mint_handle(PSlot::from_raw(0))
             .await
             .expect("mint handle for slot 0");
 
         // Forge a ticket for slot 1 (bypassing Engine::persist_bond_record
         // via the test-only constructor on PersistedBondTicket).
-        let ticket_for_slot_1 = PersistedBondTicket::__test_only_forge(PSlot(1));
+        let ticket_for_slot_1 = PersistedBondTicket::__test_only_forge(PSlot::from_raw(1));
 
         let holdings = HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
@@ -3559,9 +3586,9 @@ mod tests {
             matches!(
                 err,
                 StakeEngineError::SlotMismatch {
-                    handle_slot: PSlot(0),
-                    ticket_slot: PSlot(1),
-                }
+                    handle_slot,
+                    ticket_slot,
+                } if handle_slot == PSlot::from_raw(0) && ticket_slot == PSlot::from_raw(1)
             ),
             "expected SlotMismatch(0, 1), got {err:?}"
         );
@@ -3590,8 +3617,9 @@ mod tests {
         }
 
         let recorded = Arc::new(Mutex::new(Vec::new()));
-        let bundles: BTreeMap<PSlot, ArchivalPKeys> =
-            [(PSlot(0), derive_bundle(0))].into_iter().collect();
+        let bundles: BTreeMap<PSlot, ArchivalPKeys> = [(PSlot::from_raw(0), derive_bundle(0))]
+            .into_iter()
+            .collect();
         let handle = StakeEngineHandle {
             actor: StakeEngine::spawn(StakeEngineArgs {
                 bundles,
@@ -3604,10 +3632,10 @@ mod tests {
         };
 
         let h0 = handle
-            .mint_handle(PSlot(0))
+            .mint_handle(PSlot::from_raw(0))
             .await
             .expect("mint handle for slot 0");
-        let ticket = PersistedBondTicket::__test_only_forge(PSlot(0));
+        let ticket = PersistedBondTicket::__test_only_forge(PSlot::from_raw(0));
         let holdings = HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: vec![7, 42],
@@ -3823,7 +3851,9 @@ mod tests {
 
         assert_eq!(
             handle.retire_bonded_persona(witness).await.expect("retire"),
-            RetireOutcome::Retired { slot: PSlot(0) }
+            RetireOutcome::Retired {
+                slot: PSlot::from_raw(0)
+            }
         );
 
         // Gone now → a fresh witness for the same persona is a no-op.
@@ -3853,7 +3883,9 @@ mod tests {
         .expect("eligible");
         assert_eq!(
             handle.retire_bonded_persona(witness).await.expect("retire"),
-            RetireOutcome::SkippedActive { slot: PSlot(0) }
+            RetireOutcome::SkippedActive {
+                slot: PSlot::from_raw(0)
+            }
         );
     }
 
@@ -3903,8 +3935,10 @@ mod tests {
         /// Build a handle with an explicit self-cert mode (the bulk-test
         /// `spawn_over` uses `Skip`; the S6 tests need `RealOsRng`/`Degenerate`).
         fn spawn_with_self_cert(held: &[u32], mode: TestSelfCert) -> StakeEngineHandle {
-            let bundles: BTreeMap<PSlot, ArchivalPKeys> =
-                held.iter().map(|&s| (PSlot(s), derive_bundle(s))).collect();
+            let bundles: BTreeMap<PSlot, ArchivalPKeys> = held
+                .iter()
+                .map(|&s| (PSlot::from_raw(s), derive_bundle(s)))
+                .collect();
             let args = StakeEngineArgs {
                 bundles,
                 bonded: BTreeSet::new(),
@@ -3996,7 +4030,7 @@ mod tests {
         fn designate_at(record: PFundingOutputRecord, anchor: u64) -> DesignatedBacking {
             BackingSet::from_spendable(
                 &[record],
-                0,
+                PSlot::from_raw(0),
                 BlockHeight::from_raw(anchor),
                 BlockHeight::from_raw(0),
             )
@@ -4035,7 +4069,10 @@ mod tests {
             let tip = source.chain_height.to_raw() - 1;
             let record = || funding_record(0, 11, 5, 750_000, MintLineageOutput::BondPostChange);
 
-            let h = handle.mint_handle(PSlot(0)).await.expect("slot 0 held");
+            let h = handle
+                .mint_handle(PSlot::from_raw(0))
+                .await
+                .expect("slot 0 held");
             let err = handle
                 .assemble_emission_claim(AssembleEmissionClaim {
                     handle: h,
@@ -4060,7 +4097,10 @@ mod tests {
             // The block COUNT as the anchor (the unit mismatch this check
             // pins): one past the tip, must refuse — a count-anchored
             // designation admits records one block early.
-            let h = handle.mint_handle(PSlot(0)).await.expect("slot 0 held");
+            let h = handle
+                .mint_handle(PSlot::from_raw(0))
+                .await
+                .expect("slot 0 held");
             let err = handle
                 .assemble_emission_claim(AssembleEmissionClaim {
                     handle: h,
@@ -4087,7 +4127,10 @@ mod tests {
         #[tokio::test(flavor = "multi_thread")]
         async fn backing_in_fee_set_refuses() {
             let handle = spawn_over(&[0], &[], None);
-            let h = handle.mint_handle(PSlot(0)).await.expect("slot 0 held");
+            let h = handle
+                .mint_handle(PSlot::from_raw(0))
+                .await
+                .expect("slot 0 held");
             let source = claimable_source();
             let tip = source.chain_height.to_raw() - 1;
             let backing = funding_record(0, 11, 5, 750_000, MintLineageOutput::BondPostChange);
@@ -4134,7 +4177,10 @@ mod tests {
             // Arm 1: zero fee inputs — structural refusal, at fee 1 000 AND
             // at fee 0 (the 0/0 shortfall trap the variant exists to avoid).
             for fee in [1_000u64, 0] {
-                let h = handle.mint_handle(PSlot(0)).await.expect("slot 0 held");
+                let h = handle
+                    .mint_handle(PSlot::from_raw(0))
+                    .await
+                    .expect("slot 0 held");
                 let err = handle
                     .assemble_emission_claim(AssembleEmissionClaim {
                         handle: h,
@@ -4158,7 +4204,10 @@ mod tests {
 
             // Arm 2: fee inputs present but short of the fee — a genuine
             // shortfall, so `InsufficientFunding` is the right taxonomy.
-            let h = handle.mint_handle(PSlot(0)).await.expect("slot 0 held");
+            let h = handle
+                .mint_handle(PSlot::from_raw(0))
+                .await
+                .expect("slot 0 held");
             let short = funding_record(0, 22, 6, 400, MintLineageOutput::ExternalTransfer);
             let err = handle
                 .assemble_emission_claim(AssembleEmissionClaim {
@@ -4214,7 +4263,10 @@ mod tests {
         #[tokio::test(flavor = "multi_thread")]
         async fn assembled_claim_survives_the_daemon_side_differential() {
             let handle = spawn_over(&[0], &[], None);
-            let h = handle.mint_handle(PSlot(0)).await.expect("slot 0 held");
+            let h = handle
+                .mint_handle(PSlot::from_raw(0))
+                .await
+                .expect("slot 0 held");
             let keys = derive_bundle(0);
             let source = claimable_source();
             let tip = source.chain_height.to_raw() - 1;
@@ -4267,7 +4319,7 @@ mod tests {
             assert!(reply.size_deferred.is_empty());
             // Q11 surface: only the fee spend is reserved — the backing is
             // consumed as backing, never as a fee input.
-            assert_eq!(reply.fee_gindexes, vec![22]);
+            assert_eq!(reply.fee_gindexes, vec![GlobalOutputIndex::from_raw(22)]);
             assert!(!reply.fee_gindexes.contains(&backing_gindex));
 
             // ── Everything below recomputes from the wire BYTES. ──────────

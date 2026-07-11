@@ -270,6 +270,52 @@ scalar_u64! {
     GlobalOutputIndex
 }
 
+/// An archival-persona slot ordinal — the index into the staker's derive-forward
+/// persona set (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2 Model D).
+///
+/// Distinct from [`OutputIndexInTx`] / [`GlobalOutputIndex`] / raw `u32` so a
+/// persona slot cannot be silently passed where a tx-output index or a
+/// chain-wide gindex is expected. Wire-transparent (`#[serde(transparent)]` +
+/// `#[repr(transparent)]`) over `u32`.
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Debug,
+    Default,
+    ::serde::Serialize,
+    ::serde::Deserialize,
+)]
+#[cfg_attr(feature = "schema", derive(::postcard_schema::Schema))]
+#[serde(transparent)]
+#[repr(transparent)]
+pub struct PSlot(u32);
+
+impl PSlot {
+    /// Wrap a raw slot index at the typed-domain edge.
+    #[must_use]
+    pub const fn from_raw(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Unwrap to the raw `u32` at a `u32`-typed boundary (e.g. HKDF slot args).
+    #[must_use]
+    pub const fn to_raw(self) -> u32 {
+        self.0
+    }
+
+    /// Alias for [`Self::to_raw`] — matches the historical `stake_engine::PSlot::index`
+    /// call sites that feed `derive_archival_p_keys`.
+    #[must_use]
+    pub const fn index(self) -> u32 {
+        self.0
+    }
+}
+
 scalar_u64! {
     /// The position of an output within its own transaction's output vector.
     ///

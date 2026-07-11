@@ -24,7 +24,8 @@
 use std::collections::BTreeSet;
 
 use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHeight, GlobalOutputIndex, PSlot};
+use shekyl_units::AtomicUnits;
 
 use crate::engine::bond_assembly::{
     sweep_funding_outputs, BondAssemblyError, FundingSelection, SpentRecordsDurablyPruned,
@@ -117,7 +118,7 @@ impl BackingSet {
     /// the sweep-regression tripwire armed.
     pub(crate) fn from_spendable<'a, I>(
         records: I,
-        p_slot: u32,
+        p_slot: PSlot,
         reference_height: BlockHeight,
         last_sweep_height: BlockHeight,
     ) -> Self
@@ -281,9 +282,9 @@ impl DesignatedBacking {
         &self,
         pruning_landed: &SpentRecordsDurablyPruned,
         records: I,
-        p_slot: u32,
-        reserved: &BTreeSet<u64>,
-        required: u64,
+        p_slot: PSlot,
+        reserved: &BTreeSet<GlobalOutputIndex>,
+        required: AtomicUnits,
     ) -> Result<FundingSelection, BondAssemblyError>
     where
         I: IntoIterator<Item = &'a PFundingOutputRecord>,
@@ -336,8 +337,13 @@ mod tests {
             record(3, 150, 900, MintLineageOutput::ExternalTransfer),
         ];
 
-        let set = BackingSet::from_spendable(&records, 0, reference_height, last_sweep_height);
-        let gindexes: Vec<u64> = set.records().iter().map(|r| r.gindex).collect();
+        let set = BackingSet::from_spendable(
+            &records,
+            PSlot::from_raw(0),
+            reference_height,
+            last_sweep_height,
+        );
+        let gindexes: Vec<u64> = set.records().iter().map(|r| r.gindex.to_raw()).collect();
         assert_eq!(
             gindexes,
             vec![1, 2],
@@ -359,7 +365,12 @@ mod tests {
             // Survivor: rung 3 that a sweep should have consumed.
             record(2, 80, 700, MintLineageOutput::ExternalTransfer),
         ];
-        let _ = BackingSet::from_spendable(&records, 0, reference_height, last_sweep_height);
+        let _ = BackingSet::from_spendable(
+            &records,
+            PSlot::from_raw(0),
+            reference_height,
+            last_sweep_height,
+        );
     }
 
     /// GF4b-6 enforcement: the constructor applies the spendability filter
@@ -384,7 +395,12 @@ mod tests {
             record(2, 200, 700, MintLineageOutput::ExternalTransfer),
         ];
 
-        let set = BackingSet::from_spendable(&records, 0, reference_height, last_sweep_height);
+        let set = BackingSet::from_spendable(
+            &records,
+            PSlot::from_raw(0),
+            reference_height,
+            last_sweep_height,
+        );
         assert!(
             set.records().is_empty(),
             "immature records — including the rung-2 — are excluded by the enforced spendability filter"
@@ -431,29 +447,34 @@ mod tests {
         let selection = sweep_funding_outputs(
             &SpentRecordsDurablyPruned::for_test(),
             &pre_sweep,
-            0,
+            shekyl_types::PSlot::from_raw(0),
             &Default::default(),
-            required,
+            shekyl_units::AtomicUnits::from_raw(required),
             reference_height,
         )
         .expect("sweep succeeds");
 
         // (1) The sweep is the full spendable eligible set.
-        let swept: std::collections::BTreeSet<u64> =
-            selection.records.iter().map(|r| r.gindex).collect();
+        let swept: std::collections::BTreeSet<u64> = selection
+            .records
+            .iter()
+            .map(|r| r.gindex.to_raw())
+            .collect();
         assert_eq!(
             swept,
             [10, 11, 12, 13].into_iter().collect(),
             "sweep consumed everything, including the record a greedy subset leaves behind"
         );
-        assert_eq!(selection.total, 1_800);
+        assert_eq!(selection.total, shekyl_units::AtomicUnits::from_raw(1_800));
 
         // (2) Post-confirmation spendable remainder is empty. Durable
         // pruning is SP-R0-gated, so model spent-removal as records minus
         // swept gindexes.
         let remainder: Vec<&PFundingOutputRecord> = pre_sweep
             .iter()
-            .filter(|r| !swept.contains(&r.gindex) && r.spendable_height <= reference_height)
+            .filter(|r| {
+                !swept.contains(&r.gindex.to_raw()) && r.spendable_height <= reference_height
+            })
             .collect();
         assert!(
             remainder.is_empty(),
@@ -470,8 +491,13 @@ mod tests {
             // Legal between-sweeps tranche (height > last_sweep_height).
             record(21, 250, 123, MintLineageOutput::ExternalTransfer),
         ];
-        let set = BackingSet::from_spendable(&post_bond, 0, reference_height, last_sweep_height);
-        let eligible: Vec<u64> = set.records().iter().map(|r| r.gindex).collect();
+        let set = BackingSet::from_spendable(
+            &post_bond,
+            PSlot::from_raw(0),
+            reference_height,
+            last_sweep_height,
+        );
+        let eligible: Vec<u64> = set.records().iter().map(|r| r.gindex.to_raw()).collect();
         assert_eq!(
             eligible,
             vec![20],
@@ -498,16 +524,25 @@ mod tests {
             funding_record(1, 2, 300, 700, MintLineageOutput::BondPostChange),
         ];
 
-        let set = BackingSet::from_spendable(&records, 0, reference_height, last_sweep_height);
-        let gindexes: Vec<u64> = set.records().iter().map(|r| r.gindex).collect();
+        let set = BackingSet::from_spendable(
+            &records,
+            PSlot::from_raw(0),
+            reference_height,
+            last_sweep_height,
+        );
+        let gindexes: Vec<u64> = set.records().iter().map(|r| r.gindex.to_raw()).collect();
         assert_eq!(gindexes, vec![1], "only the claimant slot's records enter");
 
-        let designated =
-            BackingSet::from_spendable(&records, 0, reference_height, last_sweep_height)
-                .designate_backing()
-                .expect("the claimant's record designates");
+        let designated = BackingSet::from_spendable(
+            &records,
+            PSlot::from_raw(0),
+            reference_height,
+            last_sweep_height,
+        )
+        .designate_backing()
+        .expect("the claimant's record designates");
         assert_eq!(
-            designated.record().gindex,
+            designated.record().gindex.to_raw(),
             1,
             "the foreign slot's newer record must not win the comparator"
         );
@@ -520,7 +555,7 @@ mod tests {
         ];
         let set = BackingSet::from_spendable(
             &with_foreign_survivor,
-            0,
+            PSlot::from_raw(0),
             reference_height,
             last_sweep_height,
         );
@@ -542,12 +577,16 @@ mod tests {
             record(3, 95, 300, MintLineageOutput::BondPostChange),
         ];
 
-        let designated =
-            BackingSet::from_spendable(&records, 0, reference_height, last_sweep_height)
-                .designate_backing()
-                .expect("eligible records exist");
+        let designated = BackingSet::from_spendable(
+            &records,
+            PSlot::from_raw(0),
+            reference_height,
+            last_sweep_height,
+        )
+        .designate_backing()
+        .expect("eligible records exist");
         assert_eq!(
-            designated.record().gindex,
+            designated.record().gindex.to_raw(),
             3,
             "highest (height, gindex) is designated"
         );
@@ -576,8 +615,13 @@ mod tests {
         // No `expect_err`: `DesignatedBacking` intentionally derives no
         // `Debug` (same redaction posture as `FundingSelection` — the
         // contained funding record is the sensitive part).
-        match BackingSet::from_spendable(&records, 0, reference_height, last_sweep_height)
-            .designate_backing()
+        match BackingSet::from_spendable(
+            &records,
+            PSlot::from_raw(0),
+            reference_height,
+            last_sweep_height,
+        )
+        .designate_backing()
         {
             Ok(_) => panic!("expected InsufficientBacking"),
             Err(err) => assert_eq!(err.reference_height, reference_height),
@@ -603,12 +647,16 @@ mod tests {
             record(21, 250, 900, MintLineageOutput::ExternalTransfer),
         ];
 
-        let designated =
-            BackingSet::from_spendable(&post_first_bond, 0, reference_height, last_sweep_height)
-                .designate_backing()
-                .expect("the change record is eligible");
+        let designated = BackingSet::from_spendable(
+            &post_first_bond,
+            PSlot::from_raw(0),
+            reference_height,
+            last_sweep_height,
+        )
+        .designate_backing()
+        .expect("the change record is eligible");
         assert_eq!(
-            designated.record().gindex,
+            designated.record().gindex.to_raw(),
             20,
             "the first emission's backing is the bond-post change record, \
              not the more recent rung-3 tranche"
@@ -636,29 +684,34 @@ mod tests {
             // never backing-eligible.
             record(3, 150, 400, MintLineageOutput::ExternalTransfer),
         ];
-        let reserved: std::collections::BTreeSet<u64> = [1].into_iter().collect();
+        let reserved: std::collections::BTreeSet<GlobalOutputIndex> =
+            [GlobalOutputIndex::from_raw(1)].into_iter().collect();
 
         // Premise: without the exclusion, the sweep selects the backing.
         let plain = sweep_funding_outputs(
             &SpentRecordsDurablyPruned::for_test(),
             &records,
-            0,
+            PSlot::from_raw(0),
             &reserved,
-            0,
+            AtomicUnits::ZERO,
             reference_height,
         )
         .expect("plain sweep succeeds");
         assert!(
-            plain.records.iter().any(|r| r.gindex == 2),
+            plain.records.iter().any(|r| r.gindex.to_raw() == 2),
             "premise: the backing is sweep-eligible, so the exclusion below is load-bearing"
         );
 
-        let designated =
-            BackingSet::from_spendable(&records, 0, reference_height, last_sweep_height)
-                .designate_backing()
-                .expect("eligible records exist");
+        let designated = BackingSet::from_spendable(
+            &records,
+            PSlot::from_raw(0),
+            reference_height,
+            last_sweep_height,
+        )
+        .designate_backing()
+        .expect("eligible records exist");
         assert_eq!(
-            designated.record().gindex,
+            designated.record().gindex.to_raw(),
             2,
             "premise: gindex 2 is the backing"
         );
@@ -667,12 +720,12 @@ mod tests {
             .fee_sweep(
                 &SpentRecordsDurablyPruned::for_test(),
                 &records,
-                0,
+                PSlot::from_raw(0),
                 &reserved,
-                0,
+                AtomicUnits::ZERO,
             )
             .expect("fee sweep succeeds");
-        let fee_gindexes: Vec<u64> = fee.records.iter().map(|r| r.gindex).collect();
+        let fee_gindexes: Vec<u64> = fee.records.iter().map(|r| r.gindex.to_raw()).collect();
         assert!(
             !fee_gindexes.contains(&2),
             "the designated backing never appears in the fee selection (Q11)"
@@ -707,20 +760,24 @@ mod tests {
             record(3, 999, 900, MintLineageOutput::ExternalTransfer), // immature at 1_000
         ];
 
-        let designated =
-            BackingSet::from_spendable(&records, 0, reference_height, last_sweep_height)
-                .designate_backing()
-                .expect("eligible record exists");
+        let designated = BackingSet::from_spendable(
+            &records,
+            PSlot::from_raw(0),
+            reference_height,
+            last_sweep_height,
+        )
+        .designate_backing()
+        .expect("eligible record exists");
         let fee = designated
             .fee_sweep(
                 &SpentRecordsDurablyPruned::for_test(),
                 &records,
-                0,
+                PSlot::from_raw(0),
                 &Default::default(),
-                0,
+                AtomicUnits::ZERO,
             )
             .expect("fee sweep succeeds");
-        let fee_gindexes: Vec<u64> = fee.records.iter().map(|r| r.gindex).collect();
+        let fee_gindexes: Vec<u64> = fee.records.iter().map(|r| r.gindex.to_raw()).collect();
         assert_eq!(
             fee_gindexes,
             vec![2],

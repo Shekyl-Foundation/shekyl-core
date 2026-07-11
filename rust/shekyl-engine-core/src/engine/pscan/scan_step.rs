@@ -217,13 +217,13 @@ impl std::fmt::Debug for BondPostMatch {
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct FundingOutputMatch {
     /// The owning persona's slot ordinal (selects the re-derivation keys).
-    pub(crate) p_slot: u32,
+    pub(crate) p_slot: shekyl_types::PSlot,
     /// Hash of the transaction carrying the output.
-    pub(crate) tx_hash: [u8; 32],
+    pub(crate) tx_hash: shekyl_types::TxHash,
     /// The output's index within its transaction — the KEM derivation index.
     pub(crate) index_in_transaction: u64,
     /// The global (chain-wide) output index — the curve-tree leaf position.
-    pub(crate) gindex: u64,
+    pub(crate) gindex: shekyl_types::GlobalOutputIndex,
     /// The on-chain output key `O` (compressed Edwards bytes).
     pub(crate) output_key: [u8; 32],
     /// The on-chain amount commitment point `C` (compressed Edwards bytes) —
@@ -642,10 +642,10 @@ pub(crate) fn run_dual_extractor(
                 let spendable_height = eligible_height(height, wo.additional_timelock());
 
                 funding_outputs.push(FundingOutputMatch {
-                    p_slot: *slot,
-                    tx_hash,
+                    p_slot: shekyl_types::PSlot::from_raw(*slot),
+                    tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
                     index_in_transaction: wo.index_in_transaction(),
-                    gindex: wo.index_on_blockchain(),
+                    gindex: shekyl_types::GlobalOutputIndex::from_raw(wo.index_on_blockchain()),
                     output_key: wo.key().compress().to_bytes(),
                     commitment: wo.commitment().calculate().compress().to_bytes(),
                     ciphertext_x25519: ct.x25519,
@@ -851,7 +851,11 @@ mod tests {
             assert_eq!(by_epoch.get(&delta.epoch), Some(&delta.amount));
         }
         for rec in &res.funding_outputs {
-            assert_eq!(rec.p_slot, 7, "record carries the scanner's slot tag");
+            assert_eq!(
+                rec.p_slot,
+                shekyl_types::PSlot::from_raw(7),
+                "record carries the scanner's slot tag"
+            );
             assert_eq!(rec.height, BlockHeight::from_raw(20_001));
             assert_ne!(rec.output_key, [0u8; 32], "output key populated");
             assert_ne!(rec.commitment, [0u8; 32], "commitment populated");

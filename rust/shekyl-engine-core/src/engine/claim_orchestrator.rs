@@ -66,7 +66,8 @@ use shekyl_curve_tree::{
     ReferenceBlock, TwoSidedRefusal,
 };
 use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
-use shekyl_types::{BlockHeight, ChainCount, PCanonicalId};
+use shekyl_types::{BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId};
+use shekyl_units::AtomicUnits;
 
 use super::backing_set::{BackingSet, InsufficientBacking};
 use super::bond_assembly::{BondAssemblyError, FundingInputContext, SpentRecordsDurablyPruned};
@@ -133,7 +134,7 @@ pub(crate) struct ClaimAssemblyContext<'a> {
     /// (`PScanState::bond_post_matches`) — the last-sweep-height source.
     pub bond_posts: &'a [BondPostRecord],
     /// Live gindex reservations (outputs already committed to in-flight txs).
-    pub reserved: &'a BTreeSet<u64>,
+    pub reserved: &'a BTreeSet<GlobalOutputIndex>,
     /// The claimant persona's canonical id — the fetch's single query field
     /// and the bond-post ownership filter.
     pub p_canonical_id: PCanonicalId,
@@ -250,7 +251,7 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     let last_sweep = last_confirmed_sweep_height(ctx.bond_posts, &ctx.p_canonical_id);
     let backing = BackingSet::from_spendable(
         provable.iter().copied(),
-        handle.p_slot().0,
+        handle.p_slot(),
         gather_tip,
         last_sweep,
     )
@@ -261,9 +262,9 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     let selection = backing.fee_sweep(
         ctx.pruning_landed,
         provable.iter().copied(),
-        handle.p_slot().0,
+        handle.p_slot(),
         ctx.reserved,
-        ctx.fee,
+        AtomicUnits::from_raw(ctx.fee),
     )?;
 
     // 5. One reference snapshot, every membership path against it.
@@ -284,7 +285,7 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     let assemble_inputs: Vec<AssembleInput> = std::iter::once(backing.record())
         .chain(selection.records.iter())
         .map(|r| AssembleInput {
-            gindex: Gindex(r.gindex),
+            gindex: Gindex(r.gindex.to_raw()),
             output_key: r.output_key,
             commitment: r.commitment,
         })
@@ -455,7 +456,7 @@ mod tests {
         let records = [at, later];
         let kept = provable_records(&records, reference_height);
         assert_eq!(
-            kept.iter().map(|r| r.gindex).collect::<Vec<_>>(),
+            kept.iter().map(|r| r.gindex.to_raw()).collect::<Vec<_>>(),
             vec![7],
             "inclusive at the boundary; the one-block-later record is filtered"
         );
@@ -546,7 +547,10 @@ mod tests {
             let source = source_at_count(chain_height, vec![], vec![snapshot(2)]);
 
             let stake = spawn_over(&[0], &[], None);
-            let handle = stake.mint_handle(PSlot(0)).await.expect("slot 0 held");
+            let handle = stake
+                .mint_handle(PSlot::from_raw(0))
+                .await
+                .expect("slot 0 held");
             let keys = derive_bundle(0);
             let p_id = shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey(
                 &keys

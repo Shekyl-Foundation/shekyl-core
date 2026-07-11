@@ -203,6 +203,9 @@ pub(crate) mod block_fetch;
 /// funding-sweep policy over the sealed `PFundingOutputRecord` set (GF-4b
 /// sweep semantics), and the assemble path's typed failure surface.
 pub(crate) mod bond_assembly;
+/// WI-2 §3.3 Engine-side `assemble_bond_post` orchestrator (public halves +
+/// persist-before-return via an independent `PendingPostStore`).
+pub(crate) mod bond_orchestrator;
 /// PR-3's Engine-side emission-claim orchestration (`EMISSION_CLAIM_BUILDER.md`
 /// §8): the fetch → designate → fee-sweep → path-assembly →
 /// `AssembleEmissionClaim` pipeline that prepares the operands the

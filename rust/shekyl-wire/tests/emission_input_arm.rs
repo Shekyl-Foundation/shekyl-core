@@ -152,7 +152,8 @@ fn unknown_input_tag_still_kills_whole_tx_parse() {
 
     // Locate the emission arm's serialization inside the tx blob and flip its
     // leading tag byte. The arm bytes (tag + varint len + 0x04-leading payload)
-    // are long and high-entropy enough to be unique in this fixture.
+    // are long and distinctive enough to be unique in this fixture — nothing
+    // else in the tx emits a 96-byte 0xBB run.
     let mut arm_bytes = Vec::new();
     emission.write(&mut arm_bytes).expect("write emission arm");
     let pos = blob

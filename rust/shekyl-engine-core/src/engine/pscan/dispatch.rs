@@ -112,10 +112,6 @@ impl<S: PendingSealStore> PendingPostStore<S> {
     /// Read the current block under the lock (a serialized snapshot; no
     /// seal write). The WI-2 assemble path reads the derived reservation
     /// set ([`PendingPostBlock::reserved_gindexes`]) through this.
-    // Transient — the consumer is the WI-2 Engine-side assemble orchestrator
-    // (WI-2's remaining slice, out of WI-3 scope per the design doc §1), which
-    // reads reservations through this shared handle.
-    #[allow(dead_code)]
     pub(crate) async fn read<R>(
         &self,
         f: impl FnOnce(&PendingPostBlock) -> R,
@@ -578,7 +574,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         // discipline: no wall-clock, no txid, no identity).
         #[cfg(feature = "gf7-hooks")]
         self.observer.record(TimelineEvent::BondPostDispatched {
-            persona: u64::from(post.p_slot),
+            persona: u64::from(post.p_slot.to_raw()),
             at: tip.to_raw(),
         });
 
@@ -678,7 +674,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
 
-    use shekyl_types::TxHash;
+    use shekyl_types::{PSlot, TxHash};
 
     use super::*;
 
@@ -765,13 +761,17 @@ mod tests {
 
     fn post(persona_byte: u8, anchor: u64, offset: u64, gindexes: &[u64]) -> PendingBondPost {
         PendingBondPost {
-            p_slot: u32::from(persona_byte),
+            p_slot: PSlot::from_raw(u32::from(persona_byte)),
             persona: persona(persona_byte),
             tx_bytes: vec![persona_byte, 0xBE, 0xEF],
             entry_offset_blocks: 3,
             bond_post_offset_blocks: offset,
             anchor_t0: BlockHeight::from_raw(anchor),
-            funding_gindexes: gindexes.to_vec(),
+            funding_gindexes: gindexes
+                .iter()
+                .copied()
+                .map(shekyl_types::GlobalOutputIndex::from_raw)
+                .collect(),
             state: PendingPostState::Pending,
         }
     }
@@ -1138,7 +1138,7 @@ mod tests {
         assert_eq!(block.posts().len(), 1, "the record is held, not removed");
         assert_eq!(
             block.reserved_gindexes(),
-            [7u64].into(),
+            [shekyl_types::GlobalOutputIndex::from_raw(7)].into(),
             "the funding reservation stays intact (funds-safety over liveness)"
         );
     }

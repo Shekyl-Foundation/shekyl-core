@@ -74,7 +74,9 @@ use shekyl_p_transport::TorSocksEndpoint;
 
 use super::block_source::DaemonBlockSource;
 use super::cadence::FixedRateSchedule;
-use super::dispatch::{BondBroadcast, DispatchConfig, DispatchDriver, PendingSealStore};
+use super::dispatch::{
+    BondBroadcast, DispatchConfig, DispatchDriver, PendingPostStore, PendingSealStore,
+};
 use super::task::{run_pscan_task, PScanConfig, PScanStore};
 use crate::engine::bond_assembly::PBoundBytes;
 use crate::engine::posture::BroadcastPosture;
@@ -252,7 +254,7 @@ where
 /// Failures of the file-backed store: either the `WalletFile` seal/open layer, or
 /// postcard (de)serialization of the [`PScanState`] body.
 #[derive(Debug, thiserror::Error)]
-enum WalletFilePScanStoreError {
+pub(crate) enum WalletFilePScanStoreError {
     /// The `.wallet.pscan` seal/open (envelope, atomic write, swap-refusal, I/O).
     #[error("P-scan file: {0}")]
     File(#[from] WalletFileError),
@@ -307,6 +309,51 @@ where
     }
 }
 
+/// Construct an independent [`PendingPostStore`] over the engine's pending
+/// seal + the shared `pending_write_lock` (WI-2 F-1).
+///
+/// Mirrors the `start_pscan_with` construction (`WalletFilePendingSealStore`
+/// plus lock clone into [`PendingPostStore::new`]) so the assemble path
+/// serializes against the dispatch driver **without** hoisting a store handle
+/// onto [`Engine`]. That hoist was rejected (RPITIT / layering / ownership
+/// cycle). Gate-11 stays green: this factory reuses the sole seal impl; a new
+/// `.save_pending_posts(` call site would be a failure.
+#[allow(clippy::type_complexity)]
+pub(crate) fn pending_post_store_for_engine<S, D, L, E, R, P>(
+    engine: Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
+    write_lock: Arc<tokio::sync::Mutex<()>>,
+) -> PendingPostStore<WalletFilePendingSealStore<S, D, L, E, R, P>>
+where
+    S: EngineSignerKind + Send + Sync + 'static,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+    Engine<S, D, L, E, R, P, WalletFile>: Send + Sync,
+{
+    PendingPostStore::new(WalletFilePendingSealStore { engine }, write_lock)
+}
+
+/// Load the sealed [`PScanState`] for assemble (funding records), reusing the
+/// same file-backed store as the pscan task. Fail-closed on corrupt / version
+/// mismatch — assemble must not invent an empty funding set over a bad seal.
+#[allow(clippy::type_complexity)]
+pub(crate) async fn load_pscan_state_for_engine<S, D, L, E, R, P>(
+    engine: Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
+) -> Result<Option<PScanState>, WalletFilePScanStoreError>
+where
+    S: EngineSignerKind + Send + Sync + 'static,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+    Engine<S, D, L, E, R, P, WalletFile>: Send + Sync,
+{
+    WalletFilePScanStore { engine }.load().await
+}
+
 /// The production [`PendingSealStore`] (WI-3 §3.3 / §5 gate 11): same live-file
 /// reach as [`WalletFilePScanStore`] — through the engine arc under a brief read
 /// lock — delegating the seal to [`WalletFile::save_pending_posts`] /
@@ -314,7 +361,7 @@ where
 /// and the sole `PayloadKind::PendingPostBlockPostcard` encode site. This type
 /// adds no second write path; it only carries bytes to that one.
 #[allow(clippy::type_complexity)] // same self-arc shape as `WalletFilePScanStore`.
-struct WalletFilePendingSealStore<S, D, L, E, R, P>
+pub(crate) struct WalletFilePendingSealStore<S, D, L, E, R, P>
 where
     S: EngineSignerKind,
     D: DaemonEngine,
@@ -331,7 +378,7 @@ where
 /// body (including the fail-closed version refusal — a v1 seal under the v2
 /// binary surfaces here, per the WI-3 schema-v2 discipline).
 #[derive(Debug, thiserror::Error)]
-enum WalletFilePendingStoreError {
+pub(crate) enum WalletFilePendingStoreError {
     /// The `.wallet.pending` seal/open (envelope, atomic write, swap-refusal, I/O).
     #[error("pending-post file: {0}")]
     File(#[from] WalletFileError),
@@ -829,7 +876,7 @@ mod tests {
         // reopen — the open path spawns the StakeEngine for a staker.
         let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create wallet");
         engine
-            .persist_bond_record(PSlot(3))
+            .persist_bond_record(PSlot::from_raw(3))
             .expect("persist bond record");
         engine.close(&creds).expect("close created wallet");
 
@@ -905,7 +952,7 @@ mod tests {
 
         let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create wallet");
         engine
-            .persist_bond_record(PSlot(0))
+            .persist_bond_record(PSlot::from_raw(0))
             .expect("persist bond record");
         engine.close(&creds).expect("close created wallet");
         let engine = Engine::<SoloSigner>::open_full(
