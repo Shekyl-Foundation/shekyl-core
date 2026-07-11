@@ -169,6 +169,21 @@ sustainability is unaffected by the recalibration.
   fail-closed; post-genesis migration cost recorded as wipe+resync).
   *Was target: V3.0 (pre-genesis).*
 
+- **Block-height representation unification at the WI-2 anchoring seam**
+  (surfaced 2026-07-11, WI-2 orchestrator review). The anchoring path still
+  traffics in three block-height representations bridged by hand:
+  `select_reference_height(u64) -> Option<u64>` takes/returns bare `u64`, and
+  the orchestrator converts `shekyl_curve_tree`'s `CtBlockHeight` →
+  `shekyl_types::BlockHeight` via `BlockHeight::from_raw(reference.height.0)`.
+  Each `.0` / `from_raw` / raw-`u64` hop is an un-typed boundary where a
+  wrong-domain height passes unnoticed. Unify on one `BlockHeight` newtype
+  (or make the curve-tree height a transparent alias of
+  `shekyl_types::BlockHeight`) so the anchoring path is typed end-to-end and
+  the raw-`u64` helper signature disappears. Cross-crate
+  (`shekyl-curve-tree` ↔ `shekyl-types`), no wire/consensus impact — pure
+  internal type hygiene. Deferred from the WI-2 orchestrator PR as beyond its
+  validation surface (rule 19). *Target: V3.1+.*
+
 - **Economics C2a′ layer gate — stacked silent failures; layer verdicts
   currently vacuous** (surfaced 2026-07-04 when PR #241's hardened rustup
   install turned the first layer of it loud). Three independent silent
