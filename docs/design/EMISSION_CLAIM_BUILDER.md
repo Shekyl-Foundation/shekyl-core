@@ -796,6 +796,63 @@ self-check (claims-leg coverage boundary recorded in the module doc),
 the staleness comparison, and the remaining `emission_source.rs`
 staging allows.
 
+**PR 2 review round (2026-07-10, high `/code-review` + Copilot).**
+Three confirmed correctness defects fixed, plus the cleanup set:
+
+1. **Size budget re-based on the binding relay bound.** The claims
+   budget was derived from `MAX_TX_SIZE` (the 1 MB parse cap); the
+   binding constraint is the per-tx **weight limit**
+   (`get_transaction_weight_limit` = min-block-weight/2 − 600 =
+   149 400 B) — a batch bounded against the parse cap could pass
+   assembly and the size-blind step-7 self-check yet be permanently
+   unsubmittable, re-assembled identically on every retry until the
+   window's rewards expired. `shekyl_wire::TX_WEIGHT_LIMIT` now pins
+   the C++ value (const-asserted); the non-claims reserve is re-derived
+   against it (48 KiB: 16 vouts + KEM ciphertexts, two max-depth fee
+   inputs + hybrid auths, Bp+ + its weight clawback), and a const
+   assert keeps the budget above the vin's fixed cryptographic legs.
+2. **Verify step 2's join bound applied at derivation.** The
+   derivation never read the record's `E_join`; a retire-then-rejoin
+   record (join newer than the frozen rows') admitted a pre-join epoch
+   and wedged the whole batch behind the cause-blind `SelfCheckFailed`
+   until the offender aged out of the window. Fixed by extracting the
+   predicate (`epoch_is_before_join`, called by the verify body and the
+   derivation — one definition), a `BeforeJoin` skip, and a KAT whose
+   premise arm proves the skip is load-bearing.
+3. **The settled/height pair is decode-enforced consistent.** The
+   builder's window verdicts consumed the daemon's
+   `current_settled_epoch` while the self-check recomputed settled from
+   `chain_height`; an inconsistent reply split the two boundary systems
+   (deflated ⇒ whole-batch `SelfCheckFailed`; inflated ⇒ claimable
+   epochs silently forfeited as `WindowExpired`). PR 1's decode now
+   rejects the inconsistent pair as `Malformed`
+   (`settlement_epoch_at_height`, the daemon's own derivation). The
+   Copilot finding rides the same posture: a window epoch with no close
+   height (`(E+1)·SEB` overflow) is `SourceInvalid`, not a transient
+   `NotFinalized`.
+
+Cleanups in the same round: the scratch-clone oracle **retired** (the
+V3.1 FOLLOWUPS extraction landed early on its named reopening trigger —
+a second consumer needed the top boundary read-only; all boundary
+verdicts now resolve through read-only predicates, purity pin deleted);
+the steps-4/5 recompute single-sourced (`claimant_reward_share`, the
+shared evaluation head both the verify body and the derivation call);
+`ClaimableEpochs` now borrows the source's bond context and carries the
+canonical rows built in the admitting scope (stale derived/source
+pairing is unrepresentable; the `snapshot_idx`/`expect` panic surface
+for PR 3's refetch loop is gone, and the per-epoch views are built
+once); the vin has **one** construction site (`claims_vin` — the sizing
+measurement, the emitted content, and the KAT vins cannot drift) with
+the bound-or-split loop popping legs off a single vin instead of
+rebuilding per iteration; `size_deferred` narrowed to `Vec<u64>` (the
+verdict is definitional); the module-wide staging `dead_code` allow
+narrowed to item level (rule 45); the two-bond/two-shard KAT fixture
+shape single-sourced (`EMISSION_KAT_SHAPE` in the retention crate,
+consumed by both the verify KATs and the builder KATs); and the two
+intentional-design calls documented in place (batch-cap check after the
+recompute = whole-window loud validation; the linear first-position
+shard scan = byte parity with verify's lookup).
+
 Round-2 closure criteria: the §7.3 field enumeration ratified (including
 the four exclusions), the §7.2 window-batch shape ratified, the §7.4
 transport/shape/timing pins ratified, and the §8 chain shape accepted.
