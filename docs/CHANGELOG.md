@@ -51,9 +51,29 @@
   (fingerprint-not-zero-cover routes to redesign, never larger `K`);
   "fixed pre-gate schedule" pinned to {count, completion-before-gate}
   only (a schedule-fixes-times reading would manufacture member 7's
-  repulsion signature). **Final Gate-7 gates are §17.8's** (margin
-  re-derivation; per-channel reachability cross-check); §17 reopens
-  only on a new channel construction.
+  repulsion signature). Round R7 (§17.9, 2026-07-11) reopened R6's
+  landing and **re-closed §17 load-bearing**: the maintenance
+  commitment was a ratified founder-differential mechanism produced
+  by a category error — "founder" carried two referents, the
+  anonymous founder-user population and the consensus-mechanized
+  **Foundation backstop** (reward-invisible, Market-excluded;
+  verified at source) — resolved by a §14-head terminology pin
+  (three referents, three tokens; operator usages scrubbed). The
+  commitment is withdrawn on two independent grounds (categorical:
+  founders are users and owe no continuity; anti-masking: the
+  obligation's coupling is masked only by population flow, thinnest
+  exactly when the floor is load-bearing). A claimed
+  exit-correlated-posting channel was refuted at source
+  (epoch-quantized entry, `RELEASE_COOLDOWN_EPOCHS = 2` decorrelation
+  headroom, no repost mechanism) and withdrawn. Finding 1 re-homed to
+  population-level churn calibration: the §16.2 margin derives
+  against **adversarial max net attrition over the full pre-gate
+  window** (never expected churn); Q3-B re-seated on the same
+  statistical basis. **Final Gate-7 gates are §17.9's**
+  (adversarial-max-attrition margin; per-channel reachability); §17
+  reopens only against the termination bar — a construction
+  defeating both the categorical rule and the substrate's
+  decorrelation.
 
 - **daemon RPC: Axum now enforces `--rpc-max-connections*` + reports a live
   `rpc_connections_count`.** A purpose-built Rust connection layer

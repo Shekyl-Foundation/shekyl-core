@@ -8387,13 +8387,40 @@ one place to confirm each item's relationship to the wallet stack.
   (wording pin): "fixed pre-gate schedule" fixes **{count, completion-before-gate}
   only** — inter-post timing stays P1's i.i.d. draw; a schedule-fixes-times reading
   would manufacture member 7's repulsion signature on founders (interlock recorded).
-  **Final Gate-7 gates (superseding R5's formulation): `K_COVER` does not discharge
-  until (a) the margin is re-derived against the maintenance window with the breach
-  residual named in the calibration record, and (b) the reachability check has run
-  against the union of per-channel floors including the descriptor channel's
-  classification.** §17 reopens only on a **new channel construction** (a named
-  observable the §17.6 lens has not classified, with an attack shape) — lens
-  restatement against closed text does not reopen.
+  **Round R7 conducted (2026-07-11, §17.9) — R6's landing reopened and §17 RE-CLOSED,
+  load-bearing:** the R6 maintenance commitment was a **ratified founder-differential
+  mechanism** produced by a category error — "founder" was carrying two referents, the
+  anonymous founder-user population (market members who accrue and claim, §14.3.4) and
+  the **Foundation backstop** (E-2/gate-5 object: complete tree, one nominal floor
+  bond, excluded from `Market`, reward-invisible — verified at source,
+  `consensus_state.rs` / `REWARD_EMISSION_LEG.md` §4.2 / `ARCHIVAL_BOND_GATE4.md`
+  §8.1; zero accrual severs it from the privacy model, so its persistence is
+  infrastructure, never an observable against the herd). Landed: §14-head
+  **terminology pin** (three referents, three tokens — founder persona / Foundation
+  backstop / founding operators; operator usages scrubbed). P2 premise 3 **withdrawn**
+  on two independent sufficient grounds: (1) categorical — any founder-unique
+  obligation is differential conduct in a system whose thesis is founders-are-users;
+  (2) fails-in-its-own-design-case — the obligation's coupling is masked only by
+  population flow, thinnest exactly when the floor is load-bearing (Q3-A). An
+  exit-correlated-posting channel claimed en route was **refuted at source and
+  withdrawn** (epoch-quantized entry, `RELEASE_COOLDOWN_EPOCHS = 2` with pinned
+  "Unbond decorrelation headroom", no repost mechanism — population flow, not
+  trigger-response), so the reopen rests on the stronger categorical trigger, not the
+  recorded new-channel criterion. Finding 1 re-homed a third and final time:
+  **population-level churn calibration** over the whole anonymous pre-gate herd,
+  margin derived against **adversarial max net attrition over the full pre-gate
+  window** (the inducible-forfeiture adversary, more in scope with no replacement
+  backstop) — never expected churn; no founder obligation; no live sensor; M2 intact.
+  Q3-B re-seated on the same basis (guaranteed floor dissolves; population statistics
+  all the way down; premises 1–2 survive as one-shot plans).
+  **Final Gate-7 gates (superseding R6's formulation): `K_COVER` does not discharge
+  until (a) the margin is derived against adversarial max net attrition over the full
+  pre-gate window and carried in the calibration record, and (b) the reachability
+  check has run against the union of per-channel floors including the descriptor
+  channel's classification.** §17 reopens only against the §17.9 termination bar —
+  a construction defeating **both** the categorical rule and the substrate's own
+  decorrelation (epoch quantization + cooldown headroom): the real-work bar, not
+  lens restatement.
   **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
   GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
   seams, not just entry).**

@@ -204,7 +204,7 @@ The standoff already found the worst case is a **low-activity principal**
 measured funding-axis link there is ≈0.32 with inversion — above the
 `N=10` absolute anchor, because `N` is not 10 there. This is the named
 pre-seal residual **L12 / GATE6 caveat (iii)** (thinnest genesis traffic +
-longest-lived foundational `P`s coincide), not a WI-4 discovery.
+longest-lived founder `P`s coincide), not a WI-4 discovery.
 
 WI-4 therefore grades **two regimes and reports them distinctly**:
 
@@ -831,6 +831,34 @@ the §14.4 measurement runs** (same §3.5 ordering discipline as the main
 gate: bounds in this section are committed by this document ahead of any
 partition-arm code or numbers).
 
+**Terminology pin (R7, §17.9): three referents, three tokens — no
+shared word.** The ambiguity this pin removes let a fictitious attack
+be built twice (§17.9):
+
+- **Founder persona** — an anonymous early *user*: a market-member
+  staking persona that bonds pre-gate, accrues, and claims exactly as
+  any user does (§14.3.4 fact 2). This is the only referent of
+  "founder" in §§14–17: the population the timing family, the
+  strip-row floors, and the cover-thickness calibration protect.
+  Founder personas churn like users and owe no continuity (§17.9).
+- **Foundation backstop** — the consensus-mechanized data-loss
+  object, categorically outside the anonymity set: holds the
+  complete tree, posts one nominal floor bond, is excluded from
+  `Market` and reward-invisible by consensus (verified at source:
+  `consensus_state.rs` `market_member_at_epoch` returns `false` for
+  `is_foundation_complete_tree`; `FOUNDATION_EXCLUDED_FROM_MARKET`;
+  `REWARD_EMISSION_LEG.md` §4.2 / gate 5; `ARCHIVAL_BOND_GATE4.md`
+  §8.1). Zero accrual severs it from the privacy model at the root —
+  it has nothing on the income channel to hide and is not a member
+  of the set the calibration protects. Its persistence is what a
+  backstop is (infrastructure), never a cover property, and no
+  §14/§16 obligation attaches to it.
+- **Founding operators** — the humans/entity who run founder
+  personas and consent under P4. Never "the foundation" in this
+  record: that token is reserved for the backstop object above,
+  because operator↔object token collision is the reseed vector for
+  the §17.9 category error.
+
 ### 14.1 The two launch facts, and what they invert
 
 The §13.2 cold-start fail (`r = 3.54` under the panel) assumed genesis
@@ -915,27 +943,35 @@ it (§3.3's review-decision clause, exercised):
      repulsion signature, worn by founders. Interlock recorded (same
      discipline as the Q2-C/Q2-B contingency): a revert-by-reading
      here arms a detector against the population it protects.
-  3. *Persistence commitment* — founder genesis bonds remain **active
-     through gate-open**: serving (no forfeiture-triggering offline
-     burst), unslashed, un-exited. Verified against the lifecycle
-     substrate (`PRINCIPAL_STAKE_LIFECYCLE.md`): unbond is
-     voluntary-only, but offline forfeiture and slashing are
-     involuntary removal paths, so persistence is a **posture
-     commitment, not a structural fact**. Any founder bond
-     exit/forfeit/slash pre-gate is a named cover-model re-run trigger
-     (§16.2 obligation 3's monotone floor rests on this commitment).
-     *Reshaped at R6 (§17.8 finding 1) from never-lose-a-bond to a
-     **maintenance commitment**:* hold at least the calibrated floor
-     of live founder bonds through gate-open, **replacing** attrited
-     personas (voluntary exit, key/infra loss, abandonment,
-     unremediated slash) within a named replacement lag — replacement
-     bonds are always postable, and a replacement persona joins the
-     same pre-gate tenure class, adding no new observable. The
-     never-lose form was unsatisfiable against the involuntary paths
-     and, worse, unmonitorable-by-consensus (see the §16.2
-     snapshot-by-construction record); the maintenance form is the
-     strongest commitment the substrate can actually verify off-chain
-     and the one the §16.2 margin is now derived against.
+  3. *~~Persistence commitment~~ — **withdrawn at R7 (§17.9)**.* The
+     premise passed through two forms — never-lose-a-bond (R4;
+     unsatisfiable against the involuntary removal paths verified in
+     `PRINCIPAL_STAKE_LIFECYCLE.md`) and a maintenance commitment
+     (R6; hold live cover ≥ floor, replace attrited personas within
+     a named lag) — and both forms share the defect that kills them:
+     **an obligation unique to founders is founder-differential
+     conduct in a system whose thesis is that founders are users.**
+     Two independent sufficient grounds for the withdrawal, either
+     alone dispositive:
+     *(a) Categorical* — founders churn like users and owe no
+     continuity; any continuity obligation contradicts the P1
+     production-path-identical posture at the behavioral layer even
+     where no chain channel carries it.
+     *(b) Fails-in-its-own-design-case* — the obligation's coupling
+     class (posting responsive to attrition) is masked only by
+     surrounding population flow (entry/exit are epoch-quantized and
+     cooldown-decorrelated — see §17.9's substrate verification),
+     and that masking is thinnest exactly when the herd is thin,
+     which by Q3-A is precisely when the floor would be load-bearing.
+     A mechanism that is loudest exactly where it must work is not
+     mitigated by its quiet case; it is deleted.
+     Floor maintenance moves entirely into calibration: §16.2
+     obligation 3's margin derives against adversarial max net
+     attrition of the whole anonymous pre-gate herd, founders as
+     ordinary members. No founder behavior premise remains here;
+     premises 1 and 2 survive because a one-shot pre-gate plan
+     ({count, completion-before-gate}) is not an ongoing
+     differential obligation and creates no reactive coupling.
 - **P3 — The shard schedule is the structural gate.** Privacy-critical
   staking is **not available** — not merely not-incentivized — until the
   cover threshold is met. "No reason to stake early" leaves an over-eager
@@ -972,7 +1008,7 @@ it (§3.3's review-decision clause, exercised):
 
 Founder personas minted at genesis are the longest-lived; a genesis
 linkage on them is permanent, including retroactively (years later, when
-the foundation's genesis stake is a matter of public interest). P4 is the
+the founding operators' genesis stake is a matter of public interest). P4 is the
 answer, and it is load-bearing: "not concerned at first" is insufficient —
 the consent is to **permanent** attributability of these specific
 personas. Founders who need private staking positions create them later,
@@ -1008,7 +1044,7 @@ covered by P4 (attributable by consent).
 The §14.3.2 partition adversary sorts founders from users **using the
 observable channel**. This wargame is the adversary who gets the labels
 **for free** — voluntary disclosure, compelled disclosure, an opsec
-failure that identifies which personas were the foundation's. Two facts
+failure that identifies which personas were the founding operators'. Two facts
 make this the sharpest attack on the posture:
 
 1. **The collapse is retroactive.** Chain timelines are permanent. A
@@ -1572,6 +1608,19 @@ smallest-cohort regime of that separate leak is never entered either.
      redesign (more founder/structural cover, or a revised target),
      decided pre-genesis by the cover-model run, never discovered
      live.
+     *Re-seated at R7 (§17.9): the guaranteed floor dissolves with
+     the persistence/maintenance commitment's withdrawal.* Q3-B's
+     "which founder?" question resolves against the anonymous
+     reading (the §14 terminology pin): founder personas churn like
+     users, so there is no committed floor beneath the herd — and by
+     Q3-A founders ≈ the pre-gate herd anyway, so cover is
+     **population statistics all the way down**, founders as the
+     motivated-to-post subset. Well-definedness re-derives on the
+     population process under the adversarial-max-net-attrition
+     margin (the R7 margin block below); the Foundation backstop is
+     not a floor term (not in the anonymity set). The non-existence
+     behavior is unchanged and now also catches the case where no
+     `K` reaches target under the margin.
      *Sharpened again at R5 (§17.7 finding 2): the floor is a
      calibration-time premise with no runtime re-check, by
      construction.* The M1 gate reads `frozen_shard_count < K_COVER`
@@ -1607,30 +1656,45 @@ smallest-cohort regime of that separate leak is never entered either.
      priority-1 security refuses the sensor, so the freshness
      compensation must live entirely calibration-side, forever, and
      the margin is the load-bearing element of the gate by design.
-     The re-derivation decomposes the defense:
-     1. *No static margin covers permanent attrition* (the worst
-        case is total loss). The commitment reshapes to
-        **maintenance** (P2 premise 3 as amended): live founder
-        cover held at or above the calibrated floor through
-        gate-open, attrited personas replaced within a named lag.
-     2. *The margin re-derives against the maintenance window:*
-        maximum achievable attrition — adversary-induced (off-chain
-        DoS around challenge windows forcing forfeiture; challenges
-        themselves are deterministic beacon replays an honest online
-        founder cannot fail) plus natural — **within the detection +
-        replacement lag**, the only interval attrition is live under
-        a kept commitment. Derived a-priori under the gating-lemma
-        discipline, committed before the calibration is accepted.
-     3. *Maintenance breach is the named irreducible residual:*
-        post-genesis there is no consensus lever (`K_COVER` frozen;
-        the sensor deliberately structural per M2), so an
-        unremediated breach means the gate opens against sub-floor
-        live cover. The residual is monitored off-chain (the
-        maintenance commitment is exactly the observable the
-        foundation can attest), named here so it is priced rather
-        than discovered; the only structural alternative — a
-        live-cover gate input — re-arms the M2 DoS sensor and is
-        rejected on the priority hierarchy.
+     *Re-derived a third and final time at R7 (§17.9) — the R6
+     maintenance-commitment shape is withdrawn.* R6 compensated the
+     cumulative-vs-live divergence with an obligation on founders
+     (restore attrited cover within a named lag); §17.9 establishes
+     that any founder-differential obligation is itself a posture
+     defect, and — the sharper ground — that the obligation fails in
+     its own design case: its observable coupling is masked only by
+     surrounding population flow, which is thinnest exactly when the
+     floor is thin and the obligation would be load-bearing (Q3-A).
+     The R7 shape carries no founder obligation at all:
+     1. *The floor is population-statistical, not committed.*
+        Founder personas are ordinary members of the anonymous
+        pre-gate herd: they churn like users and owe no continuity.
+        `K_COVER` calibration prices live cover at gate-open as a
+        population process over the whole anonymous herd — entries,
+        exits, forfeitures — with founders as the motivated-to-post
+        subset, never a guaranteed floor beneath it.
+     2. *The margin derives against adversarial max net attrition
+        over the full pre-gate window* — not expected churn, and not
+        any restoration-lag window. The governing adversary is
+        §17.7 finding 2's inducible-forfeiture attacker (off-chain
+        DoS around challenge windows; challenges themselves are
+        honest-server-unfailable beacon replays), who is *more* in
+        scope now that no replacement obligation backstops an
+        induced exit: the margin is the sole floor-maintenance
+        mechanism, so it is sized for the adversary who depresses
+        the floor, not the mean. Derived a-priori under the
+        gating-lemma discipline, committed before the calibration
+        is accepted.
+     3. *Reachability under the margin is the existence check.* If
+        no `K_COVER` reaches the thickness target once the
+        adversarial-max-attrition margin is applied, that is the
+        named non-existence outcome — posture redesign pre-genesis
+        (more structural cover, revised target), never a degraded
+        open and never a founder obligation reintroduced to paper
+        the gap. The Foundation backstop (§14 head) is irrelevant
+        to this floor: it is not in the anonymity set and
+        contributes nothing to herd thickness; no commitment about
+        cover attaches to it.
 
 ### 16.3 M2 — cover-gate proxy choice
 
@@ -1838,16 +1902,22 @@ three §16.10 questions (Q1: §17.5/§18; Q2/Q3: §17.6); the standing
 review's adjudication of §17.6 (2026-07-10) concurred on every outcome
 and strengthened the premises with six findings, all landed in place.
 **§§14–16 are closed; the §14.4 implementation round is released**,
-carrying the obligations enumerated in §17.4 and the two pinned
-premises of §17.6 (floor persistence, count `K`-independence) with
-their reopen criteria. Round R5 (§17.7, same day) adjudicated the R4
-landing itself: four findings landed in place (nothing reopens).
-Round R6 (§17.8, same day) adjudicated the R5 landing and **closed
-§17**: three findings landed in place, and the final Gate-7 gates
-are §17.8's — the maintenance-window margin re-derivation and the
-per-channel reachability cross-check (superseding §17.7's gate
-formulation). §17 reopens only on a new channel construction, per
-the §17.8 closure criterion.
+carrying the obligations enumerated in §17.4 and the pinned premises
+of §17.6 with their reopen criteria. Round R5 (§17.7, same day)
+adjudicated the R4 landing itself: four findings landed in place
+(nothing reopens). Round R6 (§17.8, same day) adjudicated the R5
+landing and closed §17 — but that closure was over text containing
+the maintenance commitment, and Round R7 (§17.9, 2026-07-11)
+reopened R6's landing specifically: the commitment was a ratified
+founder-differential mechanism (a category error — Foundation-backstop
+properties applied to anonymous founder-users; see the §14-head
+terminology pin), withdrawn on two independent grounds, with
+finding 1 re-homed to population-level churn calibration and Q3-B
+re-seated on the same basis. **§17 is closed as of R7 (§17.9); the
+final Gate-7 gates are §17.9's** (adversarial-max-net-attrition
+margin; per-channel reachability). §17 reopens only against the
+§17.9 termination bar: a construction that defeats both the
+categorical rule and the substrate's decorrelation.
 
 ### 17.1 Attack 1 — `r < 2` under the panel that reaches `1.86`
 
@@ -2387,6 +2457,121 @@ note, a sound reviewer with no new shape is indistinguishable from
 no reviewer, and the record prefers a dry well named to a §17.9
 manufactured for cadence.
 
+*Superseded at R7 (§17.9): this round's finding-1 landing — the
+maintenance commitment and the detection-plus-replacement-lag
+margin — ratified a founder-differential mechanism and is
+withdrawn; the closure above was closed-on-that-text and therefore
+reopened and re-closed by §17.9, which also restates the Gate-7
+gates. The structural facts of this round (cumulative-vs-live
+divergence; no bond-exit decrement path; the deliberate
+derive-don't-cache disposition per M2; finding 2's per-channel
+reachability and finding 3's wording pin) all survive.*
+
+### 17.9 Round R7 (2026-07-11): the category error — founders are users, and the record now says so with three tokens
+
+**Position.** The standing review's fourth pass, opened by its own
+retraction: an R7 linkability construction (peel a replacement
+persona back to its operator via an A′-replaces-A succession
+relationship) was found void — **no succession relationship exists
+in the mechanism**; a persona unbonds and is gone, the next is a new
+user, and the operator link is precisely what per-persona bonds
+exist to destroy. The construction had presupposed the linkage it
+then "discovered." But the word that smuggled it in — *replacement*
+— was ratified text: R6's maintenance commitment. The finding was a
+correct smell with a wrong mechanism, and tracing it surfaced a
+category error that had let a fiction be built twice.
+
+**The category error.** "Founder" was carrying two referents across
+the record's edges: the **anonymous founder-user population**
+(market members who accrue and claim — the population §§14–17
+protect) and the **Foundation backstop** (the E-2/gate-5 object:
+complete tree, one nominal floor bond, excluded from `Market`,
+reward-invisible — verified at source, `consensus_state.rs`
+`market_member_at_epoch` / `FOUNDATION_EXCLUDED_FROM_MARKET`,
+`REWARD_EMISSION_LEG.md` §4.2, `ARCHIVAL_BOND_GATE4.md` §8.1). The
+two cannot be one object: §14.3.4 fact 2 *requires* founders to
+claim exactly as users do, and the backstop *cannot* claim by
+consensus. Zero accrual severs the backstop from the privacy model
+at the root — it is not in the set the calibration protects, so its
+persistence is infrastructure, not an observable against the herd.
+The R6 maintenance commitment applied a backstop property
+(persist, replace-on-loss) to the anonymous-user object; the R7
+attack needed both an anonymous operator *and* a continuity
+obligation on one object — a pairing the architecture never
+produces. Landed: the §14-head **terminology pin** (three
+referents, three tokens: founder persona / Foundation backstop /
+founding operators), with the operator usages scrubbed (§14.3.1,
+§14.3.4) so no token is shared.
+
+**The withdrawal (P2 premise 3 deleted).** Two independent
+sufficient grounds, either alone dispositive:
+
+1. *Categorical.* Any obligation unique to founders is
+   founder-differential conduct in a system whose thesis is that
+   founders are indistinguishable from users. Founders churn like
+   users and owe no continuity. (Pre-staged redundant personas —
+   the pre-provisioning alternative — are rejected as strictly
+   worse: more founder-specific behavior, a louder fingerprint.)
+2. *Fails-in-its-own-design-case.* The obligation's coupling class
+   (posting responsive to attrition) is masked only by surrounding
+   population flow — and that masking is thinnest exactly when the
+   herd is thin, which by Q3-A is precisely when the floor is
+   load-bearing. A mechanism that is loudest exactly where it must
+   work is not "clean except under a caveat"; it is deleted. This
+   is the disposition's basis, not its asterisk.
+
+**The withdrawn channel, on the record.** Before the withdrawal
+landed, an exit-correlated-replacement-posting channel was claimed
+as a new construction satisfying the §17.8 reopen criterion. It
+was refuted at source and is withdrawn: entry effects are
+epoch-quantized (`E_join = height / SETTLEMENT_EPOCH_BLOCKS`,
+market membership from `E_join + 1`), exit is smeared across
+`RELEASE_COOLDOWN_EPOCHS = 2` (~28 days) — a constant whose pinned
+rationale names "Unbond decorrelation headroom" — and **no repost
+mechanism exists** in the lifecycle. A smeared-and-quantized exit
+followed by a boundary-landing post amid the window's flow is
+population flow, not trigger-response. **The reopen therefore rests
+on the stronger trigger, not the recorded one:** a ratified
+founder-differential mechanism that shouldn't exist. The
+thin-population edge of the masking argument is not a residual — it
+is ground 2 above.
+
+**Finding 1, re-homed a third and final time.** The
+cumulative-vs-live gap (§17.8, structural facts intact) resolves by
+**population-level calibration**: `K_COVER` priced over the whole
+anonymous pre-gate herd's churn process, founders as ordinary
+members, margin derived against **adversarial max net attrition
+over the full pre-gate window** (the §17.7-finding-2 inducible
+adversary, *more* in scope now that no replacement obligation
+backstops an induced exit) — never expected churn, which undersizes
+against the adversary who depresses the floor. No founder
+obligation; no live sensor; M2 intact. Q3-B re-seated on the same
+basis (§16.2 cohort row): the guaranteed floor dissolves, cover is
+population statistics all the way down, and the non-existence
+behavior now also catches margin-inclusive unreachability.
+Premises 1 and 2 survive — a one-shot {count,
+completion-before-gate} plan creates no reactive coupling.
+
+**Disposition and closure.** §17 was closed at R6 on text
+containing the maintenance commitment — closed-on-a-fiction, which
+is worse than open — so R6's landing specifically reopened, and
+**§17 re-closes on this round, load-bearing rather than by
+exhaustion.** **Final Gate-7 gates (superseding §17.8's):**
+`K_COVER` does not discharge into the frozen constant until (a)
+the margin is derived against adversarial max net attrition over
+the full pre-gate window and carried in the calibration record,
+and (b) the reachability check has run against the union of
+per-channel floors including the descriptor channel's
+classification (§17.8 finding 2, unchanged). Termination is
+belt-and-suspenders: the categorical rule forbids
+founder-differential obligations, and the substrate's own
+decorrelation (epoch quantization + cooldown headroom) blunts the
+coupling class such obligations would produce even if the rule
+were violated. A §17.10 must construct **against the substrate** —
+defeat both the rule and the quantization with a named observable
+and an attack shape — which is the real-work bar, not the
+lens-restatement bar.
+
 ## 18. Distinct-position round R3 (2026-07-06): the completeness gap the mean-vs-max disposition left open
 
 **Position.** Standing adversarial reviewer, distinct from the bound's
@@ -2493,7 +2678,7 @@ reward emission, drain is an observation), so cumulative exposure is
 `p ≈ 0.19` is not the exposure of a persona observed across dozens of
 events. This **compounds the cold-start finding and is worse than it**:
 cold-start is thin cover at birth; accumulation is exposure growing over
-the whole life — and the **same foundational/founder personas** are
+the whole life — and the **same founder personas** are
 long-lived by construction, so they suffer both.
 
 **Disposition.** Grade **cumulative lifetime linkability** for a
