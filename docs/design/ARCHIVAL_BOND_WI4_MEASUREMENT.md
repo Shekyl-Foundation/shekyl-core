@@ -3630,3 +3630,32 @@ any is unmet. The synthesis grade is marked PROVISIONAL as all §7
 conclusions are; leg (b) **closes** only at the §19.1 sealing form
 (receipt-timestamped live-driver re-run), which consumes the same
 statistic and the same bound.
+
+### 19.7 Hermeticity pin: the leg does not follow harness knobs (rule-21 shape)
+
+Pinned 2026-07-11 (PR #292 review). `run_wallclock_leg()` is
+deliberately hermetic: fixed seed, fixed trials, and its own §19.4 N
+set — none of it drawn from the gf7 harness's `RunConfig`. That is a
+committed-surface property, not an oversight: letting a harness knob
+move the leg would re-grade the a-priori-committed §19.4 grid, an
+after-the-fact bar change.
+
+Today the coupling is inert — no CLI knob moves `cfg.n`/`cfg.seed`;
+the gf7 arm always grades at `RunConfig::default()` (n = 10), so both
+sides of the §19.6 conjunction cover N = 10. The trap arms the moment
+someone wires an archival `--n` (or `--seed`) knob into a harness or
+the rewritten wallet CLI: the block arm moves with the flag, the leg
+does not, and the failure is silent — a mixed-N conjunction reported
+as a single-N verdict.
+
+- **Rejection.** The leg does not read harness config. The hermetic
+  choice is correct: the §19.4 surface must not float on a CLI flag.
+- **Reopening criterion.** A PR that makes `cfg.n`/`cfg.seed`
+  harness-movable (sim CLI or wallet-rewrite CLI knob inventory).
+- **Re-evaluation shape.** That knob PR must dispose of this pin
+  explicitly: either thread the config through the leg (accepting the
+  §19.4 re-grade, with a fresh a-priori commitment) or document the
+  knob as leg-invariant so the mixed-N conjunction is read as such.
+  Silence is not a disposition. Mirrored at the
+  `run_wallclock_leg()` doc comment
+  (`rust/shekyl-staking-sim/src/wallclock_leg.rs`).

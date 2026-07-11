@@ -8493,6 +8493,15 @@ one place to confirm each item's relationship to the wallet stack.
   timestamping by the sim-owned observer over the live dispatch driver, consuming the same
   statistic and bound. Leg (b) closes only there; the in-model pass is the
   continue/redesign checkpoint, not the seal.
+  **Hermeticity pin (rule 21, PR #292 review — trips on the archival CLI-knob work):**
+  `run_wallclock_leg()` is deliberately hermetic (fixed seed/trials/N; the a-priori-committed
+  §19.4 surface must not float on a harness flag). Inert today — no CLI knob moves the gf7
+  `cfg.n`/`cfg.seed`. **Arms when** a PR makes those harness-movable (sim CLI or the
+  wallet-rewrite archival knob inventory): the block arm then moves with the flag, the leg
+  does not, and a mixed-N conjunction would silently report as a single-N verdict. That knob
+  PR must dispose of the pin explicitly — thread config through the leg (fresh a-priori
+  commitment) or document the knob as leg-invariant. Spec home:
+  [`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](design/ARCHIVAL_BOND_WI4_MEASUREMENT.md) §19.7.
   **Target: pre-genesis (blocks the seal).** See
   [`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](design/ARCHIVAL_BOND_WI4_MEASUREMENT.md) §13 (result),
   §14 (launch posture), [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md)

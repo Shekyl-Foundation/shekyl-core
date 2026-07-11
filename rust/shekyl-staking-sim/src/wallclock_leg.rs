@@ -329,6 +329,21 @@ fn run_controls(rng: &mut SplitMix64, trials: u32) -> (Vec<WallclockControl>, bo
 }
 
 /// Run the leg-(b) arm and compute its verdict (measurement doc §19.6).
+///
+/// Deliberately hermetic: fixed `SEED`, fixed `TRIALS`, and the sweep's
+/// own N set — none of it drawn from the gf7 harness's `RunConfig`. The
+/// sweep surface (including N ∈ {10, 20, 50}) is the a-priori-committed
+/// §19.4 grid; letting a harness knob move it would be an after-the-fact
+/// bar change. Today no CLI knob moves `cfg.n`/`cfg.seed` — the gf7 arm
+/// always grades at `RunConfig::default()` (n = 10), so both sides of
+/// the §9.9 conjunction cover N = 10 and there is no live mismatch.
+///
+/// Rule-21 pin (§19.7): if a future harness wiring makes `cfg.n`/`cfg.seed`
+/// movable, this leg intentionally does NOT move with it. The knob PR must
+/// either thread the config through here (accepting that a CLI flag
+/// re-grades the committed §19.4 surface — probably wrong) or document the
+/// knob as leg-invariant so a mixed-N conjunction is read as such, never
+/// as a single-N verdict.
 pub fn run_wallclock_leg() -> WallclockLegReport {
     run_with(TRIALS, SEED)
 }
