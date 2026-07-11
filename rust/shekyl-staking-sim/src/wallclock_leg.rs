@@ -346,10 +346,25 @@ fn run_with(trials: u32, seed: u64) -> WallclockLegReport {
     // ceiling must FAIL the bound. If the observer cannot break half
     // dispersal with 52 posts, it is weaker than the channel and this
     // run's production pass counts for nothing.
-    let observer_strength_ok = rows
+    //
+    // Non-emptiness guard (PR #292 review): `.all()` over an empty filter
+    // is vacuously true, so a `sweep()` edit that drops the ceiling row
+    // would silently *disarm* the tripwire in exactly the scenario it was
+    // built for (the production pass is expected by construction of the
+    // draw — §19.5 — so a disarmed tripwire still grades PASS). The
+    // ceiling row's absence is a mis-built sweep surface, never a
+    // measurement outcome: fail loudly, same armed-gate discipline as the
+    // partition arm's `perms`-resolution guard.
+    let ceiling: Vec<&WallclockRow> = rows
         .iter()
         .filter(|r| r.dispersal_ms == TICK_MS / 2 && r.posts_per_persona == 52 && r.n == 10)
-        .all(|r| !r.clears_bound);
+        .collect();
+    assert!(
+        !ceiling.is_empty(),
+        "§19.5 tripwire row (T/2, m=52, N=10) missing from the sweep surface — \
+         the strength check has no trigger"
+    );
+    let observer_strength_ok = ceiling.iter().all(|r| !r.clears_bound);
 
     let gate_rows_pass = rows
         .iter()
@@ -425,6 +440,27 @@ mod tests {
             "production posture unexpectedly fails in-model"
         );
         assert!(r.pass, "leg-b verdict expected to pass: {}", r.status);
+    }
+
+    /// PR #292 review: the §19.5 tripwire must have a live trigger. Pin
+    /// the ceiling row's presence in the graded surface directly, so a
+    /// future `sweep()` edit that drops it fails here loudly — otherwise
+    /// `production_passes_and_sub_tick_cliff_exists`'s
+    /// `observer_strength_ok` assertion would itself pass vacuously and
+    /// the tripwire would disarm with no test noticing.
+    #[test]
+    fn strength_tripwire_row_exists() {
+        let r = small();
+        assert_eq!(
+            r.rows
+                .iter()
+                .filter(|row| row.dispersal_ms == TICK_MS / 2
+                    && row.posts_per_persona == 52
+                    && row.n == 10)
+                .count(),
+            1,
+            "§19.5 ceiling row (T/2, m=52, N=10) must appear exactly once in the sweep"
+        );
     }
 
     /// The zero-dispersal anchor must be catastrophic at any accumulation —
