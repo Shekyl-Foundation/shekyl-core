@@ -876,7 +876,7 @@ mod tests {
         // reopen — the open path spawns the StakeEngine for a staker.
         let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create wallet");
         engine
-            .persist_bond_record(PSlot(3))
+            .persist_bond_record(PSlot::from_raw(3))
             .expect("persist bond record");
         engine.close(&creds).expect("close created wallet");
 
@@ -952,7 +952,7 @@ mod tests {
 
         let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create wallet");
         engine
-            .persist_bond_record(PSlot(0))
+            .persist_bond_record(PSlot::from_raw(0))
             .expect("persist bond record");
         engine.close(&creds).expect("close created wallet");
         let engine = Engine::<SoloSigner>::open_full(

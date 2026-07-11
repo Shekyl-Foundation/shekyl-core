@@ -226,7 +226,7 @@ mod tests {
             assert_eq!(g.ledger.staking.p_slot, 0);
         }
 
-        let slot = PSlot(7);
+        let slot = PSlot::from_raw(7);
         let ticket = engine
             .persist_bond_record(slot)
             .expect("persist bond record");
@@ -299,7 +299,7 @@ mod tests {
 
         // Become a staker at slot 3; the cursor advances to max(0, 3 + 1) = 4.
         engine
-            .persist_bond_record(PSlot(3))
+            .persist_bond_record(PSlot::from_raw(3))
             .expect("persist bond record");
         engine.close(&creds).expect("close created wallet");
 
@@ -324,7 +324,7 @@ mod tests {
 
         // The bonded slot is held — reachable for unbonding after the seed is gone.
         stake
-            .mint_handle(PSlot(3))
+            .mint_handle(PSlot::from_raw(3))
             .await
             .expect("bonded slot 3 is held");
 
@@ -332,7 +332,7 @@ mod tests {
         let cursor = 4u32;
         for offset in 0..=ARCHIVAL_PERSONA_LOOKAHEAD {
             stake
-                .mint_handle(PSlot(cursor + offset))
+                .mint_handle(PSlot::from_raw(cursor + offset))
                 .await
                 .unwrap_or_else(|e| panic!("cursor+{offset} must be held, got {e:?}"));
         }
@@ -341,7 +341,7 @@ mod tests {
         let beyond = cursor + ARCHIVAL_PERSONA_LOOKAHEAD + 1;
         assert!(
             matches!(
-                stake.mint_handle(PSlot(beyond)).await,
+                stake.mint_handle(PSlot::from_raw(beyond)).await,
                 Err(StakeEngineError::LookaheadExhausted { .. })
             ),
             "slot beyond the lookahead window must not be held"
@@ -350,7 +350,7 @@ mod tests {
         // A slot below the cursor that is not bonded is not held either.
         assert!(
             matches!(
-                stake.mint_handle(PSlot(2)).await,
+                stake.mint_handle(PSlot::from_raw(2)).await,
                 Err(StakeEngineError::LookaheadExhausted { .. })
             ),
             "an unbonded slot below the cursor must not be held"

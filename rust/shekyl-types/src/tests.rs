@@ -13,6 +13,8 @@ use super::*;
 fn edge_round_trip() {
     assert_eq!(BlockHeight::from_raw(42).to_raw(), 42);
     assert_eq!(GlobalOutputIndex::from_raw(7).to_raw(), 7);
+    assert_eq!(PSlot::from_raw(3).to_raw(), 3);
+    assert_eq!(PSlot::from_raw(3).index(), 3);
     assert!(BlockHeight::ZERO.is_zero());
     assert!(!BlockCount::from_raw(1).is_zero());
 

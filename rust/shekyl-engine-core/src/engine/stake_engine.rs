@@ -463,7 +463,7 @@ impl PersonaIdentity {
     /// Project the public identity out of a (secret) persona bundle.
     fn from_keys(keys: &ArchivalPKeys) -> Self {
         Self {
-            p_slot: PSlot(keys.p_slot),
+            p_slot: PSlot::from_raw(keys.p_slot),
             bond_id: keys.hybrid_bond_id().clone(),
         }
     }
@@ -805,7 +805,7 @@ impl StakeEngine {
         // block-relative offsets, no wall-clock, no identities.
         #[cfg(feature = "gf7-hooks")]
         {
-            let persona = u64::from(handle_slot.0);
+            let persona = u64::from(handle_slot.to_raw());
             self.observer.record(TimelineEvent::EntryGapDrawConsumed {
                 persona,
                 window_blocks: DEFAULT_ENTRY_GAP.as_blocks(),
@@ -877,11 +877,11 @@ impl StakeEngine {
                 // Slot-tagged so the extractor can attribute each recovered
                 // output to its owning persona (WI-2 D-A1 funding records).
                 scanners.push((
-                    slot.0,
+                    slot.to_raw(),
                     guaranteed_scanner_for_persona(keys).map_err(ScanSetupError::Scanner)?,
                 ));
                 let id = persona_canonical_id(keys).map_err(ScanSetupError::CanonicalId)?;
-                known_personas.insert(id, slot.0);
+                known_personas.insert(id, slot.to_raw());
             }
         }
         Ok((scanners, known_personas))
@@ -2210,10 +2210,12 @@ mod tests {
     /// Spawn a handle over a pre-derived derive-forward set: `held` slots, of
     /// which `bonded` carry a live bond, with optional initial `active` slot.
     fn spawn_over(held: &[u32], bonded: &[u32], active: Option<u32>) -> StakeEngineHandle {
-        let bundles: BTreeMap<PSlot, ArchivalPKeys> =
-            held.iter().map(|&s| (PSlot(s), derive_bundle(s))).collect();
-        let bonded: BTreeSet<PSlot> = bonded.iter().map(|&s| PSlot(s)).collect();
-        StakeEngineHandle::spawn(bundles, bonded, active.map(PSlot))
+        let bundles: BTreeMap<PSlot, ArchivalPKeys> = held
+            .iter()
+            .map(|&s| (PSlot::from_raw(s), derive_bundle(s)))
+            .collect();
+        let bonded: BTreeSet<PSlot> = bonded.iter().map(|&s| PSlot::from_raw(s)).collect();
+        StakeEngineHandle::spawn(bundles, bonded, active.map(PSlot::from_raw))
     }
 
     /// The genesis-frozen `hybrid_bond_id` canonical bytes for a slot, computed
@@ -2238,7 +2240,7 @@ mod tests {
         handle: &StakeEngineHandle,
         slot: u32,
     ) -> Result<PersonaIdentity, StakeEngineError> {
-        let h = handle.mint_handle(PSlot(slot)).await?;
+        let h = handle.mint_handle(PSlot::from_raw(slot)).await?;
         handle.activate_persona(h).await
     }
 
@@ -2369,7 +2371,7 @@ mod tests {
         let identity = mint_and_activate(&handle, 0)
             .await
             .expect("activation of a held persona");
-        assert_eq!(identity.p_slot, PSlot(0));
+        assert_eq!(identity.p_slot, PSlot::from_raw(0));
         assert_eq!(
             bond_id_bytes(&identity),
             oracle0,
@@ -2381,7 +2383,7 @@ mod tests {
             .await
             .expect("active query succeeds")
             .expect("a persona is active after activation");
-        assert_eq!(active.p_slot, PSlot(0));
+        assert_eq!(active.p_slot, PSlot::from_raw(0));
         assert_eq!(bond_id_bytes(&active), oracle0);
     }
 
@@ -2412,11 +2414,11 @@ mod tests {
     async fn mint_unheld_slot_is_lookahead_exhausted() {
         let handle = spawn_over(&[0, 1], &[], None);
         let err = handle
-            .mint_handle(PSlot(7))
+            .mint_handle(PSlot::from_raw(7))
             .await
             .expect_err("slot 7 is not held");
         assert!(
-            matches!(err, StakeEngineError::LookaheadExhausted { requested } if requested == PSlot(7)),
+            matches!(err, StakeEngineError::LookaheadExhausted { requested } if requested == PSlot::from_raw(7)),
             "expected LookaheadExhausted{{7}}, got {err:?}"
         );
     }
@@ -2434,14 +2436,14 @@ mod tests {
             bond_id_bytes(&id1),
             "distinct slots project distinct personas"
         );
-        assert_eq!(id1.p_slot, PSlot(1));
+        assert_eq!(id1.p_slot, PSlot::from_raw(1));
 
         let active = handle
             .active_persona()
             .await
             .expect("active query")
             .expect("a persona is active");
-        assert_eq!(active.p_slot, PSlot(1));
+        assert_eq!(active.p_slot, PSlot::from_raw(1));
         assert_eq!(bond_id_bytes(&active), bond_id_bytes(&id1));
     }
 
@@ -2458,11 +2460,11 @@ mod tests {
             .expect("rotate to 1 (wipes ephemeral 0)");
 
         let err = handle
-            .mint_handle(PSlot(0))
+            .mint_handle(PSlot::from_raw(0))
             .await
             .expect_err("retired ephemeral slot 0 was wiped");
         assert!(
-            matches!(err, StakeEngineError::LookaheadExhausted { requested } if requested == PSlot(0)),
+            matches!(err, StakeEngineError::LookaheadExhausted { requested } if requested == PSlot::from_raw(0)),
             "expected LookaheadExhausted{{0}} after ephemeral wipe, got {err:?}"
         );
 
@@ -2471,7 +2473,7 @@ mod tests {
             .await
             .expect("active query")
             .expect("slot 1 active");
-        assert_eq!(active.p_slot, PSlot(1));
+        assert_eq!(active.p_slot, PSlot::from_raw(1));
     }
 
     // Typed contract #4 — rotation keeps a retired *bonded* persona resident:
@@ -2508,7 +2510,10 @@ mod tests {
 
         // Mint a handle for slot 0 up front, then rotate via a *different*
         // handle, leaving the slot-0 handle straddling the rotation.
-        let stale = handle.mint_handle(PSlot(0)).await.expect("mint slot 0");
+        let stale = handle
+            .mint_handle(PSlot::from_raw(0))
+            .await
+            .expect("mint slot 0");
         mint_and_activate(&handle, 1)
             .await
             .expect("rotate to 1 (advances generation)");
@@ -2593,7 +2598,7 @@ mod tests {
         // Terminal + non-retryable across the message surface.
         for attempt in 0..3 {
             let err = handle
-                .mint_handle(PSlot(0))
+                .mint_handle(PSlot::from_raw(0))
                 .await
                 .expect_err("post-death mint fails");
             assert!(
@@ -2741,13 +2746,13 @@ mod tests {
             .await
             .expect("activate slot 0");
         let h0 = handle
-            .mint_handle(PSlot(0))
+            .mint_handle(PSlot::from_raw(0))
             .await
             .expect("mint handle for slot 0");
 
         // Forge a ticket for slot 1 (bypassing Engine::persist_bond_record
         // via the test-only constructor on PersistedBondTicket).
-        let ticket_for_slot_1 = PersistedBondTicket::__test_only_forge(PSlot(1));
+        let ticket_for_slot_1 = PersistedBondTicket::__test_only_forge(PSlot::from_raw(1));
 
         let holdings = HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
@@ -2762,9 +2767,9 @@ mod tests {
             matches!(
                 err,
                 StakeEngineError::SlotMismatch {
-                    handle_slot: PSlot(0),
-                    ticket_slot: PSlot(1),
-                }
+                    handle_slot,
+                    ticket_slot,
+                } if handle_slot == PSlot::from_raw(0) && ticket_slot == PSlot::from_raw(1)
             ),
             "expected SlotMismatch(0, 1), got {err:?}"
         );
@@ -2793,8 +2798,9 @@ mod tests {
         }
 
         let recorded = Arc::new(Mutex::new(Vec::new()));
-        let bundles: BTreeMap<PSlot, ArchivalPKeys> =
-            [(PSlot(0), derive_bundle(0))].into_iter().collect();
+        let bundles: BTreeMap<PSlot, ArchivalPKeys> = [(PSlot::from_raw(0), derive_bundle(0))]
+            .into_iter()
+            .collect();
         let handle = StakeEngineHandle {
             actor: StakeEngine::spawn(StakeEngineArgs {
                 bundles,
@@ -2807,10 +2813,10 @@ mod tests {
         };
 
         let h0 = handle
-            .mint_handle(PSlot(0))
+            .mint_handle(PSlot::from_raw(0))
             .await
             .expect("mint handle for slot 0");
-        let ticket = PersistedBondTicket::__test_only_forge(PSlot(0));
+        let ticket = PersistedBondTicket::__test_only_forge(PSlot::from_raw(0));
         let holdings = HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: vec![7, 42],
@@ -3026,7 +3032,9 @@ mod tests {
 
         assert_eq!(
             handle.retire_bonded_persona(witness).await.expect("retire"),
-            RetireOutcome::Retired { slot: PSlot(0) }
+            RetireOutcome::Retired {
+                slot: PSlot::from_raw(0)
+            }
         );
 
         // Gone now → a fresh witness for the same persona is a no-op.
@@ -3056,7 +3064,9 @@ mod tests {
         .expect("eligible");
         assert_eq!(
             handle.retire_bonded_persona(witness).await.expect("retire"),
-            RetireOutcome::SkippedActive { slot: PSlot(0) }
+            RetireOutcome::SkippedActive {
+                slot: PSlot::from_raw(0)
+            }
         );
     }
 
@@ -3106,8 +3116,10 @@ mod tests {
         /// Build a handle with an explicit self-cert mode (the bulk-test
         /// `spawn_over` uses `Skip`; the S6 tests need `RealOsRng`/`Degenerate`).
         fn spawn_with_self_cert(held: &[u32], mode: TestSelfCert) -> StakeEngineHandle {
-            let bundles: BTreeMap<PSlot, ArchivalPKeys> =
-                held.iter().map(|&s| (PSlot(s), derive_bundle(s))).collect();
+            let bundles: BTreeMap<PSlot, ArchivalPKeys> = held
+                .iter()
+                .map(|&s| (PSlot::from_raw(s), derive_bundle(s)))
+                .collect();
             let args = StakeEngineArgs {
                 bundles,
                 bonded: BTreeSet::new(),

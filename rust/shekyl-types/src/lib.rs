@@ -266,7 +266,7 @@ scalar_u64! {
 #[cfg_attr(feature = "schema", derive(::postcard_schema::Schema))]
 #[serde(transparent)]
 #[repr(transparent)]
-pub struct PSlot(pub u32);
+pub struct PSlot(u32);
 
 impl PSlot {
     /// Wrap a raw slot index at the typed-domain edge.
