@@ -17,7 +17,9 @@ use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub use shekyl_shard_visual::{CandidateRecipe, ShardAggregate};
+pub use shekyl_shard_visual::{
+    check_render_size, CandidateRecipe, ShardAggregate, MAX_RENDER_SIZE, MIN_RENDER_SIZE,
+};
 
 /// Errors a [`ShardSource`] can surface to the wallet.
 #[derive(Debug, Error)]
@@ -39,6 +41,9 @@ pub enum ShardSourceError {
     /// The backing store (fixtures today, archival registry later) failed.
     #[error("shard source backend error: {0}")]
     Backend(String),
+    /// Render edge length is outside the accepted preview range.
+    #[error("invalid render size {size}: must be in {min}..={max}")]
+    InvalidSize { size: u32, min: u32, max: u32 },
 }
 
 /// One entry in the shard list: a human label plus the full aggregate that
@@ -88,8 +93,45 @@ pub struct ShardRenderHandle {
     /// never serialized as JSON `null`.
     #[serde(with = "hex32_opt", default, skip_serializing_if = "Option::is_none")]
     pub hash_override: Option<[u8; 32]>,
-    /// Output edge length in pixels (square).
+    /// Output edge length in pixels (square). Must be in
+    /// [`MIN_RENDER_SIZE`]..=[`MAX_RENDER_SIZE`]; `0` is rejected on the wire
+    /// (renderer algorithms use `size - 1` and allocate `size²` pixels).
+    #[serde(deserialize_with = "deserialize_render_size")]
     pub size: u32,
+}
+
+fn deserialize_render_size<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let size = u32::deserialize(deserializer)?;
+    check_render_size(size).map_err(serde::de::Error::custom)?;
+    Ok(size)
+}
+
+impl ShardRenderHandle {
+    /// Build a handle after validating `size` against the preview bounds.
+    ///
+    /// Prefer this over struct-literal construction when `size` comes from
+    /// untrusted input outside the serde path (serde already rejects bad sizes).
+    pub fn new(
+        shard_id: u64,
+        shard_hash: [u8; 32],
+        hash_override: Option<[u8; 32]>,
+        size: u32,
+    ) -> Result<Self, ShardSourceError> {
+        check_render_size(size).map_err(|_| ShardSourceError::InvalidSize {
+            size,
+            min: MIN_RENDER_SIZE,
+            max: MAX_RENDER_SIZE,
+        })?;
+        Ok(Self {
+            shard_id,
+            shard_hash,
+            hash_override,
+            size,
+        })
+    }
 }
 
 /// Source of the shard list and per-shard aggregate lookup.
@@ -340,5 +382,24 @@ mod tests {
         let back: ShardRenderHandle = serde_json::from_str(&json).unwrap();
         assert_eq!(handle, back);
         assert!(back.hash_override.is_none());
+    }
+
+    #[test]
+    fn render_handle_serde_rejects_zero_size() {
+        let json = r#"{"shard_id":0,"shard_hash":"0000000000000000000000000000000000000000000000000000000000000000","size":0}"#;
+        let err = serde_json::from_str::<ShardRenderHandle>(json).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid render size"),
+            "expected size rejection, got {err}"
+        );
+    }
+
+    #[test]
+    fn render_handle_new_rejects_oversized() {
+        let too_big = MAX_RENDER_SIZE.saturating_add(1);
+        assert!(matches!(
+            ShardRenderHandle::new(0, [0u8; 32], None, too_big),
+            Err(ShardSourceError::InvalidSize { size, .. }) if size == too_big
+        ));
     }
 }
