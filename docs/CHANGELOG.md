@@ -34,8 +34,26 @@
   (gate reads `frozen_shard_count` only) with an a-priori
   induced-forfeiture thinning margin required; premise-2 OR struck
   (fixed pre-gate schedule only at gate-open); control witness type a
-  compile-time co-first-deliverable. Two R5 findings gate Gate 7's
-  `K_COVER` discharge.
+  compile-time co-first-deliverable. Round R6 (§17.8, same day)
+  adjudicated the R5 landing and **closed §17**: the R5 thinning
+  margin was sized for the transient (restoration-lag) window while
+  the cumulative-trigger/live-property divergence is permanent —
+  verified at source that `frozen_segment_count` has no bond-exit
+  decrement path (`segment_freeze.rs`), the derive-don't-cache
+  exception recorded as deliberate (a live-cover sensor is the M2
+  flood-then-withdraw DoS surface), P2's persistence commitment
+  reshaped to a **maintenance commitment** (replace attrited personas
+  within a named lag), the margin re-derived against the
+  detection-plus-replacement window, and maintenance breach named as
+  the irreducible post-genesis residual. Thickness-reachability now
+  runs against the union of per-channel floors with a
+  **profile-commonality check** on the descriptor channel
+  (fingerprint-not-zero-cover routes to redesign, never larger `K`);
+  "fixed pre-gate schedule" pinned to {count, completion-before-gate}
+  only (a schedule-fixes-times reading would manufacture member 7's
+  repulsion signature). **Final Gate-7 gates are §17.8's** (margin
+  re-derivation; per-channel reachability cross-check); §17 reopens
+  only on a new channel construction.
 
 - **daemon RPC: Axum now enforces `--rpc-max-connections*` + reports a live
   `rpc_connections_count`.** A purpose-built Rust connection layer

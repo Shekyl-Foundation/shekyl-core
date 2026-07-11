@@ -8361,9 +8361,39 @@ one place to confirm each item's relationship to the wallet stack.
   i.i.d.-re-bonding disjunct only holds where a user cohort exists. Finding 4: the
   control witness type is a **co-first-deliverable** with the gating lemma;
   first slice closes only when control configs are compile-time un-constructible from
-  the production founder-config constructor. **Gate-7 gates: `K_COVER` does not
-  discharge until the tier-channel strip floor + satisfiability pin are in the
-  calibration and the thinning margin is derived and carried.**
+  the production founder-config constructor.
+  **Round R6 conducted (2026-07-10, §17.8) — §17 CLOSED:** the standing review's third
+  pass, against the R5 landing; three findings, all derived from R5's own admissions
+  (convergence shape: 6 → 4 → 3). Finding 1 (high): the R5 thinning margin was sized
+  for the **transient** (restoration-lag) window, but the trigger quantity is
+  cumulative and the calibrated property is live — verified at source that
+  `frozen_segment_count(leaf_count)` has **no bond-exit decrement path**
+  (`segment_freeze.rs:71`; sole decrement is the `pop_block` reorg revert), so
+  permanent attrition (voluntary unbond, key/infra loss, abandonment, unremediated
+  slash) diverges the two for the entire pre-gate life. The derive-don't-cache
+  exception is recorded as **deliberate** — a live-cover gate input is the M2
+  flood-then-withdraw DoS sensor (§16.3), refused on priority 1, so the margin is the
+  gate's load-bearing element by design. Landed: P2's persistence commitment reshaped
+  to a **maintenance commitment** (live cover ≥ floor through gate-open; attrited
+  personas replaced within a named lag; replacements join the same tenure class); the
+  margin re-derived against **max attrition within the detection + replacement lag**;
+  maintenance breach named the **irreducible post-genesis residual** (no consensus
+  lever without re-arming the M2 sensor; monitored off-chain, priced in the record).
+  Finding 2 (medium-high): thickness-reachability must run against the **union of
+  per-channel floors** with non-existence armed per channel, and the descriptor
+  channel carries a **profile-commonality check** — a cover-mission-forced-distinctive
+  founder profile is a positive fingerprint no `K` can herd, classifying
+  fingerprint-not-zero-cover and routing to redesign, never a larger `K`. Finding 3
+  (wording pin): "fixed pre-gate schedule" fixes **{count, completion-before-gate}
+  only** — inter-post timing stays P1's i.i.d. draw; a schedule-fixes-times reading
+  would manufacture member 7's repulsion signature on founders (interlock recorded).
+  **Final Gate-7 gates (superseding R5's formulation): `K_COVER` does not discharge
+  until (a) the margin is re-derived against the maintenance window with the breach
+  residual named in the calibration record, and (b) the reachability check has run
+  against the union of per-channel floors including the descriptor channel's
+  classification.** §17 reopens only on a **new channel construction** (a named
+  observable the §17.6 lens has not classified, with an attack shape) — lens
+  restatement against closed text does not reopen.
   **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
   GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
   seams, not just entry).**

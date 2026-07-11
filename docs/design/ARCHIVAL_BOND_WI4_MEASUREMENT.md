@@ -906,7 +906,15 @@ it (§3.3's review-decision clause, exercised):
      exchangeability requires the user cover cohort that Q3-A proves
      absent at gate-open. The i.i.d.-re-bonding disjunct therefore
      holds only inside the thin window where that cohort exists; it
-     cannot discharge the premise at gate-open.
+     cannot discharge the premise at gate-open. *Wording pin (R6,
+     §17.8 finding 3):* the schedule fixes **{count,
+     completion-before-gate} only** — inter-post *timing* remains
+     P1's i.i.d. production draw, never scheduled times. A reading
+     that takes "fixed schedule" to fix post *times* manufactures
+     exactly the too-even spacing family member 7 detects: the
+     repulsion signature, worn by founders. Interlock recorded (same
+     discipline as the Q2-C/Q2-B contingency): a revert-by-reading
+     here arms a detector against the population it protects.
   3. *Persistence commitment* — founder genesis bonds remain **active
      through gate-open**: serving (no forfeiture-triggering offline
      burst), unslashed, un-exited. Verified against the lifecycle
@@ -916,6 +924,18 @@ it (§3.3's review-decision clause, exercised):
      commitment, not a structural fact**. Any founder bond
      exit/forfeit/slash pre-gate is a named cover-model re-run trigger
      (§16.2 obligation 3's monotone floor rests on this commitment).
+     *Reshaped at R6 (§17.8 finding 1) from never-lose-a-bond to a
+     **maintenance commitment**:* hold at least the calibrated floor
+     of live founder bonds through gate-open, **replacing** attrited
+     personas (voluntary exit, key/infra loss, abandonment,
+     unremediated slash) within a named replacement lag — replacement
+     bonds are always postable, and a replacement persona joins the
+     same pre-gate tenure class, adding no new observable. The
+     never-lose form was unsatisfiable against the involuntary paths
+     and, worse, unmonitorable-by-consensus (see the §16.2
+     snapshot-by-construction record); the maintenance form is the
+     strongest commitment the substrate can actually verify off-chain
+     and the one the §16.2 margin is now derived against.
 - **P3 — The shard schedule is the structural gate.** Privacy-critical
   staking is **not available** — not merely not-incentivized — until the
   cover threshold is met. "No reason to stake early" leaves an over-eager
@@ -1506,6 +1526,25 @@ smallest-cohort regime of that separate leak is never entered either.
      holdings-descriptor/tier stratum (§14.4 axis-completeness note)
      is calibrated at zero gate-open cover under the same rule, for
      the same tenure cause.
+     *Per-channel reachability (R6, §17.8 finding 2).* The
+     thickness-reachability check ("minimal `K` with thickness ≥
+     target") runs against the **union of per-channel floors** —
+     every named channel, not the timing floor alone — and the
+     non-existence behavior is armed **per channel**. The descriptor
+     channel additionally needs *classification* before it can be
+     floored: a zero-cover floor prices "does not help hide them"; a
+     cover-mission-forced distinctive profile is a **positive
+     per-founder fingerprint that no `K` can herd**. The cover model
+     therefore carries a **profile-commonality check** as a
+     calibration input: founder shard profiles at gate-open must be
+     common-user-profile-shaped (satisfiable by config per §17.7
+     finding 1 — many personas over small common shard sets, never
+     one `CompleteTree` persona). If the pre-gate archival-coverage
+     mission forces rare-shard service, the rare-shard-server set ≈
+     founders persists past gate-open as an active sort; the channel
+     then classifies fingerprint-not-zero-cover and routes to the
+     non-existence behavior (posture redesign, pre-genesis) — never
+     to a larger `K`, which cannot help.
    - **Gate-open cohort dynamics row (§17.3):** at gate-open, pent-up
      demand produces an entry cohort that covers *itself* — the first
      post-gate users are mutually covering, and that herd is
@@ -1545,19 +1584,53 @@ smallest-cohort regime of that separate leak is never entered either.
      re-check (verified at source, `k_cover.rs` /
      `segment_freeze.rs`). The re-run trigger is therefore
      **pre-genesis-actionable only** (adjust `K_COVER` before the
-     seal); post-genesis the levers are the `Slashed → Bonded`
-     re-bond path (`ARCHIVAL_BOND_GATE4.md` §4.2 — floor drops are
-     repairable while the shard clock ticks) and the **a-priori
-     thinning margin**: the calibration must carry a floor margin
-     above the induced-forfeiture adversary's maximum achievable
-     transient thinning (challenges are deterministic beacon replays
-     an honest online founder cannot fail, but off-chain DoS of
-     founder serving infrastructure around challenge windows induces
-     forfeiture — the involuntary path is adversary-influenceable at
-     the network layer), with the restoration lag (cooldown +
-     re-bond) as the exposure window. Margin derivation rides the
-     gating-lemma discipline: committed before the calibration is
-     accepted.
+     seal).
+     *Margin re-derived at R6 (§17.8 finding 1) — the R5 margin was
+     sized for the wrong window.* The trigger quantity is
+     **cumulative** (`frozen_segment_count(leaf_count)` is a pure
+     function of curve-tree growth with no decrement path on bond
+     exit — verified at source, `segment_freeze.rs:71`; the only
+     decrement is the `pop_block` reorg revert), while the calibrated
+     property is **live** herd thickness — so the two diverge under
+     any *permanent* attrition (voluntary unbond, key/infra loss,
+     abandonment, unremediated slash), and
+     `frozen_shard_count ≥ K_COVER` can hold at open while live
+     cover has attrited arbitrarily far below the calibration. The
+     R5 margin was parameterized on the cooldown-plus-re-bond
+     restoration lag, which covers only *transient* thinning;
+     permanent attrition's exposure window is the entire pre-gate
+     chain life. **Named plainly: this is a deliberate
+     derive-don't-cache exception, not an oversight** — the gate
+     reads the structural counter *because* a live-cover sensor is
+     the flood-then-withdraw DoS surface M2 refused (§16.3: "no live
+     participant estimate is ever read... no sensor to attack");
+     priority-1 security refuses the sensor, so the freshness
+     compensation must live entirely calibration-side, forever, and
+     the margin is the load-bearing element of the gate by design.
+     The re-derivation decomposes the defense:
+     1. *No static margin covers permanent attrition* (the worst
+        case is total loss). The commitment reshapes to
+        **maintenance** (P2 premise 3 as amended): live founder
+        cover held at or above the calibrated floor through
+        gate-open, attrited personas replaced within a named lag.
+     2. *The margin re-derives against the maintenance window:*
+        maximum achievable attrition — adversary-induced (off-chain
+        DoS around challenge windows forcing forfeiture; challenges
+        themselves are deterministic beacon replays an honest online
+        founder cannot fail) plus natural — **within the detection +
+        replacement lag**, the only interval attrition is live under
+        a kept commitment. Derived a-priori under the gating-lemma
+        discipline, committed before the calibration is accepted.
+     3. *Maintenance breach is the named irreducible residual:*
+        post-genesis there is no consensus lever (`K_COVER` frozen;
+        the sensor deliberately structural per M2), so an
+        unremediated breach means the gate opens against sub-floor
+        live cover. The residual is monitored off-chain (the
+        maintenance commitment is exactly the observable the
+        foundation can attest), named here so it is priced rather
+        than discovered; the only structural alternative — a
+        live-cover gate input — re-arms the M2 DoS sensor and is
+        rejected on the priority hierarchy.
 
 ### 16.3 M2 — cover-gate proxy choice
 
@@ -1768,10 +1841,13 @@ and strengthened the premises with six findings, all landed in place.
 carrying the obligations enumerated in §17.4 and the two pinned
 premises of §17.6 (floor persistence, count `K`-independence) with
 their reopen criteria. Round R5 (§17.7, same day) adjudicated the R4
-landing itself: four findings landed in place (nothing reopens), and
-two of them — the tier-channel strip floor with its satisfiability
-pin, and the a-priori involuntary-thinning margin — **gate Gate 7's
-`K_COVER` discharge**.
+landing itself: four findings landed in place (nothing reopens).
+Round R6 (§17.8, same day) adjudicated the R5 landing and **closed
+§17**: three findings landed in place, and the final Gate-7 gates
+are §17.8's — the maintenance-window margin re-derivation and the
+per-channel reachability cross-check (superseding §17.7's gate
+formulation). §17 reopens only on a new channel construction, per
+the §17.8 closure criterion.
 
 ### 17.1 Attack 1 — `r < 2` under the panel that reaches `1.86`
 
@@ -2213,6 +2289,103 @@ gates:** `K_COVER` does not discharge into the frozen constant until
 the calibration, and (b) the thinning margin is derived a-priori and
 carried. Findings 3 and 4 are premise tightening and a first-slice
 acceptance condition respectively.
+
+### 17.8 Round R6 (2026-07-10): closing round — the R5 margin was sized for the wrong window
+
+**Position.** The standing review's third pass, run against the R5
+landing. Concurrence on findings 3 and 4 (closed clean) and
+acceptance of the finding-1 retraction on the merits (shard
+descriptor ≠ coin wealth; the forced-tier trap does not exist).
+Three residuals, every one derived from R5's own admissions rather
+than uncovered surface — the convergence shape of a section closing
+(6 → 4 → 3 findings, severity concentrating).
+
+**Finding 1 (high, gates Gate 7) — cumulative trigger, live
+property, margin sized for the wrong window.** R5's escalation
+("snapshot by construction") created a sharper problem than the one
+it closed. The gate fires on *cumulative shards ever frozen*; the
+property `K_COVER` is calibrated to guarantee is *live herd
+thickness at gate-open*. Those diverge under any **permanent** exit
+— voluntary unbond, key/infra loss, abandonment, unremediated slash
+— each of which reduces live cover and leaves the counter untouched,
+so `frozen_shard_count ≥ K_COVER` can hold at open while live cover
+has attrited arbitrarily far below calibration. The R5 margin was
+parameterized on the *restoration lag* (transient thinning); the
+permanent-attrition exposure window is the entire pre-gate chain
+life, and the R4 re-run trigger cannot remedy it post-genesis
+(`K_COVER` frozen — nothing to adjust).
+
+- *Source verification (a), demanded by the adjudication:*
+  `frozen_segment_count(leaf_count)` is a pure function of
+  curve-tree leaf count (`segment_freeze.rs:71`); the sole decrement
+  is the `pop_block` reorg revert. **No bond-exit decrement path
+  exists.** Confirmed.
+- *Source verification (b):* the R5 §16.2 margin text was
+  parameterized on "restoration lag (cooldown + re-bond)".
+  **Undersized against its governing threat model.** Confirmed.
+- *The derive-don't-cache charge, answered with a design fact:* the
+  cache is **deliberate** — a live-cover gate input is precisely the
+  flood-then-withdraw DoS sensor M2 refused (§16.3: no live
+  participant estimate is ever read). Priority-1 security refuses
+  the sensor; the freshness compensation must live calibration-side
+  forever, which makes the margin the load-bearing element of the
+  gate *by design* — confirming the adjudication's conclusion that
+  its sizing must carry the lemma discipline against the permanent
+  window explicitly.
+
+Landed (§16.2 obligation 3, margin re-derived; §14.2 premise 3,
+reshaped): no static margin covers permanent attrition (worst case
+is total), so the defense decomposes — the persistence commitment
+reshapes to a **maintenance commitment** (live cover held ≥ floor
+through gate-open, attrited personas replaced within a named lag;
+replacements join the same tenure class, no new observable); the
+margin re-derives against **max attrition within the detection +
+replacement lag**, the only interval attrition is live under a kept
+commitment; and **maintenance breach is the named irreducible
+residual** — no post-genesis consensus lever exists without re-arming
+the M2 sensor, so the breach case is monitored off-chain and priced
+in the record rather than discovered at gate-open.
+
+**Finding 2 (medium-high) — zero-cover prices hiding-failure, not
+fingerprinting.** The descriptor channel's zero-cover floor treats
+identification; if the cover mission forces founders toward
+*distinctive* shard profiles, the channel is a positive per-founder
+identifier **no `K` can herd**, routing into the R3 liveness path
+(no `K` reaches target ⇒ redesign pre-genesis). Landed (§16.2
+obligation 3): the thickness-reachability check runs against the
+**union of per-channel floors** with non-existence behavior armed
+per channel, and the descriptor channel carries a
+**profile-commonality check** as a calibration input — founder
+profiles must be common-user-profile-shaped at gate-open
+(satisfiable by config per §17.7 finding 1); a
+cover-mission-forced-distinctive profile classifies
+fingerprint-not-zero-cover and routes to redesign, never to a
+larger `K`.
+
+**Finding 3 (low-medium) — "fixed pre-gate schedule" is one reading
+from re-arming member 7.** "Schedule" collapses count and timing;
+a reader who takes it to fix post *times* manufactures the too-even
+spacing member 7 detects — the repulsion signature, worn by
+founders. Landed (§14.2 premise 2): the schedule fixes **{count,
+completion-before-gate} only**; inter-post timing remains P1's
+i.i.d. production draw; the interlock is recorded per the
+Q2-C/Q2-B silent-revert discipline.
+
+**Disposition and closure.** No bound moves; nothing closed
+reopens. **Final Gate-7 gates (superseding §17.7's):** `K_COVER`
+does not discharge into the frozen constant until (a) the margin is
+re-derived against the maintenance window with the breach residual
+named in the calibration record, and (b) the reachability check has
+run against the union of per-channel floors including the
+descriptor channel's classification. **§17 closes with this
+round.** Reopen criterion (rule-21 shape): a **new channel
+construction** — a named observable the §17.6 structural-channel
+lens has not classified, with an attack shape attached. A round
+that produces findings only by restating the lens against closed
+text does not reopen §17; per the standing review's own convergence
+note, a sound reviewer with no new shape is indistinguishable from
+no reviewer, and the record prefers a dry well named to a §17.9
+manufactured for cadence.
 
 ## 18. Distinct-position round R3 (2026-07-06): the completeness gap the mean-vs-max disposition left open
 
