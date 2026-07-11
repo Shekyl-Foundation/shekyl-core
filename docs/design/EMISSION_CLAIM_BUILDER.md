@@ -893,6 +893,69 @@ on mismatch), CB-5 cause-blind refusals (skip diagnostics log-local).
 PR-4 (regtest e2e + blob-boundary arm) is now the chain's only open
 item, gated on #281.
 
+**PR 3 review round (2026-07-11, high `/code-review` + Copilot).**
+All verified findings fixed (correctness first, then the full cleanup
+set including the report-cap remainder):
+
+1. **Slot-filtered backing designation.** `BackingSet::from_spendable`
+   consumed the all-slot `funding_outputs` union with no `p_slot`
+   filter while the fee sweep filtered — in a rotation-overlap window
+   the most-recent-eligible comparator designated the OTHER slot's
+   record, the claimant's re-derivation failed the pre-flight leaf
+   gate, and the persona was deterministically unable to claim. The
+   slot filter now lives inside the constructor (with the spendability
+   filter, ahead of the survivor tripwire — which also makes the
+   tripwire per-persona), KAT'd with a foreign-slot-newer fixture.
+2. **Tip, never count.** The designation/sweep spendability anchor and
+   the handler's same-tip operand were `source.chain_height` (a block
+   COUNT, one past the tip) — records admitted one block early behind
+   the provable-records mask, and `InsufficientBacking` reported a
+   height that did not exist yet. Anchor = `chain_height − 1`
+   everywhere; the same-tip check compares against the derived tip;
+   the count-as-anchor case is a KAT'd refusal.
+3. **`check_money_overflow` parity.** The wire's context-free
+   validator deferred output-sum overflow as "trivial (amounts are 0)"
+   — an invariant the emission arm's loud reward vout removed. The
+   checked sum now runs; hostile `[u64::MAX, 1]` loud amounts reject
+   exactly as the C++ daemon does.
+4. **§7.4 transport pin made structural.** PR-1's "the handler is the
+   call site that enforces this" had regressed to caller-discipline
+   prose; `orchestrate_emission_claim` is now bounded on the
+   `PersonaIsolatedTransport` marker (`prpc.rs`; `PRpc` implements it,
+   the local-posture transport implements it at DQ-T2.3 as a
+   documented choice site) — a principal-session fetch is a compile
+   error.
+5. **Q11 runtime half at the handler.** The operand-driven handler
+   re-verified same-tip but trusted the backing∉fee-set pairing; a
+   mispaired message would sign a consensus-valid double-use no daemon
+   rejects (spend-blind backing). `BackingInFeeSet` now refuses beside
+   the same-tip check, KAT'd.
+6. **Structural refusal for zero fee inputs.** The empty-fee-set arm
+   reused `InsufficientFunding { available: 0, required: fee }` —
+   self-contradictory at `fee == 0` (rule 82). New
+   `ClaimFeeInputsRequired` names the actual requirement (pseudoOuts +
+   FCMP++ fee-side anchor need ≥ 1 spendable input regardless of fee).
+
+Cleanups, same round: the two-sided reference gate single-sourced as
+`shekyl_curve_tree::two_sided_reference_height` (transfer re-anchor +
+claim orchestrator both consume it; the hand-rolled
+`tip − REF_ANCHOR_AGE` copies are gone, discharging both Copilot
+duplication findings); the backing leg re-derives through the same
+`derive_spend_parts` as the fee spends (the step-10 twin of
+`prepare_funding_inputs` deleted); one output-construction loop
+(`construct_vouts_to_base`) and one `SpendInput → ProveInput`
+conversion (`prove_input_from_spend`, with exactly-one pseudo-out
+enforced on the membership-only leg — Copilot) serve bond + claim
+paths; the P-scan rung-1 pre-pass became the lazy memoized
+`OwnEmissionSlots` classifier (the eager form parsed every emission
+vin on chain — full-scan cost scaling with chain-wide claim volume);
+one test-side wire encoder (`emission_claim::test_fixtures::
+source_json`, epee omit-empty faithful) feeds the decode tests and the
+orchestrator e2e; fetch and ingested-tip awaits joined; the
+debug_assert shadowing an identical typed refusal, the dead/duplicate
+clones, and the `&[0, 0]` output-amounts literal removed; rule 22
+(`22-no-lazy-deferral`) added to CLAUDE.md's rule index.
+
 Round-2 closure criteria: the §7.3 field enumeration ratified (including
 the four exclusions), the §7.2 window-batch shape ratified, the §7.4
 transport/shape/timing pins ratified, and the §8 chain shape accepted.

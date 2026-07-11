@@ -69,6 +69,7 @@ Architecture & scope
 - [`16-architectural-inheritance`](.cursor/rules/16-architectural-inheritance.mdc) — inherited code is not inherited architecture; migrate flows that contradict the threat model
 - [`19-validation-surface-discipline`](.cursor/rules/19-validation-surface-discipline.mdc) — bundle work by validation surface, not feature topic
 - [`21-reversion-clause-discipline`](.cursor/rules/21-reversion-clause-discipline.mdc) — reject-now-with-reopening-criteria over pre-provisioned flexibility
+- [`22-no-lazy-deferral`](.cursor/rules/22-no-lazy-deferral.mdc) — scoped work lands where scoped (always applies); deferral needs a named blocker, disclosed in the deferring commit
 - [`60-no-monero-legacy`](.cursor/rules/60-no-monero-legacy.mdc) — v3-from-genesis, no Monero chain history; remove dead pre-genesis code
 - [`70-modular-consensus`](.cursor/rules/70-modular-consensus.mdc) — PoW consensus; staking is economic; no speculative consensus scaffolding
 - [`75-system-autonomy`](.cursor/rules/75-system-autonomy.mdc) — self-regulating design; minimize coordinated upgrades
