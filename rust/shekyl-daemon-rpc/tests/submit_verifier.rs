@@ -435,6 +435,7 @@ fn build_fixture() -> SpendFixture {
         key_images: vec![*ki.key_image.as_bytes()],
         extra_inputs: Vec::new(),
         output_keys: vec![payment.output_key, change.output_key],
+        output_amounts: vec![0, 0],
         view_tags: vec![
             Some(payment.view_tag_prefilter),
             Some(change.view_tag_prefilter),

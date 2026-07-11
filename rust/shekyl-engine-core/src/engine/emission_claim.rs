@@ -878,31 +878,30 @@ pub fn self_check_claims(
     }
 }
 
+/// Shared emission-source KAT fixtures, built from [`EMISSION_KAT_SHAPE`] —
+/// the same shape the consensus verify KATs
+/// (`shekyl-archival-retention/tests/emission_verify_kat.rs`) pin, so every
+/// differential half (this module's derivation/assembly KATs and the C-4
+/// `AssembleEmissionClaim` handler KATs in `stake_engine.rs`) exercises one
+/// fixture rather than growing a second source shape that can drift.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::engine::emission_source::{BondContext, BondRow, EpochSnapshot};
+pub(crate) mod test_fixtures {
+    use crate::engine::emission_source::{
+        BondContext, BondRow, EmissionClaimSource, EpochSnapshot,
+    };
     use shekyl_archival_retention::{
-        as_of_e_served_work, bond_wire::MAX_HOLDINGS_SHARDS, capped_work_milli,
-        claimed_epochs_check_and_set, reward_share_floor, settlement_epoch_at_height,
-        sigma_work_milli, BandedCurveParams, ClaimedEpochsError, CreditPair, EpochCloseInputs,
-        EpochCloseShard, HoldingsDescriptor, HoldingsKind, KCover,
-        ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-        EMISSION_KAT_SHAPE, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
+        as_of_e_served_work, epoch_close_height, settlement_epoch_at_height, sigma_work_milli,
+        CreditPair, EpochCloseShard, HoldingsDescriptor, HoldingsKind, EMISSION_KAT_SHAPE,
     };
 
-    const BUDGET: u64 = 1_000_000;
-    const SHARD_A: u64 = EMISSION_KAT_SHAPE.shard_a;
-    const SHARD_B: u64 = EMISSION_KAT_SHAPE.shard_b;
+    pub(crate) const BUDGET: u64 = 1_000_000;
+    pub(crate) const SHARD_A: u64 = EMISSION_KAT_SHAPE.shard_a;
+    pub(crate) const SHARD_B: u64 = EMISSION_KAT_SHAPE.shard_b;
 
-    /// The canonical emission KAT fixture, built from [`EMISSION_KAT_SHAPE`]
-    /// — the same shape the consensus verify KATs
-    /// (`shekyl-archival-retention/tests/emission_verify_kat.rs`) pin, so
-    /// the differential halves exercise one fixture. `sigma_work_milli` is
-    /// derived through the same sourcing functions the close persists with,
-    /// so the fixture's denominator is exactly what a real close would have
-    /// stored.
-    fn snapshot(epoch: u64) -> EpochSnapshot {
+    /// The canonical emission KAT snapshot. `sigma_work_milli` is derived
+    /// through the same sourcing functions the close persists with, so the
+    /// fixture's denominator is exactly what a real close would have stored.
+    pub(crate) fn snapshot(epoch: u64) -> EpochSnapshot {
         let shape = EMISSION_KAT_SHAPE;
         let close = epoch_close_height(epoch).expect("fixture epoch closes");
         let mut snap = EpochSnapshot {
@@ -955,7 +954,7 @@ mod tests {
 
     /// Recompute a (possibly mutated) fixture's denominator through the
     /// same sourcing functions the close persists with.
-    fn resigma(snap: &mut EpochSnapshot) {
+    pub(crate) fn resigma(snap: &mut EpochSnapshot) {
         let sigma = {
             let bonds = snap.bonds_view();
             let view = snap.source(&bonds);
@@ -970,7 +969,7 @@ mod tests {
     /// no-serve-credit (`claimant_bond_idx == None`). Both must classify
     /// identically ([`EpochSkip::ZeroShare`]) — the cause-blindness KAT
     /// drives both through this one constructor.
-    fn zero_share_snapshot(epoch: u64, gated: bool) -> EpochSnapshot {
+    pub(crate) fn zero_share_snapshot(epoch: u64, gated: bool) -> EpochSnapshot {
         let mut snap = snapshot(epoch);
         if gated {
             snap.sigma_work_milli = 0;
@@ -985,7 +984,7 @@ mod tests {
     /// mapping functions (never `(E+1)·SEB` by hand) and asserted
     /// consistent under `settlement_epoch_at_height`, the same invariant
     /// PR 1's decode enforces on a real daemon reply.
-    fn source_with(
+    pub(crate) fn source_with(
         current_settled_epoch: u64,
         claimed: Vec<u64>,
         epochs: Vec<EpochSnapshot>,
@@ -1017,7 +1016,7 @@ mod tests {
     /// A source gathered at an explicit tip count, the settled epoch
     /// derived from it through the same helper the daemon uses
     /// (`archival_claim_source.cpp`: both from one `db.height()` read).
-    fn source_at_count(
+    pub(crate) fn source_at_count(
         chain_height: u64,
         claimed: Vec<u64>,
         epochs: Vec<EpochSnapshot>,
@@ -1026,6 +1025,23 @@ mod tests {
         source.chain_height = chain_height;
         source
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_fixtures::{
+        resigma, snapshot, source_at_count, source_with, zero_share_snapshot, BUDGET, SHARD_A,
+        SHARD_B,
+    };
+    use super::*;
+    use crate::engine::emission_source::EpochSnapshot;
+    use shekyl_archival_retention::{
+        as_of_e_served_work, bond_wire::MAX_HOLDINGS_SHARDS, capped_work_milli,
+        claimed_epochs_check_and_set, reward_share_floor, settlement_epoch_at_height,
+        BandedCurveParams, ClaimedEpochsError, CreditPair, EpochCloseInputs, EpochCloseShard,
+        KCover, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
+        EMISSION_KAT_SHAPE, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
+    };
 
     /// The derivation's structural checks in one grid: boundary verdicts
     /// come from the read-only predicates (each skip reason at its exact
