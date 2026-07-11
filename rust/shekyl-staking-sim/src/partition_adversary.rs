@@ -227,6 +227,23 @@ impl MarkedControl {
             MarkedControl::Repulsion => 7,
         }
     }
+
+    /// Whether the control's failure mode is **whole-set** (all five founders
+    /// carry the signature: M-a lockstep, M-c cohesion, M-e repulsion) as
+    /// opposed to **single-member-targeted** (the signature lives on one
+    /// member's axis only: M-b's one-of-M outlier, M-d's mutually-dissimilar
+    /// joint-isolation cohort — the Q2-A/Q2-B adversary shapes). Whole-set
+    /// failure modes genuinely move the family-max `T`, so bound 2's `+0.30`
+    /// applies to them; single-member ones are graded on the any-member arm
+    /// (see [`FAMILY_ALPHA`] — the classification is a property of the
+    /// adversary the control encodes, fixed a-priori, never of measured
+    /// scores).
+    pub fn whole_set(self) -> bool {
+        matches!(
+            self,
+            MarkedControl::Lockstep | MarkedControl::Cohesion | MarkedControl::Repulsion
+        )
+    }
 }
 
 /// The **production** founder configuration — the deployed launch posture
@@ -417,8 +434,50 @@ pub const ARM_N: usize = 10;
 pub const BOUND1_TOL: f64 = 0.05;
 
 /// Per-control lift (bound 2): each marked control's `T` must sit at least
-/// `0.30` above its permutation-null mean (§14.4 bound 2).
+/// `0.30` above its permutation-null mean (§14.4 bound 2). After the T-site
+/// verification below, this family-max form is retained for the **whole-set**
+/// controls only; single-member-targeted controls grade on the any-member arm.
 pub const BOUND2_LIFT: f64 = 0.30;
+
+/// Family-wise one-sided operating significance for the **any-member arm** —
+/// the aggregator fix selected by the T-site verification (§14.4 pin
+/// resolution).
+///
+/// **The verified T-site fact.** `family_max` is a raw max over per-member
+/// Jaccard agreements (no cross-member consensus), but the operating verdict
+/// read only `T − null(T)`, and `null(T)` re-maximizes the family per
+/// relabeling: at `N = 10` it sits ≈ 0.66, set by the *selection freedom of
+/// other members* (member 3 enumerates all `C(10,5) = 252` subsets; members
+/// 1/4 take best-of-`k` clusters; member 2 best-of-feature). A lone
+/// member-6/7 signature — exactly the Q2-A/Q2-B adversary shapes those
+/// members exist for — must exceed the max-null waterline in *absolute*
+/// Jaccard before it registers in `T` at all, and `null + 0.30` to clear
+/// bound 2. Member 6's own chance level is ≈ 1/3; a strong single-member
+/// signal is therefore structurally invisible to the family-max arm, and the
+/// same insensitivity makes a bound-1 pass on `T` alone potentially
+/// false-clean. Detector-architecture finding, not a grading-wording gap.
+///
+/// **The arm.** Per member `k`, the observed trial-mean agreement is tested
+/// against its own null-of-the-mean draws (permutation `p`'s agreement
+/// averaged across trials — `perms` i.i.d. draws from the null of the mean)
+/// via the exact rank p-value `(1 + #{draws ≥ obs}) / (perms + 1)`; member
+/// `k` **flags** iff that p-value ≤ `FAMILY_ALPHA / 7` (Bonferroni over the
+/// family). Deployed bound 1 requires `|T − null| ≤ BOUND1_TOL` **and** no
+/// member flags (privacy requires that *no* member resolves the founders —
+/// the max must not hide the one that does). Each marked control requires its
+/// aimed member to flag; whole-set controls (M-a/M-c/M-e) additionally retain
+/// the family-max `+0.30` bound, which their failure modes genuinely move.
+///
+/// The bar derives a-priori from per-member null geometry plus the
+/// multiple-comparison correction — never from observed control scores
+/// (the after-seeing-scores move the gating lemma exists to forbid). At
+/// `perms = 200`: `α/7 ≈ 0.00714`, and the smallest achievable rank p-value
+/// is `1/201 ≈ 0.00498`, so a member flags iff its observed mean exceeds
+/// every one of its 200 null draws.
+pub const FAMILY_ALPHA: f64 = 0.05;
+
+/// Family size the Bonferroni correction divides over (members 1–7).
+pub const FAMILY_SIZE: usize = 7;
 
 /// Maximum chain-visible events per pair (funding, bond, drain, two per-`P`
 /// submits, resume) ⇒ at most this many inter-event gaps.
@@ -1515,20 +1574,27 @@ fn random_labels(n: usize, m: usize, rng: &mut SplitMix64) -> Vec<bool> {
 /// the full family per relabeling (§14.4 null), and return the mean of `T`
 /// plus per-member null means (the per-member bite calibration the marked
 /// controls are diagnosed against).
+///
+/// `per_perm_member[p][k]` additionally accumulates permutation `p`'s member-`k`
+/// agreement across trials: after dividing by the trial count, row `p` is one
+/// i.i.d. draw from the null of the **trial-mean** per-member agreement — the
+/// null geometry the any-member arm's rank test reads (see [`FAMILY_ALPHA`]).
 fn permutation_null(
     s: &Structures,
     trial: &Trial,
     perms: u32,
     rng: &mut SplitMix64,
+    per_perm_member: &mut [[f64; FAMILY_SIZE]],
 ) -> (f64, [f64; 7]) {
     let mut t_acc = 0.0;
     let mut member_acc = [0.0f64; 7];
-    for _ in 0..perms {
+    for row in per_perm_member.iter_mut().take(perms as usize) {
         let labels = random_labels(trial.n, FOUNDER_COUNT, rng);
         let agr = member_agreements(s, trial, &labels);
         t_acc += agr.iter().copied().fold(0.0f64, f64::max);
-        for (acc, v) in member_acc.iter_mut().zip(agr.iter()) {
+        for ((acc, slot), v) in member_acc.iter_mut().zip(row.iter_mut()).zip(agr.iter()) {
             *acc += v;
+            *slot += v;
         }
     }
     for v in member_acc.iter_mut() {
@@ -1566,8 +1632,21 @@ pub struct PartitionScenario {
     /// All seven members' permutation-null means (the per-member chance level
     /// each observed agreement is read against).
     pub member_null_means: [f64; 7],
-    /// Bound verdict: deployed uses bound 1 (`|lift| ≤ 0.05`); controls use
-    /// bound 2 (`lift ≥ 0.30`).
+    /// Any-member arm: exact rank p-value per member against its own
+    /// null-of-the-mean draws (`(1 + #{null ≥ obs}) / (perms + 1)`).
+    pub member_p: [f64; 7],
+    /// Any-member arm: member flags iff its p-value ≤ `FAMILY_ALPHA / 7`
+    /// (Bonferroni). Deployed must have **no** flag; each control's aimed
+    /// member **must** flag.
+    pub member_flags: [bool; 7],
+    /// The largest null-of-the-mean draw per member — the effective bar the
+    /// rank test applies at the operating `perms`.
+    pub member_null_max: [f64; 7],
+    /// Bound verdict. Deployed: bound 1 (`|lift| ≤ 0.05`) **and** no member
+    /// flags on the any-member arm. Whole-set controls: bound 2
+    /// (`lift ≥ 0.30`) **and** the aimed member flags. Single-member-targeted
+    /// controls: the aimed member flags (the §14.4 bound-2 pin resolution —
+    /// graded against the same any-member rule deployment uses).
     pub passed: bool,
     /// The bound the verdict applied.
     pub bound: &'static str,
@@ -1602,10 +1681,24 @@ pub struct PartitionConfig {
 }
 
 impl Default for PartitionConfig {
+    /// Evidence configuration. `trials` is **power-sized a-priori to the
+    /// single-member effect ceiling**, not tuned to any observed score:
+    /// M-b's one-of-`M` perturbation guarantees at most one extra
+    /// intersection element in the aimed member's top-`M` prediction, so its
+    /// Jaccard shift is bounded by arithmetic — at `N = 2M = 10`,
+    /// `E[J | 1 guaranteed + M−1 random] − E[J | chance] ≈ 0.40 − 0.35 =
+    /// +0.05` (hypergeometric expectation over `C(10,5)` masks). The rank
+    /// test must resolve a mean shift of that order against the null-of-the-
+    /// mean spread `σ/√trials` (measured member-2 relabeling σ ≈ 0.18) at
+    /// `α/7`: detecting `δ ≈ +0.03` (the ceiling attenuated by the member's
+    /// own selection boost, which lifts null and observed together) with
+    /// power ≈ 0.9 needs `trials ≈ ((z_{α/7} + z_{0.9})·σ/δ)² ≈ 500`.
+    /// `perms` must satisfy the α/7 resolution guard (`≥ 139`; see
+    /// `run_partition_measurement`).
     fn default() -> Self {
         Self {
             n: ARM_N,
-            trials: 200,
+            trials: 500,
             perms: 200,
             seed: 0x9A7C_144A_2C2B_0003,
         }
@@ -1624,6 +1717,9 @@ fn grade_scenario(
     let (mut t_sum, mut null_sum) = (0.0, 0.0);
     let mut agr_sum = [0.0f64; 7];
     let mut member_null_sum = [0.0f64; 7];
+    // Null-of-the-mean draws for the any-member arm: row `p` accumulates
+    // permutation `p`'s per-member agreement across trials.
+    let mut null_draws = vec![[0.0f64; FAMILY_SIZE]; cfg.perms as usize];
     for _ in 0..cfg.trials {
         let trial = match control {
             None => build_deployed_trial(rng, cfg.n, ENTRY_GAP_WINDOW),
@@ -1636,7 +1732,7 @@ fn grade_scenario(
         for (acc, v) in agr_sum.iter_mut().zip(agr.iter()) {
             *acc += v;
         }
-        let (null_t, null_members) = permutation_null(&s, &trial, cfg.perms, rng);
+        let (null_t, null_members) = permutation_null(&s, &trial, cfg.perms, rng, &mut null_draws);
         null_sum += null_t;
         for (acc, v) in member_null_sum.iter_mut().zip(null_members.iter()) {
             *acc += v;
@@ -1649,11 +1745,38 @@ fn grade_scenario(
     for v in member_null_sum.iter_mut() {
         *v /= t;
     }
+    for row in null_draws.iter_mut() {
+        for v in row.iter_mut() {
+            *v /= t;
+        }
+    }
+
+    // Any-member arm: exact rank p-value per member against its own
+    // null-of-the-mean draws, Bonferroni-corrected over the family
+    // (a-priori derivation; see FAMILY_ALPHA).
+    let per_member_alpha = FAMILY_ALPHA / FAMILY_SIZE as f64;
+    let mut member_p = [0.0f64; 7];
+    let mut member_flags = [false; 7];
+    let mut member_null_max = [0.0f64; 7];
+    for k in 0..FAMILY_SIZE {
+        let obs = agr_sum[k];
+        let ge = null_draws.iter().filter(|row| row[k] >= obs).count();
+        member_p[k] = (1 + ge) as f64 / (cfg.perms as f64 + 1.0);
+        member_flags[k] = member_p[k] <= per_member_alpha;
+        member_null_max[k] = null_draws
+            .iter()
+            .map(|row| row[k])
+            .fold(f64::NEG_INFINITY, f64::max);
+    }
+
     ScenarioAggregates {
         t_obs: t_sum / t,
         null_mean: null_sum / t,
         member_agreements: agr_sum,
         member_null_means: member_null_sum,
+        member_p,
+        member_flags,
+        member_null_max,
     }
 }
 
@@ -1663,18 +1786,47 @@ struct ScenarioAggregates {
     null_mean: f64,
     member_agreements: [f64; 7],
     member_null_means: [f64; 7],
+    /// Any-member arm: exact rank p-value per member vs its own
+    /// null-of-the-mean draws.
+    member_p: [f64; 7],
+    /// Any-member arm: `member_p ≤ FAMILY_ALPHA / 7`.
+    member_flags: [bool; 7],
+    /// The largest null-of-the-mean draw per member (the effective bar at
+    /// the operating `perms`).
+    member_null_max: [f64; 7],
 }
 
 /// Run the graded §14.4 partition-adversary measurement: the deployed posture
 /// (bound 1) and the five witness-typed marked controls (bound 2), calibrated
 /// against the permutation null of the max-over-family statistic.
 pub fn run_partition_measurement(cfg: &PartitionConfig) -> PartitionReport {
+    // Resolution guard for the any-member arm: the exact rank p-value's floor
+    // is `1/(perms+1)`; if that floor exceeds `α/7`, no member can ever flag
+    // and the arm is silently toothless — deployed would pass on
+    // mis-configuration (the exact false-clean failure mode the arm exists to
+    // close) and every single-member control would fail spuriously. Fail
+    // loudly instead: `perms ≥ 7/α − 1` (= 139 at α = 0.05).
+    let per_member_alpha = FAMILY_ALPHA / FAMILY_SIZE as f64;
+    assert!(
+        1.0 / (cfg.perms as f64 + 1.0) <= per_member_alpha,
+        "perms={} cannot resolve the any-member arm's α/7 = {per_member_alpha:.5} bar \
+         (rank p-value floor 1/(perms+1) = {:.5}); need perms ≥ {}",
+        cfg.perms,
+        1.0 / (cfg.perms as f64 + 1.0),
+        (FAMILY_SIZE as f64 / FAMILY_ALPHA).ceil() as u32 - 1,
+    );
+
     let mut rng = SplitMix64(cfg.seed);
     let subsets = m_subsets(cfg.n, FOUNDER_COUNT);
 
-    // Deployed posture — bound 1.
+    // Deployed posture — bound 1, both arms: the family-max lift must sit at
+    // chance AND no member may flag against its own FW-corrected null.
+    // Privacy requires that no member resolves the founders; the max must not
+    // hide the one that does (the false-clean hazard the T-site verification
+    // surfaced).
     let agg = grade_scenario(cfg, &subsets, None, &mut rng);
     let lift = agg.t_obs - agg.null_mean;
+    let any_flag = agg.member_flags.iter().any(|&f| f);
     let deployed = PartitionScenario {
         scenario: "deployed",
         label: "deployed posture",
@@ -1686,69 +1838,45 @@ pub fn run_partition_measurement(cfg: &PartitionConfig) -> PartitionReport {
         aimed_member_lift: 0.0,
         member_agreements: agg.member_agreements,
         member_null_means: agg.member_null_means,
-        passed: lift.abs() <= BOUND1_TOL,
-        bound: "bound 1: |T − null| ≤ 0.05",
+        member_p: agg.member_p,
+        member_flags: agg.member_flags,
+        member_null_max: agg.member_null_max,
+        passed: lift.abs() <= BOUND1_TOL && !any_flag,
+        bound: "bound 1: |T − null| ≤ 0.05 AND no member flags at α/7",
     };
 
-    // Marked controls — bound 2, each.
+    // Marked controls — bound 2, each, under the resolved grading rule
+    // (§14.4 pin resolution; see FAMILY_ALPHA for the T-site verification
+    // that selected it). Every control's aimed member must flag on the
+    // any-member arm — the same rule deployment uses, so a control PASS
+    // certifies that deployment would catch the adversary the control
+    // encodes. Whole-set controls (M-a/M-c/M-e) additionally retain the
+    // family-max `T ≥ null + 0.30` bound, which their failure modes
+    // genuinely move; single-member-targeted controls (M-b/M-d) cannot move
+    // the family max by construction (their Q2-A/Q2-B adversaries live on
+    // one member's axis), so the family-max form does not apply to them —
+    // their bar is the aimed member's FW-corrected rank test, derived from
+    // null geometry, never from observed scores.
     let mut controls = Vec::new();
-    let mut pins: Vec<String> = Vec::new();
+    let pins: Vec<String> = Vec::new();
     for &mc in &MarkedControl::ALL {
         let witness = ControlWitness::marked(mc);
         let agg = grade_scenario(cfg, &subsets, Some(&witness), &mut rng);
         let lift = agg.t_obs - agg.null_mean;
         let aimed = mc.aimed_member();
         let aimed_lift = agg.member_agreements[aimed - 1] - agg.member_null_means[aimed - 1];
-        let passed = lift >= BOUND2_LIFT;
-        // Bound 2 (family-max `T ≥ null + 0.30`) has a structural ceiling for
-        // the two **single-member-targeted** controls, M-b (aimed at member 2)
-        // and M-d (aimed at member 6). Both bite their aimed member on its own
-        // axis (recorded below in `aimed_member_lift`, and for M-d members 1–5
-        // stay at chance — the exact per-run diagnostic §14.4 names), but the
-        // family-*max* statistic cannot clear +0.30 above its permutation null:
-        // at N=10 that null (~0.66) is set by the selection freedom of the
-        // enumeration/spectral members over random labels, and a perturbation
-        // confined to one member's axis cannot lift the *max* over the family
-        // that far. The whole-set controls (M-a/M-c/M-e) clear it because their
-        // failure modes are caught near-perfectly by several members at once.
-        // This is a material under-specification of the a-priori bound —
-        // whole-set vs single-member failure modes — pinned rather than
-        // improvised (task directive / §14.4).
-        if !passed && (mc == MarkedControl::Outlier || mc == MarkedControl::CorrelationBreak) {
-            let m15_max = (0..5)
-                .map(|k| agg.member_agreements[k] - agg.member_null_means[k])
-                .fold(f64::NEG_INFINITY, f64::max);
-            let specifics = match mc {
-                MarkedControl::Outlier => format!(
-                    "M-b perturbs one of M={FOUNDER_COUNT} founders, so any rule's \
-                     founder-recall gain is bounded at 1/M = 0.20; member 2's own \
-                     top-M ranking lifts {aimed_lift:+.3} over its own null."
-                ),
-                _ => format!(
-                    "M-d's founders are mutually dissimilar by construction (the \
-                     property that keeps members 1–5 blind — max members-1–5 lift \
-                     {m15_max:+.3}, at chance), so no whole-set structure exists \
-                     for the family max to seize; member 6 (whitened joint-density \
-                     isolation) lifts {aimed_lift:+.3} over its own null — the only \
-                     detector that bites, exactly as §14.4 specifies. Member 6's \
-                     k-NN isolation of a mutually-dissimilar off-support cohort is \
-                     a weak small-sample estimator at N=10 (M/N = 0.5 \
-                     contamination); this is the phenomenon the N-sweep rider was \
-                     added to expose."
-                ),
-            };
-            pins.push(format!(
-                "{} (aimed at member {aimed}) bound 2 unsatisfiable under the \
-                 family-max T-statistic as specified (measured family-max lift \
-                 {lift:+.3} < +{BOUND2_LIFT}). {specifics} Deployed bound 1 and \
-                 the whole-set controls (M-a/M-c/M-e) are unaffected. Disposition \
-                 options: grade single-member-targeted controls on their aimed \
-                 member's own-null lift (a per-member bite bound), or respecify \
-                 bound 2 as per-aimed-member rather than family-max. Pinned to \
-                 ARCHIVAL_BOND_WI4_MEASUREMENT.md §14.4 for design decision.",
-                mc.label(),
-            ));
-        }
+        let aimed_flag = agg.member_flags[aimed - 1];
+        let (passed, bound) = if mc.whole_set() {
+            (
+                lift >= BOUND2_LIFT && aimed_flag,
+                "bound 2 (whole-set): T ≥ null + 0.30 AND aimed member flags at α/7",
+            )
+        } else {
+            (
+                aimed_flag,
+                "bound 2 (single-member): aimed member flags at α/7",
+            )
+        };
         controls.push(PartitionScenario {
             scenario: mc.tag(),
             label: mc.label(),
@@ -1760,21 +1888,27 @@ pub fn run_partition_measurement(cfg: &PartitionConfig) -> PartitionReport {
             aimed_member_lift: aimed_lift,
             member_agreements: agg.member_agreements,
             member_null_means: agg.member_null_means,
+            member_p: agg.member_p,
+            member_flags: agg.member_flags,
+            member_null_max: agg.member_null_max,
             passed,
-            bound: "bound 2: T ≥ null + 0.30",
+            bound,
         });
     }
 
     let all_pass = deployed.passed && controls.iter().all(|c| c.passed);
     let status = if all_pass {
-        "PARTITION-PASS (deployed at chance; every marked control bites)".to_string()
+        "PARTITION-PASS (deployed at chance on both arms; every marked control \
+         bites its aimed member)"
+            .to_string()
     } else if !deployed.passed {
         "PARTITION-FAIL (deployed posture sortable — launch-posture blocker, \
          never a bar move; §14.4 consumer 1)"
             .to_string()
     } else {
-        "INVALID (a marked control did not bite; see pinned_underspecifications \
-         — bound 3 all-or-nothing)"
+        "INVALID (a marked control did not bite its aimed member — bound 3 \
+         all-or-nothing; the detector cannot certify coverage of that \
+         control's adversary)"
             .to_string()
     };
 
@@ -1894,45 +2028,87 @@ mod tests {
     }
 
     /// The graded arm's structurally stable outcome (seed-robust at 120
-    /// trials): the deployed posture holds bound 1 (no family member beats its
-    /// permutation null — founders are production draws, indistinguishable by
-    /// construction); every whole-set control (M-a lockstep, M-c cohesion, M-e
-    /// repulsion) bites through bound 2 with its aimed member leading; and the
-    /// two single-member-targeted controls (M-b, M-d) surface the pinned
-    /// family-max under-specification rather than a silent pass — bound 3's
-    /// all-or-nothing verdict is therefore INVALID-with-pins, never a quiet
-    /// green.
+    /// trials) under the resolved grading rule (§14.4 pin resolution — the
+    /// any-member arm selected by the T-site verification):
+    ///
+    /// - the deployed posture holds **both** bound-1 arms: the family-max
+    ///   lift at chance AND no member flags against its own FW-corrected
+    ///   null (the per-member re-check that closes the false-clean hazard —
+    ///   a max/consensus `T` can pass on insensitivity; the per-member arm
+    ///   cannot);
+    /// - every whole-set control (M-a lockstep, M-c cohesion, M-e repulsion)
+    ///   clears family-max bound 2 with its aimed member flagging;
+    /// - the single-member-targeted controls (M-b, M-d) bite through the
+    ///   any-member arm — their aimed members (2, 6) flag at α/7 even though
+    ///   the family max cannot move (the Q2-A adversary lives on member 6's
+    ///   axis alone), certifying that deployment's rule catches the
+    ///   adversaries members 6/7 were added for;
+    /// - M-d still keeps members 1–5 at chance (the §14.4 recorded-per-run
+    ///   requirement) — the flags are member-6-specific, not a family-wide
+    ///   artifact;
+    /// - no pins remain, and bound 3's all-or-nothing verdict is
+    ///   PARTITION-PASS.
     #[test]
     fn graded_arm_structural_outcome() {
+        // `perms` must resolve the any-member arm's α/7 bar (rank p-value
+        // floor 1/(perms+1); ≥ 139 at α = 0.05 — loud guard in
+        // `run_partition_measurement`), and `trials` must be power-sized to
+        // the single-member effect ceiling (δ ≈ +0.03–0.04 vs null-of-mean
+        // spread σ/√trials, σ ≈ 0.18 — the derivation on
+        // `PartitionConfig::default`); 400 trials puts the M-b ceiling at
+        // > 4σ. Both are a-priori sizings, not tuned to observed scores.
         let cfg = PartitionConfig {
             n: ARM_N,
-            trials: 120,
-            perms: 120,
+            trials: 400,
+            perms: 160,
             seed: 0xDEAD_BEEF_0001,
         };
         let r = run_partition_measurement(&cfg);
 
-        // Bound 1: deployed founders are indistinguishable from users.
+        // Bound 1, both arms: deployed founders are indistinguishable from
+        // users on the family max AND on every member's own axis.
         assert!(
             r.deployed.passed,
-            "deployed posture must hold bound 1 (lift {:+.3})",
-            r.deployed.lift
+            "deployed posture must hold bound 1 (lift {:+.3}, flags {:?}, p {:?})",
+            r.deployed.lift, r.deployed.member_flags, r.deployed.member_p
+        );
+        assert!(
+            r.deployed.member_flags.iter().all(|&f| !f),
+            "no member may resolve deployed founders on its own axis (p {:?})",
+            r.deployed.member_p
         );
 
-        // Bound 2: each whole-set control bites the family max, and its aimed
-        // member's own lift dominates the +0.30 bound too.
+        // Bound 2 (whole-set): each control bites the family max, its aimed
+        // member's own lift dominates the +0.30 bound, and the aimed member
+        // flags on the any-member arm.
         for tag in ["M-a", "M-c", "M-e"] {
             let c = r.controls.iter().find(|c| c.scenario == tag).unwrap();
             assert!(
                 c.passed,
-                "{tag} must bite bound 2 (family-max lift {:+.3})",
-                c.lift
+                "{tag} must bite bound 2 (family-max lift {:+.3}, aimed flag {})",
+                c.lift,
+                c.member_flags[c.aimed_member - 1]
             );
             assert!(
                 c.aimed_member_lift >= BOUND2_LIFT,
                 "{tag}'s aimed member {} must itself lift ≥ {BOUND2_LIFT} (got {:+.3})",
                 c.aimed_member,
                 c.aimed_member_lift
+            );
+        }
+
+        // Bound 2 (single-member): M-b and M-d bite through the any-member
+        // arm — the resolved rule the deployed detector itself uses.
+        for tag in ["M-b", "M-d"] {
+            let c = r.controls.iter().find(|c| c.scenario == tag).unwrap();
+            assert!(
+                c.passed,
+                "{tag}'s aimed member {} must flag at α/7 (p {:.4}, obs {:.3}, \
+                 null max {:.3})",
+                c.aimed_member,
+                c.member_p[c.aimed_member - 1],
+                c.member_agreements[c.aimed_member - 1],
+                c.member_null_max[c.aimed_member - 1]
             );
         }
 
@@ -1953,17 +2129,20 @@ mod tests {
             md.aimed_member_lift
         );
 
-        // The single-member-targeted controls surface the family-max
-        // under-specification as pins, and the all-or-nothing verdict reflects
-        // it — never a silent pass.
-        assert_eq!(
-            r.pinned_underspecifications.len(),
-            2,
-            "exactly the M-b and M-d family-max pins are expected"
+        // The bound-2 under-specification is resolved (T-site fact verified,
+        // any-member arm landed); no pins remain and the all-or-nothing
+        // verdict is a genuine pass — reached by adding a detection arm,
+        // never by lowering a bar.
+        assert!(
+            r.pinned_underspecifications.is_empty(),
+            "no under-specification pins expected after the §14.4 resolution: {:?}",
+            r.pinned_underspecifications
         );
-        assert!(r.pinned_underspecifications[0].starts_with("M-b"));
-        assert!(r.pinned_underspecifications[1].starts_with("M-d"));
-        assert!(r.status.starts_with("INVALID"));
+        assert!(
+            r.status.starts_with("PARTITION-PASS"),
+            "expected PARTITION-PASS, got: {}",
+            r.status
+        );
     }
 
     /// The co-first-deliverable report is well-formed: it commits the gating

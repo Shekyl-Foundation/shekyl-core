@@ -795,13 +795,16 @@ fn print_partition_adversary_report() {
     // max-over-family statistic T, its permutation null, and bounds 1–3.
     let graded = partition_adversary::run_partition_report();
     eprintln!(
-        "Graded arm — N={} founders={} trials={} perms={} (bound 1 |lift|≤{:.2}; bound 2 lift≥{:.2}):",
+        "Graded arm — N={} founders={} trials={} perms={} (bound 1 |lift|≤{:.2} AND no member \
+         flags; bound 2 whole-set lift≥{:.2} AND aimed flags / single-member aimed flags; \
+         any-member arm at family-wise α={:.2}, Bonferroni α/7, exact rank p):",
         graded.n,
         graded.founder_count,
         graded.trials,
         graded.permutations,
         graded.bound1_tol,
         graded.bound2_lift,
+        partition_adversary::FAMILY_ALPHA,
     );
     eprintln!(
         "  Feature dictionary (§14.4, chain-visible only): seam |bond−funding|, dispatch phase,"
@@ -836,7 +839,8 @@ fn print_partition_adversary_report() {
         row(c);
     }
     eprintln!();
-    eprintln!("  per-member agreement vs null (m1..m7), deployed then controls:");
+    eprintln!("  per-member agreement vs null (m1..m7), deployed then controls;");
+    eprintln!("  flg marks the any-member arm (rank p ≤ α/7 vs the member's own null-of-mean):");
     let members = |s: &partition_adversary::PartitionScenario| {
         let agr: Vec<String> = s
             .member_agreements
@@ -848,8 +852,21 @@ fn print_partition_adversary_report() {
             .iter()
             .map(|x| format!("{x:.2}"))
             .collect();
+        let flg: Vec<String> = s
+            .member_flags
+            .iter()
+            .zip(s.member_p.iter())
+            .map(|(f, p)| {
+                if *f {
+                    format!("*{p:.3}")
+                } else {
+                    format!(" {p:.3}")
+                }
+            })
+            .collect();
         eprintln!("    {:<12} agr=[{}]", s.scenario, agr.join(" "));
         eprintln!("    {:<12} nul=[{}]", "", nul.join(" "));
+        eprintln!("    {:<12} flg=[{}]", "", flg.join(" "));
     };
     members(&graded.deployed);
     for c in &graded.controls {
