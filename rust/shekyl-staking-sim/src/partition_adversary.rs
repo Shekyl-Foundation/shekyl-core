@@ -343,7 +343,8 @@ pub struct GatingWitnessReport {
     pub cluster_span_blocks: u64,
     /// `w` (production entry-gap window, blocks).
     pub entry_gap_window: u64,
-    /// The committed a-priori bound `m·(c/w)^(m−1)`.
+    /// The committed a-priori bound `m·((c+1)/(w+1))^(m−1)` (the discrete
+    /// inclusive-endpoint form — see [`gating_lemma_bound`]'s derivation).
     pub gating_lemma_bound: f64,
     /// The tight range CDF (reported for slack visibility, not committed).
     pub gating_lemma_exact: f64,
@@ -777,17 +778,23 @@ fn gen_founders(rng: &mut SplitMix64, control: MarkedControl, window: u64) -> Ve
         // a 3-parameter manifold — every feature is a function of `(t0,
         // period, seam)`; in particular the drain and the two submits ride
         // one session grid (equal trailing gaps) and the cadence is locked to
-        // `(period, seam)`. Each M-d founder draws **every coordinate
-        // independently from its own deployed marginal** (a fresh ghost pair
-        // per coordinate): anchor from one ghost, seam from another, cadence
-        // from a third, the two trailing gaps from two more. Marginals
-        // exactly production — no band, no extreme, nothing for a
-        // per-feature ranking to hold — the joint fully factorized: grid
-        // equality broken, cadence decoupled. Founders are mutually
-        // independent composites, so the five carry no cluster (defeats
-        // 1/3/4/5), no marginal outlier (defeats 2), and no anchor regularity
-        // (defeats 7). Member 6 (joint-density isolation) alone prices the
-        // joint.
+        // `(period, seam)`. Each M-d founder starts from production draws
+        // with the deployed couplings intact, then breaks exactly **one**
+        // coupling with an in-band override (the `match` below) — off the
+        // manifold in one direction, on it everywhere else. Marginals exactly
+        // production — no band, no extreme, nothing for a per-feature ranking
+        // to hold — and the five break *different* couplings, so they carry
+        // no cluster (defeats 1/3/4/5), no marginal outlier (defeats 2), and
+        // no anchor regularity (defeats 7). Member 6 (joint-density
+        // isolation) alone prices the joint. (The alternative — fully
+        // factorizing every coordinate from its own fresh ghost — was graded
+        // and rejected, PR #291 review: it breaks the equal-gaps coupling
+        // (ii) for *all five* founders — a shared off-manifold trait where
+        // the design wants five founders sharing none — and it measurably
+        // dilutes the aimed bite (member-6 lift `+0.116` factorized vs
+        // `+0.136` targeted at the evidence config) by spending the
+        // off-support budget on couplings member 6 was not aimed at. See
+        // the defaults note in the constructor below.)
         MarkedControl::CorrelationBreak => {
             // Every marginal in-range, the **joint** off the support (§14.4
             // member 6: "plausible values in implausible pairings"). The five
@@ -810,8 +817,21 @@ fn gen_founders(rng: &mut SplitMix64, control: MarkedControl, window: u64) -> Ve
             }
             (0..FOUNDER_COUNT)
                 .map(|i| {
+                    // Defaults: production draws with the deployed couplings
+                    // INTACT — seam and cadence off one ghost, both trailing
+                    // gaps off one `per_p` (exactly equal, coupling (ii)
+                    // verbatim). Deliberate, not draw-thrift: every coordinate
+                    // this founder does *not* target below must stay ON the
+                    // deployed manifold, so each founder is off-support in
+                    // precisely one coupling and the five share no broken
+                    // coupling. Fully factorizing the defaults (a fresh ghost
+                    // per coordinate) was graded and rejected (PR #291
+                    // review): it breaks (ii) for *every* founder — one
+                    // shared off-manifold trait — and dilutes the aimed
+                    // member-6 bite (lift `+0.116` factorized vs `+0.136`
+                    // targeted at the evidence config) by spending the
+                    // off-support budget on untargeted couplings.
                     let bond = gen_deployed(rng, window).bond;
-                    // Defaults: one production draw per coordinate.
                     let g = gen_deployed(rng, window);
                     let mut seam = g.bond.abs_diff(g.funding);
                     let mut cadence = g.drain.unwrap() - g.bond;

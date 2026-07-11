@@ -936,7 +936,8 @@ fn print_partition_adversary_report() {
     // accumulation.
     let riders = riders::run_riders_report();
     eprintln!(
-        "Riders (§16.7 items 2/4, §18.3 as narrowed by §18.8, §18.4) — trials={} r-bound={:.1}:",
+        "Riders (§16.7 items 2/4, §18.3 as narrowed by §18.8, §18.4) — \
+         sweep/coupling trials={} r-bound={:.1}:",
         riders.trials, riders.ratio_bound,
     );
     eprintln!("  N-sweep (r < 2 at every swept N; growth with N = redesign signal):");
@@ -961,7 +962,11 @@ fn print_partition_adversary_report() {
             "DECOUPLED — INVALID"
         },
     );
-    eprintln!("  Attribute-bridge grading (strata as candidate bridge axes, never crowds):");
+    eprintln!(
+        "  Attribute-bridge grading (strata as candidate bridge axes, never crowds; \
+         trials={} perms={}):",
+        riders.bridge_trials, riders.bridge_perms,
+    );
     for b in &riders.bridge {
         eprintln!(
             "    {:<42} |corr|={:.3} null={:.3}  {}  [{}]",
@@ -992,7 +997,21 @@ fn print_partition_adversary_report() {
     eprintln!("  RIDERS STATUS: {}", riders.status);
     eprintln!();
 
-    match serde_json::to_string_pretty(&(&report, &graded, &riders)) {
+    // Named-field envelope, not a tuple: a bare 3-array is not
+    // self-describing, and every other report on this binary serializes a
+    // keyed object — downstream parsers should never have to know positions.
+    #[derive(serde::Serialize)]
+    struct PartitionAdversaryArtifact<'a> {
+        gating_witness: &'a partition_adversary::GatingWitnessReport,
+        graded_arm: &'a partition_adversary::PartitionReport,
+        riders: &'a riders::RidersReport,
+    }
+    let artifact = PartitionAdversaryArtifact {
+        gating_witness: &report,
+        graded_arm: &graded,
+        riders: &riders,
+    };
+    match serde_json::to_string_pretty(&artifact) {
         Ok(json) => println!("{json}"),
         Err(e) => eprintln!("error serializing partition-adversary report: {e}"),
     }
