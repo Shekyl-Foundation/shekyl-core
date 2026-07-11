@@ -112,10 +112,6 @@ impl<S: PendingSealStore> PendingPostStore<S> {
     /// Read the current block under the lock (a serialized snapshot; no
     /// seal write). The WI-2 assemble path reads the derived reservation
     /// set ([`PendingPostBlock::reserved_gindexes`]) through this.
-    // Transient — the consumer is the WI-2 Engine-side assemble orchestrator
-    // (WI-2's remaining slice, out of WI-3 scope per the design doc §1), which
-    // reads reservations through this shared handle.
-    #[allow(dead_code)]
     pub(crate) async fn read<R>(
         &self,
         f: impl FnOnce(&PendingPostBlock) -> R,

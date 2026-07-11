@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use shekyl_archival_retention::{bond_floor, HoldingsDescriptor};
 use shekyl_curve_tree::{
-    should_reanchor, AssembleInput, BlockHeight as CtBlockHeight, Gindex, ReferenceBlock,
-    REF_ANCHOR_AGE,
+    select_reference_height, should_reanchor, AssembleInput, BlockHeight as CtBlockHeight, Gindex,
+    ReferenceBlock,
 };
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{PendingBondPost, PendingPostState};
@@ -45,7 +45,7 @@ pub(crate) async fn anchored_reference_block(
     curve_tree: &CurveTreeHandle,
     chain_tip: u64,
     block_hash_at: impl FnOnce(u64) -> Option<[u8; 32]>,
-) -> Result<(ReferenceBlock, u8), BondAssemblyError> {
+) -> Result<ReferenceBlock, BondAssemblyError> {
     let covered_through = curve_tree
         .ingested_tip_height()
         .await
@@ -55,18 +55,18 @@ pub(crate) async fn anchored_reference_block(
         detail: "curve tree has not ingested any block yet",
     })?;
     let anchor_tip = chain_tip.min(ingested);
+    // Canonical send-path derivation (`tip − REF_ANCHOR_AGE`); reuse the
+    // exported helper so this can never silently diverge from it (WI-2 F-6).
     let reference_height =
-        anchor_tip
-            .checked_sub(REF_ANCHOR_AGE)
-            .ok_or(BondAssemblyError::ReferenceResyncing {
-                detail: "chain too short to anchor a reference",
-            })?;
+        select_reference_height(anchor_tip).ok_or(BondAssemblyError::ReferenceResyncing {
+            detail: "chain too short to anchor a reference",
+        })?;
     if should_reanchor(chain_tip, reference_height) {
         return Err(BondAssemblyError::ReferenceResyncing {
             detail: "tree too far behind to anchor a submittable reference; resync",
         });
     }
-    let (curve_tree_root, depth) = curve_tree
+    let (curve_tree_root, _depth) = curve_tree
         .reference_root_and_depth(CtBlockHeight(reference_height))
         .await
         .map_err(|err| BondAssemblyError::build("reference root and depth", format!("{err:?}")))?;
@@ -74,14 +74,11 @@ pub(crate) async fn anchored_reference_block(
         block_hash_at(reference_height).ok_or(BondAssemblyError::ReferenceResyncing {
             detail: "reference-height block hash missing from ledger",
         })?;
-    Ok((
-        ReferenceBlock {
-            height: CtBlockHeight(reference_height),
-            curve_tree_root,
-            block_hash,
-        },
-        depth,
-    ))
+    Ok(ReferenceBlock {
+        height: CtBlockHeight(reference_height),
+        curve_tree_root,
+        block_hash,
+    })
 }
 
 #[allow(private_bounds)] // same Engine-trait privacy posture as start_pscan_with
@@ -136,7 +133,16 @@ where
         // F-1: independent store over the cloned lock (no Engine-held store).
         let store = pending_post_store_for_engine(self_arc.clone(), pending_write_lock);
 
-        // §3.3 / §3.5: one live post per persona.
+        // §3.3 / §3.5: one live post per persona. This early read is an
+        // optimistic fast-fail only — it keys on `p_slot` (the sole identity
+        // available before assembly; 1:1 with the persona canonical id, which
+        // is not derivable until the tx is bound below). The *authoritative*
+        // one-post-per-persona serialization is `push_post` under the write
+        // lock (see the final seal), which rejects atomically by persona even
+        // if two same-persona assembles race past this gate. Reopening
+        // criterion (rule 21): if the RPC entry ever admits concurrent
+        // same-persona requests whose wasted proof work becomes a concern,
+        // add a per-`p_slot` in-flight reservation held from here to the seal.
         let already = store
             .read(|block| block.posts().iter().any(|p| p.p_slot == p_slot.to_raw()))
             .await
@@ -151,8 +157,7 @@ where
             .map_err(|e| BondAssemblyError::build("daemon claimed tip", e))?;
 
         // (ii) Anchored ReferenceBlock via the ordinary procedure.
-        let (reference, _depth) =
-            anchored_reference_block(&curve_tree, chain_tip, tip_hash_at).await?;
+        let reference = anchored_reference_block(&curve_tree, chain_tip, tip_hash_at).await?;
         let reference_height = BlockHeight::from_raw(reference.height.0);
 
         // Sealed funding records (empty set if no pscan seal yet).
@@ -180,6 +185,21 @@ where
             required,
             reference_height,
         )?;
+
+        // A bond post must anchor at least one funding input. `sweep` only
+        // errors `InsufficientFunding` when `total < required`; with a zero
+        // `required` (degenerate holdings whose `bond_floor` is 0 under a zero
+        // fee) it succeeds with an *empty* selection. Refuse loudly here — the
+        // downstream `assemble_tx`/`paths[0]` path assumes ≥1 input and would
+        // otherwise index an empty `paths` and panic the assemble task.
+        if selection.records.is_empty() {
+            return Err(BondAssemblyError::build(
+                "funding selection",
+                "no funding inputs selected (bond floor + fee is zero); \
+                 holdings cannot fund a post",
+            )
+            .into());
+        }
 
         let assemble_inputs: Vec<AssembleInput> = selection
             .records
@@ -268,7 +288,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_curve_tree::should_reanchor;
+    use shekyl_curve_tree::{should_reanchor, REF_ANCHOR_AGE};
 
     /// F-2 (i): assemble stamps `anchor_t0` via [`daemon_claimed_tip`]; the
     /// pscan `BlockSource::tip_height` path also routes through that same
@@ -330,8 +350,11 @@ mod tests {
             orch.contains("sweep_funding_outputs("),
             "orchestrator must select funding only via sweep_funding_outputs"
         );
+        // Split the needle so this assertion's own source does not match it
+        // (the file `include_str!`s itself).
+        let retired = concat!("select", "_funding_outputs");
         assert!(
-            !orch.contains("select_funding_outputs"),
+            !orch.contains(retired),
             "retired subset selector must not reappear"
         );
     }

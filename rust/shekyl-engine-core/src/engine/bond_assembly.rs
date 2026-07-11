@@ -683,12 +683,16 @@ mod tests {
             src.contains("pub(crate) fn sweep_funding_outputs"),
             "sweep definition must remain in bond_assembly"
         );
+        // Split the needle so these assertions' own source does not match it
+        // (this file and `backing_set.rs` are both `include_str!`d here).
+        let retired_def = concat!("fn select", "_funding_outputs");
+        let retired = concat!("select", "_funding_outputs");
         assert!(
-            !src.contains("fn select_funding_outputs"),
+            !src.contains(retired_def),
             "retired subset selector must not reappear in bond_assembly"
         );
         assert!(
-            !backing.contains("select_funding_outputs"),
+            !backing.contains(retired),
             "BackingSet must not revive the subset selector"
         );
         // Zero production constructors: only `for_test` under cfg(test).

@@ -43,8 +43,8 @@ use crate::error::WalletLedgerError;
 /// dispatch shape: v1's JoinMarket-only record plus the
 /// [`PendingPostState::Dispatched`] arm (`ARCHIVAL_BOND_WI3_DISPATCH.md`
 /// §3.3). Any field addition / removal / renaming bumps this; loads that see
-/// a different version **refuse rather than migrate** — pre-genesis, a v1
-/// seal under a v2 binary fails closed and the operator re-assembles
+/// a different version **refuse rather than migrate** — pre-genesis, a v2
+/// seal under a v3 binary fails closed and the operator re-assembles
 /// (rule 15).
 pub const PENDING_POST_VERSION: u32 = 3;
 
