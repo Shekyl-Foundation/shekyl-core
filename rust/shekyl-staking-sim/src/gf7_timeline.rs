@@ -981,13 +981,17 @@ fn run_measurement(cfg: &RunConfig) -> MeasurementReport {
     let wallclock_leg = run_wallclock_leg();
 
     let steady_pass = rows.iter().filter(|r| r.gate_relevant).all(|r| r.pass);
+    // The two leg-invalid branches name the failed check themselves rather
+    // than embedding `wallclock_leg.status` (which carries its own "INVALID
+    // (...)" prefix — nesting it made the verdict line read
+    // `INVALID (... — INVALID (...))`, PR #292 review). The leg's full
+    // status stays in the report under `wallclock_leg.status`.
     let gate_status = if !controls_valid {
         "INVALID (controls failed — the run counts for nothing)".to_string()
-    } else if !wallclock_leg.controls_valid || !wallclock_leg.observer_strength_ok {
-        format!(
-            "INVALID (leg-b wall-clock arm invalid — {})",
-            wallclock_leg.status
-        )
+    } else if !wallclock_leg.controls_valid {
+        "INVALID (leg-b wall-clock controls failed — the run counts for nothing)".to_string()
+    } else if !wallclock_leg.observer_strength_ok {
+        "INVALID (leg-b modeled observer weaker than the channel — §19.5 tripwire)".to_string()
     } else if steady_pass && wallclock_leg.pass {
         "PROVISIONAL-PASS (local-daemon posture only; remote-daemon posture unmet, \
          named residual; wall-clock leg b graded in-model — §19.1 sealing form open)"
