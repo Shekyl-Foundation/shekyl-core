@@ -201,6 +201,9 @@ pub(crate) mod block_fetch;
 /// funding-sweep policy over the sealed `PFundingOutputRecord` set (GF-4b
 /// sweep semantics), and the assemble path's typed failure surface.
 pub(crate) mod bond_assembly;
+/// WI-2 §3.3 Engine-side `assemble_bond_post` orchestrator (public halves +
+/// persist-before-return via an independent `PendingPostStore`).
+pub(crate) mod bond_orchestrator;
 pub mod daemon;
 pub(crate) mod diagnostics;
 /// SP-T2 (DQ-T2.3): daemon-posture selection — the no-silent-③ invariant (a
