@@ -3659,3 +3659,9 @@ as a single-N verdict.
   Silence is not a disposition. Mirrored at the
   `run_wallclock_leg()` doc comment
   (`rust/shekyl-staking-sim/src/wallclock_leg.rs`).
+- **Primary-home migration.** When the wallet-rewrite plan gains an
+  archival-knob inventory section, this pin's primary home migrates
+  there (the reopening criterion should live where the arming event
+  happens, not one hop away); this section and the FOLLOWUPS carrier
+  then point at it. Until that section exists, the FOLLOWUPS leg-(b)
+  residual entry is the read-path carrier.

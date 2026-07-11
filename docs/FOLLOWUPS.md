@@ -8502,6 +8502,8 @@ one place to confirm each item's relationship to the wallet stack.
   PR must dispose of the pin explicitly — thread config through the leg (fresh a-priori
   commitment) or document the knob as leg-invariant. Spec home:
   [`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](design/ARCHIVAL_BOND_WI4_MEASUREMENT.md) §19.7.
+  When the wallet-rewrite plan gains an archival-knob inventory section, the pin's primary
+  home migrates there (per §19.7's migration note) and this entry points at it.
   **Target: pre-genesis (blocks the seal).** See
   [`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](design/ARCHIVAL_BOND_WI4_MEASUREMENT.md) §13 (result),
   §14 (launch posture), [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md)
