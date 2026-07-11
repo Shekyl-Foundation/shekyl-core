@@ -21,13 +21,24 @@
   spectral partition, seeded nearest-neighbor expansion, joint-density
   isolation, most-regular-subset repulsion detector), max-statistic
   `T` with Jaccard label agreement, permutation-calibrated null, and
-  the five marked controls M-a…M-e. Graded at `N=10` (200 trials ×
-  200 permutations): deployed posture passes bound 1; whole-set
-  controls (M-a/M-c/M-e) pass bound 2; the two single-member-targeted
-  controls (M-b/M-d) surface a **bound-2 under-specification pinned
-  in §14.4** (family-max `T` structurally cannot lift `+0.30` for a
-  one-of-M perturbation or a mutually-dissimilar cohort) — the run
-  reports INVALID-with-pins per bound 3 rather than silently passing.
+  the five marked controls M-a…M-e. The first graded run surfaced a
+  bound-2 under-specification on the single-member-targeted controls
+  (M-b/M-d), initially pinned; review escalated it to a
+  **detector-architecture finding** — the T-site fact verified at
+  source shows the family-max null re-maximizes per relabeling
+  (≈ 0.66 at `N=10`), rendering lone member-6/7 (Q2-A/Q2-B) signals
+  structurally invisible and a `T`-only bound 1 potentially
+  false-clean. Resolution (§14.4 UPDATE block): an **any-member arm**
+  — per member vs its own null-of-the-mean, exact rank p-value,
+  Bonferroni `α/7` at a-priori `α = 0.05`, with a `perms` resolution
+  guard and `trials = 500` power-sized a-priori to the M-b
+  hypergeometric effect ceiling. Deployed bound 1 requires both arms
+  (family-max at chance and no member flags); whole-set controls
+  retain family-max `+0.30` plus the aimed-member flag; single-member
+  controls grade on the aimed-member flag. Re-graded at `N=10`
+  (500 trials × 200 permutations): deployed clean on both arms, all
+  five controls bite their aimed member — **PARTITION-PASS**, no pins
+  remaining.
   New `riders.rs` (same round): §16.7 **N-sweep** (`r < 2` holds at
   every `N ∈ {10, 20, 50}`), **M6.2 coupling control** (blind arm at
   window 0 must stay ≥ `2/N`; measured `0.231 ≥ 0.200`),

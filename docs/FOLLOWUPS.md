@@ -8435,16 +8435,37 @@ one place to confirm each item's relationship to the wallet stack.
   `+0.30` for a one-of-M perturbation or a mutually-dissimilar cohort; M-d's members 1–5
   stay at chance with member 6 the only biting detector, exactly as specified) — pinned
   in §14.4 with two disposition options (per-aimed-member grading), run reports
-  INVALID-with-pins per bound 3, never a silent pass. **Riders landed same slice:**
+  INVALID-with-pins per bound 3, never a silent pass.
+  **UPDATE 2026-07-11 — bound-2 pin RESOLVED as a detector-architecture finding, not
+  a wording choice (§14.4 UPDATE block is the record).** Review required the
+  T-computation-rule fact pulled at source before any disposition; the verified fact:
+  `T` is a raw per-member max (no consensus dilution), but its permutation null
+  re-maximizes the family per relabeling (≈ 0.66 at `N=10`, set by other members'
+  selection freedom — 252-subset enumeration, best-of-`k` clusterings), so a lone
+  member-6/7 signature (the Q2-A/Q2-B shapes) is structurally invisible to the
+  family-max arm, and a bound-1 pass on `T` alone can be false-clean. Fix = arm the
+  trigger, not lower the bar: **any-member arm** (per member vs its own
+  null-of-the-mean, exact rank p, Bonferroni `α/7` at a-priori `α = 0.05`; `perms`
+  resolution guard `≥ 139`; `trials = 500` power-sized a-priori to the M-b
+  hypergeometric effect ceiling). Deployed bound 1 now requires both arms (family-max
+  at chance **and** no member flags); whole-set controls retain family-max `+0.30`
+  and add the aimed-member flag; single-member controls grade on the aimed-member
+  flag — the same rule deployment uses. Re-graded 500×200: deployed clean on both
+  arms (lift `+0.001`, min member p `0.264`); all five controls bite (M-b m2 and
+  M-d m6 flag at the p-floor `0.005`; M-d members 1–5 at chance). Verdict
+  **PARTITION-PASS**; no pins remain. Reopen on: family-membership change
+  (re-derive the Bonferroni divisor), `N`/`M` geometry change (re-derive power
+  sizing), or persistent non-aimed-member flags on a control (aggregator
+  cross-talk → detector round). **Riders landed same slice:**
   §16.7 N-sweep (`r < 2` at every `N ∈ {10,20,50}`; measured `r` falls with `N` —
   no small-candidate-set artifact), M6.2 coupling control (blind@window-0 `0.231` ≥
   `2/N = 0.200`; the doc's `0.237` reference reproduced), §18.3-as-narrowed-by-§18.8
   attribute-bridge grading (deployed `|corr| 0.110` at null `0.115`; coupled positive
   control `0.985` bites), §18.4 lifetime-accumulation sweep (per-post `p = 0.176`
-  compounding to ≈`1.0` at the 52-event founder anchor). **Open on this arm:** the
-  §14.4 bound-2 disposition decision (doc pin, pre-genesis — gates the arm's verdict
-  flipping from INVALID-with-pins to a gradeable PASS/FAIL, which `K_COVER` sealing
-  consumes); leg-(b) wall-clock emission (separate item below).
+  compounding to ≈`1.0` at the 52-event founder anchor). **Open on this arm:**
+  ~~the §14.4 bound-2 disposition decision~~ (RESOLVED 2026-07-11 per the UPDATE
+  above — the arm now grades PARTITION-PASS, which `K_COVER` sealing consumes);
+  leg-(b) wall-clock emission (separate item below).
   **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
   GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
   seams, not just entry).**

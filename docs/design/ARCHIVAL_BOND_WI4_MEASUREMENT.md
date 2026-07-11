@@ -1240,6 +1240,63 @@ the null distribution then models.
   > reports **INVALID-with-pins** (bound 3 as written), never a
   > silent pass; the measured record lives in
   > `shekyl-staking-sim --partition-adversary`.
+  >
+  > **UPDATE 2026-07-11 — RESOLVED, but not by picking (a) or (b).**
+  > Both options above were grading-rule edits; review correctly
+  > flagged that the disposition was under-determined by an unmeasured
+  > property of the deployed statistic, and required the
+  > T-computation-rule fact to be pulled at source *before* any
+  > disposition. **The verified T-site fact
+  > (`partition_adversary.rs`):** `T` is a raw max over per-member
+  > Jaccard agreements — *no* cross-member consensus (the
+  > "Jaccard-consensus swallows single-member signal" hypothesis is
+  > falsified) — but the operating verdict read only `T − null(T)`,
+  > and `null(T)` re-maximizes the family per relabeling, sitting
+  > ≈ `0.66` at `N = 10` on the *selection freedom of other members*
+  > (member 3 enumerates all `C(10,5) = 252` subsets; members 1/4
+  > best-of-`k`; member 2 best-of-feature). A lone member-6/7
+  > signature — exactly the Q2-A/Q2-B adversary shapes those members
+  > were added for (§17 R4) — must exceed that waterline in *absolute*
+  > agreement before it registers in `T` at all. Per-member agreements
+  > were recorded but consulted by nothing. **That is the
+  > detector-architecture branch:** members 6/7 were armed with no
+  > trigger; M-b/M-d failing bound 2 was the alarm firing correctly.
+  > Picking (a) or (b) as a wording choice would have laundered the
+  > Q2-A/Q2-B detector hole into a green consumed by `K_COVER`
+  > sealing. **The fix is the aggregator, not the bar:** an
+  > **any-member arm** — per member, the observed trial-mean agreement
+  > against its *own* null-of-the-mean draws (permutation `p` averaged
+  > across trials), exact rank p-value `(1 + #{null ≥ obs})/(perms+1)`,
+  > flagged iff `p ≤ α/7` (Bonferroni) at a-priori family-wise
+  > `α = 0.05`. Deployed **bound 1 now requires both arms**:
+  > `|T − null| ≤ 0.05` *and* no member flags — closing the symmetric
+  > false-clean hazard (a max `T` can pass bound 1 on insensitivity;
+  > privacy requires that *no* member resolves the founders, and the
+  > max can hide the one that does). **Bound 2 as re-specified:** every
+  > control's aimed member must flag under the same any-member rule
+  > deployment uses; whole-set controls (M-a/M-c/M-e) *additionally*
+  > retain the family-max `+0.30`, which their failure modes genuinely
+  > move. No bar was lowered; a detection arm was added. The bar
+  > derives from per-member null geometry + the multiple-comparison
+  > correction, never from the observed failing scores; `trials` is
+  > power-sized a-priori to the single-member effect ceiling (M-b's
+  > one-of-`M` perturbation bounds the aimed member's Jaccard shift
+  > near `+0.05` by hypergeometric arithmetic; `σ/√trials` sizing gives
+  > `trials = 500` at power ≈ 0.9), and `perms` carries a loud
+  > resolution guard (`1/(perms+1) ≤ α/7`, i.e. `perms ≥ 139`).
+  > **Re-graded record (N=10, 500×200):** deployed passes both bound-1
+  > arms (family-max lift `+0.001`; per-member min rank-p `0.264`, no
+  > flag); M-a/M-c/M-e clear family-max bound 2 (`+0.38/+0.36/+0.32`)
+  > with aimed members flagging at the p-floor `0.005`; M-b's member 2
+  > and M-d's member 6 flag at `0.005` (M-d members 1–5 stay at
+  > chance, the specified single-member bite shape). Verdict:
+  > **PARTITION-PASS** — reached by arming members 6/7's trigger,
+  > never by moving a bar. Reopening criterion (rule-21 shape): any
+  > family-membership change (new member `⇒` re-derive the Bonferroni
+  > divisor), any `N`/`M` geometry change (re-derive the power sizing),
+  > or a control observed to flag a *non-aimed* member persistently
+  > (an aggregator cross-talk finding — re-open the detector round,
+  > not the bar).
 - **The gating lemma (a-priori deliverable of the implementation round;
   committed before any sweep grades — same provenance rule as the §3.2
   thresholds).** *An absolute upper bound on the probability that `M`
