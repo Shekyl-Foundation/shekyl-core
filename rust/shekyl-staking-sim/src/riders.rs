@@ -240,7 +240,7 @@ pub fn run_riders_report() -> RidersReport {
     let mut rng = SplitMix64(0x9A7C_1667_2C2B_0004);
     let posture = SynthParams::posture();
 
-    // Rider 4 (§16.7 item 4): the N-sweep. Same generator, one extra axis.
+    // Rider 1 (§16.7 item 4): the N-sweep. Same generator, one extra axis.
     let n_sweep: Vec<NSweepRow> = SWEPT_N
         .iter()
         .map(|&n| {
@@ -295,7 +295,7 @@ pub fn run_riders_report() -> RidersReport {
         },
     ];
 
-    // Rider 1 of §18.4: lifetime accumulation at the posture per-post p —
+    // Rider 4 (§18.4): lifetime accumulation at the posture per-post p —
     // pessimistic arm choice: the strongest graded arm at the N = 10 posture
     // row (the stress panel upper-bounds the fielded correlators).
     let posture_row = &n_sweep[0];
