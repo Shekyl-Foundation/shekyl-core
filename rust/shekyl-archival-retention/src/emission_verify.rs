@@ -41,7 +41,7 @@
 use crate::claimed_epochs::{claim_window_floor, claimed_epochs_contains};
 use crate::consensus_state::{
     as_of_e_served_work, capped_work_milli, epoch_close_height, settlement_epoch_at_height,
-    shard_contribution_milli, EpochCloseInputs,
+    shard_contribution_milli, CreditIndexOutOfRange, EpochCloseInputs, ServedWork,
 };
 use crate::emission_wire::{ArchivalRewardEmissionVin, EmissionAuthRole, RewardCommit, WireError};
 use crate::reward_arithmetic::reward_share_floor;
@@ -326,6 +326,89 @@ pub struct EmissionVerified {
     pub total_reward: u64,
 }
 
+/// True when `epoch` predates the bond record's market entry —
+/// step 2's `E ≥ E_join + 1` bound ([`EmissionVerifyError::EpochBeforeJoin`]),
+/// read against the **current record's** join epoch (a retire-then-rejoin
+/// lifecycle re-derives `E_join` from the rejoin height, so frozen per-epoch
+/// rows may carry an older join than the record that must sign the claim).
+///
+/// Single source of the join boundary: the verify body and the wallet claim
+/// builder's step-1 derivation both resolve through this one predicate, so a
+/// builder that admits an epoch verify rejects here is unrepresentable.
+#[must_use]
+pub fn epoch_is_before_join(epoch: u64, join_settlement_epoch: u64) -> bool {
+    epoch < join_settlement_epoch.saturating_add(1)
+}
+
+/// The claimant's steps-4/5 evaluation over one epoch's frozen rows — the
+/// shared head of the verify body's per-epoch recompute and the wallet claim
+/// builder's step-1 derivation (`EMISSION_CLAIM_BUILDER.md` §2: claimable ⇔
+/// the recomputed share is strictly positive, **the same recompute verify
+/// runs** — one function, not a mirrored copy that can drift).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimantShare {
+    /// The full [`as_of_e_served_work`] recompute (the per-entry compares
+    /// and the builder's row assembly consume its per-shard terms).
+    pub served: ServedWork,
+    /// `work_P(E)` — zero when the claimant has no serve-credit row.
+    pub work_p: u64,
+    /// Market membership at `E` (the claimant's mask term).
+    pub is_member: bool,
+    /// `reward_share_floor(budget, capped_work_milli(work_P, member, curve),
+    /// persisted Σwork)` — verify's step-5 `RewardMismatch` operand and the
+    /// builder's claimability/wire-positivity predicate.
+    pub reward: u64,
+}
+
+/// Rejection reasons for [`claimant_reward_share`] — internally inconsistent
+/// gather rows; each maps to its verify rejection (or the builder's
+/// `SourceInvalid` refusal) at the caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimantShareError {
+    /// Malformed gather indices (verify: [`EmissionVerifyError::GatherMalformed`]).
+    Gather(CreditIndexOutOfRange),
+    /// `claimant_bond_idx` outside the bond rows (verify:
+    /// [`EmissionVerifyError::ClaimantIndexOutOfRange`]).
+    ClaimantIndexOutOfRange {
+        claimant_bond_idx: usize,
+        bonds_len: usize,
+    },
+}
+
+/// Steps 4 + 5 evaluation head: the served-work recompute over the frozen
+/// rows, the bounds-checked claimant extraction (absent serve-credit row ⇒
+/// zero work, exactly as the close treated it), and the three-channel
+/// economics over the **persisted** denominator (R1.B: canonical
+/// `reward_arithmetic`, floor + burn-the-dust).
+pub fn claimant_reward_share(
+    source: &EmissionEpochSource<'_>,
+) -> Result<ClaimantShare, ClaimantShareError> {
+    let served = as_of_e_served_work(&source.inputs).map_err(ClaimantShareError::Gather)?;
+    // Bounds-check the caller-supplied index before indexing so a malformed
+    // gather is a clean rejection, not a daemon-aborting panic (fail-closed,
+    // as the FFI numerator's ERR_INDEX_RANGE guard does).
+    let (work_p, is_member) = match source.claimant_bond_idx {
+        Some(idx) if idx >= served.work_by_bond.len() => {
+            return Err(ClaimantShareError::ClaimantIndexOutOfRange {
+                claimant_bond_idx: idx,
+                bonds_len: served.work_by_bond.len(),
+            });
+        }
+        Some(idx) => (served.work_by_bond[idx], served.member[idx]),
+        None => (0, false),
+    };
+    // The capped term is the same single-sourced per-P definition that built
+    // the persisted `Σwork(E)` denominator.
+    let capped = capped_work_milli(work_p, is_member, &source.inputs.curve);
+    let reward = reward_share_floor(source.budget, capped, source.persisted_sigma_work_milli);
+    Ok(ClaimantShare {
+        served,
+        work_p,
+        is_member,
+        reward,
+    })
+}
+
 /// §7.1 steps 1–5 over the frozen as-of-`E` sources.
 ///
 /// `epoch_sources` must be aligned 1:1 with `vin.settlement_epochs` (the C++
@@ -402,7 +485,10 @@ pub fn emission_vin_verify_claims(
         return Err(EmissionVerifyError::HoldingsMismatch);
     }
     for &epoch in &vin.settlement_epochs {
-        if epoch < bond.join_settlement_epoch.saturating_add(1) {
+        // The join boundary is [`epoch_is_before_join`] — the same predicate
+        // the wallet claim builder's derivation calls, so the two cannot
+        // drift (one definition, not parallel inline copies).
+        if epoch_is_before_join(epoch, bond.join_settlement_epoch) {
             return Err(EmissionVerifyError::EpochBeforeJoin {
                 epoch,
                 join_settlement_epoch: bond.join_settlement_epoch,
@@ -423,27 +509,26 @@ pub fn emission_vin_verify_claims(
         let epoch = vin.settlement_epochs[i];
         let claim = &vin.work_claim[i];
 
-        // Step 4 — recompute `work_P(E)` through the single sourcing
-        // function (WS-1 §5.5): the numerator is P's exact term in the
-        // persisted denominator by construction.
-        let served = as_of_e_served_work(&source.inputs)
-            .map_err(|source_err| EmissionVerifyError::GatherMalformed { epoch, source_err })?;
-
-        // Claimant work + market-masked per-shard expectations. Bounds-check
-        // the caller-supplied index before indexing so a malformed gather is a
-        // clean consensus rejection, not a daemon-aborting panic (fail-closed,
-        // as the FFI numerator's ERR_INDEX_RANGE guard does).
-        let (work_p, is_member) = match source.claimant_bond_idx {
-            Some(idx) if idx >= served.work_by_bond.len() => {
-                return Err(EmissionVerifyError::ClaimantIndexOutOfRange {
-                    epoch,
-                    claimant_bond_idx: idx,
-                    bonds_len: served.work_by_bond.len(),
-                });
+        // Steps 4 + 5 head — recompute `work_P(E)` and the reward share
+        // through the shared evaluation ([`claimant_reward_share`]: the
+        // single sourcing function per WS-1 §5.5 — the numerator is P's
+        // exact term in the persisted denominator by construction — plus
+        // the R1.B economics). The wallet claim builder derives claimability
+        // from the same function, so builder and verify cannot drift.
+        let share = claimant_reward_share(source).map_err(|share_err| match share_err {
+            ClaimantShareError::Gather(source_err) => {
+                EmissionVerifyError::GatherMalformed { epoch, source_err }
             }
-            Some(idx) => (served.work_by_bond[idx], served.member[idx]),
-            None => (0, false),
-        };
+            ClaimantShareError::ClaimantIndexOutOfRange {
+                claimant_bond_idx,
+                bonds_len,
+            } => EmissionVerifyError::ClaimantIndexOutOfRange {
+                epoch,
+                claimant_bond_idx,
+                bonds_len,
+            },
+        })?;
+        let (served, work_p, is_member) = (&share.served, share.work_p, share.is_member);
 
         // Per-entry exactness (§5.4): the bit must equal the ledger fact,
         // the scarcity must equal the member-masked recompute — a claim
@@ -517,13 +602,11 @@ pub fn emission_vin_verify_claims(
             });
         }
 
-        // Step 5 — three-channel economics over the persisted denominator
-        // (R1.B: canonical `reward_arithmetic`, u128 numerator-before-divide,
-        // floor + burn-the-dust). The capped term is the same single-sourced
-        // per-P definition that built the persisted `Σwork(E)` denominator.
-        let capped = capped_work_milli(work_p, is_member, &source.inputs.curve);
-        let expected_reward =
-            reward_share_floor(source.budget, capped, source.persisted_sigma_work_milli);
+        // Step 5 — the shared evaluation's reward term (three-channel
+        // economics over the persisted denominator; R1.B: canonical
+        // `reward_arithmetic`, u128 numerator-before-divide, floor +
+        // burn-the-dust), computed above by [`claimant_reward_share`].
+        let expected_reward = share.reward;
         let claimed_reward = vin.reward_amount_plain[i];
         if claimed_reward != expected_reward {
             return Err(EmissionVerifyError::RewardMismatch {

@@ -34,6 +34,7 @@ pub mod claimed_epochs;
 pub mod consensus_state;
 pub mod conservation;
 pub mod constants;
+pub mod emission_kat_shape;
 pub mod emission_verify;
 pub mod emission_wire;
 pub mod error;
@@ -65,7 +66,7 @@ pub use challenge::{
 };
 pub use claimed_epochs::{
     claim_window_floor, claimed_epochs_check_and_set, claimed_epochs_contains,
-    emission_block_claims_unique, epoch_is_claim_expired, ClaimedEpochsError,
+    emission_block_claims_unique, epoch_is_claim_expired, epoch_is_not_settled, ClaimedEpochsError,
     MAX_CLAIMED_EPOCH_ENTRIES,
 };
 pub use consensus_state::{
@@ -81,9 +82,11 @@ pub use constants::{
     CHALLENGES_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS, CHALLENGE_RESOLUTION_BLOCKS,
     CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
 };
+pub use emission_kat_shape::{EmissionKatShape, EMISSION_KAT_SHAPE};
 pub use emission_verify::{
-    emission_vin_verify, emission_vin_verify_auth, emission_vin_verify_backing,
-    emission_vin_verify_claims, AuthVerified, BackingVerified, ClaimantBondRecord, ClaimsVerified,
+    claimant_reward_share, emission_vin_verify, emission_vin_verify_auth,
+    emission_vin_verify_backing, emission_vin_verify_claims, epoch_is_before_join, AuthVerified,
+    BackingVerified, ClaimantBondRecord, ClaimantShare, ClaimantShareError, ClaimsVerified,
     EmissionEpochSource, EmissionVerified, EmissionVerifyContext, EmissionVerifyError,
 };
 // The emission error is re-exported under a disambiguated name: the bare

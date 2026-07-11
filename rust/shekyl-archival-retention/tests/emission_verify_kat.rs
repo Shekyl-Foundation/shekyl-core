@@ -28,7 +28,7 @@ use shekyl_archival_retention::{
     ShardWorkEntry, WorkEpochClaim, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_CLAIM_AGE_W,
     SETTLEMENT_EPOCH_BLOCKS,
 };
-use shekyl_archival_retention::{EmissionAuthRole, RewardCommit};
+use shekyl_archival_retention::{EmissionAuthRole, RewardCommit, EMISSION_KAT_SHAPE};
 use shekyl_crypto_pq::derivation::hash_pqc_public_key;
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridSecretKey, SignatureScheme};
@@ -37,13 +37,16 @@ use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridSecretKey, Signature
 const E: u64 = 5;
 /// Gate-1 per-epoch budget operand.
 const BUDGET: u64 = 1_000_000;
-/// Claimed shard (claimant-credited) and the second, other-P-only shard.
-const SHARD_A: u64 = 7;
-const SHARD_B: u64 = 9;
+/// Claimed shard (claimant-credited) and the second, other-P-only shard —
+/// from the shared shape (the builder's KATs pin the same values).
+const SHARD_A: u64 = EMISSION_KAT_SHAPE.shard_a;
+const SHARD_B: u64 = EMISSION_KAT_SHAPE.shard_b;
 
-/// Owned as-of-`E` fixture rows: two bonds (idx 0 = claimant, idx 1 = other),
-/// two shards, credits {claimant→A, other→A, other→B} — `R_market(A) = 2`,
-/// `R_market(B) = 1`, claimant work = its shard-A term only.
+/// Owned as-of-`E` fixture rows built from [`EMISSION_KAT_SHAPE`] — the
+/// canonical two-bond/two-shard/three-credit shape shared with the wallet
+/// claim builder's KATs (`shekyl-engine-core`), so the differential halves
+/// exercise one fixture: `R_market(A) = 2`, `R_market(B) = 1`, claimant
+/// work = its shard-A term only.
 struct Fixture {
     epoch: u64,
     bonds: Vec<EpochCloseBond<'static>>,
@@ -54,47 +57,42 @@ struct Fixture {
 
 impl Fixture {
     fn new(epoch: u64) -> Self {
+        let shape = EMISSION_KAT_SHAPE;
         let close = epoch_close_height(epoch).expect("fixture epoch closes");
         Self {
             epoch,
             bonds: vec![
                 EpochCloseBond {
-                    join_settlement_epoch: 1,
+                    join_settlement_epoch: shape.join_settlement_epoch,
                     is_foundation_complete_tree: false,
                     bad_intervals: &[],
                 },
                 EpochCloseBond {
-                    join_settlement_epoch: 1,
+                    join_settlement_epoch: shape.join_settlement_epoch,
                     is_foundation_complete_tree: false,
                     bad_intervals: &[],
                 },
             ],
             shards: vec![
                 EpochCloseShard {
-                    shard_id: SHARD_A,
+                    shard_id: shape.shard_a,
                     has_segment: true,
-                    freeze_height: close - 5_000,
+                    freeze_height: close - shape.shard_a_freeze_offset,
                 },
                 EpochCloseShard {
-                    shard_id: SHARD_B,
+                    shard_id: shape.shard_b,
                     has_segment: true,
-                    freeze_height: close - 8_000,
+                    freeze_height: close - shape.shard_b_freeze_offset,
                 },
             ],
-            pairs: vec![
-                Pair {
-                    bond_idx: 0,
-                    shard_idx: 0,
-                },
-                Pair {
-                    bond_idx: 1,
-                    shard_idx: 0,
-                },
-                Pair {
-                    bond_idx: 1,
-                    shard_idx: 1,
-                },
-            ],
+            pairs: shape
+                .credit_pairs
+                .iter()
+                .map(|&(bond_idx, shard_idx)| Pair {
+                    bond_idx,
+                    shard_idx,
+                })
+                .collect(),
             curve: BandedCurveParams::default_provisional(),
         }
     }
@@ -184,7 +182,7 @@ impl Ctx {
             height: epoch_close_height(fx.epoch).expect("close") + 1,
             bond_holdings: holdings(),
             claimed: vec![],
-            join: 1,
+            join: EMISSION_KAT_SHAPE.join_settlement_epoch,
             vout_sum: reward,
         }
     }
@@ -206,7 +204,7 @@ fn source(fx: &Fixture) -> EmissionEpochSource<'_> {
     EmissionEpochSource {
         inputs: fx.inputs(),
         persisted_sigma_work_milli: fx.persisted_sigma(),
-        claimant_bond_idx: Some(0),
+        claimant_bond_idx: Some(EMISSION_KAT_SHAPE.claimant_bond_idx),
         budget: BUDGET,
     }
 }

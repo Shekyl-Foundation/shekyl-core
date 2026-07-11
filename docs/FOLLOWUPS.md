@@ -4629,34 +4629,6 @@ sustainability is unaffected by the recalibration.
 
 ## V3.1 — audit response and stressnet gates
 
-- **Extract `epoch_is_not_settled` as a read-only sibling of the claim
-  boundary predicates** (surfaced 2026-07-10, emission claim builder
-  PR 2 / `EMISSION_CLAIM_BUILDER.md` §2 step 1). The top claim boundary
-  (`E ≥ current_settled_epoch` ⇒ `NotSettled`) is the only one of the
-  three without a read-only predicate: expiry has
-  `epoch_is_claim_expired`, dedup has `claimed_epochs_contains`, but the
-  top check lives only inside the mutating
-  `claimed_epochs_check_and_set`. The claim builder therefore classifies
-  epochs by running `check_and_set` on a **scratch clone** as a read-only
-  oracle — sound while the function is pure w.r.t. all state but the
-  passed set (verified at `claimed_epochs.rs:118-146` on 2026-07-09; the
-  purity pin is recorded in `engine/emission_claim.rs`'s module doc, with
-  a differential test pinning oracle/predicate agreement). The
-  derivation's **fourth** boundary — verify's strict finalization
-  (`EMISSION_CLAIM_BUILDER.md` §2 step-1 post-closure sharpening) — is
-  not the oracle's and needs no extraction: it already consumes the
-  read-only `epoch_close_height`, the literal function verify calls.
-  Extracting
-  `epoch_is_not_settled(epoch, current_settled_epoch) -> bool` —
-  resolving through the same `>=` the mutator uses, with `check_and_set`
-  rewritten to call it — closes the asymmetry and retires the
-  scratch-oracle entirely. Separable scope: a consensus-crate refactor,
-  not builder work, hence not PR 2's ride-along. Target: V3.1. *Reopen
-  sooner if:* `claimed_epochs_check_and_set` gains any side effect
-  beyond the passed set (the scratch-oracle disposition breaks
-  immediately), or a second consumer needs the top boundary read-only
-  (rule-21 reopening criteria: both named, both mechanically checkable).
-
 - **Raw-import archival/burn bookkeeping parity** (surfaced 2026-07-09,
   F-B1a remediation). The non-verifying import path
   (`blockchain_import.cpp` direct `db.add_block`) bypasses

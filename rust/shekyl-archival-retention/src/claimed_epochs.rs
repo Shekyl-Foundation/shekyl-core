@@ -84,6 +84,21 @@ pub fn epoch_is_claim_expired(epoch: u64, current_settled_epoch: u64) -> bool {
     epoch < claim_window_floor(current_settled_epoch)
 }
 
+/// True when `epoch` is not yet a closed settlement epoch
+/// (`epoch >= current_settled_epoch`) — the literal `NotSettled` boundary
+/// the claim check enforces: only closed epochs are claimable (the §4.5
+/// lagged read cites `Σwork(E)` stored at the close of `E`).
+///
+/// The read-only sibling of [`epoch_is_claim_expired`] /
+/// [`claimed_epochs_contains`] for the **top** claim boundary.
+/// [`claimed_epochs_check_and_set`] resolves its `NotSettled` verdict
+/// through this one predicate, so a read-only consumer (the wallet claim
+/// builder's step-1 derivation) and the connect-path mutator cannot drift.
+#[must_use]
+pub fn epoch_is_not_settled(epoch: u64, current_settled_epoch: u64) -> bool {
+    epoch >= current_settled_epoch
+}
+
 /// Block-level intra-block cross-tx `(P, E)` uniqueness decision —
 /// `REWARD_EMISSION_E3_GATING_ROUND.md` §6.2, the middle layer of the
 /// three-layer dedup stack (intra-tx: wire strict-increase; cross-block:
@@ -120,12 +135,13 @@ pub fn claimed_epochs_check_and_set(
     epoch: u64,
     current_settled_epoch: u64,
 ) -> Result<bool, ClaimedEpochsError> {
-    if epoch >= current_settled_epoch {
+    // Both boundaries resolve through the read-only predicates — the *same*
+    // functions the wallet claim builder (top) and the 2d-1 persona-retirement
+    // witness (bottom) call, so no consumer can drift (one definition each,
+    // not parallel inline copies).
+    if epoch_is_not_settled(epoch, current_settled_epoch) {
         return Err(ClaimedEpochsError::NotSettled);
     }
-    // The expired boundary is [`epoch_is_claim_expired`] — the *same* predicate the
-    // 2d-1 persona-retirement witness calls, so the two cannot drift (both resolve
-    // through this one definition, not parallel inline copies).
     if epoch_is_claim_expired(epoch, current_settled_epoch) {
         return Err(ClaimedEpochsError::Expired);
     }
