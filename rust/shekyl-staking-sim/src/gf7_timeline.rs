@@ -209,7 +209,7 @@ impl SynthParams {
     /// dispersal *sweep* (the `dispersal` group) is a coarse-tick counterfactual
     /// bracket, and the wall-clock sweep-phase channel is graded by the live
     /// re-run (leg b, §8).
-    fn posture() -> Self {
+    pub(crate) fn posture() -> Self {
         Self {
             window: DEFAULT_ENTRY_GAP_WINDOW,
             inversion: true,
@@ -622,7 +622,12 @@ fn guess_consistency_gated(
 /// Grade one parameter point: `trials` independent worlds of `n` pairs each;
 /// all three arms consume only the recorded streams. Returns `(blind, s3, lr)`
 /// P(link) over `trials · n` linking decisions.
-fn grade(p: &SynthParams, n: usize, trials: u32, rng: &mut SplitMix64) -> (f64, f64, f64) {
+pub(crate) fn grade(
+    p: &SynthParams,
+    n: usize,
+    trials: u32,
+    rng: &mut SplitMix64,
+) -> (f64, f64, f64) {
     let sigma = p.sigma() as f64;
     let sigma2 = sigma * sigma;
     let total = trials as u64 * n as u64;
@@ -705,7 +710,7 @@ pub struct ArmResult {
 }
 
 impl ArmResult {
-    fn new(p_link: f64, n: usize) -> Self {
+    pub(crate) fn new(p_link: f64, n: usize) -> Self {
         let ratio = p_link * n as f64;
         Self {
             p_link,

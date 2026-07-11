@@ -4,6 +4,51 @@
 
 ### Added
 
+- **sim: §14.4 partition-adversary arm implemented in `shekyl-staking-sim`
+  (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §14.4; WI-4/GF-7).** Co-first
+  deliverables landed before any grading run per the R4/R5 binding
+  ordering: the **gating lemma** (a-priori absolute i.i.d.
+  founder-clustering bound `M·((c+1)/(W+1))^{M−1} = 3.5393e-5` at
+  `M=5, c=30, W=600`, exact-CDF domination test, no user-cohort
+  reliance) and **compile-time witness-typed controls**
+  (`ControlWitness` is a distinct type with no constructor or
+  conversion path from the production founder-config surface — the
+  five marked controls are un-constructible from production
+  constructors at the type level, §17.7 finding 4). New
+  `partition_adversary.rs`: named feature dictionary (11
+  posture-conditioned observables per pair), family members 1–7
+  (k-swept clustering, per-feature outlier, most-cohesive subset,
+  spectral partition, seeded nearest-neighbor expansion, joint-density
+  isolation, most-regular-subset repulsion detector), max-statistic
+  `T` with Jaccard label agreement, permutation-calibrated null, and
+  the five marked controls M-a…M-e. The first graded run surfaced a
+  bound-2 under-specification on the single-member-targeted controls
+  (M-b/M-d), initially pinned; review escalated it to a
+  **detector-architecture finding** — the T-site fact verified at
+  source shows the family-max null re-maximizes per relabeling
+  (≈ 0.66 at `N=10`), rendering lone member-6/7 (Q2-A/Q2-B) signals
+  structurally invisible and a `T`-only bound 1 potentially
+  false-clean. Resolution (§14.4 UPDATE block): an **any-member arm**
+  — per member vs its own null-of-the-mean, exact rank p-value,
+  Bonferroni `α/7` at a-priori `α = 0.05`, with a `perms` resolution
+  guard and `trials = 500` power-sized a-priori to the M-b
+  hypergeometric effect ceiling. Deployed bound 1 requires both arms
+  (family-max at chance and no member flags); whole-set controls
+  retain family-max `+0.30` plus the aimed-member flag; single-member
+  controls grade on the aimed-member flag. Re-graded at `N=10`
+  (500 trials × 200 permutations): deployed clean on both arms, all
+  five controls bite their aimed member — **PARTITION-PASS**, no pins
+  remaining.
+  New `riders.rs` (same round): §16.7 **N-sweep** (`r < 2` holds at
+  every `N ∈ {10, 20, 50}`), **M6.2 coupling control** (blind arm at
+  window 0 must stay ≥ `2/N`; measured `0.231 ≥ 0.200`),
+  **attribute-stratified bridge grading** (holdings→period coupling:
+  deployed at null `0.110` vs `0.115`, positive control bites at
+  `0.985`), and the **lifetime-accumulation sweep**
+  (`1 − (1−p)^events` at the 52-event long-lived-founder anchor).
+  Trackers updated (`FOLLOWUPS.md` WI-4 entry,
+  `IMPLEMENTATION_INDEX.md` WI-4 row, §14.4 status lines).
+
 - **docs: WI-4/GF-7 review-closure ratified — distinct-position round R4
   lands §17.6 (`ARCHIVAL_BOND_WI4_MEASUREMENT.md`).** The §16.10
   questions 2 (partition-family completeness) and 3 (`K_COVER` cycle

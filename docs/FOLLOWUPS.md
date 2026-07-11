@@ -8421,6 +8421,77 @@ one place to confirm each item's relationship to the wallet stack.
   a construction defeating **both** the categorical rule and the substrate's own
   decorrelation (epoch quantization + cooldown headroom): the real-work bar, not
   lens restatement.
+  **§14.4 implementation round, first slice LANDED (2026-07-11,
+  `feat/sim-partition-adversary`, `shekyl-staking-sim/src/partition_adversary.rs` +
+  `riders.rs`):** co-first deliverables committed before any sweep grades — the gating
+  lemma (`M·((c+1)/(W+1))^{M−1} = 3.5393e-5` at `M=5, c=30, W=600`; exact-CDF domination
+  test) and compile-time witness-typed controls (`ControlWitness` distinct from the
+  production `FounderConfig`, no constructor/`From` bridge — §17.7 finding 4 shape).
+  Family members 1–7 + named feature dictionary + max-statistic `T` + permutation null +
+  controls M-a…M-e graded at `N=10`, 200×200: deployed bound 1 holds (`−0.005`);
+  whole-set controls clear bound 2 (M-a `+0.38`, M-c `+0.36`, M-e `+0.32`, aimed-member
+  lifts `+0.46/+0.65/+0.62`); the two single-member-targeted controls (M-b, M-d) surface
+  a **pinned bound-2 under-specification** (family-max `T` structurally cannot lift
+  `+0.30` for a one-of-M perturbation or a mutually-dissimilar cohort; M-d's members 1–5
+  stay at chance in lift terms with member 6 the only biting detector, exactly as
+  specified) — pinned
+  in §14.4 with two disposition options (per-aimed-member grading), run reports
+  INVALID-with-pins per bound 3, never a silent pass.
+  **UPDATE 2026-07-11 — bound-2 pin RESOLVED as a detector-architecture finding, not
+  a wording choice (§14.4 UPDATE block is the record).** Review required the
+  T-computation-rule fact pulled at source before any disposition; the verified fact:
+  `T` is a raw per-member max (no consensus dilution), but its permutation null
+  re-maximizes the family per relabeling (≈ 0.66 at `N=10`, set by other members'
+  selection freedom — 252-subset enumeration, best-of-`k` clusterings), so a lone
+  member-6/7 signature (the Q2-A/Q2-B shapes) is structurally invisible to the
+  family-max arm, and a bound-1 pass on `T` alone can be false-clean. Fix = arm the
+  trigger, not lower the bar: **any-member arm** (per member vs its own
+  null-of-the-mean, exact rank p, Bonferroni `α/7` at a-priori `α = 0.05`; `perms`
+  resolution guard `≥ 139`; `trials = 500` power-sized a-priori to the M-b
+  hypergeometric effect ceiling). Deployed bound 1 now requires both arms (family-max
+  at chance **and** no member flags); whole-set controls retain family-max `+0.30`
+  and add the aimed-member flag; single-member controls grade on the aimed-member
+  flag — the same rule deployment uses. Re-graded 500×200: deployed clean on both
+  arms (lift `+0.001`, min member p `0.264`); all five controls bite (M-b m2 and
+  M-d m6 flag at the p-floor `0.005`; M-d members 1–5 at chance in bite-magnitude
+  terms). Verdict
+  **PARTITION-PASS**; no pins remain. Ratified 2026-07-11 (decision-anchored:
+  PR #291, incl. its review-round dispositions — projection-form spectral
+  deflation with a bit-for-bit-identical re-grade, loud geometry guards; the
+  §14.4 RATIFIED block is the record). Reopen on: family-membership change
+  (re-derive the Bonferroni divisor), `N`/`M` geometry change (re-derive power
+  sizing), or persistent non-aimed-member flags on a control **through a shared
+  computed intermediate** (aggregator cross-talk → detector round; the
+  shared-intermediate mechanism is the criterion's carrier — verify at source
+  before filing, per the M-d member-1 precedent below).
+  **Calibration note 2026-07-11 (record accuracy only — grading, verdict, and
+  code behavior untouched; deliberately NOT filed under the cross-talk
+  criterion, whose mechanism was verified absent):** the any-member arm at its
+  500-trial power resolves an off-aimed geometric side-signature on M-d —
+  member 1 flags at the rank-p floor (`+0.034` Jaccard over its own null,
+  persistent across seeds) while staying at chance in family-max-lift terms
+  (`+0.03 ≪ +0.30`, no bite). The two claims coexist because lift-magnitude
+  and rank-p are different axes; the record now names the axis wherever "at
+  chance" appears. Settled at source before recording: member 1 (k-means on
+  plain z-scored `trial.feat`) and member 6 (k-NN in `whitened_dist2`'s own
+  recomputed metric) share no computed intermediate — independent functions
+  of the raw features, so the flag is the jointly-unusual M-d cohort's own
+  geometry meeting a well-powered arm, not member-6 leakage. Dispositions
+  taken: axis-named corrections in §14.4 + code comments; member 1 kept OUT
+  of M-d's aimed set (coupling PASS to a `+0.03` incidental effect would
+  manufacture brittleness); the M-d factorized-rejection rationale re-anchored
+  on its surviving measured discriminator (member-6 lift dilution `+0.116` vs
+  `+0.136`) since member 1 flags under both constructions and never
+  discriminated between them. **Riders landed same slice:**
+  §16.7 N-sweep (`r < 2` at every `N ∈ {10,20,50}`; measured `r` falls with `N` —
+  no small-candidate-set artifact), M6.2 coupling control (blind@window-0 `0.231` ≥
+  `2/N = 0.200`; the doc's `0.237` reference reproduced), §18.3-as-narrowed-by-§18.8
+  attribute-bridge grading (deployed `|corr| 0.110` at null `0.115`; coupled positive
+  control `0.985` bites), §18.4 lifetime-accumulation sweep (per-post `p = 0.176`
+  compounding to ≈`1.0` at the 52-event founder anchor). **Open on this arm:**
+  ~~the §14.4 bound-2 disposition decision~~ (RESOLVED 2026-07-11 per the UPDATE
+  above — the arm now grades PARTITION-PASS, which `K_COVER` sealing consumes);
+  leg-(b) wall-clock emission (separate item below).
   **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
   GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
   seams, not just entry).**

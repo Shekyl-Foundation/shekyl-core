@@ -1186,6 +1186,10 @@ the null distribution then models.
     dispatch phase individually typical, jointly impossible). Detected
     by family member 6; members 1–5 checked at chance against it,
     recorded per-run (their blindness is the finding that motivated 6).
+    *Axis note (calibration correction 2026-07-11):* "at chance" is a
+    bite-magnitude claim; at rank-p resolution the powered any-member
+    arm resolves a small member-1 geometric side-signature — see the
+    re-graded record in the UPDATE block below for both axes.
   - **M-e (repulsed/scheduled)** — *added R4 (§17.6 Q2-B)*: five founder
     anchors placed by an enforced-staggering mechanism (hard-core
     process: minimum-gap rejection). Detected by family member 7 — the
@@ -1216,6 +1220,120 @@ the null distribution then models.
      separately).
   3. All bounds must hold or the partition measurement is **INVALID**
      (same all-or-nothing shape as §5's controls).
+
+  > **Pinned question (implementation round, 2026-07-11 — a material
+  > under-specification surfaced by the first graded run; pinned, not
+  > improvised around).** Bound 2 reads `T` — the **family max** — but
+  > two of the five controls are single-member-targeted by their own
+  > §14.4 construction, and for those the family-max statistic cannot
+  > reach `+0.30` at `N = 10`, `M = 5` for structural reasons the spec
+  > itself mandates: **M-b** perturbs one founder of `M`, so any rule's
+  > founder-set-overlap gain is bounded near `1/M = 0.20` before the
+  > selection-inflated permutation null is even subtracted; **M-d**'s
+  > founders are *mutually dissimilar by construction* (the property
+  > that keeps members 1–5 at chance — measured max members-1–5 lift
+  > `+0.03`), so no whole-set structure exists for the max to seize,
+  > while member 6 — the aimed detector — lifts `+0.13` over its own
+  > null, exactly the specified bite direction. The whole-set controls
+  > (M-a `+0.38`, M-c `+0.36`, M-e `+0.32`) clear bound 2 as written,
+  > and the deployed posture holds bound 1 (`−0.005`). Disposition
+  > options for the design decision: (a) grade single-member-targeted
+  > controls on their **aimed member's own-null lift** (a per-member
+  > bite bound, same `+0.30` figure); or (b) respecify bound 2 as
+  > per-aimed-member for all five controls. Until decided, the run
+  > reports **INVALID-with-pins** (bound 3 as written), never a
+  > silent pass; the measured record lives in
+  > `shekyl-staking-sim --partition-adversary`.
+  >
+  > **UPDATE 2026-07-11 — RESOLVED, but not by picking (a) or (b).**
+  > Both options above were grading-rule edits; review correctly
+  > flagged that the disposition was under-determined by an unmeasured
+  > property of the deployed statistic, and required the
+  > T-computation-rule fact to be pulled at source *before* any
+  > disposition. **The verified T-site fact
+  > (`partition_adversary.rs`):** `T` is a raw max over per-member
+  > Jaccard agreements — *no* cross-member consensus (the
+  > "Jaccard-consensus swallows single-member signal" hypothesis is
+  > falsified) — but the operating verdict read only `T − null(T)`,
+  > and `null(T)` re-maximizes the family per relabeling, sitting
+  > ≈ `0.66` at `N = 10` on the *selection freedom of other members*
+  > (member 3 enumerates all `C(10,5) = 252` subsets; members 1/4
+  > best-of-`k`; member 2 best-of-feature). A lone member-6/7
+  > signature — exactly the Q2-A/Q2-B adversary shapes those members
+  > were added for (§17 R4) — must exceed that waterline in *absolute*
+  > agreement before it registers in `T` at all. Per-member agreements
+  > were recorded but consulted by nothing. **That is the
+  > detector-architecture branch:** members 6/7 were armed with no
+  > trigger; M-b/M-d failing bound 2 was the alarm firing correctly.
+  > Picking (a) or (b) as a wording choice would have laundered the
+  > Q2-A/Q2-B detector hole into a green consumed by `K_COVER`
+  > sealing. **The fix is the aggregator, not the bar:** an
+  > **any-member arm** — per member, the observed trial-mean agreement
+  > against its *own* null-of-the-mean draws (permutation `p` averaged
+  > across trials), exact rank p-value `(1 + #{null ≥ obs})/(perms+1)`,
+  > flagged iff `p ≤ α/7` (Bonferroni) at a-priori family-wise
+  > `α = 0.05`. Deployed **bound 1 now requires both arms**:
+  > `|T − null| ≤ 0.05` *and* no member flags — closing the symmetric
+  > false-clean hazard (a max `T` can pass bound 1 on insensitivity;
+  > privacy requires that *no* member resolves the founders, and the
+  > max can hide the one that does). **Bound 2 as re-specified:** every
+  > control's aimed member must flag under the same any-member rule
+  > deployment uses; whole-set controls (M-a/M-c/M-e) *additionally*
+  > retain the family-max `+0.30`, which their failure modes genuinely
+  > move. No bar was lowered; a detection arm was added. The bar
+  > derives from per-member null geometry + the multiple-comparison
+  > correction, never from the observed failing scores; `trials` is
+  > power-sized a-priori to the single-member effect ceiling (M-b's
+  > one-of-`M` perturbation bounds the aimed member's Jaccard shift
+  > near `+0.05` by hypergeometric arithmetic; `σ/√trials` sizing gives
+  > `trials = 500` at power ≈ 0.9), and `perms` carries a loud
+  > resolution guard (`1/(perms+1) ≤ α/7`, i.e. `perms ≥ 139`).
+  > **Re-graded record (N=10, 500×200):** deployed passes both bound-1
+  > arms (family-max lift `+0.001`; per-member min rank-p `0.264`, no
+  > flag); M-a/M-c/M-e clear family-max bound 2 (`+0.38/+0.36/+0.32`)
+  > with aimed members flagging at the p-floor `0.005`; M-b's member 2
+  > and M-d's member 6 flag at `0.005`, the specified single-member
+  > bite shape. *M-d members 1–5, both axes named (calibration
+  > correction 2026-07-11 — the two axes see different things and the
+  > record must say which lens each claim is spoken in):* in
+  > **family-max-lift** terms all five are at chance (max lift ≈
+  > `+0.03`, an order of magnitude under the `+0.30` bite — no bite);
+  > in **rank-p** terms member 1 is *resolved above its own null* at
+  > the p-floor (`+0.034` Jaccard, persistent across seeds at the
+  > 500-trial power), members 2–5 at chance on both axes. The member-1
+  > signature was settled at source before recording: member 1
+  > (k-means on the plain z-scored features) and member 6 (k-NN in
+  > `whitened_dist2`'s own recomputed metric) are **independent
+  > functions of `trial.feat`** — no shared computed intermediate, no
+  > member output feeding another — so this is the jointly-unusual
+  > M-d cohort's own geometry meeting a well-powered arm
+  > (**geometry, not aggregator cross-talk**; the cross-talk
+  > reopening criterion below does not fire, and this note must not
+  > be filed under it). Aimed-flag grading is unaffected; member 1
+  > stays out of M-d's aimed set deliberately — coupling PASS to a
+  > `+0.03` incidental signature would manufacture brittleness, not
+  > accuracy. Verdict:
+  > **PARTITION-PASS** — reached by arming members 6/7's trigger,
+  > never by moving a bar. Reopening criterion (rule-21 shape): any
+  > family-membership change (new member `⇒` re-derive the Bonferroni
+  > divisor), any `N`/`M` geometry change (re-derive the power sizing),
+  > or a control observed to flag a *non-aimed* member persistently
+  > **through a shared computed intermediate** (an aggregator
+  > cross-talk finding — re-open the detector round, not the bar; the
+  > shared-intermediate mechanism is the criterion's carrier, verified
+  > at source per the M-d member-1 precedent above, which resolved to
+  > geometry and correctly did *not* reopen).
+  >
+  > **RATIFIED 2026-07-11 (decision-anchored: PR #291,
+  > `feat/sim-partition-adversary`).** The resolution above — the
+  > verified T-site fact, the any-member arm, the re-graded
+  > PARTITION-PASS — is ratified as the §14.4 arm's operating grading
+  > rule. Ratification includes the PR-#291 review-round dispositions
+  > (spectral deflation fixed to projection form, bit-for-bit-identical
+  > re-grade verified; loud geometry guards `FOUNDER_COUNT < n ≤ 20` +
+  > `trials ≥ 1` pinned by `should_panic` tests). The arm's verdict is
+  > now a gradeable input to `K_COVER` sealing; the reopening criteria
+  > above are unchanged by ratification.
 - **The gating lemma (a-priori deliverable of the implementation round;
   committed before any sweep grades — same provenance rule as the §3.2
   thresholds).** *An absolute upper bound on the probability that `M`
@@ -1338,6 +1456,25 @@ bearing the window's exposure consented permanently* (P4).
 
 Implementation of §14.4 is the next round, **gated on review of this
 section** — the same spec-first checkpoint the main gate ran on.
+
+> **UPDATE 2026-07-11 (implementation round, first slice landed —
+> `feat/sim-partition-adversary`, `shekyl-staking-sim`):** the two
+> co-first deliverables committed before any sweep grades (gating lemma
+> `M·((c+1)/(W+1))^{M−1} = 3.5393e-5` at the launch geometry, code
+> derivation + exact-CDF domination test; witness-typed controls —
+> `ControlWitness` a distinct type with no constructor or `From` bridge
+> from the production `FounderConfig`, compile-time un-constructible per
+> §17.7 finding 4). Family members 1–7, the named feature dictionary,
+> the max-statistic `T` with its permutation null, and controls M-a…M-e
+> are implemented and graded (`--partition-adversary`): deployed bound 1
+> holds; whole-set controls clear bound 2; the single-member-targeted
+> controls surface the pinned bound-2 question above. Riders landed in
+> the same round: §16.7 N-sweep (`r < 2` at every swept `N`; measured
+> `r` falls with `N`), the M6.2 coupling control (blind@window-0
+> `0.231` ≥ `2/N`), §18.3-narrowed bridge grading (deployed at null,
+> coupled control bites), and the §18.4 lifetime-accumulation sweep
+> (founder anchor visible at cumulative ≈ 1.0). Out of this slice per
+> the round's scope: leg-(b) wall-clock emission, M4/M5/M7, GF-4.
 
 ## 15. Addendum (2026-07-06): the remote-daemon posture — refuse, not accept
 
