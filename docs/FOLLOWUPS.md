@@ -8201,7 +8201,7 @@ one place to confirm each item's relationship to the wallet stack.
   adversarial read of the bounds themselves (is `r < 2` honest under the 1.86 panel; is
   the widened null the adversary's class or a subset; does the `K_COVER` derivation
   circle through the arm it gates), not a consistency rubber stamp.
-  **Review-closure round R1 conducted (2026-07-06, §17; ratification pending):** all
+  **Review-closure round R1 conducted (2026-07-06, §17; ratified 2026-07-10, see R4 below):** all
   three §16.10 attacks run to land. Attack 1 — the `r < 2` bar survives (claim-anchored,
   observer-independent) but the *measured* `r(N)`'s N-invariance is unswept: **N-sweep
   added** (§16.7 item 4, `N ∈ {10, 20, 50}`, `r < 2` at every swept `N`, a-priori).
@@ -8233,8 +8233,8 @@ one place to confirm each item's relationship to the wallet stack.
   (exchangeability makes it per-persona in-model; the untargeted reading was conceded at
   the floor) but forces the §3.2 pin naming exchangeability as the load-bearing step and
   regime-splitting as the mean-to-max lift in deployment (the discipline that already
-  surfaced cold-start as a fail rather than averaging it in). §17 closure now requires
-  §§17.1–17.5 ratified together.
+  surfaced cold-start as a fail rather than averaging it in). §17 closure requirement
+  discharged 2026-07-10: §§17.1–17.6 ratified together (see R4 below).
   **Distinct-position round R3 conducted (2026-07-06, §18):** the mean-vs-max
   disposition is sound but incomplete — it captured the max for the axis it split on
   (activity) and assumed the heterogeneity enumeration complete. Five surfaces
@@ -8358,6 +8358,179 @@ one place to confirm each item's relationship to the wallet stack.
   chain-only adversary sees nothing by construction; the three boundary classes are the
   irreducible on-ramp witness, the network default (ours until flipped), and the
   enumerated mistake set (closed by safe-by-default coverage, §18.12 pin as template).
+  **Distinct-position round R4 conducted + ratification (2026-07-10, §17.6):** the
+  §16.10 questions 2 and 3 adjudicated — six constructions (four landed, two failed,
+  no bound moves), six reviewer findings landed in place. Family grows to **seven members**
+  (member 6 joint-density isolation vs correlation-breaking founders; member 7
+  most-regular-subset vs enforced staggering) and **five controls** (M-d, M-e added; all
+  five **witness-typed** — un-instantiable as production founder configs, PF-2
+  precedent). **P2 reworded** (staggering is statistical, via P1's i.i.d. draws — any
+  enforcement mechanism is a detectable repulsion signature) with three companion
+  premises: timing-law `K`-invariance, count `K`-independence, and the **persistence
+  commitment** (founder bonds active through gate-open; verified at source that offline
+  forfeiture and slashing are involuntary removal paths — breach is a cover-model
+  re-run trigger; withdrawn at R7, below). **Gating lemma named** (§14.4): an a-priori absolute bound on i.i.d.
+  founder-clustering probability, no user-cohort reliance — the first deliverable of
+  the implementation round, committed before any sweep grades; cited by both the P2
+  no-mechanism disposition and the strip-row floor. **Strip row elevated to primary**
+  at gate-open (worst-case zero-pre-gate-cover floor; P3 de-load-borne). **Cohort
+  dynamics row sharpened** (monotone floor only; non-existence behavior named —
+  posture redesign pre-genesis, never a degraded open). **Axis completeness recorded**
+  (timing family ∪ loud-but-constant amount ∪ SP-T isolation; founder-tier residual
+  named on the holdings stratum). **§§14–16 CLOSED; the §14.4 implementation round is
+  released**, carrying the two pinned premises (floor persistence — later withdrawn
+  at R7, below; count `K`-independence) with reopen criteria to re-check before Gate 7
+  discharges `K_COVER`.
+  **Round R5 conducted (2026-07-10, §17.7):** the standing review's pass against the R4
+  landing itself — four findings, all instances of the §17.6-head lens (structural,
+  generator-invisible channels), nothing closed reopens. Finding 1: the §18.9 tier
+  residual promoted from rider-graded config requirement to a **named structural
+  channel** — satisfiability verified at source (`bond_floor` is
+  `ARCHIVAL_BOND_FLOOR_ATOMIC × shard_count`, a persona-side shard-descriptor choice,
+  never treasury wealth — the forced-tier trap refuted; R4's "foundation-scale
+  holdings" wording corrected), per-channel strip-row zero-cover floor at gate-open,
+  gating-lemma citation. Finding 2: the monotone floor is a **snapshot by
+  construction** — the M1 gate reads `frozen_shard_count < K_COVER` only (one site,
+  never live bond state; `K_COVER` genesis-frozen), so the TOCTOU window is the entire
+  pre-gate chain life; challenges are honest-server-unfailable beacon replays but
+  **off-chain DoS around challenge windows induces forfeiture** ⇒ the calibration must
+  carry an **a-priori thinning margin** above the induced-forfeiture adversary
+  (restoration lag = cooldown + re-bond), lemma-discipline-derived. Finding 3: premise
+  2's OR struck — fixed pre-gate schedule is the gate-open condition; the
+  i.i.d.-re-bonding disjunct only holds where a user cohort exists. Finding 4: the
+  control witness type is a **co-first-deliverable** with the gating lemma;
+  first slice closes only when control configs are compile-time un-constructible from
+  the production founder-config constructor.
+  **Round R6 conducted (2026-07-10, §17.8) — §17 CLOSED:** the standing review's third
+  pass, against the R5 landing; three findings, all derived from R5's own admissions
+  (convergence shape: 6 → 4 → 3). Finding 1 (high): the R5 thinning margin was sized
+  for the **transient** (restoration-lag) window, but the trigger quantity is
+  cumulative and the calibrated property is live — verified at source that
+  `frozen_segment_count(leaf_count)` has **no bond-exit decrement path**
+  (`segment_freeze.rs:71`; sole decrement is the `pop_block` reorg revert), so
+  permanent attrition (voluntary unbond, key/infra loss, abandonment, unremediated
+  slash) diverges the two for the entire pre-gate life. The derive-don't-cache
+  exception is recorded as **deliberate** — a live-cover gate input is the M2
+  flood-then-withdraw DoS sensor (§16.3), refused on priority 1, so the margin is the
+  gate's load-bearing element by design. Landed: P2's persistence commitment reshaped
+  to a **maintenance commitment** (live cover ≥ floor through gate-open; attrited
+  personas replaced within a named lag; replacements join the same tenure class); the
+  margin re-derived against **max attrition within the detection + replacement lag**;
+  maintenance breach named the **irreducible post-genesis residual** (no consensus
+  lever without re-arming the M2 sensor; monitored off-chain, priced in the record).
+  Finding 2 (medium-high): thickness-reachability must run against the **union of
+  per-channel floors** with non-existence armed per channel, and the descriptor
+  channel carries a **profile-commonality check** — a cover-mission-forced-distinctive
+  founder profile is a positive fingerprint no `K` can herd, classifying
+  fingerprint-not-zero-cover and routing to redesign, never a larger `K`. Finding 3
+  (wording pin): "fixed pre-gate schedule" fixes **{count, completion-before-gate}
+  only** — inter-post timing stays P1's i.i.d. draw; a schedule-fixes-times reading
+  would manufacture member 7's repulsion signature on founders (interlock recorded).
+  **Round R7 conducted (2026-07-11, §17.9) — R6's landing reopened and §17 RE-CLOSED,
+  load-bearing:** the R6 maintenance commitment was a **ratified founder-differential
+  mechanism** produced by a category error — "founder" was carrying two referents, the
+  anonymous founder-user population (market members who accrue and claim, §14.3.4) and
+  the **Foundation backstop** (E-2/gate-5 object: complete tree, one nominal floor
+  bond, excluded from `Market`, reward-invisible — verified at source,
+  `consensus_state.rs` / `REWARD_EMISSION_LEG.md` §4.2 / `ARCHIVAL_BOND_GATE4.md`
+  §8.1; zero accrual severs it from the privacy model, so its persistence is
+  infrastructure, never an observable against the herd). Landed: §14-head
+  **terminology pin** (three referents, three tokens — founder persona / Foundation
+  backstop / founding operators; operator usages scrubbed). P2 premise 3 **withdrawn**
+  on two independent sufficient grounds: (1) categorical — any founder-unique
+  obligation is differential conduct in a system whose thesis is founders-are-users;
+  (2) fails-in-its-own-design-case — the obligation's coupling is masked only by
+  population flow, thinnest exactly when the floor is load-bearing (Q3-A). An
+  exit-correlated-posting channel claimed en route was **refuted at source and
+  withdrawn** (epoch-quantized entry, `RELEASE_COOLDOWN_EPOCHS = 2` with pinned
+  "Unbond decorrelation headroom", no repost mechanism — population flow, not
+  trigger-response), so the reopen rests on the stronger categorical trigger, not the
+  recorded new-channel criterion. Finding 1 re-homed a third and final time:
+  **population-level churn calibration** over the whole anonymous pre-gate herd,
+  margin derived against **adversarial max net attrition over the full pre-gate
+  window** (the inducible-forfeiture adversary, more in scope with no replacement
+  backstop) — never expected churn; no founder obligation; no live sensor; M2 intact.
+  Q3-B re-seated on the same basis (guaranteed floor dissolves; population statistics
+  all the way down; premises 1–2 survive as one-shot plans).
+  **Final Gate-7 gates (superseding R6's formulation): `K_COVER` does not discharge
+  until (a) the margin is derived against adversarial max net attrition over the full
+  pre-gate window and carried in the calibration record, and (b) the reachability
+  check has run against the union of per-channel floors including the descriptor
+  channel's classification.** §17 reopens only against the §17.9 termination bar —
+  a construction defeating **both** the categorical rule and the substrate's own
+  decorrelation (epoch quantization + cooldown headroom): the real-work bar, not
+  lens restatement.
+  **§14.4 implementation round, first slice LANDED (2026-07-11,
+  `feat/sim-partition-adversary`, `shekyl-staking-sim/src/partition_adversary.rs` +
+  `riders.rs`):** co-first deliverables committed before any sweep grades — the gating
+  lemma (`M·((c+1)/(W+1))^{M−1} = 3.5393e-5` at `M=5, c=30, W=600`; exact-CDF domination
+  test) and compile-time witness-typed controls (`ControlWitness` distinct from the
+  production `FounderConfig`, no constructor/`From` bridge — §17.7 finding 4 shape).
+  Family members 1–7 + named feature dictionary + max-statistic `T` + permutation null +
+  controls M-a…M-e graded at `N=10`, 200×200: deployed bound 1 holds (`−0.005`);
+  whole-set controls clear bound 2 (M-a `+0.38`, M-c `+0.36`, M-e `+0.32`, aimed-member
+  lifts `+0.46/+0.65/+0.62`); the two single-member-targeted controls (M-b, M-d) surface
+  a **pinned bound-2 under-specification** (family-max `T` structurally cannot lift
+  `+0.30` for a one-of-M perturbation or a mutually-dissimilar cohort; M-d's members 1–5
+  stay at chance in lift terms with member 6 the only biting detector, exactly as
+  specified) — pinned
+  in §14.4 with two disposition options (per-aimed-member grading), run reports
+  INVALID-with-pins per bound 3, never a silent pass.
+  **UPDATE 2026-07-11 — bound-2 pin RESOLVED as a detector-architecture finding, not
+  a wording choice (§14.4 UPDATE block is the record).** Review required the
+  T-computation-rule fact pulled at source before any disposition; the verified fact:
+  `T` is a raw per-member max (no consensus dilution), but its permutation null
+  re-maximizes the family per relabeling (≈ 0.66 at `N=10`, set by other members'
+  selection freedom — 252-subset enumeration, best-of-`k` clusterings), so a lone
+  member-6/7 signature (the Q2-A/Q2-B shapes) is structurally invisible to the
+  family-max arm, and a bound-1 pass on `T` alone can be false-clean. Fix = arm the
+  trigger, not lower the bar: **any-member arm** (per member vs its own
+  null-of-the-mean, exact rank p, Bonferroni `α/7` at a-priori `α = 0.05`; `perms`
+  resolution guard `≥ 139`; `trials = 500` power-sized a-priori to the M-b
+  hypergeometric effect ceiling). Deployed bound 1 now requires both arms (family-max
+  at chance **and** no member flags); whole-set controls retain family-max `+0.30`
+  and add the aimed-member flag; single-member controls grade on the aimed-member
+  flag — the same rule deployment uses. Re-graded 500×200: deployed clean on both
+  arms (lift `+0.001`, min member p `0.264`); all five controls bite (M-b m2 and
+  M-d m6 flag at the p-floor `0.005`; M-d members 1–5 at chance in bite-magnitude
+  terms). Verdict
+  **PARTITION-PASS**; no pins remain. Ratified 2026-07-11 (decision-anchored:
+  PR #291, incl. its review-round dispositions — projection-form spectral
+  deflation with a bit-for-bit-identical re-grade, loud geometry guards; the
+  §14.4 RATIFIED block is the record). Reopen on: family-membership change
+  (re-derive the Bonferroni divisor), `N`/`M` geometry change (re-derive power
+  sizing), or persistent non-aimed-member flags on a control **through a shared
+  computed intermediate** (aggregator cross-talk → detector round; the
+  shared-intermediate mechanism is the criterion's carrier — verify at source
+  before filing, per the M-d member-1 precedent below).
+  **Calibration note 2026-07-11 (record accuracy only — grading, verdict, and
+  code behavior untouched; deliberately NOT filed under the cross-talk
+  criterion, whose mechanism was verified absent):** the any-member arm at its
+  500-trial power resolves an off-aimed geometric side-signature on M-d —
+  member 1 flags at the rank-p floor (`+0.034` Jaccard over its own null,
+  persistent across seeds) while staying at chance in family-max-lift terms
+  (`+0.03 ≪ +0.30`, no bite). The two claims coexist because lift-magnitude
+  and rank-p are different axes; the record now names the axis wherever "at
+  chance" appears. Settled at source before recording: member 1 (k-means on
+  plain z-scored `trial.feat`) and member 6 (k-NN in `whitened_dist2`'s own
+  recomputed metric) share no computed intermediate — independent functions
+  of the raw features, so the flag is the jointly-unusual M-d cohort's own
+  geometry meeting a well-powered arm, not member-6 leakage. Dispositions
+  taken: axis-named corrections in §14.4 + code comments; member 1 kept OUT
+  of M-d's aimed set (coupling PASS to a `+0.03` incidental effect would
+  manufacture brittleness); the M-d factorized-rejection rationale re-anchored
+  on its surviving measured discriminator (member-6 lift dilution `+0.116` vs
+  `+0.136`) since member 1 flags under both constructions and never
+  discriminated between them. **Riders landed same slice:**
+  §16.7 N-sweep (`r < 2` at every `N ∈ {10,20,50}`; measured `r` falls with `N` —
+  no small-candidate-set artifact), M6.2 coupling control (blind@window-0 `0.231` ≥
+  `2/N = 0.200`; the doc's `0.237` reference reproduced), §18.3-as-narrowed-by-§18.8
+  attribute-bridge grading (deployed `|corr| 0.110` at null `0.115`; coupled positive
+  control `0.985` bites), §18.4 lifetime-accumulation sweep (per-post `p = 0.176`
+  compounding to ≈`1.0` at the 52-event founder anchor). **Open on this arm:**
+  ~~the §14.4 bound-2 disposition decision~~ (RESOLVED 2026-07-11 per the UPDATE
+  above — the arm now grades PARTITION-PASS, which `K_COVER` sealing consumes);
+  leg-(b) wall-clock emission (separate item below).
   **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
   GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
   seams, not just entry).**
@@ -8369,6 +8542,30 @@ one place to confirm each item's relationship to the wallet stack.
   and compounds with the remote-posture residual (the same network-position adversary holds
   both capabilities). **Closing requirement (named):** sub-block wall-clock emission (finer
   hook or harness timestamp) + re-grade. **Reopen leg (b) when:** that emission exists.
+  **UPDATE 2026-07-11 (harness-timestamp form graded in-model; residual narrowed to the
+  sealing form):** the emission exists as the harness timestamp
+  (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §19, spec + a-priori bound `r = P(link)·(N−1) < 2`
+  committed one commit ahead of the code; `wallclock_leg.rs`, folded into the
+  `--gf7-timeline` criterion-9.9 conjunction). Measured: production dispersal (`U[0,T)`,
+  `T = 60 s`) grades `r ∈ [0.84, 1.32]` across `m ∈ {1,4,12,52}`, `N ∈ {10,20,50}` —
+  PROVISIONAL-PASS; the sub-`T` cliff is steep (`T/4` fails at every `m`; `T/2` fails from
+  `m = 4`), so the production range is load-bearing, not slack. The finer-hook alternative
+  was **rejected** (hooks §3 wall-clock payload ban stays intact) with a §19.1 reopening
+  criterion. **Open remainder (narrowed):** the §19.1 sealing form — receipt-side
+  timestamping by the sim-owned observer over the live dispatch driver, consuming the same
+  statistic and bound. Leg (b) closes only there; the in-model pass is the
+  continue/redesign checkpoint, not the seal.
+  **Hermeticity pin (rule 21, PR #292 review — trips on the archival CLI-knob work):**
+  `run_wallclock_leg()` is deliberately hermetic (fixed seed/trials/N; the a-priori-committed
+  §19.4 surface must not float on a harness flag). Inert today — no CLI knob moves the gf7
+  `cfg.n`/`cfg.seed`. **Arms when** a PR makes those harness-movable (sim CLI or the
+  wallet-rewrite archival knob inventory): the block arm then moves with the flag, the leg
+  does not, and a mixed-N conjunction would silently report as a single-N verdict. That knob
+  PR must dispose of the pin explicitly — thread config through the leg (fresh a-priori
+  commitment) or document the knob as leg-invariant. Spec home:
+  [`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](design/ARCHIVAL_BOND_WI4_MEASUREMENT.md) §19.7.
+  When the wallet-rewrite plan gains an archival-knob inventory section, the pin's primary
+  home migrates there (per §19.7's migration note) and this entry points at it.
   **Target: pre-genesis (blocks the seal).** See
   [`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](design/ARCHIVAL_BOND_WI4_MEASUREMENT.md) §13 (result),
   §14 (launch posture), [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md)

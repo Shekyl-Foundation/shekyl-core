@@ -23,7 +23,11 @@ pub struct ShardAggregate {
     pub dominant_regime: String,
 }
 
-mod hex_bytes {
+/// Serde `with` module for a 32-byte hash encoded as lowercase hex on the
+/// wire. Shared across the shard subsystem — `ShardAggregate::shard_hash` here
+/// and the handle hashes in `shekyl-shard-source` — so the encoding has one
+/// definition and cannot drift between crates.
+pub mod hex_bytes {
     use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(bytes: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
@@ -41,6 +45,6 @@ mod hex_bytes {
         let bytes = hex::decode(s.trim()).map_err(serde::de::Error::custom)?;
         bytes
             .try_into()
-            .map_err(|_| serde::de::Error::custom("shard_hash must be 32 bytes"))
+            .map_err(|_| serde::de::Error::custom("hash must be exactly 32 bytes"))
     }
 }

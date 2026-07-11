@@ -53,6 +53,151 @@
     surface; re-anchored V3.1). PR 4 (regtest e2e + the Q11
     blob-boundary arm, both named in the §8 PR-4 scope row) is the
     chain's only open item, gated on #281.
+- **sim: leg-(b) wall-clock sweep-phase arm graded in-model
+  (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §19; WI-3 §3.2 part 3; WI-4
+  reconvergence leg (b)).** The §13.3 closing requirement — sub-block
+  wall-clock emission + re-grade of the channel the dispersal draw
+  exists to defend, which no block-resolution re-run can see — landed
+  in its harness-timestamp form: spec + a-priori bound
+  (`r = P(link)·(N−1) < 2`, sibling identification) committed in the
+  doc one commit ahead of the grading code (§3.5 ordering), then
+  `wallclock_leg.rs` models the wallet cadence phase (`T = 60 s`,
+  mirror of `DEFAULT_PSCAN_CADENCE`) with the live driver's
+  `bounded_uniform(bound_ms − 1)` dispersal shape and grades a
+  circular-phase observer. Measured (1 000 trials/row): production
+  dispersal `U[0,T)` at `r ∈ [0.84, 1.32]` across `m ∈ {1,4,12,52}`
+  and `N ∈ {10,20,50}` — **PROVISIONAL-PASS**; the sub-`T` cliff is
+  steep (`T/4` fails at every `m`, `T/2` from `m = 4`), so the
+  production range is load-bearing, not slack; `2T` confirms
+  over-dispersal is a no-op. Controls bite (phase-lock caught at
+  `P = 1.000`; severed-wallet coupling tripwire at chance) and the
+  §19.5 observer-strength tripwire is armed (`T/2, m = 52` correctly
+  fails at `r = 5.82`). The leg's verdict joins the `--gf7-timeline`
+  criterion-9.9 **computed conjunction** — an invalid leg grades the
+  whole run INVALID. The finer-hook alternative was rejected (hooks
+  §3 wall-clock payload ban stays intact) with a §19.1 reopening
+  criterion; leg (b) **closes** only at the §19.1 sealing form
+  (receipt-timestamped live-driver re-run), the named open carrier in
+  `FOLLOWUPS.md`.
+
+- **sim: §14.4 partition-adversary arm implemented in `shekyl-staking-sim`
+  (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §14.4; WI-4/GF-7).** Co-first
+  deliverables landed before any grading run per the R4/R5 binding
+  ordering: the **gating lemma** (a-priori absolute i.i.d.
+  founder-clustering bound `M·((c+1)/(W+1))^{M−1} = 3.5393e-5` at
+  `M=5, c=30, W=600`, exact-CDF domination test, no user-cohort
+  reliance) and **compile-time witness-typed controls**
+  (`ControlWitness` is a distinct type with no constructor or
+  conversion path from the production founder-config surface — the
+  five marked controls are un-constructible from production
+  constructors at the type level, §17.7 finding 4). New
+  `partition_adversary.rs`: named feature dictionary (11
+  posture-conditioned observables per pair), family members 1–7
+  (k-swept clustering, per-feature outlier, most-cohesive subset,
+  spectral partition, seeded nearest-neighbor expansion, joint-density
+  isolation, most-regular-subset repulsion detector), max-statistic
+  `T` with Jaccard label agreement, permutation-calibrated null, and
+  the five marked controls M-a…M-e. The first graded run surfaced a
+  bound-2 under-specification on the single-member-targeted controls
+  (M-b/M-d), initially pinned; review escalated it to a
+  **detector-architecture finding** — the T-site fact verified at
+  source shows the family-max null re-maximizes per relabeling
+  (≈ 0.66 at `N=10`), rendering lone member-6/7 (Q2-A/Q2-B) signals
+  structurally invisible and a `T`-only bound 1 potentially
+  false-clean. Resolution (§14.4 UPDATE block): an **any-member arm**
+  — per member vs its own null-of-the-mean, exact rank p-value,
+  Bonferroni `α/7` at a-priori `α = 0.05`, with a `perms` resolution
+  guard and `trials = 500` power-sized a-priori to the M-b
+  hypergeometric effect ceiling. Deployed bound 1 requires both arms
+  (family-max at chance and no member flags); whole-set controls
+  retain family-max `+0.30` plus the aimed-member flag; single-member
+  controls grade on the aimed-member flag. Re-graded at `N=10`
+  (500 trials × 200 permutations): deployed clean on both arms, all
+  five controls bite their aimed member — **PARTITION-PASS**, no pins
+  remaining.
+  New `riders.rs` (same round): §16.7 **N-sweep** (`r < 2` holds at
+  every `N ∈ {10, 20, 50}`), **M6.2 coupling control** (blind arm at
+  window 0 must stay ≥ `2/N`; measured `0.231 ≥ 0.200`),
+  **attribute-stratified bridge grading** (holdings→period coupling:
+  deployed at null `0.110` vs `0.115`, positive control bites at
+  `0.985`), and the **lifetime-accumulation sweep**
+  (`1 − (1−p)^events` at the 52-event long-lived-founder anchor).
+  Trackers updated (`FOLLOWUPS.md` WI-4 entry,
+  `IMPLEMENTATION_INDEX.md` WI-4 row, §14.4 status lines).
+
+- **docs: WI-4/GF-7 review-closure ratified — distinct-position round R4
+  lands §17.6 (`ARCHIVAL_BOND_WI4_MEASUREMENT.md`).** The §16.10
+  questions 2 (partition-family completeness) and 3 (`K_COVER` cycle
+  break) adjudicated by the standing review: six constructions (four
+  landed, two failed, no bound moves), six premise-strengthening
+  findings.
+  §14.4 family grows to seven members (joint-density isolation;
+  most-regular-subset repulsion detector) and five witness-typed
+  controls (M-d correlation-breaking, M-e repulsed/scheduled); a named
+  a-priori **gating lemma** (absolute i.i.d. founder-clustering bound,
+  no user-cohort reliance) becomes the implementation round's first
+  deliverable. P2 reworded (statistical staggering only) with three
+  companion premises (timing-law `K`-invariance, count
+  `K`-independence, founder-bond persistence — lifecycle-verified:
+  offline forfeiture and slashing are involuntary removal paths;
+  the persistence premise is withdrawn at R7, below). §16.2
+  obligation 3: strip row elevated to primary at gate-open (worst-case
+  zero-pre-gate-cover floor, P3 de-load-borne); cohort-dynamics row
+  rests on the monotone floor with named non-existence behavior. Axis
+  completeness recorded (timing ∪ loud-but-constant amount ∪ SP-T
+  isolation; founder-tier residual named). **§§17.1–17.6 ratified
+  together (2026-07-10); §§14–16 closed; the §14.4 implementation
+  round is released.** Trackers updated (`FOLLOWUPS.md` WI-4 entry,
+  `IMPLEMENTATION_INDEX.md` WI-4 row). Round R5 (§17.7, same day)
+  adjudicated the R4 landing itself under the §17.6-head lens
+  (structural, generator-invisible channels): tier residual promoted
+  to a named channel with per-channel strip floor (`bond_floor`
+  satisfiability verified at source — shard-descriptor choice, never
+  treasury wealth); monotone floor recorded snapshot-by-construction
+  (gate reads `frozen_shard_count` only) with an a-priori
+  induced-forfeiture thinning margin required; premise-2 OR struck
+  (fixed pre-gate schedule only at gate-open); control witness type a
+  compile-time co-first-deliverable. Round R6 (§17.8, same day)
+  adjudicated the R5 landing and **closed §17**: the R5 thinning
+  margin was sized for the transient (restoration-lag) window while
+  the cumulative-trigger/live-property divergence is permanent —
+  verified at source that `frozen_segment_count` has no bond-exit
+  decrement path (`segment_freeze.rs`), the derive-don't-cache
+  exception recorded as deliberate (a live-cover sensor is the M2
+  flood-then-withdraw DoS surface), P2's persistence commitment
+  reshaped to a **maintenance commitment** (replace attrited personas
+  within a named lag), the margin re-derived against the
+  detection-plus-replacement window, and maintenance breach named as
+  the irreducible post-genesis residual. Thickness-reachability now
+  runs against the union of per-channel floors with a
+  **profile-commonality check** on the descriptor channel
+  (fingerprint-not-zero-cover routes to redesign, never larger `K`);
+  "fixed pre-gate schedule" pinned to {count, completion-before-gate}
+  only (a schedule-fixes-times reading would manufacture member 7's
+  repulsion signature). Round R7 (§17.9, 2026-07-11) reopened R6's
+  landing and **re-closed §17 load-bearing**: the maintenance
+  commitment was a ratified founder-differential mechanism produced
+  by a category error — "founder" carried two referents, the
+  anonymous founder-user population and the consensus-mechanized
+  **Foundation backstop** (reward-invisible, Market-excluded;
+  verified at source) — resolved by a §14-head terminology pin
+  (three referents, three tokens; operator usages scrubbed). The
+  commitment is withdrawn on two independent grounds (categorical:
+  founders are users and owe no continuity; anti-masking: the
+  obligation's coupling is masked only by population flow, thinnest
+  exactly when the floor is load-bearing). A claimed
+  exit-correlated-posting channel was refuted at source
+  (epoch-quantized entry, `RELEASE_COOLDOWN_EPOCHS = 2` decorrelation
+  headroom, no repost mechanism) and withdrawn. Finding 1 re-homed to
+  population-level churn calibration: the §16.2 margin derives
+  against **adversarial max net attrition over the full pre-gate
+  window** (never expected churn); Q3-B re-seated on the same
+  statistical basis. **Final Gate-7 gates are §17.9's**
+  (adversarial-max-attrition margin; per-channel reachability); §17
+  reopens only against the termination bar — a construction
+  defeating both the categorical rule and the substrate's
+  decorrelation.
+
 - **daemon RPC: Axum now enforces `--rpc-max-connections*` + reports a live
   `rpc_connections_count`.** A purpose-built Rust connection layer
   (`shekyl-daemon-rpc::conn_limit`: `LimitedListener` + `ConnTracker` over

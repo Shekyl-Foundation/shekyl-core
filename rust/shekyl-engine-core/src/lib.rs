@@ -24,9 +24,9 @@ pub use engine::{
     LocalRefresh, MalformedKind, Network, NoopDiagnosticSink, OpenError, OpenedEngine, PScanHandle,
     PScanStartError, PendingTx, PendingTxError, PersistenceError, ProtocolErrorKind,
     RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress,
-    RefreshReorgEvent, RefreshSummary, ReservationId, SendError, SoloSigner, StateWrapKey,
-    SuppressedClass, TracingDiagnosticSink, TxError, TxHash, TxRecipient, TxRecipientSummary,
-    TxRequest, ViewMaterial,
+    RefreshReorgEvent, RefreshSummary, ReservationId, ScannableBlock, SendError, SoloSigner,
+    StateWrapKey, SuppressedClass, TracingDiagnosticSink, TxError, TxHash, TxRecipient,
+    TxRecipientSummary, TxRequest, ViewMaterial,
 };
 pub use outbound_label::label_plaintext_for_payment_uri;
 pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult};

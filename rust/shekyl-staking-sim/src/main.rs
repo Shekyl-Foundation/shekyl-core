@@ -19,7 +19,9 @@
 //! ARCHIVAL_FAILURE_CONFIRMATION_PIN.md); `--gf7-timeline` (the GF-7 graded
 //! measurement round — joint three-axis correlator + three arms + validity
 //! controls, graded against the a-priori `r < 2` bound per
-//! ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4).
+//! ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4); `--partition-adversary` (the §14.4
+//! founder-cover partition-adversary arm — gating lemma + witness-typed
+//! controls, per the same doc's §14/§17 launch-posture round).
 
 mod agent;
 mod audit;
@@ -33,13 +35,16 @@ mod gf7_timeline;
 mod metrics;
 mod model;
 mod participation;
+mod partition_adversary;
 mod retrieval;
 mod reward;
+mod riders;
 use reward::CurveImpl;
 mod scenarios;
 mod standoff;
 mod timing_cluster;
 mod transport;
+mod wallclock_leg;
 
 use scenarios::{build_scenarios, run_sim, ScenarioResult};
 
@@ -724,23 +729,291 @@ fn print_gf7_timeline_report() {
         "  - the block-unit dispersal>0 rows are a coarse-tick counterfactual: real WI-3 dispersal"
     );
     eprintln!("    is U[0,60s) (sub-block), so the realistic block-time gate sits at dispersal=0.");
-    eprintln!("    The wall-clock sub-block channel (dispersal's actual target) is UNMEASURED at");
-    eprintln!("    block resolution and is the primary open uncertainty: closing leg (b) requires");
+    eprintln!("    The wall-clock sub-block channel is graded by the leg-(b) arm below (§19).");
+    eprintln!();
+
+    // Leg-(b) wall-clock sweep-phase arm (measurement doc §19).
+    let leg = &report.wallclock_leg;
     eprintln!(
-        "    sub-block wall-clock emission — a block-resolution live re-run cannot close it."
+        "Leg-(b) wall-clock sweep-phase arm (§19; WI-3 §3.2 part 3). Tick T={}ms; a-priori",
+        leg.tick_ms
     );
+    eprintln!(
+        "  bound (§19.2, committed before this arm existed): r = P(link)·(N-1) < {:.1} on",
+        leg.ratio_bound
+    );
+    eprintln!(
+        "  sibling identification; trials/row={}. Harness-timestamp synthesis (§19.1) —",
+        leg.trials
+    );
+    eprintln!("  the hooks payload ban stays intact; sealing form is the receipt-timestamped");
+    eprintln!("  live-driver re-run (named carrier, open).");
+    eprintln!("  Controls (§19.3; must both pass or the leg is INVALID):");
+    for c in &leg.controls {
+        eprintln!(
+            "  [{}] {:<28} P(link)={:.3} baseline={:.3}  ({})",
+            if c.passed { "ok" } else { "FAIL" },
+            c.name,
+            c.p_link,
+            c.baseline,
+            c.expectation,
+        );
+    }
+    eprintln!(
+        "  [{}] §19.5 observer-strength tripwire: T/2 at m=52 must FAIL the bound",
+        if leg.observer_strength_ok {
+            "ok"
+        } else {
+            "FAIL"
+        },
+    );
+    eprintln!(
+        "  {:<16} {:>8} {:>4} {:>4} {:>3} | {:>7} {:>6} {:>5}",
+        "group", "disp_ms", "m", "N", "K", "P(link)", "r", "pass",
+    );
+    for r in &leg.rows {
+        eprintln!(
+            "  {:<16} {:>8} {:>4} {:>4} {:>3} | {:>7.3} {:>6.2} {:>5}{}",
+            r.group,
+            r.dispersal_ms,
+            r.posts_per_persona,
+            r.n,
+            r.wallet_size,
+            r.p_link,
+            r.ratio,
+            if r.clears_bound { "Y" } else { "N" },
+            if r.gate_relevant { " *" } else { "" },
+        );
+    }
+    eprintln!("  Leg-(b) status: {}", leg.status);
+    eprintln!();
     if report.provisional {
         eprintln!(
-            "  PROVISIONAL: grades the sim's synthesized dispatch (incl. modeled WI-3 dispersal)."
+            "  PROVISIONAL: grades the sim's synthesized dispatch (incl. modeled WI-3 dispersal"
         );
-        eprintln!(
-            "  Sealing re-run against WI-3's live BondPostDispatched = reconvergence leg (b),"
-        );
-        eprintln!("  tracked in docs/FOLLOWUPS.md (rule 21 armed-gate posture).");
+        eprintln!("  and the §19 wall-clock layer). Sealing re-run against WI-3's live emission =");
+        eprintln!("  reconvergence leg (b) sealing form (§19.1), tracked in docs/FOLLOWUPS.md.");
     }
     match serde_json::to_string_pretty(&report) {
         Ok(json) => println!("{json}"),
         Err(e) => eprintln!("error serializing gf7-timeline report: {e}"),
+    }
+}
+
+fn print_partition_adversary_report() {
+    let report = partition_adversary::run_gating_witness_report();
+    eprintln!(
+        "shekyl-staking-sim — §14.4 partition-adversary arm (ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4)"
+    );
+    eprintln!(
+        "Co-first deliverables (R4/R5, committed before any sweep grades — §17.6 f.1 / §17.7 f.4):"
+    );
+    eprintln!();
+    eprintln!("Gating lemma — a-priori i.i.d. founder-clustering bound (no user-cohort reliance):");
+    eprintln!(
+        "  P(all M anchors within span c) ≤ M·((c+1)/(W+1))^(M−1) for M i.i.d. uniform draws"
+    );
+    eprintln!(
+        "  over {{0..W}}. At M={} c={} W={} (production entry-gap window, K-invariant per §17 P2):",
+        report.founder_count, report.cluster_span_blocks, report.entry_gap_window
+    );
+    eprintln!(
+        "  committed bound = {:.4e}  (exact range CDF {:.4e}; ceiling {:.0e}) — derivably small: {}",
+        report.gating_lemma_bound,
+        report.gating_lemma_exact,
+        report.gating_lemma_ceiling,
+        if report.derivably_small { "YES" } else { "NO" },
+    );
+    eprintln!("  Cited by: P2 no-mechanism disposition + §16.2 obligation-3 strip-row floor.");
+    eprintln!();
+    eprintln!(
+        "Witness-typed controls (compile-time un-constructible from the production founder-config"
+    );
+    eprintln!(
+        "  constructor — distinct ControlWitness type, no From bridge; deployed window = {} blk):",
+        report.deployed_window
+    );
+    for c in &report.controls {
+        eprintln!(
+            "  [{}] {:<30} aims at family member {}",
+            if c.witness_typed { "ok" } else { "FAIL" },
+            c.label,
+            c.aimed_member,
+        );
+    }
+    eprintln!();
+
+    // The graded arm: family members 1–7, the feature dictionary, the
+    // max-over-family statistic T, its permutation null, and bounds 1–3.
+    let graded = partition_adversary::run_partition_report();
+    eprintln!(
+        "Graded arm — N={} founders={} trials={} perms={} (bound 1 |lift|≤{:.2} AND no member \
+         flags; bound 2 whole-set lift≥{:.2} AND aimed flags / single-member aimed flags; \
+         any-member arm at family-wise α={:.2}, Bonferroni α/7, exact rank p):",
+        graded.n,
+        graded.founder_count,
+        graded.trials,
+        graded.permutations,
+        graded.bound1_tol,
+        graded.bound2_lift,
+        partition_adversary::FAMILY_ALPHA,
+    );
+    eprintln!(
+        "  Feature dictionary (§14.4, chain-visible only): seam |bond−funding|, dispatch phase,"
+    );
+    eprintln!(
+        "  sorted inter-event gap vector, cadence period, event count, resume spacing (z-scored)."
+    );
+    eprintln!(
+        "  Family: 1 k-means · 2 per-feature top-M · 3 cohesion-subset · 4 spectral · 5 seeded-NN"
+    );
+    eprintln!("          · 6 whitened joint-density isolation · 7 most-regular-subset.");
+    eprintln!();
+    eprintln!(
+        "  {:<26} {:>6} {:>6} {:>7} {:>5}  aimed  {:>6}   verdict",
+        "scenario", "T", "null", "lift", "bnd", "aimLft",
+    );
+    let row = |s: &partition_adversary::PartitionScenario| {
+        eprintln!(
+            "  {:<26} {:>6.3} {:>6.3} {:>+7.3} {:>5}  m{:<4} {:>+6.3}   {}",
+            s.label,
+            s.t_obs,
+            s.null_mean,
+            s.lift,
+            if s.aimed_member == 0 { "1" } else { "2" },
+            s.aimed_member,
+            s.aimed_member_lift,
+            if s.passed { "PASS" } else { "fail" },
+        );
+    };
+    row(&graded.deployed);
+    for c in &graded.controls {
+        row(c);
+    }
+    eprintln!();
+    eprintln!("  per-member agreement vs null (m1..m7), deployed then controls;");
+    eprintln!("  flg marks the any-member arm (rank p ≤ α/7 vs the member's own null-of-mean):");
+    let members = |s: &partition_adversary::PartitionScenario| {
+        let agr: Vec<String> = s
+            .member_agreements
+            .iter()
+            .map(|x| format!("{x:.2}"))
+            .collect();
+        let nul: Vec<String> = s
+            .member_null_means
+            .iter()
+            .map(|x| format!("{x:.2}"))
+            .collect();
+        let flg: Vec<String> = s
+            .member_flags
+            .iter()
+            .zip(s.member_p.iter())
+            .map(|(f, p)| {
+                if *f {
+                    format!("*{p:.3}")
+                } else {
+                    format!(" {p:.3}")
+                }
+            })
+            .collect();
+        eprintln!("    {:<12} agr=[{}]", s.scenario, agr.join(" "));
+        eprintln!("    {:<12} nul=[{}]", "", nul.join(" "));
+        eprintln!("    {:<12} flg=[{}]", "", flg.join(" "));
+    };
+    members(&graded.deployed);
+    for c in &graded.controls {
+        members(c);
+    }
+    eprintln!();
+    eprintln!("  STATUS: {}", graded.status);
+    for p in &graded.pinned_underspecifications {
+        eprintln!("  PIN: {p}");
+    }
+    eprintln!();
+
+    // The §14.4-round riders (same generator, extra axes): §16.7 N-sweep and
+    // M6.2 coupling control, §18.3-narrowed bridge grading, §18.4 lifetime
+    // accumulation.
+    let riders = riders::run_riders_report();
+    eprintln!(
+        "Riders (§16.7 items 2/4, §18.3 as narrowed by §18.8, §18.4) — \
+         sweep/coupling trials={} r-bound={:.1}:",
+        riders.trials, riders.ratio_bound,
+    );
+    eprintln!("  N-sweep (r < 2 at every swept N; growth with N = redesign signal):");
+    for row in &riders.n_sweep {
+        eprintln!(
+            "    N={:<3} baseline={:.3}  blind r={:.3}  s3 r={:.3}  lr r={:.3}  {}",
+            row.n,
+            row.baseline,
+            row.blind.ratio,
+            row.modeled_s3.ratio,
+            row.lr_stress.ratio,
+            if row.pass { "PASS" } else { "FAIL" },
+        );
+    }
+    eprintln!(
+        "  M6.2 coupling control: blind@window-0 P(link)={:.3} vs floor 2/N={:.3} — {}",
+        riders.coupling.blind_p_link,
+        riders.coupling.floor,
+        if riders.coupling.passed {
+            "coupled (ok)"
+        } else {
+            "DECOUPLED — INVALID"
+        },
+    );
+    eprintln!(
+        "  Attribute-bridge grading (strata as candidate bridge axes, never crowds; \
+         trials={} perms={}):",
+        riders.bridge_trials, riders.bridge_perms,
+    );
+    for b in &riders.bridge {
+        eprintln!(
+            "    {:<42} |corr|={:.3} null={:.3}  {}  [{}]",
+            b.scenario,
+            b.bridge_stat,
+            b.null_mean,
+            if b.passed { "ok" } else { "FAIL" },
+            b.expectation,
+        );
+    }
+    eprintln!(
+        "  Lifetime accumulation (per-post p={:.3}, strongest posture arm; §18.4 form):",
+        riders.lifetime_per_post_p,
+    );
+    for l in &riders.lifetime {
+        eprintln!(
+            "    events={:<3} cumulative={:.3}{}",
+            l.events,
+            l.cumulative,
+            if l.founder_anchor {
+                "  <- founder/long-lived pessimistic anchor"
+            } else {
+                ""
+            },
+        );
+    }
+    eprintln!();
+    eprintln!("  RIDERS STATUS: {}", riders.status);
+    eprintln!();
+
+    // Named-field envelope, not a tuple: a bare 3-array is not
+    // self-describing, and every other report on this binary serializes a
+    // keyed object — downstream parsers should never have to know positions.
+    #[derive(serde::Serialize)]
+    struct PartitionAdversaryArtifact<'a> {
+        gating_witness: &'a partition_adversary::GatingWitnessReport,
+        graded_arm: &'a partition_adversary::PartitionReport,
+        riders: &'a riders::RidersReport,
+    }
+    let artifact = PartitionAdversaryArtifact {
+        gating_witness: &report,
+        graded_arm: &graded,
+        riders: &riders,
+    };
+    match serde_json::to_string_pretty(&artifact) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing partition-adversary report: {e}"),
     }
 }
 
@@ -1353,6 +1626,11 @@ fn main() {
 
     if std::env::args().any(|a| a == "--gf7-timeline") {
         print_gf7_timeline_report();
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--partition-adversary") {
+        print_partition_adversary_report();
         return;
     }
 
