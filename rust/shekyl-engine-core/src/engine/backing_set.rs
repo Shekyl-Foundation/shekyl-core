@@ -171,7 +171,7 @@ mod tests {
         ];
 
         let set = BackingSet::from_spendable(&records, reference_height, last_sweep_height);
-        let gindexes: Vec<u64> = set.records().iter().map(|r| r.gindex).collect();
+        let gindexes: Vec<u64> = set.records().iter().map(|r| r.gindex.to_raw()).collect();
         assert_eq!(
             gindexes,
             vec![1, 2],
@@ -265,29 +265,34 @@ mod tests {
         let selection = sweep_funding_outputs(
             &SpentRecordsDurablyPruned::for_test(),
             &pre_sweep,
-            0,
+            shekyl_types::PSlot::from_raw(0),
             &Default::default(),
-            required,
+            shekyl_units::AtomicUnits::from_raw(required),
             reference_height,
         )
         .expect("sweep succeeds");
 
         // (1) The sweep is the full spendable eligible set.
-        let swept: std::collections::BTreeSet<u64> =
-            selection.records.iter().map(|r| r.gindex).collect();
+        let swept: std::collections::BTreeSet<u64> = selection
+            .records
+            .iter()
+            .map(|r| r.gindex.to_raw())
+            .collect();
         assert_eq!(
             swept,
             [10, 11, 12, 13].into_iter().collect(),
             "sweep consumed everything, including the record a greedy subset leaves behind"
         );
-        assert_eq!(selection.total, 1_800);
+        assert_eq!(selection.total, shekyl_units::AtomicUnits::from_raw(1_800));
 
         // (2) Post-confirmation spendable remainder is empty. Durable
         // pruning is SP-R0-gated, so model spent-removal as records minus
         // swept gindexes.
         let remainder: Vec<&PFundingOutputRecord> = pre_sweep
             .iter()
-            .filter(|r| !swept.contains(&r.gindex) && r.spendable_height <= reference_height)
+            .filter(|r| {
+                !swept.contains(&r.gindex.to_raw()) && r.spendable_height <= reference_height
+            })
             .collect();
         assert!(
             remainder.is_empty(),
@@ -305,7 +310,7 @@ mod tests {
             record(21, 250, 123, MintLineageOutput::ExternalTransfer),
         ];
         let set = BackingSet::from_spendable(&post_bond, reference_height, last_sweep_height);
-        let eligible: Vec<u64> = set.records().iter().map(|r| r.gindex).collect();
+        let eligible: Vec<u64> = set.records().iter().map(|r| r.gindex.to_raw()).collect();
         assert_eq!(
             eligible,
             vec![20],

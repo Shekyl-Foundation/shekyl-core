@@ -212,8 +212,13 @@
                       "name": "Vec<T>",
                       "ty": {
                         "Seq": {
-                          "name": "u64",
-                          "ty": "U64"
+                          "name": "GlobalOutputIndex",
+                          "ty": {
+                            "NewtypeStruct": {
+                              "name": "u64",
+                              "ty": "U64"
+                            }
+                          }
                         }
                       }
                     }

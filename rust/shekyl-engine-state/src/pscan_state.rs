@@ -34,13 +34,17 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
+use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot, SettlementEpoch, TxHash};
 use shekyl_units::AtomicUnits;
 
 use crate::error::WalletLedgerError;
 use crate::pscan_cursor::PScanCursor;
 
-/// Schema version of the durable P-scan state. **v5** adds the
+/// Schema version of the durable P-scan state. **v6** domain-newtypes the
+/// residual raw fields on [`PFundingOutputRecord`] (`p_slot` → [`PSlot`],
+/// `tx_hash` → [`TxHash`], `gindex` → [`GlobalOutputIndex`] — FOLLOWUPS
+/// WI-2 orchestrator carrier; postcard-transparent, fail-closed on mismatch);
+/// **v5** adds the
 /// [`MintLineageOutput`] `lineage` field and the `spendable_height` field on
 /// [`PFundingOutputRecord`] (GF-4b backing-lineage ladder + sweep
 /// spendability filter, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3/§3.6 — one
@@ -54,7 +58,7 @@ use crate::pscan_cursor::PScanCursor;
 /// migration at any step: pre-genesis, a version mismatch means re-scan (rule 15).
 /// Distinct from the inner [`PScanCursor`]'s own version (nested, like the wallet
 /// ledger over its sub-blocks).
-pub const PSCAN_STATE_VERSION: u32 = 5;
+pub const PSCAN_STATE_VERSION: u32 = 6;
 
 /// The GF-4b mint-lineage ladder for a `P`-owned funding output — the
 /// scan-provenance classification (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3;
@@ -162,15 +166,15 @@ impl std::fmt::Debug for BondPostRecord {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct PFundingOutputRecord {
     /// The owning persona's slot ordinal (selects the re-derivation keys).
-    pub p_slot: u32,
+    pub p_slot: PSlot,
     /// Hash of the transaction carrying the output.
-    pub tx_hash: [u8; 32],
+    pub tx_hash: TxHash,
     /// The output's index within its transaction — the KEM derivation index
     /// the spend-bundle re-derivation consumes.
     pub index_in_transaction: u64,
     /// The global (chain-wide) output index — the curve-tree leaf position
     /// (`AssembleInput::gindex`).
-    pub gindex: u64,
+    pub gindex: GlobalOutputIndex,
     /// The on-chain output key `O` (compressed Edwards bytes).
     pub output_key: [u8; 32],
     /// The on-chain amount commitment point `C` (compressed Edwards bytes) —
@@ -442,10 +446,10 @@ mod tests {
 
     fn funding_output(slot: u32, gindex: u64, amount: u64, height: u64) -> PFundingOutputRecord {
         PFundingOutputRecord {
-            p_slot: slot,
-            tx_hash: [0xA1; 32],
+            p_slot: PSlot::from_raw(slot),
+            tx_hash: TxHash::from_bytes([0xA1; 32]),
             index_in_transaction: 1,
-            gindex,
+            gindex: GlobalOutputIndex::from_raw(gindex),
             output_key: [0xB2; 32],
             commitment: [0xC3; 32],
             ciphertext_x25519: [0xD4; 32],

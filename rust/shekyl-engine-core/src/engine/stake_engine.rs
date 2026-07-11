@@ -196,22 +196,10 @@ compile_error!(
 
 /// Archival persona slot index.
 ///
-/// A newtype over `u32` so a persona slot cannot be confused at a call site
-/// with any other index (an output index, a subaddress index, …). The
-/// `derive_archival_p_keys` boundary takes a raw `u32`; the conversion is
-/// explicit via [`PSlot::index`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[allow(dead_code)] // inert until PR 2c wiring
-pub(crate) struct PSlot(pub u32);
-
-#[allow(dead_code)] // inert until PR 2c wiring
-impl PSlot {
-    /// The raw slot index, for the `derive_archival_p_keys` boundary.
-    #[must_use]
-    pub(crate) fn index(self) -> u32 {
-        self.0
-    }
-}
+/// Persona-slot ordinal — re-exported from [`shekyl_types::PSlot`] so the
+/// stake-engine surface and the persisted pscan funding records share one
+/// domain type (WI-2 domain-newtype carrier).
+pub(crate) use shekyl_types::PSlot;
 
 /// How many slots past the current cursor `assemble()` pre-derives into the
 /// held set (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2, Model D).
@@ -1319,7 +1307,10 @@ impl Message<SignBond> for StakeEngine {
 /// this request's entry-gap draw — the same seam discipline as
 /// [`SignedBondPost`]: the caller that receives the bytes to place receives
 /// where to place them.
-#[allow(dead_code)] // inert until the WI-2 Engine-side orchestrator lands (this PR).
+///
+/// Dead_code allow: the Engine orchestrator is wired; go-live still needs
+/// SP-R0/2d-1 pruning **and** the RPC stake entry (rule-21 — neither alone).
+#[allow(dead_code)] // rule-21: SP-R0/2d-1 AND RPC entry — neither alone
 pub(crate) struct AssembleBond {
     /// Operation-scoped capability proving the slot is currently held (typed
     /// contract #2). Must match `ticket.p_slot()`.
@@ -1342,7 +1333,10 @@ pub(crate) struct AssembleBond {
 /// single P-1 site, [`finalize_bond_tx`]), the placement plan, and the
 /// funding gindexes for the caller's reservation record (§3.5). Secrets never
 /// cross the boundary.
-#[allow(dead_code)] // inert until the WI-2 Engine-side orchestrator lands (this PR).
+///
+/// Dead_code allow: reply type of the wired orchestrator; same dual gate as
+/// [`AssembleBond`].
+#[allow(dead_code)] // rule-21: SP-R0/2d-1 AND RPC entry — neither alone
 #[derive(Debug)]
 pub(crate) struct AssembledBondPost {
     /// The fully-signed, wire-encoded bond transaction, persona-bound.
@@ -1350,7 +1344,7 @@ pub(crate) struct AssembledBondPost {
     /// Relative placement of the entry event and the bond-post broadcast.
     pub plan: EntrySeamPlan,
     /// The spent funding records' gindexes — the §3.5 reservation set.
-    pub funding_gindexes: Vec<u64>,
+    pub funding_gindexes: Vec<shekyl_types::GlobalOutputIndex>,
 }
 
 impl Message<AssembleBond> for StakeEngine {
@@ -1461,7 +1455,7 @@ impl Message<AssembleBond> for StakeEngine {
             spend: SpendInput,
             key_image: [u8; 32],
             pqc_pubkey: Vec<u8>,
-            gindex: u64,
+            gindex: shekyl_types::GlobalOutputIndex,
         }
         let mut prepared = Vec::with_capacity(msg.funding.len());
         // Consume `msg.funding` by value (the sum pass above already read what it
@@ -1536,7 +1530,8 @@ impl Message<AssembleBond> for StakeEngine {
         prepared.sort_by(|a, b| b.key_image.cmp(&a.key_image));
 
         let key_images: Vec<[u8; 32]> = prepared.iter().map(|p| p.key_image).collect();
-        let funding_gindexes: Vec<u64> = prepared.iter().map(|p| p.gindex).collect();
+        let funding_gindexes: Vec<shekyl_types::GlobalOutputIndex> =
+            prepared.iter().map(|p| p.gindex).collect();
 
         // ── Steps 11–12 (§3.3 actor step 2): the wire BondPost prefix input
         // from PUBLIC parts, then the prefix hash. No circularity: the wire
@@ -2080,6 +2075,33 @@ impl StakeEngineHandle {
                 ticket,
                 holdings,
                 tx_prefix_hash,
+            })
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// Ask the actor to assemble the full, broadcast-ready JoinMarket bond
+    /// (`AssembleBond`). Engine-side caller is [`Engine::assemble_bond_post`]
+    /// (WI-2 §3.3). Dead_code allow retires only when **both** SP-R0 / 2d-1
+    /// pruning **and** the RPC stake entry land — neither alone.
+    #[allow(dead_code)] // rule-21: SP-R0/2d-1 AND RPC entry — neither alone
+    pub(crate) async fn assemble_bond(
+        &self,
+        handle: PersonaHandle,
+        ticket: super::stake_persist::PersistedBondTicket,
+        holdings: HoldingsDescriptor,
+        funding: Vec<FundingInputContext>,
+        tree_ctx: TreeContext,
+        fee: u64,
+    ) -> Result<AssembledBondPost, StakeEngineError> {
+        self.actor
+            .ask(AssembleBond {
+                handle,
+                ticket,
+                holdings,
+                funding,
+                tree_ctx,
+                fee,
             })
             .await
             .map_err(collapse_send_error)

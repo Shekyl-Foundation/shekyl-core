@@ -33,7 +33,8 @@ use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind};
 use shekyl_engine_state::pending_post_block::PendingBondPost;
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_tx_builder::{encode_final_tx, LeafEntry, WireEncodeInput};
-use shekyl_types::{BlockHeight, PCanonicalId};
+use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot};
+use shekyl_units::AtomicUnits;
 use shekyl_wire::{BondPost, BondPostKind as WireBondPostKind, Holdings, Input};
 
 // ---------------------------------------------------------------------------
@@ -157,8 +158,17 @@ pub(crate) enum BondAssemblyError {
     /// at genesis: one live post per persona (§3.5); the caller waits for the
     /// pending post to confirm or fail before re-assembling.
     #[error("a pending bond post already exists for this persona; one live post per persona")]
-    #[allow(dead_code)] // transient — constructed by the D-A4 pending-post gate as it lands.
     PendingPostExists,
+
+    /// The curve-tree / ledger anchoring procedure could not produce a
+    /// submittable [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock)
+    /// (tree too far behind, ingest missing, ledger hash missing, chain too
+    /// short). Loud resync — never a silent path fail (WI-2 F-6).
+    #[error("bond reference unavailable: {detail}; resync")]
+    ReferenceResyncing {
+        /// Operator-facing detail naming which arm of the anchoring gate fired.
+        detail: &'static str,
+    },
 
     /// Invariant A-1 (§3.3 step 4, fail closed): the signed vin's
     /// wire-encoded `BondPost` fields differ from the prefix's `BondPost`
@@ -251,7 +261,7 @@ pub(crate) struct FundingSelection {
     pub records: Vec<PFundingOutputRecord>,
     /// Exact sum of the swept records' amounts.
     #[allow(dead_code)] // transient — read by the Engine-side WI-2 orchestrator as it lands.
-    pub total: u64,
+    pub total: AtomicUnits,
 }
 
 /// D-A2 funding **sweep** (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.2 as amended by
@@ -311,9 +321,9 @@ pub(crate) struct FundingSelection {
 pub(crate) fn sweep_funding_outputs(
     _pruning_landed: &SpentRecordsDurablyPruned,
     records: &[PFundingOutputRecord],
-    p_slot: u32,
-    reserved: &std::collections::BTreeSet<u64>,
-    required: u64,
+    p_slot: PSlot,
+    reserved: &std::collections::BTreeSet<GlobalOutputIndex>,
+    required: AtomicUnits,
     reference_height: BlockHeight,
 ) -> Result<FundingSelection, BondAssemblyError> {
     let mut eligible: Vec<&PFundingOutputRecord> = records
@@ -333,19 +343,19 @@ pub(crate) fn sweep_funding_outputs(
     // records together, so the reported `total` cannot drift from the
     // `records` actually returned (the change-split invariant
     // `funding == change + fee + credit` relies on that agreement).
-    let mut total: u64 = 0;
+    let mut total = AtomicUnits::ZERO;
     let mut records = Vec::with_capacity(eligible.len());
     for record in eligible {
         total = total
-            .checked_add(record.amount.to_raw())
+            .checked_add(record.amount)
             .ok_or(BondAssemblyError::AmountOverflow)?;
         records.push(record.clone());
     }
 
     if total < required {
         return Err(BondAssemblyError::InsufficientFunding {
-            available: total,
-            required,
+            available: total.to_raw(),
+            required: required.to_raw(),
         });
     }
 
@@ -474,14 +484,27 @@ mod tests {
         reference_height: u64,
     ) -> Result<FundingSelection, BondAssemblyError> {
         let reference_height = BlockHeight::from_raw(reference_height);
+        let reserved: std::collections::BTreeSet<_> = reserved
+            .iter()
+            .copied()
+            .map(shekyl_types::GlobalOutputIndex::from_raw)
+            .collect();
         sweep_funding_outputs(
             &SpentRecordsDurablyPruned::for_test(),
             records,
-            p_slot,
-            reserved,
-            required,
+            shekyl_types::PSlot::from_raw(p_slot),
+            &reserved,
+            AtomicUnits::from_raw(required),
             reference_height,
         )
+    }
+
+    fn picked_gindexes(selection: &FundingSelection) -> Vec<u64> {
+        selection
+            .records
+            .iter()
+            .map(|r| r.gindex.to_raw())
+            .collect()
     }
 
     /// GF-4b §3.1: the sweep consumes the **entire** spendable eligible set
@@ -501,9 +524,9 @@ mod tests {
         let selection = sweep(&records, 0, &Default::default(), 1_000, REF_HEIGHT).expect("sweeps");
         // Oldest-first over *everything*: 300+400 ≥ 1000 would have stopped
         // the old selector at [1, 3]; the sweep consumes all four.
-        let picked: Vec<u64> = selection.records.iter().map(|r| r.gindex).collect();
+        let picked = picked_gindexes(&selection);
         assert_eq!(picked, vec![1, 3, 4, 5], "the full eligible set, ordered");
-        assert_eq!(selection.total, 2_200);
+        assert_eq!(selection.total, AtomicUnits::from_raw(2_200));
     }
 
     /// §3.2 rule 1: records reserved by a live pending post are excluded —
@@ -513,7 +536,7 @@ mod tests {
         let records = vec![record(1, 10, 600), record(2, 20, 600)];
         let reserved = [1u64].into_iter().collect();
         let selection = sweep(&records, 0, &reserved, 500, REF_HEIGHT).expect("sweeps");
-        let picked: Vec<u64> = selection.records.iter().map(|r| r.gindex).collect();
+        let picked = picked_gindexes(&selection);
         assert_eq!(picked, vec![2], "the reserved record must not be swept");
     }
 
@@ -543,7 +566,7 @@ mod tests {
         }
         // Assembling for persona 1: sweeps persona 1's records — all of them.
         let selection = sweep(&records, 1, &Default::default(), 1_000, REF_HEIGHT).expect("sweeps");
-        let picked: Vec<u64> = selection.records.iter().map(|r| r.gindex).collect();
+        let picked = picked_gindexes(&selection);
         assert_eq!(
             picked,
             vec![2, 3],
@@ -584,9 +607,9 @@ mod tests {
         // record at height 20 matures at 30 (out, ordinary +10 flow).
         let records = vec![record(1, 10, 600), record(2, 20, 600)];
         let selection = sweep(&records, 0, &Default::default(), 500, 25).expect("sweeps");
-        let picked: Vec<u64> = selection.records.iter().map(|r| r.gindex).collect();
+        let picked = picked_gindexes(&selection);
         assert_eq!(picked, vec![1], "the immature record is not in the sweep");
-        assert_eq!(selection.total, 600);
+        assert_eq!(selection.total, AtomicUnits::from_raw(600));
 
         // Coinbase-shaped arrival: same height as the mature record, but the
         // +60 lock (via spendable_height) keeps it out until height 70.
@@ -594,7 +617,7 @@ mod tests {
         coinbase_shaped.spendable_height = BlockHeight::from_raw(10 + 60);
         let records = vec![record(1, 10, 600), coinbase_shaped];
         let selection = sweep(&records, 0, &Default::default(), 500, 25).expect("sweeps");
-        let picked: Vec<u64> = selection.records.iter().map(|r| r.gindex).collect();
+        let picked = picked_gindexes(&selection);
         assert_eq!(
             picked,
             vec![1],
@@ -620,16 +643,19 @@ mod tests {
             immature,                       // survives by design (GF4b-6)
         ];
         let selection = sweep(&records, 0, &reserved, 100, 100).expect("sweeps");
-        let swept: std::collections::BTreeSet<u64> =
-            selection.records.iter().map(|r| r.gindex).collect();
+        let swept: std::collections::BTreeSet<u64> = selection
+            .records
+            .iter()
+            .map(|r| r.gindex.to_raw())
+            .collect();
         let remainder: Vec<u64> = records
             .iter()
             .filter(|r| {
-                r.p_slot == 0
-                    && !reserved.contains(&r.gindex)
+                r.p_slot == shekyl_types::PSlot::from_raw(0)
+                    && !reserved.contains(&r.gindex.to_raw())
                     && r.spendable_height <= BlockHeight::from_raw(100)
             })
-            .map(|r| r.gindex)
+            .map(|r| r.gindex.to_raw())
             .filter(|g| !swept.contains(g))
             .collect();
         assert!(
@@ -641,6 +667,50 @@ mod tests {
             2,
             "exactly the two spendable, unreserved, own-slot records"
         );
+    }
+
+    /// C-1 §5 item 4 / F-4: `sweep_funding_outputs` remains the sole
+    /// funding-selection entry, and `SpentRecordsDurablyPruned` has no
+    /// production constructor (only `for_test`).
+    #[test]
+    fn f4_sweep_is_sole_funding_selector_and_witness_is_test_only() {
+        let src = include_str!("bond_assembly.rs");
+        let backing = include_str!("backing_set.rs");
+        // Sole funding-selection definition lives here; no alternate selector
+        // in BackingSet. Orchestrator monopoly is asserted in
+        // `bond_orchestrator::tests`.
+        assert!(
+            src.contains("pub(crate) fn sweep_funding_outputs"),
+            "sweep definition must remain in bond_assembly"
+        );
+        assert!(
+            !src.contains("fn select_funding_outputs"),
+            "retired subset selector must not reappear in bond_assembly"
+        );
+        assert!(
+            !backing.contains("select_funding_outputs"),
+            "BackingSet must not revive the subset selector"
+        );
+        // Zero production constructors: only `for_test` under cfg(test).
+        // Inspect the impl region only — this test's own source mentions the
+        // pattern narratively and would false-positive a whole-file grep.
+        let impl_region = src
+            .split("impl SpentRecordsDurablyPruned")
+            .nth(1)
+            .and_then(|rest| rest.split("/// The outcome of the D-A2 sweep").next())
+            .expect("SpentRecordsDurablyPruned impl region");
+        assert!(
+            impl_region.contains("fn for_test()"),
+            "test-only witness constructor must remain"
+        );
+        assert!(
+            !impl_region.contains("pub(crate) fn new(")
+                && !impl_region.contains("pub fn new(")
+                && !impl_region.contains("pub(crate) fn mint("),
+            "no production SpentRecordsDurablyPruned constructor"
+        );
+        // Orchestrator's sole-funding-path claim is asserted in
+        // `bond_orchestrator::tests` (keeps this KAT independent of that module).
     }
 
     /// Pin P-2 round-trip: a sealed [`PendingBondPost`]'s `(persona, tx_bytes)`
@@ -656,7 +726,7 @@ mod tests {
             entry_offset_blocks: 3,
             bond_post_offset_blocks: 7,
             anchor_t0: BlockHeight::from_raw(100),
-            funding_gindexes: vec![1],
+            funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(1)],
             state: PendingPostState::Pending,
         };
         let bound = PBoundBytes::from_pending(&post);

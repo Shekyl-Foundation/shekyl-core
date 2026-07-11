@@ -33,18 +33,20 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
-use shekyl_types::{BlockHeight, PCanonicalId};
+use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId};
 
 use crate::error::WalletLedgerError;
 
-/// Schema version of the durable pending-post block. **v2** is the WI-3
+/// Schema version of the durable pending-post block. **v3** domain-newtypes
+/// `funding_gindexes` as [`GlobalOutputIndex`] (WI-2 orchestrator carrier;
+/// postcard-transparent). **v2** is the WI-3
 /// dispatch shape: v1's JoinMarket-only record plus the
 /// [`PendingPostState::Dispatched`] arm (`ARCHIVAL_BOND_WI3_DISPATCH.md`
 /// §3.3). Any field addition / removal / renaming bumps this; loads that see
 /// a different version **refuse rather than migrate** — pre-genesis, a v1
 /// seal under a v2 binary fails closed and the operator re-assembles
 /// (rule 15).
-pub const PENDING_POST_VERSION: u32 = 2;
+pub const PENDING_POST_VERSION: u32 = 3;
 
 /// Dispatch state of a pending bond post. The WI-2 assemble path writes only
 /// [`Self::Pending`]; WI-3's block-timed dispatch driver owns the
@@ -101,7 +103,7 @@ pub struct PendingBondPost {
     /// Global output indexes of the funding outputs this post spends — the
     /// reservation set: funding selection excludes these while the post is
     /// live (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.2 rule 1).
-    pub funding_gindexes: Vec<u64>,
+    pub funding_gindexes: Vec<GlobalOutputIndex>,
     /// Dispatch state (WI-2: always [`PendingPostState::Pending`]).
     pub state: PendingPostState,
 }
@@ -183,7 +185,7 @@ impl PendingPostBlock {
 
     /// Every funding gindex reserved by a live post — the exclusion set for
     /// funding selection (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.2 rule 1).
-    pub fn reserved_gindexes(&self) -> std::collections::BTreeSet<u64> {
+    pub fn reserved_gindexes(&self) -> std::collections::BTreeSet<GlobalOutputIndex> {
         self.posts
             .iter()
             .flat_map(|p| p.funding_gindexes.iter().copied())
@@ -316,7 +318,11 @@ mod tests {
             entry_offset_blocks: 3,
             bond_post_offset_blocks: 12,
             anchor_t0: BlockHeight::from_raw(1_000),
-            funding_gindexes: gindexes.to_vec(),
+            funding_gindexes: gindexes
+                .iter()
+                .copied()
+                .map(GlobalOutputIndex::from_raw)
+                .collect(),
             state: PendingPostState::Pending,
         }
     }
@@ -455,7 +461,7 @@ mod tests {
         assert!(!block.has_live_post_for(&persona));
         assert_eq!(
             block.reserved_gindexes().into_iter().collect::<Vec<_>>(),
-            vec![7],
+            vec![GlobalOutputIndex::from_raw(7)],
             "the removed post's reservation is gone in the same mutation"
         );
         assert!(
@@ -488,7 +494,10 @@ mod tests {
         );
         assert_eq!(
             block.reserved_gindexes().into_iter().collect::<Vec<_>>(),
-            vec![2, 3],
+            vec![
+                GlobalOutputIndex::from_raw(2),
+                GlobalOutputIndex::from_raw(3),
+            ],
             "the retired post's reservation released; the kept post's remains"
         );
 
@@ -514,7 +523,13 @@ mod tests {
         assert!(block.push_post(post(0xAA, &[1, 2])));
         assert!(block.push_post(post(0xBB, &[2, 7])));
         let reserved = block.reserved_gindexes();
-        assert_eq!(reserved.into_iter().collect::<Vec<_>>(), vec![1, 2, 7]);
+        assert_eq!(
+            reserved.into_iter().collect::<Vec<_>>(),
+            [1, 2, 7]
+                .into_iter()
+                .map(GlobalOutputIndex::from_raw)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

@@ -771,7 +771,11 @@ mod tests {
             entry_offset_blocks: 3,
             bond_post_offset_blocks: offset,
             anchor_t0: BlockHeight::from_raw(anchor),
-            funding_gindexes: gindexes.to_vec(),
+            funding_gindexes: gindexes
+                .iter()
+                .copied()
+                .map(shekyl_types::GlobalOutputIndex::from_raw)
+                .collect(),
             state: PendingPostState::Pending,
         }
     }
@@ -1138,7 +1142,7 @@ mod tests {
         assert_eq!(block.posts().len(), 1, "the record is held, not removed");
         assert_eq!(
             block.reserved_gindexes(),
-            [7u64].into(),
+            [shekyl_types::GlobalOutputIndex::from_raw(7)].into(),
             "the funding reservation stays intact (funds-safety over liveness)"
         );
     }
