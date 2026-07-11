@@ -85,14 +85,23 @@
   between the decoded claim source and the signed transaction that is
   deterministic given the source — KAT-able with a fixture
   `EmissionEpochSource`, no live daemon, no actor harness.
-  `derive_claimable_epochs` consumes **four** boundaries and never
-  re-derives boundary arithmetic: top/expiry/dedup from the literal
-  connect predicate (`claimed_epochs_check_and_set` on a scratch clone
-  as a read-only oracle — purity verified at source and pinned with a
-  reopen criterion, plus a differential test sweeping the oracle
-  against the read-only predicates; read-only sibling extraction filed
-  V3.1), and **strict finalization** via verify's own
-  `epoch_close_height` predicate. The finalization boundary is a
+  `derive_claimable_epochs` consumes **five** boundaries and never
+  re-derives boundary arithmetic: top/expiry/dedup through the
+  read-only predicates (`epoch_is_not_settled` — extracted in this
+  PR's review round, retiring an interim scratch-clone-oracle
+  disposition and discharging its V3.1 FOLLOWUPS item on the named
+  trigger — plus the existing `epoch_is_claim_expired` /
+  `claimed_epochs_contains`; the connect mutator resolves through the
+  same predicates, pinned by a differential test), **join** via the
+  newly extracted `epoch_is_before_join` (verify step 2's
+  `E ≥ E_join + 1` against the record's join epoch — a review finding:
+  without it a retire-then-rejoin record wedged the whole batch behind
+  the cause-blind `SelfCheckFailed`), and **strict finalization** via
+  verify's own `epoch_close_height` predicate (a window epoch with no
+  close height at all is refused `SourceInvalid` — it can never
+  finalize). The share recompute is the shared steps-4/5 evaluation
+  head `claimant_reward_share`, called by the verify body and the
+  derivation alike (never a mirrored copy). The finalization boundary is a
   review finding: an earlier revision claimed the missing-close-row
   skip foreclosed the edge — disproved at daemon source (the close of
   `E` runs while connecting `E`'s last block, `blockchain_db.cpp`
@@ -110,10 +119,20 @@
   (compile-time const-assert as the production guarantee, checked
   `try_from` refusal + hostile-fixture KAT as non-production defense)
   and the entry-sum-vs-`work_P` hard check; sizing measures the claims
-  leg with the **production encoder** at structural maxima against
-  `MAX_TX_SIZE` minus a non-claims reserve, dropping youngest-first
-  (bound-or-split, GF-4b §5 item 5) and refusing when one epoch
-  cannot fit. The step-7 self-check (`self_check_claims`) drives the
+  leg with the **production encoder** at structural maxima — on the
+  one vin the assembly's content is returned from (`claims_vin`, the
+  single construction site) — against the **binding per-tx relay
+  bound**, the new `shekyl_wire::TX_WEIGHT_LIMIT` (149 400 B, pinning
+  the C++ `get_transaction_weight_limit`; a review finding re-based
+  this off `MAX_TX_SIZE`, the non-binding 1 MB parse cap, which could
+  pass a permanently-unsubmittable batch) minus a re-derived 48 KiB
+  non-claims reserve, dropping youngest-first (bound-or-split, GF-4b
+  §5 item 5) and refusing when one epoch cannot fit. The PR-1 decode
+  now also enforces the settled/height invariant
+  (`current_settled_epoch == settlement_epoch_at_height(chain_height)`,
+  a `Malformed` refusal otherwise), so the derivation's window
+  boundaries and the self-check's recomputed boundaries provably share
+  one basis. The step-7 self-check (`self_check_claims`) drives the
   literal `emission_vin_verify_claims` on the assembled rows before
   any signing — a builder/verifier disagreement surfaces loudly at
   build time as `SelfCheckFailed`, **cause-blind** per the CB-5
