@@ -357,6 +357,20 @@ sustainability is unaffected by the recalibration.
   source) that no reward-binding path reads `hybrid_sign_pk.ed25519` as the
   address spend pubkey; discharge by citing the structural binding it uses
   instead. Target: V3.0 (must discharge before the emission leg freezes).
+  **DISCHARGED (claim-builder PR 3, 2026-07-11):** the binding is
+  structural on both legs, checked at source in the construct path
+  (`stake_engine.rs` `AssembleEmissionClaim`). Identity: the vin's
+  `p_pubkey` is the canonical **hybrid** pubkey bytes
+  (`hybrid_sign_pk.to_canonical_bytes()` →
+  `p_canonical_id_from_hybrid_pubkey`), signed whole by Auth-P
+  (`HybridSignature`, Ed25519 + ML-DSA-65 over the auth digest).
+  Backing: bound by the membership proof over the curve-tree leaf
+  (`backing_pubkey` = the funding record's one-time output key `O`, plus
+  the leaf's `pqc_pk_hash` gate) and Auth-B under the backing spend key.
+  The `spend_pk` reads on the claim path are exclusively the fee-spend /
+  change machinery (receive-address layer); no reward-binding site
+  compares or substitutes `hybrid_sign_pk.ed25519` for the address spend
+  key — the confirmation the note predicted.
 
 - **FCMP++ circuit: confirm `incomplete_add_pub` need not constrain `c`
   on-curve (relocated from a vendored-code marker, 2026-06-24).** Upstream
@@ -3386,6 +3400,20 @@ sustainability is unaffected by the recalibration.
   implementation PR. *Target:* unchanged — **V3.0 pre-genesis**, paired with that
   landing.
 
+  *Re-evaluated (2026-07-11, claim-builder PR 3 — the named re-evaluation
+  shape).* The rebased reward arithmetic landed as
+  `shekyl-archival-retention/src/reward_arithmetic.rs`
+  (`reward_share_floor` / `mul_div_floor`) over plain `u64` operands
+  (budget atomic units, milli-scaled work) — a consensus surface whose
+  operands must stay byte-parity with the C++ FFI verify path, so it does
+  **not** carry `AtomicUnits` and the reopening criterion is not met. The
+  wallet claim builder consumes the shared function's `u64` outputs
+  verbatim (single-evaluator discipline; it never re-derives the split).
+  Deferral stands with the same substrate anchor: introduce the owned
+  primitive if/when that arithmetic surface migrates to `AtomicUnits`.
+  *Target re-anchored:* **V3.1** (no remaining V3.0 landing pairs with
+  it; the V3.0 pairing dissolved with this confirmation).
+
 - **Consolidate hand-copied `10^9` / decimal-point constants onto the `shekyl-units`
   single source (spawned 2026-06-05 by the `AtomicUnits` interim PR).** `shekyl-units` is
   now the canonical Rust owner of the `coin = 10^9` / `display_decimal_point = 9`
@@ -4583,9 +4611,16 @@ sustainability is unaffected by the recalibration.
   is underway on the §8 four-PR chain — PR 1 (daemon RPC) and PR 2
   (pure assembly module, `engine/emission_claim.rs`: four-boundary
   derivation, canonical work-claim rows, bound-or-split sizing,
-  step-7 self-check against the real verifier) implemented; PR 3
-  (StakeEngine handler: backing, proof, dual auth, tx assembly) is
-  the remaining builder half before this e2e unblocks.
+  step-7 self-check against the real verifier) implemented.
+  UPDATE 2026-07-11: PR 3 implemented (`AssembleEmissionClaim`
+  handler + the Engine-side claim orchestrator,
+  `engine/claim_orchestrator.rs`) — the builder half is complete;
+  the production path assembles a signed
+  `txin_archival_reward_emission` transaction end-to-end (verified
+  against a real curve tree in the orchestrator's integration
+  test). This e2e is now unblocked as §8 **PR-4** (regtest e2e +
+  blob-boundary arm), gated only on #281's
+  `economics_chain_helpers.h` harness.
 
 - **Q11 balance-exclusion KAT — blob-boundary invariant arm**
   (surfaced 2026-07-09, CB-4 source pass —
@@ -4616,11 +4651,15 @@ sustainability is unaffected by the recalibration.
   size-check arms cannot catch (they fire only once something is already in
   `pseudoOuts`). **Not** a consensus change (the Q11 reversion clause is
   untouched); tripwire-completeness, not a safety gate.
-  **Target: V3.0 pre-genesis, homed to the claim-builder PR** — it is
-  harness-gated on a valid-proof emission-tx builder, which that PR's
-  step-7 self-check builds anyway, so it lands where the harness is born
-  rather than in this queue. **Reopening trigger: closed when the
-  blob-boundary arm lands green.**
+  **Target: V3.0 pre-genesis, homed to §8 PR-4 (regtest e2e +
+  blob-boundary arm — `EMISSION_CLAIM_BUILDER.md` §8 row 4)** — it is
+  harness-gated on a valid-proof emission-tx builder, which PR-3's
+  production path now provides (UPDATE 2026-07-11: PR-3 landed; the
+  harness prerequisite exists), so the arm lands in PR-4 alongside the
+  regtest e2e that shares the same harness, gated on #281's
+  `economics_chain_helpers.h`. PR-4's scope table names this arm
+  explicitly; it is in-scope work there, not a rider. **Reopening
+  trigger: closed when the blob-boundary arm lands green.**
 
 ---
 

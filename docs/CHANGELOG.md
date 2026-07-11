@@ -4,6 +4,55 @@
 
 ### Added
 
+- **wallet: emission claim handler + Engine-side orchestrator —
+  claim-builder PR 3 (`EMISSION_CLAIM_BUILDER.md` §8 PR 3;
+  `REWARD_EMISSION_VIN_PLAN.md` §8.0.2/§8.0.3).** The builder half of
+  the E4 gate is complete: the production path assembles a signed
+  `txin_archival_reward_emission` transaction end-to-end. Six commits:
+  - **wire:** the emission input arm (dense tag `0x04`, opaque
+    `canonical_bytes`) — closing the latent break where a wallet
+    scanning a chain containing any emission claim failed to parse the
+    block.
+  - **pscan:** the `EmissionReward` scan arm (GF-4b item 2) — own
+    emission vins classify their vouts' lineage, so first-emission
+    backing change lands as `BondPostChange` instead of stranding in
+    rung 3.
+  - **engine:** the designated-backing selector (GF-4b §5 item 1):
+    `BackingSet::from_spendable` (spendability + lineage filters,
+    survivor tripwire) → `designate_backing` (most-recent-eligible,
+    reproducible from chain state) → `DesignatedBacking`, whose private
+    record and `fee_sweep`-owned Q11 exclusion make
+    backing-as-fee-input unrepresentable through the claim path.
+  - **engine:** the `AssembleEmissionClaim` handler (CB-2
+    `AssembleBond` sibling): derive + assemble via the PR-2 module,
+    F-C1c assembly order (fee inputs + vouts + extra → signable hash
+    over the vin-less prefix → membership proof
+    (`prove_backing_membership`, `spawn_blocking`) → dual auths from
+    the **derived bundle** (Auth-B backing key, Auth-P identity hybrid
+    key; CB-2: no master-seed re-borrow) → full prefix hash → fee-side
+    FCMP++ proof + tx PQC auths), with the daemon-side differential KAT
+    re-deriving the whole verify chain over the produced bytes.
+  - **engine:** the claim orchestrator
+    (`engine/claim_orchestrator.rs`): fetch → reference-height
+    anchoring (daemon's two-sided age gate reconciled with
+    `REF_ANCHOR_AGE`) → provable-record filter → designate → fee sweep
+    → membership-path assembly → handler dispatch; the reply returns
+    **unbroadcast** (CB-3: dispatch is the GF-4 seam). End-to-end
+    integration test over a real 30k-block `CurveTreeClient`, a canned
+    RPC transport, and the real actor, with daemon-side re-derivation
+    against the real tree root.
+  - **cleanup:** every PR-1/PR-2 staging allow whose named consumer was
+    PR-3 is deleted; skip diagnostics now log locally (their stated
+    purpose); the one remaining claim-surface allow is the orchestrator
+    + its reply's fields, staged narrowly against the CB-3 dispatch
+    seam. FOLLOWUPS: the reward→identity structural-binding forward-dep
+    discharged (the vin binds identity via the hybrid pubkey chain,
+    never the deleted ed25519/spend-key equality); the
+    `AtomicUnits::mul_div_rem` deferral re-evaluated on its named shape
+    (criterion not met — the rebased arithmetic is `u64` consensus
+    surface; re-anchored V3.1). PR 4 (regtest e2e + the Q11
+    blob-boundary arm, both named in the §8 PR-4 scope row) is the
+    chain's only open item, gated on #281.
 - **daemon RPC: Axum now enforces `--rpc-max-connections*` + reports a live
   `rpc_connections_count`.** A purpose-built Rust connection layer
   (`shekyl-daemon-rpc::conn_limit`: `LimitedListener` + `ConnTracker` over
