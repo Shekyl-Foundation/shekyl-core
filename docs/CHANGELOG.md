@@ -25,7 +25,17 @@
   isolation; founder-tier residual named). **§§17.1–17.6 ratified
   together (2026-07-10); §§14–16 closed; the §14.4 implementation
   round is released.** Trackers updated (`FOLLOWUPS.md` WI-4 entry,
-  `IMPLEMENTATION_INDEX.md` WI-4 row).
+  `IMPLEMENTATION_INDEX.md` WI-4 row). Round R5 (§17.7, same day)
+  adjudicated the R4 landing itself under the §17.6-head lens
+  (structural, generator-invisible channels): tier residual promoted
+  to a named channel with per-channel strip floor (`bond_floor`
+  satisfiability verified at source — shard-descriptor choice, never
+  treasury wealth); monotone floor recorded snapshot-by-construction
+  (gate reads `frozen_shard_count` only) with an a-priori
+  induced-forfeiture thinning margin required; premise-2 OR struck
+  (fixed pre-gate schedule only at gate-open); control witness type a
+  compile-time co-first-deliverable. Two R5 findings gate Gate 7's
+  `K_COVER` discharge.
 
 - **daemon RPC: Axum now enforces `--rpc-max-connections*` + reports a live
   `rpc_connections_count`.** A purpose-built Rust connection layer

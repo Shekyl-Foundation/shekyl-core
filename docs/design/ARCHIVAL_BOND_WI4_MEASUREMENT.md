@@ -896,9 +896,17 @@ it (§3.3's review-decision clause, exercised):
      draws, never parameterized by the launch-window length (which is
      `f(K_COVER)`); closes §17.6 Q3-C's smuggled-`K`-dependence channel.
   2. *Count `K`-independence* — the observed founder post count at
-     gate-open must not be `f(time-to-gate)`: either a fixed pre-gate
-     schedule completed before any candidate gate height, or re-bonding
-     that is itself production-i.i.d. and count-exchangeable.
+     gate-open must not be `f(time-to-gate)`. *Tightened at R5 (§17.7
+     finding 3):* the gate-open condition is a **fixed pre-gate
+     schedule completed before any candidate gate height** — full
+     stop. The originally-offered alternative (re-bonding that is
+     production-i.i.d. and count-exchangeable) satisfies only
+     *distributional* exchangeability: the realized per-founder count
+     remains observable, and laundering a realization through
+     exchangeability requires the user cover cohort that Q3-A proves
+     absent at gate-open. The i.i.d.-re-bonding disjunct therefore
+     holds only inside the thin window where that cohort exists; it
+     cannot discharge the premise at gate-open.
   3. *Persistence commitment* — founder genesis bonds remain **active
      through gate-open**: serving (no forfeiture-triggering offline
      burst), unslashed, un-exited. Verified against the lifecycle
@@ -1135,7 +1143,13 @@ the null distribution then models.
   vulnerability it tests. The implementation must make control
   configurations un-instantiable as production founder configs at the
   type level — a distinct witness type for control fixtures, not a
-  flag on the production config struct.
+  flag on the production config struct. *Sharpened at R5 (§17.7
+  finding 4):* until code exists this is a documented intention, not a
+  property — so the witness type is a **co-first-deliverable of the
+  implementation round alongside the gating lemma**, and the round's
+  first slice does not close until the control type is
+  **un-constructible from the production founder-config constructor
+  at compile time** (a runtime assertion does not satisfy this).
 - **Pass bounds (a-priori).**
   1. *Deployed posture:* `T` within `0.05` of the permutation-null mean —
      no rule in the family sorts founder from user better than chance.
@@ -1190,12 +1204,25 @@ the null distribution then models.
   - *Amount/value axis:* bond amounts are **not** CT-hidden — the bond
     term is loud-but-constant, consensus-forced to
     `bond_floor(holdings)` (§18.9; `bond_post.rs` `FloorMismatch`), so
-    it carries zero bits beyond the public holdings tier. The residual
-    marginal is the **holdings tier itself**: founder bonds must sit at
-    common user tiers (distinctive foundation-scale holdings would sort
-    founders by amount stratum with no timing statistic needed). This
-    is a P1-adjacent posture-config requirement, graded by the §18.3
-    attribute-stratified rider already attached to this arm's round.
+    it carries zero bits beyond the public holdings descriptor. The
+    residual marginal is the **holdings-descriptor stratum itself**
+    (*mechanism corrected at R5, §17.7 finding 1*): "holdings" is the
+    archival shard descriptor (`HoldingsDescriptor{kind, shard_ids}`),
+    a persona-side configuration choice — `bond_floor` is
+    `ARCHIVAL_BOND_FLOOR_ATOMIC × shard_count`, flat `1×` for
+    `CompleteTree` (`bond_floor.rs`, verified at source), **never a
+    function of treasury wealth** — so a common tier is satisfiable by
+    founder config, no holdings-split needed. But the descriptor is a
+    richer observable than the amount (the shard profile enumerates
+    what a persona serves), founder cover pushes founders toward
+    distinctive profiles, and at gate-open the user cohort to be
+    common *with* is stripped by the same tenure cause as the timing
+    cohort (Q3-A). Promoted at R5 from rider-graded config requirement
+    to a **named structural channel**: the strip-row floor extends to
+    it (calibrate as if the tier/descriptor stratum provides zero
+    founder cover at gate-open), and founder self-cover on this axis
+    cites the **gating lemma**, not the §18.3 rider alone. The rider
+    still grades the deployed posture inside the thin window.
   - *Network/transport axis:* closed by SP-T per-persona circuit
     isolation with the persona-side Tor requirement structurally
     mandatory (§18.13's compile-time posture).
@@ -1474,7 +1501,11 @@ smallest-cohort regime of that separate leak is never entered either.
      invoked to justify the ≈-founders premise — any residual cover P3
      leaves is uncontrolled, so the floor is zero-cover regardless of
      P3). Founder self-cover under the floor is priced by the §14.4
-     gating lemma.
+     gating lemma. *Extended at R5 (§17.7 finding 1):* the zero-cover
+     floor applies per-channel, not only to timing — the
+     holdings-descriptor/tier stratum (§14.4 axis-completeness note)
+     is calibrated at zero gate-open cover under the same rule, for
+     the same tenure cause.
    - **Gate-open cohort dynamics row (§17.3):** at gate-open, pent-up
      demand produces an entry cohort that covers *itself* — the first
      post-gate users are mutually covering, and that herd is
@@ -1502,6 +1533,31 @@ smallest-cohort regime of that separate leak is never entered either.
      redesign (more founder/structural cover, or a revised target),
      decided pre-genesis by the cover-model run, never discovered
      live.
+     *Sharpened again at R5 (§17.7 finding 2): the floor is a
+     calibration-time premise with no runtime re-check, by
+     construction.* The M1 gate reads `frozen_shard_count < K_COVER`
+     at exactly one site (`consensus_state.rs`
+     `epoch_close_compute`), and `frozen_shard_count` is a structural
+     function of curve-tree growth — the gate **never reads live bond
+     state**, and `K_COVER` is genesis-frozen, so the
+     calibration→open window is the entire pre-gate chain life and an
+     involuntary removal inside it cannot trigger a consensus
+     re-check (verified at source, `k_cover.rs` /
+     `segment_freeze.rs`). The re-run trigger is therefore
+     **pre-genesis-actionable only** (adjust `K_COVER` before the
+     seal); post-genesis the levers are the `Slashed → Bonded`
+     re-bond path (`ARCHIVAL_BOND_GATE4.md` §4.2 — floor drops are
+     repairable while the shard clock ticks) and the **a-priori
+     thinning margin**: the calibration must carry a floor margin
+     above the induced-forfeiture adversary's maximum achievable
+     transient thinning (challenges are deterministic beacon replays
+     an honest online founder cannot fail, but off-chain DoS of
+     founder serving infrastructure around challenge windows induces
+     forfeiture — the involuntary path is adversary-influenceable at
+     the network layer), with the restoration lag (cooldown +
+     re-bond) as the exposure window. Margin derivation rides the
+     gating-lemma discipline: committed before the calibration is
+     accepted.
 
 ### 16.3 M2 — cover-gate proxy choice
 
@@ -1711,7 +1767,11 @@ and strengthened the premises with six findings, all landed in place.
 **§§14–16 are closed; the §14.4 implementation round is released**,
 carrying the obligations enumerated in §17.4 and the two pinned
 premises of §17.6 (floor persistence, count `K`-independence) with
-their reopen criteria.
+their reopen criteria. Round R5 (§17.7, same day) adjudicated the R4
+landing itself: four findings landed in place (nothing reopens), and
+two of them — the tier-channel strip floor with its satisfiability
+pin, and the a-priori involuntary-thinning margin — **gate Gate 7's
+`K_COVER` discharge**.
 
 ### 17.1 Attack 1 — `r < 2` under the panel that reaches `1.86`
 
@@ -1927,6 +1987,19 @@ adversary-strengthening, pre-code.
 
 ### 17.6 Distinct-position round R4 (2026-07-10): questions 2 and 3 adjudicated
 
+**The lens (stated once, per R5).** The separating principle that
+decides Q2-C against Q3-A below is not a tiebreaker for one pair — it
+is the classifier for an entire residual family: **channels invisible
+to the generator because they are structural rather than temporal**
+(tenure, holdings tier, live bond state, realized post count, fixture
+identity). No timing statistic and no §14.4 arm can see them; a
+bound-1 green is uninformative about every member. The test for each
+candidate channel is the same: *is it already named and dispositioned,
+or is it an unnamed generator-invisible channel?* Named-and-
+dispositioned members are safe residuals; unnamed members are Q3-A-
+shaped findings waiting to land. §17.7's four findings are instances
+produced by applying this lens to the R4 landing itself.
+
 **Position.** Six constructions against §16.10's questions 2 (family
 completeness) and 3 (cycle break) were author-fielded, run to land;
 the standing adversarial reviewer's adjudication overturned no outcome
@@ -2045,6 +2118,101 @@ grades. §§17.1–17.6 ratified together 2026-07-10 (§17 header); the
 two pinned premises of finding 3 carry their reopen criteria into the
 implementation round and must be re-checked before Gate 7 discharges
 `K_COVER` into the frozen constant.
+
+### 17.7 Round R5 (2026-07-10): adjudication of the R4 landing — the structural-channel family
+
+**Position.** The standing review's second pass, run against the R4
+landing itself rather than the original questions. Concurrence with
+the landing (nothing closed reopens; no bound moves); four findings,
+all instances of the §17.6-head lens — the same generator-invisible
+defect class R4 caught, now found living inside R4's own fixes.
+**Findings 1 and 2 gate `K_COVER` discharge at Gate 7.** Both source
+verifications demanded by the adjudication were run before
+disposition; one refutes the adjudication's worst case, one confirms
+it and sharpens it.
+
+**Finding 1 (highest) — the §18.9 tier residual was a config
+requirement, which is the PF-2 shape again.** R4 landed "founder
+bonds must sit at common user tiers" as a rider-graded config
+requirement — a review-discipline gate, not a
+make-bad-states-unrepresentable gate, for a channel that is
+timing-free, always-on, and every-adversary (structurally identical
+to Q3-A's tenure channel).
+
+- *Satisfiability verified at source — the worst case is refuted.*
+  `bond_floor(holdings)` is `ARCHIVAL_BOND_FLOOR_ATOMIC ×
+  shard_count` (flat `1×` for `CompleteTree`), a function of the
+  **archival shard descriptor** — a persona-side configuration
+  choice — never of treasury wealth (`bond_floor.rs`,
+  `bond_wire.rs::HoldingsDescriptor`). The forced-by-holdings trap
+  (founder cannot lower the tier without a personas-split that
+  re-leaks) does not exist; a common tier is satisfiable by config.
+  The R4 axis-completeness wording ("foundation-scale holdings")
+  conflated coin wealth with shard holdings — corrected in place.
+- *The thin-cohort arm stands in full.* The descriptor is a richer
+  observable than the amount; founder cover pushes founders toward
+  distinctive shard profiles; and at gate-open the user cohort to be
+  common *with* is stripped by the same tenure cause as the timing
+  cohort — finding-1-of-R4's gating lemma with a different
+  observable. Landed: the channel is promoted to a **named structural
+  channel** (§14.4 axis-completeness note), the strip-row zero-cover
+  floor extends to it per-channel (§16.2 obligation 3), and founder
+  self-cover on this axis cites the **gating lemma**, not the §18.3
+  rider alone.
+
+**Finding 2 (high) — the persistence re-run trigger is reactive, and
+the floor is a snapshot by construction.** Verified at source: the M1
+gate reads `frozen_shard_count < K_COVER` at exactly one site
+(`consensus_state.rs` `epoch_close_compute`), `frozen_shard_count` is
+a structural function of curve-tree growth (`segment_freeze.rs`), and
+`K_COVER` is genesis-frozen (`k_cover.rs` sealing mechanics) — the
+gate **never reads live bond state**, so the floor cannot be derived
+at open and the TOCTOU window is the entire pre-gate chain life. No
+consensus re-check can exist; the derive-don't-cache disposition is
+structurally unavailable here. On inducibility: challenges are
+deterministic beacon replays (`challenge.rs`, cSHAKE over
+`block_hash(H_seal)`) that an honest online founder cannot fail —
+but **off-chain DoS of founder serving infrastructure around
+challenge windows induces forfeiture**, so the involuntary-removal
+path is adversary-influenceable at the network layer and the floor is
+an active attack surface at the decision boundary, not a monotonicity
+nuisance. Landed (§16.2 obligation 3): the re-run trigger is
+pre-genesis-actionable only; post-genesis levers are the
+`Slashed → Bonded` re-bond path (floor drops repairable while the
+shard clock ticks) and an **a-priori thinning margin** — calibration
+must carry a floor margin above the induced-forfeiture adversary's
+maximum achievable transient thinning, with the restoration lag
+(cooldown + re-bond) as the exposure window, derived under the
+gating-lemma discipline before the calibration is accepted.
+
+**Finding 3 (medium) — premise 2's disjunction hid a live branch.**
+The i.i.d.-re-bonding disjunct satisfies only *distributional*
+count-exchangeability; the realized per-founder count remains
+observable, and laundering a realization through exchangeability
+needs the user cohort Q3-A voids at gate-open — the disjunct
+collapses into R4 finding 1. Landed (§14.2 premise 2): the OR is
+struck; the gate-open condition is the fixed pre-gate schedule, full
+stop; the i.i.d. disjunct holds only inside the thin window.
+
+**Finding 4 (low, pre-genesis discount) — witness-typing was a
+documented intention, not a property.** A §14.4 requirement with no
+code is not make-bad-states-unrepresentable. Landed: the witness type
+is a **co-first-deliverable** with the gating lemma; the
+implementation round's first slice does not close until the control
+type is un-constructible from the production founder-config
+constructor at compile time (runtime assertion insufficient).
+
+**Disposition.** No bound moves; nothing closed reopens. Amendment
+sites: §17.6 head (the lens, stated once), §14.4 axis-completeness
+note (mechanism correction + channel promotion), §14.4
+witness-typing (compile-time co-first-deliverable), §14.2 premise 2
+(OR struck), §16.2 obligation 3 (per-channel strip floor;
+snapshot-by-construction sharpening + thinning margin). **Gate-7
+gates:** `K_COVER` does not discharge into the frozen constant until
+(a) the tier-channel strip floor and its satisfiability pin are in
+the calibration, and (b) the thinning margin is derived a-priori and
+carried. Findings 3 and 4 are premise tightening and a first-slice
+acceptance condition respectively.
 
 ## 18. Distinct-position round R3 (2026-07-06): the completeness gap the mean-vs-max disposition left open
 

@@ -8342,6 +8342,28 @@ one place to confirm each item's relationship to the wallet stack.
   released**, carrying the two pinned premises (floor persistence, count
   `K`-independence) with reopen criteria to re-check before Gate 7 discharges
   `K_COVER`.
+  **Round R5 conducted (2026-07-10, §17.7):** the standing review's pass against the R4
+  landing itself — four findings, all instances of the §17.6-head lens (structural,
+  generator-invisible channels), nothing closed reopens. Finding 1: the §18.9 tier
+  residual promoted from rider-graded config requirement to a **named structural
+  channel** — satisfiability verified at source (`bond_floor` is
+  `ARCHIVAL_BOND_FLOOR_ATOMIC × shard_count`, a persona-side shard-descriptor choice,
+  never treasury wealth — the forced-tier trap refuted; R4's "foundation-scale
+  holdings" wording corrected), per-channel strip-row zero-cover floor at gate-open,
+  gating-lemma citation. Finding 2: the monotone floor is a **snapshot by
+  construction** — the M1 gate reads `frozen_shard_count < K_COVER` only (one site,
+  never live bond state; `K_COVER` genesis-frozen), so the TOCTOU window is the entire
+  pre-gate chain life; challenges are honest-server-unfailable beacon replays but
+  **off-chain DoS around challenge windows induces forfeiture** ⇒ the calibration must
+  carry an **a-priori thinning margin** above the induced-forfeiture adversary
+  (restoration lag = cooldown + re-bond), lemma-discipline-derived. Finding 3: premise
+  2's OR struck — fixed pre-gate schedule is the gate-open condition; the
+  i.i.d.-re-bonding disjunct only holds where a user cohort exists. Finding 4: the
+  control witness type is a **co-first-deliverable** with the gating lemma;
+  first slice closes only when control configs are compile-time un-constructible from
+  the production founder-config constructor. **Gate-7 gates: `K_COVER` does not
+  discharge until the tier-channel strip floor + satisfiability pin are in the
+  calibration and the thinning margin is derived and carried.**
   **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
   GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
   seams, not just entry).**
