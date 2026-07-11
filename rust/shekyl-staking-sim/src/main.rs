@@ -38,6 +38,7 @@ mod participation;
 mod partition_adversary;
 mod retrieval;
 mod reward;
+mod riders;
 use reward::CurveImpl;
 mod scenarios;
 mod standoff;
@@ -861,7 +862,68 @@ fn print_partition_adversary_report() {
     }
     eprintln!();
 
-    match serde_json::to_string_pretty(&(&report, &graded)) {
+    // The §14.4-round riders (same generator, extra axes): §16.7 N-sweep and
+    // M6.2 coupling control, §18.3-narrowed bridge grading, §18.4 lifetime
+    // accumulation.
+    let riders = riders::run_riders_report();
+    eprintln!(
+        "Riders (§16.7 items 2/4, §18.3 as narrowed by §18.8, §18.4) — trials={} r-bound={:.1}:",
+        riders.trials, riders.ratio_bound,
+    );
+    eprintln!("  N-sweep (r < 2 at every swept N; growth with N = redesign signal):");
+    for row in &riders.n_sweep {
+        eprintln!(
+            "    N={:<3} baseline={:.3}  blind r={:.3}  s3 r={:.3}  lr r={:.3}  {}",
+            row.n,
+            row.baseline,
+            row.blind.ratio,
+            row.modeled_s3.ratio,
+            row.lr_stress.ratio,
+            if row.pass { "PASS" } else { "FAIL" },
+        );
+    }
+    eprintln!(
+        "  M6.2 coupling control: blind@window-0 P(link)={:.3} vs floor 2/N={:.3} — {}",
+        riders.coupling.blind_p_link,
+        riders.coupling.floor,
+        if riders.coupling.passed {
+            "coupled (ok)"
+        } else {
+            "DECOUPLED — INVALID"
+        },
+    );
+    eprintln!("  Attribute-bridge grading (strata as candidate bridge axes, never crowds):");
+    for b in &riders.bridge {
+        eprintln!(
+            "    {:<42} |corr|={:.3} null={:.3}  {}  [{}]",
+            b.scenario,
+            b.bridge_stat,
+            b.null_mean,
+            if b.passed { "ok" } else { "FAIL" },
+            b.expectation,
+        );
+    }
+    eprintln!(
+        "  Lifetime accumulation (per-post p={:.3}, strongest posture arm; §18.4 form):",
+        riders.lifetime_per_post_p,
+    );
+    for l in &riders.lifetime {
+        eprintln!(
+            "    events={:<3} cumulative={:.3}{}",
+            l.events,
+            l.cumulative,
+            if l.founder_anchor {
+                "  <- founder/long-lived pessimistic anchor"
+            } else {
+                ""
+            },
+        );
+    }
+    eprintln!();
+    eprintln!("  RIDERS STATUS: {}", riders.status);
+    eprintln!();
+
+    match serde_json::to_string_pretty(&(&report, &graded, &riders)) {
         Ok(json) => println!("{json}"),
         Err(e) => eprintln!("error serializing partition-adversary report: {e}"),
     }
