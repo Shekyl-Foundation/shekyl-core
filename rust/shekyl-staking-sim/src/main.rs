@@ -44,6 +44,7 @@ mod scenarios;
 mod standoff;
 mod timing_cluster;
 mod transport;
+mod wallclock_leg;
 
 use scenarios::{build_scenarios, run_sim, ScenarioResult};
 
@@ -728,19 +729,70 @@ fn print_gf7_timeline_report() {
         "  - the block-unit dispersal>0 rows are a coarse-tick counterfactual: real WI-3 dispersal"
     );
     eprintln!("    is U[0,60s) (sub-block), so the realistic block-time gate sits at dispersal=0.");
-    eprintln!("    The wall-clock sub-block channel (dispersal's actual target) is UNMEASURED at");
-    eprintln!("    block resolution and is the primary open uncertainty: closing leg (b) requires");
+    eprintln!("    The wall-clock sub-block channel is graded by the leg-(b) arm below (§19).");
+    eprintln!();
+
+    // Leg-(b) wall-clock sweep-phase arm (measurement doc §19).
+    let leg = &report.wallclock_leg;
     eprintln!(
-        "    sub-block wall-clock emission — a block-resolution live re-run cannot close it."
+        "Leg-(b) wall-clock sweep-phase arm (§19; WI-3 §3.2 part 3). Tick T={}ms; a-priori",
+        leg.tick_ms
     );
+    eprintln!(
+        "  bound (§19.2, committed before this arm existed): r = P(link)·(N-1) < {:.1} on",
+        leg.ratio_bound
+    );
+    eprintln!(
+        "  sibling identification; trials/row={}. Harness-timestamp synthesis (§19.1) —",
+        leg.trials
+    );
+    eprintln!("  the hooks payload ban stays intact; sealing form is the receipt-timestamped");
+    eprintln!("  live-driver re-run (named carrier, open).");
+    eprintln!("  Controls (§19.3; must both pass or the leg is INVALID):");
+    for c in &leg.controls {
+        eprintln!(
+            "  [{}] {:<28} P(link)={:.3} baseline={:.3}  ({})",
+            if c.passed { "ok" } else { "FAIL" },
+            c.name,
+            c.p_link,
+            c.baseline,
+            c.expectation,
+        );
+    }
+    eprintln!(
+        "  [{}] §19.5 observer-strength tripwire: T/2 at m=52 must FAIL the bound",
+        if leg.observer_strength_ok {
+            "ok"
+        } else {
+            "FAIL"
+        },
+    );
+    eprintln!(
+        "  {:<16} {:>8} {:>4} {:>4} {:>3} | {:>7} {:>6} {:>5}",
+        "group", "disp_ms", "m", "N", "K", "P(link)", "r", "pass",
+    );
+    for r in &leg.rows {
+        eprintln!(
+            "  {:<16} {:>8} {:>4} {:>4} {:>3} | {:>7.3} {:>6.2} {:>5}{}",
+            r.group,
+            r.dispersal_ms,
+            r.posts_per_persona,
+            r.n,
+            r.wallet_size,
+            r.p_link,
+            r.ratio,
+            if r.clears_bound { "Y" } else { "N" },
+            if r.gate_relevant { " *" } else { "" },
+        );
+    }
+    eprintln!("  Leg-(b) status: {}", leg.status);
+    eprintln!();
     if report.provisional {
         eprintln!(
-            "  PROVISIONAL: grades the sim's synthesized dispatch (incl. modeled WI-3 dispersal)."
+            "  PROVISIONAL: grades the sim's synthesized dispatch (incl. modeled WI-3 dispersal"
         );
-        eprintln!(
-            "  Sealing re-run against WI-3's live BondPostDispatched = reconvergence leg (b),"
-        );
-        eprintln!("  tracked in docs/FOLLOWUPS.md (rule 21 armed-gate posture).");
+        eprintln!("  and the §19 wall-clock layer). Sealing re-run against WI-3's live emission =");
+        eprintln!("  reconvergence leg (b) sealing form (§19.1), tracked in docs/FOLLOWUPS.md.");
     }
     match serde_json::to_string_pretty(&report) {
         Ok(json) => println!("{json}"),

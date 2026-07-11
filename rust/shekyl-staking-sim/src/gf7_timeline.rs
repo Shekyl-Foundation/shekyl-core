@@ -70,6 +70,7 @@ use shekyl_standoff::gf7::{BroadcastTimelineObserver, TimelineEvent};
 use shekyl_standoff::{bounded_uniform, draw_entry_gap, plan_entry_seam, DEFAULT_ENTRY_GAP_WINDOW};
 
 use crate::standoff::SplitMix64;
+use crate::wallclock_leg::{run_wallclock_leg, WallclockLegReport};
 
 /// The committed a-priori advantage-ratio bound (measurement doc §3.2):
 /// `r = P(link) · N < RATIO_BOUND`. Committed in the reviewed design doc
@@ -207,8 +208,8 @@ impl SynthParams {
     /// §7 / WI-3 §3.2). The block-time gate is therefore carried by the
     /// entry-gap window jitter and evaluated at `dispersal=0`; the block-unit
     /// dispersal *sweep* (the `dispersal` group) is a coarse-tick counterfactual
-    /// bracket, and the wall-clock sweep-phase channel is graded by the live
-    /// re-run (leg b, §8).
+    /// bracket, and the wall-clock sweep-phase channel is graded sub-block by
+    /// the §19 leg-(b) arm (`wallclock_leg`), sealing form §19.1.
     pub(crate) fn posture() -> Self {
         Self {
             window: DEFAULT_ENTRY_GAP_WINDOW,
@@ -771,12 +772,16 @@ pub struct MeasurementReport {
     pub n_principals: usize,
     pub trials: u32,
     pub controls_valid: bool,
-    /// PROVISIONAL-PASS / PROVISIONAL-FAIL / INVALID — the steady-state gate
-    /// verdict over the gate-relevant rows (measurement doc §3.5).
+    /// PROVISIONAL-PASS / PROVISIONAL-FAIL / INVALID — the computed
+    /// conjunction (criterion 9.9) over the steady-state gate-relevant rows
+    /// (measurement doc §3.5) AND the leg-(b) wall-clock arm (§19.6).
     pub gate_status: String,
     pub controls: Vec<ControlResult>,
     pub coverage: AxisCoverage,
     pub rows: Vec<ScenarioRow>,
+    /// The §19 leg-(b) wall-clock sweep-phase arm — the sub-block channel the
+    /// block-resolution rows above structurally cannot see (§13.3).
+    pub wallclock_leg: WallclockLegReport,
 }
 
 /// Full-run config (binary evidence generation).
@@ -967,11 +972,29 @@ fn run_measurement(cfg: &RunConfig) -> MeasurementReport {
         })
         .collect();
 
+    // The §19 leg-(b) wall-clock arm joins the computed conjunction
+    // (criterion 9.9): its bound is committed in the doc like the
+    // steady-state bound, so its measurement is a verdict input, never a
+    // narrated aside. An invalid leg (controls or the §19.5 strength
+    // tripwire) grades the whole run INVALID — a gate that cannot see the
+    // channel it certifies is not a gate.
+    let wallclock_leg = run_wallclock_leg();
+
+    let steady_pass = rows.iter().filter(|r| r.gate_relevant).all(|r| r.pass);
+    // The two leg-invalid branches name the failed check themselves rather
+    // than embedding `wallclock_leg.status` (which carries its own "INVALID
+    // (...)" prefix — nesting it made the verdict line read
+    // `INVALID (... — INVALID (...))`, PR #292 review). The leg's full
+    // status stays in the report under `wallclock_leg.status`.
     let gate_status = if !controls_valid {
         "INVALID (controls failed — the run counts for nothing)".to_string()
-    } else if rows.iter().filter(|r| r.gate_relevant).all(|r| r.pass) {
+    } else if !wallclock_leg.controls_valid {
+        "INVALID (leg-b wall-clock controls failed — the run counts for nothing)".to_string()
+    } else if !wallclock_leg.observer_strength_ok {
+        "INVALID (leg-b modeled observer weaker than the channel — §19.5 tripwire)".to_string()
+    } else if steady_pass && wallclock_leg.pass {
         "PROVISIONAL-PASS (local-daemon posture only; remote-daemon posture unmet, \
-         named residual; wall-clock leg b open)"
+         named residual; wall-clock leg b graded in-model — §19.1 sealing form open)"
             .to_string()
     } else {
         "PROVISIONAL-FAIL (decorrelation-redesign signal; pre-WI-3-live)".to_string()
@@ -987,6 +1010,7 @@ fn run_measurement(cfg: &RunConfig) -> MeasurementReport {
         controls,
         coverage: coverage_sample(cfg),
         rows,
+        wallclock_leg,
     }
 }
 

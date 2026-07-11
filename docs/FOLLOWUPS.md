@@ -8503,6 +8503,30 @@ one place to confirm each item's relationship to the wallet stack.
   and compounds with the remote-posture residual (the same network-position adversary holds
   both capabilities). **Closing requirement (named):** sub-block wall-clock emission (finer
   hook or harness timestamp) + re-grade. **Reopen leg (b) when:** that emission exists.
+  **UPDATE 2026-07-11 (harness-timestamp form graded in-model; residual narrowed to the
+  sealing form):** the emission exists as the harness timestamp
+  (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §19, spec + a-priori bound `r = P(link)·(N−1) < 2`
+  committed one commit ahead of the code; `wallclock_leg.rs`, folded into the
+  `--gf7-timeline` criterion-9.9 conjunction). Measured: production dispersal (`U[0,T)`,
+  `T = 60 s`) grades `r ∈ [0.84, 1.32]` across `m ∈ {1,4,12,52}`, `N ∈ {10,20,50}` —
+  PROVISIONAL-PASS; the sub-`T` cliff is steep (`T/4` fails at every `m`; `T/2` fails from
+  `m = 4`), so the production range is load-bearing, not slack. The finer-hook alternative
+  was **rejected** (hooks §3 wall-clock payload ban stays intact) with a §19.1 reopening
+  criterion. **Open remainder (narrowed):** the §19.1 sealing form — receipt-side
+  timestamping by the sim-owned observer over the live dispatch driver, consuming the same
+  statistic and bound. Leg (b) closes only there; the in-model pass is the
+  continue/redesign checkpoint, not the seal.
+  **Hermeticity pin (rule 21, PR #292 review — trips on the archival CLI-knob work):**
+  `run_wallclock_leg()` is deliberately hermetic (fixed seed/trials/N; the a-priori-committed
+  §19.4 surface must not float on a harness flag). Inert today — no CLI knob moves the gf7
+  `cfg.n`/`cfg.seed`. **Arms when** a PR makes those harness-movable (sim CLI or the
+  wallet-rewrite archival knob inventory): the block arm then moves with the flag, the leg
+  does not, and a mixed-N conjunction would silently report as a single-N verdict. That knob
+  PR must dispose of the pin explicitly — thread config through the leg (fresh a-priori
+  commitment) or document the knob as leg-invariant. Spec home:
+  [`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](design/ARCHIVAL_BOND_WI4_MEASUREMENT.md) §19.7.
+  When the wallet-rewrite plan gains an archival-knob inventory section, the pin's primary
+  home migrates there (per §19.7's migration note) and this entry points at it.
   **Target: pre-genesis (blocks the seal).** See
   [`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](design/ARCHIVAL_BOND_WI4_MEASUREMENT.md) §13 (result),
   §14 (launch posture), [`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md`](design/ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md)

@@ -750,6 +750,28 @@ named. WI-3's reconvergence gate leg (a) (this threshold artifact exists)
 is satisfied; leg (b)'s block-time portion is confirmatory, its wall-clock
 portion is the tracked open item.
 
+> **UPDATE 2026-07-11 (leg-(b) wall-clock arm graded in-model; sealing
+> form open).** The closing requirement above was converted to a
+> committed spec (§19, landed one commit ahead of the grading code per
+> the §3.5 ordering) and the harness-timestamp form was implemented and
+> graded (`shekyl-staking-sim/src/wallclock_leg.rs`, folded into the
+> `--gf7-timeline` criterion-9.9 conjunction). Measured, 1 000
+> trials/row: production posture (`dispersal = T`) sits at
+> `r ∈ [0.84, 1.32]` across `m ∈ {1,4,12,52}` and `N ∈ {10,20,50}` —
+> under the committed `r < 2` at every swept point. The sub-`T` cliff
+> is real and steep: `T/4` fails at every `m` (`r ≥ 2.96`), `T/2` fails
+> from `m = 4` up (`r = 3.02…5.82`), confirming the production
+> `[0, tick)` range is load-bearing, not conservative slack; the `2T`
+> rows confirm over-dispersal buys nothing (`r ≈ 1`). Controls bit
+> (phase-lock caught at `P = 1.000`; severed-wallet tripwire at chance)
+> and the §19.5 observer-strength tripwire is armed (`T/2, m = 52`
+> measured `r = 5.82`, correctly failing). **What this does and does
+> not change:** the wall-clock channel is now *graded in-model*
+> (PROVISIONAL-PASS), so the "primary open uncertainty" is narrowed
+> from unmeasured-channel to model-fidelity; leg (b) **closes** only at
+> the §19.1 sealing form (receipt-timestamped live-driver re-run),
+> which stays the named open carrier in `docs/FOLLOWUPS.md`.
+
 ### 13.4 Threshold provenance (review item (a), settled)
 
 The review asked whether `r < 2` was a-priori or post-hoc, noting the gate
@@ -3503,3 +3525,180 @@ both outside the protocol's power, which is the definition of closed
 to its floor. Caveat carried: under default-on, the opt-out set
 remains a distinguishable minority; acceptable (informed choice),
 but the opt-out must be explicit and loud, never ambient.
+
+## 19. Addendum (2026-07-11): leg-(b) wall-clock sweep-phase arm — spec and a-priori bound
+
+This section is the §13.3 closing requirement converted to a committed
+spec, in the same §3.5 ordering the main gate used: **the bound below is
+committed in this reviewed document before any grading code exists**, and
+the leg-(b) grading commit lands after this doc commit (auditable by git
+history). The block-time sealing re-run stays confirmatory by
+construction (§13.3); what follows grades the channel that re-run cannot
+see — the wall-clock sweep-phase channel of WI-3 §3.2, the one thing the
+dispersal draw exists to defend.
+
+### 19.1 Emission disposition: harness timestamp, not a finer hook
+
+§13.3 named two candidate emissions ("a finer-resolution hook or harness
+timestamp"). The disposition is the **harness timestamp**, and the
+finer-hook alternative is rejected with a reversion clause (rule 21):
+
+- **Rejected: a wall-clock field on the hook events.** The hooks payload
+  ban (`ARCHIVAL_BOND_2C_GF7_HOOKS.md` §3: *logical time only — a
+  wall-clock field is a production-fingerprint hazard and a
+  sim-irrelevance both*) is load-bearing and stays intact. The event
+  vocabulary never carries wall-clock.
+- **Adopted, this round (pre-live):** the `--gf7-timeline` synthesis
+  models the wall-clock layer sub-block (§19.2) and grades it. This is
+  the PROVISIONAL leg, same status as every §7 synthesis conclusion.
+- **Adopted, sealing form (named carrier, not this round):**
+  receipt-side timestamping by the sim-owned recording observer over the
+  live dispatch driver — the observer is already sim-side ("the sim
+  supplies its own clock", hooks §3), so stamping arrival instants is
+  sim-side instrumentation with zero payload change and zero new
+  production surface. The live driver's dispersal is a real
+  `tokio::time::sleep` of the drawn delay before the emit + send
+  (`pscan/dispatch.rs` phase 3), so receipt instants carry the actual
+  dispersal timing.
+- **Reopening criterion for the finer hook:** the receipt-side
+  timestamping route is shown, at the sealing re-run, to distort the
+  observed timing by an amount comparable to the phase resolution the
+  observer needs (scheduler/channel skew of order seconds against the
+  60 s tick). Absent that measured distortion, the payload ban is never
+  weakened for this leg.
+
+### 19.2 Channel model (pinned)
+
+- **Cadence.** Wallet sweep tick interval `T = 60 s`
+  (`DEFAULT_PSCAN_CADENCE`, verified at source in `pscan/start.rs`).
+  Each wallet has a wall-clock cadence phase `φ ~ U[0, T)`; every
+  dispatch belonging to the wallet's personas fires at `φ + k·T + d`
+  for its due tick `k`.
+- **Dispersal.** `d ~ U[0, dispersal_bound)` fresh per post, matching
+  the live driver's draw shape exactly: `bounded_uniform(bound_ms − 1)`,
+  an inclusive integer-millisecond draw (`pscan/dispatch.rs`;
+  distributional parity per §7). Production `dispersal_bound = T`.
+- **Observer.** Network-position, wall-clock packet timestamps at
+  sub-block resolution, zero timing noise — the strongest observer of
+  the *modeled* channel; the §4.3.1/§13.1 ceiling pin applies to this
+  arm identically (real-code timing residue beyond the model — seal
+  latency, fetch-burst skew — is exactly what the §19.1 sealing form
+  exists to catch).
+- **Statistic.** Circular phase: arrival `mod T`; per persona, the
+  circular mean of its `m` observed posts; the link score between two
+  personas is the circular distance between their phase estimates.
+- **Task and a-priori bound.** Given one persona of a two-persona
+  wallet among `N` candidate personas (the remaining `N − 2` on
+  independent wallets, independent phases), the observer names the
+  sibling. Chance is `1/(N − 1)`; the committed bound is the §3.2
+  derivation instantiated on this channel:
+
+  ```text
+  r  =  P(link | T_obs) · (N − 1)  <  2
+  ```
+
+  — additive advantage below one excess de-anonymization across the
+  candidate set, the same form and the same pre-rejection of `r < 1`
+  (§13.4) as the main gate. No cross-subsidy (§13.5): this bound stands
+  or falls on its own measurement.
+
+### 19.3 Controls (must bite; a failed control grades the run INVALID)
+
+1. **Positive (phase-lock caught):** `dispersal_bound = 0`, `m ≥ 4` —
+   naked phase-locking must link at `P(link) ≥ 0.80`. An arm that
+   cannot see the un-dispersed fingerprint is blind, and its pass
+   counts for nothing.
+2. **Negative (generator-coupling tripwire):** sibling personas placed
+   on *independent* wallets (no shared phase; ground-truth pair carries
+   no fingerprint) — `P(link)` must sit within tolerance of chance. A
+   synthesis refactor that accidentally couples phases across wallets
+   trips this control instead of producing a hollow pass (M6.2 shape).
+
+### 19.4 Sweep surface (pre-committed)
+
+| Axis | Values | Source |
+| --- | --- | --- |
+| `dispersal_bound` | `0` (anchor), `T/4`, `T/2`, `T` (production), `2T` | WI-3 R2-3 (§7): shape and range, fractions of and beyond `tick_interval` |
+| Posts per persona `m` | `1, 4, 12, 52` | accumulation sharpens the circular mean; `52` is the founder lifetime anchor (§18.4) |
+| Anonymity set `N` | `10, 20, 50` | §16.7 rider shape — the bound must hold at **every** swept `N` on the production posture row |
+| Wallet size `K` | `2` (gate row), `5` (context row) | per-principal promotion stays GF-4's conditional (§13.5); `K = 5` is reported context, not the gate |
+
+*Wallet-size axis note (`K > 2` scoring, pinned at PR #292 review):*
+sibling identification at every `K` scores whether the observer named a
+**distinguished sibling** (one designated wallet-mate), never "any
+wallet-mate" — chance stays `1/(N − 1)` and `r = P(link)·(N − 1)` remains
+comparable to the §19.2 `K = 2` bound across rows. At `K = 5` this
+deliberately understates the any-mate linking rate (a phase-matched
+observer splits its pick across the `K − 1` equally-locked mates, of
+which exactly one scores); an any-mate reading would carry a different
+chance baseline and a different `r`, and the context row must not be
+read as one.
+
+Trials per row: 1 000 (the `--gf7-timeline` `RunConfig` precedent);
+binomial SE at `P ≈ 0.2` is ≈ `0.013`, resolving `r` to ≈ `±0.1` at
+`N = 10` against a bound of `2` — adequate a-priori.
+
+### 19.5 Expected shape, named before grading (so the pass is not narrated)
+
+At `dispersal_bound = T` the arrival phase is `(φ + d) mod T` with `d`
+uniform over one full period — **exactly uniform, independent of `φ`**,
+so the production posture is expected to grade at `r ≈ 1` by
+construction of the draw. That expectation is the design intent of
+WI-3 §3.2 part 3 ("the tick interval is exactly the phase-decorrelating
+span"), and the informational content of this arm is therefore not the
+production pass alone but the **sub-`T` cliff**: where in
+`{0, T/4, T/2}` the bound fails, and how fast accumulation (`m`)
+sharpens the attack below full dispersal. A grade in which the
+production row passes with the `T/2` row also passing at high `m`
+would mean the modeled observer is weaker than the channel and the arm
+must be strengthened before the pass counts (same tripwire logic as
+§19.3.1). The `2T` row pins that over-dispersal buys nothing (the
+phase is already uniform at `T`), so a future "increase the dispersal
+for safety" change is graded as the no-op it is.
+
+### 19.6 Verdict integration
+
+Per criterion 9.9, the leg-(b) rows join the **computed conjunction**
+of the `--gf7-timeline` verdict: the gate line is PASS only if the
+steady-state rows *and* the leg-(b) production-posture rows (at every
+swept `N`) clear their bounds with controls valid; INVALID if any
+committed bound's measurement is absent or a control fails; FAIL if
+any is unmet. The synthesis grade is marked PROVISIONAL as all §7
+conclusions are; leg (b) **closes** only at the §19.1 sealing form
+(receipt-timestamped live-driver re-run), which consumes the same
+statistic and the same bound.
+
+### 19.7 Hermeticity pin: the leg does not follow harness knobs (rule-21 shape)
+
+Pinned 2026-07-11 (PR #292 review). `run_wallclock_leg()` is
+deliberately hermetic: fixed seed, fixed trials, and its own §19.4 N
+set — none of it drawn from the gf7 harness's `RunConfig`. That is a
+committed-surface property, not an oversight: letting a harness knob
+move the leg would re-grade the a-priori-committed §19.4 grid, an
+after-the-fact bar change.
+
+Today the coupling is inert — no CLI knob moves `cfg.n`/`cfg.seed`;
+the gf7 arm always grades at `RunConfig::default()` (n = 10), so both
+sides of the §19.6 conjunction cover N = 10. The trap arms the moment
+someone wires an archival `--n` (or `--seed`) knob into a harness or
+the rewritten wallet CLI: the block arm moves with the flag, the leg
+does not, and the failure is silent — a mixed-N conjunction reported
+as a single-N verdict.
+
+- **Rejection.** The leg does not read harness config. The hermetic
+  choice is correct: the §19.4 surface must not float on a CLI flag.
+- **Reopening criterion.** A PR that makes `cfg.n`/`cfg.seed`
+  harness-movable (sim CLI or wallet-rewrite CLI knob inventory).
+- **Re-evaluation shape.** That knob PR must dispose of this pin
+  explicitly: either thread the config through the leg (accepting the
+  §19.4 re-grade, with a fresh a-priori commitment) or document the
+  knob as leg-invariant so the mixed-N conjunction is read as such.
+  Silence is not a disposition. Mirrored at the
+  `run_wallclock_leg()` doc comment
+  (`rust/shekyl-staking-sim/src/wallclock_leg.rs`).
+- **Primary-home migration.** When the wallet-rewrite plan gains an
+  archival-knob inventory section, this pin's primary home migrates
+  there (the reopening criterion should live where the arming event
+  happens, not one hop away); this section and the FOLLOWUPS carrier
+  then point at it. Until that section exists, the FOLLOWUPS leg-(b)
+  residual entry is the read-path carrier.
