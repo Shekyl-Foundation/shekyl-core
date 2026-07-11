@@ -8,7 +8,8 @@
   lands §17.6 (`ARCHIVAL_BOND_WI4_MEASUREMENT.md`).** The §16.10
   questions 2 (partition-family completeness) and 3 (`K_COVER` cycle
   break) adjudicated by the standing review: six constructions (four
-  land, two fail, no bound moves), six premise-strengthening findings.
+  landed, two failed, no bound moves), six premise-strengthening
+  findings.
   §14.4 family grows to seven members (joint-density isolation;
   most-regular-subset repulsion detector) and five witness-typed
   controls (M-d correlation-breaking, M-e repulsed/scheduled); a named
@@ -17,7 +18,8 @@
   deliverable. P2 reworded (statistical staggering only) with three
   companion premises (timing-law `K`-invariance, count
   `K`-independence, founder-bond persistence — lifecycle-verified:
-  offline forfeiture and slash are involuntary removal paths). §16.2
+  offline forfeiture and slashing are involuntary removal paths;
+  the persistence premise is withdrawn at R7, below). §16.2
   obligation 3: strip row elevated to primary at gate-open (worst-case
   zero-pre-gate-cover floor, P3 de-load-borne); cohort-dynamics row
   rests on the monotone floor with named non-existence behavior. Axis

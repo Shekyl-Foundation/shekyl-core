@@ -902,16 +902,18 @@ it (§3.3's review-decision clause, exercised):
   same entry-gap draws, same dispersal, same recommended posture. No
   founder-specific code path, cadence profile, or configuration exists —
   indistinguishability by construction, not by discipline.
-- **P2 — Staggered, never clustered.** Founder bonds are dispersed across
-  the launch window. Five bonds in one block are one co-triggered anchor
-  (the §6 trap shape, at launch, on the most-watched blocks of the chain);
+- **P2 — Staggered statistically, never coordinated.** Founder bonds are
+  dispersed across the launch window. Five bonds in one block are one
+  co-triggered anchor (the §6 trap shape, at launch, on the most-watched
+  blocks of the chain);
   five bonds staggered are five independent contributions to cover. The
   intermittency is decorrelation work, not load spreading.
   *Amended at distinct-position round R4 (2026-07-10, §17.6 Q2-B):*
   staggering is achieved **statistically, by P1's i.i.d. production
   entry-gap draws themselves** — never by scheduling, coordination, or
-  proximity re-draws. As originally written, P2 was jointly unsatisfiable
-  with P1: enforcing "never clustered" over i.i.d. draws requires a
+  proximity re-draws. As originally headed ("Staggered, never
+  clustered"), P2 was jointly unsatisfiable with P1: enforcing "never
+  clustered" over i.i.d. draws requires a
   mechanism, and any such mechanism makes the founder set a repulsive
   point process — a signature as detectable as the clustering it
   prevents (family member 7 / control M-e exist to arm exactly this).
@@ -2149,7 +2151,8 @@ produced by applying this lens to the R4 landing itself.
 **Position.** Six constructions against §16.10's questions 2 (family
 completeness) and 3 (cycle break) were author-fielded, run to land;
 the standing adversarial reviewer's adjudication overturned no outcome
-(four lands land, two fails fail, no bound moves) and contributed six
+(the four landed constructions stand, the two failures stand, no bound
+moves) and contributed six
 findings on the premises the amendments rest on — two of them
 load-bearing premises the record had been carrying unstated. The
 findings are the distinct-position content; per B-2, this completes

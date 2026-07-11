@@ -8320,8 +8320,8 @@ one place to confirm each item's relationship to the wallet stack.
   irreducible on-ramp witness, the network default (ours until flipped), and the
   enumerated mistake set (closed by safe-by-default coverage, §18.12 pin as template).
   **Distinct-position round R4 conducted + ratification (2026-07-10, §17.6):** the
-  §16.10 questions 2 and 3 adjudicated — six constructions (four land, two fail, no
-  bound moves), six reviewer findings landed in place. Family grows to **seven members**
+  §16.10 questions 2 and 3 adjudicated — six constructions (four landed, two failed,
+  no bound moves), six reviewer findings landed in place. Family grows to **seven members**
   (member 6 joint-density isolation vs correlation-breaking founders; member 7
   most-regular-subset vs enforced staggering) and **five controls** (M-d, M-e added; all
   five **witness-typed** — un-instantiable as production founder configs, PF-2
@@ -8330,7 +8330,7 @@ one place to confirm each item's relationship to the wallet stack.
   premises: timing-law `K`-invariance, count `K`-independence, and the **persistence
   commitment** (founder bonds active through gate-open; verified at source that offline
   forfeiture and slashing are involuntary removal paths — breach is a cover-model
-  re-run trigger). **Gating lemma named** (§14.4): an a-priori absolute bound on i.i.d.
+  re-run trigger; withdrawn at R7, below). **Gating lemma named** (§14.4): an a-priori absolute bound on i.i.d.
   founder-clustering probability, no user-cohort reliance — the first deliverable of
   the implementation round, committed before any sweep grades; cited by both the P2
   no-mechanism disposition and the strip-row floor. **Strip row elevated to primary**
@@ -8339,9 +8339,9 @@ one place to confirm each item's relationship to the wallet stack.
   posture redesign pre-genesis, never a degraded open). **Axis completeness recorded**
   (timing family ∪ loud-but-constant amount ∪ SP-T isolation; founder-tier residual
   named on the holdings stratum). **§§14–16 CLOSED; the §14.4 implementation round is
-  released**, carrying the two pinned premises (floor persistence, count
-  `K`-independence) with reopen criteria to re-check before Gate 7 discharges
-  `K_COVER`.
+  released**, carrying the two pinned premises (floor persistence — later withdrawn
+  at R7, below; count `K`-independence) with reopen criteria to re-check before Gate 7
+  discharges `K_COVER`.
   **Round R5 conducted (2026-07-10, §17.7):** the standing review's pass against the R4
   landing itself — four findings, all instances of the §17.6-head lens (structural,
   generator-invisible channels), nothing closed reopens. Finding 1: the §18.9 tier
