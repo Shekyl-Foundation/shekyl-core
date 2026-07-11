@@ -8453,7 +8453,10 @@ one place to confirm each item's relationship to the wallet stack.
   flag — the same rule deployment uses. Re-graded 500×200: deployed clean on both
   arms (lift `+0.001`, min member p `0.264`); all five controls bite (M-b m2 and
   M-d m6 flag at the p-floor `0.005`; M-d members 1–5 at chance). Verdict
-  **PARTITION-PASS**; no pins remain. Reopen on: family-membership change
+  **PARTITION-PASS**; no pins remain. Ratified 2026-07-11 (decision-anchored:
+  PR #291, incl. its review-round dispositions — projection-form spectral
+  deflation with a bit-for-bit-identical re-grade, loud geometry guards; the
+  §14.4 RATIFIED block is the record). Reopen on: family-membership change
   (re-derive the Bonferroni divisor), `N`/`M` geometry change (re-derive power
   sizing), or persistent non-aimed-member flags on a control (aggregator
   cross-talk → detector round). **Riders landed same slice:**

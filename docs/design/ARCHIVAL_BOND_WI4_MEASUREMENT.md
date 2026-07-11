@@ -1297,6 +1297,17 @@ the null distribution then models.
   > or a control observed to flag a *non-aimed* member persistently
   > (an aggregator cross-talk finding — re-open the detector round,
   > not the bar).
+  >
+  > **RATIFIED 2026-07-11 (decision-anchored: PR #291,
+  > `feat/sim-partition-adversary`).** The resolution above — the
+  > verified T-site fact, the any-member arm, the re-graded
+  > PARTITION-PASS — is ratified as the §14.4 arm's operating grading
+  > rule. Ratification includes the PR-#291 review-round dispositions
+  > (spectral deflation fixed to projection form, bit-for-bit-identical
+  > re-grade verified; loud geometry guards `FOUNDER_COUNT < n ≤ 20` +
+  > `trials ≥ 1` pinned by `should_panic` tests). The arm's verdict is
+  > now a gradeable input to `K_COVER` sealing; the reopening criteria
+  > above are unchanged by ratification.
 - **The gating lemma (a-priori deliverable of the implementation round;
   committed before any sweep grades — same provenance rule as the §3.2
   thresholds).** *An absolute upper bound on the probability that `M`
