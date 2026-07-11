@@ -1,0 +1,724 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! Engine-side emission-claim orchestration (`EMISSION_CLAIM_BUILDER.md` §8
+//! PR-3; CB-2's Engine half).
+//!
+//! The `StakeEngine`'s [`AssembleEmissionClaim`] handler is deliberately
+//! operand-driven: it receives the claim source, the designated backing, the
+//! swept fee inputs, and the assembled membership paths as *prepared* values
+//! and refuses inconsistent ones (the item-6 same-tip check). This module is
+//! the production preparer — the single pipeline that gathers those operands
+//! from their authoritative sources and hands them to the actor:
+//!
+//! 1. **Fetch** ([`fetch_emission_claim_source`]) — the single-field `p_id`
+//!    query (§7.2: the request shape is identical for every claimant).
+//! 2. **Anchor** ([`claim_reference_height`]) — the transfer path's two-sided
+//!    reference gate (`local_pending_tx` §3b precedent): anchor
+//!    [`REF_ANCHOR_AGE`] behind `min(chain tip, ingested tip)`, refuse a
+//!    reference already past the [`should_reanchor`] threshold.
+//! 3. **Designate** ([`BackingSet::from_spendable`] → `designate_backing`) —
+//!    the sole backing exit, anchored at the gather tip (`source.chain_height`)
+//!    so the handler's same-tip check holds by construction.
+//! 4. **Fee-sweep** ([`DesignatedBacking::fee_sweep`]) — the Q11-excluding
+//!    sole fee entry, over the same provable record set.
+//! 5. **Assemble paths** ([`CurveTreeHandle::assemble_tx`]) — every membership
+//!    path (backing + fees) against ONE reference snapshot.
+//! 6. **Hand off** ([`StakeEngineHandle::assemble_emission_claim`]) — signing
+//!    stays inside the actor (CB-2); the reply is returned to the caller
+//!    unbroadcast (CB-3: dispatch is the GF-4 seam, not this builder).
+//!
+//! ## Provability pre-filter
+//!
+//! The designation/sweep spendability anchor is the gather tip, but a
+//! membership proof exists only for outputs already **drained into the tree
+//! at the reference height** (which sits `REF_ANCHOR_AGE + 1` blocks behind
+//! the tip). Records with `spendable_height > reference_height` are spendable
+//! but not yet provable — selecting one would assemble a claim the daemon
+//! rejects. The pipeline therefore pre-filters the record set to the provable
+//! subset before designation and sweep, the same drained-at-reference rule
+//! the transfer fixture pins (`funded_ledger_and_tree`:
+//! `owned_block + SPENDABLE_AGE <= synced - REF_ANCHOR_AGE`).
+//!
+//! ## The SP-R0 witness
+//!
+//! [`SpentRecordsDurablyPruned`] has no production constructor yet (SP-R0);
+//! the orchestrator takes it by reference and threads it to the sweep, so the
+//! compile-time sequencing witness holds end-to-end: production callers exist
+//! only once SP-R0 lands, tests mint via `for_test()`.
+
+use std::collections::BTreeSet;
+
+use shekyl_curve_tree::{
+    should_reanchor, AssembleInput, BlockHeight as TreeBlockHeight, Gindex, ReferenceBlock,
+    REF_ANCHOR_AGE,
+};
+use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
+use shekyl_rpc_client::Rpc;
+use shekyl_types::{BlockHeight, PCanonicalId};
+
+use super::backing_set::{BackingSet, InsufficientBacking};
+use super::bond_assembly::{BondAssemblyError, FundingInputContext, SpentRecordsDurablyPruned};
+use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
+use super::emission_source::{fetch_emission_claim_source, EmissionSourceError};
+use super::signing_assembly::{leaf_entry_from_chunk, tree_context_from};
+use super::stake_engine::{
+    AssembleEmissionClaim, AssembledEmissionClaim, BackingMembershipPath, PersonaHandle,
+    StakeEngineError, StakeEngineHandle,
+};
+
+/// Why the claim pipeline refused before (or at) the actor hand-off. Every
+/// arm is caller-recoverable state, not a defect: refetch/resync/refund and
+/// retry per the arm's docs.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ClaimOrchestrationError {
+    /// The claim-source fetch or decode refused (transport, non-OK status,
+    /// or a malformed reply — the untrusted-boundary refusals).
+    #[error("claim-source fetch failed: {0}")]
+    Source(#[from] EmissionSourceError),
+    /// A curve-tree handle call failed (client refusal or a stopped actor —
+    /// terminal until the engine respawns the actor).
+    #[error("curve tree unavailable or refused: {0:?}")]
+    Tree(CurveTreeHandleError),
+    /// No submittable reference can be anchored right now (chain too short,
+    /// tree not yet ingesting, or the tree too far behind the daemon tip).
+    /// Resync and retry; assembling against a stale reference would produce
+    /// a proof the daemon rejects.
+    #[error("no submittable reference can be anchored: {detail}")]
+    ReferenceUnanchorable { detail: &'static str },
+    /// The ledger has no block hash at the reference height — the wallet's
+    /// header window does not cover the anchor yet. Resync and retry.
+    #[error("no block hash at reference height {height}")]
+    MissingBlockHash { height: u64 },
+    /// The path-assembly reply did not pair one path per requested input —
+    /// an internal plumbing defect surfaced loudly rather than mis-indexed.
+    #[error("assemble_tx reply count diverged from the request: {detail}")]
+    PathAssembly { detail: &'static str },
+    /// No backing-eligible output exists at the gather tip.
+    #[error(transparent)]
+    NoBackingEligible(#[from] InsufficientBacking),
+    /// The fee sweep refused (insufficient funding or a build defect).
+    #[error(transparent)]
+    Assembly(#[from] BondAssemblyError),
+    /// The actor refused or failed the assembly itself.
+    #[error(transparent)]
+    Stake(#[from] StakeEngineError),
+}
+
+/// The read-side operands of one claim assembly, borrowed from their owners
+/// (the engine's actors, the persisted P-scan state, the live reservation
+/// set). Bundled so the pipeline's signature names the flow's inputs once.
+pub(crate) struct ClaimAssemblyContext<'a> {
+    /// The stake actor — assembly and signing stay inside it (CB-2).
+    pub stake: &'a StakeEngineHandle,
+    /// The curve-tree actor — reference root and membership paths.
+    pub tree: &'a CurveTreeHandle,
+    /// SP-R0 sequencing witness, threaded to the sweep (see module docs).
+    pub pruning_landed: &'a SpentRecordsDurablyPruned,
+    /// The persona's persisted funding records (`PScanState::funding_outputs`).
+    pub funding_records: &'a [PFundingOutputRecord],
+    /// The persona's confirmed bond-post matches
+    /// (`PScanState::bond_post_matches`) — the last-sweep-height source.
+    pub bond_posts: &'a [BondPostRecord],
+    /// Live gindex reservations (outputs already committed to in-flight txs).
+    pub reserved: &'a BTreeSet<u64>,
+    /// The claimant persona's canonical id — the fetch's single query field
+    /// and the bond-post ownership filter.
+    pub p_canonical_id: PCanonicalId,
+    /// The fee the claim tx must fund from swept `ToKey` inputs (fee inputs
+    /// are structurally mandatory — the reward is fully consumed by the loud
+    /// vout, so it cannot pay its own fee).
+    pub fee: u64,
+}
+
+/// The last **confirmed** sweep height for `persona`: the highest bond-post
+/// match carrying its canonical id, or height 0 when none is recorded (a
+/// persona that never posted sweeps from genesis). Feeds
+/// [`BackingSet::from_spendable`]'s legal-tranche boundary.
+fn last_confirmed_sweep_height(posts: &[BondPostRecord], persona: &PCanonicalId) -> BlockHeight {
+    posts
+        .iter()
+        .filter(|p| p.p_canonical_id == *persona)
+        .map(|p| p.height)
+        .max()
+        .unwrap_or(BlockHeight::from_raw(0))
+}
+
+/// The claim's curve-tree reference height, or a refusal when none is
+/// submittable — the transfer path's two-sided gate
+/// (`local_pending_tx::reanchor`, §3b F-C) over the daemon-reported
+/// `chain_height` (a block **count**, so the tip is `chain_height − 1`) and
+/// the tree's ingested tip:
+///
+/// - **Lower arm:** anchor [`REF_ANCHOR_AGE`] behind `min(tip, ingested)` so
+///   the root exists on both sides.
+/// - **Upper arm:** refuse a reference already at/past the re-anchor
+///   threshold ([`should_reanchor`], inclusive at `REBUILD_AT`) — a proof
+///   built against it could expire before submission.
+fn claim_reference_height(
+    chain_height: u64,
+    ingested_tip: Option<u64>,
+) -> Result<u64, ClaimOrchestrationError> {
+    let tip =
+        chain_height
+            .checked_sub(1)
+            .ok_or(ClaimOrchestrationError::ReferenceUnanchorable {
+                detail: "daemon reports an empty chain",
+            })?;
+    let ingested = ingested_tip.ok_or(ClaimOrchestrationError::ReferenceUnanchorable {
+        detail: "curve tree has not ingested any block yet",
+    })?;
+    let reference_height = tip.min(ingested).checked_sub(REF_ANCHOR_AGE).ok_or(
+        ClaimOrchestrationError::ReferenceUnanchorable {
+            detail: "chain too short to anchor a reference",
+        },
+    )?;
+    if should_reanchor(tip, reference_height) {
+        return Err(ClaimOrchestrationError::ReferenceUnanchorable {
+            detail: "tree too far behind the daemon tip to anchor a submittable reference",
+        });
+    }
+    Ok(reference_height)
+}
+
+/// The provability pre-filter (module docs): the subset of `records` already
+/// drained into the curve tree at `reference_height` — inclusive at the
+/// boundary, matching the tree's drain rule (`eligible_height <= reference`).
+fn provable_records(
+    records: &[PFundingOutputRecord],
+    reference_height: u64,
+) -> Vec<PFundingOutputRecord> {
+    records
+        .iter()
+        .filter(|r| r.spendable_height.to_raw() <= reference_height)
+        .cloned()
+        .collect()
+}
+
+/// Run the full claim pipeline (module docs, steps 1–6) and return the
+/// actor's reply — the signed, wire-encoded claim plus its public facts —
+/// **unbroadcast** (CB-3).
+///
+/// `block_hash_at` resolves the reference-height block hash from the caller's
+/// ledger (the orchestrator has no ledger access of its own; the engine owns
+/// the header window). `handle` is the operation-scoped slot capability; its
+/// slot also names the sweep's record filter.
+// Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): this is
+// PR-3's production pipeline awaiting its request path — the CB-3 dispatch
+// seam (2c-2b sibling) is the sole production caller and deletes this allow
+// when it lands.
+#[allow(dead_code)]
+pub(crate) async fn orchestrate_emission_claim<R: Rpc>(
+    rpc: &R,
+    handle: PersonaHandle,
+    ctx: ClaimAssemblyContext<'_>,
+    block_hash_at: impl Fn(u64) -> Option<[u8; 32]>,
+) -> Result<AssembledEmissionClaim, ClaimOrchestrationError> {
+    // 1. Fetch the claim source (single-field query; decode enforces the
+    //    settled/height invariant at the untrusted boundary).
+    let source = fetch_emission_claim_source(rpc, ctx.p_canonical_id.as_bytes()).await?;
+
+    // 2. Anchor the reference (two-sided gate over daemon tip × ingested tip).
+    let ingested = ctx
+        .tree
+        .ingested_tip_height()
+        .await
+        .map_err(ClaimOrchestrationError::Tree)?;
+    let reference_height = claim_reference_height(source.chain_height, ingested.map(|h| h.0))?;
+
+    // Provability pre-filter (module docs): only outputs drained into the
+    // tree at the reference height can carry a membership proof.
+    let provable = provable_records(ctx.funding_records, reference_height);
+
+    // 3. Designate the backing at the gather tip — the handler's same-tip
+    //    operand holds by construction (`backing_set.rs` stores ONE height).
+    let last_sweep = last_confirmed_sweep_height(ctx.bond_posts, &ctx.p_canonical_id);
+    let backing = BackingSet::from_spendable(
+        &provable,
+        BlockHeight::from_raw(source.chain_height),
+        last_sweep,
+    )
+    .designate_backing()?;
+
+    // 4. Fee sweep through the designated backing (the Q11-excluding sole
+    //    fee entry), over the same provable set and spendability anchor.
+    let selection = backing.fee_sweep(
+        ctx.pruning_landed,
+        &provable,
+        handle.p_slot().0,
+        ctx.reserved,
+        ctx.fee,
+    )?;
+
+    // 5. One reference snapshot, every membership path against it.
+    let (curve_tree_root, _depth) = ctx
+        .tree
+        .reference_root_and_depth(TreeBlockHeight(reference_height))
+        .await
+        .map_err(ClaimOrchestrationError::Tree)?;
+    let block_hash =
+        block_hash_at(reference_height).ok_or(ClaimOrchestrationError::MissingBlockHash {
+            height: reference_height,
+        })?;
+    let reference = ReferenceBlock {
+        height: TreeBlockHeight(reference_height),
+        curve_tree_root,
+        block_hash,
+    };
+    let assemble_inputs: Vec<AssembleInput> = std::iter::once(backing.record())
+        .chain(selection.records.iter())
+        .map(|r| AssembleInput {
+            gindex: Gindex(r.gindex),
+            output_key: r.output_key,
+            commitment: r.commitment,
+        })
+        .collect();
+    let requested = assemble_inputs.len();
+    let paths = ctx
+        .tree
+        .assemble_tx(reference, assemble_inputs)
+        .await
+        .map_err(ClaimOrchestrationError::Tree)?;
+    debug_assert_eq!(paths.len(), requested, "one path per requested input");
+    if paths.len() != requested {
+        return Err(ClaimOrchestrationError::PathAssembly {
+            detail: "reply paths != requested inputs",
+        });
+    }
+
+    // Field-copy across the curve-tree → tx-builder boundary. Every path
+    // shares one tree context (`assemble_tx`'s single-snapshot guarantee),
+    // so the message takes the first path's.
+    let mut paths = paths.into_iter();
+    let backing_assembled = paths.next().expect("length checked above: >= 1 (backing)");
+    let tree_ctx = tree_context_from(&backing_assembled.tree);
+    let backing_path = BackingMembershipPath {
+        leaf_chunk: backing_assembled
+            .leaf_chunk
+            .iter()
+            .map(leaf_entry_from_chunk)
+            .collect(),
+        c1_layers: backing_assembled.c1_layers,
+        c2_layers: backing_assembled.c2_layers,
+    };
+    let fee_funding: Vec<FundingInputContext> = selection
+        .records
+        .into_iter()
+        .zip(paths)
+        .map(|(record, path)| FundingInputContext {
+            record,
+            leaf_chunk: path.leaf_chunk.iter().map(leaf_entry_from_chunk).collect(),
+            c1_layers: path.c1_layers,
+            c2_layers: path.c2_layers,
+        })
+        .collect();
+
+    // 6. Hand the prepared operands to the actor (CB-2: derivation, proving,
+    //    and signing stay inside it) and return the reply unbroadcast.
+    let fee = ctx.fee;
+    Ok(ctx
+        .stake
+        .assemble_emission_claim(AssembleEmissionClaim {
+            handle,
+            source,
+            backing,
+            backing_path,
+            fee_funding,
+            tree_ctx,
+            fee,
+        })
+        .await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use shekyl_engine_state::pscan_state::MintLineageOutput;
+
+    fn post(height: u64, persona: PCanonicalId) -> BondPostRecord {
+        BondPostRecord {
+            height: BlockHeight::from_raw(height),
+            p_canonical_id: persona,
+            post_kind: 0,
+        }
+    }
+
+    /// The sweep boundary reads the persona's OWN posts only: the max height
+    /// among matching ids, height 0 when the persona never posted — another
+    /// persona's later post must not move the boundary.
+    #[test]
+    fn last_sweep_height_is_the_personas_own_max() {
+        let ours = PCanonicalId::from_bytes([1u8; 32]);
+        let theirs = PCanonicalId::from_bytes([2u8; 32]);
+        let posts = vec![post(100, ours), post(300, theirs), post(250, ours)];
+
+        assert_eq!(
+            last_confirmed_sweep_height(&posts, &ours),
+            BlockHeight::from_raw(250),
+            "our max is 250; the foreign 300 must not be read"
+        );
+        assert_eq!(
+            last_confirmed_sweep_height(&posts, &PCanonicalId::from_bytes([3u8; 32])),
+            BlockHeight::from_raw(0),
+            "a persona with no posts sweeps from genesis"
+        );
+    }
+
+    /// The two-sided reference gate, all four arms: the happy anchor
+    /// (`min(tip, ingested) − REF_ANCHOR_AGE`), and the three refusals —
+    /// no ingest yet, chain too short, tree too far behind
+    /// (`should_reanchor` inclusive at `REBUILD_AT`).
+    #[test]
+    fn claim_reference_height_arms() {
+        // Happy: tree synced to the tip; count 30_001 → tip 30_000.
+        assert_eq!(
+            claim_reference_height(30_001, Some(30_000)).expect("anchorable"),
+            30_000 - REF_ANCHOR_AGE
+        );
+        // Happy, tree one block behind: the min-arm anchors off the tree.
+        assert_eq!(
+            claim_reference_height(30_001, Some(29_999)).expect("anchorable"),
+            29_999 - REF_ANCHOR_AGE
+        );
+
+        // Refusal: no ingest.
+        assert!(matches!(
+            claim_reference_height(30_001, None),
+            Err(ClaimOrchestrationError::ReferenceUnanchorable { .. })
+        ));
+        // Refusal: chain shorter than the anchor age (and the empty chain).
+        assert!(matches!(
+            claim_reference_height(REF_ANCHOR_AGE, Some(REF_ANCHOR_AGE - 1)),
+            Err(ClaimOrchestrationError::ReferenceUnanchorable { .. })
+        ));
+        assert!(matches!(
+            claim_reference_height(0, Some(0)),
+            Err(ClaimOrchestrationError::ReferenceUnanchorable { .. })
+        ));
+        // Refusal: the tree so far behind that the anchored reference is
+        // already at the re-anchor threshold. Boundary-exact: one block
+        // inside the threshold anchors, at the threshold refuses.
+        let tip = 30_000u64;
+        let rebuild_at = shekyl_curve_tree::REBUILD_AT;
+        let barely_ok = tip - rebuild_at + REF_ANCHOR_AGE + 1;
+        assert!(claim_reference_height(tip + 1, Some(barely_ok)).is_ok());
+        assert!(matches!(
+            claim_reference_height(tip + 1, Some(barely_ok - 1)),
+            Err(ClaimOrchestrationError::ReferenceUnanchorable { .. })
+        ));
+    }
+
+    /// The provability pre-filter's inclusive boundary: an output drained AT
+    /// the reference height proves; one drained a block later is spendable
+    /// at the gather tip but not yet provable, and must not enter
+    /// designation or the sweep.
+    #[test]
+    fn provability_boundary_is_inclusive_at_the_reference_height() {
+        let at = crate::engine::test_support::funding_record(
+            0,
+            7,
+            100,
+            1_000,
+            MintLineageOutput::ExternalTransfer,
+        );
+        let mut later = crate::engine::test_support::funding_record(
+            0,
+            8,
+            101,
+            1_000,
+            MintLineageOutput::ExternalTransfer,
+        );
+        later.spendable_height = BlockHeight::from_raw(at.spendable_height.to_raw() + 1);
+
+        let reference_height = at.spendable_height.to_raw();
+        let kept = provable_records(&[at, later], reference_height);
+        assert_eq!(
+            kept.iter().map(|r| r.gindex).collect::<Vec<_>>(),
+            vec![7],
+            "inclusive at the boundary; the one-block-later record is filtered"
+        );
+    }
+
+    mod end_to_end {
+        use super::*;
+
+        use std::sync::Arc;
+
+        use serde_json::{json, Value};
+        use shekyl_archival_retention::{
+            emission_vin_verify_backing, ArchivalRewardEmissionVin, HoldingsKind,
+        };
+        use shekyl_curve_tree::{
+            BlockLeaves, CurveTreeClient, RawOutput, TargetKind, TxLeafInputs,
+        };
+        use shekyl_engine_state::pscan_state::MintLineageOutput;
+        use shekyl_rpc_client::RpcError;
+        use shekyl_wire::{Input, Transaction};
+
+        use crate::engine::emission_claim::test_fixtures::{snapshot, source_at_count};
+        use crate::engine::emission_source::{EmissionClaimSource, EpochSnapshot};
+        use crate::engine::stake_engine::test_fixtures::{
+            constructed_record, derive_bundle, spawn_over,
+        };
+        use crate::engine::stake_engine::PSlot;
+
+        /// Re-encode an [`EpochSnapshot`] as the daemon's epee KV JSON emits
+        /// it (the `emission_source` decode fixture's shape, driven from the
+        /// shared typed fixture rather than a second hand-written JSON copy).
+        fn epoch_json(e: &EpochSnapshot) -> Value {
+            json!({
+                "settlement_epoch": e.settlement_epoch,
+                "close_block_height": e.close_block_height,
+                "sigma_work_milli": e.sigma_work_milli,
+                "budget_atomic": e.budget_atomic,
+                "has_budget_row": e.has_budget_row,
+                "bonds": e.bonds.iter().map(|b| json!({
+                    "join_settlement_epoch": b.join_settlement_epoch,
+                    "is_foundation_complete_tree": b.is_foundation_complete_tree,
+                    "bad_intervals_flat": b.bad_intervals.iter()
+                        .flat_map(|i| [i.start_epoch, i.end_exclusive])
+                        .collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
+                "shards": e.shards.iter().map(|s| json!({
+                    "shard_id": s.shard_id,
+                    "freeze_height": s.freeze_height,
+                    "has_segment": s.has_segment,
+                })).collect::<Vec<_>>(),
+                "credit_pairs": e.credit_pairs.iter().map(|p| json!({
+                    "bond_idx": p.bond_idx,
+                    "shard_idx": p.shard_idx,
+                })).collect::<Vec<_>>(),
+                "claimant_bond_idx": e.claimant_bond_idx
+                    .map_or(u64::MAX, |i| i as u64),
+            })
+        }
+
+        /// The full `get_archival_emission_claim_source` result body for a
+        /// typed source — the inverse of `EmissionClaimSource::from_json`,
+        /// so the pipeline's fetch step decodes the exact fixture.
+        fn source_json(source: &EmissionClaimSource) -> Value {
+            let bond = source.bond.as_ref().expect("fixture carries a bond record");
+            json!({
+                "status": "OK",
+                "chain_height": source.chain_height,
+                "current_settled_epoch": source.current_settled_epoch,
+                "has_bond_record": true,
+                "join_settlement_epoch": bond.join_settlement_epoch,
+                "holdings_kind": match bond.holdings.kind {
+                    HoldingsKind::ShardSetCompact => 0u8,
+                    HoldingsKind::CompleteTree => 1u8,
+                },
+                "held_shard_ids": bond.holdings.shard_ids,
+                "claimed_settlement_epochs": bond.claimed_settlement_epochs,
+                "epochs": source.epochs.iter().map(epoch_json).collect::<Vec<_>>(),
+            })
+        }
+
+        /// A daemon that serves one canned claim-source result through the
+        /// real `json_rpc_call` envelope path (the trait's default impl runs
+        /// unmocked — only the transport is canned).
+        #[derive(Clone)]
+        struct ClaimSourceDaemon(Arc<Value>);
+
+        impl Rpc for ClaimSourceDaemon {
+            fn post(
+                &self,
+                route: &str,
+                _body: Vec<u8>,
+            ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
+                let reply = serde_json::to_vec(&json!({ "result": *self.0 }))
+                    .expect("fixture result encodes");
+                let ok = route == "json_rpc";
+                async move {
+                    if ok {
+                        Ok(reply)
+                    } else {
+                        Err(RpcError::InternalError("unexpected route".into()))
+                    }
+                }
+            }
+        }
+
+        /// The pipeline end-to-end over the REAL substrate — no synthetic
+        /// paths, no pre-prepared operands:
+        ///
+        /// - a real [`CurveTreeClient`] with the whole fixture chain ingested
+        ///   (the two P-paid outputs mined at one block, drained by maturity),
+        ///   so `reference_root_and_depth` and `assemble_tx` produce the
+        ///   actual root, depth, and membership paths;
+        /// - a mock daemon serving the wire-shape JSON reply, so the fetch
+        ///   leg decodes through the real untrusted-boundary path;
+        /// - the real `StakeEngine` actor doing derivation, proving, and
+        ///   signing over the pipeline-prepared operands.
+        ///
+        /// The produced bytes then face the same daemon-side re-derivation
+        /// the handler KAT pins, against the REAL tree root: erase the
+        /// emission vin at its index, verify the membership proof + leaf
+        /// gate + both auths against that root and depth. A pipeline that
+        /// designated the wrong record, mixed reference snapshots, or
+        /// mis-paired paths to records refuses here.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn orchestrated_claim_assembles_and_verifies_over_a_real_tree() {
+            // Fixture chain: count 30_001 (tip 30_000) — settled epoch 3,
+            // epoch 2 past its close by exactly one count (the strict-
+            // finalization earliest), matching the decode fixture's shape.
+            let chain_height = 30_001u64;
+            let tip = chain_height - 1;
+            let owned_block = 100u64;
+            let source = source_at_count(chain_height, vec![], vec![snapshot(2)]);
+
+            let stake = spawn_over(&[0], &[], None);
+            let handle = stake.mint_handle(PSlot(0)).await.expect("slot 0 held");
+            let keys = derive_bundle(0);
+            let p_id = shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey(
+                &keys
+                    .hybrid_sign_pk
+                    .to_canonical_bytes()
+                    .expect("identity encodes"),
+            );
+
+            // Two REAL P-paid outputs mined at `owned_block` as the chain's
+            // only outputs, so gindex == chain position (0: backing, 1: fee).
+            let (backing_record, backing_leaf) = constructed_record(
+                &keys,
+                0,
+                owned_block,
+                750_000,
+                0,
+                MintLineageOutput::BondPostChange,
+            );
+            let (fee_record, fee_leaf) = constructed_record(
+                &keys,
+                1,
+                owned_block,
+                90_000,
+                1,
+                MintLineageOutput::ExternalTransfer,
+            );
+            let backing_gindex = backing_record.gindex;
+            let fee_gindex = fee_record.gindex;
+
+            // Ingest the whole chain into a real (ephemeral-store) client —
+            // maturity drain, gindex threading, root reconstruction all real.
+            let leaf_blob: Vec<u8> = [backing_leaf.h_pqc, fee_leaf.h_pqc].concat();
+            let raw_outputs = vec![
+                RawOutput {
+                    output_key: backing_leaf.output_key,
+                    commitment: Some(backing_leaf.commitment),
+                    target: TargetKind::TaggedKey,
+                },
+                RawOutput {
+                    output_key: fee_leaf.output_key,
+                    commitment: Some(fee_leaf.commitment),
+                    target: TargetKind::TaggedKey,
+                },
+            ];
+            let client = tokio::task::spawn_blocking(move || {
+                let mut client = CurveTreeClient::new();
+                for h in 0..=tip {
+                    let txs: Vec<TxLeafInputs<'_>> = if h == owned_block {
+                        vec![TxLeafInputs {
+                            is_miner: false,
+                            leaf_hash_blob: Some(&leaf_blob),
+                            outputs: &raw_outputs,
+                        }]
+                    } else {
+                        vec![]
+                    };
+                    client
+                        .ingest_block(BlockLeaves {
+                            height: TreeBlockHeight(h),
+                            txs: &txs,
+                        })
+                        .expect("fixture chain ingests");
+                }
+                client
+            })
+            .await
+            .expect("tree-build task completes");
+            let tree = CurveTreeHandle::spawn(client);
+
+            // A FOREIGN persona's later bond post: the ownership filter must
+            // not read it — if it did, the sweep boundary would move past the
+            // rung-3 fee record and the survivor tripwire would fire loudly.
+            let bond_posts = vec![BondPostRecord {
+                height: BlockHeight::from_raw(tip),
+                p_canonical_id: PCanonicalId::from_bytes([9u8; 32]),
+                post_kind: 0,
+            }];
+
+            let expected_reference = tip - REF_ANCHOR_AGE;
+            let funding_records = vec![backing_record, fee_record];
+            let reserved = BTreeSet::new();
+            let pruned = SpentRecordsDurablyPruned::for_test();
+            let fee = 10_000u64;
+            let rpc = ClaimSourceDaemon(Arc::new(source_json(&source)));
+
+            let reply = orchestrate_emission_claim(
+                &rpc,
+                handle,
+                ClaimAssemblyContext {
+                    stake: &stake,
+                    tree: &tree,
+                    pruning_landed: &pruned,
+                    funding_records: &funding_records,
+                    bond_posts: &bond_posts,
+                    reserved: &reserved,
+                    p_canonical_id: p_id,
+                    fee,
+                },
+                |height| {
+                    assert_eq!(height, expected_reference, "anchor per the two-sided gate");
+                    Some([0xB1u8; 32])
+                },
+            )
+            .await
+            .expect("the pipeline assembles end-to-end over the real substrate");
+
+            // Public facts: epoch 2 claimed, a live reward, and the Q11
+            // surface through the WHOLE pipeline — the sweep reserved only
+            // the fee spend; the backing was never selected as a fee input.
+            assert_eq!(reply.claimed_epochs, vec![2]);
+            assert!(
+                reply.total_reward > 0,
+                "fixture epoch carries a real reward"
+            );
+            assert!(reply.size_deferred.is_empty());
+            assert_eq!(reply.fee_gindexes, vec![fee_gindex]);
+            assert!(!reply.fee_gindexes.contains(&backing_gindex));
+
+            // Daemon-side re-derivation against the REAL root: parse the
+            // bytes, erase the emission vin at its index (the
+            // `blockchain.cpp:3866` rule), and verify the membership proof,
+            // leaf gate, and both auths against the root and depth the tree
+            // reports at the anchored reference.
+            let (root, depth) = tree
+                .reference_root_and_depth(TreeBlockHeight(expected_reference))
+                .await
+                .expect("reference root resolves");
+            let mut cursor: &[u8] = reply.bound_tx.bytes();
+            let mut tx = Transaction::read(&mut cursor).expect("assembled bytes parse whole");
+            assert!(cursor.is_empty(), "no trailing bytes after the tx");
+            let emission_index = tx
+                .prefix
+                .inputs
+                .iter()
+                .position(|i| matches!(i, Input::ArchivalRewardEmission { .. }))
+                .expect("emission vin present");
+            let Input::ArchivalRewardEmission { canonical_bytes } =
+                &tx.prefix.inputs[emission_index]
+            else {
+                unreachable!("position() matched this variant");
+            };
+            let vin = ArchivalRewardEmissionVin::read(&mut canonical_bytes.as_slice())
+                .expect("vin blob parses");
+            tx.prefix.inputs.remove(emission_index);
+            let signable = tx.prefix_hash();
+            emission_vin_verify_backing(&vin, &root, depth, signable)
+                .expect("backing leg verifies against the REAL tree root and depth");
+        }
+    }
+}

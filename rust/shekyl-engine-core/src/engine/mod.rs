@@ -203,6 +203,12 @@ pub(crate) mod block_fetch;
 /// funding-sweep policy over the sealed `PFundingOutputRecord` set (GF-4b
 /// sweep semantics), and the assemble path's typed failure surface.
 pub(crate) mod bond_assembly;
+/// PR-3's Engine-side emission-claim orchestration (`EMISSION_CLAIM_BUILDER.md`
+/// §8): the fetch → designate → fee-sweep → path-assembly →
+/// `AssembleEmissionClaim` pipeline that prepares the operands the
+/// `StakeEngine` handler validates and signs against. Returns the reply
+/// unbroadcast (CB-3: dispatch is the GF-4 seam).
+pub(crate) mod claim_orchestrator;
 pub mod daemon;
 pub(crate) mod diagnostics;
 /// SP-T2 (DQ-T2.3): daemon-posture selection — the no-silent-③ invariant (a

@@ -393,11 +393,11 @@ impl EmissionClaimSource {
 /// the daemon-visible query is identical for every claimant regardless of
 /// serve history. Persona-side callers pass the persona transport
 /// (`PRpc`), never the principal's daemon session (§7.4).
-// Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the call
-// site is PR-3's `StakeEngine` claim handler; this allow is deleted there.
-// PR-2 narrowed the PR-1 module-level allow to this fetch — the decode
-// surface is now live via `emission_claim`.
-#[allow(dead_code)]
+///
+/// Sole production caller:
+/// [`orchestrate_emission_claim`](super::claim_orchestrator::orchestrate_emission_claim),
+/// step 1 of the claim pipeline (the consumer the PR-1/PR-2 staging allows
+/// named; the last of them dies here).
 pub async fn fetch_emission_claim_source<R: Rpc>(
     rpc: &R,
     p_id: &[u8; 32],

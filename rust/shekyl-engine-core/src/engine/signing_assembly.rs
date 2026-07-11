@@ -186,8 +186,10 @@ fn input_context_from_transfer(
 }
 
 /// Field copy across the curve-tree → tx-builder boundary (mirror types, no
-/// transform).
-fn leaf_entry_from_chunk(cl: &ChunkLeaf) -> LeafEntry {
+/// transform). Shared with the emission-claim orchestrator
+/// ([`super::claim_orchestrator`]), whose fee/backing paths cross the same
+/// boundary.
+pub(crate) fn leaf_entry_from_chunk(cl: &ChunkLeaf) -> LeafEntry {
     LeafEntry {
         output_key: cl.output_key,
         key_image_gen: cl.key_image_gen,
@@ -196,7 +198,9 @@ fn leaf_entry_from_chunk(cl: &ChunkLeaf) -> LeafEntry {
     }
 }
 
-fn tree_context_from(tree: &CurveTreeContext) -> TreeContext {
+/// Field copy for the tree context half of the same boundary (see
+/// [`leaf_entry_from_chunk`]).
+pub(crate) fn tree_context_from(tree: &CurveTreeContext) -> TreeContext {
     TreeContext {
         reference_block: tree.reference_block,
         tree_root: tree.tree_root,
