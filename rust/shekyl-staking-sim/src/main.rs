@@ -789,11 +789,79 @@ fn print_partition_adversary_report() {
         );
     }
     eprintln!();
+
+    // The graded arm: family members 1–7, the feature dictionary, the
+    // max-over-family statistic T, its permutation null, and bounds 1–3.
+    let graded = partition_adversary::run_partition_report();
     eprintln!(
-        "Family members 1–7, feature dictionary, max-statistic T, permutation null and bounds"
+        "Graded arm — N={} founders={} trials={} perms={} (bound 1 |lift|≤{:.2}; bound 2 lift≥{:.2}):",
+        graded.n,
+        graded.founder_count,
+        graded.trials,
+        graded.permutations,
+        graded.bound1_tol,
+        graded.bound2_lift,
     );
-    eprintln!("  1–3 land in the following slice of this round.");
-    match serde_json::to_string_pretty(&report) {
+    eprintln!(
+        "  Feature dictionary (§14.4, chain-visible only): seam |bond−funding|, dispatch phase,"
+    );
+    eprintln!(
+        "  sorted inter-event gap vector, cadence period, event count, resume spacing (z-scored)."
+    );
+    eprintln!(
+        "  Family: 1 k-means · 2 per-feature top-M · 3 cohesion-subset · 4 spectral · 5 seeded-NN"
+    );
+    eprintln!("          · 6 whitened joint-density isolation · 7 most-regular-subset.");
+    eprintln!();
+    eprintln!(
+        "  {:<26} {:>6} {:>6} {:>7} {:>5}  aimed  {:>6}   verdict",
+        "scenario", "T", "null", "lift", "bnd", "aimLft",
+    );
+    let row = |s: &partition_adversary::PartitionScenario| {
+        eprintln!(
+            "  {:<26} {:>6.3} {:>6.3} {:>+7.3} {:>5}  m{:<4} {:>+6.3}   {}",
+            s.label,
+            s.t_obs,
+            s.null_mean,
+            s.lift,
+            if s.aimed_member == 0 { "1" } else { "2" },
+            s.aimed_member,
+            s.aimed_member_lift,
+            if s.passed { "PASS" } else { "fail" },
+        );
+    };
+    row(&graded.deployed);
+    for c in &graded.controls {
+        row(c);
+    }
+    eprintln!();
+    eprintln!("  per-member agreement vs null (m1..m7), deployed then controls:");
+    let members = |s: &partition_adversary::PartitionScenario| {
+        let agr: Vec<String> = s
+            .member_agreements
+            .iter()
+            .map(|x| format!("{x:.2}"))
+            .collect();
+        let nul: Vec<String> = s
+            .member_null_means
+            .iter()
+            .map(|x| format!("{x:.2}"))
+            .collect();
+        eprintln!("    {:<12} agr=[{}]", s.scenario, agr.join(" "));
+        eprintln!("    {:<12} nul=[{}]", "", nul.join(" "));
+    };
+    members(&graded.deployed);
+    for c in &graded.controls {
+        members(c);
+    }
+    eprintln!();
+    eprintln!("  STATUS: {}", graded.status);
+    for p in &graded.pinned_underspecifications {
+        eprintln!("  PIN: {p}");
+    }
+    eprintln!();
+
+    match serde_json::to_string_pretty(&(&report, &graded)) {
         Ok(json) => println!("{json}"),
         Err(e) => eprintln!("error serializing partition-adversary report: {e}"),
     }
