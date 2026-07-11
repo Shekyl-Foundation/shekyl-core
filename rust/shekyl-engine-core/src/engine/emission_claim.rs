@@ -1001,6 +1001,131 @@ pub(crate) mod test_fixtures {
         source.chain_height = chain_height;
         source
     }
+
+    // ── The single test-side wire encoder ───────────────────────────────
+    //
+    // One Rust re-encoding of the daemon's `get_archival_emission_claim_source`
+    // JSON shape: the decode tests (`emission_source.rs`) and the claim
+    // orchestrator's e2e fetch leg both derive their fixtures from it, so a
+    // field rename cannot leave two test files updated out of lockstep. The
+    // shape's independent pin is the C++ wire-contract test on the
+    // serializer side (`archival_claim_source_rpc.cpp`) — one Rust copy,
+    // one C++ pin, no third source of truth.
+
+    /// A JSON array field the way epee KV serialization emits it: **omitted
+    /// when empty** (epee omits empty containers), so the decoder's
+    /// absent-decodes-empty rule stays exercised by every fixture built
+    /// through this encoder.
+    fn put_array<T: Clone + Into<serde_json::Value>>(
+        obj: &mut serde_json::Map<String, serde_json::Value>,
+        field: &str,
+        values: &[T],
+    ) {
+        if !values.is_empty() {
+            obj.insert(
+                field.to_owned(),
+                serde_json::Value::Array(values.iter().cloned().map(Into::into).collect()),
+            );
+        }
+    }
+
+    /// Re-encode an [`EpochSnapshot`] as the daemon's epee KV JSON emits it.
+    pub(crate) fn epoch_json(e: &EpochSnapshot) -> serde_json::Value {
+        let mut obj = serde_json::Map::new();
+        obj.insert("settlement_epoch".into(), e.settlement_epoch.into());
+        obj.insert("close_block_height".into(), e.close_block_height.into());
+        obj.insert("sigma_work_milli".into(), e.sigma_work_milli.into());
+        obj.insert("budget_atomic".into(), e.budget_atomic.into());
+        obj.insert("has_budget_row".into(), e.has_budget_row.into());
+        let bonds: Vec<serde_json::Value> = e
+            .bonds
+            .iter()
+            .map(|b| {
+                let mut bond = serde_json::Map::new();
+                bond.insert(
+                    "join_settlement_epoch".into(),
+                    b.join_settlement_epoch.into(),
+                );
+                bond.insert(
+                    "is_foundation_complete_tree".into(),
+                    b.is_foundation_complete_tree.into(),
+                );
+                let flat: Vec<u64> = b
+                    .bad_intervals
+                    .iter()
+                    .flat_map(|i| [i.start_epoch, i.end_exclusive])
+                    .collect();
+                put_array(&mut bond, "bad_intervals_flat", &flat);
+                serde_json::Value::Object(bond)
+            })
+            .collect();
+        put_array(&mut obj, "bonds", &bonds);
+        let shards: Vec<serde_json::Value> = e
+            .shards
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "shard_id": s.shard_id,
+                    "freeze_height": s.freeze_height,
+                    "has_segment": s.has_segment,
+                })
+            })
+            .collect();
+        put_array(&mut obj, "shards", &shards);
+        let pairs: Vec<serde_json::Value> = e
+            .credit_pairs
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "bond_idx": p.bond_idx,
+                    "shard_idx": p.shard_idx,
+                })
+            })
+            .collect();
+        put_array(&mut obj, "credit_pairs", &pairs);
+        obj.insert(
+            "claimant_bond_idx".into(),
+            e.claimant_bond_idx.map_or(u64::MAX, |i| i as u64).into(),
+        );
+        serde_json::Value::Object(obj)
+    }
+
+    /// The full `get_archival_emission_claim_source` result body for a
+    /// typed source — the inverse of `EmissionClaimSource::from_json`, so a
+    /// fixture built here decodes through the real untrusted-boundary path.
+    pub(crate) fn source_json(source: &EmissionClaimSource) -> serde_json::Value {
+        let mut obj = serde_json::Map::new();
+        obj.insert("status".into(), "OK".into());
+        obj.insert("chain_height".into(), source.chain_height.into());
+        obj.insert(
+            "current_settled_epoch".into(),
+            source.current_settled_epoch.into(),
+        );
+        obj.insert("has_bond_record".into(), source.bond.is_some().into());
+        if let Some(bond) = source.bond.as_ref() {
+            obj.insert(
+                "join_settlement_epoch".into(),
+                bond.join_settlement_epoch.into(),
+            );
+            obj.insert(
+                "holdings_kind".into(),
+                match bond.holdings.kind {
+                    HoldingsKind::ShardSetCompact => 0u8,
+                    HoldingsKind::CompleteTree => 1u8,
+                }
+                .into(),
+            );
+            put_array(&mut obj, "held_shard_ids", &bond.holdings.shard_ids);
+            put_array(
+                &mut obj,
+                "claimed_settlement_epochs",
+                &bond.claimed_settlement_epochs,
+            );
+        }
+        let epochs: Vec<serde_json::Value> = source.epochs.iter().map(epoch_json).collect();
+        put_array(&mut obj, "epochs", &epochs);
+        serde_json::Value::Object(obj)
+    }
 }
 
 #[cfg(test)]

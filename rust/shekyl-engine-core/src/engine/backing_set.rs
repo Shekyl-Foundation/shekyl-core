@@ -53,27 +53,43 @@ pub(crate) struct BackingSet {
     /// Backing-eligible records, in the caller's order. Private on purpose —
     /// see the type docs.
     records: Vec<PFundingOutputRecord>,
-    /// The spendability anchor the set was built against — retained so the
-    /// backing decision and everything downstream of it (the fee sweep, the
-    /// C-4 same-tip check) share literally the same height rather than
-    /// re-supplied copies that can drift (GF-4b §4 item 6).
+    /// The spendability anchor the set was built against — the chain **tip**
+    /// (a height, `chain_height − 1`) — retained so the backing decision and
+    /// everything downstream of it (the fee sweep, the C-4 same-tip check)
+    /// share literally the same height rather than re-supplied copies that
+    /// can drift (GF-4b §4 item 6).
     reference_height: BlockHeight,
 }
 
 impl BackingSet {
-    /// Build the backing-eligible set from a persona's **spendable** funding
-    /// records, filtering to the rung-1/rung-2 lineages and dropping
-    /// `ExternalTransfer`.
+    /// Build the backing-eligible set from **the claimant persona's**
+    /// spendable funding records, filtering to the rung-1/rung-2 lineages
+    /// and dropping `ExternalTransfer`.
     ///
-    /// **Spendability is enforced here, not assumed of the caller.** The
-    /// constructor applies the GF4b-6 filter itself — `spendable_height ≤
-    /// reference_height`, exactly as the sweep applies it — so the `spendable`
-    /// in the name is a guarantee the type owns rather than a precondition a
-    /// future caller must remember. `reference_height` is the caller's
-    /// spendability anchor (the chain height the backing decision is made
-    /// against). Because the filter runs *before* the survivor tripwire,
-    /// immature records cannot inflate it with false positives (GF-4b §3.4,
-    /// minor note on GF4b-3).
+    /// **The slot filter is enforced here, not assumed of the caller.**
+    /// `records` may be the wallet's all-slot `funding_outputs` union;
+    /// only `p_slot`'s records enter the set. Without this filter the
+    /// most-recent-eligible comparator can designate ANOTHER slot's record
+    /// (rotation overlap: the new persona's bond-post change is the newest
+    /// rung-2 on chain), and the claimant's key re-derivation then fails
+    /// the pre-flight leaf gate on every claim attempt — a persona
+    /// deterministically unable to claim. The fee sweep applies the same
+    /// slot filter (`sweep_funding_outputs`); the two paths must not
+    /// differ. Filtering before the survivor tripwire also keeps the
+    /// tripwire per-persona: another slot's rung-3 tranche must not trip
+    /// against *this* persona's sweep boundary.
+    ///
+    /// **Spendability is enforced here too.** The constructor applies the
+    /// GF4b-6 filter itself — `spendable_height ≤ reference_height`,
+    /// exactly as the sweep applies it — so the `spendable` in the name is
+    /// a guarantee the type owns rather than a precondition a future
+    /// caller must remember. `reference_height` is the caller's
+    /// spendability anchor: the chain **tip** the backing decision is made
+    /// against (a height, `chain_height − 1` — never the block count
+    /// itself, which would admit a record one block early and report a
+    /// not-yet-existing height in the refusal). Because the filter runs
+    /// *before* the survivor tripwire, immature records cannot inflate it
+    /// with false positives (GF-4b §3.4, minor note on GF4b-3).
     ///
     /// `last_sweep_height` is the max height of the persona's own
     /// **confirmed** bond posts (durable in `bond_post_matches`) — the
@@ -99,20 +115,26 @@ impl BackingSet {
     /// subset of these false positives; the mature-but-late subset remains a
     /// benign, debug-only false positive, accepted as the cost of keeping
     /// the sweep-regression tripwire armed.
-    pub(crate) fn from_spendable(
-        records: &[PFundingOutputRecord],
+    pub(crate) fn from_spendable<'a, I>(
+        records: I,
+        p_slot: u32,
         reference_height: BlockHeight,
         last_sweep_height: BlockHeight,
-    ) -> Self {
-        // Enforce the spendability precondition here rather than trust the
-        // caller (GF4b-6): a record is in the tree iff `spendable_height <=
-        // reference_height`, exactly as the sweep applies it. Filtering
-        // before the survivor tripwire drops the immature subset of its false
-        // positives by construction, and makes the type's "spendable"
-        // guarantee hold for every member rather than by remembered contract.
+    ) -> Self
+    where
+        I: IntoIterator<Item = &'a PFundingOutputRecord>,
+    {
+        // Enforce the slot + spendability preconditions here rather than
+        // trust the caller (type docs; GF4b-6): only the claimant slot's
+        // records, and a record is in the tree iff `spendable_height <=
+        // reference_height`, exactly as the sweep applies both. Filtering
+        // before the survivor tripwire drops the immature and foreign-slot
+        // subsets of its false positives by construction, and makes the
+        // type's guarantees hold for every member rather than by
+        // remembered contract.
         let spendable: Vec<&PFundingOutputRecord> = records
-            .iter()
-            .filter(|r| r.spendable_height <= reference_height)
+            .into_iter()
+            .filter(|r| r.p_slot == p_slot && r.spendable_height <= reference_height)
             .collect();
 
         debug_assert!(
@@ -255,14 +277,17 @@ impl DesignatedBacking {
     /// **exclusively** through this method — the same monopoly discipline as
     /// `sweep_funding_outputs` on the bond path (GF-4b §5 item 4's grep
     /// shape), reviewed at the PR boundary.
-    pub(crate) fn fee_sweep(
+    pub(crate) fn fee_sweep<'a, I>(
         &self,
         pruning_landed: &SpentRecordsDurablyPruned,
-        records: &[PFundingOutputRecord],
+        records: I,
         p_slot: u32,
         reserved: &BTreeSet<u64>,
         required: u64,
-    ) -> Result<FundingSelection, BondAssemblyError> {
+    ) -> Result<FundingSelection, BondAssemblyError>
+    where
+        I: IntoIterator<Item = &'a PFundingOutputRecord>,
+    {
         let mut excluded = reserved.clone();
         excluded.insert(self.record.gindex);
         sweep_funding_outputs(
@@ -311,7 +336,7 @@ mod tests {
             record(3, 150, 900, MintLineageOutput::ExternalTransfer),
         ];
 
-        let set = BackingSet::from_spendable(&records, reference_height, last_sweep_height);
+        let set = BackingSet::from_spendable(&records, 0, reference_height, last_sweep_height);
         let gindexes: Vec<u64> = set.records().iter().map(|r| r.gindex).collect();
         assert_eq!(
             gindexes,
@@ -334,7 +359,7 @@ mod tests {
             // Survivor: rung 3 that a sweep should have consumed.
             record(2, 80, 700, MintLineageOutput::ExternalTransfer),
         ];
-        let _ = BackingSet::from_spendable(&records, reference_height, last_sweep_height);
+        let _ = BackingSet::from_spendable(&records, 0, reference_height, last_sweep_height);
     }
 
     /// GF4b-6 enforcement: the constructor applies the spendability filter
@@ -359,7 +384,7 @@ mod tests {
             record(2, 200, 700, MintLineageOutput::ExternalTransfer),
         ];
 
-        let set = BackingSet::from_spendable(&records, reference_height, last_sweep_height);
+        let set = BackingSet::from_spendable(&records, 0, reference_height, last_sweep_height);
         assert!(
             set.records().is_empty(),
             "immature records — including the rung-2 — are excluded by the enforced spendability filter"
@@ -445,13 +470,61 @@ mod tests {
             // Legal between-sweeps tranche (height > last_sweep_height).
             record(21, 250, 123, MintLineageOutput::ExternalTransfer),
         ];
-        let set = BackingSet::from_spendable(&post_bond, reference_height, last_sweep_height);
+        let set = BackingSet::from_spendable(&post_bond, 0, reference_height, last_sweep_height);
         let eligible: Vec<u64> = set.records().iter().map(|r| r.gindex).collect();
         assert_eq!(
             eligible,
             vec![20],
             "the bond-post change record is backing-eligible; the raw tranche is not"
         );
+    }
+
+    /// The slot filter: the set is the **claimant persona's** — a foreign
+    /// slot's newer, otherwise-eligible record (the rotation-overlap window:
+    /// the new persona's bond-post change is the newest rung-2 on chain)
+    /// must neither enter the set nor win the most-recent-eligible
+    /// comparator. Without the filter, the claimant's key re-derivation
+    /// would fail the pre-flight leaf gate on every claim attempt for as
+    /// long as the foreign record stays newest — a persona deterministically
+    /// unable to claim.
+    #[test]
+    fn foreign_slot_records_never_enter_the_set() {
+        let reference_height = BlockHeight::from_raw(1_000_000);
+        let last_sweep_height = BlockHeight::from_raw(100);
+        let records = vec![
+            // The claimant's own (older) backing-eligible record.
+            funding_record(0, 1, 90, 500, MintLineageOutput::BondPostChange),
+            // A foreign slot's NEWER eligible record — the overlap window.
+            funding_record(1, 2, 300, 700, MintLineageOutput::BondPostChange),
+        ];
+
+        let set = BackingSet::from_spendable(&records, 0, reference_height, last_sweep_height);
+        let gindexes: Vec<u64> = set.records().iter().map(|r| r.gindex).collect();
+        assert_eq!(gindexes, vec![1], "only the claimant slot's records enter");
+
+        let designated =
+            BackingSet::from_spendable(&records, 0, reference_height, last_sweep_height)
+                .designate_backing()
+                .expect("the claimant's record designates");
+        assert_eq!(
+            designated.record().gindex,
+            1,
+            "the foreign slot's newer record must not win the comparator"
+        );
+
+        // A foreign slot's rung-3 survivor must not trip the claimant's
+        // tripwire either (the survivor semantics are per-persona).
+        let with_foreign_survivor = vec![
+            funding_record(0, 1, 90, 500, MintLineageOutput::BondPostChange),
+            funding_record(1, 3, 50, 900, MintLineageOutput::ExternalTransfer),
+        ];
+        let set = BackingSet::from_spendable(
+            &with_foreign_survivor,
+            0,
+            reference_height,
+            last_sweep_height,
+        );
+        assert_eq!(set.records().len(), 1, "no trip, foreign survivor filtered");
     }
 
     /// Most-recent-eligible selection: highest `(height, gindex)` wins, so
@@ -469,9 +542,10 @@ mod tests {
             record(3, 95, 300, MintLineageOutput::BondPostChange),
         ];
 
-        let designated = BackingSet::from_spendable(&records, reference_height, last_sweep_height)
-            .designate_backing()
-            .expect("eligible records exist");
+        let designated =
+            BackingSet::from_spendable(&records, 0, reference_height, last_sweep_height)
+                .designate_backing()
+                .expect("eligible records exist");
         assert_eq!(
             designated.record().gindex,
             3,
@@ -502,7 +576,7 @@ mod tests {
         // No `expect_err`: `DesignatedBacking` intentionally derives no
         // `Debug` (same redaction posture as `FundingSelection` — the
         // contained funding record is the sensitive part).
-        match BackingSet::from_spendable(&records, reference_height, last_sweep_height)
+        match BackingSet::from_spendable(&records, 0, reference_height, last_sweep_height)
             .designate_backing()
         {
             Ok(_) => panic!("expected InsufficientBacking"),
@@ -530,7 +604,7 @@ mod tests {
         ];
 
         let designated =
-            BackingSet::from_spendable(&post_first_bond, reference_height, last_sweep_height)
+            BackingSet::from_spendable(&post_first_bond, 0, reference_height, last_sweep_height)
                 .designate_backing()
                 .expect("the change record is eligible");
         assert_eq!(
@@ -579,9 +653,10 @@ mod tests {
             "premise: the backing is sweep-eligible, so the exclusion below is load-bearing"
         );
 
-        let designated = BackingSet::from_spendable(&records, reference_height, last_sweep_height)
-            .designate_backing()
-            .expect("eligible records exist");
+        let designated =
+            BackingSet::from_spendable(&records, 0, reference_height, last_sweep_height)
+                .designate_backing()
+                .expect("eligible records exist");
         assert_eq!(
             designated.record().gindex,
             2,
@@ -632,9 +707,10 @@ mod tests {
             record(3, 999, 900, MintLineageOutput::ExternalTransfer), // immature at 1_000
         ];
 
-        let designated = BackingSet::from_spendable(&records, reference_height, last_sweep_height)
-            .designate_backing()
-            .expect("eligible record exists");
+        let designated =
+            BackingSet::from_spendable(&records, 0, reference_height, last_sweep_height)
+                .designate_backing()
+                .expect("eligible record exists");
         let fee = designated
             .fee_sweep(
                 &SpentRecordsDurablyPruned::for_test(),

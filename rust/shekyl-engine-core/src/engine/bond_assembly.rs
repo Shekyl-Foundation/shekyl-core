@@ -308,16 +308,19 @@ pub(crate) struct FundingSelection {
 /// that sequencing compile-enforced. See FOLLOWUPS "2d-1 WI-2 — durable
 /// removal of SPENT funding outputs".
 #[allow(dead_code)] // transient — consumed by the Engine-side WI-2 orchestrator as it lands.
-pub(crate) fn sweep_funding_outputs(
+pub(crate) fn sweep_funding_outputs<'a, I>(
     _pruning_landed: &SpentRecordsDurablyPruned,
-    records: &[PFundingOutputRecord],
+    records: I,
     p_slot: u32,
     reserved: &std::collections::BTreeSet<u64>,
     required: u64,
     reference_height: BlockHeight,
-) -> Result<FundingSelection, BondAssemblyError> {
+) -> Result<FundingSelection, BondAssemblyError>
+where
+    I: IntoIterator<Item = &'a PFundingOutputRecord>,
+{
     let mut eligible: Vec<&PFundingOutputRecord> = records
-        .iter()
+        .into_iter()
         .filter(|r| {
             r.p_slot == p_slot
                 && !reserved.contains(&r.gindex)

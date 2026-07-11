@@ -46,8 +46,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use shekyl_curve_tree::{
-    select_reference_height, should_reanchor, AssembleInput, BlockHeight, Gindex, ReferenceBlock,
-    REF_ANCHOR_AGE,
+    select_reference_height, should_reanchor, two_sided_reference_height, AssembleInput,
+    BlockHeight, Gindex, ReferenceBlock, TwoSidedRefusal, REF_ANCHOR_AGE,
 };
 use shekyl_engine_state::{AwaitingConfirmation, LedgerBlock};
 use shekyl_units::AtomicUnits;
@@ -1864,28 +1864,28 @@ where
                 detail: "curve tree has not ingested any block yet",
             })?;
             let chain_tip = self.ledger.with_ledger_block(LedgerBlock::height);
-            // Two-sided ingested-tip gate (§3b, F-C): the lower arm anchors at or
-            // below the ingested tip; the upper arm refuses a reference already
-            // past the rebuild threshold (the tree is too far behind to anchor a
-            // submittable reference). Both are never-submit-a-bad-proof gates.
-            let anchor_tip = chain_tip.min(ingested);
-            let reference_height = anchor_tip.checked_sub(REF_ANCHOR_AGE).ok_or(
-                ReanchorError::ReferenceResyncing {
-                    detail: "chain too short to anchor a reference",
-                },
-            )?;
-            // Upper arm of the two-sided gate (§3b, F-C): refuse a fresh
-            // reference that is *already* due for re-anchor — same predicate the
-            // lock₂ re-validation uses (`should_reanchor`, inclusive at
-            // REBUILD_AT), so a reference that passes here can never immediately
-            // fail lock₂ on the age criterion and burn a prover attempt. (The
-            // reference is always below `chain_tip`, so the reorg/age-None arm of
-            // `should_reanchor` does not fire here — only the age threshold.)
-            if should_reanchor(chain_tip, reference_height) {
-                return Err(ReanchorError::ReferenceResyncing {
-                    detail: "tree too far behind to anchor a submittable reference; resync",
-                });
-            }
+            // Two-sided ingested-tip gate (§3b, F-C) — the shared
+            // [`two_sided_reference_height`] definition (also the emission
+            // claim orchestrator's): the lower arm anchors at or below the
+            // ingested tip; the upper arm refuses a reference already past
+            // the rebuild threshold — same predicate the lock₂
+            // re-validation uses (`should_reanchor`, inclusive at
+            // REBUILD_AT), so a reference that passes here can never
+            // immediately fail lock₂ on the age criterion and burn a
+            // prover attempt. Both are never-submit-a-bad-proof gates.
+            let reference_height =
+                two_sided_reference_height(chain_tip, ingested).map_err(|refusal| {
+                    ReanchorError::ReferenceResyncing {
+                        detail: match refusal {
+                            TwoSidedRefusal::ChainTooShort => {
+                                "chain too short to anchor a reference"
+                            }
+                            TwoSidedRefusal::TreeTooFarBehind => {
+                                "tree too far behind to anchor a submittable reference; resync"
+                            }
+                        },
+                    }
+                })?;
             let (curve_tree_root, depth) = handle
                 .reference_root_and_depth(BlockHeight(reference_height))
                 .await

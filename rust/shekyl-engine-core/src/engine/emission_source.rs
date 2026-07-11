@@ -414,53 +414,86 @@ pub async fn fetch_emission_claim_source<R: Rpc>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::emission_claim::test_fixtures::source_json;
     use shekyl_archival_retention::{ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, SETTLEMENT_EPOCH_BLOCKS};
 
     /// A response as the daemon's epee KV JSON store emits it: one window
     /// epoch with rows, one empty-row epoch (absent arrays omitted, as epee
-    /// omits empty containers). The C++ wire-contract test pins the same
-    /// canonical shape from the serializer side.
+    /// omits empty containers — the shared encoder reproduces that, so the
+    /// absent-decodes-empty rule stays covered). Encoded through the
+    /// crate's single test-side wire encoder
+    /// (`emission_claim::test_fixtures::source_json`); the shape's
+    /// independent pin is the C++ wire-contract test on the serializer
+    /// side (`archival_claim_source_rpc.cpp`).
     fn fixture() -> Value {
-        json!({
-            "status": "OK",
-            "untrusted": false,
-            "chain_height": 30001,
-            "current_settled_epoch": 3,
-            "has_bond_record": true,
-            "join_settlement_epoch": 1,
-            "holdings_kind": 0,
-            "held_shard_ids": [4, 9],
-            "claimed_settlement_epochs": [1],
-            "epochs": [
-                {
-                    "settlement_epoch": 1,
-                    "close_block_height": 20000,
-                    "sigma_work_milli": 5000,
-                    "budget_atomic": 777,
-                    "has_budget_row": true,
-                    "bonds": [
-                        {
-                            "join_settlement_epoch": 0,
-                            "is_foundation_complete_tree": false,
-                            "bad_intervals_flat": [2, 3]
-                        }
-                    ],
-                    "shards": [
-                        { "shard_id": 4, "freeze_height": 15, "has_segment": true }
-                    ],
-                    "credit_pairs": [ { "bond_idx": 0, "shard_idx": 0 } ],
-                    "claimant_bond_idx": 0
+        source_json(&EmissionClaimSource {
+            chain_height: 30001,
+            current_settled_epoch: 3,
+            bond: Some(BondContext {
+                join_settlement_epoch: 1,
+                holdings: HoldingsDescriptor {
+                    kind: HoldingsKind::ShardSetCompact,
+                    shard_ids: vec![4, 9],
                 },
-                {
-                    "settlement_epoch": 2,
-                    "close_block_height": 30000,
-                    "sigma_work_milli": 0,
-                    "budget_atomic": 0,
-                    "has_budget_row": false,
-                    "claimant_bond_idx": 18446744073709551615u64
-                }
-            ]
+                claimed_settlement_epochs: vec![1],
+            }),
+            epochs: vec![
+                EpochSnapshot {
+                    settlement_epoch: 1,
+                    close_block_height: 20000,
+                    sigma_work_milli: 5000,
+                    budget_atomic: 777,
+                    has_budget_row: true,
+                    bonds: vec![BondRow {
+                        join_settlement_epoch: 0,
+                        is_foundation_complete_tree: false,
+                        bad_intervals: vec![BadInterval {
+                            start_epoch: 2,
+                            end_exclusive: 3,
+                        }],
+                    }],
+                    shards: vec![EpochCloseShard {
+                        shard_id: 4,
+                        freeze_height: 15,
+                        has_segment: true,
+                    }],
+                    credit_pairs: vec![CreditPair {
+                        bond_idx: 0,
+                        shard_idx: 0,
+                    }],
+                    claimant_bond_idx: Some(0),
+                },
+                // The empty-row epoch: bonds/shards/credit_pairs are OMITTED
+                // by the encoder (epee omit-empty), exercising the decoder's
+                // absent-decodes-empty rule.
+                EpochSnapshot {
+                    settlement_epoch: 2,
+                    close_block_height: 30000,
+                    sigma_work_milli: 0,
+                    budget_atomic: 0,
+                    has_budget_row: false,
+                    bonds: vec![],
+                    shards: vec![],
+                    credit_pairs: vec![],
+                    claimant_bond_idx: None,
+                },
+            ],
         })
+    }
+
+    /// The encoder really omits the empty containers (the premise of the
+    /// absent-decodes-empty coverage above — if it ever emitted `[]`, the
+    /// fixture would silently stop exercising the epee omission rule).
+    #[test]
+    fn fixture_omits_empty_containers() {
+        let v = fixture();
+        let e2 = &v["epochs"][1];
+        for field in ["bonds", "shards", "credit_pairs"] {
+            assert!(
+                e2.get(field).is_none(),
+                "`{field}` must be absent (epee omit-empty), not an empty array"
+            );
+        }
     }
 
     #[test]

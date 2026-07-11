@@ -388,18 +388,27 @@ fn post_kind_byte(kind: &BondPostKind) -> u8 {
     }
 }
 
-/// GF-4b rung-1 pre-pass (C-1, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §5 item 2):
-/// the per-tx set of *our* persona slots whose **own** emission vin the tx
-/// carries — the structural proof that lifts the tx's recovered outputs to
-/// [`MintLineageOutput::EmissionReward`]. Public data only: an emission vin is
-/// on-chain cleartext, and its `p_pubkey → p_canonical_id` derivation
-/// ([`p_canonical_id_from_hybrid_pubkey`], the §6.1 rule) is the same one the
-/// bond post published, so no secret is touched.
+/// GF-4b rung-1 classifier (C-1, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §5
+/// item 2): per tx, the set of *our* persona slots whose **own** emission
+/// vin the tx carries — the structural proof that lifts the tx's recovered
+/// outputs to [`MintLineageOutput::EmissionReward`]. Public data only: an
+/// emission vin is on-chain cleartext, and its `p_pubkey → p_canonical_id`
+/// derivation ([`p_canonical_id_from_hybrid_pubkey`], the §6.1 rule) is the
+/// same one the bond post published, so no secret is touched.
 ///
-/// **Fail-toward-forbidden (GF4b-4), enforced by what does *not* gain an
-/// entry.** A tx earns an entry only when *all* of the following hold; each
-/// failure leaves the map without an entry, so the classification below
-/// defaults its outputs to rung 3 (`ExternalTransfer`):
+/// **Lazy, memoized per tx — hot-path economics.** Parsing an emission vin
+/// allocates its proof blob, work-claim rows, and two canonical-length auth
+/// vectors, then hashes a ~4 KiB hybrid pubkey — and the verdict is only
+/// ever consulted for a tx that recovered one of OUR outputs (rare). An
+/// eager per-block pre-pass would pay that parse for every emission vin on
+/// chain, scaling every wallet's full P-scan with chain-wide claim volume.
+/// [`Self::contains`] therefore parses on first query per tx and memoizes;
+/// unqueried txs cost one 32-byte hash→index map entry.
+///
+/// **Fail-toward-forbidden (GF4b-4), enforced by what does *not* classify.**
+/// A tx yields a slot only when *all* of the following hold; each failure
+/// yields the empty set, so the caller's classification defaults the output
+/// to rung 3 (`ExternalTransfer`):
 ///
 /// - **The blob parses under the archival-retention reader** —
 ///   [`ArchivalRewardEmissionVin::read`], the crate that *is* the Rust
@@ -424,33 +433,63 @@ fn post_kind_byte(kind: &BondPostKind) -> u8 {
 /// A misclassification in this direction can only *exclude* a safe output
 /// from backing eligibility, never admit an unsafe one (GF4b-4's acceptance
 /// criterion for this arm).
-fn own_emission_slots(
-    transactions: &[Transaction],
-    transaction_hashes: &[[u8; 32]],
-    known_personas: &BTreeMap<PCanonicalId, u32>,
-) -> BTreeMap<[u8; 32], BTreeSet<u32>> {
-    let mut emission_slots: BTreeMap<[u8; 32], BTreeSet<u32>> = BTreeMap::new();
-    for (j, tx) in transactions.iter().enumerate() {
-        for input in &tx.prefix.inputs {
-            let Input::ArchivalRewardEmission { canonical_bytes } = input else {
-                continue;
-            };
-            let mut r = canonical_bytes.as_slice();
-            let Ok(vin) = ArchivalRewardEmissionVin::read(&mut r) else {
-                continue; // unparseable → no entry → rung 3
-            };
-            if !r.is_empty() {
-                continue; // trailing bytes → not canonical → rung 3
-            }
-            let id = p_canonical_id_from_hybrid_pubkey(&vin.p_pubkey);
-            if let Some(slot) = known_personas.get(&id) {
-                if let Some(tx_hash) = transaction_hashes.get(j) {
-                    emission_slots.entry(*tx_hash).or_default().insert(*slot);
+struct OwnEmissionSlots<'a> {
+    transactions: &'a [Transaction],
+    known_personas: &'a BTreeMap<PCanonicalId, u32>,
+    /// Positionally-paired hash → tx index (32-byte copies only; built
+    /// without touching any vin blob).
+    idx_by_hash: BTreeMap<[u8; 32], usize>,
+    /// Computed verdicts: an entry present means "parsed" (possibly empty).
+    memo: BTreeMap<[u8; 32], BTreeSet<u32>>,
+}
+
+impl<'a> OwnEmissionSlots<'a> {
+    fn new(
+        transactions: &'a [Transaction],
+        transaction_hashes: &'a [[u8; 32]],
+        known_personas: &'a BTreeMap<PCanonicalId, u32>,
+    ) -> Self {
+        Self {
+            transactions,
+            known_personas,
+            idx_by_hash: transaction_hashes
+                .iter()
+                .enumerate()
+                .map(|(j, h)| (*h, j))
+                .collect(),
+            memo: BTreeMap::new(),
+        }
+    }
+
+    /// Whether `tx_hash`'s tx carries `slot`'s own emission vin — parsing
+    /// (and memoizing) that one tx's emission vins on first query.
+    fn contains(&mut self, tx_hash: [u8; 32], slot: u32) -> bool {
+        if let Some(slots) = self.memo.get(&tx_hash) {
+            return slots.contains(&slot);
+        }
+        let mut slots = BTreeSet::new();
+        if let Some(&j) = self.idx_by_hash.get(&tx_hash) {
+            for input in &self.transactions[j].prefix.inputs {
+                let Input::ArchivalRewardEmission { canonical_bytes } = input else {
+                    continue;
+                };
+                let mut r = canonical_bytes.as_slice();
+                let Ok(vin) = ArchivalRewardEmissionVin::read(&mut r) else {
+                    continue; // unparseable → no lift → rung 3
+                };
+                if !r.is_empty() {
+                    continue; // trailing bytes → not canonical → rung 3
+                }
+                let id = p_canonical_id_from_hybrid_pubkey(&vin.p_pubkey);
+                if let Some(s) = self.known_personas.get(&id) {
+                    slots.insert(*s);
                 }
             }
         }
+        let contained = slots.contains(&slot);
+        self.memo.insert(tx_hash, slots);
+        contained
     }
-    emission_slots
 }
 
 /// SP-3 — the dual extractor. Runs **off** the actor thread (the handler offloads
@@ -503,7 +542,7 @@ pub(crate) fn run_dual_extractor(
         // GF-4b lineage pre-passes (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3;
         // rung 1: §5 item 2), public data only: per tx, the set of *our*
         // persona slots whose own emission vin it carries (rung 1, the
-        // `own_emission_slots` helper above) and the set posting a `BondPost`
+        // lazy `OwnEmissionSlots` classifier above) and the set posting a `BondPost`
         // in it (rung 2, inline below). `transaction_hashes` is positionally
         // paired with `transactions` (the scanner enforces the length match);
         // a tx whose hash is missing simply gains no map entry, so its outputs
@@ -526,7 +565,7 @@ pub(crate) fn run_dual_extractor(
              attribution to ExternalTransfer"
         );
         let mut bond_post_slots: BTreeMap<[u8; 32], BTreeSet<u32>> = BTreeMap::new();
-        let emission_slots = own_emission_slots(
+        let mut emission_slots = OwnEmissionSlots::new(
             &block.transactions,
             &block.block.transaction_hashes,
             known_personas,
@@ -584,10 +623,7 @@ pub(crate) fn run_dual_extractor(
                 // `BackingSet`, so the precedence carries no eligibility
                 // consequence even off one.
                 let tx_hash = wo.transaction();
-                let lineage = if emission_slots
-                    .get(&tx_hash)
-                    .is_some_and(|slots| slots.contains(slot))
-                {
+                let lineage = if emission_slots.contains(tx_hash, *slot) {
                     MintLineageOutput::EmissionReward
                 } else if bond_post_slots
                     .get(&tx_hash)
@@ -1233,35 +1269,38 @@ mod tests {
         );
     }
 
-    /// The missing-tx-hash arm, at the pre-pass seam: a tx whose hash is
-    /// absent from `transaction_hashes` gains no map entry, so its outputs
-    /// would classify rung 3. Tested at the helper because the end-to-end
-    /// path is doubly guarded upstream — the scanner refuses a mispaired
-    /// block outright (`ScanError::InvalidScannableBlock`) and
+    /// The missing-tx-hash arm, at the classifier seam: a tx whose hash is
+    /// absent from `transaction_hashes` cannot be keyed, so its outputs
+    /// classify rung 3. Tested at the helper because the end-to-end path is
+    /// doubly guarded upstream — the scanner refuses a mispaired block
+    /// outright (`ScanError::InvalidScannableBlock`) and
     /// `run_dual_extractor`'s debug tripwire fires in test builds — leaving
     /// this arm as the innermost, release-mode defense.
     #[test]
-    fn emission_pre_pass_missing_tx_hash_yields_no_entry() {
+    fn emission_classifier_missing_tx_hash_yields_no_lift() {
         let p = persona(0);
         let known = BTreeMap::from([(canonical_id(&p), 0)]);
         let mut tx = funding_block(&p).transactions.remove(0);
         tx.prefix.inputs.push(emission_input_for(&p));
 
-        // Premise: with its hash present, the tx earns its slot entry.
+        // Premise: with its hash present, the tx classifies to our slot —
+        // and the memoized second query agrees (the lazy path's cache arm).
         let hash = tx.hash();
-        let slots = own_emission_slots(std::slice::from_ref(&tx), &[hash], &known);
-        assert_eq!(
-            slots.get(&hash).map(|s| s.contains(&0)),
-            Some(true),
-            "premise: the hash-paired tx earns an entry, so the missing hash \
-             is the only variable in the negative arm"
-        );
-
-        // Negative: no hash, no entry — nothing for classification to lift.
-        let slots = own_emission_slots(std::slice::from_ref(&tx), &[], &known);
+        let txs = std::slice::from_ref(&tx);
+        let hashes = [hash];
+        let mut slots = OwnEmissionSlots::new(txs, &hashes, &known);
         assert!(
-            slots.is_empty(),
-            "a hash-less tx must gain no entry (fail toward rung 3)"
+            slots.contains(hash, 0),
+            "premise: the hash-paired tx classifies, so the missing hash is \
+             the only variable in the negative arm"
+        );
+        assert!(slots.contains(hash, 0), "memoized re-query agrees");
+
+        // Negative: no hash, no classification — nothing to lift.
+        let mut slots = OwnEmissionSlots::new(txs, &[], &known);
+        assert!(
+            !slots.contains(hash, 0),
+            "a hash-less tx must not classify (fail toward rung 3)"
         );
     }
 

@@ -150,6 +150,7 @@ use shekyl_crypto_pq::multisig::SINGLE_SIG_CANONICAL_LEN;
 use shekyl_crypto_pq::output::{construct_output, recover_combined_ss, sign_pqc_auth_for_output};
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme as _};
 use shekyl_curve_generators::biased_hash_to_point;
+use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_scanner::extra::Extra;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
 use shekyl_standoff::draw::{draw_entry_gap, GapRng};
@@ -615,17 +616,51 @@ pub(crate) enum StakeEngineError {
     ScanJoin(#[from] tokio::task::JoinError),
 
     /// The [`DesignatedBacking`]'s stored spendability anchor does not equal
-    /// the claim source's gather tip — item 6's **runtime half** (the type
-    /// half is the single stored `reference_height` on the designation; see
-    /// `backing_set.rs`). Assembling against a stale anchor would let backing
-    /// eligibility and claim-window finalization diverge across two tips, so
-    /// the request is refused; the caller refetches the claim source and
-    /// re-designates the backing at one tip, then retries.
+    /// the claim source's gather **tip** (`chain_height − 1`; the anchor is
+    /// a height, never the block count) — item 6's **runtime half** (the
+    /// type half is the single stored `reference_height` on the designation;
+    /// see `backing_set.rs`). Assembling against a stale anchor would let
+    /// backing eligibility and claim-window finalization diverge across two
+    /// tips, so the request is refused; the caller refetches the claim
+    /// source and re-designates the backing at one tip, then retries.
     #[error(
         "stale claim anchor: the backing was designated at height {anchor} but the \
          claim source was gathered at tip {tip}; refetch both at one tip and retry"
     )]
     StaleClaimAnchor { anchor: u64, tip: u64 },
+
+    /// The designated backing's gindex appeared in the fee-funding set —
+    /// the Q11/CB-4 double-use (one output both membership-proven as the
+    /// backing and key-image-spent as a fee input). Structurally
+    /// unrepresentable through [`DesignatedBacking::fee_sweep`]; presence
+    /// here means the message paired a fee selection with a *different*
+    /// designation (a caller defect, e.g. a cached selection reused across
+    /// re-designations). Refused HERE because no daemon ever would:
+    /// consensus is spend-blind for backing, so the signed tx would
+    /// broadcast, publicly link the backing's key image to `P`, and burn
+    /// the backing as a fee input — with no error anywhere downstream.
+    #[error(
+        "the designated backing (gindex {gindex}) is also a fee input (Q11 double-use); \
+         re-run the fee sweep through DesignatedBacking::fee_sweep against this designation"
+    )]
+    BackingInFeeSet { gindex: u64 },
+
+    /// An emission claim was submitted with **zero** fee-funding inputs. At
+    /// least one spendable `ToKey` input is structurally required regardless
+    /// of the fee amount — the loud reward vout consumes the entire mint, so
+    /// the fee side must supply the tx's pseudoOuts and its FCMP++ fee-side
+    /// proof anchor. Deliberately **not** `InsufficientFunding` (rule 82):
+    /// with `fee == 0` that would read "insufficient funding: available 0,
+    /// required 0" — a shortfall error with no shortfall, misdirecting the
+    /// remedy. The remedy is to have ANY spendable funding output: fund the
+    /// persona or wait for one to mature, then retry.
+    #[error(
+        "emission claim needs at least one fee input regardless of the fee amount ({fee}): \
+         the reward vout consumes the whole mint, so pseudoOuts and the FCMP++ fee-side \
+         anchor must come from a separate spendable output — fund the persona or wait \
+         for maturity"
+    )]
+    ClaimFeeInputsRequired { fee: u64 },
 
     /// An [`AssembleEmissionClaim`] claim-side step refused or failed —
     /// derivation boundaries, size bounding, or the step-7 self-check. The
@@ -1440,46 +1475,19 @@ impl Message<AssembleBond> for StakeEngine {
         rand_core::OsRng.fill_bytes(tx_key_secret.as_mut());
         let tx_pubkey = &Scalar::from_bytes_mod_order(*tx_key_secret) * ED25519_BASEPOINT_TABLE;
 
-        let mut output_infos = Vec::with_capacity(2);
-        let mut output_keys = Vec::with_capacity(2);
-        let mut view_tags = Vec::with_capacity(2);
-        let mut kem_blobs = Vec::with_capacity(2);
-        let mut leaf_hash_blob = Vec::with_capacity(64);
-        for (idx, amount) in [change_lo, change_hi].into_iter().enumerate() {
-            let constructed = construct_output(
-                &tx_key_secret,
-                &keys.x25519_pk,
-                &keys.ml_kem_ek,
-                keys.spend_pk.as_canonical_bytes(),
-                amount,
-                idx as u64,
-            )
-            .map_err(|e| BondAssemblyError::build("change-output construction", e))?;
-            let mut kem_blob = Vec::with_capacity(32 + constructed.kem_ciphertext_ml_kem.len());
-            kem_blob.extend_from_slice(&constructed.kem_ciphertext_x25519);
-            kem_blob.extend_from_slice(&constructed.kem_ciphertext_ml_kem);
-            kem_blobs.push(kem_blob);
-            leaf_hash_blob.extend_from_slice(&constructed.h_pqc);
-            output_keys.push(constructed.output_key);
-            view_tags.push(Some(constructed.view_tag_prefilter));
-            output_infos.push(shekyl_tx_builder::OutputInfo {
-                dest_key: constructed.output_key,
-                amount: AtomicUnits::from_raw(amount),
-                commitment_mask: constructed.z,
-                enc_amount: {
-                    let mut enc = [0u8; 9];
-                    enc[..8].copy_from_slice(&constructed.enc_amount);
-                    enc[8] = constructed.amount_tag;
-                    enc
-                },
-                enc_label: {
-                    let mut enc = [0u8; 9];
-                    enc[..8].copy_from_slice(&constructed.enc_label);
-                    enc[8] = constructed.label_tag;
-                    enc
-                },
-            });
-        }
+        let ConstructedVouts {
+            output_infos,
+            output_keys,
+            view_tags,
+            kem_blobs,
+            leaf_hash_blob,
+        } = construct_vouts_to_base(
+            keys,
+            &tx_key_secret,
+            &[change_lo, change_hi],
+            "change-output construction",
+            |_, _| {},
+        )?;
 
         // ── Step 9: tx_extra — tx pubkey + per-output KEM blobs + the 0x07
         // PQC leaf hashes (without which the change outputs ingest with a
@@ -1528,7 +1536,10 @@ impl Message<AssembleBond> for StakeEngine {
             &key_images,
             &extra_inputs,
             &output_keys,
-            &[0, 0], // both change outputs are confidential (wire amount 0)
+            // Every change output is confidential (wire amount 0) — derived
+            // from the count, same as the wire encode below, so the two
+            // sites cannot disagree on arity.
+            &vec![0; output_keys.len()],
             &view_tags,
             &tx_extra,
         )
@@ -1617,12 +1628,15 @@ impl Message<AssembleBond> for StakeEngine {
             bulletproof,
             reference_block: signed.reference_block,
             fcmp_proof: signed.fcmp_proof,
+            // Placeholder auths at real pubkeys (the phase-1 payload hash
+            // reads them); the fee-slot pubkeys MOVE in — nothing reads
+            // `pqc_pubkeys` again (`sign_pqc_auths` re-derives per input).
             pqc_auths: pqc_pubkeys
-                .iter()
+                .into_iter()
                 .map(|pk| PqcAuth {
                     auth_version: 1,
                     signature: Vec::new(),
-                    public_key: pk.clone(),
+                    public_key: pk,
                 })
                 .chain(std::iter::once(PqcAuth {
                     auth_version: 1,
@@ -1690,6 +1704,167 @@ struct PreparedInput {
     gindex: u64,
 }
 
+/// One constructed vout batch to `P`'s base address — the shared
+/// output-construction loop of [`AssembleBond`] (two confidential change
+/// vouts) and [`AssembleEmissionClaim`] (loud reward + two change vouts):
+/// per output, `construct_output` → KEM blob layout → leaf-hash blob →
+/// `[u8; 9]` enc-amount/enc-label packing → tx-builder `OutputInfo`. Both
+/// change vouts return to `P`'s base spend key (the pscan
+/// `GuaranteedScanner` claims against `spend_pk` directly), so change
+/// re-enters the funding set on the next sweep.
+struct ConstructedVouts {
+    output_infos: Vec<shekyl_tx_builder::OutputInfo>,
+    output_keys: Vec<[u8; 32]>,
+    view_tags: Vec<Option<u8>>,
+    kem_blobs: Vec<Vec<u8>>,
+    leaf_hash_blob: Vec<u8>,
+}
+
+/// Construct `amounts` as vouts to `P`'s base address. `capture` sees each
+/// constructed output `(index, &OutputData)` before its fields are packed,
+/// so the emission path lifts its reward commit without a second loop or a
+/// parallel construction site.
+fn construct_vouts_to_base(
+    keys: &ArchivalPKeys,
+    tx_key_secret: &Zeroizing<[u8; 32]>,
+    amounts: &[u64],
+    error_site: &'static str,
+    mut capture: impl FnMut(usize, &shekyl_crypto_pq::output::OutputData),
+) -> Result<ConstructedVouts, BondAssemblyError> {
+    let mut vouts = ConstructedVouts {
+        output_infos: Vec::with_capacity(amounts.len()),
+        output_keys: Vec::with_capacity(amounts.len()),
+        view_tags: Vec::with_capacity(amounts.len()),
+        kem_blobs: Vec::with_capacity(amounts.len()),
+        leaf_hash_blob: Vec::with_capacity(32 * amounts.len()),
+    };
+    for (idx, &amount) in amounts.iter().enumerate() {
+        let constructed = construct_output(
+            tx_key_secret,
+            &keys.x25519_pk,
+            &keys.ml_kem_ek,
+            keys.spend_pk.as_canonical_bytes(),
+            amount,
+            idx as u64,
+        )
+        .map_err(|e| BondAssemblyError::build(error_site, e))?;
+        capture(idx, &constructed);
+        let mut kem_blob = Vec::with_capacity(32 + constructed.kem_ciphertext_ml_kem.len());
+        kem_blob.extend_from_slice(&constructed.kem_ciphertext_x25519);
+        kem_blob.extend_from_slice(&constructed.kem_ciphertext_ml_kem);
+        vouts.kem_blobs.push(kem_blob);
+        vouts.leaf_hash_blob.extend_from_slice(&constructed.h_pqc);
+        vouts.output_keys.push(constructed.output_key);
+        vouts.view_tags.push(Some(constructed.view_tag_prefilter));
+        vouts.output_infos.push(shekyl_tx_builder::OutputInfo {
+            dest_key: constructed.output_key,
+            amount: AtomicUnits::from_raw(amount),
+            commitment_mask: constructed.z,
+            enc_amount: {
+                let mut enc = [0u8; 9];
+                enc[..8].copy_from_slice(&constructed.enc_amount);
+                enc[8] = constructed.amount_tag;
+                enc
+            },
+            enc_label: {
+                let mut enc = [0u8; 9];
+                enc[..8].copy_from_slice(&constructed.enc_label);
+                enc[8] = constructed.label_tag;
+                enc
+            },
+        });
+    }
+    Ok(vouts)
+}
+
+/// One record's re-derived spend-side parts — the shared per-record body of
+/// [`prepare_funding_inputs`] (bond + emission fee spends) and the emission
+/// handler's **backing** leg, which is the same derivation minus the key
+/// image (membership-only). One definition: a correction to the bundle
+/// derivation, the leaf-chunk `h_pqc` lookup, or the `combined_ss` handling
+/// lands once, or the backing proof's secrets silently diverge from the fee
+/// path's and every claim fails its own leaf gate.
+struct DerivedSpendParts {
+    bundle: SourceSecretsBundle,
+    /// The first 64 bytes of the bundle's combined secret — the
+    /// per-output-PQC derivation operand (the backing leg retains it for
+    /// Auth-B signing).
+    combined64: Zeroizing<[u8; 64]>,
+    /// The record's leaf hash, read back from its own leaf chunk (`h_pqc`
+    /// is not persisted on the record — public identity only).
+    h_pqc: [u8; 32],
+    /// The per-output PQC public key derived from `combined64`.
+    pqc_pubkey: Vec<u8>,
+}
+
+/// Re-derive one funding record's spend-side parts (rule 36: secrets are
+/// re-derived from the record's `(ciphertext, index)` inside the actor,
+/// never carried in the message).
+fn derive_spend_parts(
+    keys: &ArchivalPKeys,
+    rec: &PFundingOutputRecord,
+    leaf_chunk: &[LeafEntry],
+) -> Result<DerivedSpendParts, BondAssemblyError> {
+    let ciphertext = HybridCiphertext {
+        x25519: rec.ciphertext_x25519,
+        ml_kem: rec.ciphertext_ml_kem.clone(),
+    };
+    let bundle = derive_p_source_secrets_bundle(keys, &ciphertext, rec.index_in_transaction)
+        .map_err(|e| BondAssemblyError::build("spend-bundle derivation", e))?;
+
+    let h_pqc = leaf_chunk
+        .iter()
+        .find(|leaf| leaf.output_key == rec.output_key)
+        .map(|leaf| leaf.h_pqc)
+        .ok_or_else(|| {
+            BondAssemblyError::build(
+                "leaf-chunk lookup",
+                "funding output missing from its own leaf chunk",
+            )
+        })?;
+
+    let combined64: Zeroizing<[u8; 64]> =
+        Zeroizing::new(bundle.combined_ss[..64].try_into().map_err(|_| {
+            BondAssemblyError::build("spend-bundle derivation", "combined_ss wrong length")
+        })?);
+    let pqc_pubkey = derive_pqc_public_key(&combined64, rec.index_in_transaction)
+        .map_err(|e| BondAssemblyError::build("pqc public-key derivation", e))?;
+
+    Ok(DerivedSpendParts {
+        bundle,
+        combined64,
+        h_pqc,
+        pqc_pubkey,
+    })
+}
+
+impl DerivedSpendParts {
+    /// The tx-builder [`SpendInput`] over these parts, moving the
+    /// membership vecs in (never deep-copying them).
+    fn into_spend_input(
+        self,
+        rec: &PFundingOutputRecord,
+        leaf_chunk: Vec<LeafEntry>,
+        c1_layers: Vec<Vec<[u8; 32]>>,
+        c2_layers: Vec<Vec<[u8; 32]>>,
+    ) -> SpendInput {
+        SpendInput {
+            output_key: rec.output_key,
+            commitment: rec.commitment,
+            amount: rec.amount,
+            spend_key_x: *self.bundle.spend_key_x,
+            spend_key_y: *self.bundle.spend_key_y,
+            commitment_mask: *self.bundle.commitment_mask,
+            h_pqc: self.h_pqc,
+            combined_ss: self.bundle.combined_ss.to_vec(),
+            output_index: rec.index_in_transaction,
+            leaf_chunk,
+            c1_layers,
+            c2_layers,
+        }
+    }
+}
+
 /// Re-derive spend bundles for the selected funding inputs, compute key
 /// images, and build the tx-builder [`SpendInput`]s — the shared spend-side
 /// leg of [`AssembleBond`] and [`AssembleEmissionClaim`] (rule 36: secrets are
@@ -1707,66 +1882,28 @@ fn prepare_funding_inputs(
     funding: Vec<FundingInputContext>,
 ) -> Result<Vec<PreparedInput>, BondAssemblyError> {
     let mut prepared = Vec::with_capacity(funding.len());
-    // `rec` borrows the disjoint `record` field, so its `Copy` reads coexist
-    // with the membership-vec field moves below.
     for ctx in funding {
         let rec = &ctx.record;
-        let ciphertext = HybridCiphertext {
-            x25519: rec.ciphertext_x25519,
-            ml_kem: rec.ciphertext_ml_kem.clone(),
-        };
-        let bundle = derive_p_source_secrets_bundle(keys, &ciphertext, rec.index_in_transaction)
-            .map_err(|e| BondAssemblyError::build("spend-bundle derivation", e))?;
+        let mut parts = derive_spend_parts(keys, rec, &ctx.leaf_chunk)?;
 
-        // KI = x·Hp(O) — same construction the FCMP++ verifier checks.
+        // KI = x·Hp(O) — same construction the FCMP++ verifier checks. The
+        // full-path-only leg (the backing's membership-only leg has none).
         let x_scalar: Zeroizing<Scalar> = Zeroizing::new(
-            Option::from(Scalar::from_canonical_bytes(*bundle.spend_key_x)).ok_or_else(|| {
-                BondAssemblyError::build("key-image derivation", "non-canonical x")
-            })?,
+            Option::from(Scalar::from_canonical_bytes(*parts.bundle.spend_key_x)).ok_or_else(
+                || BondAssemblyError::build("key-image derivation", "non-canonical x"),
+            )?,
         );
         let key_image = (biased_hash_to_point(rec.output_key) * *x_scalar)
             .compress()
             .to_bytes();
 
-        // `h_pqc` is not persisted on the record (public identity only);
-        // read it back from the assembled leaf chunk, which carries the
-        // ingested leaf for this output.
-        let h_pqc = ctx
-            .leaf_chunk
-            .iter()
-            .find(|leaf| leaf.output_key == rec.output_key)
-            .map(|leaf| leaf.h_pqc)
-            .ok_or_else(|| {
-                BondAssemblyError::build(
-                    "leaf-chunk lookup",
-                    "funding output missing from its own leaf chunk",
-                )
-            })?;
-
-        let combined: [u8; 64] = bundle.combined_ss[..64].try_into().map_err(|_| {
-            BondAssemblyError::build("spend-bundle derivation", "combined_ss wrong length")
-        })?;
-        let pqc_pubkey = derive_pqc_public_key(&combined, rec.index_in_transaction)
-            .map_err(|e| BondAssemblyError::build("pqc public-key derivation", e))?;
-
+        let pqc_pubkey = std::mem::take(&mut parts.pqc_pubkey);
+        let gindex = rec.gindex;
         prepared.push(PreparedInput {
-            spend: SpendInput {
-                output_key: rec.output_key,
-                commitment: rec.commitment,
-                amount: rec.amount,
-                spend_key_x: *bundle.spend_key_x,
-                spend_key_y: *bundle.spend_key_y,
-                commitment_mask: *bundle.commitment_mask,
-                h_pqc,
-                combined_ss: bundle.combined_ss.to_vec(),
-                output_index: rec.index_in_transaction,
-                leaf_chunk: ctx.leaf_chunk,
-                c1_layers: ctx.c1_layers,
-                c2_layers: ctx.c2_layers,
-            },
+            spend: parts.into_spend_input(rec, ctx.leaf_chunk, ctx.c1_layers, ctx.c2_layers),
             key_image,
             pqc_pubkey,
-            gindex: rec.gindex,
+            gindex,
         });
     }
     prepared.sort_by(|a, b| b.key_image.cmp(&a.key_image));
@@ -1815,8 +1952,9 @@ pub(crate) struct AssembleEmissionClaim {
     /// Operation-scoped capability proving the slot is currently held.
     pub handle: PersonaHandle,
     /// The decoded claim source (daemon gather + local dedup), gathered at
-    /// `source.chain_height`. The same-tip check below demands this equals
-    /// the backing designation's stored anchor.
+    /// `source.chain_height` (a block **count**). The same-tip check below
+    /// demands the backing designation's stored anchor equal the gather
+    /// **tip** (`chain_height − 1`).
     pub source: EmissionClaimSource,
     /// The designated backing (sole [`BackingSet`](super::backing_set::BackingSet)
     /// exit; owns the backing record and the stored `reference_height`).
@@ -1871,17 +2009,38 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         self.validate_handle(&msg.handle)?;
         let handle_slot = msg.handle.p_slot();
 
-        // ── Step 2: same-tip check (item 6, runtime half). The designation
-        // carries ONE stored anchor by construction (backing_set.rs); here
-        // that anchor must equal the tip the claim source was gathered at,
-        // or backing spendability and claim-window finalization were
-        // evaluated against different chains. Refuse; the caller refetches
-        // both at one tip.
+        // ── Step 2: operand-consistency checks (item 6 + Q11, runtime
+        // halves — the handler is operand-driven, so orchestrator
+        // invariants are re-verified at this boundary).
+        //
+        // Same-tip: the designation carries ONE stored anchor by
+        // construction (backing_set.rs) — the chain TIP its spendability
+        // was evaluated at; here it must equal the tip the claim source
+        // was gathered at (`chain_height` is a block COUNT, so the tip is
+        // `chain_height − 1`), or backing spendability and claim-window
+        // finalization were evaluated against different chains. Refuse;
+        // the caller refetches both at one tip.
         let anchor = msg.backing.reference_height().to_raw();
-        if anchor != msg.source.chain_height {
+        if msg.source.chain_height.checked_sub(1) != Some(anchor) {
             return Err(StakeEngineError::StaleClaimAnchor {
                 anchor,
-                tip: msg.source.chain_height,
+                tip: msg.source.chain_height.saturating_sub(1),
+            });
+        }
+        // Q11: the backing must not double as a fee input. The message
+        // fields are freely constructible crate-wide, so the fee_sweep
+        // monopoly alone does not bind THIS pairing — a fee selection
+        // cached across re-designations would sign a consensus-valid
+        // double-use no daemon rejects (consensus is spend-blind for
+        // backing). Same posture as the same-tip check above.
+        let backing_gindex = msg.backing.record().gindex;
+        if msg
+            .fee_funding
+            .iter()
+            .any(|f| f.record.gindex == backing_gindex)
+        {
+            return Err(StakeEngineError::BackingInFeeSet {
+                gindex: backing_gindex,
             });
         }
 
@@ -1917,13 +2076,11 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // daemon's balance `Σ pseudoOuts + total_reward·H = Σ out_masks +
         // fee·H`), so the fee MUST be funded by separate ToKey spends — an
         // emission claim with zero fee inputs has no pseudoOuts to fund a
-        // nonzero fee and no FCMP++ fee-side proof to anchor the tx.
+        // nonzero fee and no FCMP++ fee-side proof to anchor the tx. A
+        // structural refusal, not a shortfall (the variant's doc): with
+        // `fee == 0` an `InsufficientFunding { 0, 0 }` would misdirect.
         if msg.fee_funding.is_empty() {
-            return Err(BondAssemblyError::InsufficientFunding {
-                available: 0,
-                required: msg.fee,
-            }
-            .into());
+            return Err(StakeEngineError::ClaimFeeInputsRequired { fee: msg.fee });
         }
         let mut available: u64 = 0;
         for ctx in &msg.fee_funding {
@@ -1952,60 +2109,33 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         rand_core::OsRng.fill_bytes(tx_key_secret.as_mut());
         let tx_pubkey = &Scalar::from_bytes_mod_order(*tx_key_secret) * ED25519_BASEPOINT_TABLE;
 
-        let vout_amounts = [total_reward, change_lo, change_hi];
-        let mut output_infos = Vec::with_capacity(vout_amounts.len());
-        let mut output_keys = Vec::with_capacity(vout_amounts.len());
-        let mut view_tags = Vec::with_capacity(vout_amounts.len());
-        let mut kem_blobs = Vec::with_capacity(vout_amounts.len());
-        let mut leaf_hash_blob = Vec::with_capacity(32 * vout_amounts.len());
         let mut reward_commit: Option<RewardCommit> = None;
-        for (idx, amount) in vout_amounts.into_iter().enumerate() {
-            let constructed = construct_output(
-                &tx_key_secret,
-                &keys.x25519_pk,
-                &keys.ml_kem_ek,
-                keys.spend_pk.as_canonical_bytes(),
-                amount,
-                idx as u64,
-            )
-            .map_err(|e| BondAssemblyError::build("claim-output construction", e))?;
-            if idx == 0 {
-                // The auth digest must bind the commitment the daemon reads
-                // from the tx's outPk. `construct_output`'s C = z·G +
-                // amount·H is the same formula (and mask) the signer emits;
-                // the post-sign cross-check below fails loudly if they ever
-                // diverge.
-                reward_commit = Some(RewardCommit {
-                    commitment: constructed.commitment,
-                    amount_plain: total_reward,
-                    one_time_key: constructed.output_key,
-                });
-            }
-            let mut kem_blob = Vec::with_capacity(32 + constructed.kem_ciphertext_ml_kem.len());
-            kem_blob.extend_from_slice(&constructed.kem_ciphertext_x25519);
-            kem_blob.extend_from_slice(&constructed.kem_ciphertext_ml_kem);
-            kem_blobs.push(kem_blob);
-            leaf_hash_blob.extend_from_slice(&constructed.h_pqc);
-            output_keys.push(constructed.output_key);
-            view_tags.push(Some(constructed.view_tag_prefilter));
-            output_infos.push(shekyl_tx_builder::OutputInfo {
-                dest_key: constructed.output_key,
-                amount: AtomicUnits::from_raw(amount),
-                commitment_mask: constructed.z,
-                enc_amount: {
-                    let mut enc = [0u8; 9];
-                    enc[..8].copy_from_slice(&constructed.enc_amount);
-                    enc[8] = constructed.amount_tag;
-                    enc
-                },
-                enc_label: {
-                    let mut enc = [0u8; 9];
-                    enc[..8].copy_from_slice(&constructed.enc_label);
-                    enc[8] = constructed.label_tag;
-                    enc
-                },
-            });
-        }
+        let ConstructedVouts {
+            output_infos,
+            output_keys,
+            view_tags,
+            kem_blobs,
+            leaf_hash_blob,
+        } = construct_vouts_to_base(
+            keys,
+            &tx_key_secret,
+            &[total_reward, change_lo, change_hi],
+            "claim-output construction",
+            |idx, constructed| {
+                if idx == 0 {
+                    // The auth digest must bind the commitment the daemon
+                    // reads from the tx's outPk. `construct_output`'s C =
+                    // z·G + amount·H is the same formula (and mask) the
+                    // signer emits; the post-sign cross-check below fails
+                    // loudly if they ever diverge.
+                    reward_commit = Some(RewardCommit {
+                        commitment: constructed.commitment,
+                        amount_plain: total_reward,
+                        one_time_key: constructed.output_key,
+                    });
+                }
+            },
+        )?;
         let reward_commits =
             vec![reward_commit.expect("vout_amounts is non-empty; index 0 always constructs")];
         // The reward vout is loud (plaintext amount on the wire); the change
@@ -2043,34 +2173,19 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         .map_err(|e| BondAssemblyError::build("signable hash", e))?;
 
         // ── Step 10: backing spend input (membership-only; no key image).
-        // The bundle is re-derived from the designation's own record — the
-        // single record owner (Q11 doc on `BackingMembershipPath`).
+        // The parts are re-derived from the designation's own record — the
+        // single record owner (Q11 doc on `BackingMembershipPath`) —
+        // through the SAME [`derive_spend_parts`] the fee spends use (one
+        // derivation definition; a divergence would fail every claim at
+        // the leaf gate below).
         let rec = msg.backing.record();
         let backing_index = rec.index_in_transaction;
-        let ciphertext = HybridCiphertext {
-            x25519: rec.ciphertext_x25519,
-            ml_kem: rec.ciphertext_ml_kem.clone(),
-        };
-        let bundle = derive_p_source_secrets_bundle(keys, &ciphertext, backing_index)
-            .map_err(|e| BondAssemblyError::build("backing-bundle derivation", e))?;
-        let backing_h_pqc = msg
-            .backing_path
-            .leaf_chunk
-            .iter()
-            .find(|leaf| leaf.output_key == rec.output_key)
-            .map(|leaf| leaf.h_pqc)
-            .ok_or_else(|| {
-                BondAssemblyError::build(
-                    "backing leaf-chunk lookup",
-                    "backing output missing from its own leaf chunk",
-                )
-            })?;
-        let backing_combined: Zeroizing<[u8; 64]> =
-            Zeroizing::new(bundle.combined_ss[..64].try_into().map_err(|_| {
-                BondAssemblyError::build("backing-bundle derivation", "combined_ss wrong length")
-            })?);
-        let backing_pubkey = derive_pqc_public_key(&backing_combined, backing_index)
-            .map_err(|e| BondAssemblyError::build("backing pqc public-key derivation", e))?;
+        let mut parts = derive_spend_parts(keys, rec, &msg.backing_path.leaf_chunk)?;
+        let backing_h_pqc = parts.h_pqc;
+        let backing_pubkey = std::mem::take(&mut parts.pqc_pubkey);
+        // Retained for Auth-B signing after the bundle moves into the
+        // proving closure.
+        let backing_combined = std::mem::replace(&mut parts.combined64, Zeroizing::new([0u8; 64]));
         // Pre-flight leaf gate: the daemon's C-1 gate demands
         // hash(backing_pubkey) == leaf.h_pqc. A mismatch here means stale or
         // defective tree data (or a record that is not this persona's) —
@@ -2083,20 +2198,12 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             )
             .into());
         }
-        let backing_spend = SpendInput {
-            output_key: rec.output_key,
-            commitment: rec.commitment,
-            amount: rec.amount,
-            spend_key_x: *bundle.spend_key_x,
-            spend_key_y: *bundle.spend_key_y,
-            commitment_mask: *bundle.commitment_mask,
-            h_pqc: backing_h_pqc,
-            combined_ss: bundle.combined_ss.to_vec(),
-            output_index: backing_index,
-            leaf_chunk: msg.backing_path.leaf_chunk,
-            c1_layers: msg.backing_path.c1_layers,
-            c2_layers: msg.backing_path.c2_layers,
-        };
+        let backing_spend = parts.into_spend_input(
+            rec,
+            msg.backing_path.leaf_chunk,
+            msg.backing_path.c1_layers,
+            msg.backing_path.c2_layers,
+        );
 
         // ── Step 11: membership-only proof over the signable hash (CPU-
         // bound → spawn_blocking, SP-5 pattern). The backing secrets end in
@@ -2195,12 +2302,13 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             spend_inputs.push(p.spend);
             pqc_pubkeys.push(p.pqc_pubkey);
         }
-        let outputs_for_prove = output_infos.clone();
+        // `output_infos` and `vin` MOVE into the proving closure (no clones:
+        // neither is read again until the closure returns them).
+        let outputs_for_prove = output_infos;
         let tree = msg.tree_ctx.clone();
         let fee = msg.fee;
         let reward_term = InputTerm::new(AtomicUnits::from_raw(total_reward));
-        let vin_for_check = vin.clone();
-        let (signed, spend_inputs) = tokio::task::spawn_blocking(move || {
+        let (signed, spend_inputs, vin) = tokio::task::spawn_blocking(move || {
             let signed = sign_transaction_with_terms(
                 prefix_hash,
                 &spend_inputs,
@@ -2214,7 +2322,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             // Step-7 self-check, backing leg: the landed consensus verifier
             // over the assembled vin (cause-blind on refusal, CB-5).
             if let Err(e) = emission_vin_verify_backing(
-                &vin_for_check,
+                &vin,
                 &tree.tree_root,
                 tree.tree_depth,
                 signable_tx_hash,
@@ -2224,7 +2332,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
                     EmissionClaimError::SelfCheckFailed,
                 ));
             }
-            Ok((signed, spend_inputs))
+            Ok((signed, spend_inputs, vin))
         })
         .await
         .map_err(|e| BondAssemblyError::build("proving offload join", e))??;
@@ -2268,12 +2376,15 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             bulletproof,
             reference_block: signed.reference_block,
             fcmp_proof: signed.fcmp_proof,
+            // Placeholder auths at real pubkeys (the phase-1 payload hash
+            // reads them); the fee-slot pubkeys MOVE in — nothing reads
+            // `pqc_pubkeys` again (`sign_pqc_auths` re-derives per input).
             pqc_auths: pqc_pubkeys
-                .iter()
+                .into_iter()
                 .map(|pk| PqcAuth {
                     auth_version: 1,
                     signature: Vec::new(),
-                    public_key: pk.clone(),
+                    public_key: pk,
                 })
                 .chain(std::iter::once(PqcAuth {
                     auth_version: 1,
@@ -3880,6 +3991,7 @@ mod tests {
         fn designate_at(record: PFundingOutputRecord, anchor: u64) -> DesignatedBacking {
             BackingSet::from_spendable(
                 &[record],
+                0,
                 BlockHeight::from_raw(anchor),
                 BlockHeight::from_raw(0),
             )
@@ -3906,21 +4018,24 @@ mod tests {
         }
 
         /// Item 6, runtime half: a designation anchored at a height other
-        /// than the claim source's gather tip refuses as `StaleClaimAnchor`
+        /// than the claim source's gather **tip** (`chain_height − 1` — a
+        /// height, never the block count) refuses as `StaleClaimAnchor`
         /// (carrying both operands) before any derivation, proving, or
         /// funding work — the caller refetches both at one tip and retries.
+        /// The count itself is the classic off-by-one and must also refuse.
         #[tokio::test(flavor = "multi_thread")]
         async fn stale_claim_anchor_refuses_before_any_assembly() {
             let handle = spawn_over(&[0], &[], None);
-            let h = handle.mint_handle(PSlot(0)).await.expect("slot 0 held");
             let source = claimable_source();
-            let record = funding_record(0, 11, 5, 750_000, MintLineageOutput::BondPostChange);
+            let tip = source.chain_height - 1;
+            let record = || funding_record(0, 11, 5, 750_000, MintLineageOutput::BondPostChange);
 
+            let h = handle.mint_handle(PSlot(0)).await.expect("slot 0 held");
             let err = handle
                 .assemble_emission_claim(AssembleEmissionClaim {
                     handle: h,
                     source: source.clone(),
-                    backing: designate_at(record, source.chain_height + 1),
+                    backing: designate_at(record(), tip + 2),
                     backing_path: empty_path(),
                     fee_funding: vec![],
                     tree_ctx: placeholder_tree_ctx(),
@@ -3931,51 +4046,113 @@ mod tests {
             assert!(
                 matches!(
                     err,
-                    StakeEngineError::StaleClaimAnchor { anchor, tip }
-                        if anchor == source.chain_height + 1 && tip == source.chain_height
+                    StakeEngineError::StaleClaimAnchor { anchor, tip: t }
+                        if anchor == tip + 2 && t == tip
                 ),
                 "expected StaleClaimAnchor with both operands, got {err:?}"
             );
-        }
 
-        /// Fee inputs are structurally mandatory (the reward is fully
-        /// consumed by the loud vout, so a zero-input claim has no
-        /// pseudoOuts to fund a fee): the empty set refuses with
-        /// `available: 0`, and a present-but-short set refuses with the
-        /// actual shortfall — both before any proving work.
-        #[tokio::test(flavor = "multi_thread")]
-        async fn fee_funding_is_mandatory_and_shortfall_refuses() {
-            let handle = spawn_over(&[0], &[], None);
-            let source = claimable_source();
-            let tip = source.chain_height;
-            let backing = || funding_record(0, 11, 5, 750_000, MintLineageOutput::BondPostChange);
-
-            // Arm 1: zero fee inputs.
+            // The block COUNT as the anchor (the unit mismatch this check
+            // pins): one past the tip, must refuse — a count-anchored
+            // designation admits records one block early.
             let h = handle.mint_handle(PSlot(0)).await.expect("slot 0 held");
             let err = handle
                 .assemble_emission_claim(AssembleEmissionClaim {
                     handle: h,
                     source: source.clone(),
-                    backing: designate_at(backing(), tip),
+                    backing: designate_at(record(), source.chain_height),
                     backing_path: empty_path(),
                     fee_funding: vec![],
                     tree_ctx: placeholder_tree_ctx(),
-                    fee: 1_000,
+                    fee: 0,
                 })
                 .await
-                .expect_err("zero fee inputs must refuse");
+                .expect_err("the count-as-height anchor must refuse");
             assert!(
-                matches!(
-                    err,
-                    StakeEngineError::Assembly(BondAssemblyError::InsufficientFunding {
-                        available: 0,
-                        required: 1_000,
-                    })
-                ),
-                "expected InsufficientFunding(0/1000), got {err:?}"
+                matches!(err, StakeEngineError::StaleClaimAnchor { .. }),
+                "expected StaleClaimAnchor, got {err:?}"
             );
+        }
 
-            // Arm 2: fee inputs present but short of the fee.
+        /// Q11, runtime half: a fee set that contains the designated
+        /// backing's gindex refuses as `BackingInFeeSet` — the message
+        /// fields are freely constructible, so the `fee_sweep` monopoly
+        /// alone cannot bind THIS pairing, and no daemon would reject the
+        /// signed double-use (consensus is spend-blind for backing).
+        #[tokio::test(flavor = "multi_thread")]
+        async fn backing_in_fee_set_refuses() {
+            let handle = spawn_over(&[0], &[], None);
+            let h = handle.mint_handle(PSlot(0)).await.expect("slot 0 held");
+            let source = claimable_source();
+            let tip = source.chain_height - 1;
+            let backing = funding_record(0, 11, 5, 750_000, MintLineageOutput::BondPostChange);
+            let same_output = backing.clone();
+
+            let err = handle
+                .assemble_emission_claim(AssembleEmissionClaim {
+                    handle: h,
+                    source,
+                    backing: designate_at(backing, tip),
+                    backing_path: empty_path(),
+                    fee_funding: vec![FundingInputContext {
+                        record: same_output,
+                        leaf_chunk: vec![],
+                        c1_layers: vec![],
+                        c2_layers: vec![],
+                    }],
+                    tree_ctx: placeholder_tree_ctx(),
+                    fee: 0,
+                })
+                .await
+                .expect_err("the Q11 double-use must refuse");
+            assert!(
+                matches!(err, StakeEngineError::BackingInFeeSet { gindex: 11 }),
+                "expected BackingInFeeSet, got {err:?}"
+            );
+        }
+
+        /// Fee inputs are structurally mandatory (the reward is fully
+        /// consumed by the loud vout, so a zero-input claim has no
+        /// pseudoOuts to fund a fee): the empty set refuses with the
+        /// **structural** `ClaimFeeInputsRequired` — never a shortfall
+        /// (with `fee == 0` that would read `InsufficientFunding { 0, 0 }`,
+        /// a self-contradiction misdirecting the remedy) — and a
+        /// present-but-short set refuses with the actual shortfall. All
+        /// before any proving work.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn fee_funding_is_mandatory_and_shortfall_refuses() {
+            let handle = spawn_over(&[0], &[], None);
+            let source = claimable_source();
+            let tip = source.chain_height - 1;
+            let backing = || funding_record(0, 11, 5, 750_000, MintLineageOutput::BondPostChange);
+
+            // Arm 1: zero fee inputs — structural refusal, at fee 1 000 AND
+            // at fee 0 (the 0/0 shortfall trap the variant exists to avoid).
+            for fee in [1_000u64, 0] {
+                let h = handle.mint_handle(PSlot(0)).await.expect("slot 0 held");
+                let err = handle
+                    .assemble_emission_claim(AssembleEmissionClaim {
+                        handle: h,
+                        source: source.clone(),
+                        backing: designate_at(backing(), tip),
+                        backing_path: empty_path(),
+                        fee_funding: vec![],
+                        tree_ctx: placeholder_tree_ctx(),
+                        fee,
+                    })
+                    .await
+                    .expect_err("zero fee inputs must refuse");
+                assert!(
+                    matches!(
+                        err,
+                        StakeEngineError::ClaimFeeInputsRequired { fee: f } if f == fee
+                    ),
+                    "expected ClaimFeeInputsRequired at fee {fee}, got {err:?}"
+                );
+            }
+
+            // Arm 2: fee inputs present but short of the fee — a genuine
+            // shortfall, so `InsufficientFunding` is the right taxonomy.
             let h = handle.mint_handle(PSlot(0)).await.expect("slot 0 held");
             let short = funding_record(0, 22, 6, 400, MintLineageOutput::ExternalTransfer);
             let err = handle
@@ -4035,7 +4212,7 @@ mod tests {
             let h = handle.mint_handle(PSlot(0)).await.expect("slot 0 held");
             let keys = derive_bundle(0);
             let source = claimable_source();
-            let tip = source.chain_height;
+            let tip = source.chain_height - 1;
 
             // Two real P-paid outputs in ONE leaf chunk — the backing
             // (rung-2 lineage) and the fee spend (rung 3) — under one
