@@ -945,7 +945,21 @@ fn print_partition_adversary_report() {
     eprintln!("  RIDERS STATUS: {}", riders.status);
     eprintln!();
 
-    match serde_json::to_string_pretty(&(&report, &graded, &riders)) {
+    // Named-field envelope, not a tuple: a bare 3-array is not
+    // self-describing, and every other report on this binary serializes a
+    // keyed object — downstream parsers should never have to know positions.
+    #[derive(serde::Serialize)]
+    struct PartitionAdversaryArtifact<'a> {
+        gating_witness: &'a partition_adversary::GatingWitnessReport,
+        graded_arm: &'a partition_adversary::PartitionReport,
+        riders: &'a riders::RidersReport,
+    }
+    let artifact = PartitionAdversaryArtifact {
+        gating_witness: &report,
+        graded_arm: &graded,
+        riders: &riders,
+    };
+    match serde_json::to_string_pretty(&artifact) {
         Ok(json) => println!("{json}"),
         Err(e) => eprintln!("error serializing partition-adversary report: {e}"),
     }
