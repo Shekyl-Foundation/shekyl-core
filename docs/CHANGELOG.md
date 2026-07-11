@@ -53,52 +53,6 @@
     surface; re-anchored V3.1). PR 4 (regtest e2e + the Q11
     blob-boundary arm, both named in the §8 PR-4 scope row) is the
     chain's only open item, gated on #281.
-  - **review round (high `/code-review` + Copilot, all findings
-    fixed):** backing designation is now **slot-filtered inside
-    `BackingSet::from_spendable`** (the all-slot `funding_outputs`
-    union could designate a foreign slot's newer record — a rotation
-    overlap left the claimant persona deterministically unable to
-    claim, its key re-derivation failing the leaf gate every attempt);
-    the designation/sweep spendability anchor and the handler's
-    same-tip operand are the gather **tip** (`chain_height − 1`), never
-    the block count (the count admitted records one block early and
-    reported a not-yet-existing height in `InsufficientBacking`); the
-    wire's context-free validator gained the C++ `check_money_overflow`
-    parity sum for loud vout amounts (vacuous until the emission arm
-    legitimized them); the §7.4 transport pin is **structural** — the
-    orchestrator's transport parameter is bounded on the new
-    `PersonaIsolatedTransport` marker (implemented by `PRpc`; the
-    principal's `DaemonClient` is a compile error, closing the doc-only
-    deferral); the handler re-verifies the Q11 backing∉fee-set pairing
-    at its boundary (`BackingInFeeSet` — consensus is spend-blind for
-    backing, so a mispaired message would sign an undetectable
-    double-use); an empty fee set refuses with the structural
-    `ClaimFeeInputsRequired` instead of the self-contradictory
-    `InsufficientFunding { 0, 0 }`; the membership-only prover enforces
-    exactly-one pseudo-out. Structure: the two-sided reference gate is
-    single-sourced (`shekyl_curve_tree::two_sided_reference_height`,
-    consumed by the transfer re-anchor and the claim orchestrator); the
-    backing leg re-derives through the same `derive_spend_parts` as the
-    fee spends; one output-construction loop
-    (`construct_vouts_to_base`) and one `SpendInput → ProveInput`
-    conversion serve bond + claim paths; the P-scan rung-1 classifier
-    is **lazy and memoized per tx** (an eager pre-pass parsed every
-    emission vin on chain — full-scan cost would have scaled with
-    chain-wide claim volume); one test-side wire encoder
-    (`emission_claim::test_fixtures::source_json`, epee omit-empty
-    faithful) feeds the decode tests and the orchestrator e2e; the
-    fetch and ingested-tip awaits are joined; dead/duplicate clones and
-    the `&[0, 0]` output-amounts literal are gone. Follow-through: the
-    count/height unit family got its type —
-    `shekyl_types::ChainCount` (the daemon's `db.height()` operand)
-    with the two named bridges `tip()` / `next_height()`;
-    `EmissionClaimSource.chain_height` and `SubmitFacts.chain_height`
-    (a documented count previously stored in a `BlockHeight`) adopt
-    it, so laundering a count into a height no longer compiles. The
-    `SweptFeeInputs` designation witness (subsuming the
-    `StaleClaimAnchor`/`BackingInFeeSet` runtime pair) is a named
-    item on the CB-3 dispatch seam (`EMISSION_CLAIM_BUILDER.md` §8
-    PR-3 review record, rule-22 form with reopening criteria).
 - **sim: leg-(b) wall-clock sweep-phase arm graded in-model
   (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §19; WI-3 §3.2 part 3; WI-4
   reconvergence leg (b)).** The §13.3 closing requirement — sub-block
