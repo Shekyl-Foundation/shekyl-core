@@ -1182,29 +1182,23 @@ fn fiedler_bipartition(trial: &Trial, members: &[usize]) -> Vec<bool> {
     }
     // Top eigenvector v1 ≈ D^{1/2}·1 (trivial); power-iterate then deflate.
     let v1 = power_iter(&a_mat, None);
-    let lam1 = rayleigh(&a_mat, &v1);
-    let v2 = power_iter(&a_mat, Some((&v1, lam1)));
+    let v2 = power_iter(&a_mat, Some(&v1));
     // Fiedler = D^{-1/2} v2; sign gives the cut.
     (0..m).map(|i| v2[i] / deg[i].sqrt() >= 0.0).collect()
 }
 
-/// Rayleigh quotient `vᵀ A v` for a unit vector `v`.
-fn rayleigh(a: &[Vec<f64>], v: &[f64]) -> f64 {
-    let m = v.len();
-    let mut s = 0.0;
-    for i in 0..m {
-        let mut row = 0.0;
-        for j in 0..m {
-            row += a[i][j] * v[j];
-        }
-        s += v[i] * row;
-    }
-    s
-}
-
-/// Power iteration for the dominant eigenvector; if `deflate = Some((v1, λ1))`,
-/// iterate on `A − λ1·v1 v1ᵀ` to recover the second eigenvector.
-fn power_iter(a: &[Vec<f64>], deflate: Option<(&[f64], f64)>) -> Vec<f64> {
+/// Power iteration for the dominant eigenvector; if `deflate = Some(v1)`,
+/// project the iterate off `v1` after every multiply (`v ← (I − v1 v1ᵀ)·A·v`),
+/// recovering the second eigenvector of a symmetric `A`.
+///
+/// Projection deflation is chosen over the Hotelling form
+/// `(A − λ1·v1 v1ᵀ)·v`: it annihilates the `v1` component exactly at every
+/// step with no dependence on an *estimated* `λ1`, so a Rayleigh-quotient
+/// error in `λ1` (or a matrix whose top eigenvalue is not 1) can never leak
+/// `v1` back into the iterate. (PR #291 review: the previous Hotelling-form
+/// code deflated with the wrong dot product — masked here only because the
+/// normalized affinity's `λ1` is exactly 1.)
+fn power_iter(a: &[Vec<f64>], deflate: Option<&[f64]>) -> Vec<f64> {
     let m = a.len();
     let mut v = vec![1.0 / (m as f64).sqrt(); m];
     // Perturb so a symmetric start does not sit on a node of the target mode.
@@ -1220,10 +1214,10 @@ fn power_iter(a: &[Vec<f64>], deflate: Option<(&[f64], f64)>) -> Vec<f64> {
             }
             nv[i] = s;
         }
-        if let Some((v1, lam1)) = deflate {
+        if let Some(v1) = deflate {
             let dot: f64 = nv.iter().zip(v1.iter()).map(|(x, y)| x * y).sum();
-            for i in 0..m {
-                nv[i] -= lam1 * dot * v1[i];
+            for (x, &y) in nv.iter_mut().zip(v1.iter()) {
+                *x -= dot * y;
             }
         }
         let norm = nv.iter().map(|x| x * x).sum::<f64>().sqrt();
