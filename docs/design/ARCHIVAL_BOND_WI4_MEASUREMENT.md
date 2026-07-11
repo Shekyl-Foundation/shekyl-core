@@ -1216,6 +1216,30 @@ the null distribution then models.
      separately).
   3. All bounds must hold or the partition measurement is **INVALID**
      (same all-or-nothing shape as §5's controls).
+
+  > **Pinned question (implementation round, 2026-07-11 — a material
+  > under-specification surfaced by the first graded run; pinned, not
+  > improvised around).** Bound 2 reads `T` — the **family max** — but
+  > two of the five controls are single-member-targeted by their own
+  > §14.4 construction, and for those the family-max statistic cannot
+  > reach `+0.30` at `N = 10`, `M = 5` for structural reasons the spec
+  > itself mandates: **M-b** perturbs one founder of `M`, so any rule's
+  > founder-set-overlap gain is bounded near `1/M = 0.20` before the
+  > selection-inflated permutation null is even subtracted; **M-d**'s
+  > founders are *mutually dissimilar by construction* (the property
+  > that keeps members 1–5 at chance — measured max members-1–5 lift
+  > `+0.03`), so no whole-set structure exists for the max to seize,
+  > while member 6 — the aimed detector — lifts `+0.13` over its own
+  > null, exactly the specified bite direction. The whole-set controls
+  > (M-a `+0.38`, M-c `+0.36`, M-e `+0.32`) clear bound 2 as written,
+  > and the deployed posture holds bound 1 (`−0.005`). Disposition
+  > options for the design decision: (a) grade single-member-targeted
+  > controls on their **aimed member's own-null lift** (a per-member
+  > bite bound, same `+0.30` figure); or (b) respecify bound 2 as
+  > per-aimed-member for all five controls. Until decided, the run
+  > reports **INVALID-with-pins** (bound 3 as written), never a
+  > silent pass; the measured record lives in
+  > `shekyl-staking-sim --partition-adversary`.
 - **The gating lemma (a-priori deliverable of the implementation round;
   committed before any sweep grades — same provenance rule as the §3.2
   thresholds).** *An absolute upper bound on the probability that `M`
@@ -1338,6 +1362,25 @@ bearing the window's exposure consented permanently* (P4).
 
 Implementation of §14.4 is the next round, **gated on review of this
 section** — the same spec-first checkpoint the main gate ran on.
+
+> **UPDATE 2026-07-11 (implementation round, first slice landed —
+> `feat/sim-partition-adversary`, `shekyl-staking-sim`):** the two
+> co-first deliverables committed before any sweep grades (gating lemma
+> `M·((c+1)/(W+1))^{M−1} = 3.5393e-5` at the launch geometry, code
+> derivation + exact-CDF domination test; witness-typed controls —
+> `ControlWitness` a distinct type with no constructor or `From` bridge
+> from the production `FounderConfig`, compile-time un-constructible per
+> §17.7 finding 4). Family members 1–7, the named feature dictionary,
+> the max-statistic `T` with its permutation null, and controls M-a…M-e
+> are implemented and graded (`--partition-adversary`): deployed bound 1
+> holds; whole-set controls clear bound 2; the single-member-targeted
+> controls surface the pinned bound-2 question above. Riders landed in
+> the same round: §16.7 N-sweep (`r < 2` at every swept `N`; measured
+> `r` falls with `N`), the M6.2 coupling control (blind@window-0
+> `0.231` ≥ `2/N`), §18.3-narrowed bridge grading (deployed at null,
+> coupled control bites), and the §18.4 lifetime-accumulation sweep
+> (founder anchor visible at cumulative ≈ 1.0). Out of this slice per
+> the round's scope: leg-(b) wall-clock emission, M4/M5/M7, GF-4.
 
 ## 15. Addendum (2026-07-06): the remote-daemon posture — refuse, not accept
 

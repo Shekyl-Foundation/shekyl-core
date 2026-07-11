@@ -8421,6 +8421,30 @@ one place to confirm each item's relationship to the wallet stack.
   a construction defeating **both** the categorical rule and the substrate's own
   decorrelation (epoch quantization + cooldown headroom): the real-work bar, not
   lens restatement.
+  **§14.4 implementation round, first slice LANDED (2026-07-11,
+  `feat/sim-partition-adversary`, `shekyl-staking-sim/src/partition_adversary.rs` +
+  `riders.rs`):** co-first deliverables committed before any sweep grades — the gating
+  lemma (`M·((c+1)/(W+1))^{M−1} = 3.5393e-5` at `M=5, c=30, W=600`; exact-CDF domination
+  test) and compile-time witness-typed controls (`ControlWitness` distinct from the
+  production `FounderConfig`, no constructor/`From` bridge — §17.7 finding 4 shape).
+  Family members 1–7 + named feature dictionary + max-statistic `T` + permutation null +
+  controls M-a…M-e graded at `N=10`, 200×200: deployed bound 1 holds (`−0.005`);
+  whole-set controls clear bound 2 (M-a `+0.38`, M-c `+0.36`, M-e `+0.32`, aimed-member
+  lifts `+0.46/+0.65/+0.62`); the two single-member-targeted controls (M-b, M-d) surface
+  a **pinned bound-2 under-specification** (family-max `T` structurally cannot lift
+  `+0.30` for a one-of-M perturbation or a mutually-dissimilar cohort; M-d's members 1–5
+  stay at chance with member 6 the only biting detector, exactly as specified) — pinned
+  in §14.4 with two disposition options (per-aimed-member grading), run reports
+  INVALID-with-pins per bound 3, never a silent pass. **Riders landed same slice:**
+  §16.7 N-sweep (`r < 2` at every `N ∈ {10,20,50}`; measured `r` falls with `N` —
+  no small-candidate-set artifact), M6.2 coupling control (blind@window-0 `0.231` ≥
+  `2/N = 0.200`; the doc's `0.237` reference reproduced), §18.3-as-narrowed-by-§18.8
+  attribute-bridge grading (deployed `|corr| 0.110` at null `0.115`; coupled positive
+  control `0.985` bites), §18.4 lifetime-accumulation sweep (per-post `p = 0.176`
+  compounding to ≈`1.0` at the 52-event founder anchor). **Open on this arm:** the
+  §14.4 bound-2 disposition decision (doc pin, pre-genesis — gates the arm's verdict
+  flipping from INVALID-with-pins to a gradeable PASS/FAIL, which `K_COVER` sealing
+  consumes); leg-(b) wall-clock emission (separate item below).
   **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
   GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
   seams, not just entry).**
