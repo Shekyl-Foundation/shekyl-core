@@ -8162,7 +8162,7 @@ one place to confirm each item's relationship to the wallet stack.
   adversarial read of the bounds themselves (is `r < 2` honest under the 1.86 panel; is
   the widened null the adversary's class or a subset; does the `K_COVER` derivation
   circle through the arm it gates), not a consistency rubber stamp.
-  **Review-closure round R1 conducted (2026-07-06, §17; ratification pending):** all
+  **Review-closure round R1 conducted (2026-07-06, §17; ratified 2026-07-10, see R4 below):** all
   three §16.10 attacks run to land. Attack 1 — the `r < 2` bar survives (claim-anchored,
   observer-independent) but the *measured* `r(N)`'s N-invariance is unswept: **N-sweep
   added** (§16.7 item 4, `N ∈ {10, 20, 50}`, `r < 2` at every swept `N`, a-priori).
@@ -8194,8 +8194,8 @@ one place to confirm each item's relationship to the wallet stack.
   (exchangeability makes it per-persona in-model; the untargeted reading was conceded at
   the floor) but forces the §3.2 pin naming exchangeability as the load-bearing step and
   regime-splitting as the mean-to-max lift in deployment (the discipline that already
-  surfaced cold-start as a fail rather than averaging it in). §17 closure now requires
-  §§17.1–17.5 ratified together.
+  surfaced cold-start as a fail rather than averaging it in). §17 closure requirement
+  discharged 2026-07-10: §§17.1–17.6 ratified together (see R4 below).
   **Distinct-position round R3 conducted (2026-07-06, §18):** the mean-vs-max
   disposition is sound but incomplete — it captured the max for the axis it split on
   (activity) and assumed the heterogeneity enumeration complete. Five surfaces
@@ -8319,6 +8319,108 @@ one place to confirm each item's relationship to the wallet stack.
   chain-only adversary sees nothing by construction; the three boundary classes are the
   irreducible on-ramp witness, the network default (ours until flipped), and the
   enumerated mistake set (closed by safe-by-default coverage, §18.12 pin as template).
+  **Distinct-position round R4 conducted + ratification (2026-07-10, §17.6):** the
+  §16.10 questions 2 and 3 adjudicated — six constructions (four landed, two failed,
+  no bound moves), six reviewer findings landed in place. Family grows to **seven members**
+  (member 6 joint-density isolation vs correlation-breaking founders; member 7
+  most-regular-subset vs enforced staggering) and **five controls** (M-d, M-e added; all
+  five **witness-typed** — un-instantiable as production founder configs, PF-2
+  precedent). **P2 reworded** (staggering is statistical, via P1's i.i.d. draws — any
+  enforcement mechanism is a detectable repulsion signature) with three companion
+  premises: timing-law `K`-invariance, count `K`-independence, and the **persistence
+  commitment** (founder bonds active through gate-open; verified at source that offline
+  forfeiture and slashing are involuntary removal paths — breach is a cover-model
+  re-run trigger; withdrawn at R7, below). **Gating lemma named** (§14.4): an a-priori absolute bound on i.i.d.
+  founder-clustering probability, no user-cohort reliance — the first deliverable of
+  the implementation round, committed before any sweep grades; cited by both the P2
+  no-mechanism disposition and the strip-row floor. **Strip row elevated to primary**
+  at gate-open (worst-case zero-pre-gate-cover floor; P3 de-load-borne). **Cohort
+  dynamics row sharpened** (monotone floor only; non-existence behavior named —
+  posture redesign pre-genesis, never a degraded open). **Axis completeness recorded**
+  (timing family ∪ loud-but-constant amount ∪ SP-T isolation; founder-tier residual
+  named on the holdings stratum). **§§14–16 CLOSED; the §14.4 implementation round is
+  released**, carrying the two pinned premises (floor persistence — later withdrawn
+  at R7, below; count `K`-independence) with reopen criteria to re-check before Gate 7
+  discharges `K_COVER`.
+  **Round R5 conducted (2026-07-10, §17.7):** the standing review's pass against the R4
+  landing itself — four findings, all instances of the §17.6-head lens (structural,
+  generator-invisible channels), nothing closed reopens. Finding 1: the §18.9 tier
+  residual promoted from rider-graded config requirement to a **named structural
+  channel** — satisfiability verified at source (`bond_floor` is
+  `ARCHIVAL_BOND_FLOOR_ATOMIC × shard_count`, a persona-side shard-descriptor choice,
+  never treasury wealth — the forced-tier trap refuted; R4's "foundation-scale
+  holdings" wording corrected), per-channel strip-row zero-cover floor at gate-open,
+  gating-lemma citation. Finding 2: the monotone floor is a **snapshot by
+  construction** — the M1 gate reads `frozen_shard_count < K_COVER` only (one site,
+  never live bond state; `K_COVER` genesis-frozen), so the TOCTOU window is the entire
+  pre-gate chain life; challenges are honest-server-unfailable beacon replays but
+  **off-chain DoS around challenge windows induces forfeiture** ⇒ the calibration must
+  carry an **a-priori thinning margin** above the induced-forfeiture adversary
+  (restoration lag = cooldown + re-bond), lemma-discipline-derived. Finding 3: premise
+  2's OR struck — fixed pre-gate schedule is the gate-open condition; the
+  i.i.d.-re-bonding disjunct only holds where a user cohort exists. Finding 4: the
+  control witness type is a **co-first-deliverable** with the gating lemma;
+  first slice closes only when control configs are compile-time un-constructible from
+  the production founder-config constructor.
+  **Round R6 conducted (2026-07-10, §17.8) — §17 CLOSED:** the standing review's third
+  pass, against the R5 landing; three findings, all derived from R5's own admissions
+  (convergence shape: 6 → 4 → 3). Finding 1 (high): the R5 thinning margin was sized
+  for the **transient** (restoration-lag) window, but the trigger quantity is
+  cumulative and the calibrated property is live — verified at source that
+  `frozen_segment_count(leaf_count)` has **no bond-exit decrement path**
+  (`segment_freeze.rs:71`; sole decrement is the `pop_block` reorg revert), so
+  permanent attrition (voluntary unbond, key/infra loss, abandonment, unremediated
+  slash) diverges the two for the entire pre-gate life. The derive-don't-cache
+  exception is recorded as **deliberate** — a live-cover gate input is the M2
+  flood-then-withdraw DoS sensor (§16.3), refused on priority 1, so the margin is the
+  gate's load-bearing element by design. Landed: P2's persistence commitment reshaped
+  to a **maintenance commitment** (live cover ≥ floor through gate-open; attrited
+  personas replaced within a named lag; replacements join the same tenure class); the
+  margin re-derived against **max attrition within the detection + replacement lag**;
+  maintenance breach named the **irreducible post-genesis residual** (no consensus
+  lever without re-arming the M2 sensor; monitored off-chain, priced in the record).
+  Finding 2 (medium-high): thickness-reachability must run against the **union of
+  per-channel floors** with non-existence armed per channel, and the descriptor
+  channel carries a **profile-commonality check** — a cover-mission-forced-distinctive
+  founder profile is a positive fingerprint no `K` can herd, classifying
+  fingerprint-not-zero-cover and routing to redesign, never a larger `K`. Finding 3
+  (wording pin): "fixed pre-gate schedule" fixes **{count, completion-before-gate}
+  only** — inter-post timing stays P1's i.i.d. draw; a schedule-fixes-times reading
+  would manufacture member 7's repulsion signature on founders (interlock recorded).
+  **Round R7 conducted (2026-07-11, §17.9) — R6's landing reopened and §17 RE-CLOSED,
+  load-bearing:** the R6 maintenance commitment was a **ratified founder-differential
+  mechanism** produced by a category error — "founder" was carrying two referents, the
+  anonymous founder-user population (market members who accrue and claim, §14.3.4) and
+  the **Foundation backstop** (E-2/gate-5 object: complete tree, one nominal floor
+  bond, excluded from `Market`, reward-invisible — verified at source,
+  `consensus_state.rs` / `REWARD_EMISSION_LEG.md` §4.2 / `ARCHIVAL_BOND_GATE4.md`
+  §8.1; zero accrual severs it from the privacy model, so its persistence is
+  infrastructure, never an observable against the herd). Landed: §14-head
+  **terminology pin** (three referents, three tokens — founder persona / Foundation
+  backstop / founding operators; operator usages scrubbed). P2 premise 3 **withdrawn**
+  on two independent sufficient grounds: (1) categorical — any founder-unique
+  obligation is differential conduct in a system whose thesis is founders-are-users;
+  (2) fails-in-its-own-design-case — the obligation's coupling is masked only by
+  population flow, thinnest exactly when the floor is load-bearing (Q3-A). An
+  exit-correlated-posting channel claimed en route was **refuted at source and
+  withdrawn** (epoch-quantized entry, `RELEASE_COOLDOWN_EPOCHS = 2` with pinned
+  "Unbond decorrelation headroom", no repost mechanism — population flow, not
+  trigger-response), so the reopen rests on the stronger categorical trigger, not the
+  recorded new-channel criterion. Finding 1 re-homed a third and final time:
+  **population-level churn calibration** over the whole anonymous pre-gate herd,
+  margin derived against **adversarial max net attrition over the full pre-gate
+  window** (the inducible-forfeiture adversary, more in scope with no replacement
+  backstop) — never expected churn; no founder obligation; no live sensor; M2 intact.
+  Q3-B re-seated on the same basis (guaranteed floor dissolves; population statistics
+  all the way down; premises 1–2 survive as one-shot plans).
+  **Final Gate-7 gates (superseding R6's formulation): `K_COVER` does not discharge
+  until (a) the margin is derived against adversarial max net attrition over the full
+  pre-gate window and carried in the calibration record, and (b) the reachability
+  check has run against the union of per-channel floors including the descriptor
+  channel's classification.** §17 reopens only against the §17.9 termination bar —
+  a construction defeating **both** the categorical rule and the substrate's own
+  decorrelation (epoch quantization + cooldown headroom): the real-work bar, not
+  lens restatement.
   **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
   GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
   seams, not just entry).**

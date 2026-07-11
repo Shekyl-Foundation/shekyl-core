@@ -4,6 +4,79 @@
 
 ### Added
 
+- **docs: WI-4/GF-7 review-closure ratified — distinct-position round R4
+  lands §17.6 (`ARCHIVAL_BOND_WI4_MEASUREMENT.md`).** The §16.10
+  questions 2 (partition-family completeness) and 3 (`K_COVER` cycle
+  break) adjudicated by the standing review: six constructions (four
+  landed, two failed, no bound moves), six premise-strengthening
+  findings.
+  §14.4 family grows to seven members (joint-density isolation;
+  most-regular-subset repulsion detector) and five witness-typed
+  controls (M-d correlation-breaking, M-e repulsed/scheduled); a named
+  a-priori **gating lemma** (absolute i.i.d. founder-clustering bound,
+  no user-cohort reliance) becomes the implementation round's first
+  deliverable. P2 reworded (statistical staggering only) with three
+  companion premises (timing-law `K`-invariance, count
+  `K`-independence, founder-bond persistence — lifecycle-verified:
+  offline forfeiture and slashing are involuntary removal paths;
+  the persistence premise is withdrawn at R7, below). §16.2
+  obligation 3: strip row elevated to primary at gate-open (worst-case
+  zero-pre-gate-cover floor, P3 de-load-borne); cohort-dynamics row
+  rests on the monotone floor with named non-existence behavior. Axis
+  completeness recorded (timing ∪ loud-but-constant amount ∪ SP-T
+  isolation; founder-tier residual named). **§§17.1–17.6 ratified
+  together (2026-07-10); §§14–16 closed; the §14.4 implementation
+  round is released.** Trackers updated (`FOLLOWUPS.md` WI-4 entry,
+  `IMPLEMENTATION_INDEX.md` WI-4 row). Round R5 (§17.7, same day)
+  adjudicated the R4 landing itself under the §17.6-head lens
+  (structural, generator-invisible channels): tier residual promoted
+  to a named channel with per-channel strip floor (`bond_floor`
+  satisfiability verified at source — shard-descriptor choice, never
+  treasury wealth); monotone floor recorded snapshot-by-construction
+  (gate reads `frozen_shard_count` only) with an a-priori
+  induced-forfeiture thinning margin required; premise-2 OR struck
+  (fixed pre-gate schedule only at gate-open); control witness type a
+  compile-time co-first-deliverable. Round R6 (§17.8, same day)
+  adjudicated the R5 landing and **closed §17**: the R5 thinning
+  margin was sized for the transient (restoration-lag) window while
+  the cumulative-trigger/live-property divergence is permanent —
+  verified at source that `frozen_segment_count` has no bond-exit
+  decrement path (`segment_freeze.rs`), the derive-don't-cache
+  exception recorded as deliberate (a live-cover sensor is the M2
+  flood-then-withdraw DoS surface), P2's persistence commitment
+  reshaped to a **maintenance commitment** (replace attrited personas
+  within a named lag), the margin re-derived against the
+  detection-plus-replacement window, and maintenance breach named as
+  the irreducible post-genesis residual. Thickness-reachability now
+  runs against the union of per-channel floors with a
+  **profile-commonality check** on the descriptor channel
+  (fingerprint-not-zero-cover routes to redesign, never larger `K`);
+  "fixed pre-gate schedule" pinned to {count, completion-before-gate}
+  only (a schedule-fixes-times reading would manufacture member 7's
+  repulsion signature). Round R7 (§17.9, 2026-07-11) reopened R6's
+  landing and **re-closed §17 load-bearing**: the maintenance
+  commitment was a ratified founder-differential mechanism produced
+  by a category error — "founder" carried two referents, the
+  anonymous founder-user population and the consensus-mechanized
+  **Foundation backstop** (reward-invisible, Market-excluded;
+  verified at source) — resolved by a §14-head terminology pin
+  (three referents, three tokens; operator usages scrubbed). The
+  commitment is withdrawn on two independent grounds (categorical:
+  founders are users and owe no continuity; anti-masking: the
+  obligation's coupling is masked only by population flow, thinnest
+  exactly when the floor is load-bearing). A claimed
+  exit-correlated-posting channel was refuted at source
+  (epoch-quantized entry, `RELEASE_COOLDOWN_EPOCHS = 2` decorrelation
+  headroom, no repost mechanism) and withdrawn. Finding 1 re-homed to
+  population-level churn calibration: the §16.2 margin derives
+  against **adversarial max net attrition over the full pre-gate
+  window** (never expected churn); Q3-B re-seated on the same
+  statistical basis. **Final Gate-7 gates are §17.9's**
+  (adversarial-max-attrition margin; per-channel reachability); §17
+  reopens only against the termination bar — a construction
+  defeating both the categorical rule and the substrate's
+  decorrelation.
+
 - **daemon RPC: Axum now enforces `--rpc-max-connections*` + reports a live
   `rpc_connections_count`.** A purpose-built Rust connection layer
   (`shekyl-daemon-rpc::conn_limit`: `LimitedListener` + `ConnTracker` over
