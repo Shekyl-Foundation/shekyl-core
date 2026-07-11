@@ -252,8 +252,11 @@ const _: () = assert!(
 /// Builder refusals (CB-5 taxonomy, the arms this module constructs).
 ///
 /// Staged completeness (§8 / rule 15 — no dead variants):
-/// `InsufficientBacking` lands with its constructor site, PR 3's
-/// `BackingSet` selection.
+/// `InsufficientBacking` landed with its constructor site — the
+/// designated-backing selector (`backing_set::InsufficientBacking`,
+/// refused by `BackingSet::designate_backing` on an empty set) — as its
+/// own refusal type rather than a variant here: it is a selection-time
+/// refusal, upstream of claim gathering.
 // Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the call
 // site is PR-3's `StakeEngine` claim handler; this allow is deleted there.
 #[allow(dead_code)]

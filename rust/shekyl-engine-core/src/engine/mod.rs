@@ -189,11 +189,13 @@ pub(crate) mod curve_tree_decode;
 // Native `ScannableBlock` fetch over the `shekyl-wire` parse — the engine-side
 // replacement for the legacy `shekyl_rpc_client::Rpc::get_scannable_block_by_*` path.
 // Backs `DaemonEngine::fetch_scannable_block`'s default impl.
-/// GF-4b (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.4): the `BackingSet`
-/// constructor-mint gate — the sole enforcement layer for backing-lineage
-/// eligibility (consensus is lineage-blind and spend-blind for backing).
-/// The C-1 designated-backing selector consumes candidates exclusively
-/// through it.
+/// GF-4b (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.4, §5 item 1): the
+/// `BackingSet` constructor-mint gate — the sole enforcement layer for
+/// backing-lineage eligibility (consensus is lineage-blind and spend-blind
+/// for backing) — and the C-1 designated-backing selector
+/// (`designate_backing`, most-recent-eligible, arity-1), which consumes
+/// candidates exclusively through it and owns the Q11 fee-exclusion
+/// (`DesignatedBacking::fee_sweep`).
 pub(crate) mod backing_set;
 pub(crate) mod block_fetch;
 /// WI-2 (`ARCHIVAL_BOND_WI2_ASSEMBLY.md`): production bond assembly — the
