@@ -343,7 +343,8 @@ pub struct GatingWitnessReport {
     pub cluster_span_blocks: u64,
     /// `w` (production entry-gap window, blocks).
     pub entry_gap_window: u64,
-    /// The committed a-priori bound `m·(c/w)^(m−1)`.
+    /// The committed a-priori bound `m·((c+1)/(w+1))^(m−1)` (the discrete
+    /// inclusive-endpoint form — see [`gating_lemma_bound`]'s derivation).
     pub gating_lemma_bound: f64,
     /// The tight range CDF (reported for slack visibility, not committed).
     pub gating_lemma_exact: f64,
