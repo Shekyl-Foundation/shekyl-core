@@ -879,6 +879,35 @@ it (§3.3's review-decision clause, exercised):
   (the §6 trap shape, at launch, on the most-watched blocks of the chain);
   five bonds staggered are five independent contributions to cover. The
   intermittency is decorrelation work, not load spreading.
+  *Amended at distinct-position round R4 (2026-07-10, §17.6 Q2-B):*
+  staggering is achieved **statistically, by P1's i.i.d. production
+  entry-gap draws themselves** — never by scheduling, coordination, or
+  proximity re-draws. As originally written, P2 was jointly unsatisfiable
+  with P1: enforcing "never clustered" over i.i.d. draws requires a
+  mechanism, and any such mechanism makes the founder set a repulsive
+  point process — a signature as detectable as the clustering it
+  prevents (family member 7 / control M-e exist to arm exactly this).
+  The residual same-block risk under i.i.d. draws is priced by the
+  §14.4 **gating lemma** (a-priori absolute-clustering bound, no
+  user-cohort reliance — §17.6 finding 1), not asserted. Three companion
+  premises are pinned here because §17.3's cycle-break and §16.2's
+  monotone floor consume them:
+  1. *Timing-law `K`-invariance* — founder entry gaps are production
+     draws, never parameterized by the launch-window length (which is
+     `f(K_COVER)`); closes §17.6 Q3-C's smuggled-`K`-dependence channel.
+  2. *Count `K`-independence* — the observed founder post count at
+     gate-open must not be `f(time-to-gate)`: either a fixed pre-gate
+     schedule completed before any candidate gate height, or re-bonding
+     that is itself production-i.i.d. and count-exchangeable.
+  3. *Persistence commitment* — founder genesis bonds remain **active
+     through gate-open**: serving (no forfeiture-triggering offline
+     burst), unslashed, un-exited. Verified against the lifecycle
+     substrate (`PRINCIPAL_STAKE_LIFECYCLE.md`): unbond is
+     voluntary-only, but offline forfeiture and slashing are
+     involuntary removal paths, so persistence is a **posture
+     commitment, not a structural fact**. Any founder bond
+     exit/forfeit/slash pre-gate is a named cover-model re-run trigger
+     (§16.2 obligation 3's monotone floor rests on this commitment).
 - **P3 — The shard schedule is the structural gate.** Privacy-critical
   staking is **not available** — not merely not-incentivized — until the
   cover threshold is met. "No reason to stake early" leaves an over-eager
@@ -983,7 +1012,7 @@ are retroactively enumerated — the stripped number is the durability
 floor, and the M1 review decides how much reliance on non-enumeration
 the constant is allowed to price in.
 
-### 14.4 The partition-adversary arm (pre-committed spec; hypothesis class widened 2026-07-06, pre-implementation)
+### 14.4 The partition-adversary arm (pre-committed spec; hypothesis class widened 2026-07-06 and 2026-07-10, pre-implementation)
 
 A new correlator probe in the GF-7 sim, gating the launch-posture claim
 the way §5's controls gate the run. **Bounds committed here, ahead of
@@ -1046,6 +1075,26 @@ the null distribution then models.
      covers, and it is the on-ramp to the §14.3.4 enumeration collapse
      — the arm must show one leaked label does not unravel the rest.
      Calibration: permutation over the **non-seed** labels only.
+  6. *Top-`M` by joint-density isolation* — *added at distinct-position
+     round R4 (2026-07-10, §17.6 Q2-A)*: rank pairs by isolation in the
+     **joint** feature space (k-NN distance over the full dictionary);
+     take the top-`M` set; score its overlap with the founder set. The
+     multivariate generalization of member 2: catches
+     **correlation-breaking** founders — every marginal in-range, the
+     combinations out-of-support (the shared-ops-tool shape: plausible
+     values in implausible pairings). Members 1–5 all miss it: no
+     marginal outlier (2), no mutual similarity (3 — the points can be
+     mutually *dissimilar*), no compact or graph-cut cluster (1/4), and
+     seeding (5) finds neighbors the shape does not have.
+  7. *Most-regular-subset enumeration (repulsion detector)* — *added at
+     R4 (§17.6 Q2-B)*: over `M`-subsets, score **spacing regularity**
+     (suppressed small gaps; inter-event gap variance low against the
+     permutation distribution). The mirror image of member 3: any
+     *enforced* staggering — scheduling, coordination, proximity
+     re-draws — makes the founder set a repulsive point process, and
+     repulsion is as detectable as cohesion. Exists to arm P2 as
+     amended (§14.2): staggering must be statistical (i.i.d. draws),
+     never mechanized.
 - **The statistic.** `T = max over F` of label agreement, per trial,
   averaged over trials.
 - **The null.** The permutation distribution of the **same** `T` (labels
@@ -1065,15 +1114,53 @@ the null distribution then models.
     seeded member cannot recover M-c's remaining four, it does not
     bite), and member 4's bite is checked against whichever of M-a/M-c
     its graph cut is sensitive to, recorded per-run.
+  - **M-d (correlation-breaking)** — *added R4 (§17.6 Q2-A)*: five
+    founders with every marginal drawn in-range but feature
+    *combinations* drawn off the joint support (e.g. cadence period and
+    dispatch phase individually typical, jointly impossible). Detected
+    by family member 6; members 1–5 checked at chance against it,
+    recorded per-run (their blindness is the finding that motivated 6).
+  - **M-e (repulsed/scheduled)** — *added R4 (§17.6 Q2-B)*: five founder
+    anchors placed by an enforced-staggering mechanism (hard-core
+    process: minimum-gap rejection). Detected by family member 7 — the
+    P2-as-originally-worded violation, from the opposite direction to
+    M-a.
   A family proven to bite on M-a alone proves nothing about its other
   members; each control validates the member aimed at its failure mode.
+  **Controls are witness-typed (R4, §17.6 finding 6).** M-a through M-e
+  are precisely the worst founder configurations that exist; per the
+  PF-2 precedent (a sentinel with no triggering production build config
+  is a demonstrated failure class in this codebase), a control fixture
+  that could leak onto a production founder path would *be* the
+  vulnerability it tests. The implementation must make control
+  configurations un-instantiable as production founder configs at the
+  type level — a distinct witness type for control fixtures, not a
+  flag on the production config struct.
 - **Pass bounds (a-priori).**
   1. *Deployed posture:* `T` within `0.05` of the permutation-null mean —
      no rule in the family sorts founder from user better than chance.
   2. *Each marked control:* `T` at least `0.30` above the
-     permutation-null mean, **per control** (M-a, M-b, M-c separately).
+     permutation-null mean, **per control** (M-a through M-e
+     separately).
   3. All bounds must hold or the partition measurement is **INVALID**
      (same all-or-nothing shape as §5's controls).
+- **The gating lemma (a-priori deliverable of the implementation round;
+  committed before any sweep grades — same provenance rule as the §3.2
+  thresholds).** *An absolute upper bound on the probability that `M`
+  i.i.d. production entry-gap draws trip any family member above the
+  permutation null under the launch-window geometry, derived with no
+  reliance on a contemporaneous user cohort.* Named at R4 (§17.6
+  finding 1) because two dispositions consume it and were each
+  hand-waving it independently: (a) P2-as-amended's "no enforcement
+  mechanism" branch — under i.i.d. draws the trap shape must be
+  *derivably* rare, since at gate-open the exchangeability arm ("a user
+  subset could cluster too") is void (Q3-A: the contemporaneous cohort
+  is structurally absent); and (b) §16.2 obligation 3's strip-row floor,
+  which prices founder self-cover with no herd present. One lemma, two
+  citation sites; it must not be discharged twice informally. If the
+  bound is not derivably small under the production gap geometry, the
+  disposition is posture redesign (widen the entry-gap distribution),
+  never bar relaxation.
 - **What a fail means.** A deployed-posture `T` above bound 1 is a
   **launch-posture blocker**: founder cover is discounted below its
   headcount and P1/P2 must be tightened (and re-measured) before the
@@ -1086,6 +1173,36 @@ the null distribution then models.
   construction; in deployment it is real and sits with the other
   off-model axes named in §4.3.1's ceiling statement (funding provenance,
   address reuse, off-wire distinguishers). Named residual, not absorbed.
+  *Second scope boundary (R4, §17.6 Q3-A):* the arm measures
+  **concurrent-cohort exchangeability** — founders and users drawn into
+  the same trial window. The deployment **tenure asymmetry** (pre-gate
+  posters vs. the gate-open herd, sortable by first-post height at zero
+  adversary cost) is erased by the generator's concurrent lifecycles
+  *by construction*, so a bound-1 green is **uninformative** about it.
+  This is an instance of the green-by-construction class (§16.10's
+  generator-erases-the-channel failure mode), not a one-off: the tenure
+  channel is dispositioned by §16.2 obligation 3's strip-row-primary
+  rule, never by this arm's pass.
+- **Axis completeness (R4, §17.6 finding 5).** The family covers the
+  **timing/metadata axis** of founder identification only. The two
+  adjacent axes are closed elsewhere, and are named here so the
+  timing-only scope is known complete rather than merely partial:
+  - *Amount/value axis:* bond amounts are **not** CT-hidden — the bond
+    term is loud-but-constant, consensus-forced to
+    `bond_floor(holdings)` (§18.9; `bond_post.rs` `FloorMismatch`), so
+    it carries zero bits beyond the public holdings tier. The residual
+    marginal is the **holdings tier itself**: founder bonds must sit at
+    common user tiers (distinctive foundation-scale holdings would sort
+    founders by amount stratum with no timing statistic needed). This
+    is a P1-adjacent posture-config requirement, graded by the §18.3
+    attribute-stratified rider already attached to this arm's round.
+  - *Network/transport axis:* closed by SP-T per-persona circuit
+    isolation with the persona-side Tor requirement structurally
+    mandatory (§18.13's compile-time posture).
+  Timing family ∪ loud-but-constant amount discipline ∪ SP-T isolation
+  jointly cover the on-chain + transport observable surface; the
+  remaining residual is §4.3.1's off-model ceiling (funding provenance,
+  address reuse, off-wire distinguishers), already named.
 - **Two consumers, two disposition rules (pinned 2026-07-06).** Since
   §16.2 Pin 2 placed this arm on `K_COVER`'s critical path, its output
   feeds **two independent decisions that consume different projections
@@ -1339,6 +1456,25 @@ smallest-cohort regime of that separate leak is never entered either.
      enumeration; the review decides how much reliance on
      non-enumeration the constant prices in, explicitly, rather than
      the with-founders number being used as if unconditional.
+     *Elevated at R4 (2026-07-10, §17.6 Q3-A): the stripped number is
+     the **primary** calibration input at gate-open, not a
+     sensitivity.* First-post height sorts the pre-gate cohort from the
+     herd for every adversary at zero cost — no disclosure, no
+     statistics — so the with-founders number is valid only inside the
+     concurrent window the §14.4 arm actually models. Framed as a
+     **worst-case floor, not an empirical premise**: calibrate as if
+     founders receive zero cover from the gate-open herd, because
+     pre-gate non-founder demand is uncontrolled and uncalibratable.
+     The framing does not need "pre-gate posters ≈ founders" to be
+     true — it needs it to be conservative, which forecloses the
+     "but archival-service demand puts non-founders in the pre-gate
+     set" rebuttal instead of inviting it. P3 stays harm-reduction
+     only; it is **not load-bearing** for this floor (the circularity
+     to refuse: P3 thins non-founder pre-gate posting *and* was being
+     invoked to justify the ≈-founders premise — any residual cover P3
+     leaves is uncontrolled, so the floor is zero-cover regardless of
+     P3). Founder self-cover under the floor is priced by the §14.4
+     gating lemma.
    - **Gate-open cohort dynamics row (§17.3):** at gate-open, pent-up
      demand produces an entry cohort that covers *itself* — the first
      post-gate users are mutually covering, and that herd is
@@ -1346,6 +1482,26 @@ smallest-cohort regime of that separate leak is never entered either.
      empirically unknown pre-testnet (the same conditional axis as
      §16.9 item 2); the model states its demand assumption as a named
      conditional, not as a constant.
+     *Sharpened at R4 (§17.6 Q3-B): the conditional names
+     **monotonicity**, not just size.* Pent-up demand decays with
+     delay (competing venues, fixed-need users lost), so `herd(K)` is
+     non-monotone in general and "minimal `K` with thickness ≥ target"
+     is not automatically well-defined over the herd term. The
+     calibration's well-definedness rests on the **monotone floor
+     only** — accumulated founder/structural cover — which is itself
+     monotone **only under P2's persistence commitment** (§14.2 as
+     amended): bonds are removable pre-gate by voluntary exit, offline
+     forfeiture, or slash (`PRINCIPAL_STAKE_LIFECYCLE.md`, verified at
+     source), so the floor's monotonicity is a posture commitment with
+     a named re-run trigger, not a structural fact. Herd contribution
+     is a conditional bonus on top. **Non-existence behavior (named,
+     per the get-it-right rule):** if no `K` in the candidate range
+     reaches the thickness target under the monotone floor, the gate
+     does not open degraded and does not wait unboundedly on a
+     non-monotone herd assumption — the disposition is posture
+     redesign (more founder/structural cover, or a revised target),
+     decided pre-genesis by the cover-model run, never discovered
+     live.
 
 ### 16.3 M2 — cover-gate proxy choice
 
@@ -1545,12 +1701,17 @@ shaped" is satisfiable by affirmation wearing an attack's clothes:
 
 ## 17. Review-closure round R1 (2026-07-06): the three attacks, on the record
 
-**Status: conducted; ratification pending.** This section is the §16.10
+**Status: conducted; ratified 2026-07-10.** This section is the §16.10
 record — each attack was run to land, not to affirm, and where it
 landed the amendment is in place (dated, cross-referenced) rather than
-deferred. Closure of §§14–16 is ratified by the human review reading
-this record against the amended text; this section does not close
-itself.
+deferred. Distinct-position coverage per B-2 is complete across all
+three §16.10 questions (Q1: §17.5/§18; Q2/Q3: §17.6); the standing
+review's adjudication of §17.6 (2026-07-10) concurred on every outcome
+and strengthened the premises with six findings, all landed in place.
+**§§14–16 are closed; the §14.4 implementation round is released**,
+carrying the obligations enumerated in §17.4 and the two pinned
+premises of §17.6 (floor persistence, count `K`-independence) with
+their reopen criteria.
 
 ### 17.1 Attack 1 — `r < 2` under the panel that reaches `1.86`
 
@@ -1660,6 +1821,23 @@ transition cover. Its size is demand-driven and pre-testnet unknown.
 obligation 3), with the demand assumption stated as a named conditional
 on the same axis as §16.9 item 2.
 
+*R4 corrections (2026-07-10, §17.6).* Two premises in this section's
+outcome were softer than stated. **(Q3-B)** The parenthetical "later
+opening ⇒ at least as much accumulated founder activity **and pent-up
+demand**" overstated: pent-up demand decays with delay, so the herd
+term is non-monotone in general; monotone-reachability rests on the
+accumulated founder/structural floor only — itself conditional on
+P2-as-amended's persistence commitment (bonds are removable pre-gate
+by exit, forfeiture, or slash). §16.2 obligation 3's cohort-dynamics
+row carries the sharpened statement, including the named non-existence
+behavior. **(Q3-C)** The validation projection's `K`-independence
+holds *given* two premises now pinned in P2-as-amended: the founder
+timing law is `K`-invariant (production draws, not window-length
+parameterized), and the observed founder post count at gate-open is
+`K`-independent. Without them, `K`-dependence re-enters through the
+generator rather than the statistic, and the cycle-break joint is
+illusory.
+
 ### 17.4 Disposition
 
 All three §16.10 questions are answered attack-shaped, on the record:
@@ -1671,11 +1849,15 @@ direction, inside the legitimate pre-code window (§14.4's own amendment
 rule). *(Amended same day, per §16.10's B-2 strengthening: R1 was
 author-conducted — a legitimate first pass that sharpened the record,
 not by itself sufficient for closure. §17.5 carries the
-distinct-position round.)* **Ratification of §§17.1–17.5 together by
-the standing review closes §§14–16; the §14.4 implementation round (now
-five members, three controls with cross-member bite requirements, plus
-the N-sweep and the M6.2 coupling control) is the round that follows
-closure.**
+distinct-position round.)* *(Second amendment, 2026-07-10: §17.5/§18
+covered question 1's bar and the family-completeness rule; §17.6
+carries the distinct-position adjudication of questions 2 and 3,
+completing B-2's per-question coverage.)* **Ratification of
+§§17.1–17.6 together by the standing review closes §§14–16; the §14.4
+implementation round (now seven members, five controls with
+cross-member bite requirements and witness-typing, plus the N-sweep,
+the M6.2 coupling control, the §18.3/§18.4 riders, and the a-priori
+gating lemma) is the round that follows closure.**
 
 ### 17.5 Distinct-position round R2 (2026-07-06): the mean-vs-max challenge, and two structural findings
 
@@ -1742,6 +1924,127 @@ heterogeneity) is bound to the regime-splitting discipline that
 carries it. One instrument (§9 criterion 9) and one process property
 (§16.10 distinct-position) are added. All amendments
 adversary-strengthening, pre-code.
+
+### 17.6 Distinct-position round R4 (2026-07-10): questions 2 and 3 adjudicated
+
+**Position.** Six constructions against §16.10's questions 2 (family
+completeness) and 3 (cycle break) were author-fielded, run to land;
+the standing adversarial reviewer's adjudication overturned no outcome
+(four lands land, two fails fail, no bound moves) and contributed six
+findings on the premises the amendments rest on — two of them
+load-bearing premises the record had been carrying unstated. The
+findings are the distinct-position content; per B-2, this completes
+per-question coverage (Q1 was §17.5/§18).
+
+**The constructions (outcomes as adjudicated).**
+
+- **Q2-A, joint-isolation adversary (landed).** Correlation-breaking
+  founders — marginals in-range, joint combinations out-of-support —
+  defeat members 1–5. Amendment: family member 6 (top-`M` by
+  joint-density isolation), control M-d.
+- **Q2-B, repulsion adversary (landed, structural).** P2 as written
+  ("never clustered") was jointly unsatisfiable with P1 (i.i.d.
+  draws): any enforcement mechanism makes the founder set a repulsive
+  point process, as detectable as the clustering it prevents.
+  Amendment: P2 reworded (statistical staggering only), family
+  member 7 (most-regular-subset), control M-e.
+- **Q2-C, order-sensitive features (did not land).** In-model, order
+  features are dead by **exchangeability under the P1-amended timing
+  law** — i.i.d. draws in both populations kill every timing
+  statistic, sorted or ordered, not merely "same axis as
+  within-window drift." The deployment-side drift is the named
+  cross-trial persistence residual (§14.4 scope boundary).
+  *Contingency (finding 4): this coverage inherits Q2-B-as-amended as
+  a premise.* Under enforced staggering, repulsive founders carry
+  order structure the sorted vector discards, and Q2-C resurrects on
+  an axis distinct from member 7's regularity test — a future revert
+  of the P2 amendment silently reopens Q2-C, so the interlock is
+  recorded here.
+- **Q3-A, tenure channel (landed, structural).** First-post height
+  sorts the pre-gate cohort from the gate-open herd at zero adversary
+  cost, and the §14.4 generator's concurrent lifecycles erase exactly
+  this asymmetry — bound 1 can pass while tenure enumerates founders
+  trivially. Amendments: strip-row primary at gate-open (§16.2
+  obligation 3, reframed per finding 2 as a worst-case zero-pre-gate-
+  cover floor, P3 de-load-borne), §14.4 second scope boundary naming
+  the green-by-construction class.
+- **Q3-B, monotonicity of the fixed point (landed).** "Cover-at-opening
+  non-decreasing in `K`" fails on the herd term (pent-up demand decays
+  with delay). Amendment: §16.2 cohort-dynamics row sharpened —
+  calibration rests on the monotone floor only; non-existence behavior
+  named.
+- **Q3-C, `K`-dependence through the founder timing law (landed).**
+  If founder draws are parameterized by window length (`= f(K)`), the
+  validation projection's `K`-independence is illusory. Resolved by
+  the P2 amendment (production draws, `K`-invariant by construction),
+  plus the count premise below.
+
+**The adjudication's six findings (all landed).**
+
+1. **(Highest) One gating lemma, two hand-waves.** Q2-B's
+   "no-mechanism" disposition rested on i.i.d. clustering being
+   *vanishingly rare*; its exchangeability arm ("a user subset could
+   cluster too") requires a contemporaneous cohort that Q3-A proves
+   structurally absent at gate-open. The two findings stack: the
+   absolute-rarity arm carries the disposition alone, and it was
+   asserted, never derived. (The dismissed soft middle path closes the
+   trap: tail-only rejection-sampling has clip-rate ≈ trap-rate, so
+   either the trap is derivably rare — mechanism unnecessary — or the
+   clip is frequent enough for member 7 to bite the induced
+   repulsion.) Landed: the §14.4 **gating lemma**, a named a-priori
+   deliverable cited by both Q2-B's disposition and the strip-row
+   floor — the GF-7 threshold-provenance rule applied to itself.
+2. **Q3-A's premise reframed from empirical to worst-case floor.**
+   "Pre-gate posters ≈ founders" is not robust (pre-gate
+   archival-service demand puts non-founders in the pre-gate set);
+   the calibration floor — zero pre-gate cover, because pre-gate
+   non-founder demand is uncontrolled and uncalibratable — needs only
+   conservatism, not truth. P3's circularity removed: it both thins
+   non-founder pre-gate posting and was invoked to justify the
+   premise; it stays harm-reduction, never load-bearing.
+3. **Two smuggled premises, both pinned with reopen criteria (rule
+   21).** *(a) Floor persistence:* cover-at-opening is active bonds,
+   not cumulative posts; verified at source
+   (`PRINCIPAL_STAKE_LIFECYCLE.md`) that unbond is voluntary-only
+   **but offline forfeiture and slashing are involuntary removal
+   paths** — so the monotone floor is monotone only under P2's
+   persistence commitment. Reopen trigger: any founder bond
+   exit/forfeit/slash pre-gate ⇒ cover-model re-run. Companion
+   liveness gap: non-existence of the fixed point is a named behavior
+   (posture redesign pre-genesis), not an underspecified state.
+   *(b) Count `K`-independence:* the P2 amendment pinned the per-gap
+   law but not the post count; with per-persona re-bonding, observed
+   founder post count at gate-open is plausibly `f(time-to-gate) =
+   f(K)`. Pinned as P2 companion premise 2. Reopen trigger: any
+   founder re-bonding policy that is not either a completed pre-gate
+   fixed schedule or production-i.i.d. count-exchangeable.
+4. **Q2-C's reason made precise and its contingency recorded** (above,
+   in the construction entry). The clean principle separating Q2-C
+   from Q3-A: both are generator-invisible deployment channels, but
+   Q2-C's is already named and dispositioned (persistence residual)
+   while Q3-A's tenure channel was not. Same test, opposite verdicts,
+   one rule.
+5. **Axis completeness.** The family is timing/metadata-axis only;
+   the amount/value axis (loud-but-constant, §18.9 — with the
+   founder-tier residual now named) and network/transport axis (SP-T
+   isolation, §18.13) are dispositioned in §14.4's axis-completeness
+   note so the timing-only scope is known complete.
+6. **Controls witness-typed.** M-a–M-e are the worst founder sets
+   that exist; per the PF-2 precedent, a control fixture leaking onto
+   a production founder path would *be* the vulnerability it tests.
+   Landed as the §14.4 witness-typing requirement
+   (make-bad-states-unrepresentable, applied to the test apparatus).
+
+**Disposition.** No bound moves. The family lands at seven members and
+five controls; P2 is reworded with three companion premises; the
+strip row is primary at gate-open under a worst-case floor; the
+cohort-dynamics row rests on the monotone floor with named
+non-existence behavior; and the gating lemma is the implementation
+round's first a-priori deliverable — committed before any sweep
+grades. §§17.1–17.6 ratified together 2026-07-10 (§17 header); the
+two pinned premises of finding 3 carry their reopen criteria into the
+implementation round and must be re-checked before Gate 7 discharges
+`K_COVER` into the frozen constant.
 
 ## 18. Distinct-position round R3 (2026-07-06): the completeness gap the mean-vs-max disposition left open
 

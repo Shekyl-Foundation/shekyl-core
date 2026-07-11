@@ -4,6 +4,29 @@
 
 ### Added
 
+- **docs: WI-4/GF-7 review-closure ratified — distinct-position round R4
+  lands §17.6 (`ARCHIVAL_BOND_WI4_MEASUREMENT.md`).** The §16.10
+  questions 2 (partition-family completeness) and 3 (`K_COVER` cycle
+  break) adjudicated by the standing review: six constructions (four
+  land, two fail, no bound moves), six premise-strengthening findings.
+  §14.4 family grows to seven members (joint-density isolation;
+  most-regular-subset repulsion detector) and five witness-typed
+  controls (M-d correlation-breaking, M-e repulsed/scheduled); a named
+  a-priori **gating lemma** (absolute i.i.d. founder-clustering bound,
+  no user-cohort reliance) becomes the implementation round's first
+  deliverable. P2 reworded (statistical staggering only) with three
+  companion premises (timing-law `K`-invariance, count
+  `K`-independence, founder-bond persistence — lifecycle-verified:
+  offline forfeiture and slash are involuntary removal paths). §16.2
+  obligation 3: strip row elevated to primary at gate-open (worst-case
+  zero-pre-gate-cover floor, P3 de-load-borne); cohort-dynamics row
+  rests on the monotone floor with named non-existence behavior. Axis
+  completeness recorded (timing ∪ loud-but-constant amount ∪ SP-T
+  isolation; founder-tier residual named). **§§17.1–17.6 ratified
+  together (2026-07-10); §§14–16 closed; the §14.4 implementation
+  round is released.** Trackers updated (`FOLLOWUPS.md` WI-4 entry,
+  `IMPLEMENTATION_INDEX.md` WI-4 row).
+
 - **daemon RPC: Axum now enforces `--rpc-max-connections*` + reports a live
   `rpc_connections_count`.** A purpose-built Rust connection layer
   (`shekyl-daemon-rpc::conn_limit`: `LimitedListener` + `ConnTracker` over

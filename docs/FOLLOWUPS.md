@@ -8162,7 +8162,7 @@ one place to confirm each item's relationship to the wallet stack.
   adversarial read of the bounds themselves (is `r < 2` honest under the 1.86 panel; is
   the widened null the adversary's class or a subset; does the `K_COVER` derivation
   circle through the arm it gates), not a consistency rubber stamp.
-  **Review-closure round R1 conducted (2026-07-06, §17; ratification pending):** all
+  **Review-closure round R1 conducted (2026-07-06, §17; ratified 2026-07-10, see R4 below):** all
   three §16.10 attacks run to land. Attack 1 — the `r < 2` bar survives (claim-anchored,
   observer-independent) but the *measured* `r(N)`'s N-invariance is unswept: **N-sweep
   added** (§16.7 item 4, `N ∈ {10, 20, 50}`, `r < 2` at every swept `N`, a-priori).
@@ -8194,8 +8194,8 @@ one place to confirm each item's relationship to the wallet stack.
   (exchangeability makes it per-persona in-model; the untargeted reading was conceded at
   the floor) but forces the §3.2 pin naming exchangeability as the load-bearing step and
   regime-splitting as the mean-to-max lift in deployment (the discipline that already
-  surfaced cold-start as a fail rather than averaging it in). §17 closure now requires
-  §§17.1–17.5 ratified together.
+  surfaced cold-start as a fail rather than averaging it in). §17 closure requirement
+  discharged 2026-07-10: §§17.1–17.6 ratified together (see R4 below).
   **Distinct-position round R3 conducted (2026-07-06, §18):** the mean-vs-max
   disposition is sound but incomplete — it captured the max for the axis it split on
   (activity) and assumed the heterogeneity enumeration complete. Five surfaces
@@ -8319,6 +8319,29 @@ one place to confirm each item's relationship to the wallet stack.
   chain-only adversary sees nothing by construction; the three boundary classes are the
   irreducible on-ramp witness, the network default (ours until flipped), and the
   enumerated mistake set (closed by safe-by-default coverage, §18.12 pin as template).
+  **Distinct-position round R4 conducted + ratification (2026-07-10, §17.6):** the
+  §16.10 questions 2 and 3 adjudicated — six constructions (four land, two fail, no
+  bound moves), six reviewer findings landed in place. Family grows to **seven members**
+  (member 6 joint-density isolation vs correlation-breaking founders; member 7
+  most-regular-subset vs enforced staggering) and **five controls** (M-d, M-e added; all
+  five **witness-typed** — un-instantiable as production founder configs, PF-2
+  precedent). **P2 reworded** (staggering is statistical, via P1's i.i.d. draws — any
+  enforcement mechanism is a detectable repulsion signature) with three companion
+  premises: timing-law `K`-invariance, count `K`-independence, and the **persistence
+  commitment** (founder bonds active through gate-open; verified at source that offline
+  forfeiture and slashing are involuntary removal paths — breach is a cover-model
+  re-run trigger). **Gating lemma named** (§14.4): an a-priori absolute bound on i.i.d.
+  founder-clustering probability, no user-cohort reliance — the first deliverable of
+  the implementation round, committed before any sweep grades; cited by both the P2
+  no-mechanism disposition and the strip-row floor. **Strip row elevated to primary**
+  at gate-open (worst-case zero-pre-gate-cover floor; P3 de-load-borne). **Cohort
+  dynamics row sharpened** (monotone floor only; non-existence behavior named —
+  posture redesign pre-genesis, never a degraded open). **Axis completeness recorded**
+  (timing family ∪ loud-but-constant amount ∪ SP-T isolation; founder-tier residual
+  named on the holdings stratum). **§§14–16 CLOSED; the §14.4 implementation round is
+  released**, carrying the two pinned premises (floor persistence, count
+  `K`-independence) with reopen criteria to re-check before Gate 7 discharges
+  `K_COVER`.
   **Target: pre-genesis (M1 blocks genesis; M6.2 + N-sweep land with the §14.4 round;
   GF-4 exit seam + value channel are co-equal sealing-path rounds — the seal needs both
   seams, not just entry).**
