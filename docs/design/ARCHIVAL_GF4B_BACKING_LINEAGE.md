@@ -585,6 +585,23 @@ sweep **specified + implemented** ✓ (go-live dead-code-gated per §3.2),
 pre-join wiring (`BackingSet` + zero-pre-bond-output test) **landed** ✓.
 The residue riding C-1, citable by the C-1 PR:
 
+> **Status (2026-07-11, claim-builder PR-3 — `feat/emission-claim-handler`).**
+> Items **1, 2, 3, and 6 discharged** by PR-3
+> (`EMISSION_CLAIM_BUILDER.md` §8): the arity-1 designated-backing
+> selector (`BackingSet::designate_backing`, exclusivity by shape — the
+> backing record is private to the set), the `EmissionReward` scan arm
+> (fail-toward-forbidden per GF4b-4; first-emission backing classifies
+> `BondPostChange`), the emission-path integration test (orchestrator
+> end-to-end over a real curve tree), and the reference-height freshness
+> contract (the claim orchestrator derives designation and assembly from
+> the same gather tip; the handler's item-6 same-tip check refuses
+> mismatches at runtime). Items **4 and 5 remain open**: item 4 held —
+> PR-3 added no production `SpentRecordsDurablyPruned` constructor (the
+> orchestrator takes the witness by reference; the sole production mint
+> stays reserved to SP-R0) — and continues to bind every future caller;
+> item 5 is bond-path scope (`AssembleBond` wiring), untouched by the
+> claim path.
+
 | # | Item | Criterion (checkable at C-1 review) |
 | --- | --- | --- |
 | 1 | Designated-backing selector | Consumes candidates **exclusively through `BackingSet`** (no direct `funding_outputs` read on the backing path); selects exactly **one** output (the `emission_wire.rs` arity-1 pin) |
