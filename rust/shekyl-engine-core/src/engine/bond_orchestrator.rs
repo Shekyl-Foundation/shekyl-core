@@ -173,6 +173,13 @@ where
             .map_err(|e| BondAssemblyError::build("reserved gindexes", e))?;
 
         let floor = AtomicUnits::from_raw(bond_floor(&holdings));
+        // Align with the wire builder / retention verifier: a zero floor is
+        // structurally invalid holdings, not a sweep-to-empty success that
+        // would later index an empty `paths` vector. Typed refusal before
+        // any curve-tree work (rule 82).
+        if floor == AtomicUnits::ZERO {
+            return Err(BondAssemblyError::BondFloorZero.into());
+        }
         let required = floor
             .checked_add(fee)
             .ok_or(BondAssemblyError::AmountOverflow)?;
@@ -185,21 +192,8 @@ where
             required,
             reference_height,
         )?;
-
-        // A bond post must anchor at least one funding input. `sweep` only
-        // errors `InsufficientFunding` when `total < required`; with a zero
-        // `required` (degenerate holdings whose `bond_floor` is 0 under a zero
-        // fee) it succeeds with an *empty* selection. Refuse loudly here — the
-        // downstream `assemble_tx`/`paths[0]` path assumes ≥1 input and would
-        // otherwise index an empty `paths` and panic the assemble task.
-        if selection.records.is_empty() {
-            return Err(BondAssemblyError::build(
-                "funding selection",
-                "no funding inputs selected (bond floor + fee is zero); \
-                 holdings cannot fund a post",
-            )
-            .into());
-        }
+        // With `floor > 0`, `required ≥ floor > 0`, so a successful sweep
+        // cannot be empty (`total < required` → `InsufficientFunding`).
 
         let assemble_inputs: Vec<AssembleInput> = selection
             .records
@@ -226,11 +220,15 @@ where
             )
             .into());
         }
+        // Non-empty: floor gate + length agreement with a non-empty sweep.
+        let first = paths.first().ok_or_else(|| {
+            BondAssemblyError::build("assemble_tx", "assemble_tx returned no paths")
+        })?;
 
         let tree_ctx = TreeContext {
-            reference_block: paths[0].tree.reference_block,
-            tree_root: paths[0].tree.tree_root,
-            tree_depth: paths[0].tree.tree_depth,
+            reference_block: first.tree.reference_block,
+            tree_root: first.tree.tree_root,
+            tree_depth: first.tree.tree_depth,
         };
 
         let funding: Vec<FundingInputContext> = selection
@@ -345,13 +343,19 @@ mod tests {
     /// [`sweep_funding_outputs`](super::bond_assembly::sweep_funding_outputs).
     #[test]
     fn orchestrator_uses_sweep_as_sole_funding_path() {
-        let orch = include_str!("bond_orchestrator.rs");
+        // Drop only the trailing `mod tests` so assertion literals cannot
+        // self-match (`wire.rs` tripwire shape).
+        let orch = include_str!("bond_orchestrator.rs")
+            .split("\n#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("bond_orchestrator.rs has a production section");
+        // Split the call-site needle so a production doc-comment mention of
+        // the symbol alone is not enough — the live call site must remain.
+        let sweep_call = concat!("sweep", "_funding_outputs(");
         assert!(
-            orch.contains("sweep_funding_outputs("),
+            orch.contains(sweep_call),
             "orchestrator must select funding only via sweep_funding_outputs"
         );
-        // Split the needle so this assertion's own source does not match it
-        // (the file `include_str!`s itself).
         let retired = concat!("select", "_funding_outputs");
         assert!(
             !orch.contains(retired),

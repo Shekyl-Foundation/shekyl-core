@@ -186,6 +186,13 @@ pub(crate) enum BondAssemblyError {
     #[error("funding amount arithmetic overflowed")]
     AmountOverflow,
 
+    /// `bond_floor(holdings)` is zero — structurally invalid holdings (empty
+    /// / zero-count descriptor). Same refusal the wire builder and retention
+    /// verifier raise (`BondBuildError::BondFloorZero`); refuse before sweep
+    /// so a zero-`required` never reaches `assemble_tx` as an empty path set.
+    #[error("bond_floor(holdings) is zero; holdings are structurally invalid")]
+    BondFloorZero,
+
     /// A cryptographic step of the assemble pipeline failed (spend-bundle
     /// derivation, output construction, proving, PQC auth signing, or wire
     /// encoding). `stage` names the pipeline step; `detail` is the wrapped
@@ -674,17 +681,27 @@ mod tests {
     /// production constructor (only `for_test`).
     #[test]
     fn f4_sweep_is_sole_funding_selector_and_witness_is_test_only() {
-        let src = include_str!("bond_assembly.rs");
-        let backing = include_str!("backing_set.rs");
+        // Drop only the trailing `mod tests` — earlier `#[cfg(test)]` item
+        // attrs (`bind_for_test`, `for_test`) live in the production region
+        // of the source text and must remain visible to the witness check.
+        // Whole-file `include_str!` would self-match the assertion literals
+        // below (`wire.rs` tripwire shape).
+        let src = include_str!("bond_assembly.rs")
+            .split("\n#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("bond_assembly.rs has a production section");
+        let backing = include_str!("backing_set.rs")
+            .split("\n#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("backing_set.rs has a production section");
         // Sole funding-selection definition lives here; no alternate selector
         // in BackingSet. Orchestrator monopoly is asserted in
         // `bond_orchestrator::tests`.
+        let sweep_def = concat!("pub(crate) fn sweep", "_funding_outputs");
         assert!(
-            src.contains("pub(crate) fn sweep_funding_outputs"),
+            src.contains(sweep_def),
             "sweep definition must remain in bond_assembly"
         );
-        // Split the needle so these assertions' own source does not match it
-        // (this file and `backing_set.rs` are both `include_str!`d here).
         let retired_def = concat!("fn select", "_funding_outputs");
         let retired = concat!("select", "_funding_outputs");
         assert!(
@@ -696,8 +713,8 @@ mod tests {
             "BackingSet must not revive the subset selector"
         );
         // Zero production constructors: only `for_test` under cfg(test).
-        // Inspect the impl region only — this test's own source mentions the
-        // pattern narratively and would false-positive a whole-file grep.
+        // Inspect the impl region only — narrative mentions of constructors
+        // elsewhere in production docs must not false-positive.
         let impl_region = src
             .split("impl SpentRecordsDurablyPruned")
             .nth(1)
