@@ -221,6 +221,38 @@ fn emission_blob_over_transport_max_rejected_on_read() {
     assert!(err.to_string().contains("exceeds"), "{err}");
 }
 
+/// C++ `check_money_overflow` parity (`check_outs_overflow`): loud vout
+/// amounts whose sum overflows `u64` must reject context-free. This arm was
+/// vacuous while every non-coinbase amount was 0; the emission claim's loud
+/// reward vout legitimized non-zero amounts, so a hostile pair like
+/// `[u64::MAX, 1]` now exercises the checked sum — the C++ daemon rejects
+/// the same bytes, and accept/reject parity demands the Rust gate does too.
+#[test]
+fn loud_vout_amount_overflow_rejected() {
+    let loud = |amount| Output {
+        amount,
+        key: [0u8; 32],
+        view_tag: 0,
+    };
+    let tx = emission_tx(
+        vec![ki(2), ki(1), emission_input(&[0xBB; 96])],
+        vec![loud(u64::MAX), loud(1)],
+    );
+    let err = tx
+        .validate()
+        .expect_err("overflowing loud amounts must reject");
+    assert!(err.to_string().contains("check_money_overflow"), "{err}");
+
+    // Premise arm: the same shape with a non-overflowing loud amount passes,
+    // so the reject above is the overflow, not the loudness.
+    let ok = emission_tx(
+        vec![ki(2), ki(1), emission_input(&[0xBB; 96])],
+        vec![loud(u64::MAX), loud(0)],
+    );
+    ok.validate()
+        .expect("a non-overflowing loud amount is legal on the emission arm");
+}
+
 #[test]
 fn two_emission_inputs_rejected() {
     // check_inputs_types_supported:731 — Q3 arity 1.

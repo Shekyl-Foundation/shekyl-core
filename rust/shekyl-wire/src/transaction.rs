@@ -1562,8 +1562,10 @@ impl Transaction {
     ///   `check_commitment_mask_valid`) — curve checks;
     /// - the FCMP++ membership proof, CT balance, double-spend, the referenceBlock
     ///   window, and the coinbase reward / exact `unlock_time` / height (all chain-state);
-    /// - money-overflow sums — trivial here (FCMP++ input/output amounts are 0; the
-    ///   coinbase reward balance is the consensus layer's `validate_miner_transaction`).
+    /// - the coinbase reward **balance** — the consensus layer's
+    ///   `validate_miner_transaction` (the money-overflow *sum* itself is checked
+    ///   below: the loud emission-claim reward vout made non-zero non-coinbase
+    ///   amounts legal, so the C++ `check_money_overflow` parity is load-bearing).
     pub fn validate_context_free_pruned(&self) -> io::Result<()> {
         if self.prefix.inputs.is_empty() {
             return Err(io::Error::other("shekyl-wire: transaction has no inputs"));
@@ -1576,6 +1578,21 @@ impl Transaction {
                 "shekyl-wire: output count {n_out} exceeds {MAX_OUTPUTS}"
             )));
         }
+        // C++ `check_money_overflow` (`core::check_tx_semantic` →
+        // `check_outs_overflow`): the output-amount sum must not overflow. This
+        // was vacuous while every non-coinbase wire amount was 0; the loud
+        // emission-claim reward vout (C-1) legitimized non-zero non-coinbase
+        // amounts, so the checked sum is now the accept/reject-parity arm for
+        // hostile loud amounts the C++ daemon rejects.
+        self.prefix
+            .outputs
+            .iter()
+            .try_fold(0u64, |sum, out| sum.checked_add(out.amount))
+            .ok_or_else(|| {
+                io::Error::other(
+                    "shekyl-wire: output amounts overflow u64 (check_money_overflow parity)",
+                )
+            })?;
         // §2.5 coinbase shape: a `gen` input is coinbase-only and must be the sole
         // input. Reject `gen` mixed with any other input — otherwise a tx like
         // `[Gen, ToKey, …]` would be misclassified as coinbase and skip the
