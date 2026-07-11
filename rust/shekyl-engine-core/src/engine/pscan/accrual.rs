@@ -800,10 +800,10 @@ mod tests {
     #[test]
     fn funding_outputs_accumulate_and_round_trip_through_the_seal() {
         let record = FundingOutputMatch {
-            p_slot: 3,
-            tx_hash: [0xAA; 32],
+            p_slot: shekyl_types::PSlot::from_raw(3),
+            tx_hash: shekyl_types::TxHash::from_bytes([0xAA; 32]),
             index_in_transaction: 1,
-            gindex: 42,
+            gindex: shekyl_types::GlobalOutputIndex::from_raw(42),
             output_key: [0xBB; 32],
             commitment: [0xCC; 32],
             ciphertext_x25519: [0xDD; 32],

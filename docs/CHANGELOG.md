@@ -4,6 +4,17 @@
 
 ### Added
 
+- **wallet: WI-2 Engine-side `assemble_bond_post` orchestrator.** Wires
+  §3.3 steps 1–6 over an independently constructed `PendingPostStore`
+  (F-1), named `daemon_claimed_tip` for `anchor_t0` (F-2), and the
+  existing curve-tree anchoring procedure for `ReferenceBlock` (F-6).
+  Domain-newtype carrier: `PFundingOutputRecord` / sweep amounts /
+  `funding_gindexes` → `PSlot` / `TxHash` / `GlobalOutputIndex` /
+  `AtomicUnits`; `PSCAN_STATE_VERSION` 6 + `PENDING_POST_VERSION` 3
+  (pre-genesis fail-closed). Go-live remains compile-blocked on
+  `SpentRecordsDurablyPruned` until 2d-1 / SP-R0; dead_code allows on
+  the assemble surface retire only when SP-R0 **and** RPC entry land.
+  (`feat/wi2-bond-orchestrator`)
 - **sim: leg-(b) wall-clock sweep-phase arm graded in-model
   (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §19; WI-3 §3.2 part 3; WI-4
   reconvergence leg (b)).** The §13.3 closing requirement — sub-block

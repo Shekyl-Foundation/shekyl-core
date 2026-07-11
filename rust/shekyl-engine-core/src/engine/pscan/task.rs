@@ -649,9 +649,11 @@ mod tests {
 
     /// Spawn a StakeEngine over `bonded` persona slots.
     fn spawn_stake(bonded: &[u32]) -> StakeEngineHandle {
-        let bundles: BTreeMap<PSlot, ArchivalPKeys> =
-            bonded.iter().map(|&s| (PSlot(s), persona(s))).collect();
-        let bonded: BTreeSet<PSlot> = bonded.iter().map(|&s| PSlot(s)).collect();
+        let bundles: BTreeMap<PSlot, ArchivalPKeys> = bonded
+            .iter()
+            .map(|&s| (PSlot::from_raw(s), persona(s)))
+            .collect();
+        let bonded: BTreeSet<PSlot> = bonded.iter().map(|&s| PSlot::from_raw(s)).collect();
         StakeEngineHandle::spawn(bundles, bonded, None)
     }
 

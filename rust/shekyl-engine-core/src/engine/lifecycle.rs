@@ -921,11 +921,15 @@ impl Engine<SoloSigner> {
                     detail: rederivation_failure_detail(&e),
                 })
             })?;
-            bundles.insert(PSlot(slot), keys);
+            bundles.insert(PSlot::from_raw(slot), keys);
         }
 
-        let bonded: std::collections::BTreeSet<PSlot> =
-            staking.bonded_slots.iter().copied().map(PSlot).collect();
+        let bonded: std::collections::BTreeSet<PSlot> = staking
+            .bonded_slots
+            .iter()
+            .copied()
+            .map(PSlot::from_raw)
+            .collect();
 
         // Idle at open: the request path (2c-2b) mints a handle and activates.
         let handle = StakeEngineHandle::spawn(bundles, bonded, None);

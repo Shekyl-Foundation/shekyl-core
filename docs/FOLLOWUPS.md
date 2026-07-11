@@ -158,30 +158,31 @@ sustainability is unaffected by the recalibration.
   already-public holdings descriptor); re-evaluation shape: gate-6 round
   entry plus closure of this item citing it. *Target: V3.0 (pre-genesis).*
 
-- **Domain-newtype the residual raw fields on `PFundingOutputRecord` and
-  the WI-2 sweep amounts (spawned GF-4b audit sweep, 2026-07-08).** The
-  GF-4b PR typed its *new* surfaces (`spendable_height: BlockHeight`
-  end-to-end; `eligible_height` is `BlockHeight → BlockHeight`), but the
-  record's **pre-existing v4 fields** still carry raws that have landed
-  newtypes elsewhere: `p_slot: u32` (`stake_engine::PSlot` exists),
-  `tx_hash: [u8; 32]` (`shekyl_types::TxHash` exists; sibling
-  `PBondPostMatch` already carries typed `PCanonicalId`), and
-  `gindex: u64` (`shekyl_curve_tree::Gindex` exists). Adjacent to it, the
-  WI-2 sweep's `required: u64` / `FundingSelection::total: u64` are raw
-  amounts one seam away from typed `AtomicUnits` records (rule-20 amount
-  arithmetic; the checked-add is already explicit). All are wire-transparent
-  (`#[serde(transparent)]`/`#[repr(transparent)]`) so the postcard bytes are
-  unchanged; the pscan schema *snapshot* changes name-only, which pre-genesis
-  costs one `PSCAN_STATE_VERSION` bump. Deliberately **not** folded into the
-  GF-4b PR (rule 15: pre-existing fields are outside its stated scope).
-  **Carrier: the WI-2 orchestrator wiring work** — the Engine-side
-  assemble/dispatch consumer named on the `#[allow(dead_code)]` markers in
-  `bond_assembly.rs` is the next PR that touches every one of these seams
-  and the pscan schema, so the retyping and the bump ride it rather than a
-  standalone churn PR. *Target: V3.0 (pre-genesis — ships complete at
-  genesis, not deferred to a post-launch version).* *Fold in sooner if:*
-  any other pscan-schema-touching PR lands first (piggyback its bump), or
-  a slot/hash/gindex transposition bug surfaces at this seam.
+- **[Done] Domain-newtype the residual raw fields on `PFundingOutputRecord` and
+  the WI-2 sweep amounts (spawned GF-4b audit sweep, 2026-07-08; closed
+  2026-07-11 on `feat/wi2-bond-orchestrator`).** Landed with the WI-2
+  orchestrator carrier: `PFundingOutputRecord` carries `PSlot` / `TxHash` /
+  `GlobalOutputIndex`; sweep `required` / `FundingSelection::total` are
+  `AtomicUnits`; `AssembledBondPost.funding_gindexes` / pending-post
+  reservations are `Vec<GlobalOutputIndex>` / `BTreeSet<GlobalOutputIndex>`;
+  `PSCAN_STATE_VERSION` 5→6 and `PENDING_POST_VERSION` 2→3 (pre-genesis
+  fail-closed; post-genesis migration cost recorded as wipe+resync).
+  *Was target: V3.0 (pre-genesis).*
+
+- **Block-height representation unification at the WI-2 anchoring seam**
+  (surfaced 2026-07-11, WI-2 orchestrator review). The anchoring path still
+  traffics in three block-height representations bridged by hand:
+  `select_reference_height(u64) -> Option<u64>` takes/returns bare `u64`, and
+  the orchestrator converts `shekyl_curve_tree`'s `CtBlockHeight` →
+  `shekyl_types::BlockHeight` via `BlockHeight::from_raw(reference.height.0)`.
+  Each `.0` / `from_raw` / raw-`u64` hop is an un-typed boundary where a
+  wrong-domain height passes unnoticed. Unify on one `BlockHeight` newtype
+  (or make the curve-tree height a transparent alias of
+  `shekyl_types::BlockHeight`) so the anchoring path is typed end-to-end and
+  the raw-`u64` helper signature disappears. Cross-crate
+  (`shekyl-curve-tree` ↔ `shekyl-types`), no wire/consensus impact — pure
+  internal type hygiene. Deferred from the WI-2 orchestrator PR as beyond its
+  validation surface (rule 19). *Target: V3.1+.*
 
 - **Economics C2a′ layer gate — stacked silent failures; layer verdicts
   currently vacuous** (surfaced 2026-07-04 when PR #241's hardened rustup
@@ -1489,6 +1490,10 @@ sustainability is unaffected by the recalibration.
   which is where `certify_draw` and the negative-control harnesses
   (`reference_correlated_sequence`, `shared_anchor_population`) are available.
   Lands with the funding flow. **Target: V3.0** (with the funding flow).
+  **UPDATE 2026-07-11 (WI-2 orchestrator verify):** `shekyl-engine-core`
+  still depends on `shekyl-standoff` with default features; `conformance` /
+  `gf7-hooks` remain optional feature plumbing — split intact, orthogonal to
+  assemble wiring (not a design gate for this PR).
 
 - **`shekyl-stats` `Z_ALPHA_1E6` provenance vs. the `enc_label` test's
   sensitivity need (separate question; 2026-06-16).** The dedup that moved
@@ -7795,11 +7800,19 @@ one place to confirm each item's relationship to the wallet stack.
   only the *transiently-reserved* set (a live pending post's `funding_gindexes`), so once a post
   confirms and its pending record clears, the spent output is un-reserved **and** still present — a
   later assembly can re-select it and the daemon rejects the double-spend (duplicate key image).
-  **Interim-safety invariant (load-bearing):** the WI-2 assemble/dispatch path is
-  `#[allow(dead_code)]` today (no live consumer, per the `select_funding_outputs` /
-  `AssembleBond` annotations), so nothing double-spends now; it **must not go live** until either
-  (a) spent outputs are durably removed here, or (b) the reservation set is extended to durably
-  retain confirmed-spent gindexes. Durable removal must follow the SP-R0 discipline —
+  **UPDATE 2026-07-11 (WI-2 orchestrator wiring):** Engine-side `assemble_bond_post` is now
+  wired (`bond_orchestrator.rs`) over an independent `PendingPostStore` + named
+  daemon-claimed-tip `anchor_t0` + anchored `ReferenceBlock`. Go-live remains
+  **witness-gated** on `SpentRecordsDurablyPruned` (production mint still absent —
+  tests use `for_test()` only). Sibling `#[allow(dead_code)]` on
+  `assemble_bond_post` / `StakeEngineHandle::assemble_bond` / `AssembleBond` /
+  `AssembledBondPost` carries rule-21 = **(a) SP-R0 / 2d-1 pruning AND (b) RPC
+  stake entry** — neither allow retires alone. The interim-safety invariant below
+  still holds for production go-live.
+  **Interim-safety invariant (load-bearing):** the WI-2 assemble path must not
+  go live until either (a) spent outputs are durably removed here, or (b) the
+  reservation set is extended to durably retain confirmed-spent gindexes.
+  Durable removal must follow the SP-R0 discipline —
   *positive-confirmation, confirmed-absence within `covered`, never absence-from-one-source* (an
   over-eager drop of a not-yet-confirmed-spent output strands live funds), which is why it rides
   SP-6/SP-R0 rather than a naive "saw our own bond post" seam. **If WI-2 assemble must be live at
@@ -7816,6 +7829,11 @@ one place to confirm each item's relationship to the wallet stack.
   **and** minting the witness at that seam.
   See [`ARCHIVAL_BOND_WI2_ASSEMBLY.md`](design/ARCHIVAL_BOND_WI2_ASSEMBLY.md) §3.2/§3.5 and
   [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §12 (SP-R0).
+  **2d-2 tip-consumer enrollment note:** assemble-time `anchor_t0` (via
+  `daemon_claimed_tip`) is a third persisted consumer of the untrusted daemon
+  tip — a **deflated** tip at assemble shortens the WI-3 decorrelation window.
+  Enroll it in the 2d-2 tip clamp when that work reopens (alongside the WI-3
+  due-check and alarm-horizon consumers).
 - **2d-1 SP-3 — borrow the block in the dual extractor instead of cloning per bonded scanner
   (perf, non-gating; own PR).** `run_dual_extractor` calls `scanner.scan(block.clone())` inside the
   per-block loop, so each block is deep-copied once per bonded persona (N×B full-block copies per

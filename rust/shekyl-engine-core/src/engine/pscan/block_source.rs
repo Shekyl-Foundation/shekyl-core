@@ -127,10 +127,18 @@ pub(crate) trait BlockSource {
 // strings) per impl, where the copies could drift.
 
 /// A source's claimed tip height: the bare [`Rpc::get_height`] converted
-/// fail-closed to a [`BlockHeight`]. Generic over the transport so the local
-/// (`DaemonEngine: Rpc`) and remote ([`PRpc`]) sources share one body; the
-/// returned future is `Send` because `get_height`'s is.
-async fn tip_height_via<R: Rpc>(rpc: &R) -> Result<BlockHeight, BlockSourceError> {
+/// fail-closed to a [`BlockHeight`].
+///
+/// **Named daemon-claimed-tip clock (WI-2 F-2 / WI-3 R2-1).** This is the
+/// single function both (a) bond-assemble `anchor_t0` stamps and (b) the
+/// pscan dispatch due-check tip read through (`BlockSource::tip_height` →
+/// here). Explicitly **not** `synced_height` or `ingested_tip_height` —
+/// those clocks have different bases and must not feed `anchor_t0`.
+///
+/// Generic over the transport so the local (`DaemonEngine: Rpc`) and remote
+/// ([`PRpc`]) sources share one body; the returned future is `Send` because
+/// `get_height`'s is.
+pub(crate) async fn daemon_claimed_tip<R: Rpc>(rpc: &R) -> Result<BlockHeight, BlockSourceError> {
     let height = rpc.get_height().await?;
     // Checked, fail-closed conversion. The 64-bit-only build gate already makes
     // `usize <= u64` (so this never errors), but the uniform checked form keeps
@@ -177,7 +185,7 @@ impl<D: DaemonEngine> DaemonBlockSource<D> {
 impl<D: DaemonEngine> BlockSource for DaemonBlockSource<D> {
     async fn tip_height(&self) -> Result<BlockHeight, BlockSourceError> {
         // `DaemonEngine: Rpc`, so `get_height` is the inherited tip query.
-        tip_height_via(&self.daemon).await
+        daemon_claimed_tip(&self.daemon).await
     }
 
     async fn block_at(
@@ -225,7 +233,7 @@ impl BlockSource for PBlockSource {
     async fn tip_height(&self) -> Result<BlockHeight, BlockSourceError> {
         // `PRpc: Rpc`, so `get_height` is the inherited tip query — over `P`'s
         // circuit, same claimed-not-trusted semantics as any single source.
-        tip_height_via(&self.rpc).await
+        daemon_claimed_tip(&self.rpc).await
     }
 
     async fn block_at(

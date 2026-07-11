@@ -766,10 +766,12 @@ pub(crate) fn funding_record(
     lineage: MintLineageOutput,
 ) -> PFundingOutputRecord {
     PFundingOutputRecord {
-        p_slot,
-        tx_hash: [u8::try_from(gindex & 0xFF).expect("masked to a byte"); 32],
+        p_slot: shekyl_types::PSlot::from_raw(p_slot),
+        tx_hash: shekyl_types::TxHash::from_bytes(
+            [u8::try_from(gindex & 0xFF).expect("masked to a byte"); 32],
+        ),
         index_in_transaction: 0,
-        gindex,
+        gindex: shekyl_types::GlobalOutputIndex::from_raw(gindex),
         output_key: [1u8; 32],
         commitment: [2u8; 32],
         ciphertext_x25519: [3u8; 32],
