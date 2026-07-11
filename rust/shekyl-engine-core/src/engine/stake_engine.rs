@@ -1786,7 +1786,6 @@ fn prepare_funding_inputs(
 /// [`DesignatedBacking`]'s private record (which is the single source of
 /// truth for which output backs the claim). Carrying the path alone keeps
 /// one record, one owner.
-#[allow(dead_code)] // inert until the PR-3 Engine-side claim orchestrator lands.
 pub(crate) struct BackingMembershipPath {
     /// All outputs in the same Selene leaf chunk as the backing output.
     pub leaf_chunk: Vec<LeafEntry>,
@@ -1812,7 +1811,6 @@ pub(crate) struct BackingMembershipPath {
 /// the vin → **full prefix hash** → fee-side proof → tx PQC auths. The
 /// emission vin cannot be covered by the hash its own proof and auths sign
 /// over.
-#[allow(dead_code)] // inert until the PR-3 Engine-side claim orchestrator lands.
 pub(crate) struct AssembleEmissionClaim {
     /// Operation-scoped capability proving the slot is currently held.
     pub handle: PersonaHandle,
@@ -1839,7 +1837,10 @@ pub(crate) struct AssembleEmissionClaim {
 /// at the single P-1 site, [`finalize_bond_tx`]), plus the public facts the
 /// caller's reservation and dedup records need. Secrets never cross the
 /// boundary.
-#[allow(dead_code)] // inert until the PR-3 Engine-side claim orchestrator lands.
+// Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the fields'
+// production reader is the CB-3 dispatch seam — the same consumer whose
+// landing deletes `orchestrate_emission_claim`'s allow; this one dies with it.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct AssembledEmissionClaim {
     /// The fully-signed, wire-encoded emission-claim transaction.
@@ -1898,6 +1899,15 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // recompute it was admitted on).
         let claims = {
             let derived = derive_claimable_epochs(&msg.source)?;
+            if !derived.skipped.is_empty() {
+                // Local diagnostics only (CB-5: cause-blind toward the
+                // daemon; nothing derived from these verdicts shapes
+                // daemon-visible behavior).
+                tracing::debug!(
+                    skipped = ?derived.skipped,
+                    "emission claim derivation: window epochs not selected"
+                );
+            }
             assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET)?
         };
         let total_reward = claims.total_reward;
@@ -2704,7 +2714,6 @@ impl StakeEngineHandle {
     /// ([`AssembleEmissionClaim`]) — the emission sibling of the bond
     /// assembly path. Return-bytes-only: broadcast timing is the GF-4
     /// dispatch seam, outside this builder.
-    #[allow(dead_code)] // transient — the PR-3 Engine-side claim orchestrator is the consumer.
     pub(crate) async fn assemble_emission_claim(
         &self,
         msg: AssembleEmissionClaim,

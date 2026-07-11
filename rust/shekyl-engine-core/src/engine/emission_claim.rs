@@ -178,13 +178,6 @@
 //!
 //! [`EmissionVerifyError`]: shekyl_archival_retention::EmissionVerifyError
 
-// PR-2 lands the assembly core ahead of its consumer: PR-3's `StakeEngine`
-// claim handler is the call site. The item-level `#[allow(dead_code)]`
-// staging allows below (rule 45: narrowest scope) are deleted by PR-3
-// (`EMISSION_CLAIM_BUILDER.md` §8) — staging, not tolerated dead code per
-// `15-deletion-and-debt.mdc` (the emission_source PR-1 allow this PR
-// narrows followed the same protocol).
-
 use shekyl_archival_retention::{
     claimant_reward_share, claimed_epochs_contains, emission_vin_verify_claims, epoch_close_height,
     epoch_is_before_join, epoch_is_claim_expired, epoch_is_not_settled, shard_contribution_milli,
@@ -257,9 +250,6 @@ const _: () = assert!(
 /// refused by `BackingSet::designate_backing` on an empty set) — as its
 /// own refusal type rather than a variant here: it is a selection-time
 /// refusal, upstream of claim gathering.
-// Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the call
-// site is PR-3's `StakeEngine` claim handler; this allow is deleted there.
-#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub enum EmissionClaimError {
     /// Nothing claimable — an **idle state, not an error** (rule 82 /
@@ -322,8 +312,6 @@ pub enum EmissionClaimError {
 /// diagnostics**, never a transport operand or an observable refusal
 /// payload (CB-5: the claim query is cause-blind; nothing derived from
 /// these verdicts may shape daemon-visible behavior).
-// Staging (see module header): PR-3's handler consumes; deleted there.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EpochSkip {
     /// `E ≥ current_settled_epoch` ([`epoch_is_not_settled`] — the connect
@@ -374,8 +362,6 @@ pub enum EpochSkip {
 /// the epoch (single-evaluator discipline: the row can never pair with a
 /// different evaluation, and no later step re-indexes the source it came
 /// from).
-// Staging (see module header): PR-3's handler consumes; deleted there.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ClaimableEpoch {
     /// The claimed `E`.
@@ -397,8 +383,6 @@ pub struct ClaimableEpoch {
 /// re-derive after every refetch — the type makes the stale pairing
 /// unrepresentable (a refusal at compile time, not a panic or a
 /// mis-assembly at run time).
-// Staging (see module header): PR-3's handler consumes; deleted there.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct ClaimableEpochs<'src> {
     /// The claim context the batch was derived against — the assembly
@@ -450,8 +434,6 @@ pub struct ClaimableEpochs<'src> {
 /// empty (including the no-bond-record case — an idle state, not an
 /// error) and [`EmissionClaimError::SourceInvalid`] on internally
 /// inconsistent gather rows.
-// Staging (see module header): PR-3's handler is the call site.
-#[allow(dead_code)]
 pub fn derive_claimable_epochs(
     source: &EmissionClaimSource,
 ) -> Result<ClaimableEpochs<'_>, EmissionClaimError> {
@@ -572,8 +554,6 @@ pub fn derive_claimable_epochs(
 ///
 /// The PR-3 `StakeEngine` handler completes the vin around this (backing
 /// selection, dual auth) and runs the step-7 self-check on the whole.
-// Staging (see module header): PR-3's handler consumes; deleted there.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct AssembledClaims {
     /// Strictly increasing (window order) — the vin's `settlement_epochs`.
@@ -612,8 +592,6 @@ pub struct AssembledClaims {
 /// `claims_size_budget` is the claims-leg byte bound
 /// ([`EMISSION_CLAIMS_SIZE_BUDGET`] is the documented default; the
 /// parameter exists so the bound is testable at exact boundaries).
-// Staging (see module header): PR-3's handler is the call site.
-#[allow(dead_code)]
 pub fn assemble_claims(
     derived: &ClaimableEpochs<'_>,
     claims_size_budget: usize,
@@ -821,8 +799,6 @@ fn claims_vin(
 /// verifier's rejection (and a caller-side pairing bug — a vin epoch or
 /// bond record missing from the source, which forecloses even marshaling
 /// the verify call) is logged locally only.
-// Staging (see module header): PR-3's handler is the call site.
-#[allow(dead_code)]
 pub fn self_check_claims(
     source: &EmissionClaimSource,
     vin: &ArchivalRewardEmissionVin,

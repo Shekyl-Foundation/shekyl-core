@@ -19,8 +19,8 @@
 //! Transport: [`fetch_emission_claim_source`] is generic over
 //! [`Rpc`], but persona-side callers ride the persona's transport
 //! (`PTorClient`/`PRpc`) — **never** the principal's daemon session (§7.4
-//! transport pin; the PR-3 `StakeEngine` handler is the call site that
-//! enforces this). The request carries `p_id` **only**: no epoch selector,
+//! transport pin; the claim orchestrator's caller supplies the transport
+//! and enforces this). The request carries `p_id` **only**: no epoch selector,
 //! no range, no claimable-subset encoding (§7.2 transport cause-blindness).
 //!
 //! Untrusted-daemon posture (`20-rust-vs-cpp-policy.mdc` §3): scalar and
@@ -140,7 +140,7 @@ pub struct EmissionClaimSource {
     /// read), the derivation's strict-finalization operand
     /// (`emission_claim` step 2: verify admits `E` one count after the
     /// connect window does), and the §2 step-3 same-tip staleness operand
-    /// (PR-3's `StakeEngine` handler).
+    /// (the `AssembleEmissionClaim` handler's same-tip check).
     pub chain_height: u64,
     /// The daemon's settled-epoch operand (same helper consensus uses),
     /// **decode-enforced** equal to `settlement_epoch_at_height(chain_height)`

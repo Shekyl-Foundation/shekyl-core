@@ -99,8 +99,6 @@ impl BackingSet {
     /// subset of these false positives; the mature-but-late subset remains a
     /// benign, debug-only false positive, accepted as the cost of keeping
     /// the sweep-regression tripwire armed.
-    #[allow(dead_code)] // transient — the C-4 claim orchestration is the sole
-                        // production construction site; the selector below is already consumed.
     pub(crate) fn from_spendable(
         records: &[PFundingOutputRecord],
         reference_height: BlockHeight,
@@ -167,7 +165,6 @@ impl BackingSet {
     /// state before the first bond post confirms (GF-4b §4 item 3), or a
     /// persona whose only records are immature or rung-3 tranches. The
     /// caller waits or bonds; nothing is assembled.
-    #[allow(dead_code)] // transient — the C-4 `AssembleEmissionClaim` handler is the consumer.
     pub(crate) fn designate_backing(self) -> Result<DesignatedBacking, InsufficientBacking> {
         let reference_height = self.reference_height;
         self.records
@@ -221,7 +218,6 @@ pub(crate) struct InsufficientBacking {
 /// fee-selection entry, and it inserts the backing's `gindex` into the
 /// exclusion set before delegating, so a fee selection containing the
 /// backing is unrepresentable through this path.
-#[allow(dead_code)] // transient — the C-4 `AssembleEmissionClaim` handler is the consumer.
 pub(crate) struct DesignatedBacking {
     /// The designated backing record. Private — see the type docs.
     record: PFundingOutputRecord,
@@ -235,7 +231,6 @@ pub(crate) struct DesignatedBacking {
     reference_height: BlockHeight,
 }
 
-#[allow(dead_code)] // transient — the C-4 `AssembleEmissionClaim` handler is the consumer.
 impl DesignatedBacking {
     /// The designated backing record (read-only).
     pub(crate) fn record(&self) -> &PFundingOutputRecord {
