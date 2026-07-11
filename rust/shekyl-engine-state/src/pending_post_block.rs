@@ -33,7 +33,7 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
-use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId};
+use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot};
 
 use crate::error::WalletLedgerError;
 
@@ -83,7 +83,7 @@ pub enum PendingPostState {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct PendingBondPost {
     /// The owning persona's slot ordinal.
-    pub p_slot: u32,
+    pub p_slot: PSlot,
     /// The persona the transaction bytes are bound to — must match the
     /// binding engine-core's `PBoundBytes` carries when the record is
     /// re-lifted for dispatch.
@@ -312,7 +312,7 @@ mod tests {
 
     fn post(persona_byte: u8, gindexes: &[u64]) -> PendingBondPost {
         PendingBondPost {
-            p_slot: 0,
+            p_slot: PSlot::from_raw(0),
             persona: PCanonicalId::from_bytes([persona_byte; 32]),
             tx_bytes: vec![0xAB; 16],
             entry_offset_blocks: 3,

@@ -260,6 +260,12 @@ impl SpentRecordsDurablyPruned {
 /// The outcome of the D-A2 sweep: the consumed funding records (oldest-first
 /// order preserved) and their exact sum.
 ///
+/// **Invariant — `records` is non-empty.** [`sweep_funding_outputs`] is the
+/// sole constructor and refuses a sweep that consumes nothing, so possession
+/// of a `FundingSelection` is proof of ≥1 funding record. Callers rely on this
+/// (the orchestrator indexes `paths[0]` after a length-equality check against
+/// `records`); do not add a constructor that can bypass the refusal.
+///
 /// Redacted `Debug` via the contained records' own redaction; the struct adds
 /// nothing renderable beyond the total, so it derives nothing.
 pub(crate) struct FundingSelection {
@@ -360,6 +366,19 @@ pub(crate) fn sweep_funding_outputs(
     }
 
     if total < required {
+        return Err(BondAssemblyError::InsufficientFunding {
+            available: total.to_raw(),
+            required: required.to_raw(),
+        });
+    }
+
+    // A sweep that consumes nothing cannot fund a post. Only reachable with
+    // `required == 0` (a zero bond floor + zero fee — a degenerate holdings
+    // descriptor); a positive `required` over an empty eligible set already
+    // tripped the `total < required` refusal above. Refusing here is what
+    // makes `FundingSelection` non-empty *by construction*, so the downstream
+    // `assemble_tx` / `paths[0]` path can never index an empty vec.
+    if records.is_empty() {
         return Err(BondAssemblyError::InsufficientFunding {
             available: total.to_raw(),
             required: required.to_raw(),
@@ -741,7 +760,7 @@ mod tests {
         let persona = PCanonicalId::from_bytes([9u8; 32]);
         let bytes = vec![1, 2, 3, 4];
         let post = PendingBondPost {
-            p_slot: 0,
+            p_slot: PSlot::from_raw(0),
             persona,
             tx_bytes: bytes.clone(),
             entry_offset_blocks: 3,

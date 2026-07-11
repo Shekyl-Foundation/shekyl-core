@@ -21,8 +21,13 @@
                   {
                     "name": "p_slot",
                     "ty": {
-                      "name": "u32",
-                      "ty": "U32"
+                      "name": "PSlot",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "u32",
+                          "ty": "U32"
+                        }
+                      }
                     }
                   },
                   {

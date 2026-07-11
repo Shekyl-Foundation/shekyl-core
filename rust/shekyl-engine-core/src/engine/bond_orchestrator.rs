@@ -144,7 +144,7 @@ where
         // same-persona requests whose wasted proof work becomes a concern,
         // add a per-`p_slot` in-flight reservation held from here to the seal.
         let already = store
-            .read(|block| block.posts().iter().any(|p| p.p_slot == p_slot.to_raw()))
+            .read(|block| block.posts().iter().any(|p| p.p_slot == p_slot))
             .await
             .map_err(|e| BondAssemblyError::build("pending-post read", e))?;
         if already {
@@ -192,8 +192,11 @@ where
             required,
             reference_height,
         )?;
-        // With `floor > 0`, `required ≥ floor > 0`, so a successful sweep
-        // cannot be empty (`total < required` → `InsufficientFunding`).
+        // `FundingSelection` is non-empty by construction (the sweep refuses a
+        // zero-record consume), so `selection.records` carries ≥1 record and
+        // the length-checked `paths[0]` below cannot index an empty vec — this
+        // holds even for a degenerate `floor == 0`, which is why the guarantee
+        // lives in the sweep rather than an assumed `floor > 0` here.
 
         let assemble_inputs: Vec<AssembleInput> = selection
             .records
@@ -258,7 +261,7 @@ where
 
         // Persist-before-return (§3.3 step 6 / pin P-2).
         let sealed = PendingBondPost {
-            p_slot: p_slot.to_raw(),
+            p_slot,
             persona: *assembled.bound_tx.persona(),
             tx_bytes: assembled.bound_tx.bytes().to_vec(),
             entry_offset_blocks: assembled.plan.entry_offset_blocks,

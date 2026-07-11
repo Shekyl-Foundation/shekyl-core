@@ -574,7 +574,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         // discipline: no wall-clock, no txid, no identity).
         #[cfg(feature = "gf7-hooks")]
         self.observer.record(TimelineEvent::BondPostDispatched {
-            persona: u64::from(post.p_slot),
+            persona: u64::from(post.p_slot.to_raw()),
             at: tip.to_raw(),
         });
 
@@ -674,7 +674,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
 
-    use shekyl_types::TxHash;
+    use shekyl_types::{PSlot, TxHash};
 
     use super::*;
 
@@ -761,7 +761,7 @@ mod tests {
 
     fn post(persona_byte: u8, anchor: u64, offset: u64, gindexes: &[u64]) -> PendingBondPost {
         PendingBondPost {
-            p_slot: u32::from(persona_byte),
+            p_slot: PSlot::from_raw(u32::from(persona_byte)),
             persona: persona(persona_byte),
             tx_bytes: vec![persona_byte, 0xBE, 0xEF],
             entry_offset_blocks: 3,
