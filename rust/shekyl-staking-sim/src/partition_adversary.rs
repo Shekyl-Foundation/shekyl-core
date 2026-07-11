@@ -429,6 +429,15 @@ const PERIOD_MAX: u64 = 400;
 /// bound-1 arm with a greedy fallback (§16.7 item 4 / §17.1).
 pub const ARM_N: usize = 10;
 
+/// Largest `n` the graded arm accepts (PR #291 review: geometry guard).
+/// The design is exact `C(n, M)` enumeration; at `n = 20` that is
+/// `C(20,5) = 15 504` subsets scanned per label evaluation — the tractable
+/// ceiling for the evidence configuration's `trials × (perms + 1)` label
+/// evaluations. Beyond it the arm does not degrade, it refuses: grading a
+/// larger anonymity set is a design change (sampled-subset members 3/7),
+/// and sweep coverage of larger `N` already lives in the N-sweep rider.
+pub const MAX_EXACT_N: usize = 20;
+
 /// Deployed-posture tolerance (bound 1): `|T − null_mean| ≤ 0.05` — no rule in
 /// the family sorts founder from user better than chance (§14.4 bound 1).
 pub const BOUND1_TOL: f64 = 0.05;
@@ -1810,6 +1819,28 @@ pub fn run_partition_measurement(cfg: &PartitionConfig) -> PartitionReport {
         (FAMILY_SIZE as f64 / FAMILY_ALPHA).ceil() as u32 - 1,
     );
 
+    // Geometry guards (PR #291 review). The arm's grading is built on exact
+    // `C(n, M)` subset enumeration (members 3/7) and a non-degenerate
+    // founders-among-users population, so an out-of-range `n` is a
+    // mis-configuration, never a smaller-effort run — fail loudly rather
+    // than underflow (`n < M` wraps `m_subsets`' combination advance),
+    // degenerate (`n = M` makes every label vector the truth), or explode
+    // (`C(n, M)` growth swamps the per-label scans). `MAX_EXACT_N` bounds
+    // the exact-enumeration design; anonymity sets beyond it are the
+    // N-sweep rider's territory (`riders.rs`), and lifting the cap here
+    // means designing a sampled-subset member-3/7 variant, not raising a
+    // number. `trials = 0` would make every aggregate `0/0 = NaN` and the
+    // verdict vacuous.
+    assert!(
+        cfg.n > FOUNDER_COUNT && cfg.n <= MAX_EXACT_N,
+        "n={} out of the exact-enumeration design range ({} < n ≤ {}); the arm \
+         is specified at N = {ARM_N} (§14.4)",
+        cfg.n,
+        FOUNDER_COUNT,
+        MAX_EXACT_N,
+    );
+    assert!(cfg.trials > 0, "trials must be ≥ 1");
+
     let mut rng = SplitMix64(cfg.seed);
     let subsets = m_subsets(cfg.n, FOUNDER_COUNT);
 
@@ -1945,6 +1976,41 @@ mod tests {
             (bound - expected).abs() < 1e-12,
             "expected {expected}, got {bound}"
         );
+    }
+
+    /// The mis-configuration guards refuse loudly rather than degrade
+    /// (PR #291 review): a `perms` too small to resolve the any-member arm's
+    /// α/7 bar, an `n` outside the exact-enumeration design range, and a
+    /// zero-trial run are each configuration errors, never smaller-effort
+    /// runs.
+    #[test]
+    #[should_panic(expected = "cannot resolve the any-member arm")]
+    fn guard_refuses_unresolvable_perms() {
+        let cfg = PartitionConfig {
+            perms: 100,
+            ..PartitionConfig::default()
+        };
+        run_partition_measurement(&cfg);
+    }
+
+    #[test]
+    #[should_panic(expected = "exact-enumeration design range")]
+    fn guard_refuses_out_of_range_n() {
+        let cfg = PartitionConfig {
+            n: MAX_EXACT_N + 1,
+            ..PartitionConfig::default()
+        };
+        run_partition_measurement(&cfg);
+    }
+
+    #[test]
+    #[should_panic(expected = "trials must be ≥ 1")]
+    fn guard_refuses_zero_trials() {
+        let cfg = PartitionConfig {
+            trials: 0,
+            ..PartitionConfig::default()
+        };
+        run_partition_measurement(&cfg);
     }
 
     /// The committed upper bound is conservative: it is ≥ the tight range CDF
