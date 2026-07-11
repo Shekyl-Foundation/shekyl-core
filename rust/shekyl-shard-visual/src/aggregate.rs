@@ -45,6 +45,6 @@ pub mod hex_bytes {
         let bytes = hex::decode(s.trim()).map_err(serde::de::Error::custom)?;
         bytes
             .try_into()
-            .map_err(|_| serde::de::Error::custom("shard_hash must be 32 bytes"))
+            .map_err(|_| serde::de::Error::custom("hash must be exactly 32 bytes"))
     }
 }

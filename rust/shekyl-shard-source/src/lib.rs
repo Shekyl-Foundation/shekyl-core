@@ -84,8 +84,9 @@ pub struct ShardRenderHandle {
     /// The shard's own content hash (hex on the wire).
     #[serde(with = "shekyl_shard_visual::hex_bytes")]
     pub shard_hash: [u8; 32],
-    /// Optional compositor-seed override (hex on the wire).
-    #[serde(with = "hex32_opt", default)]
+    /// Optional compositor-seed override (hex on the wire). Absent when unset —
+    /// never serialized as JSON `null`.
+    #[serde(with = "hex32_opt", default, skip_serializing_if = "Option::is_none")]
     pub hash_override: Option<[u8; 32]>,
     /// Output edge length in pixels (square).
     pub size: u32,
@@ -188,9 +189,10 @@ impl ShardSource for ArchivalShardSource {
     }
 }
 
-/// Optional 32-byte hash on the wire: hex when present, absent otherwise. The
-/// 32-byte decode delegates to `shekyl_shard_visual::hex_bytes` so the encoding
-/// has a single definition and cannot drift from `shard_hash`.
+/// Optional 32-byte hash on the wire: lowercase hex when present, key omitted
+/// when unset (`skip_serializing_if` on the field). Both encode and decode
+/// delegate to [`shekyl_shard_visual::hex_bytes`] so the encoding has a single
+/// definition and cannot drift from `shard_hash`.
 mod hex32_opt {
     use serde::{Deserialize, Deserializer, Serializer};
 
@@ -199,7 +201,10 @@ mod hex32_opt {
         S: Serializer,
     {
         match opt {
-            Some(bytes) => serializer.serialize_some(&hex::encode(bytes)),
+            // Field-level `skip_serializing_if` normally prevents this arm from
+            // running for `None`; keep `serialize_none` so the module stays a
+            // correct Option adapter if reused without the skip attribute.
+            Some(bytes) => shekyl_shard_visual::hex_bytes::serialize(bytes, serializer),
             None => serializer.serialize_none(),
         }
     }
@@ -326,6 +331,11 @@ mod tests {
             size: 256,
         };
         let json = serde_json::to_string(&handle).unwrap();
+        // Wire contract: unset override is absent, not JSON null.
+        assert!(
+            !json.contains("hash_override"),
+            "unset hash_override must be omitted from JSON, got {json}"
+        );
         let back: ShardRenderHandle = serde_json::from_str(&json).unwrap();
         assert_eq!(handle, back);
         assert!(back.hash_override.is_none());
