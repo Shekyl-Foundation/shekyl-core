@@ -1,0 +1,90 @@
+---
+description: Scoped work lands where it was scoped. Deferral requires a named blocker, disclosed in the commit that defers — never discovered by later audit.
+alwaysApply: true
+---
+
+# No lazy deferral
+
+Work that is scoped to a PR lands in that PR. Deferring scoped work is
+sometimes necessary — but it is a **decision with required form**, never
+a default an implementer reaches for because the commit grew, the item
+is tedious, or the consumer "can land later."
+
+## The rule
+
+A deferral of scoped work is legitimate only when all three hold:
+
+1. **A named blocking reason exists.** "Blocked on X" where X is a
+   concrete, checkable dependency: an unlanded harness, an external
+   standardization, a gated upstream PR, a review decision not yet
+   made. "The commit was getting big" is a *split* reason, not a
+   *deferral* reason — a split re-schedules the work inside the same
+   PR; a deferral moves it out. "It felt separable" is neither.
+2. **The deferral is tagged and scheduled.** A `docs/FOLLOWUPS.md`
+   entry (or an amendment to the PR's own plan doc) with the blocker
+   named, a target version/PR, and the reopening criterion per
+   `21-reversion-clause-discipline.mdc`. An allow-comment pointing at
+   a future consumer is *not* a deferral record — it is a residue
+   marker that a deferral record must exist elsewhere to justify.
+3. **The deferral is disclosed in the flow that made it.** The commit
+   message or the report to the reviewer for the commit that sheds the
+   work states: what was scoped, what is deferred, why, and where it
+   lands. A deferral discovered later by a re-scope audit — instead of
+   disclosed by the commit that made it — is a process failure even
+   when the deferral itself would have been approved.
+
+## The motivating example
+
+PR-3 commit 4 (`AssembleEmissionClaim`, 2026-07-11): the plan scoped
+the claim orchestration into commit 4 ("the C-4 claim orchestration is
+the sole production construction site," `backing_set.rs`, written at
+commit 3). Commit 4 grew, the handler was split out — a defensible
+split — but the orchestration half was silently re-pointed to "the
+PR-3 Engine-side claim orchestrator" in allow comments, with no plan
+amendment, no FOLLOWUPS entry, and no disclosure in the commit report.
+The deferral surfaced only in the commit-5 re-scope audit. The PR row's
+own deliverable ("first live consumer — un-deadens GF-4b §5 item 1")
+was false in the interim. The disposition: the orchestrator lands in
+the same PR, as its own commit; the deferral-without-disclosure is the
+anti-pattern this rule names.
+
+## Why lazy deferral compounds
+
+Each silent deferral looks small. In aggregate they produce a FOLLOWUPS
+queue that is months of work whose items nobody decided to defer — the
+queue *accumulated* rather than being *chosen*. Per
+`15-deletion-and-debt.mdc`, FOLLOWUPS is not a graveyard: the V3.0
+pre-genesis queue is load-bearing, and every silent addition to it is
+un-reviewed scope movement on the critical path. The deferral decision
+belongs to the human reviewer, made on disclosure — not to the
+implementer, made by omission.
+
+## Callee-without-caller is the canonical smell
+
+A PR that lands a callee (handler, verifier, type, message) whose
+production caller is "a future commit" has deferred integration work.
+Sometimes staged landing is the plan (inert-until-wired is a legitimate
+pattern in this repo — see the 2c-2a/2c-2b chain). The difference is
+whether the staging is **in the plan** (named commits, named consumers,
+reviewed sequence) or **emerged silently** (the caller was scoped here
+and quietly became "later"). Staging allows with named consumers are
+the marker of the first; allow comments whose named consumer shifted
+between commits without a plan change are the marker of the second.
+
+## Interaction with existing rules
+
+- **`15-deletion-and-debt.mdc`** — "while we're here" governs scope
+  *additions*; this rule governs scope *sheddings*. Both move work
+  across the PR boundary without review; both are named so the review
+  catches them.
+- **`21-reversion-clause-discipline.mdc`** — a legitimate deferral is
+  a reversion-clause-shaped record: rejected-for-now with named
+  reopening criteria. A lazy deferral is the "we'll think about it
+  later" anti-pattern that rule already forbids; this rule adds the
+  disclosure-in-flow requirement.
+- **`06-branching.mdc`** — the 5-day/10-commit ceiling creates the
+  pressure to shed scope. The sanctioned relief valves are splitting
+  the PR (with a plan) or an explicit, disclosed deferral — never a
+  silent one.
+- **`90-commits.mdc`** — the commit that defers references what it
+  defers, the same way it references the spec section it implements.
