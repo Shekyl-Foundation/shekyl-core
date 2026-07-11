@@ -50,12 +50,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::consensus_state::settlement_epoch_at_height;
+use shekyl_archival_retention::{p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin};
 use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
 use shekyl_engine_state::transfer::eligible_height;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::transaction::{BondPostKind, Input};
+use shekyl_wire::transaction::{BondPostKind, Input, Transaction};
 
 /// Hard ceiling on the blocks one [`ScanStep`] may carry — the **enforced** form
 /// of DQ6's "bounded per message" (the actor holds `&mut self` across the offload,
@@ -241,11 +242,12 @@ pub(crate) struct FundingOutputMatch {
     pub(crate) epoch: SettlementEpoch,
     /// GF-4b mint-lineage rung, classified structurally from the carrying
     /// tx while the block is in hand (`ARCHIVAL_GF4B_BACKING_LINEAGE.md`
-    /// §3.3): a tx carrying the owning persona's own `BondPost` input →
+    /// §3.3, rung 1 per §5 item 2): a tx carrying the owning persona's own
+    /// emission vin → `EmissionReward`; the owner's own `BondPost` input →
     /// `BondPostChange`; anything else fails toward the forbidden rung,
     /// `ExternalTransfer` (which structurally covers the anomalous
     /// coinbase-to-`P` case — `P` never mines, and a coinbase tx cannot
-    /// carry a `BondPost` input).
+    /// carry a `BondPost` or emission input).
     pub(crate) lineage: MintLineageOutput,
     /// The height this output becomes spendable (its curve-tree insertion
     /// height) — the shared `transfer::eligible_height` result, computed
@@ -386,6 +388,71 @@ fn post_kind_byte(kind: &BondPostKind) -> u8 {
     }
 }
 
+/// GF-4b rung-1 pre-pass (C-1, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §5 item 2):
+/// the per-tx set of *our* persona slots whose **own** emission vin the tx
+/// carries — the structural proof that lifts the tx's recovered outputs to
+/// [`MintLineageOutput::EmissionReward`]. Public data only: an emission vin is
+/// on-chain cleartext, and its `p_pubkey → p_canonical_id` derivation
+/// ([`p_canonical_id_from_hybrid_pubkey`], the §6.1 rule) is the same one the
+/// bond post published, so no secret is touched.
+///
+/// **Fail-toward-forbidden (GF4b-4), enforced by what does *not* gain an
+/// entry.** A tx earns an entry only when *all* of the following hold; each
+/// failure leaves the map without an entry, so the classification below
+/// defaults its outputs to rung 3 (`ExternalTransfer`):
+///
+/// - **The blob parses under the archival-retention reader** —
+///   [`ArchivalRewardEmissionVin::read`], the crate that *is* the Rust
+///   validator for this wire (`shekyl-wire` deliberately carries the vin as
+///   an opaque blob; the C++ posture). The reader enforces the §8.0.2
+///   structural invariants inline as it parses (canonical key/sig lengths,
+///   epoch bounds/ordering, amount positivity, proof-size bounds), so
+///   "parses" here means *structurally valid*, not merely "bytes read".
+/// - **The parse consumed the blob exactly.** `read` alone stops at the last
+///   field; a blob with trailing bytes is not the canonical encoding of the
+///   vin it fronts, so it is not a structural proof. Same exact-parse
+///   discipline as `read_payload_exact`, applied at this consumption site.
+/// - **The derived `p_canonical_id` is one of ours** — a foreign emission vin
+///   proves someone *else's* claim, never ours.
+/// - **The tx's hash is present** in the positionally-paired
+///   `transaction_hashes` — a hash-less tx cannot be keyed, so its outputs
+///   cannot be lifted (the same under-classify posture as the bond-post
+///   pre-pass; upstream, the scanner refuses a mispaired block outright and
+///   the caller's debug tripwire catches it in test builds, so this arm is
+///   the innermost of three defenses).
+///
+/// A misclassification in this direction can only *exclude* a safe output
+/// from backing eligibility, never admit an unsafe one (GF4b-4's acceptance
+/// criterion for this arm).
+fn own_emission_slots(
+    transactions: &[Transaction],
+    transaction_hashes: &[[u8; 32]],
+    known_personas: &BTreeMap<PCanonicalId, u32>,
+) -> BTreeMap<[u8; 32], BTreeSet<u32>> {
+    let mut emission_slots: BTreeMap<[u8; 32], BTreeSet<u32>> = BTreeMap::new();
+    for (j, tx) in transactions.iter().enumerate() {
+        for input in &tx.prefix.inputs {
+            let Input::ArchivalRewardEmission { canonical_bytes } = input else {
+                continue;
+            };
+            let mut r = canonical_bytes.as_slice();
+            let Ok(vin) = ArchivalRewardEmissionVin::read(&mut r) else {
+                continue; // unparseable → no entry → rung 3
+            };
+            if !r.is_empty() {
+                continue; // trailing bytes → not canonical → rung 3
+            }
+            let id = p_canonical_id_from_hybrid_pubkey(&vin.p_pubkey);
+            if let Some(slot) = known_personas.get(&id) {
+                if let Some(tx_hash) = transaction_hashes.get(j) {
+                    emission_slots.entry(*tx_hash).or_default().insert(*slot);
+                }
+            }
+        }
+    }
+    emission_slots
+}
+
 /// SP-3 — the dual extractor. Runs **off** the actor thread (the handler offloads
 /// it to `spawn_blocking`); the secret `scanners` live only here and drop at
 /// return (DQ5). Returns **only** public data.
@@ -433,12 +500,14 @@ pub(crate) fn run_dual_extractor(
         let height = range.height_at(i);
         let epoch = SettlementEpoch::from_raw(settlement_epoch_at_height(height.to_raw()));
 
-        // GF-4b lineage pre-pass (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3),
-        // public data only: the per-tx set of *our* persona slots posting a
-        // `BondPost` in that tx. `transaction_hashes` is positionally paired
-        // with `transactions` (the scanner enforces the length match); a tx
-        // whose hash is missing simply gains no map entry, so its outputs fail
-        // toward the forbidden rung below. There is no miner/coinbase arm:
+        // GF-4b lineage pre-passes (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3;
+        // rung 1: §5 item 2), public data only: per tx, the set of *our*
+        // persona slots whose own emission vin it carries (rung 1, the
+        // `own_emission_slots` helper above) and the set posting a `BondPost`
+        // in it (rung 2, inline below). `transaction_hashes` is positionally
+        // paired with `transactions` (the scanner enforces the length match);
+        // a tx whose hash is missing simply gains no map entry, so its outputs
+        // fail toward the forbidden rung below. There is no miner/coinbase arm:
         // `P` never mines (owner ruling, §3.3), and a coinbase tx carries only
         // `Input::Gen` — an anomalous coinbase-to-`P` output lands on
         // `ExternalTransfer` structurally.
@@ -457,6 +526,11 @@ pub(crate) fn run_dual_extractor(
              attribution to ExternalTransfer"
         );
         let mut bond_post_slots: BTreeMap<[u8; 32], BTreeSet<u32>> = BTreeMap::new();
+        let emission_slots = own_emission_slots(
+            &block.transactions,
+            &block.block.transaction_hashes,
+            known_personas,
+        );
 
         // (b) public bond-post match — reads inputs, no secret, no clone.
         for (j, tx) in block.transactions.iter().enumerate() {
@@ -498,11 +572,24 @@ pub(crate) fn run_dual_extractor(
                 let wo = out.wallet_output();
                 let ct = out.source_ciphertext();
 
-                // GF-4b classification (§3.3), fail-toward-the-forbidden-rung:
-                // only a structural proof (the *owning* persona's own bond post
-                // in the carrying tx) lifts an output off rung 3.
+                // GF-4b classification (§3.3 + §5 item 2), fail-toward-the-
+                // forbidden-rung: only a structural proof — the *owning*
+                // persona's own emission vin (rung 1) or own bond post
+                // (rung 2) in the carrying tx — lifts an output off rung 3.
+                // The rung-1 arm is checked first per ladder order; the two
+                // proofs cannot coexist on a consensus-valid chain (the wire
+                // mixing matrix rejects emission + bond-post in one tx,
+                // `shekyl_wire::transaction::validate_context_free_pruned`),
+                // and both rungs are equally backing-eligible in
+                // `BackingSet`, so the precedence carries no eligibility
+                // consequence even off one.
                 let tx_hash = wo.transaction();
-                let lineage = if bond_post_slots
+                let lineage = if emission_slots
+                    .get(&tx_hash)
+                    .is_some_and(|slots| slots.contains(slot))
+                {
+                    MintLineageOutput::EmissionReward
+                } else if bond_post_slots
                     .get(&tx_hash)
                     .is_some_and(|slots| slots.contains(slot))
                 {
@@ -554,10 +641,13 @@ pub(crate) fn run_dual_extractor(
 mod tests {
     use super::*;
 
-    use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
+    use shekyl_archival_retention::{
+        HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking, ShardWorkEntry, WorkEpochClaim,
+    };
     use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
     use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
     use shekyl_crypto_pq::kem::HybridKemPublicKey;
+    use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
     use shekyl_scanner::bench_fixtures::{
         build_typical_case_scannable_block, scannable_block_for_recipient,
     };
@@ -603,6 +693,49 @@ mod tests {
             bonded_total_atomic: 1_000,
             bond_credit: 1_000,
             bond_debit: 0,
+        }
+    }
+
+    /// A structurally-valid emission vin naming persona `p` as claimant — the
+    /// §8.0.2 field set with dummy proof/auth bytes (the rung-1 pre-pass
+    /// parses structure; it does not verify proofs or auths, which is the
+    /// daemon's C-1 gate). `p_pubkey` is `p`'s real canonical hybrid key so
+    /// the §6.1 `p_canonical_id` derivation matches the id the bond post
+    /// published.
+    fn emission_vin_for(p: &ArchivalPKeys) -> ArchivalRewardEmissionVin {
+        ArchivalRewardEmissionVin {
+            p_pubkey: p.hybrid_bond_id().to_canonical_bytes().expect("encode"),
+            holdings: HoldingsDescriptor {
+                kind: HoldingsKind::CompleteTree,
+                shard_ids: Vec::new(),
+            },
+            settlement_epochs: vec![11],
+            work_claim: vec![WorkEpochClaim {
+                epoch: 11,
+                shard_entries: vec![ShardWorkEntry {
+                    shard_id: 7,
+                    serve_credit_bit: true,
+                    scarcity_milli: 850,
+                }],
+            }],
+            backing: MembershipOnlyBacking {
+                proof: vec![0xEE; 128],
+                pseudo_out: [0x22; 32],
+                pqc_pk_hash: [0x33; 32],
+                backing_pubkey: vec![0xB2; SINGLE_KEY_CANONICAL_LEN],
+                tree_depth: 3,
+            },
+            reward_amount_plain: vec![1_000_000],
+            auth_backing: vec![0xC3; SINGLE_SIG_CANONICAL_LEN],
+            auth_claim: vec![0xD4; SINGLE_SIG_CANONICAL_LEN],
+        }
+    }
+
+    /// The wire input carrying `p`'s emission vin (canonical blob, leading
+    /// `0x04` tag included — the shape `shekyl-wire` transports opaquely).
+    fn emission_input_for(p: &ArchivalPKeys) -> Input {
+        Input::ArchivalRewardEmission {
+            canonical_bytes: emission_vin_for(p).serialize().expect("serialize"),
         }
     }
 
@@ -901,6 +1034,234 @@ mod tests {
             rec.lineage,
             MintLineageOutput::ExternalTransfer,
             "another persona's bond post is not a structural proof for this output"
+        );
+    }
+
+    // ---- GF-4b rung-1 (`EmissionReward`) KATs (C-1, §5 item 2) ----
+    //
+    // Paired positive/negative coverage for the fail-toward-forbidden
+    // acceptance criterion (GF4b-4): the own-vin case lifts to rung 1, and
+    // *each* non-own case — foreign claimant, another held persona's vin, an
+    // unparseable blob, a non-canonical (trailing-bytes) blob, a different tx
+    // in the same block, a missing tx hash — stays rung 3. The dangerous
+    // failure is a classifier that lifts a non-own case, and only the
+    // negative arms catch it.
+
+    /// Rung 1 positive: the carrying tx bears the recovered output's **own**
+    /// persona's emission vin, so the output classifies `EmissionReward` —
+    /// the reserved variant's first constructor site.
+    #[test]
+    fn lineage_emission_reward_for_own_emission_vin_tx() {
+        let p = persona(0);
+        let mut block = funding_block(&p);
+        block.transactions[0]
+            .prefix
+            .inputs
+            .push(emission_input_for(&p));
+
+        let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
+        let known = BTreeMap::from([(canonical_id(&p), 0)]);
+        let res =
+            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+
+        let rec = res.funding_outputs.first().expect("one record");
+        assert_eq!(rec.lineage, MintLineageOutput::EmissionReward);
+    }
+
+    /// Fail-toward-forbidden: a **foreign** emission vin (claimant not among
+    /// our personas at all) in the carrying tx does not lift our output —
+    /// it proves someone else's claim, never ours.
+    #[test]
+    fn lineage_fails_toward_forbidden_for_foreign_emission_vin() {
+        let mine = persona(0);
+        let stranger = persona(2);
+        let mut block = funding_block(&mine);
+        block.transactions[0]
+            .prefix
+            .inputs
+            .push(emission_input_for(&stranger));
+
+        let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
+        let known = BTreeMap::from([(canonical_id(&mine), 0)]);
+        let res =
+            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+
+        let rec = res.funding_outputs.first().expect("one record");
+        assert_eq!(
+            rec.lineage,
+            MintLineageOutput::ExternalTransfer,
+            "a stranger's emission vin is not a structural proof for this output"
+        );
+    }
+
+    /// Owning-persona attribution (same rule as the bond-post arm): an
+    /// emission vin of a *different* held persona in the carrying tx does
+    /// **not** lift this persona's output off rung 3 — the structural proof
+    /// must be the owner's own vin, not any vin we recognize.
+    #[test]
+    fn lineage_fails_toward_forbidden_for_another_personas_emission_vin() {
+        let mine = persona(0);
+        let other = persona(1);
+        let mut block = funding_block(&mine);
+        block.transactions[0]
+            .prefix
+            .inputs
+            .push(emission_input_for(&other));
+
+        let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
+        let known = BTreeMap::from([(canonical_id(&mine), 0), (canonical_id(&other), 1)]);
+        let res =
+            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+
+        let rec = res.funding_outputs.first().expect("one record");
+        assert_eq!(
+            rec.lineage,
+            MintLineageOutput::ExternalTransfer,
+            "another persona's emission vin is not a structural proof for this output"
+        );
+    }
+
+    /// Fail-toward-forbidden on parse failure, premise-asserted: the *same*
+    /// own-vin blob classifies rung 1 intact (premise — so the corruption is
+    /// the only variable), and truncated it classifies rung 3. A pre-pass
+    /// that "recovered" a claimant id from a blob the validator-crate reader
+    /// rejects would fail this arm.
+    #[test]
+    fn lineage_fails_toward_forbidden_for_unparseable_emission_blob() {
+        let p = persona(0);
+        let known = BTreeMap::from([(canonical_id(&p), 0)]);
+        let intact = emission_vin_for(&p).serialize().expect("serialize");
+
+        // Premise: the intact blob lifts to rung 1.
+        let mut block = funding_block(&p);
+        block.transactions[0]
+            .prefix
+            .inputs
+            .push(Input::ArchivalRewardEmission {
+                canonical_bytes: intact.clone(),
+            });
+        let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
+        let res =
+            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+        assert_eq!(
+            res.funding_outputs.first().expect("one record").lineage,
+            MintLineageOutput::EmissionReward,
+            "premise: the uncorrupted blob must lift to rung 1, so truncation \
+             is the only variable in the negative arm"
+        );
+
+        // Negative: the truncated blob fails the parse and stays rung 3.
+        let mut truncated = intact;
+        truncated.truncate(truncated.len() - 1);
+        let mut block = funding_block(&p);
+        block.transactions[0]
+            .prefix
+            .inputs
+            .push(Input::ArchivalRewardEmission {
+                canonical_bytes: truncated,
+            });
+        let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
+        let res =
+            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+        assert_eq!(
+            res.funding_outputs.first().expect("one record").lineage,
+            MintLineageOutput::ExternalTransfer,
+            "an unparseable emission blob is not a structural proof"
+        );
+    }
+
+    /// Fail-toward-forbidden on a non-canonical blob: trailing bytes after a
+    /// successful field parse stay rung 3. This is the arm the plain reader
+    /// would miss (`ArchivalRewardEmissionVin::read` stops at the last
+    /// field); it proves the pre-pass's exact-parse discipline is armed.
+    #[test]
+    fn lineage_fails_toward_forbidden_for_trailing_bytes_in_emission_blob() {
+        let p = persona(0);
+        let mut padded = emission_vin_for(&p).serialize().expect("serialize");
+        padded.push(0x00);
+        let mut block = funding_block(&p);
+        block.transactions[0]
+            .prefix
+            .inputs
+            .push(Input::ArchivalRewardEmission {
+                canonical_bytes: padded,
+            });
+
+        let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
+        let known = BTreeMap::from([(canonical_id(&p), 0)]);
+        let res =
+            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+
+        let rec = res.funding_outputs.first().expect("one record");
+        assert_eq!(
+            rec.lineage,
+            MintLineageOutput::ExternalTransfer,
+            "a trailing-bytes blob is not the canonical vin encoding"
+        );
+    }
+
+    /// Per-tx keying: our own emission vin in a *different* tx of the same
+    /// block does not lift an output of this tx — the structural proof is
+    /// "the carrying tx bears the vin", never "the block contains one".
+    #[test]
+    fn lineage_fails_toward_forbidden_for_emission_vin_in_a_different_tx() {
+        let p = persona(0);
+        // Tx 0 carries our funding output; a second, foreign tx carries our
+        // emission vin. Appending keeps tx 0's outputs and gindexes intact.
+        let mut block = funding_block(&p);
+        let mut emission_tx = build_typical_case_scannable_block(1)
+            .transactions
+            .first()
+            .expect("a non-miner tx")
+            .clone();
+        emission_tx.prefix.inputs.push(emission_input_for(&p));
+        let emission_tx_hash = emission_tx.hash();
+        block.transactions.push(emission_tx);
+        block.block.transaction_hashes.push(emission_tx_hash);
+
+        let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
+        let known = BTreeMap::from([(canonical_id(&p), 0)]);
+        let res =
+            run_dual_extractor(vec![(0, scanner)], &known, range(5, 6), &[block]).expect("extract");
+
+        let rec = res.funding_outputs.first().expect("one record");
+        assert_eq!(
+            rec.lineage,
+            MintLineageOutput::ExternalTransfer,
+            "an emission vin elsewhere in the block is not a structural proof \
+             for this tx's outputs"
+        );
+    }
+
+    /// The missing-tx-hash arm, at the pre-pass seam: a tx whose hash is
+    /// absent from `transaction_hashes` gains no map entry, so its outputs
+    /// would classify rung 3. Tested at the helper because the end-to-end
+    /// path is doubly guarded upstream — the scanner refuses a mispaired
+    /// block outright (`ScanError::InvalidScannableBlock`) and
+    /// `run_dual_extractor`'s debug tripwire fires in test builds — leaving
+    /// this arm as the innermost, release-mode defense.
+    #[test]
+    fn emission_pre_pass_missing_tx_hash_yields_no_entry() {
+        let p = persona(0);
+        let known = BTreeMap::from([(canonical_id(&p), 0)]);
+        let mut tx = funding_block(&p).transactions.remove(0);
+        tx.prefix.inputs.push(emission_input_for(&p));
+
+        // Premise: with its hash present, the tx earns its slot entry.
+        let hash = tx.hash();
+        let slots = own_emission_slots(std::slice::from_ref(&tx), &[hash], &known);
+        assert_eq!(
+            slots.get(&hash).map(|s| s.contains(&0)),
+            Some(true),
+            "premise: the hash-paired tx earns an entry, so the missing hash \
+             is the only variable in the negative arm"
+        );
+
+        // Negative: no hash, no entry — nothing for classification to lift.
+        let slots = own_emission_slots(std::slice::from_ref(&tx), &[], &known);
+        assert!(
+            slots.is_empty(),
+            "a hash-less tx must gain no entry (fail toward rung 3)"
         );
     }
 

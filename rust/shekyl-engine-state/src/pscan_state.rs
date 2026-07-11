@@ -88,13 +88,15 @@ pub const PSCAN_STATE_VERSION: u32 = 5;
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub enum MintLineageOutput {
     /// Rung 1 — recovered from a transaction carrying `P`'s own
-    /// `txin_archival_reward_emission`. Present for **ladder-completeness**
-    /// (the persisted vocabulary encodes the full GF-4b spec ladder), with
-    /// the consumer named and scheduled: **reserved — never constructed
-    /// until C-1's emission-vin scan arm lands**, and that arm is bound to
-    /// the fail-toward-forbidden rule as a C-1 acceptance criterion
-    /// (GF4b-4, `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §5 residue item 2;
-    /// rule-21 justification in §3.3).
+    /// `txin_archival_reward_emission`. Constructed by C-1's emission-vin
+    /// scan arm (`shekyl-engine-core`'s `run_dual_extractor` rung-1
+    /// pre-pass), which is bound to the fail-toward-forbidden rule as its
+    /// acceptance criterion (GF4b-4, `ARCHIVAL_GF4B_BACKING_LINEAGE.md`
+    /// §5 residue item 2): only a structurally-proven own emission vin —
+    /// blob parsed exactly by the archival-retention reader, derived
+    /// `p_canonical_id` ours, carrying-tx hash present — lifts an output
+    /// here; every non-own case stays
+    /// [`ExternalTransfer`](Self::ExternalTransfer).
     EmissionReward,
     /// Rung 2 — recovered from a transaction carrying a `BondPost` input whose
     /// `p_canonical_id` is the recovered output's **own** persona: bond-post
