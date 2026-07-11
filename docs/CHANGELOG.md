@@ -95,6 +95,70 @@
   wallet-sync-over-Axum check folded in as the deletion PR's verification
   gate (transport only; epee KV serialization and Levin P2P remain
   separate migration phases).
+- **wallet: emission claim assembly module — claim-builder PR 2
+  (`EMISSION_CLAIM_BUILDER.md` §2 steps 1/2/5/7, §8 PR 2).** New pure
+  module `shekyl-engine-core/src/engine/emission_claim.rs`: everything
+  between the decoded claim source and the signed transaction that is
+  deterministic given the source — KAT-able with a fixture
+  `EmissionEpochSource`, no live daemon, no actor harness.
+  `derive_claimable_epochs` consumes **five** boundaries and never
+  re-derives boundary arithmetic: top/expiry/dedup through the
+  read-only predicates (`epoch_is_not_settled` — extracted in this
+  PR's review round, retiring an interim scratch-clone-oracle
+  disposition and discharging its V3.1 FOLLOWUPS item on the named
+  trigger — plus the existing `epoch_is_claim_expired` /
+  `claimed_epochs_contains`; the connect mutator resolves through the
+  same predicates, pinned by a differential test), **join** via the
+  newly extracted `epoch_is_before_join` (verify step 2's
+  `E ≥ E_join + 1` against the record's join epoch — a review finding:
+  without it a retire-then-rejoin record wedged the whole batch behind
+  the cause-blind `SelfCheckFailed`), and **strict finalization** via
+  verify's own `epoch_close_height` predicate (a window epoch with no
+  close height at all is refused `SourceInvalid` — it can never
+  finalize). The share recompute is the shared steps-4/5 evaluation
+  head `claimant_reward_share`, called by the verify body and the
+  derivation alike (never a mirrored copy). The finalization boundary is a
+  review finding: an earlier revision claimed the missing-close-row
+  skip foreclosed the edge — disproved at daemon source (the close of
+  `E` runs while connecting `E`'s last block, `blockchain_db.cpp`
+  `add_block`; gather height and `settled` come from one `db.height()`
+  read, `archival_claim_source.cpp`), so at `chain_height ==
+  h_close(E)` the connect window admits `E` while verify rejects it
+  next-block — a once-per-epoch spurious-refusal window, closed by
+  deferring one count (`EpochSkip::NotFinalized`, premise-asserted
+  boundary KAT). Claimable ⇔ recomputed share `> 0` through the
+  verify-exact chain (discharges the M1 round-1 forward obligation; no
+  `K_COVER` read anywhere in the module; zero-share skip cause-blind
+  by construction). Assembly emits the canonical minimal rows
+  (credited shards only, ascending, `serve_credit_bit = true`), with
+  the `u64→u32` scarcity conversion armed at the builder's site
+  (compile-time const-assert as the production guarantee, checked
+  `try_from` refusal + hostile-fixture KAT as non-production defense)
+  and the entry-sum-vs-`work_P` hard check; sizing measures the claims
+  leg with the **production encoder** at structural maxima — on the
+  one vin the assembly's content is returned from (`claims_vin`, the
+  single construction site) — against the **binding per-tx relay
+  bound**, the new `shekyl_wire::TX_WEIGHT_LIMIT` (149 400 B, pinning
+  the C++ `get_transaction_weight_limit`; a review finding re-based
+  this off `MAX_TX_SIZE`, the non-binding 1 MB parse cap, which could
+  pass a permanently-unsubmittable batch) minus a re-derived 48 KiB
+  non-claims reserve, dropping youngest-first (bound-or-split, GF-4b
+  §5 item 5) and refusing when one epoch cannot fit. The PR-1 decode
+  now also enforces the settled/height invariant
+  (`current_settled_epoch == settlement_epoch_at_height(chain_height)`,
+  a `Malformed` refusal otherwise), so the derivation's window
+  boundaries and the self-check's recomputed boundaries provably share
+  one basis. The step-7 self-check (`self_check_claims`) drives the
+  literal `emission_vin_verify_claims` on the assembled rows before
+  any signing — a builder/verifier disagreement surfaces loudly at
+  build time as `SelfCheckFailed`, **cause-blind** per the CB-5
+  builder pin (unit variant; verify detail log-local only), with a
+  differential KAT proving each of six vin mutations and three
+  context arms flips accept → refuse. CB-5 refusal taxonomy landed
+  minus `InsufficientBacking` (PR 3, with its constructor). Rides
+  along: the dead `shekyl_engine_core::error::EngineCoreError` module
+  deleted (separate commit; FOLLOWUPS item closed — zero live
+  consumers re-verified against the live tree).
 - **rpc: emission claim-source query — claim-builder PR 1
   (`EMISSION_CLAIM_BUILDER.md` §7 / §8 PR 1).** New daemon JSON-RPC
   `get_archival_emission_claim_source` (both transports; RPC minor

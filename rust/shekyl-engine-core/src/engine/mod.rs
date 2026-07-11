@@ -223,6 +223,9 @@ mod daemon_observability;
 #[cfg(test)]
 mod economics_differential;
 pub(crate) mod economics_snapshot;
+/// Emission claim assembly (`EMISSION_CLAIM_BUILDER.md` §2, PR 2): the pure,
+/// KAT-able derivation/assembly core the PR-3 `StakeEngine` handler drives.
+pub(crate) mod emission_claim;
 /// Emission claim-source RPC decode (`EMISSION_CLAIM_BUILDER.md` §7, PR 1):
 /// the wallet-side twin of the daemon's claim-source serializer, producing
 /// the verify-side `EmissionEpochSource`/`ClaimantBondRecord` views the

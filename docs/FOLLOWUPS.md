@@ -4579,7 +4579,13 @@ sustainability is unaffected by the recalibration.
   design round opened —
   [`EMISSION_CLAIM_BUILDER.md`](./design/EMISSION_CLAIM_BUILDER.md)
   (assembly spec + CB-1…CB-5; CB-1 recompute sourcing is the gating
-  question).
+  question). UPDATE 2026-07-10: both rounds closed and implementation
+  is underway on the §8 four-PR chain — PR 1 (daemon RPC) and PR 2
+  (pure assembly module, `engine/emission_claim.rs`: four-boundary
+  derivation, canonical work-claim rows, bound-or-split sizing,
+  step-7 self-check against the real verifier) implemented; PR 3
+  (StakeEngine handler: backing, proof, dual auth, tx assembly) is
+  the remaining builder half before this e2e unblocks.
 
 - **Q11 balance-exclusion KAT — blob-boundary invariant arm**
   (surfaced 2026-07-09, CB-4 source pass —
@@ -7879,7 +7885,16 @@ one place to confirm each item's relationship to the wallet stack.
   sixth KAT case needed). Error-genericity residual rejected with a mechanism argument
   (gatedness is publicly computable ex ante; named errors stay per rule 82). Forward
   obligation pinned: the future wallet claim builder derives claimable epochs from the
-  same positive-share recompute. **Round 2 closed against a second independent review
+  same positive-share recompute. **DISCHARGED (claim-builder PR 2, 2026-07-10):**
+  `shekyl-engine-core/src/engine/emission_claim.rs` `derive_claimable_epochs` —
+  claimable ⇔ `reward_share_floor` over the verify-exact chain `> 0`, no `K_COVER`
+  read anywhere in the module, cause-blind `ZeroShare` skip; the derivation consumes
+  **four** boundaries (top/bottom/dedup via the connect predicate on a scratch copy,
+  purity-pinned + differential-tested; strict finalization via verify's own
+  `epoch_close_height` predicate — the connect window admits the youngest epoch one
+  count before verify accepts it, verified at `blockchain_db.cpp:504-514` /
+  `archival_claim_source.cpp:30-32`, `EMISSION_CLAIM_BUILDER.md` §2 step-1
+  post-closure sharpening). **Round 2 closed against a second independent review
   (doc §10, M1-1..M1-9, 2026-07-06):** the positive-share rule resited to the wire —
   strictly positive `reward_amount_plain` enforced at `validate()`, making the
   zero-amount beacon *unencodable* and leaving exactly **one** `K_COVER` comparison site
@@ -11807,11 +11822,17 @@ Retained for citation in review; each links to the canonical record.
   or record `fee - effective_fee` explicitly. Own PR (touches burn-stat
   semantics, not claim-era).
 
-- **Pre-existing: `shekyl_engine_core::error::EngineCoreError` still carries dead
-  claim-era variants (PR-4 review):** `NotStaked`, `NoBacklog`, `NotMatured`,
-  `ClaimRangeTooLarge`, `InsufficientPoolData`, `ZeroReward`, `InvalidTier`,
-  `NoClaimableOutputs`. `pub`, so no dead-code lint fires. Orphaned by the
-  claim-era retirement; sweep with the next engine-core error-surface pass.
+- **RESOLVED (claim-builder PR 2, 2026-07-10): deleted
+  `shekyl_engine_core::error::EngineCoreError` wholesale.** The PR-4 review
+  item scheduled the dead claim-era variants (`NotStaked`, `NoBacklog`,
+  `NotMatured`, `ClaimRangeTooLarge`, `InsufficientPoolData`, `ZeroReward`,
+  `InvalidTier`, `NoClaimableOutputs`) for "the next engine-core error-surface
+  pass"; that pass found the *entire enum* orphaned — zero construction sites,
+  zero consumers beyond the `lib.rs` re-export (verified by repo-wide grep
+  including feature-gated and FFI surfaces; the only remaining references were
+  in the stale `block-wire-format` worktree, whose claim-era
+  `claim_builder.rs`/`workflow.rs` no longer exist on `dev`). Whole `error.rs`
+  module and its re-export deleted per rule 15's default.
 
 - **RESOLVED (CI-hygiene PR, 2026-07-02): deleted the M5 citation gate
   (`scripts/ci/check_phase2h_citations.sh` + its workflow step).** The gate is

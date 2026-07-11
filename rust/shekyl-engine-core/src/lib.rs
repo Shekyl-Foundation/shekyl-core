@@ -11,7 +11,6 @@
 pub mod attribution;
 pub mod consensus_constants;
 pub mod engine;
-pub mod error;
 #[cfg(feature = "multisig")]
 pub mod multisig;
 pub mod outbound_label;
@@ -29,7 +28,6 @@ pub use engine::{
     SuppressedClass, TracingDiagnosticSink, TxError, TxHash, TxRecipient, TxRecipientSummary,
     TxRequest, ViewMaterial,
 };
-pub use error::EngineCoreError;
 pub use outbound_label::label_plaintext_for_payment_uri;
 pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult};
 

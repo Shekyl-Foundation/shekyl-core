@@ -11,7 +11,12 @@ the low end anchors to `epoch_is_claim_expired`, which is single-sourced
 through `claim_window_floor` (§7.2 bottom-boundary record), and the
 builder is pinned to consume the predicate functions rather than
 re-derive boundary arithmetic. Implementation is underway on the §8
-chain, starting with PR 1 (daemon RPC); PR-1 review watch items are
+chain: PR 1 (daemon RPC) and PR 2 (pure assembly module) are
+implemented — PR-2 review produced one post-closure sharpening, the
+§2 step-1 **fourth boundary** (strict finalization at the earliest
+inclusion height; the connect window admits the youngest epoch one
+count before verify accepts it — see the step-1 text and the §8 PR-2
+status). PR-1 review watch items are
 named at the end of §8. Round 1
 CLOSED (2026-07-09): CB-1…CB-5 all ratified at source (§3): CB-1 (new
 daemon RPC as `EmissionEpochSource`, single-evaluator invariant the
@@ -91,7 +96,27 @@ names the landed function it must reuse:
    `claimed_epochs_contains`) directly and never re-derives boundary
    arithmetic inline — the predicate functions are the boundary's single
    source; inline `≥ floor` arithmetic would be a second copy that can
-   drift if the predicate ever changes. For each in-range `E` not
+   drift if the predicate ever changes.
+   **Fourth boundary — strict finalization (post-closure sharpening,
+   PR 2, 2026-07-10; rule 21 named pin, does not reopen round 2):**
+   the connect window is one count looser than the verify window, and
+   the builder's product must satisfy **verify's**. Verified at daemon
+   source: the close of `E` runs while connecting `E`'s *last* block
+   (`blockchain_db.cpp:504-514`, hook operand
+   `prev_height + 1 = (E+1)·SEB`), so at the one gather count
+   `chain_height == h_close(E)` the budget row for `E` already exists
+   and `settled = E + 1` (both derived from one `db.height()` read,
+   `archival_claim_source.cpp:30-32`) — the connect predicate admits
+   `E`, but verify's step-1 strict `current_block_height > h_close(E)`
+   (`emission_verify.rs:384`) rejects a claim of `E` in the very next
+   block. The derivation therefore also consumes verify's finalization
+   predicate — via `epoch_close_height`, the literal function verify
+   calls — at the earliest inclusion height (`chain_height`), and
+   defers the epoch one block (`EpochSkip::NotFinalized`). The window
+   contract is **four** consumed boundaries (top, bottom, dedup,
+   finalization), not three; an earlier PR-2 revision recorded this
+   edge as foreclosed by the missing close row — wrong per the daemon
+   trace above, and corrected in place in the module doc. For each in-range `E` not
    already in the bond record's claimed set: recompute the share via
    `as_of_e_served_work` → `capped_work_milli` → `reward_share_floor`;
    claimable ⇔ share `> 0`. No `K_COVER` consultation (the vin never
@@ -407,6 +432,15 @@ form an observer can read, since "self-check failed on operand X" leaks
 which operand the daemon mis-sourced. Refuse-blind, log-local: the refusal
 is visible, the cause is not (same shape as the cause-blind zero-share, and
 necessary-not-sufficient against the lying daemon per CB-1's wargame).
+**Pin discharged (PR 2, 2026-07-10):** `EmissionClaimError::SelfCheckFailed`
+is a unit variant (structurally payload-free — unrepresentable, not
+withheld); the verifier's rejection detail goes to local tracing only.
+The PR-2 taxonomy as landed: `NoClaimableEpochs` (idle, cause-blind —
+`AlreadyClaimed`/`WindowExpired`/zero-share are per-epoch skip
+diagnostics, never surfaced), `SourceInvalid`, `ScarcityConversion`,
+`SizeBoundExceeded`, `RowsUnencodable`, `SelfCheckFailed`;
+`InsufficientBacking` lands with its constructor in PR 3 (staged
+completeness, not a missing arm).
 
 ---
 
@@ -421,7 +455,7 @@ PR).
 
 | Obligation | Source | Landed anchor (verify at source) | Discharged by |
 | --- | --- | --- | --- |
-| Claimable epochs from the positive-share recompute | `docs/FOLLOWUPS.md` M1 round-1 forward pin | `reward_arithmetic.rs:129` `reward_share_floor`; `consensus_state.rs:190` `capped_work_milli` (single evaluator) | §2 step 1 |
+| Claimable epochs from the positive-share recompute | `docs/FOLLOWUPS.md` M1 round-1 forward pin | `reward_arithmetic.rs:129` `reward_share_floor`; `consensus_state.rs:190` `capped_work_milli` (single evaluator) | §2 step 1 — **discharged (PR 2)**: `emission_claim.rs` `derive_claimable_epochs`, claimable ⇔ recomputed share `> 0`, no `K_COVER` read anywhere in the module |
 | Backing exclusively through `BackingSet`, arity 1 | GF-4b §5 item 1 | `backing_set.rs:44` (private `records`), `:90` (`from_spendable` sole constructor), `:103` (spendability filter); arity-1 pin `emission_wire.rs:116-125` (Q3 vacuous at arity 1) | §2 step 3 |
 | `EmissionReward` scan arm, fail-toward-forbidden | GF-4b §5 item 2 | `pscan_state.rs:89` (`MintLineageOutput`; `:98` `EmissionReward`, `:103` `BondPostChange`, `:109` `ExternalTransfer`); `scan_step.rs:401` `run_dual_extractor`, `:501-511` fail-toward-forbidden default. **`EmissionReward` has zero production constructor sites today** (verified: only the enum def) — this is exactly the "gains its first constructor site" claim | Companion piece: the arm's first constructor lands with this builder's PR chain (its absence would strand claim change in rung-3) |
 | First-emission backing is `BondPostChange` | GF-4b §5 item 3 | `pscan_state.rs:103` (`BondPostChange` variant) | Integration test (§5) |
@@ -733,6 +767,91 @@ CHANGELOG) update per PR per rule 91.
 gating is the same harness-locality sequencing settled for the CB-4
 blob-boundary arm — the arm and PR-4 both land where the harness
 (`economics_chain_helpers.h`) is born.
+
+**PR 2 implemented (2026-07-10, `feat/emission-claim-assembly`).**
+`engine/emission_claim.rs`, five commits: the dead `EngineCoreError`
+module deletion (FOLLOWUPS discharge, separated out of the builder's
+bisect surface); the step-1 derivation (scratch-oracle boundary
+verdicts with the purity pin, M1 positive-share discharge, 15-cap
+batching); step-2/5 assembly (canonical minimal rows, `u64→u32`
+scarcity guard armed at the builder's conversion site with the
+compile-time const-assert as the production guarantee, entry-sum
+hard check, bound-or-split sizing measured by the production encoder
+at structural maxima); the step-7 self-check (`self_check_claims`
+drives the literal `emission_vin_verify_claims`; `SelfCheckFailed`
+cause-blind per the CB-5 builder pin, verify detail log-local;
+differential KAT with six vin mutation arms + three context arms,
+each proven to flip accept → refuse); and the close-boundary fix
+below. **Adversarial-review finding (the §2 step-1 fourth-boundary
+sharpening):** review refused an in-module "structurally foreclosed"
+claim about the strict-finalization edge; the daemon trace disproved
+it (the close of `E` runs connecting `E`'s last block, so at
+`chain_height == h_close(E)` the budget row exists and the connect
+window admits `E` while verify rejects it next-block) — a real
+once-per-epoch spurious-refusal window, closed in the derivation by
+consuming verify's own predicate (`EpochSkip::NotFinalized`, armed by
+a premise-asserted boundary KAT). Deferred to PR 3 with their
+constructors: `InsufficientBacking`, real backing/auth legs of the
+self-check (claims-leg coverage boundary recorded in the module doc),
+the staleness comparison, and the remaining `emission_source.rs`
+staging allows.
+
+**PR 2 review round (2026-07-10, high `/code-review` + Copilot).**
+Three confirmed correctness defects fixed, plus the cleanup set:
+
+1. **Size budget re-based on the binding relay bound.** The claims
+   budget was derived from `MAX_TX_SIZE` (the 1 MB parse cap); the
+   binding constraint is the per-tx **weight limit**
+   (`get_transaction_weight_limit` = min-block-weight/2 − 600 =
+   149 400 B) — a batch bounded against the parse cap could pass
+   assembly and the size-blind step-7 self-check yet be permanently
+   unsubmittable, re-assembled identically on every retry until the
+   window's rewards expired. `shekyl_wire::TX_WEIGHT_LIMIT` now pins
+   the C++ value (const-asserted); the non-claims reserve is re-derived
+   against it (48 KiB: 16 vouts + KEM ciphertexts, two max-depth fee
+   inputs + hybrid auths, Bp+ + its weight clawback), and a const
+   assert keeps the budget above the vin's fixed cryptographic legs.
+2. **Verify step 2's join bound applied at derivation.** The
+   derivation never read the record's `E_join`; a retire-then-rejoin
+   record (join newer than the frozen rows') admitted a pre-join epoch
+   and wedged the whole batch behind the cause-blind `SelfCheckFailed`
+   until the offender aged out of the window. Fixed by extracting the
+   predicate (`epoch_is_before_join`, called by the verify body and the
+   derivation — one definition), a `BeforeJoin` skip, and a KAT whose
+   premise arm proves the skip is load-bearing.
+3. **The settled/height pair is decode-enforced consistent.** The
+   builder's window verdicts consumed the daemon's
+   `current_settled_epoch` while the self-check recomputed settled from
+   `chain_height`; an inconsistent reply split the two boundary systems
+   (deflated ⇒ whole-batch `SelfCheckFailed`; inflated ⇒ claimable
+   epochs silently forfeited as `WindowExpired`). PR 1's decode now
+   rejects the inconsistent pair as `Malformed`
+   (`settlement_epoch_at_height`, the daemon's own derivation). The
+   Copilot finding rides the same posture: a window epoch with no close
+   height (`(E+1)·SEB` overflow) is `SourceInvalid`, not a transient
+   `NotFinalized`.
+
+Cleanups in the same round: the scratch-clone oracle **retired** (the
+V3.1 FOLLOWUPS extraction landed early on its named reopening trigger —
+a second consumer needed the top boundary read-only; all boundary
+verdicts now resolve through read-only predicates, purity pin deleted);
+the steps-4/5 recompute single-sourced (`claimant_reward_share`, the
+shared evaluation head both the verify body and the derivation call);
+`ClaimableEpochs` now borrows the source's bond context and carries the
+canonical rows built in the admitting scope (stale derived/source
+pairing is unrepresentable; the `snapshot_idx`/`expect` panic surface
+for PR 3's refetch loop is gone, and the per-epoch views are built
+once); the vin has **one** construction site (`claims_vin` — the sizing
+measurement, the emitted content, and the KAT vins cannot drift) with
+the bound-or-split loop popping legs off a single vin instead of
+rebuilding per iteration; `size_deferred` narrowed to `Vec<u64>` (the
+verdict is definitional); the module-wide staging `dead_code` allow
+narrowed to item level (rule 45); the two-bond/two-shard KAT fixture
+shape single-sourced (`EMISSION_KAT_SHAPE` in the retention crate,
+consumed by both the verify KATs and the builder KATs); and the two
+intentional-design calls documented in place (batch-cap check after the
+recompute = whole-window loud validation; the linear first-position
+shard scan = byte parity with verify's lookup).
 
 Round-2 closure criteria: the §7.3 field enumeration ratified (including
 the four exclusions), the §7.2 window-batch shape ratified, the §7.4

@@ -29,21 +29,18 @@
 //! empty, matching epee KV serialization's omit-empty-container behavior on
 //! the daemon side (the C++ wire-contract test pins that behavior). The
 //! decode also enforces `status == "OK"` (a `BUSY`/error-shaped body must
-//! never decode as a valid zeroed source) and the ordering invariants the
-//! consumers rely on: `claimed_settlement_epochs` strictly increasing (the
-//! `claimed_epochs_contains` binary-search operand) and `epochs` in strictly
-//! ascending epoch order.
-
-// PR-1 lands the decode surface ahead of its consumers: PR-2's assembly
-// core consumes the views, PR-3's `StakeEngine` handler consumes the fetch.
-// This allow is deleted by PR-2 (`EMISSION_CLAIM_BUILDER.md` §8) — it is
-// staging, not tolerated dead code per `15-deletion-and-debt.mdc`.
-#![allow(dead_code)]
+//! never decode as a valid zeroed source) and the invariants the consumers
+//! rely on: `claimed_settlement_epochs` strictly increasing (the
+//! `claimed_epochs_contains` binary-search operand), `epochs` in strictly
+//! ascending epoch order, and `current_settled_epoch` consistent with
+//! `chain_height` under the frozen mapping (`settlement_epoch_at_height` —
+//! the daemon derives both from one `db.height()` read, and the builder's
+//! window boundaries and the step-7 self-check split the pair downstream).
 
 use serde_json::{json, Value};
 use shekyl_archival_retention::{
-    BadInterval, ClaimantBondRecord, CreditPair, EmissionEpochSource, EpochCloseBond,
-    EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
+    settlement_epoch_at_height, BadInterval, ClaimantBondRecord, CreditPair, EmissionEpochSource,
+    EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
 };
 use shekyl_rpc_client::{Rpc, RpcError};
 
@@ -107,6 +104,8 @@ pub struct EpochSnapshot {
 /// Part-A claim context: the claimant's bond record as the daemon read it.
 #[derive(Debug, Clone)]
 pub struct BondContext {
+    /// `E_join` — verify step 2's `E ≥ E_join + 1` operand (read via
+    /// [`Self::record`] by the §2 step-7 self-check).
     pub join_settlement_epoch: u64,
     /// The record's holdings descriptor — the vin copies this **by value**
     /// (§5.3/§6.4.1: verify demands record equality; the builder never
@@ -119,7 +118,8 @@ pub struct BondContext {
 }
 
 impl BondContext {
-    /// The verify-side view over this record.
+    /// The verify-side view over this record — the §2 step-7 self-check's
+    /// `EmissionVerifyContext::bond` operand.
     pub fn record(&self) -> ClaimantBondRecord<'_> {
         ClaimantBondRecord {
             join_settlement_epoch: self.join_settlement_epoch,
@@ -133,12 +133,22 @@ impl BondContext {
 /// claim window's snapshots, exactly as the daemon serialized them.
 #[derive(Debug, Clone)]
 pub struct EmissionClaimSource {
-    /// Tip block count at gather time — the §2 step-3 same-tip staleness
-    /// operand, not a computation operand.
+    /// Tip block count at gather time — the §2 step-7 self-check's
+    /// verify-context height (the earliest inclusion height, and the exact
+    /// operand the daemon derived `current_settled_epoch` from —
+    /// `archival_claim_source.cpp` gathers both from one `db.height()`
+    /// read), the derivation's strict-finalization operand
+    /// (`emission_claim` step 2: verify admits `E` one count after the
+    /// connect window does), and the §2 step-3 same-tip staleness operand
+    /// (PR-3's `StakeEngine` handler).
     pub chain_height: u64,
-    /// The daemon's settled-epoch operand (same helper consensus uses).
-    /// Step 1's window bounds derive from this via the landed predicate
-    /// functions — never inline boundary arithmetic (§2 step 1).
+    /// The daemon's settled-epoch operand (same helper consensus uses),
+    /// **decode-enforced** equal to `settlement_epoch_at_height(chain_height)`
+    /// — so the step-1 window boundaries (which consume this field) and the
+    /// step-7 self-check / on-chain verify (which recompute settled from
+    /// `chain_height`) provably share one boundary basis. Step 1's window
+    /// bounds derive from this via the landed predicate functions — never
+    /// inline boundary arithmetic (§2 step 1).
     pub current_settled_epoch: u64,
     /// `None` when the daemon has no bond record for `p_id` — the builder
     /// refuses idle (`NoClaimableEpochs`), not an error.
@@ -348,9 +358,28 @@ impl EmissionClaimSource {
             .collect::<Result<Vec<_>, _>>()?;
         let epoch_ids: Vec<u64> = epochs.iter().map(|e| e.settlement_epoch).collect();
         require_strictly_increasing(&epoch_ids, "epochs[].settlement_epoch")?;
+        let chain_height = req_u64(v, "chain_height")?;
+        let current_settled_epoch = req_u64(v, "current_settled_epoch")?;
+        // The daemon derives both fields from one `db.height()` read
+        // (`archival_claim_source.cpp`), so the pair is redundant on the
+        // wire — and the two boundary systems downstream split it: the
+        // step-1 window verdicts consume `current_settled_epoch`, while the
+        // step-7 self-check (and on-chain verify) recompute settled from
+        // `chain_height`. Enforce the invariant here so an inconsistent
+        // reply is one loud `Malformed` refusal at the untrusted boundary,
+        // never a cause-blind whole-batch `SelfCheckFailed` (deflated
+        // settled) or a silently-forfeited claimable epoch (inflated
+        // settled).
+        let derived_settled = settlement_epoch_at_height(chain_height);
+        if current_settled_epoch != derived_settled {
+            return Err(EmissionSourceError::Malformed(format!(
+                "`current_settled_epoch` {current_settled_epoch} inconsistent with \
+                 `chain_height` {chain_height} (derives to {derived_settled})"
+            )));
+        }
         Ok(Self {
-            chain_height: req_u64(v, "chain_height")?,
-            current_settled_epoch: req_u64(v, "current_settled_epoch")?,
+            chain_height,
+            current_settled_epoch,
             bond,
             epochs,
         })
@@ -364,6 +393,11 @@ impl EmissionClaimSource {
 /// the daemon-visible query is identical for every claimant regardless of
 /// serve history. Persona-side callers pass the persona transport
 /// (`PRpc`), never the principal's daemon session (§7.4).
+// Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the call
+// site is PR-3's `StakeEngine` claim handler; this allow is deleted there.
+// PR-2 narrowed the PR-1 module-level allow to this fetch — the decode
+// surface is now live via `emission_claim`.
+#[allow(dead_code)]
 pub async fn fetch_emission_claim_source<R: Rpc>(
     rpc: &R,
     p_id: &[u8; 32],
@@ -571,6 +605,36 @@ mod tests {
             EmissionClaimSource::from_json(&v),
             Err(EmissionSourceError::Malformed(_))
         ));
+    }
+
+    /// The settled/height pair is redundant (one `db.height()` read
+    /// daemon-side); a reply where they disagree under the frozen mapping is
+    /// malformed — refused at decode, never split across the builder's two
+    /// boundary systems (window verdicts read `current_settled_epoch`, the
+    /// step-7 self-check recomputes from `chain_height`).
+    #[test]
+    fn settled_epoch_inconsistent_with_chain_height_is_loud() {
+        // Deflated settled: the builder's window floor would lag verify's
+        // (whole-batch SelfCheckFailed on an expired admit).
+        let mut v = fixture();
+        v["current_settled_epoch"] = json!(2);
+        assert!(matches!(
+            EmissionClaimSource::from_json(&v),
+            Err(EmissionSourceError::Malformed(_))
+        ));
+        // Inflated settled: genuinely claimable epochs would silently skip
+        // as WindowExpired (forfeited rewards).
+        let mut v = fixture();
+        v["current_settled_epoch"] = json!(4);
+        assert!(matches!(
+            EmissionClaimSource::from_json(&v),
+            Err(EmissionSourceError::Malformed(_))
+        ));
+        // The fixture itself is the consistent pair (sanity).
+        assert_eq!(
+            settlement_epoch_at_height(fixture()["chain_height"].as_u64().unwrap()),
+            fixture()["current_settled_epoch"].as_u64().unwrap()
+        );
     }
 
     #[test]
