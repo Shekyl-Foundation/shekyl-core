@@ -219,6 +219,33 @@ jobs:
     steps:
       - name: install dependencies
         run: pacman -Syyu --noconfirm base-devel git cmake boost boost-libs openssl unbound libsodium readline expat gtest python3 doxygen graphviz hidapi libusb protobuf abseil-cpp rust
+      # WORKAROUND (2026-07-10, Arch gcc 16.1.1-3): the gcc-libs →
+      # libgcc/libstdc++ package split dropped the `libstdc++.so` symlink
+      # from GCC's internal search dir (which now carries only
+      # `libstdc++.a`, files dated 2026-07-09). ld stops at the first
+      # search dir containing the library in either form and the internal
+      # dir precedes /usr/lib, so every `-lstdc++` link silently goes
+      # STATIC — colliding with the dynamic-only `__cxa_throw` hook in
+      # `src/common/stack_trace.cpp` ("multiple definition of
+      # `__cxa_throw`", first seen linking shekyl-gen-ssl-cert).
+      # Reproduced distro-side with zero Shekyl code: on this image,
+      # `ldd` on a g++ hello-world shows no libstdc++ dependency at all.
+      # Restoring the symlink reinstates the historical layout; `ln -sf`
+      # is a no-op once Arch ships it again. REMOVE when a stock
+      # container passes `ldd`-shows-dynamic-libstdc++ (the sanity check
+      # below fails loudly if the workaround itself ever stops working).
+      - name: restore dynamic libstdc++ (Arch gcc 16.1.1-3 packaging regression)
+        run: |
+          for d in /usr/lib/gcc/x86_64-pc-linux-gnu/*/; do
+            if [ -f "$d/libstdc++.a" ] && [ ! -e "$d/libstdc++.so" ]; then
+              ln -sf /usr/lib/libstdc++.so "$d/libstdc++.so"
+              echo "restored $d/libstdc++.so -> /usr/lib/libstdc++.so"
+            fi
+          done
+          printf '#include <string>\nint main(){ return std::string("x").size() == 1 ? 0 : 1; }\n' > /tmp/dynlink_check.cpp
+          g++ /tmp/dynlink_check.cpp -o /tmp/dynlink_check
+          ldd /tmp/dynlink_check | grep -q 'libstdc++\.so' \
+            || { echo '::error::libstdc++ still links statically after the symlink workaround'; exit 1; }
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
