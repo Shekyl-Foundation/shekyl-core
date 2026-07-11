@@ -19,7 +19,9 @@
 //! ARCHIVAL_FAILURE_CONFIRMATION_PIN.md); `--gf7-timeline` (the GF-7 graded
 //! measurement round — joint three-axis correlator + three arms + validity
 //! controls, graded against the a-priori `r < 2` bound per
-//! ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4).
+//! ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4); `--partition-adversary` (the §14.4
+//! founder-cover partition-adversary arm — gating lemma + witness-typed
+//! controls, per the same doc's §14/§17 launch-posture round).
 
 mod agent;
 mod audit;
@@ -33,6 +35,7 @@ mod gf7_timeline;
 mod metrics;
 mod model;
 mod participation;
+mod partition_adversary;
 mod retrieval;
 mod reward;
 use reward::CurveImpl;
@@ -744,6 +747,58 @@ fn print_gf7_timeline_report() {
     }
 }
 
+fn print_partition_adversary_report() {
+    let report = partition_adversary::run_gating_witness_report();
+    eprintln!(
+        "shekyl-staking-sim — §14.4 partition-adversary arm (ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4)"
+    );
+    eprintln!(
+        "Co-first deliverables (R4/R5, committed before any sweep grades — §17.6 f.1 / §17.7 f.4):"
+    );
+    eprintln!();
+    eprintln!("Gating lemma — a-priori i.i.d. founder-clustering bound (no user-cohort reliance):");
+    eprintln!(
+        "  P(all M anchors within span c) ≤ M·((c+1)/(W+1))^(M−1) for M i.i.d. uniform draws"
+    );
+    eprintln!(
+        "  over {{0..W}}. At M={} c={} W={} (production entry-gap window, K-invariant per §17 P2):",
+        report.founder_count, report.cluster_span_blocks, report.entry_gap_window
+    );
+    eprintln!(
+        "  committed bound = {:.4e}  (exact range CDF {:.4e}; ceiling {:.0e}) — derivably small: {}",
+        report.gating_lemma_bound,
+        report.gating_lemma_exact,
+        report.gating_lemma_ceiling,
+        if report.derivably_small { "YES" } else { "NO" },
+    );
+    eprintln!("  Cited by: P2 no-mechanism disposition + §16.2 obligation-3 strip-row floor.");
+    eprintln!();
+    eprintln!(
+        "Witness-typed controls (compile-time un-constructible from the production founder-config"
+    );
+    eprintln!(
+        "  constructor — distinct ControlWitness type, no From bridge; deployed window = {} blk):",
+        report.deployed_window
+    );
+    for c in &report.controls {
+        eprintln!(
+            "  [{}] {:<30} aims at family member {}",
+            if c.witness_typed { "ok" } else { "FAIL" },
+            c.label,
+            c.aimed_member,
+        );
+    }
+    eprintln!();
+    eprintln!(
+        "Family members 1–7, feature dictionary, max-statistic T, permutation null and bounds"
+    );
+    eprintln!("  1–3 land in the following slice of this round.");
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing partition-adversary report: {e}"),
+    }
+}
+
 fn print_cover_report() {
     use cover::Dispersion;
     let disp = |d: Dispersion| match d {
@@ -1353,6 +1408,11 @@ fn main() {
 
     if std::env::args().any(|a| a == "--gf7-timeline") {
         print_gf7_timeline_report();
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--partition-adversary") {
+        print_partition_adversary_report();
         return;
     }
 
