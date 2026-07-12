@@ -257,7 +257,10 @@ sustainability is unaffected by the recalibration.
   - Coinbase emission is a different equation — out of scope.
   - **Depends on** the `rct`→`ct` Rust rename landing first (its own PR,
     resolving the former "Archival RCT naming review" item), so the new export is
-    born on clean `ct` names (avoids F-6 double-churn). **Target: V3.0.**
+    born on clean `ct` names (avoids F-6 double-churn). **UPDATE 2026-07-11:
+    dependency cleared** — the V3.0 public-API rename slice landed (see the
+    RingCT→CT sweep entry below); the batched export can proceed on `ct` names.
+    **Target: V3.0.**
 
 - **[Done] Canonical `shekyl_wire::Transaction::weight()` + fee-model re-validation
   against the canonical spend format (flagged 2026-06-23, the tx-builder
@@ -536,8 +539,8 @@ sustainability is unaffected by the recalibration.
   confidential transaction (flagged 2026-06-22).** FCMP++ (full-chain membership
   proof) replaces ring signatures entirely: there is no ring, no RingCT-vs-pre-RingCT
   split, no V1 tx — yet the inherited CryptoNote surface still carries `rct` naming
-  throughout (`transaction.rct_signatures`, `rct::rctSig*`, `RCTTypeFcmpPlusPlusPqc`,
-  the `rct::` C++ namespace, plus assorted Rust residue). **Naming-only — no
+  throughout (`transaction.rct_signatures`, `rct::rctSig*`, the `rct::` C++
+  namespace, plus assorted Rust residue). **Naming-only — no
   wire-format / consensus / behavior change** (the wire carries a `ct_type`
   discriminant byte, never the string "rct"; `shekyl-wire` already uses the correct
   `Ct` / `CT_TYPE_*` vocabulary, which is the target). Scope: sweep the residue to
@@ -548,6 +551,24 @@ sustainability is unaffected by the recalibration.
   free pre-genesis and breaking after, so the public-API portion belongs in V3.0; the
   bulk internal rename can ride V3.1+. Not genesis-blocking. Target: V3.0 (public API) /
   V3.1+ (internal).
+  **UPDATE 2026-07-11 — V3.0 public-API slice landed** (the
+  `chore/rct-to-ct-public-api` chain): (1) daemon-RPC JSON tags
+  `rct_signatures`/`rctsig_prunable` → `ct_signatures`/`ctsig_prunable`
+  (JSON-archive-only; binary wire positional, byte-identical); (2) legacy
+  wallet-RPC `estimate_tx_size_and_weight` request field `rct` → `ct` with
+  `WALLET_RPC_VERSION` major bump 1→2, plus the FFI dispatch and Python
+  RPC-framework helper; (3) enum variants `RCTTypeNull`/`RCTTypeFcmpPlusPlusPqc`
+  → `CTTypeNull`/`CTTypeFcmpPlusPlusPqc` (values unchanged); (4) the
+  cross-language constant chain — `ct_type_fcmp_plus_plus_pqc` JSON key,
+  `SHEKYL_CT_TYPE_FCMP_PLUS_PLUS_PQC` C++ macro, Rust
+  `CT_TYPE_FCMP_PLUS_PLUS_PQC` — and Rust residue (`ct_base_blob`, stale
+  `RctSignaturesBase` doc refs). This also clears the "depends on the rct→ct
+  Rust rename" gate on the CT-balance batched-FFI item above. **Remaining
+  (V3.1+, gated on `wallet2` retirement per
+  `design/CT_SURFACE_NAMING_PIN.md` §5):** the `rct::` namespace, `rctSig*`
+  struct/module/file names, `serialize_rctsig_*`, and the
+  `transaction.rct_signatures` C++ field. The standing no-new-`rct`-names rule
+  stays in force until that lands.
 
 - **~~Pin the consensus `g(age)` age normalization, then map the sealed `g`
   band onto `archival_reward_age_weight_milli` (spawned Layer-2 band run,
@@ -7364,10 +7385,10 @@ one place to confirm each item's relationship to the wallet stack.
   a renamed container with the same dead slot — dead-guarded under a new
   name, in permanence. The accessor proves it dead: `get_pseudo_outs()`
   (`rctTypes.h:430–438`) reaches the base slot only for
-  non-`RCTTypeFcmpPlusPlusPqc` types; the only other live type is
-  `RCTTypeNull` (coinbase), which never carries pseudo-outs — the slot is a
+  non-`CTTypeFcmpPlusPlusPqc` types; the only other live type is
+  `CTTypeNull` (coinbase), which never carries pseudo-outs — the slot is a
   constant empty vector on every reachable path. The field, its
-  `RCTTypeNull` wire branch (a wire change — rides pin §5 step 3 with the
+  `CTTypeNull` wire branch (a wire change — rides pin §5 step 3 with the
   serialization-version bump, not the byte-identical rename step), its
   boost-serialization line, the accessor's base arm, and every
   `rv.pseudoOuts.empty()` dead-field guard leave together; none is

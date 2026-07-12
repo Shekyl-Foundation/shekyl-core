@@ -330,11 +330,15 @@ prefilter. *(Corrects an earlier keccak/X25519 derivation that cited a stale pat
 
 **Terminology:** *CT = confidential transaction.* There is no RingCT — Monero's
 rings/decoys are gone — so this PR says **CT**, not RCT in prose. Per
-`CT_SURFACE_NAMING_PIN.md`, renaming the C++ `rct*` source symbols (`rctTypes.h`,
-`rct_signatures`) to `ct*` is **deferred to Phase 5** (wallet2 retirement),
-**not** a genesis change: the wire **tags + type values are already
-genesis-locked**, and `binary_archive` is positional (ignores names), so the
-rename has **no genesis-wire effect**.
+`CT_SURFACE_NAMING_PIN.md`, renaming the bulk C++ `rct*` source symbols
+(`rctTypes.h`, the `rct_signatures` field, the `rct::` namespace) to `ct*` is
+**deferred to Phase 5** (wallet2 retirement), **not** a genesis change: the
+**type values are genesis-locked**, and `binary_archive` is positional (ignores
+names), so identifier renames have **no genesis-wire effect**. The V3.0
+public-API slice landed 2026-07-11: the `RCTType*` enum variants are now
+`CTTypeNull` / `CTTypeFcmpPlusPlusPqc` (type byte values unchanged), and the
+JSON-archive-only `ar.tag` names are now `ct_signatures` / `ctsig_prunable`
+(affects `decode_as_json` output only — no binary-wire byte changed).
 
 | Element | Source | Disposition |
 |---|---|---|

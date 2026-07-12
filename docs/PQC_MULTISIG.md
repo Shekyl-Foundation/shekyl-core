@@ -938,7 +938,7 @@ Given verified `SpendIntent`, every member runs:
    computed from each input's prover-assigned `y` (§11.1); outputs are
    derived per step 2; `tx_extra` includes KEM ciphertexts, leaf hashes,
    view tag hints, spend-auth pubkeys.
-4. **RCT base.** Type = `RCTTypeFcmpPlusPlusPqc (=7)`; ecdh info,
+4. **RCT base.** Type = `CTTypeFcmpPlusPlusPqc (=7)`; ecdh info,
    commitment masks, pseudo outputs all deterministic from intent.
 5. **Compute `signing_payload`** (§10.4).
 

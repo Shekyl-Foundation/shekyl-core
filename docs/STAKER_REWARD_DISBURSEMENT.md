@@ -163,7 +163,7 @@ A claim input is valid if and only if all of the following hold:
    `total_weighted_stake` recorded for each block in `staker_accrual`.
 5. The synthetic `k_image` has not already been used (anti-double-claim).
 6. Pure claim transactions (all inputs are `txin_stake_claim`) use
-   `RCTTypeNull` signatures.
+   `CTTypeNull` signatures.
 7. **Pool sufficiency, batch and sequential.** The total of all claim
    amounts in a single transaction must not exceed `staker_pool_balance`
    (intra-tx batch check, enforced in `check_tx_inputs`). Additionally,

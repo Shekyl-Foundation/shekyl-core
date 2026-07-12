@@ -110,7 +110,7 @@ restarts within a single test run.
 
 **FCMP++ tx-type enforcement is bypassed on `FAKECHAIN`.**
 `src/cryptonote_core/blockchain.cpp:3403–3434` wraps the
-`RCTTypeFcmpPlusPlusPqc` enforcement, version bounds, and input-count
+`CTTypeFcmpPlusPlusPqc` enforcement, version bounds, and input-count
 limits in `if (m_nettype != network_type::FAKECHAIN) { ... }`. Regtest
 will accept legacy/test-generator txs that would be rejected on
 mainnet. **Implication:** regtest is suitable for harnessing wallet

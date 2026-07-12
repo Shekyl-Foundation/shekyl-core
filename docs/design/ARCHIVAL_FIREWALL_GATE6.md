@@ -83,7 +83,7 @@ spend keys — not algebraic offsets, not shared nonce streams, not shared scan 
 - `P` = **HKDF-derived sub-wallet** from master seed (independent keypair; dual scan:
   principal + `P`).
 - Principal→`P` stake-in, `P`→principal unstake drain, reward sweeps = **ordinary
-  `RCTTypeFcmpPlusPlusPqc` transfers** on the main tree; base FCMP++ privacy is necessary
+  `CTTypeFcmpPlusPlusPqc` transfers** on the main tree; base FCMP++ privacy is necessary
   but **not sufficient** (timing/output still leak).
 - Reward emission = **membership-only control** on `P`'s backing UTXOs — no published
   dedup tag; no stake-keyed nullifier on the emission path.

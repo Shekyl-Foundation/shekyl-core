@@ -131,7 +131,7 @@ visitor. The closest existing shape is `txin_archival_bond_post` (carries
 - **`blockchain.cpp` `check_tx_inputs`** — tx-class detection
   (`is_stake_claim_only`, `is_archival_serve_credit_only`,
   `is_archival_bond_post_tx`), per-class input handling, and a
-  `RCTTypeFcmpPlusPlusPqc` switch with per-class branches; full spends call
+  `CTTypeFcmpPlusPlusPqc` switch with per-class branches; full spends call
   `shekyl_fcmp_verify`.
 - **`cryptonote_format_utils.cpp` `check_inputs_types_supported`** —
   structural allow/forbid of txin combinations (§7.1 step 1 hook).

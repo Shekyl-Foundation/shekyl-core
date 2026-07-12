@@ -84,7 +84,7 @@ and retires two legacy paths, not a built subtree.
 **Two irreducible consensus-special surfaces:** (1) **per-shard bond** (gate 4 —
 slashable, consensus-tracked); (2) **reward emission** (mint authorized by public
 work + backing). Everything else — principal→`P` stake-in, `P`→principal unstake
-drain, reward sweeps — is **ordinary `RCTTypeFcmpPlusPlusPqc` transfer**, firewalled
+drain, reward sweeps — is **ordinary `CTTypeFcmpPlusPlusPqc` transfer**, firewalled
 by base FCMP++ privacy.
 
 **Reward-leg crypto (substantive pin):** no published backing/reward-dedup tag on

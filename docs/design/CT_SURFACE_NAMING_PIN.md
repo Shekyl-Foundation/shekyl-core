@@ -6,6 +6,22 @@ the authoritative disposition for inherited `rct::` / `rctSig` / `rctSigs` /
 `rct_signatures` naming. Implementation is deferred; **Rust-side vocabulary is
 effective now** across the FFI boundary.
 
+**UPDATE 2026-07-11 — V3.0 public-API slice pulled forward and landed.** The
+later `FOLLOWUPS.md` umbrella entry (flagged 2026-06-22) split the sweep:
+public-surface names are free pre-genesis and breaking after, so that slice
+does not wait for Phase 5. Landed on the `chore/rct-to-ct-public-api` chain:
+the JSON-archive `ar.tag` names (`rct_signatures` → `ct_signatures`,
+`rctsig_prunable` → `ctsig_prunable`; JSON output only, binary wire
+positional/unchanged), the `RCTType*` enum variants → `CTTypeNull` /
+`CTTypeFcmpPlusPlusPqc` (values unchanged), the legacy wallet-RPC
+`estimate_tx_size_and_weight` request field `rct` → `ct` (major RPC version
+bump 1→2), the cross-language constant chain
+(`ct_type_fcmp_plus_plus_pqc` JSON key, `SHEKYL_CT_TYPE_FCMP_PLUS_PLUS_PQC`
+macro, Rust `CT_TYPE_FCMP_PLUS_PLUS_PQC`), and Rust-side residue
+(`ct_base_blob`). **Everything else in this pin is unchanged**: the `rct::`
+namespace, `rctSig*` struct/module/file names, and `serialize_rctsig_*`
+function names stay gated on `wallet2` retirement per §5.
+
 **Supersedes (partially).** April 2026 `ct_signatures = rct::rctSig` alias
 ([`STRUCTURAL_TODO.md`](../STRUCTURAL_TODO.md) §"`rct_signatures` field name is
 a Monero-era misnomer") — retained as the C++ type bridge, not as the module or
@@ -46,7 +62,7 @@ One inherited module name covers two roles. They diverge at rename time.
 
 | Current (C++) | Role | Target (at cutover) |
 |---------------|------|---------------------|
-| `rctTypes.h` | Wire blob struct + `RCTType*` enum | `ct_types.h` |
+| `rctTypes.h` | Wire blob struct + type enum (variants already `CTType*`, renamed 2026-07-11) | `ct_types.h` |
 | `rctOps.h`, `rctCryptoOps.h` | Field / point arithmetic | `ct_ops.h` (split TBD) |
 | `rctSigs.h` / `.cpp` | **Semantics verification** | `ct_semantics.h` / `.cpp` |
 | `rct::rctSig` (field type) | Passive wire container | Keep `ct_signatures` alias for now; de-"sig" the type noun is lower priority |
@@ -105,7 +121,7 @@ Do not lump these into one "V4 namespace" deferral.
 
 | Surface | Consensus / wire | Pre-genesis cost | Rename PR gate |
 |---------|------------------|------------------|----------------|
-| **Wire tags** | `ar.tag("rct_signatures")`, `"rctsig_prunable"` in [`cryptonote_basic.h`](../../src/cryptonote_basic/cryptonote_basic.h) | Cheap before genesis — defines genesis format | Intentional format change; update serialization + tx KATs |
+| **Wire tags** | **Renamed 2026-07-11** — `ar.tag("ct_signatures")`, `"ctsig_prunable"` in [`cryptonote_basic.h`](../../src/cryptonote_basic/cryptonote_basic.h). JSON-archive-only (`binary_archive::tag` is a no-op): affects `decode_as_json` / tx-pool JSON, not binary bytes; no KAT pinned the JSON key names | Done pre-genesis | Landed (V3.0 public-API slice) |
 | **C++ identifiers** | Invisible if wire tags unchanged | Cheap after `wallet2` gone | Rename-only; byte-identical round-trip required |
 | **Rust + FFI** | C ABI strings stable until coordinated cut | **Free now** — use Shekyl-native names in Rust | New exports use `shekyl_ct_*` / semantics vocabulary; legacy `rct_*` only at the C++ glue edge |
 
@@ -176,11 +192,13 @@ binding trigger**, not upstream cherry-pick calendar.
    note:** `rctSigBase::pseudoOuts` no longer exists — it was deleted in the
    standalone pre-sweep PR (§2), byte-identically. The step-2 review check is
    simply that the sweep introduces no new base-slot pseudo-out identifier.
-3. Wire tag rename (`rct_signatures` → successor) — pre-genesis or coordinated
-   hard fork; updates KATs once at genesis definition time. (The earlier
-   claim that the `rctSigBase::pseudoOuts` deletion had a wire-visible half
-   landing here was refuted at source and is corrected in §2 — the deletion
-   was byte-identical and has already landed; nothing from it rides step 3.)
+3. ~~Wire tag rename (`rct_signatures` → successor)~~ — **landed 2026-07-11**
+   pre-genesis as part of the V3.0 public-API slice (`ct_signatures` /
+   `ctsig_prunable`; JSON-archive-only, no KAT update was needed — see the
+   Status update above). (The earlier claim that the `rctSigBase::pseudoOuts`
+   deletion had a wire-visible half landing here was refuted at source and is
+   corrected in §2 — the deletion was byte-identical and has already landed;
+   nothing from it rides step 3.)
 
 **Log / RPC strings:** internal identifiers may become descriptive; verifier
 failure messages stay coarse (no proof-component detail to log observers). Same

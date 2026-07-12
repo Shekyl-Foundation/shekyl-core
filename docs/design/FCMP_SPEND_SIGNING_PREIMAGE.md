@@ -27,12 +27,12 @@ shekyl-oxide output. Its full end-to-end proof is the live C++ oracle — the op
 `get_transaction_signed_payload(tx, i)` (`src/cryptonote_core/tx_pqc_verify.cpp:58-152`):
 
 ```
-payload(i) = prefix_blob ‖ rct_base_blob ‖ prunable_hash ‖ pqc_header(i) ‖ all_key_hashes
+payload(i) = prefix_blob ‖ ct_base_blob ‖ prunable_hash ‖ pqc_header(i) ‖ all_key_hashes
 signed_hash(i) = keccak256(payload(i))         # PQC sig (ML-DSA+ed25519) signs this
 ```
 
 - **prefix_blob** = `serialize(transaction_prefix)` — see §1.2. *Includes the tx version.*
-- **rct_base_blob** = `rctSigBase::serialize_rctsig_base(inputs, outputs)` — see §1.3.
+- **ct_base_blob** = `rctSigBase::serialize_rctsig_base(inputs, outputs)` — see §1.3.
 - **prunable_hash** = `keccak256(rctSigPrunable::serialize_rctsig_prunable(type, inputs, outputs))` — see §1.4 (a 32-byte digest, not the blob).
 - **pqc_header(i)** = the i-th auth's header — see §1.5 (no signature bytes).
 - **all_key_hashes** = `‖ over all auths: keccak256(hybrid_public_key)` (binds every input's key).
@@ -50,7 +50,7 @@ hash = `keccak256(serialize(transaction_prefix))` — **also includes `version=3
 
 ### 1.3 rctSigBase (`src/fcmp/rctTypes.h:198-…`)
 ```
-FIELD(type)                       # 1 byte: RCTTypeNull(coinbase) | RCTTypeFcmpPlusPlusPqc
+FIELD(type)                       # 1 byte: CTTypeNull(coinbase) | CTTypeFcmpPlusPlusPqc
 if Fcmp:
     VARINT(txnFee)
     FIELD(referenceBlock)         # crypto::hash = 32 raw bytes   ← in BASE
@@ -114,7 +114,7 @@ daemon would reject (consistent with the known broken-spend status):
   — the FCMP++ `signable_tx_hash`.
 - `Transaction::pqc_signing_payload_hashes() -> Vec<[u8;32]>` — per input, the §1.1
   composition then `keccak256`, reusing the existing component serializers:
-  `prefix_blob = varint(3) ‖ TxPrefix::write`; `rct_base_blob` = the `Ct::Fcmp` head
+  `prefix_blob = varint(3) ‖ TxPrefix::write`; `ct_base_blob` = the `Ct::Fcmp` head
   (`CT_TYPE_FCMP ‖ varint(fee) ‖ reference_block ‖ CtBase::write`); `prunable_hash =
   keccak256(Prunable::write)`; `pqc_header(i)` (header-only); `all_key_hashes`.
   Expose **only** these two high-level methods; keep the component writers private.

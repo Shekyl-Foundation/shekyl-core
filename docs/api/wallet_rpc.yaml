@@ -26,7 +26,7 @@
 #     explicitly on every wallet-handle response — never inferred.
 #   - Hybrid PQC signatures are structured: {"ed25519": hex, "ml_dsa_65": hex}.
 #     Never a single opaque signature blob.
-#   - RCTTypeFcmpPlusPlusPqc is the only transaction type; no "rct_type"
+#   - CTTypeFcmpPlusPlusPqc is the only transaction type; no "ct_type"
 #     field exists anywhere in this API.
 #
 # Method registry status. Every planned method is listed in one of two

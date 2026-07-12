@@ -1221,6 +1221,30 @@
 
 ### Changed
 
+- **RCT→CT rename, V3.0 public-API slice (`docs/FOLLOWUPS.md` RingCT→CT
+  sweep umbrella, flagged 2026-06-22).** A Shekyl tx is a confidential
+  transaction — there is no ring — so the public, genesis-locking surface
+  drops the inherited "R" before it becomes breaking. Name-only: no wire,
+  hash, or consensus byte changes. (1) Daemon-RPC transaction JSON keys
+  `rct_signatures`/`rctsig_prunable` → `ct_signatures`/`ctsig_prunable`
+  (JSON-archive-only `ar.tag`; `binary_archive::tag` is a no-op, so binary
+  serialization is untouched; breaking for JSON consumers of
+  `decode_as_json`, tx-pool JSON, `print_tx`). (2) Legacy wallet-RPC
+  `estimate_tx_size_and_weight` request field `rct` → `ct`;
+  `WALLET_RPC_VERSION` bumped 1.30 → 2.0 (incompatible request-field
+  rename), FFI dispatch and Python RPC framework updated. (3) C++ enum
+  variants `rct::RCTTypeNull`/`rct::RCTTypeFcmpPlusPlusPqc` →
+  `rct::CTTypeNull`/`rct::CTTypeFcmpPlusPlusPqc` (type byte values
+  unchanged). (4) Cross-language constant chain renamed end to end:
+  `consensus_constants.json` key `ct_type_fcmp_plus_plus_pqc`, C++ macro
+  `SHEKYL_CT_TYPE_FCMP_PLUS_PLUS_PQC`, Rust `CT_TYPE_FCMP_PLUS_PLUS_PQC`;
+  plus Rust residue (`ct_base_blob` preimage component, stale doc refs).
+  The `rct::` namespace, `rctSig*` struct/module/file names, and the
+  `transaction.rct_signatures` field stay gated on `wallet2` retirement
+  per `CT_SURFACE_NAMING_PIN.md` §5 (V3.1+ internal bulk). Clears the
+  rename dependency on the CT-balance batched-FFI followup.
+  (`chore/rct-to-ct-public-api`)
+
 - **rct: delete the dead base-slot `pseudoOuts` and the three standalone
   object serializers — byte-identical; a claimed coinbase wire bug is
   REFUTED (`CT_SURFACE_NAMING_PIN.md` §2 correction).** The legacy

@@ -37,7 +37,7 @@ actor. This doc sits one layer up, at the orchestrator.
   §4–§6 body is stale — `SECTION_4_CLAIM_ERA`). A method carrying `claim` / `tier` /
   `StakeInstance` is wrong by construction.
 - **The principal has no consensus FSM of its own.** Its lifecycle is **ordinary
-  `RCTTypeFcmpPlusPlusPqc` transfers** to/from `P` plus firewall discipline. The only
+  `CTTypeFcmpPlusPlusPqc` transfers** to/from `P` plus firewall discipline. The only
   consensus-special legs belong to `P`: the gate-4 `txin_archival_bond_post` (bond
   post/debit) and the reward-emission mint. The consensus FSM belongs to `P`
   (`AdmissionPending / Bonded / Slashed / Exited`; FSM-retool P2B-4).
@@ -264,7 +264,7 @@ slightly differently is a silent correlation or a missed cover that no type chec
 
 ### DQ1 — no principal-side committed-stake wire survives. **CLOSED (plain transfer).**
 
-**Decision.** Stake-in is a **plain ordinary `RCTTypeFcmpPlusPlusPqc` transfer**,
+**Decision.** Stake-in is a **plain ordinary `CTTypeFcmpPlusPlusPqc` transfer**,
 principal → `P` stealth outputs on the main tree. **No `C_stake`, no range proof, no
 band, no minimum.** The §2.1 "principal role open" reopen-pointer is **retired**. This is
 **not merely a reasoned Round-1 disposition — it is the frozen genesis wire**:
