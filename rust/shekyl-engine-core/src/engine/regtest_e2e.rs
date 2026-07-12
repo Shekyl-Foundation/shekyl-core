@@ -18,6 +18,13 @@
 //! wallet `build_layers` root == daemon header root at every height. Track 2
 //! closes the other half.
 //!
+//! The file also carries the PR-4 staker harness (`EMISSION_CLAIM_BUILDER.md`
+//! §8 PR-4): a staker wallet funds its persona on-chain, the production P-scan
+//! discovers the funding, and the production bond path assembles + dispatches
+//! the bond post over the same live-daemon boundary, up to the daemon's
+//! (pinned) submit-legs gap — the substrate the emission-claim e2e builds on
+//! once the PR-4b daemon batteries land.
+//!
 //! All tests are `#[ignore]`d: they require a `shekyld` binary, located via the
 //! `SHEKYLD_BIN` env var. Run with:
 //!
@@ -698,6 +705,34 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     eprintln!("mined confirming block; height now {after}");
 }
 
+/// Mainnet [`EngineCreateParams`](super::lifecycle::EngineCreateParams) for the
+/// regtest wallets: FAKECHAIN uses the mainnet address format, and the KDF is
+/// the minimum-wall-clock relaxation the wallet-file tests share.
+fn mainnet_params<'a>(
+    base_path: &'a std::path::Path,
+    creds: &'a super::lifecycle::Credentials<'a>,
+    seed: &'a [u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+) -> super::lifecycle::EngineCreateParams<'a> {
+    super::lifecycle::EngineCreateParams {
+        base_path,
+        credentials: creds,
+        network: shekyl_address::Network::Mainnet,
+        capability: super::lifecycle::CapabilityInput::Full {
+            master_seed_64: seed,
+            seed_format: shekyl_crypto_pq::account::SeedFormat::Bip39,
+        },
+        creation_timestamp: 0,
+        restore_height_hint: 0,
+        kdf: shekyl_crypto_pq::wallet_envelope::KdfParams {
+            m_log2: 0x08,
+            t: 1,
+            p: 1,
+        },
+        overrides: shekyl_engine_file::SafetyOverrides::none(),
+        prefs: shekyl_engine_prefs::WalletPrefs::default(),
+    }
+}
+
 /// Create a Mainnet wallet (FAKECHAIN uses the mainnet address format) pointed at
 /// the daemon RPC. Returns the engine, its tempdir (caller keeps it alive — it owns
 /// the wallet files), and the encoded primary address.
@@ -712,24 +747,7 @@ async fn mainnet_wallet(
     let wallet_path = tmp.path().join("wallet");
     let seed = [seed_byte; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
     let creds = super::lifecycle::Credentials::password_only(b"track2");
-    let params = super::lifecycle::EngineCreateParams {
-        base_path: &wallet_path,
-        credentials: &creds,
-        network: shekyl_address::Network::Mainnet,
-        capability: super::lifecycle::CapabilityInput::Full {
-            master_seed_64: &seed,
-            seed_format: shekyl_crypto_pq::account::SeedFormat::Bip39,
-        },
-        creation_timestamp: 0,
-        restore_height_hint: 0,
-        kdf: shekyl_crypto_pq::wallet_envelope::KdfParams {
-            m_log2: 0x08,
-            t: 1,
-            p: 1,
-        },
-        overrides: shekyl_engine_file::SafetyOverrides::none(),
-        prefs: shekyl_engine_prefs::WalletPrefs::default(),
-    };
+    let params = mainnet_params(&wallet_path, &creds, &seed);
     let wallet = super::Engine::<super::SoloSigner>::create(params, super::DaemonClient::new(rpc))
         .expect("create wallet");
     let address = wallet.primary_address().encode().expect("encode address");
@@ -1092,6 +1110,26 @@ async fn generate_ct2_tier_b_fixture() {
     eprintln!("wrote {path}");
 }
 
+/// Mine + refresh in batches until the wallet's unlocked balance reaches
+/// `target`. Panics after `max_batches` batches.
+async fn mine_until_unlocked_at_least(
+    daemon: &RegtestDaemon,
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    address: &str,
+    target: shekyl_units::AtomicUnits,
+    batch: u64,
+    max_batches: usize,
+) {
+    for _ in 0..max_batches {
+        daemon.generate_blocks(batch, address).await;
+        refresh(arc).await;
+        if unlocked_balance(arc).await >= target {
+            return;
+        }
+    }
+    panic!("unlocked balance must reach {target:?} after mining + refresh");
+}
+
 /// Mine + refresh in batches until the wallet has a spendable (unlocked) balance.
 async fn mine_until_spendable(
     daemon: &RegtestDaemon,
@@ -1101,18 +1139,20 @@ async fn mine_until_spendable(
     max_batches: usize,
 ) {
     use shekyl_units::AtomicUnits;
-    for _ in 0..max_batches {
-        daemon.generate_blocks(batch, address).await;
-        refresh(arc).await;
-        if unlocked_balance(arc).await > AtomicUnits::ZERO {
-            return;
-        }
-    }
-    panic!("a matured coinbase must be spendable after mining + refresh");
+    mine_until_unlocked_at_least(
+        daemon,
+        arc,
+        address,
+        AtomicUnits::from_raw(1),
+        batch,
+        max_batches,
+    )
+    .await;
 }
 
 /// Build (retrying past the C2 reference-spendability gate) + submit a transfer
-/// to `recipient`, then mine one confirming block.
+/// to `recipient` for a quarter of the unlocked balance, then mine one
+/// confirming block.
 async fn submit_tier_b_spend(
     daemon: &RegtestDaemon,
     arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
@@ -1121,9 +1161,23 @@ async fn submit_tier_b_spend(
     batch: u64,
     max_batches: usize,
 ) {
-    use super::pending::{FeePriority, TxRecipient, TxRequest};
     use shekyl_units::AtomicUnits;
     let amount = AtomicUnits::from_raw(unlocked_balance(arc).await.to_raw() / 4);
+    transfer_to(daemon, arc, address, recipient, amount, batch, max_batches).await;
+}
+
+/// Build (retrying past the C2 reference-spendability gate) + submit a transfer
+/// of exactly `amount` to `recipient`, then mine one confirming block.
+async fn transfer_to(
+    daemon: &RegtestDaemon,
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    address: &str,
+    recipient: &str,
+    amount: shekyl_units::AtomicUnits,
+    batch: u64,
+    max_batches: usize,
+) {
+    use super::pending::{FeePriority, TxRecipient, TxRequest};
     let request = TxRequest {
         recipients: vec![TxRecipient {
             address: recipient.to_string(),
@@ -1146,17 +1200,17 @@ async fn submit_tier_b_spend(
                 daemon.generate_blocks(batch, address).await;
                 refresh(arc).await;
             }
-            Err(e) => panic!("build Tier-B spend: {e:?}"),
+            Err(e) => panic!("build transfer: {e:?}"),
         }
     }
-    let pending = pending.expect("Tier-B spend must build once reference-spendable");
+    let pending = pending.expect("transfer must build once reference-spendable");
     let tx_hash = {
         let mut g = arc.write().await;
         g.submit_pending_tx_async(pending.id, pending.content_gen)
             .await
-            .expect("daemon must accept the Tier-B spend (consensus verify)")
+            .expect("daemon must accept the transfer (consensus verify)")
     };
-    eprintln!("daemon accepted Tier-B spend: {tx_hash:?}");
+    eprintln!("daemon accepted transfer: {tx_hash:?}");
     daemon.generate_blocks(1, address).await;
 }
 
@@ -1177,6 +1231,390 @@ async fn unlocked_balance(
     let g = arc.read().await;
     let ledger = g.ledger();
     ledger.ledger.balance(ledger.ledger.height()).unlocked
+}
+
+// ---------------------------------------------------------------------------
+// PR-4 staker harness (EMISSION_CLAIM_BUILDER.md §8 PR-4): staker wallet
+// lifecycle + persona funding + production P-scan against the live daemon.
+// ---------------------------------------------------------------------------
+
+/// Test finality horizon for the P-scan. Production is the consensus
+/// `ARCHIVAL_REORG_DEPTH_BLOCKS`; a shallow horizon (injected through the
+/// crate-visible [`Engine::start_pscan_with`](super::Engine::start_pscan_with)
+/// seam, which exists for exactly this) lets the harness reach scan finality
+/// in blocks it can afford to mine.
+const PSCAN_TEST_REORG_DEPTH: u64 = 4;
+
+/// Create a STAKER Mainnet wallet against the daemon RPC: create → persist the
+/// slot's bond record (flips `staking_enabled`) → close → reopen (`open_full`
+/// spawns the `StakeEngine` for a staker — the same create/reopen shape as the
+/// pscan auto-start lifecycle test). Returns the arc'd engine, its tempdir
+/// (caller keeps it alive — it owns the wallet files), and the principal's
+/// encoded primary address.
+async fn staker_wallet(
+    rpc_port: u16,
+    seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    slot: super::stake_engine::PSlot,
+) -> (
+    Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    tempfile::TempDir,
+    String,
+) {
+    let tmp = tempfile::tempdir().expect("wallet tempdir");
+    let base_path = tmp.path().join("wallet");
+    let creds = super::lifecycle::Credentials::password_only(b"pr4-staker");
+    let params = mainnet_params(&base_path, &creds, seed);
+
+    let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{rpc_port}"))
+        .await
+        .expect("wallet rpc");
+    let engine = super::Engine::<super::SoloSigner>::create(params, super::DaemonClient::new(rpc))
+        .expect("create staker wallet");
+    engine
+        .persist_bond_record(slot)
+        .expect("persist bond record");
+    engine.close(&creds).expect("close created wallet");
+
+    let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{rpc_port}"))
+        .await
+        .expect("wallet rpc (reopen)");
+    let opened = super::Engine::<super::SoloSigner>::open_full(
+        &base_path,
+        &creds,
+        shekyl_address::Network::Mainnet,
+        super::DaemonClient::new(rpc),
+        shekyl_engine_file::SafetyOverrides::none(),
+    )
+    .expect("reopen staker wallet");
+    let engine = opened.into_wallet();
+    assert!(
+        engine.stake_handle().is_some(),
+        "a staker reopen spawns the StakeEngine"
+    );
+    let address = engine.primary_address().encode().expect("encode address");
+    (Arc::new(RwLock::new(engine)), tmp, address)
+}
+
+/// The persona's on-chain receive address, derived in-test from the same
+/// master seed the wallet holds. The production wallet derives the identical
+/// bundle at open (`spawn_stake_engine_if_staker` → `derive_archival_p_keys`);
+/// the harness re-derives only the PUBLIC halves so the principal can fund the
+/// persona over an ordinary wallet-built transfer.
+fn persona_address(seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES], slot: u32) -> String {
+    use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
+    use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
+    let keys = derive_archival_p_keys(seed, DerivationNetwork::Mainnet, SeedFormat::Bip39, slot)
+        .expect("derive persona keys");
+    shekyl_address::ShekylAddress::new(
+        shekyl_address::Network::Mainnet,
+        *keys.spend_pk.as_canonical_bytes(),
+        *keys.view_pk.as_canonical_bytes(),
+        keys.ml_kem_ek.to_vec(),
+    )
+    .encode()
+    .expect("encode persona address")
+}
+
+/// Run the production P-scan (tight cadence + the shallow
+/// [`PSCAN_TEST_REORG_DEPTH`] horizon, via the injectable
+/// [`Engine::start_pscan_with`](super::Engine::start_pscan_with) seam) until
+/// the sealed `.wallet.pscan` state satisfies `pred`, then shut the task down
+/// and return that state. The caller mines the finality horizon past the
+/// blocks under test *before* calling; the scan then only has to catch up to
+/// `tip − horizon`. Panics if no satisfying seal appears within the deadline.
+async fn pscan_until(
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    what: &str,
+    pred: impl Fn(&shekyl_engine_state::pscan_state::PScanState) -> bool,
+) -> shekyl_engine_state::pscan_state::PScanState {
+    use super::pscan::start::load_pscan_state_for_engine;
+    use super::pscan::task::PScanConfig;
+
+    let handle = super::Engine::start_pscan_with(
+        arc.clone(),
+        PScanConfig {
+            reorg_depth: PSCAN_TEST_REORG_DEPTH,
+            // Small batches so each seal lands quickly: the sweep persists state
+            // only at batch boundaries, and a debug-build scan-step is slow
+            // enough that a whole-backlog batch could outlive the deadline
+            // without ever sealing.
+            batch_blocks: 16,
+        },
+        Duration::from_millis(150),
+    )
+    .await
+    .expect("start pscan");
+
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let mut last_report = Instant::now();
+    loop {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        if let Some(state) = load_pscan_state_for_engine(arc.clone())
+            .await
+            .expect("load pscan state")
+        {
+            if pred(&state) {
+                handle.shutdown().await;
+                return state;
+            }
+            if last_report.elapsed() > Duration::from_secs(2) {
+                last_report = Instant::now();
+                eprintln!(
+                    "pscan progress: synced={:?}, funding={}, matches={}",
+                    state.synced_height(),
+                    state.funding_outputs().len(),
+                    state.bond_post_matches().len(),
+                );
+            }
+        } else if last_report.elapsed() > Duration::from_secs(2) {
+            last_report = Instant::now();
+            eprintln!("pscan progress: no seal yet");
+        }
+        assert!(
+            Instant::now() < deadline,
+            "pscan did not observe {what} within the deadline"
+        );
+    }
+}
+
+/// PR-4 staker harness (`EMISSION_CLAIM_BUILDER.md` §8 PR-4): a staker wallet
+/// funds its persona on-chain (a wallet-built FCMP++ transfer to the persona's
+/// derived receive address — the production rung-1 `ExternalTransfer` funding),
+/// the production P-scan discovers the funding, and the production bond path
+/// ([`Engine::assemble_bond_post`](super::Engine::assemble_bond_post) →
+/// posture→submitter choke point) dispatches the bond post over real RPC.
+///
+/// **Daemon-gap tripwire (the trailing assertion).** The daemon's Rust submit
+/// engine has no bond-post Phase-C battery yet: `DaemonTxVerifier`'s
+/// `SubmitTxKind::BondPost` arm refuses `Malformed` unconditionally
+/// (`shekyl-daemon-rpc/src/submit/verifier.rs`). Its rule-21 reopening
+/// criterion — the §13 (F1/F3) wire reshape — has *fired* (bond posts now
+/// clear Phase A; this harness proved it live: an underfunded fee draws
+/// `FeeTooLow`, which only Phase C emits), so the battery is due; it lands as
+/// the PR-4b submit-legs PR (`DAEMON_SUBMIT_VERDICT.md` §8.7.1 BP rows). The
+/// assertion pins today's exact verdict: when PR-4b lands, it fails loudly
+/// and flips to accepted-and-applied (bond mined; rung-2 bond-post match +
+/// `BondPostChange` change funding re-discovered by this same scan — the
+/// substrate the emission-claim e2e, PR-4c, spends from).
+///
+/// Bounded deviations from production, each named:
+/// - [`SpentRecordsDurablyPruned::for_test`] — SP-R0 pruning has not landed;
+///   this is the same witness every bond-path test passes
+///   (`super::bond_assembly`).
+/// - The assembled bytes are dispatched directly through the audited
+///   posture→submitter choke point (`for_posture` + `submit_bound`) rather
+///   than WI-3's block-timed dispatch driver: the driver's decorrelation
+///   offsets span up to ~600 blocks (its timing law has its own KATs); the
+///   harness proves the chain-facing contract.
+/// - A shallow P-scan finality horizon + tight cadence via the injectable
+///   `start_pscan_with` seam (see [`PSCAN_TEST_REORG_DEPTH`]).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
+async fn e2e_staker_bond_post_reaches_the_daemon_submit_gap() {
+    use super::bond_assembly::{BondAssemblyError, SpentRecordsDurablyPruned};
+    use super::error::TerminalErrorKind;
+    use super::posture::BroadcastPosture;
+    use super::pscan::start::TOR_SOCKS_PLACEHOLDER_PORT;
+    use super::stake_engine::{PSlot, StakeEngineError};
+    use super::traits::DaemonEngine;
+    use super::transaction_submitter::{BroadcastSubmitError, BroadcastSubmitter, SubmitterError};
+    use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind};
+    use shekyl_p_transport::TorSocksEndpoint;
+    use shekyl_units::AtomicUnits;
+
+    const SLOT: u32 = 0;
+    const MINE_BATCH_BLOCKS: u64 = 10;
+    const MAX_MINE_BATCHES: usize = 24;
+    /// Size ceiling for the bond-fee derivation. The single-funding-input bond
+    /// post measures ~22.5 KB; the ceiling gives the estimate ~40% headroom so
+    /// the fee baked in at assembly clears the daemon's per-byte floor even if
+    /// input count or proof size drifts.
+    const BOND_SIZE_CEILING_BYTES: usize = 32 * 1024;
+    /// Extra persona funding above `floor + fee`, so the sweep-all bond leaves
+    /// a non-zero change output — the persona's rung-2 `BondPostChange` funding
+    /// for the follow-on emission-claim leg.
+    const FUNDING_CUSHION: u64 = 200_000_000;
+
+    let daemon = RegtestDaemon::start().await;
+    let seed = [0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let slot = PSlot::from_raw(SLOT);
+    let (arc, _tmp, principal) = staker_wallet(daemon.rpc_port, &seed, slot).await;
+
+    // The bond fee is caller-chosen at this seam (the RPC stake entry's
+    // contract), but a hardcoded constant is wrong on regtest: the daemon's
+    // per-byte floor tracks the block reward, which is enormous on a young
+    // chain (~69 000/byte at these heights ⇒ ~1.55e9 for a 22.5 KB post).
+    // Derive the fee from the daemon's live estimate over the size ceiling;
+    // the reward only decays as the test mines, so an early estimate stays
+    // sufficient, and overpaying is harmless (the fee is a miner transfer,
+    // not a conservation term).
+    let bond_fee = {
+        let estimates = arc
+            .read()
+            .await
+            .daemon()
+            .get_fee_estimates()
+            .await
+            .expect("daemon fee estimates");
+        estimates
+            .economy
+            .calculate_fee_from_weight(BOND_SIZE_CEILING_BYTES)
+    };
+    eprintln!("bond fee from daemon estimate: {bond_fee}");
+
+    // Fund the principal past the persona's needs (2×: the transfer's own fee
+    // + selection churn), then fund the persona with one ordinary transfer.
+    let holdings = HoldingsDescriptor {
+        kind: HoldingsKind::CompleteTree,
+        shard_ids: vec![],
+    };
+    let funding = AtomicUnits::from_raw(bond_floor(&holdings) + bond_fee + FUNDING_CUSHION);
+    mine_until_unlocked_at_least(
+        &daemon,
+        &arc,
+        &principal,
+        AtomicUnits::from_raw(funding.to_raw() * 2),
+        MINE_BATCH_BLOCKS,
+        MAX_MINE_BATCHES,
+    )
+    .await;
+    let p_address = persona_address(&seed, SLOT);
+    transfer_to(
+        &daemon,
+        &arc,
+        &principal,
+        &p_address,
+        funding,
+        MINE_BATCH_BLOCKS,
+        MAX_MINE_BATCHES,
+    )
+    .await;
+
+    // Discovery: push the shallow finality horizon past the funding block,
+    // then run the production P-scan until the sealed state carries the
+    // persona's funding output.
+    daemon
+        .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &principal)
+        .await;
+    refresh(&arc).await;
+    let state = pscan_until(&arc, "the persona funding output", |s| {
+        s.funding_outputs().iter().any(|r| r.p_slot == slot)
+    })
+    .await;
+    let discovered = state
+        .funding_outputs()
+        .iter()
+        .filter(|r| r.p_slot == slot)
+        .count();
+    eprintln!("pscan discovered {discovered} persona funding output(s)");
+
+    // Production bond post. The funding must be spendable at the anchored
+    // REFERENCE block (tip − REF_ANCHOR_AGE), which lags tip maturity — retry
+    // the production assemble, mining between attempts (the same shape as the
+    // spend e2e's reference-spendability loop).
+    let fee = AtomicUnits::from_raw(bond_fee);
+    let mut assembled = None;
+    for _ in 0..MAX_MINE_BATCHES {
+        let (handle, ticket) = {
+            let g = arc.read().await;
+            let stake = g.stake_handle().expect("staker wallet has a stake engine");
+            // Activation advances the handle generation, so the assembly
+            // handle is minted after it (claim_dispatch's ordering).
+            let act = stake.mint_handle(slot).await.expect("mint activation");
+            stake.activate_persona(act).await.expect("activate persona");
+            let handle = stake.mint_handle(slot).await.expect("mint handle");
+            // Idempotent re-persist: a fresh ticket for this attempt.
+            let ticket = g.persist_bond_record(slot).expect("persist bond record");
+            (handle, ticket)
+        };
+        match super::Engine::assemble_bond_post(
+            arc.clone(),
+            handle,
+            ticket,
+            holdings.clone(),
+            fee,
+            &SpentRecordsDurablyPruned::for_test(),
+        )
+        .await
+        {
+            Ok(a) => {
+                assembled = Some(a);
+                break;
+            }
+            Err(StakeEngineError::Assembly(BondAssemblyError::InsufficientFunding {
+                available,
+                required,
+            })) => {
+                eprintln!(
+                    "persona funding not yet reference-spendable \
+                     ({available}/{required}); mining more"
+                );
+                daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
+                refresh(&arc).await;
+            }
+            // The same reference lag one stage later: the funding output
+            // cleared the sweep's spendability filter but is not yet drained
+            // into the REFERENCE curve tree the membership path is fetched
+            // against. `Build.detail` is a rendered daemon-client error (no
+            // typed variant crosses the assembly boundary), so the match is
+            // textual — of the daemon's path refusals only this one is
+            // mine-more-retryable, and only it carries this name.
+            Err(StakeEngineError::Assembly(BondAssemblyError::Build { stage, detail }))
+                if detail.contains("OutputNotDrained") =>
+            {
+                eprintln!("funding output not yet in the reference tree ({stage}); mining more");
+                daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
+                refresh(&arc).await;
+            }
+            Err(e) => panic!("assemble bond post: {e:?}"),
+        }
+    }
+    let assembled =
+        assembled.expect("bond post must assemble once the funding is reference-spendable");
+    eprintln!(
+        "assembled bond post: {} B, {} funding input(s)",
+        assembled.bound_tx.bytes().len(),
+        assembled.funding_gindexes.len(),
+    );
+
+    // Dispatch the assembled bytes through the audited posture→submitter
+    // choke point (see the module docs for why WI-3's block-timed driver is
+    // deliberately not exercised here).
+    let daemon_client = { arc.read().await.daemon().clone() };
+    let submitter = BroadcastSubmitter::for_posture(
+        BroadcastPosture::Local,
+        *assembled.bound_tx.persona(),
+        Arc::new(daemon_client),
+        &TorSocksEndpoint::loopback(TOR_SOCKS_PLACEHOLDER_PORT),
+    )
+    .expect("the Local arm of for_posture is infallible");
+    let verdict = submitter.submit_bound(assembled.bound_tx.clone()).await;
+
+    // The daemon-gap tripwire (module docs above): the wallet-built bond post
+    // reaches the daemon's Phase-C verifier and draws its unimplemented-arm
+    // refusal, verbatim. Anything else — acceptance (PR-4b landed: promote
+    // this into the accepted-and-applied + scan-re-discovery leg), a Phase-A
+    // reject, a transport error — fails loudly here.
+    match verdict {
+        Err(BroadcastSubmitError::Submit(SubmitterError::RejectedTerminal {
+            kind: TerminalErrorKind::Malformed,
+        })) => {
+            eprintln!(
+                "bond post cleared Phase A and drew the Phase-C unimplemented-arm \
+                 refusal — the PR-4b submit-legs gap, pinned"
+            );
+        }
+        Ok(success) => panic!(
+            "daemon ACCEPTED the bond post ({success:?}): the PR-4b bond-post battery \
+             has landed — promote this tripwire into the accepted-and-applied leg \
+             (mine past the scan horizon; assert a bond-post match + a BondPostChange \
+             funding output beyond the {discovered} discovered pre-post)"
+        ),
+        Err(other) => panic!(
+            "bond post must reach the Phase-C unimplemented-arm refusal, \
+             not fail earlier: {other:?}"
+        ),
+    }
 }
 
 /// Capture blocks `0..=tip` as one fixture chain (deterministic projection only).
