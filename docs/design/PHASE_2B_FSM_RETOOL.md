@@ -34,9 +34,10 @@ yield states. Retool is **two inversions + a collapse**, not a field rename.
 ### Finding
 
 §3.3.3 keys the wallet on the **staked output** and calls output identity "stable" (line 950).
-Under transfer-shaped admission + membership-only backing, the **admission/backing UTXO rotates**
-(E-4 gate-6 hygiene) while **`P` persists**. Output-keyed instances **orphan on every backing
-rotation**; `P_canonical_id`-keyed instances survive it.
+Under transfer-shaped admission + membership-only backing, the **funding output an emission
+designates changes per emission** while **`P` persists** (per-emission selection from `P`'s funding
+pool — not a "rotation," not consensus-tracked, §7.3). Output-keyed instances **orphan whenever the
+designated output changes**; `P_canonical_id`-keyed instances survive it.
 
 ### Disposition (proposed — confirm or push back)
 
@@ -47,19 +48,28 @@ rotation**; `P_canonical_id`-keyed instances survive it.
    - customization: `"shekyl/archival-p-id-v1"`
    - input: `HybridPublicKey::to_canonical_bytes()` (from [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §9.5)
 3. **Delete `StakeId` / `shekyl/stake-id-v1`** from the rebased FSM — no output-derived
-   primary key. Optional **secondary** `OutputRef` fields track rotatable backing UTXOs; they
-   are not instance identity.
+   primary key. The `funding_outputs` pool an emission designates backing from is **not** instance
+   identity (and is not a "rotatable field" — see the corrected table above).
 4. **Rename (suggested):** `StakeInstance` → `ArchivalPInstance` (or `PInstance`) in wallet
    docs/code when retool lands — signals per-`P` not per-stake-output.
 
-### Two rotation concepts (do not conflate)
+### "Rotation" is not a mechanism — settled, recorded at the root (do not re-litigate)
 
-| Concept | What changes | `P_canonical_id` | Gate-6 / wallet |
-|---------|--------------|------------------|-----------------|
-| **Backing UTXO rotation** (E-4 hygiene) | Admission/membership outputs on main tree | **Unchanged** | Update `backing_outputs` on same instance |
-| **`P` pseudonym rotation** (decorrelation) | HKDF `p_slot` → new keys (§9.2) | **New** id | New instance; old slot retired |
+**There is no "`P` rotation," and neither thing below is a decorrelation lever.** Pinned here at the
+origin because this keeps getting re-litigated. "Rotation" is loose shorthand for two unrelated
+things, and *both* the "hygiene" and "decorrelation" framings the earlier table carried are wrong at
+source:
 
-P2B-1 is about the **first** row. Gate-6 §9 `p_slot` governs the **second**.
+| Loose term | What it actually is (verified at source 2026-07-12) | `P_canonical_id` |
+|------------|------------------------------------------------------|------------------|
+| **Backing-output "rotation"** | `P` designates a (possibly different) output from its **own `funding_outputs` pool** to back each emission, membership-only (`BackingSet::designate_backing`). **Not a mechanism, not a hygiene action, not consensus-tracked:** there is **no `backing_outputs` field** anywhere in the code, and the **consensus backing-rotation rule was dropped** — [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §7.3, "consensus does not require backing-output rotation." No backing output is ever shared between personas (each is scanned under one `P`'s view key). | **Unchanged** |
+| **Pseudonym "rotation"** | Retire `P_old` (`Unbond` + drain) + create `P_new` (fresh `JoinMarket`): **unlink-and-relink**, two independent lifecycle ops with **no bond migration** ([`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) S-5: migration "would be a new consensus op … out of scope for V3.0"). **Not a decorrelation lever** — it provides **correlation** (T-A1 portfolio re-linkage: `P_old`↔`P_new` re-links on the public portfolio), which is precisely why **long-lived `P` is the committed architecture** (S-5). | **New** id (a *fresh* persona, unlinked by design) |
+
+**The one load-bearing takeaway (the actual P2B-1 point):** key the instance on `P_canonical_id`,
+**never on an output** — because the funding outputs a persona uses change per emission while `P`
+persists. `p_slot` (Gate-6 §9.2) is a wallet-internal key-derivation index for deriving a *fresh*
+persona; it is **not** a rotation of an existing one. Do not describe either item above as
+"decorrelation," "E-4 hygiene," or a "rotation action."
 
 ### Compatibility with Gate-6 Round 1
 
@@ -74,7 +84,7 @@ first emission, before bond record. The GUI always has a stable row id from inst
 
 ### P2B-1 exit
 
-- [x] Primary key = `P_canonical_id`; backing demoted to rotatable field.
+- [x] Primary key = `P_canonical_id`; backing is not instance identity (the `funding_outputs` pool, designated per emission — not a "rotatable field").
 - [x] `PHandle` rejected.
 - [x] §3.3.3 rewritten as archival `P_canonical_id` pin (PHASE_2B §3.3; gate-6 §9.5).
 
@@ -159,11 +169,11 @@ do not need separate FSM states.
 | Object | Role | Lifetime |
 |--------|------|----------|
 | **Bond** | Gate-4 slashable collateral; `ArchivalBondRecord` anchor | Persists across `P`'s service life |
-| **Backing / admission UTXO** | Ordinary transfer(s) ≥ MIN; membership-only proof at emission | Rotatable (gate-6 E-4 hygiene); rotation consensus-invisible |
+| **Backing / funding output** | Ordinary `P`-owned output; membership-only proof at emission | Designated per emission from `funding_outputs`; **not** a "rotation" and **not** consensus-tracked (§7.3) |
 
-Soft-admission safety (§2.4): challenge failure slashes **bond** regardless of backing
-UTXO state. Instance fields: `bond_ref` (stable) + `backing_outputs` (rotatable) — never
-conflate.
+Soft-admission safety (§2.4): challenge failure slashes **bond** regardless of which funding
+output an emission designates. Instance fields: `bond_ref` (stable) + the `funding_outputs` pool
+(designated-from per emission, not a rotatable field) — never conflate.
 
 ### Collapse (deleted)
 
@@ -176,7 +186,7 @@ conflate.
 | State | Defining predicate | Consensus footprint | Persisted (wallet) |
 |-------|-------------------|---------------------|-------------------|
 | `AdmissionPending` | No bond record | Gate-2 retention bits may accrue but **don't count** (`R_market` filters `P ∈ Market`; §3.3) | `p_slot`, `p_canonical_id`, holdings-being-served (§9.4) |
-| `Bonded` | Bond record ∧ `bonded_total > 0` | Counted retention; `Σwork`; **partial slash** shrinks holdings in-place | + `bond_ref`, `backing_outputs`, `claimed_epochs` cache |
+| `Bonded` | Bond record ∧ `bonded_total > 0` | Counted retention; `Σwork`; **partial slash** shrinks holdings in-place | + `bond_ref`, `funding_outputs`, `claimed_epochs` cache |
 | `Slashed` | Bond record ∧ `bonded_total == 0` | Terminal slash only; out of Market until re-bond | Same; cache frozen |
 | `Exited` | Drain confirmed; retiring; collateral in release cooldown until **Unbond** | Record until prune | Same; backlog cache; bond cooldown |
 
@@ -321,7 +331,7 @@ emission is the first emit action within `Bonded`:
 |--------|------|-------|
 | Fund admission | `AdmissionPending` | Ordinary transfer to `P` |
 | Emit | `Bonded` / `Slashed` / `Exited` | `txin_archival_reward_emission`, batch ≤ 15. **Emit-new:** `Bonded` + `good_standing`. **Emit-backlog:** any of three + `good_through(E)` + `W` + dedup |
-| Rotate backing | `Bonded` | Membership-only; updates `backing_outputs`; no state change |
+| Designate backing (per emission — *not* a "rotation") | `Bonded` | membership-only selection from `funding_outputs`; consensus-untracked (§7.3); no state change |
 | HoldingsUpdate add shard | `Bonded` | `txin_archival_bond_post` `post_kind = HoldingsUpdate`; `bond_credit = +FLOOR`; new shard's serve begins, counted/claimable for that shard from `E_add + 1` (per-shard R1b) |
 | HoldingsUpdate drop shard | `Bonded` (**≥1 shard remains**) | `post_kind = HoldingsUpdate`; `bond_debit = FLOOR`; dropped collateral enters **per-shard release cooldown** (P2B-7) and **stays slashable** through it — no drop-to-dodge. Dropping the last shard is rejected; use `Unbond` (→ `Exited`) |
 | Exit / drain | `Bonded` / `Slashed` | Decorrelated `P`→principal — **non-escrowed** outputs only |
@@ -331,7 +341,7 @@ emission is the first emit action within `Bonded`:
 
 ### `ArchivalPInstance` shape
 
-Keyed `P_canonical_id`: `p_slot`, `state`, `bond_ref`, `backing_outputs`, holdings/shard-set,
+Keyed `P_canonical_id`: `p_slot`, `state`, `bond_ref`, `funding_outputs` (the pool an emission designates backing from — not a `backing_outputs` field), holdings/shard-set,
 `claimed_epochs` (public cache), `emission_pending_epochs` (runtime). Secrets re-derived from
 `master_seed_64` + `p_slot` only (§9.4). `good_standing` / `good_through(E)` = bond reads,
 never authoritative locally.
@@ -499,8 +509,35 @@ questions only, with historical callers rerouted to the bits. Resolved as part o
 - [x] Mutable-holdings serve-credit read rule pinned (Pin 4); `has_archival_bond_shard`
   flagged for the connect-path work.
 - [ ] **Per-shard `E_add + 1`** verify/connect rule landed in `shekyl-archival-retention`
-  (gate-4 connect paths, FOLLOWUPS V3.0).
-- [ ] **Age-stratified sim reconciliation** (Step 3) — gates the seal.
+  (gate-4 connect paths, FOLLOWUPS V3.0). **Still open (impl):** verified at source 2026-07-12 —
+  `bond_post.rs` implements `verify_join_market_bond_post` only; the wire carries all four
+  `post_kind`s (`bond_wire.rs`) but verify rejects the other three (`PostKindNotJoinMarket`
+  "at genesis"). Rebond/Unbond/HoldingsUpdate verify+connect, the per-shard `E_add+1` rule, and
+  `verify_unbond_release` (release-cooldown spendability gate) are all unbuilt.
+- [x] **Age-stratified sim reconciliation (Step 3) — DONE; seal cleared.**
+  [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §L18 (R-3 reconciliation, 2026-06-16):
+  **`HoldingsUpdate` is sealable at genesis with `RELEASE_COOLDOWN = 2` and no change to
+  `r_target_deep`.** Binding seal number `committed_deep_under = 0.0138` (< 0.10); hold-the-floor
+  `oldest_min_committed = 6` (`oldest_margin ≥ 0`); `sole_source = 0` on the primary `lag0`
+  channel; committed floor survives `lag2` stress; not on a cliff at `c2`.
+  **Adversarial read confirmed (2026-07-12, `fsm/l18-age-stratified-review`):** this clears P2B-7
+  Pin 5's *"age-stratified, not a re-tuned flat scalar"* bar — the friction is **flat freeze,
+  age-stratified harm** (Faithfulness pin 1: the frozen amount is flat `ARCHIVAL_BOND_FLOOR` per
+  §8.1, *not* age-scaled; the age-stratification lives in the `bond_duration(age)` drop-lock
+  incidence + thinnest-tail coverage, `agent.rs:277` / `model.rs:417`, not the frozen magnitude —
+  the earlier "flat" tells were the correctly-flat bond *amount*, not the friction). The seal-arm
+  is consensus-faithful (`bond_age_scale = 0`, matching `bonded_total == bond_floor`).
+  **Residuals (not the reconciliation — named reopen/carry):** (1) **numerics provisional** — the
+  age-scaled-duration *shape* is sealed but `BOND_DURATION_{BASE,AGE_SCALE}` are post-testnet
+  `fetch_latency_per_unit` (saturates `scale 4 ≡ 8`, calibration-insensitive in `[2,8]`);
+  (2) **no-cushion reopen** — the `+1` is fully consumed with no emergent slack (findings 4/6), so
+  reopen triggers on *any* new deep-band friction, named live candidates incl. **(c) the Gate-6
+  GF-4/GF-7 recurring rebond/unbond surface** (`ARCHIVAL_FIREWALL_GATE6.md` §12 — the exit-seam
+  frictions can consume this margin) and a `RELEASE_COOLDOWN` rise past ~3.
+  **Gate-6 cross-link:** the §L18 routed residual — a **wallet-conformance guard that warns/refuses
+  a `HoldingsUpdate` drop whose freed capital is redeployed within the cooldown** — is a
+  Gate-6-class safe-by-default (the standoff-draw conformance posture); it belongs with the F-D2/F-D3
+  drain-event work (`ARCHIVAL_FIREWALL_GATE6.md` §12.4/§12.5), not the consensus floor.
 
 ---
 

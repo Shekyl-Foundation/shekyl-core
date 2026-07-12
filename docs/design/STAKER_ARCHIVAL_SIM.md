@@ -3918,6 +3918,53 @@ rather than being optional:
   strand is a UX footgun the wallet can catch at construction time. (Tracked as a wallet-side
   follow-up; not a consensus rule.)
 
+### Confirming-run refinements (adversarial pass, 2026-07-12)
+
+The a-priori seal gates + the causal/co freeze-harm bracket are the right discipline; the
+disposition above is not reopened. These are three sharpening notes for the **confirming run**,
+ordered by leverage — the seal call is made cleanly only when the run reports them.
+
+1. **Bind the seal gate to the `s4` arm, explicitly.** The gate line fixes cooldown and latency
+   ("genesis `c2`, primary `lag0` committed channel") but **not** the bond-duration composition.
+   The age-stratified harm exists **only on `s4`** (age-scaled duration — the realistic genesis
+   composition per L9; `s0` is the flat contrast with no deep-tail duration friction). A run that
+   reads the three gates on `s0` or ambiguously tests a world **without the friction the whole
+   reconciliation exists to measure.** Pin the gate to **{`c2`, `lag0`, `s4`}** in the gate line.
+2. **Pre-commit the bracket-straddle rule before the run.** Gating on `freeze_harm_co` (upper
+   bound) is correct for a seal — but Pin 1 warns that over-sealing `r_target_deep` is itself a
+   permanent decentralization cost (entry barrier). The load-bearing case is the **straddle**:
+   `freeze_harm_co` fails hold-the-floor while `freeze_harm_causal` passes. Auto-raising
+   `r_target_deep` on the upper bound there **bakes the pessimism into genesis** — the exact harm
+   Pin 1 named. **Rule (pre-committed):** a straddle is a **diagnose-the-gap** signal (attribute the
+   co-occurring deep-under to freeze vs. confound), **not an auto-raise.** Only a `causal`-side
+   breach moves the floor.
+3. **Cross the freeze with the L17 mass-exit — currently unmeasured.** L17's swan-4 sized the
+   re-seed bottleneck (`reseed_rate`) before L18 existed; L18 measures the freeze in **isolated
+   steady state** (`lag0`). Neither measured the **compound**: a crisis wave of voluntary drops
+   freezes a large capital fraction in cooldown **simultaneously**, so the survivors who should pick
+   up the abandoned deep tail hold the **least-mobile** capital exactly when re-seed demand spikes.
+   That is the pessimistic reading `freeze_harm_co` discipline says to prefer, and it is open. **One
+   arm** crossing `c2` × the L17 30% / class-correlated exit closes it.
+**Retracted (not a fourth note) — "the cooldown taxes persona rotation."** A draft fourth note
+claimed `RELEASE_COOLDOWN` carries an unpriced privacy cost by taxing persona rotation. **Withdrawn
+on the merits (2026-07-12):** there is no "persona rotation" mechanism — a persona is a keypair +
+bond, and "pseudonym rotation" is just *retire `P_old` (`Unbond` + drain) + create `P_new`
+(fresh `JoinMarket`)*, two independent lifecycle operations with no linkage and no bond-migration
+(S-5). The claimed privacy benefit was already retired by **T-A1 / S-5** (rotation is portfolio-bound,
+re-linkable, and long-lived `P` is the committed architecture — cosmetic rotation does not
+decorrelate), so there is no rotation-unlinkability for the cooldown to disincentivize. And
+mechanically a persona switch needs **fresh unlinked capital** for `P_new` regardless (recycling
+`P_old`'s freed collateral would link them), so the cooldown only delays `P_old`'s capital *recovery*
+— a purely **economic** cost already inside L18, not a privacy one. Only **backing-UTXO rotation**
+(one persona, bond untouched) is a real rotation, and it never touches the cooldown.
+
+**Report format for the seal call.** At **{`c2`, `lag0`, `s4`}**, report: (i) the three committed
+gates (`committed_deep_under < 0.10`, `sole_source = 0`, `oldest_margin ≥ 0`); (ii) the freeze-harm
+**bracket — both bounds** (`freeze_harm_causal` and `freeze_harm_co`), not just `co`; (iii) the actual
+`r_target_deep` re-derivation — does the current floor hold, and if not, **how far apart the `causal`
+and `co` bounds put the required floor.** That bracket width is the decision (per note 2: only the
+`causal` side moves the floor; a wide bracket is freeze↔shortage entanglement to diagnose, not seal).
+
 ### Faithful-freeze reconciliation (Copilot PR#148 findings #4/#5, 2026-06-16)
 
 The R-3 results above (the `0.0138` binding number, the `c4` cliff, the bracket width) were
