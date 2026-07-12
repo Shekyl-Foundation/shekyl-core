@@ -1840,8 +1840,8 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
     uint8_t record_exists);
 
 // Unbond bond-post semantic verify (gate-4 §3.5 debit path; PHASE_2B_FSM_RETOOL.md
-// P2B-8). Extends the shared SHEKYL_ARCHIVAL_BOND_POST_* error space above: 11-18 are
-// Unbond-semantic; 19 (LEN_OVERFLOW) is the shared slice-marshaling guard.
+// P2B-8). Extends the shared SHEKYL_ARCHIVAL_BOND_POST_* error space above: 11-18 and
+// 20 are Unbond-semantic; 19 (LEN_OVERFLOW) is the shared slice-marshaling guard.
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_UNBOND    11
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING          12
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_UNBOND       13
@@ -1851,6 +1851,7 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL          17
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED    18
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW            19
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_HOLDINGS_NOT_EMPTY 20
 
 /// Unbond bond-post verify. `record_exists`/`record_bonded_total` come from the LMDB
 /// bond record; `per_shard_last_served_ptr` is the array of the served shards'

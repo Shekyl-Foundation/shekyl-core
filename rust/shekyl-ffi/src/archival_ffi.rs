@@ -117,6 +117,9 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED: u8 = 18;
 /// A shard/served-epoch array length would overflow the `from_raw_parts`
 /// `isize::MAX` byte bound — a corrupted or hostile marshaled length.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW: u8 = 19;
+/// `Unbond` verify: a full exit must end at empty holdings, but the post-connect
+/// descriptor is floor-zero only because its shard set is oversize/invalid.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_HOLDINGS_NOT_EMPTY: u8 = 20;
 
 /// Context supplied by consensus after bond/registry LMDB reads (gate-2 §5.3 steps 2, 6–7).
 #[repr(C)]
@@ -444,6 +447,9 @@ fn map_bond_post_error(err: BondPostError) -> u8 {
         BondPostError::RecordMissing => SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING,
         BondPostError::NothingToUnbond => SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_UNBOND,
         BondPostError::UnbondCreditNonzero => SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_CREDIT,
+        BondPostError::UnbondHoldingsNotEmpty => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_HOLDINGS_NOT_EMPTY
+        }
         BondPostError::UnbondFloorMismatch => SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_FLOOR_MISMATCH,
         BondPostError::NotFullUnbond => SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_UNBOND,
         BondPostError::DebitNotFullBalance => SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL,
@@ -2035,6 +2041,36 @@ mod tests {
             )
         };
         assert_eq!(served_overflow, SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW);
+    }
+
+    #[test]
+    fn unbond_ffi_rejects_oversize_holdings_masquerading_as_empty() {
+        use shekyl_archival_retention::{BondPostKind, HoldingsKind};
+        // The FFI marshals shard ids without the wire decoder's MAX_HOLDINGS_SHARDS
+        // (4096) bound, so an oversize ShardSetCompact reaches verify with floor 0.
+        // A full Unbond (bonded_total 0) with such holdings must reject as
+        // UNBOND_HOLDINGS_NOT_EMPTY, not masquerade as the empty full-exit state.
+        let shards = vec![0u64; 4097];
+        let code = unsafe {
+            shekyl_archival_verify_unbond_bond_post(
+                BondPostKind::Unbond as u8,
+                HoldingsKind::ShardSetCompact as u8,
+                shards.as_ptr(),
+                shards.len(),
+                0, // bonded_total_atomic (post-connect full exit)
+                0, // bond_credit
+                1, // bond_debit == record_bonded_total
+                1, // record_exists
+                1, // record_bonded_total
+                std::ptr::null(),
+                0,
+                0,
+            )
+        };
+        assert_eq!(
+            code,
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_HOLDINGS_NOT_EMPTY
+        );
     }
 
     #[test]

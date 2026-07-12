@@ -41,6 +41,8 @@ pub enum BondPostError {
     NothingToUnbond,
     #[error("Unbond bond-post must not carry bond_credit")]
     UnbondCreditNonzero,
+    #[error("Unbond full-exit holdings must be empty, not a floor-zero shard set")]
+    UnbondHoldingsNotEmpty,
     #[error("post-connect bonded_total_atomic must equal bond_floor(holdings)")]
     UnbondFloorMismatch,
     #[error("Unbond is a full exit: post-connect bonded_total_atomic must be zero")]
@@ -131,7 +133,17 @@ pub fn verify_unbond_bond_post(
     }
 
     // Step-4 floor equality on the vin's post-connect state (§3.5 debit-path note).
-    if vin.bonded_total_atomic != bond_floor(&vin.holdings) {
+    let floor = bond_floor(&vin.holdings);
+    // A full Unbond ends at the canonical empty holdings, whose floor is 0. But
+    // `bond_floor` also returns 0 for a structurally-invalid (oversize) shard set,
+    // so a floor-0 descriptor that still carries shards is not an exit — reject it
+    // rather than let it masquerade as empty. (Join rejects floor-0 outright as
+    // `BondFloorZero`; Unbond cannot, because the empty end-state is legitimately
+    // floor 0, so it guards the non-empty case explicitly.)
+    if floor == 0 && !vin.holdings.shard_ids.is_empty() {
+        return Err(BondPostError::UnbondHoldingsNotEmpty);
+    }
+    if vin.bonded_total_atomic != floor {
         return Err(BondPostError::UnbondFloorMismatch);
     }
     // Full exit: post-connect total is zero (⇒ empty holdings, by floor equality).
@@ -158,7 +170,7 @@ pub fn verify_unbond_bond_post(
 mod tests {
     use super::*;
     use crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC;
-    use crate::bond_wire::{HoldingsDescriptor, HoldingsKind};
+    use crate::bond_wire::{HoldingsDescriptor, HoldingsKind, MAX_HOLDINGS_SHARDS};
 
     fn valid_join_vin() -> ArchivalBondPostVin {
         ArchivalBondPostVin {
@@ -360,6 +372,18 @@ mod tests {
         let mut vin = valid_unbond_vin();
         vin.holdings.shard_ids = vec![7];
         assert_eq!(ok_unbond(&vin), Err(BondPostError::UnbondFloorMismatch));
+    }
+
+    #[test]
+    fn rejects_oversize_shard_set_masquerading_as_empty() {
+        // `bond_floor` returns 0 for an oversize shard set just as it does for the
+        // empty full-exit holdings, so a floor-0 descriptor that still carries shards
+        // must not pass the full-exit checks. Reachable via the FFI, which marshals
+        // shard ids without re-running the wire decoder's MAX_HOLDINGS_SHARDS bound.
+        let mut vin = valid_unbond_vin();
+        vin.holdings.shard_ids = vec![0u64; MAX_HOLDINGS_SHARDS + 1];
+        assert_eq!(bond_floor(&vin.holdings), 0);
+        assert_eq!(ok_unbond(&vin), Err(BondPostError::UnbondHoldingsNotEmpty));
     }
 
     #[test]
