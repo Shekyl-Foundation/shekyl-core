@@ -3955,8 +3955,9 @@ re-linkable, and long-lived `P` is the committed architecture — cosmetic rotat
 decorrelate), so there is no rotation-unlinkability for the cooldown to disincentivize. And
 mechanically a persona switch needs **fresh unlinked capital** for `P_new` regardless (recycling
 `P_old`'s freed collateral would link them), so the cooldown only delays `P_old`'s capital *recovery*
-— a purely **economic** cost already inside L18, not a privacy one. Only **backing-UTXO rotation**
-(one persona, bond untouched) is a real rotation, and it never touches the cooldown.
+— a purely **economic** cost already inside L18, not a privacy one. (Nor is "backing-UTXO rotation" a
+rotation: it is one persona designating a different output per emission, bond untouched — and it never
+touches the cooldown either.)
 
 **Report format for the seal call.** At **{`c2`, `lag0`, `s4`}**, report: (i) the three committed
 gates (`committed_deep_under < 0.10`, `sole_source = 0`, `oldest_margin ≥ 0`); (ii) the freeze-harm

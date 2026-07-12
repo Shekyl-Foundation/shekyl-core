@@ -511,8 +511,8 @@ questions only, with historical callers rerouted to the bits. Resolved as part o
 - [ ] **Per-shard `E_add + 1`** verify/connect rule landed in `shekyl-archival-retention`
   (gate-4 connect paths, FOLLOWUPS V3.0). **Still open (impl):** verified at source 2026-07-12 —
   `bond_post.rs` implements `verify_join_market_bond_post` only; the wire carries all four
-  `post_kind`s (`bond_wire.rs`) but verify rejects the other three (`PostKindNotJoinMarket`
-  "at genesis"). Rebond/Unbond/HoldingsUpdate verify+connect, the per-shard `E_add+1` rule, and
+  `post_kind`s (`bond_wire.rs`) but verify rejects the other three at genesis (the
+  `PostKindNotJoinMarket` refusal). Rebond/Unbond/HoldingsUpdate verify+connect, the per-shard `E_add+1` rule, and
   `verify_unbond_release` (release-cooldown spendability gate) are all unbuilt.
 - [x] **Age-stratified sim reconciliation (Step 3) — DONE; seal cleared.**
   [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §L18 (R-3 reconciliation, 2026-06-16):
@@ -545,7 +545,7 @@ questions only, with historical callers rerouted to the bits. Resolved as part o
 
 **Why.** The bond-FSM verify/connect is **JoinMarket-only** at source (`bond_post.rs`
 `verify_join_market_bond_post`; the wire carries all four `post_kind`s but verify rejects the other
-three "at genesis"). Building `Rebond` / `Unbond` / `HoldingsUpdate` verify+connect is the real
+three at genesis). Building `Rebond` / `Unbond` / `HoldingsUpdate` verify+connect is the real
 seal-blocking work (the age-stratified sim reconciliation is **done** — §L18 sealable at genesis;
 P2B-7 exit). Four questions the specs left thin are pinned here so the impl lands M1-clean
 (arm the trigger before the identifier exists). Verify contract per `post_kind`: gate-4 §3.5 (order),
@@ -568,19 +568,20 @@ drop interval** — Pin 2 already makes the cooldown a `bond_event_log` predicat
 drop time: reorg-clean (pops with the log), no mutable per-shard field to desync. Pin 3
 (slashable-through-cooldown) reads the same interval.
 
-### Q2 — Record-level `Unbond` cooldown anchor — **lean: derive, drop the §4.1 field**
+### Q2 — Record-level `Unbond` cooldown anchor — **RESOLVED: derive, drop the §4.1 field**
 
 **Question.** §4.1 stores `last_served_epoch: Option<u64>` for the whole-record `Unbond` cooldown.
 Store-and-maintain, or derive?
 
-**Pin (lean, one call to confirm).** **Derive** — consistent with Q1 and reorg-clean: at `Unbond`
-verify, whole-record last-served = **max over the record's current shards** of the Q1 per-shard value
-(O(#shards) reverse-cursor seeks; `Unbond` is once-per-record, and a lean year-30 portfolio is ~60
-shards). **Amend §4.1 to drop the `last_served_epoch` field** — a maintained field needs its own pop
-symmetry and can desync from the serve-credit table, which is the single source of truth.
-*Alternative held (rule-21):* keep the field, updated `O(1)` on each serve-credit write
-(`last_served_epoch = max(last_served_epoch, E)`) with a pop twin — choose this only if the
-O(#shards) `Unbond`-time seek is shown to bind. **Lean: derive; §4.1 amendment routed to gate-4.**
+**Pin (source-confirmed).** **Derive; drop the field.** Verified at source that the record-level
+`last_served_epoch` has **exactly one consumer** — the `Unbond` release cooldown (gate-4 §4.1 line
+399 / §4.3); the emission-leg mention (`REWARD_EMISSION_LEG.md:534`) only *lists* it as a gate-4-owned
+field, it does not read it. With no other consumer, a maintained field only adds pop-symmetry surface
+and a desync risk against the serve-credit table (the single source of truth). So at `Unbond` verify,
+derive whole-record last-served = **max over the record's current shards** of the Q1 per-shard value
+(O(#shards) reverse-cursor seeks; `Unbond` is once-per-record, lean year-30 ≈ 60 shards). **§4.1
+amendment (drop the field) routed to gate-4.** *Alternative held (rule-21):* keep an `O(1)`-maintained
+field with a pop twin only if the O(#shards) `Unbond`-time seek is ever shown to bind.
 
 ### Q3 — `bond_duration(age)` is a consensus gate ⇒ genesis-frozen, not post-genesis tunable — **RESOLVED**
 
@@ -596,28 +597,48 @@ post-genesis change is a hard fork. Resolves the "amends this table only" vs "co
 the amend window is *pre-seal*. The impl reads the **generated** consensus constant (never a hardcode),
 and the drop-eligibility check is `current_epoch − shard_add_epoch ≥ bond_duration(age)`.
 
-### Q4 — `Rebond` precondition + the partial-slash recovery path — **needs the gate-4 call**
+### Q4 — `Rebond` precondition + recovery path — **RESOLVED (one sub-question to gate-2)**
 
-**Question.** §3.4:319 gives the `Rebond` precondition as `good_standing == false`; §3.2/P2B-4 frame
-`Rebond` as `Slashed → Bonded` (`bonded_total == 0`). Credit "restores `== bond_floor`" (§3.4:320).
-These disagree on **which** post-slash state `Rebond` recovers, and leave the **partial-slash recovery
-path** unstated.
+**Question.** §3.4:319 gives the `Rebond` precondition as `good_standing == false` (post-slash);
+§3.2/P2B-4 frame it as `Slashed → Bonded`. These read as disagreeing on *which* post-slash state
+`Rebond` recovers, and the partial-slash recovery path was unstated.
 
-**Pin (the credit) + flag (the precondition).** Credit amount is settled: restore `bonded_total` to
-`bond_floor(holdings)` (floor-equality, §3.5 step 4). The **open call for gate-4:** is `Rebond` the
-**terminal** recovery only (`bonded_total == 0`, the FSM `Slashed → Bonded` edge), with a
-**partial-slashed still-`Bonded`** record recovering its dropped shard via **`HoldingsUpdate` add**
-(re-add the slashed shard)? That reading is clean — one edge per state — and makes §3.4's
-`good_standing == false` the *slash-happened* precondition shared by both recovery paths, with the
-`bond_debit == 0` / floor-equality math distinguishing them. **Resolve at gate-4 source before the
-`Rebond` verify branch lands; do not infer the partial-slash path from the FSM table alone.**
+**Resolved at source — and this corrects the earlier P2B-8 lean.** The wire settles it: the bond-post
+vin carries `holdings: HoldingsDescriptor` for **every** `post_kind` (§3.4 line 237 / §3.4.1 layout),
+and `bond_spend_pk` **only** for `JoinMarket` (§3.4:234 — `Rebond` reuses the record's committed one).
+
+- **Precondition is `good_standing == false`** (§3.4, authoritative — it supersedes the FSM-table
+  "`Slashed` only" simplification). `Rebond` recovers **both** partial slash (record stays `Bonded`,
+  `good_standing==false`, holdings reduced with floor re-established — §4.2 step 3) **and** terminal
+  slash (`Slashed`, `bonded_total==0`). **The earlier lean ("partial slash recovers via `HoldingsUpdate`
+  add") is withdrawn:** `HoldingsUpdate` add is *voluntary growth requiring `good_standing == true`*, so
+  it cannot fire while `good_standing==false` — `Rebond` is the only recovery.
+- **`Rebond` re-specifies holdings** (the vin carries them) and credits `bonded_total` to
+  `bond_floor(holdings)` (floor-equality, §3.5 step 4; auth = identity `P_pubkey`, credit path
+  `bond_debit==0`, §3.4). Effect: floor re-established + **`good_standing → true`** (re-enables emit-new,
+  emission §6.5) + re-bond interval (F3). **Record preserved:** reuses the existing `P_canonical_id`,
+  committed `bond_spend_pk`, `claimed_epochs`, `join_market_height` — distinct from `JoinMarket` (new
+  record + commits `bond_spend_pk`).
+
+**One sub-question to gate-2 before the branch lands (slash-evasion).** `good_standing == false` spans
+**both** the grace window (challenge failed, slash *pending*, not yet applied — P2B-4) **and**
+post-slash; §3.4's "(post-slash)" qualifier implies post-slash only, but the flag alone doesn't
+distinguish them. **Pin needed:** `Rebond` must **not** fire during the grace window in a way that
+cancels a pending slash (a `T-A15b`-class evasion). Recommended: gate `Rebond` on **no pending
+challenge** for the record; confirm at gate-2 how the pending-challenge / `good_standing` lifecycle is
+tracked so the verifier can enforce it.
 
 ### P2B-8 exit
 
 - [x] Q1 per-shard cooldown anchor — derive via BE-key reverse cursor, capture in `bond_event_log`.
+- [x] Q2 record-level `Unbond` anchor — derive (sole consumer confirmed); drop the §4.1 field.
 - [x] Q3 `bond_duration` genesis-freeze posture — pre-seal calibration only.
-- [ ] Q2 §4.1 `last_served_epoch` field — **derive vs store** (lean derive); gate-4 §4.1 amendment.
-- [ ] Q4 `Rebond` precondition + partial-slash recovery path — **gate-4 source call** before the branch.
+- [~] Q4 `Rebond` — precondition (`good_standing==false`, both slash cases), holdings-re-spec, and
+  record-preservation resolved; **one gate-2 sub-question** (grace-window slash-evasion) before the branch.
+
+**Two forward doc-amendments (not blockers to the impl start):** the §4.1 `last_served_epoch` field
+drop (gate-4, Q2) and the `Rebond` no-pending-challenge pin (gate-2, Q4). The `Unbond` path — the
+Gate-6 F-D3/F-D4 unblocker — is fully pinned now (Q1/Q2/Q3); `Rebond` waits on the one gate-2 call.
 
 ---
 
@@ -640,9 +661,12 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
   last-served via a reverse-cursor seek over the BE composite serve-credit key
   (`P_id ‖ BE64(shard) ‖ BE64(epoch)`), captured into the `bond_event_log` drop interval at connect.
   Q3 (`bond_duration` consensus gate) resolved — genesis-frozen; the provisional-numeric window is
-  pre-seal calibration only. Q2 (§4.1 `last_served_epoch` store-vs-derive; lean derive) and Q4
-  (`Rebond` precondition + partial-slash recovery path) routed to gate-4 as source calls before the
-  respective verify branches land. Also (same session): P2B-7 exit reconciled to the §L18 sealed
+  pre-seal calibration only. Q2 resolved — the record-level `last_served_epoch`'s sole consumer is the
+  `Unbond` cooldown, so derive (drop the §4.1 field). Q4 resolved at the wire (precondition
+  `good_standing==false` covers both slash cases; `Rebond` re-specifies holdings on the existing
+  record; earlier partial-slash-via-`HoldingsUpdate` lean withdrawn) with **one gate-2 sub-question**
+  (grace-window slash-evasion) before the `Rebond` branch. The `Unbond` path (F-D3/F-D4 unblocker) is
+  fully pinned. Also (same session): P2B-7 exit reconciled to the §L18 sealed
   verdict; the "`P` rotation" fossil killed at the P2B-1 root (backing "rotation" is not a mechanism
   — no `backing_outputs` field, consensus rule dropped; pseudonym "rotation" is unlink-relink →
   correlation, T-A1/S-5). Docs-only.
