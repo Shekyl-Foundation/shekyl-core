@@ -4038,7 +4038,7 @@ namespace tools
     try
     {
       size_t extra_size = 34 /* pubkey */ + 10 /* encrypted payment id */; // typical makeup
-      const std::pair<size_t, uint64_t> sw = m_wallet->estimate_tx_size_and_weight(req.rct, req.n_inputs, req.n_outputs, extra_size);
+      const std::pair<size_t, uint64_t> sw = m_wallet->estimate_tx_size_and_weight(req.ct, req.n_inputs, req.n_outputs, extra_size);
       res.size = sw.first;
       res.weight = sw.second;
     }

@@ -3233,8 +3233,8 @@ static char* dispatch_verify(wallet2_handle* w, const rj::Value& p) {
 static char* dispatch_estimate_tx_size_and_weight(wallet2_handle* w, const rj::Value& p) {
     uint32_t n_inputs = json_u32(p, "n_inputs");
     uint32_t n_outputs = json_u32(p, "n_outputs");
-    bool rct = json_bool(p, "rct", true);
-    auto sw = w->wallet->estimate_tx_size_and_weight(rct, n_inputs, n_outputs, 0);
+    bool ct = json_bool(p, "ct", true);
+    auto sw = w->wallet->estimate_tx_size_and_weight(ct, n_inputs, n_outputs, 0);
     rj::Document doc;
     doc.SetObject();
     auto& a = doc.GetAllocator();
