@@ -4,6 +4,34 @@
 
 ### Added
 
+- **archival: `Unbond` connect fold + pop twin, Rust-native (gate-4 §4.3
+  "On confirm" / §5; P2B-8 increment b, `feat/bond-fsm-unbond-connect`).**
+  `shekyl-archival-retention::bond_connect` is the single implementation of
+  the release's write set — the post-connect record (`bonded_total = 0`,
+  compact-and-empty holdings; the record persists for backlog claims), the
+  `total_bonded_atomic` debit, and the §4.3 **clean interval-close**, landed
+  as a **zero-length interval `[E_unbond, E_unbond)`** in the record's
+  interval log: `good_through`-inert by construction (KAT-pinned, including
+  next to an open slash interval), it records the exit epoch for the later
+  `W`-lapse / `p_slot`-burn step with **no schema change**. The pop twin
+  validates the tip record is the connect's product (Exited state + trailing
+  clean close) before re-crediting the counter; record fields restore from
+  the connect's full pre-image journal (emission WS-2 §6.3 shape — the vin
+  carries the *post*-state, so holdings are otherwise unreconstructible).
+  FFI: `shekyl_archival_unbond_connect` / `shekyl_archival_unbond_pop` — the
+  C++ connect site (follow-on wiring increment) writes exactly what the
+  out-params dictate, no consensus arithmetic caller-side; all non-OK codes
+  map to FATAL, never a soft skip. The refund needs no connect write:
+  `bond_debit` is the CT-balance **source term** on the wire (§2.4 — the
+  refund vouts are ordinary hidden FCMP++ outputs that mix normally).
+  Riders: `verify_unbond_bond_post` gained the **`IntervalLogFull` belt**
+  (a record whose interval log is at the codec cap rejects at verify — a
+  verified-but-unconnectable tx would be a deterministic halt); gate-4 §4.1
+  executed P2B-8 Q2's forward amendment (`last_served_epoch` dropped —
+  derived, never stored) and now pins the landed `bond_event_log`
+  representation; §3.5 documents the connect/pop write set and names the
+  wiring obligations (block-level per-`P` bond-post pass, journal table).
+
 - **tests/wallet/rpc: emission-claim PR-4a — staker regtest harness up
   to the daemon submit gap, its enablers, and the Q11 blob-boundary
   arm (`EMISSION_CLAIM_BUILDER.md` §8 "PR 4 split";

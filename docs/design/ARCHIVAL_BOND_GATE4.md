@@ -401,6 +401,34 @@ the current-set-echo alternative (which would need a separate drop-shard field) 
 On block connect for **JoinMarket:** create `ArchivalBondRecord` (§4.1); credit
 `total_bonded_atomic`.
 
+On block connect for **Unbond** (§4.3 "On confirm"; connect fold + pop twin landed
+Rust-native, `shekyl-archival-retention::bond_connect` over
+`shekyl_archival_unbond_connect` / `shekyl_archival_unbond_pop` — rule 20, P2B-8
+implementation locus; C++ dispatch wiring is the follow-on increment):
+
+1. Journal the record's **full pre-image** before mutating (the emission WS-2 §6.3
+   shape) — the vin carries the *post*-state, so holdings are not reconstructible
+   at pop without it.
+2. Record → `Exited` shape: `bonded_total_atomic = 0`, `holdings` = compact-and-empty
+   (the same exit shape the slash-to-zero path writes); the record **persists** for
+   backlog claims until `W` lapses (`p_slot` burn is a later, separate step).
+3. `total_bonded_atomic -= bond_debit` (§4.5 release row; `circulating` needs no
+   explicit write — the refund enters as ordinary hidden vouts, CT-balanced by the
+   `bond_debit` source term; §2.4).
+4. Append the **clean interval-close** `[E_unbond, E_unbond)` to the interval log
+   (F3, zero-length ⇒ `good_through`-inert — see §4.1's landed-representation note);
+   backlog emission still verifies within `W`.
+
+Pop twin (§5): restore the record from the journal pre-image byte-identically
+(carries holdings and the interval log — the clean close vanishes with it) and
+re-credit `total_bonded_atomic`; the fold validates the tip record is the connect's
+product (Exited state + trailing clean close) so a journal desync is loud. Connect
+fold errors are FATAL at the call site, never a soft skip. Verify enforces the
+interval-log codec cap (`IntervalLogFull`) so a tx the connect could not apply
+never verifies. The wiring increment must also add a **block-level per-`P`
+bond-post pass** (the emission `(P,E)`-pass sibling) so two same-`P` posts in one
+block cannot both verify against pre-state.
+
 ---
 
 ## 4. `ArchivalBondRecord` fields (gate-4 owned)
@@ -420,12 +448,29 @@ ArchivalBondRecord {
   first_paying_emission_height: Option<u64>,  // set on first mint; None until then
   claimed_settlement_epochs: ClaimedEpochSet,  // emission §6.3; empty at join
   bond_event_log:            BondEventLog,     // slash / re-bond / unbond intervals (F3)
-  last_served_epoch:         Option<u64>,      // release cooldown (§4.3)
 }
 ```
 
 **Deprecated name:** `first_emission_height` → split into `join_market_height` +
 `first_paying_emission_height`. Pre-genesis docs/code use new names only.
+
+**`last_served_epoch` dropped (P2B-8 Q2, amended 2026-07-12).** The field's sole
+consumer was the `Unbond` release cooldown (§4.3), and it is **derived, never
+stored**: whole-record last-served = max over the record's current shards of the
+per-shard reverse-cursor maxima over the serve-credit table's BE composite key
+(P2B-8 Q1). A maintained field would only add pop-symmetry surface and a desync
+risk against the serve-credit table, the single source of truth. Landed:
+`release_cooldown.rs` (`whole_record_last_served`), folded at the
+`shekyl_archival_verify_unbond_bond_post` FFI.
+
+**Landed representation of `bond_event_log` (F3).** The interval log is
+`ArchivalBondValue::bad_intervals` (`shekyl_types.h`): a slash appends an **open**
+interval `[E_slash, u64::MAX)`, `Rebond` closes it (`end_exclusive = E_rebond`,
+P2B-8 Q4), and a clean `Unbond` appends the **zero-length** clean interval-close
+`[E_unbond, E_unbond)` — `good_through` skips it at every epoch (it can falsify
+nothing), so it is purely an event marker that records the exit settlement epoch
+for the later `W`-lapse / `p_slot`-burn step. `good_standing` stays a derived
+view of this log, never a stored flag.
 
 **`bond_spend_pk` — dedicated bond-debit authorizer (GF-1, gate-6 §9.6).** A `HybridPublicKey`
 (`scheme_id = 1`, Ed25519 + ML-DSA-65), **domain-separated from `P_pubkey`** by its own HKDF

@@ -679,6 +679,18 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
 
 ## Revision history
 
+- **2026-07-12 (b):** **`Unbond` connect fold + pop twin landed Rust-native**
+  (`shekyl-archival-retention::bond_connect`, driven over
+  `shekyl_archival_unbond_connect` / `shekyl_archival_unbond_pop`; C++ dispatch
+  wiring is the follow-on increment). The §4.3 clean interval-close is landed as a
+  **zero-length interval `[E_unbond, E_unbond)`** in the record's interval log —
+  `good_through`-inert by construction (KAT-pinned), records the exit epoch for the
+  later `W`-lapse / `p_slot`-burn step, no schema change (gate-4 §4.1 note). Q2's
+  forward amendment executed (gate-4 §4.1 `last_served_epoch` dropped). Verify
+  gained the `IntervalLogFull` belt (a tx whose connect could not append the close
+  never verifies — halt-vector foreclosure). Named wiring obligations: block-level
+  per-`P` bond-post pass (emission `(P,E)`-pass sibling), pre-image journal table +
+  FATAL mapping at the connect site.
 - **2026-07-12:** **P2B-8 — verify/connect design questions pinned pre-impl.** Q1 (per-shard
   `HoldingsUpdate`-drop cooldown anchor) resolved with **no new field** — derive shard `s`'s
   last-served via a reverse-cursor seek over the BE composite serve-credit key

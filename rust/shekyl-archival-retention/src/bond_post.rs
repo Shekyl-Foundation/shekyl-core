@@ -51,6 +51,8 @@ pub enum BondPostError {
     DebitNotFullBalance,
     #[error("Unbond release cooldown has not elapsed")]
     CooldownNotElapsed,
+    #[error("record interval log is full; the connect's clean interval-close cannot append")]
+    IntervalLogFull,
 }
 
 /// Verify JoinMarket bond-post semantics after wire decode and LMDB substrate read.
@@ -111,9 +113,16 @@ pub fn verify_join_market_bond_post(
 /// holdings, so `bonded_total_atomic == 0 == bond_floor(∅)`, and the debit removes
 /// the whole current balance. The `bonded_total_atomic != 0` case is a partial
 /// unbond and belongs on the `HoldingsUpdate`-drop path, not here.
+///
+/// `record_bad_interval_count` is the record's interval-log length; verify
+/// rejects a log at [`MAX_BOND_BAD_INTERVALS`](crate::bond_connect::MAX_BOND_BAD_INTERVALS)
+/// because the connect's clean interval-close could not append — a tx that
+/// verifies but cannot connect would be a deterministic halt, so verify and
+/// connect enforce the same bound.
 pub fn verify_unbond_bond_post(
     vin: &ArchivalBondPostVin,
     record_bonded_total: Option<u64>,
+    record_bad_interval_count: usize,
     last_served_epoch: Option<u64>,
     current_settlement_epoch: u64,
 ) -> Result<(), BondPostError> {
@@ -154,6 +163,13 @@ pub fn verify_unbond_bond_post(
     // The debit removes the whole current balance (§3.2 table; §4.3 refund).
     if vin.bond_debit != current_bonded {
         return Err(BondPostError::DebitNotFullBalance);
+    }
+
+    // The connect must append the clean interval-close (§4.3 F3); a full log
+    // (`bond_connect::MAX_BOND_BAD_INTERVALS`, the codec's `kMaxBadIntervals`
+    // pin) makes the tx unconnectable, so it is unverifiable too.
+    if record_bad_interval_count >= crate::bond_connect::MAX_BOND_BAD_INTERVALS {
+        return Err(BondPostError::IntervalLogFull);
     }
 
     // Release cooldown: the grace window past the last served epoch must have
@@ -313,6 +329,7 @@ mod tests {
         verify_unbond_bond_post(
             vin,
             Some(RECORD_BONDED),
+            0,
             Some(UNBOND_LAST_SERVED),
             UNBOND_CURRENT,
         )
@@ -326,7 +343,34 @@ mod tests {
     #[test]
     fn accepts_unbond_when_never_served() {
         // No serve bit anywhere ⇒ no pending challenge ⇒ cooldown vacuously elapsed.
-        assert!(verify_unbond_bond_post(&valid_unbond_vin(), Some(RECORD_BONDED), None, 0).is_ok());
+        assert!(
+            verify_unbond_bond_post(&valid_unbond_vin(), Some(RECORD_BONDED), 0, None, 0).is_ok()
+        );
+    }
+
+    #[test]
+    fn rejects_full_interval_log() {
+        // The connect's clean interval-close could not append (codec cap), so
+        // verify refuses — a verified-but-unconnectable tx would be a halt.
+        use crate::bond_connect::MAX_BOND_BAD_INTERVALS;
+        assert_eq!(
+            verify_unbond_bond_post(
+                &valid_unbond_vin(),
+                Some(RECORD_BONDED),
+                MAX_BOND_BAD_INTERVALS,
+                Some(UNBOND_LAST_SERVED),
+                UNBOND_CURRENT,
+            ),
+            Err(BondPostError::IntervalLogFull)
+        );
+        assert!(verify_unbond_bond_post(
+            &valid_unbond_vin(),
+            Some(RECORD_BONDED),
+            MAX_BOND_BAD_INTERVALS - 1,
+            Some(UNBOND_LAST_SERVED),
+            UNBOND_CURRENT,
+        )
+        .is_ok());
     }
 
     #[test]
@@ -342,6 +386,7 @@ mod tests {
             verify_unbond_bond_post(
                 &valid_unbond_vin(),
                 None,
+                0,
                 Some(UNBOND_LAST_SERVED),
                 UNBOND_CURRENT
             ),
@@ -354,7 +399,7 @@ mod tests {
         let mut vin = valid_unbond_vin();
         vin.bond_debit = 0;
         assert_eq!(
-            verify_unbond_bond_post(&vin, Some(0), Some(UNBOND_LAST_SERVED), UNBOND_CURRENT),
+            verify_unbond_bond_post(&vin, Some(0), 0, Some(UNBOND_LAST_SERVED), UNBOND_CURRENT),
             Err(BondPostError::NothingToUnbond)
         );
     }
@@ -411,6 +456,7 @@ mod tests {
             verify_unbond_bond_post(
                 &valid_unbond_vin(),
                 Some(RECORD_BONDED),
+                0,
                 Some(UNBOND_LAST_SERVED),
                 UNBOND_CURRENT - 1,
             ),
