@@ -993,6 +993,63 @@ runtime refusals are KAT'd and load-bearing. *Reopen sooner if:* any
 second caller of `assemble_emission_claim` appears before the seam, or
 a fee-selection cache is introduced anywhere in the claim path.
 
+**PR 4 split (2026-07-12): 4a / 4b / 4c — a daemon submit gap the
+harness surfaced.** Driving the PR-4 harness live exposed that "submit
+over real RPC, assert accepted-and-applied" is unreachable today for
+*both* transaction kinds the e2e needs: the daemon's Rust submit engine
+has no bond-post Phase-C battery (`shekyl-daemon-rpc`'s
+`DaemonTxVerifier` refuses `SubmitTxKind::BondPost` as `Malformed`
+unconditionally — and its stale module docs claim bond posts cannot
+clear Phase A, which the harness disproved live: an underfunded fee
+draws `FeeTooLow`, a verdict only Phase C emits, so the arm's rule-21
+reopening criterion — the §13 wire reshape — has fired), and Phase A
+rejects `Input::ArchivalRewardEmission` outright (the emission submit
+leg — kind classification, fee/vout statics, verifier rows — never
+landed). Implementing both batteries is daemon-submit-engine work — a
+different validation surface (rule 19) and its own crate — and would
+push this PR past the 10-commit ceiling. Split per `06-branching.mdc`:
+
+- **PR-4a (implemented 2026-07-12, `feat/emission-regtest-e2e`, ten
+  code commits + docs).** Everything harness-side plus the enablers: the CB-4
+  blob-boundary KAT arm (fixture made valid under the full
+  `ver_non_input_consensus` dispatch + the invariance arm — the
+  Q11-KAT FOLLOWUPS item closes here); the FAKECHAIN-only
+  settlement-epoch-blocks override (SEEDHASH-shaped env lever,
+  fail-closed off FAKECHAIN) and serve-credit-bit injection RPC
+  (WS-1 bits-only form; direct poke, **not** pop-symmetric — the e2e's
+  pop leg must never rewind below the injection height); the
+  local-posture `PersonaIsolatedTransport` (`LocalNodeRpc`, fail-closed
+  loopback validation); the `SweptFeeInputs`/`ClaimOperands`
+  designation-event witness (the named forward item above, landed with
+  the seam as scoped) and the CB-3 dispatch seam
+  (`engine/claim_dispatch.rs`: activate → orchestrate → posture→submit
+  choke point); the staker regtest harness (staker wallet lifecycle,
+  persona funding over a production FCMP++ transfer, P-scan discovery,
+  production bond assembly, dispatch — with a **tripwire** pinning the
+  daemon's exact Phase-C refusal, which fails loudly and promotes to
+  accepted-and-applied when 4b lands); and two production bugs the
+  harness surfaced and fixed with unit KATs: the payment path
+  encapsulated to raw Edwards view-key bytes instead of
+  `montgomery(view_pk)` (every cross-wallet payment unrecoverable by
+  its recipient's scanner), and the P-scan exhaustiveness gate fetched
+  pruned bodies whose FCMP++ spends can never re-hash to their
+  committed hashes (scan permanently wedged at the first spend-bearing
+  block).
+- **PR-4b (next): daemon submit legs.** The bond-post Phase-C battery
+  (BP rows: SP-T4a statics + funding-arm K checks against
+  `SubmitFacts`) and the emission submit leg (Phase-A classification
+  for `Input::ArchivalRewardEmission`, its fee/vout statics, verifier
+  rows over the landed `emission_vin_verify_*` FFI). Carried by the
+  FOLLOWUPS "daemon Rust submit engine: bond-post + emission
+  batteries" item (V3.0 queue).
+- **PR-4c (after 4b): the e2e proper.** Mine to an epoch close with
+  injected served work under the SEB lever, build via PRs 1–3's
+  production path through the CB-3 seam, submit over real RPC, assert
+  accepted-and-applied (claimed-set row + vout shape), the pop/reorg
+  leg (bounded above the injection height), and the conservation KAT's
+  fee-leg residue (#281). Rides the PR-4a harness; the E4 merge gate
+  closes here.
+
 Round-2 closure criteria: the §7.3 field enumeration ratified (including
 the four exclusions), the §7.2 window-batch shape ratified, the §7.4
 transport/shape/timing pins ratified, and the §8 chain shape accepted.
