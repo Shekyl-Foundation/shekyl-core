@@ -1511,16 +1511,19 @@ disposition is not coverage of its implementation.
 
 ---
 
-## 11. Round 3 — timing + rotation + `W`/epoch-length (DESIGNED 2026-07-11 — pending adversarial pass)
+## 11. Round 3 — timing + rotation + `W`/epoch-length (DESIGNED + adversarial pass run 2026-07-11)
 
-**Status:** **Design pass complete; pending an adversarial pass before formal close.** GF-10 (the
-sole un-pinned exit gate) is pinned as a **mechanism + structural window + a-priori advantage
-claim**; its **numeric width is routed to the R4/GF-4 CB-3 joint grade**, not graded standalone here
-— grading GF-10 alone would re-commit the per-axis-multiplication error CB-3 explicitly forbids
-(§11.5). Rotation dispositions ratified (§11.6); R2 timing hand-forwards resolved (§11.6). All pins
-source-grounded at `dev` `75c3cae1d`. **One frame assumption was overturned at source during this
-pass** — the "epoch-boundary non-crossing" constraint the 2026-07-11 frame posited is false
-(§11.4); recorded as a correction, not silently dropped.
+**Status:** **Design pass + adversarial pass both run (2026-07-11); mechanism pinned, closes when
+folded into the R4/GF-4 joint grade.** GF-10 (the sole un-pinned exit gate) is pinned as a
+**mechanism + structural window + a-priori advantage claim**; its **numeric width is routed to the
+R4/GF-4 CB-3 joint grade**, not graded standalone — grading GF-10 alone would re-commit the
+per-axis-multiplication error CB-3 forbids (§11.5). The **adversarial pass (§11.8)** found no break
+but two unstated assumptions + one wrong-tool error — folded as re-pins into §11.3–11.5 (freeze-epochs
+hold; `S_min` rationale re-derived; correct one-sided negative controls) — and produced **one clean
+retraction on the merits** (the `REFERENCE_BLOCK_MAX_AGE` "verifiable-only-≤100-blocks" misread; §11.8).
+Rotation dispositions ratified (§11.6); R2 timing hand-forwards resolved. All pins source-grounded at
+`dev` `75c3cae1d`. Two frame/pass assumptions were overturned at source (epoch-crossing, §11.4;
+max-age semantics, §11.8) — both recorded as corrections, not silently dropped.
 
 ### 11.1 Scope and the seam it defends
 
@@ -1765,6 +1768,10 @@ narrow, correct pin below.
 `PROOF_VALIDITY_HORIZON` / `REBUILD_AT` semantics (`reference.rs:85-106`) are the anchor for any
 future reasoning about how long a claim can be held; do not re-derive them from the name.
 
+---
+
+## 12. Related documents
+
 | Doc | Relationship |
 |-----|----------------|
 | [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) | Parent wallet scope; §2.4 admission shape |
@@ -1778,6 +1785,22 @@ future reasoning about how long a claim can be held; do not re-derive them from 
 
 ## Revision history
 
+- **2026-07-11 (R3 adversarial pass — findings folded, one retraction):** Ran the adversarial pass
+  over §11.3–11.5 (new §11.8). No break; two unstated assumptions + one wrong-tool error, folded as
+  re-pins, all source-anchored at `dev` `75c3cae1d`. **G-10.A** (was raised as mechanism-infeasibility,
+  **retracted on the merits** — `REFERENCE_BLOCK_MAX_AGE = 100` is a daemon inclusion-freshness
+  window, not a verifiability expiry; `reference.rs:181`/`85-106`): collapsed to a **freeze-epochs
+  pin** on the unbuilt CB-3 dispatch seam — a held claim's proof rebuilds proof-only (re-anchor
+  reference, never re-fetch `source`/re-derive `claim_epochs`); anchored to the **single-shot** claim
+  orchestrator (`claim_orchestrator.rs:230/241/335`). **G-10.B** (load-bearing): the `S_min` rationale
+  "F1 is epoch-granular so finer jitter is pointless" is **false at source** — challenge fire/response
+  is sub-epoch block-granular (`challenge.rs:56-76`); re-derived `S_min ≥ SEB` on the stronger
+  "claim epoch-set is already public" basis, added the sub-epoch-challenge scope line (beacon-driven;
+  response instant → S-2). **G-10.C**: the cited negative control (`draw_entry_gap_double_jitter_trap`)
+  guards a two-sided construction GF-10 (one-sided) does not have — swapped for shared-trigger +
+  backlog-at-cap controls. **G-10.D**: return-from-`>15`-epoch-dormancy forces a deterministic claim
+  — named as a bounded residual. Status: mechanism pinned; R3 closes when GF-10 folds into the R4
+  joint grade. Docs-only.
 - **2026-07-11 (R3 design pass — GF-10 mechanism pinned):** Converted §11 from frame to designed
   round, source-grounded at `dev` `75c3cae1d`. **GF-10 pinned as a mechanism, not a standalone
   graded gate:** a uniform-independent claim-broadcast-height draw through the audited
