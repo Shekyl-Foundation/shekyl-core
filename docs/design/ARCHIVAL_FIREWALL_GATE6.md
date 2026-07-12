@@ -1572,12 +1572,30 @@ before the identifier exists (the M1 discipline; [`26-sub-pr-design-discipline.m
 - **Per-claim independent** — no shared trigger. The entry sim measured a shared trigger as
   catastrophic (`16 → 1.01`, §10.12); a scheduler that fires every claim off one epoch-boundary tick
   clusters identically. **Independence is the load-bearing property, not the width.**
-- **Drawn directly**, never as the difference of two jitters around a common anchor — that
-  construction is triangular / zero-peaked and clusters the events (the double-jitter trap; the
-  standing negative control is `draw_entry_gap_double_jitter_trap`, `conformance.rs:177`).
+- **Drawn directly** as a single `bounded_uniform` over the window. **GF-10 is one-sided** — one
+  draw, no order coin — so unlike the entry gap it has **no double-jitter failure mode**; the entry
+  `draw_entry_gap_double_jitter_trap` (`conformance.rs:177`) guards the two-sided
+  *difference-of-two-uniforms* construction and does **not** transfer here (G-10.C, adversarial pass
+  §11.8). GF-10's real failure modes are the two below, which get their own armed controls (§11.5).
 - **No self-scheduling to the batch cap** (§11.2 finding) — the scheduler must claim opportunistically
   within the jitter window *before* backlog reaches the 15-cap, so the broadcast height is
-  jitter-determined, not backlog-forced. This is part of the GF-10 pin, not a separate concern.
+  jitter-determined, not backlog-forced. Part of the GF-10 pin. **Bounded residual (G-10.D, §11.8):**
+  a persona returning from `> 15`-epoch dormancy wakes with backlog already `>` cap, so its next
+  claim is backlog-forced — "claim before the cap" is not always achievable; the residual is
+  named, not closed.
+- **Freeze the epoch set across the jitter hold (G-10.A, §11.8).** A `≥ SEB` hold means carrying an
+  in-flight claim across the daemon acceptance window (`REFERENCE_BLOCK_MAX_AGE = 100`,
+  `reference.rs:181` — an *inclusion-freshness* window, **not** a verifiability expiry), so its FCMP
+  proof must be **re-anchored** (`REBUILD_AT = 50`, `reference.rs:106` — local, non-observable) one
+  or more times before broadcast. Each re-anchor must be **proof-only**: fresh reference + rebuilt
+  membership proof, with `claim_epochs` **frozen at the single source-fetch**. Re-running the
+  gather / `derive_claimable_epochs` at a newer tip would pull in freshly-finalized epochs and
+  re-couple the epoch set to the broadcast timing — reopening exactly what §11.4 closes. **Anchored
+  at source:** the claim orchestrator (`claim_orchestrator.rs::orchestrate_emission_claim`) is
+  **single-shot** — fetch `source` once (:230), anchor once via `two_sided_reference_height` (:241),
+  assemble once, hand off **unbroadcast** (:335, CB-3); the hold/rebuild/dispatch loop is the
+  **unbuilt CB-3 dispatch seam** (the same seam GF-10's jitter lives in), so this is a forward pin on
+  that seam, not a change to landed code.
 
 ### 11.4 The `W`/epoch-length joint pin — the structural window
 
@@ -1595,17 +1613,22 @@ later does not re-select epochs. The real bounds are finalization (below) and fo
   (`config/consensus_constants.json:19,21`), `G_submit` ≥ mempool + confirmation depth. The claim
   must confirm before its oldest epoch forfeits at `E_oldest + W`; oldest-first batch drain already
   guarantees no epoch is pushed past forfeiture (`emission_claim.rs:429`).
-- **Minimum spread** `S_min ≥ SEB` (a-priori floor, this pass). Rationale: the public **F1
-  fingerprint already reveals liveness at epoch granularity** (§2.3), so jitter *finer* than one
-  epoch adds nothing the adversary does not already have — decorrelation lives at ≥ one-epoch spread.
-  So the a-priori structural floor is one full settlement epoch, tied to the granularity of the
-  already-public signal. **The exact width above `S_min` is NOT pinned here** — it is the R4 joint-grade
-  output (§11.5).
+- **Minimum spread** `S_min ≥ SEB` (a-priori floor, this pass). **Rationale re-derived (G-10.B,
+  §11.8) — the original "F1 is epoch-granular so finer jitter is pointless" premise is false at
+  source** and is withdrawn: F1 is epoch-granular only because §2.3 *defines* it as the per-epoch
+  serve-credit ledger; it is **not** the finest public liveness signal — the challenge fire/response
+  is **sub-epoch, block-granular** (`challenge_fire_height` puts `H_fire ∈ (H_open, H_close]` via a
+  beacon offset, `challenge.rs:56-76`). The floor stands on the **stronger, granularity-independent**
+  basis: a claim's **epoch set is already fully public** (`claim_epochs` rides the tx), and the
+  broadcast height is directly on-chain, so sub-epoch jitter of the broadcast instant carries **no
+  marginal `P`→principal alignment bits** regardless of any channel's granularity. `S_min ≥ SEB` is
+  then chosen not because finer is *useless* but because ≥ one epoch is the spread at which a
+  broadcast is decorrelated from any single principal event across a full settlement period. **The
+  exact width above `S_min` is NOT pinned here** — it is the R4 joint-grade output (§11.5).
 
 This is the "joint" pin: the window `[H_lo, H_hi]` is denominated in `SEB` and bounded jointly by `W`
-(forfeiture horizon) and `ARCHIVAL_REORG_DEPTH_BLOCKS` (finalization), and the a-priori floor
-`S_min = SEB` ties the minimum spread to the epoch granularity — the three constants compose, which
-is what the round title names.
+(forfeiture horizon) and `ARCHIVAL_REORG_DEPTH_BLOCKS` (finalization); the three constants compose,
+which is what the round title names.
 
 ### 11.5 Grading is R4's (CB-3 joint grade), not standalone; conformance; coverage boundary
 
@@ -1629,16 +1652,27 @@ consensus sees only that the claim landed inside `[H_lo, H_hi]` (the claimable w
 enforces via the `NotFinalized` / forfeiture predicates). So GF-10 ships as a **published wallet
 conformance vector**, not a consensus rule: an integer golden vector on the aarch64 lane
 (bit-identical, like the standoff `golden_vector.rs`), strict-alpha chi-square uniformity + lag-1
-independence (`shekyl-stats`), with `draw_entry_gap_double_jitter_trap` as the arming negative
-control. Grade the property, not the PRNG.
+independence (`shekyl-stats`). **Negative controls corrected (G-10.C, §11.8):** the arming negatives
+must be GF-10's own failure modes, **not** the entry double-jitter trap (which detects a two-sided
+construction GF-10 does not have) — (a) a **shared-trigger control** (all claims drawn off one tick →
+assert the clustering is caught) and (b) a **backlog-at-cap control** (backlog `≥ 15` on wake →
+assert the forced-determinism is caught). Grade the property, not the PRNG.
+
+**Sub-epoch challenge channel — scope line (G-10.B, §11.8).** The challenge fire/response is a public
+`P`-serving-liveness signal at **block granularity** (`challenge_fire_height`, `challenge.rs:56-76`),
+finer than F1. It is **beacon-driven** (the fire height is consensus-seeded, not `P`-chosen), so it
+is neither a `P`→principal channel nor a claim-alignment lever, and GF-10 does not touch it.
+**Residual routed:** if the challenge *response*-broadcast instant is `P`-chosen and network-observable,
+it is a distinct timing surface → routed to the **S-2 exposure ledger** (R5), not folded into GF-10.
 
 **Coverage boundary (state it — never let association read as coverage):**
 
 - **Bites against:** a *deterministic / predictable* claim-broadcast cadence (fixed offset,
   epoch-open, or backlog-forced) an observer could align to principal timing.
 - **Does NOT cover:** *which epochs* `P` served (roll-call, attributed, public by function — F1); the
-  *joint* composition with amount / holdings / exit-timing (R4/GF-4); the entry funding seam (GF-7,
-  built) or exit funding seam (GF-4). GF-10 is one channel of the drain/claim event, not the event.
+  sub-epoch challenge fire/response liveness channel (beacon-driven; S-2 for the response instant);
+  the *joint* composition with amount / holdings / exit-timing (R4/GF-4); the entry funding seam
+  (GF-7, built) or exit funding seam (GF-4). GF-10 is one channel of the drain/claim event, not the event.
 - **Multiplicative on §10.9 isolation**, never additive — the number is `P(align | isolation holds)`.
 
 ### 11.6 Inherited dispositions ratified + R2 hand-forwards resolved
@@ -1667,9 +1701,10 @@ control. Grade the property, not the PRNG.
 
 ### 11.7 What R3 closes, defers, and its reopen criteria
 
-**Closes (pending the adversarial pass):** the GF-10 claim-jitter **mechanism** + structural window
-(§11.3–11.4) + the a-priori advantage claim (§11.5); the ratified rotation dispositions and R2 timing
-hand-forwards (§11.6).
+**Closes (adversarial pass run 2026-07-11 — §11.8, re-pins folded into §11.3–11.5):** the GF-10
+claim-jitter **mechanism** + structural window (§11.3–11.4, now incl. the freeze-epochs pin) + the
+a-priori advantage claim (§11.5, rationale re-derived); the ratified rotation dispositions and R2
+timing hand-forwards (§11.6).
 
 **Defers (named, rule-21):**
 
@@ -1678,9 +1713,12 @@ hand-forwards (§11.6).
   claim at any structurally-admissible width.
 - **Extension to bond ops** — GF-10 reused for partial-unbond / rebond-topup claim timing in R4 (§6);
   the mechanism is pinned so the extension is mechanical.
-- **Build** — the `ClaimJitterGap` draw + the claim scheduler are unbuilt. Land the draw the M1 way:
-  a CI grep that the claim scheduler routes through `bounded_uniform` with no deterministic-cadence
-  fallback, armed **before** the scheduler identifier exists.
+- **Build** — the `ClaimJitterGap` draw + the claim scheduler/dispatch seam (CB-3) are unbuilt. Land
+  the draw the M1 way: a CI grep that the claim scheduler routes through `bounded_uniform` with no
+  deterministic-cadence fallback, armed **before** the scheduler identifier exists. **Plus the
+  freeze-epochs pin (G-10.A):** the dispatch seam must rebuild a held claim's proof **proof-only**
+  (re-anchor reference, never re-fetch `source` / re-run `derive_claimable_epochs`) — arm a
+  grep/test that the dispatch rebuild path does not call the gather/derivation.
 
 **Out of scope (do not fold in):** the L17 synchronized-exit wargame (crisis cadence blows through
 jitter windows) is the **exit seam** — R4/GF-4 ([`FOLLOWUPS.md`](../FOLLOWUPS.md) swan-2/W8). R-3
@@ -1690,13 +1728,42 @@ reward-magnitude quantization is R4 / §14.4 economics.
 `ARCHIVAL_REORG_DEPTH_BLOCKS`, or `MAX_SETTLEMENT_EPOCHS_PER_EMISSION`; the mechanism reopens if the
 R4 joint grade fails the pre-committed advantage claim.
 
-**Remaining for close:** one adversarial pass over §11.3–11.5 (the wargame target: can a timing
-observer, with F1 + the batch-cap-forced-determinism lever, beat the a-priori claim under the pinned
-mechanism *before* R4's numeric width exists?), then fold GF-10 into the R4 joint grade.
+**Remaining for close:** the adversarial pass has run (§11.8) and its four findings are folded as
+re-pins. R3 is at its exit bar as a *mechanism* round: the mechanism + structural window + a-priori
+claim are pinned and source-anchored, the negatives are the right ones, and the residuals (dormancy,
+sub-epoch challenge) are named. **The one item that keeps R3 formally "designed, not closed" is
+external to the mechanism:** the a-priori advantage claim is only *graded* in the R4/GF-4 joint
+sweep (CB-3), so R3 closes when GF-10 is folded into that grade and the grade clears the
+pre-committed claim — the same mechanism-then-joint-grade split the entry seam used.
 
----
+### 11.8 Adversarial pass (2026-07-11) — findings, re-pins, and one retraction
 
-## 12. Related documents
+**Verdict:** the pass did not find a break, but it found the two unstated assumptions the mechanism
+rested on and one wrong-tool error — folded above as re-pins, not move-the-bar edits (per §11.5's own
+discipline). All four are source-anchored at `dev` `75c3cae1d`.
+
+**Retraction (clean, on the merits).** The pass first raised **G-10.A as a mechanism-infeasibility**
+finding — that `fcmp_reference_block_max_age = 100` made a claim "verifiable only ≤ 100 blocks," so a
+`≥ SEB` hold was impossible. **That was a reviewer construction resting on an unverified premise —
+the constant's semantics were asserted from its name, not traced to its consumer** (the exact failure
+mode this track holds the line against). Traced at source: `REFERENCE_BLOCK_MAX_AGE` is a **daemon
+inclusion-freshness window** (`proof_submittable`, `reference.rs:181`), **not** a verifiability
+expiry — a mined claim is validated once at inclusion and stands; `PROOF_VALIDITY_HORIZON = 94`,
+`REBUILD_AT = 50`, and re-anchor is explicitly local + non-observable (`reference.rs:102-106`). The
+"infeasible / 100 ≪ SEB / ~200-rebuilds-observable" claims are **withdrawn**. What survives is the
+narrow, correct pin below.
+
+| # | Finding | Status | Source anchor | Re-pin (where folded) |
+|---|---------|--------|---------------|-----------------------|
+| **G-10.A** | A `≥ SEB` jitter hold must rebuild the proof; a rebuild that re-derives `claim_epochs` re-couples the epoch set to broadcast timing (reopens §11.4) | **Pin** (was infeasibility — retracted) | `claim_orchestrator.rs` single-shot (:230 fetch, :241 anchor, :335 unbroadcast); hold/rebuild = unbuilt CB-3 seam | **§11.3** freeze-epochs bullet; **§11.7** Build item — proof-only rebuild, forward pin on the unbuilt dispatch seam |
+| **G-10.B** | The `S_min` rationale ("F1 is epoch-granular so finer jitter is pointless") is false — challenge fire/response is sub-epoch block-granular | **Load-bearing correction** | `challenge_fire_height` → `H_fire ∈ (H_open, H_close]`, `challenge.rs:56-76` | **§11.4** rationale re-derived on the "epoch set is already public" basis (stronger, granularity-independent); **§11.5** sub-epoch channel scope line (beacon-driven; response instant → S-2) |
+| **G-10.C** | The cited negative control (`draw_entry_gap_double_jitter_trap`) is the wrong one — it guards a two-sided construction GF-10 does not have | **Correction** | `conformance.rs:177` (two-sided); GF-10 is one-sided (§11.3) | **§11.3 / §11.5** — swapped for GF-10's real failure-mode controls (shared-trigger + backlog-at-cap) |
+| **G-10.D** | "Claim before the cap forces it" is not always achievable — return-from-`>15`-epoch-dormancy wakes with backlog `>` cap | **Bounded residual** | `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` (`emission_wire.rs:53`) | **§11.3** — named as a residual (correlates with the persona's own liveness gap, ~public via F1/challenge), not closed |
+
+**Method note (for the next reviewer):** G-10.A's retraction is the load-bearing lesson of this pass
+— a constant's meaning is its consumer, not its identifier. The `REFERENCE_BLOCK_MAX_AGE` /
+`PROOF_VALIDITY_HORIZON` / `REBUILD_AT` semantics (`reference.rs:85-106`) are the anchor for any
+future reasoning about how long a claim can be held; do not re-derive them from the name.
 
 | Doc | Relationship |
 |-----|----------------|
