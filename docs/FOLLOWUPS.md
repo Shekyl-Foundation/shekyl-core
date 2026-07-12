@@ -7309,6 +7309,21 @@ one place to confirm each item's relationship to the wallet stack.
 
 ## V3.2 — Rust cutover and cleanup
 
+- **P-scan pruned-fetch bandwidth option over Tor (rejected at V3.0).** The
+  P-scan's block source fetches **full** transaction bodies because the SP-6
+  exhaustiveness gate recomputes each body's committed hash from received
+  material, and a storage-pruned FCMP++ spend hashes with the null prunable
+  component — a pruned fetch can never satisfy the gate on a spend-bearing
+  block (`pscan/block_source.rs`, `block_fetch.rs` `TxBodyForm`). The
+  bandwidth-cheap pruned form would need a daemon-*claimed* `prunable_hash`
+  leg in the recompute, which weakens recompute-from-received toward
+  trust-the-daemon — rejected while the 2d-2 local-daemon posture is the
+  recommended default. **Target:** V3.2 (performance work). **Reopen when:**
+  2d-2 remote/Tor posture profiling shows full-body fetch dominating P-scan
+  wall time; **re-evaluation shape:** a design round over the exhaustiveness
+  gate's trust posture (daemon-claimed prunable hash vs full fetch), graded
+  against the lying-daemon forged-absence bound.
+
 - **`atomic_write_file` power-loss crash-injection tests.** PR 6 cites
   existing unit tests in `shekyl-engine-file/src/atomic.rs` (overwrite
   semantics, no stray temps) but not simulated crash mid-fsync. If audit

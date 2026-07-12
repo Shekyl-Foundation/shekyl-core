@@ -311,6 +311,31 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
         crate::engine::block_fetch::default_fetch_scannable_block(self, number)
     }
 
+    /// As [`Self::fetch_scannable_block`], but the non-miner transaction
+    /// bodies are fetched **full** (unpruned), so each body re-hashes to its
+    /// committed transaction hash.
+    ///
+    /// This is the form the P-scan's SP-6 exhaustiveness gate consumes
+    /// (`pscan::exhaustiveness`): the gate recomputes every body's hash from
+    /// received material, and a storage-pruned FCMP++ spend hashes with the
+    /// null prunable component — so a pruned fetch can never satisfy the gate
+    /// on a spend-bearing block, and the scan would halt there as a
+    /// forged-absence refusal. The refresh path keeps the pruned fetch (it
+    /// has no per-body hash gate and the pruned form is the bandwidth-cheap
+    /// one).
+    ///
+    /// Cancellation, idempotency, and error surfaces are identical to
+    /// [`Self::fetch_scannable_block`]. The default delegates to the in-crate
+    /// native fetch (`engine::block_fetch`); the test `TestDaemon` overrides
+    /// it to serve its synthetic chains, whose bodies are full by
+    /// construction.
+    fn fetch_scannable_block_full(
+        &self,
+        number: usize,
+    ) -> impl std::future::Future<Output = Result<ScannableBlock, RpcError>> + Send {
+        crate::engine::block_fetch::default_fetch_scannable_block_full(self, number)
+    }
+
     /// Atomically snapshot the daemon's fee-rate estimate at each
     /// non-`Custom` priority tier.
     ///

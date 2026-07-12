@@ -645,6 +645,16 @@ impl DaemonEngine for TestDaemon {
         }
     }
 
+    /// The synthetic chain stores full bodies (nothing is ever pruned), so
+    /// the full-body fetch is the same lookup — delegate so the scripted
+    /// error/reorg queues fire identically on either path.
+    fn fetch_scannable_block_full(
+        &self,
+        number: usize,
+    ) -> impl Send + std::future::Future<Output = Result<ScannableBlock, RpcError>> {
+        DaemonEngine::fetch_scannable_block(self, number)
+    }
+
     fn get_fee_estimates(
         &self,
     ) -> impl Send + std::future::Future<Output = Result<FeeEstimates, Self::Error>> {
