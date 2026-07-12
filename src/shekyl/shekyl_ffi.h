@@ -1925,6 +1925,21 @@ uint8_t shekyl_archival_unbond_connect(
     uint64_t* interval_close_end_out,
     uint64_t* new_total_bonded_out);
 
+/// Block-level intra-block cross-tx bond-post uniqueness verdict — at most ONE
+/// bond-post vin per P_canonical_id per block (gate-4 §3.5; the
+/// shekyl_emission_block_claims_unique sibling, keyed on P alone). Per-tx
+/// verify runs against pre-block DB state, so every same-P same-block pair
+/// (JoinMarket+JoinMarket double-credit, Unbond+Unbond double-debit, mixed
+/// kinds) passes it independently; this pass — run once per block over every
+/// bond-post vin's P_canonical_id, before connect — is the layer that REJECTS
+/// the block. The §4.5 conservation audit is NOT a backstop (a double-credit
+/// doubles both sides consistently). ids_ptr = flattened num_ids × 32-byte
+/// P_canonical_ids in block order. Returns 1 when all distinct; 0 on any
+/// duplicate or a null pointer with num_ids > 0 (fail closed).
+uint8_t shekyl_archival_bond_post_block_unique(
+    const uint8_t* ids_ptr,
+    size_t num_ids);
+
 /// Unbond pop twin: validates the tip record is the connect's product (Exited
 /// state + trailing clean interval-close for unbond_settlement_epoch), then
 /// re-credits total_bonded_atomic with the journaled pre-image balance. The

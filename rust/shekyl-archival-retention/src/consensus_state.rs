@@ -72,7 +72,17 @@ pub fn prune_below_epoch_at_height(block_height: u64, max_claim_age_w: u64) -> O
     }
 }
 
-/// Half-open bad-standing interval `[start_epoch, end_exclusive)`.
+/// Interval-log entry (gate-4 F3): half-open `[start_epoch, end_exclusive)`.
+///
+/// The log carries **two entry kinds** — do not assume every entry is a slash:
+/// a *bad-standing interval* has `start < end` (a slash opens with
+/// `end_exclusive = u64::MAX`; `Rebond` closes it in place), while the `Unbond`
+/// **clean interval-close** is **zero-length** (`start == end`) — a pure exit
+/// marker recording the unbond settlement epoch
+/// ([`clean_interval_close`](crate::bond_connect::clean_interval_close)). Its
+/// empty range excludes no epoch from [`good_through`] by construction, and
+/// every codec/marshal path deliberately carries `start == end`; never add a
+/// "valid interval is non-empty" assertion on this type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BadInterval {
     pub start_epoch: u64,

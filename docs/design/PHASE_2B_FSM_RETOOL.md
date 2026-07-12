@@ -688,9 +688,15 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
   later `W`-lapse / `p_slot`-burn step, no schema change (gate-4 §4.1 note). Q2's
   forward amendment executed (gate-4 §4.1 `last_served_epoch` dropped). Verify
   gained the `IntervalLogFull` belt (a tx whose connect could not append the close
-  never verifies — halt-vector foreclosure). Named wiring obligations: block-level
-  per-`P` bond-post pass (emission `(P,E)`-pass sibling), pre-image journal table +
-  FATAL mapping at the connect site.
+  never verifies — halt-vector foreclosure). Review round, same increment: the
+  marker's storage half KAT-pinned end-to-end (codec/LMDB/`good_through`,
+  `archival_substrate_lmdb.unbond_clean_close_marker_round_trips`; no path anywhere
+  asserts `start < end`), `kMaxBadIntervals` pinned genesis-frozen (verify validity
+  keys on it), and the block-level pass's **decision function landed**
+  (`bond_post_block_unique`, keyed on `P` alone, reject-not-serialize — covers the
+  whole same-`P` same-block class; §4.5 conservation is not a backstop). Named
+  wiring obligations: marshal that pass at the block-verify site, pre-image journal
+  table + FATAL mapping at the connect site.
 - **2026-07-12:** **P2B-8 — verify/connect design questions pinned pre-impl.** Q1 (per-shard
   `HoldingsUpdate`-drop cooldown anchor) resolved with **no new field** — derive shard `s`'s
   last-served via a reverse-cursor seek over the BE composite serve-credit key

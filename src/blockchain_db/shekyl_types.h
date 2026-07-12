@@ -730,7 +730,18 @@ struct ArchivalBondValue {
     static constexpr uint8_t kHoldingsCompleteTree = 1;
     static constexpr size_t kMaxPubkeyLen = 2048;
     static constexpr size_t kMaxHoldings = 4096;
+    /// Interval-log entry cap. GENESIS-FROZEN CONSENSUS CONSTANT, not a codec
+    /// tunable: Unbond verify rejects a record at this cap (the connect's
+    /// clean interval-close could not append — `IntervalLogFull`,
+    /// `shekyl-archival-retention::bond_post`), so tx validity depends on the
+    /// value. The Rust twin is `bond_connect::MAX_BOND_BAD_INTERVALS`; the
+    /// static_assert below pins the pair against silent drift.
     static constexpr size_t kMaxBadIntervals = 256;
+    static_assert(kMaxBadIntervals == 256,
+        "kMaxBadIntervals is genesis-frozen (Unbond verify's IntervalLogFull "
+        "belt keys on it); a change is a hard fork and must move "
+        "shekyl-archival-retention::bond_connect::MAX_BOND_BAD_INTERVALS in "
+        "lockstep");
     /// Claimed-epoch entry cap: claim window `W` plus reorg slack
     /// (REWARD_EMISSION_LEG.md §6.3 pins the cap at 32). Derived from the
     /// JSON authority so a `max_claim_age_w` change cannot drift past this
@@ -742,6 +753,16 @@ struct ArchivalBondValue {
         "REWARD_EMISSION_LEG.md §6.3 pins the claimed-epoch cap at 32 "
         "(W = 26 + 6 reorg slack); revisit the pin if max_claim_age_w moves");
 
+    // Interval-log entry (gate-4 F3). Half-open [start_epoch, end_exclusive).
+    // Carries TWO entry kinds — do not assume every entry is a slash:
+    //   - bad-standing interval: start < end (a slash opens with
+    //     end_exclusive = UINT64_MAX; Rebond closes it in place), and
+    //   - the Unbond clean interval-close: ZERO-LENGTH start == end — a pure
+    //     exit marker recording the unbond settlement epoch. Its empty range
+    //     excludes no epoch from good_through by construction, and the codec
+    //     deliberately carries start == end (KAT:
+    //     archival_substrate_lmdb.unbond_clean_close_marker_round_trips).
+    //     Never add a "valid interval is non-empty" assertion here.
     struct BadInterval {
         uint64_t start_epoch = 0;
         uint64_t end_exclusive = 0; // UINT64_MAX = open-ended bad standing

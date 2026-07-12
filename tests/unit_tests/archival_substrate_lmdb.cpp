@@ -137,6 +137,79 @@ TEST(archival_substrate_lmdb, bond_record_roundtrip)
   EXPECT_EQ(db.archival_bond_join_epoch(p_id), std::numeric_limits<uint64_t>::max());
 }
 
+// The Unbond clean interval-close (gate-4 §4.3 F3) is a ZERO-LENGTH interval
+// [E, E) appended to the interval log. Its safety has two halves: the verdict
+// half (good_through-inert) is KAT'd in Rust (bond_connect.rs); this pins the
+// storage half — the v4 codec, the production LMDB writer/reader, and the
+// good_through read path all carry start == end through byte-identically, and
+// no validity path rejects the empty interval. A natural-looking "a valid
+// interval is non-empty" assertion added to any of them would fail here
+// loudly instead of stranding every exited record as undecodable.
+TEST(archival_substrate_lmdb, unbond_clean_close_marker_round_trips)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+
+  // The Exited record shape the Unbond connect writes: zero total,
+  // compact-and-empty holdings, the clean close [12, 12) trailing the log —
+  // here after an open slash interval (the capital-flight case), so the
+  // marker round-trips next to a real bad interval.
+  shekyl::db::ArchivalBondValue written{};
+  written.hybrid_pubkey = {0x01, 0x02, 0x03, 0x04};
+  written.join_settlement_epoch = 3;
+  written.bonded_total_atomic = 0;
+  written.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
+  shekyl::db::ArchivalBondValue::BadInterval open_slash{};
+  open_slash.start_epoch = 10;
+  open_slash.end_exclusive = std::numeric_limits<uint64_t>::max();
+  shekyl::db::ArchivalBondValue::BadInterval clean_close{};
+  clean_close.start_epoch = 12;
+  clean_close.end_exclusive = 12; // zero-length: the exit marker
+  written.bad_intervals = {open_slash, clean_close};
+
+  // Codec half: encode -> decode -> re-encode is the identity on the marker.
+  const std::vector<uint8_t> encoded = written.encode();
+  shekyl::db::ArchivalBondValue decoded{};
+  ASSERT_TRUE(shekyl::db::ArchivalBondValue::decode(encoded.data(), encoded.size(), decoded));
+  ASSERT_EQ(decoded.bad_intervals.size(), 2u);
+  EXPECT_EQ(decoded.bad_intervals[1].start_epoch, 12u);
+  EXPECT_EQ(decoded.bad_intervals[1].end_exclusive, 12u);
+  EXPECT_EQ(decoded.encode(), encoded);
+
+  // Storage half: the production writer and reader accept the exit shape.
+  const crypto::hash p_id = make_hash(0x22);
+  db.put_archival_bond_value(p_id, written);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  shekyl::db::ArchivalBondValue loaded{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, loaded));
+  EXPECT_EQ(loaded.encode(), encoded);
+
+  // Verdict half through the PRODUCTION read path (LMDB -> flat marshal ->
+  // shekyl_archival_good_through): the open slash interval still governs and
+  // the marker changes nothing.
+  EXPECT_TRUE(db.archival_bond_good_through(p_id, 4));
+  EXPECT_TRUE(db.archival_bond_good_through(p_id, 9));
+  EXPECT_FALSE(db.archival_bond_good_through(p_id, 10));
+  EXPECT_FALSE(db.archival_bond_good_through(p_id, 12));
+
+  // The clean-exit-only record (no slash history): the marker alone excludes
+  // no epoch — backlog emission for served epochs stays verifiable (§4.3).
+  shekyl::db::ArchivalBondValue clean{};
+  clean.hybrid_pubkey = {0x05, 0x06};
+  clean.join_settlement_epoch = 3;
+  clean.bonded_total_atomic = 0;
+  clean.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
+  clean.bad_intervals = {clean_close};
+  const crypto::hash clean_id = make_hash(0x33);
+  db.put_archival_bond_value(clean_id, clean);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  EXPECT_TRUE(db.archival_bond_good_through(clean_id, 4));
+  EXPECT_TRUE(db.archival_bond_good_through(clean_id, 12));
+  EXPECT_TRUE(db.archival_bond_good_through(clean_id, 13));
+}
+
 TEST(archival_substrate_lmdb, complete_tree_bond_holds_any_shard)
 {
   TempLMDB fixture;

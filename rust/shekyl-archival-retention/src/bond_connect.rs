@@ -27,10 +27,15 @@ use crate::bond_wire::{HoldingsDescriptor, HoldingsKind};
 use crate::consensus_state::BadInterval;
 
 /// Interval-log entry cap — the cross-language pin of
-/// `ArchivalBondValue::kMaxBadIntervals` (`src/blockchain_db/shekyl_types.h`).
+/// `ArchivalBondValue::kMaxBadIntervals` (`src/blockchain_db/shekyl_types.h`,
+/// whose static_assert pins the pair against silent drift).
 /// The codec rejects records above this bound at encode/decode, so a connect
 /// that would append past it can never persist; verify enforces the same bound
 /// (`BondPostError::IntervalLogFull`) so such a tx never reaches connect.
+///
+/// **Genesis-frozen consensus constant** (P2B-8 Q3 posture): because Unbond
+/// verify rejects on it, tx validity depends on the value — a change is a
+/// hard fork, not a codec retune.
 pub const MAX_BOND_BAD_INTERVALS: usize = 256;
 
 /// The clean interval-close (gate-4 §4.3 F3): a **zero-length** interval

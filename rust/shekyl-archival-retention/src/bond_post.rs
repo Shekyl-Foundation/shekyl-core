@@ -182,6 +182,31 @@ pub fn verify_unbond_bond_post(
     Ok(())
 }
 
+/// Block-level intra-block cross-tx bond-post uniqueness — at most **one**
+/// bond-post vin per `P_canonical_id` per block (gate-4 §3.5; the emission
+/// `(P, E)` pass's sibling,
+/// [`emission_block_claims_unique`](crate::claimed_epochs::emission_block_claims_unique)).
+///
+/// Per-tx verify runs against pre-block DB state, so every same-`P` same-block
+/// pair — JoinMarket+JoinMarket (double `total_bonded_atomic` credit),
+/// Unbond+Unbond (double debit), JoinMarket+Unbond, and every future
+/// `HoldingsUpdate` combination — passes per-tx verify independently; each
+/// pair interacts through the per-`P` record and the global counter, and the
+/// §4.5 conservation audit is **not** a backstop (a double-credit doubles both
+/// sides of `total_bonded == Σ bonded_P` consistently, so it passes on corrupt
+/// state). This pass — run once per block over every bond-post vin's
+/// `P_canonical_id`, before connect — is the layer that **rejects the block**.
+/// Keyed on `P` alone, not `(P, post_kind)`: lifecycle transitions have no
+/// legitimate multi-post-per-block use, and rejecting outright avoids inviting
+/// intra-block ordering dependence. C++ only marshals the ids; the verdict is
+/// decided here (the emission §9.5 item-6 decision-placement pin).
+#[must_use]
+pub fn bond_post_block_unique(p_canonical_ids: &[[u8; 32]]) -> bool {
+    let mut sorted = p_canonical_ids.to_vec();
+    sorted.sort_unstable();
+    sorted.windows(2).all(|w| w[0] != w[1])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -447,6 +472,19 @@ mod tests {
         let mut vin = valid_unbond_vin();
         vin.bond_debit = ARCHIVAL_BOND_FLOOR_ATOMIC; // record holds RECORD_BONDED = 2*FLOOR
         assert_eq!(ok_unbond(&vin), Err(BondPostError::DebitNotFullBalance));
+    }
+
+    #[test]
+    fn block_unique_rejects_every_same_p_pair() {
+        let a = [0x11u8; 32];
+        let b = [0x22u8; 32];
+        assert!(bond_post_block_unique(&[]));
+        assert!(bond_post_block_unique(&[a]));
+        assert!(bond_post_block_unique(&[a, b]));
+        // Any same-P pair rejects, regardless of post kinds (the pass is
+        // keyed on P alone) or position in the block.
+        assert!(!bond_post_block_unique(&[a, a]));
+        assert!(!bond_post_block_unique(&[a, b, a]));
     }
 
     #[test]

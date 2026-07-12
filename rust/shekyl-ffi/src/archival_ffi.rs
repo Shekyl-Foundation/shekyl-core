@@ -12,21 +12,21 @@
 use std::io::Cursor;
 
 use shekyl_archival_retention::{
-    as_of_e_served_work, capped_work_milli, challenge_fire_height, challenge_leaf_chunk_bounds,
-    challenge_seal_height, claim_window_floor, claimed_epochs_check_and_set,
-    effective_settlement_epoch_blocks, emission_block_claims_unique, emission_vin_verify,
-    emission_vin_verify_auth, emission_vin_verify_backing, emission_vin_verify_claims,
-    epoch_close_compute, epoch_close_due_at_height, epoch_close_height, frozen_segment_count,
-    good_through, p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height,
-    serve_credit_epoch_ok, settlement_epoch_at_height, settlement_epoch_blocks_overridden,
-    unbond_connect, unbond_pop, verify_bond_post_ct_balance, verify_join_market_bond_post,
-    verify_leaf_index, verify_segment_path, verify_unbond_bond_post, whole_record_last_served,
-    ArchivalBondPostVin, ArchivalRewardEmissionVin, ArchivalServeCreditResponse, BadInterval,
-    BondCtBalanceError, BondPostError, BondPostKind, BondTerm, ClaimantBondRecord,
-    ClaimedEpochsError, CreditPair, EmissionEpochSource, EmissionVerifyContext,
-    EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
-    HoldingsKind, KCover, RewardCommit, UnbondConnectError, UnbondPopError, WireError,
-    CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
+    as_of_e_served_work, bond_post_block_unique, capped_work_milli, challenge_fire_height,
+    challenge_leaf_chunk_bounds, challenge_seal_height, claim_window_floor,
+    claimed_epochs_check_and_set, effective_settlement_epoch_blocks, emission_block_claims_unique,
+    emission_vin_verify, emission_vin_verify_auth, emission_vin_verify_backing,
+    emission_vin_verify_claims, epoch_close_compute, epoch_close_due_at_height, epoch_close_height,
+    frozen_segment_count, good_through, p_canonical_id_from_hybrid_pubkey,
+    prune_below_epoch_at_height, serve_credit_epoch_ok, settlement_epoch_at_height,
+    settlement_epoch_blocks_overridden, unbond_connect, unbond_pop, verify_bond_post_ct_balance,
+    verify_join_market_bond_post, verify_leaf_index, verify_segment_path, verify_unbond_bond_post,
+    whole_record_last_served, ArchivalBondPostVin, ArchivalRewardEmissionVin,
+    ArchivalServeCreditResponse, BadInterval, BondCtBalanceError, BondPostError, BondPostKind,
+    BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair, EmissionEpochSource,
+    EmissionVerifyContext, EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
+    HoldingsDescriptor, HoldingsKind, KCover, RewardCommit, UnbondConnectError, UnbondPopError,
+    WireError, CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -1599,6 +1599,50 @@ pub unsafe extern "C" fn shekyl_emission_block_claims_unique(
     u8::from(emission_block_claims_unique(&pairs))
 }
 
+/// Block-level intra-block cross-tx bond-post uniqueness verdict — at most
+/// one bond-post vin per `P_canonical_id` per block (gate-4 §3.5; the
+/// emission `(P, E)` pass's sibling above, keyed on `P` alone). Per-tx verify
+/// runs against pre-block DB state, so every same-`P` same-block pair passes
+/// it independently; this pass is the layer that rejects the block. C++ only
+/// marshals the ids; the verdict is decided in
+/// `shekyl-archival-retention::bond_post::bond_post_block_unique`.
+///
+/// `ids_ptr` is a flattened array of `num_ids` 32-byte `P_canonical_id`
+/// entries, one per bond-post vin in the block, in block order.
+///
+/// Returns 1 when every id is distinct (block passes this layer), 0 on any
+/// duplicate — or on a null pointer with `num_ids > 0` (fail closed).
+///
+/// # Safety
+///
+/// When `num_ids > 0`, `ids_ptr` must address `num_ids * 32` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_bond_post_block_unique(
+    ids_ptr: *const u8,
+    num_ids: usize,
+) -> u8 {
+    if num_ids == 0 {
+        return 1;
+    }
+    if ids_ptr.is_null() {
+        return 0;
+    }
+    let Some(byte_len) = num_ids.checked_mul(32) else {
+        return 0;
+    };
+    if byte_len > isize::MAX as usize {
+        return 0;
+    }
+    let flat = unsafe { std::slice::from_raw_parts(ids_ptr, byte_len) };
+    let mut ids = Vec::with_capacity(num_ids);
+    for entry in flat.chunks_exact(32) {
+        let mut pid = [0u8; 32];
+        pid.copy_from_slice(entry);
+        ids.push(pid);
+    }
+    u8::from(bond_post_block_unique(&ids))
+}
+
 /// The full §7.1 emission verify body in one coarse FFI crossing: wire parse,
 /// claims steps 1–5 over the marshaled as-of-`E` snapshots, membership-only
 /// backing (step 6), and the hybrid auth gate (step 8) — assembling the three
@@ -2478,6 +2522,27 @@ mod tests {
         let rc =
             unsafe { shekyl_archival_unbond_pop(0, 0, 1, 42, 42, 42, 10, 0, std::ptr::null_mut()) };
         assert_eq!(rc, SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_NULL_PTR);
+    }
+
+    #[test]
+    fn bond_post_block_unique_ffi_rejects_same_p_pairs() {
+        // Two distinct P ids pass; any same-P pair rejects (keyed on P alone,
+        // whatever the post kinds); null with nonzero count fails closed.
+        let mut flat = vec![0x11u8; 32];
+        flat.extend(vec![0x22u8; 32]);
+        let unique = unsafe { shekyl_archival_bond_post_block_unique(flat.as_ptr(), 2) };
+        assert_eq!(unique, 1);
+        flat.extend(vec![0x11u8; 32]);
+        let dup = unsafe { shekyl_archival_bond_post_block_unique(flat.as_ptr(), 3) };
+        assert_eq!(dup, 0);
+        assert_eq!(
+            unsafe { shekyl_archival_bond_post_block_unique(std::ptr::null(), 0) },
+            1
+        );
+        assert_eq!(
+            unsafe { shekyl_archival_bond_post_block_unique(std::ptr::null(), 1) },
+            0
+        );
     }
 
     #[test]

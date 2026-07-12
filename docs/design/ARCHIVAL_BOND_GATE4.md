@@ -425,9 +425,24 @@ re-credit `total_bonded_atomic`; the fold validates the tip record is the connec
 product (Exited state + trailing clean close) so a journal desync is loud. Connect
 fold errors are FATAL at the call site, never a soft skip. Verify enforces the
 interval-log codec cap (`IntervalLogFull`) so a tx the connect could not apply
-never verifies. The wiring increment must also add a **block-level per-`P`
-bond-post pass** (the emission `(P,E)`-pass sibling) so two same-`P` posts in one
-block cannot both verify against pre-state.
+never verifies — which makes `kMaxBadIntervals` a **genesis-frozen consensus
+constant** (tx validity keys on it; static_assert-pinned against its Rust twin
+`MAX_BOND_BAD_INTERVALS`).
+
+**Block-level bond-post pass (wiring obligation — decision landed, marshaling
+pending):** at most **one bond-post vin per `P_canonical_id` per block**, keyed on
+`P` alone, **rejecting the block** — `bond_post_block_unique`
+(`shekyl-archival-retention::bond_post`, over `shekyl_archival_bond_post_block_unique`;
+the emission `(P,E)` pass's sibling, same decision-placement pin: C++ marshals the
+block's ids, Rust decides). Per-tx verify runs against pre-block DB state, so
+**every** same-`P` same-block pair passes it independently — JoinMarket+JoinMarket
+(double `total_bonded_atomic` credit), Unbond+Unbond (double debit),
+JoinMarket+Unbond, and every future `HoldingsUpdate` combination — and the §4.5
+conservation audit is **not** a backstop (a double-credit doubles both sides of
+`total_bonded == Σ_P bonded_P` consistently, so it passes on corrupt state).
+Reject, not serialize: lifecycle transitions have no legitimate
+multi-post-per-`P`-per-block use, and serializing would invite intra-block
+ordering dependence (reopen per rule 21 only if a real use case emerges).
 
 ---
 

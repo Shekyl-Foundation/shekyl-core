@@ -31,6 +31,21 @@
   derived, never stored) and now pins the landed `bond_event_log`
   representation; §3.5 documents the connect/pop write set and names the
   wiring obligations (block-level per-`P` bond-post pass, journal table).
+  **Review round (same increment):** the marker's storage half is now
+  KAT-pinned end-to-end (`archival_substrate_lmdb.unbond_clean_close_marker_round_trips`:
+  v4 codec encode→decode→re-encode identity on `[E, E)`, the production LMDB
+  writer/reader on the Exited shape, and the production `good_through` read
+  path — verified besides that **no** codec/marshal/decode path anywhere
+  asserts `start < end`); `kMaxBadIntervals` pinned as a **genesis-frozen
+  consensus constant** (verify validity keys on it; static_assert + Rust-twin
+  lockstep note) with the interval log's **two entry kinds** documented at
+  both `BadInterval` types; and the block-level pass's **decision function
+  landed** (`bond_post_block_unique` + `shekyl_archival_bond_post_block_unique`,
+  the `emission_block_claims_unique` sibling keyed on `P` alone, reject-not-
+  serialize) — covering the whole same-`P` same-block class (double-JoinMarket
+  credit, double-Unbond debit, mixed kinds), which the §4.5 conservation audit
+  cannot catch (a double-credit doubles both sides consistently). C++
+  marshaling of the pass stays with the wiring increment (§3.5).
 
 - **tests/wallet/rpc: emission-claim PR-4a — staker regtest harness up
   to the daemon submit gap, its enablers, and the Q11 blob-boundary
