@@ -107,6 +107,20 @@ const MAX_PATH_LAYERS: usize = 64;
 pub const MAX_FCMP_INPUTS: usize = 8;
 /// Max outputs per tx (`BULLETPROOF_PLUS_MAX_OUTPUTS`).
 pub const MAX_OUTPUTS: usize = 16;
+/// Max Bp+ `|L|` / `|R|` — `6 + log2(MAX_OUTPUTS)`. A well-formed aggregated Bp+
+/// has `|L| == |R| == 6 + ceil(log2(n_padded))` with `n_padded ≤ MAX_OUTPUTS`, so
+/// this is the largest length any valid proof carries; the C++ deserializer
+/// rejects above it (`n_bulletproof_plus_max_amounts`, rctTypes.cpp: `L_size <=
+/// 6 + extra_bits`). The exact per-tx value is output-count-coupled and enforced
+/// by [`Transaction::validate`].
+pub const MAX_BP_LR_LEN: usize = 6 + MAX_OUTPUTS.ilog2() as usize;
+// The C++ oracle guards the same derivation with "log2(max_outputs) is out of
+// date" (`(1ULL << extra_bits) == max_outputs`); mirror it so a MAX_OUTPUTS bump
+// that breaks the power-of-two assumption fails loudly here too.
+const _: () = assert!(
+    MAX_OUTPUTS.is_power_of_two(),
+    "MAX_BP_LR_LEN derivation requires MAX_OUTPUTS to be a power of two"
+);
 /// Max `tx_extra` bytes for a non-coinbase tx (`MAX_TX_EXTRA_SIZE`).
 pub const MAX_TX_EXTRA: usize = 24_576;
 /// Max serialized transaction size (`CRYPTONOTE_MAX_TX_SIZE`) — the hard
@@ -222,9 +236,9 @@ fn read_len_prefixed_exact<R: Read>(r: &mut R, what: &str, expected: usize) -> i
 /// Read `count` fixed 32-byte points (no per-element length prefix).
 ///
 /// The speculative pre-allocation is **clamped**: `count` reaches here validated only
-/// loosely on some paths (Bp+ `L`/`R` are capped at `READ_LEN_CAP`, not their exact
-/// log-sized length), so reserving `count` up front would be a hostile-input
-/// pre-alloc DoS (~32 MiB for a declared 1M). Every legitimate point vector is
+/// loosely on some paths (pseudoOuts is sized by the input count, which the prefix
+/// parser caps at `READ_LEN_CAP`), so reserving `count` up front would be a
+/// hostile-input pre-alloc DoS (~32 MiB for a declared 1M). Every legitimate point vector is
 /// `<= MAX_BRANCH_SCALARS`, so the clamp right-sizes real inputs while bounding the
 /// reserve; the loop still pushes from a finite reader, so an oversized `count` fails
 /// on the missing bytes rather than on allocation.
@@ -937,17 +951,23 @@ impl BpPlus {
         let r1 = read_array(r)?;
         let s1 = read_array(r)?;
         let d1 = read_array(r)?;
+        // Parse-parity with the C++ deserializer: `serialize_rctsig_prunable`
+        // (rctTypes.h:338) fails deserialization unless every proof has
+        // `6 <= |L| == |R| <= 6 + log2(BULLETPROOF_PLUS_MAX_OUTPUTS)`
+        // (`n_bulletproof_plus_max_amounts` returns 0 otherwise). The remaining
+        // output-count coupling — `|L| == 6 + ceil(log2(next_pow2(n_out)))` —
+        // needs the full tx and lives in [`Transaction::validate`].
         let l_len: usize = read_varint(r)?;
-        if l_len > READ_LEN_CAP {
+        if !(6..=MAX_BP_LR_LEN).contains(&l_len) {
             return Err(io::Error::other(format!(
-                "shekyl-wire: Bp+ L length {l_len} exceeds parse cap {READ_LEN_CAP}"
+                "shekyl-wire: Bp+ |L| {l_len} outside consensus range 6..={MAX_BP_LR_LEN}"
             )));
         }
         let l = read_points(r, l_len)?;
         let r_len: usize = read_varint(r)?;
-        if r_len > READ_LEN_CAP {
+        if r_len != l_len {
             return Err(io::Error::other(format!(
-                "shekyl-wire: Bp+ R length {r_len} exceeds parse cap {READ_LEN_CAP}"
+                "shekyl-wire: Bp+ |R| {r_len} != |L| {l_len}"
             )));
         }
         let r_points = read_points(r, r_len)?;
@@ -1313,12 +1333,12 @@ impl Transaction {
         else {
             return 0;
         };
-        // `|L| < 6` cannot occur for a valid proof. An oversize `|L|` *can* be parsed —
-        // `BpPlus::read` caps to the loose `READ_LEN_CAP`, and `validate()` bounds the
-        // output *count* but not `|L|` — so the shift must not overflow, which would panic
-        // on a parseable-but-invalid tx (DoS). Clamp each proof to `MAX_OUTPUTS`: exact for
-        // any valid tx (`n_padded ≤ MAX_OUTPUTS`) and merely bounded for an invalid one,
-        // which `validate()` / `MAX_TX_SIZE` rejects regardless.
+        // `BpPlus::read` bounds `|L|` to `6..=MAX_BP_LR_LEN` and `validate()` pins it
+        // exactly by the output count, but `weight()` is also reachable on a hand-built
+        // (never-parsed, not-yet-validated) tx — so the shift must not overflow, which
+        // would panic on invalid input (DoS). Clamp each proof to `MAX_OUTPUTS`: exact
+        // for any valid tx (`n_padded ≤ MAX_OUTPUTS`) and merely bounded for an invalid
+        // one, which `validate()` / `MAX_TX_SIZE` rejects regardless.
         let n_padded: usize = prunable
             .bulletproofs
             .iter()
@@ -1832,7 +1852,8 @@ impl Transaction {
 
     /// Full context-free canonical validation: [`Self::validate_context_free_pruned`]
     /// plus the prunable-proof-coupled checks that require a complete (non-pruned)
-    /// transaction — `nbp == 1`, the per-input `pqc_auths` / `pseudoOuts` counts, the
+    /// transaction — `nbp == 1`, the Bp+ `|L|`/`|R|` round count pinned exactly by
+    /// the output count, the per-input `pqc_auths` / `pseudoOuts` counts, the
     /// `>= 2`-output anti-deanonymization rule for a spend, and the fee-only
     /// no-prunable shape. Use this on a *complete* tx; the scan/refresh boundary, which
     /// ingests pruned txs, calls [`Self::validate_context_free_pruned`] instead.
@@ -1886,6 +1907,28 @@ impl Transaction {
                         return Err(io::Error::other(format!(
                             "shekyl-wire: nbp {} != 1",
                             prunable.bulletproofs.len()
+                        )));
+                    }
+                    // §10 canonical-form corollary: for a well-formed aggregated Bp+
+                    // the round count is fully determined by the output count —
+                    // `|L| == |R| == 6 + ceil(log2(next_pow2(n_out)))`. The daemon
+                    // enforces both directions: `n_padded >= n_out` at parse
+                    // (`n_bulletproof_plus_max_amounts < outputs` fails
+                    // deserialization, rctTypes.h:338) and `n_padded < 2·n_out` at
+                    // verify (`n_bulletproof_amounts_base`'s V/L tightness,
+                    // rctTypes.cpp:234-235, with `V` restored from outPk == n_out).
+                    // Without this a tx with a valid output count but an
+                    // inconsistent `|L|` passes local validation and dies at the
+                    // daemon — a local↔daemon divergence surfacing at submit.
+                    let bp = &prunable.bulletproofs[0];
+                    // `n_out >= 2` was checked above, so the log2 is well-defined.
+                    let expected_lr = 6 + n_out.next_power_of_two().trailing_zeros() as usize;
+                    if bp.l.len() != expected_lr || bp.r.len() != expected_lr {
+                        return Err(io::Error::other(format!(
+                            "shekyl-wire: Bp+ |L|/|R| ({}/{}) != {expected_lr} \
+                             required by {n_out} output(s)",
+                            bp.l.len(),
+                            bp.r.len()
                         )));
                     }
                     // pseudoOuts: one per ToKey (spend) input, exactly. For a pure

@@ -280,22 +280,24 @@ sustainability is unaffected by the recalibration.
   serializer, real PQC pk/sig lengths, KAT fcmp proof). This raises the real fee on
   every spend (correctly). Landed on `feat/wire-tx-weight`.
 
-- **`shekyl_wire::Transaction::validate()` does not bound the Bp+ `|L|` against the
-  output count (consensus-parity gap, flagged 2026-06-24 on `feat/wire-tx-weight`).**
-  `BpPlus::read` caps `|L|`/`|R|` only at the loose `READ_LEN_CAP`, and `validate()`
-  bounds the output *count* (`MAX_OUTPUTS`) but not `|L|` — yet for a well-formed
-  proof `|L| == |R| == 6 + ceil(log2(next_pow2(n_out)))` is *fully determined* by the
-  output count (and at genesis `nbp == 1`). So a tx with a valid `n_out` but an
-  inconsistent/oversize `|L|` parses **and passes local `validate()`**, while the C++
-  daemon rejects it (it derives `n_padded` from `|L|` and enforces the tight bound +
-  `bp_base*n_padded >= bp_size`). That is a local↔daemon divergence: the wallet would
-  treat a tx as valid that fails at submit. PR #179 made `weight()` *panic-safe* on
-  such input (clamping `n_padded` to `MAX_OUTPUTS`), but that is DoS hardening, **not**
-  a reject. **Reopen-now criterion:** `validate()` should reject a spend whose Bp+
-  `|L|`/`|R|` ≠ `6 + ceil(log2(next_pow2(n_out)))` (and `nbp != 1`), matching the
-  daemon's `n_bulletproof_plus_max_amounts` + clawback assertions. Belongs in a
-  parse/validate consensus-parity pass, not the fee surface. Target: V3.0
-  (pre-genesis consensus parity).
+- **[Done] `shekyl_wire::Transaction::validate()` does not bound the Bp+ `|L|` against
+  the output count (consensus-parity gap, flagged 2026-06-24 on `feat/wire-tx-weight`;
+  resolved 2026-07-12).** `BpPlus::read` capped `|L|`/`|R|` only at the loose
+  `READ_LEN_CAP`, and `validate()` bounded the output *count* (`MAX_OUTPUTS`) but not
+  `|L|` — yet for a well-formed proof `|L| == |R| == 6 + ceil(log2(next_pow2(n_out)))`
+  is *fully determined* by the output count (and at genesis `nbp == 1`). So a tx with
+  a valid `n_out` but an inconsistent/oversize `|L|` parsed **and passed local
+  `validate()`**, while the C++ daemon rejects it — a local↔daemon divergence
+  surfacing at submit. Resolved as the flagged parse/validate consensus-parity pass,
+  mirroring the C++ split: `BpPlus::read` now rejects `|L| ∉ 6..=MAX_BP_LR_LEN`
+  (`= 6 + log2(MAX_OUTPUTS)`) and `|R| != |L|` — the deserialization-time rejects of
+  `n_bulletproof_plus_max_amounts` (`rctTypes.h:338`) — and `validate()` pins
+  `|L| == |R| == 6 + ceil(log2(next_pow2(n_out)))` exactly, the parse-time
+  `n_padded >= n_out` bound plus the verify-time V/L tightness
+  (`n_bulletproof_amounts_base`, `rctTypes.cpp:234-235`, `V` restored from
+  `outPk == n_out`). `weight()`'s PR #179 clamp stays (it is reachable on hand-built,
+  not-yet-validated txs). Accept/reject parity pinned by `bp_lr_*` tests in
+  `shekyl-wire/tests/validation.rs`.
 
 - **Difficulty-surface newtypes — type `shekyl-difficulty`'s primitive PoW
   arithmetic (flagged 2026-06-24, the `check_hash` C++ → Rust port).** The ported
