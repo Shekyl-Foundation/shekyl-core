@@ -34,8 +34,8 @@ yield states. Retool is **two inversions + a collapse**, not a field rename.
 ### Finding
 
 §3.3.3 keys the wallet on the **staked output** and calls output identity "stable" (line 950).
-Under transfer-shaped admission + membership-only backing, the **funding output an emission
-designates changes per emission** while **`P` persists** (per-emission selection from `P`'s funding
+Under transfer-shaped admission + membership-only backing, the **funding output designated by an
+emission changes per emission** while **`P` persists** (per-emission selection from `P`'s funding
 pool — not a "rotation," not consensus-tracked, §7.3). Output-keyed instances **orphan whenever the
 designated output changes**; `P_canonical_id`-keyed instances survive it.
 
@@ -49,7 +49,7 @@ designated output changes**; `P_canonical_id`-keyed instances survive it.
    - input: `HybridPublicKey::to_canonical_bytes()` (from [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §9.5)
 3. **Delete `StakeId` / `shekyl/stake-id-v1`** from the rebased FSM — no output-derived
    primary key. The `funding_outputs` pool an emission designates backing from is **not** instance
-   identity (and is not a "rotatable field" — see the corrected table above).
+   identity (and is not a "rotatable field" — see the corrected table below).
 4. **Rename (suggested):** `StakeInstance` → `ArchivalPInstance` (or `PInstance`) in wallet
    docs/code when retool lands — signals per-`P` not per-stake-output.
 
@@ -62,7 +62,7 @@ source:
 
 | Loose term | What it actually is (verified at source 2026-07-12) | `P_canonical_id` |
 |------------|------------------------------------------------------|------------------|
-| **Backing-output "rotation"** | `P` designates a (possibly different) output from its **own `funding_outputs` pool** to back each emission, membership-only (`BackingSet::designate_backing`). **Not a mechanism, not a hygiene action, not consensus-tracked:** there is **no `backing_outputs` field** anywhere in the code, and the **consensus backing-rotation rule was dropped** — [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §7.3, "consensus does not require backing-output rotation." No backing output is ever shared between personas (each is scanned under one `P`'s view key). | **Unchanged** |
+| **Backing-output "rotation"** | `P` designates a (possibly different) output from its **own `funding_outputs` pool** to back each emission, membership-only (`BackingSet::designate_backing`). **Not a mechanism, not a hygiene action, not consensus-tracked:** there is **no `backing_outputs` field** anywhere in the code, and the **consensus backing-rotation rule was dropped** — [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §7.3, "Consensus does not require backing-output rotation." No backing output is ever shared between personas (each is scanned under one `P`'s view key). | **Unchanged** |
 | **Pseudonym "rotation"** | Retire `P_old` (`Unbond` + drain) + create `P_new` (fresh `JoinMarket`): **unlink-and-relink**, two independent lifecycle ops with **no bond migration** ([`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) S-5: migration "would be a new consensus op … out of scope for V3.0"). **Not a decorrelation lever** — it provides **correlation** (T-A1 portfolio re-linkage: `P_old`↔`P_new` re-links on the public portfolio), which is precisely why **long-lived `P` is the committed architecture** (S-5). | **New** id (a *fresh* persona, unlinked by design) |
 
 **The one load-bearing takeaway (the actual P2B-1 point):** key the instance on `P_canonical_id`,
