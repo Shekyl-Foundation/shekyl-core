@@ -597,7 +597,7 @@ post-genesis change is a hard fork. Resolves the "amends this table only" vs "co
 the amend window is *pre-seal*. The impl reads the **generated** consensus constant (never a hardcode),
 and the drop-eligibility check is `current_epoch − shard_add_epoch ≥ bond_duration(age)`.
 
-### Q4 — `Rebond` precondition + recovery path — **RESOLVED (one sub-question to gate-2)**
+### Q4 — `Rebond` precondition + recovery path — **RESOLVED**
 
 **Question.** §3.4:319 gives the `Rebond` precondition as `good_standing == false` (post-slash);
 §3.2/P2B-4 frame it as `Slashed → Bonded`. These read as disagreeing on *which* post-slash state
@@ -620,25 +620,48 @@ and `bond_spend_pk` **only** for `JoinMarket` (§3.4:234 — `Rebond` reuses the
   committed `bond_spend_pk`, `claimed_epochs`, `join_market_height` — distinct from `JoinMarket` (new
   record + commits `bond_spend_pk`).
 
-**One sub-question to gate-2 before the branch lands (slash-evasion).** `good_standing == false` spans
-**both** the grace window (challenge failed, slash *pending*, not yet applied — P2B-4) **and**
-post-slash; §3.4's "(post-slash)" qualifier implies post-slash only, but the flag alone doesn't
-distinguish them. **Pin needed:** `Rebond` must **not** fire during the grace window in a way that
-cancels a pending slash (a `T-A15b`-class evasion). Recommended: gate `Rebond` on **no pending
-challenge** for the record; confirm at gate-2 how the pending-challenge / `good_standing` lifecycle is
-tracked so the verifier can enforce it.
+**Grace-window slash-evasion — RESOLVED by the landed timing + mechanism (traced 2026-07-12).** The
+concern was whether `Rebond` during the grace window could cancel a *pending* slash (a `T-A15b`-class
+evasion). It cannot, on **two independent grounds**:
+
+1. **The slash is bit-gated and fires at `H_slash_deadline`** (`= H_close + CHALLENGE_RESOLUTION_BLOCKS`,
+   gate-2 §6; landed `process_archival_slash_at_height`), keyed on the *serve-credit bit*, **not** on
+   `good_standing`. `Rebond` writes no bit, so the slash lands at `H_slash_deadline` regardless.
+2. **`Rebond` is structurally ineligible during grace.** Good-standing is **not a mutable flag** — it is
+   **`good_through(P, E)`**, a pure function of `bad_intervals` (`consensus_state.rs:81-112`;
+   `market_member_at_epoch` *is* `good_through`). A **slash writes an open bad interval**
+   `[E_slash, u64::MAX)` **at `H_slash_deadline`** (post-grace); **`Rebond` closes it**
+   (`end_exclusive = E_rebond`). During grace there is **no bad interval**, so `good_through` is `true`
+   and there is nothing to recover — a mid-grace `Rebond` is **unrepresentable**, not merely guarded.
+
+**Consequent impl pins:** (i) `good_standing` is a **derived view** of `good_through` / `bad_intervals`,
+**not** a stored authority (same derive-don't-store answer as Q2) — the §4.1 field is a cache at most;
+the operative `Rebond` precondition is **"an open bad interval exists."** (ii) `Rebond`'s effect on the
+interval log is to **close the open bad interval** (`end_exclusive = E_rebond`), restoring `good_through`
+from `E_rebond`. (iii) P2B-4's "grace-window `good_standing = false`" wording is imprecise — during
+grace `good_through` is `true`; "slash pending" is a gate-2 timeline condition, not a bad interval.
 
 ### P2B-8 exit
 
 - [x] Q1 per-shard cooldown anchor — derive via BE-key reverse cursor, capture in `bond_event_log`.
 - [x] Q2 record-level `Unbond` anchor — derive (sole consumer confirmed); drop the §4.1 field.
 - [x] Q3 `bond_duration` genesis-freeze posture — pre-seal calibration only.
-- [~] Q4 `Rebond` — precondition (`good_standing==false`, both slash cases), holdings-re-spec, and
-  record-preservation resolved; **one gate-2 sub-question** (grace-window slash-evasion) before the branch.
+- [x] Q4 `Rebond` — precondition (`good_standing==false` = open bad interval, both slash cases),
+  holdings-re-spec, record-preservation, **and** the grace-window slash-evasion — all resolved (slash
+  bit-gated at `H_slash_deadline` + `Rebond` structurally ineligible during grace; `consensus_state.rs:81-112`).
 
-**Two forward doc-amendments (not blockers to the impl start):** the §4.1 `last_served_epoch` field
-drop (gate-4, Q2) and the `Rebond` no-pending-challenge pin (gate-2, Q4). The `Unbond` path — the
-Gate-6 F-D3/F-D4 unblocker — is fully pinned now (Q1/Q2/Q3); `Rebond` waits on the one gate-2 call.
+**Design round CLOSED — all four resolved.** Recurring theme: **derive from the landed source of truth,
+don't add a mutable stored field** — Q1/Q2 derive from the serve-credit table, Q4's `good_standing`
+derives from `bad_intervals`/`good_through`. One forward doc-amendment (not a blocker): drop the §4.1
+`last_served_epoch` field (gate-4, Q2). The impl surface is fully pinned; **`Unbond` → `HoldingsUpdate`
+→ `Rebond`** all clear to build.
+
+**Implementation locus (rule 20 — Rust-first).** All bond-FSM verify/connect logic — including the
+**slash-apply body** (write the open `bad_interval`, `bond_debit` the `bonded_total`, remove the shard)
+that the C++ `process_archival_slash_at_height` currently **stubs** — lands in **`shekyl-archival-retention`
+(Rust)**, driven over the FFI from the C++ connect site (which owns the LMDB write txn). Push the FFI
+boundary as needed; do **not** build this in C++ to rip it out at the Rust cutover. LMDB schema
+(tables/keys) is the standing C++ exception.
 
 ---
 
@@ -662,11 +685,15 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
   (`P_id ‖ BE64(shard) ‖ BE64(epoch)`), captured into the `bond_event_log` drop interval at connect.
   Q3 (`bond_duration` consensus gate) resolved — genesis-frozen; the provisional-numeric window is
   pre-seal calibration only. Q2 resolved — the record-level `last_served_epoch`'s sole consumer is the
-  `Unbond` cooldown, so derive (drop the §4.1 field). Q4 resolved at the wire (precondition
+  `Unbond` cooldown, so derive (drop the §4.1 field). Q4 fully resolved: at the wire (precondition
   `good_standing==false` covers both slash cases; `Rebond` re-specifies holdings on the existing
-  record; earlier partial-slash-via-`HoldingsUpdate` lean withdrawn) with **one gate-2 sub-question**
-  (grace-window slash-evasion) before the `Rebond` branch. The `Unbond` path (F-D3/F-D4 unblocker) is
-  fully pinned. Also (same session): P2B-7 exit reconciled to the §L18 sealed
+  record; earlier partial-slash-via-`HoldingsUpdate` lean withdrawn) **and** the grace-window
+  slash-evasion — traced closed: the slash is bit-gated at `H_slash_deadline` and `good_standing` is
+  `good_through(bad_intervals)` (`consensus_state.rs:81-112`), so no bad interval exists during grace
+  and `Rebond` is structurally ineligible there. Design round CLOSED (all four; theme: derive from the
+  landed source of truth, don't store). Rust-first locus pinned (rule 20): the slash-apply body the C++
+  `process_archival_slash_at_height` stubs lands in `shekyl-archival-retention`, not C++. Also (same
+  session): P2B-7 exit reconciled to the §L18 sealed
   verdict; the "`P` rotation" fossil killed at the P2B-1 root (backing "rotation" is not a mechanism
   — no `backing_outputs` field, consensus rule dropped; pseudonym "rotation" is unlink-relink →
   correlation, T-A1/S-5). Docs-only.
