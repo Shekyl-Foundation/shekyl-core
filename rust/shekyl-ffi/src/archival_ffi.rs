@@ -19,14 +19,15 @@ use shekyl_archival_retention::{
     epoch_close_due_at_height, epoch_close_height, frozen_segment_count, good_through,
     p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height, serve_credit_epoch_ok,
     settlement_epoch_at_height, verify_bond_post_ct_balance, verify_join_market_bond_post,
-    verify_leaf_index, verify_segment_path, ArchivalBondPostVin, ArchivalRewardEmissionVin,
-    ArchivalServeCreditResponse, BadInterval, BandedCurveParams, BondCtBalanceError, BondPostError,
-    BondPostKind, BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair,
-    EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError, EpochCloseBond,
-    EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, KCover, RewardCommit,
-    WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-    ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIMED_EPOCH_ENTRIES,
-    MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
+    verify_leaf_index, verify_segment_path, verify_unbond_bond_post, whole_record_last_served,
+    ArchivalBondPostVin, ArchivalRewardEmissionVin, ArchivalServeCreditResponse, BadInterval,
+    BandedCurveParams, BondCtBalanceError, BondPostError, BondPostKind, BondTerm,
+    ClaimantBondRecord, ClaimedEpochsError, CreditPair, EmissionEpochSource, EmissionVerifyContext,
+    EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
+    HoldingsKind, KCover, RewardCommit, WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+    ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
+    CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
+    SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -99,6 +100,22 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH: u8 = 8;
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS: u8 = 9;
 /// `holdings_kind` is not a known enum value.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND: u8 = 10;
+/// `Unbond` verify: `post_kind` is not `Unbond`.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_UNBOND: u8 = 11;
+/// `Unbond` verify: no bond record exists for `P_canonical_id`.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING: u8 = 12;
+/// `Unbond` verify: record's `bonded_total` is zero (nothing to unbond).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_UNBOND: u8 = 13;
+/// `Unbond` verify: `bond_credit` is non-zero on a debit path.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_CREDIT: u8 = 14;
+/// `Unbond` verify: post-connect `bonded_total_atomic != bond_floor(holdings)`.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_FLOOR_MISMATCH: u8 = 15;
+/// `Unbond` verify: post-connect `bonded_total_atomic != 0` (partial, not full exit).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_UNBOND: u8 = 16;
+/// `Unbond` verify: `bond_debit` != the record's current `bonded_total`.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL: u8 = 17;
+/// `Unbond` verify: the release cooldown has not elapsed.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED: u8 = 18;
 
 /// Context supplied by consensus after bond/registry LMDB reads (gate-2 §5.3 steps 2, 6–7).
 #[repr(C)]
@@ -422,6 +439,14 @@ fn map_bond_post_error(err: BondPostError) -> u8 {
         BondPostError::BondFloorZero => SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_ZERO,
         BondPostError::FloorMismatch => SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH,
         BondPostError::RecordExists => SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS,
+        BondPostError::PostKindNotUnbond => SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_UNBOND,
+        BondPostError::RecordMissing => SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING,
+        BondPostError::NothingToUnbond => SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_UNBOND,
+        BondPostError::UnbondCreditNonzero => SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_CREDIT,
+        BondPostError::UnbondFloorMismatch => SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_FLOOR_MISMATCH,
+        BondPostError::NotFullUnbond => SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_UNBOND,
+        BondPostError::DebitNotFullBalance => SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL,
+        BondPostError::CooldownNotElapsed => SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED,
     }
 }
 
@@ -473,6 +498,87 @@ pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
         bond_debit,
     };
     match verify_join_market_bond_post(&vin, record_exists != 0) {
+        Ok(()) => SHEKYL_ARCHIVAL_BOND_POST_OK,
+        Err(e) => map_bond_post_error(e),
+    }
+}
+
+/// Verify `Unbond` bond-post semantics after C++ hybrid-pubkey and `P_id` checks
+/// (gate-4 §3.5 debit path; `PHASE_2B_FSM_RETOOL.md` P2B-8).
+///
+/// Marshaled facts (C++ owns the LMDB I/O): `record_exists` / `record_bonded_total`
+/// from the bond record; `per_shard_last_served_*` is the array of the **served**
+/// shards' last-served settlement epochs (never-served shards omitted) from the
+/// reverse-cursor seeks over the serve-credit table. The FFI folds them to the
+/// whole-record release-cooldown anchor via [`whole_record_last_served`], keeping
+/// the derivation and the verdict in Rust.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_verify_unbond_bond_post(
+    post_kind: u8,
+    holdings_kind: u8,
+    shard_ids_ptr: *const u64,
+    shard_ids_len: usize,
+    bonded_total_atomic: u64,
+    bond_credit: u64,
+    bond_debit: u64,
+    record_exists: u8,
+    record_bonded_total: u64,
+    per_shard_last_served_ptr: *const u64,
+    per_shard_last_served_len: usize,
+    current_settlement_epoch: u64,
+) -> u8 {
+    if shard_ids_len > 0 && shard_ids_ptr.is_null() {
+        return SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR;
+    }
+    if per_shard_last_served_len > 0 && per_shard_last_served_ptr.is_null() {
+        return SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR;
+    }
+    let holdings_kind = match holdings_kind_from_u8(holdings_kind) {
+        Ok(k) => k,
+        Err(code) => return code,
+    };
+    let post_kind = match BondPostKind::from_u8(post_kind) {
+        Ok(k) => k,
+        Err(_) => return SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_UNBOND,
+    };
+    let shard_ids: Vec<u64> = if shard_ids_len == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(shard_ids_ptr, shard_ids_len) }.to_vec()
+    };
+    // The served shards' last-served epochs → the whole-record anchor (Rust).
+    let per_shard: Vec<Option<u64>> = if per_shard_last_served_len == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(per_shard_last_served_ptr, per_shard_last_served_len) }
+            .iter()
+            .map(|&e| Some(e))
+            .collect()
+    };
+    let last_served_epoch = whole_record_last_served(&per_shard);
+    let record_bonded_total = if record_exists != 0 {
+        Some(record_bonded_total)
+    } else {
+        None
+    };
+    let vin = ArchivalBondPostVin {
+        hybrid_public_key: Vec::new(),
+        p_canonical_id: [0u8; 32],
+        post_kind,
+        holdings: HoldingsDescriptor {
+            kind: holdings_kind,
+            shard_ids,
+        },
+        bonded_total_atomic,
+        bond_credit,
+        bond_debit,
+    };
+    match verify_unbond_bond_post(
+        &vin,
+        record_bonded_total,
+        last_served_epoch,
+        current_settlement_epoch,
+    ) {
         Ok(()) => SHEKYL_ARCHIVAL_BOND_POST_OK,
         Err(e) => map_bond_post_error(e),
     }
@@ -1700,6 +1806,74 @@ mod tests {
         assert_eq!(
             verify(0, 0, Some(&shard), 1, floor, floor, 0, 1),
             SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS
+        );
+    }
+
+    #[test]
+    fn unbond_ffi_folds_cooldown_and_maps_verdicts() {
+        use shekyl_archival_retention::{ARCHIVAL_BOND_FLOOR_ATOMIC, RELEASE_COOLDOWN_EPOCHS};
+
+        let floor = ARCHIVAL_BOND_FLOOR_ATOMIC;
+        let record_bonded = 2 * floor;
+        // Two served shards → the whole-record anchor is the max (100). The FFI
+        // folds this array to the cooldown anchor, so the boundary sits at 102.
+        let served = [80u64, 100u64];
+        let ok_current = 100 + RELEASE_COOLDOWN_EPOCHS;
+
+        // (current, debit, total, holdings_len, record_exists) — post_kind = Unbond,
+        // ShardSetCompact, credit 0; holdings shard is 7 when present.
+        let verify =
+            |current: u64, debit: u64, total: u64, holdings_len: usize, record_exists: u8| unsafe {
+                let shard = 7u64;
+                shekyl_archival_verify_unbond_bond_post(
+                    2, // Unbond
+                    0, // ShardSetCompact
+                    if holdings_len == 0 {
+                        std::ptr::null()
+                    } else {
+                        std::ptr::from_ref(&shard)
+                    },
+                    holdings_len,
+                    total,
+                    0, // credit
+                    debit,
+                    record_exists,
+                    record_bonded,
+                    served.as_ptr(),
+                    served.len(),
+                    current,
+                )
+            };
+
+        // Accept: empty holdings, zero post-total, full debit, cooldown elapsed.
+        assert_eq!(
+            verify(ok_current, record_bonded, 0, 0, 1),
+            SHEKYL_ARCHIVAL_BOND_POST_OK
+        );
+        // One epoch short — proves the anchor fold (max = 100, boundary 102).
+        assert_eq!(
+            verify(ok_current - 1, record_bonded, 0, 0, 1),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED
+        );
+        // Record missing.
+        assert_eq!(
+            verify(ok_current, record_bonded, 0, 0, 0),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING
+        );
+        // Non-empty holdings with zero post-total → floor mismatch.
+        assert_eq!(
+            verify(ok_current, record_bonded, 0, 1, 1),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_FLOOR_MISMATCH
+        );
+        // Consistent post-state but non-zero total → partial, not full exit.
+        assert_eq!(
+            verify(ok_current, floor, floor, 1, 1),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_UNBOND
+        );
+        // Debit != the record's current bonded_total.
+        assert_eq!(
+            verify(ok_current, floor, 0, 0, 1),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL
         );
     }
 
