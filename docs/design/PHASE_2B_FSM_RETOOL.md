@@ -512,7 +512,7 @@ questions only, with historical callers rerouted to the bits. Resolved as part o
   (gate-4 connect paths, FOLLOWUPS V3.0). **Still open (impl):** verified at source 2026-07-12 —
   `bond_post.rs` implements `verify_join_market_bond_post` only; the wire carries all four
   `post_kind`s (`bond_wire.rs`) but verify rejects the other three at genesis (the
-  `PostKindNotJoinMarket` refusal). Rebond/Unbond/HoldingsUpdate verify+connect, the per-shard `E_add+1` rule, and
+  `PostKindNotJoinMarket` refusal). Rebond/Unbond/HoldingsUpdate verify+connect, the per-shard `E_add + 1` rule, and
   `verify_unbond_release` (release-cooldown spendability gate) are all unbuilt.
 - [x] **Age-stratified sim reconciliation (Step 3) — DONE; seal cleared.**
   [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §L18 (R-3 reconciliation, 2026-06-16):

@@ -3945,6 +3945,7 @@ ordered by leverage — the seal call is made cleanly only when the run reports 
    up the abandoned deep tail hold the **least-mobile** capital exactly when re-seed demand spikes.
    That is the pessimistic reading `freeze_harm_co` discipline says to prefer, and it is open. **One
    arm** crossing `c2` × the L17 30% / class-correlated exit closes it.
+
 **Retracted (not a fourth note) — "the cooldown taxes persona rotation."** A draft fourth note
 claimed `RELEASE_COOLDOWN` carries an unpriced privacy cost by taxing persona rotation. **Withdrawn
 on the merits (2026-07-12):** there is no "persona rotation" mechanism — a persona is a keypair +
