@@ -389,6 +389,13 @@ pub(crate) enum BroadcastSubmitError {
     Submit(#[from] SubmitterError),
 }
 
+/// Tor's conventional local SOCKS port. A **placeholder** feeding
+/// [`BroadcastSubmitter::local`]'s pre-bound ① construction: the `Local`
+/// arm never dials SOCKS (it ignores the endpoint entirely), but
+/// construction must stay on the audited posture→submitter choke point
+/// rather than reach around it to a bare submitter.
+const TOR_SOCKS_PLACEHOLDER_PORT: u16 = 9050;
+
 /// The closed-set posture→submitter dispatch
 /// (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §3.1, frozen 2026-07-04): the
 /// broadcast submitter set is closed *by type* — [`BroadcastPosture`] has no
@@ -455,6 +462,29 @@ impl<D: DaemonEngine> BroadcastSubmitter<D> {
                 PTransactionSubmitter::for_persona(persona, socks, base_url)?,
             )),
         }
+    }
+
+    /// The hardwired ① `Local`-posture construction — the operator's own
+    /// loopback node, the privacy default — shared by every seam that
+    /// dispatches through it today (the WI-3 bond broadcast, the CB-3
+    /// claim dispatch, the regtest harness), so the placeholder-endpoint
+    /// idiom exists once instead of as drifting copies. Still the audited
+    /// choke point: this is [`Self::for_posture`] with the ① arm's inputs
+    /// pre-bound. The operator's explicit ② posture choice plugs in via
+    /// the 2c config-source slice, which swaps the call sites' posture,
+    /// not this constructor.
+    pub(crate) fn local(persona: PCanonicalId, local_daemon: Arc<D>) -> Self {
+        Self::for_posture(
+            BroadcastPosture::Local,
+            persona,
+            local_daemon,
+            // Tor's conventional local SOCKS port — a placeholder feeding
+            // the signature: the ① arm never dials SOCKS.
+            &TorSocksEndpoint::loopback(TOR_SOCKS_PLACEHOLDER_PORT),
+        )
+        // The ① arm is infallible (`for_posture` docs): only the ② arm's
+        // SOCKS proxy configuration can be rejected, and ① never builds one.
+        .expect("the Local arm of for_posture is infallible")
     }
 
     /// Submit `P`-bound bytes through the dispatch, enforcing the

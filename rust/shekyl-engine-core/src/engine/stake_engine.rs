@@ -1173,6 +1173,39 @@ impl Message<ActivatePersona> for StakeEngine {
     }
 }
 
+/// Report the public identity of the **held** persona at `p_slot` — a pure
+/// projection, like [`ActivePersona`]: no activation, no rotation, no
+/// generation advance, so every outstanding handle stays valid. The claim
+/// request path (CB-3) uses this to derive the claimant's canonical id from
+/// actor-held state without the lifecycle side effects of
+/// [`ActivatePersona`] — a claim is a read-and-sign operation, and rotating
+/// on it would both invalidate any in-flight operation's handles and wipe a
+/// retired ephemeral persona as a side effect of an unrelated request.
+/// An unheld slot is [`StakeEngineError::LookaheadExhausted`], exactly as
+/// at the mint boundary.
+#[allow(dead_code)] // inert until the RPC stake entry (same retirement as the claim seam)
+pub(crate) struct PersonaIdentityOf {
+    pub p_slot: PSlot,
+}
+
+impl Message<PersonaIdentityOf> for StakeEngine {
+    type Reply = Result<PersonaIdentity, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: PersonaIdentityOf,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        if self.held.contains_key(&msg.p_slot) {
+            Ok(self.identity_of(msg.p_slot))
+        } else {
+            Err(StakeEngineError::LookaheadExhausted {
+                requested: msg.p_slot,
+            })
+        }
+    }
+}
+
 /// Report the public identity of the currently-active persona, or `None` when
 /// idle. Inspection only — never the secret bundle.
 #[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
@@ -1896,6 +1929,12 @@ pub(crate) struct AssembleEmissionClaim {
 /// at the single P-1 site, [`finalize_bond_tx`]), plus the public facts the
 /// caller's reservation and dedup records need. Secrets never cross the
 /// boundary.
+// Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the receipt
+// (`claim_dispatch::EmissionClaimReceipt`) embeds this reply whole, so the
+// lib-target field readers arrive with the RPC stake entry (rule-21, the same
+// retirement condition as the seam's allow); the orchestrator e2e KAT reads
+// every field today.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct AssembledEmissionClaim {
     /// The fully-signed, wire-encoded emission-claim transaction.
@@ -2651,6 +2690,19 @@ impl StakeEngineHandle {
     pub(crate) async fn active_persona(&self) -> Result<Option<PersonaIdentity>, StakeEngineError> {
         self.actor
             .ask(ActivePersona)
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// The public identity of the held persona at `p_slot` — a pure
+    /// projection: no activation, no rotation, no generation advance (see
+    /// [`PersonaIdentityOf`]).
+    pub(crate) async fn persona_identity(
+        &self,
+        p_slot: PSlot,
+    ) -> Result<PersonaIdentity, StakeEngineError> {
+        self.actor
+            .ask(PersonaIdentityOf { p_slot })
             .await
             .map_err(collapse_send_error)
     }
