@@ -1840,7 +1840,8 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
     uint8_t record_exists);
 
 // Unbond bond-post semantic verify (gate-4 §3.5 debit path; PHASE_2B_FSM_RETOOL.md
-// P2B-8). Extends the shared SHEKYL_ARCHIVAL_BOND_POST_* error space above (11-18).
+// P2B-8). Extends the shared SHEKYL_ARCHIVAL_BOND_POST_* error space above: 11-18 are
+// Unbond-semantic; 19 (LEN_OVERFLOW) is the shared slice-marshaling guard.
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_UNBOND    11
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING          12
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_UNBOND       13
