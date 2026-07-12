@@ -300,13 +300,14 @@ impl DesignatedBacking {
     /// `sweep_funding_outputs` on the bond path (GF-4b §5 item 4's grep
     /// shape), reviewed at the PR boundary.
     ///
-    /// A sweep that selects **nothing** refuses structurally
+    /// A sweep whose eligible set is **empty** refuses structurally
     /// ([`ClaimFundingError::ClaimFeeInputsRequired`], regardless of the fee
     /// amount): the loud reward vout consumes the entire mint, so the fee
     /// side must supply the tx's pseudoOuts and its FCMP++ fee-side proof
     /// anchor from at least one separate spendable output. A sweep that
-    /// selects something but falls short of `fee` is a genuine shortfall
-    /// and keeps the [`BondAssemblyError::InsufficientFunding`] taxonomy.
+    /// selects something but falls short of `fee` — including eligible
+    /// records that all carry amount 0 — is a genuine shortfall and keeps
+    /// the [`BondAssemblyError::InsufficientFunding`] taxonomy.
     pub(crate) fn fee_sweep<'a, I>(
         self,
         source: EmissionClaimSource,
@@ -337,12 +338,13 @@ impl DesignatedBacking {
             self.reference_height,
         )
         .map_err(|err| match err {
-            // Zero available means the sweep selected NOTHING — the
-            // structural no-fee-input state, not a shortfall (with
-            // `fee == 0` the shortfall wording would read "insufficient
-            // funding: available 0, required 0", a self-contradiction
-            // misdirecting the remedy).
-            BondAssemblyError::InsufficientFunding { available: 0, .. } => {
+            // The sweep's typed empty-eligible-set refusal IS the structural
+            // no-fee-input state. Deliberately NOT keyed on
+            // `InsufficientFunding { available: 0 }`: zero available also
+            // occurs when eligible records exist but all carry amount 0 (a
+            // representable CT state) — that is a genuine shortfall whose
+            // remedy is funding, and it keeps the shortfall taxonomy below.
+            BondAssemblyError::NoSpendableFunding => {
                 ClaimFundingError::ClaimFeeInputsRequired { fee: fee.to_raw() }
             }
             other => ClaimFundingError::Assembly(other),
@@ -1200,6 +1202,45 @@ mod tests {
                 })
             ),
             "expected InsufficientFunding(400/1000), got {err:?}"
+        );
+
+        // Arm 3: an eligible fee record EXISTS but carries amount 0 (a
+        // representable CT state). This is a shortfall — the persona is
+        // funded-but-valueless, and the remedy is accrual — NOT the
+        // structural no-fee-input refusal, whose "fund the persona" text
+        // would misdirect. Pins the taxonomy the sweep's typed
+        // empty-eligible-set arm exists to keep separate.
+        let with_zero = vec![
+            record(1, 90, 500, MintLineageOutput::BondPostChange),
+            record(2, 150, 0, MintLineageOutput::ExternalTransfer),
+        ];
+        let err = BackingSet::from_spendable(
+            &with_zero,
+            PSlot::from_raw(0),
+            BlockHeight::from_raw(tip),
+            last_sweep_height,
+        )
+        .designate_backing()
+        .expect("eligible record exists")
+        .fee_sweep(
+            source_at_tip(tip),
+            &SpentRecordsDurablyPruned::for_test(),
+            &with_zero,
+            PSlot::from_raw(0),
+            &Default::default(),
+            AtomicUnits::from_raw(1_000),
+        )
+        .err()
+        .expect("zero-value fee funding must refuse as a shortfall");
+        assert!(
+            matches!(
+                err,
+                ClaimFundingError::Assembly(BondAssemblyError::InsufficientFunding {
+                    available: 0,
+                    required: 1_000,
+                })
+            ),
+            "a present-but-zero-value selection is a shortfall, got {err:?}"
         );
     }
 

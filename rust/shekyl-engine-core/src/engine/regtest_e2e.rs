@@ -740,18 +740,32 @@ async fn mainnet_wallet(
     rpc_port: u16,
     seed_byte: u8,
 ) -> (super::Engine<super::SoloSigner>, tempfile::TempDir, String) {
+    let seed = [seed_byte; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let (wallet, tmp) = create_wallet(rpc_port, &seed, b"track2").await;
+    let address = wallet.primary_address().encode().expect("encode address");
+    (wallet, tmp, address)
+}
+
+/// The shared create step behind [`mainnet_wallet`] and [`staker_wallet`]:
+/// tempdir, credentials, wallet RPC against the daemon port, and
+/// `Engine::create` over [`mainnet_params`]. Callers layer their own
+/// follow-ons (address derivation; the staker's persist → close → reopen).
+/// The wallet base path is `tmp.path().join("wallet")`.
+async fn create_wallet(
+    rpc_port: u16,
+    seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    password: &'static [u8],
+) -> (super::Engine<super::SoloSigner>, tempfile::TempDir) {
     let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{rpc_port}"))
         .await
         .expect("wallet rpc");
     let tmp = tempfile::tempdir().expect("wallet tempdir");
     let wallet_path = tmp.path().join("wallet");
-    let seed = [seed_byte; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
-    let creds = super::lifecycle::Credentials::password_only(b"track2");
-    let params = mainnet_params(&wallet_path, &creds, &seed);
+    let creds = super::lifecycle::Credentials::password_only(password);
+    let params = mainnet_params(&wallet_path, &creds, seed);
     let wallet = super::Engine::<super::SoloSigner>::create(params, super::DaemonClient::new(rpc))
         .expect("create wallet");
-    let address = wallet.primary_address().encode().expect("encode address");
-    (wallet, tmp, address)
+    (wallet, tmp)
 }
 
 /// Depth-3+ FCMP++ verify (CT-5 / #162 reopening trigger). The partial-branch-chunk
@@ -1260,16 +1274,9 @@ async fn staker_wallet(
     tempfile::TempDir,
     String,
 ) {
-    let tmp = tempfile::tempdir().expect("wallet tempdir");
-    let base_path = tmp.path().join("wallet");
     let creds = super::lifecycle::Credentials::password_only(b"pr4-staker");
-    let params = mainnet_params(&base_path, &creds, seed);
-
-    let rpc = SimpleRequestRpc::new(format!("http://127.0.0.1:{rpc_port}"))
-        .await
-        .expect("wallet rpc");
-    let engine = super::Engine::<super::SoloSigner>::create(params, super::DaemonClient::new(rpc))
-        .expect("create staker wallet");
+    let (engine, tmp) = create_wallet(rpc_port, seed, b"pr4-staker").await;
+    let base_path = tmp.path().join("wallet");
     engine
         .persist_bond_record(slot)
         .expect("persist bond record");
@@ -1324,6 +1331,7 @@ fn persona_address(seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES], sl
 /// `tip − horizon`. Panics if no satisfying seal appears within the deadline.
 async fn pscan_until(
     arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    pscan_seal: &std::path::Path,
     what: &str,
     pred: impl Fn(&shekyl_engine_state::pscan_state::PScanState) -> bool,
 ) -> shekyl_engine_state::pscan_state::PScanState {
@@ -1347,8 +1355,26 @@ async fn pscan_until(
 
     let deadline = Instant::now() + Duration::from_secs(300);
     let mut last_report = Instant::now();
+    let mut last_seal_mtime: Option<std::time::SystemTime> = None;
     loop {
         tokio::time::sleep(Duration::from_millis(200)).await;
+        // Cheap change gate: the seal lands by atomic rename, so a changed
+        // mtime is exactly "a new batch sealed" — only then pay the full
+        // decrypt + decode of the sealed state (up to 1 500 polls fit in
+        // the deadline; re-loading an unchanged seal every 200 ms is pure
+        // waste). An absent/unreadable file falls through to the loader,
+        // which reports the no-seal-yet state.
+        let seal_mtime = std::fs::metadata(pscan_seal)
+            .ok()
+            .and_then(|m| m.modified().ok());
+        if seal_mtime.is_some() && seal_mtime == last_seal_mtime {
+            assert!(
+                Instant::now() < deadline,
+                "pscan did not observe {what} within the deadline"
+            );
+            continue;
+        }
+        last_seal_mtime = seal_mtime;
         if let Some(state) = load_pscan_state_for_engine(arc.clone())
             .await
             .expect("load pscan state")
@@ -1413,13 +1439,10 @@ async fn pscan_until(
 async fn e2e_staker_bond_post_reaches_the_daemon_submit_gap() {
     use super::bond_assembly::{BondAssemblyError, SpentRecordsDurablyPruned};
     use super::error::TerminalErrorKind;
-    use super::posture::BroadcastPosture;
-    use super::pscan::start::TOR_SOCKS_PLACEHOLDER_PORT;
     use super::stake_engine::{PSlot, StakeEngineError};
     use super::traits::DaemonEngine;
     use super::transaction_submitter::{BroadcastSubmitError, BroadcastSubmitter, SubmitterError};
     use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind};
-    use shekyl_p_transport::TorSocksEndpoint;
     use shekyl_units::AtomicUnits;
 
     const SLOT: u32 = 0;
@@ -1497,7 +1520,8 @@ async fn e2e_staker_bond_post_reaches_the_daemon_submit_gap() {
         .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &principal)
         .await;
     refresh(&arc).await;
-    let state = pscan_until(&arc, "the persona funding output", |s| {
+    let pscan_seal = shekyl_engine_file::paths::pscan_state_path_from(&_tmp.path().join("wallet"));
+    let state = pscan_until(&arc, &pscan_seal, "the persona funding output", |s| {
         s.funding_outputs().iter().any(|r| r.p_slot == slot)
     })
     .await;
@@ -1518,10 +1542,9 @@ async fn e2e_staker_bond_post_reaches_the_daemon_submit_gap() {
         let (handle, ticket) = {
             let g = arc.read().await;
             let stake = g.stake_handle().expect("staker wallet has a stake engine");
-            // Activation advances the handle generation, so the assembly
-            // handle is minted after it (claim_dispatch's ordering).
-            let act = stake.mint_handle(slot).await.expect("mint activation");
-            stake.activate_persona(act).await.expect("activate persona");
+            // Assembly authorizes on the handle alone (held-set membership
+            // at the current generation) — no activation: rotation is a
+            // persona-lifecycle operation, not an assembly precondition.
             let handle = stake.mint_handle(slot).await.expect("mint handle");
             // Idempotent re-persist: a fresh ticket for this attempt.
             let ticket = g.persist_bond_record(slot).expect("persist bond record");
@@ -1552,17 +1575,20 @@ async fn e2e_staker_bond_post_reaches_the_daemon_submit_gap() {
                 daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
                 refresh(&arc).await;
             }
+            // The same lag one notch earlier: the funding output exists but
+            // nothing has matured past the reference height yet, so the
+            // eligible set is still empty.
+            Err(StakeEngineError::Assembly(BondAssemblyError::NoSpendableFunding)) => {
+                eprintln!("persona funding set empty at the reference height; mining more");
+                daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
+                refresh(&arc).await;
+            }
             // The same reference lag one stage later: the funding output
             // cleared the sweep's spendability filter but is not yet drained
             // into the REFERENCE curve tree the membership path is fetched
-            // against. `Build.detail` is a rendered daemon-client error (no
-            // typed variant crosses the assembly boundary), so the match is
-            // textual — of the daemon's path refusals only this one is
-            // mine-more-retryable, and only it carries this name.
-            Err(StakeEngineError::Assembly(BondAssemblyError::Build { stage, detail }))
-                if detail.contains("OutputNotDrained") =>
-            {
-                eprintln!("funding output not yet in the reference tree ({stage}); mining more");
+            // against — the typed wait-and-retry arm.
+            Err(StakeEngineError::Assembly(BondAssemblyError::OutputNotYetDrained { gindex })) => {
+                eprintln!("funding output {gindex} not yet in the reference tree; mining more");
                 daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
                 refresh(&arc).await;
             }
@@ -1581,13 +1607,8 @@ async fn e2e_staker_bond_post_reaches_the_daemon_submit_gap() {
     // choke point (see the module docs for why WI-3's block-timed driver is
     // deliberately not exercised here).
     let daemon_client = { arc.read().await.daemon().clone() };
-    let submitter = BroadcastSubmitter::for_posture(
-        BroadcastPosture::Local,
-        *assembled.bound_tx.persona(),
-        Arc::new(daemon_client),
-        &TorSocksEndpoint::loopback(TOR_SOCKS_PLACEHOLDER_PORT),
-    )
-    .expect("the Local arm of for_posture is infallible");
+    let submitter =
+        BroadcastSubmitter::local(*assembled.bound_tx.persona(), Arc::new(daemon_client));
     let verdict = submitter.submit_bound(assembled.bound_tx.clone()).await;
 
     // The daemon-gap tripwire (module docs above): the wallet-built bond post

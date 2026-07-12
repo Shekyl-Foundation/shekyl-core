@@ -86,7 +86,18 @@ impl SimpleRequestRpc {
         mut url: String,
         request_timeout: Duration,
     ) -> Result<SimpleRequestRpc, RpcError> {
-        let authentication = if url.contains('@') {
+        // Credentials live only in the URL's AUTHORITY
+        // (`scheme://user:pass@host:port/...`); an '@' later in the URL
+        // (path or query, e.g. `/route?tag=user@host`) is ordinary content.
+        // Splitting on a whole-URL '@' would misparse such a URL as
+        // credentials and issue a digest-auth preflight against garbage.
+        let after_scheme = url.find("://").map_or(0, |i| i + 3);
+        let authority_end = url[after_scheme..]
+            .find('/')
+            .map_or(url.len(), |i| after_scheme + i);
+        let at_in_authority = url[after_scheme..authority_end].contains('@');
+
+        let authentication = if at_in_authority {
             // Parse out the username and password
             let url_clone = Zeroizing::new(url);
             let split_url = url_clone.split('@').collect::<Vec<_>>();

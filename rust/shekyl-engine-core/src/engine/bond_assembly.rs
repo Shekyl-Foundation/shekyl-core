@@ -154,6 +154,20 @@ pub(crate) enum BondAssemblyError {
         required: u64,
     },
 
+    /// The persona's eligible funding set is **empty** at the sweep's
+    /// reference height: nothing discovered, or everything is immature or
+    /// reserved by in-flight posts. Structurally distinct from
+    /// [`Self::InsufficientFunding`] (records exist but sum short —
+    /// including all-zero-amount records, a representable CT state): the
+    /// remedies differ, and the claim path maps only *this* arm to its
+    /// structural no-fee-input refusal.
+    #[error(
+        "no spendable P-side funding outputs at the reference height: none discovered, \
+         or all are immature or reserved by in-flight posts; fund the persona or wait \
+         for maturity/confirmation"
+    )]
+    NoSpendableFunding,
+
     /// A live pending post already exists for this persona. JoinMarket-only
     /// at genesis: one live post per persona (§3.5); the caller waits for the
     /// pending post to confirm or fail before re-assembling.
@@ -168,6 +182,23 @@ pub(crate) enum BondAssemblyError {
     ReferenceResyncing {
         /// Operator-facing detail naming which arm of the anchoring gate fired.
         detail: &'static str,
+    },
+
+    /// A swept record cleared the spendability filter but has no drained
+    /// leaf in the REFERENCE tree yet (the reference lags tip by
+    /// `REF_ANCHOR_AGE`, so a freshly-matured output can be spendable at
+    /// tip and absent at the reference) — the one path-assembly refusal
+    /// that is wait-and-retry, not a defect. Typed so retry policy (the
+    /// regtest harness today, production retry logic later) matches on the
+    /// variant instead of substring-scanning a rendered
+    /// `ClientError::OutputNotDrained`.
+    #[error(
+        "funding output (gindex {gindex}) is not yet drained into the reference tree; \
+         wait for the tree to catch up and retry"
+    )]
+    OutputNotYetDrained {
+        /// The global output index the reference tree has no leaf for.
+        gindex: u64,
     },
 
     /// Invariant A-1 (§3.3 step 4, fail closed): the signed vin's
@@ -352,6 +383,17 @@ where
     // gindexes, so the order is total and deterministic.
     eligible.sort_by_key(|r| (r.height, r.gindex));
 
+    // An empty eligible set refuses structurally BEFORE any arithmetic —
+    // never as a `0 < required` shortfall, which would conflate "nothing to
+    // sweep" with "records exist but sum short" (the all-zero-amount case
+    // makes the two genuinely different states with different remedies).
+    // This is also what makes `FundingSelection` non-empty *by
+    // construction*, so the downstream `assemble_tx` / `paths[0]` path can
+    // never index an empty vec.
+    if eligible.is_empty() {
+        return Err(BondAssemblyError::NoSpendableFunding);
+    }
+
     // Sweep: the entire eligible set, no early break — a subset is
     // inexpressible from here down. One pass sums and materializes the
     // records together, so the reported `total` cannot drift from the
@@ -367,19 +409,6 @@ where
     }
 
     if total < required {
-        return Err(BondAssemblyError::InsufficientFunding {
-            available: total.to_raw(),
-            required: required.to_raw(),
-        });
-    }
-
-    // A sweep that consumes nothing cannot fund a post. Only reachable with
-    // `required == 0` (a zero bond floor + zero fee — a degenerate holdings
-    // descriptor); a positive `required` over an empty eligible set already
-    // tripped the `total < required` refusal above. Refusing here is what
-    // makes `FundingSelection` non-empty *by construction*, so the downstream
-    // `assemble_tx` / `paths[0]` path can never index an empty vec.
-    if records.is_empty() {
         return Err(BondAssemblyError::InsufficientFunding {
             available: total.to_raw(),
             required: required.to_raw(),

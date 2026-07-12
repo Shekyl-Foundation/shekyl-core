@@ -92,14 +92,14 @@ const TXS_PER_REQUEST: usize = 100;
 ///   also unlock the full context-free validator (the prunable-coupled
 ///   checks).
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum TxBodyForm {
+pub(crate) enum TxBodyForm {
     Pruned,
     Full,
 }
 
-/// Default body for `DaemonEngine::fetch_scannable_block`: fetch the block at
-/// `number`, its pruned non-miner transactions, and the first global output
-/// index, parsing everything through [`shekyl_wire`].
+/// Convenience wrapper over [`fetch_scannable_block_with_form`] for callers
+/// outside the `DaemonEngine` trait (the `DaemonClient` inherent method):
+/// the refresh-path pruned form.
 pub(crate) async fn default_fetch_scannable_block<R: Rpc>(
     rpc: &R,
     number: usize,
@@ -107,11 +107,10 @@ pub(crate) async fn default_fetch_scannable_block<R: Rpc>(
     fetch_scannable_block_with_form(rpc, number, TxBodyForm::Pruned).await
 }
 
-/// Default body for `DaemonEngine::fetch_scannable_block_full`: as
-/// [`default_fetch_scannable_block`], but fetching **full** (unpruned)
-/// non-miner bodies so each transaction re-hashes to its committed hash — the
-/// form the P-scan's SP-6 per-body verification consumes (see
-/// [`TxBodyForm::Full`]).
+/// As [`default_fetch_scannable_block`] with **full** (unpruned) non-miner
+/// bodies — the form the P-scan's SP-6 per-body verification consumes (see
+/// [`TxBodyForm::Full`]). Used where a bare `Rpc` (not a `DaemonEngine`)
+/// carries the fetch (the remote-posture `PBlockSource`).
 pub(crate) async fn default_fetch_scannable_block_full<R: Rpc>(
     rpc: &R,
     number: usize,
@@ -119,9 +118,10 @@ pub(crate) async fn default_fetch_scannable_block_full<R: Rpc>(
     fetch_scannable_block_with_form(rpc, number, TxBodyForm::Full).await
 }
 
-/// Shared fetch body behind the two public entry points: one `get_block`, the
-/// non-miner bodies in `form`, and the first global output index.
-async fn fetch_scannable_block_with_form<R: Rpc>(
+/// The single fetch body — and `DaemonEngine::fetch_scannable_block_in_form`'s
+/// default: one `get_block`, the non-miner bodies in `form`, and the first
+/// global output index.
+pub(crate) async fn fetch_scannable_block_with_form<R: Rpc>(
     rpc: &R,
     number: usize,
     form: TxBodyForm,
@@ -231,7 +231,25 @@ fn parse_tx_blob(
         TxBodyForm::Pruned => tx
             .validate_context_free_pruned()
             .map_err(|_| invalid_tx_error(tx_hash_hex))?,
-        TxBodyForm::Full => tx.validate().map_err(|_| invalid_tx_error(tx_hash_hex))?,
+        TxBodyForm::Full => tx.validate().map_err(|_| {
+            // A body that is a perfectly canonical PRUNED spend — prunable
+            // section absent but everything else valid — is not a hostile
+            // daemon inventing garbage: it is what a **storage-pruned**
+            // daemon (a supported mode) serves for every historical spend.
+            // The P-scan cannot run against one (SP-6's exhaustiveness gate
+            // re-hashes full bodies), so name the cause and the remedy
+            // instead of a generic invalid-transaction verdict that reads
+            // as "your trusted node is serving corrupt data" (rule 82).
+            if is_storage_pruned_spend(&tx) {
+                RpcError::InvalidNode(format!(
+                    "the daemon served a storage-pruned body for a full-body request \
+                     (tx {tx_hash_hex}): the persona scan requires an UNPRUNED node — \
+                     point the wallet at a daemon running without --prune-blockchain"
+                ))
+            } else {
+                invalid_tx_error(tx_hash_hex)
+            }
+        })?,
     }
     // `get_transactions` returns only NON-miner txs — the coinbase is embedded in the
     // block blob and parsed there. A coinbase-shaped tx in this response is the daemon
@@ -241,6 +259,17 @@ fn parse_tx_blob(
         return Err(invalid_tx_error(tx_hash_hex));
     }
     Ok(tx)
+}
+
+/// Whether a full-form body that failed the complete validator is exactly a
+/// **storage-pruned spend**: the prunable section is absent but the body is
+/// otherwise a canonical pruned transaction (it passes the pruned-safe
+/// context-free subset). This is the shape a storage-pruned daemon serves
+/// for every historical spend — the diagnosable operator state, as opposed
+/// to a genuinely malformed body.
+fn is_storage_pruned_spend(tx: &Transaction) -> bool {
+    matches!(&tx.ct, shekyl_wire::Ct::Fcmp { prunable: None, .. })
+        && tx.validate_context_free_pruned().is_ok()
 }
 
 /// Build the error for a tx-body parse failure, preferring the daemon-named
@@ -799,19 +828,49 @@ mod tests {
     }
 
     #[test]
-    fn parse_full_tx_rejects_a_prunable_stripped_spend() {
-        // The hostile-fallback tripwire: a daemon answering a full-body request
-        // with a storage-pruned spend (key-image inputs, prunable dropped) is
-        // rejected by the complete validator at the ingestion boundary — it
-        // cannot survive to a bogus null-prunable hash downstream.
+    fn parse_full_tx_rejects_a_prunable_stripped_spend_naming_the_pruned_daemon() {
+        // The fallback tripwire: a daemon answering a full-body request with
+        // a storage-pruned spend (key-image inputs, prunable dropped) is
+        // rejected at the ingestion boundary — it cannot survive to a bogus
+        // null-prunable hash downstream. And because this exact shape is
+        // what a storage-pruned daemon (a supported mode) serves for every
+        // historical spend, the refusal must NAME that cause and its remedy
+        // (rule 82) — a generic "invalid transaction" would tell the
+        // operator their trusted node is corrupt, with no path out.
         let stripped_hex = pruned_tx_hex();
-        assert!(matches!(
-            parse_full_tx(&stripped_hex, ""),
-            Err(RpcError::InvalidNode(_))
-        ));
+        match parse_full_tx(&stripped_hex, "") {
+            Err(RpcError::InvalidNode(msg)) => {
+                assert!(
+                    msg.contains("storage-pruned") && msg.contains("UNPRUNED"),
+                    "the refusal must name the pruned-daemon cause and remedy: {msg}"
+                );
+            }
+            other => panic!("expected a cause-naming InvalidNode, got {other:?}"),
+        }
         // The same blob is fine on the pruned path — the split is the form, not
         // the tx.
         parse_pruned_tx(&stripped_hex, "").expect("pruned form accepts the stripped spend");
+
+        // A body that is malformed BEYOND the missing prunable section (a
+        // single-output spend violates the anti-deanon minimum) keeps the
+        // generic verdict — the pruned-daemon message must not blanket
+        // genuinely invalid bodies.
+        let mut malformed = pruned_spend_tx(0);
+        malformed.prefix.outputs.truncate(1);
+        if let Ct::Fcmp { base, .. } = &mut malformed.ct {
+            base.enc_amounts.truncate(1);
+            base.enc_labels.truncate(1);
+            base.commitments.truncate(1);
+        }
+        match parse_full_tx(&hex::encode(malformed.serialize()), "") {
+            Err(RpcError::InvalidNode(msg)) => {
+                assert!(
+                    !msg.contains("storage-pruned"),
+                    "a malformed body must not draw the pruned-daemon verdict: {msg}"
+                );
+            }
+            other => panic!("expected generic InvalidNode, got {other:?}"),
+        }
     }
 
     #[test]

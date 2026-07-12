@@ -176,20 +176,31 @@ impl LocalNodeRpc {
                 "local-posture transport requires an http:// loopback URL".to_string(),
             ));
         };
+        let authority = host_port.split_once('/').map_or(host_port, |(hp, _)| hp);
         // Refuse credentials before any host parse so a rejected URL's
-        // error message can never render a password.
-        if host_port.contains('@') {
+        // error message can never render a password. Scoped to the
+        // AUTHORITY: an '@' in the path or query is ordinary URL content
+        // (e.g. `?tag=user@host`), and refusing on it would assert
+        // credentials that are not there.
+        if authority.contains('@') {
             return Err(RpcError::ConnectionError(
                 "local-posture transport refuses in-URL credentials".to_string(),
             ));
         }
-        let authority = host_port.split_once('/').map_or(host_port, |(hp, _)| hp);
         let host = if let Some(bracketed) = authority.strip_prefix('[') {
             bracketed.split_once(']').map_or("", |(h, _)| h)
         } else {
             authority.rsplit_once(':').map_or(authority, |(h, _)| h)
         };
-        if !matches!(host, "127.0.0.1" | "localhost" | "::1") {
+        // The loopback pin proper: parse to an address and use the standard
+        // classifier (the `conn_limit.rs` idiom) — a literal allowlist would
+        // wrongly refuse legitimate loopback forms like `127.0.0.2`.
+        // `localhost` is the one accepted non-numeric form.
+        let is_loopback = host == "localhost"
+            || host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback());
+        if !is_loopback {
             return Err(RpcError::ConnectionError(format!(
                 "local-posture transport refuses non-loopback host {host:?} \
                  (the shared-network-identity argument only holds on the \
@@ -295,6 +306,11 @@ mod tests {
             "http://localhost:48081",
             "http://[::1]:48081",
             "http://127.0.0.1:48081/json_rpc",
+            // Loopback is the /8, not one literal address.
+            "http://127.0.0.2:48081",
+            // '@' in the query is URL content, not credentials — the
+            // credential refusal is scoped to the authority.
+            "http://127.0.0.1:48081/json_rpc?tag=user@host",
         ] {
             LocalNodeRpc::new(ok.to_string(), Duration::from_secs(1))
                 .await
