@@ -143,7 +143,9 @@ FCMP++ outputs only. **Bond collateral is a consensus balance**, not a spendable
 clean exit requires **`BondPostKind::Unbond`**, not drain.
 
 **Release refund (gate-6):** Unbond creates a **P-attributed** refund output whose amount
-equals public `bond_debit == bonded_total == bond_floor(holdings)`. FCMP++ tree membership
+equals public `bond_debit == bonded_total == bond_floor(holdings_current)` — the record's **current**
+holdings being fully released (distinct from the vin's post-connect `holdings` field, which is empty on
+`Unbond`; §3.5 debit-path note). FCMP++ tree membership
 is value-agnostic (output mixes normally); gate-6 §2.4 decorrelated-drain discipline applies
 to this output like reward outputs.
 
@@ -234,8 +236,8 @@ ArchivalBondPostVin {
   bond_spend_pk:         Option<HybridPublicKey>, // present iff post_kind == JoinMarket (commits the debit authorizer, §4.1)
   p_canonical_id:        [u8; 32],             // hint; verifier recomputes (emission §6.1)
   post_kind:             BondPostKind,         // §3.5
-  holdings:              HoldingsDescriptor,
-  bonded_total_atomic:   u64,                  // must equal bond_floor(holdings) post-connect
+  holdings:              HoldingsDescriptor,   // POST-connect state (empty for full Unbond; §3.5 debit-path note)
+  bonded_total_atomic:   u64,                  // == bond_floor(holdings): the post-connect record total (0 for full Unbond)
   bond_credit:           u64,                  // cleartext; 0 unless credit path (§3.2 table)
   bond_debit:            u64,                  // cleartext; 0 unless debit path (§3.2 table)
   pqc_auths:             [...],                // bond-vin auth: identity key on credit, bond_spend_pk on debit (gate-6 §9.6)
@@ -360,7 +362,8 @@ reversion clause).
 2. `post_kind` preconditions — join / re-bond / unbond / holdings-update paths.
 3. **Term rigidity** — `bond_credit` / `bond_debit` match §3.2 allowed-terms table (one
    direction only).
-4. **Floor equality** — post-connect `bonded_total_atomic == bond_floor(holdings)`.
+4. **Floor equality** — `bonded_total_atomic == bond_floor(holdings)` on the vin's **post-connect**
+   state (holdings is the *resulting* set — empty for full `Unbond`; see the debit-path note below).
 5. **Bond-vin authorization (GF-1, gate-6 §9.6)** — the `pqc_auths[]` entry aligned with the
    bond vin verifies against the **dedicated bond-spend key on debit paths** and the **identity
    key on credit paths**:
@@ -373,6 +376,27 @@ reversion clause).
 6. **FCMP++ balance** — `Σ in = Σ out + fee + bond_credit − bond_debit`; **no emission mint**.
    When `bulletproofs_plus` is non-empty, layout must be canonical (exactly one aggregated
    proof, `1 ≤ V.size() ≤ BULLETPROOF_PLUS_MAX_OUTPUTS`); credit-only join may omit proofs.
+
+**Debit-path vin semantics (`Unbond` / `HoldingsUpdate` drop) — RATIFIED (2026-07-12, maintainer, P2B-8).**
+The vin's `holdings` and `bonded_total_atomic` are the **post-connect** state, so step 4's floor
+equality reads uniformly across every path — `vin.bonded_total_atomic == bond_floor(vin.holdings)` is
+the *resulting* record. (The §3.4 field comment and the §4.3 refund line are now disambiguated to
+match — `holdings` there means the record's *current* set — so this note is a consolidated summary,
+not an ambiguity patch.) Consequences:
+
+- **`HoldingsUpdate` drop** carries the **reduced** holdings; the connect diffs it against the record's
+  current set to identify the dropped shard (which is why the vin must carry the post-state, not the
+  current set — there is no separate drop-shard field).
+- **Full `Unbond`** carries **empty holdings** (`bond_floor(∅) = 0`, so `bonded_total_atomic = 0`). The
+  `ShardSetCompactEmpty` rejection is a **credit / identity-path** check (`JoinMarket` / `Rebond` /
+  add / drop-with-remaining hold ≥ 1 shard), **not** a full-`Unbond` check.
+- **Debit amount:** `bond_debit == record.bonded_total(current) − vin.bonded_total_atomic` (= the full
+  `record.bonded_total` for `Unbond`). §4.3's `bond_debit == bonded_total == bond_floor(holdings)`
+  refers to the **record's current** holdings (the refund amount), *not* the vin's post-state field —
+  so there is no contradiction with step 4.
+
+Rust-native verify: `shekyl-archival-retention::bond_post` (rule 20). **Ratified by the maintainer;**
+the current-set-echo alternative (which would need a separate drop-shard field) is declined.
 
 On block connect for **JoinMarket:** create `ArchivalBondRecord` (§4.1); credit
 `total_bonded_atomic`.

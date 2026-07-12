@@ -1815,7 +1815,10 @@ uint8_t shekyl_verify_ct_balance(
     size_t num_out_masks,
     uint64_t txn_fee);
 
-// JoinMarket bond-post semantic verify (gate-4 §3.5; hybrid pubkey + P_id hint stay C++)
+// JoinMarket bond-post semantic verify (gate-4 §3.5; hybrid pubkey + P_id hint stay C++).
+// Codes 1 (NULL_PTR) and 19 (LEN_OVERFLOW) are shared slice-marshaling guards from the
+// common vin marshaler, so BOTH bond-post entry points can return them: JoinMarket returns
+// 0-10 or 19; Unbond additionally returns 11-18 and 20.
 #define SHEKYL_ARCHIVAL_BOND_POST_OK                           0
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR                 1
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND                2
@@ -1838,6 +1841,40 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
     uint64_t bond_credit,
     uint64_t bond_debit,
     uint8_t record_exists);
+
+// Unbond bond-post semantic verify (gate-4 §3.5 debit path; PHASE_2B_FSM_RETOOL.md
+// P2B-8). Extends the shared SHEKYL_ARCHIVAL_BOND_POST_* error space above: 11-18 and
+// 20 are Unbond-semantic; 19 (LEN_OVERFLOW) is a shared slice-marshaling guard returned
+// by both entry points (see the JoinMarket block above).
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_UNBOND    11
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING          12
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_UNBOND       13
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_CREDIT           14
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_FLOOR_MISMATCH   15
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_UNBOND         16
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL          17
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED    18
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW            19
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_HOLDINGS_NOT_EMPTY 20
+
+/// Unbond bond-post verify. `record_exists`/`record_bonded_total` come from the LMDB
+/// bond record; `per_shard_last_served_ptr` is the array of the served shards'
+/// last-served settlement epochs (never-served shards omitted), folded Rust-side to the
+/// whole-record release-cooldown anchor. `current_settlement_epoch` is the epoch the
+/// Unbond lands in.
+uint8_t shekyl_archival_verify_unbond_bond_post(
+    uint8_t post_kind,
+    uint8_t holdings_kind,
+    const uint64_t* shard_ids_ptr,
+    size_t shard_ids_len,
+    uint64_t bonded_total_atomic,
+    uint64_t bond_credit,
+    uint64_t bond_debit,
+    uint8_t record_exists,
+    uint64_t record_bonded_total,
+    const uint64_t* per_shard_last_served_ptr,
+    size_t per_shard_last_served_len,
+    uint64_t current_settlement_epoch);
 
 /// Returns 1 when settlement_epoch >= join_settlement_epoch + 1 (E_first lower bound).
 uint8_t shekyl_archival_serve_credit_epoch_ok(

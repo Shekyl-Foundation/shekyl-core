@@ -42,6 +42,7 @@ pub mod hash;
 pub mod id;
 pub mod k_cover;
 pub mod path;
+pub mod release_cooldown;
 pub mod reward_arithmetic;
 pub mod segment_freeze;
 pub mod serve_credit_decisions;
@@ -52,9 +53,9 @@ pub use bond_ct_balance::{verify_bond_post_ct_balance, BondCtBalanceError, BondT
 pub use bond_floor::{
     bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, ARCHIVAL_REORG_DEPTH_BLOCKS,
     ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-    ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, MAX_CLAIM_AGE_W,
+    ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS,
 };
-pub use bond_post::{verify_join_market_bond_post, BondPostError};
+pub use bond_post::{verify_join_market_bond_post, verify_unbond_bond_post, BondPostError};
 pub use bond_wire::{
     encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,
     HoldingsKind, BOND_POST_SIG_CUSTOMIZATION, VIN_TYPE_ARCHIVAL_BOND_POST,
@@ -106,6 +107,7 @@ pub use error::VerifyError;
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
 pub use k_cover::{KCover, K_COVER, K_COVER_PROVISIONAL};
 pub use path::{verify_leaf_index, verify_segment_path, SegmentPathOpening};
+pub use release_cooldown::{release_cooldown_elapsed, whole_record_last_served};
 pub use reward_arithmetic::{
     curve_milli, g_age_milli, mul_div_floor, reward_share_floor, scarcity_milli, BandedCurveParams,
     WORK_MILLI_SCALE,
