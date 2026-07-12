@@ -157,10 +157,12 @@ rct::rctSig make_balanced_emission_rv()
 // carries a prime-subgroup key image (check_tx_inputs_keyimages_domain),
 // the vout targets are decodable curve points (check_outs_valid), and
 // pqc_auths is sized to vin (the dispatch emission branch checks COUNT
-// only; auth content is check_tx_inputs scope). Everything derived is
-// DETERMINISTIC (fixed scalars, not skGen) so two calls with different
-// backing bytes produce txs differing ONLY in `canonical_bytes` — the
-// delta the blob-boundary arm depends on.
+// only; auth content is check_tx_inputs scope). Everything derived IN
+// THIS STAGE is deterministic (fixed d2h scalars, not skGen), so two
+// calls sharing the SAME `rv` — the blob-boundary tests build one `rv`
+// and reuse it — produce txs differing ONLY in `canonical_bytes`, the
+// delta that arm depends on. (`rv` itself is skGen-blinded; determinism
+// is this function's, per shared `rv`, not the fixture set's.)
 transaction make_emission_tx(const rct::rctSig& rv, const rct::key& backing_pseudo_out)
 {
   transaction tx{};
