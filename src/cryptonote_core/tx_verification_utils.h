@@ -45,7 +45,7 @@ uint64_t get_transaction_weight_limit(uint8_t hf_version);
 /**
  * @brief Verify the semantics of a group of FCMP++ signatures as a batch (if applicable)
  *
- * Coinbase txs or other transaction with an RCT type of RCTTypeNull will fail to verify.
+ * Coinbase txs or other transactions with a CT type of CTTypeNull will fail to verify.
  *
  * @param rvv list of signatures to verify
  * @return true if all signatures verified semantics successfully, false otherwise

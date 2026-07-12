@@ -79,7 +79,7 @@ isProject: false
 
 - **Wallet file format:** v1 split-file envelope (`.wallet.keys` + `.wallet`) per [docs/WALLET_FILE_FORMAT_V1.md](../WALLET_FILE_FORMAT_V1.md). Stance Minimum-Leak AAD, two-level KEK (DK → file_kek → wrap_key), capability-discriminated region 1, Poly1305 cross-file binding via `state_tag_of_seed_block`. Region 1 write-once; region 2 free to rewrite. Already landed in `rust/shekyl-crypto-pq/src/wallet_envelope.rs` + `rust/shekyl-engine-file/`.
 - **Key signature:** master_seed_64 → HKDF with `shekyl-master-derive-v1-<network>-<format>` salt → wide-reduce Ed25519 scalars → ML-KEM-768 via SHA3-256(`shekyl-mlkem-chacha-seed` || d_z) → ChaCha20Rng. BIP-39 mainnet/stagenet (passphrase opt-in only), raw 32-byte seed testnet/fakechain. Already landed in `rust/shekyl-crypto-pq`; binding surface anchored in the [decision log](../V3_WALLET_DECISION_LOG.md) "Key & signature stabilization" entry (2026-06-10, from Cursor plan `stabilize_key_signature_15d8e48a`).
-- **Transaction shape:** `RCTTypeFcmpPlusPlusPqc` only (and `RCTTypeNull` for coinbase). FCMP++ membership proofs from genesis, hybrid PQC (Ed25519 + ML-DSA-65) on signing, ML-KEM-768 in addresses.
+- **Transaction shape:** `CTTypeFcmpPlusPlusPqc` only (and `CTTypeNull` for coinbase). FCMP++ membership proofs from genesis, hybrid PQC (Ed25519 + ML-DSA-65) on signing, ML-KEM-768 in addresses.
 - **Multisig:** modified FROST scaffold lives behind `shekyl-wallet-core/multisig` feature; full V3.1 ship-readiness is a separate plan. The Rust wallet API is shaped FROST-aware from day 1 so V3.1 is a feature flip, not a refactor.
 - **Genesis-affecting wire lock before stressnet (Phase 7.7):** Any change that alters genesis block bytes — including FA-6 `view_tag` re-key (`docs/design/FA-6_VIEW_TAG_ML_KEM.md`) — must land on `dev` and genesis must be regenerated **before** the Phase 7.7 stressnet genesis is cut. A stressnet built on pre-FA-6 tags does not exercise the mainnet wallet scan wire format and cannot serve as the representative 4-week privacy/wire validation gate. Track genesis-affecting PRs explicitly in release/stressnet planning; the FA-6 spec is correctly scoped to FA-6 internals and does not own this sequencing, but the program plan does.
 
@@ -608,7 +608,7 @@ Each operation is a method on `Wallet` with a focused signature. No mode flags; 
 - **Proofs:** `Wallet::tx_proof(txid, dest) -> TxProof`, `Wallet::reserve_proof(amount) -> ReserveProof`. Delegate to [shekyl-proofs](rust/shekyl-proofs/).
 - **Air-gapped (cold) flow (Phase 2d):** two typed bundle types per the Phase 1 decision.
   - `UnsignedTxBundle` — produced by the network-connected view-only machine. Contains: scanned outputs (with full identification metadata), key-image inputs the offline machine needs to compute new key images, and a `TxRequest`. Single file, postcard-framed, integrity-tagged.
-  - `SignedTxBundle` — produced by the offline machine. Contains: signed `RCTTypeFcmpPlusPlusPqc` transaction(s), updated key images, and a back-link to the originating `UnsignedTxBundle` hash so the network-connected machine refuses cross-bundle replay.
+  - `SignedTxBundle` — produced by the offline machine. Contains: signed `CTTypeFcmpPlusPlusPqc` transaction(s), updated key images, and a back-link to the originating `UnsignedTxBundle` hash so the network-connected machine refuses cross-bundle replay.
   - API: `Wallet::export_unsigned(tx_request) -> UnsignedTxBundle`, `Wallet::sign_unsigned(bundle) -> SignedTxBundle` (offline-only; refuses network calls), `Wallet::submit_signed(bundle) -> Vec<TxHash>` (network-connected; refuses without a known unsigned-bundle hash). Wallet2's separate `export_outputs` / `import_outputs` / `export_key_images` / `import_key_images` four-call dance is **not ported**.
 - **Sign / verify message:** `Wallet::sign_message(msg)`, `Wallet::verify_message(msg, sig, address)`.
 - **Restore-from-keys:** subset of constructors covering view-only restore and full-from-spend-key restore (mainnet uses BIP-39, but the type system shouldn't preclude it).
@@ -688,7 +688,7 @@ Concrete Shekyl-native shapes to make first-class:
 - **Balance:** `{"liquid": "u64", "staked": "u64", "unlocked": "u64", "claimable_rewards": "u64", "pending": "u64"}`. Staking is first-class.
 - **Capability mode:** `"FULL" | "VIEW_ONLY" | "HARDWARE_OFFLOAD"` on every wallet handle response — never inferred.
 - **PQC auth surface:** `{"ed25519": "<hex>", "ml_dsa_65": "<hex>"}` for hybrid signatures. Never a single opaque "signature" blob.
-- **Transactions:** `RCTTypeFcmpPlusPlusPqc` is the only transaction type; the JSON does not enumerate "rct_type" because there is no choice.
+- **Transactions:** `CTTypeFcmpPlusPlusPqc` is the only transaction type; the JSON does not enumerate "ct_type" because there is no choice.
 
 ### Spec-first
 

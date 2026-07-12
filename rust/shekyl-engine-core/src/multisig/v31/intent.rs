@@ -31,7 +31,7 @@ pub const MAX_VALIDITY_SECS: u64 = 86400;
 // after Decision 14, copied the pre-Decision-14 value `10`). See
 // `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
 //
-// `RCT_TYPE_FCMP_PLUS_PLUS_PQC` is also generated; the canonical wire ct-type
+// `CT_TYPE_FCMP_PLUS_PLUS_PQC` is also generated; the canonical wire ct-type
 // `shekyl_wire::transaction::CT_TYPE_FCMP` is pinned to it by the runtime tripwire
 // `wire_ct_type_matches_consensus_authority` below, and the generated value itself is
 // pinned to the genesis dense baseline (`1`) by the const-evaluated `assert!` block
@@ -62,8 +62,8 @@ const _: () = assert!(
     "FCMP_REFERENCE_BLOCK_MAX_AGE diverged from baseline (100); review consensus implications before updating the sentinel"
 );
 const _: () = assert!(
-    RCT_TYPE_FCMP_PLUS_PLUS_PQC == 1,
-    "RCT_TYPE_FCMP_PLUS_PLUS_PQC diverged from the genesis dense baseline (1, GENESIS_TX_WIRE_FORMAT.md §2.0); changing the wire type number is a consensus rule change"
+    CT_TYPE_FCMP_PLUS_PLUS_PQC == 1,
+    "CT_TYPE_FCMP_PLUS_PLUS_PQC diverged from the genesis dense baseline (1, GENESIS_TX_WIRE_FORMAT.md §2.0); changing the wire type number is a consensus rule change"
 );
 
 /// Maximum recipients per intent (bounds allocation from untrusted input).
@@ -594,12 +594,12 @@ mod tests {
         // module catch the same drift at build time, but emit
         // const-evaluation errors rather than test failures).
         // Documents the values at the test surface so searches for
-        // "MIN_AGE" / "MAX_AGE" / "RCT_TYPE" land here. Pre-Bug-3
+        // "MIN_AGE" / "MAX_AGE" / "CT_TYPE" land here. Pre-Bug-3
         // fix this Rust value was 10 while C++ was 5; the JSON
         // authority closes the drift class.
         assert_eq!(FCMP_REFERENCE_BLOCK_MIN_AGE, 5);
         assert_eq!(FCMP_REFERENCE_BLOCK_MAX_AGE, 100);
-        assert_eq!(RCT_TYPE_FCMP_PLUS_PLUS_PQC, 1);
+        assert_eq!(CT_TYPE_FCMP_PLUS_PLUS_PQC, 1);
     }
 
     #[test]
@@ -613,7 +613,7 @@ mod tests {
         // serializer was removed in un-vendor slice 1.)
         assert_eq!(
             shekyl_wire::transaction::CT_TYPE_FCMP,
-            RCT_TYPE_FCMP_PLUS_PLUS_PQC,
+            CT_TYPE_FCMP_PLUS_PLUS_PQC,
             "shekyl-wire CT_TYPE_FCMP wire value drifted from \
              config/consensus_constants.json"
         );

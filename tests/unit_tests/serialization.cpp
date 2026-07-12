@@ -688,7 +688,7 @@ TEST(Serialization, rctsig_base_null_round_trip_with_outpk_enc_amounts_and_enc_l
   }
 
   rct::rctSig& rv = tx0.rct_signatures;
-  rv.type = rct::RCTTypeNull;
+  rv.type = rct::CTTypeNull;
   rv.outPk.resize(2);
   rv.enc_amounts.resize(2);
   rv.enc_labels.resize(2);
@@ -707,13 +707,13 @@ TEST(Serialization, rctsig_base_null_round_trip_with_outpk_enc_amounts_and_enc_l
 
   std::string blob;
   ASSERT_TRUE(serialization::dump_binary(tx0, blob));
-  ASSERT_FALSE(blob.empty()) << "RCTTypeNull serialization produced empty blob";
+  ASSERT_FALSE(blob.empty()) << "CTTypeNull serialization produced empty blob";
 
   transaction tx1;
   ASSERT_TRUE(serialization::parse_binary(blob, tx1))
-    << "RCTTypeNull deserialization failed; blob size=" << blob.size();
+    << "CTTypeNull deserialization failed; blob size=" << blob.size();
 
-  EXPECT_EQ(tx1.rct_signatures.type, rct::RCTTypeNull);
+  EXPECT_EQ(tx1.rct_signatures.type, rct::CTTypeNull);
   ASSERT_EQ(tx1.rct_signatures.outPk.size(), 2u);
   ASSERT_EQ(tx1.rct_signatures.enc_amounts.size(), 2u);
   ASSERT_EQ(tx1.rct_signatures.enc_labels.size(), 2u);
@@ -729,7 +729,7 @@ TEST(Serialization, rctsig_base_null_round_trip_with_outpk_enc_amounts_and_enc_l
   }
 
   EXPECT_EQ(tx1.rct_signatures.txnFee, 0u)
-    << "RCTTypeNull must not serialize txnFee, but it was non-zero after parse";
+    << "CTTypeNull must not serialize txnFee, but it was non-zero after parse";
   EXPECT_EQ(tx1.rct_signatures.referenceBlock, crypto::hash{})
-    << "RCTTypeNull must not serialize referenceBlock";
+    << "CTTypeNull must not serialize referenceBlock";
 }

@@ -1369,7 +1369,7 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::rctSig& 
     INSERT_INTO_JSON_OBJECT(dest, enc_labels, sig.enc_labels);
   if (!sig.outPk.empty())
     INSERT_INTO_JSON_OBJECT(dest, commitments, transform(sig.outPk, just_mask));
-  if (sig.type == rct::RCTTypeFcmpPlusPlusPqc)
+  if (sig.type == rct::CTTypeFcmpPlusPlusPqc)
   {
     INSERT_INTO_JSON_OBJECT(dest, fee, sig.txnFee);
     INSERT_INTO_JSON_OBJECT(dest, referenceBlock, sig.referenceBlock);
@@ -1411,7 +1411,7 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
     GET_FROM_JSON_OBJECT(val, sig.enc_labels, enc_labels);
   if (val.HasMember("commitments"))
     GET_FROM_JSON_OBJECT(val, sig.outPk, commitments);
-  if (sig.type == rct::RCTTypeFcmpPlusPlusPqc)
+  if (sig.type == rct::CTTypeFcmpPlusPlusPqc)
   {
     GET_FROM_JSON_OBJECT(val, sig.txnFee, fee);
     if (val.HasMember("referenceBlock"))

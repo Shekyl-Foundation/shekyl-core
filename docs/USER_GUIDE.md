@@ -557,7 +557,7 @@ expired, the transaction will be rejected.
 ### Privacy considerations
 
 - Staked outputs are on-chain distinguishable (lock tier is visible).
-- Claim transactions use `RCTTypeNull` and do not generate FCMP++ proofs.
+- Claim transactions use `CTTypeNull` and do not generate FCMP++ proofs.
 - Batch your claims rather than claiming every block -- frequent claims
   create a more fingerprintable on-chain pattern.
 

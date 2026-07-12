@@ -131,7 +131,7 @@ namespace cryptonote
     if (tx.version >= 2 && !is_coinbase(tx))
     {
       rct::rctSig &rv = tx.rct_signatures;
-      if (rv.type == rct::RCTTypeNull)
+      if (rv.type == rct::CTTypeNull)
         return true;
       if (rv.outPk.size() != tx.vout.size())
       {
@@ -306,7 +306,7 @@ namespace cryptonote
   {
     CHECK_AND_ASSERT_MES(tx.pruned, std::numeric_limits<uint64_t>::max(), "get_pruned_transaction_weight does not support non pruned txes");
     CHECK_AND_ASSERT_MES(tx.version >= 2, std::numeric_limits<uint64_t>::max(), "get_pruned_transaction_weight does not support v1 txes");
-    CHECK_AND_ASSERT_MES(tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc,
+    CHECK_AND_ASSERT_MES(tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc,
         std::numeric_limits<uint64_t>::max(), "Unsupported rct_signatures type in get_pruned_transaction_weight");
     CHECK_AND_ASSERT_MES(!tx.vin.empty(), std::numeric_limits<uint64_t>::max(), "empty vin");
 
@@ -1145,7 +1145,7 @@ namespace cryptonote
 
     // prunable rct
     crypto::hash prunable_hash;
-    if (t.rct_signatures.type == rct::RCTTypeNull)
+    if (t.rct_signatures.type == rct::CTTypeNull)
       prunable_hash = crypto::null_hash;
     else
       prunable_hash = pruned_data_hash;
@@ -1213,7 +1213,7 @@ namespace cryptonote
 
     // prunable rct
     crypto::hash prunable_hash;
-    if (t.rct_signatures.type == rct::RCTTypeNull)
+    if (t.rct_signatures.type == rct::CTTypeNull)
       prunable_hash = crypto::null_hash;
     else
     {

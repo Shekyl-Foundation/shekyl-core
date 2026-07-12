@@ -104,7 +104,7 @@ int main(int argc, char* argv[])
   else if (command_line::get_arg(vm, arg_generate_and_play_test_data) || (list_tests = command_line::get_arg(vm, arg_list_tests)))
   {
     // Disabled: these tests construct valid user transactions via MAKE_TX /
-    // construct_tx_rct, which now produces RCTTypeFcmpPlusPlusPqc stubs with
+    // construct_tx_rct, which now produces CTTypeFcmpPlusPlusPqc stubs with
     // empty pqc_auths. check_tx_inputs rejects them even in FAKECHAIN.
     // Re-enable once chaingen can construct full FCMP++ transactions with
     // valid PQC auth signatures and curve-tree membership proofs.

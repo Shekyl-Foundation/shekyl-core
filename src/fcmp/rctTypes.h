@@ -160,13 +160,13 @@ namespace rct {
     /// Exactly one aggregated BP+ proof with 1..MAX outputs (consensus canonical form).
     bool is_canonical_bulletproof_plus_layout(const std::vector<BulletproofPlus> &proofs);
 
-    // RCT type tags:
-    //  RCTTypeNull = coinbase (no confidential data)
-    //  RCTTypeFcmpPlusPlusPqc = FCMP++ with Bulletproofs+ and post-quantum commitment
+    // CT type tags:
+    //  CTTypeNull = coinbase (no confidential data)
+    //  CTTypeFcmpPlusPlusPqc = FCMP++ with Bulletproofs+ and post-quantum commitment
     // Genesis dense ct type scheme (GENESIS_TX_WIRE_FORMAT.md §2.0 / §5 gate-(c) item 2).
     enum {
-      RCTTypeNull = 0,
-      RCTTypeFcmpPlusPlusPqc = 1,
+      CTTypeNull = 0,
+      CTTypeFcmpPlusPlusPqc = 1,
     };
     struct rctSigBase {
         uint8_t type;
@@ -190,24 +190,24 @@ namespace rct {
         crypto::hash referenceBlock; // FCMP++: block hash anchoring the tree root for proof
 
         rctSigBase() :
-          type(RCTTypeNull), message{}, enc_amounts{}, enc_labels{}, outPk{}, txnFee(0), referenceBlock{}
+          type(CTTypeNull), message{}, enc_amounts{}, enc_labels{}, outPk{}, txnFee(0), referenceBlock{}
         {}
 
         template<bool W, template <bool> class Archive>
         bool serialize_rctsig_base(Archive<W> &ar, size_t inputs, size_t outputs)
         {
           FIELD(type)
-          if (type != RCTTypeNull && type != RCTTypeFcmpPlusPlusPqc)
+          if (type != CTTypeNull && type != CTTypeFcmpPlusPlusPqc)
             return false;
 
-          if (type == RCTTypeFcmpPlusPlusPqc)
+          if (type == CTTypeFcmpPlusPlusPqc)
           {
             VARINT_FIELD(txnFee)
             FIELD(referenceBlock)
           }
 
-          // outPk and enc_amounts are serialized for both RCTTypeNull (coinbase)
-          // and RCTTypeFcmpPlusPlusPqc. Coinbase outputs carry real Pedersen
+          // outPk and enc_amounts are serialized for both CTTypeNull (coinbase)
+          // and CTTypeFcmpPlusPlusPqc. Coinbase outputs carry real Pedersen
           // commitments C = z*G + amount*H so that check_commitment_mask_valid
           // can reject mask=1 (trivial) commitments on all outputs uniformly.
           ar.tag("enc_amounts");
@@ -316,9 +316,9 @@ namespace rct {
             return false;
           if (outputs >= 0xffffffff)
             return false;
-          if (type == RCTTypeNull)
+          if (type == CTTypeNull)
             return ar.good();
-          if (type != RCTTypeFcmpPlusPlusPqc)
+          if (type != CTTypeFcmpPlusPlusPqc)
             return false;
 
           {
@@ -382,8 +382,8 @@ namespace rct {
         rctSigPrunable p;
 
         // The pseudo-out commitments live in the prunable section for every
-        // rct type: RCTTypeFcmpPlusPlusPqc carries one per spend input, and
-        // RCTTypeNull (coinbase) has none, so the empty prunable vector is
+        // rct type: CTTypeFcmpPlusPlusPqc carries one per spend input, and
+        // CTTypeNull (coinbase) has none, so the empty prunable vector is
         // the correct value there too. (A legacy base-side fallback field was
         // removed in the dead-serializer cleanup — it was never serialized on
         // any wire and never held a value.)

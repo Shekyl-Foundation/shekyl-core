@@ -325,7 +325,7 @@ bool gen_bpp_tx_invalid_not_enough_proofs::generate(std::vector<test_event_entry
   const size_t mixin = 10;
   const uint64_t amounts_paid[] = {5000, 5000, (uint64_t)-1};
   return generate_with(events, mixin, 1, amounts_paid, false, HF_VERSION_BULLETPROOF_PLUS, NULL, [&](cryptonote::transaction &tx, size_t idx){
-    CHECK_TEST_CONDITION(tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc);
+    CHECK_TEST_CONDITION(tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc);
     CHECK_TEST_CONDITION(!tx.rct_signatures.p.bulletproofs_plus.empty());
     tx.rct_signatures.p.bulletproofs_plus.pop_back();
     CHECK_TEST_CONDITION(!tx.rct_signatures.p.bulletproofs_plus.empty());
@@ -339,7 +339,7 @@ bool gen_bpp_tx_invalid_empty_proofs::generate(std::vector<test_event_entry>& ev
   const size_t mixin = 10;
   const uint64_t amounts_paid[] = {50000, 50000, (uint64_t)-1};
   return generate_with(events, mixin, 1, amounts_paid, false, HF_VERSION_BULLETPROOF_PLUS, NULL, [&](cryptonote::transaction &tx, size_t idx){
-    CHECK_TEST_CONDITION(tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc);
+    CHECK_TEST_CONDITION(tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc);
     tx.rct_signatures.p.bulletproofs_plus.clear();
     return true;
   });
@@ -351,7 +351,7 @@ bool gen_bpp_tx_invalid_too_many_proofs::generate(std::vector<test_event_entry>&
   const size_t mixin = 10;
   const uint64_t amounts_paid[] = {10000, (uint64_t)-1};
   return generate_with(events, mixin, 1, amounts_paid, false, HF_VERSION_BULLETPROOF_PLUS, NULL, [&](cryptonote::transaction &tx, size_t idx){
-    CHECK_TEST_CONDITION(tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc);
+    CHECK_TEST_CONDITION(tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc);
     CHECK_TEST_CONDITION(!tx.rct_signatures.p.bulletproofs_plus.empty());
     tx.rct_signatures.p.bulletproofs_plus.push_back(tx.rct_signatures.p.bulletproofs_plus.back());
     return true;
@@ -364,7 +364,7 @@ bool gen_bpp_tx_invalid_wrong_amount::generate(std::vector<test_event_entry>& ev
   const size_t mixin = 10;
   const uint64_t amounts_paid[] = {10000, (uint64_t)-1};
   return generate_with(events, mixin, 1, amounts_paid, false, HF_VERSION_BULLETPROOF_PLUS, NULL, [&](cryptonote::transaction &tx, size_t idx){
-    CHECK_TEST_CONDITION(tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc);
+    CHECK_TEST_CONDITION(tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc);
     CHECK_TEST_CONDITION(!tx.rct_signatures.p.bulletproofs_plus.empty());
     tx.rct_signatures.p.bulletproofs_plus.back() = rct::bulletproof_plus_PROVE(1000, rct::skGen());
     return true;

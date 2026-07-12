@@ -79,7 +79,7 @@ protocol_version = 3
 FCMP++ curve tree membership proofs, hybrid Ed25519 + ML-DSA-65 spend
 authorization, hybrid X25519 + ML-KEM-768 output encryption, V3.1
 multisig wire format (FROST-style). Minimum transaction type:
-`RCTTypeFcmpPlusPlusPqc`.
+`CTTypeFcmpPlusPlusPqc`.
 
 ### Protocol version 4 (future)
 

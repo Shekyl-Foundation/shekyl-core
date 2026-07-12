@@ -121,7 +121,7 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                     || !rv.p.bulletproofs_plus.empty()
                     || !rv.p.fcmp_pp_proof.empty()
                     || !rv.p.pseudoOuts.empty()
-                    || rv.type != rct::RCTTypeFcmpPlusPlusPqc
+                    || rv.type != rct::CTTypeFcmpPlusPlusPqc
                     || !rct::verRctSemanticsFeeOnly(rv))
                 {
                     tvc.m_verifivation_failed = true;
@@ -138,7 +138,7 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                     || spend_input_count == 0
                     || rv.p.pseudoOuts.size() != spend_input_count
                     || rv.p.fcmp_pp_proof.empty()
-                    || rv.type != rct::RCTTypeFcmpPlusPlusPqc
+                    || rv.type != rct::CTTypeFcmpPlusPlusPqc
                     || !rct::verRctSemanticsBondPost(rv, bond.bond_credit, bond.bond_debit))
                 {
                     tvc.m_verifivation_failed = true;
@@ -171,7 +171,7 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                     || total_reward == 0
                     || tx.pqc_auths.size() != tx.vin.size()
                     || rv.p.pseudoOuts.size() != spend_input_count
-                    || rv.type != rct::RCTTypeFcmpPlusPlusPqc
+                    || rv.type != rct::CTTypeFcmpPlusPlusPqc
                     || !rct::verCtSemanticsEmission(rv, total_reward, spend_input_count))
                 {
                     tvc.m_verifivation_failed = true;
@@ -220,11 +220,11 @@ bool ver_mixed_rct_semantics(std::vector<const rct::rctSig*> rvv)
 
         switch (rv.type)
         {
-        case rct::RCTTypeNull:
+        case rct::CTTypeNull:
             MERROR("Unexpected Null rctSig type");
             return false;
             break;
-        case rct::RCTTypeFcmpPlusPlusPqc:
+        case rct::CTTypeFcmpPlusPlusPqc:
             if (!rct::is_canonical_bulletproof_plus_layout(rv.p.bulletproofs_plus))
             {
                 MERROR("Bulletproof_plus does not have canonical form");

@@ -248,7 +248,7 @@ cryptonote::transaction make_fcmp_shape_tx(uint8_t variant, uint8_t ki_variant)
   tx.vout.push_back(txout);
 
   rct::rctSig& rv = tx.rct_signatures;
-  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.type = rct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 1000000;
   memset(&rv.referenceBlock, 0xAD, sizeof(rv.referenceBlock));
   rv.outPk.resize(1);

@@ -525,8 +525,8 @@ audit finding.
 (2026-06-09). No rename PR before cutover; Rust vocabulary effective now.
 
 `transaction::rct_signatures` (typed `rct::rctSig`) no longer holds ring
-signatures. In Shekyl v3, the only accepted types are `RCTTypeNull`
-(coinbase) and `RCTTypeFcmpPlusPlusPqc`. The struct actually carries:
+signatures. In Shekyl v3, the only accepted types are `CTTypeNull`
+(coinbase) and `CTTypeFcmpPlusPlusPqc`. The struct actually carries:
 
 - **`rctSigBase`**: Pedersen commitments (`outPk`), HKDF-encrypted amounts
   (`enc_amounts`), `txnFee`, `referenceBlock` (curve tree anchor). (The dead

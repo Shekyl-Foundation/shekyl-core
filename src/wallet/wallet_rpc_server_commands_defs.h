@@ -46,8 +46,8 @@
 // whether they can talk to a given wallet without having to know in
 // advance which version they will stop working with
 // Don't go over 32767 for any of these
-#define WALLET_RPC_VERSION_MAJOR 1
-#define WALLET_RPC_VERSION_MINOR 30
+#define WALLET_RPC_VERSION_MAJOR 2
+#define WALLET_RPC_VERSION_MINOR 0
 #define MAKE_WALLET_RPC_VERSION(major,minor) (((major)<<16)|(minor))
 #define WALLET_RPC_VERSION MAKE_WALLET_RPC_VERSION(WALLET_RPC_VERSION_MAJOR, WALLET_RPC_VERSION_MINOR)
 namespace tools
@@ -2340,12 +2340,12 @@ namespace wallet_rpc
     {
       uint32_t n_inputs;
       uint32_t n_outputs;
-      bool rct;
+      bool ct;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(n_inputs)
         KV_SERIALIZE(n_outputs)
-        KV_SERIALIZE_OPT(rct, true)
+        KV_SERIALIZE_OPT(ct, true)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<request_t> request;

@@ -381,7 +381,7 @@ proofs. Reopen only with explicit spec for that machinery; §4.4 does not implem
 
 ### 5.1 Accepted tx type
 
-`RCTTypeFcmpPlusPlusPqc` only ([`60-no-monero-legacy.mdc`](../../.cursor/rules/60-no-monero-legacy.mdc)).
+`CTTypeFcmpPlusPlusPqc` only ([`60-no-monero-legacy.mdc`](../../.cursor/rules/60-no-monero-legacy.mdc)).
 
 ### 5.2 Vin layout
 

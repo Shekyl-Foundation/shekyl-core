@@ -568,7 +568,10 @@ namespace cryptonote
       }
       else
       {
-        ar.tag("rct_signatures");
+        // The tag is a JSON-archive-only key (binary_archive::tag is a no-op,
+        // so the binary wire format is unaffected); it names the CT signature
+        // data in `decode_as_json` / `print_tx` / tx-pool JSON output.
+        ar.tag("ct_signatures");
         if (!vin.empty())
         {
           ar.begin_object();
@@ -610,12 +613,12 @@ namespace cryptonote
           if (std::is_same<Archive<W>, binary_archive<W>>())
             unprunable_size = ar.getpos() - start_pos;
 
-          if (!pruned && rct_signatures.type != rct::RCTTypeNull)
+          if (!pruned && rct_signatures.type != rct::CTTypeNull)
           {
             // pseudoOuts are sized by the spend subset, not vin.size() — see
             // count_spend_inputs. Matches the consensus pins in blockchain.cpp
             // / tx_verification_utils.cpp (`pseudoOuts.size() == num_spend`).
-            ar.tag("rctsig_prunable");
+            ar.tag("ctsig_prunable");
             ar.begin_object();
             bool r = rct_signatures.p.serialize_rctsig_prunable(ar, rct_signatures.type, count_spend_inputs(vin), vout.size());
             if (!r || !ar.good()) return false;
@@ -638,7 +641,8 @@ namespace cryptonote
       }
       else
       {
-        ar.tag("rct_signatures");
+        // JSON-archive-only key; see the do_serialize note above.
+        ar.tag("ct_signatures");
         if (!vin.empty())
         {
           ar.begin_object();
@@ -765,7 +769,7 @@ namespace cryptonote
   {
     transaction_prefix::set_null();
     signatures.clear();
-    rct_signatures.type = rct::RCTTypeNull;
+    rct_signatures.type = rct::CTTypeNull;
     pqc_auths.clear();
     set_hash_valid(false);
     set_prunable_hash_valid(false);

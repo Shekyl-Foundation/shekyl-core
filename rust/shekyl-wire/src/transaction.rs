@@ -1355,11 +1355,11 @@ impl Transaction {
     /// `get_transaction_signed_payload`, `tx_pqc_verify.cpp:58-152`):
     ///
     /// ```text
-    /// payload(i)     = prefix_blob ‖ rct_base_blob ‖ prunable_hash ‖ pqc_header(i) ‖ all_key_hashes
+    /// payload(i)     = prefix_blob ‖ ct_base_blob ‖ prunable_hash ‖ pqc_header(i) ‖ all_key_hashes
     /// signed_hash(i) = cn_fast_hash(payload(i))
     /// ```
     /// - `prefix_blob`    = `varint(TX_VERSION) ‖ TxPrefix::write` (same as [`Self::prefix_hash`]'s input)
-    /// - `rct_base_blob`  = `CT_TYPE_FCMP ‖ varint(fee) ‖ reference_block ‖ CtBase::write`
+    /// - `ct_base_blob`  = `CT_TYPE_FCMP ‖ varint(fee) ‖ reference_block ‖ CtBase::write`
     ///   (mirrors the [`Ct::Fcmp`] write head exactly — §1.3, referenceBlock in *base*)
     /// - `prunable_hash`  = `cn_fast_hash(Prunable::write)` (the digest, not the blob — §1.4)
     /// - `pqc_header(i)`  = the i-th auth header, **no signature** (`PqcAuth::header_write` — §1.5)
@@ -1393,13 +1393,13 @@ impl Transaction {
             .write(&mut prefix_blob)
             .expect("Vec write is infallible");
 
-        // rct_base_blob = CT_TYPE_FCMP ‖ varint(fee) ‖ reference_block ‖ CtBase::write —
+        // ct_base_blob = CT_TYPE_FCMP ‖ varint(fee) ‖ reference_block ‖ CtBase::write —
         // byte-for-byte the head `Ct::Fcmp::write` emits before pqc_auths/prunable.
-        let mut rct_base_blob = Vec::new();
-        rct_base_blob.push(CT_TYPE_FCMP);
-        write_varint(*fee, &mut rct_base_blob).expect("Vec write is infallible");
-        rct_base_blob.extend_from_slice(reference_block);
-        base.write(&mut rct_base_blob)
+        let mut ct_base_blob = Vec::new();
+        ct_base_blob.push(CT_TYPE_FCMP);
+        write_varint(*fee, &mut ct_base_blob).expect("Vec write is infallible");
+        ct_base_blob.extend_from_slice(reference_block);
+        base.write(&mut ct_base_blob)
             .expect("Vec write is infallible");
 
         // prunable_hash = cn_fast_hash(Prunable::write)
@@ -1420,7 +1420,7 @@ impl Transaction {
             .map(|auth| {
                 let mut payload = Vec::new();
                 payload.extend_from_slice(&prefix_blob);
-                payload.extend_from_slice(&rct_base_blob);
+                payload.extend_from_slice(&ct_base_blob);
                 payload.extend_from_slice(&prunable_hash);
                 auth.header_write(&mut payload)
                     .expect("Vec write is infallible");

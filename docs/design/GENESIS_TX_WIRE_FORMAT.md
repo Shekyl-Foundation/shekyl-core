@@ -330,15 +330,19 @@ prefilter. *(Corrects an earlier keccak/X25519 derivation that cited a stale pat
 
 **Terminology:** *CT = confidential transaction.* There is no RingCT — Monero's
 rings/decoys are gone — so this PR says **CT**, not RCT in prose. Per
-`CT_SURFACE_NAMING_PIN.md`, renaming the C++ `rct*` source symbols (`rctTypes.h`,
-`rct_signatures`) to `ct*` is **deferred to Phase 5** (wallet2 retirement),
-**not** a genesis change: the wire **tags + type values are already
-genesis-locked**, and `binary_archive` is positional (ignores names), so the
-rename has **no genesis-wire effect**.
+`CT_SURFACE_NAMING_PIN.md`, renaming the bulk C++ `rct*` source symbols
+(`rctTypes.h`, the `rct_signatures` field, the `rct::` namespace) to `ct*` is
+**deferred to Phase 5** (wallet2 retirement), **not** a genesis change: the
+**type values are genesis-locked**, and `binary_archive` is positional (ignores
+names), so identifier renames have **no genesis-wire effect**. The V3.0
+public-API slice landed 2026-07-11: the `RCTType*` enum variants are now
+`CTTypeNull` / `CTTypeFcmpPlusPlusPqc` (type byte values unchanged), and the
+JSON-archive-only `ar.tag` names are now `ct_signatures` / `ctsig_prunable`
+(affects `decode_as_json` output only — no binary-wire byte changed).
 
 | Element | Source | Disposition |
 |---|---|---|
-| type byte | rctTypes.h:167-168,200 | **Ratify** — already minimal: `Null=0`, `FcmpPlusPlusPqc=7`; C++ rejects all other type values. Already created, not inherited (Monero's ~8-variant enum is gone). **Type *value* numbering** is a Q7 decision. |
+| type byte | rctTypes.h:163-170,200 | **Ratify** — already minimal: `CTTypeNull=0`, `CTTypeFcmpPlusPlusPqc=1` (Q7 dense renumber, §2.0); C++ rejects all other type values. Already created, not inherited (Monero's ~8-variant enum is gone). |
 | coinbase `Null`-but-committed (`outPk`/`enc_amounts`/`enc_labels`) | rctTypes.h:209-212 | **Ratify as the exception.** Shekyl-intended for FCMP++ tree-leaf commitment uniformity (Monero's null coinbase has no commitments). Explicitly **not** the spend template. |
 | base: `VARINT(fee)` + `referenceBlock[32]` (Fcmp only) | rctTypes.h:205-206 | **Ratify** — `referenceBlock` lives in the **base**. |
 | base arrays: `enc_amounts[nout×9]`, `enc_labels[nout×9]`, `outPk[nout×32]` (no length prefix) | rctTypes.h:213-280 | **Ratify** — sized by `vout`. See the `enc_labels` invariant below. |

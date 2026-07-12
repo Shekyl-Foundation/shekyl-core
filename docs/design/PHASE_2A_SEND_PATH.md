@@ -50,7 +50,7 @@ doc before the first implementation commit. Sub-PRs stay within
 Phase 2a is **done** when all of the following hold on `dev`:
 
 1. **`Engine::build_pending_tx`** produces a `PendingTx` whose `tx_bytes` are a
-   valid, consensus-shaped `RCTTypeFcmpPlusPlusPqc` transfer (not empty), with
+   valid, consensus-shaped `CTTypeFcmpPlusPlusPqc` transfer (not empty), with
    `fee_atomic_units` from the daemon (not `STUB_FEE_ATOMIC_UNITS`), and
    reservation semantics unchanged from Stage 1 PR 5. The FCMP++ membership
    path is built against a **locally-computed** `TreeContext` (§3.0); 2A is done
@@ -1486,7 +1486,7 @@ Foundation" (+ upstream `monero-oxide` attribution), repo
 `github.com/Shekyl-Foundation/shekyl-oxide`. Its lower layers track audited
 upstream **primitives** (dalek, generators, bulletproofs); its
 transaction/FCMP++/PQC-auth/fee layer (`transaction.rs`, `fcmp.rs`,
-`RCTTypeFcmpPlusPlusPqc`, `pqc_auths`, sentinel `encrypted_labels`) is Shekyl's
+`CTTypeFcmpPlusPlusPqc`, `pqc_auths`, sentinel `encrypted_labels`) is Shekyl's
 own divergence. So `shekyl-tx-builder → shekyl-oxide` is a first-party in-tree
 edge, **not** a `10-shekyl-first.mdc` "depend on the fork" violation — that rule
 governs the separate `monero-oxide` repo, not this vendored-but-owned copy.
@@ -1601,7 +1601,7 @@ is *invoked* in two places (actor for the payload hash, `LocalSigner` for the
 final blob) — same code, deterministic output.
 
 **Scope: transfer-kind only.** The Phase 2a encoder covers transfer transactions
-(`RCTTypeFcmpPlusPlusPqc`). Stake/unstake and other transfer kinds (Phase 2b+)
+(`CTTypeFcmpPlusPlusPqc`). Stake/unstake and other transfer kinds (Phase 2b+)
 have their own output/extra-field layout; this encoder is **not** a general "all
 tx kinds" serializer. Phase 2b extends or wraps it for the stake kind rather
 than overloading the transfer encoder.

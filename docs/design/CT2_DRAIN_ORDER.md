@@ -115,7 +115,7 @@ non-contiguous) `gindex` values as the S2 drain tiebreaker. Source:
 **Coinbase is trivially include-all (the Tier-A-relevant case).**
 `construct_miner_tx` populates `outPk` with real commitments
 (`cryptonote_tx_utils.cpp:156` `outPk.resize`, `:179` `memcpy(...mask...,
-od.commitment...)`), and even the explicit-`RCTTypeNull` path does the same
+od.commitment...)`), and even the explicit-`CTTypeNull` path does the same
 (`:709-743`). So (b) never fires for coinbase; coinbase outputs are
 `txout_to_tagged_key`/`txout_to_key` so (a) passes; and (c) is the shared
 `construct_leaf`. **A coinbase-only chain produces a leaf per coinbase output —
@@ -134,7 +134,7 @@ not diverge).
 
 ---
 
-## 3. S1-leaf — coinbase / `RCTTypeNull` leaf construction (the sharp sub-surface)
+## 3. S1-leaf — coinbase / `CTTypeNull` leaf construction (the sharp sub-surface)
 
 Every block has a coinbase, so a wrong coinbase leaf diverges the tree at every
 block. The leaf is `construct_leaf(O, C, h_pqc) → 128 B = {O.x, I.x, C.x,
@@ -145,12 +145,12 @@ x-coords are Wei25519 via `ed25519_point_to_selene_scalar`
 | Question | Rule | Source |
 |----------|------|--------|
 | Is coinbase a tree leaf? | **Yes** — `collect_outputs(blk.miner_tx, true)`; deferred, maturity `+60`. | `blockchain_db.cpp:417-420`, `372-374` |
-| Coinbase commitment `C` | **Real** `C = z*G + amount*H` (`z` from HKDF in `shekyl_construct_output`); `RCTTypeNull` still serializes real `outPk`. | `output.rs:288-293`, `rctTypes.h:207-210`, `cryptonote_tx_utils.cpp:179`,`743` |
+| Coinbase commitment `C` | **Real** `C = z*G + amount*H` (`z` from HKDF in `shekyl_construct_output`); `CTTypeNull` still serializes real `outPk`. | `output.rs:288-293`, `rctTypes.h:207-210`, `cryptonote_tx_utils.cpp:179`,`743` |
 | Trivial-commitment rejection | Consensus **rejects** `C == zeroCommit(amount)` (mask=1), `C == identity()`, `C == G` for coinbase. So a coinbase leaf is **never** a zero/identity commitment. | `blockchain.cpp:3402-3425`, `rctOps.cpp:322-333` |
 | Coinbase `h_pqc` | **Real per-output hybrid hash**, `Blake2b-512("shekyl-pqc-leaf" ‖ hybrid_pk) wide-reduced`, computed by `shekyl_construct_output` (miner self-KEM, per-output) and stored **on-chain in `tx_extra` tag `0x07`** (`TX_EXTRA_TAG_PQC_LEAF_HASHES`, `N×32` in vout order). | `derivation.rs:53-71`, `cryptonote_tx_utils.cpp:162-192`,`726-755`, `tx_extra.h:45` |
 | Where the tree reads `h_pqc` | `extract_leaf_hashes` parses `tx.extra`, finds the **single** `tx_extra_pqc_leaf_hashes` field (one `0x07` field, blob `N×32` in vout order), and returns it **only if** `blob.size() % 32 == 0`; `collect_outputs` then slices `blob + i*32`. **Falls back to 32 zero bytes** when: parse fails, the tag is absent, `blob.size() % 32 != 0` (malformed length → whole field dropped), **or** `i >= num_leaf_hashes` (blob present but shorter than vout count). | `blockchain_db.cpp:341-364` (`extract_leaf_hashes`, `zero_pqc` at `:332`), `tx_extra.h:45,219-228`, `FCMP_PLUS_PLUS.md:222-225` |
 | Leaf branch on rct type? | **No.** `collect_outputs` uses one path for miner and normal txs; only `is_miner` changes maturity. | `blockchain_db.cpp:369-407` |
-| Accepted rct types | Only `RCTTypeNull = 0` (coinbase) and `RCTTypeFcmpPlusPlusPqc = 7`. | `rctTypes.h:161-166`, `blockchain.cpp:3451-3456`,`1523` |
+| Accepted ct types | Only `CTTypeNull = 0` (coinbase) and `CTTypeFcmpPlusPlusPqc = 1`. | `rctTypes.h:163-170`, `blockchain.cpp:3451-3456`,`1523` |
 
 ### 3.1 Replication obligation — `h_pqc` is on-chain, not recomputable
 
@@ -223,9 +223,9 @@ vector become live.
 ### 3.3 Minor flag — coinbase type-by-position
 
 `construct_miner_tx` relies on the `transaction` default (`set_null →
-RCTTypeNull`) rather than explicitly assigning the type; genesis sets it
+CTTypeNull`) rather than explicitly assigning the type; genesis sets it
 explicitly (`cryptonote_tx_utils.cpp:709`). Cosmetic, but the wallet must treat
-a coinbase as `RCTTypeNull` by position (it is the miner tx), not by reading a
+a coinbase as `CTTypeNull` by position (it is the miner tx), not by reading a
 type field that may be defaulted.
 
 ---
@@ -261,7 +261,7 @@ inclusively (`maturity <= height`), never one block early or late.
 
 | Corner | Rule | Source |
 |--------|------|--------|
-| Genesis creation | Generated when DB is empty; founder pool = genesis **coinbase** outputs (`build_genesis_coinbase_from_destinations`, `txin_gen`, `version=3`, `RCTTypeNull`, `unlock_time = 60`). | `blockchain.cpp:465-472`, `cryptonote_tx_utils.cpp:683-709`, `GENESIS_TRANSPARENCY.md:122-198` |
+| Genesis creation | Generated when DB is empty; founder pool = genesis **coinbase** outputs (`build_genesis_coinbase_from_destinations`, `txin_gen`, `version=3`, `CTTypeNull`, `unlock_time = 60`). | `blockchain.cpp:465-472`, `cryptonote_tx_utils.cpp:683-709`, `GENESIS_TRANSPARENCY.md:122-198` |
 | Founder drain height | Height-0 coinbase ⇒ maturity `0 + 60 = 60`. A matured leaf enters the tree on connection of the *next* block (`drained_through = H − 1`), so the **first non-empty tree / first `R_0` material is at height 61**, not 10. (Pinned by the CT-2 KAT, `recon_kat::empty_window_then_first_drain_at_61`; supersedes this row's earlier "60" estimate.) | `blockchain_db.cpp:372-374` + coinbase rule above + CT-2 KAT |
 | Empty-tree window | Heights **0..=60** have an empty tree. (No regular tx can exist earlier — spending needs a non-empty tree for FCMP membership, and the first spendable outputs are the founder coinbase maturing at 60, first visible at 61.) | derived from the two rows above + CT-2 KAT |
 | **Small-tree root: leaf layer is never the root** | A non-empty tree of `1..=SELENE_CHUNK_WIDTH` leaves roots at the **single-child layer-1 Helios node**, not the layer-0 Selene leaf node: `grow_curve_tree` builds the Helios layer before its root-stop check. The wallet's `build_layers` reproduces this (every non-empty tree is depth ≥ 2). Pinned by the CT-2 KAT at height 61 (one leaf). | `db_lmdb.cpp` `grow_curve_tree`; `shekyl-fcmp::tree::build_upper_layers`; CT-2 KAT |

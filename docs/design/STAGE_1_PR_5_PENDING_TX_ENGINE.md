@@ -1014,7 +1014,7 @@ Three timeframes:
 - **PQC era (V4).** No effect on the trait surface — `PendingTx`
   payloads carry whatever transaction bytes the consensus rules
   define, including the hybrid PQC signatures from genesis per
-  `RCTTypeFcmpPlusPlusPqc`.
+  `CTTypeFcmpPlusPlusPqc`.
 
 ---
 

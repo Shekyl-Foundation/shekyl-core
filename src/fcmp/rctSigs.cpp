@@ -102,7 +102,7 @@ namespace
         const size_t n_in = inamounts.size();
         CHECK_AND_ASSERT_THROW_MES(destinations.size() == n_out, "fill_construct_tx_rct_stub: destinations/outamounts mismatch");
 
-        rv.type = RCTTypeFcmpPlusPlusPqc;
+        rv.type = CTTypeFcmpPlusPlusPqc;
         rv.message = message;
         rv.txnFee = txnFee;
         rv.referenceBlock = referenceBlock;
@@ -171,7 +171,7 @@ namespace
       hashes.push_back(hash2rct(h));
 
       keyV kv;
-      CHECK_AND_ASSERT_THROW_MES(rv.type == RCTTypeFcmpPlusPlusPqc, "Unsupported RCT type in get_tx_prehash: " << rv.type);
+      CHECK_AND_ASSERT_THROW_MES(rv.type == CTTypeFcmpPlusPlusPqc, "Unsupported CT type in get_tx_prehash: " << rv.type);
       kv.reserve((6*2+6) * rv.p.bulletproofs_plus.size());
       for (const auto &p: rv.p.bulletproofs_plus)
       {
@@ -204,7 +204,7 @@ namespace
         {
           CHECK_AND_ASSERT_MES(rvp, false, "rctSig pointer is NULL");
           const rctSig &rv = *rvp;
-          CHECK_AND_ASSERT_MES(rv.type == RCTTypeFcmpPlusPlusPqc,
+          CHECK_AND_ASSERT_MES(rv.type == CTTypeFcmpPlusPlusPqc,
               false, "verRctSemanticsSimple called on unsupported rctSig type");
           CHECK_AND_ASSERT_MES(!rv.p.fcmp_pp_proof.empty(),
               false, "FCMP++ proof is empty");
@@ -326,7 +326,7 @@ namespace
     {
       try
       {
-        CHECK_AND_ASSERT_MES(rv.type == RCTTypeFcmpPlusPlusPqc, false,
+        CHECK_AND_ASSERT_MES(rv.type == CTTypeFcmpPlusPlusPqc, false,
             "verRctSemanticsBondPost called on unsupported rctSig type");
         CHECK_AND_ASSERT_MES(!rv.p.fcmp_pp_proof.empty(), false,
             "verRctSemanticsBondPost requires non-empty FCMP++ proof");
@@ -349,7 +349,7 @@ namespace
     {
       try
       {
-        CHECK_AND_ASSERT_MES(rv.type == RCTTypeFcmpPlusPlusPqc, false,
+        CHECK_AND_ASSERT_MES(rv.type == CTTypeFcmpPlusPlusPqc, false,
             "verCtSemanticsEmission called on unsupported rctSig type");
         // Q11: fee inputs are optional. The FCMP++ proof authorizes exactly the
         // txin_to_key co-residents — present iff there are any (a proof with no
@@ -383,7 +383,7 @@ namespace
     {
       try
       {
-        CHECK_AND_ASSERT_MES(rv.type == RCTTypeFcmpPlusPlusPqc, false,
+        CHECK_AND_ASSERT_MES(rv.type == CTTypeFcmpPlusPlusPqc, false,
             "verRctSemanticsFeeOnly called on unsupported rctSig type");
         CHECK_AND_ASSERT_MES(rv.p.fcmp_pp_proof.empty(), false, "FCMP++ proof must be empty");
         CHECK_AND_ASSERT_MES(rv.p.pseudoOuts.empty(), false, "pseudoOuts must be empty");
@@ -479,7 +479,7 @@ namespace
         CHECK_AND_ASSERT_THROW_MES(leaf_chunk_entries.size() == inamounts.size(), "Different number of leaf_chunk_entries/inputs");
 
         rctSig rv;
-        rv.type = RCTTypeFcmpPlusPlusPqc;
+        rv.type = CTTypeFcmpPlusPlusPqc;
         rv.message = message;
         rv.txnFee = txnFee;
         rv.referenceBlock = referenceBlock;

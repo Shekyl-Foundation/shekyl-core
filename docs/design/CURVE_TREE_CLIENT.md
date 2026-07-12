@@ -1060,7 +1060,7 @@ The sharpest corner is the **empty / early-height** case, and the two notions of
   selene_hash_init() }`.
 
 The empty-tree window is heights **0..=60**, **not** `0..SPENDABLE_AGE` (0..9).
-The genesis founder allocations are **coinbase** outputs (`RCTTypeNull`,
+The genesis founder allocations are **coinbase** outputs (`CTTypeNull`,
 `unlock_time = 60`), so they mature at `+60`
 (`CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW`) — maturity height 60 — and a matured
 leaf enters the tree on connection of the **next** block

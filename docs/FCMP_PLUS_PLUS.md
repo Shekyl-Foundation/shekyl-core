@@ -164,7 +164,7 @@ The proof size scales with the number of inputs and the tree depth:
 
 ## 4. Transaction Format
 
-### RCTTypeFcmpPlusPlusPqc (type = 7)
+### CTTypeFcmpPlusPlusPqc (type = 1)
 
 Shekyl's only non-coinbase transaction type. Defined in `rctTypes.h`.
 
@@ -172,7 +172,7 @@ Shekyl's only non-coinbase transaction type. Defined in `rctTypes.h`.
 TransactionV3 {
   prefix: TransactionPrefixV3
   rct_signatures: rctSig {
-    type: RCTTypeFcmpPlusPlusPqc   // = 7
+    type: CTTypeFcmpPlusPlusPqc   // = 1
     txnFee: u64
     ecdhInfo: [EcdhTuple]
     outPk: [key]
@@ -186,8 +186,8 @@ TransactionV3 {
 }
 ```
 
-**Only two RCT type values exist.** The `rctTypes.h` enum contains
-`RCTTypeNull = 0` (coinbase only) and `RCTTypeFcmpPlusPlusPqc = 7` (all
+**Only two CT type values exist.** The `rctTypes.h` enum contains
+`CTTypeNull = 0` (coinbase only) and `CTTypeFcmpPlusPlusPqc = 1` (all
 non-coinbase spends). Legacy Monero types (`RCTTypeFull` through
 `RCTTypeBulletproofPlus`) are not defined; associated structs (`mgSig`,
 `clsag`, `rangeSig`, non-plus `Bulletproof`, `RCTConfig`, etc.) and ring /
@@ -404,7 +404,7 @@ encoding of `HybridPublicKey`.
 ## 7. Verification Order
 
 The following is the consensus-critical verification sequence for
-`RCTTypeFcmpPlusPlusPqc` transactions in `Blockchain::check_tx_inputs`.
+`CTTypeFcmpPlusPlusPqc` transactions in `Blockchain::check_tx_inputs`.
 Steps are ordered to fail fast on cheap checks before expensive proof
 verification.
 
@@ -1126,14 +1126,14 @@ For **regular** outputs, `leaf[96:128] == shekyl_fcmp_pqc_leaf_hash(pqc_pk)` unc
 
 **Claim reward outputs must be indistinguishable from regular outputs.**
 Claim reward outputs MUST be regular `txout_to_tagged_key` outputs (not
-staked), use `RCTTypeFcmpPlusPlusPqc` with Bulletproofs+ range proofs to
+staked), use `CTTypeFcmpPlusPlusPqc` with Bulletproofs+ range proofs to
 hide the reward amount, and go through the standard KEM derivation so
 their PQC keys are unique and unlinkable. Once a reward output matures
 into the curve tree, spending it must be indistinguishable from spending
 any other output. Specifically:
 
 - Reward outputs use confidential amounts (Pedersen commitment + BP+
-  range proof), not plaintext amounts with `RCTTypeNull`.
+  range proof), not plaintext amounts with `CTTypeNull`.
 - Per-output PQC keys are derived via the standard hybrid KEM path
   (unclamped Montgomery DH + ML-KEM-768 → HKDF → ML-DSA-65 keypair),
   with the ML-KEM ciphertext embedded in `tx_extra` under tag `0x06`.
@@ -1148,13 +1148,13 @@ any other output. Specifically:
 
 **Phase 4 implementation (completed):**
 
-1. Consensus: `check_tx_inputs` rejects `RCTTypeNull` for all non-coinbase
-   v3 transactions. Claim transactions must use `RCTTypeFcmpPlusPlusPqc`.
+1. Consensus: `check_tx_inputs` rejects `CTTypeNull` for all non-coinbase
+   v3 transactions. Claim transactions must use `CTTypeFcmpPlusPlusPqc`.
    Within the FCMP++ handler, a dedicated claim sub-path verifies
    pseudo-out determinism (`zeroCommit(claim_amount)`), PQC ownership
    cross-check, and batch pool balance — while skipping membership proof
    verification (not applicable to `txin_stake_claim` inputs).
-2. Wallet: `wallet2::create_claim_transaction()` uses `RCTTypeFcmpPlusPlusPqc`
+2. Wallet: `wallet2::create_claim_transaction()` uses `CTTypeFcmpPlusPlusPqc`
    with BP+ range proofs, hybrid KEM derivation for per-output PQC keys,
    ML-KEM ciphertext in `tx_extra` (`0x06`), `H(pqc_pk)` leaf hashes in
    `tx_extra` (`0x07`), and a 2-output structure (reward + dummy change).
@@ -1200,7 +1200,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | `FCMP_REFERENCE_BLOCK_MIN_AGE` | 5 (reorg safety margin) | `cryptonote_config.h` |
 | `FCMP_MAX_INPUTS_PER_TX` | 8 | `cryptonote_config.h` |
 | `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` | 10,000 | `cryptonote_config.h` |
-| `RCTTypeFcmpPlusPlusPqc` | 7 | `rctTypes.h` |
+| `CTTypeFcmpPlusPlusPqc` | 1 | `rctTypes.h` |
 | `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` | 0x06 | `tx_extra.h` |
 | `TX_EXTRA_TAG_PQC_LEAF_HASHES` | 0x07 | `tx_extra.h` |
 | `ML_KEM_768_CT_BYTES` | 1088 | `tx_extra.h` |
@@ -1265,8 +1265,8 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | `tx_extra` leaf hash tag `0x07` (N × 32 bytes) | **Done** | `tx_extra.h`, `cryptonote_format_utils.cpp` |
 | Curve tree leaves use actual `H(pqc_pk)` from `tx_extra` | **Done** | `blockchain_db.cpp` (`collect_outputs`, `make_leaf`) |
 | Coinbase KEM self-encapsulation + `H(pqc_pk)` emission | **Done** | `cryptonote_tx_utils.cpp` (`construct_miner_tx`) |
-| Consensus rejects `RCTTypeNull` for non-coinbase v3 txs | **Done** | `blockchain.cpp` (`check_tx_inputs`) |
-| Claim tx: `RCTTypeFcmpPlusPlusPqc` with BP+ range proofs | **Done** | `wallet2.cpp` (`create_claim_transaction`) |
+| Consensus rejects `CTTypeNull` for non-coinbase v3 txs | **Done** | `blockchain.cpp` (`check_tx_inputs`) |
+| Claim tx: `CTTypeFcmpPlusPlusPqc` with BP+ range proofs | **Done** | `wallet2.cpp` (`create_claim_transaction`) |
 | Claim tx: 2-output structure (reward + dummy change) | **Done** | `wallet2.cpp` (`create_claim_transaction`) |
 | Claim tx: hybrid KEM derivation for per-output PQC keys | **Done** | `wallet2.cpp` (`create_claim_transaction`) |
 | Claim tx: per-output PQC signing (not wallet master key) | **Done** | `wallet2.cpp` (`create_claim_transaction`) |
@@ -1343,7 +1343,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Wallet v3 scanner via `scan_output_recover` | **Done** | `wallet2.cpp` |
 | X25519-only view tag (sender + scanner) | **Done** | `output.rs`, `wallet2.cpp` |
 | `additional_tx_keys` removed for v3 | **Done** | `cryptonote_tx_utils.cpp` |
-| `RCTTypeNull` serializes `outPk` + `enc_amounts` | **Done** | `rctTypes.h` |
+| `CTTypeNull` serializes `outPk` + `enc_amounts` | **Done** | `rctTypes.h` |
 | On-chain `outPk` for v3+ coinbase | **Done** | `blockchain_db.cpp` |
 | `check_commitment_mask_valid` rejects z=0/z=1 | **Done** | `blockchain.cpp` |
 | PQC salt unified to `shekyl-output-derive-v1` | **Done** | `derivation.rs`, `output.rs` |
@@ -1444,7 +1444,7 @@ cd rust && cargo test --workspace
 
 `tests/unit_tests/fcmp.cpp` covers:
 
-- `RCTTypeFcmpPlusPlusPqc` serialization round-trip
+- `CTTypeFcmpPlusPlusPqc` serialization round-trip
 - `key_image_y_normalize` correctness and idempotency
 - `referenceBlock` staleness constant validation
 - `key_offsets` empty enforcement for FCMP++ type

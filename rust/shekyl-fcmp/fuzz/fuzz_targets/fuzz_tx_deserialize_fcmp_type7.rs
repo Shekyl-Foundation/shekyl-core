@@ -8,7 +8,7 @@ use libfuzzer_sys::fuzz_target;
 use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
 use shekyl_fcmp::leaf::PqcLeafScalar;
 
-/// Simulates deserializing the prunable portion of an RCTTypeFcmpPlusPlusPqc
+/// Simulates deserializing the prunable portion of a CTTypeFcmpPlusPlusPqc
 /// transaction. The fuzzer provides arbitrary bytes which are interpreted as
 /// a concatenation of: pseudoOuts (N*32 bytes) + fcmp_pp_proof (variable) +
 /// pqc_pk_hashes (N*32 bytes). The number of inputs is derived from the first
