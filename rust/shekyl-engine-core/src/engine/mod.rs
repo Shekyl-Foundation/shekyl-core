@@ -206,11 +206,16 @@ pub(crate) mod bond_assembly;
 /// WI-2 §3.3 Engine-side `assemble_bond_post` orchestrator (public halves +
 /// persist-before-return via an independent `PendingPostStore`).
 pub(crate) mod bond_orchestrator;
+/// PR-4's CB-3 dispatch seam (`EMISSION_CLAIM_BUILDER.md` §8): the Engine-side
+/// emission-claim **request path** — activate the claimant slot, assemble via
+/// `claim_orchestrator`, dispatch through the audited posture→submitter choke
+/// point. Scheduling policy stays external (the GF-4 seam).
+pub(crate) mod claim_dispatch;
 /// PR-3's Engine-side emission-claim orchestration (`EMISSION_CLAIM_BUILDER.md`
 /// §8): the fetch → designate → fee-sweep → path-assembly →
 /// `AssembleEmissionClaim` pipeline that prepares the operands the
 /// `StakeEngine` handler validates and signs against. Returns the reply
-/// unbroadcast (CB-3: dispatch is the GF-4 seam).
+/// unbroadcast (CB-3: dispatch is the `claim_dispatch` seam).
 pub(crate) mod claim_orchestrator;
 pub mod daemon;
 pub(crate) mod diagnostics;

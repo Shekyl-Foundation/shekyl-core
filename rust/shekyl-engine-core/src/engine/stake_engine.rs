@@ -1896,10 +1896,6 @@ pub(crate) struct AssembleEmissionClaim {
 /// at the single P-1 site, [`finalize_bond_tx`]), plus the public facts the
 /// caller's reservation and dedup records need. Secrets never cross the
 /// boundary.
-// Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the fields'
-// production reader is the CB-3 dispatch seam — the same consumer whose
-// landing deletes `orchestrate_emission_claim`'s allow; this one dies with it.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct AssembledEmissionClaim {
     /// The fully-signed, wire-encoded emission-claim transaction.

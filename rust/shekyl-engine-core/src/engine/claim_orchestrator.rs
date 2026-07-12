@@ -216,11 +216,6 @@ fn provable_records(
 /// ledger (the orchestrator has no ledger access of its own; the engine owns
 /// the header window). `handle` is the operation-scoped slot capability; its
 /// slot also names the sweep's record filter.
-// Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): this is
-// PR-3's production pipeline awaiting its request path — the CB-3 dispatch
-// seam (2c-2b sibling) is the sole production caller and deletes this allow
-// when it lands.
-#[allow(dead_code)]
 pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     rpc: &R,
     handle: PersonaHandle,

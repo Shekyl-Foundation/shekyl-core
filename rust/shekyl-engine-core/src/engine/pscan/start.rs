@@ -436,8 +436,10 @@ where
 /// [`BroadcastSubmitter::for_posture`]'s signature: the hardwired ① `Local`
 /// posture below never dials SOCKS (the ① arm ignores the endpoint entirely),
 /// but construction must stay on the audited posture→submitter choke point
-/// rather than reach around it to a bare submitter.
-const TOR_SOCKS_PLACEHOLDER_PORT: u16 = 9050;
+/// rather than reach around it to a bare submitter. Shared with the CB-3
+/// emission-claim dispatch seam (`claim_dispatch.rs`), which hardwires the
+/// same ① posture — one placeholder, not two drifting copies.
+pub(crate) const TOR_SOCKS_PLACEHOLDER_PORT: u16 = 9050;
 
 /// The production [`BondBroadcast`]: routes every dispatch through the
 /// [`BroadcastSubmitter::for_posture`] choke point (posture→submitter binding)
