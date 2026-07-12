@@ -541,6 +541,86 @@ questions only, with historical callers rerouted to the bits. Resolved as part o
 
 ---
 
+## P2B-8 — Verify/connect design questions (pinned pre-impl, 2026-07-12)
+
+**Why.** The bond-FSM verify/connect is **JoinMarket-only** at source (`bond_post.rs`
+`verify_join_market_bond_post`; the wire carries all four `post_kind`s but verify rejects the other
+three "at genesis"). Building `Rebond` / `Unbond` / `HoldingsUpdate` verify+connect is the real
+seal-blocking work (the age-stratified sim reconciliation is **done** — §L18 sealable at genesis;
+P2B-7 exit). Four questions the specs left thin are pinned here so the impl lands M1-clean
+(arm the trigger before the identifier exists). Verify contract per `post_kind`: gate-4 §3.5 (order),
+§3.2 (credit/debit terms), §4.1 (record shape). Verify/connect logic is **Rust-native**
+(`shekyl-archival-retention`), C++ daemon thin-glue + FFI; every connect path gets a pop twin (§5).
+
+### Q1 — Per-shard release-cooldown anchor (`HoldingsUpdate` drop) — **RESOLVED, no new field**
+
+**Question.** P2B-7 Pin 2's per-shard cooldown is measured from *shard `s`'s* last-served epoch, but
+§4.1 stores only a **record-level** `last_served_epoch`. Where does the per-shard anchor come from?
+
+**Pin (source-grounded).** **Derive it — no per-shard stored field.** The serve-credit table is keyed
+**`P_id[32] ‖ BE64(shard_id) ‖ BE64(settlement_epoch)`** — a big-endian composite whose byte-sort *is*
+`(P_id, shard, epoch)` ascending (`serve_credit_decisions.rs:58-62`; BE is load-bearing for LMDB sort
+order, `shekyl_types.h:405`, SCE audit). So *shard `s`'s last-served epoch* = the max `E` carrying a
+bit = a single **reverse-cursor seek** over the `P_id ‖ BE64(shard)` prefix (`MDB_SET_RANGE` to
+`‖ BE64(u64::MAX)`, one `MDB_PREV`; guard the "no bit for `s`" empty case → shard never served, drop
+cooldown anchors at its add epoch). At drop **connect**, capture that value into the **`bond_event_log`
+drop interval** — Pin 2 already makes the cooldown a `bond_event_log` predicate — fixing the anchor at
+drop time: reorg-clean (pops with the log), no mutable per-shard field to desync. Pin 3
+(slashable-through-cooldown) reads the same interval.
+
+### Q2 — Record-level `Unbond` cooldown anchor — **lean: derive, drop the §4.1 field**
+
+**Question.** §4.1 stores `last_served_epoch: Option<u64>` for the whole-record `Unbond` cooldown.
+Store-and-maintain, or derive?
+
+**Pin (lean, one call to confirm).** **Derive** — consistent with Q1 and reorg-clean: at `Unbond`
+verify, whole-record last-served = **max over the record's current shards** of the Q1 per-shard value
+(O(#shards) reverse-cursor seeks; `Unbond` is once-per-record, and a lean year-30 portfolio is ~60
+shards). **Amend §4.1 to drop the `last_served_epoch` field** — a maintained field needs its own pop
+symmetry and can desync from the serve-credit table, which is the single source of truth.
+*Alternative held (rule-21):* keep the field, updated `O(1)` on each serve-credit write
+(`last_served_epoch = max(last_served_epoch, E)`) with a pop twin — choose this only if the
+O(#shards) `Unbond`-time seek is shown to bind. **Lean: derive; §4.1 amendment routed to gate-4.**
+
+### Q3 — `bond_duration(age)` is a consensus gate ⇒ genesis-frozen, not post-genesis tunable — **RESOLVED**
+
+**Question.** Drop-eligibility (Pin 3, gate-4 §3.4: "before the horizon elapses, the shard is ineligible
+for voluntary drop") is **consensus-visible verify logic**, but `BOND_DURATION_{BASE,AGE_SCALE}` are
+"provisional pending testnet."
+
+**Pin.** Because it gates a consensus verify decision, `bond_duration` is **frozen at genesis like any
+consensus constant**. The "provisional / drift within `scale ∈ [2,8]`" clause
+([`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §1 fn.1) is a **pre-genesis calibration
+window** (testnet `fetch_latency_per_unit` closes it before seal), **not** a post-genesis tunable — a
+post-genesis change is a hard fork. Resolves the "amends this table only" vs "consensus gate" tension:
+the amend window is *pre-seal*. The impl reads the **generated** consensus constant (never a hardcode),
+and the drop-eligibility check is `current_epoch − shard_add_epoch ≥ bond_duration(age)`.
+
+### Q4 — `Rebond` precondition + the partial-slash recovery path — **needs the gate-4 call**
+
+**Question.** §3.4:319 gives the `Rebond` precondition as `good_standing == false`; §3.2/P2B-4 frame
+`Rebond` as `Slashed → Bonded` (`bonded_total == 0`). Credit "restores `== bond_floor`" (§3.4:320).
+These disagree on **which** post-slash state `Rebond` recovers, and leave the **partial-slash recovery
+path** unstated.
+
+**Pin (the credit) + flag (the precondition).** Credit amount is settled: restore `bonded_total` to
+`bond_floor(holdings)` (floor-equality, §3.5 step 4). The **open call for gate-4:** is `Rebond` the
+**terminal** recovery only (`bonded_total == 0`, the FSM `Slashed → Bonded` edge), with a
+**partial-slashed still-`Bonded`** record recovering its dropped shard via **`HoldingsUpdate` add**
+(re-add the slashed shard)? That reading is clean — one edge per state — and makes §3.4's
+`good_standing == false` the *slash-happened* precondition shared by both recovery paths, with the
+`bond_debit == 0` / floor-equality math distinguishing them. **Resolve at gate-4 source before the
+`Rebond` verify branch lands; do not infer the partial-slash path from the FSM table alone.**
+
+### P2B-8 exit
+
+- [x] Q1 per-shard cooldown anchor — derive via BE-key reverse cursor, capture in `bond_event_log`.
+- [x] Q3 `bond_duration` genesis-freeze posture — pre-seal calibration only.
+- [ ] Q2 §4.1 `last_served_epoch` field — **derive vs store** (lean derive); gate-4 §4.1 amendment.
+- [ ] Q4 `Rebond` precondition + partial-slash recovery path — **gate-4 source call** before the branch.
+
+---
+
 ## Forward order
 
 ```text
@@ -555,6 +635,17 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
 
 ## Revision history
 
+- **2026-07-12:** **P2B-8 — verify/connect design questions pinned pre-impl.** Q1 (per-shard
+  `HoldingsUpdate`-drop cooldown anchor) resolved with **no new field** — derive shard `s`'s
+  last-served via a reverse-cursor seek over the BE composite serve-credit key
+  (`P_id ‖ BE64(shard) ‖ BE64(epoch)`), captured into the `bond_event_log` drop interval at connect.
+  Q3 (`bond_duration` consensus gate) resolved — genesis-frozen; the provisional-numeric window is
+  pre-seal calibration only. Q2 (§4.1 `last_served_epoch` store-vs-derive; lean derive) and Q4
+  (`Rebond` precondition + partial-slash recovery path) routed to gate-4 as source calls before the
+  respective verify branches land. Also (same session): P2B-7 exit reconciled to the §L18 sealed
+  verdict; the "`P` rotation" fossil killed at the P2B-1 root (backing "rotation" is not a mechanism
+  — no `backing_outputs` field, consensus rule dropped; pseudonym "rotation" is unlink-relink →
+  correlation, T-A1/S-5). Docs-only.
 - **2026-06-15:** P2B-7 — `HoldingsUpdate` promoted deferred-V3.1 → **V3.0 (genesis)**. FSM
   transition edges + actions for voluntary add/drop; friction pins (per-shard release
   cooldown, slashable-through-cooldown anti-dodge, drop-last-shard rejected); mutable-holdings
