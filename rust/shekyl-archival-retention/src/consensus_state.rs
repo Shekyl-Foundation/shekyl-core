@@ -310,23 +310,25 @@ pub struct EpochCloseInputs<'a> {
 }
 
 impl<'a> EpochCloseInputs<'a> {
-    /// The verify-view construction (`EMISSION_CLAIM_BUILDER.md` §7.3):
-    /// consensus constants come from the compiled constants pipeline —
-    /// deliberately never a wire copy, which would be a second source that
-    /// can drift — and the close-only M1 operands are stubbed
-    /// (`frozen_shard_count: 0`, [`KCover::consensus`]), which the verify
-    /// path never reads (the gate's outcome arrives via the persisted
-    /// `Σwork` denominator). Single-sourced here so the verify FFI shims and
-    /// the wallet's §2 step-7 self-check construct byte-identical views and
-    /// cannot drift; the close path threads real M1 operands and does not
-    /// use this constructor.
+    /// The close-path construction: the pinned consensus params
+    /// (schedule, age weight, banded curve) filled from the compiled
+    /// constants pipeline — the **single** source both this and
+    /// [`Self::verify_view`] draw from, so the close FFI shim and the
+    /// verify views cannot drift on a param (the
+    /// `SETTLEMENT_EPOCH_BLOCKS → effective_settlement_epoch_blocks()`
+    /// swap previously had to edit the FFI's struct literal and this
+    /// constructor in lockstep; now the params exist once) — plus the
+    /// close-only M1 operands (`frozen_shard_count`, `k_cover`) the caller
+    /// threads for real.
     #[must_use]
-    pub fn verify_view(
+    pub fn close_view(
         settlement_epoch: u64,
         close_block_height: u64,
         bonds: &'a [EpochCloseBond<'a>],
         shards: &'a [EpochCloseShard],
         credit_pairs: &'a [CreditPair],
+        frozen_shard_count: u64,
+        k_cover: KCover,
     ) -> Self {
         Self {
             settlement_epoch,
@@ -340,9 +342,36 @@ impl<'a> EpochCloseInputs<'a> {
             bonds,
             shards,
             credit_pairs,
-            frozen_shard_count: 0,
-            k_cover: KCover::consensus(),
+            frozen_shard_count,
+            k_cover,
         }
+    }
+
+    /// The verify-view construction (`EMISSION_CLAIM_BUILDER.md` §7.3):
+    /// [`Self::close_view`]'s pinned params — deliberately never a wire
+    /// copy, which would be a second source that can drift — with the
+    /// close-only M1 operands stubbed (`frozen_shard_count: 0`,
+    /// [`KCover::consensus`]), which the verify path never reads (the
+    /// gate's outcome arrives via the persisted `Σwork` denominator).
+    /// Single-sourced here so the verify FFI shims and the wallet's §2
+    /// step-7 self-check construct byte-identical views and cannot drift.
+    #[must_use]
+    pub fn verify_view(
+        settlement_epoch: u64,
+        close_block_height: u64,
+        bonds: &'a [EpochCloseBond<'a>],
+        shards: &'a [EpochCloseShard],
+        credit_pairs: &'a [CreditPair],
+    ) -> Self {
+        Self::close_view(
+            settlement_epoch,
+            close_block_height,
+            bonds,
+            shards,
+            credit_pairs,
+            0,
+            KCover::consensus(),
+        )
     }
 }
 

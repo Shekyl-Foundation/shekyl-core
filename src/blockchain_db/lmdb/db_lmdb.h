@@ -453,6 +453,8 @@ private:
   virtual uint64_t get_total_bonded_atomic() const override;
   virtual void set_total_burned(uint64_t amount) override;
   virtual uint64_t get_total_burned() const override;
+  virtual void set_settlement_epoch_blocks_pin(uint64_t blocks) override;
+  virtual uint64_t get_settlement_epoch_blocks_pin() const override;
 
   virtual bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch) const override;

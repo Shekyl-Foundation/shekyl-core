@@ -4907,6 +4907,49 @@ uint64_t BlockchainLMDB::get_total_bonded_atomic() const
 }
 
 
+void BlockchainLMDB::set_settlement_epoch_blocks_pin(uint64_t blocks)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  // Init-time write (Blockchain::init, before any block-add txn exists), so
+  // this manages its own short transaction — the same shape as
+  // prune_worker's pruning_seed write.
+  mdb_txn_safe txn;
+  if (auto result = mdb_txn_begin(m_env, NULL, 0, txn))
+    throw0(DB_ERROR(lmdb_error("Failed to create a transaction for the db: ", result).c_str()));
+
+  MDB_val_str(k, "settlement_epoch_blocks");
+  MDB_val v = {sizeof(blocks), (void *)&blocks};
+  if (auto result = mdb_put(txn, m_properties, &k, &v, 0))
+    throw0(DB_ERROR(lmdb_error("Failed to set settlement epoch blocks pin: ", result).c_str()));
+  txn.commit();
+}
+
+uint64_t BlockchainLMDB::get_settlement_epoch_blocks_pin() const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  TXN_PREFIX_RDONLY();
+  MDB_val_str(k, "settlement_epoch_blocks");
+  MDB_val v;
+  auto get_result = mdb_get(m_txn, m_properties, &k, &v);
+  if (get_result == MDB_NOTFOUND)
+  {
+    TXN_POSTFIX_RDONLY();
+    return 0;
+  }
+  if (get_result)
+    throw0(DB_ERROR(lmdb_error("Failed to read settlement epoch blocks pin: ", get_result).c_str()));
+  if (v.mv_size != sizeof(uint64_t))
+    throw0(DB_ERROR("Bad settlement epoch blocks pin size in DB"));
+  uint64_t blocks;
+  memcpy(&blocks, v.mv_data, sizeof(blocks));
+  TXN_POSTFIX_RDONLY();
+  return blocks;
+}
+
 void BlockchainLMDB::set_total_burned(uint64_t amount)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);

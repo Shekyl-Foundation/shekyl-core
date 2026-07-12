@@ -2026,6 +2026,13 @@ public:
   virtual void set_total_burned(uint64_t amount) = 0;
   virtual uint64_t get_total_burned() const = 0;
 
+  // Fakechain settlement-epoch schedule pin (Blockchain::init): the schedule
+  // the datadir's epoch-derived rows (bond join epochs, serve-credit bits)
+  // were written under. 0 = not pinned yet. The setter manages its own write
+  // transaction — it runs at init, outside any block-add txn.
+  virtual void set_settlement_epoch_blocks_pin(uint64_t blocks) = 0;
+  virtual uint64_t get_settlement_epoch_blocks_pin() const = 0;
+
 
   // ─── Archival serve-credit ledger (gate-2 §3.1) ───────────────────────────
 
