@@ -39,16 +39,16 @@ using namespace std;
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "fcmp"
 
-// Pin the `RCTTypeFcmpPlusPlusPqc` enum tag to the JSON consensus
+// Pin the `CTTypeFcmpPlusPlusPqc` enum tag to the JSON consensus
 // authority at `config/consensus_constants.json`. The enum value is
 // not generated (changing the enum tag itself would force every
 // switch / case site to update mechanically), but its u8 wire value
 // is consensus-critical (a daemon reading `7` from the wire and a
 // wallet writing `8` would fork). See
 // `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
-static_assert(static_cast<uint8_t>(rct::RCTTypeFcmpPlusPlusPqc) ==
+static_assert(static_cast<uint8_t>(rct::CTTypeFcmpPlusPlusPqc) ==
                   SHEKYL_RCT_TYPE_FCMP_PLUS_PLUS_PQC,
-              "rct::RCTTypeFcmpPlusPlusPqc enum tag drifted from "
+              "rct::CTTypeFcmpPlusPlusPqc enum tag drifted from "
               "config/consensus_constants.json — changing the wire "
               "type number is a consensus rule change");
 
@@ -206,7 +206,7 @@ namespace rct {
     {
         switch (type)
         {
-            case RCTTypeFcmpPlusPlusPqc:
+            case CTTypeFcmpPlusPlusPqc:
                 return true;
             default:
                 return false;
@@ -217,7 +217,7 @@ namespace rct {
     {
         switch (type)
         {
-            case RCTTypeFcmpPlusPlusPqc:
+            case CTTypeFcmpPlusPlusPqc:
                 return true;
             default:
                 return false;

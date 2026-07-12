@@ -176,7 +176,7 @@ TEST(fcmp, mul8)
 // FCMP++ / PQC-specific tests (Phase 7)
 // ──────────────────────────────────────────────────────────────────────
 
-TEST(fcmp, RCTTypeFcmpPlusPlusPqc_serialization_roundtrip)
+TEST(fcmp, CTTypeFcmpPlusPlusPqc_serialization_roundtrip)
 {
   // Round-trips the rct base through `serialize_rctsig_base` — the ONLY
   // encoding of the base (the transaction serializer, the tx-hash paths, the
@@ -188,7 +188,7 @@ TEST(fcmp, RCTTypeFcmpPlusPlusPqc_serialization_roundtrip)
   // section's real-path round-trip is covered at the transaction level
   // (tests/unit_tests/serialization.cpp and the shekyl-wire KATs).
   rct::rctSig rv;
-  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.type = rct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 1000000;
   memset(&rv.referenceBlock, 0xAB, sizeof(rv.referenceBlock));
 
@@ -226,7 +226,7 @@ TEST(fcmp, RCTTypeFcmpPlusPlusPqc_serialization_roundtrip)
     ASSERT_TRUE(rv2.serialize_rctsig_base(ar, inputs, outputs));
   }
 
-  ASSERT_EQ(rv2.type, rct::RCTTypeFcmpPlusPlusPqc);
+  ASSERT_EQ(rv2.type, rct::CTTypeFcmpPlusPlusPqc);
   ASSERT_EQ(rv2.txnFee, rv.txnFee);
   ASSERT_EQ(rv2.referenceBlock, rv.referenceBlock);
   ASSERT_EQ(rv2.enc_amounts, rv.enc_amounts);
@@ -240,7 +240,7 @@ TEST(fcmp, RCTTypeFcmpPlusPlusPqc_serialization_roundtrip)
 TEST(fcmp, enc_label_binds_rctsig_base_prehash)
 {
   rct::rctSig rv;
-  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.type = rct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 1000000;
   memset(&rv.referenceBlock, 0xCD, sizeof(rv.referenceBlock));
   rv.enc_amounts.resize(1);
@@ -267,7 +267,7 @@ TEST(fcmp, enc_label_binds_rctsig_base_prehash)
   EXPECT_NE(h0, h_amount_tamper) << "enc_amount byte flip must change rctSigBase prehash component";
 }
 
-TEST(fcmp, RCTTypeNull_serialization)
+TEST(fcmp, CTTypeNull_serialization)
 {
   // The real coinbase base encoding (`serialize_rctsig_base`, the only
   // encoding — see the roundtrip test above) for a Null rct with no outputs
@@ -275,7 +275,7 @@ TEST(fcmp, RCTTypeNull_serialization)
   // pseudo-out material. The full-transaction-level pin lives in
   // tests/unit_tests/serialization.cpp; this is the focused component read.
   rct::rctSig rv;
-  rv.type = rct::RCTTypeNull;
+  rv.type = rct::CTTypeNull;
 
   std::string blob;
   {
@@ -285,7 +285,7 @@ TEST(fcmp, RCTTypeNull_serialization)
     blob = oss.str();
   }
   ASSERT_EQ(blob.size(), 1u);
-  ASSERT_EQ(blob[0], static_cast<char>(rct::RCTTypeNull));
+  ASSERT_EQ(blob[0], static_cast<char>(rct::CTTypeNull));
 
   rct::rctSig rv2;
   {
@@ -293,7 +293,7 @@ TEST(fcmp, RCTTypeNull_serialization)
     ASSERT_TRUE(rv2.serialize_rctsig_base(ar, 1, 0));
   }
 
-  ASSERT_EQ(rv2.type, rct::RCTTypeNull);
+  ASSERT_EQ(rv2.type, rct::CTTypeNull);
 }
 
 TEST(fcmp, referenceBlock_staleness_constants)
@@ -319,10 +319,10 @@ TEST(fcmp, get_pseudo_outs_uses_prunable_for_all_types)
   // The pseudo-out commitments live in the prunable section for every rct
   // type (the legacy base-side fallback field was removed in the
   // dead-serializer cleanup): FCMP++ carries one per spend input, and a
-  // coinbase (RCTTypeNull) has none, so the accessor returns the empty
+  // coinbase (CTTypeNull) has none, so the accessor returns the empty
   // prunable vector there.
   rct::rctSig rv;
-  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.type = rct::CTTypeFcmpPlusPlusPqc;
 
   rct::key k1 = rct::skGen();
   rv.p.pseudoOuts.push_back(k1);
@@ -332,7 +332,7 @@ TEST(fcmp, get_pseudo_outs_uses_prunable_for_all_types)
   ASSERT_EQ(po[0], k1);
 
   rct::rctSig coinbase;
-  coinbase.type = rct::RCTTypeNull;
+  coinbase.type = rct::CTTypeNull;
   ASSERT_TRUE(coinbase.get_pseudo_outs().empty());
 }
 
@@ -367,7 +367,7 @@ TEST(fcmp, curve_tree_root_in_block_header)
 TEST(fcmp, fcmp_pp_proof_empty_rejected_by_verifier)
 {
   rct::rctSig rv;
-  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.type = rct::CTTypeFcmpPlusPlusPqc;
   rv.p.fcmp_pp_proof.clear();
   rv.p.curve_trees_tree_depth = 20;
 
@@ -604,7 +604,7 @@ TEST(fcmp, verification_cache_hash_deterministic)
   // Same transaction produces the same verification hash twice
   cryptonote::transaction tx{};
   tx.version = 3;
-  tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
   tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03, 0x04, 0x05};
   memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
 
@@ -623,7 +623,7 @@ TEST(fcmp, verification_cache_hash_differs_on_proof_change)
 {
   cryptonote::transaction tx{};
   tx.version = 3;
-  tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
   tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03};
   memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
 
@@ -644,7 +644,7 @@ TEST(fcmp, verification_cache_hash_differs_on_reference_block_change)
 {
   cryptonote::transaction tx{};
   tx.version = 3;
-  tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
   tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03};
   memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
 
@@ -665,7 +665,7 @@ TEST(fcmp, verification_cache_hash_differs_on_key_image_change)
 {
   cryptonote::transaction tx{};
   tx.version = 3;
-  tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
   tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03};
   memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
 
@@ -686,7 +686,7 @@ TEST(fcmp, verification_cache_hash_null_for_non_fcmp_type)
 {
   cryptonote::transaction tx{};
   tx.version = 2;
-  tx.rct_signatures.type = rct::RCTTypeNull;
+  tx.rct_signatures.type = rct::CTTypeNull;
 
   crypto::hash h = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
   ASSERT_EQ(h, crypto::null_hash);
@@ -696,7 +696,7 @@ TEST(fcmp, verification_cache_hash_multiple_inputs)
 {
   cryptonote::transaction tx{};
   tx.version = 3;
-  tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
   tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03, 0x04};
   memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
 

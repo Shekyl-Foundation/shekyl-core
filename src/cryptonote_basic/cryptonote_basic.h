@@ -613,7 +613,7 @@ namespace cryptonote
           if (std::is_same<Archive<W>, binary_archive<W>>())
             unprunable_size = ar.getpos() - start_pos;
 
-          if (!pruned && rct_signatures.type != rct::RCTTypeNull)
+          if (!pruned && rct_signatures.type != rct::CTTypeNull)
           {
             // pseudoOuts are sized by the spend subset, not vin.size() — see
             // count_spend_inputs. Matches the consensus pins in blockchain.cpp
@@ -769,7 +769,7 @@ namespace cryptonote
   {
     transaction_prefix::set_null();
     signatures.clear();
-    rct_signatures.type = rct::RCTTypeNull;
+    rct_signatures.type = rct::CTTypeNull;
     pqc_auths.clear();
     set_hash_valid(false);
     set_prunable_hash_valid(false);

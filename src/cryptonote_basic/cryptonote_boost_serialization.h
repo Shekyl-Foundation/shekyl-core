@@ -325,7 +325,7 @@ namespace boost
     else
     {
       a & (rct::rctSigBase&)x.rct_signatures;
-      if (x.rct_signatures.type != rct::RCTTypeNull)
+      if (x.rct_signatures.type != rct::CTTypeNull)
         a & x.rct_signatures.p;
       if (x.version >= 3 && !x.vin.empty() && !std::holds_alternative<cryptonote::txin_gen>(x.vin[0]))
         a & x.pqc_auths;
@@ -405,7 +405,7 @@ namespace boost
   inline void serialize(Archive &a, rct::rctSigBase &x, const boost::serialization::version_type ver)
   {
     a & x.type;
-    if (x.type == rct::RCTTypeNull)
+    if (x.type == rct::CTTypeNull)
     {
       a & x.enc_amounts;
       a & x.enc_labels;
@@ -413,7 +413,7 @@ namespace boost
       a & x.txnFee;
       return;
     }
-    if (x.type != rct::RCTTypeFcmpPlusPlusPqc)
+    if (x.type != rct::CTTypeFcmpPlusPlusPqc)
       throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception, "Unsupported rct type");
     a & x.enc_amounts;
     a & x.enc_labels;
@@ -432,7 +432,7 @@ namespace boost
   inline void serialize(Archive &a, rct::rctSig &x, const boost::serialization::version_type ver)
   {
     a & x.type;
-    if (x.type == rct::RCTTypeNull)
+    if (x.type == rct::CTTypeNull)
     {
       a & x.enc_amounts;
       a & x.enc_labels;
@@ -440,7 +440,7 @@ namespace boost
       a & x.txnFee;
       return;
     }
-    if (x.type != rct::RCTTypeFcmpPlusPlusPqc)
+    if (x.type != rct::CTTypeFcmpPlusPlusPqc)
       throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception, "Unsupported rct type");
     a & x.enc_amounts;
     a & x.enc_labels;

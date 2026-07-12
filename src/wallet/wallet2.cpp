@@ -8894,7 +8894,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
             error::wallet_internal_error, "Failed to parse SignedProofs JSON from Rust");
       }
 
-      tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+      tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
       tx.rct_signatures.txnFee = fee;
       tx.rct_signatures.message = rct::hash2rct(tx_prefix_hash);
       memcpy(&tx.rct_signatures.referenceBlock, &reference_block, 32);

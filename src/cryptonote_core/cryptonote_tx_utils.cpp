@@ -740,7 +740,7 @@ namespace cryptonote
     tx_extra_pqc_leaf_hashes leaf_hash_field;
     leaf_hash_field.blob.reserve(destinations.size() * PQC_LEAF_HASH_BYTES);
 
-    tx.rct_signatures.type = rct::RCTTypeNull;
+    tx.rct_signatures.type = rct::CTTypeNull;
     tx.rct_signatures.outPk.resize(destinations.size());
     tx.rct_signatures.enc_amounts.resize(destinations.size());
     tx.rct_signatures.enc_labels.resize(destinations.size());

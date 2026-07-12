@@ -8,7 +8,7 @@ support.
 This crate provides output scanning functionality adapted from the
 monero-oxide wallet library, extended with Shekyl-specific features:
 
-- **FCMP++**: Only `RCTTypeFcmpPlusPlusPqc` transactions (no legacy ring
+- **FCMP++**: Only `CTTypeFcmpPlusPlusPqc` transactions (no legacy ring
   signatures, no decoy selection)
 - **Hybrid KEM scanning**: Full X25519 + ML-KEM-768 decapsulation pipeline
   with view-tag pre-filtering for fast output rejection

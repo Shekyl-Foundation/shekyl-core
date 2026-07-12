@@ -1528,7 +1528,7 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
   CHECK_AND_ASSERT_MES(b.miner_tx.vin.size() == 1, false, "coinbase transaction in the block has no inputs");
   CHECK_AND_ASSERT_MES(std::holds_alternative<txin_gen>(b.miner_tx.vin[0]), false, "coinbase transaction in the block has the wrong type");
   CHECK_AND_ASSERT_MES(b.miner_tx.version >= 3, false, "Invalid coinbase transaction version: " << b.miner_tx.version << " (minimum: 3)");
-  CHECK_AND_ASSERT_MES(b.miner_tx.rct_signatures.type == rct::RCTTypeNull, false, "FCMP++ signatures not allowed in coinbase transactions");
+  CHECK_AND_ASSERT_MES(b.miner_tx.rct_signatures.type == rct::CTTypeNull, false, "FCMP++ signatures not allowed in coinbase transactions");
 
   if(std::get<txin_gen>(b.miner_tx.vin[0]).height != height)
   {
@@ -3221,18 +3221,18 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
 //------------------------------------------------------------------
 // Reject outputs whose Pedersen commitment mask is trivially 0 or 1.
 //
-// For non-coinbase (RCTTypeFcmpPlusPlusPqc): BP+ range proof + balance equation
+// For non-coinbase (CTTypeFcmpPlusPlusPqc): BP+ range proof + balance equation
 // fully constrain the mask, so the identity/G checks are defense-in-depth against
 // construction bugs (they only trigger when amount=0).
 //
-// For coinbase (RCTTypeNull): there is no range proof and no balance equation.
+// For coinbase (CTTypeNull): there is no range proof and no balance equation.
 // The amount is public in tx.vout[i].amount, so an attacker who sets mask=1
 // produces C = G + amount*H which is computable by anyone — a fingerprint that
 // defeats confidential-amount coinbase. We therefore check C != zeroCommit(amount)
 // for coinbase outputs, using the public amount.
 static bool check_commitment_mask_valid(const transaction& tx)
 {
-  const bool is_coinbase = (tx.rct_signatures.type == rct::RCTTypeNull);
+  const bool is_coinbase = (tx.rct_signatures.type == rct::CTTypeNull);
   const auto& rv = tx.rct_signatures;
 
   for (size_t i = 0; i < rv.outPk.size(); ++i)
@@ -3301,8 +3301,8 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
     }
   }
 
-  if (tx.rct_signatures.type != rct::RCTTypeNull &&
-      tx.rct_signatures.type != rct::RCTTypeFcmpPlusPlusPqc)
+  if (tx.rct_signatures.type != rct::CTTypeNull &&
+      tx.rct_signatures.type != rct::CTTypeFcmpPlusPlusPqc)
   {
     MERROR_VER("Disallowed rct type " << (unsigned)tx.rct_signatures.type);
     tvc.m_invalid_output = true;
@@ -3405,7 +3405,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   {
     if (!is_fcmp_pp)
     {
-      MERROR_VER("Tx " << get_transaction_hash(tx) << " must use RCTTypeFcmpPlusPlusPqc; RCTTypeNull is only allowed for coinbase");
+      MERROR_VER("Tx " << get_transaction_hash(tx) << " must use CTTypeFcmpPlusPlusPqc; CTTypeNull is only allowed for coinbase");
       tvc.m_verifivation_failed = true;
       return false;
     }
@@ -3551,12 +3551,12 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     const rct::rctSig &rv = tx.rct_signatures;
     switch (rv.type)
     {
-    case rct::RCTTypeNull: {
-      MERROR_VER("RCTTypeNull is not allowed for non-coinbase transactions");
+    case rct::CTTypeNull: {
+      MERROR_VER("CTTypeNull is not allowed for non-coinbase transactions");
       tvc.m_verifivation_failed = true;
       return false;
     }
-    case rct::RCTTypeFcmpPlusPlusPqc:
+    case rct::CTTypeFcmpPlusPlusPqc:
     {
       const uint64_t chain_height = m_db->height();
       const size_t num_inputs = tx.vin.size();
@@ -4453,7 +4453,7 @@ bool Blockchain::check_tx_input(size_t tx_version, const txin_to_key& txin, cons
 crypto::hash Blockchain::compute_fcmp_verification_hash(const transaction& tx)
 {
   const rct::rctSig &rv = tx.rct_signatures;
-  if (rv.type != rct::RCTTypeFcmpPlusPlusPqc)
+  if (rv.type != rct::CTTypeFcmpPlusPlusPqc)
     return crypto::null_hash;
 
   // Mempool verification-cache id: binds proof bytes to the anchored snapshot

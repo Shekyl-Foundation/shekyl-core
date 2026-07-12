@@ -110,7 +110,7 @@ TEST(archival_bond_post, rct_balance_rejects_zero_bond_terms)
   constexpr uint64_t amount = 750'000'000;
 
   rct::rctSig rv{};
-  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.type = rct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 0;
   rv.p.fcmp_pp_proof = {0x01};
   rv.p.pseudoOuts.push_back(rct::scalarmultH(rct::d2h(amount)));
@@ -123,7 +123,7 @@ TEST(archival_bond_post, rct_balance_includes_bond_credit_term)
   constexpr uint64_t bond_credit = 750'000'000;
 
   rct::rctSig rv{};
-  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.type = rct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 0;
   rv.p.fcmp_pp_proof = {0x01};
   rv.p.pseudoOuts.push_back(rct::scalarmultH(rct::d2h(bond_credit)));
@@ -139,7 +139,7 @@ TEST(archival_bond_post, rct_balance_rejects_noncanonical_bulletproof_layout)
   constexpr uint64_t bond_debit = 500'000'000;
 
   rct::rctSig rv{};
-  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.type = rct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 0;
   rv.p.fcmp_pp_proof = {0x01};
   const rct::key mask_scalar = rct::skGen();
@@ -163,7 +163,7 @@ TEST(archival_bond_post, rct_balance_includes_bond_debit_term)
   constexpr uint64_t bond_debit = 500'000'000;
 
   rct::rctSig rv{};
-  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.type = rct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 0;
   rv.p.fcmp_pp_proof = {0x01};
   const rct::key mask_scalar = rct::skGen();

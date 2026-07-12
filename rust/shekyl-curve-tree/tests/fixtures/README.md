@@ -18,7 +18,7 @@ A `chains` array; each chain is a list of blocks carrying:
   (concatenated per-output `h_pqc`), hex. Only the `0x07` payload is
   recorded, not the whole `tx_extra`.
 - `miner_tx.outputs[]` — per output: `output_key` (`O`), `commitment`
-  (`C`, present for the `RCTTypeNull` coinbase), and `target` kind.
+  (`C`, present for the `CTTypeNull` coinbase), and `target` kind.
 
 Three chains exercise S1/S2/S3 (`CT2_DRAIN_ORDER.md` §8):
 
@@ -47,7 +47,7 @@ the daemon's structured block JSON.
 
 ### Why daemon JSON rather than a Rust block decode
 
-Shekyl's coinbase serializes a real `outPk` under `RCTTypeNull`
+Shekyl's coinbase serializes a real `outPk` under `CTTypeNull`
 (`rctTypes.h::serialize_rctsig_base`). The old `shekyl-oxide` coinbase model
 (`proofs: None`) did not parse this; that crate is now dissolved and `shekyl-wire`
 parses the coinbase `Null` committed base correctly (un-vendor slice 1). The fixtures

@@ -126,7 +126,7 @@ rct::rctSig make_balanced_emission_rv()
   const rct::key g_pseudo = add_scalars(g0, g1);
 
   rct::rctSig rv{};
-  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.type = rct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = kFee;
   rv.p.fcmp_pp_proof = {0x01};
   rv.p.pseudoOuts.push_back(rct::commit(10, g_pseudo));
@@ -248,7 +248,7 @@ TEST(archival_emission_ct_balance, backing_inclusion_shape_rejects_in_production
   const rct::key g_out = add_scalars(m1, m2);
 
   rct::rctSig rv{};
-  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.type = rct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = kFee;
   rv.p.fcmp_pp_proof = {0x01};
   rv.p.pseudoOuts.push_back(rct::commit(10, m1));
