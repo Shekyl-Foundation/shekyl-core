@@ -300,17 +300,24 @@ fires relative to principal activity is observability the firewall must address
 on-chain anchor ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)). Off-chain backing
 **precedes** join; first **paying** emission follows by ≥ one settlement-epoch lag.
 
-**Two rotation concepts (do not conflate — see
-[`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-1):**
+**"Rotation" is not a mechanism (corrected root:
+[`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-1; do not re-litigate).** Neither sense of
+"rotation" is a decorrelation lever:
 
-| Kind | `P_canonical_id` | Wallet instance key |
-|------|------------------|---------------------|
-| **Backing UTXO rotation** (E-4 hygiene) | Unchanged | Same `P_canonical_id`; update rotatable `backing_outputs` |
-| **`P` pseudonym rotation** (decorrelation) | New | New instance; `p_slot` increment → new keys |
-
-Sim step-0 **pseudonym rotation** → pure over-enumeration (new slot; burn old) — reversion:
-per-root subkey only; never cross-authorizing master
-([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*Step 0*).
+- **Backing-output "rotation" is not a mechanism.** A persona designates a (possibly different)
+  output from its **own `funding_outputs` pool** per emission (membership-only) — there is **no
+  `backing_outputs` field** in the code and **no consensus rotation rule**
+  ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §7.3, "consensus does not require
+  backing-output rotation"). No backing output is shared between personas (each is scanned under one
+  `P`'s view key). `P_canonical_id` is **unchanged** — the only point here: key the instance on it,
+  never on an output.
+- **Pseudonym "rotation" is unlink-and-relink, and it *correlates*.** Retire `P_old` (`Unbond` +
+  drain) + create `P_new` (fresh `JoinMarket`): two independent lifecycle ops, **no bond migration**
+  (S-5, §10.12). It provides **correlation, not decorrelation** (T-A1 portfolio re-linkage), which
+  is exactly why **long-lived `P` is the committed architecture** (S-5). `p_slot` (§9.2) derives a
+  *fresh* persona — **not** a rotation of an existing one; the sim's step-0 "over-enumeration (new
+  slot; burn old)" is that same unlink-relink (reversion: per-root subkey only, never
+  cross-authorizing master — [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*Step 0*).
 
 ---
 
