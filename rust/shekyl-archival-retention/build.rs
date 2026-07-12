@@ -98,6 +98,16 @@ fn main() {
             )
         });
 
+    let release_cooldown_epochs = map
+        .get("release_cooldown_epochs")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_else(|| {
+            panic!(
+                "missing release_cooldown_epochs in {}",
+                config_path.display()
+            )
+        });
+
     // M1 reward-gate cover threshold (ARCHIVAL_REWARD_GATE_M1.md §4 sentinel
     // mechanics). `k_cover_provisional` gates a compile-time refusal in
     // `src/k_cover.rs`; while provisional, the ONLY permitted value is 0 —
@@ -156,6 +166,7 @@ fn main() {
          pub const ARCHIVAL_REWARD_PLATEAU_WORK_MILLI: u64 = {plateau_work};\n\
          pub const ARCHIVAL_REWARD_AGE_WEIGHT_MILLI: u64 = {age_weight};\n\
          pub const MAX_CLAIM_AGE_W: u64 = {max_claim_age_w};\n\
+         pub const RELEASE_COOLDOWN_EPOCHS: u64 = {release_cooldown_epochs};\n\
          pub const ARCHIVAL_REORG_DEPTH_BLOCKS: u64 = {archival_reorg_depth_blocks};\n"
     );
     fs::write(&out_file, output).expect("failed writing archival bond floor constant");
