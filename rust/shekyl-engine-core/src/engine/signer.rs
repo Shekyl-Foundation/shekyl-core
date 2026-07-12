@@ -324,6 +324,7 @@ impl Signer for LocalSigner {
                 .iter()
                 .map(|i| *i.key_image.as_bytes())
                 .collect(),
+            output_amounts: vec![0; signatures.output_keys.len()],
             output_keys: signatures.output_keys,
             view_tags: signatures.view_tags,
             tx_extra: signatures.tx_extra,

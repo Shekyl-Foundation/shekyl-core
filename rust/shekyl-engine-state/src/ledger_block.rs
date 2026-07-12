@@ -239,7 +239,16 @@ impl LedgerBlock {
 
     // -- Read-only queries (moved from RuntimeWalletState) -----------------
 
-    /// The current synced height (== `tip.synced_height`).
+    /// The current synced **tip height** (== `tip.synced_height`) — the
+    /// newest ingested block's own height (an instant, set alongside that
+    /// block's `tip_hash`), NOT a block count. Contrast the `P`-scan
+    /// cursor's same-named `synced_height`, which is a **count** (its last
+    /// verified block is `synced_height − 1`): the two conventions coexist
+    /// in this crate, so consumers anchoring reference heights or
+    /// spendability off this value can use it as the tip directly (the
+    /// transfer path's `chain_tip` does), while count-shaped values belong
+    /// in `shekyl_types::ChainCount`. Audited 2026-07-11 (claim-builder
+    /// PR-3 review follow-through: the count/height unit family).
     pub fn height(&self) -> u64 {
         self.tip.synced_height
     }

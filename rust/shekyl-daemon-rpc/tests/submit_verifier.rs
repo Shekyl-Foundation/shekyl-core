@@ -56,7 +56,7 @@ use shekyl_tx_builder::{
     tx_prefix_hash_from_parts, LeafEntry, OutputInfo, PqcAuth as BuilderPqcAuth, SpendInput,
     TreeContext, WireEncodeInput,
 };
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHeight, ChainCount};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, CtBase, PqcAuth, Prunable, Transaction};
 
@@ -128,7 +128,7 @@ fn admitting_facts(fx: &SpendFixture) -> SubmitFacts {
         weight_limit: 149_400,
         // Reference age 6: ≥ FCMP_REFERENCE_BLOCK_MIN_AGE (5), well under
         // the max (100).
-        chain_height: BlockHeight::from_raw(fx.reference_height + 6),
+        chain_height: ChainCount::from_raw(fx.reference_height + 6),
     }
 }
 
@@ -435,6 +435,7 @@ fn build_fixture() -> SpendFixture {
         key_images: vec![*ki.key_image.as_bytes()],
         extra_inputs: Vec::new(),
         output_keys: vec![payment.output_key, change.output_key],
+        output_amounts: vec![0, 0],
         view_tags: vec![
             Some(payment.view_tag_prefilter),
             Some(change.view_tag_prefilter),
@@ -733,7 +734,7 @@ fn non_spend_kinds_refuse_loudly() {
         fee_per_byte: 1,
         fee_quantization_mask: 1,
         weight_limit: 149_400,
-        chain_height: BlockHeight::from_raw(200),
+        chain_height: ChainCount::from_raw(200),
     };
     assert_eq!(
         verify(&parsed, &facts),

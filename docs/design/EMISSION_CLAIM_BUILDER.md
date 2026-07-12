@@ -11,8 +11,12 @@ the low end anchors to `epoch_is_claim_expired`, which is single-sourced
 through `claim_window_floor` (§7.2 bottom-boundary record), and the
 builder is pinned to consume the predicate functions rather than
 re-derive boundary arithmetic. Implementation is underway on the §8
-chain: PR 1 (daemon RPC) and PR 2 (pure assembly module) are
-implemented — PR-2 review produced one post-closure sharpening, the
+chain: PR 1 (daemon RPC), PR 2 (pure assembly module), and PR 3
+(StakeEngine handler + Engine-side claim orchestrator; see the §8
+PR-3 status) are implemented — the production path assembles a signed
+emission claim end-to-end; PR 4 (regtest e2e + blob-boundary arm) is
+the chain's only open item, gated on #281. PR-2 review produced one
+post-closure sharpening, the
 §2 step-1 **fourth boundary** (strict finalization at the earliest
 inclusion height; the connect window admits the youngest epoch one
 count before verify accepts it — see the step-1 text and the §8 PR-2
@@ -24,7 +28,7 @@ ratifying reason); CB-2 (StakeEngine actor,
 sign-within-seed-gone-after-`assemble()` pin); CB-3 (routing-not-closure,
 joint-grading reopen); CB-4 (structural three-leg exclusion ratified; arming
 KAT strengthened to production operand functions + E3/rationale doc fixes
-done in-PR; blob-boundary arm homed to the builder PR); CB-5 (cause-blind
+done in-PR; blob-boundary arm homed to §8 PR-4); CB-5 (cause-blind
 refusal, `SelfCheckFailed`-blind pin). Round 2 (§7) is the CB-1
 ratification residue — the RPC field enumeration + gate-6 linkability
 review — plus the implementation-plan PR chain (§8). Implementation is
@@ -66,7 +70,7 @@ custody, and sourcing — not new cryptography.
 | Both auth binding messages | `emission_wire.rs` `auth_msgs` (one shared R1.A inventory, two cSHAKE customizations) | Landed; builder signs what verify checks — no second message builder |
 | Hybrid sign | `rust/shekyl-crypto-pq/src/signature.rs` (`SignatureScheme::sign`) | Landed |
 | Membership-only prover | `rust/shekyl-fcmp/src/proof.rs:488` `prove_membership_only` (KAT'd against `verify_membership_only`) | Landed |
-| Backing-eligibility gate | `rust/shekyl-engine-core/src/engine/backing_set.rs` (`BackingSet`, constructor-mint, GF4b-6 spendability filter inside) | Landed, `dead_code` — **this builder is the named consumer** (GF-4b §5 item 1) |
+| Backing-eligibility gate | `rust/shekyl-engine-core/src/engine/backing_set.rs` (`BackingSet`, constructor-mint, GF4b-6 spendability filter inside) | Landed; **consumed by PR-3** (GF-4b §5 item 1 — the claim orchestrator constructs, the handler designates; staging allows deleted) |
 | Verifier-exact share math | `rust/shekyl-archival-retention/src/reward_arithmetic.rs` (`reward_share_floor`), `consensus_state.rs` (`as_of_e_served_work`, `capped_work_milli`, `shard_contribution_milli`) | Landed (WS-1); the builder must call **these**, not fork them |
 | Claim-window predicates | `claimed_epochs.rs` (`claim_window_floor`, `epoch_is_claim_expired`, `claimed_epochs_contains`) | Landed; `stake_engine.rs` already consumes `epoch_is_claim_expired` for retirement |
 | Key custody + P-side signing precedent | `rust/shekyl-engine-core/src/engine/stake_engine.rs` (`SignBond` handler: seed-owning actor, secrets never cross the actor boundary) | Landed |
@@ -386,7 +390,8 @@ necessary-not-sufficient (2026-07-09, verified at source).** The Q11 ACCEPT
   `50-testing.mdc` ("Test rationales state their coverage boundary"). Both
   are known-false / known-incomplete doc fixes with zero bisect risk, fixed
   in the flow that found them.
-- **Follow-up — homed to the claim-builder PR, not deferred to a queue.**
+- **Follow-up — homed to §8 PR-4 (regtest e2e + blob-boundary arm), not
+  deferred to a queue.**
   (a) Add the arm that protects the **blob-boundary invariant** directly:
   drive the full production dispatch (`ver_non_input_consensus_templated`)
   with a valid FCMP++ emission tx and assert the **CT-balance verdict is
@@ -397,10 +402,11 @@ necessary-not-sufficient (2026-07-09, verified at source).** The Q11 ACCEPT
   side + leg ii) — the actually-dangerous refactor, which the size-check
   arms cannot catch because they only fire once something is already in
   `pseudoOuts`. It is **harness-gated** on a valid-proof emission-tx builder,
-  which the claim-builder PR's step-7 self-check builds anyway — so it lands
-  where the harness is born, not in an undrained queue. **Not** a consensus
-  change (the Q11 reversion clause is untouched); tripwire-completeness, not
-  a safety gate.
+  which PRs 1–3's production path provides (landed 2026-07-11) — so it lands
+  in PR-4 where the regtest harness is born, not in an undrained queue; the
+  §8 PR-4 scope row names the arm explicitly as in-scope work. **Not** a
+  consensus change (the Q11 reversion clause is untouched);
+  tripwire-completeness, not a safety gate.
 
 ### CB-5 — refusal taxonomy
 
@@ -457,7 +463,7 @@ PR).
 | --- | --- | --- | --- |
 | Claimable epochs from the positive-share recompute | `docs/FOLLOWUPS.md` M1 round-1 forward pin | `reward_arithmetic.rs:129` `reward_share_floor`; `consensus_state.rs:190` `capped_work_milli` (single evaluator) | §2 step 1 — **discharged (PR 2)**: `emission_claim.rs` `derive_claimable_epochs`, claimable ⇔ recomputed share `> 0`, no `K_COVER` read anywhere in the module |
 | Backing exclusively through `BackingSet`, arity 1 | GF-4b §5 item 1 | `backing_set.rs:44` (private `records`), `:90` (`from_spendable` sole constructor), `:103` (spendability filter); arity-1 pin `emission_wire.rs:116-125` (Q3 vacuous at arity 1) | §2 step 3 |
-| `EmissionReward` scan arm, fail-toward-forbidden | GF-4b §5 item 2 | `pscan_state.rs:89` (`MintLineageOutput`; `:98` `EmissionReward`, `:103` `BondPostChange`, `:109` `ExternalTransfer`); `scan_step.rs:401` `run_dual_extractor`, `:501-511` fail-toward-forbidden default. **`EmissionReward` has zero production constructor sites today** (verified: only the enum def) — this is exactly the "gains its first constructor site" claim | Companion piece: the arm's first constructor lands with this builder's PR chain (its absence would strand claim change in rung-3) |
+| `EmissionReward` scan arm, fail-toward-forbidden | GF-4b §5 item 2 | `pscan_state.rs:89` (`MintLineageOutput`; `:98` `EmissionReward`, `:103` `BondPostChange`, `:109` `ExternalTransfer`); `scan_step.rs:401` `run_dual_extractor`, `:501-511` fail-toward-forbidden default. **`EmissionReward` gained its first production constructor site in PR-3's scan arm** (own emission vin ⇒ vout lineage classification) — the "gains its first constructor site" claim, discharged | Companion piece landed with PR-3 (claim change no longer strands in rung-3) |
 | First-emission backing is `BondPostChange` | GF-4b §5 item 3 | `pscan_state.rs:103` (`BondPostChange` variant) | Integration test (§5) |
 | No `SpentRecordsDurablyPruned` production mint | GF-4b §5 item 4 | `bond_assembly.rs:231` (struct), `:238` (`for_test()` — **sole** constructor, no production mint) | Review confirmation at PR boundary (C-1 must not add one) |
 | Change-split / tx-size bound | GF-4b §5 item 5 | `bond_assembly.rs:311` `sweep_funding_outputs`, `:488` "oldest-first — no early break at required, no expressible subset" (the entire-set consumption the bound must fold/split) | §2 step 5 sizing rule (bound or split; a many-outputs persona cannot build a daemon-rejected oversize tx) |
@@ -495,7 +501,7 @@ with the joint-grading reopen named; CB-4 ratified on the structural
 three-leg exclusion, with the arming KAT strengthened to production operand
 functions (leg-i operand side + leg-iii armed in-PR), the E3 §2.2 rationale
 and the `50-testing.mdc` coverage-boundary discipline corrected in-PR, and
-the blob-boundary invariant arm homed to the builder PR (§3 CB-4 +
+the blob-boundary invariant arm homed to §8 PR-4 (§3 CB-4 +
 `FOLLOWUPS.md` Q11-KAT item); CB-5 ratified with the
 `SelfCheckFailed`-blind pin. Builder-PR pins to carry: sign within
 seed-gone-after-`assemble()` (CB-2); `SelfCheckFailed` refuses cause-blind
@@ -852,6 +858,140 @@ consumed by both the verify KATs and the builder KATs); and the two
 intentional-design calls documented in place (batch-cap check after the
 recompute = whole-window loud validation; the linear first-position
 shard scan = byte parity with verify's lookup).
+
+**PR 3 implemented (2026-07-11, `feat/emission-claim-handler`).**
+Six commits: the wire emission-input arm (`0x04`, closing the latent
+scanner break the pre-flight surfaced); the `EmissionReward` scan arm
+(GF-4b item 2 — first-emission backing classifies `BondPostChange`);
+the designated-backing selector (`BackingSet::from_spendable` →
+`designate_backing`, GF-4b §5 item 1 — exclusivity and the Q11
+fee-exclusion land as type properties: the backing record is private,
+`fee_sweep` inserts its gindex into the exclusion set before
+delegating); the `AssembleEmissionClaim` handler (CB-2 sibling of
+`AssembleBond`: derive + assemble via the PR-2 module, F-C1c assembly
+order — signable hash over the vin-less prefix → membership proof
+(`prove_backing_membership`, offloaded to `spawn_blocking`) → dual
+auths (Auth-B backing key, Auth-P identity hybrid key) → full prefix
+hash → fee-side FCMP++ proof + tx PQC auths — with the daemon-side
+differential KAT re-deriving the whole verify chain over the produced
+bytes); the Engine-side claim orchestrator
+(`engine/claim_orchestrator.rs`: fetch → reference-height anchoring
+reconciling the daemon's two-sided age gate with `REF_ANCHOR_AGE` →
+provable-record filter → designate → fee sweep → path assembly →
+handler dispatch, reply returned unbroadcast per CB-3; end-to-end
+integration test over a real 30k-block `CurveTreeClient`, a canned
+RPC transport, and the real actor, with daemon-side re-derivation
+against the real root); and the staging-allow deletion pass (every
+PR-1/PR-2 allow whose named consumer was PR-3 is gone; the one
+remaining claim-surface allow is `orchestrate_emission_claim` +
+its reply's fields, staged narrowly against the CB-3 dispatch seam).
+Pins carried: CB-2 no-seed-re-borrow (secrets re-derived from
+`(ciphertext, index)` inside the actor; the orchestrator handles
+public material only), GF-4b §5 items 1/2/3/6, the item-6 same-tip
+rule (stored designation anchor == assembly tip, refuse-and-refetch
+on mismatch), CB-5 cause-blind refusals (skip diagnostics log-local).
+PR-4 (regtest e2e + blob-boundary arm) is now the chain's only open
+item, gated on #281.
+
+**PR 3 review round (2026-07-11, high `/code-review` + Copilot).**
+All verified findings fixed (correctness first, then the full cleanup
+set including the report-cap remainder):
+
+1. **Slot-filtered backing designation.** `BackingSet::from_spendable`
+   consumed the all-slot `funding_outputs` union with no `p_slot`
+   filter while the fee sweep filtered — in a rotation-overlap window
+   the most-recent-eligible comparator designated the OTHER slot's
+   record, the claimant's re-derivation failed the pre-flight leaf
+   gate, and the persona was deterministically unable to claim. The
+   slot filter now lives inside the constructor (with the spendability
+   filter, ahead of the survivor tripwire — which also makes the
+   tripwire per-persona), KAT'd with a foreign-slot-newer fixture.
+2. **Tip, never count.** The designation/sweep spendability anchor and
+   the handler's same-tip operand were `source.chain_height` (a block
+   COUNT, one past the tip) — records admitted one block early behind
+   the provable-records mask, and `InsufficientBacking` reported a
+   height that did not exist yet. Anchor = `chain_height − 1`
+   everywhere; the same-tip check compares against the derived tip;
+   the count-as-anchor case is a KAT'd refusal.
+3. **`check_money_overflow` parity.** The wire's context-free
+   validator deferred output-sum overflow as "trivial (amounts are 0)"
+   — an invariant the emission arm's loud reward vout removed. The
+   checked sum now runs; hostile `[u64::MAX, 1]` loud amounts reject
+   exactly as the C++ daemon does.
+4. **§7.4 transport pin made structural.** PR-1's "the handler is the
+   call site that enforces this" had regressed to caller-discipline
+   prose; `orchestrate_emission_claim` is now bounded on the
+   `PersonaIsolatedTransport` marker (`prpc.rs`; `PRpc` implements it,
+   the local-posture transport implements it at DQ-T2.3 as a
+   documented choice site) — a principal-session fetch is a compile
+   error.
+5. **Q11 runtime half at the handler.** The operand-driven handler
+   re-verified same-tip but trusted the backing∉fee-set pairing; a
+   mispaired message would sign a consensus-valid double-use no daemon
+   rejects (spend-blind backing). `BackingInFeeSet` now refuses beside
+   the same-tip check, KAT'd.
+6. **Structural refusal for zero fee inputs.** The empty-fee-set arm
+   reused `InsufficientFunding { available: 0, required: fee }` —
+   self-contradictory at `fee == 0` (rule 82). New
+   `ClaimFeeInputsRequired` names the actual requirement (pseudoOuts +
+   FCMP++ fee-side anchor need ≥ 1 spendable input regardless of fee).
+
+Cleanups, same round: the two-sided reference gate single-sourced as
+`shekyl_curve_tree::two_sided_reference_height` (transfer re-anchor +
+claim orchestrator both consume it; the hand-rolled
+`tip − REF_ANCHOR_AGE` copies are gone, discharging both Copilot
+duplication findings); the backing leg re-derives through the same
+`derive_spend_parts` as the fee spends (the step-10 twin of
+`prepare_funding_inputs` deleted); one output-construction loop
+(`construct_vouts_to_base`) and one `SpendInput → ProveInput`
+conversion (`prove_input_from_spend`, with exactly-one pseudo-out
+enforced on the membership-only leg — Copilot) serve bond + claim
+paths; the P-scan rung-1 pre-pass became the lazy memoized
+`OwnEmissionSlots` classifier (the eager form parsed every emission
+vin on chain — full-scan cost scaling with chain-wide claim volume);
+one test-side wire encoder (`emission_claim::test_fixtures::
+source_json`, epee omit-empty faithful) feeds the decode tests and the
+orchestrator e2e; fetch and ingested-tip awaits joined; the
+debug_assert shadowing an identical typed refusal, the dead/duplicate
+clones, and the `&[0, 0]` output-amounts literal removed; rule 22
+(`22-no-lazy-deferral`) added to CLAUDE.md's rule index.
+
+**Review follow-through — the count/height newtype (landed same
+round).** The tip/count fixes above were three sightings of one unit
+family, so the family got its type: `shekyl_types::ChainCount` (the
+daemon's `db.height()` operand) with exactly two `BlockHeight` bridges
+— `tip()` (count − 1, `None` on the empty chain: the
+spendability/anchoring operand) and `next_height()` (the count *is*
+the next block's height: the earliest-inclusion / verify-context
+operand). `EmissionClaimSource.chain_height` and
+`SubmitFacts.chain_height` (which was a documented count stored in a
+`BlockHeight` — the same laundering, latent) are now `ChainCount`;
+`BlockHeight::from_raw(count)` is unwritable, and each call site names
+which chain fact it means. The ledger-tip audit that came with it:
+`LedgerBlock::height()` **is** a tip instant (set to the ingested
+block's own height) while the P-scan cursor's same-named
+`synced_height` is a count — conventions now pinned in the accessor
+doc; no bug.
+
+**Named forward item (rule 22 form) — the `SweptFeeInputs` designation
+witness, scoped to the CB-3 dispatch seam / PR 4.** The handler's two
+step-2 runtime refusals (`StaleClaimAnchor`, `BackingInFeeSet`) are one
+invariant — *these operands came from one designation event* —
+enforced as two comparisons because `AssembleEmissionClaim`'s fields
+are freely constructible. The witness form (a fee selection minted
+only by `DesignatedBacking::fee_sweep`, carrying the designation's
+gindex + anchor privately, the message taking the pair sealed) makes
+the cross-pairing unrepresentable and deletes both refusal arms — the
+house witness-token shape. **Named blocker, disclosed here:** the
+threat is a *retry/cached-selection* path, which first exists at the
+CB-3 dispatch seam, and the witness reshapes the exact message that
+seam consumes (fee records currently leave `fee_sweep` as a plain
+`FundingSelection` and are re-wrapped with membership paths in the
+orchestrator — the witness must survive that zip). Landing it with the
+seam is one message-shape change instead of two. Until then the
+runtime refusals are KAT'd and load-bearing. *Reopen sooner if:* any
+second caller of `assemble_emission_claim` appears before the seam, or
+a fee-selection cache is introduced anywhere in the claim path.
 
 Round-2 closure criteria: the §7.3 field enumeration ratified (including
 the four exclusions), the §7.2 window-batch shape ratified, the §7.4

@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use shekyl_types::{BlockHash, BlockHeight, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, ChainCount, TxHash};
 
 use crate::core::CoreRpc;
 use crate::ffi;
@@ -71,7 +71,7 @@ fn facts_from_ffi(pod: &ffi::SubmitFactsFfi, ki: &[u8]) -> Result<SubmitFacts, (
         fee_per_byte: pod.fee_per_byte,
         fee_quantization_mask: pod.fee_quantization_mask,
         weight_limit: pod.weight_limit,
-        chain_height: BlockHeight::from_raw(pod.chain_height),
+        chain_height: ChainCount::from_raw(pod.chain_height),
     })
 }
 
@@ -263,7 +263,7 @@ mod tests {
         assert_eq!(reference.height, BlockHeight::from_raw(150));
         assert_eq!(reference.root, [0xAA; 32]);
         assert_eq!(reference.tree_depth, 9);
-        assert_eq!(facts.chain_height, BlockHeight::from_raw(200));
+        assert_eq!(facts.chain_height, ChainCount::from_raw(200));
 
         // A byte outside the documented set is a contract violation, not a
         // guessed fact.

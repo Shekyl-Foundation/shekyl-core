@@ -12,7 +12,7 @@
 //! mempool implements it natively. Facts are plain data — the shim fetches,
 //! the engine decides. Zero verdict logic lives behind this trait.
 
-use shekyl_types::{BlockHash, BlockHeight, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, ChainCount, TxHash};
 
 use crate::submit::certificate::VerificationCertificate;
 
@@ -95,9 +95,14 @@ pub struct SubmitFacts {
     /// Transaction weight limit (compile-time constant on Shekyl:
     /// `min_block_weight / 2 − COINBASE_BLOB_RESERVED_SIZE` = 149 400; §3.1).
     pub weight_limit: u64,
-    /// Chain height as a block **count** (`m_db->height()`), the consensus
-    /// basis for the ref-age window arithmetic.
-    pub chain_height: BlockHeight,
+    /// Chain block **count** (`m_db->height()`), the consensus basis for
+    /// the ref-age window arithmetic. Typed [`ChainCount`], not
+    /// [`BlockHeight`]: C++ overloads "height" for this value, and holding
+    /// a count in the height type is one `<=` away from an off-by-one
+    /// (the emission-claim spendability anchor bug, claim-builder PR-3
+    /// review). The ref-age comparison consumes the raw count deliberately
+    /// — that is the consensus shape (`blockchain.cpp:3745-3765`).
+    pub chain_height: ChainCount,
 }
 
 /// The snapshot shim failed internally (§3.4: DB exception, marshalling

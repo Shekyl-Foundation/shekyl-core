@@ -18,7 +18,7 @@ use shekyl_daemon_rpc::submit::{
     SubmitFacts, VerifyFailure,
 };
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHeight, ChainCount};
 use submit_fixtures::{
     admitting_facts, hexify, serve_credit_tx, spend_tx, MockShim, MockVerifier, FIXTURE_ROOT,
 };
@@ -142,7 +142,7 @@ fn young_chain_rejects_reference_too_recent() {
     // chain_height below MIN_AGE: every reference is too recent (the C++
     // comparison shape, blockchain.cpp:3745-3754).
     let mut facts = base_facts();
-    facts.chain_height = BlockHeight::from_raw(3);
+    facts.chain_height = ChainCount::from_raw(3);
     facts.reference.as_mut().unwrap().height = BlockHeight::from_raw(0);
     let (engine, _shim, _verifier) = engine(facts, CommitOutcome::Committed);
     assert_eq!(
@@ -463,7 +463,7 @@ fn raced_reference_aged_out_classifies_stale_root() {
     // Blocks landed during Phase C and pushed the reference past MAX_AGE:
     // fresh height 251 with ref at 150 (MAX_AGE 100) is out of window.
     let mut fresh = base_facts();
-    fresh.chain_height = BlockHeight::from_raw(251);
+    fresh.chain_height = ChainCount::from_raw(251);
     let (engine, _shim, _verifier) = engine(base_facts(), CommitOutcome::Raced(fresh));
     assert_eq!(
         engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),

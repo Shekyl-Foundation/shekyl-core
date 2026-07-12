@@ -19,8 +19,8 @@
 //! Transport: [`fetch_emission_claim_source`] is generic over
 //! [`Rpc`], but persona-side callers ride the persona's transport
 //! (`PTorClient`/`PRpc`) — **never** the principal's daemon session (§7.4
-//! transport pin; the PR-3 `StakeEngine` handler is the call site that
-//! enforces this). The request carries `p_id` **only**: no epoch selector,
+//! transport pin; the claim orchestrator's caller supplies the transport
+//! and enforces this). The request carries `p_id` **only**: no epoch selector,
 //! no range, no claimable-subset encoding (§7.2 transport cause-blindness).
 //!
 //! Untrusted-daemon posture (`20-rust-vs-cpp-policy.mdc` §3): scalar and
@@ -43,6 +43,7 @@ use shekyl_archival_retention::{
     EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
 };
 use shekyl_rpc_client::{Rpc, RpcError};
+use shekyl_types::ChainCount;
 
 /// The daemon JSON-RPC method name (registered on both the epee and
 /// Rust/Axum transports in PR 1's daemon half).
@@ -133,15 +134,18 @@ impl BondContext {
 /// claim window's snapshots, exactly as the daemon serialized them.
 #[derive(Debug, Clone)]
 pub struct EmissionClaimSource {
-    /// Tip block count at gather time — the §2 step-7 self-check's
-    /// verify-context height (the earliest inclusion height, and the exact
-    /// operand the daemon derived `current_settled_epoch` from —
-    /// `archival_claim_source.cpp` gathers both from one `db.height()`
-    /// read), the derivation's strict-finalization operand
-    /// (`emission_claim` step 2: verify admits `E` one count after the
-    /// connect window does), and the §2 step-3 same-tip staleness operand
-    /// (PR-3's `StakeEngine` handler).
-    pub chain_height: u64,
+    /// Chain block **count** at gather time ([`ChainCount`] — a count, not
+    /// a height; the type's two bridges are the two facts consumers need).
+    /// Its [`next_height`](ChainCount::next_height) is the §2 step-7
+    /// self-check's verify-context height (the earliest inclusion height)
+    /// and the derivation's strict-finalization operand (`emission_claim`
+    /// step 2: verify admits `E` one count after the connect window does);
+    /// its [`tip`](ChainCount::tip) is the designation/sweep spendability
+    /// anchor and the §2 step-3 same-tip staleness operand (the
+    /// `AssembleEmissionClaim` handler's same-tip check). The exact operand
+    /// the daemon derived `current_settled_epoch` from —
+    /// `archival_claim_source.cpp` gathers both from one `db.height()` read.
+    pub chain_height: ChainCount,
     /// The daemon's settled-epoch operand (same helper consensus uses),
     /// **decode-enforced** equal to `settlement_epoch_at_height(chain_height)`
     /// — so the step-1 window boundaries (which consume this field) and the
@@ -378,7 +382,10 @@ impl EmissionClaimSource {
             )));
         }
         Ok(Self {
-            chain_height,
+            // The typed-domain edge (rule 18): the raw wire u64 becomes a
+            // ChainCount here, so no consumer can launder the count into a
+            // BlockHeight without naming which chain fact it means.
+            chain_height: ChainCount::from_raw(chain_height),
             current_settled_epoch,
             bond,
             epochs,
@@ -393,11 +400,11 @@ impl EmissionClaimSource {
 /// the daemon-visible query is identical for every claimant regardless of
 /// serve history. Persona-side callers pass the persona transport
 /// (`PRpc`), never the principal's daemon session (§7.4).
-// Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the call
-// site is PR-3's `StakeEngine` claim handler; this allow is deleted there.
-// PR-2 narrowed the PR-1 module-level allow to this fetch — the decode
-// surface is now live via `emission_claim`.
-#[allow(dead_code)]
+///
+/// Sole production caller:
+/// [`orchestrate_emission_claim`](super::claim_orchestrator::orchestrate_emission_claim),
+/// step 1 of the claim pipeline (the consumer the PR-1/PR-2 staging allows
+/// named; the last of them dies here).
 pub async fn fetch_emission_claim_source<R: Rpc>(
     rpc: &R,
     p_id: &[u8; 32],
@@ -414,59 +421,92 @@ pub async fn fetch_emission_claim_source<R: Rpc>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::emission_claim::test_fixtures::source_json;
     use shekyl_archival_retention::{ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, SETTLEMENT_EPOCH_BLOCKS};
 
     /// A response as the daemon's epee KV JSON store emits it: one window
     /// epoch with rows, one empty-row epoch (absent arrays omitted, as epee
-    /// omits empty containers). The C++ wire-contract test pins the same
-    /// canonical shape from the serializer side.
+    /// omits empty containers — the shared encoder reproduces that, so the
+    /// absent-decodes-empty rule stays covered). Encoded through the
+    /// crate's single test-side wire encoder
+    /// (`emission_claim::test_fixtures::source_json`); the shape's
+    /// independent pin is the C++ wire-contract test on the serializer
+    /// side (`archival_claim_source_rpc.cpp`).
     fn fixture() -> Value {
-        json!({
-            "status": "OK",
-            "untrusted": false,
-            "chain_height": 30001,
-            "current_settled_epoch": 3,
-            "has_bond_record": true,
-            "join_settlement_epoch": 1,
-            "holdings_kind": 0,
-            "held_shard_ids": [4, 9],
-            "claimed_settlement_epochs": [1],
-            "epochs": [
-                {
-                    "settlement_epoch": 1,
-                    "close_block_height": 20000,
-                    "sigma_work_milli": 5000,
-                    "budget_atomic": 777,
-                    "has_budget_row": true,
-                    "bonds": [
-                        {
-                            "join_settlement_epoch": 0,
-                            "is_foundation_complete_tree": false,
-                            "bad_intervals_flat": [2, 3]
-                        }
-                    ],
-                    "shards": [
-                        { "shard_id": 4, "freeze_height": 15, "has_segment": true }
-                    ],
-                    "credit_pairs": [ { "bond_idx": 0, "shard_idx": 0 } ],
-                    "claimant_bond_idx": 0
+        source_json(&EmissionClaimSource {
+            chain_height: ChainCount::from_raw(30001),
+            current_settled_epoch: 3,
+            bond: Some(BondContext {
+                join_settlement_epoch: 1,
+                holdings: HoldingsDescriptor {
+                    kind: HoldingsKind::ShardSetCompact,
+                    shard_ids: vec![4, 9],
                 },
-                {
-                    "settlement_epoch": 2,
-                    "close_block_height": 30000,
-                    "sigma_work_milli": 0,
-                    "budget_atomic": 0,
-                    "has_budget_row": false,
-                    "claimant_bond_idx": 18446744073709551615u64
-                }
-            ]
+                claimed_settlement_epochs: vec![1],
+            }),
+            epochs: vec![
+                EpochSnapshot {
+                    settlement_epoch: 1,
+                    close_block_height: 20000,
+                    sigma_work_milli: 5000,
+                    budget_atomic: 777,
+                    has_budget_row: true,
+                    bonds: vec![BondRow {
+                        join_settlement_epoch: 0,
+                        is_foundation_complete_tree: false,
+                        bad_intervals: vec![BadInterval {
+                            start_epoch: 2,
+                            end_exclusive: 3,
+                        }],
+                    }],
+                    shards: vec![EpochCloseShard {
+                        shard_id: 4,
+                        freeze_height: 15,
+                        has_segment: true,
+                    }],
+                    credit_pairs: vec![CreditPair {
+                        bond_idx: 0,
+                        shard_idx: 0,
+                    }],
+                    claimant_bond_idx: Some(0),
+                },
+                // The empty-row epoch: bonds/shards/credit_pairs are OMITTED
+                // by the encoder (epee omit-empty), exercising the decoder's
+                // absent-decodes-empty rule.
+                EpochSnapshot {
+                    settlement_epoch: 2,
+                    close_block_height: 30000,
+                    sigma_work_milli: 0,
+                    budget_atomic: 0,
+                    has_budget_row: false,
+                    bonds: vec![],
+                    shards: vec![],
+                    credit_pairs: vec![],
+                    claimant_bond_idx: None,
+                },
+            ],
         })
+    }
+
+    /// The encoder really omits the empty containers (the premise of the
+    /// absent-decodes-empty coverage above — if it ever emitted `[]`, the
+    /// fixture would silently stop exercising the epee omission rule).
+    #[test]
+    fn fixture_omits_empty_containers() {
+        let v = fixture();
+        let e2 = &v["epochs"][1];
+        for field in ["bonds", "shards", "credit_pairs"] {
+            assert!(
+                e2.get(field).is_none(),
+                "`{field}` must be absent (epee omit-empty), not an empty array"
+            );
+        }
     }
 
     #[test]
     fn decodes_fixture_field_for_field() {
         let src = EmissionClaimSource::from_json(&fixture()).unwrap();
-        assert_eq!(src.chain_height, 30001);
+        assert_eq!(src.chain_height, ChainCount::from_raw(30001));
         assert_eq!(src.current_settled_epoch, 3);
 
         let bond = src.bond.as_ref().unwrap();

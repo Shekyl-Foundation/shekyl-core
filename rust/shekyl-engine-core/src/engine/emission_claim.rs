@@ -178,13 +178,6 @@
 //!
 //! [`EmissionVerifyError`]: shekyl_archival_retention::EmissionVerifyError
 
-// PR-2 lands the assembly core ahead of its consumer: PR-3's `StakeEngine`
-// claim handler is the call site. The item-level `#[allow(dead_code)]`
-// staging allows below (rule 45: narrowest scope) are deleted by PR-3
-// (`EMISSION_CLAIM_BUILDER.md` §8) — staging, not tolerated dead code per
-// `15-deletion-and-debt.mdc` (the emission_source PR-1 allow this PR
-// narrows followed the same protocol).
-
 use shekyl_archival_retention::{
     claimant_reward_share, claimed_epochs_contains, emission_vin_verify_claims, epoch_close_height,
     epoch_is_before_join, epoch_is_claim_expired, epoch_is_not_settled, shard_contribution_milli,
@@ -252,11 +245,11 @@ const _: () = assert!(
 /// Builder refusals (CB-5 taxonomy, the arms this module constructs).
 ///
 /// Staged completeness (§8 / rule 15 — no dead variants):
-/// `InsufficientBacking` lands with its constructor site, PR 3's
-/// `BackingSet` selection.
-// Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the call
-// site is PR-3's `StakeEngine` claim handler; this allow is deleted there.
-#[allow(dead_code)]
+/// `InsufficientBacking` landed with its constructor site — the
+/// designated-backing selector (`backing_set::InsufficientBacking`,
+/// refused by `BackingSet::designate_backing` on an empty set) — as its
+/// own refusal type rather than a variant here: it is a selection-time
+/// refusal, upstream of claim gathering.
 #[derive(Debug, thiserror::Error)]
 pub enum EmissionClaimError {
     /// Nothing claimable — an **idle state, not an error** (rule 82 /
@@ -319,8 +312,6 @@ pub enum EmissionClaimError {
 /// diagnostics**, never a transport operand or an observable refusal
 /// payload (CB-5: the claim query is cause-blind; nothing derived from
 /// these verdicts may shape daemon-visible behavior).
-// Staging (see module header): PR-3's handler consumes; deleted there.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EpochSkip {
     /// `E ≥ current_settled_epoch` ([`epoch_is_not_settled`] — the connect
@@ -371,8 +362,6 @@ pub enum EpochSkip {
 /// the epoch (single-evaluator discipline: the row can never pair with a
 /// different evaluation, and no later step re-indexes the source it came
 /// from).
-// Staging (see module header): PR-3's handler consumes; deleted there.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ClaimableEpoch {
     /// The claimed `E`.
@@ -394,8 +383,6 @@ pub struct ClaimableEpoch {
 /// re-derive after every refetch — the type makes the stale pairing
 /// unrepresentable (a refusal at compile time, not a panic or a
 /// mis-assembly at run time).
-// Staging (see module header): PR-3's handler consumes; deleted there.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct ClaimableEpochs<'src> {
     /// The claim context the batch was derived against — the assembly
@@ -447,8 +434,6 @@ pub struct ClaimableEpochs<'src> {
 /// empty (including the no-bond-record case — an idle state, not an
 /// error) and [`EmissionClaimError::SourceInvalid`] on internally
 /// inconsistent gather rows.
-// Staging (see module header): PR-3's handler is the call site.
-#[allow(dead_code)]
 pub fn derive_claimable_epochs(
     source: &EmissionClaimSource,
 ) -> Result<ClaimableEpochs<'_>, EmissionClaimError> {
@@ -501,7 +486,10 @@ pub fn derive_claimable_epochs(
         let Some(h_close) = epoch_close_height(epoch) else {
             return Err(EmissionClaimError::SourceInvalid { epoch });
         };
-        if source.chain_height <= h_close {
+        // Verify's operand is the block carrying the tx; assembled now,
+        // that is the chain count's next height (`ChainCount::next_height`
+        // — the typed form of "the count IS the earliest inclusion height").
+        if source.chain_height.next_height().to_raw() <= h_close {
             skipped.push((epoch, EpochSkip::NotFinalized));
             continue;
         }
@@ -569,8 +557,6 @@ pub fn derive_claimable_epochs(
 ///
 /// The PR-3 `StakeEngine` handler completes the vin around this (backing
 /// selection, dual auth) and runs the step-7 self-check on the whole.
-// Staging (see module header): PR-3's handler consumes; deleted there.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct AssembledClaims {
     /// Strictly increasing (window order) — the vin's `settlement_epochs`.
@@ -609,8 +595,6 @@ pub struct AssembledClaims {
 /// `claims_size_budget` is the claims-leg byte bound
 /// ([`EMISSION_CLAIMS_SIZE_BUDGET`] is the documented default; the
 /// parameter exists so the bound is testable at exact boundaries).
-// Staging (see module header): PR-3's handler is the call site.
-#[allow(dead_code)]
 pub fn assemble_claims(
     derived: &ClaimableEpochs<'_>,
     claims_size_budget: usize,
@@ -818,8 +802,6 @@ fn claims_vin(
 /// verifier's rejection (and a caller-side pairing bug — a vin epoch or
 /// bond record missing from the source, which forecloses even marshaling
 /// the verify call) is logged locally only.
-// Staging (see module header): PR-3's handler is the call site.
-#[allow(dead_code)]
 pub fn self_check_claims(
     source: &EmissionClaimSource,
     vin: &ArchivalRewardEmissionVin,
@@ -857,10 +839,10 @@ pub fn self_check_claims(
         .collect();
 
     // The gather tip is the verify-context height (module doc "Step 7":
-    // `chain_height` is a block count, the earliest inclusion height, and
+    // `chain_height.next_height()` is the earliest inclusion height, and
     // the exact operand the daemon derived `current_settled_epoch` from).
     let ctx = EmissionVerifyContext {
-        current_block_height: source.chain_height,
+        current_block_height: source.chain_height.next_height().to_raw(),
         bond: Some(bond.record()),
         vout_reward_sum,
     };
@@ -875,31 +857,31 @@ pub fn self_check_claims(
     }
 }
 
+/// Shared emission-source KAT fixtures, built from [`EMISSION_KAT_SHAPE`] —
+/// the same shape the consensus verify KATs
+/// (`shekyl-archival-retention/tests/emission_verify_kat.rs`) pin, so every
+/// differential half (this module's derivation/assembly KATs and the C-4
+/// `AssembleEmissionClaim` handler KATs in `stake_engine.rs`) exercises one
+/// fixture rather than growing a second source shape that can drift.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::engine::emission_source::{BondContext, BondRow, EpochSnapshot};
-    use shekyl_archival_retention::{
-        as_of_e_served_work, bond_wire::MAX_HOLDINGS_SHARDS, capped_work_milli,
-        claimed_epochs_check_and_set, reward_share_floor, settlement_epoch_at_height,
-        sigma_work_milli, BandedCurveParams, ClaimedEpochsError, CreditPair, EpochCloseInputs,
-        EpochCloseShard, HoldingsDescriptor, HoldingsKind, KCover,
-        ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-        EMISSION_KAT_SHAPE, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
+pub(crate) mod test_fixtures {
+    use crate::engine::emission_source::{
+        BondContext, BondRow, EmissionClaimSource, EpochSnapshot,
     };
+    use shekyl_archival_retention::{
+        as_of_e_served_work, epoch_close_height, settlement_epoch_at_height, sigma_work_milli,
+        CreditPair, EpochCloseShard, HoldingsDescriptor, HoldingsKind, EMISSION_KAT_SHAPE,
+    };
+    use shekyl_types::ChainCount;
 
-    const BUDGET: u64 = 1_000_000;
-    const SHARD_A: u64 = EMISSION_KAT_SHAPE.shard_a;
-    const SHARD_B: u64 = EMISSION_KAT_SHAPE.shard_b;
+    pub(crate) const BUDGET: u64 = 1_000_000;
+    pub(crate) const SHARD_A: u64 = EMISSION_KAT_SHAPE.shard_a;
+    pub(crate) const SHARD_B: u64 = EMISSION_KAT_SHAPE.shard_b;
 
-    /// The canonical emission KAT fixture, built from [`EMISSION_KAT_SHAPE`]
-    /// — the same shape the consensus verify KATs
-    /// (`shekyl-archival-retention/tests/emission_verify_kat.rs`) pin, so
-    /// the differential halves exercise one fixture. `sigma_work_milli` is
-    /// derived through the same sourcing functions the close persists with,
-    /// so the fixture's denominator is exactly what a real close would have
-    /// stored.
-    fn snapshot(epoch: u64) -> EpochSnapshot {
+    /// The canonical emission KAT snapshot. `sigma_work_milli` is derived
+    /// through the same sourcing functions the close persists with, so the
+    /// fixture's denominator is exactly what a real close would have stored.
+    pub(crate) fn snapshot(epoch: u64) -> EpochSnapshot {
         let shape = EMISSION_KAT_SHAPE;
         let close = epoch_close_height(epoch).expect("fixture epoch closes");
         let mut snap = EpochSnapshot {
@@ -952,7 +934,7 @@ mod tests {
 
     /// Recompute a (possibly mutated) fixture's denominator through the
     /// same sourcing functions the close persists with.
-    fn resigma(snap: &mut EpochSnapshot) {
+    pub(crate) fn resigma(snap: &mut EpochSnapshot) {
         let sigma = {
             let bonds = snap.bonds_view();
             let view = snap.source(&bonds);
@@ -967,7 +949,7 @@ mod tests {
     /// no-serve-credit (`claimant_bond_idx == None`). Both must classify
     /// identically ([`EpochSkip::ZeroShare`]) — the cause-blindness KAT
     /// drives both through this one constructor.
-    fn zero_share_snapshot(epoch: u64, gated: bool) -> EpochSnapshot {
+    pub(crate) fn zero_share_snapshot(epoch: u64, gated: bool) -> EpochSnapshot {
         let mut snap = snapshot(epoch);
         if gated {
             snap.sigma_work_milli = 0;
@@ -982,7 +964,7 @@ mod tests {
     /// mapping functions (never `(E+1)·SEB` by hand) and asserted
     /// consistent under `settlement_epoch_at_height`, the same invariant
     /// PR 1's decode enforces on a real daemon reply.
-    fn source_with(
+    pub(crate) fn source_with(
         current_settled_epoch: u64,
         claimed: Vec<u64>,
         epochs: Vec<EpochSnapshot>,
@@ -997,7 +979,7 @@ mod tests {
             "fixture coherence: the pair must satisfy the decode invariant"
         );
         EmissionClaimSource {
-            chain_height,
+            chain_height: ChainCount::from_raw(chain_height),
             current_settled_epoch,
             bond: Some(BondContext {
                 join_settlement_epoch: EMISSION_KAT_SHAPE.join_settlement_epoch,
@@ -1014,15 +996,159 @@ mod tests {
     /// A source gathered at an explicit tip count, the settled epoch
     /// derived from it through the same helper the daemon uses
     /// (`archival_claim_source.cpp`: both from one `db.height()` read).
-    fn source_at_count(
+    pub(crate) fn source_at_count(
         chain_height: u64,
         claimed: Vec<u64>,
         epochs: Vec<EpochSnapshot>,
     ) -> EmissionClaimSource {
         let mut source = source_with(settlement_epoch_at_height(chain_height), claimed, epochs);
-        source.chain_height = chain_height;
+        source.chain_height = ChainCount::from_raw(chain_height);
         source
     }
+
+    // ── The single test-side wire encoder ───────────────────────────────
+    //
+    // One Rust re-encoding of the daemon's `get_archival_emission_claim_source`
+    // JSON shape: the decode tests (`emission_source.rs`) and the claim
+    // orchestrator's e2e fetch leg both derive their fixtures from it, so a
+    // field rename cannot leave two test files updated out of lockstep. The
+    // shape's independent pin is the C++ wire-contract test on the
+    // serializer side (`archival_claim_source_rpc.cpp`) — one Rust copy,
+    // one C++ pin, no third source of truth.
+
+    /// A JSON array field the way epee KV serialization emits it: **omitted
+    /// when empty** (epee omits empty containers), so the decoder's
+    /// absent-decodes-empty rule stays exercised by every fixture built
+    /// through this encoder.
+    fn put_array<T: Clone + Into<serde_json::Value>>(
+        obj: &mut serde_json::Map<String, serde_json::Value>,
+        field: &str,
+        values: &[T],
+    ) {
+        if !values.is_empty() {
+            obj.insert(
+                field.to_owned(),
+                serde_json::Value::Array(values.iter().cloned().map(Into::into).collect()),
+            );
+        }
+    }
+
+    /// Re-encode an [`EpochSnapshot`] as the daemon's epee KV JSON emits it.
+    pub(crate) fn epoch_json(e: &EpochSnapshot) -> serde_json::Value {
+        let mut obj = serde_json::Map::new();
+        obj.insert("settlement_epoch".into(), e.settlement_epoch.into());
+        obj.insert("close_block_height".into(), e.close_block_height.into());
+        obj.insert("sigma_work_milli".into(), e.sigma_work_milli.into());
+        obj.insert("budget_atomic".into(), e.budget_atomic.into());
+        obj.insert("has_budget_row".into(), e.has_budget_row.into());
+        let bonds: Vec<serde_json::Value> = e
+            .bonds
+            .iter()
+            .map(|b| {
+                let mut bond = serde_json::Map::new();
+                bond.insert(
+                    "join_settlement_epoch".into(),
+                    b.join_settlement_epoch.into(),
+                );
+                bond.insert(
+                    "is_foundation_complete_tree".into(),
+                    b.is_foundation_complete_tree.into(),
+                );
+                let flat: Vec<u64> = b
+                    .bad_intervals
+                    .iter()
+                    .flat_map(|i| [i.start_epoch, i.end_exclusive])
+                    .collect();
+                put_array(&mut bond, "bad_intervals_flat", &flat);
+                serde_json::Value::Object(bond)
+            })
+            .collect();
+        put_array(&mut obj, "bonds", &bonds);
+        let shards: Vec<serde_json::Value> = e
+            .shards
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "shard_id": s.shard_id,
+                    "freeze_height": s.freeze_height,
+                    "has_segment": s.has_segment,
+                })
+            })
+            .collect();
+        put_array(&mut obj, "shards", &shards);
+        let pairs: Vec<serde_json::Value> = e
+            .credit_pairs
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "bond_idx": p.bond_idx,
+                    "shard_idx": p.shard_idx,
+                })
+            })
+            .collect();
+        put_array(&mut obj, "credit_pairs", &pairs);
+        obj.insert(
+            "claimant_bond_idx".into(),
+            e.claimant_bond_idx.map_or(u64::MAX, |i| i as u64).into(),
+        );
+        serde_json::Value::Object(obj)
+    }
+
+    /// The full `get_archival_emission_claim_source` result body for a
+    /// typed source — the inverse of `EmissionClaimSource::from_json`, so a
+    /// fixture built here decodes through the real untrusted-boundary path.
+    pub(crate) fn source_json(source: &EmissionClaimSource) -> serde_json::Value {
+        let mut obj = serde_json::Map::new();
+        obj.insert("status".into(), "OK".into());
+        obj.insert("chain_height".into(), source.chain_height.to_raw().into());
+        obj.insert(
+            "current_settled_epoch".into(),
+            source.current_settled_epoch.into(),
+        );
+        obj.insert("has_bond_record".into(), source.bond.is_some().into());
+        if let Some(bond) = source.bond.as_ref() {
+            obj.insert(
+                "join_settlement_epoch".into(),
+                bond.join_settlement_epoch.into(),
+            );
+            obj.insert(
+                "holdings_kind".into(),
+                match bond.holdings.kind {
+                    HoldingsKind::ShardSetCompact => 0u8,
+                    HoldingsKind::CompleteTree => 1u8,
+                }
+                .into(),
+            );
+            put_array(&mut obj, "held_shard_ids", &bond.holdings.shard_ids);
+            put_array(
+                &mut obj,
+                "claimed_settlement_epochs",
+                &bond.claimed_settlement_epochs,
+            );
+        }
+        let epochs: Vec<serde_json::Value> = source.epochs.iter().map(epoch_json).collect();
+        put_array(&mut obj, "epochs", &epochs);
+        serde_json::Value::Object(obj)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_fixtures::{
+        resigma, snapshot, source_at_count, source_with, zero_share_snapshot, BUDGET, SHARD_A,
+        SHARD_B,
+    };
+    use super::*;
+    use crate::engine::emission_source::EpochSnapshot;
+    use shekyl_types::ChainCount;
+
+    use shekyl_archival_retention::{
+        as_of_e_served_work, bond_wire::MAX_HOLDINGS_SHARDS, capped_work_milli,
+        claimed_epochs_check_and_set, reward_share_floor, settlement_epoch_at_height,
+        BandedCurveParams, ClaimedEpochsError, CreditPair, EpochCloseInputs, EpochCloseShard,
+        KCover, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
+        EMISSION_KAT_SHAPE, MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
+    };
 
     /// The derivation's structural checks in one grid: boundary verdicts
     /// come from the read-only predicates (each skip reason at its exact
@@ -1369,7 +1495,7 @@ mod tests {
         // window predicates (decode refuses this pair; the derivation
         // must still fail closed on it).
         source.current_settled_epoch = u64::MAX;
-        source.chain_height = u64::MAX;
+        source.chain_height = ChainCount::from_raw(u64::MAX);
         assert!(matches!(
             derive_claimable_epochs(&source),
             Err(EmissionClaimError::SourceInvalid { epoch: e }) if e == epoch

@@ -31,6 +31,33 @@ use std::future::Future;
 use shekyl_p_transport::{PTorClient, PTransportError, RequestErrorKind};
 use shekyl_rpc_client::{Rpc, RpcError};
 
+/// Marker for [`Rpc`] transports whose **network identity is the persona's
+/// own** — the §7.4 transport pin (`EMISSION_CLAIM_BUILDER.md`): a persona's
+/// claim-side traffic must never ride the principal's daemon session, or the
+/// query (which carries `p_id`) links `P` to its principal at the daemon —
+/// the origin-edge deanonymization the P↔principal firewall exists to
+/// prevent.
+///
+/// The pin is **structural**: `orchestrate_emission_claim` bounds its
+/// transport parameter on this trait, so handing it the principal's
+/// `DaemonClient` is a compile error, not a review obligation or a
+/// caller-discipline comment. Production implementors:
+///
+/// - [`PRpc`] — the `remote` posture: `P`'s own Tor circuit, one circuit per
+///   persona (`for_persona`'s isolation invariants).
+/// - The `local` posture's direct-localhost transport implements it when the
+///   DQ-T2.3 posture selector lands: against the wallet's **own** node
+///   (run-your-own-node is the privacy default, SP-T2), principal and
+///   persona share a trusted daemon, so the shared network identity is not
+///   an adversary-observable edge — that impl is a deliberate choice site,
+///   documented there.
+///
+/// Test transports may implement it freely; the pin is against production
+/// misuse, not test plumbing.
+pub(crate) trait PersonaIsolatedTransport: Rpc {}
+
+impl PersonaIsolatedTransport for PRpc {}
+
 /// A per-`P` [`Rpc`] that routes every call over `P`'s Tor circuit.
 ///
 /// `Clone` is a per-`P` clone: it shares the same `Arc`-backed `ureq::Agent`

@@ -20,7 +20,7 @@ use shekyl_daemon_rpc::submit::{
     CommitOutcome, KeyImageConflict, ParsedSubmission, ReferenceFacts, ShimFault, SubmitFacts,
     SubmitStateShim, TxMeta, TxVerifier, VerificationCertificate, VerifyFailure,
 };
-use shekyl_types::{BlockHash, BlockHeight, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, ChainCount, TxHash};
 use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
 use shekyl_wire::{
     BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, ServeCredit, Transaction, TxPrefix,
@@ -187,7 +187,7 @@ pub fn admitting_facts(parsed: &ParsedSubmission) -> SubmitFacts {
         fee_per_byte: 1,
         fee_quantization_mask: 1,
         weight_limit: 149_400,
-        chain_height: BlockHeight::from_raw(200),
+        chain_height: ChainCount::from_raw(200),
     }
 }
 

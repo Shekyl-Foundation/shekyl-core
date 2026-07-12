@@ -104,6 +104,24 @@ fn timestamp_secs_since() {
     assert_eq!(before.checked_secs_since(now), None);
 }
 
+/// The two chain facts a [`ChainCount`] carries: the tip is one below the
+/// count (`None` on an empty chain — no laundering a count into a height),
+/// and the next block's height is numerically the count itself.
+#[test]
+fn chain_count_bridges() {
+    let count = ChainCount::from_raw(30_001);
+    assert_eq!(count.tip(), Some(BlockHeight::from_raw(30_000)));
+    assert_eq!(count.next_height(), BlockHeight::from_raw(30_001));
+
+    let empty = ChainCount::ZERO;
+    assert_eq!(empty.tip(), None, "an empty chain has no tip");
+    assert_eq!(
+        empty.next_height(),
+        BlockHeight::from_raw(0),
+        "the next block of an empty chain is genesis"
+    );
+}
+
 #[test]
 fn hash_display_is_lowercase_hex() {
     let mut bytes = [0u8; 32];

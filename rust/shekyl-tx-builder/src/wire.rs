@@ -29,6 +29,13 @@ pub struct WireEncodeInput {
     /// beyond the `ToKey` guard.
     pub extra_inputs: Vec<Input>,
     pub output_keys: Vec<[u8; 32]>,
+    /// Per-output **plaintext** wire amount. `0` for confidential outputs (every
+    /// ordinary FCMP++ spend). Non-zero only for the emission-claim reward vouts,
+    /// which are *loud* by consensus: the daemon reads `tx.vout[i].amount` directly
+    /// to form the reward-commit set and the `total_reward` operand of
+    /// `verCtSemanticsEmission` (`blockchain.cpp:3926`, `rctSigs.cpp:348`). Arity
+    /// is pinned to `output_keys` at build.
+    pub output_amounts: Vec<u64>,
     pub view_tags: Vec<Option<u8>>,
     pub tx_extra: Vec<u8>,
     pub fee: u64,
@@ -81,34 +88,40 @@ fn wire_inputs(
         .collect())
 }
 
-/// Map output keys + view tags to `shekyl_wire::Output`. Genesis outputs always carry a
-/// view_tag (FA-6); the optional form is a pre-genesis inheritance that must not reach
-/// the wire, so a `None` is a hard error.
+/// Map output keys + view tags + plaintext amounts to `shekyl_wire::Output`. Genesis
+/// outputs always carry a view_tag (FA-6); the optional form is a pre-genesis
+/// inheritance that must not reach the wire, so a `None` is a hard error. Amounts are
+/// `0` on confidential paths and the loud per-vout values on the emission-claim path
+/// (see [`WireEncodeInput::output_amounts`]).
 fn wire_outputs(
     output_keys: &[[u8; 32]],
+    output_amounts: &[u64],
     view_tags: &[Option<u8>],
 ) -> Result<Vec<Output>, TxBuilderError> {
     // `zip` would silently truncate to the shorter slice — emitting fewer outputs (or
-    // dropping tags) and building an invalid tx unnoticed. Couple the lengths explicitly.
-    if output_keys.len() != view_tags.len() {
+    // dropping tags/amounts) and building an invalid tx unnoticed. Couple the lengths
+    // explicitly.
+    if output_keys.len() != view_tags.len() || output_keys.len() != output_amounts.len() {
         return Err(TxBuilderError::WireError(format!(
-            "output_keys ({}) / view_tags ({}) length mismatch",
+            "output_keys ({}) / output_amounts ({}) / view_tags ({}) length mismatch",
             output_keys.len(),
+            output_amounts.len(),
             view_tags.len()
         )));
     }
     output_keys
         .iter()
+        .zip(output_amounts.iter())
         .zip(view_tags.iter())
         .enumerate()
-        .map(|(idx, (key, view_tag))| {
+        .map(|(idx, ((key, amount), view_tag))| {
             let view_tag = view_tag.ok_or_else(|| {
                 TxBuilderError::WireError(format!(
                     "output {idx} missing view_tag (genesis requires it)"
                 ))
             })?;
             Ok(Output {
-                amount: 0,
+                amount: *amount,
                 key: *key,
                 view_tag,
             })
@@ -141,6 +154,7 @@ fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError>
         ("enc_amounts", input.enc_amounts.len()),
         ("enc_labels", input.enc_labels.len()),
         ("out_commitments", input.out_commitments.len()),
+        ("output_amounts", input.output_amounts.len()),
     ] {
         if got != n_out {
             return Err(TxBuilderError::WireError(format!(
@@ -206,7 +220,7 @@ fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError>
         prefix: TxPrefix {
             unlock_time: 0,
             inputs: wire_inputs(&input.key_images, &input.extra_inputs)?,
-            outputs: wire_outputs(&input.output_keys, &input.view_tags)?,
+            outputs: wire_outputs(&input.output_keys, &input.output_amounts, &input.view_tags)?,
             extra: input.tx_extra.clone(),
         },
         ct: Ct::Fcmp {
@@ -239,6 +253,7 @@ fn prefix_only_tx(
     key_images: &[[u8; 32]],
     extra_inputs: &[Input],
     output_keys: &[[u8; 32]],
+    output_amounts: &[u64],
     view_tags: &[Option<u8>],
     tx_extra: &[u8],
 ) -> Result<Transaction, TxBuilderError> {
@@ -246,7 +261,7 @@ fn prefix_only_tx(
         prefix: TxPrefix {
             unlock_time: 0,
             inputs: wire_inputs(key_images, extra_inputs)?,
-            outputs: wire_outputs(output_keys, view_tags)?,
+            outputs: wire_outputs(output_keys, output_amounts, view_tags)?,
             extra: tx_extra.to_vec(),
         },
         ct: Ct::Null(CtBase {
@@ -287,6 +302,7 @@ pub fn tx_prefix_hash_for_signing(input: &WireEncodeInput) -> [u8; 32] {
         &input.key_images,
         &input.extra_inputs,
         &input.output_keys,
+        &input.output_amounts,
         &input.view_tags,
         &input.tx_extra,
     )
@@ -296,33 +312,55 @@ pub fn tx_prefix_hash_for_signing(input: &WireEncodeInput) -> [u8; 32] {
 
 /// Prefix hash from prefix fields only (no proofs) — the canonical `prefix_hash` (the ct
 /// section is irrelevant to it). Same panic contract as [`tx_prefix_hash_for_signing`].
+/// Confidential-only form: every output's wire amount is `0` (loud-vout callers go
+/// through [`tx_prefix_hash_from_parts_with_extra`]).
 pub fn tx_prefix_hash_from_parts(
     key_images: &[[u8; 32]],
     output_keys: &[[u8; 32]],
     view_tags: &[Option<u8>],
     tx_extra: &[u8],
 ) -> [u8; 32] {
-    prefix_only_tx(key_images, &[], output_keys, view_tags, tx_extra)
-        .expect("prefix tx builds for well-formed parts")
-        .prefix_hash()
+    let zero_amounts = vec![0u64; output_keys.len()];
+    prefix_only_tx(
+        key_images,
+        &[],
+        output_keys,
+        &zero_amounts,
+        view_tags,
+        tx_extra,
+    )
+    .expect("prefix tx builds for well-formed parts")
+    .prefix_hash()
 }
 
 /// [`tx_prefix_hash_from_parts`] with non-`ToKey` prefix inputs (e.g. an archival
 /// bond post) appended after the `ToKey` inputs — the shape a bond-post transaction's
-/// prefix takes (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.2.2).
+/// prefix takes (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.2.2) — and explicit per-output
+/// plaintext amounts (all-zero on confidential paths; the loud per-vout values on the
+/// emission-claim path, whose prefix hashes must cover them).
 ///
 /// # Errors
 ///
 /// [`TxBuilderError::WireError`] if `extra_inputs` contains an [`Input::ToKey`]
-/// (spend inputs go through `key_images`) or an output is missing its view tag.
+/// (spend inputs go through `key_images`), an output is missing its view tag, or the
+/// per-output slices disagree in length.
 pub fn tx_prefix_hash_from_parts_with_extra(
     key_images: &[[u8; 32]],
     extra_inputs: &[Input],
     output_keys: &[[u8; 32]],
+    output_amounts: &[u64],
     view_tags: &[Option<u8>],
     tx_extra: &[u8],
 ) -> Result<[u8; 32], TxBuilderError> {
-    Ok(prefix_only_tx(key_images, extra_inputs, output_keys, view_tags, tx_extra)?.prefix_hash())
+    Ok(prefix_only_tx(
+        key_images,
+        extra_inputs,
+        output_keys,
+        output_amounts,
+        view_tags,
+        tx_extra,
+    )?
+    .prefix_hash())
 }
 
 #[cfg(test)]
@@ -335,6 +373,7 @@ mod tests {
             key_images: vec![[1u8; 32]],
             extra_inputs: Vec::new(),
             output_keys: vec![[2u8; 32]],
+            output_amounts: vec![0],
             view_tags: vec![Some(3)],
             tx_extra: vec![1, 2, 3],
             fee: 1_000,
@@ -514,6 +553,7 @@ mod tests {
                 &input.key_images,
                 &input.extra_inputs,
                 &input.output_keys,
+                &input.output_amounts,
                 &input.view_tags,
                 &input.tx_extra,
             )
@@ -533,6 +573,40 @@ mod tests {
             tx.prefix_hash(),
             "extra input must be part of the prefix preimage"
         );
+    }
+
+    /// Loud (plaintext) output amounts reach the wire `Output.amount` field and
+    /// are covered by the prefix hash — the emission-claim reward-vout shape
+    /// (`verCtSemanticsEmission` reads `tx.vout[i].amount` daemon-side). The
+    /// zero-amount encoding must NOT equal the loud encoding, or a builder bug
+    /// silencing the amounts would go unnoticed until the daemon's balance check.
+    #[test]
+    fn loud_output_amounts_reach_wire_and_prefix_hash() {
+        let quiet = minimal_input();
+        let mut loud = minimal_input();
+        loud.output_amounts = vec![1_000_000];
+
+        let bytes = encode_final_tx(&loud).expect("encode loud output");
+        let tx = Transaction::from_bytes(&bytes).expect("re-parse");
+        assert_eq!(tx.prefix.outputs[0].amount, 1_000_000);
+
+        assert_ne!(
+            tx_prefix_hash_for_signing(&loud),
+            tx_prefix_hash_for_signing(&quiet),
+            "the plaintext amount must be part of the prefix preimage"
+        );
+        assert_eq!(tx_prefix_hash_for_signing(&loud), tx.prefix_hash());
+    }
+
+    /// `output_amounts` out of step with the output count fails at the boundary.
+    #[test]
+    fn output_amount_arity_mismatch_is_rejected() {
+        let mut input = minimal_input();
+        input.output_amounts.push(7);
+        assert!(matches!(
+            encode_final_tx(&input),
+            Err(TxBuilderError::WireError(_))
+        ));
     }
 
     /// `pqc_auths` sized for spends only (missing the extra's slot) is a
@@ -570,6 +644,7 @@ mod tests {
             &input.key_images,
             &input.extra_inputs,
             &input.output_keys,
+            &input.output_amounts,
             &input.view_tags,
             &input.tx_extra,
         )

@@ -234,6 +234,33 @@ scalar_u64! {
 }
 
 scalar_u64! {
+    /// The chain's total **block count** — the daemon's `m_db->height()`
+    /// operand, which is **one past the tip** (a chain of N blocks has tip
+    /// height N − 1).
+    ///
+    /// Distinct from both [`BlockHeight`] (an absolute instant — a count is
+    /// not a position) and [`BlockCount`] (a relative span between two
+    /// heights — a count is anchored at genesis and carries the two chain
+    /// facts below). C++ overloads the word "height" for this value, which
+    /// is exactly the confusion this type exists to stop: laundering a
+    /// count into a height via `BlockHeight::from_raw` admitted records one
+    /// block early in the emission-claim spendability anchor and stored a
+    /// not-yet-existing "height" in refusals (claim-builder PR-3 review).
+    ///
+    /// The only bridges to [`BlockHeight`] are the two named chain facts:
+    ///
+    /// - [`ChainCount::tip`] — the newest existing block (`count − 1`;
+    ///   `None` on an empty chain), the spendability / anchoring operand;
+    /// - [`ChainCount::next_height`] — the height the *next* block will
+    ///   carry (numerically the count itself), the earliest-inclusion
+    ///   operand (e.g. an emission claim's verify-context height).
+    ///
+    /// Which fact a call site means is now spelled at the call site instead
+    /// of carried in a comment.
+    ChainCount
+}
+
+scalar_u64! {
     /// A ledger-wide global output index (the daemon's `next_output_seq`
     /// counter), assigned densely to every output in drain order.
     ///
@@ -443,6 +470,26 @@ impl Timestamp {
     #[must_use]
     pub const fn checked_secs_since(self, earlier: Timestamp) -> Option<u64> {
         self.0.checked_sub(earlier.0)
+    }
+}
+
+impl ChainCount {
+    /// The newest existing block's height (`count − 1`), or `None` on an
+    /// empty chain. The spendability / reference-anchoring operand.
+    #[must_use]
+    pub const fn tip(self) -> Option<BlockHeight> {
+        match self.0.checked_sub(1) {
+            Some(v) => Some(BlockHeight(v)),
+            None => None,
+        }
+    }
+
+    /// The height the **next** block will carry — numerically the count
+    /// itself, typed as the instant it will become. The earliest-inclusion
+    /// operand (a tx assembled now lands at this height at the soonest).
+    #[must_use]
+    pub const fn next_height(self) -> BlockHeight {
+        BlockHeight(self.0)
     }
 }
 

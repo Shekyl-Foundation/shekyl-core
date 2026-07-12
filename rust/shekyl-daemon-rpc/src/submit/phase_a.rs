@@ -191,6 +191,19 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
                 // panickable by construction.
                 return Err(PhaseAReject::new("gen input in a non-coinbase submission"));
             }
+            Input::ArchivalRewardEmission { .. } => {
+                // The wire arm exists (C-1 parse survival for the *scan* path),
+                // but the emission submit leg — its SubmitTxKind, fee/vout
+                // statics, and verifier rows — has not landed. Refuse loudly
+                // rather than misclassify as Spend: before the wire arm this
+                // submission died at parse ("unsupported input tag"), so this
+                // preserves the submit surface's reject exactly. Replaced by
+                // real classification when the emission submit leg lands
+                // (EMISSION_CLAIM_BUILDER.md §8 PR-3/PR-4).
+                return Err(PhaseAReject::new(
+                    "emission input submission is not yet supported",
+                ));
+            }
         }
     }
     let kind = if n_serve_credit > 0 {

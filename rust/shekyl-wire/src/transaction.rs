@@ -15,6 +15,7 @@
 //! Input(spend)     := 0x01 V(amount) vec(V key_offset) key_image[32]   # txin_to_key / fcmp
 //! Input(serve_cr.) := 0x02 ...                                         # archival serve_credit
 //! Input(bond_post) := 0x03 ...                                         # archival bond_post
+//! Input(emission)  := 0x04 V(blob_len) canonical_bytes[blob_len]       # archival reward_emission (opaque)
 //! Output      := V(amount) 0x00 key[32] view_tag(1)                  # tagged_key (sole genesis output)
 //! Ct(Null)    := 0x00 enc_amounts[nout×9] enc_labels[nout×9] outPk[nout×32]   # coinbase
 //! Ct(Fcmp)    := 0x01 V(fee) referenceBlock[32]
@@ -30,8 +31,12 @@
 //! length prefix, but its count is `n_spend` — the number of **`ToKey` (key-image)
 //! inputs only**. A bond-post input occupies a `pqc_auths` slot but carries no
 //! pseudo-out (its cleartext `bond_credit` rides the CT balance instead:
-//! `Σ pseudoOuts = Σ out_masks + fee + bond_credit`). For a pure spend
-//! `n_spend == nvin`, so the two counts only diverge on bond-post transactions.
+//! `Σ pseudoOuts = Σ out_masks + fee + bond_credit`). The reward-emission input is
+//! the same shape on the other side of the ledger: a `pqc_auths` slot, no
+//! pseudo-out, its cleartext `total_reward` entering the CT balance input-side
+//! (`Σ pseudoOuts + total_reward·H = Σ out_masks + fee·H`,
+//! `src/fcmp/rctSigs.cpp` `verCtSemanticsEmission`). For a pure spend
+//! `n_spend == nvin`, so the counts only diverge on bond-post / emission txs.
 //! Source: `src/fcmp/rctTypes.h` (`serialize_rctsig_base` / `serialize_rctsig_prunable`,
 //! `BulletproofPlus`), `src/cryptonote_basic/cryptonote_basic.h` (`pqc_authentication`,
 //! tx-level between base and prunable).
@@ -65,6 +70,13 @@ pub const CT_TYPE_FCMP: u8 = 0x01;
 pub const TAG_INPUT_SERVE_CREDIT: u8 = 0x02;
 /// `txin_archival_bond_post` tag (gate-4, JoinMarket-only at genesis).
 pub const TAG_INPUT_BOND_POST: u8 = 0x03;
+/// `txin_archival_reward_emission` tag (C-1) — an opaque canonical blob whose
+/// codec is owned by `shekyl-archival-retention::emission_wire`
+/// (`VIN_TYPE_ARCHIVAL_REWARD_EMISSION`); mirrors the C++
+/// `TXIN_ARCHIVAL_REWARD_EMISSION_WIRE_TAG` (`cryptonote_basic.h:296`). The blob's
+/// **leading byte echoes this tag** — the transport guard the C++ deserializer
+/// enforces (`cryptonote_basic.h:302-310`) and [`Input::read`] mirrors.
+pub const TAG_INPUT_ARCHIVAL_REWARD_EMISSION: u8 = 0x04;
 
 /// `post_kind` value for a JoinMarket bond post (the only kind valid at genesis).
 /// `bond_spend_pk` is present on the wire iff `post_kind == JOINMARKET` (§9.11).
@@ -73,6 +85,13 @@ pub const BOND_POST_KIND_JOINMARKET: u8 = 0;
 pub const HOLDINGS_SHARD_SET_COMPACT: u8 = 0;
 /// `holdings.kind` for the complete tree (carries no shard list).
 pub const HOLDINGS_COMPLETE_TREE: u8 = 1;
+
+/// Transport bound on the emission `canonical_bytes` blob
+/// (`config::ARCHIVAL_EMISSION_VIN_MAX_BYTES`, `src/cryptonote_config.h:308`).
+/// Deliberately the C++ transport cap verbatim (1 MiB > [`MAX_TX_SIZE`]): the wire
+/// layer mirrors the oracle's accept/reject exactly, and the tx-size bound rejects
+/// the oversized *transaction* independently.
+pub const ARCHIVAL_EMISSION_VIN_MAX_BYTES: usize = 1024 * 1024;
 
 /// Consensus bound: max shards in a compact holdings set (`bond_wire.rs`).
 const MAX_HOLDINGS_SHARDS: usize = 4096;
@@ -272,9 +291,9 @@ fn read_branch_layers<R: Read>(r: &mut R, kind: &str) -> io::Result<Vec<Vec<[u8;
 
 /// A transaction input.
 ///
-/// Genesis arms modelled here: the coinbase `gen` input and the FCMP++ spend
-/// (`txin_to_key`). The archival arms (`serve_credit`, `bond_post`) and the
-/// deferred emission/membership-only arms land in later slices.
+/// Genesis arms modelled here: the coinbase `gen` input, the FCMP++ spend
+/// (`txin_to_key`), and the archival arms (`serve_credit`, `bond_post`,
+/// `reward_emission`).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Input {
     /// Coinbase generation input: the block height.
@@ -295,6 +314,41 @@ pub enum Input {
     ServeCredit(Box<ServeCredit>),
     /// Archival bond-post (dense tag `0x03`, gate-4) — JoinMarket-only at genesis.
     BondPost(Box<BondPost>),
+    /// Archival reward-emission (dense tag `0x04`, C-1) — the complete Rust
+    /// canonical encoding as an **opaque blob**, leading wire tag `0x04` included.
+    /// This crate is transport only, matching the C++ posture
+    /// (`cryptonote_basic.h:283-311`): `shekyl-archival-retention::emission_wire`
+    /// owns the codec, the parse, and every structural bound; the transport guard
+    /// here is the allocation bound + the wire-tag echo, and a blob passing it can
+    /// still be garbage — the emission parser is the validator. Like a bond-post,
+    /// this input occupies a `pqc_auths` slot but no pseudo-out slot (module
+    /// header; C++ `count_spend_inputs`, `cryptonote_basic.h:322`).
+    ArchivalRewardEmission {
+        /// The complete `emission_wire.rs` canonical encoding (leading `0x04` included).
+        canonical_bytes: Vec<u8>,
+    },
+}
+
+/// The emission-blob transport guard (`cryptonote_basic.h:302-310`): length in
+/// `2..=`[`ARCHIVAL_EMISSION_VIN_MAX_BYTES`], leading byte echoing the wire tag.
+/// One source for the two sites that must agree — [`Input::read`] (accept/reject
+/// parity with the C++ deserializer) and `validate_context_free_pruned`'s per-arm
+/// pass (the in-memory gate that keeps a hand-built tx round-trippable).
+fn check_emission_blob(canonical_bytes: &[u8]) -> io::Result<()> {
+    if canonical_bytes.len() < 2 || canonical_bytes.len() > ARCHIVAL_EMISSION_VIN_MAX_BYTES {
+        return Err(io::Error::other(format!(
+            "shekyl-wire: emission canonical_bytes length {} outside 2..={ARCHIVAL_EMISSION_VIN_MAX_BYTES}",
+            canonical_bytes.len()
+        )));
+    }
+    if canonical_bytes[0] != TAG_INPUT_ARCHIVAL_REWARD_EMISSION {
+        return Err(io::Error::other(format!(
+            "shekyl-wire: emission canonical_bytes leading byte {:#04x} != wire tag \
+             {TAG_INPUT_ARCHIVAL_REWARD_EMISSION:#04x}",
+            canonical_bytes[0]
+        )));
+    }
+    Ok(())
 }
 
 impl Input {
@@ -326,6 +380,14 @@ impl Input {
                 w.write_all(&[TAG_INPUT_BOND_POST])?;
                 bp.write(w)
             }
+            Input::ArchivalRewardEmission { canonical_bytes } => {
+                // Faithful write (bounds are `validate`'s job, per the
+                // `Transaction::serialize` posture): varint length + blob, the
+                // C++ `FIELD(canonical_bytes)` encoding.
+                w.write_all(&[TAG_INPUT_ARCHIVAL_REWARD_EMISSION])?;
+                write_varint(canonical_bytes.len(), w)?;
+                w.write_all(canonical_bytes)
+            }
         }
     }
 
@@ -354,6 +416,15 @@ impl Input {
             }
             TAG_INPUT_SERVE_CREDIT => Ok(Input::ServeCredit(Box::new(ServeCredit::read(r)?))),
             TAG_INPUT_BOND_POST => Ok(Input::BondPost(Box::new(BondPost::read(r)?))),
+            TAG_INPUT_ARCHIVAL_REWARD_EMISSION => {
+                let canonical_bytes = read_len_prefixed_bounded(
+                    r,
+                    "emission canonical_bytes",
+                    ARCHIVAL_EMISSION_VIN_MAX_BYTES,
+                )?;
+                check_emission_blob(&canonical_bytes)?;
+                Ok(Input::ArchivalRewardEmission { canonical_bytes })
+            }
             other => Err(io::Error::other(format!(
                 "shekyl-wire: unsupported input tag {other:#04x}"
             ))),
@@ -1181,8 +1252,9 @@ impl Transaction {
             )));
         }
         let prefix = TxPrefix::read(r)?;
-        // pseudoOuts are sized by the ToKey (spend) subset of vin — a bond-post
-        // input occupies a pqc_auths slot but no pseudo-out slot (module header).
+        // pseudoOuts are sized by the ToKey (spend) subset of vin — a bond-post or
+        // emission input occupies a pqc_auths slot but no pseudo-out slot (module
+        // header; C++ `count_spend_inputs` counts only `txin_to_key`).
         let spend_inputs = prefix
             .inputs
             .iter()
@@ -1473,7 +1545,8 @@ impl Transaction {
     /// `core::check_tx_semantic` + `Blockchain::check_tx_inputs` +
     /// `check_inputs_types_supported` (verified by a differential read, 2026-06-21):
     /// resource bounds (§10), the arm-mixing matrix (gen sole / coinbase, serve_credit
-    /// all-or-none + fee-only, ≤1 bond_post), `Null` ct iff coinbase, empty
+    /// all-or-none + fee-only, ≤1 bond_post, ≤1 emission not mixing with bond_post),
+    /// `Null` ct iff coinbase, empty
     /// `key_offsets`, strictly-descending key images (rejecting in-tx duplicates),
     /// per-arm archival bounds, the committed-base arity, and the `unlock_time`
     /// block-height form. The prunable-coupled checks — `nbp == 1`, the per-input
@@ -1489,8 +1562,10 @@ impl Transaction {
     ///   `check_commitment_mask_valid`) — curve checks;
     /// - the FCMP++ membership proof, CT balance, double-spend, the referenceBlock
     ///   window, and the coinbase reward / exact `unlock_time` / height (all chain-state);
-    /// - money-overflow sums — trivial here (FCMP++ input/output amounts are 0; the
-    ///   coinbase reward balance is the consensus layer's `validate_miner_transaction`).
+    /// - the coinbase reward **balance** — the consensus layer's
+    ///   `validate_miner_transaction` (the money-overflow *sum* itself is checked
+    ///   below: the loud emission-claim reward vout made non-zero non-coinbase
+    ///   amounts legal, so the C++ `check_money_overflow` parity is load-bearing).
     pub fn validate_context_free_pruned(&self) -> io::Result<()> {
         if self.prefix.inputs.is_empty() {
             return Err(io::Error::other("shekyl-wire: transaction has no inputs"));
@@ -1503,6 +1578,21 @@ impl Transaction {
                 "shekyl-wire: output count {n_out} exceeds {MAX_OUTPUTS}"
             )));
         }
+        // C++ `check_money_overflow` (`core::check_tx_semantic` →
+        // `check_outs_overflow`): the output-amount sum must not overflow. This
+        // was vacuous while every non-coinbase wire amount was 0; the loud
+        // emission-claim reward vout (C-1) legitimized non-zero non-coinbase
+        // amounts, so the checked sum is now the accept/reject-parity arm for
+        // hostile loud amounts the C++ daemon rejects.
+        self.prefix
+            .outputs
+            .iter()
+            .try_fold(0u64, |sum, out| sum.checked_add(out.amount))
+            .ok_or_else(|| {
+                io::Error::other(
+                    "shekyl-wire: output amounts overflow u64 (check_money_overflow parity)",
+                )
+            })?;
         // §2.5 coinbase shape: a `gen` input is coinbase-only and must be the sole
         // input. Reject `gen` mixed with any other input — otherwise a tx like
         // `[Gen, ToKey, …]` would be misclassified as coinbase and skip the
@@ -1532,6 +1622,12 @@ impl Transaction {
             .inputs
             .iter()
             .filter(|i| matches!(i, Input::BondPost(_)))
+            .count();
+        let emission_count = self
+            .prefix
+            .inputs
+            .iter()
+            .filter(|i| matches!(i, Input::ArchivalRewardEmission { .. }))
             .count();
         // serve_credit is non-spending — it must not mix with any spend/bond/gen arm.
         // The oracle allows **multiple** serve_credits, only rejecting the *mixing*
@@ -1563,6 +1659,21 @@ impl Transaction {
         if bond_post_count > 1 {
             return Err(io::Error::other(
                 "shekyl-wire: at most one bond_post input per tx (§2.5)",
+            ));
+        }
+        // Emission mixing (C-1, Q3 arity 1 / Q11): at most one emission vin
+        // (check_inputs_types_supported:731), and it must not mix with a bond_post
+        // (:737) — key-imaged `ToKey` fee spends are the only permitted
+        // co-residents. serve_credit co-residency is already rejected by the
+        // all-serve_credit rule above; gen co-residency by the sole-gen rule.
+        if emission_count > 1 {
+            return Err(io::Error::other(
+                "shekyl-wire: at most one emission input per tx (§2.5)",
+            ));
+        }
+        if emission_count == 1 && bond_post_count > 0 {
+            return Err(io::Error::other(
+                "shekyl-wire: emission must not mix with a bond_post input (§2.5)",
             ));
         }
         // tx_extra bound (the coinbase extra is unbounded in C++; cap non-coinbase).
@@ -1601,7 +1712,7 @@ impl Transaction {
         //  - key-image-bearing inputs strictly **descending** by key image:
         //    `memcmp(ki, last) >= 0 → reject` (blockchain.cpp:3656). One rule, two
         //    guarantees — rejects unsorted AND in-tx duplicate key images. No-key-image
-        //    arms (`gen`/`serve_credit`/`bond_post`) carry no key image and are exempt.
+        //    arms (`gen`/`serve_credit`/`bond_post`/`emission`) are exempt.
         let mut key_images: Vec<&[u8; 32]> = Vec::new();
         for input in &self.prefix.inputs {
             if let Input::ToKey {
@@ -1634,6 +1745,9 @@ impl Transaction {
             match input {
                 Input::ServeCredit(sc) => sc.validate()?,
                 Input::BondPost(bp) => bp.validate()?,
+                Input::ArchivalRewardEmission { canonical_bytes } => {
+                    check_emission_blob(canonical_bytes)?
+                }
                 _ => {}
             }
         }

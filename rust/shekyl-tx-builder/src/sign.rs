@@ -157,44 +157,7 @@ pub fn sign_transaction_with_terms(
     let prove_inputs: Vec<ProveInput> = inputs
         .iter()
         .enumerate()
-        .map(|(i, inp)| {
-            let leaf_outputs: Vec<([u8; 32], [u8; 32], [u8; 32])> = inp
-                .leaf_chunk
-                .iter()
-                .map(|e| (e.output_key, e.key_image_gen, e.commitment))
-                .collect();
-            let leaf_h_pqc: Vec<[u8; 32]> = inp.leaf_chunk.iter().map(|e| e.h_pqc).collect();
-
-            let c1_branch_layers: Vec<BranchLayer> = inp
-                .c1_layers
-                .iter()
-                .map(|siblings| BranchLayer {
-                    siblings: siblings.clone(),
-                })
-                .collect();
-            let c2_branch_layers: Vec<BranchLayer> = inp
-                .c2_layers
-                .iter()
-                .map(|siblings| BranchLayer {
-                    siblings: siblings.clone(),
-                })
-                .collect();
-
-            ProveInput {
-                output_key: inp.output_key,
-                key_image_gen: compute_key_image_gen(&inp.output_key),
-                commitment: inp.commitment,
-                h_pqc: PqcLeafScalar(inp.h_pqc),
-                spend_key_x: inp.spend_key_x,
-                spend_key_y: inp.spend_key_y,
-                commitment_mask: inp.commitment_mask,
-                pseudo_out_blind: pseudo_masks[i].to_bytes(),
-                leaf_chunk_outputs: leaf_outputs,
-                leaf_chunk_h_pqc: leaf_h_pqc,
-                c1_branch_layers,
-                c2_branch_layers,
-            }
-        })
+        .map(|(i, inp)| prove_input_from_spend(inp, pseudo_masks[i].to_bytes()))
         .collect();
 
     // ── 7. FCMP++ prove ──────────────────────────────────────────────
@@ -303,6 +266,121 @@ pub fn sign_pqc_auths(
     }
 
     Ok(auths)
+}
+
+/// A membership-only FCMP++ backing proof for a
+/// `txin_archival_reward_emission` (`REWARD_EMISSION_LEG.md` §7).
+///
+/// The prover half's output, shaped for the emission vin's
+/// `MembershipOnlyBacking` fields: the proof blob, the single rerandomized
+/// pseudo-out `C~`, and the tree depth the proof spans.
+#[derive(Debug)]
+pub struct MembershipOnlyProof {
+    /// Serialized `FcmpMembershipOnly` proof bytes.
+    pub proof: Vec<u8>,
+    /// The backing's rerandomized commitment `C~` (real ×1 form).
+    pub pseudo_out: [u8; 32],
+    /// Tree depth the proof spans (copied from the `TreeContext`).
+    pub tree_depth: u8,
+}
+
+/// Prove a **membership-only** backing for a reward-emission vin.
+///
+/// The thin boundary over `shekyl_fcmp::proof::prove_membership_only`: this
+/// crate is engine-core's single production route into the FCMP++ prover
+/// (`shekyl-fcmp` is not a direct production dependency of engine-core), so the
+/// membership-only leg enters here alongside [`sign_transaction_with_terms`].
+///
+/// The `SpendInput → ProveInput` conversion is the same as the full-path
+/// signer's step 6, except `pseudo_out_blind` is zero: the membership-only
+/// prover derives its pseudo-out from the context-bound rerandomization and
+/// never reads a caller-supplied blind (no commitment-blind arithmetic on this
+/// path). The rerandomization context is pinned to `tree.tree_root` here —
+/// baked in, not a caller parameter — so every emission proof binds to the
+/// reference block's root (gate-6 §9.6) and a caller cannot pass an
+/// inconsistent context.
+///
+/// # Errors
+///
+/// [`TxBuilderError::FcmpProveError`] on any prover failure (invalid
+/// points/scalars, missing tree path, upstream prove error).
+pub fn prove_backing_membership(
+    input: &SpendInput,
+    tree: &TreeContext,
+    signable_tx_hash: [u8; 32],
+) -> Result<MembershipOnlyProof, TxBuilderError> {
+    // The blind is not read on the membership-only path: pseudo-out blinds
+    // are a full-path (key-image) concern; the membership-only pseudo-out
+    // comes from the context-bound rerandomization inside the prover.
+    let prove_input = prove_input_from_spend(input, [0u8; 32]);
+
+    let result = proof::prove_membership_only(
+        &[prove_input],
+        &tree.tree_root,
+        tree.tree_depth,
+        signable_tx_hash,
+        &tree.tree_root,
+    )
+    .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
+
+    // Exactly one pseudo-out for the one input — enforced, not `.first()`:
+    // a prover regression that returned extras would otherwise be silently
+    // truncated here and surface as an unexplained daemon rejection.
+    let [pseudo_out] = result.pseudo_outs.as_slice() else {
+        return Err(TxBuilderError::FcmpProveError(format!(
+            "membership-only prover returned {} pseudo-outs for one input",
+            result.pseudo_outs.len()
+        )));
+    };
+
+    Ok(MembershipOnlyProof {
+        proof: result.proof.data,
+        pseudo_out: *pseudo_out,
+        tree_depth: tree.tree_depth,
+    })
+}
+
+/// The `SpendInput → ProveInput` field conversion — one definition for the
+/// full-path signer (step 6, per-input balanced blind) and the
+/// membership-only backing leg (zero blind), so the leaf-chunk/branch-layer
+/// marshaling cannot drift between the two proving paths.
+fn prove_input_from_spend(input: &SpendInput, pseudo_out_blind: [u8; 32]) -> ProveInput {
+    let leaf_outputs: Vec<([u8; 32], [u8; 32], [u8; 32])> = input
+        .leaf_chunk
+        .iter()
+        .map(|e| (e.output_key, e.key_image_gen, e.commitment))
+        .collect();
+    let leaf_h_pqc: Vec<[u8; 32]> = input.leaf_chunk.iter().map(|e| e.h_pqc).collect();
+
+    let c1_branch_layers: Vec<BranchLayer> = input
+        .c1_layers
+        .iter()
+        .map(|siblings| BranchLayer {
+            siblings: siblings.clone(),
+        })
+        .collect();
+    let c2_branch_layers: Vec<BranchLayer> = input
+        .c2_layers
+        .iter()
+        .map(|siblings| BranchLayer {
+            siblings: siblings.clone(),
+        })
+        .collect();
+
+    ProveInput {
+        output_key: input.output_key,
+        key_image_gen: compute_key_image_gen(&input.output_key),
+        commitment: input.commitment,
+        h_pqc: PqcLeafScalar(input.h_pqc),
+        spend_key_x: input.spend_key_x,
+        spend_key_y: input.spend_key_y,
+        commitment_mask: input.commitment_mask,
+        pseudo_out_blind,
+        leaf_chunk_outputs: leaf_outputs,
+        leaf_chunk_h_pqc: leaf_h_pqc,
+        c1_branch_layers,
+        c2_branch_layers,
+    }
 }
 
 /// Compute the key image generator Hp(O) for a given output key O.
