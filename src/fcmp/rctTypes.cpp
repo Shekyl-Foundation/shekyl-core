@@ -47,7 +47,7 @@ using namespace std;
 // wallet writing `8` would fork). See
 // `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
 static_assert(static_cast<uint8_t>(rct::CTTypeFcmpPlusPlusPqc) ==
-                  SHEKYL_RCT_TYPE_FCMP_PLUS_PLUS_PQC,
+                  SHEKYL_CT_TYPE_FCMP_PLUS_PLUS_PQC,
               "rct::CTTypeFcmpPlusPlusPqc enum tag drifted from "
               "config/consensus_constants.json — changing the wire "
               "type number is a consensus rule change");

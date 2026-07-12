@@ -57,10 +57,10 @@ fn main() {
     // with a clear message rather than silently emitting an out-of-range
     // literal that the consumer would reject. Mirrors the type-aware
     // range check in `cmake/generate_consensus_constants.py`.
-    let rct_type_raw = get_u64(&map, "rct_type_fcmp_plus_plus_pqc", &config_path);
-    let rct_type: u8 = u8::try_from(rct_type_raw).unwrap_or_else(|_| {
+    let ct_type_raw = get_u64(&map, "ct_type_fcmp_plus_plus_pqc", &config_path);
+    let ct_type: u8 = u8::try_from(ct_type_raw).unwrap_or_else(|_| {
         panic!(
-            "rct_type_fcmp_plus_plus_pqc must fit in u8 (got {rct_type_raw}) in {}",
+            "ct_type_fcmp_plus_plus_pqc must fit in u8 (got {ct_type_raw}) in {}",
             config_path.display()
         )
     });
@@ -77,7 +77,7 @@ fn main() {
          // the same JSON by `cmake/generate_consensus_constants.py`.\n\
          pub const FCMP_REFERENCE_BLOCK_MIN_AGE: u64 = {min_age};\n\
          pub const FCMP_REFERENCE_BLOCK_MAX_AGE: u64 = {max_age};\n\
-         pub const RCT_TYPE_FCMP_PLUS_PLUS_PQC: u8 = {rct_type};\n\
+         pub const CT_TYPE_FCMP_PLUS_PLUS_PQC: u8 = {ct_type};\n\
          pub const ARCHIVAL_BOND_FLOOR_ATOMIC: u64 = {archival_bond_floor};\n",
     );
 

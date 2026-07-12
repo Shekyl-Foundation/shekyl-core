@@ -33,7 +33,7 @@ import sys
 KEYS_INTEGER = {
     "fcmp_reference_block_min_age": "u64",
     "fcmp_reference_block_max_age": "u64",
-    "rct_type_fcmp_plus_plus_pqc": "u8",
+    "ct_type_fcmp_plus_plus_pqc": "u8",
     # LWMA-1 difficulty adjustment, docs/completed/DAA_LWMA1.md §4.
     # All u64 so the generated header has uniform `UINT64_C(...)`
     # emission shape across the DAA window-shape constants. C++
@@ -147,21 +147,21 @@ def main() -> int:
 
 // Values bracketed `SHEKYL_*` to make their generated origin obvious at
 // every consumer; original symbols (`FCMP_REFERENCE_BLOCK_MIN_AGE`,
-// `FCMP_REFERENCE_BLOCK_MAX_AGE`, `RCTTypeFcmpPlusPlusPqc`) are now
+// `FCMP_REFERENCE_BLOCK_MAX_AGE`, `CTTypeFcmpPlusPlusPqc`) are now
 // `static_assert`-pinned to these. The emitted fixed-width literal
 // macros (`UINT8_C` / `UINT64_C`) are validated against the declared
 // type's range at generator time, so a JSON value that overflows
-// (e.g. `rct_type_fcmp_plus_plus_pqc` > 255) fails the build at
+// (e.g. `ct_type_fcmp_plus_plus_pqc` > 255) fails the build at
 // CMake configure rather than truncating silently.
 #define SHEKYL_FCMP_REFERENCE_BLOCK_MIN_AGE \
     {emit("fcmp_reference_block_min_age")}
 #define SHEKYL_FCMP_REFERENCE_BLOCK_MAX_AGE \
     {emit("fcmp_reference_block_max_age")}
-#define SHEKYL_RCT_TYPE_FCMP_PLUS_PLUS_PQC \
-    {emit("rct_type_fcmp_plus_plus_pqc")}
+#define SHEKYL_CT_TYPE_FCMP_PLUS_PLUS_PQC \
+    {emit("ct_type_fcmp_plus_plus_pqc")}
 
 // LWMA-1 difficulty adjustment parameters per docs/completed/DAA_LWMA1.md
-// §4. Generated alongside the FCMP/RCT constants because both subsets
+// §4. Generated alongside the FCMP/CT constants because both subsets
 // share the cross-language-drift threat model (Bug 3 of the 2026-05-05
 // audit). The Rust mirror lives in rust/shekyl-difficulty's build.rs;
 // the Phase 4 C++ cutover replaces inherited `DIFFICULTY_TARGET_V2`,

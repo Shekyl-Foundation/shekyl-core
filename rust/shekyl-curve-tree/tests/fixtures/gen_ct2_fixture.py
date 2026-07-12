@@ -230,8 +230,8 @@ def record_block(daemon: Daemon, height: int) -> dict:
     blk = daemon.json_rpc("get_block", {"height": height})
     root = blk["block_header"]["curve_tree_root"]
     miner = json.loads(blk["json"])["miner_tx"]
-    rct = miner.get("rct_signatures", {})
-    out_pk = rct.get("outPk", [])
+    ct = miner.get("ct_signatures", {})
+    out_pk = ct.get("outPk", [])
     outputs = []
     for i, vout in enumerate(miner["vout"]):
         kind, okey = output_target(vout["target"])

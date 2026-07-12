@@ -230,7 +230,7 @@ pub struct RecoveredWalletOutput {
     /// One-byte view tag carried in the on-chain output. Public.
     #[zeroize(skip)]
     pub(crate) view_tag: u8,
-    /// Encrypted amount bytes from `RctSignaturesBase::encrypted_amounts`.
+    /// Encrypted amount bytes from `CtBase::enc_amounts`.
     /// Public on-chain residue.
     #[zeroize(skip)]
     pub(crate) enc_amount: [u8; 8],
@@ -293,7 +293,7 @@ impl RecoveredWalletOutput {
     pub fn view_tag(&self) -> u8 {
         self.view_tag
     }
-    /// Encrypted amount bytes from `RctSignaturesBase::encrypted_amounts`.
+    /// Encrypted amount bytes from `CtBase::enc_amounts`.
     pub fn enc_amount(&self) -> &[u8; 8] {
         &self.enc_amount
     }

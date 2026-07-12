@@ -296,7 +296,7 @@ fn synthetic_spend_prefix_hash_is_pinned() {
 
 #[test]
 fn synthetic_spend_pqc_signing_payload_hashes_are_pinned() {
-    // Per-input PQC signing preimage (§1.1): payload(i) = prefix_blob ‖ rct_base_blob ‖
+    // Per-input PQC signing preimage (§1.1): payload(i) = prefix_blob ‖ ct_base_blob ‖
     // prunable_hash ‖ pqc_header(i) ‖ all_key_hashes, then cn_fast_hash. Source-validated;
     // the live C++ oracle KAT is the §1.1 residual. Regression guard against drift.
     let tx = synthetic_spend();
@@ -307,7 +307,7 @@ fn synthetic_spend_pqc_signing_payload_hashes_are_pinned() {
         h, "12997863855a3d6f731199b75780966075a36aa587b13adeef7f45e9100355dd",
         "FCMP++ PQC signing preimage drifted (§1.1)"
     );
-    // Structural: the fee is bound into the preimage (it lives in rct_base_blob), so
+    // Structural: the fee is bound into the preimage (it lives in ct_base_blob), so
     // bumping it must move the hash.
     let mut fee_changed = synthetic_spend();
     if let Ct::Fcmp { fee, .. } = &mut fee_changed.ct {
