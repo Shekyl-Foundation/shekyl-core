@@ -454,6 +454,46 @@ fn holdings_kind_from_u8(kind: u8) -> Result<HoldingsKind, u8> {
     HoldingsKind::from_u8(kind).map_err(|_| SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND)
 }
 
+/// Marshal the shared bond-post args into an [`ArchivalBondPostVin`] for the JoinMarket
+/// and Unbond FFI entry points. The `post_kind` byte is decoded at each call site (the
+/// two name an out-of-range byte differently — `ERR_POST_KIND` vs
+/// `ERR_POST_KIND_NOT_UNBOND`), so it arrives here already typed. The C++ hybrid pubkey
+/// and `P_id` hint stay consensus-side, so the vin carries placeholders for them.
+///
+/// # Safety
+/// `shard_ids_ptr` must be valid for `shard_ids_len` `u64`s, or null when the len is 0.
+unsafe fn bond_post_vin_from_raw(
+    post_kind: BondPostKind,
+    holdings_kind: u8,
+    shard_ids_ptr: *const u64,
+    shard_ids_len: usize,
+    bonded_total_atomic: u64,
+    bond_credit: u64,
+    bond_debit: u64,
+) -> Result<ArchivalBondPostVin, u8> {
+    if shard_ids_len > 0 && shard_ids_ptr.is_null() {
+        return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR);
+    }
+    let holdings_kind = holdings_kind_from_u8(holdings_kind)?;
+    let shard_ids: Vec<u64> = if shard_ids_len == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(shard_ids_ptr, shard_ids_len) }.to_vec()
+    };
+    Ok(ArchivalBondPostVin {
+        hybrid_public_key: Vec::new(),
+        p_canonical_id: [0u8; 32],
+        post_kind,
+        holdings: HoldingsDescriptor {
+            kind: holdings_kind,
+            shard_ids,
+        },
+        bonded_total_atomic,
+        bond_credit,
+        bond_debit,
+    })
+}
+
 /// Verify JoinMarket bond-post semantics after C++ hybrid-pubkey and `P_id` checks.
 ///
 /// Hybrid pubkey bounds and `p_canonical_id` hint recompute stay in C++ consensus glue.
@@ -469,33 +509,21 @@ pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
     bond_debit: u64,
     record_exists: u8,
 ) -> u8 {
-    if shard_ids_len > 0 && shard_ids_ptr.is_null() {
-        return SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR;
-    }
-    let holdings_kind = match holdings_kind_from_u8(holdings_kind) {
-        Ok(k) => k,
-        Err(code) => return code,
-    };
     let post_kind = match BondPostKind::from_u8(post_kind) {
         Ok(k) => k,
         Err(_) => return SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND,
     };
-    let shard_ids: Vec<u64> = if shard_ids_len == 0 {
-        Vec::new()
-    } else {
-        unsafe { std::slice::from_raw_parts(shard_ids_ptr, shard_ids_len) }.to_vec()
-    };
-    let vin = ArchivalBondPostVin {
-        hybrid_public_key: Vec::new(),
-        p_canonical_id: [0u8; 32],
+    let vin = match bond_post_vin_from_raw(
         post_kind,
-        holdings: HoldingsDescriptor {
-            kind: holdings_kind,
-            shard_ids,
-        },
+        holdings_kind,
+        shard_ids_ptr,
+        shard_ids_len,
         bonded_total_atomic,
         bond_credit,
         bond_debit,
+    ) {
+        Ok(v) => v,
+        Err(code) => return code,
     };
     match verify_join_market_bond_post(&vin, record_exists != 0) {
         Ok(()) => SHEKYL_ARCHIVAL_BOND_POST_OK,
@@ -527,51 +555,37 @@ pub unsafe extern "C" fn shekyl_archival_verify_unbond_bond_post(
     per_shard_last_served_len: usize,
     current_settlement_epoch: u64,
 ) -> u8 {
-    if shard_ids_len > 0 && shard_ids_ptr.is_null() {
-        return SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR;
-    }
-    if per_shard_last_served_len > 0 && per_shard_last_served_ptr.is_null() {
-        return SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR;
-    }
-    let holdings_kind = match holdings_kind_from_u8(holdings_kind) {
-        Ok(k) => k,
-        Err(code) => return code,
-    };
     let post_kind = match BondPostKind::from_u8(post_kind) {
         Ok(k) => k,
         Err(_) => return SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_UNBOND,
     };
-    let shard_ids: Vec<u64> = if shard_ids_len == 0 {
-        Vec::new()
-    } else {
-        unsafe { std::slice::from_raw_parts(shard_ids_ptr, shard_ids_len) }.to_vec()
+    let vin = match bond_post_vin_from_raw(
+        post_kind,
+        holdings_kind,
+        shard_ids_ptr,
+        shard_ids_len,
+        bonded_total_atomic,
+        bond_credit,
+        bond_debit,
+    ) {
+        Ok(v) => v,
+        Err(code) => return code,
     };
-    // The served shards' last-served epochs → the whole-record anchor (Rust).
-    let per_shard: Vec<Option<u64>> = if per_shard_last_served_len == 0 {
-        Vec::new()
+    if per_shard_last_served_len > 0 && per_shard_last_served_ptr.is_null() {
+        return SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR;
+    }
+    // The served shards' last-served epochs → the whole-record anchor (Rust);
+    // never-served shards are omitted by C++, so an empty slice folds to `None`.
+    let per_shard: &[u64] = if per_shard_last_served_len == 0 {
+        &[]
     } else {
         unsafe { std::slice::from_raw_parts(per_shard_last_served_ptr, per_shard_last_served_len) }
-            .iter()
-            .map(|&e| Some(e))
-            .collect()
     };
-    let last_served_epoch = whole_record_last_served(&per_shard);
+    let last_served_epoch = whole_record_last_served(per_shard);
     let record_bonded_total = if record_exists != 0 {
         Some(record_bonded_total)
     } else {
         None
-    };
-    let vin = ArchivalBondPostVin {
-        hybrid_public_key: Vec::new(),
-        p_canonical_id: [0u8; 32],
-        post_kind,
-        holdings: HoldingsDescriptor {
-            kind: holdings_kind,
-            shard_ids,
-        },
-        bonded_total_atomic,
-        bond_credit,
-        bond_debit,
     };
     match verify_unbond_bond_post(
         &vin,

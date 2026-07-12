@@ -24,12 +24,13 @@ use crate::bond_floor::RELEASE_COOLDOWN_EPOCHS;
 /// shards of each shard's last-served epoch (P2B-8 Q2 — the `Unbond` cooldown
 /// anchor). `None` when the persona has never served any shard.
 ///
-/// `per_shard_last_served` carries one entry per current shard: the reverse-cursor
-/// maximum for that shard, or `None` if the shard has never carried a serve-credit
-/// bit. A never-served shard contributes `None` and cannot lower the max.
+/// `per_shard_served` carries the reverse-cursor maximum of each **served** shard;
+/// never-served shards are omitted by the caller (they carry no serve-credit bit, so
+/// they cannot lower the max). An empty slice therefore means the persona has never
+/// served, folding to `None`.
 #[must_use]
-pub fn whole_record_last_served(per_shard_last_served: &[Option<u64>]) -> Option<u64> {
-    per_shard_last_served.iter().copied().flatten().max()
+pub fn whole_record_last_served(per_shard_served: &[u64]) -> Option<u64> {
+    per_shard_served.iter().copied().max()
 }
 
 /// Whether the release cooldown has elapsed at `current_settlement_epoch`, given the
@@ -49,7 +50,14 @@ pub fn release_cooldown_elapsed(
 ) -> bool {
     match last_served_epoch {
         None => true,
-        Some(last) => current_settlement_epoch >= last.saturating_add(RELEASE_COOLDOWN_EPOCHS),
+        // `checked_add` keeps the documented predicate exactly: if the boundary epoch
+        // `last + RELEASE_COOLDOWN_EPOCHS` overflows `u64` it is unreachable, so the
+        // cooldown is reported not-elapsed (fail-closed) rather than saturating to a
+        // false "elapsed" that would let an `Unbond` dodge the slashing window.
+        Some(last) => match last.checked_add(RELEASE_COOLDOWN_EPOCHS) {
+            Some(boundary) => current_settlement_epoch >= boundary,
+            None => false,
+        },
     }
 }
 
@@ -69,21 +77,19 @@ mod tests {
 
     #[test]
     fn whole_record_last_served_is_max_over_served_shards() {
-        assert_eq!(
-            whole_record_last_served(&[Some(4), Some(9), Some(7)]),
-            Some(9)
-        );
+        assert_eq!(whole_record_last_served(&[4, 9, 7]), Some(9));
     }
 
     #[test]
-    fn whole_record_last_served_skips_never_served_shards() {
-        // A never-served shard (`None`) must not lower the max.
-        assert_eq!(whole_record_last_served(&[Some(9), None, Some(3)]), Some(9));
+    fn whole_record_last_served_ignores_omitted_never_served_shards() {
+        // Never-served shards are omitted by the caller, so the fold sees only the
+        // served maxima and cannot be lowered by a shard that never served.
+        assert_eq!(whole_record_last_served(&[9, 3]), Some(9));
     }
 
     #[test]
     fn whole_record_last_served_none_when_never_served() {
-        assert_eq!(whole_record_last_served(&[None, None]), None);
+        // Empty slice = the persona has served no shard at all.
         assert_eq!(whole_record_last_served(&[]), None);
     }
 
@@ -112,10 +118,11 @@ mod tests {
     }
 
     #[test]
-    fn cooldown_saturates_near_u64_max_without_overflow() {
-        // A last-served anchor near u64::MAX must not panic on the add; it simply
-        // never reaches the (unreachable) boundary.
-        assert!(!release_cooldown_elapsed(Some(u64::MAX - 1), u64::MAX - 1));
-        assert!(release_cooldown_elapsed(Some(u64::MAX), u64::MAX));
+    fn cooldown_not_elapsed_when_boundary_overflows_u64() {
+        // A last-served anchor so high that `last + RELEASE_COOLDOWN_EPOCHS` overflows
+        // u64 has an unreachable boundary epoch: report not-elapsed (fail-closed), never
+        // a saturated false "elapsed".
+        assert!(!release_cooldown_elapsed(Some(u64::MAX), u64::MAX));
+        assert!(!release_cooldown_elapsed(Some(u64::MAX - 1), u64::MAX));
     }
 }
