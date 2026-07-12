@@ -24,20 +24,32 @@
     includes `blobdatatype.h` — it referenced `blobdata` without
     declaring it.)
   - **archival:** a FAKECHAIN-only **settlement-epoch-blocks
-    override** (`SHEKYL_SETTLEMENT_EPOCH_BLOCKS`, SEEDHASH-shaped:
-    read once, clamped, daemon aborts at startup if set off
-    FAKECHAIN), so the regtest e2e reaches an epoch close in minutes
-    instead of hours; FFI exposes the effective value + overridden
-    flag.
+    override** (`SHEKYL_SETTLEMENT_EPOCH_BLOCKS`, read once and
+    **armed explicitly**: an unarmed process — every wallet, every
+    public-net daemon — runs the genesis schedule no matter what the
+    environment says, and the wallet warns once when it ignores a set
+    lever), so the regtest e2e reaches an epoch close in minutes
+    instead of hours. The daemon arms only on FAKECHAIN at
+    `Blockchain::init`, refusing on the lever's presence on public
+    nets and on an invalid value (loud, never a silent
+    clamp-to-genesis), and **pins the effective schedule into the
+    fakechain datadir** (LMDB `properties`) so a reopen under a
+    different schedule than its epoch-derived rows were written with
+    refuses with the remedy named. FFI exposes the effective value,
+    overridden flag, presence, and the arming entry point.
   - **rpc:** a FAKECHAIN-only **serve-credit-bit injection RPC**
     (`inject_archival_serve_credit`, WS-1 bits-only form over the
     production writer `set_archival_serve_credit_bit`) — Gate-6's
-    regtest stand-in. The poke is deliberately **not** pop-symmetric;
-    the e2e's pop leg is bounded above the injection height.
+    regtest stand-in; `CORE_RPC_VERSION` → 3.19. The poke is
+    deliberately **not** pop-symmetric; the e2e's pop leg is bounded
+    above the injection height.
   - **wallet:** `LocalNodeRpc`, the local-posture
-    `PersonaIsolatedTransport` (fail-closed http-loopback validation,
-    credentials rejected without leaking them) — the DQ-T2.3 choice
-    site's local arm.
+    `PersonaIsolatedTransport` (fail-closed loopback pin via
+    `IpAddr::is_loopback` + `localhost`; in-URL credentials rejected —
+    authority-scoped — without leaking them) — the DQ-T2.3 choice
+    site's local arm. `SimpleRequestRpc`'s credential parse is
+    likewise scoped to the URL authority (a whole-URL `@` split
+    misparsed path/query content as credentials).
   - **wallet:** the **`SweptFeeInputs`/`ClaimOperands`
     designation-event witness** (PR-3's named forward item, landed
     with the seam as scoped): `DesignatedBacking::fee_sweep` is the
@@ -48,12 +60,18 @@
     cross-pairing is now unrepresentable, refusals moved to mint time
     (`ClaimFundingError`), all three KAT'd at the mint.
   - **wallet:** the **CB-3 dispatch seam**
-    (`engine/claim_dispatch.rs`): `submit_emission_claim` — activate
-    the claimant slot → orchestrate → sign → submit through the
-    audited posture→`BroadcastSubmitter` choke point (scheduling
-    stays external, the GF-4 seam); the last PR-3 claim-surface
-    staging allows deleted; tripwire test pins the route through the
-    choke point.
+    (`engine/claim_dispatch.rs`): `submit_emission_claim` — claimant
+    id from the actor's read-only `PersonaIdentityOf` projection (no
+    activation: a claim is read-and-sign, never a rotation) →
+    orchestrate → **persist-before-dispatch** (a sealed
+    `PendingEmissionClaim`, pending-post block v4, carries the bytes,
+    the fee-gindex reservation feeding the shared `reserved_gindexes`
+    union, and the claimed epochs; one live claim per persona is the
+    in-flight epoch dedup) → submit through the audited
+    posture→`BroadcastSubmitter::local` choke point (scheduling stays
+    external, the GF-4 seam; claim retirement/resubmit = the WI-3-
+    sibling claim driver slice); tripwire test pins the pipeline
+    route, the choke point, and the seal-before-send ordering.
   - **tests:** the **staker regtest harness** (`regtest_e2e.rs`):
     staker wallet lifecycle against a live `shekyld --regtest`,
     persona funding over a production FCMP++ transfer, P-scan
@@ -84,9 +102,12 @@
   wedged permanently (`BodyMismatch`) at the first spend-bearing
   block. `TxBodyForm::{Pruned,Full}` now parameterizes the fetch
   (`block_fetch.rs`), the P-scan block sources request full bodies,
-  and `parse_full_tx` rejects prunable-stripped spends; the
-  bandwidth-cheap pruned option over Tor is a rejected-with-reopening
-  FOLLOWUPS item (V3.2).
+  and `parse_full_tx` rejects prunable-stripped spends — naming the
+  storage-pruned-daemon cause and its remedy (run an unpruned node)
+  when the split body is exactly a canonical pruned spend, since that
+  is a supported daemon mode and not corruption; the bandwidth-cheap
+  pruned option over Tor is a rejected-with-reopening FOLLOWUPS item
+  (V3.2).
 
 ### Added
 

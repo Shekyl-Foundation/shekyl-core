@@ -1050,6 +1050,78 @@ push this PR past the 10-commit ceiling. Split per `06-branching.mdc`:
   fee-leg residue (#281). Rides the PR-4a harness; the E4 merge gate
   closes here.
 
+**PR-4a review round (2026-07-12, high-effort workflow review — 29
+verified findings, all addressed in one round; the dominant theme was
+the SEB override's guard living daemon-only).** The load-bearing
+outcomes, recorded here because each changed a §8 surface:
+
+1. **The SEB override is now armed, not ambient.**
+   `effective_settlement_epoch_blocks()` returns the override **only in
+   a process that explicitly armed it**
+   (`arm_settlement_epoch_override_for_regtest`); an unarmed process —
+   every wallet today, every public-net daemon — computes the genesis
+   schedule no matter what the environment says, and the wallet's
+   stake-engine spawn warns once when it ignores a set lever. The
+   daemon arms only on FAKECHAIN behind its `Blockchain::init` gate,
+   which now refuses on the lever's *presence* (public nets), refuses
+   an *invalid value* loudly (no silent clamp-to-genesis — a typo'd
+   lever would otherwise surface as an unexplained harness timeout),
+   and **pins the effective schedule into the fakechain datadir**
+   (LMDB `properties`): reopening a regtest datadir under a different
+   schedule than its epoch-derived rows were written with is a loud
+   startup refusal naming the remedy, not silently mislabeled join
+   epochs.
+2. **The CB-3 seam is persist-before-dispatch.** `PendingEmissionClaim`
+   (pending-post block **v4**) seals the claim bytes, its fee-gindex
+   reservation, and its claimed epochs before any network send — the
+   bond path's pin-P-2 discipline, sibling-for-sibling. The record's
+   fee gindexes join the shared `reserved_gindexes` union (bond sweeps
+   and claim sweeps read one exclusion set) and one-live-claim-per-
+   persona is the in-flight epoch dedup (`ClaimPending` refusal;
+   `push_claim` under the write lock is the authoritative
+   serialization). Retirement + byte-identical resubmit = the claim
+   dispatch driver, the WI-3-sibling slice (named, next).
+3. **The seam no longer rotates.** The claimant id derives from a
+   read-only actor projection (`PersonaIdentityOf` /
+   `StakeEngineHandle::persona_identity`) instead of
+   `activate_persona`: a claim is read-and-sign, and rotating on it
+   would invalidate in-flight handles *and wipe a retired ephemeral
+   persona* as a side effect of an unrelated request. The e2e's bond
+   loop dropped its copied activation dance for the same reason
+   (assembly authorizes on the handle alone).
+4. **Taxonomy fixes with structural carriers.** The sweep refuses an
+   empty eligible set with the typed `NoSpendableFunding` (never
+   `InsufficientFunding{0, req}` — eligible-but-zero-amount records
+   are a genuine shortfall with a different remedy, and the claim
+   path's `ClaimFeeInputsRequired` mapping now keys on the typed arm,
+   not a value shape). The reference-tree drain lag is the typed
+   `OutputNotYetDrained{gindex}` across the assembly boundary (the
+   harness's `detail.contains("OutputNotDrained")` substring match is
+   gone). The P-scan's full-body fetch names the storage-pruned-daemon
+   cause and remedy when a split body is exactly a canonical pruned
+   spend (rule 82 — previously a generic "invalid transaction" against
+   the operator's own node).
+5. **URL grammar fixed at the source.** `SimpleRequestRpc` scopes its
+   credential parse to the URL *authority* (a whole-URL `@` split
+   misparsed path/query content as credentials); `LocalNodeRpc`'s
+   refusal is likewise authority-scoped and its loopback pin is
+   `IpAddr::is_loopback` (+ `localhost`), not a literal allowlist.
+6. **Single-override/single-source consolidations.**
+   `DaemonEngine::fetch_scannable_block_in_form` is the one fetch
+   override point (the pruned/full pair are provided wrappers — the
+   override-both-in-lockstep hazard is unrepresentable);
+   `BroadcastSubmitter::local` is the one pre-bound ①-posture
+   construction (three drifting copies deleted);
+   `EpochCloseInputs::close_view` single-sources the pinned params the
+   close FFI and `verify_view` previously restated in lockstep;
+   `EmissionClaimReceipt` embeds `AssembledEmissionClaim` whole;
+   `CORE_RPC_VERSION` → 3.19 for the injection RPC. One judgment call
+   kept: the seam's brief-read prologue still *mirrors*
+   `assemble_bond_post`'s shape (documented) rather than sharing a
+   helper — the two tuples differ (tip clock vs. snapshot closure) and
+   a forced abstraction would cost more than the mirror; the three
+   independent reads it feeds are now `tokio::join!`ed.
+
 Round-2 closure criteria: the §7.3 field enumeration ratified (including
 the four exclusions), the §7.2 window-batch shape ratified, the §7.4
 transport/shape/timing pins ratified, and the §8 chain shape accepted.
