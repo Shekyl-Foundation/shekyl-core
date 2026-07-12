@@ -374,6 +374,26 @@ reversion clause).
    When `bulletproofs_plus` is non-empty, layout must be canonical (exactly one aggregated
    proof, `1 ≤ V.size() ≤ BULLETPROOF_PLUS_MAX_OUTPUTS`); credit-only join may omit proofs.
 
+**Debit-path vin semantics (`Unbond` / `HoldingsUpdate` drop) — clarification (2026-07-12, P2B-8).**
+The doc uses "holdings" two ways; pinned here so the Rust verifier is unambiguous. The vin's
+`holdings` and `bonded_total_atomic` are the **post-connect** state, so step 4's floor equality reads
+uniformly across every path — `vin.bonded_total_atomic == bond_floor(vin.holdings)` is the *resulting*
+record. Consequences:
+
+- **`HoldingsUpdate` drop** carries the **reduced** holdings; the connect diffs it against the record's
+  current set to identify the dropped shard (which is why the vin must carry the post-state, not the
+  current set — there is no separate drop-shard field).
+- **Full `Unbond`** carries **empty holdings** (`bond_floor(∅) = 0`, so `bonded_total_atomic = 0`). The
+  `ShardSetCompactEmpty` rejection is a **credit / identity-path** check (`JoinMarket` / `Rebond` /
+  add / drop-with-remaining hold ≥ 1 shard), **not** a full-`Unbond` check.
+- **Debit amount:** `bond_debit == record.bonded_total(current) − vin.bonded_total_atomic` (= the full
+  `record.bonded_total` for `Unbond`). §4.3's `bond_debit == bonded_total == bond_floor(holdings)`
+  refers to the **record's current** holdings (the refund amount), *not* the vin's post-state field —
+  so there is no contradiction with step 4.
+
+Rust-native verify: `shekyl-archival-retention::bond_post` (rule 20). Reopen if a gate-4 author intends
+the vin `holdings` to echo the *current* set instead (would need a separate drop-shard field).
+
 On block connect for **JoinMarket:** create `ArchivalBondRecord` (§4.1); credit
 `total_bonded_atomic`.
 
