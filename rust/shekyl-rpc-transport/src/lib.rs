@@ -87,39 +87,32 @@ impl SimpleRequestRpc {
         request_timeout: Duration,
     ) -> Result<SimpleRequestRpc, RpcError> {
         // Credentials live only in the URL's AUTHORITY
-        // (`scheme://user:pass@host:port/...`); an '@' later in the URL
-        // (path or query, e.g. `/route?tag=user@host`) is ordinary content.
-        // Splitting on a whole-URL '@' would misparse such a URL as
-        // credentials and issue a digest-auth preflight against garbage.
+        // (`scheme://user:pass@host:port/...`), which RFC 3986 terminates at
+        // the first of `/`, `?`, or `#`; an '@' anywhere later (path, query,
+        // or fragment — e.g. `?tag=user@host`, with or without a path) is
+        // ordinary content. Splitting on a whole-URL '@' would misparse such
+        // a URL as credentials and issue a digest-auth preflight against
+        // garbage, so the split happens at the authority's own '@' (userinfo
+        // cannot contain a raw '@', so the authority holds at most one) and
+        // the rest of the URL is never consulted.
         let after_scheme = url.find("://").map_or(0, |i| i + 3);
         let authority_end = url[after_scheme..]
-            .find('/')
+            .find(['/', '?', '#'])
             .map_or(url.len(), |i| after_scheme + i);
-        let at_in_authority = url[after_scheme..authority_end].contains('@');
+        let at_in_authority = url[after_scheme..authority_end]
+            .find('@')
+            .map(|i| after_scheme + i);
 
-        let authentication = if at_in_authority {
-            // Parse out the username and password
-            let url_clone = Zeroizing::new(url);
-            let split_url = url_clone.split('@').collect::<Vec<_>>();
-            if split_url.len() != 2 {
-                Err(RpcError::ConnectionError(
-                    "invalid amount of login specifications".to_string(),
-                ))?;
-            }
-            let mut userpass = split_url[0];
-            url = split_url[1].to_string();
-
-            // If there was additionally a protocol string, restore that to the daemon URL
-            if userpass.contains("://") {
-                let split_userpass = userpass.split("://").collect::<Vec<_>>();
-                if split_userpass.len() != 2 {
-                    Err(RpcError::ConnectionError(
-                        "invalid amount of protocol specifications".to_string(),
-                    ))?;
-                }
-                url = split_userpass[0].to_string() + "://" + &url;
-                userpass = split_userpass[1];
-            }
+        let authentication = if let Some(at) = at_in_authority {
+            // Split at the authority's '@': userinfo before it, everything
+            // else (scheme included) is the credential-free daemon URL.
+            let url_with_credentials = Zeroizing::new(url);
+            let userpass = Zeroizing::new(url_with_credentials[after_scheme..at].to_string());
+            url = format!(
+                "{}{}",
+                &url_with_credentials[..after_scheme],
+                &url_with_credentials[at + 1..]
+            );
 
             let split_userpass = userpass.split(':').collect::<Vec<_>>();
             if split_userpass.len() > 2 {
@@ -324,5 +317,53 @@ impl Rpc for SimpleRequestRpc {
                 .await
                 .map_err(|e| RpcError::ConnectionError(format!("{e:?}")))?
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The credential grammar is authority-scoped end to end: an '@' after
+    /// the authority (which terminates at the first of `/`, `?`, or `#` —
+    /// including a path-less query or fragment) never selects the
+    /// authenticated path, so no digest preflight is issued and construction
+    /// is offline.
+    #[tokio::test]
+    async fn at_outside_the_authority_is_not_credentials() {
+        for url in [
+            "http://127.0.0.1:1/route?tag=user@host",
+            "http://127.0.0.1:1?tag=user@host",
+            "http://127.0.0.1:1#frag@ment",
+        ] {
+            let rpc = SimpleRequestRpc::new(url.to_string())
+                .await
+                .unwrap_or_else(|e| panic!("{url} must construct unauthenticated: {e}"));
+            assert!(
+                matches!(rpc.authentication, Authentication::Unauthenticated(_)),
+                "{url}: the '@' beyond the authority must not trigger digest auth"
+            );
+            assert_eq!(rpc.url, url, "{url}: a credential-free URL is untouched");
+        }
+    }
+
+    /// Credentials in the authority coexist with an '@' later in the URL:
+    /// the split consumes only the authority's '@', so parsing succeeds and
+    /// the constructor proceeds to the digest preflight (which fails against
+    /// the refusing port — proving the parse was clean) with the password
+    /// stripped from the dialed URL and absent from the error.
+    #[tokio::test]
+    async fn credentials_split_at_the_authority_at_only() {
+        let err = SimpleRequestRpc::new("http://user:hunter2@127.0.0.1:1/x?tag=a@b".to_string())
+            .await
+            .expect_err("the preflight against a refusing port must fail");
+        assert!(
+            matches!(err, RpcError::ConnectionError(_)),
+            "expected the preflight's ConnectionError, got {err:?}"
+        );
+        assert!(
+            !format!("{err}").contains("hunter2"),
+            "a constructor error must never render the password"
+        );
     }
 }

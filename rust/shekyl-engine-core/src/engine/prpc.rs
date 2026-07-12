@@ -176,11 +176,16 @@ impl LocalNodeRpc {
                 "local-posture transport requires an http:// loopback URL".to_string(),
             ));
         };
-        let authority = host_port.split_once('/').map_or(host_port, |(hp, _)| hp);
+        // The authority ends at the first of `/`, `?`, or `#` (RFC 3986) —
+        // terminating on `/` alone would fold a path-less query or fragment
+        // into the authority and misread its content as host or credentials.
+        let authority = host_port
+            .split_once(['/', '?', '#'])
+            .map_or(host_port, |(hp, _)| hp);
         // Refuse credentials before any host parse so a rejected URL's
         // error message can never render a password. Scoped to the
-        // AUTHORITY: an '@' in the path or query is ordinary URL content
-        // (e.g. `?tag=user@host`), and refusing on it would assert
+        // AUTHORITY: an '@' in the path, query, or fragment is ordinary URL
+        // content (e.g. `?tag=user@host`), and refusing on it would assert
         // credentials that are not there.
         if authority.contains('@') {
             return Err(RpcError::ConnectionError(
@@ -311,6 +316,11 @@ mod tests {
             // '@' in the query is URL content, not credentials — the
             // credential refusal is scoped to the authority.
             "http://127.0.0.1:48081/json_rpc?tag=user@host",
+            // The authority terminates at `?` / `#` even with no path — a
+            // path-less query or fragment is not part of the host and its
+            // '@' is not credentials.
+            "http://127.0.0.1:48081?tag=user@host",
+            "http://localhost:48081#frag@ment",
         ] {
             LocalNodeRpc::new(ok.to_string(), Duration::from_secs(1))
                 .await
