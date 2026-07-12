@@ -10,7 +10,7 @@ use crate::bond_floor::{
     ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
     ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
 };
-use crate::constants::SETTLEMENT_EPOCH_BLOCKS;
+use crate::constants::{effective_settlement_epoch_blocks, SETTLEMENT_EPOCH_BLOCKS};
 use crate::k_cover::KCover;
 use crate::reward_arithmetic::{
     curve_milli, mul_div_floor, scarcity_milli, BandedCurveParams, WORK_MILLI_SCALE,
@@ -21,13 +21,15 @@ const _: () = assert!(
     "settlement epoch must be nonzero"
 );
 
-/// Settlement epoch containing `block_height` (`floor(height / SETTLEMENT_EPOCH_BLOCKS)`).
+/// Settlement epoch containing `block_height` (`floor(height / SEB)`), where
+/// `SEB` is [`effective_settlement_epoch_blocks`] — the genesis pin, or the
+/// clamped fakechain-only regtest override.
 ///
 /// Used for bond-connect `join_settlement_epoch` derivation and prune-horizon
 /// arithmetic; the daemon performs no epoch arithmetic of its own.
 #[must_use]
 pub fn settlement_epoch_at_height(block_height: u64) -> u64 {
-    block_height / SETTLEMENT_EPOCH_BLOCKS
+    block_height / effective_settlement_epoch_blocks()
 }
 
 /// Settlement epoch that closes at `block_height`, when one does.
@@ -37,10 +39,11 @@ pub fn settlement_epoch_at_height(block_height: u64) -> u64 {
 /// height 0 and at non-boundary heights.
 #[must_use]
 pub fn epoch_close_due_at_height(block_height: u64) -> Option<u64> {
-    if block_height == 0 || !block_height.is_multiple_of(SETTLEMENT_EPOCH_BLOCKS) {
+    let seb = effective_settlement_epoch_blocks();
+    if block_height == 0 || !block_height.is_multiple_of(seb) {
         return None;
     }
-    Some(block_height / SETTLEMENT_EPOCH_BLOCKS - 1)
+    Some(block_height / seb - 1)
 }
 
 /// The block height at which settlement epoch `epoch` closes — the inverse of
@@ -53,7 +56,7 @@ pub fn epoch_close_due_at_height(block_height: u64) -> Option<u64> {
 pub fn epoch_close_height(epoch: u64) -> Option<u64> {
     epoch
         .checked_add(1)
-        .and_then(|next| next.checked_mul(SETTLEMENT_EPOCH_BLOCKS))
+        .and_then(|next| next.checked_mul(effective_settlement_epoch_blocks()))
 }
 
 /// Prune horizon at `block_height`: epochs strictly below the returned value
@@ -328,7 +331,7 @@ impl<'a> EpochCloseInputs<'a> {
         Self {
             settlement_epoch,
             close_block_height,
-            settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
+            settlement_epoch_blocks: effective_settlement_epoch_blocks(),
             age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
             curve: BandedCurveParams {
                 plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,

@@ -596,6 +596,22 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
       }
       MWARNING("SEEDHASH_EPOCH_* override active on fakechain: the RandomX seed-epoch schedule differs from mainnet defaults — blocks produced under this schedule validate only among fakechain nodes running the same override, and captured vectors will not match mainnet seedheights");
     }
+    if (shekyl_archival_settlement_epoch_overridden())
+    {
+      // Same shape as the SEEDHASH_EPOCH_* gate above: the settlement-epoch
+      // schedule is consensus (epoch close boundaries, serve-credit epochs,
+      // bond join epochs, emission claim windows all derive from it), and
+      // SHEKYL_SETTLEMENT_EPOCH_BLOCKS is the fakechain-only lever that
+      // makes epoch-close e2e coverage affordable. A node inheriting it
+      // from a leaked environment would close epochs at wrong heights and
+      // fork every public peer.
+      if (m_nettype != FAKECHAIN)
+      {
+        MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS override active on a public network: the settlement-epoch schedule is consensus-critical and the override is a fakechain-only (regtest) lever; refusing to start. Unset SHEKYL_SETTLEMENT_EPOCH_BLOCKS to run this node.");
+        return false;
+      }
+      MWARNING("SHEKYL_SETTLEMENT_EPOCH_BLOCKS override active on fakechain: settlement epochs are " << shekyl_archival_settlement_epoch_blocks() << " blocks instead of the genesis-pinned schedule — epoch closes, serve-credit windows, and emission claims computed under this schedule are valid only among fakechain nodes running the same override");
+    }
     const crypto::hash seedhash = get_block_id_by_height(shekyl_pow_randomx_v2_seedheight(m_db->height()));
     if (seedhash != crypto::null_hash)
       shekyl_pow_randomx_v2_set_canonical(reinterpret_cast<const uint8_t (*)[32]>(seedhash.data));

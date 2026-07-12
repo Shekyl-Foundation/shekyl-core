@@ -79,8 +79,9 @@ pub use consensus_state::{
 };
 pub use conservation::{verify_conservation_snapshot, ConservationError, ConservationSnapshot};
 pub use constants::{
-    CHALLENGES_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS, CHALLENGE_RESOLUTION_BLOCKS,
-    CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
+    clamp_settlement_epoch_blocks, effective_settlement_epoch_blocks,
+    settlement_epoch_blocks_overridden, CHALLENGES_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS,
+    CHALLENGE_RESOLUTION_BLOCKS, CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
 };
 pub use emission_kat_shape::{EmissionKatShape, EMISSION_KAT_SHAPE};
 pub use emission_verify::{

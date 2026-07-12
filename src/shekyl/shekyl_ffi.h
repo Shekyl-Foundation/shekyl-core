@@ -1885,6 +1885,18 @@ uint8_t shekyl_archival_good_through(
 /// Settlement epoch containing `block_height` (bond-connect join epoch).
 uint64_t shekyl_archival_settlement_epoch_at_height(uint64_t block_height);
 
+/// The effective settlement-epoch length in blocks (genesis-pinned 10 000,
+/// or the clamped SHEKYL_SETTLEMENT_EPOCH_BLOCKS override — the
+/// fakechain-only regtest lever). Single source for consumers needing the
+/// length itself; the schedule functions here consume it internally.
+uint64_t shekyl_archival_settlement_epoch_blocks(void);
+
+/// True iff a SHEKYL_SETTLEMENT_EPOCH_BLOCKS override is active (effective
+/// schedule differs from the genesis default). Drives Blockchain::init's
+/// fail-closed gate: the schedule is consensus and the lever must never
+/// reach a public network.
+bool shekyl_archival_settlement_epoch_overridden(void);
+
 /// Returns 1 and writes the settlement epoch whose close is processed at
 /// `block_height`; 0 (no write) at height 0 or non-boundary heights.
 uint8_t shekyl_archival_epoch_close_due(
