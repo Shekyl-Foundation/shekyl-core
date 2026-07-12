@@ -1,16 +1,40 @@
 # Archival firewall — gate 6 (`P` lifecycle + pseudonym hygiene)
 
-**Status:** **Round 1 closed (2026-06-13)** — crypto layer + `P` hybrid derivation pinned (§9);
-GF-1 per-tx-type verifier contract resolved and GF-2 dual-scan enforcement made architectural;
-reviewer sign-off recorded (§9.8), with post-sign-off review refinements (C-1/C-2/C-3) folded in.
-**Round 2 (network + transport) is drafted and OPEN for the adversarial pass (§10).** Round-1
-carries: the `ARCHIVAL_P_DERIVE_V1` KAT manifest + `archival_p` implementation (§7), and the
-**C-1 confirm-at-source dependency** — the emission vin-layer ML-DSA equality check (a hard merge
-blocker, §9.8) must land before the `archival_p` impl is wired into emission. Round 2 may add an
-**HS-identity HKDF label** to that KAT (GF-9, §10.7). Timing/output rounds still open. Not
-soundness-closed. **GF-1-carve resolved (2026-06-16):** bond-debit authority is a dedicated
-`bond_spend_pk` (gate-4 §3.5 step 5 / §4.1 / §3.4.1; §9.3 labels), not the account identity key.
-Per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc),
+**Status:** **Rounds 1–2 closed; Round 3 open (2026-07-11).** Not soundness-closed (R5 pending).
+
+- **Round 1 closed (2026-06-13)** — crypto layer + `P` hybrid derivation pinned (§9); GF-1
+  per-tx-type verifier contract resolved, GF-2 dual-scan enforcement made architectural, reviewer
+  sign-off (§9.8), post-sign-off refinements C-1/C-2/C-3 folded in. **Lone carry discharged:** the
+  `ARCHIVAL_P_DERIVE_V1` KAT + `archival_p` module **landed** (Bond-PR 0 #152 — verified at source:
+  [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) carries all seven §9.3 labels
+  incl. the `bond_spend_*` pair; [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs)).
+  **C-1 dependency discharged:** the emission vin-layer ML-DSA equality check **landed** (PR #277,
+  `dev` `13c368707`; `emission_verify.rs`) — quantum spend-authority no longer classical-only.
+- **Round 2 closed (2026-07-11)** — network + transport (§10). All §10.10 exit dispositions
+  ratified against the round's defense-in-depth bar (§10.0); closure disposition + carried items
+  with rule-21 criteria at §10.13. **One carry is a not-yet-frozen crypto surface:** the GF-9
+  seed-derived HS-identity HKDF label is *pinned as a disposition* (§10.7) but is **not yet in the
+  derivation/KAT** (verified at source — absent from `archival_p.rs`), and §10.7's proposed label
+  string uses dot separators against §9.3's hyphen convention; §10.13 carries it armed with the
+  normalization flag so it cannot freeze wrong.
+- **Round 3 designed + adversarial pass run (2026-07-11)** — timing + rotation + `W`/epoch-length
+  (§11). **GF-10** pinned as a *mechanism + structural window + a-priori advantage claim* (§11.3–11.5);
+  numeric width **routed to the R4/GF-4 CB-3 joint grade**, not graded standalone (per-axis-multiplication
+  error avoided). Rotation dispositions ratified; R2 timing hand-forwards resolved (§11.6). The
+  claim-jitter draw + scheduler are unbuilt (verified) — pinned pre-code, M1-armed. The adversarial
+  pass (§11.8) found no break; its four findings are folded as re-pins into §11.3–11.5. Remaining for
+  close: fold GF-10 into the R4/GF-4 joint grade and clear the pre-committed advantage claim (§11.7).
+- **Round 4 drafted (2026-07-11, §12) — the drain-event firewall.** GF-7 (funding-in) already built +
+  graded PROVISIONAL-PASS (`r = 1.86`); GF-4 (value-out) drafted as one event with three co-triggered
+  channels graded jointly: **F-D1** drain-amount taint-carve (complete pre-code pin — (a)+strip),
+  **F-D2** UI-default, **F-D3/F-D4** one-sided cooldown-anchored exit standoff (**FSM-gated**), **F-D5**
+  → §14.4, **F-D6** anti-drift. GF-10 (R3) folds into the joint grade. Blocks on the rebond/unbond FSM.
+- **Round 5 planned** — the cross-layer soundness sign-off for Stage 3 (S-2 exposure ledger + S-3
+  exit/value-seam adversary sim, §10.12).
+
+**GF-1-carve resolved (2026-06-16):** bond-debit authority is a dedicated `bond_spend_pk` (gate-4
+§3.5 step 5 / §4.1 / §3.4.1; §9.3 labels), not the account identity key. Per
+[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc),
 adversarial rounds run before Stage 3 `StakeEngine` production code.
 
 **Global PQC policy:** Hybrid genesis stack (Ed25519 + ML-DSA-65 spend auth; X25519 +
@@ -277,17 +301,24 @@ fires relative to principal activity is observability the firewall must address
 on-chain anchor ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)). Off-chain backing
 **precedes** join; first **paying** emission follows by ≥ one settlement-epoch lag.
 
-**Two rotation concepts (do not conflate — see
-[`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-1):**
+**"Rotation" is not a mechanism (corrected root:
+[`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-1; do not re-litigate).** Neither sense of
+"rotation" is a decorrelation lever:
 
-| Kind | `P_canonical_id` | Wallet instance key |
-|------|------------------|---------------------|
-| **Backing UTXO rotation** (E-4 hygiene) | Unchanged | Same `P_canonical_id`; update rotatable `backing_outputs` |
-| **`P` pseudonym rotation** (decorrelation) | New | New instance; `p_slot` increment → new keys |
-
-Sim step-0 **pseudonym rotation** → pure over-enumeration (new slot; burn old) — reversion:
-per-root subkey only; never cross-authorizing master
-([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*Step 0*).
+- **Backing-output "rotation" is not a mechanism.** A persona designates a (possibly different)
+  output from its **own `funding_outputs` pool** per emission (membership-only) — there is **no
+  `backing_outputs` field** in the code and **no consensus rotation rule**
+  ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §7.3, "consensus does not require
+  backing-output rotation"). No backing output is shared between personas (each is scanned under one
+  `P`'s view key). `P_canonical_id` is **unchanged** — the only point here: key the instance on it,
+  never on an output.
+- **Pseudonym "rotation" is unlink-and-relink, and it *correlates*.** Retire `P_old` (`Unbond` +
+  drain) + create `P_new` (fresh `JoinMarket`): two independent lifecycle ops, **no bond migration**
+  (S-5, §10.12). It provides **correlation, not decorrelation** (T-A1 portfolio re-linkage), which
+  is exactly why **long-lived `P` is the committed architecture** (S-5). `p_slot` (§9.2) derives a
+  *fresh* persona — **not** a rotation of an existing one; the sim's step-0 "over-enumeration (new
+  slot; burn old)" is that same unlink-relink (reversion: per-root subkey only, never
+  cross-authorizing master — [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*Step 0*).
 
 ---
 
@@ -332,16 +363,24 @@ the staking identity surface ([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIF
 
 ---
 
-## 6. Design rounds (planned)
+## 6. Design rounds
+
+Status of record is this table; the round-detail sections (§9 R1, §10 R2, §11 R3) and the
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) landed-code stamps are the reconciled sources
+each cell points at. **"Closed" means the round met its own exit bar** — for the network round that
+bar is defense-in-depth (§10.0: every leak vector named, mitigation specified and testable, residual
+written down), **not** "linkage impossible" and **not** "all implementation landed" — so a closed
+round may carry named implementation/tuning items with rule-21 criteria (R1 closed with its impl
+carried; R2 the same).
 
 | Round | Focus | Exit criterion |
 |-------|-------|----------------|
 | **0** | Scaffold + invariant frame + consumer map | **Done** |
-| **1** | HKDF/`P_id` wire + crypto layer hooks | **Done** (2026-06-13) — §9 GF-1 dual-key verifier contract resolved; GF-2 dual-scan enforcement made architectural; reviewer sign-off recorded (§9.8). **Lone carry:** `ARCHIVAL_P_DERIVE_V1` KAT manifest + `archival_p` module (impl, §7). |
-| **2** | Network + transport (L16 → production shape) | **Draft open (2026-06-13) — §10.** Rendezvous path specified; seeding relaxation bounded. **Entry gates (R1-named, now threaded into the §10 draft):** challenge-response Levin class → anonymity-routable set (GF-3, §10.4); pre-join backing-presentation transport pinned (GF-5, §10.5); Arti HS-hosting capability **confirmed** (web 2026-06), at-source pin carried (GF-12, §10.3); `P`-tx wire-size fingerprint characterization + dummy/fragmentation policy (GF-6, §10.6); Tor HS key lifecycle `p_slot`-bound + seed-derived, residual named (GF-9, §10.7). **Pass-1 dispositions (2026-06-13):** bonded-verifier challenges (§10.4), broadcast announce (§10.5), `P`↔principal circuit/guard isolation pinned as exit item (§10.9), pure-rendezvous + I2P-closed leans (§10.11); **rebond/unbond-at-genesis scope expansion** (R4 recurring; pre-seal sim dependency). Exit checklist + carries: §10.10. |
-| **3** | Timing + rotation + `W` / epoch-length joint pin | E-4 mitigations named with testable wallet defaults. **Exit gate (R1-named):** within-epoch claim jitter min/max bounds pinned (GF-10). |
-| **4** | Output + bond-funding hygiene (**recurring** — rebond/unbond at genesis) | Drain/ramp defaults; threat-model §7 rebase in PHASE_2B. **Hard exits (R1-named, now recurring not one-time — see scope note):** decorrelated-drain **output-count** discipline pinned for **terminal drain *and* recurring partial-unbond (`HoldingsUpdate`)** (GF-4 — delay floor already pinned, §2.4); principal→`P` bond-funding structural-distinguishability + minimum separation pinned for **first join *and* recurring rebond-topup** (GF-7); within-epoch timing (GF-10, R3) now applies to **bond ops, not just emission**. |
-| **5** | Cross-layer adversarial pass | Soundness-depth sign-off for Stage 3 |
+| **1** | HKDF/`P_id` wire + crypto layer hooks | **Closed (2026-06-13)** — §9 GF-1 dual-key verifier contract resolved; GF-2 dual-scan enforcement made architectural; reviewer sign-off (§9.8). **Carry discharged (2026-07-11 reconciliation):** `ARCHIVAL_P_DERIVE_V1` KAT + `archival_p` module **landed** (Bond-PR 0 #152; `archival_p.rs` + `kat_archival_p_derive_v1.rs`, seven §9.3 labels incl. `bond_spend_*` verified at source). C-1 emission vin ML-DSA equality check **landed** (#277). §7 checklist reconciled to landed state. |
+| **2** | Network + transport (L16 → production shape) | **Closed (2026-07-11) — §10; closure disposition §10.13.** Rendezvous path specified; seeding relaxation bounded. **Entry gates (all dispositioned):** challenge-response Levin class → anonymity-routable set (GF-3, §10.4); pre-join backing-presentation transport (GF-5, §10.5); Arti HS-hosting capability confirmed, at-source pin carried (GF-12, §10.3); `P`-tx wire-size fingerprint characterization + dummy/fragmentation policy (GF-6, §10.6); HS key lifecycle `p_slot`-bound + seed-derived (GF-9, §10.7). **Exit dispositions (§10.11, passes 1–4):** bonded-verifier challenges, broadcast announce, `P`↔principal circuit/guard isolation (§10.9), pure-rendezvous + I2P-closed. **Carries (§10.13, rule-21):** at-source Arti pin → transport PR; dummy/frag tuned ratio → testnet; **GF-9 HS-id HKDF label → §9.3 amendment (armed: not yet in derivation; dot-vs-hyphen format flag)**; announce↔anchor + cadence timing → R3. Transport code partial-landed (2d-2: SP-T1 #204/#209, SP-T4a #254 — inert). |
+| **3** | Timing + rotation + `W` / epoch-length joint pin | **Designed + adversarial pass run (2026-07-11) — §11; closes on the R4/GF-4 joint grade (§11.7).** **GF-10** pinned as *mechanism + structural window* (uniform-independent claim-broadcast-height draw via audited `bounded_uniform`; floor = `h_close + reorg_depth(720)`, ceiling = `(E_oldest+W)·SEB − submit_guard`; a-priori `S_min ≥ SEB`); **numeric width routed to R4/GF-4 CB-3 joint grade** (not standalone — per-axis error avoided). Draw + scheduler **unbuilt** (verified) → pinned pre-code, M1-armed. Rotation leg ratified (T-A1 timeline non-channel; network leg §10.7/§10.9); R2 timing hand-forwards resolved (announce↔anchor = entry standoff; emission-cadence = GF-10). Adversarial pass (§11.8) found no break — four findings folded as re-pins, one retraction (max-age misread). Two frame/pass assumptions overturned at source (epoch-crossing §11.4; max-age semantics §11.8). |
+| **4** | Output + bond-funding hygiene (**recurring** — rebond/unbond at genesis) | **Drafted (2026-07-11) — §12, the drain-event firewall.** **GF-7 (funding-in) built + graded PROVISIONAL-PASS** (`r = 1.86`, local-daemon; standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) provisional) — not an open design question. **GF-4 (value-out) drafted:** the drain is one event, three co-triggered channels graded jointly (§12.1). **F-D1** drain-amount taint-carve — complete pre-code pin ((a)+strip; strip `{lineage,epoch,height}` + aggregate-scalar amount stage; §12.3); **F-D2** UI-default (§12.4); **F-D3/F-D4** one-sided cooldown-anchored exit standoff — **FSM-gated** (§12.5–12.6); **F-D5** quantization → §14.4; **F-D6** anti-drift derive-don't-hardcode (§12.7). GF-10 (R3) folds into the joint grade. Blocks on the rebond/unbond FSM frictions → age-stratified sim reconciliation (pre-seal). |
+| **5** | Cross-layer adversarial pass | **Planned.** Soundness-depth sign-off for Stage 3. Build the S-2 fused exposure ledger (first) + the S-3 exit/value-seam adversary sim (§10.12), then sign off. |
 
 **Parallel (not gated on gate-6 closure):** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
 schema implementation; PHASE_2B §3–§7 FSM retool off rebased §2.4.
@@ -382,35 +421,48 @@ shipping an optimistic sealed floor on top of the very +1 margin it is meant to 
 
 ## 7. Implementation checklist (pre-code)
 
-- [x] Pin `P` HKDF labels + `P_canonical_id` alignment with emission leg (§9).
+Reconciled to landed code 2026-07-11 (`dev` `75c3cae1d`; status-of-record is
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) — this list marks each item's round and
+whether its design pin and its code have landed, and does not restate the index's detail). A `[x]`
+here means **the gate-6 design pin is discharged**; a trailing "code:" clause states the landed
+artifact where one exists.
+
+- [x] Pin `P` HKDF labels + `P_canonical_id` alignment with emission leg (§9). **code:** `archival_p.rs`.
 - [x] Pin per-tx-type verifier contract — account `hybrid_sign_pk` is bond-record identity only;
       per-input auth is per-output (GF-1, §9.6).
-- [ ] Land `ARCHIVAL_P_DERIVE_V1` KAT vectors + `shekyl-crypto-pq` `archival_p` module —
-      **including the `shekyl-archival-p-bond-spend-{ed25519,ml-dsa-65}-v1` labels → `bond_spend_pk`**
-      (GF-1; §9.3 / §9.4).
-- [ ] Pin off-chain announce/backing presentation wire (daemon + wallet).
-- [ ] Pin rotation ceremony (over-enumeration; holdings/bond migration).
-- [ ] Pin network rendezvous requirement for production archival serving.
+- [x] **Land `ARCHIVAL_P_DERIVE_V1` KAT vectors + `shekyl-crypto-pq` `archival_p` module** —
+      incl. the `shekyl-archival-p-bond-spend-{ed25519,ml-dsa-65}-v1` labels → `bond_spend_pk`
+      (GF-1; §9.3 / §9.4). **code (Bond-PR 0 #152, verified 2026-07-11):**
+      [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) (7 labels present),
+      [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs).
+- [ ] Pin off-chain announce/backing presentation wire (daemon + wallet). **R2 transport half
+      pinned** (GF-5 broadcast, §10.5 / §10.13); the *wire* half is the residual (§10.13 carry).
+- [ ] Pin rotation ceremony (over-enumeration; holdings/bond migration). **→ R3** (§11; §2.3 P2B-1
+      two-rotation split + `p_slot` over-enumeration already pinned, §9.2).
+- [x] Pin network rendezvous requirement for production archival serving — **R2** (§10.2 heavy-path
+      onion-rendezvous, no clearnet fallback; §10.9 isolation). **code:** partial, inert (2d-2).
 - [ ] Pin wallet defaults: emission batching, drain decorrelation, bond-funding ramp
       (T-A4/T-A6 conditional passes; [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §9).
-- [ ] Land wallet disclosure §10 in UX copy.
+      **Split:** batching **landed** (`MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15`); **drain decorrelation +
+      ramp → R4**; **within-epoch claim jitter → R3 (GF-10, un-pinned).**
+- [ ] Land wallet disclosure §10 in UX copy. **→ R3/R4 (F1 disclosure draft §10, UX).**
 - [x] SEB pinned (10_000) — joint gate-2 cadence + epoch-granularity fingerprint (`ARCHIVAL_TIMING_CONSTANTS.md` §1.2).
 - [ ] Rebase PHASE_2B §7 threat model — draft:
       [`PHASE_2B_SECTION7_DRAFT.md`](../completed/PHASE_2B_SECTION7_DRAFT.md) (review → land).
 - [ ] Stage 3 test vectors: cross-layer linkability negatives — **including the GF-2
       cross-pipeline non-cross-assignment test** (no output emitted to both principal and `P`
-      scan contexts; §9.6).
-- [ ] **C-1 forgery negative (emission vin + stressnet negative suite):** a backing input that
+      scan contexts; §9.6). **→ R5.**
+- [x] **C-1 forgery negative (emission vin ML-DSA equality check):** a backing input that
       proves leaf membership while supplying a `pqc_pk` whose `H(pqc_pk)` does **not** equal the
-      leaf-committed extra scalar must be **rejected** by the emission vin verifier. This test
-      **fails until the vin-layer ML-DSA equality check lands** (§9.8 C-1), making the carried
-      dependency a failing test rather than a remember-to-build item. Add as an explicit negative
-      case alongside the honest-path "staking lifecycle completes 100 full cycles" stressnet
-      criterion.
+      leaf-committed extra scalar is **rejected** by the emission vin verifier. **code (PR #277,
+      `dev` `13c368707`):** `emission_verify.rs`; quantum spend-authority no longer classical-only
+      (§9.8 C-1 discharged). The honest-path stressnet "staking lifecycle completes 100 full
+      cycles" criterion + the blob-boundary arm remain the **regtest e2e residue** (E4/E5 gate,
+      `FOLLOWUPS.md`), not a gate-6 deliverable.
 
 ---
 
-## 9. Round 1 — `P` hybrid derivation (genesis pin, draft)
+## 9. Round 1 — `P` hybrid derivation (genesis pin — Round 1 CLOSED 2026-06-13)
 
 ### 9.1 Design disposition
 
@@ -762,11 +814,14 @@ hybrid and V4 is gated; gate 6 does not ship a classical-only `P` escape hatch.
 - [x] Dual-scan and signing-surface separation stated (GF-1 per-tx-type contract; GF-2 architectural enforcement).
 - [x] V4 reversion clauses named.
 - [x] Reviewer sign-off on Round 1 draft (2026-06-13 — GF-1 resolved, GF-2 made architectural, GF-8/11/4 corrected, downstream round criteria named).
-- [ ] `ARCHIVAL_P_DERIVE_V1` KAT manifest (fixed `master_seed` + `p_slot` → known `p_canonical_id`
-      **and `bond_spend_pk`** — the §9.3 `shekyl-archival-p-bond-spend-*` labels, GF-1).
-- [ ] `shekyl-crypto-pq::archival_p` implementation + unit tests.
+- [x] `ARCHIVAL_P_DERIVE_V1` KAT manifest (fixed `master_seed` + `p_slot` → known `p_canonical_id`
+      **and `bond_spend_pk`** — the §9.3 `shekyl-archival-p-bond-spend-*` labels, GF-1). **Landed**
+      (Bond-PR 0 #152): [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs).
+- [x] `shekyl-crypto-pq::archival_p` implementation + unit tests. **Landed:**
+      [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) (seven §9.3 labels present,
+      verified at source 2026-07-11).
 
-**Carried dependencies (confirm-at-source before the impl + emission verifier land):**
+**Carried dependencies — DISCHARGED (confirm-at-source status, 2026-07-11):**
 
 - **C-1 — emission backing-input quantum spend-authority binding.** The GF-1 §9.6 emission
   contract rests entirely on the membership proof and the ML-DSA check binding the **same
@@ -786,15 +841,23 @@ hybrid and V4 is gated; gate 6 does not ship a classical-only `P` escape hatch.
   (a backing input whose supplied `pqc_pk` does not hash to the leaf-committed extra scalar must be
   **rejected**) **fails** until the vin equality check lands — so the dependency cannot silently
   fail to discharge.
+  **DISCHARGED (PR #277, merged `dev` `13c368707`, verified 2026-07-11):** the vin-layer ML-DSA
+  equality check landed in the emission verify module (`emission_verify.rs`; index §4 PR-E rows) —
+  the backing path now carries the quantum spend-authority guarantee, not classical-only. The
+  honest-path stressnet 100-cycle criterion + the blob-boundary arm remain the **regtest e2e
+  residue** (E4/E5 gate, `FOLLOWUPS.md`), which is emission-track scope, not a Gate-6 deliverable.
 
 ---
 
-## 10. Round 2 — network + transport layer (draft — OPEN)
+## 10. Round 2 — network + transport layer (CLOSED 2026-07-11)
 
-**Status:** Draft for the adversarial pass (opened 2026-06-13). **Not closed.** Round 2
-specifies how peers reach `P` and how `P` broadcasts, such that `P`'s network *location* and
-*traffic shape* never link to the principal. It threads the R1-named entry gates
-(GF-3/5/6/9/12, §6) into one transport spec rather than re-deriving surface.
+**Status:** **Closed 2026-07-11** (opened 2026-06-13; four adversarial passes §10.11; closure
+disposition §10.13). Round 2 specifies how peers reach `P` and how `P` broadcasts, such that `P`'s
+network *location* and *traffic shape* never link to the principal. It threads the R1-named entry
+gates (GF-3/5/6/9/12, §6) into one transport spec rather than re-deriving surface. Closed against
+the round's defense-in-depth bar (§10.0), **not** "linkage impossible": every named leak vector has
+a specified, testable mitigation and a written residual; implementation/tuning items are carried
+with rule-21 criteria (§10.13). The §10.10 exit checklist below is ticked to its closure basis.
 
 ### 10.0 How Round 2 differs from Round 1 (the bar is different)
 
@@ -1103,28 +1166,41 @@ with the principal-linkage gap still open under a different name.
 
 ### 10.10 Round 2 exit criteria + carried items
 
-**Exit (all required to close Round 2):**
+**Exit (all met at close 2026-07-11; a `[x]` means the *design disposition* is discharged — see
+§10.13 for the closure basis and the implementation carries that ride each one):**
 
-- [ ] **GF-3** — challenge/response + liveness-re-proof Levin class **added to the
-      anonymity-routable set**, command IDs pinned, clearnet fallback **refused (loud)**.
-- [ ] **GF-5** — pre-join announce/backing-presentation **transport** pinned (fresh circuit, no
-      principal stream reuse); announce↔anchor timing gap **handed to R3**.
-- [ ] **GF-6** — `P`-tx burst **characterization obligation** pinned (cell/fragment granularity,
-      per `P`-tx type) + dummy/fragmentation **policy shape** decided; tuned ratio **carried to
-      testnet replay**.
-- [ ] **GF-9** — HS identity key **`p_slot`-bound + seed-derived** disposition pinned; **new
-      HKDF label added to §9.3 + `ARCHIVAL_P_DERIVE_V1` KAT**; serving-side key-compromise
-      residual **named**.
-- [ ] **GF-12** — embed-Arti fork **decided conditional on the at-source pin**
-      (version/feature/MSRV/`with_hsid` API); external-daemon reversion clause recorded.
-- [ ] **Forks 1+4 / §10.9** — `P`↔principal **client/circuit isolation** pinned (independent
+- [x] **GF-3** — challenge/response + liveness-re-proof Levin class **added to the
+      anonymity-routable set**, command IDs pinned, clearnet fallback **refused (loud)** (§10.4,
+      bonded-verifier disposition).
+- [x] **GF-5** — pre-join announce/backing-presentation **transport** pinned (**broadcast** over the
+      tx-broadcast anonymity path, fresh circuit, no principal stream reuse; §10.5); announce↔anchor
+      timing gap **handed to R3**.
+- [x] **GF-6** — `P`-tx burst **characterization obligation** pinned (cell/fragment granularity,
+      per `P`-tx type) + dummy/fragmentation **policy shape** decided (§10.6); tuned ratio **carried
+      to testnet replay** (§10.13). Structural pin is §10.9 circuit/guard isolation (burst shape is
+      orthogonal to origin-dilution).
+- [~] **GF-9** — HS identity key **`p_slot`-bound + seed-derived** disposition **pinned** (§10.7),
+      serving-side key-compromise residual **named**. **The "new HKDF label added to §9.3 +
+      `ARCHIVAL_P_DERIVE_V1` KAT" is a carry, not done** — verified at source, the label is absent
+      from [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) (seven §9.3 labels, no
+      `hs_id`). Carried armed at §10.13 with the **dot-vs-hyphen format flag** (§10.7's proposed
+      `shekyl.archival.p.hs_id.v1` violates §9.3's hyphen convention and its non-prefix-free
+      safety argument — normalize before freezing). Disposition closes R2; the label-freeze is a
+      §9.3 amendment.
+- [x] **GF-12** — embed-Arti fork **decided conditional on the at-source pin**
+      (version/feature/MSRV/`with_hsid` API; §10.3); external-daemon reversion clause recorded.
+- [x] **Forks 1+4 / §10.9** — `P`↔principal **client/circuit isolation** pinned (independent
       Arti clients + non-overlapping guard sets; no principal stream reuse; **restore-flow
       co-activation discipline** — `StakeEngine` does not co-launch `P`'s HS with principal sync).
-      Operational residual named.
-- [ ] **Rebond/unbond recurring-surface** — §6 R4 re-scope acknowledged: GF-4 (drain output-count)
+      Operational residual named. **Enforcement mechanism (Arti config vs. policy) carried** to the
+      transport PR (§10.13). Extended to **key locality** by S-6 (§10.12).
+- [x] **Rebond/unbond recurring-surface** — §6 R4 re-scope acknowledged: GF-4 (drain output-count)
       and GF-7 (bond-funding separation) carried as **recurring** (partial-unbond / rebond-topup),
       not one-time; the **rebond/unbond FSM (promoted to genesis / V3.0, 2026-06-15)** named as the
       **pre-genesis-seal dependency** for the R-3 sim bond-mobility reconciliation.
+
+**Legend:** `[x]` disposition discharged; `[~]` disposition discharged but an implementation/freeze
+carry rides it (GF-9 label). No box is `[ ]` at close.
 
 **Carried out of Round 2 (named, not silently deferred — per
 [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)):**
@@ -1403,9 +1479,497 @@ handle's fusion surface, do not re-fork the architecture. The walls (crypto + ne
 shape; the **doors (GF-7/GF-4)** are where the remaining privacy work is. S-2 and S-3 are the
 privacy axis of the R-3 reconciliation that already gates the seal.
 
+### 10.13 Round 2 closure disposition (2026-07-11)
+
+**Closed against the §10.0 bar.** The network round does not admit algebraic separation, so the
+close is *not* "principal↔`P` linkage is impossible." It is: **every named leak vector (GF-3, GF-5,
+GF-6, GF-9, GF-12, the fork-1+4 isolation gap) has a specified, testable mitigation and a written
+residual** (§§10.3–10.9), the four adversarial passes (§10.11) resolved the forks and the
+critical-path items, and the §10.12 end-to-end trace surfaced and homed the cross-layer S-1…S-6
+findings. R2's job was to *name the transport firewall and its residuals*; it has. What remains is
+implementation and measurement, carried below — the same closure posture R1 took with its `archival_p`
+impl carried.
+
+**What R2 does *not* claim.** It does not close GF-7 or GF-4 (the money seams — S-1); those are R4
+and are conceded-deferred here, not covered. It does not measure effective (vs. nominal) cover; that
+is the testnet S-3 obligation. It does not freeze the GF-9 HS-id label (below). Association with a
+disposition is not coverage of its implementation.
+
+**Carried items (rule-21 — each names its completion/reopen criterion and its home):**
+
+| Carry | Home | Completion / reopen criterion |
+|-------|------|-------------------------------|
+| **GF-9 HS-id HKDF label** — seed-derived `p_slot`-bound `.onion` identity | **§9.3 amendment + `ARCHIVAL_P_DERIVE_V1` KAT** | **Armed:** label absent from `archival_p.rs` at close (verified). Pin the label into the §9.3 table (L=32 seed → ed25519 HS identity, consumer `launch_onion_service_with_hsid`) **normalized to the hyphen convention** — §10.7's `shekyl.archival.p.hs_id.v1` (dots) must become `shekyl-archival-p-hs-id-*-v1` before it enters the KAT, or the §9.3 non-prefix-free safety argument does not cover it. Freezing the label is a deliberate crypto-surface act, not a side effect — do it as its own pin. |
+| **At-source Arti pin** — exact version/feature/MSRV/`with_hsid` API shape | Transport PR (§10.3) | Embed-Arti fork holds; external-daemon-over-SOCKS reversion clause fires iff the at-source check fails. |
+| **Dummy/fragmentation tuned ratio** | Testnet replay (§10.6) | Measure-then-tune: the real-to-dummy ratio that makes `P` bursts indistinguishable from ambient large-v3; honest cost/coverage residual. |
+| **§10.9 isolation enforcement mechanism** (Arti config vs. policy) + **S-6 key-locality** provisioning | Transport PR + PHASE_2B engines | Independent guard sets + restore-flow non-co-activation must be *structural*, and the serving box gets only the `P`-subtree (never the master seed). Reopen if a host-level compromise model is added. |
+| **Heavy-path relaxation** | §10.8; post-testnet sim L-curve | Pure-rendezvous is the genesis commitment; any relaxation is a post-testnet reversion clause and must prove the *access pattern* (not just the payload) carries no `P`-attributable metadata. |
+
+**Handed forward (not carries — scope transfers):**
+
+- **To R3 (§11):** announce↔anchor timing gap (§10.5) and emission-cadence timing (§10.6) — the
+  *timing* of the transport events R2 pinned the *shape* of.
+- **To R4 (§6):** GF-4/GF-7 recurring surfaces under the genesis rebond/unbond FSM; the exit-seam
+  standoff (FOLLOWUPS 2b).
+- **To R5 (§10.12):** the S-2 fused exposure ledger and S-3 exit/value-seam adversary sim.
+
+**Landed transport code at close (status-of-record: [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §4):**
+2d-2 is *partially built, inert* — SP-T1 circuit isolation (#204/#209), SP-T4a `BroadcastSubmitter`
+(#254, `Local` posture live via the WI-3 dispatch driver); `shekyl-p-transport` (`PTorClient`,
+`PBlockSource`) on `dev` but `dead_code`; the `PerP` posture + block-timed remote dispatch await the
+2d-2 completion. R2's *design* is closed; its *wiring* tracks the Bond-PR 2d-2 front.
+
 ---
 
-## 11. Related documents
+## 11. Round 3 — timing + rotation + `W`/epoch-length (DESIGNED + adversarial pass run 2026-07-11)
+
+**Status:** **Design pass + adversarial pass both run (2026-07-11); mechanism pinned, closes when
+folded into the R4/GF-4 joint grade.** GF-10 (the sole un-pinned exit gate) is pinned as a
+**mechanism + structural window + a-priori advantage claim**; its **numeric width is routed to the
+R4/GF-4 CB-3 joint grade**, not graded standalone — grading GF-10 alone would re-commit the
+per-axis-multiplication error CB-3 forbids (§11.5). The **adversarial pass (§11.8)** found no break
+but two unstated assumptions + one wrong-tool error — folded as re-pins into §11.3–11.5 (freeze-epochs
+hold; `S_min` rationale re-derived; correct one-sided negative controls) — and produced **one clean
+retraction on the merits** (the `REFERENCE_BLOCK_MAX_AGE` "verifiable-only-≤100-blocks" misread; §11.8).
+Rotation dispositions ratified (§11.6); R2 timing hand-forwards resolved. All pins source-grounded at
+`dev` `75c3cae1d`. Two frame/pass assumptions were overturned at source (epoch-crossing, §11.4;
+max-age semantics, §11.8) — both recorded as corrections, not silently dropped.
+
+### 11.1 Scope and the seam it defends
+
+Scope (§6): **timing + rotation + the `W`/epoch-length joint pin.** The property (§4 invariant 3):
+a watcher cannot align principal spends and `P` emissions to a single clock better than chance +
+public epoch boundaries, under stated wallet discipline. The bridge is **`P`→principal timing** —
+a sub-epoch alignment channel between `P`'s emission-claim broadcasts and principal wallet activity.
+It is *not* principal→user, and *not* the amount channel (loud by design, §2.4). This is the inner
+seam's *timing* face; the entry/exit *funding* seams (GF-7/GF-4) are R4.
+
+### 11.2 The adversary (name it)
+
+A **passive timing observer** with the public per-epoch retention/serve-credit timeline (F1
+liveness fingerprint, §2.3) and a candidate set of principal on-chain activity, attempting to align
+`P`'s within-epoch emission-claim broadcasts to principal spends. Two sub-adversaries:
+
+1. **Sub-epoch claim-timing correlator** — the settlement-epoch batch (§2.3) already coarsens claim
+   cadence to epoch granularity, but *within* an epoch the claim's broadcast instant is currently
+   unconstrained. If it is deterministic (e.g. always at epoch open, or a fixed offset), it is a
+   standing alignment channel. **This is what GF-10 closes.**
+2. **Rotation-timeline linker (E-4)** — `P_old`→`P_new` re-linkage via fine-grained retention
+   timeline + shard-set adjacency across a rotation (§2.3 E-4). Largely **already dispositioned** —
+   see §11.6.
+3. **Batch-cap-forced determinism (wargame finding, this pass).** The jitter mechanism has an
+   unstated assumption: it decorrelates only if the scheduler *chooses* the broadcast height. If the
+   scheduler lets backlog accumulate to `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15`, the claim is
+   **forced** at the block the 15th epoch settles — deterministic on epoch settlement, defeating any
+   jitter. The mechanism is only as strong as the scheduler's discipline to claim *before* backlog
+   forces it. §11.3 pins that discipline as part of GF-10, so the assumption is armed, not implicit.
+
+### 11.3 GF-10 disposition — the claim-jitter mechanism (pinned)
+
+**Where it lives (source, not memory).** Claim cadence is a **scheduler** concern, *not* the claim
+builder: CB-3 (RATIFIED 2026-07-09, [`EMISSION_CLAIM_BUILDER.md`](EMISSION_CLAIM_BUILDER.md) §CB-3)
+pins that the builder takes an explicit `claim_epochs` input and **does not self-schedule**, and the
+Engine claim orchestrator returns the assembled reply **unbroadcast** (`claim_orchestrator.rs`, index
+§4). So GF-10 governs the **claim scheduler**, which is **unbuilt** — verified at source 2026-07-11:
+`shekyl-standoff` exposes `draw_entry_gap` only; there is **no `draw_exit_gap` and no claim-jitter
+symbol** anywhere under `rust/`, and `ARCHIVAL_TIMING_CONSTANTS.md` §7 still lists "Emission jitter —
+± fraction of `SEB`" as unlanded. This is therefore a **pre-code structural pin** — arm the mechanism
+before the identifier exists (the M1 discipline; [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)).
+
+**Mechanism (pinned):**
+
+- The claim scheduler draws each emission-claim tx's **broadcast height** by a **direct
+  uniform-independent draw** through the audited `bounded_uniform` (`rust/shekyl-standoff/src/draw.rs:31`,
+  the single unbiased sampler), wrapped in a typed `ClaimJitterGap` mirroring the entry
+  `draw_entry_gap` / `NetworkGap` pattern (`draw.rs:81`).
+- **Per-claim independent** — no shared trigger. The entry sim measured a shared trigger as
+  catastrophic (`16 → 1.01`, §10.12); a scheduler that fires every claim off one epoch-boundary tick
+  clusters identically. **Independence is the load-bearing property, not the width.**
+- **Drawn directly** as a single `bounded_uniform` over the window. **GF-10 is one-sided** — one
+  draw, no order coin — so unlike the entry gap it has **no double-jitter failure mode**; the entry
+  `draw_entry_gap_double_jitter_trap` (`conformance.rs:177`) guards the two-sided
+  *difference-of-two-uniforms* construction and does **not** transfer here (G-10.C, adversarial pass
+  §11.8). GF-10's real failure modes are the two below, which get their own armed controls (§11.5).
+- **No self-scheduling to the batch cap** (§11.2 finding) — the scheduler must claim opportunistically
+  within the jitter window *before* backlog reaches the 15-cap, so the broadcast height is
+  jitter-determined, not backlog-forced. Part of the GF-10 pin. **Bounded residual (G-10.D, §11.8):**
+  a persona returning from `> 15`-epoch dormancy wakes with backlog already `>` cap, so its next
+  claim is backlog-forced — "claim before the cap" is not always achievable; the residual is
+  named, not closed.
+- **Freeze the epoch set across the jitter hold (G-10.A, §11.8).** A `≥ SEB` hold means carrying an
+  in-flight claim across the daemon acceptance window (`REFERENCE_BLOCK_MAX_AGE = 100`,
+  `reference.rs:181` — an *inclusion-freshness* window, **not** a verifiability expiry), so its FCMP
+  proof must be **re-anchored** (`REBUILD_AT = 50`, `reference.rs:106` — local, non-observable) one
+  or more times before broadcast. Each re-anchor must be **proof-only**: fresh reference + rebuilt
+  membership proof, with `claim_epochs` **frozen at the single source-fetch**. Re-running the
+  gather / `derive_claimable_epochs` at a newer tip would pull in freshly-finalized epochs and
+  re-couple the epoch set to the broadcast timing — reopening exactly what §11.4 closes. **Anchored
+  at source:** the claim orchestrator (`claim_orchestrator.rs::orchestrate_emission_claim`) is
+  **single-shot** — fetch `source` once (:230), anchor once via `two_sided_reference_height` (:241),
+  assemble once, hand off **unbroadcast** (:335, CB-3); the hold/rebuild/dispatch loop is the
+  **unbuilt CB-3 dispatch seam** (the same seam GF-10's jitter lives in), so this is a forward pin on
+  that seam, not a change to landed code.
+
+### 11.4 The `W`/epoch-length joint pin — the structural window
+
+**Source correction (this pass overturned the frame).** The 2026-07-11 frame posited that the jitter
+"must not push a claim across a settlement-epoch boundary (which would change *which* epoch it
+claims)." **Verified false at source:** which epochs a claim covers is the tx payload `claim_epochs`
+(`emission_claim.rs::derive_claimable_epochs`), **independent of the broadcast height** — broadcasting
+later does not re-select epochs. The real bounds are finalization (below) and forfeiture (above):
+
+- **Floor** `H_lo = h_close(E_oldest) + G_final`, `G_final ≥ ARCHIVAL_REORG_DEPTH_BLOCKS = 720`
+  (`config/consensus_constants.json:23`). A claim cannot broadcast before its oldest batched epoch is
+  finalized — verify's `NotFinalized` predicate is `chain_height > h_close(E)`
+  (`emission_claim.rs:335-342`); the reorg-depth guard keeps the claim valid across a reorg.
+- **Ceiling** `H_hi = (E_oldest + W)·SEB − G_submit`, with `W = 26`, `SEB = 10_000`
+  (`config/consensus_constants.json:19,21`), `G_submit` ≥ mempool + confirmation depth. The claim
+  must confirm before its oldest epoch forfeits at `E_oldest + W`; oldest-first batch drain already
+  guarantees no epoch is pushed past forfeiture (`emission_claim.rs:429`).
+- **Minimum spread** `S_min ≥ SEB` (a-priori floor, this pass). **Rationale re-derived (G-10.B,
+  §11.8) — the original "F1 is epoch-granular so finer jitter is pointless" premise is false at
+  source** and is withdrawn: F1 is epoch-granular only because §2.3 *defines* it as the per-epoch
+  serve-credit ledger; it is **not** the finest public liveness signal — the challenge fire/response
+  is **sub-epoch, block-granular** (`challenge_fire_height` puts `H_fire ∈ (H_open, H_close]` via a
+  beacon offset, `challenge.rs:56-76`). The floor stands on the **stronger, granularity-independent**
+  basis: a claim's **epoch set is already fully public** (`claim_epochs` rides the tx), and the
+  broadcast height is directly on-chain, so sub-epoch jitter of the broadcast instant carries **no
+  marginal `P`→principal alignment bits** regardless of any channel's granularity. `S_min ≥ SEB` is
+  then chosen not because finer is *useless* but because ≥ one epoch is the spread at which a
+  broadcast is decorrelated from any single principal event across a full settlement period. **The
+  exact width above `S_min` is NOT pinned here** — it is the R4 joint-grade output (§11.5).
+
+This is the "joint" pin: the window `[H_lo, H_hi]` is denominated in `SEB` and bounded jointly by `W`
+(forfeiture horizon) and `ARCHIVAL_REORG_DEPTH_BLOCKS` (finalization); the three constants compose,
+which is what the round title names.
+
+### 11.5 Grading is R4's (CB-3 joint grade), not standalone; conformance; coverage boundary
+
+**Grading routed, not performed here — and this is load-bearing.** CB-3 (RATIFIED 2026-07-09) routes
+claim-cadence grading to the GF-4 round under a **rule-21 joint-grading obligation**: claim timing
+must be graded **jointly** with the reward-amount sequence and the holdings stratum, because the three
+are co-present on one persona and an independent per-axis grade multiplies as if independent (the
+per-axis-multiplication error WI-4 §11 / CB-3 both flag). **R3 therefore pins GF-10's mechanism +
+structural window + the a-priori advantage claim, and stops** — it does **not** standalone-grade the
+width. Grading GF-10 alone here would be exactly the error CB-3 forbids. Same split the entry seam
+used: the standoff *draw* is the mechanism (R2/R4), the WI-4 sim is the joint *grade*.
+
+**A-priori advantage claim (pre-committed, before any R4 sweep — GF7_HOOKS §5.1 discipline).** Under
+a uniform-independent draw over `[H_lo, H_hi]` with `S_min ≥ SEB`, a passive timing observer holding
+the F1 fingerprint and a candidate principal-activity set gains **no better-than-epoch-prior**
+alignment of a claim broadcast to a principal spend. A failed R4 grade against this claim is a
+**redesign signal** (widen `S_min`, revisit independence), *never* a move-the-bar signal.
+
+**Conformance (wallet self-test, consensus-unenforceable).** The broadcast height is consumer-side;
+consensus sees only that the claim landed inside `[H_lo, H_hi]` (the claimable window it already
+enforces via the `NotFinalized` / forfeiture predicates). So GF-10 ships as a **published wallet
+conformance vector**, not a consensus rule: an integer golden vector on the aarch64 lane
+(bit-identical, like the standoff `golden_vector.rs`), strict-alpha chi-square uniformity + lag-1
+independence (`shekyl-stats`). **Negative controls corrected (G-10.C, §11.8):** the arming negatives
+must be GF-10's own failure modes, **not** the entry double-jitter trap (which detects a two-sided
+construction GF-10 does not have) — (a) a **shared-trigger control** (all claims drawn off one tick →
+assert the clustering is caught) and (b) a **backlog-at-cap control** (backlog `≥ 15` on wake →
+assert the forced-determinism is caught). Grade the property, not the PRNG.
+
+**Sub-epoch challenge channel — scope line (G-10.B, §11.8).** The challenge fire/response is a public
+`P`-serving-liveness signal at **block granularity** (`challenge_fire_height`, `challenge.rs:56-76`),
+finer than F1. It is **beacon-driven** (the fire height is consensus-seeded, not `P`-chosen), so it
+is neither a `P`→principal channel nor a claim-alignment lever, and GF-10 does not touch it.
+**Residual routed:** if the challenge *response*-broadcast instant is `P`-chosen and network-observable,
+it is a distinct timing surface → routed to the **S-2 exposure ledger** (R5), not folded into GF-10.
+
+**Coverage boundary (state it — never let association read as coverage):**
+
+- **Bites against:** a *deterministic / predictable* claim-broadcast cadence (fixed offset,
+  epoch-open, or backlog-forced) an observer could align to principal timing.
+- **Does NOT cover:** *which epochs* `P` served (roll-call, attributed, public by function — F1); the
+  sub-epoch challenge fire/response liveness channel (beacon-driven; S-2 for the response instant);
+  the *joint* composition with amount / holdings / exit-timing (R4/GF-4); the entry funding seam
+  (GF-7, built) or exit funding seam (GF-4). GF-10 is one channel of the drain/claim event, not the event.
+- **Multiplicative on §10.9 isolation**, never additive — the number is `P(align | isolation holds)`.
+
+### 11.6 Inherited dispositions ratified + R2 hand-forwards resolved
+
+- **Rotation timeline leg → non-channel (T-A1, §2.3).** At lean equilibrium ~98% singleton portfolios
+  ⇒ portfolio = public identity; cosmetic rotation with fixed storage is rational and re-linkable, so
+  timeline re-linkage is *not* the channel and decorrelation would require abandoning scarce-shard
+  income. F1 **conditionally finally accepted** (§2.3). Ratified into the round; reopen only on a
+  Form-C / reward-shape change (§2.3).
+- **Rotation network leg → pinned in R2.** `P_new` must not share principal clearnet path (§4
+  invariant 4): HS key `p_slot`-bound + seed-derived (§10.7), independent guards + restore-flow
+  non-co-activation (§10.9). R3 owns only the *timing/portfolio* face of rotation.
+- **`p_slot` over-enumeration ceremony** — two-rotation split (backing-UTXO vs. `P` pseudonym
+  rotation) + `new slot ⇒ new keys` pinned (§3, §9.2).
+- **Epoch batching + `W` vs cap (GF-11, no new pin)** — `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15`
+  blunts drip cadence; `W = 26 > 15` so the **batch cap binds** — a `P` cannot widen its claim window
+  to the forfeiture horizon to thin its fingerprint (§2.3). Consensus fact, not a lever R3 spends.
+- **R2→R3 timing hand-forwards resolved:**
+  - **§10.5 announce↔anchor timing gap → covered by the entry standoff** (GF-7 mechanism,
+    `draw_entry_gap`, built #255): the announce↔bond-post gap *is* the entry standoff's target. R3
+    ratifies; it does **not** build a second mechanism.
+  - **§10.6 emission-cadence timing → GF-10** (§11.3–11.5) mechanism + the CB-3/R4 joint grade.
+- **F1 wallet disclosure copy** ([`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §10)
+  — operator-facing statement that rotation does **not** reset `T_obs` (= operator lifetime); a UX
+  task routed to the wallet disclosure surface.
+
+### 11.7 What R3 closes, defers, and its reopen criteria
+
+**Closes (adversarial pass run 2026-07-11 — §11.8, re-pins folded into §11.3–11.5):** the GF-10
+claim-jitter **mechanism** + structural window (§11.3–11.4, now incl. the freeze-epochs pin) + the
+a-priori advantage claim (§11.5, rationale re-derived); the ratified rotation dispositions and R2
+timing hand-forwards (§11.6).
+
+**Defers (named, rule-21):**
+
+- **GF-10 numeric width** above `S_min` → R4/GF-4 CB-3 joint grade (jointly with amount + holdings +
+  exit-timing). Reopen the mechanism only if the joint grade cannot meet the pre-committed advantage
+  claim at any structurally-admissible width.
+- **Extension to bond ops** — GF-10 reused for partial-unbond / rebond-topup claim timing in R4 (§6);
+  the mechanism is pinned so the extension is mechanical.
+- **Build** — the `ClaimJitterGap` draw + the claim scheduler/dispatch seam (CB-3) are unbuilt. Land
+  the draw the M1 way: a CI grep that the claim scheduler routes through `bounded_uniform` with no
+  deterministic-cadence fallback, armed **before** the scheduler identifier exists. **Plus the
+  freeze-epochs pin (G-10.A):** the dispatch seam must rebuild a held claim's proof **proof-only**
+  (re-anchor reference, never re-fetch `source` / re-run `derive_claimable_epochs`) — arm a
+  grep/test that the dispatch rebuild path does not call the gather/derivation.
+
+**Out of scope (do not fold in):** the L17 synchronized-exit wargame (crisis cadence blows through
+jitter windows) is the **exit seam** — R4/GF-4 ([`FOLLOWUPS.md`](../FOLLOWUPS.md) swan-2/W8). R-3
+reward-magnitude quantization is R4 / §14.4 economics.
+
+**Reopen (rule-21):** the GF-10 window reopens on any change to `SEB`, `W`,
+`ARCHIVAL_REORG_DEPTH_BLOCKS`, or `MAX_SETTLEMENT_EPOCHS_PER_EMISSION`; the mechanism reopens if the
+R4 joint grade fails the pre-committed advantage claim.
+
+**Remaining for close:** the adversarial pass has run (§11.8) and its four findings are folded as
+re-pins. R3 is at its exit bar as a *mechanism* round: the mechanism + structural window + a-priori
+claim are pinned and source-anchored, the negatives are the right ones, and the residuals (dormancy,
+sub-epoch challenge) are named. **The one item that keeps R3 formally "designed, not closed" is
+external to the mechanism:** the a-priori advantage claim is only *graded* in the R4/GF-4 joint
+sweep (CB-3), so R3 closes when GF-10 is folded into that grade and the grade clears the
+pre-committed claim — the same mechanism-then-joint-grade split the entry seam used.
+
+### 11.8 Adversarial pass (2026-07-11) — findings, re-pins, and one retraction
+
+**Verdict:** the pass did not find a break, but it found the two unstated assumptions the mechanism
+rested on and one wrong-tool error — folded above as re-pins, not move-the-bar edits (per §11.5's own
+discipline). All four are source-anchored at `dev` `75c3cae1d`.
+
+**Retraction (clean, on the merits).** The pass first raised **G-10.A as a mechanism-infeasibility**
+finding — that `fcmp_reference_block_max_age = 100` made a claim "verifiable only ≤ 100 blocks," so a
+`≥ SEB` hold was impossible. **That was a reviewer construction resting on an unverified premise —
+the constant's semantics were asserted from its name, not traced to its consumer** (the exact failure
+mode this track holds the line against). Traced at source: `REFERENCE_BLOCK_MAX_AGE` is a **daemon
+inclusion-freshness window** (`proof_submittable`, `reference.rs:181`), **not** a verifiability
+expiry — a mined claim is validated once at inclusion and stands; `PROOF_VALIDITY_HORIZON = 94`,
+`REBUILD_AT = 50`, and re-anchor is explicitly local + non-observable (`reference.rs:102-106`). The
+"infeasible / 100 ≪ SEB / ~200-rebuilds-observable" claims are **withdrawn**. What survives is the
+narrow, correct pin below.
+
+| # | Finding | Status | Source anchor | Re-pin (where folded) |
+|---|---------|--------|---------------|-----------------------|
+| **G-10.A** | A `≥ SEB` jitter hold must rebuild the proof; a rebuild that re-derives `claim_epochs` re-couples the epoch set to broadcast timing (reopens §11.4) | **Pin** (was infeasibility — retracted) | `claim_orchestrator.rs` single-shot (:230 fetch, :241 anchor, :335 unbroadcast); hold/rebuild = unbuilt CB-3 seam | **§11.3** freeze-epochs bullet; **§11.7** Build item — proof-only rebuild, forward pin on the unbuilt dispatch seam |
+| **G-10.B** | The `S_min` rationale ("F1 is epoch-granular so finer jitter is pointless") is false — challenge fire/response is sub-epoch block-granular | **Load-bearing correction** | `challenge_fire_height` → `H_fire ∈ (H_open, H_close]`, `challenge.rs:56-76` | **§11.4** rationale re-derived on the "epoch set is already public" basis (stronger, granularity-independent); **§11.5** sub-epoch channel scope line (beacon-driven; response instant → S-2) |
+| **G-10.C** | The cited negative control (`draw_entry_gap_double_jitter_trap`) is the wrong one — it guards a two-sided construction GF-10 does not have | **Correction** | `conformance.rs:177` (two-sided); GF-10 is one-sided (§11.3) | **§11.3 / §11.5** — swapped for GF-10's real failure-mode controls (shared-trigger + backlog-at-cap) |
+| **G-10.D** | "Claim before the cap forces it" is not always achievable — return-from-`>15`-epoch-dormancy wakes with backlog `>` cap | **Bounded residual** | `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` (`emission_wire.rs:53`) | **§11.3** — named as a residual (correlates with the persona's own liveness gap, ~public via F1/challenge), not closed |
+
+**Method note (for the next reviewer):** G-10.A's retraction is the load-bearing lesson of this pass
+— a constant's meaning is its consumer, not its identifier. The `REFERENCE_BLOCK_MAX_AGE` /
+`PROOF_VALIDITY_HORIZON` / `REBUILD_AT` semantics (`reference.rs:85-106`) are the anchor for any
+future reasoning about how long a claim can be held; do not re-derive them from the name.
+
+---
+
+## 12. Round 4 — output + bond-funding hygiene: the drain-event firewall (OPEN — drafted 2026-07-11)
+
+**Status:** **Open — drafted.** Scope, adversary, and the drain-event findings (F-D1…F-D6) pinned,
+source-grounded at `dev` `75c3cae1d`. **F-D1** (amount channel) is a **complete pre-code pin**,
+buildable now; **F-D2** (UI-default) buildable now; **F-D3/F-D4** (exit-timing) are **FSM-gated**
+spec-stubs with activation criteria; **F-D5** (quantization) is routed out to §14.4 economics;
+**F-D6** is the anti-drift pin. R4's other half — **GF-7 (funding-in)** — is already built + graded
+PROVISIONAL-PASS (`r = 1.86`; §6 R4 cell); this section is the **value-out (GF-4)**. The channels are
+**graded jointly, not per-axis** (§18.10 R-4 + CB-3).
+
+### 12.1 Scope — the drain is one event with three co-triggered channels
+
+The on-chain value legs are dead by construction: reward mint is loud-but-exact
+([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §5.5/§9, a priority-1 inflation-audit disposition;
+CT-committing it is foreclosed), amounts are FCMP++/CT-hidden with an unenumerable spend set (§18.11).
+What survives is **one event — the drain (`P`→principal value-out)** — carrying three channels that
+S-1 says no single layer owns:
+
+| Channel | Finding | Buildable? |
+|---------|---------|-----------|
+| **Amount** (off-chain subsum match) | F-D1 (+F-D2 UI) | **now** |
+| **Timing** (exit-seam standoff) | F-D3 + F-D4 | **FSM-gated** |
+| **Output-count** (decorrelated drain) | §6 R4 hard exit (lineage-blind, §12.3-sibling) | FSM-gated |
+
+They are **co-triggered** on one event, so they must be **graded jointly** — an independent per-axis
+grade multiplies as if the channels were independent (the CB-3 / WI-4 §11 per-axis-multiplication
+error). Grading is the R4 joint sweep, into which GF-10's claim-jitter mechanism (§11) folds.
+
+### 12.2 The exit anchor — a source correction
+
+The exit standoff anchors on **`RELEASE_COOLDOWN_EPOCHS = 2`** (~28 days), **not**
+`RETENTION_HORIZON_BLOCKS = 420_000` (42 epochs). Verified at source: retention-horizon is "min
+block-span archival derived state survives before prune **sweep** … audit/sweep only"
+([`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §1/§4) — it governs **data pruning**,
+not collateral spendability. An earlier reviewer note that retention "dominates the exit anchor" is
+**withdrawn** on that read. The spendability chain: collateral is a **consensus balance** (not a
+UTXO); `Unbond` fires after the release cooldown (grace after last serve) and mints a
+**`P`-attributed refund output** at public `bond_floor` ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)
+§4.3); the refund then matures like any output. The deterministic tell F-D3 breaks is that this
+earliest-spend moment is **cooldown-pinned**.
+
+### 12.3 F-D1 — drain-amount taint-carve (amount channel; complete pre-code pin)
+
+The forbidden read is the **reward-sequence decomposition** (per-epoch `reward_P(E)`, subsums, epoch
+counts — `reward_P(E)` is public-derivable ex ante (§18.10), so a drain amount equal to a reward
+subsum is off-chain-matchable). The permitted read is the **aggregate** spendable balance (a scalar;
+the §18.12 lifetime-band floor, already irreducible).
+
+**Encoding — (a)+strip, over the capability-token (b) and module+grep (c) forks** (source overturned
+the shared (b) lean, 2026-07-11): lineage is **backing-only** — `MintLineageOutput`
+(`pscan_state.rs:93`, a 3-way rung tag, no epoch/amount in the tag) has exactly one production
+reader-for-a-decision, `BackingSet` (`backing_set.rs:143,158`); the writer is `scan_step.rs`, the type
+home `pscan_state.rs`; **no drain/spend/selection path reads it** (every other hit is `#[cfg(test)]`).
+The drain doesn't need lineage, and the codebase's own selection principle is already **lineage-blind**
+("a lineage preference would add a distinguishable … signal", `backing_set.rs:171-176`).
+
+**Two-part trust boundary** (stripping the tag is necessary but not sufficient — per-output *amounts*
+are the reward *values*, so a stripped-but-per-output-amount view still admits a subsum pick):
+
+1. **Strip `{lineage, epoch, height}`** from the drain view. Dropping `lineage` breaks reward-output
+   *identification* (the load-bearer); dropping `epoch`/`height` closes the residual that for a
+   **reward-dominated persona** (the typical long-lived staker, S-5) `Σ amount` grouped by `epoch` ≈
+   `reward_P(E)` **even without the tag**. Keep `spendable_height` (a different axis —
+   maturity/provability). Fields verified at `pscan_state.rs:169-210`.
+2. **The amount stage reads the aggregate scalar only**, never the per-output amount vector — the
+   vector carries the reward values; the scalar (one `AtomicUnits` sum) does not decompose.
+
+**Three stages, each reading the minimum:**
+
+- **Amount:** `{user target, cadence, RNG}` → `DrainAmount`; the aggregate scalar is consulted for an
+  **affordability check only** (`amount ≤ total`), never as a computation input — so the amount is
+  provably not any subsum.
+- **Select:** coin-selection over the stripped `{output_id, amount, spendable_height}` vector to meet
+  the fixed amount; FCMP++-hidden on-chain, so lineage-blind fungible selection is fine.
+- **Project (the single trust boundary):** `PFundingOutputRecord` → the two operands (scalar +
+  stripped vector) lives **upstream in the drain orchestrator** — the engine gather that holds
+  `PScanState.funding_outputs`, the established "orchestrator prepares operands, downstream receives
+  prepared values" seam (`claim_orchestrator.rs:9-14`). The drain amount + selection modules never
+  name `MintLineageOutput` / `PFundingOutputRecord`.
+
+**Arm (M1, pre-code — drain path unbuilt):** (i) an import-check that the **drain amount + selection
+modules** (not the orchestrator, which must hold the record) import neither lineage type — the
+`sweep_funding_outputs`-sole-primitive grep template (`bond_assembly.rs:722-727`); (ii) a signature
+check that the amount-stage fn takes `AtomicUnits`, not the output vector. Both fail before the drain
+identifier exists.
+
+**Coverage boundary:** closes the **automated off-chain amount-match** (the R-1 residual). Does **not**
+touch the lifetime-aggregate floor (§18.12 — drain-all reveals the lifetime total, irreducible),
+user-eye manual reconstruction (F-D2 mitigates, does not close), or the timing/output-count channels
+(F-D3/F-D4). F-D1 is the amount channel only.
+
+### 12.4 F-D2 — UI-default (defaults are firewall-class; kept in gate-6)
+
+F-D1 makes the *function* incapable of a subsum; F-D2 covers the *default the wallet offers*, which
+§18.12 doesn't reach. Per the safe-by-default-for-the-uneducated-user principle:
+
+- **Aggregate-only balance surface.** The drain UI's `P`-balance is the **aggregate scalar**
+  (mirroring the principal `LedgerEngine::balance() -> BalanceSummary` aggregate discipline,
+  `local_ledger.rs:341`), never a per-epoch/per-reward decomposition. **Largely structural by
+  inheritance from F-D1:** the projection means the reward decomposition never reaches the drain
+  subsystem, UI included.
+- **No reward-derived pre-fill.** The drain-amount field is never seeded from a reward-derived value —
+  no "drain epoch-E reward" affordance, no default = reward subsum. Default = empty / user-typed (or
+  round-number / random-split if a default is wanted). Consistent with the existing explicit-amount
+  send path (no send-max/pre-fill exists).
+- **Coverage boundary:** bites against **automated/default** subsum reconstruction (the UI never hands
+  the user a reward-shaped number to accept); does **not** cover a user *intentionally* reconstructing
+  by eye from public reward history → that residual routes to the enumerated mistake-set (§18.13
+  boundary class 3) + the opsec guide.
+
+### 12.5 F-D3 — exit-seam standoff mechanism (one-sided, cooldown-anchored; FSM-gated)
+
+The exit seam's dominant adversary is **correlated mass-unbonding** (§18.1): a market event fires
+correlated drains, and the linkage is the **co-trigger**, not the amount — so F-D1 is inert against
+it; the defense is an independent per-`P` exit-timing draw, exactly the entry finding's "shared
+trigger is catastrophic, `16→1.01`."
+
+- **`draw_exit_gap`** — a sibling of `draw_entry_gap`, **one-sided**: a single `bounded_uniform`
+  (`draw.rs:31`), **no order coin, no inversion** — collateral isn't spendable before the cooldown, so
+  there is no "which came first" to draw (the one-sidedness is *forced by the cooldown*, which is also
+  why the entry double-jitter trap does not apply here — §11.3/§11.8). Typed `ExitGap`, mirroring
+  `NetworkGap`.
+- **Anchored at the cooldown-pinned earliest-spend height** — `Unbond`-height-derived
+  `+ RELEASE_COOLDOWN_EPOCHS × SEB` (F-D6: **derived, never hardcoded `20_000`**). The draw adds a
+  random one-sided latency *after* that point, breaking the deterministic fixed-offset cooldown tell.
+- **Per-event independent**, applied to **both terminal drain and recurring partial-unbond
+  (`HoldingsUpdate`)** — each its own draw (the shared-trigger lesson; correlated unbonding is the
+  adversary).
+- Wallet self-test conformance (the anchor is consumer-side/off-chain, consensus-unenforceable),
+  integer golden vector on the aarch64 lane — the `draw_entry_gap` discipline.
+- **FSM-gated (rule-21).** The deterministic cooldown tell **does not exist yet**:
+  `RELEASE_COOLDOWN_EPOCHS` is a **committed-but-unenforced** consensus constant — verified at source,
+  no `verify_unbond_release` / spendability-gate consumer exists (the rebond/unbond FSM is unbuilt;
+  `bond_post.rs` verifies `JoinMarket` only). F-D3 can be *spec'd* now but cannot be *measured or
+  sealed* until the cooldown is an enforced spendability gate. **Activation criterion:** open F-D3
+  build/measurement when a `verify_unbond_release` path reads `RELEASE_COOLDOWN_EPOCHS` as a
+  spendability gate.
+
+### 12.6 F-D4 — a-priori exit window (FSM-gated)
+
+The exit window **cannot borrow the entry `600`**. That number was derived rate-driven against the
+**background funding-spend rate**; the exit seam's driving rate is the **correlated-unbond /
+market-event rate** (§18.1), which is worse and different. A **separate a-priori window derivation**
+from a stated adversary-advantage claim is required, **committed before any exit sweep runs**
+(GF7_HOOKS §5.1: threshold before grading; a failed sweep is a redesign signal, never a move-the-bar).
+The exit draw is one-sided (600-block search width, not the entry's 1200), so the thin-regime
+**gap-toward-max** bias matters more (§10.12). This is the exit-seam analogue of the entry `1.86` and
+the sealing-path measurement WI-4 §18.1 flags as owed. **Couples to L17:** the correlated-unbond model
+is exactly the L17 synchronized-exit wargame (does `RELEASE_COOLDOWN = 2` **smear** the cohort or
+merely **delay** it; is a release-cooldown *queue* needed — [`FOLLOWUPS.md`](../FOLLOWUPS.md)
+swan-2/W8), so F-D4's rate model and the L17 wargame are one obligation. **Activation:** the F-D3 FSM
+gate.
+
+### 12.7 F-D5 (routed out) and F-D6 (anti-drift pin)
+
+- **F-D5 — reward-magnitude quantization → §14.4 economics, not this round.** Layer-2 CT-severing
+  breaks the off-chain sequence surface first (§18.10/§18.11), so the grid's threat model is the
+  **lifetime-aggregate band only** — a consensus economics change (grid width interacts with
+  dust/budget conservation, a-priori-derived per §18.7). A **defense-in-depth candidate**, not R4's
+  structural work. **Reopen (rule-21):** graded in the GF-4/§14.4 economics round, not folded into the
+  wallet pin.
+- **F-D6 — single-source + derive (anti-drift).** When the FSM lands, the cooldown gets a **named Rust
+  const** mirroring `SETTLEMENT_EPOCH_BLOCKS` (`constants.rs:27`), and the exit anchor **derives
+  `RELEASE_COOLDOWN_EPOCHS × SETTLEMENT_EPOCH_BLOCKS`**, never a hardcoded `20_000` — the anti-drift
+  rule `consensus_state.rs` already enforces for `SEB` ("do not re-derive by hand and risk drift").
+  Today `20_000` exists only as a doc-comment integer in `standoff.rs:93`; that is the drift vector,
+  closed when F-D3 builds.
+
+### 12.8 Round 4 status, joint-grading obligation, and what closes it
+
+- **GF-7 (funding-in):** built + graded **PROVISIONAL-PASS** (`r = 1.86`, local-daemon; §6 R4 cell) —
+  not an open design question; its residuals (effective-vs-nominal cover, cold-start) are testnet
+  obligations already tracked ([`FOLLOWUPS.md`](../FOLLOWUPS.md) funding-seam carries).
+- **GF-4 (value-out):** this section. F-D1 + F-D2 buildable now; F-D3 + F-D4 FSM-gated; output-count
+  discipline lineage-blind (an F-D1-sibling).
+- **Joint grade (the round's exit bar, per §18.10 R-4 + CB-3):** the drain event is graded on
+  **{amount-band ∧ claim/exit-timing ∧ holdings-stratum ∧ output-count}** jointly, correlated-trigger
+  modeled on — never per-axis-multiplied. GF-10's claim-jitter mechanism (§11) folds in here; **R3
+  closes when it does.**
+- **Pre-seal blocker:** the rebond/unbond FSM (genesis-scoped, 2026-06-15) gates F-D3/F-D4 activation
+  *and* the age-stratified sim bond-mobility reconciliation (§6 scope note). The FSM frictions
+  ([`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md)) must be pinned before the exit seam can be
+  measured.
+- **Closes when:** F-D1/F-D2 land with their arms; the FSM lands and F-D3/F-D4 derive their a-priori
+  windows and pass the joint grade against the pre-committed claims; F-D5 is dispositioned in §14.4.
+  Until then R4 is **drafted, not closed**.
+
+---
+
+## 13. Related documents
 
 | Doc | Relationship |
 |-----|----------------|
@@ -1420,6 +1984,78 @@ privacy axis of the R-3 reconciliation that already gates the seal.
 
 ## Revision history
 
+- **2026-07-11 (R4 drafted — the drain-event firewall, §12):** Opened Round 4 as §12 (Related
+  documents → §13), source-grounded at `dev` `75c3cae1d`. Framed the drain as **one event with three
+  co-triggered channels** (amount / timing / output-count) graded **jointly**, not per-axis (§18.10
+  R-4 + CB-3). **Source correction (§12.2):** the exit anchor is `RELEASE_COOLDOWN_EPOCHS = 2`, not
+  `RETENTION_HORIZON_BLOCKS` (42 epochs) — the latter is data-pruning/sweep-only
+  (`ARCHIVAL_TIMING_CONSTANTS`), so the earlier "retention dominates the exit anchor" note is
+  withdrawn. **F-D1** (§12.3) — drain-amount taint-carve, complete pre-code pin: **(a)+strip** chosen
+  over the capability-token/module-grep forks after source overturned the shared (b) lean (lineage is
+  backing-only — `MintLineageOutput` read only by `BackingSet`, `backing_set.rs:143/158`; writer
+  `scan_step.rs`; no drain path reads it); **two-part boundary** (strip `{lineage,epoch,height}` +
+  amount stage reads the aggregate scalar only, since per-output amounts *are* the reward values);
+  three-stage shape; projection is the single trust boundary upstream in the drain orchestrator
+  (`claim_orchestrator.rs:9-14` seam); M1-armed import + signature checks. **F-D2** (§12.4) UI-default
+  (aggregate-only balance, no reward-derived pre-fill; largely structural by inheritance from F-D1).
+  **F-D3/F-D4** (§12.5–12.6) — one-sided (`draw_exit_gap`, no inversion — forced by the cooldown),
+  cooldown-expiry-anchored exit standoff + a-priori window that cannot borrow the entry `600`
+  (correlated-unbond rate; L17-coupled); **FSM-gated** (the cooldown is committed-but-unenforced —
+  no `verify_unbond_release` consumer). **F-D5** quantization → §14.4; **F-D6** anti-drift (derive
+  `RELEASE_COOLDOWN_EPOCHS × SEB`, never hardcode `20_000`). GF-10 (R3) folds into the joint grade.
+  §6 R4 cell + status header updated. Docs-only.
+- **2026-07-11 (R3 adversarial pass — findings folded, one retraction):** Ran the adversarial pass
+  over §11.3–11.5 (new §11.8). No break; two unstated assumptions + one wrong-tool error, folded as
+  re-pins, all source-anchored at `dev` `75c3cae1d`. **G-10.A** (was raised as mechanism-infeasibility,
+  **retracted on the merits** — `REFERENCE_BLOCK_MAX_AGE = 100` is a daemon inclusion-freshness
+  window, not a verifiability expiry; `reference.rs:181`/`85-106`): collapsed to a **freeze-epochs
+  pin** on the unbuilt CB-3 dispatch seam — a held claim's proof rebuilds proof-only (re-anchor
+  reference, never re-fetch `source`/re-derive `claim_epochs`); anchored to the **single-shot** claim
+  orchestrator (`claim_orchestrator.rs:230/241/335`). **G-10.B** (load-bearing): the `S_min` rationale
+  "F1 is epoch-granular so finer jitter is pointless" is **false at source** — challenge fire/response
+  is sub-epoch block-granular (`challenge.rs:56-76`); re-derived `S_min ≥ SEB` on the stronger
+  "claim epoch-set is already public" basis, added the sub-epoch-challenge scope line (beacon-driven;
+  response instant → S-2). **G-10.C**: the cited negative control (`draw_entry_gap_double_jitter_trap`)
+  guards a two-sided construction GF-10 (one-sided) does not have — swapped for shared-trigger +
+  backlog-at-cap controls. **G-10.D**: return-from-`>15`-epoch-dormancy forces a deterministic claim
+  — named as a bounded residual. Status: mechanism pinned; R3 closes when GF-10 folds into the R4
+  joint grade. Docs-only.
+- **2026-07-11 (R3 design pass — GF-10 mechanism pinned):** Converted §11 from frame to designed
+  round, source-grounded at `dev` `75c3cae1d`. **GF-10 pinned as a mechanism, not a standalone
+  graded gate:** a uniform-independent claim-broadcast-height draw through the audited
+  `bounded_uniform` (`shekyl-standoff` draw.rs:31), typed `ClaimJitterGap`, per-claim independent
+  (the `16→1.01` shared-trigger lesson), drawn directly (double-jitter trap avoided), with
+  no-self-schedule-to-the-batch-cap discipline. **W/epoch-length joint pin:** window `[h_close +
+  reorg_depth(720), (E_oldest+W)·SEB − submit_guard]`, a-priori `S_min ≥ SEB` (tied to F1's
+  epoch-granularity fingerprint); constants verified at source (`config/consensus_constants.json`:
+  SEB 10_000, W 26, reorg 720, batch cap 15, `release_cooldown_epochs = 2` ⇒ the "20 000-block
+  cooldown" is derived `2·SEB`). **Grading correctly routed to R4/GF-4's CB-3 joint grade** (RATIFIED
+  2026-07-09) — NOT graded standalone, which would re-commit the per-axis-multiplication error CB-3
+  forbids; a-priori advantage claim pre-committed. **Source overturned a frame assumption:** the
+  "epoch-boundary non-crossing" constraint is false — broadcast height does not re-select
+  `claim_epochs` (recorded as a correction, §11.4). **Wargame finding:** batch-cap-forced determinism
+  (backlog to the 15-cap forces the claim height) — armed into the mechanism, not left implicit.
+  Draw + scheduler verified **unbuilt** → pinned pre-code, M1-armed (CI grep before the identifier
+  exists). Status: designed, pending one adversarial pass (§11.7). Docs-only.
+- **2026-07-11 (R2 closed, R3 opened, landed elements reconciled — this pass):** Brought the doc up
+  to its own status-of-record so the round record is self-contained rather than reconstructed from
+  scattered docs. **R1 carry discharged:** verified at source that `archival_p` + the
+  `ARCHIVAL_P_DERIVE_V1` KAT landed (Bond-PR 0 #152; seven §9.3 labels incl. `bond_spend_*` present
+  in `archival_p.rs`) and the C-1 emission vin ML-DSA equality check landed (#277); §7 checklist
+  reconciled to landed state per item (round + code anchor). **R2 formally closed** against its
+  §10.0 defense-in-depth bar (not "linkage impossible", not "all implementation landed"): §10.10
+  boxes ticked to closure basis, new **§10.13 closure disposition** (ratification + carried items
+  with rule-21 criteria + R3/R4/R5 hand-forwards + landed-transport-code pointer). **GF-9 honesty
+  correction:** the HS-id HKDF label is *not* in the derivation (verified — absent from
+  `archival_p.rs`), so its box is `[~]` (disposition pinned, label-freeze carried) and the carry is
+  armed with the **dot-vs-hyphen format flag** (§10.7's `shekyl.archival.p.hs_id.v1` violates
+  §9.3's hyphen convention + non-prefix-free safety argument — normalize before freezing).
+  **R3 opened** as a draft *frame only* (new §11): scope, adversary, entry gate (GF-10 within-epoch
+  claim jitter — un-pinned, no landed code, verified), inherited dispositions (T-A1 rotation
+  non-channel, epoch-batch, GF-11 `W`-vs-cap, R2 rotation network leg), what it owes, and the
+  steps-forward — with the coverage boundary that the standoff (GF-7/R4) is **not** GF-10 coverage.
+  §6 round table rewritten to true status; §11 Related documents renumbered §12. No design pinned
+  this pass. Docs-only.
 - **2026-06-16 (S-5 consciously closed — long-lived `P` committed):** The last genuinely-structural
   fork (long-lived vs. short-lived `P`) is closed in favor of **long-lived `P`** per
   `21-reversion-clause-discipline.mdc` — ratifying what serve-credit accrual, lock tiers,
