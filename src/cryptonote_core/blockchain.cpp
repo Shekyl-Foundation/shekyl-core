@@ -4582,6 +4582,29 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
   return true;
 }
 //------------------------------------------------------------------
+// FAKECHAIN-only regtest shim; contract, coverage boundary, and the
+// non-pop-symmetry caveat are documented at the declaration
+// (blockchain.h). Fail-closed here as well as at the RPC gate: this is a
+// consensus-state write, and the core boundary must not trust the RPC
+// layer to have checked the nettype.
+bool Blockchain::regtest_inject_archival_serve_credit(const crypto::hash& p_canonical_id,
+  uint64_t shard_id, uint64_t settlement_epoch)
+{
+  LOG_PRINT_L3("Blockchain::" << __func__);
+  if (m_nettype != FAKECHAIN)
+  {
+    MERROR("regtest_inject_archival_serve_credit called off fakechain; refusing");
+    return false;
+  }
+  CRITICAL_REGION_LOCAL(m_blockchain_lock);
+  db_wtxn_guard wtxn_guard(m_db);
+  m_db->set_archival_serve_credit_bit(p_canonical_id, shard_id, settlement_epoch);
+  MWARNING("Injected archival serve-credit bit (regtest Gate-6 stand-in): P="
+    << p_canonical_id << " shard=" << shard_id << " E=" << settlement_epoch
+    << " — bit is not block-owned; pops below this height strand it");
+  return true;
+}
+//------------------------------------------------------------------
 // AUDITED DECISION (ARCHIVAL_SERVE_CREDIT_EQUIVALENCE_AUDIT.md, D-SC-B wide /
 // D-SC-A dedup): this gate's ordered predicate sequence is mirrored in Rust
 // (shekyl-archival-retention::serve_credit_decisions) and pinned by the
