@@ -51,7 +51,10 @@ fn out() -> Output {
     }
 }
 
-fn bp() -> BpPlus {
+/// A Bp+ whose `|L|`/`|R|` are consistent with `n_out` outputs
+/// (`6 + ceil(log2(next_pow2(n_out)))` — the §10 canonical-form corollary).
+fn bp(n_out: usize) -> BpPlus {
+    let lr = 6 + n_out.next_power_of_two().trailing_zeros() as usize;
     BpPlus {
         a: [0u8; 32],
         a1: [0u8; 32],
@@ -59,8 +62,8 @@ fn bp() -> BpPlus {
         r1: [0u8; 32],
         s1: [0u8; 32],
         d1: [0u8; 32],
-        l: vec![],
-        r: vec![],
+        l: vec![[0u8; 32]; lr],
+        r: vec![[0u8; 32]; lr],
     }
 }
 
@@ -100,7 +103,7 @@ fn emission_tx(inputs: Vec<Input>, outputs: Vec<Output>) -> Transaction {
                 })
                 .collect(),
             prunable: Some(Prunable {
-                bulletproofs: vec![bp()],
+                bulletproofs: vec![bp(n_out)],
                 tree_depth: 1,
                 fcmp_proof: vec![],
                 pseudo_outs: vec![[0u8; 32]; n_ki],

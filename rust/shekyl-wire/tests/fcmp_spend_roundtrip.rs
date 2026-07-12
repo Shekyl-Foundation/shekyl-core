@@ -356,7 +356,9 @@ fn pqc_signing_payload_hashes_empty_for_non_spend() {
 fn bp_plus_from_bytes_parses_canonical_layout() {
     // BpPlus::from_bytes is how the tx-builder maps an oxide `Bulletproof` (byte-identical
     // layout: a‖a1‖b‖r1‖s1‖d1‖varint(L)·L‖varint(R)·R) into the wire BpPlus. Build that
-    // exact layout by hand, parse it, and confirm round-trip + trailing-byte rejection.
+    // exact layout by hand (|L| == |R| == 7, the 2-output round count — the parser
+    // rejects |L| outside 6..=10 and |R| != |L|), parse it, and confirm round-trip +
+    // trailing-byte rejection.
     let bp = BpPlus {
         a: [1u8; 32],
         a1: [2u8; 32],
@@ -364,18 +366,18 @@ fn bp_plus_from_bytes_parses_canonical_layout() {
         r1: [4u8; 32],
         s1: [5u8; 32],
         d1: [6u8; 32],
-        l: vec![[7u8; 32], [8u8; 32]],
-        r: vec![[9u8; 32]],
+        l: (7u8..14).map(|v| [v; 32]).collect(),
+        r: (14u8..21).map(|v| [v; 32]).collect(),
     };
     let mut bytes = Vec::new();
     for field in [&bp.a, &bp.a1, &bp.b, &bp.r1, &bp.s1, &bp.d1] {
         bytes.extend_from_slice(field);
     }
-    bytes.push(2); // varint(L_len = 2) — single byte for len < 128
+    bytes.push(7); // varint(L_len = 7) — single byte for len < 128
     for p in &bp.l {
         bytes.extend_from_slice(p);
     }
-    bytes.push(1); // varint(R_len = 1)
+    bytes.push(7); // varint(R_len = 7)
     for p in &bp.r {
         bytes.extend_from_slice(p);
     }
@@ -434,9 +436,11 @@ fn weight_clawback_matches_cpp_formula() {
 
 #[test]
 fn weight_does_not_panic_on_oversize_bp_l() {
-    // A parseable-but-invalid tx whose Bp+ |L| far exceeds the consensus bound must not
-    // shift-overflow weight() (DoS): |L|=100 ⇒ bits=94 ⇒ `1 << 94` without the clamp.
-    // The clamp caps n_padded at MAX_OUTPUTS, so weight() stays finite and ≥ the size.
+    // A hand-built (never-parsed, not-yet-validated) tx whose Bp+ |L| far exceeds the
+    // consensus bound must not shift-overflow weight() (DoS): |L|=100 ⇒ bits=94 ⇒
+    // `1 << 94` without the clamp. The parser rejects |L| > 10 and validate() pins the
+    // exact value, but weight() is reachable before either gate; the clamp caps
+    // n_padded at MAX_OUTPUTS, so weight() stays finite and ≥ the size.
     let mut tx = synthetic_spend();
     set_bp_lr_len(&mut tx, 100);
     assert!(tx.weight() >= tx.serialized_len());

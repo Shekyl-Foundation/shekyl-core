@@ -167,7 +167,7 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::Input;
 use zeroize::Zeroizing;
 
-use super::backing_set::DesignatedBacking;
+use super::backing_set::ClaimOperands;
 use super::bond_assembly::{
     finalize_bond_tx, wire_bond_post_input, BondAssemblyError, FundingInputContext, PBoundBytes,
 };
@@ -175,7 +175,6 @@ use super::emission_claim::{
     assemble_claims, derive_claimable_epochs, self_check_claims, EmissionClaimError,
     EMISSION_CLAIMS_SIZE_BUDGET,
 };
-use super::emission_source::EmissionClaimSource;
 use super::error::KeyEngineError;
 use super::pscan::persona_scanner::{guaranteed_scanner_for_persona, PersonaScanError};
 use super::pscan::scan_step::{
@@ -602,53 +601,6 @@ pub(crate) enum StakeEngineError {
     /// not stringified, so the failure is fully diagnosable.
     #[error("scan-step task failed to join: {0}")]
     ScanJoin(#[from] tokio::task::JoinError),
-
-    /// The [`DesignatedBacking`]'s stored spendability anchor does not equal
-    /// the claim source's gather **tip** (`chain_height − 1`; the anchor is
-    /// a height, never the block count) — item 6's **runtime half** (the
-    /// type half is the single stored `reference_height` on the designation;
-    /// see `backing_set.rs`). Assembling against a stale anchor would let
-    /// backing eligibility and claim-window finalization diverge across two
-    /// tips, so the request is refused; the caller refetches the claim
-    /// source and re-designates the backing at one tip, then retries.
-    #[error(
-        "stale claim anchor: the backing was designated at height {anchor} but the \
-         claim source was gathered at tip {tip}; refetch both at one tip and retry"
-    )]
-    StaleClaimAnchor { anchor: u64, tip: u64 },
-
-    /// The designated backing's gindex appeared in the fee-funding set —
-    /// the Q11/CB-4 double-use (one output both membership-proven as the
-    /// backing and key-image-spent as a fee input). Structurally
-    /// unrepresentable through [`DesignatedBacking::fee_sweep`]; presence
-    /// here means the message paired a fee selection with a *different*
-    /// designation (a caller defect, e.g. a cached selection reused across
-    /// re-designations). Refused HERE because no daemon ever would:
-    /// consensus is spend-blind for backing, so the signed tx would
-    /// broadcast, publicly link the backing's key image to `P`, and burn
-    /// the backing as a fee input — with no error anywhere downstream.
-    #[error(
-        "the designated backing (gindex {gindex}) is also a fee input (Q11 double-use); \
-         re-run the fee sweep through DesignatedBacking::fee_sweep against this designation"
-    )]
-    BackingInFeeSet { gindex: u64 },
-
-    /// An emission claim was submitted with **zero** fee-funding inputs. At
-    /// least one spendable `ToKey` input is structurally required regardless
-    /// of the fee amount — the loud reward vout consumes the entire mint, so
-    /// the fee side must supply the tx's pseudoOuts and its FCMP++ fee-side
-    /// proof anchor. Deliberately **not** `InsufficientFunding` (rule 82):
-    /// with `fee == 0` that would read "insufficient funding: available 0,
-    /// required 0" — a shortfall error with no shortfall, misdirecting the
-    /// remedy. The remedy is to have ANY spendable funding output: fund the
-    /// persona or wait for one to mature, then retry.
-    #[error(
-        "emission claim needs at least one fee input regardless of the fee amount ({fee}): \
-         the reward vout consumes the whole mint, so pseudoOuts and the FCMP++ fee-side \
-         anchor must come from a separate spendable output — fund the persona or wait \
-         for maturity"
-    )]
-    ClaimFeeInputsRequired { fee: u64 },
 
     /// An [`AssembleEmissionClaim`] claim-side step refused or failed —
     /// derivation boundaries, size bounding, or the step-7 self-check. The
@@ -1218,6 +1170,39 @@ impl Message<ActivatePersona> for StakeEngine {
         self.generation = self.generation.saturating_add(1);
 
         Ok(self.identity_of(target))
+    }
+}
+
+/// Report the public identity of the **held** persona at `p_slot` — a pure
+/// projection, like [`ActivePersona`]: no activation, no rotation, no
+/// generation advance, so every outstanding handle stays valid. The claim
+/// request path (CB-3) uses this to derive the claimant's canonical id from
+/// actor-held state without the lifecycle side effects of
+/// [`ActivatePersona`] — a claim is a read-and-sign operation, and rotating
+/// on it would both invalidate any in-flight operation's handles and wipe a
+/// retired ephemeral persona as a side effect of an unrelated request.
+/// An unheld slot is [`StakeEngineError::LookaheadExhausted`], exactly as
+/// at the mint boundary.
+#[allow(dead_code)] // inert until the RPC stake entry (same retirement as the claim seam)
+pub(crate) struct PersonaIdentityOf {
+    pub p_slot: PSlot,
+}
+
+impl Message<PersonaIdentityOf> for StakeEngine {
+    type Reply = Result<PersonaIdentity, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: PersonaIdentityOf,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        if self.held.contains_key(&msg.p_slot) {
+            Ok(self.identity_of(msg.p_slot))
+        } else {
+            Err(StakeEngineError::LookaheadExhausted {
+                requested: msg.p_slot,
+            })
+        }
     }
 }
 
@@ -1909,24 +1894,6 @@ fn prepare_funding_inputs(
 // PR-3 commit 4 — AssembleEmissionClaim: the emission-claim assembly message
 // ---------------------------------------------------------------------------
 
-/// The designated backing's curve-tree membership path — public tree data
-/// only, assembled by the Engine-side orchestrator against the same
-/// [`TreeContext`] as the fee paths.
-///
-/// Deliberately **not** a [`FundingInputContext`]: that type carries its own
-/// record copy, and a second record here could silently disagree with the
-/// [`DesignatedBacking`]'s private record (which is the single source of
-/// truth for which output backs the claim). Carrying the path alone keeps
-/// one record, one owner.
-pub(crate) struct BackingMembershipPath {
-    /// All outputs in the same Selene leaf chunk as the backing output.
-    pub leaf_chunk: Vec<LeafEntry>,
-    /// Selene (C1) branch layers, bottom-to-top.
-    pub c1_layers: Vec<Vec<[u8; 32]>>,
-    /// Helios (C2) branch layers, bottom-to-top.
-    pub c2_layers: Vec<Vec<[u8; 32]>>,
-}
-
 /// Assemble the **full, broadcast-ready** emission-claim transaction inside
 /// the actor (`REWARD_EMISSION_VIN_PLAN.md` §8.0.2/§8.0.3, PR-3 commit 4) —
 /// the emission sibling of [`AssembleBond`].
@@ -1946,33 +1913,27 @@ pub(crate) struct BackingMembershipPath {
 pub(crate) struct AssembleEmissionClaim {
     /// Operation-scoped capability proving the slot is currently held.
     pub handle: PersonaHandle,
-    /// The decoded claim source (daemon gather + local dedup), gathered at
-    /// `source.chain_height` (a block **count**). The same-tip check below
-    /// demands the backing designation's stored anchor equal the gather
-    /// **tip** (`chain_height − 1`).
-    pub source: EmissionClaimSource,
-    /// The designated backing (sole [`BackingSet`](super::backing_set::BackingSet)
-    /// exit; owns the backing record and the stored `reference_height`).
-    pub backing: DesignatedBacking,
-    /// The backing output's membership path (public tree data only).
-    pub backing_path: BackingMembershipPath,
-    /// The selected **fee** funding inputs with their membership paths —
-    /// selected through [`DesignatedBacking::fee_sweep`], so the backing
-    /// output is structurally absent from this set (Q11).
-    pub fee_funding: Vec<FundingInputContext>,
+    /// The sealed operand set — claim source, designated backing, swept fee
+    /// inputs, membership paths — mintable only through
+    /// [`DesignatedBacking::fee_sweep`](super::backing_set::DesignatedBacking::fee_sweep)
+    /// → [`SweptFeeInputs::with_paths`](super::backing_set::SweptFeeInputs::with_paths),
+    /// so possession is proof of same-tip (item 6) and Q11 backing/fee
+    /// disjointness. The handler re-checks nothing (`backing_set.rs` module
+    /// docs: the old step-2 runtime refusals are deleted, not relocated).
+    pub operands: ClaimOperands,
     /// The curve-tree reference context all paths were assembled against.
     pub tree_ctx: TreeContext,
-    /// The fee the Engine-side selection was run against.
-    pub fee: u64,
 }
 
 /// Reply of [`AssembleEmissionClaim`]: the persona-bound wire bytes (minted
 /// at the single P-1 site, [`finalize_bond_tx`]), plus the public facts the
 /// caller's reservation and dedup records need. Secrets never cross the
 /// boundary.
-// Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the fields'
-// production reader is the CB-3 dispatch seam — the same consumer whose
-// landing deletes `orchestrate_emission_claim`'s allow; this one dies with it.
+// Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the receipt
+// (`claim_dispatch::EmissionClaimReceipt`) embeds this reply whole, so the
+// lib-target field readers arrive with the RPC stake entry (rule-21, the same
+// retirement condition as the seam's allow); the orchestrator e2e KAT reads
+// every field today.
 #[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct AssembledEmissionClaim {
@@ -2004,45 +1965,14 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         self.validate_handle(&msg.handle)?;
         let handle_slot = msg.handle.p_slot();
 
-        // ── Step 2: operand-consistency checks (item 6 + Q11, runtime
-        // halves — the handler is operand-driven, so orchestrator
-        // invariants are re-verified at this boundary).
-        //
-        // Same-tip: the designation carries ONE stored anchor by
-        // construction (backing_set.rs) — the chain TIP its spendability
-        // was evaluated at; here it must equal the claim source's gather
-        // tip (`ChainCount::tip` — the typed count/height bridge, so the
-        // block count itself cannot pose as the anchor), or backing
-        // spendability and claim-window finalization were evaluated
-        // against different chains. Refuse; the caller refetches both at
-        // one tip.
-        let anchor = msg.backing.reference_height();
-        if msg.source.chain_height.tip() != Some(anchor) {
-            return Err(StakeEngineError::StaleClaimAnchor {
-                anchor: anchor.to_raw(),
-                tip: msg
-                    .source
-                    .chain_height
-                    .tip()
-                    .map_or(0, shekyl_types::BlockHeight::to_raw),
-            });
-        }
-        // Q11: the backing must not double as a fee input. The message
-        // fields are freely constructible crate-wide, so the fee_sweep
-        // monopoly alone does not bind THIS pairing — a fee selection
-        // cached across re-designations would sign a consensus-valid
-        // double-use no daemon rejects (consensus is spend-blind for
-        // backing). Same posture as the same-tip check above.
-        let backing_gindex = msg.backing.record().gindex;
-        if msg
-            .fee_funding
-            .iter()
-            .any(|f| f.record.gindex == backing_gindex)
-        {
-            return Err(StakeEngineError::BackingInFeeSet {
-                gindex: backing_gindex.to_raw(),
-            });
-        }
+        // ── Step 2: unseal the operands. Consistency is the TYPE's, not
+        // this handler's: `ClaimOperands` is mintable only through
+        // `DesignatedBacking::fee_sweep` → `SweptFeeInputs::with_paths`
+        // (backing_set.rs), so same-tip (item 6), Q11 backing/fee
+        // disjointness, a non-empty fee set, and `fee_total >= fee` hold
+        // by possession — the refusal arms that used to live here were
+        // deleted with the seal, not relocated.
+        let ops = msg.operands.into_parts();
 
         // ── Step 3: borrow the held bundle (never crosses the boundary).
         // CB-2: everything below signs with material derived from this
@@ -2057,7 +1987,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // rows and rewards ride the derivation; assembly never re-runs the
         // recompute it was admitted on).
         let claims = {
-            let derived = derive_claimable_epochs(&msg.source)?;
+            let derived = derive_claimable_epochs(&ops.source)?;
             if !derived.skipped.is_empty() {
                 // Local diagnostics only (CB-5: cause-blind toward the
                 // daemon; nothing derived from these verdicts shapes
@@ -2074,28 +2004,13 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // ── Step 5: fee arithmetic. The reward is fully consumed by the
         // loud vout (`vout_reward_sum == total_reward`, enforced by the
         // daemon's balance `Σ pseudoOuts + total_reward·H = Σ out_masks +
-        // fee·H`), so the fee MUST be funded by separate ToKey spends — an
-        // emission claim with zero fee inputs has no pseudoOuts to fund a
-        // nonzero fee and no FCMP++ fee-side proof to anchor the tx. A
-        // structural refusal, not a shortfall (the variant's doc): with
-        // `fee == 0` an `InsufficientFunding { 0, 0 }` would misdirect.
-        if msg.fee_funding.is_empty() {
-            return Err(StakeEngineError::ClaimFeeInputsRequired { fee: msg.fee });
-        }
-        let mut available: u64 = 0;
-        for ctx in &msg.fee_funding {
-            available = available
-                .checked_add(ctx.record.amount.to_raw())
-                .ok_or(BondAssemblyError::AmountOverflow)?;
-        }
-        if available < msg.fee {
-            return Err(BondAssemblyError::InsufficientFunding {
-                available,
-                required: msg.fee,
-            }
-            .into());
-        }
-        let change = available - msg.fee;
+        // fee·H`), so the fee is funded by the sealed fee spends. The
+        // structural refusals (empty selection, shortfall, sum overflow)
+        // fired at the mint (`fee_sweep`); `fee_total` is the sweep's
+        // exact checked sum and `fee_total >= fee` by its shortfall
+        // refusal, so the change split is plain subtraction.
+        let fee = ops.fee.to_raw();
+        let change = ops.fee_total.to_raw() - fee;
         let change_lo = change / 2;
         let change_hi = change - change_lo;
 
@@ -2150,7 +2065,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
 
         // ── Step 8: fee spend inputs — shared spend-side leg with the bond
         // path (descending key-image order).
-        let prepared = prepare_funding_inputs(keys, msg.fee_funding)?;
+        let prepared = prepare_funding_inputs(keys, ops.fee_funding)?;
         let key_images: Vec<[u8; 32]> = prepared.iter().map(|p| p.key_image).collect();
         let fee_gindexes: Vec<GlobalOutputIndex> = prepared.iter().map(|p| p.gindex).collect();
 
@@ -2174,13 +2089,14 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
 
         // ── Step 10: backing spend input (membership-only; no key image).
         // The parts are re-derived from the designation's own record — the
-        // single record owner (Q11 doc on `BackingMembershipPath`) —
-        // through the SAME [`derive_spend_parts`] the fee spends use (one
-        // derivation definition; a divergence would fail every claim at
-        // the leaf gate below).
-        let rec = msg.backing.record();
+        // single record owner (the `MembershipPath` doc in `backing_set.rs`:
+        // paths carry no record copy) — through the SAME
+        // [`derive_spend_parts`] the fee spends use (one derivation
+        // definition; a divergence would fail every claim at the leaf gate
+        // below).
+        let rec = ops.backing.record();
         let backing_index = rec.index_in_transaction;
-        let mut parts = derive_spend_parts(keys, rec, &msg.backing_path.leaf_chunk)?;
+        let mut parts = derive_spend_parts(keys, rec, &ops.backing_path.leaf_chunk)?;
         let backing_h_pqc = parts.h_pqc;
         let backing_pubkey = std::mem::take(&mut parts.pqc_pubkey);
         // Retained for Auth-B signing after the bundle moves into the
@@ -2200,9 +2116,9 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         }
         let backing_spend = parts.into_spend_input(
             rec,
-            msg.backing_path.leaf_chunk,
-            msg.backing_path.c1_layers,
-            msg.backing_path.c2_layers,
+            ops.backing_path.leaf_chunk,
+            ops.backing_path.c1_layers,
+            ops.backing_path.c2_layers,
         );
 
         // ── Step 11: membership-only proof over the signable hash (CPU-
@@ -2306,7 +2222,6 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // neither is read again until the closure returns them).
         let outputs_for_prove = output_infos;
         let tree = msg.tree_ctx.clone();
-        let fee = msg.fee;
         let reward_term = InputTerm::new(AtomicUnits::from_raw(total_reward));
         let (signed, spend_inputs, vin) = tokio::task::spawn_blocking(move || {
             let signed = sign_transaction_with_terms(
@@ -2431,7 +2346,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // the landed verifier's economics recompute against the paired
         // source. Auth leg: both role signatures over the recomputed
         // binding messages (cause-blind on refusal, CB-5).
-        self_check_claims(&msg.source, &vin, total_reward)?;
+        self_check_claims(&ops.source, &vin, total_reward)?;
         if let Err(e) = emission_vin_verify_auth(&vin, &reward_commits, &signable_tx_hash) {
             tracing::error!(error = %e, "emission self-check: auth verification failed");
             return Err(EmissionClaimError::SelfCheckFailed.into());
@@ -2775,6 +2690,19 @@ impl StakeEngineHandle {
     pub(crate) async fn active_persona(&self) -> Result<Option<PersonaIdentity>, StakeEngineError> {
         self.actor
             .ask(ActivePersona)
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// The public identity of the held persona at `p_slot` — a pure
+    /// projection: no activation, no rotation, no generation advance (see
+    /// [`PersonaIdentityOf`]).
+    pub(crate) async fn persona_identity(
+        &self,
+        p_slot: PSlot,
+    ) -> Result<PersonaIdentity, StakeEngineError> {
+        self.actor
+            .ask(PersonaIdentityOf { p_slot })
             .await
             .map_err(collapse_send_error)
     }
@@ -3996,26 +3924,30 @@ mod tests {
         }
     }
 
-    /// PR-3 commit 4 — [`AssembleEmissionClaim`] KATs: the item-6 same-tip
-    /// runtime refusal, the mandatory-fee-funding refusals, and the
-    /// end-to-end **daemon-side differential**: parse the produced bytes,
-    /// re-derive every consensus operand (`archival_emission_index`, the
-    /// erase-rule signable hash, the ordered reward-commit set, the
-    /// id-equality key) from the wire alone, and drive the landed verifiers
-    /// over the PARSED vin — nothing below reuses the builder's in-memory
-    /// intermediates, so builder/daemon drift on any of those rules fails
-    /// here rather than at a real daemon.
+    /// PR-3 commit 4 — [`AssembleEmissionClaim`]'s end-to-end **daemon-side
+    /// differential**: parse the produced bytes, re-derive every consensus
+    /// operand (`archival_emission_index`, the erase-rule signable hash, the
+    /// ordered reward-commit set, the id-equality key) from the wire alone,
+    /// and drive the landed verifiers over the PARSED vin — nothing below
+    /// reuses the builder's in-memory intermediates, so builder/daemon drift
+    /// on any of those rules fails here rather than at a real daemon.
+    ///
+    /// The old handler-side refusal KATs (stale anchor, backing-in-fee-set,
+    /// mandatory fee funding) moved to `backing_set.rs` with the checks
+    /// themselves: `ClaimOperands` is mintable only through the sweep seal,
+    /// so those states have no expressible form at this message boundary.
     mod emission_claim_assembly {
         use super::*;
 
-        use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
+        use shekyl_engine_state::pscan_state::MintLineageOutput;
         use shekyl_types::BlockHeight;
         use shekyl_wire::{Ct, Transaction};
 
-        use crate::engine::backing_set::BackingSet;
+        use crate::engine::backing_set::{BackingSet, MembershipPath};
+        use crate::engine::bond_assembly::SpentRecordsDurablyPruned;
         use crate::engine::emission_claim::test_fixtures::{snapshot, source_with};
+        use crate::engine::emission_source::EmissionClaimSource;
         use crate::engine::synthetic_tree::consistent_synthetic_path;
-        use crate::engine::test_support::funding_record;
 
         /// The known-claimable source shape shared with the `emission_claim`
         /// step-7 differential (settled = 10, epochs 4 and 5 claimable) — one
@@ -4023,219 +3955,6 @@ mod tests {
         /// `test_fixtures` module doc.
         fn claimable_source() -> EmissionClaimSource {
             source_with(10, vec![], vec![snapshot(4), snapshot(5)])
-        }
-
-        /// Designate `record` at `anchor` — the same-tip operand under test
-        /// (the ONE stored height `backing_set.rs` owns by construction).
-        fn designate_at(record: PFundingOutputRecord, anchor: u64) -> DesignatedBacking {
-            BackingSet::from_spendable(
-                &[record],
-                PSlot::from_raw(0),
-                BlockHeight::from_raw(anchor),
-                BlockHeight::from_raw(0),
-            )
-            .designate_backing()
-            .expect("one eligible record designates")
-        }
-
-        /// An empty membership path — sufficient for the refusal KATs, whose
-        /// arms fire before any tree data is touched.
-        fn empty_path() -> BackingMembershipPath {
-            BackingMembershipPath {
-                leaf_chunk: vec![],
-                c1_layers: vec![],
-                c2_layers: vec![],
-            }
-        }
-
-        fn placeholder_tree_ctx() -> TreeContext {
-            TreeContext {
-                reference_block: [0u8; 32],
-                tree_root: [0u8; 32],
-                tree_depth: 1,
-            }
-        }
-
-        /// Item 6, runtime half: a designation anchored at a height other
-        /// than the claim source's gather **tip** (`chain_height − 1` — a
-        /// height, never the block count) refuses as `StaleClaimAnchor`
-        /// (carrying both operands) before any derivation, proving, or
-        /// funding work — the caller refetches both at one tip and retries.
-        /// The count itself is the classic off-by-one and must also refuse.
-        #[tokio::test(flavor = "multi_thread")]
-        async fn stale_claim_anchor_refuses_before_any_assembly() {
-            let handle = spawn_over(&[0], &[], None);
-            let source = claimable_source();
-            let tip = source.chain_height.to_raw() - 1;
-            let record = || funding_record(0, 11, 5, 750_000, MintLineageOutput::BondPostChange);
-
-            let h = handle
-                .mint_handle(PSlot::from_raw(0))
-                .await
-                .expect("slot 0 held");
-            let err = handle
-                .assemble_emission_claim(AssembleEmissionClaim {
-                    handle: h,
-                    source: source.clone(),
-                    backing: designate_at(record(), tip + 2),
-                    backing_path: empty_path(),
-                    fee_funding: vec![],
-                    tree_ctx: placeholder_tree_ctx(),
-                    fee: 0,
-                })
-                .await
-                .expect_err("a stale anchor must refuse");
-            assert!(
-                matches!(
-                    err,
-                    StakeEngineError::StaleClaimAnchor { anchor, tip: t }
-                        if anchor == tip + 2 && t == tip
-                ),
-                "expected StaleClaimAnchor with both operands, got {err:?}"
-            );
-
-            // The block COUNT as the anchor (the unit mismatch this check
-            // pins): one past the tip, must refuse — a count-anchored
-            // designation admits records one block early.
-            let h = handle
-                .mint_handle(PSlot::from_raw(0))
-                .await
-                .expect("slot 0 held");
-            let err = handle
-                .assemble_emission_claim(AssembleEmissionClaim {
-                    handle: h,
-                    source: source.clone(),
-                    backing: designate_at(record(), source.chain_height.to_raw()),
-                    backing_path: empty_path(),
-                    fee_funding: vec![],
-                    tree_ctx: placeholder_tree_ctx(),
-                    fee: 0,
-                })
-                .await
-                .expect_err("the count-as-height anchor must refuse");
-            assert!(
-                matches!(err, StakeEngineError::StaleClaimAnchor { .. }),
-                "expected StaleClaimAnchor, got {err:?}"
-            );
-        }
-
-        /// Q11, runtime half: a fee set that contains the designated
-        /// backing's gindex refuses as `BackingInFeeSet` — the message
-        /// fields are freely constructible, so the `fee_sweep` monopoly
-        /// alone cannot bind THIS pairing, and no daemon would reject the
-        /// signed double-use (consensus is spend-blind for backing).
-        #[tokio::test(flavor = "multi_thread")]
-        async fn backing_in_fee_set_refuses() {
-            let handle = spawn_over(&[0], &[], None);
-            let h = handle
-                .mint_handle(PSlot::from_raw(0))
-                .await
-                .expect("slot 0 held");
-            let source = claimable_source();
-            let tip = source.chain_height.to_raw() - 1;
-            let backing = funding_record(0, 11, 5, 750_000, MintLineageOutput::BondPostChange);
-            let same_output = backing.clone();
-
-            let err = handle
-                .assemble_emission_claim(AssembleEmissionClaim {
-                    handle: h,
-                    source,
-                    backing: designate_at(backing, tip),
-                    backing_path: empty_path(),
-                    fee_funding: vec![FundingInputContext {
-                        record: same_output,
-                        leaf_chunk: vec![],
-                        c1_layers: vec![],
-                        c2_layers: vec![],
-                    }],
-                    tree_ctx: placeholder_tree_ctx(),
-                    fee: 0,
-                })
-                .await
-                .expect_err("the Q11 double-use must refuse");
-            assert!(
-                matches!(err, StakeEngineError::BackingInFeeSet { gindex: 11 }),
-                "expected BackingInFeeSet, got {err:?}"
-            );
-        }
-
-        /// Fee inputs are structurally mandatory (the reward is fully
-        /// consumed by the loud vout, so a zero-input claim has no
-        /// pseudoOuts to fund a fee): the empty set refuses with the
-        /// **structural** `ClaimFeeInputsRequired` — never a shortfall
-        /// (with `fee == 0` that would read `InsufficientFunding { 0, 0 }`,
-        /// a self-contradiction misdirecting the remedy) — and a
-        /// present-but-short set refuses with the actual shortfall. All
-        /// before any proving work.
-        #[tokio::test(flavor = "multi_thread")]
-        async fn fee_funding_is_mandatory_and_shortfall_refuses() {
-            let handle = spawn_over(&[0], &[], None);
-            let source = claimable_source();
-            let tip = source.chain_height.to_raw() - 1;
-            let backing = || funding_record(0, 11, 5, 750_000, MintLineageOutput::BondPostChange);
-
-            // Arm 1: zero fee inputs — structural refusal, at fee 1 000 AND
-            // at fee 0 (the 0/0 shortfall trap the variant exists to avoid).
-            for fee in [1_000u64, 0] {
-                let h = handle
-                    .mint_handle(PSlot::from_raw(0))
-                    .await
-                    .expect("slot 0 held");
-                let err = handle
-                    .assemble_emission_claim(AssembleEmissionClaim {
-                        handle: h,
-                        source: source.clone(),
-                        backing: designate_at(backing(), tip),
-                        backing_path: empty_path(),
-                        fee_funding: vec![],
-                        tree_ctx: placeholder_tree_ctx(),
-                        fee,
-                    })
-                    .await
-                    .expect_err("zero fee inputs must refuse");
-                assert!(
-                    matches!(
-                        err,
-                        StakeEngineError::ClaimFeeInputsRequired { fee: f } if f == fee
-                    ),
-                    "expected ClaimFeeInputsRequired at fee {fee}, got {err:?}"
-                );
-            }
-
-            // Arm 2: fee inputs present but short of the fee — a genuine
-            // shortfall, so `InsufficientFunding` is the right taxonomy.
-            let h = handle
-                .mint_handle(PSlot::from_raw(0))
-                .await
-                .expect("slot 0 held");
-            let short = funding_record(0, 22, 6, 400, MintLineageOutput::ExternalTransfer);
-            let err = handle
-                .assemble_emission_claim(AssembleEmissionClaim {
-                    handle: h,
-                    source: source.clone(),
-                    backing: designate_at(backing(), tip),
-                    backing_path: empty_path(),
-                    fee_funding: vec![FundingInputContext {
-                        record: short,
-                        leaf_chunk: vec![],
-                        c1_layers: vec![],
-                        c2_layers: vec![],
-                    }],
-                    tree_ctx: placeholder_tree_ctx(),
-                    fee: 1_000,
-                })
-                .await
-                .expect_err("short fee funding must refuse");
-            assert!(
-                matches!(
-                    err,
-                    StakeEngineError::Assembly(BondAssemblyError::InsufficientFunding {
-                        available: 400,
-                        required: 1_000,
-                    })
-                ),
-                "expected InsufficientFunding(400/1000), got {err:?}"
-            );
         }
 
         /// The end-to-end daemon-side differential. Assembly runs over a
@@ -4291,25 +4010,49 @@ mod tests {
                 tree_depth: depth,
             };
 
+            // Mint the sealed operands through the ONLY route there is:
+            // designate the backing at the source's tip, sweep the fee
+            // inputs against it (the Q11 exclusion and the item-6 same-tip
+            // check fire in the mint, exercised by the `backing_set.rs`
+            // KATs), then zip the assembled paths in. Both leaves share the
+            // single synthetic path, so every witness record gets the same
+            // path data — exactly the old hand-built shape, now sealed.
             let fee = 10_000u64;
+            let records = [backing_record.clone(), fee_record];
+            let swept = BackingSet::from_spendable(
+                &[backing_record],
+                PSlot::from_raw(0),
+                BlockHeight::from_raw(tip),
+                BlockHeight::from_raw(0),
+            )
+            .designate_backing()
+            .expect("the rung-2 record designates")
+            .fee_sweep(
+                source.clone(),
+                &SpentRecordsDurablyPruned::for_test(),
+                &records,
+                PSlot::from_raw(0),
+                &Default::default(),
+                AtomicUnits::from_raw(fee),
+            )
+            .expect("the fee sweep mints the sealed witness");
+            let paths: Vec<MembershipPath> = swept
+                .path_records()
+                .map(|_| MembershipPath {
+                    leaf_chunk: leaf_chunk.clone(),
+                    c1_layers: c1_layers.clone(),
+                    c2_layers: c2_layers.clone(),
+                })
+                .collect();
+            let operands = swept
+                .with_paths(paths)
+                .expect("one path per witness record");
+
             let reply = handle
                 .assemble_emission_claim(AssembleEmissionClaim {
                     handle: h,
-                    source: source.clone(),
-                    backing: designate_at(backing_record, tip),
-                    backing_path: BackingMembershipPath {
-                        leaf_chunk: leaf_chunk.clone(),
-                        c1_layers: c1_layers.clone(),
-                        c2_layers: c2_layers.clone(),
-                    },
-                    fee_funding: vec![FundingInputContext {
-                        record: fee_record,
-                        leaf_chunk,
-                        c1_layers,
-                        c2_layers,
-                    }],
+                    operands,
                     tree_ctx,
-                    fee,
                 })
                 .await
                 .expect("emission-claim assembly completes end-to-end");

@@ -1849,6 +1849,7 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_UNBOND         16
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL          17
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED    18
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW            19
 
 /// Unbond bond-post verify. `record_exists`/`record_bonded_total` come from the LMDB
 /// bond record; `per_shard_last_served_ptr` is the array of the served shards'
@@ -1914,6 +1915,32 @@ uint8_t shekyl_archival_good_through(
 
 /// Settlement epoch containing `block_height` (bond-connect join epoch).
 uint64_t shekyl_archival_settlement_epoch_at_height(uint64_t block_height);
+
+/// The effective settlement-epoch length in blocks (genesis-pinned 10 000,
+/// or the clamped SHEKYL_SETTLEMENT_EPOCH_BLOCKS override — the
+/// fakechain-only regtest lever). Single source for consumers needing the
+/// length itself; the schedule functions here consume it internally.
+uint64_t shekyl_archival_settlement_epoch_blocks(void);
+
+/// True iff a SHEKYL_SETTLEMENT_EPOCH_BLOCKS override is active (effective
+/// schedule differs from the genesis default — which requires this process
+/// to have armed via shekyl_archival_settlement_epoch_arm_regtest). Drives
+/// the daemon's loud fakechain warning.
+bool shekyl_archival_settlement_epoch_overridden(void);
+
+/// True iff SHEKYL_SETTLEMENT_EPOCH_BLOCKS is present in the environment at
+/// all (no validation, no schedule latch). Drives Blockchain::init's
+/// fail-closed public-network refusal: the schedule is consensus, and on a
+/// non-FAKECHAIN net the lever's presence is the operator error to refuse
+/// on, before any question of the value's validity.
+bool shekyl_archival_settlement_epoch_override_present(void);
+
+/// Arm the SHEKYL_SETTLEMENT_EPOCH_BLOCKS override (FAKECHAIN startup path
+/// only). Returns true and latches the validated override (or the genesis
+/// pin when unset); returns false — refuse to start — when the value is
+/// invalid or the schedule already latched differently. An unarmed process
+/// ignores the lever entirely.
+bool shekyl_archival_settlement_epoch_arm_regtest(void);
 
 /// Returns 1 and writes the settlement epoch whose close is processed at
 /// `block_height`; 0 (no write) at height 0 or non-boundary heights.

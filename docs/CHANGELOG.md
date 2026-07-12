@@ -4,6 +4,113 @@
 
 ### Added
 
+- **tests/wallet/rpc: emission-claim PR-4a — staker regtest harness up
+  to the daemon submit gap, its enablers, and the Q11 blob-boundary
+  arm (`EMISSION_CLAIM_BUILDER.md` §8 "PR 4 split";
+  `feat/emission-regtest-e2e`).** Driving the harness live surfaced
+  that the daemon's Rust submit engine accepts neither transaction
+  kind the E4-gate e2e needs (no bond-post Phase-C battery; Phase A
+  rejects `Input::ArchivalRewardEmission`), so PR-4 split into
+  4a/4b/4c — 4a is this batch, 4b is the daemon submit batteries
+  (FOLLOWUPS V3.0 item), 4c is the e2e proper. Landed here:
+  - **tests:** the CB-4 **Q11 blob-boundary invariance arm**
+    (`archival_emission_ct_balance.cpp`): the emission fixture made
+    valid under the full `ver_non_input_consensus` dispatch
+    (valid-domain output keys, fee-input key image, per-input
+    `pqc_auths`), plus the arm asserting the CT-balance verdict is
+    invariant under `canonical_bytes` variation with an
+    oversized-`pseudoOuts` control. Closes the Q11-KAT FOLLOWUPS
+    item. (Header hygiene rider: `tx_verification_utils.h` now
+    includes `blobdatatype.h` — it referenced `blobdata` without
+    declaring it.)
+  - **archival:** a FAKECHAIN-only **settlement-epoch-blocks
+    override** (`SHEKYL_SETTLEMENT_EPOCH_BLOCKS`, read once and
+    **armed explicitly**: an unarmed process — every wallet, every
+    public-net daemon — runs the genesis schedule no matter what the
+    environment says, and the wallet warns once when it ignores a set
+    lever), so the regtest e2e reaches an epoch close in minutes
+    instead of hours. The daemon arms only on FAKECHAIN at
+    `Blockchain::init`, refusing on the lever's presence on public
+    nets and on an invalid value (loud, never a silent
+    clamp-to-genesis), and **pins the effective schedule into the
+    fakechain datadir** (LMDB `properties`) so a reopen under a
+    different schedule than its epoch-derived rows were written with
+    refuses with the remedy named. FFI exposes the effective value,
+    overridden flag, presence, and the arming entry point.
+  - **rpc:** a FAKECHAIN-only **serve-credit-bit injection RPC**
+    (`inject_archival_serve_credit`, WS-1 bits-only form over the
+    production writer `set_archival_serve_credit_bit`) — Gate-6's
+    regtest stand-in; `CORE_RPC_VERSION` → 3.19. The poke is
+    deliberately **not** pop-symmetric; the e2e's pop leg is bounded
+    above the injection height.
+  - **wallet:** `LocalNodeRpc`, the local-posture
+    `PersonaIsolatedTransport` (fail-closed loopback pin via
+    `IpAddr::is_loopback` + `localhost`; in-URL credentials rejected —
+    authority-scoped — without leaking them) — the DQ-T2.3 choice
+    site's local arm. `SimpleRequestRpc`'s credential parse is
+    likewise scoped to the URL authority (a whole-URL `@` split
+    misparsed path/query content as credentials).
+  - **wallet:** the **`SweptFeeInputs`/`ClaimOperands`
+    designation-event witness** (PR-3's named forward item, landed
+    with the seam as scoped): `DesignatedBacking::fee_sweep` is the
+    sole mint of a sealed fee selection carrying the designation's
+    anchor and exclusion, `with_paths` zips membership paths into
+    sealed `ClaimOperands`, and the handler's two step-2 runtime
+    refusals (`StaleClaimAnchor`, `BackingInFeeSet`) are deleted —
+    cross-pairing is now unrepresentable, refusals moved to mint time
+    (`ClaimFundingError`), all three KAT'd at the mint.
+  - **wallet:** the **CB-3 dispatch seam**
+    (`engine/claim_dispatch.rs`): `submit_emission_claim` — claimant
+    id from the actor's read-only `PersonaIdentityOf` projection (no
+    activation: a claim is read-and-sign, never a rotation) →
+    orchestrate → **persist-before-dispatch** (a sealed
+    `PendingEmissionClaim`, pending-post block v4, carries the bytes,
+    the fee-gindex reservation feeding the shared `reserved_gindexes`
+    union, and the claimed epochs; one live claim per persona is the
+    in-flight epoch dedup) → submit through the audited
+    posture→`BroadcastSubmitter::local` choke point (scheduling stays
+    external, the GF-4 seam; claim retirement/resubmit = the WI-3-
+    sibling claim driver slice); tripwire test pins the pipeline
+    route, the choke point, and the seal-before-send ordering.
+  - **tests:** the **staker regtest harness** (`regtest_e2e.rs`):
+    staker wallet lifecycle against a live `shekyld --regtest`,
+    persona funding over a production FCMP++ transfer, P-scan
+    discovery, live-estimate fee sizing, production bond assembly
+    (with not-yet-spendable retry), and dispatch — asserting the
+    daemon's exact Phase-C refusal (`RejectedTerminal { Malformed }`)
+    as a **tripwire** that fails loudly and promotes to
+    accepted-and-applied when PR-4b lands the battery. (The live
+    `FeeTooLow` drawn en route disproved `phase_a.rs`'s stale
+    "bond posts can't clear Phase A" docs — flagged to PR-4b.)
+
+### Fixed
+
+- **wallet: payments encapsulated to `montgomery(view_pk)`, not raw
+  Edwards bytes (PR-4a, harness-surfaced).** `sign_tx` passed the
+  recipient's Edwards view key straight into the output builder's
+  X25519 KEM-encapsulation slot, so every cross-wallet payment
+  produced outputs the recipient's scanner could never recover (funds
+  visible only to the sender's change path). The view key is now
+  converted via `ed25519_pk_to_x25519_pk` at the single build site;
+  KAT'd end-to-end (decoded-address payment recovered by the
+  recipient's `GuaranteedScanner`).
+- **wallet: P-scan exhaustiveness gate fetches full tx bodies
+  (PR-4a, harness-surfaced).** The SP-6 exhaustiveness check
+  recomputes each body's committed hash from received material, but
+  the block source fetched **pruned** bodies — a storage-pruned
+  FCMP++ spend hashes with the null prunable component, so the scan
+  wedged permanently (`BodyMismatch`) at the first spend-bearing
+  block. `TxBodyForm::{Pruned,Full}` now parameterizes the fetch
+  (`block_fetch.rs`), the P-scan block sources request full bodies,
+  and `parse_full_tx` rejects prunable-stripped spends — naming the
+  storage-pruned-daemon cause and its remedy (run an unpruned node)
+  when the split body is exactly a canonical pruned spend, since that
+  is a supported daemon mode and not corruption; the bandwidth-cheap
+  pruned option over Tor is a rejected-with-reopening FOLLOWUPS item
+  (V3.2).
+
+### Added
+
 - **wallet: emission claim handler + Engine-side orchestrator —
   claim-builder PR 3 (`EMISSION_CLAIM_BUILDER.md` §8 PR 3;
   `REWARD_EMISSION_VIN_PLAN.md` §8.0.2/§8.0.3).** The builder half of
@@ -540,6 +647,18 @@
 
 ### Fixed
 
+- **wire: `Transaction::validate()` pins the Bp+ `|L|`/`|R|` round count by
+  the output count (consensus-parity gap, `docs/FOLLOWUPS.md` flagged
+  2026-06-24).** A tx with a valid output count but an inconsistent/oversize
+  Bp+ `|L|` parsed and passed local `validate()` while the C++ daemon
+  rejects it — a local↔daemon divergence surfacing at submit. Mirroring the
+  C++ split: `BpPlus::read` now rejects `|L| ∉ 6..=MAX_BP_LR_LEN` and
+  `|R| != |L|` (the deserialization-time `n_bulletproof_plus_max_amounts`
+  rejects), and `validate()` enforces
+  `|L| == |R| == 6 + ceil(log2(next_pow2(n_out)))` exactly (parse-time
+  `n_padded >= n_out` + verify-time V/L tightness, `V` restored from
+  `outPk`). `weight()`'s overflow clamp stays for hand-built,
+  not-yet-validated txs.
 - **consensus: C-1 emission review hardening (PR #277 review,
   `REWARD_EMISSION_E3_GATING_ROUND.md` §9.5).** Batch of
   correctness/robustness fixes from the high-effort review of the

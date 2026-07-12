@@ -70,7 +70,6 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use shekyl_engine_state::PendingPostBlock;
-use shekyl_p_transport::TorSocksEndpoint;
 
 use super::block_source::DaemonBlockSource;
 use super::cadence::FixedRateSchedule;
@@ -79,7 +78,6 @@ use super::dispatch::{
 };
 use super::task::{run_pscan_task, PScanConfig, PScanStore};
 use crate::engine::bond_assembly::PBoundBytes;
-use crate::engine::posture::BroadcastPosture;
 use crate::engine::signer::EngineSignerKind;
 use crate::engine::traits::{
     DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine,
@@ -432,16 +430,10 @@ where
     }
 }
 
-/// Tor's conventional local SOCKS port. A **placeholder** feeding
-/// [`BroadcastSubmitter::for_posture`]'s signature: the hardwired ① `Local`
-/// posture below never dials SOCKS (the ① arm ignores the endpoint entirely),
-/// but construction must stay on the audited posture→submitter choke point
-/// rather than reach around it to a bare submitter.
-const TOR_SOCKS_PLACEHOLDER_PORT: u16 = 9050;
-
 /// The production [`BondBroadcast`]: routes every dispatch through the
-/// [`BroadcastSubmitter::for_posture`] choke point (posture→submitter binding)
-/// and its [`submit_bound`](BroadcastSubmitter::submit_bound) pairing check.
+/// [`BroadcastSubmitter::local`] pre-bound ① construction (which is itself
+/// the `for_posture` posture→submitter choke point) and its
+/// [`submit_bound`](BroadcastSubmitter::submit_bound) pairing check.
 ///
 /// **Posture is hardwired ① `Local`** — the privacy default (the loopback
 /// broadcast originates on the operator's own box; exactly what
@@ -462,16 +454,9 @@ impl<D: DaemonEngine> BondBroadcast for LocalBondBroadcast<D> {
     ) -> impl std::future::Future<Output = Result<SubmitSuccess, BroadcastSubmitError>> + Send {
         let daemon = self.daemon.clone();
         async move {
-            let submitter = BroadcastSubmitter::for_posture(
-                BroadcastPosture::Local,
-                *bound.persona(),
-                daemon,
-                &TorSocksEndpoint::loopback(TOR_SOCKS_PLACEHOLDER_PORT),
-            )
-            // The ① arm is infallible (`for_posture` docs): only the ② arm's
-            // SOCKS proxy configuration can be rejected, and ① never builds one.
-            .expect("the Local arm of for_posture is infallible");
-            submitter.submit_bound(bound).await
+            BroadcastSubmitter::local(*bound.persona(), daemon)
+                .submit_bound(bound)
+                .await
         }
     }
 }

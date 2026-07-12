@@ -895,6 +895,22 @@ impl Engine<SoloSigner> {
             return Ok(None);
         }
 
+        // The settlement-epoch schedule is consensus, and the wallet's epoch
+        // arithmetic (P-scan accrual join epochs, claim-window recomputes)
+        // runs on the genesis schedule unless this process explicitly armed
+        // the regtest override — which no production wallet ever does. A
+        // leaked SHEKYL_SETTLEMENT_EPOCH_BLOCKS (shared systemd template,
+        // container base layer) is therefore ignored, and this is the loud,
+        // once-per-open surface that names the ignored lever so the operator
+        // can clean the environment instead of guessing.
+        if shekyl_archival_retention::settlement_epoch_override_ignored() {
+            warn!(
+                "SHEKYL_SETTLEMENT_EPOCH_BLOCKS is set but this wallet is not an armed \
+                 regtest context; the override is IGNORED and the genesis settlement-epoch \
+                 schedule is in effect — unset the variable (it is a fakechain-only lever)"
+            );
+        }
+
         let cursor = staking.monotone_current_slot_from_record();
 
         // Union the persisted bonded hint with the lookahead window. A `BTreeSet`

@@ -37,16 +37,20 @@ use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot};
 
 use crate::error::WalletLedgerError;
 
-/// Schema version of the durable pending-post block. **v3** domain-newtypes
+/// Schema version of the durable pending-post block. **v4** adds the
+/// [`PendingEmissionClaim`] record set — the emission-claim sibling of the
+/// bond post's persist-before-dispatch discipline (CB-3 dispatch seam): the
+/// claim's fee-gindex reservation and claimed-epoch dedup facts must exist
+/// durably **before** the bytes reach any submitter. **v3** domain-newtypes
 /// `funding_gindexes` as [`GlobalOutputIndex`] (WI-2 orchestrator carrier;
 /// postcard-transparent). **v2** is the WI-3
 /// dispatch shape: v1's JoinMarket-only record plus the
 /// [`PendingPostState::Dispatched`] arm (`ARCHIVAL_BOND_WI3_DISPATCH.md`
 /// §3.3). Any field addition / removal / renaming bumps this; loads that see
-/// a different version **refuse rather than migrate** — pre-genesis, a v2
-/// seal under a v3 binary fails closed and the operator re-assembles
+/// a different version **refuse rather than migrate** — pre-genesis, a v3
+/// seal under a v4 binary fails closed and the operator re-assembles
 /// (rule 15).
-pub const PENDING_POST_VERSION: u32 = 3;
+pub const PENDING_POST_VERSION: u32 = 4;
 
 /// Dispatch state of a pending bond post. The WI-2 assemble path writes only
 /// [`Self::Pending`]; WI-3's block-timed dispatch driver owns the
@@ -118,6 +122,51 @@ impl std::fmt::Debug for PendingBondPost {
     }
 }
 
+/// One durable pending **emission claim**: the assembled, signed,
+/// wire-encoded claim bytes bound to their persona, the fee reservation they
+/// hold, and the epochs they claim — sealed **before** dispatch (the CB-3
+/// seam's persist-before-dispatch, pin P-2's sibling: retries re-send these
+/// stored bytes, and the reservation/dedup facts exist durably before any
+/// network send).
+///
+/// A live claim record means: its `fee_gindexes` are reserved (they feed
+/// [`PendingPostBlock::reserved_gindexes`], so neither a bond sweep nor a
+/// second claim sweep can double-spend them) and its `claimed_epochs` are
+/// in flight (the one-live-claim-per-persona refusal is the epoch-dedup —
+/// a second claim while one is live would re-derive and re-claim the same
+/// epochs by construction). Retirement (confirmation observe / terminal
+/// reject) is the claim dispatch driver's slice, mirroring WI-3's bond
+/// retire.
+///
+/// Same redacted-`Debug` class as [`PendingBondPost`]: persona, funding
+/// placement, and claim timing are `P`-side behavioral history.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
+pub struct PendingEmissionClaim {
+    /// The owning persona's slot ordinal.
+    pub p_slot: PSlot,
+    /// The persona the claim bytes are bound to.
+    pub persona: PCanonicalId,
+    /// The fully-assembled, signed, wire-encoded claim bytes — the value
+    /// itself: retries re-send these stored bytes, never a re-encode.
+    pub tx_bytes: Vec<u8>,
+    /// Global output indexes of the swept **fee** funding records — the
+    /// reservation this claim holds while live. The backing's gindex is
+    /// deliberately absent (proven, not spent).
+    pub fee_gindexes: Vec<GlobalOutputIndex>,
+    /// The settlement epochs this claim's tx claims — the in-flight dedup
+    /// facts the retirement driver will need.
+    pub claimed_epochs: Vec<u64>,
+    /// Dispatch state — same lifecycle as the bond post's.
+    pub state: PendingPostState,
+}
+
+impl std::fmt::Debug for PendingEmissionClaim {
+    /// Redacted for the same reason as [`PendingBondPost`].
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PendingEmissionClaim(<redacted pending-claim>)")
+    }
+}
+
 /// The durable pending-post block: every live pending bond post, sealed as
 /// one atomic unit to the `P`-isolated `.wallet.pending` sibling file.
 ///
@@ -132,6 +181,10 @@ pub struct PendingPostBlock {
     /// (JoinMarket-only; the assemble path refuses a second — `ARCHIVAL_BOND_WI2_ASSEMBLY.md`
     /// §3.5 "one live post per persona").
     posts: Vec<PendingBondPost>,
+    /// The live pending emission claims. At most one per persona (the
+    /// claim seam refuses a second — a live claim is the in-flight
+    /// epoch-dedup fact).
+    claims: Vec<PendingEmissionClaim>,
 }
 
 impl std::fmt::Debug for PendingPostBlock {
@@ -139,6 +192,7 @@ impl std::fmt::Debug for PendingPostBlock {
         f.debug_struct("PendingPostBlock")
             .field("version", &self.version)
             .field("posts", &"<redacted pending-posts>")
+            .field("claims", &"<redacted pending-claims>")
             .finish()
     }
 }
@@ -150,20 +204,23 @@ impl Default for PendingPostBlock {
 }
 
 impl PendingPostBlock {
-    /// A fresh block with no pending posts.
+    /// A fresh block with no pending posts or claims.
     pub fn empty() -> Self {
         Self {
             version: PENDING_POST_VERSION,
             posts: Vec::new(),
+            claims: Vec::new(),
         }
     }
 
-    /// A block carrying `posts`, stamped with the current version. The caller
-    /// (the assemble path) owns the one-live-post-per-persona invariant.
+    /// A block carrying `posts` (no claims), stamped with the current
+    /// version. The caller (the assemble path) owns the
+    /// one-live-post-per-persona invariant.
     pub fn new(posts: Vec<PendingBondPost>) -> Self {
         Self {
             version: PENDING_POST_VERSION,
             posts,
+            claims: Vec::new(),
         }
     }
 
@@ -183,12 +240,33 @@ impl PendingPostBlock {
         self.posts.iter().any(|p| &p.persona == persona)
     }
 
-    /// Every funding gindex reserved by a live post — the exclusion set for
-    /// funding selection (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.2 rule 1).
+    /// The live pending emission claims.
+    pub fn claims(&self) -> &[PendingEmissionClaim] {
+        &self.claims
+    }
+
+    /// Whether `persona` already has a live pending emission claim — the
+    /// claim seam's one-live-claim-per-persona refusal predicate (which is
+    /// also the in-flight epoch dedup: a second claim would re-derive and
+    /// re-claim the same epochs).
+    pub fn has_live_claim_for(&self, persona: &PCanonicalId) -> bool {
+        self.claims.iter().any(|c| &c.persona == persona)
+    }
+
+    /// Every funding gindex reserved by a live post **or a live claim's fee
+    /// sweep** — the exclusion set for funding selection
+    /// (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.2 rule 1): neither a bond sweep
+    /// nor a claim fee sweep may select an output an in-flight tx already
+    /// spends.
     pub fn reserved_gindexes(&self) -> std::collections::BTreeSet<GlobalOutputIndex> {
         self.posts
             .iter()
             .flat_map(|p| p.funding_gindexes.iter().copied())
+            .chain(
+                self.claims
+                    .iter()
+                    .flat_map(|c| c.fee_gindexes.iter().copied()),
+            )
             .collect()
     }
 
@@ -202,6 +280,54 @@ impl PendingPostBlock {
         }
         self.posts.push(post);
         true
+    }
+
+    /// Append a pending emission claim. Refuses (returns `false`, block
+    /// unchanged) if the persona already has a live claim — the caller
+    /// surfaces this as its typed claim-pending error.
+    #[must_use]
+    pub fn push_claim(&mut self, claim: PendingEmissionClaim) -> bool {
+        if self.has_live_claim_for(&claim.persona) {
+            return false;
+        }
+        self.claims.push(claim);
+        true
+    }
+
+    /// Transition `persona`'s live claim into
+    /// [`PendingPostState::Dispatched`] (or bump its attempt counter on a
+    /// byte-identical resubmit) — the claim twin of
+    /// [`Self::mark_dispatched`], same seal-before-send discipline. Returns
+    /// the post-transition attempt count and the transitioned claim, or
+    /// `None` when the persona has no live claim.
+    #[must_use]
+    pub fn mark_claim_dispatched(
+        &mut self,
+        persona: &PCanonicalId,
+        at: BlockHeight,
+    ) -> Option<(u32, &PendingEmissionClaim)> {
+        let claim = self.claims.iter_mut().find(|c| &c.persona == persona)?;
+        let attempts = match &mut claim.state {
+            PendingPostState::Pending => {
+                claim.state = PendingPostState::Dispatched { at, attempts: 1 };
+                1
+            }
+            PendingPostState::Dispatched { attempts, .. } => {
+                *attempts = attempts.saturating_add(1);
+                *attempts
+            }
+        };
+        Some((attempts, &*claim))
+    }
+
+    /// Remove `persona`'s live claim (confirmation retire, or terminal-
+    /// reject prune). As with [`Self::remove_post`], removal *is* the
+    /// byte-prune, the reservation release, and the epoch-dedup release in
+    /// one seal; idempotent under crash-replay (`None` when absent).
+    #[must_use]
+    pub fn remove_claim(&mut self, persona: &PCanonicalId) -> Option<PendingEmissionClaim> {
+        let idx = self.claims.iter().position(|c| &c.persona == persona)?;
+        Some(self.claims.remove(idx))
     }
 
     /// WI-3 §3.3 step 2 — transition `persona`'s post into
@@ -369,6 +495,7 @@ mod tests {
         let wrong = PendingPostBlock {
             version: PENDING_POST_VERSION + 1,
             posts: Vec::new(),
+            claims: Vec::new(),
         };
         let bytes = postcard::to_allocvec(&wrong).expect("encode");
         let err = PendingPostBlock::from_postcard_bytes(&bytes).expect_err("must refuse");
@@ -389,6 +516,7 @@ mod tests {
         let v1 = PendingPostBlock {
             version: 1,
             posts: Vec::new(),
+            claims: Vec::new(),
         };
         let bytes = postcard::to_allocvec(&v1).expect("encode");
         let err = PendingPostBlock::from_postcard_bytes(&bytes).expect_err("v1 must refuse");
@@ -530,6 +658,99 @@ mod tests {
                 .map(GlobalOutputIndex::from_raw)
                 .collect::<Vec<_>>()
         );
+    }
+
+    fn claim(persona_byte: u8, fee_gindexes: &[u64], epochs: &[u64]) -> PendingEmissionClaim {
+        PendingEmissionClaim {
+            p_slot: PSlot::from_raw(0),
+            persona: PCanonicalId::from_bytes([persona_byte; 32]),
+            tx_bytes: vec![0xCD; 16],
+            fee_gindexes: fee_gindexes
+                .iter()
+                .copied()
+                .map(GlobalOutputIndex::from_raw)
+                .collect(),
+            claimed_epochs: epochs.to_vec(),
+            state: PendingPostState::Pending,
+        }
+    }
+
+    /// The claim record's persist-before-dispatch surface: one live claim
+    /// per persona, its fee gindexes join the shared reservation union
+    /// (bond sweeps and claim sweeps read one exclusion set), the seal
+    /// round-trips, and removal releases reservation + dedup in one
+    /// mutation (idempotent under crash-replay).
+    #[test]
+    fn claim_records_reserve_dedup_and_round_trip() {
+        let persona = PCanonicalId::from_bytes([0xAA; 32]);
+        let mut block = PendingPostBlock::empty();
+        assert!(block.push_post(post(0xBB, &[1])));
+        assert!(block.push_claim(claim(0xAA, &[7, 9], &[2, 3])));
+
+        // One live claim per persona — the in-flight epoch dedup.
+        assert!(block.has_live_claim_for(&persona));
+        assert!(!block.push_claim(claim(0xAA, &[11], &[4])));
+
+        // The reservation union spans posts AND claims.
+        assert_eq!(
+            block.reserved_gindexes().into_iter().collect::<Vec<_>>(),
+            [1, 7, 9]
+                .into_iter()
+                .map(GlobalOutputIndex::from_raw)
+                .collect::<Vec<_>>(),
+        );
+
+        // Seal-before-send transition + round-trip through postcard.
+        assert_eq!(
+            block
+                .mark_claim_dispatched(&persona, BlockHeight::from_raw(500))
+                .map(|(attempts, _)| attempts),
+            Some(1)
+        );
+        let bytes = block.to_postcard_bytes().expect("encode");
+        let back = PendingPostBlock::from_postcard_bytes(&bytes).expect("decode");
+        assert_eq!(back, block);
+        assert_eq!(back.claims().len(), 1);
+        assert_eq!(
+            back.claims()[0].state,
+            PendingPostState::Dispatched {
+                at: BlockHeight::from_raw(500),
+                attempts: 1
+            }
+        );
+
+        // Removal releases the reservation in the same mutation; re-removal
+        // is idempotent.
+        let removed = block.remove_claim(&persona).expect("live claim removes");
+        assert_eq!(removed.claimed_epochs, vec![2, 3]);
+        assert!(!block.has_live_claim_for(&persona));
+        assert_eq!(
+            block.reserved_gindexes().into_iter().collect::<Vec<_>>(),
+            vec![GlobalOutputIndex::from_raw(1)],
+            "only the bond post's reservation remains"
+        );
+        assert!(block.remove_claim(&persona).is_none());
+    }
+
+    /// A v3 seal (no claim set) under this v4 binary fails closed on the
+    /// version gate — refuse-not-migrate (rule 15, pre-genesis).
+    #[test]
+    fn v3_seal_fails_closed_under_v4_binary() {
+        let v3 = PendingPostBlock {
+            version: 3,
+            posts: Vec::new(),
+            claims: Vec::new(),
+        };
+        let bytes = postcard::to_allocvec(&v3).expect("encode");
+        let err = PendingPostBlock::from_postcard_bytes(&bytes).expect_err("v3 must refuse");
+        assert!(matches!(
+            err,
+            WalletLedgerError::UnsupportedBlockVersion {
+                block: "pending_post_block",
+                file: 3,
+                binary: PENDING_POST_VERSION,
+            }
+        ));
     }
 
     #[test]

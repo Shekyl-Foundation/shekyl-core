@@ -14,20 +14,18 @@ use std::io::Cursor;
 use shekyl_archival_retention::{
     as_of_e_served_work, capped_work_milli, challenge_fire_height, challenge_leaf_chunk_bounds,
     challenge_seal_height, claim_window_floor, claimed_epochs_check_and_set,
-    emission_block_claims_unique, emission_vin_verify, emission_vin_verify_auth,
-    emission_vin_verify_backing, emission_vin_verify_claims, epoch_close_compute,
-    epoch_close_due_at_height, epoch_close_height, frozen_segment_count, good_through,
-    p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height, serve_credit_epoch_ok,
-    settlement_epoch_at_height, verify_bond_post_ct_balance, verify_join_market_bond_post,
-    verify_leaf_index, verify_segment_path, verify_unbond_bond_post, whole_record_last_served,
-    ArchivalBondPostVin, ArchivalRewardEmissionVin, ArchivalServeCreditResponse, BadInterval,
-    BandedCurveParams, BondCtBalanceError, BondPostError, BondPostKind, BondTerm,
-    ClaimantBondRecord, ClaimedEpochsError, CreditPair, EmissionEpochSource, EmissionVerifyContext,
-    EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
-    HoldingsKind, KCover, RewardCommit, WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-    ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI, ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-    CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
-    SETTLEMENT_EPOCH_BLOCKS,
+    effective_settlement_epoch_blocks, emission_block_claims_unique, emission_vin_verify,
+    emission_vin_verify_auth, emission_vin_verify_backing, emission_vin_verify_claims,
+    epoch_close_compute, epoch_close_due_at_height, epoch_close_height, frozen_segment_count,
+    good_through, p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height,
+    serve_credit_epoch_ok, settlement_epoch_at_height, settlement_epoch_blocks_overridden,
+    verify_bond_post_ct_balance, verify_join_market_bond_post, verify_leaf_index,
+    verify_segment_path, verify_unbond_bond_post, whole_record_last_served, ArchivalBondPostVin,
+    ArchivalRewardEmissionVin, ArchivalServeCreditResponse, BadInterval, BondCtBalanceError,
+    BondPostError, BondPostKind, BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair,
+    EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError, EpochCloseBond,
+    EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, KCover, RewardCommit,
+    WireError, CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -116,6 +114,9 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_UNBOND: u8 = 16;
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL: u8 = 17;
 /// `Unbond` verify: the release cooldown has not elapsed.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED: u8 = 18;
+/// A shard/served-epoch array length would overflow the `from_raw_parts`
+/// `isize::MAX` byte bound — a corrupted or hostile marshaled length.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW: u8 = 19;
 
 /// Context supplied by consensus after bond/registry LMDB reads (gate-2 §5.3 steps 2, 6–7).
 #[repr(C)]
@@ -134,7 +135,7 @@ pub struct ShekylArchivalVerifyCtx {
 
 #[must_use]
 pub fn settlement_epoch_open_height(e: u64) -> u64 {
-    e.saturating_mul(SETTLEMENT_EPOCH_BLOCKS)
+    e.saturating_mul(effective_settlement_epoch_blocks())
 }
 
 #[must_use]
@@ -454,6 +455,33 @@ fn holdings_kind_from_u8(kind: u8) -> Result<HoldingsKind, u8> {
     HoldingsKind::from_u8(kind).map_err(|_| SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND)
 }
 
+/// Bound-checked `&[u64]` from a raw C pointer at the bond-post FFI boundary.
+///
+/// `len == 0` yields an empty slice (a null pointer is allowed only then). A null
+/// pointer with a positive `len` is a caller marshaling bug (`ERR_NULL_PTR`), and a
+/// `len` whose byte span (`len * size_of::<u64>()`) would exceed `isize::MAX` — the
+/// soundness precondition of [`std::slice::from_raw_parts`] — is rejected
+/// (`ERR_LEN_OVERFLOW`) rather than invoking undefined behavior on a corrupted or
+/// hostile length. Mirrors the `flat_commitment_keys` guard used elsewhere here.
+///
+/// # Safety
+/// When `len > 0`, `ptr` must be valid for `len` `u64`s for the duration of the call.
+unsafe fn bond_post_u64_slice<'a>(ptr: *const u64, len: usize) -> Result<&'a [u64], u8> {
+    if len == 0 {
+        return Ok(&[]);
+    }
+    if ptr.is_null() {
+        return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR);
+    }
+    let Some(byte_len) = len.checked_mul(std::mem::size_of::<u64>()) else {
+        return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW);
+    };
+    if byte_len > isize::MAX as usize {
+        return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW);
+    }
+    Ok(unsafe { std::slice::from_raw_parts(ptr, len) })
+}
+
 /// Marshal the shared bond-post args into an [`ArchivalBondPostVin`] for the JoinMarket
 /// and Unbond FFI entry points. The `post_kind` byte is decoded at each call site (the
 /// two name an out-of-range byte differently — `ERR_POST_KIND` vs
@@ -471,15 +499,9 @@ unsafe fn bond_post_vin_from_raw(
     bond_credit: u64,
     bond_debit: u64,
 ) -> Result<ArchivalBondPostVin, u8> {
-    if shard_ids_len > 0 && shard_ids_ptr.is_null() {
-        return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR);
-    }
+    let shard_ids: Vec<u64> =
+        unsafe { bond_post_u64_slice(shard_ids_ptr, shard_ids_len) }?.to_vec();
     let holdings_kind = holdings_kind_from_u8(holdings_kind)?;
-    let shard_ids: Vec<u64> = if shard_ids_len == 0 {
-        Vec::new()
-    } else {
-        unsafe { std::slice::from_raw_parts(shard_ids_ptr, shard_ids_len) }.to_vec()
-    };
     Ok(ArchivalBondPostVin {
         hybrid_public_key: Vec::new(),
         p_canonical_id: [0u8; 32],
@@ -583,17 +605,13 @@ pub unsafe extern "C" fn shekyl_archival_verify_unbond_bond_post(
     // reverse-cursor fold on an already-invalid tx; `verify_unbond_bond_post`
     // remains the sole decider of record validity and the cooldown gate.
     let last_served_epoch = if record_bonded_total.is_some() {
-        if per_shard_last_served_len > 0 && per_shard_last_served_ptr.is_null() {
-            return SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR;
-        }
         // The served shards' last-served epochs → the whole-record anchor (Rust);
         // never-served shards are omitted by C++, so an empty slice folds to `None`.
-        let per_shard: &[u64] = if per_shard_last_served_len == 0 {
-            &[]
-        } else {
-            unsafe {
-                std::slice::from_raw_parts(per_shard_last_served_ptr, per_shard_last_served_len)
-            }
+        let per_shard = match unsafe {
+            bond_post_u64_slice(per_shard_last_served_ptr, per_shard_last_served_len)
+        } {
+            Ok(s) => s,
+            Err(code) => return code,
         };
         whole_record_last_served(per_shard)
     } else {
@@ -651,6 +669,51 @@ pub unsafe extern "C" fn shekyl_archival_good_through(
 #[no_mangle]
 pub extern "C" fn shekyl_archival_settlement_epoch_at_height(block_height: u64) -> u64 {
     settlement_epoch_at_height(block_height)
+}
+
+/// The effective settlement-epoch length in blocks (the genesis-pinned
+/// 10 000, or the clamped `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override —
+/// the fakechain-only regtest lever). Single source for C++ consumers
+/// needing the length itself; the schedule functions above already
+/// consume it internally.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_settlement_epoch_blocks() -> u64 {
+    effective_settlement_epoch_blocks()
+}
+
+/// True iff a `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override is active (the
+/// effective schedule differs from the genesis default — which requires
+/// this process to have **armed** via
+/// [`shekyl_archival_settlement_epoch_arm_regtest`]). Drives the daemon's
+/// loud fakechain warning.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_settlement_epoch_overridden() -> bool {
+    settlement_epoch_blocks_overridden()
+}
+
+/// True iff `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` is present in the process
+/// environment at all (no validation, no schedule latch). Drives the
+/// daemon's fail-closed public-network refusal: the settlement-epoch
+/// schedule is consensus, and on a non-FAKECHAIN net the *presence* of the
+/// lever is the operator error to refuse on (`Blockchain::init`, next to
+/// the `SEEDHASH_EPOCH_*` gate) — before any question of the value's
+/// validity.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_settlement_epoch_override_present() -> bool {
+    shekyl_archival_retention::settlement_epoch_override_present()
+}
+
+/// Arm the `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override for the daemon's
+/// FAKECHAIN startup path. Returns `true` and latches the validated
+/// override (or the genesis pin when the variable is unset); returns
+/// `false` — the daemon refuses to start — when the value is invalid or
+/// the schedule already latched to a different value (an
+/// initialization-order bug). An unarmed process ignores the lever
+/// entirely, so arming is the single gate a regtest schedule passes
+/// through.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_settlement_epoch_arm_regtest() -> bool {
+    shekyl_archival_retention::arm_settlement_epoch_override_for_regtest().is_ok()
 }
 
 /// Returns `1` and writes the settlement epoch whose close is processed at
@@ -958,23 +1021,19 @@ pub unsafe extern "C" fn shekyl_archival_epoch_close_compute(
     };
 
     let bonds = rows.bonds();
-    let inputs = EpochCloseInputs {
+    // Pinned params via the single-sourced close-view constructor (a struct
+    // literal here would be a second param source that edits in lockstep).
+    // PF-6a: the consensus() constructor is the only production path to a
+    // threshold value; a divergent threshold is a type error here.
+    let inputs = EpochCloseInputs::close_view(
         settlement_epoch,
         close_block_height,
-        settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
-        age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-        curve: BandedCurveParams {
-            plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-            plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-        },
-        bonds: &bonds,
-        shards: &rows.shards,
-        credit_pairs: &rows.pairs,
+        &bonds,
+        &rows.shards,
+        &rows.pairs,
         frozen_shard_count,
-        // PF-6a: the consensus() constructor is the only production path to
-        // a threshold value; a divergent threshold is a type error here.
-        k_cover: KCover::consensus(),
-    };
+        KCover::consensus(),
+    );
     let result = match epoch_close_compute(&inputs) {
         Ok(r) => r,
         Err(_) => return SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_INDEX_RANGE,
@@ -1713,6 +1772,10 @@ pub unsafe extern "C" fn shekyl_archival_verify_bond_post_ct_balance(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_archival_retention::{
+        BandedCurveParams, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
+        ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, SETTLEMENT_EPOCH_BLOCKS,
+    };
     use std::ptr;
 
     #[test]
@@ -1929,6 +1992,49 @@ mod tests {
             record_missing_null_cooldown,
             SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING
         );
+    }
+
+    #[test]
+    fn unbond_ffi_rejects_len_overflow() {
+        use shekyl_archival_retention::{BondPostKind, HoldingsKind};
+        let dummy = 7u64;
+        // A shard_ids length whose byte span overflows isize::MAX must reject
+        // (LEN_OVERFLOW) rather than reach from_raw_parts with an unsound length.
+        let shard_overflow = unsafe {
+            shekyl_archival_verify_unbond_bond_post(
+                BondPostKind::Unbond as u8,
+                HoldingsKind::ShardSetCompact as u8,
+                std::ptr::from_ref(&dummy),
+                usize::MAX,
+                0,
+                0,
+                0,
+                1,
+                1,
+                std::ptr::null(),
+                0,
+                0,
+            )
+        };
+        assert_eq!(shard_overflow, SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW);
+        // Same guard on the serve-credit anchor array (reached once the record exists).
+        let served_overflow = unsafe {
+            shekyl_archival_verify_unbond_bond_post(
+                BondPostKind::Unbond as u8,
+                HoldingsKind::ShardSetCompact as u8,
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                0,
+                1,
+                1,
+                std::ptr::from_ref(&dummy),
+                usize::MAX,
+                0,
+            )
+        };
+        assert_eq!(served_overflow, SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW);
     }
 
     #[test]

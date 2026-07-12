@@ -63,7 +63,7 @@ pub use payment_request::{
     DisputeReason, PaymentRequest, PaymentRequestId, PaymentRequestState, ReceiveAttribution,
 };
 pub use pending_post_block::{
-    PendingBondPost, PendingPostBlock, PendingPostState, PENDING_POST_VERSION,
+    PendingBondPost, PendingEmissionClaim, PendingPostBlock, PendingPostState, PENDING_POST_VERSION,
 };
 pub use safety_constants::NetworkSafetyConstants;
 pub use staking_block::{StakingBlock, STAKING_BLOCK_VERSION};
