@@ -342,7 +342,7 @@ JSON-archive-only `ar.tag` names are now `ct_signatures` / `ctsig_prunable`
 
 | Element | Source | Disposition |
 |---|---|---|
-| type byte | rctTypes.h:167-168,200 | **Ratify** — already minimal: `Null=0`, `FcmpPlusPlusPqc=7`; C++ rejects all other type values. Already created, not inherited (Monero's ~8-variant enum is gone). **Type *value* numbering** is a Q7 decision. |
+| type byte | rctTypes.h:163-170,200 | **Ratify** — already minimal: `CTTypeNull=0`, `CTTypeFcmpPlusPlusPqc=1` (Q7 dense renumber, §2.0); C++ rejects all other type values. Already created, not inherited (Monero's ~8-variant enum is gone). |
 | coinbase `Null`-but-committed (`outPk`/`enc_amounts`/`enc_labels`) | rctTypes.h:209-212 | **Ratify as the exception.** Shekyl-intended for FCMP++ tree-leaf commitment uniformity (Monero's null coinbase has no commitments). Explicitly **not** the spend template. |
 | base: `VARINT(fee)` + `referenceBlock[32]` (Fcmp only) | rctTypes.h:205-206 | **Ratify** — `referenceBlock` lives in the **base**. |
 | base arrays: `enc_amounts[nout×9]`, `enc_labels[nout×9]`, `outPk[nout×32]` (no length prefix) | rctTypes.h:213-280 | **Ratify** — sized by `vout`. See the `enc_labels` invariant below. |

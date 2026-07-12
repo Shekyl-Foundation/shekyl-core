@@ -164,7 +164,7 @@ The proof size scales with the number of inputs and the tree depth:
 
 ## 4. Transaction Format
 
-### CTTypeFcmpPlusPlusPqc (type = 7)
+### CTTypeFcmpPlusPlusPqc (type = 1)
 
 Shekyl's only non-coinbase transaction type. Defined in `rctTypes.h`.
 
@@ -172,7 +172,7 @@ Shekyl's only non-coinbase transaction type. Defined in `rctTypes.h`.
 TransactionV3 {
   prefix: TransactionPrefixV3
   rct_signatures: rctSig {
-    type: CTTypeFcmpPlusPlusPqc   // = 7
+    type: CTTypeFcmpPlusPlusPqc   // = 1
     txnFee: u64
     ecdhInfo: [EcdhTuple]
     outPk: [key]
@@ -186,8 +186,8 @@ TransactionV3 {
 }
 ```
 
-**Only two RCT type values exist.** The `rctTypes.h` enum contains
-`CTTypeNull = 0` (coinbase only) and `CTTypeFcmpPlusPlusPqc = 7` (all
+**Only two CT type values exist.** The `rctTypes.h` enum contains
+`CTTypeNull = 0` (coinbase only) and `CTTypeFcmpPlusPlusPqc = 1` (all
 non-coinbase spends). Legacy Monero types (`RCTTypeFull` through
 `RCTTypeBulletproofPlus`) are not defined; associated structs (`mgSig`,
 `clsag`, `rangeSig`, non-plus `Bulletproof`, `RCTConfig`, etc.) and ring /
@@ -1200,7 +1200,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | `FCMP_REFERENCE_BLOCK_MIN_AGE` | 5 (reorg safety margin) | `cryptonote_config.h` |
 | `FCMP_MAX_INPUTS_PER_TX` | 8 | `cryptonote_config.h` |
 | `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` | 10,000 | `cryptonote_config.h` |
-| `CTTypeFcmpPlusPlusPqc` | 7 | `rctTypes.h` |
+| `CTTypeFcmpPlusPlusPqc` | 1 | `rctTypes.h` |
 | `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` | 0x06 | `tx_extra.h` |
 | `TX_EXTRA_TAG_PQC_LEAF_HASHES` | 0x07 | `tx_extra.h` |
 | `ML_KEM_768_CT_BYTES` | 1088 | `tx_extra.h` |

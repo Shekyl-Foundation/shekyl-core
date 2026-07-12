@@ -171,7 +171,7 @@ namespace
       hashes.push_back(hash2rct(h));
 
       keyV kv;
-      CHECK_AND_ASSERT_THROW_MES(rv.type == CTTypeFcmpPlusPlusPqc, "Unsupported RCT type in get_tx_prehash: " << rv.type);
+      CHECK_AND_ASSERT_THROW_MES(rv.type == CTTypeFcmpPlusPlusPqc, "Unsupported CT type in get_tx_prehash: " << rv.type);
       kv.reserve((6*2+6) * rv.p.bulletproofs_plus.size());
       for (const auto &p: rv.p.bulletproofs_plus)
       {

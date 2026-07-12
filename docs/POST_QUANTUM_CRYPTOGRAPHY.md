@@ -691,8 +691,8 @@ High-level rule:
 `TransactionV3` keeps the existing CryptoNote-style prefix and FCMP++ body, but
 adds a dedicated hybrid authorization structure outside `tx_extra`.
 
-The FCMP++ type for user transactions is `CTTypeFcmpPlusPlusPqc = 7`. This is
-Shekyl's only non-coinbase RCT type. It replaces CLSAG ring signatures with
+The FCMP++ type for user transactions is `CTTypeFcmpPlusPlusPqc = 1`. This is
+Shekyl's only non-coinbase CT type. It replaces CLSAG ring signatures with
 FCMP++ membership proofs, uses Bulletproof+ range proofs, and adds a
 `referenceBlock` field to `rctSigBase` anchoring the proof to a specific curve
 tree snapshot. The prunable section carries `curve_trees_tree_depth` and an
@@ -705,7 +705,7 @@ Conceptually:
 ```text
 TransactionV3 {
   prefix: TransactionPrefixV3
-  rct_signatures: rctSig          // type = CTTypeFcmpPlusPlusPqc (7)
+  rct_signatures: rctSig          // type = CTTypeFcmpPlusPlusPqc (1)
   pqc_auths: std::vector<PqcAuthentication>   // one per input (pqc_auths.size() == vin.size())
 }
 ```

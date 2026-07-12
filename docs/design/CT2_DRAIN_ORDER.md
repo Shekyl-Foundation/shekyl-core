@@ -150,7 +150,7 @@ x-coords are Wei25519 via `ed25519_point_to_selene_scalar`
 | Coinbase `h_pqc` | **Real per-output hybrid hash**, `Blake2b-512("shekyl-pqc-leaf" ‖ hybrid_pk) wide-reduced`, computed by `shekyl_construct_output` (miner self-KEM, per-output) and stored **on-chain in `tx_extra` tag `0x07`** (`TX_EXTRA_TAG_PQC_LEAF_HASHES`, `N×32` in vout order). | `derivation.rs:53-71`, `cryptonote_tx_utils.cpp:162-192`,`726-755`, `tx_extra.h:45` |
 | Where the tree reads `h_pqc` | `extract_leaf_hashes` parses `tx.extra`, finds the **single** `tx_extra_pqc_leaf_hashes` field (one `0x07` field, blob `N×32` in vout order), and returns it **only if** `blob.size() % 32 == 0`; `collect_outputs` then slices `blob + i*32`. **Falls back to 32 zero bytes** when: parse fails, the tag is absent, `blob.size() % 32 != 0` (malformed length → whole field dropped), **or** `i >= num_leaf_hashes` (blob present but shorter than vout count). | `blockchain_db.cpp:341-364` (`extract_leaf_hashes`, `zero_pqc` at `:332`), `tx_extra.h:45,219-228`, `FCMP_PLUS_PLUS.md:222-225` |
 | Leaf branch on rct type? | **No.** `collect_outputs` uses one path for miner and normal txs; only `is_miner` changes maturity. | `blockchain_db.cpp:369-407` |
-| Accepted rct types | Only `CTTypeNull = 0` (coinbase) and `CTTypeFcmpPlusPlusPqc = 7`. | `rctTypes.h:161-166`, `blockchain.cpp:3451-3456`,`1523` |
+| Accepted ct types | Only `CTTypeNull = 0` (coinbase) and `CTTypeFcmpPlusPlusPqc = 1`. | `rctTypes.h:163-170`, `blockchain.cpp:3451-3456`,`1523` |
 
 ### 3.1 Replication obligation — `h_pqc` is on-chain, not recomputable
 

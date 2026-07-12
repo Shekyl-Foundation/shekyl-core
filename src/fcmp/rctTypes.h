@@ -160,7 +160,7 @@ namespace rct {
     /// Exactly one aggregated BP+ proof with 1..MAX outputs (consensus canonical form).
     bool is_canonical_bulletproof_plus_layout(const std::vector<BulletproofPlus> &proofs);
 
-    // RCT type tags:
+    // CT type tags:
     //  CTTypeNull = coinbase (no confidential data)
     //  CTTypeFcmpPlusPlusPqc = FCMP++ with Bulletproofs+ and post-quantum commitment
     // Genesis dense ct type scheme (GENESIS_TX_WIRE_FORMAT.md §2.0 / §5 gate-(c) item 2).
