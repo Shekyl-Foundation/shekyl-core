@@ -17,10 +17,12 @@
   derivation/KAT** (verified at source — absent from `archival_p.rs`), and §10.7's proposed label
   string uses dot separators against §9.3's hyphen convention; §10.13 carries it armed with the
   normalization flag so it cannot freeze wrong.
-- **Round 3 open (2026-07-11, this pass)** — timing + rotation + `W`/epoch-length (§11). Sole
-  un-pinned exit gate is **GF-10** within-epoch claim-jitter bounds (no landed code — verified at
-  source); the rotation leg is largely dispositioned by T-A1 (§2.3) and §10.7/§10.9. Frame + steps
-  forward: §11.
+- **Round 3 designed (2026-07-11, pending adversarial pass)** — timing + rotation + `W`/epoch-length
+  (§11). **GF-10** pinned as a *mechanism + structural window + a-priori advantage claim* (§11.3–11.5);
+  numeric width **routed to the R4/GF-4 CB-3 joint grade**, not graded standalone (per-axis-multiplication
+  error avoided). Rotation dispositions ratified; R2 timing hand-forwards resolved (§11.6). The
+  claim-jitter draw + scheduler are unbuilt (verified) — pinned pre-code, M1-armed. Remaining for
+  close: one adversarial pass (§11.7).
 - **Rounds 4–5 planned** — R4 (output + bond-funding, recurring) is formally open but its dominant
   finding **GF-7 is already built and graded PROVISIONAL-PASS** (`r = 1.86`, local-daemon posture;
   standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) provisional); the **GF-4 exit
@@ -365,7 +367,7 @@ carried; R2 the same).
 | **0** | Scaffold + invariant frame + consumer map | **Done** |
 | **1** | HKDF/`P_id` wire + crypto layer hooks | **Closed (2026-06-13)** — §9 GF-1 dual-key verifier contract resolved; GF-2 dual-scan enforcement made architectural; reviewer sign-off (§9.8). **Carry discharged (2026-07-11 reconciliation):** `ARCHIVAL_P_DERIVE_V1` KAT + `archival_p` module **landed** (Bond-PR 0 #152; `archival_p.rs` + `kat_archival_p_derive_v1.rs`, seven §9.3 labels incl. `bond_spend_*` verified at source). C-1 emission vin ML-DSA equality check **landed** (#277). §7 checklist reconciled to landed state. |
 | **2** | Network + transport (L16 → production shape) | **Closed (2026-07-11) — §10; closure disposition §10.13.** Rendezvous path specified; seeding relaxation bounded. **Entry gates (all dispositioned):** challenge-response Levin class → anonymity-routable set (GF-3, §10.4); pre-join backing-presentation transport (GF-5, §10.5); Arti HS-hosting capability confirmed, at-source pin carried (GF-12, §10.3); `P`-tx wire-size fingerprint characterization + dummy/fragmentation policy (GF-6, §10.6); HS key lifecycle `p_slot`-bound + seed-derived (GF-9, §10.7). **Exit dispositions (§10.11, passes 1–4):** bonded-verifier challenges, broadcast announce, `P`↔principal circuit/guard isolation (§10.9), pure-rendezvous + I2P-closed. **Carries (§10.13, rule-21):** at-source Arti pin → transport PR; dummy/frag tuned ratio → testnet; **GF-9 HS-id HKDF label → §9.3 amendment (armed: not yet in derivation; dot-vs-hyphen format flag)**; announce↔anchor + cadence timing → R3. Transport code partial-landed (2d-2: SP-T1 #204/#209, SP-T4a #254 — inert). |
-| **3** | Timing + rotation + `W` / epoch-length joint pin | **Open (2026-07-11) — §11.** Frame, adversary, and steps-forward pinned. **Sole un-pinned exit gate:** within-epoch claim-jitter min/max bounds (GF-10 — no landed code, verified at source). Rotation leg largely dispositioned (T-A1 §2.3 timeline non-channel; network leg §10.7/§10.9); epoch-batch already blunts drip (`MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15`). E-4 mitigations to be ratified into the round. |
+| **3** | Timing + rotation + `W` / epoch-length joint pin | **Designed (2026-07-11) — §11; pending adversarial pass.** **GF-10** pinned as *mechanism + structural window* (uniform-independent claim-broadcast-height draw via audited `bounded_uniform`; floor = `h_close + reorg_depth(720)`, ceiling = `(E_oldest+W)·SEB − submit_guard`; a-priori `S_min ≥ SEB`); **numeric width routed to R4/GF-4 CB-3 joint grade** (not standalone — per-axis error avoided). Draw + scheduler **unbuilt** (verified) → pinned pre-code, M1-armed. Rotation leg ratified (T-A1 timeline non-channel; network leg §10.7/§10.9); R2 timing hand-forwards resolved (announce↔anchor = entry standoff; emission-cadence = GF-10). One frame assumption overturned at source (epoch-crossing — §11.4). |
 | **4** | Output + bond-funding hygiene (**recurring** — rebond/unbond at genesis) | **Planned; substance partly landed/graded.** **GF-7 (funding-in) built + graded PROVISIONAL-PASS** (`r = 1.86`, local-daemon; standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) provisional) — not an open design question. **GF-4 (value-out) is the R4 gap:** decorrelated-drain **output-count** discipline + the *separate one-sided* exit-seam standoff (FOLLOWUPS 2b) + joint grading (cadence+amount+holdings) + the L17 synchronized-exit wargame, for **terminal drain *and* recurring partial-unbond (`HoldingsUpdate`)** (delay floor already pinned, §2.4). GF-10 (R3) extends to bond ops. Blocks on the rebond/unbond FSM frictions → age-stratified sim reconciliation (pre-seal). |
 | **5** | Cross-layer adversarial pass | **Planned.** Soundness-depth sign-off for Stage 3. Build the S-2 fused exposure ledger (first) + the S-3 exit/value-seam adversary sim (§10.12), then sign off. |
 | **5** | Cross-layer adversarial pass | Soundness-depth sign-off for Stage 3 |
@@ -1509,14 +1511,16 @@ disposition is not coverage of its implementation.
 
 ---
 
-## 11. Round 3 — timing + rotation + `W`/epoch-length (OPEN — draft frame, 2026-07-11)
+## 11. Round 3 — timing + rotation + `W`/epoch-length (DESIGNED 2026-07-11 — pending adversarial pass)
 
-**Status:** **Open — frame only.** This section opens R3 from a closed R1/R2 base; it does **not**
-design R3. It fixes the round's scope, adversary, entry gate, the dispositions R3 inherits (so the
-round does not re-derive them), the one deliverable that is genuinely un-pinned, and the steps a
-design pass would take. No numeric bound is pinned here — GF-10's constant is genesis-frozen and
-must be set *a priori, before* any measurement, per the same discipline the standoff constant
-followed (§10.12 BUILD; [`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](ARCHIVAL_BOND_WI4_MEASUREMENT.md) §13.4).
+**Status:** **Design pass complete; pending an adversarial pass before formal close.** GF-10 (the
+sole un-pinned exit gate) is pinned as a **mechanism + structural window + a-priori advantage
+claim**; its **numeric width is routed to the R4/GF-4 CB-3 joint grade**, not graded standalone here
+— grading GF-10 alone would re-commit the per-axis-multiplication error CB-3 explicitly forbids
+(§11.5). Rotation dispositions ratified (§11.6); R2 timing hand-forwards resolved (§11.6). All pins
+source-grounded at `dev` `75c3cae1d`. **One frame assumption was overturned at source during this
+pass** — the "epoch-boundary non-crossing" constraint the 2026-07-11 frame posited is false
+(§11.4); recorded as a correction, not silently dropped.
 
 ### 11.1 Scope and the seam it defends
 
@@ -1539,78 +1543,156 @@ liveness fingerprint, §2.3) and a candidate set of principal on-chain activity,
    standing alignment channel. **This is what GF-10 closes.**
 2. **Rotation-timeline linker (E-4)** — `P_old`→`P_new` re-linkage via fine-grained retention
    timeline + shard-set adjacency across a rotation (§2.3 E-4). Largely **already dispositioned** —
-   see §11.4.
+   see §11.6.
+3. **Batch-cap-forced determinism (wargame finding, this pass).** The jitter mechanism has an
+   unstated assumption: it decorrelates only if the scheduler *chooses* the broadcast height. If the
+   scheduler lets backlog accumulate to `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15`, the claim is
+   **forced** at the block the 15th epoch settles — deterministic on epoch settlement, defeating any
+   jitter. The mechanism is only as strong as the scheduler's discipline to claim *before* backlog
+   forces it. §11.3 pins that discipline as part of GF-10, so the assumption is armed, not implicit.
 
-### 11.3 Entry gate — GF-10 (the sole un-pinned deliverable)
+### 11.3 GF-10 disposition — the claim-jitter mechanism (pinned)
 
-**GF-10 — within-epoch claim-jitter min/max bounds.** Un-pinned:
-[`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §7 lists "Emission jitter — ± fraction
-of `SEB` (wallet-local) — gate-6 R3" as unlanded, and there is **no landed code** (verified at
-source 2026-07-11: no `emission_jitter` / `claim_jitter` symbol under `rust/`). This is R3's exit
-gate. **Coverage boundary — do not let the standoff read as coverage of this:** the `--standoff`
-sim and WI-4 grading (§10.12) measure the **entry funding seam** (announce↔bond, GF-7/R4); they say
-**nothing** about within-epoch claim timing. GF-10 is a distinct channel and a distinct constant.
+**Where it lives (source, not memory).** Claim cadence is a **scheduler** concern, *not* the claim
+builder: CB-3 (RATIFIED 2026-07-09, [`EMISSION_CLAIM_BUILDER.md`](EMISSION_CLAIM_BUILDER.md) §CB-3)
+pins that the builder takes an explicit `claim_epochs` input and **does not self-schedule**, and the
+Engine claim orchestrator returns the assembled reply **unbroadcast** (`claim_orchestrator.rs`, index
+§4). So GF-10 governs the **claim scheduler**, which is **unbuilt** — verified at source 2026-07-11:
+`shekyl-standoff` exposes `draw_entry_gap` only; there is **no `draw_exit_gap` and no claim-jitter
+symbol** anywhere under `rust/`, and `ARCHIVAL_TIMING_CONSTANTS.md` §7 still lists "Emission jitter —
+± fraction of `SEB`" as unlanded. This is therefore a **pre-code structural pin** — arm the mechanism
+before the identifier exists (the M1 discipline; [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)).
 
-### 11.4 What R3 inherits (already dispositioned — do not re-derive)
+**Mechanism (pinned):**
 
-- **Rotation timeline leg → non-channel (T-A1, §2.3).** At lean equilibrium ~98% singleton
-  portfolios ⇒ portfolio = public identity; cosmetic rotation with fixed storage is rational and
-  re-linkable, so timeline re-linkage is *not* the channel and decorrelation would require
-  abandoning scarce-shard income. F1 **conditionally finally accepted** (§2.3). R3 ratifies this
-  into the round; it does not reopen it. Reopen only on a Form-C / reward-shape change (§2.3).
+- The claim scheduler draws each emission-claim tx's **broadcast height** by a **direct
+  uniform-independent draw** through the audited `bounded_uniform` (`rust/shekyl-standoff/src/draw.rs:31`,
+  the single unbiased sampler), wrapped in a typed `ClaimJitterGap` mirroring the entry
+  `draw_entry_gap` / `NetworkGap` pattern (`draw.rs:81`).
+- **Per-claim independent** — no shared trigger. The entry sim measured a shared trigger as
+  catastrophic (`16 → 1.01`, §10.12); a scheduler that fires every claim off one epoch-boundary tick
+  clusters identically. **Independence is the load-bearing property, not the width.**
+- **Drawn directly**, never as the difference of two jitters around a common anchor — that
+  construction is triangular / zero-peaked and clusters the events (the double-jitter trap; the
+  standing negative control is `draw_entry_gap_double_jitter_trap`, `conformance.rs:177`).
+- **No self-scheduling to the batch cap** (§11.2 finding) — the scheduler must claim opportunistically
+  within the jitter window *before* backlog reaches the 15-cap, so the broadcast height is
+  jitter-determined, not backlog-forced. This is part of the GF-10 pin, not a separate concern.
+
+### 11.4 The `W`/epoch-length joint pin — the structural window
+
+**Source correction (this pass overturned the frame).** The 2026-07-11 frame posited that the jitter
+"must not push a claim across a settlement-epoch boundary (which would change *which* epoch it
+claims)." **Verified false at source:** which epochs a claim covers is the tx payload `claim_epochs`
+(`emission_claim.rs::derive_claimable_epochs`), **independent of the broadcast height** — broadcasting
+later does not re-select epochs. The real bounds are finalization (below) and forfeiture (above):
+
+- **Floor** `H_lo = h_close(E_oldest) + G_final`, `G_final ≥ ARCHIVAL_REORG_DEPTH_BLOCKS = 720`
+  (`config/consensus_constants.json:23`). A claim cannot broadcast before its oldest batched epoch is
+  finalized — verify's `NotFinalized` predicate is `chain_height > h_close(E)`
+  (`emission_claim.rs:335-342`); the reorg-depth guard keeps the claim valid across a reorg.
+- **Ceiling** `H_hi = (E_oldest + W)·SEB − G_submit`, with `W = 26`, `SEB = 10_000`
+  (`config/consensus_constants.json:19,21`), `G_submit` ≥ mempool + confirmation depth. The claim
+  must confirm before its oldest epoch forfeits at `E_oldest + W`; oldest-first batch drain already
+  guarantees no epoch is pushed past forfeiture (`emission_claim.rs:429`).
+- **Minimum spread** `S_min ≥ SEB` (a-priori floor, this pass). Rationale: the public **F1
+  fingerprint already reveals liveness at epoch granularity** (§2.3), so jitter *finer* than one
+  epoch adds nothing the adversary does not already have — decorrelation lives at ≥ one-epoch spread.
+  So the a-priori structural floor is one full settlement epoch, tied to the granularity of the
+  already-public signal. **The exact width above `S_min` is NOT pinned here** — it is the R4 joint-grade
+  output (§11.5).
+
+This is the "joint" pin: the window `[H_lo, H_hi]` is denominated in `SEB` and bounded jointly by `W`
+(forfeiture horizon) and `ARCHIVAL_REORG_DEPTH_BLOCKS` (finalization), and the a-priori floor
+`S_min = SEB` ties the minimum spread to the epoch granularity — the three constants compose, which
+is what the round title names.
+
+### 11.5 Grading is R4's (CB-3 joint grade), not standalone; conformance; coverage boundary
+
+**Grading routed, not performed here — and this is load-bearing.** CB-3 (RATIFIED 2026-07-09) routes
+claim-cadence grading to the GF-4 round under a **rule-21 joint-grading obligation**: claim timing
+must be graded **jointly** with the reward-amount sequence and the holdings stratum, because the three
+are co-present on one persona and an independent per-axis grade multiplies as if independent (the
+per-axis-multiplication error WI-4 §11 / CB-3 both flag). **R3 therefore pins GF-10's mechanism +
+structural window + the a-priori advantage claim, and stops** — it does **not** standalone-grade the
+width. Grading GF-10 alone here would be exactly the error CB-3 forbids. Same split the entry seam
+used: the standoff *draw* is the mechanism (R2/R4), the WI-4 sim is the joint *grade*.
+
+**A-priori advantage claim (pre-committed, before any R4 sweep — GF7_HOOKS §5.1 discipline).** Under
+a uniform-independent draw over `[H_lo, H_hi]` with `S_min ≥ SEB`, a passive timing observer holding
+the F1 fingerprint and a candidate principal-activity set gains **no better-than-epoch-prior**
+alignment of a claim broadcast to a principal spend. A failed R4 grade against this claim is a
+**redesign signal** (widen `S_min`, revisit independence), *never* a move-the-bar signal.
+
+**Conformance (wallet self-test, consensus-unenforceable).** The broadcast height is consumer-side;
+consensus sees only that the claim landed inside `[H_lo, H_hi]` (the claimable window it already
+enforces via the `NotFinalized` / forfeiture predicates). So GF-10 ships as a **published wallet
+conformance vector**, not a consensus rule: an integer golden vector on the aarch64 lane
+(bit-identical, like the standoff `golden_vector.rs`), strict-alpha chi-square uniformity + lag-1
+independence (`shekyl-stats`), with `draw_entry_gap_double_jitter_trap` as the arming negative
+control. Grade the property, not the PRNG.
+
+**Coverage boundary (state it — never let association read as coverage):**
+
+- **Bites against:** a *deterministic / predictable* claim-broadcast cadence (fixed offset,
+  epoch-open, or backlog-forced) an observer could align to principal timing.
+- **Does NOT cover:** *which epochs* `P` served (roll-call, attributed, public by function — F1); the
+  *joint* composition with amount / holdings / exit-timing (R4/GF-4); the entry funding seam (GF-7,
+  built) or exit funding seam (GF-4). GF-10 is one channel of the drain/claim event, not the event.
+- **Multiplicative on §10.9 isolation**, never additive — the number is `P(align | isolation holds)`.
+
+### 11.6 Inherited dispositions ratified + R2 hand-forwards resolved
+
+- **Rotation timeline leg → non-channel (T-A1, §2.3).** At lean equilibrium ~98% singleton portfolios
+  ⇒ portfolio = public identity; cosmetic rotation with fixed storage is rational and re-linkable, so
+  timeline re-linkage is *not* the channel and decorrelation would require abandoning scarce-shard
+  income. F1 **conditionally finally accepted** (§2.3). Ratified into the round; reopen only on a
+  Form-C / reward-shape change (§2.3).
 - **Rotation network leg → pinned in R2.** `P_new` must not share principal clearnet path (§4
   invariant 4): HS key `p_slot`-bound + seed-derived (§10.7), independent guards + restore-flow
   non-co-activation (§10.9). R3 owns only the *timing/portfolio* face of rotation.
-- **`p_slot` over-enumeration ceremony** — the two-rotation split (backing-UTXO rotation vs. `P`
-  pseudonym rotation) and `new slot ⇒ new keys` are pinned (§3, §9.2).
-- **Epoch batching** — `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` (§2.3) already blunts drip cadence.
-- **`W` vs batch cap (GF-11, no new pin)** — `W = 26 > 15`; the **batch cap binds**, a `P` cannot
-  widen its claim window to the forfeiture horizon to thin its fingerprint (§2.3). Consensus fact,
-  not a decorrelation lever R3 can spend.
+- **`p_slot` over-enumeration ceremony** — two-rotation split (backing-UTXO vs. `P` pseudonym
+  rotation) + `new slot ⇒ new keys` pinned (§3, §9.2).
+- **Epoch batching + `W` vs cap (GF-11, no new pin)** — `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15`
+  blunts drip cadence; `W = 26 > 15` so the **batch cap binds** — a `P` cannot widen its claim window
+  to the forfeiture horizon to thin its fingerprint (§2.3). Consensus fact, not a lever R3 spends.
+- **R2→R3 timing hand-forwards resolved:**
+  - **§10.5 announce↔anchor timing gap → covered by the entry standoff** (GF-7 mechanism,
+    `draw_entry_gap`, built #255): the announce↔bond-post gap *is* the entry standoff's target. R3
+    ratifies; it does **not** build a second mechanism.
+  - **§10.6 emission-cadence timing → GF-10** (§11.3–11.5) mechanism + the CB-3/R4 joint grade.
+- **F1 wallet disclosure copy** ([`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §10)
+  — operator-facing statement that rotation does **not** reset `T_obs` (= operator lifetime); a UX
+  task routed to the wallet disclosure surface.
 
-### 11.5 What R3 owes to close
+### 11.7 What R3 closes, defers, and its reopen criteria
 
-1. **Pin GF-10 within-epoch claim-jitter bounds** — an a-priori, genesis-frozen `± fraction of
-   `SEB`` window, set before measurement. Because the claim anchor is consumer-side and
-   FCMP++-hidden, the bound is **wallet-only, consensus-unenforceable** (like the standoff draw) —
-   so it ships as a **published conformance test vector** with a strict-alpha goodness-of-fit grade,
-   *not* a consensus rule (the standoff pattern: draw directly, no double-jitter trap;
-   [`FOLLOWUPS.md`](../FOLLOWUPS.md) funding-seam carry (1)/(2b)).
-2. **Resolve the `W`/epoch-length *joint* pin** — the design question the round name flags: a jitter
-   window must not push a claim across a settlement-epoch boundary (which would change *which* epoch
-   it claims — a consensus-visible move, not mere wallet timing). Bound GF-10 *relative to* `SEB`
-   and the batch cap so the two constraints compose. This is the "joint" in the round title.
-3. **Ratify the E-4/T-A1 rotation dispositions** into the round record (they currently live as §2.3
-   prose + the F1 disclosure doc).
-4. **Absorb the R2→R3 hand-forward** — the announce↔anchor timing gap (§10.5) and emission-cadence
-   timing (§10.6): decide whether they are covered by GF-10's window or need their own bound.
-5. **F1 wallet disclosure copy** ([`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md)
-   §10) — the operator-facing statement that rotation does not reset the observation window
-   (`T_obs` = operator lifetime).
+**Closes (pending the adversarial pass):** the GF-10 claim-jitter **mechanism** + structural window
+(§11.3–11.4) + the a-priori advantage claim (§11.5); the ratified rotation dispositions and R2 timing
+hand-forwards (§11.6).
 
-### 11.6 Blocks / dependencies
+**Defers (named, rule-21):**
 
-- **Not blocked on the FSM** — GF-10 is emission-claim jitter; the rebond/unbond FSM friction blocks
-  R4, not this. R3 can proceed now.
-- **`SEB = 10_000` is pinned** (§7), so the epoch-length half of the joint pin has its constant.
-- **Coupling out:** GF-10 is later *extended to bond ops* in R4 (§6) — R3 pins the emission form;
-  R4 reuses it for partial-unbond/rebond-topup timing. Pin GF-10 so that extension is mechanical.
-- **Not in scope:** the L17 synchronized-exit wargame (crisis cadence blows through jitter windows)
-  is the **exit seam** — R4/GF-4, [`FOLLOWUPS.md`](../FOLLOWUPS.md) swan-2/W8 — not R3.
+- **GF-10 numeric width** above `S_min` → R4/GF-4 CB-3 joint grade (jointly with amount + holdings +
+  exit-timing). Reopen the mechanism only if the joint grade cannot meet the pre-committed advantage
+  claim at any structurally-admissible width.
+- **Extension to bond ops** — GF-10 reused for partial-unbond / rebond-topup claim timing in R4 (§6);
+  the mechanism is pinned so the extension is mechanical.
+- **Build** — the `ClaimJitterGap` draw + the claim scheduler are unbuilt. Land the draw the M1 way:
+  a CI grep that the claim scheduler routes through `bounded_uniform` with no deterministic-cadence
+  fallback, armed **before** the scheduler identifier exists.
 
-### 11.7 Steps forward (the design pass, when convened)
+**Out of scope (do not fold in):** the L17 synchronized-exit wargame (crisis cadence blows through
+jitter windows) is the **exit seam** — R4/GF-4 ([`FOLLOWUPS.md`](../FOLLOWUPS.md) swan-2/W8). R-3
+reward-magnitude quantization is R4 / §14.4 economics.
 
-1. State the GF-10 adversary-advantage claim and derive the jitter window a priori from it (commit
-   the threshold in this doc **before** any sim run — a failed grade is a redesign signal, never a
-   move-the-bar signal).
-2. Pin the window as `± fraction of SEB`, resolve the epoch-boundary non-crossing constraint (owe 2),
-   and state the batch-cap composition.
-3. Specify the wallet conformance vector (direct draw, strict-alpha chi-square, lag-1 independence)
-   reusing the `shekyl-standoff` / `shekyl-stats` primitives; state it is wallet self-test, not
-   consensus enforcement, with its coverage boundary.
-4. Ratify T-A1/E-4 and fold the R2 timing hand-forward; write the F1 disclosure copy.
-5. Adversarially verify: a timing observer with the F1 fingerprint gains no better-than-epoch-prior
-   alignment under the pinned window. Close R3 or name the residual.
+**Reopen (rule-21):** the GF-10 window reopens on any change to `SEB`, `W`,
+`ARCHIVAL_REORG_DEPTH_BLOCKS`, or `MAX_SETTLEMENT_EPOCHS_PER_EMISSION`; the mechanism reopens if the
+R4 joint grade fails the pre-committed advantage claim.
+
+**Remaining for close:** one adversarial pass over §11.3–11.5 (the wargame target: can a timing
+observer, with F1 + the batch-cap-forced-determinism lever, beat the a-priori claim under the pinned
+mechanism *before* R4's numeric width exists?), then fold GF-10 into the R4 joint grade.
 
 ---
 
@@ -1629,6 +1711,23 @@ sim and WI-4 grading (§10.12) measure the **entry funding seam** (announce↔bo
 
 ## Revision history
 
+- **2026-07-11 (R3 design pass — GF-10 mechanism pinned):** Converted §11 from frame to designed
+  round, source-grounded at `dev` `75c3cae1d`. **GF-10 pinned as a mechanism, not a standalone
+  graded gate:** a uniform-independent claim-broadcast-height draw through the audited
+  `bounded_uniform` (`shekyl-standoff` draw.rs:31), typed `ClaimJitterGap`, per-claim independent
+  (the `16→1.01` shared-trigger lesson), drawn directly (double-jitter trap avoided), with
+  no-self-schedule-to-the-batch-cap discipline. **W/epoch-length joint pin:** window `[h_close +
+  reorg_depth(720), (E_oldest+W)·SEB − submit_guard]`, a-priori `S_min ≥ SEB` (tied to F1's
+  epoch-granularity fingerprint); constants verified at source (`config/consensus_constants.json`:
+  SEB 10_000, W 26, reorg 720, batch cap 15, `release_cooldown_epochs = 2` ⇒ the "20 000-block
+  cooldown" is derived `2·SEB`). **Grading correctly routed to R4/GF-4's CB-3 joint grade** (RATIFIED
+  2026-07-09) — NOT graded standalone, which would re-commit the per-axis-multiplication error CB-3
+  forbids; a-priori advantage claim pre-committed. **Source overturned a frame assumption:** the
+  "epoch-boundary non-crossing" constraint is false — broadcast height does not re-select
+  `claim_epochs` (recorded as a correction, §11.4). **Wargame finding:** batch-cap-forced determinism
+  (backlog to the 15-cap forces the claim height) — armed into the mechanism, not left implicit.
+  Draw + scheduler verified **unbuilt** → pinned pre-code, M1-armed (CI grep before the identifier
+  exists). Status: designed, pending one adversarial pass (§11.7). Docs-only.
 - **2026-07-11 (R2 closed, R3 opened, landed elements reconciled — this pass):** Brought the doc up
   to its own status-of-record so the round record is self-contained rather than reconstructed from
   scattered docs. **R1 carry discharged:** verified at source that `archival_p` + the
