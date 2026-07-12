@@ -540,6 +540,18 @@
 
 ### Fixed
 
+- **wire: `Transaction::validate()` pins the Bp+ `|L|`/`|R|` round count by
+  the output count (consensus-parity gap, `docs/FOLLOWUPS.md` flagged
+  2026-06-24).** A tx with a valid output count but an inconsistent/oversize
+  Bp+ `|L|` parsed and passed local `validate()` while the C++ daemon
+  rejects it — a local↔daemon divergence surfacing at submit. Mirroring the
+  C++ split: `BpPlus::read` now rejects `|L| ∉ 6..=MAX_BP_LR_LEN` and
+  `|R| != |L|` (the deserialization-time `n_bulletproof_plus_max_amounts`
+  rejects), and `validate()` enforces
+  `|L| == |R| == 6 + ceil(log2(next_pow2(n_out)))` exactly (parse-time
+  `n_padded >= n_out` + verify-time V/L tightness, `V` restored from
+  `outPk`). `weight()`'s overflow clamp stays for hand-built,
+  not-yet-validated txs.
 - **consensus: C-1 emission review hardening (PR #277 review,
   `REWARD_EMISSION_E3_GATING_ROUND.md` §9.5).** Batch of
   correctness/robustness fixes from the high-effort review of the

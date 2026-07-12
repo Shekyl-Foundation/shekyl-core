@@ -53,7 +53,10 @@ fn ki(byte: u8) -> Input {
     }
 }
 
-fn bp() -> BpPlus {
+/// A Bp+ whose `|L|`/`|R|` are consistent with `n_out` outputs
+/// (`6 + ceil(log2(next_pow2(n_out)))` — the §10 canonical-form corollary).
+fn bp(n_out: usize) -> BpPlus {
+    let lr = 6 + n_out.next_power_of_two().trailing_zeros() as usize;
     BpPlus {
         a: [0u8; 32],
         a1: [0u8; 32],
@@ -61,8 +64,8 @@ fn bp() -> BpPlus {
         r1: [0u8; 32],
         s1: [0u8; 32],
         d1: [0u8; 32],
-        l: vec![],
-        r: vec![],
+        l: vec![[0u8; 32]; lr],
+        r: vec![[0u8; 32]; lr],
     }
 }
 
@@ -95,7 +98,7 @@ fn spend(inputs: Vec<Input>, outputs: Vec<Output>, unlock_time: u64, nbp: usize)
                 })
                 .collect(),
             prunable: Some(Prunable {
-                bulletproofs: (0..nbp).map(|_| bp()).collect(),
+                bulletproofs: (0..nbp).map(|_| bp(n_out)).collect(),
                 tree_depth: 1,
                 fcmp_proof: vec![],
                 pseudo_outs: vec![[0u8; 32]; n_in],
@@ -185,6 +188,71 @@ fn wrong_nbp_rejected() {
     assert!(spend(vec![ki(1)], vec![out(), out()], 0, 0)
         .validate()
         .is_err());
+}
+
+/// Set the (sole) proof's `|L|`/`|R|` independently, to drive the round-count checks.
+fn set_bp_lr(tx: &mut Transaction, l_len: usize, r_len: usize) {
+    if let Ct::Fcmp {
+        prunable: Some(p), ..
+    } = &mut tx.ct
+    {
+        p.bulletproofs[0].l = vec![[0u8; 32]; l_len];
+        p.bulletproofs[0].r = vec![[0u8; 32]; r_len];
+    }
+}
+
+#[test]
+fn bp_lr_exact_by_output_count_validates() {
+    // |L| == |R| == 6 + ceil(log2(next_pow2(n_out))): 3 outputs pad to 4 ⇒ 8.
+    let outs = (0..3).map(|_| out()).collect::<Vec<_>>();
+    let tx = spend(vec![ki(1)], outs, 0, 1);
+    tx.validate()
+        .expect("|L| consistent with the output count must validate");
+}
+
+#[test]
+fn bp_lr_oversize_for_output_count_rejected() {
+    // 2 outputs require |L| = 7; |L| = |R| = 8 parses in isolation but the daemon
+    // rejects it (n_bulletproof_amounts_base V/L tightness) — validate() must too.
+    let mut tx = spend(vec![ki(1)], vec![out(), out()], 0, 1);
+    set_bp_lr(&mut tx, 8, 8);
+    let err = tx.validate().unwrap_err();
+    assert!(err.to_string().contains("Bp+ |L|/|R|"), "{err}");
+}
+
+#[test]
+fn bp_lr_undersize_for_output_count_rejected() {
+    // 3 outputs require |L| = 8; |L| = |R| = 7 under-covers the padded outputs
+    // (the daemon's parse-time `n_bulletproof_plus_max_amounts < outputs` reject).
+    let outs = (0..3).map(|_| out()).collect::<Vec<_>>();
+    let mut tx = spend(vec![ki(1)], outs, 0, 1);
+    set_bp_lr(&mut tx, 7, 7);
+    let err = tx.validate().unwrap_err();
+    assert!(err.to_string().contains("Bp+ |L|/|R|"), "{err}");
+}
+
+#[test]
+fn bp_lr_mismatch_rejected() {
+    // |L| != |R| is malformed regardless of the output count (rctTypes.cpp
+    // "Mismatched bulletproof L/R size").
+    let mut tx = spend(vec![ki(1)], vec![out(), out()], 0, 1);
+    set_bp_lr(&mut tx, 7, 6);
+    let err = tx.validate().unwrap_err();
+    assert!(err.to_string().contains("Bp+ |L|/|R|"), "{err}");
+}
+
+#[test]
+fn bp_lr_out_of_range_rejected_on_parse() {
+    // Parse-parity: the C++ deserializer fails on |L| outside 6..=10
+    // (n_bulletproof_plus_max_amounts returns 0 ⇒ serialize_rctsig_prunable
+    // fails), so the byte-level parser must reject too — write is faithful,
+    // so serialize a hand-built out-of-range tx and re-parse.
+    for (l_len, r_len) in [(11usize, 11usize), (5, 5), (7, 6)] {
+        let mut tx = spend(vec![ki(1)], vec![out(), out()], 0, 1);
+        set_bp_lr(&mut tx, l_len, r_len);
+        let err = Transaction::from_bytes(&tx.serialize()).unwrap_err();
+        assert!(err.to_string().contains("Bp+"), "|L|={l_len}: {err}");
+    }
 }
 
 #[test]
