@@ -270,10 +270,8 @@ impl SpentRecordsDurablyPruned {
 /// nothing renderable beyond the total, so it derives nothing.
 pub(crate) struct FundingSelection {
     /// The swept records, in deterministic (oldest-first) order.
-    #[allow(dead_code)] // transient — read by the Engine-side WI-2 orchestrator as it lands.
     pub records: Vec<PFundingOutputRecord>,
     /// Exact sum of the swept records' amounts.
-    #[allow(dead_code)] // transient — read by the Engine-side WI-2 orchestrator as it lands.
     pub total: AtomicUnits,
 }
 

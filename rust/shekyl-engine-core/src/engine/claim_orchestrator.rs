@@ -8,10 +8,13 @@
 //!
 //! The `StakeEngine`'s [`AssembleEmissionClaim`] handler is deliberately
 //! operand-driven: it receives the claim source, the designated backing, the
-//! swept fee inputs, and the assembled membership paths as *prepared* values
-//! and refuses inconsistent ones (the item-6 same-tip check). This module is
-//! the production preparer — the single pipeline that gathers those operands
-//! from their authoritative sources and hands them to the actor:
+//! swept fee inputs, and the assembled membership paths as one sealed
+//! [`ClaimOperands`](super::backing_set::ClaimOperands) — mintable only
+//! through the designation-event seal (`backing_set.rs`), so the item-6
+//! same-tip check and the Q11 exclusion fire at the mint, not in the
+//! handler. This module is the production preparer — the single pipeline
+//! that gathers those operands from their authoritative sources and hands
+//! them to the actor:
 //!
 //! 1. **Fetch** ([`fetch_emission_claim_source`]) — the single-field `p_id`
 //!    query (§7.2: the request shape is identical for every claimant),
@@ -30,9 +33,13 @@
 //!    the gather **tip** (`source.chain_height − 1`) so the handler's
 //!    same-tip check holds by construction.
 //! 4. **Fee-sweep** ([`DesignatedBacking::fee_sweep`]) — the Q11-excluding
-//!    sole fee entry, over the same provable record set.
+//!    sole fee entry, over the same provable record set; consumes the
+//!    designation and the source into the sealed
+//!    [`SweptFeeInputs`](super::backing_set::SweptFeeInputs) witness.
 //! 5. **Assemble paths** ([`CurveTreeHandle::assemble_tx`]) — every membership
-//!    path (backing + fees) against ONE reference snapshot.
+//!    path (backing + fees) against ONE reference snapshot, zipped into the
+//!    witness ([`SweptFeeInputs::with_paths`](super::backing_set::SweptFeeInputs::with_paths),
+//!    the sole `ClaimOperands` mint).
 //! 6. **Hand off** ([`StakeEngineHandle::assemble_emission_claim`]) — signing
 //!    stays inside the actor (CB-2); the reply is returned to the caller
 //!    unbroadcast (CB-3: dispatch is the GF-4 seam, not this builder).
@@ -69,15 +76,15 @@ use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
 use shekyl_types::{BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId};
 use shekyl_units::AtomicUnits;
 
-use super::backing_set::{BackingSet, InsufficientBacking};
-use super::bond_assembly::{BondAssemblyError, FundingInputContext, SpentRecordsDurablyPruned};
+use super::backing_set::{BackingSet, ClaimFundingError, InsufficientBacking, MembershipPath};
+use super::bond_assembly::SpentRecordsDurablyPruned;
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::emission_source::{fetch_emission_claim_source, EmissionSourceError};
 use super::prpc::PersonaIsolatedTransport;
 use super::signing_assembly::{leaf_entry_from_chunk, tree_context_from};
 use super::stake_engine::{
-    AssembleEmissionClaim, AssembledEmissionClaim, BackingMembershipPath, PersonaHandle,
-    StakeEngineError, StakeEngineHandle,
+    AssembleEmissionClaim, AssembledEmissionClaim, PersonaHandle, StakeEngineError,
+    StakeEngineHandle,
 };
 
 /// Why the claim pipeline refused before (or at) the actor hand-off. Every
@@ -103,16 +110,14 @@ pub(crate) enum ClaimOrchestrationError {
     /// header window does not cover the anchor yet. Resync and retry.
     #[error("no block hash at reference height {height}")]
     MissingBlockHash { height: u64 },
-    /// The path-assembly reply did not pair one path per requested input —
-    /// an internal plumbing defect surfaced loudly rather than mis-indexed.
-    #[error("assemble_tx reply count diverged from the request: {detail}")]
-    PathAssembly { detail: &'static str },
     /// No backing-eligible output exists at the gather tip.
     #[error(transparent)]
     NoBackingEligible(#[from] InsufficientBacking),
-    /// The fee sweep refused (insufficient funding or a build defect).
+    /// The designation-event seal refused to mint (a stale anchor, no fee
+    /// input at all, a genuine shortfall, or a path-count mismatch — see
+    /// [`ClaimFundingError`]'s arms).
     #[error(transparent)]
-    Assembly(#[from] BondAssemblyError),
+    Funding(#[from] ClaimFundingError),
     /// The actor refused or failed the assembly itself.
     #[error(transparent)]
     Stake(#[from] StakeEngineError),
@@ -258,8 +263,12 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     .designate_backing()?;
 
     // 4. Fee sweep through the designated backing (the Q11-excluding sole
-    //    fee entry), over the same provable set and spendability anchor.
-    let selection = backing.fee_sweep(
+    //    fee entry), over the same provable set and spendability anchor —
+    //    the designation-event seal's mint: the source and the backing move
+    //    into the [`SweptFeeInputs`] witness together, and the item-6
+    //    same-tip check fires here, once.
+    let swept = backing.fee_sweep(
+        source,
         ctx.pruning_landed,
         provable.iter().copied(),
         handle.p_slot(),
@@ -282,66 +291,45 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
         curve_tree_root,
         block_hash,
     };
-    let assemble_inputs: Vec<AssembleInput> = std::iter::once(backing.record())
-        .chain(selection.records.iter())
+    let assemble_inputs: Vec<AssembleInput> = swept
+        .path_records()
         .map(|r| AssembleInput {
             gindex: Gindex(r.gindex.to_raw()),
             output_key: r.output_key,
             commitment: r.commitment,
         })
         .collect();
-    let requested = assemble_inputs.len();
     let paths = ctx
         .tree
         .assemble_tx(reference, assemble_inputs)
         .await
         .map_err(ClaimOrchestrationError::Tree)?;
-    if paths.len() != requested {
-        return Err(ClaimOrchestrationError::PathAssembly {
-            detail: "reply paths != requested inputs",
-        });
-    }
 
     // Field-copy across the curve-tree → tx-builder boundary. Every path
     // shares one tree context (`assemble_tx`'s single-snapshot guarantee),
-    // so the message takes the first path's.
-    let mut paths = paths.into_iter();
-    let backing_assembled = paths.next().expect("length checked above: >= 1 (backing)");
-    let tree_ctx = tree_context_from(&backing_assembled.tree);
-    let backing_path = BackingMembershipPath {
-        leaf_chunk: backing_assembled
-            .leaf_chunk
-            .iter()
-            .map(leaf_entry_from_chunk)
-            .collect(),
-        c1_layers: backing_assembled.c1_layers,
-        c2_layers: backing_assembled.c2_layers,
-    };
-    let fee_funding: Vec<FundingInputContext> = selection
-        .records
+    // so the message takes the first path's; the path↔record pairing itself
+    // is the seal's — `with_paths` counts and zips in the mint's own order,
+    // refusing a mismatch loudly.
+    let tree_ctx = paths.first().map(|p| tree_context_from(&p.tree));
+    let membership_paths: Vec<MembershipPath> = paths
         .into_iter()
-        .zip(paths)
-        .map(|(record, path)| FundingInputContext {
-            record,
+        .map(|path| MembershipPath {
             leaf_chunk: path.leaf_chunk.iter().map(leaf_entry_from_chunk).collect(),
             c1_layers: path.c1_layers,
             c2_layers: path.c2_layers,
         })
         .collect();
+    let operands = swept.with_paths(membership_paths)?;
+    let tree_ctx = tree_ctx.expect("with_paths minted: at least the backing path exists");
 
-    // 6. Hand the prepared operands to the actor (CB-2: derivation, proving,
+    // 6. Hand the sealed operands to the actor (CB-2: derivation, proving,
     //    and signing stay inside it) and return the reply unbroadcast.
-    let fee = ctx.fee;
     Ok(ctx
         .stake
         .assemble_emission_claim(AssembleEmissionClaim {
             handle,
-            source,
-            backing,
-            backing_path,
-            fee_funding,
+            operands,
             tree_ctx,
-            fee,
         })
         .await?)
 }
