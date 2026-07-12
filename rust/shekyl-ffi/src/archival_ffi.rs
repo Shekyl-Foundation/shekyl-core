@@ -571,19 +571,31 @@ pub unsafe extern "C" fn shekyl_archival_verify_unbond_bond_post(
         Ok(v) => v,
         Err(code) => return code,
     };
-    if per_shard_last_served_len > 0 && per_shard_last_served_ptr.is_null() {
-        return SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR;
-    }
-    // The served shards' last-served epochs → the whole-record anchor (Rust);
-    // never-served shards are omitted by C++, so an empty slice folds to `None`.
-    let per_shard: &[u64] = if per_shard_last_served_len == 0 {
-        &[]
-    } else {
-        unsafe { std::slice::from_raw_parts(per_shard_last_served_ptr, per_shard_last_served_len) }
-    };
-    let last_served_epoch = whole_record_last_served(per_shard);
     let record_bonded_total = if record_exists != 0 {
         Some(record_bonded_total)
+    } else {
+        None
+    };
+    // The cooldown anchor only gates a record that exists: a missing record is
+    // rejected (`RECORD_MISSING`) before the cooldown check, so we neither require
+    // the serve-credit pointer nor fold it when there is no record. This keeps the
+    // record-missing verdict independent of cooldown marshaling and skips the
+    // reverse-cursor fold on an already-invalid tx; `verify_unbond_bond_post`
+    // remains the sole decider of record validity and the cooldown gate.
+    let last_served_epoch = if record_bonded_total.is_some() {
+        if per_shard_last_served_len > 0 && per_shard_last_served_ptr.is_null() {
+            return SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR;
+        }
+        // The served shards' last-served epochs → the whole-record anchor (Rust);
+        // never-served shards are omitted by C++, so an empty slice folds to `None`.
+        let per_shard: &[u64] = if per_shard_last_served_len == 0 {
+            &[]
+        } else {
+            unsafe {
+                std::slice::from_raw_parts(per_shard_last_served_ptr, per_shard_last_served_len)
+            }
+        };
+        whole_record_last_served(per_shard)
     } else {
         None
     };
@@ -1825,7 +1837,9 @@ mod tests {
 
     #[test]
     fn unbond_ffi_folds_cooldown_and_maps_verdicts() {
-        use shekyl_archival_retention::{ARCHIVAL_BOND_FLOOR_ATOMIC, RELEASE_COOLDOWN_EPOCHS};
+        use shekyl_archival_retention::{
+            BondPostKind, HoldingsKind, ARCHIVAL_BOND_FLOOR_ATOMIC, RELEASE_COOLDOWN_EPOCHS,
+        };
 
         let floor = ARCHIVAL_BOND_FLOOR_ATOMIC;
         let record_bonded = 2 * floor;
@@ -1834,14 +1848,14 @@ mod tests {
         let served = [80u64, 100u64];
         let ok_current = 100 + RELEASE_COOLDOWN_EPOCHS;
 
-        // (current, debit, total, holdings_len, record_exists) — post_kind = Unbond,
-        // ShardSetCompact, credit 0; holdings shard is 7 when present.
+        // (current, debit, total, holdings_len, record_exists); the post is a
+        // ShardSetCompact `Unbond` with credit 0 and holdings shard 7 when present.
         let verify =
             |current: u64, debit: u64, total: u64, holdings_len: usize, record_exists: u8| unsafe {
                 let shard = 7u64;
                 shekyl_archival_verify_unbond_bond_post(
-                    2, // Unbond
-                    0, // ShardSetCompact
+                    BondPostKind::Unbond as u8,
+                    HoldingsKind::ShardSetCompact as u8,
                     if holdings_len == 0 {
                         std::ptr::null()
                     } else {
@@ -1888,6 +1902,32 @@ mod tests {
         assert_eq!(
             verify(ok_current, floor, 0, 0, 1),
             SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL
+        );
+
+        // A missing record is rejected before the cooldown gate, so the verdict
+        // must not hinge on cooldown marshaling: a null serve-credit pointer with
+        // a nonzero length under `record_exists == 0` surfaces RECORD_MISSING, not
+        // NULL_PTR. (The closure always passes a valid `served` slice, so this
+        // precedence case is exercised directly.)
+        let record_missing_null_cooldown = unsafe {
+            shekyl_archival_verify_unbond_bond_post(
+                BondPostKind::Unbond as u8,
+                HoldingsKind::ShardSetCompact as u8,
+                std::ptr::null(), // shard_ids_ptr (empty holdings)
+                0,                // shard_ids_len
+                0,                // bonded_total_atomic
+                0,                // bond_credit
+                record_bonded,    // bond_debit
+                0,                // record_exists → missing
+                record_bonded,    // record_bonded_total (ignored when missing)
+                std::ptr::null(), // per_shard_last_served_ptr (null)
+                1,                // per_shard_last_served_len > 0
+                ok_current,
+            )
+        };
+        assert_eq!(
+            record_missing_null_cooldown,
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING
         );
     }
 
