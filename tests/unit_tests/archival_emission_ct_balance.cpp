@@ -144,6 +144,16 @@ rct::rctSig make_balanced_emission_rv()
 // 32-byte field inside the opaque canonical blob (emission_wire.rs
 // MembershipOnlyBacking.pseudo_out); this stage never parses the blob, so
 // the backing commitment's serialized bytes stand in at a fixed offset.
+//
+// The fixture is valid through the FULL non-input dispatch
+// (`ver_non_input_consensus`), not just the CT-balance leaf: the fee vin
+// carries a prime-subgroup key image (check_tx_inputs_keyimages_domain),
+// the vout targets are decodable curve points (check_outs_valid), and
+// pqc_auths is sized to vin (the dispatch emission branch checks COUNT
+// only; auth content is check_tx_inputs scope). Everything derived is
+// DETERMINISTIC (fixed scalars, not skGen) so two calls with different
+// backing bytes produce txs differing ONLY in `canonical_bytes` — the
+// delta the blob-boundary arm depends on.
 transaction make_emission_tx(const rct::rctSig& rv, const rct::key& backing_pseudo_out)
 {
   transaction tx{};
@@ -157,7 +167,12 @@ transaction make_emission_tx(const rct::rctSig& rv, const rct::key& backing_pseu
   vin.canonical_bytes[0] = 0x04;
   std::memcpy(vin.canonical_bytes.data() + 32, backing_pseudo_out.bytes, 32);
   tx.vin.push_back(vin);
-  tx.vin.push_back(txin_to_key{});
+
+  txin_to_key fee_in{};
+  // key_offsets stay empty: FCMP++ txs carry no ring members.
+  const rct::key ki = rct::scalarmultBase(rct::d2h(7));
+  std::memcpy(&fee_in.k_image, ki.bytes, sizeof(fee_in.k_image));
+  tx.vin.push_back(fee_in);
 
   const uint64_t amounts[2] = {kReward, 0};
   for (size_t i = 0; i < 2; ++i)
@@ -165,11 +180,18 @@ transaction make_emission_tx(const rct::rctSig& rv, const rct::key& backing_pseu
     tx_out vout{};
     vout.amount = amounts[i];
     txout_to_tagged_key tagged{};
-    memset(&tagged.key, 0x30 + static_cast<int>(i), sizeof(tagged.key));
+    const rct::key out_key = rct::scalarmultBase(rct::d2h(11 + i));
+    std::memcpy(&tagged.key, out_key.bytes, sizeof(tagged.key));
     tagged.view_tag.data = 0;
     vout.target = tagged;
     tx.vout.push_back(vout);
   }
+
+  // One auth slot per vin — the dispatch checks pqc_auths.size() == vin.size().
+  tx.pqc_auths.resize(tx.vin.size());
+  for (auto& auth : tx.pqc_auths)
+    auth.auth_version = 1;
+
   tx.rct_signatures = rv;
   return tx;
 }
