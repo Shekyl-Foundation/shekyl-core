@@ -55,7 +55,7 @@ pub use bond_floor::{
     ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
     ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS,
 };
-pub use bond_post::{verify_join_market_bond_post, BondPostError};
+pub use bond_post::{verify_join_market_bond_post, verify_unbond_bond_post, BondPostError};
 pub use bond_wire::{
     encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,
     HoldingsKind, BOND_POST_SIG_CUSTOMIZATION, VIN_TYPE_ARCHIVAL_BOND_POST,
