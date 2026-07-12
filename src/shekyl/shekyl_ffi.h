@@ -1815,7 +1815,10 @@ uint8_t shekyl_verify_ct_balance(
     size_t num_out_masks,
     uint64_t txn_fee);
 
-// JoinMarket bond-post semantic verify (gate-4 §3.5; hybrid pubkey + P_id hint stay C++)
+// JoinMarket bond-post semantic verify (gate-4 §3.5; hybrid pubkey + P_id hint stay C++).
+// Codes 1 (NULL_PTR) and 19 (LEN_OVERFLOW) are shared slice-marshaling guards from the
+// common vin marshaler, so BOTH bond-post entry points can return them: JoinMarket returns
+// 0-10 or 19; Unbond additionally returns 11-18 and 20.
 #define SHEKYL_ARCHIVAL_BOND_POST_OK                           0
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR                 1
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND                2
@@ -1841,7 +1844,8 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
 
 // Unbond bond-post semantic verify (gate-4 §3.5 debit path; PHASE_2B_FSM_RETOOL.md
 // P2B-8). Extends the shared SHEKYL_ARCHIVAL_BOND_POST_* error space above: 11-18 and
-// 20 are Unbond-semantic; 19 (LEN_OVERFLOW) is the shared slice-marshaling guard.
+// 20 are Unbond-semantic; 19 (LEN_OVERFLOW) is a shared slice-marshaling guard returned
+// by both entry points (see the JoinMarket block above).
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_UNBOND    11
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING          12
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_UNBOND       13

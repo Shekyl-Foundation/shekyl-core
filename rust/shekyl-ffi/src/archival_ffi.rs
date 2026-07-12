@@ -461,20 +461,26 @@ fn holdings_kind_from_u8(kind: u8) -> Result<HoldingsKind, u8> {
     HoldingsKind::from_u8(kind).map_err(|_| SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND)
 }
 
-/// Bound-checked `&[u64]` from a raw C pointer at the bond-post FFI boundary.
+/// Run `f` over a bound-checked `&[u64]` marshaled from a raw C pointer at the
+/// bond-post FFI boundary (shared by the JoinMarket and Unbond entry points).
 ///
-/// `len == 0` yields an empty slice (a null pointer is allowed only then). A null
+/// `len == 0` passes an empty slice (a null pointer is allowed only then). A null
 /// pointer with a positive `len` is a caller marshaling bug (`ERR_NULL_PTR`), and a
 /// `len` whose byte span (`len * size_of::<u64>()`) would exceed `isize::MAX` — the
 /// soundness precondition of [`std::slice::from_raw_parts`] — is rejected
 /// (`ERR_LEN_OVERFLOW`) rather than invoking undefined behavior on a corrupted or
-/// hostile length. Mirrors the `flat_commitment_keys` guard used elsewhere here.
+/// hostile length. The slice is confined to `f`, so no caller can name its lifetime
+/// or let it escape the pointer's validity window.
 ///
 /// # Safety
 /// When `len > 0`, `ptr` must be valid for `len` `u64`s for the duration of the call.
-unsafe fn bond_post_u64_slice<'a>(ptr: *const u64, len: usize) -> Result<&'a [u64], u8> {
+unsafe fn with_bond_post_u64_slice<R>(
+    ptr: *const u64,
+    len: usize,
+    f: impl FnOnce(&[u64]) -> R,
+) -> Result<R, u8> {
     if len == 0 {
-        return Ok(&[]);
+        return Ok(f(&[]));
     }
     if ptr.is_null() {
         return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR);
@@ -485,7 +491,8 @@ unsafe fn bond_post_u64_slice<'a>(ptr: *const u64, len: usize) -> Result<&'a [u6
     if byte_len > isize::MAX as usize {
         return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW);
     }
-    Ok(unsafe { std::slice::from_raw_parts(ptr, len) })
+    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
+    Ok(f(slice))
 }
 
 /// Marshal the shared bond-post args into an [`ArchivalBondPostVin`] for the JoinMarket
@@ -505,8 +512,8 @@ unsafe fn bond_post_vin_from_raw(
     bond_credit: u64,
     bond_debit: u64,
 ) -> Result<ArchivalBondPostVin, u8> {
-    let shard_ids: Vec<u64> =
-        unsafe { bond_post_u64_slice(shard_ids_ptr, shard_ids_len) }?.to_vec();
+    let shard_ids =
+        unsafe { with_bond_post_u64_slice(shard_ids_ptr, shard_ids_len, <[u64]>::to_vec) }?;
     let holdings_kind = holdings_kind_from_u8(holdings_kind)?;
     Ok(ArchivalBondPostVin {
         hybrid_public_key: Vec::new(),
@@ -613,13 +620,16 @@ pub unsafe extern "C" fn shekyl_archival_verify_unbond_bond_post(
     let last_served_epoch = if record_bonded_total.is_some() {
         // The served shards' last-served epochs → the whole-record anchor (Rust);
         // never-served shards are omitted by C++, so an empty slice folds to `None`.
-        let per_shard = match unsafe {
-            bond_post_u64_slice(per_shard_last_served_ptr, per_shard_last_served_len)
+        match unsafe {
+            with_bond_post_u64_slice(
+                per_shard_last_served_ptr,
+                per_shard_last_served_len,
+                whole_record_last_served,
+            )
         } {
-            Ok(s) => s,
+            Ok(anchor) => anchor,
             Err(code) => return code,
-        };
-        whole_record_last_served(per_shard)
+        }
     } else {
         None
     };
