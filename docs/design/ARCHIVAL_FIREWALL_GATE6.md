@@ -1,16 +1,34 @@
 # Archival firewall — gate 6 (`P` lifecycle + pseudonym hygiene)
 
-**Status:** **Round 1 closed (2026-06-13)** — crypto layer + `P` hybrid derivation pinned (§9);
-GF-1 per-tx-type verifier contract resolved and GF-2 dual-scan enforcement made architectural;
-reviewer sign-off recorded (§9.8), with post-sign-off review refinements (C-1/C-2/C-3) folded in.
-**Round 2 (network + transport) is drafted and OPEN for the adversarial pass (§10).** Round-1
-carries: the `ARCHIVAL_P_DERIVE_V1` KAT manifest + `archival_p` implementation (§7), and the
-**C-1 confirm-at-source dependency** — the emission vin-layer ML-DSA equality check (a hard merge
-blocker, §9.8) must land before the `archival_p` impl is wired into emission. Round 2 may add an
-**HS-identity HKDF label** to that KAT (GF-9, §10.7). Timing/output rounds still open. Not
-soundness-closed. **GF-1-carve resolved (2026-06-16):** bond-debit authority is a dedicated
-`bond_spend_pk` (gate-4 §3.5 step 5 / §4.1 / §3.4.1; §9.3 labels), not the account identity key.
-Per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc),
+**Status:** **Rounds 1–2 closed; Round 3 open (2026-07-11).** Not soundness-closed (R5 pending).
+
+- **Round 1 closed (2026-06-13)** — crypto layer + `P` hybrid derivation pinned (§9); GF-1
+  per-tx-type verifier contract resolved, GF-2 dual-scan enforcement made architectural, reviewer
+  sign-off (§9.8), post-sign-off refinements C-1/C-2/C-3 folded in. **Lone carry discharged:** the
+  `ARCHIVAL_P_DERIVE_V1` KAT + `archival_p` module **landed** (Bond-PR 0 #152 — verified at source:
+  [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) carries all seven §9.3 labels
+  incl. the `bond_spend_*` pair; [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs)).
+  **C-1 dependency discharged:** the emission vin-layer ML-DSA equality check **landed** (PR #277,
+  `dev` `13c368707`; `emission_verify.rs`) — quantum spend-authority no longer classical-only.
+- **Round 2 closed (2026-07-11)** — network + transport (§10). All §10.10 exit dispositions
+  ratified against the round's defense-in-depth bar (§10.0); closure disposition + carried items
+  with rule-21 criteria at §10.13. **One carry is a not-yet-frozen crypto surface:** the GF-9
+  seed-derived HS-identity HKDF label is *pinned as a disposition* (§10.7) but is **not yet in the
+  derivation/KAT** (verified at source — absent from `archival_p.rs`), and §10.7's proposed label
+  string uses dot separators against §9.3's hyphen convention; §10.13 carries it armed with the
+  normalization flag so it cannot freeze wrong.
+- **Round 3 open (2026-07-11, this pass)** — timing + rotation + `W`/epoch-length (§11). Sole
+  un-pinned exit gate is **GF-10** within-epoch claim-jitter bounds (no landed code — verified at
+  source); the rotation leg is largely dispositioned by T-A1 (§2.3) and §10.7/§10.9. Frame + steps
+  forward: §11.
+- **Rounds 4–5 planned** — R4 (output + bond-funding, recurring) is formally open but its dominant
+  finding **GF-7 is already built and graded PROVISIONAL-PASS** (`r = 1.86`, local-daemon posture;
+  standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) provisional); the **GF-4 exit
+  seam is the real R4 gap** (§6 R4 cell). R5 is the cross-layer soundness sign-off for Stage 3.
+
+**GF-1-carve resolved (2026-06-16):** bond-debit authority is a dedicated `bond_spend_pk` (gate-4
+§3.5 step 5 / §4.1 / §3.4.1; §9.3 labels), not the account identity key. Per
+[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc),
 adversarial rounds run before Stage 3 `StakeEngine` production code.
 
 **Global PQC policy:** Hybrid genesis stack (Ed25519 + ML-DSA-65 spend auth; X25519 +
@@ -332,15 +350,24 @@ the staking identity surface ([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIF
 
 ---
 
-## 6. Design rounds (planned)
+## 6. Design rounds
+
+Status of record is this table; the round-detail sections (§9 R1, §10 R2, §11 R3) and the
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) landed-code stamps are the reconciled sources
+each cell points at. **"Closed" means the round met its own exit bar** — for the network round that
+bar is defense-in-depth (§10.0: every leak vector named, mitigation specified and testable, residual
+written down), **not** "linkage impossible" and **not** "all implementation landed" — so a closed
+round may carry named implementation/tuning items with rule-21 criteria (R1 closed with its impl
+carried; R2 the same).
 
 | Round | Focus | Exit criterion |
 |-------|-------|----------------|
 | **0** | Scaffold + invariant frame + consumer map | **Done** |
-| **1** | HKDF/`P_id` wire + crypto layer hooks | **Done** (2026-06-13) — §9 GF-1 dual-key verifier contract resolved; GF-2 dual-scan enforcement made architectural; reviewer sign-off recorded (§9.8). **Lone carry:** `ARCHIVAL_P_DERIVE_V1` KAT manifest + `archival_p` module (impl, §7). |
-| **2** | Network + transport (L16 → production shape) | **Draft open (2026-06-13) — §10.** Rendezvous path specified; seeding relaxation bounded. **Entry gates (R1-named, now threaded into the §10 draft):** challenge-response Levin class → anonymity-routable set (GF-3, §10.4); pre-join backing-presentation transport pinned (GF-5, §10.5); Arti HS-hosting capability **confirmed** (web 2026-06), at-source pin carried (GF-12, §10.3); `P`-tx wire-size fingerprint characterization + dummy/fragmentation policy (GF-6, §10.6); Tor HS key lifecycle `p_slot`-bound + seed-derived, residual named (GF-9, §10.7). **Pass-1 dispositions (2026-06-13):** bonded-verifier challenges (§10.4), broadcast announce (§10.5), `P`↔principal circuit/guard isolation pinned as exit item (§10.9), pure-rendezvous + I2P-closed leans (§10.11); **rebond/unbond-at-genesis scope expansion** (R4 recurring; pre-seal sim dependency). Exit checklist + carries: §10.10. |
-| **3** | Timing + rotation + `W` / epoch-length joint pin | E-4 mitigations named with testable wallet defaults. **Exit gate (R1-named):** within-epoch claim jitter min/max bounds pinned (GF-10). |
-| **4** | Output + bond-funding hygiene (**recurring** — rebond/unbond at genesis) | Drain/ramp defaults; threat-model §7 rebase in PHASE_2B. **Hard exits (R1-named, now recurring not one-time — see scope note):** decorrelated-drain **output-count** discipline pinned for **terminal drain *and* recurring partial-unbond (`HoldingsUpdate`)** (GF-4 — delay floor already pinned, §2.4); principal→`P` bond-funding structural-distinguishability + minimum separation pinned for **first join *and* recurring rebond-topup** (GF-7); within-epoch timing (GF-10, R3) now applies to **bond ops, not just emission**. |
+| **1** | HKDF/`P_id` wire + crypto layer hooks | **Closed (2026-06-13)** — §9 GF-1 dual-key verifier contract resolved; GF-2 dual-scan enforcement made architectural; reviewer sign-off (§9.8). **Carry discharged (2026-07-11 reconciliation):** `ARCHIVAL_P_DERIVE_V1` KAT + `archival_p` module **landed** (Bond-PR 0 #152; `archival_p.rs` + `kat_archival_p_derive_v1.rs`, seven §9.3 labels incl. `bond_spend_*` verified at source). C-1 emission vin ML-DSA equality check **landed** (#277). §7 checklist reconciled to landed state. |
+| **2** | Network + transport (L16 → production shape) | **Closed (2026-07-11) — §10; closure disposition §10.13.** Rendezvous path specified; seeding relaxation bounded. **Entry gates (all dispositioned):** challenge-response Levin class → anonymity-routable set (GF-3, §10.4); pre-join backing-presentation transport (GF-5, §10.5); Arti HS-hosting capability confirmed, at-source pin carried (GF-12, §10.3); `P`-tx wire-size fingerprint characterization + dummy/fragmentation policy (GF-6, §10.6); HS key lifecycle `p_slot`-bound + seed-derived (GF-9, §10.7). **Exit dispositions (§10.11, passes 1–4):** bonded-verifier challenges, broadcast announce, `P`↔principal circuit/guard isolation (§10.9), pure-rendezvous + I2P-closed. **Carries (§10.13, rule-21):** at-source Arti pin → transport PR; dummy/frag tuned ratio → testnet; **GF-9 HS-id HKDF label → §9.3 amendment (armed: not yet in derivation; dot-vs-hyphen format flag)**; announce↔anchor + cadence timing → R3. Transport code partial-landed (2d-2: SP-T1 #204/#209, SP-T4a #254 — inert). |
+| **3** | Timing + rotation + `W` / epoch-length joint pin | **Open (2026-07-11) — §11.** Frame, adversary, and steps-forward pinned. **Sole un-pinned exit gate:** within-epoch claim-jitter min/max bounds (GF-10 — no landed code, verified at source). Rotation leg largely dispositioned (T-A1 §2.3 timeline non-channel; network leg §10.7/§10.9); epoch-batch already blunts drip (`MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15`). E-4 mitigations to be ratified into the round. |
+| **4** | Output + bond-funding hygiene (**recurring** — rebond/unbond at genesis) | **Planned; substance partly landed/graded.** **GF-7 (funding-in) built + graded PROVISIONAL-PASS** (`r = 1.86`, local-daemon; standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) provisional) — not an open design question. **GF-4 (value-out) is the R4 gap:** decorrelated-drain **output-count** discipline + the *separate one-sided* exit-seam standoff (FOLLOWUPS 2b) + joint grading (cadence+amount+holdings) + the L17 synchronized-exit wargame, for **terminal drain *and* recurring partial-unbond (`HoldingsUpdate`)** (delay floor already pinned, §2.4). GF-10 (R3) extends to bond ops. Blocks on the rebond/unbond FSM frictions → age-stratified sim reconciliation (pre-seal). |
+| **5** | Cross-layer adversarial pass | **Planned.** Soundness-depth sign-off for Stage 3. Build the S-2 fused exposure ledger (first) + the S-3 exit/value-seam adversary sim (§10.12), then sign off. |
 | **5** | Cross-layer adversarial pass | Soundness-depth sign-off for Stage 3 |
 
 **Parallel (not gated on gate-6 closure):** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
@@ -382,35 +409,48 @@ shipping an optimistic sealed floor on top of the very +1 margin it is meant to 
 
 ## 7. Implementation checklist (pre-code)
 
-- [x] Pin `P` HKDF labels + `P_canonical_id` alignment with emission leg (§9).
+Reconciled to landed code 2026-07-11 (`dev` `75c3cae1d`; status-of-record is
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) — this list marks each item's round and
+whether its design pin and its code have landed, and does not restate the index's detail). A `[x]`
+here means **the gate-6 design pin is discharged**; a trailing "code:" clause states the landed
+artifact where one exists.
+
+- [x] Pin `P` HKDF labels + `P_canonical_id` alignment with emission leg (§9). **code:** `archival_p.rs`.
 - [x] Pin per-tx-type verifier contract — account `hybrid_sign_pk` is bond-record identity only;
       per-input auth is per-output (GF-1, §9.6).
-- [ ] Land `ARCHIVAL_P_DERIVE_V1` KAT vectors + `shekyl-crypto-pq` `archival_p` module —
-      **including the `shekyl-archival-p-bond-spend-{ed25519,ml-dsa-65}-v1` labels → `bond_spend_pk`**
-      (GF-1; §9.3 / §9.4).
-- [ ] Pin off-chain announce/backing presentation wire (daemon + wallet).
-- [ ] Pin rotation ceremony (over-enumeration; holdings/bond migration).
-- [ ] Pin network rendezvous requirement for production archival serving.
+- [x] **Land `ARCHIVAL_P_DERIVE_V1` KAT vectors + `shekyl-crypto-pq` `archival_p` module** —
+      incl. the `shekyl-archival-p-bond-spend-{ed25519,ml-dsa-65}-v1` labels → `bond_spend_pk`
+      (GF-1; §9.3 / §9.4). **code (Bond-PR 0 #152, verified 2026-07-11):**
+      [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) (7 labels present),
+      [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs).
+- [ ] Pin off-chain announce/backing presentation wire (daemon + wallet). **R2 transport half
+      pinned** (GF-5 broadcast, §10.5 / §10.13); the *wire* half is the residual (§10.13 carry).
+- [ ] Pin rotation ceremony (over-enumeration; holdings/bond migration). **→ R3** (§11; §2.3 P2B-1
+      two-rotation split + `p_slot` over-enumeration already pinned, §9.2).
+- [x] Pin network rendezvous requirement for production archival serving — **R2** (§10.2 heavy-path
+      onion-rendezvous, no clearnet fallback; §10.9 isolation). **code:** partial, inert (2d-2).
 - [ ] Pin wallet defaults: emission batching, drain decorrelation, bond-funding ramp
       (T-A4/T-A6 conditional passes; [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md) §9).
-- [ ] Land wallet disclosure §10 in UX copy.
+      **Split:** batching **landed** (`MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15`); **drain decorrelation +
+      ramp → R4**; **within-epoch claim jitter → R3 (GF-10, un-pinned).**
+- [ ] Land wallet disclosure §10 in UX copy. **→ R3/R4 (F1 disclosure draft §10, UX).**
 - [x] SEB pinned (10_000) — joint gate-2 cadence + epoch-granularity fingerprint (`ARCHIVAL_TIMING_CONSTANTS.md` §1.2).
 - [ ] Rebase PHASE_2B §7 threat model — draft:
       [`PHASE_2B_SECTION7_DRAFT.md`](../completed/PHASE_2B_SECTION7_DRAFT.md) (review → land).
 - [ ] Stage 3 test vectors: cross-layer linkability negatives — **including the GF-2
       cross-pipeline non-cross-assignment test** (no output emitted to both principal and `P`
-      scan contexts; §9.6).
-- [ ] **C-1 forgery negative (emission vin + stressnet negative suite):** a backing input that
+      scan contexts; §9.6). **→ R5.**
+- [x] **C-1 forgery negative (emission vin ML-DSA equality check):** a backing input that
       proves leaf membership while supplying a `pqc_pk` whose `H(pqc_pk)` does **not** equal the
-      leaf-committed extra scalar must be **rejected** by the emission vin verifier. This test
-      **fails until the vin-layer ML-DSA equality check lands** (§9.8 C-1), making the carried
-      dependency a failing test rather than a remember-to-build item. Add as an explicit negative
-      case alongside the honest-path "staking lifecycle completes 100 full cycles" stressnet
-      criterion.
+      leaf-committed extra scalar is **rejected** by the emission vin verifier. **code (PR #277,
+      `dev` `13c368707`):** `emission_verify.rs`; quantum spend-authority no longer classical-only
+      (§9.8 C-1 discharged). The honest-path stressnet "staking lifecycle completes 100 full
+      cycles" criterion + the blob-boundary arm remain the **regtest e2e residue** (E4/E5 gate,
+      `FOLLOWUPS.md`), not a gate-6 deliverable.
 
 ---
 
-## 9. Round 1 — `P` hybrid derivation (genesis pin, draft)
+## 9. Round 1 — `P` hybrid derivation (genesis pin — Round 1 CLOSED 2026-06-13)
 
 ### 9.1 Design disposition
 
@@ -762,11 +802,14 @@ hybrid and V4 is gated; gate 6 does not ship a classical-only `P` escape hatch.
 - [x] Dual-scan and signing-surface separation stated (GF-1 per-tx-type contract; GF-2 architectural enforcement).
 - [x] V4 reversion clauses named.
 - [x] Reviewer sign-off on Round 1 draft (2026-06-13 — GF-1 resolved, GF-2 made architectural, GF-8/11/4 corrected, downstream round criteria named).
-- [ ] `ARCHIVAL_P_DERIVE_V1` KAT manifest (fixed `master_seed` + `p_slot` → known `p_canonical_id`
-      **and `bond_spend_pk`** — the §9.3 `shekyl-archival-p-bond-spend-*` labels, GF-1).
-- [ ] `shekyl-crypto-pq::archival_p` implementation + unit tests.
+- [x] `ARCHIVAL_P_DERIVE_V1` KAT manifest (fixed `master_seed` + `p_slot` → known `p_canonical_id`
+      **and `bond_spend_pk`** — the §9.3 `shekyl-archival-p-bond-spend-*` labels, GF-1). **Landed**
+      (Bond-PR 0 #152): [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs).
+- [x] `shekyl-crypto-pq::archival_p` implementation + unit tests. **Landed:**
+      [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) (seven §9.3 labels present,
+      verified at source 2026-07-11).
 
-**Carried dependencies (confirm-at-source before the impl + emission verifier land):**
+**Carried dependencies — DISCHARGED (confirm-at-source status, 2026-07-11):**
 
 - **C-1 — emission backing-input quantum spend-authority binding.** The GF-1 §9.6 emission
   contract rests entirely on the membership proof and the ML-DSA check binding the **same
@@ -786,15 +829,23 @@ hybrid and V4 is gated; gate 6 does not ship a classical-only `P` escape hatch.
   (a backing input whose supplied `pqc_pk` does not hash to the leaf-committed extra scalar must be
   **rejected**) **fails** until the vin equality check lands — so the dependency cannot silently
   fail to discharge.
+  **DISCHARGED (PR #277, merged `dev` `13c368707`, verified 2026-07-11):** the vin-layer ML-DSA
+  equality check landed in the emission verify module (`emission_verify.rs`; index §4 PR-E rows) —
+  the backing path now carries the quantum spend-authority guarantee, not classical-only. The
+  honest-path stressnet 100-cycle criterion + the blob-boundary arm remain the **regtest e2e
+  residue** (E4/E5 gate, `FOLLOWUPS.md`), which is emission-track scope, not a Gate-6 deliverable.
 
 ---
 
-## 10. Round 2 — network + transport layer (draft — OPEN)
+## 10. Round 2 — network + transport layer (CLOSED 2026-07-11)
 
-**Status:** Draft for the adversarial pass (opened 2026-06-13). **Not closed.** Round 2
-specifies how peers reach `P` and how `P` broadcasts, such that `P`'s network *location* and
-*traffic shape* never link to the principal. It threads the R1-named entry gates
-(GF-3/5/6/9/12, §6) into one transport spec rather than re-deriving surface.
+**Status:** **Closed 2026-07-11** (opened 2026-06-13; four adversarial passes §10.11; closure
+disposition §10.13). Round 2 specifies how peers reach `P` and how `P` broadcasts, such that `P`'s
+network *location* and *traffic shape* never link to the principal. It threads the R1-named entry
+gates (GF-3/5/6/9/12, §6) into one transport spec rather than re-deriving surface. Closed against
+the round's defense-in-depth bar (§10.0), **not** "linkage impossible": every named leak vector has
+a specified, testable mitigation and a written residual; implementation/tuning items are carried
+with rule-21 criteria (§10.13). The §10.10 exit checklist below is ticked to its closure basis.
 
 ### 10.0 How Round 2 differs from Round 1 (the bar is different)
 
@@ -1103,28 +1154,41 @@ with the principal-linkage gap still open under a different name.
 
 ### 10.10 Round 2 exit criteria + carried items
 
-**Exit (all required to close Round 2):**
+**Exit (all met at close 2026-07-11; a `[x]` means the *design disposition* is discharged — see
+§10.13 for the closure basis and the implementation carries that ride each one):**
 
-- [ ] **GF-3** — challenge/response + liveness-re-proof Levin class **added to the
-      anonymity-routable set**, command IDs pinned, clearnet fallback **refused (loud)**.
-- [ ] **GF-5** — pre-join announce/backing-presentation **transport** pinned (fresh circuit, no
-      principal stream reuse); announce↔anchor timing gap **handed to R3**.
-- [ ] **GF-6** — `P`-tx burst **characterization obligation** pinned (cell/fragment granularity,
-      per `P`-tx type) + dummy/fragmentation **policy shape** decided; tuned ratio **carried to
-      testnet replay**.
-- [ ] **GF-9** — HS identity key **`p_slot`-bound + seed-derived** disposition pinned; **new
-      HKDF label added to §9.3 + `ARCHIVAL_P_DERIVE_V1` KAT**; serving-side key-compromise
-      residual **named**.
-- [ ] **GF-12** — embed-Arti fork **decided conditional on the at-source pin**
-      (version/feature/MSRV/`with_hsid` API); external-daemon reversion clause recorded.
-- [ ] **Forks 1+4 / §10.9** — `P`↔principal **client/circuit isolation** pinned (independent
+- [x] **GF-3** — challenge/response + liveness-re-proof Levin class **added to the
+      anonymity-routable set**, command IDs pinned, clearnet fallback **refused (loud)** (§10.4,
+      bonded-verifier disposition).
+- [x] **GF-5** — pre-join announce/backing-presentation **transport** pinned (**broadcast** over the
+      tx-broadcast anonymity path, fresh circuit, no principal stream reuse; §10.5); announce↔anchor
+      timing gap **handed to R3**.
+- [x] **GF-6** — `P`-tx burst **characterization obligation** pinned (cell/fragment granularity,
+      per `P`-tx type) + dummy/fragmentation **policy shape** decided (§10.6); tuned ratio **carried
+      to testnet replay** (§10.13). Structural pin is §10.9 circuit/guard isolation (burst shape is
+      orthogonal to origin-dilution).
+- [~] **GF-9** — HS identity key **`p_slot`-bound + seed-derived** disposition **pinned** (§10.7),
+      serving-side key-compromise residual **named**. **The "new HKDF label added to §9.3 +
+      `ARCHIVAL_P_DERIVE_V1` KAT" is a carry, not done** — verified at source, the label is absent
+      from [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) (seven §9.3 labels, no
+      `hs_id`). Carried armed at §10.13 with the **dot-vs-hyphen format flag** (§10.7's proposed
+      `shekyl.archival.p.hs_id.v1` violates §9.3's hyphen convention and its non-prefix-free
+      safety argument — normalize before freezing). Disposition closes R2; the label-freeze is a
+      §9.3 amendment.
+- [x] **GF-12** — embed-Arti fork **decided conditional on the at-source pin**
+      (version/feature/MSRV/`with_hsid` API; §10.3); external-daemon reversion clause recorded.
+- [x] **Forks 1+4 / §10.9** — `P`↔principal **client/circuit isolation** pinned (independent
       Arti clients + non-overlapping guard sets; no principal stream reuse; **restore-flow
       co-activation discipline** — `StakeEngine` does not co-launch `P`'s HS with principal sync).
-      Operational residual named.
-- [ ] **Rebond/unbond recurring-surface** — §6 R4 re-scope acknowledged: GF-4 (drain output-count)
+      Operational residual named. **Enforcement mechanism (Arti config vs. policy) carried** to the
+      transport PR (§10.13). Extended to **key locality** by S-6 (§10.12).
+- [x] **Rebond/unbond recurring-surface** — §6 R4 re-scope acknowledged: GF-4 (drain output-count)
       and GF-7 (bond-funding separation) carried as **recurring** (partial-unbond / rebond-topup),
       not one-time; the **rebond/unbond FSM (promoted to genesis / V3.0, 2026-06-15)** named as the
       **pre-genesis-seal dependency** for the R-3 sim bond-mobility reconciliation.
+
+**Legend:** `[x]` disposition discharged; `[~]` disposition discharged but an implementation/freeze
+carry rides it (GF-9 label). No box is `[ ]` at close.
 
 **Carried out of Round 2 (named, not silently deferred — per
 [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)):**
@@ -1403,9 +1467,154 @@ handle's fusion surface, do not re-fork the architecture. The walls (crypto + ne
 shape; the **doors (GF-7/GF-4)** are where the remaining privacy work is. S-2 and S-3 are the
 privacy axis of the R-3 reconciliation that already gates the seal.
 
+### 10.13 Round 2 closure disposition (2026-07-11)
+
+**Closed against the §10.0 bar.** The network round does not admit algebraic separation, so the
+close is *not* "principal↔`P` linkage is impossible." It is: **every named leak vector (GF-3, GF-5,
+GF-6, GF-9, GF-12, the fork-1+4 isolation gap) has a specified, testable mitigation and a written
+residual** (§§10.3–10.9), the four adversarial passes (§10.11) resolved the forks and the
+critical-path items, and the §10.12 end-to-end trace surfaced and homed the cross-layer S-1…S-6
+findings. R2's job was to *name the transport firewall and its residuals*; it has. What remains is
+implementation and measurement, carried below — the same closure posture R1 took with its `archival_p`
+impl carried.
+
+**What R2 does *not* claim.** It does not close GF-7 or GF-4 (the money seams — S-1); those are R4
+and are conceded-deferred here, not covered. It does not measure effective (vs. nominal) cover; that
+is the testnet S-3 obligation. It does not freeze the GF-9 HS-id label (below). Association with a
+disposition is not coverage of its implementation.
+
+**Carried items (rule-21 — each names its completion/reopen criterion and its home):**
+
+| Carry | Home | Completion / reopen criterion |
+|-------|------|-------------------------------|
+| **GF-9 HS-id HKDF label** — seed-derived `p_slot`-bound `.onion` identity | **§9.3 amendment + `ARCHIVAL_P_DERIVE_V1` KAT** | **Armed:** label absent from `archival_p.rs` at close (verified). Pin the label into the §9.3 table (L=32 seed → ed25519 HS identity, consumer `launch_onion_service_with_hsid`) **normalized to the hyphen convention** — §10.7's `shekyl.archival.p.hs_id.v1` (dots) must become `shekyl-archival-p-hs-id-*-v1` before it enters the KAT, or the §9.3 non-prefix-free safety argument does not cover it. Freezing the label is a deliberate crypto-surface act, not a side effect — do it as its own pin. |
+| **At-source Arti pin** — exact version/feature/MSRV/`with_hsid` API shape | Transport PR (§10.3) | Embed-Arti fork holds; external-daemon-over-SOCKS reversion clause fires iff the at-source check fails. |
+| **Dummy/fragmentation tuned ratio** | Testnet replay (§10.6) | Measure-then-tune: the real-to-dummy ratio that makes `P` bursts indistinguishable from ambient large-v3; honest cost/coverage residual. |
+| **§10.9 isolation enforcement mechanism** (Arti config vs. policy) + **S-6 key-locality** provisioning | Transport PR + PHASE_2B engines | Independent guard sets + restore-flow non-co-activation must be *structural*, and the serving box gets only the `P`-subtree (never the master seed). Reopen if a host-level compromise model is added. |
+| **Heavy-path relaxation** | §10.8; post-testnet sim L-curve | Pure-rendezvous is the genesis commitment; any relaxation is a post-testnet reversion clause and must prove the *access pattern* (not just the payload) carries no `P`-attributable metadata. |
+
+**Handed forward (not carries — scope transfers):**
+
+- **To R3 (§11):** announce↔anchor timing gap (§10.5) and emission-cadence timing (§10.6) — the
+  *timing* of the transport events R2 pinned the *shape* of.
+- **To R4 (§6):** GF-4/GF-7 recurring surfaces under the genesis rebond/unbond FSM; the exit-seam
+  standoff (FOLLOWUPS 2b).
+- **To R5 (§10.12):** the S-2 fused exposure ledger and S-3 exit/value-seam adversary sim.
+
+**Landed transport code at close (status-of-record: [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §4):**
+2d-2 is *partially built, inert* — SP-T1 circuit isolation (#204/#209), SP-T4a `BroadcastSubmitter`
+(#254, `Local` posture live via the WI-3 dispatch driver); `shekyl-p-transport` (`PTorClient`,
+`PBlockSource`) on `dev` but `dead_code`; the `PerP` posture + block-timed remote dispatch await the
+2d-2 completion. R2's *design* is closed; its *wiring* tracks the Bond-PR 2d-2 front.
+
 ---
 
-## 11. Related documents
+## 11. Round 3 — timing + rotation + `W`/epoch-length (OPEN — draft frame, 2026-07-11)
+
+**Status:** **Open — frame only.** This section opens R3 from a closed R1/R2 base; it does **not**
+design R3. It fixes the round's scope, adversary, entry gate, the dispositions R3 inherits (so the
+round does not re-derive them), the one deliverable that is genuinely un-pinned, and the steps a
+design pass would take. No numeric bound is pinned here — GF-10's constant is genesis-frozen and
+must be set *a priori, before* any measurement, per the same discipline the standoff constant
+followed (§10.12 BUILD; [`ARCHIVAL_BOND_WI4_MEASUREMENT.md`](ARCHIVAL_BOND_WI4_MEASUREMENT.md) §13.4).
+
+### 11.1 Scope and the seam it defends
+
+Scope (§6): **timing + rotation + the `W`/epoch-length joint pin.** The property (§4 invariant 3):
+a watcher cannot align principal spends and `P` emissions to a single clock better than chance +
+public epoch boundaries, under stated wallet discipline. The bridge is **`P`→principal timing** —
+a sub-epoch alignment channel between `P`'s emission-claim broadcasts and principal wallet activity.
+It is *not* principal→user, and *not* the amount channel (loud by design, §2.4). This is the inner
+seam's *timing* face; the entry/exit *funding* seams (GF-7/GF-4) are R4.
+
+### 11.2 The adversary (name it)
+
+A **passive timing observer** with the public per-epoch retention/serve-credit timeline (F1
+liveness fingerprint, §2.3) and a candidate set of principal on-chain activity, attempting to align
+`P`'s within-epoch emission-claim broadcasts to principal spends. Two sub-adversaries:
+
+1. **Sub-epoch claim-timing correlator** — the settlement-epoch batch (§2.3) already coarsens claim
+   cadence to epoch granularity, but *within* an epoch the claim's broadcast instant is currently
+   unconstrained. If it is deterministic (e.g. always at epoch open, or a fixed offset), it is a
+   standing alignment channel. **This is what GF-10 closes.**
+2. **Rotation-timeline linker (E-4)** — `P_old`→`P_new` re-linkage via fine-grained retention
+   timeline + shard-set adjacency across a rotation (§2.3 E-4). Largely **already dispositioned** —
+   see §11.4.
+
+### 11.3 Entry gate — GF-10 (the sole un-pinned deliverable)
+
+**GF-10 — within-epoch claim-jitter min/max bounds.** Un-pinned:
+[`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §7 lists "Emission jitter — ± fraction
+of `SEB` (wallet-local) — gate-6 R3" as unlanded, and there is **no landed code** (verified at
+source 2026-07-11: no `emission_jitter` / `claim_jitter` symbol under `rust/`). This is R3's exit
+gate. **Coverage boundary — do not let the standoff read as coverage of this:** the `--standoff`
+sim and WI-4 grading (§10.12) measure the **entry funding seam** (announce↔bond, GF-7/R4); they say
+**nothing** about within-epoch claim timing. GF-10 is a distinct channel and a distinct constant.
+
+### 11.4 What R3 inherits (already dispositioned — do not re-derive)
+
+- **Rotation timeline leg → non-channel (T-A1, §2.3).** At lean equilibrium ~98% singleton
+  portfolios ⇒ portfolio = public identity; cosmetic rotation with fixed storage is rational and
+  re-linkable, so timeline re-linkage is *not* the channel and decorrelation would require
+  abandoning scarce-shard income. F1 **conditionally finally accepted** (§2.3). R3 ratifies this
+  into the round; it does not reopen it. Reopen only on a Form-C / reward-shape change (§2.3).
+- **Rotation network leg → pinned in R2.** `P_new` must not share principal clearnet path (§4
+  invariant 4): HS key `p_slot`-bound + seed-derived (§10.7), independent guards + restore-flow
+  non-co-activation (§10.9). R3 owns only the *timing/portfolio* face of rotation.
+- **`p_slot` over-enumeration ceremony** — the two-rotation split (backing-UTXO rotation vs. `P`
+  pseudonym rotation) and `new slot ⇒ new keys` are pinned (§3, §9.2).
+- **Epoch batching** — `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15` (§2.3) already blunts drip cadence.
+- **`W` vs batch cap (GF-11, no new pin)** — `W = 26 > 15`; the **batch cap binds**, a `P` cannot
+  widen its claim window to the forfeiture horizon to thin its fingerprint (§2.3). Consensus fact,
+  not a decorrelation lever R3 can spend.
+
+### 11.5 What R3 owes to close
+
+1. **Pin GF-10 within-epoch claim-jitter bounds** — an a-priori, genesis-frozen `± fraction of
+   `SEB`` window, set before measurement. Because the claim anchor is consumer-side and
+   FCMP++-hidden, the bound is **wallet-only, consensus-unenforceable** (like the standoff draw) —
+   so it ships as a **published conformance test vector** with a strict-alpha goodness-of-fit grade,
+   *not* a consensus rule (the standoff pattern: draw directly, no double-jitter trap;
+   [`FOLLOWUPS.md`](../FOLLOWUPS.md) funding-seam carry (1)/(2b)).
+2. **Resolve the `W`/epoch-length *joint* pin** — the design question the round name flags: a jitter
+   window must not push a claim across a settlement-epoch boundary (which would change *which* epoch
+   it claims — a consensus-visible move, not mere wallet timing). Bound GF-10 *relative to* `SEB`
+   and the batch cap so the two constraints compose. This is the "joint" in the round title.
+3. **Ratify the E-4/T-A1 rotation dispositions** into the round record (they currently live as §2.3
+   prose + the F1 disclosure doc).
+4. **Absorb the R2→R3 hand-forward** — the announce↔anchor timing gap (§10.5) and emission-cadence
+   timing (§10.6): decide whether they are covered by GF-10's window or need their own bound.
+5. **F1 wallet disclosure copy** ([`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_TA7_LIFETIME_WINDOW.md)
+   §10) — the operator-facing statement that rotation does not reset the observation window
+   (`T_obs` = operator lifetime).
+
+### 11.6 Blocks / dependencies
+
+- **Not blocked on the FSM** — GF-10 is emission-claim jitter; the rebond/unbond FSM friction blocks
+  R4, not this. R3 can proceed now.
+- **`SEB = 10_000` is pinned** (§7), so the epoch-length half of the joint pin has its constant.
+- **Coupling out:** GF-10 is later *extended to bond ops* in R4 (§6) — R3 pins the emission form;
+  R4 reuses it for partial-unbond/rebond-topup timing. Pin GF-10 so that extension is mechanical.
+- **Not in scope:** the L17 synchronized-exit wargame (crisis cadence blows through jitter windows)
+  is the **exit seam** — R4/GF-4, [`FOLLOWUPS.md`](../FOLLOWUPS.md) swan-2/W8 — not R3.
+
+### 11.7 Steps forward (the design pass, when convened)
+
+1. State the GF-10 adversary-advantage claim and derive the jitter window a priori from it (commit
+   the threshold in this doc **before** any sim run — a failed grade is a redesign signal, never a
+   move-the-bar signal).
+2. Pin the window as `± fraction of SEB`, resolve the epoch-boundary non-crossing constraint (owe 2),
+   and state the batch-cap composition.
+3. Specify the wallet conformance vector (direct draw, strict-alpha chi-square, lag-1 independence)
+   reusing the `shekyl-standoff` / `shekyl-stats` primitives; state it is wallet self-test, not
+   consensus enforcement, with its coverage boundary.
+4. Ratify T-A1/E-4 and fold the R2 timing hand-forward; write the F1 disclosure copy.
+5. Adversarially verify: a timing observer with the F1 fingerprint gains no better-than-epoch-prior
+   alignment under the pinned window. Close R3 or name the residual.
+
+---
+
+## 12. Related documents
 
 | Doc | Relationship |
 |-----|----------------|
@@ -1420,6 +1629,25 @@ privacy axis of the R-3 reconciliation that already gates the seal.
 
 ## Revision history
 
+- **2026-07-11 (R2 closed, R3 opened, landed elements reconciled — this pass):** Brought the doc up
+  to its own status-of-record so the round record is self-contained rather than reconstructed from
+  scattered docs. **R1 carry discharged:** verified at source that `archival_p` + the
+  `ARCHIVAL_P_DERIVE_V1` KAT landed (Bond-PR 0 #152; seven §9.3 labels incl. `bond_spend_*` present
+  in `archival_p.rs`) and the C-1 emission vin ML-DSA equality check landed (#277); §7 checklist
+  reconciled to landed state per item (round + code anchor). **R2 formally closed** against its
+  §10.0 defense-in-depth bar (not "linkage impossible", not "all implementation landed"): §10.10
+  boxes ticked to closure basis, new **§10.13 closure disposition** (ratification + carried items
+  with rule-21 criteria + R3/R4/R5 hand-forwards + landed-transport-code pointer). **GF-9 honesty
+  correction:** the HS-id HKDF label is *not* in the derivation (verified — absent from
+  `archival_p.rs`), so its box is `[~]` (disposition pinned, label-freeze carried) and the carry is
+  armed with the **dot-vs-hyphen format flag** (§10.7's `shekyl.archival.p.hs_id.v1` violates
+  §9.3's hyphen convention + non-prefix-free safety argument — normalize before freezing).
+  **R3 opened** as a draft *frame only* (new §11): scope, adversary, entry gate (GF-10 within-epoch
+  claim jitter — un-pinned, no landed code, verified), inherited dispositions (T-A1 rotation
+  non-channel, epoch-batch, GF-11 `W`-vs-cap, R2 rotation network leg), what it owes, and the
+  steps-forward — with the coverage boundary that the standoff (GF-7/R4) is **not** GF-10 coverage.
+  §6 round table rewritten to true status; §11 Related documents renumbered §12. No design pinned
+  this pass. Docs-only.
 - **2026-06-16 (S-5 consciously closed — long-lived `P` committed):** The last genuinely-structural
   fork (long-lived vs. short-lived `P`) is closed in favor of **long-lived `P`** per
   `21-reversion-clause-discipline.mdc` — ratifying what serve-credit accrual, lock tiers,
