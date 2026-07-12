@@ -33,7 +33,7 @@ use shekyl_rpc_client::{Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
 use shekyl_types::BlockHeight;
 
-use crate::engine::block_fetch::default_fetch_scannable_block;
+use crate::engine::block_fetch::default_fetch_scannable_block_full;
 use crate::engine::prpc::PRpc;
 use crate::engine::traits::DaemonEngine;
 
@@ -164,9 +164,10 @@ fn block_number(height: BlockHeight) -> Result<usize, BlockSourceError> {
 /// [`DaemonEngine`] connection.
 ///
 /// It is generic over [`DaemonEngine`] (not the bare `Rpc` transport) on
-/// purpose — it calls the high-level [`DaemonEngine::fetch_scannable_block`],
-/// which the daemon actor and the test double both override; routing through
-/// the low-level `Rpc` transport instead would bypass those overrides.
+/// purpose — it calls the high-level
+/// [`DaemonEngine::fetch_scannable_block_full`], which the daemon actor and
+/// the test double both override; routing through the low-level `Rpc`
+/// transport instead would bypass those overrides.
 ///
 /// This establishes the *interface* only. The per-`P` network **isolation**
 /// (separate connection, no shared cache with the principal) is 2d-2's
@@ -193,10 +194,14 @@ impl<D: DaemonEngine> BlockSource for DaemonBlockSource<D> {
         height: BlockHeight,
     ) -> Result<Option<ScannableBlock>, BlockSourceError> {
         let number = block_number(height)?;
-        // High-level fetch: whole block, all transactions, no selectivity. Routes
-        // through `DaemonEngine::fetch_scannable_block` (which the daemon actor and
-        // the test double override) — not the bare `Rpc`, which would bypass them.
-        let block = self.daemon.fetch_scannable_block(number).await?;
+        // High-level fetch: whole block, all transactions, no selectivity. The
+        // **full**-body variant, because SP-6's exhaustiveness gate recomputes
+        // each body's committed hash — a pruned FCMP++ spend can never satisfy
+        // it (`Transaction::hash()` substitutes the null prunable hash). Routes
+        // through `DaemonEngine::fetch_scannable_block_full` (which the daemon
+        // actor and the test double override) — not the bare `Rpc`, which
+        // would bypass them.
+        let block = self.daemon.fetch_scannable_block_full(number).await?;
         Ok(Some(block))
     }
 }
@@ -241,12 +246,17 @@ impl BlockSource for PBlockSource {
         height: BlockHeight,
     ) -> Result<Option<ScannableBlock>, BlockSourceError> {
         let number = block_number(height)?;
-        // P-SH: exactly one height per call — `default_fetch_scannable_block`
-        // issues a single `get_block` (+ its txs) for `number`. Like
+        // P-SH: exactly one height per call — the fetch issues a single
+        // `get_block` (+ its txs) for `number`. Full bodies, same as
+        // `DaemonBlockSource`: the SP-6 per-body hash recompute requires the
+        // prunable section. (The pruned-fetch bandwidth optimization over Tor
+        // is the reopening candidate if 2d-2 posture profiling demands it —
+        // it would need a daemon-claimed `prunable_hash` leg, which weakens
+        // recompute-from-received; see `docs/FOLLOWUPS.md`.) Like
         // `DaemonBlockSource`, a missing block surfaces as `Err` (this source
         // cannot *prove* absence; `Ok(None)` is the withheld-body-robustness
         // slice, out of scope for SP-T2).
-        let block = default_fetch_scannable_block(&self.rpc, number).await?;
+        let block = default_fetch_scannable_block_full(&self.rpc, number).await?;
         Ok(Some(block))
     }
 }

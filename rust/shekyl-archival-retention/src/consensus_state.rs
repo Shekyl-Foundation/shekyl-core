@@ -10,7 +10,7 @@ use crate::bond_floor::{
     ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
     ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
 };
-use crate::constants::SETTLEMENT_EPOCH_BLOCKS;
+use crate::constants::{effective_settlement_epoch_blocks, SETTLEMENT_EPOCH_BLOCKS};
 use crate::k_cover::KCover;
 use crate::reward_arithmetic::{
     curve_milli, mul_div_floor, scarcity_milli, BandedCurveParams, WORK_MILLI_SCALE,
@@ -21,13 +21,15 @@ const _: () = assert!(
     "settlement epoch must be nonzero"
 );
 
-/// Settlement epoch containing `block_height` (`floor(height / SETTLEMENT_EPOCH_BLOCKS)`).
+/// Settlement epoch containing `block_height` (`floor(height / SEB)`), where
+/// `SEB` is [`effective_settlement_epoch_blocks`] — the genesis pin, or the
+/// clamped fakechain-only regtest override.
 ///
 /// Used for bond-connect `join_settlement_epoch` derivation and prune-horizon
 /// arithmetic; the daemon performs no epoch arithmetic of its own.
 #[must_use]
 pub fn settlement_epoch_at_height(block_height: u64) -> u64 {
-    block_height / SETTLEMENT_EPOCH_BLOCKS
+    block_height / effective_settlement_epoch_blocks()
 }
 
 /// Settlement epoch that closes at `block_height`, when one does.
@@ -37,10 +39,11 @@ pub fn settlement_epoch_at_height(block_height: u64) -> u64 {
 /// height 0 and at non-boundary heights.
 #[must_use]
 pub fn epoch_close_due_at_height(block_height: u64) -> Option<u64> {
-    if block_height == 0 || !block_height.is_multiple_of(SETTLEMENT_EPOCH_BLOCKS) {
+    let seb = effective_settlement_epoch_blocks();
+    if block_height == 0 || !block_height.is_multiple_of(seb) {
         return None;
     }
-    Some(block_height / SETTLEMENT_EPOCH_BLOCKS - 1)
+    Some(block_height / seb - 1)
 }
 
 /// The block height at which settlement epoch `epoch` closes — the inverse of
@@ -53,7 +56,7 @@ pub fn epoch_close_due_at_height(block_height: u64) -> Option<u64> {
 pub fn epoch_close_height(epoch: u64) -> Option<u64> {
     epoch
         .checked_add(1)
-        .and_then(|next| next.checked_mul(SETTLEMENT_EPOCH_BLOCKS))
+        .and_then(|next| next.checked_mul(effective_settlement_epoch_blocks()))
 }
 
 /// Prune horizon at `block_height`: epochs strictly below the returned value
@@ -307,28 +310,30 @@ pub struct EpochCloseInputs<'a> {
 }
 
 impl<'a> EpochCloseInputs<'a> {
-    /// The verify-view construction (`EMISSION_CLAIM_BUILDER.md` §7.3):
-    /// consensus constants come from the compiled constants pipeline —
-    /// deliberately never a wire copy, which would be a second source that
-    /// can drift — and the close-only M1 operands are stubbed
-    /// (`frozen_shard_count: 0`, [`KCover::consensus`]), which the verify
-    /// path never reads (the gate's outcome arrives via the persisted
-    /// `Σwork` denominator). Single-sourced here so the verify FFI shims and
-    /// the wallet's §2 step-7 self-check construct byte-identical views and
-    /// cannot drift; the close path threads real M1 operands and does not
-    /// use this constructor.
+    /// The close-path construction: the pinned consensus params
+    /// (schedule, age weight, banded curve) filled from the compiled
+    /// constants pipeline — the **single** source both this and
+    /// [`Self::verify_view`] draw from, so the close FFI shim and the
+    /// verify views cannot drift on a param (the
+    /// `SETTLEMENT_EPOCH_BLOCKS → effective_settlement_epoch_blocks()`
+    /// swap previously had to edit the FFI's struct literal and this
+    /// constructor in lockstep; now the params exist once) — plus the
+    /// close-only M1 operands (`frozen_shard_count`, `k_cover`) the caller
+    /// threads for real.
     #[must_use]
-    pub fn verify_view(
+    pub fn close_view(
         settlement_epoch: u64,
         close_block_height: u64,
         bonds: &'a [EpochCloseBond<'a>],
         shards: &'a [EpochCloseShard],
         credit_pairs: &'a [CreditPair],
+        frozen_shard_count: u64,
+        k_cover: KCover,
     ) -> Self {
         Self {
             settlement_epoch,
             close_block_height,
-            settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
+            settlement_epoch_blocks: effective_settlement_epoch_blocks(),
             age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
             curve: BandedCurveParams {
                 plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
@@ -337,9 +342,36 @@ impl<'a> EpochCloseInputs<'a> {
             bonds,
             shards,
             credit_pairs,
-            frozen_shard_count: 0,
-            k_cover: KCover::consensus(),
+            frozen_shard_count,
+            k_cover,
         }
+    }
+
+    /// The verify-view construction (`EMISSION_CLAIM_BUILDER.md` §7.3):
+    /// [`Self::close_view`]'s pinned params — deliberately never a wire
+    /// copy, which would be a second source that can drift — with the
+    /// close-only M1 operands stubbed (`frozen_shard_count: 0`,
+    /// [`KCover::consensus`]), which the verify path never reads (the
+    /// gate's outcome arrives via the persisted `Σwork` denominator).
+    /// Single-sourced here so the verify FFI shims and the wallet's §2
+    /// step-7 self-check construct byte-identical views and cannot drift.
+    #[must_use]
+    pub fn verify_view(
+        settlement_epoch: u64,
+        close_block_height: u64,
+        bonds: &'a [EpochCloseBond<'a>],
+        shards: &'a [EpochCloseShard],
+        credit_pairs: &'a [CreditPair],
+    ) -> Self {
+        Self::close_view(
+            settlement_epoch,
+            close_block_height,
+            bonds,
+            shards,
+            credit_pairs,
+            0,
+            KCover::consensus(),
+        )
     }
 }
 

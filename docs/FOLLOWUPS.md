@@ -4649,6 +4649,17 @@ sustainability is unaffected by the recalibration.
   test). This e2e is now unblocked as §8 **PR-4** (regtest e2e +
   blob-boundary arm), gated only on #281's
   `economics_chain_helpers.h` harness.
+  UPDATE 2026-07-12: PR-4 split into **4a/4b/4c**
+  (`EMISSION_CLAIM_BUILDER.md` §8 "PR 4 split"): driving the harness
+  live surfaced that the daemon's Rust submit engine can accept
+  *neither* transaction kind the e2e needs (no bond-post Phase-C
+  battery; Phase A rejects `Input::ArchivalRewardEmission`). PR-4a
+  (implemented) lands the harness up to the daemon submit gap plus
+  the enablers (SEB lever, serve-credit injection RPC, local-posture
+  transport, `SweptFeeInputs` witness + CB-3 seam, blob-boundary arm,
+  two production bug fixes); PR-4b lands the daemon submit legs (see
+  the "daemon Rust submit engine" item below); PR-4c is the e2e
+  proper and closes the E4 gate.
 
 - **Q11 balance-exclusion KAT — blob-boundary invariant arm**
   (surfaced 2026-07-09, CB-4 source pass —
@@ -4688,6 +4699,43 @@ sustainability is unaffected by the recalibration.
   `economics_chain_helpers.h`. PR-4's scope table names this arm
   explicitly; it is in-scope work there, not a rider. **Reopening
   trigger: closed when the blob-boundary arm lands green.**
+  **UPDATE 2026-07-12: CLOSED — the blob-boundary arm landed green in
+  §8 PR-4a** (`archival_emission_ct_balance.cpp`
+  `dispatch_verdict_invariant_under_blob_variation`): the fixture was
+  made valid under the **full** `ver_non_input_consensus` dispatch
+  (valid-domain output keys / fee-input key image / per-input
+  `pqc_auths`), and the arm asserts the CT-balance verdict is
+  invariant across two transactions differing only in
+  `canonical_bytes`, with an oversized-`pseudoOuts` control proving
+  the size-check leg still fires. The #281 harness gate turned out
+  not to bind — the arm drives the dispatch directly and needed no
+  chain helpers.
+
+- **Daemon Rust submit engine: bond-post + emission submit batteries —
+  §8 PR-4b** (surfaced 2026-07-12, PR-4a staker harness,
+  [`EMISSION_CLAIM_BUILDER.md`](./design/EMISSION_CLAIM_BUILDER.md) §8
+  "PR 4 split"). Two gaps in `shekyl-daemon-rpc`'s submit pipeline,
+  both proven live by the PR-4a harness. **(i) Bond posts:** the
+  Phase-C verifier (`submit/verifier.rs` `DaemonTxVerifier`) has no
+  `SubmitTxKind::BondPost` battery — it logs and refuses `Malformed`
+  unconditionally, so no production bond post can ever be accepted
+  over the Rust submit path. The `phase_a.rs` module docs claiming
+  bond posts cannot clear Phase A are **stale** (the harness drew
+  `FeeTooLow` — a Phase-C-only verdict — from an underfunded bond
+  post, so the arm's rule-21 reopening criterion, the §13 wire
+  reshape, has already fired); fix the docs with the battery.
+  **(ii) Emission claims:** Phase A rejects
+  `Input::ArchivalRewardEmission` outright; the emission submit leg
+  (kind classification, fee/vout statics, Phase-C rows over the
+  landed `emission_vin_verify_*` FFI battery) never landed. The
+  PR-4a harness carries a **tripwire** pinning gap (i)'s exact
+  refusal (`regtest_e2e.rs`
+  `e2e_staker_bond_post_reaches_the_daemon_submit_gap` asserts
+  `RejectedTerminal { kind: Malformed }`); it fails loudly when the
+  battery lands and promotes to accepted-and-applied in the same PR.
+  **Target: V3.0 pre-genesis — PR-4b; the E4 gate (PR-4c e2e) is
+  sequenced behind it.** Closed when both batteries land and the
+  tripwire is promoted.
 
 ---
 
@@ -7308,6 +7356,21 @@ one place to confirm each item's relationship to the wallet stack.
 ---
 
 ## V3.2 — Rust cutover and cleanup
+
+- **P-scan pruned-fetch bandwidth option over Tor (rejected at V3.0).** The
+  P-scan's block source fetches **full** transaction bodies because the SP-6
+  exhaustiveness gate recomputes each body's committed hash from received
+  material, and a storage-pruned FCMP++ spend hashes with the null prunable
+  component — a pruned fetch can never satisfy the gate on a spend-bearing
+  block (`pscan/block_source.rs`, `block_fetch.rs` `TxBodyForm`). The
+  bandwidth-cheap pruned form would need a daemon-*claimed* `prunable_hash`
+  leg in the recompute, which weakens recompute-from-received toward
+  trust-the-daemon — rejected while the 2d-2 local-daemon posture is the
+  recommended default. **Target:** V3.2 (performance work). **Reopen when:**
+  2d-2 remote/Tor posture profiling shows full-body fetch dominating P-scan
+  wall time; **re-evaluation shape:** a design round over the exhaustiveness
+  gate's trust posture (daemon-claimed prunable hash vs full fetch), graded
+  against the lying-daemon forged-absence bound.
 
 - **`atomic_write_file` power-loss crash-injection tests.** PR 6 cites
   existing unit tests in `shekyl-engine-file/src/atomic.rs` (overwrite

@@ -574,15 +574,16 @@ impl Rpc for TestDaemon {
 impl DaemonEngine for TestDaemon {
     type Error = RpcError;
 
-    /// Serve the in-memory chain directly, overriding the
-    /// [`block_fetch`](super::block_fetch) default (which would drive the
-    /// real RPC transport `TestDaemon::post` panics on). The body is the
-    /// former `Rpc::fetch_scannable_block` override, now returning the
-    /// `shekyl_wire`-typed [`ScannableBlock`]; the migration moved block
-    /// fetching from the `Rpc` surface to `DaemonEngine::fetch_scannable_block`.
-    fn fetch_scannable_block(
+    /// Serve the in-memory chain directly, overriding the single fetch
+    /// override point (the [`block_fetch`](super::block_fetch) default
+    /// would drive the real RPC transport `TestDaemon::post` panics on).
+    /// The synthetic chain stores full bodies (nothing is ever pruned), so
+    /// the body `form` is irrelevant here — the same lookup serves both,
+    /// and the scripted error/reorg queues fire identically on either.
+    fn fetch_scannable_block_in_form(
         &self,
         number: usize,
+        _form: super::block_fetch::TxBodyForm,
     ) -> impl Send + std::future::Future<Output = Result<ScannableBlock, RpcError>> {
         let state = self.state.clone();
         async move {

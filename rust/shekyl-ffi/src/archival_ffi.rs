@@ -14,19 +14,18 @@ use std::io::Cursor;
 use shekyl_archival_retention::{
     as_of_e_served_work, capped_work_milli, challenge_fire_height, challenge_leaf_chunk_bounds,
     challenge_seal_height, claim_window_floor, claimed_epochs_check_and_set,
-    emission_block_claims_unique, emission_vin_verify, emission_vin_verify_auth,
-    emission_vin_verify_backing, emission_vin_verify_claims, epoch_close_compute,
-    epoch_close_due_at_height, epoch_close_height, frozen_segment_count, good_through,
-    p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height, serve_credit_epoch_ok,
-    settlement_epoch_at_height, verify_bond_post_ct_balance, verify_join_market_bond_post,
-    verify_leaf_index, verify_segment_path, ArchivalBondPostVin, ArchivalRewardEmissionVin,
-    ArchivalServeCreditResponse, BadInterval, BandedCurveParams, BondCtBalanceError, BondPostError,
-    BondPostKind, BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair,
-    EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError, EpochCloseBond,
-    EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, KCover, RewardCommit,
-    WireError, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-    ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIMED_EPOCH_ENTRIES,
-    MAX_CLAIM_AGE_W, SETTLEMENT_EPOCH_BLOCKS,
+    effective_settlement_epoch_blocks, emission_block_claims_unique, emission_vin_verify,
+    emission_vin_verify_auth, emission_vin_verify_backing, emission_vin_verify_claims,
+    epoch_close_compute, epoch_close_due_at_height, epoch_close_height, frozen_segment_count,
+    good_through, p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height,
+    serve_credit_epoch_ok, settlement_epoch_at_height, settlement_epoch_blocks_overridden,
+    verify_bond_post_ct_balance, verify_join_market_bond_post, verify_leaf_index,
+    verify_segment_path, ArchivalBondPostVin, ArchivalRewardEmissionVin,
+    ArchivalServeCreditResponse, BadInterval, BondCtBalanceError, BondPostError, BondPostKind,
+    BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair, EmissionEpochSource,
+    EmissionVerifyContext, EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
+    HoldingsDescriptor, HoldingsKind, KCover, RewardCommit, WireError, CHALLENGE_RESOLUTION_BLOCKS,
+    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -117,7 +116,7 @@ pub struct ShekylArchivalVerifyCtx {
 
 #[must_use]
 pub fn settlement_epoch_open_height(e: u64) -> u64 {
-    e.saturating_mul(SETTLEMENT_EPOCH_BLOCKS)
+    e.saturating_mul(effective_settlement_epoch_blocks())
 }
 
 #[must_use]
@@ -521,6 +520,51 @@ pub extern "C" fn shekyl_archival_settlement_epoch_at_height(block_height: u64) 
     settlement_epoch_at_height(block_height)
 }
 
+/// The effective settlement-epoch length in blocks (the genesis-pinned
+/// 10 000, or the clamped `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override —
+/// the fakechain-only regtest lever). Single source for C++ consumers
+/// needing the length itself; the schedule functions above already
+/// consume it internally.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_settlement_epoch_blocks() -> u64 {
+    effective_settlement_epoch_blocks()
+}
+
+/// True iff a `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override is active (the
+/// effective schedule differs from the genesis default — which requires
+/// this process to have **armed** via
+/// [`shekyl_archival_settlement_epoch_arm_regtest`]). Drives the daemon's
+/// loud fakechain warning.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_settlement_epoch_overridden() -> bool {
+    settlement_epoch_blocks_overridden()
+}
+
+/// True iff `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` is present in the process
+/// environment at all (no validation, no schedule latch). Drives the
+/// daemon's fail-closed public-network refusal: the settlement-epoch
+/// schedule is consensus, and on a non-FAKECHAIN net the *presence* of the
+/// lever is the operator error to refuse on (`Blockchain::init`, next to
+/// the `SEEDHASH_EPOCH_*` gate) — before any question of the value's
+/// validity.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_settlement_epoch_override_present() -> bool {
+    shekyl_archival_retention::settlement_epoch_override_present()
+}
+
+/// Arm the `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override for the daemon's
+/// FAKECHAIN startup path. Returns `true` and latches the validated
+/// override (or the genesis pin when the variable is unset); returns
+/// `false` — the daemon refuses to start — when the value is invalid or
+/// the schedule already latched to a different value (an
+/// initialization-order bug). An unarmed process ignores the lever
+/// entirely, so arming is the single gate a regtest schedule passes
+/// through.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_settlement_epoch_arm_regtest() -> bool {
+    shekyl_archival_retention::arm_settlement_epoch_override_for_regtest().is_ok()
+}
+
 /// Returns `1` and writes the settlement epoch whose close is processed at
 /// `block_height`; `0` (no write) at height 0, non-boundary heights, or null out.
 ///
@@ -826,23 +870,19 @@ pub unsafe extern "C" fn shekyl_archival_epoch_close_compute(
     };
 
     let bonds = rows.bonds();
-    let inputs = EpochCloseInputs {
+    // Pinned params via the single-sourced close-view constructor (a struct
+    // literal here would be a second param source that edits in lockstep).
+    // PF-6a: the consensus() constructor is the only production path to a
+    // threshold value; a divergent threshold is a type error here.
+    let inputs = EpochCloseInputs::close_view(
         settlement_epoch,
         close_block_height,
-        settlement_epoch_blocks: SETTLEMENT_EPOCH_BLOCKS,
-        age_weight_milli: ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
-        curve: BandedCurveParams {
-            plateau_work_milli: ARCHIVAL_REWARD_PLATEAU_WORK_MILLI,
-            plateau_value_milli: ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-        },
-        bonds: &bonds,
-        shards: &rows.shards,
-        credit_pairs: &rows.pairs,
+        &bonds,
+        &rows.shards,
+        &rows.pairs,
         frozen_shard_count,
-        // PF-6a: the consensus() constructor is the only production path to
-        // a threshold value; a divergent threshold is a type error here.
-        k_cover: KCover::consensus(),
-    };
+        KCover::consensus(),
+    );
     let result = match epoch_close_compute(&inputs) {
         Ok(r) => r,
         Err(_) => return SHEKYL_ARCHIVAL_EPOCH_CLOSE_ERR_INDEX_RANGE,
@@ -1581,6 +1621,10 @@ pub unsafe extern "C" fn shekyl_archival_verify_bond_post_ct_balance(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_archival_retention::{
+        BandedCurveParams, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
+        ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, SETTLEMENT_EPOCH_BLOCKS,
+    };
     use std::ptr;
 
     #[test]

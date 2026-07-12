@@ -17,6 +17,7 @@ use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::handle::derive_output_handle;
+use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_crypto_pq::output::construct_output;
 use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
@@ -211,10 +212,22 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
 
     for (address, amount) in payment_outputs {
         let recipient = decode_recipient(&address, network)?;
+        // The address carries the recipient's **Edwards** view key; the KEM's
+        // X25519 half encapsulates to `montgomery(view_pk)` (the parameter-free
+        // birational map — the same one the recipient's scanner inverts by using
+        // its view scalar as the Montgomery secret). Passing the Edwards bytes
+        // straight through would encapsulate to a wrong point: the daemon still
+        // accepts the tx (the sender's own proofs re-derive consistently), but
+        // the recipient's decap silently fails and the output is unrecoverable.
+        let recipient_x25519 = ed25519_pk_to_x25519_pk(&recipient.view_key).map_err(|_| {
+            KeyEngineError::Primitive {
+                detail: "recipient view key does not map to a valid X25519 point",
+            }
+        })?;
         let built = build_output(
             &tx_key_secret,
             &recipient.spend_key,
-            &recipient.view_key,
+            &recipient_x25519,
             &recipient.ml_kem_encap_key,
             amount,
             output_index,
@@ -510,6 +523,113 @@ mod tests {
             (&x * ED25519_BASEPOINT_TABLE) + (*shekyl_curve_generators::T * y),
             o,
             "change output must open with x·G + y·T == O (spendable)"
+        );
+    }
+
+    /// A **payment** output built from a decoded address must be recoverable by
+    /// the recipient — the sender-side X25519 encapsulation key is
+    /// `montgomery(view_pk)`, never the raw Edwards `view_key` bytes the
+    /// address carries.
+    ///
+    /// The pre-fix payment path passed `recipient.view_key` (compressed
+    /// Edwards) straight into `construct_output`'s `x25519_pk` parameter, which
+    /// interprets the bytes as a Montgomery u-coordinate. The ECDH then targets
+    /// a wrong point: the daemon still accepts the transaction (the sender's
+    /// own proofs re-derive from the same wrong point, consistently), but the
+    /// recipient's decap silently fails and the payment is invisible to its
+    /// scanner. Self-paid change never hit this (it uses the wallet's stored
+    /// `x25519_pk`), so only a cross-wallet recovery pins it — this is the
+    /// unit-level distillation of the PR-4 staker regtest harness's
+    /// persona-funding discovery leg.
+    #[test]
+    fn payment_output_from_decoded_address_is_recoverable_by_the_recipient() {
+        const SEED: [u8; 32] = [9u8; 32];
+        const TX_KEY: [u8; 32] = [13u8; 32];
+        const OUT_IDX: u64 = 0;
+        const AMOUNT: u64 = 5_000_000;
+
+        // Recipient wallet: encode its primary address (Edwards view key on the
+        // wire), then decode it exactly as `sign_tx` does.
+        let recipient_keys = LocalKeys::from_test_seed(SEED);
+        let address = ShekylAddress::new(
+            Network::Mainnet,
+            *recipient_keys.keys.spend_pk.as_canonical_bytes(),
+            *recipient_keys.keys.view_pk.as_canonical_bytes(),
+            recipient_keys.keys.ml_kem_ek.to_vec(),
+        )
+        .encode()
+        .expect("encode recipient address");
+        let decoded = decode_recipient(&address, Network::Mainnet).expect("decode recipient");
+
+        // Sender-side mapping, exactly as the `sign_tx` payment loop does it.
+        let recipient_x25519 =
+            ed25519_pk_to_x25519_pk(&decoded.view_key).expect("map view key to X25519");
+        assert_eq!(
+            recipient_x25519, recipient_keys.keys.x25519_pk,
+            "the mapped key must equal the wallet's stored montgomery(view_pk)"
+        );
+
+        // Positive arm: an output encapsulated to the MAPPED key is recovered
+        // by the recipient's view-derived Montgomery secret (the production
+        // scanner's derivation).
+        let constructed = construct_output(
+            &TX_KEY,
+            &recipient_x25519,
+            &decoded.ml_kem_encap_key,
+            &decoded.spend_key,
+            AMOUNT,
+            OUT_IDX,
+        )
+        .expect("construct payment output");
+        let recovered = scan_output_recover(
+            recipient_keys.keys.view_sk.as_canonical_bytes(),
+            recipient_keys.keys.ml_kem_dk.as_canonical_bytes(),
+            &constructed.kem_ciphertext_x25519,
+            &constructed.kem_ciphertext_ml_kem,
+            &constructed.output_key,
+            &constructed.commitment,
+            &constructed.enc_amount,
+            constructed.amount_tag,
+            &constructed.enc_label,
+            constructed.label_tag,
+            constructed.view_tag_prefilter,
+            OUT_IDX,
+        )
+        .expect("recipient must recover the payment output");
+        assert_eq!(
+            recovered.recovered_spend_key, decoded.spend_key,
+            "recovery must yield the recipient's spend key"
+        );
+
+        // Negative arm — the bug class this test exists for: encapsulating to
+        // the RAW Edwards view-key bytes (interpreted as a Montgomery
+        // u-coordinate) produces an output the recipient CANNOT recover.
+        let wrong = construct_output(
+            &TX_KEY,
+            &decoded.view_key,
+            &decoded.ml_kem_encap_key,
+            &decoded.spend_key,
+            AMOUNT,
+            OUT_IDX,
+        )
+        .expect("construct output to the wrong point (daemon-acceptable)");
+        assert!(
+            scan_output_recover(
+                recipient_keys.keys.view_sk.as_canonical_bytes(),
+                recipient_keys.keys.ml_kem_dk.as_canonical_bytes(),
+                &wrong.kem_ciphertext_x25519,
+                &wrong.kem_ciphertext_ml_kem,
+                &wrong.output_key,
+                &wrong.commitment,
+                &wrong.enc_amount,
+                wrong.amount_tag,
+                &wrong.enc_label,
+                wrong.label_tag,
+                wrong.view_tag_prefilter,
+                OUT_IDX,
+            )
+            .is_err(),
+            "an output encapsulated to the raw Edwards bytes must NOT be recoverable"
         );
     }
 }

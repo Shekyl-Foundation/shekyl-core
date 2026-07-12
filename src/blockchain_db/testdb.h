@@ -177,6 +177,9 @@ public:
   virtual void set_total_burned(uint64_t amount) override {}
   virtual uint64_t get_total_burned() const override { return 0; }
 
+  virtual void set_settlement_epoch_blocks_pin(uint64_t blocks) override {}
+  virtual uint64_t get_settlement_epoch_blocks_pin() const override { return 0; }
+
   virtual bool has_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) const override { return false; }
   virtual void set_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) override {}
   virtual void remove_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) override {}

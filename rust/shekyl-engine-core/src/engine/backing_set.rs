@@ -20,16 +20,34 @@
 //! `funding_outputs` to a backing candidate that bypasses the eligibility
 //! filter (GF-4b doc §5 item 1, checked here by shape and at the PR boundary
 //! by grep).
+//!
+//! **The designation-event seal (`SweptFeeInputs` → [`ClaimOperands`]).**
+//! The same monopoly discipline extends to the claim message's operands
+//! (`EMISSION_CLAIM_BUILDER.md` §8's named forward item): the handler's two
+//! old step-2 runtime refusals (`StaleClaimAnchor`, `BackingInFeeSet`) were
+//! one invariant — *these operands came from one designation event* —
+//! enforced as comparisons because the message fields were freely
+//! constructible. [`DesignatedBacking::fee_sweep`] now consumes the
+//! designation **and** the claim source and mints [`SweptFeeInputs`], the
+//! sealed triple; [`SweptFeeInputs::with_paths`] zips the membership paths
+//! in without breaking the seal; the message takes the resulting
+//! [`ClaimOperands`] whole. Cross-pairing a fee selection, a designation,
+//! and a source from different events is unrepresentable, and the refusal
+//! arms are deleted, not relocated (the one remaining runtime comparison —
+//! designation anchor vs. source tip — happens once, at the mint).
 
 use std::collections::BTreeSet;
 
 use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
+use shekyl_tx_builder::LeafEntry;
 use shekyl_types::{BlockHeight, GlobalOutputIndex, PSlot};
 use shekyl_units::AtomicUnits;
 
 use crate::engine::bond_assembly::{
-    sweep_funding_outputs, BondAssemblyError, FundingSelection, SpentRecordsDurablyPruned,
+    sweep_funding_outputs, BondAssemblyError, FundingInputContext, FundingSelection,
+    SpentRecordsDurablyPruned,
 };
+use crate::engine::emission_source::EmissionClaimSource;
 
 /// The backing-eligible subset of a persona's **spendable** funding records
 /// — possession is proof that every member's lineage is rung 1 or rung 2
@@ -247,10 +265,9 @@ pub(crate) struct DesignatedBacking {
     /// The spendability anchor inherited from the [`BackingSet`] this
     /// backing was designated from. The fee sweep below reuses it, so the
     /// backing decision and the fee-input spendability are anchored to the
-    /// same height by construction; the C-4 handler's same-tip check
-    /// (GF-4b §4 item 6) compares this single value against the tip the
-    /// tree context and membership paths are fetched at, and
-    /// refuses-and-refetches on mismatch.
+    /// same height by construction; the mint-time same-tip check (GF-4b §4
+    /// item 6, [`Self::fee_sweep`]) compares this single value against the
+    /// claim source's gather tip and refuses-and-refetches on mismatch.
     reference_height: BlockHeight,
 }
 
@@ -260,54 +277,296 @@ impl DesignatedBacking {
         &self.record
     }
 
-    /// The spendability anchor the backing was designated at — the height
-    /// the C-4 same-tip check verifies against the assembly tip (GF-4b §4
-    /// item 6).
-    pub(crate) fn reference_height(&self) -> BlockHeight {
-        self.reference_height
-    }
-
-    /// The claim path's fee-input selection: [`sweep_funding_outputs`] with
-    /// the designated backing structurally excluded (Q11) and the
-    /// spendability anchor inherited from the backing decision (item 6).
+    /// The claim path's fee-input selection **and the designation-event
+    /// seal's mint site** (module docs): [`sweep_funding_outputs`] with the
+    /// designated backing structurally excluded (Q11) and the spendability
+    /// anchor inherited from the backing decision (item 6), consuming the
+    /// designation *and* the claim source so the three operands leave as one
+    /// sealed [`SweptFeeInputs`].
+    ///
+    /// The item-6 same-tip comparison happens **once, here**: the
+    /// designation's stored anchor must equal the source's gather tip
+    /// (`chain_height − 1` — a height, never the block count), or backing
+    /// spendability and claim-window finalization were evaluated against
+    /// different chains ([`ClaimFundingError::StaleClaimAnchor`]; the caller
+    /// refetches both at one tip). Downstream there is nothing left to
+    /// re-check — the witness carries the pairing.
     ///
     /// `reserved` is the live pending posts' reservation union, exactly as
     /// on the bond path; this method unions the backing's `gindex` into it
     /// before delegating, so the exclusion cannot be forgotten or applied
-    /// against the wrong output. The C-4 handler obtains fee inputs
+    /// against the wrong output. The claim path obtains fee inputs
     /// **exclusively** through this method — the same monopoly discipline as
     /// `sweep_funding_outputs` on the bond path (GF-4b §5 item 4's grep
     /// shape), reviewed at the PR boundary.
+    ///
+    /// A sweep whose eligible set is **empty** refuses structurally
+    /// ([`ClaimFundingError::ClaimFeeInputsRequired`], regardless of the fee
+    /// amount): the loud reward vout consumes the entire mint, so the fee
+    /// side must supply the tx's pseudoOuts and its FCMP++ fee-side proof
+    /// anchor from at least one separate spendable output. A sweep that
+    /// selects something but falls short of `fee` — including eligible
+    /// records that all carry amount 0 — is a genuine shortfall and keeps
+    /// the [`BondAssemblyError::InsufficientFunding`] taxonomy.
     pub(crate) fn fee_sweep<'a, I>(
-        &self,
+        self,
+        source: EmissionClaimSource,
         pruning_landed: &SpentRecordsDurablyPruned,
         records: I,
         p_slot: PSlot,
         reserved: &BTreeSet<GlobalOutputIndex>,
-        required: AtomicUnits,
-    ) -> Result<FundingSelection, BondAssemblyError>
+        fee: AtomicUnits,
+    ) -> Result<SweptFeeInputs, ClaimFundingError>
     where
         I: IntoIterator<Item = &'a PFundingOutputRecord>,
     {
+        if source.chain_height.tip() != Some(self.reference_height) {
+            return Err(ClaimFundingError::StaleClaimAnchor {
+                anchor: self.reference_height.to_raw(),
+                tip: source.chain_height.tip().map_or(0, BlockHeight::to_raw),
+            });
+        }
+
         let mut excluded = reserved.clone();
         excluded.insert(self.record.gindex);
-        sweep_funding_outputs(
+        let selection = sweep_funding_outputs(
             pruning_landed,
             records,
             p_slot,
             &excluded,
-            required,
+            fee,
             self.reference_height,
         )
+        .map_err(|err| match err {
+            // The sweep's typed empty-eligible-set refusal IS the structural
+            // no-fee-input state. Deliberately NOT keyed on
+            // `InsufficientFunding { available: 0 }`: zero available also
+            // occurs when eligible records exist but all carry amount 0 (a
+            // representable CT state) — that is a genuine shortfall whose
+            // remedy is funding, and it keeps the shortfall taxonomy below.
+            BondAssemblyError::NoSpendableFunding => {
+                ClaimFundingError::ClaimFeeInputsRequired { fee: fee.to_raw() }
+            }
+            other => ClaimFundingError::Assembly(other),
+        })?;
+
+        Ok(SweptFeeInputs {
+            source,
+            backing: self,
+            selection,
+            fee,
+        })
     }
+}
+
+/// The sealed designation-event triple (module docs): the claim source, the
+/// designated backing, and the fee selection swept **against that backing at
+/// that source's tip** — [`DesignatedBacking::fee_sweep`] is the sole
+/// constructor, so possession is proof the three operands came from one
+/// designation event. Every field is private; the only exits are
+/// [`Self::path_records`] (borrowed, for membership-path assembly) and
+/// [`Self::with_paths`] (consuming, into [`ClaimOperands`]).
+pub(crate) struct SweptFeeInputs {
+    /// The claim source the designation was anchored against.
+    source: EmissionClaimSource,
+    /// The designated backing (its `gindex` is excluded from `selection` by
+    /// the mint).
+    backing: DesignatedBacking,
+    /// The swept fee selection — non-empty by [`FundingSelection`]'s own
+    /// constructor invariant.
+    selection: FundingSelection,
+    /// The fee the sweep was run against (`selection.total >= fee`, by the
+    /// sweep's shortfall refusal).
+    fee: AtomicUnits,
+}
+
+impl SweptFeeInputs {
+    /// The records needing curve-tree membership paths, in path-request
+    /// order: the backing first, then the fee records in sweep
+    /// (oldest-first) order. [`Self::with_paths`] consumes the assembled
+    /// paths in exactly this order.
+    pub(crate) fn path_records(&self) -> impl Iterator<Item = &PFundingOutputRecord> {
+        std::iter::once(&self.backing.record).chain(self.selection.records.iter())
+    }
+
+    /// Test-only inspection of the swept fee records (the production exits
+    /// are `path_records` and `with_paths`; see the type docs).
+    #[cfg(test)]
+    pub(crate) fn fee_records(&self) -> &[PFundingOutputRecord] {
+        &self.selection.records
+    }
+
+    /// Zip the assembled membership paths in — one per [`Self::path_records`]
+    /// entry, same order — producing the message-ready [`ClaimOperands`]
+    /// without breaking the seal. Refuses a count mismatch loudly
+    /// ([`ClaimFundingError::PathCount`]) rather than mis-pairing paths to
+    /// records.
+    pub(crate) fn with_paths(
+        self,
+        mut paths: Vec<MembershipPath>,
+    ) -> Result<ClaimOperands, ClaimFundingError> {
+        let expected = 1 + self.selection.records.len();
+        if paths.len() != expected {
+            return Err(ClaimFundingError::PathCount {
+                expected,
+                got: paths.len(),
+            });
+        }
+        let fee_paths = paths.split_off(1);
+        let backing_path = paths
+            .pop()
+            .expect("length checked above: exactly 1 remains");
+        let fee_funding = self
+            .selection
+            .records
+            .into_iter()
+            .zip(fee_paths)
+            .map(|(record, path)| FundingInputContext {
+                record,
+                leaf_chunk: path.leaf_chunk,
+                c1_layers: path.c1_layers,
+                c2_layers: path.c2_layers,
+            })
+            .collect();
+        Ok(ClaimOperands {
+            source: self.source,
+            backing: self.backing,
+            backing_path,
+            fee_funding,
+            fee: self.fee,
+            fee_total: self.selection.total,
+        })
+    }
+}
+
+/// One output's curve-tree membership path — public tree data only,
+/// assembled by the Engine-side orchestrator against one reference snapshot
+/// and consumed for both the backing and the fee legs.
+///
+/// Deliberately **not** a [`FundingInputContext`]: that type carries its own
+/// record copy, and a second record here could silently disagree with the
+/// sealed witness's private records (the single source of truth for which
+/// outputs participate). Carrying the path alone keeps one record, one
+/// owner; [`SweptFeeInputs::with_paths`] pairs paths to records by the
+/// mint's own order.
+pub(crate) struct MembershipPath {
+    /// All outputs in the same Selene leaf chunk as this output.
+    pub leaf_chunk: Vec<LeafEntry>,
+    /// Selene (C1) branch layers, bottom-to-top.
+    pub c1_layers: Vec<Vec<[u8; 32]>>,
+    /// Helios (C2) branch layers, bottom-to-top.
+    pub c2_layers: Vec<Vec<[u8; 32]>>,
+}
+
+/// The complete, sealed operand set of one emission-claim assembly — the
+/// [`SweptFeeInputs`] triple with the membership paths zipped in
+/// ([`SweptFeeInputs::with_paths`], the sole constructor). The
+/// `AssembleEmissionClaim` message takes this whole; the handler
+/// destructures it via [`Self::into_parts`] and re-checks **nothing** —
+/// same-tip and Q11 consistency are properties of the type, not runtime
+/// comparisons (module docs).
+pub(crate) struct ClaimOperands {
+    source: EmissionClaimSource,
+    backing: DesignatedBacking,
+    backing_path: MembershipPath,
+    fee_funding: Vec<FundingInputContext>,
+    fee: AtomicUnits,
+    fee_total: AtomicUnits,
+}
+
+impl ClaimOperands {
+    /// Destructure for handler consumption (the seal's job ends at the
+    /// message boundary; the handler owns the parts).
+    pub(crate) fn into_parts(self) -> ClaimOperandParts {
+        ClaimOperandParts {
+            source: self.source,
+            backing: self.backing,
+            backing_path: self.backing_path,
+            fee_funding: self.fee_funding,
+            fee: self.fee,
+            fee_total: self.fee_total,
+        }
+    }
+}
+
+/// The destructured [`ClaimOperands`] — produced only by
+/// [`ClaimOperands::into_parts`], inside the handler.
+pub(crate) struct ClaimOperandParts {
+    /// The decoded claim source (daemon gather + local dedup).
+    pub source: EmissionClaimSource,
+    /// The designated backing (owns the backing record).
+    pub backing: DesignatedBacking,
+    /// The backing output's membership path.
+    pub backing_path: MembershipPath,
+    /// The fee funding inputs with their membership paths, in sweep order.
+    /// Non-empty, backing-free, and anchored with the backing — by the mint.
+    pub fee_funding: Vec<FundingInputContext>,
+    /// The fee the sweep was run against.
+    pub fee: AtomicUnits,
+    /// The swept fee inputs' exact sum (`>= fee`, by the sweep's shortfall
+    /// refusal — the handler's change math needs no re-summation).
+    pub fee_total: AtomicUnits,
+}
+
+/// Why [`DesignatedBacking::fee_sweep`] (or [`SweptFeeInputs::with_paths`])
+/// refused to mint. Every arm is caller-recoverable — nothing was assembled,
+/// signed, or reserved.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ClaimFundingError {
+    /// The designation's stored spendability anchor does not equal the claim
+    /// source's gather **tip** (`chain_height − 1`; the anchor is a height,
+    /// never the block count) — item 6, checked once at the mint. Assembling
+    /// against a stale anchor would let backing eligibility and claim-window
+    /// finalization diverge across two tips; the caller refetches the claim
+    /// source and re-designates the backing at one tip, then retries.
+    #[error(
+        "stale claim anchor: the backing was designated at height {anchor} but the \
+         claim source was gathered at tip {tip}; refetch both at one tip and retry"
+    )]
+    StaleClaimAnchor { anchor: u64, tip: u64 },
+
+    /// The fee sweep selected **zero** fee-funding inputs. At least one
+    /// spendable `ToKey` input is structurally required regardless of the
+    /// fee amount — the loud reward vout consumes the entire mint, so the
+    /// fee side must supply the tx's pseudoOuts and its FCMP++ fee-side
+    /// proof anchor. Deliberately **not** `InsufficientFunding` (rule 82):
+    /// with `fee == 0` that would read "insufficient funding: available 0,
+    /// required 0" — a shortfall error with no shortfall, misdirecting the
+    /// remedy. The remedy is to have ANY spendable funding output: fund the
+    /// persona or wait for one to mature, then retry.
+    #[error(
+        "emission claim needs at least one fee input regardless of the fee amount ({fee}): \
+         the reward vout consumes the whole mint, so pseudoOuts and the FCMP++ fee-side \
+         anchor must come from a separate spendable output — fund the persona or wait \
+         for maturity"
+    )]
+    ClaimFeeInputsRequired { fee: u64 },
+
+    /// The assembled membership paths did not pair one path per witness
+    /// record — an internal plumbing defect surfaced loudly rather than
+    /// mis-indexed.
+    #[error("membership paths diverged from the witness records: expected {expected}, got {got}")]
+    PathCount { expected: usize, got: usize },
+
+    /// The underlying sweep refused (a genuine shortfall, or arithmetic
+    /// overflow — see the wrapped [`BondAssemblyError`]).
+    #[error(transparent)]
+    Assembly(#[from] BondAssemblyError),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::engine::bond_assembly::{sweep_funding_outputs, SpentRecordsDurablyPruned};
+    use crate::engine::emission_claim::test_fixtures::source_at_count;
     use crate::engine::test_support::funding_record;
     use shekyl_types::BlockHeight;
+
+    /// A claim source gathered at the tip a designation was anchored at —
+    /// the coherent pairing [`DesignatedBacking::fee_sweep`] mints from.
+    fn source_at_tip(tip: u64) -> EmissionClaimSource {
+        source_at_count(tip + 1, vec![], vec![])
+    }
 
     /// Slot-0 wrapper over the crate's single `funding_record` fixture — this
     /// module varies `lineage`, so it threads that through.
@@ -591,8 +850,7 @@ mod tests {
             "highest (height, gindex) is designated"
         );
         assert_eq!(
-            designated.reference_height(),
-            reference_height,
+            designated.reference_height, reference_height,
             "the designation carries the set's spendability anchor"
         );
     }
@@ -716,8 +974,9 @@ mod tests {
             "premise: gindex 2 is the backing"
         );
 
-        let fee = designated
+        let swept = designated
             .fee_sweep(
+                source_at_tip(reference_height.to_raw()),
                 &SpentRecordsDurablyPruned::for_test(),
                 &records,
                 PSlot::from_raw(0),
@@ -725,7 +984,11 @@ mod tests {
                 AtomicUnits::ZERO,
             )
             .expect("fee sweep succeeds");
-        let fee_gindexes: Vec<u64> = fee.records.iter().map(|r| r.gindex.to_raw()).collect();
+        let fee_gindexes: Vec<u64> = swept
+            .fee_records()
+            .iter()
+            .map(|r| r.gindex.to_raw())
+            .collect();
         assert!(
             !fee_gindexes.contains(&2),
             "the designated backing never appears in the fee selection (Q11)"
@@ -739,6 +1002,9 @@ mod tests {
             vec![3],
             "the fee sweep is the plain sweep minus the backing and reservations"
         );
+        // The seal's path-request order: the backing first, then the fees.
+        let path_order: Vec<u64> = swept.path_records().map(|r| r.gindex.to_raw()).collect();
+        assert_eq!(path_order, vec![2, 3]);
     }
 
     /// Item 6 anchoring: the fee sweep reuses the backing's own
@@ -768,8 +1034,9 @@ mod tests {
         )
         .designate_backing()
         .expect("eligible record exists");
-        let fee = designated
+        let swept = designated
             .fee_sweep(
+                source_at_tip(reference_height.to_raw()),
                 &SpentRecordsDurablyPruned::for_test(),
                 &records,
                 PSlot::from_raw(0),
@@ -777,11 +1044,278 @@ mod tests {
                 AtomicUnits::ZERO,
             )
             .expect("fee sweep succeeds");
-        let fee_gindexes: Vec<u64> = fee.records.iter().map(|r| r.gindex.to_raw()).collect();
+        let fee_gindexes: Vec<u64> = swept
+            .fee_records()
+            .iter()
+            .map(|r| r.gindex.to_raw())
+            .collect();
         assert_eq!(
             fee_gindexes,
             vec![2],
             "the immature record is excluded by the inherited anchor; the backing by Q11"
         );
+    }
+
+    /// Item 6 at the mint: a designation anchored at a height other than the
+    /// claim source's gather **tip** (`chain_height − 1` — a height, never
+    /// the block count) refuses as [`ClaimFundingError::StaleClaimAnchor`]
+    /// carrying both operands, before any sweep work — the caller refetches
+    /// both at one tip and retries. The count itself is the classic
+    /// off-by-one and must also refuse. (Formerly the handler's step-2
+    /// runtime check; the seal moved it here, once.)
+    #[test]
+    fn fee_sweep_refuses_a_stale_anchor() {
+        let tip = 1_000_000u64;
+        let last_sweep_height = BlockHeight::from_raw(100);
+        let records = vec![record(1, 90, 500, MintLineageOutput::BondPostChange)];
+        let designate_at = |anchor: u64| {
+            BackingSet::from_spendable(
+                &records,
+                PSlot::from_raw(0),
+                BlockHeight::from_raw(anchor),
+                last_sweep_height,
+            )
+            .designate_backing()
+            .expect("one eligible record designates")
+        };
+
+        // Anchored two past the tip.
+        let err = designate_at(tip + 2)
+            .fee_sweep(
+                source_at_tip(tip),
+                &SpentRecordsDurablyPruned::for_test(),
+                &records,
+                PSlot::from_raw(0),
+                &Default::default(),
+                AtomicUnits::ZERO,
+            )
+            .err()
+            .expect("a stale anchor must refuse");
+        assert!(
+            matches!(
+                err,
+                ClaimFundingError::StaleClaimAnchor { anchor, tip: t }
+                    if anchor == tip + 2 && t == tip
+            ),
+            "expected StaleClaimAnchor with both operands, got {err:?}"
+        );
+
+        // The block COUNT as the anchor (the unit mismatch this check pins):
+        // one past the tip, must refuse — a count-anchored designation
+        // admits records one block early.
+        let err = designate_at(tip + 1)
+            .fee_sweep(
+                source_at_tip(tip),
+                &SpentRecordsDurablyPruned::for_test(),
+                &records,
+                PSlot::from_raw(0),
+                &Default::default(),
+                AtomicUnits::ZERO,
+            )
+            .err()
+            .expect("the count-as-height anchor must refuse");
+        assert!(
+            matches!(err, ClaimFundingError::StaleClaimAnchor { .. }),
+            "expected StaleClaimAnchor, got {err:?}"
+        );
+    }
+
+    /// Fee inputs are structurally mandatory (the reward is fully consumed
+    /// by the loud vout, so a zero-input claim has no pseudoOuts to fund a
+    /// fee): a sweep that selects nothing refuses with the **structural**
+    /// [`ClaimFundingError::ClaimFeeInputsRequired`] — never a shortfall
+    /// (with `fee == 0` that would read `InsufficientFunding { 0, 0 }`, a
+    /// self-contradiction misdirecting the remedy) — and a present-but-short
+    /// selection refuses with the actual shortfall. (Formerly the handler's
+    /// step-5 checks; the seal moved them to the mint.)
+    #[test]
+    fn fee_sweep_requires_a_fee_input_structurally() {
+        let tip = 1_000_000u64;
+        let last_sweep_height = BlockHeight::from_raw(100);
+        // The backing is the persona's ONLY record: the Q11 exclusion leaves
+        // the fee sweep nothing to select.
+        let records = vec![record(1, 90, 500, MintLineageOutput::BondPostChange)];
+        let designate = || {
+            BackingSet::from_spendable(
+                &records,
+                PSlot::from_raw(0),
+                BlockHeight::from_raw(tip),
+                last_sweep_height,
+            )
+            .designate_backing()
+            .expect("one eligible record designates")
+        };
+
+        // Arm 1: nothing selectable — structural refusal, at fee 1 000 AND
+        // at fee 0 (the 0/0 shortfall trap the variant exists to avoid).
+        for fee in [1_000u64, 0] {
+            let err = designate()
+                .fee_sweep(
+                    source_at_tip(tip),
+                    &SpentRecordsDurablyPruned::for_test(),
+                    &records,
+                    PSlot::from_raw(0),
+                    &Default::default(),
+                    AtomicUnits::from_raw(fee),
+                )
+                .err()
+                .expect("an empty fee selection must refuse");
+            assert!(
+                matches!(
+                    err,
+                    ClaimFundingError::ClaimFeeInputsRequired { fee: f } if f == fee
+                ),
+                "expected ClaimFeeInputsRequired at fee {fee}, got {err:?}"
+            );
+        }
+
+        // Arm 2: a fee input exists but falls short of the fee — a genuine
+        // shortfall, so `InsufficientFunding` is the right taxonomy.
+        let with_short = vec![
+            record(1, 90, 500, MintLineageOutput::BondPostChange),
+            record(2, 150, 400, MintLineageOutput::ExternalTransfer),
+        ];
+        let err = BackingSet::from_spendable(
+            &with_short,
+            PSlot::from_raw(0),
+            BlockHeight::from_raw(tip),
+            last_sweep_height,
+        )
+        .designate_backing()
+        .expect("eligible record exists")
+        .fee_sweep(
+            source_at_tip(tip),
+            &SpentRecordsDurablyPruned::for_test(),
+            &with_short,
+            PSlot::from_raw(0),
+            &Default::default(),
+            AtomicUnits::from_raw(1_000),
+        )
+        .err()
+        .expect("short fee funding must refuse");
+        assert!(
+            matches!(
+                err,
+                ClaimFundingError::Assembly(BondAssemblyError::InsufficientFunding {
+                    available: 400,
+                    required: 1_000,
+                })
+            ),
+            "expected InsufficientFunding(400/1000), got {err:?}"
+        );
+
+        // Arm 3: an eligible fee record EXISTS but carries amount 0 (a
+        // representable CT state). This is a shortfall — the persona is
+        // funded-but-valueless, and the remedy is accrual — NOT the
+        // structural no-fee-input refusal, whose "fund the persona" text
+        // would misdirect. Pins the taxonomy the sweep's typed
+        // empty-eligible-set arm exists to keep separate.
+        let with_zero = vec![
+            record(1, 90, 500, MintLineageOutput::BondPostChange),
+            record(2, 150, 0, MintLineageOutput::ExternalTransfer),
+        ];
+        let err = BackingSet::from_spendable(
+            &with_zero,
+            PSlot::from_raw(0),
+            BlockHeight::from_raw(tip),
+            last_sweep_height,
+        )
+        .designate_backing()
+        .expect("eligible record exists")
+        .fee_sweep(
+            source_at_tip(tip),
+            &SpentRecordsDurablyPruned::for_test(),
+            &with_zero,
+            PSlot::from_raw(0),
+            &Default::default(),
+            AtomicUnits::from_raw(1_000),
+        )
+        .err()
+        .expect("zero-value fee funding must refuse as a shortfall");
+        assert!(
+            matches!(
+                err,
+                ClaimFundingError::Assembly(BondAssemblyError::InsufficientFunding {
+                    available: 0,
+                    required: 1_000,
+                })
+            ),
+            "a present-but-zero-value selection is a shortfall, got {err:?}"
+        );
+    }
+
+    /// [`SweptFeeInputs::with_paths`] pairs one path per witness record —
+    /// backing first, fees in sweep order — and refuses a count mismatch
+    /// loudly rather than mis-pairing.
+    #[test]
+    fn with_paths_pairs_by_the_mints_order_and_refuses_a_count_mismatch() {
+        let tip = 1_000_000u64;
+        let last_sweep_height = BlockHeight::from_raw(100);
+        let records = vec![
+            record(1, 90, 500, MintLineageOutput::BondPostChange), // → designated
+            record(2, 150, 400, MintLineageOutput::ExternalTransfer),
+            record(3, 160, 300, MintLineageOutput::ExternalTransfer),
+        ];
+        let sweep = || {
+            BackingSet::from_spendable(
+                &records,
+                PSlot::from_raw(0),
+                BlockHeight::from_raw(tip),
+                last_sweep_height,
+            )
+            .designate_backing()
+            .expect("eligible record exists")
+            .fee_sweep(
+                source_at_tip(tip),
+                &SpentRecordsDurablyPruned::for_test(),
+                &records,
+                PSlot::from_raw(0),
+                &Default::default(),
+                AtomicUnits::ZERO,
+            )
+            .expect("fee sweep succeeds")
+        };
+        let path = |marker: u8| MembershipPath {
+            leaf_chunk: vec![],
+            c1_layers: vec![vec![[marker; 32]]],
+            c2_layers: vec![],
+        };
+
+        // Count mismatch (backing + 2 fees = 3 expected) refuses loudly.
+        let err = sweep()
+            .with_paths(vec![path(0), path(1)])
+            .err()
+            .expect("a path-count mismatch must refuse");
+        assert!(
+            matches!(
+                err,
+                ClaimFundingError::PathCount {
+                    expected: 3,
+                    got: 2
+                }
+            ),
+            "expected PathCount, got {err:?}"
+        );
+
+        // Correct count: paths pair by the mint's order — the backing takes
+        // path 0; the fee records (sweep order: gindex 2 then 3) take paths
+        // 1 and 2.
+        let parts = sweep()
+            .with_paths(vec![path(0), path(1), path(2)])
+            .expect("matched paths zip")
+            .into_parts();
+        assert_eq!(parts.backing.record().gindex.to_raw(), 1);
+        assert_eq!(parts.backing_path.c1_layers, vec![vec![[0u8; 32]]]);
+        let paired: Vec<(u64, u8)> = parts
+            .fee_funding
+            .iter()
+            .map(|f| (f.record.gindex.to_raw(), f.c1_layers[0][0][0]))
+            .collect();
+        assert_eq!(
+            paired,
+            vec![(2, 1), (3, 2)],
+            "fee paths pair to fee records in sweep order"
+        );
+        assert_eq!(parts.fee_total, AtomicUnits::from_raw(700));
     }
 }

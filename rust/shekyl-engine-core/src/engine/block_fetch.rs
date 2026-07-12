@@ -37,17 +37,21 @@
 //!
 //! The daemon is untrusted, so this boundary rejects non-canonical responses
 //! rather than forwarding them to the scanner. Every block- and transaction-blob
-//! is run through the canonical, pruned-safe context-free validator
+//! is run through the canonical context-free validator matching its fetched
+//! body form ([`TxBodyForm`]). Pruned bodies (the refresh path) take
 //! [`shekyl_wire::Transaction::validate_context_free_pruned`] — the consensus-parity
 //! reject set (resource bounds, the §2.5 coinbase shape + arm-mixing matrix, the §12
 //! key-image canonical form, block-height-only `unlock_time`, committed-base arity)
-//! minus the prunable-coupled checks, which cannot run on the *pruned* transactions
-//! the wallet ingests (the prunable proof is dropped, and the full
+//! minus the prunable-coupled checks, which cannot run on a *pruned* transaction
+//! (the prunable proof is dropped, and the full
 //! [`shekyl_wire::Transaction::validate`] rejects a key-image-bearing spend without it
-//! by design). This is the single ingestion gate; it replaces the scattered ad-hoc
-//! checks (the standalone `unlock_time` reject, etc.) that accumulated here.
+//! by design). Full bodies (the P-scan path, which must re-hash each body for
+//! the SP-6 exhaustiveness gate) take the complete
+//! [`shekyl_wire::Transaction::validate`]. This is the single ingestion gate; it
+//! replaces the scattered ad-hoc checks (the standalone `unlock_time` reject,
+//! etc.) that accumulated here.
 //!
-//! On top of the validator, [`parse_pruned_tx`] rejects a coinbase-shaped tx in a
+//! On top of the validator, [`parse_tx_blob`] rejects a coinbase-shaped tx in a
 //! `get_transactions` response ([`shekyl_wire::Transaction::is_coinbase`]) — the
 //! coinbase is embedded in the block blob and parsed there, never served as a
 //! non-miner tx — and the transport-shape checks guard the framing: oversized-hex
@@ -68,12 +72,59 @@ use shekyl_wire::{block::MAX_BLOCK_BLOB_SIZE, transaction::MAX_TX_SIZE, Block, T
 /// restricted RPC (`core_rpc_server.cpp`); batch accordingly.
 const TXS_PER_REQUEST: usize = 100;
 
-/// Default body for `DaemonEngine::fetch_scannable_block`: fetch the block at
-/// `number`, its pruned non-miner transactions, and the first global output
-/// index, parsing everything through [`shekyl_wire`].
+/// Which transaction-body form a scannable-block fetch requests from the
+/// daemon, and therefore which parse/validation path each body takes.
+///
+/// The two forms exist because two wallet consumers have different
+/// verification obligations:
+///
+/// - [`Pruned`](Self::Pruned) — the refresh path. The prunable proof is
+///   dropped by the daemon (`prune: true`), so the body cannot be re-hashed to
+///   its committed tx hash (`GENESIS_TX_WIRE_FORMAT.md` §11 — the pruned form
+///   hashes differently); association is by the daemon-echoed `tx_hash` label,
+///   and validation is the pruned-safe context-free subset.
+/// - [`Full`](Self::Full) — the P-scan path. SP-6's exhaustiveness gate
+///   recomputes every body's hash from received material
+///   (`pscan::exhaustiveness`), which **requires** the prunable section: a
+///   storage-pruned FCMP++ spend hashes with the null prunable component and
+///   can never equal its committed hash, so a pruned fetch would halt the scan
+///   at the first spend-bearing block as a forged-absence refusal. Full bodies
+///   also unlock the full context-free validator (the prunable-coupled
+///   checks).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TxBodyForm {
+    Pruned,
+    Full,
+}
+
+/// Convenience wrapper over [`fetch_scannable_block_with_form`] for callers
+/// outside the `DaemonEngine` trait (the `DaemonClient` inherent method):
+/// the refresh-path pruned form.
 pub(crate) async fn default_fetch_scannable_block<R: Rpc>(
     rpc: &R,
     number: usize,
+) -> Result<ScannableBlock, RpcError> {
+    fetch_scannable_block_with_form(rpc, number, TxBodyForm::Pruned).await
+}
+
+/// As [`default_fetch_scannable_block`] with **full** (unpruned) non-miner
+/// bodies — the form the P-scan's SP-6 per-body verification consumes (see
+/// [`TxBodyForm::Full`]). Used where a bare `Rpc` (not a `DaemonEngine`)
+/// carries the fetch (the remote-posture `PBlockSource`).
+pub(crate) async fn default_fetch_scannable_block_full<R: Rpc>(
+    rpc: &R,
+    number: usize,
+) -> Result<ScannableBlock, RpcError> {
+    fetch_scannable_block_with_form(rpc, number, TxBodyForm::Full).await
+}
+
+/// The single fetch body — and `DaemonEngine::fetch_scannable_block_in_form`'s
+/// default: one `get_block`, the non-miner bodies in `form`, and the first
+/// global output index.
+pub(crate) async fn fetch_scannable_block_with_form<R: Rpc>(
+    rpc: &R,
+    number: usize,
+    form: TxBodyForm,
 ) -> Result<ScannableBlock, RpcError> {
     let res: Value = rpc
         .json_rpc_call("get_block", Some(json!({ "height": number })))
@@ -84,7 +135,7 @@ pub(crate) async fn default_fetch_scannable_block<R: Rpc>(
         .ok_or_else(|| RpcError::InvalidNode("get_block response missing blob".to_string()))?;
     let block = parse_block_blob(blob, number)?;
 
-    let transactions = fetch_pruned_transactions(rpc, &block.transaction_hashes).await?;
+    let transactions = fetch_transactions(rpc, &block.transaction_hashes, form).await?;
     let first_output_index = compute_first_output_index(rpc, &block, &transactions).await?;
 
     Ok(ScannableBlock {
@@ -137,24 +188,69 @@ fn parse_block_blob(blob_hex: &str, expected_number: usize) -> Result<Block, Rpc
 /// to a block hash is pinned by [`parse_tx_batch`], which checks each returned
 /// `tx_hash` against the requested hash, in order.
 fn parse_pruned_tx(pruned_hex: &str, tx_hash_hex: &str) -> Result<Transaction, RpcError> {
-    // DoS pre-bound: `hex::decode` allocates ~`pruned_hex.len() / 2` bytes, so
+    parse_tx_blob(pruned_hex, tx_hash_hex, TxBodyForm::Pruned)
+}
+
+/// As [`parse_pruned_tx`], for a **full** (unpruned) body: the same DoS bound,
+/// exact-consumption parse, and coinbase rejection, but the canonical-shape
+/// gate is the *complete* context-free validator
+/// ([`shekyl_wire::Transaction::validate`]) — the prunable section is present,
+/// so the prunable-coupled checks (including "a key-image-bearing spend must
+/// carry its proof") run, and a daemon that answers a full-body request with a
+/// storage-pruned spend is rejected here rather than surviving to a bogus
+/// hash downstream.
+fn parse_full_tx(full_hex: &str, tx_hash_hex: &str) -> Result<Transaction, RpcError> {
+    parse_tx_blob(full_hex, tx_hash_hex, TxBodyForm::Full)
+}
+
+/// Shared parse body behind [`parse_pruned_tx`] / [`parse_full_tx`]; `form`
+/// selects the canonical-shape validator matching the body form requested.
+fn parse_tx_blob(
+    blob_hex: &str,
+    tx_hash_hex: &str,
+    form: TxBodyForm,
+) -> Result<Transaction, RpcError> {
+    // DoS pre-bound: `hex::decode` allocates ~`blob_hex.len() / 2` bytes, so
     // bound the *input* length before decoding — otherwise a hostile daemon
     // could force a large allocation that `from_bytes`'s own `MAX_TX_SIZE`
     // guard only catches after the decode. A pruned blob is at most a full tx
     // (`MAX_TX_SIZE` bytes ⇒ `2 * MAX_TX_SIZE` hex chars).
-    if pruned_hex.len() > MAX_TX_SIZE.saturating_mul(2) {
+    if blob_hex.len() > MAX_TX_SIZE.saturating_mul(2) {
         return Err(invalid_tx_error(tx_hash_hex));
     }
-    let bytes = hex::decode(pruned_hex)
-        .map_err(|_| RpcError::InvalidNode("pruned tx blob wasn't hex".to_string()))?;
+    let bytes = hex::decode(blob_hex)
+        .map_err(|_| RpcError::InvalidNode("tx blob wasn't hex".to_string()))?;
     let tx = Transaction::from_bytes(&bytes).map_err(|_| invalid_tx_error(tx_hash_hex))?;
     // Canonical-shape gate: the daemon is untrusted, so reject any tx that is not a
     // well-formed, block-height-only Shekyl transaction before it reaches the scanner.
-    // This is the pruned-safe context-free subset of the consensus-parity validator
-    // (the wallet ingests pruned txs, so `validate()`'s prunable-coupled branch cannot
-    // run — see `shekyl_wire::Transaction::validate_context_free_pruned`).
-    tx.validate_context_free_pruned()
-        .map_err(|_| invalid_tx_error(tx_hash_hex))?;
+    // Pruned bodies take the pruned-safe context-free subset (`validate()`'s
+    // prunable-coupled branch cannot run without the prunable section — see
+    // `shekyl_wire::Transaction::validate_context_free_pruned`); full bodies take the
+    // complete consensus-parity validator.
+    match form {
+        TxBodyForm::Pruned => tx
+            .validate_context_free_pruned()
+            .map_err(|_| invalid_tx_error(tx_hash_hex))?,
+        TxBodyForm::Full => tx.validate().map_err(|_| {
+            // A body that is a perfectly canonical PRUNED spend — prunable
+            // section absent but everything else valid — is not a hostile
+            // daemon inventing garbage: it is what a **storage-pruned**
+            // daemon (a supported mode) serves for every historical spend.
+            // The P-scan cannot run against one (SP-6's exhaustiveness gate
+            // re-hashes full bodies), so name the cause and the remedy
+            // instead of a generic invalid-transaction verdict that reads
+            // as "your trusted node is serving corrupt data" (rule 82).
+            if is_storage_pruned_spend(&tx) {
+                RpcError::InvalidNode(format!(
+                    "the daemon served a storage-pruned body for a full-body request \
+                     (tx {tx_hash_hex}): the persona scan requires an UNPRUNED node — \
+                     point the wallet at a daemon running without --prune-blockchain"
+                ))
+            } else {
+                invalid_tx_error(tx_hash_hex)
+            }
+        })?,
+    }
     // `get_transactions` returns only NON-miner txs — the coinbase is embedded in the
     // block blob and parsed there. A coinbase-shaped tx in this response is the daemon
     // serving something it never should; reject it so a misplaced coinbase (with its
@@ -165,7 +261,18 @@ fn parse_pruned_tx(pruned_hex: &str, tx_hash_hex: &str) -> Result<Transaction, R
     Ok(tx)
 }
 
-/// Build the error for a pruned-tx parse failure, preferring the daemon-named
+/// Whether a full-form body that failed the complete validator is exactly a
+/// **storage-pruned spend**: the prunable section is absent but the body is
+/// otherwise a canonical pruned transaction (it passes the pruned-safe
+/// context-free subset). This is the shape a storage-pruned daemon serves
+/// for every historical spend — the diagnosable operator state, as opposed
+/// to a genuinely malformed body.
+fn is_storage_pruned_spend(tx: &Transaction) -> bool {
+    matches!(&tx.ct, shekyl_wire::Ct::Fcmp { prunable: None, .. })
+        && tx.validate_context_free_pruned().is_ok()
+}
+
+/// Build the error for a tx-body parse failure, preferring the daemon-named
 /// hash ([`RpcError::InvalidTransaction`]) when it decodes.
 fn invalid_tx_error(tx_hash_hex: &str) -> RpcError {
     match hex::decode(tx_hash_hex)
@@ -177,22 +284,24 @@ fn invalid_tx_error(tx_hash_hex: &str) -> RpcError {
     }
 }
 
-/// Fetch and parse the pruned non-miner transactions named by `hashes`,
-/// batching by [`TXS_PER_REQUEST`].
-async fn fetch_pruned_transactions<R: Rpc>(
+/// Fetch and parse the non-miner transactions named by `hashes` in the body
+/// `form`, batching by [`TXS_PER_REQUEST`].
+async fn fetch_transactions<R: Rpc>(
     rpc: &R,
     hashes: &[[u8; 32]],
+    form: TxBodyForm,
 ) -> Result<Vec<Transaction>, RpcError> {
     if hashes.is_empty() {
         return Ok(Vec::new());
     }
+    let prune = form == TxBodyForm::Pruned;
     let mut transactions = Vec::with_capacity(hashes.len());
     for batch in hashes.chunks(TXS_PER_REQUEST) {
         let hashes_hex: Vec<String> = batch.iter().map(hex::encode).collect();
         let resp: Value = rpc
             .rpc_call(
                 "get_transactions",
-                Some(json!({ "txs_hashes": hashes_hex, "prune": true })),
+                Some(json!({ "txs_hashes": hashes_hex, "prune": prune })),
             )
             .await?;
 
@@ -205,14 +314,14 @@ async fn fetch_pruned_transactions<R: Rpc>(
         let txs = resp.get("txs").and_then(Value::as_array).ok_or_else(|| {
             RpcError::InvalidNode("get_transactions response missing txs".to_string())
         })?;
-        transactions.extend(parse_tx_batch(batch, txs)?);
+        transactions.extend(parse_tx_batch(batch, txs, form)?);
     }
 
     Ok(transactions)
 }
 
 /// Validate one `get_transactions` batch response against the `batch` of
-/// requested hashes (in order) and parse each pruned tx.
+/// requested hashes (in order) and parse each tx in the requested `form`.
 ///
 /// Pure (no transport) so the adversarial-daemon checks are unit-testable
 /// without an RPC mock. Every requested tx must be present (the caller turns a
@@ -224,9 +333,25 @@ async fn fetch_pruned_transactions<R: Rpc>(
 /// association handle; an unchecked reorder or substitution would mis-assign
 /// the running global output index (assigned by walking txs in block order)
 /// and record wrong txids — exactly the failure the untrusted-node model must
-/// reject. Per-batch equality also makes the caller's total length exact, so no
-/// separate cardinality check is needed after batching.
-fn parse_tx_batch(batch: &[[u8; 32]], txs: &[Value]) -> Result<Vec<Transaction>, RpcError> {
+/// reject. (Full-form consumers additionally recompute each body's hash — the
+/// P-scan's SP-6 exhaustiveness gate — so for them the label check is the
+/// fast-fail, not the last line.) Per-batch equality also makes the caller's
+/// total length exact, so no separate cardinality check is needed after
+/// batching.
+///
+/// Body-field selection: a pruned request answers in the split form
+/// (`pruned_as_hex`). A full request answers in the **non-split** form
+/// (`as_hex`) — except that the daemon falls back to the split form when the
+/// prunable section is empty, in which case the pruned body *is* the full
+/// body, so `pruned_as_hex` is accepted as the fallback. A body served
+/// through the fallback still passes [`parse_full_tx`]'s complete validator,
+/// so a hostile daemon cannot use the fallback to smuggle a
+/// prunable-stripped spend.
+fn parse_tx_batch(
+    batch: &[[u8; 32]],
+    txs: &[Value],
+    form: TxBodyForm,
+) -> Result<Vec<Transaction>, RpcError> {
     if txs.len() != batch.len() {
         return Err(RpcError::InvalidNode(
             "daemon returned a different number of transactions than requested".to_string(),
@@ -243,13 +368,27 @@ fn parse_tx_batch(batch: &[[u8; 32]], txs: &[Value]) -> Result<Vec<Transaction>,
                 "daemon returned a transaction whose hash did not match the request".to_string(),
             ));
         }
-        let pruned_hex = t
-            .get("pruned_as_hex")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                RpcError::InvalidNode("transaction response missing pruned_as_hex".to_string())
-            })?;
-        out.push(parse_pruned_tx(pruned_hex, tx_hash_hex)?);
+        let field = |name: &str| {
+            t.get(name)
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+        };
+        match form {
+            TxBodyForm::Pruned => {
+                let pruned_hex = field("pruned_as_hex").ok_or_else(|| {
+                    RpcError::InvalidNode("transaction response missing pruned_as_hex".to_string())
+                })?;
+                out.push(parse_pruned_tx(pruned_hex, tx_hash_hex)?);
+            }
+            TxBodyForm::Full => {
+                let full_hex = field("as_hex")
+                    .or_else(|| field("pruned_as_hex"))
+                    .ok_or_else(|| {
+                        RpcError::InvalidNode("transaction response missing as_hex".to_string())
+                    })?;
+                out.push(parse_full_tx(full_hex, tx_hash_hex)?);
+            }
+        }
     }
     Ok(out)
 }
@@ -547,6 +686,49 @@ mod tests {
         hex::encode(pruned_spend_tx(0).serialize())
     }
 
+    /// A **full** (unpruned) non-miner spend: [`pruned_spend_tx`] with the
+    /// prunable-coupled sections restored — one aggregated Bp+, one pseudo-out per
+    /// `ToKey` input, one `pqc_auths` slot per input — so it passes the complete
+    /// [`shekyl_wire::Transaction::validate`]. Proof bytes are zeroed placeholders:
+    /// the context-free validator checks structure (counts/arities), not proof math.
+    fn full_spend_tx() -> Transaction {
+        use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN};
+        use shekyl_wire::{BpPlus, PqcAuth, Prunable};
+
+        let mut tx = pruned_spend_tx(0);
+        let Ct::Fcmp {
+            pqc_auths,
+            prunable,
+            ..
+        } = &mut tx.ct
+        else {
+            unreachable!("pruned_spend_tx is Fcmp by construction");
+        };
+        *pqc_auths = vec![PqcAuth {
+            auth_version: 1,
+            scheme_id: 1,
+            flags: 0,
+            hybrid_public_key: vec![0u8; PQC_HYBRID_SINGLE_KEY_LEN],
+            hybrid_signature: vec![0u8; PQC_HYBRID_SINGLE_SIG_LEN],
+        }];
+        *prunable = Some(Prunable {
+            bulletproofs: vec![BpPlus {
+                a: [0; 32],
+                a1: [0; 32],
+                b: [0; 32],
+                r1: [0; 32],
+                s1: [0; 32],
+                d1: [0; 32],
+                l: vec![[0; 32]; 7],
+                r: vec![[0; 32]; 7],
+            }],
+            tree_depth: 1,
+            fcmp_proof: vec![0u8; 8],
+            pseudo_outs: vec![[0; 32]],
+        });
+        tx
+    }
+
     fn tx_entry(tx_hash_hex: &str, pruned_hex: &str) -> Value {
         json!({ "tx_hash": tx_hash_hex, "pruned_as_hex": pruned_hex })
     }
@@ -559,7 +741,8 @@ mod tests {
             tx_entry(&hex::encode(h0), &blob),
             tx_entry(&hex::encode(h1), &blob),
         ];
-        let out = parse_tx_batch(&[h0, h1], &txs).expect("in-order batch parses");
+        let out =
+            parse_tx_batch(&[h0, h1], &txs, TxBodyForm::Pruned).expect("in-order batch parses");
         assert_eq!(out.len(), 2);
     }
 
@@ -576,7 +759,7 @@ mod tests {
             tx_entry(&hex::encode(h0), &blob),
         ];
         assert!(matches!(
-            parse_tx_batch(&[h0, h1], &txs),
+            parse_tx_batch(&[h0, h1], &txs, TxBodyForm::Pruned),
             Err(RpcError::InvalidNode(_))
         ));
     }
@@ -587,7 +770,7 @@ mod tests {
         let blob = pruned_tx_hex();
         let txs = vec![tx_entry(&hex::encode(h0), &blob)];
         assert!(matches!(
-            parse_tx_batch(&[h0, h1], &txs),
+            parse_tx_batch(&[h0, h1], &txs, TxBodyForm::Pruned),
             Err(RpcError::InvalidNode(_))
         ));
     }
@@ -600,7 +783,7 @@ mod tests {
         let blob = pruned_tx_hex();
         let txs = vec![json!({ "pruned_as_hex": blob })];
         assert!(matches!(
-            parse_tx_batch(&[h0], &txs),
+            parse_tx_batch(&[h0], &txs, TxBodyForm::Pruned),
             Err(RpcError::InvalidNode(_))
         ));
     }
@@ -610,14 +793,99 @@ mod tests {
         let h0 = [3u8; 32];
         let txs = vec![json!({ "tx_hash": hex::encode(h0) })];
         assert!(matches!(
-            parse_tx_batch(&[h0], &txs),
+            parse_tx_batch(&[h0], &txs, TxBodyForm::Pruned),
             Err(RpcError::InvalidNode(_))
         ));
     }
 
     #[test]
     fn parse_tx_batch_empty_is_ok() {
-        let out = parse_tx_batch(&[], &[]).expect("empty batch parses");
+        let out = parse_tx_batch(&[], &[], TxBodyForm::Pruned).expect("empty batch parses");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn parse_tx_batch_full_form_reads_as_hex_with_pruned_fallback() {
+        // The full form's primary field is the non-split `as_hex`; when the
+        // daemon answers in the split form because the prunable section is
+        // empty, `pruned_as_hex` IS the full body, so it is the accepted
+        // fallback. (Our fixture's pruned form is a stripped spend, which the
+        // full validator rejects — so the fallback leg uses the full blob under
+        // the `pruned_as_hex` key, exactly the daemon's empty-prunable shape.)
+        let (h0, h1) = ([3u8; 32], [4u8; 32]);
+        let full_hex = hex::encode(full_spend_tx().serialize());
+        let txs = vec![
+            json!({ "tx_hash": hex::encode(h0), "as_hex": full_hex }),
+            json!({ "tx_hash": hex::encode(h1), "as_hex": "", "pruned_as_hex": full_hex }),
+        ];
+        let out = parse_tx_batch(&[h0, h1], &txs, TxBodyForm::Full).expect("full batch parses");
+        assert_eq!(out.len(), 2);
+        assert!(
+            out.iter()
+                .all(|tx| matches!(&tx.ct, Ct::Fcmp { prunable, .. } if prunable.is_some())),
+            "full-form bodies carry their prunable section"
+        );
+    }
+
+    #[test]
+    fn parse_full_tx_rejects_a_prunable_stripped_spend_naming_the_pruned_daemon() {
+        // The fallback tripwire: a daemon answering a full-body request with
+        // a storage-pruned spend (key-image inputs, prunable dropped) is
+        // rejected at the ingestion boundary — it cannot survive to a bogus
+        // null-prunable hash downstream. And because this exact shape is
+        // what a storage-pruned daemon (a supported mode) serves for every
+        // historical spend, the refusal must NAME that cause and its remedy
+        // (rule 82) — a generic "invalid transaction" would tell the
+        // operator their trusted node is corrupt, with no path out.
+        let stripped_hex = pruned_tx_hex();
+        match parse_full_tx(&stripped_hex, "") {
+            Err(RpcError::InvalidNode(msg)) => {
+                assert!(
+                    msg.contains("storage-pruned") && msg.contains("UNPRUNED"),
+                    "the refusal must name the pruned-daemon cause and remedy: {msg}"
+                );
+            }
+            other => panic!("expected a cause-naming InvalidNode, got {other:?}"),
+        }
+        // The same blob is fine on the pruned path — the split is the form, not
+        // the tx.
+        parse_pruned_tx(&stripped_hex, "").expect("pruned form accepts the stripped spend");
+
+        // A body that is malformed BEYOND the missing prunable section (a
+        // single-output spend violates the anti-deanon minimum) keeps the
+        // generic verdict — the pruned-daemon message must not blanket
+        // genuinely invalid bodies.
+        let mut malformed = pruned_spend_tx(0);
+        malformed.prefix.outputs.truncate(1);
+        if let Ct::Fcmp { base, .. } = &mut malformed.ct {
+            base.enc_amounts.truncate(1);
+            base.enc_labels.truncate(1);
+            base.commitments.truncate(1);
+        }
+        match parse_full_tx(&hex::encode(malformed.serialize()), "") {
+            Err(RpcError::InvalidNode(msg)) => {
+                assert!(
+                    !msg.contains("storage-pruned"),
+                    "a malformed body must not draw the pruned-daemon verdict: {msg}"
+                );
+            }
+            other => panic!("expected generic InvalidNode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_tx_batch_full_form_requires_a_body_field() {
+        let h0 = [3u8; 32];
+        let txs = vec![json!({ "tx_hash": hex::encode(h0) })];
+        assert!(matches!(
+            parse_tx_batch(&[h0], &txs, TxBodyForm::Full),
+            Err(RpcError::InvalidNode(_))
+        ));
+    }
+
+    #[test]
+    fn parse_tx_batch_empty_is_ok_full_form_too() {
+        let out = parse_tx_batch(&[], &[], TxBodyForm::Full).expect("empty batch parses");
         assert!(out.is_empty());
     }
 

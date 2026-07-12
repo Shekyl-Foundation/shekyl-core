@@ -52,13 +52,17 @@
 //     the blob boundary (leg i, pseudoOuts side) or the dispatch check
 //     (leg ii).
 //
-//  NOT COVERED by any arm here: driving the full production dispatch
-//  (`ver_non_input_consensus_templated`) with a valid FCMP++ emission tx
-//  and asserting the CT-balance verdict is INVARIANT under `canonical_bytes`
-//  variation — the arm that would fail if a future deserialization change
-//  parsed the backing out of the blob into `pseudoOuts` (leg i, pseudoOuts
-//  side + leg ii). That arm is harness-gated on a valid-proof emission-tx
-//  builder; it rides the claim-builder PR (CB-4 follow-up (a)).
+//  3. dispatch_verdict_invariant_under_blob_variation — BITES against a
+//     deserialization change that parsed the backing out of the blob into
+//     `pseudoOuts` (leg i, pseudoOuts side) or bumped the dispatch size
+//     check in lockstep (leg ii): it drives the FULL production dispatch
+//     (`ver_non_input_consensus`) on two txs identical except for their
+//     `canonical_bytes` and asserts both accept, plus a control tx whose
+//     pseudoOuts carries an appended commitment, asserting the dispatch
+//     size check (leg ii) rejects it before the balance leaf. Does NOT
+//     cover: `check_tx_inputs` (input consensus — backing verify, auth
+//     content), which is the regtest e2e's scope (CB-4 follow-up (a),
+//     closed by this arm's landing), not this KAT's.
 //
 // A future edit that routes the backing into the balance MUST flip the
 // biting assertions here; per the Q11 reversion clause that edit is a
@@ -76,6 +80,9 @@ extern "C"
 #include "crypto/crypto-ops.h"
 }
 #include "cryptonote_basic/cryptonote_basic.h"
+#include "cryptonote_basic/verification_context.h"
+#include "cryptonote_config.h"
+#include "cryptonote_core/tx_verification_utils.h"
 #include "fcmp/bulletproofs_plus.h"
 #include "fcmp/rctOps.h"
 #include "fcmp/rctSigs.h"
@@ -144,6 +151,18 @@ rct::rctSig make_balanced_emission_rv()
 // 32-byte field inside the opaque canonical blob (emission_wire.rs
 // MembershipOnlyBacking.pseudo_out); this stage never parses the blob, so
 // the backing commitment's serialized bytes stand in at a fixed offset.
+//
+// The fixture is valid through the FULL non-input dispatch
+// (`ver_non_input_consensus`), not just the CT-balance leaf: the fee vin
+// carries a prime-subgroup key image (check_tx_inputs_keyimages_domain),
+// the vout targets are decodable curve points (check_outs_valid), and
+// pqc_auths is sized to vin (the dispatch emission branch checks COUNT
+// only; auth content is check_tx_inputs scope). Everything derived IN
+// THIS STAGE is deterministic (fixed d2h scalars, not skGen), so two
+// calls sharing the SAME `rv` — the blob-boundary tests build one `rv`
+// and reuse it — produce txs differing ONLY in `canonical_bytes`, the
+// delta that arm depends on. (`rv` itself is skGen-blinded; determinism
+// is this function's, per shared `rv`, not the fixture set's.)
 transaction make_emission_tx(const rct::rctSig& rv, const rct::key& backing_pseudo_out)
 {
   transaction tx{};
@@ -157,7 +176,12 @@ transaction make_emission_tx(const rct::rctSig& rv, const rct::key& backing_pseu
   vin.canonical_bytes[0] = 0x04;
   std::memcpy(vin.canonical_bytes.data() + 32, backing_pseudo_out.bytes, 32);
   tx.vin.push_back(vin);
-  tx.vin.push_back(txin_to_key{});
+
+  txin_to_key fee_in{};
+  // key_offsets stay empty: FCMP++ txs carry no ring members.
+  const rct::key ki = rct::scalarmultBase(rct::d2h(7));
+  std::memcpy(&fee_in.k_image, ki.bytes, sizeof(fee_in.k_image));
+  tx.vin.push_back(fee_in);
 
   const uint64_t amounts[2] = {kReward, 0};
   for (size_t i = 0; i < 2; ++i)
@@ -165,11 +189,18 @@ transaction make_emission_tx(const rct::rctSig& rv, const rct::key& backing_pseu
     tx_out vout{};
     vout.amount = amounts[i];
     txout_to_tagged_key tagged{};
-    memset(&tagged.key, 0x30 + static_cast<int>(i), sizeof(tagged.key));
+    const rct::key out_key = rct::scalarmultBase(rct::d2h(11 + i));
+    std::memcpy(&tagged.key, out_key.bytes, sizeof(tagged.key));
     tagged.view_tag.data = 0;
     vout.target = tagged;
     tx.vout.push_back(vout);
   }
+
+  // One auth slot per vin — the dispatch checks pqc_auths.size() == vin.size().
+  tx.pqc_auths.resize(tx.vin.size());
+  for (auto& auth : tx.pqc_auths)
+    auth.auth_version = 1;
+
   tx.rct_signatures = rv;
   return tx;
 }
@@ -273,4 +304,51 @@ TEST(archival_emission_ct_balance, backing_inclusion_shape_rejects_in_production
     pseudo_flat.data(), 2, mask_flat.data(), 1, kFee,
     /*bond_credit=*/0, /*bond_debit=*/kReward);
   EXPECT_EQ(included_rc, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK);
+}
+
+// Arm 3 (CB-4 follow-up (a)): the FULL production dispatch
+// (ver_non_input_consensus — Rules 1-6 plus the emission branch) on two
+// valid emission txs whose ONLY delta is the vin's opaque canonical blob.
+// Nothing on the dispatch path deserializes the blob into the CT-balance
+// operands, so the verdict must be invariant under blob variation. A
+// future refactor that parsed the backing pseudo-out into rv.p.pseudoOuts
+// (leg i, pseudoOuts side) would either desync the dispatch size check
+// (leg ii, tx_verification_utils.cpp) or move the balance sum, flipping
+// an assertion below. The control tx pins leg ii directly: the
+// coordinated-regression accepting shape (backing appended to pseudoOuts)
+// must reject through the dispatch, not survive to an accepting balance.
+TEST(archival_emission_ct_balance, dispatch_verdict_invariant_under_blob_variation)
+{
+  const rct::rctSig rv = make_balanced_emission_rv();
+
+  const rct::key backing_O = rct::commit(500, rct::skGen());
+  const rct::key backing_O_prime = rct::commit(9999, rct::skGen());
+  const transaction tx_O = make_emission_tx(rv, backing_O);
+  const transaction tx_O_prime = make_emission_tx(rv, backing_O_prime);
+
+  // The two txs differ ONLY in canonical_bytes — pin the delta so a
+  // fixture drift cannot silently turn this arm into a same-tx tautology.
+  ASSERT_NE(std::get<txin_archival_reward_emission>(tx_O.vin[0]).canonical_bytes,
+    std::get<txin_archival_reward_emission>(tx_O_prime.vin[0]).canonical_bytes);
+  ASSERT_EQ(tx_O.rct_signatures.outPk[0].mask, tx_O_prime.rct_signatures.outPk[0].mask);
+
+  // HF_VERSION_SHEKYL_NG is the genesis (and only) consensus surface; the
+  // dispatch derives min/max tx version and the weight limit from it.
+  tx_verification_context tvc_O{};
+  tx_verification_context tvc_O_prime{};
+  EXPECT_TRUE(ver_non_input_consensus(tx_O, tvc_O, HF_VERSION_SHEKYL_NG));
+  EXPECT_TRUE(ver_non_input_consensus(tx_O_prime, tvc_O_prime, HF_VERSION_SHEKYL_NG));
+  EXPECT_FALSE(tvc_O.m_verifivation_failed);
+  EXPECT_FALSE(tvc_O_prime.m_verifivation_failed);
+
+  // Leg-ii control: the accepting shape of the coordinated regression —
+  // the backing commitment appended to the pseudo side — must reject
+  // through the dispatch (pseudoOuts.size() != spend_input_count at
+  // tx_verification_utils.cpp; the leaf's own size check backstops it).
+  transaction tx_included = make_emission_tx(rv, backing_O);
+  tx_included.rct_signatures.p.pseudoOuts.push_back(backing_O);
+  tx_verification_context tvc_included{};
+  EXPECT_FALSE(ver_non_input_consensus(tx_included, tvc_included, HF_VERSION_SHEKYL_NG));
+  EXPECT_TRUE(tvc_included.m_verifivation_failed);
+  EXPECT_TRUE(tvc_included.m_invalid_input);
 }

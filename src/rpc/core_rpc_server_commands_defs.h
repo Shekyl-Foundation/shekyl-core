@@ -87,7 +87,7 @@ namespace cryptonote
 // advance which version they will stop working with
 // Don't go over 32767 for any of these
 #define CORE_RPC_VERSION_MAJOR 3
-#define CORE_RPC_VERSION_MINOR 18
+#define CORE_RPC_VERSION_MINOR 19
 #define MAKE_CORE_RPC_VERSION(major,minor) (((major)<<16)|(minor))
 #define CORE_RPC_VERSION MAKE_CORE_RPC_VERSION(CORE_RPC_VERSION_MAJOR, CORE_RPC_VERSION_MINOR)
 
@@ -1109,7 +1109,36 @@ namespace cryptonote
     };
     typedef epee::misc_utils::struct_init<response_t> response;
   };
-  
+
+  // FAKECHAIN-only: inject an archival serve-credit bit through the
+  // production setter (Gate-6 accrual-path regtest stand-in; contract and
+  // pop-range caveat at Blockchain::regtest_inject_archival_serve_credit).
+  struct COMMAND_RPC_INJECT_ARCHIVAL_SERVE_CREDIT
+  {
+    struct request_t: public rpc_request_base
+    {
+      std::string p_canonical_id;  // hex hash
+      uint64_t shard_id;
+      uint64_t settlement_epoch;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_request_base)
+        KV_SERIALIZE(p_canonical_id)
+        KV_SERIALIZE(shard_id)
+        KV_SERIALIZE(settlement_epoch)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<request_t> request;
+
+    struct response_t: public rpc_response_base
+    {
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_response_base)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<response_t> response;
+  };
+
   struct block_header_response
   {
       uint8_t major_version;

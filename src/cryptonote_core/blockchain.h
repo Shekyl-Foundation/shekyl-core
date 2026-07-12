@@ -1178,6 +1178,31 @@ namespace cryptonote
 
     bool check_archival_bond_post_input(const txin_archival_bond_post& bond) const;
 
+    /**
+     * @brief FAKECHAIN-only: inject an archival serve-credit bit directly.
+     *
+     * Regtest stand-in for the Gate-6 serve-credit accrual path
+     * (ARCHIVAL_FIREWALL_GATE6.md): writes through the production setter
+     * (BlockchainDB::set_archival_serve_credit_bit — the same writer the
+     * txin_archival_serve_credit_response connect path drives at
+     * blockchain_db.cpp) so the WS-1 single-source shape holds: bits are
+     * the sole work_P source and the epoch close derives everything else.
+     * It deliberately bypasses check_archival_serve_credit_input
+     * (acceptance + segment-freeze substrate is Gate-6 scope, out of the
+     * E4 gate) — that coverage boundary is the point of the shim.
+     *
+     * NOT pop-symmetric: a bit injected here has no carrier transaction,
+     * so no block pop ever calls remove_archival_serve_credit_bit for it.
+     * Callers (the emission regtest e2e) must hard-bound any pop/reorg
+     * below the injection height, or the reverted-and-replayed close
+     * derives Σwork over a stranded bit. Deletion target: replaced by the
+     * production serve-credit response builder when Gate-6 R3–R5 land.
+     *
+     * @return false unless nettype is FAKECHAIN.
+     */
+    bool regtest_inject_archival_serve_credit(const crypto::hash& p_canonical_id,
+      uint64_t shard_id, uint64_t settlement_epoch);
+
 #ifndef IN_UNIT_TESTS
   private:
 #endif

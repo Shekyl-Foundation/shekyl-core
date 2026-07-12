@@ -26,10 +26,12 @@ use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
+use shekyl_curve_tree::ClientError;
+
 use super::bond_assembly::{
     sweep_funding_outputs, BondAssemblyError, FundingInputContext, SpentRecordsDurablyPruned,
 };
-use super::curve_tree_actor::CurveTreeHandle;
+use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::start::{load_pscan_state_for_engine, pending_post_store_for_engine};
 use super::signer::EngineSignerKind;
@@ -211,7 +213,15 @@ where
         let paths = curve_tree
             .assemble_tx(reference, assemble_inputs)
             .await
-            .map_err(|e| BondAssemblyError::build("assemble_tx", format!("{e:?}")))?;
+            .map_err(|e| match e {
+                // The one retryable path-assembly refusal, kept typed across
+                // the boundary (a rendered `Build.detail` would force retry
+                // policy into substring-matching the error text).
+                CurveTreeHandleError::Client(ClientError::OutputNotDrained { gindex, .. }) => {
+                    BondAssemblyError::OutputNotYetDrained { gindex: gindex.0 }
+                }
+                other => BondAssemblyError::build("assemble_tx", format!("{other:?}")),
+            })?;
         if paths.len() != selection.records.len() {
             return Err(BondAssemblyError::build(
                 "assemble_tx",

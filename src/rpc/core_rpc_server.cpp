@@ -1970,6 +1970,39 @@ namespace cryptonote
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
+  bool core_rpc_server::on_inject_archival_serve_credit(const COMMAND_RPC_INJECT_ARCHIVAL_SERVE_CREDIT::request& req, COMMAND_RPC_INJECT_ARCHIVAL_SERVE_CREDIT::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
+  {
+    RPC_TRACKER(inject_archival_serve_credit);
+
+    CHECK_CORE_READY();
+
+    if(m_core.get_nettype() != FAKECHAIN)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_REGTEST_REQUIRED;
+      error_resp.message = "Regtest required when injecting archival serve credit";
+      return false;
+    }
+
+    crypto::hash p_canonical_id;
+    if (!epee::string_tools::hex_to_pod(req.p_canonical_id, p_canonical_id))
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+      error_resp.message = "p_canonical_id is not a 32-byte hex hash";
+      return false;
+    }
+
+    if (!m_core.get_blockchain_storage().regtest_inject_archival_serve_credit(
+      p_canonical_id, req.shard_id, req.settlement_epoch))
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = "Serve-credit injection failed";
+      return false;
+    }
+
+    res.status = CORE_RPC_STATUS_OK;
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
   uint64_t core_rpc_server::get_block_reward(const block& blk)
   {
     uint64_t reward = 0;
