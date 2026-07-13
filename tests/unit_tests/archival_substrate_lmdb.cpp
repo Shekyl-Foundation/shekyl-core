@@ -1416,6 +1416,41 @@ void append_minimal_blocks(BlockchainDB& db, uint64_t count, uint64_t accrual_pe
   }
 }
 
+// Connect one block at the current tip carrying `txs` through the real
+// add_block path (miner_tx + prev/height scaffolding that every bond-post /
+// emission connect KAT below otherwise open-codes identically). Returns the
+// connect height. Caller batch_stop/batch_start around it as needed.
+uint64_t connect_block_with_txs(BlockchainDB& db, const std::vector<transaction>& txs)
+{
+  const uint64_t connect_height = db.height();
+  block blk{};
+  blk.major_version = 1;
+  blk.minor_version = 1;
+  blk.timestamp = 1500000000 + connect_height;
+  blk.prev_id = db.get_block_hash_from_height(connect_height - 1);
+  blk.curve_tree_root = crypto::null_hash;
+  blk.nonce = 0;
+  transaction miner_tx{};
+  miner_tx.version = 1;
+  miner_tx.unlock_time = connect_height + 60;
+  txin_gen gen{};
+  gen.height = connect_height;
+  miner_tx.vin.push_back(gen);
+  blk.miner_tx = std::move(miner_tx);
+
+  std::vector<std::pair<transaction, blobdata>> tx_blobs;
+  tx_blobs.reserve(txs.size());
+  for (const transaction& tx : txs)
+  {
+    blk.tx_hashes.push_back(get_transaction_hash(tx));
+    tx_blobs.emplace_back(tx, tx_to_blob(tx));
+  }
+
+  db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
+    connect_height + 1, 0, 0, tx_blobs);
+  return connect_height;
+}
+
 } // namespace
 
 // ── WS-1 slash-side mirror KAT (REWARD_EMISSION_E3_GATING_ROUND.md §5.6) ──
@@ -1848,27 +1883,8 @@ TEST(archival_substrate_lmdb, emission_connect_pop_roundtrip_through_real_block_
 
   // Connect a block carrying the emission tx through the real add_block path
   // (F-B5a: this call threw BLOCK_DNE from the connect arm before the fix).
-  const uint64_t connect_height = db.height();
   const transaction tx = make_connectable_emission_tx(fx);
-
-  block blk{};
-  blk.major_version = 1;
-  blk.minor_version = 1;
-  blk.timestamp = 1500000000 + connect_height;
-  blk.prev_id = db.get_block_hash_from_height(connect_height - 1);
-  blk.curve_tree_root = crypto::null_hash;
-  blk.nonce = 0;
-  transaction miner_tx{};
-  miner_tx.version = 1;
-  miner_tx.unlock_time = connect_height + 60;
-  txin_gen gen{};
-  gen.height = connect_height;
-  miner_tx.vin.push_back(gen);
-  blk.miner_tx = std::move(miner_tx);
-  blk.tx_hashes.push_back(get_transaction_hash(tx));
-
-  db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
-    connect_height + 1, 0, 0, {std::make_pair(tx, tx_to_blob(tx))});
+  const uint64_t connect_height = connect_block_with_txs(db, {tx});
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
@@ -1933,23 +1949,7 @@ TEST(archival_substrate_lmdb, bond_post_connect_pop_roundtrip_through_real_block
   vin.bond_debit = 0;
   tx.vin.push_back(vin);
 
-  block blk{};
-  blk.major_version = 1;
-  blk.minor_version = 1;
-  blk.timestamp = 1500000000 + connect_height;
-  blk.prev_id = db.get_block_hash_from_height(connect_height - 1);
-  blk.curve_tree_root = crypto::null_hash;
-  transaction miner_tx{};
-  miner_tx.version = 1;
-  miner_tx.unlock_time = connect_height + 60;
-  txin_gen gen{};
-  gen.height = connect_height;
-  miner_tx.vin.push_back(gen);
-  blk.miner_tx = std::move(miner_tx);
-  blk.tx_hashes.push_back(get_transaction_hash(tx));
-
-  db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
-    connect_height + 1, 0, 0, {std::make_pair(tx, tx_to_blob(tx))});
+  connect_block_with_txs(db, {tx});
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
@@ -1997,6 +1997,49 @@ TEST(archival_substrate_lmdb, unbond_revert_value_round_trips)
 
   shekyl::db::ArchivalBondUnbondRevertValue empty{};
   EXPECT_THROW(empty.encode(), std::runtime_error);
+}
+
+// The all-shards last-served marshal (release-cooldown anchor source for a
+// CompleteTree record, which stores no shard list). The hop scan must return
+// each SERVED shard's max epoch across the whole (P, *) prefix — the fix for
+// a CompleteTree persona whose cooldown would otherwise fold from an empty
+// list and open the release gate vacuously — and stay confined to P's prefix.
+TEST(archival_substrate_lmdb, all_last_served_hop_scan_over_p_prefix)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+
+  const crypto::hash p = make_hash(0xC7);
+  const crypto::hash other = make_hash(0xC8);
+
+  // P served shards 3 and 9 across several epochs; the max per shard is what
+  // the anchor fold needs. Shard 5 is bordered by another P's rows on both
+  // sides to prove the scan neither leaks across nor stops early.
+  db.set_archival_serve_credit_bit(p, 3, 10);
+  db.set_archival_serve_credit_bit(p, 3, 40);   // shard 3 max
+  db.set_archival_serve_credit_bit(p, 3, 25);
+  db.set_archival_serve_credit_bit(p, 9, 7);
+  db.set_archival_serve_credit_bit(p, 9, 33);   // shard 9 max
+  // Another P interleaved in the shard key space: must not appear in P's scan.
+  db.set_archival_serve_credit_bit(other, 3, 99);
+  db.set_archival_serve_credit_bit(other, 9, 99);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  std::vector<uint64_t> anchors = db.archival_bond_all_last_served_epochs(p);
+  std::sort(anchors.begin(), anchors.end());
+  EXPECT_EQ(anchors, (std::vector<uint64_t>{33, 40}));
+
+  // A persona that never served yields an empty list (⇒ never-served, cooldown
+  // vacuously elapsed in the Rust fold).
+  EXPECT_TRUE(db.archival_bond_all_last_served_epochs(make_hash(0xC9)).empty());
+
+  // Cross-check: the all-shards form agrees with the per-shard form when the
+  // shard list is supplied explicitly (the two marshals must not diverge).
+  std::vector<uint64_t> per_shard =
+    db.archival_bond_last_served_epochs(p, {3, 9});
+  std::sort(per_shard.begin(), per_shard.end());
+  EXPECT_EQ(per_shard, anchors);
 }
 
 // The Unbond connect/pop twin through the REAL block path (gate-4 §4.3/§5):
@@ -2048,23 +2091,7 @@ TEST(archival_substrate_lmdb, unbond_connect_pop_roundtrip_through_real_block_pa
   vin.bond_debit = record_bonded;
   tx.vin.push_back(vin);
 
-  block blk{};
-  blk.major_version = 1;
-  blk.minor_version = 1;
-  blk.timestamp = 1500000000 + connect_height;
-  blk.prev_id = db.get_block_hash_from_height(connect_height - 1);
-  blk.curve_tree_root = crypto::null_hash;
-  transaction miner_tx{};
-  miner_tx.version = 1;
-  miner_tx.unlock_time = connect_height + 60;
-  txin_gen gen{};
-  gen.height = connect_height;
-  miner_tx.vin.push_back(gen);
-  blk.miner_tx = std::move(miner_tx);
-  blk.tx_hashes.push_back(get_transaction_hash(tx));
-
-  db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
-    connect_height + 1, 0, 0, {std::make_pair(tx, tx_to_blob(tx))});
+  connect_block_with_txs(db, {tx});
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
@@ -2130,7 +2157,6 @@ TEST(archival_substrate_lmdb, unbond_two_p_one_block_threads_the_counter)
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
-  const uint64_t connect_height = db.height();
   auto unbond_tx = [](const crypto::hash& p_id, uint64_t debit, uint8_t fill) {
     transaction tx{};
     tx.version = 2;
@@ -2148,25 +2174,7 @@ TEST(archival_substrate_lmdb, unbond_two_p_one_block_threads_the_counter)
   const transaction tx_a = unbond_tx(p_a, bonded_a, 0x11);
   const transaction tx_b = unbond_tx(p_b, bonded_b, 0x22);
 
-  block blk{};
-  blk.major_version = 1;
-  blk.minor_version = 1;
-  blk.timestamp = 1500000000 + connect_height;
-  blk.prev_id = db.get_block_hash_from_height(connect_height - 1);
-  blk.curve_tree_root = crypto::null_hash;
-  transaction miner_tx{};
-  miner_tx.version = 1;
-  miner_tx.unlock_time = connect_height + 60;
-  txin_gen gen{};
-  gen.height = connect_height;
-  miner_tx.vin.push_back(gen);
-  blk.miner_tx = std::move(miner_tx);
-  blk.tx_hashes.push_back(get_transaction_hash(tx_a));
-  blk.tx_hashes.push_back(get_transaction_hash(tx_b));
-
-  db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
-    connect_height + 1, 0, 0,
-    {std::make_pair(tx_a, tx_to_blob(tx_a)), std::make_pair(tx_b, tx_to_blob(tx_b))});
+  connect_block_with_txs(db, {tx_a, tx_b});
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
