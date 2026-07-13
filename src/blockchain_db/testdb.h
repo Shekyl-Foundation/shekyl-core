@@ -184,7 +184,8 @@ public:
   virtual void set_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) override {}
   virtual void remove_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) override {}
 
-  virtual void put_archival_bond_record(const crypto::hash&, const std::vector<uint8_t>&, uint64_t,
+  virtual void put_archival_bond_record(const crypto::hash&, const std::vector<uint8_t>&,
+    const std::vector<uint8_t>&, uint64_t,
     uint64_t, uint8_t, const std::vector<uint64_t>&,
     const std::vector<std::pair<uint64_t, uint64_t>>&) override {}
   virtual void put_archival_bond_value(const crypto::hash&,

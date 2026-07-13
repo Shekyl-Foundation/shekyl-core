@@ -817,13 +817,15 @@ private:
 //
 // Versioned LMDB value for `archival_bond` (gate-4 §4; serve-credit reads).
 //
-// v4 (REWARD_EMISSION_LEG.md §6.2/§6.3, encoding pinned 2026-06-11) appends
-// the windowed claimed-epoch set and `first_paying_emission_height`. v3 is
-// rejected at decode per the pre-genesis posture: no migration, reset the
-// data directory.
+// v5 (GF-1, gate-4 §4.1) inserts the committed `bond_spend_pk` — the debit
+// authorizer, written once at JoinMarket connect and immutable for the
+// record's life — after `hybrid_pubkey`. v4 (REWARD_EMISSION_LEG.md
+// §6.2/§6.3, encoding pinned 2026-06-11) appended the windowed claimed-epoch
+// set and `first_paying_emission_height`. Prior versions are rejected at
+// decode per the pre-genesis posture: no migration, reset the data directory.
 
 struct ArchivalBondValue {
-    static constexpr uint8_t kVersion = 4;
+    static constexpr uint8_t kVersion = 5;
     static constexpr uint8_t kHoldingsShardSetCompact = 0;
     static constexpr uint8_t kHoldingsCompleteTree = 1;
     static constexpr size_t kMaxPubkeyLen = 2048;
@@ -867,6 +869,14 @@ struct ArchivalBondValue {
     };
 
     std::vector<uint8_t> hybrid_pubkey;
+    /// GF-1 debit authorizer (gate-4 §4.1 / gate-6 §9.6): committed once at
+    /// JoinMarket connect from the vin's §9.11 field, immutable for the
+    /// record's life. Every later `bond_debit` (Unbond, HoldingsUpdate-drop)
+    /// verifies its pqc auth against THIS copy — never the identity key.
+    /// The codec bounds it like `hybrid_pubkey` (≤ kMaxPubkeyLen); the exact
+    /// canonical-length requirement is the writers'/verify's (every record is
+    /// created by JoinMarket connect, whose vin serializer enforces it).
+    std::vector<uint8_t> bond_spend_pk;
     uint64_t join_settlement_epoch = 0;
     /// Per-P bonded balance (gate-4 §4.1); must equal `bond_floor(holdings)` post-connect.
     uint64_t bonded_total_atomic = 0;
@@ -896,6 +906,7 @@ struct ArchivalBondValue {
     [[nodiscard]] std::vector<uint8_t> encode() const
     {
         if (hybrid_pubkey.size() > kMaxPubkeyLen
+            || bond_spend_pk.size() > kMaxPubkeyLen
             || held_shard_ids.size() > kMaxHoldings
             || bad_intervals.size() > kMaxBadIntervals
             || claimed_settlement_epochs.size() > kMaxClaimedEpochs)
@@ -920,13 +931,18 @@ struct ArchivalBondValue {
                 "ArchivalBondValue encode: claimed_settlement_epochs order/span violated");
 
         std::vector<uint8_t> out;
-        out.reserve(1 + 2 + hybrid_pubkey.size() + 8 + 8 + 1 + 4 + held_shard_ids.size() * 8
+        out.reserve(1 + 2 + hybrid_pubkey.size() + 2 + bond_spend_pk.size() + 8 + 8 + 1 + 4
+            + held_shard_ids.size() * 8
             + 4 + bad_intervals.size() * 16 + 4 + claimed_settlement_epochs.size() * 8 + 8);
         out.push_back(kVersion);
         const uint16_t pk_len = static_cast<uint16_t>(hybrid_pubkey.size());
         out.push_back(static_cast<uint8_t>(pk_len >> 8));
         out.push_back(static_cast<uint8_t>(pk_len));
         out.insert(out.end(), hybrid_pubkey.begin(), hybrid_pubkey.end());
+        const uint16_t spk_len = static_cast<uint16_t>(bond_spend_pk.size());
+        out.push_back(static_cast<uint8_t>(spk_len >> 8));
+        out.push_back(static_cast<uint8_t>(spk_len));
+        out.insert(out.end(), bond_spend_pk.begin(), bond_spend_pk.end());
         for (int i = 7; i >= 0; --i)
             out.push_back(static_cast<uint8_t>((join_settlement_epoch >> (i * 8)) & 0xFF));
         for (int i = 7; i >= 0; --i)
@@ -985,7 +1001,7 @@ struct ArchivalBondValue {
 
     static bool decode(const void* data, size_t len, ArchivalBondValue& out)
     {
-        if (!data || len < 1 + 2 + 8 + 8 + 1 + 4 + 4 + 4 + 8)
+        if (!data || len < 1 + 2 + 2 + 8 + 8 + 1 + 4 + 4 + 4 + 8)
             return false;
         const auto* p = static_cast<const uint8_t*>(data);
         size_t off = 0;
@@ -996,10 +1012,16 @@ struct ArchivalBondValue {
             return false;
         const uint16_t pk_len = static_cast<uint16_t>((p[off] << 8) | p[off + 1]);
         off += 2;
-        if (pk_len > kMaxPubkeyLen || off + pk_len + 8 + 8 + 1 > len)
+        if (pk_len > kMaxPubkeyLen || off + pk_len + 2 > len)
             return false;
         out.hybrid_pubkey.assign(p + off, p + off + pk_len);
         off += pk_len;
+        const uint16_t spk_len = static_cast<uint16_t>((p[off] << 8) | p[off + 1]);
+        off += 2;
+        if (spk_len > kMaxPubkeyLen || off + spk_len + 8 + 8 + 1 > len)
+            return false;
+        out.bond_spend_pk.assign(p + off, p + off + spk_len);
+        off += spk_len;
         out.join_settlement_epoch = load_be64(p + off);
         off += 8;
         out.bonded_total_atomic = load_be64(p + off);

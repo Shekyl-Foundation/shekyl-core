@@ -464,27 +464,27 @@ never verifies — which makes `kMaxBadIntervals` a **genesis-frozen consensus
 constant** (tx validity keys on it; static_assert-pinned against its Rust twin
 `MAX_BOND_BAD_INTERVALS`).
 
-**GF-1 debit-auth blocker (named, rule 22): Unbond txs remain verify-rejected —
-and this is a SEQUENCED PREREQUISITE for the whole debit side, not deferrable
-cleanup.** Step 5 gates every `bond_debit > 0`, so `HoldingsUpdate`-drop fails
-closed at the same auth step the moment it is wired; GF-1 precedes
-`HoldingsUpdate` **by dependency**. It is the immediate next PR.
-§3.5 step 5 requires a `bond_debit` to verify against the record's committed
-`bond_spend_pk`, never the identity key. The §9.11 field the Rust wallet wire
-(`shekyl-wire`) already carries is **absent from the C++ `txin_archival_bond_post`
-serializer and the v4 record schema**, so no record commits a debit authorizer —
-the verify dispatch runs the full Unbond semantic verify, then **fails closed** at
-the auth step with the blocker named. The flip is the GF-1 wire+record
-sub-increment: C++ vin gains the JoinMarket-coupled `bond_spend_pk` (reconciling
-the shekyl-wire divergence), the record commits it at JoinMarket connect (schema
-v5), the §3.4.1 sig-preimage binds it, and the debit-auth check replaces the
-rejection. Until then the connect arm is landed-but-unreachable through consensus
-(exercised by the DB-layer block-path KATs). Two flip pins (review, 2026-07-12):
-the auth lands as the **shared debit authorizer** (step 5 gates every
-`bond_debit > 0` — `HoldingsUpdate`-drop rides the same check), and the flip
-**swaps reject→auth in one change** pinned by a discriminating KAT (wrong
-`bond_spend_pk` rejects, committed one accepts) — deleting the rejection without
-the real check would go from fail-closed to no-auth.
+**GF-1 debit authorization — LANDED (2026-07-13); the debit side is enabled.**
+Step 5's selection is live in `check_archival_bond_post_input`, with the auth
+key (`tx.pqc_auths[bond_index].hybrid_public_key`, whose signature over the
+whole-tx payload `verify_transaction_pqc_auth` checks) pinned kind-dependently:
+**credit paths → the identity key `P_pubkey`; debit paths → the record's
+COMMITTED `bond_spend_pk`** — the shared debit authorizer both flip pins asked
+for (`HoldingsUpdate`-drop rides the same selection when it lands). The wire
+divergence is reconciled: the C++ `txin_archival_bond_post` (binary, boost, and
+JSON serializers) carries the §9.11 JoinMarket-coupled field with the exact
+canonical length enforced both directions, matching `shekyl-wire` and the
+now-coupled Rust `bond_wire` codec (whose §3.4.1 `signature_preimage` binds the
+key; the operative consensus binding also rides the tx prefix inside the pqc
+payload). The v5 record (`ArchivalBondValue`, v4 rejected at decode —
+datadir-reset posture) commits the key once at JoinMarket connect
+(`put_archival_bond_record`, no-default parameter so no caller can silently
+commit an empty authorizer). The reject→auth swap landed in one change, pinned
+by the discriminating KATs
+(`archival_bond_post.gf1_unbond_auth_discriminates_on_committed_key` + siblings):
+the committed key accepts — Unbond verifies end-to-end — while the identity
+key, a foreign key, and a record committing no key (pre-GF-1 shape) all reject
+fail-closed, never an identity fallback.
 
 **Block-level bond-post pass (LANDED end-to-end):** at most **one bond-post vin
 per `P_canonical_id` per block**, keyed on

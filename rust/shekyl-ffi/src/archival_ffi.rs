@@ -588,6 +588,10 @@ unsafe fn bond_post_vin_from_raw(
         hybrid_public_key: Vec::new(),
         p_canonical_id: [0u8; 32],
         post_kind,
+        // Placeholder, like `hybrid_public_key`: the C++ glue owns the
+        // structural bond_spend_pk checks (presence/length by kind) and the
+        // record-commit; the Rust verify arms never read it.
+        bond_spend_pk: Vec::new(),
         holdings: HoldingsDescriptor {
             kind: holdings_kind,
             shard_ids,

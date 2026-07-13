@@ -235,7 +235,11 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
       if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
       {
         const uint64_t join_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
-        put_archival_bond_record(bond.p_canonical_id, bond.hybrid_public_key, join_epoch,
+        // GF-1: commit the vin's §9.11 debit authorizer into the record. The
+        // vin serializer already enforced presence + canonical length on
+        // JoinMarket, so an empty key here is unreachable through parse.
+        put_archival_bond_record(bond.p_canonical_id, bond.hybrid_public_key,
+          bond.bond_spend_pk, join_epoch,
           bond.bonded_total_atomic, static_cast<uint8_t>(bond.holdings.kind),
           bond.holdings.shard_ids);
         const uint64_t bonded_total = get_total_bonded_atomic();
@@ -1434,7 +1438,8 @@ bool BlockchainDB::get_archival_shard_segment_at_height(uint64_t /*shard_id*/, u
 }
 
 void BlockchainDB::put_archival_bond_record(const crypto::hash& /*p_id*/,
-  const std::vector<uint8_t>& /*hybrid_pubkey*/, uint64_t /*join_settlement_epoch*/,
+  const std::vector<uint8_t>& /*hybrid_pubkey*/,
+  const std::vector<uint8_t>& /*bond_spend_pk*/, uint64_t /*join_settlement_epoch*/,
   uint64_t /*bonded_total_atomic*/, uint8_t /*holdings_kind*/,
   const std::vector<uint64_t>& /*held_shard_ids*/,
   const std::vector<std::pair<uint64_t, uint64_t>>& /*bad_intervals*/)

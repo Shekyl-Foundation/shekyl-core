@@ -56,11 +56,16 @@ fn build_gate4_document() -> Value {
         .expect("integration pk");
     let hybrid_pk_bytes = decode_hex(hybrid_pk_hex);
     let p_id = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes).to_bytes();
+    // The GF-1 debit authorizer (§9.11, JoinMarket-coupled). A deterministic
+    // canonical-length pattern — the KAT pins wire shape and record commit,
+    // not key validity; the C++ integration auth KAT references this hex.
+    let bond_spend_pk = vec![0xB5u8; hybrid_pk_bytes.len()];
 
     let join_vin = ArchivalBondPostVin {
         hybrid_public_key: hybrid_pk_bytes,
         p_canonical_id: p_id,
         post_kind: BondPostKind::JoinMarket,
+        bond_spend_pk: bond_spend_pk.clone(),
         holdings: HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: vec![integration["shard_id"].as_u64().expect("shard")],
@@ -77,6 +82,7 @@ fn build_gate4_document() -> Value {
         "join": {
             "wire_hex": encode_hex(&join_vin.serialize().expect("join wire")),
             "p_canonical_id_hex": encode_hex(&p_id),
+            "bond_spend_pk_hex": encode_hex(&bond_spend_pk),
             "bond_credit": ARCHIVAL_BOND_FLOOR_ATOMIC,
             "join_settlement_epoch": integration["join_settlement_epoch"].as_u64().expect("join epoch"),
         },

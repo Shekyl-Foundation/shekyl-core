@@ -257,6 +257,12 @@ namespace boost
     a & x.hybrid_public_key;
     a & x.p_canonical_id;
     a & x.post_kind;
+    // §9.11 coupling mirrored from the binary serializer: the GF-1 debit
+    // authorizer exists iff JoinMarket. Boost archives are internal
+    // (blob/pool paths), but the conditional keeps every representation of
+    // the vin byte-coupled to the same rule.
+    if (x.post_kind == static_cast<uint8_t>(cryptonote::archival_bond_post_kind::JoinMarket))
+      a & x.bond_spend_pk;
     a & x.holdings;
     a & x.bonded_total_atomic;
     a & x.bond_credit;

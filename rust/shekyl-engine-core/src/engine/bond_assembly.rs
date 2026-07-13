@@ -451,16 +451,15 @@ pub(crate) fn wire_holdings(holdings: &HoldingsDescriptor) -> Holdings {
 /// Map a built [`ArchivalBondPostVin`] onto the canonical wire
 /// [`Input::BondPost`] prefix input (`GENESIS_TX_WIRE_FORMAT.md` §9.11).
 ///
-/// `bond_spend_pk` is the GF-1 debit-authorizer hybrid public key
-/// (JoinMarket-coupled on the wire per §9.11); the vin itself does not carry
-/// it, so the caller supplies P's canonical `bond_spend_pk` bytes alongside.
+/// The GF-1 debit-authorizer `bond_spend_pk` rides the vin itself
+/// (JoinMarket-coupled per §9.11 — the GF-1 wire increment collapsed the old
+/// caller-supplies-alongside seam), so this mapping just moves it across; the
+/// vin's `write`/`read` coupling guarantees a JoinMarket vin carries a
+/// canonical-length key.
 ///
 /// Refuses a non-JoinMarket vin: JoinMarket is the only post kind valid at
 /// genesis, and the `bond_spend_pk` coupling below is JoinMarket-specific.
-pub(crate) fn wire_bond_post_input(
-    vin: &ArchivalBondPostVin,
-    bond_spend_pk: Vec<u8>,
-) -> Result<Input, BondAssemblyError> {
+pub(crate) fn wire_bond_post_input(vin: &ArchivalBondPostVin) -> Result<Input, BondAssemblyError> {
     match vin.post_kind {
         RetentionBondPostKind::JoinMarket => {}
         other => {
@@ -473,7 +472,9 @@ pub(crate) fn wire_bond_post_input(
     Ok(Input::BondPost(Box::new(BondPost {
         hybrid_public_key: vin.hybrid_public_key.clone(),
         p_canonical_id: vin.p_canonical_id,
-        kind: WireBondPostKind::JoinMarket { bond_spend_pk },
+        kind: WireBondPostKind::JoinMarket {
+            bond_spend_pk: vin.bond_spend_pk.clone(),
+        },
         holdings: wire_holdings(&vin.holdings),
         bonded_total_atomic: vin.bonded_total_atomic,
         bond_credit: vin.bond_credit,

@@ -2060,8 +2060,14 @@ public:
     crypto::hash& out_rk, uint64_t& out_leaf_count) const;
 
   // Gate-4 bond-post / registry writers (substrate seeding until bond vin lands).
+  // `bond_spend_pk` is the GF-1 debit authorizer the JoinMarket connect
+  // commits (gate-4 §4.1) — deliberately no default: every caller states the
+  // key, so the production connect can never silently commit a record whose
+  // debits are unauthorized-forever. Test seeders pass {} when the record's
+  // debit path is not under test.
   virtual void put_archival_bond_record(const crypto::hash& p_id,
-    const std::vector<uint8_t>& hybrid_pubkey, uint64_t join_settlement_epoch,
+    const std::vector<uint8_t>& hybrid_pubkey,
+    const std::vector<uint8_t>& bond_spend_pk, uint64_t join_settlement_epoch,
     uint64_t bonded_total_atomic, uint8_t holdings_kind,
     const std::vector<uint64_t>& held_shard_ids,
     const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals = {});

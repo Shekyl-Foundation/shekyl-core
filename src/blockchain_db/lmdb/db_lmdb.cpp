@@ -5342,7 +5342,8 @@ bool BlockchainLMDB::get_archival_shard_segment_at_height(uint64_t shard_id, uin
 }
 
 void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
-  const std::vector<uint8_t>& hybrid_pubkey, uint64_t join_settlement_epoch,
+  const std::vector<uint8_t>& hybrid_pubkey,
+  const std::vector<uint8_t>& bond_spend_pk, uint64_t join_settlement_epoch,
   uint64_t bonded_total_atomic, uint8_t holdings_kind,
   const std::vector<uint64_t>& held_shard_ids,
   const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals)
@@ -5351,6 +5352,11 @@ void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
 
   shekyl::db::ArchivalBondValue bond{};
   bond.hybrid_pubkey = hybrid_pubkey;
+  // GF-1: the committed debit authorizer (gate-4 §4.1) — written once here,
+  // at join time; immutable for the record's life (re-keying is a full
+  // Unbond + re-JoinMarket). Every later bond_debit's pqc auth verifies
+  // against this copy, never the identity key.
+  bond.bond_spend_pk = bond_spend_pk;
   bond.join_settlement_epoch = join_settlement_epoch;
   bond.bonded_total_atomic = bonded_total_atomic;
   bond.holdings_kind = holdings_kind;

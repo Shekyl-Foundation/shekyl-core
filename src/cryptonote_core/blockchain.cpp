@@ -3680,16 +3680,16 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       {
         const txin_archival_bond_post& bond =
           std::get<txin_archival_bond_post>(tx.vin[archival_bond_post_index]);
-        if (!check_archival_bond_post_input(bond, chain_height))
+        // The auth-key selection (gate-4 §3.5 step 5 — identity key on
+        // credit, the record's committed bond_spend_pk on debit) lives inside
+        // check_archival_bond_post_input, which has the record access; the
+        // bond input's pqc auth key is passed in for that pinning. The
+        // signature over the whole-tx payload is verified against the same
+        // key by verify_transaction_pqc_auth.
+        if (!check_archival_bond_post_input(bond,
+              tx.pqc_auths[archival_bond_post_index].hybrid_public_key, chain_height))
         {
           MERROR_VER("Archival bond-post validation failed");
-          tvc.m_verifivation_failed = true;
-          return false;
-        }
-        if (tx.pqc_auths[archival_bond_post_index].hybrid_public_key != bond.hybrid_public_key)
-        {
-          MERROR_VER("Archival bond-post hybrid pubkey does not match pqc_auths["
-            << archival_bond_post_index << "]");
           tvc.m_verifivation_failed = true;
           return false;
         }
@@ -4593,7 +4593,7 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
 } // namespace
 
 bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& bond,
-  uint64_t chain_height) const
+  const std::vector<uint8_t>& auth_pubkey, uint64_t chain_height) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
@@ -4664,19 +4664,30 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
         << "): " << archival_bond_post_verify_err_string(verify_rc));
       return false;
     }
-    // GF-1 debit authorization (gate-4 §3.5 step 5): a bond_debit must verify
-    // against the record's committed bond_spend_pk — NEVER the identity key
-    // P_pubkey (identity-only invariant, gate-6 §9.6). The v4 record does not
-    // yet commit one: the §9.11 field the Rust wallet wire already carries is
-    // absent from the C++ txin_archival_bond_post serializer and the record
-    // schema, so there is no key a debit may verify against. Fail closed with
-    // the blocker named; this branch flips when the GF-1 wire+record
-    // sub-increment lands (JoinMarket commits bond_spend_pk into the record)
-    // and the debit auth check replaces this rejection.
-    MERROR_VER("Archival Unbond rejected: record commits no bond_spend_pk (GF-1 "
-      "debit authorizer pending the wire+record sub-increment); identity-key "
-      "debit authorization is forbidden");
-    return false;
+    // GF-1 debit authorization (gate-4 §3.5 step 5) — the SHARED debit
+    // authorizer: every bond_debit > 0 (Unbond here; HoldingsUpdate-drop
+    // rides the same selection when it lands) verifies its pqc auth against
+    // the record's COMMITTED bond_spend_pk — never the identity key P_pubkey
+    // (identity-only invariant, gate-6 §9.6). The signature itself is
+    // verified over the whole-tx payload by verify_transaction_pqc_auth
+    // against pqc_auths[idx].hybrid_public_key; pinning that key here is the
+    // authorization choice. A record with no committed key (pre-GF-1 shape)
+    // authorizes nothing — fail closed, not identity fallback.
+    if (record.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
+    {
+      MERROR_VER("Archival Unbond rejected: record commits no bond_spend_pk; "
+        "a debit cannot be authorized (and the identity key never authorizes "
+        "a value-out)");
+      return false;
+    }
+    if (auth_pubkey != record.bond_spend_pk)
+    {
+      MERROR_VER("Archival Unbond rejected: pqc auth key does not match the "
+        "record's committed bond_spend_pk (identity-key or foreign-key debit "
+        "authorization is forbidden)");
+      return false;
+    }
+    return true;
   }
 
   std::vector<uint8_t> existing_pubkey;
@@ -4694,6 +4705,23 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
   {
     MERROR_VER("Archival bond-post verify failed (code " << static_cast<unsigned>(verify_rc)
       << "): " << archival_bond_post_verify_err_string(verify_rc));
+    return false;
+  }
+
+  // Credit-path authorization (gate-4 §3.5 step 5, the debit selection's
+  // twin): bond_debit == 0 paths authorize with the IDENTITY key P_pubkey —
+  // the §9.11 bond_spend_pk the vin commits for the record must be present
+  // and canonical (the serializer enforces it at parse; re-checked here for
+  // non-parse callers), but it never authorizes the credit itself.
+  if (bond.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
+  {
+    MERROR_VER("Archival JoinMarket rejected: bond_spend_pk missing or not canonical");
+    return false;
+  }
+  if (auth_pubkey != bond.hybrid_public_key)
+  {
+    MERROR_VER("Archival bond-post rejected: credit-path pqc auth key does not "
+      "match the identity key P_pubkey");
     return false;
   }
 

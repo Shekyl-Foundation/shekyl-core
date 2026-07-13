@@ -4,6 +4,41 @@
 
 ### Added
 
+- **archival: GF-1 `bond_spend_pk` wire+record — the debit-side enable flip
+  (gate-4 §3.5 step 5 / §4.1 / §9.11; `feat/gf1-bond-spend-pk`).** The
+  sequenced prerequisite the Unbond wiring named is landed; **Unbond txs now
+  verify end-to-end** and `HoldingsUpdate`'s drop-path auth is unblocked.
+  - **Wire:** `txin_archival_bond_post` gains the JoinMarket-coupled GF-1
+    debit authorizer in all three C++ serializers (binary/boost/JSON) and in
+    the Rust `bond_wire` codec — present with the exact canonical single-key
+    length iff JoinMarket, absent otherwise, enforced both directions on
+    every representation (a misconstruction is loud, never silently
+    dropped). Reconciles the shekyl-wire §9.11 divergence; the §3.4.1
+    `signature_preimage` binds the key (the operative consensus binding also
+    rides the tx prefix inside the pqc payload); the gate-4 lifecycle KAT
+    fixture is regenerated from the coupled codec and now exposes
+    `bond_spend_pk_hex` for the C++ integration KATs.
+  - **Record (v5):** `ArchivalBondValue` commits the key once at JoinMarket
+    connect — `put_archival_bond_record` takes it as a **no-default**
+    parameter (no caller can silently commit an empty authorizer); v4
+    rejects at decode (pre-genesis posture: reset the data directory). The
+    real-block-path connect KAT asserts the committed copy.
+  - **Auth (the reject→auth swap, one change):** the §3.5 step-5 selection
+    is live in `check_archival_bond_post_input` as the **shared debit
+    authorizer** — credit paths pin the pqc auth key to the identity
+    `P_pubkey`; debit paths pin it to the record's **committed**
+    `bond_spend_pk` (the signature over the whole-tx payload is verified
+    against that key by `verify_transaction_pqc_auth`). A record committing
+    no key authorizes nothing — fail-closed, never identity fallback.
+    Pinned by the discriminating KATs: committed key accepts, identity key /
+    foreign key / keyless record all reject; the credit-path twin proves the
+    vin's own key does not authorize the credit.
+  - **Wallet seam:** `ArchivalBondPostVin` carries the key
+    (`build_join_market_vin` sets it from `ArchivalPKeys::bond_spend_pk`;
+    `wire_bond_post_input`'s supply-alongside parameter deleted), so the A-1
+    assembly invariant now pins the key byte-for-byte between the prefix
+    input and the signed vin.
+
 - **archival: `Unbond` release-gate hardening + block/template dedup (review
   round, `feat/bond-fsm-unbond-connect`).** The release cooldown gains a second
   predicate — `slashes_settled_through`: the slash scheduler's settled watermark

@@ -679,6 +679,20 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
 
 ## Revision history
 
+- **2026-07-13 (e):** **GF-1 `bond_spend_pk` wire+record LANDED — the debit side
+  is enabled.** The §9.11 JoinMarket-coupled field now exists in all three C++
+  serializers (binary/boost/JSON, exact canonical length both directions) and
+  the Rust `bond_wire` codec (coupling enforced at write/read; §3.4.1 preimage
+  binds it; gate-4 KAT fixture regenerated); the v5 record commits it once at
+  JoinMarket connect (v4 rejected at decode, datadir reset); and the §3.5
+  step-5 selection is live as the **shared debit authorizer** (credit →
+  identity key, debit → the record's committed key) — the reject→auth swap
+  landed in one change with the discriminating KATs (committed key accepts:
+  **Unbond verifies end-to-end**; identity/foreign/no-key all reject
+  fail-closed). The wallet seam simplified (the vin carries the key;
+  `wire_bond_post_input` takes it from the vin; A-1 now pins the key
+  byte-for-byte between prefix input and signed vin). **`HoldingsUpdate` is
+  unblocked** — its drop-path auth rides the same selection.
 - **2026-07-13 (d):** **`Unbond` release-gate hardening (review round).** Added
   the slash-settlement predicate to the release verify — the scheduler's settled
   watermark (`archival_last_slash_epoch`) must reach `P`'s last-served anchor,

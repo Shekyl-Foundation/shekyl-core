@@ -1503,13 +1503,13 @@ impl Message<AssembleBond> for StakeEngine {
             hybrid_public_key: hybrid_pk_bytes.clone(),
             p_canonical_id: *persona.as_bytes(),
             post_kind: shekyl_archival_retention::BondPostKind::JoinMarket,
+            bond_spend_pk: bond_spend_pk_bytes,
             holdings: msg.holdings.clone(),
             bonded_total_atomic: floor,
             bond_credit: floor,
             bond_debit: 0,
         };
-        let prefix_bond_input: Input =
-            wire_bond_post_input(&expected_vin, bond_spend_pk_bytes.clone())?;
+        let prefix_bond_input: Input = wire_bond_post_input(&expected_vin)?;
         let extra_inputs = vec![prefix_bond_input];
 
         let prefix_hash = tx_prefix_hash_from_parts_with_extra(
