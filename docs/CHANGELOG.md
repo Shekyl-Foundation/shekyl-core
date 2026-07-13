@@ -4,6 +4,104 @@
 
 ### Added
 
+- **archival: `Unbond` release-gate hardening + block/template dedup (review
+  round, `feat/bond-fsm-unbond-connect`).** The release cooldown gains a second
+  predicate — `slashes_settled_through`: the slash scheduler's settled watermark
+  (`archival_last_slash_epoch`) must have reached `P`'s last-served anchor, so a
+  held-but-unserved failure at or before the last serve is slash-processed on
+  bonded collateral before the exit verifies. This closes the one-block race
+  where the connect dispatch precedes the per-block slash fold. Epochs after the
+  last serve are exit-forgiven by construction: slashability ends at the `Unbond`
+  connect and the refund is never clawed back (so the pop-order slash revert is a
+  defensive belt, not a real-case dependency; `apply_archival_slash_one` now
+  FATALs on a shard the record does not hold rather than silently no-op). A
+  `CompleteTree` record's cooldown anchor is sourced from an all-shards `P`-prefix
+  serve-credit scan (`archival_bond_all_last_served_epochs`) instead of its empty
+  stored shard list. The block-level pass gains a GF-1 fail-closed belt (any
+  debit-side bond-post kind rejects the block, matching the per-tx rejection the
+  `PER_BLOCK_CHECKPOINT` fast path skips), and the mempool/template fill dedups
+  archival block-unique keys (bond-post `P`, emission `(P,E)`, serve-credit
+  `(P,shard,E)`) so two conflicting txs cannot co-occupy one self-invalid
+  template (a mining-stall vector). A serve-credit + `Unbond` for one `P` in one
+  block is deliberately allowed (served epochs are slash-immune; the re-armed
+  span is the exit-forgiven tail).
+
+- **archival: `Unbond` C++ dispatch wiring — connect arm, pre-image journal,
+  pop twin, verify dispatch, per-`P` block pass (gate-4 §3.5/§4.3/§5;
+  P2B-8 increment c, `feat/bond-fsm-unbond-connect`).** The
+  `add_transaction` bond arm dispatches on `post_kind`: Unbond →
+  `apply_archival_unbond`, the single writer that journals the record's
+  full pre-image (`m_archival_bond_unbond_log`, BE(height)‖BE(seq) —
+  `ArchivalBondUnbondRevertValue` carries exactly the three mutated
+  fields, disjoint from the emission journal's), applies the Rust fold's
+  write set verbatim (Exited record + clean interval-close + counter
+  debit), and FATALs on any fold error. Counter threading is per-post
+  (live `get → fold → set` inside the writer) — armed by the
+  two-`P`-one-block KAT, which a hoisted per-block read would fail.
+  `pop_block` calls `revert_archival_unbonds_at_height` after the slash
+  revert as a **defensive ordering belt** — slashability ends at the
+  `Unbond` connect (an Exited record holds no shards, so it is never a
+  slash candidate; ratified 2026-07-12), so nothing trails the clean
+  close and the pop fold's trailing-close check holds unconditionally;
+  the fold validates the Exited shape + trailing close before
+  re-crediting, and the pre-image restores byte-exactly (real-block-path
+  connect/pop KAT). Verify dispatch:
+  `check_archival_bond_post_input` gains the chain-height operand and an
+  Unbond branch marshaling record facts + the P2B-8 Q1/Q2 cooldown
+  anchors (`archival_bond_last_served_epochs`: one reverse-cursor seek
+  per held shard over the BE serve-credit key; never-served omitted).
+  The per-`P` block pass is marshaled beside the emission `(P,E)` pass
+  (`shekyl_archival_bond_post_block_unique`, reject-not-serialize).
+  **Named blocker (rule 22, gate-4 §3.5 + FOLLOWUPS): Unbond txs remain
+  verify-rejected fail-closed at the §3.5 step-5 debit-auth step** — no
+  record commits a `bond_spend_pk` (the §9.11 field the Rust wallet wire
+  carries is absent from the C++ vin serializer and the v4 record), and
+  the identity key must never authorize a value-out (GF-1). The GF-1
+  wire+record sub-increment is the enable flip.
+
+- **archival: `Unbond` connect fold + pop twin, Rust-native (gate-4 §4.3
+  "On confirm" / §5; P2B-8 increment b, `feat/bond-fsm-unbond-connect`).**
+  `shekyl-archival-retention::bond_connect` is the single implementation of
+  the release's write set — the post-connect record (`bonded_total = 0`,
+  compact-and-empty holdings; the record persists for backlog claims), the
+  `total_bonded_atomic` debit, and the §4.3 **clean interval-close**, landed
+  as a **zero-length interval `[E_unbond, E_unbond)`** in the record's
+  interval log: `good_through`-inert by construction (KAT-pinned, including
+  next to an open slash interval), it records the exit epoch for the later
+  `W`-lapse / `p_slot`-burn step with **no schema change**. The pop twin
+  validates the tip record is the connect's product (Exited state + trailing
+  clean close) before re-crediting the counter; record fields restore from
+  the connect's full pre-image journal (emission WS-2 §6.3 shape — the vin
+  carries the *post*-state, so holdings are otherwise unreconstructible).
+  FFI: `shekyl_archival_unbond_connect` / `shekyl_archival_unbond_pop` — the
+  C++ connect site (follow-on wiring increment) writes exactly what the
+  out-params dictate, no consensus arithmetic caller-side; all non-OK codes
+  map to FATAL, never a soft skip. The refund needs no connect write:
+  `bond_debit` is the CT-balance **source term** on the wire (§2.4 — the
+  refund vouts are ordinary hidden FCMP++ outputs that mix normally).
+  Riders: `verify_unbond_bond_post` gained the **`IntervalLogFull` belt**
+  (a record whose interval log is at the codec cap rejects at verify — a
+  verified-but-unconnectable tx would be a deterministic halt); gate-4 §4.1
+  executed P2B-8 Q2's forward amendment (`last_served_epoch` dropped —
+  derived, never stored) and now pins the landed `bond_event_log`
+  representation; §3.5 documents the connect/pop write set and names the
+  wiring obligations (block-level per-`P` bond-post pass, journal table).
+  **Review round (same increment):** the marker's storage half is now
+  KAT-pinned end-to-end (`archival_substrate_lmdb.unbond_clean_close_marker_round_trips`:
+  v4 codec encode→decode→re-encode identity on `[E, E)`, the production LMDB
+  writer/reader on the Exited shape, and the production `good_through` read
+  path — verified besides that **no** codec/marshal/decode path anywhere
+  asserts `start < end`); `kMaxBadIntervals` pinned as a **genesis-frozen
+  consensus constant** (verify validity keys on it; static_assert + Rust-twin
+  lockstep note) with the interval log's **two entry kinds** documented at
+  both `BadInterval` types; and the block-level pass's **decision function
+  landed** (`bond_post_block_unique` + `shekyl_archival_bond_post_block_unique`,
+  the `emission_block_claims_unique` sibling keyed on `P` alone, reject-not-
+  serialize) — covering the whole same-`P` same-block class (double-JoinMarket
+  credit, double-Unbond debit, mixed kinds), which the §4.5 conservation audit
+  cannot catch (a double-credit doubles both sides consistently). C++
+  marshaling of the pass stays with the wiring increment (§3.5).
+
 - **tests/wallet/rpc: emission-claim PR-4a — staker regtest harness up
   to the daemon submit gap, its enablers, and the Q11 blob-boundary
   arm (`EMISSION_CLAIM_BUILDER.md` §8 "PR 4 split";

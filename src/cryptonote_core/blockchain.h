@@ -1176,7 +1176,8 @@ namespace cryptonote
     bool check_archival_serve_credit_input(const txin_archival_serve_credit_response& resp,
       uint64_t current_height) const;
 
-    bool check_archival_bond_post_input(const txin_archival_bond_post& bond) const;
+    bool check_archival_bond_post_input(const txin_archival_bond_post& bond,
+      uint64_t chain_height) const;
 
     /**
      * @brief FAKECHAIN-only: inject an archival serve-credit bit directly.

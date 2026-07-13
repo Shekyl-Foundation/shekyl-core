@@ -169,7 +169,7 @@ TEST(archival_bond_post, gate4_integration_accepts_valid_join_market)
   auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
   BlockchainAndPool bap;
   ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_TRUE(bap.bc.check_archival_bond_post_input(bond));
+  EXPECT_TRUE(bap.bc.check_archival_bond_post_input(bond, bap.bc.get_current_blockchain_height()));
 }
 
 TEST(archival_bond_post, gate4_integration_rejects_both_bond_terms)
@@ -181,7 +181,7 @@ TEST(archival_bond_post, gate4_integration_rejects_both_bond_terms)
   auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
   BlockchainAndPool bap;
   ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond));
+  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bap.bc.get_current_blockchain_height()));
 }
 
 TEST(archival_bond_post, gate4_integration_rejects_debit_without_credit)
@@ -195,7 +195,7 @@ TEST(archival_bond_post, gate4_integration_rejects_debit_without_credit)
   auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
   BlockchainAndPool bap;
   ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond));
+  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bap.bc.get_current_blockchain_height()));
 }
 
 TEST(archival_bond_post, gate4_integration_rejects_existing_bond_record)
@@ -215,7 +215,7 @@ TEST(archival_bond_post, gate4_integration_rejects_existing_bond_record)
 
   BlockchainAndPool bap;
   ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond));
+  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bap.bc.get_current_blockchain_height()));
 }
 
 TEST(archival_bond_post, gate4_integration_rejects_p_id_hint_mismatch)
@@ -227,7 +227,7 @@ TEST(archival_bond_post, gate4_integration_rejects_p_id_hint_mismatch)
   auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
   BlockchainAndPool bap;
   ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond));
+  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bap.bc.get_current_blockchain_height()));
 }
 
 TEST(archival_bond_post, gate4_integration_rejects_floor_mismatch)
@@ -240,7 +240,7 @@ TEST(archival_bond_post, gate4_integration_rejects_floor_mismatch)
   auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
   BlockchainAndPool bap;
   ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond));
+  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bap.bc.get_current_blockchain_height()));
 }
 
 TEST(archival_bond_post, gate4_integration_rejects_empty_shard_set)
@@ -251,7 +251,7 @@ TEST(archival_bond_post, gate4_integration_rejects_empty_shard_set)
   auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
   BlockchainAndPool bap;
   ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond));
+  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bap.bc.get_current_blockchain_height()));
 }
 
 TEST(archival_bond_post, gate4_integration_rejects_complete_tree_with_shards)
@@ -265,7 +265,7 @@ TEST(archival_bond_post, gate4_integration_rejects_complete_tree_with_shards)
   auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
   BlockchainAndPool bap;
   ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond));
+  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bap.bc.get_current_blockchain_height()));
 }
 
 TEST(archival_bond_post, gate4_integration_rejects_non_join_post_kind)
@@ -276,7 +276,7 @@ TEST(archival_bond_post, gate4_integration_rejects_non_join_post_kind)
   auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
   BlockchainAndPool bap;
   ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond));
+  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bap.bc.get_current_blockchain_height()));
 }
 
 TEST(archival_bond_post, gate4_integration_rejects_oversized_hybrid_pubkey)
@@ -287,7 +287,7 @@ TEST(archival_bond_post, gate4_integration_rejects_oversized_hybrid_pubkey)
   auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
   BlockchainAndPool bap;
   ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond));
+  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bap.bc.get_current_blockchain_height()));
 }
 
 TEST(archival_bond_post, ffi_maps_each_bond_post_error_code)

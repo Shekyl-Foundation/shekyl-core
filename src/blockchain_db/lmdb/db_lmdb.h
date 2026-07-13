@@ -491,6 +491,13 @@ private:
   virtual void apply_archival_emission_claim(uint64_t block_height, const crypto::hash& p_id,
     const std::vector<uint64_t>& settlement_epochs) override;
   virtual void revert_archival_emission_claims_at_height(uint64_t block_height) override;
+  virtual void apply_archival_unbond(uint64_t block_height, const crypto::hash& p_id,
+    uint64_t vin_bond_debit) override;
+  virtual void revert_archival_unbonds_at_height(uint64_t block_height) override;
+  virtual std::vector<uint64_t> archival_bond_last_served_epochs(const crypto::hash& p_id,
+    const std::vector<uint64_t>& shard_ids) const override;
+  virtual std::vector<uint64_t> archival_bond_all_last_served_epochs(
+    const crypto::hash& p_id) const override;
   virtual void process_archival_segment_freezes_at_height(uint64_t block_height) override;
   virtual void revert_archival_segment_freezes() override;
   virtual void process_archival_epoch_close_at_height(uint64_t block_height) override;
@@ -563,7 +570,11 @@ private:
   bool load_archival_bond_value(const crypto::hash& p_id,
     shekyl::db::ArchivalBondValue& out) const;
 
-  uint64_t get_archival_last_slash_epoch() const;
+  // Overrides the BlockchainDB virtual (Unbond release verify marshals it as
+  // the slash-settled watermark); also called internally by the slash
+  // scheduler. Private override — reached via the base pointer from
+  // Blockchain, and as a member here.
+  uint64_t get_archival_last_slash_epoch() const override;
   void set_archival_last_slash_epoch(uint64_t settlement_epoch);
   bool has_archival_slash_applied(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch) const;
@@ -753,6 +764,7 @@ private:
   MDB_dbi m_archival_slash_applied;   // P_id||shard||E -> slash idempotency bit
   MDB_dbi m_archival_slash_log;       // BE(height)||BE(seq) -> revert journal
   MDB_dbi m_archival_emission_claim_log; // BE(height)||BE(seq) -> claimed-set pre-image journal
+  MDB_dbi m_archival_bond_unbond_log; // BE(height)||BE(seq) -> Unbond record pre-image journal
   MDB_dbi m_archival_r_market;        // BE(shard)||BE(E) -> BE(count)
   MDB_dbi m_archival_sigma_work;      // BE(E) -> BE(sigma_milli)
   MDB_dbi m_archival_epoch_close_log; // block_height -> settlement_epoch finalized

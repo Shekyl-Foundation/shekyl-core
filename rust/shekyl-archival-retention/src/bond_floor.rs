@@ -17,10 +17,18 @@ use crate::bond_wire::{HoldingsDescriptor, HoldingsKind, MAX_HOLDINGS_SHARDS};
 /// Returns `0` when holdings are structurally invalid (empty shard set, count overflow).
 #[must_use]
 pub fn bond_floor(holdings: &HoldingsDescriptor) -> u64 {
-    if holdings.kind == HoldingsKind::CompleteTree {
+    bond_floor_of(holdings.kind, holdings.shard_ids.len())
+}
+
+/// [`bond_floor`] from the holdings' `(kind, shard count)` alone — the floor
+/// never reads shard-id *values*, so a caller that only knows the count (the
+/// `Unbond` connect fold, whose C++ caller need not marshal the record's
+/// shard-id array across the FFI) shares the one implementation.
+#[must_use]
+pub fn bond_floor_of(kind: HoldingsKind, shard_count: usize) -> u64 {
+    if kind == HoldingsKind::CompleteTree {
         return ARCHIVAL_BOND_FLOOR_ATOMIC;
     }
-    let shard_count = holdings.shard_ids.len();
     if shard_count == 0 || shard_count > MAX_HOLDINGS_SHARDS {
         return 0;
     }

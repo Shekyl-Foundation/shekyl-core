@@ -25,6 +25,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod bond_connect;
 pub mod bond_ct_balance;
 pub mod bond_floor;
 pub mod bond_post;
@@ -34,6 +35,7 @@ pub mod claimed_epochs;
 pub mod consensus_state;
 pub mod conservation;
 pub mod constants;
+pub mod distinct;
 pub mod emission_kat_shape;
 pub mod emission_verify;
 pub mod emission_wire;
@@ -49,13 +51,19 @@ pub mod serve_credit_decisions;
 pub mod serve_eligibility;
 pub mod wire;
 
+pub use bond_connect::{
+    clean_interval_close, is_clean_interval_close, unbond_connect, unbond_pop, UnbondConnect,
+    UnbondConnectError, UnbondPopError, MAX_BOND_BAD_INTERVALS,
+};
 pub use bond_ct_balance::{verify_bond_post_ct_balance, BondCtBalanceError, BondTerm};
 pub use bond_floor::{
     bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, ARCHIVAL_REORG_DEPTH_BLOCKS,
     ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
     ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS,
 };
-pub use bond_post::{verify_join_market_bond_post, verify_unbond_bond_post, BondPostError};
+pub use bond_post::{
+    bond_post_block_unique, verify_join_market_bond_post, verify_unbond_bond_post, BondPostError,
+};
 pub use bond_wire::{
     encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,
     HoldingsKind, BOND_POST_SIG_CUSTOMIZATION, VIN_TYPE_ARCHIVAL_BOND_POST,

@@ -14,9 +14,27 @@
 //! `(P_id, shard, epoch)` ascending; shard `s`'s last-served epoch is therefore the
 //! max `E` carrying a bit — a single reverse-cursor seek over the `P_id ‖ BE64(shard)`
 //! prefix. That LMDB cursor I/O stays C++-side (the standing schema exception); the
-//! derived per-shard maxima arrive here as data, and this module owns the two
-//! decisions on top: the whole-record anchor (max over shards, for `Unbond`) and the
-//! cooldown predicate.
+//! derived per-shard maxima arrive here as data, and this module owns the
+//! decisions on top: the whole-record anchor (max over shards, for `Unbond`), the
+//! cooldown predicate, and the slash-settlement predicate.
+//!
+//! ## The guarantee (ratified 2026-07-12, maintainer)
+//!
+//! Together the two predicates ([`release_cooldown_elapsed`] and
+//! [`slashes_settled_through`]) guarantee: **at `Unbond` legality, every settlement
+//! epoch up to and including the record's last-served anchor has passed its slash
+//! deadline and been processed by the deterministic slash scheduler** — any
+//! held-but-unserved failure at or before the last serve has already been slashed
+//! on still-bonded collateral. Epochs *after* the last serve (at most the cooldown
+//! window, unserved by definition, earning nothing) are **exit-forgiven by
+//! construction**: slashability ends at the `Unbond` connect, and the refund is
+//! never clawed back. The epoch-distance predicate alone is not sufficient — the
+//! connect dispatch runs *before* the per-block slash fold
+//! (`BlockchainDB::add_block` ordering), so in the first block past the anchor
+//! epoch's slash deadline an `Unbond` would exit the record ahead of the fold that
+//! settles the anchor epoch; [`slashes_settled_through`] closes exactly that
+//! one-block race by requiring the scheduler's settled watermark to have reached
+//! the anchor before the release verifies.
 
 use crate::bond_floor::RELEASE_COOLDOWN_EPOCHS;
 
@@ -35,14 +53,20 @@ pub fn whole_record_last_served(per_shard_served: &[u64]) -> Option<u64> {
 
 /// Whether the release cooldown has elapsed at `current_settlement_epoch`, given the
 /// derived `last_served_epoch` anchor (gate-4 §4.3: the cooldown is the grace window
-/// *past* the last served epoch, so no pending challenge can still slash after `P`
-/// stopped serving).
+/// *past* the last served epoch — sized so every epoch up to the anchor reaches its
+/// slash deadline before the release can verify).
 ///
 /// Elapsed iff `current_settlement_epoch >= last_served_epoch + RELEASE_COOLDOWN_EPOCHS`.
 /// `RELEASE_COOLDOWN_EPOCHS` covers the challenge-resolution window by construction
 /// (`ARCHIVAL_TIMING_CONSTANTS.md` §2.2 L16 pin: `RELEASE_COOLDOWN_EPOCHS · SEB >
-/// CHALLENGE_RESOLUTION_BLOCKS`). A persona that never served (`None`) has no pending
-/// challenge that could still slash, so the cooldown is vacuously elapsed.
+/// CHALLENGE_RESOLUTION_BLOCKS`). A persona that never served (`None`) has earned
+/// nothing whose settlement the exit could outrun — every epoch it held without
+/// serving either was already slashed at its deadline while bonded or falls in the
+/// exit-forgiven tail (module docs) — so the cooldown is vacuously elapsed.
+///
+/// This predicate is necessary but not sufficient on its own; pair it with
+/// [`slashes_settled_through`] (see the module docs for the combined guarantee and
+/// the one-block connect-ordering race the second predicate closes).
 #[must_use]
 pub fn release_cooldown_elapsed(
     last_served_epoch: Option<u64>,
@@ -56,6 +80,34 @@ pub fn release_cooldown_elapsed(
         // false "elapsed" that would let an `Unbond` dodge the slashing window.
         Some(last) => match last.checked_add(RELEASE_COOLDOWN_EPOCHS) {
             Some(boundary) => current_settlement_epoch >= boundary,
+            None => false,
+        },
+    }
+}
+
+/// Whether the deterministic slash scheduler has settled every settlement epoch up
+/// to and including the record's last-served anchor.
+///
+/// `last_settled_slash_epoch` is the scheduler's monotone watermark (the LMDB
+/// `archival_last_slash_epoch` scalar): `Some(S)` means every epoch `<= S` has been
+/// scanned at its slash deadline; `None` means no epoch has been settled yet.
+///
+/// Settled iff the anchor is `None` (never served — nothing the exit could outrun
+/// beyond the exit-forgiven tail) or `watermark >= anchor`. Without this predicate,
+/// an `Unbond` in the exact first block past the anchor epoch's slash deadline
+/// connects *before* that block's slash fold (`add_transaction` precedes
+/// `process_archival_slash_at_height` in `BlockchainDB::add_block`) and exits the
+/// record ahead of the fold that would have slashed a held-but-unserved shard at
+/// the anchor epoch — the one-block race the module docs name.
+#[must_use]
+pub fn slashes_settled_through(
+    last_settled_slash_epoch: Option<u64>,
+    last_served_epoch: Option<u64>,
+) -> bool {
+    match last_served_epoch {
+        None => true,
+        Some(anchor) => match last_settled_slash_epoch {
+            Some(watermark) => watermark >= anchor,
             None => false,
         },
     }
@@ -115,6 +167,30 @@ mod tests {
     #[test]
     fn never_served_cooldown_is_vacuously_elapsed() {
         assert!(release_cooldown_elapsed(None, 0));
+    }
+
+    #[test]
+    fn settled_through_requires_watermark_at_or_past_the_anchor() {
+        // The one-block race: anchor L, watermark L-1 (epoch L's deadline block has
+        // not folded yet) must reject; watermark L (and beyond) accepts.
+        let anchor = Some(100);
+        assert!(!slashes_settled_through(Some(99), anchor));
+        assert!(slashes_settled_through(Some(100), anchor));
+        assert!(slashes_settled_through(Some(101), anchor));
+    }
+
+    #[test]
+    fn settled_through_rejects_before_any_epoch_settles() {
+        // A served record with no scheduler watermark yet: the anchor epoch cannot
+        // have settled, so the release must wait (fail-closed).
+        assert!(!slashes_settled_through(None, Some(0)));
+    }
+
+    #[test]
+    fn settled_through_vacuous_for_never_served() {
+        // Never served: no anchor to settle through, with or without a watermark.
+        assert!(slashes_settled_through(None, None));
+        assert!(slashes_settled_through(Some(7), None));
     }
 
     #[test]

@@ -1843,9 +1843,9 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
     uint8_t record_exists);
 
 // Unbond bond-post semantic verify (gate-4 §3.5 debit path; PHASE_2B_FSM_RETOOL.md
-// P2B-8). Extends the shared SHEKYL_ARCHIVAL_BOND_POST_* error space above: 11-18 and
-// 20 are Unbond-semantic; 19 (LEN_OVERFLOW) is a shared slice-marshaling guard returned
-// by both entry points (see the JoinMarket block above).
+// P2B-8). Extends the shared SHEKYL_ARCHIVAL_BOND_POST_* error space above: 11-18,
+// 20, 21, and 22 are Unbond-semantic; 19 (LEN_OVERFLOW) is a shared slice-marshaling
+// guard returned by both entry points (see the JoinMarket block above).
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_UNBOND    11
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING          12
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_UNBOND       13
@@ -1856,12 +1856,24 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED    18
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW            19
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_HOLDINGS_NOT_EMPTY 20
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL       21
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING 22
 
-/// Unbond bond-post verify. `record_exists`/`record_bonded_total` come from the LMDB
-/// bond record; `per_shard_last_served_ptr` is the array of the served shards'
-/// last-served settlement epochs (never-served shards omitted), folded Rust-side to the
-/// whole-record release-cooldown anchor. `current_settlement_epoch` is the epoch the
-/// Unbond lands in.
+/// Unbond bond-post verify. `record_exists`/`record_bonded_total`/
+/// `record_bad_interval_count` come from the LMDB bond record;
+/// `per_shard_last_served_ptr` is the array of the served shards' last-served
+/// settlement epochs (never-served shards omitted; for a CompleteTree record,
+/// the all-shards P-prefix scan), folded Rust-side to the whole-record
+/// release-cooldown anchor. `last_settled_slash_epoch` is the slash scheduler's
+/// monotone watermark (archival_last_slash_epoch; u64 max = no epoch settled
+/// yet, the scheduler's own storage sentinel) — the release verifies only once
+/// every epoch through the anchor is slash-settled, closing the one-block
+/// connect-ordering race (add_transaction runs before
+/// process_archival_slash_at_height in add_block). `current_settlement_epoch`
+/// is the epoch the Unbond lands in. A record whose interval log is at the
+/// codec cap rejects (INTERVAL_LOG_FULL): the connect's clean interval-close
+/// could not append, and a verified-but-unconnectable tx would be a
+/// deterministic halt.
 uint8_t shekyl_archival_verify_unbond_bond_post(
     uint8_t post_kind,
     uint8_t holdings_kind,
@@ -1872,9 +1884,91 @@ uint8_t shekyl_archival_verify_unbond_bond_post(
     uint64_t bond_debit,
     uint8_t record_exists,
     uint64_t record_bonded_total,
+    size_t record_bad_interval_count,
     const uint64_t* per_shard_last_served_ptr,
     size_t per_shard_last_served_len,
+    uint64_t last_settled_slash_epoch,
     uint64_t current_settlement_epoch);
+
+// Unbond block-connect fold + pop twin (gate-4 §4.3 "On confirm" / §5;
+// PHASE_2B_FSM_RETOOL.md P2B-8 implementation locus). The C++ connect arm owns
+// the LMDB write txn and writes EXACTLY what the out-params dictate; no
+// consensus arithmetic caller-side. Non-OK codes are connect-time invariant
+// breaches / pop-time journal desyncs — the caller maps them to a FATAL abort
+// (the emission-connect posture), never a soft skip.
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_OK                          0
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_NULL_PTR                1
+// Code 2 (LEN_OVERFLOW) is retired: the connect fold takes the record's held
+// shard COUNT, not a pointer/length pair, so no slice marshal exists to guard.
+// The value stays reserved so the family's codes never renumber.
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_HOLDINGS_KIND           3
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_DEBIT_ZERO              4
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_DEBIT_NOT_RECORD_TOTAL  5
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_RECORD_FLOOR_INVARIANT  6
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_TOTAL_BONDED_UNDERFLOW  7
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_INTERVAL_LOG_FULL       8
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_RECORD_NOT_EXITED       9
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_MISSING_CLEAN_CLOSE    10
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_PRE_IMAGE_EMPTY        11
+#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_TOTAL_BONDED_OVERFLOW  12
+
+/// Unbond connect fold: record inputs are the record's CURRENT state (before
+/// the release); the outs are the full post-connect write set — record becomes
+/// post_bonded_total/post_holdings_kind with post_held_shard_count (always 0)
+/// shard ids, the clean interval-close [start, end) is APPENDED to the record's
+/// interval log (zero-length — good_through-inert, records the exit epoch), and
+/// the global counter becomes new_total_bonded. Journal the record's full
+/// pre-image BEFORE applying (emission WS-2 §6.3 shape); the refund needs no
+/// write here — bond_debit is the CT-balance source term on the wire. The
+/// record's holdings arrive as (kind, held shard count) — the fold's floor
+/// invariant never reads shard-id values, so no shard-id array crosses the FFI
+/// (the shekyl_archival_unbond_pop shape).
+uint8_t shekyl_archival_unbond_connect(
+    uint64_t record_bonded_total,
+    uint8_t record_holdings_kind,
+    uint64_t record_held_shard_count,
+    size_t record_bad_interval_count,
+    uint64_t vin_bond_debit,
+    uint64_t total_bonded_atomic,
+    uint64_t unbond_settlement_epoch,
+    uint64_t* post_bonded_total_out,
+    uint8_t* post_holdings_kind_out,
+    uint64_t* post_held_shard_count_out,
+    uint64_t* interval_close_start_out,
+    uint64_t* interval_close_end_out,
+    uint64_t* new_total_bonded_out);
+
+/// Block-level intra-block cross-tx bond-post uniqueness verdict — at most ONE
+/// bond-post vin per P_canonical_id per block (gate-4 §3.5; the
+/// shekyl_emission_block_claims_unique sibling, keyed on P alone). Per-tx
+/// verify runs against pre-block DB state, so every same-P same-block pair
+/// (JoinMarket+JoinMarket double-credit, Unbond+Unbond double-debit, mixed
+/// kinds) passes it independently; this pass — run once per block over every
+/// bond-post vin's P_canonical_id, before connect — is the layer that REJECTS
+/// the block. The §4.5 conservation audit is NOT a backstop (a double-credit
+/// doubles both sides consistently). ids_ptr = flattened num_ids × 32-byte
+/// P_canonical_ids in block order. Returns 1 when all distinct; 0 on any
+/// duplicate or a null pointer with num_ids > 0 (fail closed).
+uint8_t shekyl_archival_bond_post_block_unique(
+    const uint8_t* ids_ptr,
+    size_t num_ids);
+
+/// Unbond pop twin: validates the tip record is the connect's product (Exited
+/// state + trailing clean interval-close for unbond_settlement_epoch), then
+/// re-credits total_bonded_atomic with the journaled pre-image balance. The
+/// record fields themselves are restored caller-side as a byte-copy of the
+/// pre-image journal row. `has_trailing_interval` is 0 when the record's
+/// interval log is empty (the trailing start/end operands are then ignored).
+uint8_t shekyl_archival_unbond_pop(
+    uint64_t current_record_bonded_total,
+    uint64_t current_record_held_shard_count,
+    uint8_t has_trailing_interval,
+    uint64_t trailing_interval_start,
+    uint64_t trailing_interval_end,
+    uint64_t unbond_settlement_epoch,
+    uint64_t journal_pre_bonded_total,
+    uint64_t total_bonded_atomic,
+    uint64_t* new_total_bonded_out);
 
 /// Returns 1 when settlement_epoch >= join_settlement_epoch + 1 (E_first lower bound).
 uint8_t shekyl_archival_serve_credit_epoch_ok(

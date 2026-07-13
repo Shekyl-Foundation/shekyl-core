@@ -2115,6 +2115,52 @@ public:
   /// connected (§6.3: the naive remove-inverse leaves prune-evicted
   /// already-claimed epochs out of the restored set — the double-mint).
   virtual void revert_archival_emission_claims_at_height(uint64_t block_height);
+  /// Unbond connect writer (gate-4 §4.3 "On confirm"; the Rust fold
+  /// `shekyl_archival_unbond_connect` dictates the entire write set — record
+  /// to the Exited shape, clean interval-close appended, counter debited):
+  /// journals the record's full pre-image first (the emission WS-2 §6.3
+  /// shape — the vin carries the POST-state, so holdings are otherwise
+  /// unreconstructible at pop). Reads the LIVE `total_bonded_atomic`
+  /// internally (per-post get→fold→set threading — a hoisted per-block read
+  /// would clobber across multiple bond posts; §3.5 counter-threading
+  /// obligation). Any fold error is a hard abort, never a soft skip.
+  /// Caller: the bond-post vin connect dispatch (add_transaction).
+  virtual void apply_archival_unbond(uint64_t block_height, const crypto::hash& p_id,
+    uint64_t vin_bond_debit);
+  /// Restore the Unbond pre-image journal rows recorded when `block_height`
+  /// connected, re-crediting `total_bonded_atomic` via the Rust pop fold
+  /// (which validates the tip record is the connect's product — Exited state
+  /// + trailing clean close). Trailing-entry invariant (ratified 2026-07-12,
+  /// §3.5): slashability ends at the Unbond connect — the slash scheduler
+  /// only challenges currently held shards and an Exited record holds none —
+  /// so nothing appends after the clean close and the trailing entry is
+  /// always the connect's close. pop_block still runs the slash revert first
+  /// as a defensive ordering belt; a violation surfaces in the fold as
+  /// MISSING_CLEAN_CLOSE, loud.
+  virtual void revert_archival_unbonds_at_height(uint64_t block_height);
+  /// Unbond verify marshaling (P2B-8 Q1/Q2): each held shard's last-served
+  /// settlement epoch — one reverse-cursor seek per shard over the BE
+  /// composite serve-credit key `P_id ‖ BE64(shard) ‖ BE64(epoch)` — with
+  /// never-served shards omitted (they carry no bit; the Rust fold treats an
+  /// empty result as never-served ⇒ cooldown vacuously elapsed). The fold to
+  /// the whole-record anchor and the cooldown verdict stay Rust-side
+  /// (`whole_record_last_served` via the verify FFI).
+  virtual std::vector<uint64_t> archival_bond_last_served_epochs(
+    const crypto::hash& p_id, const std::vector<uint64_t>& shard_ids) const;
+  /// The all-shards form of the last-served marshal, for records that store
+  /// no shard list (CompleteTree holds every shard): a `P`-prefix hop scan
+  /// over the serve-credit table yielding each *served* shard's last-served
+  /// epoch — one reverse seek per served shard, never a full-table walk.
+  /// Without this, a CompleteTree persona's cooldown anchor would fold from
+  /// an empty list and the release gate would be vacuously open.
+  virtual std::vector<uint64_t> archival_bond_all_last_served_epochs(
+    const crypto::hash& p_id) const;
+  /// The slash scheduler's monotone settled watermark
+  /// (`archival_last_slash_epoch`): every settlement epoch `<=` the returned
+  /// value has been scanned at its slash deadline. u64 max = no epoch settled
+  /// yet (the storage sentinel). Marshaled into the Unbond release verify
+  /// (SLASH_SETTLEMENT_PENDING gate).
+  virtual uint64_t get_archival_last_slash_epoch() const;
   /// Finalize `R_market` / `Σwork` at settlement-epoch close (`ARCHIVAL_CONSENSUS_STATE.md` §3.3–§3.5).
   virtual void process_archival_epoch_close_at_height(uint64_t block_height);
   /// Revert epoch-close materialization when `block_height` is popped.

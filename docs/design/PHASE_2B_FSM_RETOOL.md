@@ -679,6 +679,56 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
 
 ## Revision history
 
+- **2026-07-13 (d):** **`Unbond` release-gate hardening (review round).** Added
+  the slash-settlement predicate to the release verify — the scheduler's settled
+  watermark (`archival_last_slash_epoch`) must reach `P`'s last-served anchor,
+  closing the one-block race where the connect dispatch precedes the per-block
+  slash fold; a held-but-unserved failure through the anchor is thus slashed on
+  bonded collateral before the exit. This **supersedes the (c) reverse-order-pop
+  assumption**: slashability ends at the `Unbond` connect (an Exited record holds
+  no shards → never a slash candidate), the post-connect exit tail is
+  exit-forgiven (no clawback), and the pop-order slash revert is a defensive
+  belt, not a real-case dependency (`apply_archival_slash_one` now FATALs on a
+  not-held shard). Also: CompleteTree cooldown anchor via the all-shards
+  `P`-prefix scan (`archival_bond_all_last_served_epochs`); block-level GF-1
+  fail-closed belt for the checkpoint fast path; mempool/template dedup of
+  archival block-unique keys (mining-stall vector); serve-credit + `Unbond`
+  same-`P` same-block deliberately allowed.
+
+- **2026-07-12 (c):** **`Unbond` C++ dispatch wiring landed** — `add_transaction`
+  Unbond arm → `apply_archival_unbond` (pre-image journal
+  `m_archival_bond_unbond_log`, Rust-fold write set, per-post live-counter
+  threading — KAT-armed by the two-`P`-one-block test), `pop_block` →
+  `revert_archival_unbonds_at_height` (after the slash revert — a defensive
+  ordering belt; see (d), which retired the earlier reverse-order-pop
+  assumption), verify dispatch in
+  `check_archival_bond_post_input` (Q1/Q2 anchors via the
+  `archival_bond_last_served_epochs` reverse-cursor helper), and the per-`P`
+  block pass marshaled beside the emission `(P,E)` pass. **Unbond txs remain
+  verify-rejected fail-closed at the §3.5 step-5 debit-auth step** (rule-22 named
+  blocker, gate-4 §3.5 + FOLLOWUPS): no record commits a `bond_spend_pk` — the
+  §9.11 field the Rust wallet wire carries is absent from the C++ vin serializer
+  and the v4 record. The GF-1 wire+record sub-increment (C++ vin field, schema
+  v5 commit at JoinMarket, §3.4.1 preimage binding, debit-auth check) is the
+  enable flip and the next slice before `HoldingsUpdate`.
+- **2026-07-12 (b):** **`Unbond` connect fold + pop twin landed Rust-native**
+  (`shekyl-archival-retention::bond_connect`, driven over
+  `shekyl_archival_unbond_connect` / `shekyl_archival_unbond_pop`; C++ dispatch
+  wiring is the follow-on increment). The §4.3 clean interval-close is landed as a
+  **zero-length interval `[E_unbond, E_unbond)`** in the record's interval log —
+  `good_through`-inert by construction (KAT-pinned), records the exit epoch for the
+  later `W`-lapse / `p_slot`-burn step, no schema change (gate-4 §4.1 note). Q2's
+  forward amendment executed (gate-4 §4.1 `last_served_epoch` dropped). Verify
+  gained the `IntervalLogFull` belt (a tx whose connect could not append the close
+  never verifies — halt-vector foreclosure). Review round, same increment: the
+  marker's storage half KAT-pinned end-to-end (codec/LMDB/`good_through`,
+  `archival_substrate_lmdb.unbond_clean_close_marker_round_trips`; no path anywhere
+  asserts `start < end`), `kMaxBadIntervals` pinned genesis-frozen (verify validity
+  keys on it), and the block-level pass's **decision function landed**
+  (`bond_post_block_unique`, keyed on `P` alone, reject-not-serialize — covers the
+  whole same-`P` same-block class; §4.5 conservation is not a backstop). Named
+  wiring obligations: marshal that pass at the block-verify site, pre-image journal
+  table + FATAL mapping at the connect site.
 - **2026-07-12:** **P2B-8 — verify/connect design questions pinned pre-impl.** Q1 (per-shard
   `HoldingsUpdate`-drop cooldown anchor) resolved with **no new field** — derive shard `s`'s
   last-served via a reverse-cursor seek over the BE composite serve-credit key

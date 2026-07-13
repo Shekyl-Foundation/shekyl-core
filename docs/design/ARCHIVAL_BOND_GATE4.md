@@ -324,9 +324,23 @@ require the `bond_spend_pk` field present (`scheme_id = 1`) and **commit it into
 **Unbond path (G4-1):** clean release of bonded balance when:
 
 1. `P` has initiated exit (decorrelated drain confirmed) **or** is in `Exited` posture, and
-2. **Release cooldown** elapsed: no pending challenge can still slash for epochs after `P`
-   stopped serving — i.e. grace window past `P`'s last served settlement epoch (gate-4;
-   **shorter than `W`**).
+2. **Release cooldown** elapsed: grace window past `P`'s last served settlement epoch
+   (gate-4; **shorter than `W`**), **and**
+3. **Slash settlement** reached the anchor: the slash scheduler's settled watermark
+   (`archival_last_slash_epoch`) is `>=` `P`'s last-served anchor, so every epoch up to
+   the anchor has been slash-processed on still-bonded collateral before the release
+   verifies.
+
+The two-part gate is load-bearing (ratified 2026-07-12). The cooldown alone leaves a
+one-block race: the connect dispatch runs *before* the per-block slash fold
+(`add_transaction` precedes `process_archival_slash_at_height` in `add_block`), so in
+the first block past the anchor epoch's slash deadline an `Unbond` would exit the record
+ahead of the fold that settles it — the settlement gate closes exactly that. Together they
+guarantee: every epoch through the last serve is slash-settled while bonded (a
+held-but-unserved failure at or before the last serve is already slashed); the epochs
+*after* the last serve — at most the cooldown window, unserved by definition, earning
+nothing — are **exit-forgiven by construction**, because slashability ends at the `Unbond`
+connect and the refund is never clawed back.
 
 On confirm: `bond_debit == bonded_total`; refund output(s) to `P`; zero
 `bonded_total_atomic`; decrement `total_bonded_atomic`; append **clean interval-close** to
@@ -401,6 +415,92 @@ the current-set-echo alternative (which would need a separate drop-shard field) 
 On block connect for **JoinMarket:** create `ArchivalBondRecord` (§4.1); credit
 `total_bonded_atomic`.
 
+On block connect for **Unbond** (§4.3 "On confirm"; connect fold + pop twin landed
+Rust-native, `shekyl-archival-retention::bond_connect` over
+`shekyl_archival_unbond_connect` / `shekyl_archival_unbond_pop` — rule 20, P2B-8
+implementation locus; **C++ dispatch wiring LANDED**: `add_transaction` Unbond arm →
+`apply_archival_unbond` single writer, `m_archival_bond_unbond_log` pre-image
+journal, `pop_block` → `revert_archival_unbonds_at_height`, verify dispatch in
+`check_archival_bond_post_input` with the Q1/Q2 reverse-cursor anchors via
+`archival_bond_last_served_epochs`):
+
+1. Journal the record's **full pre-image** before mutating (the emission WS-2 §6.3
+   shape) — the vin carries the *post*-state, so holdings are not reconstructible
+   at pop without it.
+2. Record → `Exited` shape: `bonded_total_atomic = 0`, `holdings` = compact-and-empty
+   (the same exit shape the slash-to-zero path writes); the record **persists** for
+   backlog claims until `W` lapses (`p_slot` burn is a later, separate step).
+3. `total_bonded_atomic -= bond_debit` (§4.5 release row; `circulating` needs no
+   explicit write — the refund enters as ordinary hidden vouts, CT-balanced by the
+   `bond_debit` source term; §2.4). **Counter-threading obligation:** the fold
+   returns the new total as an **absolute** post-value, so the dispatch must read
+   the live counter immediately before *each* post (`get → fold → set`, the
+   JoinMarket arm's shape) — a hoisted per-block read would compute every debit
+   from the same block-start total and clobber all but the last write. The
+   per-`P` pass does not cover this (different-`P` posts in one block are
+   legitimate and share the counter).
+4. Append the **clean interval-close** `[E_unbond, E_unbond)` to the interval log
+   (F3, zero-length ⇒ `good_through`-inert — see §4.1's landed-representation note);
+   backlog emission still verifies within `W`.
+
+Pop twin (§5): restore the record from the journal pre-image byte-identically
+(carries holdings and the interval log — the clean close vanishes with it) and
+re-credit `total_bonded_atomic`; the fold validates the tip record is the connect's
+product (Exited state + trailing clean close) so a journal desync is loud.
+**Trailing-entry invariant (ratified 2026-07-12):** slashability ends at the
+`Unbond` connect — the slash scheduler only challenges *currently held* shards
+and an `Exited` record holds none — so nothing ever appends after the clean
+close, and the trailing-clean-close check holds unconditionally. (The release
+verify guarantees every epoch through the record's last-served anchor is
+slash-settled *before* the connect; see §4.3's slash-settlement gate.)
+`pop_block` still reverts slashes before the bond journal, but that ordering is
+now a **defensive belt** — a same-block slash on a *different* record is
+routine — not a correctness dependency on a post-close slash to the exiting
+record. A future change that let an interval land after a clean close surfaces
+as `MissingCleanClose`, loud. Connect
+fold errors are FATAL at the call site, never a soft skip. Verify enforces the
+interval-log codec cap (`IntervalLogFull`) so a tx the connect could not apply
+never verifies — which makes `kMaxBadIntervals` a **genesis-frozen consensus
+constant** (tx validity keys on it; static_assert-pinned against its Rust twin
+`MAX_BOND_BAD_INTERVALS`).
+
+**GF-1 debit-auth blocker (named, rule 22): Unbond txs remain verify-rejected —
+and this is a SEQUENCED PREREQUISITE for the whole debit side, not deferrable
+cleanup.** Step 5 gates every `bond_debit > 0`, so `HoldingsUpdate`-drop fails
+closed at the same auth step the moment it is wired; GF-1 precedes
+`HoldingsUpdate` **by dependency**. It is the immediate next PR.
+§3.5 step 5 requires a `bond_debit` to verify against the record's committed
+`bond_spend_pk`, never the identity key. The §9.11 field the Rust wallet wire
+(`shekyl-wire`) already carries is **absent from the C++ `txin_archival_bond_post`
+serializer and the v4 record schema**, so no record commits a debit authorizer —
+the verify dispatch runs the full Unbond semantic verify, then **fails closed** at
+the auth step with the blocker named. The flip is the GF-1 wire+record
+sub-increment: C++ vin gains the JoinMarket-coupled `bond_spend_pk` (reconciling
+the shekyl-wire divergence), the record commits it at JoinMarket connect (schema
+v5), the §3.4.1 sig-preimage binds it, and the debit-auth check replaces the
+rejection. Until then the connect arm is landed-but-unreachable through consensus
+(exercised by the DB-layer block-path KATs). Two flip pins (review, 2026-07-12):
+the auth lands as the **shared debit authorizer** (step 5 gates every
+`bond_debit > 0` — `HoldingsUpdate`-drop rides the same check), and the flip
+**swaps reject→auth in one change** pinned by a discriminating KAT (wrong
+`bond_spend_pk` rejects, committed one accepts) — deleting the rejection without
+the real check would go from fail-closed to no-auth.
+
+**Block-level bond-post pass (LANDED end-to-end):** at most **one bond-post vin
+per `P_canonical_id` per block**, keyed on
+`P` alone, **rejecting the block** — `bond_post_block_unique`
+(`shekyl-archival-retention::bond_post`, over `shekyl_archival_bond_post_block_unique`;
+the emission `(P,E)` pass's sibling, same decision-placement pin: C++ marshals the
+block's ids, Rust decides). Per-tx verify runs against pre-block DB state, so
+**every** same-`P` same-block pair passes it independently — JoinMarket+JoinMarket
+(double `total_bonded_atomic` credit), Unbond+Unbond (double debit),
+JoinMarket+Unbond, and every future `HoldingsUpdate` combination — and the §4.5
+conservation audit is **not** a backstop (a double-credit doubles both sides of
+`total_bonded == Σ_P bonded_P` consistently, so it passes on corrupt state).
+Reject, not serialize: lifecycle transitions have no legitimate
+multi-post-per-`P`-per-block use, and serializing would invite intra-block
+ordering dependence (reopen per rule 21 only if a real use case emerges).
+
 ---
 
 ## 4. `ArchivalBondRecord` fields (gate-4 owned)
@@ -420,12 +520,29 @@ ArchivalBondRecord {
   first_paying_emission_height: Option<u64>,  // set on first mint; None until then
   claimed_settlement_epochs: ClaimedEpochSet,  // emission §6.3; empty at join
   bond_event_log:            BondEventLog,     // slash / re-bond / unbond intervals (F3)
-  last_served_epoch:         Option<u64>,      // release cooldown (§4.3)
 }
 ```
 
 **Deprecated name:** `first_emission_height` → split into `join_market_height` +
 `first_paying_emission_height`. Pre-genesis docs/code use new names only.
+
+**`last_served_epoch` dropped (P2B-8 Q2, amended 2026-07-12).** The field's sole
+consumer was the `Unbond` release cooldown (§4.3), and it is **derived, never
+stored**: whole-record last-served = max over the record's current shards of the
+per-shard reverse-cursor maxima over the serve-credit table's BE composite key
+(P2B-8 Q1). A maintained field would only add pop-symmetry surface and a desync
+risk against the serve-credit table, the single source of truth. Landed:
+`release_cooldown.rs` (`whole_record_last_served`), folded at the
+`shekyl_archival_verify_unbond_bond_post` FFI.
+
+**Landed representation of `bond_event_log` (F3).** The interval log is
+`ArchivalBondValue::bad_intervals` (`shekyl_types.h`): a slash appends an **open**
+interval `[E_slash, u64::MAX)`, `Rebond` closes it (`end_exclusive = E_rebond`,
+P2B-8 Q4), and a clean `Unbond` appends the **zero-length** clean interval-close
+`[E_unbond, E_unbond)` — `good_through` skips it at every epoch (it can falsify
+nothing), so it is purely an event marker that records the exit settlement epoch
+for the later `W`-lapse / `p_slot`-burn step. `good_standing` stays a derived
+view of this log, never a stored flag.
 
 **`bond_spend_pk` — dedicated bond-debit authorizer (GF-1, gate-6 §9.6).** A `HybridPublicKey`
 (`scheme_id = 1`, Ed25519 + ML-DSA-65), **domain-separated from `P_pubkey`** by its own HKDF

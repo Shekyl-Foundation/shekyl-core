@@ -631,6 +631,26 @@ namespace cryptonote
     static bool append_key_images(std::unordered_set<crypto::key_image>& kic, const transaction_prefix& tx);
 
     /**
+     * @brief check-and-record a transaction's archival block-unique keys
+     *
+     * The block-level archival passes reject any block carrying two txs with
+     * the same bond-post P_canonical_id, emission (P, E) claim, or serve-credit
+     * (P, shard, E) — and neither vin class carries a key image, so nothing in
+     * the key-image dedup keeps such a pair out of one template. Without this,
+     * two conflicting pool txs make EVERY mined template fail its own
+     * block-level pass on connect and bounce back to the pool: a cheap
+     * network-wide mining stall. Pool admission deliberately accepts both
+     * (first-connect-wins; the loser fails per-tx re-verify after the winner
+     * lands and drops) — the template must simply never carry both.
+     *
+     * Inserts all of `tx`'s domain-tagged archival keys into `keys` and
+     * returns true; returns false (inserting nothing further) on the first
+     * key already present, or on an unparseable emission vin (fail closed —
+     * the block-level pass would reject it too).
+     */
+    static bool append_archival_block_unique_keys(std::unordered_set<std::string>& keys, const transaction_prefix& tx);
+
+    /**
      * @brief check if a transaction is a valid candidate for inclusion in a block
      *
      * @param txd the transaction to check (and info about it)

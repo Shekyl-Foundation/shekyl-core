@@ -113,9 +113,7 @@ pub fn epoch_is_not_settled(epoch: u64, current_settled_epoch: u64) -> bool {
 /// verdict is decided here (decision-placement pin, §9.5 item 6).
 #[must_use]
 pub fn emission_block_claims_unique(pairs: &[([u8; 32], u64)]) -> bool {
-    let mut sorted = pairs.to_vec();
-    sorted.sort_unstable();
-    sorted.windows(2).all(|w| w[0] != w[1])
+    crate::distinct::all_distinct(pairs)
 }
 
 /// Record `epoch` as claimed at `current_settled_epoch`, maintaining the

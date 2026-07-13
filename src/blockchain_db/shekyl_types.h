@@ -673,6 +673,104 @@ struct ArchivalEmissionClaimRevertValue {
     }
 };
 
+// ─── ArchivalBondUnbondLogKey / ArchivalBondUnbondRevertValue ──────────────
+//
+// Per-block journal for the Unbond connect's record pre-image (gate-4 §3.5
+// connect step 1 / §5 pop twin). Same BE(height)||BE(seq) idiom as the slash
+// and emission-claim logs — one reorg mechanism, many tables. The vin carries
+// the POST-connect state (§3.5 debit-path pin), so the pre-release holdings
+// and interval log are not reconstructible at pop without this row; it
+// carries the full pre-image of exactly the three fields the connect mutates
+// (bonded_total, holdings, bad_intervals — disjoint from the emission-claim
+// journal's fields, so the two reverts compose in any order).
+
+using ArchivalBondUnbondLogKey = ArchivalSlashLogKey;
+
+struct ArchivalBondUnbondRevertValue {
+    static constexpr uint8_t kVersion = 1;
+    /// Same bounds as `ArchivalBondValue` (defined further down this header;
+    /// the static_asserts after it pin the pairs to the same values).
+    static constexpr size_t kMaxHoldings = 4096;
+    static constexpr size_t kMaxBadIntervals = 256;
+    // ver, p_id, pre_bonded_total, pre_holdings_kind, shard count, interval count
+    static constexpr size_t kFixedSize = 1 + 32 + 8 + 1 + 4 + 4;
+
+    uint8_t p_id[32]{};
+    /// `bonded_total_atomic` before the release (== the connect's bond_debit;
+    /// never 0 — a zero-balance record fails Unbond verify and connect alike).
+    uint64_t pre_bonded_total = 0;
+    uint8_t pre_holdings_kind = 0;
+    std::vector<uint64_t> pre_shard_ids;
+    /// `bad_intervals` before the clean interval-close was appended, as
+    /// flattened (start_epoch, end_exclusive) pairs.
+    std::vector<std::pair<uint64_t, uint64_t>> pre_bad_intervals;
+
+    [[nodiscard]] std::vector<uint8_t> encode() const
+    {
+        if (pre_shard_ids.size() > kMaxHoldings
+            || pre_bad_intervals.size() > kMaxBadIntervals)
+        {
+            throw std::runtime_error(
+                "ArchivalBondUnbondRevertValue encode: bounds exceeded");
+        }
+        if (pre_bonded_total == 0)
+            throw std::runtime_error(
+                "ArchivalBondUnbondRevertValue encode: empty pre-image");
+        std::vector<uint8_t> out;
+        out.reserve(kFixedSize + pre_shard_ids.size() * 8 + pre_bad_intervals.size() * 16);
+        out.push_back(kVersion);
+        out.insert(out.end(), p_id, p_id + 32);
+        push_be64(out, pre_bonded_total);
+        out.push_back(pre_holdings_kind);
+        push_be32(out, static_cast<uint32_t>(pre_shard_ids.size()));
+        for (const uint64_t shard_id : pre_shard_ids)
+            push_be64(out, shard_id);
+        push_be32(out, static_cast<uint32_t>(pre_bad_intervals.size()));
+        for (const auto& iv : pre_bad_intervals)
+        {
+            push_be64(out, iv.first);
+            push_be64(out, iv.second);
+        }
+        return out;
+    }
+
+    static bool decode(const void* data, size_t len, ArchivalBondUnbondRevertValue& out)
+    {
+        if (!data || len < kFixedSize)
+            return false;
+        const auto* p = static_cast<const uint8_t*>(data);
+        size_t off = 0;
+        if (p[off++] != kVersion)
+            return false;
+        std::memcpy(out.p_id, p + off, 32);
+        off += 32;
+        out.pre_bonded_total = load_be64(p + off);
+        off += 8;
+        if (out.pre_bonded_total == 0)
+            return false;
+        out.pre_holdings_kind = p[off++];
+        const uint32_t shard_count = load_be32(p + off);
+        off += 4;
+        if (shard_count > kMaxHoldings
+            || len < off + static_cast<size_t>(shard_count) * 8 + 4)
+            return false;
+        out.pre_shard_ids.clear();
+        out.pre_shard_ids.reserve(shard_count);
+        for (uint32_t i = 0; i < shard_count; ++i, off += 8)
+            out.pre_shard_ids.push_back(load_be64(p + off));
+        const uint32_t interval_count = load_be32(p + off);
+        off += 4;
+        if (interval_count > kMaxBadIntervals
+            || len != off + static_cast<size_t>(interval_count) * 16)
+            return false;
+        out.pre_bad_intervals.clear();
+        out.pre_bad_intervals.reserve(interval_count);
+        for (uint32_t i = 0; i < interval_count; ++i, off += 16)
+            out.pre_bad_intervals.emplace_back(load_be64(p + off), load_be64(p + off + 8));
+        return true;
+    }
+};
+
 // ─── ArchivalBondKey ───────────────────────────────────────────────────────
 //
 // Gate-4 bond record keyed by P_canonical_id (ARCHIVAL_CONSENSUS_STATE.md §3.4).
@@ -730,7 +828,18 @@ struct ArchivalBondValue {
     static constexpr uint8_t kHoldingsCompleteTree = 1;
     static constexpr size_t kMaxPubkeyLen = 2048;
     static constexpr size_t kMaxHoldings = 4096;
+    /// Interval-log entry cap. GENESIS-FROZEN CONSENSUS CONSTANT, not a codec
+    /// tunable: Unbond verify rejects a record at this cap (the connect's
+    /// clean interval-close could not append — `IntervalLogFull`,
+    /// `shekyl-archival-retention::bond_post`), so tx validity depends on the
+    /// value. The Rust twin is `bond_connect::MAX_BOND_BAD_INTERVALS`; the
+    /// static_assert below pins the pair against silent drift.
     static constexpr size_t kMaxBadIntervals = 256;
+    static_assert(kMaxBadIntervals == 256,
+        "kMaxBadIntervals is genesis-frozen (Unbond verify's IntervalLogFull "
+        "belt keys on it); a change is a hard fork and must move "
+        "shekyl-archival-retention::bond_connect::MAX_BOND_BAD_INTERVALS in "
+        "lockstep");
     /// Claimed-epoch entry cap: claim window `W` plus reorg slack
     /// (REWARD_EMISSION_LEG.md §6.3 pins the cap at 32). Derived from the
     /// JSON authority so a `max_claim_age_w` change cannot drift past this
@@ -742,6 +851,16 @@ struct ArchivalBondValue {
         "REWARD_EMISSION_LEG.md §6.3 pins the claimed-epoch cap at 32 "
         "(W = 26 + 6 reorg slack); revisit the pin if max_claim_age_w moves");
 
+    // Interval-log entry (gate-4 F3). Half-open [start_epoch, end_exclusive).
+    // Carries TWO entry kinds — do not assume every entry is a slash:
+    //   - bad-standing interval: start < end (a slash opens with
+    //     end_exclusive = UINT64_MAX; Rebond closes it in place), and
+    //   - the Unbond clean interval-close: ZERO-LENGTH start == end — a pure
+    //     exit marker recording the unbond settlement epoch. Its empty range
+    //     excludes no epoch from good_through by construction, and the codec
+    //     deliberately carries start == end (KAT:
+    //     archival_substrate_lmdb.unbond_clean_close_marker_round_trips).
+    //     Never add a "valid interval is non-empty" assertion here.
     struct BadInterval {
         uint64_t start_epoch = 0;
         uint64_t end_exclusive = 0; // UINT64_MAX = open-ended bad standing
@@ -893,11 +1012,7 @@ struct ArchivalBondValue {
         }
         if (off + 4 > len)
             return false;
-        const uint32_t holdings_count = static_cast<uint32_t>(
-            (static_cast<uint32_t>(p[off]) << 24)
-            | (static_cast<uint32_t>(p[off + 1]) << 16)
-            | (static_cast<uint32_t>(p[off + 2]) << 8)
-            | static_cast<uint32_t>(p[off + 3]));
+        const uint32_t holdings_count = load_be32(p + off);
         off += 4;
         if (holdings_count > kMaxHoldings || off + holdings_count * 8u + 4 > len)
             return false;
@@ -908,11 +1023,7 @@ struct ArchivalBondValue {
             out.held_shard_ids.push_back(load_be64(p + off));
             off += 8;
         }
-        const uint32_t interval_count = static_cast<uint32_t>(
-            (static_cast<uint32_t>(p[off]) << 24)
-            | (static_cast<uint32_t>(p[off + 1]) << 16)
-            | (static_cast<uint32_t>(p[off + 2]) << 8)
-            | static_cast<uint32_t>(p[off + 3]));
+        const uint32_t interval_count = load_be32(p + off);
         off += 4;
         if (interval_count > kMaxBadIntervals || off + interval_count * 16u + 4 > len)
             return false;
@@ -927,11 +1038,7 @@ struct ArchivalBondValue {
             off += 8;
             out.bad_intervals.push_back(iv);
         }
-        const uint32_t claimed_count = static_cast<uint32_t>(
-            (static_cast<uint32_t>(p[off]) << 24)
-            | (static_cast<uint32_t>(p[off + 1]) << 16)
-            | (static_cast<uint32_t>(p[off + 2]) << 8)
-            | static_cast<uint32_t>(p[off + 3]));
+        const uint32_t claimed_count = load_be32(p + off);
         off += 4;
         if (claimed_count > kMaxClaimedEpochs || off + claimed_count * 8u + 8 != len)
             return false;
@@ -977,6 +1084,11 @@ static_assert(ArchivalSlashRevertValue::kPreKindShardSetCompact
 static_assert(ArchivalEmissionClaimRevertValue::kMaxClaimedEpochs
         == ArchivalBondValue::kMaxClaimedEpochs,
     "emission-claim journal cap must mirror ArchivalBondValue::kMaxClaimedEpochs");
+static_assert(ArchivalBondUnbondRevertValue::kMaxHoldings == ArchivalBondValue::kMaxHoldings,
+    "unbond journal holdings cap must mirror ArchivalBondValue::kMaxHoldings");
+static_assert(ArchivalBondUnbondRevertValue::kMaxBadIntervals
+        == ArchivalBondValue::kMaxBadIntervals,
+    "unbond journal interval cap must mirror ArchivalBondValue::kMaxBadIntervals");
 
 // ─── ArchivalShardSegmentValue ─────────────────────────────────────────────
 
