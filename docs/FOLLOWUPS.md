@@ -80,7 +80,33 @@ sustainability is unaffected by the recalibration.
   today, and removing it without the real check in the same change goes
   from fail-closed to no-auth; the pin is a **discriminating KAT**
   (wrong `bond_spend_pk` rejects, the committed one accepts), so
-  "enabled" means "authorized," not merely "un-rejected." *Target: V3.0
+  "enabled" means "authorized," not merely "un-rejected."
+  **Implementation notes (source-grounded 2026-07-12, so the slice starts
+  from facts, not re-derivation):** (a) wire position per the shekyl-wire
+  oracle (`transaction.rs` `BondPost::write`): varint-length-prefixed key
+  **after the `post_kind` byte, before holdings**, exact
+  `PQC_HYBRID_SINGLE_KEY_LEN`, present iff JoinMarket; (b) the gate-4 KAT
+  fixture (`gate4_lifecycle_kat_v1.json`, shared by the C++ integration
+  test) is **generated from `bond_wire.rs::serialize()`** via the ignored
+  regen test — it regenerates with the codec change; (c) auth mechanics:
+  `verify_transaction_pqc_auth` (`tx_pqc_verify.cpp`) verifies every
+  input's hybrid signature over a payload containing the **tx prefix blob**
+  — so once the field is in the C++ serializer, the JoinMarket signature
+  binds the committed key via the prefix; the authorization choice is the
+  **key-pinning** currently at `blockchain.cpp` (`pqc_auths[idx]
+  .hybrid_public_key == bond.hybrid_public_key`), which moves inside
+  `check_archival_bond_post_input` as a kind-dependent selection
+  (credit → identity key, debit → record's committed `bond_spend_pk`) via
+  a new `auth_pubkey` parameter — that selection IS the shared debit
+  authorizer; (d) the wallet already supplies the key
+  (`bond_assembly.rs` `WireBondPostKind::JoinMarket { bond_spend_pk }`) —
+  only consensus lags; (e) C++ surfaces to touch: binary serializer
+  (`cryptonote_basic.h`), boost (`cryptonote_boost_serialization.h:255`),
+  JSON (`json_object.cpp:688/701`), record v5
+  (`ArchivalBondValue` kVersion 4→5 + field, v4 rejected at decode,
+  datadir-reset posture) with the `put_archival_bond_record` parameter
+  ripple, and `bond_wire.rs` §3.4.1 `signature_preimage` gains the key
+  after the `post_kind` byte. *Target: V3.0
   (genesis gate: without it no archiver can ever exit).*
 
 - **Daemon Axum: onion-as-remote-RPC docs + operator story** (added
