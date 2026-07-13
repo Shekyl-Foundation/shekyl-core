@@ -78,7 +78,7 @@ fn build_gate4_document() -> Value {
 
     json!({
         "format_version": 1,
-        "description": "Gate-4 §8 phase-1: join bond-post, serve at E_first, bonded-aggregation KAT.",
+        "description": "Gate-4 §8 phase-1: join bond-post, bonded-aggregation KAT. The serve-at-E_first leg reads gate2_serve_credit_kat_v1.json's integration section directly (single source; the embedded copy drifted).",
         "join": {
             "wire_hex": encode_hex(&join_vin.serialize().expect("join wire")),
             "p_canonical_id_hex": encode_hex(&p_id),
@@ -86,7 +86,6 @@ fn build_gate4_document() -> Value {
             "bond_credit": ARCHIVAL_BOND_FLOOR_ATOMIC,
             "join_settlement_epoch": integration["join_settlement_epoch"].as_u64().expect("join epoch"),
         },
-        "serve_e_first": integration.clone(),
         "negative_serve_at_e_join": {
             "settlement_epoch": 0,
             "join_settlement_epoch": 0,
@@ -248,7 +247,14 @@ fn gate4_lifecycle_kat_vectors() {
         neg["join_settlement_epoch"].as_u64().expect("E_join"),
     ));
 
-    let serve = &kat["serve_e_first"];
+    // The serve-at-E_first leg reads gate-2's integration section DIRECTLY —
+    // the gate-4 fixture used to embed a wholesale copy, and the copy silently
+    // drifted on dev (no consumer failed); one source of truth, no drift
+    // channel. The join fixture above still derives from the same section, so
+    // a gate-2 re-pin that changes the pubkey fails these cross-assertions
+    // loudly until gate-4 is regenerated.
+    let gate2: Value = serde_json::from_str(GATE2_KAT).expect("gate2 json");
+    let serve = &gate2["integration"];
     let join_epoch = serve["join_settlement_epoch"].as_u64().expect("join epoch");
     let settlement_epoch = serve["settlement_epoch"]
         .as_u64()
@@ -388,7 +394,10 @@ fn gate4_conservation_rejects_aggregation_mismatch() {
 #[test]
 fn gate4_join_wire_p_id_matches_recomputed_pubkey() {
     let kat: Value = serde_json::from_str(GATE4_KAT).expect("gate4 json");
-    let serve = &kat["serve_e_first"];
+    // Gate-2's integration section is the pubkey's single source (see
+    // gate4_lifecycle_kat_vectors); this pins the gate-4 join fixture to it.
+    let gate2: Value = serde_json::from_str(GATE2_KAT).expect("gate2 json");
+    let serve = &gate2["integration"];
     let pk_bytes = decode_hex(serve["bond_hybrid_pubkey_hex"].as_str().expect("hybrid pk"));
     let expected = decode_hex32(kat["join"]["p_canonical_id_hex"].as_str().expect("p_id"));
     assert_eq!(

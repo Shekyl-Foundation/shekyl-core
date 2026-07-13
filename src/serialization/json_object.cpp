@@ -692,9 +692,20 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
   INSERT_INTO_JSON_OBJECT(dest, p_canonical_id, txin.p_canonical_id);
   INSERT_INTO_JSON_OBJECT(dest, post_kind, txin.post_kind);
   // §9.11 coupling: the GF-1 debit authorizer is emitted iff JoinMarket,
-  // mirroring the binary serializer.
+  // mirroring the binary serializer — including its write-side refusals: a
+  // non-canonical key (or a stray key on another kind) must fail HERE at the
+  // producer, not surface later as a parse failure of daemon-emitted JSON
+  // (fromJsonValue below rejects both shapes).
   if (txin.post_kind == static_cast<uint8_t>(cryptonote::archival_bond_post_kind::JoinMarket))
+  {
+    if (txin.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
+      throw WRONG_TYPE("archival bond-post bond_spend_pk length not canonical");
     INSERT_INTO_JSON_OBJECT(dest, bond_spend_pk, txin.bond_spend_pk);
+  }
+  else if (!txin.bond_spend_pk.empty())
+  {
+    throw WRONG_TYPE("bond_spend_pk is JoinMarket-coupled");
+  }
   INSERT_INTO_JSON_OBJECT(dest, holdings, txin.holdings);
   INSERT_INTO_JSON_OBJECT(dest, bonded_total_atomic, txin.bonded_total_atomic);
   INSERT_INTO_JSON_OBJECT(dest, bond_credit, txin.bond_credit);

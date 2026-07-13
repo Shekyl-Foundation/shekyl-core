@@ -66,7 +66,8 @@ pub use bond_post::{
 };
 pub use bond_wire::{
     encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,
-    HoldingsKind, BOND_POST_SIG_CUSTOMIZATION, VIN_TYPE_ARCHIVAL_BOND_POST,
+    HoldingsKind, BOND_POST_SIG_CUSTOMIZATION, HYBRID_PUBKEY_CANONICAL_BYTES,
+    VIN_TYPE_ARCHIVAL_BOND_POST,
 };
 pub use challenge::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height,

@@ -38,6 +38,26 @@
     `wire_bond_post_input`'s supply-alongside parameter deleted), so the A-1
     assembly invariant now pins the key byte-for-byte between the prefix
     input and the signed vin.
+  - **Review round:** the boost serializer enforces the coupling both
+    directions (it admitted a non-canonical key on load — the one codec
+    bypassing the length pin the record-commit relies on — and silently
+    dropped a stray one on save); JSON `toJsonValue` refuses at write what
+    `fromJsonValue` refuses at read. The FFI vin marshaler threads the real
+    `bond_spend_pk` through both verify entry points and enforces the
+    coupling itself (`SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING`,
+    code 23) instead of placeholdering the field into a vin the Rust wire
+    codec refuses to serialize. `check_archival_bond_post_input` gains the
+    §9.11 belts for non-parse callers on both arms and pins the committed
+    key BEFORE the per-shard cursor scans + FFI verify (an unauthorized
+    `Unbond` no longer pays the LMDB walk). The block-level checkpoint
+    fast-path arm executes the swap its belt named: under the fast path it
+    re-pins the debit's pqc auth key against the record's committed
+    `bond_spend_pk` instead of blanket-rejecting every debit kind — without
+    this, a block carrying a valid `Unbond` was rejected by every node,
+    contradicting the enable flip; debit-side posts now also feed the
+    per-`P` block-unique pass. The gate-4 lifecycle KAT reads gate-2's
+    integration section directly instead of embedding a copy (the committed
+    copy had silently drifted on dev with no test failing).
 
 - **archival: `Unbond` release-gate hardening + block/template dedup (review
   round, `feat/bond-fsm-unbond-connect`).** The release cooldown gains a second

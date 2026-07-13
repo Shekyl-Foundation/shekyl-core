@@ -235,9 +235,10 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
       if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
       {
         const uint64_t join_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
-        // GF-1: commit the vin's §9.11 debit authorizer into the record. The
-        // vin serializer already enforced presence + canonical length on
-        // JoinMarket, so an empty key here is unreachable through parse.
+        // GF-1: commit the vin's §9.11 debit authorizer into the record.
+        // Every codec (binary, boost, JSON) enforces presence + canonical
+        // length on JoinMarket, so an empty key here is unreachable through
+        // ANY parse path — including pool/blob reloads via boost archives.
         put_archival_bond_record(bond.p_canonical_id, bond.hybrid_public_key,
           bond.bond_spend_pk, join_epoch,
           bond.bonded_total_atomic, static_cast<uint8_t>(bond.holdings.kind),

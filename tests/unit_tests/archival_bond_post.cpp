@@ -32,12 +32,19 @@
 #include <sstream>
 #include <variant>
 
+#include <boost/archive/portable_binary_iarchive.hpp>
+#include <boost/archive/portable_binary_oarchive.hpp>
+#include <rapidjson/document.h>
+
+#include "byte_stream.h"
 #include "cryptonote_basic/cryptonote_basic.h"
+#include "cryptonote_basic/cryptonote_boost_serialization.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "fcmp/bulletproofs_plus.h"
 #include "fcmp/rctOps.h"
 #include "fcmp/rctSigs.h"
 #include "serialization/binary_archive.h"
+#include "serialization/json_object.h"
 #include "shekyl/consensus_constants_generated.h"
 
 using namespace cryptonote;
@@ -152,6 +159,90 @@ TEST(archival_bond_post, vin_serializer_enforces_bond_spend_pk_coupling)
     const auto& out = std::get<txin_archival_bond_post>(decoded);
     EXPECT_TRUE(out.bond_spend_pk.empty());
     EXPECT_EQ(out.bond_debit, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC);
+  }
+}
+
+// §9.11 coupling at the boost serializer (blob/pool paths): the same shapes
+// the binary codec refuses must refuse here too — on save so a
+// misconstruction is loud instead of silently dropping the key, and (same
+// direction-agnostic branch) on load so a non-canonical key can never enter
+// memory through a boost archive when every other codec pins the length.
+TEST(archival_bond_post, boost_serializer_enforces_bond_spend_pk_coupling)
+{
+  const auto boost_round_trip = [](const txin_archival_bond_post& in) {
+    std::stringstream ss;
+    boost::archive::portable_binary_oarchive oar(ss);
+    oar << in;
+    txin_archival_bond_post out{};
+    boost::archive::portable_binary_iarchive iar(ss);
+    iar >> out;
+    return out;
+  };
+
+  {
+    const txin_archival_bond_post out = boost_round_trip(make_join_market_vin());
+    EXPECT_EQ(out.bond_spend_pk,
+      std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xE5));
+  }
+  {
+    txin_archival_bond_post missing_key = make_join_market_vin();
+    missing_key.bond_spend_pk.clear();
+    EXPECT_THROW(boost_round_trip(missing_key), boost::archive::archive_exception);
+  }
+  {
+    txin_archival_bond_post truncated_key = make_join_market_vin();
+    truncated_key.bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN - 1, 0xE5);
+    EXPECT_THROW(boost_round_trip(truncated_key), boost::archive::archive_exception);
+  }
+  {
+    txin_archival_bond_post unbond_with_key = make_join_market_vin();
+    unbond_with_key.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+    EXPECT_THROW(boost_round_trip(unbond_with_key), boost::archive::archive_exception);
+  }
+  {
+    txin_archival_bond_post unbond = make_join_market_vin();
+    unbond.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+    unbond.bond_spend_pk.clear();
+    EXPECT_TRUE(boost_round_trip(unbond).bond_spend_pk.empty());
+  }
+}
+
+// §9.11 coupling at the JSON codec: toJsonValue refuses at write exactly what
+// fromJsonValue refuses at read, so the daemon can never emit JSON its own
+// parser rejects (the failure belongs to the producer, not the consumer).
+TEST(archival_bond_post, json_codec_enforces_bond_spend_pk_coupling)
+{
+  const auto to_json = [](const txin_archival_bond_post& in) {
+    epee::byte_stream buffer;
+    rapidjson::Writer<epee::byte_stream> dest{buffer};
+    cryptonote::json::toJsonValue(dest, in);
+    return std::string(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+  };
+
+  {
+    // Valid JoinMarket round-trips through write + parse.
+    const std::string json = to_json(make_join_market_vin());
+    rapidjson::Document doc;
+    ASSERT_FALSE(doc.Parse(json.c_str()).HasParseError());
+    txin_archival_bond_post out{};
+    cryptonote::json::fromJsonValue(doc, out);
+    EXPECT_EQ(out.bond_spend_pk,
+      std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xE5));
+  }
+  {
+    txin_archival_bond_post missing_key = make_join_market_vin();
+    missing_key.bond_spend_pk.clear();
+    EXPECT_THROW(to_json(missing_key), cryptonote::json::WRONG_TYPE);
+  }
+  {
+    txin_archival_bond_post truncated_key = make_join_market_vin();
+    truncated_key.bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN - 1, 0xE5);
+    EXPECT_THROW(to_json(truncated_key), cryptonote::json::WRONG_TYPE);
+  }
+  {
+    txin_archival_bond_post unbond_with_key = make_join_market_vin();
+    unbond_with_key.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+    EXPECT_THROW(to_json(unbond_with_key), cryptonote::json::WRONG_TYPE);
   }
 }
 

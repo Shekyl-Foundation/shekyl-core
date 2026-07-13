@@ -26,7 +26,8 @@ use shekyl_archival_retention::{
     BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair, EmissionEpochSource,
     EmissionVerifyContext, EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
     HoldingsDescriptor, HoldingsKind, KCover, RewardCommit, UnbondConnectError, UnbondPopError,
-    WireError, CHALLENGE_RESOLUTION_BLOCKS, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
+    WireError, CHALLENGE_RESOLUTION_BLOCKS, HYBRID_PUBKEY_CANONICAL_BYTES,
+    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -127,6 +128,11 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL: u8 = 21;
 /// `Unbond` verify: the slash scheduler has not yet settled every epoch through
 /// the record's last-served anchor (the one-block connect-ordering race guard).
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING: u8 = 22;
+/// The marshaled `bond_spend_pk` violates the §9.11 JoinMarket coupling:
+/// missing/non-canonical length on JoinMarket, or present on any other kind.
+/// Returned by the shared vin marshaler, so both entry points can return it —
+/// the marshaler refuses to construct a vin the wire codec could not emit.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING: u8 = 23;
 
 /// `Unbond` connect/pop fold succeeded (gate-4 §4.3 / §5).
 pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_OK: u8 = 0;
@@ -564,34 +570,80 @@ unsafe fn with_bond_post_u64_slice<R>(
     Ok(f(slice))
 }
 
+/// [`with_bond_post_u64_slice`]'s byte twin, for the `bond_spend_pk` marshal.
+/// Same contract: `len == 0` passes an empty slice, a null pointer with a
+/// positive `len` is `ERR_NULL_PTR`, and a `len` past the `from_raw_parts`
+/// `isize::MAX` soundness bound is `ERR_LEN_OVERFLOW`.
+///
+/// # Safety
+/// When `len > 0`, `ptr` must be valid for `len` bytes for the duration of the call.
+unsafe fn with_bond_post_u8_slice<R>(
+    ptr: *const u8,
+    len: usize,
+    f: impl FnOnce(&[u8]) -> R,
+) -> Result<R, u8> {
+    if len == 0 {
+        return Ok(f(&[]));
+    }
+    if ptr.is_null() {
+        return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR);
+    }
+    if len > isize::MAX as usize {
+        return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW);
+    }
+    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
+    Ok(f(slice))
+}
+
 /// Marshal the shared bond-post args into an [`ArchivalBondPostVin`] for the JoinMarket
 /// and Unbond FFI entry points. The `post_kind` byte is decoded at each call site (the
 /// two name an out-of-range byte differently — `ERR_POST_KIND` vs
 /// `ERR_POST_KIND_NOT_UNBOND`), so it arrives here already typed. The C++ hybrid pubkey
 /// and `P_id` hint stay consensus-side, so the vin carries placeholders for them.
 ///
+/// `bond_spend_pk` is marshaled for real, NOT placeholdered: the §9.11 coupling
+/// (JoinMarket iff exact-canonical-length key) is structural in
+/// [`ArchivalBondPostVin`] — `serialize()` refuses a violating vin and
+/// `signature_preimage()` binds the key bytes — and unlike the consensus-side
+/// placeholders above, an empty key is a *valid* wire shape for the debit
+/// kinds, so a placeholder would silently satisfy the wrong invariant. The
+/// marshaler enforces the coupling (`ERR_BOND_SPEND_PK_COUPLING`) instead of
+/// constructing a violating vin.
+///
 /// # Safety
-/// `shard_ids_ptr` must be valid for `shard_ids_len` `u64`s, or null when the len is 0.
+/// `shard_ids_ptr` must be valid for `shard_ids_len` `u64`s, or null when the len is 0;
+/// `bond_spend_pk_ptr` must be valid for `bond_spend_pk_len` bytes, or null when the
+/// len is 0.
+#[allow(clippy::too_many_arguments)] // coarse-call FFI: mirrors the entry points' flat operand list
 unsafe fn bond_post_vin_from_raw(
     post_kind: BondPostKind,
     holdings_kind: u8,
     shard_ids_ptr: *const u64,
     shard_ids_len: usize,
+    bond_spend_pk_ptr: *const u8,
+    bond_spend_pk_len: usize,
     bonded_total_atomic: u64,
     bond_credit: u64,
     bond_debit: u64,
 ) -> Result<ArchivalBondPostVin, u8> {
     let shard_ids =
         unsafe { with_bond_post_u64_slice(shard_ids_ptr, shard_ids_len, <[u64]>::to_vec) }?;
+    let bond_spend_pk =
+        unsafe { with_bond_post_u8_slice(bond_spend_pk_ptr, bond_spend_pk_len, <[u8]>::to_vec) }?;
+    let coupling_ok = if post_kind == BondPostKind::JoinMarket {
+        bond_spend_pk.len() == HYBRID_PUBKEY_CANONICAL_BYTES
+    } else {
+        bond_spend_pk.is_empty()
+    };
+    if !coupling_ok {
+        return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING);
+    }
     let holdings_kind = holdings_kind_from_u8(holdings_kind)?;
     Ok(ArchivalBondPostVin {
         hybrid_public_key: Vec::new(),
         p_canonical_id: [0u8; 32],
         post_kind,
-        // Placeholder, like `hybrid_public_key`: the C++ glue owns the
-        // structural bond_spend_pk checks (presence/length by kind) and the
-        // record-commit; the Rust verify arms never read it.
-        bond_spend_pk: Vec::new(),
+        bond_spend_pk,
         holdings: HoldingsDescriptor {
             kind: holdings_kind,
             shard_ids,
@@ -606,12 +658,21 @@ unsafe fn bond_post_vin_from_raw(
 ///
 /// Hybrid pubkey bounds and `p_canonical_id` hint recompute stay in C++ consensus glue.
 /// `record_exists` is `1` when LMDB already has a bond record for this `P_id`.
+/// `bond_spend_pk_*` is the vin's GF-1 debit authorizer; the shared marshaler
+/// enforces the §9.11 coupling (exact-canonical-length key iff JoinMarket,
+/// `ERR_BOND_SPEND_PK_COUPLING` otherwise).
+///
+/// # Safety
+/// `bond_spend_pk_ptr` must be valid for `bond_spend_pk_len` bytes, or null when
+/// the len is 0.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
     post_kind: u8,
     holdings_kind: u8,
     shard_ids_ptr: *const u64,
     shard_ids_len: usize,
+    bond_spend_pk_ptr: *const u8,
+    bond_spend_pk_len: usize,
     bonded_total_atomic: u64,
     bond_credit: u64,
     bond_debit: u64,
@@ -626,6 +687,8 @@ pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
         holdings_kind,
         shard_ids_ptr,
         shard_ids_len,
+        bond_spend_pk_ptr,
+        bond_spend_pk_len,
         bonded_total_atomic,
         bond_credit,
         bond_debit,
@@ -656,12 +719,19 @@ pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
 /// release on every epoch through the anchor being slash-settled
 /// (`release_cooldown::slashes_settled_through`; closes the one-block
 /// connect-ordering race the module docs name).
+/// # Safety
+/// `bond_spend_pk_ptr` must be valid for `bond_spend_pk_len` bytes, or null when
+/// the len is 0 (an `Unbond` vin never carries the §9.11 field, so a conforming
+/// caller passes null/0; the shared marshaler rejects anything else as
+/// `ERR_BOND_SPEND_PK_COUPLING`).
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_archival_verify_unbond_bond_post(
     post_kind: u8,
     holdings_kind: u8,
     shard_ids_ptr: *const u64,
     shard_ids_len: usize,
+    bond_spend_pk_ptr: *const u8,
+    bond_spend_pk_len: usize,
     bonded_total_atomic: u64,
     bond_credit: u64,
     bond_debit: u64,
@@ -682,6 +752,8 @@ pub unsafe extern "C" fn shekyl_archival_verify_unbond_bond_post(
         holdings_kind,
         shard_ids_ptr,
         shard_ids_len,
+        bond_spend_pk_ptr,
+        bond_spend_pk_len,
         bonded_total_atomic,
         bond_credit,
         bond_debit,
@@ -2116,6 +2188,7 @@ mod tests {
 
         let floor = ARCHIVAL_BOND_FLOOR_ATOMIC;
         let shard = 42u64;
+        let spend_pk = vec![0xE5u8; HYBRID_PUBKEY_CANONICAL_BYTES];
         let verify = |post_kind: u8,
                       holdings_kind: u8,
                       shards: Option<&u64>,
@@ -2129,6 +2202,8 @@ mod tests {
                 holdings_kind,
                 shards.map_or(std::ptr::null(), std::ptr::from_ref),
                 shard_len,
+                spend_pk.as_ptr(),
+                spend_pk.len(),
                 total,
                 credit,
                 debit,
@@ -2140,8 +2215,24 @@ mod tests {
             verify(0, 0, Some(&shard), 1, floor, floor, 0, 0),
             SHEKYL_ARCHIVAL_BOND_POST_OK
         );
+        // A conforming Rebond vin carries NO key (§9.11), so the post-kind
+        // verdict is asserted with an empty one; Rebond WITH a key is the
+        // coupling case at the bottom.
         assert_eq!(
-            verify(1, 0, Some(&shard), 1, floor, floor, 0, 0),
+            unsafe {
+                shekyl_archival_verify_join_market_bond_post(
+                    1,
+                    0,
+                    std::ptr::from_ref(&shard),
+                    1,
+                    std::ptr::null(),
+                    0,
+                    floor,
+                    floor,
+                    0,
+                    0,
+                )
+            },
             SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND
         );
         assert_eq!(
@@ -2175,6 +2266,59 @@ mod tests {
         assert_eq!(
             verify(0, 0, Some(&shard), 1, floor, floor, 0, 1),
             SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS
+        );
+
+        // §9.11 coupling at the marshaler: JoinMarket requires the
+        // exact-canonical-length key — empty and truncated both refuse.
+        let coupling = |pk: &[u8]| unsafe {
+            shekyl_archival_verify_join_market_bond_post(
+                0,
+                0,
+                std::ptr::from_ref(&shard),
+                1,
+                if pk.is_empty() {
+                    std::ptr::null()
+                } else {
+                    pk.as_ptr()
+                },
+                pk.len(),
+                floor,
+                floor,
+                0,
+                0,
+            )
+        };
+        assert_eq!(
+            coupling(&[]),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING
+        );
+        assert_eq!(
+            coupling(&spend_pk[..HYBRID_PUBKEY_CANONICAL_BYTES - 1]),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING
+        );
+        // ...and the inverse direction: a non-JoinMarket kind (Rebond) carrying
+        // a key refuses at the marshaler, before the post-kind verdict.
+        assert_eq!(
+            verify(1, 0, Some(&shard), 1, floor, floor, 0, 0),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING
+        );
+        // A null key pointer with a positive length is the caller bug, not coupling.
+        assert_eq!(
+            unsafe {
+                shekyl_archival_verify_join_market_bond_post(
+                    0,
+                    0,
+                    std::ptr::from_ref(&shard),
+                    1,
+                    std::ptr::null(),
+                    HYBRID_PUBKEY_CANONICAL_BYTES,
+                    floor,
+                    floor,
+                    0,
+                    0,
+                )
+            },
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR
         );
     }
 
@@ -2212,6 +2356,8 @@ mod tests {
                     std::ptr::from_ref(&shard)
                 },
                 holdings_len,
+                std::ptr::null(), // bond_spend_pk (§9.11: never on Unbond)
+                0,
                 total,
                 0, // credit
                 debit,
@@ -2279,6 +2425,8 @@ mod tests {
                 HoldingsKind::ShardSetCompact as u8,
                 std::ptr::null(), // shard_ids_ptr (empty holdings)
                 0,                // shard_ids_len
+                std::ptr::null(), // bond_spend_pk_ptr (§9.11: never on Unbond)
+                0,                // bond_spend_pk_len
                 0,                // bonded_total_atomic
                 0,                // bond_credit
                 record_bonded,    // bond_debit
@@ -2295,6 +2443,36 @@ mod tests {
             record_missing_null_cooldown,
             SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING
         );
+
+        // §9.11 coupling at the marshaler: an Unbond vin carrying ANY
+        // bond_spend_pk bytes refuses — even the canonical length that would
+        // satisfy JoinMarket (the field is JoinMarket-coupled, not
+        // length-gated).
+        let stray_key = vec![0xC7u8; HYBRID_PUBKEY_CANONICAL_BYTES];
+        let unbond_with_stray_key = unsafe {
+            shekyl_archival_verify_unbond_bond_post(
+                BondPostKind::Unbond as u8,
+                HoldingsKind::ShardSetCompact as u8,
+                std::ptr::null(),
+                0,
+                stray_key.as_ptr(),
+                stray_key.len(),
+                0,
+                0,
+                record_bonded,
+                1,
+                record_bonded,
+                0,
+                served.as_ptr(),
+                served.len(),
+                settled_ok,
+                ok_current,
+            )
+        };
+        assert_eq!(
+            unbond_with_stray_key,
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING
+        );
     }
 
     #[test]
@@ -2309,6 +2487,8 @@ mod tests {
                 HoldingsKind::ShardSetCompact as u8,
                 std::ptr::from_ref(&dummy),
                 usize::MAX,
+                std::ptr::null(),
+                0,
                 0,
                 0,
                 0,
@@ -2322,11 +2502,38 @@ mod tests {
             )
         };
         assert_eq!(shard_overflow, SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW);
+        // Same guard on the bond_spend_pk byte slice.
+        let spend_pk_overflow = unsafe {
+            shekyl_archival_verify_unbond_bond_post(
+                BondPostKind::Unbond as u8,
+                HoldingsKind::ShardSetCompact as u8,
+                std::ptr::null(),
+                0,
+                std::ptr::from_ref(&dummy).cast::<u8>(),
+                usize::MAX,
+                0,
+                0,
+                0,
+                1,
+                1,
+                0,
+                std::ptr::null(),
+                0,
+                u64::MAX,
+                0,
+            )
+        };
+        assert_eq!(
+            spend_pk_overflow,
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW
+        );
         // Same guard on the serve-credit anchor array (reached once the record exists).
         let served_overflow = unsafe {
             shekyl_archival_verify_unbond_bond_post(
                 BondPostKind::Unbond as u8,
                 HoldingsKind::ShardSetCompact as u8,
+                std::ptr::null(),
+                0,
                 std::ptr::null(),
                 0,
                 0,
@@ -2358,6 +2565,8 @@ mod tests {
                 HoldingsKind::ShardSetCompact as u8,
                 shards.as_ptr(),
                 shards.len(),
+                std::ptr::null(), // bond_spend_pk (§9.11: never on Unbond)
+                0,
                 0, // bonded_total_atomic (post-connect full exit)
                 0, // bond_credit
                 1, // bond_debit == record_bonded_total
