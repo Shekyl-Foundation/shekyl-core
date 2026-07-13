@@ -679,6 +679,21 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
 
 ## Revision history
 
+- **2026-07-12 (c):** **`Unbond` C++ dispatch wiring landed** — `add_transaction`
+  Unbond arm → `apply_archival_unbond` (pre-image journal
+  `m_archival_bond_unbond_log`, Rust-fold write set, per-post live-counter
+  threading — KAT-armed by the two-`P`-one-block test), `pop_block` →
+  `revert_archival_unbonds_at_height` (after the slash revert, per the named
+  reverse-order-pop assumption), verify dispatch in
+  `check_archival_bond_post_input` (Q1/Q2 anchors via the
+  `archival_bond_last_served_epochs` reverse-cursor helper), and the per-`P`
+  block pass marshaled beside the emission `(P,E)` pass. **Unbond txs remain
+  verify-rejected fail-closed at the §3.5 step-5 debit-auth step** (rule-22 named
+  blocker, gate-4 §3.5 + FOLLOWUPS): no record commits a `bond_spend_pk` — the
+  §9.11 field the Rust wallet wire carries is absent from the C++ vin serializer
+  and the v4 record. The GF-1 wire+record sub-increment (C++ vin field, schema
+  v5 commit at JoinMarket, §3.4.1 preimage binding, debit-auth check) is the
+  enable flip and the next slice before `HoldingsUpdate`.
 - **2026-07-12 (b):** **`Unbond` connect fold + pop twin landed Rust-native**
   (`shekyl-archival-retention::bond_connect`, driven over
   `shekyl_archival_unbond_connect` / `shekyl_archival_unbond_pop`; C++ dispatch

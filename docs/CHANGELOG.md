@@ -4,6 +4,37 @@
 
 ### Added
 
+- **archival: `Unbond` C++ dispatch wiring — connect arm, pre-image journal,
+  pop twin, verify dispatch, per-`P` block pass (gate-4 §3.5/§4.3/§5;
+  P2B-8 increment c, `feat/bond-fsm-unbond-connect`).** The
+  `add_transaction` bond arm dispatches on `post_kind`: Unbond →
+  `apply_archival_unbond`, the single writer that journals the record's
+  full pre-image (`m_archival_bond_unbond_log`, BE(height)‖BE(seq) —
+  `ArchivalBondUnbondRevertValue` carries exactly the three mutated
+  fields, disjoint from the emission journal's), applies the Rust fold's
+  write set verbatim (Exited record + clean interval-close + counter
+  debit), and FATALs on any fold error. Counter threading is per-post
+  (live `get → fold → set` inside the writer) — armed by the
+  two-`P`-one-block KAT, which a hoisted per-block read would fail.
+  `pop_block` calls `revert_archival_unbonds_at_height` after the slash
+  revert (the named reverse-order-pop assumption: an Exited record stays
+  slashable, so a later slash trailing the clean close is restored to
+  trailing position first); the pop fold validates the Exited shape +
+  trailing close before re-crediting, and the pre-image restores
+  byte-exactly (real-block-path connect/pop KAT). Verify dispatch:
+  `check_archival_bond_post_input` gains the chain-height operand and an
+  Unbond branch marshaling record facts + the P2B-8 Q1/Q2 cooldown
+  anchors (`archival_bond_last_served_epochs`: one reverse-cursor seek
+  per held shard over the BE serve-credit key; never-served omitted).
+  The per-`P` block pass is marshaled beside the emission `(P,E)` pass
+  (`shekyl_archival_bond_post_block_unique`, reject-not-serialize).
+  **Named blocker (rule 22, gate-4 §3.5 + FOLLOWUPS): Unbond txs remain
+  verify-rejected fail-closed at the §3.5 step-5 debit-auth step** — no
+  record commits a `bond_spend_pk` (the §9.11 field the Rust wallet wire
+  carries is absent from the C++ vin serializer and the v4 record), and
+  the identity key must never authorize a value-out (GF-1). The GF-1
+  wire+record sub-increment is the enable flip.
+
 - **archival: `Unbond` connect fold + pop twin, Rust-native (gate-4 §4.3
   "On confirm" / §5; P2B-8 increment b, `feat/bond-fsm-unbond-connect`).**
   `shekyl-archival-retention::bond_connect` is the single implementation of

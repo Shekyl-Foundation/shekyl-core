@@ -1972,6 +1972,225 @@ TEST(archival_substrate_lmdb, bond_post_connect_pop_roundtrip_through_real_block
   EXPECT_EQ(db.get_total_bonded_atomic(), 0u);
 }
 
+TEST(archival_substrate_lmdb, unbond_revert_value_round_trips)
+{
+  // Direct codec round-trip for the Unbond record pre-image journal value:
+  // encode → decode reproduces every field (including a zero-length clean
+  // close among the pre-image intervals), and an empty pre-image (bonded 0)
+  // is rejected on both sides — connect can never journal it.
+  shekyl::db::ArchivalBondUnbondRevertValue v{};
+  std::memset(v.p_id, 0xCD, sizeof(v.p_id));
+  v.pre_bonded_total = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  v.pre_holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
+  v.pre_shard_ids = {7, 42};
+  v.pre_bad_intervals = {{5, 6}, {9, 9}};
+
+  const std::vector<uint8_t> encoded = v.encode();
+  shekyl::db::ArchivalBondUnbondRevertValue out{};
+  ASSERT_TRUE(shekyl::db::ArchivalBondUnbondRevertValue::decode(
+    encoded.data(), encoded.size(), out));
+  EXPECT_EQ(0, std::memcmp(out.p_id, v.p_id, sizeof(v.p_id)));
+  EXPECT_EQ(out.pre_bonded_total, v.pre_bonded_total);
+  EXPECT_EQ(out.pre_holdings_kind, v.pre_holdings_kind);
+  EXPECT_EQ(out.pre_shard_ids, v.pre_shard_ids);
+  EXPECT_EQ(out.pre_bad_intervals, v.pre_bad_intervals);
+
+  shekyl::db::ArchivalBondUnbondRevertValue empty{};
+  EXPECT_THROW(empty.encode(), std::runtime_error);
+}
+
+// The Unbond connect/pop twin through the REAL block path (gate-4 §4.3/§5):
+// add_block drives the vin dispatch → apply_archival_unbond (pre-image
+// journal, Rust fold write set, per-post counter threading), pop_block drives
+// revert_archival_unbonds_at_height (pop fold consistency checks + pre-image
+// restore). Asserts the Exited shape, the clean interval-close appended AFTER
+// the seeded closed interval, the counter debit, and the byte-exact restore.
+TEST(archival_substrate_lmdb, unbond_connect_pop_roundtrip_through_real_block_path)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  append_minimal_blocks(db, kSeb + 3);
+
+  // Seed the bonded record the Unbond releases: two shards, a prior CLOSED
+  // bad interval (proves the journal restores the interval log, not just
+  // pops one entry), and a global counter larger than the record's balance
+  // (proves decrement, not zeroing).
+  const crypto::hash p_id = make_hash(0xE1);
+  const uint64_t record_bonded = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const uint64_t total_bonded = 5 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  db.put_archival_bond_record(p_id,
+    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B), 3, record_bonded,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7, 42}, {{5, 6}});
+  db.set_total_bonded_atomic(total_bonded);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  const uint64_t connect_height = db.height();
+  const uint64_t expected_epoch =
+    shekyl_archival_settlement_epoch_at_height(connect_height);
+  ASSERT_GT(expected_epoch, 0u);
+
+  // The Unbond vin carries the POST-connect state (§3.5 debit-path pin).
+  transaction tx{};
+  tx.version = 2;
+  txin_archival_bond_post vin{};
+  vin.hybrid_public_key.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B);
+  vin.p_canonical_id = p_id;
+  vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+  vin.holdings.kind = archival_holdings_kind::ShardSetCompact;
+  vin.holdings.shard_ids = {};
+  vin.bonded_total_atomic = 0;
+  vin.bond_credit = 0;
+  vin.bond_debit = record_bonded;
+  tx.vin.push_back(vin);
+
+  block blk{};
+  blk.major_version = 1;
+  blk.minor_version = 1;
+  blk.timestamp = 1500000000 + connect_height;
+  blk.prev_id = db.get_block_hash_from_height(connect_height - 1);
+  blk.curve_tree_root = crypto::null_hash;
+  transaction miner_tx{};
+  miner_tx.version = 1;
+  miner_tx.unlock_time = connect_height + 60;
+  txin_gen gen{};
+  gen.height = connect_height;
+  miner_tx.vin.push_back(gen);
+  blk.miner_tx = std::move(miner_tx);
+  blk.tx_hashes.push_back(get_transaction_hash(tx));
+
+  db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
+    connect_height + 1, 0, 0, {std::make_pair(tx, tx_to_blob(tx))});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // Exited shape: zero total, compact-and-empty holdings, the seeded closed
+  // interval intact with the zero-length clean close appended after it.
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read))
+    << "the record must PERSIST for backlog claims (connect does not delete)";
+  EXPECT_EQ(read.bonded_total_atomic, 0u);
+  EXPECT_EQ(read.holdings_kind, shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact);
+  EXPECT_TRUE(read.held_shard_ids.empty());
+  ASSERT_EQ(read.bad_intervals.size(), 2u);
+  EXPECT_EQ(read.bad_intervals[0].start_epoch, 5u);
+  EXPECT_EQ(read.bad_intervals[0].end_exclusive, 6u);
+  EXPECT_EQ(read.bad_intervals[1].start_epoch, expected_epoch);
+  EXPECT_EQ(read.bad_intervals[1].end_exclusive, expected_epoch);
+  EXPECT_EQ(db.get_total_bonded_atomic(), total_bonded - record_bonded);
+
+  block popped{};
+  std::vector<transaction> popped_txs;
+  fixture.db.pop_block(popped, popped_txs);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_EQ(popped_txs.size(), 1u);
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.bonded_total_atomic, record_bonded);
+  EXPECT_EQ(read.held_shard_ids, (std::vector<uint64_t>{7, 42}));
+  ASSERT_EQ(read.bad_intervals.size(), 1u);
+  EXPECT_EQ(read.bad_intervals[0].start_epoch, 5u);
+  EXPECT_EQ(read.bad_intervals[0].end_exclusive, 6u);
+  EXPECT_EQ(db.get_total_bonded_atomic(), total_bonded);
+}
+
+// Two different-P Unbonds in ONE block: the counter-threading obligation
+// armed (gate-4 §3.5). The fold returns the new total as an ABSOLUTE value,
+// so a dispatch that hoisted one counter read per block would compute both
+// debits from the same block-start total and lose one; the per-post
+// get→fold→set threading inside apply_archival_unbond must land both. (The
+// per-P uniqueness pass does not cover this case — different-P posts in one
+// block are legitimate.)
+TEST(archival_substrate_lmdb, unbond_two_p_one_block_threads_the_counter)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  append_minimal_blocks(db, 5);
+
+  const crypto::hash p_a = make_hash(0xA1);
+  const crypto::hash p_b = make_hash(0xB2);
+  const uint64_t bonded_a = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const uint64_t bonded_b = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  db.put_archival_bond_record(p_a,
+    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x11), 0, bonded_a,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7});
+  db.put_archival_bond_record(p_b,
+    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x22), 0, bonded_b,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {8, 9});
+  db.set_total_bonded_atomic(bonded_a + bonded_b);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  const uint64_t connect_height = db.height();
+  auto unbond_tx = [](const crypto::hash& p_id, uint64_t debit, uint8_t fill) {
+    transaction tx{};
+    tx.version = 2;
+    txin_archival_bond_post vin{};
+    vin.hybrid_public_key.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, fill);
+    vin.p_canonical_id = p_id;
+    vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+    vin.holdings.kind = archival_holdings_kind::ShardSetCompact;
+    vin.bonded_total_atomic = 0;
+    vin.bond_credit = 0;
+    vin.bond_debit = debit;
+    tx.vin.push_back(vin);
+    return tx;
+  };
+  const transaction tx_a = unbond_tx(p_a, bonded_a, 0x11);
+  const transaction tx_b = unbond_tx(p_b, bonded_b, 0x22);
+
+  block blk{};
+  blk.major_version = 1;
+  blk.minor_version = 1;
+  blk.timestamp = 1500000000 + connect_height;
+  blk.prev_id = db.get_block_hash_from_height(connect_height - 1);
+  blk.curve_tree_root = crypto::null_hash;
+  transaction miner_tx{};
+  miner_tx.version = 1;
+  miner_tx.unlock_time = connect_height + 60;
+  txin_gen gen{};
+  gen.height = connect_height;
+  miner_tx.vin.push_back(gen);
+  blk.miner_tx = std::move(miner_tx);
+  blk.tx_hashes.push_back(get_transaction_hash(tx_a));
+  blk.tx_hashes.push_back(get_transaction_hash(tx_b));
+
+  db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
+    connect_height + 1, 0, 0,
+    {std::make_pair(tx_a, tx_to_blob(tx_a)), std::make_pair(tx_b, tx_to_blob(tx_b))});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // BOTH debits must land: a hoisted-read dispatch would leave
+  // total − min(debit) or total − max(debit), never 0.
+  EXPECT_EQ(db.get_total_bonded_atomic(), 0u);
+
+  block popped{};
+  std::vector<transaction> popped_txs;
+  fixture.db.pop_block(popped, popped_txs);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_EQ(popped_txs.size(), 2u);
+  EXPECT_EQ(db.get_total_bonded_atomic(), bonded_a + bonded_b);
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_a, read));
+  EXPECT_EQ(read.bonded_total_atomic, bonded_a);
+  EXPECT_EQ(read.held_shard_ids, (std::vector<uint64_t>{7}));
+  ASSERT_TRUE(db.get_archival_bond_value(p_b, read));
+  EXPECT_EQ(read.bonded_total_atomic, bonded_b);
+  EXPECT_EQ(read.held_shard_ids, (std::vector<uint64_t>{8, 9}));
+}
+
 // ── F-B1a: production-path epoch boundary — budget(E) includes E's final block ──
 //
 // The substrate KATs B1–B3 above drive add_archival_budget_accrual and the

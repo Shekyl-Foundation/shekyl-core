@@ -3680,7 +3680,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       {
         const txin_archival_bond_post& bond =
           std::get<txin_archival_bond_post>(tx.vin[archival_bond_post_index]);
-        if (!check_archival_bond_post_input(bond))
+        if (!check_archival_bond_post_input(bond, chain_height))
         {
           MERROR_VER("Archival bond-post validation failed");
           tvc.m_verifivation_failed = true;
@@ -4562,13 +4562,36 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
     return "bond record already exists";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND:
     return "invalid holdings_kind";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_UNBOND:
+    return "post_kind not Unbond";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING:
+    return "Unbond requires an existing bond record";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_UNBOND:
+    return "record bonded_total is zero";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_CREDIT:
+    return "Unbond bond_credit must be zero";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_FLOOR_MISMATCH:
+    return "post-connect bonded_total must equal bond_floor(holdings)";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_UNBOND:
+    return "Unbond is a full exit: post-connect bonded_total must be zero";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL:
+    return "bond_debit must equal the record's current bonded_total";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED:
+    return "release cooldown has not elapsed";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW:
+    return "marshaled array length overflow";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_HOLDINGS_NOT_EMPTY:
+    return "full exit must end at empty holdings";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL:
+    return "record interval log is full";
   default:
     return "unknown bond-post verify code";
   }
 }
 } // namespace
 
-bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& bond) const
+bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& bond,
+  uint64_t chain_height) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
@@ -4592,11 +4615,60 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     return false;
   }
 
-  std::vector<uint8_t> existing_pubkey;
-  const bool record_exists = m_db->get_archival_bond_hybrid_pubkey(bond.p_canonical_id, existing_pubkey);
   const uint64_t* shard_ptr = bond.holdings.shard_ids.empty()
     ? nullptr
     : bond.holdings.shard_ids.data();
+
+  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Unbond))
+  {
+    // Unbond semantic verify (gate-4 §3.5 debit path): marshal the record
+    // facts + the P2B-8 Q1/Q2 cooldown anchors (one reverse-cursor seek per
+    // held shard; never-served shards omitted); the fold to the whole-record
+    // anchor and every verdict stay Rust-side.
+    shekyl::db::ArchivalBondValue record{};
+    const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);
+    std::vector<uint64_t> last_served;
+    if (have_record)
+      last_served = m_db->archival_bond_last_served_epochs(bond.p_canonical_id,
+        record.held_shard_ids);
+    const uint64_t current_epoch = shekyl_archival_settlement_epoch_at_height(chain_height);
+    const uint8_t verify_rc = shekyl_archival_verify_unbond_bond_post(
+      bond.post_kind,
+      static_cast<uint8_t>(bond.holdings.kind),
+      shard_ptr,
+      bond.holdings.shard_ids.size(),
+      bond.bonded_total_atomic,
+      bond.bond_credit,
+      bond.bond_debit,
+      have_record ? 1 : 0,
+      record.bonded_total_atomic,
+      record.bad_intervals.size(),
+      last_served.empty() ? nullptr : last_served.data(),
+      last_served.size(),
+      current_epoch);
+    if (verify_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
+    {
+      MERROR_VER("Archival Unbond verify failed (code " << static_cast<unsigned>(verify_rc)
+        << "): " << archival_bond_post_verify_err_string(verify_rc));
+      return false;
+    }
+    // GF-1 debit authorization (gate-4 §3.5 step 5): a bond_debit must verify
+    // against the record's committed bond_spend_pk — NEVER the identity key
+    // P_pubkey (identity-only invariant, gate-6 §9.6). The v4 record does not
+    // yet commit one: the §9.11 field the Rust wallet wire already carries is
+    // absent from the C++ txin_archival_bond_post serializer and the record
+    // schema, so there is no key a debit may verify against. Fail closed with
+    // the blocker named; this branch flips when the GF-1 wire+record
+    // sub-increment lands (JoinMarket commits bond_spend_pk into the record)
+    // and the debit auth check replaces this rejection.
+    MERROR_VER("Archival Unbond rejected: record commits no bond_spend_pk (GF-1 "
+      "debit authorizer pending the wire+record sub-increment); identity-key "
+      "debit authorization is forbidden");
+    return false;
+  }
+
+  std::vector<uint8_t> existing_pubkey;
+  const bool record_exists = m_db->get_archival_bond_hybrid_pubkey(bond.p_canonical_id, existing_pubkey);
   const uint8_t verify_rc = shekyl_archival_verify_join_market_bond_post(
     bond.post_kind,
     static_cast<uint8_t>(bond.holdings.kind),
@@ -5397,6 +5469,39 @@ leave:
         && shekyl_emission_block_claims_unique(emission_claim_pairs.data(), num_pairs) != 1)
     {
       MERROR_VER("Block " << id << " has duplicate archival emission (P, E) claims");
+      bvc.m_verifivation_failed = true;
+      return_txs_to_pool();
+      return false;
+    }
+  }
+
+  // Block-level bond-post per-P uniqueness pass (gate-4 §3.5): at most one
+  // bond-post vin per P_canonical_id per block, keyed on P alone. Per-tx
+  // verify runs against pre-block DB state, so every same-P same-block pair
+  // (JoinMarket+JoinMarket double-credit, Unbond+Unbond double-debit, mixed
+  // kinds) passes it independently, and the §4.5 conservation audit is NOT a
+  // backstop (a double-credit doubles both sides consistently). C++ only
+  // marshals the block's ids; the duplicate verdict is Rust's (the emission
+  // pass's decision-placement pin).
+  {
+    std::vector<uint8_t> bond_post_ids;
+    for (const auto& tx_pair : txs)
+    {
+      for (const auto& vin : tx_pair.first.vin)
+      {
+        if (!std::holds_alternative<txin_archival_bond_post>(vin))
+          continue;
+        const auto& bond = std::get<txin_archival_bond_post>(vin);
+        const size_t off = bond_post_ids.size();
+        bond_post_ids.resize(off + 32);
+        memcpy(bond_post_ids.data() + off, bond.p_canonical_id.data, 32);
+      }
+    }
+    const size_t num_ids = bond_post_ids.size() / 32;
+    if (num_ids > 0
+        && shekyl_archival_bond_post_block_unique(bond_post_ids.data(), num_ids) != 1)
+    {
+      MERROR_VER("Block " << id << " has multiple archival bond posts for one P");
       bvc.m_verifivation_failed = true;
       return_txs_to_pool();
       return false;

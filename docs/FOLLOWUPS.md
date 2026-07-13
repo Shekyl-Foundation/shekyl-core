@@ -47,6 +47,23 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **GF-1 `bond_spend_pk` wire+record sub-increment — the Unbond enable flip**
+  (added 2026-07-12, Unbond connect wiring). The Unbond verify/connect/pop
+  path is fully wired, but Unbond txs are **verify-rejected fail-closed** at
+  the §3.5 step-5 debit-auth step: a `bond_debit` must verify against the
+  record's committed `bond_spend_pk` (never the identity key — GF-1
+  identity-only invariant), and no record commits one. The §9.11
+  JoinMarket-coupled field exists on the Rust wallet wire (`shekyl-wire`)
+  but is **absent from the C++ `txin_archival_bond_post` serializer and the
+  v4 `ArchivalBondValue`** — a wire divergence that must reconcile anyway
+  (bond posts cannot round-trip wallet→daemon until it does; interacts with
+  the PR-4b daemon bond-post submit battery). Scope: C++ vin gains the
+  JoinMarket-coupled field, record schema v5 commits it at JoinMarket
+  connect, §3.4.1 sig-preimage binds it, debit-auth check replaces the
+  named rejection in `check_archival_bond_post_input`. Consensus wire —
+  one validation surface, own PR (rules 19/42). *Target: V3.0 (genesis
+  gate: without it no archiver can ever exit).*
+
 - **Daemon Axum: onion-as-remote-RPC docs + operator story** (added
   2026-07-10, epee HTTP listener deletion). shekyld no longer exposes
   inbound `--rpc-login` / `--rpc-ssl*`. Local = plaintext loopback;

@@ -404,7 +404,11 @@ On block connect for **JoinMarket:** create `ArchivalBondRecord` (§4.1); credit
 On block connect for **Unbond** (§4.3 "On confirm"; connect fold + pop twin landed
 Rust-native, `shekyl-archival-retention::bond_connect` over
 `shekyl_archival_unbond_connect` / `shekyl_archival_unbond_pop` — rule 20, P2B-8
-implementation locus; C++ dispatch wiring is the follow-on increment):
+implementation locus; **C++ dispatch wiring LANDED**: `add_transaction` Unbond arm →
+`apply_archival_unbond` single writer, `m_archival_bond_unbond_log` pre-image
+journal, `pop_block` → `revert_archival_unbonds_at_height`, verify dispatch in
+`check_archival_bond_post_input` with the Q1/Q2 reverse-cursor anchors via
+`archival_bond_last_served_epochs`):
 
 1. Journal the record's **full pre-image** before mutating (the emission WS-2 §6.3
    shape) — the vin carries the *post*-state, so holdings are not reconstructible
@@ -414,7 +418,13 @@ implementation locus; C++ dispatch wiring is the follow-on increment):
    backlog claims until `W` lapses (`p_slot` burn is a later, separate step).
 3. `total_bonded_atomic -= bond_debit` (§4.5 release row; `circulating` needs no
    explicit write — the refund enters as ordinary hidden vouts, CT-balanced by the
-   `bond_debit` source term; §2.4).
+   `bond_debit` source term; §2.4). **Counter-threading obligation:** the fold
+   returns the new total as an **absolute** post-value, so the dispatch must read
+   the live counter immediately before *each* post (`get → fold → set`, the
+   JoinMarket arm's shape) — a hoisted per-block read would compute every debit
+   from the same block-start total and clobber all but the last write. The
+   per-`P` pass does not cover this (different-`P` posts in one block are
+   legitimate and share the counter).
 4. Append the **clean interval-close** `[E_unbond, E_unbond)` to the interval log
    (F3, zero-length ⇒ `good_through`-inert — see §4.1's landed-representation note);
    backlog emission still verifies within `W`.
@@ -422,15 +432,34 @@ implementation locus; C++ dispatch wiring is the follow-on increment):
 Pop twin (§5): restore the record from the journal pre-image byte-identically
 (carries holdings and the interval log — the clean close vanishes with it) and
 re-credit `total_bonded_atomic`; the fold validates the tip record is the connect's
-product (Exited state + trailing clean close) so a journal desync is loud. Connect
+product (Exited state + trailing clean close) so a journal desync is loud.
+**Reverse-order-pop assumption (named):** an `Exited` record stays slashable
+through the cooldown, so a slash interval appended after the clean close is a
+real case — the trailing entry is then the slash, and the trailing-clean-close
+check holds only because the later slash's revert runs first (`pop_block`
+reverts slashes before the bond journal), restoring the close to the trailing
+position. A reordered pop surfaces as `MissingCleanClose`, loud. Connect
 fold errors are FATAL at the call site, never a soft skip. Verify enforces the
 interval-log codec cap (`IntervalLogFull`) so a tx the connect could not apply
 never verifies — which makes `kMaxBadIntervals` a **genesis-frozen consensus
 constant** (tx validity keys on it; static_assert-pinned against its Rust twin
 `MAX_BOND_BAD_INTERVALS`).
 
-**Block-level bond-post pass (wiring obligation — decision landed, marshaling
-pending):** at most **one bond-post vin per `P_canonical_id` per block**, keyed on
+**GF-1 debit-auth blocker (named, rule 22): Unbond txs remain verify-rejected.**
+§3.5 step 5 requires a `bond_debit` to verify against the record's committed
+`bond_spend_pk`, never the identity key. The §9.11 field the Rust wallet wire
+(`shekyl-wire`) already carries is **absent from the C++ `txin_archival_bond_post`
+serializer and the v4 record schema**, so no record commits a debit authorizer —
+the verify dispatch runs the full Unbond semantic verify, then **fails closed** at
+the auth step with the blocker named. The flip is the GF-1 wire+record
+sub-increment: C++ vin gains the JoinMarket-coupled `bond_spend_pk` (reconciling
+the shekyl-wire divergence), the record commits it at JoinMarket connect (schema
+v5), the §3.4.1 sig-preimage binds it, and the debit-auth check replaces the
+rejection. Until then the connect arm is landed-but-unreachable through consensus
+(exercised by the DB-layer block-path KATs).
+
+**Block-level bond-post pass (LANDED end-to-end):** at most **one bond-post vin
+per `P_canonical_id` per block**, keyed on
 `P` alone, **rejecting the block** — `bond_post_block_unique`
 (`shekyl-archival-retention::bond_post`, over `shekyl_archival_bond_post_block_unique`;
 the emission `(P,E)` pass's sibling, same decision-placement pin: C++ marshals the

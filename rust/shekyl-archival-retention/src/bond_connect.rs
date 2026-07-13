@@ -105,6 +105,15 @@ pub struct UnbondConnect {
     /// The clean interval-close to append (F3): `[E_unbond, E_unbond)`.
     pub interval_close: BadInterval,
     /// `total_bonded_atomic − bond_debit` (§4.5 release row).
+    ///
+    /// **Absolute post-value — thread it per post.** The caller must read the
+    /// live counter immediately before *each* fold (`get → unbond_connect →
+    /// set`, the JoinMarket arm's inline `get → set(get + credit)` shape,
+    /// `blockchain_db.cpp`). A dispatch that hoists one counter read out of a
+    /// multi-bond-post block and applies each fold's absolute would compute
+    /// every debit from the same block-start total and clobber all but the
+    /// last write. The per-`P` block pass does NOT cover this: different-`P`
+    /// posts in one block are legitimate and still share the global counter.
     pub new_total_bonded_atomic: u64,
     /// `== bond_debit == bond_floor(record's current holdings)` (§4.3).
     pub refund_atomic: u64,
@@ -185,6 +194,16 @@ pub enum UnbondPopError {
 /// restore carries the holdings and the interval log (the clean close vanishes
 /// with it), so this fold's job is the counter movement plus the consistency
 /// checks that make a desynced journal loud instead of silently corrupting.
+///
+/// **Reverse-order-pop assumption (named, not emergent):** the
+/// trailing-must-be-clean-close check is correct only because pops run in
+/// reverse connect order. An `Exited` record **stays slashable through the
+/// cooldown**, so a slash interval appended *after* the clean close is a real
+/// case, not a hypothetical — at that point the trailing entry is the slash.
+/// The later slash's revert runs first (`pop_block` reverts slashes before the
+/// bond journal), restoring the clean close to the trailing position before
+/// this fold sees the record. A pop path that reordered those reverts would
+/// surface here as `MissingCleanClose` — loud, not silent.
 pub fn unbond_pop(
     current_record_bonded_total: u64,
     current_record_held_shard_count: usize,

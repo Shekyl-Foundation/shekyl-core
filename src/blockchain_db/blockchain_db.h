@@ -2115,6 +2115,36 @@ public:
   /// connected (§6.3: the naive remove-inverse leaves prune-evicted
   /// already-claimed epochs out of the restored set — the double-mint).
   virtual void revert_archival_emission_claims_at_height(uint64_t block_height);
+  /// Unbond connect writer (gate-4 §4.3 "On confirm"; the Rust fold
+  /// `shekyl_archival_unbond_connect` dictates the entire write set — record
+  /// to the Exited shape, clean interval-close appended, counter debited):
+  /// journals the record's full pre-image first (the emission WS-2 §6.3
+  /// shape — the vin carries the POST-state, so holdings are otherwise
+  /// unreconstructible at pop). Reads the LIVE `total_bonded_atomic`
+  /// internally (per-post get→fold→set threading — a hoisted per-block read
+  /// would clobber across multiple bond posts; §3.5 counter-threading
+  /// obligation). Any fold error is a hard abort, never a soft skip.
+  /// Caller: the bond-post vin connect dispatch (add_transaction).
+  virtual void apply_archival_unbond(uint64_t block_height, const crypto::hash& p_id,
+    uint64_t vin_bond_debit);
+  /// Restore the Unbond pre-image journal rows recorded when `block_height`
+  /// connected, re-crediting `total_bonded_atomic` via the Rust pop fold
+  /// (which validates the tip record is the connect's product — Exited state
+  /// + trailing clean close). Runs AFTER the slash revert in pop_block: an
+  /// Exited record stays slashable through the cooldown, so a later slash
+  /// interval trailing the clean close is a real case, restored to trailing
+  /// position by the slash revert before this fold checks it (§3.5
+  /// reverse-order-pop assumption, named).
+  virtual void revert_archival_unbonds_at_height(uint64_t block_height);
+  /// Unbond verify marshaling (P2B-8 Q1/Q2): each held shard's last-served
+  /// settlement epoch — one reverse-cursor seek per shard over the BE
+  /// composite serve-credit key `P_id ‖ BE64(shard) ‖ BE64(epoch)` — with
+  /// never-served shards omitted (they carry no bit; the Rust fold treats an
+  /// empty result as never-served ⇒ cooldown vacuously elapsed). The fold to
+  /// the whole-record anchor and the cooldown verdict stay Rust-side
+  /// (`whole_record_last_served` via the verify FFI).
+  virtual std::vector<uint64_t> archival_bond_last_served_epochs(
+    const crypto::hash& p_id, const std::vector<uint64_t>& shard_ids) const;
   /// Finalize `R_market` / `Σwork` at settlement-epoch close (`ARCHIVAL_CONSENSUS_STATE.md` §3.3–§3.5).
   virtual void process_archival_epoch_close_at_height(uint64_t block_height);
   /// Revert epoch-close materialization when `block_height` is popped.

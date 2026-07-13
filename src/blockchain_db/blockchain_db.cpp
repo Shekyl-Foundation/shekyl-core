@@ -229,19 +229,36 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
     else if (std::holds_alternative<txin_archival_bond_post>(tx_input))
     {
       const auto& bond = std::get<txin_archival_bond_post>(tx_input);
-      if (bond.post_kind != static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
-        throw std::runtime_error("FATAL: bond-post connect supports JoinMarket only at genesis");
       // F-B5a sibling: the block_heights row for blk_hash does not exist yet
       // at add_transaction time — height() is the connecting block's index.
       const uint64_t block_height = height();
-      const uint64_t join_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
-      put_archival_bond_record(bond.p_canonical_id, bond.hybrid_public_key, join_epoch,
-        bond.bonded_total_atomic, static_cast<uint8_t>(bond.holdings.kind),
-        bond.holdings.shard_ids);
-      const uint64_t bonded_total = get_total_bonded_atomic();
-      if (bond.bond_credit > std::numeric_limits<uint64_t>::max() - bonded_total)
-        throw std::runtime_error("FATAL: total_bonded_atomic overflow on bond credit");
-      set_total_bonded_atomic(bonded_total + bond.bond_credit);
+      if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
+      {
+        const uint64_t join_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
+        put_archival_bond_record(bond.p_canonical_id, bond.hybrid_public_key, join_epoch,
+          bond.bonded_total_atomic, static_cast<uint8_t>(bond.holdings.kind),
+          bond.holdings.shard_ids);
+        const uint64_t bonded_total = get_total_bonded_atomic();
+        if (bond.bond_credit > std::numeric_limits<uint64_t>::max() - bonded_total)
+          throw std::runtime_error("FATAL: total_bonded_atomic overflow on bond credit");
+        set_total_bonded_atomic(bonded_total + bond.bond_credit);
+      }
+      else if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Unbond))
+      {
+        // Unbond connect (gate-4 §4.3 "On confirm"): the single writer
+        // journals the record pre-image, applies the Rust fold's write set
+        // (Exited record + clean interval-close + counter debit, with the
+        // per-post live-counter threading inside), and FATALs on any fold
+        // error. The journal keys on the block's index N = height() (the
+        // F-B5a operand verify's epoch read used); the pop-side revert
+        // converts from its N+1 chain-height convention (see pop_block).
+        apply_archival_unbond(block_height, bond.p_canonical_id, bond.bond_debit);
+      }
+      else
+      {
+        throw std::runtime_error(
+          "FATAL: bond-post connect supports JoinMarket and Unbond only");
+      }
     }
     else if (std::holds_alternative<txin_archival_reward_emission>(tx_input))
     {
@@ -549,6 +566,16 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   // the journal to N + 1 would shift the connect-side settled-epoch operand
   // off verify's at every epoch boundary.
   revert_archival_emission_claims_at_height(removed_block_height - 1);
+  // Unbond pre-image restore (gate-4 §3.5/§5): same journal-key convention
+  // as the emission claims (block index N = removed_block_height - 1), and
+  // deliberately AFTER the slash revert above — an Exited record stays
+  // slashable through the cooldown, so a same-branch slash interval trailing
+  // the clean close is a real case; the slash revert restores the close to
+  // the trailing position before the pop fold checks it (the named
+  // reverse-order-pop assumption). The restored fields (bonded_total,
+  // holdings, interval log) are disjoint from the emission journal's
+  // (claimed set, first_paying), so those two reverts compose in any order.
+  revert_archival_unbonds_at_height(removed_block_height - 1);
   // Mirror of the accrual write in add_block, keyed at the block's INDEX
   // N = removed_block_height - 1 (the claim-journal convention above, not
   // the hook convention). Runs inside the same wtxn as the pop — key
@@ -666,6 +693,10 @@ void BlockchainDB::remove_transaction(const crypto::hash& tx_hash)
     else if (std::holds_alternative<txin_archival_bond_post>(tx_input))
     {
       const auto& bond = std::get<txin_archival_bond_post>(tx_input);
+      // Only JoinMarket pops here (vin-driven: the record is deleted whole).
+      // Unbond pops via the height-keyed pre-image journal in pop_block
+      // (revert_archival_unbonds_at_height) — the vin carries the
+      // post-connect state, so it cannot drive the restore.
       if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
       {
         remove_archival_bond_record(bond.p_canonical_id);
@@ -1459,6 +1490,21 @@ void BlockchainDB::apply_archival_emission_claim(uint64_t /*block_height*/,
 
 void BlockchainDB::revert_archival_emission_claims_at_height(uint64_t /*block_height*/)
 {
+}
+
+void BlockchainDB::apply_archival_unbond(uint64_t /*block_height*/,
+  const crypto::hash& /*p_id*/, uint64_t /*vin_bond_debit*/)
+{
+}
+
+void BlockchainDB::revert_archival_unbonds_at_height(uint64_t /*block_height*/)
+{
+}
+
+std::vector<uint64_t> BlockchainDB::archival_bond_last_served_epochs(
+  const crypto::hash& /*p_id*/, const std::vector<uint64_t>& /*shard_ids*/) const
+{
+  return {};
 }
 
 void BlockchainDB::process_archival_epoch_close_at_height(uint64_t /*block_height*/)
