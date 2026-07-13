@@ -456,7 +456,12 @@ sub-increment: C++ vin gains the JoinMarket-coupled `bond_spend_pk` (reconciling
 the shekyl-wire divergence), the record commits it at JoinMarket connect (schema
 v5), the §3.4.1 sig-preimage binds it, and the debit-auth check replaces the
 rejection. Until then the connect arm is landed-but-unreachable through consensus
-(exercised by the DB-layer block-path KATs).
+(exercised by the DB-layer block-path KATs). Two flip pins (review, 2026-07-12):
+the auth lands as the **shared debit authorizer** (step 5 gates every
+`bond_debit > 0` — `HoldingsUpdate`-drop rides the same check), and the flip
+**swaps reject→auth in one change** pinned by a discriminating KAT (wrong
+`bond_spend_pk` rejects, committed one accepts) — deleting the rejection without
+the real check would go from fail-closed to no-auth.
 
 **Block-level bond-post pass (LANDED end-to-end):** at most **one bond-post vin
 per `P_canonical_id` per block**, keyed on

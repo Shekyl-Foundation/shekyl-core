@@ -61,8 +61,19 @@ sustainability is unaffected by the recalibration.
   JoinMarket-coupled field, record schema v5 commits it at JoinMarket
   connect, §3.4.1 sig-preimage binds it, debit-auth check replaces the
   named rejection in `check_archival_bond_post_input`. Consensus wire —
-  one validation surface, own PR (rules 19/42). *Target: V3.0 (genesis
-  gate: without it no archiver can ever exit).*
+  one validation surface, own PR (rules 19/42). **Two pins from the
+  wiring-increment review (2026-07-12):** (1) build the auth as the
+  **shared debit authorizer**, not Unbond-specific — §3.5 step 5 gates
+  *every* `bond_debit > 0`, and `HoldingsUpdate`-drop (the next P2B-8
+  slice) is also a debit, so scoping it generally unblocks that slice's
+  auth for free; (2) the enable flip must **swap reject→auth in one
+  change, never delete the reject first** — the fail-closed rejection at
+  the `check_archival_bond_post_input` auth step IS the entire auth
+  today, and removing it without the real check in the same change goes
+  from fail-closed to no-auth; the pin is a **discriminating KAT**
+  (wrong `bond_spend_pk` rejects, the committed one accepts), so
+  "enabled" means "authorized," not merely "un-rejected." *Target: V3.0
+  (genesis gate: without it no archiver can ever exit).*
 
 - **Daemon Axum: onion-as-remote-RPC docs + operator story** (added
   2026-07-10, epee HTTP listener deletion). shekyld no longer exposes
