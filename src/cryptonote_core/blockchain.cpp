@@ -5512,7 +5512,13 @@ leave:
           const size_t off = emission_claim_pairs.size();
           emission_claim_pairs.resize(off + 40);
           memcpy(emission_claim_pairs.data() + off, p_canonical_id.data, 32);
-          memcpy(emission_claim_pairs.data() + off + 32, &vin_epochs[e], 8);
+          // The FFI contract is `p_canonical_id[32] || epoch_le[8]` — the Rust
+          // side parses the epoch with u64::from_le_bytes. Emit little-endian
+          // explicitly (identity on LE hosts, byteswap on BE) so the bytes
+          // honor that contract on any target, not just the equality the
+          // current distinctness fold happens to rely on.
+          const uint64_t epoch_le = SWAP64LE(vin_epochs[e]);
+          memcpy(emission_claim_pairs.data() + off + 32, &epoch_le, 8);
         }
       }
     }

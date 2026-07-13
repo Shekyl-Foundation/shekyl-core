@@ -324,9 +324,23 @@ require the `bond_spend_pk` field present (`scheme_id = 1`) and **commit it into
 **Unbond path (G4-1):** clean release of bonded balance when:
 
 1. `P` has initiated exit (decorrelated drain confirmed) **or** is in `Exited` posture, and
-2. **Release cooldown** elapsed: no pending challenge can still slash for epochs after `P`
-   stopped serving — i.e. grace window past `P`'s last served settlement epoch (gate-4;
-   **shorter than `W`**).
+2. **Release cooldown** elapsed: grace window past `P`'s last served settlement epoch
+   (gate-4; **shorter than `W`**), **and**
+3. **Slash settlement** reached the anchor: the slash scheduler's settled watermark
+   (`archival_last_slash_epoch`) is `>=` `P`'s last-served anchor, so every epoch up to
+   the anchor has been slash-processed on still-bonded collateral before the release
+   verifies.
+
+The two-part gate is load-bearing (ratified 2026-07-12). The cooldown alone leaves a
+one-block race: the connect dispatch runs *before* the per-block slash fold
+(`add_transaction` precedes `process_archival_slash_at_height` in `add_block`), so in
+the first block past the anchor epoch's slash deadline an `Unbond` would exit the record
+ahead of the fold that settles it — the settlement gate closes exactly that. Together they
+guarantee: every epoch through the last serve is slash-settled while bonded (a
+held-but-unserved failure at or before the last serve is already slashed); the epochs
+*after* the last serve — at most the cooldown window, unserved by definition, earning
+nothing — are **exit-forgiven by construction**, because slashability ends at the `Unbond`
+connect and the refund is never clawed back.
 
 On confirm: `bond_debit == bonded_total`; refund output(s) to `P`; zero
 `bonded_total_atomic`; decrement `total_bonded_atomic`; append **clean interval-close** to
@@ -433,12 +447,17 @@ Pop twin (§5): restore the record from the journal pre-image byte-identically
 (carries holdings and the interval log — the clean close vanishes with it) and
 re-credit `total_bonded_atomic`; the fold validates the tip record is the connect's
 product (Exited state + trailing clean close) so a journal desync is loud.
-**Reverse-order-pop assumption (named):** an `Exited` record stays slashable
-through the cooldown, so a slash interval appended after the clean close is a
-real case — the trailing entry is then the slash, and the trailing-clean-close
-check holds only because the later slash's revert runs first (`pop_block`
-reverts slashes before the bond journal), restoring the close to the trailing
-position. A reordered pop surfaces as `MissingCleanClose`, loud. Connect
+**Trailing-entry invariant (ratified 2026-07-12):** slashability ends at the
+`Unbond` connect — the slash scheduler only challenges *currently held* shards
+and an `Exited` record holds none — so nothing ever appends after the clean
+close, and the trailing-clean-close check holds unconditionally. (The release
+verify guarantees every epoch through the record's last-served anchor is
+slash-settled *before* the connect; see §4.3's slash-settlement gate.)
+`pop_block` still reverts slashes before the bond journal, but that ordering is
+now a **defensive belt** — a same-block slash on a *different* record is
+routine — not a correctness dependency on a post-close slash to the exiting
+record. A future change that let an interval land after a clean close surfaces
+as `MissingCleanClose`, loud. Connect
 fold errors are FATAL at the call site, never a soft skip. Verify enforces the
 interval-log codec cap (`IntervalLogFull`) so a tx the connect could not apply
 never verifies — which makes `kMaxBadIntervals` a **genesis-frozen consensus

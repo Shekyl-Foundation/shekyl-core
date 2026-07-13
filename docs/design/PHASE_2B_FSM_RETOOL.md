@@ -679,12 +679,29 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
 
 ## Revision history
 
+- **2026-07-13 (d):** **`Unbond` release-gate hardening (review round).** Added
+  the slash-settlement predicate to the release verify — the scheduler's settled
+  watermark (`archival_last_slash_epoch`) must reach `P`'s last-served anchor,
+  closing the one-block race where the connect dispatch precedes the per-block
+  slash fold; a held-but-unserved failure through the anchor is thus slashed on
+  bonded collateral before the exit. This **supersedes the (c) reverse-order-pop
+  assumption**: slashability ends at the `Unbond` connect (an Exited record holds
+  no shards → never a slash candidate), the post-connect exit tail is
+  exit-forgiven (no clawback), and the pop-order slash revert is a defensive
+  belt, not a real-case dependency (`apply_archival_slash_one` now FATALs on a
+  not-held shard). Also: CompleteTree cooldown anchor via the all-shards
+  `P`-prefix scan (`archival_bond_all_last_served_epochs`); block-level GF-1
+  fail-closed belt for the checkpoint fast path; mempool/template dedup of
+  archival block-unique keys (mining-stall vector); serve-credit + `Unbond`
+  same-`P` same-block deliberately allowed.
+
 - **2026-07-12 (c):** **`Unbond` C++ dispatch wiring landed** — `add_transaction`
   Unbond arm → `apply_archival_unbond` (pre-image journal
   `m_archival_bond_unbond_log`, Rust-fold write set, per-post live-counter
   threading — KAT-armed by the two-`P`-one-block test), `pop_block` →
-  `revert_archival_unbonds_at_height` (after the slash revert, per the named
-  reverse-order-pop assumption), verify dispatch in
+  `revert_archival_unbonds_at_height` (after the slash revert — a defensive
+  ordering belt; see (d), which retired the earlier reverse-order-pop
+  assumption), verify dispatch in
   `check_archival_bond_post_input` (Q1/Q2 anchors via the
   `archival_bond_last_served_epochs` reverse-cursor helper), and the per-`P`
   block pass marshaled beside the emission `(P,E)` pass. **Unbond txs remain

@@ -4,6 +4,28 @@
 
 ### Added
 
+- **archival: `Unbond` release-gate hardening + block/template dedup (review
+  round, `feat/bond-fsm-unbond-connect`).** The release cooldown gains a second
+  predicate — `slashes_settled_through`: the slash scheduler's settled watermark
+  (`archival_last_slash_epoch`) must have reached `P`'s last-served anchor, so a
+  held-but-unserved failure at or before the last serve is slash-processed on
+  bonded collateral before the exit verifies. This closes the one-block race
+  where the connect dispatch precedes the per-block slash fold. Epochs after the
+  last serve are exit-forgiven by construction: slashability ends at the `Unbond`
+  connect and the refund is never clawed back (so the pop-order slash revert is a
+  defensive belt, not a real-case dependency; `apply_archival_slash_one` now
+  FATALs on a shard the record does not hold rather than silently no-op). A
+  `CompleteTree` record's cooldown anchor is sourced from an all-shards `P`-prefix
+  serve-credit scan (`archival_bond_all_last_served_epochs`) instead of its empty
+  stored shard list. The block-level pass gains a GF-1 fail-closed belt (any
+  debit-side bond-post kind rejects the block, matching the per-tx rejection the
+  `PER_BLOCK_CHECKPOINT` fast path skips), and the mempool/template fill dedups
+  archival block-unique keys (bond-post `P`, emission `(P,E)`, serve-credit
+  `(P,shard,E)`) so two conflicting txs cannot co-occupy one self-invalid
+  template (a mining-stall vector). A serve-credit + `Unbond` for one `P` in one
+  block is deliberately allowed (served epochs are slash-immune; the re-armed
+  span is the exit-forgiven tail).
+
 - **archival: `Unbond` C++ dispatch wiring — connect arm, pre-image journal,
   pop twin, verify dispatch, per-`P` block pass (gate-4 §3.5/§4.3/§5;
   P2B-8 increment c, `feat/bond-fsm-unbond-connect`).** The
@@ -17,11 +39,13 @@
   (live `get → fold → set` inside the writer) — armed by the
   two-`P`-one-block KAT, which a hoisted per-block read would fail.
   `pop_block` calls `revert_archival_unbonds_at_height` after the slash
-  revert (the named reverse-order-pop assumption: an Exited record stays
-  slashable, so a later slash trailing the clean close is restored to
-  trailing position first); the pop fold validates the Exited shape +
-  trailing close before re-crediting, and the pre-image restores
-  byte-exactly (real-block-path connect/pop KAT). Verify dispatch:
+  revert as a **defensive ordering belt** — slashability ends at the
+  `Unbond` connect (an Exited record holds no shards, so it is never a
+  slash candidate; ratified 2026-07-12), so nothing trails the clean
+  close and the pop fold's trailing-close check holds unconditionally;
+  the fold validates the Exited shape + trailing close before
+  re-crediting, and the pre-image restores byte-exactly (real-block-path
+  connect/pop KAT). Verify dispatch:
   `check_archival_bond_post_input` gains the chain-height operand and an
   Unbond branch marshaling record facts + the P2B-8 Q1/Q2 cooldown
   anchors (`archival_bond_last_served_epochs`: one reverse-cursor seek
