@@ -1427,7 +1427,10 @@ uint64_t connect_block_with_txs(BlockchainDB& db, const std::vector<transaction>
   blk.major_version = 1;
   blk.minor_version = 1;
   blk.timestamp = 1500000000 + connect_height;
-  blk.prev_id = db.get_block_hash_from_height(connect_height - 1);
+  // Guard the genesis case like append_minimal_blocks: height 0 has no
+  // predecessor to hash (connect_height - 1 would underflow).
+  blk.prev_id = connect_height == 0
+    ? crypto::null_hash : db.get_block_hash_from_height(connect_height - 1);
   blk.curve_tree_root = crypto::null_hash;
   blk.nonce = 0;
   transaction miner_tx{};

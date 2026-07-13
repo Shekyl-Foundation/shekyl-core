@@ -1731,9 +1731,21 @@ namespace cryptonote
     // serve-credit (P, shard, E) composite. A template that carried two txs
     // sharing any such key would fail its own block-level pass on connect.
     //
+    // Integer key fields are appended BIG-ENDIAN (shekyl::db::store_be64) —
+    // the archival composite-key convention (SCE-1; db_lmdb.cpp forbids
+    // native-endian composite keys). This ephemeral in-process set would
+    // dedup correctly with any fixed byte order, but keeping every archival
+    // key big-endian removes the endianness question outright and matches
+    // the persisted keys these mirror.
+    //
     // Two-phase: collect the tx's keys first, commit only on full success —
     // a skipped tx must leave no keys behind to over-exclude later
     // candidates.
+    const auto append_be64 = [](std::string& key, uint64_t v) {
+      uint8_t be[8];
+      shekyl::db::store_be64(be, v);
+      key.append(reinterpret_cast<const char*>(be), sizeof(be));
+    };
     std::vector<std::string> tx_keys;
     for (const auto& vin : tx.vin)
     {
@@ -1760,7 +1772,7 @@ namespace cryptonote
         {
           std::string key(1, 'E');
           key.append(p_canonical_id.data, sizeof(p_canonical_id.data));
-          key.append(reinterpret_cast<const char*>(&vin_epochs[e]), sizeof(uint64_t));
+          append_be64(key, vin_epochs[e]);
           tx_keys.push_back(std::move(key));
         }
       }
@@ -1769,8 +1781,8 @@ namespace cryptonote
         const auto& resp = std::get<txin_archival_serve_credit_response>(vin);
         std::string key(1, 'S');
         key.append(resp.p_canonical_id.data, sizeof(resp.p_canonical_id.data));
-        key.append(reinterpret_cast<const char*>(&resp.shard_id), sizeof(uint64_t));
-        key.append(reinterpret_cast<const char*>(&resp.settlement_epoch), sizeof(uint64_t));
+        append_be64(key, resp.shard_id);
+        append_be64(key, resp.settlement_epoch);
         tx_keys.push_back(std::move(key));
       }
     }
