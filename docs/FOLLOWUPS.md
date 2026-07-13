@@ -47,12 +47,20 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **GF-1 `bond_spend_pk` wire+record sub-increment — the Unbond enable flip**
-  (added 2026-07-12, Unbond connect wiring). The Unbond verify/connect/pop
-  path is fully wired, but Unbond txs are **verify-rejected fail-closed** at
-  the §3.5 step-5 debit-auth step: a `bond_debit` must verify against the
-  record's committed `bond_spend_pk` (never the identity key — GF-1
-  identity-only invariant), and no record commits one. The §9.11
+- **GF-1 `bond_spend_pk` wire+record — SEQUENCED PREREQUISITE, the
+  debit-side enable flip (immediate next PR, not deferrable cleanup)**
+  (added 2026-07-12, Unbond connect wiring; re-filed same day — the "V3.0
+  debt" label understated it). **Hard sequencing gate:** §3.5 step 5 pins
+  `bond_spend_pk` as the authorizer for **every** `bond_debit > 0`, so the
+  entire remaining debit-side FSM waits behind this — Unbond is fail-closed
+  now, and `HoldingsUpdate`-drop (`bond_debit = FLOOR`) will fail closed at
+  the same auth step the moment it is wired, for the same missing field.
+  **GF-1 must precede `HoldingsUpdate` by dependency, not convention**
+  (rule-21 criterion: no debit path can enable until the committed
+  authorizer exists; the trigger is already armed — every debit attempt
+  rejects loudly with the blocker named at the
+  `check_archival_bond_post_input` auth step). Fully specified, no design
+  blocker in front of it. The §9.11
   JoinMarket-coupled field exists on the Rust wallet wire (`shekyl-wire`)
   but is **absent from the C++ `txin_archival_bond_post` serializer and the
   v4 `ArchivalBondValue`** — a wire divergence that must reconcile anyway

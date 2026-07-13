@@ -445,7 +445,11 @@ never verifies — which makes `kMaxBadIntervals` a **genesis-frozen consensus
 constant** (tx validity keys on it; static_assert-pinned against its Rust twin
 `MAX_BOND_BAD_INTERVALS`).
 
-**GF-1 debit-auth blocker (named, rule 22): Unbond txs remain verify-rejected.**
+**GF-1 debit-auth blocker (named, rule 22): Unbond txs remain verify-rejected —
+and this is a SEQUENCED PREREQUISITE for the whole debit side, not deferrable
+cleanup.** Step 5 gates every `bond_debit > 0`, so `HoldingsUpdate`-drop fails
+closed at the same auth step the moment it is wired; GF-1 precedes
+`HoldingsUpdate` **by dependency**. It is the immediate next PR.
 §3.5 step 5 requires a `bond_debit` to verify against the record's committed
 `bond_spend_pk`, never the identity key. The §9.11 field the Rust wallet wire
 (`shekyl-wire`) already carries is **absent from the C++ `txin_archival_bond_post`
