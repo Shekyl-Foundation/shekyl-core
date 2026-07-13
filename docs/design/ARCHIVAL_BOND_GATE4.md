@@ -486,6 +486,16 @@ the committed key accepts — Unbond verifies end-to-end — while the identity
 key, a foreign key, and a record committing no key (pre-GF-1 shape) all reject
 fail-closed, never an identity fallback.
 
+**Coverage boundary (named, #302 review):** the selector's soundness rests on
+two load-bearing preconditions **upstream and out of its scope** — the
+vin↔auth **index mapping** (`pqc_auths[bond_index]` is the bond input's auth;
+`pqc_auths.size() == vin.size()` is enforced at classification) and the
+**signature verification itself** (`verify_transaction_pqc_auth` over the
+whole-tx payload against that entry's key). The GF-1 check only pins *which*
+key must be that authorizer. Any change to the pqc-auth indexing or payload
+shape must re-check this seam; the `HoldingsUpdate`-drop slice inherits the
+same preconditions when its `bond_debit > 0` rides this selection.
+
 **Block-level bond-post pass (LANDED end-to-end):** at most **one bond-post vin
 per `P_canonical_id` per block**, keyed on
 `P` alone, **rejecting the block** — `bond_post_block_unique`
