@@ -4584,6 +4584,8 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
     return "full exit must end at empty holdings";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL:
     return "record interval log is full";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING:
+    return "slash scheduler has not settled every epoch through the last-served anchor";
   default:
     return "unknown bond-post verify code";
   }
@@ -4623,14 +4625,23 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
   {
     // Unbond semantic verify (gate-4 §3.5 debit path): marshal the record
     // facts + the P2B-8 Q1/Q2 cooldown anchors (one reverse-cursor seek per
-    // held shard; never-served shards omitted); the fold to the whole-record
-    // anchor and every verdict stay Rust-side.
+    // held shard; never-served shards omitted — a CompleteTree record stores
+    // no shard list, so its anchors come from the all-shards P-prefix scan
+    // instead of folding vacuously from an empty list) + the slash
+    // scheduler's settled watermark (the SLASH_SETTLEMENT_PENDING gate; u64
+    // max = no epoch settled yet). The fold to the whole-record anchor and
+    // every verdict stay Rust-side.
     shekyl::db::ArchivalBondValue record{};
     const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);
     std::vector<uint64_t> last_served;
     if (have_record)
-      last_served = m_db->archival_bond_last_served_epochs(bond.p_canonical_id,
-        record.held_shard_ids);
+    {
+      last_served = record.is_complete_tree()
+        ? m_db->archival_bond_all_last_served_epochs(bond.p_canonical_id)
+        : m_db->archival_bond_last_served_epochs(bond.p_canonical_id,
+            record.held_shard_ids);
+    }
+    const uint64_t last_settled_slash_epoch = m_db->get_archival_last_slash_epoch();
     const uint64_t current_epoch = shekyl_archival_settlement_epoch_at_height(chain_height);
     const uint8_t verify_rc = shekyl_archival_verify_unbond_bond_post(
       bond.post_kind,
@@ -4645,6 +4656,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
       record.bad_intervals.size(),
       last_served.empty() ? nullptr : last_served.data(),
       last_served.size(),
+      last_settled_slash_epoch,
       current_epoch);
     if (verify_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
     {
@@ -5422,20 +5434,60 @@ leave:
     }
   }
 
-  // Block-level emission (P,E) uniqueness pass (E3 gating round §6.2 layer 2).
-  // Per-tx emission verify runs against pre-block DB state (the Q7
-  // frozen-snapshot purity property), so two txs in this block claiming the
-  // same (P, E) each pass verify independently; this pass is the layer that
-  // rejects the block. C++ only marshals the block's claim pairs — one
-  // 40-byte entry (P_canonical_id || epoch_le) per (P, E_i) of every emission
-  // vin — and takes the duplicate verdict from Rust (decision-placement pin,
-  // §9.5 item 6).
+  // Block-level emission (P,E) uniqueness pass (E3 gating round §6.2 layer 2)
+  // and bond-post per-P uniqueness pass (gate-4 §3.5), collected in ONE vin
+  // traversal (block verification is the sync/relay hot path; each pass's
+  // verdict stays separate and Rust-side).
+  //
+  // Per-tx verify runs against pre-block DB state (the Q7 frozen-snapshot
+  // purity property), so two txs in this block claiming the same (P, E) — or
+  // posting the same P's bond twice (JoinMarket+JoinMarket double-credit,
+  // Unbond+Unbond double-debit, mixed kinds) — each pass verify
+  // independently; these passes are the layer that rejects the block. The
+  // §4.5 conservation audit is NOT a backstop (a double-credit doubles both
+  // sides consistently). C++ only marshals pairs/ids; the duplicate verdicts
+  // are Rust's (decision-placement pin, §9.5 item 6).
+  //
+  // Deliberately NOT rejected here (ratified 2026-07-12): a serve-credit
+  // response and an Unbond for the same P in one block — benign under the
+  // settled release semantics (bond_post.rs::bond_post_block_unique docs):
+  // served epochs are bit-immune, the re-armed span is the exit-forgiven
+  // tail, and rejecting would cost an honest exiting P its final earned
+  // credit for zero closed exposure.
   {
     std::vector<uint8_t> emission_claim_pairs;
+    std::vector<uint8_t> bond_post_ids;
     for (const auto& tx_pair : txs)
     {
       for (const auto& vin : tx_pair.first.vin)
       {
+        if (std::holds_alternative<txin_archival_bond_post>(vin))
+        {
+          const auto& bond = std::get<txin_archival_bond_post>(vin);
+          // GF-1 fail-closed belt (gate-4 §3.5 step 5), block-level: the
+          // per-tx debit rejection lives in check_tx_inputs, which the
+          // per-block-checkpoint fast path skips — without this arm a
+          // fast-syncing node would connect an unauthorized debit that a
+          // fully-verifying node rejects (consensus split), and the removed
+          // connect-time FATAL guard is not a substitute (it crashed the
+          // node instead of rejecting the block). No record commits a
+          // bond_spend_pk yet, so every non-JoinMarket (debit-side) kind
+          // fails closed; the GF-1 wire+record sub-increment swaps this arm
+          // to the real bond_spend_pk auth together with the per-tx flip.
+          if (bond.post_kind != static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
+          {
+            MERROR_VER("Block " << id << " has a debit-side archival bond post "
+              "(GF-1 debit authorizer pending; kind "
+              << static_cast<unsigned>(bond.post_kind) << ")");
+            bvc.m_verifivation_failed = true;
+            return_txs_to_pool();
+            return false;
+          }
+          const size_t off = bond_post_ids.size();
+          bond_post_ids.resize(off + 32);
+          memcpy(bond_post_ids.data() + off, bond.p_canonical_id.data, 32);
+          continue;
+        }
         if (!std::holds_alternative<txin_archival_reward_emission>(vin))
           continue;
         const auto& emission = std::get<txin_archival_reward_emission>(vin);
@@ -5472,30 +5524,6 @@ leave:
       bvc.m_verifivation_failed = true;
       return_txs_to_pool();
       return false;
-    }
-  }
-
-  // Block-level bond-post per-P uniqueness pass (gate-4 §3.5): at most one
-  // bond-post vin per P_canonical_id per block, keyed on P alone. Per-tx
-  // verify runs against pre-block DB state, so every same-P same-block pair
-  // (JoinMarket+JoinMarket double-credit, Unbond+Unbond double-debit, mixed
-  // kinds) passes it independently, and the §4.5 conservation audit is NOT a
-  // backstop (a double-credit doubles both sides consistently). C++ only
-  // marshals the block's ids; the duplicate verdict is Rust's (the emission
-  // pass's decision-placement pin).
-  {
-    std::vector<uint8_t> bond_post_ids;
-    for (const auto& tx_pair : txs)
-    {
-      for (const auto& vin : tx_pair.first.vin)
-      {
-        if (!std::holds_alternative<txin_archival_bond_post>(vin))
-          continue;
-        const auto& bond = std::get<txin_archival_bond_post>(vin);
-        const size_t off = bond_post_ids.size();
-        bond_post_ids.resize(off + 32);
-        memcpy(bond_post_ids.data() + off, bond.p_canonical_id.data, 32);
-      }
     }
     const size_t num_ids = bond_post_ids.size() / 32;
     if (num_ids > 0

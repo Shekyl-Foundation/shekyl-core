@@ -749,10 +749,7 @@ struct ArchivalBondUnbondRevertValue {
         if (out.pre_bonded_total == 0)
             return false;
         out.pre_holdings_kind = p[off++];
-        const uint32_t shard_count = (static_cast<uint32_t>(p[off]) << 24)
-            | (static_cast<uint32_t>(p[off + 1]) << 16)
-            | (static_cast<uint32_t>(p[off + 2]) << 8)
-            | static_cast<uint32_t>(p[off + 3]);
+        const uint32_t shard_count = load_be32(p + off);
         off += 4;
         if (shard_count > kMaxHoldings
             || len < off + static_cast<size_t>(shard_count) * 8 + 4)
@@ -761,10 +758,7 @@ struct ArchivalBondUnbondRevertValue {
         out.pre_shard_ids.reserve(shard_count);
         for (uint32_t i = 0; i < shard_count; ++i, off += 8)
             out.pre_shard_ids.push_back(load_be64(p + off));
-        const uint32_t interval_count = (static_cast<uint32_t>(p[off]) << 24)
-            | (static_cast<uint32_t>(p[off + 1]) << 16)
-            | (static_cast<uint32_t>(p[off + 2]) << 8)
-            | static_cast<uint32_t>(p[off + 3]);
+        const uint32_t interval_count = load_be32(p + off);
         off += 4;
         if (interval_count > kMaxBadIntervals
             || len != off + static_cast<size_t>(interval_count) * 16)
@@ -1018,11 +1012,7 @@ struct ArchivalBondValue {
         }
         if (off + 4 > len)
             return false;
-        const uint32_t holdings_count = static_cast<uint32_t>(
-            (static_cast<uint32_t>(p[off]) << 24)
-            | (static_cast<uint32_t>(p[off + 1]) << 16)
-            | (static_cast<uint32_t>(p[off + 2]) << 8)
-            | static_cast<uint32_t>(p[off + 3]));
+        const uint32_t holdings_count = load_be32(p + off);
         off += 4;
         if (holdings_count > kMaxHoldings || off + holdings_count * 8u + 4 > len)
             return false;
@@ -1033,11 +1023,7 @@ struct ArchivalBondValue {
             out.held_shard_ids.push_back(load_be64(p + off));
             off += 8;
         }
-        const uint32_t interval_count = static_cast<uint32_t>(
-            (static_cast<uint32_t>(p[off]) << 24)
-            | (static_cast<uint32_t>(p[off + 1]) << 16)
-            | (static_cast<uint32_t>(p[off + 2]) << 8)
-            | static_cast<uint32_t>(p[off + 3]));
+        const uint32_t interval_count = load_be32(p + off);
         off += 4;
         if (interval_count > kMaxBadIntervals || off + interval_count * 16u + 4 > len)
             return false;
@@ -1052,11 +1038,7 @@ struct ArchivalBondValue {
             off += 8;
             out.bad_intervals.push_back(iv);
         }
-        const uint32_t claimed_count = static_cast<uint32_t>(
-            (static_cast<uint32_t>(p[off]) << 24)
-            | (static_cast<uint32_t>(p[off + 1]) << 16)
-            | (static_cast<uint32_t>(p[off + 2]) << 8)
-            | static_cast<uint32_t>(p[off + 3]));
+        const uint32_t claimed_count = load_be32(p + off);
         off += 4;
         if (claimed_count > kMaxClaimedEpochs || off + claimed_count * 8u + 8 != len)
             return false;

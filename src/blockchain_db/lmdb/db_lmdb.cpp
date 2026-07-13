@@ -5184,6 +5184,89 @@ bool BlockchainLMDB::archival_bond_holds_shard(const crypto::hash& p_id, uint64_
 
 namespace {
 
+// ─── Height-keyed archival journal helpers ─────────────────────────────────
+//
+// Three archival journals (slash log, emission-claim log, unbond log) share
+// the same BE(height)‖BE(seq) row layout and the same three sub-operations:
+// probe the next free seq for a height, read every row at a height, delete
+// every row at a height. `KeyT` is the row-key type (constructed from
+// (height, seq)); the write-txn and dbi are passed in so these stay storage
+// adapters with no consensus logic. The slash log's epoch-marker special seq
+// keeps its own bespoke loop; the emission-claim and unbond logs are the two
+// clean consumers.
+
+// Next unused seq at `height` (linear probe from 0 — one journal holds only
+// the few rows a single block appended).
+template <typename KeyT>
+uint32_t archival_journal_next_seq(MDB_txn* wtxn, MDB_dbi dbi, uint64_t height,
+  const char* ctx)
+{
+  uint32_t seq = 0;
+  for (;; ++seq)
+  {
+    KeyT key(height, seq);
+    MDB_val k = key.as_mdb_val();
+    MDB_val v;
+    const int rc = mdb_get(wtxn, dbi, &k, &v);
+    if (rc == MDB_NOTFOUND)
+      return seq;
+    if (rc)
+      throw0(DB_ERROR(lmdb_error(std::string("Failed to probe ") + ctx + ": ", rc).c_str()));
+  }
+}
+
+// Append one already-encoded row at `height`/`seq`.
+template <typename KeyT>
+void archival_journal_put(MDB_txn* wtxn, MDB_dbi dbi, uint64_t height, uint32_t seq,
+  const std::vector<uint8_t>& encoded, const char* ctx)
+{
+  KeyT key(height, seq);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v = {encoded.size(), const_cast<uint8_t*>(encoded.data())};
+  const int rc = mdb_put(wtxn, dbi, &k, &v, 0);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error(std::string("Failed to append ") + ctx + ": ", rc).c_str()));
+}
+
+// Decode every row at `height` (seq 0.. until the first gap) into `ValT`s.
+template <typename KeyT, typename ValT>
+std::vector<ValT> archival_journal_read(MDB_txn* wtxn, MDB_dbi dbi, uint64_t height,
+  const char* ctx)
+{
+  std::vector<ValT> rows;
+  for (uint32_t seq = 0; ; ++seq)
+  {
+    KeyT key(height, seq);
+    MDB_val k = key.as_mdb_val();
+    MDB_val v;
+    const int rc = mdb_get(wtxn, dbi, &k, &v);
+    if (rc == MDB_NOTFOUND)
+      break;
+    if (rc)
+      throw0(DB_ERROR(lmdb_error(std::string("Failed to read ") + ctx + " on pop: ", rc).c_str()));
+    ValT entry{};
+    if (!ValT::decode(v.mv_data, v.mv_size, entry))
+      throw std::runtime_error(std::string("FATAL: ") + ctx + " decode failed on pop");
+    rows.push_back(std::move(entry));
+  }
+  return rows;
+}
+
+// Delete rows [0, count) at `height`.
+template <typename KeyT>
+void archival_journal_delete(MDB_txn* wtxn, MDB_dbi dbi, uint64_t height, uint32_t count,
+  const char* ctx)
+{
+  for (uint32_t seq = 0; seq < count; ++seq)
+  {
+    KeyT key(height, seq);
+    MDB_val k = key.as_mdb_val();
+    const int rc = mdb_del(wtxn, dbi, &k, nullptr);
+    if (rc)
+      throw0(DB_ERROR(lmdb_error(std::string("Failed to delete ") + ctx + " on pop: ", rc).c_str()));
+  }
+}
+
 // Flatten BadInterval records into the [start, end_exclusive, ...] pair
 // layout expected by the Rust FFI. Storage adapter only; the interval
 // semantics live in shekyl-archival-retention.
@@ -5512,8 +5595,15 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
   else
   {
     const auto it = std::find(shards.begin(), shards.end(), shard_id);
+    // Unreachable from the scheduler: process_archival_slash_for_epoch only
+    // challenges shards the record currently holds, so the shard is always
+    // present here. In particular an Exited record (Unbond connect) holds
+    // nothing and is never a slash candidate — slashability ends at the
+    // connect; the refund is never clawed back (ratified 2026-07-12). Fail
+    // loudly rather than silently no-op (the connect-fold posture); the
+    // HoldingsUpdate-drop slice must revisit when voluntary removal lands.
     if (it == shards.end())
-      return;
+      throw std::runtime_error("FATAL: archival slash apply for a shard the record does not hold");
     shards.erase(it);
     shekyl::db::ArchivalBondValue::BadInterval iv{};
     iv.start_epoch = settlement_epoch;
@@ -5582,6 +5672,14 @@ void BlockchainLMDB::process_archival_slash_for_epoch(uint64_t block_height,
     if (!shekyl::db::ArchivalBondValue::decode(v.mv_data, v.mv_size, bond))
       throw std::runtime_error("FATAL: archival_bond decode failed during slash scan");
 
+    // Only currently held shards are challenged. An Exited record (Unbond
+    // connect: compact-and-empty) therefore never reaches a challenge — by
+    // design, not accident: slashability ends at the Unbond connect, and the
+    // release verify guarantees every epoch through the record's last-served
+    // anchor settled BEFORE the exit (ratified 2026-07-12; the exit-forgiven
+    // tail is release_cooldown.rs's module contract). Slash-emptied records
+    // are excluded the same way, with earlier epochs already settled by the
+    // scheduler's ascending epoch order.
     if (bond.is_complete_tree())
     {
       MDB_cursor* seg_cur = nullptr;
@@ -5844,27 +5942,12 @@ void BlockchainLMDB::apply_archival_emission_claim(uint64_t block_height,
   // one emission per block is legal (distinct P); more than one per (P,
   // block) is foreclosed by the block-level pass, but the probe + the
   // reverse-order restore in the revert keep this correct regardless.
-  uint32_t seq = 0;
-  for (;; ++seq)
-  {
-    shekyl::db::ArchivalEmissionClaimLogKey key(block_height, seq);
-    MDB_val k = key.as_mdb_val();
-    MDB_val v;
-    const int get_result = mdb_get(*m_write_txn, m_archival_emission_claim_log, &k, &v);
-    if (get_result == MDB_NOTFOUND)
-      break;
-    if (get_result)
-      throw0(DB_ERROR(lmdb_error("Failed to probe archival emission claim log: ",
-        get_result).c_str()));
-  }
-  const std::vector<uint8_t> encoded = log_entry.encode();
-  shekyl::db::ArchivalEmissionClaimLogKey key(block_height, seq);
-  MDB_val k = key.as_mdb_val();
-  MDB_val v = {encoded.size(), const_cast<uint8_t*>(encoded.data())};
-  const int put_result = mdb_put(*m_write_txn, m_archival_emission_claim_log, &k, &v, 0);
-  if (put_result)
-    throw0(DB_ERROR(lmdb_error("Failed to append archival emission claim log: ",
-      put_result).c_str()));
+  const uint32_t seq = archival_journal_next_seq<shekyl::db::ArchivalEmissionClaimLogKey>(
+    *m_write_txn, m_archival_emission_claim_log, block_height,
+    "archival emission claim log");
+  archival_journal_put<shekyl::db::ArchivalEmissionClaimLogKey>(
+    *m_write_txn, m_archival_emission_claim_log, block_height, seq, log_entry.encode(),
+    "archival emission claim log");
 }
 
 void BlockchainLMDB::revert_archival_emission_claims_at_height(uint64_t block_height)
@@ -5874,24 +5957,11 @@ void BlockchainLMDB::revert_archival_emission_claims_at_height(uint64_t block_he
   if (!m_write_txn)
     throw std::runtime_error("FATAL: archival emission claim revert requires active write txn");
 
-  std::vector<shekyl::db::ArchivalEmissionClaimRevertValue> rows;
-  for (uint32_t seq = 0; ; ++seq)
-  {
-    shekyl::db::ArchivalEmissionClaimLogKey key(block_height, seq);
-    MDB_val k = key.as_mdb_val();
-    MDB_val v;
-    const int get_result = mdb_get(*m_write_txn, m_archival_emission_claim_log, &k, &v);
-    if (get_result == MDB_NOTFOUND)
-      break;
-    if (get_result)
-      throw0(DB_ERROR(lmdb_error("Failed to read archival emission claim log on pop: ",
-        get_result).c_str()));
-
-    shekyl::db::ArchivalEmissionClaimRevertValue entry{};
-    if (!shekyl::db::ArchivalEmissionClaimRevertValue::decode(v.mv_data, v.mv_size, entry))
-      throw std::runtime_error("FATAL: archival emission claim log decode failed on pop");
-    rows.push_back(std::move(entry));
-  }
+  const std::vector<shekyl::db::ArchivalEmissionClaimRevertValue> rows =
+    archival_journal_read<shekyl::db::ArchivalEmissionClaimLogKey,
+      shekyl::db::ArchivalEmissionClaimRevertValue>(
+      *m_write_txn, m_archival_emission_claim_log, block_height,
+      "archival emission claim log");
 
   // Restore in reverse connect order so the earliest pre-image lands last —
   // correct even if multiple rows exist for the same P at this height.
@@ -5911,15 +5981,9 @@ void BlockchainLMDB::revert_archival_emission_claims_at_height(uint64_t block_he
     put_archival_bond_value(p_id, bond);
   }
 
-  for (uint32_t seq = 0; seq < rows.size(); ++seq)
-  {
-    shekyl::db::ArchivalEmissionClaimLogKey key(block_height, seq);
-    MDB_val k = key.as_mdb_val();
-    const int del_result = mdb_del(*m_write_txn, m_archival_emission_claim_log, &k, nullptr);
-    if (del_result)
-      throw0(DB_ERROR(lmdb_error("Failed to delete archival emission claim log on pop: ",
-        del_result).c_str()));
-  }
+  archival_journal_delete<shekyl::db::ArchivalEmissionClaimLogKey>(
+    *m_write_txn, m_archival_emission_claim_log, block_height,
+    static_cast<uint32_t>(rows.size()), "archival emission claim log");
 }
 
 void BlockchainLMDB::apply_archival_unbond(uint64_t block_height,
@@ -5959,8 +6023,6 @@ void BlockchainLMDB::apply_archival_unbond(uint64_t block_height,
   // bond posts in one block.
   const uint64_t total_bonded = get_total_bonded_atomic();
   const uint64_t unbond_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
-  const uint64_t* shard_ptr = bond.held_shard_ids.empty()
-    ? nullptr : bond.held_shard_ids.data();
   uint64_t post_bonded_total = 0;
   uint8_t post_holdings_kind = 0;
   uint64_t post_held_shard_count = 0;
@@ -5968,7 +6030,7 @@ void BlockchainLMDB::apply_archival_unbond(uint64_t block_height,
   uint64_t close_end = 0;
   uint64_t new_total_bonded = 0;
   const uint8_t fold_rc = shekyl_archival_unbond_connect(
-    bond.bonded_total_atomic, bond.holdings_kind, shard_ptr, bond.held_shard_ids.size(),
+    bond.bonded_total_atomic, bond.holdings_kind, bond.held_shard_ids.size(),
     bond.bad_intervals.size(), vin_bond_debit, total_bonded, unbond_epoch,
     &post_bonded_total, &post_holdings_kind, &post_held_shard_count,
     &close_start, &close_end, &new_total_bonded);
@@ -5994,30 +6056,14 @@ void BlockchainLMDB::apply_archival_unbond(uint64_t block_height,
   put_archival_bond_value(p_id, bond);
   set_total_bonded_atomic(new_total_bonded);
 
-  // Append the journal row at the next free seq for this height (same probe
-  // as the emission claim log; the per-P pass forecloses same-P multiplicity
-  // but distinct-P unbonds per block are legal).
-  uint32_t seq = 0;
-  for (;; ++seq)
-  {
-    shekyl::db::ArchivalBondUnbondLogKey key(block_height, seq);
-    MDB_val k = key.as_mdb_val();
-    MDB_val v;
-    const int get_result = mdb_get(*m_write_txn, m_archival_bond_unbond_log, &k, &v);
-    if (get_result == MDB_NOTFOUND)
-      break;
-    if (get_result)
-      throw0(DB_ERROR(lmdb_error("Failed to probe archival bond unbond log: ",
-        get_result).c_str()));
-  }
-  const std::vector<uint8_t> encoded = log_entry.encode();
-  shekyl::db::ArchivalBondUnbondLogKey key(block_height, seq);
-  MDB_val k = key.as_mdb_val();
-  MDB_val v = {encoded.size(), const_cast<uint8_t*>(encoded.data())};
-  const int put_result = mdb_put(*m_write_txn, m_archival_bond_unbond_log, &k, &v, 0);
-  if (put_result)
-    throw0(DB_ERROR(lmdb_error("Failed to append archival bond unbond log: ",
-      put_result).c_str()));
+  // Append the journal row at the next free seq for this height (the per-P
+  // pass forecloses same-P multiplicity but distinct-P unbonds per block are
+  // legal, so the seq space is shared per height).
+  const uint32_t seq = archival_journal_next_seq<shekyl::db::ArchivalBondUnbondLogKey>(
+    *m_write_txn, m_archival_bond_unbond_log, block_height, "archival bond unbond log");
+  archival_journal_put<shekyl::db::ArchivalBondUnbondLogKey>(
+    *m_write_txn, m_archival_bond_unbond_log, block_height, seq, log_entry.encode(),
+    "archival bond unbond log");
 }
 
 void BlockchainLMDB::revert_archival_unbonds_at_height(uint64_t block_height)
@@ -6027,33 +6073,21 @@ void BlockchainLMDB::revert_archival_unbonds_at_height(uint64_t block_height)
   if (!m_write_txn)
     throw std::runtime_error("FATAL: archival unbond revert requires active write txn");
 
-  std::vector<shekyl::db::ArchivalBondUnbondRevertValue> rows;
-  for (uint32_t seq = 0; ; ++seq)
-  {
-    shekyl::db::ArchivalBondUnbondLogKey key(block_height, seq);
-    MDB_val k = key.as_mdb_val();
-    MDB_val v;
-    const int get_result = mdb_get(*m_write_txn, m_archival_bond_unbond_log, &k, &v);
-    if (get_result == MDB_NOTFOUND)
-      break;
-    if (get_result)
-      throw0(DB_ERROR(lmdb_error("Failed to read archival bond unbond log on pop: ",
-        get_result).c_str()));
-
-    shekyl::db::ArchivalBondUnbondRevertValue entry{};
-    if (!shekyl::db::ArchivalBondUnbondRevertValue::decode(v.mv_data, v.mv_size, entry))
-      throw std::runtime_error("FATAL: archival bond unbond log decode failed on pop");
-    rows.push_back(std::move(entry));
-  }
+  const std::vector<shekyl::db::ArchivalBondUnbondRevertValue> rows =
+    archival_journal_read<shekyl::db::ArchivalBondUnbondLogKey,
+      shekyl::db::ArchivalBondUnbondRevertValue>(
+      *m_write_txn, m_archival_bond_unbond_log, block_height, "archival bond unbond log");
 
   const uint64_t unbond_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
 
-  // Restore in reverse connect order (§5). Reverse-order-pop assumption
-  // (named, gate-4 §3.5): this runs AFTER revert_archival_slashes_at_height
-  // in pop_block — an Exited record stays slashable through the cooldown, so
-  // a later slash interval trailing the clean close is a real case, already
-  // popped back off by the slash revert before the fold below checks the
-  // trailing entry.
+  // Restore in reverse connect order (§5). Trailing-entry invariant (ratified
+  // 2026-07-12, gate-4 §3.5): slashability ends at the Unbond connect — the
+  // slash scheduler only examines currently held shards and an Exited record
+  // holds none — so nothing ever appends after the clean close and the
+  // trailing entry here is always this connect's close. pop_block still runs
+  // revert_archival_slashes_at_height first as a defensive ordering belt; any
+  // future change that let an interval land after a clean close would surface
+  // in the fold below as MISSING_CLEAN_CLOSE, loud.
   for (auto it = rows.rbegin(); it != rows.rend(); ++it)
   {
     crypto::hash p_id{};
@@ -6098,15 +6132,9 @@ void BlockchainLMDB::revert_archival_unbonds_at_height(uint64_t block_height)
     set_total_bonded_atomic(new_total_bonded);
   }
 
-  for (uint32_t seq = 0; seq < rows.size(); ++seq)
-  {
-    shekyl::db::ArchivalBondUnbondLogKey key(block_height, seq);
-    MDB_val k = key.as_mdb_val();
-    const int del_result = mdb_del(*m_write_txn, m_archival_bond_unbond_log, &k, nullptr);
-    if (del_result)
-      throw0(DB_ERROR(lmdb_error("Failed to delete archival bond unbond log on pop: ",
-        del_result).c_str()));
-  }
+  archival_journal_delete<shekyl::db::ArchivalBondUnbondLogKey>(
+    *m_write_txn, m_archival_bond_unbond_log, block_height,
+    static_cast<uint32_t>(rows.size()), "archival bond unbond log");
 }
 
 std::vector<uint64_t> BlockchainLMDB::archival_bond_last_served_epochs(
@@ -6176,6 +6204,109 @@ std::vector<uint64_t> BlockchainLMDB::archival_bond_last_served_epochs(
         || shekyl::db::load_be64(kb + 32) != shard_id)
       continue; // predecessor belongs to another (P, shard): never served
     out.push_back(shekyl::db::load_be64(kb + 40));
+  }
+
+  mdb_cursor_close(cur);
+  TXN_POSTFIX_RDONLY();
+  return out;
+}
+
+std::vector<uint64_t> BlockchainLMDB::archival_bond_all_last_served_epochs(
+  const crypto::hash& p_id) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  // The all-shards form of the last-served marshal, for CompleteTree records
+  // (they store no shard list — the record "holds" every shard). Hop scan
+  // over the same BE composite key `P_id ‖ BE64(shard) ‖ BE64(epoch)`: seek
+  // to each served shard's first row, jump straight to that shard's max
+  // epoch via the `epoch = u64::MAX` probe, record it, then hop to the next
+  // shard's prefix — two seeks per *served* shard, never a row-by-row walk
+  // of a shard's whole epoch history.
+  std::vector<uint64_t> out;
+
+  TXN_PREFIX_RDONLY();
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(m_txn, m_archival_serve_credit, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_serve_credit cursor for all-last-served: ",
+      rc).c_str()));
+
+  uint64_t next_shard = 0;
+  bool shard_probe_wrapped = false;
+  while (!shard_probe_wrapped)
+  {
+    // First row at or past (P, next_shard, 0): the next served shard, if any.
+    shekyl::db::ArchivalServeCreditKey lo_probe(
+      reinterpret_cast<const uint8_t*>(p_id.data), next_shard, 0);
+    MDB_val lo = lo_probe.as_mdb_val();
+    MDB_val k = lo;
+    MDB_val v;
+    rc = mdb_cursor_get(cur, &k, &v, MDB_SET_RANGE);
+    if (rc == MDB_NOTFOUND)
+      break;
+    if (rc)
+    {
+      mdb_cursor_close(cur);
+      throw0(DB_ERROR(lmdb_error("Failed archival_serve_credit forward seek: ", rc).c_str()));
+    }
+    if (k.mv_size != shekyl::db::kArchivalServeCreditKeySize)
+    {
+      mdb_cursor_close(cur);
+      throw std::runtime_error("FATAL: archival_serve_credit key size mismatch at all-last-served");
+    }
+    const auto* kb = static_cast<const uint8_t*>(k.mv_data);
+    if (std::memcmp(kb, p_id.data, 32) != 0)
+      break; // past P's prefix: no more served shards
+    const uint64_t shard_id = shekyl::db::load_be64(kb + 32);
+
+    // This shard's max epoch: predecessor of (P, shard, u64::MAX) — the same
+    // reverse-seek the per-shard form uses; an exact hit IS the max.
+    shekyl::db::ArchivalServeCreditKey hi_probe(
+      reinterpret_cast<const uint8_t*>(p_id.data), shard_id,
+      std::numeric_limits<uint64_t>::max());
+    MDB_val hi = hi_probe.as_mdb_val();
+    k = hi;
+    rc = mdb_cursor_get(cur, &k, &v, MDB_SET_RANGE);
+    if (rc == 0
+        && k.mv_size == hi.mv_size
+        && std::memcmp(k.mv_data, hi.mv_data, k.mv_size) == 0)
+    {
+      out.push_back(std::numeric_limits<uint64_t>::max());
+    }
+    else
+    {
+      if (rc == 0)
+        rc = mdb_cursor_get(cur, &k, &v, MDB_PREV);
+      else if (rc == MDB_NOTFOUND)
+        rc = mdb_cursor_get(cur, &k, &v, MDB_LAST);
+      if (rc)
+      {
+        mdb_cursor_close(cur);
+        throw0(DB_ERROR(lmdb_error("Failed archival_serve_credit reverse seek: ", rc).c_str()));
+      }
+      if (k.mv_size != shekyl::db::kArchivalServeCreditKeySize)
+      {
+        mdb_cursor_close(cur);
+        throw std::runtime_error("FATAL: archival_serve_credit key size mismatch at all-last-served");
+      }
+      kb = static_cast<const uint8_t*>(k.mv_data);
+      // The forward seek above proved at least one (P, shard, E) row exists,
+      // so the predecessor of (P, shard, MAX) is within this shard's prefix.
+      if (std::memcmp(kb, p_id.data, 32) != 0
+          || shekyl::db::load_be64(kb + 32) != shard_id)
+      {
+        mdb_cursor_close(cur);
+        throw std::runtime_error("FATAL: archival_serve_credit reverse seek left the shard prefix");
+      }
+      out.push_back(shekyl::db::load_be64(kb + 40));
+    }
+
+    if (shard_id == std::numeric_limits<uint64_t>::max())
+      shard_probe_wrapped = true;
+    else
+      next_shard = shard_id + 1;
   }
 
   mdb_cursor_close(cur);

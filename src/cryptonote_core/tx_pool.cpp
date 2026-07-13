@@ -46,6 +46,7 @@
 #include "misc_language.h"
 #include "misc_log_ex.h"
 #include "tx_verification_utils.h"
+#include "shekyl/shekyl_ffi.h"
 #include "warnings.h"
 #include "common/perf_timer.h"
 #include "crypto/hash.h"
@@ -1229,6 +1230,7 @@ namespace cryptonote
     uint64_t w = 0;
 
     std::unordered_set<crypto::key_image> k_images;
+    std::unordered_set<std::string> archival_keys;
 
     for (const tx_block_template_backlog_entry& e : tmp)
     {
@@ -1246,6 +1248,11 @@ namespace cryptonote
         if (is_transaction_ready_to_go(meta, e.id, txblob, tx))
         {
           if (have_key_images(k_images, tx))
+            continue;
+          // Same archival block-unique dedup as fill_block_template: a pair
+          // sharing a bond-post P / emission (P, E) / serve-credit key would
+          // make the template self-invalid at its block-level pass.
+          if (!append_archival_block_unique_keys(archival_keys, tx))
             continue;
           append_key_images(k_images, tx);
 
@@ -1715,6 +1722,68 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------------------------
+  bool tx_memory_pool::append_archival_block_unique_keys(std::unordered_set<std::string>& keys, const transaction_prefix& tx)
+  {
+    // Mirrors the block-level archival uniqueness passes
+    // (Blockchain::handle_block_to_main_chain), domain-tagged so the three
+    // key spaces cannot collide: 'B' + P (bond post, keyed on P alone —
+    // gate-4 §3.5), 'E' + P + epoch (emission (P, E) claim), 'S' + the
+    // serve-credit (P, shard, E) composite. A template that carried two txs
+    // sharing any such key would fail its own block-level pass on connect.
+    //
+    // Two-phase: collect the tx's keys first, commit only on full success —
+    // a skipped tx must leave no keys behind to over-exclude later
+    // candidates.
+    std::vector<std::string> tx_keys;
+    for (const auto& vin : tx.vin)
+    {
+      if (std::holds_alternative<txin_archival_bond_post>(vin))
+      {
+        const auto& bond = std::get<txin_archival_bond_post>(vin);
+        std::string key(1, 'B');
+        key.append(bond.p_canonical_id.data, sizeof(bond.p_canonical_id.data));
+        tx_keys.push_back(std::move(key));
+      }
+      else if (std::holds_alternative<txin_archival_reward_emission>(vin))
+      {
+        const auto& emission = std::get<txin_archival_reward_emission>(vin);
+        crypto::hash p_canonical_id{};
+        uint64_t vin_epochs[SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS] = {};
+        size_t vin_epochs_len = 0;
+        const uint8_t extract_rc = shekyl_archival_emission_vin_extract(
+          emission.canonical_bytes.data(), emission.canonical_bytes.size(),
+          reinterpret_cast<uint8_t*>(p_canonical_id.data),
+          vin_epochs, SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS, &vin_epochs_len);
+        if (extract_rc != SHEKYL_EMISSION_VIN_OK || vin_epochs_len == 0)
+          return false; // unparseable claim: the block pass rejects it too
+        for (size_t e = 0; e < vin_epochs_len; ++e)
+        {
+          std::string key(1, 'E');
+          key.append(p_canonical_id.data, sizeof(p_canonical_id.data));
+          key.append(reinterpret_cast<const char*>(&vin_epochs[e]), sizeof(uint64_t));
+          tx_keys.push_back(std::move(key));
+        }
+      }
+      else if (std::holds_alternative<txin_archival_serve_credit_response>(vin))
+      {
+        const auto& resp = std::get<txin_archival_serve_credit_response>(vin);
+        std::string key(1, 'S');
+        key.append(resp.p_canonical_id.data, sizeof(resp.p_canonical_id.data));
+        key.append(reinterpret_cast<const char*>(&resp.shard_id), sizeof(uint64_t));
+        key.append(reinterpret_cast<const char*>(&resp.settlement_epoch), sizeof(uint64_t));
+        tx_keys.push_back(std::move(key));
+      }
+    }
+    for (const std::string& key : tx_keys)
+      if (keys.count(key))
+        return false;
+    // Intra-tx duplicates cannot reach here (per-tx verify rejects them), but
+    // insert() dedups harmlessly regardless.
+    for (std::string& key : tx_keys)
+      keys.insert(std::move(key));
+    return true;
+  }
+  //---------------------------------------------------------------------------------
   void tx_memory_pool::mark_double_spend(const transaction &tx)
   {
     CRITICAL_REGION_LOCAL(m_transactions_lock);
@@ -1815,6 +1884,7 @@ namespace cryptonote
     size_t max_total_weight_v5 = 2 * median_weight - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
     size_t max_total_weight = version >= 5 ? max_total_weight_v5 : max_total_weight_pre_v5;
     std::unordered_set<crypto::key_image> k_images;
+    std::unordered_set<std::string> archival_keys;
 
     LOG_PRINT_L2("Filling block template, median weight " << median_weight << ", " << m_txs_by_fee_and_receive_time.size() << " txes in the pool");
 
@@ -1924,6 +1994,15 @@ namespace cryptonote
       if (have_key_images(k_images, tx))
       {
         LOG_PRINT_L2("  key images already seen");
+        continue;
+      }
+      // Two txs sharing an archival block-unique key (bond-post P, emission
+      // (P, E), serve-credit (P, shard, E)) carry no key images to conflict
+      // on, yet make the template fail its own block-level pass on connect —
+      // the mining-stall vector. First candidate wins the slot.
+      if (!append_archival_block_unique_keys(archival_keys, tx))
+      {
+        LOG_PRINT_L2("  archival block-unique key already seen");
         continue;
       }
 

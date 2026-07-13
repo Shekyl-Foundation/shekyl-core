@@ -568,11 +568,12 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   revert_archival_emission_claims_at_height(removed_block_height - 1);
   // Unbond pre-image restore (gate-4 §3.5/§5): same journal-key convention
   // as the emission claims (block index N = removed_block_height - 1), and
-  // deliberately AFTER the slash revert above — an Exited record stays
-  // slashable through the cooldown, so a same-branch slash interval trailing
-  // the clean close is a real case; the slash revert restores the close to
-  // the trailing position before the pop fold checks it (the named
-  // reverse-order-pop assumption). The restored fields (bonded_total,
+  // AFTER the slash revert above as a defensive ordering belt. Nothing can
+  // actually trail the clean close (ratified 2026-07-12): slashability ends
+  // at the Unbond connect — the scheduler only challenges currently held
+  // shards and an Exited record holds none — so the pop fold's trailing
+  // clean-close check holds unconditionally; a future violation surfaces
+  // there as MISSING_CLEAN_CLOSE, loud. The restored fields (bonded_total,
   // holdings, interval log) are disjoint from the emission journal's
   // (claimed set, first_paying), so those two reverts compose in any order.
   revert_archival_unbonds_at_height(removed_block_height - 1);
@@ -1505,6 +1506,19 @@ std::vector<uint64_t> BlockchainDB::archival_bond_last_served_epochs(
   const crypto::hash& /*p_id*/, const std::vector<uint64_t>& /*shard_ids*/) const
 {
   return {};
+}
+
+std::vector<uint64_t> BlockchainDB::archival_bond_all_last_served_epochs(
+  const crypto::hash& /*p_id*/) const
+{
+  return {};
+}
+
+uint64_t BlockchainDB::get_archival_last_slash_epoch() const
+{
+  // No scheduler state on the base class: the "no epoch settled yet" sentinel,
+  // which fails the release verify closed rather than open.
+  return std::numeric_limits<uint64_t>::max();
 }
 
 void BlockchainDB::process_archival_epoch_close_at_height(uint64_t /*block_height*/)
