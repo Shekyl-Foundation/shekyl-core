@@ -13,7 +13,8 @@ use thiserror::Error;
 
 use crate::bond_floor::bond_floor;
 use crate::bond_wire::{ArchivalBondPostVin, BondPostKind, HoldingsKind};
-use crate::release_cooldown::release_cooldown_elapsed;
+use crate::distinct::all_distinct;
+use crate::release_cooldown::{release_cooldown_elapsed, slashes_settled_through};
 
 #[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
 pub enum BondPostError {
@@ -53,6 +54,8 @@ pub enum BondPostError {
     CooldownNotElapsed,
     #[error("record interval log is full; the connect's clean interval-close cannot append")]
     IntervalLogFull,
+    #[error("slash scheduler has not settled every epoch through the last-served anchor")]
+    SlashSettlementPending,
 }
 
 /// Verify JoinMarket bond-post semantics after wire decode and LMDB substrate read.
@@ -106,7 +109,10 @@ pub fn verify_join_market_bond_post(
 /// record exists for `P_canonical_id`; `last_served_epoch` is the derived
 /// whole-record release-cooldown anchor
 /// ([`crate::release_cooldown::whole_record_last_served`] over the per-shard
-/// reverse-cursor maxima), read at `current_settlement_epoch`.
+/// reverse-cursor maxima — for a `CompleteTree` record the maxima come from the
+/// all-shards `P`-prefix scan, since the record stores no shard list), read at
+/// `current_settlement_epoch`; `last_settled_slash_epoch` is the slash scheduler's
+/// monotone watermark (`None` before any epoch settles).
 ///
 /// The vin's `holdings` / `bonded_total_atomic` are the **post-connect** state
 /// (gate-4 §3.5 debit-path note, ratified P2B-8): a full `Unbond` ends at empty
@@ -124,6 +130,7 @@ pub fn verify_unbond_bond_post(
     record_bonded_total: Option<u64>,
     record_bad_interval_count: usize,
     last_served_epoch: Option<u64>,
+    last_settled_slash_epoch: Option<u64>,
     current_settlement_epoch: u64,
 ) -> Result<(), BondPostError> {
     if vin.post_kind != BondPostKind::Unbond {
@@ -173,10 +180,20 @@ pub fn verify_unbond_bond_post(
     }
 
     // Release cooldown: the grace window past the last served epoch must have
-    // elapsed, so no pending challenge can still slash (gate-4 §4.3; the Gate-6
-    // F-D3/F-D4 gate).
+    // elapsed (gate-4 §4.3; the Gate-6 F-D3/F-D4 gate).
     if !release_cooldown_elapsed(last_served_epoch, current_settlement_epoch) {
         return Err(BondPostError::CooldownNotElapsed);
+    }
+
+    // Slash settlement: the scheduler's watermark must have reached the anchor,
+    // so every epoch up to the last serve has been slash-processed on bonded
+    // collateral before the release verifies. The cooldown alone leaves a
+    // one-block connect-ordering race open (`release_cooldown` module docs).
+    // Together the two checks pin the ratified guarantee (2026-07-12): epochs
+    // through the anchor are settled; the unserved exit tail is forgiven;
+    // slashability ends at the Unbond connect — the refund is never clawed back.
+    if !slashes_settled_through(last_settled_slash_epoch, last_served_epoch) {
+        return Err(BondPostError::SlashSettlementPending);
     }
 
     Ok(())
@@ -200,11 +217,18 @@ pub fn verify_unbond_bond_post(
 /// legitimate multi-post-per-block use, and rejecting outright avoids inviting
 /// intra-block ordering dependence. C++ only marshals the ids; the verdict is
 /// decided here (the emission §9.5 item-6 decision-placement pin).
+///
+/// **Deliberately NOT covered (ratified 2026-07-12): a serve-credit response
+/// and an `Unbond` for the same `P` in one block.** The pair is benign under
+/// the settled release semantics: a served epoch carries a serve bit and is
+/// slash-immune outright, and the epochs the fresh credit would have re-armed
+/// the cooldown over are the unserved exit tail, which is exit-forgiven by
+/// construction (`release_cooldown` module docs). Rejecting the pair would
+/// force an honest exiting `P` to forfeit its final epoch's earned credit or
+/// delay the exit a full cooldown — real cost, zero slashable exposure closed.
 #[must_use]
 pub fn bond_post_block_unique(p_canonical_ids: &[[u8; 32]]) -> bool {
-    let mut sorted = p_canonical_ids.to_vec();
-    sorted.sort_unstable();
-    sorted.windows(2).all(|w| w[0] != w[1])
+    all_distinct(p_canonical_ids)
 }
 
 #[cfg(test)]
@@ -332,6 +356,8 @@ mod tests {
     // it so a re-pin re-derives the cooldown boundary.
     const UNBOND_LAST_SERVED: u64 = 100;
     const UNBOND_CURRENT: u64 = UNBOND_LAST_SERVED + crate::bond_floor::RELEASE_COOLDOWN_EPOCHS;
+    // The scheduler watermark has reached the anchor: epochs ≤ last-served settled.
+    const UNBOND_SETTLED: Option<u64> = Some(UNBOND_LAST_SERVED);
     const RECORD_BONDED: u64 = 2 * ARCHIVAL_BOND_FLOOR_ATOMIC;
 
     /// The post-connect state of a full exit: empty holdings, zero total.
@@ -356,6 +382,7 @@ mod tests {
             Some(RECORD_BONDED),
             0,
             Some(UNBOND_LAST_SERVED),
+            UNBOND_SETTLED,
             UNBOND_CURRENT,
         )
     }
@@ -367,10 +394,48 @@ mod tests {
 
     #[test]
     fn accepts_unbond_when_never_served() {
-        // No serve bit anywhere ⇒ no pending challenge ⇒ cooldown vacuously elapsed.
-        assert!(
-            verify_unbond_bond_post(&valid_unbond_vin(), Some(RECORD_BONDED), 0, None, 0).is_ok()
-        );
+        // No serve bit anywhere ⇒ no anchor: every held-but-unserved epoch either
+        // already settled (slashed while bonded) or falls in the exit-forgiven
+        // tail, with or without a scheduler watermark.
+        assert!(verify_unbond_bond_post(
+            &valid_unbond_vin(),
+            Some(RECORD_BONDED),
+            0,
+            None,
+            None,
+            0
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn rejects_slash_settlement_pending() {
+        // The one-block race (release_cooldown module docs): cooldown elapsed by
+        // epoch distance, but the scheduler watermark has not reached the anchor —
+        // the anchor epoch's deadline block has not folded yet.
+        for watermark in [Some(UNBOND_LAST_SERVED - 1), None] {
+            assert_eq!(
+                verify_unbond_bond_post(
+                    &valid_unbond_vin(),
+                    Some(RECORD_BONDED),
+                    0,
+                    Some(UNBOND_LAST_SERVED),
+                    watermark,
+                    UNBOND_CURRENT,
+                ),
+                Err(BondPostError::SlashSettlementPending)
+            );
+        }
+        // Watermark past the anchor also accepts.
+        assert!(verify_unbond_bond_post(
+            &valid_unbond_vin(),
+            Some(RECORD_BONDED),
+            0,
+            Some(UNBOND_LAST_SERVED),
+            Some(UNBOND_LAST_SERVED + 5),
+            UNBOND_CURRENT,
+        )
+        .is_ok());
     }
 
     #[test]
@@ -384,6 +449,7 @@ mod tests {
                 Some(RECORD_BONDED),
                 MAX_BOND_BAD_INTERVALS,
                 Some(UNBOND_LAST_SERVED),
+                UNBOND_SETTLED,
                 UNBOND_CURRENT,
             ),
             Err(BondPostError::IntervalLogFull)
@@ -393,6 +459,7 @@ mod tests {
             Some(RECORD_BONDED),
             MAX_BOND_BAD_INTERVALS - 1,
             Some(UNBOND_LAST_SERVED),
+            UNBOND_SETTLED,
             UNBOND_CURRENT,
         )
         .is_ok());
@@ -413,6 +480,7 @@ mod tests {
                 None,
                 0,
                 Some(UNBOND_LAST_SERVED),
+                UNBOND_SETTLED,
                 UNBOND_CURRENT
             ),
             Err(BondPostError::RecordMissing)
@@ -424,7 +492,14 @@ mod tests {
         let mut vin = valid_unbond_vin();
         vin.bond_debit = 0;
         assert_eq!(
-            verify_unbond_bond_post(&vin, Some(0), 0, Some(UNBOND_LAST_SERVED), UNBOND_CURRENT),
+            verify_unbond_bond_post(
+                &vin,
+                Some(0),
+                0,
+                Some(UNBOND_LAST_SERVED),
+                UNBOND_SETTLED,
+                UNBOND_CURRENT
+            ),
             Err(BondPostError::NothingToUnbond)
         );
     }
@@ -496,6 +571,7 @@ mod tests {
                 Some(RECORD_BONDED),
                 0,
                 Some(UNBOND_LAST_SERVED),
+                UNBOND_SETTLED,
                 UNBOND_CURRENT - 1,
             ),
             Err(BondPostError::CooldownNotElapsed)

@@ -22,7 +22,7 @@
 
 use thiserror::Error;
 
-use crate::bond_floor::bond_floor;
+use crate::bond_floor::bond_floor_of;
 use crate::bond_wire::{HoldingsDescriptor, HoldingsKind};
 use crate::consensus_state::BadInterval;
 
@@ -37,6 +37,14 @@ use crate::consensus_state::BadInterval;
 /// verify rejects on it, tx validity depends on the value — a change is a
 /// hard fork, not a codec retune.
 pub const MAX_BOND_BAD_INTERVALS: usize = 256;
+
+// The C++ static_assert can only fire on a C++ edit; this is the Rust half of
+// the pair-wise pin (the `bond_floor` idiom), so a Rust-only edit cannot
+// silently diverge verify's IntervalLogFull bound from the codec cap either.
+const _: () = assert!(
+    MAX_BOND_BAD_INTERVALS == 256,
+    "MAX_BOND_BAD_INTERVALS diverged from the kMaxBadIntervals genesis pin"
+);
 
 /// The clean interval-close (gate-4 §4.3 F3): a **zero-length** interval
 /// `[E, E)` appended to the record's interval log at `Unbond` connect.
@@ -124,12 +132,16 @@ pub struct UnbondConnect {
 /// produce the post-connect record state, the interval-log append, and the
 /// `total_bonded_atomic` movement.
 ///
+/// The record's holdings arrive as `(kind, shard count)` — the floor invariant
+/// never reads shard-id values ([`bond_floor_of`]), so the caller marshals the
+/// count instead of copying the record's shard-id array across the FFI.
 /// `record_bad_interval_count` is the record's interval-log length *before*
 /// the append. The record **persists** (state `Exited`) for backlog claims
 /// until `W` lapses — deletion / `p_slot` burn is a later, separate step.
 pub fn unbond_connect(
     record_bonded_total: u64,
-    record_holdings: &HoldingsDescriptor,
+    record_holdings_kind: HoldingsKind,
+    record_held_shard_count: usize,
     record_bad_interval_count: usize,
     vin_bond_debit: u64,
     total_bonded_atomic: u64,
@@ -143,7 +155,7 @@ pub fn unbond_connect(
     }
     // §3.2 maintained invariant on the record being released — a mismatch is
     // record corruption the release must not paper over.
-    if bond_floor(record_holdings) != record_bonded_total {
+    if bond_floor_of(record_holdings_kind, record_held_shard_count) != record_bonded_total {
         return Err(UnbondConnectError::RecordFloorInvariantBroken);
     }
     if record_bad_interval_count >= MAX_BOND_BAD_INTERVALS {
@@ -195,15 +207,17 @@ pub enum UnbondPopError {
 /// with it), so this fold's job is the counter movement plus the consistency
 /// checks that make a desynced journal loud instead of silently corrupting.
 ///
-/// **Reverse-order-pop assumption (named, not emergent):** the
-/// trailing-must-be-clean-close check is correct only because pops run in
-/// reverse connect order. An `Exited` record **stays slashable through the
-/// cooldown**, so a slash interval appended *after* the clean close is a real
-/// case, not a hypothetical — at that point the trailing entry is the slash.
-/// The later slash's revert runs first (`pop_block` reverts slashes before the
-/// bond journal), restoring the clean close to the trailing position before
-/// this fold sees the record. A pop path that reordered those reverts would
-/// surface here as `MissingCleanClose` — loud, not silent.
+/// **Trailing-entry invariant (ratified 2026-07-12, maintainer):** slashability
+/// ends at the `Unbond` connect — the slash scheduler only examines currently
+/// held shards and an `Exited` record holds none, so nothing ever appends after
+/// the clean close and the refund is never clawed back. (The release verify
+/// guarantees every epoch through the last-served anchor settled *before* the
+/// connect: `release_cooldown` module docs.) The trailing entry at pop is
+/// therefore always this connect's clean close. `pop_block` still reverts
+/// slashes before the bond journal — a defensive ordering belt, since a
+/// same-block slash on a *different* record is routine — and any future change
+/// that let an interval land after a clean close would surface here as
+/// `MissingCleanClose`: loud, not silent.
 pub fn unbond_pop(
     current_record_bonded_total: u64,
     current_record_held_shard_count: usize,
@@ -230,7 +244,7 @@ pub fn unbond_pop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC;
+    use crate::bond_floor::{bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC};
     use crate::consensus_state::good_through;
 
     const E_UNBOND: u64 = 42;
@@ -245,9 +259,11 @@ mod tests {
     }
 
     fn ok_connect() -> UnbondConnect {
+        let holdings = record_holdings();
         unbond_connect(
             RECORD_BONDED,
-            &record_holdings(),
+            holdings.kind,
+            holdings.shard_ids.len(),
             0,
             RECORD_BONDED,
             TOTAL_BONDED,
@@ -272,13 +288,10 @@ mod tests {
     #[test]
     fn connect_releases_complete_tree_record() {
         // Foundation-shaped record: floor is one FLOOR regardless of shards.
-        let holdings = HoldingsDescriptor {
-            kind: HoldingsKind::CompleteTree,
-            shard_ids: Vec::new(),
-        };
         let effect = unbond_connect(
             ARCHIVAL_BOND_FLOOR_ATOMIC,
-            &holdings,
+            HoldingsKind::CompleteTree,
+            0,
             0,
             ARCHIVAL_BOND_FLOOR_ATOMIC,
             TOTAL_BONDED,
@@ -324,10 +337,23 @@ mod tests {
         }
     }
 
+    // The tests marshal the fixture holdings the way the FFI caller does:
+    // (kind, shard count), never the id values.
+    const HOLDINGS_KIND: HoldingsKind = HoldingsKind::ShardSetCompact;
+    const HOLDINGS_COUNT: usize = 2;
+
     #[test]
     fn connect_rejects_zero_debit() {
         assert_eq!(
-            unbond_connect(0, &record_holdings(), 0, 0, TOTAL_BONDED, E_UNBOND),
+            unbond_connect(
+                0,
+                HOLDINGS_KIND,
+                HOLDINGS_COUNT,
+                0,
+                0,
+                TOTAL_BONDED,
+                E_UNBOND
+            ),
             Err(UnbondConnectError::DebitZero)
         );
     }
@@ -337,7 +363,8 @@ mod tests {
         assert_eq!(
             unbond_connect(
                 RECORD_BONDED,
-                &record_holdings(),
+                HOLDINGS_KIND,
+                HOLDINGS_COUNT,
                 0,
                 RECORD_BONDED - 1,
                 TOTAL_BONDED,
@@ -354,7 +381,8 @@ mod tests {
         assert_eq!(
             unbond_connect(
                 corrupt,
-                &record_holdings(),
+                HOLDINGS_KIND,
+                HOLDINGS_COUNT,
                 0,
                 corrupt,
                 TOTAL_BONDED,
@@ -369,7 +397,8 @@ mod tests {
         assert_eq!(
             unbond_connect(
                 RECORD_BONDED,
-                &record_holdings(),
+                HOLDINGS_KIND,
+                HOLDINGS_COUNT,
                 0,
                 RECORD_BONDED,
                 RECORD_BONDED - 1,
@@ -384,7 +413,8 @@ mod tests {
         assert_eq!(
             unbond_connect(
                 RECORD_BONDED,
-                &record_holdings(),
+                HOLDINGS_KIND,
+                HOLDINGS_COUNT,
                 MAX_BOND_BAD_INTERVALS,
                 RECORD_BONDED,
                 TOTAL_BONDED,
@@ -398,7 +428,8 @@ mod tests {
     fn connect_appends_below_the_cap() {
         assert!(unbond_connect(
             RECORD_BONDED,
-            &record_holdings(),
+            HOLDINGS_KIND,
+            HOLDINGS_COUNT,
             MAX_BOND_BAD_INTERVALS - 1,
             RECORD_BONDED,
             TOTAL_BONDED,

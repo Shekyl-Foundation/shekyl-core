@@ -35,6 +35,7 @@ pub mod claimed_epochs;
 pub mod consensus_state;
 pub mod conservation;
 pub mod constants;
+pub mod distinct;
 pub mod emission_kat_shape;
 pub mod emission_verify;
 pub mod emission_wire;

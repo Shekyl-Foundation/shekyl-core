@@ -124,12 +124,17 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_HOLDINGS_NOT_EMPTY: u8 = 20;
 /// `Unbond` verify: the record's interval log is at the codec cap, so the
 /// connect's clean interval-close could not append — reject at admission.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL: u8 = 21;
+/// `Unbond` verify: the slash scheduler has not yet settled every epoch through
+/// the record's last-served anchor (the one-block connect-ordering race guard).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING: u8 = 22;
 
 /// `Unbond` connect/pop fold succeeded (gate-4 §4.3 / §5).
 pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_OK: u8 = 0;
 /// A required out-pointer was null.
 pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_NULL_PTR: u8 = 1;
-/// The record shard-id length would overflow the `from_raw_parts` byte bound.
+/// Retired: the connect fold takes the record's held shard COUNT, not a
+/// pointer/length pair, so no slice marshal exists to guard. The value stays
+/// reserved so the family's codes never renumber.
 pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_LEN_OVERFLOW: u8 = 2;
 /// `record_holdings_kind` is not a known enum value.
 pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_HOLDINGS_KIND: u8 = 3;
@@ -486,6 +491,9 @@ fn map_bond_post_error(err: BondPostError) -> u8 {
         BondPostError::DebitNotFullBalance => SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL,
         BondPostError::CooldownNotElapsed => SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED,
         BondPostError::IntervalLogFull => SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL,
+        BondPostError::SlashSettlementPending => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING
+        }
     }
 }
 
@@ -633,9 +641,17 @@ pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
 /// Marshaled facts (C++ owns the LMDB I/O): `record_exists` / `record_bonded_total` /
 /// `record_bad_interval_count` from the bond record; `per_shard_last_served_*` is the
 /// array of the **served** shards' last-served settlement epochs (never-served shards
-/// omitted) from the reverse-cursor seeks over the serve-credit table. The FFI folds
-/// them to the whole-record release-cooldown anchor via [`whole_record_last_served`],
-/// keeping the derivation and the verdict in Rust.
+/// omitted) from the reverse-cursor seeks over the serve-credit table — for a
+/// `CompleteTree` record, from the all-shards `P`-prefix scan. The FFI folds them to
+/// the whole-record release-cooldown anchor via [`whole_record_last_served`], keeping
+/// the derivation and the verdict in Rust.
+///
+/// `last_settled_slash_epoch` is the slash scheduler's monotone watermark
+/// (`archival_last_slash_epoch`), with `u64::MAX` meaning **no epoch settled yet** —
+/// the scheduler's own storage sentinel, translated to `None` here. It gates the
+/// release on every epoch through the anchor being slash-settled
+/// (`release_cooldown::slashes_settled_through`; closes the one-block
+/// connect-ordering race the module docs name).
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_archival_verify_unbond_bond_post(
     post_kind: u8,
@@ -650,6 +666,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_unbond_bond_post(
     record_bad_interval_count: usize,
     per_shard_last_served_ptr: *const u64,
     per_shard_last_served_len: usize,
+    last_settled_slash_epoch: u64,
     current_settlement_epoch: u64,
 ) -> u8 {
     let post_kind = match BondPostKind::from_u8(post_kind) {
@@ -695,11 +712,19 @@ pub unsafe extern "C" fn shekyl_archival_verify_unbond_bond_post(
     } else {
         None
     };
+    // u64::MAX is the scheduler's "no epoch settled yet" storage sentinel
+    // (`get_archival_last_slash_epoch`'s initial value) — never a settled epoch.
+    let last_settled_slash_epoch = if last_settled_slash_epoch == u64::MAX {
+        None
+    } else {
+        Some(last_settled_slash_epoch)
+    };
     match verify_unbond_bond_post(
         &vin,
         record_bonded_total,
         record_bad_interval_count,
         last_served_epoch,
+        last_settled_slash_epoch,
         current_settlement_epoch,
     ) {
         Ok(()) => SHEKYL_ARCHIVAL_BOND_POST_OK,
@@ -722,15 +747,18 @@ pub unsafe extern "C" fn shekyl_archival_verify_unbond_bond_post(
 /// Errors are connect-time invariant breaches (verify already rejected these);
 /// the caller maps any non-OK code to a FATAL abort, never a soft skip.
 ///
+/// The record's holdings arrive as `(kind, held shard count)` — the fold's
+/// floor invariant never reads shard-id values (`bond_floor_of`), so the
+/// caller marshals the count only (the `shekyl_archival_unbond_pop` shape),
+/// not a pointer to the record's shard-id array.
+///
 /// # Safety
-/// `record_shard_ids_ptr` must be valid for `record_shard_ids_len` `u64`s, or
-/// null when the len is 0. All out-pointers must be valid for writes.
+/// All out-pointers must be valid for writes.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_archival_unbond_connect(
     record_bonded_total: u64,
     record_holdings_kind: u8,
-    record_shard_ids_ptr: *const u64,
-    record_shard_ids_len: usize,
+    record_held_shard_count: u64,
     record_bad_interval_count: usize,
     vin_bond_debit: u64,
     total_bonded_atomic: u64,
@@ -754,30 +782,20 @@ pub unsafe extern "C" fn shekyl_archival_unbond_connect(
     let Ok(kind) = HoldingsKind::from_u8(record_holdings_kind) else {
         return SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_HOLDINGS_KIND;
     };
-    let effect = match unsafe {
-        with_bond_post_u64_slice(record_shard_ids_ptr, record_shard_ids_len, |shard_ids| {
-            let record_holdings = HoldingsDescriptor {
-                kind,
-                shard_ids: shard_ids.to_vec(),
-            };
-            unbond_connect(
-                record_bonded_total,
-                &record_holdings,
-                record_bad_interval_count,
-                vin_bond_debit,
-                total_bonded_atomic,
-                unbond_settlement_epoch,
-            )
-        })
-    } {
-        // The marshal helper's codes are bond-post-family values; remap the two
-        // reachable ones onto this family so one code space reads coherently.
-        Err(code) if code == SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR => {
-            return SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_NULL_PTR;
-        }
-        Err(_) => return SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_LEN_OVERFLOW,
-        Ok(Err(e)) => return map_unbond_connect_error(e),
-        Ok(Ok(effect)) => effect,
+    // A u64 count cannot exceed usize on 64-bit targets; saturate on narrower
+    // ones — an over-cap count fails the floor invariant identically.
+    let held_shard_count = usize::try_from(record_held_shard_count).unwrap_or(usize::MAX);
+    let effect = match unbond_connect(
+        record_bonded_total,
+        kind,
+        held_shard_count,
+        record_bad_interval_count,
+        vin_bond_debit,
+        total_bonded_atomic,
+        unbond_settlement_epoch,
+    ) {
+        Err(e) => return map_unbond_connect_error(e),
+        Ok(effect) => effect,
     };
     unsafe {
         *post_bonded_total_out = effect.post_bonded_total;
@@ -2168,61 +2186,81 @@ mod tests {
         // folds this array to the cooldown anchor, so the boundary sits at 102.
         let served = [80u64, 100u64];
         let ok_current = 100 + RELEASE_COOLDOWN_EPOCHS;
+        // The slash scheduler's watermark has reached the anchor.
+        let settled_ok = 100u64;
 
-        // (current, debit, total, holdings_len, record_exists); the post is a
-        // ShardSetCompact `Unbond` with credit 0 and holdings shard 7 when present.
-        let verify =
-            |current: u64, debit: u64, total: u64, holdings_len: usize, record_exists: u8| unsafe {
-                let shard = 7u64;
-                shekyl_archival_verify_unbond_bond_post(
-                    BondPostKind::Unbond as u8,
-                    HoldingsKind::ShardSetCompact as u8,
-                    if holdings_len == 0 {
-                        std::ptr::null()
-                    } else {
-                        std::ptr::from_ref(&shard)
-                    },
-                    holdings_len,
-                    total,
-                    0, // credit
-                    debit,
-                    record_exists,
-                    record_bonded,
-                    0, // record_bad_interval_count
-                    served.as_ptr(),
-                    served.len(),
-                    current,
-                )
-            };
+        // (current, settled, debit, total, holdings_len, record_exists); the post
+        // is a ShardSetCompact `Unbond` with credit 0 and holdings shard 7 when
+        // present.
+        let verify = |current: u64,
+                      settled: u64,
+                      debit: u64,
+                      total: u64,
+                      holdings_len: usize,
+                      record_exists: u8| unsafe {
+            let shard = 7u64;
+            shekyl_archival_verify_unbond_bond_post(
+                BondPostKind::Unbond as u8,
+                HoldingsKind::ShardSetCompact as u8,
+                if holdings_len == 0 {
+                    std::ptr::null()
+                } else {
+                    std::ptr::from_ref(&shard)
+                },
+                holdings_len,
+                total,
+                0, // credit
+                debit,
+                record_exists,
+                record_bonded,
+                0, // record_bad_interval_count
+                served.as_ptr(),
+                served.len(),
+                settled,
+                current,
+            )
+        };
 
-        // Accept: empty holdings, zero post-total, full debit, cooldown elapsed.
+        // Accept: empty holdings, zero post-total, full debit, cooldown elapsed,
+        // anchor slash-settled.
         assert_eq!(
-            verify(ok_current, record_bonded, 0, 0, 1),
+            verify(ok_current, settled_ok, record_bonded, 0, 0, 1),
             SHEKYL_ARCHIVAL_BOND_POST_OK
         );
         // One epoch short — proves the anchor fold (max = 100, boundary 102).
         assert_eq!(
-            verify(ok_current - 1, record_bonded, 0, 0, 1),
+            verify(ok_current - 1, settled_ok, record_bonded, 0, 0, 1),
             SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED
+        );
+        // Cooldown elapsed but the anchor epoch not yet slash-settled — the
+        // one-block connect-ordering race guard.
+        assert_eq!(
+            verify(ok_current, settled_ok - 1, record_bonded, 0, 0, 1),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING
+        );
+        // u64::MAX is the "no epoch settled yet" storage sentinel, not a watermark.
+        assert_eq!(
+            verify(ok_current, u64::MAX, record_bonded, 0, 0, 1),
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING
         );
         // Record missing.
         assert_eq!(
-            verify(ok_current, record_bonded, 0, 0, 0),
+            verify(ok_current, settled_ok, record_bonded, 0, 0, 0),
             SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING
         );
         // Non-empty holdings with zero post-total → floor mismatch.
         assert_eq!(
-            verify(ok_current, record_bonded, 0, 1, 1),
+            verify(ok_current, settled_ok, record_bonded, 0, 1, 1),
             SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_FLOOR_MISMATCH
         );
         // Consistent post-state but non-zero total → partial, not full exit.
         assert_eq!(
-            verify(ok_current, floor, floor, 1, 1),
+            verify(ok_current, settled_ok, floor, floor, 1, 1),
             SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_UNBOND
         );
         // Debit != the record's current bonded_total.
         assert_eq!(
-            verify(ok_current, floor, 0, 0, 1),
+            verify(ok_current, settled_ok, floor, 0, 0, 1),
             SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL
         );
 
@@ -2245,6 +2283,7 @@ mod tests {
                 0,                // record_bad_interval_count
                 std::ptr::null(), // per_shard_last_served_ptr (null)
                 1,                // per_shard_last_served_len > 0
+                u64::MAX,         // last_settled_slash_epoch (none-settled sentinel)
                 ok_current,
             )
         };
@@ -2274,6 +2313,7 @@ mod tests {
                 0,
                 std::ptr::null(),
                 0,
+                u64::MAX,
                 0,
             )
         };
@@ -2293,6 +2333,7 @@ mod tests {
                 0,
                 std::ptr::from_ref(&dummy),
                 usize::MAX,
+                u64::MAX,
                 0,
             )
         };
@@ -2321,6 +2362,7 @@ mod tests {
                 0, // record_bad_interval_count
                 std::ptr::null(),
                 0,
+                u64::MAX,
                 0,
             )
         };
@@ -2349,8 +2391,7 @@ mod tests {
             shekyl_archival_unbond_connect(
                 record_bonded,
                 HoldingsKind::ShardSetCompact as u8,
-                shards.as_ptr(),
-                shards.len(),
+                shards.len() as u64,
                 0,
                 record_bonded,
                 total_bonded,
@@ -2409,8 +2450,7 @@ mod tests {
                 shekyl_archival_unbond_connect(
                     record_total,
                     HoldingsKind::ShardSetCompact as u8,
-                    shards.as_ptr(),
-                    shards.len(),
+                    shards.len() as u64,
                     bad_count,
                     debit,
                     total,
@@ -2455,13 +2495,12 @@ mod tests {
             SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_INTERVAL_LOG_FULL
         );
 
-        // Null out-pointer and hostile shard length reject before any write.
+        // Null out-pointer rejects before any write.
         let rc = unsafe {
             shekyl_archival_unbond_connect(
                 record_bonded,
                 HoldingsKind::ShardSetCompact as u8,
-                shards.as_ptr(),
-                shards.len(),
+                shards.len() as u64,
                 0,
                 record_bonded,
                 record_bonded,
@@ -2475,14 +2514,16 @@ mod tests {
             )
         };
         assert_eq!(rc, SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_NULL_PTR);
+        // A hostile over-cap shard count cannot satisfy the floor invariant
+        // (bond_floor_of returns 0 past MAX_HOLDINGS_SHARDS), so it maps to the
+        // record-corruption arm rather than needing a pointer-length guard.
         let mut sink = 0u64;
         let mut kind_sink = 0u8;
         let rc = unsafe {
             shekyl_archival_unbond_connect(
                 record_bonded,
                 HoldingsKind::ShardSetCompact as u8,
-                shards.as_ptr(),
-                usize::MAX,
+                u64::MAX,
                 0,
                 record_bonded,
                 record_bonded,
@@ -2495,7 +2536,7 @@ mod tests {
                 &raw mut sink,
             )
         };
-        assert_eq!(rc, SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_LEN_OVERFLOW);
+        assert_eq!(rc, SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_RECORD_FLOOR_INVARIANT);
     }
 
     #[test]
