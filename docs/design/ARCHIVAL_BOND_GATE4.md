@@ -635,11 +635,17 @@ formula is genesis-frozen in `shekyl-archival-retention::bond_duration`:
 `bond_duration(age) = BASE·(1 + SCALE·age)` (integer-canonical, round-half-up, floored
 at 1; `BOND_DURATION_{BASE_EPOCHS,AGE_SCALE}` = 4/4 provisional, config-generated), with
 `age = shard_age_milli` **evaluated at the shard's add-epoch settlement close**
-`H_close(add_epoch)` — the same realization the reward curve uses (the age-realization
-invariant, `ARCHIVAL_TIMING_CONSTANTS.md` §1). The `ShardAgeAtAdd` newtype makes
-age-at-drop and raw-block-height evaluation unrepresentable at the type; the integer
-formula is proven bit-identical to the sim's f64 model over the full age sweep (integer
-authoritative). The drop verify/connect that *consumes* this gate lands in slice C.
+`H_close(add_epoch)`. **Age-realization invariant (STATED, genesis-frozen):** the sim
+feeds one age variable into both the scarcity/reward curve and the retention lock, and
+consensus already realizes that age as `shard_age_milli` in the reward path
+(`scarcity_milli`), so retention **consumes the same realization** — `bond_duration` and
+`scarcity` read one age, `shard_age_milli @ H_close(add)`; forking a separate age for
+retention would split a normalization the sim never split. The freeze rests on this
+stated invariant, not on the implementation (full statement + the sim source trace:
+`ARCHIVAL_TIMING_CONSTANTS.md` §1). The `ShardAgeAtAdd` newtype makes age-at-drop and
+raw-block-height evaluation unrepresentable at the type; the integer formula is proven
+bit-identical to the sim's f64 model over the full age sweep (integer authoritative). The
+drop verify/connect that *consumes* this gate lands in slice C.
 
 **Safety for deferral:** `work_P(E)` is derived from per-`(P,s,E)` **retention bits**, not
 the mutable holdings descriptor. HoldingsUpdate cannot corrupt historical work; descriptor =

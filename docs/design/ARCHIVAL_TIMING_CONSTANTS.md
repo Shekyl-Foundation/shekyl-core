@@ -41,6 +41,19 @@ pair is the sim-exercised H2 plateau arm and is re-confirmed or re-pinned when t
 `fetch_latency_per_unit`. Drift within the plateau band (scale ∈ [2,8]) amends this table only;
 a shape change requires the L10 reversion clause.
 
+**Rule-21 reopen-at-seal (explicit — the freeze landed the shape, NOT these values).**
+The HoldingsUpdate slice-A freeze (2026-07-14, `bond_duration.rs`) sealed the **shape**
+(`BASE·(1 + SCALE·age)`) and the **age-realization** (`shard_age_milli @ H_close(add)`,
+shared with reward). It did **not** seal `4/4` — do not read "slice A shipped" as "the
+numerics are final." **Reopen criterion (rule-21):** the testnet
+`fetch_latency_per_unit` measurement re-confirms or re-pins the pair; a value within the
+plateau band `scale ∈ [2,8]` amends this table only (no code change — the constant is
+config-generated), while a change outside the band, or to the shape, invokes the L10
+reversion clause. The full-sweep integer↔sim parity KAT
+(`bond_duration_matches_sim_f64_over_full_age_sweep`) reads the config constants, so it
+**re-runs automatically on any re-pin** and fails loudly if a new pair introduces a
+round-half divergence — the seal check is executable, not a manual review.
+
 **Age-realization invariant (GENESIS-FROZEN, pinned 2026-07-14).** The `age ∈ [0,1]`
 that `bond_duration` consumes is the **same age normalization the reward curve consumes**,
 realized in consensus as [`shard_age_milli`](../../rust/shekyl-archival-retention/src/consensus_state.rs)

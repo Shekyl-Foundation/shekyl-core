@@ -84,10 +84,13 @@ impl ShardAgeAtAdd {
     /// its segment **freeze height**, deriving `close = H_close(add_epoch)` — the same
     /// settlement-close height the reward path feeds `shard_age_milli`.
     ///
-    /// `H_close(E) = (E + 1)·SEB` ([`epoch_close_height`]); on the unreachable overflow
-    /// (epochs are `height/SEB`, so an epoch large enough to overflow `(E+1)·SEB` is
-    /// itself unreachable) the close saturates to `u64::MAX`, which yields age ≈ max —
-    /// fail-safe toward the *longest* commitment (hardest to drop), never the shortest.
+    /// `H_close(E) = (E + 1)·SEB` ([`epoch_close_height`]). `epoch_close_height` returns
+    /// `None` only on the overflow of `(E+1)·SEB`, which is unreachable: `add_epoch`
+    /// comes from the v6 record and equals `height/SEB`, so an epoch large enough to
+    /// overflow is itself unreachable. A `debug_assert` fails loudly in tests/CI if a
+    /// substrate bug ever produces such an epoch (so it surfaces rather than hiding);
+    /// release saturates the close to `u64::MAX`, which yields age ≈ max — fail-safe
+    /// toward the *longest* commitment (hardest to drop), never the shortest.
     ///
     /// A freshly-frozen shard added immediately gets age ≈ 0, i.e.
     /// `bond_duration = BASE` — the genuine youngest-deep minimum. (The `close ≤ freeze`
@@ -97,7 +100,14 @@ impl ShardAgeAtAdd {
     #[must_use]
     pub fn from_add(add_settlement_epoch: u64, freeze_height: u64) -> Self {
         let seb = effective_settlement_epoch_blocks();
-        let close = epoch_close_height(add_settlement_epoch).unwrap_or(u64::MAX);
+        let close_opt = epoch_close_height(add_settlement_epoch);
+        debug_assert!(
+            close_opt.is_some(),
+            "ShardAgeAtAdd::from_add: H_close({add_settlement_epoch}) overflowed — an \
+             add-epoch this large is unreachable from the v6 record; a substrate bug \
+             produced it"
+        );
+        let close = close_opt.unwrap_or(u64::MAX);
         Self {
             age_milli: shard_age_milli(close, freeze_height, seb),
         }
