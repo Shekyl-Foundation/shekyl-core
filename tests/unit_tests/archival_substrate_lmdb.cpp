@@ -104,8 +104,12 @@ TEST(archival_substrate_lmdb, bond_record_roundtrip)
   ASSERT_TRUE(db.get_archival_bond_hybrid_pubkey(p_id, out_pubkey));
   EXPECT_EQ(out_pubkey, pubkey);
   EXPECT_EQ(db.archival_bond_join_epoch(p_id), 3u);
-  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 42, 0));
-  EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 99, 0));
+  // Held-since-add semantics (P2B-7 Pin 5): a tip-held shard answers held only
+  // for heights in epochs strictly after its add epoch (= the join epoch 3
+  // here), never for the forfeited partial add epoch or before it.
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 42, shekyl_archival_epoch_open_height(4)));
+  EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 42, 0));
+  EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 99, shekyl_archival_epoch_open_height(4)));
   EXPECT_TRUE(db.archival_bond_good_through(p_id, 4));
   EXPECT_FALSE(db.archival_bond_good_through(p_id, 3));
   EXPECT_FALSE(db.archival_bond_good_through(p_id, 5));
@@ -1224,20 +1228,24 @@ TEST(archival_substrate_lmdb, bond_v4_claimed_set_survives_reorg_revert)
 // acceptance (blockchain.cpp, check_archival_serve_credit_input) and slash
 // eligibility (db_lmdb.cpp, archival_challenge_failed_at_height) — pass the
 // challenge fire height, so the accessor's boundary is the shared consensus
-// boundary for reward and punishment alike. Holdings only shrink post-join at
-// the current substrate (slash-apply's erase/demotion is the sole mutation,
-// journaled per-block in the slash log), so the accessor reconstructs
-// "held-at-height" from tip holdings plus logged removals strictly above
-// at_height. The inverse boundary case — held at tip but NOT at h_fire — is
-// structurally unrepresentable until a holdings-add path (HoldingsUpdate)
-// lands; that path's pre-flight owns extending the reconstruction.
+// boundary for reward and punishment alike. Under mutable holdings
+// (HoldingsUpdate; P2B-7 Pin 4/5) the accessor reconstructs "held-at-height"
+// from THREE sources: tip holdings bounded below by the shard's v6 add-epoch
+// (held only in epochs strictly after it — the per-shard E_add + 1 rule, the
+// partial add epoch forfeited for credit and challenge alike), slash-log
+// removals strictly above at_height (bounded by the row's journaled
+// add-epoch the same way), and — deliberately — NOTHING for voluntary drops:
+// grace-tail keeps no drop interval (ratified P2B-7 Pin 2), so a dropped
+// shard answers not-held everywhere and its drop epoch's pending acceptances
+// are forfeited, the symmetric twin of the forfeited add epoch.
 
 // Acceptance-gate KAT, accessor boundary (§5.6 #2): a shard removed by a
-// slash at height H was held at every height < H and not held at ≥ H.
-// This is the exact read the serve-credit acceptance gate performs at
+// slash at height H was held at every post-add-epoch height < H and not held
+// at ≥ H. This is the exact read the serve-credit acceptance gate performs at
 // h_fire, and the read the slash-eligibility mirror bottoms out in — the
 // tip-read defect ("drop after fire escapes accounting") is dead only if
-// this boundary holds.
+// this boundary holds. Fixture: add epoch 2 (bond_with_v4_fields), so held
+// heights start at epoch 3 (kSebFixture * 3); the slash lands mid-epoch 3.
 TEST(archival_substrate_lmdb, holds_shard_honors_at_height_across_slash_removal)
 {
   TempLMDB fixture;
@@ -1245,7 +1253,8 @@ TEST(archival_substrate_lmdb, holds_shard_honors_at_height_across_slash_removal)
   BlockchainLMDB& lmdb = fixture.db;
   const crypto::hash p_id = make_hash(0x76);
   const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
-  const uint64_t slash_height = 6000;
+  const uint64_t held_from = shekyl_archival_epoch_open_height(3); // add epoch 2
+  const uint64_t slash_height = held_from + 6000;
 
   db.put_archival_bond_value(p_id, bond_with_v4_fields({7, 9}, 2 * floor));
   db.set_total_bonded_atomic(2 * floor);
@@ -1262,17 +1271,25 @@ TEST(archival_substrate_lmdb, holds_shard_honors_at_height_across_slash_removal)
   ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
   EXPECT_FALSE(read.holds_shard(7));
 
-  // Held at every height strictly below the slash …
+  // Held at every post-add-epoch height strictly below the slash …
   EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 7, slash_height - 1));
-  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 7, 0));
-  // … and not held at the slash height or after (holdings at h are the
-  // post-connect state of block h).
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 7, held_from));
+  // … not held at the slash height or after (holdings at h are the
+  // post-connect state of block h) …
   EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 7, slash_height));
   EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 7, slash_height + 1000));
+  // … and not held at/before its add epoch, even though the slash row is
+  // strictly above (the row's journaled add-epoch bounds the reconstruction
+  // exactly as the tip-held arm's bound does).
+  EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 7, held_from - 1));
+  EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 7, 0));
 
-  // A shard never slashed reads from tip at any height.
-  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 9, 0));
+  // A shard never slashed reads from tip at any post-add-epoch height — and
+  // answers not-held for its (forfeited) add epoch and earlier.
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 9, held_from));
   EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 9, slash_height + 1000));
+  EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 9, held_from - 1));
+  EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 9, 0));
   // Max-height sentinel: nothing exists strictly above it, so the answer is
   // the tip state — and the log-scan start key must not wrap to 0 and
   // resurrect the slashed shard from the whole-log scan.
@@ -1280,6 +1297,38 @@ TEST(archival_substrate_lmdb, holds_shard_honors_at_height_across_slash_removal)
   EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 9, std::numeric_limits<uint64_t>::max()));
   // A shard never held is not resurrected by someone else's log rows.
   EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 42, slash_height - 1));
+}
+
+// P2B-7 Pin 5 boundary, the HoldingsUpdate-add case this reconstruction
+// exists for: a shard HU-added mid-life is held from its OWN add epoch's
+// close, not from join — so a challenge whose fire height precedes the add
+// (or lands inside the forfeited add epoch) reads not-held, and no unjust
+// slash or add-epoch serve credit is possible. Mirrors the state the connect
+// writes: held_shard_ids grows, shard_add_epochs carries the new epoch.
+TEST(archival_substrate_lmdb, holds_shard_bounds_added_shard_by_its_add_epoch)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  const crypto::hash p_id = make_hash(0x78);
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+
+  // Joined at epoch 2 with shard 7; shard 9 HU-added at epoch 5.
+  shekyl::db::ArchivalBondValue bond = bond_with_v4_fields({7, 9}, 2 * floor);
+  bond.shard_add_epochs = {2, 5};
+  db.put_archival_bond_value(p_id, bond);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // The join-time shard is held from epoch 3 on.
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 7, shekyl_archival_epoch_open_height(3)));
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 7, shekyl_archival_epoch_open_height(5)));
+  // The added shard is held only from epoch 6 (add epoch 5 forfeited): a fire
+  // height in epochs 3-5 — before or during the add — answers not-held.
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 9, shekyl_archival_epoch_open_height(6)));
+  EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 9, shekyl_archival_epoch_open_height(5)));
+  EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 9,
+    shekyl_archival_epoch_close_height(5)));
+  EXPECT_FALSE(db.archival_bond_holds_shard(p_id, 9, shekyl_archival_epoch_open_height(3)));
 }
 
 // Complete-tree demotion reconstruction: the slash cleared *every* holding,
@@ -1357,8 +1406,10 @@ TEST(archival_substrate_lmdb, slash_revert_restores_single_shard_compact_bond)
   EXPECT_EQ(read.held_shard_ids, std::vector<uint64_t>({7}));
   EXPECT_EQ(read.bonded_total_atomic, 2 * floor);
   // The revert also consumed the log row: reconstruction no longer sees a
-  // removal, so as-of-height reads fall through to (restored) tip.
-  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 7, slash_height + 1));
+  // removal, so as-of-height reads fall through to (restored) tip — probed at
+  // a post-add-epoch height (held-since-add semantics; the fixture's add
+  // epoch is 2).
+  EXPECT_TRUE(db.archival_bond_holds_shard(p_id, 7, shekyl_archival_epoch_open_height(3)));
 }
 
 // Complete-tree pop-revert restores the demotion from the recorded pre-kind

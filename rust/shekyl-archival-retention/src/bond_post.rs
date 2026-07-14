@@ -83,6 +83,11 @@ pub enum BondPostError {
     HoldingsUpdateDropFloorMismatch,
     #[error("HoldingsUpdate-drop shard is within its bond_duration retention horizon")]
     HoldingsUpdateDropWithinHorizon,
+    #[error(
+        "HoldingsUpdate requires a Bonded record (bonded collateral and at least one \
+         held shard); an Exited or slash-emptied record re-enters via JoinMarket/Rebond"
+    )]
+    HoldingsUpdateRecordNotBonded,
 }
 
 /// The single-shard set difference `post ∖ current` when `post` grows `current` by
@@ -138,6 +143,45 @@ pub(crate) fn single_shard_diff(current: &[u64], post: &[u64]) -> SingleDiff {
     }
 }
 
+/// Shared `HoldingsUpdate` admission prologue, both directions (the add and drop
+/// verifies below): post-kind pin, record existence, the ShardSetCompact pins on
+/// record and post, and the **Bonded-state gate** (P2B-7 Pin 1: `HoldingsUpdate`
+/// is `Bonded → Bonded`). Returns the record's current `bonded_total` for the
+/// direction-specific arithmetic.
+///
+/// The Bonded gate is load-bearing, not a belt: without it an **Exited** record
+/// (post-`Unbond`: zero total, empty holdings, zero-length clean close — which
+/// `good_through` excludes nothing for) passes every add gate and becomes a
+/// JoinMarket-bypassing resurrection path whose connect then throws on the
+/// empty-pre-image journal encode — a verify-valid tx no block can connect
+/// (chain-stall vector). Re-entry after an exit or a full slash is
+/// `JoinMarket`/`Rebond`, never a voluntary adjustment.
+fn holdings_update_prologue(
+    vin: &ArchivalBondPostVin,
+    record_bonded_total: Option<u64>,
+    record_holdings_kind: HoldingsKind,
+    record_held_shard_ids: &[u64],
+) -> Result<u64, BondPostError> {
+    if vin.post_kind != BondPostKind::HoldingsUpdate {
+        return Err(BondPostError::PostKindNotHoldingsUpdate);
+    }
+    let Some(current_bonded) = record_bonded_total else {
+        return Err(BondPostError::RecordMissing);
+    };
+    // HoldingsUpdate operates on a shard set; a foundation CompleteTree record
+    // has no shard list to adjust.
+    if record_holdings_kind != HoldingsKind::ShardSetCompact {
+        return Err(BondPostError::HoldingsUpdateOnCompleteTree);
+    }
+    if vin.holdings.kind != HoldingsKind::ShardSetCompact {
+        return Err(BondPostError::HoldingsUpdatePostNotCompact);
+    }
+    if current_bonded == 0 || record_held_shard_ids.is_empty() {
+        return Err(BondPostError::HoldingsUpdateRecordNotBonded);
+    }
+    Ok(current_bonded)
+}
+
 /// Verify `HoldingsUpdate`-**add** bond-post semantics — voluntary growth of a
 /// `Bonded` record by exactly one shard (gate-4 §4.4; `PHASE_2B_FSM_RETOOL.md`
 /// P2B-7 Pin 1/5, Q4). Credit path (`bond_debit == 0`), so the pqc auth is the
@@ -164,20 +208,12 @@ pub fn verify_holdings_update_add(
     record_bad_intervals: &[crate::consensus_state::BadInterval],
     current_settlement_epoch: u64,
 ) -> Result<(), BondPostError> {
-    if vin.post_kind != BondPostKind::HoldingsUpdate {
-        return Err(BondPostError::PostKindNotHoldingsUpdate);
-    }
-    let Some(current_bonded) = record_bonded_total else {
-        return Err(BondPostError::RecordMissing);
-    };
-    // HoldingsUpdate operates on a shard set; a foundation CompleteTree record has
-    // no shard list to add to.
-    if record_holdings_kind != HoldingsKind::ShardSetCompact {
-        return Err(BondPostError::HoldingsUpdateOnCompleteTree);
-    }
-    if vin.holdings.kind != HoldingsKind::ShardSetCompact {
-        return Err(BondPostError::HoldingsUpdatePostNotCompact);
-    }
+    let current_bonded = holdings_update_prologue(
+        vin,
+        record_bonded_total,
+        record_holdings_kind,
+        record_held_shard_ids,
+    )?;
     // Credit direction (§3.2 term table): exactly `+FLOOR`, no debit.
     if vin.bond_debit != 0 || vin.bond_credit != crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC {
         return Err(BondPostError::HoldingsUpdateAddTerms);
@@ -244,18 +280,12 @@ pub fn verify_holdings_update_drop(
     last_settled_slash_epoch: Option<u64>,
     current_settlement_epoch: u64,
 ) -> Result<(), BondPostError> {
-    if vin.post_kind != BondPostKind::HoldingsUpdate {
-        return Err(BondPostError::PostKindNotHoldingsUpdate);
-    }
-    let Some(current_bonded) = record_bonded_total else {
-        return Err(BondPostError::RecordMissing);
-    };
-    if record_holdings_kind != HoldingsKind::ShardSetCompact {
-        return Err(BondPostError::HoldingsUpdateOnCompleteTree);
-    }
-    if vin.holdings.kind != HoldingsKind::ShardSetCompact {
-        return Err(BondPostError::HoldingsUpdatePostNotCompact);
-    }
+    let current_bonded = holdings_update_prologue(
+        vin,
+        record_bonded_total,
+        record_holdings_kind,
+        record_held_shard_ids,
+    )?;
     // Debit direction (§3.2 term table): exactly `−FLOOR`, no credit.
     if vin.bond_credit != 0 || vin.bond_debit != crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC {
         return Err(BondPostError::HoldingsUpdateDropTerms);
@@ -941,6 +971,37 @@ mod tests {
     }
 
     #[test]
+    fn add_rejects_exited_record_resurrection() {
+        // The Exited shape (post-Unbond): zero total, empty holdings, and a
+        // zero-length clean interval-close that good_through excludes nothing
+        // for. Without the Bonded gate this passed EVERY add gate — a
+        // JoinMarket-bypassing re-entry path whose connect then threw on the
+        // empty-pre-image journal encode (verify-valid but unconnectable on
+        // every node: a chain-stall vector). P2B-7 Pin 1: Bonded → Bonded.
+        let vin = ArchivalBondPostVin {
+            holdings: HoldingsDescriptor {
+                kind: HoldingsKind::ShardSetCompact,
+                shard_ids: vec![11],
+            },
+            bonded_total_atomic: ARCHIVAL_BOND_FLOOR_ATOMIC,
+            bond_credit: ARCHIVAL_BOND_FLOOR_ATOMIC,
+            ..valid_add_vin()
+        };
+        assert_eq!(
+            verify_holdings_update_add(
+                &vin,
+                Some(0), // Exited: nothing bonded
+                HoldingsKind::ShardSetCompact,
+                &[], // Exited: no held shards
+                HU_JOIN,
+                &[],
+                HU_CURRENT,
+            ),
+            Err(BondPostError::HoldingsUpdateRecordNotBonded)
+        );
+    }
+
+    #[test]
     fn add_rejects_open_bad_interval() {
         // An open bad interval (post-slash, pre-Rebond) is not good standing.
         let open = crate::consensus_state::BadInterval {
@@ -1034,6 +1095,27 @@ mod tests {
     #[test]
     fn accepts_valid_drop() {
         assert!(ok_drop(&valid_drop_vin()).is_ok());
+    }
+
+    #[test]
+    fn drop_rejects_unbonded_record() {
+        // The add arm's Bonded-gate twin (shared prologue): a zero-total /
+        // no-shards record refuses before any diff or term arithmetic runs.
+        assert_eq!(
+            verify_holdings_update_drop(
+                &valid_drop_vin(),
+                Some(0),
+                HoldingsKind::ShardSetCompact,
+                &[],
+                11,
+                DROP_ADD_EPOCH,
+                DROP_FREEZE,
+                Some(DROP_LAST_SERVED),
+                Some(DROP_CURRENT),
+                DROP_CURRENT,
+            ),
+            Err(BondPostError::HoldingsUpdateRecordNotBonded)
+        );
     }
 
     #[test]

@@ -138,12 +138,17 @@ pub struct ServeCreditGateInputs<'a> {
     /// Step 9 (`:4312`): `archival_bond_holds_shard(P, shard, H_fire)`.
     ///
     /// At the pinned substrate this accessor is already the WS-1-corrected
-    /// **as-of-`H_fire` reconstruction** (`db_lmdb.cpp:5040–5072`, landed
-    /// with PR #269), not a tip read — the mirror snapshots the corrected
-    /// behavior on purpose (audit doc §5, step-9 substrate note). The
-    /// reconstruction itself (held-at-tip / slash-log strictly-above
-    /// two-step read) stays C++-side marshaling; its strictly-above boundary
-    /// is audited through seeded-state verdict vectors on the C++ leg.
+    /// **as-of-`H_fire` reconstruction** (`db_lmdb.cpp`, landed with PR
+    /// #269), not a tip read — the mirror snapshots the corrected behavior
+    /// on purpose (audit doc §5, step-9 substrate note). The HoldingsUpdate
+    /// slice extended the reconstruction for mutable holdings (P2B-7 Pin
+    /// 4/5): a tip-held compact shard answers held only for heights in
+    /// epochs strictly after its v6 add-epoch (the per-shard `E_add + 1`
+    /// rule — the partial add epoch is forfeited for credit and challenge
+    /// alike), and a voluntarily dropped shard answers not-held everywhere
+    /// (grace-tail keeps no drop interval). The reconstruction stays
+    /// C++-side marshaling; its boundaries are audited through seeded-state
+    /// verdict vectors on the C++ leg.
     pub held_at_fire: bool,
     /// Step 10 (`:4321`): `get_archival_shard_segment_at_height` succeeded.
     pub registry_present_at_fire: bool,

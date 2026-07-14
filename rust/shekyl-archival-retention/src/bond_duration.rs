@@ -93,10 +93,19 @@ impl ShardAgeAtAdd {
     /// toward the *longest* commitment (hardest to drop), never the shortest.
     ///
     /// A freshly-frozen shard added immediately gets age ≈ 0, i.e.
-    /// `bond_duration = BASE` — the genuine youngest-deep minimum. (The `close ≤ freeze`
-    /// path in `shard_age_milli` is a defensive backstop: a shard cannot be added before
-    /// its segment freezes, so `H_close(add_epoch) > freeze_height` holds by the ADD
-    /// verify's frozen-segment check — gate-4 §4.4 / P2B-7 Pin 5.)
+    /// `bond_duration = BASE` — the genuine youngest-deep minimum.
+    ///
+    /// **Unfrozen-at-add fails closed to the OLDEST age (longest horizon).** The
+    /// ADD verify deliberately does **not** require a frozen segment (adding an
+    /// unfrozen shard earns nothing — self-harm, not an attack; `bond_post.rs`),
+    /// so `freeze_height ≥ H_close(add_epoch)` is a reachable consensus state,
+    /// not a defensive backstop. Mapping it to `shard_age_milli`'s `close ≤
+    /// freeze` age-0 arm would hand the SHORTEST horizon (`BASE`) to exactly the
+    /// state the C++ drop-marshal fails closed to the LONGEST for (a segment
+    /// with no freeze row marshals `freeze_height = 0` → genesis-band oldest) —
+    /// the same condition, opposite extremes, and a 5× cheaper recycle than the
+    /// age-stratified friction the seal models (`STAKER_ARCHIVAL_SIM.md` §L18).
+    /// Both corners pin to `WORK_MILLI_SCALE` (oldest → `BASE·(1+SCALE)`).
     #[must_use]
     pub fn from_add(add_settlement_epoch: u64, freeze_height: u64) -> Self {
         let seb = effective_settlement_epoch_blocks();
@@ -108,9 +117,12 @@ impl ShardAgeAtAdd {
              produced it"
         );
         let close = close_opt.unwrap_or(u64::MAX);
-        Self {
-            age_milli: shard_age_milli(close, freeze_height, seb),
-        }
+        let age_milli = if freeze_height >= close {
+            WORK_MILLI_SCALE
+        } else {
+            shard_age_milli(close, freeze_height, seb)
+        };
+        Self { age_milli }
     }
 
     /// The frozen age in `shard_age_milli` milli-units (`[0, WORK_MILLI_SCALE]`).
@@ -240,12 +252,31 @@ mod tests {
 
     #[test]
     fn freshly_frozen_shard_is_youngest_minimum() {
-        // Segment freezes at the add epoch's close ⇒ age 0 ⇒ bond_duration = BASE.
-        // (Backstop path: close == freeze; the real add invariant is freeze < close.)
+        // Segment froze one block before the add epoch's close ⇒ age ≈ 0 ⇒
+        // bond_duration = BASE — the genuine youngest-deep minimum.
         let add_epoch = 7u64;
         let close = (add_epoch + 1) * SETTLEMENT_EPOCH_BLOCKS;
-        let a = ShardAgeAtAdd::from_add(add_epoch, close);
+        let a = ShardAgeAtAdd::from_add(add_epoch, close - 1);
         assert_eq!(a.age_milli(), 0);
         assert_eq!(bond_duration(a), 4);
+    }
+
+    #[test]
+    fn unfrozen_at_add_fails_closed_to_longest_horizon() {
+        // The ADD verify does not require a frozen segment, so a shard whose
+        // segment freezes at or after H_close(add_epoch) is reachable. Both that
+        // state and the C++ missing-freeze-row sentinel (freeze_height 0 →
+        // genesis-band oldest) must land on the SAME extreme: the longest
+        // commitment, never the age-0 shortest.
+        let add_epoch = 7u64;
+        let close = (add_epoch + 1) * SETTLEMENT_EPOCH_BLOCKS;
+        for freeze in [close, close + 1, close + 10 * SETTLEMENT_EPOCH_BLOCKS] {
+            let a = ShardAgeAtAdd::from_add(add_epoch, freeze);
+            assert_eq!(a.age_milli(), WORK_MILLI_SCALE, "freeze={freeze}");
+            assert_eq!(bond_duration(a), 20, "freeze={freeze}");
+        }
+        // The C++ sentinel corner (no freeze row → 0) is the genesis-band arm,
+        // already the oldest age — the two corners agree at 20.
+        assert_eq!(bond_duration(ShardAgeAtAdd::from_add(add_epoch, 0)), 20);
     }
 }

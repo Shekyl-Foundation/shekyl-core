@@ -599,11 +599,17 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   revert_archival_unbonds_at_height(removed_block_height - 1);
   // HoldingsUpdate pre-image restore (gate-4 §4.4/§5): same journal-key
   // convention (block index N = removed_block_height - 1) and the same
-  // vin-carries-POST-state reason it cannot drive its own restore. The record
-  // stays Bonded, so there is no clean-close ordering coupling with the slash
-  // revert; the restored fields (bonded_total, held_shard_ids, shard_add_epochs)
-  // are disjoint from every other reorg journal's, so the reverts compose in
-  // any order.
+  // vin-carries-POST-state reason it cannot drive its own restore. ORDER IS
+  // LOAD-BEARING: the slash journal restores the very same record fields
+  // (bonded_total, held_shard_ids, shard_add_epochs), and within a block the
+  // txs (HoldingsUpdate) connect before the epoch-deadline slash hook — so
+  // the pop must revert the slash FIRST (above) for this pop fold's
+  // exactly-one-FLOOR delta check to see the post-HoldingsUpdate state it
+  // journaled against. Reordering these two reverts (or adding a journal
+  // that touches these fields between them) makes holdings_update_pop see a
+  // FLOOR ± slashed_amount delta and abort the pop with NotSingleShardDelta.
+  // Only the emission journal's fields (claimed set, first_paying) are
+  // disjoint from this one's.
   revert_archival_holdings_updates_at_height(removed_block_height - 1);
   // Mirror of the accrual write in add_block, keyed at the block's INDEX
   // N = removed_block_height - 1 (the claim-journal convention above, not

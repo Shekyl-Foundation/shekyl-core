@@ -4607,17 +4607,52 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_TERMS:
     return "HoldingsUpdate-drop terms are not exactly -FLOOR debit / no credit";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_DROP:
-    return "HoldingsUpdate-drop is not exactly one removed shard (or not the shard "
-      "facts were read for)";
+    return "HoldingsUpdate-drop must remove exactly one shard, and it must be the "
+      "shard whose per-shard facts were marshaled";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_LAST_SHARD:
     return "HoldingsUpdate-drop would empty the shard set (a full exit is Unbond)";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_FLOOR_MISMATCH:
     return "HoldingsUpdate-drop post bonded_total != bond_floor(post) / current - FLOOR";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON:
     return "HoldingsUpdate-drop before the shard's retention-commitment horizon elapsed";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED:
+    return "HoldingsUpdate requires a Bonded record (an Exited or slash-emptied "
+      "record re-enters via JoinMarket/Rebond)";
   default:
     return "unknown bond-post verify code";
   }
+}
+
+// GF-1 debit authorization (gate-4 §3.5 step 5) — the SHARED debit authorizer,
+// single-sourced for every bond_debit > 0 arm (Unbond, HoldingsUpdate-drop; a
+// future debit kind rides the same call): the pqc auth key must equal the
+// record's COMMITTED bond_spend_pk — never the identity key P_pubkey
+// (identity-only invariant, gate-6 §9.6). The signature itself is verified
+// over the whole-tx payload by verify_transaction_pqc_auth against
+// pqc_auths[idx].hybrid_public_key; pinning that key here is the authorization
+// choice. A record with no committed key (pre-GF-1 shape) authorizes nothing —
+// fail closed, not identity fallback. Callers gate on have_record (a missing
+// record falls through to the semantic verify's RECORD_MISSING) and run this
+// BEFORE any per-shard cursor scans or FFI verify: it is a two-vector compare,
+// so an unauthorized attempt is rejected before it can cost LMDB seeks.
+bool archival_debit_auth_pin(const shekyl::db::ArchivalBondValue& record,
+  const std::vector<uint8_t>& auth_pubkey, const char* arm)
+{
+  if (record.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
+  {
+    MERROR_VER("Archival " << arm << " rejected: record commits no bond_spend_pk; "
+      "a debit cannot be authorized (and the identity key never authorizes "
+      "a value-out)");
+    return false;
+  }
+  if (auth_pubkey != record.bond_spend_pk)
+  {
+    MERROR_VER("Archival " << arm << " rejected: pqc auth key does not match the "
+      "record's committed bond_spend_pk (identity-key or foreign-key debit "
+      "authorization is forbidden)");
+    return false;
+  }
+  return true;
 }
 } // namespace
 
@@ -4666,39 +4701,10 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     shekyl::db::ArchivalBondValue record{};
     const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);
 
-    // GF-1 debit authorization (gate-4 §3.5 step 5) — the SHARED debit
-    // authorizer: every bond_debit > 0 (Unbond here; HoldingsUpdate-drop
-    // rides the same selection when it lands) verifies its pqc auth against
-    // the record's COMMITTED bond_spend_pk — never the identity key P_pubkey
-    // (identity-only invariant, gate-6 §9.6). The signature itself is
-    // verified over the whole-tx payload by verify_transaction_pqc_auth
-    // against pqc_auths[idx].hybrid_public_key; pinning that key here is the
-    // authorization choice. A record with no committed key (pre-GF-1 shape)
-    // authorizes nothing — fail closed, not identity fallback.
-    //
-    // The pin runs BEFORE the cooldown-anchor gathering and the semantic
-    // verify: it is a two-vector compare, so an unauthorized attempt (foreign
-    // key, identity key, keyless record) is rejected before it can cost one
-    // reverse-cursor LMDB seek per held shard plus an FFI call. A missing
-    // record falls through — the semantic verify owns that verdict
-    // (RECORD_MISSING).
-    if (have_record)
-    {
-      if (record.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
-      {
-        MERROR_VER("Archival Unbond rejected: record commits no bond_spend_pk; "
-          "a debit cannot be authorized (and the identity key never authorizes "
-          "a value-out)");
-        return false;
-      }
-      if (auth_pubkey != record.bond_spend_pk)
-      {
-        MERROR_VER("Archival Unbond rejected: pqc auth key does not match the "
-          "record's committed bond_spend_pk (identity-key or foreign-key debit "
-          "authorization is forbidden)");
-        return false;
-      }
-    }
+    // GF-1 debit authorization — the shared pin (archival_debit_auth_pin
+    // above), run before the cooldown-anchor gathering + semantic verify.
+    if (have_record && !archival_debit_auth_pin(record, auth_pubkey, "Unbond"))
+      return false;
 
     // Unbond semantic verify (gate-4 §3.5 debit path): marshal the record
     // facts + the P2B-8 Q1/Q2 cooldown anchors (one reverse-cursor seek per
@@ -4819,25 +4825,10 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
       return true;
     }
 
-    // DROP (grace-tail debit path). GF-1 debit authorization — the SHARED debit
-    // authorizer (the Unbond arm's twin): the pqc auth verifies against the
-    // record's COMMITTED bond_spend_pk, never the identity key. A missing record
-    // falls through — the semantic verify owns that verdict (RECORD_MISSING).
-    if (have_record)
-    {
-      if (record.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
-      {
-        MERROR_VER("Archival HoldingsUpdate-drop rejected: record commits no "
-          "bond_spend_pk; a debit cannot be authorized");
-        return false;
-      }
-      if (auth_pubkey != record.bond_spend_pk)
-      {
-        MERROR_VER("Archival HoldingsUpdate-drop rejected: pqc auth key does not "
-          "match the record's committed bond_spend_pk");
-        return false;
-      }
-    }
+    // DROP (grace-tail debit path). GF-1 debit authorization — the shared pin
+    // (archival_debit_auth_pin above), the Unbond arm's twin.
+    if (have_record && !archival_debit_auth_pin(record, auth_pubkey, "HoldingsUpdate-drop"))
+      return false;
 
     // Identify the dropped shard by set-difference (record CURRENT \ vin POST)
     // and read its per-shard facts. The Rust verify recomputes the diff and
@@ -4863,10 +4854,16 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
         const size_t i = removed_idx[0];
         dropped_shard_id = record.held_shard_ids[i];
         dropped_add_epoch = record.shard_add_epochs[i];
-        // The shard must have a frozen segment (add requires one); a missing
-        // segment on a held shard is record corruption — fail closed by leaving
-        // the freeze height at 0, which yields the longest (hardest-to-drop)
-        // horizon in the Rust age computation.
+        // The ADD verify deliberately does NOT require a frozen segment
+        // (bond_post.rs: adding an unfrozen shard is self-harm, not an
+        // attack), so a held shard may legitimately have no freeze row yet.
+        // Fail closed by leaving the freeze height at 0 — the genesis-band
+        // "oldest" sentinel, i.e. the longest (hardest-to-drop) horizon. The
+        // Rust age computation (ShardAgeAtAdd::from_add) pins the adjacent
+        // corner to the same extreme: a segment that froze AT or AFTER
+        // H_close(add_epoch) also gets the longest horizon, so an
+        // added-before-freeze shard cannot recycle its FLOOR early no matter
+        // when the freeze lands relative to the drop attempt.
         uint64_t freeze = 0;
         if (m_db->archival_shard_freeze_height(dropped_shard_id, freeze))
           dropped_freeze_height = freeze;
@@ -5741,8 +5738,15 @@ leave:
           // the theft-shaped check is re-run here; the debit's semantic legs
           // (cooldown, watermark, floor) stay checkpoint-trusted under the
           // fast path like every other skipped per-tx check.
-          if (fast_check
-            && bond.post_kind != static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
+          //
+          // The selector is the GF-1 selector itself — bond_debit > 0, NOT
+          // "kind != JoinMarket": HoldingsUpdate-add is a credit arm whose
+          // legitimate pqc auth is the IDENTITY key (per-tx verify pins
+          // auth == hybrid_public_key), so keying the belt on the post kind
+          // would reject every valid HoldingsUpdate-add block under fast
+          // sync while fully-verifying nodes accept it — a network split.
+          // Credits stay checkpoint-trusted here exactly as JoinMarket does.
+          if (fast_check && bond.bond_debit > 0)
           {
             shekyl::db::ArchivalBondValue record{};
             const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);

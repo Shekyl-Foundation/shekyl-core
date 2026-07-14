@@ -160,6 +160,10 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_LAST_SHARD: u8 = 33;
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_FLOOR_MISMATCH: u8 = 34;
 /// HoldingsUpdate-drop verify: the shard is within its bond_duration retention horizon.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON: u8 = 35;
+/// `HoldingsUpdate` verify: the record is not Bonded — zero collateral / no held
+/// shards (P2B-7 Pin 1: `Bonded → Bonded`; an Exited or slash-emptied record
+/// re-enters via JoinMarket/Rebond, never a voluntary adjustment).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED: u8 = 36;
 
 /// `Unbond` connect/pop fold succeeded (gate-4 §4.3 / §5).
 pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_OK: u8 = 0;
@@ -209,6 +213,9 @@ pub const SHEKYL_ARCHIVAL_HU_APPLY_ERR_RECORD_FLOOR_INVARIANT: u8 = 6;
 pub const SHEKYL_ARCHIVAL_HU_APPLY_ERR_COUNTER_RANGE: u8 = 7;
 /// Pop: the per-`P` balance changed by something other than one FLOOR.
 pub const SHEKYL_ARCHIVAL_HU_APPLY_ERR_NOT_SINGLE_DELTA: u8 = 8;
+/// Connect-fold belt of the verify-side Bonded gate: the record holds no
+/// bonded collateral / no shards (an Exited record cannot be resurrected).
+pub const SHEKYL_ARCHIVAL_HU_APPLY_ERR_RECORD_NOT_BONDED: u8 = 9;
 
 #[must_use]
 fn map_holdings_update_connect_error(e: HoldingsUpdateConnectError) -> u8 {
@@ -220,6 +227,9 @@ fn map_holdings_update_connect_error(e: HoldingsUpdateConnectError) -> u8 {
             SHEKYL_ARCHIVAL_HU_APPLY_ERR_RECORD_FLOOR_INVARIANT
         }
         HoldingsUpdateConnectError::CounterRange => SHEKYL_ARCHIVAL_HU_APPLY_ERR_COUNTER_RANGE,
+        HoldingsUpdateConnectError::RecordNotBonded => {
+            SHEKYL_ARCHIVAL_HU_APPLY_ERR_RECORD_NOT_BONDED
+        }
     }
 }
 
@@ -601,6 +611,9 @@ fn map_bond_post_error(err: BondPostError) -> u8 {
         }
         BondPostError::HoldingsUpdateDropWithinHorizon => {
             SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON
+        }
+        BondPostError::HoldingsUpdateRecordNotBonded => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED
         }
     }
 }
@@ -1038,6 +1051,64 @@ pub unsafe extern "C" fn shekyl_archival_unbond_pop(
     }
 }
 
+/// Shared `HoldingsUpdate` entry-point prologue (add + drop): decode the post
+/// kind, marshal the vin (§9.11 coupling enforced by the shared marshaler),
+/// decode the record's holdings kind, and gather the record facts common to
+/// both directions. Keeping this single-sourced means an admission-marshal
+/// change cannot land on one direction and silently miss the other.
+///
+/// # Safety
+/// Same contracts as the entry points: each `*_ptr` valid for its `*_len`
+/// elements, or null when the len is 0.
+#[allow(clippy::too_many_arguments)] // coarse-call FFI: mirrors the entry points' flat operand list
+unsafe fn holdings_update_marshal_prologue(
+    post_kind: u8,
+    holdings_kind: u8,
+    shard_ids_ptr: *const u64,
+    shard_ids_len: usize,
+    bond_spend_pk_ptr: *const u8,
+    bond_spend_pk_len: usize,
+    bonded_total_atomic: u64,
+    bond_credit: u64,
+    bond_debit: u64,
+    record_exists: u8,
+    record_bonded_total: u64,
+    record_holdings_kind: u8,
+    record_shard_ids_ptr: *const u64,
+    record_shard_ids_len: usize,
+) -> Result<(ArchivalBondPostVin, Option<u64>, HoldingsKind, Vec<u64>), u8> {
+    let post_kind = match BondPostKind::from_u8(post_kind) {
+        Ok(k) => k,
+        Err(_) => return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE),
+    };
+    let vin = unsafe {
+        bond_post_vin_from_raw(
+            post_kind,
+            holdings_kind,
+            shard_ids_ptr,
+            shard_ids_len,
+            bond_spend_pk_ptr,
+            bond_spend_pk_len,
+            bonded_total_atomic,
+            bond_credit,
+            bond_debit,
+        )
+    }?;
+    let Ok(record_holdings_kind) = HoldingsKind::from_u8(record_holdings_kind) else {
+        return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND);
+    };
+    let record_bonded_total = (record_exists != 0).then_some(record_bonded_total);
+    let record_shards = unsafe {
+        with_bond_post_u64_slice(record_shard_ids_ptr, record_shard_ids_len, <[u64]>::to_vec)
+    }?;
+    Ok((
+        vin,
+        record_bonded_total,
+        record_holdings_kind,
+        record_shards,
+    ))
+}
+
 /// Verify `HoldingsUpdate`-add bond-post semantics (gate-4 §4.4 credit path).
 ///
 /// The vin's post-holdings arrive via `shard_ids_*`; `record_shard_ids_*` is the
@@ -1071,34 +1142,23 @@ pub unsafe extern "C" fn shekyl_archival_verify_holdings_update_add(
     record_bad_intervals_len: usize,
     current_settlement_epoch: u64,
 ) -> u8 {
-    let post_kind = match BondPostKind::from_u8(post_kind) {
-        Ok(k) => k,
-        Err(_) => return SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE,
-    };
-    let vin = match bond_post_vin_from_raw(
-        post_kind,
-        holdings_kind,
-        shard_ids_ptr,
-        shard_ids_len,
-        bond_spend_pk_ptr,
-        bond_spend_pk_len,
-        bonded_total_atomic,
-        bond_credit,
-        bond_debit,
-    ) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
-    let Ok(record_holdings_kind) = HoldingsKind::from_u8(record_holdings_kind) else {
-        return SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND;
-    };
-    let record_bonded_total = if record_exists != 0 {
-        Some(record_bonded_total)
-    } else {
-        None
-    };
-    let record_shards = match unsafe {
-        with_bond_post_u64_slice(record_shard_ids_ptr, record_shard_ids_len, <[u64]>::to_vec)
+    let (vin, record_bonded_total, record_holdings_kind, record_shards) = match unsafe {
+        holdings_update_marshal_prologue(
+            post_kind,
+            holdings_kind,
+            shard_ids_ptr,
+            shard_ids_len,
+            bond_spend_pk_ptr,
+            bond_spend_pk_len,
+            bonded_total_atomic,
+            bond_credit,
+            bond_debit,
+            record_exists,
+            record_bonded_total,
+            record_holdings_kind,
+            record_shard_ids_ptr,
+            record_shard_ids_len,
+        )
     } {
         Ok(v) => v,
         Err(code) => return code,
@@ -1156,34 +1216,23 @@ pub unsafe extern "C" fn shekyl_archival_verify_holdings_update_drop(
     last_settled_slash_epoch: u64,
     current_settlement_epoch: u64,
 ) -> u8 {
-    let post_kind = match BondPostKind::from_u8(post_kind) {
-        Ok(k) => k,
-        Err(_) => return SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE,
-    };
-    let vin = match bond_post_vin_from_raw(
-        post_kind,
-        holdings_kind,
-        shard_ids_ptr,
-        shard_ids_len,
-        bond_spend_pk_ptr,
-        bond_spend_pk_len,
-        bonded_total_atomic,
-        bond_credit,
-        bond_debit,
-    ) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
-    let Ok(record_holdings_kind) = HoldingsKind::from_u8(record_holdings_kind) else {
-        return SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND;
-    };
-    let record_bonded_total = if record_exists != 0 {
-        Some(record_bonded_total)
-    } else {
-        None
-    };
-    let record_shards = match unsafe {
-        with_bond_post_u64_slice(record_shard_ids_ptr, record_shard_ids_len, <[u64]>::to_vec)
+    let (vin, record_bonded_total, record_holdings_kind, record_shards) = match unsafe {
+        holdings_update_marshal_prologue(
+            post_kind,
+            holdings_kind,
+            shard_ids_ptr,
+            shard_ids_len,
+            bond_spend_pk_ptr,
+            bond_spend_pk_len,
+            bonded_total_atomic,
+            bond_credit,
+            bond_debit,
+            record_exists,
+            record_bonded_total,
+            record_holdings_kind,
+            record_shard_ids_ptr,
+            record_shard_ids_len,
+        )
     } {
         Ok(v) => v,
         Err(code) => return code,

@@ -27,6 +27,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 
 #include "blockchain_db/blockchain_db.h"
 #include "cryptonote_basic/blobdatatype.h" // for type blobdata
@@ -499,6 +500,27 @@ private:
     const std::vector<uint64_t>& post_shard_ids) override;
   virtual void apply_archival_holdings_update_drop(uint64_t block_height, const crypto::hash& p_id,
     const std::vector<uint64_t>& post_shard_ids) override;
+  /// The direction-specific fold outputs consumed by the shared HoldingsUpdate
+  /// connect-writer scaffold: the counter movement plus the add-direction's
+  /// coupled add-epoch override for the rebuilt `shard_add_epochs`.
+  struct HoldingsUpdateFoldOuts
+  {
+    uint64_t new_bonded_total = 0;
+    uint64_t new_total_bonded = 0;
+    uint64_t override_shard_id = 0;
+    uint64_t override_add_epoch = 0;
+    bool has_override = false;
+  };
+  using holdings_update_fold_t = std::function<uint8_t(
+    const shekyl::db::ArchivalBondValue& bond, uint64_t total_bonded,
+    HoldingsUpdateFoldOuts& outs)>;
+  /// Shared connect-writer scaffold for both HoldingsUpdate directions (txn
+  /// guard, record load + v6 desync check, pre-image journal, live counter
+  /// read, fold, coupled-array rebuild, record/counter writes, journal
+  /// append) — add/drop differ only in the `fold` they pass.
+  void apply_archival_holdings_update(uint64_t block_height, const crypto::hash& p_id,
+    const std::vector<uint64_t>& post_shard_ids, const char* arm,
+    const holdings_update_fold_t& fold);
   virtual void revert_archival_holdings_updates_at_height(uint64_t block_height) override;
   virtual bool archival_shard_freeze_height(uint64_t shard_id, uint64_t& out) const override;
   virtual std::vector<uint64_t> archival_bond_last_served_epochs(const crypto::hash& p_id,

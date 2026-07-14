@@ -47,9 +47,39 @@
     with per-post live-counter threading; `pop_block` reverts it. Real-block-path
     add/drop connect/pop KATs assert the add-epoch rebuild, the counter movement,
     and the byte-exact reorg restore.
-  - **Follow-on (rule 19, named not deferred):** the gate-2 serve-credit
-    reconciliation pins (Pin-4 at-height `has_archival_bond_shard`, Pin-5
-    per-shard `E_add+1` coverage) are a separate validation surface.
+  - **Review round (2026-07-14):** seven correctness findings fixed. The
+    checkpoint fast-path GF-1 belt is re-keyed on the GF-1 selector itself
+    (`bond_debit > 0`, not `post_kind != JoinMarket`) — as written it rejected
+    every valid HoldingsUpdate-add block under fast sync (the add is a credit
+    arm, identity-key authorized): a network split. The HU verify arms gain
+    the **Bonded-state gate** (shared prologue; P2B-7 Pin 1 `Bonded → Bonded`,
+    `HoldingsUpdateRecordNotBonded` + connect-fold `RecordNotBonded` belt) —
+    without it an Exited record passed every add gate (the zero-length clean
+    close excludes nothing from `good_through`; `bond_floor(∅)` vacuously
+    satisfies the floor pins) and became a JoinMarket-bypassing resurrection
+    whose connect threw on the empty-pre-image journal row: verify-valid but
+    unconnectable on every node, a chain-stall vector. **Pin-4 + Pin-5 are
+    CLOSED, not follow-on:** `archival_bond_holds_shard` — the one accessor
+    both serve-credit acceptance and slash eligibility bottom out in — bounds
+    a tip-held shard below by its v6 add-epoch (and the slash-log
+    reconstruction by the row's journaled add-epoch), enforcing per-shard
+    `E ≥ E_add + 1` symmetrically: no add-epoch serve credit, no unjust slash
+    for a challenge that fired before the add; a voluntarily dropped shard
+    answers not-held everywhere (grace-tail keeps no drop interval — the drop
+    epoch's pending acceptances are forfeited, the add-forfeit's twin).
+    Unfrozen-at-add fails closed to the LONGEST retention horizon on both
+    corners (`ShardAgeAtAdd::from_add`: `freeze ≥ H_close(add_epoch)` → age
+    max, matching the C++ missing-freeze-row sentinel; previously the same
+    condition earned a 4- or 20-epoch lock depending on when the freeze landed
+    — a 5× early-recycle hole vs. the §L18 age-stratified friction). The
+    drop-after-fire scenario is documented as the RATIFIED grace-tail bounded
+    forgiveness (Pin 3; capped at one cooldown — "stop serving and hold" keeps
+    being slashed), and the slash-apply FATAL's HoldingsUpdate revisit is
+    discharged. The pop-ordering comment now states the real dependency (slash
+    revert FIRST; the slash journal restores the same record fields — the
+    "compose in any order" claim was false). Dedup: shared C++ debit-auth pin
+    (Unbond + HU-drop), shared Rust verify + FFI marshal prologues, shared HU
+    connect-writer scaffold (add/drop differ only in the fold call).
 
 - **archival: `bond_duration(age)` retention-horizon freeze — HoldingsUpdate
   slice A (gate-4 §4.4; `ARCHIVAL_TIMING_CONSTANTS.md` §1; P2B-7 Pin 3 /

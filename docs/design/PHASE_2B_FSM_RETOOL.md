@@ -530,14 +530,22 @@ questions only, with historical callers rerouted to the bits. Resolved as part o
   drop-last-shard rejected (Pin 1).
 - [x] Mutable-holdings serve-credit read rule pinned (Pin 4); `has_archival_bond_shard`
   flagged for the connect-path work.
-- [ ] **Per-shard `E_add + 1`** verify/connect rule landed in `shekyl-archival-retention`
-  (gate-4 connect paths, FOLLOWUPS V3.0). **Still open (impl):** as of 2026-07-13 the
+- [x] **Per-shard `E_add + 1`** verify/connect rule landed in `shekyl-archival-retention`
+  (gate-4 connect paths, FOLLOWUPS V3.0). As of 2026-07-13 the
   `HoldingsUpdate` add/drop and `Unbond` verify+connect+pop paths are **landed and wired**
   (`bond_post.rs` / `bond_connect.rs` + the C++ dispatch via `shekyl-ffi`); the record v6
-  `shard_add_epochs` substrate carries the per-shard add-epoch. What **remains open** here is the
-  gate-2 serve-credit **consumption** rule — Pin-4 (at-height `has_archival_bond_shard`) and
-  Pin-5 (per-shard `E_add + 1` counting/claim coverage) — a separate validation surface
-  (rule 19), plus `Rebond` verify+connect.
+  `shard_add_epochs` substrate carries the per-shard add-epoch. **Pin-4 and Pin-5 CLOSED
+  (2026-07-14, PR #303 review round):** both consumption rules land in the ONE accessor both
+  consumers bottom out in — `archival_bond_holds_shard(P, s, at_height)` now bounds a tip-held
+  compact shard below by its v6 add-epoch (held only in epochs strictly after `E_add`; the
+  slash-log reconstruction honors the row's journaled add-epoch the same way), so serve-credit
+  acceptance (holds-at-`h_fire` gate) and challenge eligibility (`archival_challenge_failed_at_height`)
+  enforce `E ≥ E_add + 1` symmetrically with no second predicate to drift: the partial add
+  epoch is forfeited for credit AND challenge alike (no add-epoch serve credit, no unjust
+  slash for a challenge that fired before the add). A voluntarily dropped shard answers
+  not-held everywhere (grace-tail keeps no drop interval — Pin 2), forfeiting the drop
+  epoch's pending acceptances, the add-forfeit's symmetric twin. What **remains open** here
+  is `Rebond` verify+connect.
 - [x] **Age-stratified sim reconciliation (Step 3) — DONE; seal cleared.**
   [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §L18 (R-3 reconciliation, 2026-06-16):
   **`HoldingsUpdate` is sealable at genesis with `RELEASE_COOLDOWN = 2` and no change to
@@ -703,6 +711,33 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
 
 ## Revision history
 
+- **2026-07-14:** **HoldingsUpdate review round — Pin-4/Pin-5 closed at the shared
+  accessor; the Bonded gate; fast-path belt re-keyed on the debit.** The high review
+  surfaced seven correctness findings; the load-bearing three: (1) the checkpoint
+  fast-path GF-1 belt keyed on `post_kind != JoinMarket` rejected every valid
+  HoldingsUpdate-**add** block under fast sync (the add is a credit arm, identity-key
+  authorized) — re-keyed on the GF-1 selector itself, `bond_debit > 0`; (2) the HU
+  verify arms had no Bonded-state gate, so an Exited record passed every add gate
+  (zero-length clean close excludes nothing from `good_through`; `bond_floor(∅) == 0`
+  vacuously satisfies the floor pins) and became a JoinMarket-bypassing resurrection
+  whose connect threw on the empty-pre-image journal row — a verify-valid,
+  unconnectable tx (chain-stall vector); the shared verify prologue now pins Pin 1's
+  `Bonded → Bonded` (`HoldingsUpdateRecordNotBonded`), with a connect-fold belt
+  (`RecordNotBonded`); (3) Pin-4/Pin-5 wired (see the P2B-7 exit item). Also:
+  unfrozen-at-add now fails closed to the LONGEST horizon on both corners
+  (`ShardAgeAtAdd::from_add` pins `freeze ≥ H_close(add_epoch)` to age-max, matching
+  the C++ missing-freeze-row sentinel — previously the same condition got 4 or 20
+  epochs depending on when the freeze landed relative to the drop attempt, a 5×
+  early-recycle hole vs. the §L18 seal's age-stratified friction); the drop-then-dodge
+  scenario is DOCUMENTED as the ratified grace-tail bounded forgiveness (Pin 3), not a
+  defect — the slash-apply FATAL's HoldingsUpdate revisit is discharged (a dropped
+  shard leaves `held_shard_ids`, so the scheduler never challenges it; the unserved
+  tail past the shard's settled anchor is exit-forgiven, capped at one cooldown); the
+  pop-ordering comment now states the real dependency (slash revert FIRST — the slash
+  journal restores the same record fields; "compose in any order" was false);
+  dedup: shared C++ debit-auth pin (Unbond + HU-drop), shared Rust verify prologue +
+  FFI marshal prologue, shared HU connect-writer scaffold (add/drop differ only in
+  the fold).
 - **2026-07-13 (f):** **GF-1 review round — every codec refuses what the binary
   codec refuses, and the enable flip completes at the block level.** The boost
   serializer now enforces the §9.11 coupling both directions (it deserialized a

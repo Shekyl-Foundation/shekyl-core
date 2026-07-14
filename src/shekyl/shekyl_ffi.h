@@ -1887,6 +1887,10 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_LAST_SHARD      33
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_FLOOR_MISMATCH  34
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON  35
+// The record is not Bonded (zero collateral / no held shards) — P2B-7 Pin 1:
+// HoldingsUpdate is Bonded→Bonded; an Exited or slash-emptied record re-enters
+// via JoinMarket/Rebond, never a voluntary adjustment. Shared by both HU arms.
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED    36
 
 /// Unbond bond-post verify. `record_exists`/`record_bonded_total`/
 /// `record_bad_interval_count` come from the LMDB bond record;
@@ -2016,6 +2020,9 @@ uint8_t shekyl_archival_unbond_pop(
 #define SHEKYL_ARCHIVAL_HU_APPLY_ERR_RECORD_FLOOR_INVARIANT 6
 #define SHEKYL_ARCHIVAL_HU_APPLY_ERR_COUNTER_RANGE         7
 #define SHEKYL_ARCHIVAL_HU_APPLY_ERR_NOT_SINGLE_DELTA      8
+// Connect-fold belt of the verify-side Bonded gate (an Exited record cannot
+// be resurrected through a voluntary adjustment).
+#define SHEKYL_ARCHIVAL_HU_APPLY_ERR_RECORD_NOT_BONDED     9
 
 /// HoldingsUpdate-ADD verify (gate-4 §4.4 credit path). `shard_ids_*` is the
 /// vin's POST holdings; `record_shard_ids_*` the record's CURRENT holdings (for
@@ -2044,12 +2051,15 @@ uint8_t shekyl_archival_verify_holdings_update_add(
 
 /// HoldingsUpdate-DROP verify (gate-4 §4.4 grace-tail debit path). C++ finds the
 /// dropped shard by set-difference (record CURRENT \ vin POST) and reads its
-/// per-shard facts from the coupled arrays: `dropped_shard_add_epoch` (the
-/// shard's stored add-epoch → bond_duration horizon), `dropped_shard_freeze_height`
-/// (H_close(add_epoch) for age-at-add), `dropped_shard_last_served` (u64 max =
-/// never served → release-cooldown anchor). `last_settled_slash_epoch` is the
-/// slash scheduler's monotone watermark (u64 max = no epoch settled yet). The
-/// Rust verify recomputes the diff and cross-checks `dropped_shard_id`.
+/// per-shard facts: `dropped_shard_add_epoch` (the shard's stored v6 add-epoch)
+/// and `dropped_shard_freeze_height` (the shard SEGMENT's freeze height — 0 when
+/// the segment has no freeze row yet, the fail-closed oldest sentinel); the Rust
+/// verify derives age-at-add from the pair by evaluating the freeze against
+/// `H_close(add_epoch)` (`ShardAgeAtAdd::from_add`), then the retention horizon.
+/// `dropped_shard_last_served` (u64 max = never served) is the release-cooldown
+/// anchor; `last_settled_slash_epoch` is the slash scheduler's monotone
+/// watermark (u64 max = no epoch settled yet). The Rust verify recomputes the
+/// diff and cross-checks `dropped_shard_id`.
 uint8_t shekyl_archival_verify_holdings_update_drop(
     uint8_t post_kind,
     uint8_t holdings_kind,

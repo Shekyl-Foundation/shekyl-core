@@ -2172,8 +2172,12 @@ public:
   virtual void revert_archival_holdings_updates_at_height(uint64_t block_height);
   /// HoldingsUpdate-drop verify marshaling: the dropped shard's segment
   /// freeze height (feeds the retention-horizon age-at-add). Returns false
-  /// when the shard has no frozen segment — a held shard being dropped must
-  /// have one (add requires a frozen segment), so the caller fails closed.
+  /// when the shard has no frozen segment — a REACHABLE state, not
+  /// corruption: the add verify deliberately does not require a frozen
+  /// segment (bond_post.rs), so the caller fails closed by marshaling
+  /// freeze_height 0 (the genesis-band "oldest" sentinel → the longest
+  /// horizon); the Rust age computation pins a segment that froze at/after
+  /// H_close(add_epoch) to the same longest-horizon extreme.
   virtual bool archival_shard_freeze_height(uint64_t shard_id, uint64_t& out) const;
   /// Unbond verify marshaling (P2B-8 Q1/Q2): each held shard's last-served
   /// settlement epoch — one reverse-cursor seek per shard over the BE

@@ -264,6 +264,14 @@ pub enum HoldingsUpdateConnectError {
     /// underflow (drop) — the counter disagrees with the balance it aggregates.
     #[error("bonded/total_bonded counter over/underflow on HoldingsUpdate")]
     CounterRange,
+    /// The record is not Bonded (zero collateral / no held shards) — verify's
+    /// `HoldingsUpdateRecordNotBonded` is the admission decision (P2B-7 Pin 1:
+    /// `Bonded → Bonded`); this is the connect-fold belt so a verify-bypassing
+    /// caller cannot resurrect an Exited record through a voluntary adjustment.
+    /// Without it the add's floor invariant passes vacuously on an emptied
+    /// record (`bond_floor(∅) == 0 == bonded_total`).
+    #[error("HoldingsUpdate on a record with no bonded collateral (Exited/emptied)")]
+    RecordNotBonded,
 }
 
 /// The `HoldingsUpdate`-add connect effect (gate-4 §4.4). The C++ arm journals
@@ -296,6 +304,9 @@ pub fn holdings_update_add_connect(
     else {
         return Err(HoldingsUpdateConnectError::NotSingleAdd);
     };
+    if record_bonded_total == 0 || record_held_shard_ids.is_empty() {
+        return Err(HoldingsUpdateConnectError::RecordNotBonded);
+    }
     if bond_floor_of(HoldingsKind::ShardSetCompact, record_held_shard_ids.len())
         != record_bonded_total
     {
@@ -798,6 +809,19 @@ mod tests {
         )
         .expect("drop pop");
         assert_eq!(restored, HU_TOTAL);
+    }
+
+    #[test]
+    fn holdings_update_add_connect_rejects_unbonded_record() {
+        // The connect-fold belt of the verify-side Bonded gate: an Exited
+        // record's floor invariant is vacuously true (bond_floor(∅) == 0 ==
+        // bonded_total), so without the explicit gate the fold proceeded and
+        // the C++ writer only failed later, throwing on the empty-pre-image
+        // journal row.
+        assert_eq!(
+            holdings_update_add_connect(0, &[], &[11], 0, 5),
+            Err(HoldingsUpdateConnectError::RecordNotBonded)
+        );
     }
 
     #[test]
