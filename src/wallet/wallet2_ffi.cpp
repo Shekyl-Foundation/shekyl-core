@@ -1439,7 +1439,6 @@ static char* dispatch_validate_address(wallet2_handle* w, const rj::Value& p) {
     if (net == cryptonote::TESTNET) nt_str = "testnet";
     else if (net == cryptonote::STAGENET) nt_str = "stagenet";
     doc.AddMember("nettype", rj::Value(nt_str, a), a);
-    doc.AddMember("openalias_address", "", a);
     return json_to_string(doc);
 }
 

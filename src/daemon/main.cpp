@@ -163,7 +163,6 @@ int main(int argc, char const * argv[])
       command_line::add_arg(core_settings, daemon_args::arg_max_log_files);
       command_line::add_arg(core_settings, daemon_args::arg_max_concurrency);
       command_line::add_arg(core_settings, daemon_args::arg_proxy);
-      command_line::add_arg(core_settings, daemon_args::arg_proxy_allow_dns_leaks);
       command_line::add_arg(core_settings, daemon_args::arg_public_node);
       command_line::add_arg(visible_options, daemon_args::arg_non_interactive);
 

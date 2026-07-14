@@ -47,7 +47,6 @@ set(unit_tests_sources
   decompose_amount_into_digits.cpp
   device.cpp
   difficulty.cpp
-  dns_resolver.cpp
   epee_boosted_tcp_server.cpp
   epee_levin_protocol_handler_async.cpp
   epee_http_server.cpp
@@ -96,7 +95,6 @@ set(unit_tests_sources
   test_protocol_pack.cpp
   threadpool.cpp
   hardfork.cpp
-  unbound.cpp
   uri.cpp
   util.cpp
   varint.cpp

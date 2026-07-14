@@ -37,8 +37,6 @@
 #include "shekyl/economics_params_generated.h"
 #include "shekyl/consensus_constants_generated.h"
 
-#define CRYPTONOTE_DNS_TIMEOUT_MS                       20000
-
 #define CRYPTONOTE_MAX_BLOCK_NUMBER                     500000000
 #define CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL            CRYPTONOTE_MAX_BLOCK_NUMBER
 #define CRYPTONOTE_MAX_TX_SIZE                          1000000

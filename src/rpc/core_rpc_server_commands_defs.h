@@ -87,7 +87,7 @@ namespace cryptonote
 // advance which version they will stop working with
 // Don't go over 32767 for any of these
 #define CORE_RPC_VERSION_MAJOR 3
-#define CORE_RPC_VERSION_MINOR 19
+#define CORE_RPC_VERSION_MINOR 20
 #define MAKE_CORE_RPC_VERSION(major,minor) (((major)<<16)|(minor))
 #define CORE_RPC_VERSION MAKE_CORE_RPC_VERSION(CORE_RPC_VERSION_MAJOR, CORE_RPC_VERSION_MINOR)
 
@@ -670,7 +670,6 @@ namespace cryptonote
       uint64_t height_without_bootstrap;
       bool was_bootstrap_ever_used;
       uint64_t database_size;
-      bool update_available;
       bool busy_syncing;
       std::string version;
       uint32_t protocol_version;
@@ -721,7 +720,6 @@ namespace cryptonote
         KV_SERIALIZE(height_without_bootstrap)
         KV_SERIALIZE(was_bootstrap_ever_used)
         KV_SERIALIZE(database_size)
-        KV_SERIALIZE(update_available)
         KV_SERIALIZE(busy_syncing)
         KV_SERIALIZE(version)
         KV_SERIALIZE(protocol_version)
@@ -2297,43 +2295,6 @@ namespace cryptonote
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE_PARENT(rpc_response_base)
         KV_SERIALIZE(chains)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct COMMAND_RPC_UPDATE
-  {
-    struct request_t: public rpc_request_base
-    {
-      std::string command;
-      std::string path;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE(command)
-        KV_SERIALIZE(path)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t: public rpc_response_base
-    {
-      bool update;
-      std::string version;
-      std::string user_uri;
-      std::string auto_uri;
-      std::string hash;
-      std::string path;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(update)
-        KV_SERIALIZE(version)
-        KV_SERIALIZE(user_uri)
-        KV_SERIALIZE(auto_uri)
-        KV_SERIALIZE(hash)
-        KV_SERIALIZE(path)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

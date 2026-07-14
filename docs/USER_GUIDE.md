@@ -970,8 +970,6 @@ Higher values slow down wallet opening but make password cracking much harder.
 - **Corrupted database:** Try `pop_blocks 100` in the daemon console to
   roll back recent blocks. As a last resort, delete the LMDB directory and
   resync.
-- **DNS:** If checkpoint DNS resolution fails, try
-  `--disable-dns-checkpoints`.
 
 ### Wallet balance is wrong or zero
 
@@ -1120,8 +1118,8 @@ Behavior changes to be aware of when upgrading:
    must be updated.
 2. **`MLOG_SET_THREAD_NAME` is a no-op.** The macro still accepts
    its argument so existing call sites (`abstract_tcp_server2.inl`,
-   `miner.cpp`, `download.cpp`) keep compiling, but the label
-   (`[SRV_MAIN]`, `[miner 3]`, `DL12`) no longer appears in the log
+   `miner.cpp`) keep compiling, but the label
+   (`[SRV_MAIN]`, `[miner 3]`) no longer appears in the log
    stream. Restoring semantic thread labels via
    `pthread_setname_np` / equivalent is tracked in
    `docs/FOLLOWUPS.md` as a minor follow-up.

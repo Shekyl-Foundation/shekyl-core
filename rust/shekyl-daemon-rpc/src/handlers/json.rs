@@ -186,5 +186,4 @@ json_handler!(get_net_stats, "/get_net_stats");
 json_handler!(set_limit, "/set_limit");
 json_handler!(out_peers, "/out_peers");
 json_handler!(in_peers, "/in_peers");
-json_handler!(update, "/update");
 json_handler!(pop_blocks, "/pop_blocks");

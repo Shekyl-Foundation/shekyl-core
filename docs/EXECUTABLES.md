@@ -23,9 +23,8 @@ All binaries are placed in `build/release/bin/` (or `build/debug/bin/`).
 | `shekyl-blockchain-prune-known-spent-data` | Prune known-spent output buckets |
 | `shekyl-utils-deserialize` | Decode hex blobs to human-readable JSON |
 | `shekyl-utils-object-sizes` | Print sizeof for core data structures |
-| `shekyl-utils-dns-checks` | Verify Shekyl DNS seed/update records |
 
-The last three (`shekyl-utils-*`) are only built when `BUILD_DEBUG_UTILITIES=ON`.
+The `shekyl-utils-*` executables are only built when `BUILD_DEBUG_UTILITIES=ON`.
 
 ---
 
@@ -597,18 +596,6 @@ shekyl-utils-object-sizes
 ```
 
 No options — simply run and inspect the output.
-
-### `shekyl-utils-dns-checks`
-
-Resolves Shekyl's hardcoded DNS seed, update, checkpoint, and seg-height
-hostnames and verifies DNSSEC signatures. Reports whether all name servers
-return consistent results.
-
-```bash
-shekyl-utils-dns-checks
-```
-
-No options — performs all checks and prints results.
 
 ---
 

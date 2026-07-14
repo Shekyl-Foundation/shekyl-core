@@ -7531,9 +7531,9 @@ one place to confirm each item's relationship to the wallet stack.
   `MLOG_SET_THREAD_NAME(label)` in
   `contrib/epee/include/misc_log_ex.h` is a `((void)(x))` no-op
   after Chore #2. Call sites (`abstract_tcp_server2.inl` ~L1399 /
-  L1459, `miner.cpp` ~L529, `download.cpp` ~L62) still compile and
+  L1459, `miner.cpp` ~L529) still compile and
   still evaluate their argument, but the human-readable label
-  (`[SRV_MAIN]` / `[miner 3]` / `DL12`) no longer reaches the log
+  (`[SRV_MAIN]` / `[miner 3]`) no longer reaches the log
   stream. easylogging++ used this hook to stamp the label into
   every subsequent emit; `tracing-subscriber`'s `fmt::layer` reads
   the OS-level thread name instead, and the Chore #2 shim is not
@@ -7841,21 +7841,9 @@ one place to confirm each item's relationship to the wallet stack.
   `STRUCTURAL_TODO.md`, 2026-05-30).** Consolidated here so open debt
   lives in one tracker; `STRUCTURAL_TODO.md` is now a structural-
   reference doc (32-bit security argument, migration-on-touch rubric,
-  naming reference), not an open-todo list. Three Windows/MSVC items:
+  naming reference), not an open-todo list. Two Windows/MSVC items:
 
-  1. **`libunbound` stubbed on MSVC (V3.2).** `dns_utils.cpp` is wrapped
-     in `#ifdef HAVE_DNS_UNBOUND` with no-op stubs in the `#else`
-     branch, so wallet DNS resolution (OpenAlias lookup, DNS checkpoint
-     fetch) silently does nothing on MSVC/Windows builds. Options:
-     (a) port `libunbound` to vcpkg; (b) Windows-native DNS backend
-     (`DnsQuery_A` / `DnsQueryEx`); (c) accept the limitation
-     (GUI-wallet-first posture; Tor/I2P transports are independent).
-     Option (c) is lowest-effort and likely correct, but unratified.
-     Whichever wins, the `#else` stubs must declare the contract
-     explicitly rather than silently returning empty strings. Target:
-     V3.2.
-
-  2. **MSVC warnings in vendored dependencies (V3.2).**
+  1. **MSVC warnings in vendored dependencies (V3.2).**
      `liblmdb/mdb.c:1745` (C4172: returning address of local `buf` —
      genuine dangling-pointer bug, debug-only path) is the only one with
      correctness risk and deserves an upstream report + local patch;
@@ -7864,7 +7852,7 @@ one place to confirm each item's relationship to the wallet stack.
      wallet-core hot paths. Target: V3.2 (address the dangling-pointer
      case; cosmetic ones may stay open).
 
-  3. **vcpkg builds take 45+ minutes — partially resolved (V3.3).** Even
+  2. **vcpkg builds take 45+ minutes — partially resolved (V3.3).** Even
      with `actions/cache`, vcpkg install is 45+ min cold / 10–15 min
      warm. A root `vcpkg.json` manifest was attempted (April 2026) but
      broke MSVC CI and was reverted; packages are listed explicitly in

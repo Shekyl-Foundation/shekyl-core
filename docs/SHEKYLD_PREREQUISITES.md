@@ -63,7 +63,6 @@ The flag is mutually exclusive with `--testnet` / `--stagenet`
 - `--keep-fakechain` — preserve LMDB across runs; without it, the DB
   is wiped each launch (`src/cryptonote_core/cryptonote_core.cpp:531–538`).
 - `--offline` — disable peer dialing (recommended for hermetic tests).
-- `--disable-dns-checkpoints` — disable upstream checkpoint fetch.
 
 **On-demand block generation.** The JSON-RPC method `generateblocks`
 exists (`src/rpc/core_rpc_server.h:153`,
@@ -96,7 +95,6 @@ shekyld \
   --regtest \
   --offline \
   --fixed-difficulty 1 \
-  --disable-dns-checkpoints \
   --data-dir /tmp/shekyl-regtest-XXXX \
   --rpc-bind-port 28081 \
   --p2p-bind-port 28080 \

@@ -48,7 +48,6 @@
 #include "version.h"
 #include "string_tools.h"
 #include "common/util.h"
-#include "common/dns_utils.h"
 #include "common/pruning.h"
 #include "net/error.h"
 #include "net/net_helper.h"
@@ -122,7 +121,6 @@ namespace nodetool
     command_line::add_arg(desc, arg_ban_list);
     command_line::add_arg(desc, arg_p2p_hide_my_port);
     command_line::add_arg(desc, arg_no_sync);
-    command_line::add_arg(desc, arg_enable_dns_blocklist);
     command_line::add_arg(desc, arg_no_igd);
     command_line::add_arg(desc, arg_igd);
     command_line::add_arg(desc, arg_out_peers);
@@ -585,8 +583,6 @@ namespace nodetool
     if (command_line::has_arg(vm, arg_no_sync))
       m_payload_handler.set_no_sync(true);
 
-    m_enable_dns_blocklist = command_line::get_arg(vm, arg_enable_dns_blocklist);
-
     if ( !set_max_out_peers(public_zone, command_line::get_arg(vm, arg_out_peers) ) )
       return false;
     else
@@ -760,127 +756,12 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  std::set<std::string> node_server<t_payload_net_handler>::get_dns_seed_nodes()
-  {
-    if (!m_exclusive_peers.empty() || m_offline)
-    {
-      return {};
-    }
-    if (m_nettype == cryptonote::TESTNET)
-    {
-      return get_ip_seed_nodes();
-    }
-    if (m_nettype == cryptonote::STAGENET)
-    {
-      return get_ip_seed_nodes();
-    }
-    if (!m_enable_dns_seed_nodes)
-    {
-      // TODO: a domain can be set through socks, so that the remote side does the lookup for the DNS seed nodes.
-      m_fallback_seed_nodes_added.test_and_set();
-      return get_ip_seed_nodes();
-    }
-
-    std::set<std::string> full_addrs;
-
-    // for each hostname in the seed nodes list, attempt to DNS resolve and
-    // add the result addresses as seed nodes
-    // TODO: at some point add IPv6 support, but that won't be relevant
-    // for some time yet.
-
-    std::vector<std::vector<std::string>> dns_results;
-    dns_results.resize(m_seed_nodes_list.size());
-
-    // some libc implementation provide only a very small stack
-    // for threads, e.g. musl only gives +- 80kb, which is not
-    // enough to do a resolve with unbound. we request a stack
-    // of 1 mb, which should be plenty
-    boost::thread::attributes thread_attributes;
-    thread_attributes.set_stack_size(1024*1024);
-
-    std::list<boost::thread> dns_threads;
-    uint64_t result_index = 0;
-    for (const std::string& addr_str : m_seed_nodes_list)
-    {
-      boost::thread th = boost::thread(thread_attributes, [=, &dns_results, &addr_str]
-      {
-        MDEBUG("dns_threads[" << result_index << "] created for: " << addr_str);
-        // TODO: care about dnssec avail/valid
-        bool avail, valid;
-        std::vector<std::string> addr_list;
-
-        try
-        {
-          addr_list = tools::DNSResolver::instance().get_ipv4(addr_str, avail, valid);
-          MDEBUG("dns_threads[" << result_index << "] DNS resolve done");
-          boost::this_thread::interruption_point();
-        }
-        catch(const boost::thread_interrupted&)
-        {
-          // thread interruption request
-          // even if we now have results, finish thread without setting
-          // result variables, which are now out of scope in main thread
-          MWARNING("dns_threads[" << result_index << "] interrupted");
-          return;
-        }
-
-        MINFO("dns_threads[" << result_index << "] addr_str: " << addr_str << "  number of results: " << addr_list.size());
-        dns_results[result_index] = addr_list;
-      });
-
-      dns_threads.push_back(std::move(th));
-      ++result_index;
-    }
-
-    MDEBUG("dns_threads created, now waiting for completion or timeout of " << CRYPTONOTE_DNS_TIMEOUT_MS << "ms");
-    boost::chrono::system_clock::time_point deadline = boost::chrono::system_clock::now() + boost::chrono::milliseconds(CRYPTONOTE_DNS_TIMEOUT_MS);
-    uint64_t i = 0;
-    for (boost::thread& th : dns_threads)
-    {
-      if (! th.try_join_until(deadline))
-      {
-        MWARNING("dns_threads[" << i << "] timed out, sending interrupt");
-        th.interrupt();
-      }
-      ++i;
-    }
-
-    i = 0;
-    for (const auto& result : dns_results)
-    {
-      MDEBUG("DNS lookup for " << m_seed_nodes_list[i] << ": " << result.size() << " results");
-      // if no results for node, thread's lookup likely timed out
-      if (result.size())
-      {
-        for (const auto& addr_string : result)
-          full_addrs.insert(addr_string + ":" + std::to_string(cryptonote::get_config(m_nettype).P2P_DEFAULT_PORT));
-      }
-      ++i;
-    }
-
-    // append the fallback nodes if we have too few seed nodes to start with
-    if (full_addrs.size() < MIN_WANTED_SEED_NODES)
-    {
-      if (full_addrs.empty())
-        MINFO("DNS seed node lookup either timed out or failed, falling back to defaults");
-      else
-        MINFO("Not enough DNS seed nodes found, using fallback defaults too");
-
-      for (const auto &peer: get_ip_seed_nodes())
-        full_addrs.insert(peer);
-      m_fallback_seed_nodes_added.test_and_set();
-    }
-
-    return full_addrs;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
   std::set<std::string> node_server<t_payload_net_handler>::get_seed_nodes(epee::net_utils::zone zone)
   {
     switch (zone)
     {
     case epee::net_utils::zone::public_:
-      return get_dns_seed_nodes();
+      return get_ip_seed_nodes();
     case epee::net_utils::zone::tor:
       if (m_nettype == cryptonote::MAINNET)
       {
@@ -922,7 +803,7 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::init(const boost::program_options::variables_map& vm, const std::string& proxy, bool proxy_dns_leaks_allowed)
+  bool node_server<t_payload_net_handler>::init(const boost::program_options::variables_map& vm, const std::string& proxy)
   {
     bool res = handle_command_line(vm);
     CHECK_AND_ASSERT_MES(res, false, "Failed to handle command line");
@@ -934,8 +815,6 @@ namespace nodetool
       public_zone.m_connect = &socks_connect;
       public_zone.m_proxy_address = *endpoint;
       public_zone.m_can_pingback = false;
-      m_enable_dns_seed_nodes &= proxy_dns_leaks_allowed;
-      m_enable_dns_blocklist &= proxy_dns_leaks_allowed;
     }
 
     if (m_nettype == cryptonote::TESTNET)
@@ -2127,55 +2006,6 @@ namespace nodetool
     m_gray_peerlist_housekeeping_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::gray_peerlist_housekeeping, this));
     m_peerlist_store_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::store_config, this));
     m_incoming_connections_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::check_incoming_connections, this));
-    m_dns_blocklist_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::update_dns_blocklist, this));
-    return true;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::update_dns_blocklist()
-  {
-    if (!m_enable_dns_blocklist)
-      return true;
-    if (m_nettype != cryptonote::MAINNET)
-      return true;
-
-    // Shekyl blocklist DNS records -- to be configured when DNS infrastructure is ready
-    static const std::vector<std::string> dns_urls = {
-      "blocklist.shekyl.org"
-    };
-
-    std::vector<std::string> records;
-    if (!tools::dns_utils::load_txt_records_from_dns(records, dns_urls))
-      return true;
-
-    unsigned good = 0;
-    for (const auto& record : records)
-    {
-      std::vector<std::string> ips;
-      boost::split(ips, record, boost::is_any_of(";"));
-      for (const auto &ip: ips)
-      {
-        if (ip.empty())
-          continue;
-        auto subnet = net::get_ipv4_subnet_address(ip);
-        if (subnet)
-        {
-          block_subnet(*subnet, DNS_BLOCKLIST_LIFETIME);
-          ++good;
-          continue;
-        }
-        const expect<epee::net_utils::network_address> parsed_addr = net::get_network_address(ip, 0);
-        if (parsed_addr)
-        {
-          block_host(*parsed_addr, DNS_BLOCKLIST_LIFETIME, true);
-          ++good;
-          continue;
-        }
-        MWARNING("Invalid IP address or subnet from DNS blocklist: " << ip << " - " << parsed_addr.error());
-      }
-    }
-    if (good > 0)
-      MINFO(good << " addresses added to the blocklist");
     return true;
   }
   //-----------------------------------------------------------------------------------

@@ -227,7 +227,6 @@ pub fn build_router(state: Arc<AppState>, cors_origins: &[String]) -> Router {
             .route("/set_limit", get(json::set_limit).post(json::set_limit))
             .route("/out_peers", get(json::out_peers).post(json::out_peers))
             .route("/in_peers", get(json::in_peers).post(json::in_peers))
-            .route("/update", get(json::update).post(json::update))
             .route("/pop_blocks", get(json::pop_blocks).post(json::pop_blocks));
     }
 
