@@ -294,6 +294,7 @@ const char* const LMDB_ARCHIVAL_SLASH_APPLIED = "archival_slash_applied";
 const char* const LMDB_ARCHIVAL_SLASH_LOG = "archival_slash_log";
 const char* const LMDB_ARCHIVAL_EMISSION_CLAIM_LOG = "archival_emission_claim_log";
 const char* const LMDB_ARCHIVAL_BOND_UNBOND_LOG = "archival_bond_unbond_log";
+const char* const LMDB_ARCHIVAL_BOND_HOLDINGS_UPDATE_LOG = "archival_bond_holdings_update_log";
 const char* const LMDB_ARCHIVAL_R_MARKET = "archival_r_market";
 const char* const LMDB_ARCHIVAL_SIGMA_WORK = "archival_sigma_work";
 const char* const LMDB_ARCHIVAL_EPOCH_CLOSE_LOG = "archival_epoch_close_log";
@@ -1546,9 +1547,11 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
   // set up lmdb environment
   if ((result = mdb_env_create(&m_env)))
     throw0(DB_ERROR(lmdb_error("Failed to create lmdb environment: ", result).c_str()));
-  // Six gate-2/gate-4 archival subdbs (serve-credit, bond, shard segment/leaf,
-  // slash applied/log) require headroom above the v7 curve-tree layout (36).
-  if ((result = mdb_env_set_maxdbs(m_env, 44)))
+  // Gate-2/gate-4 archival subdbs (serve-credit, bond, shard segment/leaf,
+  // slash applied/log, the reorg journals — emission-claim, Unbond, and the
+  // HoldingsUpdate pre-image log) require headroom above the v7 curve-tree
+  // layout (36).
+  if ((result = mdb_env_set_maxdbs(m_env, 45)))
     throw0(DB_ERROR(lmdb_error("Failed to set max number of dbs: ", result).c_str()));
 
   int threads = tools::get_max_concurrency();
@@ -1651,6 +1654,9 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
     "Failed to open db handle for m_archival_emission_claim_log");
   lmdb_db_open(txn, LMDB_ARCHIVAL_BOND_UNBOND_LOG, MDB_CREATE, m_archival_bond_unbond_log,
     "Failed to open db handle for m_archival_bond_unbond_log");
+  lmdb_db_open(txn, LMDB_ARCHIVAL_BOND_HOLDINGS_UPDATE_LOG, MDB_CREATE,
+    m_archival_bond_holdings_update_log,
+    "Failed to open db handle for m_archival_bond_holdings_update_log");
   lmdb_db_open(txn, LMDB_ARCHIVAL_R_MARKET, MDB_CREATE, m_archival_r_market,
     "Failed to open db handle for m_archival_r_market");
   lmdb_db_open(txn, LMDB_ARCHIVAL_SIGMA_WORK, MDB_CREATE, m_archival_sigma_work,
@@ -6170,6 +6176,237 @@ void BlockchainLMDB::revert_archival_unbonds_at_height(uint64_t block_height)
   archival_journal_delete<shekyl::db::ArchivalBondUnbondLogKey>(
     *m_write_txn, m_archival_bond_unbond_log, block_height,
     static_cast<uint32_t>(rows.size()), "archival bond unbond log");
+}
+
+namespace {
+// Rebuild the index-parallel add-epoch array for a POST holdings set from the
+// pre-connect (shard_id -> add_epoch) association. Linear per shard: holdings
+// are small (the linear-shard-scan idiom used throughout this file), and the
+// association is exact — a POST shard with no pre-image entry (and no override)
+// is a fold/record desync, so it aborts loud rather than inventing an epoch.
+std::vector<uint64_t> rebuild_shard_add_epochs(
+  const std::vector<uint64_t>& post_shard_ids,
+  const std::vector<uint64_t>& prev_shard_ids,
+  const std::vector<uint64_t>& prev_add_epochs,
+  uint64_t override_shard_id, uint64_t override_add_epoch, bool has_override)
+{
+  std::vector<uint64_t> out;
+  out.reserve(post_shard_ids.size());
+  for (const uint64_t s : post_shard_ids)
+  {
+    if (has_override && s == override_shard_id)
+    {
+      out.push_back(override_add_epoch);
+      continue;
+    }
+    bool found = false;
+    for (size_t i = 0; i < prev_shard_ids.size(); ++i)
+    {
+      if (prev_shard_ids[i] == s)
+      {
+        out.push_back(prev_add_epochs[i]);
+        found = true;
+        break;
+      }
+    }
+    if (!found)
+      throw std::runtime_error(
+        "FATAL: holdings-update carried shard missing from pre-image add-epochs");
+  }
+  return out;
+}
+} // namespace
+
+void BlockchainLMDB::apply_archival_holdings_update_add(uint64_t block_height,
+  const crypto::hash& p_id, const std::vector<uint64_t>& post_shard_ids)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: archival holdings-update-add requires active write txn");
+
+  shekyl::db::ArchivalBondValue bond{};
+  if (!load_archival_bond_value(p_id, bond))
+    throw std::runtime_error("FATAL: archival holdings-update-add without bond record");
+  if (bond.held_shard_ids.size() != bond.shard_add_epochs.size())
+    throw std::runtime_error("FATAL: bond record shard id / add-epoch length desync");
+
+  // Journal the pre-image of the mutated fields BEFORE mutating (the emission
+  // WS-2 §6.3 shape). The vin carries the POST holdings, so the pre-add shard
+  // set and add-epochs are not reconstructible at pop without this row.
+  shekyl::db::ArchivalBondHoldingsUpdateRevertValue log_entry{};
+  std::memcpy(log_entry.p_id, p_id.data, 32);
+  log_entry.pre_bonded_total = bond.bonded_total_atomic;
+  log_entry.pre_shard_ids = bond.held_shard_ids;
+  log_entry.pre_shard_add_epochs = bond.shard_add_epochs;
+
+  // Counter-threading (§3.5): read the LIVE total per post, immediately before
+  // the fold — never a caller-hoisted per-block value.
+  const uint64_t total_bonded = get_total_bonded_atomic();
+  const uint64_t add_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
+  uint64_t added_shard_id = 0;
+  uint64_t add_epoch_out = 0;
+  uint64_t new_bonded_total = 0;
+  uint64_t new_total_bonded = 0;
+  const uint8_t fold_rc = shekyl_archival_holdings_update_add_connect(
+    bond.bonded_total_atomic,
+    bond.held_shard_ids.empty() ? nullptr : bond.held_shard_ids.data(),
+    bond.held_shard_ids.size(),
+    post_shard_ids.empty() ? nullptr : post_shard_ids.data(),
+    post_shard_ids.size(),
+    total_bonded, add_epoch,
+    &added_shard_id, &add_epoch_out, &new_bonded_total, &new_total_bonded);
+  if (fold_rc != SHEKYL_ARCHIVAL_HU_APPLY_OK)
+    throw std::runtime_error("FATAL: archival holdings-update-add connect fold failed (code "
+      + std::to_string(static_cast<unsigned>(fold_rc)) + ")");
+
+  // Write exactly what the fold dictates: held_shard_ids = post, and the
+  // index-parallel add-epochs rebuilt (carried shards keep theirs; the added
+  // shard takes E_add). Record stays Bonded (ShardSetCompact) — no interval,
+  // no clean close (grace-tail).
+  bond.shard_add_epochs = rebuild_shard_add_epochs(post_shard_ids,
+    log_entry.pre_shard_ids, log_entry.pre_shard_add_epochs,
+    added_shard_id, add_epoch_out, /*has_override=*/true);
+  bond.bonded_total_atomic = new_bonded_total;
+  bond.held_shard_ids = post_shard_ids;
+  put_archival_bond_value(p_id, bond);
+  set_total_bonded_atomic(new_total_bonded);
+
+  const uint32_t seq = archival_journal_next_seq<shekyl::db::ArchivalBondHoldingsUpdateLogKey>(
+    *m_write_txn, m_archival_bond_holdings_update_log, block_height,
+    "archival bond holdings-update log");
+  archival_journal_put<shekyl::db::ArchivalBondHoldingsUpdateLogKey>(
+    *m_write_txn, m_archival_bond_holdings_update_log, block_height, seq, log_entry.encode(),
+    "archival bond holdings-update log");
+}
+
+void BlockchainLMDB::apply_archival_holdings_update_drop(uint64_t block_height,
+  const crypto::hash& p_id, const std::vector<uint64_t>& post_shard_ids)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: archival holdings-update-drop requires active write txn");
+
+  shekyl::db::ArchivalBondValue bond{};
+  if (!load_archival_bond_value(p_id, bond))
+    throw std::runtime_error("FATAL: archival holdings-update-drop without bond record");
+  if (bond.held_shard_ids.size() != bond.shard_add_epochs.size())
+    throw std::runtime_error("FATAL: bond record shard id / add-epoch length desync");
+
+  shekyl::db::ArchivalBondHoldingsUpdateRevertValue log_entry{};
+  std::memcpy(log_entry.p_id, p_id.data, 32);
+  log_entry.pre_bonded_total = bond.bonded_total_atomic;
+  log_entry.pre_shard_ids = bond.held_shard_ids;
+  log_entry.pre_shard_add_epochs = bond.shard_add_epochs;
+
+  const uint64_t total_bonded = get_total_bonded_atomic();
+  uint64_t dropped_shard_id = 0;
+  uint64_t new_bonded_total = 0;
+  uint64_t new_total_bonded = 0;
+  uint64_t refund_atomic = 0;
+  const uint8_t fold_rc = shekyl_archival_holdings_update_drop_connect(
+    bond.bonded_total_atomic,
+    bond.held_shard_ids.empty() ? nullptr : bond.held_shard_ids.data(),
+    bond.held_shard_ids.size(),
+    post_shard_ids.empty() ? nullptr : post_shard_ids.data(),
+    post_shard_ids.size(),
+    total_bonded,
+    &dropped_shard_id, &new_bonded_total, &new_total_bonded, &refund_atomic);
+  if (fold_rc != SHEKYL_ARCHIVAL_HU_APPLY_OK)
+    throw std::runtime_error("FATAL: archival holdings-update-drop connect fold failed (code "
+      + std::to_string(static_cast<unsigned>(fold_rc)) + ")");
+  // refund_atomic (== FLOOR) is the released collateral the vin's bond_debit
+  // returns to circulation, CT-balanced on the wire — not a ledger write here.
+  (void)refund_atomic;
+
+  // Every POST shard is carried (the dropped one is gone) — no override.
+  bond.shard_add_epochs = rebuild_shard_add_epochs(post_shard_ids,
+    log_entry.pre_shard_ids, log_entry.pre_shard_add_epochs,
+    /*override_shard_id=*/0, /*override_add_epoch=*/0, /*has_override=*/false);
+  bond.bonded_total_atomic = new_bonded_total;
+  bond.held_shard_ids = post_shard_ids;
+  put_archival_bond_value(p_id, bond);
+  set_total_bonded_atomic(new_total_bonded);
+
+  const uint32_t seq = archival_journal_next_seq<shekyl::db::ArchivalBondHoldingsUpdateLogKey>(
+    *m_write_txn, m_archival_bond_holdings_update_log, block_height,
+    "archival bond holdings-update log");
+  archival_journal_put<shekyl::db::ArchivalBondHoldingsUpdateLogKey>(
+    *m_write_txn, m_archival_bond_holdings_update_log, block_height, seq, log_entry.encode(),
+    "archival bond holdings-update log");
+}
+
+void BlockchainLMDB::revert_archival_holdings_updates_at_height(uint64_t block_height)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: archival holdings-update revert requires active write txn");
+
+  const std::vector<shekyl::db::ArchivalBondHoldingsUpdateRevertValue> rows =
+    archival_journal_read<shekyl::db::ArchivalBondHoldingsUpdateLogKey,
+      shekyl::db::ArchivalBondHoldingsUpdateRevertValue>(
+      *m_write_txn, m_archival_bond_holdings_update_log, block_height,
+      "archival bond holdings-update log");
+
+  // Restore in reverse connect order (§5). The record stays Bonded throughout,
+  // so there is no Exited/clean-close check — the pop fold only guards that the
+  // tip and pre-image balances differ by exactly one FLOOR.
+  for (auto it = rows.rbegin(); it != rows.rend(); ++it)
+  {
+    crypto::hash p_id{};
+    std::memcpy(p_id.data, it->p_id, 32);
+
+    shekyl::db::ArchivalBondValue bond{};
+    if (!load_archival_bond_value(p_id, bond))
+      throw std::runtime_error("FATAL: archival holdings-update revert without bond record");
+
+    const uint64_t total_bonded = get_total_bonded_atomic();
+    uint64_t new_total_bonded = 0;
+    const uint8_t fold_rc = shekyl_archival_holdings_update_pop(
+      bond.bonded_total_atomic, it->pre_bonded_total, total_bonded, &new_total_bonded);
+    if (fold_rc != SHEKYL_ARCHIVAL_HU_APPLY_OK)
+      throw std::runtime_error("FATAL: archival holdings-update pop fold failed (code "
+        + std::to_string(static_cast<unsigned>(fold_rc)) + ")");
+
+    // Restore exactly the mutated fields from the pre-image; holdings_kind
+    // (stays ShardSetCompact) and bad_intervals (untouched by the connect) were
+    // never journaled and need no restore.
+    bond.bonded_total_atomic = it->pre_bonded_total;
+    bond.held_shard_ids = it->pre_shard_ids;
+    bond.shard_add_epochs = it->pre_shard_add_epochs;
+    put_archival_bond_value(p_id, bond);
+    set_total_bonded_atomic(new_total_bonded);
+  }
+
+  archival_journal_delete<shekyl::db::ArchivalBondHoldingsUpdateLogKey>(
+    *m_write_txn, m_archival_bond_holdings_update_log, block_height,
+    static_cast<uint32_t>(rows.size()), "archival bond holdings-update log");
+}
+
+bool BlockchainLMDB::archival_shard_freeze_height(uint64_t shard_id, uint64_t& out) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  shekyl::db::ArchivalShardKey key(shard_id);
+  MDB_val k = key.as_mdb_val();
+  TXN_PREFIX_RDONLY();
+  MDB_val v;
+  const int rc = mdb_get(m_txn, m_archival_shard_segment, &k, &v);
+  TXN_POSTFIX_RDONLY();
+  if (rc == MDB_NOTFOUND)
+    return false;
+  if (rc)
+    throw0(DB_ERROR(lmdb_error(
+      "Failed to get archival_shard_segment for freeze height: ", rc).c_str()));
+
+  shekyl::db::ArchivalShardSegmentValue segment{};
+  if (!shekyl::db::ArchivalShardSegmentValue::decode(v.mv_data, v.mv_size, segment))
+    return false;
+  out = segment.freeze_height;
+  return true;
 }
 
 std::vector<uint64_t> BlockchainLMDB::archival_bond_last_served_epochs(

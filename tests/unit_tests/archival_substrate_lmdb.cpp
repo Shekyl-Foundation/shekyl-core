@@ -2237,6 +2237,187 @@ TEST(archival_substrate_lmdb, unbond_two_p_one_block_threads_the_counter)
   EXPECT_EQ(read.held_shard_ids, (std::vector<uint64_t>{8, 9}));
 }
 
+// Direct codec round-trip for the HoldingsUpdate record pre-image journal value
+// (gate-4 §4.4): encode → decode reproduces every field; an empty pre-image
+// (bonded 0) and a per-shard array length desync are both rejected at encode
+// (connect can never journal them).
+TEST(archival_substrate_lmdb, holdings_update_revert_value_round_trips)
+{
+  shekyl::db::ArchivalBondHoldingsUpdateRevertValue v{};
+  std::memset(v.p_id, 0x9E, sizeof(v.p_id));
+  v.pre_bonded_total = 3 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  v.pre_shard_ids = {7, 42, 99};
+  v.pre_shard_add_epochs = {3, 3, 11};
+
+  const std::vector<uint8_t> encoded = v.encode();
+  shekyl::db::ArchivalBondHoldingsUpdateRevertValue out{};
+  ASSERT_TRUE(shekyl::db::ArchivalBondHoldingsUpdateRevertValue::decode(
+    encoded.data(), encoded.size(), out));
+  EXPECT_EQ(0, std::memcmp(out.p_id, v.p_id, sizeof(v.p_id)));
+  EXPECT_EQ(out.pre_bonded_total, v.pre_bonded_total);
+  EXPECT_EQ(out.pre_shard_ids, v.pre_shard_ids);
+  EXPECT_EQ(out.pre_shard_add_epochs, v.pre_shard_add_epochs);
+
+  shekyl::db::ArchivalBondHoldingsUpdateRevertValue empty{};
+  EXPECT_THROW(empty.encode(), std::runtime_error);
+
+  shekyl::db::ArchivalBondHoldingsUpdateRevertValue desync{};
+  desync.pre_bonded_total = 1;
+  desync.pre_shard_ids = {1, 2};
+  desync.pre_shard_add_epochs = {1}; // length mismatch
+  EXPECT_THROW(desync.encode(), std::runtime_error);
+}
+
+// HoldingsUpdate-ADD connect/pop twin through the REAL block path (gate-4 §4.4):
+// add_block drives the vin dispatch → apply_archival_holdings_update_add
+// (pre-image journal, Rust fold counter movement, index-parallel add-epoch
+// rebuild with the new shard taking E_add), pop_block drives
+// revert_archival_holdings_updates_at_height (pop fold + byte-exact restore).
+// The record stays Bonded — no interval, no Exited transition.
+TEST(archival_substrate_lmdb, holdings_update_add_connect_pop_roundtrip_through_real_block_path)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  append_minimal_blocks(db, kSeb + 3);
+
+  // Bonded record holding two shards (add-epochs seeded at join epoch 3); the
+  // global counter is larger than the record's balance so the +FLOOR credit is
+  // observably an increment, not a reset.
+  const crypto::hash p_id = make_hash(0xF1);
+  const uint64_t record_bonded = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const uint64_t total_bonded = 5 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  db.put_archival_bond_record(p_id,
+    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B), {}, 3, record_bonded,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7, 42});
+  db.set_total_bonded_atomic(total_bonded);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  const uint64_t connect_height = db.height();
+  const uint64_t expected_epoch =
+    shekyl_archival_settlement_epoch_at_height(connect_height);
+  ASSERT_GT(expected_epoch, 0u);
+
+  // The add vin carries the POST holdings (current ∪ {99}) and +FLOOR credit.
+  transaction tx{};
+  tx.version = 2;
+  txin_archival_bond_post vin{};
+  vin.hybrid_public_key.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B);
+  vin.p_canonical_id = p_id;
+  vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::HoldingsUpdate);
+  vin.holdings.kind = archival_holdings_kind::ShardSetCompact;
+  vin.holdings.shard_ids = {7, 42, 99};
+  vin.bonded_total_atomic = 3 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  vin.bond_credit = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  vin.bond_debit = 0;
+  tx.vin.push_back(vin);
+
+  connect_block_with_txs(db, {tx});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.bonded_total_atomic, 3 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC);
+  EXPECT_EQ(read.holdings_kind, shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact);
+  EXPECT_EQ(read.held_shard_ids, (std::vector<uint64_t>{7, 42, 99}));
+  // Carried shards keep their join add-epoch; the added shard takes E_add.
+  EXPECT_EQ(read.shard_add_epochs, (std::vector<uint64_t>{3, 3, expected_epoch}));
+  EXPECT_TRUE(read.bad_intervals.empty());
+  EXPECT_EQ(db.get_total_bonded_atomic(), total_bonded + SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC);
+
+  block popped{};
+  std::vector<transaction> popped_txs;
+  fixture.db.pop_block(popped, popped_txs);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_EQ(popped_txs.size(), 1u);
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.bonded_total_atomic, record_bonded);
+  EXPECT_EQ(read.held_shard_ids, (std::vector<uint64_t>{7, 42}));
+  EXPECT_EQ(read.shard_add_epochs, (std::vector<uint64_t>{3, 3}));
+  EXPECT_EQ(db.get_total_bonded_atomic(), total_bonded);
+}
+
+// HoldingsUpdate-DROP connect/pop twin through the REAL block path (gate-4 §4.4
+// grace-tail): -FLOOR debit, the dropped shard (and its add-epoch) vanish, the
+// record stays Bonded, and the pop restores the dropped shard's add-epoch
+// byte-exactly. Seeded with DISTINCT per-shard add-epochs (via the whole-record
+// writer) so the restore is a meaningful check, not a constant.
+TEST(archival_substrate_lmdb, holdings_update_drop_connect_pop_roundtrip_through_real_block_path)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  append_minimal_blocks(db, kSeb + 3);
+
+  // Bonded record holding three shards with distinct add-epochs.
+  const crypto::hash p_id = make_hash(0xF2);
+  const uint64_t record_bonded = 3 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const uint64_t total_bonded = 5 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  shekyl::db::ArchivalBondValue seed{};
+  seed.hybrid_pubkey.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B);
+  seed.bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x6C);
+  seed.join_settlement_epoch = 3;
+  seed.bonded_total_atomic = record_bonded;
+  seed.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
+  seed.held_shard_ids = {7, 42, 99};
+  seed.shard_add_epochs = {3, 5, 8};
+  db.put_archival_bond_value(p_id, seed);
+  db.set_total_bonded_atomic(total_bonded);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // The drop vin carries the POST holdings (current \ {42}) and -FLOOR debit.
+  transaction tx{};
+  tx.version = 2;
+  txin_archival_bond_post vin{};
+  vin.hybrid_public_key.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B);
+  vin.p_canonical_id = p_id;
+  vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::HoldingsUpdate);
+  vin.holdings.kind = archival_holdings_kind::ShardSetCompact;
+  vin.holdings.shard_ids = {7, 99};
+  vin.bonded_total_atomic = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  vin.bond_credit = 0;
+  vin.bond_debit = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  tx.vin.push_back(vin);
+
+  connect_block_with_txs(db, {tx});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.bonded_total_atomic, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC);
+  EXPECT_EQ(read.holdings_kind, shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact);
+  EXPECT_EQ(read.held_shard_ids, (std::vector<uint64_t>{7, 99}));
+  // The dropped shard's add-epoch (5) is gone; the survivors keep theirs.
+  EXPECT_EQ(read.shard_add_epochs, (std::vector<uint64_t>{3, 8}));
+  EXPECT_TRUE(read.bad_intervals.empty());
+  EXPECT_EQ(db.get_total_bonded_atomic(), total_bonded - SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC);
+
+  block popped{};
+  std::vector<transaction> popped_txs;
+  fixture.db.pop_block(popped, popped_txs);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_EQ(popped_txs.size(), 1u);
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.bonded_total_atomic, record_bonded);
+  EXPECT_EQ(read.held_shard_ids, (std::vector<uint64_t>{7, 42, 99}));
+  EXPECT_EQ(read.shard_add_epochs, (std::vector<uint64_t>{3, 5, 8}));
+  EXPECT_EQ(db.get_total_bonded_atomic(), total_bonded);
+}
+
 // ── F-B1a: production-path epoch boundary — budget(E) includes E's final block ──
 //
 // The substrate KATs B1–B3 above drive add_archival_budget_accrual and the

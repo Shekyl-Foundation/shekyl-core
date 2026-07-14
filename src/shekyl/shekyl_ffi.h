@@ -1870,6 +1870,24 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING 22
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING  23
 
+// HoldingsUpdate bond-post semantics (gate-4 §4.4; PHASE_2B_FSM_RETOOL.md P2B-7,
+// grace-tail DROP). Extends the shared SHEKYL_ARCHIVAL_BOND_POST_* space: 24-30
+// are the ADD (credit) arm, 31-35 the DROP (grace-tail debit) arm; the shared
+// vin-marshaling guards (19 LEN_OVERFLOW, 23 BOND_SPEND_PK_COUPLING) and the
+// HOLDINGS_KIND guard (10) apply to both entry points as above.
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE 24
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ON_COMPLETE_TREE     25
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_POST_NOT_COMPACT     26
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_TERMS            27
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_GOOD_STANDING    28
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_ADD       29
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_FLOOR_MISMATCH   30
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_TERMS           31
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_DROP      32
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_LAST_SHARD      33
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_FLOOR_MISMATCH  34
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON  35
+
 /// Unbond bond-post verify. `record_exists`/`record_bonded_total`/
 /// `record_bad_interval_count` come from the LMDB bond record;
 /// `per_shard_last_served_ptr` is the array of the served shards' last-served
@@ -1979,6 +1997,122 @@ uint8_t shekyl_archival_unbond_pop(
     uint64_t trailing_interval_start,
     uint64_t trailing_interval_end,
     uint64_t unbond_settlement_epoch,
+    uint64_t journal_pre_bonded_total,
+    uint64_t total_bonded_atomic,
+    uint64_t* new_total_bonded_out);
+
+// HoldingsUpdate verify + connect/pop (gate-4 §4.4). Semantic verify returns the
+// shared SHEKYL_ARCHIVAL_BOND_POST_* space (OK=0, 24-35 HU-semantic, plus the
+// shared marshaling guards); the connect/pop folds return the HU_APPLY family
+// below. As with Unbond, a non-OK apply code is a connect-time invariant breach /
+// pop-time journal desync — the caller maps it to a FATAL abort, never a soft
+// skip.
+#define SHEKYL_ARCHIVAL_HU_APPLY_OK                        0
+#define SHEKYL_ARCHIVAL_HU_APPLY_ERR_NULL_PTR              1
+#define SHEKYL_ARCHIVAL_HU_APPLY_ERR_LEN_OVERFLOW          2
+#define SHEKYL_ARCHIVAL_HU_APPLY_ERR_NOT_SINGLE_ADD        3
+#define SHEKYL_ARCHIVAL_HU_APPLY_ERR_NOT_SINGLE_DROP       4
+#define SHEKYL_ARCHIVAL_HU_APPLY_ERR_DROP_LAST_SHARD       5
+#define SHEKYL_ARCHIVAL_HU_APPLY_ERR_RECORD_FLOOR_INVARIANT 6
+#define SHEKYL_ARCHIVAL_HU_APPLY_ERR_COUNTER_RANGE         7
+#define SHEKYL_ARCHIVAL_HU_APPLY_ERR_NOT_SINGLE_DELTA      8
+
+/// HoldingsUpdate-ADD verify (gate-4 §4.4 credit path). `shard_ids_*` is the
+/// vin's POST holdings; `record_shard_ids_*` the record's CURRENT holdings (for
+/// the single-shard diff); `record_bad_intervals_ptr` the flattened
+/// (start, end) pairs (2 × count u64s) feeding good-standing. A HoldingsUpdate
+/// vin never carries bond_spend_pk (credit path) — pass null/0.
+uint8_t shekyl_archival_verify_holdings_update_add(
+    uint8_t post_kind,
+    uint8_t holdings_kind,
+    const uint64_t* shard_ids_ptr,
+    size_t shard_ids_len,
+    const uint8_t* bond_spend_pk_ptr,
+    size_t bond_spend_pk_len,
+    uint64_t bonded_total_atomic,
+    uint64_t bond_credit,
+    uint64_t bond_debit,
+    uint8_t record_exists,
+    uint64_t record_bonded_total,
+    uint8_t record_holdings_kind,
+    const uint64_t* record_shard_ids_ptr,
+    size_t record_shard_ids_len,
+    uint64_t record_join_settlement_epoch,
+    const uint64_t* record_bad_intervals_ptr,
+    size_t record_bad_intervals_len,
+    uint64_t current_settlement_epoch);
+
+/// HoldingsUpdate-DROP verify (gate-4 §4.4 grace-tail debit path). C++ finds the
+/// dropped shard by set-difference (record CURRENT \ vin POST) and reads its
+/// per-shard facts from the coupled arrays: `dropped_shard_add_epoch` (the
+/// shard's stored add-epoch → bond_duration horizon), `dropped_shard_freeze_height`
+/// (H_close(add_epoch) for age-at-add), `dropped_shard_last_served` (u64 max =
+/// never served → release-cooldown anchor). `last_settled_slash_epoch` is the
+/// slash scheduler's monotone watermark (u64 max = no epoch settled yet). The
+/// Rust verify recomputes the diff and cross-checks `dropped_shard_id`.
+uint8_t shekyl_archival_verify_holdings_update_drop(
+    uint8_t post_kind,
+    uint8_t holdings_kind,
+    const uint64_t* shard_ids_ptr,
+    size_t shard_ids_len,
+    const uint8_t* bond_spend_pk_ptr,
+    size_t bond_spend_pk_len,
+    uint64_t bonded_total_atomic,
+    uint64_t bond_credit,
+    uint64_t bond_debit,
+    uint8_t record_exists,
+    uint64_t record_bonded_total,
+    uint8_t record_holdings_kind,
+    const uint64_t* record_shard_ids_ptr,
+    size_t record_shard_ids_len,
+    uint64_t dropped_shard_id,
+    uint64_t dropped_shard_add_epoch,
+    uint64_t dropped_shard_freeze_height,
+    uint64_t dropped_shard_last_served,
+    uint64_t last_settled_slash_epoch,
+    uint64_t current_settlement_epoch);
+
+/// HoldingsUpdate-ADD connect fold (gate-4 §4.4). The C++ arm journals the record
+/// pre-image, sets held_shard_ids = post + appends `add_settlement_epoch_out` as
+/// the added shard's coupled add-epoch, and writes the counters from
+/// new_bonded_total_out / new_total_bonded_out. `total_bonded_atomic` is the LIVE
+/// global counter (thread it per post — never a hoisted block-start read).
+uint8_t shekyl_archival_holdings_update_add_connect(
+    uint64_t record_bonded_total,
+    const uint64_t* record_shard_ids_ptr,
+    size_t record_shard_ids_len,
+    const uint64_t* post_shard_ids_ptr,
+    size_t post_shard_ids_len,
+    uint64_t total_bonded_atomic,
+    uint64_t add_settlement_epoch,
+    uint64_t* added_shard_id_out,
+    uint64_t* add_settlement_epoch_out,
+    uint64_t* new_bonded_total_out,
+    uint64_t* new_total_bonded_out);
+
+/// HoldingsUpdate-DROP connect fold (gate-4 §4.4 grace-tail). The C++ arm journals
+/// the pre-image, sets held_shard_ids = post (dropping the coupled add-epoch of
+/// `dropped_shard_id_out`), and writes the counters. `refund_out` (== FLOOR) is
+/// the bond_debit CT-balance source term — no ledger write here. `total_bonded_atomic`
+/// is the LIVE global counter (thread it per post).
+uint8_t shekyl_archival_holdings_update_drop_connect(
+    uint64_t record_bonded_total,
+    const uint64_t* record_shard_ids_ptr,
+    size_t record_shard_ids_len,
+    const uint64_t* post_shard_ids_ptr,
+    size_t post_shard_ids_len,
+    uint64_t total_bonded_atomic,
+    uint64_t* dropped_shard_id_out,
+    uint64_t* new_bonded_total_out,
+    uint64_t* new_total_bonded_out,
+    uint64_t* refund_out);
+
+/// HoldingsUpdate pop twin (add + drop; gate-4 §5). The record fields are restored
+/// caller-side as a byte-copy of the pre-image journal row; this reverts the global
+/// total_bonded_atomic by the connect's ±FLOOR delta, guarding that the tip
+/// record's bonded_total and the journaled pre-image differ by exactly one FLOOR.
+uint8_t shekyl_archival_holdings_update_pop(
+    uint64_t current_record_bonded_total,
     uint64_t journal_pre_bonded_total,
     uint64_t total_bonded_atomic,
     uint64_t* new_total_bonded_out);

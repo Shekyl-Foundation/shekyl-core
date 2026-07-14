@@ -204,10 +204,12 @@ with `Slashed` transition.
 **Voluntary holdings adjustment (`HoldingsUpdate`, genesis — P2B-7):** add/drop one shard
 shares the partial-slash *shape* — `bonded_total` and `holdings` mutate in-place, `P` **stays
 `Bonded`** — but differs on three load-bearing points: (1) it is **voluntary** (a self-posted
-`txin_archival_bond_post` `post_kind = HoldingsUpdate`), not consensus-imposed; (2) the dropped
-shard's released `FLOOR` enters a **per-shard release cooldown** rather than returning at once;
-(3) the dropped collateral **stays slashable** through that cooldown so a voluntary drop cannot
-dodge an in-flight challenge. Friction semantics, the slashable-when boundary, and the
+`txin_archival_bond_post` `post_kind = HoldingsUpdate`), not consensus-imposed; (2) **grace-tail**
+(ratified 2026-07-15) — the dropped shard's release cooldown must have elapsed **before** the drop
+posts, and at connect the `FLOOR` returns immediately (no post-drop cooldown sub-state); (3) the
+anti-dodge is the precondition itself — the drop cannot post until the shard's slashes are settled
+through its last-served anchor **and** its `bond_duration(age)` retention horizon has elapsed, so no
+in-flight challenge is escaped. Friction semantics, the slashable-when boundary, and the
 mutable-holdings serve-credit reconciliation are pinned in **P2B-7**.
 
 **`Exited` refinements:**
@@ -309,7 +311,7 @@ on the wire matches the function decomposition. Re-bond needs (b) regardless.
 | — | HKDF derive `P` (§9.4) | `AdmissionPending` |
 | `AdmissionPending` | **join-Market** confirm (bond-post vin; record + `E_join`) | `Bonded` |
 | `Bonded` | **HoldingsUpdate add shard** (credit `+FLOOR`; holdings grows) | `Bonded` |
-| `Bonded` | **HoldingsUpdate drop shard** (debit `FLOOR`; **≥1 shard remains**; dropped collateral → per-shard release cooldown, stays slashable) | `Bonded` |
+| `Bonded` | **HoldingsUpdate drop shard** (debit `FLOOR`; **≥1 shard remains**; grace-tail — cooldown/slash-settlement are drop *preconditions*, FLOOR returns at connect) | `Bonded` |
 | `Bonded` | Partial slash (shard dropped; bond > 0) | `Bonded` |
 | `Bonded` | Terminal slash (`bonded_total → 0`) | `Slashed` |
 | `Slashed` | Standalone re-bond (gate-4) | `Bonded` |
@@ -333,7 +335,7 @@ emission is the first emit action within `Bonded`:
 | Emit | `Bonded` / `Slashed` / `Exited` | `txin_archival_reward_emission`, batch ≤ 15. **Emit-new:** `Bonded` + `good_standing`. **Emit-backlog:** any of three + `good_through(E)` + `W` + dedup |
 | Designate backing (per emission — *not* a "rotation") | `Bonded` | membership-only selection from `funding_outputs`; consensus-untracked (§7.3); no state change |
 | HoldingsUpdate add shard | `Bonded` | `txin_archival_bond_post` `post_kind = HoldingsUpdate`; `bond_credit = +FLOOR`; new shard's serve begins, counted/claimable for that shard from `E_add + 1` (per-shard R1b) |
-| HoldingsUpdate drop shard | `Bonded` (**≥1 shard remains**) | `post_kind = HoldingsUpdate`; `bond_debit = FLOOR`; dropped collateral enters **per-shard release cooldown** (P2B-7) and **stays slashable** through it — no drop-to-dodge. Dropping the last shard is rejected; use `Unbond` (→ `Exited`) |
+| HoldingsUpdate drop shard | `Bonded` (**≥1 shard remains**) | `post_kind = HoldingsUpdate`; `bond_debit = FLOOR`; **grace-tail** (P2B-7 Pin 2/3): the dropped shard's release cooldown must have elapsed and its slashes settled **before** the drop posts (no drop-to-dodge), and its `bond_duration(age)` retention horizon must have elapsed; at connect the shard leaves `holdings` and the `FLOOR` returns immediately. Dropping the last shard is rejected; use `Unbond` (→ `Exited`) |
 | Exit / drain | `Bonded` / `Slashed` | Decorrelated `P`→principal — **non-escrowed** outputs only |
 | Unbond | `Exited` (post-cooldown) | Gate-4 collateral return; independent of backlog emit (`W`) |
 
@@ -400,8 +402,8 @@ claim-era wargame → §7.A. Draft retained as [`PHASE_2B_SECTION7_DRAFT.md`](..
 
 - [x] F1 — conditionally finally accepted (T-A1 v2); SEB **not** F1 lever; timing cluster pinned.
 - [x] T-A16 (A6 grief) + T-A15b (HoldingsUpdate evasion — now structurally foreclosed by
-  P2B-7 Pin 3: dropped collateral stays slashable through cooldown) + T-A17 (join
-  censorship, low).
+  P2B-7 Pin 3 grace-tail: a drop cannot post until the shard's slashes are settled and its
+  retention horizon has elapsed) + T-A17 (join censorship, low).
 - [x] G11 — positive KAT invariants G11-E1/E2/E3; full-node vs light-client split.
 - [x] G1 — three-tier surfacing; partial slash stays `Bonded` (FSM amended).
 - [x] LMDB substrate verify on `dev` — pattern clean (§7.11).
@@ -529,11 +531,13 @@ questions only, with historical callers rerouted to the bits. Resolved as part o
 - [x] Mutable-holdings serve-credit read rule pinned (Pin 4); `has_archival_bond_shard`
   flagged for the connect-path work.
 - [ ] **Per-shard `E_add + 1`** verify/connect rule landed in `shekyl-archival-retention`
-  (gate-4 connect paths, FOLLOWUPS V3.0). **Still open (impl):** verified at source 2026-07-12 —
-  `bond_post.rs` implements `verify_join_market_bond_post` only; the wire carries all four
-  `post_kind`s (`bond_wire.rs`) but verify rejects the other three at genesis (the
-  `PostKindNotJoinMarket` refusal). Rebond/Unbond/HoldingsUpdate verify+connect, the per-shard `E_add + 1` rule, and
-  `verify_unbond_release` (release-cooldown spendability gate) are all unbuilt.
+  (gate-4 connect paths, FOLLOWUPS V3.0). **Still open (impl):** as of 2026-07-13 the
+  `HoldingsUpdate` add/drop and `Unbond` verify+connect+pop paths are **landed and wired**
+  (`bond_post.rs` / `bond_connect.rs` + the C++ dispatch via `shekyl-ffi`); the record v6
+  `shard_add_epochs` substrate carries the per-shard add-epoch. What **remains open** here is the
+  gate-2 serve-credit **consumption** rule — Pin-4 (at-height `has_archival_bond_shard`) and
+  Pin-5 (per-shard `E_add + 1` counting/claim coverage) — a separate validation surface
+  (rule 19), plus `Rebond` verify+connect.
 - [x] **Age-stratified sim reconciliation (Step 3) — DONE; seal cleared.**
   [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §L18 (R-3 reconciliation, 2026-06-16):
   **`HoldingsUpdate` is sealable at genesis with `RELEASE_COOLDOWN = 2` and no change to

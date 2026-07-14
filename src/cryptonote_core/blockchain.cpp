@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdio>
+#include <limits>
 #include <sstream>
 #include <unordered_set>
 #include <boost/asio/dispatch.hpp>
@@ -4589,6 +4590,31 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING:
     return "bond_spend_pk violates the JoinMarket coupling (missing/non-canonical on "
       "JoinMarket, or present on another kind)";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE:
+    return "post_kind is not HoldingsUpdate";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ON_COMPLETE_TREE:
+    return "HoldingsUpdate on a CompleteTree record (no shard set to change)";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_POST_NOT_COMPACT:
+    return "HoldingsUpdate post holdings are not ShardSetCompact";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_TERMS:
+    return "HoldingsUpdate-add terms are not exactly +FLOOR credit / no debit";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_GOOD_STANDING:
+    return "HoldingsUpdate-add on a record not good_through the current epoch";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_ADD:
+    return "HoldingsUpdate-add is not exactly one added shard";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_FLOOR_MISMATCH:
+    return "HoldingsUpdate-add post bonded_total != bond_floor(post) / current + FLOOR";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_TERMS:
+    return "HoldingsUpdate-drop terms are not exactly -FLOOR debit / no credit";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_DROP:
+    return "HoldingsUpdate-drop is not exactly one removed shard (or not the shard "
+      "facts were read for)";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_LAST_SHARD:
+    return "HoldingsUpdate-drop would empty the shard set (a full exit is Unbond)";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_FLOOR_MISMATCH:
+    return "HoldingsUpdate-drop post bonded_total != bond_floor(post) / current - FLOOR";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON:
+    return "HoldingsUpdate-drop before the shard's retention-commitment horizon elapsed";
   default:
     return "unknown bond-post verify code";
   }
@@ -4713,6 +4739,170 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     {
       MERROR_VER("Archival Unbond verify failed (code " << static_cast<unsigned>(verify_rc)
         << "): " << archival_bond_post_verify_err_string(verify_rc));
+      return false;
+    }
+    return true;
+  }
+
+  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::HoldingsUpdate))
+  {
+    // §9.11 coupling belt: a HoldingsUpdate never carries the vin-borne debit
+    // authorizer — the add is a credit (identity-key auth) and the drop's debit
+    // authorizes against the record's COMMITTED bond_spend_pk (GF-1 selector),
+    // never a key the vin brings along.
+    if (!bond.bond_spend_pk.empty())
+    {
+      MERROR_VER("Archival HoldingsUpdate rejected: vin carries a bond_spend_pk "
+        "(JoinMarket-coupled field)");
+      return false;
+    }
+
+    shekyl::db::ArchivalBondValue record{};
+    const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);
+    if (have_record
+        && record.held_shard_ids.size() != record.shard_add_epochs.size())
+    {
+      MERROR_VER("Archival HoldingsUpdate rejected: record shard id / add-epoch "
+        "length desync");
+      return false;
+    }
+    const uint64_t current_epoch = shekyl_archival_settlement_epoch_at_height(chain_height);
+    const uint64_t* record_shard_ptr = record.held_shard_ids.empty()
+      ? nullptr : record.held_shard_ids.data();
+
+    // Direction (verify-pinned §3.2): bond_debit == 0 is the add (credit) arm;
+    // a positive debit is the drop (grace-tail) arm. Each arm's own term check
+    // is authoritative — this only selects which fact set to marshal.
+    if (bond.bond_debit == 0)
+    {
+      // ADD (credit path): marshal the record's current holdings + the good_through
+      // inputs (join epoch + bad intervals). Auth is the IDENTITY key.
+      std::vector<uint64_t> bad_flat;
+      bad_flat.reserve(record.bad_intervals.size() * 2);
+      for (const auto& iv : record.bad_intervals)
+      {
+        bad_flat.push_back(iv.start_epoch);
+        bad_flat.push_back(iv.end_exclusive);
+      }
+      const uint8_t hu_rc = shekyl_archival_verify_holdings_update_add(
+        bond.post_kind,
+        static_cast<uint8_t>(bond.holdings.kind),
+        shard_ptr,
+        bond.holdings.shard_ids.size(),
+        nullptr, // bond_spend_pk: empty on HoldingsUpdate (belt above)
+        0,
+        bond.bonded_total_atomic,
+        bond.bond_credit,
+        bond.bond_debit,
+        have_record ? 1 : 0,
+        record.bonded_total_atomic,
+        static_cast<uint8_t>(record.holdings_kind),
+        record_shard_ptr,
+        record.held_shard_ids.size(),
+        record.join_settlement_epoch,
+        bad_flat.empty() ? nullptr : bad_flat.data(),
+        record.bad_intervals.size(),
+        current_epoch);
+      if (hu_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
+      {
+        MERROR_VER("Archival HoldingsUpdate-add verify failed (code "
+          << static_cast<unsigned>(hu_rc) << "): "
+          << archival_bond_post_verify_err_string(hu_rc));
+        return false;
+      }
+      if (auth_pubkey != bond.hybrid_public_key)
+      {
+        MERROR_VER("Archival HoldingsUpdate-add rejected: credit-path pqc auth key "
+          "does not match the identity key P_pubkey");
+        return false;
+      }
+      return true;
+    }
+
+    // DROP (grace-tail debit path). GF-1 debit authorization — the SHARED debit
+    // authorizer (the Unbond arm's twin): the pqc auth verifies against the
+    // record's COMMITTED bond_spend_pk, never the identity key. A missing record
+    // falls through — the semantic verify owns that verdict (RECORD_MISSING).
+    if (have_record)
+    {
+      if (record.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
+      {
+        MERROR_VER("Archival HoldingsUpdate-drop rejected: record commits no "
+          "bond_spend_pk; a debit cannot be authorized");
+        return false;
+      }
+      if (auth_pubkey != record.bond_spend_pk)
+      {
+        MERROR_VER("Archival HoldingsUpdate-drop rejected: pqc auth key does not "
+          "match the record's committed bond_spend_pk");
+        return false;
+      }
+    }
+
+    // Identify the dropped shard by set-difference (record CURRENT \ vin POST)
+    // and read its per-shard facts. The Rust verify recomputes the diff and
+    // cross-checks dropped_shard_id, so a non-single diff is rejected there
+    // regardless of what we pass; we gather real facts only when exactly one
+    // shard was removed (the happy path), else pass zeroed facts.
+    uint64_t dropped_shard_id = 0;
+    uint64_t dropped_add_epoch = 0;
+    uint64_t dropped_freeze_height = 0;
+    uint64_t dropped_last_served = std::numeric_limits<uint64_t>::max();
+    if (have_record)
+    {
+      std::vector<size_t> removed_idx;
+      for (size_t i = 0; i < record.held_shard_ids.size(); ++i)
+      {
+        const uint64_t s = record.held_shard_ids[i];
+        if (std::find(bond.holdings.shard_ids.begin(), bond.holdings.shard_ids.end(), s)
+            == bond.holdings.shard_ids.end())
+          removed_idx.push_back(i);
+      }
+      if (removed_idx.size() == 1)
+      {
+        const size_t i = removed_idx[0];
+        dropped_shard_id = record.held_shard_ids[i];
+        dropped_add_epoch = record.shard_add_epochs[i];
+        // The shard must have a frozen segment (add requires one); a missing
+        // segment on a held shard is record corruption — fail closed by leaving
+        // the freeze height at 0, which yields the longest (hardest-to-drop)
+        // horizon in the Rust age computation.
+        uint64_t freeze = 0;
+        if (m_db->archival_shard_freeze_height(dropped_shard_id, freeze))
+          dropped_freeze_height = freeze;
+        const std::vector<uint64_t> served =
+          m_db->archival_bond_last_served_epochs(bond.p_canonical_id, {dropped_shard_id});
+        if (!served.empty())
+          dropped_last_served = served.front();
+      }
+    }
+    const uint64_t last_settled_slash_epoch = m_db->get_archival_last_slash_epoch();
+    const uint8_t hu_rc = shekyl_archival_verify_holdings_update_drop(
+      bond.post_kind,
+      static_cast<uint8_t>(bond.holdings.kind),
+      shard_ptr,
+      bond.holdings.shard_ids.size(),
+      nullptr, // bond_spend_pk: empty on HoldingsUpdate (belt above)
+      0,
+      bond.bonded_total_atomic,
+      bond.bond_credit,
+      bond.bond_debit,
+      have_record ? 1 : 0,
+      record.bonded_total_atomic,
+      static_cast<uint8_t>(record.holdings_kind),
+      record_shard_ptr,
+      record.held_shard_ids.size(),
+      dropped_shard_id,
+      dropped_add_epoch,
+      dropped_freeze_height,
+      dropped_last_served,
+      last_settled_slash_epoch,
+      current_epoch);
+    if (hu_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
+    {
+      MERROR_VER("Archival HoldingsUpdate-drop verify failed (code "
+        << static_cast<unsigned>(hu_rc) << "): "
+        << archival_bond_post_verify_err_string(hu_rc));
       return false;
     }
     return true;

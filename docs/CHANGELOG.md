@@ -4,6 +4,53 @@
 
 ### Added
 
+- **archival: `HoldingsUpdate` add + drop — the voluntary one-shard bond
+  balance path, end-to-end (gate-4 §4.4; P2B-7; `feat/bond-fsm-holdings-update`).**
+  Building on slice A's `bond_duration` freeze: the fourth and final bond-FSM
+  kind (`JoinMarket / Rebond / Unbond / HoldingsUpdate`) now verifies, connects,
+  and reorg-reverts through the real block path. A record stays `Bonded`
+  throughout — one shard is added (`+FLOOR` credit) or dropped (`−FLOOR`
+  debit) under the `bonded_total == bond_floor(holdings)` balance.
+  - **Record (v6):** `ArchivalBondValue` gains a per-shard `shard_add_epochs`
+    array, index-parallel to `held_shard_ids` under one holdings count (a
+    length desync cannot round-trip). Join-time shards take `E_join`; a
+    HoldingsUpdate-add appends `E_add`; a drop removes the dropped shard's
+    entry. The drop path reads it for the retention horizon and (slice A) the
+    age-at-add. The reorg-log schemas ripple to match: `ArchivalSlashRevertValue`
+    v3 and `ArchivalBondUnbondRevertValue` v2 carry the coupled add-epochs.
+  - **Verify (Rust-native, `shekyl-archival-retention::bond_post`):**
+    `verify_holdings_update_add` gates on ShardSetCompact record + post,
+    exactly `+FLOOR` credit, good-standing (`good_through` the current epoch),
+    a single-shard set-diff add, and post-floor equality;
+    `verify_holdings_update_drop` gates on exactly `−FLOOR` debit, a single-shard
+    removal (drop-last rejected — a full exit is `Unbond`), post-floor equality,
+    the **retention horizon** (`current_epoch − add_epoch ≥ bond_duration`), and
+    the **grace-tail** precondition (the dropped shard's release cooldown elapsed
+    and slashes settled through its last-served anchor). 22 KATs.
+  - **Grace-tail DROP model (ratified 2026-07-15):** the release cooldown is a
+    verify *precondition*; at connect the shard leaves `holdings` and the FLOOR
+    returns immediately via the `bond_debit` source term — no cooldown sub-state,
+    no interval, no clean-close marker (superseding the earlier drop-then-cool
+    fossil, P2B-7 Pin 2/3, swept in the design docs).
+  - **Connect/pop folds + FFI:** `holdings_update_{add,drop}_connect` produce the
+    counter movement (absolute post-values, threaded per post) and the
+    single-shard delta; `holdings_update_pop` reverts by the connect's `±FLOOR`.
+    Exposed across the single `shekyl-ffi` boundary
+    (`shekyl_archival_verify_holdings_update_{add,drop}`,
+    `shekyl_archival_holdings_update_{add_connect,drop_connect,pop}`).
+  - **C++ dispatch (thin glue):** the bond-post verify branch routes add/drop on
+    the debit direction and applies the GF-1 auth selector (credit → identity
+    key; drop's debit → the record's committed `bond_spend_pk`, the Unbond arm's
+    twin); the connect arm journals the record pre-image to a dedicated
+    `archival_bond_holdings_update_log` (the record stays `Bonded`, so it cannot
+    share Unbond's Exited/clean-close pop path) and applies the fold's write set
+    with per-post live-counter threading; `pop_block` reverts it. Real-block-path
+    add/drop connect/pop KATs assert the add-epoch rebuild, the counter movement,
+    and the byte-exact reorg restore.
+  - **Follow-on (rule 19, named not deferred):** the gate-2 serve-credit
+    reconciliation pins (Pin-4 at-height `has_archival_bond_shard`, Pin-5
+    per-shard `E_add+1` coverage) are a separate validation surface.
+
 - **archival: `bond_duration(age)` retention-horizon freeze — HoldingsUpdate
   slice A (gate-4 §4.4; `ARCHIVAL_TIMING_CONSTANTS.md` §1; P2B-7 Pin 3 /
   P2B-8 Q3; `feat/bond-fsm-holdings-update`).** The genesis-frozen per-shard
