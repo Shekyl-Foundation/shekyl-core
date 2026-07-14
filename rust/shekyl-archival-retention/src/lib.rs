@@ -54,10 +54,11 @@ pub mod wire;
 
 pub use bond_connect::{
     clean_interval_close, holdings_update_add_connect, holdings_update_drop_connect,
-    holdings_update_pop, is_clean_interval_close, rebond_connect, rebond_pop, unbond_connect,
-    unbond_pop, HoldingsUpdateAddConnect, HoldingsUpdateConnectError, HoldingsUpdateDropConnect,
-    HoldingsUpdatePopError, RebondConnect, RebondConnectError, RebondPopError, UnbondConnect,
-    UnbondConnectError, UnbondPopError, MAX_BOND_BAD_INTERVALS,
+    holdings_update_pop, is_clean_interval_close, rebond_connect, rebond_pop,
+    slash_open_interval_to_append, unbond_connect, unbond_pop, HoldingsUpdateAddConnect,
+    HoldingsUpdateConnectError, HoldingsUpdateDropConnect, HoldingsUpdatePopError, RebondConnect,
+    RebondConnectError, RebondPopError, UnbondConnect, UnbondConnectError, UnbondPopError,
+    MAX_BOND_BAD_INTERVALS,
 };
 pub use bond_ct_balance::{verify_bond_post_ct_balance, BondCtBalanceError, BondTerm};
 pub use bond_duration::{bond_duration, ShardAgeAtAdd};
@@ -73,7 +74,7 @@ pub use bond_post::{
 };
 pub use bond_wire::{
     encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,
-    HoldingsKind, BOND_POST_SIG_CUSTOMIZATION, HYBRID_PUBKEY_CANONICAL_BYTES,
+    HoldingsKind, BOND_POST_SIG_CUSTOMIZATION, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_HOLDINGS_SHARDS,
     VIN_TYPE_ARCHIVAL_BOND_POST,
 };
 pub use challenge::{

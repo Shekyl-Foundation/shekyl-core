@@ -1905,6 +1905,18 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM     42
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS            43
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET     44
+// Rebond post-holdings exceed the codec shard cap (bond_floor collapses to an
+// in-band 0 on an oversize set — without the bound a terminal-slashed record
+// verified an oversize post at zero credit, then aborted block connect at the
+// record encode).
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE    45
+// Record bonded_total != bond_floor(record holdings) — floor-drifted record,
+// rejected at verify so the tx never rides to the connect fold's FATAL belt.
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR     46
+// Shared vin marshal (every bond-post verify entry): the vin's holdings shard
+// count exceeds the wire codec bound (MAX_HOLDINGS_SHARDS) — the FFI marshal
+// is a second decoder and enforces the decoder's structural cap.
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED 47
 
 /// Unbond bond-post verify. `record_exists`/`record_bonded_total`/
 /// `record_bad_interval_count` come from the LMDB bond record;
@@ -2161,6 +2173,7 @@ uint8_t shekyl_archival_holdings_update_pop(
 #define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_COUNTER_RANGE           9
 #define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NOT_REBOND_DELTA       10
 #define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_ADDED_BUFFER_TOO_SMALL 11
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_POST_OVERSIZE          12
 
 /// Rebond verify (gate-4 §3.4; P2B-9). `shard_ids_*` is the vin's POST holdings
 /// (the superset re-spec); `record_shard_ids_*` the record's CURRENT holdings;
@@ -2260,6 +2273,27 @@ uint8_t shekyl_archival_challenge_leaf_chunk_bounds(
 // computation — membership, R_market counting, age weighting, scarcity, curve,
 // Σwork — to Rust in one coarse call (40-ffi-discipline.mdc). C++ performs no
 // consensus arithmetic.
+
+// Same-epoch slash-coalescing decision (P2B-9 Pin 5). The decision AND the
+// interval shape live Rust-side; the C++ slash writer appends exactly what
+// the call returns, deciding nothing.
+#define SHEKYL_ARCHIVAL_SLASH_INTERVAL_COALESCE    0
+#define SHEKYL_ARCHIVAL_SLASH_INTERVAL_APPEND      1
+#define SHEKYL_ARCHIVAL_SLASH_INTERVAL_ERR_MARSHAL 2
+
+/// Returns SHEKYL_ARCHIVAL_SLASH_INTERVAL_APPEND and writes the open interval
+/// [settlement_epoch, u64 MAX) when the record carries no open bad interval;
+/// SHEKYL_ARCHIVAL_SLASH_INTERVAL_COALESCE (no write) when one exists (the
+/// same-epoch sibling slash appends nothing — at most one open interval ever).
+/// SHEKYL_ARCHIVAL_SLASH_INTERVAL_ERR_MARSHAL is a marshal fault the slash
+/// writer maps to a FATAL abort, never a skip. `bad_intervals_ptr` is
+/// `2 × bad_intervals_len` u64s — the shekyl_archival_good_through layout.
+uint8_t shekyl_archival_slash_open_interval_to_append(
+    const uint64_t* bad_intervals_ptr,
+    size_t bad_intervals_len,
+    uint64_t settlement_epoch,
+    uint64_t* interval_start_out,
+    uint64_t* interval_end_out);
 
 /// `good_through(P, E)` from bond fields (§3.4 interval semantics).
 /// `bad_intervals_ptr` is `2 × bad_intervals_len` u64s — flattened

@@ -11,8 +11,8 @@
 
 use thiserror::Error;
 
-use crate::bond_floor::bond_floor;
-use crate::bond_wire::{ArchivalBondPostVin, BondPostKind, HoldingsKind};
+use crate::bond_floor::{bond_floor, bond_floor_of};
+use crate::bond_wire::{ArchivalBondPostVin, BondPostKind, HoldingsKind, MAX_HOLDINGS_SHARDS};
 use crate::distinct::all_distinct;
 use crate::release_cooldown::{release_cooldown_elapsed, slashes_settled_through};
 
@@ -118,6 +118,19 @@ pub enum BondPostError {
          HoldingsUpdate-drop's gated job)"
     )]
     RebondNotSuperset,
+    #[error(
+        "Rebond post-holdings exceed the codec shard cap — bond_floor collapses \
+         to 0 on an oversize set, which would let an oversize post on a \
+         terminal-slashed record demand zero credit and then abort block-connect \
+         at the record encode"
+    )]
+    RebondPostOversize,
+    #[error(
+        "record bonded_total != bond_floor(record holdings) — record corruption; \
+         rejected at verify so a verify-valid tx can never meet the connect \
+         fold's loud floor belt (tx rejection, not a chain halt)"
+    )]
+    RebondRecordFloorBroken,
 }
 
 /// The single-shard set difference `post ∖ current` when `post` grows `current` by
@@ -443,6 +456,16 @@ pub fn verify_rebond_bond_post(
     if vin.holdings.shard_ids.is_empty() {
         return Err(BondPostError::ShardSetCompactEmpty);
     }
+    // `bond_floor` collapses to 0 on a post set past the codec cap — the same
+    // in-band zero as the empty exit shape — so without this bound an oversize
+    // post on a terminal-slashed record (bonded_total == 0) would demand zero
+    // credit below, verify with 4097+ unfunded shards, and then abort block
+    // connect at the record encode. The wire decoder enforces the cap, but the
+    // FFI marshal is a second decoder; verify fails closed regardless of entry
+    // (the Unbond oversize guard's Rebond twin).
+    if vin.holdings.shard_ids.len() > MAX_HOLDINGS_SHARDS {
+        return Err(BondPostError::RebondPostOversize);
+    }
     // Precondition: exactly one open bad interval (Pin 5's coalescing invariant).
     let open_count = record_bad_intervals
         .iter()
@@ -464,9 +487,18 @@ pub fn verify_rebond_bond_post(
     if superset_added_diff(record_held_shard_ids, &vin.holdings.shard_ids).is_none() {
         return Err(BondPostError::RebondNotSuperset);
     }
+    // §3.2 record floor invariant, checked HERE against the marshaled record
+    // facts — not deferred to the connect fold's RecordFloorInvariantBroken
+    // belt: a floor-drifted record would otherwise let this tx verify (its
+    // terms are computed FROM the drifted total) and then FATAL-abort every
+    // node at block connect. Verify rejects the tx; the fold's belt stays for
+    // verify-bypassing callers (the multiplicity check's posture, one check up).
+    if bond_floor_of(record_holdings_kind, record_held_shard_ids.len()) != current_bonded {
+        return Err(BondPostError::RebondRecordFloorBroken);
+    }
     // Pin 2 terms (§3.2): no debit; credit == bond_floor(post) − current bonded
-    // (== |added|·FLOOR under the record floor invariant, which the connect fold
-    // belts; zero legal); post-state floor equality. `checked_sub` fails closed on
+    // (== |added|·FLOOR under the record floor invariant, checked just above;
+    // zero legal); post-state floor equality. `checked_sub` fails closed on
     // a record whose bonded exceeds the post floor (corruption — the superset
     // makes an honest shrink unrepresentable).
     if vin.bond_debit != 0 {
@@ -1615,8 +1647,9 @@ mod tests {
         let mut vin = rebond_vin(vec![7, 9], 0);
         vin.bonded_total_atomic += 1;
         assert_eq!(ok_rebond(&vin), Err(BondPostError::RebondTerms));
-        // A record whose bonded exceeds floor(post) fails closed (corruption; an
-        // honest shrink is unrepresentable under the superset).
+        // A record whose bonded exceeds floor(record holdings) is corruption —
+        // the explicit floor-invariant check names it (an honest shrink is
+        // unrepresentable under the superset anyway).
         assert_eq!(
             verify_rebond_bond_post(
                 &rebond_vin(vec![7, 9], 0),
@@ -1625,7 +1658,56 @@ mod tests {
                 &rebond_record_shards(),
                 &[open_interval(5)],
             ),
-            Err(BondPostError::RebondTerms)
+            Err(BondPostError::RebondRecordFloorBroken)
+        );
+    }
+
+    #[test]
+    fn rebond_rejects_oversize_shard_set() {
+        // The fail-open hole this guard closes: on a terminal-slashed record
+        // (bonded_total == 0, no held shards) an oversize post collapses
+        // bond_floor to 0, so expected_credit == 0 and the vin verified with
+        // 4097+ shards and ZERO collateral funded — then rebond_connect (which
+        // credits |added|·FLOOR directly) produced a record the codec refuses
+        // to encode, aborting block connect deterministically. Reachable via
+        // the FFI, which is a second decoder for the wire object (the Unbond
+        // oversize test's Rebond twin); the FFI marshal now also enforces the
+        // cap at the boundary.
+        let mut vin = rebond_vin((0..=MAX_HOLDINGS_SHARDS as u64).collect(), 0);
+        vin.bonded_total_atomic = 0;
+        assert_eq!(bond_floor(&vin.holdings), 0);
+        assert_eq!(
+            verify_rebond_bond_post(
+                &vin,
+                Some(0),
+                HoldingsKind::ShardSetCompact,
+                &[],
+                &[open_interval(5)],
+            ),
+            Err(BondPostError::RebondPostOversize)
+        );
+    }
+
+    #[test]
+    fn rebond_rejects_record_floor_drift() {
+        // A record whose bonded_total drifted BELOW bond_floor(holdings)
+        // (1.5·FLOOR over two shards — no honest path produces it; any latent
+        // bug or DB corruption could). The terms alone would verify — credit =
+        // bond_floor(post) − 1.5·FLOOR via the checked_sub — and the connect
+        // fold's RecordFloorInvariantBroken belt would then FATAL-abort every
+        // node connecting the block. The verify-side check turns the chain
+        // halt into a tx rejection.
+        let drifted = ARCHIVAL_BOND_FLOOR_ATOMIC + ARCHIVAL_BOND_FLOOR_ATOMIC / 2;
+        let vin = rebond_vin(vec![7, 9], 2 * ARCHIVAL_BOND_FLOOR_ATOMIC - drifted);
+        assert_eq!(
+            verify_rebond_bond_post(
+                &vin,
+                Some(drifted),
+                HoldingsKind::ShardSetCompact,
+                &rebond_record_shards(),
+                &[open_interval(5)],
+            ),
+            Err(BondPostError::RebondRecordFloorBroken)
         );
     }
 }

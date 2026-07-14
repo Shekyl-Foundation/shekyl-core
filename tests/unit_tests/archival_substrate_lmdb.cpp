@@ -2573,6 +2573,54 @@ TEST(archival_substrate_lmdb, rebond_revert_value_round_trips)
   EXPECT_THROW(desync.encode(), std::runtime_error);
 }
 
+// Slashed-record seed shared by the Rebond round-trip KATs: survivors {7, 9}
+// (add-epochs 0), one open bad interval from epoch 0, floor-consistent balance
+// 2·FLOOR, global counter 5·FLOOR. The record shape is single-sourced so a
+// future ArchivalBondValue field the Rebond path must carry lands in every
+// round-trip at once instead of leaving one green-passing on a stale seed.
+static crypto::hash seed_slashed_rebond_record(TempLMDB& fixture, uint8_t p_byte)
+{
+  BlockchainDB& db = fixture.db;
+  const crypto::hash p_id = make_hash(p_byte);
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  shekyl::db::ArchivalBondValue seed{};
+  seed.hybrid_pubkey.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B);
+  seed.bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x6C);
+  seed.join_settlement_epoch = 0;
+  seed.bonded_total_atomic = 2 * floor;
+  seed.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
+  seed.held_shard_ids = {7, 9};
+  seed.shard_add_epochs = {0, 0};
+  shekyl::db::ArchivalBondValue::BadInterval open{};
+  open.start_epoch = 0;
+  open.end_exclusive = std::numeric_limits<uint64_t>::max();
+  seed.bad_intervals = {open};
+  db.put_archival_bond_value(p_id, seed);
+  db.set_total_bonded_atomic(5 * floor);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  return p_id;
+}
+
+// A Rebond tx (credit path, no debit) carrying the POST holdings re-spec.
+static transaction make_rebond_tx(const crypto::hash& p_id,
+  std::vector<uint64_t> post_shard_ids, uint64_t bonded_total_atomic, uint64_t bond_credit)
+{
+  transaction tx{};
+  tx.version = 2;
+  txin_archival_bond_post vin{};
+  vin.hybrid_public_key.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B);
+  vin.p_canonical_id = p_id;
+  vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Rebond);
+  vin.holdings.kind = archival_holdings_kind::ShardSetCompact;
+  vin.holdings.shard_ids = std::move(post_shard_ids);
+  vin.bonded_total_atomic = bonded_total_atomic;
+  vin.bond_credit = bond_credit;
+  vin.bond_debit = 0;
+  tx.vin.push_back(vin);
+  return tx;
+}
+
 // Rebond connect/pop twin through the REAL block path (gate-4 §3.4; P2B-9):
 // add_block drives the vin dispatch → apply_archival_rebond (pre-image journal
 // incl. the closed interval's identity, Rust fold counter movement, the
@@ -2591,26 +2639,10 @@ TEST(archival_substrate_lmdb, rebond_connect_pop_roundtrip_through_real_block_pa
   append_minimal_blocks(db, kSeb + 3);
 
   // Post-slash record: shard 42 was slashed away at epoch 0 (open interval),
-  // survivors {7, 9} keep distinct add-epochs; floor-consistent balance.
-  const crypto::hash p_id = make_hash(0xB4);
+  // survivors {7, 9}; floor-consistent balance.
+  const crypto::hash p_id = seed_slashed_rebond_record(fixture, 0xB4);
   const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   const uint64_t total_bonded = 5 * floor;
-  shekyl::db::ArchivalBondValue seed{};
-  seed.hybrid_pubkey.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B);
-  seed.bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x6C);
-  seed.join_settlement_epoch = 0;
-  seed.bonded_total_atomic = 2 * floor;
-  seed.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
-  seed.held_shard_ids = {7, 9};
-  seed.shard_add_epochs = {0, 0};
-  shekyl::db::ArchivalBondValue::BadInterval open{};
-  open.start_epoch = 0;
-  open.end_exclusive = std::numeric_limits<uint64_t>::max();
-  seed.bad_intervals = {open};
-  db.put_archival_bond_value(p_id, seed);
-  db.set_total_bonded_atomic(total_bonded);
-  fixture.db.batch_stop();
-  fixture.db.batch_start();
 
   const uint64_t connect_height = db.height();
   const uint64_t e_rebond = shekyl_archival_settlement_epoch_at_height(connect_height);
@@ -2618,20 +2650,7 @@ TEST(archival_substrate_lmdb, rebond_connect_pop_roundtrip_through_real_block_pa
 
   // The Rebond vin carries the POST holdings (superset: survivors + the
   // re-acquired 42 + new 99) and the growth credit 2·FLOOR.
-  transaction tx{};
-  tx.version = 2;
-  txin_archival_bond_post vin{};
-  vin.hybrid_public_key.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B);
-  vin.p_canonical_id = p_id;
-  vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Rebond);
-  vin.holdings.kind = archival_holdings_kind::ShardSetCompact;
-  vin.holdings.shard_ids = {7, 9, 42, 99};
-  vin.bonded_total_atomic = 4 * floor;
-  vin.bond_credit = 2 * floor;
-  vin.bond_debit = 0;
-  tx.vin.push_back(vin);
-
-  connect_block_with_txs(db, {tx});
+  connect_block_with_txs(db, {make_rebond_tx(p_id, {7, 9, 42, 99}, 4 * floor, 2 * floor)});
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
@@ -2679,42 +2698,14 @@ TEST(archival_substrate_lmdb, rebond_standing_only_zero_credit_roundtrip)
 
   append_minimal_blocks(db, kSeb + 3);
 
-  const crypto::hash p_id = make_hash(0xB5);
+  const crypto::hash p_id = seed_slashed_rebond_record(fixture, 0xB5);
   const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   const uint64_t total_bonded = 5 * floor;
-  shekyl::db::ArchivalBondValue seed{};
-  seed.hybrid_pubkey.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B);
-  seed.bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x6C);
-  seed.join_settlement_epoch = 0;
-  seed.bonded_total_atomic = 2 * floor;
-  seed.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
-  seed.held_shard_ids = {7, 9};
-  seed.shard_add_epochs = {0, 0};
-  shekyl::db::ArchivalBondValue::BadInterval open{};
-  open.start_epoch = 0;
-  open.end_exclusive = std::numeric_limits<uint64_t>::max();
-  seed.bad_intervals = {open};
-  db.put_archival_bond_value(p_id, seed);
-  db.set_total_bonded_atomic(total_bonded);
-  fixture.db.batch_stop();
-  fixture.db.batch_start();
 
   const uint64_t e_rebond = shekyl_archival_settlement_epoch_at_height(db.height());
 
-  transaction tx{};
-  tx.version = 2;
-  txin_archival_bond_post vin{};
-  vin.hybrid_public_key.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B);
-  vin.p_canonical_id = p_id;
-  vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Rebond);
-  vin.holdings.kind = archival_holdings_kind::ShardSetCompact;
-  vin.holdings.shard_ids = {7, 9};
-  vin.bonded_total_atomic = 2 * floor;
-  vin.bond_credit = 0;
-  vin.bond_debit = 0;
-  tx.vin.push_back(vin);
-
-  connect_block_with_txs(db, {tx});
+  // Same shard set, zero credit — pure standing reinstatement.
+  connect_block_with_txs(db, {make_rebond_tx(p_id, {7, 9}, 2 * floor, 0)});
   fixture.db.batch_stop();
   fixture.db.batch_start();
 

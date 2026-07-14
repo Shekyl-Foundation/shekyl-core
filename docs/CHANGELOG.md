@@ -58,6 +58,24 @@
     coverage boundary + the R-3-routed retention-valve forward question);
     gate-4 §3.2/§3.4/§4.1 swept to the credit equation and the `E_rebond + 1`
     close.
+  - **Review round (9 findings + 2 Copilot):** two new verify belts —
+    `RebondPostOversize` (an oversize post on a terminal-slashed record
+    collapsed `bond_floor` to 0, verified at zero credit, then aborted block
+    connect at the record encode) and `RebondRecordFloorBroken` (a
+    floor-drifted record now rejects at verify instead of riding to the
+    connect fold's FATAL belt — tx rejection, not a chain halt); the FFI vin
+    marshal now enforces the wire codec's `MAX_HOLDINGS_SHARDS` bound for
+    every post kind (the marshal is a second decoder), and the Rebond connect
+    fold belts oversize posts. The Pin-5 coalescing *decision* moved Rust-side
+    (`slash_open_interval_to_append`, KAT-covered) — the C++ slash writer
+    appends exactly what the fold returns. Duplication paid down: the
+    HU marshal prologue is shared with the Rebond FFI entry
+    (`bond_post_record_marshal_prologue`), the LMDB connect-writer scaffold is
+    generalized to all POST-holdings kinds
+    (`apply_archival_bond_record_update`, with the in-place interval close as
+    a fold output), the verify arms share one record-fact marshal
+    (`archival_marshal_record_facts`), and the Rebond round-trip KATs share
+    one seed/tx builder.
 
 - **archival: `HoldingsUpdate` add + drop — the voluntary one-shard bond
   balance path, end-to-end (gate-4 §4.4; P2B-7; `feat/bond-fsm-holdings-update`).**

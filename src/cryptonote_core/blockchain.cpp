@@ -4634,6 +4634,12 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET:
     return "Rebond post-holdings are not a duplicate-free superset of the record's "
       "current holdings (shedding goes through HoldingsUpdate-drop)";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE:
+    return "Rebond post-holdings exceed the codec shard cap";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR:
+    return "record bonded_total != bond_floor(record holdings) (floor-drifted record)";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED:
+    return "vin holdings shard count exceeds the wire codec bound";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED:
     return "HoldingsUpdate requires a Bonded record (an Exited or slash-emptied "
       "record re-enters via JoinMarket/Rebond)";
@@ -4670,6 +4676,34 @@ bool archival_debit_auth_pin(const shekyl::db::ArchivalBondValue& record,
       "record's committed bond_spend_pk (identity-key or foreign-key debit "
       "authorization is forbidden)");
     return false;
+  }
+  return true;
+}
+
+// Shared record-fact marshal for the record-mutating bond-post verify arms
+// (HoldingsUpdate, Rebond): load the bond record, belt the v6 index-parallel
+// coupling, and flatten the interval log into the FFI's (start, end_exclusive)
+// pair layout. Returns false — rejecting the tx — on the desync belt.
+// Single-sourced so the arms verify against identically-gathered record facts;
+// a marshal fix cannot land on one bond-post kind and leave another verifying
+// against differently-shaped facts for the same chain state.
+bool archival_marshal_record_facts(BlockchainDB* db, const crypto::hash& p_id,
+  const char* arm, shekyl::db::ArchivalBondValue& record, bool& have_record,
+  std::vector<uint64_t>& intervals_flat)
+{
+  have_record = db->get_archival_bond_value(p_id, record);
+  if (have_record && record.held_shard_ids.size() != record.shard_add_epochs.size())
+  {
+    MERROR_VER("Archival " << arm << " rejected: record shard id / add-epoch "
+      "length desync");
+    return false;
+  }
+  intervals_flat.clear();
+  intervals_flat.reserve(record.bad_intervals.size() * 2);
+  for (const auto& iv : record.bad_intervals)
+  {
+    intervals_flat.push_back(iv.start_epoch);
+    intervals_flat.push_back(iv.end_exclusive);
   }
   return true;
 }
@@ -4783,14 +4817,11 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     }
 
     shekyl::db::ArchivalBondValue record{};
-    const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);
-    if (have_record
-        && record.held_shard_ids.size() != record.shard_add_epochs.size())
-    {
-      MERROR_VER("Archival HoldingsUpdate rejected: record shard id / add-epoch "
-        "length desync");
+    bool have_record = false;
+    std::vector<uint64_t> bad_flat;
+    if (!archival_marshal_record_facts(m_db, bond.p_canonical_id, "HoldingsUpdate",
+        record, have_record, bad_flat))
       return false;
-    }
     const uint64_t current_epoch = shekyl_archival_settlement_epoch_at_height(chain_height);
     const uint64_t* record_shard_ptr = record.held_shard_ids.empty()
       ? nullptr : record.held_shard_ids.data();
@@ -4800,15 +4831,9 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     // is authoritative — this only selects which fact set to marshal.
     if (bond.bond_debit == 0)
     {
-      // ADD (credit path): marshal the record's current holdings + the good_through
-      // inputs (join epoch + bad intervals). Auth is the IDENTITY key.
-      std::vector<uint64_t> bad_flat;
-      bad_flat.reserve(record.bad_intervals.size() * 2);
-      for (const auto& iv : record.bad_intervals)
-      {
-        bad_flat.push_back(iv.start_epoch);
-        bad_flat.push_back(iv.end_exclusive);
-      }
+      // ADD (credit path): the record's current holdings + the good_through
+      // inputs (join epoch + the flattened bad intervals). Auth is the
+      // IDENTITY key.
       const uint8_t hu_rc = shekyl_archival_verify_holdings_update_add(
         bond.post_kind,
         static_cast<uint8_t>(bond.holdings.kind),
@@ -4945,20 +4970,11 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     // single-open check, and the Pin-6 headroom bound all read it Rust-side.
     // No epoch operand: the precondition is interval-shaped, not epoch-shaped.
     shekyl::db::ArchivalBondValue record{};
-    const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);
-    if (have_record
-        && record.held_shard_ids.size() != record.shard_add_epochs.size())
-    {
-      MERROR_VER("Archival Rebond rejected: record shard id / add-epoch length desync");
-      return false;
-    }
+    bool have_record = false;
     std::vector<uint64_t> intervals_flat;
-    intervals_flat.reserve(record.bad_intervals.size() * 2);
-    for (const auto& iv : record.bad_intervals)
-    {
-      intervals_flat.push_back(iv.start_epoch);
-      intervals_flat.push_back(iv.end_exclusive);
-    }
+    if (!archival_marshal_record_facts(m_db, bond.p_canonical_id, "Rebond",
+        record, have_record, intervals_flat))
+      return false;
     const uint8_t rb_rc = shekyl_archival_verify_rebond_bond_post(
       bond.post_kind,
       static_cast<uint8_t>(bond.holdings.kind),

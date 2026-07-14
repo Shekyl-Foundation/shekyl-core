@@ -24,7 +24,7 @@ use thiserror::Error;
 
 use crate::bond_floor::{bond_floor_of, ARCHIVAL_BOND_FLOOR_ATOMIC};
 use crate::bond_post::{single_shard_diff, superset_added_diff, SingleDiff};
-use crate::bond_wire::{HoldingsDescriptor, HoldingsKind};
+use crate::bond_wire::{HoldingsDescriptor, HoldingsKind, MAX_HOLDINGS_SHARDS};
 use crate::consensus_state::BadInterval;
 
 /// Interval-log entry cap — the cross-language pin of
@@ -69,6 +69,41 @@ pub fn clean_interval_close(unbond_settlement_epoch: u64) -> BadInterval {
 #[must_use]
 pub fn is_clean_interval_close(interval: &BadInterval, epoch: u64) -> bool {
     interval.start_epoch == epoch && interval.end_exclusive == epoch
+}
+
+/// The open bad interval a landed slash appends — or `None` under the
+/// same-epoch coalescing invariant (P2B-9 Pin 5): an open interval already
+/// exists, so the sibling slash appends nothing.
+///
+/// Every held shard is challenged every epoch and this epoch's failures are
+/// slashed one call each against a stale pre-scan eligibility copy, so an
+/// offline N-shard record takes N slashes in one block. The intervals they
+/// would each append are IDENTICAL (`[E_slash, u64::MAX)` — later epochs are
+/// `good_through`-blocked while any open interval exists, so multiplicity is
+/// same-epoch only), and appending one per shard let a record with more
+/// failing shards than the interval log's codec headroom
+/// ([`MAX_BOND_BAD_INTERVALS`]) throw at encode inside the block-connect
+/// slash hook — a deterministic consensus halt. Appending only when no open
+/// interval exists leaves standing semantics unchanged (`good_through` only
+/// asks whether SOME open interval covers the epoch) and establishes the
+/// **at most one open interval** invariant the `Rebond` verify (Pin 5) and
+/// its in-place close depend on.
+///
+/// The decision and the interval shape are consensus semantics, so they live
+/// here — the C++ slash writer appends exactly what this returns
+/// (`20-rust-vs-cpp-policy`; the [`clean_interval_close`] placement's twin).
+#[must_use]
+pub fn slash_open_interval_to_append(
+    record_bad_intervals: &[BadInterval],
+    slash_settlement_epoch: u64,
+) -> Option<BadInterval> {
+    let has_open = record_bad_intervals
+        .iter()
+        .any(|iv| iv.end_exclusive == u64::MAX);
+    (!has_open).then_some(BadInterval {
+        start_epoch: slash_settlement_epoch,
+        end_exclusive: u64::MAX,
+    })
 }
 
 #[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
@@ -425,6 +460,11 @@ pub enum RebondConnectError {
     /// Empty post — verify's `ShardSetCompactEmpty` (reinstatement needs a position).
     #[error("Rebond post-holdings are empty")]
     EmptyPost,
+    /// The post set exceeds the codec shard cap — the resulting record could
+    /// never encode; verify's `RebondPostOversize` forecloses this at tx
+    /// admission, this is the fold's belt for verify-bypassing callers.
+    #[error("Rebond post-holdings exceed the codec shard cap")]
+    PostOversize,
     /// The record's `bonded_total == bond_floor(holdings)` invariant (§3.2) does
     /// not hold — record corruption, not a tx fault.
     #[error("record bonded_total != bond_floor(record holdings)")]
@@ -487,6 +527,12 @@ pub fn rebond_connect(
 ) -> Result<RebondConnect, RebondConnectError> {
     if post_held_shard_ids.is_empty() {
         return Err(RebondConnectError::EmptyPost);
+    }
+    // Codec-cap belt (verify's RebondPostOversize twin): a post past the cap
+    // would fold into a record ArchivalBondValue::encode refuses — fail typed
+    // and loud here instead of as an opaque encode throw in the LMDB writer.
+    if post_held_shard_ids.len() > MAX_HOLDINGS_SHARDS {
+        return Err(RebondConnectError::PostOversize);
     }
     let Some(added_shard_ids) = superset_added_diff(record_held_shard_ids, post_held_shard_ids)
     else {
@@ -1103,6 +1149,61 @@ mod tests {
                 RB_EPOCH,
             ),
             Err(RebondConnectError::IntervalOrdering)
+        );
+    }
+
+    #[test]
+    fn slash_appends_open_interval_only_when_none_open() {
+        // First slash of the epoch appends [E, MAX) — on an empty log and next
+        // to closed history alike.
+        assert_eq!(
+            slash_open_interval_to_append(&[], RB_EPOCH),
+            Some(rb_open(RB_EPOCH))
+        );
+        assert_eq!(
+            slash_open_interval_to_append(&[rb_closed(2, 3)], RB_EPOCH),
+            Some(rb_open(RB_EPOCH))
+        );
+        // An existing open interval coalesces the sibling — including one from
+        // an earlier epoch (unreachable live, since good_through blocks later
+        // epochs while any interval is open, but the decision is
+        // interval-shaped, not epoch-shaped).
+        assert_eq!(
+            slash_open_interval_to_append(&[rb_open(RB_EPOCH)], RB_EPOCH),
+            None
+        );
+        assert_eq!(
+            slash_open_interval_to_append(&[rb_closed(1, 2), rb_open(3)], RB_EPOCH),
+            None
+        );
+    }
+
+    #[test]
+    fn slash_coalescing_caps_same_epoch_sweep_at_one_interval() {
+        // The consensus-halt scenario the coalescing fixes (P2B-9 Pin 5): an
+        // offline record with more failing shards than the interval log's
+        // codec headroom takes one slash call per shard in ONE block. Folding
+        // each decision over the growing log must append exactly one interval
+        // — never 300 past MAX_BOND_BAD_INTERVALS.
+        let mut log = vec![rb_closed(2, 3)];
+        for _ in 0..300 {
+            if let Some(iv) = slash_open_interval_to_append(&log, RB_EPOCH) {
+                log.push(iv);
+            }
+        }
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[1], rb_open(RB_EPOCH));
+        assert!(log.len() < MAX_BOND_BAD_INTERVALS);
+    }
+
+    #[test]
+    fn rebond_connect_rejects_oversize_post() {
+        // The verify-side RebondPostOversize twin: the fold refuses to produce
+        // a record the codec cannot encode.
+        let post: Vec<u64> = (0..=(MAX_HOLDINGS_SHARDS as u64)).collect();
+        assert_eq!(
+            rebond_connect(0, &[], &[rb_open(5)], &post, RB_TOTAL, RB_EPOCH),
+            Err(RebondConnectError::PostOversize)
         );
     }
 
