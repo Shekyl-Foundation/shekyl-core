@@ -43,7 +43,7 @@ The dependency matrix is maintained in `README.md` and includes:
 
 - compiler/tooling: GCC, CMake, pkg-config
 - core libs: Boost, OpenSSL, libsodium
-- optional libs/tools: libunwind, readline, expat, gtest, ccache, doxygen/graphviz
+- optional libs/tools: libunwind, readline, gtest, ccache, doxygen/graphviz
 - optional hardware wallet stack: hidapi, libusb, protobuf/protoc, libudev
 
 ### Rust integration behavior

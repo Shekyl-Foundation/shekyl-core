@@ -167,7 +167,7 @@ sudo apt-get install -y \
 **macOS** (Homebrew):
 ```bash
 brew install cmake boost hidapi openssl libpgm \
-  miniupnpc expat protobuf abseil libsodium
+  miniupnpc protobuf abseil libsodium
 ```
 
 **Windows**: Not yet supported. The C++ codebase builds with MinGW but the

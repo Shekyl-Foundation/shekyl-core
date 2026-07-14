@@ -318,7 +318,7 @@ CMake cache values cannot leak architecture-specific flags.
 
 - Boost (chrono, date-time, filesystem, program-options, regex, serialization,
   system, thread)
-- OpenSSL, libsodium, readline, expat
+- OpenSSL, libsodium, readline
 
 No HIDAPI, protobuf, or libusb packages are required on the target machine.
 
