@@ -470,6 +470,7 @@ bool run_gate_vector(const Gate2Substrate& s, const std::string& cpp_setup,
     bond.hybrid_pubkey = bytes_from_hex(s.bond_pubkey_hex);
     bond.join_settlement_epoch = s.join_epoch;
     bond.held_shard_ids = {s.shard_id};
+    bond.shard_add_epochs.assign(bond.held_shard_ids.size(), s.join_epoch); // v6: join-time shards carry E_join
     bond.bad_intervals = std::move(bad_intervals);
     db->put_bond(p_id, std::move(bond));
   }

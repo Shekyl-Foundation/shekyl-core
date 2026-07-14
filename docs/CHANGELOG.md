@@ -4,6 +4,115 @@
 
 ### Added
 
+- **archival: `HoldingsUpdate` add + drop — the voluntary one-shard bond
+  balance path, end-to-end (gate-4 §4.4; P2B-7; `feat/bond-fsm-holdings-update`).**
+  Building on slice A's `bond_duration` freeze: the fourth and final bond-FSM
+  kind (`JoinMarket / Rebond / Unbond / HoldingsUpdate`) now verifies, connects,
+  and reorg-reverts through the real block path. A record stays `Bonded`
+  throughout — one shard is added (`+FLOOR` credit) or dropped (`−FLOOR`
+  debit) under the `bonded_total == bond_floor(holdings)` balance.
+  - **Record (v6):** `ArchivalBondValue` gains a per-shard `shard_add_epochs`
+    array, index-parallel to `held_shard_ids` under one holdings count (a
+    length desync cannot round-trip). Join-time shards take `E_join`; a
+    HoldingsUpdate-add appends `E_add`; a drop removes the dropped shard's
+    entry. The drop path reads it for the retention horizon and (slice A) the
+    age-at-add. The reorg-log schemas ripple to match: `ArchivalSlashRevertValue`
+    v3 and `ArchivalBondUnbondRevertValue` v2 carry the coupled add-epochs.
+  - **Verify (Rust-native, `shekyl-archival-retention::bond_post`):**
+    `verify_holdings_update_add` gates on ShardSetCompact record + post,
+    exactly `+FLOOR` credit, good-standing (`good_through` the current epoch),
+    a single-shard set-diff add, and post-floor equality;
+    `verify_holdings_update_drop` gates on exactly `−FLOOR` debit, a single-shard
+    removal (drop-last rejected — a full exit is `Unbond`), post-floor equality,
+    the **retention horizon** (`current_epoch − add_epoch ≥ bond_duration`), and
+    the **grace-tail** precondition (the dropped shard's release cooldown elapsed
+    and slashes settled through its last-served anchor). 22 KATs.
+  - **Grace-tail DROP model (ratified 2026-07-15):** the release cooldown is a
+    verify *precondition*; at connect the shard leaves `holdings` and the FLOOR
+    returns immediately via the `bond_debit` source term — no cooldown sub-state,
+    no interval, no clean-close marker (superseding the earlier drop-then-cool
+    fossil, P2B-7 Pin 2/3, swept in the design docs).
+  - **Connect/pop folds + FFI:** `holdings_update_{add,drop}_connect` produce the
+    counter movement (absolute post-values, threaded per post) and the
+    single-shard delta; `holdings_update_pop` reverts by the connect's `±FLOOR`.
+    Exposed across the single `shekyl-ffi` boundary
+    (`shekyl_archival_verify_holdings_update_{add,drop}`,
+    `shekyl_archival_holdings_update_{add_connect,drop_connect,pop}`).
+  - **C++ dispatch (thin glue):** the bond-post verify branch routes add/drop on
+    the debit direction and applies the GF-1 auth selector (credit → identity
+    key; drop's debit → the record's committed `bond_spend_pk`, the Unbond arm's
+    twin); the connect arm journals the record pre-image to a dedicated
+    `archival_bond_holdings_update_log` (the record stays `Bonded`, so it cannot
+    share Unbond's Exited/clean-close pop path) and applies the fold's write set
+    with per-post live-counter threading; `pop_block` reverts it. Real-block-path
+    add/drop connect/pop KATs assert the add-epoch rebuild, the counter movement,
+    and the byte-exact reorg restore.
+  - **Review round (2026-07-14):** seven correctness findings fixed. The
+    checkpoint fast-path GF-1 belt is re-keyed on the GF-1 selector itself
+    (`bond_debit > 0`, not `post_kind != JoinMarket`) — as written it rejected
+    every valid HoldingsUpdate-add block under fast sync (the add is a credit
+    arm, identity-key authorized): a network split. The HU verify arms gain
+    the **Bonded-state gate** (shared prologue; P2B-7 Pin 1 `Bonded → Bonded`,
+    `HoldingsUpdateRecordNotBonded` + connect-fold `RecordNotBonded` belt) —
+    without it an Exited record passed every add gate (the zero-length clean
+    close excludes nothing from `good_through`; `bond_floor(∅)` vacuously
+    satisfies the floor pins) and became a JoinMarket-bypassing resurrection
+    whose connect threw on the empty-pre-image journal row: verify-valid but
+    unconnectable on every node, a chain-stall vector. **Pin-4 + Pin-5 are
+    CLOSED, not follow-on:** `archival_bond_holds_shard` — the one accessor
+    both serve-credit acceptance and slash eligibility bottom out in — bounds
+    a tip-held shard below by its v6 add-epoch (and the slash-log
+    reconstruction by the row's journaled add-epoch), enforcing per-shard
+    `E ≥ E_add + 1` symmetrically: no add-epoch serve credit, no unjust slash
+    for a challenge that fired before the add; a voluntarily dropped shard
+    answers not-held everywhere (grace-tail keeps no drop interval — the drop
+    epoch's pending acceptances are forfeited, the add-forfeit's twin).
+    Unfrozen-at-add fails closed to the LONGEST retention horizon on both
+    corners (`ShardAgeAtAdd::from_add`: `freeze ≥ H_close(add_epoch)` → age
+    max, matching the C++ missing-freeze-row sentinel; previously the same
+    condition earned a 4- or 20-epoch lock depending on when the freeze landed
+    — a 5× early-recycle hole vs. the §L18 age-stratified friction). The
+    drop-after-fire scenario is documented as the RATIFIED grace-tail bounded
+    forgiveness (Pin 3; capped at one cooldown — "stop serving and hold" keeps
+    being slashed), and the slash-apply FATAL's HoldingsUpdate revisit is
+    discharged. The pop-ordering comment now states the real dependency (slash
+    revert FIRST; the slash journal restores the same record fields — the
+    "compose in any order" claim was false). Dedup: shared C++ debit-auth pin
+    (Unbond + HU-drop), shared Rust verify + FFI marshal prologues, shared HU
+    connect-writer scaffold (add/drop differ only in the fold call).
+
+- **archival: `bond_duration(age)` retention-horizon freeze — HoldingsUpdate
+  slice A (gate-4 §4.4; `ARCHIVAL_TIMING_CONSTANTS.md` §1; P2B-7 Pin 3 /
+  P2B-8 Q3; `feat/bond-fsm-holdings-update`).** The genesis-frozen per-shard
+  drop-eligibility formula, landed on its own reviewable surface ahead of the
+  HoldingsUpdate verify/connect (slices B/C) that consume it — pure functions,
+  no schema or consensus-path change.
+  - **`bond_duration(ShardAgeAtAdd) -> epochs`** (`shekyl-archival-retention::
+    bond_duration`): `BASE·(1 + SCALE·age)`, **integer-canonical** (round-half-up,
+    floored at 1; no float in consensus). `BOND_DURATION_{BASE_EPOCHS,AGE_SCALE}`
+    = 4/4 (H2 plateau arm, provisional within the scale band [2,8]) wired
+    from `config/consensus_constants.json` through `build.rs` (emitted into the
+    OUT_DIR-generated include that `bond_floor.rs` pulls in) and, in parallel,
+    through `generate_consensus_constants.py` into the C++ constants header for
+    cross-language parity (no C++ consumer at genesis — the bond-FSM verify is
+    Rust-native).
+  - **`ShardAgeAtAdd` newtype** makes two consensus properties unrepresentable
+    at the type rather than tested-against: the age is evaluated **at add, not
+    at drop** (the sim arms the lock on fresh acquisition and counts down, so a
+    rising-target drop-time age cannot be expressed), and its close reference is
+    **`H_close(add_epoch)`**, the same settlement-close height the reward curve
+    feeds `shard_age_milli` (the constructor derives the close from the add
+    epoch, so a raw within-epoch block height cannot be passed). One age
+    normalization across reward and retention, by construction — the
+    age-realization invariant, pinned in `ARCHIVAL_TIMING_CONSTANTS.md` §1.
+  - **KATs:** endpoints/midpoint/monotonicity/floor, the F1 close-reference
+    check (age uses `H_close(add_epoch)`), and the **F2 full-sweep parity** —
+    the integer artifact equals the sim's f64 model across every
+    `age_milli ∈ [0, WORK_MILLI_SCALE]`, with the **integer authoritative**: a
+    divergence fails loudly as the signal to re-check the sim economics (the
+    genesis 4/4 constants have no half-boundary case, so the sweep is clean; the
+    KAT is the tripwire on any re-pin).
+
 - **archival: GF-1 `bond_spend_pk` wire+record — the debit-side enable flip
   (gate-4 §3.5 step 5 / §4.1 / §9.11; `feat/gf1-bond-spend-pk`).** The
   sequenced prerequisite the Unbond wiring named is landed; **Unbond txs now

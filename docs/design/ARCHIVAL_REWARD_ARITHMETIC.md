@@ -100,6 +100,15 @@ derives age from the `archival_shard_segment` `freeze_height` and
 `SETTLEMENT_EPOCH_BLOCKS`, and feeds `g(age)` inside `epoch_close_compute`. C++ passes
 `freeze_height` through; it does not compute age.
 
+**Shared with retention (age-realization invariant, genesis-frozen).** This same
+`shard_age_milli` normalization is the *one* age the retention lock consumes: the
+`bond_duration(age)` drop-eligibility horizon (gate-4 §4.4; `bond_duration.rs`) reads
+`shard_age_milli` evaluated at the shard's add-epoch settlement close
+`H_close(add_epoch)` — the sim feeds one age variable into both `g(age)` here and the
+retention lock (`agent.rs`), and consensus realizes that one age as `shard_age_milli` in
+both. Retention must not fork a separate normalization. Pinned at
+[`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §1.
+
 **Normalization (pinned 2026-06-11, Layer-2 band run).** Age is a **relative depth
 fraction**, not a raw epoch count:
 

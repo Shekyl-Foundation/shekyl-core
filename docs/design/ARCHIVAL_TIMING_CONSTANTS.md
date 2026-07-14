@@ -41,6 +41,44 @@ pair is the sim-exercised H2 plateau arm and is re-confirmed or re-pinned when t
 `fetch_latency_per_unit`. Drift within the plateau band (scale ∈ [2,8]) amends this table only;
 a shape change requires the L10 reversion clause.
 
+**Rule-21 reopen-at-seal (explicit — the freeze landed the shape, NOT these values).**
+The HoldingsUpdate slice-A freeze (2026-07-14, `bond_duration.rs`) sealed the **shape**
+(`BASE·(1 + SCALE·age)`) and the **age-realization** (`shard_age_milli @ H_close(add)`,
+shared with reward). It did **not** seal `4/4` — do not read "slice A shipped" as "the
+numerics are final." **Reopen criterion (rule-21):** the testnet
+`fetch_latency_per_unit` measurement re-confirms or re-pins the pair; a value within the
+plateau band `scale ∈ [2,8]` amends this table only (no code change — the constant is
+config-generated), while a change outside the band, or to the shape, invokes the L10
+reversion clause. The full-sweep integer↔sim parity KAT
+(`bond_duration_matches_sim_f64_over_full_age_sweep`) reads the config constants, so it
+**re-runs automatically on any re-pin** and fails loudly if a new pair introduces a
+round-half divergence — the seal check is executable, not a manual review.
+
+**Age-realization invariant (GENESIS-FROZEN, pinned 2026-07-14).** The `age ∈ [0,1]`
+that `bond_duration` consumes is the **same age normalization the reward curve consumes**,
+realized in consensus as [`shard_age_milli`](../../rust/shekyl-archival-retention/src/consensus_state.rs)
+(relative tree-depth fraction `(close−freeze)/SEB ÷ close/SEB`, milli-scaled to
+`[0, WORK_MILLI_SCALE]`). The sim feeds one age variable into **both** the
+scarcity/reward curve (`g_age`, `agent.rs:186`) and the retention lock
+(`bond_duration`, `agent.rs:277`); consensus already realizes that age as
+`shard_age_milli` in the reward path (`scarcity_milli`, `consensus_state.rs`), so
+retention **must** use the same realization — forking a separate age for retention
+would split a normalization the sim never split. **Reference time is age-at-ADD, not
+age-at-drop:** the sim arms the retention commitment only on fresh acquisition and
+counts it down (`agent.rs:275-280`, `new_held && !was_held`), so the horizon is fixed
+at acquisition. Consensus matches: `bond_duration` is evaluated once, on the shard's
+`shard_age_milli` computed with `close = H_close(add_epoch) = (add_epoch+1)·SEB` — the
+add-epoch's settlement close, **not** a raw within-epoch add block height (`ShardAgeAtAdd`,
+`bond_duration.rs`). Evaluating at drop height would make `bond_duration` a rising
+target (`shard_age_milli` grows over tenure) — wrong semantics and a
+longer-than-simulated bar. The sim ages linearly while `shard_age_milli` decelerates,
+but because the lock is fixed at add, the post-add aging *rate* is irrelevant — only
+the distribution of age-at-add matters, which is the same sim↔consensus age fidelity
+already accepted when the reward curve was frozen against `shard_age_milli`; no new
+genesis risk. **Drop-eligibility gate:** `current_epoch − add_epoch(s) ≥
+bond_duration(ShardAgeAtAdd(s))`, both operands powered by the one v3.0 per-shard
+add-epoch record field.
+
 **Derived (not independent constants):**
 
 ```text

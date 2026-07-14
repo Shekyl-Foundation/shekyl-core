@@ -623,9 +623,39 @@ continuity reset) to swap one slot. The full lifecycle
 the resulting age-stratified mobility friction is a pre-seal dependency
 ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*steady-state frame* item 6).
 
-**Principle:** dropping shard *s* from `ShardSetCompact` reduces
-`bond_floor(holdings)` by `ARCHIVAL_BOND_FLOOR`; released collateral for *s* inherits
-**Unbond release cooldown** (per-shard last-served epoch) — cannot withdraw immediately.
+**Principle (grace-tail, ratified 2026-07-15):** dropping shard *s* from `ShardSetCompact`
+reduces `bond_floor(holdings)` by `ARCHIVAL_BOND_FLOOR`. The **release cooldown is a verify
+precondition on the drop**, not a post-drop state (the same model as `Unbond`): the drop of
+*s* cannot be posted until *s*'s release cooldown has elapsed (`release_cooldown_elapsed` on
+*s*'s per-shard last-served epoch) **and** the slash scheduler has settled through that
+anchor (`slashes_settled_through`). At connect the shard leaves `holdings`, `bonded_total −=
+FLOOR`, and the `FLOOR` returns immediately via the `bond_debit` source term (§3.2) — no
+`collateral-in-cooldown` sub-state, no `bond_event_log` drop interval, no clean-close marker
+(`P` stays `Bonded` with ≥1 shard). The drop is additionally gated by the **retention-horizon**
+(`bond_duration(ShardAgeAtAdd(s))`, §4.4 slice-A freeze / P2B-7 Pin 3): a shard younger than
+its horizon is ineligible for voluntary drop at all. (Supersedes the earlier
+"cannot withdraw immediately" drop-then-cool wording — the same fossil as the `Unbond` "stays
+slashable" language; see `PHASE_2B_FSM_RETOOL.md` P2B-7 Pin 2/3.)
+
+**Retention-horizon freeze (LANDED — slice A, 2026-07-14).** The `bond_duration(age)`
+drop-eligibility gate (§3.4 asymmetry table; P2B-7 Pin 3 / P2B-8 Q3) is
+`current_epoch − add_epoch(s) ≥ bond_duration(ShardAgeAtAdd(s))`, both operands
+powered by the one v3.0 per-shard add-epoch record field (landed in slice B). The
+formula is genesis-frozen in `shekyl-archival-retention::bond_duration`:
+`bond_duration(age) = BASE·(1 + SCALE·age)` (integer-canonical, round-half-up, floored
+at 1; `BOND_DURATION_{BASE_EPOCHS,AGE_SCALE}` = 4/4 provisional, config-generated), with
+`age = shard_age_milli` **evaluated at the shard's add-epoch settlement close**
+`H_close(add_epoch)`. **Age-realization invariant (STATED, genesis-frozen):** the sim
+feeds one age variable into both the scarcity/reward curve and the retention lock, and
+consensus already realizes that age as `shard_age_milli` in the reward path
+(`scarcity_milli`), so retention **consumes the same realization** — `bond_duration` and
+`scarcity` read one age, `shard_age_milli @ H_close(add)`; forking a separate age for
+retention would split a normalization the sim never split. The freeze rests on this
+stated invariant, not on the implementation (full statement + the sim source trace:
+`ARCHIVAL_TIMING_CONSTANTS.md` §1). The `ShardAgeAtAdd` newtype makes age-at-drop and
+raw-block-height evaluation unrepresentable at the type; the integer formula is proven
+bit-identical to the sim's f64 model over the full age sweep (integer authoritative). The
+drop verify/connect that *consumes* this gate lands in slice C.
 
 **Safety for deferral:** `work_P(E)` is derived from per-`(P,s,E)` **retention bits**, not
 the mutable holdings descriptor. HoldingsUpdate cannot corrupt historical work; descriptor =

@@ -259,10 +259,25 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
         // converts from its N+1 chain-height convention (see pop_block).
         apply_archival_unbond(block_height, bond.p_canonical_id, bond.bond_debit);
       }
+      else if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::HoldingsUpdate))
+      {
+        // HoldingsUpdate connect (gate-4 §4.4): the record stays Bonded — one
+        // shard is added or dropped. Direction is verify-pinned (add: +FLOOR
+        // credit, no debit; drop: -FLOOR debit, no credit), so bond_debit == 0
+        // selects the add arm. Both writers journal the record pre-image and
+        // apply the Rust fold's counter movement with the per-post live-counter
+        // threading inside. The vin's holdings carry the POST shard set.
+        if (bond.bond_debit == 0)
+          apply_archival_holdings_update_add(block_height, bond.p_canonical_id,
+            bond.holdings.shard_ids);
+        else
+          apply_archival_holdings_update_drop(block_height, bond.p_canonical_id,
+            bond.holdings.shard_ids);
+      }
       else
       {
         throw std::runtime_error(
-          "FATAL: bond-post connect supports JoinMarket and Unbond only");
+          "FATAL: bond-post connect supports JoinMarket, Unbond, and HoldingsUpdate only");
       }
     }
     else if (std::holds_alternative<txin_archival_reward_emission>(tx_input))
@@ -582,6 +597,20 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   // holdings, interval log) are disjoint from the emission journal's
   // (claimed set, first_paying), so those two reverts compose in any order.
   revert_archival_unbonds_at_height(removed_block_height - 1);
+  // HoldingsUpdate pre-image restore (gate-4 §4.4/§5): same journal-key
+  // convention (block index N = removed_block_height - 1) and the same
+  // vin-carries-POST-state reason it cannot drive its own restore. ORDER IS
+  // LOAD-BEARING: the slash journal restores the very same record fields
+  // (bonded_total, held_shard_ids, shard_add_epochs), and within a block the
+  // txs (HoldingsUpdate) connect before the epoch-deadline slash hook — so
+  // the pop must revert the slash FIRST (above) for this pop fold's
+  // exactly-one-FLOOR delta check to see the post-HoldingsUpdate state it
+  // journaled against. Reordering these two reverts (or adding a journal
+  // that touches these fields between them) makes holdings_update_pop see a
+  // FLOOR ± slashed_amount delta and abort the pop with NotSingleShardDelta.
+  // Only the emission journal's fields (claimed set, first_paying) are
+  // disjoint from this one's.
+  revert_archival_holdings_updates_at_height(removed_block_height - 1);
   // Mirror of the accrual write in add_block, keyed at the block's INDEX
   // N = removed_block_height - 1 (the claim-journal convention above, not
   // the hook convention). Runs inside the same wtxn as the pop — key
@@ -700,8 +729,9 @@ void BlockchainDB::remove_transaction(const crypto::hash& tx_hash)
     {
       const auto& bond = std::get<txin_archival_bond_post>(tx_input);
       // Only JoinMarket pops here (vin-driven: the record is deleted whole).
-      // Unbond pops via the height-keyed pre-image journal in pop_block
-      // (revert_archival_unbonds_at_height) — the vin carries the
+      // Unbond and HoldingsUpdate pop via the height-keyed pre-image journals
+      // in pop_block (revert_archival_unbonds_at_height /
+      // revert_archival_holdings_updates_at_height) — the vin carries the
       // post-connect state, so it cannot drive the restore.
       if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
       {
@@ -1506,6 +1536,25 @@ void BlockchainDB::apply_archival_unbond(uint64_t /*block_height*/,
 
 void BlockchainDB::revert_archival_unbonds_at_height(uint64_t /*block_height*/)
 {
+}
+
+void BlockchainDB::apply_archival_holdings_update_add(uint64_t /*block_height*/,
+  const crypto::hash& /*p_id*/, const std::vector<uint64_t>& /*post_shard_ids*/)
+{
+}
+
+void BlockchainDB::apply_archival_holdings_update_drop(uint64_t /*block_height*/,
+  const crypto::hash& /*p_id*/, const std::vector<uint64_t>& /*post_shard_ids*/)
+{
+}
+
+void BlockchainDB::revert_archival_holdings_updates_at_height(uint64_t /*block_height*/)
+{
+}
+
+bool BlockchainDB::archival_shard_freeze_height(uint64_t /*shard_id*/, uint64_t& /*out*/) const
+{
+  return false;
 }
 
 std::vector<uint64_t> BlockchainDB::archival_bond_last_served_epochs(

@@ -218,6 +218,7 @@ TEST(archival_bond_post, gate4_integration_rejects_existing_bond_record)
   existing.bonded_total_atomic = kat.bond_credit;
   existing.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
   existing.held_shard_ids = bond.holdings.shard_ids;
+  existing.shard_add_epochs.assign(existing.held_shard_ids.size(), kat.join_settlement_epoch); // v6: join-time shards carry E_join
   db->put_bond(p_id, std::move(existing));
 
   BlockchainAndPool bap;
@@ -378,6 +379,7 @@ shekyl::db::ArchivalBondValue exited_candidate_record(
   record.bonded_total_atomic = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   record.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
   record.held_shard_ids = {7};
+  record.shard_add_epochs = {0}; // v6 coupling
   return record;
 }
 

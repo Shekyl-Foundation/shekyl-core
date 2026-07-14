@@ -56,6 +56,287 @@ pub enum BondPostError {
     IntervalLogFull,
     #[error("slash scheduler has not settled every epoch through the last-served anchor")]
     SlashSettlementPending,
+    // ── HoldingsUpdate (add + drop; gate-4 §4.4, P2B-7) ──────────────────────
+    #[error("post_kind is not HoldingsUpdate")]
+    PostKindNotHoldingsUpdate,
+    #[error("HoldingsUpdate is only valid on a ShardSetCompact record (not CompleteTree)")]
+    HoldingsUpdateOnCompleteTree,
+    #[error("HoldingsUpdate post-holdings must be ShardSetCompact")]
+    HoldingsUpdatePostNotCompact,
+    #[error("HoldingsUpdate-add requires bond_credit == FLOOR and bond_debit == 0")]
+    HoldingsUpdateAddTerms,
+    #[error("HoldingsUpdate-add requires the record in good standing (no open bad interval)")]
+    HoldingsUpdateNotGoodStanding,
+    #[error(
+        "HoldingsUpdate-add post-holdings must be current holdings plus exactly one new shard"
+    )]
+    HoldingsUpdateNotSingleAdd,
+    #[error("HoldingsUpdate-add post bonded_total must equal bond_floor(post-holdings)")]
+    HoldingsUpdateAddFloorMismatch,
+    #[error("HoldingsUpdate-drop requires bond_debit == FLOOR and bond_credit == 0")]
+    HoldingsUpdateDropTerms,
+    #[error("HoldingsUpdate-drop post-holdings must be current holdings minus exactly one shard")]
+    HoldingsUpdateNotSingleDrop,
+    #[error("HoldingsUpdate-drop must leave at least one shard (use Unbond for a full exit)")]
+    HoldingsUpdateDropLastShard,
+    #[error("HoldingsUpdate-drop post bonded_total must equal bond_floor(post-holdings)")]
+    HoldingsUpdateDropFloorMismatch,
+    #[error("HoldingsUpdate-drop shard is within its bond_duration retention horizon")]
+    HoldingsUpdateDropWithinHorizon,
+    #[error(
+        "HoldingsUpdate requires a Bonded record (bonded collateral and at least one \
+         held shard); an Exited or slash-emptied record re-enters via JoinMarket/Rebond"
+    )]
+    HoldingsUpdateRecordNotBonded,
+}
+
+/// The single-shard set difference `post ∖ current` when `post` grows `current` by
+/// exactly one shard (`HoldingsUpdate`-add), or the reverse for a drop. Both
+/// holdings are treated as **sets** (order-agnostic); the vin's `post` is validated
+/// to carry no duplicate shard ids (the record's `current` is trusted).
+///
+/// Returns the single added/removed shard id, or `None` when the difference is not
+/// exactly one shard in the requested direction (wrong cardinality, a duplicate in
+/// `post`, or a shard changed on both sides).
+pub(crate) enum SingleDiff {
+    /// `post = current ∪ {shard}`, `shard ∉ current`, `|post| = |current| + 1`.
+    Added(u64),
+    /// `post = current ∖ {shard}`, `shard ∈ current`, `|post| = |current| − 1`.
+    Removed(u64),
+    /// Not a single-shard change in either direction.
+    NotSingle,
+}
+
+pub(crate) fn single_shard_diff(current: &[u64], post: &[u64]) -> SingleDiff {
+    // Reject a `post` carrying a duplicate shard id (a set on the wire).
+    let mut post_sorted = post.to_vec();
+    post_sorted.sort_unstable();
+    if post_sorted.windows(2).any(|w| w[0] == w[1]) {
+        return SingleDiff::NotSingle;
+    }
+    let mut cur_sorted = current.to_vec();
+    cur_sorted.sort_unstable();
+
+    // Both vectors are sorted, so membership is a `binary_search` — the diff is
+    // O(n log n), not the O(n²) a linear `contains` per element would cost on
+    // holdings that can reach the codec cap.
+    let added: Vec<u64> = post_sorted
+        .iter()
+        .copied()
+        .filter(|s| cur_sorted.binary_search(s).is_err())
+        .collect();
+    let removed: Vec<u64> = cur_sorted
+        .iter()
+        .copied()
+        .filter(|s| post_sorted.binary_search(s).is_err())
+        .collect();
+
+    match (
+        post_sorted.len().cmp(&cur_sorted.len()),
+        added.as_slice(),
+        removed.as_slice(),
+    ) {
+        (std::cmp::Ordering::Greater, [s], []) if post_sorted.len() == cur_sorted.len() + 1 => {
+            SingleDiff::Added(*s)
+        }
+        (std::cmp::Ordering::Less, [], [s]) if post_sorted.len() + 1 == cur_sorted.len() => {
+            SingleDiff::Removed(*s)
+        }
+        _ => SingleDiff::NotSingle,
+    }
+}
+
+/// Shared `HoldingsUpdate` admission prologue, both directions (the add and drop
+/// verifies below): post-kind pin, record existence, the ShardSetCompact pins on
+/// record and post, and the **Bonded-state gate** (P2B-7 Pin 1: `HoldingsUpdate`
+/// is `Bonded → Bonded`). Returns the record's current `bonded_total` for the
+/// direction-specific arithmetic.
+///
+/// The Bonded gate is load-bearing, not a belt: without it an **Exited** record
+/// (post-`Unbond`: zero total, empty holdings, zero-length clean close — which
+/// `good_through` excludes nothing for) passes every add gate and becomes a
+/// JoinMarket-bypassing resurrection path whose connect then throws on the
+/// empty-pre-image journal encode — a verify-valid tx no block can connect
+/// (chain-stall vector). Re-entry after an exit or a full slash is
+/// `JoinMarket`/`Rebond`, never a voluntary adjustment.
+fn holdings_update_prologue(
+    vin: &ArchivalBondPostVin,
+    record_bonded_total: Option<u64>,
+    record_holdings_kind: HoldingsKind,
+    record_held_shard_ids: &[u64],
+) -> Result<u64, BondPostError> {
+    if vin.post_kind != BondPostKind::HoldingsUpdate {
+        return Err(BondPostError::PostKindNotHoldingsUpdate);
+    }
+    let Some(current_bonded) = record_bonded_total else {
+        return Err(BondPostError::RecordMissing);
+    };
+    // HoldingsUpdate operates on a shard set; a foundation CompleteTree record
+    // has no shard list to adjust.
+    if record_holdings_kind != HoldingsKind::ShardSetCompact {
+        return Err(BondPostError::HoldingsUpdateOnCompleteTree);
+    }
+    if vin.holdings.kind != HoldingsKind::ShardSetCompact {
+        return Err(BondPostError::HoldingsUpdatePostNotCompact);
+    }
+    if current_bonded == 0 || record_held_shard_ids.is_empty() {
+        return Err(BondPostError::HoldingsUpdateRecordNotBonded);
+    }
+    Ok(current_bonded)
+}
+
+/// Verify `HoldingsUpdate`-**add** bond-post semantics — voluntary growth of a
+/// `Bonded` record by exactly one shard (gate-4 §4.4; `PHASE_2B_FSM_RETOOL.md`
+/// P2B-7 Pin 1/5, Q4). Credit path (`bond_debit == 0`), so the pqc auth is the
+/// identity key (the GF-1 selector routes credit → `P_pubkey`).
+///
+/// Marshaled facts (C++ reads, Rust decides): `record_bonded_total` is `None` when
+/// no record exists; `record_held_shard_ids` is the record's **current** holdings
+/// (needed for the single-shard diff — the vin carries the **post**-connect set per
+/// the §3.5 debit-path pin, which applies uniformly to every `post_kind`);
+/// `record_join_settlement_epoch` and `record_bad_intervals` feed the good-standing
+/// gate (Q4: add is voluntary growth requiring `good_standing == true`, i.e.
+/// `good_through` at the current epoch — no open bad interval).
+///
+/// The added shard is **not** required to be a frozen segment here: adding a shard
+/// that never freezes locks `FLOOR` and earns nothing (the reward/challenge channel
+/// is serve-credit-bit-driven, never descriptor-driven), so it is self-harm, not an
+/// attack, and gating it would couple bond-post verify to the segment registry.
+pub fn verify_holdings_update_add(
+    vin: &ArchivalBondPostVin,
+    record_bonded_total: Option<u64>,
+    record_holdings_kind: HoldingsKind,
+    record_held_shard_ids: &[u64],
+    record_join_settlement_epoch: u64,
+    record_bad_intervals: &[crate::consensus_state::BadInterval],
+    current_settlement_epoch: u64,
+) -> Result<(), BondPostError> {
+    let current_bonded = holdings_update_prologue(
+        vin,
+        record_bonded_total,
+        record_holdings_kind,
+        record_held_shard_ids,
+    )?;
+    // Credit direction (§3.2 term table): exactly `+FLOOR`, no debit.
+    if vin.bond_debit != 0 || vin.bond_credit != crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC {
+        return Err(BondPostError::HoldingsUpdateAddTerms);
+    }
+    // Good standing (Q4): voluntary growth requires the record be good_through the
+    // current epoch — an open bad interval (post-slash, pre-Rebond) forecloses add.
+    if !crate::consensus_state::good_through(
+        record_join_settlement_epoch,
+        current_settlement_epoch,
+        record_bad_intervals,
+    ) {
+        return Err(BondPostError::HoldingsUpdateNotGoodStanding);
+    }
+    // Exactly one shard added; the post is `current ∪ {new}` (set semantics).
+    match single_shard_diff(record_held_shard_ids, &vin.holdings.shard_ids) {
+        SingleDiff::Added(_) => {}
+        _ => return Err(BondPostError::HoldingsUpdateNotSingleAdd),
+    }
+    // Floor equality on the post-state: bonded_total == bond_floor(post) ==
+    // (|current| + 1)·FLOOR. `bond_credit == FLOOR` (checked above) is the
+    // single-shard increment; this pins the resulting total.
+    let post_floor = bond_floor(&vin.holdings);
+    if vin.bonded_total_atomic != post_floor
+        || vin.bonded_total_atomic
+            != current_bonded.saturating_add(crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC)
+    {
+        return Err(BondPostError::HoldingsUpdateAddFloorMismatch);
+    }
+    Ok(())
+}
+
+/// Verify `HoldingsUpdate`-**drop** bond-post semantics — voluntary removal of exactly
+/// one shard from a `Bonded` record (gate-4 §4.4 grace-tail; `PHASE_2B_FSM_RETOOL.md`
+/// P2B-7 Pin 1/2/3). Debit path (`bond_debit == FLOOR`), so the pqc auth is the
+/// record's committed `bond_spend_pk` (the GF-1 selector routes debit → the committed
+/// key; enforced C++-side, as for `Unbond`).
+///
+/// **Grace-tail model (ratified 2026-07-15):** the drop is a precondition-gated shrink,
+/// not a drop-then-cool. The dropped shard's release cooldown must have elapsed
+/// ([`release_cooldown_elapsed`] on its per-shard last-served anchor) and the slash
+/// scheduler must have settled through that anchor ([`slashes_settled_through`]) — the
+/// same two predicates the `Unbond` release uses, applied to the one dropped shard.
+/// The shard is additionally gated by the retention horizon
+/// ([`bond_duration`](crate::bond_duration::bond_duration) of
+/// [`ShardAgeAtAdd`](crate::bond_duration::ShardAgeAtAdd)): it is ineligible for
+/// voluntary drop until `current_epoch − add_epoch ≥ bond_duration`. At connect the
+/// shard leaves `holdings` and the `FLOOR` returns via the `bond_debit` source term —
+/// no cooldown sub-state, no interval, no clean-close marker (`P` stays `Bonded`).
+///
+/// The per-shard facts (`add_epoch`, `freeze_height`, `last_served`) are for the shard
+/// C++ identified by set-difference; this verify recomputes the diff and cross-checks
+/// that `dropped_shard_id` is exactly the one it removed, so the passed facts cannot be
+/// mis-associated (the exactly-one-dropped **rule** is decided here, not in C++).
+#[allow(clippy::too_many_arguments)]
+pub fn verify_holdings_update_drop(
+    vin: &ArchivalBondPostVin,
+    record_bonded_total: Option<u64>,
+    record_holdings_kind: HoldingsKind,
+    record_held_shard_ids: &[u64],
+    dropped_shard_id: u64,
+    dropped_shard_add_epoch: u64,
+    dropped_shard_freeze_height: u64,
+    dropped_shard_last_served: Option<u64>,
+    last_settled_slash_epoch: Option<u64>,
+    current_settlement_epoch: u64,
+) -> Result<(), BondPostError> {
+    let current_bonded = holdings_update_prologue(
+        vin,
+        record_bonded_total,
+        record_holdings_kind,
+        record_held_shard_ids,
+    )?;
+    // Debit direction (§3.2 term table): exactly `−FLOOR`, no credit.
+    if vin.bond_credit != 0 || vin.bond_debit != crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC {
+        return Err(BondPostError::HoldingsUpdateDropTerms);
+    }
+    // Exactly one shard removed, and it is the shard C++ read facts for.
+    match single_shard_diff(record_held_shard_ids, &vin.holdings.shard_ids) {
+        SingleDiff::Removed(s) if s == dropped_shard_id => {}
+        _ => return Err(BondPostError::HoldingsUpdateNotSingleDrop),
+    }
+    // Drop-last-shard rejected: a full exit is `Unbond` (→ `Exited`), not a drop
+    // that would leave an empty ShardSetCompact (P2B-7 Pin 1).
+    if vin.holdings.shard_ids.is_empty() {
+        return Err(BondPostError::HoldingsUpdateDropLastShard);
+    }
+    // Floor equality on the post-state: bonded_total == bond_floor(post) ==
+    // (|current| − 1)·FLOOR.
+    let post_floor = bond_floor(&vin.holdings);
+    if vin.bonded_total_atomic != post_floor
+        || vin
+            .bonded_total_atomic
+            .saturating_add(crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC)
+            != current_bonded
+    {
+        return Err(BondPostError::HoldingsUpdateDropFloorMismatch);
+    }
+    // Retention horizon (gate-4 §4.4 / P2B-7 Pin 3): the shard is ineligible for
+    // voluntary drop until `current_epoch − add_epoch ≥ bond_duration(age@add)`.
+    // A `current < add_epoch` is record corruption (add cannot be in the future);
+    // treat it as within-horizon (fail-closed, hardest to drop).
+    let horizon =
+        crate::bond_duration::bond_duration(crate::bond_duration::ShardAgeAtAdd::from_add(
+            dropped_shard_add_epoch,
+            dropped_shard_freeze_height,
+        ));
+    match current_settlement_epoch.checked_sub(dropped_shard_add_epoch) {
+        Some(tenure) if tenure >= horizon => {}
+        _ => return Err(BondPostError::HoldingsUpdateDropWithinHorizon),
+    }
+    // Per-shard release cooldown (grace-tail precondition) on the dropped shard's
+    // last-served anchor, plus slash-settlement through it — the same guarantee as
+    // `Unbond`, scoped to the one shard: no pending challenge can still slash it.
+    if !release_cooldown_elapsed(dropped_shard_last_served, current_settlement_epoch) {
+        return Err(BondPostError::CooldownNotElapsed);
+    }
+    if !slashes_settled_through(last_settled_slash_epoch, dropped_shard_last_served) {
+        return Err(BondPostError::SlashSettlementPending);
+    }
+    Ok(())
 }
 
 /// Verify JoinMarket bond-post semantics after wire decode and LMDB substrate read.
@@ -577,6 +858,380 @@ mod tests {
                 UNBOND_CURRENT - 1,
             ),
             Err(BondPostError::CooldownNotElapsed)
+        );
+    }
+
+    // ── HoldingsUpdate: the single-shard diff ────────────────────────────────
+
+    #[test]
+    fn single_shard_diff_classifies_add_drop_and_rejects_others() {
+        assert!(matches!(
+            single_shard_diff(&[7, 9], &[7, 9, 11]),
+            SingleDiff::Added(11)
+        ));
+        assert!(matches!(
+            single_shard_diff(&[7, 9, 11], &[7, 9]),
+            SingleDiff::Removed(11)
+        ));
+        // Order-agnostic (holdings is a set): same set, no change.
+        assert!(matches!(
+            single_shard_diff(&[9, 7], &[7, 9]),
+            SingleDiff::NotSingle
+        ));
+        // Two-shard change, a swap, and a duplicate in post all reject.
+        assert!(matches!(
+            single_shard_diff(&[7], &[7, 9, 11]),
+            SingleDiff::NotSingle
+        ));
+        assert!(matches!(
+            single_shard_diff(&[7, 9], &[7, 11]),
+            SingleDiff::NotSingle
+        ));
+        assert!(matches!(
+            single_shard_diff(&[7], &[7, 7]),
+            SingleDiff::NotSingle
+        ));
+    }
+
+    // ── HoldingsUpdate-add verify ────────────────────────────────────────────
+
+    const HU_JOIN: u64 = 3;
+    const HU_CURRENT: u64 = 20;
+    fn hu_current_shards() -> Vec<u64> {
+        vec![7, 9]
+    }
+
+    fn valid_add_vin() -> ArchivalBondPostVin {
+        ArchivalBondPostVin {
+            hybrid_public_key: vec![0xAB; 64],
+            p_canonical_id: [0x11; 32],
+            post_kind: BondPostKind::HoldingsUpdate,
+            bond_spend_pk: Vec::new(),
+            holdings: HoldingsDescriptor {
+                kind: HoldingsKind::ShardSetCompact,
+                shard_ids: vec![7, 9, 11], // current + one new shard
+            },
+            bonded_total_atomic: 3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+            bond_credit: ARCHIVAL_BOND_FLOOR_ATOMIC,
+            bond_debit: 0,
+        }
+    }
+
+    fn ok_add(vin: &ArchivalBondPostVin) -> Result<(), BondPostError> {
+        verify_holdings_update_add(
+            vin,
+            Some(2 * ARCHIVAL_BOND_FLOOR_ATOMIC),
+            HoldingsKind::ShardSetCompact,
+            &hu_current_shards(),
+            HU_JOIN,
+            &[],
+            HU_CURRENT,
+        )
+    }
+
+    #[test]
+    fn accepts_valid_add() {
+        assert!(ok_add(&valid_add_vin()).is_ok());
+    }
+
+    #[test]
+    fn add_rejects_wrong_post_kind() {
+        let mut vin = valid_add_vin();
+        vin.post_kind = BondPostKind::JoinMarket;
+        assert_eq!(ok_add(&vin), Err(BondPostError::PostKindNotHoldingsUpdate));
+    }
+
+    #[test]
+    fn add_rejects_missing_record() {
+        assert_eq!(
+            verify_holdings_update_add(
+                &valid_add_vin(),
+                None,
+                HoldingsKind::ShardSetCompact,
+                &hu_current_shards(),
+                HU_JOIN,
+                &[],
+                HU_CURRENT,
+            ),
+            Err(BondPostError::RecordMissing)
+        );
+    }
+
+    #[test]
+    fn add_rejects_complete_tree_record() {
+        assert_eq!(
+            verify_holdings_update_add(
+                &valid_add_vin(),
+                Some(ARCHIVAL_BOND_FLOOR_ATOMIC),
+                HoldingsKind::CompleteTree,
+                &[],
+                HU_JOIN,
+                &[],
+                HU_CURRENT,
+            ),
+            Err(BondPostError::HoldingsUpdateOnCompleteTree)
+        );
+    }
+
+    #[test]
+    fn add_rejects_exited_record_resurrection() {
+        // The Exited shape (post-Unbond): zero total, empty holdings, and a
+        // zero-length clean interval-close that good_through excludes nothing
+        // for. Without the Bonded gate this passed EVERY add gate — a
+        // JoinMarket-bypassing re-entry path whose connect then threw on the
+        // empty-pre-image journal encode (verify-valid but unconnectable on
+        // every node: a chain-stall vector). P2B-7 Pin 1: Bonded → Bonded.
+        let vin = ArchivalBondPostVin {
+            holdings: HoldingsDescriptor {
+                kind: HoldingsKind::ShardSetCompact,
+                shard_ids: vec![11],
+            },
+            bonded_total_atomic: ARCHIVAL_BOND_FLOOR_ATOMIC,
+            bond_credit: ARCHIVAL_BOND_FLOOR_ATOMIC,
+            ..valid_add_vin()
+        };
+        assert_eq!(
+            verify_holdings_update_add(
+                &vin,
+                Some(0), // Exited: nothing bonded
+                HoldingsKind::ShardSetCompact,
+                &[], // Exited: no held shards
+                HU_JOIN,
+                &[],
+                HU_CURRENT,
+            ),
+            Err(BondPostError::HoldingsUpdateRecordNotBonded)
+        );
+    }
+
+    #[test]
+    fn add_rejects_open_bad_interval() {
+        // An open bad interval (post-slash, pre-Rebond) is not good standing.
+        let open = crate::consensus_state::BadInterval {
+            start_epoch: 10,
+            end_exclusive: u64::MAX,
+        };
+        assert_eq!(
+            verify_holdings_update_add(
+                &valid_add_vin(),
+                Some(2 * ARCHIVAL_BOND_FLOOR_ATOMIC),
+                HoldingsKind::ShardSetCompact,
+                &hu_current_shards(),
+                HU_JOIN,
+                &[open],
+                HU_CURRENT,
+            ),
+            Err(BondPostError::HoldingsUpdateNotGoodStanding)
+        );
+    }
+
+    #[test]
+    fn add_rejects_wrong_terms() {
+        let mut vin = valid_add_vin();
+        vin.bond_credit = 2 * ARCHIVAL_BOND_FLOOR_ATOMIC; // must be exactly one FLOOR
+        assert_eq!(ok_add(&vin), Err(BondPostError::HoldingsUpdateAddTerms));
+        let mut vin = valid_add_vin();
+        vin.bond_debit = 1; // credit path must carry no debit
+        assert_eq!(ok_add(&vin), Err(BondPostError::HoldingsUpdateAddTerms));
+    }
+
+    #[test]
+    fn add_rejects_not_single_add() {
+        // Post adds two shards.
+        let mut vin = valid_add_vin();
+        vin.holdings.shard_ids = vec![7, 9, 11, 13];
+        vin.bonded_total_atomic = 4 * ARCHIVAL_BOND_FLOOR_ATOMIC;
+        assert_eq!(ok_add(&vin), Err(BondPostError::HoldingsUpdateNotSingleAdd));
+    }
+
+    #[test]
+    fn add_rejects_floor_mismatch() {
+        let mut vin = valid_add_vin();
+        vin.bonded_total_atomic = 4 * ARCHIVAL_BOND_FLOOR_ATOMIC; // != |post|·FLOOR
+        assert_eq!(
+            ok_add(&vin),
+            Err(BondPostError::HoldingsUpdateAddFloorMismatch)
+        );
+    }
+
+    // ── HoldingsUpdate-drop verify ───────────────────────────────────────────
+
+    // A shard old enough to drop: added at epoch 0 (genesis band, freeze 0 ⇒ age
+    // max ⇒ bond_duration 20), tenure = current − 0 must reach 20.
+    const DROP_ADD_EPOCH: u64 = 0;
+    const DROP_FREEZE: u64 = 0;
+    const DROP_LAST_SERVED: u64 = 5;
+    const DROP_CURRENT: u64 = 40; // tenure 40 ≥ horizon 20; cooldown/settle satisfied
+
+    fn valid_drop_vin() -> ArchivalBondPostVin {
+        ArchivalBondPostVin {
+            hybrid_public_key: vec![0xAB; 64],
+            p_canonical_id: [0x11; 32],
+            post_kind: BondPostKind::HoldingsUpdate,
+            bond_spend_pk: Vec::new(),
+            holdings: HoldingsDescriptor {
+                kind: HoldingsKind::ShardSetCompact,
+                shard_ids: vec![7], // current {7, 11} minus 11
+            },
+            bonded_total_atomic: ARCHIVAL_BOND_FLOOR_ATOMIC,
+            bond_credit: 0,
+            bond_debit: ARCHIVAL_BOND_FLOOR_ATOMIC,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn ok_drop(vin: &ArchivalBondPostVin) -> Result<(), BondPostError> {
+        verify_holdings_update_drop(
+            vin,
+            Some(2 * ARCHIVAL_BOND_FLOOR_ATOMIC),
+            HoldingsKind::ShardSetCompact,
+            &[7, 11],
+            11,
+            DROP_ADD_EPOCH,
+            DROP_FREEZE,
+            Some(DROP_LAST_SERVED),
+            Some(DROP_CURRENT),
+            DROP_CURRENT,
+        )
+    }
+
+    #[test]
+    fn accepts_valid_drop() {
+        assert!(ok_drop(&valid_drop_vin()).is_ok());
+    }
+
+    #[test]
+    fn drop_rejects_unbonded_record() {
+        // The add arm's Bonded-gate twin (shared prologue): a zero-total /
+        // no-shards record refuses before any diff or term arithmetic runs.
+        assert_eq!(
+            verify_holdings_update_drop(
+                &valid_drop_vin(),
+                Some(0),
+                HoldingsKind::ShardSetCompact,
+                &[],
+                11,
+                DROP_ADD_EPOCH,
+                DROP_FREEZE,
+                Some(DROP_LAST_SERVED),
+                Some(DROP_CURRENT),
+                DROP_CURRENT,
+            ),
+            Err(BondPostError::HoldingsUpdateRecordNotBonded)
+        );
+    }
+
+    #[test]
+    fn drop_rejects_wrong_terms() {
+        let mut vin = valid_drop_vin();
+        vin.bond_debit = 2 * ARCHIVAL_BOND_FLOOR_ATOMIC;
+        assert_eq!(ok_drop(&vin), Err(BondPostError::HoldingsUpdateDropTerms));
+    }
+
+    #[test]
+    fn drop_rejects_not_single_or_wrong_shard() {
+        // The vin drops a shard, but C++ passed a different dropped_shard_id.
+        let vin = valid_drop_vin();
+        assert_eq!(
+            verify_holdings_update_drop(
+                &vin,
+                Some(2 * ARCHIVAL_BOND_FLOOR_ATOMIC),
+                HoldingsKind::ShardSetCompact,
+                &[7, 11],
+                7, // wrong: the diff removed 11, not 7
+                DROP_ADD_EPOCH,
+                DROP_FREEZE,
+                Some(DROP_LAST_SERVED),
+                Some(DROP_CURRENT),
+                DROP_CURRENT,
+            ),
+            Err(BondPostError::HoldingsUpdateNotSingleDrop)
+        );
+    }
+
+    #[test]
+    fn drop_rejects_last_shard() {
+        // Dropping the only shard: post empty → use Unbond.
+        let mut vin = valid_drop_vin();
+        vin.holdings.shard_ids = vec![];
+        vin.bonded_total_atomic = 0;
+        assert_eq!(
+            verify_holdings_update_drop(
+                &vin,
+                Some(ARCHIVAL_BOND_FLOOR_ATOMIC),
+                HoldingsKind::ShardSetCompact,
+                &[11],
+                11,
+                DROP_ADD_EPOCH,
+                DROP_FREEZE,
+                Some(DROP_LAST_SERVED),
+                Some(DROP_CURRENT),
+                DROP_CURRENT,
+            ),
+            Err(BondPostError::HoldingsUpdateDropLastShard)
+        );
+    }
+
+    #[test]
+    fn drop_rejects_within_horizon() {
+        // Same shard, but current epoch is only 10 past add — horizon for a
+        // genesis-band shard is 20, so tenure 10 < 20.
+        assert_eq!(
+            verify_holdings_update_drop(
+                &valid_drop_vin(),
+                Some(2 * ARCHIVAL_BOND_FLOOR_ATOMIC),
+                HoldingsKind::ShardSetCompact,
+                &[7, 11],
+                11,
+                DROP_ADD_EPOCH,
+                DROP_FREEZE,
+                Some(DROP_LAST_SERVED),
+                Some(10),
+                10,
+            ),
+            Err(BondPostError::HoldingsUpdateDropWithinHorizon)
+        );
+    }
+
+    #[test]
+    fn drop_rejects_cooldown_not_elapsed() {
+        // Last-served at current − 1: the release cooldown (2 epochs) has not passed.
+        let near = DROP_CURRENT;
+        assert_eq!(
+            verify_holdings_update_drop(
+                &valid_drop_vin(),
+                Some(2 * ARCHIVAL_BOND_FLOOR_ATOMIC),
+                HoldingsKind::ShardSetCompact,
+                &[7, 11],
+                11,
+                DROP_ADD_EPOCH,
+                DROP_FREEZE,
+                Some(near),
+                Some(near),
+                near,
+            ),
+            Err(BondPostError::CooldownNotElapsed)
+        );
+    }
+
+    #[test]
+    fn drop_rejects_slash_settlement_pending() {
+        // Cooldown elapsed, but the slash scheduler has not settled through the
+        // dropped shard's last-served anchor.
+        assert_eq!(
+            verify_holdings_update_drop(
+                &valid_drop_vin(),
+                Some(2 * ARCHIVAL_BOND_FLOOR_ATOMIC),
+                HoldingsKind::ShardSetCompact,
+                &[7, 11],
+                11,
+                DROP_ADD_EPOCH,
+                DROP_FREEZE,
+                Some(DROP_LAST_SERVED),
+                Some(DROP_LAST_SERVED - 1), // watermark below the anchor
+                DROP_CURRENT,
+            ),
+            Err(BondPostError::SlashSettlementPending)
         );
     }
 }

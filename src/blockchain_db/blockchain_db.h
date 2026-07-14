@@ -2144,6 +2144,41 @@ public:
   /// as a defensive ordering belt; a violation surfaces in the fold as
   /// MISSING_CLEAN_CLOSE, loud.
   virtual void revert_archival_unbonds_at_height(uint64_t block_height);
+  /// HoldingsUpdate-add connect writer (gate-4 §4.4; the Rust fold
+  /// `shekyl_archival_holdings_update_add_connect` dictates the counter
+  /// movement): sets `held_shard_ids = post` and rebuilds the index-parallel
+  /// `shard_add_epochs` (carried shards keep their add-epoch; the one added
+  /// shard takes `E_add = settlement_epoch(block_height)`). The record stays
+  /// `Bonded` (ShardSetCompact) — no interval, no clean close (grace-tail
+  /// posture). Journals the full pre-image of the mutated fields first, and
+  /// reads the LIVE `total_bonded_atomic` internally (per-post threading, as
+  /// Unbond). Any fold error is a hard abort. Caller: the bond-post vin
+  /// connect dispatch (add_transaction).
+  virtual void apply_archival_holdings_update_add(uint64_t block_height,
+    const crypto::hash& p_id, const std::vector<uint64_t>& post_shard_ids);
+  /// HoldingsUpdate-drop connect writer (gate-4 §4.4 grace-tail): sets
+  /// `held_shard_ids = post` and rebuilds `shard_add_epochs` (the dropped
+  /// shard's add-epoch vanishes with it); the released FLOOR returns via the
+  /// `bond_debit` CT-balance source term (no ledger write). Same journal +
+  /// per-post counter threading as the add. Caller: add_transaction.
+  virtual void apply_archival_holdings_update_drop(uint64_t block_height,
+    const crypto::hash& p_id, const std::vector<uint64_t>& post_shard_ids);
+  /// Restore the HoldingsUpdate pre-image journal rows recorded when
+  /// `block_height` connected, reverting `total_bonded_atomic` via the Rust
+  /// pop fold (which guards that the tip and pre-image balances differ by
+  /// exactly one FLOOR — a single-shard change). The record stays Bonded
+  /// throughout, so there is no Exited/clean-close check (the add/drop pop
+  /// twin, gate-4 §5).
+  virtual void revert_archival_holdings_updates_at_height(uint64_t block_height);
+  /// HoldingsUpdate-drop verify marshaling: the dropped shard's segment
+  /// freeze height (feeds the retention-horizon age-at-add). Returns false
+  /// when the shard has no frozen segment — a REACHABLE state, not
+  /// corruption: the add verify deliberately does not require a frozen
+  /// segment (bond_post.rs), so the caller fails closed by marshaling
+  /// freeze_height 0 (the genesis-band "oldest" sentinel → the longest
+  /// horizon); the Rust age computation pins a segment that froze at/after
+  /// H_close(add_epoch) to the same longest-horizon extreme.
+  virtual bool archival_shard_freeze_height(uint64_t shard_id, uint64_t& out) const;
   /// Unbond verify marshaling (P2B-8 Q1/Q2): each held shard's last-served
   /// settlement epoch — one reverse-cursor seek per shard over the BE
   /// composite serve-credit key `P_id ‖ BE64(shard) ‖ BE64(epoch)` — with

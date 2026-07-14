@@ -108,6 +108,30 @@ fn main() {
             )
         });
 
+    // Per-shard retention-commitment horizon (gate-4 §4.4). Shape genesis-frozen;
+    // numerics provisional (H2 plateau arm). Consumed by
+    // shekyl-archival-retention::bond_duration (Rust-only at genesis); the C++
+    // header emits the same values for parity.
+    let bond_duration_base_epochs = map
+        .get("bond_duration_base_epochs")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_else(|| {
+            panic!(
+                "missing bond_duration_base_epochs in {}",
+                config_path.display()
+            )
+        });
+
+    let bond_duration_age_scale = map
+        .get("bond_duration_age_scale")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_else(|| {
+            panic!(
+                "missing bond_duration_age_scale in {}",
+                config_path.display()
+            )
+        });
+
     // M1 reward-gate cover threshold (ARCHIVAL_REWARD_GATE_M1.md §4 sentinel
     // mechanics). `k_cover_provisional` gates a compile-time refusal in
     // `src/k_cover.rs`; while provisional, the ONLY permitted value is 0 —
@@ -167,9 +191,11 @@ fn main() {
          pub const ARCHIVAL_REWARD_AGE_WEIGHT_MILLI: u64 = {age_weight};\n\
          pub const MAX_CLAIM_AGE_W: u64 = {max_claim_age_w};\n\
          pub const RELEASE_COOLDOWN_EPOCHS: u64 = {release_cooldown_epochs};\n\
-         pub const ARCHIVAL_REORG_DEPTH_BLOCKS: u64 = {archival_reorg_depth_blocks};\n"
+         pub const ARCHIVAL_REORG_DEPTH_BLOCKS: u64 = {archival_reorg_depth_blocks};\n\
+         pub const BOND_DURATION_BASE_EPOCHS: u64 = {bond_duration_base_epochs};\n\
+         pub const BOND_DURATION_AGE_SCALE: u64 = {bond_duration_age_scale};\n"
     );
-    fs::write(&out_file, output).expect("failed writing archival bond floor constant");
+    fs::write(&out_file, output).expect("failed writing generated archival consensus constants");
 
     let k_cover_file = out_dir.join("k_cover_generated.rs");
     let k_cover_output = format!(
