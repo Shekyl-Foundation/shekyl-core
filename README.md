@@ -13,4 +13,4 @@ updated by the `ci/benchmarks` workflow on every push to
 - `baseline.iai.snapshot` — raw gungraun stdout
   corresponding to the same capture.
 
-Current source commit: `2380ea221e7c4c05103d8c9eb96c747c271cf772`.
+Current source commit: `a6f64a6e25a9c0e4308eb3c08f63ca6c211002c3`.
