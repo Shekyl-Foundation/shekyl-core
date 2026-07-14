@@ -679,6 +679,43 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
 
 ## Revision history
 
+- **2026-07-13 (f):** **GF-1 review round — every codec refuses what the binary
+  codec refuses, and the enable flip completes at the block level.** The boost
+  serializer now enforces the §9.11 coupling both directions (it deserialized a
+  non-canonical key and silently dropped a stray one — the one codec bypassing
+  the length pin the record-commit relies on), and JSON `toJsonValue` refuses at
+  write what `fromJsonValue` refuses at read (a producer failure, not a consumer
+  parse error). The FFI vin marshaler stops placeholdering `bond_spend_pk`:
+  both verify entry points take the real bytes and the shared marshaler
+  enforces the coupling (`ERR_BOND_SPEND_PK_COUPLING`, code 23) — the
+  `HoldingsUpdate` arm will inherit an honest marshal. `check_archival_bond_post_input`
+  gains the coupling belts for non-parse callers on BOTH arms (the Unbond arm
+  had none) and runs the committed-key pin BEFORE the per-shard cursor scans and
+  the FFI verify (an unauthorized attempt no longer pays the LMDB walk). The
+  block-level checkpoint fast-path arm executes the swap its (d) belt named:
+  under `fast_check` it re-pins the debit's pqc auth key against the record's
+  committed `bond_spend_pk` (fail-closed on missing record/keyless record/missing
+  auth slot) instead of blanket-rejecting every debit kind — without the swap, a
+  block carrying a valid `Unbond` was rejected by every node, contradicting (e)'s
+  end-to-end contract; debit-side bond posts now also feed the per-`P`
+  block-unique pass (`Unbond+Unbond` pairs were unreachable before). The gate-4
+  lifecycle KAT stops embedding a copy of gate-2's integration section (the copy
+  had silently drifted on dev); the serve-at-`E_first` leg reads
+  `gate2_serve_credit_kat_v1.json` directly.
+- **2026-07-13 (e):** **GF-1 `bond_spend_pk` wire+record LANDED — the debit side
+  is enabled.** The §9.11 JoinMarket-coupled field now exists in all three C++
+  serializers (binary/boost/JSON, exact canonical length both directions) and
+  the Rust `bond_wire` codec (coupling enforced at write/read; §3.4.1 preimage
+  binds it; gate-4 KAT fixture regenerated); the v5 record commits it once at
+  JoinMarket connect (v4 rejected at decode, datadir reset); and the §3.5
+  step-5 selection is live as the **shared debit authorizer** (credit →
+  identity key, debit → the record's committed key) — the reject→auth swap
+  landed in one change with the discriminating KATs (committed key accepts:
+  **Unbond verifies end-to-end**; identity/foreign/no-key all reject
+  fail-closed). The wallet seam simplified (the vin carries the key;
+  `wire_bond_post_input` takes it from the vin; A-1 now pins the key
+  byte-for-byte between prefix input and signed vin). **`HoldingsUpdate` is
+  unblocked** — its drop-path auth rides the same selection.
 - **2026-07-13 (d):** **`Unbond` release-gate hardening (review round).** Added
   the slash-settlement predicate to the release verify — the scheduler's settled
   watermark (`archival_last_slash_epoch`) must reach `P`'s last-served anchor,

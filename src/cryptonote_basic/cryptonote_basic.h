@@ -230,6 +230,13 @@ namespace cryptonote
     std::vector<uint8_t> hybrid_public_key;
     crypto::hash p_canonical_id;
     uint8_t post_kind;
+    // GF-1 debit authorizer (gate-4 §4.1 / gate-6 §9.6), JoinMarket-coupled on
+    // the wire (§9.11, matching the Rust bond wire and shekyl-wire): present
+    // with the exact canonical single-key length iff post_kind == JoinMarket,
+    // empty (and absent from the wire) on every other kind. Committed once
+    // into the bond record at JoinMarket connect; every later bond_debit
+    // verifies against the committed copy, never the identity key.
+    std::vector<uint8_t> bond_spend_pk;
     archival_holdings_descriptor holdings;
     uint64_t bonded_total_atomic;
     uint64_t bond_credit;
@@ -246,6 +253,20 @@ namespace cryptonote
       FIELD(post_kind)
       if (post_kind > static_cast<uint8_t>(archival_bond_post_kind::HoldingsUpdate))
         return false;
+      if (post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
+      {
+        FIELD(bond_spend_pk)
+        if (bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
+          return false;
+      }
+      else if (!bond_spend_pk.empty())
+      {
+        // §9.11 coupling: only JoinMarket carries the debit authorizer. On
+        // read this branch is unreachable (the field is default-empty); on
+        // write it makes a misconstruction loud instead of silently dropping
+        // the key from the emitted bytes.
+        return false;
+      }
       FIELD(holdings)
       VARINT_FIELD(bonded_total_atomic)
       VARINT_FIELD(bond_credit)

@@ -78,6 +78,15 @@ pub struct ArchivalBondPostVin {
     pub hybrid_public_key: Vec<u8>,
     pub p_canonical_id: [u8; 32],
     pub post_kind: BondPostKind,
+    /// The GF-1 debit authorizer (gate-4 §4.1 `bond_spend_pk`, gate-6 §9.6),
+    /// **JoinMarket-coupled on the wire** (§9.11, mirroring the `shekyl-wire`
+    /// `BondPostKind::JoinMarket { bond_spend_pk }` oracle): present with the
+    /// exact canonical single-key length iff `post_kind == JoinMarket` —
+    /// committed once into the record at connect, immutable for the record's
+    /// life, and the key every later `bond_debit` verifies against. `write`
+    /// and `read_payload` enforce the coupling (a non-JoinMarket vin carrying
+    /// one, or a JoinMarket vin without one, is unrepresentable on the wire).
+    pub bond_spend_pk: Vec<u8>,
     pub holdings: HoldingsDescriptor,
     pub bonded_total_atomic: u64,
     pub bond_credit: u64,
@@ -89,6 +98,8 @@ pub enum WireError {
     Io(io::Error),
     UnknownVinType(u8),
     HybridPubkeyLenNotCanonical { got: usize },
+    BondSpendPkLenNotCanonical { got: usize },
+    BondSpendPkForbidden,
     HoldingsCountExceeded { got: usize },
     ShardListForbiddenForCompleteTree,
     InvalidPostKind(u8),
@@ -105,6 +116,18 @@ impl fmt::Display for WireError {
                 write!(
                     f,
                     "hybrid pubkey length {got} != canonical single-key length"
+                )
+            }
+            Self::BondSpendPkLenNotCanonical { got } => {
+                write!(
+                    f,
+                    "bond_spend_pk length {got} != canonical single-key length"
+                )
+            }
+            Self::BondSpendPkForbidden => {
+                write!(
+                    f,
+                    "bond_spend_pk is JoinMarket-coupled; other post kinds must not carry one"
                 )
             }
             Self::HoldingsCountExceeded { got } => {
@@ -187,12 +210,19 @@ pub fn read_holdings_descriptor<R: Read>(r: &mut R) -> Result<HoldingsDescriptor
 
 impl ArchivalBondPostVin {
     /// `cSHAKE256` spend-auth preimage for the bond vin (`tx_prefix_hash` is 32 bytes).
+    ///
+    /// Binds `bond_spend_pk` directly (gate-4 §3.4.1: the JoinMarket signature
+    /// commits the debit authorizer). Injective: the `post_kind` byte precedes
+    /// the key bytes, and the key is exactly canonical-length on JoinMarket and
+    /// empty otherwise, so no two field assignments share an encoding.
     pub fn signature_preimage(&self, tx_prefix_hash: &[u8; 32]) -> [u8; 32] {
         let holdings = encode_holdings_descriptor(&self.holdings).expect("encode holdings");
-        let mut input = Vec::with_capacity(32 + 32 + 1 + holdings.len() + 24);
+        let mut input =
+            Vec::with_capacity(32 + 32 + 1 + self.bond_spend_pk.len() + holdings.len() + 24);
         input.extend_from_slice(tx_prefix_hash);
         input.extend_from_slice(&self.p_canonical_id);
         input.push(self.post_kind as u8);
+        input.extend_from_slice(&self.bond_spend_pk);
         input.extend_from_slice(&holdings);
         input.extend_from_slice(&self.bonded_total_atomic.to_le_bytes());
         input.extend_from_slice(&self.bond_credit.to_le_bytes());
@@ -205,6 +235,23 @@ impl ArchivalBondPostVin {
             return Err(WireError::HybridPubkeyLenNotCanonical {
                 got: self.hybrid_public_key.len(),
             });
+        }
+        // §9.11 coupling: JoinMarket carries the exact-canonical-length key;
+        // every other kind must not carry one. Enforced at write so a
+        // misconstruction is loud rather than silently dropped or emitted.
+        match self.post_kind {
+            BondPostKind::JoinMarket => {
+                if self.bond_spend_pk.len() != HYBRID_PUBKEY_CANONICAL_BYTES {
+                    return Err(WireError::BondSpendPkLenNotCanonical {
+                        got: self.bond_spend_pk.len(),
+                    });
+                }
+            }
+            _ => {
+                if !self.bond_spend_pk.is_empty() {
+                    return Err(WireError::BondSpendPkForbidden);
+                }
+            }
         }
         if self.holdings.kind == HoldingsKind::ShardSetCompact
             && self.holdings.shard_ids.len() > MAX_HOLDINGS_SHARDS
@@ -222,6 +269,10 @@ impl ArchivalBondPostVin {
         w.write_all(&self.hybrid_public_key)?;
         w.write_all(&self.p_canonical_id)?;
         w.write_all(&[self.post_kind as u8])?;
+        if self.post_kind == BondPostKind::JoinMarket {
+            write_varint(&self.bond_spend_pk.len(), w)?;
+            w.write_all(&self.bond_spend_pk)?;
+        }
         write_holdings_descriptor(w, &self.holdings)?;
         write_varint(&self.bonded_total_atomic, w)?;
         write_varint(&self.bond_credit, w)?;
@@ -244,6 +295,19 @@ impl ArchivalBondPostVin {
         r.read_exact(&mut hybrid_public_key)?;
         let p_canonical_id = read_bytes(r)?;
         let post_kind = BondPostKind::from_u8(read_byte(r)?)?;
+        // §9.11 coupling: the key bytes exist on the wire iff JoinMarket, so
+        // `read` can never yield a non-JoinMarket vin carrying one.
+        let bond_spend_pk = if post_kind == BondPostKind::JoinMarket {
+            let spk_len: usize = read_varint(r)?;
+            if spk_len != HYBRID_PUBKEY_CANONICAL_BYTES {
+                return Err(WireError::BondSpendPkLenNotCanonical { got: spk_len });
+            }
+            let mut spk = vec![0u8; spk_len];
+            r.read_exact(&mut spk)?;
+            spk
+        } else {
+            Vec::new()
+        };
         let holdings = read_holdings_descriptor(r)?;
         let bonded_total_atomic = read_varint(r)?;
         let bond_credit = read_varint(r)?;
@@ -252,6 +316,7 @@ impl ArchivalBondPostVin {
             hybrid_public_key,
             p_canonical_id,
             post_kind,
+            bond_spend_pk,
             holdings,
             bonded_total_atomic,
             bond_credit,
@@ -290,6 +355,7 @@ mod tests {
             hybrid_public_key: hybrid_pk.clone(),
             p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk).to_bytes(),
             post_kind: BondPostKind::JoinMarket,
+            bond_spend_pk: vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES],
             holdings: HoldingsDescriptor {
                 kind: HoldingsKind::ShardSetCompact,
                 shard_ids: vec![7, 42],
@@ -311,6 +377,7 @@ mod tests {
             hybrid_public_key: hybrid_pk.clone(),
             p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk).to_bytes(),
             post_kind: BondPostKind::JoinMarket,
+            bond_spend_pk: vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES],
             holdings: HoldingsDescriptor {
                 kind: HoldingsKind::CompleteTree,
                 shard_ids: Vec::new(),
@@ -332,6 +399,7 @@ mod tests {
             hybrid_public_key: hybrid_pk.clone(),
             p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk).to_bytes(),
             post_kind: BondPostKind::JoinMarket,
+            bond_spend_pk: vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES],
             holdings: HoldingsDescriptor {
                 kind: HoldingsKind::ShardSetCompact,
                 shard_ids: vec![99],
@@ -356,6 +424,7 @@ mod tests {
             hybrid_public_key: vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES - 1],
             p_canonical_id: [0x11; 32],
             post_kind: BondPostKind::JoinMarket,
+            bond_spend_pk: vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES],
             holdings: HoldingsDescriptor {
                 kind: HoldingsKind::CompleteTree,
                 shard_ids: Vec::new(),
@@ -382,6 +451,87 @@ mod tests {
             ArchivalBondPostVin::read_payload(&mut wire.as_slice()),
             Err(WireError::HybridPubkeyLenNotCanonical { .. })
         ));
+    }
+
+    /// §9.11 coupling: `bond_spend_pk` is present with the exact canonical
+    /// length iff JoinMarket. Both directions of the misconstruction are
+    /// unrepresentable — write refuses to emit them, read refuses to parse
+    /// them — mirroring the shekyl-wire `BondPostKind` enum coupling.
+    #[test]
+    fn bond_spend_pk_is_join_market_coupled() {
+        let hybrid_pk = vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES];
+        let base = ArchivalBondPostVin {
+            hybrid_public_key: hybrid_pk.clone(),
+            p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk).to_bytes(),
+            post_kind: BondPostKind::JoinMarket,
+            bond_spend_pk: vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES],
+            holdings: HoldingsDescriptor {
+                kind: HoldingsKind::ShardSetCompact,
+                shard_ids: vec![7],
+            },
+            bonded_total_atomic: 750_000_000,
+            bond_credit: 750_000_000,
+            bond_debit: 0,
+        };
+
+        // JoinMarket with a non-canonical key length refuses to write.
+        let mut vin = base.clone();
+        vin.bond_spend_pk = vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES - 1];
+        assert!(matches!(
+            vin.serialize(),
+            Err(WireError::BondSpendPkLenNotCanonical { .. })
+        ));
+        let mut vin = base.clone();
+        vin.bond_spend_pk = Vec::new();
+        assert!(matches!(
+            vin.serialize(),
+            Err(WireError::BondSpendPkLenNotCanonical { .. })
+        ));
+
+        // A non-JoinMarket vin carrying a key refuses to write (it would be
+        // silently dropped otherwise — the coupling means the wire has no
+        // place for it).
+        let mut vin = base.clone();
+        vin.post_kind = BondPostKind::Unbond;
+        vin.holdings.shard_ids = Vec::new();
+        vin.bonded_total_atomic = 0;
+        vin.bond_credit = 0;
+        vin.bond_debit = 750_000_000;
+        assert!(matches!(
+            vin.serialize(),
+            Err(WireError::BondSpendPkForbidden)
+        ));
+        // The same vin without the key round-trips, key-less.
+        vin.bond_spend_pk = Vec::new();
+        let wire = vin.serialize().unwrap();
+        let decoded = ArchivalBondPostVin::read(&mut wire.as_slice()).unwrap();
+        assert_eq!(decoded, vin);
+        assert!(decoded.bond_spend_pk.is_empty());
+
+        // Read side: a JoinMarket payload with a truncated key length refuses.
+        let mut wire = Vec::new();
+        write_varint(&HYBRID_PUBKEY_CANONICAL_BYTES, &mut wire).unwrap();
+        wire.extend_from_slice(&hybrid_pk);
+        wire.extend_from_slice(&base.p_canonical_id);
+        wire.push(BondPostKind::JoinMarket as u8);
+        write_varint(&(HYBRID_PUBKEY_CANONICAL_BYTES - 1), &mut wire).unwrap();
+        wire.extend_from_slice(&vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES - 1]);
+        assert!(matches!(
+            ArchivalBondPostVin::read_payload(&mut wire.as_slice()),
+            Err(WireError::BondSpendPkLenNotCanonical { .. })
+        ));
+
+        // The preimage binds the key: two vins differing only in
+        // bond_spend_pk must not share a signature preimage (§3.4.1).
+        let other_key = ArchivalBondPostVin {
+            bond_spend_pk: vec![0xE6; HYBRID_PUBKEY_CANONICAL_BYTES],
+            ..base.clone()
+        };
+        let prefix = [0x42u8; 32];
+        assert_ne!(
+            base.signature_preimage(&prefix),
+            other_key.signature_preimage(&prefix)
+        );
     }
 
     /// Golden byte vector for the shared holdings codec.

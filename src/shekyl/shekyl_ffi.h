@@ -1816,9 +1816,10 @@ uint8_t shekyl_verify_ct_balance(
     uint64_t txn_fee);
 
 // JoinMarket bond-post semantic verify (gate-4 §3.5; hybrid pubkey + P_id hint stay C++).
-// Codes 1 (NULL_PTR) and 19 (LEN_OVERFLOW) are shared slice-marshaling guards from the
-// common vin marshaler, so BOTH bond-post entry points can return them: JoinMarket returns
-// 0-10 or 19; Unbond additionally returns 11-18 and 20.
+// Codes 1 (NULL_PTR), 19 (LEN_OVERFLOW), and 23 (BOND_SPEND_PK_COUPLING) are shared
+// vin-marshaling guards from the common vin marshaler, so BOTH bond-post entry points
+// can return them: JoinMarket returns 0-10, 19, or 23; Unbond additionally returns
+// 11-18 and 20-22.
 #define SHEKYL_ARCHIVAL_BOND_POST_OK                           0
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR                 1
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND                2
@@ -1832,11 +1833,19 @@ uint8_t shekyl_verify_ct_balance(
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND            10
 
 /// `record_exists` is 1 when LMDB already stores a bond record for this P_id.
+/// `bond_spend_pk_*` is the vin's GF-1 debit authorizer (§9.11); the shared vin
+/// marshaler enforces the JoinMarket coupling — exact canonical single-key
+/// length iff JoinMarket, empty otherwise — returning
+/// SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING (code 23, shared by
+/// both entry points like LEN_OVERFLOW) instead of building a vin the Rust
+/// wire codec would refuse to serialize.
 uint8_t shekyl_archival_verify_join_market_bond_post(
     uint8_t post_kind,
     uint8_t holdings_kind,
     const uint64_t* shard_ids_ptr,
     size_t shard_ids_len,
+    const uint8_t* bond_spend_pk_ptr,
+    size_t bond_spend_pk_len,
     uint64_t bonded_total_atomic,
     uint64_t bond_credit,
     uint64_t bond_debit,
@@ -1844,8 +1853,9 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
 
 // Unbond bond-post semantic verify (gate-4 §3.5 debit path; PHASE_2B_FSM_RETOOL.md
 // P2B-8). Extends the shared SHEKYL_ARCHIVAL_BOND_POST_* error space above: 11-18,
-// 20, 21, and 22 are Unbond-semantic; 19 (LEN_OVERFLOW) is a shared slice-marshaling
-// guard returned by both entry points (see the JoinMarket block above).
+// 20, 21, and 22 are Unbond-semantic; 19 (LEN_OVERFLOW) and 23
+// (BOND_SPEND_PK_COUPLING) are shared vin-marshaling guards returned by both
+// entry points (see the JoinMarket block above).
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_UNBOND    11
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING          12
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_UNBOND       13
@@ -1858,6 +1868,7 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_HOLDINGS_NOT_EMPTY 20
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL       21
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING 22
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING  23
 
 /// Unbond bond-post verify. `record_exists`/`record_bonded_total`/
 /// `record_bad_interval_count` come from the LMDB bond record;
@@ -1879,6 +1890,8 @@ uint8_t shekyl_archival_verify_unbond_bond_post(
     uint8_t holdings_kind,
     const uint64_t* shard_ids_ptr,
     size_t shard_ids_len,
+    const uint8_t* bond_spend_pk_ptr,
+    size_t bond_spend_pk_len,
     uint64_t bonded_total_atomic,
     uint64_t bond_credit,
     uint64_t bond_debit,

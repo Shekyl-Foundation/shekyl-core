@@ -242,6 +242,7 @@ mod tests {
             hybrid_public_key: vec![0xAB; 64],
             p_canonical_id: [0x11; 32],
             post_kind: BondPostKind::JoinMarket,
+            bond_spend_pk: vec![0xE5; 64],
             holdings: HoldingsDescriptor {
                 kind: HoldingsKind::ShardSetCompact,
                 shard_ids: vec![7, 42],
@@ -366,6 +367,7 @@ mod tests {
             hybrid_public_key: vec![0xAB; 64],
             p_canonical_id: [0x11; 32],
             post_kind: BondPostKind::Unbond,
+            bond_spend_pk: Vec::new(),
             holdings: HoldingsDescriptor {
                 kind: HoldingsKind::ShardSetCompact,
                 shard_ids: vec![],

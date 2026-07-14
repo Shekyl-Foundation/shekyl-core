@@ -32,12 +32,19 @@
 #include <sstream>
 #include <variant>
 
+#include <boost/archive/portable_binary_iarchive.hpp>
+#include <boost/archive/portable_binary_oarchive.hpp>
+#include <rapidjson/document.h>
+
+#include "byte_stream.h"
 #include "cryptonote_basic/cryptonote_basic.h"
+#include "cryptonote_basic/cryptonote_boost_serialization.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "fcmp/bulletproofs_plus.h"
 #include "fcmp/rctOps.h"
 #include "fcmp/rctSigs.h"
 #include "serialization/binary_archive.h"
+#include "serialization/json_object.h"
 #include "shekyl/consensus_constants_generated.h"
 
 using namespace cryptonote;
@@ -51,6 +58,9 @@ txin_archival_bond_post make_join_market_vin()
   bond.hybrid_public_key.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xAB);
   memset(&bond.p_canonical_id, 0x11, sizeof(bond.p_canonical_id));
   bond.post_kind = static_cast<uint8_t>(archival_bond_post_kind::JoinMarket);
+  // GF-1 debit authorizer: JoinMarket-coupled on the wire (§9.11), exact
+  // canonical length enforced by the serializer.
+  bond.bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xE5);
   bond.holdings.kind = archival_holdings_kind::ShardSetCompact;
   bond.holdings.shard_ids = {7, 42};
   bond.bonded_total_atomic = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
@@ -83,6 +93,157 @@ TEST(archival_bond_post, vin_deserializes_with_tag_0x03)
   EXPECT_EQ(out.holdings.shard_ids[1], 42u);
   EXPECT_EQ(out.bond_credit, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC);
   EXPECT_EQ(out.post_kind, static_cast<uint8_t>(archival_bond_post_kind::JoinMarket));
+  // GF-1: the committed debit authorizer round-trips byte-exactly.
+  EXPECT_EQ(out.bond_spend_pk,
+    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xE5));
+}
+
+// §9.11 coupling at the C++ serializer: JoinMarket without a canonical-length
+// bond_spend_pk refuses to serialize, and a non-JoinMarket vin carrying one
+// refuses too (it would otherwise be silently dropped from the bytes).
+TEST(archival_bond_post, vin_serializer_enforces_bond_spend_pk_coupling)
+{
+  {
+    txin_v vin_missing_key = [] {
+      txin_archival_bond_post b = make_join_market_vin();
+      b.bond_spend_pk.clear();
+      return b;
+    }();
+    std::ostringstream oss;
+    binary_archive<true> oar(oss);
+    EXPECT_FALSE(::do_serialize(oar, vin_missing_key));
+  }
+  {
+    txin_v vin_truncated_key = [] {
+      txin_archival_bond_post b = make_join_market_vin();
+      b.bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN - 1, 0xE5);
+      return b;
+    }();
+    std::ostringstream oss;
+    binary_archive<true> oar(oss);
+    EXPECT_FALSE(::do_serialize(oar, vin_truncated_key));
+  }
+  {
+    txin_v vin_unbond_with_key = [] {
+      txin_archival_bond_post b = make_join_market_vin();
+      b.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+      b.holdings.shard_ids.clear();
+      b.bonded_total_atomic = 0;
+      b.bond_credit = 0;
+      b.bond_debit = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+      return b; // bond_spend_pk still set: forbidden off JoinMarket
+    }();
+    std::ostringstream oss;
+    binary_archive<true> oar(oss);
+    EXPECT_FALSE(::do_serialize(oar, vin_unbond_with_key));
+  }
+  {
+    // The same Unbond vin without the key serializes and round-trips key-less.
+    txin_v vin_unbond = [] {
+      txin_archival_bond_post b = make_join_market_vin();
+      b.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+      b.bond_spend_pk.clear();
+      b.holdings.shard_ids.clear();
+      b.bonded_total_atomic = 0;
+      b.bond_credit = 0;
+      b.bond_debit = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+      return b;
+    }();
+    std::ostringstream oss;
+    binary_archive<true> oar(oss);
+    ASSERT_TRUE(::do_serialize(oar, vin_unbond));
+    const std::string wire = oss.str();
+    txin_v decoded;
+    binary_archive<false> iar({reinterpret_cast<const uint8_t*>(wire.data()), wire.size()});
+    ASSERT_TRUE(::do_serialize(iar, decoded));
+    const auto& out = std::get<txin_archival_bond_post>(decoded);
+    EXPECT_TRUE(out.bond_spend_pk.empty());
+    EXPECT_EQ(out.bond_debit, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC);
+  }
+}
+
+// §9.11 coupling at the boost serializer (blob/pool paths): the same shapes
+// the binary codec refuses must refuse here too — on save so a
+// misconstruction is loud instead of silently dropping the key, and (same
+// direction-agnostic branch) on load so a non-canonical key can never enter
+// memory through a boost archive when every other codec pins the length.
+TEST(archival_bond_post, boost_serializer_enforces_bond_spend_pk_coupling)
+{
+  const auto boost_round_trip = [](const txin_archival_bond_post& in) {
+    std::stringstream ss;
+    boost::archive::portable_binary_oarchive oar(ss);
+    oar << in;
+    txin_archival_bond_post out{};
+    boost::archive::portable_binary_iarchive iar(ss);
+    iar >> out;
+    return out;
+  };
+
+  {
+    const txin_archival_bond_post out = boost_round_trip(make_join_market_vin());
+    EXPECT_EQ(out.bond_spend_pk,
+      std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xE5));
+  }
+  {
+    txin_archival_bond_post missing_key = make_join_market_vin();
+    missing_key.bond_spend_pk.clear();
+    EXPECT_THROW(boost_round_trip(missing_key), boost::archive::archive_exception);
+  }
+  {
+    txin_archival_bond_post truncated_key = make_join_market_vin();
+    truncated_key.bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN - 1, 0xE5);
+    EXPECT_THROW(boost_round_trip(truncated_key), boost::archive::archive_exception);
+  }
+  {
+    txin_archival_bond_post unbond_with_key = make_join_market_vin();
+    unbond_with_key.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+    EXPECT_THROW(boost_round_trip(unbond_with_key), boost::archive::archive_exception);
+  }
+  {
+    txin_archival_bond_post unbond = make_join_market_vin();
+    unbond.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+    unbond.bond_spend_pk.clear();
+    EXPECT_TRUE(boost_round_trip(unbond).bond_spend_pk.empty());
+  }
+}
+
+// §9.11 coupling at the JSON codec: toJsonValue refuses at write exactly what
+// fromJsonValue refuses at read, so the daemon can never emit JSON its own
+// parser rejects (the failure belongs to the producer, not the consumer).
+TEST(archival_bond_post, json_codec_enforces_bond_spend_pk_coupling)
+{
+  const auto to_json = [](const txin_archival_bond_post& in) {
+    epee::byte_stream buffer;
+    rapidjson::Writer<epee::byte_stream> dest{buffer};
+    cryptonote::json::toJsonValue(dest, in);
+    return std::string(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+  };
+
+  {
+    // Valid JoinMarket round-trips through write + parse.
+    const std::string json = to_json(make_join_market_vin());
+    rapidjson::Document doc;
+    ASSERT_FALSE(doc.Parse(json.c_str()).HasParseError());
+    txin_archival_bond_post out{};
+    cryptonote::json::fromJsonValue(doc, out);
+    EXPECT_EQ(out.bond_spend_pk,
+      std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xE5));
+  }
+  {
+    txin_archival_bond_post missing_key = make_join_market_vin();
+    missing_key.bond_spend_pk.clear();
+    EXPECT_THROW(to_json(missing_key), cryptonote::json::WRONG_TYPE);
+  }
+  {
+    txin_archival_bond_post truncated_key = make_join_market_vin();
+    truncated_key.bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN - 1, 0xE5);
+    EXPECT_THROW(to_json(truncated_key), cryptonote::json::WRONG_TYPE);
+  }
+  {
+    txin_archival_bond_post unbond_with_key = make_join_market_vin();
+    unbond_with_key.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+    EXPECT_THROW(to_json(unbond_with_key), cryptonote::json::WRONG_TYPE);
+  }
 }
 
 TEST(archival_bond_post, bond_floor_matches_shard_count)

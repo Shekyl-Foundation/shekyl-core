@@ -78,15 +78,15 @@ struct EmissionSnapshotKat
   /// post-seed reads and writes ride a fresh write txn.
   void seed(cryptonote::BlockchainDB& db) const
   {
-    db.put_archival_bond_record(p1, pubkey, kJoinEpoch,
+    db.put_archival_bond_record(p1, pubkey, {}, kJoinEpoch,
       2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
       shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
-    db.put_archival_bond_record(p2, pubkey, kJoinEpoch,
+    db.put_archival_bond_record(p2, pubkey, {}, kJoinEpoch,
       2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
       shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7, 9}, {});
     // Bonded but never credited in E: claimant_bond_idx must come back as
     // the no-credit sentinel, zero work by construction.
-    db.put_archival_bond_record(p_no_credit, pubkey, kJoinEpoch,
+    db.put_archival_bond_record(p_no_credit, pubkey, {}, kJoinEpoch,
       2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
       shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
 

@@ -3680,16 +3680,16 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       {
         const txin_archival_bond_post& bond =
           std::get<txin_archival_bond_post>(tx.vin[archival_bond_post_index]);
-        if (!check_archival_bond_post_input(bond, chain_height))
+        // The auth-key selection (gate-4 §3.5 step 5 — identity key on
+        // credit, the record's committed bond_spend_pk on debit) lives inside
+        // check_archival_bond_post_input, which has the record access; the
+        // bond input's pqc auth key is passed in for that pinning. The
+        // signature over the whole-tx payload is verified against the same
+        // key by verify_transaction_pqc_auth.
+        if (!check_archival_bond_post_input(bond,
+              tx.pqc_auths[archival_bond_post_index].hybrid_public_key, chain_height))
         {
           MERROR_VER("Archival bond-post validation failed");
-          tvc.m_verifivation_failed = true;
-          return false;
-        }
-        if (tx.pqc_auths[archival_bond_post_index].hybrid_public_key != bond.hybrid_public_key)
-        {
-          MERROR_VER("Archival bond-post hybrid pubkey does not match pqc_auths["
-            << archival_bond_post_index << "]");
           tvc.m_verifivation_failed = true;
           return false;
         }
@@ -4586,6 +4586,9 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
     return "record interval log is full";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING:
     return "slash scheduler has not settled every epoch through the last-served anchor";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING:
+    return "bond_spend_pk violates the JoinMarket coupling (missing/non-canonical on "
+      "JoinMarket, or present on another kind)";
   default:
     return "unknown bond-post verify code";
   }
@@ -4593,7 +4596,7 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
 } // namespace
 
 bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& bond,
-  uint64_t chain_height) const
+  const std::vector<uint8_t>& auth_pubkey, uint64_t chain_height) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
@@ -4623,6 +4626,54 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
 
   if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Unbond))
   {
+    // §9.11 coupling belt for non-parse callers (every codec refuses this at
+    // parse; the credit path's twin belt sits below): only JoinMarket carries
+    // the debit authorizer — an Unbond debit authorizes against the record's
+    // COMMITTED copy, never a key the vin brings along.
+    if (!bond.bond_spend_pk.empty())
+    {
+      MERROR_VER("Archival Unbond rejected: vin carries a bond_spend_pk "
+        "(JoinMarket-coupled field)");
+      return false;
+    }
+
+    shekyl::db::ArchivalBondValue record{};
+    const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);
+
+    // GF-1 debit authorization (gate-4 §3.5 step 5) — the SHARED debit
+    // authorizer: every bond_debit > 0 (Unbond here; HoldingsUpdate-drop
+    // rides the same selection when it lands) verifies its pqc auth against
+    // the record's COMMITTED bond_spend_pk — never the identity key P_pubkey
+    // (identity-only invariant, gate-6 §9.6). The signature itself is
+    // verified over the whole-tx payload by verify_transaction_pqc_auth
+    // against pqc_auths[idx].hybrid_public_key; pinning that key here is the
+    // authorization choice. A record with no committed key (pre-GF-1 shape)
+    // authorizes nothing — fail closed, not identity fallback.
+    //
+    // The pin runs BEFORE the cooldown-anchor gathering and the semantic
+    // verify: it is a two-vector compare, so an unauthorized attempt (foreign
+    // key, identity key, keyless record) is rejected before it can cost one
+    // reverse-cursor LMDB seek per held shard plus an FFI call. A missing
+    // record falls through — the semantic verify owns that verdict
+    // (RECORD_MISSING).
+    if (have_record)
+    {
+      if (record.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
+      {
+        MERROR_VER("Archival Unbond rejected: record commits no bond_spend_pk; "
+          "a debit cannot be authorized (and the identity key never authorizes "
+          "a value-out)");
+        return false;
+      }
+      if (auth_pubkey != record.bond_spend_pk)
+      {
+        MERROR_VER("Archival Unbond rejected: pqc auth key does not match the "
+          "record's committed bond_spend_pk (identity-key or foreign-key debit "
+          "authorization is forbidden)");
+        return false;
+      }
+    }
+
     // Unbond semantic verify (gate-4 §3.5 debit path): marshal the record
     // facts + the P2B-8 Q1/Q2 cooldown anchors (one reverse-cursor seek per
     // held shard; never-served shards omitted — a CompleteTree record stores
@@ -4631,8 +4682,6 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     // scheduler's settled watermark (the SLASH_SETTLEMENT_PENDING gate; u64
     // max = no epoch settled yet). The fold to the whole-record anchor and
     // every verdict stay Rust-side.
-    shekyl::db::ArchivalBondValue record{};
-    const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);
     std::vector<uint64_t> last_served;
     if (have_record)
     {
@@ -4648,6 +4697,8 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
       static_cast<uint8_t>(bond.holdings.kind),
       shard_ptr,
       bond.holdings.shard_ids.size(),
+      nullptr, // bond_spend_pk: empty on Unbond (§9.11; the belt above enforces it)
+      0,
       bond.bonded_total_atomic,
       bond.bond_credit,
       bond.bond_debit,
@@ -4664,18 +4715,27 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
         << "): " << archival_bond_post_verify_err_string(verify_rc));
       return false;
     }
-    // GF-1 debit authorization (gate-4 §3.5 step 5): a bond_debit must verify
-    // against the record's committed bond_spend_pk — NEVER the identity key
-    // P_pubkey (identity-only invariant, gate-6 §9.6). The v4 record does not
-    // yet commit one: the §9.11 field the Rust wallet wire already carries is
-    // absent from the C++ txin_archival_bond_post serializer and the record
-    // schema, so there is no key a debit may verify against. Fail closed with
-    // the blocker named; this branch flips when the GF-1 wire+record
-    // sub-increment lands (JoinMarket commits bond_spend_pk into the record)
-    // and the debit auth check replaces this rejection.
-    MERROR_VER("Archival Unbond rejected: record commits no bond_spend_pk (GF-1 "
-      "debit authorizer pending the wire+record sub-increment); identity-key "
-      "debit authorization is forbidden");
+    return true;
+  }
+
+  // §9.11 belt for non-parse callers, the Unbond arm's twin (the serializer
+  // enforces this at parse, and the FFI vin marshaler below re-refuses the
+  // coupling): JoinMarket must commit a canonical-length bond_spend_pk for
+  // the record — it never authorizes the credit itself; the identity-key pin
+  // below does — and every other kind on this arm (Rebond / HoldingsUpdate,
+  // both still verify-rejected downstream) must not carry one.
+  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
+  {
+    if (bond.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
+    {
+      MERROR_VER("Archival JoinMarket rejected: bond_spend_pk missing or not canonical");
+      return false;
+    }
+  }
+  else if (!bond.bond_spend_pk.empty())
+  {
+    MERROR_VER("Archival bond-post rejected: vin carries a bond_spend_pk "
+      "(JoinMarket-coupled field)");
     return false;
   }
 
@@ -4686,6 +4746,8 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     static_cast<uint8_t>(bond.holdings.kind),
     shard_ptr,
     bond.holdings.shard_ids.size(),
+    bond.bond_spend_pk.data(),
+    bond.bond_spend_pk.size(),
     bond.bonded_total_atomic,
     bond.bond_credit,
     bond.bond_debit,
@@ -4694,6 +4756,15 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
   {
     MERROR_VER("Archival bond-post verify failed (code " << static_cast<unsigned>(verify_rc)
       << "): " << archival_bond_post_verify_err_string(verify_rc));
+    return false;
+  }
+
+  // Credit-path authorization (gate-4 §3.5 step 5, the debit selection's
+  // twin): bond_debit == 0 paths authorize with the IDENTITY key P_pubkey.
+  if (auth_pubkey != bond.hybrid_public_key)
+  {
+    MERROR_VER("Archival bond-post rejected: credit-path pqc auth key does not "
+      "match the identity key P_pubkey");
     return false;
   }
 
@@ -5459,29 +5530,45 @@ leave:
     std::vector<uint8_t> bond_post_ids;
     for (const auto& tx_pair : txs)
     {
-      for (const auto& vin : tx_pair.first.vin)
+      const transaction& btx = tx_pair.first;
+      for (size_t vin_idx = 0; vin_idx < btx.vin.size(); ++vin_idx)
       {
+        const auto& vin = btx.vin[vin_idx];
         if (std::holds_alternative<txin_archival_bond_post>(vin))
         {
           const auto& bond = std::get<txin_archival_bond_post>(vin);
           // GF-1 fail-closed belt (gate-4 §3.5 step 5), block-level: the
-          // per-tx debit rejection lives in check_tx_inputs, which the
-          // per-block-checkpoint fast path skips — without this arm a
-          // fast-syncing node would connect an unauthorized debit that a
+          // per-tx debit-auth pin lives in check_archival_bond_post_input,
+          // which the per-block-checkpoint fast path skips — without this arm
+          // a fast-syncing node would connect an unauthorized debit that a
           // fully-verifying node rejects (consensus split), and the removed
           // connect-time FATAL guard is not a substitute (it crashed the
-          // node instead of rejecting the block). No record commits a
-          // bond_spend_pk yet, so every non-JoinMarket (debit-side) kind
-          // fails closed; the GF-1 wire+record sub-increment swaps this arm
-          // to the real bond_spend_pk auth together with the per-tx flip.
-          if (bond.post_kind != static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
+          // node instead of rejecting the block). The GF-1 wire+record
+          // sub-increment swapped the arm's pre-GF-1 blanket rejection to the
+          // real authorization: re-pin the vin's pqc auth key against the
+          // record's COMMITTED bond_spend_pk (fail closed on a missing
+          // record, a keyless pre-GF-1 record, or a missing auth slot). Only
+          // the theft-shaped check is re-run here; the debit's semantic legs
+          // (cooldown, watermark, floor) stay checkpoint-trusted under the
+          // fast path like every other skipped per-tx check.
+          if (fast_check
+            && bond.post_kind != static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
           {
-            MERROR_VER("Block " << id << " has a debit-side archival bond post "
-              "(GF-1 debit authorizer pending; kind "
-              << static_cast<unsigned>(bond.post_kind) << ")");
-            bvc.m_verifivation_failed = true;
-            return_txs_to_pool();
-            return false;
+            shekyl::db::ArchivalBondValue record{};
+            const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);
+            const bool auth_ok = have_record
+              && record.bond_spend_pk.size() == config::PQC_HYBRID_SINGLE_KEY_LEN
+              && vin_idx < btx.pqc_auths.size()
+              && btx.pqc_auths[vin_idx].hybrid_public_key == record.bond_spend_pk;
+            if (!auth_ok)
+            {
+              MERROR_VER("Block " << id << " has a debit-side archival bond post whose "
+                "pqc auth key does not match the record's committed bond_spend_pk (kind "
+                << static_cast<unsigned>(bond.post_kind) << ")");
+              bvc.m_verifivation_failed = true;
+              return_txs_to_pool();
+              return false;
+            }
           }
           const size_t off = bond_post_ids.size();
           bond_post_ids.resize(off + 32);

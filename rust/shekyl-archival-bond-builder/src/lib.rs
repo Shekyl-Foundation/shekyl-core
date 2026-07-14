@@ -127,12 +127,21 @@ pub fn build_join_market_vin(
     // the raw `[u8; 32]`, so lift it out at this wire-construction edge.
     let p_canonical_id = p_canonical_id_from_hybrid_pubkey(&hybrid_public_key).to_bytes();
 
+    // The GF-1 debit authorizer, JoinMarket-coupled on the wire (§9.11) and
+    // committed into the record at connect. The vin carries it, so the §3.4.1
+    // preimage below binds the committed key under the JoinMarket signature.
+    let bond_spend_pk = keys
+        .bond_spend_pk
+        .to_canonical_bytes()
+        .map_err(BondBuildError::IdentityEncode)?;
+
     // JoinMarket is a pure credit path: bonded_total == bond_credit == floor,
     // bond_debit == 0 (the verify side pins this in verify_join_market_bond_post).
     let vin = ArchivalBondPostVin {
         hybrid_public_key,
         p_canonical_id,
         post_kind: BondPostKind::JoinMarket,
+        bond_spend_pk,
         holdings,
         bonded_total_atomic: floor,
         bond_credit: floor,
