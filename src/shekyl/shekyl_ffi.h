@@ -1892,6 +1892,20 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
 // via JoinMarket/Rebond, never a voluntary adjustment. Shared by both HU arms.
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED    36
 
+// Rebond bond-post semantics (gate-4 §3.4; P2B-9 reinstatement pins). Extends
+// the shared SHEKYL_ARCHIVAL_BOND_POST_* space: 37-44 are Rebond-semantic; the
+// shared marshaling guards (10 HOLDINGS_KIND, 19 LEN_OVERFLOW, 23
+// BOND_SPEND_PK_COUPLING) and the reused RECORD_MISSING (12) /
+// SHARD_SET_EMPTY (2) apply as above.
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND    37
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE 38
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_NOT_COMPACT 39
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED      40
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN    41
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM     42
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS            43
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET     44
+
 /// Unbond bond-post verify. `record_exists`/`record_bonded_total`/
 /// `record_bad_interval_count` come from the LMDB bond record;
 /// `per_shard_last_served_ptr` is the array of the served shards' last-served
@@ -2124,6 +2138,90 @@ uint8_t shekyl_archival_holdings_update_drop_connect(
 /// total_bonded_atomic by the connect's ±FLOOR delta, guarding that the tip
 /// record's bonded_total and the journaled pre-image differ by exactly one FLOOR.
 uint8_t shekyl_archival_holdings_update_pop(
+    uint64_t current_record_bonded_total,
+    uint64_t journal_pre_bonded_total,
+    uint64_t total_bonded_atomic,
+    uint64_t* new_total_bonded_out);
+
+// Rebond verify + connect/pop (gate-4 §3.4; P2B-9 reinstatement). Semantic
+// verify returns the shared SHEKYL_ARCHIVAL_BOND_POST_* space (OK=0, 37-44
+// Rebond-semantic, plus the shared guards); the connect/pop folds return the
+// REBOND_APPLY family below. As with Unbond/HoldingsUpdate, a non-OK apply code
+// is a connect-time invariant breach / pop-time journal desync — the caller
+// maps it to a FATAL abort, never a soft skip.
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_OK                          0
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NULL_PTR                1
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_LEN_OVERFLOW            2
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NOT_SUPERSET            3
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_EMPTY_POST              4
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_RECORD_FLOOR_INVARIANT  5
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NO_OPEN_INTERVAL        6
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_MULTIPLE_OPEN_INTERVALS 7
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_INTERVAL_ORDERING       8
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_COUNTER_RANGE           9
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NOT_REBOND_DELTA       10
+#define SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_ADDED_BUFFER_TOO_SMALL 11
+
+/// Rebond verify (gate-4 §3.4; P2B-9). `shard_ids_*` is the vin's POST holdings
+/// (the superset re-spec); `record_shard_ids_*` the record's CURRENT holdings;
+/// `record_bad_intervals_ptr` the flattened (start, end_exclusive) interval
+/// pairs, where `record_bad_intervals_len` counts PAIRS (buffer holds 2*len
+/// u64s) — carries the open-interval precondition and the Pin-6 headroom bound.
+/// A Rebond vin never carries bond_spend_pk (credit path; the record keeps its
+/// join-time key) — pass null/0. No epoch operand: the precondition is interval-
+/// shaped, not epoch-shaped (an open interval covers every later epoch).
+uint8_t shekyl_archival_verify_rebond_bond_post(
+    uint8_t post_kind,
+    uint8_t holdings_kind,
+    const uint64_t* shard_ids_ptr,
+    size_t shard_ids_len,
+    const uint8_t* bond_spend_pk_ptr,
+    size_t bond_spend_pk_len,
+    uint64_t bonded_total_atomic,
+    uint64_t bond_credit,
+    uint64_t bond_debit,
+    uint8_t record_exists,
+    uint64_t record_bonded_total,
+    uint8_t record_holdings_kind,
+    const uint64_t* record_shard_ids_ptr,
+    size_t record_shard_ids_len,
+    const uint64_t* record_bad_intervals_ptr,
+    size_t record_bad_intervals_len);
+
+/// Rebond connect fold (gate-4 §3.4; P2B-9). The C++ arm journals the record
+/// pre-image (including the closed interval's index + start), sets
+/// held_shard_ids = post and rebuilds the coupled add-epochs (carried shards
+/// keep theirs; every id in added_shard_ids_out takes add_settlement_epoch_out
+/// = E_rebond — Pin 7), closes the open interval IN PLACE
+/// (bad_intervals[closed_interval_index_out].end_exclusive =
+/// interval_end_exclusive_out == E_rebond + 1 — Pin 3), and writes the counters.
+/// `total_bonded_atomic` is the LIVE global counter (thread per post).
+/// `added_shard_ids_cap` must be >= the post length (added ⊆ post).
+uint8_t shekyl_archival_rebond_connect(
+    uint64_t record_bonded_total,
+    const uint64_t* record_shard_ids_ptr,
+    size_t record_shard_ids_len,
+    const uint64_t* record_bad_intervals_ptr,
+    size_t record_bad_intervals_len,
+    const uint64_t* post_shard_ids_ptr,
+    size_t post_shard_ids_len,
+    uint64_t total_bonded_atomic,
+    uint64_t rebond_settlement_epoch,
+    uint64_t* added_shard_ids_out,
+    size_t added_shard_ids_cap,
+    size_t* added_shard_ids_len_out,
+    uint64_t* add_settlement_epoch_out,
+    uint64_t* closed_interval_index_out,
+    uint64_t* interval_end_exclusive_out,
+    uint64_t* new_bonded_total_out,
+    uint64_t* new_total_bonded_out);
+
+/// Rebond pop twin (gate-4 §5): the record fields are restored caller-side as a
+/// byte-copy of the pre-image journal row (including re-opening the closed
+/// interval to end_exclusive = MAX); this reverts the global total_bonded_atomic
+/// by the connect's |added|·FLOOR credit — zero delta included (the common
+/// standing-only reinstatement moved no collateral).
+uint8_t shekyl_archival_rebond_pop(
     uint64_t current_record_bonded_total,
     uint64_t journal_pre_bonded_total,
     uint64_t total_bonded_atomic,

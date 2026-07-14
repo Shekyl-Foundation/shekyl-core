@@ -895,6 +895,101 @@ struct ArchivalBondHoldingsUpdateRevertValue {
     }
 };
 
+// ─── ArchivalBondRebondLogKey / ArchivalBondRebondRevertValue ───────────────
+//
+// Per-block journal for the Rebond connect's record pre-image (gate-4 §3.4;
+// P2B-9 reinstatement). Same BE(height)||BE(seq) idiom as the other reorg
+// journals. Rebond is the one bond-post kind that mutates an EXISTING interval
+// in place (end_exclusive: MAX → E_rebond + 1), so alongside the holdings
+// pre-image the row carries the closed interval's index + start: the pop
+// re-opens exactly that entry to MAX (belt: the start must match and the entry
+// must currently be closed). pre_bonded_total == 0 is LEGAL here — a
+// terminal-slash reinstatement starts from a zero-balance record (unlike the
+// Unbond/HoldingsUpdate journals, whose zero pre-image is unreachable).
+
+using ArchivalBondRebondLogKey = ArchivalSlashLogKey;
+
+struct ArchivalBondRebondRevertValue {
+    // Born at v1 (pre-genesis; no migration, reset on any format change).
+    static constexpr uint8_t kVersion = 1;
+    /// Same holdings bound as `ArchivalBondValue` (static_assert below).
+    static constexpr size_t kMaxHoldings = 4096;
+    // ver, p_id, pre_bonded_total, closed idx, closed start, shard count
+    static constexpr size_t kFixedSize = 1 + 32 + 8 + 4 + 8 + 4;
+
+    uint8_t p_id[32]{};
+    /// `bonded_total_atomic` before the connect (0 legal: terminal-slash
+    /// reinstatement).
+    uint64_t pre_bonded_total = 0;
+    /// Index into the record's `bad_intervals` of the interval the connect
+    /// closed; the pop re-opens it to `end_exclusive = MAX`.
+    uint32_t closed_interval_index = 0;
+    /// The closed interval's `start_epoch` (pop-side identity belt).
+    uint64_t closed_interval_start = 0;
+    std::vector<uint64_t> pre_shard_ids;
+    /// The pre-connect add-epochs, index-parallel to `pre_shard_ids` under the
+    /// same shard count (single-count coupling; a length desync cannot
+    /// round-trip). Restored alongside the ids on Rebond pop.
+    std::vector<uint64_t> pre_shard_add_epochs;
+
+    [[nodiscard]] std::vector<uint8_t> encode() const
+    {
+        if (pre_shard_ids.size() > kMaxHoldings)
+            throw std::runtime_error(
+                "ArchivalBondRebondRevertValue encode: holdings bound exceeded");
+        if (pre_shard_ids.size() != pre_shard_add_epochs.size())
+            throw std::runtime_error(
+                "ArchivalBondRebondRevertValue encode: shard id / add-epoch length mismatch");
+        std::vector<uint8_t> out;
+        out.reserve(kFixedSize + pre_shard_ids.size() * 16);
+        out.push_back(kVersion);
+        out.insert(out.end(), p_id, p_id + 32);
+        push_be64(out, pre_bonded_total);
+        push_be32(out, closed_interval_index);
+        push_be64(out, closed_interval_start);
+        push_be32(out, static_cast<uint32_t>(pre_shard_ids.size()));
+        for (const uint64_t shard_id : pre_shard_ids)
+            push_be64(out, shard_id);
+        for (const uint64_t add_epoch : pre_shard_add_epochs)
+            push_be64(out, add_epoch);
+        return out;
+    }
+
+    static bool decode(const void* data, size_t len, ArchivalBondRebondRevertValue& out)
+    {
+        if (!data || len < kFixedSize)
+            return false;
+        const auto* p = static_cast<const uint8_t*>(data);
+        size_t off = 0;
+        if (p[off++] != kVersion)
+            return false;
+        std::memcpy(out.p_id, p + off, 32);
+        off += 32;
+        out.pre_bonded_total = load_be64(p + off);
+        off += 8;
+        out.closed_interval_index = load_be32(p + off);
+        off += 4;
+        out.closed_interval_start = load_be64(p + off);
+        off += 8;
+        const uint32_t shard_count = load_be32(p + off);
+        off += 4;
+        // The single shard_count governs BOTH the id and add-epoch arrays
+        // (2 * count * 8), with no trailing bytes.
+        if (shard_count > kMaxHoldings
+            || len != off + static_cast<size_t>(shard_count) * 8u * 2u)
+            return false;
+        out.pre_shard_ids.clear();
+        out.pre_shard_ids.reserve(shard_count);
+        for (uint32_t i = 0; i < shard_count; ++i, off += 8)
+            out.pre_shard_ids.push_back(load_be64(p + off));
+        out.pre_shard_add_epochs.clear();
+        out.pre_shard_add_epochs.reserve(shard_count);
+        for (uint32_t i = 0; i < shard_count; ++i, off += 8)
+            out.pre_shard_add_epochs.push_back(load_be64(p + off));
+        return true;
+    }
+};
+
 // ─── ArchivalBondKey ───────────────────────────────────────────────────────
 //
 // Gate-4 bond record keyed by P_canonical_id (ARCHIVAL_CONSENSUS_STATE.md §3.4).
@@ -1283,6 +1378,8 @@ static_assert(ArchivalBondUnbondRevertValue::kMaxBadIntervals
 static_assert(ArchivalBondHoldingsUpdateRevertValue::kMaxHoldings
         == ArchivalBondValue::kMaxHoldings,
     "holdings-update journal holdings cap must mirror ArchivalBondValue::kMaxHoldings");
+static_assert(ArchivalBondRebondRevertValue::kMaxHoldings == ArchivalBondValue::kMaxHoldings,
+    "rebond journal holdings cap must mirror ArchivalBondValue::kMaxHoldings");
 
 // ─── ArchivalShardSegmentValue ─────────────────────────────────────────────
 
