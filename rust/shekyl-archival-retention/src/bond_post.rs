@@ -117,15 +117,18 @@ pub(crate) fn single_shard_diff(current: &[u64], post: &[u64]) -> SingleDiff {
     let mut cur_sorted = current.to_vec();
     cur_sorted.sort_unstable();
 
+    // Both vectors are sorted, so membership is a `binary_search` — the diff is
+    // O(n log n), not the O(n²) a linear `contains` per element would cost on
+    // holdings that can reach the codec cap.
     let added: Vec<u64> = post_sorted
         .iter()
         .copied()
-        .filter(|s| !cur_sorted.contains(s))
+        .filter(|s| cur_sorted.binary_search(s).is_err())
         .collect();
     let removed: Vec<u64> = cur_sorted
         .iter()
         .copied()
-        .filter(|s| !post_sorted.contains(s))
+        .filter(|s| post_sorted.binary_search(s).is_err())
         .collect();
 
     match (

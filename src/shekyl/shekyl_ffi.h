@@ -2026,9 +2026,11 @@ uint8_t shekyl_archival_unbond_pop(
 
 /// HoldingsUpdate-ADD verify (gate-4 §4.4 credit path). `shard_ids_*` is the
 /// vin's POST holdings; `record_shard_ids_*` the record's CURRENT holdings (for
-/// the single-shard diff); `record_bad_intervals_ptr` the flattened
-/// (start, end) pairs (2 × count u64s) feeding good-standing. A HoldingsUpdate
-/// vin never carries bond_spend_pk (credit path) — pass null/0.
+/// the single-shard diff); `record_bad_intervals_ptr` is the flattened
+/// (start, end) interval pairs feeding good-standing, where
+/// `record_bad_intervals_len` counts **pairs** and the buffer therefore holds
+/// `2 * record_bad_intervals_len` u64s. A HoldingsUpdate vin never carries
+/// bond_spend_pk (credit path) — pass null/0.
 uint8_t shekyl_archival_verify_holdings_update_add(
     uint8_t post_kind,
     uint8_t holdings_kind,
