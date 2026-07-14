@@ -209,7 +209,7 @@ Emission already ships a loud cleartext **source** term (mint) inflation-checked
 | `post_kind` | `bond_credit` | `bond_debit` | Notes |
 |-------------|---------------|--------------|-------|
 | `JoinMarket` | yes (`== bond_floor`) | no | Creates record |
-| `Rebond` | yes | no | Restores floor after slash |
+| `Rebond` | yes (`== bond_floor(post) − bonded_total`; **0 legal**) | no | Restores standing after slash; credit = growth only (P2B-9 Pin 2) |
 | `Unbond` | no | yes (`== bonded_total`) | After release cooldown |
 | `HoldingsUpdate` add shard | yes (`+FLOOR`) | no | V3.0 |
 | `HoldingsUpdate` drop shard | no | yes (`FLOOR`) | V3.0; per-shard cooldown (§4.4) |
@@ -318,8 +318,17 @@ require the `bond_spend_pk` field present (`scheme_id = 1`) and **commit it into
 (immutable debit authorizer, §4.1); `bond_credit == bond_floor(holdings)`; credit
 `bonded_total_atomic` and `total_bonded_atomic`.
 
-**Rebond path:** require existing record with `good_standing == false` (post-slash);
-`bond_credit` restores `== bond_floor`; append re-bond event to interval log (F3).
+**Rebond path (reinstatement, not re-entry — P2B-9):** require existing record with an
+**open bad interval** (`good_standing == false`, both slash severities); the vin's holdings
+must be `ShardSetCompact`, **non-empty**, and a **superset of the record's current holdings**
+(shedding stays `HoldingsUpdate`-drop's gated job — Pin 1); `bond_credit ==
+bond_floor(post) − bonded_total == |added|·FLOOR`, **zero legal and common** (the landed
+slash preserves floor-equality, so standing-only reinstatement carries no credit — Pin 2,
+amending the earlier "restores `== bond_floor`" wording); interval-cap headroom
+`bad_intervals.size() ≤ 254` (one slot reserved for the next slash + one for `Unbond`'s
+clean close, so exit is always reachable — Pin 6); **close** the open bad interval
+(`end_exclusive = E_rebond + 1`, F3 / Pin 3). Carried shards keep their add-epochs; added
+shards take `E_rebond` (Pin 7).
 
 **Unbond path (G4-1):** clean release of bonded balance when:
 
@@ -547,8 +556,11 @@ risk against the serve-credit table, the single source of truth. Landed:
 
 **Landed representation of `bond_event_log` (F3).** The interval log is
 `ArchivalBondValue::bad_intervals` (`shekyl_types.h`): a slash appends an **open**
-interval `[E_slash, u64::MAX)`, `Rebond` closes it (`end_exclusive = E_rebond`,
-P2B-8 Q4), and a clean `Unbond` appends the **zero-length** clean interval-close
+interval `[E_slash, u64::MAX)` — at most **one** open interval ever exists (same-epoch
+slashes coalesce, P2B-9 Pin 5; later epochs are `good_through`-blocked) — `Rebond`
+closes it (`end_exclusive = E_rebond + 1`: the partial rebond epoch is forfeited in
+both directions, P2B-9 Pin 3, amending the earlier `E_rebond` pin), and a clean
+`Unbond` appends the **zero-length** clean interval-close
 `[E_unbond, E_unbond)` — `good_through` skips it at every epoch (it can falsify
 nothing), so it is purely an event marker that records the exit settlement epoch
 for the later `W`-lapse / `p_slot`-burn step. `good_standing` stays a derived
