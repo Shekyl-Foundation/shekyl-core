@@ -4841,12 +4841,15 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     uint64_t dropped_last_served = std::numeric_limits<uint64_t>::max();
     if (have_record)
     {
+      // Index the POST holdings once (O(1) membership) so identifying the
+      // record-minus-post shard stays O(n) rather than a nested scan at the
+      // 4096 holdings cap.
+      const std::unordered_set<uint64_t> post_shards(
+        bond.holdings.shard_ids.begin(), bond.holdings.shard_ids.end());
       std::vector<size_t> removed_idx;
       for (size_t i = 0; i < record.held_shard_ids.size(); ++i)
       {
-        const uint64_t s = record.held_shard_ids[i];
-        if (std::find(bond.holdings.shard_ids.begin(), bond.holdings.shard_ids.end(), s)
-            == bond.holdings.shard_ids.end())
+        if (post_shards.find(record.held_shard_ids[i]) == post_shards.end())
           removed_idx.push_back(i);
       }
       if (removed_idx.size() == 1)

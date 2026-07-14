@@ -5108,6 +5108,10 @@ bool BlockchainLMDB::archival_slash_removed_holding_after(const crypto::hash& p_
   if (at_height == std::numeric_limits<uint64_t>::max())
     return false;
 
+  // Invariant across the whole scan (at_height is fixed) — compute the epoch
+  // once rather than per log row.
+  const uint64_t at_epoch = shekyl_archival_settlement_epoch_at_height(at_height);
+
   const auto scan = [&](MDB_txn* txn) -> bool {
     MDB_cursor* cur = nullptr;
     const int open_rc = mdb_cursor_open(txn, m_archival_slash_log, &cur);
@@ -5138,8 +5142,7 @@ bool BlockchainLMDB::archival_slash_removed_holding_after(const crypto::hash& p_
         && (entry.holdings_pre_kind
               == shekyl::db::ArchivalSlashRevertValue::kPreKindCompleteTree
             || (entry.shard_id == shard_id
-                && shekyl_archival_settlement_epoch_at_height(at_height)
-                     > entry.slashed_shard_add_epoch)))
+                && at_epoch > entry.slashed_shard_add_epoch)))
       {
         removed = true;
         break;
@@ -6236,16 +6239,22 @@ void BlockchainLMDB::revert_archival_unbonds_at_height(uint64_t block_height)
 
 namespace {
 // Rebuild the index-parallel add-epoch array for a POST holdings set from the
-// pre-connect (shard_id -> add_epoch) association. Linear per shard: holdings
-// are small (the linear-shard-scan idiom used throughout this file), and the
-// association is exact — a POST shard with no pre-image entry (and no override)
-// is a fold/record desync, so it aborts loud rather than inventing an epoch.
+// pre-connect (shard_id -> add_epoch) association. The association is indexed
+// once (O(n)) so a large post set does not force a quadratic per-shard scan at
+// the 4096 holdings cap. The mapping is exact — a POST shard with no pre-image
+// entry (and no override) is a fold/record desync, so it aborts loud rather
+// than inventing an epoch.
 std::vector<uint64_t> rebuild_shard_add_epochs(
   const std::vector<uint64_t>& post_shard_ids,
   const std::vector<uint64_t>& prev_shard_ids,
   const std::vector<uint64_t>& prev_add_epochs,
   uint64_t override_shard_id, uint64_t override_add_epoch, bool has_override)
 {
+  std::unordered_map<uint64_t, uint64_t> prev_add_epoch_of;
+  prev_add_epoch_of.reserve(prev_shard_ids.size());
+  for (size_t i = 0; i < prev_shard_ids.size(); ++i)
+    prev_add_epoch_of.emplace(prev_shard_ids[i], prev_add_epochs[i]);
+
   std::vector<uint64_t> out;
   out.reserve(post_shard_ids.size());
   for (const uint64_t s : post_shard_ids)
@@ -6255,19 +6264,11 @@ std::vector<uint64_t> rebuild_shard_add_epochs(
       out.push_back(override_add_epoch);
       continue;
     }
-    bool found = false;
-    for (size_t i = 0; i < prev_shard_ids.size(); ++i)
-    {
-      if (prev_shard_ids[i] == s)
-      {
-        out.push_back(prev_add_epochs[i]);
-        found = true;
-        break;
-      }
-    }
-    if (!found)
+    const auto it = prev_add_epoch_of.find(s);
+    if (it == prev_add_epoch_of.end())
       throw std::runtime_error(
         "FATAL: holdings-update carried shard missing from pre-image add-epochs");
+    out.push_back(it->second);
   }
   return out;
 }

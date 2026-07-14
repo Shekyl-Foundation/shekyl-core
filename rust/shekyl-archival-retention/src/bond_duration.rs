@@ -155,7 +155,7 @@ pub fn bond_duration(age: ShardAgeAtAdd) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::SETTLEMENT_EPOCH_BLOCKS;
+    use crate::constants::effective_settlement_epoch_blocks;
 
     // Construct a raw age for the pure-formula sweeps (bypasses `from_add`; the
     // add-epoch derivation is covered separately below).
@@ -230,10 +230,13 @@ mod tests {
     fn shard_age_at_add_uses_settlement_close_not_raw_height() {
         // F1: the age is computed at H_close(add_epoch) = (add_epoch+1)·SEB, the SAME
         // close the reward path uses — reproduce it independently and require equality.
+        // Use the EFFECTIVE SEB (as `from_add` does), so the reconstruction stays
+        // aligned with production if a regtest override is armed in this process.
+        let seb = effective_settlement_epoch_blocks();
         let add_epoch = 3u64;
         let freeze_height = 5_000u64;
-        let close = (add_epoch + 1) * SETTLEMENT_EPOCH_BLOCKS;
-        let expected = shard_age_milli(close, freeze_height, SETTLEMENT_EPOCH_BLOCKS);
+        let close = (add_epoch + 1) * seb;
+        let expected = shard_age_milli(close, freeze_height, seb);
         assert_eq!(
             ShardAgeAtAdd::from_add(add_epoch, freeze_height).age_milli(),
             expected
@@ -254,8 +257,9 @@ mod tests {
     fn freshly_frozen_shard_is_youngest_minimum() {
         // Segment froze one block before the add epoch's close ⇒ age ≈ 0 ⇒
         // bond_duration = BASE — the genuine youngest-deep minimum.
+        let seb = effective_settlement_epoch_blocks();
         let add_epoch = 7u64;
-        let close = (add_epoch + 1) * SETTLEMENT_EPOCH_BLOCKS;
+        let close = (add_epoch + 1) * seb;
         let a = ShardAgeAtAdd::from_add(add_epoch, close - 1);
         assert_eq!(a.age_milli(), 0);
         assert_eq!(bond_duration(a), 4);
@@ -268,9 +272,10 @@ mod tests {
         // state and the C++ missing-freeze-row sentinel (freeze_height 0 →
         // genesis-band oldest) must land on the SAME extreme: the longest
         // commitment, never the age-0 shortest.
+        let seb = effective_settlement_epoch_blocks();
         let add_epoch = 7u64;
-        let close = (add_epoch + 1) * SETTLEMENT_EPOCH_BLOCKS;
-        for freeze in [close, close + 1, close + 10 * SETTLEMENT_EPOCH_BLOCKS] {
+        let close = (add_epoch + 1) * seb;
+        for freeze in [close, close + 1, close + 10 * seb] {
             let a = ShardAgeAtAdd::from_add(add_epoch, freeze);
             assert_eq!(a.age_milli(), WORK_MILLI_SCALE, "freeze={freeze}");
             assert_eq!(bond_duration(a), 20, "freeze={freeze}");
