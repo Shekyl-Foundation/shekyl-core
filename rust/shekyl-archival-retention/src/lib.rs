@@ -27,6 +27,7 @@
 
 pub mod bond_connect;
 pub mod bond_ct_balance;
+pub mod bond_duration;
 pub mod bond_floor;
 pub mod bond_post;
 pub mod bond_wire;
@@ -56,10 +57,12 @@ pub use bond_connect::{
     UnbondConnectError, UnbondPopError, MAX_BOND_BAD_INTERVALS,
 };
 pub use bond_ct_balance::{verify_bond_post_ct_balance, BondCtBalanceError, BondTerm};
+pub use bond_duration::{bond_duration, ShardAgeAtAdd};
 pub use bond_floor::{
     bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, ARCHIVAL_REORG_DEPTH_BLOCKS,
     ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, ARCHIVAL_REWARD_PLATEAU_VALUE_MILLI,
-    ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS,
+    ARCHIVAL_REWARD_PLATEAU_WORK_MILLI, BOND_DURATION_AGE_SCALE, BOND_DURATION_BASE_EPOCHS,
+    MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS,
 };
 pub use bond_post::{
     bond_post_block_unique, verify_join_market_bond_post, verify_unbond_bond_post, BondPostError,

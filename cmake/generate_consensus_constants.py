@@ -60,6 +60,15 @@ KEYS_INTEGER = {
     # in src/. Rust mirror: rust/shekyl-archival-retention/build.rs
     # (SEGMENT_LEAF_COUNT, width-product compile assert).
     "segment_leaf_count": "u64",
+    # Per-shard retention-commitment horizon (gate-4 §4.4;
+    # ARCHIVAL_TIMING_CONSTANTS.md §1). Shape genesis-frozen
+    # (age-scaled-constant); numerics provisional (H2 plateau arm).
+    # Consumer is Rust-only at genesis (bond-FSM verify,
+    # shekyl-archival-retention::bond_duration); mirrored in
+    # rust/shekyl-archival-retention/build.rs. Emitted to the C++ header
+    # for parity, no C++ consumer yet.
+    "bond_duration_base_epochs": "u64",
+    "bond_duration_age_scale": "u64",
 }
 
 # Inclusive [min, max] range for each declared type.
@@ -208,6 +217,19 @@ def main() -> int:
 // rust/shekyl-archival-retention (segment_freeze.rs).
 #define SHEKYL_ARCHIVAL_SEGMENT_LEAF_COUNT \
     {emit("segment_leaf_count")}
+
+// Per-shard retention-commitment horizon (gate-4 §4.4;
+// ARCHIVAL_TIMING_CONSTANTS.md §1). Shape genesis-frozen (age-scaled-constant:
+// bond_duration(age) = BASE * (1 + SCALE * age), age = shard_age_milli @ the
+// shard's add-epoch settlement close); numerics provisional (H2 plateau arm,
+// re-pin at testnet within scale band [2,8]). Consumer is Rust-only at genesis
+// (bond-FSM verify, shekyl-archival-retention::bond_duration); mirror in
+// rust/shekyl-archival-retention/build.rs. Emitted for cross-language parity,
+// no C++ consumer yet.
+#define SHEKYL_BOND_DURATION_BASE_EPOCHS \
+    {emit("bond_duration_base_epochs")}
+#define SHEKYL_BOND_DURATION_AGE_SCALE \
+    {emit("bond_duration_age_scale")}
 """
     out_path.write_text(content, encoding="utf-8")
     return 0

@@ -627,6 +627,20 @@ the resulting age-stratified mobility friction is a pre-seal dependency
 `bond_floor(holdings)` by `ARCHIVAL_BOND_FLOOR`; released collateral for *s* inherits
 **Unbond release cooldown** (per-shard last-served epoch) — cannot withdraw immediately.
 
+**Retention-horizon freeze (LANDED — slice A, 2026-07-14).** The `bond_duration(age)`
+drop-eligibility gate (§3.4 asymmetry table; P2B-7 Pin 3 / P2B-8 Q3) is
+`current_epoch − add_epoch(s) ≥ bond_duration(ShardAgeAtAdd(s))`, both operands
+powered by the one v3.0 per-shard add-epoch record field (landed in slice B). The
+formula is genesis-frozen in `shekyl-archival-retention::bond_duration`:
+`bond_duration(age) = BASE·(1 + SCALE·age)` (integer-canonical, round-half-up, floored
+at 1; `BOND_DURATION_{BASE_EPOCHS,AGE_SCALE}` = 4/4 provisional, config-generated), with
+`age = shard_age_milli` **evaluated at the shard's add-epoch settlement close**
+`H_close(add_epoch)` — the same realization the reward curve uses (the age-realization
+invariant, `ARCHIVAL_TIMING_CONSTANTS.md` §1). The `ShardAgeAtAdd` newtype makes
+age-at-drop and raw-block-height evaluation unrepresentable at the type; the integer
+formula is proven bit-identical to the sim's f64 model over the full age sweep (integer
+authoritative). The drop verify/connect that *consumes* this gate lands in slice C.
+
 **Safety for deferral:** `work_P(E)` is derived from per-`(P,s,E)` **retention bits**, not
 the mutable holdings descriptor. HoldingsUpdate cannot corrupt historical work; descriptor =
 current membership, bits = per-epoch ground truth.

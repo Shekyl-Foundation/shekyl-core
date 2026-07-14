@@ -4,6 +4,36 @@
 
 ### Added
 
+- **archival: `bond_duration(age)` retention-horizon freeze — HoldingsUpdate
+  slice A (gate-4 §4.4; `ARCHIVAL_TIMING_CONSTANTS.md` §1; P2B-7 Pin 3 /
+  P2B-8 Q3; `feat/bond-fsm-holdings-update`).** The genesis-frozen per-shard
+  drop-eligibility formula, landed on its own reviewable surface ahead of the
+  HoldingsUpdate verify/connect (slices B/C) that consume it — pure functions,
+  no schema or consensus-path change.
+  - **`bond_duration(ShardAgeAtAdd) -> epochs`** (`shekyl-archival-retention::
+    bond_duration`): `BASE·(1 + SCALE·age)`, **integer-canonical** (round-half-up,
+    floored at 1; no float in consensus). `BOND_DURATION_{BASE_EPOCHS,AGE_SCALE}`
+    = 4/4 (H2 plateau arm, provisional within the scale band [2,8]) wired
+    config → `generate_consensus_constants.py` → `build.rs` → `constants.rs`,
+    with the C++ header emitting the same values for cross-language parity (no
+    C++ consumer at genesis — the bond-FSM verify is Rust-native).
+  - **`ShardAgeAtAdd` newtype** makes two consensus properties unrepresentable
+    at the type rather than tested-against: the age is evaluated **at add, not
+    at drop** (the sim arms the lock on fresh acquisition and counts down, so a
+    rising-target drop-time age cannot be expressed), and its close reference is
+    **`H_close(add_epoch)`**, the same settlement-close height the reward curve
+    feeds `shard_age_milli` (the constructor derives the close from the add
+    epoch, so a raw within-epoch block height cannot be passed). One age
+    normalization across reward and retention, by construction — the
+    age-realization invariant, pinned in `ARCHIVAL_TIMING_CONSTANTS.md` §1.
+  - **KATs:** endpoints/midpoint/monotonicity/floor, the F1 close-reference
+    check (age uses `H_close(add_epoch)`), and the **F2 full-sweep parity** —
+    the integer artifact equals the sim's f64 model across every
+    `age_milli ∈ [0, WORK_MILLI_SCALE]`, with the **integer authoritative**: a
+    divergence fails loudly as the signal to re-check the sim economics (the
+    genesis 4/4 constants have no half-boundary case, so the sweep is clean; the
+    KAT is the tripwire on any re-pin).
+
 - **archival: GF-1 `bond_spend_pk` wire+record — the debit-side enable flip
   (gate-4 §3.5 step 5 / §4.1 / §9.11; `feat/gf1-bond-spend-pk`).** The
   sequenced prerequisite the Unbond wiring named is landed; **Unbond txs now
