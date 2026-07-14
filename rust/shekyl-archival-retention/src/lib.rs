@@ -53,8 +53,11 @@ pub mod serve_eligibility;
 pub mod wire;
 
 pub use bond_connect::{
-    clean_interval_close, is_clean_interval_close, unbond_connect, unbond_pop, UnbondConnect,
-    UnbondConnectError, UnbondPopError, MAX_BOND_BAD_INTERVALS,
+    clean_interval_close, holdings_update_add_connect, holdings_update_drop_connect,
+    holdings_update_pop, is_clean_interval_close, unbond_connect, unbond_pop,
+    HoldingsUpdateAddConnect, HoldingsUpdateConnectError, HoldingsUpdateDropConnect,
+    HoldingsUpdatePopError, UnbondConnect, UnbondConnectError, UnbondPopError,
+    MAX_BOND_BAD_INTERVALS,
 };
 pub use bond_ct_balance::{verify_bond_post_ct_balance, BondCtBalanceError, BondTerm};
 pub use bond_duration::{bond_duration, ShardAgeAtAdd};
@@ -65,7 +68,8 @@ pub use bond_floor::{
     MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS,
 };
 pub use bond_post::{
-    bond_post_block_unique, verify_join_market_bond_post, verify_unbond_bond_post, BondPostError,
+    bond_post_block_unique, verify_holdings_update_add, verify_holdings_update_drop,
+    verify_join_market_bond_post, verify_unbond_bond_post, BondPostError,
 };
 pub use bond_wire::{
     encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,

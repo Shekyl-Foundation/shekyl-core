@@ -133,6 +133,31 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING: u8 = 22;
 /// Returned by the shared vin marshaler, so both entry points can return it —
 /// the marshaler refuses to construct a vin the wire codec could not emit.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING: u8 = 23;
+// ── HoldingsUpdate add + drop verify (gate-4 §4.4) ──────────────────────────
+/// HoldingsUpdate verify: `post_kind` is not HoldingsUpdate.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE: u8 = 24;
+/// HoldingsUpdate verify: the record is CompleteTree (foundation) — not a shard set.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ON_COMPLETE_TREE: u8 = 25;
+/// HoldingsUpdate verify: the post-holdings are not ShardSetCompact.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_POST_NOT_COMPACT: u8 = 26;
+/// HoldingsUpdate-add verify: terms are not `bond_credit == FLOOR, bond_debit == 0`.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_TERMS: u8 = 27;
+/// HoldingsUpdate-add verify: the record is not in good standing (open bad interval).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_GOOD_STANDING: u8 = 28;
+/// HoldingsUpdate-add verify: post is not current holdings plus exactly one shard.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_ADD: u8 = 29;
+/// HoldingsUpdate-add verify: post bonded_total != bond_floor(post-holdings).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_FLOOR_MISMATCH: u8 = 30;
+/// HoldingsUpdate-drop verify: terms are not `bond_debit == FLOOR, bond_credit == 0`.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_TERMS: u8 = 31;
+/// HoldingsUpdate-drop verify: post is not current holdings minus exactly one shard.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_DROP: u8 = 32;
+/// HoldingsUpdate-drop verify: dropping the last shard (use Unbond for a full exit).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_LAST_SHARD: u8 = 33;
+/// HoldingsUpdate-drop verify: post bonded_total != bond_floor(post-holdings).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_FLOOR_MISMATCH: u8 = 34;
+/// HoldingsUpdate-drop verify: the shard is within its bond_duration retention horizon.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON: u8 = 35;
 
 /// `Unbond` connect/pop fold succeeded (gate-4 §4.3 / §5).
 pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_OK: u8 = 0;
@@ -499,6 +524,38 @@ fn map_bond_post_error(err: BondPostError) -> u8 {
         BondPostError::IntervalLogFull => SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL,
         BondPostError::SlashSettlementPending => {
             SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING
+        }
+        BondPostError::PostKindNotHoldingsUpdate => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE
+        }
+        BondPostError::HoldingsUpdateOnCompleteTree => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ON_COMPLETE_TREE
+        }
+        BondPostError::HoldingsUpdatePostNotCompact => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_POST_NOT_COMPACT
+        }
+        BondPostError::HoldingsUpdateAddTerms => SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_TERMS,
+        BondPostError::HoldingsUpdateNotGoodStanding => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_GOOD_STANDING
+        }
+        BondPostError::HoldingsUpdateNotSingleAdd => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_ADD
+        }
+        BondPostError::HoldingsUpdateAddFloorMismatch => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_FLOOR_MISMATCH
+        }
+        BondPostError::HoldingsUpdateDropTerms => SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_TERMS,
+        BondPostError::HoldingsUpdateNotSingleDrop => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_DROP
+        }
+        BondPostError::HoldingsUpdateDropLastShard => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_LAST_SHARD
+        }
+        BondPostError::HoldingsUpdateDropFloorMismatch => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_FLOOR_MISMATCH
+        }
+        BondPostError::HoldingsUpdateDropWithinHorizon => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON
         }
     }
 }

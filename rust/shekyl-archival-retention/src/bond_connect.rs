@@ -22,7 +22,8 @@
 
 use thiserror::Error;
 
-use crate::bond_floor::bond_floor_of;
+use crate::bond_floor::{bond_floor_of, ARCHIVAL_BOND_FLOOR_ATOMIC};
+use crate::bond_post::{single_shard_diff, SingleDiff};
 use crate::bond_wire::{HoldingsDescriptor, HoldingsKind};
 use crate::consensus_state::BadInterval;
 
@@ -239,6 +240,169 @@ pub fn unbond_pop(
     total_bonded_atomic
         .checked_add(journal_pre_bonded_total)
         .ok_or(UnbondPopError::TotalBondedOverflow)
+}
+
+// ── HoldingsUpdate add / drop connect + pop (gate-4 §4.4 grace-tail) ─────────
+
+#[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
+pub enum HoldingsUpdateConnectError {
+    /// The post-holdings are not `current ∪ {one new shard}` (add) — verify's
+    /// `HoldingsUpdateNotSingleAdd` should have rejected this.
+    #[error("HoldingsUpdate-add post is not current holdings plus exactly one shard")]
+    NotSingleAdd,
+    /// The post-holdings are not `current ∖ {one shard}` (drop).
+    #[error("HoldingsUpdate-drop post is not current holdings minus exactly one shard")]
+    NotSingleDrop,
+    /// Drop would empty the shard set — verify's `HoldingsUpdateDropLastShard`.
+    #[error("HoldingsUpdate-drop would leave no shards (use Unbond)")]
+    DropLastShard,
+    /// The record's `bonded_total == bond_floor(holdings)` invariant (§3.2)
+    /// does not hold — record corruption, not a tx fault.
+    #[error("record bonded_total != bond_floor(record holdings)")]
+    RecordFloorInvariantBroken,
+    /// `bonded_total_atomic` / `total_bonded_atomic` would overflow (add) or
+    /// underflow (drop) — the counter disagrees with the balance it aggregates.
+    #[error("bonded/total_bonded counter over/underflow on HoldingsUpdate")]
+    CounterRange,
+}
+
+/// The `HoldingsUpdate`-add connect effect (gate-4 §4.4). The C++ arm journals
+/// the record's full pre-image, then sets `held_shard_ids = post` and rebuilds
+/// the index-parallel `shard_add_epochs` — the carried-over shards keep their
+/// existing add-epoch, and `added_shard_id` takes `add_settlement_epoch` (the
+/// connecting block's settlement epoch, `E_add`). The counter movement is the
+/// absolute post-value, threaded per post (the `UnbondConnect` note).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HoldingsUpdateAddConnect {
+    pub added_shard_id: u64,
+    pub add_settlement_epoch: u64,
+    /// `record_bonded_total + FLOOR`.
+    pub new_bonded_total: u64,
+    /// `total_bonded_atomic + FLOOR` (absolute — thread per post).
+    pub new_total_bonded_atomic: u64,
+}
+
+/// Fold the `HoldingsUpdate`-add connect: validate the single-shard growth and
+/// the record's floor invariant, and produce the counter movement.
+pub fn holdings_update_add_connect(
+    record_bonded_total: u64,
+    record_held_shard_ids: &[u64],
+    post_held_shard_ids: &[u64],
+    total_bonded_atomic: u64,
+    add_settlement_epoch: u64,
+) -> Result<HoldingsUpdateAddConnect, HoldingsUpdateConnectError> {
+    let SingleDiff::Added(added_shard_id) =
+        single_shard_diff(record_held_shard_ids, post_held_shard_ids)
+    else {
+        return Err(HoldingsUpdateConnectError::NotSingleAdd);
+    };
+    if bond_floor_of(HoldingsKind::ShardSetCompact, record_held_shard_ids.len())
+        != record_bonded_total
+    {
+        return Err(HoldingsUpdateConnectError::RecordFloorInvariantBroken);
+    }
+    let new_bonded_total = record_bonded_total
+        .checked_add(ARCHIVAL_BOND_FLOOR_ATOMIC)
+        .ok_or(HoldingsUpdateConnectError::CounterRange)?;
+    let new_total_bonded_atomic = total_bonded_atomic
+        .checked_add(ARCHIVAL_BOND_FLOOR_ATOMIC)
+        .ok_or(HoldingsUpdateConnectError::CounterRange)?;
+    Ok(HoldingsUpdateAddConnect {
+        added_shard_id,
+        add_settlement_epoch,
+        new_bonded_total,
+        new_total_bonded_atomic,
+    })
+}
+
+/// The `HoldingsUpdate`-drop connect effect (gate-4 §4.4 grace-tail). The C++ arm
+/// journals the pre-image, then sets `held_shard_ids = post` and rebuilds the
+/// index-parallel `shard_add_epochs` (the dropped shard's add-epoch vanishes with
+/// it). `refund_atomic == FLOOR` is the released collateral the `bond_debit`
+/// source term returns to circulation (CT-balance-enforced on the wire; not
+/// written by the connect — exposed so tests pin the §3.2 identity).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HoldingsUpdateDropConnect {
+    pub dropped_shard_id: u64,
+    /// `record_bonded_total − FLOOR`.
+    pub new_bonded_total: u64,
+    /// `total_bonded_atomic − FLOOR` (absolute — thread per post).
+    pub new_total_bonded_atomic: u64,
+    pub refund_atomic: u64,
+}
+
+/// Fold the `HoldingsUpdate`-drop connect: validate the single-shard shrink,
+/// drop-last rejection, and the record's floor invariant, and produce the
+/// counter movement.
+pub fn holdings_update_drop_connect(
+    record_bonded_total: u64,
+    record_held_shard_ids: &[u64],
+    post_held_shard_ids: &[u64],
+    total_bonded_atomic: u64,
+) -> Result<HoldingsUpdateDropConnect, HoldingsUpdateConnectError> {
+    let SingleDiff::Removed(dropped_shard_id) =
+        single_shard_diff(record_held_shard_ids, post_held_shard_ids)
+    else {
+        return Err(HoldingsUpdateConnectError::NotSingleDrop);
+    };
+    if post_held_shard_ids.is_empty() {
+        return Err(HoldingsUpdateConnectError::DropLastShard);
+    }
+    if bond_floor_of(HoldingsKind::ShardSetCompact, record_held_shard_ids.len())
+        != record_bonded_total
+    {
+        return Err(HoldingsUpdateConnectError::RecordFloorInvariantBroken);
+    }
+    let new_bonded_total = record_bonded_total
+        .checked_sub(ARCHIVAL_BOND_FLOOR_ATOMIC)
+        .ok_or(HoldingsUpdateConnectError::CounterRange)?;
+    let new_total_bonded_atomic = total_bonded_atomic
+        .checked_sub(ARCHIVAL_BOND_FLOOR_ATOMIC)
+        .ok_or(HoldingsUpdateConnectError::CounterRange)?;
+    Ok(HoldingsUpdateDropConnect {
+        dropped_shard_id,
+        new_bonded_total,
+        new_total_bonded_atomic,
+        refund_atomic: ARCHIVAL_BOND_FLOOR_ATOMIC,
+    })
+}
+
+#[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
+pub enum HoldingsUpdatePopError {
+    /// The per-`P` balance changed by something other than one `FLOOR` between
+    /// the journaled pre-image and the tip record — not a single-shard
+    /// HoldingsUpdate, so the pop would revert the wrong movement.
+    #[error("HoldingsUpdate pop delta is not a single FLOOR")]
+    NotSingleShardDelta,
+    /// Re-applying the counter delta would over/underflow.
+    #[error("total_bonded_atomic over/underflow on HoldingsUpdate pop")]
+    CounterRange,
+}
+
+/// Fold the `HoldingsUpdate` add/drop pop twin (gate-4 §5): the C++ arm restores
+/// the record's fields from the pre-image journal byte-identically (held shards,
+/// add-epochs, bonded_total, bad intervals); this fold reverts the global
+/// `total_bonded_atomic` by exactly the connect's `±FLOOR` delta. The tip
+/// record's `bonded_total` (the connect's post-value) and the journaled
+/// pre-image balance must differ by exactly one `FLOOR` — a single-shard change
+/// — or the journal does not describe a HoldingsUpdate at this height.
+pub fn holdings_update_pop(
+    current_record_bonded_total: u64,
+    journal_pre_bonded_total: u64,
+    total_bonded_atomic: u64,
+) -> Result<u64, HoldingsUpdatePopError> {
+    if current_record_bonded_total.abs_diff(journal_pre_bonded_total) != ARCHIVAL_BOND_FLOOR_ATOMIC
+    {
+        return Err(HoldingsUpdatePopError::NotSingleShardDelta);
+    }
+    // Revert the connect's counter movement: total += (pre − post). Branch on the
+    // direction so neither intermediate step over/underflows.
+    let restored = if journal_pre_bonded_total >= current_record_bonded_total {
+        total_bonded_atomic.checked_add(journal_pre_bonded_total - current_record_bonded_total)
+    } else {
+        total_bonded_atomic.checked_sub(current_record_bonded_total - journal_pre_bonded_total)
+    };
+    restored.ok_or(HoldingsUpdatePopError::CounterRange)
 }
 
 #[cfg(test)]
@@ -535,6 +699,116 @@ mod tests {
                 u64::MAX,
             ),
             Err(UnbondPopError::TotalBondedOverflow)
+        );
+    }
+
+    // ── HoldingsUpdate add / drop connect + pop ──────────────────────────────
+
+    const HU_TOTAL: u64 = 5 * ARCHIVAL_BOND_FLOOR_ATOMIC;
+
+    #[test]
+    fn add_connect_grows_by_one_floor() {
+        let effect = holdings_update_add_connect(
+            2 * ARCHIVAL_BOND_FLOOR_ATOMIC, // record: 2 shards
+            &[7, 9],
+            &[7, 9, 11], // post
+            HU_TOTAL,
+            42, // E_add
+        )
+        .expect("valid add");
+        assert_eq!(effect.added_shard_id, 11);
+        assert_eq!(effect.add_settlement_epoch, 42);
+        assert_eq!(effect.new_bonded_total, 3 * ARCHIVAL_BOND_FLOOR_ATOMIC);
+        assert_eq!(
+            effect.new_total_bonded_atomic,
+            HU_TOTAL + ARCHIVAL_BOND_FLOOR_ATOMIC
+        );
+    }
+
+    #[test]
+    fn drop_connect_shrinks_by_one_floor() {
+        let effect = holdings_update_drop_connect(
+            2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+            &[7, 11],
+            &[7], // post
+            HU_TOTAL,
+        )
+        .expect("valid drop");
+        assert_eq!(effect.dropped_shard_id, 11);
+        assert_eq!(effect.new_bonded_total, ARCHIVAL_BOND_FLOOR_ATOMIC);
+        assert_eq!(
+            effect.new_total_bonded_atomic,
+            HU_TOTAL - ARCHIVAL_BOND_FLOOR_ATOMIC
+        );
+        // §3.2: the refund the bond_debit source term returns == one FLOOR.
+        assert_eq!(effect.refund_atomic, ARCHIVAL_BOND_FLOOR_ATOMIC);
+    }
+
+    #[test]
+    fn add_connect_rejects_non_single_and_broken_invariant() {
+        // Two shards added.
+        assert_eq!(
+            holdings_update_add_connect(
+                2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+                &[7, 9],
+                &[7, 9, 11, 13],
+                HU_TOTAL,
+                42
+            ),
+            Err(HoldingsUpdateConnectError::NotSingleAdd)
+        );
+        // Record bonded_total disagrees with bond_floor(current 2 shards).
+        assert_eq!(
+            holdings_update_add_connect(
+                3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+                &[7, 9],
+                &[7, 9, 11],
+                HU_TOTAL,
+                42
+            ),
+            Err(HoldingsUpdateConnectError::RecordFloorInvariantBroken)
+        );
+    }
+
+    #[test]
+    fn drop_connect_rejects_last_shard() {
+        assert_eq!(
+            holdings_update_drop_connect(ARCHIVAL_BOND_FLOOR_ATOMIC, &[7], &[], HU_TOTAL),
+            Err(HoldingsUpdateConnectError::DropLastShard)
+        );
+    }
+
+    #[test]
+    fn holdings_update_pop_reverts_both_directions() {
+        // ADD: connect took total → total+FLOOR, record pre 2·FLOOR → post 3·FLOOR.
+        // Pop: total+FLOOR back to total, given post/pre.
+        let restored = holdings_update_pop(
+            3 * ARCHIVAL_BOND_FLOOR_ATOMIC, // current (post)
+            2 * ARCHIVAL_BOND_FLOOR_ATOMIC, // journal pre
+            HU_TOTAL + ARCHIVAL_BOND_FLOOR_ATOMIC,
+        )
+        .expect("add pop");
+        assert_eq!(restored, HU_TOTAL);
+
+        // DROP: post 1·FLOOR, pre 2·FLOOR; pop re-credits the FLOOR.
+        let restored = holdings_update_pop(
+            ARCHIVAL_BOND_FLOOR_ATOMIC,
+            2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+            HU_TOTAL - ARCHIVAL_BOND_FLOOR_ATOMIC,
+        )
+        .expect("drop pop");
+        assert_eq!(restored, HU_TOTAL);
+    }
+
+    #[test]
+    fn holdings_update_pop_rejects_non_floor_delta() {
+        assert_eq!(
+            holdings_update_pop(
+                3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+                ARCHIVAL_BOND_FLOOR_ATOMIC, // delta 2·FLOOR, not a single shard
+                HU_TOTAL,
+            ),
+            Err(HoldingsUpdatePopError::NotSingleShardDelta)
         );
     }
 }

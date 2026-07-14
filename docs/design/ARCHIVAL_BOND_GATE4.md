@@ -623,9 +623,19 @@ continuity reset) to swap one slot. The full lifecycle
 the resulting age-stratified mobility friction is a pre-seal dependency
 ([`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*steady-state frame* item 6).
 
-**Principle:** dropping shard *s* from `ShardSetCompact` reduces
-`bond_floor(holdings)` by `ARCHIVAL_BOND_FLOOR`; released collateral for *s* inherits
-**Unbond release cooldown** (per-shard last-served epoch) — cannot withdraw immediately.
+**Principle (grace-tail, ratified 2026-07-15):** dropping shard *s* from `ShardSetCompact`
+reduces `bond_floor(holdings)` by `ARCHIVAL_BOND_FLOOR`. The **release cooldown is a verify
+precondition on the drop**, not a post-drop state (the same model as `Unbond`): the drop of
+*s* cannot be posted until *s*'s release cooldown has elapsed (`release_cooldown_elapsed` on
+*s*'s per-shard last-served epoch) **and** the slash scheduler has settled through that
+anchor (`slashes_settled_through`). At connect the shard leaves `holdings`, `bonded_total −=
+FLOOR`, and the `FLOOR` returns immediately via the `bond_debit` source term (§3.2) — no
+`collateral-in-cooldown` sub-state, no `bond_event_log` drop interval, no clean-close marker
+(`P` stays `Bonded` with ≥1 shard). The drop is additionally gated by the **retention-horizon**
+(`bond_duration(ShardAgeAtAdd(s))`, §4.4 slice-A freeze / P2B-7 Pin 3): a shard younger than
+its horizon is ineligible for voluntary drop at all. (Supersedes the earlier
+"cannot withdraw immediately" drop-then-cool wording — the same fossil as the `Unbond` "stays
+slashable" language; see `PHASE_2B_FSM_RETOOL.md` P2B-7 Pin 2/3.)
 
 **Retention-horizon freeze (LANDED — slice A, 2026-07-14).** The `bond_duration(age)`
 drop-eligibility gate (§3.4 asymmetry table; P2B-7 Pin 3 / P2B-8 Q3) is

@@ -434,36 +434,56 @@ Dropping the **last** shard is rejected at verify (post-state holdings must be n
 full exit is `Unbond` (→ `Exited`). This keeps `HoldingsUpdate` total-preserving on the FSM:
 it never lands in `Slashed` or `Exited`.
 
-### Pin 2 — per-shard release cooldown (the friction)
+### Pin 2 — per-shard release cooldown (the friction) — GRACE-TAIL, ratified 2026-07-15
 
-A dropped shard's released `FLOOR` does **not** return at the drop confirm. It enters the
-**per-shard release cooldown** measured from that shard's `last_served_epoch` (gate-4 §4.4,
-§4.3 asymmetry table). While `P` continues serving its remaining shards in `Bonded`, the
-dropped shard's collateral sits in a **`collateral-in-cooldown` sub-condition** — the same
-sub-condition `Exited` carries for whole-record `Unbond`, but scoped to one shard and held
-**inside `Bonded`**. It is a predicate on the bond record (`bond_event_log` drop interval +
-per-shard cooldown), **not** a new FSM state. The freed capital cannot recycle into a fresh
-shard until cooldown elapses; this is the deep-tail mobility friction the sim must model
-age-stratified (Pin 5).
+**The cooldown is a verify PRECONDITION on the drop, not a post-drop state** (grace-tail,
+the same model as `Unbond` — `release_cooldown.rs` names HoldingsUpdate-drop as a consumer
+of the identical predicates). A drop of shard *s* cannot be posted until *s*'s release
+cooldown has elapsed (`release_cooldown_elapsed` on *s*'s `last_served_epoch`) **and** the
+slash scheduler has settled through that anchor (`slashes_settled_through`); at connect the
+shard leaves `holdings`, `bonded_total −= FLOOR`, and the `FLOOR` **returns immediately** via
+the `bond_debit` source term (§3.2). There is **no `collateral-in-cooldown` sub-state, no
+`bond_event_log` drop interval, and no clean-close marker** — `P` stays `Bonded` with ≥1
+shard, so there is no exit epoch to record. The friction (freed capital cannot recycle until
+the cooldown elapses) is real and identical to the superseded reading — it is just enforced
+*before* the drop rather than tracked *after* it.
+
+*Satisfiability + why this is the right call (ratified 2026-07-15).* The cooldown epochs
+after last-serve are unserved-by-definition and exit-forgiven at the drop connect
+(`release_cooldown.rs` guarantee), so grace-tail-DROP is satisfiable exactly as
+grace-tail-Unbond is — the persona freezes `last_served`, the pending challenges through the
+anchor resolve on still-bonded collateral, then the drop posts. The two models are
+**economically identical** (both leave *s* unserved and its `FLOOR` frozen for exactly the
+cooldown window; coverage is accounted by serve-credit, not holdings, so a held-but-unserved
+shard is uncovered under either — see the confirmations below), so this fork is
+**sim-agnostic**: no L18 re-run, no seal impact. That removes the only thing that could have
+forced drop-then-cool; grace-tail then wins on FSM shape alone (a gated shrink vs. a
+sub-state machine).
 
 Add (top-up) carries no cooldown: `bond_credit = +FLOOR` is immediate; the new shard's
 serve obligations begin at the add confirm.
 
-### Pin 3 — slashable-when boundary (no drop-to-dodge)
+### Pin 3 — slashable-when boundary (no drop-to-dodge) — under grace-tail
 
-The dropped shard's collateral **stays slashable through its cooldown**. A voluntary drop
-must not let `P` escape a challenge that was in-flight or within the challenge window for
-shard *s* at the drop height. Concretely: a `slash(P,s)` triggered by a
-`challenge_failed(P,s,E)` whose deadline falls on or before the cooldown expiry **still
-applies** to the cooling collateral (gate-4 §4.2 atomic write set), even though `s` is no
-longer in current `holdings`. This is the exact rationale §4.3 gives for the `Unbond`
-cooldown ("no pending challenge can still slash for epochs after `P` stopped serving"),
-applied per-shard. Without it, `HoldingsUpdate` drop is a slash-evasion lever (T-A15b).
+The retention-commitment horizon (`bond_duration(age)`, gate-4 §4.4; HoldingsUpdate slice A)
+is the *earlier* gate: a shard younger than its horizon is **ineligible for voluntary drop at
+all**. The anti-dodge is then the **precondition**: the drop cannot post until *s*'s cooldown
+has elapsed and the slasher has settled through *s*'s last-served anchor, so no challenge that
+was in-flight or within the window for *s* is escaped — it has already resolved (on bonded
+collateral) or the drop simply cannot verify yet. This is the exact per-shard analogue of the
+`Unbond` cooldown, applied to the one dropped shard. **Bounded forgiveness carries
+(confirmed at source 2026-07-15):** the slash scheduler challenges *currently-held* shards on
+the serve-credit bit (`process_archival_slash_for_epoch` iterates `held_shard_ids`), and the
+exit forgiveness applies only once the drop *connects* — so "stop serving, hold, never drop"
+keeps being slashed for non-service (the gap is capped at one cooldown, the persona is pushed
+to actually drop). **Re-coverage keys on serve-credit, not holdings (confirmed):**
+`r_market_count` skips `!serve_credit`, so a held-but-unserved shard is not counted as
+covered — grace-tail's immediate-shed-vs-precondition choice does not delay re-seeding.
 
-The **retention-commitment horizon** (`bond_duration(age)`, gate-4 §3.4/§4.3) is the
-*earlier* gate: a shard younger than its horizon is **ineligible for voluntary drop at all**.
-Pin 3 governs the window *after* an eligible drop is posted; the horizon governs whether the
-drop may be posted.
+*(Superseded framing: the earlier Pin 2/3 wording described drop-then-cool — the shard leaves
+holdings immediately with the `FLOOR` withheld into a per-shard cooldown that "stays
+slashable." That is the same fossil as the `Unbond` "stays slashable" language; the operative
+model is grace-tail above. Gate-4 §4.4 is aligned.)*
 
 ### Pin 4 — mutable-holdings serve-credit reconciliation (the consensus-read fix)
 
