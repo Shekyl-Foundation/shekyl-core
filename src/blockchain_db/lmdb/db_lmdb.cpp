@@ -5645,16 +5645,41 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
   // complete-tree demotion (which clears the whole array, restored by kind).
   uint64_t slashed_shard_add_epoch = 0;
 
+  // Same-epoch coalescing (P2B-9 Pin 5): every held shard is challenged every
+  // epoch (CHALLENGES_PER_EPOCH = 1, the fire height always lands), and this
+  // epoch's failing shards are slashed one call each against a stale pre-scan
+  // eligibility copy — so an offline N-shard record takes N slashes here in
+  // one block. The open intervals they would each append are IDENTICAL
+  // ([settlement_epoch, MAX): later epochs are good_through-blocked while any
+  // open interval exists, so multiplicity is same-epoch only), and appending
+  // one per shard let a record with more failing shards than the interval
+  // log's codec headroom (kMaxBadIntervals = 256, holdings cap 4096) throw at
+  // encode inside this block-connect hook — a deterministic consensus halt.
+  // Append only when no open interval exists: standing semantics are
+  // unchanged (good_through only asks whether SOME open interval covers the
+  // epoch), the pop revert is already compatible (its remove_if strips every
+  // matching open interval on the first same-epoch row and no-ops after), and
+  // the record carries AT MOST ONE open interval — the invariant the Rebond
+  // close targets.
+  const bool has_open_interval = std::any_of(
+    bond.bad_intervals.begin(), bond.bad_intervals.end(),
+    [](const shekyl::db::ArchivalBondValue::BadInterval& iv) {
+      return iv.end_exclusive == std::numeric_limits<uint64_t>::max();
+    });
+
   auto& shards = bond.held_shard_ids;
   if (bond.is_complete_tree())
   {
     bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
     shards.clear();
     bond.shard_add_epochs.clear(); // v6 coupling: drop the add-epochs with the shards
-    shekyl::db::ArchivalBondValue::BadInterval iv{};
-    iv.start_epoch = settlement_epoch;
-    iv.end_exclusive = std::numeric_limits<uint64_t>::max();
-    bond.bad_intervals.push_back(iv);
+    if (!has_open_interval)
+    {
+      shekyl::db::ArchivalBondValue::BadInterval iv{};
+      iv.start_epoch = settlement_epoch;
+      iv.end_exclusive = std::numeric_limits<uint64_t>::max();
+      bond.bad_intervals.push_back(iv);
+    }
   }
   else
   {
@@ -5689,10 +5714,13 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
     slashed_shard_add_epoch = bond.shard_add_epochs[idx];
     bond.shard_add_epochs.erase(bond.shard_add_epochs.begin() + idx);
     shards.erase(it);
-    shekyl::db::ArchivalBondValue::BadInterval iv{};
-    iv.start_epoch = settlement_epoch;
-    iv.end_exclusive = std::numeric_limits<uint64_t>::max();
-    bond.bad_intervals.push_back(iv);
+    if (!has_open_interval)
+    {
+      shekyl::db::ArchivalBondValue::BadInterval iv{};
+      iv.start_epoch = settlement_epoch;
+      iv.end_exclusive = std::numeric_limits<uint64_t>::max();
+      bond.bad_intervals.push_back(iv);
+    }
   }
 
   if (bond.bonded_total_atomic < slashed_amount)

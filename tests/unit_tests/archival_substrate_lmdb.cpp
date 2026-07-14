@@ -2469,6 +2469,70 @@ TEST(archival_substrate_lmdb, holdings_update_drop_connect_pop_roundtrip_through
   EXPECT_EQ(db.get_total_bonded_atomic(), total_bonded);
 }
 
+// P2B-9 Pin 5: same-epoch multi-shard slashes coalesce into ONE open bad
+// interval. Every held shard is challenged every epoch and an epoch's failures
+// each slash once against a stale eligibility copy, so an offline record with
+// more failing shards than the interval log's codec headroom (kMaxBadIntervals
+// = 256 vs the 4096 holdings cap) used to append one open interval per shard
+// and throw at encode INSIDE the block-connect slash hook — a deterministic
+// consensus halt. Drives a 300-shard record (above the interval cap) through a
+// full same-epoch slash sweep: one open interval, no throw; then the pop
+// revert restores the record byte-exactly (its remove_if strips the coalesced
+// interval on the first same-epoch row and no-ops on the rest).
+TEST(archival_substrate_lmdb, same_epoch_slashes_coalesce_one_open_interval)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+  const crypto::hash p_id = make_hash(0xE7);
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const uint64_t slash_height = 6000;
+  const uint64_t epoch = 3;
+  constexpr uint64_t kShardCount = 300; // > kMaxBadIntervals (256)
+
+  shekyl::db::ArchivalBondValue seed{};
+  seed.hybrid_pubkey = {0x0A};
+  seed.join_settlement_epoch = 2;
+  seed.bonded_total_atomic = kShardCount * floor;
+  seed.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
+  for (uint64_t i = 0; i < kShardCount; ++i)
+  {
+    seed.held_shard_ids.push_back(i);
+    seed.shard_add_epochs.push_back(2);
+  }
+  db.put_archival_bond_value(p_id, seed);
+  db.set_total_bonded_atomic(kShardCount * floor);
+  db.set_total_burned(0);
+
+  uint32_t seq = 0;
+  for (uint64_t i = 0; i < kShardCount; ++i)
+    lmdb.apply_archival_slash_one(slash_height, seq, p_id, i, epoch, floor);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_TRUE(read.held_shard_ids.empty());
+  EXPECT_EQ(read.bonded_total_atomic, 0u);
+  ASSERT_EQ(read.bad_intervals.size(), 1u); // coalesced, not 300
+  EXPECT_EQ(read.bad_intervals[0].start_epoch, epoch);
+  EXPECT_EQ(read.bad_intervals[0].end_exclusive, std::numeric_limits<uint64_t>::max());
+  EXPECT_EQ(db.get_total_bonded_atomic(), 0u);
+  EXPECT_EQ(db.get_total_burned(), kShardCount * floor);
+
+  db.revert_archival_slashes_at_height(slash_height);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, read));
+  EXPECT_EQ(read.held_shard_ids, seed.held_shard_ids);
+  EXPECT_EQ(read.shard_add_epochs, seed.shard_add_epochs);
+  EXPECT_EQ(read.bonded_total_atomic, kShardCount * floor);
+  EXPECT_TRUE(read.bad_intervals.empty());
+  EXPECT_EQ(db.get_total_bonded_atomic(), kShardCount * floor);
+  EXPECT_EQ(db.get_total_burned(), 0u);
+}
+
 // ── F-B1a: production-path epoch boundary — budget(E) includes E's final block ──
 //
 // The substrate KATs B1–B3 above drive add_archival_budget_accrual and the
