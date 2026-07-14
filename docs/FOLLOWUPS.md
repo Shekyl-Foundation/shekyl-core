@@ -6534,10 +6534,7 @@ sustainability is unaffected by the recalibration.
     `contrib/gitian/gitian-win.yml`, the ARMv7 entries in
     `gitian-linux.yml` and `gitian-android.yml`.
   - Delete `_config_opts_i686_mingw32`, `_config_opts_mingw32`
-    (where purely 32-bit), the `_cflags_mingw32` line in
-    `contrib/depends/packages/unbound.mk` (arch-asymmetric
-    carve-out — deletion target, not a typo), and the
-    `i686_mingw32` variants in the other
+    (where purely 32-bit) and the `i686_mingw32` variants in the
     `contrib/depends/packages/*.mk`.
   - Delete `MDB_VL32` from
     `external/db_drivers/liblmdb/CMakeLists.txt`. Vendored-LMDB

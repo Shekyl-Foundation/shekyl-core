@@ -62,7 +62,7 @@ name: "Shekyl CodeQL config"
 # ----------------------------------------------------------------------
 #
 # `external/**` is third-party vendored code (LMDB, qrcodegen, RandomX,
-# unbound, etc.), tracked as submodules/imports. Shekyl does not patch
+# etc.), tracked as submodules/imports. Shekyl does not patch
 # these in place — the remediation path for a real finding is a dep
 # update or a fork, never a local edit — so CodeQL alerts anchored in
 # `external/` are not an actionable Shekyl surface. Analyzing them only
