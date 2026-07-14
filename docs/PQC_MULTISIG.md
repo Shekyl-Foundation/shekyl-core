@@ -1715,11 +1715,25 @@ shekyl-crypto-pq/src/multisig_receiving.rs
 
 ### 16.4 Modified C++
 
+> **Engine-integration supersession (2026-07-14).** The bullets below
+> are **historical plan text** and are **not** the V3.1 implementation
+> target. Wallet-side multisig logic (output construction, scanning,
+> receive-time validation, griefing scores) lands in Rust behind the
+> `multisig` Cargo feature per
+> [`docs/design/V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md)
+> (**MS-2**). Allowed C++ surface: LMDB / chain-DB persistence of
+> consensus-visible bytes, plus the existing `scheme_id = 2` verify
+> path into Rust FFI (group-id defense-in-depth wiring is a separate
+> consensus PR — **MS-8**). Phase 0 of that design (P0-a) will delete
+> or rewrite these bullets once Round 1 closes.
+
 - `src/cryptonote_core/cryptonote_tx_utils.cpp`: add multisig-aware output
-  construction path
+  construction path *(superseded — do not implement in C++)*
 - `src/wallet/wallet2.cpp`: multisig output scanning, receive-time
-  validation, garbage filtering with griefing scores
+  validation, garbage filtering with griefing scores *(superseded —
+  do not implement in C++)*
 - `src/rpc/core_rpc_server.h`: add `get_griefing_stats` endpoint
+  *(superseded as daemon consensus RPC — wallet-side if at all)*
 
 ### 16.5 New address parsing
 

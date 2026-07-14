@@ -4,6 +4,18 @@
 
 ### Added
 
+- **docs: V3.1 multisig Rust engine integration design — Round 1 OPEN
+  (`docs/v31-multisig-rust-engine-plan`).** Fires
+  `V3_ENGINE_TRAIT_BOUNDARIES.md` §10.3.1. New carrier
+  [`docs/design/V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md)
+  poses **MS-1…MS-8** (trait identity, Rust-owns-logic C++ boundary,
+  feature-gate flip criteria, receive/spend/transport placement,
+  Persistence R6 confirm, daemon `group_id` verify as separate PR).
+  Protocol remains `PQC_MULTISIG.md`; §16.4 C++ wallet bullets marked
+  superseded pending Phase 0. INDEX registry + FOLLOWUPS pointer
+  updated. **No implementation** until design rounds + rule-26
+  pre-flight and explicit go-ahead.
+
 - **archival: `HoldingsUpdate` add + drop — the voluntary one-shard bond
   balance path, end-to-end (gate-4 §4.4; P2B-7; `feat/bond-fsm-holdings-update`).**
   Building on slice A's `bond_duration` freeze: the fourth and final bond-FSM

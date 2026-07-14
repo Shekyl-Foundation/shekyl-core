@@ -5809,6 +5809,16 @@ sustainability is unaffected by the recalibration.
   [`docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md`](completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
   §7. Target: V3.1.
 
+- **PQC Multisig V3.1: Rust engine integration design (carrier).**
+  `V3_ENGINE_TRAIT_BOUNDARIES.md` §10.3.1 trigger fired 2026-07-14.
+  Owning doc: [`docs/design/V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md)
+  (branch `docs/v31-multisig-rust-engine-plan`). Round 1 OPEN —
+  questions **MS-1…MS-8**. Posture: Rust-owns-logic (C++ = LMDB +
+  `scheme_id=2` verify FFI only); keep Cargo `multisig` feature
+  default-off; **no implementation** until design rounds close and
+  rule-26 pre-flight discharges. Protocol crypto stays in
+  `PQC_MULTISIG.md`. Target: V3.1.
+
 - **PQC Multisig V3.1: external adversarial review (Phase 5).**
   Round 4 wargame against the V3.1 multisig implementation per
   `PQC_MULTISIG_V3_1_ANALYSIS.md` §5.4. Review targets:

@@ -5753,8 +5753,16 @@ the 8th trait if it clears §1.5; or it may live as method
 extensions on `KeyEngine` and `PendingTxEngine` if it
 doesn't).
 
+*Status (2026-07-14).* Design phase **begun**. Engine-integration
+carrier:
+[`docs/design/V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md)
+(Round 1 OPEN — questions **MS-1…MS-8**). Protocol remains
+[`PQC_MULTISIG.md`](PQC_MULTISIG.md). Trait-surface amendments
+(§8.2) wait on Round 1–2 closure (Phase 0 **P0-b**).
+
 *Trigger.* "V3.1 multisig design phase begins." (External —
 owned by V3.1 release planning; tracked against project plan.)
+**Discharged 2026-07-14** by opening the carrier above.
 
 *Structural cross-reference.* §2.1 `KeyEngine`; §2.6
 `PendingTxEngine`; §1.5 trait-identity criteria (for
