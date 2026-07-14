@@ -5361,6 +5361,11 @@ void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
   bond.bonded_total_atomic = bonded_total_atomic;
   bond.holdings_kind = holdings_kind;
   bond.held_shard_ids = held_shard_ids;
+  // v6: every join-time shard was acquired at E_join, so its per-shard
+  // add-epoch is the record's join epoch (index-parallel to held_shard_ids).
+  // HoldingsUpdate-add later appends E_add for a new shard; the drop path and
+  // per-shard E_add+1 counting read this array.
+  bond.shard_add_epochs.assign(held_shard_ids.size(), join_settlement_epoch);
   // Join-time invariant: a fresh compact bond must hold at least one shard
   // (JoinMarket rejects empty holdings). This is a precondition of *this*
   // writer, not of the record shape — post-slash records can be legitimately
@@ -5587,12 +5592,17 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
   // pre-image kind — not the post-image shape — is what pop-revert and
   // as-of-height reconstruction need.
   const uint8_t holdings_pre_kind = bond.holdings_kind;
+  // v6/v3: the erased shard's add-epoch, captured before the erase so the pop
+  // revert restores its shard_add_epochs entry exactly. Stays 0 for a
+  // complete-tree demotion (which clears the whole array, restored by kind).
+  uint64_t slashed_shard_add_epoch = 0;
 
   auto& shards = bond.held_shard_ids;
   if (bond.is_complete_tree())
   {
     bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
     shards.clear();
+    bond.shard_add_epochs.clear(); // v6 coupling: drop the add-epochs with the shards
     shekyl::db::ArchivalBondValue::BadInterval iv{};
     iv.start_epoch = settlement_epoch;
     iv.end_exclusive = std::numeric_limits<uint64_t>::max();
@@ -5610,6 +5620,14 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
     // HoldingsUpdate-drop slice must revisit when voluntary removal lands.
     if (it == shards.end())
       throw std::runtime_error("FATAL: archival slash apply for a shard the record does not hold");
+    // v6 coupling: capture then erase the same index from the parallel
+    // add-epoch array.
+    const size_t idx = static_cast<size_t>(it - shards.begin());
+    if (idx < bond.shard_add_epochs.size())
+    {
+      slashed_shard_add_epoch = bond.shard_add_epochs[idx];
+      bond.shard_add_epochs.erase(bond.shard_add_epochs.begin() + idx);
+    }
     shards.erase(it);
     shekyl::db::ArchivalBondValue::BadInterval iv{};
     iv.start_epoch = settlement_epoch;
@@ -5643,6 +5661,7 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
   log_entry.settlement_epoch = settlement_epoch;
   log_entry.slashed_amount = slashed_amount;
   log_entry.holdings_pre_kind = holdings_pre_kind;
+  log_entry.slashed_shard_add_epoch = slashed_shard_add_epoch;
   append_archival_slash_log(block_height, seq++, log_entry);
 }
 
@@ -5821,6 +5840,7 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
     {
       bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsCompleteTree;
       bond.held_shard_ids.clear();
+      bond.shard_add_epochs.clear(); // v6 coupling: complete-tree holds no shard list
       bond.bad_intervals.erase(
         std::remove_if(bond.bad_intervals.begin(), bond.bad_intervals.end(),
           [&](const shekyl::db::ArchivalBondValue::BadInterval& iv) {
@@ -5833,6 +5853,9 @@ void BlockchainLMDB::revert_archival_slashes_at_height(uint64_t block_height)
     else if (!bond.holds_shard(entry.shard_id))
     {
       bond.held_shard_ids.push_back(entry.shard_id);
+      // v6 coupling: restore the reverted shard's add-epoch (v3 log field),
+      // keeping the parallel arrays coupled after the re-add.
+      bond.shard_add_epochs.push_back(entry.slashed_shard_add_epoch);
       bond.bad_intervals.erase(
         std::remove_if(bond.bad_intervals.begin(), bond.bad_intervals.end(),
           [&](const shekyl::db::ArchivalBondValue::BadInterval& iv) {
@@ -6018,6 +6041,7 @@ void BlockchainLMDB::apply_archival_unbond(uint64_t block_height,
   log_entry.pre_bonded_total = bond.bonded_total_atomic;
   log_entry.pre_holdings_kind = bond.holdings_kind;
   log_entry.pre_shard_ids = bond.held_shard_ids;
+  log_entry.pre_shard_add_epochs = bond.shard_add_epochs; // v6 coupling
   log_entry.pre_bad_intervals.reserve(bond.bad_intervals.size());
   for (const auto& iv : bond.bad_intervals)
     log_entry.pre_bad_intervals.emplace_back(iv.start_epoch, iv.end_exclusive);
@@ -6053,6 +6077,7 @@ void BlockchainLMDB::apply_archival_unbond(uint64_t block_height,
   bond.bonded_total_atomic = post_bonded_total;
   bond.holdings_kind = post_holdings_kind;
   bond.held_shard_ids.clear();
+  bond.shard_add_epochs.clear(); // v6 coupling: Exited record holds no shards
   shekyl::db::ArchivalBondValue::BadInterval close{};
   close.start_epoch = close_start;
   close.end_exclusive = close_end;
@@ -6125,6 +6150,7 @@ void BlockchainLMDB::revert_archival_unbonds_at_height(uint64_t block_height)
     bond.bonded_total_atomic = it->pre_bonded_total;
     bond.holdings_kind = it->pre_holdings_kind;
     bond.held_shard_ids = it->pre_shard_ids;
+    bond.shard_add_epochs = it->pre_shard_add_epochs; // v6 coupling
     bond.bad_intervals.clear();
     bond.bad_intervals.reserve(it->pre_bad_intervals.size());
     for (const auto& iv : it->pre_bad_intervals)

@@ -34,12 +34,13 @@ using archival_test::make_hash;
 using archival_test::EmissionSnapshotKat;
 using TempLMDB = archival_test::TempLMDB;
 
-/// Minimum-length bond LMDB value with a non-v5 version byte.
+/// Minimum-length bond LMDB value with a non-v6 version byte.
 ///
 /// `ArchivalBondValue::decode` rejects solely on `version != kVersion` once
-/// `len >= 42` (the v5 structural minimum); no historical pre-v5 wire layout
-/// is load-bearing at genesis.
-std::vector<uint8_t> non_v5_bond_blob(uint8_t version)
+/// `len >= 42` (the v6 structural minimum — 0 held shards ⇒ 0 add-epochs, so
+/// the fixed prefix is unchanged from v5); no historical pre-v6 wire layout is
+/// load-bearing at genesis.
+std::vector<uint8_t> non_v6_bond_blob(uint8_t version)
 {
   std::vector<uint8_t> blob(42, 0);
   blob[0] = version;
@@ -78,6 +79,7 @@ shekyl::db::ArchivalBondValue baseline_bond()
   bond.bonded_total_atomic = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
   bond.held_shard_ids = {42};
+  bond.shard_add_epochs = {7}; // v6: index-parallel add-epoch (= join epoch)
   return bond;
 }
 
@@ -117,6 +119,9 @@ TEST(archival_substrate_lmdb, bond_record_roundtrip)
   written.bonded_total_atomic = bonded_total;
   written.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
   written.held_shard_ids = shards;
+  // v6: per-shard add-epochs, index-parallel to held_shard_ids (distinct values
+  // so a mis-ordered or dropped entry is caught).
+  written.shard_add_epochs = {3, 5};
   for (const auto& iv : bad)
   {
     shekyl::db::ArchivalBondValue::BadInterval entry{};
@@ -130,6 +135,8 @@ TEST(archival_substrate_lmdb, bond_record_roundtrip)
   ASSERT_TRUE(shekyl::db::ArchivalBondValue::decode(encoded.data(), encoded.size(), roundtrip));
   EXPECT_EQ(roundtrip.bonded_total_atomic, bonded_total);
   EXPECT_EQ(roundtrip.bond_spend_pk, written.bond_spend_pk);
+  EXPECT_EQ(roundtrip.held_shard_ids, written.held_shard_ids);
+  EXPECT_EQ(roundtrip.shard_add_epochs, written.shard_add_epochs);
   EXPECT_EQ(roundtrip.claimed_settlement_epochs, written.claimed_settlement_epochs);
   EXPECT_EQ(roundtrip.first_paying_emission_height, written.first_paying_emission_height);
 
@@ -233,42 +240,34 @@ TEST(archival_substrate_lmdb, bond_reject_legacy_versions)
 {
   shekyl::db::ArchivalBondValue decoded{};
 
-  const std::vector<uint8_t> v1 = non_v5_bond_blob(1);
+  const std::vector<uint8_t> v1 = non_v6_bond_blob(1);
   EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(v1.data(), v1.size(), decoded));
 
-  const std::vector<uint8_t> v2 = non_v5_bond_blob(2);
+  const std::vector<uint8_t> v2 = non_v6_bond_blob(2);
   EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(v2.data(), v2.size(), decoded));
 
-  // Byte-exact v4 record: the v5 layout minus the 2-byte bond_spend_pk
-  // length field (empty key), with the version byte patched. Pre-genesis
-  // posture: rejected, no migration path — reset the data directory.
+  // decode() rejects on `version != kVersion` before parsing structure, so a
+  // byte-exact v6 encoding with the version byte patched to any prior version
+  // (3, 4, 5) rejects — pre-genesis posture: no migration, reset the data
+  // directory. (v6 = the layout with the per-shard add-epoch array.)
+  for (const uint8_t stale : {uint8_t{3}, uint8_t{4}, uint8_t{5}})
   {
-    const std::vector<uint8_t> v5 = baseline_bond().encode();
-    const size_t spk_len_off = 1 + 2 + baseline_bond().hybrid_pubkey.size();
-    std::vector<uint8_t> v4;
-    v4.reserve(v5.size() - 2);
-    v4.insert(v4.end(), v5.begin(), v5.begin() + spk_len_off);
-    v4.insert(v4.end(), v5.begin() + spk_len_off + 2, v5.end());
-    v4[0] = 4;
-    EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(v4.data(), v4.size(), decoded));
+    std::vector<uint8_t> blob = baseline_bond().encode();
+    blob[0] = stale;
+    EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(blob.data(), blob.size(), decoded))
+      << "stale version " << static_cast<unsigned>(stale) << " must reject";
   }
-
-  // v3 (v4 minus the 12-byte claimed tail) rejects on the version byte alone.
-  std::vector<uint8_t> v3 = baseline_bond().encode();
-  v3.resize(v3.size() - 12);
-  v3[0] = 3;
-  EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(v3.data(), v3.size(), decoded));
 }
 
 TEST(archival_substrate_lmdb, bond_reject_unknown_version)
 {
-  std::vector<uint8_t> blob = non_v5_bond_blob(1);
+  std::vector<uint8_t> blob = non_v6_bond_blob(1);
   blob[0] = 99;
   shekyl::db::ArchivalBondValue decoded{};
   EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(blob.data(), blob.size(), decoded));
 }
 
-TEST(archival_substrate_lmdb, bond_v5_reject_truncated_after_join_epoch)
+TEST(archival_substrate_lmdb, bond_v6_reject_truncated_after_join_epoch)
 {
   std::vector<uint8_t> encoded = baseline_bond().encode();
   ASSERT_GT(encoded.size(), 20u);
@@ -278,7 +277,7 @@ TEST(archival_substrate_lmdb, bond_v5_reject_truncated_after_join_epoch)
   EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(encoded.data(), encoded.size(), decoded));
 }
 
-TEST(archival_substrate_lmdb, bond_v5_encode_version_byte)
+TEST(archival_substrate_lmdb, bond_v6_encode_version_byte)
 {
   shekyl::db::ArchivalBondValue bond{};
   bond.hybrid_pubkey = {0x0A};
@@ -286,6 +285,7 @@ TEST(archival_substrate_lmdb, bond_v5_encode_version_byte)
   bond.bonded_total_atomic = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
   bond.held_shard_ids = {7, 42};
+  bond.shard_add_epochs = {0, 0}; // v6 coupling
 
   const std::vector<uint8_t> encoded = bond.encode();
   ASSERT_FALSE(encoded.empty());
@@ -294,15 +294,17 @@ TEST(archival_substrate_lmdb, bond_v5_encode_version_byte)
 
 TEST(archival_substrate_lmdb, slash_revert_value_round_trips)
 {
-  // Direct codec round-trip for the WS-1 v2 slash-revert value: encode →
-  // decode reproduces every field, and the version byte is v2. Guards the
-  // encode/decode symmetry independently of the slash apply/pop flow.
+  // Direct codec round-trip for the v3 slash-revert value: encode → decode
+  // reproduces every field (including the v3 slashed-shard add-epoch), and the
+  // version byte is v3. Guards the encode/decode symmetry independently of the
+  // slash apply/pop flow.
   shekyl::db::ArchivalSlashRevertValue v{};
   std::memset(v.p_id, 0xAB, sizeof(v.p_id));
   v.shard_id = 0x0102030405060708ull;
   v.settlement_epoch = 42;
   v.slashed_amount = 7 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   v.holdings_pre_kind = shekyl::db::ArchivalSlashRevertValue::kPreKindCompleteTree;
+  v.slashed_shard_add_epoch = 17; // v3 field
 
   const std::vector<uint8_t> encoded = v.encode();
   ASSERT_EQ(encoded.size(), shekyl::db::ArchivalSlashRevertValue::kEncodedSize);
@@ -316,6 +318,7 @@ TEST(archival_substrate_lmdb, slash_revert_value_round_trips)
   EXPECT_EQ(decoded.settlement_epoch, v.settlement_epoch);
   EXPECT_EQ(decoded.slashed_amount, v.slashed_amount);
   EXPECT_EQ(decoded.holdings_pre_kind, v.holdings_pre_kind);
+  EXPECT_EQ(decoded.slashed_shard_add_epoch, v.slashed_shard_add_epoch);
 }
 
 TEST(archival_substrate_lmdb, emission_claim_revert_value_round_trips)
@@ -338,7 +341,7 @@ TEST(archival_substrate_lmdb, emission_claim_revert_value_round_trips)
   EXPECT_EQ(decoded.pre_claimed_epochs, v.pre_claimed_epochs);
 }
 
-TEST(archival_substrate_lmdb, bond_v5_empty_claimed_defaults)
+TEST(archival_substrate_lmdb, bond_v6_empty_claimed_defaults)
 {
   const std::vector<uint8_t> encoded = baseline_bond().encode();
   shekyl::db::ArchivalBondValue decoded{};
@@ -347,7 +350,7 @@ TEST(archival_substrate_lmdb, bond_v5_empty_claimed_defaults)
   EXPECT_EQ(decoded.first_paying_emission_height, 0u);
 }
 
-TEST(archival_substrate_lmdb, bond_v5_claimed_cap_rejected_at_decode)
+TEST(archival_substrate_lmdb, bond_v6_claimed_cap_rejected_at_decode)
 {
   // 33 entries — one over the §6.3 cap (W = 26 + 6 reorg slack = 32). Spaced
   // within the span bound is impossible at this count, but the cap check is
@@ -361,7 +364,7 @@ TEST(archival_substrate_lmdb, bond_v5_claimed_cap_rejected_at_decode)
   EXPECT_FALSE(shekyl::db::ArchivalBondValue::decode(blob.data(), blob.size(), decoded));
 }
 
-TEST(archival_substrate_lmdb, bond_v5_claimed_non_monotone_rejected_at_decode)
+TEST(archival_substrate_lmdb, bond_v6_claimed_non_monotone_rejected_at_decode)
 {
   shekyl::db::ArchivalBondValue decoded{};
 
@@ -376,7 +379,7 @@ TEST(archival_substrate_lmdb, bond_v5_claimed_non_monotone_rejected_at_decode)
     shekyl::db::ArchivalBondValue::decode(duplicate.data(), duplicate.size(), decoded));
 }
 
-TEST(archival_substrate_lmdb, bond_v5_claimed_span_violation_rejected_at_decode)
+TEST(archival_substrate_lmdb, bond_v6_claimed_span_violation_rejected_at_decode)
 {
   // Span 27 > W = 26: a correct writer prunes below `current − W`, so a wider
   // span is unreachable except through corruption or a writer bug.
@@ -1070,6 +1073,7 @@ shekyl::db::ArchivalBondValue bond_with_v4_fields(const std::vector<uint64_t>& s
   bond.bonded_total_atomic = bonded_total;
   bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
   bond.held_shard_ids = shards;
+  bond.shard_add_epochs.assign(shards.size(), 2); // v6 coupling (join epoch 2)
   bond.claimed_settlement_epochs = {100, 105, 126};
   bond.first_paying_emission_height = 1234567;
   return bond;
@@ -1503,6 +1507,7 @@ TEST(archival_substrate_lmdb, slash_scheduler_slashes_missed_challenge_at_deadli
   seed.bonded_total_atomic = 2 * floor;
   seed.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
   seed.held_shard_ids = {7};
+  seed.shard_add_epochs = {0}; // v6 coupling
   db.put_archival_bond_value(p_miss, seed);
   db.put_archival_bond_value(p_served, seed);
   db.set_total_bonded_atomic(4 * floor);
@@ -1607,6 +1612,7 @@ shekyl::db::ArchivalBondValue unclaimed_bond()
   bond.bonded_total_atomic = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
   bond.held_shard_ids = {7};
+  bond.shard_add_epochs = {0}; // v6 coupling
   return bond;
 }
 
@@ -2005,6 +2011,7 @@ TEST(archival_substrate_lmdb, unbond_revert_value_round_trips)
   v.pre_bonded_total = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   v.pre_holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
   v.pre_shard_ids = {7, 42};
+  v.pre_shard_add_epochs = {3, 5}; // v2: index-parallel add-epochs
   v.pre_bad_intervals = {{5, 6}, {9, 9}};
 
   const std::vector<uint8_t> encoded = v.encode();
@@ -2015,10 +2022,19 @@ TEST(archival_substrate_lmdb, unbond_revert_value_round_trips)
   EXPECT_EQ(out.pre_bonded_total, v.pre_bonded_total);
   EXPECT_EQ(out.pre_holdings_kind, v.pre_holdings_kind);
   EXPECT_EQ(out.pre_shard_ids, v.pre_shard_ids);
+  EXPECT_EQ(out.pre_shard_add_epochs, v.pre_shard_add_epochs);
   EXPECT_EQ(out.pre_bad_intervals, v.pre_bad_intervals);
 
   shekyl::db::ArchivalBondUnbondRevertValue empty{};
   EXPECT_THROW(empty.encode(), std::runtime_error);
+
+  // v2 single-count coupling: a length desync between the two per-shard arrays
+  // cannot round-trip (encode rejects it).
+  shekyl::db::ArchivalBondUnbondRevertValue desync{};
+  desync.pre_bonded_total = 1;
+  desync.pre_shard_ids = {1, 2};
+  desync.pre_shard_add_epochs = {1}; // length mismatch
+  EXPECT_THROW(desync.encode(), std::runtime_error);
 }
 
 // The all-shards last-served marshal (release-cooldown anchor source for a
