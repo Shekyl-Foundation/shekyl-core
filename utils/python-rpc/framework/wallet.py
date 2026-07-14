@@ -847,13 +847,12 @@ class Wallet(object):
         }
         return self.rpc.send_json_rpc_request(set_log_categories)
 
-    def validate_address(self, address, any_net_type = False, allow_openalias = False):
+    def validate_address(self, address, any_net_type = False):
         validate_address = {
             'method': 'validate_address',
             'params': {
                 'address': address,
                 'any_net_type': any_net_type,
-                'allow_openalias': allow_openalias,
             },
             'jsonrpc': '2.0',
             'id': '0'

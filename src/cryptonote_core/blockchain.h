@@ -807,15 +807,12 @@ namespace cryptonote
     /**
      * @brief check the blockchain against a set of checkpoints
      *
-     * If a block fails a checkpoint and enforce is enabled, the blockchain
-     * will be rolled back to two blocks prior to that block.  If enforce
-     * is disabled, as is currently the default case with DNS-based checkpoints,
-     * an error will be printed to the user but no other action will be taken.
+     * If a block fails a checkpoint, the blockchain is rolled back to two
+     * blocks prior to that block.
      *
      * @param points the checkpoints to check against
-     * @param enforce whether or not to take action on failure
      */
-    void check_against_checkpoints(const checkpoints& points, bool enforce);
+    void check_against_checkpoints(const checkpoints& points);
 
     /**
      * @brief loads new checkpoints from a file

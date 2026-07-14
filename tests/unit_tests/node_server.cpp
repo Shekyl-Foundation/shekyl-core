@@ -740,8 +740,6 @@ TEST(cryptonote_protocol_handler, race_condition)
           boost::program_options::command_line_parser({
             "--data-dir",
             (dir / "main").string(),
-            "--disable-dns-checkpoints",
-            "--check-updates=disabled",
             "--fixed-difficulty=1",
             "--block-sync-size=1",
             "--db-sync-mode=fastest:async:50000",
@@ -767,8 +765,6 @@ TEST(cryptonote_protocol_handler, race_condition)
           boost::program_options::command_line_parser({
             "--data-dir",
             (dir / "alt").string(),
-            "--disable-dns-checkpoints",
-            "--check-updates=disabled",
             "--fixed-difficulty=1",
             "--block-sync-size=1",
             "--db-sync-mode=fastest:async:50000",
@@ -1250,8 +1246,6 @@ TEST(node_server, race_condition)
           dir.string(),
           "--no-igd",
           "--add-exclusive-node=127.0.0.1:48080",
-          "--check-updates=disabled",
-          "--disable-dns-checkpoints",
         }).options([]{
           options_description_t options_description{};
           cryptonote::core::init_options(options_description);

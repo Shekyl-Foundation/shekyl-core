@@ -6002,7 +6002,7 @@ bool Blockchain::add_new_block(const block& bl, block_verification_context& bvc,
 //------------------------------------------------------------------
 //TODO: Refactor, consider returning a failure height and letting
 //      caller decide course of action.
-void Blockchain::check_against_checkpoints(const checkpoints& points, bool enforce)
+void Blockchain::check_against_checkpoints(const checkpoints& points)
 {
   const auto& pts = points.get_points();
   bool stop_batch;
@@ -6020,17 +6020,10 @@ void Blockchain::check_against_checkpoints(const checkpoints& points, bool enfor
 
     if (!points.check_block(pt.first, m_db->get_block_hash_from_height(pt.first)))
     {
-      // if asked to enforce checkpoints, roll back to a couple of blocks before the checkpoint
-      if (enforce)
-      {
-        LOG_ERROR("Local blockchain failed to pass a checkpoint, rolling back!");
-        std::list<block> empty;
-        rollback_blockchain_switching(empty, pt.first - 2);
-      }
-      else
-      {
-        LOG_ERROR("WARNING: local blockchain failed to pass a DNS checkpoint, and you could be on a fork. You should either sync up from scratch, OR download a fresh blockchain bootstrap, OR enable checkpoint enforcing with the --enforce-dns-checkpointing command-line option");
-      }
+      // roll back to a couple of blocks before the checkpoint
+      LOG_ERROR("Local blockchain failed to pass a checkpoint, rolling back!");
+      std::list<block> empty;
+      rollback_blockchain_switching(empty, pt.first - 2);
     }
   }
   if (stop_batch)
@@ -6047,7 +6040,7 @@ bool Blockchain::update_checkpoints(const std::string& file_path)
       return false;
   }
 
-  check_against_checkpoints(m_checkpoints, true);
+  check_against_checkpoints(m_checkpoints);
 
   return true;
 }

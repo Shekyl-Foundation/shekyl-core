@@ -551,10 +551,6 @@ setting the following configuration parameters and environment variables:
   the config file to disable listening for connections on external interfaces.
 * `--no-igd` on the command line or `no-igd=1` in the config file to disable IGD
   (UPnP port forwarding negotiation), which is pointless with Tor.
-* `DNS_PUBLIC=tcp` or `DNS_PUBLIC=tcp://x.x.x.x` where x.x.x.x is the IP of the
-  desired DNS server, for DNS requests to go over TCP, so that they are routed
-  through Tor. When IP is not specified, shekyld uses the default list of
-  servers defined in [src/common/dns_utils.cpp](src/common/dns_utils.cpp).
 * `TORSOCKS_ALLOW_INBOUND=1` to tell torsocks to allow shekyld to bind to interfaces
    to accept connections from the wallet. On some Linux systems, torsocks
    allows binding to localhost by default, so setting this variable is only
@@ -571,7 +567,7 @@ setting the following configuration parameters and environment variables:
 Example command line to start shekyld through Tor:
 
 ```bash
-DNS_PUBLIC=tcp torsocks shekyld --p2p-bind-ip 127.0.0.1 --no-igd
+torsocks shekyld --p2p-bind-ip 127.0.0.1 --no-igd
 ```
 
 A helper script is in `contrib/tor/`. It assumes Tor is installed
@@ -585,7 +581,7 @@ allow inbound connections. Full example:
 
 ```bash
 sudo iptables -I OUTPUT 2 -p tcp -d 127.0.0.1 -m tcp --dport 11029 -j ACCEPT
-DNS_PUBLIC=tcp torsocks ./shekyld --p2p-bind-ip 127.0.0.1 --no-igd --rpc-bind-ip 127.0.0.1 \
+torsocks ./shekyld --p2p-bind-ip 127.0.0.1 --no-igd --rpc-bind-ip 127.0.0.1 \
     --data-dir /home/amnesia/Persistent/your/directory/to/the/blockchain
 ```
 
