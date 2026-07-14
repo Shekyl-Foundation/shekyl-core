@@ -164,6 +164,27 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON: u8 = 35;
 /// shards (P2B-7 Pin 1: `Bonded → Bonded`; an Exited or slash-emptied record
 /// re-enters via JoinMarket/Rebond, never a voluntary adjustment).
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED: u8 = 36;
+/// `Rebond` verify (gate-4 §3.4; P2B-9): the vin's post_kind is not Rebond.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND: u8 = 37;
+/// Rebond verify: the record is CompleteTree (unrepresentable — demotion flips
+/// the kind atomically with the interval append; belt).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE: u8 = 38;
+/// Rebond verify: the vin's post-holdings are not ShardSetCompact.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_NOT_COMPACT: u8 = 39;
+/// Rebond verify: no open bad interval — the record is not slashed.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED: u8 = 40;
+/// Rebond verify: more than one open bad interval (P2B-9 Pin 5 coalescing
+/// invariant broken — record corruption).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN: u8 = 41;
+/// Rebond verify: interval log lacks headroom (> 254 entries; Pin 6 reserves one
+/// slot for the next slash + one for the Unbond clean close).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM: u8 = 42;
+/// Rebond verify: terms mismatch (debit nonzero, or credit != bond_floor(post) −
+/// record bonded_total, or post bonded_total != bond_floor(post)).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS: u8 = 43;
+/// Rebond verify: post-holdings are not a duplicate-free superset of the record's
+/// current holdings (Pin 1 — reinstatement, not restructuring).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET: u8 = 44;
 
 /// `Unbond` connect/pop fold succeeded (gate-4 §4.3 / §5).
 pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_OK: u8 = 0;
@@ -615,6 +636,22 @@ fn map_bond_post_error(err: BondPostError) -> u8 {
         BondPostError::HoldingsUpdateRecordNotBonded => {
             SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED
         }
+        BondPostError::PostKindNotRebond => SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND,
+        BondPostError::RebondOnCompleteTree => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE
+        }
+        BondPostError::RebondPostNotCompact => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_NOT_COMPACT
+        }
+        BondPostError::RebondNotSlashed => SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED,
+        BondPostError::RebondMultipleOpenIntervals => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN
+        }
+        BondPostError::RebondIntervalLogHeadroom => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM
+        }
+        BondPostError::RebondTerms => SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS,
+        BondPostError::RebondNotSuperset => SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET,
     }
 }
 

@@ -23,7 +23,7 @@
 use thiserror::Error;
 
 use crate::bond_floor::{bond_floor_of, ARCHIVAL_BOND_FLOOR_ATOMIC};
-use crate::bond_post::{single_shard_diff, SingleDiff};
+use crate::bond_post::{single_shard_diff, superset_added_diff, SingleDiff};
 use crate::bond_wire::{HoldingsDescriptor, HoldingsKind};
 use crate::consensus_state::BadInterval;
 
@@ -414,6 +414,161 @@ pub fn holdings_update_pop(
         total_bonded_atomic.checked_sub(current_record_bonded_total - journal_pre_bonded_total)
     };
     restored.ok_or(HoldingsUpdatePopError::CounterRange)
+}
+
+#[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
+pub enum RebondConnectError {
+    /// The post set is not a duplicate-free superset of the record's holdings —
+    /// verify's `RebondNotSuperset`.
+    #[error("Rebond post-holdings are not a duplicate-free superset of current")]
+    NotSuperset,
+    /// Empty post — verify's `ShardSetCompactEmpty` (reinstatement needs a position).
+    #[error("Rebond post-holdings are empty")]
+    EmptyPost,
+    /// The record's `bonded_total == bond_floor(holdings)` invariant (§3.2) does
+    /// not hold — record corruption, not a tx fault.
+    #[error("record bonded_total != bond_floor(record holdings)")]
+    RecordFloorInvariantBroken,
+    /// No open bad interval — the record is not slashed; verify's `RebondNotSlashed`.
+    #[error("no open bad interval to close (record not slashed)")]
+    NoOpenInterval,
+    /// More than one open bad interval — corruption of the P2B-9 Pin 5 coalescing
+    /// invariant (the loud multiplicity belt).
+    #[error("multiple open bad intervals (coalescing invariant broken)")]
+    MultipleOpenIntervals,
+    /// `E_rebond + 1` does not lie strictly after the open interval's start — the
+    /// slash would have to postdate the reinstatement (corruption).
+    #[error("interval close E_rebond + 1 is not after the open interval's start")]
+    IntervalOrdering,
+    /// Counter/epoch arithmetic over/underflow.
+    #[error("counter or epoch arithmetic out of range on Rebond")]
+    CounterRange,
+}
+
+/// The `Rebond` connect effect (gate-4 §3.4; P2B-9). The C++ arm journals the
+/// record's pre-image (bonded_total, held shards, add-epochs, the closed
+/// interval's index + pre-image), then: sets `held_shard_ids = post` and rebuilds
+/// the index-parallel `shard_add_epochs` — carried shards keep their add-epochs,
+/// every `added_shard_ids` member takes `add_settlement_epoch` (`E_rebond`,
+/// Pin 7) — and closes the open bad interval **in place**:
+/// `bad_intervals[closed_interval_index].end_exclusive = interval_end_exclusive`
+/// (`E_rebond + 1`, Pin 3 — standing resumes at `E_rebond + 1`; the partial rebond
+/// epoch is forfeited in both directions). The counter movement is the absolute
+/// post-value, threaded per post (the `UnbondConnect` note). No interval is
+/// appended and none removed — post-connect `bad_intervals.len()` is unchanged,
+/// which is what the verify-side `≤ 254` headroom (Pin 6) budgeted for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RebondConnect {
+    /// `post ∖ current` — each takes `add_settlement_epoch` as its add-epoch.
+    pub added_shard_ids: Vec<u64>,
+    /// `E_rebond` (the connecting block's settlement epoch).
+    pub add_settlement_epoch: u64,
+    /// Index into the record's `bad_intervals` of the one open interval to close.
+    pub closed_interval_index: usize,
+    /// `E_rebond + 1` — the value to write into the closed interval's
+    /// `end_exclusive`.
+    pub interval_end_exclusive: u64,
+    /// `record_bonded_total + |added|·FLOOR` (`== bond_floor(post)`).
+    pub new_bonded_total: u64,
+    /// `total_bonded_atomic + |added|·FLOOR` (absolute — thread per post).
+    pub new_total_bonded_atomic: u64,
+}
+
+/// Fold the `Rebond` connect: validate the superset re-spec, the record's floor
+/// invariant, and the single open interval, and produce the interval close + the
+/// counter movement.
+pub fn rebond_connect(
+    record_bonded_total: u64,
+    record_held_shard_ids: &[u64],
+    record_bad_intervals: &[BadInterval],
+    post_held_shard_ids: &[u64],
+    total_bonded_atomic: u64,
+    rebond_settlement_epoch: u64,
+) -> Result<RebondConnect, RebondConnectError> {
+    if post_held_shard_ids.is_empty() {
+        return Err(RebondConnectError::EmptyPost);
+    }
+    let Some(added_shard_ids) = superset_added_diff(record_held_shard_ids, post_held_shard_ids)
+    else {
+        return Err(RebondConnectError::NotSuperset);
+    };
+    if bond_floor_of(HoldingsKind::ShardSetCompact, record_held_shard_ids.len())
+        != record_bonded_total
+    {
+        return Err(RebondConnectError::RecordFloorInvariantBroken);
+    }
+    let mut open_indices = record_bad_intervals
+        .iter()
+        .enumerate()
+        .filter(|(_, iv)| iv.end_exclusive == u64::MAX)
+        .map(|(i, _)| i);
+    let Some(closed_interval_index) = open_indices.next() else {
+        return Err(RebondConnectError::NoOpenInterval);
+    };
+    if open_indices.next().is_some() {
+        return Err(RebondConnectError::MultipleOpenIntervals);
+    }
+    let interval_end_exclusive = rebond_settlement_epoch
+        .checked_add(1)
+        .ok_or(RebondConnectError::CounterRange)?;
+    // The slash that opened the interval predates the reinstatement, so the close
+    // must land strictly after the open's start — anything else is corruption.
+    if interval_end_exclusive <= record_bad_intervals[closed_interval_index].start_epoch {
+        return Err(RebondConnectError::IntervalOrdering);
+    }
+    let credit = (added_shard_ids.len() as u64)
+        .checked_mul(ARCHIVAL_BOND_FLOOR_ATOMIC)
+        .ok_or(RebondConnectError::CounterRange)?;
+    let new_bonded_total = record_bonded_total
+        .checked_add(credit)
+        .ok_or(RebondConnectError::CounterRange)?;
+    let new_total_bonded_atomic = total_bonded_atomic
+        .checked_add(credit)
+        .ok_or(RebondConnectError::CounterRange)?;
+    Ok(RebondConnect {
+        added_shard_ids,
+        add_settlement_epoch: rebond_settlement_epoch,
+        closed_interval_index,
+        interval_end_exclusive,
+        new_bonded_total,
+        new_total_bonded_atomic,
+    })
+}
+
+#[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
+pub enum RebondPopError {
+    /// The per-`P` balance moved by something other than a non-negative whole
+    /// number of `FLOOR`s between the journaled pre-image and the tip record —
+    /// the journal does not describe a `Rebond` at this height.
+    #[error("Rebond pop delta is not a non-negative whole number of FLOORs")]
+    NotRebondDelta,
+    /// Re-applying the counter delta would underflow.
+    #[error("total_bonded_atomic underflow on Rebond pop")]
+    CounterRange,
+}
+
+/// Fold the `Rebond` pop twin (gate-4 §5): the C++ arm restores the record's
+/// fields from the pre-image journal byte-identically (held shards, add-epochs,
+/// bonded_total, and the closed interval re-opened to `end_exclusive = MAX`);
+/// this fold reverts the global `total_bonded_atomic` by the connect's
+/// `|added|·FLOOR` credit. A `Rebond` only grows the balance, so the tip record's
+/// `bonded_total` must exceed the journaled pre-image by a non-negative whole
+/// number of `FLOOR`s — **zero included** (the common standing-only
+/// reinstatement moves no collateral).
+pub fn rebond_pop(
+    current_record_bonded_total: u64,
+    journal_pre_bonded_total: u64,
+    total_bonded_atomic: u64,
+) -> Result<u64, RebondPopError> {
+    let Some(delta) = current_record_bonded_total.checked_sub(journal_pre_bonded_total) else {
+        return Err(RebondPopError::NotRebondDelta);
+    };
+    if delta % ARCHIVAL_BOND_FLOOR_ATOMIC != 0 {
+        return Err(RebondPopError::NotRebondDelta);
+    }
+    total_bonded_atomic
+        .checked_sub(delta)
+        .ok_or(RebondPopError::CounterRange)
 }
 
 #[cfg(test)]
@@ -833,6 +988,174 @@ mod tests {
                 HU_TOTAL,
             ),
             Err(HoldingsUpdatePopError::NotSingleShardDelta)
+        );
+    }
+
+    // ── Rebond connect/pop (P2B-9) ────────────────────────────────────────────
+
+    const RB_EPOCH: u64 = 20;
+    const RB_TOTAL: u64 = 9 * ARCHIVAL_BOND_FLOOR_ATOMIC;
+
+    fn rb_open(start: u64) -> BadInterval {
+        BadInterval {
+            start_epoch: start,
+            end_exclusive: u64::MAX,
+        }
+    }
+
+    fn rb_closed(start: u64, end: u64) -> BadInterval {
+        BadInterval {
+            start_epoch: start,
+            end_exclusive: end,
+        }
+    }
+
+    #[test]
+    fn rebond_connect_standing_only_moves_no_collateral() {
+        let intervals = [rb_closed(2, 3), rb_open(5)];
+        let e = rebond_connect(
+            2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+            &[7, 9],
+            &intervals,
+            &[7, 9],
+            RB_TOTAL,
+            RB_EPOCH,
+        )
+        .unwrap();
+        assert!(e.added_shard_ids.is_empty());
+        assert_eq!(e.add_settlement_epoch, RB_EPOCH);
+        assert_eq!(e.closed_interval_index, 1);
+        assert_eq!(e.interval_end_exclusive, RB_EPOCH + 1); // Pin 3
+        assert_eq!(e.new_bonded_total, 2 * ARCHIVAL_BOND_FLOOR_ATOMIC);
+        assert_eq!(e.new_total_bonded_atomic, RB_TOTAL);
+    }
+
+    #[test]
+    fn rebond_connect_growth_credits_added_floors() {
+        // Terminal-slash reinstatement: empty current, two shards re-specified.
+        let e = rebond_connect(0, &[], &[rb_open(5)], &[7, 11], RB_TOTAL, RB_EPOCH).unwrap();
+        assert_eq!(e.added_shard_ids, vec![7, 11]);
+        assert_eq!(e.new_bonded_total, 2 * ARCHIVAL_BOND_FLOOR_ATOMIC);
+        assert_eq!(
+            e.new_total_bonded_atomic,
+            RB_TOTAL + 2 * ARCHIVAL_BOND_FLOOR_ATOMIC
+        );
+    }
+
+    #[test]
+    fn rebond_connect_rejects_shape_and_invariant_breaches() {
+        let intervals = [rb_open(5)];
+        assert_eq!(
+            rebond_connect(0, &[], &intervals, &[], RB_TOTAL, RB_EPOCH),
+            Err(RebondConnectError::EmptyPost)
+        );
+        assert_eq!(
+            rebond_connect(
+                2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+                &[7, 9],
+                &intervals,
+                &[7, 13], // swap
+                RB_TOTAL,
+                RB_EPOCH,
+            ),
+            Err(RebondConnectError::NotSuperset)
+        );
+        assert_eq!(
+            rebond_connect(
+                ARCHIVAL_BOND_FLOOR_ATOMIC, // != 2·FLOOR for two shards
+                &[7, 9],
+                &intervals,
+                &[7, 9],
+                RB_TOTAL,
+                RB_EPOCH,
+            ),
+            Err(RebondConnectError::RecordFloorInvariantBroken)
+        );
+        assert_eq!(
+            rebond_connect(
+                2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+                &[7, 9],
+                &[rb_closed(2, 3)], // nothing open
+                &[7, 9],
+                RB_TOTAL,
+                RB_EPOCH,
+            ),
+            Err(RebondConnectError::NoOpenInterval)
+        );
+        assert_eq!(
+            rebond_connect(
+                2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+                &[7, 9],
+                &[rb_open(5), rb_open(5)], // coalescing invariant broken
+                &[7, 9],
+                RB_TOTAL,
+                RB_EPOCH,
+            ),
+            Err(RebondConnectError::MultipleOpenIntervals)
+        );
+        assert_eq!(
+            rebond_connect(
+                2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+                &[7, 9],
+                &[rb_open(RB_EPOCH + 5)], // slash start after the close point
+                &[7, 9],
+                RB_TOTAL,
+                RB_EPOCH,
+            ),
+            Err(RebondConnectError::IntervalOrdering)
+        );
+    }
+
+    #[test]
+    fn rebond_pop_reverts_growth_and_tolerates_zero_delta() {
+        // Growth of 2·FLOOR reverts exactly.
+        assert_eq!(
+            rebond_pop(
+                3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+                ARCHIVAL_BOND_FLOOR_ATOMIC,
+                RB_TOTAL,
+            ),
+            Ok(RB_TOTAL - 2 * ARCHIVAL_BOND_FLOOR_ATOMIC)
+        );
+        // Standing-only: zero delta, counter unchanged.
+        assert_eq!(
+            rebond_pop(
+                2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+                2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+                RB_TOTAL,
+            ),
+            Ok(RB_TOTAL)
+        );
+    }
+
+    #[test]
+    fn rebond_pop_rejects_shrink_partial_floor_and_underflow() {
+        // A Rebond never shrinks the balance.
+        assert_eq!(
+            rebond_pop(
+                ARCHIVAL_BOND_FLOOR_ATOMIC,
+                2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+                RB_TOTAL,
+            ),
+            Err(RebondPopError::NotRebondDelta)
+        );
+        // Delta must be a whole number of FLOORs.
+        assert_eq!(
+            rebond_pop(
+                2 * ARCHIVAL_BOND_FLOOR_ATOMIC + 1,
+                ARCHIVAL_BOND_FLOOR_ATOMIC,
+                RB_TOTAL,
+            ),
+            Err(RebondPopError::NotRebondDelta)
+        );
+        // Reverting more than the global counter holds is corruption.
+        assert_eq!(
+            rebond_pop(
+                2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+                0,
+                ARCHIVAL_BOND_FLOOR_ATOMIC
+            ),
+            Err(RebondPopError::CounterRange)
         );
     }
 }
