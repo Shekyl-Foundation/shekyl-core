@@ -285,7 +285,7 @@ TEST(archival_substrate_lmdb, bond_v6_encode_version_byte)
   bond.bonded_total_atomic = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   bond.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
   bond.held_shard_ids = {7, 42};
-  bond.shard_add_epochs = {0, 0}; // v6 coupling
+  bond.shard_add_epochs = {1, 1}; // v6: join-time shards carry E_join (= 1)
 
   const std::vector<uint8_t> encoded = bond.encode();
   ASSERT_FALSE(encoded.empty());

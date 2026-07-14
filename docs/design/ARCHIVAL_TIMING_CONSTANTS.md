@@ -54,7 +54,8 @@ would split a normalization the sim never split. **Reference time is age-at-ADD,
 age-at-drop:** the sim arms the retention commitment only on fresh acquisition and
 counts it down (`agent.rs:275-280`, `new_held && !was_held`), so the horizon is fixed
 at acquisition. Consensus matches: `bond_duration` is evaluated once, on the shard's
-`shard_age_milli` computed with `close = the shard's add height` (`ShardAgeAtAdd`,
+`shard_age_milli` computed with `close = H_close(add_epoch) = (add_epoch+1)·SEB` — the
+add-epoch's settlement close, **not** a raw within-epoch add block height (`ShardAgeAtAdd`,
 `bond_duration.rs`). Evaluating at drop height would make `bond_duration` a rising
 target (`shard_age_milli` grows over tenure) — wrong semantics and a
 longer-than-simulated bar. The sim ages linearly while `shard_age_milli` decelerates,

@@ -5620,14 +5620,17 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
     // HoldingsUpdate-drop slice must revisit when voluntary removal lands.
     if (it == shards.end())
       throw std::runtime_error("FATAL: archival slash apply for a shard the record does not hold");
-    // v6 coupling: capture then erase the same index from the parallel
-    // add-epoch array.
+    // v6 coupling is STRICT: the two per-shard arrays are index-parallel, so
+    // the found index is always in range. A size mismatch is record
+    // corruption, not a tolerable desync — fail loudly here (the connect-fold
+    // posture) rather than skipping the add-epoch erase and surfacing it later
+    // as an opaque encode-time throw with the arrays already mismatched.
     const size_t idx = static_cast<size_t>(it - shards.begin());
-    if (idx < bond.shard_add_epochs.size())
-    {
-      slashed_shard_add_epoch = bond.shard_add_epochs[idx];
-      bond.shard_add_epochs.erase(bond.shard_add_epochs.begin() + idx);
-    }
+    if (idx >= bond.shard_add_epochs.size())
+      throw std::runtime_error(
+        "FATAL: shard_add_epochs desynced from held_shard_ids on slash apply");
+    slashed_shard_add_epoch = bond.shard_add_epochs[idx];
+    bond.shard_add_epochs.erase(bond.shard_add_epochs.begin() + idx);
     shards.erase(it);
     shekyl::db::ArchivalBondValue::BadInterval iv{};
     iv.start_epoch = settlement_epoch;

@@ -195,7 +195,7 @@ fn main() {
          pub const BOND_DURATION_BASE_EPOCHS: u64 = {bond_duration_base_epochs};\n\
          pub const BOND_DURATION_AGE_SCALE: u64 = {bond_duration_age_scale};\n"
     );
-    fs::write(&out_file, output).expect("failed writing archival bond floor constant");
+    fs::write(&out_file, output).expect("failed writing generated archival consensus constants");
 
     let k_cover_file = out_dir.join("k_cover_generated.rs");
     let k_cover_output = format!(

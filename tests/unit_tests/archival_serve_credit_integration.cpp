@@ -305,7 +305,7 @@ void seed_substrate(ArchivalServeCreditIntegrationDB& db, const IntegrationKat& 
   bond.hybrid_pubkey = bytes_from_hex(kat.bond_pubkey_hex);
   bond.join_settlement_epoch = kat.join_epoch;
   bond.held_shard_ids = {kat.shard_id};
-  bond.shard_add_epochs.assign(bond.held_shard_ids.size(), 0); // v6 coupling
+  bond.shard_add_epochs.assign(bond.held_shard_ids.size(), kat.join_epoch); // v6: join-time shards carry E_join
   db.put_bond(p_id, std::move(bond));
 
   shekyl::db::ArchivalShardSegmentValue segment{};

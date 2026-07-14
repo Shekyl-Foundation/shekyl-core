@@ -24,7 +24,7 @@
   "release_cooldown_epochs": 2,
   "challenge_resolution_blocks": 10000,
 
-  "_comment_bond_duration": "Per-shard retention-commitment horizon (gate-4 §4.4; ARCHIVAL_TIMING_CONSTANTS.md §1). Shape genesis-frozen (age-scaled-constant: bond_duration(age) = BASE * (1 + SCALE * age)); numerics provisional (H2 plateau arm, re-pin at testnet within scale band [2,8]). Age is shard_age_milli @ the shard's add height (the age-realization invariant), evaluated once at acquisition.",
+  "_comment_bond_duration": "Per-shard retention-commitment horizon (gate-4 §4.4; ARCHIVAL_TIMING_CONSTANTS.md §1). Shape genesis-frozen (age-scaled-constant: bond_duration(age) = BASE * (1 + SCALE * age)); numerics provisional (H2 plateau arm, re-pin at testnet within scale band [2,8]). Age is shard_age_milli evaluated at the shard's add-epoch settlement close H_close(add_epoch) = (add_epoch+1)*SEB (NOT a raw within-epoch add block height; the age-realization invariant), computed once at acquisition.",
   "bond_duration_base_epochs": 4,
   "bond_duration_age_scale": 4,
 

@@ -14,9 +14,11 @@
     bond_duration`): `BASE·(1 + SCALE·age)`, **integer-canonical** (round-half-up,
     floored at 1; no float in consensus). `BOND_DURATION_{BASE_EPOCHS,AGE_SCALE}`
     = 4/4 (H2 plateau arm, provisional within the scale band [2,8]) wired
-    config → `generate_consensus_constants.py` → `build.rs` → `constants.rs`,
-    with the C++ header emitting the same values for cross-language parity (no
-    C++ consumer at genesis — the bond-FSM verify is Rust-native).
+    from `config/consensus_constants.json` through `build.rs` (emitted into the
+    OUT_DIR-generated include that `bond_floor.rs` pulls in) and, in parallel,
+    through `generate_consensus_constants.py` into the C++ constants header for
+    cross-language parity (no C++ consumer at genesis — the bond-FSM verify is
+    Rust-native).
   - **`ShardAgeAtAdd` newtype** makes two consensus properties unrepresentable
     at the type rather than tested-against: the age is evaluated **at add, not
     at drop** (the sim arms the lock on fresh acquisition and counts down, so a
