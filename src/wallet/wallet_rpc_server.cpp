@@ -1031,7 +1031,6 @@ namespace tools
     {
       cryptonote::address_parse_info info;
       cryptonote::tx_destination_entry de;
-      er.message = "";
       if(!get_account_address_from_str(info, m_wallet->nettype(), it->address))
       {
         er.code = WALLET_RPC_ERROR_CODE_WRONG_ADDRESS;
@@ -2370,10 +2369,10 @@ namespace tools
     }
 
     cryptonote::address_parse_info info;
-    er.message = "";
     if(!get_account_address_from_str(info, m_wallet->nettype(), req.address))
     {
       er.code = WALLET_RPC_ERROR_CODE_WRONG_ADDRESS;
+      er.message = std::string("WALLET_RPC_ERROR_CODE_WRONG_ADDRESS: ") + req.address;
       return false;
     }
 
@@ -3119,7 +3118,6 @@ namespace tools
     CHECK_IF_BACKGROUND_SYNCING();
 
     cryptonote::address_parse_info info;
-    er.message = "";
     if(!get_account_address_from_str(info, m_wallet->nettype(), req.address))
     {
       er.code = WALLET_RPC_ERROR_CODE_WRONG_ADDRESS;
@@ -3160,7 +3158,6 @@ namespace tools
     cryptonote::address_parse_info info;
     if (req.set_address)
     {
-      er.message = "";
       if(!get_account_address_from_str(info, m_wallet->nettype(), req.address))
       {
         er.code = WALLET_RPC_ERROR_CODE_WRONG_ADDRESS;
