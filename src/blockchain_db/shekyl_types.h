@@ -519,21 +519,18 @@ private:
 };
 
 struct ArchivalSlashRevertValue {
-    // v2 (WS-1, REWARD_EMISSION_E3_GATING_ROUND.md §5) appends the pre-slash
-    // holdings kind. v1 could not distinguish a complete-tree demotion (which
-    // cleared *all* holdings) from a compact erase of a bond's last shard, so
-    // (a) pop-revert restored the pre-image by an amount/emptiness heuristic
-    // that mis-restores a slashed single-shard compact bond to complete-tree,
-    // and (b) as-of-height holdings reconstruction from the log was ambiguous.
-    // v1 is rejected at decode per the pre-genesis posture: no migration,
-    // reset the data directory.
-    // v3 (HoldingsUpdate record v6) appends the slashed shard's add-epoch, so a
-    // compact-slash pop restores the reverted shard's per-shard add-epoch
-    // (index-parallel `shard_add_epochs`) exactly, not just its id. v2 (WS-1,
-    // REWARD_EMISSION_E3_GATING_ROUND.md §5) appended the pre-slash holdings
-    // kind. v1 could not distinguish a complete-tree demotion (which cleared
-    // *all* holdings) from a compact erase of a bond's last shard. Prior
-    // versions are rejected at decode per the pre-genesis posture: no
+    // Version history (newest first):
+    // - v3 (HoldingsUpdate record v6) appends the slashed shard's add-epoch, so a
+    //   compact-slash pop restores the reverted shard's per-shard add-epoch
+    //   (index-parallel `shard_add_epochs`) exactly, not just its id.
+    // - v2 (WS-1, REWARD_EMISSION_E3_GATING_ROUND.md §5) appended the pre-slash
+    //   holdings kind, so pop-revert restores the recorded pre-image directly
+    //   instead of guessing complete-tree-vs-compact by an amount/emptiness
+    //   heuristic (which mis-restored a slashed single-shard compact bond to
+    //   complete-tree, and left as-of-height reconstruction ambiguous).
+    // - v1 could not distinguish a complete-tree demotion (which cleared *all*
+    //   holdings) from a compact erase of a bond's last shard.
+    // Prior versions are rejected at decode per the pre-genesis posture: no
     // migration, reset the data directory.
     static constexpr uint8_t kVersion = 3;
     static constexpr size_t kEncodedSize = 1 + 32 + 8 + 8 + 8 + 1 + 8;
@@ -925,9 +922,13 @@ struct ArchivalBondValue {
     /// `HoldingsUpdate`-add appends the new shard's `E_add`. It powers both the
     /// drop-eligibility gate (`current − add_epoch ≥ bond_duration(ShardAgeAtAdd)`,
     /// gate-4 §4.4) and per-shard `E_add+1` serve-credit counting (P2B-7 Pin 5).
-    /// The codec couples the two arrays under ONE `holdings_count`, so a length
-    /// desync is unrepresentable in the persisted form; the accessor/mutation
-    /// helpers keep them coupled in memory.
+    /// The codec couples the two arrays under ONE `holdings_count` (`encode`
+    /// throws on a length mismatch; `decode` reads `holdings_count` entries into
+    /// each), so a length desync is unrepresentable in the persisted form. In
+    /// memory the coupling is call-site discipline: every mutation site
+    /// (`put_archival_bond_record`, slash apply/revert, Unbond and HoldingsUpdate
+    /// connect/pop) adds or removes the matching index in both arrays — there is
+    /// no accessor that enforces it, and the `encode` throw is the backstop.
     std::vector<uint64_t> shard_add_epochs;
     std::vector<BadInterval> bad_intervals;
     /// Strictly increasing absolute settlement-epoch indices already claimed
