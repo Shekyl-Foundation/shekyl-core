@@ -120,20 +120,12 @@ struct t_internals {
   {
     // === core ===
     MGINFO("Initializing core...");
-    if (command_line::is_arg_defaulted(vm, daemon_args::arg_proxy)
-        && command_line::get_arg(vm, daemon_args::arg_proxy_allow_dns_leaks))
-    {
-      MLOG_RED(el::Level::Warning, "--" << daemon_args::arg_proxy_allow_dns_leaks.name
-        << " is enabled, but --" << daemon_args::arg_proxy.name << " is not specified.");
-    }
 #if defined(PER_BLOCK_CHECKPOINT)
     cryptonote::GetCheckpointsCallback const & get_checkpoints = blocks::GetCheckpointsData;
 #else
     cryptonote::GetCheckpointsCallback const & get_checkpoints = nullptr;
 #endif
-    const bool allow_dns = command_line::is_arg_defaulted(vm, daemon_args::arg_proxy)
-      || command_line::get_arg(vm, daemon_args::arg_proxy_allow_dns_leaks);
-    if (!core.init(vm, nullptr, get_checkpoints, allow_dns))
+    if (!core.init(vm, nullptr, get_checkpoints))
     {
       throw std::runtime_error("Failed to initialize core");
     }
@@ -150,8 +142,7 @@ struct t_internals {
     // === p2p ===
     MGINFO("Initializing p2p server...");
     if (!p2p.init(vm,
-        command_line::get_arg(vm, daemon_args::arg_proxy),
-        command_line::get_arg(vm, daemon_args::arg_proxy_allow_dns_leaks)))
+        command_line::get_arg(vm, daemon_args::arg_proxy)))
     {
       throw std::runtime_error("Failed to initialize p2p server.");
     }

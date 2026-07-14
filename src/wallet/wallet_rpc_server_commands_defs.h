@@ -47,7 +47,7 @@
 // advance which version they will stop working with
 // Don't go over 32767 for any of these
 #define WALLET_RPC_VERSION_MAJOR 2
-#define WALLET_RPC_VERSION_MINOR 0
+#define WALLET_RPC_VERSION_MINOR 1
 #define MAKE_WALLET_RPC_VERSION(major,minor) (((major)<<16)|(minor))
 #define WALLET_RPC_VERSION MAKE_WALLET_RPC_VERSION(WALLET_RPC_VERSION_MAJOR, WALLET_RPC_VERSION_MINOR)
 namespace tools
@@ -2222,12 +2222,10 @@ namespace wallet_rpc
     {
       std::string address;
       bool any_net_type;
-      bool allow_openalias;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(address)
         KV_SERIALIZE_OPT(any_net_type, false)
-        KV_SERIALIZE_OPT(allow_openalias, false)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<request_t> request;
@@ -2238,14 +2236,12 @@ namespace wallet_rpc
       bool integrated;
       bool subaddress;
       std::string nettype;
-      std::string openalias_address;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(valid)
         KV_SERIALIZE(integrated)
         KV_SERIALIZE(subaddress)
         KV_SERIALIZE(nettype)
-        KV_SERIALIZE(openalias_address)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

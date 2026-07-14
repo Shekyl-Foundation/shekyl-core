@@ -81,7 +81,6 @@ using namespace epee;
 #include "common/json_util.h"
 #include "memwipe.h"
 #include "common/combinator.h"
-#include "common/dns_utils.h"
 #include "common/notify.h"
 #include "common/perf_timer.h"
 #include "fcmp/rctSigs.h"

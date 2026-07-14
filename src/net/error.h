@@ -38,9 +38,7 @@ namespace net
     enum class error : int
     {
         // 0 reserved for success (as per expect<T>)
-        bogus_dnssec = 1,   //!< Invalid response signature from DNSSEC enabled domain
-        dns_query_failure,  //!< Failed to retrieve desired DNS record
-        expected_tld,       //!< Expected a tld
+        expected_tld = 1,   //!< Expected a tld
         invalid_encoding,   //!< Invalid percent encoding
         invalid_host,       //!< Hostname is not valid
         invalid_i2p_address,

@@ -48,10 +48,6 @@ namespace
         {
             switch (net::error(value))
             {
-            case net::error::bogus_dnssec:
-                return "Invalid response signature from DNSSEC enabled domain";
-            case net::error::dns_query_failure:
-                return "Failed to retrieve desired DNS record";
             case net::error::expected_tld:
                 return "Expected top-level domain";
             case net::error::invalid_encoding:

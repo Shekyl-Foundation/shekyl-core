@@ -881,9 +881,6 @@ ExternalProject_Add(generate_translations_header
 include_directories("${CMAKE_CURRENT_BINARY_DIR}/translations")
 add_subdirectory(external)
 
-# Final setup for libunbound
-include_directories(${UNBOUND_INCLUDE_DIR})
-
 # Final setup for liblmdb
 include_directories(${LMDB_INCLUDE})
 

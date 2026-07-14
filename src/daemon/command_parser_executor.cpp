@@ -26,7 +26,6 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "common/dns_utils.h"
 #include "common/command_line.h"
 #include "net/parse.h"
 #include "daemon/command_parser_executor.h"
@@ -382,28 +381,8 @@ bool t_command_parser_executor::start_mining(const std::vector<std::string>& arg
     {
       if(!cryptonote::get_account_address_from_str(info, cryptonote::STAGENET, args.front()))
       {
-        bool dnssec_valid;
-        std::string address_str = tools::dns_utils::get_account_address_as_str_from_url(args.front(), dnssec_valid,
-            [](const std::string &url, const std::vector<std::string> &addresses, bool dnssec_valid){return addresses[0];});
-        if(!cryptonote::get_account_address_from_str(info, cryptonote::MAINNET, address_str))
-        {
-          if(!cryptonote::get_account_address_from_str(info, cryptonote::TESTNET, address_str))
-          {
-            if(!cryptonote::get_account_address_from_str(info, cryptonote::STAGENET, address_str))
-            {
-              std::cout << "Invalid syntax: Target account address has wrong format. For more details, use the help command." << std::endl;
-              return true;
-            }
-            else
-            {
-              nettype = cryptonote::STAGENET;
-            }
-          }
-          else
-          {
-            nettype = cryptonote::TESTNET;
-          }
-        }
+        std::cout << "Invalid syntax: Target account address has wrong format. For more details, use the help command." << std::endl;
+        return true;
       }
       else
       {
@@ -887,17 +866,6 @@ bool t_command_parser_executor::print_blockchain_dynamic_stats(const std::vector
   }
 
   return m_executor.print_blockchain_dynamic_stats(nblocks);
-}
-
-bool t_command_parser_executor::update(const std::vector<std::string>& args)
-{
-  if (args.size() != 1)
-  {
-    std::cout << "Invalid syntax: One parameter expected. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  return m_executor.update(args.front());
 }
 
 bool t_command_parser_executor::relay_tx(const std::vector<std::string>& args)

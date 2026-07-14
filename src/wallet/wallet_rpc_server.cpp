@@ -1032,24 +1032,10 @@ namespace tools
       cryptonote::address_parse_info info;
       cryptonote::tx_destination_entry de;
       er.message = "";
-      if(!get_account_address_from_str_or_url(info, m_wallet->nettype(), it->address,
-        [&er](const std::string &url, const std::vector<std::string> &addresses, bool dnssec_valid)->std::string {
-          if (!dnssec_valid)
-          {
-            er.message = std::string("Invalid DNSSEC for ") + url;
-            return {};
-          }
-          if (addresses.empty())
-          {
-            er.message = std::string("No Shekyl address found at ") + url;
-            return {};
-          }
-          return addresses[0];
-        }))
+      if(!get_account_address_from_str(info, m_wallet->nettype(), it->address))
       {
         er.code = WALLET_RPC_ERROR_CODE_WRONG_ADDRESS;
-        if (er.message.empty())
-          er.message = std::string("WALLET_RPC_ERROR_CODE_WRONG_ADDRESS: ") + it->address;
+        er.message = std::string("WALLET_RPC_ERROR_CODE_WRONG_ADDRESS: ") + it->address;
         return false;
       }
 
@@ -2385,20 +2371,7 @@ namespace tools
 
     cryptonote::address_parse_info info;
     er.message = "";
-    if(!get_account_address_from_str_or_url(info, m_wallet->nettype(), req.address,
-      [&er](const std::string &url, const std::vector<std::string> &addresses, bool dnssec_valid)->std::string {
-        if (!dnssec_valid)
-        {
-          er.message = std::string("Invalid DNSSEC for ") + url;
-          return {};
-        }
-        if (addresses.empty())
-        {
-          er.message = std::string("No Shekyl address found at ") + url;
-          return {};
-        }
-        return addresses[0];
-      }))
+    if(!get_account_address_from_str(info, m_wallet->nettype(), req.address))
     {
       er.code = WALLET_RPC_ERROR_CODE_WRONG_ADDRESS;
       return false;
@@ -3147,24 +3120,10 @@ namespace tools
 
     cryptonote::address_parse_info info;
     er.message = "";
-    if(!get_account_address_from_str_or_url(info, m_wallet->nettype(), req.address,
-      [&er](const std::string &url, const std::vector<std::string> &addresses, bool dnssec_valid)->std::string {
-        if (!dnssec_valid)
-        {
-          er.message = std::string("Invalid DNSSEC for ") + url;
-          return {};
-        }
-        if (addresses.empty())
-        {
-          er.message = std::string("No Shekyl address found at ") + url;
-          return {};
-        }
-        return addresses[0];
-      }))
+    if(!get_account_address_from_str(info, m_wallet->nettype(), req.address))
     {
       er.code = WALLET_RPC_ERROR_CODE_WRONG_ADDRESS;
-      if (er.message.empty())
-        er.message = std::string("WALLET_RPC_ERROR_CODE_WRONG_ADDRESS: ") + req.address;
+      er.message = std::string("WALLET_RPC_ERROR_CODE_WRONG_ADDRESS: ") + req.address;
       return false;
     }
     if (!m_wallet->add_address_book_row(info.address, info.has_payment_id ? &info.payment_id : NULL, req.description, info.is_subaddress))
@@ -3202,24 +3161,10 @@ namespace tools
     if (req.set_address)
     {
       er.message = "";
-      if(!get_account_address_from_str_or_url(info, m_wallet->nettype(), req.address,
-        [&er](const std::string &url, const std::vector<std::string> &addresses, bool dnssec_valid)->std::string {
-          if (!dnssec_valid)
-          {
-            er.message = std::string("Invalid DNSSEC for ") + url;
-            return {};
-          }
-          if (addresses.empty())
-          {
-            er.message = std::string("No Shekyl address found at ") + url;
-            return {};
-          }
-          return addresses[0];
-        }))
+      if(!get_account_address_from_str(info, m_wallet->nettype(), req.address))
       {
         er.code = WALLET_RPC_ERROR_CODE_WRONG_ADDRESS;
-        if (er.message.empty())
-          er.message = std::string("WALLET_RPC_ERROR_CODE_WRONG_ADDRESS: ") + req.address;
+        er.message = std::string("WALLET_RPC_ERROR_CODE_WRONG_ADDRESS: ") + req.address;
         return false;
       }
       entry.m_address = info.address;
@@ -3893,31 +3838,7 @@ namespace tools
     {
       if (!req.any_net_type && (!m_wallet || net_type.type != m_wallet->nettype()))
         continue;
-      if (req.allow_openalias)
-      {
-        std::string address;
-        res.valid = get_account_address_from_str_or_url(info, net_type.type, req.address,
-          [&er, &address](const std::string &url, const std::vector<std::string> &addresses, bool dnssec_valid)->std::string {
-            if (!dnssec_valid)
-            {
-              er.message = std::string("Invalid DNSSEC for ") + url;
-              return {};
-            }
-            if (addresses.empty())
-            {
-              er.message = std::string("No Shekyl address found at ") + url;
-              return {};
-            }
-            address = addresses[0];
-            return address;
-          });
-        if (res.valid)
-          res.openalias_address = address;
-      }
-      else
-      {
-        res.valid = cryptonote::get_account_address_from_str(info, net_type.type, req.address);
-      }
+      res.valid = cryptonote::get_account_address_from_str(info, net_type.type, req.address);
       if (res.valid)
       {
         res.integrated = info.has_payment_id;

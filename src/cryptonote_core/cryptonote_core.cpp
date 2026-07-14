@@ -37,8 +37,6 @@ using namespace epee;
 #include <unordered_set>
 #include "cryptonote_core.h"
 #include "common/util.h"
-#include "common/updates.h"
-#include "common/download.h"
 #include "common/threadpool.h"
 #include "common/command_line.h"
 #include "cryptonote_basic/events.h"
@@ -113,10 +111,6 @@ namespace cryptonote
     "offline"
   , "Do not listen for peers, nor connect to any"
   };
-  const command_line::arg_descriptor<bool> arg_disable_dns_checkpoints = {
-    "disable-dns-checkpoints"
-  , "Do not retrieve checkpoints from DNS"
-  };
   const command_line::arg_descriptor<size_t> arg_block_download_max_size  = {
     "block-download-max-size"
   , "Set maximum size of block download queue in bytes (0 for default)"
@@ -146,11 +140,6 @@ namespace cryptonote
   , "Sleep time in ms, defaults to 0 (off), used to debug before/after locking mutex. Values 100 to 1000 are good for tests."
   , 0
   };
-  static const command_line::arg_descriptor<bool> arg_dns_checkpoints  = {
-    "enforce-dns-checkpointing"
-  , "checkpoints from DNS server will be enforced"
-  , false
-  };
   static const command_line::arg_descriptor<uint64_t> arg_fast_block_sync = {
     "fast-block-sync"
   , "Sync up most of the way by using embedded, known block hashes."
@@ -170,11 +159,6 @@ namespace cryptonote
     "block-sync-size"
   , "How many blocks to sync at once during chain synchronization (0 = adaptive)."
   , 0
-  };
-  static const command_line::arg_descriptor<std::string> arg_check_updates = {
-    "check-updates"
-  , "Check for new versions of shekyl: [disabled|notify|download|update]"
-  , "notify"
   };
   static const command_line::arg_descriptor<bool> arg_fluffy_blocks  = {
     "fluffy-blocks"
@@ -239,12 +223,8 @@ namespace cryptonote
               m_starter_message_showed(false),
               m_target_blockchain_height(0),
               m_checkpoints_path(""),
-              m_last_dns_checkpoints_update(0),
               m_last_json_checkpoints_update(0),
-              m_disable_dns_checkpoints(false),
-              m_update_download(0),
-              m_nettype(UNDEFINED),
-              m_update_available(false)
+              m_nettype(UNDEFINED)
   {
     m_checkpoints_updating.clear();
     set_cryptonote_protocol(pprotocol);
@@ -273,28 +253,17 @@ namespace cryptonote
   {
     m_checkpoints_path = path;
   }
-  //-----------------------------------------------------------------------------------
-  void core::set_enforce_dns_checkpoints(bool enforce_dns)
-  {
-    m_blockchain_storage.set_enforce_dns_checkpoints(enforce_dns);
-  }
   //-----------------------------------------------------------------------------------------------
-  bool core::update_checkpoints(const bool skip_dns /* = false */)
+  bool core::update_checkpoints()
   {
-    if (m_nettype != MAINNET || m_disable_dns_checkpoints) return true;
+    if (m_nettype != MAINNET) return true;
 
     if (m_checkpoints_updating.test_and_set()) return true;
 
     bool res = true;
-    if (!skip_dns && time(NULL) - m_last_dns_checkpoints_update >= 3600)
+    if (time(NULL) - m_last_json_checkpoints_update >= 600)
     {
-      res = m_blockchain_storage.update_checkpoints(m_checkpoints_path, true);
-      m_last_dns_checkpoints_update = time(NULL);
-      m_last_json_checkpoints_update = time(NULL);
-    }
-    else if (time(NULL) - m_last_json_checkpoints_update >= 600)
-    {
-      res = m_blockchain_storage.update_checkpoints(m_checkpoints_path, false);
+      res = m_blockchain_storage.update_checkpoints(m_checkpoints_path);
       m_last_json_checkpoints_update = time(NULL);
     }
 
@@ -312,15 +281,6 @@ namespace cryptonote
   {
     m_miner.stop();
     m_blockchain_storage.cancel();
-
-    tools::download_async_handle handle;
-    {
-      boost::lock_guard<boost::mutex> lock(m_update_mutex);
-      handle = m_update_download;
-      m_update_download = 0;
-    }
-    if (handle)
-      tools::download_cancel(handle);
   }
   //-----------------------------------------------------------------------------------
   void core::init_options(boost::program_options::options_description& desc)
@@ -335,16 +295,13 @@ namespace cryptonote
     command_line::add_arg(desc, arg_regtest_on);
     command_line::add_arg(desc, arg_keep_fakechain);
     command_line::add_arg(desc, arg_fixed_difficulty);
-    command_line::add_arg(desc, arg_dns_checkpoints);
     command_line::add_arg(desc, arg_prep_blocks_threads);
     command_line::add_arg(desc, arg_fast_block_sync);
     command_line::add_arg(desc, arg_show_time_stats);
     command_line::add_arg(desc, arg_block_sync_size);
-    command_line::add_arg(desc, arg_check_updates);
     command_line::add_arg(desc, arg_fluffy_blocks);
     command_line::add_arg(desc, arg_test_dbg_lock_sleep);
     command_line::add_arg(desc, arg_offline);
-    command_line::add_arg(desc, arg_disable_dns_checkpoints);
     command_line::add_arg(desc, arg_block_download_max_size);
     command_line::add_arg(desc, arg_span_limit);
     command_line::add_arg(desc, arg_sync_pruned_blocks);
@@ -388,10 +345,8 @@ namespace cryptonote
     }
 
 
-    set_enforce_dns_checkpoints(command_line::get_arg(vm, arg_dns_checkpoints));
     test_drop_download_height(command_line::get_arg(vm, arg_test_drop_download_height));
     m_offline = get_arg(vm, arg_offline);
-    m_disable_dns_checkpoints = get_arg(vm, arg_disable_dns_checkpoints);
 
     if (!command_line::is_arg_defaulted(vm, arg_fluffy_blocks))
       MWARNING(arg_fluffy_blocks.name << " is obsolete, it is now default");
@@ -465,7 +420,7 @@ namespace cryptonote
     return m_blockchain_storage.get_alternative_blocks_count();
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::init(const boost::program_options::variables_map& vm, const cryptonote::test_options *test_options, const GetCheckpointsCallback& get_checkpoints/* = nullptr */, bool allow_dns)
+  bool core::init(const boost::program_options::variables_map& vm, const cryptonote::test_options *test_options, const GetCheckpointsCallback& get_checkpoints/* = nullptr */)
   {
     start_time = std::time(nullptr);
 
@@ -476,13 +431,11 @@ namespace cryptonote
     }
     bool r = handle_command_line(vm);
     CHECK_AND_ASSERT_MES(r, false, "Failed to handle command line");
-    m_disable_dns_checkpoints |= not allow_dns;
 
     std::string db_sync_mode = command_line::get_arg(vm, cryptonote::arg_db_sync_mode);
     bool db_salvage = command_line::get_arg(vm, cryptonote::arg_db_salvage) != 0;
     bool fast_sync = command_line::get_arg(vm, arg_fast_block_sync) != 0;
     uint64_t blocks_threads = command_line::get_arg(vm, arg_prep_blocks_threads);
-    std::string check_updates_string = command_line::get_arg(vm, arg_check_updates);
     size_t max_txpool_weight = command_line::get_arg(vm, arg_max_txpool_weight);
     bool prune_blockchain = command_line::get_arg(vm, arg_prune_blockchain);
     bool keep_alt_blocks = command_line::get_arg(vm, arg_keep_alt_blocks);
@@ -697,24 +650,9 @@ namespace cryptonote
 
     MGINFO("Loading checkpoints");
 
-    // load json & DNS checkpoints, and verify them
+    // load json checkpoints, and verify them
     // with respect to what blocks we already have
-    const bool skip_dns_checkpoints = !command_line::get_arg(vm, arg_dns_checkpoints);
-    CHECK_AND_ASSERT_MES(update_checkpoints(skip_dns_checkpoints), false, "One or more checkpoints loaded from json or dns conflicted with existing checkpoints.");
-
-   // DNS versions checking
-    if (check_updates_string == "disabled" || not allow_dns)
-      check_updates_level = UPDATES_DISABLED;
-    else if (check_updates_string == "notify")
-      check_updates_level = UPDATES_NOTIFY;
-    else if (check_updates_string == "download")
-      check_updates_level = UPDATES_DOWNLOAD;
-    else if (check_updates_string == "update")
-      check_updates_level = UPDATES_UPDATE;
-    else {
-      MERROR("Invalid argument to --check-updates: " << check_updates_string);
-      return false;
-    }
+    CHECK_AND_ASSERT_MES(update_checkpoints(), false, "One or more checkpoints loaded from json conflicted with existing checkpoints.");
 
     r = m_miner.init(vm, m_nettype);
     CHECK_AND_ASSERT_MES(r, false, "Failed to initialize miner instance");
@@ -1603,7 +1541,6 @@ namespace cryptonote
     }
 
     relay_txpool_transactions(); // txpool handles periodic DB checking
-    m_check_updates_interval.do_call(boost::bind(&core::check_updates, this));
     m_check_disk_space_interval.do_call(boost::bind(&core::check_disk_space, this));
     m_block_rate_interval.do_call(boost::bind(&core::check_block_rate, this));
     m_blockchain_pruning_interval.do_call(boost::bind(&core::update_blockchain_pruning, this));
@@ -1631,136 +1568,6 @@ namespace cryptonote
   uint64_t core::get_earliest_ideal_height_for_version(uint8_t version) const
   {
     return get_blockchain_storage().get_earliest_ideal_height_for_version(version);
-  }
-  //-----------------------------------------------------------------------------------------------
-  bool core::check_updates()
-  {
-    static const char software[] = "shekyl";
-#ifdef BUILD_TAG
-    static const char buildtag[] = BOOST_PP_STRINGIZE(BUILD_TAG);
-    static const char subdir[] = "cli"; // because it can never be simple
-#else
-    static const char buildtag[] = "source";
-    static const char subdir[] = "source"; // because it can never be simple
-#endif
-
-    if (m_offline)
-      return true;
-
-    if (check_updates_level == UPDATES_DISABLED)
-      return true;
-
-    std::string version, hash;
-    MCDEBUG("updates", "Checking for a new " << software << " version for " << buildtag);
-    if (!tools::check_updates(software, buildtag, version, hash))
-      return false;
-
-    if (tools::vercmp(version.c_str(), MONERO_VERSION) <= 0)
-    {
-      m_update_available = false;
-      return true;
-    }
-
-    std::string url = tools::get_update_url(software, subdir, buildtag, version, true);
-    MCLOG_CYAN(el::Level::Info, "global", "Version " << version << " of " << software << " for " << buildtag << " is available: " << url << ", SHA256 hash " << hash);
-    m_update_available = true;
-
-    if (check_updates_level == UPDATES_NOTIFY)
-      return true;
-
-    url = tools::get_update_url(software, subdir, buildtag, version, false);
-    std::string filename;
-    const char *slash = strrchr(url.c_str(), '/');
-    if (slash)
-      filename = slash + 1;
-    else
-      filename = std::string(software) + "-update-" + version;
-    boost::filesystem::path path(epee::string_tools::get_current_module_folder());
-    path /= filename;
-
-    boost::unique_lock<boost::mutex> lock(m_update_mutex);
-
-    if (m_update_download != 0)
-    {
-      MCDEBUG("updates", "Already downloading update");
-      return true;
-    }
-
-    crypto::hash file_hash;
-    if (!tools::sha256sum(path.string(), file_hash) || (hash != epee::string_tools::pod_to_hex(file_hash)))
-    {
-      MCDEBUG("updates", "We don't have that file already, downloading");
-      const std::string tmppath = path.string() + ".tmp";
-      if (epee::file_io_utils::is_file_exist(tmppath))
-      {
-        MCDEBUG("updates", "We have part of the file already, resuming download");
-      }
-      m_last_update_length = 0;
-      m_update_download = tools::download_async(tmppath, url, [this, hash, path](const std::string &tmppath, const std::string &uri, bool success) {
-        bool remove = false, good = true;
-        if (success)
-        {
-          crypto::hash file_hash;
-          if (!tools::sha256sum(tmppath, file_hash))
-          {
-            MCERROR("updates", "Failed to hash " << tmppath);
-            remove = true;
-            good = false;
-          }
-          else if (hash != epee::string_tools::pod_to_hex(file_hash))
-          {
-            MCERROR("updates", "Download from " << uri << " does not match the expected hash");
-            remove = true;
-            good = false;
-          }
-        }
-        else
-        {
-          MCERROR("updates", "Failed to download " << uri);
-          good = false;
-        }
-        boost::unique_lock<boost::mutex> lock(m_update_mutex);
-        m_update_download = 0;
-        if (success && !remove)
-        {
-          std::error_code e = tools::replace_file(tmppath, path.string());
-          if (e)
-          {
-            MCERROR("updates", "Failed to rename downloaded file");
-            good = false;
-          }
-        }
-        else if (remove)
-        {
-          if (!boost::filesystem::remove(tmppath))
-          {
-            MCERROR("updates", "Failed to remove invalid downloaded file");
-            good = false;
-          }
-        }
-        if (good)
-          MCLOG_CYAN(el::Level::Info, "updates", "New version downloaded to " << path.string());
-      }, [this](const std::string &path, const std::string &uri, size_t length, ssize_t content_length) {
-        if (length >= m_last_update_length + 1024 * 1024 * 10)
-        {
-          m_last_update_length = length;
-          MCDEBUG("updates", "Downloaded " << length << "/" << (content_length ? std::to_string(content_length) : "unknown"));
-        }
-        return true;
-      });
-    }
-    else
-    {
-      MCDEBUG("updates", "We already have " << path << " with expected hash");
-    }
-
-    lock.unlock();
-
-    if (check_updates_level == UPDATES_DOWNLOAD)
-      return true;
-
-    MCERROR("updates", "Download/update not implemented yet");
-    return true;
   }
   //-----------------------------------------------------------------------------------------------
   bool core::check_disk_space()

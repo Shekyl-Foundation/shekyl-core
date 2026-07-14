@@ -40,16 +40,6 @@ namespace cryptonote {
   /*                                                                      */
   /************************************************************************/
 
-  namespace
-  {
-    inline std::string return_first_address(const std::string &url, const std::vector<std::string> &addresses, bool dnssec_valid)
-    {
-      if (addresses.empty())
-        return {};
-      return addresses[0];
-    }
-  }
-
   struct address_parse_info
   {
     account_public_address address;
@@ -82,13 +72,6 @@ namespace cryptonote {
       address_parse_info& info
     , network_type nettype
     , const std::string& str
-    );
-
-  bool get_account_address_from_str_or_url(
-      address_parse_info& info
-    , network_type nettype
-    , const std::string& str_or_url
-    , std::function<std::string(const std::string&, const std::vector<std::string>&, bool)> dns_confirm = return_first_address
     );
 
   bool is_coinbase(const transaction& tx);
