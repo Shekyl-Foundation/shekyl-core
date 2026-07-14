@@ -1182,8 +1182,17 @@ unsafe fn holdings_update_marshal_prologue(
             bond_debit,
         )
     }?;
-    let Ok(record_holdings_kind) = HoldingsKind::from_u8(record_holdings_kind) else {
-        return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND);
+    // Parse the record's kind only when a record exists: a missing record must
+    // surface as RECORD_MISSING (the verify's own verdict), never as a
+    // misleading HOLDINGS_KIND from whatever placeholder the caller passed.
+    // The dummy is unread — every verify checks RecordMissing before kinds.
+    let record_holdings_kind = if record_exists != 0 {
+        match HoldingsKind::from_u8(record_holdings_kind) {
+            Ok(k) => k,
+            Err(_) => return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND),
+        }
+    } else {
+        HoldingsKind::ShardSetCompact
     };
     let record_bonded_total = (record_exists != 0).then_some(record_bonded_total);
     let record_shards = unsafe {
@@ -1542,8 +1551,17 @@ pub unsafe extern "C" fn shekyl_archival_verify_rebond_bond_post(
         Ok(v) => v,
         Err(code) => return code,
     };
-    let Ok(record_holdings_kind) = HoldingsKind::from_u8(record_holdings_kind) else {
-        return SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND;
+    // Parse the record's kind only when a record exists (the marshal-prologue
+    // idiom): a missing record must surface as RECORD_MISSING, never as a
+    // misleading HOLDINGS_KIND from a caller placeholder. The dummy is unread —
+    // the verify checks RecordMissing before kinds.
+    let record_holdings_kind = if record_exists != 0 {
+        match HoldingsKind::from_u8(record_holdings_kind) {
+            Ok(k) => k,
+            Err(_) => return SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND,
+        }
+    } else {
+        HoldingsKind::ShardSetCompact
     };
     let record_bonded_total = if record_exists != 0 {
         Some(record_bonded_total)

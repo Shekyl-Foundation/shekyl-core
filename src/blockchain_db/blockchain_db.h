@@ -2170,14 +2170,14 @@ public:
   /// throughout, so there is no Exited/clean-close check (the add/drop pop
   /// twin, gate-4 §5).
   virtual void revert_archival_holdings_updates_at_height(uint64_t block_height);
-  /// Rebond connect writer (gate-4 Â§3.4; P2B-9 reinstatement; the Rust fold
+  /// Rebond connect writer (gate-4 §3.4; P2B-9 reinstatement; the Rust fold
   /// `shekyl_archival_rebond_connect` dictates the write set): sets
   /// `held_shard_ids = post` (a verified superset of current) and rebuilds the
   /// index-parallel `shard_add_epochs` (carried shards keep theirs; added
-  /// shards take `E_rebond` â Pin 7), closes the open bad interval IN PLACE
-  /// (`end_exclusive = E_rebond + 1` â Pin 3; the record stays `Bonded`,
+  /// shards take `E_rebond` — Pin 7), closes the open bad interval IN PLACE
+  /// (`end_exclusive = E_rebond + 1` — Pin 3; the record stays `Bonded`,
   /// standing resumes at `E_rebond + 1`), and credits the counters by
-  /// `|added|Â·FLOOR` (zero for standing-only). Journals the pre-image of the
+  /// `|added|·FLOOR` (zero for standing-only). Journals the pre-image of the
   /// mutated fields (including the closed interval's index + start) first, and
   /// reads the LIVE `total_bonded_atomic` internally (per-post threading). Any
   /// fold error is a hard abort. Caller: the bond-post vin connect dispatch.
@@ -2188,7 +2188,7 @@ public:
   /// (identity-belted against the journal's index + start and the connect's
   /// `E_rebond + 1` close), restore holdings/add-epochs/balance, and revert
   /// `total_bonded_atomic` via the Rust pop fold (non-negative whole-FLOOR
-  /// delta guard â zero included).
+  /// delta guard — zero included).
   virtual void revert_archival_rebonds_at_height(uint64_t block_height);
   /// HoldingsUpdate-drop verify marshaling: the dropped shard's segment
   /// freeze height (feeds the retention-horizon age-at-add). Returns false
