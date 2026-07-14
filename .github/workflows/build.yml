@@ -174,7 +174,7 @@ jobs:
         run: |
           brew uninstall cmake
           brew update
-          brew install --quiet cmake boost hidapi openssl libpgm miniupnpc expat libunwind-headers protobuf abseil ccache zstd
+          brew install --quiet cmake boost hidapi openssl libpgm miniupnpc libunwind-headers protobuf abseil ccache zstd
       # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
       # auto-install race in the daemon build). Bump both together.
       - uses: dtolnay/rust-toolchain@1.94.0
@@ -218,7 +218,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: install dependencies
-        run: pacman -Syyu --noconfirm base-devel git cmake boost boost-libs openssl libsodium readline expat gtest python3 doxygen graphviz hidapi libusb protobuf abseil-cpp rust
+        run: pacman -Syyu --noconfirm base-devel git cmake boost boost-libs openssl libsodium readline gtest python3 doxygen graphviz hidapi libusb protobuf abseil-cpp rust
       # WORKAROUND (2026-07-10, Arch gcc 16.1.1-3): the gcc-libs →
       # libgcc/libstdc++ package split dropped the `libstdc++.so` symlink
       # from GCC's internal search dir (which now carries only

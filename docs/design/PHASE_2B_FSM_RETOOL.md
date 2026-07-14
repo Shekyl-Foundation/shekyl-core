@@ -729,14 +729,38 @@ costs the one shard + the burned `FLOOR` + the gap, never the portfolio + tenure
 Reinstatement, not restructuring. Floor-equality + credit-only does **not** force growth — a
 **swap** (drop K shards, add K different ones, `credit = 0`) satisfies both, so without the
 superset constraint a persona could deliberately no-show one challenge (cost: one burned
-`FLOOR` + the gap) and shed past `HU`-drop's gates (retention horizon, per-shard cooldown,
-slash settlement) in one tx. `post ⊇ current` closes that, and a second dodge with it: a
-retention-locked shard survives the slash+`Rebond` — you cannot get slashed to escape a
-retention commitment. Shedding stays `HU`-drop's gated job. Non-empty post (`ShardSetCompactEmpty`
+`FLOOR` + the gap) and shed the **carried** shards past `HU`-drop's gates (retention horizon,
+per-shard cooldown, slash settlement) in one tx. `post ⊇ current` closes exactly that: you
+cannot get slashed on `S1` and use the reinstatement to also dump `S2`/`S3`. Shedding stays
+`HU`-drop's gated job.
+
+**Coverage boundary (corrected 2026-07-14 — the original "you cannot get slashed to escape a
+retention commitment" rationale was wrong at source).** The superset does **not** cover the
+slashed shard itself: `apply_archival_slash_one` erases it from `held_shard_ids` (+ its
+coupled add-epoch), so `current` at `Rebond` time already excludes it — re-acquiring is
+optional. **Slash-to-shed of the slashed shard is priced, not prevented**, three layers deep:
+(1) the burn destroys exactly the `FLOOR` the shed would free; (2) the bad-standing gap
+zeroes the **whole portfolio's** serve-credit through `E_rebond` (standing resumes
+`E_rebond + 1`, Pin 3); (3) a re-acquisition takes `add_epoch = E_rebond` (Pin 7), so its
+`ShardAgeAtAdd` is older and its `bond_duration` **longer** than the commitment escaped —
+the ADD-side "self-harm, not an attack" shape. **Rule-21 reopen:** this pricing rests on the
+slash **burning** the `FLOOR`. If slash economics ever change to return collateral (in any
+form), slash-to-shed opens as a real dodge that neither Pin 1 nor the burn prices — reopen
+the re-spec shape (e.g., require re-acquisition or forfeit) at that boundary.
+
+Non-empty post (`ShardSetCompactEmpty`
 reuse): a terminal-slash record rebonding to `∅` at credit 0 would be a zombie (good standing,
 no shards, no balance; `HU`-add rejects `RecordNotBonded`, `Unbond` rejects `NothingToUnbond`).
 Under the superset pin the diff is an **added-set**, so the landed `rebuild_shard_add_epochs`
 applies directly.
+
+**Forward question (routed to the R-3 / §L18 reconciliation track — a question, not a
+finding):** because abandoning a slashed shard is priced at one `FLOOR` + the portfolio-wide
+gap, effective retention is `min(bond_duration, willingness-to-burn-a-FLOOR)` — rational for
+an uneconomic shard once storage cost × remaining lock exceeds the `FLOOR`. Believed to be
+the designed pressure-release (Rebond exists precisely so abandonment doesn't kill the
+persona), but the seal rests on `bond_duration` holding deep capital: confirm the sim's
+actors can take the priced valve rather than treating the horizon as absolute.
 
 ### Pin 2 — credit equation: `bond_credit == bond_floor(post) − bonded_total` (zero legal, common)
 
@@ -964,7 +988,10 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
   resolved the semantics; these settle the build gates). Operating concept: **reinstatement,
   not re-entry** — a slash is a bounded penalty (one shard + one burned `FLOOR` + the gap),
   `Rebond` resumes in place (same `P_canonical_id`, tenure, backlog). Pins: `post ⊇ current`
-  non-empty (closes the swap-shed and retention-escape dodges); credit `== |added|·FLOOR ≥ 0`
+  non-empty (closes swap-shedding of **carried** shards; the slashed shard's abandonment is
+  **priced** — one burned `FLOOR` + the portfolio-wide gap — not prevented, with a rule-21
+  reopen if slash economics ever return collateral; corrected 2026-07-14, the original
+  "retention-escape" rationale was wrong at source); credit `== |added|·FLOOR ≥ 0`
   (zero legal/common — the landed slash preserves floor-equality; amends gate-4 "restores
   `== bond_floor`"); interval close `end_exclusive = E_rebond + 1` (partial-epoch symmetry
   with Pin-5 `E_add+1`; amends Q4(ii)/gate-4 §4.1); auth = identity key on the landed selector
