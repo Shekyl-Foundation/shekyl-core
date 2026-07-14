@@ -123,7 +123,7 @@ static libraries.
   C++ Desktop workload.  The CI uses VS 2026 for forward compatibility,
   but the build works on VS 2022 as well thanks to the
   `CryptonightR_JIT_stub.c` workaround for the PDB ICE (see below).
-- vcpkg (for Boost, libsodium, OpenSSL, libunbound, LMDB)
+- vcpkg (for Boost, libsodium, OpenSSL, LMDB)
 - Rust toolchain (`stable-x86_64-pc-windows-msvc`)
 - CMake 3.25+ (or CMake 4.0+ if using VS 2026)
 
@@ -318,7 +318,7 @@ CMake cache values cannot leak architecture-specific flags.
 
 - Boost (chrono, date-time, filesystem, program-options, regex, serialization,
   system, thread)
-- OpenSSL, libunbound, libsodium, readline, expat
+- OpenSSL, libsodium, readline, expat
 
 No HIDAPI, protobuf, or libusb packages are required on the target machine.
 
