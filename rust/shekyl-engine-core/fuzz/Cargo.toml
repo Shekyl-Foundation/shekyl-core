@@ -33,13 +33,6 @@ doc = false
 bench = false
 
 [[bin]]
-name = "fuzz_counter_proof_parse"
-path = "fuzz_targets/fuzz_counter_proof_parse.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "fuzz_encrypt_decrypt_roundtrip"
 path = "fuzz_targets/fuzz_encrypt_decrypt_roundtrip.rs"
 test = false
@@ -54,36 +47,8 @@ doc = false
 bench = false
 
 [[bin]]
-name = "fuzz_heartbeat_anomalies"
-path = "fuzz_targets/fuzz_heartbeat_anomalies.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "fuzz_intent_validation"
 path = "fuzz_targets/fuzz_intent_validation.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "fuzz_assembly_consensus"
-path = "fuzz_targets/fuzz_assembly_consensus.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "fuzz_equivocation_proof"
-path = "fuzz_targets/fuzz_equivocation_proof.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "fuzz_counter_proof_verify"
-path = "fuzz_targets/fuzz_counter_proof_verify.rs"
 test = false
 doc = false
 bench = false

@@ -5,11 +5,8 @@
 
 use crate::multisig::v31::{
     encryption::{decrypt_payload, encrypt_payload},
-    heartbeat::{Heartbeat, HeartbeatAnomaly, HeartbeatTracker},
     intent::{IntentRecipient, SpendIntent, SpendIntentError, SPEND_INTENT_VERSION},
-    invariants::{check_assembly_consensus, InvariantCheckResult, InvariantId},
     messages::MessageType,
-    prover::{EquivocationProof, ProverInputProof, ProverOutput, SignatureShare},
     state::{IntentState, TrackedIntent},
 };
 use shekyl_units::AtomicUnits;
@@ -45,60 +42,6 @@ fn replay_detection_via_kem_seed() {
     let mut seen = std::collections::HashSet::new();
     seen.insert(intent1.kem_randomness_seed);
     assert!(seen.contains(&intent2.kem_randomness_seed));
-}
-
-#[test]
-fn equivocation_detected_via_proof_commitment() {
-    let po1 = ProverOutput {
-        prover_index: 0,
-        intent_hash: [0xAA; 32],
-        fcmp_proofs: vec![ProverInputProof {
-            input_global_index: 42,
-            fcmp_proof: vec![0x11; 100],
-            key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([0xBB; 32]),
-        }],
-        prover_sig: vec![0; 64],
-    };
-
-    let mut po2 = po1.clone();
-    po2.fcmp_proofs[0].fcmp_proof = vec![0x22; 100];
-
-    assert_ne!(po1.fcmp_proof_commitment(), po2.fcmp_proof_commitment());
-
-    let ep = EquivocationProof {
-        prover_index: 0,
-        intent_hash: [0xAA; 32],
-        proof_a: po1,
-        proof_b: po2,
-    };
-    assert!(ep.is_valid());
-}
-
-#[test]
-fn assembly_rejects_mixed_commitments() {
-    let shares = vec![
-        SignatureShare {
-            signer_index: 0,
-            hybrid_sig: vec![0; 64],
-            tx_hash_commitment: [0xAA; 32],
-            fcmp_proof_commitment: [0xBB; 32],
-            bp_plus_proof_commitment: [0xCC; 32],
-        },
-        SignatureShare {
-            signer_index: 1,
-            hybrid_sig: vec![0; 64],
-            tx_hash_commitment: [0xAA; 32],
-            fcmp_proof_commitment: [0xFF; 32],
-            bp_plus_proof_commitment: [0xCC; 32],
-        },
-    ];
-
-    match check_assembly_consensus(&shares) {
-        InvariantCheckResult::Fail { invariant, .. } => {
-            assert_eq!(invariant, InvariantId::I6AssemblyConsensus);
-        }
-        _ => panic!("should have detected fcmp_proof disagreement"),
-    }
 }
 
 #[test]
@@ -170,39 +113,6 @@ fn expired_intent_cannot_be_signed() {
 
     let result = ti.transition(IntentState::ProverReady);
     assert!(result.is_err());
-}
-
-#[test]
-fn heartbeat_detects_all_anomaly_types() {
-    let mut tracker = HeartbeatTracker::new(3);
-    let hb = Heartbeat {
-        sender_index: 1,
-        timestamp: 500,
-        last_seen_intent: [0xFF; 32],
-        observed_relay_ops: vec!["same".into()],
-        local_tx_counter: 99,
-        sig: vec![],
-    };
-
-    let anomalies = tracker.record(&hb, &[0xAA; 32], 5, 1000);
-
-    let has_intent = anomalies
-        .iter()
-        .any(|a| matches!(a, HeartbeatAnomaly::IntentDisagreement { .. }));
-    let has_relay = anomalies
-        .iter()
-        .any(|a| matches!(a, HeartbeatAnomaly::RelayDiversityCollapse { .. }));
-    let has_counter = anomalies
-        .iter()
-        .any(|a| matches!(a, HeartbeatAnomaly::CounterDivergence { .. }));
-    let has_skew = anomalies
-        .iter()
-        .any(|a| matches!(a, HeartbeatAnomaly::TimeSkew { .. }));
-
-    assert!(has_intent, "should detect intent disagreement");
-    assert!(has_relay, "should detect relay diversity collapse");
-    assert!(has_counter, "should detect counter divergence");
-    assert!(has_skew, "should detect time skew");
 }
 
 #[test]

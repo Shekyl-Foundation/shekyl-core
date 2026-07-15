@@ -149,25 +149,6 @@ fn bench_chain_state_fingerprint(c: &mut Criterion) {
     });
 }
 
-fn bench_assembly_consensus(c: &mut Criterion) {
-    use shekyl_engine_core::multisig::v31::invariants::check_assembly_consensus;
-    use shekyl_engine_core::multisig::v31::prover::SignatureShare;
-
-    let shares: Vec<_> = (0..7)
-        .map(|i| SignatureShare {
-            signer_index: i,
-            hybrid_sig: vec![0; 64],
-            tx_hash_commitment: [0xAA; 32],
-            fcmp_proof_commitment: [0xBB; 32],
-            bp_plus_proof_commitment: [0xCC; 32],
-        })
-        .collect();
-
-    c.bench_function("assembly_consensus_7_signers", |b| {
-        b.iter(|| black_box(check_assembly_consensus(&shares)))
-    });
-}
-
 criterion_group!(
     benches,
     bench_intent_hash,
@@ -175,6 +156,5 @@ criterion_group!(
     bench_encrypt_decrypt,
     bench_envelope_roundtrip,
     bench_chain_state_fingerprint,
-    bench_assembly_consensus,
 );
 criterion_main!(benches);
