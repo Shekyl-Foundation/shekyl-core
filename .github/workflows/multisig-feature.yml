@@ -1,0 +1,141 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# F-6 + P0-n — V3.1 multisig Round 1 / Phase 0.
+#
+# F-6: positive CI for `--features multisig` on engine-core, engine-rpc,
+# and ffi (the packages named in V3_1_MULTISIG_RUST_ENGINE.md R1-F-6).
+# Until this lane is green, every Track B claim about gated code is
+# untested.
+#
+# P0-n: doc-literal grep gate (cap fossils + pqc_auth fee-oracle drift).
+#
+# Clippy posture mirrors build.yml's rust-audit-and-test job:
+#   - toolchain pinned to rust/rust-toolchain.toml (1.94.0), not @stable
+#   - `-D warnings` only on the clippy argv (`-- -D warnings`), NOT via
+#     job-level RUSTFLAGS (that promotes rustc warnings in path deps
+#     like helioselene into hard errors that main CI intentionally
+#     does not fail on)
+# Discovery: first enable may still fail clippy on frost_sal / Option A
+# fossil debt — that is the signal; do not weaken `-D warnings`.
+
+name: ci/multisig-feature
+
+on:
+  pull_request:
+    paths:
+      - "rust/shekyl-engine-core/**"
+      - "rust/shekyl-engine-rpc/**"
+      - "rust/shekyl-ffi/**"
+      - "rust/shekyl-fcmp/**"
+      - "rust/shekyl-fcmp-proofs/**"
+      # C-1: crates that own a multisig constant. MAX_MULTISIG_PARTICIPANTS
+      # (crypto-pq/src/multisig.rs), PQC_MAX_*_BLOB / single-key len (wire),
+      # MultisigAddressPayload (address), and the C++ twins in
+      # cryptonote_config.h. Without these, cap/blob drift lands with the
+      # gate silent — an armed gate with no trigger.
+      - "rust/shekyl-crypto-pq/**"
+      - "rust/shekyl-wire/**"
+      - "rust/shekyl-address/**"
+      - "src/cryptonote_config.h"
+      - "rust/Cargo.lock"
+      - "docs/**"
+      - "scripts/ci/check_multisig_doc_literals.sh"
+      - ".github/workflows/multisig-feature.yml"
+  push:
+    branches: [dev]
+    paths:
+      - "rust/shekyl-engine-core/**"
+      - "rust/shekyl-engine-rpc/**"
+      - "rust/shekyl-ffi/**"
+      - "rust/shekyl-fcmp/**"
+      - "rust/shekyl-fcmp-proofs/**"
+      # C-1: crates that own a multisig constant. MAX_MULTISIG_PARTICIPANTS
+      # (crypto-pq/src/multisig.rs), PQC_MAX_*_BLOB / single-key len (wire),
+      # MultisigAddressPayload (address), and the C++ twins in
+      # cryptonote_config.h. Without these, cap/blob drift lands with the
+      # gate silent — an armed gate with no trigger.
+      - "rust/shekyl-crypto-pq/**"
+      - "rust/shekyl-wire/**"
+      - "rust/shekyl-address/**"
+      - "src/cryptonote_config.h"
+      - "rust/Cargo.lock"
+      - "docs/**"
+      - "scripts/ci/check_multisig_doc_literals.sh"
+      - ".github/workflows/multisig-feature.yml"
+
+concurrency:
+  group: multisig-feature-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  p0n-doc-literals:
+    name: "P0-n: multisig doc-literal gate"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install ripgrep
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ripgrep
+          rg --version
+      - name: Run P0-n gate
+        run: scripts/ci/check_multisig_doc_literals.sh
+
+  f6-multisig-feature:
+    name: "F-6: cargo check/clippy/test --features multisig"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v5
+
+      # Pin matches rust/rust-toolchain.toml and build.yml — not @stable
+      # (canary lives in rust-stable-canary.yml).
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+
+      - name: cargo check (engine-core + engine-rpc + ffi, --features multisig)
+        run: >
+          cargo check --locked
+          -p shekyl-engine-core
+          -p shekyl-engine-rpc
+          -p shekyl-ffi
+          --features multisig
+
+      - name: cargo clippy -D warnings (same packages, all targets)
+        # Mirror build.yml: deny on clippy argv only. Do not set
+        # RUSTFLAGS=-D warnings (path-dep rustc warnings ≠ clippy debt).
+        run: >
+          cargo clippy --locked
+          -p shekyl-engine-core
+          -p shekyl-engine-rpc
+          -p shekyl-ffi
+          --features multisig
+          --all-targets
+          --keep-going
+          -- -D warnings
+
+      - name: cargo test (same packages, --features multisig)
+        run: >
+          cargo test --locked
+          -p shekyl-engine-core
+          -p shekyl-engine-rpc
+          -p shekyl-ffi
+          --features multisig

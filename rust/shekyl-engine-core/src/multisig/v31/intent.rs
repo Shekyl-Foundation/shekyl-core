@@ -81,6 +81,9 @@ pub enum SpendIntentError {
     #[error("wrong version: expected {SPEND_INTENT_VERSION}, got {0}")]
     WrongVersion(u8),
 
+    #[error("field '{0}' too long to serialize (length exceeds u32 wire prefix)")]
+    FieldTooLong(&'static str),
+
     #[error("group_id mismatch")]
     GroupIdMismatch,
 
@@ -178,22 +181,32 @@ pub struct SpendIntent {
 
 impl SpendIntent {
     /// Compute `intent_hash = cn_fast_hash(canonical_serialize(SpendIntent))` (SS9.4).
-    pub fn intent_hash(&self) -> [u8; 32] {
-        let canonical = self.to_canonical_bytes();
-        shekyl_crypto_hash::cn_fast_hash(&canonical)
+    ///
+    /// Fallible because canonical serialization is: a field whose length
+    /// exceeds the u32 wire prefix has no well-defined canonical encoding
+    /// (silently truncating the prefix would collide distinct intents), so
+    /// it has no well-defined hash-identity either. `validate_structural`
+    /// bounds every length well below `u32::MAX`, so this only fires on an
+    /// unvalidated, pathologically-large intent.
+    pub fn intent_hash(&self) -> Result<[u8; 32], SpendIntentError> {
+        let canonical = self.to_canonical_bytes()?;
+        Ok(shekyl_crypto_hash::cn_fast_hash(&canonical))
     }
 
     /// Canonical serialization for hashing and signing.
     ///
     /// Layout: all fixed fields in declaration order, then variable-length
-    /// recipients and inputs with length prefixes (u32 LE).
-    pub fn to_canonical_bytes(&self) -> Vec<u8> {
+    /// recipients and inputs with length prefixes (u32 LE). Fails with
+    /// `FieldTooLong` rather than truncating a length that overflows u32.
+    pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, SpendIntentError> {
         let mut buf = Vec::with_capacity(256);
         buf.push(self.version);
         buf.extend_from_slice(&self.intent_id);
         buf.extend_from_slice(&self.group_id);
         buf.push(self.proposer_index);
-        buf.extend_from_slice(&(self.proposer_sig.len() as u32).to_le_bytes());
+        let proposer_sig_len = u32::try_from(self.proposer_sig.len())
+            .map_err(|_| SpendIntentError::FieldTooLong("proposer_sig"))?;
+        buf.extend_from_slice(&proposer_sig_len.to_le_bytes());
         buf.extend_from_slice(&self.proposer_sig);
         buf.extend_from_slice(&self.created_at.to_le_bytes());
         buf.extend_from_slice(&self.expires_at.to_le_bytes());
@@ -201,27 +214,36 @@ impl SpendIntent {
         buf.extend_from_slice(&self.reference_block_height.to_le_bytes());
         buf.extend_from_slice(&self.reference_block_hash);
 
-        buf.extend_from_slice(&(self.recipients.len() as u32).to_le_bytes());
+        let recipients_len = u32::try_from(self.recipients.len())
+            .map_err(|_| SpendIntentError::FieldTooLong("recipients"))?;
+        buf.extend_from_slice(&recipients_len.to_le_bytes());
         for r in &self.recipients {
-            buf.extend_from_slice(&(r.address.len() as u32).to_le_bytes());
+            let address_len = u32::try_from(r.address.len())
+                .map_err(|_| SpendIntentError::FieldTooLong("recipient address"))?;
+            buf.extend_from_slice(&address_len.to_le_bytes());
             buf.extend_from_slice(&r.address);
             buf.extend_from_slice(&r.amount.to_raw().to_le_bytes());
         }
 
         buf.extend_from_slice(&self.fee.to_raw().to_le_bytes());
 
-        buf.extend_from_slice(&(self.input_global_indices.len() as u32).to_le_bytes());
+        let inputs_len = u32::try_from(self.input_global_indices.len())
+            .map_err(|_| SpendIntentError::FieldTooLong("input_global_indices"))?;
+        buf.extend_from_slice(&inputs_len.to_le_bytes());
         for idx in &self.input_global_indices {
             buf.extend_from_slice(&idx.to_le_bytes());
         }
 
         buf.extend_from_slice(&self.kem_randomness_seed);
         buf.extend_from_slice(&self.chain_state_fingerprint);
-        buf
+        Ok(buf)
     }
 
     /// Compute the bytes that the proposer signs (everything except proposer_sig).
-    pub fn signable_bytes(&self) -> Vec<u8> {
+    ///
+    /// Fails with `FieldTooLong` rather than truncating a length that
+    /// overflows the u32 wire prefix (see `to_canonical_bytes`).
+    pub fn signable_bytes(&self) -> Result<Vec<u8>, SpendIntentError> {
         let mut buf = Vec::with_capacity(256);
         buf.push(self.version);
         buf.extend_from_slice(&self.intent_id);
@@ -233,23 +255,29 @@ impl SpendIntent {
         buf.extend_from_slice(&self.reference_block_height.to_le_bytes());
         buf.extend_from_slice(&self.reference_block_hash);
 
-        buf.extend_from_slice(&(self.recipients.len() as u32).to_le_bytes());
+        let recipients_len = u32::try_from(self.recipients.len())
+            .map_err(|_| SpendIntentError::FieldTooLong("recipients"))?;
+        buf.extend_from_slice(&recipients_len.to_le_bytes());
         for r in &self.recipients {
-            buf.extend_from_slice(&(r.address.len() as u32).to_le_bytes());
+            let address_len = u32::try_from(r.address.len())
+                .map_err(|_| SpendIntentError::FieldTooLong("recipient address"))?;
+            buf.extend_from_slice(&address_len.to_le_bytes());
             buf.extend_from_slice(&r.address);
             buf.extend_from_slice(&r.amount.to_raw().to_le_bytes());
         }
 
         buf.extend_from_slice(&self.fee.to_raw().to_le_bytes());
 
-        buf.extend_from_slice(&(self.input_global_indices.len() as u32).to_le_bytes());
+        let inputs_len = u32::try_from(self.input_global_indices.len())
+            .map_err(|_| SpendIntentError::FieldTooLong("input_global_indices"))?;
+        buf.extend_from_slice(&inputs_len.to_le_bytes());
         for idx in &self.input_global_indices {
             buf.extend_from_slice(&idx.to_le_bytes());
         }
 
         buf.extend_from_slice(&self.kem_randomness_seed);
         buf.extend_from_slice(&self.chain_state_fingerprint);
-        buf
+        Ok(buf)
     }
 
     /// Validate structural invariants that don't require external state
@@ -308,7 +336,7 @@ impl SpendIntent {
 
         if chain_tip_height
             .checked_sub(self.reference_block_height)
-            .map_or(true, |age| age < FCMP_REFERENCE_BLOCK_MIN_AGE)
+            .is_none_or(|age| age < FCMP_REFERENCE_BLOCK_MIN_AGE)
         {
             return Err(SpendIntentError::RefBlockTooFresh {
                 height: self.reference_block_height,
@@ -318,7 +346,7 @@ impl SpendIntent {
 
         if chain_tip_height
             .checked_sub(self.reference_block_height)
-            .map_or(true, |age| age > FCMP_REFERENCE_BLOCK_MAX_AGE)
+            .is_none_or(|age| age > FCMP_REFERENCE_BLOCK_MAX_AGE)
         {
             return Err(SpendIntentError::RefBlockTooStale {
                 height: self.reference_block_height,
@@ -448,8 +476,8 @@ mod tests {
     #[test]
     fn intent_hash_deterministic() {
         let intent = make_test_intent();
-        let h1 = intent.intent_hash();
-        let h2 = intent.intent_hash();
+        let h1 = intent.intent_hash().unwrap();
+        let h2 = intent.intent_hash().unwrap();
         assert_eq!(h1, h2);
         assert_ne!(h1, [0; 32]);
     }
@@ -459,13 +487,13 @@ mod tests {
         let i1 = make_test_intent();
         let mut i2 = make_test_intent();
         i2.fee = AtomicUnits::from_raw(20);
-        assert_ne!(i1.intent_hash(), i2.intent_hash());
+        assert_ne!(i1.intent_hash().unwrap(), i2.intent_hash().unwrap());
     }
 
     #[test]
     fn canonical_bytes_roundtrip_length() {
         let intent = make_test_intent();
-        let bytes = intent.to_canonical_bytes();
+        let bytes = intent.to_canonical_bytes().unwrap();
         assert!(bytes.len() > 200);
     }
 

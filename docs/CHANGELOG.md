@@ -4,6 +4,11 @@
 
 ### Added
 
+- **ci: F-6 `--features multisig` lane + P0-n doc gate (follow-on to #308).**
+  Lands `.github/workflows/multisig-feature.yml` and
+  `scripts/ci/check_multisig_doc_literals.sh`. Clippy posture matches
+  `build.yml` (toolchain 1.94.0; `-D warnings` on clippy argv only).
+
 - **docs: PR #308 Copilot round 2 — E′ consistency (principles, roles,
   ops, VERSIONING).** Principle 5 no longer claims FROST SAL is out of
   V3.1 scope (E′ *is* 15.4a). Roles / MULTISIG_OPERATIONS banner Option D

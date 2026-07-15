@@ -74,29 +74,38 @@ impl MultisigEnvelope {
     /// payload_len is included to prevent framing attacks where an attacker
     /// swaps the length prefix while preserving the ciphertext. sig_len is
     /// NOT included because it is metadata about the signature itself.
-    pub fn signable_header(&self) -> Vec<u8> {
+    pub fn signable_header(&self) -> Result<Vec<u8>, EnvelopeError> {
         let mut buf = Vec::with_capacity(70 + self.encrypted_payload.len());
         buf.push(self.version);
         buf.extend_from_slice(&self.group_id);
         buf.extend_from_slice(&self.intent_hash);
         buf.push(self.sender_index);
-        buf.extend_from_slice(&(self.encrypted_payload.len() as u32).to_le_bytes());
+        let payload_len = u32::try_from(self.encrypted_payload.len())
+            .map_err(|_| EnvelopeError::FieldTooLong("encrypted_payload"))?;
+        buf.extend_from_slice(&payload_len.to_le_bytes());
         buf.extend_from_slice(&self.encrypted_payload);
-        buf
+        Ok(buf)
     }
 
     /// Serialize to canonical bytes for transport.
-    pub fn to_bytes(&self) -> Vec<u8> {
+    ///
+    /// Fails with `FieldTooLong` rather than truncating a length that
+    /// overflows the u32 wire prefix.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, EnvelopeError> {
         let mut buf = Vec::with_capacity(128 + self.encrypted_payload.len());
         buf.push(self.version);
         buf.extend_from_slice(&self.group_id);
         buf.extend_from_slice(&self.intent_hash);
         buf.push(self.sender_index);
-        buf.extend_from_slice(&(self.sender_sig.len() as u32).to_le_bytes());
+        let sig_len = u32::try_from(self.sender_sig.len())
+            .map_err(|_| EnvelopeError::FieldTooLong("sender_sig"))?;
+        buf.extend_from_slice(&sig_len.to_le_bytes());
         buf.extend_from_slice(&self.sender_sig);
-        buf.extend_from_slice(&(self.encrypted_payload.len() as u32).to_le_bytes());
+        let payload_len = u32::try_from(self.encrypted_payload.len())
+            .map_err(|_| EnvelopeError::FieldTooLong("encrypted_payload"))?;
+        buf.extend_from_slice(&payload_len.to_le_bytes());
         buf.extend_from_slice(&self.encrypted_payload);
-        buf
+        Ok(buf)
     }
 
     /// Parse from canonical bytes.
@@ -176,6 +185,8 @@ pub enum EnvelopeError {
     SigTooLong(u32),
     #[error("payload_len {0} exceeds maximum {MAX_PAYLOAD_LEN}")]
     PayloadTooLong(u32),
+    #[error("field '{0}' too long to serialize (length exceeds u32 wire prefix)")]
+    FieldTooLong(&'static str),
 }
 
 /// Decrypted payload: message_type + type-specific body.
@@ -238,7 +249,7 @@ mod tests {
             sender_sig: vec![0xCC; 64],
             encrypted_payload: vec![0xDD; 128],
         };
-        let bytes = env.to_bytes();
+        let bytes = env.to_bytes().unwrap();
         let parsed = MultisigEnvelope::from_bytes(&bytes).unwrap();
         assert_eq!(parsed.version, ENVELOPE_VERSION);
         assert_eq!(parsed.group_id, [0xAA; 32]);

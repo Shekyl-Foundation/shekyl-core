@@ -38,7 +38,7 @@ fn intent_hash_canary() {
         chain_state_fingerprint: [0xEE; 32],
     };
 
-    let hash = intent.intent_hash();
+    let hash = intent.intent_hash().unwrap();
 
     assert_eq!(
         &hash[..4],
@@ -104,7 +104,7 @@ fn canonical_serialization_length_canary() {
         chain_state_fingerprint: [0; 32],
     };
 
-    let bytes = intent.to_canonical_bytes();
+    let bytes = intent.to_canonical_bytes().unwrap();
 
     assert_eq!(
         bytes.len(),
