@@ -488,6 +488,20 @@ impl Holdings {
                 for _ in 0..count {
                     shard_ids.push(read_varint(r)?);
                 }
+                // Duplicate-free: holdings are "a set on the wire". The
+                // retention decoder (bond_wire::ShardSet) rejects a repeated id;
+                // this oracle enforces the same rule independently, so the two
+                // decoders cannot diverge on validity (a wire the retention
+                // verify rejects must not decode here as accepted). Sorted
+                // scratch copy — the accepted wire preserves insertion order.
+                let mut sorted = shard_ids.clone();
+                sorted.sort_unstable();
+                if let Some(pair) = sorted.windows(2).find(|w| w[0] == w[1]) {
+                    return Err(io::Error::other(format!(
+                        "shekyl-wire: holdings shard id {} appears more than once",
+                        pair[0]
+                    )));
+                }
                 Ok(Holdings::ShardSetCompact(shard_ids))
             }
             HOLDINGS_COMPLETE_TREE => Ok(Holdings::CompleteTree),
