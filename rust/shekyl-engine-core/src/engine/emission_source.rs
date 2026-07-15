@@ -40,7 +40,7 @@
 use serde_json::{json, Value};
 use shekyl_archival_retention::{
     settlement_epoch_at_height, BadInterval, ClaimantBondRecord, CreditPair, EmissionEpochSource,
-    EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
+    EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, ShardSet,
 };
 use shekyl_rpc_client::{Rpc, RpcError};
 use shekyl_types::ChainCount;
@@ -349,7 +349,14 @@ impl EmissionClaimSource {
                 join_settlement_epoch: req_u64(v, "join_settlement_epoch")?,
                 holdings: HoldingsDescriptor {
                     kind,
-                    shard_ids: u64_array(v, "held_shard_ids")?,
+                    // Daemon-response decoder boundary: the shard list is
+                    // untrusted input, so it is validated at construction (bound
+                    // + duplicate-free) like every other holdings decoder. The
+                    // ShardSetError carries the specific fault (which id
+                    // duplicated / the offending count) — surface it.
+                    shard_ids: ShardSet::new(u64_array(v, "held_shard_ids")?).map_err(|e| {
+                        EmissionSourceError::Malformed(format!("held_shard_ids: {e}"))
+                    })?,
                 },
                 claimed_settlement_epochs,
             })
@@ -440,7 +447,7 @@ mod tests {
                 join_settlement_epoch: 1,
                 holdings: HoldingsDescriptor {
                     kind: HoldingsKind::ShardSetCompact,
-                    shard_ids: vec![4, 9],
+                    shard_ids: ShardSet::new(vec![4, 9]).unwrap(),
                 },
                 claimed_settlement_epochs: vec![1],
             }),

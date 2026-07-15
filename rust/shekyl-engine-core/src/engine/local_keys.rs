@@ -1649,6 +1649,7 @@ mod tests {
         use shekyl_archival_retention::{
             bond_floor, verify_bond_post_ct_balance, verify_join_market_bond_post,
             BondCtBalanceError, BondPostError, BondTerm, HoldingsDescriptor, HoldingsKind,
+            ShardSet,
         };
         use shekyl_bulletproofs::Bulletproof;
         use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
@@ -1677,7 +1678,7 @@ mod tests {
 
         let holdings = HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
-            shard_ids: vec![7, 42],
+            shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
         };
         let floor = bond_floor(&holdings);
         assert!(

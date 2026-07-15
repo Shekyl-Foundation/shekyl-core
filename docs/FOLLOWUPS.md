@@ -47,29 +47,6 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **`ShardSet` newtype: parse-don't-validate holdings shard list** (added
-  2026-07-14, Rebond review round, PR #307 commit 9b0ab6e68). The oversize
-  fail-open hole in the Rebond verify existed because `HoldingsDescriptor`'s
-  `shard_ids: Vec<u64>` carries its structural bounds by convention:
-  `bond_floor` signals an invalid set with an in-band `0` (the same value the
-  legitimate empty exit shape returns), so each verify must re-guard oversize
-  independently. The review round enforced the wire codec's
-  `MAX_HOLDINGS_SHARDS` cap at every construction boundary (wire decoder,
-  which already had it; the FFI marshal `bond_post_vin_from_raw`, code 47;
-  verify/connect belts 45 + `REBOND_APPLY` 12) — the *checks* are complete,
-  but the invariant is still convention, not type. The follow-up: convert the
-  shard list to a validated `ShardSet` constructed only by the decoders
-  (bound-checked at construction; decide duplicate handling explicitly —
-  today `single_shard_diff`/`superset_added_diff` reject duplicates per-verify
-  while JoinMarket tolerates them, a set-semantics wart the type should
-  settle), then retire `bond_floor`'s in-band `0` and the per-verify oversize
-  guards. Scope note (why it did not ride the review round):
-  `HoldingsDescriptor` is a pub-field struct shared by BOTH consensus wires
-  (bond-post `0x03` + reward-emission `0x04`) across ~6 crates / 15 files,
-  and its order-preserving encoding feeds signature preimages — the
-  conversion is its own PR with a byte-identical-wire proof obligation.
-  *Target: V3.0 (shortly after `feat/bond-fsm-rebond` lands).*
-
 - **Unbond verify: record-floor belt (the `RebondRecordFloorBroken` twin)**
   (added 2026-07-14, Rebond review round, PR #307 commit 9b0ab6e68). The
   Rebond verify now checks the record floor invariant

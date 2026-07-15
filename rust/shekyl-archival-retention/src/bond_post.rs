@@ -12,7 +12,7 @@
 use thiserror::Error;
 
 use crate::bond_floor::{bond_floor, bond_floor_of};
-use crate::bond_wire::{ArchivalBondPostVin, BondPostKind, HoldingsKind, MAX_HOLDINGS_SHARDS};
+use crate::bond_wire::{ArchivalBondPostVin, BondPostKind, HoldingsKind};
 use crate::distinct::all_distinct;
 use crate::release_cooldown::{release_cooldown_elapsed, slashes_settled_through};
 
@@ -118,13 +118,6 @@ pub enum BondPostError {
          HoldingsUpdate-drop's gated job)"
     )]
     RebondNotSuperset,
-    #[error(
-        "Rebond post-holdings exceed the codec shard cap — bond_floor collapses \
-         to 0 on an oversize set, which would let an oversize post on a \
-         terminal-slashed record demand zero credit and then abort block-connect \
-         at the record encode"
-    )]
-    RebondPostOversize,
     #[error(
         "record bonded_total != bond_floor(record holdings) — record corruption; \
          rejected at verify so a verify-valid tx can never meet the connect \
@@ -456,16 +449,10 @@ pub fn verify_rebond_bond_post(
     if vin.holdings.shard_ids.is_empty() {
         return Err(BondPostError::ShardSetCompactEmpty);
     }
-    // `bond_floor` collapses to 0 on a post set past the codec cap — the same
-    // in-band zero as the empty exit shape — so without this bound an oversize
-    // post on a terminal-slashed record (bonded_total == 0) would demand zero
-    // credit below, verify with 4097+ unfunded shards, and then abort block
-    // connect at the record encode. The wire decoder enforces the cap, but the
-    // FFI marshal is a second decoder; verify fails closed regardless of entry
-    // (the Unbond oversize guard's Rebond twin).
-    if vin.holdings.shard_ids.len() > MAX_HOLDINGS_SHARDS {
-        return Err(BondPostError::RebondPostOversize);
-    }
+    // (No oversize guard here: `vin.holdings.shard_ids` is a `ShardSet`, bounded
+    // at construction, so an oversize post is unrepresentable by the time verify
+    // runs — the former `RebondPostOversize` belt was retired with the newtype.
+    // The raw-slice connect path re-guards it in `rebond_connect`'s `PostOversize`.)
     // Precondition: exactly one open bad interval (Pin 5's coalescing invariant).
     let open_count = record_bad_intervals
         .iter()
@@ -691,7 +678,7 @@ pub fn bond_post_block_unique(p_canonical_ids: &[[u8; 32]]) -> bool {
 mod tests {
     use super::*;
     use crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC;
-    use crate::bond_wire::{HoldingsDescriptor, HoldingsKind, MAX_HOLDINGS_SHARDS};
+    use crate::bond_wire::{HoldingsDescriptor, HoldingsKind, ShardSet};
 
     fn valid_join_vin() -> ArchivalBondPostVin {
         ArchivalBondPostVin {
@@ -701,7 +688,7 @@ mod tests {
             bond_spend_pk: vec![0xE5; 64],
             holdings: HoldingsDescriptor {
                 kind: HoldingsKind::ShardSetCompact,
-                shard_ids: vec![7, 42],
+                shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
             },
             bonded_total_atomic: 2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             bond_credit: 2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
@@ -727,7 +714,7 @@ mod tests {
     #[test]
     fn rejects_empty_shard_set() {
         let mut vin = valid_join_vin();
-        vin.holdings.shard_ids.clear();
+        vin.holdings.shard_ids = ShardSet::empty();
         assert_eq!(
             verify_join_market_bond_post(&vin, false),
             Err(BondPostError::ShardSetCompactEmpty)
@@ -738,7 +725,7 @@ mod tests {
     fn rejects_complete_tree_with_shards() {
         let mut vin = valid_join_vin();
         vin.holdings.kind = HoldingsKind::CompleteTree;
-        vin.holdings.shard_ids = vec![1];
+        vin.holdings.shard_ids = ShardSet::new(vec![1]).unwrap();
         vin.bonded_total_atomic = ARCHIVAL_BOND_FLOOR_ATOMIC;
         vin.bond_credit = ARCHIVAL_BOND_FLOOR_ATOMIC;
         assert_eq!(
@@ -772,7 +759,7 @@ mod tests {
     #[test]
     fn rejects_floor_zero_via_empty_shards() {
         let mut vin = valid_join_vin();
-        vin.holdings.shard_ids.clear();
+        vin.holdings.shard_ids = ShardSet::empty();
         assert_eq!(
             verify_join_market_bond_post(&vin, false),
             Err(BondPostError::ShardSetCompactEmpty)
@@ -826,7 +813,7 @@ mod tests {
             bond_spend_pk: Vec::new(),
             holdings: HoldingsDescriptor {
                 kind: HoldingsKind::ShardSetCompact,
-                shard_ids: vec![],
+                shard_ids: ShardSet::empty(),
             },
             bonded_total_atomic: 0,
             bond_credit: 0,
@@ -973,28 +960,22 @@ mod tests {
     fn rejects_floor_mismatch_nonempty_holdings() {
         // Non-empty holdings ⇒ bond_floor > 0, but bonded_total_atomic is 0.
         let mut vin = valid_unbond_vin();
-        vin.holdings.shard_ids = vec![7];
+        vin.holdings.shard_ids = ShardSet::new(vec![7]).unwrap();
         assert_eq!(ok_unbond(&vin), Err(BondPostError::UnbondFloorMismatch));
     }
 
-    #[test]
-    fn rejects_oversize_shard_set_masquerading_as_empty() {
-        // `bond_floor` returns 0 for an oversize shard set just as it does for the
-        // empty full-exit holdings, so a floor-0 descriptor that still carries shards
-        // must not pass the full-exit checks. Reachable via the FFI, which marshals
-        // shard ids without re-running the wire decoder's MAX_HOLDINGS_SHARDS bound.
-        let mut vin = valid_unbond_vin();
-        vin.holdings.shard_ids = vec![0u64; MAX_HOLDINGS_SHARDS + 1];
-        assert_eq!(bond_floor(&vin.holdings), 0);
-        assert_eq!(ok_unbond(&vin), Err(BondPostError::UnbondHoldingsNotEmpty));
-    }
+    // (The former `rejects_oversize_shard_set_masquerading_as_empty` test is
+    // retired: an oversize holdings is now unrepresentable — `ShardSet::new`
+    // rejects it at the decode/marshal boundary before any verify runs. The
+    // type-level rejection and byte-identity are covered by the `ShardSet` tests
+    // in `bond_wire`; the FFI marshal boundary keeps its own oversize test.)
 
     #[test]
     fn rejects_partial_unbond_nonzero_post_total() {
         // Consistent post-state but total != 0 ⇒ partial exit; belongs on the
         // HoldingsUpdate-drop path, not Unbond.
         let mut vin = valid_unbond_vin();
-        vin.holdings.shard_ids = vec![7];
+        vin.holdings.shard_ids = ShardSet::new(vec![7]).unwrap();
         vin.bonded_total_atomic = ARCHIVAL_BOND_FLOOR_ATOMIC;
         assert_eq!(ok_unbond(&vin), Err(BondPostError::NotFullUnbond));
     }
@@ -1084,7 +1065,7 @@ mod tests {
             bond_spend_pk: Vec::new(),
             holdings: HoldingsDescriptor {
                 kind: HoldingsKind::ShardSetCompact,
-                shard_ids: vec![7, 9, 11], // current + one new shard
+                shard_ids: ShardSet::new(vec![7, 9, 11]).unwrap(), // current + one new shard
             },
             bonded_total_atomic: 3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             bond_credit: ARCHIVAL_BOND_FLOOR_ATOMIC,
@@ -1159,7 +1140,7 @@ mod tests {
         let vin = ArchivalBondPostVin {
             holdings: HoldingsDescriptor {
                 kind: HoldingsKind::ShardSetCompact,
-                shard_ids: vec![11],
+                shard_ids: ShardSet::new(vec![11]).unwrap(),
             },
             bonded_total_atomic: ARCHIVAL_BOND_FLOOR_ATOMIC,
             bond_credit: ARCHIVAL_BOND_FLOOR_ATOMIC,
@@ -1214,7 +1195,7 @@ mod tests {
     fn add_rejects_not_single_add() {
         // Post adds two shards.
         let mut vin = valid_add_vin();
-        vin.holdings.shard_ids = vec![7, 9, 11, 13];
+        vin.holdings.shard_ids = ShardSet::new(vec![7, 9, 11, 13]).unwrap();
         vin.bonded_total_atomic = 4 * ARCHIVAL_BOND_FLOOR_ATOMIC;
         assert_eq!(ok_add(&vin), Err(BondPostError::HoldingsUpdateNotSingleAdd));
     }
@@ -1246,7 +1227,7 @@ mod tests {
             bond_spend_pk: Vec::new(),
             holdings: HoldingsDescriptor {
                 kind: HoldingsKind::ShardSetCompact,
-                shard_ids: vec![7], // current {7, 11} minus 11
+                shard_ids: ShardSet::new(vec![7]).unwrap(), // current {7, 11} minus 11
             },
             bonded_total_atomic: ARCHIVAL_BOND_FLOOR_ATOMIC,
             bond_credit: 0,
@@ -1328,7 +1309,7 @@ mod tests {
     fn drop_rejects_last_shard() {
         // Dropping the only shard: post empty → use Unbond.
         let mut vin = valid_drop_vin();
-        vin.holdings.shard_ids = vec![];
+        vin.holdings.shard_ids = ShardSet::empty();
         vin.bonded_total_atomic = 0;
         assert_eq!(
             verify_holdings_update_drop(
@@ -1435,7 +1416,8 @@ mod tests {
     }
 
     fn rebond_vin(post: Vec<u64>, credit: u64) -> ArchivalBondPostVin {
-        let post_floor = post.len() as u64 * ARCHIVAL_BOND_FLOOR_ATOMIC;
+        let shard_ids = ShardSet::new(post).expect("rebond fixture holdings are valid");
+        let post_floor = shard_ids.len() as u64 * ARCHIVAL_BOND_FLOOR_ATOMIC;
         ArchivalBondPostVin {
             hybrid_public_key: vec![0xAB; 64],
             p_canonical_id: [0x11; 32],
@@ -1443,7 +1425,7 @@ mod tests {
             bond_spend_pk: Vec::new(),
             holdings: HoldingsDescriptor {
                 kind: HoldingsKind::ShardSetCompact,
-                shard_ids: post,
+                shard_ids,
             },
             bonded_total_atomic: post_floor,
             bond_credit: credit,
@@ -1620,11 +1602,9 @@ mod tests {
             ok_rebond(&rebond_vin(vec![7], 0)),
             Err(BondPostError::RebondNotSuperset)
         );
-        // A duplicate in post is not a set.
-        assert_eq!(
-            ok_rebond(&rebond_vin(vec![7, 9, 9], ARCHIVAL_BOND_FLOOR_ATOMIC)),
-            Err(BondPostError::RebondNotSuperset)
-        );
+        // (A duplicate post — `vec![7, 9, 9]` — is no longer reachable here: it
+        // cannot be constructed into a `ShardSet`, so the "not a set" case is a
+        // `ShardSet::new` rejection, tested in `bond_wire`.)
     }
 
     #[test]
@@ -1662,31 +1642,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn rebond_rejects_oversize_shard_set() {
-        // The fail-open hole this guard closes: on a terminal-slashed record
-        // (bonded_total == 0, no held shards) an oversize post collapses
-        // bond_floor to 0, so expected_credit == 0 and the vin verified with
-        // 4097+ shards and ZERO collateral funded — then rebond_connect (which
-        // credits |added|·FLOOR directly) produced a record the codec refuses
-        // to encode, aborting block connect deterministically. Reachable via
-        // the FFI, which is a second decoder for the wire object (the Unbond
-        // oversize test's Rebond twin); the FFI marshal now also enforces the
-        // cap at the boundary.
-        let mut vin = rebond_vin((0..=MAX_HOLDINGS_SHARDS as u64).collect(), 0);
-        vin.bonded_total_atomic = 0;
-        assert_eq!(bond_floor(&vin.holdings), 0);
-        assert_eq!(
-            verify_rebond_bond_post(
-                &vin,
-                Some(0),
-                HoldingsKind::ShardSetCompact,
-                &[],
-                &[open_interval(5)],
-            ),
-            Err(BondPostError::RebondPostOversize)
-        );
-    }
+    // (The former `rebond_rejects_oversize_shard_set` verify test is retired
+    // with the `RebondPostOversize` belt: an oversize post cannot be built into
+    // the vin's `ShardSet`, so the fail-open hole it closed — an oversize post
+    // collapsing `bond_floor` to 0 on a terminal record, verifying with zero
+    // collateral, then aborting the block-connect encode — is now
+    // unrepresentable at the decode/marshal boundary. The bound is proven by
+    // the `ShardSet` construction tests and re-guarded on the raw-slice connect
+    // path by `rebond_connect`'s `PostOversize` belt + the FFI marshal test.)
 
     #[test]
     fn rebond_rejects_record_floor_drift() {

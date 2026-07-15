@@ -24,7 +24,7 @@ use shekyl_archival_retention::CreditPair as Pair;
 use shekyl_archival_retention::{
     as_of_e_served_work, curve_milli, epoch_close_height, reward_share_floor, sigma_work_milli,
     ArchivalRewardEmissionVin, BandedCurveParams, EpochCloseBond, EpochCloseInputs,
-    EpochCloseShard, HoldingsDescriptor, HoldingsKind, KCover, MembershipOnlyBacking,
+    EpochCloseShard, HoldingsDescriptor, HoldingsKind, KCover, MembershipOnlyBacking, ShardSet,
     ShardWorkEntry, WorkEpochClaim, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, MAX_CLAIM_AGE_W,
     SETTLEMENT_EPOCH_BLOCKS,
 };
@@ -134,7 +134,7 @@ impl Fixture {
 fn holdings() -> HoldingsDescriptor {
     HoldingsDescriptor {
         kind: HoldingsKind::ShardSetCompact,
-        shard_ids: vec![SHARD_A],
+        shard_ids: ShardSet::new(vec![SHARD_A]).unwrap(),
     }
 }
 
@@ -308,7 +308,7 @@ fn bond_posture_rejections() {
 
     // Holdings descriptor drift between vin and record.
     let mut drifted = Ctx::accepting(&fx);
-    drifted.bond_holdings.shard_ids = vec![SHARD_A, SHARD_B];
+    drifted.bond_holdings.shard_ids = ShardSet::new(vec![SHARD_A, SHARD_B]).unwrap();
     assert!(matches!(
         emission_vin_verify_claims(&vin, &drifted.as_context(), &[source(&fx)]).unwrap_err(),
         EmissionVerifyError::HoldingsMismatch

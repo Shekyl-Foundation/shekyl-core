@@ -443,7 +443,7 @@ pub(crate) struct FundingInputContext {
 /// canonical wire [`Holdings`] enum.
 pub(crate) fn wire_holdings(holdings: &HoldingsDescriptor) -> Holdings {
     match holdings.kind {
-        HoldingsKind::ShardSetCompact => Holdings::ShardSetCompact(holdings.shard_ids.clone()),
+        HoldingsKind::ShardSetCompact => Holdings::ShardSetCompact(holdings.shard_ids.to_vec()),
         HoldingsKind::CompleteTree => Holdings::CompleteTree,
     }
 }

@@ -678,7 +678,8 @@ mod tests {
     use super::*;
 
     use shekyl_archival_retention::{
-        HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking, ShardWorkEntry, WorkEpochClaim,
+        HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking, ShardSet, ShardWorkEntry,
+        WorkEpochClaim,
     };
     use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
     use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
@@ -743,7 +744,7 @@ mod tests {
             p_pubkey: p.hybrid_bond_id().to_canonical_bytes().expect("encode"),
             holdings: HoldingsDescriptor {
                 kind: HoldingsKind::CompleteTree,
-                shard_ids: Vec::new(),
+                shard_ids: ShardSet::empty(),
             },
             settlement_epochs: vec![11],
             work_claim: vec![WorkEpochClaim {

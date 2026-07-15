@@ -1905,18 +1905,22 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM     42
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS            43
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET     44
-// Rebond post-holdings exceed the codec shard cap (bond_floor collapses to an
-// in-band 0 on an oversize set — without the bound a terminal-slashed record
-// verified an oversize post at zero credit, then aborted block connect at the
-// record encode).
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE    45
+// RETIRED — never returned. Code 45 was the Rebond verify-level oversize belt,
+// removed with the Rust ShardSet newtype (an oversize post is now
+// unrepresentable in the vin's holdings). The symbol stays DEFINED and reserved
+// (rather than renumbering 46/47/48) so the Rust<->C++ code contract is explicit
+// and a stray/legacy 45 maps to a meaningful message, not "unknown".
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE_RETIRED 45
 // Record bonded_total != bond_floor(record holdings) — floor-drifted record,
 // rejected at verify so the tx never rides to the connect fold's FATAL belt.
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR     46
 // Shared vin marshal (every bond-post verify entry): the vin's holdings shard
 // count exceeds the wire codec bound (MAX_HOLDINGS_SHARDS) — the FFI marshal
-// is a second decoder and enforces the decoder's structural cap.
+// routes through ShardSet::new, a second decoder for the same wire object.
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED 47
+// Shared vin marshal: the vin's holdings carry a duplicate shard id (rejected
+// at the same ShardSet::new boundary as the count cap — "a set on the wire").
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD 48
 
 /// Unbond bond-post verify. `record_exists`/`record_bonded_total`/
 /// `record_bad_interval_count` come from the LMDB bond record;

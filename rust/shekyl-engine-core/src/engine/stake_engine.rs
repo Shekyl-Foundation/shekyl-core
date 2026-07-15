@@ -2963,7 +2963,7 @@ mod tests {
     use super::test_fixtures::{constructed_record, derive_bundle, spawn_over};
     use super::*;
 
-    use shekyl_archival_retention::MAX_CLAIM_AGE_W;
+    use shekyl_archival_retention::{ShardSet, MAX_CLAIM_AGE_W};
 
     /// The genesis-frozen `hybrid_bond_id` canonical bytes for a slot, computed
     /// directly via the derivation oracle.
@@ -3445,7 +3445,7 @@ mod tests {
         let bundle = derive_bundle(0);
         let holdings = HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
-            shard_ids: vec![7, 42],
+            shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
         };
         let tx_prefix_hash = [0u8; 32];
         let vin = build_join_market_vin(&bundle, holdings, &tx_prefix_hash)
@@ -3503,7 +3503,7 @@ mod tests {
 
         let holdings = HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
-            shard_ids: vec![7, 42],
+            shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
         };
         let err = handle
             .sign_bond(h0, ticket_for_slot_1, holdings, [0u8; 32])
@@ -3566,7 +3566,7 @@ mod tests {
         let ticket = PersistedBondTicket::__test_only_forge(PSlot::from_raw(0));
         let holdings = HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
-            shard_ids: vec![7, 42],
+            shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
         };
         let post = handle
             .sign_bond(h0, ticket, holdings, [0u8; 32])

@@ -270,12 +270,27 @@ u8                      holdings_kind       (0=ShardSetCompact, 1=CompleteTree)
 // if holdings_kind == 0:
 varint                  shard_count         (≤ 4096)
 repeat shard_count:
-  varint                shard_id
+  varint                shard_id            // set: no duplicate id; order preserved (not canonicalized)
 // if holdings_kind == 1: no shard list (sentinel only)
 varint                  bonded_total_atomic
 varint                  bond_credit
 varint                  bond_debit
 ```
+
+**The shard list is a set on the wire (ratified 2026-07-15).** A `ShardSetCompact`
+holdings carries **no duplicate shard id** — a shard is a distinct retention
+obligation, so `[7, 7]` (which would bond `2·FLOOR` for one shard) is invalid.
+This is enforced at the **decode boundary** in both consensus decoders — the Rust
+`bond_wire::ShardSet` newtype (parse-don't-validate: bound + duplicate-free at
+construction, the only way to obtain a `ShardSet`) and the independent
+`shekyl-wire` oracle — so an invalid set is unrepresentable past any decoder
+rather than re-guarded per verify. **Insertion order is NOT canonicalized:** the
+ids encode in the order given, so `[7, 42]` and `[42, 7]` are distinct valid
+encodings of the same set (benign — holdings feed the signature preimage, so only
+the signer produces either and only one connects). The encoding of any valid
+(duplicate-free) holdings is **byte-identical** to the pre-`ShardSet` form; the
+tightening rejects only duplicate-carrying byte strings, which no honest wallet
+emits.
 
 Hybrid spend authorization uses **transaction-level** `pqc_auths[]` aligned with `vin[]`
 indices (not an on-vin signature blob). Preimage:

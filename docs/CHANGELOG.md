@@ -4,6 +4,41 @@
 
 ### Added
 
+- **archival: `ShardSet` newtype — parse-don't-validate holdings shard list, and
+  the shard list is now a set on the wire (gate-4 §3.4.1; `feat/shardset-newtype`).**
+  Converts `HoldingsDescriptor.shard_ids` from a bare `Vec<u64>` to a validated
+  `ShardSet`: the structural invariants that were carried by convention — the
+  `MAX_HOLDINGS_SHARDS` bound (each verify re-guarding; `bond_floor` signalling an
+  invalid set with an in-band `0`, the same value the empty exit shape returns)
+  and duplicate-freeness — are enforced **once, at construction**, so an invalid
+  set is unrepresentable past any decoder.
+  - **Consensus tightening (ratified 2026-07-15): holdings are a set.** A shard
+    is a distinct retention obligation, so a `ShardSetCompact` list carries no
+    duplicate id — previously rejected only inside the `HoldingsUpdate`/`Rebond`
+    diffs and **silently tolerated by `JoinMarket`** (`[7, 7]` bonded `2·FLOOR`
+    for one shard). Duplicate-carrying byte strings now reject at decode.
+  - **Byte-identical for accepted txs.** Insertion order is preserved (not
+    canonicalized), so a valid `ShardSet` encodes exactly as the old `Vec` did —
+    no accepted tx re-encodes; only the validity predicate tightens. Pinned by
+    the unchanged golden-vector codec test.
+  - Construction routes through `ShardSet::new` at every decoder boundary: the
+    wire decoder (new `WireError::HoldingsDuplicateShard`), the FFI vin marshal
+    (a second decoder — new code 48 `HOLDINGS_DUPLICATE_SHARD` beside the count
+    cap), the emission claim-source decoder, and every builder/fixture. `ShardSet`
+    derefs to `[u64]`, so read sites are untouched. The independent `shekyl-wire`
+    oracle enforces the same duplicate-reject in its own `Holdings::read`.
+  - **Retires the per-verify oversize guards** the FOLLOWUP named: the
+    `RebondPostOversize` verify belt is dead (verify receives a bounded
+    `ShardSet`) — removed; FFI/C++ code 45 reserved, not renumbered. The
+    raw-slice connect path keeps its `RebondConnectError::PostOversize` belt (C++
+    marshals the post array to the connect fold without re-constructing a
+    `ShardSet`); `bond_floor_of` keeps its count-path oversize guard (the Unbond
+    fold's C++ count crosses the FFI as a primitive).
+  - Tests: `ShardSet` bound/duplicate rejection, insertion-order-preserved
+    byte-identity, decode-rejects-duplicate-wire-bytes, FFI-marshal and
+    `shekyl-wire` duplicate-reject twins. Behavior-preserving migration across 6
+    crates (retention, ffi, engine-core, bond-builder, staking-sim, shekyl-wire).
+
 - **archival: `Rebond` — post-slash reinstatement, end-to-end + the same-epoch
   slash-interval consensus-halt fix (gate-4 §3.4; P2B-9, ratified 2026-07-14;
   `feat/bond-fsm-rebond`).** The final bond-FSM kind: the full genesis lifecycle
