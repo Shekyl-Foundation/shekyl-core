@@ -86,7 +86,7 @@ One validation surface (rule 19):
 | ID | Work |
 | --- | --- |
 | **MSW-1** | Reconcile `PQC_MAX_PUBLIC_KEY_BLOB` / `PQC_MAX_SIGNATURE_BLOB` / `MULTISIG_KEY_HEADER_LEN` against `MultisigKeyContainer::expected_blob_len` / sig layout. Single-source across `cryptonote_config.h` / `shekyl-wire` / `shekyl-crypto-pq`; **delete** the `tx_pqc_verify.cpp:49-52` local shadow (and keep `submit/verifier.rs` in lockstep — R1-F-8). Cross-seam KAT: every `n ∈ 1..=MAX_MULTISIG_PARTICIPANTS` real container round-trips **both** deserializers. |
-| **MSW-2** | **Pin scheme-disjointness as a load-bearing consensus invariant** (doc + KAT): no byte string parses as both `HybridPublicKey::from_canonical_bytes` and `MultisigKeyContainer::from_canonical_bytes`. Separation is **byte[2]**: scheme-1 `reserved == 0` ⊥ scheme-2 `m_required ≥ 1` (`signature.rs` reserved check; `multisig.rs:68`). Length disjointness is a second, independent separator. **Leaf preimage left alone.** Rule-21 reopen: any use of `reserved`, any `MULTISIG_CONTAINER_VERSION` bump, any new scheme id / V4 lattice container. |
+| **MSW-2** | **Pin scheme-disjointness as a load-bearing consensus invariant** (doc + KAT): no byte string parses as both `HybridPublicKey::from_canonical_bytes` and `MultisigKeyContainer::from_canonical_bytes`. **Primary separator today: length** (1996 ∉ `{3+n·2028}`). **Secondary / header-level:** byte[2] scheme-1 `reserved == 0` ⊥ scheme-2 `m_required ≥ 1`. **Leaf preimage left alone.** Rule-21 reopen: any use of `reserved`, any `MULTISIG_CONTAINER_VERSION` bump, any new scheme id / V4 lattice container (must re-prove length non-collision too). |
 | **MSW-3** | Fix `"output committed="` misattributions (`tx_pqc_verify.cpp:191-192`, `tx_pqc_verify.h:30-31`) — consumer is intra-tx `pqc_auths[0]` consistency (`blockchain.cpp:4260`), not output binding. Record **MS-8 retirement**: `group_id = f(key_blob)` already leaf-bound; wiring `shekyl_pqc_verify_with_group_id` is a no-op. |
 
 **Genesis-adjacent (not MSW code, but answer before seal):** whether
@@ -164,8 +164,104 @@ design's acceptance**, not implementation.
 | A7 | Forge FROST `participant` index | **No** on FROST lineage |
 | A8 | Flip ships never-compiled code | **Wrong-direction gate** — R1-F-6 |
 
-**A2 + MSW-1:** raising bounds does **not** remove prefix disjointness;
-MSW-2 KAT must still pass after the bound correction. No leaf change.
+**A2 + MSW-1:** raising bounds does **not** remove length disjointness
+(1996 ∉ {2031…14199}); MSW-2 KAT remains belt-and-suspenders after
+MSW-1. No leaf change.
+
+---
+
+## §0.2 Independent code audit of the findings (maintainer/agent)
+
+Reviewed against this tree (same formulas as pin `b23cdaff0` for
+multisig surfaces). Disposition: **confirm / sharpen / push back**.
+
+### R1-F-1 — **CONFIRMED**
+
+- `expected_blob_len(7) = 14199`; `PQC_MAX_PUBLIC_KEY_BLOB = 13974`
+  (`cryptonote_config.h:290`, `shekyl-wire` twin). Sig twin:
+  `23703 > 23697`. Arithmetic matches the review.
+- Reject site is deserialize (`cryptonote_basic.h:458`), before verify.
+- **"Correction, not growth"** holds: container layout already encodes
+  14199; the ceiling was written for a pre-version/`spend_auth`
+  formula.
+- Local shadow `MULTISIG_MAX_KEY_BLOB = 2 + 7*1996` in
+  `tx_pqc_verify.cpp:50-52` is the **same fossil**, and is wrong in
+  *two* ways (header claimed as `n‖m` only — omits `version`; max
+  omits `n·32` spend-auth). A naive "fix" of `3 + 7*1996 = 13975`
+  would **still** reject N=7. MSW-1 must single-source
+  `expected_blob_len` / the sig twin, not invent a third formula.
+- Fund-loss shape holds: creating a payment *to* a multisig address
+  does not put the key container in the creator's `pqc_auths`; the
+  spend does. Output can land; spend fails to parse.
+
+### R1-F-2 / leaf change — **RETRACTION HOLDS; byte[2] oversold**
+
+- **Leaf change not needed / not free:** confirmed. `PqcLeafScalar`
+  hashes raw `pqc_pk` bytes for scheme 1 and 2; retargeting the
+  preimage is a cross-cutting ABI/vector/emission Auth-B change.
+- **Dual-parse of one byte string as both `HybridPublicKey` and
+  `MultisigKeyContainer` is already impossible by length alone:**
+  solo is exactly 1996; scheme-2 lengths are `3+n·2028`
+  (`2031…14199`). No integer `n` yields 1996. Both parsers require
+  exact length (`cursor == len` / `expected_blob_len`).
+- **Byte[2] `reserved==0` ⊥ `m_required≥1`:** real as a *header-level*
+  check when a solo key blob is fed to `MultisigKeyContainer::from_canonical_bytes`
+  (`bytes[2]==0` → `m_required==0` reject at `multisig.rs:120`). It is
+  **secondary** to length for the actual parsers. Calling it "the"
+  separator overstates; MSW-2 is still worth pinning as a rule-21
+  invariant (reserved must not gain meaning; container version bumps
+  must re-prove non-collision), not as the sole A2 defense.
+- **A2 (lie about `scheme_id`):** with leaf-bound bytes, scheme-1
+  verify requires `len==1996`; scheme-2 requires a container parse.
+  Cross-scheme auth fails at length/parse without a leaf change.
+  Blockchain comment that scheme binding "relies on the leaf hash"
+  (`blockchain.cpp:4251-4253`) is imprecise — the leaf binds **bytes**;
+  scheme is enforced by how those bytes parse under `scheme_id`.
+
+### MS-8 retirement — **CONFIRMED**
+
+`verify_multisig` check 9 recomputes `multisig_group_id(container)`
+from the same blob the leaf already commits. Optional
+`expected_group_id` cannot add binding the leaf lacks. Redundancy
+argument does **not** depend on changing the leaf.
+
+### Reward-zone / `MAX=7` — **MATH CONFIRMED; rhetoric trim**
+
+- Per-input 7-of-7 `PqcAuth` ≈ **37911** bytes (header + varints +
+  14199 + 23703). `8 * 37911 = 303288 > 300000`
+  (`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`). Correct.
+- Prefer: "a single legal maxed multisig spend **exceeds the
+  penalty-free zone by itself**" over "unprofitable to mine" (penalty
+  ≠ necessarily unprofitable once fees are counted).
+- Corner case (8-in × 7-of-7), but still a fair **MSW-G** genesis
+  question.
+
+### Fee model / `MAX_INPUTS` — **CONFIRMED (Track B)**
+
+- `pqc_auth_weight()` hardcodes solo lengths
+  (`tx_fee_model.rs:151-158`).
+- `v31/intent.rs MAX_INPUTS = 128` vs `shekyl_fcmp::MAX_INPUTS = 8` /
+  `FCMP_MAX_INPUTS_PER_TX`. Note: `cryptonote_config.h:200-207`
+  comments about intent.rs/`build.rs` sync refer to **reference-block
+  age** constants, **not** this 128 — so 128 is real drift, not a
+  synced authority.
+
+### `wallet2` PQC multisig surface — **CONFIRMED**
+
+`create_pqc_multisig_group` / `m_pqc_multisig_*` at
+`wallet2.cpp:9828-9852` uses `shekyl_pqc_multisig_group_id` (correct
+derivation). MS-2 "don't thicken" stands; §2.3 must not claim C++ has
+no multisig surface.
+
+### R1-F-3…F-7, F-6 CI — **not re-litigated here**
+
+Still Round 1 closure blockers for Track B; this audit focused on the
+Track A / F-2 / size claims that decide whether Track A is a constant
+fix.
+
+**Net:** proceed with **revised Track A** as documented in §0. Record
+MSW-2 as invariant+KAT with the sharpened "length primary, prefix
+secondary" wording. Do not reopen leaf preimage.
 
 ---
 
@@ -473,3 +569,4 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-14 | Round 1 opened; MS-1…MS-8 posed |
 | 2026-07-14 | Adversarial review recorded (R1-F-1…F-10); Track A/B split; MS-8 retired; Round 1 closure blocked on F-3…F-7 + F-6 CI; MSW family registered |
 | 2026-07-14 | **F-2 retraction:** leaf preimage left alone; Track A revised to constant-family fix + prefix-disjointness KAT + misattribution; size/fee/`MAX_INPUTS` → Track B; `wallet2` group surface acknowledged; **MSW-G** on whether `MAX=7` survives reward-zone |
+| 2026-07-14 | **§0.2 independent audit:** F-1 confirmed (shadow formula must use `expected_blob_len`, not `3+N*1996`); F-2 retraction holds but byte[2] oversold — length is primary separator; reward-zone math confirmed with rhetoric trim; fee/`MAX_INPUTS`/wallet2 confirmed |
