@@ -165,7 +165,7 @@ impl FrostSalSession {
             .as_mut()
             .ok_or(ProveError::UpstreamError("session already consumed".into()))?;
 
-        let _addendum = algo.preprocess_addendum(&mut OsRng, keys);
+        algo.preprocess_addendum(&mut OsRng, keys);
         let nonce_generators = algo.nonces();
 
         let k = Zeroizing::new(Scalar::random(&mut OsRng));
@@ -224,7 +224,7 @@ impl FrostSalSession {
 
         let share = algo.sign_share(params, nonce_sums, vec![k], &[]);
         Ok(FrostSignShareResult {
-            share: share.to_repr().into(),
+            share: share.to_repr(),
         })
     }
 
@@ -283,7 +283,7 @@ impl fmt::Debug for FrostSigningCoordinator {
             .field("included", &self.included.len())
             .field("commitments_collected", &self.commitments.len())
             .field("shares_collected", &self.shares.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -401,11 +401,11 @@ impl FrostSigningCoordinator {
 
                 let mut offset = 0;
                 for (set_idx, &count) in self.generators_per_nonce.iter().enumerate() {
-                    for gen_idx in 0..count {
+                    for sum_pt in sums[set_idx].iter_mut().take(count) {
                         let mut buf = [0u8; 32];
                         buf.copy_from_slice(&raw[offset..offset + 32]);
                         let pt = decompress_point(&buf, "nonce_commitment")?;
-                        sums[set_idx][gen_idx] = sums[set_idx][gen_idx] + pt;
+                        *sum_pt += pt;
                         offset += 32;
                     }
                 }
@@ -438,6 +438,10 @@ impl FrostSigningCoordinator {
     }
 
     /// Collect a partial signature share from one participant for all inputs.
+    // rule-21: `input_shares` is owned by value pending the MS-5 spend-path
+    // API design. Reshaping to `&[FrostSignShareResult]` now pre-decides the
+    // coordinator collection API that E′ will consume; reopen when MS-5 lands.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn collect_shares(
         &mut self,
         from: Participant,
@@ -487,7 +491,7 @@ impl FrostSigningCoordinator {
 
         let mut sum = Scalar::ZERO;
         for participant in &self.included {
-            sum = sum + self.shares[participant][input_idx];
+            sum += self.shares[participant][input_idx];
         }
         Ok(sum)
     }
@@ -541,7 +545,7 @@ impl FrostSigningCoordinator {
 // ---------------------------------------------------------------------------
 
 fn decompress_point(bytes: &[u8; 32], field: &'static str) -> Result<EdwardsPoint, ProveError> {
-    let ct = <EdwardsPoint as GroupEncoding>::from_bytes(bytes.into());
+    let ct = <EdwardsPoint as GroupEncoding>::from_bytes(bytes);
     if bool::from(ct.is_some()) {
         Ok(ct.unwrap())
     } else {
@@ -553,7 +557,7 @@ fn decompress_point(bytes: &[u8; 32], field: &'static str) -> Result<EdwardsPoin
 }
 
 fn deserialize_scalar(bytes: &[u8; 32], field: &'static str) -> Result<Scalar, ProveError> {
-    let ct = Scalar::from_repr((*bytes).into());
+    let ct = Scalar::from_repr(*bytes);
     if bool::from(ct.is_some()) {
         Ok(ct.unwrap())
     } else {
@@ -596,10 +600,10 @@ mod tests {
         let c = EdwardsPoint::random(&mut rand_core::OsRng);
 
         let input = FrostSalInput {
-            output_key: o.to_bytes().into(),
-            key_image_gen: i.to_bytes().into(),
-            commitment: c.to_bytes().into(),
-            spend_key_x: x.to_repr().into(),
+            output_key: o.to_bytes(),
+            key_image_gen: i.to_bytes(),
+            commitment: c.to_bytes(),
+            spend_key_x: x.to_repr(),
             signable_tx_hash: [0xAB; 32],
         };
 
@@ -623,10 +627,10 @@ mod tests {
         let c = EdwardsPoint::random(&mut rand_core::OsRng);
 
         let input = FrostSalInput {
-            output_key: o.to_bytes().into(),
-            key_image_gen: i.to_bytes().into(),
-            commitment: c.to_bytes().into(),
-            spend_key_x: x.to_repr().into(),
+            output_key: o.to_bytes(),
+            key_image_gen: i.to_bytes(),
+            commitment: c.to_bytes(),
+            spend_key_x: x.to_repr(),
             signable_tx_hash: [0xCD; 32],
         };
 
@@ -818,10 +822,10 @@ mod tests {
         let c = EdwardsPoint::random(&mut rand_core::OsRng);
 
         let input = FrostSalInput {
-            output_key: o.to_bytes().into(),
-            key_image_gen: i.to_bytes().into(),
-            commitment: c.to_bytes().into(),
-            spend_key_x: x.to_repr().into(),
+            output_key: o.to_bytes(),
+            key_image_gen: i.to_bytes(),
+            commitment: c.to_bytes(),
+            spend_key_x: x.to_repr(),
             signable_tx_hash: [0xEF; 32],
         };
 
