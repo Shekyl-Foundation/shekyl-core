@@ -4,6 +4,13 @@
 
 ### Added
 
+- **docs: PR #308 Copilot round 2 — E′ consistency (principles, roles,
+  ops, VERSIONING).** Principle 5 no longer claims FROST SAL is out of
+  V3.1 scope (E′ *is* 15.4a). Roles / MULTISIG_OPERATIONS banner Option D
+  prover playbooks as historical. §15.1 / §7.2 / §7.4 `spend_auth_version`
+  = `0x02`. USER_GUIDE ~5.4 KB. VERSIONING / §15.4a cite
+  `derive_output_secrets` for `y ≠ 0`, not `output.rs:304`.
+
 - **docs: defer F-6 / P0-n CI to follow-on PR (PR #308).** Remove
   `ci/multisig-feature` workflow + `check_multisig_doc_literals.sh`
   from this docs carrier so #308 can land alone. Fossil *sweeps*
