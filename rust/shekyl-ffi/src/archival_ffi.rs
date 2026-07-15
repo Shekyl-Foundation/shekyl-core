@@ -187,11 +187,13 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS: u8 = 43;
 /// Rebond verify: post-holdings are not a duplicate-free superset of the record's
 /// current holdings (Pin 1 — reinstatement, not restructuring).
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET: u8 = 44;
-/// Rebond verify: post-holdings exceed the codec shard cap — `bond_floor`
-// Code 45 (`REBOND_POST_OVERSIZE`) is RETIRED and reserved: the verify-level
-// oversize belt was removed with the `ShardSet` newtype (an oversize post is
-// unrepresentable in the vin's holdings), so the code is never returned. The
-// number stays reserved rather than renumbering 46/47.
+/// **RETIRED — never returned.** Code 45 was the Rebond verify-level oversize
+/// belt (`REBOND_POST_OVERSIZE`), removed with the `ShardSet` newtype: an
+/// oversize post is now unrepresentable in the vin's holdings, so no verify
+/// produces it. The symbol stays **defined and reserved** (rather than
+/// renumbering 46/47/48, or leaving a dangling name) so the Rust↔C++ code
+/// contract is explicit and a stray/legacy 45 maps to a meaningful message.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE_RETIRED: u8 = 45;
 /// Rebond verify: the record's `bonded_total != bond_floor(record holdings)`
 /// (floor-drifted record) — rejected at verify so the tx can never ride to the
 /// connect fold's FATAL floor belt (tx rejection, not a chain halt).

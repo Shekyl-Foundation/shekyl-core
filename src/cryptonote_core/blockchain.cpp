@@ -4634,6 +4634,9 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET:
     return "Rebond post-holdings are not a duplicate-free superset of the record's "
       "current holdings (shedding goes through HoldingsUpdate-drop)";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE_RETIRED:
+    return "retired Rebond oversize code (45) — never returned; oversize is now "
+      "unrepresentable in the vin's ShardSet holdings";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR:
     return "record bonded_total != bond_floor(record holdings) (floor-drifted record)";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED:

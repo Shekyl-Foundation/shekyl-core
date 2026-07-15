@@ -100,6 +100,24 @@ pub enum ShardSetError {
     Duplicate { shard_id: u64 },
 }
 
+impl fmt::Display for ShardSetError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CountExceeded { got } => {
+                write!(
+                    f,
+                    "shard count {got} exceeds the bound ({MAX_HOLDINGS_SHARDS})"
+                )
+            }
+            Self::Duplicate { shard_id } => {
+                write!(f, "shard id {shard_id} appears more than once")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ShardSetError {}
+
 impl ShardSet {
     /// The one fallible constructor — every decoder / FFI marshal / builder
     /// routes through it. Enforces the bound and duplicate-freeness; preserves

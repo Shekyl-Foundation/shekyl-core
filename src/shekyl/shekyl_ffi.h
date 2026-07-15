@@ -1905,10 +1905,12 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM     42
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS            43
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET     44
-// Code 45 (REBOND_POST_OVERSIZE) is RETIRED and reserved: the verify-level
-// oversize belt was removed with the Rust ShardSet newtype (an oversize post is
-// unrepresentable in the vin's holdings). The number stays reserved rather than
-// renumbering 46/47.
+// RETIRED — never returned. Code 45 was the Rebond verify-level oversize belt,
+// removed with the Rust ShardSet newtype (an oversize post is now
+// unrepresentable in the vin's holdings). The symbol stays DEFINED and reserved
+// (rather than renumbering 46/47/48) so the Rust<->C++ code contract is explicit
+// and a stray/legacy 45 maps to a meaningful message, not "unknown".
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE_RETIRED 45
 // Record bonded_total != bond_floor(record holdings) — floor-drifted record,
 // rejected at verify so the tx never rides to the connect fold's FATAL belt.
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR     46

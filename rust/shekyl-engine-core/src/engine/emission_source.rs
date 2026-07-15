@@ -351,11 +351,11 @@ impl EmissionClaimSource {
                     kind,
                     // Daemon-response decoder boundary: the shard list is
                     // untrusted input, so it is validated at construction (bound
-                    // + duplicate-free) like every other holdings decoder.
-                    shard_ids: ShardSet::new(u64_array(v, "held_shard_ids")?).map_err(|_| {
-                        EmissionSourceError::Malformed(
-                            "held_shard_ids is oversize or carries a duplicate".into(),
-                        )
+                    // + duplicate-free) like every other holdings decoder. The
+                    // ShardSetError carries the specific fault (which id
+                    // duplicated / the offending count) — surface it.
+                    shard_ids: ShardSet::new(u64_array(v, "held_shard_ids")?).map_err(|e| {
+                        EmissionSourceError::Malformed(format!("held_shard_ids: {e}"))
                     })?,
                 },
                 claimed_settlement_epochs,
