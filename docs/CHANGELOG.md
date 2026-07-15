@@ -4,6 +4,16 @@
 
 ### Added
 
+- **docs: Round 1 adversarial on V3.1 multisig engine design — Track A/B
+  split (PR #308).** Records R1-F-1…F-10 in
+  [`V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md).
+  **Track A (MSW-1…MSW-3):** V3.0 pre-genesis wire — N=7 blob-bound
+  fossil (fund-loss), leaf `scheme_id` genesis decision, dual verify
+  sites; **not** held by engine rule-26 halt. **Track B:** MS-1…MS-7
+  remain gated; **MS-8 retired** (group_id verify is a no-op → MSW-2).
+  Round 1 cannot close until F-3…F-7 + F-6 CI. INDEX `MSW-` registry;
+  FOLLOWUPS group_id item superseded.
+
 - **docs: V3.1 multisig Rust engine integration design — Round 1 OPEN
   (`docs/v31-multisig-rust-engine-plan`).** Fires
   `V3_ENGINE_TRAIT_BOUNDARIES.md` §10.3.1. New carrier

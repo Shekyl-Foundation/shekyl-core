@@ -5812,12 +5812,25 @@ sustainability is unaffected by the recalibration.
 - **PQC Multisig V3.1: Rust engine integration design (carrier).**
   `V3_ENGINE_TRAIT_BOUNDARIES.md` §10.3.1 trigger fired 2026-07-14.
   Owning doc: [`docs/design/V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md)
-  (branch `docs/v31-multisig-rust-engine-plan`). Round 1 OPEN —
-  questions **MS-1…MS-8**. Posture: Rust-owns-logic (C++ = LMDB +
-  `scheme_id=2` verify FFI only); keep Cargo `multisig` feature
-  default-off; **no implementation** until design rounds close and
-  rule-26 pre-flight discharges. Protocol crypto stays in
-  `PQC_MULTISIG.md`. Target: V3.1.
+  (branch `docs/v31-multisig-rust-engine-plan`, draft PR #308).
+  **UPDATE 2026-07-14:** Round 1 adversarial review recorded
+  (R1-F-1…F-10). Split **Track A** (V3.0 wire, **MSW-1…MSW-3**) vs
+  **Track B** (engine, MS-1…MS-7). **MS-8 retired** (group_id verify
+  wiring is a no-op; real genesis question is leaf `scheme_id` —
+  MSW-2). Round 1 **cannot close** until F-3…F-7 + F-6 CI lane.
+  Track B: Rust-owns-logic; `multisig` default-off; rule-26 halt.
+  Track A: **not** held by that halt; awaits explicit go-ahead.
+  Target: V3.1 (Track B) / V3.0 pre-genesis (Track A).
+
+- **PQC Multisig V3.0 wire: MSW-1…MSW-3 (pre-genesis, priority 1).**
+  From Round 1 adversarial on `V3_1_MULTISIG_RUST_ENGINE.md`:
+  - **MSW-1:** `PQC_MAX_{PUBLIC_KEY,SIGNATURE}_BLOB` + header len
+    fossil vs V3.1 container — N=7/M=7 unserializable (fund-loss).
+  - **MSW-2:** leaf preimage genesis decision (`scheme_id ‖
+    container_version` in or out); single-source `DOMAIN_PQC_LEAF` +
+    KAT; retires group_id-wiring FOLLOWUPS item.
+  - **MSW-3:** both verify sites move together (rule 19).
+  Joint surface with A2+A8 co-trigger. Target: **V3.0 pre-genesis**.
 
 - **PQC Multisig V3.1: external adversarial review (Phase 5).**
   Round 4 wargame against the V3.1 multisig implementation per
@@ -5853,16 +5866,16 @@ sustainability is unaffected by the recalibration.
   participant), but practical validation is needed.
 
 - **PQC Multisig V3.1: wire `shekyl_pqc_verify_with_group_id` into
-  consensus verifier.** (Audit response.)
-  The FFI export `shekyl_pqc_verify_with_group_id` exists and accepts an
-  `expected_group_id` parameter, but the daemon's C++ verifier
-  (`tx_pqc_verify.cpp`) still calls `shekyl_pqc_verify` for `scheme_id == 2`
-  without passing a group ID. This means defense-in-depth group binding
-  (`PQC_MULTISIG.md` §16.3) is implemented in the Rust library but not
-  enforced at the consensus verification layer. Wiring it in requires the
-  C++ verifier to extract `group_id` from the multisig key blob and pass it
-  through — a small change but consensus-touching, requires its own review
-  cycle.
+  consensus verifier.** **SUPERSEDED 2026-07-14 (R1-F-2 /
+  MS-8 retirement).** `group_id` is a pure function of the key blob;
+  the FCMP++ leaf already binds the whole blob — wiring
+  `expected_group_id` into `tx_pqc_verify.cpp` is a no-op consensus
+  rule. The real genesis-freeze question is leaf preimage
+  `scheme_id ‖ container_version` (Track A **MSW-2** in
+  [`V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md)).
+  Historical note: FFI `shekyl_pqc_verify_with_group_id` still exists;
+  do not schedule daemon wiring as a V3.1 ship-gate. Carrier for the
+  replacement work: **MSW-1…MSW-3**.
 
 - **Historical tree path assembly uses current LMDB state.**
   `assemble_tree_path_for_output` (in both `chaingen.cpp` and
