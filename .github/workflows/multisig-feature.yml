@@ -31,6 +31,15 @@ on:
       - "rust/shekyl-ffi/**"
       - "rust/shekyl-fcmp/**"
       - "rust/shekyl-fcmp-proofs/**"
+      # C-1: crates that own a multisig constant. MAX_MULTISIG_PARTICIPANTS
+      # (crypto-pq/src/multisig.rs), PQC_MAX_*_BLOB / single-key len (wire),
+      # MultisigAddressPayload (address), and the C++ twins in
+      # cryptonote_config.h. Without these, cap/blob drift lands with the
+      # gate silent — an armed gate with no trigger.
+      - "rust/shekyl-crypto-pq/**"
+      - "rust/shekyl-wire/**"
+      - "rust/shekyl-address/**"
+      - "src/cryptonote_config.h"
       - "rust/Cargo.lock"
       - "docs/**"
       - "scripts/ci/check_multisig_doc_literals.sh"
@@ -43,6 +52,15 @@ on:
       - "rust/shekyl-ffi/**"
       - "rust/shekyl-fcmp/**"
       - "rust/shekyl-fcmp-proofs/**"
+      # C-1: crates that own a multisig constant. MAX_MULTISIG_PARTICIPANTS
+      # (crypto-pq/src/multisig.rs), PQC_MAX_*_BLOB / single-key len (wire),
+      # MultisigAddressPayload (address), and the C++ twins in
+      # cryptonote_config.h. Without these, cap/blob drift lands with the
+      # gate silent — an armed gate with no trigger.
+      - "rust/shekyl-crypto-pq/**"
+      - "rust/shekyl-wire/**"
+      - "rust/shekyl-address/**"
+      - "src/cryptonote_config.h"
       - "rust/Cargo.lock"
       - "docs/**"
       - "scripts/ci/check_multisig_doc_literals.sh"
