@@ -5814,38 +5814,34 @@ sustainability is unaffected by the recalibration.
   Owning doc: [`docs/design/V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md)
   (branch `docs/v31-multisig-rust-engine-plan`, draft PR #308).
   **UPDATE 2026-07-14:** Round 1 adversarial review recorded
-  (R1-F-1…F-10). Split **Track A** (V3.0 wire, **MSW-1…MSW-3**) vs
-  **Track B** (engine, MS-1…MS-7). **MS-8 retired** (group_id verify
-  wiring is a no-op; real genesis question is leaf `scheme_id` —
-  MSW-2). Round 1 **cannot close** until F-3…F-7 + F-6 CI lane.
+  (R1-F-1…F-11). Split **Track A** (V3.0 wire, **MSW-1…MSW-5** +
+  MSW-G) vs **Track B** (engine, MS-1…MS-7). **MS-8 retired**.
+  Round 1 **cannot close** until F-3…F-7 + F-6 CI lane.
   Track B: Rust-owns-logic; `multisig` default-off; rule-26 halt.
   Track A: **not** held by that halt; awaits explicit go-ahead.
   Target: V3.1 (Track B) / V3.0 pre-genesis (Track A).
 
-- **PQC Multisig V3.0 wire: MSW-1…MSW-3 (pre-genesis, priority 1).**
-  **UPDATE 2026-07-14 (F-2 retraction):** Track A is a **constant
-  fix**, not a leaf-preimage design change. Cross-scheme confusion is
-  already impossible by byte[2] prefix disjointness; leaf left alone
-  (changing it would touch wallet2 receive, emission Auth-B, FFI ABI,
-  test vectors). Revised work:
+- **PQC Multisig V3.0 wire: MSW-1…MSW-5 (pre-genesis, priority 1).**
+  **UPDATE 2026-07-14 (F-2 retraction + R1-F-11):** Track A is
+  constant/version-hook work, not a leaf-preimage change. Leaf left
+  alone. Work:
   - **MSW-1:** raise fossil `PQC_MAX_*_BLOB` / header to match V3.1
-    `expected_blob_len` (correction, not growth); single-source;
-    cross-seam KAT; delete local shadows.
-  - **MSW-2:** doc + KAT for `reserved==0` ⊥ `m_required≥1`; rule-21
-    reopen on reserved use / container version / new scheme.
-  - **MSW-3:** fix `"output committed="` misattributions; MS-8 stays
-    retired (group_id redundant with leaf).
-  - **MSW-G:** pick `MAX ∈ {6,7,8}` **with** MSW-1 — 7 has no
-    derivation; fossil bound and zone both imply effective 6;
-    raising bound to admit 7 unhides the zone case. Held open.
-    Size lens has `PQC_MULTISIG.md` §15.4b expiry (composite
-    lattice ~2030+); genesis still freezes on today's list.
-  - **Not** lattice-threshold for Track A. §15.4: **15.4a** FROST
-    SAL = availability (1/N *loss*), internal blocker; auth already
-    PQ (M×ML-DSA); solo≡multisig classical FCMP++/SAL.
-    **15.4b** = auth *size* (composite); NIST IR 8214C reference-
-    only; `spend_auth_version=0x02` ≠ lattice SAL.
-    TRacoon wrong regime + no DKG + not FIPS; watch TALUS/dPN25.
+    `expected_blob_len`; single-source; cross-seam KAT; delete shadows.
+  - **MSW-2:** doc + KAT for length + byte[2] disjointness; reopen on
+    either separator.
+  - **MSW-3:** fix `"output committed="` misattributions; MS-8 retired.
+  - **MSW-4:** unfuse `MULTISIG_CONTAINER_VERSION` / `group_version`;
+    `multisig_group_id` reads `container.version`; known-version set;
+    KAT `group_version` variation (same F-1 shape — gate doesn't
+    protect version bytes). Independent of MSW-G.
+  - **MSW-5:** pin `spend_auth_version` carrier (address/`group_id`
+    vs wire) as decision; §15.1 honesty; reserved-namespace KAT.
+  - **MSW-G:** pick `MAX ∈ {6,7,8}` **with** MSW-1 — held open.
+    Size lens has §15.4b expiry; genesis freezes on today's list.
+  - **MS-7 Round-2:** R6 must not bake `[u8;32]` classical-only
+    durable `spend_auth_pubkeys` (plan §1 three-timeframes).
+  - **Not** lattice-threshold for Track A. §15.4 posture: auth already
+    PQ; 15.4a = availability; 15.4b = auth size; `0x02` ≠ lattice SAL.
   Fee model / `v31 MAX_INPUTS=128` → Track B. Target: **V3.0
   pre-genesis**.
 

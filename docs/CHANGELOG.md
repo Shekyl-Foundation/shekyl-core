@@ -4,6 +4,15 @@
 
 ### Added
 
+- **docs: R1-F-11 / MSW-4+5 — version hooks for 2030+ (PR #308).**
+  `group_version` fused with `MULTISIG_CONTAINER_VERSION` (constant, not
+  `container.version`); `spend_auth_version` hardcoded / not on container
+  wire by accident; reserved-namespace KATs incomplete (`group_version`
+  never varied). Same shape as F-1 — feature gate does not protect
+  genesis-frozen bytes. MSW-4 unfuse + known-version set; MSW-5 pin
+  carrier decision; §15.1 honesty (P0-k). MS-7 Round-2: R6 must not bake
+  `[u8;32]` classical-only durable SAL field (plan §1 three-timeframes).
+
 - **docs: §15.4 posture pin — auth already PQ; SAL = liveness (PR #308).**
   Scheme_id=2 is M×ML-DSA today; solo and multisig share classical
   FCMP++ membership/SAL. Multisig adds no classical exposure. Classical

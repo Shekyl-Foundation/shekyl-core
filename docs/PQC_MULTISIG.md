@@ -1612,10 +1612,43 @@ published; intent REJECTED
 | Item | Purpose |
 |---|---|
 | `group_version = 0x01` | V3.1; higher values for future rotated groups |
-| `spend_auth_version = 0x01` | V3.1 classical ephemeral; 0x02+ for future schemes |
+| `spend_auth_version = 0x01` | V3.1 classical ephemeral; 0x02+ for future schemes (15.4a) |
 | HRP `shekyl1n...` | Rotated-key multisig (V3.2+) |
 | `TX_EXTRA_TAG_MULTISIG_MIGRATION (0x08)` | V3.2 migration transactions |
 | Message type `0x0A` (RotationIntent) | V3.2 full rotation protocol |
+
+**Honesty pin (2026-07-14 — P0-k / R1-F-11).** These rows are
+*intent*, not substrate. Today:
+
+1. **`group_version` is fused with `MULTISIG_CONTAINER_VERSION`.**
+   `multisig_group_id` passes the compile-time constant as
+   `group_version`, not `container.version`. Wire-encoding version and
+   protocol-semantics version are different jobs sharing one byte.
+   When a v2 container exists under the current code, group_id would
+   silently hash v1's group_version. **MSW-4** unfuses: parse accepts
+   a known-version set; `group_id` reads `container.version`.
+2. **`spend_auth_version` is not a container wire field.** It is a
+   hardcoded `SPEND_AUTH_VERSION_ED25519` argument into the group_id
+   preimage (and appears as the first byte of the `tx_extra`
+   spend-auth tag at receive time — wallet layer). Address/`group_id`
+   binding may be the right carrier (§15.5); it is currently so **by
+   accident**, not named decision. **MSW-5** pins the disposition.
+3. **Reserved-namespace KATs are incomplete.** Existing
+   `group_id_v31_includes_version_fields` covers `scheme_id` and
+   `spend_auth_version` via `with_versions`; it does **not** vary
+   `group_version`. A reserved byte never set to a second value is
+   indistinguishable from a constant.
+
+V3.2 / V4 / 2030+ migration paths run through these bytes. They are
+genesis-frozen the same way `PQC_MAX_*_BLOB` is — the `multisig`
+feature gate does not protect them. Track A owns the fix.
+
+V3.1 provides the necessary hooks **once MSW-4/5 land**:
+- Separated container vs group version (or one byte with both jobs
+  *named* and `group_id` reading the wire)
+- Named spend_auth_version carrier
+- Exercised reserved-namespace KATs
+- Reserved message type 0x0A / `tx_extra` tag 0x08 (unchanged)
 
 ### 15.2 V3.2 full rotation protocol (hooks reserved, protocol deferred)
 
@@ -1632,13 +1665,8 @@ design flaws surface when real users depend on the feature, not in a
 rushed pre-launch implementation. This is not a scope-protection
 argument; it is a design-maturity argument.
 
-V3.1 provides the necessary hooks:
-- Versioned `spend_auth_version` field
-- Reserved message type 0x0A
-- Reserved `tx_extra` tag 0x08
-- Forward-compatible derivation function structure
-
-V3.2 will add:
+V3.1 provides the necessary hooks **once MSW-4/5 land** (see §15.1
+honesty pin). V3.2 will add:
 - Full `RotationIntent` protocol
 - Individual participant key rotation
 - Full group rotation (new group_id)

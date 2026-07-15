@@ -41,7 +41,7 @@ short-lived branch off `dev`).
 | Family | Owns |
 | --- | --- |
 | **MS-1…MS-N** | Track B engine-integration Round 1 questions |
-| **MSW-1…MSW-N** | Track A V3.0 pre-genesis multisig **wire** work (revised): bound-family reconcile + cross-seam KAT + scheme-disjointness pin + misattribution fix; **not** a leaf-preimage change |
+| **MSW-1…MSW-N** | Track A V3.0 pre-genesis multisig **wire** work: bound-family reconcile + disjointness + misattribution + **version-byte hooks** (MSW-4/5) so 2030+ migration paths stay open; **not** a leaf-preimage change |
 | **R1-F-N** | Round 1 adversarial findings (doc-scoped; this file) |
 
 Prefix `MS` / `MSW` uniqueness: registered in
@@ -89,6 +89,8 @@ One validation surface (rule 19):
 | **MSW-1** | Reconcile `PQC_MAX_*_BLOB` / `MULTISIG_KEY_HEADER_LEN` against `expected_blob_len` / sig layout. Single-source; delete local shadows; cross-seam KAT for every `n ∈ 1..=MAX`. **Cannot land without MSW-G** — raising the bound to admit N=7 is a behavior change (unhides the zone case); setting `MAX=6` is behavior-preserving. |
 | **MSW-2** | Pin scheme-disjointness (doc + KAT): no byte string dual-parses. **Primary:** length (`1996 ∉ {3+n·2028}`). **Secondary:** byte[2] `reserved==0` ⊥ `m_required≥1` (structural; survives key-size moves that shift length). Rule-21 reopen on **either** separator weakening: `reserved` gains meaning, container-version bump, new scheme id, **or** a key-size / layout change that makes a scheme-2 length equal 1996 (V4 lattice-only is the live threat to length). **Leaf left alone.** |
 | **MSW-3** | Fix `"output committed="` misattributions; record MS-8 retirement. |
+| **MSW-4** | **Unfuse version bytes (genesis hooks for 2030+).** Today `MULTISIG_CONTAINER_VERSION` is both wire-encoding version and the `group_version` argument to `multisig_group_id` (constant, not `container.version`). When a v2 container exists, group_id silently hashes **v1's** group_version. Fix: parse accepts a *set* of known container versions; `multisig_group_id` reads `container.version` as group_version; KAT that `group_version` variation changes group_id (existing test covers scheme_id + spend_auth_version only). Same F-1 shape: feature gate does not protect version bytes. |
+| **MSW-5** | **Pin `spend_auth_version` carrier (decision, not accident).** Bound into `group_id` / address today; **not** a container wire field; hardcoded `SPEND_AUTH_VERSION_ED25519` in `multisig_group_id`. §15.5 no-implicit-upgrade still holds via address identity. Name the disposition: (A) address/`group_id`-only carrier is intentional, or (B) add a wire byte. Either way: doc §15.1 honesty + KAT that reserved `0x02` ≠ `0x01` in the preimage (partially present as `0xFF`; lock to `0x02`). |
 | **MSW-G** | **`MAX_MULTISIG_PARTICIPANTS` disposition (held open — co-requisite of MSW-1).** No recorded derivation in-repo (`git log -S` lands only as side-effect of unrelated commits). Candidates: **6** (de-facto=de-jure, zone-clean, loses 3-fault BFT configs), **7** (keeps 4-of-7/5-of-7; requires zone case + worst `%`-bias in `1..=7`; needs written BFT rationale), **8** (bias-free at power-of-two; keeps 5-of-8; worst size). See §0.3. |
 
 ### Track B — V3.1 engine (MS-1…MS-7, gated, unhurried)
@@ -212,6 +214,7 @@ design's acceptance**, not implementation.
 | **R1-F-8** | MEDIUM | Second verify site + five independent bound defs; folds into MSW-1 lockstep + MSW-3 misattribution. | **Accepted → MSW-1/MSW-3.** |
 | **R1-F-9** | MEDIUM | FROST `sign_own` nonce-reuse; unauthenticated `participant` claims. | **Accepted.** Evaporates if F-3 deletes lineage; else hard gates before compile-into-product. |
 | **R1-F-10** | LOW | Pin discipline: `dev`-at-recording ≠ branch tip. | **Accepted.** Banner + this table. |
+| **R1-F-11** | HIGH | Version hooks for 2030+ are fake: `group_version` fused with `MULTISIG_CONTAINER_VERSION` (constant, not `container.version`); `spend_auth_version` hardcoded / not on wire by accident; reserved namespace under-tested (`group_version` variation absent). Same shape as F-1 — feature gate does not protect genesis-frozen bytes. | **Accepted → MSW-4 + MSW-5.** Also amends MS-7 / R6: durable `PersistedMultisigOutput` must not bake `[u8; 32]` classical-only (`SPEND_AUTH_PUBKEY_LEN`) — plan §1 three-timeframes. |
 
 ### Wargame table (accepted)
 
@@ -349,7 +352,7 @@ re-prove MSW-2 reopen criteria.
 ### §2.1 In scope
 
 **Track A (this doc owns the finding → MSW map; implementation is a
-separate go-ahead):** MSW-1, MSW-2, MSW-3.
+separate go-ahead):** MSW-1…MSW-5, MSW-G.
 
 **Track B:** MS-1…MS-7 (MS-8 retired); map protocol onto engines;
 Rust-owns-logic; feature-gate discipline; Phase 0 doc amends after
@@ -395,6 +398,7 @@ unchanged across the 9-commit archival drift.
 | `MultisigGroup` (engine) | Serialize hex secrets; claims "wallet file encrypted" | **R1-F-5** |
 | `tx_fee_model::pqc_auth_weight` | scheme-1 lengths only | **Track B R-B** |
 | `v31/intent.rs MAX_INPUTS` | 128 vs consensus `FCMP_MAX_INPUTS_PER_TX=8` | **Track B R-C** |
+| `MULTISIG_CONTAINER_VERSION` / `multisig_group_id` | **Fused:** constant passed as `group_version`, not `container.version`; `spend_auth_version` hardcoded | **R1-F-11 → MSW-4/5** |
 | CI `--features multisig` | **no job** | **R1-F-6** |
 | Protocol §16.4 | superseded note (Rust-owns-logic) | design branch |
 
@@ -448,6 +452,7 @@ Deferred to Round 2 after MS-1 **and** F-3 lineage fate.
 | **P0-h** | `V3_ROLLOUT.md` multisig size table | Replace auth-overhead/~7× framing with whole-tx weights; use real (post-MSW-1) blob sizes; delete coordinator-held + "recommended for staking" drift (Pin #4 / F-3) |
 | **P0-i** | `MAX_MULTISIG_PARTICIPANTS` | Record MSW-G pick + rationale (or explicit "held at 7 with written BFT+zone acceptance") |
 | **P0-j** | `PQC_MULTISIG.md` §15.4 + `VERSIONING.md` | **Landed 2026-07-14:** split 15.4a/15.4b; same-day **posture pin** (auth already PQ; SAL = liveness; phrase pin for `spend_auth_version=0x02`) |
+| **P0-k** | `PQC_MULTISIG.md` §15.1 honesty | Doc that hooks are currently fused/hardcoded; point to MSW-4/5 as the real reservation |
 
 ---
 
@@ -505,15 +510,27 @@ Gaps restated: no v31 `construction.rs`; **there is** a
 
 Pure wire in `v31`; I/O via adapter. File-first.
 
-### MS-7 — Persistence — **OPEN — lean WITHDRAWN (R1-F-5)**
+### MS-7 — Persistence — **OPEN — lean WITHDRAWN (R1-F-5); Round-2 amend R1-F-11**
 
 Do **not** "confirm R6" against the protocol table alone.
 **Re-open R6** against `MultisigGroup`'s actual Serialize-hex secret
 shape (and whatever F-3 replaces it with). Secret hygiene
 (`35`/`36`) is a closure prerequisite for any group-persist path.
 
+**Round-2 amend (R1-F-11 / plan §1 three-timeframes).** R6 must not
+pin durable ledger fields that Stage 4 / 15.4a cannot evolve.
+`PersistedMultisigOutput.spend_auth_pubkeys: [[u8; 32]; n]` (and
+`SPEND_AUTH_PUBKEY_LEN = 32` "compressed Ed25519 point") is a
+**classical-only assumption in a durable field**. Disposition options
+for Round 2: versioned opaque blob / length-prefixed bytes keyed by
+`spend_auth_version`; or an explicit rule-21 reopen that `[u8; 32]`
+is frozen for `0x01` only and a new version requires a new ledger
+type. "Confirm R6" as-is fails plan §1.
+
 **Reopen triggers.** Existing PR 6 §5.4.1 triggers, plus: any durable
-secret field that is not `Zeroizing`/`ZeroizeOnDrop` end-to-end.
+secret field that is not `Zeroizing`/`ZeroizeOnDrop` end-to-end; any
+durable field whose byte layout assumes a single classical key size
+without a version discriminant.
 
 ### MS-8 — Daemon `group_id` verify — **RETIRED (redundancy; F-2 retraction compatible)**
 
@@ -541,7 +558,7 @@ not a quiet reopen of MS-8.
 | MS-4 | **OPEN** | Lean holds |
 | MS-5 | **OPEN** | Blocked on F-3 / F-7 |
 | MS-6 | **OPEN** | Lean holds |
-| MS-7 | **OPEN** | Confirm-R6 **withdrawn**; re-open vs `MultisigGroup` |
+| MS-7 | **OPEN** | Confirm-R6 **withdrawn**; re-open vs `MultisigGroup`; **+ Round-2:** no `[u8;32]` classical-only durable SAL field (R1-F-11) |
 | MS-8 | **RETIRED** | redundancy; leaf change not required |
 
 **Round 1 still cannot close until:**
@@ -584,13 +601,16 @@ not a quiet reopen of MS-8.
 3. One validation surface: **MSW-G pick** → MSW-1 (bounds for that
    MAX + single-source + cross-seam KAT + delete shadows) + MSW-2
    (both separators + reopen on either) + MSW-3 (misattribution +
-   MS-8 record).
+   MS-8 record) + **MSW-4** (unfuse container/group version;
+   `group_id` ← `container.version`; known-version set) + **MSW-5**
+   (pin spend_auth_version carrier + reserved-namespace KAT).
 4. **Do not** change leaf preimage / FFI leaf hash ABI / emission
    Auth-B / test-vector corpus as part of Track A.
 5. **Do not** adopt lattice-threshold / TRacoon here — evaluate under
    §15.4b when MPTC / a future NIST process warrants; **15.4a FROST
    SAL** is a separate internal track (§0.3 / `PQC_MULTISIG.md`).
 6. **Not** blocked on Track B Round 1–3; **is** blocked on MSW-G.
+   MSW-4/5 do **not** require MSW-G (version hooks independent of MAX).
 
 ### §7.2 Track B (MS-*) — rule-26 halt
 
@@ -639,3 +659,4 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-14 | **§0.3 MSW-G:** MAX=7 has no derivation; F-1 fix *is* the 6/7/8 choice; fossil bound ≡ zone both imply effective 6; V3_ROLLOUT table fossil + coordinator/staking drift → P0-h; TRacoon = V4 research candidate not Track A |
 | 2026-07-14 | **§15.4 split (P0-j):** FROST SAL (15.4a, internal two-component/`y` blocker) ≠ pure-PQC auth (15.4b, NIST IR 8214C reference call → later process). TRacoon wrong N regime + no DKG + not FIPS; watch dPN25/TALUS for size. Size lens for MSW-G has 15.4b expiry; genesis still freezes on today's list economics. |
 | 2026-07-14 | **§15.4 posture pin:** scheme_id=2 already PQ auth (M×ML-DSA); solo≡multisig classical FCMP++/SAL; SAL = liveness not compromise; grinding/griefing → availability not Phase 6 crypto; `spend_auth_version=0x02` = 15.4a classical threshold SAL ≠ lattice SAL (impossible under FCMP++); 15.4b = auth size only. Ship decision = economics (~3×), not crypto-maturity. |
+| 2026-07-14 | **R1-F-11 / MSW-4+5:** version hooks fake at genesis — fuse container/group version; spend_auth_version constant not wire; under-tested reserved namespace. Same shape as F-1. MS-7 Round-2: R6 must not bake `[u8;32]` classical-only durable field (plan §1). |
