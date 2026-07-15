@@ -1682,11 +1682,21 @@ honesty pin). V3.2 will add:
 - Migration transactions consuming old outputs, producing new
 - Key escrow protocol as 1/N loss mitigation
 
-### 15.3 V3.3 candidate features
+### 15.3 Address size / group registry (usability ship gate)
 
-- **Chain-anchored group registry:** new tx type; reduces address size
+**Not a V3.3 nice-to-have.** Multisig address payload carries per
+participant `HYBRID_KEM (1216) + HYBRID_SIGN (1984) = 3200` bytes
+(`shekyl-address` `multisig_address.rs`). At MAX=8 that is ~25.6 KB
+payload / ~41k bech32m characters — copy-paste unusable at N=6 already
+(~31k chars). The Apr 15 "~13 KB at N=7" figure was KEM-only and
+predates Solution C putting sign pubkeys in the address.
+
+- **Chain-anchored group registry** (new tx type; short on-chain /
+  address reference): **usability ship gate** for any product multisig
+  at V3.1+ — see design doc **P0-m**. Does not reopen
+  `MAX_MULTISIG_PARTICIPANTS` (MSW-G=8).
 - **Traffic padding for transport privacy:** fixed-interval heartbeats,
-  dummy messages
+  dummy messages (still V3.3-candidate timing).
 
 ### 15.4 V4 path — two items, two blockers (split 2026-07-14; posture pin same day)
 

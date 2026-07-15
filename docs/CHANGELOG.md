@@ -4,6 +4,16 @@
 
 ### Added
 
+- **docs: MSW-G = 8; address usability fossil; MSW-4/5 narrowed
+  (PR #308).** Security (3-fault BFT) > zone economics; 7 incoherent
+  once zone crossed. Hostage lens retracted (`E[frozen]=p` independent
+  of n). Address bech32m ~36k chars at N=7 (Solution C sign keys) —
+  §15.3 registry is a usability ship gate (P0-m), not an MSW-G
+  discriminator. MSW-5(A): `MultisigAddressPayload` already carries
+  three §15.1 version axes; MSW-4 = plumb `multisig_group_id` from that
+  payload. R1-F-2 row: length primary. Track A ready; code awaits
+  explicit go-ahead.
+
 - **docs: corrected picture — design done; Track A is the urgent half
   (PR #308).** Banner in `V3_1_MULTISIG_RUST_ENGINE.md`: April decisions
   stand; gap is unbuilt scaffold + consensus surfaces the feature gate

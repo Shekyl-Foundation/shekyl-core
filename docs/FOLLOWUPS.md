@@ -5837,8 +5837,11 @@ sustainability is unaffected by the recalibration.
     protect version bytes). Independent of MSW-G.
   - **MSW-5:** pin `spend_auth_version` carrier (address/`group_id`
     vs wire) as decision; §15.1 honesty; reserved-namespace KAT.
-  - **MSW-G:** pick `MAX ∈ {6,7,8}` **with** MSW-1 — held open.
-    Size lens has §15.4b expiry; genesis freezes on today's list.
+  - **MSW-G:** **DECIDED MAX=8** (2026-07-15) — 3-fault > zone;
+    7 incoherent; hostage lens retracted (E[frozen]=p indep. of n);
+    address ~36k chars = P0-m usability gate, not MSW-G.
+  - **MSW-4/5:** address payload already has three version axes;
+    group_id must plumb from it (MSW-5 disposition A).
   - **MS-7 Round-2:** versioned record with **working discriminator**
     (discriminability, not evolvable enum — §0.4 / §15.5).
   - **§0.4 coexistence:** V4 rewrite beside V3.1 forever; Track A
@@ -5848,7 +5851,7 @@ sustainability is unaffected by the recalibration.
   - **Not** lattice-threshold for Track A. §15.4 posture: auth already
     PQ; 15.4a = availability; 15.4b = auth size; `0x02` ≠ lattice SAL.
   Fee model / `v31 MAX_INPUTS=128` → Track B. Target: **V3.0
-  pre-genesis**.
+  pre-genesis**. **Track A code awaits explicit go-ahead.**
 
 - **PQC Multisig V3.1: external adversarial review (Phase 5).**
   Round 4 wargame against the V3.1 multisig implementation per
