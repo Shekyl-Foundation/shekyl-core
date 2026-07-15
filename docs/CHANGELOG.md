@@ -4,6 +4,191 @@
 
 ### Added
 
+- **docs: PR #308 Copilot round 2 — E′ consistency (principles, roles,
+  ops, VERSIONING).** Principle 5 no longer claims FROST SAL is out of
+  V3.1 scope (E′ *is* 15.4a). Roles / MULTISIG_OPERATIONS banner Option D
+  prover playbooks as historical. §15.1 / §7.2 / §7.4 `spend_auth_version`
+  = `0x02`. USER_GUIDE ~5.4 KB. VERSIONING / §15.4a cite
+  `derive_output_secrets` for `y ≠ 0`, not `output.rs:304`.
+
+- **docs: defer F-6 / P0-n CI to follow-on PR (PR #308).** Remove
+  `ci/multisig-feature` workflow + `check_multisig_doc_literals.sh`
+  from this docs carrier so #308 can land alone. Fossil *sweeps*
+  remain here; gate script + workflow ship in the follow-on CI PR.
+  Carrier / INDEX status: R1-F-6 open again until that PR greens.
+
+- **ci: align F-6 multisig lane with build.yml clippy posture (PR #308).**
+  Dropped job-level `RUSTFLAGS=-D warnings` (it denied rustc
+  `deprecated` in path-dep `helioselene`, which main CI only warns
+  on). Pin toolchain to `1.94.0` (not `@stable`); keep
+  `-- -D warnings` on the clippy argv only; add `--keep-going`.
+  *(CI files moved to follow-on PR — see deferral bullet above.)*
+
+- **docs: PR #308 Copilot review — decide/enforce labels + F-11
+  consistency.** MAX=5 is the ratified MSW-G target; docs no longer
+  imply the live constant (still `= 7` until MSW-1). Changelog drops
+  the superseded same-day MSW-G=8 bullet (trail stays in the carrier
+  history). Finding range unified to R1-F-1…F-11. §16.7 feature-flag
+  block labeled planned sketch (not a copy-pasteable `Cargo.toml`).
+
+- **ci/docs: P0-n doc gate + F-6 `--features multisig` lane (PR #308).**
+  `scripts/ci/check_multisig_doc_literals.sh` (cap / fee-oracle fossils)
+  and `.github/workflows/multisig-feature.yml` (`cargo check` /
+  `clippy -D warnings` / `test` on engine-core + engine-rpc + ffi with
+  `--features multisig`). Operator docs swept off `5-of-7` / `5385`
+  fossils. Pause before MSW-6 — first enable may clippy-fail on
+  `frost_sal` (Option A debt); that is the signal.
+  *(CI files moved to follow-on PR — fossil sweeps stay in #308.)*
+
+- **docs: D-7…D-10 — VERSIONING + MS-4/MS-5 under E′ (PR #308).**
+  VERSIONING: two-component gate discharged (`output.rs:304`); remaining
+  blockers = threshold-share `y_group` + wire `0x02`; protocol-3 wire
+  is `scheme_id=2` M-of-N list (not "FROST-style"); 15.4b gets IR 8214C
+  → MPTC ~2027 → later-process scale. MS-4/MS-5 restated: receive =
+  local KI via `b` (no I7); spend = FROST-on-`y` + nonce types (not
+  prover handoff). Round 1 closure checklist + §10.3.1 premise date.
+
+- **docs: Pin #1 reversion + VERSIONING/§10.3.1 for E′ (PR #308).**
+  Named reversion: comment-only production-source amendments allowed
+  when recording a semantic this doc-only PR pins (`bond_wire.rs`
+  MSW-7 pseudonym-uniformity — was a silent Pin #1 break).
+  `VERSIONING.md`: 15.4a blocker open (`y≠0` landed); `0x02` = E′
+  product path. `V3_ENGINE_TRAIT_BOUNDARIES` §10.3.1 status: MS-8
+  retired, E′, MSW-*. Sequencing note: MSW-G cold before MSW-1 code.
+
+- **docs: Phase 0 sweep D-1…D-6 + P0-n grep-gate (PR #308).** Fix
+  normative `n_total > 7` → `MAX_MULTISIG_PARTICIPANTS` (D-1). Correct
+  ROLLOUT vs-N-solos ratios (0.57× / 0.48×), cap fossils (`=7` /
+  `5-of-7` / ~37 KB → 5 / 5-of-5 / ~27 KB), `pqc_auth` 5385→5389 from
+  `pqc_auth_weight()`, Last-updated date (D-2…D-5). ANALYSIS:
+  historical banner, E′ row in §2.1, §6/key-escrow superseded, §7.6
+  E′ tweak Phase 6 target; rotation naming collision (§11.1 ≠ §15.2).
+  P0-n: doc grep-gate against bare-cap / fee-oracle drift.
+
+- **docs: MSW-8 — delete vestigial address hybrid_sign_pubkeys
+  (PR #308).** Confirmed zero consumers: `multisig_receiving.rs`
+  derives leaf sign keys from KEM; address field is
+  construct/parse-only (Solution C fossil). ~2.6× address shrink is
+  MSW-8, not E′ (attribution correction). N=2 ≈ QR-able. §15.3
+  registry demoted off critical path. Defect class named:
+  shape-from-prose without a read site. E′ three closes complete
+  (dealer-only, y-tweak→Phase 6, MSW-8).
+
+- **docs: Option E′ — two-component trust split is the product path
+  (PR #308).** `O = ho·G + B + y·T`: `b` group-plaintext (view+link /
+  local KI); `y` FROST M-of-N with `y_out = y_group + y_kem` (E′, not
+  fixed-`y` E). Dealer-mode, no DKG, no `export_multisig_info`.
+  Deletes mandatory-prover Option D scaffold (~prover/heartbeat/
+  counter_proof/I7). `spend_auth_version=0x02`; `0x01` never issued.
+  `frost-sal-v4` = E′ gate (keep primitives; delete Option A wrapper).
+  Does not shrink auth blobs or fix anonymity partition. Address
+  size win deferred to MSW-8. Carrier §0.5; `PQC_MULTISIG` §15.4a /
+  §16.7 aligned.
+
+- **docs: MSW-6 + MSW-G=5 overhaul; MSW-7 retract (PR #308).** Track A
+  staking unblock is **MSW-6** — relax tx-wide `scheme_id` agreement
+  (per-input ∈ `{1,2}`); archival core never sees funding inputs
+  (`verify_*_bond_post(vin, record_state)`). **MSW-G = 5** (2f+1 at
+  f=2; withdraws same-day MAX=8). MSW-1 narrowed to
+  `SINGLE_KEY_CANONICAL_LEN` single-source + DoS ceiling. **MSW-7
+  retracted** — `bond_spend_pk` stays 1996 for pseudonym uniformity
+  (`bond_wire.rs` comment amended). Pin #4 named reversion for MSW-6
+  only. Sequencing: Phase 0 docs → MSW-6 → MSW-1…5 → F-6 → Option E′.
+  Phase 0: `V3_ROLLOUT` whole-tx weights; `PQC_MULTISIG` §5 derivation,
+  §11.1 rotation≠hostile-sender, §14.2 stream attribution, §15.4a
+  two-component O open, §16.3/16.4/16.7 retire DiD/wallet2.
+  *(Same-day provisional MSW-G=8 withdrawn into this entry — decision
+  trail lives in `V3_1_MULTISIG_RUST_ENGINE.md` history, not as a
+  separate changelog bullet.)*
+
+- **docs: corrected picture — design done; Track A is the urgent half
+  (PR #308).** Banner in `V3_1_MULTISIG_RUST_ENGINE.md`: April decisions
+  stand; gap is unbuilt scaffold + consensus surfaces the feature gate
+  never covered. Three buckets, differential rigor, reviewer scorecard.
+  §11.1 / ANALYSIS grinding lead → availability ~`k·n`, not scare-`n^k`.
+
+- **docs: R1-F-3 → DELETE Option A FROST fossil (PR #308).** Not the Apr
+  15 rotating-vs-fixed *prover* fork (both Option C/D; rotating chosen
+  with named 1/N loss). `MultisigGroup.pqc_public_key` is Option A
+  (rejected 2026-04-04 for `pqc_auth` fingerprint). Do not quarantine
+  behind `frost-sal-v4` — artifact fuses SAL keys with rejected fixed
+  group PQC key. F-4/F-5/F-9 evaporate on delete. `V3_ROLLOUT.md`
+  coordinator-held + staking-recommendation drift fixed (P0-h partial).
+  Retract "Phase 6 cryptographer" claim on per-output privacy.
+
+- **docs: §0.4 coexistence — V4 rewrites beside V3.1 (PR #308).**
+  §15.4–15.5 imply permanent dual stack (version byte + HRP), not
+  in-place evolution. Discriminability > evolvability; MSW-4/5 version
+  bytes are the entire V3.1↔V4 interface. Track A permanent / Track B
+  ~4y then legacy — process inversion named. MS-1(a)/(c) preferred,
+  (b) rejected under coexist. MS-7: versioned record with working
+  discriminator, not evolvable enum.
+
+- **docs: R1-F-11 / MSW-4+5 — version hooks for 2030+ (PR #308).**
+  `group_version` fused with `MULTISIG_CONTAINER_VERSION` (constant, not
+  `container.version`); `spend_auth_version` hardcoded / not on container
+  wire by accident; reserved-namespace KATs incomplete (`group_version`
+  never varied). Same shape as F-1 — feature gate does not protect
+  genesis-frozen bytes. MSW-4 unfuse + known-version set; MSW-5 pin
+  carrier decision; §15.1 honesty (P0-k).
+
+- **docs: §15.4 posture pin — auth already PQ; SAL = liveness (PR #308).**
+  Scheme_id=2 is M×ML-DSA today; solo and multisig share classical
+  FCMP++ membership/SAL. Multisig adds no classical exposure. Classical
+  SAL is 1/N permanent-*loss* (availability), not compromise. Grinding /
+  griefing → MS-4/5 engineering, not Phase 6 crypto. Phrase pin:
+  `spend_auth_version=0x02` = 15.4a threshold classical SAL; 15.4b =
+  composite/lattice-only *auth* size — not lattice SAL (impossible under
+  FCMP++). Ship decision = economics (~3×), not crypto-maturity.
+
+- **docs: split PQC_MULTISIG §15.4 — FROST SAL ≠ lattice auth (PR #308).**
+  §15.4a FROST SAL (mandatory prover / 1/N) blocked on two-component
+  address / `y`, not NIST. §15.4b pure-PQC composite auth blocked on
+  lattice threshold maturity; NIST IR 8214C is reference-material only
+  (MPTC ~2027 → later process). TRacoon wrong N regime + trusted KeyGen
+  + not FIPS; watch dPN25 / TALUS for size. MSW-G size lens has 15.4b
+  expiry; genesis still freezes on today's signature-list economics.
+  `VERSIONING.md` V4 note aligned. P0-j landed.
+
+- **docs: MSW-G — MAX=7 has no derivation; F-1 fix is the 6/7/8 pick
+  (PR #308).** Recorded in `V3_1_MULTISIG_RUST_ENGINE.md` §0.3.
+  Fossil bound accidentally caps spendable N at 6; reward zone
+  independently caps worst-case at 6. Raising the bound to admit 7 is
+  a behavior change. Candidates 6/7/8 held open. MSW-2 reopen names
+  **either** separator (length primary; byte[2] secondary). V3_ROLLOUT
+  fossil ~7× table + coordinator/staking drift → P0-h. TRacoon /
+  `lib-q-threshold-raccoon` noted as V4 research, not Track A.
+
+- **docs: F-2 retraction — Track A revised to constant fix (PR #308).**
+  Leaf preimage **left alone** (not free: wallet2 / emission Auth-B /
+  FFI ABI / vectors; not needed: byte[2] prefix disjointness already
+  separates scheme 1 vs 2). Track A = MSW-1 bounds reconcile + MSW-2
+  disjointness KAT + MSW-3 misattribution; **MSW-G** on whether
+  `MAX=7` survives reward-zone. Fee model / `MAX_INPUTS=128` → Track
+  B. `wallet2` PQC multisig group surface acknowledged under MS-2.
+
+- **docs: Round 1 adversarial on V3.1 multisig engine design — Track A/B
+  split (PR #308).** Records R1-F-1…F-11 in
+  [`V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md).
+  **Track A (MSW-1…MSW-3):** V3.0 pre-genesis wire — N=7 blob-bound
+  fossil (fund-loss), leaf `scheme_id` genesis decision, dual verify
+  sites; **not** held by engine rule-26 halt. **Track B:** MS-1…MS-7
+  remain gated; **MS-8 retired** (group_id verify is a no-op → MSW-2).
+  Round 1 cannot close until F-3…F-7 + F-6 CI. INDEX `MSW-` registry;
+  FOLLOWUPS group_id item superseded.
+
+- **docs: V3.1 multisig Rust engine integration design — Round 1 OPEN
+  (`docs/v31-multisig-rust-engine-plan`).** Fires
+  `V3_ENGINE_TRAIT_BOUNDARIES.md` §10.3.1. New carrier
+  [`docs/design/V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md)
+  poses **MS-1…MS-8** (trait identity, Rust-owns-logic C++ boundary,
+  feature-gate flip criteria, receive/spend/transport placement,
+  Persistence R6 confirm, daemon `group_id` verify as separate PR).
+  Protocol remains `PQC_MULTISIG.md`; §16.4 C++ wallet bullets marked
+  superseded pending Phase 0. INDEX registry + FOLLOWUPS pointer
+  updated. **No implementation** until design rounds + rule-26
+  pre-flight and explicit go-ahead.
+
 - **archival: `ShardSet` newtype — parse-don't-validate holdings shard list, and
   the shard list is now a set on the wire (gate-4 §3.4.1; `feat/shardset-newtype`).**
   Converts `HoldingsDescriptor.shard_ids` from a bare `Vec<u64>` to a validated

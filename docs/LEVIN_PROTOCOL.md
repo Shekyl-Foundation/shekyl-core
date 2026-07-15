@@ -186,7 +186,8 @@ excluded from `pqc_auth`.
 
 Carries one or more serialized transactions for mempool relay. This is the
 primary message type affected by v3 PQC sizing: each `TransactionV3` user
-transaction adds ~5,385 bytes of hybrid authentication data.
+transaction adds **5389** bytes of hybrid authentication data
+  (`pqc_auth_weight()`; see `docs/V3_ROLLOUT.md`).
 
 Over anonymity networks, this message is the most fingerprinting-sensitive:
 it is sent shortly after a wallet constructs a transaction and is the

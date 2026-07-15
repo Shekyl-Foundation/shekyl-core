@@ -2,29 +2,43 @@
 
 > **Protocol version:** V3.1 (equal-participants, coordinator-less)
 >
+> **Product path:** **Option E′** (`spend_auth_version = 0x02`) — dealer-mode
+> FROST on `y`, plaintext `b`, **no mandatory prover / no 1/N permanent-loss
+> assignment**. See `PQC_MULTISIG.md` §15.4a and
+> `V3_1_MULTISIG_RUST_ENGINE.md` §0.5.
+>
 > **Spec:** `docs/PQC_MULTISIG.md`
 >
 > **Analysis:** `docs/PQC_MULTISIG_V3_1_ANALYSIS.md`
 >
 > **Wire format:** `docs/SHEKYL_MULTISIG_WIRE_FORMAT.md`
+>
+> **Historical:** Sections that still describe a rotating designated prover,
+> ProverOutput / ProverReceipt, or 1/N recovery playbooks are **Option D
+> scaffold** (deleted, not shipped). They remain until rewritten; do not
+> treat them as E′ operational guidance.
 
 ## Overview
 
-Shekyl V3.1 multisig uses an equal-participants model where every member
-has the same capabilities. There is no coordinator. Transaction
-construction is deterministic, and each participant is the designated
-prover for approximately 1/N of group outputs.
+Shekyl V3.1 multisig (Option E′) uses an equal-participants model where
+every member holds the same dealer-issued share of the group spend
+secret `y` and the same plaintext view key `b`. There is no coordinator
+and no privileged prover: any M of N can authorize a spend, and FCMP++
+proof construction is not assigned to a single permanent loser.
 
 ### Key Properties
 
-- **M-of-N threshold signing** (e.g., 2-of-3, 3-of-5)
+- **M-of-N threshold signing** (e.g., 2-of-3, 3-of-5) with FROST on `y`
 - **Hybrid PQC**: X25519 + ML-KEM-768 for KEM, Ed25519 + ML-DSA-65 for
   signatures
 - **FCMP++ membership proofs** from genesis (no ring signatures)
 - **Per-output forward privacy** via ephemeral KEM
-- **Rotating prover assignment** — deterministic, hash-based
+- **Dealer-mode setup** — owner is trusted KeyGen; no DKG in the
+  default path
 - **Multi-relay transport** for censorship resistance
 - **File-based transport** for air-gapped operation
+- ~~Rotating prover assignment / 1/N permanent loss~~ — **Option D only;
+  deleted under E′**
 
 ---
 
@@ -37,14 +51,18 @@ prover for approximately 1/N of group outputs.
 | **2-of-2** | Both must agree | Both must be online | Low | Couples, business partners |
 | **2-of-3** | Tolerates 1 compromised key | Tolerates 1 offline member | Low | Personal savings, small teams |
 | **3-of-5** | Tolerates 2 compromised keys | Tolerates 2 offline members | Medium | Organization treasury |
-| **5-of-7** | Tolerates 4 compromised keys | Tolerates 2 offline members | High | High-value cold storage |
+| **5-of-5** | All must agree | All must be online | High | High-value cold storage (max N) |
+
+Target consensus cap: `MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G;
+decided — code still `= 7` until MSW-1). After MSW-1, configurations
+with `n_total > 5` are unreachable.
 
 **Rules of thumb:**
 
 - If you need to spend quickly (business operations), keep M low relative
   to N. 2-of-3 means any two can spend.
 - If you need maximum security (cold storage), keep M high relative to N.
-  5-of-7 means a majority must agree.
+  5-of-5 means every member must agree.
 - Never use 1-of-N — this is just single-sig with extra steps. If any
   one key is compromised, funds are lost.
 - Availability and security trade off directly: higher M means more
@@ -58,9 +76,9 @@ For most users, 2-of-3 is the right starting point:
 - An attacker must compromise two keys (security).
 - Only two people need to coordinate for any spend (operational
   simplicity).
-- The 1/N loss limitation (§6.1) means at worst 33% of outputs are at
-  risk if a participant disappears — manageable with periodic
-  consolidation.
+- The **Option D** 1/N loss limitation (§6.1, historical) is **not**
+  the E′ product path. Under E′, plan for ordinary M-of-N availability
+  (enough shares online), not prover rebalancing.
 
 ### When to Use Larger Groups
 
@@ -249,7 +267,15 @@ on-chain at N confirmations (default: 3).
 
 ## 6. Failure Recovery
 
+> **Option E′ note:** permanent key loss for a participant is an
+> **M-of-N threshold** problem (can the remaining members still meet
+> `m_required`?), not a rotating-prover 1/N permanent-loss problem.
+> §6.1 and §9.1 below still describe the **deleted Option D** playbook
+> and will be rewritten; do not follow them as E′ ops guidance.
+
 ### 6.1 A Participant Lost Their Keys
+
+> **Historical (Option D scaffold).**
 
 **Severity:** Medium (1/N of outputs at risk)
 
@@ -429,7 +455,13 @@ trade-offs documented for transparency.
 
 ### 9.1 1/N Prover Loss
 
-If a participant permanently disappears, approximately 1/N of group
+> **Historical (Option D scaffold).** Under Option E′ there is no
+> rotating prover assignment and no 1/N permanent-loss lock from that
+> mechanism. Key-loss risk is ordinary threshold failure (`m_required`
+> cannot be met).
+
+If a participant permanently disappears under the **deleted** Option D
+model, approximately 1/N of group
 outputs become unspendable. This is inherent to V3.1's rotating prover
 model. **Mitigation:** periodic consolidation to rebalance prover
 assignments. **Future fix:** V4 will use threshold FCMP++ proving to
@@ -490,12 +522,14 @@ terms.
 
 ### Size Comparison
 
-| Transaction Type | Approx Size (2-in/2-out) | Fee Multiplier |
+| Transaction Type | Approx Size (1-in/2-out) | Fee Multiplier |
 |-----------------|--------------------------|----------------|
-| **Single-sig** | ~23 KB | 1.0x (baseline) |
-| **2-of-3 multisig** | ~36 KB | ~1.6x |
-| **3-of-5 multisig** | ~43 KB | ~1.9x |
-| **5-of-7 multisig** | ~54 KB | ~2.3x |
+| **Single-sig** | ~15.6 KB | 1.0× (baseline) |
+| **3-of-3 multisig** | ~26.5 KB | ~1.7× |
+| **5-of-5 multisig** | ~37.3 KB | ~2.4× |
+
+Oracle and rationale: `docs/V3_ROLLOUT.md` (vs-N-solos amortization).
+Do not read auth-overhead “×N vs single-signer” as whole-tx cost.
 
 ### Where the Overhead Comes From
 
@@ -503,10 +537,10 @@ terms.
 
 | Config | Auth overhead | vs single-sig |
 |--------|---------------|---------------|
-| Single-sig | ~5,385 B | baseline |
-| 2-of-3 | ~12,769 B | +7,384 B (~2.4x) |
-| 3-of-5 | ~20,153 B | +14,768 B (~3.7x) |
-| 5-of-7 | ~30,921 B | +25,536 B (~5.7x) |
+| Single-sig | **5389** B (`pqc_auth_weight()`) | baseline |
+| 2-of-3 | ~12.8 KB | ~2.4× |
+| 3-of-5 | ~20.2 KB | ~3.7× |
+| 5-of-5 | ~27 KB | ~5.0× |
 
 **Per-output overhead (multisig-specific `tx_extra`):**
 

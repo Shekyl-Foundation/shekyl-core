@@ -646,14 +646,19 @@ threshold lives entirely in the PQC auth layer.
 
 ### Transaction size
 
-Each additional signer adds approximately 5.3 KB of authentication material.
+Each additional signer adds roughly another hybrid key + signature of
+authentication material (~5.4 KB solo baseline via `pqc_auth_weight()`).
 
 | Configuration | Auth Size | vs. Single |
 |---------------|-----------|------------|
-| Single signer | ~5.3 KB | baseline |
-| 2-of-3 | ~12.5 KB | 2.4x |
-| 3-of-5 | ~19.7 KB | 3.7x |
-| 5-of-7 | ~30.2 KB | 5.7x |
+| Single signer | ~5.4 KB | baseline |
+| 2-of-3 | ~12.8 KB | ~2.4× |
+| 3-of-5 | ~20.2 KB | ~3.7× |
+| 5-of-5 | ~27 KB | ~5.0× |
+
+Whole-tx weights (FCMP++/Bp+/KEM dominate) are closer to ~2.4× solo for
+5-of-5 — see `V3_ROLLOUT.md`. Target cap is
+`MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G; code still `= 7` until MSW-1).
 
 ### Use cases
 

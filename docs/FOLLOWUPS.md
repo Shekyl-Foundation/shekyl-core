@@ -5826,6 +5826,50 @@ sustainability is unaffected by the recalibration.
   [`docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md`](completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
   §7. Target: V3.1.
 
+- **PQC Multisig V3.1: Rust engine integration design (carrier).**
+  `V3_ENGINE_TRAIT_BOUNDARIES.md` §10.3.1 trigger fired 2026-07-14.
+  Owning doc: [`docs/design/V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md)
+  (branch `docs/v31-multisig-rust-engine-plan`, draft PR #308).
+  **UPDATE 2026-07-14:** Round 1 adversarial review recorded
+  (R1-F-1…F-11). Split **Track A** (V3.0 wire, **MSW-1…MSW-8** +
+  MSW-G=5) vs **Track B** (engine → Option E′, MS-1…MS-7). **MS-8 retired**.
+  Round 1 **cannot close** until F-6 CI + F-7 framing (F-3…F-5/F-9
+  **dispositioned DELETE** Option A fossil).
+  Track B: Rust-owns-logic; `multisig` = v31 Option D only; rule-26 halt.
+  Track A: **not** held by that halt; awaits explicit go-ahead.
+  Target: V3.1 (Track B) / V3.0 pre-genesis (Track A).
+
+- **PQC Multisig V3.0 wire: MSW-1…MSW-8 (pre-genesis, priority 1).**
+  **UPDATE 2026-07-15 overhaul:**
+  - **MSW-6 (NEW):** relax tx-wide `scheme_id` agreement — staking
+    unblock. Per-input scheme ∈ `{1,2}` (or bond-post exemption).
+    Archival core never sees funding inputs. Own validation surface;
+    independent of `--features multisig`. Pin #4 named reversion for
+    this tx-layer coupling only.
+  - **MSW-G:** **DECIDED MAX=5** (2f+1 at f=2; withdraws same-day 8).
+    Consumer = largest group served. Written into `PQC_MULTISIG.md` §5.
+  - **MSW-1 (narrowed):** copy `bond_wire` `SINGLE_KEY_CANONICAL_LEN`
+    pattern; `PQC_MAX_*_BLOB` = generous DoS ceiling; exactness in
+    parse; cross-seam KAT `n∈1..=5`; delete shadows.
+  - **MSW-2 / MSW-3 / MSW-4 / MSW-5:** unchanged dispositions (length
+    primary; misattribution; group_id ← address payload; carrier A).
+  - **MSW-7 RETRACTED:** `bond_spend_pk` stays 1996 — pseudonym
+    uniformity (amend `bond_wire` comment).
+  - **Not changing:** bond record, P, emission vin, archival core.
+  - **MSW-8 (NEW):** delete vestigial
+    `MultisigAddressPayload.hybrid_sign_pubkeys` (Solution C fossil;
+    zero consumers — `multisig_receiving` derives leaf keys from KEM).
+    ~2.6× address shrink is this, not E′. §15.3 registry off critical
+    path. Free pre-genesis.
+  - Sequencing: Phase 0 docs → MSW-6 → MSW-1…5/**8** → F-6 → **Option E′**
+    (§0.5: dealer-mode, threshold `y`, plaintext `b`, no DKG;
+    `spend_auth_version=0x02`; `0x01` never issued; deletes mandatory
+    prover). `frost-sal-v4` = E′ gate.
+  - **R1-F-3 DELETE:** Option A FROST *orchestration* fossil; keep
+    `frost_sal`/`frost_dkg` primitives for E′.
+  Fee / `MAX_INPUTS=128` → Track B. Target: **V3.0 pre-genesis**.
+  **Track A code awaits explicit go-ahead.**
+
 - **PQC Multisig V3.1: external adversarial review (Phase 5).**
   Round 4 wargame against the V3.1 multisig implementation per
   `PQC_MULTISIG_V3_1_ANALYSIS.md` §5.4. Review targets:
@@ -5860,16 +5904,20 @@ sustainability is unaffected by the recalibration.
   participant), but practical validation is needed.
 
 - **PQC Multisig V3.1: wire `shekyl_pqc_verify_with_group_id` into
-  consensus verifier.** (Audit response.)
-  The FFI export `shekyl_pqc_verify_with_group_id` exists and accepts an
-  `expected_group_id` parameter, but the daemon's C++ verifier
-  (`tx_pqc_verify.cpp`) still calls `shekyl_pqc_verify` for `scheme_id == 2`
-  without passing a group ID. This means defense-in-depth group binding
-  (`PQC_MULTISIG.md` §16.3) is implemented in the Rust library but not
-  enforced at the consensus verification layer. Wiring it in requires the
-  C++ verifier to extract `group_id` from the multisig key blob and pass it
-  through — a small change but consensus-touching, requires its own review
-  cycle.
+  consensus verifier.** **SUPERSEDED 2026-07-14 (R1-F-2 /
+  MS-8 retirement).** `group_id` is a pure function of the key blob;
+  the FCMP++ leaf already binds the whole blob — wiring
+  `expected_group_id` into `tx_pqc_verify.cpp` is a no-op consensus
+  rule. The real genesis-freeze question is leaf preimage
+  `scheme_id ‖ container_version` (Track A **MSW-2** in
+  [`V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md).
+  The real genesis-adjacent leftover was **MSW-G** — **CLOSED MAX=5**
+  (2026-07-15 overhaul) — plus Track A MSW-1…MSW-6 (DoS ceiling +
+  disjointness KAT + misattribution + version plumbing + scheme_id
+  relax) — **not** a leaf-preimage change (F-2 retraction 2026-07-14).
+  Historical note: FFI
+  `shekyl_pqc_verify_with_group_id` still exists; do not schedule
+  daemon wiring as a V3.1 ship-gate.
 
 - **Historical tree path assembly uses current LMDB state.**
   `assemble_tree_path_for_output` (in both `chaingen.cpp` and

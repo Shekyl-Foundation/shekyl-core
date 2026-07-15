@@ -522,7 +522,7 @@ If this design is adopted:
    - Simulation tests for stuffing profitability under various hash power distributions.
    - Unit tests for multisig `pqc_auth` (`scheme_id = 2`) serialization, verification, and rejection of malformed inputs.
    - Integration tests for multisig staking: create multisig staked output, claim rewards with M-of-N authorization, verify lock enforcement.
-   - Size regression tests for multisig transactions across 2-of-3 through 5-of-7 configurations.
+   - Size regression tests for multisig transactions across 2-of-3 through 5-of-5 configurations (target `MAX_MULTISIG_PARTICIPANTS = 5`; MSW-1 enforces).
 
 ---
 

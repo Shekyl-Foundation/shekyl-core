@@ -17,9 +17,9 @@ PQC note:
 
 ### Measured v3 Impact on Anonymity Networks
 
-`TransactionV3` adds ~5,385 bytes of `pqc_auth` material per user transaction
-(see `docs/V3_ROLLOUT.md` for exact component sizes). Practical consequences
-for anonymity relay:
+`TransactionV3` adds **5389** bytes of `pqc_auth` material per user
+transaction input (`pqc_auth_weight()`; see `docs/V3_ROLLOUT.md`).
+Practical consequences for anonymity relay:
 
 - A typical 2-in/2-out FCMP++ transaction grows from ~2–3 KB to ~7–8 KB.
 - On Tor, a single cell is 512 bytes; a v3 transaction spans ~14–16 cells

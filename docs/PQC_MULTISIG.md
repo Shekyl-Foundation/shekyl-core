@@ -51,10 +51,9 @@ authorizations rely on rules and code paths already present in V3.
 
 ## 2. Design Principles
 
-1. **Symmetric authority.** The four authorities historically conflated
-   in "coordinator" — proposal, construction, signing, assembly — are split.
-   Only the FCMP++ proving role retains a designated holder per output, and
-   that role rotates deterministically across the group.
+1. **Equal participants under Option E′.** Proposal, construction,
+   signing, and assembly are shared. There is **no mandatory prover**.
+   (Rotating-prover / Option D scaffold is **deleted** — see §4 / §11.)
 2. **Deterministic construction.** Given a spend intent and a committed
    chain snapshot, every participant produces byte-identical transaction
    bytes. There is no interface latitude.
@@ -65,17 +64,21 @@ authorizations rely on rules and code paths already present in V3.
 4. **No consensus changes.** Every binding is achievable within existing
    V3 rules. The worst-case failure of a wallet-layer bug is a failed
    broadcast, never a chain split.
-5. **Get it right.** Where deferring a feature lets us avoid shipping
-   speculative cryptography, we defer. FROST SAL (V4), the full rotation
-   protocol (V3.2), and chain-anchored group registries (V3.3+) are all
-   explicitly out of V3.1 scope, with reserved namespace for clean future
-   addition.
+5. **Get it right — defer speculative crypto, ship E′.** **In V3.1
+   scope:** Option E′ threshold FROST SAL on `y` (`spend_auth_version =
+   0x02`; §15.4a). **Out of V3.1 scope:** the deleted Option D
+   mandatory-prover / 1/N-*loss* scaffold; the full *key* rotation
+   protocol (V3.2); chain-anchored group registries (V3.3+); composite /
+   lattice-only *auth* size (§15.4b, waits on lattice-threshold maturity
+   beyond IR 8214C). Authorization is already PQ (M × ML-DSA); do not
+   read "deferral" as "multisig is classical," and do not read §15.4a
+   FROST-on-`y` as "out of scope."
 6. **Honest-signer protocol invariants.** Where consensus cannot enforce
    a property without a hard fork, the property is enforced at the wallet
    layer by honest signers. These invariants are enumerated in §2.7 and
    each one is made mechanically unbypassable in supported client stacks.
 7. **Forward-compatible primitives.** Cryptographic primitives that might
-   change in future versions (spend-auth keys, prover schemes) are
+   change in future versions (spend-auth keys, auth schemes) are
    abstracted behind a `version` byte so future schemes slot in without
    protocol rewrites.
 
@@ -175,16 +178,24 @@ consensus-layer fix would require a chain-anchored group registry
 
 ## 4. Roles
 
+> **Product path (Option E′):** roles are **Proposer / Signer /
+> Assembler** only. There is **no mandatory Prover**. Sections that
+> still name a rotating Prover (and I7 / ProverReceipt / grinding)
+> describe the **deleted Option D scaffold** — retained for archaeology
+> until those sections are rewritten; they are **not** operational
+> guidance for E′.
+
 | Role | Authority | Who | Adversarial bound |
 |---|---|---|---|
 | Proposer | Publishes signed spend intent | Any group member | Signers veto by refusing to sign |
-| Prover | Constructs FCMP++ membership proof for a specific output | Deterministically rotated per output; see §11.1 | Cannot modify tx; proof binds to signers' computed payload |
-| Signer | Produces hybrid signature over canonical payload | Any M of the N members | Cannot individually authorize; needs M−1 collaborators |
+| Signer | Produces hybrid signature over canonical payload; FROST share on `y` | Any M of the N members | Cannot individually authorize; needs M−1 collaborators |
 | Assembler | Collects M signatures, broadcasts | Any group member with M sigs | Can only broadcast what signers produced |
+| ~~Prover~~ | ~~FCMP++ proof for a specific output~~ | **Option D only — deleted** | — |
 
-The prover role is the only structural asymmetry remaining in V3.1, and
-even it is per-output rather than per-group. V4 FROST SAL eliminates the
-prover role entirely by threshold-sharing the classical key.
+Under E′, FCMP++ proving is not a privileged single-member role: the
+group constructs proofs under the shared spend path without a
+1/N permanent-loss assignment. V4 lattice work does not reintroduce
+that role.
 
 ---
 
@@ -194,86 +205,95 @@ prover role entirely by threshold-sharing the classical key.
 
 A group is defined by:
 
-- `n_total`: total signers, `1 ≤ n_total ≤ 7` (consensus cap)
+- `n_total`: total signers, `1 ≤ n_total ≤ MAX_MULTISIG_PARTICIPANTS`
 - `m_required`: threshold, `1 ≤ m_required ≤ n_total`
 - `group_version`: `0x01` for V3.1 (reserved for future rotation)
-- `spend_auth_version`: `0x01` for V3.1 classical ephemeral spend-auth
+- `spend_auth_version`: **`0x02` for Option E′** (product path —
+  threshold FROST SAL on `y`; dealer-mode). **`0x01` is never issued**
+  (mandatory-prover Option D scaffold is deleted, not shipped). A later
+  mutually-distrusting DKG ceremony mode, if any, gets its own version
+  byte — do not overload `0x01`.
 - N hybrid signing keypairs (Ed25519 + ML-DSA-65), one per participant
 - N hybrid KEM keypairs (X25519 + ML-KEM-768), one per participant
 
-### 5.2 Distributed Key Generation (mandatory, no testing escape)
+**`MAX_MULTISIG_PARTICIPANTS` (MSW-G) = 5** (decided 2026-07-15
+overhaul; withdraws same-day provisional 8).
 
-V3.1 groups MUST be created via Distributed Key Generation for the
-**group shared transport secret**. There is NO simple-mode fallback:
-production wallet builds MUST NOT compile any code path that distributes
-this secret without DKG.
+**Enforcement status (pre-genesis).** This is the **ratified target**,
+not the live constant. Until **MSW-1** lands, production code still
+compiles the constant as **seven**
+(`rust/shekyl-crypto-pq/src/multisig.rs`,
+`src/cryptonote_config.h`). Do not read this section as "the node
+already rejects n>5." MSW-1 is the atomic cutover of the constant +
+bound KATs; this PR is design/docs only.
 
-Specifically:
+**Derivation:** MAX = **2f+1 at f=2** — classical majority-threshold
+BFT for the *largest group we intend to serve*. Consumer: largest
+group served. **Not** a resource bound, reward-zone fill, or
+power-of-two bias fix. The operator chooses m-of-n ≤ MAX; MAX is the
+largest n tooling ships. Rule-21 reopen: only if a named consumer
+requires n>5 *and* zone/address usability are dispositioned. See
+`V3_1_MULTISIG_RUST_ENGINE.md` §0.3.
 
-- The `multisig-v3.1` feature flag, when enabled in release builds,
-  MUST activate a compile-time assertion that disables all simple-mode
-  code paths.
-- Development and test builds MAY include simple-mode behind a separate
-  `unsafe-testing-only` feature flag that is mutually exclusive with the
-  release-build feature flag. Simple-mode code, if present, MUST emit
-  runtime warnings on every invocation and MUST refuse to broadcast
-  transactions constructed from simple-mode groups.
-- CI MUST verify that release builds do not contain simple-mode symbols.
+### 5.2 Distributed Key Generation — **not the ship default**
 
-The DKG ceremony uses the existing `dkg-pedpop` infrastructure already
-present in `shekyl-engine-core/src/multisig/dkg.rs`. The DKG output is
-the 32-byte `group_shared_secret` from which per-message encryption keys
-are derived (see §12.3).
+**Product path (Option E′, §15.4a / design §0.5):** the owner is the
+trusted dealer. Generate `b` and `y_group`, Shamir-split `y_group`,
+write participant files. **No DKG.** TRaccoon-class papers assume the
+same trusted KeyGen.
 
-DKG is performed once at group creation. The shared secret persists for
-the lifetime of the group's transport layer. This secret is distinct
-from any cryptographic spend key; its only purpose is encrypting multisig
-coordination messages.
+**Mutually-distrusting parties** (buyer/seller/arbitrator) MAY get a
+DKG ceremony behind a **later** `spend_auth_version` / ceremony mode —
+not `0x02`, and not compiled into the dealer-mode default.
+
+When that mode exists:
+
+- Production wallet builds MUST NOT compile a path that distributes
+  the *threshold spend secret* without the ceremony that mode requires.
+- A transport-only shared secret (message AEAD), if any, is distinct
+  from `y_group` and must not be confused with spend authorization.
+
+*(Older prose requiring DKG for every V3.1 group applied to mandatory-
+prover Option D and is withdrawn for the E′ product path.)*
 
 ### 5.3 group_id derivation
 
-The 32-byte `group_id` binds the group's identity:
+The 32-byte `group_id` binds the group's identity. **Code today**
+(`multisig_group_id`) hashes the **leaf** `MultisigKeyContainer`
+(ephemeral hybrid keys + spend-auth pubkeys), not address fields:
 
 ```
 group_id = cn_fast_hash(
+    DOMAIN_SEP_V31 ||
     group_version ||
     scheme_id (= 2) ||
     spend_auth_version ||
     n_total ||
     m_required ||
-    concat(sorted(hybrid_signing_pubkeys))
+    concat(container.keys) ||
+    concat(container.spend_auth_pubkeys)   # layout per multisig.rs
 )
 ```
 
-The signing pubkeys (not KEM pubkeys) define group identity. This allows
-KEM-only rotation (compromised KEM keys) without changing authorization
-identity in a future V3.2 enhancement.
+> **Honesty pin:** older prose claimed address `hybrid_signing_pubkeys`
+> define group identity. That field is vestigial (**MSW-8**) and was
+> never a `group_id` input in code. E′ will rebind `group_id` to
+> `(spend_auth_version, B, Y_group, KEMs, m, n)` (exact preimage in
+> the E′ address freeze) — Track A MSW-4/5 keep the version bytes real.
 
-`spend_auth_version` is included so that a future rotation to a new
-spend-auth scheme produces a new `group_id`, preventing silent
-reinterpretation of outputs across prover schemes.
+`spend_auth_version` is included so that a future ceremony/mode produces
+a new `group_id`, preventing silent reinterpretation across stacks.
 
-### 5.4 1/N permanent-loss acknowledgment (mandatory)
+### 5.4 1/N permanent-loss acknowledgment — **withdrawn for E′**
 
-Before a group is activated, each participant MUST acknowledge the
-following through an explicit wallet UI action:
+Mandatory-prover Option D required a 1/N loss acknowledgment (assigned
+prover holds per-output `y`). **Option E′ deletes the mandatory prover**
+— threshold FROST on `y_group` means any M honest devices can spend.
+The §5.4 acknowledgment UI is **not** part of the E′ product path.
 
-> "I understand that V3.1 multisig assigns proving duties across the
-> group's members by rotation. If any participant permanently loses
-> their keys, approximately 1/N of outputs the group receives will
-> become permanently unspendable. For N=3 that is 33%; for N=5, 20%;
-> for N=7, 14%.
->
-> I have an independent operational plan for key loss. I will not place
-> value in this group that I cannot tolerate losing if one participant's
-> keys are destroyed."
-
-Each participant's acknowledgment is signed (hybrid-signed) and shared
-with all other participants. A group is not activated (cannot receive
-funds) until all N acknowledgments are collected.
-
-Wallets MUST persist the acknowledgments as part of group state and MUST
-NOT allow activation without them.
+*(If a future mutual-distrust mode reintroduces a single-holder
+liveness dependency, restore an acknowledgment under that mode's
+version byte — do not revive it for `0x02`.)*
 
 ### 5.5 Setup ceremony (informative summary)
 
@@ -323,31 +343,36 @@ type-check the HRP at parse time.
 MultisigAddressPayload {
     version:             u8   (= 0x01)
     group_version:       u8   (= 0x01)
-    spend_auth_version:  u8   (= 0x01)
+    spend_auth_version:  u8   (= 0x02 for Option E′; 0x01 never issued)
     network_byte:        u8
-    n_total:             u8   (1..=7)
+    n_total:             u8   (1..=MAX_MULTISIG_PARTICIPANTS)
     m_required:          u8   (1..=n_total)
 
     hybrid_kem_pubkeys:  [HybridKemPubkey; n_total]
     // Each: X25519 (32 B) + ML-KEM-768 (1184 B) = 1216 B
     // Canonically ordered by participant_index (0..n_total)
 
-    hybrid_sign_pubkeys: [HybridSignPubkey; n_total]
-    // Each: Ed25519 (32 B) + ML-DSA-65 (1952 B) = 1984 B
-    // Canonically ordered by participant_index (0..n_total)
+    // Option E′ additionally carries group B and Y_group (layout TBD
+    // in E′ address freeze). Not shown in the D-era struct below.
 
     checksum:            [u8; 4]   // Bech32m
 }
 ```
 
-Total payload: `10 + N × 3200` bytes.
+> **MSW-8 (2026-07-15):** `hybrid_sign_pubkeys: [HybridSignPubkey; n_total]`
+> is **deleted**. Vestigial Solution C fossil — constructed and parsed,
+> never consumed (`multisig_receiving.rs` derives leaf hybrid sign keys
+> from KEM shared secrets). `PER_PARTICIPANT_LEN` collapses 3212 → 1216.
+> Free pre-genesis. Applies to D and E′ identically.
 
-| N | Payload bytes | Bech32m chars |
-|---|---|---|
-| 2 | 6,410 | ~10,260 |
-| 3 | 9,610 | ~15,380 |
-| 5 | 16,010 | ~25,620 |
-| 7 | 22,410 | ~35,860 |
+Total payload after MSW-8: `10 + N × 1216` bytes (plus E′ `B`/`Y` when
+those fields land).
+
+| N | After MSW-8 (bech32m chars, approx) |
+|---|---|
+| 2 | ~3,900 ← QR-able |
+| 3 | ~5,850 |
+| 5 | ~9,740 |
 
 ### 6.3 Address handling, fingerprint UX, and provenance
 
@@ -538,8 +563,9 @@ cross-version key reuse:
 
 | spend_auth_version | KDF label |
 |---|---|
-| 0x01 (V3.1 classical) | `"shekyl-v31-classical-spend"` |
-| 0x02 (reserved, V4 PQC) | `"shekyl-v4-pqc-spend"` |
+| **0x02 (Option E′ / 15.4a)** | `"shekyl-v31-classical-spend"` — classical threshold SAL on `y` (Ed25519 in the FCMP++ circuit). **Not** lattice auth. |
+| 0x01 | **Never issued** (was Option D mandatory-prover scaffold) |
+| Future 15.4b auth evolution | Distinct label — do not overload `0x02` |
 
 Domain separation is a HARD requirement. Any implementation that uses
 identical material for two purposes is non-conforming.
@@ -572,9 +598,10 @@ Per multisig-recipient output, the tx_extra includes:
 | **0x0A** | `TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS` | **1 + N × 32 B** (version byte + N Y_i) |
 
 Tag `0x0A` is new in V3.1 and is REQUIRED on every multisig-recipient
-output. Its first byte is the `spend_auth_version` (0x01 for V3.1
-classical); subsequent bytes are the N spend-auth pubkeys in canonical
-participant order.
+output. Its first byte is the `spend_auth_version` (**`0x02` for
+Option E′**; `0x01` never issued); subsequent bytes are the N
+spend-auth pubkeys in canonical participant order (E′ layout pinned
+in design §0.5 — `B` + `Y_group` + N×KEM once MSW-8 lands).
 
 `TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS` (0x09) MUST be absent for single-sig
 outputs. Wallets MUST reject any single-sig-shaped output that contains
@@ -652,14 +679,18 @@ When sending to a multisig recipient, the sender's wallet MUST:
 1. Display the address fingerprint (§6.3) and require user confirmation
 2. Verify that the parsed address has a valid Bech32m checksum
 3. Verify that all N hybrid pubkey blobs deserialize correctly
-4. Reject addresses with `n_total > 7` or `m_required > n_total`
+4. Reject addresses with `n_total > MAX_MULTISIG_PARTICIPANTS` or
+   `m_required > n_total` (cap = 5 per §5.1 / MSW-G)
 5. Reject addresses with unknown `spend_auth_version` (wallets only
    construct outputs for versions they fully implement)
 6. Compute and surface the per-output size cost
-7. Determine `assigned_prover_index` via the sender-computable rule
-8. Set `O = spend_auth_pubkeys[assigned_prover_index]` correctly;
-   any wallet bug here would produce unspendable outputs, caught by
-   recipient-side receive-time validation
+7. *(Option D only — withdrawn for E′.)* Determine
+   `assigned_prover_index` via the sender-computable rule
+8. *(Option D only — withdrawn for E′.)* Set
+   `O = spend_auth_pubkeys[assigned_prover_index]`. Under **Option E′**
+   (§15.4a), construct `O = ho·G + B + y_out·T` with
+   `y_out = y_group + y_kem`; any wallet bug here would produce
+   unspendable outputs
 
 ---
 
@@ -1069,6 +1100,13 @@ rather than content grinding.
 
 ### 11.1 Rotating prover assignment (sender-computable)
 
+> **Product path (Option E′):** this entire subsection is **deleted
+> machinery** — E′ has no mandatory prover (§15.4a / design §0.5).
+> Retained as historical specification of the Option D scaffold.
+>
+> **Naming:** "rotating *prover* assignment" ≠ §15.2 V3.2 "full
+> *key* rotation protocol." E′ deletes the former; the latter survives.
+
 For each output being spent, the prover is determined deterministically
 from data the **sender knew at construction time**:
 
@@ -1109,14 +1147,25 @@ Where:
 - **Roughly uniform**: cryptographic hash mod N is uniform over any
   reasonable input distribution
 
-**Grinding resistance:** a sender can iterate `tx_secret_key` values to
-bias which participant is assigned prover for specific outputs. This
-bounds the sender's ability to target (e.g., always assign to a known-
-offline participant). The grinding cost is proportional to the target
-bias: to bias all N outputs to one prover requires ~N^k work for k
-outputs. For most realistic adversaries, the work cost exceeds the
-benefit. Cryptographer review target: formalize this bound
-(see `PQC_MULTISIG_V3_1_ANALYSIS.md` §7).
+**Rotation protects against accident and load, not a hostile sender.**
+"Grinding resistance" in the authorization sense is **unreachable by
+construction**: the assignment is sender-computable, so a sender who
+wants a chosen prover can iterate `tx_secret_key` / `tx_secret_key_hash`
+until they get it. Reframe: rotation spreads prover duty so one
+participant does not accidentally own every proof; it does **not** stop
+a motivated sender from biasing assignments.
+
+**Lead figure (availability griefing, not authorization):** ~`n_total`
+expected tries to force one output onto a chosen prover; ~`k · n_total`
+to land `k` preferred assignments across `k` independent targets
+(separate 1-output txs). That is cheap (~hashes, fee-bounded) — an
+**availability** surface (MS-4/MS-5), not a steal path (auth remains
+M × ML-DSA). Do **not** lead with scare-`N^k`: forcing *all* `k`
+outputs in *one* tx onto the same prover under one shared
+`tx_secret_key_hash` is still ~`(1/n)^k` per trial, but that is not
+the everyday attack — k separate txs cost ~`k·N`. Cryptographer
+formalization of the joint tail remains optional
+(`PQC_MULTISIG_V3_1_ANALYSIS.md` §7); it is not a Phase 6 ship gate.
 
 **Recipient-side verification** at receive time confirms the sender's
 computed assignment matches the one the group independently derives.
@@ -1572,10 +1621,27 @@ published; intent REJECTED
 | Property | Mechanism |
 |---|---|
 | Per-output forward privacy | Option C N-fold KEM fan-out + per-output ephemeral keys |
-| Spend-to-spend unlinkability | Different ephemeral N-key blobs per spend |
+| Spend-to-spend unlinkability (within scheme-2) | Different ephemeral N-key blobs per spend — **but see stream attribution below** |
 | Group identity privacy from passive observer | group_id not on-chain; encrypted transport |
 | Role-pattern privacy from relay observers | Encrypted message_type in envelope |
 | Filesystem metadata privacy | Opaque filenames + encrypted manifest (§12.6) |
+
+**Stream attribution (honest statement, 2026-07-15).** Do **not** write
+"accepted given negligible multisig volume" — that is circular: the
+anonymity set stays small *because* volume is negligible. The load-
+bearing privacy fact for `scheme_id = 2` spends:
+
+- Every scheme-2 spend is **provably one entity's** (the M-of-N group
+  that authorized it). One linkage event (exchange deposit/withdrawal,
+  KYC'd counterparty, etc.) **retroactively deanonymizes the whole
+  history** of that stream.
+- The scheme-2 FCMP set is the multisig outputs **by construction** —
+  harmless at low N; it is not a separate "multisig set" to grow into.
+- Change-output leak lands on **senders** (who choose to pay a
+  multisig address), not on the group as a special consensus class.
+
+Operator docs and UX must treat multisig as a **labeled custody
+stream**, not as "same privacy as solo at small volume."
 
 ### 14.3 Liveness
 
@@ -1609,12 +1675,51 @@ published; intent REJECTED
 | Item | Purpose |
 |---|---|
 | `group_version = 0x01` | V3.1; higher values for future rotated groups |
-| `spend_auth_version = 0x01` | V3.1 classical ephemeral; 0x02+ for future schemes |
+| `spend_auth_version = 0x02` | **Option E′** (15.4a threshold classical SAL on `y`). **`0x01` never issued.** Higher values only for a later mutually-distrusting / lattice-auth path — do not overload `0x02`. |
 | HRP `shekyl1n...` | Rotated-key multisig (V3.2+) |
 | `TX_EXTRA_TAG_MULTISIG_MIGRATION (0x08)` | V3.2 migration transactions |
 | Message type `0x0A` (RotationIntent) | V3.2 full rotation protocol |
 
+**Honesty pin (2026-07-14 — P0-k / R1-F-11).** These rows are
+*intent*, not substrate. Today:
+
+1. **`group_version` is fused with `MULTISIG_CONTAINER_VERSION`.**
+   `multisig_group_id` passes the compile-time constant as
+   `group_version`, not `container.version`. Wire-encoding version and
+   protocol-semantics version are different jobs sharing one byte.
+   When a v2 container exists under the current code, group_id would
+   silently hash v1's group_version. **MSW-4** unfuses: parse accepts
+   a known-version set; `group_id` reads `container.version`.
+2. **`spend_auth_version` is not a container wire field.** It is a
+   hardcoded `SPEND_AUTH_VERSION_ED25519` argument into the group_id
+   preimage (and appears as the first byte of the `tx_extra`
+   spend-auth tag at receive time — wallet layer). Address/`group_id`
+   binding may be the right carrier (§15.5); it is currently so **by
+   accident**, not named decision. **MSW-5** pins the disposition.
+3. **Reserved-namespace KATs are incomplete.** Existing
+   `group_id_v31_includes_version_fields` covers `scheme_id` and
+   `spend_auth_version` via `with_versions`; it does **not** vary
+   `group_version`. A reserved byte never set to a second value is
+   indistinguishable from a constant.
+
+V3.2 / V4 / 2030+ migration paths run through these bytes. They are
+genesis-frozen the same way `PQC_MAX_*_BLOB` is — the `multisig`
+feature gate does not protect them. Track A owns the fix.
+
+V3.1 provides the necessary hooks **once MSW-4/5 land**:
+- Separated container vs group version (or one byte with both jobs
+  *named* and `group_id` reading the wire)
+- Named spend_auth_version carrier
+- Exercised reserved-namespace KATs
+- Reserved message type 0x0A / `tx_extra` tag 0x08 (unchanged)
+
 ### 15.2 V3.2 full rotation protocol (hooks reserved, protocol deferred)
+
+> **Naming collision (2026-07-15).** This section is **participant / group
+> *key* rotation** (new KEM keys, new `group_id`, migration txs). It is
+> **unrelated** to §11.1 "rotating *prover* assignment," which Option E′
+> deletes. Do not read "rotation deleted" (E′ / mandatory prover) as
+> striking this V3.2 key-rotation work.
 
 V3.1 reserves the message type and namespace for rotation but does NOT
 implement the rotation protocol itself. The rotation protocol will be
@@ -1629,35 +1734,160 @@ design flaws surface when real users depend on the feature, not in a
 rushed pre-launch implementation. This is not a scope-protection
 argument; it is a design-maturity argument.
 
-V3.1 provides the necessary hooks:
-- Versioned `spend_auth_version` field
-- Reserved message type 0x0A
-- Reserved `tx_extra` tag 0x08
-- Forward-compatible derivation function structure
-
-V3.2 will add:
+V3.1 provides the necessary hooks **once MSW-4/5 land** (see §15.1
+honesty pin). V3.2 will add:
 - Full `RotationIntent` protocol
 - Individual participant key rotation
 - Full group rotation (new group_id)
 - Migration transactions consuming old outputs, producing new
-- Key escrow protocol as 1/N loss mitigation
 
-### 15.3 V3.3 candidate features
+~~Key escrow protocol as 1/N loss mitigation~~ — **struck for E′**
+(2026-07-15). There is no mandatory-prover 1/N loss to mitigate under
+`spend_auth_version = 0x02`. If a future mutual-distrust mode
+reintroduces single-holder liveness, escrow belongs under *that*
+version byte — not inherited silently into V3.2 from Option D.
 
-- **Chain-anchored group registry:** new tx type; reduces address size
-- **Traffic padding for transport privacy:** fixed-interval heartbeats,
-  dummy messages
+### 15.3 Address size / group registry (re-priced 2026-07-15)
 
-### 15.4 V4 path (FROST SAL + pure-PQC spend-auth)
+**MSW-8** deletes vestigial address `hybrid_sign_pubkeys`
+(`PER_PARTICIPANT_LEN` 3212 → 1216). After that cut:
 
-When lattice threshold signatures are standardized:
+| N | bech32m chars (approx) | note |
+|---|---|---|
+| 2 | ~3,900 | QR-able under alphanumeric cap ~4,296 |
+| 3 | ~5,850 | file-friendly |
+| 5 | ~9,740 | still a file; not 25k |
 
-- **FROST SAL** threshold-shares classical (or PQC) spend secrets
-- `spend_auth_version = 0x02` deployed alongside V4
-- Groups can opt to migrate via V3.2 rotation protocol
-- V3.1 outputs remain spendable indefinitely under
-  `spend_auth_version = 0x01`
-- Prover role becomes threshold; 1/N permanent-loss limitation eliminated
+**Chain-anchored group registry** (§6.5) is an **optimization**, not a
+V3.1 critical-path prerequisite. The fossil made 15k–36k chars look
+unusable; that weight was the unread field. Traffic-padding /
+heartbeat privacy work remains a separate V3.3-candidate.
+
+Does not reopen `MAX_MULTISIG_PARTICIPANTS` (MSW-G=5).
+
+### 15.4 V4 path — two items, two blockers (split 2026-07-14; posture pin same day)
+
+Earlier prose bundled "FROST SAL + pure-PQC spend-auth" behind a single
+NIST-lattice gate. That was wrong twice: it parked 15.4a behind NIST,
+and the phrase "pure-PQC spend-auth" is ambiguous (pin below).
+
+#### Posture first — multisig is already PQ for authorization
+
+Scheme_id=2 verify check 10 is `M × Ed25519 + M × ML-DSA`
+(`shekyl-crypto-pq` multisig). The key container is hybrid by
+construction (`SINGLE_KEY_CANONICAL_LEN = 1996`). Forging an M-of-N
+spend requires breaking ML-DSA-65 M times. **Threshold authorization
+is quantum-resistant today.**
+
+Classical exposure lives in the **FCMP++ layer**, not in multisig:
+
+- SAL / membership: Ed25519 (`SPEND_AUTH_VERSION_ED25519 = 0x01`;
+  `SpendAuthAndLinkability` in `shekyl-fcmp`, compiled unconditionally).
+- Leaf `{O.x, I.x, C.x, H(pqc_pk)}` for every output on the chain.
+- **Solo has the identical posture** — classical membership/SAL +
+  hybrid PQC auth bound through `h_pqc`. Multisig adds **zero**
+  classical exposure; it carries M hybrid signatures instead of one.
+
+**Quantum degradation of the SAL is graceful for funds, not for
+privacy.** An adversary who breaks Ed25519 learns each assigned
+prover's `y` and can produce the SAL themselves — the mandatory-prover
+dependency evaporates — and **M × ML-DSA still authorizes the spend**.
+Classical SAL is a **liveness** dependency (1/N permanent-*loss*), not
+a compromise path. Curve break against FCMP++ membership is
+**privacy retroactive** (HNDL on the anonymity set); that concern is
+real, **not multisig-specific**, and multisig neither helps nor hurts
+it.
+
+**Consequence for Track B:** grinding, rotation bias, hostage fraction,
+veto / heartbeat / griefing are **availability engineering** (MS-4 /
+MS-5 / R-F), not cryptography. They do not belong in the Phase 6
+cryptographer queue. Funds are freezable under those attacks, not
+stealable via them. Shipping multisig now is an **economics** question
+(~2.4× per-tx size vs solo for 5-of-5; ≪ five solos — `V3_ROLLOUT.md`)
+— whether threshold custody is worth that cost — not a crypto-maturity
+question.
+
+#### Phrase pin — what "pure-PQC spend-auth" is *not*
+
+| Reading | Meaning | Status |
+| --- | --- | --- |
+| **(a) Lattice-only *auth signing*** | Drop the Ed25519 half of the hybrid `scheme_id=2` key/sig container; M-of-N or composite becomes lattice-only at the *authorization* layer | Achievable in principle; size/FIPS story; **not** what `spend_auth_version` gates |
+| **(b) Lattice *SAL*** | Replace Ed25519 `O` / `y` with a lattice key verified inside FCMP++ | **Impossible** while FCMP++ is the membership proof (Helios/Selene circuit verifies a curve equation) |
+
+`spend_auth_version` gates the **SAL key scheme** published in
+`tx_extra` (`spend_auth_pubkeys`), not the hybrid auth container.
+**`spend_auth_version = 0x02` means 15.4a** (threshold classical SAL /
+FROST group-shaped `y` under a two-component address) — still Ed25519
+points in the circuit. It does **not** mean (b). Reading (a) is a
+separate auth-layer evolution (scheme id / blob layout), tracked
+under 15.4b's size motivation when lattice threshold maturity allows
+a composite or lattice-only auth path.
+
+#### 15.4a — FROST SAL / Option E′ (threshold `y`; no mandatory prover)
+
+**Product shape (2026-07-15):** **Option E′** — see
+`V3_1_MULTISIG_RUST_ENGINE.md` §0.5. Two-component
+`O = ho·G + B + y·T` (`output.rs:286-304`) splits trust axes:
+
+- **`b` / `B`:** group-plaintext view+link key → local key images /
+  balance without co-signer ceremony.
+- **`y`:** FROST M-of-N group secret with per-output tweak
+  `y_out = y_group + y_kem` (E′, not fixed-`y` E).
+- **Ship:** dealer-mode (owner = trusted KeyGen), MAX=5,
+  `spend_auth_version = 0x02`, **`0x01` never issued**.
+- **Deletes:** mandatory prover, rotation/grinding, heartbeat,
+  counter_proof, I7 receive-time prover check, griefing scores.
+
+**Fixes:** 1/N permanent-**loss** lock and the availability surface that
+existed only because a single assigned prover held `y`. Does **not**
+change quantum authorization strength (already M × ML-DSA). Does **not**
+shrink auth blobs (15.4b).
+
+**Blocked on (internal — now open):** Apr 9 `y=0` / two-component-address
+gate is dead — `derive_output_secrets` asserts `y ≠ 0`
+(`rust/shekyl-crypto-pq/src/derivation.rs`; formula
+`O = ho·G + B + y·T` in `output.rs`). Remaining work: threshold-
+share `y_group`, wire `0x02`, nonce-discipline types, E′ address layout
+(`B` + `Y_group` + N×KEM). **Not blocked on NIST.**
+
+**Watch (15.4b size only):** dPN25 (T≤8, ~2.7 KB), TALUS/ML-DSA-threshold.
+Do **not** lead with TRaccoon (wrong N, coordinator, no DKG).
+
+**Coexistence:** E′ is the issued V3.1 path. A later stack (lattice
+auth, mutual-distrust DKG mode) lands **beside** it under a new
+version/HRP — §15.5 + MSW-4/5 discriminability. See design doc §0.4 /
+§0.5.
+
+#### 15.4b — Composite / lattice-only *auth* (size, not SAL)
+
+**Fixes:** M-of-N hybrid signature-list **blob size**, F-1 bound
+pressure, full-reward-zone tension with large N, N-cap size lens.
+Does **not** fix the mandatory prover (that is 15.4a). Does **not**
+add PQ authorization (already present).
+
+**Blocked on (external):** lattice *threshold* maturity. NIST IR 8214C
+(final 2026-01-20) is a **reference-material collection**, not a
+standardization — packages → analysis → MPTC characterization report
+(~2027) that "may include recommendations for future processes."
+Actual standardization is that later process (2030+ plausible). The
+deferral **hardened**.
+
+**Watch list (not V3.0/V3.1 adoption):**
+
+| Line | Regime / note | Fit for Shekyl N≤8 |
+| --- | --- | --- |
+| Threshold Raccoon (del Pino et al., eprint 2024/184) | ~13 KiB sigs, ~40 KiB/user, T≤1024; trusted KeyGen; coordinator combine; not FIPS | Wrong regime; imports F-3; not FIPS 204 |
+| dPN25 (del Pino–Niot) | Compact T≤8, ~2.7 KiB Dilithium-family; **not** FIPS 204 | Exact N; best size win on paper |
+| Tanuki (MPTS 2026 preview) | 2-round + preprocessing; Raccoon-compatible | Watch |
+| **TALUS** (MPTS 2026) | Threshold **ML-DSA**, 1-round online | **Primary watch** — thresholds shipped `fips204` |
+
+All of the above threshold the **auth layer** only. None are a lattice
+SAL. None touch 15.4a.
+
+**Genesis / MSW-G:** MAX=5 is 2f+1 at f=2 (largest group served), not
+a zone fill. A future composite auth (15.4b) may reopen the size lens
+for larger N; genesis freezes on today's signature-list economics with
+that explicit 15.4b expiry.
 
 ### 15.5 No implicit upgrades
 
@@ -1665,6 +1895,12 @@ Outputs created under one `spend_auth_version` MUST NOT be reinterpreted
 under another. Upgrading requires explicit migration transaction. This
 prevents silent misreinterpretation and preserves auditability across
 scheme transitions.
+
+**Implication for Stage 4 / V4:** this rule forbids in-place evolution of
+V3.1 durable fields into V4 shapes. V4 is a **coexisting rewrite**
+(§15.4). Do not design V3.1 persistence for "Stage 4 will evolve this
+type" — design it so the version discriminator routes to the correct
+stack forever.
 
 ---
 
@@ -1709,17 +1945,30 @@ shekyl-crypto-pq/src/multisig_receiving.rs
 
 ### 16.3 Defense-in-depth wiring fixes
 
-- `src/cryptonote_core/blockchain.cpp:3768`: wire `expected_scheme_id`
-- `rust/shekyl-ffi/src/lib.rs:343`: pass `expected_group_id` to
-  `verify_multisig` for scheme_id=2
+> **MSW-6 (2026-07-15).** The historical "wire `expected_scheme_id`"
+> DiD that forced **tx-wide** scheme agreement is **withdrawn** — it
+> was self-referential (cites this section) and costs scheme-2 funding
+> + scheme-1 bond vin in one tx. Replacement: per-input scheme ∈
+> `{1,2}` (or bond-post exemption mirroring
+> `is_archival_serve_credit_only`). Cross-scheme confusion remains
+> prevented by length disjointness (MSW-2). Archival core never sees
+> funding `pqc_auths`.
 
-### 16.4 Modified C++
+- ~~`src/cryptonote_core/blockchain.cpp` tx-wide `expected_scheme_id`~~
+  → **MSW-6** relax (both verify batteries + Rust submit verifier)
+- `rust/shekyl-ffi` / group_id DiD for scheme_id=2: **MS-8 retired**
+  (leaf already binds the blob; no-op)
 
-- `src/cryptonote_core/cryptonote_tx_utils.cpp`: add multisig-aware output
-  construction path
-- `src/wallet/wallet2.cpp`: multisig output scanning, receive-time
-  validation, garbage filtering with griefing scores
-- `src/rpc/core_rpc_server.h`: add `get_griefing_stats` endpoint
+### 16.4 Modified C++ — **RETIRED**
+
+> **Retired 2026-07-15 (Phase 0).** Do not implement wallet2 /
+> `cryptonote_tx_utils` multisig paths. Wallet-side multisig logic
+> lands in Rust behind the `multisig` Cargo feature
+> ([`V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md),
+> **MS-2**). Allowed C++ surface: LMDB / chain-DB persistence of
+> consensus-visible bytes; existing `scheme_id ∈ {1,2}` verify into
+> Rust FFI; **MSW-6** tx-layer scheme rule. Historical bullets deleted
+> rather than kept as "superseded" temptation.
 
 ### 16.5 New address parsing
 
@@ -1740,21 +1989,38 @@ shekyl-crypto-pq/src/multisig_receiving.rs
 
 ### 16.7 Feature flag structure
 
+**Status: planned sketch — these flags are not in any `Cargo.toml`
+today.** Do not copy-paste the block below into a crate; it names the
+intended gate axes for Track B / Option E′. Live today: `multisig`
+scaffolding feature on engine-core / engine-rpc / ffi (F-6 CI lane).
+`frost-sal-v4` and `unsafe-testing-only` land when E′ / simple-mode
+fixtures are implemented (after Option A orchestration DELETE).
+
 ```
+# PLANNED (not present in workspace Cargo.toml as of 2026-07-15)
 [features]
 default = []
-multisig-v3.1 = []                 # production multisig
-frost-sal-v4 = []                   # V4 FROST SAL scaffolding
-unsafe-testing-only = []            # simple-mode fixtures, dev only
-# Mutual exclusion: cargo enforces at compile time
+multisig = []                       # scaffolding / CI compile (F-6) — PARTIAL: exists
+frost-sal-v4 = []                   # Option E′ product path (15.4a) — NOT YET
+unsafe-testing-only = []            # simple-mode fixtures, dev only — NOT YET
+# Mutual exclusion: cargo enforces at compile time (when landed)
 ```
 
 CI verifies release builds do not contain simple-mode symbols.
+**F-6:** CI must build `check/clippy/test` with `--features multisig`.
+
+**`frost-sal-v4` is E′'s planned gate** (was specified, never built —
+now the first real coexistence boundary for `spend_auth_version =
+0x02`). Build it after deleting the Option A `MultisigGroup` wrapper;
+**keep** `shekyl-fcmp::{frost_sal, frost_dkg}` primitives. Do **not**
+park the rejected fixed `pqc_public_key` fossil behind this flag —
+**delete** `multisig/{dkg,group,signing}.rs` orchestration (R1-F-3)
+and re-home clean SAL-only types under the E′ stack.
 
 ### 16.8 Test matrix
 
 **Functional:**
-- 2-of-3, 3-of-5, 5-of-7 happy paths (receive + spend)
+- 2-of-3, 3-of-5, 5-of-5 happy paths (receive + spend)
 - Single-sig → multisig, multisig → multisig
 - Change outputs (group → self)
 - Staked outputs
