@@ -766,13 +766,14 @@ pub struct EmissionAuthMsgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bond_wire::ShardSet;
 
     fn sample_vin() -> ArchivalRewardEmissionVin {
         ArchivalRewardEmissionVin {
             p_pubkey: vec![0xA1; SINGLE_KEY_CANONICAL_LEN],
             holdings: HoldingsDescriptor {
                 kind: HoldingsKind::ShardSetCompact,
-                shard_ids: vec![7, 42],
+                shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
             },
             settlement_epochs: vec![11, 12, 15],
             work_claim: vec![
@@ -838,7 +839,7 @@ mod tests {
         let mut ct = sample_vin();
         ct.holdings = HoldingsDescriptor {
             kind: HoldingsKind::CompleteTree,
-            shard_ids: Vec::new(),
+            shard_ids: ShardSet::empty(),
         };
         let wire = ct.serialize().unwrap();
         let decoded = ArchivalRewardEmissionVin::read(&mut wire.as_slice()).unwrap();
@@ -1072,7 +1073,7 @@ mod tests {
         const GOLDEN_SHARD_SET: [u8; 4] = [0x00, 0x02, 0x07, 0x2A];
         let shard_set = HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
-            shard_ids: vec![7, 42],
+            shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
         };
         // In-situ: the fragment sits byte-identical inside a serialized emission
         // vin, at tag + varint(pk_len) + pk_bytes. (The direct-encode assertion

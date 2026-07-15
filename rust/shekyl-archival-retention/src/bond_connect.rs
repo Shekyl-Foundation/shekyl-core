@@ -24,7 +24,7 @@ use thiserror::Error;
 
 use crate::bond_floor::{bond_floor_of, ARCHIVAL_BOND_FLOOR_ATOMIC};
 use crate::bond_post::{single_shard_diff, superset_added_diff, SingleDiff};
-use crate::bond_wire::{HoldingsDescriptor, HoldingsKind, MAX_HOLDINGS_SHARDS};
+use crate::bond_wire::{HoldingsDescriptor, HoldingsKind, ShardSet, MAX_HOLDINGS_SHARDS};
 use crate::consensus_state::BadInterval;
 
 /// Interval-log entry cap — the cross-language pin of
@@ -205,7 +205,7 @@ pub fn unbond_connect(
         post_bonded_total: 0,
         post_holdings: HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
-            shard_ids: Vec::new(),
+            shard_ids: ShardSet::empty(),
         },
         interval_close: clean_interval_close(unbond_settlement_epoch),
         new_total_bonded_atomic,
@@ -630,7 +630,7 @@ mod tests {
     fn record_holdings() -> HoldingsDescriptor {
         HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
-            shard_ids: vec![7, 42],
+            shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
         }
     }
 

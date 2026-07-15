@@ -29,8 +29,9 @@ use shekyl_archival_retention::{
     EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError, EpochCloseBond,
     EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
     HoldingsUpdateConnectError, HoldingsUpdatePopError, KCover, RebondConnectError, RebondPopError,
-    RewardCommit, UnbondConnectError, UnbondPopError, WireError, CHALLENGE_RESOLUTION_BLOCKS,
-    HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W, MAX_HOLDINGS_SHARDS,
+    RewardCommit, ShardSet, ShardSetError, UnbondConnectError, UnbondPopError, WireError,
+    CHALLENGE_RESOLUTION_BLOCKS, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES,
+    MAX_CLAIM_AGE_W,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -187,19 +188,22 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS: u8 = 43;
 /// current holdings (Pin 1 — reinstatement, not restructuring).
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET: u8 = 44;
 /// Rebond verify: post-holdings exceed the codec shard cap — `bond_floor`
-/// collapses to 0 on an oversize set, which would let an oversize post on a
-/// terminal-slashed record demand zero credit and then abort block connect at
-/// the record encode.
-pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE: u8 = 45;
+// Code 45 (`REBOND_POST_OVERSIZE`) is RETIRED and reserved: the verify-level
+// oversize belt was removed with the `ShardSet` newtype (an oversize post is
+// unrepresentable in the vin's holdings), so the code is never returned. The
+// number stays reserved rather than renumbering 46/47.
 /// Rebond verify: the record's `bonded_total != bond_floor(record holdings)`
 /// (floor-drifted record) — rejected at verify so the tx can never ride to the
 /// connect fold's FATAL floor belt (tx rejection, not a chain halt).
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR: u8 = 46;
 /// Shared vin marshal: the vin's holdings shard count exceeds the wire codec
 /// bound (`MAX_HOLDINGS_SHARDS`). The FFI marshal is a second decoder for the
-/// same wire object, so it enforces the decoder's structural cap — an
-/// oversize set is unrepresentable past the boundary for every post kind.
+/// same wire object, so it routes through `ShardSet::new` — an oversize set is
+/// unrepresentable past the boundary for every post kind.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED: u8 = 47;
+/// Shared vin marshal: the vin's holdings carry a duplicate shard id. Rejected
+/// at the same `ShardSet::new` boundary as the count cap ("a set on the wire").
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD: u8 = 48;
 
 /// `Unbond` connect/pop fold succeeded (gate-4 §4.3 / §5).
 pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_OK: u8 = 0;
@@ -706,7 +710,6 @@ fn map_bond_post_error(err: BondPostError) -> u8 {
             SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED
         }
         BondPostError::PostKindNotRebond => SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND,
-        BondPostError::RebondPostOversize => SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE,
         BondPostError::RebondRecordFloorBroken => SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR,
         BondPostError::RebondOnCompleteTree => {
             SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE
@@ -849,17 +852,21 @@ unsafe fn bond_post_vin_from_raw(
     bond_credit: u64,
     bond_debit: u64,
 ) -> Result<ArchivalBondPostVin, u8> {
-    let shard_ids =
+    let shard_ids_raw =
         unsafe { with_bond_post_u64_slice(shard_ids_ptr, shard_ids_len, <[u64]>::to_vec) }?;
-    // The wire decoder bounds the vin's shard count (MAX_HOLDINGS_SHARDS);
-    // this marshal is a second decoder for the same wire object, so it
-    // enforces the same structural cap — an oversize set is unrepresentable
-    // past the FFI boundary for EVERY post kind, not a case each downstream
-    // verify must re-guard (`bond_floor` collapses to an in-band 0 on oversize,
-    // which let an unguarded verify read it as the empty exit shape).
-    if shard_ids.len() > MAX_HOLDINGS_SHARDS {
-        return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED);
-    }
+    // The wire decoder validates the vin's shard list through `ShardSet::new`;
+    // this marshal is a second decoder for the same wire object, so it routes
+    // through the identical constructor — the bound AND duplicate-freeness are
+    // unrepresentable-if-violated past the FFI boundary for EVERY post kind, not
+    // a case each downstream verify must re-guard (`bond_floor` collapses to an
+    // in-band 0 on oversize, which let an unguarded verify read it as the empty
+    // exit shape; and a duplicate silently double-counted the floor).
+    let shard_ids = ShardSet::new(shard_ids_raw).map_err(|e| match e {
+        ShardSetError::CountExceeded { .. } => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED
+        }
+        ShardSetError::Duplicate { .. } => SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD,
+    })?;
     let bond_spend_pk =
         unsafe { with_bond_post_u8_slice(bond_spend_pk_ptr, bond_spend_pk_len, <[u8]>::to_vec) }?;
     let coupling_ok = if post_kind == BondPostKind::JoinMarket {
@@ -2691,10 +2698,16 @@ pub unsafe extern "C" fn shekyl_emission_vin_verify(
         let Ok(kind) = HoldingsKind::from_u8(bond_holdings_kind) else {
             return SHEKYL_EMISSION_VIN_ERR_MARSHAL;
         };
-        let shard_ids: Vec<u64> = if bond_shard_ids_len == 0 {
+        let shard_ids_raw: Vec<u64> = if bond_shard_ids_len == 0 {
             Vec::new()
         } else {
             unsafe { std::slice::from_raw_parts(bond_shard_ids_ptr, bond_shard_ids_len) }.to_vec()
+        };
+        // The record is trusted substrate (its holdings were built from a
+        // validated vin's `ShardSet`), so re-validating here is a corruption
+        // guard: an oversize/duplicate record-holdings is a marshal error.
+        let Ok(shard_ids) = ShardSet::new(shard_ids_raw) else {
+            return SHEKYL_EMISSION_VIN_ERR_MARSHAL;
         };
         bond_holdings = HoldingsDescriptor { kind, shard_ids };
         claimed_epochs = if claimed_epochs_len == 0 {
@@ -3466,6 +3479,32 @@ mod tests {
             )
         };
         assert_eq!(code, SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED);
+    }
+
+    #[test]
+    fn bond_post_ffi_rejects_duplicate_holdings_at_the_marshal_boundary() {
+        use shekyl_archival_retention::{BondPostKind, HoldingsKind, ARCHIVAL_BOND_FLOOR_ATOMIC};
+        // "A set on the wire": the marshal is a second decoder, so it rejects a
+        // duplicate shard id (the JoinMarket path that silently double-counted
+        // the floor before the newtype). One arbitrary verify entry proves the
+        // shared marshal — the rejection is at the marshal, kind-agnostic, and
+        // fires before any post-kind semantics.
+        let dup = [7u64, 42, 7];
+        let code = unsafe {
+            shekyl_archival_verify_join_market_bond_post(
+                BondPostKind::JoinMarket as u8,
+                HoldingsKind::ShardSetCompact as u8,
+                dup.as_ptr(),
+                dup.len(),
+                std::ptr::null(),
+                0,
+                3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+                3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+                0,
+                0, // record_exists
+            )
+        };
+        assert_eq!(code, SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD);
     }
 
     #[test]
@@ -4413,7 +4452,7 @@ mod tests {
                 p_pubkey: p_pk.to_canonical_bytes().expect("canonical P pubkey"),
                 holdings: HoldingsDescriptor {
                     kind: HoldingsKind::ShardSetCompact,
-                    shard_ids: vec![EM_SHARD_A],
+                    shard_ids: ShardSet::new(vec![EM_SHARD_A]).unwrap(),
                 },
                 settlement_epochs: vec![EM_EPOCH],
                 work_claim: vec![WorkEpochClaim {

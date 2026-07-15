@@ -4170,7 +4170,7 @@ mod tests {
 
     async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         use shekyl_archival_bond_builder::{build_join_market_vin, verify_credit_funding};
-        use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind};
+        use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
         use shekyl_crypto_pq::account::{SeedFormat, MASTER_SEED_BYTES};
         use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
         use shekyl_crypto_pq::kem::HybridCiphertext;
@@ -4188,7 +4188,7 @@ mod tests {
         .expect("derive archival P keys");
         let holdings = HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
-            shard_ids: vec![7, 42],
+            shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
         };
         let floor = bond_floor(&holdings);
         assert!(

@@ -46,12 +46,13 @@ const _: () = assert!(
 mod tests {
     use super::*;
     use crate::bond_wire::HoldingsKind;
+    use crate::bond_wire::ShardSet;
 
     #[test]
     fn floor_scales_with_shard_count() {
         let holdings = HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
-            shard_ids: vec![1, 2, 3],
+            shard_ids: ShardSet::new(vec![1, 2, 3]).unwrap(),
         };
         assert_eq!(bond_floor(&holdings), 3 * ARCHIVAL_BOND_FLOOR_ATOMIC);
     }
@@ -60,7 +61,7 @@ mod tests {
     fn complete_tree_is_single_floor() {
         let holdings = HoldingsDescriptor {
             kind: HoldingsKind::CompleteTree,
-            shard_ids: Vec::new(),
+            shard_ids: ShardSet::empty(),
         };
         assert_eq!(bond_floor(&holdings), ARCHIVAL_BOND_FLOOR_ATOMIC);
     }
@@ -69,7 +70,7 @@ mod tests {
     fn empty_shard_set_yields_zero() {
         let holdings = HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
-            shard_ids: Vec::new(),
+            shard_ids: ShardSet::empty(),
         };
         assert_eq!(bond_floor(&holdings), 0);
     }

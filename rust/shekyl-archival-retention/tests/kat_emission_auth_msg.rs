@@ -24,7 +24,7 @@
 use shekyl_archival_retention::hash::cshake256_32;
 use shekyl_archival_retention::{
     ArchivalRewardEmissionVin, EmissionAuthRole, HoldingsDescriptor, HoldingsKind,
-    MembershipOnlyBacking, RewardCommit, ShardWorkEntry, WorkEpochClaim,
+    MembershipOnlyBacking, RewardCommit, ShardSet, ShardWorkEntry, WorkEpochClaim,
 };
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 
@@ -46,7 +46,7 @@ fn fixture_vin() -> ArchivalRewardEmissionVin {
         p_pubkey: vec![0x5A; SINGLE_KEY_CANONICAL_LEN],
         holdings: HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
-            shard_ids: vec![7, 42],
+            shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
         },
         settlement_epochs: vec![11, 12, 15],
         work_claim: vec![

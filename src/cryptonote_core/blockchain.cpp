@@ -4634,12 +4634,12 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET:
     return "Rebond post-holdings are not a duplicate-free superset of the record's "
       "current holdings (shedding goes through HoldingsUpdate-drop)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE:
-    return "Rebond post-holdings exceed the codec shard cap";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR:
     return "record bonded_total != bond_floor(record holdings) (floor-drifted record)";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED:
     return "vin holdings shard count exceeds the wire codec bound";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD:
+    return "vin holdings carry a duplicate shard id (a set on the wire)";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED:
     return "HoldingsUpdate requires a Bonded record (an Exited or slash-emptied "
       "record re-enters via JoinMarket/Rebond)";
