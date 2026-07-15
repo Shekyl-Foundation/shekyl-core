@@ -646,7 +646,8 @@ threshold lives entirely in the PQC auth layer.
 
 ### Transaction size
 
-Each additional signer adds approximately 5.3 KB of authentication material.
+Each additional signer adds roughly another hybrid key + signature of
+authentication material (~5.4 KB solo baseline via `pqc_auth_weight()`).
 
 | Configuration | Auth Size | vs. Single |
 |---------------|-----------|------------|

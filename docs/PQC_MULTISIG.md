@@ -51,10 +51,9 @@ authorizations rely on rules and code paths already present in V3.
 
 ## 2. Design Principles
 
-1. **Symmetric authority.** The four authorities historically conflated
-   in "coordinator" — proposal, construction, signing, assembly — are split.
-   Only the FCMP++ proving role retains a designated holder per output, and
-   that role rotates deterministically across the group.
+1. **Equal participants under Option E′.** Proposal, construction,
+   signing, and assembly are shared. There is **no mandatory prover**.
+   (Rotating-prover / Option D scaffold is **deleted** — see §4 / §11.)
 2. **Deterministic construction.** Given a spend intent and a committed
    chain snapshot, every participant produces byte-identical transaction
    bytes. There is no interface latitude.
@@ -65,20 +64,21 @@ authorizations rely on rules and code paths already present in V3.
 4. **No consensus changes.** Every binding is achievable within existing
    V3 rules. The worst-case failure of a wallet-layer bug is a failed
    broadcast, never a chain split.
-5. **Get it right.** Where deferring a feature lets us avoid shipping
-   speculative cryptography, we defer. FROST SAL (§15.4a — availability
-   fix for 1/N *loss*; blocked on two-component address / `y`, not NIST),
-   the full rotation protocol (V3.2), and chain-anchored group registries
-   (V3.3+) are all explicitly out of V3.1 scope. Composite / lattice-only
-   *auth* size (§15.4b) waits on lattice-threshold maturity beyond IR
-   8214C. Authorization is already PQ (M × ML-DSA); do not read
-   "deferral" as "multisig is classical."
+5. **Get it right — defer speculative crypto, ship E′.** **In V3.1
+   scope:** Option E′ threshold FROST SAL on `y` (`spend_auth_version =
+   0x02`; §15.4a). **Out of V3.1 scope:** the deleted Option D
+   mandatory-prover / 1/N-*loss* scaffold; the full *key* rotation
+   protocol (V3.2); chain-anchored group registries (V3.3+); composite /
+   lattice-only *auth* size (§15.4b, waits on lattice-threshold maturity
+   beyond IR 8214C). Authorization is already PQ (M × ML-DSA); do not
+   read "deferral" as "multisig is classical," and do not read §15.4a
+   FROST-on-`y` as "out of scope."
 6. **Honest-signer protocol invariants.** Where consensus cannot enforce
    a property without a hard fork, the property is enforced at the wallet
    layer by honest signers. These invariants are enumerated in §2.7 and
    each one is made mechanically unbypassable in supported client stacks.
 7. **Forward-compatible primitives.** Cryptographic primitives that might
-   change in future versions (spend-auth keys, prover schemes) are
+   change in future versions (spend-auth keys, auth schemes) are
    abstracted behind a `version` byte so future schemes slot in without
    protocol rewrites.
 
@@ -178,16 +178,24 @@ consensus-layer fix would require a chain-anchored group registry
 
 ## 4. Roles
 
+> **Product path (Option E′):** roles are **Proposer / Signer /
+> Assembler** only. There is **no mandatory Prover**. Sections that
+> still name a rotating Prover (and I7 / ProverReceipt / grinding)
+> describe the **deleted Option D scaffold** — retained for archaeology
+> until those sections are rewritten; they are **not** operational
+> guidance for E′.
+
 | Role | Authority | Who | Adversarial bound |
 |---|---|---|---|
 | Proposer | Publishes signed spend intent | Any group member | Signers veto by refusing to sign |
-| Prover | Constructs FCMP++ membership proof for a specific output | Deterministically rotated per output; see §11.1 | Cannot modify tx; proof binds to signers' computed payload |
-| Signer | Produces hybrid signature over canonical payload | Any M of the N members | Cannot individually authorize; needs M−1 collaborators |
+| Signer | Produces hybrid signature over canonical payload; FROST share on `y` | Any M of the N members | Cannot individually authorize; needs M−1 collaborators |
 | Assembler | Collects M signatures, broadcasts | Any group member with M sigs | Can only broadcast what signers produced |
+| ~~Prover~~ | ~~FCMP++ proof for a specific output~~ | **Option D only — deleted** | — |
 
-The prover role is the only structural asymmetry remaining in V3.1, and
-even it is per-output rather than per-group. V4 FROST SAL eliminates the
-prover role entirely by threshold-sharing the classical key.
+Under E′, FCMP++ proving is not a privileged single-member role: the
+group constructs proofs under the shared spend path without a
+1/N permanent-loss assignment. V4 lattice work does not reintroduce
+that role.
 
 ---
 
@@ -555,8 +563,9 @@ cross-version key reuse:
 
 | spend_auth_version | KDF label |
 |---|---|
-| 0x01 (V3.1 classical) | `"shekyl-v31-classical-spend"` |
-| 0x02 (reserved, V4 PQC) | `"shekyl-v4-pqc-spend"` |
+| **0x02 (Option E′ / 15.4a)** | `"shekyl-v31-classical-spend"` — classical threshold SAL on `y` (Ed25519 in the FCMP++ circuit). **Not** lattice auth. |
+| 0x01 | **Never issued** (was Option D mandatory-prover scaffold) |
+| Future 15.4b auth evolution | Distinct label — do not overload `0x02` |
 
 Domain separation is a HARD requirement. Any implementation that uses
 identical material for two purposes is non-conforming.
@@ -589,9 +598,10 @@ Per multisig-recipient output, the tx_extra includes:
 | **0x0A** | `TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS` | **1 + N × 32 B** (version byte + N Y_i) |
 
 Tag `0x0A` is new in V3.1 and is REQUIRED on every multisig-recipient
-output. Its first byte is the `spend_auth_version` (0x01 for V3.1
-classical); subsequent bytes are the N spend-auth pubkeys in canonical
-participant order.
+output. Its first byte is the `spend_auth_version` (**`0x02` for
+Option E′**; `0x01` never issued); subsequent bytes are the N
+spend-auth pubkeys in canonical participant order (E′ layout pinned
+in design §0.5 — `B` + `Y_group` + N×KEM once MSW-8 lands).
 
 `TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS` (0x09) MUST be absent for single-sig
 outputs. Wallets MUST reject any single-sig-shaped output that contains
@@ -1665,7 +1675,7 @@ stream**, not as "same privacy as solo at small volume."
 | Item | Purpose |
 |---|---|
 | `group_version = 0x01` | V3.1; higher values for future rotated groups |
-| `spend_auth_version = 0x01` | V3.1 classical ephemeral; 0x02+ for future schemes (15.4a) |
+| `spend_auth_version = 0x02` | **Option E′** (15.4a threshold classical SAL on `y`). **`0x01` never issued.** Higher values only for a later mutually-distrusting / lattice-auth path — do not overload `0x02`. |
 | HRP `shekyl1n...` | Rotated-key multisig (V3.2+) |
 | `TX_EXTRA_TAG_MULTISIG_MIGRATION (0x08)` | V3.2 migration transactions |
 | Message type `0x0A` (RotationIntent) | V3.2 full rotation protocol |
@@ -1834,7 +1844,9 @@ change quantum authorization strength (already M × ML-DSA). Does **not**
 shrink auth blobs (15.4b).
 
 **Blocked on (internal — now open):** Apr 9 `y=0` / two-component-address
-gate is dead — `output.rs:304` has `y ≠ 0`. Remaining work: threshold-
+gate is dead — `derive_output_secrets` asserts `y ≠ 0`
+(`rust/shekyl-crypto-pq/src/derivation.rs`; formula
+`O = ho·G + B + y·T` in `output.rs`). Remaining work: threshold-
 share `y_group`, wire `0x02`, nonce-discipline types, E′ address layout
 (`B` + `Y_group` + N×KEM). **Not blocked on NIST.**
 

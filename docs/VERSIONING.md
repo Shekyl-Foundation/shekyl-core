@@ -99,8 +99,11 @@ mandatory-prover Option D.
 
 - **15.4a FROST SAL / Option E′** — threshold classical spend-auth
   inside FCMP++ (**availability**: eliminate mandatory-prover 1/N
-  *loss*). **Two-component gate discharged** (`output.rs:304`,
-  `y ≠ 0`). **Remaining blockers:** threshold-share `y_group` + wire
+  *loss*). **Two-component gate discharged** —
+  `derive_output_secrets` asserts `y ≠ 0`
+  (`rust/shekyl-crypto-pq/src/derivation.rs`; point formula
+  `O = ho·G + B + y·T` in `output.rs`). **Remaining blockers:**
+  threshold-share `y_group` + wire
   `0x02` + nonce discipline — **not** NIST. Auth is already PQ
   (M × ML-DSA); this does not add authorization strength.
   `spend_auth_version = 0x02` means 15.4a / E′, **not** lattice SAL.
