@@ -83,14 +83,17 @@ multisig wire format (FROST-style). Minimum transaction type:
 
 ### Protocol version 4 (future)
 
-Two separable tracks (see `PQC_MULTISIG.md` §15.4a / §15.4b):
+Two separable tracks (see `PQC_MULTISIG.md` §15.4):
 
-- **15.4a FROST SAL** — threshold classical spend-auth inside FCMP++;
-  blocked on the two-component address / `y` design, **not** on NIST.
-- **15.4b pure-PQC spend-auth** — composite lattice threshold replacing
-  the M-of-N hybrid signature list; gated on a future NIST process
-  beyond IR 8214C's reference-material call (MPTC report ~2027 →
-  possible later standardization). Not a near-term calendar.
+- **15.4a FROST SAL** — threshold classical spend-auth inside FCMP++
+  (**availability**: eliminate 1/N permanent-*loss*). Blocked on
+  two-component address / `y`, **not** NIST. Auth is already PQ
+  (M × ML-DSA); this does not add authorization strength.
+- **15.4b composite / lattice-only *auth*** — size win replacing the
+  M-of-N hybrid signature list (or dropping the classical half of
+  hybrid auth). **Not** a lattice SAL (impossible under FCMP++).
+  Gated on a future NIST process beyond IR 8214C. `spend_auth_version
+  = 0x02` means 15.4a, not lattice SAL.
 
 See `00-mission.mdc` for the V4 transition commitment.
 

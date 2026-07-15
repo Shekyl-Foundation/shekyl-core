@@ -4,6 +4,15 @@
 
 ### Added
 
+- **docs: §15.4 posture pin — auth already PQ; SAL = liveness (PR #308).**
+  Scheme_id=2 is M×ML-DSA today; solo and multisig share classical
+  FCMP++ membership/SAL. Multisig adds no classical exposure. Classical
+  SAL is 1/N permanent-*loss* (availability), not compromise. Grinding /
+  griefing → MS-4/5 engineering, not Phase 6 crypto. Phrase pin:
+  `spend_auth_version=0x02` = 15.4a threshold classical SAL; 15.4b =
+  composite/lattice-only *auth* size — not lattice SAL (impossible under
+  FCMP++). Ship decision = economics (~3×), not crypto-maturity.
+
 - **docs: split PQC_MULTISIG §15.4 — FROST SAL ≠ lattice auth (PR #308).**
   §15.4a FROST SAL (mandatory prover / 1/N) blocked on two-component
   address / `y`, not NIST. §15.4b pure-PQC composite auth blocked on

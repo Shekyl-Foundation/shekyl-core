@@ -171,32 +171,26 @@ other two do not.
 **Not ours to pick in Round 1.** Track A go-ahead must name 6, 7, or
 8; MSW-1 formulas follow.
 
-### Lattice threshold / §15.4 — out of Track A; split the gate
+### Lattice threshold / §15.4 — out of Track A; posture pin
 
-**NIST posture (as of 2026-07):** IR 8214C final 2026-01-20 is a
-reference-material collection, not a standard. MPTS 2026 → packages
-(prelim Jul–Sep, complete Oct-19) → MPTC report ~2027 that may
-recommend a *later* process. **Deferral hardened** vs earlier
-2028–2029 guesses.
+**Hybrid posture (pin 2026-07-14).** Scheme_id=2 is already
+post-quantum for authorization (M × ML-DSA). Solo and multisig share
+classical FCMP++ membership/SAL + hybrid auth via `h_pqc`. Multisig
+adds **no** classical exposure. Classical SAL is a **liveness**
+dependency (1/N *loss*), not a compromise path. Curve HNDL on
+membership privacy is real and **not multisig-specific**. Grinding /
+rotation / griefing → **availability engineering** (MS-4/5), not the
+Phase 6 cryptographer queue. Shipping now ≈ economics (~3× tx size
+for threshold custody), not crypto-maturity.
 
-**Threshold Raccoon** ([eprint 2024/184](https://eprint.iacr.org/2024/184)):
-wrong regime for N≤7 (~13 KiB on-chain win vs ~1.8× today, but ~40 KiB
-× N off-chain, 3 rounds, trusted KeyGen, coordinator combine — F-3
-again; not FIPS). Rust
-[`lib-q-threshold-raccoon`](https://crates.io/crates/lib-q-threshold-raccoon)
-is PROVISIONAL. **Not Track A.**
+**§15.4 phrase pin:** "pure-PQC spend-auth" ≠ lattice SAL (impossible
+under FCMP++). `spend_auth_version = 0x02` = **15.4a** threshold
+classical SAL. **15.4b** = composite / lattice-only *auth* size win.
+Full text: `PQC_MULTISIG.md` §15.4.
 
-**Better watch for 15.4b size:** dPN25 (T≤8, ~2.7 KiB, Dilithium-family
-≠ FIPS 204); **TALUS** (threshold ML-DSA — matches shipped `fips204`);
-Tanuki (2-round Raccoon-compatible). All threshold **PQC auth only**.
-
-**None touch the mandatory prover.** SAL is Ed25519 inside FCMP++.
-Lattice cannot be SAL. See `PQC_MULTISIG.md` **§15.4a** (FROST SAL —
-internal blocker: two-component address / `y`) vs **§15.4b**
-(composite lattice auth — external NIST). Prior §15.4 bundled them
-behind the wrong gate; Phase 0 **P0-j** lands the split.
-
-Do **not** couple lattice adoption to F-1 / MSW-G.
+**NIST / TRacoon:** IR 8214C is reference-only (deferral hardened).
+TRacoon wrong N regime + trusted KeyGen + not FIPS. Watch TALUS /
+dPN25 for 15.4b size. Do **not** couple to F-1 / MSW-G.
 
 ---
 
@@ -366,12 +360,13 @@ rounds close.
 | Item | Carrier |
 | --- | --- |
 | Protocol crypto redesign | `PQC_MULTISIG.md` |
-| Cryptographer / external wargame (protocol Phases 5–6) | FOLLOWUPS; after enough surface |
+| Cryptographer / external wargame (protocol Phases 5–6) | FOLLOWUPS; **crypto** surfaces only (auth reductions, leaf binding, scheme disjointness). Grinding / rotation bias / hostage fraction / griefing scoring are **availability** (MS-4/MS-5/R-F), not Phase 6 |
 | Headless co-signer / HW wallet / GUI | FOLLOWUPS / sibling repos |
 | Archival | Separate |
 | Enabling `multisig` in release packages | Named flip PR |
 | Wiring `shekyl_pqc_verify_with_group_id` as the primary fix | **Retired** (MS-8 redundancy); do not schedule as ship-gate |
 | Changing `DOMAIN_PQC_LEAF ‖ …` preimage | **Rejected** (F-2 retraction); not free, not needed |
+| Lattice SAL / "PQ the FCMP++ layer via multisig" | **Rejected as framing** — same classical membership/SAL as solo; multisig is not the lever for curve HNDL |
 
 ### §2.3 Substrate table (corrected)
 
@@ -452,7 +447,7 @@ Deferred to Round 2 after MS-1 **and** F-3 lineage fate.
 | **P0-g** | FOLLOWUPS "wire group_id into consensus" | **Close as superseded by MSW-2 / MS-8 retirement** |
 | **P0-h** | `V3_ROLLOUT.md` multisig size table | Replace auth-overhead/~7× framing with whole-tx weights; use real (post-MSW-1) blob sizes; delete coordinator-held + "recommended for staking" drift (Pin #4 / F-3) |
 | **P0-i** | `MAX_MULTISIG_PARTICIPANTS` | Record MSW-G pick + rationale (or explicit "held at 7 with written BFT+zone acceptance") |
-| **P0-j** | `PQC_MULTISIG.md` §15.4 + `VERSIONING.md` | **Landed 2026-07-14:** split into §15.4a (FROST SAL, internal) / §15.4b (lattice auth, NIST IR 8214C → later process). Stop gating prover fix on lattice. |
+| **P0-j** | `PQC_MULTISIG.md` §15.4 + `VERSIONING.md` | **Landed 2026-07-14:** split 15.4a/15.4b; same-day **posture pin** (auth already PQ; SAL = liveness; phrase pin for `spend_auth_version=0x02`) |
 
 ---
 
@@ -643,3 +638,4 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-14 | **§0.2 independent audit:** F-1 confirmed; F-2 leaf-leave-alone; length primary / byte[2] secondary; reward-zone rhetoric trim |
 | 2026-07-14 | **§0.3 MSW-G:** MAX=7 has no derivation; F-1 fix *is* the 6/7/8 choice; fossil bound ≡ zone both imply effective 6; V3_ROLLOUT table fossil + coordinator/staking drift → P0-h; TRacoon = V4 research candidate not Track A |
 | 2026-07-14 | **§15.4 split (P0-j):** FROST SAL (15.4a, internal two-component/`y` blocker) ≠ pure-PQC auth (15.4b, NIST IR 8214C reference call → later process). TRacoon wrong N regime + no DKG + not FIPS; watch dPN25/TALUS for size. Size lens for MSW-G has 15.4b expiry; genesis still freezes on today's list economics. |
+| 2026-07-14 | **§15.4 posture pin:** scheme_id=2 already PQ auth (M×ML-DSA); solo≡multisig classical FCMP++/SAL; SAL = liveness not compromise; grinding/griefing → availability not Phase 6 crypto; `spend_auth_version=0x02` = 15.4a classical threshold SAL ≠ lattice SAL (impossible under FCMP++); 15.4b = auth size only. Ship decision = economics (~3×), not crypto-maturity. |

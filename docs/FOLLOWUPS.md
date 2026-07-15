@@ -5840,10 +5840,12 @@ sustainability is unaffected by the recalibration.
     raising bound to admit 7 unhides the zone case. Held open.
     Size lens has `PQC_MULTISIG.md` §15.4b expiry (composite
     lattice ~2030+); genesis still freezes on today's list.
-  - **Not** lattice-threshold for Track A. §15.4 split: **15.4a**
-    FROST SAL (internal; two-component/`y`) vs **15.4b** pure-PQC
-    auth (NIST IR 8214C is reference-only; watch TALUS/dPN25).
-    TRacoon wrong regime + no DKG + not FIPS.
+  - **Not** lattice-threshold for Track A. §15.4: **15.4a** FROST
+    SAL = availability (1/N *loss*), internal blocker; auth already
+    PQ (M×ML-DSA); solo≡multisig classical FCMP++/SAL.
+    **15.4b** = auth *size* (composite); NIST IR 8214C reference-
+    only; `spend_auth_version=0x02` ≠ lattice SAL.
+    TRacoon wrong regime + no DKG + not FIPS; watch TALUS/dPN25.
   Fee model / `v31 MAX_INPUTS=128` → Track B. Target: **V3.0
   pre-genesis**.
 
