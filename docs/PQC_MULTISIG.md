@@ -661,14 +661,18 @@ When sending to a multisig recipient, the sender's wallet MUST:
 1. Display the address fingerprint (§6.3) and require user confirmation
 2. Verify that the parsed address has a valid Bech32m checksum
 3. Verify that all N hybrid pubkey blobs deserialize correctly
-4. Reject addresses with `n_total > 7` or `m_required > n_total`
+4. Reject addresses with `n_total > MAX_MULTISIG_PARTICIPANTS` or
+   `m_required > n_total` (cap = 5 per §5.1 / MSW-G)
 5. Reject addresses with unknown `spend_auth_version` (wallets only
    construct outputs for versions they fully implement)
 6. Compute and surface the per-output size cost
-7. Determine `assigned_prover_index` via the sender-computable rule
-8. Set `O = spend_auth_pubkeys[assigned_prover_index]` correctly;
-   any wallet bug here would produce unspendable outputs, caught by
-   recipient-side receive-time validation
+7. *(Option D only — withdrawn for E′.)* Determine
+   `assigned_prover_index` via the sender-computable rule
+8. *(Option D only — withdrawn for E′.)* Set
+   `O = spend_auth_pubkeys[assigned_prover_index]`. Under **Option E′**
+   (§15.4a), construct `O = ho·G + B + y_out·T` with
+   `y_out = y_group + y_kem`; any wallet bug here would produce
+   unspendable outputs
 
 ---
 
@@ -1077,6 +1081,13 @@ rather than content grinding.
 ## 11. Spending: Prover and Signing
 
 ### 11.1 Rotating prover assignment (sender-computable)
+
+> **Product path (Option E′):** this entire subsection is **deleted
+> machinery** — E′ has no mandatory prover (§15.4a / design §0.5).
+> Retained as historical specification of the Option D scaffold.
+>
+> **Naming:** "rotating *prover* assignment" ≠ §15.2 V3.2 "full
+> *key* rotation protocol." E′ deletes the former; the latter survives.
 
 For each output being spent, the prover is determined deterministically
 from data the **sender knew at construction time**:
@@ -1686,6 +1697,12 @@ V3.1 provides the necessary hooks **once MSW-4/5 land**:
 
 ### 15.2 V3.2 full rotation protocol (hooks reserved, protocol deferred)
 
+> **Naming collision (2026-07-15).** This section is **participant / group
+> *key* rotation** (new KEM keys, new `group_id`, migration txs). It is
+> **unrelated** to §11.1 "rotating *prover* assignment," which Option E′
+> deletes. Do not read "rotation deleted" (E′ / mandatory prover) as
+> striking this V3.2 key-rotation work.
+
 V3.1 reserves the message type and namespace for rotation but does NOT
 implement the rotation protocol itself. The rotation protocol will be
 specified and shipped in V3.2 as a focused release.
@@ -1705,7 +1722,12 @@ honesty pin). V3.2 will add:
 - Individual participant key rotation
 - Full group rotation (new group_id)
 - Migration transactions consuming old outputs, producing new
-- Key escrow protocol as 1/N loss mitigation
+
+~~Key escrow protocol as 1/N loss mitigation~~ — **struck for E′**
+(2026-07-15). There is no mandatory-prover 1/N loss to mitigate under
+`spend_auth_version = 0x02`. If a future mutual-distrust mode
+reintroduces single-holder liveness, escrow belongs under *that*
+version byte — not inherited silently into V3.2 from Option D.
 
 ### 15.3 Address size / group registry (re-priced 2026-07-15)
 

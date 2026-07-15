@@ -809,6 +809,7 @@ Deferred to Round 2 after MS-1 **and** F-3 lineage fate.
 | **P0-k** | `PQC_MULTISIG.md` §15.1 honesty | Address payload already correct; group_id plumbing = MSW-4 |
 | **P0-l** | R1-F-3 DELETE | **Disposition landed:** delete Option A FROST fossil; not `frost-sal-v4` quarantine. Impl = Track B / cleanup. |
 | **P0-m** | Address bech32m / §15.3 registry | **Re-priced 2026-07-15:** MSW-8 deletes vestigial address sign keys (~2.6×). N=2 QR-able. Registry demoted from critical-path prerequisite to optimization. |
+| **P0-n** | Doc prose KAT / grep-gate | **NEW 2026-07-15:** no bare `7` near `n_total`/`MAX_MULTISIG`; no `pqc_auth` byte figure that isn't `pqc_auth_weight()`'s output. Same defect class as F-1 — values whose semantics live in consumers, surviving sweeps. Cheap CI lint; Phase 0. Known remaining fossils outside this PR's seven files: `MULTISIG_OPERATIONS.md`, `USER_GUIDE.md`, `POST_QUANTUM_CRYPTOGRAPHY.md` (`5385`), `DESIGN_CONCEPTS.md` (`5-of-7`) — P0-n owns the sweep. |
 
 ---
 
@@ -1026,3 +1027,4 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-15 | **Overhaul:** MSW-6 (relax tx-wide scheme_id — staking unblock; archival core untouched). MSW-G **5** (2f+1 at f=2; withdraws 8). MSW-1 narrowed to SINGLE_KEY_CANONICAL_LEN single-source + DoS ceiling. MSW-7 retracted (`bond_spend_pk` 1996 = pseudonym uniformity). Pin #4 named reversion for MSW-6 only. Sequencing: Phase 0 docs → MSW-6 → MSW-1…5 → F-6 → Option E′. |
 | 2026-07-15 | **§0.5 Option E′** (lean). Two-component `O` splits trust: `b` group-plaintext (view+link / local KI); `y` FROST M-of-N with `y_out = y_group + y_kem` tweak. Dealer-mode, no DKG, no `export_multisig_info`. Deletes mandatory-prover Option D scaffold. `spend_auth_version=0x02`; `0x01` never issued. `frost-sal-v4` = E′ gate. |
 | 2026-07-15 | **MSW-8:** delete vestigial `MultisigAddressPayload.hybrid_sign_pubkeys` (Solution C fossil; zero consumers). ~2.6× address shrink is MSW-8, not E′. §15.3 registry re-priced off critical path. Defect class named: shape-from-prose without a read site (fifth instance this session). |
+| 2026-07-15 | **Phase 0 sweep D-1…D-6:** normative `n_total > 7` → MAX (D-1); ROLLOUT vs-N-solos math + cap fossils + `5385→5389` + date (D-2…D-5); ANALYSIS historical banner + E′ row + §6/§15.2 escrow struck + rotation naming collision (D-6). **P0-n** doc grep-gate. |

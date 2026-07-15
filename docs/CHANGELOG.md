@@ -4,6 +4,15 @@
 
 ### Added
 
+- **docs: Phase 0 sweep D-1…D-6 + P0-n grep-gate (PR #308).** Fix
+  normative `n_total > 7` → `MAX_MULTISIG_PARTICIPANTS` (D-1). Correct
+  ROLLOUT vs-N-solos ratios (0.57× / 0.48×), cap fossils (`=7` /
+  `5-of-7` / ~37 KB → 5 / 5-of-5 / ~27 KB), `pqc_auth` 5385→5389 from
+  `pqc_auth_weight()`, Last-updated date (D-2…D-5). ANALYSIS:
+  historical banner, E′ row in §2.1, §6/key-escrow superseded, §7.6
+  E′ tweak Phase 6 target; rotation naming collision (§11.1 ≠ §15.2).
+  P0-n: doc grep-gate against bare-cap / fee-oracle drift.
+
 - **docs: MSW-8 — delete vestigial address hybrid_sign_pubkeys
   (PR #308).** Confirmed zero consumers: `multisig_receiving.rs`
   derives leaf sign keys from KEM; address field is
