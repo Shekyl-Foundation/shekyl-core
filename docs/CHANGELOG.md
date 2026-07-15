@@ -4,6 +4,11 @@
 
 ### Added
 
+- **ci: F-6 `--features multisig` lane + P0-n doc gate (follow-on to #308).**
+  Lands `.github/workflows/multisig-feature.yml` and
+  `scripts/ci/check_multisig_doc_literals.sh`. Clippy posture matches
+  `build.yml` (toolchain 1.94.0; `-D warnings` on clippy argv only).
+
 - **docs: defer F-6 / P0-n CI to follow-on PR (PR #308).** Remove
   `ci/multisig-feature` workflow + `check_multisig_doc_literals.sh`
   from this docs carrier so #308 can land alone. Fossil *sweeps*
