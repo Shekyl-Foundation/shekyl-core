@@ -4,11 +4,18 @@
 
 ### Added
 
+- **docs: defer F-6 / P0-n CI to follow-on PR (PR #308).** Remove
+  `ci/multisig-feature` workflow + `check_multisig_doc_literals.sh`
+  from this docs carrier so #308 can land alone. Fossil *sweeps*
+  remain here; gate script + workflow ship in the follow-on CI PR.
+  Carrier / INDEX status: R1-F-6 open again until that PR greens.
+
 - **ci: align F-6 multisig lane with build.yml clippy posture (PR #308).**
   Dropped job-level `RUSTFLAGS=-D warnings` (it denied rustc
   `deprecated` in path-dep `helioselene`, which main CI only warns
   on). Pin toolchain to `1.94.0` (not `@stable`); keep
   `-- -D warnings` on the clippy argv only; add `--keep-going`.
+  *(CI files moved to follow-on PR — see deferral bullet above.)*
 
 - **docs: PR #308 Copilot review — decide/enforce labels + F-11
   consistency.** MAX=5 is the ratified MSW-G target; docs no longer
@@ -24,6 +31,7 @@
   `--features multisig`). Operator docs swept off `5-of-7` / `5385`
   fossils. Pause before MSW-6 — first enable may clippy-fail on
   `frost_sal` (Option A debt); that is the signal.
+  *(CI files moved to follow-on PR — fossil sweeps stay in #308.)*
 
 - **docs: D-7…D-10 — VERSIONING + MS-4/MS-5 under E′ (PR #308).**
   VERSIONING: two-component gate discharged (`output.rs:304`); remaining
