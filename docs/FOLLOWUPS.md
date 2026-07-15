@@ -5835,8 +5835,11 @@ sustainability is unaffected by the recalibration.
     reopen on reserved use / container version / new scheme.
   - **MSW-3:** fix `"output committed="` misattributions; MS-8 stays
     retired (group_id redundant with leaf).
-  - **MSW-G:** sim/decide whether `MAX=7` survives reward-zone
-    (8×7-of-7 pqc_auths alone ≈ 303 KiB vs 300 KiB zone).
+  - **MSW-G:** pick `MAX ∈ {6,7,8}` **with** MSW-1 — 7 has no
+    derivation; fossil bound and zone both imply effective 6;
+    raising bound to admit 7 unhides the zone case. Held open.
+  - **Not** TRacoon / lattice-threshold (V4 research;
+    `lib-q-threshold-raccoon` is PROVISIONAL).
   Fee model / `v31 MAX_INPUTS=128` → Track B. Target: **V3.0
   pre-genesis**.
 

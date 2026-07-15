@@ -4,6 +4,15 @@
 
 ### Added
 
+- **docs: MSW-G — MAX=7 has no derivation; F-1 fix is the 6/7/8 pick
+  (PR #308).** Recorded in `V3_1_MULTISIG_RUST_ENGINE.md` §0.3.
+  Fossil bound accidentally caps spendable N at 6; reward zone
+  independently caps worst-case at 6. Raising the bound to admit 7 is
+  a behavior change. Candidates 6/7/8 held open. MSW-2 reopen names
+  **either** separator (length primary; byte[2] secondary). V3_ROLLOUT
+  fossil ~7× table + coordinator/staking drift → P0-h. TRacoon /
+  `lib-q-threshold-raccoon` noted as V4 research, not Track A.
+
 - **docs: F-2 retraction — Track A revised to constant fix (PR #308).**
   Leaf preimage **left alone** (not free: wallet2 / emission Auth-B /
   FFI ABI / vectors; not needed: byte[2] prefix disjointness already

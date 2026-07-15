@@ -66,35 +66,30 @@ HEAD diverges immediately. Re-pin at Round 0 / Track A pre-flight.
 Accepted from Round 1 adversarial review (2026-07-14), **revised**
 same day after F-2 retraction + blast-radius / size Q&A.
 
-### Track A — V3.0 pre-genesis wire (**revised: constant fix, not design change**)
+### Track A — V3.0 pre-genesis wire (**bound family + MAX disposition**)
 
 Always-compiled deserialize / verify ceilings. Ship whether or not
-`multisig` flips. **No Track B design-round debt.** **No wallet /
-engine / archival / emission-wire contact** for the bound fix (F-1
-consumer set is config + wire + two verify sites + two symbolic
-negative tests). Curve tree / leaf size **unaffected** (`h_pqc` is
-always 32 bytes).
+`multisig` flips. **No Track B design-round debt** for the constant
+surface. **No wallet / engine / archival / emission-wire contact** for
+MSW-1/2/3 code (config + wire + verify shadows + KATs). Curve tree /
+leaf size **unaffected**.
 
-**Nothing gets bigger.** A 7-of-7 key container has always been
-14,199 bytes (`expected_blob_len`); the bound was written for a
-pre-V3.1 two-byte-header container. F-1 raises
-`13,974 → 14,199` (and the sig twin) so the ceiling stops rejecting
-the artifact it claims to describe.
+**Framing correction (post-MSW-G):** calling F-1 a pure "correction,
+not growth" is true of the *container byte layout* (already 14,199 for
+N=7) but incomplete as a *consensus behavior* claim. Today's fossil
+bound **accidentally enforces MAX=6** on the wire. Raising the bound
+to admit N=7 **unhides** the 8-in×7-of-7 full-reward-zone case that
+has never been spendable. Choosing `MAX=6` keeps de-facto=de-jure.
+**MSW-1 and MSW-G are one disposition.**
 
 One validation surface (rule 19):
 
 | ID | Work |
 | --- | --- |
-| **MSW-1** | Reconcile `PQC_MAX_PUBLIC_KEY_BLOB` / `PQC_MAX_SIGNATURE_BLOB` / `MULTISIG_KEY_HEADER_LEN` against `MultisigKeyContainer::expected_blob_len` / sig layout. Single-source across `cryptonote_config.h` / `shekyl-wire` / `shekyl-crypto-pq`; **delete** the `tx_pqc_verify.cpp:49-52` local shadow (and keep `submit/verifier.rs` in lockstep — R1-F-8). Cross-seam KAT: every `n ∈ 1..=MAX_MULTISIG_PARTICIPANTS` real container round-trips **both** deserializers. |
-| **MSW-2** | **Pin scheme-disjointness as a load-bearing consensus invariant** (doc + KAT): no byte string parses as both `HybridPublicKey::from_canonical_bytes` and `MultisigKeyContainer::from_canonical_bytes`. **Primary separator today: length** (1996 ∉ `{3+n·2028}`). **Secondary / header-level:** byte[2] scheme-1 `reserved == 0` ⊥ scheme-2 `m_required ≥ 1`. **Leaf preimage left alone.** Rule-21 reopen: any use of `reserved`, any `MULTISIG_CONTAINER_VERSION` bump, any new scheme id / V4 lattice container (must re-prove length non-collision too). |
-| **MSW-3** | Fix `"output committed="` misattributions (`tx_pqc_verify.cpp:191-192`, `tx_pqc_verify.h:30-31`) — consumer is intra-tx `pqc_auths[0]` consistency (`blockchain.cpp:4260`), not output binding. Record **MS-8 retirement**: `group_id = f(key_blob)` already leaf-bound; wiring `shekyl_pqc_verify_with_group_id` is a no-op. |
-
-**Genesis-adjacent (not MSW code, but answer before seal):** whether
-`MAX_MULTISIG_PARTICIPANTS = 7` is the right frozen number given
-full-reward-zone economics (8×7-of-7 `pqc_auths` alone ≈ 303 KiB vs
-`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5 = 300_000`). Track as
-**MSW-G** decision / sim input — may lower `MAX` before genesis;
-does **not** reopen leaf preimage.
+| **MSW-1** | Reconcile `PQC_MAX_*_BLOB` / `MULTISIG_KEY_HEADER_LEN` against `expected_blob_len` / sig layout. Single-source; delete local shadows; cross-seam KAT for every `n ∈ 1..=MAX`. **Cannot land without MSW-G** — raising the bound to admit N=7 is a behavior change (unhides the zone case); setting `MAX=6` is behavior-preserving. |
+| **MSW-2** | Pin scheme-disjointness (doc + KAT): no byte string dual-parses. **Primary:** length (`1996 ∉ {3+n·2028}`). **Secondary:** byte[2] `reserved==0` ⊥ `m_required≥1` (structural; survives key-size moves that shift length). Rule-21 reopen on **either** separator weakening: `reserved` gains meaning, container-version bump, new scheme id, **or** a key-size / layout change that makes a scheme-2 length equal 1996 (V4 lattice-only is the live threat to length). **Leaf left alone.** |
+| **MSW-3** | Fix `"output committed="` misattributions; record MS-8 retirement. |
+| **MSW-G** | **`MAX_MULTISIG_PARTICIPANTS` disposition (held open — co-requisite of MSW-1).** No recorded derivation in-repo (`git log -S` lands only as side-effect of unrelated commits). Candidates: **6** (de-facto=de-jure, zone-clean, loses 3-fault BFT configs), **7** (keeps 4-of-7/5-of-7; requires zone case + worst `%`-bias in `1..=7`; needs written BFT rationale), **8** (bias-free at power-of-two; keeps 5-of-8; worst size). See §0.3. |
 
 ### Track B — V3.1 engine (MS-1…MS-7, gated, unhurried)
 
@@ -127,8 +122,64 @@ Feature-gated wallet orchestration. Rule-26 halt remains correct
    substrate — MS-2 forbids *thickening* it; deletion/migration is
    Phase 5 / rewrite fodder, not Track A.
 4. **Archival out of scope** for Track B (and for revised Track A).
-5. **Track A (revised)** lands off `dev` on `feat/msw-*` when
-   go-ahead is given — not held behind Track B rounds.
+5. **Track A** lands off `dev` on `feat/msw-*` when go-ahead is given
+   — not held behind Track B rounds; **blocked on MSW-G pick**.
+
+---
+
+## §0.3 MSW-G — Why is MAX=7? (held open)
+
+**Fact.** No in-repo derivation. `git log -S'MAX_MULTISIG_PARTICIPANTS'`
+lands the constant as a passenger of unrelated work (C-1 emission /
+WI-4 merge). `V3_ROLLOUT.md:41-49` states 7 as given and derives a
+**fossil** auth-overhead table from it (7-of-7 `~37,680` = old bound
+`13,974+23,697+…`; real auth is **37,911**). Same file still says
+FCMP++ uses a "coordinator-held" classical key (`:73-74`) and calls
+multisig staking "**the recommended configuration**" (`:78-82`) —
+contradicts Hard Scope Pin #4 and F-3's coordinator-less posture.
+**Phase 0:** rewrite that table as whole-tx weight (auth is ~⅓ of solo
+tx; 7-of-7 ≈ **3.1×** one solo, **≪** seven solos) and delete the
+coordinator / staking-recommendation drift.
+
+**Independent checks (this tree):**
+
+- `rotating_prover_index` = `cn_fast_hash(…)[0] % n_total`
+  (`multisig.rs:339`). Bias table for `hash[0] % n` over 256 buckets
+  **confirmed**: powers of two (2/4/8) are exact; **7 is worst in
+  `1..=7`** (2.78% relative). Rejection sampling / wide reduce is a
+  separate protocol improvement (not required to pick MAX).
+- Full-reward zone: reviewer 8-in×N-of-N totals (depth 12, 2-out)
+  place the break between **6** (under) and **7** (over ~328 KiB vs
+  300 KiB). Structure matches earlier 8×37911 pqc_auth-alone
+  overshoot; prefer "**exceeds penalty-free zone**" not "unprofitable"
+  (fee vs penalty not computed).
+- Fossil bound and zone both point at **effective MAX=6** today.
+
+| Candidate | Keeps | Costs |
+| --- | --- | --- |
+| **6** | Behavior-preserving vs today's spendable set; zone-clean | Loses 4-of-7 / 5-of-7 (3-fault BFT reconstruction — **not written in-repo**) |
+| **7** | "Typical max" 5-of-7 in rollout prose; BFT intuition | Zone case at 8-in; worst `%` bias in range; needs rationale written |
+| **8** | Bias-free; 5-of-8 still 3-fault tolerant | Largest size; zone case anyway |
+
+**Not ours to pick in Round 1.** Track A go-ahead must name 6, 7, or
+8; MSW-1 formulas follow.
+
+### Lattice threshold (TRacoon) — out of Track A
+
+**Exists, not a V3.0/V3.1 drop-in.** Academic
+[Threshold Raccoon](https://eprint.iacr.org/2024/184) (EUROCRYPT 2024;
+Dilithium-family assumptions; ~13 KiB sigs in the paper). Rust:
+[`lib-q-threshold-raccoon`](https://crates.io/crates/lib-q-threshold-raccoon)
+— **PROVISIONAL / research-grade**, co-designed with `lib-q-dkg`,
+explicitly not production standardization.
+
+Shekyl's published V4 path is **FROST SAL + lattice when threshold
+lattice is standardized** (`PQC_MULTISIG.md` §15.4), not "swap scheme_id=2
+for TRacoon at genesis." Adopting TRacoon now would replace hybrid
+M-of-N blob auth, FCMP spend-auth, wire bounds, and the entire v31
+protocol — a V4 design track, not MSW-*. Evaluate under V4 readiness
+(NIST/industry posture, audit, size vs zone, DKG story) when that
+gate opens; do **not** couple to F-1/MSW-G.
 
 ---
 
@@ -140,7 +191,7 @@ design's acceptance**, not implementation.
 
 | ID | Sev | Finding (one line) | Disposition |
 | --- | --- | --- | --- |
-| **R1-F-1** | CRITICAL | `PQC_MAX_*_BLOB` uses fossil `2+N·LEN`; V3.1 container is `3+n·2028` / `1+M·3385+M`. **N=7 (and M=7) unserializable** at deserialize. Fund-loss: output can land; spend never parses. Bound raise is a **correction** (container already that size), not growth. Consumers: config + wire + verify shadows + two symbolic tests — **zero wallet/engine/archival**. | **Accepted → MSW-1.** |
+| **R1-F-1** | CRITICAL | Fossil `PQC_MAX_*_BLOB`; N=7 unserializable. Container layout already 14,199 — but admitting N=7 on the wire is a **behavior change** (unhides zone case). Fossil + zone both imply effective MAX=6 today. | **Accepted → MSW-1 + MSW-G** (pick 6/7/8 with the bound). |
 | **R1-F-2** | CRITICAL → **retracted as leaf change** | Original: change leaf preimage / treat length as sole cross-scheme separator. **Retraction:** leaf is shared scheme-1+2; changing it touches wallet2 receive, blockchain verify×3, emission Auth-B, stake_engine, FFI C ABI, test vectors, submit verifier — emission-wire risk. Cross-scheme confusion already impossible by **byte[2] prefix disjointness**; length is second separator. MS-8 still redundant. Dual `DOMAIN_PQC_LEAF` remains hygiene debt (not Track A blocking). | **Leaf change REJECTED.** **MSW-2 = disjointness invariant doc+KAT.** **MS-8 RETIRED** (redundancy). Misattribution fix → MSW-3. |
 | **R1-F-3** | HIGH | Coexisting FROST **coordinator** lineage under same `multisig` gate (`multisig/{dkg,group,signing}.rs`) vs coordinator-less `v31/`. | **Accepted.** Round 1 closure prerequisite: name fate (delete vs `frost-sal-v4`-only vs quarantine). Blocks MS-1/MS-3/MS-5. |
 | **R1-F-4** | HIGH | Two `group_id` defs: deterministic `multisig_group_id` vs caller-supplied `dkg.rs` context. | **Accepted.** Round 2 / F-3 co-dispose: one canonical type; delete or newtype the other. |
@@ -156,7 +207,7 @@ design's acceptance**, not implementation.
 | # | Adversary | Armed at source? |
 | --- | --- | --- |
 | A1 | N=7 output lands; spend never serializes | **No** — R1-F-1 |
-| A2 | Present scheme-2 blob against scheme-1 leaf (or reverse) | **Armed by construction** — byte[2] `reserved==0` ⊥ `m_required≥1` (+ length). Original "length only" claim **retracted**. Guard with MSW-2 KAT. |
+| A2 | Present scheme-2 blob against scheme-1 leaf (or reverse) | **Armed by construction** — **length primary** (`1996 ∉` scheme-2 lengths); byte[2] secondary. Guard both with MSW-2 KAT. |
 | A3 | Spender lies about `group_id` | **Vacuous** — already in leaf; MS-8 retired |
 | A4 | Mix scheme 1/2 across inputs | Self-referential intra-tx only |
 | A5 | Malicious DKG steers `group_id` | **No** — R1-F-4 |
@@ -381,10 +432,8 @@ Deferred to Round 2 after MS-1 **and** F-3 lineage fate.
 | **P0-d** | Persistence / ledger | **Re-open R6** against post-F-3/F-5 group shape |
 | **P0-e** | INDEX | MS / MSW status rows |
 | **P0-f** | FA-6b FOLLOWUPS | V3.1 engine ship gate |
-| **P0-g** | FOLLOWUPS "wire group_id into consensus" | **Close as superseded by MSW-2** |
-
-Track A may land code before P0-* if go-ahead is given; P0-g should
-still close in the same docs train so FOLLOWUPS stops lying.
+| **P0-h** | `V3_ROLLOUT.md` multisig size table | Replace auth-overhead/~7× framing with whole-tx weights; use real (post-MSW-1) blob sizes; delete coordinator-held + "recommended for staking" drift (Pin #4 / F-3) |
+| **P0-i** | `MAX_MULTISIG_PARTICIPANTS` | Record MSW-G pick + rationale (or explicit "held at 7 with written BFT+zone acceptance") |
 
 ---
 
@@ -506,8 +555,9 @@ not a quiet reopen of MS-8.
   assume length-only separation.
 - R-H: F-3 lineage deletion/quarantine PR shape.
 - R-I: F-5 zeroize + ledger migration for group secrets.
-- R-J / **MSW-G:** pre-genesis decision — is `MAX_MULTISIG_PARTICIPANTS
-  = 7` viable under full-reward-zone (sim); lower `MAX` if not.
+- R-J / **MSW-G:** pick `MAX ∈ {6,7,8}` **before** MSW-1 lands; write
+  rationale; optionally improve `rotating_prover_index` (rejection
+  sampling) as a separate protocol PR.
 
 ---
 
@@ -517,14 +567,15 @@ not a quiet reopen of MS-8.
 
 1. Explicit user go-ahead for Track A implementation.
 2. Short-lived `feat/msw-*` off current `dev`.
-3. One validation surface: MSW-1 (bounds + single-source + cross-seam
-   KAT + delete local shadows) + MSW-2 (disjointness doc+KAT) +
-   MSW-3 (misattribution + MS-8 retirement record).
+3. One validation surface: **MSW-G pick** → MSW-1 (bounds for that
+   MAX + single-source + cross-seam KAT + delete shadows) + MSW-2
+   (both separators + reopen on either) + MSW-3 (misattribution +
+   MS-8 record).
 4. **Do not** change leaf preimage / FFI leaf hash ABI / emission
    Auth-B / test-vector corpus as part of Track A.
-5. **Not** blocked on Track B Round 1–3.
-6. **MSW-G** may land as a docs/sim decision in the same train or
-   immediately after; if `MAX` drops, MSW-1 formulas follow.
+5. **Do not** adopt TRacoon / lattice-threshold here — V4 evaluation
+   only (§0.3).
+6. **Not** blocked on Track B Round 1–3; **is** blocked on MSW-G.
 
 ### §7.2 Track B (MS-*) — rule-26 halt
 
@@ -569,4 +620,5 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-14 | Round 1 opened; MS-1…MS-8 posed |
 | 2026-07-14 | Adversarial review recorded (R1-F-1…F-10); Track A/B split; MS-8 retired; Round 1 closure blocked on F-3…F-7 + F-6 CI; MSW family registered |
 | 2026-07-14 | **F-2 retraction:** leaf preimage left alone; Track A revised to constant-family fix + prefix-disjointness KAT + misattribution; size/fee/`MAX_INPUTS` → Track B; `wallet2` group surface acknowledged; **MSW-G** on whether `MAX=7` survives reward-zone |
-| 2026-07-14 | **§0.2 independent audit:** F-1 confirmed (shadow formula must use `expected_blob_len`, not `3+N*1996`); F-2 retraction holds but byte[2] oversold — length is primary separator; reward-zone math confirmed with rhetoric trim; fee/`MAX_INPUTS`/wallet2 confirmed |
+| 2026-07-14 | **§0.2 independent audit:** F-1 confirmed; F-2 leaf-leave-alone; length primary / byte[2] secondary; reward-zone rhetoric trim |
+| 2026-07-14 | **§0.3 MSW-G:** MAX=7 has no derivation; F-1 fix *is* the 6/7/8 choice; fossil bound ≡ zone both imply effective 6; V3_ROLLOUT table fossil + coordinator/staking drift → P0-h; TRacoon = V4 research candidate not Track A |
