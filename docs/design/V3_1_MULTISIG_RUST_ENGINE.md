@@ -661,13 +661,13 @@ argument does **not** depend on changing the leaf.
 
 ### Reward-zone / `MAX=7` — **MATH CONFIRMED; rhetoric trim**
 
-- Per-input 7-of-7 `PqcAuth` ≈ **37911** bytes (header + varints +
+- Per-input 7-of-7 `PqcAuth` ≈ **37911** bytes (header + varints + <!-- doc-literal-gate-allow: historical MAX=7-era reward-zone analysis -->
   14199 + 23703). `8 * 37911 = 303288 > 300000`
   (`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`). Correct.
 - Prefer: "a single legal maxed multisig spend **exceeds the
   penalty-free zone by itself**" over "unprofitable to mine" (penalty
   ≠ necessarily unprofitable once fees are counted).
-- Corner case (8-in × 7-of-7), but still a fair **MSW-G** genesis
+- Corner case (8-in × 7-of-7), but still a fair **MSW-G** genesis <!-- doc-literal-gate-allow: historical MAX=7-era reward-zone analysis -->
   question.
 
 ### Fee model / `MAX_INPUTS` — **CONFIRMED (Track B)**
@@ -834,7 +834,7 @@ Deferred to Round 2 after MS-1 **and** F-3 lineage fate.
 | **P0-k** | `PQC_MULTISIG.md` §15.1 honesty | Address payload already correct; group_id plumbing = MSW-4 |
 | **P0-l** | R1-F-3 DELETE | **Disposition landed:** delete Option A FROST fossil; not `frost-sal-v4` quarantine. Impl = Track B / cleanup. |
 | **P0-m** | Address bech32m / §15.3 registry | **Re-priced 2026-07-15:** MSW-8 deletes vestigial address sign keys (~2.6×). N=2 QR-able. Registry demoted from critical-path prerequisite to optimization. |
-| **P0-n** | Doc prose KAT / grep-gate | **Landed (this PR):** `scripts/ci/check_multisig_doc_literals.sh` + `ci/multisig-feature` job. Fossil sweeps were on the docs carrier (#308). Carrier + INDEX + FOLLOWUPS intentionally excluded (decision-log / historical). |
+| **P0-n** | Doc prose KAT / grep-gate | **Landed (this PR):** `scripts/ci/check_multisig_doc_literals.sh` + `ci/multisig-doc-literals` job (split out of `ci/multisig-feature` so docs-only changes skip the F-6 cargo lane). Fossil sweeps were on the docs carrier (#308). This carrier + INDEX + FOLLOWUPS **are scanned**; their few genuinely-historical lines (decision-log rows, reward-zone `MAX=7` analysis) opt out per-line with an inline `doc-literal-gate-allow` marker rather than excluding the whole file. |
 
 ---
 
@@ -1088,7 +1088,7 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-15 | **Overhaul:** MSW-6 (relax tx-wide scheme_id — staking unblock; archival core untouched). MSW-G **5** (2f+1 at f=2; withdraws 8). MSW-1 narrowed to SINGLE_KEY_CANONICAL_LEN single-source + DoS ceiling. MSW-7 retracted (`bond_spend_pk` 1996 = pseudonym uniformity). Pin #4 named reversion for MSW-6 only. Sequencing: Phase 0 docs → MSW-6 → MSW-1…5 → F-6 → Option E′. |
 | 2026-07-15 | **§0.5 Option E′** (lean). Two-component `O` splits trust: `b` group-plaintext (view+link / local KI); `y` FROST M-of-N with `y_out = y_group + y_kem` tweak. Dealer-mode, no DKG, no `export_multisig_info`. Deletes mandatory-prover Option D scaffold. `spend_auth_version=0x02`; `0x01` never issued. `frost-sal-v4` = E′ gate. |
 | 2026-07-15 | **MSW-8:** delete vestigial `MultisigAddressPayload.hybrid_sign_pubkeys` (Solution C fossil; zero consumers). ~2.6× address shrink is MSW-8, not E′. §15.3 registry re-priced off critical path. Defect class named: shape-from-prose without a read site (fifth instance this session). |
-| 2026-07-15 | **Phase 0 sweep D-1…D-6:** normative `n_total > 7` → MAX (D-1); ROLLOUT vs-N-solos math + cap fossils + `5385→5389` + date (D-2…D-5); ANALYSIS historical banner + E′ row + §6/§15.2 escrow struck + rotation naming collision (D-6). **P0-n** doc grep-gate. |
+| 2026-07-15 | **Phase 0 sweep D-1…D-6:** normative `n_total > 7` → MAX (D-1); ROLLOUT vs-N-solos math + cap fossils + `5385→5389` + date (D-2…D-5); ANALYSIS historical banner + E′ row + §6/§15.2 escrow struck + rotation naming collision (D-6). **P0-n** doc grep-gate. <!-- doc-literal-gate-allow: decision-log row recording the n_total > 7 → MAX fix (D-1) --> |
 | 2026-07-15 | **PR process:** Pin #1 named reversion — comment-only source amendments OK when recording a semantic this PR pins (`bond_wire` MSW-7 uniformity). VERSIONING.md aligned to E′ (15.4a blocker open; `0x02` = product path). §10.3.1 status refreshed (MS-8 retired, E′, MSW-*). P-3: MSW-G cold before MSW-1 code. |
 | 2026-07-15 | **Copilot on #308:** label MAX=5 as decided/unenforced until MSW-1 (reject cutting the constant in a docs PR); drop superseded MSW-G=8 CHANGELOG bullet; F-10→F-11 consistency; §16.7 flags = planned sketch not live Cargo. |
 | 2026-07-15 | **P0-n + F-6 CI:** draft lane + fossil sweeps prepared; **CI files split out** to a follow-on PR so this docs carrier lands alone. Operator/protocol fossils swept here (`USER_GUIDE` / `MULTISIG_OPERATIONS` / `POST_QUANTUM` / `DESIGN_CONCEPTS` / `ANONYMITY` / `LEVIN` / `RELEASE_CHECKLIST`). |

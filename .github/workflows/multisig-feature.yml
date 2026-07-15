@@ -3,14 +3,16 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# F-6 + P0-n — V3.1 multisig Round 1 / Phase 0.
+# F-6 — V3.1 multisig Round 1.
 #
-# F-6: positive CI for `--features multisig` on engine-core, engine-rpc,
-# and ffi (the packages named in V3_1_MULTISIG_RUST_ENGINE.md R1-F-6).
-# Until this lane is green, every Track B claim about gated code is
-# untested.
+# Positive CI for `--features multisig` on engine-core, engine-rpc, and
+# ffi (the packages named in V3_1_MULTISIG_RUST_ENGINE.md R1-F-6). Until
+# this lane is green, every Track B claim about gated code is untested.
 #
-# P0-n: doc-literal grep gate (cap fossils + pqc_auth fee-oracle drift).
+# The P0-n doc-literal gate lives in its own workflow
+# (`multisig-doc-literals.yml`) so a docs-only change no longer drags a
+# full `cargo check + clippy + test --features multisig` across three
+# crates behind it — prose can't affect the Rust build.
 #
 # Clippy posture mirrors build.yml's rust-audit-and-test job:
 #   - toolchain pinned to rust/rust-toolchain.toml (1.94.0), not @stable
@@ -25,46 +27,28 @@ name: ci/multisig-feature
 
 on:
   pull_request:
-    paths:
+    # Rust build/test inputs only. A single anchored list, aliased into
+    # `push` below, so the two event triggers cannot drift apart (a new
+    # multisig-owning crate added to one but not the other would leave a
+    # silent gap — the failure mode C-1 warns about).
+    paths: &paths
       - "rust/shekyl-engine-core/**"
       - "rust/shekyl-engine-rpc/**"
       - "rust/shekyl-ffi/**"
       - "rust/shekyl-fcmp/**"
       - "rust/shekyl-fcmp-proofs/**"
-      # C-1: crates that own a multisig constant. MAX_MULTISIG_PARTICIPANTS
-      # (crypto-pq/src/multisig.rs), PQC_MAX_*_BLOB / single-key len (wire),
-      # MultisigAddressPayload (address), and the C++ twins in
-      # cryptonote_config.h. Without these, cap/blob drift lands with the
-      # gate silent — an armed gate with no trigger.
+      # C-1: crates that own a multisig constant consumed by the tested
+      # packages. MAX_MULTISIG_PARTICIPANTS (crypto-pq/src/multisig.rs),
+      # PQC_MAX_*_BLOB / single-key len (wire), MultisigAddressPayload
+      # (address). A change here must rebuild + retest the dependents.
       - "rust/shekyl-crypto-pq/**"
       - "rust/shekyl-wire/**"
       - "rust/shekyl-address/**"
-      - "src/cryptonote_config.h"
       - "rust/Cargo.lock"
-      - "docs/**"
-      - "scripts/ci/check_multisig_doc_literals.sh"
       - ".github/workflows/multisig-feature.yml"
   push:
     branches: [dev]
-    paths:
-      - "rust/shekyl-engine-core/**"
-      - "rust/shekyl-engine-rpc/**"
-      - "rust/shekyl-ffi/**"
-      - "rust/shekyl-fcmp/**"
-      - "rust/shekyl-fcmp-proofs/**"
-      # C-1: crates that own a multisig constant. MAX_MULTISIG_PARTICIPANTS
-      # (crypto-pq/src/multisig.rs), PQC_MAX_*_BLOB / single-key len (wire),
-      # MultisigAddressPayload (address), and the C++ twins in
-      # cryptonote_config.h. Without these, cap/blob drift lands with the
-      # gate silent — an armed gate with no trigger.
-      - "rust/shekyl-crypto-pq/**"
-      - "rust/shekyl-wire/**"
-      - "rust/shekyl-address/**"
-      - "src/cryptonote_config.h"
-      - "rust/Cargo.lock"
-      - "docs/**"
-      - "scripts/ci/check_multisig_doc_literals.sh"
-      - ".github/workflows/multisig-feature.yml"
+    paths: *paths
 
 concurrency:
   group: multisig-feature-${{ github.ref }}
@@ -77,19 +61,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  p0n-doc-literals:
-    name: "P0-n: multisig doc-literal gate"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install ripgrep
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ripgrep
-          rg --version
-      - name: Run P0-n gate
-        run: scripts/ci/check_multisig_doc_literals.sh
-
   f6-multisig-feature:
     name: "F-6: cargo check/clippy/test --features multisig"
     runs-on: ubuntu-latest
