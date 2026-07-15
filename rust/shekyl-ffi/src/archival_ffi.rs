@@ -19,17 +19,18 @@ use shekyl_archival_retention::{
     emission_vin_verify_claims, epoch_close_compute, epoch_close_due_at_height, epoch_close_height,
     frozen_segment_count, good_through, holdings_update_add_connect, holdings_update_drop_connect,
     holdings_update_pop, p_canonical_id_from_hybrid_pubkey, prune_below_epoch_at_height,
-    serve_credit_epoch_ok, settlement_epoch_at_height, settlement_epoch_blocks_overridden,
-    unbond_connect, unbond_pop, verify_bond_post_ct_balance, verify_holdings_update_add,
-    verify_holdings_update_drop, verify_join_market_bond_post, verify_leaf_index,
-    verify_segment_path, verify_unbond_bond_post, whole_record_last_served, ArchivalBondPostVin,
+    rebond_connect, rebond_pop, serve_credit_epoch_ok, settlement_epoch_at_height,
+    settlement_epoch_blocks_overridden, slash_open_interval_to_append, unbond_connect, unbond_pop,
+    verify_bond_post_ct_balance, verify_holdings_update_add, verify_holdings_update_drop,
+    verify_join_market_bond_post, verify_leaf_index, verify_rebond_bond_post, verify_segment_path,
+    verify_unbond_bond_post, whole_record_last_served, ArchivalBondPostVin,
     ArchivalRewardEmissionVin, ArchivalServeCreditResponse, BadInterval, BondCtBalanceError,
     BondPostError, BondPostKind, BondTerm, ClaimantBondRecord, ClaimedEpochsError, CreditPair,
     EmissionEpochSource, EmissionVerifyContext, EmissionVerifyError, EpochCloseBond,
     EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
-    HoldingsUpdateConnectError, HoldingsUpdatePopError, KCover, RewardCommit, UnbondConnectError,
-    UnbondPopError, WireError, CHALLENGE_RESOLUTION_BLOCKS, HYBRID_PUBKEY_CANONICAL_BYTES,
-    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
+    HoldingsUpdateConnectError, HoldingsUpdatePopError, KCover, RebondConnectError, RebondPopError,
+    RewardCommit, UnbondConnectError, UnbondPopError, WireError, CHALLENGE_RESOLUTION_BLOCKS,
+    HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W, MAX_HOLDINGS_SHARDS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 use shekyl_fcmp::SCALARS_PER_LEAF;
@@ -164,6 +165,41 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON: u8 = 35;
 /// shards (P2B-7 Pin 1: `Bonded → Bonded`; an Exited or slash-emptied record
 /// re-enters via JoinMarket/Rebond, never a voluntary adjustment).
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED: u8 = 36;
+/// `Rebond` verify (gate-4 §3.4; P2B-9): the vin's post_kind is not Rebond.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND: u8 = 37;
+/// Rebond verify: the record is CompleteTree (unrepresentable — demotion flips
+/// the kind atomically with the interval append; belt).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE: u8 = 38;
+/// Rebond verify: the vin's post-holdings are not ShardSetCompact.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_NOT_COMPACT: u8 = 39;
+/// Rebond verify: no open bad interval — the record is not slashed.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED: u8 = 40;
+/// Rebond verify: more than one open bad interval (P2B-9 Pin 5 coalescing
+/// invariant broken — record corruption).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN: u8 = 41;
+/// Rebond verify: interval log lacks headroom (> 254 entries; Pin 6 reserves one
+/// slot for the next slash + one for the Unbond clean close).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM: u8 = 42;
+/// Rebond verify: terms mismatch (debit nonzero, or credit != bond_floor(post) −
+/// record bonded_total, or post bonded_total != bond_floor(post)).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS: u8 = 43;
+/// Rebond verify: post-holdings are not a duplicate-free superset of the record's
+/// current holdings (Pin 1 — reinstatement, not restructuring).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET: u8 = 44;
+/// Rebond verify: post-holdings exceed the codec shard cap — `bond_floor`
+/// collapses to 0 on an oversize set, which would let an oversize post on a
+/// terminal-slashed record demand zero credit and then abort block connect at
+/// the record encode.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE: u8 = 45;
+/// Rebond verify: the record's `bonded_total != bond_floor(record holdings)`
+/// (floor-drifted record) — rejected at verify so the tx can never ride to the
+/// connect fold's FATAL floor belt (tx rejection, not a chain halt).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR: u8 = 46;
+/// Shared vin marshal: the vin's holdings shard count exceeds the wire codec
+/// bound (`MAX_HOLDINGS_SHARDS`). The FFI marshal is a second decoder for the
+/// same wire object, so it enforces the decoder's structural cap — an
+/// oversize set is unrepresentable past the boundary for every post kind.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED: u8 = 47;
 
 /// `Unbond` connect/pop fold succeeded (gate-4 §4.3 / §5).
 pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_OK: u8 = 0;
@@ -240,6 +276,60 @@ fn map_holdings_update_pop_error(e: HoldingsUpdatePopError) -> u8 {
             SHEKYL_ARCHIVAL_HU_APPLY_ERR_NOT_SINGLE_DELTA
         }
         HoldingsUpdatePopError::CounterRange => SHEKYL_ARCHIVAL_HU_APPLY_ERR_COUNTER_RANGE,
+    }
+}
+
+/// `Rebond` connect/pop fold succeeded (gate-4 §3.4; P2B-9).
+pub const SHEKYL_ARCHIVAL_REBOND_APPLY_OK: u8 = 0;
+/// A required out-pointer is null.
+pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NULL_PTR: u8 = 1;
+/// A marshaled array length overflows.
+pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_LEN_OVERFLOW: u8 = 2;
+/// Connect: post is not a duplicate-free superset of the record's holdings.
+pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NOT_SUPERSET: u8 = 3;
+/// Connect: empty post (reinstatement needs a position).
+pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_EMPTY_POST: u8 = 4;
+/// Connect: the record's `bonded_total == bond_floor(holdings)` invariant is broken.
+pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_RECORD_FLOOR_INVARIANT: u8 = 5;
+/// Connect: no open bad interval to close (record not slashed).
+pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NO_OPEN_INTERVAL: u8 = 6;
+/// Connect: multiple open bad intervals (Pin 5 coalescing invariant broken).
+pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_MULTIPLE_OPEN_INTERVALS: u8 = 7;
+/// Connect: `E_rebond + 1` is not strictly after the open interval's start.
+pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_INTERVAL_ORDERING: u8 = 8;
+/// Connect/pop: counter or epoch arithmetic out of range.
+pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_COUNTER_RANGE: u8 = 9;
+/// Pop: the per-`P` balance delta is not a non-negative whole number of FLOORs.
+pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NOT_REBOND_DELTA: u8 = 10;
+/// Connect: the caller's added-shard out buffer is smaller than the added set.
+pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_ADDED_BUFFER_TOO_SMALL: u8 = 11;
+/// Connect: the post set exceeds the codec shard cap (the record could never
+/// encode) — verify's `REBOND_POST_OVERSIZE` forecloses this at admission.
+pub const SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_POST_OVERSIZE: u8 = 12;
+
+#[must_use]
+fn map_rebond_connect_error(e: RebondConnectError) -> u8 {
+    match e {
+        RebondConnectError::NotSuperset => SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NOT_SUPERSET,
+        RebondConnectError::EmptyPost => SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_EMPTY_POST,
+        RebondConnectError::PostOversize => SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_POST_OVERSIZE,
+        RebondConnectError::RecordFloorInvariantBroken => {
+            SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_RECORD_FLOOR_INVARIANT
+        }
+        RebondConnectError::NoOpenInterval => SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NO_OPEN_INTERVAL,
+        RebondConnectError::MultipleOpenIntervals => {
+            SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_MULTIPLE_OPEN_INTERVALS
+        }
+        RebondConnectError::IntervalOrdering => SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_INTERVAL_ORDERING,
+        RebondConnectError::CounterRange => SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_COUNTER_RANGE,
+    }
+}
+
+#[must_use]
+fn map_rebond_pop_error(e: RebondPopError) -> u8 {
+    match e {
+        RebondPopError::NotRebondDelta => SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NOT_REBOND_DELTA,
+        RebondPopError::CounterRange => SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_COUNTER_RANGE,
     }
 }
 
@@ -615,6 +705,24 @@ fn map_bond_post_error(err: BondPostError) -> u8 {
         BondPostError::HoldingsUpdateRecordNotBonded => {
             SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED
         }
+        BondPostError::PostKindNotRebond => SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND,
+        BondPostError::RebondPostOversize => SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE,
+        BondPostError::RebondRecordFloorBroken => SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR,
+        BondPostError::RebondOnCompleteTree => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE
+        }
+        BondPostError::RebondPostNotCompact => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_NOT_COMPACT
+        }
+        BondPostError::RebondNotSlashed => SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED,
+        BondPostError::RebondMultipleOpenIntervals => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN
+        }
+        BondPostError::RebondIntervalLogHeadroom => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM
+        }
+        BondPostError::RebondTerms => SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS,
+        BondPostError::RebondNotSuperset => SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET,
     }
 }
 
@@ -743,6 +851,15 @@ unsafe fn bond_post_vin_from_raw(
 ) -> Result<ArchivalBondPostVin, u8> {
     let shard_ids =
         unsafe { with_bond_post_u64_slice(shard_ids_ptr, shard_ids_len, <[u64]>::to_vec) }?;
+    // The wire decoder bounds the vin's shard count (MAX_HOLDINGS_SHARDS);
+    // this marshal is a second decoder for the same wire object, so it
+    // enforces the same structural cap — an oversize set is unrepresentable
+    // past the FFI boundary for EVERY post kind, not a case each downstream
+    // verify must re-guard (`bond_floor` collapses to an in-band 0 on oversize,
+    // which let an unguarded verify read it as the empty exit shape).
+    if shard_ids.len() > MAX_HOLDINGS_SHARDS {
+        return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED);
+    }
     let bond_spend_pk =
         unsafe { with_bond_post_u8_slice(bond_spend_pk_ptr, bond_spend_pk_len, <[u8]>::to_vec) }?;
     let coupling_ok = if post_kind == BondPostKind::JoinMarket {
@@ -1051,17 +1168,22 @@ pub unsafe extern "C" fn shekyl_archival_unbond_pop(
     }
 }
 
-/// Shared `HoldingsUpdate` entry-point prologue (add + drop): decode the post
-/// kind, marshal the vin (§9.11 coupling enforced by the shared marshaler),
-/// decode the record's holdings kind, and gather the record facts common to
-/// both directions. Keeping this single-sourced means an admission-marshal
-/// change cannot land on one direction and silently miss the other.
+/// Shared record-fact entry-point prologue for the bond-post kinds that verify
+/// against an existing record's holdings (`HoldingsUpdate` add + drop,
+/// `Rebond`): decode the post kind (an out-of-range byte maps to the caller's
+/// `wrong_post_kind_err` — the kinds name it differently), marshal the vin
+/// (§9.11 coupling enforced by the shared marshaler), decode the record's
+/// holdings kind, and gather the common record facts. Keeping this
+/// single-sourced means an admission-marshal change cannot land on one entry
+/// point and silently miss another — the kinds must return one verdict for the
+/// same malformed record facts.
 ///
 /// # Safety
 /// Same contracts as the entry points: each `*_ptr` valid for its `*_len`
 /// elements, or null when the len is 0.
 #[allow(clippy::too_many_arguments)] // coarse-call FFI: mirrors the entry points' flat operand list
-unsafe fn holdings_update_marshal_prologue(
+unsafe fn bond_post_record_marshal_prologue(
+    wrong_post_kind_err: u8,
     post_kind: u8,
     holdings_kind: u8,
     shard_ids_ptr: *const u64,
@@ -1079,7 +1201,7 @@ unsafe fn holdings_update_marshal_prologue(
 ) -> Result<(ArchivalBondPostVin, Option<u64>, HoldingsKind, Vec<u64>), u8> {
     let post_kind = match BondPostKind::from_u8(post_kind) {
         Ok(k) => k,
-        Err(_) => return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE),
+        Err(_) => return Err(wrong_post_kind_err),
     };
     let vin = unsafe {
         bond_post_vin_from_raw(
@@ -1094,8 +1216,17 @@ unsafe fn holdings_update_marshal_prologue(
             bond_debit,
         )
     }?;
-    let Ok(record_holdings_kind) = HoldingsKind::from_u8(record_holdings_kind) else {
-        return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND);
+    // Parse the record's kind only when a record exists: a missing record must
+    // surface as RECORD_MISSING (the verify's own verdict), never as a
+    // misleading HOLDINGS_KIND from whatever placeholder the caller passed.
+    // The dummy is unread — every verify checks RecordMissing before kinds.
+    let record_holdings_kind = if record_exists != 0 {
+        match HoldingsKind::from_u8(record_holdings_kind) {
+            Ok(k) => k,
+            Err(_) => return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND),
+        }
+    } else {
+        HoldingsKind::ShardSetCompact
     };
     let record_bonded_total = (record_exists != 0).then_some(record_bonded_total);
     let record_shards = unsafe {
@@ -1143,7 +1274,8 @@ pub unsafe extern "C" fn shekyl_archival_verify_holdings_update_add(
     current_settlement_epoch: u64,
 ) -> u8 {
     let (vin, record_bonded_total, record_holdings_kind, record_shards) = match unsafe {
-        holdings_update_marshal_prologue(
+        bond_post_record_marshal_prologue(
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE,
             post_kind,
             holdings_kind,
             shard_ids_ptr,
@@ -1217,7 +1349,8 @@ pub unsafe extern "C" fn shekyl_archival_verify_holdings_update_drop(
     current_settlement_epoch: u64,
 ) -> u8 {
     let (vin, record_bonded_total, record_holdings_kind, record_shards) = match unsafe {
-        holdings_update_marshal_prologue(
+        bond_post_record_marshal_prologue(
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE,
             post_kind,
             holdings_kind,
             shard_ids_ptr,
@@ -1405,6 +1538,202 @@ pub unsafe extern "C" fn shekyl_archival_holdings_update_pop(
     }
 }
 
+/// Verify `Rebond` bond-post semantics (gate-4 §3.4; P2B-9 reinstatement). The
+/// vin's post-holdings arrive via `shard_ids_*`; `record_shard_ids_*` is the
+/// record's **current** holdings (the superset base), and
+/// `record_bad_intervals_*` is the flattened `(start, end_exclusive)` pairs —
+/// `record_bad_intervals_len` counts **pairs** (buffer holds `2 × len` u64s) —
+/// carrying the open-interval precondition and the Pin-6 headroom bound. A
+/// `Rebond` vin never carries `bond_spend_pk` (credit path; the record keeps its
+/// join-time key), so a conforming caller passes null/0.
+///
+/// # Safety
+/// Each `*_ptr` must be valid for its `*_len` elements, or null when the len is 0.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn shekyl_archival_verify_rebond_bond_post(
+    post_kind: u8,
+    holdings_kind: u8,
+    shard_ids_ptr: *const u64,
+    shard_ids_len: usize,
+    bond_spend_pk_ptr: *const u8,
+    bond_spend_pk_len: usize,
+    bonded_total_atomic: u64,
+    bond_credit: u64,
+    bond_debit: u64,
+    record_exists: u8,
+    record_bonded_total: u64,
+    record_holdings_kind: u8,
+    record_shard_ids_ptr: *const u64,
+    record_shard_ids_len: usize,
+    record_bad_intervals_ptr: *const u64,
+    record_bad_intervals_len: usize,
+) -> u8 {
+    let (vin, record_bonded_total, record_holdings_kind, record_shards) = match unsafe {
+        bond_post_record_marshal_prologue(
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND,
+            post_kind,
+            holdings_kind,
+            shard_ids_ptr,
+            shard_ids_len,
+            bond_spend_pk_ptr,
+            bond_spend_pk_len,
+            bonded_total_atomic,
+            bond_credit,
+            bond_debit,
+            record_exists,
+            record_bonded_total,
+            record_holdings_kind,
+            record_shard_ids_ptr,
+            record_shard_ids_len,
+        )
+    } {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let Some(bad) =
+        (unsafe { gather_bad_intervals(record_bad_intervals_ptr, record_bad_intervals_len) })
+    else {
+        return SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW;
+    };
+    match verify_rebond_bond_post(
+        &vin,
+        record_bonded_total,
+        record_holdings_kind,
+        &record_shards,
+        &bad,
+    ) {
+        Ok(()) => SHEKYL_ARCHIVAL_BOND_POST_OK,
+        Err(e) => map_bond_post_error(e),
+    }
+}
+
+/// Fold the `Rebond` connect (gate-4 §3.4; P2B-9). The C++ arm journals the
+/// record pre-image (including the closed interval's index + start), sets
+/// `held_shard_ids = post` and rebuilds the coupled add-epochs (carried shards
+/// keep theirs; every id written to `added_shard_ids_out` takes
+/// `add_settlement_epoch_out = E_rebond`), closes the open interval **in place**
+/// (`bad_intervals[closed_interval_index_out].end_exclusive =
+/// interval_end_exclusive_out`, `== E_rebond + 1`), and sets the counters.
+/// `total_bonded_atomic` is the LIVE global counter (thread per post).
+/// `added_shard_ids_cap` must be ≥ the post length (added ⊆ post).
+///
+/// # Safety
+/// Array pointers valid for their lens (or null at len 0);
+/// `added_shard_ids_out` valid for `added_shard_ids_cap` writes; all scalar
+/// out-pointers valid for writes.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn shekyl_archival_rebond_connect(
+    record_bonded_total: u64,
+    record_shard_ids_ptr: *const u64,
+    record_shard_ids_len: usize,
+    record_bad_intervals_ptr: *const u64,
+    record_bad_intervals_len: usize,
+    post_shard_ids_ptr: *const u64,
+    post_shard_ids_len: usize,
+    total_bonded_atomic: u64,
+    rebond_settlement_epoch: u64,
+    added_shard_ids_out: *mut u64,
+    added_shard_ids_cap: usize,
+    added_shard_ids_len_out: *mut usize,
+    add_settlement_epoch_out: *mut u64,
+    closed_interval_index_out: *mut u64,
+    interval_end_exclusive_out: *mut u64,
+    new_bonded_total_out: *mut u64,
+    new_total_bonded_out: *mut u64,
+) -> u8 {
+    if (added_shard_ids_out.is_null() && added_shard_ids_cap > 0)
+        || added_shard_ids_len_out.is_null()
+        || add_settlement_epoch_out.is_null()
+        || closed_interval_index_out.is_null()
+        || interval_end_exclusive_out.is_null()
+        || new_bonded_total_out.is_null()
+        || new_total_bonded_out.is_null()
+    {
+        return SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NULL_PTR;
+    }
+    let current = match unsafe {
+        with_bond_post_u64_slice(record_shard_ids_ptr, record_shard_ids_len, <[u64]>::to_vec)
+    } {
+        Ok(v) => v,
+        Err(_) => return SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_LEN_OVERFLOW,
+    };
+    let post = match unsafe {
+        with_bond_post_u64_slice(post_shard_ids_ptr, post_shard_ids_len, <[u64]>::to_vec)
+    } {
+        Ok(v) => v,
+        Err(_) => return SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_LEN_OVERFLOW,
+    };
+    let Some(bad) =
+        (unsafe { gather_bad_intervals(record_bad_intervals_ptr, record_bad_intervals_len) })
+    else {
+        return SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_LEN_OVERFLOW;
+    };
+    match rebond_connect(
+        record_bonded_total,
+        &current,
+        &bad,
+        &post,
+        total_bonded_atomic,
+        rebond_settlement_epoch,
+    ) {
+        Ok(e) => {
+            if e.added_shard_ids.len() > added_shard_ids_cap {
+                return SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_ADDED_BUFFER_TOO_SMALL;
+            }
+            unsafe {
+                if !e.added_shard_ids.is_empty() {
+                    std::ptr::copy_nonoverlapping(
+                        e.added_shard_ids.as_ptr(),
+                        added_shard_ids_out,
+                        e.added_shard_ids.len(),
+                    );
+                }
+                *added_shard_ids_len_out = e.added_shard_ids.len();
+                *add_settlement_epoch_out = e.add_settlement_epoch;
+                *closed_interval_index_out = e.closed_interval_index as u64;
+                *interval_end_exclusive_out = e.interval_end_exclusive;
+                *new_bonded_total_out = e.new_bonded_total;
+                *new_total_bonded_out = e.new_total_bonded_atomic;
+            }
+            SHEKYL_ARCHIVAL_REBOND_APPLY_OK
+        }
+        Err(e) => map_rebond_connect_error(e),
+    }
+}
+
+/// Fold the `Rebond` pop twin (gate-4 §5): the C++ arm restores the record
+/// fields from the pre-image journal byte-identically (including re-opening the
+/// closed interval to `end_exclusive = MAX`); this reverts the global
+/// `total_bonded_atomic` by the connect's `|added|·FLOOR` credit — zero delta
+/// included (the standing-only reinstatement moved no collateral).
+///
+/// # Safety
+/// `new_total_bonded_out` must be valid for a write.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_rebond_pop(
+    current_record_bonded_total: u64,
+    journal_pre_bonded_total: u64,
+    total_bonded_atomic: u64,
+    new_total_bonded_out: *mut u64,
+) -> u8 {
+    if new_total_bonded_out.is_null() {
+        return SHEKYL_ARCHIVAL_REBOND_APPLY_ERR_NULL_PTR;
+    }
+    match rebond_pop(
+        current_record_bonded_total,
+        journal_pre_bonded_total,
+        total_bonded_atomic,
+    ) {
+        Ok(new_total) => {
+            unsafe { *new_total_bonded_out = new_total };
+            SHEKYL_ARCHIVAL_REBOND_APPLY_OK
+        }
+        Err(e) => map_rebond_pop_error(e),
+    }
+}
+
 /// Returns `1` when `settlement_epoch >= join_settlement_epoch + 1` (gate-4 §2.2 `E_first` lower bound).
 #[no_mangle]
 pub extern "C" fn shekyl_archival_serve_credit_epoch_ok(
@@ -1415,6 +1744,59 @@ pub extern "C" fn shekyl_archival_serve_credit_epoch_ok(
         settlement_epoch,
         join_settlement_epoch,
     ))
+}
+
+/// [`shekyl_archival_slash_open_interval_to_append`]: no append — an open
+/// interval already exists (the same-epoch sibling coalesces).
+pub const SHEKYL_ARCHIVAL_SLASH_INTERVAL_COALESCE: u8 = 0;
+/// [`shekyl_archival_slash_open_interval_to_append`]: append the out-params'
+/// open interval.
+pub const SHEKYL_ARCHIVAL_SLASH_INTERVAL_APPEND: u8 = 1;
+/// [`shekyl_archival_slash_open_interval_to_append`]: marshal error (null
+/// pointer with nonzero length, pair-count overflow, or null out-pointer) —
+/// the C++ slash writer maps this to a FATAL abort, never a skip.
+pub const SHEKYL_ARCHIVAL_SLASH_INTERVAL_ERR_MARSHAL: u8 = 2;
+
+/// Same-epoch slash-coalescing decision (P2B-9 Pin 5;
+/// `shekyl-archival-retention::bond_connect::slash_open_interval_to_append`):
+/// returns [`SHEKYL_ARCHIVAL_SLASH_INTERVAL_APPEND`] and writes the open
+/// interval `[settlement_epoch, u64::MAX)` when the record carries no open bad
+/// interval, or [`SHEKYL_ARCHIVAL_SLASH_INTERVAL_COALESCE`] (no write) when one
+/// exists. The decision AND the interval shape are consensus semantics — the
+/// C++ slash writer appends exactly what this returns, deciding nothing.
+///
+/// `bad_intervals_ptr` is `2 × bad_intervals_len` `u64`s — flattened
+/// `(start_epoch, end_exclusive)` pairs (the `shekyl_archival_good_through`
+/// layout).
+///
+/// # Safety
+/// When `bad_intervals_len > 0`, `bad_intervals_ptr` must address
+/// `2 × bad_intervals_len` valid `u64`s; the out-pointers must be valid for
+/// writes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_slash_open_interval_to_append(
+    bad_intervals_ptr: *const u64,
+    bad_intervals_len: usize,
+    settlement_epoch: u64,
+    interval_start_out: *mut u64,
+    interval_end_out: *mut u64,
+) -> u8 {
+    if interval_start_out.is_null() || interval_end_out.is_null() {
+        return SHEKYL_ARCHIVAL_SLASH_INTERVAL_ERR_MARSHAL;
+    }
+    let Some(bad) = (unsafe { gather_bad_intervals(bad_intervals_ptr, bad_intervals_len) }) else {
+        return SHEKYL_ARCHIVAL_SLASH_INTERVAL_ERR_MARSHAL;
+    };
+    match slash_open_interval_to_append(&bad, settlement_epoch) {
+        Some(iv) => {
+            unsafe {
+                *interval_start_out = iv.start_epoch;
+                *interval_end_out = iv.end_exclusive;
+            }
+            SHEKYL_ARCHIVAL_SLASH_INTERVAL_APPEND
+        }
+        None => SHEKYL_ARCHIVAL_SLASH_INTERVAL_COALESCE,
+    }
 }
 
 /// `good_through(P, E)` from bond fields (ARCHIVAL_CONSENSUS_STATE.md §3.4 interval semantics).
@@ -3023,10 +3405,12 @@ mod tests {
     #[test]
     fn unbond_ffi_rejects_oversize_holdings_masquerading_as_empty() {
         use shekyl_archival_retention::{BondPostKind, HoldingsKind};
-        // The FFI marshals shard ids without the wire decoder's MAX_HOLDINGS_SHARDS
-        // (4096) bound, so an oversize ShardSetCompact reaches verify with floor 0.
-        // A full Unbond (bonded_total 0) with such holdings must reject as
-        // UNBOND_HOLDINGS_NOT_EMPTY, not masquerade as the empty full-exit state.
+        // The FFI marshal is a second decoder for the wire object, so it
+        // enforces the wire decoder's MAX_HOLDINGS_SHARDS (4096) bound at the
+        // boundary: an oversize ShardSetCompact never reaches verify (where
+        // bond_floor's in-band 0 would make it masquerade as the empty
+        // full-exit state — the verify-level guard for direct Rust callers is
+        // pinned by bond_post.rs's rejects_oversize_shard_set_masquerading_as_empty).
         let shards = vec![0u64; 4097];
         let code = unsafe {
             shekyl_archival_verify_unbond_bond_post(
@@ -3048,10 +3432,40 @@ mod tests {
                 0,
             )
         };
-        assert_eq!(
-            code,
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_HOLDINGS_NOT_EMPTY
-        );
+        assert_eq!(code, SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED);
+    }
+
+    #[test]
+    fn rebond_ffi_rejects_oversize_post_at_the_marshal_boundary() {
+        use shekyl_archival_retention::{BondPostKind, HoldingsKind};
+        // The finding this closes: a >4096-shard Rebond post on a
+        // terminal-slashed record (bonded 0) collapsed bond_floor to 0, so the
+        // zero-credit terms verified and the connect then aborted block apply
+        // at the record encode. The marshal cap makes the oversize set
+        // unrepresentable past the FFI for every post kind.
+        let shards: Vec<u64> = (0..4097u64).collect();
+        let intervals = [5u64, u64::MAX]; // one open interval (slashed record)
+        let code = unsafe {
+            shekyl_archival_verify_rebond_bond_post(
+                BondPostKind::Rebond as u8,
+                HoldingsKind::ShardSetCompact as u8,
+                shards.as_ptr(),
+                shards.len(),
+                std::ptr::null(), // bond_spend_pk (§9.11: never on Rebond)
+                0,
+                0, // bonded_total_atomic — the floor-collapse masquerade
+                0, // bond_credit — zero collateral demanded
+                0, // bond_debit
+                1, // record_exists
+                0, // record_bonded_total — terminal slash
+                HoldingsKind::ShardSetCompact as u8,
+                std::ptr::null(), // record holds nothing
+                0,
+                intervals.as_ptr(),
+                1,
+            )
+        };
+        assert_eq!(code, SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED);
     }
 
     #[test]

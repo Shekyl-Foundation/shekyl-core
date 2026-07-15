@@ -500,28 +500,53 @@ private:
     const std::vector<uint64_t>& post_shard_ids) override;
   virtual void apply_archival_holdings_update_drop(uint64_t block_height, const crypto::hash& p_id,
     const std::vector<uint64_t>& post_shard_ids) override;
-  /// The direction-specific fold outputs consumed by the shared HoldingsUpdate
-  /// connect-writer scaffold: the counter movement plus the add-direction's
-  /// coupled add-epoch override for the rebuilt `shard_add_epochs`.
-  struct HoldingsUpdateFoldOuts
+  /// The kind-specific fold outputs consumed by the shared bond-record
+  /// connect-writer scaffold: the counter movement, the add-epoch overrides
+  /// for the rebuilt index-parallel `shard_add_epochs` (empty = every POST
+  /// shard is carried), and the optional in-place interval close (Rebond).
+  struct BondRecordFoldOuts
   {
     uint64_t new_bonded_total = 0;
     uint64_t new_total_bonded = 0;
-    uint64_t override_shard_id = 0;
+    std::vector<uint64_t> override_shard_ids;
     uint64_t override_add_epoch = 0;
-    bool has_override = false;
+    bool has_interval_close = false;
+    uint64_t closed_interval_index = 0;
+    uint64_t interval_end_exclusive = 0;
   };
-  using holdings_update_fold_t = std::function<uint8_t(
+  using bond_record_fold_t = std::function<uint8_t(
     const shekyl::db::ArchivalBondValue& bond, uint64_t total_bonded,
-    HoldingsUpdateFoldOuts& outs)>;
-  /// Shared connect-writer scaffold for both HoldingsUpdate directions (txn
-  /// guard, record load + v6 desync check, pre-image journal, live counter
-  /// read, fold, coupled-array rebuild, record/counter writes, journal
-  /// append) — add/drop differ only in the `fold` they pass.
-  void apply_archival_holdings_update(uint64_t block_height, const crypto::hash& p_id,
+    BondRecordFoldOuts& outs)>;
+  /// Pre-image facts the scaffold captures before any mutation, handed to the
+  /// kind's journal writer (`closed_interval_start` is meaningful iff the fold
+  /// set `has_interval_close`).
+  struct BondRecordPreImage
+  {
+    uint64_t pre_bonded_total = 0;
+    std::vector<uint64_t> pre_shard_ids;
+    std::vector<uint64_t> pre_shard_add_epochs;
+    uint64_t closed_interval_start = 0;
+  };
+  using bond_record_journal_t = std::function<void(
+    const BondRecordPreImage& pre, const BondRecordFoldOuts& outs)>;
+  /// Shared connect-writer scaffold for every POST-holdings bond-record
+  /// mutation (HoldingsUpdate add/drop, Rebond): txn guard, record load + v6
+  /// desync check, pre-image capture, live counter read, fold, optional
+  /// in-place interval close, coupled-array rebuild, record/counter writes,
+  /// then the kind's journal append (same atomic txn). Single-sourced so a
+  /// journal/ordering/invariant change cannot land on one bond-post kind and
+  /// silently miss another — the kinds must stay reorg-twinned with their pops.
+  void apply_archival_bond_record_update(uint64_t block_height, const crypto::hash& p_id,
     const std::vector<uint64_t>& post_shard_ids, const char* arm,
-    const holdings_update_fold_t& fold);
+    const bond_record_fold_t& fold, const bond_record_journal_t& journal);
+  /// The HoldingsUpdate add/drop journal writer (one row type, one pop) —
+  /// passed to the scaffold by both directions.
+  void put_archival_holdings_update_journal(uint64_t block_height,
+    const crypto::hash& p_id, const BondRecordPreImage& pre);
   virtual void revert_archival_holdings_updates_at_height(uint64_t block_height) override;
+  virtual void apply_archival_rebond(uint64_t block_height, const crypto::hash& p_id,
+    const std::vector<uint64_t>& post_shard_ids) override;
+  virtual void revert_archival_rebonds_at_height(uint64_t block_height) override;
   virtual bool archival_shard_freeze_height(uint64_t shard_id, uint64_t& out) const override;
   virtual std::vector<uint64_t> archival_bond_last_served_epochs(const crypto::hash& p_id,
     const std::vector<uint64_t>& shard_ids) const override;
@@ -795,6 +820,7 @@ private:
   MDB_dbi m_archival_emission_claim_log; // BE(height)||BE(seq) -> claimed-set pre-image journal
   MDB_dbi m_archival_bond_unbond_log; // BE(height)||BE(seq) -> Unbond record pre-image journal
   MDB_dbi m_archival_bond_holdings_update_log; // BE(height)||BE(seq) -> HoldingsUpdate record pre-image journal
+  MDB_dbi m_archival_bond_rebond_log; // BE(height)||BE(seq) -> Rebond record pre-image journal
   MDB_dbi m_archival_r_market;        // BE(shard)||BE(E) -> BE(count)
   MDB_dbi m_archival_sigma_work;      // BE(E) -> BE(sigma_milli)
   MDB_dbi m_archival_epoch_close_log; // block_height -> settlement_epoch finalized

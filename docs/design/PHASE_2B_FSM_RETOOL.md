@@ -811,9 +811,13 @@ Apply-side only — the landed revert's `remove_if` strips every matching open i
 first same-epoch row and no-ops on the rest, so pop symmetry holds with no schema bump. This
 establishes **≤ 1 open interval** as a machine-checkable invariant, which is what makes
 "`Rebond` closes *the* open interval" well-defined; the `Rebond` fold belts on multiplicity
-(loud corruption detector, not a tolerated state). The fix lands at the C++ slash-apply site
-(a bug fix to landed code, the file's idiom) and migrates with the slash body at its pinned
-Rust cutover (P2B-8 implementation locus).
+(loud corruption detector, not a tolerated state). **Locus (revised at the PR's review
+round):** the coalescing *decision* and the interval shape live Rust-side
+(`bond_connect::slash_open_interval_to_append`, KAT-covered — the invariant the Rust `Rebond`
+verify depends on is exercised by the Rust suite), reached via
+`shekyl_archival_slash_open_interval_to_append`; the C++ slash-apply site appends exactly what
+the fold returns and decides nothing. The remaining slash *writer* body migrates with the
+slash cutover as pinned (P2B-8 implementation locus).
 
 ### Pin 6 — interval-cap headroom: verify requires `bad_intervals.size() ≤ 254`
 

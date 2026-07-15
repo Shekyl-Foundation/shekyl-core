@@ -4615,6 +4615,31 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
     return "HoldingsUpdate-drop post bonded_total != bond_floor(post) / current - FLOOR";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON:
     return "HoldingsUpdate-drop before the shard's retention-commitment horizon elapsed";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND:
+    return "post_kind is not Rebond";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE:
+    return "Rebond on a CompleteTree record (demotion flips the kind; unrepresentable)";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_NOT_COMPACT:
+    return "Rebond post-holdings are not ShardSetCompact";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED:
+    return "Rebond requires an open bad interval (the record is not slashed)";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN:
+    return "record carries multiple open bad intervals (coalescing invariant broken)";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM:
+    return "record interval log lacks Rebond headroom (must leave a slot for the next "
+      "slash and the Unbond clean close)";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS:
+    return "Rebond terms mismatch (debit nonzero, or credit != bond_floor(post) - "
+      "record bonded_total, or post bonded_total != bond_floor(post))";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET:
+    return "Rebond post-holdings are not a duplicate-free superset of the record's "
+      "current holdings (shedding goes through HoldingsUpdate-drop)";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE:
+    return "Rebond post-holdings exceed the codec shard cap";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR:
+    return "record bonded_total != bond_floor(record holdings) (floor-drifted record)";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED:
+    return "vin holdings shard count exceeds the wire codec bound";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED:
     return "HoldingsUpdate requires a Bonded record (an Exited or slash-emptied "
       "record re-enters via JoinMarket/Rebond)";
@@ -4651,6 +4676,34 @@ bool archival_debit_auth_pin(const shekyl::db::ArchivalBondValue& record,
       "record's committed bond_spend_pk (identity-key or foreign-key debit "
       "authorization is forbidden)");
     return false;
+  }
+  return true;
+}
+
+// Shared record-fact marshal for the record-mutating bond-post verify arms
+// (HoldingsUpdate, Rebond): load the bond record, belt the v6 index-parallel
+// coupling, and flatten the interval log into the FFI's (start, end_exclusive)
+// pair layout. Returns false — rejecting the tx — on the desync belt.
+// Single-sourced so the arms verify against identically-gathered record facts;
+// a marshal fix cannot land on one bond-post kind and leave another verifying
+// against differently-shaped facts for the same chain state.
+bool archival_marshal_record_facts(BlockchainDB* db, const crypto::hash& p_id,
+  const char* arm, shekyl::db::ArchivalBondValue& record, bool& have_record,
+  std::vector<uint64_t>& intervals_flat)
+{
+  have_record = db->get_archival_bond_value(p_id, record);
+  if (have_record && record.held_shard_ids.size() != record.shard_add_epochs.size())
+  {
+    MERROR_VER("Archival " << arm << " rejected: record shard id / add-epoch "
+      "length desync");
+    return false;
+  }
+  intervals_flat.clear();
+  intervals_flat.reserve(record.bad_intervals.size() * 2);
+  for (const auto& iv : record.bad_intervals)
+  {
+    intervals_flat.push_back(iv.start_epoch);
+    intervals_flat.push_back(iv.end_exclusive);
   }
   return true;
 }
@@ -4764,14 +4817,11 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     }
 
     shekyl::db::ArchivalBondValue record{};
-    const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);
-    if (have_record
-        && record.held_shard_ids.size() != record.shard_add_epochs.size())
-    {
-      MERROR_VER("Archival HoldingsUpdate rejected: record shard id / add-epoch "
-        "length desync");
+    bool have_record = false;
+    std::vector<uint64_t> bad_flat;
+    if (!archival_marshal_record_facts(m_db, bond.p_canonical_id, "HoldingsUpdate",
+        record, have_record, bad_flat))
       return false;
-    }
     const uint64_t current_epoch = shekyl_archival_settlement_epoch_at_height(chain_height);
     const uint64_t* record_shard_ptr = record.held_shard_ids.empty()
       ? nullptr : record.held_shard_ids.data();
@@ -4781,15 +4831,9 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     // is authoritative — this only selects which fact set to marshal.
     if (bond.bond_debit == 0)
     {
-      // ADD (credit path): marshal the record's current holdings + the good_through
-      // inputs (join epoch + bad intervals). Auth is the IDENTITY key.
-      std::vector<uint64_t> bad_flat;
-      bad_flat.reserve(record.bad_intervals.size() * 2);
-      for (const auto& iv : record.bad_intervals)
-      {
-        bad_flat.push_back(iv.start_epoch);
-        bad_flat.push_back(iv.end_exclusive);
-      }
+      // ADD (credit path): the record's current holdings + the good_through
+      // inputs (join epoch + the flattened bad intervals). Auth is the
+      // IDENTITY key.
       const uint8_t hu_rc = shekyl_archival_verify_holdings_update_add(
         bond.post_kind,
         static_cast<uint8_t>(bond.holdings.kind),
@@ -4908,12 +4952,72 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     return true;
   }
 
+  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Rebond))
+  {
+    // §9.11 coupling belt: Rebond never carries the vin-borne debit authorizer
+    // — it is a credit (identity-key auth, P2B-9 Pin 4) and the record keeps
+    // its join-time committed bond_spend_pk for future debits.
+    if (!bond.bond_spend_pk.empty())
+    {
+      MERROR_VER("Archival Rebond rejected: vin carries a bond_spend_pk "
+        "(JoinMarket-coupled field)");
+      return false;
+    }
+
+    // Rebond semantic verify (gate-4 §3.4; P2B-9 reinstatement): marshal the
+    // record's current holdings + the full interval log as flattened
+    // (start, end_exclusive) pairs — the open-interval precondition, the Pin-5
+    // single-open check, and the Pin-6 headroom bound all read it Rust-side.
+    // No epoch operand: the precondition is interval-shaped, not epoch-shaped.
+    shekyl::db::ArchivalBondValue record{};
+    bool have_record = false;
+    std::vector<uint64_t> intervals_flat;
+    if (!archival_marshal_record_facts(m_db, bond.p_canonical_id, "Rebond",
+        record, have_record, intervals_flat))
+      return false;
+    const uint8_t rb_rc = shekyl_archival_verify_rebond_bond_post(
+      bond.post_kind,
+      static_cast<uint8_t>(bond.holdings.kind),
+      shard_ptr,
+      bond.holdings.shard_ids.size(),
+      nullptr, // bond_spend_pk: empty on Rebond (belt above)
+      0,
+      bond.bonded_total_atomic,
+      bond.bond_credit,
+      bond.bond_debit,
+      have_record ? 1 : 0,
+      record.bonded_total_atomic,
+      static_cast<uint8_t>(record.holdings_kind),
+      record.held_shard_ids.empty() ? nullptr : record.held_shard_ids.data(),
+      record.held_shard_ids.size(),
+      intervals_flat.empty() ? nullptr : intervals_flat.data(),
+      record.bad_intervals.size());
+    if (rb_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
+    {
+      MERROR_VER("Archival Rebond verify failed (code "
+        << static_cast<unsigned>(rb_rc) << "): "
+        << archival_bond_post_verify_err_string(rb_rc));
+      return false;
+    }
+    // Credit-path authorization (P2B-9 Pin 4, the GF-1 selector): the identity
+    // key — a Rebond proves control of P_canonical_id; the funded value (if
+    // any) arrives via self-authorizing txin_to_key inputs.
+    if (auth_pubkey != bond.hybrid_public_key)
+    {
+      MERROR_VER("Archival Rebond rejected: credit-path pqc auth key does not "
+        "match the identity key P_pubkey");
+      return false;
+    }
+    return true;
+  }
+
   // §9.11 belt for non-parse callers, the Unbond arm's twin (the serializer
   // enforces this at parse, and the FFI vin marshaler below re-refuses the
   // coupling): JoinMarket must commit a canonical-length bond_spend_pk for
   // the record — it never authorizes the credit itself; the identity-key pin
-  // below does — and every other kind on this arm (Rebond / HoldingsUpdate,
-  // both still verify-rejected downstream) must not carry one.
+  // below does — and every other kind on this arm (Rebond and HoldingsUpdate
+  // dispatch above; anything else is verify-rejected downstream) must not
+  // carry one.
   if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
   {
     if (bond.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)

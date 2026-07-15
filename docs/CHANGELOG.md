@@ -4,6 +4,79 @@
 
 ### Added
 
+- **archival: `Rebond` — post-slash reinstatement, end-to-end + the same-epoch
+  slash-interval consensus-halt fix (gate-4 §3.4; P2B-9, ratified 2026-07-14;
+  `feat/bond-fsm-rebond`).** The final bond-FSM kind: the full genesis lifecycle
+  (`JoinMarket / HoldingsUpdate / Rebond / Unbond`) now verifies, connects, and
+  reorg-reverts through the real block path. **Reinstatement, not re-entry:** a
+  slash is a bounded penalty (one shard + one burned `FLOOR` + a zero-earning
+  gap) and `Rebond` resumes the persona in place — same `P_canonical_id`,
+  carried tenure, backlog; it is the only exit from a terminal slash (nothing to
+  unbond at `bonded_total == 0`).
+  - **Consensus-halt fix (commit 1, P2B-9 Pin 5):** every held shard is
+    challenged every epoch against a stale eligibility copy, so an offline
+    N-shard record appended N identical open bad intervals in one block — at
+    N > the 256-interval codec cap the encode threw **inside the block-connect
+    slash hook**, a deterministic consensus freeze reachable by accident.
+    Same-epoch slashes now **coalesce** (append only when no open interval
+    exists); the pop revert was already idempotent-compatible, so the fix is
+    apply-side only. Establishes the **≤ 1 open interval** invariant the Rebond
+    close targets. KAT drives a 300-shard same-epoch sweep (above the cap) with
+    byte-exact revert.
+  - **Verify (Rust-native):** precondition = exactly one open bad interval
+    (zero → not slashed; more → the coalescing invariant's loud corruption
+    reject); `post ⊇ current` duplicate-free non-empty superset (Pin 1 —
+    shedding of carried shards forbidden, stays `HU`-drop's gated job; the
+    slashed shard's abandonment is **priced** — burn + portfolio gap — not
+    prevented, rule-21 reopen if slash economics ever return collateral);
+    `bond_credit == bond_floor(post) − bonded_total` with **zero legal and
+    common** (Pin 2 — the landed slash preserves floor-equality, no deficit
+    exists); interval-log headroom ≤ 254 (Pin 6 — one slot for the next slash +
+    one for `Unbond`'s clean close, exit always reachable); ShardSetCompact
+    both sides. Auth = identity key on the landed GF-1 selector (credit path,
+    Pin 4).
+  - **Connect/pop:** the connect closes the open interval **in place** at
+    `end_exclusive = E_rebond + 1` (Pin 3 — the partial rebond epoch forfeited
+    in both directions, the `E_add+1` mirror; carried and added shards resume
+    together) and rebuilds the coupled add-epochs (carried keep theirs, added
+    take `E_rebond` — Pin 7); the pop re-opens the journaled interval to `MAX`
+    (identity-belted) and reverts the `|added|·FLOOR` credit, zero delta
+    included. New `archival_bond_rebond_log` pre-image journal (maxdbs 45→46)
+    carrying the closed interval's index + start alongside the holdings
+    pre-image — `pre_bonded_total == 0` legal (terminal reinstatement).
+  - **FFI + dispatch:** `shekyl_archival_verify_rebond_bond_post` /
+    `shekyl_archival_rebond_connect` / `shekyl_archival_rebond_pop`; shared
+    `BOND_POST` error space codes 37–44 + the `REBOND_APPLY` family; the C++
+    verify arm marshals the record + full interval log and pins the identity
+    key; per-post live-counter threading throughout. `rebuild_shard_add_epochs`
+    generalized to a K-shard override set (shared with `HU`).
+  - **KATs:** 17 Rust (standing-only/growth/terminal accepts; swap-shed,
+    headroom-boundary, multi-open, and every term/shape reject) + 3 C++
+    real-block-path (growth connect/pop with interval close/re-open and
+    add-epoch rebuild; standing-only zero-credit round-trip; journal codec).
+  - **Docs:** P2B-9 pins in `PHASE_2B_FSM_RETOOL.md` (incl. the corrected Pin 1
+    coverage boundary + the R-3-routed retention-valve forward question);
+    gate-4 §3.2/§3.4/§4.1 swept to the credit equation and the `E_rebond + 1`
+    close.
+  - **Review round (9 findings + 2 Copilot):** two new verify belts —
+    `RebondPostOversize` (an oversize post on a terminal-slashed record
+    collapsed `bond_floor` to 0, verified at zero credit, then aborted block
+    connect at the record encode) and `RebondRecordFloorBroken` (a
+    floor-drifted record now rejects at verify instead of riding to the
+    connect fold's FATAL belt — tx rejection, not a chain halt); the FFI vin
+    marshal now enforces the wire codec's `MAX_HOLDINGS_SHARDS` bound for
+    every post kind (the marshal is a second decoder), and the Rebond connect
+    fold belts oversize posts. The Pin-5 coalescing *decision* moved Rust-side
+    (`slash_open_interval_to_append`, KAT-covered) — the C++ slash writer
+    appends exactly what the fold returns. Duplication paid down: the
+    HU marshal prologue is shared with the Rebond FFI entry
+    (`bond_post_record_marshal_prologue`), the LMDB connect-writer scaffold is
+    generalized to all POST-holdings kinds
+    (`apply_archival_bond_record_update`, with the in-place interval close as
+    a fold output), the verify arms share one record-fact marshal
+    (`archival_marshal_record_facts`), and the Rebond round-trip KATs share
+    one seed/tx builder.
+
 - **archival: `HoldingsUpdate` add + drop — the voluntary one-shard bond
   balance path, end-to-end (gate-4 §4.4; P2B-7; `feat/bond-fsm-holdings-update`).**
   Building on slice A's `bond_duration` freeze: the fourth and final bond-FSM
