@@ -39,14 +39,19 @@ rebooted chain. All multisig uses PQC-only authorization via `scheme_id = 2`.
 See `docs/PQC_MULTISIG.md` for full specification.
 
 Multisig transactions carry N public keys and M signatures. Consensus cap:
-`MAX_MULTISIG_PARTICIPANTS = 7`. Per-configuration overhead:
+`MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G: 2f+1 at f=2 — largest group
+served; see `PQC_MULTISIG.md` §5). Auth is ~⅓ of a solo tx; whole-tx
+weights (1-in/2-out, depth 12, measured FCMP proof) dominate:
 
-| Configuration | Auth overhead | vs single-signer |
-|---|---|---|
-| 2-of-3 | ~12,769 bytes | +7,384 (~2.4x) |
-| 3-of-5 | ~20,153 bytes | +14,768 (~3.7x) |
-| 5-of-7 (typical max) | ~30,921 bytes | +25,536 (~5.7x) |
-| 7-of-7 (worst case) | ~37,680 bytes | +32,295 (~7.0x) |
+| Configuration | Approx tx total | vs 1 solo | vs N solos |
+|---|---|---|---|
+| solo | ~15.6 KB | 1.0× | — |
+| 3-of-3 | ~26.5 KB | ~1.7× | ~0.24× |
+| 5-of-5 | ~37.3 KB | ~2.4× | ~0.34× |
+
+A 5-of-5 spend is ~2.4× one solo and **well under** five separate
+solos — it amortizes FCMP++/Bp+/KEM/prefix fixed costs. Do **not**
+read auth-overhead "×N vs single-signer" as whole-tx cost.
 
 Multisig usage is expected to be well under 1% of transaction volume.
 Aggregate chain growth impact is negligible.
@@ -56,6 +61,9 @@ Practical effect:
 - larger mempool footprint
 - higher relay bandwidth usage
 - larger RPC transaction payloads
+- file-based at N≥3 after MSW-8 (~5.8k chars); N=2 QR-able; §15.3
+  registry is an optimization, not a ship prerequisite
+  (`PQC_MULTISIG.md` §15.3)
 
 ## Wallet Migration Notes
 
@@ -69,17 +77,21 @@ Practical effect:
   not carried forward to the rebooted chain. The `make_multisig` code path,
   MMS transport, and classical multisig wallet state are deleted. All
   multisig uses PQC-only authorization (`scheme_id = 2`).
-- **Multisig wallets:** Equal-participants Option D (`PQC_MULTISIG.md`
-  v1.1): N parallel KEM encaps + N classical spend-auth pubkeys in
-  `tx_extra`; rotating prover per output (1/N permanent-loss if a
-  participant's keys are lost — named limitation). **Not** a fixed
-  group-aggregate PQC key or coordinator-held classical spend key
-  (Option A rejected 2026-04-04). Signing coordination uses file-based
+- **Multisig wallets:** Product path is **Option E′**
+  (`PQC_MULTISIG.md` §15.4a / design §0.5): dealer-mode, group-plaintext
+  `b` (local balance/KI), FROST M-of-N on `y` with per-output tweak,
+  `spend_auth_version = 0x02` (`0x01` never issued). Address after
+  **MSW-8** is KEM-only per participant (+ E′ `B`/`Y`). **Not** fixed
+  group-aggregate PQC key (Option A rejected 2026-04-04) and **not**
+  mandatory-prover Option D. Signing coordination uses file-based
   export/import of payload and signature blobs.
-- **Staking with multisig:** Archival-bond coupling is **out of scope**
-  for V3.1 multisig (Hard Scope Pin #4). Multisig `scheme_id = 2`
-  spends are consensus-valid; do not treat multisig as the recommended
-  staking configuration in this rollout note.
+- **Staking / archival bonds with multisig:** Funding inputs may use
+  `scheme_id = 2` while the bond vin authorizes with scheme-1 P
+  (`bond_spend_pk` remains a single hybrid key — pseudonym uniformity).
+  That requires relaxing tx-wide scheme agreement (**MSW-6**); archival
+  core never sees funding `pqc_auths`. Multisig is **not** "the
+  recommended configuration" for long-duration positions by default —
+  it is an optional custody shape once MSW-6 lands.
 
 ## Payload Limit Guidance
 

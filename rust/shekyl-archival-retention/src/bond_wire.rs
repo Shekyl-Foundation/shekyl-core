@@ -23,9 +23,12 @@ pub const BOND_POST_SIG_CUSTOMIZATION: &[u8] = b"shekyl/archival-bond-post-v1";
 
 /// Exact canonical single [`HybridPublicKey`] encoding length; matches
 /// `config::PQC_HYBRID_SINGLE_KEY_LEN` in `cryptonote_config.h` (not multisig
-/// blob). The wire demands **equality** — a truncated key is not a shorter
-/// valid key, it is malformed (PR #229 review; the C++ oracle's structural
-/// check was tightened to exact equality in the same change).
+/// blob). Stays 1996 even when multisig admits N>1: **pseudonym uniformity**
+/// — all `bond_spend_pk` (P) values are the same shape; a bond commits
+/// exactly one hybrid key so no bond is distinguishable by its controller's
+/// structure. Anonymity constraint, not a bounds check. Rule-21 reopen:
+/// only if P-set uniformity is abandoned. (Truncation ≠ shorter-valid is
+/// also true — PR #229 — and incidental to that load-bearing reason.)
 pub const HYBRID_PUBKEY_CANONICAL_BYTES: usize = SINGLE_KEY_CANONICAL_LEN;
 pub const MAX_HOLDINGS_SHARDS: usize = 4096;
 

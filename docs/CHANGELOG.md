@@ -4,8 +4,42 @@
 
 ### Added
 
+- **docs: MSW-8 — delete vestigial address hybrid_sign_pubkeys
+  (PR #308).** Confirmed zero consumers: `multisig_receiving.rs`
+  derives leaf sign keys from KEM; address field is
+  construct/parse-only (Solution C fossil). ~2.6× address shrink is
+  MSW-8, not E′ (attribution correction). N=2 ≈ QR-able. §15.3
+  registry demoted off critical path. Defect class named:
+  shape-from-prose without a read site. E′ three closes complete
+  (dealer-only, y-tweak→Phase 6, MSW-8).
+
+- **docs: Option E′ — two-component trust split is the product path
+  (PR #308).** `O = ho·G + B + y·T`: `b` group-plaintext (view+link /
+  local KI); `y` FROST M-of-N with `y_out = y_group + y_kem` (E′, not
+  fixed-`y` E). Dealer-mode, no DKG, no `export_multisig_info`.
+  Deletes mandatory-prover Option D scaffold (~prover/heartbeat/
+  counter_proof/I7). `spend_auth_version=0x02`; `0x01` never issued.
+  `frost-sal-v4` = E′ gate (keep primitives; delete Option A wrapper).
+  Does not shrink auth blobs or fix anonymity partition. Address
+  size win deferred to MSW-8. Carrier §0.5; `PQC_MULTISIG` §15.4a /
+  §16.7 aligned.
+
+- **docs: MSW-6 + MSW-G=5 overhaul; MSW-7 retract (PR #308).** Track A
+  staking unblock is **MSW-6** — relax tx-wide `scheme_id` agreement
+  (per-input ∈ `{1,2}`); archival core never sees funding inputs
+  (`verify_*_bond_post(vin, record_state)`). **MSW-G = 5** (2f+1 at
+  f=2; withdraws same-day MAX=8). MSW-1 narrowed to
+  `SINGLE_KEY_CANONICAL_LEN` single-source + DoS ceiling. **MSW-7
+  retracted** — `bond_spend_pk` stays 1996 for pseudonym uniformity
+  (`bond_wire.rs` comment amended). Pin #4 named reversion for MSW-6
+  only. Sequencing: Phase 0 docs → MSW-6 → MSW-1…5 → F-6 → Option E′.
+  Phase 0: `V3_ROLLOUT` whole-tx weights; `PQC_MULTISIG` §5 derivation,
+  §11.1 rotation≠hostile-sender, §14.2 stream attribution, §15.4a
+  two-component O open, §16.3/16.4/16.7 retire DiD/wallet2.
+
 - **docs: MSW-G = 8; address usability fossil; MSW-4/5 narrowed
-  (PR #308).** Security (3-fault BFT) > zone economics; 7 incoherent
+  (PR #308).** *(Superseded same day by MSW-G=5 overhaul above.)*
+  Security (3-fault BFT) > zone economics; 7 incoherent
   once zone crossed. Hostage lens retracted (`E[frozen]=p` independent
   of n). Address bech32m ~36k chars at N=7 (Solution C sign keys) —
   §15.3 registry is a usability ship gate (P0-m), not an MSW-G

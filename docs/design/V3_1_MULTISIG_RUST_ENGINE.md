@@ -37,12 +37,14 @@ not a fork.
 
 | Surface | State |
 | --- | --- |
-| `PQC_MAX_*_BLOB` | N=7 unspendable today; DoS guard fossil. → **MSW-1** (admit MAX=8) |
+| Tx-wide `scheme_id` agreement | Blocks scheme-2 funding + scheme-1 bond vin. → **MSW-6** (staking unblock) |
+| `PQC_MAX_*_BLOB` | DoS fossil; exactness belongs in parse. → **MSW-1** (MAX=5; single-source `SINGLE_KEY_CANONICAL_LEN`) |
 | `MULTISIG_KEY_HEADER_LEN = 2` | Header is 3. → **MSW-1** |
-| Version bytes | §15.1 reserves three axes; code has one fused byte + one constant; `group_id` passes constant not `container.version`; under-tested. → **MSW-4/5** |
-| `MAX_MULTISIG_PARTICIPANTS` | **MSW-G = 8** (decided 2026-07-15). → **MSW-1** |
-| Leaf / scheme separation | Length primary, byte[2] secondary; untested. → **MSW-2** |
-| `DOMAIN_PQC_LEAF` | Dual def; hygiene debt |
+| Version bytes | Address payload correct; `group_id` hashes constants. → **MSW-4/5** |
+| `MAX_MULTISIG_PARTICIPANTS` | **MSW-G = 5** (2f+1 at f=2; withdraws same-day 8). → **MSW-1** |
+| Leaf / scheme separation | Length primary; untested. → **MSW-2** |
+| `bond_spend_pk` | Stays 1996 — **MSW-7 retracted** (pseudonym uniformity) |
+| Address `hybrid_sign_pubkeys` | Vestigial (zero consumers). → **MSW-8** |
 
 **2. Behind the gate — designed, scaffolded, uncompiled — Track B**
 
@@ -54,9 +56,10 @@ scanner path.
 
 **3. Docs that mislead (Phase 0)**
 
-`V3_ROLLOUT` Option A prose — **fixed 2026-07-14** (size table still
-fossil) · §11.1 grinding lead figure · §15.4 was bundled (split) ·
-§16.4 `wallet2` · Pin #4 vs staking recommendation.
+`V3_ROLLOUT` Option A prose + size table + staking note — Phase 0 ·
+§5 MSW-G=5 derivation · §11.1 grinding · §15.4a/b · §16.4/16.7 ·
+privacy stream-attribution · `bond_wire` uniformity comment · Pin #4
+reversion for MSW-6.
 
 ### The gap isn't the design
 
@@ -67,11 +70,13 @@ in the one layer the gate never covered."**
 
 What should be true today and isn't:
 
-1. A 7-of-7 output should be spendable (cross-seam KAT: container → wire).
-2. Version bytes independently movable and tested (V3.1↔2030 interface).
-3. CI compiles `--features multisig`.
-4. Operator docs describe Option D (prose fixed; size table still owed).
-5. FROST Option A lineage gone (disposition DELETE; impl pending).
+1. Scheme-2 funding may share a tx with a scheme-1 bond vin (**MSW-6**).
+2. Blob bounds are a DoS ceiling; exactness is in the parse (**MSW-1**).
+3. Version bytes plumb from address payload into `group_id` (**MSW-4/5**).
+4. CI compiles `--features multisig` (**F-6**).
+5. Operator docs match Option D + whole-tx weights (Phase 0).
+6. FROST Option A lineage gone (DELETE disposition; impl pending).
+7. MAX=5 with written §5 derivation (MSW-G).
 
 ### Process — differential rigor
 
@@ -136,132 +141,120 @@ HEAD diverges immediately. Re-pin at Round 0 / Track A pre-flight.
 Accepted from Round 1 adversarial review (2026-07-14), **revised**
 same day after F-2 retraction + blast-radius / size Q&A.
 
-### Track A — V3.0 pre-genesis wire (**bound family + MAX disposition**)
+### Track A — V3.0 pre-genesis wire (**revised 2026-07-15 overhaul**)
 
-Always-compiled deserialize / verify ceilings. Ship whether or not
-`multisig` flips. **No Track B design-round debt** for the constant
-surface. **No wallet / engine / archival / emission-wire contact** for
-MSW-1/2/3 code (config + wire + verify shadows + KATs). Curve tree /
-leaf size **unaffected**.
+Always-compiled tx / deserialize / verify surfaces. Ship whether or not
+`multisig` flips. **Archival core is untouched** (confirmed at source:
+`verify_*_bond_post(vin, record_state)` never sees funding inputs /
+`pqc_auths` / `scheme_id`; `emission_verify.rs:20` — FCMP fee balance
+is C++ tx layer, not that module; Rust submit verifier has no archival
+arm). Architecture already separates: **P hot/disposable**,
+`bond_spend_pk` cold/once (JoinMarket vin only, §9.11), **multisig holds
+funds before and after**.
 
-**Framing correction (post-MSW-G):** calling F-1 a pure "correction,
-not growth" is true of the *container byte layout* (already 14,199 for
-N=7) but incomplete as a *consensus behavior* claim. Today's fossil
-bound **accidentally enforces MAX=6** on the wire. Raising the bound
-to admit N=7 **unhides** the 8-in×7-of-7 full-reward-zone case that
-has never been spendable. Choosing `MAX=6` keeps de-facto=de-jure.
-**MSW-1 and MSW-G are one disposition.**
+**MSW-7 retracted.** `bond_spend_pk` stays exactly
+`SINGLE_KEY_CANONICAL_LEN` (1996). Pseudonym uniformity — all P's look
+the same; a bond commits exactly one hybrid key so no bond is
+distinguishable by controller structure. Anonymity constraint, not a
+bounds check. Rule-21 reopen: only if P-set uniformity is abandoned.
+Amend `bond_wire.rs:24-28` accordingly (PR #229 truncation note stays
+true and incidental).
 
-One validation surface (rule 19):
+#### Wire work
 
 | ID | Work |
 | --- | --- |
-| **MSW-1** | Reconcile `PQC_MAX_*_BLOB` / `MULTISIG_KEY_HEADER_LEN` against `expected_blob_len` / sig layout for **MAX=8**. Single-source; delete local shadows; cross-seam KAT for every `n ∈ 1..=8`. Also bump `shekyl-address` `n_total > 7` guards. **Behavior change** vs today's de-facto-6. |
-| **MSW-2** | Pin scheme-disjointness (doc + KAT): no byte string dual-parses. **Primary:** length (`1996 ∉ {3+n·2028}`). **Secondary:** byte[2] `reserved==0` ⊥ `m_required≥1` (structural; survives key-size moves that shift length). Rule-21 reopen on **either** separator weakening: `reserved` gains meaning, container-version bump, new scheme id, **or** a key-size / layout change that makes a scheme-2 length equal 1996 (V4 lattice-only is the live threat to length). **Leaf left alone.** |
-| **MSW-3** | Fix `"output committed="` misattributions; record MS-8 retirement. |
-| **MSW-4** | **Version plumbing gap (narrowed).** `MultisigAddressPayload` already has separate `version` / `group_version` / `spend_auth_version` (`multisig_address.rs:77-86`). Bug: `multisig_group_id` ignores that payload and hashes compile-time constants. Fix: take versions **from the address payload** (or equivalent caller-supplied triple that matches it); parse accepts known container-version set; KAT `group_version` variation. Smaller than "invent unfuse" — address got §15.1 right; group_id did not. |
-| **MSW-5** | **Disposition (A) — landed as fact.** Address/`group_id` is the intentional carrier; three §15.1 axes already separate fields on `MultisigAddressPayload`. Not a container wire field. Doc §15.1 honesty + KAT reserved `0x02` ≠ `0x01` in group_id preimage (lock to `0x02`, not only `0xFF`). |
-| **MSW-G** | **DECIDED MAX=8** (2026-07-15). Security (3-fault) > zone economics; 7 incoherent once zone crossed. See §0.3. |
+| **MSW-6** | **Relax tx-wide `scheme_id` agreement** — the staking unblock. Today `expected_scheme = tx.pqc_auths[0].scheme_id` forces every input to match; scheme-2 funding cannot share a tx with scheme-1 bond vin (`blockchain.cpp:4717` pins P at 1996). **Change:** per-input scheme ∈ closed set `{1,2}`; drop tx-wide agreement — *or* exempt bond-post txs the way `is_archival_serve_credit_only` already is (`:4256`). Sites (lockstep both batteries): `blockchain.cpp:4256-4262`, `tx_pqc_verify.cpp:189-193` (`expected_scheme_id`), `shekyl-daemon-rpc/.../verifier.rs:326,335`. **Safe:** self-referential DiD by its own comment (cites `PQC_MULTISIG.md` §16.3 — clean withdrawal, not reversal); each leaf binds its blob (`h_pqc = H(blob)`); cross-scheme = MSW-2 length disjointness. Guards nothing; costs the use case. **Independent of `--features multisig`.** Own validation surface. |
+| **MSW-1** | **Bound family (narrowed).** Copy `bond_wire.rs:11` pattern: `use shekyl_crypto_pq::multisig::SINGLE_KEY_CANONICAL_LEN`. Kill duplicate `1996` literals in `shekyl-wire::transaction` / `cryptonote_config.h`; delete `tx_pqc_verify.cpp:49` shadow. Split jobs: `PQC_MAX_*_BLOB` = **generous DoS ceiling** (round number, documented headroom; bump needs consensus rationale); correctness = `MultisigKeyContainer::from_canonical_bytes` exact-length parse. Cross-seam KAT `n ∈ 1..=MAX` through both deserializers (absence produced F-1). Sized for **MAX=5**. |
+| **MSW-2** | Disjointness KAT — **length primary**, byte[2] secondary. Leaf left alone. |
+| **MSW-3** | `"output committed="` misattributions; MS-8 retirement record. |
+| **MSW-4** | `multisig_group_id` reads versions from `MultisigAddressPayload` (already has `version`/`group_version`/`spend_auth_version`) — plumbing gap, not container change. |
+| **MSW-5** | Disposition **(A)** — address/`group_id` intentional carrier; already built on the payload. KAT reserved `0x02`. |
+| **MSW-8** | **Delete `MultisigAddressPayload.hybrid_sign_pubkeys`.** Vestigial — constructed/validated/serialized/parsed, **never consumed** (`multisig_receiving.rs:163` populates leaf keys from KEM; address field unread). Solution C fossil. Free pre-genesis. Applies to D and E′ identically. ~2.6× address shrink is **this**, not E′. |
+| **MSW-G** | **DECIDED MAX=5** (2026-07-15 overhaul; withdraws same-day MAX=8). See §0.3. |
 
-### Track B — V3.1 engine (MS-1…MS-7, gated, **bounded design life**)
+#### Explicitly not changing
 
-Feature-gated wallet orchestration. **§0.4:** ~4 years as active
-design, then permanent legacy beside V4 — seal well, do not
-architect-for-forever. Rule-26 halt remains correct **here**. Round 1
-closure prerequisites: **R1-F-6 CI + R1-F-7** (F-3…F-5/F-9
-**dispositioned DELETE**). **MS-8 retired**.
+- `bond_spend_pk` length / shape (MSW-7 retracted)
+- Bond record schema
+- P (hot key) shape
+- Emission vin
+- Archival retention core / FFI verify signatures
+- No "multisig archival coupling" inside bond semantics — MSW-6 is a
+  **tx-layer** scheme rule only
 
-**Size / fee items belong here (not Track A):**
+### Track B — engine (MS-1…MS-7, gated) → **pivots to Option E′**
 
-- Fee model is scheme-1-only (`tx_fee_model.rs:151-158`
-  `pqc_auth_weight`) — underpays multisig → R-B / MS-5.
-- `v31` `MAX_INPUTS = 128` vs consensus `FCMP_MAX_INPUTS_PER_TX = 8`
-  — bad-states-representable → R-C / intent type.
-- Per-input wire size table (2-of-2…7-of-7) informs fee + UX, not
-  the tree.
+Round 1 still needs **F-6 CI** + **F-7** for any gated work. F-3
+DELETE of Option A fossil stands (keep `frost_sal` / `frost_dkg`
+primitives; drop `MultisigGroup.pqc_public_key`).
 
-### Hard scope pins (amended 2026-07-14; pin-2 revised after F-2 retraction)
+**Product path is Option E′** (§0.5) — dealer-mode, MAX=5,
+`spend_auth_version = 0x02`, **`0x01` never issued**. Mandatory-prover
+Option D machinery is deleted, not shipped. Spec after Track A + F-6;
+implementation still needs explicit go-ahead.
 
-1. **No Track B production code on this branch** until design closure
-   + pre-flight + explicit go-ahead.
-2. **Feature gate protects wallet orchestration only.** It does
-   **not** protect `PQC_MAX_*_BLOB` (always-compiled; **R1-F-1**).
-   Cross-scheme leaf safety is prefix-disjointness (**MSW-2**), not
-   the feature gate. Default packages still must not enable
-   `multisig`.
-3. **Rust owns new wallet multisig logic.** C++ = LMDB / chain-DB +
-   verify FFI. **Existing** `wallet2` PQC multisig group surface
-   (`create_pqc_multisig_group`, `m_pqc_multisig_*`,
-   `shekyl_pqc_multisig_group_id` at `:9828-9852`) is acknowledged
-   substrate — MS-2 forbids *thickening* it; deletion/migration is
-   Phase 5 / rewrite fodder, not Track A.
-4. **Archival out of scope** for Track B (and for revised Track A).
-5. **Track A** lands off `dev` on `feat/msw-*` when go-ahead is given
-   — not held behind Track B rounds. **MSW-G = 8** (decided). MSW-1
-   follows that pick; **MSW-4/5** remain priority-1 under §0.4.
-6. **V4 is rewrite-and-coexist, not evolve-in-place** (§0.4 / §15.4–15.5).
-   V3.1 stack stays live forever beside V4. Track A bytes are the
-   entire V3.1↔V4 interface. Track B is a bounded, well-sealed design
-   with a known replacement date — not architecturally-integral-forever.
+### Hard scope pins (amended 2026-07-15)
+
+1. **No Track B production code** until design closure + pre-flight +
+   explicit go-ahead.
+2. **Feature gate protects wallet orchestration only** — not
+   `PQC_MAX_*_BLOB`, not the tx-wide scheme rule (MSW-6).
+3. **Rust owns new wallet multisig logic.** Don't thicken `wallet2`
+   PQC group surface.
+4. **Archival bond *semantics* out of scope** for Track A/B wallet
+   work. **Reversion (named):** MSW-6 *is* the permitted archival
+   *tx-layer* coupling — relax scheme_id agreement so scheme-2 funding
+   may accompany a scheme-1 bond vin. It does **not** reopen archival
+   core, `bond_spend_pk`, or record shape. Prior Pin #4 absolute
+   "no archival contact" is withdrawn for that one rule only.
+5. **Track A** on `feat/msw-*` after explicit go-ahead. Sequencing
+   below. **MSW-G = 5.**
+6. **V4 rewrite-and-coexist** (§0.4). Discriminability > evolvability.
+
+### Sequencing (implementation order when go-ahead lands)
+
+1. **Phase 0 docs** — stop the misdirection (ROLLOUT fossils, §5
+   MSW-G derivation, §11.1 grinding reframes, §15.4a/b, §16.4/16.7,
+   privacy stream-attribution, `bond_wire` comment, Pin #4 reversion).
+   Doc-only; no feature gate.
+2. **MSW-6** — own validation surface; staking unblock; independent of
+   `multisig` feature.
+3. **MSW-1/2/3/4/5/8 at MAX=5** — one surface; cross-seam KAT is the
+   gate; MSW-8 deletes address `hybrid_sign_pubkeys` fossil.
+4. **F-6** CI `--features multisig` — Round 1 closure + Track B trust.
+5. **Option E′ spec + `frost-sal-v4` gate** — product path (§0.5);
+   deletes mandatory-prover Option D scaffold.
 
 ---
 
-## §0.3 MSW-G — **DECIDED: MAX = 8** (2026-07-15)
+## §0.3 MSW-G — **DECIDED: MAX = 5** (2026-07-15 overhaul)
 
-**Decision.** `MAX_MULTISIG_PARTICIPANTS = 8`.
+**Decision.** `MAX_MULTISIG_PARTICIPANTS = 5`.
 
-**Irreducible conflict.** 3-fault majority-threshold BFT needs N≥7
-(4-of-7 / 5-of-8). A worst-case 8-in×N-of-N that stays inside the
-300 KiB full-reward zone needs N≤6. **You cannot have both.**
-Priority hierarchy: fault tolerance is availability/security; the zone
-case is performance/economics. **Security > performance → N ≥ 7.**
+**Derivation (write into `PQC_MULTISIG.md` §5).** MAX = **2f+1 at f=2**
+— classical majority-threshold BFT for the *largest group we intend to
+serve*, not a resource/zone/bias bound. Consumer: largest group served.
+**Not** "fill the reward zone" and **not** "power-of-two for modulo bias."
 
-**Why not 7.** Once N≥7 the zone lens is binary (already over the
-line). Marginal zone cost of 8 vs 7 is **zero** on that lens (328 KiB
-vs ~371 KiB against a 300 KiB line already crossed). MAX=8 permits
-4-of-7 *and* 5-of-8; MAX=7 forecloses 5-of-8. Raising a cap later is a
-hard fork that strands nothing; **lowering strands funds** — genesis
-errs toward permitting. Bias-free at `hash[0]%n` is belt-and-braces
-(wide-reduce remains a separate fix at any N).
+**Withdraws same-day MAX=8.** The 8 pick optimized an irreducible
+3-fault-vs-zone conflict under "security > performance → N≥7" and then
+picked 8 because the zone lens was binary once crossed. That framing
+treated the *cap* as the BFT parameter. Correct framing: the operator
+chooses m-of-n ≤ MAX; MAX is the largest n we ship tooling for. **5**
+serves 3-of-5 (f=2) cleanly, stays inside today's de-facto fossil
+behavior for worst-case size, and matches Option E's intended product
+surface. Rule-21 reopen of MAX: only if a named consumer requires
+n>5 *and* zone/address usability are dispositioned.
 
-**Coherent alternative rejected:** MAX=6 keeps the zone clean and pays
-3-fault tolerance permanently. **7 is incoherent** — pays the zone case
-and the worst modulo bias in `1..=7` for strictly less than 8.
-
-### Lenses that drop out (do not pick MAX)
+### Lenses that do not pick MAX
 
 | Lens | Disposition |
 | --- | --- |
-| **Bias** (`hash[0]%n`) | Fixable by wide-reduce / rejection sampling at any N. Derivation bug ≠ consensus constant. |
-| **Hostage fraction** | **Retracted.** One mandatory prover per output → `E[fraction frozen] = p`, **independent of n**. Rotation buys variance reduction vs fixed-prover (`P(100% frozen): p → pⁿ`), not a better expectation. 6→8 moves per-loss blast radius 16.7%→12.5% — marginal. **Deleted from size-expiry note.** |
-| **Address bech32m size** | Fourth fossil (below). Does **not** discriminate 6/7/8 — all unusable as text. |
-
-### Address-size fossil (does not move MSW-G; gates usability)
-
-`shekyl-address/src/multisig_address.rs`: `PER_PARTICIPANT_LEN =
-HYBRID_KEM_PUBKEY_LEN (1216) + HYBRID_SIGN_PUBKEY_LEN (1984) = 3200`,
-asserted `HEADER_LEN + n * PER_PARTICIPANT_LEN`. Apr 15 "~13 KB text
-at N=7" was **KEM-only** — predates Solution C putting
-`hybrid_sign_pubkeys` in the address. Real payload ≈ `6 + n·3200`
-bytes; bech32m text ≈ 1.6×:
-
-| N | payload | ~bech32m chars |
-| --- | --- | --- |
-| 6 | 19,206 B | ~30.7k |
-| 7 | 22,406 B | ~35.8k |
-| 8 | 25,606 B | ~41.0k |
-
-All equally unusable as copy-paste text. **§15.3 chain-anchored group
-registry is not a V3.3 nice-to-have — it is a usability ship gate** at
-any MAX. Track as **P0-m** / FOLLOWUPS; does not reopen MSW-G.
-
-### Historical context (superseded)
-
-No in-repo derivation for the prior value 7 (`git log -S` passenger of
-unrelated work). Fossil bound + zone implied effective MAX=6 on the
-wire. MSW-1 raises bounds to admit MAX=8 (**behavior change** vs
-today's de-facto-6). `V3_ROLLOUT` Option A prose fixed; size table
-still fossil (P0-h remainder).
+| **Bias** | Wide-reduce separately; not a consensus-constant driver. |
+| **Hostage fraction** | **Retracted** — `E[frozen]=p`, independent of n. |
+| **Reward zone** | Informs worst-case fee UX; does not set MAX under the 2f+1 derivation. |
+| **Address bech32m** | After **MSW-8**, payload is `10 + N×1216` (KEM only). N=2 ≈ QR-able. Does not set MAX. §15.3 registry **re-priced** — optimization, not prerequisite. |
 
 ---
 
@@ -274,8 +267,8 @@ adds **no** classical exposure. Classical SAL is a **liveness**
 dependency (1/N *loss*), not a compromise path. Curve HNDL on
 membership privacy is real and **not multisig-specific**. Grinding /
 rotation / griefing → **availability engineering** (MS-4/5), not the
-Phase 6 cryptographer queue. Shipping now ≈ economics (~3× tx size
-for threshold custody), not crypto-maturity.
+Phase 6 cryptographer queue. Shipping now ≈ economics (~2.4× tx size
+for 5-of-5 threshold custody), not crypto-maturity.
 
 **§15.4 phrase pin:** "pure-PQC spend-auth" ≠ lattice SAL (impossible
 under FCMP++). `spend_auth_version = 0x02` = **15.4a** threshold
@@ -288,15 +281,175 @@ dPN25 for 15.4b size. Do **not** couple to F-1 / MSW-G.
 
 ---
 
+## §0.5 Option E′ — intended use of two-component `O` (2026-07-15)
+
+**Status.** Design pin for the **product** multisig path. Spec detail
+and implementation await Track A + F-6 + explicit go-ahead. Replaces
+"Option E later" with a named shape. **Take E′, not plain E.**
+
+### The one-line change
+
+Solo binds both components to the wallet: `b` long-term, `y` per-output
+KEM-derived; recipient holds both.
+
+**Option E′ splits them across trust axes** — the intended use of
+`O = ho·G + B + y·T` (`shekyl-crypto-pq` `output.rs:286-304`):
+
+| component | in solo | in Option E′ | enables |
+| --- | --- | --- | --- |
+| **`b` → `B = b·G`** | wallet spend secret | **group-plaintext.** Every participant holds it. | `ho`, `x = ho+b`, key image `I = x·Hp(O)` → **local scan, local balance, local spent-detection** |
+| **`y` → `Y = y·T`** | per-output, KEM-derived | **FROST M-of-N group secret** (with per-output tweak below) | **spending.** Nothing else. |
+| `ho`, `z`, amount keys | per-output KEM | per-output, N-fold fan-out of one secret `s` | `O` stays one-time |
+| per-output PQC key | KEM-derived | per-participant from **their own** `ss_i` | M hybrid sigs, `scheme_id=2`, no group fingerprint |
+
+`compute_output_key_image(&combined_ss, idx, &spend_secret, &hp_of_output)`
+— **`y` is not an argument.** That is the whole thing. Apr 9 named the
+`y = 0` complaint: *"an attacker who learns `x` can spend it without
+needing any T-side secret."* With `y ≠ 0`, **`x` is discovery and `y`
+is authorization.** E′ thresholds exactly the component that was
+already the spend-auth.
+
+`b` becomes a group **view+link key**. Compromise one participant →
+they watch, they can't spend. A security model users already have a
+name for.
+
+### E vs E′ — take E′
+
+| | `y` per output | output algebra vs solo |
+| --- | --- | --- |
+| **E** | fixed `y_group` for all group outputs | `O₁−O₂ = (ho₁−ho₂)·G` (no T term) |
+| **E′** | `y_out = y_group + y_kem` (`y_kem` per-output, public to group) | same *shape* as solo: G and T terms both move |
+
+FROST signs under `Y_group`; `y_kem·T` is added in the clear — standard
+key tweak (Taproot-shaped). E does not *obviously* leak (differences
+are still just points without the DL), but **E′ costs one scalar
+addition** and keeps every future analysis's "per-output `y`"
+assumption. Under "don't be structurally special," take the free one.
+
+**E′ is the lean.** The tweak soundness claim is standard but still a
+crypto claim → **Phase 6**, as a small well-formed question, not
+"review our protocol."
+
+### Why it's usable — two unlocks
+
+1. **No `export_multisig_info`.** Monero's killer was split spend keys
+   forcing a file round-trip with every co-signer *before you can see
+   your balance*. Here nobody needs a ceremony to know what they have.
+   **Absent by construction, not fixed.**
+2. **No DKG for the ship product.** One owner, three devices ⇒ **the
+   owner is the trusted dealer.** Generate `b`, generate `y_group`,
+   Shamir-split `y_group` locally, write three files. One button.
+   TRaccoon's paper concedes the same trusted-KeyGen assumption. DKG
+   exists for mutually-distrusting parties (buyer/seller/arbitrator) —
+   **reserve it** behind a later `spend_auth_version` / ceremony mode;
+   **do not ship it** as the default.
+
+Net UX: **SLIP-39-shaped setup, local balance, and one ceremony at the
+only moment a ceremony belongs — spending.**
+
+### What it deletes (mandatory prover is the root)
+
+| dies | ~lines (tree today) |
+| --- | --- |
+| `v31/prover.rs` — assignment, receipts, vetoes, equivocation | 231 |
+| `v31/heartbeat.rs` — prover-availability | 274 |
+| `v31/counter_proof.rs` — prover equivocation | 297 |
+| `rotating_prover_index` + `% n` bias + grinding finding | — |
+| `validate_multisig_output_at_receive` (I7) | — |
+| griefing scores, R-F storage question | — |
+| much of `v31/invariants.rs` | ~491 |
+
+**Survives:** `messages.rs`, `encryption.rs`, `group_descriptor.rs`
+(transport), `intent.rs`, `state.rs` (still agree on what to spend).
+
+**Adds:** `frost_sal.rs` (852, in-tree; `y≠0` gate open) + **nonce
+discipline** (F-9: make reuse unrepresentable by type, not by review).
+
+### What it does *not* buy
+
+- **Not smaller on the wire.** M hybrid sigs still ride; the leaf
+  commits `H(pqc_pk)` and consensus verifies it. Same auth bytes as
+  Option D. Size win = composite lattice sig (dPN25 / 15.4b, 2030+).
+- **Does not fix the anonymity partition.** `scheme_id=2` and N-fold
+  fan-out remain visible. Same cost at N=3 as at N=5. Honest price;
+  April priced it circularly ("negligible volume").
+- **Address size is not an E′ win.** The ~2.6× shrink
+  (`PER_PARTICIPANT_LEN` 3212 → 1216) is **MSW-8** — deleting the
+  vestigial address `hybrid_sign_pubkeys`. D gets it too. E′ address
+  adds `B` + `Y_group` on top of N×1216; still smaller than today's
+  fossil, still a file at N=5. §15.3 registry re-priced (below).
+- **Nonce discipline is the new footgun.** F-9 already found `sign_own`
+  with no state guard.
+
+### Status in-tree
+
+| | |
+| --- | --- |
+| **Open** | `output.rs:304` two-component landed, `y ≠ 0` — Apr 9 blocker dead. `frost_sal.rs` + `frost_dkg` exist (852 + 423). |
+| **Wrong** | They sit under `MultisigGroup` with **Option A** `pqc_public_key` (fixed per group). **DELETE** that wrapper; **keep** the FROST primitives. |
+| **Missing** | `frost-sal-v4 = []` was specified in §16.7 and never built — that is **E′'s feature gate**, and building it is the first real coexistence boundary (discriminability for 0x02). |
+| **Version** | `spend_auth_version = 0x02` for E′; **`0x01` never issued.** §15.5 + MSW-4/5 make that real instead of aspirational. |
+| **Address** | After MSW-8: KEM-only per participant. E′ layout: `B` + `Y_group` + N×1216 + `spend_auth_version=0x02`. |
+
+### MSW-8 — address `hybrid_sign_pubkeys` is vestigial (CLOSED)
+
+**Confirmed at source.** `multisig_receiving.rs:163`: *"hybrid_sign_pubkeys:
+populated by this function using per-participant KEM derivation."*
+`:186-214` encaps to each address `kem_pubkey`, derives spend-auth /
+view-tag / hybrid sign seed from `ss` — **never reads address sign
+keys.** In `multisig_address.rs` the field is declare / construct /
+validate / serialize / parse — **and nowhere else in the tree.**
+
+`multisig_group_id` hashes `MultisigKeyContainer` keys (the leaf
+ephemeral hybrid keys), not the address field. §5.3 prose that
+"signing pubkeys in the address define group identity" is itself
+fossil — code never did that from the address.
+
+**Disposition:** **MSW-8** — delete `MultisigAddressPayload.hybrid_sign_pubkeys`
+(+ `HYBRID_SIGN_PUBKEY_LEN` / `PER_PARTICIPANT_LEN` collapse to 1216).
+Free pre-genesis; hard fork after first issuance. Same for D and E′.
+
+| N | today (fossil) | after MSW-8 |
+| --- | --- | --- |
+| 2 | ~10,300 chars | **~3,900** ← QR-able (alphanumeric cap ~4,296) |
+| 3 | ~15,400 | **~5,850** |
+| 5 | ~25,700 | **~9,740** |
+
+**§15.3 re-price:** chain-anchored group registry was carrying the
+fossil's weight. At ~5,850 for 2-of-3 it is an optimization; at 15,400
+it looked like a prerequisite. **Registry may leave the critical path.**
+P0-m demoted accordingly.
+
+**Defect class (named):** fifth constant/field this session whose
+semantics lived only in imagined consumers — `PQC_MAX_*_BLOB`,
+`MAX_MULTISIG_PARTICIPANTS`, `bond_spend_pk` length rationale,
+fused `group_version`, and now a field with **zero** consumers.
+Not five bugs — one class: **shape-from-prose without a read site.**
+
+### Relation to Track A / 15.4a
+
+E′ *is* 15.4a in product form (threshold classical SAL on `y`), shipped
+as the only issued `spend_auth_version` rather than a later migration
+from mandatory-prover 0x01. Track A (MSW-1…6, **MSW-8**, MSW-G) still
+lands first — wire bounds, scheme rule, version plumbing, address
+fossil — because E′ still uses `scheme_id=2` containers and
+genesis-frozen bytes.
+
+---
+
 ## §0.4 Coexistence pin — V4 rewrites beside V3.1; it does not replace it
 
-**Source.** §15.4: V3.1 outputs remain spendable indefinitely under
-`spend_auth_version = 0x01`. §15.5: no implicit upgrades; migration is
-an explicit tx. In 2030 you do **not** `rm -rf multisig/v31/`. You add
-`multisig/v4/` beside it. Both stacks stay live forever — two receive
-paths, two spend paths, two container formats — discriminated by
-**version byte and address HRP**. V3.1 becomes permanent legacy the day
-V4 ships.
+**Source.** §15.5: no implicit upgrades; migration is an explicit tx.
+**Product path (E′, §0.5):** only `spend_auth_version = 0x02` is issued;
+`0x01` never lands on-chain. A later stack (lattice auth, mutual-distrust
+DKG mode, …) lands **beside** E′ under a new version/HRP — you do **not**
+`rm -rf` the E′ stack. Both stay live forever, discriminated by
+**version byte and address HRP**.
+
+*(Historical §15.4 prose about "0x01 outputs remain spendable" assumed
+a mandatory-prover V3.1 that E′ replaces before issue. If any 0x01
+test/fixture outputs exist, they stay spendable under §15.5; they are
+not a product surface.)*
 
 ### What V3.1 owes V4 is discriminability, not evolvability
 
@@ -398,7 +551,7 @@ design's acceptance**, not implementation.
 
 | ID | Sev | Finding (one line) | Disposition |
 | --- | --- | --- | --- |
-| **R1-F-1** | CRITICAL | Fossil `PQC_MAX_*_BLOB`; N=7 unserializable. | **Accepted → MSW-1 + MSW-G=8** (bounds admit 8; unhides zone case by priority). |
+| **R1-F-1** | CRITICAL | Fossil `PQC_MAX_*_BLOB`; N=7 unserializable. | **Accepted → MSW-1 + MSW-G=5** (DoS ceiling + exact-length parse; MAX=5 after overhaul). |
 | **R1-F-2** | CRITICAL → **retracted as leaf change** | Original: change leaf preimage / treat length as sole separator. **Retraction:** leaf shared scheme-1+2; change not free. Cross-scheme already impossible: **length primary** (`1996 ∉` scheme-2 lengths); **byte[2] secondary** (`reserved==0` ⊥ `m_required≥1`). MS-8 redundant. Dual `DOMAIN_PQC_LEAF` = hygiene debt. | **Leaf change REJECTED.** **MSW-2 = both separators (length primary).** **MS-8 RETIRED.** Misattribution → MSW-3. |
 | **R1-F-3** | HIGH | `multisig/{dkg,group,signing}.rs` = **Option A** fixed-group PQC key fossil vs v31 Option D. Not the Apr 15 rotating-vs-fixed *prover* fork. | **DELETE** (not `frost-sal-v4` quarantine). Fuses SAL keys (V4-want) with `pqc_public_key` (Option A, rejected 2026-04-04). Unblocks MS-1 lineage. F-4/F-5/F-9 evaporate on delete. |
 | **R1-F-4** | HIGH | Two `group_id` defs: deterministic `multisig_group_id` vs caller-supplied `dkg.rs` context. | **Accepted → evaporates with F-3 DELETE** (DKG caller-supplied id dies with the file). Canonical = `multisig_group_id` / v31. |
@@ -417,7 +570,7 @@ design's acceptance**, not implementation.
 | A1 | N=7 output lands; spend never serializes | **No** — R1-F-1 |
 | A2 | Present scheme-2 blob against scheme-1 leaf (or reverse) | **Armed by construction** — **length primary** (`1996 ∉` scheme-2 lengths); byte[2] secondary. Guard both with MSW-2 KAT. |
 | A3 | Spender lies about `group_id` | **Vacuous** — already in leaf; MS-8 retired |
-| A4 | Mix scheme 1/2 across inputs | Self-referential intra-tx only |
+| A4 | Mix scheme 1/2 across inputs | **Vacuous DiD** — each leaf binds its blob; length disjointness is MSW-2. Tx-wide agreement costs MSW-6's use case → **relax** |
 | A5 | Malicious DKG steers `group_id` | **No** — R1-F-4 |
 | A6 | Replay `sign_own` / nonce reuse | **No** — R1-F-9 |
 | A7 | Forge FROST `participant` index | **No** on FROST lineage |
@@ -651,11 +804,11 @@ Deferred to Round 2 after MS-1 **and** F-3 lineage fate.
 | **P0-f** | FA-6b FOLLOWUPS | V3.1 engine ship gate |
 | **P0-g** | FOLLOWUPS "wire group_id into consensus" | **Close as superseded by MSW-2 / MS-8 retirement** |
 | **P0-h** | `V3_ROLLOUT.md` | **Partial land 2026-07-14:** delete Option A "coordinator-held" + "recommended for staking" drift. Still owed: replace fossil ~7× auth-overhead table with whole-tx weights (post-MSW-1 sizes). |
-| **P0-i** | `MAX_MULTISIG_PARTICIPANTS` | **Landed 2026-07-15: MAX=8** (§0.3). |
+| **P0-i** | `MAX_MULTISIG_PARTICIPANTS` | **Landed 2026-07-15: MAX=5** (§0.3; withdraws same-day provisional 8). |
 | **P0-j** | `PQC_MULTISIG.md` §15.4 + `VERSIONING.md` | **Landed 2026-07-14:** split 15.4a/15.4b; posture pin |
 | **P0-k** | `PQC_MULTISIG.md` §15.1 honesty | Address payload already correct; group_id plumbing = MSW-4 |
 | **P0-l** | R1-F-3 DELETE | **Disposition landed:** delete Option A FROST fossil; not `frost-sal-v4` quarantine. Impl = Track B / cleanup. |
-| **P0-m** | Address bech32m size / §15.3 registry | **Usability ship gate:** ~36k chars at N=7 (Solution C sign keys in address). Chain-anchored group registry not V3.3 optional. Does not reopen MSW-G. |
+| **P0-m** | Address bech32m / §15.3 registry | **Re-priced 2026-07-15:** MSW-8 deletes vestigial address sign keys (~2.6×). N=2 QR-able. Registry demoted from critical-path prerequisite to optimization. |
 
 ---
 
@@ -792,8 +945,8 @@ not a quiet reopen of MS-8.
   assume length-only separation.
 - R-H: F-3 DELETE PR (`dkg`/`group`/`signing` + tests); not quarantine.
 - R-I: F-5 zeroize + ledger migration for group secrets.
-- R-J / **MSW-G:** **CLOSED = 8** (§0.3). Optionally improve
-  `rotating_prover_index` (wide-reduce) as a separate protocol PR.
+- R-J / **MSW-G:** **CLOSED = 5** (§0.3; withdraws same-day 8). Optionally
+  improve `rotating_prover_index` (wide-reduce) as a separate protocol PR.
 
 ---
 
@@ -803,16 +956,20 @@ not a quiet reopen of MS-8.
 
 1. Explicit user go-ahead for Track A implementation.
 2. Short-lived `feat/msw-*` off current `dev`.
-3. One validation surface: **MSW-G=8** → MSW-1 (bounds for MAX=8 +
-   single-source + cross-seam KAT `n∈1..=8` + address `n≤8` + delete
-   shadows) + MSW-2/3 (both separators + misattribution) + MSW-4/5
-   (group_id ← address-payload versions; KAT reserved namespace).
-4. **Do not** change leaf preimage / FFI leaf hash ABI / emission
-   Auth-B / test-vector corpus as part of Track A.
-5. **Do not** adopt lattice-threshold / TRacoon here.
-6. **MSW-G decided.** Awaiting **explicit Track A implementation
+3. **MSW-6 first** (own surface) — relax tx-wide scheme_id; archival
+   core untouched.
+4. Then one surface: **MSW-G=5** → MSW-1 (DoS ceiling +
+   `SINGLE_KEY_CANONICAL_LEN` single-source + cross-seam KAT
+   `n∈1..=5` + delete shadows) + MSW-2/3 + MSW-4/5 (group_id ←
+   address-payload versions) + **MSW-8** (delete address
+   `hybrid_sign_pubkeys`).
+5. **Do not** change leaf preimage / FFI leaf hash ABI / emission
+   Auth-B / test-vector corpus / `bond_spend_pk` length as part of
+   Track A.
+6. **Do not** adopt lattice-threshold / TRacoon here.
+7. **MSW-G decided (=5).** Awaiting **explicit Track A implementation
    go-ahead** (this doc does not authorize code). F-6/F-7 remain
-   Round 1 / Track B and do **not** block Track A.
+   Round 1 / Track B and do **not** block Track A or MSW-6.
 
 ### §7.2 Track B (MS-*) — rule-26 halt
 
@@ -866,3 +1023,6 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-14 | **R1-F-3 → DELETE:** Option A fixed-group PQC fossil (not Apr 15 rotating-vs-fixed prover; that closed with named 1/N loss). Not a V4 seed — fuses SAL keys with rejected `pqc_public_key`. `frost-sal-v4` later for clean SAL only. V3_ROLLOUT Option A prose fixed (P0-h partial). Retract "Phase 6 cryptographer" claim on per-output privacy. |
 | 2026-07-15 | **Corrected picture banner:** design done (April table); gap = unbuilt + consensus leak past gate. Track A urgent / Track B bounded. Scorecard. §11.1 grinding lead → ~`k·n` availability, not scare-`n^k`. |
 | 2026-07-15 | **MSW-G = 8.** Security (3-fault) > zone; 7 incoherent. Bias + hostage lenses drop (hostage E[frozen]=p independent of n — retracted). Address bech32m ~36k chars = usability fossil (P0-m), not MSW-G. MSW-5(A): address payload already has three version axes; MSW-4 = group_id plumbing to that payload. R1-F-2 row: length primary. |
+| 2026-07-15 | **Overhaul:** MSW-6 (relax tx-wide scheme_id — staking unblock; archival core untouched). MSW-G **5** (2f+1 at f=2; withdraws 8). MSW-1 narrowed to SINGLE_KEY_CANONICAL_LEN single-source + DoS ceiling. MSW-7 retracted (`bond_spend_pk` 1996 = pseudonym uniformity). Pin #4 named reversion for MSW-6 only. Sequencing: Phase 0 docs → MSW-6 → MSW-1…5 → F-6 → Option E′. |
+| 2026-07-15 | **§0.5 Option E′** (lean). Two-component `O` splits trust: `b` group-plaintext (view+link / local KI); `y` FROST M-of-N with `y_out = y_group + y_kem` tweak. Dealer-mode, no DKG, no `export_multisig_info`. Deletes mandatory-prover Option D scaffold. `spend_auth_version=0x02`; `0x01` never issued. `frost-sal-v4` = E′ gate. |
+| 2026-07-15 | **MSW-8:** delete vestigial `MultisigAddressPayload.hybrid_sign_pubkeys` (Solution C fossil; zero consumers). ~2.6× address shrink is MSW-8, not E′. §15.3 registry re-priced off critical path. Defect class named: shape-from-prose without a read site (fifth instance this session). |

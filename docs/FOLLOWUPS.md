@@ -5814,44 +5814,44 @@ sustainability is unaffected by the recalibration.
   Owning doc: [`docs/design/V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md)
   (branch `docs/v31-multisig-rust-engine-plan`, draft PR #308).
   **UPDATE 2026-07-14:** Round 1 adversarial review recorded
-  (R1-F-1…F-11). Split **Track A** (V3.0 wire, **MSW-1…MSW-5** +
-  MSW-G) vs **Track B** (engine, MS-1…MS-7). **MS-8 retired**.
+  (R1-F-1…F-11). Split **Track A** (V3.0 wire, **MSW-1…MSW-8** +
+  MSW-G=5) vs **Track B** (engine → Option E′, MS-1…MS-7). **MS-8 retired**.
   Round 1 **cannot close** until F-6 CI + F-7 framing (F-3…F-5/F-9
   **dispositioned DELETE** Option A fossil).
   Track B: Rust-owns-logic; `multisig` = v31 Option D only; rule-26 halt.
   Track A: **not** held by that halt; awaits explicit go-ahead.
   Target: V3.1 (Track B) / V3.0 pre-genesis (Track A).
 
-- **PQC Multisig V3.0 wire: MSW-1…MSW-5 (pre-genesis, priority 1).**
-  **UPDATE 2026-07-14 (F-2 retraction + R1-F-11 + F-3 DELETE):** Track A is
-  constant/version-hook work, not a leaf-preimage change. Leaf left
-  alone. Work:
-  - **MSW-1:** raise fossil `PQC_MAX_*_BLOB` / header to match V3.1
-    `expected_blob_len`; single-source; cross-seam KAT; delete shadows.
-  - **MSW-2:** doc + KAT for length + byte[2] disjointness; reopen on
-    either separator.
-  - **MSW-3:** fix `"output committed="` misattributions; MS-8 retired.
-  - **MSW-4:** unfuse `MULTISIG_CONTAINER_VERSION` / `group_version`;
-    `multisig_group_id` reads `container.version`; known-version set;
-    KAT `group_version` variation (same F-1 shape — gate doesn't
-    protect version bytes). Independent of MSW-G.
-  - **MSW-5:** pin `spend_auth_version` carrier (address/`group_id`
-    vs wire) as decision; §15.1 honesty; reserved-namespace KAT.
-  - **MSW-G:** **DECIDED MAX=8** (2026-07-15) — 3-fault > zone;
-    7 incoherent; hostage lens retracted (E[frozen]=p indep. of n);
-    address ~36k chars = P0-m usability gate, not MSW-G.
-  - **MSW-4/5:** address payload already has three version axes;
-    group_id must plumb from it (MSW-5 disposition A).
-  - **MS-7 Round-2:** versioned record with **working discriminator**
-    (discriminability, not evolvable enum — §0.4 / §15.5).
-  - **§0.4 coexistence:** V4 rewrite beside V3.1 forever; Track A
-    permanent, Track B bounded; MS-1(a)/(c) not (b).
-  - **R1-F-3 DELETE:** Option A FROST fossil (`dkg`/`group`/`signing`);
-    not `frost-sal-v4` quarantine. That flag waits for clean SAL-only.
-  - **Not** lattice-threshold for Track A. §15.4 posture: auth already
-    PQ; 15.4a = availability; 15.4b = auth size; `0x02` ≠ lattice SAL.
-  Fee model / `v31 MAX_INPUTS=128` → Track B. Target: **V3.0
-  pre-genesis**. **Track A code awaits explicit go-ahead.**
+- **PQC Multisig V3.0 wire: MSW-1…MSW-8 (pre-genesis, priority 1).**
+  **UPDATE 2026-07-15 overhaul:**
+  - **MSW-6 (NEW):** relax tx-wide `scheme_id` agreement — staking
+    unblock. Per-input scheme ∈ `{1,2}` (or bond-post exemption).
+    Archival core never sees funding inputs. Own validation surface;
+    independent of `--features multisig`. Pin #4 named reversion for
+    this tx-layer coupling only.
+  - **MSW-G:** **DECIDED MAX=5** (2f+1 at f=2; withdraws same-day 8).
+    Consumer = largest group served. Written into `PQC_MULTISIG.md` §5.
+  - **MSW-1 (narrowed):** copy `bond_wire` `SINGLE_KEY_CANONICAL_LEN`
+    pattern; `PQC_MAX_*_BLOB` = generous DoS ceiling; exactness in
+    parse; cross-seam KAT `n∈1..=5`; delete shadows.
+  - **MSW-2 / MSW-3 / MSW-4 / MSW-5:** unchanged dispositions (length
+    primary; misattribution; group_id ← address payload; carrier A).
+  - **MSW-7 RETRACTED:** `bond_spend_pk` stays 1996 — pseudonym
+    uniformity (amend `bond_wire` comment).
+  - **Not changing:** bond record, P, emission vin, archival core.
+  - **MSW-8 (NEW):** delete vestigial
+    `MultisigAddressPayload.hybrid_sign_pubkeys` (Solution C fossil;
+    zero consumers — `multisig_receiving` derives leaf keys from KEM).
+    ~2.6× address shrink is this, not E′. §15.3 registry off critical
+    path. Free pre-genesis.
+  - Sequencing: Phase 0 docs → MSW-6 → MSW-1…5/**8** → F-6 → **Option E′**
+    (§0.5: dealer-mode, threshold `y`, plaintext `b`, no DKG;
+    `spend_auth_version=0x02`; `0x01` never issued; deletes mandatory
+    prover). `frost-sal-v4` = E′ gate.
+  - **R1-F-3 DELETE:** Option A FROST *orchestration* fossil; keep
+    `frost_sal`/`frost_dkg` primitives for E′.
+  Fee / `MAX_INPUTS=128` → Track B. Target: **V3.0 pre-genesis**.
+  **Track A code awaits explicit go-ahead.**
 
 - **PQC Multisig V3.1: external adversarial review (Phase 5).**
   Round 4 wargame against the V3.1 multisig implementation per
@@ -5894,10 +5894,11 @@ sustainability is unaffected by the recalibration.
   rule. The real genesis-freeze question is leaf preimage
   `scheme_id ‖ container_version` (Track A **MSW-2** in
   [`V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md).
-  The real genesis-adjacent leftover is **MSW-G** (is `MAX=7` viable
-  under full-reward-zone) plus Track A MSW-1…MSW-3 (bounds +
-  disjointness KAT + misattribution) — **not** a leaf-preimage change
-  (F-2 retraction 2026-07-14). Historical note: FFI
+  The real genesis-adjacent leftover was **MSW-G** — **CLOSED MAX=5**
+  (2026-07-15 overhaul) — plus Track A MSW-1…MSW-6 (DoS ceiling +
+  disjointness KAT + misattribution + version plumbing + scheme_id
+  relax) — **not** a leaf-preimage change (F-2 retraction 2026-07-14).
+  Historical note: FFI
   `shekyl_pqc_verify_with_group_id` still exists; do not schedule
   daemon wiring as a V3.1 ship-gate.
 
