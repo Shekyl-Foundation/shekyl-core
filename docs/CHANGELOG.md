@@ -4,6 +4,12 @@
 
 ### Added
 
+- **docs: corrected picture — design done; Track A is the urgent half
+  (PR #308).** Banner in `V3_1_MULTISIG_RUST_ENGINE.md`: April decisions
+  stand; gap is unbuilt scaffold + consensus surfaces the feature gate
+  never covered. Three buckets, differential rigor, reviewer scorecard.
+  §11.1 / ANALYSIS grinding lead → availability ~`k·n`, not scare-`n^k`.
+
 - **docs: R1-F-3 → DELETE Option A FROST fossil (PR #308).** Not the Apr
   15 rotating-vs-fixed *prover* fork (both Option C/D; rotating chosen
   with named 1/N loss). `MultisigGroup.pqc_public_key` is Option A
