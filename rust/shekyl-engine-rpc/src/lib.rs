@@ -22,9 +22,6 @@ pub mod types;
 #[cfg(feature = "rust-scanner")]
 pub mod scanner_state;
 
-#[cfg(feature = "multisig")]
-pub mod multisig_handlers;
-
 pub use engine::{EngineError, EngineResult, ProgressEvent, Wallet2};
 pub use server::{run_server, ServerConfig};
 
