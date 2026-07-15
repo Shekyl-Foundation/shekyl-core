@@ -792,9 +792,8 @@ not a quiet reopen of MS-8.
   assume length-only separation.
 - R-H: F-3 DELETE PR (`dkg`/`group`/`signing` + tests); not quarantine.
 - R-I: F-5 zeroize + ledger migration for group secrets.
-- R-J / **MSW-G:** pick `MAX ∈ {6,7,8}` **before** MSW-1 lands; write
-  rationale; optionally improve `rotating_prover_index` (rejection
-  sampling) as a separate protocol PR.
+- R-J / **MSW-G:** **CLOSED = 8** (§0.3). Optionally improve
+  `rotating_prover_index` (wide-reduce) as a separate protocol PR.
 
 ---
 
