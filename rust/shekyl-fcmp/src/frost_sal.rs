@@ -94,6 +94,11 @@ impl FrostSalSession {
     ///
     /// The coordinator must hold `x` (spend secret). The FROST protocol will
     /// threshold-share `y` across participants using `ThresholdKeys<Ed25519T>`.
+    // CLIPPY(non_snake_case): the single-uppercase locals below (`O` output,
+    // `I` key-image generator, `C` commitment, and the further FROST-SAL
+    // points) are the FCMP++ / FROST-SAL reference notation. snake_case would
+    // diverge from the spec and the cryptographic paper and hurt auditability
+    // against them; the mathematical names are the documentation.
     #[allow(non_snake_case)]
     pub fn new(input_data: &FrostSalInput) -> Result<Self, ProveError> {
         let O = decompress_point(&input_data.output_key, "output_key")?;

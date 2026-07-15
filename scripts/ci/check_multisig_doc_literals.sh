@@ -48,10 +48,13 @@ if [[ -z "${RG_BIN}" ]]; then
 fi
 
 # Explicit path + file-type filter — do not scan from repo root with
-# only -g globs (slow / flaky with some rg builds).
+# only -g globs (slow / flaky with some rg builds). No pattern below uses
+# a PCRE2-only feature (look-around / backreferences); `(?:...)` groups are
+# native to ripgrep's default engine, so we do NOT pass `--pcre2` — a build
+# of rg without PCRE2 support would otherwise error and, combined with the
+# no-match handling in `hit()`, could bypass the gate.
 RG_COMMON=(
   -n
-  --pcre2
   --type md
   --glob '!**/CHANGELOG.md'
   --glob '!**/completed/**'
@@ -68,8 +71,17 @@ hit() {
   local label="$1"
   local pattern="$2"
   local matches
-  # rg exits 1 on no match; treat that as clean.
-  matches="$("${RG_BIN}" "${RG_COMMON[@]}" "${pattern}" docs || true)"
+  local status=0
+  # rg exit codes: 0 = match found, 1 = no match, >=2 = real error (bad
+  # flag, unusable regex, unreadable path, missing engine feature). Only 1
+  # is "clean" — anything >=2 must abort loudly, otherwise a broken rg
+  # invocation prints to stderr and the gate silently passes on empty
+  # stdout. `|| status=$?` also keeps `set -e` from firing on exit 1.
+  matches="$("${RG_BIN}" "${RG_COMMON[@]}" "${pattern}" docs)" || status=$?
+  if [[ "${status}" -ge 2 ]]; then
+    echo "FATAL: ripgrep failed (exit ${status}) on pattern: ${pattern}" >&2
+    exit 2
+  fi
   if [[ -n "${matches}" ]]; then
     echo "FAIL [${label}]:" >&2
     echo "${matches}" >&2

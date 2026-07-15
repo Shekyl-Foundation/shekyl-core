@@ -6,6 +6,7 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
     use shekyl_engine_core::multisig::v31::intent::{IntentRecipient, SpendIntent};
+    use shekyl_units::AtomicUnits;
 
     let intent = SpendIntent {
         version: data[0],
@@ -20,9 +21,9 @@ fuzz_target!(|data: &[u8]| {
         reference_block_hash: [0; 32],
         recipients: vec![IntentRecipient {
             address: vec![1],
-            amount: 100,
+            amount: AtomicUnits::from_raw(100),
         }],
-        fee: 10,
+        fee: AtomicUnits::from_raw(10),
         input_global_indices: vec![42],
         kem_randomness_seed: [0; 32],
         chain_state_fingerprint: [0; 32],
