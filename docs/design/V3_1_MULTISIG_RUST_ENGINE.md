@@ -432,6 +432,7 @@ Deferred to Round 2 after MS-1 **and** F-3 lineage fate.
 | **P0-d** | Persistence / ledger | **Re-open R6** against post-F-3/F-5 group shape |
 | **P0-e** | INDEX | MS / MSW status rows |
 | **P0-f** | FA-6b FOLLOWUPS | V3.1 engine ship gate |
+| **P0-g** | FOLLOWUPS "wire group_id into consensus" | **Close as superseded by MSW-2 / MS-8 retirement** |
 | **P0-h** | `V3_ROLLOUT.md` multisig size table | Replace auth-overhead/~7× framing with whole-tx weights; use real (post-MSW-1) blob sizes; delete coordinator-held + "recommended for staking" drift (Pin #4 / F-3) |
 | **P0-i** | `MAX_MULTISIG_PARTICIPANTS` | Record MSW-G pick + rationale (or explicit "held at 7 with written BFT+zone acceptance") |
 
