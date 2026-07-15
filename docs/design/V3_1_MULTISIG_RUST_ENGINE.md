@@ -196,8 +196,18 @@ implementation still needs explicit go-ahead.
 
 ### Hard scope pins (amended 2026-07-15)
 
-1. **No Track B production code** until design closure + pre-flight +
-   explicit go-ahead.
+1. **This branch is documentation-only** until the user issues an
+   explicit implementation go-ahead. No production *logic*, no wire
+   layout changes, no consensus constants mutated in code.
+   **Reversion (named, 2026-07-15):** comment-only amendments in
+   production source are permitted when they record a semantic this
+   PR is pinning (e.g. `bond_wire.rs` HYBRID_PUBKEY_CANONICAL_BYTES
+   — pseudonym-uniformity rationale for MSW-7 retract). No executable
+   change; diff must be comments/docs inside the source file only.
+   Reopen criterion for broader code: explicit go-ahead for Track A
+   (`feat/msw-*`) or Track B. *(Pin #1 was violated silently by the
+   `bond_wire` comment riding in `3b70404` before this reversion —
+   same failure mode the pin exists to catch.)*
 2. **Feature gate protects wallet orchestration only** — not
    `PQC_MAX_*_BLOB`, not the tx-wide scheme rule (MSW-6).
 3. **Rust owns new wallet multisig logic.** Don't thicken `wallet2`
@@ -209,7 +219,9 @@ implementation still needs explicit go-ahead.
    core, `bond_spend_pk`, or record shape. Prior Pin #4 absolute
    "no archival contact" is withdrawn for that one rule only.
 5. **Track A** on `feat/msw-*` after explicit go-ahead. Sequencing
-   below. **MSW-G = 5.**
+   below. **MSW-G = 5** must be cold before MSW-1 mutates bounds
+   (see P-3: 8→5 withdrawal inside this PR would have frozen wrong
+   `expected_blob_len` if it had been code).
 6. **V4 rewrite-and-coexist** (§0.4). Discriminability > evolvability.
 
 ### Sequencing (implementation order when go-ahead lands)
@@ -1028,3 +1040,4 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-15 | **§0.5 Option E′** (lean). Two-component `O` splits trust: `b` group-plaintext (view+link / local KI); `y` FROST M-of-N with `y_out = y_group + y_kem` tweak. Dealer-mode, no DKG, no `export_multisig_info`. Deletes mandatory-prover Option D scaffold. `spend_auth_version=0x02`; `0x01` never issued. `frost-sal-v4` = E′ gate. |
 | 2026-07-15 | **MSW-8:** delete vestigial `MultisigAddressPayload.hybrid_sign_pubkeys` (Solution C fossil; zero consumers). ~2.6× address shrink is MSW-8, not E′. §15.3 registry re-priced off critical path. Defect class named: shape-from-prose without a read site (fifth instance this session). |
 | 2026-07-15 | **Phase 0 sweep D-1…D-6:** normative `n_total > 7` → MAX (D-1); ROLLOUT vs-N-solos math + cap fossils + `5385→5389` + date (D-2…D-5); ANALYSIS historical banner + E′ row + §6/§15.2 escrow struck + rotation naming collision (D-6). **P0-n** doc grep-gate. |
+| 2026-07-15 | **PR process:** Pin #1 named reversion — comment-only source amendments OK when recording a semantic this PR pins (`bond_wire` MSW-7 uniformity). VERSIONING.md aligned to E′ (15.4a blocker open; `0x02` = product path). §10.3.1 status refreshed (MS-8 retired, E′, MSW-*). P-3: MSW-G cold before MSW-1 code. |

@@ -5753,11 +5753,12 @@ the 8th trait if it clears §1.5; or it may live as method
 extensions on `KeyEngine` and `PendingTxEngine` if it
 doesn't).
 
-*Status (2026-07-14).* Design phase **begun**. Engine-integration
+*Status (2026-07-15).* Design phase **open**. Engine-integration
 carrier:
 [`docs/design/V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md)
-(Round 1 OPEN — questions **MS-1…MS-8**). Protocol remains
-[`PQC_MULTISIG.md`](PQC_MULTISIG.md). Trait-surface amendments
+(Round 1 OPEN — Track B **MS-1…MS-7**; **MS-8 RETIRED**; product path
+**Option E′**; Track A **MSW-1…MSW-8** + MSW-G=5). Protocol remains
+[`PQC_MULTISIG.md`](PQC_MULTISIG.md) (§15.4a). Trait-surface amendments
 (§8.2) wait on Round 1–2 closure (Phase 0 **P0-b**).
 
 *Trigger.* "V3.1 multisig design phase begins." (External —

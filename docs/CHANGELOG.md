@@ -4,6 +4,14 @@
 
 ### Added
 
+- **docs: Pin #1 reversion + VERSIONING/§10.3.1 for E′ (PR #308).**
+  Named reversion: comment-only production-source amendments allowed
+  when recording a semantic this doc-only PR pins (`bond_wire.rs`
+  MSW-7 pseudonym-uniformity — was a silent Pin #1 break).
+  `VERSIONING.md`: 15.4a blocker open (`y≠0` landed); `0x02` = E′
+  product path. `V3_ENGINE_TRAIT_BOUNDARIES` §10.3.1 status: MS-8
+  retired, E′, MSW-*. Sequencing note: MSW-G cold before MSW-1 code.
+
 - **docs: Phase 0 sweep D-1…D-6 + P0-n grep-gate (PR #308).** Fix
   normative `n_total > 7` → `MAX_MULTISIG_PARTICIPANTS` (D-1). Correct
   ROLLOUT vs-N-solos ratios (0.57× / 0.48×), cap fossils (`=7` /

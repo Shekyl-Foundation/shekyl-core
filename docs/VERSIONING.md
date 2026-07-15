@@ -81,21 +81,29 @@ authorization, hybrid X25519 + ML-KEM-768 output encryption, V3.1
 multisig wire format (FROST-style). Minimum transaction type:
 `CTTypeFcmpPlusPlusPqc`.
 
-### Protocol version 4 (future)
+### Protocol version 4 (future) / spend_auth evolution
 
-Two separable tracks (see `PQC_MULTISIG.md` §15.4):
+Two separable tracks (see `PQC_MULTISIG.md` §15.4). **Product path
+(2026-07-15):** Option **E′** issues `spend_auth_version = 0x02` from
+the start (`0x01` never issued) — dealer-mode FROST on `y`, plaintext
+`b`. That is 15.4a in product form, not a later migration from
+mandatory-prover Option D.
 
-- **15.4a FROST SAL** — threshold classical spend-auth inside FCMP++
-  (**availability**: eliminate 1/N permanent-*loss*). Blocked on
-  two-component address / `y`, **not** NIST. Auth is already PQ
+- **15.4a FROST SAL / Option E′** — threshold classical spend-auth
+  inside FCMP++ (**availability**: eliminate mandatory-prover 1/N
+  *loss*). **Internal blocker open:** two-component
+  `O = ho·G + B + y·T` with `y ≠ 0` already landed
+  (`shekyl-crypto-pq` `output.rs:304`). Remaining work is threshold-
+  share + wire + nonce discipline — **not** NIST. Auth is already PQ
   (M × ML-DSA); this does not add authorization strength.
+  `spend_auth_version = 0x02` means 15.4a / E′, **not** lattice SAL.
 - **15.4b composite / lattice-only *auth*** — size win replacing the
   M-of-N hybrid signature list (or dropping the classical half of
   hybrid auth). **Not** a lattice SAL (impossible under FCMP++).
-  Gated on a future NIST process beyond IR 8214C. `spend_auth_version
-  = 0x02` means 15.4a, not lattice SAL.
+  Gated on a future NIST process beyond IR 8214C (MPTC ~2027 → later).
 
-See `00-mission.mdc` for the V4 transition commitment.
+See `00-mission.mdc` for the V4 transition commitment and
+`V3_1_MULTISIG_RUST_ENGINE.md` §0.5 for E′.
 
 ### Where protocol_version lives in code
 
