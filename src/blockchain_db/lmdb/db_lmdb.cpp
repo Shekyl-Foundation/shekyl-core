@@ -5699,11 +5699,27 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
   // coalescing-compatible (its remove_if strips every matching open interval
   // on the first same-epoch row and no-ops after). Computed on the pre-append
   // log — neither branch above touches bad_intervals.
-  const std::vector<uint64_t> intervals_flat = archival_bad_intervals_flat(bond);
+  //
+  // The flat marshal fills a fixed stack buffer: the interval log is
+  // codec-capped at kMaxBadIntervals (genesis-frozen), so the worst case is
+  // 4 KiB of stack and the per-shard slash sweep — the hot loop this hook
+  // runs in once per failed shard — performs no heap allocation here. A log
+  // above the cap cannot exist on disk (encode/decode both reject it); if one
+  // is ever observed the record is corrupt, and that must be loud.
+  if (bond.bad_intervals.size() > shekyl::db::ArchivalBondValue::kMaxBadIntervals)
+    throw std::runtime_error(
+      "FATAL: bond record interval log exceeds the codec cap at slash apply");
+  std::array<uint64_t, 2 * shekyl::db::ArchivalBondValue::kMaxBadIntervals> intervals_flat;
+  const size_t iv_pairs = bond.bad_intervals.size();
+  for (size_t i = 0; i < iv_pairs; ++i)
+  {
+    intervals_flat[2 * i] = bond.bad_intervals[i].start_epoch;
+    intervals_flat[2 * i + 1] = bond.bad_intervals[i].end_exclusive;
+  }
   uint64_t iv_start = 0;
   uint64_t iv_end = 0;
   const uint8_t iv_rc = shekyl_archival_slash_open_interval_to_append(
-    intervals_flat.empty() ? nullptr : intervals_flat.data(), intervals_flat.size() / 2,
+    iv_pairs == 0 ? nullptr : intervals_flat.data(), iv_pairs,
     settlement_epoch, &iv_start, &iv_end);
   if (iv_rc == SHEKYL_ARCHIVAL_SLASH_INTERVAL_APPEND)
   {
