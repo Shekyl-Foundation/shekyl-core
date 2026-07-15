@@ -83,10 +83,16 @@ multisig wire format (FROST-style). Minimum transaction type:
 
 ### Protocol version 4 (future)
 
-Lattice-only threshold signatures, removing the classical Ed25519
-component. Gated on NIST lattice threshold algorithm standardization.
-Timeline: 12-24 months after protocol version 3 launch. See
-`00-mission.mdc` for the V4 transition commitment.
+Two separable tracks (see `PQC_MULTISIG.md` §15.4a / §15.4b):
+
+- **15.4a FROST SAL** — threshold classical spend-auth inside FCMP++;
+  blocked on the two-component address / `y` design, **not** on NIST.
+- **15.4b pure-PQC spend-auth** — composite lattice threshold replacing
+  the M-of-N hybrid signature list; gated on a future NIST process
+  beyond IR 8214C's reference-material call (MPTC report ~2027 →
+  possible later standardization). Not a near-term calendar.
+
+See `00-mission.mdc` for the V4 transition commitment.
 
 ### Where protocol_version lives in code
 

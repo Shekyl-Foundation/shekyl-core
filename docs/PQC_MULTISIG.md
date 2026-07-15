@@ -66,10 +66,12 @@ authorizations rely on rules and code paths already present in V3.
    V3 rules. The worst-case failure of a wallet-layer bug is a failed
    broadcast, never a chain split.
 5. **Get it right.** Where deferring a feature lets us avoid shipping
-   speculative cryptography, we defer. FROST SAL (V4), the full rotation
-   protocol (V3.2), and chain-anchored group registries (V3.3+) are all
+   speculative cryptography, we defer. FROST SAL (§15.4a — blocked on
+   two-component address / `y`, not NIST), the full rotation protocol
+   (V3.2), and chain-anchored group registries (V3.3+) are all
    explicitly out of V3.1 scope, with reserved namespace for clean future
-   addition.
+   addition. Pure-PQC composite auth (§15.4b) waits on lattice-threshold
+   maturity beyond IR 8214C.
 6. **Honest-signer protocol invariants.** Where consensus cannot enforce
    a property without a hard fork, the property is enforced at the wallet
    layer by honest signers. These invariants are enumerated in §2.7 and
@@ -1648,16 +1650,67 @@ V3.2 will add:
 - **Traffic padding for transport privacy:** fixed-interval heartbeats,
   dummy messages
 
-### 15.4 V4 path (FROST SAL + pure-PQC spend-auth)
+### 15.4 V4 path — two items, two blockers (split 2026-07-14)
 
-When lattice threshold signatures are standardized:
+Earlier prose bundled "FROST SAL + pure-PQC spend-auth" behind a single
+NIST-lattice gate. That misattributes the mandatory-prover / 1/N-loss
+fix to an external process it does not need. The two items have
+**different blockers, timelines, and payoffs**. Neither replaces the
+other.
 
-- **FROST SAL** threshold-shares classical (or PQC) spend secrets
-- `spend_auth_version = 0x02` deployed alongside V4
-- Groups can opt to migrate via V3.2 rotation protocol
-- V3.1 outputs remain spendable indefinitely under
-  `spend_auth_version = 0x01`
-- Prover role becomes threshold; 1/N permanent-loss limitation eliminated
+#### 15.4a — FROST SAL (mandatory prover → threshold)
+
+**Fixes:** mandatory prover, 1/N permanent-loss lock, rotation /
+griefing / heartbeat / veto surface tied to a single assigned prover.
+
+**Blocked on (internal):** FCMP++ SAL is an Ed25519 point
+`O = spend_auth_pubkeys[assigned]` verified *inside* the membership
+circuit over the Helios/Selene cycle. Today's `y` is HKDF-derived from
+the per-output shared secret, not a FROST group key
+(`FCMP_PLUS_PLUS.md` §20: FROST SAL gated on a two-component address
+scheme). A lattice signature **cannot** be the SAL while FCMP++ is the
+membership proof.
+
+**Not blocked on NIST.** Classical FROST over Ed25519 is available;
+the open work is the address / `y`-component design, not a standards
+calendar. Do not park 15.4a behind 15.4b.
+
+**Target shape when unblocked:** threshold-shared classical spend
+secret; prover role becomes threshold; `spend_auth_version` bump for
+migrating groups; V3.1 `0x01` outputs remain spendable indefinitely
+under §15.5.
+
+#### 15.4b — Pure-PQC spend-auth (composite lattice threshold)
+
+**Fixes:** M-of-N hybrid signature-list blob size, F-1 bound pressure,
+full-reward-zone tension with large N, N-cap size lens.
+
+**Blocked on (external):** lattice *threshold* maturity. NIST IR 8214C
+(final 2026-01-20) is a **reference-material collection**, not a
+standardization — packages → analysis → MPTC characterization report
+(~2027) that "may include recommendations for future processes."
+Actual standardization is that later process (2030+ plausible). The
+§15.4 deferral **hardened**, it did not tighten.
+
+**Watch list (not adoption candidates for V3.0/V3.1):**
+
+| Line | Regime / note | Fit for Shekyl N≤8 |
+| --- | --- | --- |
+| Threshold Raccoon (del Pino et al., eprint 2024/184) | ~13 KiB sigs, ~40 KiB/user comms, T up to 1024; trusted KeyGen; coordinator combine; not FIPS | Wrong parameter regime; imports F-3; not FIPS 204 |
+| dPN25 (del Pino–Niot) | Compact T≤8, ~2.7 KiB Dilithium-family; **not** FIPS 204 | Exact N regime; best size win on paper; FIPS story rewrite |
+| Tanuki (MPTS 2026 preview) | 2-round + preprocessing; Raccoon-compatible | Watch |
+| **TALUS** (MPTS 2026) | Threshold **ML-DSA**, 1-round online; concurrent ML-DSA threshold work | **Primary watch** — thresholds the primitive already shipped (`fips204`) |
+
+All of the above threshold the **PQC auth layer** only. None touch
+15.4a.
+
+**Genesis implication for `MAX_MULTISIG_PARTICIPANTS`:** a composite
+signature would retire the size / reward-zone lens that currently
+favors capping at 6. Hostage-fraction and rotation-bias lenses then
+favor larger / power-of-two N (e.g. 8). That is speculative and
+post-MPTC; **genesis freezes on today's signature-list economics**,
+with the size lens carrying an explicit expiry date (15.4b), not a
+present claim that 15.4b has arrived.
 
 ### 15.5 No implicit upgrades
 

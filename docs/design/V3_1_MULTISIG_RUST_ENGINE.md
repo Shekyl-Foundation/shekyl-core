@@ -161,25 +161,42 @@ coordinator / staking-recommendation drift.
 | **7** | "Typical max" 5-of-7 in rollout prose; BFT intuition | Zone case at 8-in; worst `%` bias in range; needs rationale written |
 | **8** | Bias-free; 5-of-8 still 3-fault tolerant | Largest size; zone case anyway |
 
+**Size-lens expiry (15.4b).** The reward-zone argument for 6 assumes
+today's M-of-N signature list. A composite lattice auth (~2.7–13 KiB)
+retires that lens; hostage-fraction and bias then favor **8**. That is
+speculative and post-MPTC (2030+). **Genesis freezes on today's
+economics**; weight the size lens knowing it has an expiry date the
+other two do not.
+
 **Not ours to pick in Round 1.** Track A go-ahead must name 6, 7, or
 8; MSW-1 formulas follow.
 
-### Lattice threshold (TRacoon) — out of Track A
+### Lattice threshold / §15.4 — out of Track A; split the gate
 
-**Exists, not a V3.0/V3.1 drop-in.** Academic
-[Threshold Raccoon](https://eprint.iacr.org/2024/184) (EUROCRYPT 2024;
-Dilithium-family assumptions; ~13 KiB sigs in the paper). Rust:
+**NIST posture (as of 2026-07):** IR 8214C final 2026-01-20 is a
+reference-material collection, not a standard. MPTS 2026 → packages
+(prelim Jul–Sep, complete Oct-19) → MPTC report ~2027 that may
+recommend a *later* process. **Deferral hardened** vs earlier
+2028–2029 guesses.
+
+**Threshold Raccoon** ([eprint 2024/184](https://eprint.iacr.org/2024/184)):
+wrong regime for N≤7 (~13 KiB on-chain win vs ~1.8× today, but ~40 KiB
+× N off-chain, 3 rounds, trusted KeyGen, coordinator combine — F-3
+again; not FIPS). Rust
 [`lib-q-threshold-raccoon`](https://crates.io/crates/lib-q-threshold-raccoon)
-— **PROVISIONAL / research-grade**, co-designed with `lib-q-dkg`,
-explicitly not production standardization.
+is PROVISIONAL. **Not Track A.**
 
-Shekyl's published V4 path is **FROST SAL + lattice when threshold
-lattice is standardized** (`PQC_MULTISIG.md` §15.4), not "swap scheme_id=2
-for TRacoon at genesis." Adopting TRacoon now would replace hybrid
-M-of-N blob auth, FCMP spend-auth, wire bounds, and the entire v31
-protocol — a V4 design track, not MSW-*. Evaluate under V4 readiness
-(NIST/industry posture, audit, size vs zone, DKG story) when that
-gate opens; do **not** couple to F-1/MSW-G.
+**Better watch for 15.4b size:** dPN25 (T≤8, ~2.7 KiB, Dilithium-family
+≠ FIPS 204); **TALUS** (threshold ML-DSA — matches shipped `fips204`);
+Tanuki (2-round Raccoon-compatible). All threshold **PQC auth only**.
+
+**None touch the mandatory prover.** SAL is Ed25519 inside FCMP++.
+Lattice cannot be SAL. See `PQC_MULTISIG.md` **§15.4a** (FROST SAL —
+internal blocker: two-component address / `y`) vs **§15.4b**
+(composite lattice auth — external NIST). Prior §15.4 bundled them
+behind the wrong gate; Phase 0 **P0-j** lands the split.
+
+Do **not** couple lattice adoption to F-1 / MSW-G.
 
 ---
 
@@ -435,6 +452,7 @@ Deferred to Round 2 after MS-1 **and** F-3 lineage fate.
 | **P0-g** | FOLLOWUPS "wire group_id into consensus" | **Close as superseded by MSW-2 / MS-8 retirement** |
 | **P0-h** | `V3_ROLLOUT.md` multisig size table | Replace auth-overhead/~7× framing with whole-tx weights; use real (post-MSW-1) blob sizes; delete coordinator-held + "recommended for staking" drift (Pin #4 / F-3) |
 | **P0-i** | `MAX_MULTISIG_PARTICIPANTS` | Record MSW-G pick + rationale (or explicit "held at 7 with written BFT+zone acceptance") |
+| **P0-j** | `PQC_MULTISIG.md` §15.4 + `VERSIONING.md` | **Landed 2026-07-14:** split into §15.4a (FROST SAL, internal) / §15.4b (lattice auth, NIST IR 8214C → later process). Stop gating prover fix on lattice. |
 
 ---
 
@@ -574,8 +592,9 @@ not a quiet reopen of MS-8.
    MS-8 record).
 4. **Do not** change leaf preimage / FFI leaf hash ABI / emission
    Auth-B / test-vector corpus as part of Track A.
-5. **Do not** adopt TRacoon / lattice-threshold here — V4 evaluation
-   only (§0.3).
+5. **Do not** adopt lattice-threshold / TRacoon here — evaluate under
+   §15.4b when MPTC / a future NIST process warrants; **15.4a FROST
+   SAL** is a separate internal track (§0.3 / `PQC_MULTISIG.md`).
 6. **Not** blocked on Track B Round 1–3; **is** blocked on MSW-G.
 
 ### §7.2 Track B (MS-*) — rule-26 halt
@@ -623,3 +642,4 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-14 | **F-2 retraction:** leaf preimage left alone; Track A revised to constant-family fix + prefix-disjointness KAT + misattribution; size/fee/`MAX_INPUTS` → Track B; `wallet2` group surface acknowledged; **MSW-G** on whether `MAX=7` survives reward-zone |
 | 2026-07-14 | **§0.2 independent audit:** F-1 confirmed; F-2 leaf-leave-alone; length primary / byte[2] secondary; reward-zone rhetoric trim |
 | 2026-07-14 | **§0.3 MSW-G:** MAX=7 has no derivation; F-1 fix *is* the 6/7/8 choice; fossil bound ≡ zone both imply effective 6; V3_ROLLOUT table fossil + coordinator/staking drift → P0-h; TRacoon = V4 research candidate not Track A |
+| 2026-07-14 | **§15.4 split (P0-j):** FROST SAL (15.4a, internal two-component/`y` blocker) ≠ pure-PQC auth (15.4b, NIST IR 8214C reference call → later process). TRacoon wrong N regime + no DKG + not FIPS; watch dPN25/TALUS for size. Size lens for MSW-G has 15.4b expiry; genesis still freezes on today's list economics. |

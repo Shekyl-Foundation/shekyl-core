@@ -4,6 +4,15 @@
 
 ### Added
 
+- **docs: split PQC_MULTISIG §15.4 — FROST SAL ≠ lattice auth (PR #308).**
+  §15.4a FROST SAL (mandatory prover / 1/N) blocked on two-component
+  address / `y`, not NIST. §15.4b pure-PQC composite auth blocked on
+  lattice threshold maturity; NIST IR 8214C is reference-material only
+  (MPTC ~2027 → later process). TRacoon wrong N regime + trusted KeyGen
+  + not FIPS; watch dPN25 / TALUS for size. MSW-G size lens has 15.4b
+  expiry; genesis still freezes on today's signature-list economics.
+  `VERSIONING.md` V4 note aligned. P0-j landed.
+
 - **docs: MSW-G — MAX=7 has no derivation; F-1 fix is the 6/7/8 pick
   (PR #308).** Recorded in `V3_1_MULTISIG_RUST_ENGINE.md` §0.3.
   Fossil bound accidentally caps spendable N at 6; reward zone

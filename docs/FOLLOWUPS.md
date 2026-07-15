@@ -5838,8 +5838,12 @@ sustainability is unaffected by the recalibration.
   - **MSW-G:** pick `MAX ∈ {6,7,8}` **with** MSW-1 — 7 has no
     derivation; fossil bound and zone both imply effective 6;
     raising bound to admit 7 unhides the zone case. Held open.
-  - **Not** TRacoon / lattice-threshold (V4 research;
-    `lib-q-threshold-raccoon` is PROVISIONAL).
+    Size lens has `PQC_MULTISIG.md` §15.4b expiry (composite
+    lattice ~2030+); genesis still freezes on today's list.
+  - **Not** lattice-threshold for Track A. §15.4 split: **15.4a**
+    FROST SAL (internal; two-component/`y`) vs **15.4b** pure-PQC
+    auth (NIST IR 8214C is reference-only; watch TALUS/dPN25).
+    TRacoon wrong regime + no DKG + not FIPS.
   Fee model / `v31 MAX_INPUTS=128` → Track B. Target: **V3.0
   pre-genesis**.
 
