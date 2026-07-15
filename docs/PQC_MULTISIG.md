@@ -1750,6 +1750,14 @@ SAL gated on a two-component address scheme). **Not blocked on NIST.**
 becomes threshold; `spend_auth_version = 0x02` for migrating groups;
 V3.1 `0x01` outputs remain spendable under §15.5.
 
+**Coexistence, not replacement (2026-07-14).** Shipping 15.4a / 15.4b
+does **not** delete the V3.1 stack. Add `multisig/v4/` (or equivalent)
+**beside** `multisig/v31/`; both receive/spend/container paths stay
+live forever, discriminated by version byte and address HRP. V3.1
+becomes permanent legacy. What V3.1 owes V4 is **discriminability**
+(working version bytes — Track A MSW-4/5), not evolvable ledger
+fields. See `V3_1_MULTISIG_RUST_ENGINE.md` §0.4.
+
 #### 15.4b — Composite / lattice-only *auth* (size, not SAL)
 
 **Fixes:** M-of-N hybrid signature-list **blob size**, F-1 bound
@@ -1788,6 +1796,12 @@ Outputs created under one `spend_auth_version` MUST NOT be reinterpreted
 under another. Upgrading requires explicit migration transaction. This
 prevents silent misreinterpretation and preserves auditability across
 scheme transitions.
+
+**Implication for Stage 4 / V4:** this rule forbids in-place evolution of
+V3.1 durable fields into V4 shapes. V4 is a **coexisting rewrite**
+(§15.4). Do not design V3.1 persistence for "Stage 4 will evolve this
+type" — design it so the version discriminator routes to the correct
+stack forever.
 
 ---
 
@@ -1880,13 +1894,20 @@ shekyl-crypto-pq/src/multisig_receiving.rs
 ```
 [features]
 default = []
-multisig-v3.1 = []                 # production multisig
-frost-sal-v4 = []                   # V4 FROST SAL scaffolding
+multisig-v3.1 = []                 # production multisig (v31 equal-participants)
+frost-sal-v4 = []                   # V4 FROST SAL scaffolding (separate stack)
 unsafe-testing-only = []            # simple-mode fixtures, dev only
 # Mutual exclusion: cargo enforces at compile time
 ```
 
 CI verifies release builds do not contain simple-mode symbols.
+
+**Coexistence rehearsal (2026-07-14).** `frost-sal-v4` is not only a
+future scaffold — it is the **first dual-stack boundary** the tree can
+practice now. The in-tree FROST coordinator lineage under today's
+`multisig` gate (R1-F-3) should move behind `frost-sal-v4`; `multisig`
+means v31 only. That is the 2030 pattern (two stacks, real
+discriminator) on a lineage nobody depends on yet. See design doc §0.4.
 
 ### 16.8 Test matrix
 

@@ -4,6 +4,15 @@
 
 ### Added
 
+- **docs: §0.4 coexistence — V4 rewrites beside V3.1 (PR #308).**
+  §15.4–15.5 imply permanent dual stack (version byte + HRP), not
+  in-place evolution. Discriminability > evolvability; MSW-4/5 version
+  bytes are the entire V3.1↔V4 interface. Track A permanent / Track B
+  ~4y then legacy — process inversion named. MS-1(a)/(c) preferred,
+  (b) rejected under coexist. F-3 = early rehearsal; lean quarantine
+  behind `frost-sal-v4` (§16.7). MS-7: versioned record with working
+  discriminator, not evolvable enum. P0-l recorded.
+
 - **docs: R1-F-11 / MSW-4+5 — version hooks for 2030+ (PR #308).**
   `group_version` fused with `MULTISIG_CONTAINER_VERSION` (constant, not
   `container.version`); `spend_auth_version` hardcoded / not on container

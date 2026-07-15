@@ -5838,8 +5838,11 @@ sustainability is unaffected by the recalibration.
     vs wire) as decision; §15.1 honesty; reserved-namespace KAT.
   - **MSW-G:** pick `MAX ∈ {6,7,8}` **with** MSW-1 — held open.
     Size lens has §15.4b expiry; genesis freezes on today's list.
-  - **MS-7 Round-2:** R6 must not bake `[u8;32]` classical-only
-    durable `spend_auth_pubkeys` (plan §1 three-timeframes).
+  - **MS-7 Round-2:** versioned record with **working discriminator**
+    (discriminability, not evolvable enum — §0.4 / §15.5).
+  - **§0.4 coexistence:** V4 rewrite beside V3.1 forever; Track A
+    permanent, Track B bounded; MS-1(a)/(c) not (b); F-3 lean
+    `frost-sal-v4` separate flag (§16.7 rehearsal).
   - **Not** lattice-threshold for Track A. §15.4 posture: auth already
     PQ; 15.4a = availability; 15.4b = auth size; `0x02` ≠ lattice SAL.
   Fee model / `v31 MAX_INPUTS=128` → Track B. Target: **V3.0
