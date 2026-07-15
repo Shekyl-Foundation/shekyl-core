@@ -274,10 +274,22 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
           apply_archival_holdings_update_drop(block_height, bond.p_canonical_id,
             bond.holdings.shard_ids);
       }
+      else if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Rebond))
+      {
+        // Rebond connect (gate-4 §3.4; P2B-9 reinstatement): the record stays
+        // Bonded — the open bad interval closes in place at E_rebond + 1 and
+        // the verified superset re-spec lands (carried shards keep add-epochs,
+        // added take E_rebond). The writer journals the pre-image (including
+        // the closed interval's identity) and applies the Rust fold's counter
+        // movement with the per-post live-counter threading inside. The vin's
+        // holdings carry the POST shard set.
+        apply_archival_rebond(block_height, bond.p_canonical_id,
+          bond.holdings.shard_ids);
+      }
       else
       {
         throw std::runtime_error(
-          "FATAL: bond-post connect supports JoinMarket, Unbond, and HoldingsUpdate only");
+          "FATAL: bond-post connect supports JoinMarket, Unbond, HoldingsUpdate, and Rebond only");
       }
     }
     else if (std::holds_alternative<txin_archival_reward_emission>(tx_input))
@@ -611,6 +623,14 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   // Only the emission journal's fields (claimed set, first_paying) are
   // disjoint from this one's.
   revert_archival_holdings_updates_at_height(removed_block_height - 1);
+  // Rebond pre-image restore (gate-4 §3.4/§5; P2B-9): same journal-key
+  // convention (block index N = removed_block_height - 1). Runs AFTER the
+  // slash revert: both journals touch bad_intervals, and within a block the
+  // connect order was tx-connect before slash-processing, so the pop mirrors
+  // it in reverse — the slash revert strips any interval its own rows appended
+  // before the rebond revert re-opens the journaled closed interval. The
+  // restored holdings/balance fields are disjoint from the other journals'.
+  revert_archival_rebonds_at_height(removed_block_height - 1);
   // Mirror of the accrual write in add_block, keyed at the block's INDEX
   // N = removed_block_height - 1 (the claim-journal convention above, not
   // the hook convention). Runs inside the same wtxn as the pop — key
@@ -729,10 +749,9 @@ void BlockchainDB::remove_transaction(const crypto::hash& tx_hash)
     {
       const auto& bond = std::get<txin_archival_bond_post>(tx_input);
       // Only JoinMarket pops here (vin-driven: the record is deleted whole).
-      // Unbond and HoldingsUpdate pop via the height-keyed pre-image journals
-      // in pop_block (revert_archival_unbonds_at_height /
-      // revert_archival_holdings_updates_at_height) — the vin carries the
-      // post-connect state, so it cannot drive the restore.
+      // Unbond, HoldingsUpdate, and Rebond pop via the height-keyed pre-image
+      // journals in pop_block — the vin carries the post-connect state, so it
+      // cannot drive the restore.
       if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
       {
         remove_archival_bond_record(bond.p_canonical_id);
@@ -1549,6 +1568,15 @@ void BlockchainDB::apply_archival_holdings_update_drop(uint64_t /*block_height*/
 }
 
 void BlockchainDB::revert_archival_holdings_updates_at_height(uint64_t /*block_height*/)
+{
+}
+
+void BlockchainDB::apply_archival_rebond(uint64_t /*block_height*/,
+  const crypto::hash& /*p_id*/, const std::vector<uint64_t>& /*post_shard_ids*/)
+{
+}
+
+void BlockchainDB::revert_archival_rebonds_at_height(uint64_t /*block_height*/)
 {
 }
 

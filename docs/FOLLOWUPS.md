@@ -47,6 +47,23 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Unbond verify: record-floor belt (the `RebondRecordFloorBroken` twin)**
+  (added 2026-07-14, Rebond review round, PR #307 commit 9b0ab6e68). The
+  Rebond verify now checks the record floor invariant
+  (`record_bonded_total == bond_floor_of(kind, held.len())`) so a
+  floor-drifted record produces a tx rejection instead of riding to the
+  connect fold's `RecordFloorInvariantBroken` FATAL — a chain halt. Unbond
+  has the same verify/connect gap in principle, but closing it was not
+  bundled: `shekyl_archival_verify_unbond_bond_post` deliberately does not
+  marshal the record's holdings `(kind, shard count)` (the fold takes counts
+  precisely so no shard array crosses the FFI), so the belt needs an FFI
+  signature widening + C++ caller + tests on a landed, reviewed surface.
+  Mitigation while open: no honest state path produces a floor-drifted
+  record (the slash burns exactly one `FLOOR` per removed shard and throws
+  on underflow), and HU add/drop verifies imply the invariant arithmetically
+  through their double floor equalities. *Target: V3.0 (with or shortly
+  after the `ShardSet` PR — same validation surface).*
+
 - **Daemon Axum: onion-as-remote-RPC docs + operator story** (added
   2026-07-10, epee HTTP listener deletion). shekyld no longer exposes
   inbound `--rpc-login` / `--rpc-ssl*`. Local = plaintext loopback;

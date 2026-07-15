@@ -870,7 +870,8 @@ pub(crate) mod test_fixtures {
     };
     use shekyl_archival_retention::{
         as_of_e_served_work, epoch_close_height, settlement_epoch_at_height, sigma_work_milli,
-        CreditPair, EpochCloseShard, HoldingsDescriptor, HoldingsKind, EMISSION_KAT_SHAPE,
+        CreditPair, EpochCloseShard, HoldingsDescriptor, HoldingsKind, ShardSet,
+        EMISSION_KAT_SHAPE,
     };
     use shekyl_types::ChainCount;
 
@@ -985,7 +986,7 @@ pub(crate) mod test_fixtures {
                 join_settlement_epoch: EMISSION_KAT_SHAPE.join_settlement_epoch,
                 holdings: HoldingsDescriptor {
                     kind: HoldingsKind::ShardSetCompact,
-                    shard_ids: vec![SHARD_A],
+                    shard_ids: ShardSet::new(vec![SHARD_A]).unwrap(),
                 },
                 claimed_settlement_epochs: claimed,
             }),
@@ -1140,6 +1141,7 @@ mod tests {
     };
     use super::*;
     use crate::engine::emission_source::EpochSnapshot;
+    use shekyl_archival_retention::ShardSet;
     use shekyl_types::ChainCount;
 
     use shekyl_archival_retention::{
@@ -1869,7 +1871,7 @@ mod tests {
                 },
             ),
             ("holdings swapped (verify: HoldingsMismatch)", |vin| {
-                vin.holdings.shard_ids = vec![SHARD_B];
+                vin.holdings.shard_ids = ShardSet::new(vec![SHARD_B]).unwrap();
             }),
         ];
         for (name, mutate) in mutations {

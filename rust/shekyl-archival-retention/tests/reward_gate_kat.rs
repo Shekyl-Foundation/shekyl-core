@@ -29,7 +29,7 @@
 use shekyl_archival_retention::{
     curve_milli, epoch_close_compute, reward_share_floor, ArchivalRewardEmissionVin,
     BandedCurveParams, CreditPair, EmissionWireError, EpochCloseInputs, EpochCloseResult,
-    EpochCloseShard, HoldingsDescriptor, HoldingsKind, KCover, MembershipOnlyBacking,
+    EpochCloseShard, HoldingsDescriptor, HoldingsKind, KCover, MembershipOnlyBacking, ShardSet,
     ShardWorkEntry, WorkEpochClaim,
 };
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
@@ -251,7 +251,7 @@ fn wire_vin(
         p_pubkey: vec![0x5A; SINGLE_KEY_CANONICAL_LEN],
         holdings: HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
-            shard_ids: vec![7],
+            shard_ids: ShardSet::new(vec![7]).unwrap(),
         },
         settlement_epochs,
         work_claim,

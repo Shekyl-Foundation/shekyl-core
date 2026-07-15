@@ -1442,7 +1442,7 @@ async fn e2e_staker_bond_post_reaches_the_daemon_submit_gap() {
     use super::stake_engine::{PSlot, StakeEngineError};
     use super::traits::DaemonEngine;
     use super::transaction_submitter::{BroadcastSubmitError, BroadcastSubmitter, SubmitterError};
-    use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind};
+    use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
     use shekyl_units::AtomicUnits;
 
     const SLOT: u32 = 0;
@@ -1489,7 +1489,7 @@ async fn e2e_staker_bond_post_reaches_the_daemon_submit_gap() {
     // + selection churn), then fund the persona with one ordinary transfer.
     let holdings = HoldingsDescriptor {
         kind: HoldingsKind::CompleteTree,
-        shard_ids: vec![],
+        shard_ids: ShardSet::empty(),
     };
     let funding = AtomicUnits::from_raw(bond_floor(&holdings) + bond_fee + FUNDING_CUSHION);
     mine_until_unlocked_at_least(

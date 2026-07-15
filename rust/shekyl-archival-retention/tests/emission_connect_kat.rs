@@ -22,7 +22,8 @@ use std::io::Cursor;
 use serde_json::{json, Value};
 use shekyl_archival_retention::{
     p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin, HoldingsDescriptor, HoldingsKind,
-    MembershipOnlyBacking, ShardWorkEntry, WorkEpochClaim, VIN_TYPE_ARCHIVAL_REWARD_EMISSION,
+    MembershipOnlyBacking, ShardSet, ShardWorkEntry, WorkEpochClaim,
+    VIN_TYPE_ARCHIVAL_REWARD_EMISSION,
 };
 use shekyl_crypto_pq::derivation::hash_pqc_public_key;
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
@@ -58,7 +59,7 @@ fn build_connect_vin() -> ArchivalRewardEmissionVin {
         p_pubkey: vec![0x11; SINGLE_KEY_CANONICAL_LEN],
         holdings: HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
-            shard_ids: vec![SHARD],
+            shard_ids: ShardSet::new(vec![SHARD]).unwrap(),
         },
         settlement_epochs: epochs.to_vec(),
         work_claim: epochs

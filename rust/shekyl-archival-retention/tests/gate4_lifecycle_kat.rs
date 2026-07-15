@@ -17,7 +17,8 @@ use shekyl_archival_retention::{
     verify_join_market_bond_post, verify_leaf_index, verify_segment_path, ArchivalBondPostVin,
     ArchivalServeCreditResponse, BadInterval, BandedCurveParams, BondPostError, BondPostKind,
     ConservationError, ConservationSnapshot, HoldingsDescriptor, HoldingsKind, ServeCreditRow,
-    ARCHIVAL_BOND_FLOOR_ATOMIC, SETTLEMENT_EPOCH_BLOCKS, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
+    ShardSet, ARCHIVAL_BOND_FLOOR_ATOMIC, SETTLEMENT_EPOCH_BLOCKS,
+    VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
 
@@ -68,7 +69,8 @@ fn build_gate4_document() -> Value {
         bond_spend_pk: bond_spend_pk.clone(),
         holdings: HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
-            shard_ids: vec![integration["shard_id"].as_u64().expect("shard")],
+            shard_ids: ShardSet::new(vec![integration["shard_id"].as_u64().expect("shard")])
+                .unwrap(),
         },
         bonded_total_atomic: ARCHIVAL_BOND_FLOOR_ATOMIC,
         bond_credit: ARCHIVAL_BOND_FLOOR_ATOMIC,

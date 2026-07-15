@@ -19,7 +19,7 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT as G, scalar::Scalar};
 use shekyl_archival_bond_builder::{build_join_market_vin, verify_credit_funding, BondBuildError};
 use shekyl_archival_retention::{
     bond_floor, verify_bond_post_ct_balance, verify_join_market_bond_post, BondCtBalanceError,
-    BondTerm, HoldingsDescriptor, HoldingsKind,
+    BondTerm, HoldingsDescriptor, HoldingsKind, ShardSet,
 };
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
@@ -42,7 +42,7 @@ fn commit(amount: u64, mask: &Scalar) -> [u8; 32] {
 fn shard_set(shard_ids: Vec<u64>) -> HoldingsDescriptor {
     HoldingsDescriptor {
         kind: HoldingsKind::ShardSetCompact,
-        shard_ids,
+        shard_ids: ShardSet::new(shard_ids).expect("valid holdings fixture"),
     }
 }
 
