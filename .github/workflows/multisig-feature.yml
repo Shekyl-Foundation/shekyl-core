@@ -12,9 +12,14 @@
 #
 # P0-n: doc-literal grep gate (cap fossils + pqc_auth fee-oracle drift).
 #
-# Discovery posture: clippy may fail on first enable — that *is* the
-# signal (frost_sal / Option A fossil debt). Do not weaken `-D warnings`
-# to greenwash; fix the findings or delete the fossil (R1-F-3).
+# Clippy posture mirrors build.yml's rust-audit-and-test job:
+#   - toolchain pinned to rust/rust-toolchain.toml (1.94.0), not @stable
+#   - `-D warnings` only on the clippy argv (`-- -D warnings`), NOT via
+#     job-level RUSTFLAGS (that promotes rustc warnings in path deps
+#     like helioselene into hard errors that main CI intentionally
+#     does not fail on)
+# Discovery: first enable may still fail clippy on frost_sal / Option A
+# fossil debt — that is the signal; do not weaken `-D warnings`.
 
 name: ci/multisig-feature
 
@@ -52,7 +57,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings"
 
 jobs:
   p0n-doc-literals:
@@ -77,8 +81,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Pin matches rust/rust-toolchain.toml and build.yml — not @stable
+      # (canary lives in rust-stable-canary.yml).
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.0
         with:
           components: clippy
 
@@ -96,6 +102,8 @@ jobs:
           --features multisig
 
       - name: cargo clippy -D warnings (same packages, all targets)
+        # Mirror build.yml: deny on clippy argv only. Do not set
+        # RUSTFLAGS=-D warnings (path-dep rustc warnings ≠ clippy debt).
         run: >
           cargo clippy --locked
           -p shekyl-engine-core
@@ -103,6 +111,7 @@ jobs:
           -p shekyl-ffi
           --features multisig
           --all-targets
+          --keep-going
           -- -D warnings
 
       - name: cargo test (same packages, --features multisig)

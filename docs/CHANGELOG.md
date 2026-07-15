@@ -4,6 +4,12 @@
 
 ### Added
 
+- **ci: align F-6 multisig lane with build.yml clippy posture (PR #308).**
+  Dropped job-level `RUSTFLAGS=-D warnings` (it denied rustc
+  `deprecated` in path-dep `helioselene`, which main CI only warns
+  on). Pin toolchain to `1.94.0` (not `@stable`); keep
+  `-- -D warnings` on the clippy argv only; add `--keep-going`.
+
 - **docs: PR #308 Copilot review — decide/enforce labels + F-11
   consistency.** MAX=5 is the ratified MSW-G target; docs no longer
   imply the live constant (still `= 7` until MSW-1). Changelog drops
