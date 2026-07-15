@@ -98,7 +98,8 @@ One validation surface (rule 19):
 Feature-gated wallet orchestration. **§0.4:** ~4 years as active
 design, then permanent legacy beside V4 — seal well, do not
 architect-for-forever. Rule-26 halt remains correct **here**. Round 1
-closure prerequisites: **R1-F-3…F-7** (+ F-6 CI). **MS-8 retired**.
+closure prerequisites: **R1-F-6 CI + R1-F-7** (F-3…F-5/F-9
+**dispositioned DELETE**). **MS-8 retired**.
 
 **Size / fee items belong here (not Track A):**
 
@@ -427,7 +428,11 @@ argument does **not** depend on changing the leaf.
 derivation). MS-2 "don't thicken" stands; §2.3 must not claim C++ has
 no multisig surface.
 
-### R1-F-3…F-7, F-6 CI — **not re-litigated here**
+### R1-F-6 CI + F-7 — **still open**; F-3…F-5/F-9 dispositioned DELETE
+
+F-3 Option A fossil DELETE is closed as design disposition (impl
+pending). Remaining Round 1 blockers: positive CI lane; SoloSigner
+associated-item framing.
 
 Still Round 1 closure blockers for Track B; this audit focused on the
 Track A / F-2 / size claims that decide whether Track A is a constant
@@ -532,7 +537,7 @@ unchanged across the 9-commit archival drift.
 
 Unchanged in applicability (principles 4–8; lenses bounded; no
 Monero `wallet2` inheritance). **Add:** fossil-sweep obligation for
-the FROST coordinator lineage (R1-F-3) — same shape as superseded
+Option A FROST lineage DELETE (R1-F-3) — same shape as superseded
 docs left standing beside replacements.
 
 ### §3.5 Branch posture
@@ -667,26 +672,26 @@ not a quiet reopen of MS-8.
 
 | ID | Status | Notes |
 | --- | --- | --- |
-| MS-1 | **OPEN** | Lean **(a)/(c)** under §0.4 coexist; **(b) rejected**; name `K`; blocked on F-3 |
+| MS-1 | **OPEN** | Lean **(a)/(c)**; **(b) rejected**; name `K`; F-3 lineage **CLOSED** (v31 only) |
 | MS-2 | **OPEN** | Lean holds |
-| MS-3 | **OPEN** | Amended: positive CI + F-3 |
+| MS-3 | **OPEN** | Amended: positive CI (F-6); F-3 = delete fossil before flip |
 | MS-4 | **OPEN** | Lean holds |
-| MS-5 | **OPEN** | Blocked on F-3 / F-7 |
+| MS-5 | **OPEN** | Unblocked on lineage; still F-7 + construction gaps |
 | MS-6 | **OPEN** | Lean holds |
-| MS-7 | **OPEN** | Confirm-R6 **withdrawn**; re-open vs `MultisigGroup`; **+ Round-2:** no `[u8;32]` classical-only durable SAL field (R1-F-11) |
+| MS-7 | **OPEN** | R6 vs **v31** persist only; versioned discriminator (R1-F-11) |
 | MS-8 | **RETIRED** | redundancy; leaf change not required |
 
 **Round 1 still cannot close until:**
 
 - [ ] **R1-F-6:** CI lane compiles/tests `--features multisig` (or
       documented equivalent gate on the design branch's follow-on).
-- [ ] **R1-F-3:** Written fate for FROST coordinator lineage.
-- [ ] **R1-F-4:** Canonical `group_id` named (with F-3).
-- [ ] **R1-F-5 / MS-7:** R6 re-opened against real persist shape.
+- [x] **R1-F-3:** Disposition **DELETE** Option A fossil (impl pending).
+- [x] **R1-F-4:** Evaporates with F-3 DELETE; canonical = v31 `multisig_group_id`.
+- [x] **R1-F-5 / MS-7:** `MultisigGroup` dies with F-3; R6 against v31 + discriminator.
 - [ ] **R1-F-7:** §3.1 / SoloSigner associated-item framing accepted
       into Phase 0 plan.
 - [ ] Maintainer sign-off on revised Track A (constant fix) + MS-8
-      retirement + F-2 leaf-leave-alone.
+      retirement + F-2 leaf-leave-alone + F-3 DELETE.
 - [ ] Lens-1 re-test after MS-1; R-residuals pointed at Round 2.
 
 **Round 2 residuals (updated).**
