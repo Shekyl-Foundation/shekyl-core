@@ -4,6 +4,14 @@
 
 ### Added
 
+- **ci/docs: P0-n doc gate + F-6 `--features multisig` lane (PR #308).**
+  `scripts/ci/check_multisig_doc_literals.sh` (cap / fee-oracle fossils)
+  and `.github/workflows/multisig-feature.yml` (`cargo check` /
+  `clippy -D warnings` / `test` on engine-core + engine-rpc + ffi with
+  `--features multisig`). Operator docs swept off `5-of-7` / `5385`
+  fossils. Pause before MSW-6 — first enable may clippy-fail on
+  `frost_sal` (Option A debt); that is the signal.
+
 - **docs: D-7…D-10 — VERSIONING + MS-4/MS-5 under E′ (PR #308).**
   VERSIONING: two-component gate discharged (`output.rs:304`); remaining
   blockers = threshold-share `y_group` + wire `0x02`; protocol-3 wire

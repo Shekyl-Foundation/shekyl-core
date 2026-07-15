@@ -902,8 +902,13 @@ Measured from canonical serialization output in
 
 - `HybridPublicKey` canonical bytes: `1996` bytes
 - `HybridSignature` canonical bytes: `3385` bytes
-- `PqcAuthentication` payload contribution (`u8,u8,u16` + key + signature):
-  `4 + 1996 + 3385 = 5385` bytes
+- `pqc_auth` body contribution (single-signer, per input): **`5389`**
+  bytes — oracle `tx_fee_model::pqc_auth_weight()` =
+  `auth_version` + `scheme_id` + `flags(u16)` +
+  `varint(pk_len)‖pk` + `varint(sig_len)‖sig`
+  (`1+1+2 + 2+1996 + 2+3385`). Summing only the fixed header fields
+  plus the two blob lengths (omitting the two length varints) under-
+  counts by two bytes and is **not** the fee/weight figure.
 
 The measured values match the canonical field layout:
 

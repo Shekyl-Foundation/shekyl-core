@@ -37,14 +37,17 @@ prover for approximately 1/N of group outputs.
 | **2-of-2** | Both must agree | Both must be online | Low | Couples, business partners |
 | **2-of-3** | Tolerates 1 compromised key | Tolerates 1 offline member | Low | Personal savings, small teams |
 | **3-of-5** | Tolerates 2 compromised keys | Tolerates 2 offline members | Medium | Organization treasury |
-| **5-of-7** | Tolerates 4 compromised keys | Tolerates 2 offline members | High | High-value cold storage |
+| **5-of-5** | All must agree | All must be online | High | High-value cold storage (max N) |
+
+Consensus cap: `MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G). Configurations
+with `n_total > 5` are unreachable.
 
 **Rules of thumb:**
 
 - If you need to spend quickly (business operations), keep M low relative
   to N. 2-of-3 means any two can spend.
 - If you need maximum security (cold storage), keep M high relative to N.
-  5-of-7 means a majority must agree.
+  5-of-5 means every member must agree.
 - Never use 1-of-N — this is just single-sig with extra steps. If any
   one key is compromised, funds are lost.
 - Availability and security trade off directly: higher M means more
@@ -490,12 +493,14 @@ terms.
 
 ### Size Comparison
 
-| Transaction Type | Approx Size (2-in/2-out) | Fee Multiplier |
+| Transaction Type | Approx Size (1-in/2-out) | Fee Multiplier |
 |-----------------|--------------------------|----------------|
-| **Single-sig** | ~23 KB | 1.0x (baseline) |
-| **2-of-3 multisig** | ~36 KB | ~1.6x |
-| **3-of-5 multisig** | ~43 KB | ~1.9x |
-| **5-of-7 multisig** | ~54 KB | ~2.3x |
+| **Single-sig** | ~15.6 KB | 1.0× (baseline) |
+| **3-of-3 multisig** | ~26.5 KB | ~1.7× |
+| **5-of-5 multisig** | ~37.3 KB | ~2.4× |
+
+Oracle and rationale: `docs/V3_ROLLOUT.md` (vs-N-solos amortization).
+Do not read auth-overhead “×N vs single-signer” as whole-tx cost.
 
 ### Where the Overhead Comes From
 
@@ -503,10 +508,10 @@ terms.
 
 | Config | Auth overhead | vs single-sig |
 |--------|---------------|---------------|
-| Single-sig | ~5,385 B | baseline |
-| 2-of-3 | ~12,769 B | +7,384 B (~2.4x) |
-| 3-of-5 | ~20,153 B | +14,768 B (~3.7x) |
-| 5-of-7 | ~30,921 B | +25,536 B (~5.7x) |
+| Single-sig | **5389** B (`pqc_auth_weight()`) | baseline |
+| 2-of-3 | ~12.8 KB | ~2.4× |
+| 3-of-5 | ~20.2 KB | ~3.7× |
+| 5-of-5 | ~27 KB | ~5.0× |
 
 **Per-output overhead (multisig-specific `tx_extra`):**
 

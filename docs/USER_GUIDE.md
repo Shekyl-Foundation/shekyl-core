@@ -650,10 +650,13 @@ Each additional signer adds approximately 5.3 KB of authentication material.
 
 | Configuration | Auth Size | vs. Single |
 |---------------|-----------|------------|
-| Single signer | ~5.3 KB | baseline |
-| 2-of-3 | ~12.5 KB | 2.4x |
-| 3-of-5 | ~19.7 KB | 3.7x |
-| 5-of-7 | ~30.2 KB | 5.7x |
+| Single signer | ~5.4 KB | baseline |
+| 2-of-3 | ~12.8 KB | ~2.4× |
+| 3-of-5 | ~20.2 KB | ~3.7× |
+| 5-of-5 | ~27 KB | ~5.0× |
+
+Whole-tx weights (FCMP++/Bp+/KEM dominate) are closer to ~2.4× solo for
+5-of-5 — see `V3_ROLLOUT.md`. Cap is `MAX_MULTISIG_PARTICIPANTS = 5`.
 
 ### Use cases
 
