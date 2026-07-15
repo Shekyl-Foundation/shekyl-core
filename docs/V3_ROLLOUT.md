@@ -69,16 +69,17 @@ Practical effect:
   not carried forward to the rebooted chain. The `make_multisig` code path,
   MMS transport, and classical multisig wallet state are deleted. All
   multisig uses PQC-only authorization (`scheme_id = 2`).
-- **Multisig wallets:** Each participant generates their own hybrid keypair.
-  The FCMP++ layer uses a single classical key (coordinator-held).
-  M-of-N authorization lives in the `pqc_auth` layer. Signing coordination
-  uses file-based export/import of payload and signature blobs. See
-  `docs/PQC_MULTISIG.md` for full specification.
-- **Staking with multisig:** Multisig staked outputs and claim transactions
-  are supported with `scheme_id = 2`. This is the recommended configuration
-  for long-duration (150,000 block) staking positions with significant value.
-  Note: GUI staking integration depends on the Tauri↔wallet2 FFI bridge
-  being completed for single-signer staking first.
+- **Multisig wallets:** Equal-participants Option D (`PQC_MULTISIG.md`
+  v1.1): N parallel KEM encaps + N classical spend-auth pubkeys in
+  `tx_extra`; rotating prover per output (1/N permanent-loss if a
+  participant's keys are lost — named limitation). **Not** a fixed
+  group-aggregate PQC key or coordinator-held classical spend key
+  (Option A rejected 2026-04-04). Signing coordination uses file-based
+  export/import of payload and signature blobs.
+- **Staking with multisig:** Archival-bond coupling is **out of scope**
+  for V3.1 multisig (Hard Scope Pin #4). Multisig `scheme_id = 2`
+  spends are consensus-valid; do not treat multisig as the recommended
+  staking configuration in this rollout note.
 
 ## Payload Limit Guidance
 

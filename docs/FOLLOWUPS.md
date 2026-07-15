@@ -5816,13 +5816,14 @@ sustainability is unaffected by the recalibration.
   **UPDATE 2026-07-14:** Round 1 adversarial review recorded
   (R1-F-1…F-11). Split **Track A** (V3.0 wire, **MSW-1…MSW-5** +
   MSW-G) vs **Track B** (engine, MS-1…MS-7). **MS-8 retired**.
-  Round 1 **cannot close** until F-3…F-7 + F-6 CI lane.
-  Track B: Rust-owns-logic; `multisig` default-off; rule-26 halt.
+  Round 1 **cannot close** until F-6 CI + F-7 framing (F-3…F-5/F-9
+  **dispositioned DELETE** Option A fossil).
+  Track B: Rust-owns-logic; `multisig` = v31 Option D only; rule-26 halt.
   Track A: **not** held by that halt; awaits explicit go-ahead.
   Target: V3.1 (Track B) / V3.0 pre-genesis (Track A).
 
 - **PQC Multisig V3.0 wire: MSW-1…MSW-5 (pre-genesis, priority 1).**
-  **UPDATE 2026-07-14 (F-2 retraction + R1-F-11):** Track A is
+  **UPDATE 2026-07-14 (F-2 retraction + R1-F-11 + F-3 DELETE):** Track A is
   constant/version-hook work, not a leaf-preimage change. Leaf left
   alone. Work:
   - **MSW-1:** raise fossil `PQC_MAX_*_BLOB` / header to match V3.1
@@ -5841,8 +5842,9 @@ sustainability is unaffected by the recalibration.
   - **MS-7 Round-2:** versioned record with **working discriminator**
     (discriminability, not evolvable enum — §0.4 / §15.5).
   - **§0.4 coexistence:** V4 rewrite beside V3.1 forever; Track A
-    permanent, Track B bounded; MS-1(a)/(c) not (b); F-3 lean
-    `frost-sal-v4` separate flag (§16.7 rehearsal).
+    permanent, Track B bounded; MS-1(a)/(c) not (b).
+  - **R1-F-3 DELETE:** Option A FROST fossil (`dkg`/`group`/`signing`);
+    not `frost-sal-v4` quarantine. That flag waits for clean SAL-only.
   - **Not** lattice-threshold for Track A. §15.4 posture: auth already
     PQ; 15.4a = availability; 15.4b = auth size; `0x02` ≠ lattice SAL.
   Fee model / `v31 MAX_INPUTS=128` → Track B. Target: **V3.0

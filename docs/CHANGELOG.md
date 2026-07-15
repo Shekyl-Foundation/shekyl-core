@@ -4,14 +4,22 @@
 
 ### Added
 
+- **docs: R1-F-3 → DELETE Option A FROST fossil (PR #308).** Not the Apr
+  15 rotating-vs-fixed *prover* fork (both Option C/D; rotating chosen
+  with named 1/N loss). `MultisigGroup.pqc_public_key` is Option A
+  (rejected 2026-04-04 for `pqc_auth` fingerprint). Do not quarantine
+  behind `frost-sal-v4` — artifact fuses SAL keys with rejected fixed
+  group PQC key. F-4/F-5/F-9 evaporate on delete. `V3_ROLLOUT.md`
+  coordinator-held + staking-recommendation drift fixed (P0-h partial).
+  Retract "Phase 6 cryptographer" claim on per-output privacy.
+
 - **docs: §0.4 coexistence — V4 rewrites beside V3.1 (PR #308).**
   §15.4–15.5 imply permanent dual stack (version byte + HRP), not
   in-place evolution. Discriminability > evolvability; MSW-4/5 version
   bytes are the entire V3.1↔V4 interface. Track A permanent / Track B
   ~4y then legacy — process inversion named. MS-1(a)/(c) preferred,
-  (b) rejected under coexist. F-3 = early rehearsal; lean quarantine
-  behind `frost-sal-v4` (§16.7). MS-7: versioned record with working
-  discriminator, not evolvable enum. P0-l recorded.
+  (b) rejected under coexist. MS-7: versioned record with working
+  discriminator, not evolvable enum.
 
 - **docs: R1-F-11 / MSW-4+5 — version hooks for 2030+ (PR #308).**
   `group_version` fused with `MULTISIG_CONTAINER_VERSION` (constant, not
@@ -19,8 +27,7 @@
   wire by accident; reserved-namespace KATs incomplete (`group_version`
   never varied). Same shape as F-1 — feature gate does not protect
   genesis-frozen bytes. MSW-4 unfuse + known-version set; MSW-5 pin
-  carrier decision; §15.1 honesty (P0-k). MS-7 Round-2: R6 must not bake
-  `[u8;32]` classical-only durable SAL field (plan §1 three-timeframes).
+  carrier decision; §15.1 honesty (P0-k).
 
 - **docs: §15.4 posture pin — auth already PQ; SAL = liveness (PR #308).**
   Scheme_id=2 is M×ML-DSA today; solo and multisig share classical

@@ -1902,12 +1902,11 @@ unsafe-testing-only = []            # simple-mode fixtures, dev only
 
 CI verifies release builds do not contain simple-mode symbols.
 
-**Coexistence rehearsal (2026-07-14).** `frost-sal-v4` is not only a
-future scaffold — it is the **first dual-stack boundary** the tree can
-practice now. The in-tree FROST coordinator lineage under today's
-`multisig` gate (R1-F-3) should move behind `frost-sal-v4`; `multisig`
-means v31 only. That is the 2030 pattern (two stacks, real
-discriminator) on a lineage nobody depends on yet. See design doc §0.4.
+**Coexistence rehearsal (2026-07-14, revised).** `frost-sal-v4` remains
+the right *future* dual-stack boundary for a **clean FROST-SAL
+scaffold** (SAL keys only — no fixed group PQC pubkey). Do **not**
+park the current `multisig/{dkg,group,signing}.rs` Option A fossil
+behind it — **delete** that lineage (R1-F-3). See design doc §0.4.
 
 ### 16.8 Test matrix
 

@@ -259,19 +259,49 @@ implementations at once.
 | **MS-1(b)** extend PendingTx/Refresh/Key methods | Threads *two* schemes through five traits — **rejected** under §15.5 rewrite |
 | **MS-1(a)/(c)** standalone / cuttable seam | Can stand a second stack beside the first — **preferred**; both "permanent" and "temporary-then-coexisting" argue for a cuttable seam. Only "temporary and gradually evolved" favored (b), and §15.5 forbids that |
 
-### F-3 is coexistence arriving four years early
+### F-3 — Option A fossil, not a competing V3.1 model (**DELETE**)
 
-Today `multisig/` holds two lineages under one flag — v31 rotating-
-prover and fixed-group-key FROST — **undiscriminated, ungated from each
-other, uncompiled.** Preview of 2030 with version discipline unfixed.
-F-3 is not just tidiness; it is the coexistence problem early.
+**Wrong axis corrected (2026-07-14).** The fork under
+`multisig/{dkg,group,signing}.rs` is **not** the Apr 15
+fixed-prover vs rotating-prover fork (both were Option C/D —
+per-output KEM + per-participant spend-auth; you chose rotating with
+eyes open on 1/N permanent-loss — §15.4). It is also **not** a V4
+seed to quarantine.
 
-**Cheap rehearsal now (§16.7):** protocol already specified
-`frost-sal-v4 = []` as a separate Cargo feature. Building that
-boundary (move/quarantine the coordinator lineage behind
-`frost-sal-v4`, keep `multisig` = v31 only) tests the coexistence
-pattern on a lineage nobody depends on yet. Preferred F-3 disposition
-lean: **separate flag**, not "delete forever" and not "same gate."
+It is **Option A** (fixed group-aggregate PQC pubkey), rejected
+**2026-04-04**: a fixed `hybrid_public_key` in plaintext `pqc_auth`
+is a ~1996-byte fingerprint that collapses FCMP++ anonymity. Option
+**D** (N parallel KEM + N classical spend-auth in `tx_extra`) won.
+`MultisigGroup { group_id, serialized_keys, pqc_public_key }` is that
+rejected model — one PQC pubkey per group for life — surviving only
+because nothing compiles it. v31's per-output `MultisigKeyContainer`
+is the shipping design.
+
+**Do not move it behind `frost-sal-v4`.** The artifact fuses two axes:
+
+| Field | Axis | V4 want? |
+| --- | --- | --- |
+| `serialized_keys` (FROST threshold) | **SAL** | Yes — legitimately fixed-per-group for real FROST-SAL |
+| `pqc_public_key` (fixed group) | **PQC auth** | **No** — Option A, rejected |
+
+A real V4 FROST-SAL keeps the first and must never have the second.
+Keeping this blob costs four years of F-3 confusion to buy a seed
+you'd throw away.
+
+**Disposition: DELETE** `multisig/{dkg,group,signing}.rs` (+
+`MultisigGroup` / tests) under Track B go-ahead (or a tiny cleanup
+PR). F-4 / F-5 / F-9 evaporate with it. `frost-sal-v4` (§16.7) remains
+worth building as the first **coexistence** boundary when there is a
+*clean* SAL-only scaffold — not around this fossil.
+
+**Prose fossil:** `V3_ROLLOUT.md` still documents coordinator-held
+single classical key — Option A as shipping design. **P0-h** (landed
+partially this commit).
+
+**Retraction:** claiming "per-output vs fixed-group privacy is a
+Phase 6 cryptographer question" was wrong — answered in-repo since
+Apr 4 (`pqc_auth` plaintext fingerprint). Search before pointing at
+external review.
 
 ---
 
@@ -285,13 +315,13 @@ design's acceptance**, not implementation.
 | --- | --- | --- | --- |
 | **R1-F-1** | CRITICAL | Fossil `PQC_MAX_*_BLOB`; N=7 unserializable. Container layout already 14,199 — but admitting N=7 on the wire is a **behavior change** (unhides zone case). Fossil + zone both imply effective MAX=6 today. | **Accepted → MSW-1 + MSW-G** (pick 6/7/8 with the bound). |
 | **R1-F-2** | CRITICAL → **retracted as leaf change** | Original: change leaf preimage / treat length as sole cross-scheme separator. **Retraction:** leaf is shared scheme-1+2; changing it touches wallet2 receive, blockchain verify×3, emission Auth-B, stake_engine, FFI C ABI, test vectors, submit verifier — emission-wire risk. Cross-scheme confusion already impossible by **byte[2] prefix disjointness**; length is second separator. MS-8 still redundant. Dual `DOMAIN_PQC_LEAF` remains hygiene debt (not Track A blocking). | **Leaf change REJECTED.** **MSW-2 = disjointness invariant doc+KAT.** **MS-8 RETIRED** (redundancy). Misattribution fix → MSW-3. |
-| **R1-F-3** | HIGH | Coexisting FROST **coordinator** lineage under same `multisig` gate (`multisig/{dkg,group,signing}.rs`) vs coordinator-less `v31/`. | **Accepted — sharpened (§0.4).** Coexistence rehearsal four years early. Lean: quarantine behind `frost-sal-v4` (§16.7); `multisig` = v31 only. Blocks MS-1/MS-3/MS-5 until named. |
-| **R1-F-4** | HIGH | Two `group_id` defs: deterministic `multisig_group_id` vs caller-supplied `dkg.rs` context. | **Accepted.** Round 2 / F-3 co-dispose: one canonical type; delete or newtype the other. |
-| **R1-F-5** | HIGH | `MultisigGroup` Serialize hex of secrets; un-zeroized `Vec` reassign; not a `WalletLedger` extension — falsifies "confirm R6". | **Accepted.** MS-7 lean **withdrawn**; R6 re-opened against actual shape. |
+| **R1-F-3** | HIGH | `multisig/{dkg,group,signing}.rs` = **Option A** fixed-group PQC key fossil vs v31 Option D. Not the Apr 15 rotating-vs-fixed *prover* fork. | **DELETE** (not `frost-sal-v4` quarantine). Fuses SAL keys (V4-want) with `pqc_public_key` (Option A, rejected 2026-04-04). Unblocks MS-1 lineage. F-4/F-5/F-9 evaporate on delete. |
+| **R1-F-4** | HIGH | Two `group_id` defs: deterministic `multisig_group_id` vs caller-supplied `dkg.rs` context. | **Accepted → evaporates with F-3 DELETE** (DKG caller-supplied id dies with the file). Canonical = `multisig_group_id` / v31. |
+| **R1-F-5** | HIGH | `MultisigGroup` Serialize hex of secrets; un-zeroized `Vec` reassign; not a `WalletLedger` extension — falsifies "confirm R6". | **Accepted → evaporates with F-3 DELETE.** R6 re-open against **v31** persist shape only (MS-7). |
 | **R1-F-6** | HIGH | No CI job builds `--features multisig`. Gate armed, no positive compile trigger. | **Accepted.** **Prerequisite for Round 1 closure:** CI lane `check/clippy/test` for engine-core + engine-rpc + ffi with `--features multisig`. |
 | **R1-F-7** | MEDIUM | §3.1 "associated items only on multisig kind" is a compile error; `EngineSignerKind` has zero associated items; marker is aspiration. | **Accepted.** Correct framing: first associated item = trait-surface amend touching `SoloSigner` (`SigningCeremony = Infallible`). |
 | **R1-F-8** | MEDIUM | Second verify site + five independent bound defs; folds into MSW-1 lockstep + MSW-3 misattribution. | **Accepted → MSW-1/MSW-3.** |
-| **R1-F-9** | MEDIUM | FROST `sign_own` nonce-reuse; unauthenticated `participant` claims. | **Accepted.** Evaporates if F-3 deletes lineage; else hard gates before compile-into-product. |
+| **R1-F-9** | MEDIUM | FROST `sign_own` nonce-reuse; unauthenticated `participant` claims. | **Accepted → evaporates with F-3 DELETE.** |
 | **R1-F-10** | LOW | Pin discipline: `dev`-at-recording ≠ branch tip. | **Accepted.** Banner + this table. |
 | **R1-F-11** | HIGH | Version hooks for 2030+ are fake: `group_version` fused with `MULTISIG_CONTAINER_VERSION` (constant, not `container.version`); `spend_auth_version` hardcoded / not on wire by accident; reserved namespace under-tested (`group_version` variation absent). Same shape as F-1 — feature gate does not protect genesis-frozen bytes. | **Accepted → MSW-4 + MSW-5.** Under §0.4 rewrite-and-coexist, these bytes are the **entire V3.1↔V4 interface** (discriminability, not evolvability). MS-7: versioned record with working discriminator — **not** an evolvable enum. |
 
@@ -417,7 +447,7 @@ Per [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc):
 | --- | --- |
 | **1 — Security** | **Track A first:** lying ceilings (F-1); disjointness (MSW-2); **version discriminators (MSW-4/5)** — the V3.1↔V4 interface under §0.4. Track B: threshold authority, wipe-on-drop, honest-signer invariants — **bounded** design life. |
 | **2 — Privacy** | Track B receive path (Option C / FA-6b). Spend must not weaken FCMP++ vs solo. |
-| **3 — System longevity** | §0.4 coexistence: V3.1 permanent beside V4. Discriminability > evolvability. Feature-gated Track B; F-3 rehearses dual-stack via `frost-sal-v4`. |
+| **3 — System longevity** | §0.4 coexistence: V3.1 permanent beside V4. Discriminability > evolvability. Feature-gated Track B (v31 only). `frost-sal-v4` for a *future clean* SAL scaffold — not the Option A fossil. |
 
 **Three timeframes (corrected under §0.4).** Now: Track A bounds +
 disjointness + **real version bytes** before genesis; MSW-G. V3.1:
@@ -464,7 +494,7 @@ unchanged across the 9-commit archival drift.
 | Production wallet-rpc / cli | do not enable `multisig` | both |
 | Envelope `CAPABILITY_RESERVED_MULTISIG` | refused | both |
 | `EngineSignerKind` / `SoloSigner` | marker only; **zero associated items**; `MultisigSigner` type **absent** | both |
-| **`multisig/{dkg,group,signing}.rs`** | **FROST coordinator lineage** under same gate (~493+152 LOC) | **omitted at open — R1-F-3** |
+| **`multisig/{dkg,group,signing}.rs`** | **Option A FROST fossil** — **DELETE** (R1-F-3 disposition) | **closed as delete** |
 | `multisig/v31/` | equal-participants scaffold; no `construction.rs` / `transport/` | both |
 | `shekyl-crypto-pq::multisig` | **always compiled**; V3.1 container `expected_blob_len = 3+n·2028` | both |
 | `PQC_MAX_PUBLIC_KEY_BLOB` | `2+7·1996 = 13974` — **N=7 canonical 14199 fails** | **R1-F-1 → MSW-1** |
@@ -530,11 +560,11 @@ Deferred to Round 2 after MS-1 **and** F-3 lineage fate.
 | **P0-e** | INDEX | MS / MSW status rows |
 | **P0-f** | FA-6b FOLLOWUPS | V3.1 engine ship gate |
 | **P0-g** | FOLLOWUPS "wire group_id into consensus" | **Close as superseded by MSW-2 / MS-8 retirement** |
-| **P0-h** | `V3_ROLLOUT.md` multisig size table | Replace auth-overhead/~7× framing with whole-tx weights; use real (post-MSW-1) blob sizes; delete coordinator-held + "recommended for staking" drift (Pin #4 / F-3) |
+| **P0-h** | `V3_ROLLOUT.md` | **Partial land 2026-07-14:** delete Option A "coordinator-held" + "recommended for staking" drift. Still owed: replace fossil ~7× auth-overhead table with whole-tx weights (post-MSW-1 sizes). |
 | **P0-i** | `MAX_MULTISIG_PARTICIPANTS` | Record MSW-G pick + rationale (or explicit "held at 7 with written BFT+zone acceptance") |
-| **P0-j** | `PQC_MULTISIG.md` §15.4 + `VERSIONING.md` | **Landed 2026-07-14:** split 15.4a/15.4b; same-day **posture pin** (auth already PQ; SAL = liveness; phrase pin for `spend_auth_version=0x02`) |
-| **P0-k** | `PQC_MULTISIG.md` §15.1 honesty | Doc that hooks are currently fused/hardcoded; point to MSW-4/5 as the real reservation |
-| **P0-l** | §0.4 / §16.7 F-3 rehearsal | Prefer `frost-sal-v4` separate flag for coordinator lineage; `multisig` = v31 only — practice dual-stack before 2030 |
+| **P0-j** | `PQC_MULTISIG.md` §15.4 + `VERSIONING.md` | **Landed 2026-07-14:** split 15.4a/15.4b; posture pin |
+| **P0-k** | `PQC_MULTISIG.md` §15.1 honesty | Doc that hooks are currently fused/hardcoded; point to MSW-4/5 |
+| **P0-l** | R1-F-3 DELETE | **Disposition landed:** delete Option A FROST fossil (`dkg`/`group`/`signing`); do **not** quarantine behind `frost-sal-v4`. Build that flag later for clean SAL-only coexist rehearsal. Implementation = Track B go-ahead / cleanup PR. |
 
 ---
 
@@ -542,25 +572,19 @@ Deferred to Round 2 after MS-1 **and** F-3 lineage fate.
 
 Criteria unchanged. Status reflects adversarial review.
 
-### MS-1 — Trait identity — **OPEN (blocked on R1-F-3; lean sharpened §0.4)**
+### MS-1 — Trait identity — **OPEN (F-3 lineage CLOSED → v31 only; lean §0.4)**
 
-**Lean MS-1(a)/(c)** — standalone / cuttable seam that can stand a
-**second** multisig stack beside the first. Under §0.4
-rewrite-and-coexist, `EngineSignerKind` must hold solo + **two**
-multisig implementations forever. **MS-1(b)** (extend PendingTx /
-Refresh / Key methods) is **rejected**: it threads two schemes through
-five traits; §15.5 forbids gradual evolution.
+**Lean MS-1(a)/(c)** — cuttable seam for solo + **future** second
+multisig stack (V4 coexist). **MS-1(b) rejected.** Lineage question
+**closed**: only v31 Option D ships under `multisig`; Option A FROST
+fossil **DELETE** (R1-F-3). Round-2 still names `K` on
+`MultisigSigner<N, K>` (threshold vs spend_auth / scheme version for
+the *future* coexist axis — not "which fossil").
 
-`signer.rs:12` names `MultisigSigner<N, K>` and never defines `K`.
-Round-2 must name it: threshold? Or **scheme / spend_auth version**
-(the coexistence axis)? MS-1 is not picking a shape for V3.1 alone.
+Still needs R1-F-7 SoloSigner associated-item amend. F-6 CI remains
+Round 1 closure prerequisite.
 
-Still blocked on F-3 naming which lineage `MultisigSigner` dispatches
-to (lean: v31 under `multisig`; FROST under `frost-sal-v4`).
-R1-F-7 SoloSigner amend required for associated items.
-
-**Reopen.** Only if coexistence premise is withdrawn (§15.5 amended
-to allow in-place evolution) — then (b) re-enters.
+**Reopen.** Only if coexistence premise withdrawn (§15.5 amended).
 
 ### MS-2 — C++ / Rust boundary — **OPEN (lean holds; substrate corrected)**
 
@@ -585,19 +609,18 @@ Keep Cargo feature name `multisig`. Flip checklist **amended**:
    CI (**R1-F-6** — Round 1 closure prerequisite, not Round 3).
 6. **Negative CI:** default/release builds do not enable `multisig`;
    no simple-mode symbols.
-7. **F-3:** flip must not ship the coordinator lineage unless that
-   is the explicit product decision.
+7. **F-3:** Option A fossil **deleted** before flip (not shipped, not
+   quarantined behind `frost-sal-v4`).
 
 ### MS-4 — Receive path — **OPEN (lean holds)**
 
 MS-4(a) Refresh/scanner arm. FA-6b gate unchanged.
 
-### MS-5 — Spend path — **OPEN (blocked on R1-F-3 / R1-F-7)**
+### MS-5 — Spend path — **OPEN (F-7 + construction; lineage unblocked)**
 
-Gaps restated: no v31 `construction.rs`; **there is** a
-`MultisigSigningSession` with a **conflicting** coordinator model
-(R1-F-3). `EngineSignerKind` has no ceremony associated type yet
-(R1-F-7). Lean MS-5(a)/(c) after F-3.
+Gaps: no v31 `construction.rs`; Option A `MultisigSigningSession`
+**deleted with F-3**. `EngineSignerKind` has no ceremony associated
+type yet (R1-F-7). Lean MS-5(a)/(c).
 
 ### MS-6 — Transport — **OPEN (lean holds)**
 
@@ -676,7 +699,7 @@ not a quiet reopen of MS-8.
   `FCMP_MAX_INPUTS_PER_TX` (128 → 8); refuse unserializable intents.
 - R-G: MSW-2 KAT remains green after MSW-1 bound raise; flip must not
   assume length-only separation.
-- R-H: F-3 lineage deletion/quarantine PR shape.
+- R-H: F-3 DELETE PR (`dkg`/`group`/`signing` + tests); not quarantine.
 - R-I: F-5 zeroize + ledger migration for group secrets.
 - R-J / **MSW-G:** pick `MAX ∈ {6,7,8}` **before** MSW-1 lands; write
   rationale; optionally improve `rotating_prover_index` (rejection
@@ -752,4 +775,5 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-14 | **§15.4 split (P0-j):** FROST SAL (15.4a, internal two-component/`y` blocker) ≠ pure-PQC auth (15.4b, NIST IR 8214C reference call → later process). TRacoon wrong N regime + no DKG + not FIPS; watch dPN25/TALUS for size. Size lens for MSW-G has 15.4b expiry; genesis still freezes on today's list economics. |
 | 2026-07-14 | **§15.4 posture pin:** scheme_id=2 already PQ auth (M×ML-DSA); solo≡multisig classical FCMP++/SAL; SAL = liveness not compromise; grinding/griefing → availability not Phase 6 crypto; `spend_auth_version=0x02` = 15.4a classical threshold SAL ≠ lattice SAL (impossible under FCMP++); 15.4b = auth size only. Ship decision = economics (~3×), not crypto-maturity. |
 | 2026-07-14 | **R1-F-11 / MSW-4+5:** version hooks fake at genesis — fuse container/group version; spend_auth_version constant not wire; under-tested reserved namespace. Same shape as F-1. MS-7 Round-2: R6 must not bake `[u8;32]` classical-only durable field (plan §1). |
-| 2026-07-14 | **§0.4 coexistence pin:** V4 = rewrite beside V3.1 (§15.4–15.5), not evolve-in-place. Discriminability > evolvability; version bytes = entire V3.1↔V4 interface. Track A permanent / Track B ~4y then legacy — process inversion named. MS-1(a)/(c) win, (b) rejected. F-3 = coexist rehearsal; lean `frost-sal-v4` separate flag (§16.7). |
+| 2026-07-14 | **§0.4 coexistence pin:** V4 = rewrite beside V3.1 (§15.4–15.5), not evolve-in-place. Discriminability > evolvability; version bytes = entire V3.1↔V4 interface. Track A permanent / Track B ~4y then legacy — process inversion named. MS-1(a)/(c) win, (b) rejected. |
+| 2026-07-14 | **R1-F-3 → DELETE:** Option A fixed-group PQC fossil (not Apr 15 rotating-vs-fixed prover; that closed with named 1/N loss). Not a V4 seed — fuses SAL keys with rejected `pqc_public_key`. `frost-sal-v4` later for clean SAL only. V3_ROLLOUT Option A prose fixed (P0-h partial). Retract "Phase 6 cryptographer" claim on per-output privacy. |
