@@ -13,18 +13,24 @@ are mostly defensible for Track B. Round 1 **still cannot close**:
 §2.3's opening substrate table omitted always-compiled consensus
 surfaces and a coexisting FROST lineage, which inverted **MS-8** and
 falsified the safety rationale behind Hard Scope Pin #2 (feature gate
-protects wallet logic only — not blob bounds, leaf preimage, or
-`scheme_id` binding).
+protects wallet orchestration only — not `PQC_MAX_*_BLOB` bounds).
+
+**F-2 retraction (2026-07-14, same reviewer, pin `b23cdaff0`).**
+Changing the leaf preimage is **not** free and **not** needed:
+cross-scheme confusion is already impossible by **prefix
+disjointness** (`reserved == 0` ⊥ `m_required ≥ 1` at byte[2]), with
+length as a second separator. Track A shrinks to a constant-family
+correction + KATs + misattribution fixes. Leaf preimage **left alone**.
 
 **Process.** Cites
 [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) and
 [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
 **Halt condition (Track B only):** no Track B implementation commits
 until design closure **and** the named pre-flight pass discharge.
-**Track A** (V3.0 wire) is **not** held by that halt — it is a
-fund-loss / genesis-freeze consensus defect class and ships whether or
-not multisig ever flips — but still requires an **explicit
-implementation go-ahead** (separate short-lived branch off `dev`).
+**Track A** (V3.0 wire bounds) is **not** held by that halt — F-1 is
+a fund-loss deserialize ceiling lying about an existing container —
+but still requires an **explicit implementation go-ahead** (separate
+short-lived branch off `dev`).
 
 **Trigger fired.**
 [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
@@ -35,7 +41,7 @@ implementation go-ahead** (separate short-lived branch off `dev`).
 | Family | Owns |
 | --- | --- |
 | **MS-1…MS-N** | Track B engine-integration Round 1 questions |
-| **MSW-1…MSW-N** | Track A V3.0 pre-genesis multisig **wire** work items (from R1-F-1 / R1-F-2 / R1-F-8) |
+| **MSW-1…MSW-N** | Track A V3.0 pre-genesis multisig **wire** work (revised): bound-family reconcile + cross-seam KAT + scheme-disjointness pin + misattribution fix; **not** a leaf-preimage change |
 | **R1-F-N** | Round 1 adversarial findings (doc-scoped; this file) |
 
 Prefix `MS` / `MSW` uniqueness: registered in
@@ -50,51 +56,79 @@ HEAD diverges immediately. Re-pin at Round 0 / Track A pre-flight.
 | --- | --- |
 | Design branch opened | `dev` = `13bd508c7` (2026-07-14) |
 | Round 1 adversarial verification (reviewer) | `dev` = `b23cdaff0` (2026-07-14; +9 archival commits, no multisig surface move) |
-| Local re-check of R1-F-1 / R1-F-2 arithmetic + cited paths | this design-branch tree (crypto-pq / wire / config formulas unchanged by archival drift) |
+| Local re-check of R1-F-1 arithmetic + F-2-retraction prefix layout | this design-branch tree |
+| F-2 retraction / blast-radius / size Q&A | reviewer pin `b23cdaff0` (2026-07-14) |
 
 ---
 
 ## §0 Structural disposition — Track A / Track B split
 
-Accepted from Round 1 adversarial review (2026-07-14). Two tracks were
-fused; the fusion inverted priority order (rule `00-mission` priority 1).
+Accepted from Round 1 adversarial review (2026-07-14), **revised**
+same day after F-2 retraction + blast-radius / size Q&A.
 
-### Track A — V3.0 pre-genesis wire (unblocked from engine design rounds)
+### Track A — V3.0 pre-genesis wire (**revised: constant fix, not design change**)
 
-Consensus / always-compiled surfaces. Ship whether or not the
-`multisig` feature ever flips. **No Track B design-round debt.**
-Rule-19: F-1 bounds, F-2 leaf preimage, and F-8 dual verify sites are
-**one validation surface** — jointly reconcile (A2+A8 co-trigger:
-fixing lengths without fixing leaf `scheme_id` moves the only
-current cross-scheme separator).
+Always-compiled deserialize / verify ceilings. Ship whether or not
+`multisig` flips. **No Track B design-round debt.** **No wallet /
+engine / archival / emission-wire contact** for the bound fix (F-1
+consumer set is config + wire + two verify sites + two symbolic
+negative tests). Curve tree / leaf size **unaffected** (`h_pqc` is
+always 32 bytes).
 
-| ID | From | Work |
-| --- | --- | --- |
-| **MSW-1** | R1-F-1 | Reconcile `PQC_MAX_{PUBLIC_KEY,SIGNATURE}_BLOB` + `MULTISIG_KEY_HEADER_LEN` to V3.1 container (`3 + n·2028` keys; `1 + M·3385 + M` sigs). Single-source constant family across C++ / `shekyl-wire` / `shekyl-crypto-pq`. Cross-seam KAT: every `n ∈ 1..=MAX` round-trips both deserializers. |
-| **MSW-2** | R1-F-2 | Decide leaf preimage before genesis: keep `DOMAIN_PQC_LEAF ‖ pqc_pk` **or** extend to `DOMAIN_PQC_LEAF ‖ scheme_id ‖ container_version ‖ pqc_pk`. Single-source `DOMAIN_PQC_LEAF` + wide-reduce; cross-crate KAT. **Retires MS-8.** |
-| **MSW-3** | R1-F-8 | Move `tx_pqc_verify.cpp` **and** `shekyl-daemon-rpc/src/submit/verifier.rs` together under MSW-1/MSW-2. |
+**Nothing gets bigger.** A 7-of-7 key container has always been
+14,199 bytes (`expected_blob_len`); the bound was written for a
+pre-V3.1 two-byte-header container. F-1 raises
+`13,974 → 14,199` (and the sig twin) so the ceiling stops rejecting
+the artifact it claims to describe.
+
+One validation surface (rule 19):
+
+| ID | Work |
+| --- | --- |
+| **MSW-1** | Reconcile `PQC_MAX_PUBLIC_KEY_BLOB` / `PQC_MAX_SIGNATURE_BLOB` / `MULTISIG_KEY_HEADER_LEN` against `MultisigKeyContainer::expected_blob_len` / sig layout. Single-source across `cryptonote_config.h` / `shekyl-wire` / `shekyl-crypto-pq`; **delete** the `tx_pqc_verify.cpp:49-52` local shadow (and keep `submit/verifier.rs` in lockstep — R1-F-8). Cross-seam KAT: every `n ∈ 1..=MAX_MULTISIG_PARTICIPANTS` real container round-trips **both** deserializers. |
+| **MSW-2** | **Pin scheme-disjointness as a load-bearing consensus invariant** (doc + KAT): no byte string parses as both `HybridPublicKey::from_canonical_bytes` and `MultisigKeyContainer::from_canonical_bytes`. Separation is **byte[2]**: scheme-1 `reserved == 0` ⊥ scheme-2 `m_required ≥ 1` (`signature.rs` reserved check; `multisig.rs:68`). Length disjointness is a second, independent separator. **Leaf preimage left alone.** Rule-21 reopen: any use of `reserved`, any `MULTISIG_CONTAINER_VERSION` bump, any new scheme id / V4 lattice container. |
+| **MSW-3** | Fix `"output committed="` misattributions (`tx_pqc_verify.cpp:191-192`, `tx_pqc_verify.h:30-31`) — consumer is intra-tx `pqc_auths[0]` consistency (`blockchain.cpp:4260`), not output binding. Record **MS-8 retirement**: `group_id = f(key_blob)` already leaf-bound; wiring `shekyl_pqc_verify_with_group_id` is a no-op. |
+
+**Genesis-adjacent (not MSW code, but answer before seal):** whether
+`MAX_MULTISIG_PARTICIPANTS = 7` is the right frozen number given
+full-reward-zone economics (8×7-of-7 `pqc_auths` alone ≈ 303 KiB vs
+`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5 = 300_000`). Track as
+**MSW-G** decision / sim input — may lower `MAX` before genesis;
+does **not** reopen leaf preimage.
 
 ### Track B — V3.1 engine (MS-1…MS-7, gated, unhurried)
 
 Feature-gated wallet orchestration. Rule-26 halt remains correct
-**here**. Round 1 closure prerequisites: **R1-F-3, R1-F-4, R1-F-5,
-R1-F-6, R1-F-7** (below). **MS-8 retired** → Track A / MSW-2.
+**here**. Round 1 closure prerequisites: **R1-F-3…F-7** (+ F-6 CI).
+**MS-8 retired** (redundancy; independent of leaf-preimage choice).
 
-### Hard scope pins (amended 2026-07-14)
+**Size / fee items belong here (not Track A):**
+
+- Fee model is scheme-1-only (`tx_fee_model.rs:151-158`
+  `pqc_auth_weight`) — underpays multisig → R-B / MS-5.
+- `v31` `MAX_INPUTS = 128` vs consensus `FCMP_MAX_INPUTS_PER_TX = 8`
+  — bad-states-representable → R-C / intent type.
+- Per-input wire size table (2-of-2…7-of-7) informs fee + UX, not
+  the tree.
+
+### Hard scope pins (amended 2026-07-14; pin-2 revised after F-2 retraction)
 
 1. **No Track B production code on this branch** until design closure
    + pre-flight + explicit go-ahead.
 2. **Feature gate protects wallet orchestration only.** It does
-   **not** protect `PQC_MAX_*_BLOB`, leaf preimage, or `scheme_id`
-   binding — those are always-compiled and genesis-frozen (**R1-F-1**,
-   **R1-F-2**). Default packages still must not enable `multisig`.
-3. **Rust owns wallet multisig logic.** C++ = LMDB / chain-DB of
-   consensus-visible bytes + verify FFI marshaling. No `wallet2` /
-   `cryptonote_tx_utils` multisig logic.
-4. **Archival out of scope** for Track B.
-5. **Track A is in scope for the project now**, tracked as MSW-*,
-   implemented off `dev` on a separate branch when go-ahead is given —
-   not held behind Track B rounds.
+   **not** protect `PQC_MAX_*_BLOB` (always-compiled; **R1-F-1**).
+   Cross-scheme leaf safety is prefix-disjointness (**MSW-2**), not
+   the feature gate. Default packages still must not enable
+   `multisig`.
+3. **Rust owns new wallet multisig logic.** C++ = LMDB / chain-DB +
+   verify FFI. **Existing** `wallet2` PQC multisig group surface
+   (`create_pqc_multisig_group`, `m_pqc_multisig_*`,
+   `shekyl_pqc_multisig_group_id` at `:9828-9852`) is acknowledged
+   substrate — MS-2 forbids *thickening* it; deletion/migration is
+   Phase 5 / rewrite fodder, not Track A.
+4. **Archival out of scope** for Track B (and for revised Track A).
+5. **Track A (revised)** lands off `dev` on `feat/msw-*` when
+   go-ahead is given — not held behind Track B rounds.
 
 ---
 
@@ -106,14 +140,14 @@ design's acceptance**, not implementation.
 
 | ID | Sev | Finding (one line) | Disposition |
 | --- | --- | --- | --- |
-| **R1-F-1** | CRITICAL | `PQC_MAX_*_BLOB` uses fossil `2+N·LEN`; V3.1 container is `3+n·2028` / `1+M·3385+M`. **N=7 (and M=7) unserializable** at deserialize (`cryptonote_basic.h:458`, `shekyl-wire` bounds). Fund-loss: output can land; spend never parses. | **Accepted → MSW-1.** V3.0 wire. Not held by Track B halt. |
-| **R1-F-2** | CRITICAL | Leaf is `H(DOMAIN ‖ pqc_pk)` only (`leaf.rs:29-33`). `group_id` binding is redundant (pure fn of blob already in leaf). Real gap: **spender-supplied `scheme_id`** only intra-tx consistent; cross-scheme safety is length-disjointness coincidence. Dual `DOMAIN_PQC_LEAF` defs, no cross-crate KAT. | **Accepted → MSW-2.** **MS-8 RETIRED.** Joint with MSW-1. |
+| **R1-F-1** | CRITICAL | `PQC_MAX_*_BLOB` uses fossil `2+N·LEN`; V3.1 container is `3+n·2028` / `1+M·3385+M`. **N=7 (and M=7) unserializable** at deserialize. Fund-loss: output can land; spend never parses. Bound raise is a **correction** (container already that size), not growth. Consumers: config + wire + verify shadows + two symbolic tests — **zero wallet/engine/archival**. | **Accepted → MSW-1.** |
+| **R1-F-2** | CRITICAL → **retracted as leaf change** | Original: change leaf preimage / treat length as sole cross-scheme separator. **Retraction:** leaf is shared scheme-1+2; changing it touches wallet2 receive, blockchain verify×3, emission Auth-B, stake_engine, FFI C ABI, test vectors, submit verifier — emission-wire risk. Cross-scheme confusion already impossible by **byte[2] prefix disjointness**; length is second separator. MS-8 still redundant. Dual `DOMAIN_PQC_LEAF` remains hygiene debt (not Track A blocking). | **Leaf change REJECTED.** **MSW-2 = disjointness invariant doc+KAT.** **MS-8 RETIRED** (redundancy). Misattribution fix → MSW-3. |
 | **R1-F-3** | HIGH | Coexisting FROST **coordinator** lineage under same `multisig` gate (`multisig/{dkg,group,signing}.rs`) vs coordinator-less `v31/`. | **Accepted.** Round 1 closure prerequisite: name fate (delete vs `frost-sal-v4`-only vs quarantine). Blocks MS-1/MS-3/MS-5. |
 | **R1-F-4** | HIGH | Two `group_id` defs: deterministic `multisig_group_id` vs caller-supplied `dkg.rs` context. | **Accepted.** Round 2 / F-3 co-dispose: one canonical type; delete or newtype the other. |
 | **R1-F-5** | HIGH | `MultisigGroup` Serialize hex of secrets; un-zeroized `Vec` reassign; not a `WalletLedger` extension — falsifies "confirm R6". | **Accepted.** MS-7 lean **withdrawn**; R6 re-opened against actual shape. |
 | **R1-F-6** | HIGH | No CI job builds `--features multisig`. Gate armed, no positive compile trigger. | **Accepted.** **Prerequisite for Round 1 closure:** CI lane `check/clippy/test` for engine-core + engine-rpc + ffi with `--features multisig`. |
 | **R1-F-7** | MEDIUM | §3.1 "associated items only on multisig kind" is a compile error; `EngineSignerKind` has zero associated items; marker is aspiration. | **Accepted.** Correct framing: first associated item = trait-surface amend touching `SoloSigner` (`SigningCeremony = Infallible`). |
-| **R1-F-8** | MEDIUM | Second verify site: `shekyl-daemon-rpc/.../verifier.rs` also `verify_multisig(..., None)`. Five independent `MAX_MULTISIG_PARTICIPANTS` / bound defs. | **Accepted → MSW-3.** Bundle with MSW-1/2. |
+| **R1-F-8** | MEDIUM | Second verify site + five independent bound defs; folds into MSW-1 lockstep + MSW-3 misattribution. | **Accepted → MSW-1/MSW-3.** |
 | **R1-F-9** | MEDIUM | FROST `sign_own` nonce-reuse; unauthenticated `participant` claims. | **Accepted.** Evaporates if F-3 deletes lineage; else hard gates before compile-into-product. |
 | **R1-F-10** | LOW | Pin discipline: `dev`-at-recording ≠ branch tip. | **Accepted.** Banner + this table. |
 
@@ -122,7 +156,7 @@ design's acceptance**, not implementation.
 | # | Adversary | Armed at source? |
 | --- | --- | --- |
 | A1 | N=7 output lands; spend never serializes | **No** — R1-F-1 |
-| A2 | Scheme-2 blob vs scheme-1 leaf (or reverse) | **No** — only length coincidence; R1-F-2 |
+| A2 | Present scheme-2 blob against scheme-1 leaf (or reverse) | **Armed by construction** — byte[2] `reserved==0` ⊥ `m_required≥1` (+ length). Original "length only" claim **retracted**. Guard with MSW-2 KAT. |
 | A3 | Spender lies about `group_id` | **Vacuous** — already in leaf; MS-8 retired |
 | A4 | Mix scheme 1/2 across inputs | Self-referential intra-tx only |
 | A5 | Malicious DKG steers `group_id` | **No** — R1-F-4 |
@@ -130,9 +164,8 @@ design's acceptance**, not implementation.
 | A7 | Forge FROST `participant` index | **No** on FROST lineage |
 | A8 | Flip ships never-compiled code | **Wrong-direction gate** — R1-F-6 |
 
-**A2 + A8 co-trigger:** MSW-1 and MSW-2 must land in one validation
-surface (or sequenced with an explicit disjointness proof after the
-bound change).
+**A2 + MSW-1:** raising bounds does **not** remove prefix disjointness;
+MSW-2 KAT must still pass after the bound correction. No leaf change.
 
 ---
 
@@ -142,13 +175,14 @@ Per [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc):
 
 | Priority | How this design touches it |
 | --- | --- |
-| **1 — Security** | **Track A first.** Blob bounds + leaf/`scheme_id` are genesis-frozen fund-loss / confusion surfaces. Track B: threshold authority, DKG secrets, wipe-on-drop (`35`/`36`), honest-signer invariants. |
+| **1 — Security** | **Track A first (revised):** correct lying deserialize ceilings (F-1); pin prefix-disjointness (MSW-2). **Not** a leaf-preimage cut. Track B: threshold authority, DKG secrets, wipe-on-drop (`35`/`36`), honest-signer invariants. |
 | **2 — Privacy** | Track B receive path (Option C / FA-6b). Spend must not weaken FCMP++ vs solo. |
 | **3 — System longevity** | Feature-gated V3.1; Stage 4 swap-in; V4 FROST-SAL only after F-3 names the in-tree FROST lineage's fate. |
 
-**Three timeframes.** Now: Track A before genesis. V3.1: Track B
-behind `multisig`. V4: lattice-only / FROST-SAL — not an excuse to
-leave the coordinator fossil under the V3.1 feature name.
+**Three timeframes.** Now: Track A bound correction + disjointness
+KAT before genesis; **MSW-G** on whether `MAX=7` survives reward-zone
+math. V3.1: Track B behind `multisig`. V4: lattice container must
+re-prove MSW-2 reopen criteria.
 
 ---
 
@@ -172,7 +206,8 @@ rounds close.
 | Headless co-signer / HW wallet / GUI | FOLLOWUPS / sibling repos |
 | Archival | Separate |
 | Enabling `multisig` in release packages | Named flip PR |
-| Wiring `shekyl_pqc_verify_with_group_id` as the primary fix | **Retired** (R1-F-2); do not schedule as ship-gate |
+| Wiring `shekyl_pqc_verify_with_group_id` as the primary fix | **Retired** (MS-8 redundancy); do not schedule as ship-gate |
+| Changing `DOMAIN_PQC_LEAF ‖ …` preimage | **Rejected** (F-2 retraction); not free, not needed |
 
 ### §2.3 Substrate table (corrected)
 
@@ -189,14 +224,18 @@ unchanged across the 9-commit archival drift.
 | **`multisig/{dkg,group,signing}.rs`** | **FROST coordinator lineage** under same gate (~493+152 LOC) | **omitted at open — R1-F-3** |
 | `multisig/v31/` | equal-participants scaffold; no `construction.rs` / `transport/` | both |
 | `shekyl-crypto-pq::multisig` | **always compiled**; V3.1 container `expected_blob_len = 3+n·2028` | both |
-| `PQC_MAX_PUBLIC_KEY_BLOB` | `2+7·1996 = 13974` — **N=7 canonical 14199 fails** | **R1-F-1** |
-| `PQC_MAX_SIGNATURE_BLOB` | `2+7·3385 = 23697` — **M=7 canonical 23703 fails** | **R1-F-1** |
-| `MULTISIG_KEY_HEADER_LEN` | still `2` in `tx_pqc_verify.cpp` + `submit/verifier.rs` | **R1-F-1** |
-| Leaf preimage | `DOMAIN ‖ pqc_pk` only; no `scheme_id` / version | **R1-F-2** |
-| `DOMAIN_PQC_LEAF` | dual def fcmp + crypto-pq; comment-tied, no KAT | **R1-F-2** |
-| Daemon `tx_pqc_verify.cpp` | `scheme_id=2`; `shekyl_pqc_verify` (no group_id) | both |
-| **`shekyl-daemon-rpc/.../verifier.rs`** | **second** `verify_multisig(..., None)` | **omitted at open — R1-F-8** |
-| `MultisigGroup` | Serialize hex secrets; claims "wallet file encrypted" | **R1-F-5** |
+| `PQC_MAX_PUBLIC_KEY_BLOB` | `2+7·1996 = 13974` — **N=7 canonical 14199 fails** | **R1-F-1 → MSW-1** |
+| `PQC_MAX_SIGNATURE_BLOB` | `2+7·3385 = 23697` — **M=7 canonical 23703 fails** | **R1-F-1 → MSW-1** |
+| `MULTISIG_KEY_HEADER_LEN` | still `2` in `tx_pqc_verify.cpp` + `submit/verifier.rs` | **R1-F-1 → MSW-1** |
+| Leaf preimage | `DOMAIN ‖ pqc_pk` — **leave alone** (F-2 retraction) | shared scheme 1+2 |
+| Scheme blob prefix | byte[2]: `reserved==0` ⊥ `m_required≥1` | **MSW-2 invariant** |
+| `DOMAIN_PQC_LEAF` | dual def fcmp + crypto-pq; hygiene debt, not Track A blocking | note |
+| Daemon `tx_pqc_verify.cpp` | `scheme_id=2`; misattribution `"output committed="` | **MSW-3** |
+| **`shekyl-daemon-rpc/.../verifier.rs`** | second verify site; header shadow | **MSW-1 lockstep** |
+| **`wallet2.cpp:9828-9852`** | **existing** `create_pqc_multisig_group` / `m_pqc_multisig_*` / correct `shekyl_pqc_multisig_group_id` | **MS-2:** don't thicken; third group_id consumer (vs F-4 DKG) |
+| `MultisigGroup` (engine) | Serialize hex secrets; claims "wallet file encrypted" | **R1-F-5** |
+| `tx_fee_model::pqc_auth_weight` | scheme-1 lengths only | **Track B R-B** |
+| `v31/intent.rs MAX_INPUTS` | 128 vs consensus `FCMP_MAX_INPUTS_PER_TX=8` | **Track B R-C** |
 | CI `--features multisig` | **no job** | **R1-F-6** |
 | Protocol §16.4 | superseded note (Rust-owns-logic) | design branch |
 
@@ -266,11 +305,15 @@ R1-F-7 SoloSigner amend.
 
 **Reopen.** §1.5 failure for standalone engine → MS-1(b).
 
-### MS-2 — C++ / Rust boundary — **OPEN (lean holds)**
+### MS-2 — C++ / Rust boundary — **OPEN (lean holds; substrate corrected)**
 
-Wallet logic: Rust-only. C++: LMDB + verify FFI. Track A wire fixes
-**are** consensus C++/Rust constant + deserialize + leaf changes —
-that is not "wallet multisig logic."
+New wallet multisig logic: Rust-only. C++: LMDB + verify FFI.
+**Do not claim C++ has no multisig surface** — `wallet2.cpp:9828-9852`
+already has group create / `m_pqc_multisig_*` using the **correct**
+`shekyl_pqc_multisig_group_id` (contrast F-4 DKG caller-supplied id).
+MS-2 forbids thickening that surface; migration/deletion is rewrite /
+Phase 5. Track A bound fixes are consensus ceiling corrections, not
+wallet logic.
 
 ### MS-3 — Feature gate — **OPEN (lean amended)**
 
@@ -313,21 +356,19 @@ shape (and whatever F-3 replaces it with). Secret hygiene
 **Reopen triggers.** Existing PR 6 §5.4.1 triggers, plus: any durable
 secret field that is not `Zeroizing`/`ZeroizeOnDrop` end-to-end.
 
-### MS-8 — Daemon `group_id` verify — **RETIRED (R1-F-2)**
+### MS-8 — Daemon `group_id` verify — **RETIRED (redundancy; F-2 retraction compatible)**
 
-**Rejection.** Wiring `shekyl_pqc_verify_with_group_id` buys a no-op
-consensus rule: `group_id = f(key_blob)` and the leaf already binds
-the blob. No sound daemon-side `expected_group_id` from the creating
-output (`blockchain.cpp` cannot locate it).
+**Rejection.** Wiring `shekyl_pqc_verify_with_group_id` buys a no-op:
+`group_id = f(key_blob)` and the leaf already binds the blob. No
+sound daemon-side `expected_group_id` from the creating output.
+**This conclusion does not depend on changing the leaf preimage.**
 
-**Replacement question (Track A / MSW-2).** Does
-`DOMAIN_PQC_LEAF ‖ pqc_pk` need to become
-`DOMAIN_PQC_LEAF ‖ scheme_id ‖ container_version ‖ pqc_pk` before
-genesis?
+**Replacement (Track A / MSW-2–3).** Pin prefix-disjointness; fix
+`"output committed="` misattributions; do not change leaf hash.
 
-**Re-evaluation shape.** Track A design note or MSW-2 PR description
-records the choice with a cross-crate KAT; FOLLOWUPS group_id item
-closes as superseded (P0-g).
+**Re-evaluation shape.** Only if a future scheme breaks MSW-2 reopen
+criteria *and* leaf binding is shown insufficient — new design round,
+not a quiet reopen of MS-8.
 
 ---
 
@@ -342,7 +383,7 @@ closes as superseded (P0-g).
 | MS-5 | **OPEN** | Blocked on F-3 / F-7 |
 | MS-6 | **OPEN** | Lean holds |
 | MS-7 | **OPEN** | Confirm-R6 **withdrawn**; re-open vs `MultisigGroup` |
-| MS-8 | **RETIRED** | → MSW-2 |
+| MS-8 | **RETIRED** | redundancy; leaf change not required |
 
 **Round 1 still cannot close until:**
 
@@ -353,30 +394,41 @@ closes as superseded (P0-g).
 - [ ] **R1-F-5 / MS-7:** R6 re-opened against real persist shape.
 - [ ] **R1-F-7:** §3.1 / SoloSigner associated-item framing accepted
       into Phase 0 plan.
-- [ ] Maintainer sign-off on Track A / Track B split + MS-8 retirement.
+- [ ] Maintainer sign-off on revised Track A (constant fix) + MS-8
+      retirement + F-2 leaf-leave-alone.
 - [ ] Lens-1 re-test after MS-1; R-residuals pointed at Round 2.
 
 **Round 2 residuals (updated).**
 
 - R-A…R-F as before (engine surface, construction, regtest, FA-6b,
   capability, griefing storage).
-- R-G: **replaced** — MS-8 sequencing → MSW-2 sequencing vs flip
-  (flip must not rely on length coincidence post-MSW-1).
+- R-B **extends:** multisig arm in `pqc_auth_weight` / fee model
+  (scheme-1-only today).
+- R-C **extends:** pin `SpendIntent::MAX_INPUTS` to
+  `FCMP_MAX_INPUTS_PER_TX` (128 → 8); refuse unserializable intents.
+- R-G: MSW-2 KAT remains green after MSW-1 bound raise; flip must not
+  assume length-only separation.
 - R-H: F-3 lineage deletion/quarantine PR shape.
 - R-I: F-5 zeroize + ledger migration for group secrets.
+- R-J / **MSW-G:** pre-genesis decision — is `MAX_MULTISIG_PARTICIPANTS
+  = 7` viable under full-reward-zone (sim); lower `MAX` if not.
 
 ---
 
 ## §7 Implementation gates
 
-### §7.1 Track A (MSW-*) — priority 1
+### §7.1 Track A (MSW-*) — priority 1 (revised)
 
 1. Explicit user go-ahead for Track A implementation.
 2. Short-lived `feat/msw-*` off current `dev`.
-3. Single validation surface (or tightly sequenced PRs with
-   disjointness proof): MSW-1 + MSW-2 + MSW-3.
-4. Cross-seam KATs mandatory before merge.
+3. One validation surface: MSW-1 (bounds + single-source + cross-seam
+   KAT + delete local shadows) + MSW-2 (disjointness doc+KAT) +
+   MSW-3 (misattribution + MS-8 retirement record).
+4. **Do not** change leaf preimage / FFI leaf hash ABI / emission
+   Auth-B / test-vector corpus as part of Track A.
 5. **Not** blocked on Track B Round 1–3.
+6. **MSW-G** may land as a docs/sim decision in the same train or
+   immediately after; if `MAX` drops, MSW-1 formulas follow.
 
 ### §7.2 Track B (MS-*) — rule-26 halt
 
@@ -419,4 +471,5 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | Date | Event |
 | --- | --- |
 | 2026-07-14 | Round 1 opened; MS-1…MS-8 posed |
-| 2026-07-14 | Adversarial review recorded (R1-F-1…F-10); Track A/B split; MS-8 retired → MSW-2; Round 1 closure blocked on F-3…F-7 + F-6 CI; MSW family registered |
+| 2026-07-14 | Adversarial review recorded (R1-F-1…F-10); Track A/B split; MS-8 retired; Round 1 closure blocked on F-3…F-7 + F-6 CI; MSW family registered |
+| 2026-07-14 | **F-2 retraction:** leaf preimage left alone; Track A revised to constant-family fix + prefix-disjointness KAT + misattribution; size/fee/`MAX_INPUTS` → Track B; `wallet2` group surface acknowledged; **MSW-G** on whether `MAX=7` survives reward-zone |

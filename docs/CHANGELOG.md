@@ -4,6 +4,14 @@
 
 ### Added
 
+- **docs: F-2 retraction — Track A revised to constant fix (PR #308).**
+  Leaf preimage **left alone** (not free: wallet2 / emission Auth-B /
+  FFI ABI / vectors; not needed: byte[2] prefix disjointness already
+  separates scheme 1 vs 2). Track A = MSW-1 bounds reconcile + MSW-2
+  disjointness KAT + MSW-3 misattribution; **MSW-G** on whether
+  `MAX=7` survives reward-zone. Fee model / `MAX_INPUTS=128` → Track
+  B. `wallet2` PQC multisig group surface acknowledged under MS-2.
+
 - **docs: Round 1 adversarial on V3.1 multisig engine design — Track A/B
   split (PR #308).** Records R1-F-1…F-10 in
   [`V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md).

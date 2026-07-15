@@ -5823,14 +5823,22 @@ sustainability is unaffected by the recalibration.
   Target: V3.1 (Track B) / V3.0 pre-genesis (Track A).
 
 - **PQC Multisig V3.0 wire: MSW-1…MSW-3 (pre-genesis, priority 1).**
-  From Round 1 adversarial on `V3_1_MULTISIG_RUST_ENGINE.md`:
-  - **MSW-1:** `PQC_MAX_{PUBLIC_KEY,SIGNATURE}_BLOB` + header len
-    fossil vs V3.1 container — N=7/M=7 unserializable (fund-loss).
-  - **MSW-2:** leaf preimage genesis decision (`scheme_id ‖
-    container_version` in or out); single-source `DOMAIN_PQC_LEAF` +
-    KAT; retires group_id-wiring FOLLOWUPS item.
-  - **MSW-3:** both verify sites move together (rule 19).
-  Joint surface with A2+A8 co-trigger. Target: **V3.0 pre-genesis**.
+  **UPDATE 2026-07-14 (F-2 retraction):** Track A is a **constant
+  fix**, not a leaf-preimage design change. Cross-scheme confusion is
+  already impossible by byte[2] prefix disjointness; leaf left alone
+  (changing it would touch wallet2 receive, emission Auth-B, FFI ABI,
+  test vectors). Revised work:
+  - **MSW-1:** raise fossil `PQC_MAX_*_BLOB` / header to match V3.1
+    `expected_blob_len` (correction, not growth); single-source;
+    cross-seam KAT; delete local shadows.
+  - **MSW-2:** doc + KAT for `reserved==0` ⊥ `m_required≥1`; rule-21
+    reopen on reserved use / container version / new scheme.
+  - **MSW-3:** fix `"output committed="` misattributions; MS-8 stays
+    retired (group_id redundant with leaf).
+  - **MSW-G:** sim/decide whether `MAX=7` survives reward-zone
+    (8×7-of-7 pqc_auths alone ≈ 303 KiB vs 300 KiB zone).
+  Fee model / `v31 MAX_INPUTS=128` → Track B. Target: **V3.0
+  pre-genesis**.
 
 - **PQC Multisig V3.1: external adversarial review (Phase 5).**
   Round 4 wargame against the V3.1 multisig implementation per
@@ -5872,10 +5880,13 @@ sustainability is unaffected by the recalibration.
   `expected_group_id` into `tx_pqc_verify.cpp` is a no-op consensus
   rule. The real genesis-freeze question is leaf preimage
   `scheme_id ‖ container_version` (Track A **MSW-2** in
-  [`V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md)).
-  Historical note: FFI `shekyl_pqc_verify_with_group_id` still exists;
-  do not schedule daemon wiring as a V3.1 ship-gate. Carrier for the
-  replacement work: **MSW-1…MSW-3**.
+  [`V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md).
+  The real genesis-adjacent leftover is **MSW-G** (is `MAX=7` viable
+  under full-reward-zone) plus Track A MSW-1…MSW-3 (bounds +
+  disjointness KAT + misattribution) — **not** a leaf-preimage change
+  (F-2 retraction 2026-07-14). Historical note: FFI
+  `shekyl_pqc_verify_with_group_id` still exists; do not schedule
+  daemon wiring as a V3.1 ship-gate.
 
 - **Historical tree path assembly uses current LMDB state.**
   `assemble_tree_path_for_output` (in both `chaingen.cpp` and
