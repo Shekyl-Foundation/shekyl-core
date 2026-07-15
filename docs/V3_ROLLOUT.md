@@ -42,10 +42,13 @@ Classical Monero-style multisig (secret-splitting) is removed from the
 rebooted chain. All multisig uses PQC-only authorization via `scheme_id = 2`.
 See `docs/PQC_MULTISIG.md` for full specification.
 
-Multisig transactions carry N public keys and M signatures. Consensus cap:
-`MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G: 2f+1 at f=2 — largest group
-served; see `PQC_MULTISIG.md` §5). Auth is ~⅓ of a solo tx; whole-tx
-weights (1-in/2-out, depth 12, measured FCMP proof) dominate:
+Multisig transactions carry N public keys and M signatures. **Target**
+consensus cap (MSW-G, decided 2026-07-15):
+`MAX_MULTISIG_PARTICIPANTS = 5` (2f+1 at f=2 — largest group served;
+see `PQC_MULTISIG.md` §5). **Not yet live** — code still uses `= 7`
+until MSW-1. Size table below is sized to the target cap. Auth is ~⅓
+of a solo tx; whole-tx weights (1-in/2-out, depth 12, measured FCMP
+proof) dominate:
 
 | Configuration | Approx tx total | vs 1 solo | vs N solos |
 |---|---|---|---|
@@ -109,11 +112,12 @@ Operators and indexers must accommodate the increased per-transaction size:
   plus ~3-4 KB per input for FCMP++ proofs and ~1 KB per output for
   ML-KEM ciphertexts. Budget at least 25 KB above current median user
   tx size.
-- **Multisig headroom:** the consensus cap
-  `MAX_MULTISIG_PARTICIPANTS = 5` bounds the worst-case `pqc_auth`
-  overhead to **~27 KB** (5-of-5). Typical configurations (2-of-3,
-  3-of-5) are well under this. Operators should not reject transactions
-  solely based on pre-PQC size assumptions.
+- **Multisig headroom:** the **target** cap
+  `MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G; code still `= 7` until
+  MSW-1) bounds planned worst-case `pqc_auth` overhead to **~27 KB**
+  (5-of-5). Typical configurations (2-of-3, 3-of-5) are well under
+  this. Operators should not reject transactions solely based on
+  pre-PQC size assumptions.
 - **RPC consumers:** adjust any hardcoded maximum payload buffers to at
   least 150 KB per transaction (typical 2-input/2-output tx + PQC auth).
   For multisig, budget up to 200 KB.

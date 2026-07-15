@@ -656,7 +656,8 @@ Each additional signer adds approximately 5.3 KB of authentication material.
 | 5-of-5 | ~27 KB | ~5.0× |
 
 Whole-tx weights (FCMP++/Bp+/KEM dominate) are closer to ~2.4× solo for
-5-of-5 — see `V3_ROLLOUT.md`. Cap is `MAX_MULTISIG_PARTICIPANTS = 5`.
+5-of-5 — see `V3_ROLLOUT.md`. Target cap is
+`MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G; code still `= 7` until MSW-1).
 
 ### Use cases
 

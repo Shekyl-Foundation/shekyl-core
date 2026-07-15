@@ -211,6 +211,14 @@ A group is defined by:
 **`MAX_MULTISIG_PARTICIPANTS` (MSW-G) = 5** (decided 2026-07-15
 overhaul; withdraws same-day provisional 8).
 
+**Enforcement status (pre-genesis).** This is the **ratified target**,
+not the live constant. Until **MSW-1** lands, production code still
+compiles the constant as **seven**
+(`rust/shekyl-crypto-pq/src/multisig.rs`,
+`src/cryptonote_config.h`). Do not read this section as "the node
+already rejects n>5." MSW-1 is the atomic cutover of the constant +
+bound KATs; this PR is design/docs only.
+
 **Derivation:** MAX = **2f+1 at f=2** — classical majority-threshold
 BFT for the *largest group we intend to serve*. Consumer: largest
 group served. **Not** a resource bound, reward-zone fill, or
@@ -1969,25 +1977,33 @@ shekyl-crypto-pq/src/multisig_receiving.rs
 
 ### 16.7 Feature flag structure
 
+**Status: planned sketch — these flags are not in any `Cargo.toml`
+today.** Do not copy-paste the block below into a crate; it names the
+intended gate axes for Track B / Option E′. Live today: `multisig`
+scaffolding feature on engine-core / engine-rpc / ffi (F-6 CI lane).
+`frost-sal-v4` and `unsafe-testing-only` land when E′ / simple-mode
+fixtures are implemented (after Option A orchestration DELETE).
+
 ```
+# PLANNED (not present in workspace Cargo.toml as of 2026-07-15)
 [features]
 default = []
-multisig = []                       # scaffolding / CI compile (F-6)
-frost-sal-v4 = []                   # Option E′ product path (15.4a)
-unsafe-testing-only = []            # simple-mode fixtures, dev only
-# Mutual exclusion: cargo enforces at compile time
+multisig = []                       # scaffolding / CI compile (F-6) — PARTIAL: exists
+frost-sal-v4 = []                   # Option E′ product path (15.4a) — NOT YET
+unsafe-testing-only = []            # simple-mode fixtures, dev only — NOT YET
+# Mutual exclusion: cargo enforces at compile time (when landed)
 ```
 
 CI verifies release builds do not contain simple-mode symbols.
 **F-6:** CI must build `check/clippy/test` with `--features multisig`.
 
-**`frost-sal-v4` is E′'s gate** (was specified, never built — now the
-first real coexistence boundary for `spend_auth_version = 0x02`). Build
-it after deleting the Option A `MultisigGroup` wrapper; **keep**
-`shekyl-fcmp::{frost_sal, frost_dkg}` primitives. Do **not** park the
-rejected fixed `pqc_public_key` fossil behind this flag — **delete**
-`multisig/{dkg,group,signing}.rs` orchestration (R1-F-3) and re-home
-clean SAL-only types under the E′ stack.
+**`frost-sal-v4` is E′'s planned gate** (was specified, never built —
+now the first real coexistence boundary for `spend_auth_version =
+0x02`). Build it after deleting the Option A `MultisigGroup` wrapper;
+**keep** `shekyl-fcmp::{frost_sal, frost_dkg}` primitives. Do **not**
+park the rejected fixed `pqc_public_key` fossil behind this flag —
+**delete** `multisig/{dkg,group,signing}.rs` orchestration (R1-F-3)
+and re-home clean SAL-only types under the E′ stack.
 
 ### 16.8 Test matrix
 

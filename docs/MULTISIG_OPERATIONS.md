@@ -39,7 +39,8 @@ prover for approximately 1/N of group outputs.
 | **3-of-5** | Tolerates 2 compromised keys | Tolerates 2 offline members | Medium | Organization treasury |
 | **5-of-5** | All must agree | All must be online | High | High-value cold storage (max N) |
 
-Consensus cap: `MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G). Configurations
+Target consensus cap: `MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G;
+decided — code still `= 7` until MSW-1). After MSW-1, configurations
 with `n_total > 5` are unreachable.
 
 **Rules of thumb:**

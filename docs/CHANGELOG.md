@@ -4,6 +4,13 @@
 
 ### Added
 
+- **docs: PR #308 Copilot review — decide/enforce labels + F-11
+  consistency.** MAX=5 is the ratified MSW-G target; docs no longer
+  imply the live constant (still `= 7` until MSW-1). Changelog drops
+  the superseded same-day MSW-G=8 bullet (trail stays in the carrier
+  history). Finding range unified to R1-F-1…F-11. §16.7 feature-flag
+  block labeled planned sketch (not a copy-pasteable `Cargo.toml`).
+
 - **ci/docs: P0-n doc gate + F-6 `--features multisig` lane (PR #308).**
   `scripts/ci/check_multisig_doc_literals.sh` (cap / fee-oracle fossils)
   and `.github/workflows/multisig-feature.yml` (`cargo check` /
@@ -69,17 +76,9 @@
   Phase 0: `V3_ROLLOUT` whole-tx weights; `PQC_MULTISIG` §5 derivation,
   §11.1 rotation≠hostile-sender, §14.2 stream attribution, §15.4a
   two-component O open, §16.3/16.4/16.7 retire DiD/wallet2.
-
-- **docs: MSW-G = 8; address usability fossil; MSW-4/5 narrowed
-  (PR #308).** *(Superseded same day by MSW-G=5 overhaul above.)*
-  Security (3-fault BFT) > zone economics; 7 incoherent
-  once zone crossed. Hostage lens retracted (`E[frozen]=p` independent
-  of n). Address bech32m ~36k chars at N=7 (Solution C sign keys) —
-  §15.3 registry is a usability ship gate (P0-m), not an MSW-G
-  discriminator. MSW-5(A): `MultisigAddressPayload` already carries
-  three §15.1 version axes; MSW-4 = plumb `multisig_group_id` from that
-  payload. R1-F-2 row: length primary. Track A ready; code awaits
-  explicit go-ahead.
+  *(Same-day provisional MSW-G=8 withdrawn into this entry — decision
+  trail lives in `V3_1_MULTISIG_RUST_ENGINE.md` history, not as a
+  separate changelog bullet.)*
 
 - **docs: corrected picture — design done; Track A is the urgent half
   (PR #308).** Banner in `V3_1_MULTISIG_RUST_ENGINE.md`: April decisions
@@ -148,7 +147,7 @@
   B. `wallet2` PQC multisig group surface acknowledged under MS-2.
 
 - **docs: Round 1 adversarial on V3.1 multisig engine design — Track A/B
-  split (PR #308).** Records R1-F-1…F-10 in
+  split (PR #308).** Records R1-F-1…F-11 in
   [`V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md).
   **Track A (MSW-1…MSW-3):** V3.0 pre-genesis wire — N=7 blob-bound
   fossil (fund-loss), leaf `scheme_id` genesis decision, dual verify

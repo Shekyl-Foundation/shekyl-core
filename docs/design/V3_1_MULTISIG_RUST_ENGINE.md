@@ -245,6 +245,12 @@ implementation still needs explicit go-ahead.
 
 **Decision.** `MAX_MULTISIG_PARTICIPANTS = 5`.
 
+**Code vs docs.** Decision is normative for Track A. Live constants
+remain `= 7` until **MSW-1** (this PR does not cut over the constant —
+pre-genesis cutover is its own surface). Normative protocol prose that
+states `= 5` must carry the same "decided / not yet enforced" label
+(`PQC_MULTISIG.md` §5).
+
 **Derivation (write into `PQC_MULTISIG.md` §5).** MAX = **2f+1 at f=2**
 — classical majority-threshold BFT for the *largest group we intend to
 serve*, not a resource/zone/bias bound. Consumer: largest group served.
@@ -1068,7 +1074,7 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | Date | Event |
 | --- | --- |
 | 2026-07-14 | Round 1 opened; MS-1…MS-8 posed |
-| 2026-07-14 | Adversarial review recorded (R1-F-1…F-10); Track A/B split; MS-8 retired; Round 1 closure blocked on F-3…F-7 + F-6 CI; MSW family registered |
+| 2026-07-14 | Adversarial review recorded (R1-F-1…F-11); Track A/B split; MS-8 retired; Round 1 closure blocked on F-3…F-7 + F-6 CI; MSW family registered |
 | 2026-07-14 | **F-2 retraction:** leaf preimage left alone; Track A revised to constant-family fix + prefix-disjointness KAT + misattribution; size/fee/`MAX_INPUTS` → Track B; `wallet2` group surface acknowledged; **MSW-G** on whether `MAX=7` survives reward-zone |
 | 2026-07-14 | **§0.2 independent audit:** F-1 confirmed; F-2 leaf-leave-alone; length primary / byte[2] secondary; reward-zone rhetoric trim |
 | 2026-07-14 | **§0.3 MSW-G:** MAX=7 has no derivation; F-1 fix *is* the 6/7/8 choice; fossil bound ≡ zone both imply effective 6; V3_ROLLOUT table fossil + coordinator/staking drift → P0-h; TRacoon = V4 research candidate not Track A |
@@ -1084,5 +1090,5 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-15 | **MSW-8:** delete vestigial `MultisigAddressPayload.hybrid_sign_pubkeys` (Solution C fossil; zero consumers). ~2.6× address shrink is MSW-8, not E′. §15.3 registry re-priced off critical path. Defect class named: shape-from-prose without a read site (fifth instance this session). |
 | 2026-07-15 | **Phase 0 sweep D-1…D-6:** normative `n_total > 7` → MAX (D-1); ROLLOUT vs-N-solos math + cap fossils + `5385→5389` + date (D-2…D-5); ANALYSIS historical banner + E′ row + §6/§15.2 escrow struck + rotation naming collision (D-6). **P0-n** doc grep-gate. |
 | 2026-07-15 | **PR process:** Pin #1 named reversion — comment-only source amendments OK when recording a semantic this PR pins (`bond_wire` MSW-7 uniformity). VERSIONING.md aligned to E′ (15.4a blocker open; `0x02` = product path). §10.3.1 status refreshed (MS-8 retired, E′, MSW-*). P-3: MSW-G cold before MSW-1 code. |
-| 2026-07-15 | **D-7…D-10:** VERSIONING — two-component gate *discharged* (not "blocker open" ambiguity); protocol-3 wire = `scheme_id=2` list not "FROST-style"; 15.4b IR 8214C timeline scale. MS-4/MS-5 restated under E′; Round 1 closure checklist + §10.3.1 premise date. |
+| 2026-07-15 | **Copilot on #308:** label MAX=5 as decided/unenforced until MSW-1 (reject cutting the constant in a docs PR); drop superseded MSW-G=8 CHANGELOG bullet; F-10→F-11 consistency; §16.7 flags = planned sketch not live Cargo. |
 | 2026-07-15 | **P0-n + F-6 CI:** doc-literal gate script + `ci/multisig-feature` workflow (`check`/`clippy`/`test --features multisig` + P0-n). Operator/protocol fossils swept (`USER_GUIDE` / `MULTISIG_OPERATIONS` / `POST_QUANTUM` / `DESIGN_CONCEPTS` / `ANONYMITY` / `LEVIN` / `RELEASE_CHECKLIST`). Pause before MSW-6 — let CI report clippy debt. |
