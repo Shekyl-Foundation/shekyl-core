@@ -37,7 +37,7 @@ not a fork.
 
 | Surface | State |
 | --- | --- |
-| `PQC_MAX_*_BLOB` | N=7 unspendable; DoS guard sized to pre-`spend_auth_pubkeys` container. Effective cap **6**. → **MSW-1 + MSW-G** |
+| `PQC_MAX_*_BLOB` | N=7 unspendable today; DoS guard fossil. → **MSW-1** (admit MAX=8) |
 | `MULTISIG_KEY_HEADER_LEN = 2` | Header is 3. → **MSW-1** |
 | Version bytes | §15.1 reserves three axes; code has one fused byte + one constant; `group_id` passes constant not `container.version`; under-tested. → **MSW-4/5** |
 | `MAX_MULTISIG_PARTICIPANTS` | **MSW-G = 8** (decided 2026-07-15). → **MSW-1** |
