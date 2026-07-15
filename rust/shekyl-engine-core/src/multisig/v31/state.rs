@@ -73,6 +73,15 @@ impl TrackedIntent {
     }
 
     /// Attempt a state transition. Returns Ok(new_state) or Err if invalid.
+    //
+    // CLIPPY(match_same_arms): the transition table below lists each legal FSM
+    // edge on its own arm with an identical empty body on purpose. Merging the
+    // arms with `|` (the lint's suggestion) collapses the explicit edge
+    // enumeration into an opaque disjunction and loses the one-edge-per-line
+    // auditability — here the duplication *is* the documentation. (state.rs is
+    // Option-D-shaped and slated for deletion under MS-5, which writes E′'s
+    // Round1/Round2 FSM fresh — see docs/FOLLOWUPS.md.)
+    #[allow(clippy::match_same_arms)]
     pub fn transition(&mut self, to: IntentState) -> Result<IntentState, StateError> {
         if self.state.is_terminal() {
             return Err(StateError::AlreadyTerminal(self.state));

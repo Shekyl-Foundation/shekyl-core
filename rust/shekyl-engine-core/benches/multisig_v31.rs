@@ -32,7 +32,7 @@ fn bench_intent_hash(c: &mut Criterion) {
     };
 
     c.bench_function("intent_hash", |b| {
-        b.iter(|| black_box(intent.intent_hash()))
+        b.iter(|| black_box(intent.intent_hash().unwrap()))
     });
 }
 
@@ -63,7 +63,7 @@ fn bench_intent_serialization(c: &mut Criterion) {
     };
 
     c.bench_function("intent_to_canonical_bytes", |b| {
-        b.iter(|| black_box(intent.to_canonical_bytes()))
+        b.iter(|| black_box(intent.to_canonical_bytes().unwrap()))
     });
 }
 
@@ -122,10 +122,10 @@ fn bench_envelope_roundtrip(c: &mut Criterion) {
         encrypted_payload: vec![0xCC; 512],
     };
 
-    let bytes = envelope.to_bytes();
+    let bytes = envelope.to_bytes().unwrap();
 
     c.bench_function("envelope_serialize", |b| {
-        b.iter(|| black_box(envelope.to_bytes()))
+        b.iter(|| black_box(envelope.to_bytes().unwrap()))
     });
 
     c.bench_function("envelope_deserialize", |b| {
@@ -141,7 +141,7 @@ fn bench_chain_state_fingerprint(c: &mut Criterion) {
         input_global_indices: (0..16).collect(),
         input_eligible_heights: (900..916).collect(),
         input_amounts: vec![shekyl_units::AtomicUnits::from_raw(1_000_000); 16],
-        input_assigned_prover_indices: (0..16).map(|i| (i % 3) as u8).collect(),
+        input_assigned_prover_indices: (0..16u8).map(|i| i % 3).collect(),
     };
 
     c.bench_function("chain_state_fingerprint_16_inputs", |b| {

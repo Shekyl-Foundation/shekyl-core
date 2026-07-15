@@ -52,11 +52,11 @@ fn intent_roundtrip_through_encryption() {
     };
 
     let group_secret = [0x99; 32];
-    let intent_hash = intent.intent_hash();
+    let intent_hash = intent.intent_hash().unwrap();
 
     let payload = DecryptedPayload {
         message_type: MessageType::SpendIntent,
-        body: intent.to_canonical_bytes(),
+        body: intent.to_canonical_bytes().unwrap(),
     };
     let plaintext = payload.encode();
 
@@ -82,7 +82,7 @@ fn intent_roundtrip_through_encryption() {
 
     let decoded = DecryptedPayload::decode(&pt).unwrap();
     assert_eq!(decoded.message_type, MessageType::SpendIntent);
-    assert_eq!(decoded.body, intent.to_canonical_bytes());
+    assert_eq!(decoded.body, intent.to_canonical_bytes().unwrap());
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn envelope_wraps_encrypted_payload() {
         encrypted_payload: ct.clone(),
     };
 
-    let bytes = envelope.to_bytes();
+    let bytes = envelope.to_bytes().unwrap();
     let parsed = MultisigEnvelope::from_bytes(&bytes).unwrap();
     assert_eq!(parsed.encrypted_payload, ct);
 

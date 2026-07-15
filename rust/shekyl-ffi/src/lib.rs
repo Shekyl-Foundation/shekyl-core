@@ -1958,7 +1958,7 @@ pub unsafe extern "C" fn shekyl_frost_coordinator_add_shares(
         shares.push(shekyl_fcmp::frost_sal::FrostSignShareResult { share: buf });
     }
 
-    coord.0.collect_shares(p, shares).is_ok()
+    coord.0.collect_shares(p, &shares).is_ok()
 }
 
 #[cfg(feature = "multisig")]
@@ -2014,8 +2014,7 @@ pub unsafe extern "C" fn shekyl_frost_coordinator_aggregate_and_prove(
     };
 
     use ciphersuite::group::GroupEncoding;
-    let gk_ct =
-        <dalek_ff_group::EdwardsPoint as GroupEncoding>::from_bytes(&group_key_bytes.into());
+    let gk_ct = <dalek_ff_group::EdwardsPoint as GroupEncoding>::from_bytes(&group_key_bytes);
     if bool::from(gk_ct.is_none()) {
         return fail;
     }
@@ -2049,7 +2048,7 @@ pub unsafe extern "C" fn shekyl_frost_coordinator_aggregate_and_prove(
     let leaf_chunks: Vec<_> = prove_inputs
         .iter()
         .map(|pi| shekyl_fcmp::proof::ProveInputLeafChunk {
-            output_h_pqc: pi.h_pqc.clone(),
+            output_h_pqc: pi.h_pqc,
             leaf_outputs: pi.leaf_chunk_outputs.clone(),
             leaf_h_pqc: pi.leaf_chunk_h_pqc.clone(),
             c1_branch_layers: pi.c1_branch_layers.clone(),
@@ -2172,7 +2171,7 @@ pub unsafe extern "C" fn shekyl_frost_signer_sign(
 
     use ciphersuite::group::GroupEncoding;
     let nonce_sum_ct =
-        <dalek_ff_group::EdwardsPoint as GroupEncoding>::from_bytes(&nonce_sum_bytes.into());
+        <dalek_ff_group::EdwardsPoint as GroupEncoding>::from_bytes(&nonce_sum_bytes);
     if bool::from(nonce_sum_ct.is_none()) {
         return ShekylBuffer::null();
     }

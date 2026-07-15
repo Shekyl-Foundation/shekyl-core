@@ -438,14 +438,13 @@ impl FrostSigningCoordinator {
     }
 
     /// Collect a partial signature share from one participant for all inputs.
-    // rule-21: `input_shares` is owned by value pending the MS-5 spend-path
-    // API design. Reshaping to `&[FrostSignShareResult]` now pre-decides the
-    // coordinator collection API that E′ will consume; reopen when MS-5 lands.
-    #[allow(clippy::needless_pass_by_value)]
+    ///
+    /// Borrows the shares: this only deserializes each `share` into a scalar
+    /// and stores the derived scalars, never taking ownership of the input.
     pub fn collect_shares(
         &mut self,
         from: Participant,
-        input_shares: Vec<FrostSignShareResult>,
+        input_shares: &[FrostSignShareResult],
     ) -> Result<(), ProveError> {
         if input_shares.len() != self.num_inputs {
             return Err(ProveError::UpstreamError(format!(
@@ -711,7 +710,7 @@ mod tests {
         let p2 = Participant::new(2).unwrap();
         let mut coord = FrostSigningCoordinator::new_for_sal(1, vec![p1, p2]).unwrap();
 
-        let result = coord.collect_shares(p1, vec![FrostSignShareResult { share: [0u8; 32] }]);
+        let result = coord.collect_shares(p1, &[FrostSignShareResult { share: [0u8; 32] }]);
         assert!(
             result.is_ok(),
             "Share collection is independent of preprocess collection"
@@ -725,8 +724,8 @@ mod tests {
         let mut coord = FrostSigningCoordinator::new_for_sal(1, vec![p1, p2]).unwrap();
 
         let shares = vec![FrostSignShareResult { share: [1u8; 32] }];
-        coord.collect_shares(p1, shares.clone()).unwrap();
-        let result = coord.collect_shares(p1, shares);
+        coord.collect_shares(p1, &shares).unwrap();
+        let result = coord.collect_shares(p1, &shares);
         assert!(result.is_err(), "Should reject duplicate shares");
     }
 
@@ -848,7 +847,7 @@ mod tests {
         let mut coord = FrostSigningCoordinator::new_for_sal(1, vec![p1, p2]).unwrap();
 
         let shares = vec![FrostSignShareResult { share: [1u8; 32] }];
-        coord.collect_shares(p1, shares).unwrap();
+        coord.collect_shares(p1, &shares).unwrap();
 
         let result = coord.sum_shares_for_input(0);
         assert!(result.is_err(), "Should fail: only 1 of 2 shares collected");
