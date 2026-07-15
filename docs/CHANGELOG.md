@@ -4,6 +4,14 @@
 
 ### Added
 
+- **docs: D-7…D-10 — VERSIONING + MS-4/MS-5 under E′ (PR #308).**
+  VERSIONING: two-component gate discharged (`output.rs:304`); remaining
+  blockers = threshold-share `y_group` + wire `0x02`; protocol-3 wire
+  is `scheme_id=2` M-of-N list (not "FROST-style"); 15.4b gets IR 8214C
+  → MPTC ~2027 → later-process scale. MS-4/MS-5 restated: receive =
+  local KI via `b` (no I7); spend = FROST-on-`y` + nonce types (not
+  prover handoff). Round 1 closure checklist + §10.3.1 premise date.
+
 - **docs: Pin #1 reversion + VERSIONING/§10.3.1 for E′ (PR #308).**
   Named reversion: comment-only production-source amendments allowed
   when recording a semantic this doc-only PR pins (`bond_wire.rs`

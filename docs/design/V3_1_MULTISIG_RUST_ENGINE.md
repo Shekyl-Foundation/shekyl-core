@@ -277,10 +277,13 @@ post-quantum for authorization (M × ML-DSA). Solo and multisig share
 classical FCMP++ membership/SAL + hybrid auth via `h_pqc`. Multisig
 adds **no** classical exposure. Classical SAL is a **liveness**
 dependency (1/N *loss*), not a compromise path. Curve HNDL on
-membership privacy is real and **not multisig-specific**. Grinding /
-rotation / griefing → **availability engineering** (MS-4/5), not the
-Phase 6 cryptographer queue. Shipping now ≈ economics (~2.4× tx size
-for 5-of-5 threshold custody), not crypto-maturity.
+membership privacy is real and **not multisig-specific**. Under
+Option D, grinding / rotation / griefing were **availability
+engineering** (MS-4/5). **Under E′** those surfaces largely die with
+the mandatory prover; remaining availability work is FROST nonce
+discipline (MS-5 restated) — not the Phase 6 cryptographer queue
+beyond the small `y_out` tweak claim. Shipping now ≈ economics
+(~2.4× tx size for 5-of-5 threshold custody), not crypto-maturity.
 
 **§15.4 phrase pin:** "pure-PQC spend-auth" ≠ lattice SAL (impossible
 under FCMP++). `spend_auth_version = 0x02` = **15.4a** threshold
@@ -869,15 +872,44 @@ Keep Cargo feature name `multisig`. Flip checklist **amended**:
 7. **F-3:** Option A fossil **deleted** before flip (not shipped, not
    quarantined behind `frost-sal-v4`).
 
-### MS-4 — Receive path — **OPEN (lean holds)**
+### MS-4 — Receive path — **OPEN — restated under E′ (2026-07-15)**
 
-MS-4(a) Refresh/scanner arm. FA-6b gate unchanged.
+**Prior lean (Option D):** Refresh/scanner arm; I7 receive-time prover
+check (`O == spend_auth_pubkeys[assigned]`); FA-6b gate.
 
-### MS-5 — Spend path — **OPEN (F-7 + construction; lineage unblocked)**
+**Under E′ the question changed.** There is no assigned prover and no
+I7 prover binding. Receive path must:
 
-Gaps: no v31 `construction.rs`; Option A `MultisigSigningSession`
-**deleted with F-3**. `EngineSignerKind` has no ceremony associated
-type yet (R1-F-7). Lean MS-5(a)/(c).
+1. N-fold KEM decap + view-tag filter (unchanged from C/D).
+2. Reconstruct / verify `O = ho·G + B + y_out·T` with
+   `y_out = y_group + y_kem` (group knows `B`, `Y_group`; `y_kem` from
+   own `ss_i` / published material as specified).
+3. Local key-image / balance via plaintext `b` — **no**
+   `export_multisig_info` round-trip.
+4. Drop griefing-score / I7 machinery tied to rotating prover.
+
+Placement lean MS-4(a) (Refresh/scanner arm) still holds; the
+*validation contents* do not. Round 1 cannot close on the old I7 lean.
+
+### MS-5 — Spend path — **OPEN — restated under E′ (2026-07-15)**
+
+**Prior lean (Option D):** `intent → canonical construction → prover →
+signature shares → assembly`. Gaps: no v31 `construction.rs`; F-7
+`EngineSignerKind` ceremony associated type.
+
+**Under E′ the question changed.** Spend path is a **two-round FROST
+ceremony over `y_group`** (with public `y_kem` tweak), plus M hybrid
+`scheme_id=2` sigs from per-participant KEM-derived keys — **not** a
+prover handoff.
+
+1. Agree intent / construction (survives: `intent.rs`, `state.rs`).
+2. FROST SAL on `y_group` with **nonce discipline unrepresentable by
+   type** (F-9 footgun; `frost_sal.rs` kept, Option A wrapper deleted).
+3. Assemble `scheme_id=2` auth blob (unchanged wire size vs D).
+4. No `rotating_prover_index`, heartbeat, counter_proof, veto.
+
+Lean MS-5(a)/(c) for trait placement still applies; **"unblocked on
+lineage" is not "prover path ready."** Restate before Round 1 close.
 
 ### MS-6 — Transport — **OPEN (lean holds)**
 
@@ -927,8 +959,8 @@ not a quiet reopen of MS-8.
 | MS-1 | **OPEN** | Lean **(a)/(c)**; **(b) rejected**; name `K`; F-3 lineage **CLOSED** (v31 only) |
 | MS-2 | **OPEN** | Lean holds |
 | MS-3 | **OPEN** | Amended: positive CI (F-6); F-3 = delete fossil before flip |
-| MS-4 | **OPEN** | Lean holds |
-| MS-5 | **OPEN** | Unblocked on lineage; still F-7 + construction gaps |
+| MS-4 | **OPEN — restated E′** | No I7 / prover; local KI via `b`; KEM fan-out + `O` verify |
+| MS-5 | **OPEN — restated E′** | FROST-on-`y` + nonce types; not prover handoff; F-7 still |
 | MS-6 | **OPEN** | Lean holds |
 | MS-7 | **OPEN** | R6 vs **v31** persist only; versioned discriminator (R1-F-11) |
 | MS-8 | **RETIRED** | redundancy; leaf change not required |
@@ -942,6 +974,8 @@ not a quiet reopen of MS-8.
 - [x] **R1-F-5 / MS-7:** `MultisigGroup` dies with F-3; R6 against v31 + discriminator.
 - [ ] **R1-F-7:** §3.1 / SoloSigner associated-item framing accepted
       into Phase 0 plan.
+- [ ] **D-10:** MS-4 / MS-5 restated under E′ (above) — maintainer
+      sign-off that Round 1 leans are no longer Option D prover-shaped.
 - [ ] Maintainer sign-off on revised Track A (constant fix) + MS-8
       retirement + F-2 leaf-leave-alone + F-3 DELETE.
 - [ ] Lens-1 re-test after MS-1; R-residuals pointed at Round 2.
@@ -949,7 +983,8 @@ not a quiet reopen of MS-8.
 **Round 2 residuals (updated).**
 
 - R-A…R-F as before (engine surface, construction, regtest, FA-6b,
-  capability, griefing storage).
+  capability). Griefing-storage (R-F) largely evaporates with E′
+  (no I7 / prover griefing scores) — reconfirm in Round 2.
 - R-B **extends:** multisig arm in `pqc_auth_weight` / fee model
   (scheme-1-only today).
 - R-C **extends:** pin `SpendIntent::MAX_INPUTS` to
@@ -958,8 +993,9 @@ not a quiet reopen of MS-8.
   assume length-only separation.
 - R-H: F-3 DELETE PR (`dkg`/`group`/`signing` + tests); not quarantine.
 - R-I: F-5 zeroize + ledger migration for group secrets.
-- R-J / **MSW-G:** **CLOSED = 5** (§0.3; withdraws same-day 8). Optionally
-  improve `rotating_prover_index` (wide-reduce) as a separate protocol PR.
+- R-J / **MSW-G:** **CLOSED = 5** (§0.3; withdraws same-day 8).
+- R-K **(new):** E′ FROST nonce-discipline types; Phase 6 tweak claim
+  (`y_out = y_group + y_kem`).
 
 ---
 
@@ -1041,3 +1077,4 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-15 | **MSW-8:** delete vestigial `MultisigAddressPayload.hybrid_sign_pubkeys` (Solution C fossil; zero consumers). ~2.6× address shrink is MSW-8, not E′. §15.3 registry re-priced off critical path. Defect class named: shape-from-prose without a read site (fifth instance this session). |
 | 2026-07-15 | **Phase 0 sweep D-1…D-6:** normative `n_total > 7` → MAX (D-1); ROLLOUT vs-N-solos math + cap fossils + `5385→5389` + date (D-2…D-5); ANALYSIS historical banner + E′ row + §6/§15.2 escrow struck + rotation naming collision (D-6). **P0-n** doc grep-gate. |
 | 2026-07-15 | **PR process:** Pin #1 named reversion — comment-only source amendments OK when recording a semantic this PR pins (`bond_wire` MSW-7 uniformity). VERSIONING.md aligned to E′ (15.4a blocker open; `0x02` = product path). §10.3.1 status refreshed (MS-8 retired, E′, MSW-*). P-3: MSW-G cold before MSW-1 code. |
+| 2026-07-15 | **D-7…D-10:** VERSIONING — two-component gate *discharged* (not "blocker open" ambiguity); protocol-3 wire = `scheme_id=2` list not "FROST-style"; 15.4b IR 8214C timeline scale. MS-4/MS-5 restated under E′; Round 1 closure checklist + §10.3.1 premise date. |

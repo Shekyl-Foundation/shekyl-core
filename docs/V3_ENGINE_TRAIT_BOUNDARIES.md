@@ -5757,13 +5757,16 @@ doesn't).
 carrier:
 [`docs/design/V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md)
 (Round 1 OPEN — Track B **MS-1…MS-7**; **MS-8 RETIRED**; product path
-**Option E′**; Track A **MSW-1…MSW-8** + MSW-G=5). Protocol remains
+**Option E′** — MS-4/MS-5 **restated** under E′, not Option D prover
+path; Track A **MSW-1…MSW-8** + MSW-G=5). Protocol remains
 [`PQC_MULTISIG.md`](PQC_MULTISIG.md) (§15.4a). Trait-surface amendments
 (§8.2) wait on Round 1–2 closure (Phase 0 **P0-b**).
 
 *Trigger.* "V3.1 multisig design phase begins." (External —
 owned by V3.1 release planning; tracked against project plan.)
-**Discharged 2026-07-14** by opening the carrier above.
+**Discharged 2026-07-14** by opening the carrier; **premise updated
+2026-07-15** for E′ / MSW-G=5 (do not read the discharge date as the
+carrier's current Round 1 shape).
 
 *Structural cross-reference.* §2.1 `KeyEngine`; §2.6
 `PendingTxEngine`; §1.5 trait-identity criteria (for

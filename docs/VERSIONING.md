@@ -77,9 +77,17 @@ protocol_version = 3
 ### Protocol version 3
 
 FCMP++ curve tree membership proofs, hybrid Ed25519 + ML-DSA-65 spend
-authorization, hybrid X25519 + ML-KEM-768 output encryption, V3.1
-multisig wire format (FROST-style). Minimum transaction type:
-`CTTypeFcmpPlusPlusPqc`.
+authorization, hybrid X25519 + ML-KEM-768 output encryption, and
+multisig authorization via **`scheme_id = 2`** (M-of-N hybrid
+signature list on the wire — the blob 15.4b may one day shrink).
+Minimum transaction type: `CTTypeFcmpPlusPlusPqc`.
+
+Spend-auth *ceremony* shape is gated by `spend_auth_version`, not by
+protocol version: product path **E′** uses `0x02` (FROST on `y`);
+protocol version 3 does not become "FROST-style" by a wallet opt-in
+(§15.5 — no implicit upgrades). Do **not** describe protocol-3
+multisig as FROST — that conflates the wire auth list with the
+classical SAL ceremony.
 
 ### Protocol version 4 (future) / spend_auth evolution
 
@@ -91,16 +99,17 @@ mandatory-prover Option D.
 
 - **15.4a FROST SAL / Option E′** — threshold classical spend-auth
   inside FCMP++ (**availability**: eliminate mandatory-prover 1/N
-  *loss*). **Internal blocker open:** two-component
-  `O = ho·G + B + y·T` with `y ≠ 0` already landed
-  (`shekyl-crypto-pq` `output.rs:304`). Remaining work is threshold-
-  share + wire + nonce discipline — **not** NIST. Auth is already PQ
+  *loss*). **Two-component gate discharged** (`output.rs:304`,
+  `y ≠ 0`). **Remaining blockers:** threshold-share `y_group` + wire
+  `0x02` + nonce discipline — **not** NIST. Auth is already PQ
   (M × ML-DSA); this does not add authorization strength.
   `spend_auth_version = 0x02` means 15.4a / E′, **not** lattice SAL.
 - **15.4b composite / lattice-only *auth*** — size win replacing the
   M-of-N hybrid signature list (or dropping the classical half of
   hybrid auth). **Not** a lattice SAL (impossible under FCMP++).
-  Gated on a future NIST process beyond IR 8214C (MPTC ~2027 → later).
+  NIST IR 8214C (final 2026-01) is a **reference-material collection**,
+  not a standard; MPTC characterization report ~2027 may recommend a
+  later process (2030+ plausible). Do not reinflate "12–24 months."
 
 See `00-mission.mdc` for the V4 transition commitment and
 `V3_1_MULTISIG_RUST_ENGINE.md` §0.5 for E′.
