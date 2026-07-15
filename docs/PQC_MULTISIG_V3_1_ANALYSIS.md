@@ -467,8 +467,14 @@ that `Y=yG=O` is required; no alternate witness produces a valid proof.
 `rotating_prover_index()`. What is the concrete cost to achieve
 specific biases? Specifically:
 
-- To bias one output's prover to a specific participant: ~N expected tries
-- To bias all k outputs in a tx to one specific participant: ~N^k tries
+- To bias one output's prover to a specific participant: ~`n` expected
+  tries (one hash per try) — **availability-relevant lead figure**
+- To land `k` preferred assignments across independent targets:
+  ~`k · n` expected tries
+- To bias *all* `k` outputs in *one* tx to one participant under a
+  single shared `tx_secret_key_hash`: ~`n^k` expected trials (joint;
+  one trial re-samples the whole vector) — correct math, **not** the
+  everyday threat; do not lead with this
 - To achieve a target bias distribution (e.g., 80% to participant 2):
   what's the analysis?
 

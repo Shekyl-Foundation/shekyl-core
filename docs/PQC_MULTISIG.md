@@ -1112,14 +1112,23 @@ Where:
 - **Roughly uniform**: cryptographic hash mod N is uniform over any
   reasonable input distribution
 
-**Grinding resistance:** a sender can iterate `tx_secret_key` values to
-bias which participant is assigned prover for specific outputs. This
-bounds the sender's ability to target (e.g., always assign to a known-
-offline participant). The grinding cost is proportional to the target
-bias: to bias all N outputs to one prover requires ~N^k work for k
-outputs. For most realistic adversaries, the work cost exceeds the
-benefit. Cryptographer review target: formalize this bound
-(see `PQC_MULTISIG_V3_1_ANALYSIS.md` §7).
+**Grinding resistance (availability, not authorization):** a sender can
+iterate `tx_secret_key` / `tx_secret_key_hash` to bias which participant
+is assigned prover for specific outputs. **Lead figure (threat that
+matters):** ~`n_total` expected tries to force one output onto a chosen
+prover; ~`k · n_total` to land `k` preferred assignments across `k`
+independent targets (separate outputs / txs). That is cheap (~hashes,
+fee-bounded) — an **availability** griefing surface (MS-4/MS-5), not a
+steal path (auth remains M × ML-DSA).
+
+**Joint figure (do not lead with this):** forcing *all* `k` outputs in
+*one* tx onto the same prover under a single shared
+`tx_secret_key_hash` is still ~`(1/n)^k` per trial (~`n^k` expected
+trials) because one trial re-samples the whole assignment vector.
+Prior prose led with ~`N^k` as if it were the everyday bound — that
+overstated the cost of the attack operators actually care about.
+Cryptographer formalization of the joint tail remains optional
+(`PQC_MULTISIG_V3_1_ANALYSIS.md` §7); it is not a Phase 6 ship gate.
 
 **Recipient-side verification** at receive time confirms the sender's
 computed assignment matches the one the group independently derives.

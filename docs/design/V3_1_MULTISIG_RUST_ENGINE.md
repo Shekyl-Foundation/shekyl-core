@@ -1,36 +1,105 @@
 # V3.1 Multisig — Rust engine integration design
 
-**Status.** **Round 1 OPEN — cannot close (2026-07-14 adversarial
-review).** Doc-only design branch `docs/v31-multisig-rust-engine-plan`.
-This document is the **engine-integration** carrier for V3.1 multisig
-(**Track B**) and the **finding ledger + Track A split** for
-pre-genesis **consensus wire** defects that the Round 1 review
-surfaced. Protocol crypto remains
+**Status.** **Round 1 OPEN** (remaining: F-6 CI + F-7 SoloSigner framing).
+Doc-only branch `docs/v31-multisig-rust-engine-plan`. Protocol crypto:
 [`PQC_MULTISIG.md`](../PQC_MULTISIG.md) (DRAFT v1.1).
 
-**Verdict (Round 1 adversarial, verified locally).** The eight MS leans
-are mostly defensible for Track B. Round 1 **still cannot close**:
-§2.3's opening substrate table omitted always-compiled consensus
-surfaces and a coexisting FROST lineage, which inverted **MS-8** and
-falsified the safety rationale behind Hard Scope Pin #2 (feature gate
-protects wallet orchestration only — not `PQC_MAX_*_BLOB` bounds).
+---
 
-**F-2 retraction (2026-07-14, same reviewer, pin `b23cdaff0`).**
-Changing the leaf preimage is **not** free and **not** needed:
-cross-scheme confusion is already impossible by **prefix
-disjointness** (`reserved == 0` ⊥ `m_required ≥ 1` at byte[2]), with
-length as a second separator. Track A shrinks to a constant-family
-correction + KATs + misattribution fixes. Leaf preimage **left alone**.
+## Corrected picture (2026-07-14) — read this first
+
+### The design is done, and it's good
+
+Every load-bearing question was answered in April, with provenance.
+Nothing in that list needs revisiting. Session findings were about
+**tree/gate/docs**, not redesign.
+
+| Decided | When | Provenance |
+| --- | --- | --- |
+| **Option C** — per-output PQC keys (X25519+ML-KEM-768) | 2026-04-04 | Fixed key in `pqc_auth` collapses anonymity set to 1 |
+| **Option D** — C + N classical spend-auth in `tx_extra` | 2026-04-15 | A/B rejected on forward privacy |
+| Equal participants, coordinator-less, deterministic construction | 2026-04-15 | Governance |
+| **C.alpha-rotating** — prover per output (named 1/N loss) | 2026-04-15 | *"that is simply a limitation at this time"* — both rotating and fixed were defensible |
+| **Solution C** — independent per-participant spend-auth, publicly verifiable | v1.1 Round 3 | Fixed non-implementable §11.3 |
+| **scheme_id = 2** — M-of-N hybrid (Ed25519 + ML-DSA-65) | earlier | PQ authorization **today** |
+| V3.2 rotation deferred; hooks reserved | §15.2 | Design-maturity, not scope protection |
+| V4 deferred — FROST-SAL + lattice threshold | §15.4 | NIST Threshold Call ≠ standardize; ~2027 → 2030+ |
+| Staking as product driver | 2026-04-15 | Economics of ~3× size vs threshold custody |
+
+The two "competing models" raised in review resolve **into** this table:
+rotating-vs-fixed **prover** closed Apr 15; per-output-vs-group **key**
+closed Apr 4. The FROST lineage is a **pre-Option-C fossil** (DELETE),
+not a fork.
+
+### Where the tree actually is — three buckets
+
+**1. Frozen at genesis (feature gate does not protect these) — Track A**
+
+| Surface | State |
+| --- | --- |
+| `PQC_MAX_*_BLOB` | N=7 unspendable; DoS guard sized to pre-`spend_auth_pubkeys` container. Effective cap **6**. → **MSW-1 + MSW-G** |
+| `MULTISIG_KEY_HEADER_LEN = 2` | Header is 3. → **MSW-1** |
+| Version bytes | §15.1 reserves three axes; code has one fused byte + one constant; `group_id` passes constant not `container.version`; under-tested. → **MSW-4/5** |
+| `MAX_MULTISIG_PARTICIPANTS = 7` | No derivation; F-1's fix forces the pick. → **MSW-G** |
+| Leaf / scheme separation | Length primary, byte[2] secondary; untested. → **MSW-2** |
+| `DOMAIN_PQC_LEAF` | Dual def; hygiene debt |
+
+**2. Behind the gate — designed, scaffolded, uncompiled — Track B**
+
+FROST Option A fossil (**DELETE**) · `frost-sal-v4` specified never built ·
+**no CI `--features multisig`** · `MultisigGroup` hygiene · `MAX_INPUTS=128`
+vs consensus 8 · fee model no multisig arm · prover grinding (availability)
+· `MultisigSigner<N,K>` absent · `EngineSignerKind` phantom marker · no
+scanner path.
+
+**3. Docs that mislead (Phase 0)**
+
+`V3_ROLLOUT` Option A prose — **fixed 2026-07-14** (size table still
+fossil) · §11.1 grinding lead figure · §15.4 was bundled (split) ·
+§16.4 `wallet2` · Pin #4 vs staking recommendation.
+
+### The gap isn't the design
+
+The design was never built; the parts that leaked past the gate leaked
+into **consensus**. Today it reads "mostly implemented, needs wiring."
+It is **"fully designed, scaffolded, uncompiled — with a consensus bug
+in the one layer the gate never covered."**
+
+What should be true today and isn't:
+
+1. A 7-of-7 output should be spendable (cross-seam KAT: container → wire).
+2. Version bytes independently movable and tested (V3.1↔2030 interface).
+3. CI compiles `--features multisig`.
+4. Operator docs describe Option D (prose fixed; size table still owed).
+5. FROST Option A lineage gone (disposition DELETE; impl pending).
+
+### Process — differential rigor
+
+Maximal process on Track B (~4y then legacy) with Track A historically
+out of scope was the **inversion**. Genesis-frozen earns unlimited
+rigor; gated replaceable subsystem earns a bounded, well-sealed design.
+**Track A is the urgent half.** Track B keeps rounds + halt — not the
+priority queue.
+
+### Reviewer scorecard (what held / what didn't)
+
+| Held | Retracted |
+| --- | --- |
+| F-1 (fossil bounds) | Leaf preimage must change |
+| MS-8 redundant with leaf | "Deferral has no recorded justification" (§15.4 existed) |
+| Track A/B split (better justification from coexistence) | "Mandatory prover is permanent" (§15.5 versions it) |
+| | "Per-output vs group key is a Phase 6 cryptographer question" (answered Apr 4; `pqc_auth` is plaintext) |
+
+Twice absence was claimed without searching. Search first.
+
+---
 
 **Process.** Cites
 [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) and
 [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
-**Halt condition (Track B only):** no Track B implementation commits
-until design closure **and** the named pre-flight pass discharge.
-**Track A** (V3.0 wire bounds) is **not** held by that halt — F-1 is
-a fund-loss deserialize ceiling lying about an existing container —
-but still requires an **explicit implementation go-ahead** (separate
-short-lived branch off `dev`).
+**Halt condition (Track B only):** no Track B implementation until
+design closure + pre-flight + explicit go-ahead. **Track A** is **not**
+held by that halt — still needs **explicit go-ahead** (`feat/msw-*`).
 
 **Trigger fired.**
 [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
@@ -58,6 +127,7 @@ HEAD diverges immediately. Re-pin at Round 0 / Track A pre-flight.
 | Round 1 adversarial verification (reviewer) | `dev` = `b23cdaff0` (2026-07-14; +9 archival commits, no multisig surface move) |
 | Local re-check of R1-F-1 arithmetic + F-2-retraction prefix layout | this design-branch tree |
 | F-2 retraction / blast-radius / size Q&A | reviewer pin `b23cdaff0` (2026-07-14) |
+| Corrected picture / F-3 DELETE / coexistence | this design-branch tree (2026-07-14/15) |
 
 ---
 
@@ -478,14 +548,15 @@ rounds close.
 
 | Item | Carrier |
 | --- | --- |
-| Protocol crypto redesign | `PQC_MULTISIG.md` |
-| Cryptographer / external wargame (protocol Phases 5–6) | FOLLOWUPS; **crypto** surfaces only (auth reductions, leaf binding, scheme disjointness). Grinding / rotation bias / hostage fraction / griefing scoring are **availability** (MS-4/MS-5/R-F), not Phase 6 |
+| Protocol crypto redesign | `PQC_MULTISIG.md` — **design is closed** (April table); do not reopen in engine rounds |
+| Cryptographer / external wargame (protocol Phases 5–6) | FOLLOWUPS; **crypto** surfaces only. Grinding / rotation / griefing = **availability** (lead cost ~`k·n`, not scare-`n^k`) |
 | Headless co-signer / HW wallet / GUI | FOLLOWUPS / sibling repos |
 | Archival | Separate |
 | Enabling `multisig` in release packages | Named flip PR |
 | Wiring `shekyl_pqc_verify_with_group_id` as the primary fix | **Retired** (MS-8 redundancy); do not schedule as ship-gate |
 | Changing `DOMAIN_PQC_LEAF ‖ …` preimage | **Rejected** (F-2 retraction); not free, not needed |
-| Lattice SAL / "PQ the FCMP++ layer via multisig" | **Rejected as framing** — same classical membership/SAL as solo; multisig is not the lever for curve HNDL |
+| Lattice SAL / "PQ the FCMP++ layer via multisig" | **Rejected as framing** — same classical membership/SAL as solo |
+| Option A FROST fossil keep/quarantine | **Rejected** — DELETE (R1-F-3) |
 
 ### §2.3 Substrate table (corrected)
 
@@ -782,3 +853,4 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-14 | **R1-F-11 / MSW-4+5:** version hooks fake at genesis — fuse container/group version; spend_auth_version constant not wire; under-tested reserved namespace. Same shape as F-1. MS-7 Round-2: R6 must not bake `[u8;32]` classical-only durable field (plan §1). |
 | 2026-07-14 | **§0.4 coexistence pin:** V4 = rewrite beside V3.1 (§15.4–15.5), not evolve-in-place. Discriminability > evolvability; version bytes = entire V3.1↔V4 interface. Track A permanent / Track B ~4y then legacy — process inversion named. MS-1(a)/(c) win, (b) rejected. |
 | 2026-07-14 | **R1-F-3 → DELETE:** Option A fixed-group PQC fossil (not Apr 15 rotating-vs-fixed prover; that closed with named 1/N loss). Not a V4 seed — fuses SAL keys with rejected `pqc_public_key`. `frost-sal-v4` later for clean SAL only. V3_ROLLOUT Option A prose fixed (P0-h partial). Retract "Phase 6 cryptographer" claim on per-output privacy. |
+| 2026-07-15 | **Corrected picture banner:** design done (April table); gap = unbuilt + consensus leak past gate. Track A urgent / Track B bounded. Scorecard. §11.1 grinding lead → ~`k·n` availability, not scare-`n^k`. |
