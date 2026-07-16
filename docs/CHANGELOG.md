@@ -4,6 +4,21 @@
 
 ### Added
 
+- **MSW-6: relax the tx-wide `scheme_id` agreement (staking unblock).** A v3
+  transaction may now carry per-input PQC schemes from `{1,2}` freely — e.g.
+  scheme-2 (multisig) funding sharing a tx with a scheme-1 (single) bond vin.
+  The former tx-wide agreement (every input matching `pqc_auths[0].scheme_id`)
+  is dropped in lockstep across the C++ verify batteries
+  (`tx_pqc_verify.{h,cpp}`, `blockchain.cpp`) and the Rust submit verifier
+  (`shekyl-daemon-rpc/.../verifier.rs`); per-input scheme validity, key-blob
+  length, and signature remain enforced. The agreement's stated
+  scheme-downgrade purpose was vacuous (self-referential; per-output binding is
+  the `h_pqc` leaf hash), and its actual effect — foreclosing a self-inflicted
+  solo/multisig cross-model linkage — moves to the wallet per **TM-1**
+  (disclosure + coin-selection invariant, tracked to MS-5), not consensus.
+  Cross-seam KAT: `tests/unit_tests/fcmp.cpp::msw6_mixed_scheme_transaction_verifies`.
+  See `PQC_MULTISIG.md` §16.3.
+
 - **docs: F-D4 a-priori exit-window derivation
   (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`, Gate-6 §12.6).** Committed
   before any `draw_exit_gap` code or sweep (GF7_HOOKS §5.1 ordering):

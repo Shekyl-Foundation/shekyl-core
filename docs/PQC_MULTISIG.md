@@ -1945,17 +1945,28 @@ shekyl-crypto-pq/src/multisig_receiving.rs
 
 ### 16.3 Defense-in-depth wiring fixes
 
-> **MSW-6 (2026-07-15).** The historical "wire `expected_scheme_id`"
-> DiD that forced **tx-wide** scheme agreement is **withdrawn** — it
-> was self-referential (cites this section) and costs scheme-2 funding
-> + scheme-1 bond vin in one tx. Replacement: per-input scheme ∈
-> `{1,2}` (or bond-post exemption mirroring
-> `is_archival_serve_credit_only`). Cross-scheme confusion remains
-> prevented by length disjointness (MSW-2). Archival core never sees
-> funding `pqc_auths`.
+> **MSW-6 (landed).** The tx-wide `expected_scheme_id` DiD that forced
+> **tx-wide** scheme agreement is **withdrawn** (option a — dropped
+> outright, not exempted). Its *stated* purpose (a cross-input
+> scheme-downgrade defense) was vacuous: `expected_scheme` was derived
+> from `pqc_auths[0]` itself (self-referential), and per-output scheme
+> binding is the leaf hash `h_pqc = H(hybrid_public_key)`, not this
+> check. Its *actual* effect was to foreclose a self-inflicted
+> solo(1)/multisig(2) **cross-model linkage** — under FCMP++ separate
+> txs are unlinkable, so co-spending is the only proof of common control
+> across key models. Per **TM-1**
+> ([`design/ARCHIVAL_TM1_CLUSTERING.md`](design/ARCHIVAL_TM1_CLUSTERING.md))
+> that self-inflicted class is a *wallet disclosure + coin-selection
+> invariant* (tracked to **MS-5** / E′ coin selection), not a consensus
+> mechanism. Each input is still validated per-input (scheme ∈ `{1,2}`,
+> blob length, signature). Cross-scheme confusion remains prevented by
+> length disjointness (MSW-2); archival core never sees funding
+> `pqc_auths`.
 
 - ~~`src/cryptonote_core/blockchain.cpp` tx-wide `expected_scheme_id`~~
-  → **MSW-6** relax (both verify batteries + Rust submit verifier)
+  → **MSW-6 landed** — dropped in both C++ verify batteries
+  (`tx_pqc_verify.{h,cpp}` + `blockchain.cpp`) and the Rust submit
+  verifier (`verifier.rs`). KAT: `fcmp.cpp::msw6_mixed_scheme_transaction_verifies`.
 - `rust/shekyl-ffi` / group_id DiD for scheme_id=2: **MS-8 retired**
   (leaf already binds the blob; no-op)
 

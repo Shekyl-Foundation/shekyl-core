@@ -204,7 +204,8 @@ fn verify_spend(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), Ve
         .ok_or(VerifyFailure::StaleRoot)?;
     verify_fcmp(parsed, prunable, pqc_auths, &reference.root, layers)?;
 
-    // ── K13: PQC hybrid auth + scheme-id consistency ────────────────────
+    // ── K13: PQC hybrid auth (per-input scheme validity; MSW-6 dropped the
+    // former tx-wide scheme-id agreement — see verify_pqc_auths) ─────────
     verify_pqc_auths(parsed, pqc_auths)
 }
 
@@ -301,16 +302,21 @@ fn verify_fcmp(
 }
 
 /// K13 proper: the `verify_transaction_pqc_auth` battery
-/// (`tx_pqc_verify.cpp:154-248`), natively.
+/// (`tx_pqc_verify.cpp`), natively.
 ///
-/// Per auth: version pin, zero flags, known scheme id, the FCMP++
-/// scheme-id **consistency** rule (all inputs agree with input 0 —
-/// PQC_MULTISIG.md §16.3 defense-in-depth; the C++ derives
-/// `expected_scheme_id` from `pqc_auths[0]`), per-scheme key-blob length
-/// bounds, then the hybrid Ed25519+ML-DSA (or M-of-N multisig container)
-/// verification over the per-input signing-preimage hash — computed by
-/// `shekyl-wire`'s [`pqc_signing_payload_hashes`], the pinned Rust twin of
+/// Per auth: version pin, zero flags, known scheme id ∈ {1,2}, per-scheme
+/// key-blob length bounds, then the hybrid Ed25519+ML-DSA (or M-of-N multisig
+/// container) verification over the per-input signing-preimage hash — computed
+/// by `shekyl-wire`'s [`pqc_signing_payload_hashes`], the pinned Rust twin of
 /// C++ `get_transaction_signed_payload`.
+///
+/// MSW-6 (PQC_MULTISIG.md §16.3) withdrew the former tx-wide scheme-id
+/// agreement (every input matching `pqc_auths[0]`). Its stated scheme-downgrade
+/// purpose was vacuous — self-referential, and per-output binding is the leaf
+/// hash `h_pqc = H(hybrid_public_key)`; its actual effect, foreclosing a
+/// self-inflicted solo/multisig cross-model linkage, is a wallet disclosure +
+/// coin-selection invariant per TM-1 (tracked to MS-5), not a consensus rule.
+/// Dropped here in lockstep with the C++ battery so the K13 differential holds.
 ///
 /// [`pqc_signing_payload_hashes`]: shekyl_wire::transaction::Transaction::pqc_signing_payload_hashes
 fn verify_pqc_auths(parsed: &ParsedSubmission, pqc_auths: &[PqcAuth]) -> Result<(), VerifyFailure> {
@@ -323,16 +329,11 @@ fn verify_pqc_auths(parsed: &ParsedSubmission, pqc_auths: &[PqcAuth]) -> Result<
     if payload_hashes.len() != pqc_auths.len() {
         return Err(VerifyFailure::Malformed);
     }
-    let expected_scheme = pqc_auths[0].scheme_id;
-
     for (auth, payload_hash) in pqc_auths.iter().zip(&payload_hashes) {
         if auth.auth_version != 1 || auth.flags != 0 {
             return Err(VerifyFailure::Malformed);
         }
         if auth.scheme_id != PQC_SCHEME_SINGLE && auth.scheme_id != PQC_SCHEME_MULTISIG {
-            return Err(VerifyFailure::Malformed);
-        }
-        if auth.scheme_id != expected_scheme {
             return Err(VerifyFailure::Malformed);
         }
         if auth.hybrid_public_key.is_empty() {
