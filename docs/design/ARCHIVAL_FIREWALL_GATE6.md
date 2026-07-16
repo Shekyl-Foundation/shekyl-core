@@ -2115,8 +2115,10 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   post-genesis monitoring plan). Verified at source: the `1.86` was computed on
   **nominal** cover (`gf7_timeline.rs` seeds `N = TARGET_ANON_SET = 10` at full honest
   strength; §11 (iv) already names the measured set an upper bound), so the conditional is
-  load-bearing — effective cover below nominal moves `r` up against a 7% margin, and per
-  WI-4's no-cross-subsidy pin it cannot borrow that margin.
+  load-bearing — effective cover below nominal moves realized per-event exposure
+  `P(link)` up (the sweep below shows `r` itself is cover-blind, so the harm never
+  registers gate-side), and per WI-4's no-cross-subsidy pin it cannot borrow the gate's
+  margin.
   **Kind sharpened + sensitivity sweep run (2026-07-16, later same day; reading corrected
   same day, per review).** Two amendments to the filing above, recorded at WI-4 §13.5 in
   full. (1) *Kind:* "the isolation-conditioning kind" got the permanence right and the

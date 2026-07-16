@@ -831,6 +831,10 @@ preserve:
   rate the sim proxied* (Gate-6 §11 (ii)). So `1.86` is not the
   measured value of `r` — it is `r` **under the most favorable cover
   assumption**, with no lower bound on the truth from the cover side.
+  (Pre-sweep framing, retained as the filing of record; the
+  sensitivity sweep below **retracts it as to `r`** — the ratio is
+  structurally cover-blind, and what thinner cover moves is realized
+  per-event exposure `P(link)`, not `r`.)
   The honest characterization of the number is **stacked marginals of
   opposite sign**: the adversary input is deliberately pessimistic (the
   stress arm is an oracle-union panel over three correlators including

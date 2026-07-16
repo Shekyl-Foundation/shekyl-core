@@ -849,17 +849,25 @@ fn print_gf7_breakeven_report() {
         );
     }
     eprintln!();
-    match report.ratio_threshold_n {
-        Some(t) => eprintln!(
+    // A `None` selection is ambiguous between "every valid row misses" and
+    // "no row was valid at all" (controls failed everywhere — the sweep
+    // observed nothing); the two must never print as the same sentence.
+    let any_valid_rows = report.rows.iter().any(|r| r.controls_valid);
+    match (report.ratio_threshold_n, any_valid_rows) {
+        (Some(t), _) => eprintln!(
             "  Ratio breakeven: worst arm clears r < {:.1} down to N = {} — if that is the \
              bottom of the sweep, the relative leak is scale-invariant in-model (no ratio \
              breakeven in range; cover was never gated by r).",
             report.ratio_bound, t,
         ),
-        None => eprintln!("  Ratio breakeven: NONE — every valid row breaches the bound."),
+        (None, true) => eprintln!("  Ratio breakeven: NONE — every valid row breaches the bound."),
+        (None, false) => eprintln!(
+            "  Ratio breakeven: NO VALID ROWS — controls failed at every N; the sweep \
+             graded nothing and no conclusion about the bound was observed.",
+        ),
     }
-    match &report.nominal_parity {
-        Some(p) => eprintln!(
+    match (&report.nominal_parity, any_valid_rows) {
+        (Some(p), _) => eprintln!(
             "  Nominal-exposure parity (arithmetic identity, not a threshold): worst-arm \
              P(link) stays <= {:.2} down to N = {} (P = {:.3} there). Under flat r this must \
              sit at N = nominal * (r / bound) by identity — it restates the nominal-cover \
@@ -867,9 +875,13 @@ fn print_gf7_breakeven_report() {
              its instrument is the S-2 ledger, not this number.",
             report.nominal_exposure_identity, p.n, p.worst_p_link,
         ),
-        None => eprintln!(
+        (None, true) => eprintln!(
             "  Nominal-exposure parity: NONE — every valid row realizes more than the \
              nominal-cover exposure.",
+        ),
+        (None, false) => eprintln!(
+            "  Nominal-exposure parity: NO VALID ROWS — controls failed at every N; \
+             nothing was observed.",
         ),
     }
     if !report.failing_n.is_empty() {

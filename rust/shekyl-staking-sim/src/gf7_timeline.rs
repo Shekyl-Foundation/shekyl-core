@@ -87,12 +87,15 @@ pub const RATIO_BOUND: f64 = 2.0;
 pub const NOMINAL_COVER_N: usize = 10;
 
 /// Positive-control pass floor: the known-linked control must link well above
-/// baseline for the run to be valid (measurement doc §5 control 1).
-const POSITIVE_CONTROL_MIN: f64 = 0.80;
+/// baseline for the run to be valid (measurement doc §5 control 1). Shared
+/// with the `gf7_breakeven` sweep, which re-runs this round's §5 controls
+/// per swept `N` — one definition, so the two harnesses cannot diverge.
+pub(crate) const POSITIVE_CONTROL_MIN: f64 = 0.80;
 
 /// Negative-control tolerance: the known-independent control must land within
-/// this of the `1/N` baseline for the run to be valid (§5 control 2).
-const NEGATIVE_CONTROL_TOL: f64 = 0.05;
+/// this of the `1/N` baseline for the run to be valid (§5 control 2). Shared
+/// with `gf7_breakeven` for the same reason as `POSITIVE_CONTROL_MIN`.
+pub(crate) const NEGATIVE_CONTROL_TOL: f64 = 0.05;
 
 /// Correlator timing tolerance floor (blocks). The kernel width is
 /// `sigma = max(window, dispersal_bound, SIGMA_FLOOR)`: a well-specified

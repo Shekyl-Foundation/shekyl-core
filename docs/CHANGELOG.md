@@ -142,8 +142,10 @@
   cover (`gf7_timeline.rs` seeds `N = TARGET_ANON_SET = 10` at full
   honest strength; Gate-6 §11 (iv) already names the measured set an
   upper bound), so the conditional is load-bearing: effective cover
-  below nominal moves `r` up against the 7% gate margin, and per
-  WI-4's no-cross-subsidy pin it cannot be paid out of that margin.
+  below nominal moves realized per-event exposure `P(link)` up (the
+  later sweep entry above shows `r` itself is cover-blind, so the
+  harm never registers gate-side), and per WI-4's no-cross-subsidy
+  pin it cannot be paid out of the gate's margin.
   WI-4 §13.5 ledger extended four → five conditionals; the seal-time
   verdict line now carries three permanent clauses (isolation, GF-4
   promotion, effective cover). FOLLOWUPS funding-seam carry 4 split

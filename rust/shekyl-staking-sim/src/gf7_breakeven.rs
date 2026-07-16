@@ -68,14 +68,11 @@
 
 use serde::Serialize;
 
-use crate::gf7_timeline::{grade, ArmResult, SynthParams, NOMINAL_COVER_N, RATIO_BOUND};
+use crate::gf7_timeline::{
+    grade, ArmResult, SynthParams, NEGATIVE_CONTROL_TOL, NOMINAL_COVER_N, POSITIVE_CONTROL_MIN,
+    RATIO_BOUND,
+};
 use crate::standoff::SplitMix64;
-
-/// Positive-control pass floor (same bar as the measurement round §5).
-const POSITIVE_CONTROL_MIN: f64 = 0.80;
-
-/// Negative-control tolerance (same bar as the measurement round §5).
-const NEGATIVE_CONTROL_TOL: f64 = 0.05;
 
 /// The swept cover levels. `NOMINAL_COVER_N` (10) is the nominal gate point
 /// (the `1.86` row) and must appear in the sweep — `run_breakeven` asserts it,
