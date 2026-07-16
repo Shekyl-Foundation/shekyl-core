@@ -1334,6 +1334,36 @@ sustainability is unaffected by the recalibration.
     itself remains open — it graduates the lemma from a-priori to empirical
     and pre-brackets the rates the stressnet read seals. Target unchanged:
     **V3.0** for the wargame; the seal is Phase 7.7.
+  - **UPDATE 2026-07-16:** the wargame's instrument exists and has run on
+    swept pre-testnet assumptions: `shekyl-staking-sim --exit-standoff`
+    (the F-D4 §8 pre-registered sweep — X-2 is the L17 cohort arm, one
+    obligation with this wargame). Its X-2 grid empirically confirms the
+    anti-smear lemma (skipped-draw cohorts land on ≤2 heights; caught by
+    the negative control) and **prices the lever-vs-queue question** (doc
+    §14): under the pre-registered exact-Bayes observer the trough cohort
+    needs `σ_L` on the `W/2` scale — not the `W/N_x` spacing form — so the
+    queue decision is now a mechanical read of the sealed `(ρ_x, N_x, σ_L)`
+    through `required_sigma_l`. What remains of the round is running the
+    same instrument on stressnet-measured rates instead of swept corners.
+  - **UPDATE 2026-07-16 (later same day) — CLOSED as posed, by the F-D4
+    round-4 premise audit (deletion ratified).** The wargame's A2 analyst
+    "correlates P-side releases against principal-side activity" — and the
+    audit (doc §2.1/§15, F-W7) found that observable **unpopulated**: the
+    refund leaves as hidden outputs inside the posting tx (structural),
+    rotation is dead by S-5/T-A1 + in-place `HoldingsUpdate`, network is
+    the §10.9 conditioning double-counted, and the off-chain crossing
+    belongs to Gate-6 §18.13. The anti-smear lemma survives as public
+    geometry (release heights are public; the lemma never needed `T`), but
+    the harm it fed — intra-cohort *assignment* — is a function of `T`, so
+    the smear-or-delay and lever-vs-queue questions are moot as posed. No
+    stressnet read, no seal, no queue redesign. **Reopen** rides the F-D4
+    §15.4 tripwire (any future public principal-side event re-runs the
+    audit, then this wargame); whether a re-homed *crossing* wargame
+    (principal↔user seam, S-2 ledger) replaces it is part of the §15.5
+    hand-forward Gate-6 R4 now owns. The instrument itself never landed
+    on `dev` — preserved at `archive/feat/fd4-exit-sweep-2026-07-16`
+    (F-D4 §15.4's landing disposition), recoverable for a re-homed
+    wargame.
 
 - **Foundation treasury diversification — floor capacity must not be
   pro-cyclical (swan-2/W4, 2026-06-11; re-scoped swan-3/W12–W13; re-anchored
@@ -1553,6 +1583,47 @@ sustainability is unaffected by the recalibration.
   `STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff* → *Conditionality and
   caveats*, `ARCHIVAL_FIREWALL_GATE6.md` §10.12 / §10.9. **Target: V3.0** (carries
   1–3 are pre-genesis; carry 4 is the testnet measurement that calibrates them).
+  **UPDATE 2026-07-16 (Gate-6 §11.8 method note 3 — the mechanism-vs-economics
+  filter — splits this carry):** the two halves of carry 4 are different
+  measurement classes and only one is testnet-dischargeable. The
+  **observer machinery** (does the observe-and-inject adversary's attributable
+  decoy injection get discounted; does the S-3 correlator behave against the
+  strengthened panel) is *mechanism* — testnet-faithful, stays here as the
+  testnet obligation. The **cover level** — the post-isolation network-event
+  rate itself — is *economics*: a function of real value at risk, which a
+  testnet cannot produce; a testnet cover-level read measures the load
+  generator, echoed back as "measured." The level therefore **cannot close
+  pre-genesis** and is reclassified out of this carry into the WI-4 §13.5
+  conditional register (fifth conditional: carried as a stated assumption
+  with a **post-genesis monitoring plan** — live-chain
+  funding-spend/network-event rate observation once real value flows).
+  Load-bearing because the `1.86` was computed on nominal cover
+  (`gf7_timeline.rs` seeds `N = TARGET_ANON_SET` at full honest strength)
+  against a 7% margin, and per WI-4's no-cross-subsidy pin the conditional
+  cannot borrow that margin.   **UPDATE 2026-07-16 (later same day — kind
+  sharpened, sensitivity sweep run; reading corrected same day, per
+  review):** the conditional conditions the *number itself*, not a
+  channel (isolation's kind) — `1.86` was computed at nominal cover, an
+  upper bound, stacked against a deliberately pessimistic adversary
+  panel (full statement WI-4 §13.5). The sweep
+  (`shekyl-staking-sim --gf7-breakeven`, `gf7_breakeven.rs`,
+  mechanism-class — a property of the model) finds worst-arm `r`
+  clearing the bound at every row of `N ∈ [2, 16]` and never trending
+  toward the bar as cover thins: **`r < 2` is structurally blind to
+  cover** (hit probability and `1/N` baseline shrink together), so
+  cover was never gated by `r` and the gate's ~7% margin is
+  relative-leak margin, not cover margin. **No per-event monitoring
+  threshold was discovered**: the candidate `P(link) ≤ 0.2` is the
+  ratio bar evaluated at nominal cover, back-derived — under flat `r`
+  the parity point sits at `N ≈ nominal · r/bound` *by identity* (the
+  run's parity row: worst `P = 0.199` at `N = 9`, `0.179` at
+  `N = 10`), restating the
+  nominal-cover assumption with no independent content; pinning it as
+  an absolute bar is refused. Per-event `P(link)` also does not bound
+  the aspiration's quantity (repetition + geometric intersection
+  collapse, F-D4 §13.3/F-W5): the conditional's instrument is the
+  **S-2 lifetime exposure ledger** (Gate-6 R5, unbuilt), not any
+  per-event number.
 
 - **Wallet bond-funding/standoff call site (tracks the `shekyl-standoff`
   importable surface; 2026-06-16).** The `shekyl-standoff` crate is now

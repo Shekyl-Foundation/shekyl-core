@@ -5,8 +5,22 @@ exit sweep runs. Review rounds 1–3 run same day (§10–§12): F-W2 reclassifi
 lever; F-W3 converted the genesis value to a `K_COVER`-pattern provisional sentinel with the
 decision rule frozen (§5.4) — the value is sealed by the Phase 7.7 stressnet rate read, not
 committed here; F-W6 folded the rate-independent X-3 anchor-merge bound (`W ≥ 2 × SEB`,
-§5.2a) into the frozen rule with its cost stated.** This is the artifact Gate-6 §12.6
-requires first in the F-D3/F-D4 build
+§5.2a) into the frozen rule with its cost stated.**
+
+**UPDATE 2026-07-16 — round 4 (§15) is a premise audit, and it is blocking: the correlated
+observable `T` (the "principal-side re-appearance") was never named, and no candidate
+population for it survives the audit within this doc's seam (§2.1). Every bound in §5, the
+§5.4 rule, the §13 derivation, and the §14 sweep findings quantify over `T` and are
+conditional on its existence. X-3's harm model is retracted (F-W8, §15.3). The sentinel
+holds the system in the correct frozen state throughout (§15.7).**
+
+**UPDATE 2026-07-16 (later same day) — round 4 RATIFIED: deletion-with-tripwire (§15.4),
+with the harness's deletion sequenced behind the §15.5 gate question, which is handed
+forward to Gate-6 R4 with this audit attached — the re-homing call is R4's, not this doc's.
+The `RELEASE_CHECKLIST.md` seal entry is removed by the ratification commit; the mechanism
+deletion is a separate PR whose reviewer-map is §15.4 item 1.**
+
+This is the artifact Gate-6 §12.6 requires first in the F-D3/F-D4 build
 sequence, in the GF7_HOOKS §5.1 ordering: (a) derive the threshold and the window model from a
 stated adversary-advantage claim, (b) adversarial review of the rate model against the
 correlated-unbond adversary, (c) only then does the sweep run. A failed sweep is a
@@ -80,28 +94,85 @@ constraints (§4); neither reproduces `600`.
 
 ---
 
-## 2. The adversary
+## 2. The adversary — and the observable it correlates against (rewritten by round 4)
 
 Inherited from Gate-6 §12.1/§18.1 and the WI-4 S-3 observer, specialized to the exit seam:
 
 - **Sees:** the full public chain — every `Unbond`/`HoldingsUpdate` connect height, the bond
   record (so `last_served_epoch`, hence **`H_0` is adversary-computable per persona**), the
-  refund amount class; plus network-observable principal-side activity timing. Does **not** see
-  FCMP++-hidden amounts/sources or circuit interiors (§10.9 isolation is the inherited
-  conditioning assumption; the hooks measure the post-isolation residual).
-- **Wants:** the `P` ↔ principal link. The exit is the highest-yield event for it: a
-  cooldown-expiry release followed by principal-side value re-appearance at a characteristic
-  latency.
-- **Channels:**
+  refund amount class — which is **one point, by construction**: `refund_atomic` is
+  CT-balance-enforced on the wire to equal `bond_floor(current holdings)` — the public
+  constant times the public shard count (`bond_connect.rs` `UnbondConnect::refund_atomic`,
+  `HoldingsUpdateDropConnect::refund_atomic == FLOOR`). "They re-bonded for the exact same
+  amount" is mandatory and universal, not a fingerprint; there is no amount channel to close
+  because the masking is total by construction. Does **not** see FCMP++-hidden
+  amounts/sources or circuit interiors (§10.9 isolation is the inherited conditioning
+  assumption; the hooks measure the post-isolation residual).
+- **Wants:** the `P` ↔ principal link. Rounds 0–3 modeled the exit as the highest-yield event
+  for it: a cooldown-expiry release followed by principal-side value re-appearance at a
+  characteristic latency `T`.
+- **Channels (each quantifies over `T` — see §2.1):**
   1. **Fixed-offset tell** — without the draw, the release sits at a deterministic,
      per-persona-computable height `H_0`; any principal-side event at a stable offset from
-     `H_0` is attributable.
+     `H_0` is attributable. *Requires a principal-side event.*
   2. **Isolation** — an exit that is the only exit-class event within the observer's
      correlation resolution is uniquely pairable with the principal-side event that follows it.
+     *Requires a principal-side event.*
   3. **Co-trigger clustering** — a market event synchronizes many exits; the *cohort
      membership* is public, and the intra-cohort assignment (which P maps to which
      principal-side re-appearance) is the residual the draw must scramble. The shared trigger
-     is the catastrophic case (`16→1.01`, entry finding, §12.5).
+     is the catastrophic case (`16→1.01`, entry finding, §12.5). *Assignment maps onto
+     principal-side events; without them there is nothing to assign.*
+
+### 2.1 The correlated observable, named (round 4 — the audit rounds 0–3 never ran)
+
+For any of the three channels to be non-empty, `T` must be a concrete event with a
+population that produces it and a cadence. The candidates, exhaustively, with their
+foreclosure class — the classes matter because they have **different reopen behavior**
+(§15.4):
+
+- **T-1 — a subsequent public bond post (rotation / re-entry).** The only *on-chain public*
+  event a principal can produce after an exit. Structurally live as an event class (a
+  `JoinMarket` is public), but: the funding link is FCMP++-hidden (the new bond's inputs are
+  membership proofs — the chain does not say the refund funded it); the amount is
+  FLOOR-shaped like every other bond post; only timing correlation remains — and **the
+  population is empty by design.** Shard changes never exit (`HoldingsUpdate` swaps in place,
+  bonded throughout); identity rotation is out of scope for V3.0 (**S-5**: long-lived `P`
+  committed) and ruled a non-channel regardless (**T-A1**: the shard portfolio is the public
+  identity — cosmetic rotation re-links on the portfolio, non-cosmetic rotation abandons the
+  income stream); a cash-out leaves and does not return. Who exits and re-enters, why, how
+  often: nobody the design gives a reason to, for no reason it doesn't serve better in place,
+  at cadence ≈ 0. **Foreclosure class: policy + economics** (S-5 scope decision, T-A1
+  economics) — *not* structure; reopens if rotation is ever brought into scope (§15.4).
+- **T-2 — watching the refund land or move (on-chain value re-appearance).** **Structurally
+  unrepresentable.** `refund_atomic` is the `bond_debit` source term **of the `Unbond`
+  transaction itself** — the released value leaves as ordinary hidden outputs *inside the
+  same tx that posts the exit*, CT-enforced to the public floor; slashability ends at the
+  connect and the refund is never clawed back (`bond_connect.rs`). There is no later release
+  event, no refund output whose arrival an adversary can watch, and the outputs' subsequent
+  spends are FCMP++-hidden. The exit seam contains **exactly one public event** — the
+  `Unbond`/`HoldingsUpdate` connect, P-attributed by construction — and everything after it
+  is inside FCMP++. **Foreclosure class: structural** — the chain has no place to express
+  this event; reopens only if a design moves the refund out of the posting tx (a scheduled
+  release, a deferred-payout mechanism — §15.4 tripwire).
+- **T-3 — network-observable principal-side activity.** **Already spent as conditioning.**
+  The "Sees" line above inherits §10.9 default-on isolation as its conditioning assumption;
+  the same fact cannot be assumed in the conditioning and harvested as the channel.
+  **Foreclosure class: conditioning** — reopens only if default-on isolation is weakened
+  (foreclosed independently by mission rule 2).
+- **T-4 — the off-chain counterparty crossing (exchange deposit, KYC'd receipt).** **Real —
+  and not this seam.** It is the `P`→user bridge, Gate-6 §18.13's seam, where the committed
+  posture is *widen, not close* (a counterparty saw the money; the channel is irreducible)
+  and the grading instrument is the S-2 exposure ledger. An exit-timing spread could serve as
+  one widening instrument *there*, sized by *that* seam's analysis — not by this doc's
+  on-chain rate model. **Foreclosure class: re-homed** (§15.5 raises whether GF-4's exit seam
+  belongs there wholesale).
+
+**The population paragraph rounds 0–3 owed and never wrote: within this doc's seam — on-chain
+`P` ↔ principal — there is no concrete public event, no population, and no cadence.** T-1 is
+an event class with an empty population; T-2 has no event; T-3 is double-counted; T-4 is
+another seam. The three channels above are retained as the historical record of the rounds
+0–3 model; each is empty absent `T`.
 
 ## 3. The anchor-quantization lemma (the a-priori answer to swan-2/W8's mechanism question)
 
@@ -220,6 +291,15 @@ With `N_x = 5` and `σ_L` at a generous days-scale (`σ_L ≈ 2_000` blocks ≈ 
 *(Inserted by review round 3 as `5.2a`: §5.3/§5.4 are externally cited — Gate-6 §12.6,
 `RELEASE_CHECKLIST.md`, FOLLOWUPS — and do not renumber.)*
 
+> **RETRACTED — harm model empty (F-W8, round 4, §15.3).** The geometry below is correct and
+> the derivation stands as arithmetic; the *harm* it prevents does not exist. "The adversary
+> reads cohort membership straight off the exit height" gave the adversary nothing it lacked:
+> cohort membership **is** `last_served_epoch`, public on the bond record, and every
+> `Unbond` is P-attributed by construction. The partition only ever mattered as an input to
+> intra-cohort *assignment*, and assignment is a function of `T` (§2.1) — phantom `T`, empty
+> X-3. The bound goes into the §15 audit with everything else; nothing from this section is
+> banked on geometry alone.
+
 The §3 lemma already contains a second lower bound, derivable with **no rate input at all**.
 Adjacent anchors sit exactly `SEB` apart (`H_close(E+2)`, `H_close(E+3)`, …). A cohort at
 anchor `A` occupies `[A, A + W]`; the next occupies `[A + SEB, A + SEB + W]`. They overlap iff
@@ -304,6 +384,13 @@ needed it is a *mechanism* change (the draw's domain widens for everyone, always
 conditional branch.
 
 ### 5.4 The value is sealed by measurement; the decision rule is frozen now (F-W3)
+
+> **CLOSED by round-4 ratification (§15.4, 2026-07-16).** The rule's X-1 term is conditional
+> on `T` existing (§2.1) and its X-3 term is retracted (F-W8). The deletion disposition is
+> ratified: no seal, no `σ_L` spec, no lever-vs-queue arbitration — the rule survives only
+> as the archived record and the §15.4 tripwire's re-run template. The sentinel already
+> refuses shipping, so closure required no code change — the system was frozen in the
+> correct state by construction (§15.7).
 
 **No genesis value is committed here.** Review round 1 (F-W1) replaced one picked point
 (`2 × SEB`) with another (`3 × SEB`); review round 2 (F-W3) found the real error one level up:
@@ -465,10 +552,25 @@ partition event and takes a design round of its own.**
    **UPDATE 2026-07-16: done (§13) — `N_t(exit) = 10`, derived a-priori; rule and box
    unchanged; the repetition asymmetry routed to `σ_L`/S-2 as a named residual.**
 4. The X-1/X-2 sweep per §8; grading folds into the R4 joint grade (Gate-6 §12.8) — never
-   per-axis.
+   per-axis. **UPDATE 2026-07-16: the instrument was built and run** —
+   `shekyl-staking-sim --exit-standoff` (`src/exit_standoff.rs`), all five §8 items built to
+   the bar before any row ran; `EXIT_TARGET_ANON_SET` minted per §13.4; the §5.4 frozen rule
+   encoded once (`frozen_rule_window`, planning-box corners pinned as its KAT). Pre-seal
+   structural findings recorded in **§14** — the delivered X-1 cover is latency-gated
+   (`ρ_x · σ_L`), and the §5.3 lever must be priced by the observer-derived required `σ_L`,
+   not the spacing form. **It never landed on `dev`** — after round 4 (§15.4) the round-4
+   record ships docs-only and the harness rides the §15.5 answer from the archive tag
+   `archive/feat/fd4-exit-sweep-2026-07-16`.
 5. **The seal:** Phase 7.7 stressnet read of `(ρ_x, N_x, σ_L)` → the §5.4 frozen rule fixes
    `DEFAULT_EXIT_GAP_WINDOW` → provisional flag cleared (stressnet-entry prerequisite,
    `RELEASE_CHECKLIST.md`, beside `K_COVER`/PF-9).
+6. **UPDATE 2026-07-16 — round 4 inserted between steps 4 and 5, and it is blocking (§15):**
+   the premise audit found no population for `T` within this seam (§2.1). Step 5 does not run
+   in any branch as written. **RATIFIED same day:** deletion-with-tripwire (§15.4) — the
+   `RELEASE_CHECKLIST.md` seal entry is removed by the ratification commit, the mechanism
+   deletion is a separate PR (reviewer-map at §15.4 item 1), the harness's fate rides with
+   the §15.5 hand-forward to Gate-6 R4. Steps 1–4 stand as the historical record; their
+   outputs are conditional per the §1-status banner.
 
 ## 10. Review round 1 (2026-07-15) — the rate model vs the correlated-unbond adversary
 
@@ -580,6 +682,12 @@ two-term form.
 
 ## 13. F-W5 resolution (2026-07-16) — the exit-seam `N_t`, derived a-priori
 
+> **CONDITIONAL on round 4 (§15) — deletion RATIFIED 2026-07-16.** The derivation is
+> internally sound and unretracted, but its subject — the anonymity set an exit event needs —
+> quantifies over `T` (§2.1), and the ratified disposition leaves no exit event to size a
+> set for. The derivation stands as the record of *how* a seam-specific `N_t` is derived
+> (its method survives as the §15.4 tripwire's re-run template).
+
 **Result: `N_t(exit) = 10` — numerically equal to the entry posture anchor, by derivation,
 not inheritance.** The trap this section was ordered ahead of the sweep to foreclose (§5.4
 rule 3): `N_t = 9` would have made the round-1 planning instance's `20_000` exact. The
@@ -681,6 +789,350 @@ post-seal `W` change is a §16.1 partition event, §7).
   independently. Until the harness exists, this section is the exit anchor's single source;
   no dead constant is pre-provisioned.
 
+## 14. The §8 sweep instrument + pre-seal structural findings (2026-07-16)
+
+> **RE-SCOPED by round 4 (§15) — deletion RATIFIED 2026-07-16.** Every graded number below
+> is internally rigorous **and conditional on `T` existing** — the observer that produced
+> them is exactly the artifact that exposed `T` as unpopulated (§15.6): the code had to have
+> a variable where the prose had a phrase, and "what populates this?" became unavoidable.
+> The findings stand as the archived record of what the mechanism would have delivered *if*
+> the channel existed — the calibration reference the §15.4 tripwire's re-run inherits; none
+> of them prices anything. The harness itself is sequenced behind the §15.5 hand-forward
+> (§15.4 item 1). **Landing disposition (2026-07-16): the harness never landed on `dev`.**
+> The round-4 record ships docs-only; the instrument lives at the archive tag
+> `archive/feat/fd4-exit-sweep-2026-07-16` (branch `feat/fd4-exit-sweep`, HEAD
+> `d049dcd27`), recoverable if the §15.5 answer re-homes the seam and wants it
+> re-parameterized on the crossing observer. If R4 declines the re-homing, nothing needs
+> deleting — not-landing was free; landing-then-deleting would have cost a PR and a fossil.
+
+The pre-registered sweep was built and run as `shekyl-staking-sim --exit-standoff`
+(`rust/shekyl-staking-sim/src/exit_standoff.rs`, on the archived branch — never on `dev`):
+X-1 over the §5.1 planning-box corners in
+the WI-4 N-sweep form, X-2 over `N_x ∈ {3, 5, 8}` × one/two-anchor × swept `σ_L` × the three
+frozen-rule windows, the §8.3 shared-trigger negative control, the §8.4 thin-regime bias
+statistics, and the §5.3 lever-vs-queue costing — all against this doc's committed `r < 2`,
+worst row reported (`x1_rho1.58e-4_n20_sl1000`, `r = 18.49`), no post-hoc thresholds.
+`EXIT_TARGET_ANON_SET` is minted at this consumer per §13.4. Every `ρ_x`/`σ_L`/`N_x` row is
+a **swept pre-testnet assumption, not a measurement** — the Phase 7.7 read runs through this
+same instrument and `frozen_rule_window` (the §5.4 rule's single code home, planning-box
+corners pinned as its KAT) to seal the value.
+
+### 14.1 The observer, pre-registered
+
+Support-gated exact Bayes: the adversary sees the release height and the principal-side
+re-appearance at latency `L ~ U[0, σ_L]`, and holds every release whose latency support
+contains the re-appearance as equally likely — `P(link) = E[1/|support|]`, the optimal
+per-event score under the model, no heuristic discount. Committed in the module docs before
+any row ran (GF7 §5.1 ordering).
+
+### 14.2 Finding — delivered X-1 cover is latency-gated: `ρ_x · σ_L`, not `ρ_x · W`
+
+The nominal candidate set is everything in the window (`ρ_x · W` — what §5.1 sizes). But the
+principal-side re-appearance prunes it: only releases within one latency-support of the
+re-appearance survive, so the **delivered** support is `1 + ρ_x · σ_L`, W-independent
+(asserted as a harness test). The sweep shows it flatly: at the sparse corner with
+`N = 10`, the frozen rule gives `W = 60_000` and nominal cover 9.48, yet at
+`σ_L = 1_000` the delivered cover is 1.15 and `r = 9.27`. **The window buys de-quantization
+of the anchor and the X-3 merge; latency-gated confusability is bought by `σ_L`.** The §5.1
+bound and the §5.4 rule are unchanged — `W` is still necessary (a release outside the cover
+population's span has no candidates at all) — but `W` alone was never sufficient, which is
+what F-W2's lever reclassification said in cost terms and this observer proves in advantage
+terms.
+
+Consequence, priced: the exit clears `r < 2` at the §13 anchor iff `σ_L` satisfies the exact
+inversion `E[1/(1 + Pois(ρ_x σ_L))] ≤ 2/N_t` (`required_sigma_l` in the harness):
+`31_425` blocks (≈ 43.7 days at 120 s) at the sparse corner, `12_413` (≈ 17.2 days) at the
+planning instance, `1_613` (≈ 2.2 days) at the dense corner. The §5.3 spacing form
+`σ_L ≥ W / N_x` is **not the right price** — at the sparse corner it asks for 7 500–20 000
+where the observer requires 31 425 (under-delivers), at the dense corner it asks for
+2 500–6 667 where 1 613 suffices (over-pays). The lever-vs-queue costing table now runs on
+the observer-derived `required σ_L`, and at every swept corner the lever (paid by exiters
+only, mean `σ_L / 2`) undercuts the queue (`k × SEB / 2` paid by every exit) — the queue is
+reached only if the wallet discipline cannot plausibly hold the required spread, exactly the
+§5.3 reach condition.
+
+### 14.3 Finding — the X-2 trough is priced, and marginal confusability is not `r < 2`
+
+The §5.2 condition ("expected spacing ≤ σ_L") makes cohort members *confusable at all*; the
+sweep shows that under the exact-Bayes observer this delivers marginal advantage reduction,
+not the bar: `r < 2` at cohort size `N_x` needs `p_assign < 2/N_x`, i.e. the support must
+hold ≈ `N_x / 2` cohort members, which puts `σ_L` on the **`W/2` scale**, not the `W / N_x`
+scale. Of the 72 swept X-2 rows exactly one clears (`W = 20_000`, `N_x = 3`, one-anchor,
+`σ_L = 12_500` → `r = 1.80`). Rows are reported failing per GF7 §5.1 — and the disposition
+is the pre-committed one: this is the **decorrelation-redesign signal surface** the §5.3
+costing exists to arbitrate, not a bar move. What the trough actually needs (wide `σ_L`
+discipline vs. the W8 queue widening effective `σ_L` for everyone) is the seal-time decision,
+now with its numbers; the trough row grades in its own regime per WI-4, never averaged
+against the steady state.
+
+### 14.4 Certifications (the instrument can fail, and mixing is as predicted)
+
+- **X-3 coverage boundary:** measured cross-anchor overlap matches `(W − SEB)/W` at all
+  three windows (0.500 at `2 × SEB`, 0.667 at `3 × SEB`, 0.833 at `6 × SEB`) — the §5.2a
+  *mixes-at-all* claim certified, and only that; cross-anchor confusion grows with `σ_L`
+  (0.51 at `N_x = 8`, `σ_L = 12_500`, `W = 60_000`) but never approaches "merged".
+- **§8.3 negative control:** a draw-skipping cohort is caught as clustered
+  (`max_same_height_share = 1.000` vs `0.200` drawn). Recorded with it: the *assignment*
+  observer is provably blind to the skip (`r = 1.00` on the skipped world — all releases at
+  one height are symmetric), which is **why the control keys on clustering-detection**, as
+  §8.3 required.
+- **§8.4 thin regime:** gap positions at the trough row are unbiased (mean fractional
+  position 0.502, upper-half share 0.502) — no gap-toward-max analogue of the entry's
+  `1.86` finding under the one-sided draw.
+
+### 14.5 What changes and what does not
+
+Nothing in §5.4 moves: the rule, the sentinel, the conservatism percentile, and the anchor
+are all as frozen. What the sweep adds is the **required-`σ_L` surface** — the §5.3 joint
+constraint now has its exact form (`E[1/(1 + Pois(ρ_x σ_L))] ≤ 2/N_t` for X-1; support ≈
+`N_x/2` for the trough) in code beside the rule, so the Phase 7.7 read prices the lever and
+the queue mechanically. Grading folds into the R4 joint grade (Gate-6 §12.8) jointly with
+amount-band, holdings-stratum, and output-count — never per-axis.
+
+## 15. Review round 4 (2026-07-16) — the premise audit: the observable was never named
+
+Rounds 1–3 audited the rate model, the derivability of the value, and the geometry of the
+bounds — each internally rigorous, each downstream of a premise no round examined: **that
+the event the adversary correlates against exists.** Round 4 audits the premise. Its verdict
+is not that the arithmetic is wrong; it is that the arithmetic is *about nothing* unless `T`
+has a population, and the §2.1 audit finds none within this seam. This is not a GF7 §5.1 bar
+move — a bar governs how measurements are graded; a premise found false is upstream of every
+measurement. Per the standard this round applies: **phantom channels are deleted, not
+softened.**
+
+### 15.1 F-W7 — the phantom-`T` finding (blocking)
+
+§2 as written by rounds 0–3 defined the adversary's *sight* with real precision (connect
+heights, the bond record, adversary-computable `H_0`, the refund amount class) and defined
+the thing it *correlates against* as "network-observable principal-side activity timing" and
+"principal-side value re-appearance at a characteristic latency" — never named, never
+populated. Every one of §2's three channels quantifies over that event: the fixed-offset
+tell needs a principal-side event at a stable offset; isolation needs the principal-side
+event that follows; co-trigger clustering needs re-appearances to assign. Remove `T` and all
+three are empty. Four rounds of review — the 19× planning box, the sentinel conversion, the
+X-3 geometry, the `N_t` derivation, the 71/72 sweep failures, the 17–44-day `required-σ_L`
+surface — audited arithmetic downstream of the unexamined existential.
+
+**The wire-shape verification that makes it structural, not merely unnamed** (source:
+`bond_connect.rs`): `refund_atomic` is the `bond_debit` source term **of the `Unbond`
+transaction itself**, CT-balance-enforced to `bond_floor(current holdings)`; the released
+value leaves as hidden outputs inside the same tx that posts the exit; slashability ends at
+the connect and the refund is never clawed back. There is no scheduled release, no refund
+arrival to watch, and FCMP++ hides every subsequent spend. The seam contains exactly one
+public event — the P-attributed connect — and the chain has no place to express a second.
+
+**The amount channel was never open**: every bond post and every refund is the public floor
+times the public shard count, the same number for everyone always, enforced by CT balance on
+the wire. Cover was never something to add; the masking is total by construction, and the
+only cover variable that ever existed was temporal density — which is why the entire model
+reduced to `ρ_x`, and why the model's collapse is total when `T` collapses.
+
+### 15.2 The population audit
+
+Run in §2.1, summarized: **T-1** (rotation/re-entry — the only on-chain public candidate)
+has an empty population by design — in-place `HoldingsUpdate` removes the reason, S-5 scopes
+rotation out, T-A1 prices it as identity-suicide-or-relink; foreclosure class **policy +
+economics**. **T-2** (on-chain value re-appearance) is structurally unrepresentable;
+foreclosure class **structural**. **T-3** (network) is the conditioning assumption
+double-counted; foreclosure class **conditioning**. **T-4** (off-chain counterparty
+crossing) is real and belongs to Gate-6 §18.13's seam under its committed widen-not-close
+posture, graded by the S-2 ledger; foreclosure class **re-homed**. The classes are kept
+distinct deliberately: they have different reopen behavior, and collapsing them is how a
+tripwire rots (§15.4).
+
+### 15.3 F-W8 — X-3's harm model, retracted
+
+The §5.2a geometry is correct arithmetic about an empty harm. Cohort membership is
+`last_served_epoch` — public on the bond record — and every `Unbond` is P-attributed by
+construction, so "the adversary reads cohort membership off the exit height" gave it nothing
+it didn't already have; the partition only ever mattered as an input to intra-cohort
+*assignment*, which is a function of `T`. This retracts a bound that F-W6 folded into the
+§5.4 frozen rule one round earlier — recorded plainly because it is the fourth instance of
+the same failure shape in one track (a number acquiring a justification after being liked:
+first the rate narration around `20_000`, then the stacked-marginal conservatism, then the
+re-cut temptation F-W5 was minted against, now geometry). Banking `2 × SEB` "because the
+geometry survives" would have re-committed the failure the round was naming. Nothing from
+this track is banked past the audit.
+
+### 15.4 Disposition — deletion with a tripwire (RATIFIED 2026-07-16)
+
+The population paragraph could not be written (§2.1); per this round's standard the channel
+is deleted, not softened. **Ratified 2026-07-16, with one sequencing amendment recorded at
+item 1.** Rule-21 shape:
+
+1. **The rejection.** The exit-timing decorrelation apparatus guards a channel with no
+   population: delete `draw_exit_gap` and its surface (`exit.rs`, the
+   `ExitGapWindow`/`ExitGap` newtypes, `DEFAULT_EXIT_GAP_WINDOW` + both features, the exit
+   arms in `conformance.rs`, the golden-vector/seal-tripwire tests) and the
+   `RELEASE_CHECKLIST.md` seal entry (removed by the ratification commit). Dead mechanism is
+   audit surface (rule 15); git history and this doc are the archive — the doc retains every
+   number so the record survives the code. The F-D6 anchor derivation
+   (`release_cooldown_anchor_height`) and the cooldown itself are **not** in scope: they
+   exist for slashability/backlog-claim reasons and predate this analysis. The deletion-scope
+   enumeration above is the reviewer-map for the deletion PR; anything it misses is a
+   map-failure, not a license.
+
+   **Sequencing amendment (ratification):** the `--exit-standoff` harness is **out of the
+   mechanism-deletion PR's scope** — its fate rides with the §15.5 gate question. If Gate-6
+   R4 re-homes the seam to §18.13, the harness is the natural instrument for that seam
+   (re-parameterized on the crossing observer), and deleting-then-resurrecting would make
+   the deletion PR fight the re-homing PR; if R4 declines the re-homing, the harness is
+   deleted then. It is **not** kept as a monument to §15.6's finding — the asset is the
+   lesson, not the artifact; keeping code alive as a monument is the fossil pattern in a new
+   costume. And the rule-15 case for its eventual deletion is stronger than "dead code": a
+   harness that grades a phantom channel is a **trigger with no gate** — it will happily
+   produce a report, and reports get believed. That is worse than absence.
+
+   **Landing disposition (2026-07-16, same day):** the sequencing resolved in the cheapest
+   direction — the harness **never landed on `dev`**. PR #313 carried the mechanism
+   (`exit.rs` and its surface, now the deletion PR's real scope) but not the instrument;
+   the round-4 record ships docs-only. The branch is preserved at
+   `archive/feat/fd4-exit-sweep-2026-07-16` (`feat/fd4-exit-sweep`, HEAD `d049dcd27`):
+   if the §15.5 answer re-homes the seam, the instrument is recovered and re-parameterized
+   there; if not, it stays unlanded and there is nothing to delete. "Deleted then"
+   above therefore reduces to "not resurrected."
+2. **The reopen criteria (substrate-anchored).** The finding is conditional on "no public
+   principal-side event exists," which is true of the chain **as designed today**. The
+   channel reopens — and this analysis is the thing to re-run — if any future design mints
+   one: **(a)** identity rotation brought into scope (S-5 revisited, V3.1+/V4); **(b)** any
+   mechanism that moves the refund out of the posting transaction (a scheduled release, a
+   deferred payout, a claim-then-collect shape); **(c)** any new public wire term keyed to
+   the principal rather than to `P`; **(d)** weakening of §10.9 default-on isolation
+   (independently foreclosed by mission rule 2, listed for completeness). Delete the
+   mechanism, keep the tripwire — otherwise someone re-mints the event in three years and
+   nobody remembers the exit standoff was deleted because its channel didn't exist.
+3. **The re-evaluation shape.** The reopening design's review round 1 re-runs the §2.1
+   population audit *for the newly minted event* — concrete event, population, cadence —
+   with the observer **pre-registered as code before any grading** (§15.6). §13 is the
+   template for re-deriving the seam's `N_t`; the archived harness is the template for the
+   instrument; the archived §14 numbers are the calibration reference. The re-run lands in a
+   design round of its own, not as a rider on the minting PR.
+
+Until ratification: no `σ_L` spec, no lever-vs-queue arbitration, no seal preparation, no
+downstream status sweeps (Gate-6 §12.5–§12.8, `IMPLEMENTATION_INDEX.md`, `FOLLOWUPS.md`
+swan-2/W8, `RELEASE_CHECKLIST.md` — the ratification commit is the named carrier for all of
+them, rule-21/rule-94 shape). **DISCHARGED 2026-07-16: the ratification commit carried all
+four sweeps** (Gate-6 §12.5/§12.6/§12.8 + revision history + §11.8 method note 2; index rows
+95–98; FOLLOWUPS swan-2/W8 closed as posed; the checklist seal entry removed). What remains
+owed: the mechanism-deletion PR (item 1's reviewer-map) and the Gate-6 R4 answer to §15.5.
+
+### 15.5 The gate question (HANDED FORWARD to Gate-6 R4, audit attached — 2026-07-16)
+
+If T-4 is the only live channel, then the exit's timing exposure is not `P` ↔ principal at
+all — it is the `P` → user crossing, §18.13's seam, whose posture is already *widen, not
+close* and whose instrument is the S-2 ledger. F-D1's amount concern (a drain amount
+matching a reward subsum, observable at a counterparty) lands at the same crossing — the
+on-chain amount channel was already closed by construction (§15.1); what survived of F-D1
+was always the off-chain subsum match at a counterparty. If both halves of GF-4's exit seam
+reduce to the off-chain crossing, GF-4 is substantially a principal↔user finding wearing a
+`P`↔principal label — which would **re-home it, not just re-scope it**.
+
+**Ratification disposition: raised and handed forward, not answered here — the call is not
+F-D4's to make.** The re-homing has a consequence this doc cannot absorb: R4's four-axis
+joint grade loses its on-chain timing axis, and if the timing input is phantom the joint
+grade is not "run it with one fewer term" — it is a **different grade over a different seam
+with a different posture** (widen-not-close, graded by the S-2 ledger rather than a rate
+model). That is Gate-6 R4's structural decision. This audit travels with the hand-forward
+(Gate-6 §12.8 carries the receiving item); the harness's deletion is sequenced behind the
+answer per §15.4 item 1.
+
+### 15.6 The methodological finding — observer-as-code (the asset this track produced)
+
+Four rounds of prose review never surfaced F-W7. The prose could say "principal-side
+re-appearance" indefinitely; **the harness had to declare a variable**, and once the
+observer existed as code, "what populates this?" became unavoidable — the §14 instrument is
+simultaneously the most rigorous artifact of the track and the one that exposed the track's
+premise as empty. Standing requirement, proposed for every seam this project grades from
+here on: **the observer is pre-registered as code before any row runs** — not as a
+methods paragraph, as an executable artifact whose inputs must be named to compile. This
+track is the proof case: the requirement's cost is one module; its yield here was catching a
+phantom channel before genesis instead of after, with months of per-operator dead capital on
+the line. Recorded beside Gate-6 §11.8's method note ("a constant's meaning is its
+consumer") as the same lesson one level up: *a channel's meaning is its observable.*
+
+**Adopted at ratification (2026-07-16)** — with the framing made explicit: this is not a
+consolation prize for a deleted track; it is the most reusable thing the track produced.
+Four rounds of rigorous arithmetic were worth nothing, and what exposed that was being
+forced to write the observer as code with a variable in it. The lesson transfers; the
+artifact does not (§15.4 item 1 — the asset is the lesson, not the code).
+
+### 15.7 The `K_COVER` pattern, vindicated
+
+The outcome vindicates the sentinel pattern rather than merely surviving it. At the moment
+the premise collapsed, the system was already in the correct state — `DEFAULT_EXIT_GAP_WINDOW`
+refuses to compile into anything real, so there is nothing to un-ship, no flag day, no
+partition risk, no rollback: the freeze that was built to wait for a *measurement* turns out
+to hold equally well while the thing being measured is audited out of existence. A failure
+mode the pattern was never designed for, handled by construction. The pattern's claim —
+*a plausible-looking provisional value is unrepresentable, not merely discouraged* — is
+exactly what kept four rounds of internally-rigorous arithmetic from ever touching a
+shipping build.
+
+Mechanically, the refusal was always a turnstile, not a wall: `compile_error!` fires only
+on unacknowledged builds; a testnet build enables the grep-able
+`provisional-exit-gap-window` feature and runs against the sentinel, so "who is shipping a
+provisional value" is a search, not an audit. The planned end-state — read the numbers
+early in the Phase 7.7 window → apply the frozen rule → set the constant → delete the flag,
+with the golden vector's seal tripwire (pinned at the synthetic `10_007`) failing on
+purpose to force the KAT re-freeze — was the `K_COVER` pattern end to end. Round 4
+dissolved the question for F-D4 (phantom `T` ⇒ nothing to measure), and the sentinel's
+job was precisely to hold the line until that was found out. Which it did.
+
+### 15.8 The measurement-class finding — mechanism vs. economics (added at ratification, 2026-07-16)
+
+A second finding, extracted at ratification, is **bigger than F-D4 and was true before
+F-W7**: even had `T` been real, the Phase 7.7 seal would have been unsound, because two of
+the three inputs the read was queued to produce are unmeasurable on a testnet **in
+principle**, not merely hard:
+
+- **`σ_L`** — the latency to an event that doesn't occur. Empty, not noisy.
+- **`N_x`** — a market-panic cohort size. A testnet has no money at stake and therefore
+  cannot produce a panic; a scripted synthetic mass-exit measures the script.
+- **`ρ_x`** — exit rate, i.e. profit-taking cadence: an economic behavior. On a testnet it
+  is whatever the participants' harness decides to do that afternoon.
+
+The Phase 7.7 read would have returned a measurement of our own test plan, echoed back with
+the authority of "measured" — and a genesis constant would have been sealed on it.
+
+**The filter (adopted as a standing method posture, second home at Gate-6 §11.8 method
+note 3):** before queuing any constant for a stressnet seal, classify the measurement.
+
+- **Mechanism** — does the partition fire, is the draw unbiased, does the determinism KAT
+  hold on aarch64, does timing behave under load. A testnet reproduces these faithfully,
+  because the software doesn't know the money is fake. `K_COVER`'s §14.4 partition run is
+  this class — which is why it is gradeable and why PF-9 is a sound gate.
+- **Economics** — exit rate, churn, profit-taking cadence, panic cohort size, mobility.
+  A testnet cannot produce these; every one is a function of real value at risk.
+
+If a constant needs an economics number, the stressnet is the wrong instrument, and there
+are exactly three honest exits: **derive it structurally** (X-3's instinct — right shape,
+even though its particular harm model was empty), **design so the constant isn't needed**,
+or **ship it knowingly under-determined with a post-genesis reopen** — which for a
+genesis-frozen value means *not shipping it at all*.
+
+The filter was run across the PF-9 / Phase 7.7 queue at adoption (grep-anchored,
+2026-07-16): the only seal queued behind stressnet entry is `K_COVER` (mechanism — passes);
+the other Phase 7.7 entries (F11-S Windows-midrange bench re-measurement, historical
+reference-block/reorg exercise, archival multi-staker path, the `tests/stressnet/README.md`
+acceptance criteria) are all mechanism exercises, and the FA-6 wire lock is a sequencing
+pin, not a measurement. One live hit: GF-7's *effective-vs-nominal cover* residual is
+testnet-gradeable only on its observer machinery — the cover *level* is driven by the
+post-isolation network-event rate, an economics number, unfalsifiable pre-genesis, and was
+subsequently reclassified as the fifth WI-4 §13.5 standing conditional (Gate-6 §12.8;
+the `1.86` was verified computed on nominal cover, so the conditional is load-bearing —
+on realized per-event exposure, the sweep below showing the gate's `r` itself is
+cover-blind). The hit's follow-through demonstrates the filter's
+constructive half: the level is economics, but the *sensitivity sweep* — how the model's
+own `r` and `P(link)` move with cover — is mechanism (a property of the model), and was
+run the same day (`shekyl-staking-sim --gf7-breakeven`: worst-arm `r` clears the bound
+at every row of `N ∈ [2, 16]`, never trending toward the bar as cover thins — `r < 2` is
+structurally blind to cover, so cover was never gated by it;
+no per-event monitoring threshold exists, the candidate `P(link) ≤ 0.2` being the
+nominal-cover assumption restated by identity; full reading WI-4 §13.5, whose instrument
+for the conditional is the S-2 lifetime ledger).
+`DEFAULT_EXIT_GAP_WINDOW` never would have passed this filter — and absent round 4, that
+would have been discovered at the stressnet, after building the harness, instead of now.
+
 ## Related documents
 
 - [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §12.5–12.8 — F-D3 mechanism, F-D6
@@ -696,5 +1148,7 @@ post-seal `W` change is a §16.1 partition event, §7).
   `RELEASE_COOLDOWN_EPOCHS`.
 - [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §L13/§L17/§L18 — population attractor,
   swan table, the reconciled mobility model.
-- [`FOLLOWUPS.md`](../FOLLOWUPS.md) — swan-2/W8 synchronized-exit wargame (this doc converts its
-  mechanism question into the §5.3 predicate; the wargame remains the empirical arm).
+- [`FOLLOWUPS.md`](../FOLLOWUPS.md) — swan-2/W8 synchronized-exit wargame (this doc converted its
+  mechanism question into the §5.3 predicate; closed as posed by round 4 — the wargame's
+  observer correlates against the phantom `T`; reopen rides the §15.4 tripwire, and any
+  re-homed crossing wargame is part of the §15.5 hand-forward).
