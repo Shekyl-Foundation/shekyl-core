@@ -44,6 +44,32 @@
   so the premise collapse required no un-shipping. F-W7/F-W8 registered
   at birth per rule 94 (index row 97, family extended F-W1…F-W8).
 
+- **docs: mechanism-vs-economics measurement filter adopted (F-D4 §15.8
+  + Gate-6 §11.8 method note 3 + `RELEASE_CHECKLIST.md` seal-queueing
+  rule).** Second finding extracted at the F-D4 round-4 ratification,
+  true *before* the phantom-`T` finding: two of the three Phase 7.7
+  seal inputs were unmeasurable on a testnet in principle — `σ_L` is
+  the latency to an event that doesn't occur (empty, not noisy), `N_x`
+  is a market-panic cohort size (no real value at stake ⇒ no panic; a
+  scripted mass-exit measures the script), `ρ_x` is profit-taking
+  cadence (economic behavior). The read would have returned the test
+  plan with the authority of "measured," and a genesis constant would
+  have been sealed on it. Standing posture: before queuing any constant
+  for a stressnet seal, classify the measurement — **mechanism**
+  (partition firing, draw bias, determinism KATs, timing under load; a
+  testnet reproduces these because the software doesn't know the money
+  is fake) vs. **economics** (exit rate, churn, panic cohorts,
+  mobility; functions of real value at risk, which a testnet cannot
+  produce). Economics ⇒ the stressnet is the wrong instrument; the
+  honest exits are derive-structurally / design-the-constant-away /
+  don't-ship-the-genesis-frozen-value. Filter run across the PF-9 /
+  Phase 7.7 queue at adoption: `K_COVER` is the only queued seal and
+  passes (the §14.4 partition run is mechanism); the remaining
+  Phase 7.7 entries are mechanism exercises; one caveat placed at
+  Gate-6 §12.8 — GF-7's effective-vs-nominal-cover residual is
+  testnet-dischargeable only on its observer machinery, never on the
+  cover level (post-isolation network-event rate is economics).
+
 - **sim: the F-D4 §8 exit-seam sweep harness — X-1/X-2/X-3 arms landed
   and run (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §8/§9 step 4; new
   §14).** New `shekyl-staking-sim --exit-standoff`
