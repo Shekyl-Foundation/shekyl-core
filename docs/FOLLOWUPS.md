@@ -1580,6 +1580,24 @@ sustainability is unaffected by the recalibration.
   `STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff* → *Conditionality and
   caveats*, `ARCHIVAL_FIREWALL_GATE6.md` §10.12 / §10.9. **Target: V3.0** (carries
   1–3 are pre-genesis; carry 4 is the testnet measurement that calibrates them).
+  **UPDATE 2026-07-16 (Gate-6 §11.8 method note 3 — the mechanism-vs-economics
+  filter — splits this carry):** the two halves of carry 4 are different
+  measurement classes and only one is testnet-dischargeable. The
+  **observer machinery** (does the observe-and-inject adversary's attributable
+  decoy injection get discounted; does the S-3 correlator behave against the
+  strengthened panel) is *mechanism* — testnet-faithful, stays here as the
+  testnet obligation. The **cover level** — the post-isolation network-event
+  rate itself — is *economics*: a function of real value at risk, which a
+  testnet cannot produce; a testnet cover-level read measures the load
+  generator, echoed back as "measured." The level therefore **cannot close
+  pre-genesis** and is reclassified out of this carry into the WI-4 §13.5
+  conditional register (fifth conditional, the isolation-conditioning kind:
+  carried as a stated assumption with a **post-genesis monitoring plan** —
+  live-chain funding-spend/network-event rate observation once real value
+  flows). Load-bearing because the `1.86` was computed on nominal cover
+  (`gf7_timeline.rs` seeds `N = TARGET_ANON_SET` at full honest strength)
+  against a 7% margin, and per WI-4's no-cross-subsidy pin the conditional
+  cannot borrow that margin.
 
 - **Wallet bond-funding/standoff call site (tracks the `shekyl-standoff`
   importable surface; 2026-06-16).** The `shekyl-standoff` crate is now

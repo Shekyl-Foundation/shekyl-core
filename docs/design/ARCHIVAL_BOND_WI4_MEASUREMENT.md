@@ -788,8 +788,9 @@ de-anonymization" claim, with the margin now honestly thin (§13.1).
 
 ### 13.5 The sealed claim is conditional by construction (pinned 2026-07-06)
 
-The ledger against the `1.86` margin is four conditionals (the fourth
-added at R3), and it is **asymmetric** in a way the eventual seal must
+The ledger against the `1.86` margin is five conditionals (the fourth
+added at R3; the fifth added 2026-07-16 by the Gate-6 §11.8 method-note-3
+filter), and it is **asymmetric** in a way the eventual seal must
 preserve:
 
 - **Leg (b)** (wall-clock channel, §13.3) and the **§14.4 partition run**
@@ -811,22 +812,48 @@ preserve:
   per-post `1.86` implies a per-principal guarantee **only where GF-4
   holds**, and that dependency is a committed conditional, not an
   assumption to leave implicit.
+- **Effective-cover conditioning (added 2026-07-16, by the Gate-6 §11.8
+  method-note-3 mechanism-vs-economics filter)** is a *second*
+  permanently-pre-genesis-conditional of the isolation kind, and it was
+  previously misfiled as a testnet obligation. The `1.86` was computed
+  on **nominal cover**: the sim's `N = TARGET_ANON_SET = 10` seeds the
+  anonymity set at full honest strength (`gf7_timeline.rs` `RunConfig`,
+  baseline `1/N`), and the number's own qualifiers already say so —
+  the measured set is *nominal honest-traffic cover, an upper bound*;
+  effective cover against an observe-and-inject adversary is *lower and
+  unquantified* (Gate-6 §11 (iv)), and the rate that actually drives
+  cover is the *post-isolation network-event rate, not the on-chain
+  funding-spend rate the sim proxied* (Gate-6 §11 (ii)). The effective
+  level is an **economics quantity** — a function of real value at
+  risk — so no testnet read can validate it: a testnet cover-level
+  measurement measures the load generator (Gate-6 §11.8 method note 3).
+  It therefore **cannot close pre-genesis**; it is carried as a stated
+  assumption with a post-genesis monitoring plan, not a task. The
+  observer-*machinery* half (does decoy injection get discounted, does
+  the correlator behave) stays testnet-dischargeable and remains on the
+  testnet list. Load-bearing consequence: if effective cover runs below
+  nominal, `r` moves **up**, and the margin is 7% — this conditional
+  can consume the entire gate margin, and per the no-cross-subsidy pin
+  below it cannot be paid for out of that margin.
 
 Consequence for seal-time wording: even when leg (b) and the partition
 arm both pass and `K_COVER` is set, the gate's honest form is **not**
 "unlinkability holds." It is "the per-persona entry-seam advantage is
 bounded (`r < 2`) under the local-daemon posture, **conditional on
 (1) circuit/client isolation, verified at the transport layer, not
-here, and (2) persona mutual-unlinkability (GF-4), graded separately —
+here, (2) persona mutual-unlinkability (GF-4), graded separately —
 without which the per-post bound does not promote to the per-principal
-property S-1 names**." Measured-conditionals-cleared must never be read
+property S-1 names — and (3) effective cover at or near the nominal
+level the sim seeded, unvalidatable before real value is at risk**."
+Measured-conditionals-cleared must never be read
 as all-conditionals-cleared, and a per-**post** bound must never be read
-as a per-**principal** one: both the isolation conditional and the
-cross-seam/GF-4 conditional survive into the genesis claim itself as
+as a per-**principal** one: the isolation conditional, the
+cross-seam/GF-4 conditional, and the effective-cover conditional survive
+into the genesis claim itself as
 permanent qualifiers, and a future reader who sees "leg-b passed,
-partition passed, sealed" and drops either has dropped an assumption the
-gate rests on. Any seal statement derived from this document carries
-**both** conditional clauses on the verdict line, in the same position
+partition passed, sealed" and drops any of them has dropped an assumption
+the gate rests on. Any seal statement derived from this document carries
+**all three** conditional clauses on the verdict line, in the same position
 the posture condition occupies today.
 
 **No cross-subsidy (the same pin, applied to marginal numbers).** The

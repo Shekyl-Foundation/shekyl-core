@@ -1097,9 +1097,12 @@ The filter was run across the PF-9 / Phase 7.7 queue at adoption (grep-anchored,
 the other Phase 7.7 entries (F11-S Windows-midrange bench re-measurement, historical
 reference-block/reorg exercise, archival multi-staker path, the `tests/stressnet/README.md`
 acceptance criteria) are all mechanism exercises, and the FA-6 wire lock is a sequencing
-pin, not a measurement. One caveat was placed: GF-7's *effective-vs-nominal cover* residual
-is testnet-gradeable only on its observer machinery — the cover *level* is driven by the
-post-isolation network-event rate, an economics number (Gate-6 §12.8 carries the caveat).
+pin, not a measurement. One live hit: GF-7's *effective-vs-nominal cover* residual is
+testnet-gradeable only on its observer machinery — the cover *level* is driven by the
+post-isolation network-event rate, an economics number, unfalsifiable pre-genesis, and was
+subsequently reclassified as the fifth WI-4 §13.5 standing conditional (Gate-6 §12.8;
+the `1.86` was verified computed on nominal cover, so the conditional is load-bearing
+against the 7% gate margin).
 `DEFAULT_EXIT_GAP_WINDOW` never would have passed this filter — and absent round 4, that
 would have been discovered at the stressnet, after building the harness, instead of now.
 
