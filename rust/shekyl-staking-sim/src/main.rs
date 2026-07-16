@@ -858,16 +858,14 @@ fn print_gf7_breakeven_report() {
         ),
         None => eprintln!("  Ratio breakeven: NONE — every valid row breaches the bound."),
     }
-    match report.nominal_parity_n {
-        Some(t) => eprintln!(
+    match &report.nominal_parity {
+        Some(p) => eprintln!(
             "  Nominal-exposure parity (arithmetic identity, not a threshold): worst-arm \
              P(link) stays <= {:.2} down to N = {} (P = {:.3} there). Under flat r this must \
              sit at N = nominal * (r / bound) by identity — it restates the nominal-cover \
              assumption. Lifetime exposure is the aspiration's quantity (F-D4 Sect. 13.3); \
              its instrument is the S-2 ledger, not this number.",
-            report.nominal_exposure_identity,
-            t,
-            report.nominal_parity_worst_p_link.unwrap_or(f64::NAN),
+            report.nominal_exposure_identity, p.n, p.worst_p_link,
         ),
         None => eprintln!(
             "  Nominal-exposure parity: NONE — every valid row realizes more than the \

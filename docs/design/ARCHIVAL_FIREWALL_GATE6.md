@@ -2130,17 +2130,18 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   effective-vs-nominal **at steady state**. (2) *Sweep:* `shekyl-staking-sim
   --gf7-breakeven` (mechanism-class under method note 3: a property of the model, no
   economics input) sweeps `r(N)` at the gate posture, `N ∈ [2, 16]`. Finding: worst-arm
-  `r` is **flat** (≈1.7–1.86) across the range — **`r < 2` is structurally blind to
-  cover**. The ratio renormalizes by the degraded baseline, so thin-cover harm cannot
-  move it (at `N = 2` the worst arm links 74.6% and still "clears"); the hit probability
-  and the `1/N` baseline shrink together. Consequences: the filing's "no lower bound on
-  the truth" framing is retracted as to `r` (the true `r` is ≈1.86 at every cover level);
+  `r` clears the bound at every row (≈1.46–1.83) and never trends toward the bar as
+  cover thins — **`r < 2` is structurally blind to cover**. The ratio renormalizes by
+  the degraded baseline, so thin-cover harm cannot move it (at `N = 2` the worst arm
+  links 72.9% and still "clears"); the hit probability and the `1/N` baseline shrink
+  together. Consequences: the filing's "no lower bound on the truth" framing is
+  retracted as to `r` (the true `r` does not degrade as cover thins);
   **cover was never gated** — the ~7% margin is margin on the mechanism's fixed relative
   leak, never margin against cover, which is what made this section's own misfiling
   possible; and **no per-event monitoring threshold exists to derive** — the candidate
   `P(link) ≤ 0.2` is the ratio bar evaluated at nominal cover (back-derived; under flat
-  `r` the parity point sits at `N = 10 · 1.86/2 ≈ 9.3` *by identity*, the run straddling
-  it at `P = 0.203`/`N = 9` vs `0.177`/`N = 10`), and pinning it as an absolute bar would
+  `r` the parity point sits at `N ≈ nominal · r/bound` *by identity*, the run's parity
+  row landing at `P = 0.199`/`N = 9` vs `0.179`/`N = 10`), and pinning it as an absolute bar would
   commit a bound backwards from the number it must certify — refused. Per-event
   `P(link)` also does not bound the aspiration's quantity at all (the binding is observed
   repeatedly; intersection collapses geometrically, F-D4 §13.3/F-W5): the conditional's
@@ -2232,15 +2233,16 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   panel × optimistic cover). Scope narrowed: thin-cover-as-regime is already
   L12/design-away; the conditional carries effective-vs-nominal **at steady state**.
   (2) *Sweep run* (`shekyl-staking-sim --gf7-breakeven`, `gf7_breakeven.rs` —
-  mechanism-class under method note 3, a property of the model): worst-arm `r` is
-  **flat ≈1.7–1.86 across `N ∈ [2, 16]`** — **`r < 2` is structurally blind to cover**
-  (hit probability and `1/N` baseline shrink together). Cover was therefore **never
+  mechanism-class under method note 3, a property of the model): worst-arm `r`
+  **clears the bound at every row of `N ∈ [2, 16]`, never trending toward the bar as
+  cover thins** — **`r < 2` is structurally blind to cover** (hit probability and
+  `1/N` baseline shrink together). Cover was therefore **never
   gated**: the ~7% margin is relative-leak margin, not cover margin — the structural
   fact that made this section's misfiling possible. The pre-sweep "true `r` ≥ 1.86,
   unknown" framing is retracted; and **no per-event monitoring threshold was
   discovered** — the candidate `P(link) ≤ 0.2` is the ratio bar evaluated at nominal
-  cover, back-derived (under flat `r` the parity point sits at `N ≈ 9.3` *by identity*,
-  straddled by the run at `P = 0.203`/`N = 9` vs `0.177`/`N = 10`); pinning it as an
+  cover, back-derived (under flat `r` the parity point sits at `N ≈ nominal · r/bound`
+  *by identity*, the run's parity row at `P = 0.199`/`N = 9` vs `0.179`/`N = 10`); pinning it as an
   absolute bar is refused as commitment-backwards-from-the-number. Per-event `P(link)`
   does not bound the aspiration's quantity in any case (repetition + geometric
   intersection collapse, F-D4 §13.3/F-W5). (3) *Aspiration-vs-gate framing pinned* at

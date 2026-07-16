@@ -867,16 +867,18 @@ preserve:
   controls, worst arm per row, 1 000 trials/point. Its finding is
   sharper than the breakeven it went looking for, and it corrects this
   filing's own framing in one direction:
-  - ***`r < 2` is structurally blind to cover.*** Worst-arm `r` is
-    **flat** (≈1.7–1.86) across the entire range — `P(link)` scales
-    ≈`1.86/N`; the LR scorer's hit probability and the `1/N` blind
-    baseline shrink together, so the ratio renormalizes thin-cover
-    harm away **by construction** (`r ≤ N` caps it; at `N = 2` the
-    worst arm links 74.6% of the time and still "clears"). Two
-    consequences. First, the "no lower bound on the truth from the
-    cover side" sentence above is **retracted as to `r`**: the true
-    `r` is not "≥ 1.86, unknown" — it is ≈1.86 at every cover level,
-    because the mechanism's relative leak is scale-invariant in-model.
+  - ***`r < 2` is structurally blind to cover.*** Worst-arm `r` stays
+    within ≈1.46–1.83 across the entire range, clearing the bound at
+    every row and never trending toward the bar as cover thins —
+    `P(link)` scales ≈`1.8/N`; the LR scorer's hit probability and
+    the `1/N` blind baseline shrink together, so the ratio
+    renormalizes thin-cover harm away **by construction** (`r ≤ N`
+    caps it, compressing the smallest rows as the hit probability
+    saturates; at `N = 2` the worst arm links 72.9% of the time and
+    still "clears"). Two consequences. First, the "no lower bound on
+    the truth from the cover side" sentence above is **retracted as
+    to `r`**: the true `r` does not degrade as cover thins — the
+    mechanism's relative leak is scale-invariant in-model.
     Second, the durable statement: **cover was never gated** — not
     "gated on an optimistic assumption," never gated at all. The ~7%
     margin is margin on the mechanism's *fixed relative leak*; it was
@@ -889,9 +891,9 @@ preserve:
     *evaluated at nominal cover* — back-derived arithmetic, not an
     a-priori commitment (`r < 2` was committed on its merits;
     `P(link) < 0.2` fell out of the division). Under flat `r`,
-    worst-arm `P(link)` meets it at `N = 10 · (1.86/2) ≈ 9.3` **by
-    identity** — the evidence run straddles that point (worst-arm
-    `P = 0.203` at `N = 9`, `0.177` at `N = 10`), but the number
+    worst-arm `P(link)` meets it at `N ≈ nominal · (r / bound)` **by
+    identity** — the evidence run's parity row is `N = 9` (worst-arm
+    `P = 0.199` there, `0.179` at `N = 10`), but the number
     restates the nominal-cover assumption ("keep cover at the level we
     assumed, because below it you are below what we assumed") and
     carries no independent content. Committing `0.2` as an absolute

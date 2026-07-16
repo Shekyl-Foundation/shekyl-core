@@ -22,11 +22,14 @@
 //!
 //! `r = P(link) · N` renormalizes by the degraded baseline: it asks "how many
 //! times blind guessing," not "how exposed." The 2026-07-16 evidence run
-//! shows worst-arm `r` **flat** (≈1.7–1.86) across `N ∈ [2, 16]`, with
-//! `P(link)` scaling ≈ `1.8/N` — the LR scorer's hit probability and the
-//! `1/N` blind baseline shrink together, so the ratio renormalizes
-//! thin-cover harm away **by construction** (`r ≤ N` caps it; at `N = 2` the
-//! worst arm links 74.6% of the time and still "clears"). Two consequences:
+//! shows worst-arm `r` staying within ≈1.46–1.83 across `N ∈ [2, 16]`,
+//! clearing the bound at every row and never trending toward the bar as
+//! cover thins, with `P(link)` scaling ≈ `1.8/N` — the LR scorer's hit
+//! probability and the `1/N` blind baseline shrink together, so the ratio
+//! renormalizes thin-cover harm away **by construction** (`r ≤ N` caps it,
+//! compressing the smallest rows as the hit probability saturates; at
+//! `N = 2` the worst arm links 72.9% of the time and still "clears"). Two
+//! consequences:
 //!
 //! - **Cover was never gated.** Not "gated on an optimistic assumption" —
 //!   never gated at all. The gate's ~7% margin (`1.86` vs `2`) is margin on
@@ -121,22 +124,30 @@ pub struct BreakevenReport {
     /// Ratio-anchored breakeven: the smallest valid cover level at which the
     /// worst arm still clears `r < RATIO_BOUND`; `None` if every valid row
     /// fails. The 2026-07-16 evidence run lands this at the bottom of the
-    /// sweep (worst-arm `r ≈ 1.7–1.86` at every swept `N`): the relative
-    /// leak is scale-invariant in-model, so **no ratio breakeven exists in
-    /// range** and the ratio cannot see thin-cover harm below its `r ≤ N`
-    /// cap. That scale invariance is the sweep's finding.
+    /// sweep (worst-arm `r` clears at every swept `N`, never trending toward
+    /// the bar): the relative leak is scale-invariant in-model, so **no
+    /// ratio breakeven exists in range** and the ratio cannot see thin-cover
+    /// harm below its `r ≤ N` cap. That scale invariance is the sweep's
+    /// finding.
     pub ratio_threshold_n: Option<usize>,
-    /// Nominal-exposure parity point: the smallest valid cover level whose
-    /// worst-arm `P(link)` stays at or under `nominal_exposure_identity`.
-    /// Under flat `r` this sits at `nominal_n · (r / RATIO_BOUND)` **by
-    /// identity** — it restates the nominal-cover assumption ("below it you
-    /// are below what we assumed") and carries no independent content. It is
-    /// **not** a monitoring threshold; the aspiration's quantity is lifetime
-    /// exposure (F-D4 §13.3 / F-W5), instrumented by the S-2 ledger.
-    pub nominal_parity_n: Option<usize>,
-    /// Worst-arm absolute `P(link)` at the parity point, stated beside it so
-    /// the identity is never quoted without its realized exposure.
-    pub nominal_parity_worst_p_link: Option<f64>,
+    /// Nominal-exposure parity point; `None` if every valid row realizes
+    /// more than the nominal-cover exposure. One field, not two parallel
+    /// `Option`s, so "`n` present without its exposure" is unrepresentable.
+    pub nominal_parity: Option<ParityPoint>,
+}
+
+/// The smallest valid cover level whose worst-arm `P(link)` stays at or
+/// under `nominal_exposure_identity`, with that realized exposure beside it
+/// so the identity is never quoted without it. Under flat `r` this sits at
+/// `nominal_n · (r / RATIO_BOUND)` **by identity** — it restates the
+/// nominal-cover assumption ("below it you are below what we assumed") and
+/// carries no independent content. It is **not** a monitoring threshold;
+/// the aspiration's quantity is lifetime exposure (F-D4 §13.3 / F-W5),
+/// instrumented by the S-2 ledger.
+#[derive(Serialize)]
+pub struct ParityPoint {
+    pub n: usize,
+    pub worst_p_link: f64,
 }
 
 /// Run the two validity controls at cover level `n` (measurement round §5,
@@ -161,13 +172,19 @@ fn controls_valid_at(n: usize, trials: u32, rng: &mut SplitMix64) -> bool {
     pos_s3 >= POSITIVE_CONTROL_MIN && (neg_s3 - baseline).abs() < NEGATIVE_CONTROL_TOL
 }
 
+/// SplitMix64's own seeding increment (the golden-ratio constant). Deriving
+/// each row's seed as `base + n · γ` is a seeder jump to an independent
+/// stream — rows are decoupled, so editing `COVER_LEVELS` never perturbs the
+/// other rows' numbers (which the docs quote).
+const SPLITMIX_GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
+
 fn run_breakeven(trials: u32, seed: u64) -> BreakevenReport {
-    let mut rng = SplitMix64(seed);
     let posture = SynthParams::posture();
 
     let rows: Vec<BreakevenRow> = COVER_LEVELS
         .iter()
         .map(|&n| {
+            let mut rng = SplitMix64(seed.wrapping_add((n as u64).wrapping_mul(SPLITMIX_GAMMA)));
             let controls_valid = controls_valid_at(n, trials, &mut rng);
             let (blind, s3, lr) = grade(&posture, n, trials, &mut rng);
             let (blind, s3, lr) = (
@@ -218,8 +235,10 @@ fn run_breakeven(trials: u32, seed: u64) -> BreakevenReport {
         nominal_n,
         nominal_exposure_identity,
         ratio_threshold_n: ratio_threshold.map(|r| r.n),
-        nominal_parity_n: nominal_parity.map(|r| r.n),
-        nominal_parity_worst_p_link: nominal_parity.map(|r| r.worst_p_link),
+        nominal_parity: nominal_parity.map(|r| ParityPoint {
+            n: r.n,
+            worst_p_link: r.worst_p_link,
+        }),
         rows,
         failing_n,
     }
@@ -262,9 +281,10 @@ mod tests {
             assert!(row.controls_valid && row.clears_bound);
             assert!(!report.failing_n.contains(&t));
         }
-        if let Some(t) = report.nominal_parity_n {
-            let row = report.rows.iter().find(|r| r.n == t).expect("parity row");
+        if let Some(p) = &report.nominal_parity {
+            let row = report.rows.iter().find(|r| r.n == p.n).expect("parity row");
             assert!(row.controls_valid && row.worst_p_link <= report.nominal_exposure_identity);
+            assert!((row.worst_p_link - p.worst_p_link).abs() < 1e-12);
         }
     }
 }

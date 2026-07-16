@@ -1123,8 +1123,9 @@ the `1.86` was verified computed on nominal cover, so the conditional is load-be
 against the 7% gate margin). The hit's follow-through demonstrates the filter's
 constructive half: the level is economics, but the *sensitivity sweep* — how the model's
 own `r` and `P(link)` move with cover — is mechanism (a property of the model), and was
-run the same day (`shekyl-staking-sim --gf7-breakeven`: worst-arm `r` flat ≈1.86 across
-`N ∈ [2, 16]` — `r < 2` is structurally blind to cover, so cover was never gated by it;
+run the same day (`shekyl-staking-sim --gf7-breakeven`: worst-arm `r` clears the bound
+at every row of `N ∈ [2, 16]`, never trending toward the bar as cover thins — `r < 2` is
+structurally blind to cover, so cover was never gated by it;
 no per-event monitoring threshold exists, the candidate `P(link) ≤ 0.2` being the
 nominal-cover assumption restated by identity; full reading WI-4 §13.5, whose instrument
 for the conditional is the S-2 lifetime ledger).

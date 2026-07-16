@@ -1607,15 +1607,17 @@ sustainability is unaffected by the recalibration.
   upper bound, stacked against a deliberately pessimistic adversary
   panel (full statement WI-4 §13.5). The sweep
   (`shekyl-staking-sim --gf7-breakeven`, `gf7_breakeven.rs`,
-  mechanism-class — a property of the model) finds worst-arm `r` flat
-  (≈1.86) across `N ∈ [2, 16]`: **`r < 2` is structurally blind to
+  mechanism-class — a property of the model) finds worst-arm `r`
+  clearing the bound at every row of `N ∈ [2, 16]` and never trending
+  toward the bar as cover thins: **`r < 2` is structurally blind to
   cover** (hit probability and `1/N` baseline shrink together), so
   cover was never gated by `r` and the gate's ~7% margin is
   relative-leak margin, not cover margin. **No per-event monitoring
   threshold was discovered**: the candidate `P(link) ≤ 0.2` is the
   ratio bar evaluated at nominal cover, back-derived — under flat `r`
-  the parity point sits at `N ≈ 9.3` *by identity* (the run straddles
-  it: worst `P = 0.203` at `N = 9`, `0.177` at `N = 10`), restating the
+  the parity point sits at `N ≈ nominal · r/bound` *by identity* (the
+  run's parity row: worst `P = 0.199` at `N = 9`, `0.179` at
+  `N = 10`), restating the
   nominal-cover assumption with no independent content; pinning it as
   an absolute bar is refused. Per-event `P(link)` also does not bound
   the aspiration's quantity (repetition + geometric intersection

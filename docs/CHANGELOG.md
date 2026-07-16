@@ -22,11 +22,12 @@
   (mechanism-class under method note 3 — a property of the model, no
   testnet, no economics input):* the new arm sweeps the gate-relevant
   posture over `N ∈ [2, 16]` with per-`N` validity controls, worst arm
-  per row, 1 000 trials/point. Finding: worst-arm `r` is **flat
-  ≈1.7–1.86 across the range** — **`r < 2` is structurally blind to
-  cover**. The LR scorer's hit probability and the `1/N` blind
-  baseline shrink together, so the ratio renormalizes thin-cover harm
-  away by construction (at `N = 2` the worst arm links 74.6% and still
+  per row, 1 000 trials/point. Finding: worst-arm `r` **clears the
+  bound at every row of the range, never trending toward the bar as
+  cover thins** — **`r < 2` is structurally blind to cover**. The LR
+  scorer's hit probability and the `1/N` blind baseline shrink
+  together, so the ratio renormalizes thin-cover harm away by
+  construction (at `N = 2` the worst arm links 72.9% and still
   "clears"). Consequences: **cover was never gated** — not on an
   optimistic assumption, not at all; the gate's ~7% margin is margin
   on the mechanism's fixed relative leak, never margin against cover
@@ -35,8 +36,8 @@
   per-event monitoring threshold was discovered** — the candidate
   `P(link) ≤ 0.2` is the ratio bar evaluated at nominal cover,
   back-derived arithmetic (under flat `r` the parity point sits at
-  `N = 10 · 1.86/2 ≈ 9.3` *by identity*, straddled by the run:
-  `P = 0.203` at `N = 9`, `0.177` at `N = 10`), so it restates the
+  `N ≈ nominal · r/bound` *by identity*, the run's parity row landing
+  at `P = 0.199`/`N = 9` vs `0.179`/`N = 10`), so it restates the
   nominal-cover assumption with no independent content, and pinning it
   as an absolute bar is refused as
   commitment-backwards-from-the-number. Per-event `P(link)` also does
