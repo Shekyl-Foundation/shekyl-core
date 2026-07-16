@@ -1950,7 +1950,13 @@ swan-2/W8), so F-D4's rate model and the L17 wargame are one obligation. **Activ
 gate — **FIRED 2026-07-15** (§12.5). The window derivation is the build sequence's first artifact,
 committed **before** any exit sweep runs and before `draw_exit_gap` code lands (GF7_HOOKS §5.1:
 threshold before grading; a failed sweep is a decorrelation-redesign signal, never a move-the-bar
-signal).
+signal). **The derivation is committed:**
+[`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`](ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md) (2026-07-15) —
+anchor formula from named consts (§1.1), two-regime split (steady-state X-1 lower bound vs
+crisis-cohort X-2 upper bound), the anchor-quantization lemma (a-priori: the cooldown delays and
+*quantizes*, does not smear), the §5.3 queue predicate deciding the W8 question, candidate
+`DEFAULT_EXIT_GAP_WINDOW = 2 × SEB`, pre-registered sweep arms. Awaiting the rate-model
+adversarial review before any code lands.
 
 ### 12.7 F-D5 (routed out) and F-D6 (anti-drift pin)
 
