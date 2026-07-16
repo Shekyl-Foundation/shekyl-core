@@ -19,7 +19,10 @@
 //! ARCHIVAL_FAILURE_CONFIRMATION_PIN.md); `--gf7-timeline` (the GF-7 graded
 //! measurement round — joint three-axis correlator + three arms + validity
 //! controls, graded against the a-priori `r < 2` bound per
-//! ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4); `--partition-adversary` (the §14.4
+//! ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4); `--gf7-breakeven` (the
+//! effective-cover breakeven sweep — `r(N)` sensitivity at the gate posture,
+//! the WI-4 §13.5 fifth conditional's monitoring threshold; not a gate);
+//! `--partition-adversary` (the §14.4
 //! founder-cover partition-adversary arm — gating lemma + witness-typed
 //! controls, per the same doc's §14/§17 launch-posture round).
 
@@ -31,6 +34,7 @@ mod cover;
 mod curve;
 mod failure_confirmation;
 mod fingerprint;
+mod gf7_breakeven;
 mod gf7_timeline;
 mod metrics;
 mod model;
@@ -797,6 +801,84 @@ fn print_gf7_timeline_report() {
     match serde_json::to_string_pretty(&report) {
         Ok(json) => println!("{json}"),
         Err(e) => eprintln!("error serializing gf7-timeline report: {e}"),
+    }
+}
+
+fn print_gf7_breakeven_report() {
+    let report = gf7_breakeven::run_full_report();
+    eprintln!(
+        "shekyl-staking-sim — GF-7 effective-cover breakeven sweep (WI-4 §13.5 fifth conditional)"
+    );
+    eprintln!("NOT A GATE. The WI-4 verdict (r = 1.86 < 2 at N = 10) was computed at NOMINAL");
+    eprintln!("  cover (Gate-6 §11 qualifier (iv): an upper bound); effective post-isolation");
+    eprintln!("  cover is economics (§11.8 method note 3) — unmeasurable pre-genesis. This sweep");
+    eprintln!("  derives the conditional's MONITORING THRESHOLD: the model's own r(N) at the");
+    eprintln!("  gate-relevant posture, a property of the model (mechanism-class), derivable now.");
+    eprintln!(
+        "  Bound r < {:.1}; trials/point={}. Worst arm per row; controls re-run per N.",
+        report.ratio_bound, report.trials,
+    );
+    eprintln!();
+    eprintln!("  TWO ANCHORS: the ratio (r < 2 per N) grades the mechanism's RELATIVE leak —");
+    eprintln!("  it renormalizes by the degraded baseline and cannot see thin-cover harm. The");
+    eprintln!(
+        "  ABSOLUTE anchor (worst P(link) <= {:.2}, the exposure the nominal N={} verdict",
+        report.absolute_bar, report.nominal_n,
+    );
+    eprintln!("  certified) is the fifth conditional's monitoring number. Read both columns; a");
+    eprintln!("  low-N row clearing the ratio is not 'passing' in any useful sense.");
+    eprintln!();
+    eprintln!(
+        "  {:>4} {:>6} {:>8} | {:>7} {:>7} {:>7} | {:>8} {:>9} {:>6}",
+        "N", "ctrls", "baseline", "blind", "s3", "lr", "worst_r", "worst_P", "clears",
+    );
+    for r in &report.rows {
+        eprintln!(
+            "  {:>4} {:>6} {:>8.3} | {:>7.3} {:>7.3} {:>7.3} | {:>8.2} {:>9.3} {:>6}",
+            r.n,
+            if r.controls_valid { "ok" } else { "FAIL" },
+            r.baseline,
+            r.blind.p_link,
+            r.modeled_s3.p_link,
+            r.lr_stress.p_link,
+            r.worst_ratio,
+            r.worst_p_link,
+            if r.clears_bound { "Y" } else { "N" },
+        );
+    }
+    eprintln!();
+    match report.ratio_threshold_n {
+        Some(t) => eprintln!(
+            "  Ratio anchor: worst arm clears r < {:.1} down to N = {} — if that is the bottom \
+             of the sweep, the relative leak is scale-invariant in-model (no ratio breakeven \
+             in range).",
+            report.ratio_bound, t,
+        ),
+        None => eprintln!("  Ratio anchor: NONE — every valid row breaches the bound."),
+    }
+    match report.absolute_threshold_n {
+        Some(t) => eprintln!(
+            "  MONITORING THRESHOLD (absolute anchor): worst-arm P(link) stays <= {:.2} down \
+             to N = {} (P = {:.3} there); below it the realized exposure exceeds what the \
+             nominal verdict certified.",
+            report.absolute_bar,
+            t,
+            report.absolute_threshold_worst_p_link.unwrap_or(f64::NAN),
+        ),
+        None => eprintln!(
+            "  MONITORING THRESHOLD (absolute anchor): NONE — every valid row exceeds the \
+             certified exposure.",
+        ),
+    }
+    if !report.failing_n.is_empty() {
+        eprintln!(
+            "  Failing cover levels (valid rows): {:?}",
+            report.failing_n
+        );
+    }
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing gf7-breakeven report: {e}"),
     }
 }
 
@@ -1626,6 +1708,11 @@ fn main() {
 
     if std::env::args().any(|a| a == "--gf7-timeline") {
         print_gf7_timeline_report();
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--gf7-breakeven") {
+        print_gf7_breakeven_report();
         return;
     }
 
