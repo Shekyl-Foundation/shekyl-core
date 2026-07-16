@@ -4,6 +4,39 @@
 
 ### Added
 
+- **docs: F-D4 review round 4 — the premise audit
+  (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §2.1 + §15; F-W7/F-W8 minted;
+  disposition PROPOSED, ratification pending).** The correlated
+  observable `T` ("principal-side re-appearance") that every exit-seam
+  channel quantifies over was never named by rounds 0–3; the §2.1
+  population audit finds it empty within the seam: **T-2 structural**
+  (the refund is the `bond_debit` source term of the `Unbond` tx itself
+  — hidden outputs in the posting transaction, CT-enforced to the public
+  floor, no later release to watch; `bond_connect.rs`), **T-1
+  policy + economics** (rotation dead by S-5 scope + T-A1 portfolio
+  identity + in-place `HoldingsUpdate`; population ≈ 0 by design),
+  **T-3 conditioning** (§10.9 default-on isolation cannot be assumed
+  and harvested), **T-4 re-homed** (the off-chain counterparty crossing
+  is Gate-6 §18.13's principal↔user seam — widen-not-close, S-2
+  ledger). F-W8 retracts X-3's harm model (cohort membership is
+  `last_served_epoch`, already public; the partition only fed
+  assignment, which is a function of `T`). §5–§14 outputs stamped
+  conditional; proposed disposition is **deletion-with-tripwire**
+  (§15.4: mechanism deleted on ratification, reopen criteria named —
+  rotation in scope / refund moved out of the posting tx / new public
+  principal-keyed term / isolation weakened; re-run shape specified).
+  §15.5 raises whether GF-4's exit seam re-homes to §18.13 wholesale.
+  Methodological finding recorded (§15.6 + Gate-6 §11.8 method note 2):
+  **observer-as-code, pre-registered before any row runs** — the
+  harness's declared variable is what exposed the phantom four prose
+  rounds missed; *a channel's meaning is its observable*. The `K_COVER`
+  sentinel pattern is vindicated (§15.7): the unsealable value already
+  refused to compile, so the premise collapse required no un-shipping.
+  Downstream status sweeps (Gate-6 §12.5–§12.8, index rows, FOLLOWUPS
+  swan-2/W8, `RELEASE_CHECKLIST.md`) are carried by the ratification
+  commit per §15.4; the F-W family row is extended now (F-W7/F-W8
+  registered at birth per rule 94).
+
 - **sim: the F-D4 §8 exit-seam sweep harness — X-1/X-2/X-3 arms landed
   and run (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §8/§9 step 4; new
   §14).** New `shekyl-staking-sim --exit-standoff`
