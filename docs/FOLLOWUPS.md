@@ -1313,10 +1313,11 @@ sustainability is unaffected by the recalibration.
   (gate-6 wargame round, before the firewall constants freeze).
   - **UPDATE 2026-07-15:** the smear-or-delay mechanism question now has a
     committed a-priori answer: the epoch-quantized cooldown anchor **delays
-    and quantizes** the cohort onto ≤2 epoch-boundary heights — no smear,
-    anti-smear
+    and quantizes** the cohort onto ≤2 epoch-boundary heights — not a smear
+    but its opposite (anti-smear: intra-epoch dispersion erased,
+    cohort concentrated)
     ([`design/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`](./design/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md)
-    §4 anchor-quantization lemma). The release-queue question is likewise
+    §3 anchor-quantization lemma). The release-queue question is likewise
     pre-committed as the §5.3 queue predicate: if
     `(N_t − 1)/ρ_x ≤ N_x·σ_L` fails, the disposition is the W8 queue
     redesign (a decorrelation redesign, never a moved bar, per GF7_HOOKS

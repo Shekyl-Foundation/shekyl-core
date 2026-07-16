@@ -99,7 +99,8 @@ Inherited from Gate-6 §12.1/§18.1 and the WI-4 S-3 observer, specialized to th
 
 The W8 wargame asks whether `RELEASE_COOLDOWN_EPOCHS = 2` **smears** a synchronized-exit cohort
 or merely **delays** it intact. A-priori answer from the landed predicate's arithmetic:
-**it delays and it quantizes — it does not smear, it anti-smears.**
+**it delays and it quantizes — the effect is not a smear but its opposite (anti-smear:
+intra-epoch dispersion is erased, concentrating the cohort).**
 
 The cooldown anchors on `last_served_epoch`, an **epoch-quantized** value. A market event at
 mid-epoch `E` stops a cohort's serving; every member's anchor lands on `E` (or `E − 1` for
