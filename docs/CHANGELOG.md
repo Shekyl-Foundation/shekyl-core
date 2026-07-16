@@ -6,7 +6,7 @@
 
 - **docs: F-D4 review round 4 — the premise audit
   (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §2.1 + §15; F-W7/F-W8 minted;
-  disposition PROPOSED, ratification pending).** The correlated
+  disposition RATIFIED 2026-07-16: deletion-with-tripwire).** The correlated
   observable `T` ("principal-side re-appearance") that every exit-seam
   channel quantifies over was never named by rounds 0–3; the §2.1
   population audit finds it empty within the seam: **T-2 structural**
@@ -21,21 +21,28 @@
   ledger). F-W8 retracts X-3's harm model (cohort membership is
   `last_served_epoch`, already public; the partition only fed
   assignment, which is a function of `T`). §5–§14 outputs stamped
-  conditional; proposed disposition is **deletion-with-tripwire**
-  (§15.4: mechanism deleted on ratification, reopen criteria named —
-  rotation in scope / refund moved out of the posting tx / new public
-  principal-keyed term / isolation weakened; re-run shape specified).
-  §15.5 raises whether GF-4's exit seam re-homes to §18.13 wholesale.
-  Methodological finding recorded (§15.6 + Gate-6 §11.8 method note 2):
-  **observer-as-code, pre-registered before any row runs** — the
-  harness's declared variable is what exposed the phantom four prose
-  rounds missed; *a channel's meaning is its observable*. The `K_COVER`
-  sentinel pattern is vindicated (§15.7): the unsealable value already
-  refused to compile, so the premise collapse required no un-shipping.
-  Downstream status sweeps (Gate-6 §12.5–§12.8, index rows, FOLLOWUPS
-  swan-2/W8, `RELEASE_CHECKLIST.md`) are carried by the ratification
-  commit per §15.4; the F-W family row is extended now (F-W7/F-W8
-  registered at birth per rule 94).
+  conditional-then-closed; disposition **RATIFIED: deletion-with-tripwire**
+  (§15.4 — reopen criteria named: rotation in scope / refund moved out
+  of the posting tx / new public principal-keyed term / isolation
+  weakened; re-run shape specified; the mechanism-deletion PR's
+  reviewer-map is §15.4 item 1, with the `--exit-standoff` harness
+  sequenced behind the §15.5 answer — a harness grading a phantom
+  channel is a trigger with no gate, but deleting-then-resurrecting
+  would fight a re-homing PR). §15.5 — whether GF-4's exit seam re-homes
+  to §18.13 wholesale, and what the four-axis joint grade becomes
+  without its on-chain timing axis — is **handed forward to Gate-6 R4
+  with the audit attached** (received at Gate-6 §12.8). Ratification
+  sweeps landed: Gate-6 §12.5/§12.6/§12.8 + revision history, the
+  `RELEASE_CHECKLIST.md` `DEFAULT_EXIT_GAP_WINDOW` seal entry
+  **removed**, FOLLOWUPS swan-2/W8 wargame closed-as-posed (reopen rides
+  the §15.4 tripwire), index rows 95–98. Methodological finding adopted
+  (§15.6 + Gate-6 §11.8 method note 2): **observer-as-code,
+  pre-registered before any row runs** — the harness's declared variable
+  is what exposed the phantom four prose rounds missed; *a channel's
+  meaning is its observable*. The `K_COVER` sentinel pattern is
+  vindicated (§15.7): the unsealable value already refused to compile,
+  so the premise collapse required no un-shipping. F-W7/F-W8 registered
+  at birth per rule 94 (index row 97, family extended F-W1…F-W8).
 
 - **sim: the F-D4 §8 exit-seam sweep harness — X-1/X-2/X-3 arms landed
   and run (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §8/§9 step 4; new

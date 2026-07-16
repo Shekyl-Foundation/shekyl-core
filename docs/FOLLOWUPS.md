@@ -1345,6 +1345,22 @@ sustainability is unaffected by the recalibration.
     queue decision is now a mechanical read of the sealed `(ρ_x, N_x, σ_L)`
     through `required_sigma_l`. What remains of the round is running the
     same instrument on stressnet-measured rates instead of swept corners.
+  - **UPDATE 2026-07-16 (later same day) — CLOSED as posed, by the F-D4
+    round-4 premise audit (deletion ratified).** The wargame's A2 analyst
+    "correlates P-side releases against principal-side activity" — and the
+    audit (doc §2.1/§15, F-W7) found that observable **unpopulated**: the
+    refund leaves as hidden outputs inside the posting tx (structural),
+    rotation is dead by S-5/T-A1 + in-place `HoldingsUpdate`, network is
+    the §10.9 conditioning double-counted, and the off-chain crossing
+    belongs to Gate-6 §18.13. The anti-smear lemma survives as public
+    geometry (release heights are public; the lemma never needed `T`), but
+    the harm it fed — intra-cohort *assignment* — is a function of `T`, so
+    the smear-or-delay and lever-vs-queue questions are moot as posed. No
+    stressnet read, no seal, no queue redesign. **Reopen** rides the F-D4
+    §15.4 tripwire (any future public principal-side event re-runs the
+    audit, then this wargame); whether a re-homed *crossing* wargame
+    (principal↔user seam, S-2 ledger) replaces it is part of the §15.5
+    hand-forward Gate-6 R4 now owns.
 
 - **Foundation treasury diversification — floor capacity must not be
   pro-cyclical (swan-2/W4, 2026-06-11; re-scoped swan-3/W12–W13; re-anchored
