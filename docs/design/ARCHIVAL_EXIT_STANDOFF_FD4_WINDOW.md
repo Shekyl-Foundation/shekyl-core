@@ -439,6 +439,20 @@ partition event and takes a design round of its own.**
    one-sided `bounded_uniform`, typed `ExitGap`, golden vector on the aarch64 lane,
    F-D6-derived anchor, conformance + §8.3 negative control; compile-refusal wiring per the
    `k_cover.rs` pattern. Unblocked now — the mechanism does not wait on the value.
+   **UPDATE 2026-07-16: landed.** `shekyl-standoff/src/exit.rs` — `ExitGapWindow` capability
+   newtype (`wallet_default()` reads the sentinel; `for_kat()` gated behind the permanent
+   dev-only `exit-window-kat` feature), typed `ExitGap`, `draw_exit_gap` via the shared
+   unbiased `bounded_uniform`, no order coin. Sentinel mechanics per the `k_cover.rs`
+   pattern: provisional ⇔ 0 (const-asserted), `compile_error!` unless the consumer enables
+   the grep-able `provisional-exit-gap-window` acknowledgment feature (deleted at seal).
+   Golden vector at a synthetic KAT window (10 007, deliberately not an SEB multiple) with a
+   seal tripwire that fails at seal time to force the re-freeze; §8.3 negative control
+   (`exit_release_population` shared-trigger arm) + two-property exit grade (uniformity,
+   serial independence — no order axis) in `conformance.rs`. The F-D6 anchor landed as
+   `shekyl_archival_retention::release_cooldown_anchor_height` — `H_cd` derived from
+   `RELEASE_COOLDOWN_EPOCHS × SETTLEMENT_EPOCH_BLOCKS`, boundary-tested against
+   `release_cooldown_elapsed` so the wallet's schedule and the consensus predicate cannot
+   disagree; the `20_000` doc fossil in `shekyl-staking-sim/src/standoff.rs` is purged.
 3. The exit-seam `N_t` re-derivation (F-W5) — before the sweep grades and before the seal.
 4. The X-1/X-2 sweep per §8; grading folds into the R4 joint grade (Gate-6 §12.8) — never
    per-axis.

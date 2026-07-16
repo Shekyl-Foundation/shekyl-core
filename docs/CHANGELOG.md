@@ -4,6 +4,37 @@
 
 ### Added
 
+- **standoff: `draw_exit_gap` against the F-D4 provisional sentinel
+  (Gate-6 §12.5 F-D3; `ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §9 step 2).**
+  New `shekyl-standoff/src/exit.rs`: the one-sided exit-seam draw through
+  the shared unbiased `bounded_uniform` — no order coin, no inversion
+  (forced by the cooldown) — with typed `ExitGap` and an `ExitGapWindow`
+  capability newtype whose `wallet_default()` reads
+  `DEFAULT_EXIT_GAP_WINDOW`, a `K_COVER`-pattern provisional sentinel
+  (`0`; provisional ⇔ 0 const-asserted; `compile_error!` unless the
+  consumer enables the grep-able `provisional-exit-gap-window`
+  acknowledgment feature, deleted at the Phase 7.7 seal;
+  `for_kat()` behind the permanent dev-only `exit-window-kat` feature).
+  Golden vector at a synthetic KAT window (10 007) with a **seal
+  tripwire** that fails at seal time to force the re-freeze; the §12.5
+  pinned shared-trigger negative control landed
+  (`conformance.rs::exit_release_population`, clustering-detection)
+  beside a two-property exit grade (uniformity + serial independence —
+  no order axis). Consumer acks: `shekyl-engine-core` and
+  `shekyl-staking-sim` enable the arming feature explicitly.
+
+- **archival: F-D6 cooldown-anchor derivation —
+  `release_cooldown_anchor_height` (Gate-6 §12.7, DONE).** The
+  exit-standoff scheduling anchor `H_cd = (last_served +
+  RELEASE_COOLDOWN_EPOCHS) × SETTLEMENT_EPOCH_BLOCKS` now derives from
+  named consts in one home (`shekyl-archival-retention`
+  `release_cooldown.rs`), mirroring `release_cooldown_elapsed` exactly
+  (vacuous never-served arm; fail-closed overflow arm) with a boundary
+  test proving the two agree at `H_cd` and disagree one block before it.
+  The last `20_000` doc-comment fossil (staking-sim `standoff.rs` module
+  docs — the drift vector F-D6 was opened against) is purged, pointing
+  at the derivation instead.
+
 - **docs: F-D4 review round 3 — F-W6: X-3 anchor-merge bound folded into
   the frozen rule (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §5.2a/§12).**
   Round 2 had parked the `2 × SEB` structural argument as a tiebreak
