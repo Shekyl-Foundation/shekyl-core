@@ -396,7 +396,7 @@ discipline** (F-9: make reuse unrepresentable by type, not by review).
   fan-out remain visible. Same cost at N=3 as at N=5. Honest price;
   April priced it circularly ("negligible volume").
 - **Address size is not an E′ win.** The ~2.6× shrink
-  (`PER_PARTICIPANT_LEN` 3212 → 1216) is **MSW-8** — deleting the
+  (`PER_PARTICIPANT_LEN` 3200 → 1216) is **MSW-8** — deleting the
   vestigial address `hybrid_sign_pubkeys`. D gets it too. E′ address
   adds `B` + `Y_group` on top of N×1216; still smaller than today's
   fossil, still a file at N=5. §15.3 registry re-priced (below).

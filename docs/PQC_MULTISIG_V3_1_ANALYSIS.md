@@ -179,7 +179,6 @@ Per output totals:
 | 2 | 2,339 B | 2,435 B |
 | 3 | 3,492 B | 3,588 B |
 | 5 | 5,798 B | 5,894 B |
-| 7 | 8,104 B | 8,200 B |
 
 ### 3.2 Per-spend overhead
 
@@ -192,16 +191,19 @@ is the canonical `MultisigKeyContainer` serialized into
 | Component | Size |
 |---|---|
 | Version + n_total + m_required | 3 B |
-| Hybrid sign pubkeys (N × 1984 B) | 1984 × N B |
+| Hybrid keys (`HybridPublicKey`, N × 1996 B) | 1996 × N B |
 | Spend-auth pubkeys (N × 32 B) | 32 × N B |
-| **Total** | **3 + 2016 × N B** |
+| **Total** | **3 + 2028 × N B** |
+
+The container `keys` are `HybridPublicKey` at `SINGLE_KEY_CANONICAL_LEN`
+(1996 B, with the canonical framing) — **not** the address's raw 1984-B
+sign pubkey (MSW-1 corrected an earlier conflation of the two).
 
 | N | Container size |
 |---|---|
-| 2 | 4,035 B |
-| 3 | 6,051 B |
-| 5 | 10,083 B |
-| 7 | 14,115 B |
+| 2 | 4,059 B |
+| 3 | 6,087 B |
+| 5 | 10,143 B |
 
 ### 3.3 Network impact projections
 
@@ -221,16 +223,17 @@ At 25% multisig adoption with average N=5:
 
 ### 3.4 Address size
 
-Addresses are file-based (§6). Typical sizes:
+Addresses are file-based (§6). Typical sizes (post-MSW-8: the payload
+carries KEM pubkeys only, `10 + N × 1216` B; see `PQC_MULTISIG.md` §6.2):
 
 | N | Bech32m chars | File size |
 |---|---|---|
-| 2 | ~10,260 | ~10 KB |
-| 3 | ~15,380 | ~15 KB |
-| 5 | ~25,620 | ~26 KB |
-| 7 | ~35,860 | ~36 KB |
+| 2 | ~3,900 | ~4 KB |
+| 3 | ~5,850 | ~6 KB |
+| 5 | ~9,740 | ~10 KB |
 
-Too large for QR codes; file transfer is mandatory. Fingerprint
+The N=2 address is now near the alphanumeric QR ceiling (~4,296); larger
+groups still require file transfer. Fingerprint
 (§6.3) is the human-verifiable handle (3 parallel representations).
 
 ---

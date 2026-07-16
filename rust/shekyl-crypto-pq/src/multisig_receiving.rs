@@ -160,7 +160,9 @@ pub struct MultisigOutputConstruction {
 /// `MultisigKeyContainer` with all spend-auth pubkeys.
 ///
 /// `kem_pubkeys`: N participant KEM public keys (in canonical participant order).
-/// `hybrid_sign_pubkeys`: populated by this function using per-participant KEM derivation.
+/// The returned container's leaf hybrid sign keys are derived here, per
+/// participant, from each KEM shared secret — the address never carries them
+/// (MSW-8: the vestigial address `hybrid_sign_pubkeys` field is deleted).
 #[allow(clippy::too_many_arguments)]
 pub fn construct_multisig_output_for_sender(
     n_total: u8,

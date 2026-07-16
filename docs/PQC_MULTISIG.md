@@ -365,7 +365,7 @@ MultisigAddressPayload {
 > **MSW-8 (2026-07-15):** `hybrid_sign_pubkeys: [HybridSignPubkey; n_total]`
 > is **deleted**. Vestigial Solution C fossil — constructed and parsed,
 > never consumed (`multisig_receiving.rs` derives leaf hybrid sign keys
-> from KEM shared secrets). `PER_PARTICIPANT_LEN` collapses 3212 → 1216.
+> from KEM shared secrets). `PER_PARTICIPANT_LEN` collapses 3200 → 1216.
 > Free pre-genesis. Applies to D and E′ identically.
 
 Total payload after MSW-8: `10 + N × 1216` bytes (plus E′ `B`/`Y` when
@@ -531,7 +531,7 @@ def construct_multisig_output(
         version:              0x01,
         n_total:              recipient_address.n_total,
         m_required:           recipient_address.m_required,
-        hybrid_sign_pubkeys:  ephemeral_sign_pks,
+        keys:                 ephemeral_sign_pks,  # HybridPublicKey per participant
         spend_auth_pubkeys:   spend_auth_pubkeys,
     }
 
@@ -1753,7 +1753,7 @@ version byte — not inherited silently into V3.2 from Option D.
 ### 15.3 Address size / group registry (re-priced 2026-07-15)
 
 **MSW-8** deletes vestigial address `hybrid_sign_pubkeys`
-(`PER_PARTICIPANT_LEN` 3212 → 1216). After that cut:
+(`PER_PARTICIPANT_LEN` 3200 → 1216). After that cut:
 
 | N | bech32m chars (approx) | note |
 |---|---|---|
