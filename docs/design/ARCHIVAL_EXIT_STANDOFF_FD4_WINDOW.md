@@ -11,10 +11,14 @@ committed here; F-W6 folded the rate-independent X-3 anchor-merge bound (`W ≥ 
 observable `T` (the "principal-side re-appearance") was never named, and no candidate
 population for it survives the audit within this doc's seam (§2.1). Every bound in §5, the
 §5.4 rule, the §13 derivation, and the §14 sweep findings quantify over `T` and are
-conditional on its existence. X-3's harm model is retracted (F-W8, §15.3). The proposed
-disposition is deletion-with-tripwire (§15.4); nothing seals, nothing is tuned, and no
-downstream doc status changes until the round is ratified. The sentinel holds the system in
-the correct frozen state throughout (§15.7).** This is the artifact Gate-6 §12.6
+conditional on its existence. X-3's harm model is retracted (F-W8, §15.3). The sentinel
+holds the system in the correct frozen state throughout (§15.7).**
+
+**UPDATE 2026-07-16 (later same day) — round 4 RATIFIED: deletion-with-tripwire (§15.4),
+with the harness's deletion sequenced behind the §15.5 gate question, which is handed
+forward to Gate-6 R4 with this audit attached — the re-homing call is R4's, not this doc's.
+The `RELEASE_CHECKLIST.md` seal entry is removed by the ratification commit; the mechanism
+deletion is a separate PR whose reviewer-map is §15.4 item 1.** This is the artifact Gate-6 §12.6
 requires first in the F-D3/F-D4 build
 sequence, in the GF7_HOOKS §5.1 ordering: (a) derive the threshold and the window model from a
 stated adversary-advantage claim, (b) adversarial review of the rate model against the
@@ -380,11 +384,12 @@ conditional branch.
 
 ### 5.4 The value is sealed by measurement; the decision rule is frozen now (F-W3)
 
-> **SUSPENDED pending round-4 ratification (§15.4).** The rule's X-1 term is conditional on
-> `T` existing (§2.1) and its X-3 term is retracted (F-W8). No seal preparation, no `σ_L`
-> spec, no lever-vs-queue arbitration runs until the round is dispositioned. The sentinel
-> already refuses shipping, so the suspension requires no code change — the system is frozen
-> in the correct state by construction (§15.7).
+> **CLOSED by round-4 ratification (§15.4, 2026-07-16).** The rule's X-1 term is conditional
+> on `T` existing (§2.1) and its X-3 term is retracted (F-W8). The deletion disposition is
+> ratified: no seal, no `σ_L` spec, no lever-vs-queue arbitration — the rule survives only
+> as the archived record and the §15.4 tripwire's re-run template. The sentinel already
+> refuses shipping, so closure required no code change — the system was frozen in the
+> correct state by construction (§15.7).
 
 **No genesis value is committed here.** Review round 1 (F-W1) replaced one picked point
 (`2 × SEB`) with another (`3 × SEB`); review round 2 (F-W3) found the real error one level up:
@@ -558,10 +563,11 @@ partition event and takes a design round of its own.**
    `RELEASE_CHECKLIST.md`, beside `K_COVER`/PF-9).
 6. **UPDATE 2026-07-16 — round 4 inserted between steps 4 and 5, and it is blocking (§15):**
    the premise audit found no population for `T` within this seam (§2.1). Step 5 does not run
-   in any branch as written: if the round's deletion disposition is ratified, the seal entry
-   is deleted with the mechanism (tripwire retained, §15.4); if the §15.5 re-homing branch is
-   taken, sizing moves to the §18.13 seam's instruments. Steps 1–4 stand as the historical
-   record; their outputs are conditional per the §1-status banner.
+   in any branch as written. **RATIFIED same day:** deletion-with-tripwire (§15.4) — the
+   `RELEASE_CHECKLIST.md` seal entry is removed by the ratification commit, the mechanism
+   deletion is a separate PR (reviewer-map at §15.4 item 1), the harness's fate rides with
+   the §15.5 hand-forward to Gate-6 R4. Steps 1–4 stand as the historical record; their
+   outputs are conditional per the §1-status banner.
 
 ## 10. Review round 1 (2026-07-15) — the rate model vs the correlated-unbond adversary
 
@@ -673,11 +679,11 @@ two-term form.
 
 ## 13. F-W5 resolution (2026-07-16) — the exit-seam `N_t`, derived a-priori
 
-> **CONDITIONAL on round 4 (§15).** The derivation is internally sound and unretracted, but
-> its subject — the anonymity set an exit event needs — quantifies over `T` (§2.1). If the
-> deletion disposition is ratified there is no exit event to size a set for; the derivation
-> stands as the record of *how* a seam-specific `N_t` is derived (its method survives as the
-> §15.4 tripwire's re-run template).
+> **CONDITIONAL on round 4 (§15) — deletion RATIFIED 2026-07-16.** The derivation is
+> internally sound and unretracted, but its subject — the anonymity set an exit event needs —
+> quantifies over `T` (§2.1), and the ratified disposition leaves no exit event to size a
+> set for. The derivation stands as the record of *how* a seam-specific `N_t` is derived
+> (its method survives as the §15.4 tripwire's re-run template).
 
 **Result: `N_t(exit) = 10` — numerically equal to the entry posture anchor, by derivation,
 not inheritance.** The trap this section was ordered ahead of the sweep to foreclose (§5.4
@@ -782,12 +788,14 @@ post-seal `W` change is a §16.1 partition event, §7).
 
 ## 14. The §8 sweep instrument + pre-seal structural findings (2026-07-16)
 
-> **RE-SCOPED by round 4 (§15).** Every graded number below is internally rigorous **and
-> conditional on `T` existing** — the observer that produced them is exactly the artifact
-> that exposed `T` as unpopulated (§15.6): the code had to have a variable where the prose
-> had a phrase, and "what populates this?" became unavoidable. The findings stand as the
-> record of what the mechanism would deliver *if* the channel existed; none of them prices
-> anything until §15 is dispositioned.
+> **RE-SCOPED by round 4 (§15) — deletion RATIFIED 2026-07-16.** Every graded number below
+> is internally rigorous **and conditional on `T` existing** — the observer that produced
+> them is exactly the artifact that exposed `T` as unpopulated (§15.6): the code had to have
+> a variable where the prose had a phrase, and "what populates this?" became unavoidable.
+> The findings stand as the archived record of what the mechanism would have delivered *if*
+> the channel existed — the calibration reference the §15.4 tripwire's re-run inherits; none
+> of them prices anything. The harness itself is sequenced behind the §15.5 hand-forward
+> (§15.4 item 1).
 
 The pre-registered sweep landed as `shekyl-staking-sim --exit-standoff`
 (`rust/shekyl-staking-sim/src/exit_standoff.rs`): X-1 over the §5.1 planning-box corners in
@@ -937,22 +945,34 @@ re-cut temptation F-W5 was minted against, now geometry). Banking `2 × SEB` "be
 geometry survives" would have re-committed the failure the round was naming. Nothing from
 this track is banked past the audit.
 
-### 15.4 Disposition — deletion with a tripwire (PROPOSED; ratification is the round's exit)
+### 15.4 Disposition — deletion with a tripwire (RATIFIED 2026-07-16)
 
 The population paragraph could not be written (§2.1); per this round's standard the channel
-is deleted, not softened. Rule-21 shape:
+is deleted, not softened. **Ratified 2026-07-16, with one sequencing amendment recorded at
+item 1.** Rule-21 shape:
 
 1. **The rejection.** The exit-timing decorrelation apparatus guards a channel with no
-   population: on ratification, delete `draw_exit_gap` and its surface (`exit.rs`, the
+   population: delete `draw_exit_gap` and its surface (`exit.rs`, the
    `ExitGapWindow`/`ExitGap` newtypes, `DEFAULT_EXIT_GAP_WINDOW` + both features, the exit
-   arms in `conformance.rs`, the golden-vector/seal-tripwire tests, the
-   `--exit-standoff` harness) and the `RELEASE_CHECKLIST.md` seal entry. Dead mechanism is
+   arms in `conformance.rs`, the golden-vector/seal-tripwire tests) and the
+   `RELEASE_CHECKLIST.md` seal entry (removed by the ratification commit). Dead mechanism is
    audit surface (rule 15); git history and this doc are the archive — the doc retains every
    number so the record survives the code. The F-D6 anchor derivation
    (`release_cooldown_anchor_height`) and the cooldown itself are **not** in scope: they
    exist for slashability/backlog-claim reasons and predate this analysis. The deletion-scope
    enumeration above is the reviewer-map for the deletion PR; anything it misses is a
    map-failure, not a license.
+
+   **Sequencing amendment (ratification):** the `--exit-standoff` harness is **out of the
+   mechanism-deletion PR's scope** — its fate rides with the §15.5 gate question. If Gate-6
+   R4 re-homes the seam to §18.13, the harness is the natural instrument for that seam
+   (re-parameterized on the crossing observer), and deleting-then-resurrecting would make
+   the deletion PR fight the re-homing PR; if R4 declines the re-homing, the harness is
+   deleted then. It is **not** kept as a monument to §15.6's finding — the asset is the
+   lesson, not the artifact; keeping code alive as a monument is the fossil pattern in a new
+   costume. And the rule-15 case for its eventual deletion is stronger than "dead code": a
+   harness that grades a phantom channel is a **trigger with no gate** — it will happily
+   produce a report, and reports get believed. That is worse than absence.
 2. **The reopen criteria (substrate-anchored).** The finding is conditional on "no public
    principal-side event exists," which is true of the chain **as designed today**. The
    channel reopens — and this analysis is the thing to re-run — if any future design mints
@@ -973,18 +993,30 @@ is deleted, not softened. Rule-21 shape:
 Until ratification: no `σ_L` spec, no lever-vs-queue arbitration, no seal preparation, no
 downstream status sweeps (Gate-6 §12.5–§12.8, `IMPLEMENTATION_INDEX.md`, `FOLLOWUPS.md`
 swan-2/W8, `RELEASE_CHECKLIST.md` — the ratification commit is the named carrier for all of
-them, rule-21/rule-94 shape).
+them, rule-21/rule-94 shape). **DISCHARGED 2026-07-16: the ratification commit carried all
+four sweeps** (Gate-6 §12.5/§12.6/§12.8 + revision history + §11.8 method note 2; index rows
+95–98; FOLLOWUPS swan-2/W8 closed as posed; the checklist seal entry removed). What remains
+owed: the mechanism-deletion PR (item 1's reviewer-map) and the Gate-6 R4 answer to §15.5.
 
-### 15.5 The gate question (raised, not asserted)
+### 15.5 The gate question (HANDED FORWARD to Gate-6 R4, audit attached — 2026-07-16)
 
 If T-4 is the only live channel, then the exit's timing exposure is not `P` ↔ principal at
 all — it is the `P` → user crossing, §18.13's seam, whose posture is already *widen, not
 close* and whose instrument is the S-2 ledger. F-D1's amount concern (a drain amount
-matching a reward subsum, observable at a counterparty) lands at the same crossing. If both
-halves of GF-4's exit seam reduce to the off-chain crossing, GF-4 is substantially a
-principal↔user finding wearing a `P`↔principal label — which would **re-home it, not just
-re-scope it**. Raised as the question the ratification review answers on the way through
-§2.1; not asserted here.
+matching a reward subsum, observable at a counterparty) lands at the same crossing — the
+on-chain amount channel was already closed by construction (§15.1); what survived of F-D1
+was always the off-chain subsum match at a counterparty. If both halves of GF-4's exit seam
+reduce to the off-chain crossing, GF-4 is substantially a principal↔user finding wearing a
+`P`↔principal label — which would **re-home it, not just re-scope it**.
+
+**Ratification disposition: raised and handed forward, not answered here — the call is not
+F-D4's to make.** The re-homing has a consequence this doc cannot absorb: R4's four-axis
+joint grade loses its on-chain timing axis, and if the timing input is phantom the joint
+grade is not "run it with one fewer term" — it is a **different grade over a different seam
+with a different posture** (widen-not-close, graded by the S-2 ledger rather than a rate
+model). That is Gate-6 R4's structural decision. This audit travels with the hand-forward
+(Gate-6 §12.8 carries the receiving item); the harness's deletion is sequenced behind the
+answer per §15.4 item 1.
 
 ### 15.6 The methodological finding — observer-as-code (the asset this track produced)
 
@@ -999,6 +1031,12 @@ track is the proof case: the requirement's cost is one module; its yield here wa
 phantom channel before genesis instead of after, with months of per-operator dead capital on
 the line. Recorded beside Gate-6 §11.8's method note ("a constant's meaning is its
 consumer") as the same lesson one level up: *a channel's meaning is its observable.*
+
+**Adopted at ratification (2026-07-16)** — with the framing made explicit: this is not a
+consolation prize for a deleted track; it is the most reusable thing the track produced.
+Four rounds of rigorous arithmetic were worth nothing, and what exposed that was being
+forced to write the observer as code with a variable in it. The lesson transfers; the
+artifact does not (§15.4 item 1 — the asset is the lesson, not the code).
 
 ### 15.7 The `K_COVER` pattern, vindicated
 
@@ -1027,5 +1065,7 @@ shipping build.
   `RELEASE_COOLDOWN_EPOCHS`.
 - [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §L13/§L17/§L18 — population attractor,
   swan table, the reconciled mobility model.
-- [`FOLLOWUPS.md`](../FOLLOWUPS.md) — swan-2/W8 synchronized-exit wargame (this doc converts its
-  mechanism question into the §5.3 predicate; the wargame remains the empirical arm).
+- [`FOLLOWUPS.md`](../FOLLOWUPS.md) — swan-2/W8 synchronized-exit wargame (this doc converted its
+  mechanism question into the §5.3 predicate; closed as posed by round 4 — the wargame's
+  observer correlates against the phantom `T`; reopen rides the §15.4 tripwire, and any
+  re-homed crossing wargame is part of the §15.5 hand-forward).

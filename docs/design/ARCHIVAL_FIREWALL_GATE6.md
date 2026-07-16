@@ -1962,6 +1962,19 @@ trigger is catastrophic, `16→1.01`."
   from `RELEASE_COOLDOWN_EPOCHS × SETTLEMENT_EPOCH_BLOCKS`, boundary-tested against
   `release_cooldown_elapsed`. F-W5 resolved same day (F-D4 §13: exit-seam `N_t = 10`, derived
   not inherited). Open: the X-1/X-2 sweep and the Phase 7.7 seal.
+- **UPDATE 2026-07-16 (later same day) — DELETION RATIFIED (F-D4 round 4, §15).** The premise
+  audit (F-D4 §2.1/§15, F-W7) found the correlated observable `T` — the "principal-side
+  re-appearance" every channel above quantifies over — has **no population within this seam**:
+  the refund leaves as hidden outputs inside the posting tx itself (structural,
+  `bond_connect.rs`); rotation is dead by S-5/T-A1 + in-place `HoldingsUpdate` (policy +
+  economics); network is spent as §10.9 conditioning; the off-chain crossing is §18.13's seam.
+  Disposition ratified: **delete the mechanism, keep the tripwire** (reopen criteria at F-D4
+  §15.4 — rotation in scope, refund moved out of the posting tx, new public principal-keyed
+  term, isolation weakened). The mechanism-deletion PR's reviewer-map is F-D4 §15.4 item 1;
+  the cooldown and the F-D6 anchor derivation are out of scope (they predate this analysis and
+  stand on slashability/anti-drift reasons). The seal entry is removed from
+  `RELEASE_CHECKLIST.md`; nothing was ever shipped — the F-W3 sentinel held the system frozen
+  in the correct state by construction (F-D4 §15.7).
 
 ### 12.6 F-D4 — a-priori exit window (activation FIRED with F-D3, 2026-07-15)
 
@@ -2007,7 +2020,12 @@ predicate's LHS acquires a hard `20_000` floor, making the F-W2 lever-vs-queue c
 load-bearing in every measured world. Mixes-at-all, never "merged" (`50 %` mixed fraction at
 the cliff). Lemma, X-1 shape, X-2 form, and the one-window pin survived all rounds.
 **`draw_exit_gap` is unblocked, written against the sentinel** — compiles for testnet under
-explicit arming, refuses to ship unsealed.
+explicit arming, refuses to ship unsealed. **UPDATE 2026-07-16 — round 4 (F-D4 §15) closed
+the derivation's subject: F-W7 found the observable unpopulated (no principal-side event
+exists on the chain as designed), F-W8 retracted X-3's harm model (cohort membership is
+`last_served_epoch`, already public). Deletion-with-tripwire ratified; the §5.4 rule, the
+§13 `N_t`, and the §14 sweep numbers survive as the archived re-run template for the F-D4
+§15.4 tripwire. No value is sealed; the checklist entry is removed.**
 
 ### 12.7 F-D5 (routed out) and F-D6 (anti-drift pin)
 
@@ -2048,11 +2066,32 @@ explicit arming, refuses to ship unsealed.
   observer inversion (`required_sigma_l`), so the Phase 7.7 read seals both `W` (frozen
   rule) and the lever-vs-queue decision through the same instrument. The timing channel's
   joint-grade input exists; **what remains for R4 close is the joint grade itself**
-  (four axes, correlated-trigger on) plus F-D1/F-D2 arms.
+  (four axes, correlated-trigger on) plus F-D1/F-D2 arms. UPDATE 2026-07-16 (later same
+  day): **superseded by the F-D4 round-4 premise audit** — the timing channel is phantom
+  (F-W7: no principal-side observable exists within the seam; F-D4 §2.1/§15).
+  F-D3/F-D4 deletion-with-tripwire **ratified**; the sweep's numbers are archived as the
+  tripwire's re-run template, and the hand-forward below is what R4 now owes.
+- **HAND-FORWARD from F-D4 §15.5 (received 2026-07-16, audit attached) — is GF-4's exit seam
+  in the right gate?** On the F-D4 §2.1 audit, the only live channel is the **off-chain
+  counterparty crossing** (T-4) — §18.13's principal↔user seam, posture *widen, not close*,
+  instrument the S-2 ledger. F-D1's surviving amount concern (the off-chain subsum match at
+  a counterparty — the on-chain amount channel was always closed by construction) lands at
+  the same crossing. If both halves of GF-4's exit seam reduce to it, GF-4 is substantially
+  a principal↔user finding wearing a `P`↔principal label — **re-homed, not re-scoped**. The
+  consequence R4 must decide structurally: the four-axis joint grade **loses its on-chain
+  timing axis**, and with a phantom timing input the joint grade is not "run with one fewer
+  term" — it is a different grade over a different seam with a different posture. The
+  `--exit-standoff` harness's deletion is sequenced behind this answer (F-D4 §15.4 item 1):
+  if re-homed, it re-parameterizes on the crossing observer; if not, it is deleted (a
+  harness grading a phantom channel is a trigger with no gate — it will produce a report,
+  and reports get believed).
 - **Joint grade (the round's exit bar, per §18.10 R-4 + CB-3):** the drain event is graded on
   **{amount-band ∧ claim/exit-timing ∧ holdings-stratum ∧ output-count}** jointly, correlated-trigger
   modeled on — never per-axis-multiplied. GF-10's claim-jitter mechanism (§11) folds in here; **R3
-  closes when it does.**
+  closes when it does.** UPDATE 2026-07-16: the axis set is under the hand-forward above —
+  the exit-timing axis is phantom per F-W7, and whether the grade re-forms as three-axis
+  on-chain + S-2-ledger crossing or re-homes wholesale is the R4 structural decision that
+  now precedes running it.
 - **Pre-seal blocker — DISCHARGED 2026-07-15:** the rebond/unbond FSM (genesis-scoped, 2026-06-15)
   gated F-D3/F-D4 activation *and* the age-stratified sim bond-mobility reconciliation (§6 scope
   note). Both halves are done: the FSM frictions were pinned
@@ -2060,9 +2099,12 @@ explicit arming, refuses to ship unsealed.
   PR #303 2026-07-14) and landed as enforced consensus (`HoldingsUpdate`/`Unbond` #303, `Rebond`
   #307), and the sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18). The exit
   seam is measurable.
-- **Closes when:** F-D1/F-D2 land with their arms; F-D3/F-D4 derive their a-priori windows and pass
-  the joint grade against the pre-committed claims (the "FSM lands" precondition of this clause was
-  satisfied 2026-07-14); F-D5 is dispositioned in §14.4. Until then R4 is **drafted, not closed**.
+- **Closes when:** F-D1/F-D2 land with their arms; F-D5 is dispositioned in §14.4; and the
+  §15.5 hand-forward is answered (seam re-homing + the joint grade's axis set). UPDATE
+  2026-07-16: the F-D3/F-D4 clause is discharged by deletion, not by grading — the a-priori
+  window was derived, audited through four rounds, and its premise found empty (F-D4 §15);
+  what replaces "pass the joint grade on the timing axis" is the hand-forward decision
+  above. Until then R4 is **drafted, not closed**.
 
 ---
 
@@ -2080,6 +2122,28 @@ explicit arming, refuses to ship unsealed.
 ---
 
 ## Revision history
+
+- **2026-07-16 (F-D4 round 4 RATIFIED — premise audit; F-D3/F-D4 deletion-with-tripwire;
+  §15.5 hand-forward received):** The F-D4 premise audit (F-W7/F-W8,
+  `ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §2.1/§15) found the correlated observable `T` —
+  the "principal-side re-appearance" all three exit-seam channels quantify over —
+  **unpopulated within the seam**: structural for the refund (hidden outputs inside the
+  posting tx, `bond_connect.rs`), policy + economics for rotation (S-5/T-A1 + in-place
+  `HoldingsUpdate`), conditioning for network (§10.9), re-homed for the off-chain crossing
+  (§18.13/S-2). F-W8 retracted X-3's harm model (cohort membership already public via
+  `last_served_epoch`). **Ratified disposition: delete the mechanism, keep the tripwire**
+  (reopen criteria named at F-D4 §15.4; mechanism-deletion PR's reviewer-map is §15.4
+  item 1; the `--exit-standoff` harness is sequenced behind the §15.5 answer). The
+  `RELEASE_CHECKLIST.md` `DEFAULT_EXIT_GAP_WINDOW` seal entry is removed; the F-W3 sentinel
+  held the system frozen correctly throughout — nothing to un-ship (`K_COVER` pattern
+  vindicated, F-D4 §15.7). §12.8 receives the **§15.5 hand-forward**: whether GF-4's exit
+  seam re-homes to §18.13 wholesale (F-D1's surviving amount concern lands at the same
+  crossing), and what the four-axis joint grade becomes without its on-chain timing axis —
+  R4's structural decision, now preceding the grade. Method note 2 added beside §11.8:
+  *a channel's meaning is its observable* — observer-as-code, pre-registered before any row
+  runs, adopted as method posture. Statuses swept: §12.5, §12.6, §12.8 (GF-4 cell,
+  joint-grade bullet, closes-when clause); F-D4 doc §2.1/§5.2a/§5.4/§9/§13/§14/§15; index
+  rows 95–98; FOLLOWUPS swan-2/W8; `RELEASE_CHECKLIST.md`; CHANGELOG.
 
 - **2026-07-16 (F-D4 §8 sweep instrument landed; pre-seal findings recorded):** The
   pre-registered X-1/X-2 sweep built and run as `shekyl-staking-sim --exit-standoff`
