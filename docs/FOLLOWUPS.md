@@ -6019,6 +6019,25 @@ sustainability is unaffected by the recalibration.
     `doc-literal-gate-allow` markers — already landed in #311 high-review,
     `52d4a2c8e`; the gate matches cap/fee literals, not stale *reasoning*,
     so the A4 wargame-row fossil was a manual catch, not a gate hit.)
+  - **C-2 is structural, not cosmetic — prose retypes numbers the code
+    derives, and the denylist gate cannot see it.** `af8e3fc` (the MSW-1
+    completion sweep) found the *container* key sized at the address's raw
+    `1984` B instead of `SINGLE_KEY_CANONICAL_LEN` = `1996`, and the *address*
+    per-participant at `3212` (= 1216 + 1996) instead of `3200` (= 1216 + 1984)
+    — the same two similar constants confused in opposite directions. **There
+    is no string to ban:** the figure is wrong because two constants were
+    swapped, a class the denylist `check_multisig_doc_literals.sh` structurally
+    cannot express. The fix is the same move `CANONICAL_LEN`-on-the-type made
+    for code — **derive the number, don't type it**: have prose *quote* the
+    derived figures, via a size table generated from
+    `MultisigKeyContainer::expected_blob_len` / `expected_sig_len` (+ the address
+    `PER_PARTICIPANT_LEN`), or a KAT that reads those consts and asserts the
+    doc's numbers, fail-closed. This subsumes the "extract MAX and compare"
+    framing above (that catches the cap; this catches the whole retyped-number
+    class). *Blocker:* a prose-quotes-source harness (doc generator or doc-KAT)
+    that reads the Rust consts — none is wired. *Target:* the same
+    consensus-port neighborhood as "option 2" (generate `cryptonote_config.h`'s
+    PQC block from Rust); same shape, do them together.
   - **F-7 (Round-1 blocker): `EngineSignerKind` associated items.** §3.1's
     "associated items only the multisig kind defines" is a compile error
     at implementation time — associated items must be defined by every
