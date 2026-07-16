@@ -40,7 +40,9 @@
   (`0`; provisional ⇔ 0 const-asserted; `compile_error!` unless the
   consumer enables the grep-able `provisional-exit-gap-window`
   acknowledgment feature, deleted at the Phase 7.7 seal;
-  `for_kat()` behind the permanent dev-only `exit-window-kat` feature).
+  `kat_inject()` behind the permanent dev-only `exit-window-kat`
+  feature — named per the `kat_forge` precedent so the PF-6a tripwire's
+  `for_kat` grep stays scoped to `KCover`).
   Golden vector at a synthetic KAT window (10 007) with a **seal
   tripwire** that fails at seal time to force the re-freeze; the §12.5
   pinned shared-trigger negative control landed

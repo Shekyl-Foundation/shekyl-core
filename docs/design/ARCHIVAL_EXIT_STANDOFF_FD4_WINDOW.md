@@ -444,8 +444,9 @@ partition event and takes a design round of its own.**
    F-D6-derived anchor, conformance + §8.3 negative control; compile-refusal wiring per the
    `k_cover.rs` pattern. Unblocked now — the mechanism does not wait on the value.
    **UPDATE 2026-07-16: landed.** `shekyl-standoff/src/exit.rs` — `ExitGapWindow` capability
-   newtype (`wallet_default()` reads the sentinel; `for_kat()` gated behind the permanent
-   dev-only `exit-window-kat` feature), typed `ExitGap`, `draw_exit_gap` via the shared
+   newtype (`wallet_default()` reads the sentinel; `kat_inject()` gated behind the permanent
+   dev-only `exit-window-kat` feature — named per the `kat_forge` precedent so the PF-6a
+   tripwire's `for_kat` grep stays scoped to `KCover`), typed `ExitGap`, `draw_exit_gap` via the shared
    unbiased `bounded_uniform`, no order coin. Sentinel mechanics per the `k_cover.rs`
    pattern: provisional ⇔ 0 (const-asserted), `compile_error!` unless the consumer enables
    the grep-able `provisional-exit-gap-window` acknowledgment feature (deleted at seal).

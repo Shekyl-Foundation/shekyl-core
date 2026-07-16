@@ -3,7 +3,7 @@
 //!
 //! Runs without the `conformance` feature (pure-integer only), so it rides the
 //! aarch64 CI lane exactly as `golden_vector.rs` does for the entry draw. The
-//! `exit-window-kat` dev-only feature supplies `ExitGapWindow::for_kat`; it
+//! `exit-window-kat` dev-only feature supplies `ExitGapWindow::kat_inject`; it
 //! pulls no dependencies and no float, so the lane's integer-only guarantee is
 //! unchanged.
 //!
@@ -45,7 +45,7 @@ const GOLDEN: [u64; 16] = [
 
 #[test]
 fn exit_golden_vector_is_bit_identical() {
-    let window = ExitGapWindow::for_kat(KAT_WINDOW);
+    let window = ExitGapWindow::kat_inject(KAT_WINDOW);
     let mut rng = SplitMix64(GOLDEN_SEED);
     let seq: Vec<u64> = (0..GOLDEN.len())
         .map(|_| draw_exit_gap(window, &mut rng).blocks())
@@ -59,7 +59,7 @@ fn exit_golden_vector_is_bit_identical() {
 
 #[test]
 fn exit_draw_stays_within_window() {
-    let window = ExitGapWindow::for_kat(KAT_WINDOW);
+    let window = ExitGapWindow::kat_inject(KAT_WINDOW);
     let mut rng = SplitMix64(0x1234_5678_9ABC_DEF0);
     for _ in 0..100_000 {
         let gap = draw_exit_gap(window, &mut rng).blocks();
@@ -69,7 +69,7 @@ fn exit_draw_stays_within_window() {
 
 #[test]
 fn same_seed_reproduces_exit_sequence() {
-    let window = ExitGapWindow::for_kat(KAT_WINDOW);
+    let window = ExitGapWindow::kat_inject(KAT_WINDOW);
     let mut a = SplitMix64(GOLDEN_SEED);
     let mut b = SplitMix64(GOLDEN_SEED);
     for _ in 0..10_000 {

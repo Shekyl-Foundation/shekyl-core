@@ -286,7 +286,7 @@ fn exit_reference_draw_self_certifies() {
     let mut rng = SplitMix64(0x90DE_4242_7777_0003);
     let report = certify_exit_draw(
         &mut rng,
-        ExitGapWindow::for_kat(EXIT_KAT_WINDOW),
+        ExitGapWindow::kat_inject(EXIT_KAT_WINDOW),
         CERTIFY_SAMPLE_N,
     );
     assert!(report.uniform_ok, "exit uniform grade failed: {report:?}");
@@ -305,7 +305,7 @@ fn exit_shared_trigger_control_catches_a_cohort_that_skipped_the_draw() {
     // the only dispersal. A cohort with the draw disabled piles every release
     // onto the anchor block — max_bin_share must read it as clustered, and a
     // harness that cannot fail this control certifies nothing.
-    let window = ExitGapWindow::for_kat(EXIT_KAT_WINDOW);
+    let window = ExitGapWindow::kat_inject(EXIT_KAT_WINDOW);
     let anchor = 120_000u64;
     let bin = 1_000u64; // ~10 bins across the window: drawn cohorts disperse
     let n = 5_000usize;

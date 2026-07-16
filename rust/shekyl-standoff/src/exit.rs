@@ -39,9 +39,10 @@
 //!    `provisional-exit-gap-window` feature is enabled. Every consumer carries
 //!    a grep-able acknowledgment line in its `Cargo.toml`; the shipping guard
 //!    is the compile refusal, never the sentinel's runtime semantics.
-//! 3. KAT/conformance parameterization goes through [`ExitGapWindow::for_kat`]
-//!    behind the **permanent** dev-only `exit-window-kat` feature (it must
-//!    survive the seal, so it does not ride `provisional-exit-gap-window`).
+//! 3. KAT/conformance parameterization goes through
+//!    [`ExitGapWindow::kat_inject`] behind the **permanent** dev-only
+//!    `exit-window-kat` feature (it must survive the seal, so it does not ride
+//!    `provisional-exit-gap-window`).
 //!
 //! **Sealing** (the Phase 7.7 read lands, `RELEASE_CHECKLIST.md` beside
 //! `K_COVER`): set [`DEFAULT_EXIT_GAP_WINDOW`] to the rule's value (≥ 1), flip
@@ -104,9 +105,9 @@ const _: () = assert!(
 /// **type error**: the only production constructor is
 /// [`ExitGapWindow::wallet_default`], which threads
 /// [`DEFAULT_EXIT_GAP_WINDOW`] verbatim. KAT/conformance parameterization goes
-/// through [`ExitGapWindow::for_kat`], gated behind the **permanent** dev-only
-/// `exit-window-kat` feature (enabled only via dev-dependencies; it survives
-/// the §5.4 seal, so it does not ride `provisional-exit-gap-window`).
+/// through [`ExitGapWindow::kat_inject`], gated behind the **permanent**
+/// dev-only `exit-window-kat` feature (enabled only via dev-dependencies; it
+/// survives the §5.4 seal, so it does not ride `provisional-exit-gap-window`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExitGapWindow(u64);
 
@@ -124,9 +125,12 @@ impl ExitGapWindow {
     /// seal without rewrite. Test-only by construction — `cfg(test)` for
     /// in-crate unit tests, the `exit-window-kat` dev-only feature for
     /// integration tests. Never call from production code.
+    /// (Named `kat_inject`, not `for_kat`, so the PF-6a CI tripwire's
+    /// call-site grep stays scoped to `KCover` alone — the `kat_forge`
+    /// precedent in `shekyl-archival-retention/src/emission_verify.rs`.)
     #[cfg(any(test, feature = "exit-window-kat"))]
     #[must_use]
-    pub const fn for_kat(value: u64) -> Self {
+    pub const fn kat_inject(value: u64) -> Self {
         Self(value)
     }
 
@@ -193,7 +197,7 @@ mod tests {
 
     #[test]
     fn draw_stays_within_kat_window() {
-        let window = ExitGapWindow::for_kat(10_007);
+        let window = ExitGapWindow::kat_inject(10_007);
         let mut rng = SplitMix64(0x1234_5678_9ABC_DEF0);
         for _ in 0..100_000 {
             let gap = draw_exit_gap(window, &mut rng);

@@ -32,7 +32,7 @@ gf7-hooks = []
 # DELETE at the Phase 7.7 seal, together with every consumer acknowledgment
 # line (deletion target named in the spec §5.4).
 provisional-exit-gap-window = []
-# Exit-window KAT-injection constructor (`ExitGapWindow::for_kat`) for tests
+# Exit-window KAT-injection constructor (`ExitGapWindow::kat_inject`) for tests
 # and conformance arms. PERMANENT (unlike provisional-exit-gap-window): the
 # fixtures must survive the §5.4 seal, so this feature does not ride the
 # provisional flag. Dev-dependencies only; never enable from production code.
