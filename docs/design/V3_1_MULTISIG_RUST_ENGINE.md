@@ -592,7 +592,7 @@ design's acceptance**, not implementation.
 | A1 | N=7 output lands; spend never serializes | **No** — R1-F-1 |
 | A2 | Present scheme-2 blob against scheme-1 leaf (or reverse) | **Armed by construction** — **length primary** (`1996 ∉` scheme-2 lengths); byte[2] secondary. Guard both with MSW-2 KAT. |
 | A3 | Spender lies about `group_id` | **Vacuous** — already in leaf; MS-8 retired |
-| A4 | Mix scheme 1/2 across inputs | **Vacuous DiD** — each leaf binds its blob; length disjointness is MSW-2. Tx-wide agreement costs MSW-6's use case → **relax** |
+| A4 | Mix scheme 1/2 across inputs | **MSW-6 relaxed (landed).** Stated purpose of the tx-wide agreement was vacuous (self-referential; per-output binding is the leaf hash `h_pqc = H(blob)`). Actual effect: forecloses a self-inflicted solo/multisig cross-model linkage → per **TM-1** a wallet disclosure + coin-selection invariant (MS-5), **not** consensus. Length disjointness (MSW-2) still prevents cross-scheme confusion. |
 | A5 | Malicious DKG steers `group_id` | **No** — R1-F-4 |
 | A6 | Replay `sign_own` / nonce reuse | **No** — R1-F-9 |
 | A7 | Forge FROST `participant` index | **No** on FROST lineage |
