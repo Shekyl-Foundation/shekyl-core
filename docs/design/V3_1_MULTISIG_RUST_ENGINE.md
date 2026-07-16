@@ -1,9 +1,12 @@
 # V3.1 Multisig — Rust engine integration design
 
-**Status.** **Round 1 OPEN** (remaining: F-6 clippy-green / F-3 delete
-debt + F-7 SoloSigner framing). F-6 CI **lane landed** (this follow-on PR).
-Doc-only branch `docs/v31-multisig-rust-engine-plan`. Protocol crypto:
-[`PQC_MULTISIG.md`](../PQC_MULTISIG.md) (DRAFT v1.1).
+**Status.** **Round 1 CLOSED (2026-07-16).** All blockers discharged:
+F-3 DELETE (Option A fossil) + F-6 CI (`--features multisig` green,
+PR #310, merged 2026-07-15) + F-7 (`EngineSignerKind::SigningCeremony`,
+PR #317). Track B (MS-1…MS-7) advances to Round 2 / MS-5 (Option E′) on
+explicit go-ahead; the one pre-MS-5 gate no CI can turn green is the
+`MultisigSigner` `N`/`K` decision (§ "MS-1 under coexistence").
+Protocol crypto: [`PQC_MULTISIG.md`](../PQC_MULTISIG.md) (DRAFT v1.1).
 
 ---
 
@@ -235,7 +238,7 @@ implementation still needs explicit go-ahead.
    `multisig` feature.
 3. **MSW-1/2/3/4/5/8 at MAX=5** — one surface; cross-seam KAT is the
    gate; MSW-8 deletes address `hybrid_sign_pubkeys` fossil.
-4. **F-6** CI `--features multisig` — Round 1 closure + Track B trust.
+4. **F-6** CI `--features multisig` — ✅ landed (#310, merged 2026-07-15); Round 1 closure + Track B trust.
 5. **Option E′ spec + `frost-sal-v4` gate** — product path (§0.5);
    deletes mandatory-prover Option D scaffold.
 
@@ -598,7 +601,7 @@ design's acceptance**, not implementation.
 | **R1-F-3** | HIGH | `multisig/{dkg,group,signing}.rs` = **Option A** fixed-group PQC key fossil vs v31 Option D. Not the Apr 15 rotating-vs-fixed *prover* fork. | **DELETE** (not `frost-sal-v4` quarantine). Fuses SAL keys (V4-want) with `pqc_public_key` (Option A, rejected 2026-04-04). Unblocks MS-1 lineage. F-4/F-5/F-9 evaporate on delete. |
 | **R1-F-4** | HIGH | Two `group_id` defs: deterministic `multisig_group_id` vs caller-supplied `dkg.rs` context. | **Accepted → evaporates with F-3 DELETE** (DKG caller-supplied id dies with the file). Canonical = `multisig_group_id` / v31. |
 | **R1-F-5** | HIGH | `MultisigGroup` Serialize hex of secrets; un-zeroized `Vec` reassign; not a `WalletLedger` extension — falsifies "confirm R6". | **Accepted → evaporates with F-3 DELETE.** R6 re-open against **v31** persist shape only (MS-7). |
-| **R1-F-6** | HIGH | No CI job builds `--features multisig`. Gate armed, no positive compile trigger. | **Landed (this PR).** `ci/multisig-feature`: check/clippy/test + P0-n. First enable may clippy-fail on `frost_sal` — discovery, not greenwash. Round 1 closure still needs clippy-green / F-3 DELETE. |
+| **R1-F-6** ✅ **LANDED** | HIGH | No CI job builds `--features multisig`. Gate armed, no positive compile trigger. | **Landed → CLOSED (#310, merged 2026-07-15).** `ci/multisig-feature`: check/clippy/test + P0-n, green. clippy-green + F-3 DELETE (Option A fossil) shipped in #310 — no greenwash. |
 | **R1-F-7** ✅ **LANDED** | MEDIUM | §3.1 "associated items only on multisig kind" is a compile error; `EngineSignerKind` has zero associated items; marker is aspiration. | **Accepted → LANDED.** First associated item `EngineSignerKind::SigningCeremony` added; `SoloSigner::SigningCeremony = core::convert::Infallible` (uninhabited). A compile-time pin (`fn(ceremony: SoloSigner::SigningCeremony) -> ! { match ceremony {} }`) fails the build if it stops being uninhabited — "a solo wallet ran a multisig ceremony" is unrepresentable. `signer.rs`; `MultisigSigner<N,K>` sets its own (FROST, MS-5). |
 | **R1-F-8** | MEDIUM | Second verify site + five independent bound defs; folds into MSW-1 lockstep + MSW-3 misattribution. | **Accepted → MSW-1/MSW-3.** |
 | **R1-F-9** | MEDIUM | FROST `sign_own` nonce-reuse; unauthenticated `participant` claims. | **Accepted → evaporates with F-3 DELETE.** |
@@ -712,12 +715,11 @@ no multisig surface.
 F-3 Option A fossil DELETE is closed as design disposition (impl
 pending). F-6 CI lane: `ci/multisig-feature` — check / clippy / test
 + P0-n (toolchain 1.94.0; no job-level RUSTFLAGS). First enable may
-fail clippy on `frost_sal` (discovery). Remaining Round 1 blockers
-for **closure**: clippy-green (via F-3 DELETE) + ~~SoloSigner
-associated-item framing (F-7)~~ — **F-7 landed**; closure now needs only
-F-6 CI.
+fail clippy on `frost_sal` (discovery). Round 1 blockers for **closure** — clippy-green (via F-3 DELETE),
+SoloSigner associated-item framing (F-7), and F-6 CI — are **all
+discharged** (F-3/F-6 in #310, F-7 in #317). **Round 1 CLOSED 2026-07-16.**
 
-Still Round 1 closure blockers for Track B; this audit focused on the
+The Track B Round 1 blockers have since closed; this audit focused on the
 Track A / F-2 / size claims that decide whether Track A is a constant
 fix.
 
@@ -880,7 +882,8 @@ not const generics — see "MS-1 under coexistence" above; resolve and record th
 answer at the type before MS-5.**
 
 R1-F-7 SoloSigner associated-item amend **landed** (`EngineSignerKind::SigningCeremony`,
-`SoloSigner = Infallible`). F-6 CI remains Round 1 closure prerequisite.
+`SoloSigner = Infallible`, #317). F-6 CI landed (#310, merged 2026-07-15) —
+**Round 1 CLOSED 2026-07-16.**
 
 **Reopen.** Only if coexistence premise withdrawn (§15.5 amended).
 
@@ -904,7 +907,7 @@ Keep Cargo feature name `multisig`. Flip checklist **amended**:
 4. Capability un-reserve in flip PR only.
 5. **Positive CI:** `cargo check/clippy/test -p shekyl-engine-core
    -p shekyl-engine-rpc -p shekyl-ffi --features multisig` green in
-   CI (**R1-F-6** — Round 1 closure prerequisite, not Round 3).
+   CI (**R1-F-6** — Round 1 closure prerequisite, ✅ landed #310, not Round 3).
 6. **Negative CI:** default/release builds do not enable `multisig`;
    no simple-mode symbols.
 7. **F-3:** Option A fossil **deleted** before flip (not shipped, not
@@ -927,7 +930,9 @@ I7 prover binding. Receive path must:
 4. Drop griefing-score / I7 machinery tied to rotating prover.
 
 Placement lean MS-4(a) (Refresh/scanner arm) still holds; the
-*validation contents* do not. Round 1 cannot close on the old I7 lean.
+*validation contents* do not — the old I7 lean is dead (rotating-prover
+machinery dropped). (Round 1 closed 2026-07-16 on the F-* blockers; MS-4's
+E′-restated contents are Round-2 work, not a Round-1 gate.)
 
 ### MS-5 — Spend path — **OPEN — restated under E′ (2026-07-15)**
 
@@ -1015,13 +1020,13 @@ not a quiet reopen of MS-8.
 | MS-7 | **OPEN** | R6 vs **v31** persist only; versioned discriminator (R1-F-11) |
 | MS-8 | **RETIRED** | redundancy; leaf change not required |
 
-**Round 1 still cannot close until:**
+**Round 1 closure checklist — ✅ all discharged; Round 1 CLOSED 2026-07-16:**
 
 - [x] **R1-F-6:** CI lane `ci/multisig-feature` —
       `check`/`clippy`/`test` for engine-core + engine-rpc + ffi with
-      `--features multisig` (+ P0-n doc gate). **Lane exists (this PR);**
-      first enable may clippy-fail on `frost_sal` (F-3 DELETE) — Round 1
-      closure still needs that debt cleared, not `-D warnings` weakened.
+      `--features multisig` (+ P0-n doc gate). **Lane landed + green (#310,
+      merged 2026-07-15);** F-3 DELETE cleared the `frost_sal` debt — no
+      `-D warnings` weakening.
 - [x] **R1-F-3:** Disposition **DELETE** Option A fossil (impl pending).
 - [x] **R1-F-4:** Evaporates with F-3 DELETE; canonical = v31 `multisig_group_id`.
 - [x] **R1-F-5 / MS-7:** `MultisigGroup` dies with F-3; R6 against v31 + discriminator.
@@ -1075,7 +1080,7 @@ not a quiet reopen of MS-8.
 
 ### §7.2 Track B (MS-*) — rule-26 halt
 
-1. Satisfy §6 Round 1 closure prerequisites (including F-6 CI).
+1. Satisfy §6 Round 1 closure prerequisites (F-3/F-6/F-7 — ✅ all discharged 2026-07-16).
 2. Round 2 → Round 3 → pre-flight (Round 0 / R0-D#).
 3. Explicit go-ahead; then `feat/ms-*`.
 
@@ -1132,3 +1137,4 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-15 | **PR process:** Pin #1 named reversion — comment-only source amendments OK when recording a semantic this PR pins (`bond_wire` MSW-7 uniformity). VERSIONING.md aligned to E′ (15.4a blocker open; `0x02` = product path). §10.3.1 status refreshed (MS-8 retired, E′, MSW-*). P-3: MSW-G cold before MSW-1 code. |
 | 2026-07-15 | **Copilot on #308:** label MAX=5 as decided/unenforced until MSW-1 (reject cutting the constant in a docs PR); drop superseded MSW-G=8 CHANGELOG bullet; F-10→F-11 consistency; §16.7 flags = planned sketch not live Cargo. |
 | 2026-07-15 | **P0-n + F-6 CI:** draft lane + fossil sweeps prepared; **CI files split out** to a follow-on PR so this docs carrier lands alone. Operator/protocol fossils swept here (`USER_GUIDE` / `MULTISIG_OPERATIONS` / `POST_QUANTUM` / `DESIGN_CONCEPTS` / `ANONYMITY` / `LEVIN` / `RELEASE_CHECKLIST`). |
+| 2026-07-16 | **Round 1 CLOSED.** All blockers discharged: F-3 DELETE (Option A fossil) + F-6 CI (`--features multisig` green) in **#310** (merged 2026-07-15); F-7 (`EngineSignerKind::SigningCeremony`) in **#317**. Track B (MS-1…MS-7) → Round 2 / MS-5 (Option E′) on explicit go-ahead. Pre-MS-5 gate no CI can turn green: the `MultisigSigner` `N`/`K` decision (see "MS-1 under coexistence"). |

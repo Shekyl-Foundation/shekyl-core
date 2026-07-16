@@ -5756,11 +5756,13 @@ doesn't).
 *Status (2026-07-15).* Design phase **open**. Engine-integration
 carrier:
 [`docs/design/V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md)
-(Round 1 OPEN — Track B **MS-1…MS-7**; **MS-8 RETIRED**; product path
+(Round 1 **CLOSED 2026-07-16** — F-3/F-6 (#310) + F-7 (#317) discharged;
+Track B **MS-1…MS-7** → Round 2 / MS-5; **MS-8 RETIRED**; product path
 **Option E′** — MS-4/MS-5 **restated** under E′, not Option D prover
-path; Track A **MSW-1…MSW-8** + MSW-G=5). Protocol remains
-[`PQC_MULTISIG.md`](PQC_MULTISIG.md) (§15.4a). Trait-surface amendments
-(§8.2) wait on Round 1–2 closure (Phase 0 **P0-b**).
+path; Track A **MSW-1…MSW-8** + MSW-G=5 landed #316). Protocol remains
+[`PQC_MULTISIG.md`](PQC_MULTISIG.md) (§15.4a). Further trait-surface
+amendments (§8.2) wait on Round 2 closure (Phase 0 **P0-b**); the F-7
+`SigningCeremony` amend landed with Round 1.
 
 *Trigger.* "V3.1 multisig design phase begins." (External —
 owned by V3.1 release planning; tracked against project plan.)

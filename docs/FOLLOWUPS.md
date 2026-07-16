@@ -5870,8 +5870,10 @@ sustainability is unaffected by the recalibration.
   **UPDATE 2026-07-14:** Round 1 adversarial review recorded
   (R1-F-1…F-11). Split **Track A** (V3.0 wire, **MSW-1…MSW-8** +
   MSW-G=5) vs **Track B** (engine → Option E′, MS-1…MS-7). **MS-8 retired**.
-  Round 1 **cannot close** until F-6 CI + F-7 framing (F-3…F-5/F-9
-  **dispositioned DELETE** Option A fossil).
+  **UPDATE 2026-07-16: Round 1 CLOSED** — F-6 CI (#310, merged
+  2026-07-15) + F-7 framing (#317) + F-3…F-5/F-9 DELETE (Option A fossil)
+  all discharged. Track B → Round 2 / MS-5 (Option E′) on explicit
+  go-ahead.
   Track B: Rust-owns-logic; `multisig` = v31 Option D only; rule-26 halt.
   Track A: **not** held by that halt; awaits explicit go-ahead.
   Target: V3.1 (Track B) / V3.0 pre-genesis (Track A).
