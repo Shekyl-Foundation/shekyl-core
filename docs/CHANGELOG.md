@@ -28,7 +28,8 @@
   reviewer-map is §15.4 item 1, with the `--exit-standoff` harness
   sequenced behind the §15.5 answer — a harness grading a phantom
   channel is a trigger with no gate, but deleting-then-resurrecting
-  would fight a re-homing PR). §15.5 — whether GF-4's exit seam re-homes
+  would fight a re-homing PR; landing disposition: the harness never
+  landed on `dev`, preserved at `archive/feat/fd4-exit-sweep-2026-07-16`). §15.5 — whether GF-4's exit seam re-homes
   to §18.13 wholesale, and what the four-axis joint grade becomes
   without its on-chain timing axis — is **handed forward to Gate-6 R4
   with the audit attached** (received at Gate-6 §12.8). Ratification
@@ -96,9 +97,14 @@
   because its §14 disposition is already the design-away exit;
   isolation conditioning was already correctly filed.
 
-- **sim: the F-D4 §8 exit-seam sweep harness — X-1/X-2/X-3 arms landed
-  and run (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §8/§9 step 4; new
-  §14).** New `shekyl-staking-sim --exit-standoff`
+- **docs: the F-D4 §8 exit-seam sweep — X-1/X-2/X-3 arms built and run;
+  findings recorded; the instrument itself **never landed on `dev`**
+  (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §8/§9 step 4; new §14).
+  Per the round-4 landing disposition the harness is preserved at
+  `archive/feat/fd4-exit-sweep-2026-07-16` and its fate rides the §15.5
+  hand-forward (re-parameterized on the crossing observer if Gate-6 R4
+  re-homes the seam; otherwise never resurrected).** The instrument as
+  built and run: `shekyl-staking-sim --exit-standoff`
   (`src/exit_standoff.rs`), built to the bar before any row ran: X-1
   steady-state arm over the §5.1 planning-box corners in the WI-4
   N-sweep form (`r < 2` at every swept `N`, worst row reported); X-2
@@ -121,10 +127,11 @@
   `required_sigma_l`), and marginal confusability is not `r < 2` (the
   X-2 trough needs `σ_L` on the `W/2` scale; 71/72 swept rows reported
   failing per GF7 §5.1 — the pre-committed §5.3 costing surface, never
-  a bar move). The sim is a named approved consumer of
-  `exit-window-kat` (comments pinned in both `Cargo.toml`s; the binary
-  sits outside every production graph). The Phase 7.7 stressnet read
-  runs through this same instrument to seal `DEFAULT_EXIT_GAP_WINDOW`.
+  a bar move). On the archived branch the sim is a named approved
+  consumer of `exit-window-kat` (comments pinned in both `Cargo.toml`s;
+  the binary sits outside every production graph). The seal this
+  instrument was to serve is removed by the round-4 entry above; the
+  numbers survive as the §15.4 tripwire's re-run calibration template.
 
 - **docs: F-W5 resolved — the exit-seam `N_t`, derived a-priori
   (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §13).** Result: **`N_t(exit)

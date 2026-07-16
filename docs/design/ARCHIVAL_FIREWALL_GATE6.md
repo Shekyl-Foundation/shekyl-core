@@ -2109,7 +2109,7 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   discipline lineage-blind (an F-D1-sibling). UPDATE 2026-07-16: F-D3 **BUILT** against the
   F-D4 sentinel (§12.5) and F-W5 resolved (F-D4 §13: `N_t = 10` derived); the timing channel
   enters the joint grade via the X-1/X-2 sweep, which is now unblocked. UPDATE 2026-07-16
-  (same day): the **§8 sweep instrument landed** (`shekyl-staking-sim --exit-standoff`,
+  (same day): the **§8 sweep instrument was built and run** (`shekyl-staking-sim --exit-standoff`,
   `exit_standoff.rs`) — X-1 N-sweep + X-2 cohort/anchor/`σ_L` grid + X-3 coverage-boundary
   grade + §8.3 negative control + thin-regime arm, all against the committed `r < 2`, worst
   row reported. Pre-seal structural findings recorded at F-D4 §14: delivered X-1 cover is
@@ -2135,7 +2135,11 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   `--exit-standoff` harness's deletion is sequenced behind this answer (F-D4 §15.4 item 1):
   if re-homed, it re-parameterizes on the crossing observer; if not, it is deleted (a
   harness grading a phantom channel is a trigger with no gate — it will produce a report,
-  and reports get believed).
+  and reports get believed). **Landing disposition (2026-07-16): the harness never landed
+  on `dev`** — the round-4 record shipped docs-only, and the instrument is preserved at
+  `archive/feat/fd4-exit-sweep-2026-07-16`; "deleted" reduces to "not resurrected." The
+  mechanism (`exit.rs`, PR #313) *did* land and its deletion PR is real work (reviewer-map
+  F-D4 §15.4 item 1).
 - **Joint grade (the round's exit bar, per §18.10 R-4 + CB-3):** the drain event is graded on
   **{amount-band ∧ claim/exit-timing ∧ holdings-stratum ∧ output-count}** jointly, correlated-trigger
   modeled on — never per-axis-multiplied. GF-10's claim-jitter mechanism (§11) folds in here; **R3
@@ -2226,7 +2230,9 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   joint-grade bullet, closes-when clause); F-D4 doc §2.1/§5.2a/§5.4/§9/§13/§14/§15; index
   rows 95–98; FOLLOWUPS swan-2/W8; `RELEASE_CHECKLIST.md`; CHANGELOG.
 
-- **2026-07-16 (F-D4 §8 sweep instrument landed; pre-seal findings recorded):** The
+- **2026-07-16 (F-D4 §8 sweep instrument built and run; pre-seal findings recorded —
+  instrument never landed on `dev`, preserved at `archive/feat/fd4-exit-sweep-2026-07-16`
+  per the round-4 landing disposition):** The
   pre-registered X-1/X-2 sweep built and run as `shekyl-staking-sim --exit-standoff`
   (`rust/shekyl-staking-sim/src/exit_standoff.rs`) — all five §8 items to the bar before any
   row ran; `EXIT_TARGET_ANON_SET` minted at this consumer (F-D4 §13.4's concrete carrier);

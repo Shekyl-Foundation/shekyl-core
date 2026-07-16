@@ -1360,7 +1360,10 @@ sustainability is unaffected by the recalibration.
     §15.4 tripwire (any future public principal-side event re-runs the
     audit, then this wargame); whether a re-homed *crossing* wargame
     (principal↔user seam, S-2 ledger) replaces it is part of the §15.5
-    hand-forward Gate-6 R4 now owns.
+    hand-forward Gate-6 R4 now owns. The instrument itself never landed
+    on `dev` — preserved at `archive/feat/fd4-exit-sweep-2026-07-16`
+    (F-D4 §15.4's landing disposition), recoverable for a re-homed
+    wargame.
 
 - **Foundation treasury diversification — floor capacity must not be
   pro-cyclical (swan-2/W4, 2026-06-11; re-scoped swan-3/W12–W13; re-anchored

@@ -551,13 +551,15 @@ partition event and takes a design round of its own.**
    **UPDATE 2026-07-16: done (§13) — `N_t(exit) = 10`, derived a-priori; rule and box
    unchanged; the repetition asymmetry routed to `σ_L`/S-2 as a named residual.**
 4. The X-1/X-2 sweep per §8; grading folds into the R4 joint grade (Gate-6 §12.8) — never
-   per-axis. **UPDATE 2026-07-16: the instrument landed** —
+   per-axis. **UPDATE 2026-07-16: the instrument was built and run** —
    `shekyl-staking-sim --exit-standoff` (`src/exit_standoff.rs`), all five §8 items built to
    the bar before any row ran; `EXIT_TARGET_ANON_SET` minted per §13.4; the §5.4 frozen rule
    encoded once (`frozen_rule_window`, planning-box corners pinned as its KAT). Pre-seal
    structural findings recorded in **§14** — the delivered X-1 cover is latency-gated
    (`ρ_x · σ_L`), and the §5.3 lever must be priced by the observer-derived required `σ_L`,
-   not the spacing form.
+   not the spacing form. **It never landed on `dev`** — after round 4 (§15.4) the round-4
+   record ships docs-only and the harness rides the §15.5 answer from the archive tag
+   `archive/feat/fd4-exit-sweep-2026-07-16`.
 5. **The seal:** Phase 7.7 stressnet read of `(ρ_x, N_x, σ_L)` → the §5.4 frozen rule fixes
    `DEFAULT_EXIT_GAP_WINDOW` → provisional flag cleared (stressnet-entry prerequisite,
    `RELEASE_CHECKLIST.md`, beside `K_COVER`/PF-9).
@@ -795,10 +797,16 @@ post-seal `W` change is a §16.1 partition event, §7).
 > The findings stand as the archived record of what the mechanism would have delivered *if*
 > the channel existed — the calibration reference the §15.4 tripwire's re-run inherits; none
 > of them prices anything. The harness itself is sequenced behind the §15.5 hand-forward
-> (§15.4 item 1).
+> (§15.4 item 1). **Landing disposition (2026-07-16): the harness never landed on `dev`.**
+> The round-4 record ships docs-only; the instrument lives at the archive tag
+> `archive/feat/fd4-exit-sweep-2026-07-16` (branch `feat/fd4-exit-sweep`, HEAD
+> `d049dcd27`), recoverable if the §15.5 answer re-homes the seam and wants it
+> re-parameterized on the crossing observer. If R4 declines the re-homing, nothing needs
+> deleting — not-landing was free; landing-then-deleting would have cost a PR and a fossil.
 
-The pre-registered sweep landed as `shekyl-staking-sim --exit-standoff`
-(`rust/shekyl-staking-sim/src/exit_standoff.rs`): X-1 over the §5.1 planning-box corners in
+The pre-registered sweep was built and run as `shekyl-staking-sim --exit-standoff`
+(`rust/shekyl-staking-sim/src/exit_standoff.rs`, on the archived branch — never on `dev`):
+X-1 over the §5.1 planning-box corners in
 the WI-4 N-sweep form, X-2 over `N_x ∈ {3, 5, 8}` × one/two-anchor × swept `σ_L` × the three
 frozen-rule windows, the §8.3 shared-trigger negative control, the §8.4 thin-regime bias
 statistics, and the §5.3 lever-vs-queue costing — all against this doc's committed `r < 2`,
@@ -973,6 +981,15 @@ item 1.** Rule-21 shape:
    costume. And the rule-15 case for its eventual deletion is stronger than "dead code": a
    harness that grades a phantom channel is a **trigger with no gate** — it will happily
    produce a report, and reports get believed. That is worse than absence.
+
+   **Landing disposition (2026-07-16, same day):** the sequencing resolved in the cheapest
+   direction — the harness **never landed on `dev`**. PR #313 carried the mechanism
+   (`exit.rs` and its surface, now the deletion PR's real scope) but not the instrument;
+   the round-4 record ships docs-only. The branch is preserved at
+   `archive/feat/fd4-exit-sweep-2026-07-16` (`feat/fd4-exit-sweep`, HEAD `d049dcd27`):
+   if the §15.5 answer re-homes the seam, the instrument is recovered and re-parameterized
+   there; if not, it stays unlanded and there is nothing to delete. "Deleted then"
+   above therefore reduces to "not resurrected."
 2. **The reopen criteria (substrate-anchored).** The finding is conditional on "no public
    principal-side event exists," which is true of the chain **as designed today**. The
    channel reopens — and this analysis is the thing to re-run — if any future design mints
