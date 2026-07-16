@@ -4,6 +4,19 @@
 
 ### Added
 
+- **docs: F-D3/F-D4 activation fired — fossil sweep (Gate-6 §12.5).**
+  The rule-21 activation criterion ("a verify path reads the release
+  cooldown as a spendability gate") is met at source: `bond_post.rs:369`
+  (`HoldingsUpdate`-drop) / `:627` (`Unbond`), landed with the bond FSM
+  (PR #303/#307). Swept every row that still claimed the gap: Gate-6
+  header/§6 R4 cell/§12 statuses, `IMPLEMENTATION_INDEX.md` Round-N row,
+  `PHASE_2B_FSM_RETOOL.md` P2B-7 residuals row (said "open" against its
+  own exit checklist's "closed" — Pin-4/Pin-5 closed at PR #303,
+  sim reconciliation DONE at §L18), and the FOLLOWUPS `HoldingsUpdate`
+  "Still open" clause. New §12.5 pin: `draw_exit_gap` per-event
+  independence gets its own shared-trigger negative control. Build order:
+  F-D4 a-priori window derivation before any code or sweep.
+
 - **docs: PR #308 Copilot round 2 — E′ consistency (principles, roles,
   ops, VERSIONING).** Principle 5 no longer claims FROST SAL is out of
   V3.1 scope (E′ *is* 15.4a). Roles / MULTISIG_OPERATIONS banner Option D

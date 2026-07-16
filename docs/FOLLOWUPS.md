@@ -1591,13 +1591,27 @@ sustainability is unaffected by the recalibration.
   consumers (serve-credit acceptance `blockchain.cpp` and slash eligibility `db_lmdb.cpp`,
   whose leading tip-holdings pre-filter was deleted) now read as-of-fire-height
   (`REWARD_EMISSION_E3_GATING_ROUND.md` §5; KATs in `archival_substrate_lmdb.cpp`).
-  **Still open, owned by the HoldingsUpdate connect-path PR:** voluntary *adds* break the
+  ~~**Still open, owned by the HoldingsUpdate connect-path PR:** voluntary *adds* break the
   shrink-only premise — that PR's pre-flight must extend the reconstruction (journal adds the
   way slashes are journaled, or move to `bond_event_log` intervals) **and** fix the slash
   candidate enumeration in `process_archival_slash_for_epoch`, which iterates *tip*
   `held_shard_ids` (behavior-neutral today: the only drop is slash-apply itself, which sets
   the slash-applied bit + `[E, ∞)` bad interval; a voluntary drop would let the dropped
-  shard escape enumeration). Also land the per-shard `E_add+1` verify/connect rule.
+  shard escape enumeration). Also land the per-shard `E_add+1` verify/connect rule.~~
+  **UPDATE 2026-07-15: DISCHARGED by the HoldingsUpdate connect-path PR (#303, 2026-07-14 —
+  P2B-7 Pin-4/Pin-5 closed at the review round).** All three legs verified at source: (i) the
+  reconstruction is extended — the record v6 `shard_add_epochs` substrate + the journaled
+  `slashed_shard_add_epoch` in slash-log rows let `archival_bond_holds_shard(P, s, at_height)`
+  bound a tip-held compact shard below by its add-epoch (`E ≥ E_add + 1`) and reconstruct
+  slashed-away tenures the same way; a voluntarily dropped shard keeps no interval and answers
+  not-held everywhere (grace-tail, Pin 2). (ii) The slash candidate enumeration still iterates
+  tip `held_shard_ids` but is now **sound by precondition, not by the shrink-only accident**:
+  a drop cannot connect until its cooldown elapsed and slashes settled through the dropped
+  shard's last-served anchor (`bond_post.rs:369` + `slashes_settled_through`), so every
+  credited epoch resolved on bonded collateral before the shard could leave enumeration — the
+  unserved tail is the bounded, deliberately-accepted exit forgiveness, recorded at the
+  enumeration site (`process_archival_slash_for_epoch`). (iii) Per-shard `E_add+1` landed
+  symmetrically for credit and challenge through the one shared accessor.
   (2) **~~Age-stratified sim reconciliation (pre-seal dependency).~~ DONE 2026-06-16 —
   `STAKER_ARCHIVAL_SIM.md` §L18.** The reconciliation landed as the
   `--axis=holdingsupdate_cooldown` sweep: released collateral frozen for the release

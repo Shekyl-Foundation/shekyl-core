@@ -360,7 +360,7 @@ never authoritative locally.
 | **R2** | `Exited` re-entry → new slot only | Gate-6 rotation round |
 | **R3** | §8.3 amendment (Accruing/Claimable closed) | PHASE_2B retool write-up |
 | **R4** | Grace-window GUI surfacing (**G1a — priority-1 UX**) | §7 G1 + gate-6 §5 |
-| **P2B-7** | `HoldingsUpdate` FSM/read pins (genesis); open: per-shard `E_add+1` connect rule, age-stratified sim reconciliation (seal-gating) | gate-4 §4.4; `shekyl-archival-retention`; Step 3 sim |
+| **P2B-7** | **Closed (as of 2026-07-15 sweep)** — `HoldingsUpdate` FSM/read pins (genesis). UPDATE 2026-07-15: this row's "open: per-shard `E_add+1` connect rule, age-stratified sim reconciliation (seal-gating)" was a fossil contradicting the P2B-7 exit checklist below in this same doc — the `E_add+1` rule landed and Pin-4/Pin-5 closed at the shared accessor `archival_bond_holds_shard` (PR #303 review round, 2026-07-14), and the sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18, 2026-06-16; adversarial read confirmed 2026-07-12). The exit checklist is the authority; the checklist's own last remainder (`Rebond` verify+connect) landed via PR #307 | gate-4 §4.4; `shekyl-archival-retention`; Step 3 sim |
 | **Substrate verify** | **Closed (2026-06-07)** — LMDB pattern on `dev` verified; bond wire greenfield | PHASE_2B §7.11 |
 
 ---
@@ -544,8 +544,10 @@ questions only, with historical callers rerouted to the bits. Resolved as part o
   epoch is forfeited for credit AND challenge alike (no add-epoch serve credit, no unjust
   slash for a challenge that fired before the add). A voluntarily dropped shard answers
   not-held everywhere (grace-tail keeps no drop interval — Pin 2), forfeiting the drop
-  epoch's pending acceptances, the add-forfeit's symmetric twin. What **remains open** here
-  is `Rebond` verify+connect.
+  epoch's pending acceptances, the add-forfeit's symmetric twin. What **remained open** here
+  — `Rebond` verify+connect — **landed 2026-07-14 (PR #307, `feat/bond-fsm-rebond`; ShardSet
+  newtype follow-on PR #309)**: the bond FSM's verify+connect surface is complete at genesis
+  scope.
 - [x] **Age-stratified sim reconciliation (Step 3) — DONE; seal cleared.**
   [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §L18 (R-3 reconciliation, 2026-06-16):
   **`HoldingsUpdate` is sealable at genesis with `RELEASE_COOLDOWN = 2` and no change to
