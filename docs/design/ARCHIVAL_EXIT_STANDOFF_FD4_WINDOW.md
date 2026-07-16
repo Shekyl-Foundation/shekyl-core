@@ -1119,7 +1119,12 @@ testnet-gradeable only on its observer machinery — the cover *level* is driven
 post-isolation network-event rate, an economics number, unfalsifiable pre-genesis, and was
 subsequently reclassified as the fifth WI-4 §13.5 standing conditional (Gate-6 §12.8;
 the `1.86` was verified computed on nominal cover, so the conditional is load-bearing
-against the 7% gate margin).
+against the 7% gate margin). The hit's follow-through demonstrates the filter's
+constructive half: the level is economics, but the *breakeven* — at what cover the model's
+own `r` exceeds the certified exposure — is mechanism (a property of the model), and was
+derived the same day (`shekyl-staking-sim --gf7-breakeven`: worst-arm `r` flat ≈1.86
+across `N ∈ [2, 16]`, forcing the absolute-exposure breakeven to `N* ≈ 9.3` — zero
+measurable cover slack; monitoring threshold pinned at WI-4 §13.5, aspiration-side).
 `DEFAULT_EXIT_GAP_WINDOW` never would have passed this filter — and absent round 4, that
 would have been discovered at the stressnet, after building the harness, instead of now.
 

@@ -1594,13 +1594,27 @@ sustainability is unaffected by the recalibration.
   testnet cannot produce; a testnet cover-level read measures the load
   generator, echoed back as "measured." The level therefore **cannot close
   pre-genesis** and is reclassified out of this carry into the WI-4 §13.5
-  conditional register (fifth conditional, the isolation-conditioning kind:
-  carried as a stated assumption with a **post-genesis monitoring plan** —
-  live-chain funding-spend/network-event rate observation once real value
-  flows). Load-bearing because the `1.86` was computed on nominal cover
+  conditional register (fifth conditional: carried as a stated assumption
+  with a **post-genesis monitoring plan** — live-chain
+  funding-spend/network-event rate observation once real value flows).
+  Load-bearing because the `1.86` was computed on nominal cover
   (`gf7_timeline.rs` seeds `N = TARGET_ANON_SET` at full honest strength)
   against a 7% margin, and per WI-4's no-cross-subsidy pin the conditional
-  cannot borrow that margin.
+  cannot borrow that margin. **UPDATE 2026-07-16 (later same day — kind
+  sharpened, monitoring threshold derived):** the conditional conditions
+  the *number itself*, not a channel (isolation's kind) — `1.86` is `r`
+  under the most favorable cover assumption, stacked against a
+  deliberately pessimistic adversary panel (net direction indeterminate;
+  full statement WI-4 §13.5). The monitoring plan now has a **derived
+  threshold**: `shekyl-staking-sim --gf7-breakeven` (`gf7_breakeven.rs`,
+  mechanism-class — a property of the model) sweeps `r(N)` at the gate
+  posture and finds worst-arm `r` flat (≈1.86) across `N ∈ [2, 16]`, which
+  forces the absolute-exposure breakeven (certified `P(link) < 0.2`) to
+  `N* ≈ 9.3` — the run straddles it (worst `P = 0.203` at `N = 9`, `0.177`
+  at `N = 10`). Zero measurable cover slack: the post-genesis monitor
+  watches **effective steady-state cover ≥ ~10**; below it the certified
+  exposure is exceeded and the aspiration is degrading (aspiration-side
+  threshold, not a gate — the gate passed and is not re-litigated).
 
 - **Wallet bond-funding/standoff call site (tracks the `shekyl-standoff`
   importable surface; 2026-06-16).** The `shekyl-standoff` crate is now

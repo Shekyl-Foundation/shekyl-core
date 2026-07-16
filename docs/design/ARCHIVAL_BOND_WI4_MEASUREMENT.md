@@ -813,28 +813,93 @@ preserve:
   holds**, and that dependency is a committed conditional, not an
   assumption to leave implicit.
 - **Effective-cover conditioning (added 2026-07-16, by the Gate-6 §11.8
-  method-note-3 mechanism-vs-economics filter)** is a *second*
-  permanently-pre-genesis-conditional of the isolation kind, and it was
-  previously misfiled as a testnet obligation. The `1.86` was computed
-  on **nominal cover**: the sim's `N = TARGET_ANON_SET = 10` seeds the
-  anonymity set at full honest strength (`gf7_timeline.rs` `RunConfig`,
-  baseline `1/N`), and the number's own qualifiers already say so —
-  the measured set is *nominal honest-traffic cover, an upper bound*;
-  effective cover against an observe-and-inject adversary is *lower and
-  unquantified* (Gate-6 §11 (iv)), and the rate that actually drives
-  cover is the *post-isolation network-event rate, not the on-chain
-  funding-spend rate the sim proxied* (Gate-6 §11 (ii)). The effective
-  level is an **economics quantity** — a function of real value at
-  risk — so no testnet read can validate it: a testnet cover-level
-  measurement measures the load generator (Gate-6 §11.8 method note 3).
-  It therefore **cannot close pre-genesis**; it is carried as a stated
-  assumption with a post-genesis monitoring plan, not a task. The
+  method-note-3 mechanism-vs-economics filter; kind sharpened and
+  breakeven derived later the same day)** is a *second*
+  permanently-pre-genesis conditional, and it was previously misfiled
+  as a testnet obligation. It shares isolation conditioning's
+  *permanence* but not its *shape*: isolation conditions a **channel**
+  (if it fails, a new channel opens and the analysis changes
+  qualitatively), whereas effective cover conditions **the number
+  itself**. The `1.86` was computed on **nominal cover**: the sim's
+  `N = TARGET_ANON_SET = 10` seeds the anonymity set at full honest
+  strength (`gf7_timeline.rs` `RunConfig`, baseline `1/N`), and the
+  number's own qualifiers already say so — the measured set is *nominal
+  honest-traffic cover, an upper bound*; effective cover against an
+  observe-and-inject adversary is *lower and unquantified* (Gate-6 §11
+  (iv)), and the rate that actually drives cover is the
+  *post-isolation network-event rate, not the on-chain funding-spend
+  rate the sim proxied* (Gate-6 §11 (ii)). So `1.86` is not the
+  measured value of `r` — it is `r` **under the most favorable cover
+  assumption**, with no lower bound on the truth from the cover side.
+  The honest characterization of the number is **stacked marginals of
+  opposite sign**: the adversary input is deliberately pessimistic (the
+  stress arm is an oracle-union panel over three correlators including
+  the exact seam-consistency-gated MAP, stronger than the certified S-3
+  model), while the cover input is optimistic (nominal, an upper
+  bound). One conservative input, one favorable input — the net
+  direction is indeterminate without knowing which dominates. That is
+  the same stacked-marginals hygiene F-W4 applies on the other side,
+  and it is more informative than either "best case" or
+  "capable-adversary prediction."
+
+  The effective level is an **economics quantity** — a function of real
+  value at risk — so no testnet read can validate it: a testnet
+  cover-level measurement measures the load generator (Gate-6 §11.8
+  method note 3). It therefore **cannot close pre-genesis**; it is
+  carried as a stated assumption with a **post-genesis monitoring plan
+  against a named threshold** (below), not a task. The
   observer-*machinery* half (does decoy injection get discounted, does
-  the correlator behave) stays testnet-dischargeable and remains on the
-  testnet list. Load-bearing consequence: if effective cover runs below
-  nominal, `r` moves **up**, and the margin is 7% — this conditional
-  can consume the entire gate margin, and per the no-cross-subsidy pin
-  below it cannot be paid for out of that margin.
+  the correlator behave) stays testnet-dischargeable and remains on
+  the testnet list. Scope narrowing recorded at the same audit: the
+  *thin-cover regime itself* (`N` small) is already the L12 residual
+  with a design-away disposition — M1's reward-gate-by-shard-count
+  refuses the regime rather than measuring it — so the cold-start half
+  of the cover worry is structurally handled; what this conditional
+  carries is the narrower steady-state question, *effective-vs-nominal
+  event rate with plenty of personas*.
+
+  **The breakeven, derived (2026-07-16; `shekyl-staking-sim
+  --gf7-breakeven`, `gf7_breakeven.rs` — mechanism-class under method
+  note 3, a property of the model, no testnet, no economics input).**
+  The sweep grades the gate-relevant posture at
+  `N ∈ {2..10, 12, 14, 16}`, per-`N` validity controls, worst arm per
+  row, 1 000 trials/point. Two anchors, two answers:
+  - *Ratio anchor (`r < 2` per `N`):* worst-arm `r` is **flat**
+    (≈1.7–1.86) across the entire range — `P(link)` scales ≈`1.86/N`.
+    The mechanism's *relative* leak is scale-invariant in-model; there
+    is **no ratio breakeven in range**. The ratio renormalizes by the
+    degraded baseline, so it structurally cannot see thin-cover harm
+    (`r ≤ N` caps it; at `N = 2` the worst arm links 74.6% of the time
+    and still "clears").
+  - *Absolute anchor (the exposure the verdict certified:
+    `P(link) < r_bound/N_nominal = 0.2`):* flat `r ≈ 1.86` forces the
+    breakeven to `N* = 10 · (1.86/2) ≈ 9.3` — and the evidence run
+    straddles it exactly (worst-arm `P = 0.203` at `N = 9`, `0.177` at
+    `N = 10`). The certified exposure has **no measurable cover
+    slack**: any effective-cover shortfall below nominal puts the
+    realized exposure above what the verdict certified. This is the
+    7% margin's direct corollary, now a measured number rather than an
+    inference.
+
+  The monitoring threshold is therefore the **absolute** anchor:
+  *effective steady-state cover ≥ ~10 personas per anonymity
+  neighborhood, monitored post-genesis; below it the gate's certified
+  exposure is exceeded.* This is aspiration-side, not gate-side — the
+  gate (`r < 2` at target cover) passed and is not re-litigated; the
+  threshold names when *the aspiration is degrading* and converts this
+  conditional from an unfalsifiable assumption into a monitored number
+  with a trigger. Load-bearing consequence, unchanged: if effective
+  cover runs below nominal, realized exposure moves **up** with zero
+  slack, and per the no-cross-subsidy pin below it cannot be paid for
+  out of the gate's own margin. One scope argument is explicitly
+  **rejected as a reading of the measurement**: "only a state actor
+  gets post-isolation visibility, and they have KYC anyway" would be a
+  legitimate *scope decision* if made explicitly and recorded, but used
+  to make `1.86` comfortable it is standard-adjustment-around-a-number
+  — and the marginal loss is not nil (KYC gives principal→user; GF-7
+  protects `P`→principal; break both and the adversary gets
+  `P`→user — which shards, what earnings, what patterns). No such
+  scope decision is made here.
 
 Consequence for seal-time wording: even when leg (b) and the partition
 arm both pass and `K_COVER` is set, the gate's honest form is **not**
@@ -844,7 +909,9 @@ bounded (`r < 2`) under the local-daemon posture, **conditional on
 here, (2) persona mutual-unlinkability (GF-4), graded separately —
 without which the per-post bound does not promote to the per-principal
 property S-1 names — and (3) effective cover at or near the nominal
-level the sim seeded, unvalidatable before real value is at risk**."
+level the sim seeded (breakeven `N* ≈ 9.3` against the certified
+exposure — zero measurable slack), unvalidatable before real value is
+at risk, monitored post-genesis against the ≥ ~10 threshold**."
 Measured-conditionals-cleared must never be read
 as all-conditionals-cleared, and a per-**post** bound must never be read
 as a per-**principal** one: the isolation conditional, the
@@ -872,6 +939,33 @@ aggregate verdict is a **computed conjunction** over every committed
 bound (INVALID on absence, FAIL on any miss), so yielding to the
 temptation is unrepresentable in the artifact rather than forbidden in
 prose.
+
+**What this register is (pinned 2026-07-16): the aspiration's ledger.**
+Gates and aspirations are different objects. A gate is a pass/fail
+criterion on something the protocol controls and can measure ("does the
+mechanism leak more than 2× over baseline at target cover?" —
+answerable, falsifiable, ours). The aspiration — *the only thing left
+exposed is the KYC crossing* — is a whole-system end state depending on
+things outside the protocol: real cover levels, real adversary reach,
+real user behavior. It cannot be gated on, because it can never be
+proven; gate on it and you never ship. `r < 2` never claimed the
+aspiration holds; it claimed *this mechanism doesn't leak* — and the
+2026-07-16 misfiling happened at exactly the moment a cover
+*assumption* (aspiration-side fact) was filed as a testnet *obligation*
+(gate-side label). The five conditionals above are therefore not a
+to-do list: they are the standing, read-together statement of **what
+stands between "every gate passed" and "the aspiration holds."** The
+failure mode this prevents is shipping a system where every gate is
+green and the aspiration quietly doesn't hold because each gate's
+conditional was tracked somewhere nobody read together — which is why
+the three permanent clauses ride the verdict line itself. The
+breakeven threshold above is aspiration-side monitoring, not a sixth
+gate; and the aspiration's own instrument — the only thing that can
+ever answer "what exposures remain, and is KYC the only one?" — is the
+**S-2 fused per-observer whole-life exposure ledger** (Gate-6 R5,
+"build first — cheapest, highest leverage," still unbuilt). An
+aspiration with no instrument decays into a slogan invoked when a gate
+feels inconvenient; S-2 is what stops that.
 
 ## 14. Addendum (2026-07-06): the founder-cover launch posture — refusing the cold-start regime
 
