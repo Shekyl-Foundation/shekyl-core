@@ -31,6 +31,25 @@
   independence gets its own shared-trigger negative control. Build order:
   F-D4 a-priori window derivation before any code or sweep.
 
+- **ci: F-6 `--features multisig` lane + P0-n doc gate (follow-on to #308).**
+  Lands the F-6 lane (`.github/workflows/multisig-feature.yml`) and the
+  P0-n doc-literal gate (`scripts/ci/check_multisig_doc_literals.sh`),
+  split across two workflows (`multisig-feature.yml`,
+  `multisig-doc-literals.yml`) so a docs-only change runs only the cheap
+  ripgrep gate, not the full `cargo check/clippy/test`. Clippy posture
+  matches `build.yml` (toolchain 1.94.0; `-D warnings` on clippy argv
+  only). The gate catches the `pqc_auth` fee fossil in bare / comma /
+  approximation forms (not only tilde-prefixed) and any `k-of-n` config
+  over `MAX_MULTISIG_PARTICIPANTS = 5` (not only the two 7-literals), and
+  now scans the design carrier / tracking index / FOLLOWUPS instead of
+  excluding them wholesale — genuinely-historical lines opt out with an
+  inline `doc-literal-gate-allow` marker.
+
+- **fix: stale `pqc_auth` size in `POST_QUANTUM_CRYPTOGRAPHY.md`.** The
+  hardened P0-n gate surfaced a comma-grouped fossil (`5,385 bytes`) that
+  contradicted the same doc's oracle figure — corrected to `5,389`
+  (`pqc_auth_weight()`).
+
 - **docs: PR #308 Copilot round 2 — E′ consistency (principles, roles,
   ops, VERSIONING).** Principle 5 no longer claims FROST SAL is out of
   V3.1 scope (E′ *is* 15.4a). Roles / MULTISIG_OPERATIONS banner Option D

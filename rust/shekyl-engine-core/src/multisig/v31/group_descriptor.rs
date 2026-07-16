@@ -79,7 +79,10 @@ impl GroupDescriptor {
         if desc.participant_pubkeys.len() != desc.n_total as usize {
             return Err(GroupDescriptorError::PubkeyCountMismatch {
                 expected: desc.n_total,
-                got: desc.participant_pubkeys.len() as u8,
+                // Diagnostic-only field on an error we are already returning;
+                // saturate rather than widen the error type (house telemetry
+                // idiom). n_total is u8, so any real mismatch is representable.
+                got: u8::try_from(desc.participant_pubkeys.len()).unwrap_or(u8::MAX),
             });
         }
         if desc.group_id.is_empty() {

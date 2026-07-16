@@ -5896,6 +5896,37 @@ sustainability is unaffected by the recalibration.
   Fee / `MAX_INPUTS=128` → Track B. Target: **V3.0 pre-genesis**.
   **Track A code awaits explicit go-ahead.**
 
+- **PQC Multisig V3.1: Option-D residue left standing after the F-6
+  prover excision (blocker: MS-5 / §15.4a).** F-6 (PR #310) excised the
+  Option-D prover lineage — deleted `multisig/v31/{prover,heartbeat,
+  counter_proof}.rs`, their fuzz targets + bench arm + adversarial/
+  functional test coverage, and the forced `invariants.rs` surgery
+  (dropped the `prover` param + I5 prover-assignment block +
+  `check_assembly_consensus`/I6; `InvariantId` now carries {I1,I2,I3,I4,I7}
+  with 5/6 intentional gaps — the enum is internal, never serialized).
+  What F-6 deliberately did **not** touch, because rewriting it is
+  designing Option E′'s spend model (MS-5), not clearing a lint:
+  - **`state.rs` `IntentState` FSM.** The `ProverReady` edge
+    (`Verified → ProverReady → Signed`) is Option D's. E′'s ceremony is
+    `Round1Committed → Round2Shared`. **MS-5 deletes `state.rs` and
+    writes E′'s FSM fresh — it does not edit the Option-D machine in
+    place.** The surviving `match_same_arms` `#[allow]` on `transition`
+    (rule 45 // CLIPPY:, F-6 commit 5) goes with the file.
+  - **`messages.rs` Option-D `MessageType` discriminants** —
+    `ProverOutput`(0x02), `ProverReceipt`(0x05), `Heartbeat`(0x06),
+    `CounterProof`(0x07), `EquivocationProof`(0x0B). Bare u8 tags, no
+    live producer post-excision; E′ redraws the message taxonomy.
+  - **`intent.rs` `ChainStateFingerprint::input_assigned_prover_indices`**
+    (rotating-prover assignment data) and the receive-time output
+    validation / I7 (`validate_multisig_output_at_receive`) — both are
+    E′ spend-model shape (MS-4/§15.4a).
+  - **Spec docs still describe Option D as live:** `PQC_MULTISIG.md`
+    (incl. the `prover.rs` file-tree line + fuzz-plan list),
+    `MULTISIG_OPERATIONS.md`, `SHEKYL_MULTISIG_WIRE_FORMAT.md` (0x02/
+    0x05/0x0B bodies), `PQC_MULTISIG_V3_1_ANALYSIS.md`. Their rewrite to
+    E′ is MS-5's — the E′ spec does not yet exist, so a CI-lane PR cannot
+    author it. Target: **V3.1 (Track B)**.
+
 - **PQC Multisig V3.1: external adversarial review (Phase 5).**
   Round 4 wargame against the V3.1 multisig implementation per
   `PQC_MULTISIG_V3_1_ANALYSIS.md` §5.4. Review targets:

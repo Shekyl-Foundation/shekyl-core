@@ -1242,7 +1242,7 @@ sets the intended direction:
 - **Ownership binding:** `PqcAuthentication` is attached to `TransactionV3`;
   the signed payload covers prefix + RCT base + auth header (excluding the
   signature itself). Implemented in `tx_pqc_verify.cpp`.
-- **Max transaction size:** Measured at 5,385 bytes per user tx for `pqc_auths`
+- **Max transaction size:** Measured at 5,389 bytes per user tx for `pqc_auths`
   (see Measured Sizes above). Operator limits documented in
   `docs/V3_ROLLOUT.md` under "Payload Limit Guidance."
 - **Multisig approach:** V3 uses signature-list (`scheme_id = 2`); lattice

@@ -1,25 +1,14 @@
 // Copyright (c) 2025-2026, The Shekyl Foundation
 // All rights reserved. BSD-3-Clause
 
-//! FROST multisig wallet orchestration.
+//! Shekyl V3.1 multisig — Option E′ (`v31`).
 //!
-//! Provides wallet-level abstractions for FROST threshold signing:
-//!
-//! - [`MultisigGroup`] -- M-of-N group metadata and key material.
-//! - [`MultisigDkgSession`] -- Drives the DKG protocol rounds and
-//!   serializes/deserializes round messages for file-based transport.
-//! - [`MultisigSigningSession`] -- Drives the FROST signing protocol,
-//!   collecting nonce commitments and partial shares from M signers,
-//!   then aggregating into a complete FCMP++ proof.
+//! The Option A FROST wrapper (`MultisigGroup` / `MultisigDkgSession` /
+//! `MultisigSigningSession`) was deleted under R1-F-3: it fused FROST-SAL
+//! threshold keys with a fixed-per-group `pqc_public_key` — Option A,
+//! rejected 2026-04-04 because a fixed group PQC key in plaintext
+//! `pqc_auth` is a ~1996-byte on-chain fingerprint that collapses FCMP++
+//! anonymity. The FROST-SAL / DKG primitives it wrapped live on in
+//! `shekyl-fcmp` (`frost_sal`, `frost_dkg`); the shipping design is `v31`.
 
-pub mod dkg;
-pub mod group;
-pub mod signing;
 pub mod v31;
-
-pub use dkg::MultisigDkgSession;
-pub use group::MultisigGroup;
-pub use signing::MultisigSigningSession;
-
-#[cfg(test)]
-mod tests;
