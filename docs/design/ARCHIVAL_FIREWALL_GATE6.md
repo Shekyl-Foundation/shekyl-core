@@ -1954,9 +1954,14 @@ signal). **The derivation is committed:**
 [`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`](ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md) (2026-07-15) —
 anchor formula from named consts (§1.1), two-regime split (steady-state X-1 lower bound vs
 crisis-cohort X-2 upper bound), the anchor-quantization lemma (a-priori: the cooldown delays and
-*quantizes*, does not smear), the §5.3 queue predicate deciding the W8 question, candidate
-`DEFAULT_EXIT_GAP_WINDOW = 2 × SEB`, pre-registered sweep arms. Awaiting the rate-model
-adversarial review before any code lands.
+*quantizes*, does not smear), the §5.3 predicate making the W8 question decidable, candidate
+`DEFAULT_EXIT_GAP_WINDOW`, pre-registered sweep arms. **Rate-model review round 1 run
+2026-07-15** (derivation doc §10): F-W1 (blocking) — the draft `2 × SEB` candidate failed its
+own X-1 planning bound (`20_000 < 22_500`) while §5.4 said "clears"; re-derived to
+`3 × SEB = 30_000` (33 % margin). F-W2 (load-bearing) — `σ_L` reclassified as a design lever;
+the §5.3 predicate is a joint constraint over `(W, σ_L)`, and the wallet-discipline lever must
+be costed against the release-queue before either commits. Lemma, X-1 shape, X-2 form, and the
+one-window pin survived review. `draw_exit_gap` code stays gated on review of the amendment.
 
 ### 12.7 F-D5 (routed out) and F-D6 (anti-drift pin)
 
@@ -2015,6 +2020,15 @@ adversarial review before any code lands.
 ---
 
 ## Revision history
+
+- **2026-07-15 (F-D4 review round 1 — F-W1/F-W2):** The rate-model adversarial review ran
+  against the committed derivation (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §10). F-W1
+  (blocking): the draft candidate `2 × SEB` failed its own X-1 planning bound and was
+  described as clearing it — re-derived to `3 × SEB = 30_000` (33 % margin); §12.6 pointer
+  text updated. F-W2 (load-bearing): `σ_L` reclassified as a design lever; the §5.3 predicate
+  reframed as a joint constraint over `(W, σ_L)` with the wallet-discipline lever costed
+  against the release-queue on the shared capital-idle axis. The anchor-quantization lemma,
+  both regime forms, and the one-window pin survived. `draw_exit_gap` remains gated.
 
 - **2026-07-15 (F-D3/F-D4 activation FIRED — fossil sweep):** The §12.5 rule-21 activation
   criterion ("a verify path reads `RELEASE_COOLDOWN_EPOCHS` as a spendability gate") fired at

@@ -4,6 +4,24 @@
 
 ### Added
 
+- **docs: F-D4 rate-model review round 1 — F-W1/F-W2 resolved by
+  amendment (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §10).** F-W1
+  (blocking): the draft candidate `2 × SEB = 20_000` failed its own X-1
+  planning-instance bound (`22_500`, itself the conservative end — the
+  pessimistic `c = 0.05` pushes the bound *up*) while §5.4 said
+  "clears" — the GF7 §5.1 bar-moving violation; re-derived to
+  `3 × SEB = 30_000` (33 % margin, clears down to `c ≥ 0.0375`), failure
+  recorded in-place, not erased. F-W2 (load-bearing): `σ_L` is
+  wallet-drawn — a design lever, not a fact of nature — so the §5.3
+  predicate is a joint constraint over `(W, σ_L)`; the wallet-discipline
+  lever (`σ_L ≥ W/N_x = 6_000` blocks, cost borne by exiters only) is
+  now costed against the release-queue (domain widens for everyone,
+  always) on the shared capital-idle axis, neither pre-selected. Lemma,
+  X-1 shape, X-2 form, and the one-window pin survived review. `N_t`
+  citation disambiguated to `shekyl-staking-sim/src/standoff.rs:116`.
+  `draw_exit_gap` stays gated on review of the amendment. F-W family
+  registered.
+
 - **docs: F-D4 a-priori exit-window derivation
   (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`, Gate-6 §12.6).** Committed
   before any `draw_exit_gap` code or sweep (GF7_HOOKS §5.1 ordering):
@@ -13,10 +31,11 @@
   cooldown delays and quantizes a synchronized cohort — no smear; the
   a-priori answer to swan-2/W8's mechanism question, wargame-confirmed
   arm pre-registered); the §5.3 queue predicate making "is a release
-  queue needed" decidable; candidate `DEFAULT_EXIT_GAP_WINDOW = 2 × SEB`
-  (~28 d, conditional on `ρ_x`/`σ_L` reads). Exit window does not borrow
-  the entry 600 — the derivation shows SEB-scale. Code gated on the
-  rate-model adversarial review.
+  queue needed" decidable; candidate `DEFAULT_EXIT_GAP_WINDOW`
+  (conditional on `ρ_x`/`σ_L` reads; the draft's `2 × SEB` was corrected
+  to `3 × SEB` by review round 1 — see the F-W1/F-W2 entry above). Exit
+  window does not borrow the entry 600 — the derivation shows SEB-scale.
+  Code gated on the rate-model adversarial review.
 
 - **docs: F-D3/F-D4 activation fired — fossil sweep (Gate-6 §12.5).**
   The rule-21 activation criterion ("a verify path reads the release
