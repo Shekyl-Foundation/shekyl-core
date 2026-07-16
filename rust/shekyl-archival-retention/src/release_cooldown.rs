@@ -228,10 +228,17 @@ mod tests {
     #[test]
     fn anchor_height_derives_from_named_consts() {
         use crate::constants::SETTLEMENT_EPOCH_BLOCKS;
+        // Precondition, made executable: the unit-test environment runs
+        // unarmed, so the effective SEB the anchor multiplies by IS the
+        // genesis pin. If a future harness arms the fakechain override,
+        // this fails loudly here instead of desynchronizing the
+        // expectations below.
+        assert_eq!(effective_settlement_epoch_blocks(), SETTLEMENT_EPOCH_BLOCKS);
         // F-D6: the anchor is the product of named consts. At genesis values
         // (COOLDOWN = 2, SEB = 10_000) this is the 20_000 that previously
-        // lived only as a doc-comment integer — now derived, guarded against
-        // silent config drift the same way genesis_cooldown_is_two_epochs is.
+        // lived only as a doc-comment integer — now derived. The literal is
+        // deliberate: a genesis tripwire against silent config drift, the
+        // same shape as genesis_cooldown_is_two_epochs.
         assert_eq!(
             release_cooldown_anchor_height(Some(0)),
             Some(RELEASE_COOLDOWN_EPOCHS * SETTLEMENT_EPOCH_BLOCKS)
