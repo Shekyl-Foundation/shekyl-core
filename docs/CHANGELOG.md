@@ -70,6 +70,32 @@
   testnet-dischargeable only on its observer machinery, never on the
   cover level (post-isolation network-event rate is economics).
 
+- **docs: GF-7 effective-cover reclassified as the fifth WI-4 §13.5
+  standing conditional; method-note-3 sweep extended across Gate-6's
+  residuals.** The §12.8 caveat's "stays open on the level" was the
+  wrong filing — "open" implies it closes when someone does the work,
+  and the cover level is unfalsifiable before real value is at risk:
+  a standing conditional of the isolation-conditioning kind (carried
+  as a stated assumption with a post-genesis monitoring plan, never a
+  task). Verified at source that the `1.86` was computed on **nominal**
+  cover (`gf7_timeline.rs` seeds `N = TARGET_ANON_SET = 10` at full
+  honest strength; Gate-6 §11 (iv) already names the measured set an
+  upper bound), so the conditional is load-bearing: effective cover
+  below nominal moves `r` up against the 7% gate margin, and per
+  WI-4's no-cross-subsidy pin it cannot be paid out of that margin.
+  WI-4 §13.5 ledger extended four → five conditionals; the seal-time
+  verdict line now carries three permanent clauses (isolation, GF-4
+  promotion, effective cover). FOLLOWUPS funding-seam carry 4 split
+  (observer machinery = testnet obligation, retained; cover level =
+  register). Sweep across Gate-6's remaining named residuals: one
+  proviso (GF-6 dummy/fragmentation ratio — the ambient large-v3
+  distribution must be observed from the live Tor network, never
+  synthesized by the replay, or the ratio is tuned against the load
+  generator); leg-(b), the §14.4 partition run, G-10.D, and the
+  heavy-path L-curve classify as mechanism; L12 cold-start passes
+  because its §14 disposition is already the design-away exit;
+  isolation conditioning was already correctly filed.
+
 - **sim: the F-D4 §8 exit-seam sweep harness — X-1/X-2/X-3 arms landed
   and run (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §8/§9 step 4; new
   §14).** New `shekyl-staking-sim --exit-standoff`

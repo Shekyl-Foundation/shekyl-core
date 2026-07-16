@@ -1501,7 +1501,10 @@ impl carried.
 
 **What R2 does *not* claim.** It does not close GF-7 or GF-4 (the money seams — S-1); those are R4
 and are conceded-deferred here, not covered. It does not measure effective (vs. nominal) cover; that
-is the testnet S-3 obligation. It does not freeze the GF-9 HS-id label (below). Association with a
+was filed as the testnet S-3 obligation *(re-split 2026-07-16 by §11.8 method note 3: the observer
+machinery stays a testnet obligation; the cover **level** is economics, cannot close pre-genesis, and
+is reclassified into the WI-4 §13.5 conditional register — see §12.8)*. It does not freeze the GF-9
+HS-id label (below). Association with a
 disposition is not coverage of its implementation.
 
 **Carried items (rule-21 — each names its completion/reopen criterion and its home):**
@@ -1510,7 +1513,7 @@ disposition is not coverage of its implementation.
 |-------|------|-------------------------------|
 | **GF-9 HS-id HKDF label** — seed-derived `p_slot`-bound `.onion` identity | **§9.3 amendment + `ARCHIVAL_P_DERIVE_V1` KAT** | **Armed:** label absent from `archival_p.rs` at close (verified). Pin the label into the §9.3 table (L=32 seed → ed25519 HS identity, consumer `launch_onion_service_with_hsid`) **normalized to the hyphen convention** — §10.7's `shekyl.archival.p.hs_id.v1` (dots) must become `shekyl-archival-p-hs-id-*-v1` before it enters the KAT, or the §9.3 non-prefix-free safety argument does not cover it. Freezing the label is a deliberate crypto-surface act, not a side effect — do it as its own pin. |
 | **At-source Arti pin** — exact version/feature/MSRV/`with_hsid` API shape | Transport PR (§10.3) | Embed-Arti fork holds; external-daemon-over-SOCKS reversion clause fires iff the at-source check fails. |
-| **Dummy/fragmentation tuned ratio** | Testnet replay (§10.6) | Measure-then-tune: the real-to-dummy ratio that makes `P` bursts indistinguishable from ambient large-v3; honest cost/coverage residual. |
+| **Dummy/fragmentation tuned ratio** | Testnet replay (§10.6) | Measure-then-tune: the real-to-dummy ratio that makes `P` bursts indistinguishable from ambient large-v3; honest cost/coverage residual. **Instrument proviso (method note 3, 2026-07-16):** the `P`-burst side is mechanism (software-generated, testnet-faithful); the **ambient large-v3 distribution must be observed from the live Tor network** — real external-world data that exists independent of Shekyl's economics — never synthesized by the replay itself, or the ratio is tuned against the load generator. |
 | **§10.9 isolation enforcement mechanism** (Arti config vs. policy) + **S-6 key-locality** provisioning | Transport PR + PHASE_2B engines | Independent guard sets + restore-flow non-co-activation must be *structural*, and the serving box gets only the `P`-subtree (never the master seed). Reopen if a host-level compromise model is added. |
 | **Heavy-path relaxation** | §10.8; post-testnet sim L-curve | Pure-rendezvous is the genesis commitment; any relaxation is a post-testnet reversion clause and must prove the *access pattern* (not just the payload) carries no `P`-attributable metadata. |
 
@@ -1818,9 +1821,22 @@ at adoption:** `K_COVER` is the only seal queued behind stressnet entry and pass
 §14.4 partition run is mechanism — a pre-registered partition-adversary arm); the remaining
 Phase 7.7 entries (F11-S Windows-midrange bench, historical reference-block/reorg exercise,
 archival multi-staker path, `tests/stressnet/README.md` acceptance criteria) are mechanism
-exercises; the FA-6 wire lock is a sequencing pin, not a measurement. One caveat placed at
-§12.8: GF-7's effective-vs-nominal-cover residual is testnet-gradeable only on its observer
-*machinery* — the cover *level* is post-isolation network-event rate, an economics number.
+exercises; the FA-6 wire lock is a sequencing pin, not a measurement. **Filter extended
+across this doc's named residuals (2026-07-16, same day):** one live hit and one proviso.
+The hit — GF-7's effective-vs-nominal-cover residual was misfiled as a testnet obligation:
+the observer *machinery* is mechanism and stays testnet-dischargeable, but the cover
+**level** is post-isolation network-event rate — economics, unfalsifiable pre-genesis —
+so it is **reclassified as the fifth WI-4 §13.5 standing conditional** (§12.8; verified at
+source that the `1.86` was computed on nominal cover, so the conditional is load-bearing
+against the 7% margin). The proviso — the GF-6 dummy/fragmentation tuned ratio (§10.13
+carry): the `P`-burst side is mechanism, but the ambient large-v3 distribution must come
+from live-Tor observation, never the replay's own synthesis. The rest classify cleanly:
+leg-(b) wall-clock and the §14.4 partition run are mechanism (buildable, as WI-4 §13.5
+already says); isolation conditioning is already correctly filed as permanently
+conditional; the L12 cold-start residual passes because its disposition is already the
+design-away exit (§14 refuses to enter the regime rather than measure it); G-10.D's
+dormancy-backlog residual is mechanism-shaped (correlates with the public liveness gap);
+the GF-9 label freeze and Arti at-source pin are acts, not measurements.
 
 ---
 
@@ -2074,12 +2090,20 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
 - **GF-7 (funding-in):** built + graded **PROVISIONAL-PASS** (`r = 1.86`, local-daemon; §6 R4 cell) —
   not an open design question; its residuals (effective-vs-nominal cover, cold-start) are testnet
   obligations already tracked ([`FOLLOWUPS.md`](../FOLLOWUPS.md) funding-seam carries).
-  **Caveat (method note 3, 2026-07-16):** the testnet grades the residual's observer
+  **Reclassified (method note 3, 2026-07-16): the effective-cover *level* is a standing
+  conditional, not a testnet obligation.** The testnet grades the residual's observer
   *machinery* (does the observe-and-inject adversary's decoy injection get discounted; does
-  the S-3 correlator behave) — a mechanism measurement. The effective cover **level** is
-  driven by the post-isolation network-event rate (§11's own (ii)), an economics number a
-  testnet cannot produce; a testnet cover-level read would measure the load generator. The
-  residual stays open on the level; only the machinery is testnet-dischargeable.
+  the S-3 correlator behave) — a mechanism measurement, which stays on the testnet list.
+  The effective cover **level** is driven by the post-isolation network-event rate (§11's
+  own (ii)), an economics number a testnet cannot produce; a cover-level read would measure
+  the load generator. "Open" would imply it closes when someone does the work — it cannot
+  close pre-genesis, so it is filed as the **fifth member of the WI-4 §13.5 conditional
+  register** (the isolation-conditioning kind: unfalsifiable pre-genesis, carried as a
+  stated assumption with a post-genesis monitoring plan). Verified at source: the `1.86`
+  was computed on **nominal** cover (`gf7_timeline.rs` seeds `N = TARGET_ANON_SET = 10` at
+  full honest strength; §11 (iv) already names the measured set an upper bound), so the
+  conditional is load-bearing — effective cover below nominal moves `r` up against a 7%
+  margin, and per WI-4's no-cross-subsidy pin it cannot borrow that margin.
 - **GF-4 (value-out):** this section. F-D1 + F-D2 buildable now; F-D3 + F-D4 **gate FIRED
   2026-07-15 — open for build** (§12.5, `bond_post.rs:369`/`:627`); output-count
   discipline lineage-blind (an F-D1-sibling). UPDATE 2026-07-16: F-D3 **BUILT** against the
@@ -2149,6 +2173,22 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
 ---
 
 ## Revision history
+
+- **2026-07-16 (method-note-3 residual sweep; GF-7 effective-cover reclassified to the
+  WI-4 §13.5 register):** The §12.8 caveat is upgraded from "stays open on the level" to
+  a **standing conditional** — "open" implies dischargeable, and the cover level is
+  unfalsifiable before real value is at risk, the same shape as isolation conditioning.
+  Verified at source: the `1.86` was computed on **nominal** cover (`gf7_timeline.rs`
+  seeds `N = TARGET_ANON_SET = 10` at full honest strength; §11 (iv) names the measured
+  set an upper bound), so the conditional is load-bearing against the 7% margin and per
+  the no-cross-subsidy pin cannot borrow it. WI-4 §13.5 ledger extended four → five
+  conditionals; the seal-time verdict line now carries three permanent clauses
+  (isolation, GF-4 promotion, effective cover). FOLLOWUPS funding-seam carry 4 split
+  (machinery = testnet obligation; level = register + post-genesis monitoring plan);
+  R2's "testnet S-3 obligation" non-claim line re-split. Filter then run across this
+  doc's remaining named residuals — one proviso placed (GF-6 dummy-ratio: ambient
+  large-v3 must be live-Tor-observed, never replay-synthesized); the rest classify
+  cleanly (§11.8 method note 3 records the sweep).
 
 - **2026-07-16 (method note 3 — mechanism-vs-economics measurement filter; GF-7 residual
   caveat):** Second lesson extracted at the F-D4 round-4 ratification, recorded at §11.8
