@@ -9,8 +9,9 @@
 //!
 //! The Phase 1 plan locks the wallet's solo / multisig dispatch into the
 //! type system: `Engine<S: EngineSignerKind>`, with `S` ranging over
-//! [`SoloSigner`] (V3.0 default) and the multisig kind — working name
-//! `MultisigSigner` (V3.1, lands behind the `multisig` Cargo feature).
+//! [`SoloSigner`] (V3.0 default) and the multisig kind(s) — `MultisigSigner`,
+//! one type or a per-version family (V3.1, behind the `multisig` Cargo feature;
+//! MS-1 fixes which).
 //! Choosing the dispatch axis at compile time means the V3.1 enablement is
 //! a feature flip on call sites, not a refactor.
 //!
@@ -26,8 +27,9 @@
 //! monomorphization per config for no benefit. Coexistence is a **type /
 //! dispatch** matter (per-version `EngineSignerKind` markers, or a runtime
 //! version field — MS-1's trait-identity design settles which), never a
-//! `<N, K>` parameterization. So the multisig kind is written `MultisigSigner`,
-//! unparameterized.
+//! `<N, K>` parameterization. So the multisig kind takes no type parameters;
+//! whether it is one type with a runtime version or a per-version family is
+//! MS-1's call.
 //!
 //! [`EngineSignerKind`] is sealed: only this crate may add variants.
 //! Downstream code parameterizes `Engine<S>` with `SoloSigner` (or, in

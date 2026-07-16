@@ -6070,8 +6070,9 @@ sustainability is unaffected by the recalibration.
     (scheme / `spend_auth` version byte — one `Engine` holding two multisig
     stacks at once) is not a const generic either: the version is read at runtime
     and a version const-generic would multiply `Engine<S>` monomorphization per
-    config. `MultisigSigner<N, K>` is retired; `MultisigSigner` is
-    unparameterized. **Recorded at the name** (`signer.rs` module doc) and in the
+    config. `MultisigSigner<N, K>` is retired; the multisig kind takes no type
+    parameters — one type with a runtime version, or a per-version family (MS-1's
+    call). **Recorded at the name** (`signer.rs` module doc) and in the
     carrier "MS-1 under coexistence". *Residual for MS-1:* only the coexistence
     *shape* (per-version `EngineSignerKind` markers vs a runtime version field),
     bounded by "no const generics".
