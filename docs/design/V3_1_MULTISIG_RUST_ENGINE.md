@@ -165,14 +165,14 @@ true and incidental).
 
 | ID | Work |
 | --- | --- |
-| **MSW-6** ✅ **LANDED** | **Relax tx-wide `scheme_id` agreement** — the staking unblock. `expected_scheme = tx.pqc_auths[0].scheme_id` forced every input to match, so scheme-2 funding could not share a tx with a scheme-1 bond vin. **Change (option a — drop the agreement):** each input is still validated per-input (scheme ∈ `{1,2}`, blob length, signature); only the cross-input agreement is removed, in lockstep across both batteries — `tx_pqc_verify.{h,cpp}` + `blockchain.cpp` (C++) and `verifier.rs` (Rust twin). **Why (corrected — *not* "guards nothing", a §11.8 error):** the *stated* purpose (a cross-input scheme-downgrade defense) was vacuous — self-referential, and per-output scheme binding is the leaf hash `h_pqc = H(hybrid_public_key)` (`blockchain.cpp:3769`), not this check. Its *actual* effect was to make a tx that spends a solo (scheme 1) and a multisig (scheme 2) output together unrepresentable — a **self-inflicted cross-model linkage** (co-spending is the only proof of common control under FCMP++). Per **TM-1** (`ARCHIVAL_TM1_CLUSTERING.md:38-40`) that class is a *wallet disclosure + coin-selection invariant* (→ **MS-5** / E′ coin selection), not a consensus mechanism. **Proof:** `fcmp.cpp::msw6_mixed_scheme_transaction_verifies` — a solo(1)+multisig(2) tx verifies, with a tamper control pinning the per-input signature binding. **Independent of `--features multisig`.** Own validation surface. |
-| **MSW-1** | **Bound family (narrowed).** Copy `bond_wire.rs:11` pattern: `use shekyl_crypto_pq::multisig::SINGLE_KEY_CANONICAL_LEN`. Kill duplicate `1996` literals in `shekyl-wire::transaction` / `cryptonote_config.h`; delete `tx_pqc_verify.cpp:49` shadow. Split jobs: `PQC_MAX_*_BLOB` = **generous DoS ceiling** (round number, documented headroom; bump needs consensus rationale); correctness = `MultisigKeyContainer::from_canonical_bytes` exact-length parse. Cross-seam KAT `n ∈ 1..=MAX` through both deserializers (absence produced F-1). Sized for **MAX=5**. |
-| **MSW-2** | Disjointness KAT — **length primary**, byte[2] secondary. Leaf left alone. |
-| **MSW-3** | `"output committed="` misattributions; MS-8 retirement record. |
-| **MSW-4** | `multisig_group_id` reads versions from `MultisigAddressPayload` (already has `version`/`group_version`/`spend_auth_version`) — plumbing gap, not container change. |
-| **MSW-5** | Disposition **(A)** — address/`group_id` intentional carrier; already built on the payload. KAT reserved `0x02`. |
-| **MSW-8** | **Delete `MultisigAddressPayload.hybrid_sign_pubkeys`.** Vestigial — constructed/validated/serialized/parsed, **never consumed** (`multisig_receiving.rs:163` populates leaf keys from KEM; address field unread). Solution C fossil. Free pre-genesis. Applies to D and E′ identically. ~2.6× address shrink is **this**, not E′. |
-| **MSW-G** | **DECIDED MAX=5** (2026-07-15 overhaul; withdraws same-day MAX=8). See §0.3. |
+| **MSW-6** ✅ **LANDED** | **Relax tx-wide `scheme_id` agreement** — the staking unblock. `expected_scheme = tx.pqc_auths[0].scheme_id` forced every input to match, so scheme-2 funding could not share a tx with a scheme-1 bond vin. **Change (option a — drop the agreement):** each input is still validated per-input (scheme ∈ `{1,2}`, blob length, signature); only the cross-input agreement is removed, in lockstep across both batteries — `tx_pqc_verify.{h,cpp}` + `blockchain.cpp` (C++) and `verifier.rs` (Rust twin). **Why (corrected — *not* "guards nothing", a §11.8 error):** the *stated* purpose (a cross-input scheme-downgrade defense) was vacuous — self-referential, and per-output scheme binding is the leaf hash `h_pqc = H(hybrid_public_key)` (`blockchain.cpp:3769`), not this check. Its *actual* effect was to make a tx that spends a solo (scheme 1) and a multisig (scheme 2) output together unrepresentable — a **cross-model linkage** (co-spending is the only proof of common control under FCMP++). That has **no externality** (one-time keys, FCMP++ proof over the whole tree — no other set shrinks, unlike a small ring poisoning decoys) and mirrors Shekyl's own opt-in `scheme_id=2` self-marking cost, so it is a *wallet coin-selection invariant* — which must land as a **blocking E′/MS-5 ship gate** (never cross key models, with a test, + disclosure), not a consensus mechanism. (**Not TM-1**, whose disposition rests on impossibility — it does not transfer to this case where the mechanism existed and worked.) **Proof:** `fcmp.cpp::msw6_mixed_scheme_transaction_verifies` — a solo(1)+multisig(2) tx verifies, with a tamper control pinning the per-input signature binding. **Independent of `--features multisig`.** Own validation surface. |
+| **MSW-1** ✅ **LANDED** | **Bound family (narrowed).** Copy `bond_wire.rs:11` pattern: `use shekyl_crypto_pq::multisig::SINGLE_KEY_CANONICAL_LEN`. Kill duplicate `1996` literals in `shekyl-wire::transaction` / `cryptonote_config.h`; delete `tx_pqc_verify.cpp:49` shadow. Split jobs: `PQC_MAX_*_BLOB` = **generous DoS ceiling** (round number, documented headroom; bump needs consensus rationale); correctness = `MultisigKeyContainer::from_canonical_bytes` exact-length parse. Cross-seam KAT `n ∈ 1..=MAX` through both deserializers (absence produced F-1). Sized for **MAX=5**. — **Landed:** `HybridPublicKey/Signature::CANONICAL_LEN` is the one canonical length; `SINGLE_KEY/SIG_CANONICAL_LEN` alias it; ceilings decoupled (16384 key / 32768 sig — the sig ceiling is **not** 16384, which would make a max-threshold spend unserializable) with compile-time `const _` ladder asserts; fossil `2 + N·LEN` deleted from `cryptonote_config.h`, `tx_pqc_verify.cpp`, `shekyl-wire`. **Bound-family sweep:** `multisig_receiving.rs:177` + `shekyl-address` ×3 also hardcoded `> 7` — deduped to `MAX_MULTISIG_PARTICIPANTS`, and the crypto-pq↔address caps are **pinned equal at compile time** (`const _` in `multisig.rs`; crypto-pq already depends on address). **F-1 catcher:** `shekyl_pqc_canonical_lens()` FFI + `fcmp.cpp::msw1_pqc_constants_match_rust` prove C++ config == Rust across the FFI (31/31 fcmp green); Rust cross-seam `msw1_container_lengths_and_roundtrip_over_all_n`. |
+| **MSW-2** ✅ **LANDED** | Disjointness KAT — **length primary**, byte[2] secondary. Leaf left alone. — **Landed:** `multisig::tests::msw2_length_primary_disjointness` — `1996 ∉` container lengths, `expected_blob_len` strictly increasing (injective) so distinct `n` never collide, a length-relabelled blob is rejected on the length cross-check (not the bounds check), and `byte[2] = m_required ≥ 1` ⊥ reserved-zero as the secondary separator. |
+| **MSW-3** ✅ **LANDED** (via MSW-6) | `"output committed="` misattributions; MS-8 retirement record. — **Landed:** the misattributed `"output committed="` string was already removed by **MSW-6** (#314); no such literal remains. **MS-8 retirement recorded** here: `group_id` verify is a no-op check → folded into MSW-2's disjointness reasoning; MS-8 stays RETIRED. |
+| **MSW-4** ✅ **LANDED** | `multisig_group_id` reads versions from `MultisigAddressPayload` (already has `version`/`group_version`/`spend_auth_version`) — plumbing gap, not container change. — **Landed:** `multisig_group_id_from_address(container, &MultisigAddressPayload)` sources `group_version` + `spend_auth_version` from the payload (crypto-pq→address dep); the bare `multisig_group_id` wrapper is now documented tests/fuzz-only (fabricates the axes from constants). KAT `msw4_group_id_reads_versions_from_address_payload`: the version bytes are load-bearing (spend_auth `0x01` vs `0x02` ⇒ distinct group_id), and a payload/container shape mismatch is `ParameterBounds`, never silently hashed. **FFI/engine rewiring to call `_from_address` is Track B (MS-*).** |
+| **MSW-5** ✅ **LANDED** | Disposition **(A)** — address/`group_id` intentional carrier; already built on the payload. KAT reserved `0x02`. — **Landed:** `multisig_address::tests::reserved_spend_auth_version_is_carried` — a reserved `spend_auth_version = 0x02` round-trips unchanged (never normalized or rejected), so forward-compatible readers (§8.2) can dispatch on it. |
+| **MSW-8** ✅ **LANDED** | **Delete `MultisigAddressPayload.hybrid_sign_pubkeys`.** Vestigial — constructed/validated/serialized/parsed, **never consumed** (`multisig_receiving.rs:163` populates leaf keys from KEM; address field unread). Solution C fossil. Free pre-genesis. Applies to D and E′ identically. ~2.6× address shrink is **this**, not E′. — **Landed:** field + its error variants (`SignPubkeyCount`/`SignPubkeyLength`) + serialize/parse loops removed; `PER_PARTICIPANT_LEN` collapses to KEM-only (1216), canonical payload `6 + N·1216` (`HEADER_LEN + N·PER_PARTICIPANT_LEN`). Zero external readers verified. `PQC_MULTISIG.md` §6.2 is authoritative. **Test-vector regen** (`PQC_TEST_VECTOR_002_MULTISIG.json`) landed as its own concern. |
+| **MSW-G** ✅ **BUILT (MSW-1)** | **DECIDED MAX=5** (2026-07-15 overhaul; withdraws same-day MAX=8). See §0.3. |
 
 #### Explicitly not changing
 
@@ -273,7 +273,7 @@ n>5 *and* zone/address usability are dispositioned.
 | **Bias** | Wide-reduce separately; not a consensus-constant driver. |
 | **Hostage fraction** | **Retracted** — `E[frozen]=p`, independent of n. |
 | **Reward zone** | Informs worst-case fee UX; does not set MAX under the 2f+1 derivation. |
-| **Address bech32m** | After **MSW-8**, payload is `10 + N×1216` (KEM only). N=2 ≈ QR-able. Does not set MAX. §15.3 registry **re-priced** — optimization, not prerequisite. |
+| **Address bech32m** | After **MSW-8**, canonical payload is `6 + N×1216` (KEM only; `HEADER_LEN + N×PER_PARTICIPANT_LEN`). N=2 ≈ QR-able. Does not set MAX. §15.3 registry **re-priced** — optimization, not prerequisite. |
 
 ---
 
@@ -396,7 +396,7 @@ discipline** (F-9: make reuse unrepresentable by type, not by review).
   fan-out remain visible. Same cost at N=3 as at N=5. Honest price;
   April priced it circularly ("negligible volume").
 - **Address size is not an E′ win.** The ~2.6× shrink
-  (`PER_PARTICIPANT_LEN` 3212 → 1216) is **MSW-8** — deleting the
+  (`PER_PARTICIPANT_LEN` 3200 → 1216) is **MSW-8** — deleting the
   vestigial address `hybrid_sign_pubkeys`. D gets it too. E′ address
   adds `B` + `Y_group` on top of N×1216; still smaller than today's
   fossil, still a file at N=5. §15.3 registry re-priced (below).
@@ -592,7 +592,7 @@ design's acceptance**, not implementation.
 | A1 | N=7 output lands; spend never serializes | **No** — R1-F-1 |
 | A2 | Present scheme-2 blob against scheme-1 leaf (or reverse) | **Armed by construction** — **length primary** (`1996 ∉` scheme-2 lengths); byte[2] secondary. Guard both with MSW-2 KAT. |
 | A3 | Spender lies about `group_id` | **Vacuous** — already in leaf; MS-8 retired |
-| A4 | Mix scheme 1/2 across inputs | **MSW-6 relaxed (landed).** Stated purpose of the tx-wide agreement was vacuous (self-referential; per-output binding is the leaf hash `h_pqc = H(blob)`). Actual effect: forecloses a self-inflicted solo/multisig cross-model linkage → per **TM-1** a wallet disclosure + coin-selection invariant (MS-5), **not** consensus. Length disjointness (MSW-2) still prevents cross-scheme confusion. |
+| A4 | Mix scheme 1/2 across inputs | **MSW-6 relaxed (landed).** Stated purpose of the tx-wide agreement was vacuous (self-referential; per-output binding is the leaf hash `h_pqc = H(blob)`). Actual effect: forecloses a solo/multisig cross-model linkage → a wallet coin-selection invariant (**no externality** + the opt-in `scheme_id=2` precedent; **not** TM-1), which must land as a **blocking E′/MS-5 ship gate**, **not** consensus. Length disjointness (MSW-2) still prevents cross-scheme confusion. |
 | A5 | Malicious DKG steers `group_id` | **No** — R1-F-4 |
 | A6 | Replay `sign_own` / nonce reuse | **No** — R1-F-9 |
 | A7 | Forge FROST `participant` index | **No** on FROST lineage |
@@ -920,6 +920,18 @@ prover handoff.
 
 Lean MS-5(a)/(c) for trait placement still applies; **"unblocked on
 lineage" is not "prover path ready."** Restate before Round 1 close.
+
+**DoD gate (inherited from MSW-6, non-negotiable).** MSW-6 dropped the
+*consensus* rule that forbade co-spending a solo (scheme-1) and a multisig
+(scheme-2) output; that guardrail's replacement lives **here**, and MS-5 is
+**not done** until it lands. Required: (1) `shekyl-tx-builder` coin selection
+**never crosses key models**, with a test that fails if it does; (2) the
+one-line cross-model disclosure ships (`MULTISIG_OPERATIONS.md` +
+`USER_GUIDE.md`: "a tx spending both solo and multisig outputs proves common
+control; the wallet will not construct one"). This is justified by no-externality
++ the opt-in `scheme_id=2` precedent (see §16.3), **not** TM-1 — but a working
+consensus mechanism was removed on the promise that this lands, so leaving it a
+soft follow-up would be the armed-gate / no-trigger shape one layer up.
 
 ### MS-6 — Transport — **OPEN (lean holds)**
 

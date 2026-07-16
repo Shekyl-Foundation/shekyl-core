@@ -52,6 +52,15 @@ pub struct HybridSignature {
 }
 
 impl HybridPublicKey {
+    /// Canonical wire length, defined once here where the encoding lives:
+    /// `version(1) || scheme(1) || reserved(2) || ed_len(4) || ed(32) ||
+    /// ml_len(4) || ml(1952)` = 1996. `from_canonical_bytes` is authoritative
+    /// (it rejects any other total via `cursor != bytes.len()`); this const is
+    /// the value the container layer (`multisig.rs`) and its DoS ceilings
+    /// derive from, so the length is never written twice.
+    pub const CANONICAL_LEN: usize =
+        1 + 1 + 2 + 4 + ED25519_PUBLIC_KEY_LENGTH + 4 + ML_DSA_65_PUBLIC_KEY_LENGTH;
+
     pub fn validate(&self) -> Result<(), CryptoError> {
         if self.ml_dsa.len() != ML_DSA_65_PUBLIC_KEY_LENGTH {
             return Err(CryptoError::InvalidKeyMaterial);
@@ -163,6 +172,12 @@ impl HybridSecretKey {
 }
 
 impl HybridSignature {
+    /// Canonical wire length, defined once here (same layout as
+    /// `HybridPublicKey::CANONICAL_LEN`, sig-sized) = 3385. The container
+    /// layer and its DoS ceilings derive from this const.
+    pub const CANONICAL_LEN: usize =
+        1 + 1 + 2 + 4 + ED25519_SIGNATURE_LENGTH + 4 + ML_DSA_65_SIGNATURE_LENGTH;
+
     pub fn validate(&self) -> Result<(), CryptoError> {
         if self.ed25519.len() != ED25519_SIGNATURE_LENGTH
             || self.ml_dsa.len() != ML_DSA_65_SIGNATURE_LENGTH

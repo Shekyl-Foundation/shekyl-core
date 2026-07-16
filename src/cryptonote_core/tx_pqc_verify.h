@@ -29,8 +29,9 @@ bool get_transaction_signed_payload(const transaction& tx, size_t input_index, s
 /// Each input is validated per-input (scheme_id ∈ {1,2}, key-blob length bounds,
 /// and the hybrid/multisig signature). MSW-6 (PQC_MULTISIG.md §16.3) withdrew the
 /// former tx-wide scheme_id agreement; the call site in blockchain.cpp carries the
-/// rationale (the foreclosed cross-model linkage is a wallet concern per TM-1, not
-/// a consensus rule).
+/// rationale (the foreclosed cross-model linkage has no externality and mirrors
+/// the opt-in scheme_id=2 self-marking cost, so it is a wallet coin-selection
+/// invariant — a blocking E′/MS-5 ship gate — not a consensus rule; not TM-1).
 bool verify_transaction_pqc_auth(const transaction& tx);
 
 } // namespace cryptonote

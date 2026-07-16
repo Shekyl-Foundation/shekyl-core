@@ -409,6 +409,38 @@ pub extern "C" fn shekyl_pqc_sign(
     }
 }
 
+/// MSW-1 cross-language consistency: the canonical PQC multisig wire lengths,
+/// owned by `shekyl-crypto-pq`. The C++ `cryptonote_config.h` twins are pinned
+/// equal to these by `tests/unit_tests/fcmp.cpp` — the only mechanism that
+/// catches C++ and Rust drifting from each other (F-1: each side internally
+/// consistent, disagreeing across the FFI, which no single-language assert sees).
+#[repr(C)]
+pub struct ShekylPqcCanonicalLens {
+    pub single_key_len: usize,
+    pub single_sig_len: usize,
+    pub spend_auth_pubkey_len: usize,
+    pub max_multisig_participants: usize,
+    pub max_public_key_blob: usize,
+    pub max_signature_blob: usize,
+}
+
+/// Return the canonical PQC multisig wire lengths (see `ShekylPqcCanonicalLens`).
+#[no_mangle]
+pub extern "C" fn shekyl_pqc_canonical_lens() -> ShekylPqcCanonicalLens {
+    use shekyl_crypto_pq::multisig::{
+        MAX_MULTISIG_PARTICIPANTS, PQC_MAX_PUBLIC_KEY_BLOB, PQC_MAX_SIGNATURE_BLOB,
+        SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN, SPEND_AUTH_PUBKEY_LEN,
+    };
+    ShekylPqcCanonicalLens {
+        single_key_len: SINGLE_KEY_CANONICAL_LEN,
+        single_sig_len: SINGLE_SIG_CANONICAL_LEN,
+        spend_auth_pubkey_len: SPEND_AUTH_PUBKEY_LEN,
+        max_multisig_participants: MAX_MULTISIG_PARTICIPANTS as usize,
+        max_public_key_blob: PQC_MAX_PUBLIC_KEY_BLOB,
+        max_signature_blob: PQC_MAX_SIGNATURE_BLOB,
+    }
+}
+
 /// Verify a PQC-authenticated message.
 ///
 /// Returns 0 on success, or a nonzero `PqcVerifyError` discriminant (1-11) on failure:

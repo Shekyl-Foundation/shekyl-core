@@ -27,8 +27,8 @@ use crate::kem::{
     SharedSecret,
 };
 use crate::multisig::{
-    rotating_prover_index, MultisigKeyContainer, MULTISIG_CONTAINER_VERSION,
-    SPEND_AUTH_VERSION_ED25519,
+    rotating_prover_index, MultisigKeyContainer, MAX_MULTISIG_PARTICIPANTS,
+    MULTISIG_CONTAINER_VERSION, SPEND_AUTH_VERSION_ED25519,
 };
 
 // ── KDF labels (must match PQC_MULTISIG.md §7.2 table) ─────────────────
@@ -160,7 +160,9 @@ pub struct MultisigOutputConstruction {
 /// `MultisigKeyContainer` with all spend-auth pubkeys.
 ///
 /// `kem_pubkeys`: N participant KEM public keys (in canonical participant order).
-/// `hybrid_sign_pubkeys`: populated by this function using per-participant KEM derivation.
+/// The returned container's leaf hybrid sign keys are derived here, per
+/// participant, from each KEM shared secret — the address never carries them
+/// (MSW-8: the vestigial address `hybrid_sign_pubkeys` field is deleted).
 #[allow(clippy::too_many_arguments)]
 pub fn construct_multisig_output_for_sender(
     n_total: u8,
@@ -174,7 +176,11 @@ pub fn construct_multisig_output_for_sender(
     if kem_pubkeys.len() != n_total as usize {
         return Err(CryptoError::InvalidKeyMaterial);
     }
-    if n_total == 0 || m_required == 0 || m_required > n_total || n_total > 7 {
+    if n_total == 0
+        || m_required == 0
+        || m_required > n_total
+        || n_total > MAX_MULTISIG_PARTICIPANTS
+    {
         return Err(CryptoError::InvalidKeyMaterial);
     }
 

@@ -258,9 +258,12 @@ prover Option D and is withdrawn for the E′ product path.)*
 
 ### 5.3 group_id derivation
 
-The 32-byte `group_id` binds the group's identity. **Code today**
-(`multisig_group_id`) hashes the **leaf** `MultisigKeyContainer`
-(ephemeral hybrid keys + spend-auth pubkeys), not address fields:
+The 32-byte `group_id` binds the group's identity. The code hashes the
+**leaf** `MultisigKeyContainer` (ephemeral hybrid keys + spend-auth pubkeys)
+for its key material — not address key fields — while sourcing the three
+version axes from the group's address payload
+(`multisig_group_id_from_address`, MSW-4; the bare `multisig_group_id`
+convenience form fabricates them from constants and is tests/fuzz-only):
 
 ```
 group_id = cn_fast_hash(
@@ -355,18 +358,22 @@ MultisigAddressPayload {
     // Option E′ additionally carries group B and Y_group (layout TBD
     // in E′ address freeze). Not shown in the D-era struct below.
 
-    checksum:            [u8; 4]   // Bech32m
+    // No stored checksum: integrity is the fingerprint (§6.3). A Bech32m
+    // string encoding (§6.1) appends the HRP + checksum at encode time; the
+    // checksum is derived from the data, never a payload field.
 }
 ```
 
 > **MSW-8 (2026-07-15):** `hybrid_sign_pubkeys: [HybridSignPubkey; n_total]`
 > is **deleted**. Vestigial Solution C fossil — constructed and parsed,
 > never consumed (`multisig_receiving.rs` derives leaf hybrid sign keys
-> from KEM shared secrets). `PER_PARTICIPANT_LEN` collapses 3212 → 1216.
+> from KEM shared secrets). `PER_PARTICIPANT_LEN` collapses 3200 → 1216.
 > Free pre-genesis. Applies to D and E′ identically.
 
-Total payload after MSW-8: `10 + N × 1216` bytes (plus E′ `B`/`Y` when
-those fields land).
+Canonical payload after MSW-8: `6 + N × 1216` bytes
+(`HEADER_LEN + N × PER_PARTICIPANT_LEN`, plus E′ `B`/`Y` when those fields
+land). This is the fingerprint preimage and the file contents; the Bech32m
+string form (§6.1) adds the HRP + checksum on top, which are not stored here.
 
 | N | After MSW-8 (bech32m chars, approx) |
 |---|---|
@@ -528,7 +535,7 @@ def construct_multisig_output(
         version:              0x01,
         n_total:              recipient_address.n_total,
         m_required:           recipient_address.m_required,
-        hybrid_sign_pubkeys:  ephemeral_sign_pks,
+        keys:                 ephemeral_sign_pks,  # HybridPublicKey per participant
         spend_auth_pubkeys:   spend_auth_pubkeys,
     }
 
@@ -1750,7 +1757,7 @@ version byte — not inherited silently into V3.2 from Option D.
 ### 15.3 Address size / group registry (re-priced 2026-07-15)
 
 **MSW-8** deletes vestigial address `hybrid_sign_pubkeys`
-(`PER_PARTICIPANT_LEN` 3212 → 1216). After that cut:
+(`PER_PARTICIPANT_LEN` 3200 → 1216). After that cut:
 
 | N | bech32m chars (approx) | note |
 |---|---|---|
@@ -1951,14 +1958,25 @@ shekyl-crypto-pq/src/multisig_receiving.rs
 > scheme-downgrade defense) was vacuous: `expected_scheme` was derived
 > from `pqc_auths[0]` itself (self-referential), and per-output scheme
 > binding is the leaf hash `h_pqc = H(hybrid_public_key)`, not this
-> check. Its *actual* effect was to foreclose a self-inflicted
+> check. Its *actual* effect was to foreclose a
 > solo(1)/multisig(2) **cross-model linkage** — under FCMP++ separate
 > txs are unlinkable, so co-spending is the only proof of common control
-> across key models. Per **TM-1**
-> ([`design/ARCHIVAL_TM1_CLUSTERING.md`](design/ARCHIVAL_TM1_CLUSTERING.md))
-> that self-inflicted class is a *wallet disclosure + coin-selection
-> invariant* (tracked to **MS-5** / E′ coin selection), not a consensus
-> mechanism. Each input is still validated per-input (scheme ∈ `{1,2}`,
+> across key models. That belongs in the wallet, not consensus, on two
+> grounds: **(1) no externality** — the two co-spent outputs are one-time
+> keys and the FCMP++ proof ranges over the whole tree, so no other
+> party's anonymity set shrinks (contrast a small ring, which poisons
+> others' decoys — the reason ring size *is* consensus); it is pure
+> self-harm; **(2)** Shekyl already permits exactly this opt-in class — a
+> `scheme_id=2` spend provably marks the spender, shipped as a disclosed
+> opt-in cost — so refusing an opt-in cross-model link while permitting
+> the multisig mark would be incoherent. It is therefore a **wallet
+> coin-selection invariant**, which must land as a **blocking E′ / MS-5
+> ship gate** (a coin-selection rule that never crosses key models, with a
+> test, + the disclosure line — see the FOLLOWUPS residue), not a consensus
+> mechanism. (**Not TM-1**: that disposition rests on the linkage being
+> *impossible to mechanize* — shared-operator personas are unlinkable by
+> construction — which does not transfer to a case where the mechanism
+> existed and worked.) Each input is still validated per-input (scheme ∈ `{1,2}`,
 > blob length, signature). Cross-scheme confusion remains prevented by
 > length disjointness (MSW-2); archival core never sees funding
 > `pqc_auths`.

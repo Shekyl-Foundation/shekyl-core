@@ -157,17 +157,26 @@ pub const UNLOCK_TIME_BLOCK_SENTINEL: u64 = 500_000_000;
 // the tx-level `pqc_auths` blobs may aggregate up to `MAX_MULTISIG_PARTICIPANTS` of
 // them. These are tighter than `READ_LEN_CAP` and are the values the daemon rejects
 // above, so the parser must match.
-/// Single hybrid public-key length (`PQC_HYBRID_SINGLE_KEY_LEN`).
+// MSW-1: shekyl-wire keeps a minimal runtime dependency surface (crypto-hash
+// only — crypto-pq is dev-only, by design), so these are retyped twins of the
+// canonical `shekyl_crypto_pq::multisig` values rather than imports. They are
+// pinned equal to the canonical source by the cross-crate test in
+// `tests/pqc_consts_match_crypto_pq.rs` — the Rust↔Rust analog of the C++↔Rust
+// cross-language KAT: the only mechanism that catches the two sides drifting.
+/// Single hybrid public-key length — twin of `SINGLE_KEY_CANONICAL_LEN`. Used
+/// for the exact bond-post `hybrid_public_key` / `bond_spend_pk` length checks.
 pub const PQC_HYBRID_SINGLE_KEY_LEN: usize = 1996;
-/// Single hybrid signature length (`PQC_HYBRID_SINGLE_SIG_LEN`).
+/// Single hybrid signature length — twin of `SINGLE_SIG_CANONICAL_LEN`. Used
+/// for the serve-credit `hybrid_signature` bound.
 pub const PQC_HYBRID_SINGLE_SIG_LEN: usize = 3385;
-/// Max multisig participants (`MAX_MULTISIG_PARTICIPANTS`).
-const MAX_MULTISIG_PARTICIPANTS: usize = 7;
-/// Max tx-level `pqc_auths` public-key blob (`PQC_MAX_PUBLIC_KEY_BLOB`).
-pub const PQC_MAX_PUBLIC_KEY_BLOB: usize =
-    2 + MAX_MULTISIG_PARTICIPANTS * PQC_HYBRID_SINGLE_KEY_LEN;
-/// Max tx-level `pqc_auths` signature blob (`PQC_MAX_SIGNATURE_BLOB`).
-pub const PQC_MAX_SIGNATURE_BLOB: usize = 2 + MAX_MULTISIG_PARTICIPANTS * PQC_HYBRID_SINGLE_SIG_LEN;
+/// Max tx-level `pqc_auths` public-key / signature blob — the DoS ceilings.
+/// Round, generous, DECOUPLED from MAX (correctness is the exact-length
+/// container parse in crypto-pq / verify_multisig, not these bounds). Twins of
+/// crypto-pq's `PQC_MAX_*_BLOB`. The old `2 + MAX·LEN` fossil formula is
+/// deleted — it rejected a legal 5-of-5 in the deserializer (F-1's exact site).
+pub const PQC_MAX_PUBLIC_KEY_BLOB: usize = 16384;
+/// See `PQC_MAX_PUBLIC_KEY_BLOB`.
+pub const PQC_MAX_SIGNATURE_BLOB: usize = 32768;
 
 /// The Bp+ weight clawback as a pure function of the padded output count — the C++
 /// `get_transaction_weight_clawback` (`cryptonote_format_utils.cpp:93`); `0` for ≤ 2

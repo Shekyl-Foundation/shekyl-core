@@ -5877,6 +5877,29 @@ sustainability is unaffected by the recalibration.
   Target: V3.1 (Track B) / V3.0 pre-genesis (Track A).
 
 - **PQC Multisig V3.0 wire: MSW-1…MSW-8 (pre-genesis, priority 1).**
+  **UPDATE 2026-07-16 — MSW-1/2/3/4/5/8 ✅ LANDED** (branch
+  `feat/msw-wire-max5`, atop MSW-6). MAX=5 across the whole surface; the F-1
+  fossil `2 + N·LEN` is deleted from all four sites (`cryptonote_config.h`,
+  `tx_pqc_verify.cpp`, `shekyl-wire`, and the stale `> 7` cap that also survived
+  in `multisig_receiving.rs` + `shekyl-address` ×3), with the crypto-pq↔address
+  caps pinned equal at compile time. Cross-language KAT
+  `fcmp.cpp::msw1_pqc_constants_match_rust` (via the `shekyl_pqc_canonical_lens`
+  FFI accessor) is green — the F-1 catcher across the boundary. Disjointness
+  (MSW-2), `group_id`←address plumbing (MSW-4), reserved-`0x02` carrier (MSW-5),
+  and the `hybrid_sign_pubkeys` deletion (MSW-8) all landed with KATs; MSW-3's
+  misattribution string was already cleared by MSW-6. Per-item closeouts in
+  `V3_1_MULTISIG_RUST_ENGINE.md` (wire-work table).
+  **Residual (port-track, deferred — rule 22 clause 3):** MSW-1 chose the
+  cross-language KAT as its F-1 catcher over "option 2" — *generating* the
+  `cryptonote_config.h` PQC block (`PQC_HYBRID_SINGLE_*_LEN`, `PQC_MAX_*_BLOB`,
+  `PQC_SPEND_AUTH_PUBKEY_LEN`, `MAX_MULTISIG_PARTICIPANTS`) from the Rust source
+  so the constants can have exactly one definition (compile-time single source,
+  not test-enforced agreement). *Blocker:* the `shekyl_ffi.h` header is
+  hand-authored (no cbindgen in the build bridge); a generator is its own
+  build-bridge change. *Target:* consensus port, alongside the `tx_pqc_verify`
+  structural-battery → Rust migration already tracked under "MSW-6 landing
+  residue". Until then the KAT + the compile-time `const _` ceiling/cap asserts
+  are the drift mechanism.
   **UPDATE 2026-07-15 overhaul:**
   - **MSW-6 ✅ LANDED (option a):** relaxed the tx-wide `scheme_id`
     agreement — dropped outright, in lockstep across the C++ verify
@@ -5885,9 +5908,11 @@ sustainability is unaffected by the recalibration.
     length + signature still enforced. **Withdrawal reason corrected**
     from "guards nothing" (a §11.8 error): the stated scheme-downgrade
     DiD was vacuous (self-referential; per-output binding is the leaf
-    hash), but its *effect* foreclosed a self-inflicted solo/multisig
-    cross-model linkage — per **TM-1** a wallet concern (→ MS-5), not
-    consensus. KAT `fcmp.cpp::msw6_mixed_scheme_transaction_verifies`
+    hash), but its *effect* foreclosed a solo/multisig cross-model
+    linkage — a wallet coin-selection concern on **no externality** + the
+    opt-in `scheme_id=2` precedent (**not** TM-1), which must land as a
+    **blocking E′/MS-5 ship gate**, not consensus. KAT
+    `fcmp.cpp::msw6_mixed_scheme_transaction_verifies`
     (solo+multisig tx verifies; tamper control). Staking unblock. Archival
     core never sees funding inputs; independent of `--features multisig`.
   - **MSW-G:** **DECIDED MAX=5** (2f+1 at f=2; withdraws same-day 8).
@@ -5914,19 +5939,70 @@ sustainability is unaffected by the recalibration.
   Fee / `MAX_INPUTS=128` → Track B. Target: **V3.0 pre-genesis**.
   **Track A code awaits explicit go-ahead.**
 
+- **Term hygiene: "rotation" is a §11.8 defect on a noun — rename to
+  "activation" (read-per-site, NOT grep-and-replace).** The word has two
+  consumers with incompatible meanings, and the second is a phantom the word
+  invented. Same root cause as F-1: a name that records something other than
+  what its consumer does.
+  - **`stake_engine.rs` (real):** a "rotation" is a wallet-local **activation**
+    — a single assignment moves the active slot, advances the `generation`, and
+    invalidates prior handles (`StaleHandle`, `!Clone`). It emits nothing and is
+    not an on-chain event. `:66-71` (atomic single-transition wipe-iff-ephemeral)
+    and `:390`, which literally glosses it: *"a rotation (an activation that
+    changes the active slot)."* ~61 "rotat" sites in this one file.
+  - **Threat / design docs (phantom):** "rotation" is read as a *linked
+    sequence of personas* — a continuity the chain does not encode.
+    `ArchivalBondPostVin` (`bond_wire.rs:205`) is `hybrid_public_key,
+    p_canonical_id, post_kind, bond_spend_pk, holdings, bonded_total_atomic,
+    bond_credit, bond_debit` — **no predecessor field, no continuity marker.**
+    One P unbonds; a different P bonds (new key, new `p_canonical_id`, new shard
+    set). Two unrelated transactions.
+  - **Cost so far — two phantom analyses reconstructed from the same noun:**
+    TM-1's simultaneous-K-persona matcher (built, gate-clean, AUC-valid —
+    rigorous work on a word; premise retracted, `ARCHIVAL_TM1_CLUSTERING.md` §0)
+    and a "rotation firewall" MSW-6-reversal request (retracted this week). Two
+    independent reviewers reconstructed the same nonexistent mechanism from the
+    same noun — the term did it, not carelessness.
+  - **Fix — a rename, but grep-and-replace is the wrong instrument** (it is what
+    produced the error): read each site and ask which consumer it means.
+    `stake_engine` sites mean *activation* → `activate` / `ActivatePersona`; drop
+    "rotation" entirely (nothing rotates — the active slot moves). Threat-doc
+    sites mean *linked sequence* → there is no mechanism to name; say "an
+    operator's successive, independent P's," no noun implying continuity.
+    `PRINCIPAL_STAKE_LIFECYCLE.md:389`'s "drain-and-rotate co-triggers GF-4 and
+    the persona-rotation network break" asserts a co-trigger between a real chain
+    event (the drain = a `bond_debit`) and a local `BTreeMap` assignment — split
+    the two.
+  *Blocker:* cross-cutting (stake_engine + ~10 threat/design docs); a dedicated
+  read-per-site pass, not a mechanical sweep. *Target:* naturally alongside the
+  MS-5 / E′ `state.rs` rework (same surface); the docs half can lead.
+
 - **PQC Multisig: MSW-6 landing residue.** The scheme_id relaxation
   landed subtractively; five items it deliberately did not fold in
   (each named blocker + target, rule 22 clause 3):
-  - **Cross-model co-spend: wallet disclosure + coin-selection
-    invariant.** MSW-6 removed the *consensus* enforcement that a tx
-    can't spend a solo (scheme 1) and a multisig (scheme 2) output
-    together; per **TM-1** the property doesn't vanish, it moves to the
-    wallet — a one-line disclosure (`MULTISIG_OPERATIONS.md` +
-    `USER_GUIDE.md`: "a tx spending both solo and multisig outputs proves
-    common control; the wallet will not construct one") **plus** a
-    coin-selection invariant that never crosses key models. Both wait on
-    the invariant being real. *Blocker:* **MS-5** (E′ coin-selection
-    surface). *Target:* V3.1 (Track B).
+  - **Cross-model co-spend: a BLOCKING E′ ship gate, not a soft item.**
+    MSW-6 removed the *consensus* enforcement that a tx can't spend a solo
+    (scheme 1) and a multisig (scheme 2) output together. That relaxation
+    is correct — but on **no externality** (the two outputs are one-time
+    keys and the FCMP++ proof ranges over the whole tree, so no other
+    party's anonymity set shrinks, unlike a small ring poisoning others'
+    decoys) **plus Shekyl's own opt-in precedent** (a `scheme_id=2` spend
+    already marks the spender as a disclosed opt-in cost; refusing an
+    opt-in cross-model link while permitting the multisig mark is
+    incoherent) — **not** TM-1, whose disposition rests on the linkage
+    being impossible to mechanize (it does not transfer to a case where the
+    mechanism existed and worked). **But (a) is only correct if the
+    guardrail lands.** A working consensus mechanism was deleted; its
+    replacement is not "tracked" — it is a **gate blocking MS-5 / E′'s
+    definition-of-done, with a test**: `shekyl-tx-builder` coin selection
+    MUST NOT cross key models, and the one-line disclosure
+    (`MULTISIG_OPERATIONS.md` + `USER_GUIDE.md`: "a tx spending both solo
+    and multisig outputs proves common control; the wallet will not
+    construct one") must ship with it. Otherwise MSW-6 traded a live
+    property for a promise and the next reviewer finds an empty row where
+    the guardrail was — the armed-gate/no-trigger shape, one layer up.
+    *Blocker:* **MS-5** coin-selection surface (E′). *Target:* **E′ ship
+    gate — blocks MS-5 DoD (Track B).**
   - **`cryptonote_tx_utils.cpp:671` mis-classification.** The
     `multisig_preassembled` heuristic reads `pqc_auths[0].scheme_id`
     only; a mixed tx whose input 0 is the scheme-1 vin mis-classifies.
@@ -5953,6 +6029,25 @@ sustainability is unaffected by the recalibration.
     `doc-literal-gate-allow` markers — already landed in #311 high-review,
     `52d4a2c8e`; the gate matches cap/fee literals, not stale *reasoning*,
     so the A4 wargame-row fossil was a manual catch, not a gate hit.)
+  - **C-2 is structural, not cosmetic — prose retypes numbers the code
+    derives, and the denylist gate cannot see it.** `af8e3fc` (the MSW-1
+    completion sweep) found the *container* key sized at the address's raw
+    `1984` B instead of `SINGLE_KEY_CANONICAL_LEN` = `1996`, and the *address*
+    per-participant at `3212` (= 1216 + 1996) instead of `3200` (= 1216 + 1984)
+    — the same two similar constants confused in opposite directions. **There
+    is no string to ban:** the figure is wrong because two constants were
+    swapped, a class the denylist `check_multisig_doc_literals.sh` structurally
+    cannot express. The fix is the same move `CANONICAL_LEN`-on-the-type made
+    for code — **derive the number, don't type it**: have prose *quote* the
+    derived figures, via a size table generated from
+    `MultisigKeyContainer::expected_blob_len` / `expected_sig_len` (+ the address
+    `PER_PARTICIPANT_LEN`), or a KAT that reads those consts and asserts the
+    doc's numbers, fail-closed. This subsumes the "extract MAX and compare"
+    framing above (that catches the cap; this catches the whole retyped-number
+    class). *Blocker:* a prose-quotes-source harness (doc generator or doc-KAT)
+    that reads the Rust consts — none is wired. *Target:* the same
+    consensus-port neighborhood as "option 2" (generate `cryptonote_config.h`'s
+    PQC block from Rust); same shape, do them together.
   - **F-7 (Round-1 blocker): `EngineSignerKind` associated items.** §3.1's
     "associated items only the multisig kind defines" is a compile error
     at implementation time — associated items must be defined by every
@@ -12289,9 +12384,10 @@ Retained for citation in review; each links to the canonical record.
   scheme-downgrade defense was vacuous (self-referential; per-output
   scheme binding is the `h_pqc` curve-tree leaf commitment — Attack 1 /
   §16.3 — not this check), and its *actual* effect (foreclosing a
-  self-inflicted solo/multisig cross-model linkage) is a wallet concern
-  per TM-1, not consensus. Per-input scheme ∈ `{1,2}` + blob length +
-  signature remain enforced.
+  solo/multisig cross-model linkage) is a wallet coin-selection concern on
+  **no externality** + the opt-in `scheme_id=2` precedent (**not** TM-1),
+  which must land as a **blocking E′/MS-5 ship gate**, not consensus.
+  Per-input scheme ∈ `{1,2}` + blob length + signature remain enforced.
 
 - **`on_get_curve_tree_path` RPC correctly reads reference-block state.**
   Fixed by computing `ref_leaf_count` at `reference_height` (subtracting
