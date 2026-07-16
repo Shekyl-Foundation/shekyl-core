@@ -124,7 +124,9 @@ pub use error::VerifyError;
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
 pub use k_cover::{KCover, K_COVER, K_COVER_PROVISIONAL};
 pub use path::{verify_leaf_index, verify_segment_path, SegmentPathOpening};
-pub use release_cooldown::{release_cooldown_elapsed, whole_record_last_served};
+pub use release_cooldown::{
+    release_cooldown_anchor_height, release_cooldown_elapsed, whole_record_last_served,
+};
 pub use reward_arithmetic::{
     curve_milli, g_age_milli, mul_div_floor, reward_share_floor, scarcity_milli, BandedCurveParams,
     WORK_MILLI_SCALE,

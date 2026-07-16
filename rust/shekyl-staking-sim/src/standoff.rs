@@ -90,10 +90,13 @@
 //! (announce↔bond, order-symmetric, inversion-eligible). The *exit* seam
 //! (terminal drain + recurring partial-unbond) is a separate standoff with its
 //! own envelope, modeled nowhere here: it is **one-sided** (collateral is not
-//! spendable before the 20_000-block release cooldown, so there is no
-//! inversion), and its latency is measured **from cooldown expiry, not from the
-//! unbond event** (the cooldown already pins the earliest spend deterministically;
-//! the standoff's job is to break that fixed-offset tell).
+//! spendable before the release cooldown of
+//! `RELEASE_COOLDOWN_EPOCHS × SETTLEMENT_EPOCH_BLOCKS` blocks — derived, not
+//! restated as an integer, per F-D6; the single home for that arithmetic is
+//! `shekyl_archival_retention::release_cooldown_anchor_height` — so there is
+//! no inversion), and its latency is measured **from cooldown expiry, not from
+//! the unbond event** (the cooldown already pins the earliest spend
+//! deterministically; the standoff's job is to break that fixed-offset tell).
 
 use serde::Serialize;
 
