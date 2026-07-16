@@ -465,7 +465,13 @@ partition event and takes a design round of its own.**
    **UPDATE 2026-07-16: done (§13) — `N_t(exit) = 10`, derived a-priori; rule and box
    unchanged; the repetition asymmetry routed to `σ_L`/S-2 as a named residual.**
 4. The X-1/X-2 sweep per §8; grading folds into the R4 joint grade (Gate-6 §12.8) — never
-   per-axis.
+   per-axis. **UPDATE 2026-07-16: the instrument landed** —
+   `shekyl-staking-sim --exit-standoff` (`src/exit_standoff.rs`), all five §8 items built to
+   the bar before any row ran; `EXIT_TARGET_ANON_SET` minted per §13.4; the §5.4 frozen rule
+   encoded once (`frozen_rule_window`, planning-box corners pinned as its KAT). Pre-seal
+   structural findings recorded in **§14** — the delivered X-1 cover is latency-gated
+   (`ρ_x · σ_L`), and the §5.3 lever must be priced by the observer-derived required `σ_L`,
+   not the spacing form.
 5. **The seal:** Phase 7.7 stressnet read of `(ρ_x, N_x, σ_L)` → the §5.4 frozen rule fixes
    `DEFAULT_EXIT_GAP_WINDOW` → provisional flag cleared (stressnet-entry prerequisite,
    `RELEASE_CHECKLIST.md`, beside `K_COVER`/PF-9).
@@ -680,6 +686,91 @@ post-seal `W` change is a §16.1 partition event, §7).
   constant's meaning is its consumer, and the two anchors must be able to move
   independently. Until the harness exists, this section is the exit anchor's single source;
   no dead constant is pre-provisioned.
+
+## 14. The §8 sweep instrument + pre-seal structural findings (2026-07-16)
+
+The pre-registered sweep landed as `shekyl-staking-sim --exit-standoff`
+(`rust/shekyl-staking-sim/src/exit_standoff.rs`): X-1 over the §5.1 planning-box corners in
+the WI-4 N-sweep form, X-2 over `N_x ∈ {3, 5, 8}` × one/two-anchor × swept `σ_L` × the three
+frozen-rule windows, the §8.3 shared-trigger negative control, the §8.4 thin-regime bias
+statistics, and the §5.3 lever-vs-queue costing — all against this doc's committed `r < 2`,
+worst row reported (`x1_rho1.58e-4_n20_sl1000`, `r = 18.49`), no post-hoc thresholds.
+`EXIT_TARGET_ANON_SET` is minted at this consumer per §13.4. Every `ρ_x`/`σ_L`/`N_x` row is
+a **swept pre-testnet assumption, not a measurement** — the Phase 7.7 read runs through this
+same instrument and `frozen_rule_window` (the §5.4 rule's single code home, planning-box
+corners pinned as its KAT) to seal the value.
+
+### 14.1 The observer, pre-registered
+
+Support-gated exact Bayes: the adversary sees the release height and the principal-side
+re-appearance at latency `L ~ U[0, σ_L]`, and holds every release whose latency support
+contains the re-appearance as equally likely — `P(link) = E[1/|support|]`, the optimal
+per-event score under the model, no heuristic discount. Committed in the module docs before
+any row ran (GF7 §5.1 ordering).
+
+### 14.2 Finding — delivered X-1 cover is latency-gated: `ρ_x · σ_L`, not `ρ_x · W`
+
+The nominal candidate set is everything in the window (`ρ_x · W` — what §5.1 sizes). But the
+principal-side re-appearance prunes it: only releases within one latency-support of the
+re-appearance survive, so the **delivered** support is `1 + ρ_x · σ_L`, W-independent
+(asserted as a harness test). The sweep shows it flatly: at the sparse corner with
+`N = 10`, the frozen rule gives `W = 60_000` and nominal cover 9.48, yet at
+`σ_L = 1_000` the delivered cover is 1.15 and `r = 9.27`. **The window buys de-quantization
+of the anchor and the X-3 merge; latency-gated confusability is bought by `σ_L`.** The §5.1
+bound and the §5.4 rule are unchanged — `W` is still necessary (a release outside the cover
+population's span has no candidates at all) — but `W` alone was never sufficient, which is
+what F-W2's lever reclassification said in cost terms and this observer proves in advantage
+terms.
+
+Consequence, priced: the exit clears `r < 2` at the §13 anchor iff `σ_L` satisfies the exact
+inversion `E[1/(1 + Pois(ρ_x σ_L))] ≤ 2/N_t` (`required_sigma_l` in the harness):
+`31_425` blocks (≈ 43.7 days at 120 s) at the sparse corner, `12_413` (≈ 17.2 days) at the
+planning instance, `1_613` (≈ 2.2 days) at the dense corner. The §5.3 spacing form
+`σ_L ≥ W / N_x` is **not the right price** — at the sparse corner it asks for 7 500–20 000
+where the observer requires 31 425 (under-delivers), at the dense corner it asks for
+2 500–6 667 where 1 613 suffices (over-pays). The lever-vs-queue costing table now runs on
+the observer-derived `required σ_L`, and at every swept corner the lever (paid by exiters
+only, mean `σ_L / 2`) undercuts the queue (`k × SEB / 2` paid by every exit) — the queue is
+reached only if the wallet discipline cannot plausibly hold the required spread, exactly the
+§5.3 reach condition.
+
+### 14.3 Finding — the X-2 trough is priced, and marginal confusability is not `r < 2`
+
+The §5.2 condition ("expected spacing ≤ σ_L") makes cohort members *confusable at all*; the
+sweep shows that under the exact-Bayes observer this delivers marginal advantage reduction,
+not the bar: `r < 2` at cohort size `N_x` needs `p_assign < 2/N_x`, i.e. the support must
+hold ≈ `N_x / 2` cohort members, which puts `σ_L` on the **`W/2` scale**, not the `W / N_x`
+scale. Of the 72 swept X-2 rows exactly one clears (`W = 20_000`, `N_x = 3`, one-anchor,
+`σ_L = 12_500` → `r = 1.80`). Rows are reported failing per GF7 §5.1 — and the disposition
+is the pre-committed one: this is the **decorrelation-redesign signal surface** the §5.3
+costing exists to arbitrate, not a bar move. What the trough actually needs (wide `σ_L`
+discipline vs. the W8 queue widening effective `σ_L` for everyone) is the seal-time decision,
+now with its numbers; the trough row grades in its own regime per WI-4, never averaged
+against the steady state.
+
+### 14.4 Certifications (the instrument can fail, and mixing is as predicted)
+
+- **X-3 coverage boundary:** measured cross-anchor overlap matches `(W − SEB)/W` at all
+  three windows (0.500 at `2 × SEB`, 0.667 at `3 × SEB`, 0.833 at `6 × SEB`) — the §5.2a
+  *mixes-at-all* claim certified, and only that; cross-anchor confusion grows with `σ_L`
+  (0.51 at `N_x = 8`, `σ_L = 12_500`, `W = 60_000`) but never approaches "merged".
+- **§8.3 negative control:** a draw-skipping cohort is caught as clustered
+  (`max_same_height_share = 1.000` vs `0.200` drawn). Recorded with it: the *assignment*
+  observer is provably blind to the skip (`r = 1.00` on the skipped world — all releases at
+  one height are symmetric), which is **why the control keys on clustering-detection**, as
+  §8.3 required.
+- **§8.4 thin regime:** gap positions at the trough row are unbiased (mean fractional
+  position 0.502, upper-half share 0.502) — no gap-toward-max analogue of the entry's
+  `1.86` finding under the one-sided draw.
+
+### 14.5 What changes and what does not
+
+Nothing in §5.4 moves: the rule, the sentinel, the conservatism percentile, and the anchor
+are all as frozen. What the sweep adds is the **required-`σ_L` surface** — the §5.3 joint
+constraint now has its exact form (`E[1/(1 + Pois(ρ_x σ_L))] ≤ 2/N_t` for X-1; support ≈
+`N_x/2` for the trough) in code beside the rule, so the Phase 7.7 read prices the lever and
+the queue mechanically. Grading folds into the R4 joint grade (Gate-6 §12.8) jointly with
+amount-band, holdings-stratum, and output-count — never per-axis.
 
 ## Related documents
 
