@@ -4,6 +4,30 @@
 
 ### Added
 
+- **docs: F-D4 review round 2 — F-W3/F-W4/F-W5: the window value is not
+  derivable pre-measurement; sentinel + frozen decision rule
+  (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §5.4/§11).** F-W3 (blocking):
+  the X-1 bound spans a ~19× planning box over the doc's own ranges
+  (`N_P ∈ 79–154`, `c ∈ [0.02, 0.2]`; corners `2_922`–`56_250`), so both
+  draft candidates (`2 × SEB`, `3 × SEB`) were points picked from a box,
+  not derivations — `ρ_x` is a pre-testnet unknown and the value cannot
+  precede the rate. Resolution mirrors the ratified `K_COVER` pattern
+  (M1 §9.3): `DEFAULT_EXIT_GAP_WINDOW` ships as a provisional sentinel
+  `0` with compile-time refusal in non-test builds, sealed by the
+  Phase 7.7 stressnet read of `(ρ_x, N_x, σ_L)` (`RELEASE_CHECKLIST.md`
+  entry added beside `K_COVER`/PF-9). A wallet default sizing an
+  anonymity set is soft-frozen (post-ship change = §16.1 partition trap
+  as a flag day), hence consensus-constant treatment. Frozen now: the
+  decision rule (smallest `SEB` multiple ≥ the X-1 bound), the F-W4
+  conservatism commitment (10th percentile of the joint `(N_P, c)` read
+  — no stacked marginal worst cases), and the F-W5 pin (exit-seam `N_t`
+  re-derived a-priori before the seal; the entry-inherited `10` is not
+  the exit constant). `2 × SEB`'s structural argument survives
+  independent of X-1. **`draw_exit_gap` unblocked against the sentinel**
+  — compiles for testnet under explicit arming, refuses to ship
+  unsealed. Gate-6 §12.6, index F-W/X-/Round-N rows, and the FOLLOWUPS
+  swan-2/W8 entry swept to match.
+
 - **docs: F-D4 rate-model review round 1 — F-W1/F-W2 resolved by
   amendment (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §10).** F-W1
   (blocking): the draft candidate `2 × SEB = 20_000` failed its own X-1
@@ -19,8 +43,9 @@
   always) on the shared capital-idle axis, neither pre-selected. Lemma,
   X-1 shape, X-2 form, and the one-window pin survived review. `N_t`
   citation disambiguated to `shekyl-staking-sim/src/standoff.rs:116`.
-  `draw_exit_gap` stays gated on review of the amendment. F-W family
-  registered.
+  F-W family registered. (The `3 × SEB` re-derivation was itself
+  superseded same-day by round 2's F-W3 sentinel reshape — see the entry
+  above.)
 
 - **docs: F-D4 a-priori exit-window derivation
   (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`, Gate-6 §12.6).** Committed
@@ -31,9 +56,9 @@
   cooldown delays and quantizes a synchronized cohort — no smear; the
   a-priori answer to swan-2/W8's mechanism question, wargame-confirmed
   arm pre-registered); the §5.3 queue predicate making "is a release
-  queue needed" decidable; candidate `DEFAULT_EXIT_GAP_WINDOW`
-  (conditional on `ρ_x`/`σ_L` reads; the draft's `2 × SEB` was corrected
-  to `3 × SEB` by review round 1 — see the F-W1/F-W2 entry above). Exit
+  queue needed" decidable; `DEFAULT_EXIT_GAP_WINDOW` (the draft's
+  committed candidate was retracted by review rounds 1–2 — sealed by
+  measurement per the F-W3 entry above). Exit
   window does not borrow the entry 600 — the derivation shows SEB-scale.
   Code gated on the rate-model adversarial review.
 
