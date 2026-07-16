@@ -1334,6 +1334,17 @@ sustainability is unaffected by the recalibration.
     itself remains open — it graduates the lemma from a-priori to empirical
     and pre-brackets the rates the stressnet read seals. Target unchanged:
     **V3.0** for the wargame; the seal is Phase 7.7.
+  - **UPDATE 2026-07-16:** the wargame's instrument exists and has run on
+    swept pre-testnet assumptions: `shekyl-staking-sim --exit-standoff`
+    (the F-D4 §8 pre-registered sweep — X-2 is the L17 cohort arm, one
+    obligation with this wargame). Its X-2 grid empirically confirms the
+    anti-smear lemma (skipped-draw cohorts land on ≤2 heights; caught by
+    the negative control) and **prices the lever-vs-queue question** (doc
+    §14): under the pre-registered exact-Bayes observer the trough cohort
+    needs `σ_L` on the `W/2` scale — not the `W/N_x` spacing form — so the
+    queue decision is now a mechanical read of the sealed `(ρ_x, N_x, σ_L)`
+    through `required_sigma_l`. What remains of the round is running the
+    same instrument on stressnet-measured rates instead of swept corners.
 
 - **Foundation treasury diversification — floor capacity must not be
   pro-cyclical (swan-2/W4, 2026-06-11; re-scoped swan-3/W12–W13; re-anchored

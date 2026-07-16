@@ -2028,7 +2028,16 @@ explicit arming, refuses to ship unsealed.
   2026-07-15 — open for build** (§12.5, `bond_post.rs:369`/`:627`); output-count
   discipline lineage-blind (an F-D1-sibling). UPDATE 2026-07-16: F-D3 **BUILT** against the
   F-D4 sentinel (§12.5) and F-W5 resolved (F-D4 §13: `N_t = 10` derived); the timing channel
-  enters the joint grade via the X-1/X-2 sweep, which is now unblocked.
+  enters the joint grade via the X-1/X-2 sweep, which is now unblocked. UPDATE 2026-07-16
+  (same day): the **§8 sweep instrument landed** (`shekyl-staking-sim --exit-standoff`,
+  `exit_standoff.rs`) — X-1 N-sweep + X-2 cohort/anchor/`σ_L` grid + X-3 coverage-boundary
+  grade + §8.3 negative control + thin-regime arm, all against the committed `r < 2`, worst
+  row reported. Pre-seal structural findings recorded at F-D4 §14: delivered X-1 cover is
+  latency-gated (`ρ_x · σ_L`, not `ρ_x · W`) and the §5.3 lever is priced by the exact
+  observer inversion (`required_sigma_l`), so the Phase 7.7 read seals both `W` (frozen
+  rule) and the lever-vs-queue decision through the same instrument. The timing channel's
+  joint-grade input exists; **what remains for R4 close is the joint grade itself**
+  (four axes, correlated-trigger on) plus F-D1/F-D2 arms.
 - **Joint grade (the round's exit bar, per §18.10 R-4 + CB-3):** the drain event is graded on
   **{amount-band ∧ claim/exit-timing ∧ holdings-stratum ∧ output-count}** jointly, correlated-trigger
   modeled on — never per-axis-multiplied. GF-10's claim-jitter mechanism (§11) folds in here; **R3
@@ -2060,6 +2069,27 @@ explicit arming, refuses to ship unsealed.
 ---
 
 ## Revision history
+
+- **2026-07-16 (F-D4 §8 sweep instrument landed; pre-seal findings recorded):** The
+  pre-registered X-1/X-2 sweep built and run as `shekyl-staking-sim --exit-standoff`
+  (`rust/shekyl-staking-sim/src/exit_standoff.rs`) — all five §8 items to the bar before any
+  row ran; `EXIT_TARGET_ANON_SET` minted at this consumer (F-D4 §13.4's concrete carrier);
+  the §5.4 frozen rule encoded once as `frozen_rule_window` with the planning-box corners as
+  its KAT. Observer pre-registered: support-gated exact Bayes under `L ~ U[0, σ_L]`. Two
+  structural findings, recorded at F-D4 §14: **(1)** delivered X-1 cover is latency-gated —
+  `ρ_x · σ_L`, W-independent (asserted as a harness test) — so the `σ_L` lever is priced by
+  the exact inversion `E[1/(1 + Pois(ρ_x σ_L))] ≤ 2/N_t` (31 425 / 12 413 / 1 613 blocks at
+  the sparse/planning/dense corners), not the §5.3 spacing form, which under-delivers at the
+  sparse corner and over-pays at the dense one; **(2)** marginal confusability is not
+  `r < 2` — the X-2 trough needs support ≈ `N_x/2` (`σ_L` on the `W/2` scale), 71/72 swept
+  rows fail and are reported failing per GF7 §5.1 (the pre-committed
+  decorrelation-redesign/costing surface, never a bar move). Certified: X-3 mixed fraction
+  measured = predicted `(W − SEB)/W` at all three windows (mixes-at-all only); the §8.3
+  negative control catches the skipped draw via clustering (and the assignment observer is
+  provably blind to it — why the control keys on clustering); thin-regime gap positions
+  unbiased. §12.8 GF-4 cell updated: the timing channel's joint-grade input exists; R4 close
+  now awaits the joint grade itself plus F-D1/F-D2 arms. Statuses swept: §12.8; index rows
+  95/96/98; FD4 §9 step 4 + new §14; CHANGELOG.
 
 - **2026-07-16 (F-W5 resolved — exit-seam `N_t` derived):** The F-D4 §5.4 rule-3 obligation
   discharged a-priori, before the sweep grades

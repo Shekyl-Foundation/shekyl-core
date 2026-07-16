@@ -4,6 +4,36 @@
 
 ### Added
 
+- **sim: the F-D4 §8 exit-seam sweep harness — X-1/X-2/X-3 arms landed
+  and run (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §8/§9 step 4; new
+  §14).** New `shekyl-staking-sim --exit-standoff`
+  (`src/exit_standoff.rs`), built to the bar before any row ran: X-1
+  steady-state arm over the §5.1 planning-box corners in the WI-4
+  N-sweep form (`r < 2` at every swept `N`, worst row reported); X-2
+  crisis-cohort arm (`N_x ∈ {3, 5, 8}`, one/two-anchor per the §3
+  quantization lemma, swept `σ_L`) whose two-anchor rows certify the
+  X-3 coverage boundary (measured cross-anchor overlap = predicted
+  `(W − SEB)/W` at all three windows — mixes-at-all, never "merged");
+  the §8.3 shared-trigger negative control (caught via
+  clustering-detection; the assignment observer is provably blind to
+  the skip, which is why the control keys on clustering); the §8.4
+  thin-regime bias arm (unbiased); and the §5.3 lever-vs-queue costing
+  on the shared capital-idle axis. The §5.4 frozen rule is encoded once
+  (`frozen_rule_window`, planning-box corners pinned as its KAT) and
+  `EXIT_TARGET_ANON_SET` is minted at this consumer (F-W5 §13.4
+  carrier). Observer pre-registered: support-gated exact Bayes under
+  `L ~ U[0, σ_L]`. Two structural findings recorded at §14, stated not
+  buried: delivered X-1 cover is **latency-gated** (`ρ_x · σ_L`,
+  W-independent — the window buys de-quantization and the X-3 merge;
+  confusability is bought by `σ_L`, priced by the exact inversion
+  `required_sigma_l`), and marginal confusability is not `r < 2` (the
+  X-2 trough needs `σ_L` on the `W/2` scale; 71/72 swept rows reported
+  failing per GF7 §5.1 — the pre-committed §5.3 costing surface, never
+  a bar move). The sim is a named approved consumer of
+  `exit-window-kat` (comments pinned in both `Cargo.toml`s; the binary
+  sits outside every production graph). The Phase 7.7 stressnet read
+  runs through this same instrument to seal `DEFAULT_EXIT_GAP_WINDOW`.
+
 - **docs: F-W5 resolved — the exit-seam `N_t`, derived a-priori
   (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §13).** Result: **`N_t(exit)
   = 10`** — numerically equal to the entry posture anchor by
