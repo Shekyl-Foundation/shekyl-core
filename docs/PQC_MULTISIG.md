@@ -1954,14 +1954,25 @@ shekyl-crypto-pq/src/multisig_receiving.rs
 > scheme-downgrade defense) was vacuous: `expected_scheme` was derived
 > from `pqc_auths[0]` itself (self-referential), and per-output scheme
 > binding is the leaf hash `h_pqc = H(hybrid_public_key)`, not this
-> check. Its *actual* effect was to foreclose a self-inflicted
+> check. Its *actual* effect was to foreclose a
 > solo(1)/multisig(2) **cross-model linkage** — under FCMP++ separate
 > txs are unlinkable, so co-spending is the only proof of common control
-> across key models. Per **TM-1**
-> ([`design/ARCHIVAL_TM1_CLUSTERING.md`](design/ARCHIVAL_TM1_CLUSTERING.md))
-> that self-inflicted class is a *wallet disclosure + coin-selection
-> invariant* (tracked to **MS-5** / E′ coin selection), not a consensus
-> mechanism. Each input is still validated per-input (scheme ∈ `{1,2}`,
+> across key models. That belongs in the wallet, not consensus, on two
+> grounds: **(1) no externality** — the two co-spent outputs are one-time
+> keys and the FCMP++ proof ranges over the whole tree, so no other
+> party's anonymity set shrinks (contrast a small ring, which poisons
+> others' decoys — the reason ring size *is* consensus); it is pure
+> self-harm; **(2)** Shekyl already permits exactly this opt-in class — a
+> `scheme_id=2` spend provably marks the spender, shipped as a disclosed
+> opt-in cost — so refusing an opt-in cross-model link while permitting
+> the multisig mark would be incoherent. It is therefore a **wallet
+> coin-selection invariant**, which must land as a **blocking E′ / MS-5
+> ship gate** (a coin-selection rule that never crosses key models, with a
+> test, + the disclosure line — see the FOLLOWUPS residue), not a consensus
+> mechanism. (**Not TM-1**: that disposition rests on the linkage being
+> *impossible to mechanize* — shared-operator personas are unlinkable by
+> construction — which does not transfer to a case where the mechanism
+> existed and worked.) Each input is still validated per-input (scheme ∈ `{1,2}`,
 > blob length, signature). Cross-scheme confusion remains prevented by
 > length disjointness (MSW-2); archival core never sees funding
 > `pqc_auths`.

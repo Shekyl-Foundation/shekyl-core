@@ -13,9 +13,12 @@
   (`shekyl-daemon-rpc/.../verifier.rs`); per-input scheme validity, key-blob
   length, and signature remain enforced. The agreement's stated
   scheme-downgrade purpose was vacuous (self-referential; per-output binding is
-  the `h_pqc` leaf hash), and its actual effect — foreclosing a self-inflicted
-  solo/multisig cross-model linkage — moves to the wallet per **TM-1**
-  (disclosure + coin-selection invariant, tracked to MS-5), not consensus.
+  the `h_pqc` leaf hash), and its actual effect — foreclosing a
+  solo/multisig cross-model linkage — belongs in the wallet on **no externality**
+  (one-time keys, FCMP++ proof over the whole tree — no other anonymity set
+  shrinks) plus Shekyl's own opt-in `scheme_id=2` self-marking precedent, **not**
+  TM-1; the compensating coin-selection invariant (never cross key models, with a
+  test) + disclosure line are a **blocking E′/MS-5 ship gate**, not consensus.
   Cross-seam KAT: `tests/unit_tests/fcmp.cpp::msw6_mixed_scheme_transaction_verifies`.
   See `PQC_MULTISIG.md` §16.3.
 
