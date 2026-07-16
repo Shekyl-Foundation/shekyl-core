@@ -1949,8 +1949,8 @@ trigger is catastrophic, `16→1.01`."
   two-property exit grade — uniformity, serial independence, no order axis). The anchor is
   F-D6-derived: `shekyl_archival_retention::release_cooldown_anchor_height` computes `H_cd`
   from `RELEASE_COOLDOWN_EPOCHS × SETTLEMENT_EPOCH_BLOCKS`, boundary-tested against
-  `release_cooldown_elapsed`. Open: the F-W5 exit-seam `N_t` re-derivation (F-D4 §9 step 3),
-  the X-1/X-2 sweep, and the seal.
+  `release_cooldown_elapsed`. F-W5 resolved same day (F-D4 §13: exit-seam `N_t = 10`, derived
+  not inherited). Open: the X-1/X-2 sweep and the Phase 7.7 seal.
 
 ### 12.6 F-D4 — a-priori exit window (activation FIRED with F-D3, 2026-07-15)
 
@@ -1984,7 +1984,11 @@ sentinel `0`, compile-time refusal in non-test builds) with the **decision rule 
 (smallest `SEB` multiple ≥ `max(` X-1 bound at the committed 10th percentile of the joint
 `(N_P, c)` stressnet read with exit-derived `N_t` per F-W5, `2 × SEB` `)`) and the value
 **sealed by the Phase 7.7 stressnet rate read** (`RELEASE_CHECKLIST.md` entry beside
-`K_COVER`/PF-9). F-W6 (round 3) — the `2 × SEB` structural argument made precise as **X-3**,
+`K_COVER`/PF-9). F-W5 resolved 2026-07-16 (derivation doc §13): **exit-seam `N_t = 10`** —
+equal to the entry anchor by derivation, not inheritance (every seam-variant fact lands on
+`W`, a graded arm, or its own regime row; the repetition asymmetry — the binding observed
+repeatedly, keyed to the public `P_id` — cannot be priced into a per-event anchor and routes
+to the `σ_L` discipline and the S-2 exposure ledger as a named residual). F-W6 (round 3) — the `2 × SEB` structural argument made precise as **X-3**,
 a rate-independent anchor-merge lower bound derived from the quantization lemma (cohort
 windows overlap iff `W > SEB`; at `1 × SEB` the adversary partitions the crisis cohort by
 exit height, invisible to X-1), folded into the rule with its cost stated: the queue
@@ -2023,8 +2027,8 @@ explicit arming, refuses to ship unsealed.
 - **GF-4 (value-out):** this section. F-D1 + F-D2 buildable now; F-D3 + F-D4 **gate FIRED
   2026-07-15 — open for build** (§12.5, `bond_post.rs:369`/`:627`); output-count
   discipline lineage-blind (an F-D1-sibling). UPDATE 2026-07-16: F-D3 **BUILT** against the
-  F-D4 sentinel (§12.5); the timing channel enters the joint grade via the X-1/X-2 sweep
-  once the F-W5 `N_t` re-derivation lands.
+  F-D4 sentinel (§12.5) and F-W5 resolved (F-D4 §13: `N_t = 10` derived); the timing channel
+  enters the joint grade via the X-1/X-2 sweep, which is now unblocked.
 - **Joint grade (the round's exit bar, per §18.10 R-4 + CB-3):** the drain event is graded on
   **{amount-band ∧ claim/exit-timing ∧ holdings-stratum ∧ output-count}** jointly, correlated-trigger
   modeled on — never per-axis-multiplied. GF-10's claim-jitter mechanism (§11) folds in here; **R3
@@ -2056,6 +2060,30 @@ explicit arming, refuses to ship unsealed.
 ---
 
 ## Revision history
+
+- **2026-07-16 (F-W5 resolved — exit-seam `N_t` derived):** The F-D4 §5.4 rule-3 obligation
+  discharged a-priori, before the sweep grades
+  (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §13): **`N_t(exit) = 10`** — numerically equal to
+  the entry posture anchor **by derivation, not inheritance**. Method: the committed bar is
+  WI-4's N-invariant ratio bound (`r < 2` per regime row), and `N_t` is only the posture
+  anchor the window is sized to deliver; each seam-variant structural fact was examined for
+  whether it moves the anchor — cover class (moves `ρ_x`, hence `W`; already spent),
+  one-sidedness (moves `W` and a graded §8 arm), the trough cohort (its own X-2 regime row
+  per WI-4 regime-splitting; never averaged into steady state) — and none moves the anchor's
+  own determinants (protected secret, bar, advantage semantics), which are seam-invariant.
+  The one real asymmetry — the binding observed **repeatedly, keyed to the public `P_id`**
+  (recurring drops + terminal drain + entry∩exit intersection) — provably cannot be priced
+  into a per-event anchor (intersection collapses geometrically; a finite `N_t` cannot hold
+  a lifetime floor, and inflating it re-imports F-W3 via the pre-testnet `E[m]`), so it
+  routes to the `σ_L` re-appearance discipline (which widens the per-observation candidate
+  fraction — the base of the geometric collapse) and the S-2 exposure ledger (R5), as a
+  named residual with reversion criteria. Consequences: the §5.4 rule's X-1 term is
+  `9/ρ_x`; the §8.1 arm grades at `10` and carries the WI-4 N-sweep form; the exit anchor
+  is minted as its own constant (`EXIT_TARGET_ANON_SET`) when the sweep harness lands —
+  numerically equal, independently movable. The `N_t = 9 ⇒ 20_000 exact` re-cut trap noted
+  at F-W5's minting did not bind: `9` has no model support in the derivation. Statuses
+  swept: §12.5 BUILT block, §12.6, §12.8; index F-W row; FD4 doc §5.4/§8.1/§9/§11.
+  Docs-only.
 
 - **2026-07-16 (F-D3 built against the sentinel; F-D6 done):** `draw_exit_gap` landed in
   `shekyl-standoff/src/exit.rs` per §12.5 — one-sided through the shared unbiased

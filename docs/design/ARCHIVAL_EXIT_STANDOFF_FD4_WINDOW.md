@@ -354,6 +354,10 @@ prerequisite).
    `N_t` must be re-derived a-priori and taken as it comes — **before** the seal, because the
    dependence is not innocent (`N_t = 9` would make `20_000` exact at the draft's planning
    instance, which is precisely the re-cut temptation rule 2 exists to foreclose).
+   **RESOLVED 2026-07-16 (§13): `N_t(exit) = 10`** — equal by derivation, not inheritance;
+   every seam-variant fact lands on `W`, a graded arm, or its own regime row, and the one
+   real asymmetry (repetition keyed to the public `P_id`) cannot be priced into a per-event
+   anchor (§13.3 — routed to `σ_L` and the S-2 exposure ledger).
 4. **The §5.3 joint-constraint costing**, already committed: the `σ_L` lever priced against
    the queue on the shared capital-idle axis; the cheaper satisfier wins.
 
@@ -412,8 +416,8 @@ partition event and takes a design round of its own.**
 ## 8. What the sweep must include (pre-registered, so the harness is built to the bar)
 
 1. **X-1 arm:** lone exit against swept `ρ_x`; grade `r` against `< 2` at the exit-derived
-   `N_t` (F-W5 — the re-derivation must land before this arm runs; the entry-inherited `10` is
-   not the grading constant).
+   `N_t` (F-W5 — **resolved, §13: `N_t(exit) = 10`, derived not inherited**; the arm carries
+   the WI-4 N-sweep form — `r < 2` at every swept `N`, not only the anchor, per §13.4).
 2. **X-2 arm (the L17/W8 wargame — one obligation with this doc):** synchronized cohort
    (`N_x ∈ {3, 5, 8}`, both one-anchor and two-anchor splits per §3), swept `σ_L`; grade
    intra-cohort assignment advantage. This arm empirically answers smear-vs-delay and supplies
@@ -454,6 +458,8 @@ partition event and takes a design round of its own.**
    `release_cooldown_elapsed` so the wallet's schedule and the consensus predicate cannot
    disagree; the `20_000` doc fossil in `shekyl-staking-sim/src/standoff.rs` is purged.
 3. The exit-seam `N_t` re-derivation (F-W5) — before the sweep grades and before the seal.
+   **UPDATE 2026-07-16: done (§13) — `N_t(exit) = 10`, derived a-priori; rule and box
+   unchanged; the repetition asymmetry routed to `σ_L`/S-2 as a named residual.**
 4. The X-1/X-2 sweep per §8; grading folds into the R4 joint grade (Gate-6 §12.8) — never
    per-axis.
 5. **The seal:** Phase 7.7 stressnet read of `(ρ_x, N_x, σ_L)` → the §5.4 frozen rule fixes
@@ -521,6 +527,7 @@ corrected a point *within* the same mistake. Three findings, resolved by the §5
   taken as it comes, before the seal** — the dependence is not innocent (`N_t = 9` would make
   `20_000` exact at the round-1 instance), which is exactly why it settles before the value,
   not after. Owed at §9 step 3; the §8.1 sweep arm grades at the exit-derived `N_t`.
+  **RESOLVED 2026-07-16 — §13: `N_t(exit) = 10`, by derivation.**
 - **Survives round 2:** the `2 × SEB` **structural** argument (two-anchor merging,
   adjacent-epoch pooling, natural `k = 2`) — good and entirely independent of X-1; it may win
   at the seal on structure plus a real measurement, it just cannot be smuggled in as
@@ -566,6 +573,109 @@ is **derivable** — from the §3 lemma alone, with no rate input (F-W6).
 The sentinel, the F-W4 percentile commitment, and the F-W5 `N_t` obligation are untouched by
 this round. `draw_exit_gap` remains unblocked; the seal rule it refuses against is now the
 two-term form.
+
+## 13. F-W5 resolution (2026-07-16) — the exit-seam `N_t`, derived a-priori
+
+**Result: `N_t(exit) = 10` — numerically equal to the entry posture anchor, by derivation,
+not inheritance.** The trap this section was ordered ahead of the sweep to foreclose (§5.4
+rule 3): `N_t = 9` would have made the round-1 planning instance's `20_000` exact. The
+derivation below was run against the exit adversary's structure with the `W`-consequences
+blinded; `9` has no model support anywhere in it, and the result leaves the §5.1 planning
+box and the §5.4 rule exactly as frozen (the X-1 term reads `(10 − 1)/ρ_x`).
+
+### 13.1 What `N_t` is at the exit consumer — and what it is not
+
+The committed privacy bar is **not** `N_t`. It is WI-4's ratio bound `r < 2` per regime row
+(`ARCHIVAL_BOND_WI4_MEASUREMENT.md`): adversary advantage strictly under twice blind
+guessing, a bound whose *meaning* is N-invariant — committing an absolute `p` instead would
+silently tighten or loosen the claim as realized cover moves with traffic. §8 arm 5 already
+commits this doc's arms to that bar. `N_t` is the **posture anchor**: the steady-state cover
+the window is *sized to deliver* (the §5.4 rule's X-1 term) and the point at which the
+absolute instance of the ratio bound is evaluated (`P(link) < 2/N_t`; the entry instance is
+`< 0.20` at `N = 10`). Two consumers in this doc: the frozen rule's `(N_t − 1)/ρ_x` term and
+the §8.1 grading arm.
+
+### 13.2 The derivation — every seam difference, examined for whether it moves the anchor
+
+The anchor's determinants are the protected secret, the bar, and the advantage semantics.
+Examine each seam-variant structural fact and ask where it lands:
+
+- **The protected secret is identical.** Both seams guard the persona↔principal binding; a
+  successful link at either endpoint attributes the persona's **entire** record to the
+  principal (T-A1's lifetime observation window applies at both ends — there is no
+  "prospective-only" entry harm or "retrospective-only" exit harm; the binding is one fact).
+  The per-event absolute instance the anchor encodes (`< 0.20` per targeted persona per
+  regime row) is a posture about that secret and the adversary's excess over blind guessing
+  — seam-invariant.
+- **Cover class differs — it moves the rate, not the count.** Entry cover is funding-shaped
+  background (class-heterogeneous, high-rate); exit cover is exit-class events only (the
+  `Unbond`/drop is publicly typed, so only other exiters are candidates). Under the
+  `mean(1/set)` model the set counts true candidates in both cases; the class difference is
+  why `ρ_x ≪` the funding rate and therefore why `W ≫ 600` (the §5.1 box) — it is already
+  fully spent on `W`. Cover-*quality* differences (are exit-class decoys easier to rule
+  out?) are what the WI-4 likelihood-ratio stress arm and the N-sweep pin (`r < 2` at
+  **every** swept `N`, not only the anchor) exist to grade; pricing them into the anchor
+  a-priori would double-count a measured quantity.
+- **One-sidedness moves `W`, not `N_t`.** The one-sided window accumulates background over
+  width `W`, not `2W` — an input the X-1 formula already carries — and its thin-regime
+  gap-toward-max bias is a pre-registered graded residual (§8 arm 4). Nothing about
+  ordering-prior availability changes how much cover constitutes the posture instance.
+- **The trough cohort is its own regime row.** `N_x ≈ 3–8 < 10` in a crisis — but WI-4's
+  regime-splitting discipline grades low-`N` rows separately and forbids averaging them
+  into the steady-state row (a low-`N` pass is a weak absolute guarantee by construction).
+  `N_t` anchors the steady-state row only; X-2 owns the trough.
+
+Every seam-variant fact lands on `W`, on a graded arm, or on its own regime row. The
+anchor's own determinants are seam-invariant; the anchor carries at `10`. That is the
+derivation — not "the entry had 10," but "each candidate mover was examined and none moves
+the anchor."
+
+### 13.3 The one real asymmetry — repetition — and why it cannot be priced into `N_t`
+
+The exit seam observes the binding **repeatedly, keyed to the public `P_id`**: each
+recurring `HoldingsUpdate`-drop, the terminal drain, and (for the binding as a whole) the
+entry event itself — the adversary can intersect candidate sets across all of them. This is
+the genuine structural difference from the single-shot entry seam, and it is exactly the
+factor that **cannot** be bought with window width:
+
+- **Intersection collapses geometrically.** With per-event principal-side candidate
+  fraction `q`, expected decoy survivors after `m` observations `≈ N_pop × q^m`. Holding
+  any fixed lifetime floor against growing `m` through per-event cover alone requires the
+  per-event set to approach the entire population — no finite `N_t` delivers it.
+- **An inflated anchor would re-import F-W3.** The union-bound inflation (`N_t ≈
+  10 × (1 + E[m])`) requires `E[m]` — per-persona lifetime exit-event count, a pre-testnet
+  unknown (`c ×` lifetime) — a number picked from a box, wearing a constant's clothes. And
+  it pays real cost for no defense: `W` scales linearly in `N_t` (capital lockup, §6) while
+  the intersection collapse is geometric.
+- **Per-event composition is not per-axis multiplication.** Naively multiplying per-event
+  linkage across events is the same category error the R4 joint grade exists to forbid
+  (the CB-3 / WI-4 per-axis-multiplication error) — composition across observations of one
+  binding is a *joint* question.
+
+The repetition exposure therefore **routes where it can be defended**: the principal-side
+re-appearance discipline (`σ_L` — what it widens is precisely each observation's
+principal-side candidate fraction `q`, the base of the geometric collapse) and the **S-2
+exposure ledger** (R5 cross-layer sign-off), whose scope is composition across events and
+across seams (entry ∩ exit on the same `P_id`). Named residual, rule-21 shape — **reopen
+criterion:** the S-2 composition model, when it lands, shows the per-event anchor (not `q`)
+is the binding constraint on lifetime exposure; **re-evaluation shape:** re-derive this
+section against that model in a design round of its own, before any window re-seal (a
+post-seal `W` change is a §16.1 partition event, §7).
+
+### 13.4 Consequences
+
+- The §5.4 rule's X-1 term is `(10 − 1)/ρ_x = 9/ρ_x`. The §5.1 planning box is unchanged.
+- The §8.1 arm grades at `N_t = 10` **and carries the WI-4 N-sweep form** (`r < 2` at every
+  swept `N`) — if the exit's score-distribution tail is fatter than the entry's (one-sided
+  draw, class-homogeneous cover), the arm fails there and the disposition is
+  decorrelation-redesign, never a bar move (GF7 §5.1). The derivation is falsifiable by its
+  own sweep.
+- **The constant gets its own name at its consumer.** The exit anchor is minted as
+  `EXIT_TARGET_ANON_SET` when the §8 sweep harness lands (concrete carrier: the harness PR),
+  distinct from the sim's entry `TARGET_ANON_SET` even though numerically equal — a
+  constant's meaning is its consumer, and the two anchors must be able to move
+  independently. Until the harness exists, this section is the exit anchor's single source;
+  no dead constant is pre-provisioned.
 
 ## Related documents
 

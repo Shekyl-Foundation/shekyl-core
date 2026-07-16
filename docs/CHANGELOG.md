@@ -4,6 +4,32 @@
 
 ### Added
 
+- **docs: F-W5 resolved — the exit-seam `N_t`, derived a-priori
+  (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §13).** Result: **`N_t(exit)
+  = 10`** — numerically equal to the entry posture anchor by
+  derivation, not inheritance. The committed bar is WI-4's N-invariant
+  ratio bound (`r < 2` per regime row); `N_t` is only the posture
+  anchor the window is sized to deliver. Each seam-variant structural
+  fact was examined for whether it moves the anchor: cover class moves
+  `ρ_x` (already spent on `W`), one-sidedness moves `W` and a graded §8
+  arm, the trough cohort is its own X-2 regime row (WI-4 regime
+  splitting — never averaged into steady state); the anchor's own
+  determinants (protected secret, bar, advantage semantics) are
+  seam-invariant. The one real asymmetry — the persona↔principal
+  binding observed repeatedly, keyed to the public `P_id` (recurring
+  drops + terminal drain + entry∩exit intersection) — provably cannot
+  be priced into a per-event anchor (intersection collapses
+  geometrically; inflating `N_t` re-imports F-W3 via the pre-testnet
+  `E[m]`) and routes to the `σ_L` re-appearance discipline and the S-2
+  exposure ledger as a named residual with reversion criteria. The
+  §5.4 rule's X-1 term reads `9/ρ_x`; the §8.1 arm grades at `10` and
+  carries the WI-4 N-sweep form; `EXIT_TARGET_ANON_SET` is minted at
+  the sweep-harness PR (numerically equal to the sim's entry constant,
+  independently movable). The `N_t = 9 ⇒ 20_000 exact` re-cut trap
+  did not bind — `9` has no model support in the derivation. Gate-6
+  §12.5/§12.6/§12.8, index F-W/Round-N rows, and the release-checklist
+  seal entry swept.
+
 - **standoff: `draw_exit_gap` against the F-D4 provisional sentinel
   (Gate-6 §12.5 F-D3; `ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §9 step 2).**
   New `shekyl-standoff/src/exit.rs`: the one-sided exit-seam draw through
