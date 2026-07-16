@@ -358,7 +358,9 @@ MultisigAddressPayload {
     // Option E′ additionally carries group B and Y_group (layout TBD
     // in E′ address freeze). Not shown in the D-era struct below.
 
-    checksum:            [u8; 4]   // Bech32m
+    // No stored checksum: integrity is the fingerprint (§6.3). A Bech32m
+    // string encoding (§6.1) appends the HRP + checksum at encode time; the
+    // checksum is derived from the data, never a payload field.
 }
 ```
 
@@ -368,8 +370,10 @@ MultisigAddressPayload {
 > from KEM shared secrets). `PER_PARTICIPANT_LEN` collapses 3200 → 1216.
 > Free pre-genesis. Applies to D and E′ identically.
 
-Total payload after MSW-8: `10 + N × 1216` bytes (plus E′ `B`/`Y` when
-those fields land).
+Canonical payload after MSW-8: `6 + N × 1216` bytes
+(`HEADER_LEN + N × PER_PARTICIPANT_LEN`, plus E′ `B`/`Y` when those fields
+land). This is the fingerprint preimage and the file contents; the Bech32m
+string form (§6.1) adds the HRP + checksum on top, which are not stored here.
 
 | N | After MSW-8 (bech32m chars, approx) |
 |---|---|

@@ -6,9 +6,11 @@
 //! Multisig address encoding, fingerprint, and provenance (PQC_MULTISIG.md SS6).
 //!
 //! Multisig addresses use the `shekyl1m` / `shekyltest1m` / `sshekyl1m` HRP
-//! family. Due to their size (10 + N * 1216 bytes), they are file-based:
-//! the canonical payload is written to a file and transferred via an
-//! authenticated channel.
+//! family. Due to their size, they are file-based: the canonical payload
+//! (`HEADER_LEN + N * PER_PARTICIPANT_LEN` = 6 + N * 1216 bytes) is written to a
+//! file and transferred via an authenticated channel. Integrity is the
+//! fingerprint (below), not a stored checksum; a Bech32m string form appends
+//! the HRP + checksum at encode time, which are not part of this payload.
 //!
 //! The fingerprint is `cn_fast_hash(canonical(MultisigAddressPayload))`.
 

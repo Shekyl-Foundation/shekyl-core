@@ -223,8 +223,8 @@ At 25% multisig adoption with average N=5:
 
 ### 3.4 Address size
 
-Addresses are file-based (§6). Typical sizes (post-MSW-8: the payload
-carries KEM pubkeys only, `10 + N × 1216` B; see `PQC_MULTISIG.md` §6.2):
+Addresses are file-based (§6). Typical sizes (post-MSW-8: the canonical
+payload carries KEM pubkeys only, `6 + N × 1216` B; see `PQC_MULTISIG.md` §6.2):
 
 | N | Bech32m chars | File size |
 |---|---|---|
