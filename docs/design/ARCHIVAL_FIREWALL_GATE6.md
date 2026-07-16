@@ -28,7 +28,9 @@
   graded PROVISIONAL-PASS (`r = 1.86`); GF-4 (value-out) drafted as one event with three co-triggered
   channels graded jointly: **F-D1** drain-amount taint-carve (complete pre-code pin — (a)+strip),
   **F-D2** UI-default, **F-D3/F-D4** one-sided cooldown-anchored exit standoff (**FSM gate FIRED
-  2026-07-15** — §12.5; open for build), **F-D5** → §14.4, **F-D6** anti-drift. GF-10 (R3) folds into
+2026-07-15** — §12.5; F-D4 derivation committed + reviewed rounds 1–3; **F-D3 BUILT 2026-07-16**
+  against the F-D4 sentinel — `draw_exit_gap`, F-D6-derived anchor; sealing owed at Phase 7.7),
+  **F-D5** → §14.4, **F-D6** anti-drift (**DONE 2026-07-16**, §12.7). GF-10 (R3) folds into
   the joint grade. The rebond/unbond FSM blocker is discharged (landed PR #303/#307).
 - **Round 5 planned** — the cross-layer soundness sign-off for Stage 3 (S-2 exposure ledger + S-3
   exit/value-seam adversary sim, §10.12).
@@ -380,7 +382,7 @@ carried; R2 the same).
 | **1** | HKDF/`P_id` wire + crypto layer hooks | **Closed (2026-06-13)** — §9 GF-1 dual-key verifier contract resolved; GF-2 dual-scan enforcement made architectural; reviewer sign-off (§9.8). **Carry discharged (2026-07-11 reconciliation):** `ARCHIVAL_P_DERIVE_V1` KAT + `archival_p` module **landed** (Bond-PR 0 #152; `archival_p.rs` + `kat_archival_p_derive_v1.rs`, seven §9.3 labels incl. `bond_spend_*` verified at source). C-1 emission vin ML-DSA equality check **landed** (#277). §7 checklist reconciled to landed state. |
 | **2** | Network + transport (L16 → production shape) | **Closed (2026-07-11) — §10; closure disposition §10.13.** Rendezvous path specified; seeding relaxation bounded. **Entry gates (all dispositioned):** challenge-response Levin class → anonymity-routable set (GF-3, §10.4); pre-join backing-presentation transport (GF-5, §10.5); Arti HS-hosting capability confirmed, at-source pin carried (GF-12, §10.3); `P`-tx wire-size fingerprint characterization + dummy/fragmentation policy (GF-6, §10.6); HS key lifecycle `p_slot`-bound + seed-derived (GF-9, §10.7). **Exit dispositions (§10.11, passes 1–4):** bonded-verifier challenges, broadcast announce, `P`↔principal circuit/guard isolation (§10.9), pure-rendezvous + I2P-closed. **Carries (§10.13, rule-21):** at-source Arti pin → transport PR; dummy/frag tuned ratio → testnet; **GF-9 HS-id HKDF label → §9.3 amendment (armed: not yet in derivation; dot-vs-hyphen format flag)**; announce↔anchor + cadence timing → R3. Transport code partial-landed (2d-2: SP-T1 #204/#209, SP-T4a #254 — inert). |
 | **3** | Timing + rotation + `W` / epoch-length joint pin | **Designed + adversarial pass run (2026-07-11) — §11; closes on the R4/GF-4 joint grade (§11.7).** **GF-10** pinned as *mechanism + structural window* (uniform-independent claim-broadcast-height draw via audited `bounded_uniform`; floor = `h_close + reorg_depth(720)`, ceiling = `(E_oldest+W)·SEB − submit_guard`; a-priori `S_min ≥ SEB`); **numeric width routed to R4/GF-4 CB-3 joint grade** (not standalone — per-axis error avoided). Draw + scheduler **unbuilt** (verified) → pinned pre-code, M1-armed. Rotation leg ratified (T-A1 timeline non-channel; network leg §10.7/§10.9); R2 timing hand-forwards resolved (announce↔anchor = entry standoff; emission-cadence = GF-10). Adversarial pass (§11.8) found no break — four findings folded as re-pins, one retraction (max-age misread). Two frame/pass assumptions overturned at source (epoch-crossing §11.4; max-age semantics §11.8). |
-| **4** | Output + bond-funding hygiene (**recurring** — rebond/unbond at genesis) | **Drafted (2026-07-11) — §12, the drain-event firewall.** **GF-7 (funding-in) built + graded PROVISIONAL-PASS** (`r = 1.86`, local-daemon; standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) provisional) — not an open design question. **GF-4 (value-out) drafted:** the drain is one event, three co-triggered channels graded jointly (§12.1). **F-D1** drain-amount taint-carve — complete pre-code pin ((a)+strip; strip `{lineage,epoch,height}` + aggregate-scalar amount stage; §12.3); **F-D2** UI-default (§12.4); **F-D3/F-D4** one-sided cooldown-anchored exit standoff — **FSM gate FIRED 2026-07-15** (§12.5–12.6; `bond_post.rs:369`/`:627`); **F-D5** quantization → §14.4; **F-D6** anti-drift derive-don't-hardcode (§12.7). GF-10 (R3) folds into the joint grade. UPDATE 2026-07-15: both former blockers discharged — the rebond/unbond FSM landed (PR #303 `HoldingsUpdate`/`Unbond` + Pin-4/Pin-5 closure 2026-07-14; PR #307 `Rebond`) and the age-stratified sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18). F-D3/F-D4 open for build: F-D4 a-priori window derivation first (committed before any sweep runs, §12.6), then `draw_exit_gap` (§12.5) with the F-D6 derived anchor. |
+| **4** | Output + bond-funding hygiene (**recurring** — rebond/unbond at genesis) | **Drafted (2026-07-11) — §12, the drain-event firewall.** **GF-7 (funding-in) built + graded PROVISIONAL-PASS** (`r = 1.86`, local-daemon; standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) provisional) — not an open design question. **GF-4 (value-out) drafted:** the drain is one event, three co-triggered channels graded jointly (§12.1). **F-D1** drain-amount taint-carve — complete pre-code pin ((a)+strip; strip `{lineage,epoch,height}` + aggregate-scalar amount stage; §12.3); **F-D2** UI-default (§12.4); **F-D3/F-D4** one-sided cooldown-anchored exit standoff — **FSM gate FIRED 2026-07-15** (§12.5–12.6; `bond_post.rs:369`/`:627`); **F-D5** quantization → §14.4; **F-D6** anti-drift derive-don't-hardcode (§12.7). GF-10 (R3) folds into the joint grade. UPDATE 2026-07-15: both former blockers discharged — the rebond/unbond FSM landed (PR #303 `HoldingsUpdate`/`Unbond` + Pin-4/Pin-5 closure 2026-07-14; PR #307 `Rebond`) and the age-stratified sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18). F-D3/F-D4 open for build: F-D4 a-priori window derivation first (committed before any sweep runs, §12.6), then `draw_exit_gap` (§12.5) with the F-D6 derived anchor. UPDATE 2026-07-16: derivation committed + reviewed (rounds 1–3, sentinel + frozen rule); **`draw_exit_gap` BUILT** against the sentinel with the F-D6 anchor derived (`release_cooldown_anchor_height`) — F-W5 `N_t` re-derivation, sweep, and Phase 7.7 seal remain. |
 | **5** | Cross-layer adversarial pass | **Planned.** Soundness-depth sign-off for Stage 3. Build the S-2 fused exposure ledger (first) + the S-3 exit/value-seam adversary sim (§10.12), then sign off. |
 
 **Parallel (not gated on gate-6 closure):** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
@@ -1582,6 +1584,9 @@ Engine claim orchestrator returns the assembled reply **unbroadcast** (`claim_or
 symbol** anywhere under `rust/`, and `ARCHIVAL_TIMING_CONSTANTS.md` §7 still lists "Emission jitter —
 ± fraction of `SEB`" as unlanded. This is therefore a **pre-code structural pin** — arm the mechanism
 before the identifier exists (the M1 discipline; [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)).
+(UPDATE 2026-07-16: `draw_exit_gap` now exists — F-D3, §12.5, `shekyl-standoff/src/exit.rs` —
+but it is the *exit-seam* draw, not GF-10's claim jitter; the claim-jitter symbol remains absent
+and this pin's status is unchanged.)
 
 **Mechanism (pinned):**
 
@@ -1810,7 +1815,7 @@ S-1 says no single layer owns:
 | Channel | Finding | Buildable? |
 |---------|---------|-----------|
 | **Amount** (off-chain subsum match) | F-D1 (+F-D2 UI) | **now** |
-| **Timing** (exit-seam standoff) | F-D3 + F-D4 | **gate FIRED 2026-07-15 — buildable** (§12.5) |
+| **Timing** (exit-seam standoff) | F-D3 + F-D4 | **BUILT 2026-07-16 against the F-D4 sentinel** (§12.5); sweep + seal owed |
 | **Output-count** (decorrelated drain) | §6 R4 hard exit (lineage-blind, §12.3-sibling) | FSM landed (#303/#307) — buildable |
 
 They are **co-triggered** on one event, so they must be **graded jointly** — an independent per-axis
@@ -1933,6 +1938,19 @@ trigger is catastrophic, `16→1.01`."
   harness gets a **shared-trigger arm**: a cohort of exit draws keyed to one anchor / one simulated
   market event must be *caught* as clustered (clustering-detection, not inversion-detection). A
   `draw_exit_gap` whose independence claim has no negative control is not conformance-armed.
+- **UPDATE 2026-07-16 — BUILT (against the F-D4 sentinel; sealing still owed).**
+  `shekyl-standoff/src/exit.rs`: `draw_exit_gap` one-sided through the shared unbiased
+  `bounded_uniform`, no order coin; typed `ExitGap`; `ExitGapWindow` capability newtype whose
+  `wallet_default()` reads `DEFAULT_EXIT_GAP_WINDOW` — a **provisional sentinel** (`0`,
+  `K_COVER` pattern per F-D4 §5.4: compile-refusal unless the consumer enables the grep-able
+  `provisional-exit-gap-window` feature, deleted at the Phase 7.7 seal). Golden vector on a
+  synthetic KAT window (10 007) with a seal tripwire forcing the re-freeze at seal; the pinned
+  shared-trigger negative control landed (`conformance.rs` `exit_release_population` +
+  two-property exit grade — uniformity, serial independence, no order axis). The anchor is
+  F-D6-derived: `shekyl_archival_retention::release_cooldown_anchor_height` computes `H_cd`
+  from `RELEASE_COOLDOWN_EPOCHS × SETTLEMENT_EPOCH_BLOCKS`, boundary-tested against
+  `release_cooldown_elapsed`. F-W5 resolved same day (F-D4 §13: exit-seam `N_t = 10`, derived
+  not inherited). Open: the X-1/X-2 sweep and the Phase 7.7 seal.
 
 ### 12.6 F-D4 — a-priori exit window (activation FIRED with F-D3, 2026-07-15)
 
@@ -1954,9 +1972,31 @@ signal). **The derivation is committed:**
 [`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`](ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md) (2026-07-15) —
 anchor formula from named consts (§1.1), two-regime split (steady-state X-1 lower bound vs
 crisis-cohort X-2 upper bound), the anchor-quantization lemma (a-priori: the cooldown delays and
-*quantizes*, does not smear), the §5.3 queue predicate deciding the W8 question, candidate
-`DEFAULT_EXIT_GAP_WINDOW = 2 × SEB`, pre-registered sweep arms. Awaiting the rate-model
-adversarial review before any code lands.
+*quantizes*, does not smear), the §5.3 predicate making the W8 question decidable,
+pre-registered sweep arms. **Rate-model review rounds 1–2 run 2026-07-15** (derivation doc
+§10–§11): F-W1/F-W2 (round 1) — the draft `2 × SEB` candidate failed its own X-1 planning
+bound while §5.4 said "clears"; `σ_L` reclassified as a design lever, the §5.3 predicate a
+joint constraint over `(W, σ_L)` with the wallet-discipline lever costed against the
+release-queue. F-W3/F-W4/F-W5 (round 2, superseding round 1's re-picked candidate) — the X-1
+bound is a **~19× planning box**, so no pre-measurement value is derivable;
+`DEFAULT_EXIT_GAP_WINDOW` adopts the **`K_COVER` provisional-sentinel pattern** (M1 §9.3:
+sentinel `0`, compile-time refusal absent explicit acknowledgment) with the **decision rule frozen**
+(smallest `SEB` multiple ≥ `max(` X-1 bound at the committed 10th percentile of the joint
+`(N_P, c)` stressnet read with exit-derived `N_t` per F-W5, `2 × SEB` `)`) and the value
+**sealed by the Phase 7.7 stressnet rate read** (`RELEASE_CHECKLIST.md` entry beside
+`K_COVER`/PF-9). F-W5 resolved 2026-07-16 (derivation doc §13): **exit-seam `N_t = 10`** —
+equal to the entry anchor by derivation, not inheritance (every seam-variant fact lands on
+`W`, a graded arm, or its own regime row; the repetition asymmetry — the binding observed
+repeatedly, keyed to the public `P_id` — cannot be priced into a per-event anchor and routes
+to the `σ_L` discipline and the S-2 exposure ledger as a named residual). F-W6 (round 3) — the `2 × SEB` structural argument made precise as **X-3**,
+a rate-independent anchor-merge lower bound derived from the quantization lemma (cohort
+windows overlap iff `W > SEB`; at `1 × SEB` the adversary partitions the crisis cohort by
+exit height, invisible to X-1), folded into the rule with its cost stated: the queue
+predicate's LHS acquires a hard `20_000` floor, making the F-W2 lever-vs-queue costing
+load-bearing in every measured world. Mixes-at-all, never "merged" (`50 %` mixed fraction at
+the cliff). Lemma, X-1 shape, X-2 form, and the one-window pin survived all rounds.
+**`draw_exit_gap` is unblocked, written against the sentinel** — compiles for testnet under
+explicit arming, refuses to ship unsealed.
 
 ### 12.7 F-D5 (routed out) and F-D6 (anti-drift pin)
 
@@ -1966,15 +2006,18 @@ adversarial review before any code lands.
   dust/budget conservation, a-priori-derived per §18.7). A **defense-in-depth candidate**, not R4's
   structural work. **Reopen (rule-21):** graded in the GF-4/§14.4 economics round, not folded into the
   wallet pin.
-- **F-D6 — single-source + derive (anti-drift).** UPDATE 2026-07-15: the FSM landed and the named
-  const half is **done** — `RELEASE_COOLDOWN_EPOCHS` is config-generated
+- **F-D6 — single-source + derive (anti-drift). DONE 2026-07-16.** UPDATE 2026-07-15: the FSM
+  landed and the named const half is **done** — `RELEASE_COOLDOWN_EPOCHS` is config-generated
   (`config/consensus_constants.json` `release_cooldown_epochs: 2` → `shekyl-archival-retention`
-  `build.rs` → `bond_floor`), consumed by `release_cooldown.rs`. What remains of F-D6 is the
+  `build.rs` → `bond_floor`), consumed by `release_cooldown.rs`. What remained of F-D6 was the
   consumer-side derivation: `draw_exit_gap`'s anchor **derives
   `RELEASE_COOLDOWN_EPOCHS × SETTLEMENT_EPOCH_BLOCKS`** from those named consts, never a hardcoded
   `20_000` — the anti-drift rule `consensus_state.rs` already enforces for `SEB` ("do not re-derive
-  by hand and risk drift"). Today `20_000` still exists as a doc-comment integer in the staking-sim
-  `standoff.rs:93`; that is the drift vector, purged when F-D3 builds.
+  by hand and risk drift"). UPDATE 2026-07-16: that half landed with F-D3 —
+  `release_cooldown_anchor_height` (`release_cooldown.rs`) is the derivation's single home,
+  boundary-tested against `release_cooldown_elapsed` (the two cannot disagree at `H_cd`), and the
+  `20_000` doc-comment integer in staking-sim `standoff.rs` — the named drift vector — is purged,
+  pointing at the derivation instead.
 
 ### 12.8 Round 4 status, joint-grading obligation, and what closes it
 
@@ -1983,7 +2026,9 @@ adversarial review before any code lands.
   obligations already tracked ([`FOLLOWUPS.md`](../FOLLOWUPS.md) funding-seam carries).
 - **GF-4 (value-out):** this section. F-D1 + F-D2 buildable now; F-D3 + F-D4 **gate FIRED
   2026-07-15 — open for build** (§12.5, `bond_post.rs:369`/`:627`); output-count
-  discipline lineage-blind (an F-D1-sibling).
+  discipline lineage-blind (an F-D1-sibling). UPDATE 2026-07-16: F-D3 **BUILT** against the
+  F-D4 sentinel (§12.5) and F-W5 resolved (F-D4 §13: `N_t = 10` derived); the timing channel
+  enters the joint grade via the X-1/X-2 sweep, which is now unblocked.
 - **Joint grade (the round's exit bar, per §18.10 R-4 + CB-3):** the drain event is graded on
   **{amount-band ∧ claim/exit-timing ∧ holdings-stratum ∧ output-count}** jointly, correlated-trigger
   modeled on — never per-axis-multiplied. GF-10's claim-jitter mechanism (§11) folds in here; **R3
@@ -2015,6 +2060,93 @@ adversarial review before any code lands.
 ---
 
 ## Revision history
+
+- **2026-07-16 (F-W5 resolved — exit-seam `N_t` derived):** The F-D4 §5.4 rule-3 obligation
+  discharged a-priori, before the sweep grades
+  (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §13): **`N_t(exit) = 10`** — numerically equal to
+  the entry posture anchor **by derivation, not inheritance**. Method: the committed bar is
+  WI-4's N-invariant ratio bound (`r < 2` per regime row), and `N_t` is only the posture
+  anchor the window is sized to deliver; each seam-variant structural fact was examined for
+  whether it moves the anchor — cover class (moves `ρ_x`, hence `W`; already spent),
+  one-sidedness (moves `W` and a graded §8 arm), the trough cohort (its own X-2 regime row
+  per WI-4 regime-splitting; never averaged into steady state) — and none moves the anchor's
+  own determinants (protected secret, bar, advantage semantics), which are seam-invariant.
+  The one real asymmetry — the binding observed **repeatedly, keyed to the public `P_id`**
+  (recurring drops + terminal drain + entry∩exit intersection) — provably cannot be priced
+  into a per-event anchor (intersection collapses geometrically; a finite `N_t` cannot hold
+  a lifetime floor, and inflating it re-imports F-W3 via the pre-testnet `E[m]`), so it
+  routes to the `σ_L` re-appearance discipline (which widens the per-observation candidate
+  fraction — the base of the geometric collapse) and the S-2 exposure ledger (R5), as a
+  named residual with reversion criteria. Consequences: the §5.4 rule's X-1 term is
+  `9/ρ_x`; the §8.1 arm grades at `10` and carries the WI-4 N-sweep form; the exit anchor
+  is minted as its own constant (`EXIT_TARGET_ANON_SET`) when the sweep harness lands —
+  numerically equal, independently movable. The `N_t = 9 ⇒ 20_000 exact` re-cut trap noted
+  at F-W5's minting did not bind: `9` has no model support in the derivation. Statuses
+  swept: §12.5 BUILT block, §12.6, §12.8; index F-W row; FD4 doc §5.4/§8.1/§9/§11.
+  Docs-only.
+
+- **2026-07-16 (F-D3 built against the sentinel; F-D6 done):** `draw_exit_gap` landed in
+  `shekyl-standoff/src/exit.rs` per §12.5 — one-sided through the shared unbiased
+  `bounded_uniform` (no order coin), typed `ExitGap`, `ExitGapWindow` capability newtype whose
+  `wallet_default()` reads the F-D4 §5.4 provisional sentinel (`DEFAULT_EXIT_GAP_WINDOW = 0`,
+  provisional ⇔ 0 const-asserted, compile refusal unless the consumer enables the grep-able
+  `provisional-exit-gap-window` acknowledgment feature — deleted at the Phase 7.7 seal).
+  Golden vector at a synthetic KAT window (10 007, not an SEB multiple) with a seal tripwire
+  that fails at seal time to force the re-freeze; the §12.5 pinned shared-trigger negative
+  control landed (`conformance.rs` `exit_release_population`, clustering-detection) beside a
+  two-property exit grade (uniformity + serial independence — no order axis; the entry's
+  order/inversion axes don't exist here). F-D6's remaining half closed:
+  `release_cooldown_anchor_height` (`shekyl-archival-retention`) is the single home for
+  `H_cd = (last_served + RELEASE_COOLDOWN_EPOCHS) × SEB` from named consts, boundary-tested
+  against `release_cooldown_elapsed` (agree at `H_cd`, disagree one block before); the
+  staking-sim `standoff.rs` `20_000` doc fossil purged. Statuses swept: header summary, §6 R4
+  cell, §11.3 verified-at-source note (exit draw exists; claim-jitter still absent — pin
+  unchanged), §12.1 channel table, §12.5 BUILT block, §12.7 F-D6 DONE, §12.8. Open on the
+  F-D4 §9 order: F-W5 exit-seam `N_t` re-derivation, then the X-1/X-2 sweep into the R4 joint
+  grade, then the Phase 7.7 seal.
+
+- **2026-07-15 (F-D4 review round 3 — F-W6, X-3 anchor-merge bound):** Round 3 graded round
+  2's disposition of the `2 × SEB` structural argument: refusing a preference-shaped
+  `max(2 × SEB, …)` floor was correct (F-W1's error through the back door), but parking the
+  argument as tiebreak narrative was not — made precise it is a **derived bound**, from the
+  anchor-quantization lemma with no rate input: adjacent anchors sit `SEB` apart, cohort
+  windows overlap iff `W > SEB` (measure-zero at equality), so at `1 × SEB` the adversary
+  reads cohort membership off the exit height — a clean partition of the crisis cohort that
+  X-1 (background cover, not cohort integrity) never sees. Minted **X-3**
+  (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §5.2a) and folded into the §5.4 rule:
+  `W := smallest SEB multiple ≥ max((N_t − 1)/ρ_x, 2 × SEB)`. Carried with it: the coverage
+  boundary (2 × SEB *opens* the split — 50 % mixed fraction, continuous improvement, no
+  second cliff; the sweep's two-anchor arm grades the actual fraction) and the cost, stated
+  beside the benefit: the queue predicate's LHS gains a hard `20_000` floor in every
+  measured world, so the F-W2 lever-vs-queue costing no longer evaporates on a dense `ρ_x`
+  read. Sentinel, F-W4 percentile, F-W5 `N_t` obligation untouched.
+
+- **2026-07-15 (F-D4 review round 2 — F-W3/F-W4/F-W5, sentinel reshape):** Round 2 reviewed
+  the round-1 amendment and found its `3 × SEB` fix repeated the category error: the X-1
+  bound spans a ~19× planning box over the doc's own ranges (`N_P ∈ 79–154`, `c ∈ [0.02,
+  0.2]`; corners `2_922`–`56_962`), so no pre-measurement value is derivable — any picked
+  point can be narrated as "within" something. Resolution (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`
+  §5.4/§11): `DEFAULT_EXIT_GAP_WINDOW` adopts the `K_COVER` M1 §9.3 provisional-sentinel
+  pattern (sentinel `0`, compile-time refusal absent explicit acknowledgment, dev-only arming), the value
+  sealed by the Phase 7.7 stressnet rate read (`RELEASE_CHECKLIST.md` entry beside
+  `K_COVER`/PF-9 — a wallet default sizing an anonymity set is soft-frozen: post-ship change
+  is the §16.1 partition trap as a flag day). Frozen now instead: the decision rule (smallest
+  `SEB` multiple ≥ the X-1 bound), the conservatism level (10th percentile of the joint
+  `(N_P, c)` read — F-W4 killed the round-1 instance's stacked marginal worst cases), and the
+  F-W5 obligation that the exit-seam `N_t` be re-derived a-priori before the seal (the
+  entry-inherited `10` is not the exit constant; `N_t = 9` would have made `20_000` exact —
+  the re-cut temptation the ordering forecloses). `2 × SEB`'s structural argument survives
+  independent of X-1 and may win at the seal on structure plus measurement. §12.6 pointer
+  updated; **`draw_exit_gap` unblocked against the sentinel**.
+
+- **2026-07-15 (F-D4 review round 1 — F-W1/F-W2):** The rate-model adversarial review ran
+  against the committed derivation (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §10). F-W1
+  (blocking): the draft candidate `2 × SEB` failed its own X-1 planning bound and was
+  described as clearing it — re-derived to `3 × SEB = 30_000` (33 % margin); §12.6 pointer
+  text updated. F-W2 (load-bearing): `σ_L` reclassified as a design lever; the §5.3 predicate
+  reframed as a joint constraint over `(W, σ_L)` with the wallet-discipline lever costed
+  against the release-queue on the shared capital-idle axis. The anchor-quantization lemma,
+  both regime forms, and the one-window pin survived. `draw_exit_gap` remains gated.
 
 - **2026-07-15 (F-D3/F-D4 activation FIRED — fossil sweep):** The §12.5 rule-21 activation
   criterion ("a verify path reads `RELEASE_COOLDOWN_EPOCHS` as a spendability gate") fired at

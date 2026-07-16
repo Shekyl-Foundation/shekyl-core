@@ -4,6 +4,130 @@
 
 ### Added
 
+- **docs: F-W5 resolved — the exit-seam `N_t`, derived a-priori
+  (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §13).** Result: **`N_t(exit)
+  = 10`** — numerically equal to the entry posture anchor by
+  derivation, not inheritance. The committed bar is WI-4's N-invariant
+  ratio bound (`r < 2` per regime row); `N_t` is only the posture
+  anchor the window is sized to deliver. Each seam-variant structural
+  fact was examined for whether it moves the anchor: cover class moves
+  `ρ_x` (already spent on `W`), one-sidedness moves `W` and a graded §8
+  arm, the trough cohort is its own X-2 regime row (WI-4 regime
+  splitting — never averaged into steady state); the anchor's own
+  determinants (protected secret, bar, advantage semantics) are
+  seam-invariant. The one real asymmetry — the persona↔principal
+  binding observed repeatedly, keyed to the public `P_id` (recurring
+  drops + terminal drain + entry∩exit intersection) — provably cannot
+  be priced into a per-event anchor (intersection collapses
+  geometrically; inflating `N_t` re-imports F-W3 via the pre-testnet
+  `E[m]`) and routes to the `σ_L` re-appearance discipline and the S-2
+  exposure ledger as a named residual with reversion criteria. The
+  §5.4 rule's X-1 term reads `9/ρ_x`; the §8.1 arm grades at `10` and
+  carries the WI-4 N-sweep form; `EXIT_TARGET_ANON_SET` is minted at
+  the sweep-harness PR (numerically equal to the sim's entry constant,
+  independently movable). The `N_t = 9 ⇒ 20_000 exact` re-cut trap
+  did not bind — `9` has no model support in the derivation. Gate-6
+  §12.5/§12.6/§12.8, index F-W/Round-N rows, and the release-checklist
+  seal entry swept.
+
+- **standoff: `draw_exit_gap` against the F-D4 provisional sentinel
+  (Gate-6 §12.5 F-D3; `ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §9 step 2).**
+  New `shekyl-standoff/src/exit.rs`: the one-sided exit-seam draw through
+  the shared unbiased `bounded_uniform` — no order coin, no inversion
+  (forced by the cooldown) — with typed `ExitGap` and an `ExitGapWindow`
+  capability newtype whose `wallet_default()` reads
+  `DEFAULT_EXIT_GAP_WINDOW`, a `K_COVER`-pattern provisional sentinel
+  (`0`; provisional ⇔ 0 const-asserted; `compile_error!` unless the
+  consumer enables the grep-able `provisional-exit-gap-window`
+  acknowledgment feature, deleted at the Phase 7.7 seal;
+  `kat_inject()` behind the permanent dev-only `exit-window-kat`
+  feature — named per the `kat_forge` precedent so the PF-6a tripwire's
+  `for_kat` grep stays scoped to `KCover`).
+  Golden vector at a synthetic KAT window (10 007) with a **seal
+  tripwire** that fails at seal time to force the re-freeze; the §12.5
+  pinned shared-trigger negative control landed
+  (`conformance.rs::exit_release_population`, clustering-detection)
+  beside a two-property exit grade (uniformity + serial independence —
+  no order axis). Consumer acks: `shekyl-engine-core` and
+  `shekyl-staking-sim` enable the arming feature explicitly.
+
+- **archival: F-D6 cooldown-anchor derivation —
+  `release_cooldown_anchor_height` (Gate-6 §12.7, DONE).** The
+  exit-standoff scheduling anchor `H_cd = (last_served +
+  RELEASE_COOLDOWN_EPOCHS) × SETTLEMENT_EPOCH_BLOCKS` now derives from
+  named consts in one home (`shekyl-archival-retention`
+  `release_cooldown.rs`), mirroring `release_cooldown_elapsed` exactly
+  (vacuous never-served arm; fail-closed overflow arm) with a boundary
+  test proving the two agree at `H_cd` and disagree one block before it.
+  The last `20_000` doc-comment fossil (staking-sim `standoff.rs` module
+  docs — the drift vector F-D6 was opened against) is purged, pointing
+  at the derivation instead.
+
+- **docs: F-D4 review round 3 — F-W6: X-3 anchor-merge bound folded into
+  the frozen rule (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §5.2a/§12).**
+  Round 2 had parked the `2 × SEB` structural argument as a tiebreak
+  narrative; round 3 made it precise — it is a **derived bound**, from
+  the §3 quantization lemma with no rate input: adjacent anchors sit
+  `SEB` apart, cohort windows overlap iff `W > SEB` (measure-zero at
+  equality), so at `1 × SEB` the adversary partitions a straddling
+  crisis cohort by exit height — invisible to X-1, which grades
+  background cover, not cohort integrity. Minted X-3
+  (`W ≥ 2 × SETTLEMENT_EPOCH_BLOCKS`); the §5.4 rule is now
+  `W := smallest SEB multiple ≥ max((N_t − 1)/ρ_x, 2 × SEB)`. Carried
+  with it: the coverage boundary (2 × SEB *opens* the split — 50 %
+  mixed fraction at the cliff, continuous improvement, no second cliff;
+  the §8 two-anchor arm grades the actual fraction; nothing may claim
+  "merged") and the cost stated beside the benefit (the §5.3 queue
+  predicate gains a hard `20_000` LHS floor in every measured world, so
+  the F-W2 lever-vs-queue costing no longer evaporates on a dense `ρ_x`
+  read). A preference-shaped `max()` floor was refused; the derived
+  bound is what earned rule entry. Gate-6 §12.6, `RELEASE_CHECKLIST.md`
+  seal entry, index X-/F-W/Round-N rows, and FOLLOWUPS swan-2/W8 swept
+  to the two-term form.
+
+- **docs: F-D4 review round 2 — F-W3/F-W4/F-W5: the window value is not
+  derivable pre-measurement; sentinel + frozen decision rule
+  (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §5.4/§11).** F-W3 (blocking):
+  the X-1 bound spans a ~19× planning box over the doc's own ranges
+  (`N_P ∈ 79–154`, `c ∈ [0.02, 0.2]`; corners `2_922`–`56_962`), so both
+  draft candidates (`2 × SEB`, `3 × SEB`) were points picked from a box,
+  not derivations — `ρ_x` is a pre-testnet unknown and the value cannot
+  precede the rate. Resolution mirrors the ratified `K_COVER` pattern
+  (M1 §9.3): `DEFAULT_EXIT_GAP_WINDOW` ships as a provisional sentinel
+  `0` with compile-time refusal absent explicit acknowledgment, sealed
+  by the Phase 7.7 stressnet read of `(ρ_x, N_x, σ_L)` (`RELEASE_CHECKLIST.md`
+  entry added beside `K_COVER`/PF-9). A wallet default sizing an
+  anonymity set is soft-frozen (post-ship change = §16.1 partition trap
+  as a flag day), hence consensus-constant treatment. Frozen now: the
+  decision rule (smallest `SEB` multiple ≥ the X-1 bound), the F-W4
+  conservatism commitment (10th percentile of the joint `(N_P, c)` read
+  — no stacked marginal worst cases), and the F-W5 pin (exit-seam `N_t`
+  re-derived a-priori before the seal; the entry-inherited `10` is not
+  the exit constant). `2 × SEB`'s structural argument survives
+  independent of X-1. **`draw_exit_gap` unblocked against the sentinel**
+  — compiles for testnet under explicit arming, refuses to ship
+  unsealed. Gate-6 §12.6, index F-W/X-/Round-N rows, and the FOLLOWUPS
+  swan-2/W8 entry swept to match.
+
+- **docs: F-D4 rate-model review round 1 — F-W1/F-W2 resolved by
+  amendment (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §10).** F-W1
+  (blocking): the draft candidate `2 × SEB = 20_000` failed its own X-1
+  planning-instance bound (`22_500`, itself the conservative end — the
+  pessimistic `c = 0.05` pushes the bound *up*) while §5.4 said
+  "clears" — the GF7 §5.1 bar-moving violation; re-derived to
+  `3 × SEB = 30_000` (33 % margin, clears down to `c ≥ 0.0375`), failure
+  recorded in-place, not erased. F-W2 (load-bearing): `σ_L` is
+  wallet-drawn — a design lever, not a fact of nature — so the §5.3
+  predicate is a joint constraint over `(W, σ_L)`; the wallet-discipline
+  lever (`σ_L ≥ W/N_x = 6_000` blocks, cost borne by exiters only) is
+  now costed against the release-queue (domain widens for everyone,
+  always) on the shared capital-idle axis, neither pre-selected. Lemma,
+  X-1 shape, X-2 form, and the one-window pin survived review. `N_t`
+  citation disambiguated to `shekyl-staking-sim/src/standoff.rs:119`.
+  F-W family registered. (The `3 × SEB` re-derivation was itself
+  superseded same-day by round 2's F-W3 sentinel reshape — see the entry
+  above.)
+
 - **MSW-6: relax the tx-wide `scheme_id` agreement (staking unblock).** A v3
   transaction may now carry per-input PQC schemes from `{1,2}` freely — e.g.
   scheme-2 (multisig) funding sharing a tx with a scheme-1 (single) bond vin.
@@ -28,10 +152,11 @@
   cooldown delays and quantizes a synchronized cohort — no smear; the
   a-priori answer to swan-2/W8's mechanism question, wargame-confirmed
   arm pre-registered); the §5.3 queue predicate making "is a release
-  queue needed" decidable; candidate `DEFAULT_EXIT_GAP_WINDOW = 2 × SEB`
-  (~28 d, conditional on `ρ_x`/`σ_L` reads). Exit window does not borrow
-  the entry 600 — the derivation shows SEB-scale. Code gated on the
-  rate-model adversarial review.
+  queue needed" decidable; `DEFAULT_EXIT_GAP_WINDOW` (the draft's
+  committed candidate was retracted by review rounds 1–2 — sealed by
+  measurement per the F-W3 entry above). Exit
+  window does not borrow the entry 600 — the derivation shows SEB-scale.
+  Code gated on the rate-model adversarial review.
 
 - **docs: F-D3/F-D4 activation fired — fossil sweep (Gate-6 §12.5).**
   The rule-21 activation criterion ("a verify path reads the release

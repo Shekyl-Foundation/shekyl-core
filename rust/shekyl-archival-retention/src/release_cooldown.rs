@@ -37,6 +37,7 @@
 //! the anchor before the release verifies.
 
 use crate::bond_floor::RELEASE_COOLDOWN_EPOCHS;
+use crate::constants::effective_settlement_epoch_blocks;
 
 /// The whole-record last-served settlement epoch: the max over the record's current
 /// shards of each shard's last-served epoch (P2B-8 Q2 — the `Unbond` cooldown
@@ -82,6 +83,37 @@ pub fn release_cooldown_elapsed(
             Some(boundary) => current_settlement_epoch >= boundary,
             None => false,
         },
+    }
+}
+
+/// The earliest block height at which [`release_cooldown_elapsed`] verifies for the
+/// given anchor — `H_cd(P)` in the F-D4 derivation
+/// (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §1.1), the **F-D6 anchor**: derived from
+/// the named consts `RELEASE_COOLDOWN_EPOCHS × SETTLEMENT_EPOCH_BLOCKS`, never a
+/// hardcoded `20_000`. This function is that derivation's single home; it exists so
+/// the exit-standoff consumer (the wallet's `draw_exit_gap` scheduling, Gate-6
+/// §12.5 F-D3) anchors on the same arithmetic the consensus predicate enforces —
+/// the wallet posts at `H_0 + s` where
+/// `H_0 = max(H_cd, first height slashes_settled_through holds)`; the second term
+/// is runtime scheduler state, consumer-composed, not derivable here.
+///
+/// The cooldown elapses at the first height of epoch
+/// `last_served_epoch + RELEASE_COOLDOWN_EPOCHS`, i.e.
+/// `(last_served_epoch + RELEASE_COOLDOWN_EPOCHS) × SEB` (`SEB` is
+/// [`effective_settlement_epoch_blocks`] — the genesis pin, or the fakechain-only
+/// regtest override, matching `settlement_epoch_at_height`). A never-served anchor
+/// (`None`) is vacuously elapsed from genesis (`Some(0)`, mirroring the predicate).
+/// `None` on overflow: the boundary epoch is unreachable, exactly the predicate's
+/// fail-closed arm — the two functions cannot disagree at the boundary.
+#[must_use]
+pub fn release_cooldown_anchor_height(last_served_epoch: Option<u64>) -> Option<u64> {
+    match last_served_epoch {
+        None => Some(0),
+        Some(last) => last
+            .checked_add(RELEASE_COOLDOWN_EPOCHS)
+            .and_then(|boundary_epoch| {
+                boundary_epoch.checked_mul(effective_settlement_epoch_blocks())
+            }),
     }
 }
 
@@ -191,6 +223,65 @@ mod tests {
         // Never served: no anchor to settle through, with or without a watermark.
         assert!(slashes_settled_through(None, None));
         assert!(slashes_settled_through(Some(7), None));
+    }
+
+    #[test]
+    fn anchor_height_derives_from_named_consts() {
+        use crate::constants::SETTLEMENT_EPOCH_BLOCKS;
+        // Precondition, made executable: the unit-test environment runs
+        // unarmed, so the effective SEB the anchor multiplies by IS the
+        // genesis pin. If a future harness arms the fakechain override,
+        // this fails loudly here instead of desynchronizing the
+        // expectations below.
+        assert_eq!(effective_settlement_epoch_blocks(), SETTLEMENT_EPOCH_BLOCKS);
+        // F-D6: the anchor is the product of named consts. At genesis values
+        // (COOLDOWN = 2, SEB = 10_000) this is the 20_000 that previously
+        // lived only as a doc-comment integer — now derived. The literal is
+        // deliberate: a genesis tripwire against silent config drift, the
+        // same shape as genesis_cooldown_is_two_epochs.
+        assert_eq!(
+            release_cooldown_anchor_height(Some(0)),
+            Some(RELEASE_COOLDOWN_EPOCHS * SETTLEMENT_EPOCH_BLOCKS)
+        );
+        assert_eq!(release_cooldown_anchor_height(Some(0)), Some(20_000));
+        assert_eq!(
+            release_cooldown_anchor_height(Some(7)),
+            Some((7 + RELEASE_COOLDOWN_EPOCHS) * SETTLEMENT_EPOCH_BLOCKS)
+        );
+    }
+
+    #[test]
+    fn anchor_height_is_the_predicate_boundary_exactly() {
+        use crate::consensus_state::settlement_epoch_at_height;
+        // The derivation and the consensus predicate must agree at the
+        // boundary: the anchor height is the FIRST height at which the
+        // cooldown verifies, and the height before it must not.
+        for last in [0u64, 1, 7, 100, 12_345] {
+            let h = release_cooldown_anchor_height(Some(last)).expect("no overflow here");
+            assert!(
+                release_cooldown_elapsed(Some(last), settlement_epoch_at_height(h)),
+                "cooldown must be elapsed at the derived anchor height {h} (last {last})"
+            );
+            assert!(
+                !release_cooldown_elapsed(Some(last), settlement_epoch_at_height(h - 1)),
+                "cooldown must NOT be elapsed one block before the anchor {h} (last {last})"
+            );
+        }
+    }
+
+    #[test]
+    fn anchor_height_vacuous_for_never_served() {
+        // Never served: the predicate is vacuously elapsed, so the earliest
+        // verifying height is genesis.
+        assert_eq!(release_cooldown_anchor_height(None), Some(0));
+    }
+
+    #[test]
+    fn anchor_height_fails_closed_on_overflow() {
+        // Mirrors cooldown_not_elapsed_when_boundary_overflows_u64: an
+        // unreachable boundary epoch yields no anchor height, never a
+        // saturated false one.
+        assert_eq!(release_cooldown_anchor_height(Some(u64::MAX)), None);
     }
 
     #[test]
