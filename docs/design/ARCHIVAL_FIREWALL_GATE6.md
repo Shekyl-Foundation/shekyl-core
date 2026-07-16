@@ -1980,7 +1980,7 @@ joint constraint over `(W, σ_L)` with the wallet-discipline lever costed agains
 release-queue. F-W3/F-W4/F-W5 (round 2, superseding round 1's re-picked candidate) — the X-1
 bound is a **~19× planning box**, so no pre-measurement value is derivable;
 `DEFAULT_EXIT_GAP_WINDOW` adopts the **`K_COVER` provisional-sentinel pattern** (M1 §9.3:
-sentinel `0`, compile-time refusal in non-test builds) with the **decision rule frozen**
+sentinel `0`, compile-time refusal absent explicit acknowledgment) with the **decision rule frozen**
 (smallest `SEB` multiple ≥ `max(` X-1 bound at the committed 10th percentile of the joint
 `(N_P, c)` stressnet read with exit-derived `N_t` per F-W5, `2 × SEB` `)`) and the value
 **sealed by the Phase 7.7 stressnet rate read** (`RELEASE_CHECKLIST.md` entry beside
@@ -2127,7 +2127,7 @@ explicit arming, refuses to ship unsealed.
   0.2]`; corners `2_922`–`56_962`), so no pre-measurement value is derivable — any picked
   point can be narrated as "within" something. Resolution (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`
   §5.4/§11): `DEFAULT_EXIT_GAP_WINDOW` adopts the `K_COVER` M1 §9.3 provisional-sentinel
-  pattern (sentinel `0`, compile-time refusal in non-test builds, dev-only arming), the value
+  pattern (sentinel `0`, compile-time refusal absent explicit acknowledgment, dev-only arming), the value
   sealed by the Phase 7.7 stressnet rate read (`RELEASE_CHECKLIST.md` entry beside
   `K_COVER`/PF-9 — a wallet default sizing an anonymity set is soft-frozen: post-ship change
   is the §16.1 partition trap as a flag day). Frozen now instead: the decision rule (smallest

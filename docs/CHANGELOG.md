@@ -94,8 +94,8 @@
   not derivations — `ρ_x` is a pre-testnet unknown and the value cannot
   precede the rate. Resolution mirrors the ratified `K_COVER` pattern
   (M1 §9.3): `DEFAULT_EXIT_GAP_WINDOW` ships as a provisional sentinel
-  `0` with compile-time refusal in non-test builds, sealed by the
-  Phase 7.7 stressnet read of `(ρ_x, N_x, σ_L)` (`RELEASE_CHECKLIST.md`
+  `0` with compile-time refusal absent explicit acknowledgment, sealed
+  by the Phase 7.7 stressnet read of `(ρ_x, N_x, σ_L)` (`RELEASE_CHECKLIST.md`
   entry added beside `K_COVER`/PF-9). A wallet default sizing an
   anonymity set is soft-frozen (post-ship change = §16.1 partition trap
   as a flag day), hence consensus-constant treatment. Frozen now: the
@@ -123,7 +123,7 @@
   now costed against the release-queue (domain widens for everyone,
   always) on the shared capital-idle axis, neither pre-selected. Lemma,
   X-1 shape, X-2 form, and the one-window pin survived review. `N_t`
-  citation disambiguated to `shekyl-staking-sim/src/standoff.rs:116`.
+  citation disambiguated to `shekyl-staking-sim/src/standoff.rs:119`.
   F-W family registered. (The `3 × SEB` re-derivation was itself
   superseded same-day by round 2's F-W3 sentinel reshape — see the entry
   above.)

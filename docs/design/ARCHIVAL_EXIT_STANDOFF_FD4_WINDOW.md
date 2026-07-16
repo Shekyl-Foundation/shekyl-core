@@ -151,7 +151,7 @@ maximally cheap — the L17 coupling that makes the rate model and the wargame o
 
 A lone exiter's cover is the expected number of other exit-class events landing in its window.
 With background exit-class rate `ρ_x` (events/block) and target cover `N_t = TARGET_ANON_SET
-= 10` (the inherited posture anchor, `shekyl-staking-sim/src/standoff.rs:116` — a grading
+= 10` (the inherited posture anchor, `shekyl-staking-sim/src/standoff.rs:119` — a grading
 constant of the **sim** crate; nothing of this name lives in the production `shekyl-standoff`
 crate, and a bare `standoff.rs` citation is ambiguous between the two):
 
@@ -319,10 +319,12 @@ prerequisite).
 
 - `DEFAULT_EXIT_GAP_WINDOW` lands as a **provisional sentinel `0`** with the invariant
   *provisional ⇔ 0, sealed ⇒ ≥ 1* asserted at compile time.
-- **Non-test builds refuse the sentinel** (`compile_error!` unless the provisional flag is
-  explicitly acknowledged) — the shipping guard is the compile refusal, never the sentinel's
-  runtime semantics. Testnet/stressnet builds arm it explicitly; KAT parameterization goes
-  through a `for_kat`-style constructor behind a permanent dev-only feature.
+- **Unacknowledged builds refuse the sentinel** (`compile_error!` unless the
+  `provisional-exit-gap-window` feature explicitly acknowledges the provisional state — every
+  build, test or not, must opt in) — the shipping guard is the compile refusal, never the
+  sentinel's runtime semantics. Testnet/stressnet builds arm it explicitly; KAT
+  parameterization goes through the `kat_inject` constructor behind a permanent dev-only
+  feature.
 - `draw_exit_gap` is **written against the sentinel now** — F-D3's mechanism, typing, golden
   vectors, and conformance harness land without waiting on the value; only shipping waits.
 
@@ -471,7 +473,7 @@ partition event and takes a design round of its own.**
 ## 10. Review round 1 (2026-07-15) — the rate model vs the correlated-unbond adversary
 
 The §9.1 adversarial review ran same-day. Inputs verified at source first (`TARGET_ANON_SET
-= 10.0` at `shekyl-staking-sim/src/standoff.rs:116`; `DEFAULT_ENTRY_GAP_WINDOW = 600` at
+= 10.0` at `shekyl-staking-sim/src/standoff.rs:119`; `DEFAULT_ENTRY_GAP_WINDOW = 600` at
 `shekyl-standoff/src/draw.rs:73`); the §5.1 arithmetic confirmed. Two findings, both resolved
 by amendment in this doc; the review's survival list recorded so later rounds don't relitigate
 it.
@@ -524,7 +526,7 @@ corrected a point *within* the same mistake. Three findings, resolved by the §5
   joint `(N_P, c)` read** (§5.4 rule 2), so the measurement cannot be re-cut to land on a
   convenient `W`.
 - **F-W5 (input provenance — pinned, derivation owed):** `N_t = 10` is real at
-  `shekyl-staking-sim/src/standoff.rs:116` but was anchored to the **entry** seam; a
+  `shekyl-staking-sim/src/standoff.rs:119` but was anchored to the **entry** seam; a
   constant's meaning is its consumer. The exit-seam `N_t` must be **re-derived a-priori and
   taken as it comes, before the seal** — the dependence is not innocent (`N_t = 9` would make
   `20_000` exact at the round-1 instance), which is exactly why it settles before the value,
