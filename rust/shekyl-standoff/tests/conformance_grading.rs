@@ -369,6 +369,29 @@ fn exit_no_observations_cannot_claim_uniformity() {
 }
 
 #[test]
+fn exit_out_of_range_gap_fails_closed_instead_of_panicking() {
+    // A gap above the window is a draw that escaped its claimed window — a
+    // worse defect than non-uniformity, and one no binning can grade. The
+    // grader must fail the uniformity axis closed (NaN chi-square), never
+    // panic on the bin index or clamp the escape back into range.
+    let mut gaps: Vec<u64> = (0..1_000).map(|i| i % (EXIT_KAT_WINDOW + 1)).collect();
+    gaps.push(EXIT_KAT_WINDOW + 1);
+    let report = grade_exit_sample(&gaps, EXIT_KAT_WINDOW);
+    assert!(
+        report.chi_square.is_nan(),
+        "out-of-range gap must NaN the chi-square: {report:?}"
+    );
+    assert!(
+        !report.uniform_ok,
+        "out-of-range gap must not claim uniformity: {report:?}"
+    );
+    assert!(
+        !report.passed(),
+        "a sample that escaped its window must not self-certify: {report:?}"
+    );
+}
+
+#[test]
 fn no_observations_cannot_claim_uniformity() {
     // A chi-square uniformity claim needs observations: an empty (or single-point)
     // sample gives chi-square 0, which clears the critical value and would otherwise

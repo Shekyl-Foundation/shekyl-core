@@ -484,7 +484,11 @@ impl ExitCertifyReport {
 /// gap-uniformity (discrete chi-square at alpha = 1e-6) and serial
 /// independence (lag-1). The one-sided analogue of [`grade_sample`]; the same
 /// empty/single-sample honesty guards apply (no data cannot claim a
-/// distribution shape).
+/// distribution shape). A gap **outside `[0, window]`** is a draw that
+/// escaped its claimed window — no binning can grade it, so the uniformity
+/// axis fails closed (`chi_square = NaN`, the same fail-closed convention as
+/// [`chi_square_uniform`]'s zero-width-bin arm) rather than panicking on the
+/// bin index or clamping the escape back into range.
 #[must_use]
 pub fn grade_exit_sample(gaps: &[u64], window: u64) -> ExitCertifyReport {
     let n = gaps.len();
@@ -493,13 +497,22 @@ pub fn grade_exit_sample(gaps: &[u64], window: u64) -> ExitCertifyReport {
     let n_bins = (UNIFORM_BINS as u64).min(window.saturating_add(1)).max(1) as usize;
 
     let mut counts = vec![0u64; n_bins];
+    let mut out_of_range = false;
     let mut series = Vec::with_capacity(n);
     for &g in gaps {
-        counts[uniform_bin_index(g, window, n_bins)] += 1;
+        if g > window {
+            out_of_range = true;
+        } else {
+            counts[uniform_bin_index(g, window, n_bins)] += 1;
+        }
         series.push(g as f64);
     }
 
-    let chi_square = chi_square_counts_expected(&counts, &uniform_bin_expected(n, window, n_bins));
+    let chi_square = if out_of_range {
+        f64::NAN
+    } else {
+        chi_square_counts_expected(&counts, &uniform_bin_expected(n, window, n_bins))
+    };
     let chi_square_crit = chi_square_upper_crit((n_bins as f64 - 1.0).max(1.0), Z_ALPHA_1E6);
     let uniform_ok = n >= 2 && n_bins >= 2 && chi_square < chi_square_crit;
 
