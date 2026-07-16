@@ -153,8 +153,7 @@ bool get_transaction_signed_payload(const transaction& tx, size_t input_index, s
   return true;
 }
 
-bool verify_transaction_pqc_auth(const transaction& tx,
-                                  const boost::optional<uint8_t>& expected_scheme_id)
+bool verify_transaction_pqc_auth(const transaction& tx)
 {
   if (tx.version < 3 || tx.vin.empty() || std::holds_alternative<txin_gen>(tx.vin[0]))
     return true;
@@ -183,13 +182,6 @@ bool verify_transaction_pqc_auth(const transaction& tx,
     if (auth.scheme_id != PQC_SCHEME_SINGLE && auth.scheme_id != PQC_SCHEME_MULTISIG)
     {
       MERROR("PQC verify: unknown scheme_id " << (int)auth.scheme_id << " (input " << idx << ")");
-      return false;
-    }
-
-    if (expected_scheme_id && auth.scheme_id != *expected_scheme_id)
-    {
-      MERROR("PQC verify: scheme_id mismatch (spend=" << (int)auth.scheme_id
-             << ", output committed=" << (int)*expected_scheme_id << ", input " << idx << ")");
       return false;
     }
 

@@ -4247,20 +4247,26 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     }
   }
 
-  // v3 PQC hybrid signature verification with scheme_id consistency
-  // (PQC_MULTISIG.md SS16.3 defense-in-depth).
+  // v3 PQC hybrid signature verification (per-input hybrid Ed25519+ML-DSA,
+  // or M-of-N multisig, over each input's signing-payload hash).
   //
-  // In FCMP++, the verifier cannot identify the creating output (privacy
-  // property), so per-output scheme_id binding relies on the leaf hash.
-  // As a defense-in-depth measure, assert all inputs agree on scheme_id.
+  // MSW-6 (PQC_MULTISIG.md §16.3): the former tx-wide scheme_id agreement was
+  // withdrawn. Its *stated* purpose — a cross-input scheme-downgrade defense —
+  // was vacuous: `expected_scheme` was derived from `tx.pqc_auths[0]` itself
+  // (self-referential), and per-output scheme binding is the leaf hash
+  // `h_pqc = H(hybrid_public_key)` (see :3769, `shekyl_fcmp_pqc_leaf_hash`),
+  // not this check. Its *effect* was to make a tx that spends a solo (scheme 1)
+  // output and a multisig (scheme 2) output together unrepresentable — under
+  // FCMP++ separate txs are unlinkable, so co-spending is the only proof of
+  // common control across key models. Per TM-1 (ARCHIVAL_TM1_CLUSTERING.md)
+  // that self-inflicted linkage is a wallet disclosure + coin-selection
+  // invariant (tracked to MS-5 / E′ coin selection), not a consensus mechanism.
+  // Each input is still validated per-input (scheme ∈ {1,2}, key-blob length,
+  // signature); only the cross-input agreement is dropped.
   if (tx.version >= 3 && !tx.vin.empty() && !std::holds_alternative<txin_gen>(tx.vin[0])
       && !is_archival_serve_credit_only)
   {
-    boost::optional<uint8_t> expected_scheme;
-    if (!tx.pqc_auths.empty())
-      expected_scheme = tx.pqc_auths[0].scheme_id;
-
-    if (!verify_transaction_pqc_auth(tx, expected_scheme))
+    if (!verify_transaction_pqc_auth(tx))
     {
       MERROR_VER("Failed to verify PQC hybrid signature on v3 transaction");
       tvc.m_verifivation_failed = true;
