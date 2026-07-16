@@ -18,8 +18,9 @@ holds the system in the correct frozen state throughout (§15.7).**
 with the harness's deletion sequenced behind the §15.5 gate question, which is handed
 forward to Gate-6 R4 with this audit attached — the re-homing call is R4's, not this doc's.
 The `RELEASE_CHECKLIST.md` seal entry is removed by the ratification commit; the mechanism
-deletion is a separate PR whose reviewer-map is §15.4 item 1.** This is the artifact Gate-6 §12.6
-requires first in the F-D3/F-D4 build
+deletion is a separate PR whose reviewer-map is §15.4 item 1.**
+
+This is the artifact Gate-6 §12.6 requires first in the F-D3/F-D4 build
 sequence, in the GF7_HOOKS §5.1 ordering: (a) derive the threshold and the window model from a
 stated adversary-advantage claim, (b) adversarial review of the rate model against the
 correlated-unbond adversary, (c) only then does the sweep run. A failed sweep is a

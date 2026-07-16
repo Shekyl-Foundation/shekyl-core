@@ -76,7 +76,8 @@
   sequenced behind the §15.5 answer — a harness grading a phantom
   channel is a trigger with no gate, but deleting-then-resurrecting
   would fight a re-homing PR; landing disposition: the harness never
-  landed on `dev`, preserved at `archive/feat/fd4-exit-sweep-2026-07-16`). §15.5 — whether GF-4's exit seam re-homes
+  landed on `dev`, preserved at `archive/feat/fd4-exit-sweep-2026-07-16`).
+  §15.5 — whether GF-4's exit seam re-homes
   to §18.13 wholesale, and what the four-axis joint grade becomes
   without its on-chain timing axis — is **handed forward to Gate-6 R4
   with the audit attached** (received at Gate-6 §12.8). Ratification
