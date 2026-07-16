@@ -1,12 +1,14 @@
 # F-D4 — the a-priori exit-window derivation (Gate-6 §12.6)
 
 **Status: committed a-priori 2026-07-15 — before any `draw_exit_gap` code exists and before any
-exit sweep runs. Review round 1 run same day (§10): F-W1 corrected the candidate window,
-F-W2 reclassified `σ_L` as a design lever.** This is the artifact Gate-6 §12.6 requires first
-in the F-D3/F-D4 build sequence, in the GF7_HOOKS §5.1 ordering: (a) derive the threshold and
-the window model from a stated adversary-advantage claim, (b) adversarial review of the rate
-model against the correlated-unbond adversary, (c) only then does the sweep run. A failed sweep
-is a decorrelation-redesign signal, never a move-the-bar signal.
+exit sweep runs. Review rounds 1–2 run same day (§10–§11): F-W2 reclassified `σ_L` as a design
+lever; F-W3 converted the genesis value to a `K_COVER`-pattern provisional sentinel with the
+decision rule frozen (§5.4) — the value is sealed by the Phase 7.7 stressnet rate read, not
+committed here.** This is the artifact Gate-6 §12.6 requires first in the F-D3/F-D4 build
+sequence, in the GF7_HOOKS §5.1 ordering: (a) derive the threshold and the window model from a
+stated adversary-advantage claim, (b) adversarial review of the rate model against the
+correlated-unbond adversary, (c) only then does the sweep run. A failed sweep is a
+decorrelation-redesign signal, never a move-the-bar signal.
 
 **Activation provenance:** the F-D3/F-D4 FSM gate fired 2026-07-15 —
 `release_cooldown_elapsed` is enforced consensus at `bond_post.rs:369` (`HoldingsUpdate`-drop,
@@ -16,9 +18,11 @@ per-shard anchor) and `:627` (`Unbond`, whole-record anchor); landed with the bo
 **What this doc does and does not decide.** It commits: the anchor formula, the threshold, the
 regime split, the two-sided window model with its driving rates, the smear-or-delay answer as an
 a-priori lemma, the queue predicate that converts the swan-2/W8 open question into a decidable
-condition, and a candidate genesis window under stated conservative rate assumptions. It does
-**not** commit code (`draw_exit_gap` lands after this doc's rate model passes review) and it does
-**not** grade anything (grading is the R4 joint sweep, Gate-6 §12.8).
+condition, and — per review round 2 (F-W3) — the **decision rule and conservatism percentile**
+that convert the Phase 7.7 stressnet rate read into the genesis window, with a provisional
+sentinel shipping in the interim. It does **not** commit a window value (not derivable
+pre-measurement, §5.4/§11) and it does **not** grade anything (grading is the R4 joint sweep,
+Gate-6 §12.8). `draw_exit_gap` is written against the sentinel (§9 step 2).
 
 ---
 
@@ -158,19 +162,29 @@ but it is boundable from the bond-market model: at the sim's lean-equilibrium at
 (`N_P ≈ 79–154` bonded, `STAKER_ARCHIVAL_SIM.md` §L13) with per-epoch voluntary churn fraction
 `c` (unbonds + `HoldingsUpdate`-drops per persona per epoch), `ρ_x ≈ N_P × c / SEB`.
 
-**Committed planning instance (conservative):** `N_P = 80`, `c = 0.05/epoch` (the sim's lean
-regime is low-churn by construction — `bond_duration(age)` retention plus the cooldown suppress
-mobility; 5% is deliberately below the sim's myopic acquire/drop and must be re-anchored by the
-wargame's churn read):
+**The planning box (F-W3 — the bound is a range, not a number).** Both inputs are pre-testnet
+unknowns with stated plausible ranges: `N_P ∈ 79–154` (the L13 attractor) and `c ∈ [0.02, 0.2]`.
+Evaluating the corners:
 
 ```
-ρ_x ≈ 80 × 0.05 / 10_000 = 4 × 10⁻⁴ / block
-W ≥ 9 / 4×10⁻⁴ = 22_500 blocks ≈ 2.25 SEB ≈ 31 days
+N_P =  80, c = 0.02:   ρ_x = 1.6 × 10⁻⁴   ⇒   W ≥ 56_250 blocks ≈ 5.6 SEB
+N_P =  80, c = 0.05:   ρ_x = 4.0 × 10⁻⁴   ⇒   W ≥ 22_500 blocks ≈ 2.25 SEB
+N_P = 154, c = 0.20:   ρ_x = 3.1 × 10⁻³   ⇒   W ≥  2_922 blocks ≈ 0.3 SEB
 ```
 
-The scale conclusion is robust to the exact churn number: for any plausible `c ∈ [0.02, 0.2]`,
-`W` lands at **SEB scale (≈ 0.6–5.6 SEB), one to two orders of magnitude above the entry 600**.
-This is the quantitative form of "the exit window cannot borrow the entry 600."
+The bound spans a **~19× box**. Any point picked from it is a point, not a derivation — this is
+review round 2's blocking finding (§10 F-W3), and it is why the window's *value* is sealed by
+the stressnet read (§5.4) rather than committed here. What the box does establish a-priori: at
+**every** corner the bound sits above the entry `600` (≈ 5× at the loosest corner, ≈ 94× at the
+tightest), so "the exit window cannot borrow the entry 600" survives the full box even though
+the exact scale does not.
+
+The first draft committed a single "conservative planning instance" (`N_P = 80`, `c = 0.05`).
+Review round 2 (F-W4) found that instance structurally steered: it stacked two *marginal*
+worst cases (low-end `N_P` and a `c` deliberately below the sim's myopic acquire/drop),
+yielding a bound more pessimistic than any joint scenario — the mirror image of F-W1's
+undershoot, with the same disease (the number being steered). The conservatism level is now
+committed a-priori as a **percentile of the joint read** (§5.4), not as hand-picked marginals.
 
 An SEB-scale window has a second, structural benefit: it **smears the epoch-boundary
 quantization spike** (§3) across a full epoch and overlaps adjacent-epoch release populations,
@@ -213,10 +227,11 @@ axis** (capital idle after refund — the freeze-harm shape the sim already mode
 directly comparable):
 
 - **The `σ_L` lever (wallet discipline, no mechanism change):** spec the principal-side
-  re-appearance discipline with `σ_L ≥ W / N_x`. At the §5.4 candidate and the trough
-  `N_x = 5`, that is `σ_L ≥ 6_000` blocks ≈ 8.3 days of principal-side re-appearance spread.
-  No consensus surface, no draw-domain change; the cost is idle refunded capital on the
-  principal side, mean `σ_L / 2` per exiting persona, paid **only by exiters**.
+  re-appearance discipline with `σ_L ≥ W / N_x`. At an SEB-scale window and the trough
+  `N_x = 5`, that is days-scale spread (e.g. `σ_L ≥ 4_000` blocks ≈ 5.6 days at `W = 2 × SEB`;
+  the exact figure follows the sealed `W`, §5.4). No consensus surface, no draw-domain change;
+  the cost is idle refunded capital on the principal side, mean `σ_L / 2` per exiting persona,
+  paid **only by exiters**.
 - **The release-queue (the W8 candidate):** crisis unbonds spread over a randomized
   multi-epoch window — formally raising the *effective* `σ_L` by drawing `s` over `k` epochs
   (`W_crisis = k × SEB`) so adjacent cohorts and residual steady-state churn pool into one
@@ -235,41 +250,68 @@ tell inside the cohort). The draw is always `U[0, DEFAULT_EXIT_GAP_WINDOW]`; if 
 needed it is a *mechanism* change (the draw's domain widens for everyone, always), not a
 conditional branch.
 
-### 5.4 Candidate genesis value (committed, conditional)
+### 5.4 The value is sealed by measurement; the decision rule is frozen now (F-W3)
 
-```
-DEFAULT_EXIT_GAP_WINDOW = 3 × SETTLEMENT_EPOCH_BLOCKS = 30_000 blocks   (≈ 42 days)
-```
+**No genesis value is committed here.** Review round 1 (F-W1) replaced one picked point
+(`2 × SEB`) with another (`3 × SEB`); review round 2 (F-W3) found the real error one level up:
+the §5.1 bound spans a ~19× planning box, so *any* pre-measurement value is a point picked
+from a range wide enough that some narration will always make it look derived. `ρ_x` is a
+pre-testnet unknown by this doc's own statement — the value cannot be derived before the rate
+is measured. The resolution is the project's ratified pattern for exactly this shape:
+**`K_COVER`** — a genesis constant gated on a measurement that hasn't run
+(`ARCHIVAL_REWARD_GATE_M1.md` §9.3; PF-9 pins its finalization as a Phase 7.7 stressnet-entry
+prerequisite).
 
-**F-W1 (review round 1, blocking — resolved by re-derivation):** the first draft committed
-`2 × SEB = 20_000` and described it as clearing the X-1 bound. It does not: `20_000 < 22_500`,
-11 % *below* the bound — and the shortfall runs the wrong way twice, because the planning
-instance's `c = 0.05` is deliberately pessimistic (§5.1), so `22_500` is the *conservative*
-end of the bound, and the candidate undershot the conservative end. Describing that as
-"clears" was the bar moving to meet the number — the one move GF7_HOOKS §5.1 forbids by name.
-The value was picked for being clean (`2 × SEB`, cooldown-symmetric) and the bound was then
-narrated as met. The candidate is re-derived: the smallest named-const multiple of `SEB` that
-clears the planning-instance bound is `3 × SEB`.
+**Sentinel + refusal (mirrors `k_cover.rs` mechanics, verified at source):**
 
-- **Clears the X-1 bound with margin:** `30_000 ≥ 22_500`, 33 % above the planning-instance
-  bound (equivalently: clears for any measured `c ≥ 0.0375`, a 25 % cushion below the already-
-  pessimistic committed `c = 0.05`). Still *derived from named consts* per F-D6 — the
-  multiplier changes, the derivation discipline doesn't.
-- Spans three full epochs: merges the two-anchor split (§3), pools adjacent-epoch release
-  populations across two boundary seams, and is the natural first `k` for the queue mechanism
-  if that leg wins the §5.3 costing.
-- Total worst-case exit latency after last service ≈ 2 epochs (consensus cooldown) + up to
-  3 epochs (draw), mean 3.5 epochs. The cooldown symmetry of the draft's `2 × SEB` is lost;
-  symmetry was an aesthetic, not a derivation input, and does not outrank the bound.
-- Implied §5.3 lever requirement at the trough: `σ_L ≥ W / N_x = 6_000` blocks ≈ 8.3 days
-  (`N_x = 5`).
-- **Conditional on** the wargame's `ρ_x` and `σ_L` reads (§7); the number moves only through
-  this doc's §5 model, reviewed — never through the sweep.
+- `DEFAULT_EXIT_GAP_WINDOW` lands as a **provisional sentinel `0`** with the invariant
+  *provisional ⇔ 0, sealed ⇒ ≥ 1* asserted at compile time.
+- **Non-test builds refuse the sentinel** (`compile_error!` unless the provisional flag is
+  explicitly acknowledged) — the shipping guard is the compile refusal, never the sentinel's
+  runtime semantics. Testnet/stressnet builds arm it explicitly; KAT parameterization goes
+  through a `for_kat`-style constructor behind a permanent dev-only feature.
+- `draw_exit_gap` is **written against the sentinel now** — F-D3's mechanism, typing, golden
+  vectors, and conformance harness land without waiting on the value; only shipping waits.
+
+**The decision rule, frozen a-priori (cheap today, expensive after the sweep):**
+
+1. **The rule:** given the measured `(ρ_x, N_x, σ_L)`,
+   `W := the smallest multiple of SETTLEMENT_EPOCH_BLOCKS ≥ (N_t − 1) / ρ_x` — keeps F-D6's
+   derive-from-named-consts and the §5.1 epoch-spanning/two-anchor-merging property. The
+   `2 × SEB` **structural** argument survives independently of X-1 (it merges the `E`/`E − 1`
+   split, pools adjacent-epoch cohorts, and is the natural `k = 2` if the queue fires): if the
+   measured bound lands at or below `2 × SEB`, `2 × SEB` wins on structure plus a real
+   measurement; if not, a larger multiple or the queue wins. Either way the number arrives
+   from the rate — never the rate at the number.
+2. **The conservatism level (F-W4):** the bound is evaluated at a **committed percentile of
+   the joint `(N_P, c)` read** — the **10th percentile of measured `ρ_x`** (the window clears
+   the bound in ≥ 90 % of jointly-plausible scenarios). Not stacked marginal worst cases: the
+   draft's `N_P = 80` × `c = 0.05` compounded two marginal pessimisms into a bound harsher
+   than any joint scenario, which is steering with the sign flipped. Committed now so the
+   measurement cannot be re-cut later to land on a convenient `W`.
+3. **`N_t` re-derived for the exit adversary (F-W5):** `TARGET_ANON_SET = 10` is real but was
+   anchored to the *entry* seam, and a constant's meaning is its consumer. The exit-seam
+   `N_t` must be re-derived a-priori and taken as it comes — **before** the seal, because the
+   dependence is not innocent (`N_t = 9` would make `20_000` exact at the draft's planning
+   instance, which is precisely the re-cut temptation rule 2 exists to foreclose).
+4. **The §5.3 joint-constraint costing**, already committed: the `σ_L` lever priced against
+   the queue on the shared capital-idle axis; the cheaper satisfier wins.
+
+**Why a wallet default gets consensus-constant treatment:** changing a shipped window splits
+the wallet population into two draw distributions — the §16.1 partition trap arriving as a
+flag day. Technically mutable, practically once-only: **soft-frozen**, sealed once, by the
+stressnet read, through this rule.
+
+**Seal event:** the Phase 7.7 stressnet is where `ρ_x`, `N_x`, and `σ_L` get read.
+`DEFAULT_EXIT_GAP_WINDOW` finalization rides the same stressnet-entry gate as `K_COVER`
+(PF-9 shape; `RELEASE_CHECKLIST.md` entry added beside it). Sealing after stressnet entry
+would leave mainnet genesis as the window's first live execution — same argument, same pin.
 
 ## 6. The cost side (named, per 00-mission ordering)
 
 The window's cost is **capital lockup**: collateral stays unspendable up to `W` blocks past
-`H_0` (mean `W/2` ≈ 21 days at the candidate). Priority-2 (privacy) buys this from usability
+`H_0` (mean `W/2` — weeks-scale at any SEB-scale `W`; the exact figure follows the sealed
+value, §5.4). Priority-2 (privacy) buys this from usability
 explicitly — the same trade the entry standoff made, at larger scale because the exit's cover is
 thinner. Named consequences:
 
@@ -291,22 +333,27 @@ Committed as conditional on three pre-testnet unknowns, each a named sweep axis 
 
 | Unknown | Source of truth when it exists | Effect on the model |
 |---|---|---|
-| `ρ_x` (steady exit-class rate) | Testnet bond-market telemetry; interim: L13 attractor × churn read from the L18-reconciled sim | Moves the X-1 bound linearly |
+| `ρ_x` (steady exit-class rate) | **The Phase 7.7 stressnet read — the §5.4 seal event** (joint `(N_P, c)` distribution, 10th-percentile evaluation); interim scale bracket only: L13 attractor × churn from the L18-reconciled sim (the ~19× §5.1 box) | Decides `W` through the frozen §5.4 rule |
 | `σ_L` (principal-side re-appearance spread) | The coupled wallet-discipline design (not yet spec'd) — a **design lever** (F-W2), chosen when that discipline lands, feasibility-bounded by how fast principals actually redeploy | Moves the X-2 bound linearly; its feasible range decides the §5.3 lever-vs-queue costing |
 | `N_x` trough cohort | L17 swan table (9–25 × exit fraction); wargame re-read | Moves the X-2 bound and the queue predicate |
 
 **Reopen criteria:** (a) the W8 wargame contradicts the §3 quantization lemma (e.g., anchor
 heterogeneity in real cohorts exceeds two epochs — then the burden re-splits between anchor
-spread and draw and the §5 model is re-derived); (b) measured `ρ_x` off the committed planning
-instance by more than an order of magnitude in either direction; (c) the principal-side
-discipline lands and its feasible `σ_L` range is known (then the §5.3 joint constraint is
-priced for real — lever vs queue — and the cheaper satisfier is committed). Re-evaluation
-shape: amend this doc + Gate-6 §12.6, adversarial review of the changed leg, before any window
-change ships.
+spread and draw and the §5 model is re-derived); (b) the stressnet-measured `ρ_x` falls
+outside the §5.1 planning box entirely (below `1.6 × 10⁻⁴` or above `3.1 × 10⁻³`) — then the
+box's own model (`ρ_x ≈ N_P × c / SEB`) is wrong, not just its inputs, and §5 is re-derived
+rather than re-evaluated; (c) the principal-side discipline lands and its feasible `σ_L` range
+is known (then the §5.3 joint constraint is priced for real — lever vs queue — and the cheaper
+satisfier is committed). Re-evaluation shape: amend this doc + Gate-6 §12.6, adversarial
+review of the changed leg, before any window change ships. **The sealed value itself never
+reopens through these criteria — post-seal it is soft-frozen (§5.4); a change is a §16.1
+partition event and takes a design round of its own.**
 
 ## 8. What the sweep must include (pre-registered, so the harness is built to the bar)
 
-1. **X-1 arm:** lone exit against swept `ρ_x`; grade `r` against `< 2` at `N_t = 10`.
+1. **X-1 arm:** lone exit against swept `ρ_x`; grade `r` against `< 2` at the exit-derived
+   `N_t` (F-W5 — the re-derivation must land before this arm runs; the entry-inherited `10` is
+   not the grading constant).
 2. **X-2 arm (the L17/W8 wargame — one obligation with this doc):** synchronized cohort
    (`N_x ∈ {3, 5, 8}`, both one-anchor and two-anchor splits per §3), swept `σ_L`; grade
    intra-cohort assignment advantage. This arm empirically answers smear-vs-delay and supplies
@@ -323,12 +370,18 @@ change ships.
 ## 9. Build order after this doc
 
 1. Adversarial review of §5's rate model against the correlated-unbond adversary (the step
-   gating any code). **Round 1 run 2026-07-15 — findings F-W1/F-W2 resolved by amendment
-   (§10); code stays gated on review of the amendment.**
-2. `draw_exit_gap` in `shekyl-standoff` (one-sided `bounded_uniform`, typed `ExitGap`, golden
-   vector on the aarch64 lane, F-D6-derived anchor, conformance + §8.3 negative control).
-3. The X-1/X-2 sweep per §8; grading folds into the R4 joint grade (Gate-6 §12.8) — never
+   gating any code). **Round 1 run 2026-07-15 (F-W1/F-W2); round 2 run same day (F-W3/F-W4/
+   F-W5) — resolved by the §5.4 sentinel + frozen-rule reshape (§10).**
+2. `draw_exit_gap` in `shekyl-standoff`, **written against the provisional sentinel** (§5.4):
+   one-sided `bounded_uniform`, typed `ExitGap`, golden vector on the aarch64 lane,
+   F-D6-derived anchor, conformance + §8.3 negative control; compile-refusal wiring per the
+   `k_cover.rs` pattern. Unblocked now — the mechanism does not wait on the value.
+3. The exit-seam `N_t` re-derivation (F-W5) — before the sweep grades and before the seal.
+4. The X-1/X-2 sweep per §8; grading folds into the R4 joint grade (Gate-6 §12.8) — never
    per-axis.
+5. **The seal:** Phase 7.7 stressnet read of `(ρ_x, N_x, σ_L)` → the §5.4 frozen rule fixes
+   `DEFAULT_EXIT_GAP_WINDOW` → provisional flag cleared (stressnet-entry prerequisite,
+   `RELEASE_CHECKLIST.md`, beside `K_COVER`/PF-9).
 
 ## 10. Review round 1 (2026-07-15) — the rate model vs the correlated-unbond adversary
 
@@ -338,18 +391,17 @@ The §9.1 adversarial review ran same-day. Inputs verified at source first (`TAR
 by amendment in this doc; the review's survival list recorded so later rounds don't relitigate
 it.
 
-- **F-W1 (blocking — resolved):** the draft candidate `2 × SEB = 20_000` did not clear its own
-  X-1 planning-instance bound (`22_500`) and §5.4 said "clears" — bar-moving, the GF7 §5.1
-  named violation, aggravated because the pessimistic `c` makes `22_500` the conservative end.
-  Resolution: candidate re-derived to `3 × SEB = 30_000` (33 % margin; clears down to
-  `c ≥ 0.0375`); the failure and the correction are recorded in §5.4 rather than erased.
+- **F-W1 (blocking — resolved, then superseded by F-W3):** the draft candidate
+  `2 × SEB = 20_000` did not clear its own X-1 planning-instance bound (`22_500`) and §5.4
+  said "clears" — bar-moving, the GF7 §5.1 named violation, aggravated because the pessimistic
+  `c` makes `22_500` the conservative end. The round-1 resolution re-derived the candidate to
+  `3 × SEB`; round 2 (F-W3) found that fix repeated the category error at a different point.
 - **F-W2 (load-bearing — resolved):** §5.3 treated `σ_L` as exogenous and pre-sanctioned the
   release-queue on predicted failure, despite §5.2 itself calling `σ_L` wallet-drawn. The
   predicate is a **joint constraint over `(W, σ_L)`**; the `σ_L` wallet-discipline lever
-  (`σ_L ≥ W/N_x = 6_000` blocks at the candidate — no mechanism change, cost borne by exiters
-  only) must be priced against the queue (domain widens for everyone, always) on the shared
-  capital-idle axis before either is committed. §5.2/§5.3/§7 amended; neither option is
-  pre-selected.
+  (no mechanism change, cost borne by exiters only) must be priced against the queue (domain
+  widens for everyone, always) on the shared capital-idle axis before either is committed.
+  §5.2/§5.3/§7 amended; neither option is pre-selected.
 - **Confirmed sound (survives both fixes):** the §3 anchor-quantization lemma (delays and
   merges, never smears — and it merges `last_served_epoch`, already public, so it leaks
   nothing new); the rate-driven X-1 shape; the X-2 confusability form (`W/N_x ≲ σ_L`);
@@ -359,8 +411,47 @@ it.
 - **Precision item (resolved):** the `N_t` citation disambiguated — `standoff.rs` names both a
   sim file and (as a crate) the production draw home; §5.1 now cites the sim path and line.
 
-`draw_exit_gap` remains gated: the window value is the artifact, and code opens only against
-the amended §5.4 (review of this amendment is the reopen check, not a new round).
+## 11. Review round 2 (2026-07-15) — the value is not derivable pre-measurement
+
+Round 2 reviewed the round-1 amendment and found the deeper error: F-W1's fix (`3 × SEB`)
+corrected a point *within* the same mistake. Three findings, resolved by the §5.4 reshape.
+
+- **F-W3 (blocking — resolved):** the X-1 bound is not a number but a **~19× planning box**
+  (§5.1 corners: `2_922` to `56_250` over the doc's own stated ranges `N_P ∈ 79–154`,
+  `c ∈ [0.02, 0.2]`). The round-1 planning instance (`22_500`) and both draft candidates are
+  points in that box with no better claim than any other; "within 12 %" needed saying
+  precisely because a number picked from a range that wide is always within something. `ρ_x`
+  is a pre-testnet unknown by this doc's own statement — **the value cannot be derived before
+  the rate is measured, and no re-argued candidate changes that.** Resolution: stop picking.
+  The project's ratified pattern for a genesis constant gated on an unrun measurement is
+  `K_COVER` (M1 §9.3 provisional sentinel + compile-time refusal; PF-9 seal-before-stressnet
+  pin). `DEFAULT_EXIT_GAP_WINDOW` is the same shape gated on the same event and rides the
+  same Phase 7.7 gate — §5.4 now freezes the **decision rule** and ships the **sentinel**;
+  the value arrives from the stressnet rate read. That the constant is a wallet default, not
+  consensus, *strengthens* the treatment: changing it post-ship splits the population into
+  two draw distributions (the §16.1 partition trap as a flag day), so it is soft-frozen —
+  technically mutable, practically once-only.
+- **F-W4 (steering-symmetry — resolved):** the round-1 planning instance stacked two
+  *marginal* worst cases (`N_P = 80` low end × `c = 0.05` deliberately-below-sim), producing
+  a bound more pessimistic than any joint scenario — the mirror image of F-W1 (one direction
+  inflates the bound, the other undershoots it; both are the number being steered).
+  Resolution: the conservatism level is committed a-priori as the **10th percentile of the
+  joint `(N_P, c)` read** (§5.4 rule 2), so the measurement cannot be re-cut to land on a
+  convenient `W`.
+- **F-W5 (input provenance — pinned, derivation owed):** `N_t = 10` is real at
+  `shekyl-staking-sim/src/standoff.rs:116` but was anchored to the **entry** seam; a
+  constant's meaning is its consumer. The exit-seam `N_t` must be **re-derived a-priori and
+  taken as it comes, before the seal** — the dependence is not innocent (`N_t = 9` would make
+  `20_000` exact at the round-1 instance), which is exactly why it settles before the value,
+  not after. Owed at §9 step 3; the §8.1 sweep arm grades at the exit-derived `N_t`.
+- **Survives round 2:** the `2 × SEB` **structural** argument (two-anchor merging,
+  adjacent-epoch pooling, natural `k = 2`) — good and entirely independent of X-1; it may win
+  at the seal on structure plus a real measurement, it just cannot be smuggled in as
+  "clears X-1" (§5.4 rule 1). Everything on the round-1 survival list stands.
+
+**`draw_exit_gap` is unblocked** — written against the sentinel per §5.4, compiling for
+testnet under explicit arming, refusing to ship until the read seals the value. F-D3's
+mechanism lands now; the one thing that genuinely cannot be known yet stays honestly unknown.
 
 ## Related documents
 
@@ -370,6 +461,9 @@ the amended §5.4 (review of this amendment is the reopen check, not a new round
   threshold shape (`r < 2`), regime splitting, exchangeability pin, conditional-seal posture.
 - [`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](ARCHIVAL_BOND_2C_GF7_HOOKS.md) §5.1 — threshold-precedes-
   grading ordering.
+- [`ARCHIVAL_REWARD_GATE_M1.md`](ARCHIVAL_REWARD_GATE_M1.md) §9.3 / §4 — the `K_COVER`
+  provisional-sentinel pattern this doc's §5.4 mirrors (sentinel ⇔ 0, compile-time refusal,
+  PF-9 seal-before-stressnet ordering).
 - [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §2.2 — the L16 floor under
   `RELEASE_COOLDOWN_EPOCHS`.
 - [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §L13/§L17/§L18 — population attractor,

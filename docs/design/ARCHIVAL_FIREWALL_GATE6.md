@@ -1954,14 +1954,21 @@ signal). **The derivation is committed:**
 [`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`](ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md) (2026-07-15) —
 anchor formula from named consts (§1.1), two-regime split (steady-state X-1 lower bound vs
 crisis-cohort X-2 upper bound), the anchor-quantization lemma (a-priori: the cooldown delays and
-*quantizes*, does not smear), the §5.3 predicate making the W8 question decidable, candidate
-`DEFAULT_EXIT_GAP_WINDOW`, pre-registered sweep arms. **Rate-model review round 1 run
-2026-07-15** (derivation doc §10): F-W1 (blocking) — the draft `2 × SEB` candidate failed its
-own X-1 planning bound (`20_000 < 22_500`) while §5.4 said "clears"; re-derived to
-`3 × SEB = 30_000` (33 % margin). F-W2 (load-bearing) — `σ_L` reclassified as a design lever;
-the §5.3 predicate is a joint constraint over `(W, σ_L)`, and the wallet-discipline lever must
-be costed against the release-queue before either commits. Lemma, X-1 shape, X-2 form, and the
-one-window pin survived review. `draw_exit_gap` code stays gated on review of the amendment.
+*quantizes*, does not smear), the §5.3 predicate making the W8 question decidable,
+pre-registered sweep arms. **Rate-model review rounds 1–2 run 2026-07-15** (derivation doc
+§10–§11): F-W1/F-W2 (round 1) — the draft `2 × SEB` candidate failed its own X-1 planning
+bound while §5.4 said "clears"; `σ_L` reclassified as a design lever, the §5.3 predicate a
+joint constraint over `(W, σ_L)` with the wallet-discipline lever costed against the
+release-queue. F-W3/F-W4/F-W5 (round 2, superseding round 1's re-picked candidate) — the X-1
+bound is a **~19× planning box**, so no pre-measurement value is derivable;
+`DEFAULT_EXIT_GAP_WINDOW` adopts the **`K_COVER` provisional-sentinel pattern** (M1 §9.3:
+sentinel `0`, compile-time refusal in non-test builds) with the **decision rule frozen**
+(smallest `SEB` multiple ≥ the X-1 bound at the committed 10th percentile of the joint
+`(N_P, c)` stressnet read, exit-derived `N_t` per F-W5) and the value **sealed by the
+Phase 7.7 stressnet rate read** (`RELEASE_CHECKLIST.md` entry beside `K_COVER`/PF-9). Lemma,
+X-1 shape, X-2 form, the one-window pin, and `2 × SEB`'s structural (not X-1) argument
+survived review. **`draw_exit_gap` is unblocked, written against the sentinel** — compiles
+for testnet under explicit arming, refuses to ship unsealed.
 
 ### 12.7 F-D5 (routed out) and F-D6 (anti-drift pin)
 
@@ -2020,6 +2027,24 @@ one-window pin survived review. `draw_exit_gap` code stays gated on review of th
 ---
 
 ## Revision history
+
+- **2026-07-15 (F-D4 review round 2 — F-W3/F-W4/F-W5, sentinel reshape):** Round 2 reviewed
+  the round-1 amendment and found its `3 × SEB` fix repeated the category error: the X-1
+  bound spans a ~19× planning box over the doc's own ranges (`N_P ∈ 79–154`, `c ∈ [0.02,
+  0.2]`; corners `2_922`–`56_250`), so no pre-measurement value is derivable — any picked
+  point can be narrated as "within" something. Resolution (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`
+  §5.4/§11): `DEFAULT_EXIT_GAP_WINDOW` adopts the `K_COVER` M1 §9.3 provisional-sentinel
+  pattern (sentinel `0`, compile-time refusal in non-test builds, dev-only arming), the value
+  sealed by the Phase 7.7 stressnet rate read (`RELEASE_CHECKLIST.md` entry beside
+  `K_COVER`/PF-9 — a wallet default sizing an anonymity set is soft-frozen: post-ship change
+  is the §16.1 partition trap as a flag day). Frozen now instead: the decision rule (smallest
+  `SEB` multiple ≥ the X-1 bound), the conservatism level (10th percentile of the joint
+  `(N_P, c)` read — F-W4 killed the round-1 instance's stacked marginal worst cases), and the
+  F-W5 obligation that the exit-seam `N_t` be re-derived a-priori before the seal (the
+  entry-inherited `10` is not the exit constant; `N_t = 9` would have made `20_000` exact —
+  the re-cut temptation the ordering forecloses). `2 × SEB`'s structural argument survives
+  independent of X-1 and may win at the seal on structure plus measurement. §12.6 pointer
+  updated; **`draw_exit_gap` unblocked against the sentinel**.
 
 - **2026-07-15 (F-D4 review round 1 — F-W1/F-W2):** The rate-model adversarial review ran
   against the committed derivation (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §10). F-W1
