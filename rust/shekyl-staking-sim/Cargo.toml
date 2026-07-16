@@ -35,7 +35,10 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention", features = 
 # joint three-axis scenario through the recorded timeline (§6.3). The sim also
 # imports the single-sourced `draw_entry_gap` + `plan_entry_seam` so it grades
 # the same draw/planner the wallet runs ("what we validated is what ships").
-shekyl-standoff = { path = "../shekyl-standoff", features = ["gf7-hooks"] }
+# `provisional-exit-gap-window`: DEFAULT_EXIT_GAP_WINDOW unsealed-sentinel
+# acknowledgment (ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md §5.4) — delete at the
+# Phase 7.7 seal.
+shekyl-standoff = { path = "../shekyl-standoff", features = ["gf7-hooks", "provisional-exit-gap-window"] }
 
 # The `conformance` feature (float grading + self-cert harness) stays dev-only:
 # it backs the smoke test that the sim's `SplitMix64` conforms through the

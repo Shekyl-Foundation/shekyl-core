@@ -25,9 +25,29 @@ conformance = ["dep:shekyl-stats"]
 # recording impl lives in `shekyl-staking-sim` (layer 2, CI dependency-graph
 # asserted). Adds no dependencies: the seam is inert by type (layer 1).
 gf7-hooks = []
+# DEFAULT_EXIT_GAP_WINDOW unsealed-sentinel acknowledgment (F-D4 §5.4,
+# ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md; the k_cover.rs shape). While the
+# window is the provisional sentinel, src/exit.rs refuses to compile without
+# this explicit acknowledgment — the shipping guard is the compile refusal.
+# DELETE at the Phase 7.7 seal, together with every consumer acknowledgment
+# line (deletion target named in the spec §5.4).
+provisional-exit-gap-window = []
+# Exit-window KAT-injection constructor (`ExitGapWindow::for_kat`) for tests
+# and conformance arms. PERMANENT (unlike provisional-exit-gap-window): the
+# fixtures must survive the §5.4 seal, so this feature does not ride the
+# provisional flag. Dev-dependencies only; never enable from production code.
+exit-window-kat = []
 
 [dependencies]
 shekyl-stats = { path = "../shekyl-stats", optional = true }
+
+# Integration tests and doc-tests build this crate as a dependency of
+# themselves, so the provisional-exit-gap-window acknowledgment must ride the
+# dev graph explicitly (delete with the feature at the seal). exit-window-kat
+# is permanent and dev-only — this line is how the KAT constructor stays out
+# of production graphs.
+[dev-dependencies]
+shekyl-standoff = { path = ".", features = ["provisional-exit-gap-window", "exit-window-kat"] }
 
 [lints]
 workspace = true
