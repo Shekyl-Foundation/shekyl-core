@@ -1318,12 +1318,15 @@ sustainability is unaffected by the recalibration.
     cohort concentrated)
     ([`design/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`](./design/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md)
     §3 anchor-quantization lemma). The release-queue question is likewise
-    pre-committed as the §5.3 queue predicate: if
-    `(N_t − 1)/ρ_x ≤ N_x·σ_L` fails, the disposition is the W8 queue
-    redesign (a decorrelation redesign, never a moved bar, per GF7_HOOKS
-    §5.1). The wargame round itself remains open — it graduates the lemma
-    from a-priori to empirical and supplies the `ρ_x`/`σ_L` reads the
-    candidate window is conditional on. Target unchanged: **V3.0**.
+    pre-committed as the §5.3 predicate `(N_t − 1)/ρ_x ≤ N_x·σ_L` — per
+    review round 1 (F-W2, doc §10) a **joint constraint over `(W, σ_L)`**,
+    satisfiable either by the `σ_L` wallet-discipline lever or by the W8
+    queue redesign; both are priced on the shared capital-idle axis before
+    either commits (a decorrelation redesign, never a moved bar, per
+    GF7_HOOKS §5.1). The wargame round itself remains open — it graduates
+    the lemma from a-priori to empirical and supplies the `ρ_x`/`σ_L`
+    feasibility reads the candidate window (`3 × SEB` post-F-W1) is
+    conditional on. Target unchanged: **V3.0**.
 
 - **Foundation treasury diversification — floor capacity must not be
   pro-cyclical (swan-2/W4, 2026-06-11; re-scoped swan-3/W12–W13; re-anchored
