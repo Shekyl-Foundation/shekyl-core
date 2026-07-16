@@ -4,6 +4,19 @@
 
 ### Added
 
+- **F-7 (R1-F-7): first `EngineSignerKind` associated item —
+  `SigningCeremony`.** The sealed signer-kind marker was a zero-associated-item
+  trait; adding the first item was a Round-1 closure prerequisite (associated
+  items must be defined by every implementor, and associated-type defaults are
+  unstable, so a compiler would have forced it mid-MS-1). Landed the
+  trait-surface amendment now: `EngineSignerKind::SigningCeremony`, with
+  `SoloSigner::SigningCeremony = core::convert::Infallible`. A solo wallet runs
+  no multisig ceremony, so its ceremony type is uninhabited — "a solo wallet ran
+  a multisig ceremony" is unrepresentable, guarded by a compile-time
+  `match ceremony {}` pin (same compile-forced tier as the `!Clone` archival
+  keys). `MultisigSigner<N, K>` (V3.1) will set its own FROST ceremony type
+  (MS-5). `rust/shekyl-engine-core/src/engine/signer.rs`.
+
 - **docs: F-W5 resolved — the exit-seam `N_t`, derived a-priori
   (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §13).** Result: **`N_t(exit)
   = 10`** — numerically equal to the entry posture anchor by

@@ -579,7 +579,7 @@ design's acceptance**, not implementation.
 | **R1-F-4** | HIGH | Two `group_id` defs: deterministic `multisig_group_id` vs caller-supplied `dkg.rs` context. | **Accepted → evaporates with F-3 DELETE** (DKG caller-supplied id dies with the file). Canonical = `multisig_group_id` / v31. |
 | **R1-F-5** | HIGH | `MultisigGroup` Serialize hex of secrets; un-zeroized `Vec` reassign; not a `WalletLedger` extension — falsifies "confirm R6". | **Accepted → evaporates with F-3 DELETE.** R6 re-open against **v31** persist shape only (MS-7). |
 | **R1-F-6** | HIGH | No CI job builds `--features multisig`. Gate armed, no positive compile trigger. | **Landed (this PR).** `ci/multisig-feature`: check/clippy/test + P0-n. First enable may clippy-fail on `frost_sal` — discovery, not greenwash. Round 1 closure still needs clippy-green / F-3 DELETE. |
-| **R1-F-7** | MEDIUM | §3.1 "associated items only on multisig kind" is a compile error; `EngineSignerKind` has zero associated items; marker is aspiration. | **Accepted.** Correct framing: first associated item = trait-surface amend touching `SoloSigner` (`SigningCeremony = Infallible`). |
+| **R1-F-7** ✅ **LANDED** | MEDIUM | §3.1 "associated items only on multisig kind" is a compile error; `EngineSignerKind` has zero associated items; marker is aspiration. | **Accepted → LANDED.** First associated item `EngineSignerKind::SigningCeremony` added; `SoloSigner::SigningCeremony = core::convert::Infallible` (uninhabited). A compile-time pin (`fn(_: SoloSigner::SigningCeremony) -> ! { match ceremony {} }`) fails the build if it stops being uninhabited — "a solo wallet ran a multisig ceremony" is unrepresentable. `signer.rs`; `MultisigSigner<N,K>` sets its own (FROST, MS-5). |
 | **R1-F-8** | MEDIUM | Second verify site + five independent bound defs; folds into MSW-1 lockstep + MSW-3 misattribution. | **Accepted → MSW-1/MSW-3.** |
 | **R1-F-9** | MEDIUM | FROST `sign_own` nonce-reuse; unauthenticated `participant` claims. | **Accepted → evaporates with F-3 DELETE.** |
 | **R1-F-10** | LOW | Pin discipline: `dev`-at-recording ≠ branch tip. | **Accepted.** Banner + this table. |
@@ -693,8 +693,9 @@ F-3 Option A fossil DELETE is closed as design disposition (impl
 pending). F-6 CI lane: `ci/multisig-feature` — check / clippy / test
 + P0-n (toolchain 1.94.0; no job-level RUSTFLAGS). First enable may
 fail clippy on `frost_sal` (discovery). Remaining Round 1 blockers
-for **closure**: clippy-green (via F-3 DELETE) + SoloSigner
-associated-item framing (F-7).
+for **closure**: clippy-green (via F-3 DELETE) + ~~SoloSigner
+associated-item framing (F-7)~~ — **F-7 landed**; closure now needs only
+F-6 CI.
 
 Still Round 1 closure blockers for Track B; this audit focused on the
 Track A / F-2 / size claims that decide whether Track A is a constant
@@ -788,11 +789,15 @@ unchanged across the 9-commit archival drift.
 ### §3.1 Engine identification (corrected per R1-F-7)
 
 - §10.3.1 still open for MS-1.
-- **Honest framing:** adding the first associated item to
-  `EngineSignerKind` is a **trait-surface amendment that touches
-  `SoloSigner`** (e.g. `type SigningCeremony = Infallible`), not a
-  silent feature flip. Module docs describing "eventual" associated
-  types are aspiration, not substrate (`signer.rs:60-64`, `:65`).
+- **Honest framing (✅ LANDED):** the first associated item on
+  `EngineSignerKind` — `type SigningCeremony` — is a trait-surface
+  amendment that touches `SoloSigner` (`type SigningCeremony =
+  core::convert::Infallible`), not a silent feature flip. Landed in
+  `signer.rs`: `SoloSigner`'s ceremony type is uninhabited and a
+  compile-time `match ceremony {}` pin fails the build if that changes;
+  `SigningCeremony` is now **substrate**. Other per-kind types (an eventual
+  `SignaturePayload`) stay aspiration until the code that consumes them
+  lands.
 - `#[cfg(feature = "multisig")]` on inherent/`Engine` methods remains
   valid for bodies that must not exist in V3.0 builds.
 
@@ -822,7 +827,7 @@ Deferred to Round 2 after MS-1 **and** F-3 lineage fate.
 | ID | Target | Intent |
 | --- | --- | --- |
 | **P0-a** | `PQC_MULTISIG.md` §16 | Align feature name; list modules; keep §16.4 superseded |
-| **P0-b** | `V3_ENGINE_TRAIT_BOUNDARIES.md` | MS-1 + SoloSigner associated-item amend (§8.2) |
+| **P0-b** | `V3_ENGINE_TRAIT_BOUNDARIES.md` | MS-1 + SoloSigner associated-item amend (§8.2) — **amend landed (F-7): `SigningCeremony`** |
 | **P0-c** | `WALLET_REWRITE_PLAN.md` | Feature-flip checklist → this doc |
 | **P0-d** | Persistence / ledger | **Re-open R6** against post-F-3/F-5 group shape |
 | **P0-e** | INDEX | MS / MSW status rows |
@@ -851,8 +856,8 @@ fossil **DELETE** (R1-F-3). Round-2 still names `K` on
 `MultisigSigner<N, K>` (threshold vs spend_auth / scheme version for
 the *future* coexist axis — not "which fossil").
 
-Still needs R1-F-7 SoloSigner associated-item amend. F-6 CI remains
-Round 1 closure prerequisite.
+R1-F-7 SoloSigner associated-item amend **landed** (`EngineSignerKind::SigningCeremony`,
+`SoloSigner = Infallible`). F-6 CI remains Round 1 closure prerequisite.
 
 **Reopen.** Only if coexistence premise withdrawn (§15.5 amended).
 
@@ -997,8 +1002,8 @@ not a quiet reopen of MS-8.
 - [x] **R1-F-3:** Disposition **DELETE** Option A fossil (impl pending).
 - [x] **R1-F-4:** Evaporates with F-3 DELETE; canonical = v31 `multisig_group_id`.
 - [x] **R1-F-5 / MS-7:** `MultisigGroup` dies with F-3; R6 against v31 + discriminator.
-- [ ] **R1-F-7:** §3.1 / SoloSigner associated-item framing accepted
-      into Phase 0 plan.
+- [x] **R1-F-7:** §3.1 / SoloSigner associated-item amend **landed** —
+      `EngineSignerKind::SigningCeremony`, `SoloSigner = Infallible` (`signer.rs`).
 - [ ] **D-10:** MS-4 / MS-5 restated under E′ (above) — maintainer
       sign-off that Round 1 leans are no longer Option D prover-shaped.
 - [ ] Maintainer sign-off on revised Track A (constant fix) + MS-8

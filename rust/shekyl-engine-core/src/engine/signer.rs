@@ -58,11 +58,26 @@ mod private {
 /// `match` at runtime, which produces unreachable arms in V3.0 (where
 /// only `SoloSigner` exists) and reintroduces the runtime-mode-flag
 /// pattern the rewrite plan rejects. A trait with associated items lets
-/// each kind name its own associated types (e.g., the eventual
-/// `SignaturePayload`, `SigningCeremony`) and lets the type system
+/// each kind name its own associated types and lets the type system
 /// statically prove that solo and multisig code paths never share a
-/// runtime branch.
-pub trait EngineSignerKind: private::Sealed + 'static {}
+/// runtime branch. The first such item is
+/// [`SigningCeremony`](EngineSignerKind::SigningCeremony) (below); further
+/// per-kind types (e.g. an eventual `SignaturePayload`) land with the code
+/// that consumes them, not before.
+pub trait EngineSignerKind: private::Sealed + 'static {
+    /// The ceremony this signer kind runs to authorize a spend, before any
+    /// signature can be produced.
+    ///
+    /// [`SoloSigner`] sets this to the uninhabited [`core::convert::Infallible`]:
+    /// a solo wallet holds the spend secret and signs in-process, running
+    /// **no** multisig ceremony. Because the type has no values, every code
+    /// path that would consume a `SoloSigner::SigningCeremony` is statically
+    /// dead — "a solo wallet ran a multisig ceremony" is unrepresentable, the
+    /// same compile-forced guarantee as the `!Clone` archival keys.
+    /// `MultisigSigner<N, K>` (V3.1, behind the `multisig` feature) will set
+    /// this to its two-round FROST ceremony type (MS-5).
+    type SigningCeremony;
+}
 
 /// V3.0 default: this wallet holds the spend secret directly and signs
 /// transactions in-process.
@@ -74,7 +89,28 @@ pub trait EngineSignerKind: private::Sealed + 'static {}
 pub struct SoloSigner;
 
 impl private::Sealed for SoloSigner {}
-impl EngineSignerKind for SoloSigner {}
+impl EngineSignerKind for SoloSigner {
+    /// A solo wallet runs no multisig ceremony; the type is uninhabited.
+    type SigningCeremony = core::convert::Infallible;
+}
+
+// F-7 (R1-F-7): the first `EngineSignerKind` associated item, landed before
+// MS-1 so the compiler doesn't discover a missing item mid-implementation.
+// `SoloSigner`'s ceremony type is uninhabited — the guarantee MS-5's ceremony
+// dispatch relies on: a `SoloSigner::SigningCeremony` value cannot exist, so
+// handling one is the empty match, dead code the compiler erases. This block
+// compiles only while that stays true; a non-uninhabited type would make the
+// `match ceremony {}` non-exhaustive and fail the build.
+const _: () = {
+    fn solo_ceremony_is_uninhabited(
+        ceremony: <SoloSigner as EngineSignerKind>::SigningCeremony,
+    ) -> ! {
+        match ceremony {}
+    }
+    // Referenced (never called — no `Infallible` value can exist) so the
+    // definition, and thus the empty-match check, is not elided as unused.
+    let _ = solo_ceremony_is_uninhabited;
+};
 
 // ----------------------------------------------------------------------------
 // PR 5 — `Signer` trait surface (R11 (b), Phase 0h)

@@ -6048,15 +6048,18 @@ sustainability is unaffected by the recalibration.
     that reads the Rust consts — none is wired. *Target:* the same
     consensus-port neighborhood as "option 2" (generate `cryptonote_config.h`'s
     PQC block from Rust); same shape, do them together.
-  - **F-7 (Round-1 blocker): `EngineSignerKind` associated items.** §3.1's
-    "associated items only the multisig kind defines" is a compile error
-    at implementation time — associated items must be defined by every
-    implementor and associated-type defaults are unstable, so `SoloSigner`
-    must name them. Fix is also the right design:
-    `SoloSigner::SigningCeremony = Infallible` makes "a solo wallet ran a
-    multisig ceremony" unrepresentable (same tier as `!Clone` archival
-    keys). *Blocker:* none — wants doing **before MS-1 closes**, not after
-    a compiler discovers it. *Target:* MS-1.
+  - **F-7 (Round-1 blocker): `EngineSignerKind` associated items — ✅ LANDED
+    (2026-07-16).** §3.1's "associated items only the multisig kind defines"
+    was a compile error at implementation time — associated items must be
+    defined by every implementor and associated-type defaults are unstable, so
+    `SoloSigner` must name them. Fix is also the right design:
+    `SoloSigner::SigningCeremony = core::convert::Infallible` makes "a solo
+    wallet ran a multisig ceremony" unrepresentable (same tier as `!Clone`
+    archival keys). **Landed** in `signer.rs`: `EngineSignerKind::SigningCeremony`
+    added, `SoloSigner`'s is the uninhabited `Infallible`, guarded by a
+    compile-time `match ceremony {}` pin that fails the build if it stops being
+    uninhabited. Done **before MS-1**, so no compiler discovers it mid-flight;
+    `MultisigSigner<N,K>` sets its own ceremony type (FROST, MS-5).
 
 - **PQC Multisig V3.1: Option-D residue left standing after the F-6
   prover excision (blocker: MS-5 / §15.4a).** F-6 (PR #310) excised the
