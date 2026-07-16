@@ -283,14 +283,33 @@ namespace config
   const char HASH_KEY_MESSAGE_SIGNING[] = "ShekylMessageSignature";
   const unsigned char HASH_KEY_MM_SLOT = 'm';
   // PQC Multisig (scheme_id = 2)
-  const uint32_t MAX_MULTISIG_PARTICIPANTS{7};
-  // Max serialized PQC blob sizes for deserialization bounds checking.
-  // Ed25519(32) + ML-DSA-65(1952) + 12 header = 1996 per participant.
+  // MSW-G (settled 2026-07-15: 2f+1 at f=2; withdrew the same-day MAX=8).
+  // Correctness cap only (verify_multisig / MultisigKeyContainer reject
+  // n_total > MAX); NOT the source of the DoS ceilings below. The C++ twin of
+  // shekyl-crypto-pq's MAX_MULTISIG_PARTICIPANTS — the cross-language KAT
+  // (`fcmp.cpp::msw1_pqc_constants_match_rust`) pins C++ == Rust, the only
+  // check that catches the two sides drifting from each other (F-1).
+  const uint32_t MAX_MULTISIG_PARTICIPANTS{5};
+  // Per-participant serialized lengths (twins of SINGLE_KEY/SIG_CANONICAL_LEN
+  // + SPEND_AUTH_PUBKEY_LEN). Ed25519(32) + ML-DSA-65(1952) + 12 header = 1996;
+  // classical spend-auth pubkey = 32; Ed25519(64) + ML-DSA-65(3309) + 12 = 3385.
   constexpr size_t PQC_HYBRID_SINGLE_KEY_LEN = 1996;
-  constexpr size_t PQC_MAX_PUBLIC_KEY_BLOB = 2 + MAX_MULTISIG_PARTICIPANTS * PQC_HYBRID_SINGLE_KEY_LEN;
-  // Ed25519(64) + ML-DSA-65(3309) + 12 header = 3385 per participant.
+  constexpr size_t PQC_SPEND_AUTH_PUBKEY_LEN = 32;
   constexpr size_t PQC_HYBRID_SINGLE_SIG_LEN = 3385;
-  constexpr size_t PQC_MAX_SIGNATURE_BLOB = 2 + MAX_MULTISIG_PARTICIPANTS * PQC_HYBRID_SINGLE_SIG_LEN;
+  // DoS ceilings for the serialized multisig key / signature containers.
+  // Round, generous, DECOUPLED from MAX — correctness is the exact-length
+  // container parse, not this bound. The static_asserts make a ceiling below
+  // the largest legal container a COMPILE error (MSW-1 / F-1: the old
+  // `2 + N*LEN` fossil omitted the 3-byte header and the 32-byte-per-participant
+  // spend-auth keys, and silently rejected a legal 5-of-5).
+  constexpr size_t PQC_MAX_PUBLIC_KEY_BLOB = 16384;
+  constexpr size_t PQC_MAX_SIGNATURE_BLOB = 32768;
+  static_assert(PQC_MAX_PUBLIC_KEY_BLOB >=
+      3 + MAX_MULTISIG_PARTICIPANTS * (PQC_HYBRID_SINGLE_KEY_LEN + PQC_SPEND_AUTH_PUBKEY_LEN),
+      "PQC_MAX_PUBLIC_KEY_BLOB below the largest legal MultisigKeyContainer — see MSW-1/F-1");
+  static_assert(PQC_MAX_SIGNATURE_BLOB >=
+      1 + MAX_MULTISIG_PARTICIPANTS * (PQC_HYBRID_SINGLE_SIG_LEN + 1),
+      "PQC_MAX_SIGNATURE_BLOB below the largest legal MultisigSigContainer — see MSW-1/F-1");
 
   // Archival serve-credit vin (gate-2 §5.1); bounds match shekyl-archival-retention::wire.
   constexpr size_t ARCHIVAL_LEAF_BYTES = 128;

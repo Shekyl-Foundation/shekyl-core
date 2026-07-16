@@ -27,8 +27,8 @@ use crate::kem::{
     SharedSecret,
 };
 use crate::multisig::{
-    rotating_prover_index, MultisigKeyContainer, MULTISIG_CONTAINER_VERSION,
-    SPEND_AUTH_VERSION_ED25519,
+    rotating_prover_index, MultisigKeyContainer, MAX_MULTISIG_PARTICIPANTS,
+    MULTISIG_CONTAINER_VERSION, SPEND_AUTH_VERSION_ED25519,
 };
 
 // ── KDF labels (must match PQC_MULTISIG.md §7.2 table) ─────────────────
@@ -174,7 +174,11 @@ pub fn construct_multisig_output_for_sender(
     if kem_pubkeys.len() != n_total as usize {
         return Err(CryptoError::InvalidKeyMaterial);
     }
-    if n_total == 0 || m_required == 0 || m_required > n_total || n_total > 7 {
+    if n_total == 0
+        || m_required == 0
+        || m_required > n_total
+        || n_total > MAX_MULTISIG_PARTICIPANTS
+    {
         return Err(CryptoError::InvalidKeyMaterial);
     }
 

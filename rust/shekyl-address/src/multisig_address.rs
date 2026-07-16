@@ -6,7 +6,7 @@
 //! Multisig address encoding, fingerprint, and provenance (PQC_MULTISIG.md SS6).
 //!
 //! Multisig addresses use the `shekyl1m` / `shekyltest1m` / `sshekyl1m` HRP
-//! family. Due to their size (10 + N * 3200 bytes), they are file-based:
+//! family. Due to their size (10 + N * 1216 bytes), they are file-based:
 //! the canonical payload is written to a file and transferred via an
 //! authenticated channel.
 //!
@@ -17,11 +17,20 @@ use crate::network::Network;
 /// X25519 (32) + ML-KEM-768 (1184).
 pub const HYBRID_KEM_PUBKEY_LEN: usize = 1216;
 
-/// Ed25519 (32) + ML-DSA-65 (1952).
-pub const HYBRID_SIGN_PUBKEY_LEN: usize = 1984;
+/// Per-participant total. Post-MSW-8 (2026-07-15) this is the KEM pubkey
+/// alone. The former `hybrid_sign_pubkeys` (Ed25519 + ML-DSA-65) were a
+/// vestigial Solution C fossil — constructed and parsed here but never
+/// consumed: leaf hybrid sign keys are derived per-output from the KEM shared
+/// secrets in `shekyl-crypto-pq::multisig_receiving`, so the address never
+/// needed to carry them (PQC_MULTISIG.md §6.2).
+pub const PER_PARTICIPANT_LEN: usize = HYBRID_KEM_PUBKEY_LEN;
 
-/// Per-participant total: KEM + sign.
-pub const PER_PARTICIPANT_LEN: usize = HYBRID_KEM_PUBKEY_LEN + HYBRID_SIGN_PUBKEY_LEN;
+/// Maximum multisig participants. Mirrors the authoritative MSW-G cap in
+/// `shekyl-crypto-pq::multisig::MAX_MULTISIG_PARTICIPANTS` (2f+1 at f=2). An
+/// address that exceeds it is dead-on-arrival — no key container can be built
+/// for it — so the two caps must agree; drift is caught at compile time by the
+/// cross-crate pin `const _` assert in that crate (MSW-1).
+pub const MAX_MULTISIG_PARTICIPANTS: u8 = 5;
 
 /// Header: version + group_version + spend_auth_version + network + n_total + m_required.
 const HEADER_LEN: usize = 6;
@@ -38,7 +47,7 @@ pub const SPEND_AUTH_VERSION: u8 = 0x01;
 /// Errors specific to multisig address operations.
 #[derive(Debug, thiserror::Error)]
 pub enum MultisigAddressError {
-    #[error("participant count {n} out of range 1..=7")]
+    #[error("participant count {n} out of range 1..={max}", max = MAX_MULTISIG_PARTICIPANTS)]
     InvalidParticipantCount { n: u8 },
 
     #[error("threshold {m} out of range 1..={n}")]
@@ -47,14 +56,8 @@ pub enum MultisigAddressError {
     #[error("expected {expected} KEM pubkeys, got {got}")]
     KemPubkeyCount { expected: u8, got: usize },
 
-    #[error("expected {expected} sign pubkeys, got {got}")]
-    SignPubkeyCount { expected: u8, got: usize },
-
     #[error("KEM pubkey {index} has wrong length: expected {HYBRID_KEM_PUBKEY_LEN}, got {got}")]
     KemPubkeyLength { index: usize, got: usize },
-
-    #[error("sign pubkey {index} has wrong length: expected {HYBRID_SIGN_PUBKEY_LEN}, got {got}")]
-    SignPubkeyLength { index: usize, got: usize },
 
     #[error("payload too short: need at least {HEADER_LEN} bytes, got {got}")]
     PayloadTooShort { got: usize },
@@ -82,7 +85,6 @@ pub struct MultisigAddressPayload {
     pub n_total: u8,
     pub m_required: u8,
     pub hybrid_kem_pubkeys: Vec<Vec<u8>>,
-    pub hybrid_sign_pubkeys: Vec<Vec<u8>>,
 }
 
 impl MultisigAddressPayload {
@@ -92,9 +94,8 @@ impl MultisigAddressPayload {
         n_total: u8,
         m_required: u8,
         hybrid_kem_pubkeys: Vec<Vec<u8>>,
-        hybrid_sign_pubkeys: Vec<Vec<u8>>,
     ) -> Result<Self, MultisigAddressError> {
-        if n_total == 0 || n_total > 7 {
+        if n_total == 0 || n_total > MAX_MULTISIG_PARTICIPANTS {
             return Err(MultisigAddressError::InvalidParticipantCount { n: n_total });
         }
         if m_required == 0 || m_required > n_total {
@@ -109,23 +110,9 @@ impl MultisigAddressPayload {
                 got: hybrid_kem_pubkeys.len(),
             });
         }
-        if hybrid_sign_pubkeys.len() != n_total as usize {
-            return Err(MultisigAddressError::SignPubkeyCount {
-                expected: n_total,
-                got: hybrid_sign_pubkeys.len(),
-            });
-        }
         for (i, pk) in hybrid_kem_pubkeys.iter().enumerate() {
             if pk.len() != HYBRID_KEM_PUBKEY_LEN {
                 return Err(MultisigAddressError::KemPubkeyLength {
-                    index: i,
-                    got: pk.len(),
-                });
-            }
-        }
-        for (i, pk) in hybrid_sign_pubkeys.iter().enumerate() {
-            if pk.len() != HYBRID_SIGN_PUBKEY_LEN {
-                return Err(MultisigAddressError::SignPubkeyLength {
                     index: i,
                     got: pk.len(),
                 });
@@ -140,7 +127,6 @@ impl MultisigAddressPayload {
             n_total,
             m_required,
             hybrid_kem_pubkeys,
-            hybrid_sign_pubkeys,
         })
     }
 
@@ -153,8 +139,7 @@ impl MultisigAddressPayload {
     ///
     /// Layout: `version(1) || group_version(1) || spend_auth_version(1) ||
     ///          network(1) || n_total(1) || m_required(1) ||
-    ///          kem_pk[0] || ... || kem_pk[N-1] ||
-    ///          sign_pk[0] || ... || sign_pk[N-1]`
+    ///          kem_pk[0] || ... || kem_pk[N-1]`
     pub fn to_canonical_bytes(&self) -> Vec<u8> {
         let len = self.canonical_len();
         let mut buf = Vec::with_capacity(len);
@@ -165,9 +150,6 @@ impl MultisigAddressPayload {
         buf.push(self.n_total);
         buf.push(self.m_required);
         for pk in &self.hybrid_kem_pubkeys {
-            buf.extend_from_slice(pk);
-        }
-        for pk in &self.hybrid_sign_pubkeys {
             buf.extend_from_slice(pk);
         }
         debug_assert_eq!(buf.len(), len);
@@ -194,7 +176,7 @@ impl MultisigAddressPayload {
         let network = Network::from_u8(network_byte)
             .ok_or(MultisigAddressError::UnknownNetwork { byte: network_byte })?;
 
-        if n_total == 0 || n_total > 7 {
+        if n_total == 0 || n_total > MAX_MULTISIG_PARTICIPANTS {
             return Err(MultisigAddressError::InvalidParticipantCount { n: n_total });
         }
         if m_required == 0 || m_required > n_total {
@@ -218,12 +200,6 @@ impl MultisigAddressPayload {
             hybrid_kem_pubkeys.push(data[offset..offset + HYBRID_KEM_PUBKEY_LEN].to_vec());
             offset += HYBRID_KEM_PUBKEY_LEN;
         }
-
-        let mut hybrid_sign_pubkeys = Vec::with_capacity(n_total as usize);
-        for _ in 0..n_total {
-            hybrid_sign_pubkeys.push(data[offset..offset + HYBRID_SIGN_PUBKEY_LEN].to_vec());
-            offset += HYBRID_SIGN_PUBKEY_LEN;
-        }
         debug_assert_eq!(offset, data.len());
 
         Ok(MultisigAddressPayload {
@@ -234,7 +210,6 @@ impl MultisigAddressPayload {
             n_total,
             m_required,
             hybrid_kem_pubkeys,
-            hybrid_sign_pubkeys,
         })
     }
 
@@ -306,9 +281,6 @@ mod tests {
             n,
             m,
             (0..n).map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN]).collect(),
-            (0..n)
-                .map(|i| vec![0x80 + i; HYBRID_SIGN_PUBKEY_LEN])
-                .collect(),
         )
         .unwrap()
     }
@@ -332,27 +304,32 @@ mod tests {
     }
 
     #[test]
-    fn canonical_roundtrip_7_of_7() {
-        let payload = make_test_payload(7, 7);
+    fn canonical_roundtrip_5_of_5() {
+        let payload = make_test_payload(MAX_MULTISIG_PARTICIPANTS, MAX_MULTISIG_PARTICIPANTS);
         let bytes = payload.to_canonical_bytes();
-        assert_eq!(bytes.len(), HEADER_LEN + 7 * PER_PARTICIPANT_LEN);
+        assert_eq!(
+            bytes.len(),
+            HEADER_LEN + (MAX_MULTISIG_PARTICIPANTS as usize) * PER_PARTICIPANT_LEN
+        );
         let decoded = MultisigAddressPayload::from_canonical_bytes(&bytes).unwrap();
         assert_eq!(payload, decoded);
     }
 
     #[test]
     fn rejects_n_zero() {
-        assert!(MultisigAddressPayload::new(Network::Mainnet, 0, 0, vec![], vec![]).is_err());
+        assert!(MultisigAddressPayload::new(Network::Mainnet, 0, 0, vec![]).is_err());
     }
 
     #[test]
-    fn rejects_n_over_7() {
+    fn rejects_n_over_max() {
+        // MSW-1: n = MAX+1 is the boundary-adjacent rejection. The address cap
+        // must track the container cap; an over-cap address is unusable.
+        let n = MAX_MULTISIG_PARTICIPANTS + 1;
         assert!(MultisigAddressPayload::new(
             Network::Mainnet,
-            8,
+            n,
             3,
-            (0..8).map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN]).collect(),
-            (0..8).map(|i| vec![i; HYBRID_SIGN_PUBKEY_LEN]).collect(),
+            (0..n).map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN]).collect(),
         )
         .is_err());
     }
@@ -364,7 +341,6 @@ mod tests {
             2,
             3,
             vec![vec![0; HYBRID_KEM_PUBKEY_LEN]; 2],
-            vec![vec![0; HYBRID_SIGN_PUBKEY_LEN]; 2],
         )
         .is_err());
     }
@@ -376,7 +352,6 @@ mod tests {
             2,
             2,
             vec![vec![0; 100], vec![0; HYBRID_KEM_PUBKEY_LEN]],
-            vec![vec![0; HYBRID_SIGN_PUBKEY_LEN]; 2],
         )
         .is_err());
     }
@@ -393,6 +368,19 @@ mod tests {
         let mut bytes = make_test_payload(2, 2).to_canonical_bytes();
         bytes[0] = 0xFF;
         assert!(MultisigAddressPayload::from_canonical_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn reserved_spend_auth_version_is_carried() {
+        // MSW-5: address carrier disposition (A). The payload transports
+        // `spend_auth_version` opaquely — a reserved value (0x02, the Option E′
+        // marker; §6.2) must round-trip unchanged, never be normalized or
+        // rejected, so forward-compatible readers (§8.2) can dispatch on it.
+        let mut bytes = make_test_payload(2, 2).to_canonical_bytes();
+        bytes[2] = 0x02;
+        let decoded = MultisigAddressPayload::from_canonical_bytes(&bytes).unwrap();
+        assert_eq!(decoded.spend_auth_version, 0x02);
+        assert_eq!(decoded.to_canonical_bytes(), bytes);
     }
 
     #[test]
@@ -469,7 +457,6 @@ mod tests {
             2,
             2,
             vec![vec![0; HYBRID_KEM_PUBKEY_LEN]; 2],
-            vec![vec![0; HYBRID_SIGN_PUBKEY_LEN]; 2],
         )
         .unwrap();
         let p_test = MultisigAddressPayload::new(
@@ -477,7 +464,6 @@ mod tests {
             2,
             2,
             vec![vec![0; HYBRID_KEM_PUBKEY_LEN]; 2],
-            vec![vec![0; HYBRID_SIGN_PUBKEY_LEN]; 2],
         )
         .unwrap();
         assert_ne!(p_main.to_canonical_bytes(), p_test.to_canonical_bytes());
