@@ -1600,21 +1600,28 @@ sustainability is unaffected by the recalibration.
   Load-bearing because the `1.86` was computed on nominal cover
   (`gf7_timeline.rs` seeds `N = TARGET_ANON_SET` at full honest strength)
   against a 7% margin, and per WI-4's no-cross-subsidy pin the conditional
-  cannot borrow that margin. **UPDATE 2026-07-16 (later same day — kind
-  sharpened, monitoring threshold derived):** the conditional conditions
-  the *number itself*, not a channel (isolation's kind) — `1.86` is `r`
-  under the most favorable cover assumption, stacked against a
-  deliberately pessimistic adversary panel (net direction indeterminate;
-  full statement WI-4 §13.5). The monitoring plan now has a **derived
-  threshold**: `shekyl-staking-sim --gf7-breakeven` (`gf7_breakeven.rs`,
-  mechanism-class — a property of the model) sweeps `r(N)` at the gate
-  posture and finds worst-arm `r` flat (≈1.86) across `N ∈ [2, 16]`, which
-  forces the absolute-exposure breakeven (certified `P(link) < 0.2`) to
-  `N* ≈ 9.3` — the run straddles it (worst `P = 0.203` at `N = 9`, `0.177`
-  at `N = 10`). Zero measurable cover slack: the post-genesis monitor
-  watches **effective steady-state cover ≥ ~10**; below it the certified
-  exposure is exceeded and the aspiration is degrading (aspiration-side
-  threshold, not a gate — the gate passed and is not re-litigated).
+  cannot borrow that margin.   **UPDATE 2026-07-16 (later same day — kind
+  sharpened, sensitivity sweep run; reading corrected same day, per
+  review):** the conditional conditions the *number itself*, not a
+  channel (isolation's kind) — `1.86` was computed at nominal cover, an
+  upper bound, stacked against a deliberately pessimistic adversary
+  panel (full statement WI-4 §13.5). The sweep
+  (`shekyl-staking-sim --gf7-breakeven`, `gf7_breakeven.rs`,
+  mechanism-class — a property of the model) finds worst-arm `r` flat
+  (≈1.86) across `N ∈ [2, 16]`: **`r < 2` is structurally blind to
+  cover** (hit probability and `1/N` baseline shrink together), so
+  cover was never gated by `r` and the gate's ~7% margin is
+  relative-leak margin, not cover margin. **No per-event monitoring
+  threshold was discovered**: the candidate `P(link) ≤ 0.2` is the
+  ratio bar evaluated at nominal cover, back-derived — under flat `r`
+  the parity point sits at `N ≈ 9.3` *by identity* (the run straddles
+  it: worst `P = 0.203` at `N = 9`, `0.177` at `N = 10`), restating the
+  nominal-cover assumption with no independent content; pinning it as
+  an absolute bar is refused. Per-event `P(link)` also does not bound
+  the aspiration's quantity (repetition + geometric intersection
+  collapse, F-D4 §13.3/F-W5): the conditional's instrument is the
+  **S-2 lifetime exposure ledger** (Gate-6 R5, unbuilt), not any
+  per-event number.
 
 - **Wallet bond-funding/standoff call site (tracks the `shekyl-standoff`
   importable surface; 2026-06-16).** The `shekyl-standoff` crate is now

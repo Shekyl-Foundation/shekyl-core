@@ -1828,14 +1828,18 @@ the observer *machinery* is mechanism and stays testnet-dischargeable, but the c
 **level** is post-isolation network-event rate — economics, unfalsifiable pre-genesis —
 so it is **reclassified as the fifth WI-4 §13.5 standing conditional** (§12.8; verified at
 source that the `1.86` was computed on nominal cover, so the conditional is load-bearing
-against the 7% margin). **The hit's follow-through (same day): the conditional's threshold
-was then *derived*, because the breakeven is mechanism even though the level is
+against the 7% margin). **The hit's follow-through (same day): the conditional's *shape*
+was then measured, because the sensitivity sweep is mechanism even though the level is
 economics** — `shekyl-staking-sim --gf7-breakeven` sweeps the model's own `r(N)` at the
-gate posture (a property of the model, not the world) and lands the absolute-exposure
-breakeven at `N* ≈ 9.3` (flat worst-arm `r ≈ 1.86` forces it; full reading at §12.8 and
-WI-4 §13.5). This is the filter's constructive half demonstrated: the same classification
-that removes an unmeasurable read from the seal queue also names which *derivable* number
-converts the standing conditional into a monitored threshold. The proviso — the GF-6
+gate posture (a property of the model, not the world). Result: worst-arm `r` is flat
+≈1.86 across `N ∈ [2, 16]` — **`r < 2` is structurally blind to cover**, so cover was
+never gated by `r` and no per-event monitoring threshold exists to derive (the candidate
+`P(link) ≤ 0.2` is the ratio bar evaluated at nominal cover, back-derived — an arithmetic
+identity, not a committed bound; full reading at §12.8 and WI-4 §13.5). This is the
+filter's constructive half demonstrated with an honest output: the same classification
+that removes an unmeasurable read from the seal queue also names which *derivable*
+measurement exists — and takes its answer even when the answer is "no per-event monitor
+exists; the conditional's instrument is the S-2 lifetime ledger." The proviso — the GF-6
 dummy/fragmentation tuned ratio (§10.13 carry): the `P`-burst side is mechanism
 (protocol-determined wire sizes, testnet-faithful), but the ambient large-v3 distribution
 must come from live-Tor observation — real external-world data that exists independent of
@@ -2113,30 +2117,34 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   strength; §11 (iv) already names the measured set an upper bound), so the conditional is
   load-bearing — effective cover below nominal moves `r` up against a 7% margin, and per
   WI-4's no-cross-subsidy pin it cannot borrow that margin.
-  **Kind sharpened + breakeven derived (2026-07-16, later same day).** Two amendments to
-  the filing above, recorded at WI-4 §13.5 in full. (1) *Kind:* "the isolation-conditioning
-  kind" got the permanence right and the shape wrong — isolation conditions a **channel**
-  (fails ⇒ a new channel opens, qualitative change); effective cover conditions **the
-  number itself** (`1.86` is `r` under the most favorable cover assumption, not the
-  measured value — no lower bound on the truth from the cover side). The honest
-  characterization is **stacked marginals of opposite sign**: pessimistic adversary (the
-  stress arm is an oracle-union panel, stronger than S-3) against optimistic cover
-  (nominal, an upper bound) — net direction indeterminate; F-W4's hygiene applied on this
-  side. Scope narrowing: thin-cover-as-regime is already L12 with a design-away
+  **Kind sharpened + sensitivity sweep run (2026-07-16, later same day; reading corrected
+  same day, per review).** Two amendments to the filing above, recorded at WI-4 §13.5 in
+  full. (1) *Kind:* "the isolation-conditioning kind" got the permanence right and the
+  shape wrong — isolation conditions a **channel** (fails ⇒ a new channel opens,
+  qualitative change); effective cover conditions **the number itself** (`1.86` was
+  computed at nominal cover, an upper bound). The honest characterization is **stacked
+  marginals of opposite sign**: pessimistic adversary (the stress arm is an oracle-union
+  panel, stronger than S-3) against optimistic cover (nominal) — F-W4's hygiene applied
+  on this side. Scope narrowing: thin-cover-as-regime is already L12 with a design-away
   disposition (M1 reward-gate refuses the regime), so what this conditional carries is
-  effective-vs-nominal **at steady state**. (2) *Breakeven:* the conditional's monitoring
-  threshold is now a derived number, not a vibe — `shekyl-staking-sim --gf7-breakeven`
-  (mechanism-class under method note 3: a property of the model, no economics input)
-  sweeps `r(N)` at the gate posture, `N ∈ [2, 16]`. Result: worst-arm `r` is **flat**
-  (≈1.7–1.86) across the range — no ratio breakeven exists in range because the ratio
-  renormalizes by the degraded baseline and structurally cannot see thin-cover harm
-  (at `N = 2` the worst arm links 74.6% and still "clears"). The load-bearing anchor is
-  **absolute exposure** (`P(link) < 0.2`, what the nominal verdict certified): flat `r`
-  forces that breakeven to `N* ≈ 9.3`, and the run straddles it exactly (worst-arm
-  `P = 0.203` at `N = 9`, `0.177` at `N = 10`). **The certified exposure has zero
-  measurable cover slack** — any effective shortfall below nominal exceeds it. The
-  threshold is aspiration-side, not gate-side (the gate passed and is not re-litigated;
-  below `N* ≈ 10` the *aspiration* is degrading, and this is the number that says so).
+  effective-vs-nominal **at steady state**. (2) *Sweep:* `shekyl-staking-sim
+  --gf7-breakeven` (mechanism-class under method note 3: a property of the model, no
+  economics input) sweeps `r(N)` at the gate posture, `N ∈ [2, 16]`. Finding: worst-arm
+  `r` is **flat** (≈1.7–1.86) across the range — **`r < 2` is structurally blind to
+  cover**. The ratio renormalizes by the degraded baseline, so thin-cover harm cannot
+  move it (at `N = 2` the worst arm links 74.6% and still "clears"); the hit probability
+  and the `1/N` baseline shrink together. Consequences: the filing's "no lower bound on
+  the truth" framing is retracted as to `r` (the true `r` is ≈1.86 at every cover level);
+  **cover was never gated** — the ~7% margin is margin on the mechanism's fixed relative
+  leak, never margin against cover, which is what made this section's own misfiling
+  possible; and **no per-event monitoring threshold exists to derive** — the candidate
+  `P(link) ≤ 0.2` is the ratio bar evaluated at nominal cover (back-derived; under flat
+  `r` the parity point sits at `N = 10 · 1.86/2 ≈ 9.3` *by identity*, the run straddling
+  it at `P = 0.203`/`N = 9` vs `0.177`/`N = 10`), and pinning it as an absolute bar would
+  commit a bound backwards from the number it must certify — refused. Per-event
+  `P(link)` also does not bound the aspiration's quantity at all (the binding is observed
+  repeatedly; intersection collapses geometrically, F-D4 §13.3/F-W5): the conditional's
+  instrument is the **S-2 lifetime exposure ledger**, not any per-event number.
   Explicitly rejected as a reading of the measurement: "only a state actor sees
   post-isolation timing, and they have KYC anyway" — a scope decision that could be made
   and recorded, but not made here, and never to be used to make `1.86` comfortable (KYC
@@ -2215,30 +2223,35 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
 
 ## Revision history
 
-- **2026-07-16 (GF-7 fifth conditional: kind sharpened, breakeven derived —
-  `--gf7-breakeven`):** Follow-through on the reclassification below, per review. (1)
-  *Kind corrected:* "the isolation-conditioning kind" got permanence right and shape
-  wrong — isolation conditions a channel; effective cover conditions **the number
-  itself** (`1.86` = `r` under the most favorable cover assumption; honest
-  characterization is stacked marginals of opposite sign — pessimistic adversary panel ×
-  optimistic cover, net direction indeterminate). Scope narrowed: thin-cover-as-regime is
-  already L12/design-away; the conditional carries effective-vs-nominal **at steady
-  state**. (2) *Breakeven derived* (`shekyl-staking-sim --gf7-breakeven`,
-  `gf7_breakeven.rs` — mechanism-class under method note 3, a property of the model):
-  worst-arm `r` is **flat ≈1.7–1.86 across `N ∈ [2, 16]`** — no ratio breakeven exists in
-  range (the ratio renormalizes by the degraded baseline and cannot see thin-cover harm);
-  the load-bearing anchor is **absolute exposure** (certified `P(link) < 0.2`), whose
-  breakeven flat-`r` forces to **`N* ≈ 9.3`** — straddled exactly by the run
-  (`P = 0.203` at `N = 9`, `0.177` at `N = 10`). Zero measurable cover slack; the
-  post-genesis monitor watches effective steady-state cover ≥ ~10, **aspiration-side**
-  (the gate passed and is not re-litigated). (3) *Aspiration-vs-gate framing pinned* at
+- **2026-07-16 (GF-7 fifth conditional: kind sharpened, sensitivity sweep run —
+  `--gf7-breakeven`; reading corrected same day, per review):** Follow-through on the
+  reclassification below. (1) *Kind corrected:* "the isolation-conditioning kind" got
+  permanence right and shape wrong — isolation conditions a channel; effective cover
+  conditions **the number itself** (`1.86` was computed at nominal cover, an upper bound;
+  honest characterization is stacked marginals of opposite sign — pessimistic adversary
+  panel × optimistic cover). Scope narrowed: thin-cover-as-regime is already
+  L12/design-away; the conditional carries effective-vs-nominal **at steady state**.
+  (2) *Sweep run* (`shekyl-staking-sim --gf7-breakeven`, `gf7_breakeven.rs` —
+  mechanism-class under method note 3, a property of the model): worst-arm `r` is
+  **flat ≈1.7–1.86 across `N ∈ [2, 16]`** — **`r < 2` is structurally blind to cover**
+  (hit probability and `1/N` baseline shrink together). Cover was therefore **never
+  gated**: the ~7% margin is relative-leak margin, not cover margin — the structural
+  fact that made this section's misfiling possible. The pre-sweep "true `r` ≥ 1.86,
+  unknown" framing is retracted; and **no per-event monitoring threshold was
+  discovered** — the candidate `P(link) ≤ 0.2` is the ratio bar evaluated at nominal
+  cover, back-derived (under flat `r` the parity point sits at `N ≈ 9.3` *by identity*,
+  straddled by the run at `P = 0.203`/`N = 9` vs `0.177`/`N = 10`); pinning it as an
+  absolute bar is refused as commitment-backwards-from-the-number. Per-event `P(link)`
+  does not bound the aspiration's quantity in any case (repetition + geometric
+  intersection collapse, F-D4 §13.3/F-W5). (3) *Aspiration-vs-gate framing pinned* at
   WI-4 §13.5: the register is the aspiration's ledger — the standing statement of what
   stands between "every gate passed" and "the aspiration holds"; the aspiration's
-  instrument is the **S-2 fused exposure ledger** (R5, "build first," unbuilt). The
+  instrument is the **S-2 fused exposure ledger** (R5, "build first," unbuilt — its
+  permanent deferral is now itself recorded as a finding on the ledger). The
   "state actor has KYC anyway" scope argument is explicitly rejected as a reading of the
   measurement (recorded at WI-4 §13.5). Statuses swept: §12.8 GF-7 cell, §11.8 method
-  note 3 (constructive-half demonstration added), WI-4 §13.5, FOLLOWUPS carry 4,
-  CHANGELOG.
+  note 3 (constructive-half demonstration corrected to its honest output), WI-4 §13.5,
+  FOLLOWUPS carry 4, CHANGELOG.
 
 - **2026-07-16 (method-note-3 residual sweep; GF-7 effective-cover reclassified to the
   WI-4 §13.5 register):** The §12.8 caveat is upgraded from "stays open on the level" to

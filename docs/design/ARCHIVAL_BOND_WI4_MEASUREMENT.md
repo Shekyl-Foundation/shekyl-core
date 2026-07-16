@@ -814,7 +814,7 @@ preserve:
   assumption to leave implicit.
 - **Effective-cover conditioning (added 2026-07-16, by the Gate-6 §11.8
   method-note-3 mechanism-vs-economics filter; kind sharpened and
-  breakeven derived later the same day)** is a *second*
+  sensitivity sweep run later the same day)** is a *second*
   permanently-pre-genesis conditional, and it was previously misfiled
   as a testnet obligation. It shares isolation conditioning's
   *permanence* but not its *shape*: isolation conditions a **channel**
@@ -846,8 +846,9 @@ preserve:
   value at risk — so no testnet read can validate it: a testnet
   cover-level measurement measures the load generator (Gate-6 §11.8
   method note 3). It therefore **cannot close pre-genesis**; it is
-  carried as a stated assumption with a **post-genesis monitoring plan
-  against a named threshold** (below), not a task. The
+  carried as a stated assumption, not a task — and the sensitivity
+  sweep below shows no per-event number can monitor it, so its
+  instrument is the S-2 lifetime ledger. The
   observer-*machinery* half (does decoy injection get discounted, does
   the correlator behave) stays testnet-dischargeable and remains on
   the testnet list. Scope narrowing recorded at the same audit: the
@@ -858,48 +859,68 @@ preserve:
   carries is the narrower steady-state question, *effective-vs-nominal
   event rate with plenty of personas*.
 
-  **The breakeven, derived (2026-07-16; `shekyl-staking-sim
+  **The sensitivity sweep, run (2026-07-16; `shekyl-staking-sim
   --gf7-breakeven`, `gf7_breakeven.rs` — mechanism-class under method
-  note 3, a property of the model, no testnet, no economics input).**
-  The sweep grades the gate-relevant posture at
-  `N ∈ {2..10, 12, 14, 16}`, per-`N` validity controls, worst arm per
-  row, 1 000 trials/point. Two anchors, two answers:
-  - *Ratio anchor (`r < 2` per `N`):* worst-arm `r` is **flat**
-    (≈1.7–1.86) across the entire range — `P(link)` scales ≈`1.86/N`.
-    The mechanism's *relative* leak is scale-invariant in-model; there
-    is **no ratio breakeven in range**. The ratio renormalizes by the
-    degraded baseline, so it structurally cannot see thin-cover harm
-    (`r ≤ N` caps it; at `N = 2` the worst arm links 74.6% of the time
-    and still "clears").
-  - *Absolute anchor (the exposure the verdict certified:
-    `P(link) < r_bound/N_nominal = 0.2`):* flat `r ≈ 1.86` forces the
-    breakeven to `N* = 10 · (1.86/2) ≈ 9.3` — and the evidence run
-    straddles it exactly (worst-arm `P = 0.203` at `N = 9`, `0.177` at
-    `N = 10`). The certified exposure has **no measurable cover
-    slack**: any effective-cover shortfall below nominal puts the
-    realized exposure above what the verdict certified. This is the
-    7% margin's direct corollary, now a measured number rather than an
-    inference.
+  note 3, a property of the model, no testnet, no economics input;
+  reading corrected same day, per review).** The sweep grades the
+  gate-relevant posture at `N ∈ {2..10, 12, 14, 16}`, per-`N` validity
+  controls, worst arm per row, 1 000 trials/point. Its finding is
+  sharper than the breakeven it went looking for, and it corrects this
+  filing's own framing in one direction:
+  - ***`r < 2` is structurally blind to cover.*** Worst-arm `r` is
+    **flat** (≈1.7–1.86) across the entire range — `P(link)` scales
+    ≈`1.86/N`; the LR scorer's hit probability and the `1/N` blind
+    baseline shrink together, so the ratio renormalizes thin-cover
+    harm away **by construction** (`r ≤ N` caps it; at `N = 2` the
+    worst arm links 74.6% of the time and still "clears"). Two
+    consequences. First, the "no lower bound on the truth from the
+    cover side" sentence above is **retracted as to `r`**: the true
+    `r` is not "≥ 1.86, unknown" — it is ≈1.86 at every cover level,
+    because the mechanism's relative leak is scale-invariant in-model.
+    Second, the durable statement: **cover was never gated** — not
+    "gated on an optimistic assumption," never gated at all. The ~7%
+    margin is margin on the mechanism's *fixed relative leak*; it was
+    never margin against anything cover-related, and no cover
+    shortfall can consume it. That structural blindness is what made
+    the §12.8 misfiling possible in the first place: no gate-side
+    number ever watched cover.
+  - ***No breakeven was discovered, and no absolute bar is pinned.***
+    The exposure figure `r_bound/N_nominal = 0.2` is the ratio bar
+    *evaluated at nominal cover* — back-derived arithmetic, not an
+    a-priori commitment (`r < 2` was committed on its merits;
+    `P(link) < 0.2` fell out of the division). Under flat `r`,
+    worst-arm `P(link)` meets it at `N = 10 · (1.86/2) ≈ 9.3` **by
+    identity** — the evidence run straddles that point (worst-arm
+    `P = 0.203` at `N = 9`, `0.177` at `N = 10`), but the number
+    restates the nominal-cover assumption ("keep cover at the level we
+    assumed, because below it you are below what we assumed") and
+    carries no independent content. Committing `0.2` as an absolute
+    bound now, backwards from the number it would need to certify, is
+    the F-W1-class move this track has refused four times; it is
+    refused here too.
 
-  The monitoring threshold is therefore the **absolute** anchor:
-  *effective steady-state cover ≥ ~10 personas per anonymity
-  neighborhood, monitored post-genesis; below it the gate's certified
-  exposure is exceeded.* This is aspiration-side, not gate-side — the
-  gate (`r < 2` at target cover) passed and is not re-litigated; the
-  threshold names when *the aspiration is degrading* and converts this
-  conditional from an unfalsifiable assumption into a monitored number
-  with a trigger. Load-bearing consequence, unchanged: if effective
-  cover runs below nominal, realized exposure moves **up** with zero
-  slack, and per the no-cross-subsidy pin below it cannot be paid for
-  out of the gate's own margin. One scope argument is explicitly
-  **rejected as a reading of the measurement**: "only a state actor
-  gets post-isolation visibility, and they have KYC anyway" would be a
-  legitimate *scope decision* if made explicitly and recorded, but used
-  to make `1.86` comfortable it is standard-adjustment-around-a-number
-  — and the marginal loss is not nil (KYC gives principal→user; GF-7
-  protects `P`→principal; break both and the adversary gets
-  `P`→user — which shards, what earnings, what patterns). No such
-  scope decision is made here.
+  What the conditional therefore is: a stated assumption with **no
+  per-event monitor**, because the sweep shows no per-event number can
+  serve as one — the ratio is cover-blind, and the absolute figure is
+  the assumption restated. Nor would a per-event monitor bound the
+  thing the aspiration cares about even at face value: the
+  `P`↔principal binding is observed repeatedly, and intersection
+  collapses geometrically (F-D4 §13.3 / F-W5), so no finite per-event
+  anchor holds a lifetime floor. The conditional's honest instrument
+  is the **S-2 fused whole-life exposure ledger** — the aspiration's
+  quantity measured directly — and the sweep's lasting outputs are the
+  scale-invariance result plus this negative. The no-cross-subsidy
+  consequence is unchanged: effective cover below nominal moves
+  realized per-event exposure up, and it cannot be paid for out of the
+  gate's margin (which is relative-leak margin, not cover margin). One
+  scope argument is explicitly **rejected as a reading of the
+  measurement**: "only a state actor gets post-isolation visibility,
+  and they have KYC anyway" would be a legitimate *scope decision* if
+  made explicitly and recorded, but used to make `1.86` comfortable it
+  is standard-adjustment-around-a-number — and the marginal loss is
+  not nil (KYC gives principal→user; GF-7 protects `P`→principal;
+  break both and the adversary gets `P`→user — which shards, what
+  earnings, what patterns). No such scope decision is made here.
 
 Consequence for seal-time wording: even when leg (b) and the partition
 arm both pass and `K_COVER` is set, the gate's honest form is **not**
@@ -909,9 +930,11 @@ bounded (`r < 2`) under the local-daemon posture, **conditional on
 here, (2) persona mutual-unlinkability (GF-4), graded separately —
 without which the per-post bound does not promote to the per-principal
 property S-1 names — and (3) effective cover at or near the nominal
-level the sim seeded (breakeven `N* ≈ 9.3` against the certified
-exposure — zero measurable slack), unvalidatable before real value is
-at risk, monitored post-genesis against the ≥ ~10 threshold**."
+level the sim seeded, unvalidatable before real value is at risk and
+unmonitorable by any per-event number (the sensitivity sweep: `r` is
+structurally cover-blind, and the only per-event exposure figure is
+the nominal-cover assumption restated); its instrument is the S-2
+lifetime ledger**."
 Measured-conditionals-cleared must never be read
 as all-conditionals-cleared, and a per-**post** bound must never be read
 as a per-**principal** one: the isolation conditional, the
@@ -959,13 +982,22 @@ failure mode this prevents is shipping a system where every gate is
 green and the aspiration quietly doesn't hold because each gate's
 conditional was tracked somewhere nobody read together — which is why
 the three permanent clauses ride the verdict line itself. The
-breakeven threshold above is aspiration-side monitoring, not a sixth
-gate; and the aspiration's own instrument — the only thing that can
-ever answer "what exposures remain, and is KYC the only one?" — is the
-**S-2 fused per-observer whole-life exposure ledger** (Gate-6 R5,
-"build first — cheapest, highest leverage," still unbuilt). An
-aspiration with no instrument decays into a slogan invoked when a gate
-feels inconvenient; S-2 is what stops that.
+sensitivity sweep above contributes a *negative* to this ledger — no
+per-event number monitors the cover conditional (the ratio is
+cover-blind; the exposure figure is the assumption restated) — which
+sharpens rather than weakens the instrument requirement: the
+aspiration's own instrument, the only thing that can ever answer "what
+exposures remain, and is KYC the only one?", is the **S-2 fused
+per-observer whole-life exposure ledger** (Gate-6 R5, "build first —
+cheapest, highest leverage," still unbuilt). An aspiration with no
+instrument decays into a slogan invoked when a gate feels
+inconvenient; S-2 is what stops that. And the ledger records one more
+standing fact: every track this cycle — the fifth conditional, the
+F-W5 §13.3 repetition residual, this sweep's negative — has terminated
+at "S-2 is the instrument," while S-2 has remained unbuilt since the
+round-0 scoping named it cheapest and highest-leverage. **The
+cheapest highest-leverage item being permanently deferred is itself a
+finding**, and it is now on the ledger it belongs to.
 
 ## 14. Addendum (2026-07-06): the founder-cover launch posture — refusing the cold-start regime
 

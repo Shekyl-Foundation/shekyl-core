@@ -20,8 +20,9 @@
 //! measurement round — joint three-axis correlator + three arms + validity
 //! controls, graded against the a-priori `r < 2` bound per
 //! ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4); `--gf7-breakeven` (the
-//! effective-cover breakeven sweep — `r(N)` sensitivity at the gate posture,
-//! the WI-4 §13.5 fifth conditional's monitoring threshold; not a gate);
+//! effective-cover sensitivity sweep — `r(N)`/`P(link)` at the gate posture,
+//! the WI-4 §13.5 fifth conditional's measured shape; not a gate, and its
+//! parity line is an arithmetic identity, not a threshold);
 //! `--partition-adversary` (the §14.4
 //! founder-cover partition-adversary arm — gating lemma + witness-typed
 //! controls, per the same doc's §14/§17 launch-posture round).
@@ -807,26 +808,27 @@ fn print_gf7_timeline_report() {
 fn print_gf7_breakeven_report() {
     let report = gf7_breakeven::run_full_report();
     eprintln!(
-        "shekyl-staking-sim — GF-7 effective-cover breakeven sweep (WI-4 §13.5 fifth conditional)"
+        "shekyl-staking-sim — GF-7 effective-cover sensitivity sweep (WI-4 §13.5 fifth conditional)"
     );
     eprintln!("NOT A GATE. The WI-4 verdict (r = 1.86 < 2 at N = 10) was computed at NOMINAL");
     eprintln!("  cover (Gate-6 §11 qualifier (iv): an upper bound); effective post-isolation");
     eprintln!("  cover is economics (§11.8 method note 3) — unmeasurable pre-genesis. This sweep");
-    eprintln!("  derives the conditional's MONITORING THRESHOLD: the model's own r(N) at the");
-    eprintln!("  gate-relevant posture, a property of the model (mechanism-class), derivable now.");
+    eprintln!("  measures how the model's own r(N) and P(link) move with cover at the gate");
+    eprintln!("  posture — a property of the model (mechanism-class), derivable now.");
     eprintln!(
         "  Bound r < {:.1}; trials/point={}. Worst arm per row; controls re-run per N.",
         report.ratio_bound, report.trials,
     );
     eprintln!();
-    eprintln!("  TWO ANCHORS: the ratio (r < 2 per N) grades the mechanism's RELATIVE leak —");
-    eprintln!("  it renormalizes by the degraded baseline and cannot see thin-cover harm. The");
+    eprintln!("  FINDING: r < 2 is structurally blind to cover — the ratio renormalizes by the");
+    eprintln!("  degraded baseline, so thin-cover harm cannot move it (r <= N caps it; a low-N");
+    eprintln!("  row 'clearing' the ratio is not passing in any useful sense). The exposure");
     eprintln!(
-        "  ABSOLUTE anchor (worst P(link) <= {:.2}, the exposure the nominal N={} verdict",
-        report.absolute_bar, report.nominal_n,
+        "  figure {:.2} is the ratio bar evaluated at nominal N={} — back-derived arithmetic,",
+        report.nominal_exposure_identity, report.nominal_n,
     );
-    eprintln!("  certified) is the fifth conditional's monitoring number. Read both columns; a");
-    eprintln!("  low-N row clearing the ratio is not 'passing' in any useful sense.");
+    eprintln!("  NOT a committed bound; the parity line below restates the nominal-cover");
+    eprintln!("  assumption and carries no independent content.");
     eprintln!();
     eprintln!(
         "  {:>4} {:>6} {:>8} | {:>7} {:>7} {:>7} | {:>8} {:>9} {:>6}",
@@ -849,25 +851,27 @@ fn print_gf7_breakeven_report() {
     eprintln!();
     match report.ratio_threshold_n {
         Some(t) => eprintln!(
-            "  Ratio anchor: worst arm clears r < {:.1} down to N = {} — if that is the bottom \
-             of the sweep, the relative leak is scale-invariant in-model (no ratio breakeven \
-             in range).",
+            "  Ratio breakeven: worst arm clears r < {:.1} down to N = {} — if that is the \
+             bottom of the sweep, the relative leak is scale-invariant in-model (no ratio \
+             breakeven in range; cover was never gated by r).",
             report.ratio_bound, t,
         ),
-        None => eprintln!("  Ratio anchor: NONE — every valid row breaches the bound."),
+        None => eprintln!("  Ratio breakeven: NONE — every valid row breaches the bound."),
     }
-    match report.absolute_threshold_n {
+    match report.nominal_parity_n {
         Some(t) => eprintln!(
-            "  MONITORING THRESHOLD (absolute anchor): worst-arm P(link) stays <= {:.2} down \
-             to N = {} (P = {:.3} there); below it the realized exposure exceeds what the \
-             nominal verdict certified.",
-            report.absolute_bar,
+            "  Nominal-exposure parity (arithmetic identity, not a threshold): worst-arm \
+             P(link) stays <= {:.2} down to N = {} (P = {:.3} there). Under flat r this must \
+             sit at N = nominal * (r / bound) by identity — it restates the nominal-cover \
+             assumption. Lifetime exposure is the aspiration's quantity (F-D4 Sect. 13.3); \
+             its instrument is the S-2 ledger, not this number.",
+            report.nominal_exposure_identity,
             t,
-            report.absolute_threshold_worst_p_link.unwrap_or(f64::NAN),
+            report.nominal_parity_worst_p_link.unwrap_or(f64::NAN),
         ),
         None => eprintln!(
-            "  MONITORING THRESHOLD (absolute anchor): NONE — every valid row exceeds the \
-             certified exposure.",
+            "  Nominal-exposure parity: NONE — every valid row realizes more than the \
+             nominal-cover exposure.",
         ),
     }
     if !report.failing_n.is_empty() {

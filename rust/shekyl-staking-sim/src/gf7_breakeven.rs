@@ -1,5 +1,5 @@
-//! GF-7 effective-cover breakeven sweep — the fifth WI-4 §13.5 conditional's
-//! monitoring threshold (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §13.5;
+//! GF-7 effective-cover sensitivity sweep — the fifth WI-4 §13.5 conditional's
+//! measured shape (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §13.5;
 //! `ARCHIVAL_FIREWALL_GATE6.md` §12.8).
 //!
 //! # What this is — and what it is not
@@ -8,53 +8,53 @@
 //! **nominal** cover: `RunConfig { n: 10 }` seeds the full honest-traffic
 //! strength, and Gate-6 §11 qualifier (iv) names the measured set an upper
 //! bound. The *effective* post-isolation cover is an economics quantity
-//! (Gate-6 §11.8 method note 3) — unmeasurable pre-genesis. That makes the
-//! gate's central number conditional on a cover level nobody can validate
-//! before real value is at risk.
+//! (Gate-6 §11.8 method note 3) — unmeasurable pre-genesis.
 //!
 //! This sweep derives the one thing about that conditional that **is**
-//! derivable today: the breakeven — at what cover level does the model's own
-//! `r` reach the committed bound? It is a sensitivity sweep over the existing
-//! harness at the gate-relevant posture (`SynthParams::posture()`), a property
-//! of the **model**, not of the world: mechanism-class under method note 3,
-//! no testnet, no economics input.
+//! derivable today: how the model's own `r` and `P(link)` move as the cover
+//! level varies. It is a sensitivity sweep over the existing harness at the
+//! gate-relevant posture (`SynthParams::posture()`), a property of the
+//! **model**, not of the world: mechanism-class under method note 3, no
+//! testnet, no economics input. It is **not a gate**: the gate (`r < 2` at
+//! target cover) passed and is not re-litigated here.
 //!
-//! It is **not a gate**. The gate (`r < 2` at target cover) passed and is not
-//! re-litigated here. Gate-side, a breakeven bar would be overreach — it would
-//! gate on a whole-system end state the protocol does not control.
-//! Aspiration-side, it converts the fifth conditional from "unfalsifiable,
-//! carry an assumption" into "cover ≥ threshold, monitored against a named
-//! number" — a real reopen criterion. The post-genesis monitoring plan reads
-//! its threshold from this sweep.
-//!
-//! # Reading the direction honestly — two anchors, one finding
+//! # The finding: `r < 2` is structurally blind to cover
 //!
 //! `r = P(link) · N` renormalizes by the degraded baseline: it asks "how many
-//! times blind guessing," not "how exposed." Both anchors are derived and
-//! reported, because they answer different questions:
+//! times blind guessing," not "how exposed." The 2026-07-16 evidence run
+//! shows worst-arm `r` **flat** (≈1.7–1.86) across `N ∈ [2, 16]`, with
+//! `P(link)` scaling ≈ `1.8/N` — the LR scorer's hit probability and the
+//! `1/N` blind baseline shrink together, so the ratio renormalizes
+//! thin-cover harm away **by construction** (`r ≤ N` caps it; at `N = 2` the
+//! worst arm links 74.6% of the time and still "clears"). Two consequences:
 //!
-//! - **Ratio-anchored** (`worst-arm r < 2` at each swept `N`): does the
-//!   *mechanism's relative leak* worsen as cover thins? The 2026-07-16
-//!   evidence run answers no — worst-arm `r` is flat (≈1.7–1.86) across
-//!   `N ∈ [2, 16]`; `P(link)` scales ≈ `1.8/N`. The mechanism property the
-//!   gate certified is scale-invariant in-model: there is **no ratio
-//!   breakeven in range**. That is the reassuring half.
-//! - **Absolute-anchored** (`worst-arm P(link) ≤ RATIO_BOUND / 10 = 0.2`,
-//!   the exposure the nominal verdict certified): does the *realized
-//!   exposure* stay at what the gate said? Flat `r` forces
-//!   `P ≈ 1.86/N`, so the exposure bar is crossed at `N* ≈ 1.86/0.2 ≈ 9.3` —
-//!   the evidence run straddles it exactly (worst `P = 0.203` at `N = 9`,
-//!   `0.177` at `N = 10`). The certified exposure has **no measurable cover
-//!   slack**: any real-world shortfall below nominal cover puts the realized
-//!   exposure above what the verdict certified. That is the load-bearing
-//!   half, and it is the direct corollary of the gate's ~7% margin — with
-//!   flat `r ≈ 1.86`, the exposure breakeven *must* sit at
-//!   `N* = 10 · (1.86/2) ≈ 9.3`.
+//! - **Cover was never gated.** Not "gated on an optimistic assumption" —
+//!   never gated at all. The gate's ~7% margin (`1.86` vs `2`) is margin on
+//!   the mechanism's *fixed relative leak*, which cover shortfall cannot
+//!   consume. This corrects the pre-sweep framing ("the true `r` is ≥ 1.86,
+//!   unknown"): `r` does not degrade as cover thins; it structurally cannot.
+//!   It is also why the §12.8 misfiling was possible — no gate-side number
+//!   ever watched cover.
+//! - **There is no discovered breakeven.** The exposure figure
+//!   `RATIO_BOUND / N_nominal = 0.2` is the ratio bar *evaluated at nominal
+//!   cover* — back-derived arithmetic, never an a-priori commitment (`r < 2`
+//!   was committed on its merits; `P(link) < 0.2` fell out of the division).
+//!   Under flat `r`, worst-arm `P(link)` meets it at
+//!   `N = N_nominal · (r / bound) ≈ 9.3` **by identity**: "keep cover at the
+//!   level we assumed, because below it you are below what we assumed."
+//!   The report states that identity for the record; it does **not** pin
+//!   `0.2` as a bound, and no monitoring threshold is minted from it —
+//!   committing an absolute bar backwards from the number it would need to
+//!   certify is the move this track has refused four times.
 //!
-//! The fifth conditional's monitoring threshold is the **absolute** anchor:
-//! the ratio anchor cannot see thin-cover harm (it renormalizes it away),
-//! and a low-`N` row clearing `r < 2` is not "passing" in any sense the
-//! aspiration cares about.
+//! # Where the aspiration's number actually lives
+//!
+//! Per-event `P(link)` is not the aspiration's quantity in any case: the
+//! `P`↔principal binding is observed repeatedly, and intersection collapses
+//! geometrically (F-D4 §13.3 / F-W5), so no finite per-event anchor bounds
+//! lifetime exposure. The aspiration's quantity is whole-life fused
+//! exposure, and its instrument is the S-2 ledger (Gate-6 R5, unbuilt) —
+//! not any per-event number this sweep can produce.
 //!
 //! # Scope
 //!
@@ -108,30 +108,35 @@ pub struct BreakevenReport {
     /// The nominal gate point (`n = 10`) restated from this run, for
     /// continuity with the WI-4 verdict row.
     pub nominal_n: usize,
-    /// The absolute linkage bar the nominal verdict certified:
-    /// `RATIO_BOUND / nominal_n` (= `P(link) < 0.2` at `N = 10`). The
-    /// absolute-anchored threshold below holds effective cover to *this*
-    /// exposure, not to the ratio.
-    pub absolute_bar: f64,
+    /// The ratio bar evaluated at nominal cover: `RATIO_BOUND / nominal_n`
+    /// (= `0.2` at `N = 10`). **Back-derived arithmetic, not a committed
+    /// bound** — `r < 2` was committed a-priori on its merits; this number
+    /// fell out of the division and is reported only so the parity identity
+    /// below is legible. Never quote it as an a-priori exposure bar.
+    pub nominal_exposure_identity: f64,
     pub rows: Vec<BreakevenRow>,
     /// Cover levels (valid rows only) where the worst arm breaches the
     /// ratio bound.
     pub failing_n: Vec<usize>,
-    /// Ratio-anchored threshold: the smallest valid cover level at which the
+    /// Ratio-anchored breakeven: the smallest valid cover level at which the
     /// worst arm still clears `r < RATIO_BOUND`; `None` if every valid row
-    /// fails. If the ratio surface is flat (the 2026-07-16 evidence run:
-    /// worst-arm `r ≈ 1.7–1.86` at every swept `N`), this lands at the
-    /// bottom of the sweep and is **not** the number to monitor — the ratio
-    /// cannot see thin-cover harm below its `r ≤ N` cap.
+    /// fails. The 2026-07-16 evidence run lands this at the bottom of the
+    /// sweep (worst-arm `r ≈ 1.7–1.86` at every swept `N`): the relative
+    /// leak is scale-invariant in-model, so **no ratio breakeven exists in
+    /// range** and the ratio cannot see thin-cover harm below its `r ≤ N`
+    /// cap. That scale invariance is the sweep's finding.
     pub ratio_threshold_n: Option<usize>,
-    /// Absolute-anchored threshold — the fifth conditional's monitoring
-    /// number: the smallest valid cover level whose worst-arm `P(link)`
-    /// stays at or under `absolute_bar`, i.e. the cover level below which
-    /// the realized exposure exceeds what the nominal verdict certified.
-    pub absolute_threshold_n: Option<usize>,
-    /// Worst-arm absolute `P(link)` at the absolute threshold, stated
-    /// beside it so the threshold is never quoted without its exposure.
-    pub absolute_threshold_worst_p_link: Option<f64>,
+    /// Nominal-exposure parity point: the smallest valid cover level whose
+    /// worst-arm `P(link)` stays at or under `nominal_exposure_identity`.
+    /// Under flat `r` this sits at `nominal_n · (r / RATIO_BOUND)` **by
+    /// identity** — it restates the nominal-cover assumption ("below it you
+    /// are below what we assumed") and carries no independent content. It is
+    /// **not** a monitoring threshold; the aspiration's quantity is lifetime
+    /// exposure (F-D4 §13.3 / F-W5), instrumented by the S-2 ledger.
+    pub nominal_parity_n: Option<usize>,
+    /// Worst-arm absolute `P(link)` at the parity point, stated beside it so
+    /// the identity is never quoted without its realized exposure.
+    pub nominal_parity_worst_p_link: Option<f64>,
 }
 
 /// Run the two validity controls at cover level `n` (measurement round §5,
@@ -201,20 +206,20 @@ fn run_breakeven(trials: u32, seed: u64) -> BreakevenReport {
         .min_by_key(|r| r.n);
 
     let nominal_n = 10usize;
-    let absolute_bar = RATIO_BOUND / nominal_n as f64;
-    let absolute_threshold = rows
+    let nominal_exposure_identity = RATIO_BOUND / nominal_n as f64;
+    let nominal_parity = rows
         .iter()
-        .filter(|r| r.controls_valid && r.worst_p_link <= absolute_bar)
+        .filter(|r| r.controls_valid && r.worst_p_link <= nominal_exposure_identity)
         .min_by_key(|r| r.n);
 
     BreakevenReport {
         ratio_bound: RATIO_BOUND,
         trials,
         nominal_n,
-        absolute_bar,
+        nominal_exposure_identity,
         ratio_threshold_n: ratio_threshold.map(|r| r.n),
-        absolute_threshold_n: absolute_threshold.map(|r| r.n),
-        absolute_threshold_worst_p_link: absolute_threshold.map(|r| r.worst_p_link),
+        nominal_parity_n: nominal_parity.map(|r| r.n),
+        nominal_parity_worst_p_link: nominal_parity.map(|r| r.worst_p_link),
         rows,
         failing_n,
     }
@@ -244,7 +249,10 @@ mod tests {
             assert!(row.worst_ratio <= row.n as f64 + 1e-9);
             assert!(row.worst_ratio >= row.worst_p_link - 1e-9);
         }
-        assert!((report.absolute_bar - RATIO_BOUND / report.nominal_n as f64).abs() < 1e-12);
+        assert!(
+            (report.nominal_exposure_identity - RATIO_BOUND / report.nominal_n as f64).abs()
+                < 1e-12
+        );
         if let Some(t) = report.ratio_threshold_n {
             let row = report
                 .rows
@@ -254,13 +262,9 @@ mod tests {
             assert!(row.controls_valid && row.clears_bound);
             assert!(!report.failing_n.contains(&t));
         }
-        if let Some(t) = report.absolute_threshold_n {
-            let row = report
-                .rows
-                .iter()
-                .find(|r| r.n == t)
-                .expect("threshold row");
-            assert!(row.controls_valid && row.worst_p_link <= report.absolute_bar);
+        if let Some(t) = report.nominal_parity_n {
+            let row = report.rows.iter().find(|r| r.n == t).expect("parity row");
+            assert!(row.controls_valid && row.worst_p_link <= report.nominal_exposure_identity);
         }
     }
 }

@@ -4,52 +4,63 @@
 
 ### Added
 
-- **sim + docs: GF-7 effective-cover breakeven sweep
+- **sim + docs: GF-7 effective-cover sensitivity sweep
   (`shekyl-staking-sim --gf7-breakeven`, `gf7_breakeven.rs`); fifth
-  WI-4 §13.5 conditional's kind sharpened and monitoring threshold
-  derived; aspiration-vs-gate framing pinned.** Follow-through on the
-  reclassification entry below, per review. *Kind:* "the
-  isolation-conditioning kind" got permanence right and shape wrong —
-  isolation conditions a **channel** (fails ⇒ new channel, qualitative
-  change); effective cover conditions **the number itself**: `1.86` is
-  `r` under the most favorable cover assumption, not the measured
-  value, and the honest characterization is **stacked marginals of
-  opposite sign** (pessimistic oracle-union adversary panel ×
-  optimistic nominal cover — net direction indeterminate; F-W4's
-  hygiene applied on this side). Scope narrowed: thin-cover-as-regime
-  is already L12/design-away (M1 reward gate refuses the regime); the
-  conditional carries effective-vs-nominal **at steady state**.
-  *Breakeven (mechanism-class under method note 3 — a property of the
-  model, no testnet, no economics input):* the new arm sweeps the
-  gate-relevant posture over `N ∈ [2, 16]` with per-`N` validity
-  controls, worst arm per row, 1 000 trials/point. Worst-arm `r` is
-  **flat ≈1.7–1.86 across the range** — no ratio breakeven exists,
-  because `r` renormalizes by the degraded baseline and structurally
-  cannot see thin-cover harm (at `N = 2` the worst arm links 74.6% and
-  still "clears"); the load-bearing anchor is **absolute exposure**
-  (`P(link) < 0.2`, what the nominal verdict certified), whose
-  breakeven flat-`r` forces to **`N* ≈ 9.3`** — straddled exactly by
-  the evidence run (`P = 0.203` at `N = 9`, `0.177` at `N = 10`).
-  **Zero measurable cover slack**: any effective shortfall below
-  nominal exceeds the certified exposure. The threshold is
-  **aspiration-side, not gate-side** — the gate passed and is not
-  re-litigated; below `N* ≈ 10` the aspiration is degrading and this
-  is the number that says so (post-genesis monitor: effective
-  steady-state cover ≥ ~10). *Framing pinned at WI-4 §13.5:* the
-  conditional register is **the aspiration's ledger** — the standing
-  statement of what stands between "every gate passed" and "the
-  aspiration holds" (gates are falsifiable and ours; the aspiration —
-  only-KYC-remains — cannot be gated on); the aspiration's instrument
-  is the **S-2 fused exposure ledger** (Gate-6 R5, "build first,"
-  unbuilt). The "state actor has KYC anyway" scope argument is
+  WI-4 §13.5 conditional's kind sharpened; `r < 2` found structurally
+  blind to cover; aspiration-vs-gate framing pinned.** Follow-through
+  on the reclassification entry below, per review; reading corrected
+  same day, per review. *Kind:* "the isolation-conditioning kind" got
+  permanence right and shape wrong — isolation conditions a
+  **channel** (fails ⇒ new channel, qualitative change); effective
+  cover conditions **the number itself**: `1.86` was computed at
+  nominal cover, an upper bound, and the honest characterization is
+  **stacked marginals of opposite sign** (pessimistic oracle-union
+  adversary panel × optimistic nominal cover; F-W4's hygiene applied
+  on this side). Scope narrowed: thin-cover-as-regime is already
+  L12/design-away (M1 reward gate refuses the regime); the conditional
+  carries effective-vs-nominal **at steady state**. *Sweep
+  (mechanism-class under method note 3 — a property of the model, no
+  testnet, no economics input):* the new arm sweeps the gate-relevant
+  posture over `N ∈ [2, 16]` with per-`N` validity controls, worst arm
+  per row, 1 000 trials/point. Finding: worst-arm `r` is **flat
+  ≈1.7–1.86 across the range** — **`r < 2` is structurally blind to
+  cover**. The LR scorer's hit probability and the `1/N` blind
+  baseline shrink together, so the ratio renormalizes thin-cover harm
+  away by construction (at `N = 2` the worst arm links 74.6% and still
+  "clears"). Consequences: **cover was never gated** — not on an
+  optimistic assumption, not at all; the gate's ~7% margin is margin
+  on the mechanism's fixed relative leak, never margin against cover
+  (the structural fact that made the §12.8 misfiling possible); the
+  pre-sweep "true `r` ≥ 1.86, unknown" framing is retracted; and **no
+  per-event monitoring threshold was discovered** — the candidate
+  `P(link) ≤ 0.2` is the ratio bar evaluated at nominal cover,
+  back-derived arithmetic (under flat `r` the parity point sits at
+  `N = 10 · 1.86/2 ≈ 9.3` *by identity*, straddled by the run:
+  `P = 0.203` at `N = 9`, `0.177` at `N = 10`), so it restates the
+  nominal-cover assumption with no independent content, and pinning it
+  as an absolute bar is refused as
+  commitment-backwards-from-the-number. Per-event `P(link)` also does
+  not bound the aspiration's quantity (the `P`↔principal binding is
+  observed repeatedly; intersection collapses geometrically, F-D4
+  §13.3/F-W5): the conditional's instrument is the **S-2 fused
+  exposure ledger** (Gate-6 R5, "build first," unbuilt). *Framing
+  pinned at WI-4 §13.5:* the conditional register is **the
+  aspiration's ledger** — the standing statement of what stands
+  between "every gate passed" and "the aspiration holds" (gates are
+  falsifiable and ours; the aspiration — only-KYC-remains — cannot be
+  gated on); and S-2's permanent deferral while every track terminates
+  at "S-2 is the instrument" is now itself recorded as a finding on
+  that ledger. The "state actor has KYC anyway" scope argument is
   explicitly rejected as a reading of the measurement (KYC yields
   principal→user; GF-7 protects `P`→principal; both broken yields
   `P`→user — which shards, what earnings, what patterns). Surfaces:
-  `gf7_breakeven.rs` + `--gf7-breakeven` (dual-anchor report), WI-4
-  §13.5 (fifth conditional rewritten; verdict clause (3) carries the
-  threshold; aspiration-ledger pin), Gate-6 §12.8 + §11.8 method note
-  3 (constructive-half demonstration) + revision history, FOLLOWUPS
-  carry 4.
+  `gf7_breakeven.rs` + `--gf7-breakeven` (scale-invariance report;
+  parity line labeled as identity), WI-4 §13.5 (fifth conditional
+  rewritten; verdict clause (3) reworded to name S-2 as the
+  instrument; aspiration-ledger pin), Gate-6 §12.8 + §11.8 method note
+  3 (constructive-half demonstration corrected to its honest output) +
+  revision history, FOLLOWUPS carry 4, `IMPLEMENTATION_INDEX.md` row
+  "Round N / R N".
 
 - **docs: F-D4 review round 4 — the premise audit
   (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §2.1 + §15; F-W7/F-W8 minted;
