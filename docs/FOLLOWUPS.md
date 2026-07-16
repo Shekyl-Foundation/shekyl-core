@@ -5867,6 +5867,29 @@ sustainability is unaffected by the recalibration.
   Target: V3.1 (Track B) / V3.0 pre-genesis (Track A).
 
 - **PQC Multisig V3.0 wire: MSW-1…MSW-8 (pre-genesis, priority 1).**
+  **UPDATE 2026-07-16 — MSW-1/2/3/4/5/8 ✅ LANDED** (branch
+  `feat/msw-wire-max5`, atop MSW-6). MAX=5 across the whole surface; the F-1
+  fossil `2 + N·LEN` is deleted from all four sites (`cryptonote_config.h`,
+  `tx_pqc_verify.cpp`, `shekyl-wire`, and the stale `> 7` cap that also survived
+  in `multisig_receiving.rs` + `shekyl-address` ×3), with the crypto-pq↔address
+  caps pinned equal at compile time. Cross-language KAT
+  `fcmp.cpp::msw1_pqc_constants_match_rust` (via the `shekyl_pqc_canonical_lens`
+  FFI accessor) is green — the F-1 catcher across the boundary. Disjointness
+  (MSW-2), `group_id`←address plumbing (MSW-4), reserved-`0x02` carrier (MSW-5),
+  and the `hybrid_sign_pubkeys` deletion (MSW-8) all landed with KATs; MSW-3's
+  misattribution string was already cleared by MSW-6. Per-item closeouts in
+  `V3_1_MULTISIG_RUST_ENGINE.md` (wire-work table).
+  **Residual (port-track, deferred — rule 22 clause 3):** MSW-1 chose the
+  cross-language KAT as its F-1 catcher over "option 2" — *generating* the
+  `cryptonote_config.h` PQC block (`PQC_HYBRID_SINGLE_*_LEN`, `PQC_MAX_*_BLOB`,
+  `PQC_SPEND_AUTH_PUBKEY_LEN`, `MAX_MULTISIG_PARTICIPANTS`) from the Rust source
+  so the constants can have exactly one definition (compile-time single source,
+  not test-enforced agreement). *Blocker:* the `shekyl_ffi.h` header is
+  hand-authored (no cbindgen in the build bridge); a generator is its own
+  build-bridge change. *Target:* consensus port, alongside the `tx_pqc_verify`
+  structural-battery → Rust migration already tracked under "MSW-6 landing
+  residue". Until then the KAT + the compile-time `const _` ceiling/cap asserts
+  are the drift mechanism.
   **UPDATE 2026-07-15 overhaul:**
   - **MSW-6 ✅ LANDED (option a):** relaxed the tx-wide `scheme_id`
     agreement — dropped outright, in lockstep across the C++ verify

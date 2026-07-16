@@ -258,9 +258,12 @@ prover Option D and is withdrawn for the E′ product path.)*
 
 ### 5.3 group_id derivation
 
-The 32-byte `group_id` binds the group's identity. **Code today**
-(`multisig_group_id`) hashes the **leaf** `MultisigKeyContainer`
-(ephemeral hybrid keys + spend-auth pubkeys), not address fields:
+The 32-byte `group_id` binds the group's identity. The code hashes the
+**leaf** `MultisigKeyContainer` (ephemeral hybrid keys + spend-auth pubkeys)
+for its key material — not address key fields — while sourcing the three
+version axes from the group's address payload
+(`multisig_group_id_from_address`, MSW-4; the bare `multisig_group_id`
+convenience form fabricates them from constants and is tests/fuzz-only):
 
 ```
 group_id = cn_fast_hash(
