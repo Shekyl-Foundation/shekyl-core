@@ -167,10 +167,11 @@ but it is boundable from the bond-market model: at the sim's lean-equilibrium at
 
 **The planning box (F-W3 — the bound is a range, not a number).** Both inputs are pre-testnet
 unknowns with stated plausible ranges: `N_P ∈ 79–154` (the L13 attractor) and `c ∈ [0.02, 0.2]`.
-Evaluating the corners:
+Evaluating the two corners (the middle row is the round-1 planning instance, kept for §10's
+audit trail — it is an interior point, not a corner):
 
 ```
-N_P =  80, c = 0.02:   ρ_x = 1.6 × 10⁻⁴   ⇒   W ≥ 56_250 blocks ≈ 5.6 SEB
+N_P =  79, c = 0.02:   ρ_x = 1.58 × 10⁻⁴  ⇒   W ≥ 56_962 blocks ≈ 5.7 SEB
 N_P =  80, c = 0.05:   ρ_x = 4.0 × 10⁻⁴   ⇒   W ≥ 22_500 blocks ≈ 2.25 SEB
 N_P = 154, c = 0.20:   ρ_x = 3.1 × 10⁻³   ⇒   W ≥  2_922 blocks ≈ 0.3 SEB
 ```
@@ -178,7 +179,7 @@ N_P = 154, c = 0.20:   ρ_x = 3.1 × 10⁻³   ⇒   W ≥  2_922 blocks ≈ 0.3
 The bound spans a **~19× box**. Any point picked from it is a point, not a derivation — this is
 review round 2's blocking finding (§10 F-W3), and it is why the window's *value* is sealed by
 the stressnet read (§5.4) rather than committed here. What the box does establish a-priori: at
-**every** corner the bound sits above the entry `600` (≈ 5× at the loosest corner, ≈ 94× at the
+**every** corner the bound sits above the entry `600` (≈ 5× at the loosest corner, ≈ 95× at the
 tightest), so "the exit window cannot borrow the entry 600" survives the full box even though
 the exact scale does not.
 
@@ -501,7 +502,7 @@ Round 2 reviewed the round-1 amendment and found the deeper error: F-W1's fix (`
 corrected a point *within* the same mistake. Three findings, resolved by the §5.4 reshape.
 
 - **F-W3 (blocking — resolved):** the X-1 bound is not a number but a **~19× planning box**
-  (§5.1 corners: `2_922` to `56_250` over the doc's own stated ranges `N_P ∈ 79–154`,
+  (§5.1 corners: `2_922` to `56_962` over the doc's own stated ranges `N_P ∈ 79–154`,
   `c ∈ [0.02, 0.2]`). The round-1 planning instance (`22_500`) and both draft candidates are
   points in that box with no better claim than any other; "within 12 %" needed saying
   precisely because a number picked from a range that wide is always within something. `ρ_x`

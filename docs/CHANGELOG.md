@@ -89,7 +89,7 @@
   derivable pre-measurement; sentinel + frozen decision rule
   (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §5.4/§11).** F-W3 (blocking):
   the X-1 bound spans a ~19× planning box over the doc's own ranges
-  (`N_P ∈ 79–154`, `c ∈ [0.02, 0.2]`; corners `2_922`–`56_250`), so both
+  (`N_P ∈ 79–154`, `c ∈ [0.02, 0.2]`; corners `2_922`–`56_962`), so both
   draft candidates (`2 × SEB`, `3 × SEB`) were points picked from a box,
   not derivations — `ρ_x` is a pre-testnet unknown and the value cannot
   precede the rate. Resolution mirrors the ratified `K_COVER` pattern

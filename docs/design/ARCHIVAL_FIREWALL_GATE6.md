@@ -2124,7 +2124,7 @@ explicit arming, refuses to ship unsealed.
 - **2026-07-15 (F-D4 review round 2 — F-W3/F-W4/F-W5, sentinel reshape):** Round 2 reviewed
   the round-1 amendment and found its `3 × SEB` fix repeated the category error: the X-1
   bound spans a ~19× planning box over the doc's own ranges (`N_P ∈ 79–154`, `c ∈ [0.02,
-  0.2]`; corners `2_922`–`56_250`), so no pre-measurement value is derivable — any picked
+  0.2]`; corners `2_922`–`56_962`), so no pre-measurement value is derivable — any picked
   point can be narrated as "within" something. Resolution (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`
   §5.4/§11): `DEFAULT_EXIT_GAP_WINDOW` adopts the `K_COVER` M1 §9.3 provisional-sentinel
   pattern (sentinel `0`, compile-time refusal in non-test builds, dev-only arming), the value
