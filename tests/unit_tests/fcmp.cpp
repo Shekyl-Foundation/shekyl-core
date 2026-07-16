@@ -635,6 +635,7 @@ std::vector<uint8_t> msw6_sign_multisig_2of3(const ShekylPqcKeypair (&kps)[3],
     ShekylPqcSignatureResult sig = shekyl_pqc_sign(
         kps[signer].secret_key.ptr, kps[signer].secret_key.len,
         reinterpret_cast<const uint8_t*>(msg.data), 32);
+    CHECK_AND_ASSERT_THROW_MES(sig.success, "multisig partial sign failed");
     partials.push_back({(uint8_t)signer,
         std::vector<uint8_t>(sig.signature.ptr, sig.signature.ptr + sig.signature.len)});
     shekyl_buffer_free(sig.signature.ptr, sig.signature.len);
@@ -743,6 +744,7 @@ TEST(fcmp, msw6_mixed_scheme_transaction_verifies)
   // not the per-input signature binding. Corrupt the multisig signature and the
   // same tx must fail.
   cryptonote::transaction tampered = tx;
+  ASSERT_GE(tampered.pqc_auths[1].hybrid_signature.size(), 4u);
   tampered.pqc_auths[1].hybrid_signature[3] ^= 0xFF;
   EXPECT_FALSE(cryptonote::verify_transaction_pqc_auth(tampered))
       << "per-input signature binding must still reject a tampered auth";

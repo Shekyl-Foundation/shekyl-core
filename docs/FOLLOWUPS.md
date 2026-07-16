@@ -5930,18 +5930,19 @@ sustainability is unaffected by the recalibration.
     FFI (rules 16/40). *Blocker:* consensus-port sequencing. *Target:*
     consensus port (§16.4 already sanctions "scheme_id ∈ {1,2} verify into
     Rust FFI").
-  - **C-2 (P0-n gate is a denylist).** `check_multisig_doc_literals.sh`
-    greps for `=7` / `7-of-7` / `5385` — yesterday's fossils; it never
-    reads the source, so if MSW-G moves it passes on the *new* fossils.
-    Fix: extract `MAX_MULTISIG_PARTICIPANTS` from
-    `crypto-pq/src/multisig.rs:21` and assert the docs' stated cap equals
-    it (one grep + one compare — catches the class). *Target:* land with
-    MSW-1 or after.
-  - **C-3 (P0-n whole-file exclusions).** `V3_1_MULTISIG_RUST_ENGINE.md`,
-    `IMPLEMENTATION_INDEX.md`, `FOLLOWUPS.md` are excluded wholesale to
-    protect decision-log rows — but that blinds the gate to the file where
-    MSW-* literals live. Replace with a `<!-- p0n-allow -->` row marker.
-    *Target:* land with MSW-1 or after.
+  - **C-2 (P0-n gate is a literal denylist).**
+    `check_multisig_doc_literals.sh` pattern-matches known cap/fee fossils
+    (hardened in #311 high-review to a general `k-of-n` cap pattern plus
+    comma/approx fee forms); it still never extracts
+    `MAX_MULTISIG_PARTICIPANTS` from `crypto-pq/src/multisig.rs:21` to check
+    the docs' stated cap against the source of truth, so if MSW-G ever moves
+    the denylist is stale by one revision. Fix: extract the constant and
+    assert the docs' cap equals it — catch the class, not instances.
+    *Target:* land with MSW-1 or after. (**C-3** — dropping the wholesale
+    carrier/index/FOLLOWUPS exclusion in favour of per-line
+    `doc-literal-gate-allow` markers — already landed in #311 high-review,
+    `52d4a2c8e`; the gate matches cap/fee literals, not stale *reasoning*,
+    so the A4 wargame-row fossil was a manual catch, not a gate hit.)
   - **F-7 (Round-1 blocker): `EngineSignerKind` associated items.** §3.1's
     "associated items only the multisig kind defines" is a compile error
     at implementation time — associated items must be defined by every
