@@ -126,6 +126,23 @@ struct ShekylPqcSignatureResult {
     bool success;
 };
 
+/// MSW-1 cross-language consistency: the canonical PQC multisig wire lengths,
+/// owned by shekyl-crypto-pq. The `cryptonote_config.h` twins are pinned equal
+/// to these by a unit test — the only check that catches C++ and Rust drifting
+/// from each other (F-1: each side internally consistent, disagreeing across
+/// the FFI). All fields are byte counts.
+struct ShekylPqcCanonicalLens {
+    size_t single_key_len;
+    size_t single_sig_len;
+    size_t spend_auth_pubkey_len;
+    size_t max_multisig_participants;
+    size_t max_public_key_blob;
+    size_t max_signature_blob;
+};
+
+/// Return the canonical PQC multisig wire lengths (see ShekylPqcCanonicalLens).
+ShekylPqcCanonicalLens shekyl_pqc_canonical_lens();
+
 /// Generate a hybrid ML-DSA + Ed25519 keypair.
 /// Free both buffers with shekyl_buffer_free. Wipe secret_key after use.
 ShekylPqcKeypair shekyl_pqc_keypair_generate();

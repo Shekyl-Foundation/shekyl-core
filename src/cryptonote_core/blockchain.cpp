@@ -4258,9 +4258,16 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   // not this check. Its *effect* was to make a tx that spends a solo (scheme 1)
   // output and a multisig (scheme 2) output together unrepresentable — under
   // FCMP++ separate txs are unlinkable, so co-spending is the only proof of
-  // common control across key models. Per TM-1 (ARCHIVAL_TM1_CLUSTERING.md)
-  // that self-inflicted linkage is a wallet disclosure + coin-selection
-  // invariant (tracked to MS-5 / E′ coin selection), not a consensus mechanism.
+  // common control across key models. That belongs in the wallet, not consensus,
+  // on no externality: the two outputs are one-time keys and the FCMP++ proof
+  // ranges over the whole tree, so no other party's anonymity set shrinks
+  // (unlike a small ring poisoning others' decoys — the reason ring size *is*
+  // consensus). Shekyl already permits exactly this opt-in class (a scheme_id=2
+  // spend marks the spender, a disclosed opt-in cost), so refusing an opt-in
+  // cross-model link at consensus would be incoherent. It is a wallet
+  // coin-selection invariant — a BLOCKING E′/MS-5 ship gate (see §16.3), not a
+  // consensus mechanism. (NOT TM-1, whose disposition rests on the linkage being
+  // impossible to mechanize; here the mechanism existed and worked.)
   // Each input is still validated per-input (scheme ∈ {1,2}, key-blob length,
   // signature); only the cross-input agreement is dropped.
   if (tx.version >= 3 && !tx.vin.empty() && !std::holds_alternative<txin_gen>(tx.vin[0])

@@ -597,6 +597,30 @@ TEST(fcmp, multisig_2of3_sig_container_assembly)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// MSW-1: PQC constant cross-language consistency (bound family)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// The C++ `cryptonote_config.h` PQC constants are hand-written twins of
+// shekyl-crypto-pq's canonical values (the FFI header is hand-written — no
+// cbindgen). Each side has its own compile-time guard against internal drift
+// (`static_assert` in C++, `const _` assert in Rust: ceiling >= largest legal
+// container). This test guards the third failure mode — C++ and Rust each
+// internally consistent but disagreeing with each other across the FFI, which
+// is exactly what F-1 was and which no single-language assert can see. It reads
+// both sides and asserts equality.
+TEST(fcmp, msw1_pqc_constants_match_rust)
+{
+  const ShekylPqcCanonicalLens r = shekyl_pqc_canonical_lens();
+  EXPECT_EQ(r.single_key_len, config::PQC_HYBRID_SINGLE_KEY_LEN);
+  EXPECT_EQ(r.single_sig_len, config::PQC_HYBRID_SINGLE_SIG_LEN);
+  EXPECT_EQ(r.spend_auth_pubkey_len, config::PQC_SPEND_AUTH_PUBKEY_LEN);
+  EXPECT_EQ(r.max_multisig_participants,
+            static_cast<size_t>(config::MAX_MULTISIG_PARTICIPANTS));
+  EXPECT_EQ(r.max_public_key_blob, config::PQC_MAX_PUBLIC_KEY_BLOB);
+  EXPECT_EQ(r.max_signature_blob, config::PQC_MAX_SIGNATURE_BLOB);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // MSW-6: per-input scheme mixing (tx-wide scheme_id agreement withdrawn)
 // ═══════════════════════════════════════════════════════════════════════════
 

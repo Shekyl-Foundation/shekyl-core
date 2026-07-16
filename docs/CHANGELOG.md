@@ -4,6 +4,19 @@
 
 ### Added
 
+- **F-7 (R1-F-7): first `EngineSignerKind` associated item —
+  `SigningCeremony`.** The sealed signer-kind marker was a zero-associated-item
+  trait; adding the first item was a Round-1 closure prerequisite (associated
+  items must be defined by every implementor, and associated-type defaults are
+  unstable, so a compiler would have forced it mid-MS-1). Landed the
+  trait-surface amendment now: `EngineSignerKind::SigningCeremony`, with
+  `SoloSigner::SigningCeremony = core::convert::Infallible`. A solo wallet runs
+  no multisig ceremony, so its ceremony type is uninhabited — "a solo wallet ran
+  a multisig ceremony" is unrepresentable, guarded by a compile-time
+  `match ceremony {}` pin (same compile-forced tier as the `!Clone` archival
+  keys). `MultisigSigner<N, K>` (V3.1) will set its own FROST ceremony type
+  (MS-5). `rust/shekyl-engine-core/src/engine/signer.rs`.
+
 - **sim + docs: GF-7 effective-cover sensitivity sweep
   (`shekyl-staking-sim --gf7-breakeven`, `gf7_breakeven.rs`); fifth
   WI-4 §13.5 conditional's kind sharpened; `r < 2` found structurally
@@ -194,7 +207,6 @@
   the binary sits outside every production graph). The seal this
   instrument was to serve is removed by the round-4 entry above; the
   numbers survive as the §15.4 tripwire's re-run calibration template.
-
 - **docs: F-W5 resolved — the exit-seam `N_t`, derived a-priori
   (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §13).** Result: **`N_t(exit)
   = 10`** — numerically equal to the entry posture anchor by
@@ -328,11 +340,58 @@
   (`shekyl-daemon-rpc/.../verifier.rs`); per-input scheme validity, key-blob
   length, and signature remain enforced. The agreement's stated
   scheme-downgrade purpose was vacuous (self-referential; per-output binding is
-  the `h_pqc` leaf hash), and its actual effect — foreclosing a self-inflicted
-  solo/multisig cross-model linkage — moves to the wallet per **TM-1**
-  (disclosure + coin-selection invariant, tracked to MS-5), not consensus.
+  the `h_pqc` leaf hash), and its actual effect — foreclosing a
+  solo/multisig cross-model linkage — belongs in the wallet on **no externality**
+  (one-time keys, FCMP++ proof over the whole tree — no other anonymity set
+  shrinks) plus Shekyl's own opt-in `scheme_id=2` self-marking precedent, **not**
+  TM-1; the compensating coin-selection invariant (never cross key models, with a
+  test) + disclosure line are a **blocking E′/MS-5 ship gate**, not consensus.
   Cross-seam KAT: `tests/unit_tests/fcmp.cpp::msw6_mixed_scheme_transaction_verifies`.
   See `PQC_MULTISIG.md` §16.3.
+
+- **MSW-1/2/3/4/5/8: V3.1 multisig wire-format bundle @ MAX=5.** One validation
+  surface; the cross-language KAT is the gate whose absence produced F-1.
+  - **MSW-1 (bound family + MAX=5).** `MAX_MULTISIG_PARTICIPANTS` 7→5 (MSW-G,
+    2f+1 at f=2). The canonical wire length now lives on the type that owns the
+    bytes (`HybridPublicKey`/`HybridSignature::CANONICAL_LEN`);
+    `SINGLE_KEY_CANONICAL_LEN` / `SINGLE_SIG_CANONICAL_LEN` alias it. The DoS
+    ceilings (`PQC_MAX_PUBLIC_KEY_BLOB = 16384`, `PQC_MAX_SIGNATURE_BLOB =
+    32768`) are **decoupled** from MAX and guarded by compile-time `const _`
+    asserts against the largest legal container — so a ceiling *below* a legal
+    max-threshold blob is now a build error. The F-1 fossil `2 + N·LEN` (which
+    omitted the 3-byte container header and the 32-byte-per-participant
+    spend-auth keys) is deleted from `cryptonote_config.h`, `tx_pqc_verify.cpp`,
+    and `shekyl-wire`. The same stale `n > 7` cap survived in
+    `multisig_receiving.rs` and `shekyl-address` (×3): both are deduped to
+    `MAX_MULTISIG_PARTICIPANTS`, and the crypto-pq↔address caps are pinned equal
+    at compile time. **F-1 catcher:** the new `shekyl_pqc_canonical_lens()` FFI
+    accessor + `fcmp.cpp::msw1_pqc_constants_match_rust` prove the C++ config
+    constants equal the Rust ones across the FFI — the one mechanism that would
+    have caught F-1, where each side was internally consistent and disagreed
+    only across the boundary.
+  - **MSW-2 (disjointness KAT).** The scheme-1 leaf length (1996) is disjoint
+    from every scheme-2 container length, `expected_blob_len` is injective (so a
+    length-relabelled blob is rejected on the length cross-check), and
+    `m_required ≥ 1` is the secondary separator. Leaf encoding untouched.
+  - **MSW-3 (misattribution / MS-8 record).** The misattributed
+    `"output committed="` string was already removed by MSW-6; MS-8 stays
+    retired (group_id verify no-op → folded into MSW-2).
+  - **MSW-4 (group_id version plumbing).** `multisig_group_id_from_address`
+    sources `group_version` / `spend_auth_version` from the group's
+    `MultisigAddressPayload` rather than crate constants, so a version change
+    produces a distinct group_id (§5.3); the bare `multisig_group_id` wrapper is
+    now documented tests/fuzz-only.
+  - **MSW-5 (reserved-version carrier).** The address payload transports a
+    reserved `spend_auth_version = 0x02` (Option E′ marker) opaquely — it
+    round-trips unchanged for forward-compatible readers (§8.2).
+  - **MSW-8 (address shrink).** The vestigial
+    `MultisigAddressPayload.hybrid_sign_pubkeys` (Solution C fossil, zero
+    consumers — leaf sign keys are derived per-output from KEM shared secrets)
+    is deleted; `PER_PARTICIPANT_LEN` collapses 3200→1216 (~2.6× smaller
+    address). Clean removal at payload version `0x01` — no version bump.
+    `PQC_TEST_VECTOR_002_MULTISIG.json` regenerated off the F-1 fossil model.
+  See `docs/design/V3_1_MULTISIG_RUST_ENGINE.md` (wire-work table) and
+  `PQC_MULTISIG.md` §5.3 / §6.2.
 
 - **docs: F-D4 a-priori exit-window derivation
   (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`, Gate-6 §12.6).** Committed

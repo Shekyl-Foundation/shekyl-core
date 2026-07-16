@@ -8,17 +8,15 @@
 //! v1.1 for the full specification.
 
 use crate::error::PqcVerifyError;
-use crate::signature::{
-    HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
-    ML_DSA_65_PUBLIC_KEY_LENGTH, ML_DSA_65_SIGNATURE_LENGTH,
-};
+use crate::signature::{HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme};
 use crate::CryptoError;
-use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH as ED25519_PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH as ED25519_SIGNATURE_LENGTH,
-};
 use shekyl_crypto_hash::cn_fast_hash;
 
-pub const MAX_MULTISIG_PARTICIPANTS: u8 = 7;
+/// Largest multisig group served (MSW-G, settled 2026-07-15: 2f+1 at f=2;
+/// withdrew the same-day MAX=8 pick). The value is the *correctness* cap —
+/// `from_canonical_bytes` rejects `n_total > MAX` — and is deliberately NOT
+/// the source of the DoS ceilings below (see `PQC_MAX_*_BLOB`).
+pub const MAX_MULTISIG_PARTICIPANTS: u8 = 5;
 pub const HYBRID_SCHEME_ID_MULTISIG: u8 = 2;
 
 /// V3.1 container version (first version with spend_auth_pubkeys).
@@ -31,13 +29,52 @@ const DOMAIN_SEP_V31: &[u8] = b"shekyl-multisig-group-v31";
 /// Classical spend-auth pubkey length (compressed Ed25519 point).
 pub const SPEND_AUTH_PUBKEY_LEN: usize = 32;
 
-/// Size of a single `HybridPublicKey` in canonical encoding.
-pub const SINGLE_KEY_CANONICAL_LEN: usize =
-    1 + 1 + 2 + 4 + ED25519_PUBLIC_KEY_LENGTH + 4 + ML_DSA_65_PUBLIC_KEY_LENGTH; // 1996
+/// Size of a single `HybridPublicKey` in canonical encoding (1996). Aliased
+/// from the type that owns the encoding — one canonical definition (MSW-1).
+pub const SINGLE_KEY_CANONICAL_LEN: usize = HybridPublicKey::CANONICAL_LEN;
 
-/// Size of a single `HybridSignature` in canonical encoding.
-pub const SINGLE_SIG_CANONICAL_LEN: usize =
-    1 + 1 + 2 + 4 + ED25519_SIGNATURE_LENGTH + 4 + ML_DSA_65_SIGNATURE_LENGTH; // 3385
+/// Size of a single `HybridSignature` in canonical encoding (3385). Aliased
+/// from the type that owns the encoding — one canonical definition (MSW-1).
+pub const SINGLE_SIG_CANONICAL_LEN: usize = HybridSignature::CANONICAL_LEN;
+
+/// DoS pre-bound for the serialized multisig **key** container
+/// (`pqc_auth.hybrid_public_key`, scheme 2). A generous, round ceiling
+/// **decoupled** from `MAX_MULTISIG_PARTICIPANTS`: correctness (exact byte
+/// count, `n ≤ MAX`) is `MultisigKeyContainer::from_canonical_bytes`, not this
+/// bound. Bumping it needs a consensus rationale. The `const` assert below
+/// makes a ceiling *below* the largest legal container a **compile error** —
+/// MSW-1 / F-1: the old `2 + N·LEN` fossil formula silently stopped tracking
+/// the real container on every MAX/field change (it omitted both the 3-byte
+/// header and the 32-byte-per-participant spend-auth keys).
+pub const PQC_MAX_PUBLIC_KEY_BLOB: usize = 16_384;
+
+/// DoS pre-bound for the serialized multisig **signature** container. Same
+/// discipline as `PQC_MAX_PUBLIC_KEY_BLOB`.
+pub const PQC_MAX_SIGNATURE_BLOB: usize = 32_768;
+
+// Compile-time ceiling ladder (compile errors > runtime guards > reviewer
+// discipline). A too-small ceiling can no longer land: the largest legal
+// container at MAX must fit under the ceiling, checked at build time.
+const _: () = assert!(
+    MultisigKeyContainer::expected_blob_len(MAX_MULTISIG_PARTICIPANTS) <= PQC_MAX_PUBLIC_KEY_BLOB,
+    "PQC_MAX_PUBLIC_KEY_BLOB below the largest legal MultisigKeyContainer — see MSW-1/F-1"
+);
+const _: () = assert!(
+    MultisigSigContainer::expected_sig_len(MAX_MULTISIG_PARTICIPANTS) <= PQC_MAX_SIGNATURE_BLOB,
+    "PQC_MAX_SIGNATURE_BLOB below the largest legal MultisigSigContainer — see MSW-1/F-1"
+);
+
+// MSW-1: the participant cap is enforced at two validation surfaces — this
+// key container (`from_canonical_bytes`) and the multisig address payload
+// (`shekyl-address`). Both express the same MSW-G invariant; an address that
+// exceeds the container cap is dead-on-arrival (no container can be built for
+// it). crypto-pq already depends on shekyl-address, so the two caps are pinned
+// equal here at compile time — the F-1 lesson is that a bound duplicated across
+// a boundary must be caught by a mechanism, never by reviewer discipline.
+const _: () = assert!(
+    MAX_MULTISIG_PARTICIPANTS == shekyl_address::multisig_address::MAX_MULTISIG_PARTICIPANTS,
+    "MSW-1: shekyl-crypto-pq and shekyl-address multisig participant caps diverged"
+);
 
 // ---------------------------------------------------------------------------
 // MultisigKeyContainer
@@ -82,7 +119,10 @@ impl MultisigKeyContainer {
     }
 
     /// Compute the expected byte length of a V3.1 canonical encoding.
-    pub fn expected_blob_len(n: u8) -> usize {
+    ///
+    /// `const fn` so the DoS-ceiling ladder (`PQC_MAX_PUBLIC_KEY_BLOB`) can
+    /// assert against it at compile time.
+    pub const fn expected_blob_len(n: u8) -> usize {
         3 + (n as usize) * SINGLE_KEY_CANONICAL_LEN + (n as usize) * SPEND_AUTH_PUBKEY_LEN
     }
 
@@ -196,9 +236,15 @@ pub struct MultisigSigContainer {
 }
 
 impl MultisigSigContainer {
+    /// Expected byte length of an `m`-signature canonical encoding:
+    /// `sig_count(1) || m·sig(3385) || m·idx(1)`. `const fn` so the
+    /// `PQC_MAX_SIGNATURE_BLOB` ceiling can assert against it at compile time.
+    pub const fn expected_sig_len(m: u8) -> usize {
+        1 + (m as usize) * SINGLE_SIG_CANONICAL_LEN + (m as usize)
+    }
+
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, PqcVerifyError> {
-        let cap =
-            1 + (self.sig_count as usize) * SINGLE_SIG_CANONICAL_LEN + self.sig_count as usize;
+        let cap = Self::expected_sig_len(self.sig_count);
         let mut out = Vec::with_capacity(cap);
         out.push(self.sig_count);
         for sig in &self.sigs {
@@ -221,7 +267,7 @@ impl MultisigSigContainer {
             return Err(PqcVerifyError::ParameterBounds);
         }
 
-        let expected_len = 1 + (sig_count as usize) * SINGLE_SIG_CANONICAL_LEN + sig_count as usize;
+        let expected_len = Self::expected_sig_len(sig_count);
         if bytes.len() != expected_len {
             return Err(PqcVerifyError::SigBlobLength);
         }
@@ -259,6 +305,12 @@ impl MultisigSigContainer {
 ///
 /// `spend_auth_version` is currently 0x01 (Ed25519). Future lattice-only
 /// versions (V4) will use a different value.
+///
+/// This convenience form fabricates the version axes from crate constants and
+/// is for tests / fuzz / the current single-version stack only. Production
+/// group-identity derivation must source the version bytes from the group's
+/// address payload via [`multisig_group_id_from_address`] (MSW-4), so a version
+/// change actually changes the group_id.
 pub fn multisig_group_id(container: &MultisigKeyContainer) -> Result<[u8; 32], PqcVerifyError> {
     multisig_group_id_with_versions(
         container,
@@ -302,6 +354,36 @@ pub fn multisig_group_id_with_versions(
     }
 
     Ok(cn_fast_hash(&preimage))
+}
+
+/// Compute the group_id using the version axes carried by the group's
+/// [`MultisigAddressPayload`](shekyl_address::multisig_address::MultisigAddressPayload)
+/// (MSW-4).
+///
+/// The address payload is the authoritative carrier of the three independent
+/// version axes (§15.1); `group_version` and `spend_auth_version` are read from
+/// it rather than fabricated from crate constants — the R1-F-11 "group_id
+/// hashes constants" gap. Sourcing them from the payload keeps a version change
+/// (e.g. the V4 lattice-only `spend_auth_version`) producing a *distinct*
+/// group_id, which is what prevents silent cross-stack reinterpretation (§5.3).
+/// `scheme_id` is the multisig constant (2) — not a version axis.
+///
+/// The payload and container must describe the same group: an `n_total` /
+/// `m_required` mismatch is a caller error (`ParameterBounds`), never a
+/// silently-hashed input.
+pub fn multisig_group_id_from_address(
+    container: &MultisigKeyContainer,
+    address: &shekyl_address::multisig_address::MultisigAddressPayload,
+) -> Result<[u8; 32], PqcVerifyError> {
+    if address.n_total != container.n_total || address.m_required != container.m_required {
+        return Err(PqcVerifyError::ParameterBounds);
+    }
+    multisig_group_id_with_versions(
+        container,
+        address.group_version,
+        HYBRID_SCHEME_ID_MULTISIG,
+        address.spend_auth_version,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -622,16 +704,168 @@ mod tests {
     }
 
     #[test]
-    fn valid_7_of_7() {
-        let pairs = gen_keypairs(7);
-        let kc = make_key_container(&pairs, 7);
-        let msg = b"7-of-7-max";
-        let sc = sign_multisig(&pairs, &[0, 1, 2, 3, 4, 5, 6], msg);
+    fn valid_5_of_5() {
+        // MSW-G = 5: the largest legal group verifies end to end.
+        let pairs = gen_keypairs(5);
+        let kc = make_key_container(&pairs, 5);
+        let msg = b"5-of-5-max";
+        let sc = sign_multisig(&pairs, &[0, 1, 2, 3, 4], msg);
         let group_id = multisig_group_id(&kc).unwrap();
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
 
         assert!(verify_multisig(2, &key_blob, &sig_blob, msg, Some(&group_id)).unwrap());
+    }
+
+    // MSW-1 cross-seam length KAT. The absence of a test that crossed the
+    // container↔wire seam produced F-1. For every legal group size the
+    // serialized length equals the single canonical length expression
+    // (`expected_*_len`) and the bytes round-trip — the release-safe form of the
+    // `debug_assert_eq!(out.len(), cap)` inside `to_canonical_bytes`, and it also
+    // pins `from_canonical_bytes` to the same length. `n = MAX + 1` is the DoS-
+    // ceiling-independent correctness cap.
+    #[test]
+    fn msw1_container_lengths_and_roundtrip_over_all_n() {
+        for n in 1..=MAX_MULTISIG_PARTICIPANTS {
+            let pairs = gen_keypairs(n as usize);
+            let kc = make_key_container(&pairs, n); // n-of-n
+            let blob = kc.to_canonical_bytes().unwrap();
+            assert_eq!(
+                blob.len(),
+                MultisigKeyContainer::expected_blob_len(n),
+                "key container length != expected_blob_len at n={n}"
+            );
+            let kc2 = MultisigKeyContainer::from_canonical_bytes(&blob).unwrap();
+            assert_eq!(kc2.n_total, n);
+            assert_eq!(kc2.spend_auth_pubkeys, kc.spend_auth_pubkeys);
+
+            let indices: Vec<u8> = (0..n).collect();
+            let sc = sign_multisig(&pairs, &indices, b"msw1-kat");
+            let sblob = sc.to_canonical_bytes().unwrap();
+            assert_eq!(
+                sblob.len(),
+                MultisigSigContainer::expected_sig_len(n),
+                "sig container length != expected_sig_len at m={n}"
+            );
+            let sc2 = MultisigSigContainer::from_canonical_bytes(&sblob).unwrap();
+            assert_eq!(sc2.sig_count, n);
+        }
+    }
+
+    #[test]
+    fn msw1_parser_rejects_over_max() {
+        let pairs = gen_keypairs(MAX_MULTISIG_PARTICIPANTS as usize);
+        let kc = make_key_container(&pairs, 1);
+        let mut blob = kc.to_canonical_bytes().unwrap();
+        blob[1] = MAX_MULTISIG_PARTICIPANTS + 1; // claim one too many participants
+        assert_eq!(
+            MultisigKeyContainer::from_canonical_bytes(&blob).unwrap_err(),
+            PqcVerifyError::ParameterBounds
+        );
+    }
+
+    // MSW-2: cross-scheme disjointness holds by two independent separators, so a
+    // scheme-1 single-key blob can never be reparsed as a scheme-2 container
+    // (or vice versa) — even before the tx-level `scheme_id` is consulted. The
+    // leaf (scheme-1) encoding is deliberately left untouched (R1-F-2).
+    #[test]
+    fn msw2_length_primary_disjointness() {
+        // Separator 1 (primary): length. The single scheme-1 key length is not
+        // any legal scheme-2 container length, and distinct group sizes never
+        // collide — `expected_blob_len` is strictly increasing (hence
+        // injective) over the legal range. Length alone fixes scheme + size.
+        let container_lens: Vec<usize> = (1..=MAX_MULTISIG_PARTICIPANTS)
+            .map(MultisigKeyContainer::expected_blob_len)
+            .collect();
+        assert!(
+            !container_lens.contains(&SINGLE_KEY_CANONICAL_LEN),
+            "scheme-1 leaf length {SINGLE_KEY_CANONICAL_LEN} collided with a container length",
+        );
+        for w in container_lens.windows(2) {
+            assert!(
+                w[0] < w[1],
+                "expected_blob_len not strictly increasing: {w:?}"
+            );
+        }
+
+        // The primary separator is enforced, not merely arithmetic: a blob whose
+        // byte length is correct for one group size but whose declared n_total
+        // is a *different* legal size is rejected on the length cross-check,
+        // never silently reinterpreted. (m = 1 keeps the relabel within m ≤ n so
+        // the length check — not the bounds check — is what fires.)
+        let pairs = gen_keypairs(MAX_MULTISIG_PARTICIPANTS as usize);
+        let kc = make_key_container(&pairs, 1); // n = MAX, m = 1
+        let mut relabelled = kc.to_canonical_bytes().unwrap();
+        relabelled[1] = MAX_MULTISIG_PARTICIPANTS - 1; // shrink declared n, keep m ≤ n
+        assert_eq!(
+            MultisigKeyContainer::from_canonical_bytes(&relabelled).unwrap_err(),
+            PqcVerifyError::KeyBlobLength
+        );
+
+        // Separator 2 (secondary): byte[2] = m_required is ≥ 1 for every legal
+        // container (`m_required == 0` ⊥ any valid group), so a reader that
+        // reached this byte still distinguishes a container from a reserved-zero
+        // leaf byte.
+        let mut zero_m = kc.to_canonical_bytes().unwrap();
+        zero_m[2] = 0;
+        assert_eq!(
+            MultisigKeyContainer::from_canonical_bytes(&zero_m).unwrap_err(),
+            PqcVerifyError::ParameterBounds
+        );
+    }
+
+    // MSW-4: `group_id` derives its version axes from the group's address
+    // payload, not from crate constants — and the bytes are load-bearing.
+    #[test]
+    fn msw4_group_id_reads_versions_from_address_payload() {
+        use shekyl_address::multisig_address::{MultisigAddressPayload, HYBRID_KEM_PUBKEY_LEN};
+        use shekyl_address::Network;
+
+        let pairs = gen_keypairs(3);
+        let kc = make_key_container(&pairs, 2); // n = 3, m = 2
+        let payload = MultisigAddressPayload::new(
+            Network::Mainnet,
+            3,
+            2,
+            vec![vec![0u8; HYBRID_KEM_PUBKEY_LEN]; 3],
+        )
+        .unwrap();
+
+        // Payload-sourced group_id equals the explicit-version derivation for
+        // the same axes (the payload is just the honest source of those bytes).
+        let from_addr = multisig_group_id_from_address(&kc, &payload).unwrap();
+        let explicit = multisig_group_id_with_versions(
+            &kc,
+            payload.group_version,
+            HYBRID_SCHEME_ID_MULTISIG,
+            payload.spend_auth_version,
+        )
+        .unwrap();
+        assert_eq!(from_addr, explicit);
+
+        // The version bytes are *real*: a payload differing only in
+        // `spend_auth_version` (the reserved 0x02 / E′ marker; MSW-5) yields a
+        // different group_id — no silent cross-version reinterpretation (§5.3).
+        let mut payload_v2 = payload.clone();
+        payload_v2.spend_auth_version = 0x02;
+        assert_ne!(
+            multisig_group_id_from_address(&kc, &payload_v2).unwrap(),
+            from_addr
+        );
+
+        // A payload that describes a different group shape than the container is
+        // a caller error, never a silently-hashed input.
+        let payload_wrong = MultisigAddressPayload::new(
+            Network::Mainnet,
+            3,
+            3,
+            vec![vec![0u8; HYBRID_KEM_PUBKEY_LEN]; 3],
+        )
+        .unwrap();
+        assert_eq!(
+            multisig_group_id_from_address(&kc, &payload_wrong).unwrap_err(),
+            PqcVerifyError::ParameterBounds
+        );
     }
 
     // -- Adversarial checks --
@@ -882,10 +1116,10 @@ mod tests {
     // -- Edge cases --
 
     #[test]
-    fn valid_1_of_7() {
-        let pairs = gen_keypairs(7);
+    fn valid_1_of_5() {
+        let pairs = gen_keypairs(5);
         let kc = make_key_container(&pairs, 1);
-        let msg = b"1-of-7";
+        let msg = b"1-of-5";
         let sc = sign_multisig(&pairs, &[3], msg);
         let group_id = multisig_group_id(&kc).unwrap();
         let key_blob = kc.to_canonical_bytes().unwrap();
