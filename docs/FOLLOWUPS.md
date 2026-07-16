@@ -1311,6 +1311,18 @@ sustainability is unaffected by the recalibration.
   exit-event channel is the binding one. Priority-2 (privacy) per
   `00-mission.mdc` — ranked above the other swan-2 exports. Target: **V3.0**
   (gate-6 wargame round, before the firewall constants freeze).
+  - **UPDATE 2026-07-15:** the smear-or-delay mechanism question now has a
+    committed a-priori answer: the epoch-quantized cooldown anchor **delays
+    and quantizes** the cohort onto ≤2 epoch-boundary heights — no smear,
+    anti-smear
+    ([`design/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`](./design/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md)
+    §4 anchor-quantization lemma). The release-queue question is likewise
+    pre-committed as the §5.3 queue predicate: if
+    `(N_t − 1)/ρ_x ≤ N_x·σ_L` fails, the disposition is the W8 queue
+    redesign (a decorrelation redesign, never a moved bar, per GF7_HOOKS
+    §5.1). The wargame round itself remains open — it graduates the lemma
+    from a-priori to empirical and supplies the `ρ_x`/`σ_L` reads the
+    candidate window is conditional on. Target unchanged: **V3.0**.
 
 - **Foundation treasury diversification — floor capacity must not be
   pro-cyclical (swan-2/W4, 2026-06-11; re-scoped swan-3/W12–W13; re-anchored
