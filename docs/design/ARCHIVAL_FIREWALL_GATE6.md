@@ -1801,6 +1801,27 @@ proposed there and adopted as this doc's method posture: **every graded seam pre
 its observer as executable code before any row runs.** A methods paragraph can quantify over
 a phantom indefinitely; an executable observer cannot.
 
+**Method note 3 (added 2026-07-16, extracted at the F-D4 round-4 ratification — the
+instrumental half of note 2): before queuing any constant for a stressnet seal, classify
+the measurement as mechanism or economics.** *Mechanism* — does the partition fire, is the
+draw unbiased, does the determinism KAT hold on aarch64, does timing behave under load. A
+testnet reproduces these faithfully, because the software doesn't know the money is fake.
+*Economics* — exit rate, churn, profit-taking cadence, panic cohort size, mobility. A
+testnet **cannot** produce these: every one is a function of real value at risk, so a
+"read" returns a measurement of the test plan, echoed back with the authority of
+"measured." If a constant needs an economics number, the stressnet is the wrong instrument
+and the honest exits are three: derive it structurally, design the constant away, or don't
+ship the genesis-frozen value at all (F-D4 §15.8 has the full statement and the motivating
+case — two of `DEFAULT_EXIT_GAP_WINDOW`'s three seal inputs were economics, unmeasurable in
+principle *before* the phantom-`T` finding). **Filter run across the PF-9 / Phase 7.7 queue
+at adoption:** `K_COVER` is the only seal queued behind stressnet entry and passes (the
+§14.4 partition run is mechanism — a pre-registered partition-adversary arm); the remaining
+Phase 7.7 entries (F11-S Windows-midrange bench, historical reference-block/reorg exercise,
+archival multi-staker path, `tests/stressnet/README.md` acceptance criteria) are mechanism
+exercises; the FA-6 wire lock is a sequencing pin, not a measurement. One caveat placed at
+§12.8: GF-7's effective-vs-nominal-cover residual is testnet-gradeable only on its observer
+*machinery* — the cover *level* is post-isolation network-event rate, an economics number.
+
 ---
 
 ## 12. Round 4 — output + bond-funding hygiene: the drain-event firewall (OPEN — drafted 2026-07-11)
@@ -2053,6 +2074,12 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
 - **GF-7 (funding-in):** built + graded **PROVISIONAL-PASS** (`r = 1.86`, local-daemon; §6 R4 cell) —
   not an open design question; its residuals (effective-vs-nominal cover, cold-start) are testnet
   obligations already tracked ([`FOLLOWUPS.md`](../FOLLOWUPS.md) funding-seam carries).
+  **Caveat (method note 3, 2026-07-16):** the testnet grades the residual's observer
+  *machinery* (does the observe-and-inject adversary's decoy injection get discounted; does
+  the S-3 correlator behave) — a mechanism measurement. The effective cover **level** is
+  driven by the post-isolation network-event rate (§11's own (ii)), an economics number a
+  testnet cannot produce; a testnet cover-level read would measure the load generator. The
+  residual stays open on the level; only the machinery is testnet-dischargeable.
 - **GF-4 (value-out):** this section. F-D1 + F-D2 buildable now; F-D3 + F-D4 **gate FIRED
   2026-07-15 — open for build** (§12.5, `bond_post.rs:369`/`:627`); output-count
   discipline lineage-blind (an F-D1-sibling). UPDATE 2026-07-16: F-D3 **BUILT** against the
@@ -2122,6 +2149,20 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
 ---
 
 ## Revision history
+
+- **2026-07-16 (method note 3 — mechanism-vs-economics measurement filter; GF-7 residual
+  caveat):** Second lesson extracted at the F-D4 round-4 ratification, recorded at §11.8
+  method note 3 with the full statement at F-D4 §15.8: two of `DEFAULT_EXIT_GAP_WINDOW`'s
+  three Phase 7.7 seal inputs (`N_x`, `ρ_x`; `σ_L` was empty outright) were **economics
+  measurements a testnet cannot produce in principle** — the read would have sealed a
+  genesis constant on an echo of the test plan, and that was true before the phantom-`T`
+  finding. Standing posture adopted: classify every stressnet-seal candidate as mechanism
+  (testnet-faithful) or economics (requires real value at risk); economics ⇒ derive
+  structurally, design the constant away, or don't ship it. Filter run across the PF-9 /
+  Phase 7.7 queue: `K_COVER` passes (mechanism, §14.4 partition run); remaining Phase 7.7
+  entries are mechanism exercises; caveat placed at §12.8 on GF-7's
+  effective-vs-nominal-cover residual (observer machinery testnet-dischargeable, cover
+  level not). `RELEASE_CHECKLIST.md` stressnet-entry section gains the queueing rule.
 
 - **2026-07-16 (F-D4 round 4 RATIFIED — premise audit; F-D3/F-D4 deletion-with-tripwire;
   §15.5 hand-forward received):** The F-D4 premise audit (F-W7/F-W8,

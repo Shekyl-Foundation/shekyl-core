@@ -1050,6 +1050,59 @@ mode the pattern was never designed for, handled by construction. The pattern's 
 exactly what kept four rounds of internally-rigorous arithmetic from ever touching a
 shipping build.
 
+Mechanically, the refusal was always a turnstile, not a wall: `compile_error!` fires only
+on unacknowledged builds; a testnet build enables the grep-able
+`provisional-exit-gap-window` feature and runs against the sentinel, so "who is shipping a
+provisional value" is a search, not an audit. The planned end-state — read the numbers
+early in the Phase 7.7 window → apply the frozen rule → set the constant → delete the flag,
+with the golden vector's seal tripwire (pinned at the synthetic `10_007`) failing on
+purpose to force the KAT re-freeze — was the `K_COVER` pattern end to end. Round 4
+dissolved the question for F-D4 (phantom `T` ⇒ nothing to measure), and the sentinel's
+job was precisely to hold the line until that was found out. Which it did.
+
+### 15.8 The measurement-class finding — mechanism vs. economics (added at ratification, 2026-07-16)
+
+A second finding, extracted at ratification, is **bigger than F-D4 and was true before
+F-W7**: even had `T` been real, the Phase 7.7 seal would have been unsound, because two of
+the three inputs the read was queued to produce are unmeasurable on a testnet **in
+principle**, not merely hard:
+
+- **`σ_L`** — the latency to an event that doesn't occur. Empty, not noisy.
+- **`N_x`** — a market-panic cohort size. A testnet has no money at stake and therefore
+  cannot produce a panic; a scripted synthetic mass-exit measures the script.
+- **`ρ_x`** — exit rate, i.e. profit-taking cadence: an economic behavior. On a testnet it
+  is whatever the participants' harness decides to do that afternoon.
+
+The Phase 7.7 read would have returned a measurement of our own test plan, echoed back with
+the authority of "measured" — and a genesis constant would have been sealed on it.
+
+**The filter (adopted as a standing method posture, second home at Gate-6 §11.8 method
+note 3):** before queuing any constant for a stressnet seal, classify the measurement.
+
+- **Mechanism** — does the partition fire, is the draw unbiased, does the determinism KAT
+  hold on aarch64, does timing behave under load. A testnet reproduces these faithfully,
+  because the software doesn't know the money is fake. `K_COVER`'s §14.4 partition run is
+  this class — which is why it is gradeable and why PF-9 is a sound gate.
+- **Economics** — exit rate, churn, profit-taking cadence, panic cohort size, mobility.
+  A testnet cannot produce these; every one is a function of real value at risk.
+
+If a constant needs an economics number, the stressnet is the wrong instrument, and there
+are exactly three honest exits: **derive it structurally** (X-3's instinct — right shape,
+even though its particular harm model was empty), **design so the constant isn't needed**,
+or **ship it knowingly under-determined with a post-genesis reopen** — which for a
+genesis-frozen value means *not shipping it at all*.
+
+The filter was run across the PF-9 / Phase 7.7 queue at adoption (grep-anchored,
+2026-07-16): the only seal queued behind stressnet entry is `K_COVER` (mechanism — passes);
+the other Phase 7.7 entries (F11-S Windows-midrange bench re-measurement, historical
+reference-block/reorg exercise, archival multi-staker path, the `tests/stressnet/README.md`
+acceptance criteria) are all mechanism exercises, and the FA-6 wire lock is a sequencing
+pin, not a measurement. One caveat was placed: GF-7's *effective-vs-nominal cover* residual
+is testnet-gradeable only on its observer machinery — the cover *level* is driven by the
+post-isolation network-event rate, an economics number (Gate-6 §12.8 carries the caveat).
+`DEFAULT_EXIT_GAP_WINDOW` never would have passed this filter — and absent round 4, that
+would have been discovered at the stressnet, after building the harness, instead of now.
+
 ## Related documents
 
 - [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §12.5–12.8 — F-D3 mechanism, F-D6
