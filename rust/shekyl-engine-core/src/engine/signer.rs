@@ -9,10 +9,22 @@
 //!
 //! The Phase 1 plan locks the wallet's solo / multisig dispatch into the
 //! type system: `Engine<S: EngineSignerKind>`, with `S` ranging over
-//! [`SoloSigner`] (V3.0 default) and `MultisigSigner<N, K>` (V3.1, lands
-//! behind the `multisig` Cargo feature). Choosing the dispatch axis at
-//! compile time means the V3.1 enablement is a feature flip on call
-//! sites, not a refactor.
+//! [`SoloSigner`] (V3.0 default) and the multisig kind — working name
+//! `MultisigSigner` (V3.1, lands behind the `multisig` Cargo feature).
+//! Choosing the dispatch axis at compile time means the V3.1 enablement is
+//! a feature flip on call sites, not a refactor.
+//!
+//! **Open MS-1 question — do not read the placeholder `MultisigSigner<N, K>`
+//! notation as K-of-N threshold.** It is unresolved and must not be taken at
+//! face value: participant count and threshold (`n_total`, `m_required`) are
+//! *runtime* values the address payload hands over, so they cannot be const
+//! generics at all. If a const-generic parameter exists it is more likely the
+//! coexistence axis (scheme / `spend_auth` version — MS-1 must hold two
+//! multisig stacks at once), which the conventional `<N, K>` reading hides —
+//! and a version const-generic multiplies monomorphization across every
+//! `Engine<S>` method. What the parameters are, and whether there are any at
+//! all, is a Round-2 decision for MS-1 (`V3_1_MULTISIG_RUST_ENGINE.md`, MS-1
+//! section); this doc must not prejudge it.
 //!
 //! [`EngineSignerKind`] is sealed: only this crate may add variants.
 //! Downstream code parameterizes `Engine<S>` with `SoloSigner` (or, in
@@ -73,9 +85,10 @@ pub trait EngineSignerKind: private::Sealed + 'static {
     /// **no** multisig ceremony. Because the type has no values, every code
     /// path that would consume a `SoloSigner::SigningCeremony` is statically
     /// dead — "a solo wallet ran a multisig ceremony" is unrepresentable, the
-    /// same compile-forced guarantee as the `!Clone` archival keys.
-    /// `MultisigSigner<N, K>` (V3.1, behind the `multisig` feature) will set
-    /// this to its two-round FROST ceremony type (MS-5).
+    /// same compile-forced guarantee as the `!Clone` archival keys. The
+    /// multisig signer kind (working name `MultisigSigner`; its parameters are
+    /// an open MS-1 question — see the module docs, *not* K-of-N threshold)
+    /// will set this to its two-round FROST ceremony type (MS-5).
     type SigningCeremony;
 }
 

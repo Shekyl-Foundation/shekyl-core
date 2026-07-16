@@ -508,11 +508,31 @@ historically out of scope was the **inversion**; this pin corrects it.
 ### MS-1 under coexistence
 
 `Engine<S: EngineSignerKind>` must hold **solo + two multisig stacks**
-simultaneously forever. `signer.rs:12` names `MultisigSigner<N, K>`
-and never defines `K` — threshold? Or **scheme / spend_auth version**
-(the coexistence axis)? Round-2 load-bearing: MS-1 is not picking a
-shape for V3.1 alone; it is picking the shape that holds two multisig
-implementations at once.
+simultaneously forever. `signer.rs` names `MultisigSigner<N, K>` and never
+defines either parameter. **Round-2 load-bearing — resolve before MS-5, and say
+the answer where the name is** (`signer.rs`; the module doc now carries a
+placeholder caveat, not an answer):
+
+- **The `<N, K>` notation lies by convention.** Every reader — the next agent
+  included — parses `<N, K>` as *K-of-N threshold*. If `K` is instead the
+  **coexistence axis** (scheme / `spend_auth` version — the thing that lets one
+  `Engine` hold *two* multisig implementations at once), that reading is
+  invisible from the name and wrong. Name it at the type or drop the notation.
+- **Both readings may be wrong for const generics.** Participant count and
+  threshold are *runtime* values the wire hands over (`n_total: u8`,
+  `m_required: u8` on `MultisigAddressPayload` / `MultisigKeyContainer`) — you
+  cannot const-generic a value read from the payload. So `N` (participants) /
+  `M` (threshold) are not const-generic candidates at all.
+- **A version const-generic has a monomorphization cost.** If `K` = version is a
+  const generic, `MultisigSigner<5, 2>`-style types are distinct per
+  configuration, multiplying `Engine<S>` method monomorphization. Whether the
+  coexistence axis is a const generic, an associated type/const, or runtime
+  dispatch is part of this decision.
+
+MS-1 is not picking a shape for V3.1 alone; it is picking the shape that holds
+two multisig implementations at once. **This is the last unrecorded reason in
+the multisig surface** — record what `N`/`K` are (or that there are none) before
+MS-5 opens.
 
 | Candidate | Under coexist |
 | --- | --- |
@@ -854,7 +874,10 @@ multisig stack (V4 coexist). **MS-1(b) rejected.** Lineage question
 **closed**: only v31 Option D ships under `multisig`; Option A FROST
 fossil **DELETE** (R1-F-3). Round-2 still names `K` on
 `MultisigSigner<N, K>` (threshold vs spend_auth / scheme version for
-the *future* coexist axis — not "which fossil").
+the *future* coexist axis — not "which fossil"). **The `<N, K>` notation
+misleads (reads as K-of-N threshold) and `N`/`M` are runtime payload values,
+not const generics — see "MS-1 under coexistence" above; resolve and record the
+answer at the type before MS-5.**
 
 R1-F-7 SoloSigner associated-item amend **landed** (`EngineSignerKind::SigningCeremony`,
 `SoloSigner = Infallible`). F-6 CI remains Round 1 closure prerequisite.
