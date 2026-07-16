@@ -44,6 +44,7 @@
 #include "serialization/binary_archive.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/blockchain.h"
+#include "cryptonote_core/tx_pqc_verify.h"
 
 using namespace std;
 using namespace crypto;
@@ -588,6 +589,168 @@ TEST(fcmp, multisig_2of3_sig_container_assembly)
   ASSERT_EQ(pqc_result, 0) << "multisig PQC verify error code: " << (int)pqc_result;
 
   // Cleanup
+  for (int i = 0; i < 3; ++i)
+  {
+    shekyl_buffer_free(kps[i].public_key.ptr, kps[i].public_key.len);
+    shekyl_buffer_free(kps[i].secret_key.ptr, kps[i].secret_key.len);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MSW-6: per-input scheme mixing (tx-wide scheme_id agreement withdrawn)
+// ═══════════════════════════════════════════════════════════════════════════
+
+namespace {
+
+// V3.1 MultisigKeyContainer for an n=3, m=2 group:
+// [version(1) | n(1) | m(1) | pk0..2(1996 each) | sa_pk0..2(32 each)].
+// Same layout the scheme_id=2 path in shekyl_pqc_verify parses (see
+// multisig_2of3_sig_container_assembly above).
+std::vector<uint8_t> msw6_build_multisig_key_container(const ShekylPqcKeypair (&kps)[3])
+{
+  std::vector<uint8_t> key_blob;
+  key_blob.push_back(0x01);  // MULTISIG_CONTAINER_VERSION
+  key_blob.push_back(3);     // n_total
+  key_blob.push_back(2);     // m_required
+  for (int i = 0; i < 3; ++i)
+    key_blob.insert(key_blob.end(),
+        kps[i].public_key.ptr, kps[i].public_key.ptr + kps[i].public_key.len);
+  for (int i = 0; i < 3; ++i)
+  {
+    uint8_t sa_pk[32];
+    memset(sa_pk, 0x20 + i, 32);
+    key_blob.insert(key_blob.end(), sa_pk, sa_pk + 32);
+  }
+  return key_blob;
+}
+
+// 2-of-3 MultisigSigContainer over msg by signers {0,2}:
+// [m(1) | sig0 | sig1 | idx0(1) | idx1(1)].
+std::vector<uint8_t> msw6_sign_multisig_2of3(const ShekylPqcKeypair (&kps)[3],
+                                             const crypto::hash& msg)
+{
+  std::vector<std::pair<uint8_t, std::vector<uint8_t>>> partials;
+  for (int signer : {0, 2})
+  {
+    ShekylPqcSignatureResult sig = shekyl_pqc_sign(
+        kps[signer].secret_key.ptr, kps[signer].secret_key.len,
+        reinterpret_cast<const uint8_t*>(msg.data), 32);
+    CHECK_AND_ASSERT_THROW_MES(sig.success, "multisig partial sign failed");
+    partials.push_back({(uint8_t)signer,
+        std::vector<uint8_t>(sig.signature.ptr, sig.signature.ptr + sig.signature.len)});
+    shekyl_buffer_free(sig.signature.ptr, sig.signature.len);
+  }
+  std::vector<uint8_t> sig_blob;
+  sig_blob.push_back(2);  // m_required
+  for (const auto& p : partials)
+    sig_blob.insert(sig_blob.end(), p.second.begin(), p.second.end());
+  for (const auto& p : partials)
+    sig_blob.push_back(p.first);
+  return sig_blob;
+}
+
+// Minimal 2-spend-input, 0-output v3 tx whose rct base + prunable serialize
+// through get_transaction_signed_payload. 0 outputs ⇒ no Bp+ / outPk needed;
+// two spend inputs ⇒ two pseudoOuts. Not a spendable tx — just enough for the
+// PQC signing-payload binding that verify_transaction_pqc_auth checks.
+cryptonote::transaction msw6_two_spend_skeleton()
+{
+  cryptonote::transaction tx{};
+  tx.version = 3;
+
+  cryptonote::txin_to_key in0;
+  memset(&in0.k_image, 0xB0, 32);
+  in0.amount = 0;
+  cryptonote::txin_to_key in1;
+  memset(&in1.k_image, 0xB1, 32);
+  in1.amount = 0;
+  tx.vin.push_back(in0);
+  tx.vin.push_back(in1);
+
+  tx.rct_signatures.type = rct::CTTypeFcmpPlusPlusPqc;
+  tx.rct_signatures.txnFee = 0;
+  memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
+  tx.rct_signatures.p.curve_trees_tree_depth = 1;
+  tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03, 0x04};
+  tx.rct_signatures.p.pseudoOuts.resize(2);  // one per spend input
+
+  tx.pqc_auths.resize(2);
+  return tx;
+}
+
+crypto::hash msw6_input_payload_hash(const cryptonote::transaction& tx, size_t idx)
+{
+  std::string payload;
+  CHECK_AND_ASSERT_THROW_MES(cryptonote::get_transaction_signed_payload(tx, idx, payload),
+                             "get_transaction_signed_payload failed");
+  crypto::hash h;
+  cryptonote::get_blob_hash(payload, h);
+  return h;
+}
+
+} // namespace
+
+// MSW-6: a v3 tx that spends a solo (scheme 1) output AND a multisig (scheme 2)
+// output in ONE tx now verifies. Before MSW-6 the tx-wide scheme_id agreement
+// rejected it at input 1 (scheme 2 != pqc_auths[0].scheme_id == 1) before the
+// signature was ever checked. That is the enabler this withdrawal exists for:
+// scheme-2 funding sharing a tx with a scheme-1 bond vin (PQC_MULTISIG.md §16.3,
+// V3_1_MULTISIG_RUST_ENGINE.md MSW-6). Each input is still bound to its own
+// signature — the negative control pins that the per-input crypto is intact.
+TEST(fcmp, msw6_mixed_scheme_transaction_verifies)
+{
+  ShekylPqcKeypair kp_single = shekyl_pqc_keypair_generate();
+  ASSERT_TRUE(kp_single.success);
+  ShekylPqcKeypair kps[3];
+  for (int i = 0; i < 3; ++i)
+  {
+    kps[i] = shekyl_pqc_keypair_generate();
+    ASSERT_TRUE(kps[i].success);
+  }
+
+  cryptonote::transaction tx = msw6_two_spend_skeleton();
+
+  // Public keys must be final before the payloads are computed — the signing
+  // payload binds every input's key hash (get_transaction_signed_payload), so
+  // the signatures are set afterward (the payload never covers the signature).
+  tx.pqc_auths[0].auth_version = 1;
+  tx.pqc_auths[0].scheme_id = 1;  // solo
+  tx.pqc_auths[0].flags = 0;
+  tx.pqc_auths[0].hybrid_public_key.assign(
+      kp_single.public_key.ptr, kp_single.public_key.ptr + kp_single.public_key.len);
+
+  tx.pqc_auths[1].auth_version = 1;
+  tx.pqc_auths[1].scheme_id = 2;  // multisig
+  tx.pqc_auths[1].flags = 0;
+  tx.pqc_auths[1].hybrid_public_key = msw6_build_multisig_key_container(kps);
+
+  crypto::hash h0 = msw6_input_payload_hash(tx, 0);
+  ShekylPqcSignatureResult sig0 = shekyl_pqc_sign(
+      kp_single.secret_key.ptr, kp_single.secret_key.len,
+      reinterpret_cast<const uint8_t*>(h0.data), 32);
+  ASSERT_TRUE(sig0.success);
+  tx.pqc_auths[0].hybrid_signature.assign(sig0.signature.ptr,
+                                          sig0.signature.ptr + sig0.signature.len);
+  shekyl_buffer_free(sig0.signature.ptr, sig0.signature.len);
+
+  crypto::hash h1 = msw6_input_payload_hash(tx, 1);
+  tx.pqc_auths[1].hybrid_signature = msw6_sign_multisig_2of3(kps, h1);
+
+  // The enabler: the mixed-scheme tx verifies.
+  EXPECT_TRUE(cryptonote::verify_transaction_pqc_auth(tx))
+      << "MSW-6: a solo(1)+multisig(2) transaction must verify";
+
+  // Negative control: the relaxation dropped only the cross-input agreement,
+  // not the per-input signature binding. Corrupt the multisig signature and the
+  // same tx must fail.
+  cryptonote::transaction tampered = tx;
+  ASSERT_GE(tampered.pqc_auths[1].hybrid_signature.size(), 4u);
+  tampered.pqc_auths[1].hybrid_signature[3] ^= 0xFF;
+  EXPECT_FALSE(cryptonote::verify_transaction_pqc_auth(tampered))
+      << "per-input signature binding must still reject a tampered auth";
+
+  shekyl_buffer_free(kp_single.public_key.ptr, kp_single.public_key.len);
+  shekyl_buffer_free(kp_single.secret_key.ptr, kp_single.secret_key.len);
   for (int i = 0; i < 3; ++i)
   {
     shekyl_buffer_free(kps[i].public_key.ptr, kps[i].public_key.len);

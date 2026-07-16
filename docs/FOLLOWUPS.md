@@ -5878,11 +5878,18 @@ sustainability is unaffected by the recalibration.
 
 - **PQC Multisig V3.0 wire: MSW-1…MSW-8 (pre-genesis, priority 1).**
   **UPDATE 2026-07-15 overhaul:**
-  - **MSW-6 (NEW):** relax tx-wide `scheme_id` agreement — staking
-    unblock. Per-input scheme ∈ `{1,2}` (or bond-post exemption).
-    Archival core never sees funding inputs. Own validation surface;
-    independent of `--features multisig`. Pin #4 named reversion for
-    this tx-layer coupling only.
+  - **MSW-6 ✅ LANDED (option a):** relaxed the tx-wide `scheme_id`
+    agreement — dropped outright, in lockstep across the C++ verify
+    batteries (`tx_pqc_verify.{h,cpp}` + `blockchain.cpp`) and the Rust
+    submit verifier (`verifier.rs`). Per-input scheme ∈ `{1,2}` + blob
+    length + signature still enforced. **Withdrawal reason corrected**
+    from "guards nothing" (a §11.8 error): the stated scheme-downgrade
+    DiD was vacuous (self-referential; per-output binding is the leaf
+    hash), but its *effect* foreclosed a self-inflicted solo/multisig
+    cross-model linkage — per **TM-1** a wallet concern (→ MS-5), not
+    consensus. KAT `fcmp.cpp::msw6_mixed_scheme_transaction_verifies`
+    (solo+multisig tx verifies; tamper control). Staking unblock. Archival
+    core never sees funding inputs; independent of `--features multisig`.
   - **MSW-G:** **DECIDED MAX=5** (2f+1 at f=2; withdraws same-day 8).
     Consumer = largest group served. Written into `PQC_MULTISIG.md` §5.
   - **MSW-1 (narrowed):** copy `bond_wire` `SINGLE_KEY_CANONICAL_LEN`
@@ -5906,6 +5913,55 @@ sustainability is unaffected by the recalibration.
     `frost_sal`/`frost_dkg` primitives for E′.
   Fee / `MAX_INPUTS=128` → Track B. Target: **V3.0 pre-genesis**.
   **Track A code awaits explicit go-ahead.**
+
+- **PQC Multisig: MSW-6 landing residue.** The scheme_id relaxation
+  landed subtractively; five items it deliberately did not fold in
+  (each named blocker + target, rule 22 clause 3):
+  - **Cross-model co-spend: wallet disclosure + coin-selection
+    invariant.** MSW-6 removed the *consensus* enforcement that a tx
+    can't spend a solo (scheme 1) and a multisig (scheme 2) output
+    together; per **TM-1** the property doesn't vanish, it moves to the
+    wallet — a one-line disclosure (`MULTISIG_OPERATIONS.md` +
+    `USER_GUIDE.md`: "a tx spending both solo and multisig outputs proves
+    common control; the wallet will not construct one") **plus** a
+    coin-selection invariant that never crosses key models. Both wait on
+    the invariant being real. *Blocker:* **MS-5** (E′ coin-selection
+    surface). *Target:* V3.1 (Track B).
+  - **`cryptonote_tx_utils.cpp:671` mis-classification.** The
+    `multisig_preassembled` heuristic reads `pqc_auths[0].scheme_id`
+    only; a mixed tx whose input 0 is the scheme-1 vin mis-classifies.
+    Wallet **construction** (Rust-tx-builder territory), not consensus.
+    *Blocker:* MS-5 tx construction. *Target:* V3.1.
+  - **Structural pqc-auth verify → Rust port slice.** The C++
+    `tx_pqc_verify.cpp` per-input structural checks are largely redundant
+    with `shekyl_pqc_verify` (which already validates scheme + deserializes
+    the blob), and the C++/Rust structural *twin* (`verifier.rs`) is
+    inherited duplication — collapse into one Rust impl, C++ calls it via
+    FFI (rules 16/40). *Blocker:* consensus-port sequencing. *Target:*
+    consensus port (§16.4 already sanctions "scheme_id ∈ {1,2} verify into
+    Rust FFI").
+  - **C-2 (P0-n gate is a literal denylist).**
+    `check_multisig_doc_literals.sh` pattern-matches known cap/fee fossils
+    (hardened in #311 high-review to a general `k-of-n` cap pattern plus
+    comma/approx fee forms); it still never extracts
+    `MAX_MULTISIG_PARTICIPANTS` from `crypto-pq/src/multisig.rs:21` to check
+    the docs' stated cap against the source of truth, so if MSW-G ever moves
+    the denylist is stale by one revision. Fix: extract the constant and
+    assert the docs' cap equals it — catch the class, not instances.
+    *Target:* land with MSW-1 or after. (**C-3** — dropping the wholesale
+    carrier/index/FOLLOWUPS exclusion in favour of per-line
+    `doc-literal-gate-allow` markers — already landed in #311 high-review,
+    `52d4a2c8e`; the gate matches cap/fee literals, not stale *reasoning*,
+    so the A4 wargame-row fossil was a manual catch, not a gate hit.)
+  - **F-7 (Round-1 blocker): `EngineSignerKind` associated items.** §3.1's
+    "associated items only the multisig kind defines" is a compile error
+    at implementation time — associated items must be defined by every
+    implementor and associated-type defaults are unstable, so `SoloSigner`
+    must name them. Fix is also the right design:
+    `SoloSigner::SigningCeremony = Infallible` makes "a solo wallet ran a
+    multisig ceremony" unrepresentable (same tier as `!Clone` archival
+    keys). *Blocker:* none — wants doing **before MS-1 closes**, not after
+    a compiler discovers it. *Target:* MS-1.
 
 - **PQC Multisig V3.1: Option-D residue left standing after the F-6
   prover excision (blocker: MS-5 / §15.4a).** F-6 (PR #310) excised the
@@ -12226,13 +12282,16 @@ Retained for citation in review; each links to the canonical record.
   `scripts/verify_genesis.py` in `shekyl-dev` for reproducibility
   verification.
 
-- **scheme_id binding confirmed active.** `expected_scheme_id` IS used:
-  `blockchain.cpp` calls `verify_transaction_pqc_auth(tx, expected_scheme)`
-  where `expected_scheme` is derived from `tx.pqc_auths[0].scheme_id`.
-  This enforces cross-input scheme consistency — all inputs in a
-  transaction must use the same scheme_id. Scheme downgrade protection
-  across outputs is still provided by the `h_pqc` curve tree leaf
-  commitment as described in `PQC_MULTISIG.md` Attack 1.
+- **scheme_id tx-wide binding — WITHDRAWN by MSW-6.** This entry
+  previously read "confirmed active" (`blockchain.cpp` derived
+  `expected_scheme` from `tx.pqc_auths[0].scheme_id` and enforced
+  cross-input agreement). MSW-6 dropped it: the stated cross-input
+  scheme-downgrade defense was vacuous (self-referential; per-output
+  scheme binding is the `h_pqc` curve-tree leaf commitment — Attack 1 /
+  §16.3 — not this check), and its *actual* effect (foreclosing a
+  self-inflicted solo/multisig cross-model linkage) is a wallet concern
+  per TM-1, not consensus. Per-input scheme ∈ `{1,2}` + blob length +
+  signature remain enforced.
 
 - **`on_get_curve_tree_path` RPC correctly reads reference-block state.**
   Fixed by computing `ref_leaf_count` at `reference_height` (subtracting
