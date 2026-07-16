@@ -27,8 +27,9 @@
 - **Round 4 drafted (2026-07-11, §12) — the drain-event firewall.** GF-7 (funding-in) already built +
   graded PROVISIONAL-PASS (`r = 1.86`); GF-4 (value-out) drafted as one event with three co-triggered
   channels graded jointly: **F-D1** drain-amount taint-carve (complete pre-code pin — (a)+strip),
-  **F-D2** UI-default, **F-D3/F-D4** one-sided cooldown-anchored exit standoff (**FSM-gated**), **F-D5**
-  → §14.4, **F-D6** anti-drift. GF-10 (R3) folds into the joint grade. Blocks on the rebond/unbond FSM.
+  **F-D2** UI-default, **F-D3/F-D4** one-sided cooldown-anchored exit standoff (**FSM gate FIRED
+  2026-07-15** — §12.5; open for build), **F-D5** → §14.4, **F-D6** anti-drift. GF-10 (R3) folds into
+  the joint grade. The rebond/unbond FSM blocker is discharged (landed PR #303/#307).
 - **Round 5 planned** — the cross-layer soundness sign-off for Stage 3 (S-2 exposure ledger + S-3
   exit/value-seam adversary sim, §10.12).
 
@@ -379,7 +380,7 @@ carried; R2 the same).
 | **1** | HKDF/`P_id` wire + crypto layer hooks | **Closed (2026-06-13)** — §9 GF-1 dual-key verifier contract resolved; GF-2 dual-scan enforcement made architectural; reviewer sign-off (§9.8). **Carry discharged (2026-07-11 reconciliation):** `ARCHIVAL_P_DERIVE_V1` KAT + `archival_p` module **landed** (Bond-PR 0 #152; `archival_p.rs` + `kat_archival_p_derive_v1.rs`, seven §9.3 labels incl. `bond_spend_*` verified at source). C-1 emission vin ML-DSA equality check **landed** (#277). §7 checklist reconciled to landed state. |
 | **2** | Network + transport (L16 → production shape) | **Closed (2026-07-11) — §10; closure disposition §10.13.** Rendezvous path specified; seeding relaxation bounded. **Entry gates (all dispositioned):** challenge-response Levin class → anonymity-routable set (GF-3, §10.4); pre-join backing-presentation transport (GF-5, §10.5); Arti HS-hosting capability confirmed, at-source pin carried (GF-12, §10.3); `P`-tx wire-size fingerprint characterization + dummy/fragmentation policy (GF-6, §10.6); HS key lifecycle `p_slot`-bound + seed-derived (GF-9, §10.7). **Exit dispositions (§10.11, passes 1–4):** bonded-verifier challenges, broadcast announce, `P`↔principal circuit/guard isolation (§10.9), pure-rendezvous + I2P-closed. **Carries (§10.13, rule-21):** at-source Arti pin → transport PR; dummy/frag tuned ratio → testnet; **GF-9 HS-id HKDF label → §9.3 amendment (armed: not yet in derivation; dot-vs-hyphen format flag)**; announce↔anchor + cadence timing → R3. Transport code partial-landed (2d-2: SP-T1 #204/#209, SP-T4a #254 — inert). |
 | **3** | Timing + rotation + `W` / epoch-length joint pin | **Designed + adversarial pass run (2026-07-11) — §11; closes on the R4/GF-4 joint grade (§11.7).** **GF-10** pinned as *mechanism + structural window* (uniform-independent claim-broadcast-height draw via audited `bounded_uniform`; floor = `h_close + reorg_depth(720)`, ceiling = `(E_oldest+W)·SEB − submit_guard`; a-priori `S_min ≥ SEB`); **numeric width routed to R4/GF-4 CB-3 joint grade** (not standalone — per-axis error avoided). Draw + scheduler **unbuilt** (verified) → pinned pre-code, M1-armed. Rotation leg ratified (T-A1 timeline non-channel; network leg §10.7/§10.9); R2 timing hand-forwards resolved (announce↔anchor = entry standoff; emission-cadence = GF-10). Adversarial pass (§11.8) found no break — four findings folded as re-pins, one retraction (max-age misread). Two frame/pass assumptions overturned at source (epoch-crossing §11.4; max-age semantics §11.8). |
-| **4** | Output + bond-funding hygiene (**recurring** — rebond/unbond at genesis) | **Drafted (2026-07-11) — §12, the drain-event firewall.** **GF-7 (funding-in) built + graded PROVISIONAL-PASS** (`r = 1.86`, local-daemon; standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) provisional) — not an open design question. **GF-4 (value-out) drafted:** the drain is one event, three co-triggered channels graded jointly (§12.1). **F-D1** drain-amount taint-carve — complete pre-code pin ((a)+strip; strip `{lineage,epoch,height}` + aggregate-scalar amount stage; §12.3); **F-D2** UI-default (§12.4); **F-D3/F-D4** one-sided cooldown-anchored exit standoff — **FSM-gated** (§12.5–12.6); **F-D5** quantization → §14.4; **F-D6** anti-drift derive-don't-hardcode (§12.7). GF-10 (R3) folds into the joint grade. Blocks on the rebond/unbond FSM frictions → age-stratified sim reconciliation (pre-seal). |
+| **4** | Output + bond-funding hygiene (**recurring** — rebond/unbond at genesis) | **Drafted (2026-07-11) — §12, the drain-event firewall.** **GF-7 (funding-in) built + graded PROVISIONAL-PASS** (`r = 1.86`, local-daemon; standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) provisional) — not an open design question. **GF-4 (value-out) drafted:** the drain is one event, three co-triggered channels graded jointly (§12.1). **F-D1** drain-amount taint-carve — complete pre-code pin ((a)+strip; strip `{lineage,epoch,height}` + aggregate-scalar amount stage; §12.3); **F-D2** UI-default (§12.4); **F-D3/F-D4** one-sided cooldown-anchored exit standoff — **FSM gate FIRED 2026-07-15** (§12.5–12.6; `bond_post.rs:369`/`:627`); **F-D5** quantization → §14.4; **F-D6** anti-drift derive-don't-hardcode (§12.7). GF-10 (R3) folds into the joint grade. UPDATE 2026-07-15: both former blockers discharged — the rebond/unbond FSM landed (PR #303 `HoldingsUpdate`/`Unbond` + Pin-4/Pin-5 closure 2026-07-14; PR #307 `Rebond`) and the age-stratified sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18). F-D3/F-D4 open for build: F-D4 a-priori window derivation first (committed before any sweep runs, §12.6), then `draw_exit_gap` (§12.5) with the F-D6 derived anchor. |
 | **5** | Cross-layer adversarial pass | **Planned.** Soundness-depth sign-off for Stage 3. Build the S-2 fused exposure ledger (first) + the S-3 exit/value-seam adversary sim (§10.12), then sign off. |
 
 **Parallel (not gated on gate-6 closure):** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
@@ -416,6 +417,12 @@ binding constraint, because the deep tail's friction is *above* the average and 
 recovery mobility matters most. So the pre-seal requirement is **"model the friction
 age-stratified,"** not "add the frictions" — a re-tuned flat cost will *look* reconciled while
 shipping an optimistic sealed floor on top of the very +1 margin it is meant to protect.
+
+*(UPDATE 2026-07-15 — this dependency chain is discharged end-to-end: the FSM frictions were pinned
+(P2B-7) and landed as enforced consensus (PR #303 `HoldingsUpdate`/`Unbond` + Pin-4/Pin-5 closure;
+PR #307 `Rebond`), and the age-stratified reconciliation (c) is DONE, seal cleared —
+`STAKER_ARCHIVAL_SIM.md` §L18, adversarially confirmed to clear the "age-stratified, not a re-tuned
+flat scalar" bar 2026-07-12. The paragraph above stands as the reasoning record.)*
 
 ---
 
@@ -1782,10 +1789,12 @@ future reasoning about how long a claim can be held; do not re-derive them from 
 
 ## 12. Round 4 — output + bond-funding hygiene: the drain-event firewall (OPEN — drafted 2026-07-11)
 
-**Status:** **Open — drafted.** Scope, adversary, and the drain-event findings (F-D1…F-D6) pinned,
-source-grounded at `dev` `75c3cae1d`. **F-D1** (amount channel) is a **complete pre-code pin**,
-buildable now; **F-D2** (UI-default) buildable now; **F-D3/F-D4** (exit-timing) are **FSM-gated**
-spec-stubs with activation criteria; **F-D5** (quantization) is routed out to §14.4 economics;
+**Status:** **Open — drafted; F-D3/F-D4 activation FIRED 2026-07-15.** Scope, adversary, and the
+drain-event findings (F-D1…F-D6) pinned, source-grounded at `dev` `75c3cae1d`. **F-D1** (amount
+channel) is a **complete pre-code pin**, buildable now; **F-D2** (UI-default) buildable now;
+**F-D3/F-D4** (exit-timing) were FSM-gated spec-stubs whose activation criterion **fired 2026-07-15**
+(§12.5 — the cooldown is now an enforced spendability gate, `bond_post.rs:369`/`:627`), so both are
+**open for build**; **F-D5** (quantization) is routed out to §14.4 economics;
 **F-D6** is the anti-drift pin. R4's other half — **GF-7 (funding-in)** — is already built + graded
 PROVISIONAL-PASS (`r = 1.86`; §6 R4 cell); this section is the **value-out (GF-4)**. The channels are
 **graded jointly, not per-axis** (§18.10 R-4 + CB-3).
@@ -1801,8 +1810,8 @@ S-1 says no single layer owns:
 | Channel | Finding | Buildable? |
 |---------|---------|-----------|
 | **Amount** (off-chain subsum match) | F-D1 (+F-D2 UI) | **now** |
-| **Timing** (exit-seam standoff) | F-D3 + F-D4 | **FSM-gated** |
-| **Output-count** (decorrelated drain) | §6 R4 hard exit (lineage-blind, §12.3-sibling) | FSM-gated |
+| **Timing** (exit-seam standoff) | F-D3 + F-D4 | **gate FIRED 2026-07-15 — buildable** (§12.5) |
+| **Output-count** (decorrelated drain) | §6 R4 hard exit (lineage-blind, §12.3-sibling) | FSM landed (#303/#307) — buildable |
 
 They are **co-triggered** on one event, so they must be **graded jointly** — an independent per-axis
 grade multiplies as if the channels were independent (the CB-3 / WI-4 §11 per-axis-multiplication
@@ -1890,7 +1899,7 @@ F-D1 makes the *function* incapable of a subsum; F-D2 covers the *default the wa
   by eye from public reward history → that residual routes to the enumerated mistake-set (§18.13
   boundary class 3) + the opsec guide.
 
-### 12.5 F-D3 — exit-seam standoff mechanism (one-sided, cooldown-anchored; FSM-gated)
+### 12.5 F-D3 — exit-seam standoff mechanism (one-sided, cooldown-anchored; gate FIRED 2026-07-15)
 
 The exit seam's dominant adversary is **correlated mass-unbonding** (§18.1): a market event fires
 correlated drains, and the linkage is the **co-trigger**, not the amount — so F-D1 is inert against
@@ -1910,15 +1919,22 @@ trigger is catastrophic, `16→1.01`."
   adversary).
 - Wallet self-test conformance (the anchor is consumer-side/off-chain, consensus-unenforceable),
   integer golden vector on the aarch64 lane — the `draw_entry_gap` discipline.
-- **FSM-gated (rule-21).** The deterministic cooldown tell **does not exist yet**:
-  `RELEASE_COOLDOWN_EPOCHS` is a **committed-but-unenforced** consensus constant — verified at source,
-  no `verify_unbond_release` / spendability-gate consumer exists (the rebond/unbond FSM is unbuilt;
-  `bond_post.rs` verifies `JoinMarket` only). F-D3 can be *spec'd* now but cannot be *measured or
-  sealed* until the cooldown is an enforced spendability gate. **Activation criterion:** open F-D3
-  build/measurement when a `verify_unbond_release` path reads `RELEASE_COOLDOWN_EPOCHS` as a
-  spendability gate.
+- **FSM gate (rule-21) — FIRED 2026-07-15.** The activation criterion recorded here ("open F-D3
+  build/measurement when a verify path reads `RELEASE_COOLDOWN_EPOCHS` as a spendability gate") is
+  met at source: `release_cooldown_elapsed` is **enforced consensus** with two verify consumers —
+  `bond_post.rs:369` (`HoldingsUpdate`-drop, per-shard last-served anchor) and `bond_post.rs:627`
+  (`Unbond`, whole-record anchor) — landed with the rebond/unbond FSM (PR #303 `HoldingsUpdate` +
+  `Unbond` verify/connect/pop and the Pin-4/Pin-5 closure, 2026-07-14; PR #307 `Rebond`). The
+  deterministic cooldown tell this standoff exists to break is now real; F-D3 is **open for build
+  and measurement**.
+- **Per-event independence armed with its own negative control (pinned at activation, 2026-07-15).**
+  The entry seam's `double_jitter_trap` guards a **two-sided** construction (order coin + inversion)
+  that the one-sided exit draw does not have, so it cannot be borrowed. The exit draw's conformance
+  harness gets a **shared-trigger arm**: a cohort of exit draws keyed to one anchor / one simulated
+  market event must be *caught* as clustered (clustering-detection, not inversion-detection). A
+  `draw_exit_gap` whose independence claim has no negative control is not conformance-armed.
 
-### 12.6 F-D4 — a-priori exit window (FSM-gated)
+### 12.6 F-D4 — a-priori exit window (activation FIRED with F-D3, 2026-07-15)
 
 The exit window **cannot borrow the entry `600`**. That number was derived rate-driven against the
 **background funding-spend rate**; the exit seam's driving rate is the **correlated-unbond /
@@ -1931,7 +1947,16 @@ the sealing-path measurement WI-4 §18.1 flags as owed. **Couples to L17:** the 
 is exactly the L17 synchronized-exit wargame (does `RELEASE_COOLDOWN = 2` **smear** the cohort or
 merely **delay** it; is a release-cooldown *queue* needed — [`FOLLOWUPS.md`](../FOLLOWUPS.md)
 swan-2/W8), so F-D4's rate model and the L17 wargame are one obligation. **Activation:** the F-D3 FSM
-gate.
+gate — **FIRED 2026-07-15** (§12.5). The window derivation is the build sequence's first artifact,
+committed **before** any exit sweep runs and before `draw_exit_gap` code lands (GF7_HOOKS §5.1:
+threshold before grading; a failed sweep is a decorrelation-redesign signal, never a move-the-bar
+signal). **The derivation is committed:**
+[`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`](ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md) (2026-07-15) —
+anchor formula from named consts (§1.1), two-regime split (steady-state X-1 lower bound vs
+crisis-cohort X-2 upper bound), the anchor-quantization lemma (a-priori: the cooldown delays and
+*quantizes*, does not smear), the §5.3 queue predicate deciding the W8 question, candidate
+`DEFAULT_EXIT_GAP_WINDOW = 2 × SEB`, pre-registered sweep arms. Awaiting the rate-model
+adversarial review before any code lands.
 
 ### 12.7 F-D5 (routed out) and F-D6 (anti-drift pin)
 
@@ -1941,31 +1966,38 @@ gate.
   dust/budget conservation, a-priori-derived per §18.7). A **defense-in-depth candidate**, not R4's
   structural work. **Reopen (rule-21):** graded in the GF-4/§14.4 economics round, not folded into the
   wallet pin.
-- **F-D6 — single-source + derive (anti-drift).** When the FSM lands, the cooldown gets a **named Rust
-  const** mirroring `SETTLEMENT_EPOCH_BLOCKS` (`constants.rs:27`), and the exit anchor **derives
-  `RELEASE_COOLDOWN_EPOCHS × SETTLEMENT_EPOCH_BLOCKS`**, never a hardcoded `20_000` — the anti-drift
-  rule `consensus_state.rs` already enforces for `SEB` ("do not re-derive by hand and risk drift").
-  Today `20_000` exists only as a doc-comment integer in `standoff.rs:93`; that is the drift vector,
-  closed when F-D3 builds.
+- **F-D6 — single-source + derive (anti-drift).** UPDATE 2026-07-15: the FSM landed and the named
+  const half is **done** — `RELEASE_COOLDOWN_EPOCHS` is config-generated
+  (`config/consensus_constants.json` `release_cooldown_epochs: 2` → `shekyl-archival-retention`
+  `build.rs` → `bond_floor`), consumed by `release_cooldown.rs`. What remains of F-D6 is the
+  consumer-side derivation: `draw_exit_gap`'s anchor **derives
+  `RELEASE_COOLDOWN_EPOCHS × SETTLEMENT_EPOCH_BLOCKS`** from those named consts, never a hardcoded
+  `20_000` — the anti-drift rule `consensus_state.rs` already enforces for `SEB` ("do not re-derive
+  by hand and risk drift"). Today `20_000` still exists as a doc-comment integer in the staking-sim
+  `standoff.rs:93`; that is the drift vector, purged when F-D3 builds.
 
 ### 12.8 Round 4 status, joint-grading obligation, and what closes it
 
 - **GF-7 (funding-in):** built + graded **PROVISIONAL-PASS** (`r = 1.86`, local-daemon; §6 R4 cell) —
   not an open design question; its residuals (effective-vs-nominal cover, cold-start) are testnet
   obligations already tracked ([`FOLLOWUPS.md`](../FOLLOWUPS.md) funding-seam carries).
-- **GF-4 (value-out):** this section. F-D1 + F-D2 buildable now; F-D3 + F-D4 FSM-gated; output-count
+- **GF-4 (value-out):** this section. F-D1 + F-D2 buildable now; F-D3 + F-D4 **gate FIRED
+  2026-07-15 — open for build** (§12.5, `bond_post.rs:369`/`:627`); output-count
   discipline lineage-blind (an F-D1-sibling).
 - **Joint grade (the round's exit bar, per §18.10 R-4 + CB-3):** the drain event is graded on
   **{amount-band ∧ claim/exit-timing ∧ holdings-stratum ∧ output-count}** jointly, correlated-trigger
   modeled on — never per-axis-multiplied. GF-10's claim-jitter mechanism (§11) folds in here; **R3
   closes when it does.**
-- **Pre-seal blocker:** the rebond/unbond FSM (genesis-scoped, 2026-06-15) gates F-D3/F-D4 activation
-  *and* the age-stratified sim bond-mobility reconciliation (§6 scope note). The FSM frictions
-  ([`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md)) must be pinned before the exit seam can be
-  measured.
-- **Closes when:** F-D1/F-D2 land with their arms; the FSM lands and F-D3/F-D4 derive their a-priori
-  windows and pass the joint grade against the pre-committed claims; F-D5 is dispositioned in §14.4.
-  Until then R4 is **drafted, not closed**.
+- **Pre-seal blocker — DISCHARGED 2026-07-15:** the rebond/unbond FSM (genesis-scoped, 2026-06-15)
+  gated F-D3/F-D4 activation *and* the age-stratified sim bond-mobility reconciliation (§6 scope
+  note). Both halves are done: the FSM frictions were pinned
+  ([`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-7, all pins closed — Pin-4/Pin-5 at
+  PR #303 2026-07-14) and landed as enforced consensus (`HoldingsUpdate`/`Unbond` #303, `Rebond`
+  #307), and the sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18). The exit
+  seam is measurable.
+- **Closes when:** F-D1/F-D2 land with their arms; F-D3/F-D4 derive their a-priori windows and pass
+  the joint grade against the pre-committed claims (the "FSM lands" precondition of this clause was
+  satisfied 2026-07-14); F-D5 is dispositioned in §14.4. Until then R4 is **drafted, not closed**.
 
 ---
 
@@ -1984,6 +2016,24 @@ gate.
 
 ## Revision history
 
+- **2026-07-15 (F-D3/F-D4 activation FIRED — fossil sweep):** The §12.5 rule-21 activation
+  criterion ("a verify path reads `RELEASE_COOLDOWN_EPOCHS` as a spendability gate") fired at
+  source: `release_cooldown_elapsed` is enforced consensus with two verify consumers —
+  `bond_post.rs:369` (`HoldingsUpdate`-drop, per-shard last-served anchor) and `:627` (`Unbond`,
+  whole-record anchor) — landed with the rebond/unbond FSM (PR #303 `HoldingsUpdate`/`Unbond` +
+  the P2B-7 Pin-4/Pin-5 closure, 2026-07-14; PR #307 `Rebond`; #309 ShardSet newtype). Statuses
+  swept: header summary, §6 R4 cell + scope-note discharge, §12 status header, §12.1 channel
+  table, §12.5/§12.6 headings + gate/activation blocks, §12.7 F-D6 (named const half done —
+  config-generated `RELEASE_COOLDOWN_EPOCHS`; consumer-side derivation + the staking-sim
+  `standoff.rs:93` `20_000` doc-comment purge remain with the F-D3 build), §12.8 pre-seal blocker
+  DISCHARGED. Same sweep: `IMPLEMENTATION_INDEX.md` Round-N row,
+  `PHASE_2B_FSM_RETOOL.md` P2B-7 residuals row (the fossil that said "open" against its own exit
+  checklist's "closed" — one artifact, two meanings; a closure is not done until every row that
+  claimed the gap is swept). New §12.5 pin: `draw_exit_gap`'s per-event independence must be armed
+  with its own **shared-trigger negative control** (clustering-detection; the entry
+  `double_jitter_trap` guards a two-sided construction the one-sided exit draw doesn't have).
+  Build order pinned: F-D4 a-priori window derivation committed **before** any sweep runs or draw
+  code lands (GF7_HOOKS §5.1). Docs-only.
 - **2026-07-11 (R4 drafted — the drain-event firewall, §12):** Opened Round 4 as §12 (Related
   documents → §13), source-grounded at `dev` `75c3cae1d`. Framed the drain as **one event with three
   co-triggered channels** (amount / timing / output-count) graded **jointly**, not per-axis (§18.10
