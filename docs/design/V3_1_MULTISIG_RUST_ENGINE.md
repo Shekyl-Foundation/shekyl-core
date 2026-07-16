@@ -1,9 +1,7 @@
 # V3.1 Multisig — Rust engine integration design
 
-**Status.** **Round 1 OPEN** (remaining: F-6 CI follow-on PR + F-7
-SoloSigner framing; clippy-green / F-3 DELETE still gate Round 1
-closure). F-6 / P0-n **CI deferred** to a follow-on PR so this docs
-carrier can land alone; operator fossil *sweeps* stay here.
+**Status.** **Round 1 OPEN** (remaining: F-6 clippy-green / F-3 delete
+debt + F-7 SoloSigner framing). F-6 CI **lane landed** (this follow-on PR).
 Doc-only branch `docs/v31-multisig-rust-engine-plan`. Protocol crypto:
 [`PQC_MULTISIG.md`](../PQC_MULTISIG.md) (DRAFT v1.1).
 
@@ -580,7 +578,7 @@ design's acceptance**, not implementation.
 | **R1-F-3** | HIGH | `multisig/{dkg,group,signing}.rs` = **Option A** fixed-group PQC key fossil vs v31 Option D. Not the Apr 15 rotating-vs-fixed *prover* fork. | **DELETE** (not `frost-sal-v4` quarantine). Fuses SAL keys (V4-want) with `pqc_public_key` (Option A, rejected 2026-04-04). Unblocks MS-1 lineage. F-4/F-5/F-9 evaporate on delete. |
 | **R1-F-4** | HIGH | Two `group_id` defs: deterministic `multisig_group_id` vs caller-supplied `dkg.rs` context. | **Accepted → evaporates with F-3 DELETE** (DKG caller-supplied id dies with the file). Canonical = `multisig_group_id` / v31. |
 | **R1-F-5** | HIGH | `MultisigGroup` Serialize hex of secrets; un-zeroized `Vec` reassign; not a `WalletLedger` extension — falsifies "confirm R6". | **Accepted → evaporates with F-3 DELETE.** R6 re-open against **v31** persist shape only (MS-7). |
-| **R1-F-6** | HIGH | No CI job builds `--features multisig`. Gate armed, no positive compile trigger. | **Deferred to follow-on CI PR** (split from this docs PR). Workflow draft + P0-n script staged for that PR; first enable may clippy-fail on `frost_sal`. Round 1 closure still needs the lane green + F-3 DELETE. |
+| **R1-F-6** | HIGH | No CI job builds `--features multisig`. Gate armed, no positive compile trigger. | **Landed (this PR).** `ci/multisig-feature`: check/clippy/test + P0-n. First enable may clippy-fail on `frost_sal` — discovery, not greenwash. Round 1 closure still needs clippy-green / F-3 DELETE. |
 | **R1-F-7** | MEDIUM | §3.1 "associated items only on multisig kind" is a compile error; `EngineSignerKind` has zero associated items; marker is aspiration. | **Accepted.** Correct framing: first associated item = trait-surface amend touching `SoloSigner` (`SigningCeremony = Infallible`). |
 | **R1-F-8** | MEDIUM | Second verify site + five independent bound defs; folds into MSW-1 lockstep + MSW-3 misattribution. | **Accepted → MSW-1/MSW-3.** |
 | **R1-F-9** | MEDIUM | FROST `sign_own` nonce-reuse; unauthenticated `participant` claims. | **Accepted → evaporates with F-3 DELETE.** |
@@ -663,13 +661,13 @@ argument does **not** depend on changing the leaf.
 
 ### Reward-zone / `MAX=7` — **MATH CONFIRMED; rhetoric trim**
 
-- Per-input 7-of-7 `PqcAuth` ≈ **37911** bytes (header + varints +
+- Per-input 7-of-7 `PqcAuth` ≈ **37911** bytes (header + varints + <!-- doc-literal-gate-allow: historical MAX=7-era reward-zone analysis -->
   14199 + 23703). `8 * 37911 = 303288 > 300000`
   (`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`). Correct.
 - Prefer: "a single legal maxed multisig spend **exceeds the
   penalty-free zone by itself**" over "unprofitable to mine" (penalty
   ≠ necessarily unprofitable once fees are counted).
-- Corner case (8-in × 7-of-7), but still a fair **MSW-G** genesis
+- Corner case (8-in × 7-of-7), but still a fair **MSW-G** genesis <!-- doc-literal-gate-allow: historical MAX=7-era reward-zone analysis -->
   question.
 
 ### Fee model / `MAX_INPUTS` — **CONFIRMED (Track B)**
@@ -689,14 +687,14 @@ argument does **not** depend on changing the leaf.
 derivation). MS-2 "don't thicken" stands; §2.3 must not claim C++ has
 no multisig surface.
 
-### R1-F-6 CI + F-7 — F-6 **deferred to follow-on CI PR**; F-7 still open; F-3…F-5/F-9 dispositioned DELETE
+### R1-F-6 CI + F-7 — F-6 **lane landed**; F-7 still open; F-3…F-5/F-9 dispositioned DELETE
 
 F-3 Option A fossil DELETE is closed as design disposition (impl
-pending). F-6 CI lane (`ci/multisig-feature` + P0-n script) ships in a
-**follow-on PR** so this docs carrier lands without a greenwash /
-path-dep RUSTFLAGS fight. Remaining Round 1 blockers for **closure**:
-F-6 lane green (via that PR + F-3 DELETE for frost_sal debt) +
-SoloSigner associated-item framing (F-7).
+pending). F-6 CI lane: `ci/multisig-feature` — check / clippy / test
++ P0-n (toolchain 1.94.0; no job-level RUSTFLAGS). First enable may
+fail clippy on `frost_sal` (discovery). Remaining Round 1 blockers
+for **closure**: clippy-green (via F-3 DELETE) + SoloSigner
+associated-item framing (F-7).
 
 Still Round 1 closure blockers for Track B; this audit focused on the
 Track A / F-2 / size claims that decide whether Track A is a constant
@@ -780,7 +778,7 @@ unchanged across the 9-commit archival drift.
 | `tx_fee_model::pqc_auth_weight` | scheme-1 lengths only | **Track B R-B** |
 | `v31/intent.rs MAX_INPUTS` | 128 vs consensus `FCMP_MAX_INPUTS_PER_TX=8` | **Track B R-C** |
 | `MULTISIG_CONTAINER_VERSION` / `multisig_group_id` | **Fused:** constant passed as `group_version`, not `container.version`; `spend_auth_version` hardcoded | **R1-F-11 → MSW-4/5** |
-| CI `--features multisig` | **follow-on CI PR** | **R1-F-6 deferred** |
+| CI `--features multisig` | **`ci/multisig-feature`** | **R1-F-6 lane; clippy debt open** |
 | Protocol §16.4 | superseded note (Rust-owns-logic) | design branch |
 
 ---
@@ -836,7 +834,7 @@ Deferred to Round 2 after MS-1 **and** F-3 lineage fate.
 | **P0-k** | `PQC_MULTISIG.md` §15.1 honesty | Address payload already correct; group_id plumbing = MSW-4 |
 | **P0-l** | R1-F-3 DELETE | **Disposition landed:** delete Option A FROST fossil; not `frost-sal-v4` quarantine. Impl = Track B / cleanup. |
 | **P0-m** | Address bech32m / §15.3 registry | **Re-priced 2026-07-15:** MSW-8 deletes vestigial address sign keys (~2.6×). N=2 QR-able. Registry demoted from critical-path prerequisite to optimization. |
-| **P0-n** | Doc prose KAT / grep-gate | **Fossil *sweeps* landed 2026-07-15** in operator/protocol docs (this PR). **Gate script + CI job** deferred to the follow-on F-6 PR (`scripts/ci/check_multisig_doc_literals.sh` + `ci/multisig-feature`). Carrier + INDEX + FOLLOWUPS intentionally excluded from the gate (decision-log / historical). |
+| **P0-n** | Doc prose KAT / grep-gate | **Landed (this PR):** `scripts/ci/check_multisig_doc_literals.sh` + `ci/multisig-doc-literals` job (split out of `ci/multisig-feature` so docs-only changes skip the F-6 cargo lane). Fossil sweeps were on the docs carrier (#308). This carrier + INDEX + FOLLOWUPS **are scanned**; their few genuinely-historical lines (decision-log rows, reward-zone `MAX=7` analysis) opt out per-line with an inline `doc-literal-gate-allow` marker rather than excluding the whole file. |
 
 ---
 
@@ -979,12 +977,11 @@ not a quiet reopen of MS-8.
 
 **Round 1 still cannot close until:**
 
-- [ ] **R1-F-6:** CI lane `ci/multisig-feature` —
+- [x] **R1-F-6:** CI lane `ci/multisig-feature` —
       `check`/`clippy`/`test` for engine-core + engine-rpc + ffi with
-      `--features multisig` (+ P0-n doc gate). **Deferred to follow-on
-      CI PR** (split from this docs PR). Round 1 closure still needs
-      that lane green; first enable may clippy-fail on `frost_sal`
-      (F-3 DELETE), not `-D warnings` weakened.
+      `--features multisig` (+ P0-n doc gate). **Lane exists (this PR);**
+      first enable may clippy-fail on `frost_sal` (F-3 DELETE) — Round 1
+      closure still needs that debt cleared, not `-D warnings` weakened.
 - [x] **R1-F-3:** Disposition **DELETE** Option A fossil (impl pending).
 - [x] **R1-F-4:** Evaporates with F-3 DELETE; canonical = v31 `multisig_group_id`.
 - [x] **R1-F-5 / MS-7:** `MultisigGroup` dies with F-3; R6 against v31 + discriminator.
@@ -1091,7 +1088,7 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-15 | **Overhaul:** MSW-6 (relax tx-wide scheme_id — staking unblock; archival core untouched). MSW-G **5** (2f+1 at f=2; withdraws 8). MSW-1 narrowed to SINGLE_KEY_CANONICAL_LEN single-source + DoS ceiling. MSW-7 retracted (`bond_spend_pk` 1996 = pseudonym uniformity). Pin #4 named reversion for MSW-6 only. Sequencing: Phase 0 docs → MSW-6 → MSW-1…5 → F-6 → Option E′. |
 | 2026-07-15 | **§0.5 Option E′** (lean). Two-component `O` splits trust: `b` group-plaintext (view+link / local KI); `y` FROST M-of-N with `y_out = y_group + y_kem` tweak. Dealer-mode, no DKG, no `export_multisig_info`. Deletes mandatory-prover Option D scaffold. `spend_auth_version=0x02`; `0x01` never issued. `frost-sal-v4` = E′ gate. |
 | 2026-07-15 | **MSW-8:** delete vestigial `MultisigAddressPayload.hybrid_sign_pubkeys` (Solution C fossil; zero consumers). ~2.6× address shrink is MSW-8, not E′. §15.3 registry re-priced off critical path. Defect class named: shape-from-prose without a read site (fifth instance this session). |
-| 2026-07-15 | **Phase 0 sweep D-1…D-6:** normative `n_total > 7` → MAX (D-1); ROLLOUT vs-N-solos math + cap fossils + `5385→5389` + date (D-2…D-5); ANALYSIS historical banner + E′ row + §6/§15.2 escrow struck + rotation naming collision (D-6). **P0-n** doc grep-gate. |
+| 2026-07-15 | **Phase 0 sweep D-1…D-6:** normative `n_total > 7` → MAX (D-1); ROLLOUT vs-N-solos math + cap fossils + `5385→5389` + date (D-2…D-5); ANALYSIS historical banner + E′ row + §6/§15.2 escrow struck + rotation naming collision (D-6). **P0-n** doc grep-gate. <!-- doc-literal-gate-allow: decision-log row recording the n_total > 7 → MAX fix (D-1) --> |
 | 2026-07-15 | **PR process:** Pin #1 named reversion — comment-only source amendments OK when recording a semantic this PR pins (`bond_wire` MSW-7 uniformity). VERSIONING.md aligned to E′ (15.4a blocker open; `0x02` = product path). §10.3.1 status refreshed (MS-8 retired, E′, MSW-*). P-3: MSW-G cold before MSW-1 code. |
 | 2026-07-15 | **Copilot on #308:** label MAX=5 as decided/unenforced until MSW-1 (reject cutting the constant in a docs PR); drop superseded MSW-G=8 CHANGELOG bullet; F-10→F-11 consistency; §16.7 flags = planned sketch not live Cargo. |
 | 2026-07-15 | **P0-n + F-6 CI:** draft lane + fossil sweeps prepared; **CI files split out** to a follow-on PR so this docs carrier lands alone. Operator/protocol fossils swept here (`USER_GUIDE` / `MULTISIG_OPERATIONS` / `POST_QUANTUM` / `DESIGN_CONCEPTS` / `ANONYMITY` / `LEVIN` / `RELEASE_CHECKLIST`). |

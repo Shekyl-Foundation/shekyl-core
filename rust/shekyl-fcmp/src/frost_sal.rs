@@ -94,6 +94,11 @@ impl FrostSalSession {
     ///
     /// The coordinator must hold `x` (spend secret). The FROST protocol will
     /// threshold-share `y` across participants using `ThresholdKeys<Ed25519T>`.
+    // CLIPPY(non_snake_case): the single-uppercase locals below (`O` output,
+    // `I` key-image generator, `C` commitment, and the further FROST-SAL
+    // points) are the FCMP++ / FROST-SAL reference notation. snake_case would
+    // diverge from the spec and the cryptographic paper and hurt auditability
+    // against them; the mathematical names are the documentation.
     #[allow(non_snake_case)]
     pub fn new(input_data: &FrostSalInput) -> Result<Self, ProveError> {
         let O = decompress_point(&input_data.output_key, "output_key")?;
@@ -165,7 +170,7 @@ impl FrostSalSession {
             .as_mut()
             .ok_or(ProveError::UpstreamError("session already consumed".into()))?;
 
-        let _addendum = algo.preprocess_addendum(&mut OsRng, keys);
+        algo.preprocess_addendum(&mut OsRng, keys);
         let nonce_generators = algo.nonces();
 
         let k = Zeroizing::new(Scalar::random(&mut OsRng));
@@ -224,7 +229,7 @@ impl FrostSalSession {
 
         let share = algo.sign_share(params, nonce_sums, vec![k], &[]);
         Ok(FrostSignShareResult {
-            share: share.to_repr().into(),
+            share: share.to_repr(),
         })
     }
 
@@ -283,7 +288,7 @@ impl fmt::Debug for FrostSigningCoordinator {
             .field("included", &self.included.len())
             .field("commitments_collected", &self.commitments.len())
             .field("shares_collected", &self.shares.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -401,11 +406,11 @@ impl FrostSigningCoordinator {
 
                 let mut offset = 0;
                 for (set_idx, &count) in self.generators_per_nonce.iter().enumerate() {
-                    for gen_idx in 0..count {
+                    for sum_pt in sums[set_idx].iter_mut().take(count) {
                         let mut buf = [0u8; 32];
                         buf.copy_from_slice(&raw[offset..offset + 32]);
                         let pt = decompress_point(&buf, "nonce_commitment")?;
-                        sums[set_idx][gen_idx] = sums[set_idx][gen_idx] + pt;
+                        *sum_pt += pt;
                         offset += 32;
                     }
                 }
@@ -438,10 +443,13 @@ impl FrostSigningCoordinator {
     }
 
     /// Collect a partial signature share from one participant for all inputs.
+    ///
+    /// Borrows the shares: this only deserializes each `share` into a scalar
+    /// and stores the derived scalars, never taking ownership of the input.
     pub fn collect_shares(
         &mut self,
         from: Participant,
-        input_shares: Vec<FrostSignShareResult>,
+        input_shares: &[FrostSignShareResult],
     ) -> Result<(), ProveError> {
         if input_shares.len() != self.num_inputs {
             return Err(ProveError::UpstreamError(format!(
@@ -487,7 +495,7 @@ impl FrostSigningCoordinator {
 
         let mut sum = Scalar::ZERO;
         for participant in &self.included {
-            sum = sum + self.shares[participant][input_idx];
+            sum += self.shares[participant][input_idx];
         }
         Ok(sum)
     }
@@ -541,7 +549,7 @@ impl FrostSigningCoordinator {
 // ---------------------------------------------------------------------------
 
 fn decompress_point(bytes: &[u8; 32], field: &'static str) -> Result<EdwardsPoint, ProveError> {
-    let ct = <EdwardsPoint as GroupEncoding>::from_bytes(bytes.into());
+    let ct = <EdwardsPoint as GroupEncoding>::from_bytes(bytes);
     if bool::from(ct.is_some()) {
         Ok(ct.unwrap())
     } else {
@@ -553,7 +561,7 @@ fn decompress_point(bytes: &[u8; 32], field: &'static str) -> Result<EdwardsPoin
 }
 
 fn deserialize_scalar(bytes: &[u8; 32], field: &'static str) -> Result<Scalar, ProveError> {
-    let ct = Scalar::from_repr((*bytes).into());
+    let ct = Scalar::from_repr(*bytes);
     if bool::from(ct.is_some()) {
         Ok(ct.unwrap())
     } else {
@@ -596,10 +604,10 @@ mod tests {
         let c = EdwardsPoint::random(&mut rand_core::OsRng);
 
         let input = FrostSalInput {
-            output_key: o.to_bytes().into(),
-            key_image_gen: i.to_bytes().into(),
-            commitment: c.to_bytes().into(),
-            spend_key_x: x.to_repr().into(),
+            output_key: o.to_bytes(),
+            key_image_gen: i.to_bytes(),
+            commitment: c.to_bytes(),
+            spend_key_x: x.to_repr(),
             signable_tx_hash: [0xAB; 32],
         };
 
@@ -623,10 +631,10 @@ mod tests {
         let c = EdwardsPoint::random(&mut rand_core::OsRng);
 
         let input = FrostSalInput {
-            output_key: o.to_bytes().into(),
-            key_image_gen: i.to_bytes().into(),
-            commitment: c.to_bytes().into(),
-            spend_key_x: x.to_repr().into(),
+            output_key: o.to_bytes(),
+            key_image_gen: i.to_bytes(),
+            commitment: c.to_bytes(),
+            spend_key_x: x.to_repr(),
             signable_tx_hash: [0xCD; 32],
         };
 
@@ -707,7 +715,7 @@ mod tests {
         let p2 = Participant::new(2).unwrap();
         let mut coord = FrostSigningCoordinator::new_for_sal(1, vec![p1, p2]).unwrap();
 
-        let result = coord.collect_shares(p1, vec![FrostSignShareResult { share: [0u8; 32] }]);
+        let result = coord.collect_shares(p1, &[FrostSignShareResult { share: [0u8; 32] }]);
         assert!(
             result.is_ok(),
             "Share collection is independent of preprocess collection"
@@ -721,8 +729,8 @@ mod tests {
         let mut coord = FrostSigningCoordinator::new_for_sal(1, vec![p1, p2]).unwrap();
 
         let shares = vec![FrostSignShareResult { share: [1u8; 32] }];
-        coord.collect_shares(p1, shares.clone()).unwrap();
-        let result = coord.collect_shares(p1, shares);
+        coord.collect_shares(p1, &shares).unwrap();
+        let result = coord.collect_shares(p1, &shares);
         assert!(result.is_err(), "Should reject duplicate shares");
     }
 
@@ -818,10 +826,10 @@ mod tests {
         let c = EdwardsPoint::random(&mut rand_core::OsRng);
 
         let input = FrostSalInput {
-            output_key: o.to_bytes().into(),
-            key_image_gen: i.to_bytes().into(),
-            commitment: c.to_bytes().into(),
-            spend_key_x: x.to_repr().into(),
+            output_key: o.to_bytes(),
+            key_image_gen: i.to_bytes(),
+            commitment: c.to_bytes(),
+            spend_key_x: x.to_repr(),
             signable_tx_hash: [0xEF; 32],
         };
 
@@ -844,7 +852,7 @@ mod tests {
         let mut coord = FrostSigningCoordinator::new_for_sal(1, vec![p1, p2]).unwrap();
 
         let shares = vec![FrostSignShareResult { share: [1u8; 32] }];
-        coord.collect_shares(p1, shares).unwrap();
+        coord.collect_shares(p1, &shares).unwrap();
 
         let result = coord.sum_shares_for_input(0);
         assert!(result.is_err(), "Should fail: only 1 of 2 shares collected");

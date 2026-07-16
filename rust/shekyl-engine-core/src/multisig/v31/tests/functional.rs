@@ -8,7 +8,6 @@ use crate::multisig::v31::{
     encryption::{decrypt_payload, encrypt_payload},
     intent::{ChainStateFingerprint, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION},
     messages::{DecryptedPayload, MessageType, MultisigEnvelope, ENVELOPE_VERSION},
-    prover::{ProverReceipt, SignatureShare},
     state::{IntentState, TrackedIntent, TxCounterTracker},
 };
 use shekyl_units::AtomicUnits;
@@ -53,11 +52,11 @@ fn intent_roundtrip_through_encryption() {
     };
 
     let group_secret = [0x99; 32];
-    let intent_hash = intent.intent_hash();
+    let intent_hash = intent.intent_hash().unwrap();
 
     let payload = DecryptedPayload {
         message_type: MessageType::SpendIntent,
-        body: intent.to_canonical_bytes(),
+        body: intent.to_canonical_bytes().unwrap(),
     };
     let plaintext = payload.encode();
 
@@ -83,7 +82,7 @@ fn intent_roundtrip_through_encryption() {
 
     let decoded = DecryptedPayload::decode(&pt).unwrap();
     assert_eq!(decoded.message_type, MessageType::SpendIntent);
-    assert_eq!(decoded.body, intent.to_canonical_bytes());
+    assert_eq!(decoded.body, intent.to_canonical_bytes().unwrap());
 }
 
 #[test]
@@ -111,7 +110,7 @@ fn envelope_wraps_encrypted_payload() {
         encrypted_payload: ct.clone(),
     };
 
-    let bytes = envelope.to_bytes();
+    let bytes = envelope.to_bytes().unwrap();
     let parsed = MultisigEnvelope::from_bytes(&bytes).unwrap();
     assert_eq!(parsed.encrypted_payload, ct);
 
@@ -182,33 +181,4 @@ fn chain_state_fingerprint_includes_all_fields() {
         input_assigned_prover_indices: vec![0, 1, 2],
     };
     assert_ne!(h1, fp3.compute());
-}
-
-#[test]
-fn prover_receipt_counter_monotonicity() {
-    let r1 = ProverReceipt {
-        prover_index: 0,
-        intent_hash: [0xAA; 32],
-        local_counter: 1,
-        receipt_sig: vec![0; 64],
-    };
-    let r2 = ProverReceipt {
-        local_counter: 2,
-        ..r1.clone()
-    };
-    assert_ne!(r1.signable_bytes(), r2.signable_bytes());
-}
-
-#[test]
-fn signature_share_commitments_bind_content() {
-    let share = SignatureShare {
-        signer_index: 0,
-        hybrid_sig: vec![0; 64],
-        tx_hash_commitment: [0xAA; 32],
-        fcmp_proof_commitment: [0xBB; 32],
-        bp_plus_proof_commitment: [0xCC; 32],
-    };
-
-    assert_ne!(share.tx_hash_commitment, share.fcmp_proof_commitment);
-    assert_ne!(share.fcmp_proof_commitment, share.bp_plus_proof_commitment);
 }

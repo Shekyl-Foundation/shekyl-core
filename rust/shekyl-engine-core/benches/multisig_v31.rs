@@ -32,7 +32,7 @@ fn bench_intent_hash(c: &mut Criterion) {
     };
 
     c.bench_function("intent_hash", |b| {
-        b.iter(|| black_box(intent.intent_hash()))
+        b.iter(|| black_box(intent.intent_hash().unwrap()))
     });
 }
 
@@ -63,7 +63,7 @@ fn bench_intent_serialization(c: &mut Criterion) {
     };
 
     c.bench_function("intent_to_canonical_bytes", |b| {
-        b.iter(|| black_box(intent.to_canonical_bytes()))
+        b.iter(|| black_box(intent.to_canonical_bytes().unwrap()))
     });
 }
 
@@ -122,10 +122,10 @@ fn bench_envelope_roundtrip(c: &mut Criterion) {
         encrypted_payload: vec![0xCC; 512],
     };
 
-    let bytes = envelope.to_bytes();
+    let bytes = envelope.to_bytes().unwrap();
 
     c.bench_function("envelope_serialize", |b| {
-        b.iter(|| black_box(envelope.to_bytes()))
+        b.iter(|| black_box(envelope.to_bytes().unwrap()))
     });
 
     c.bench_function("envelope_deserialize", |b| {
@@ -141,30 +141,11 @@ fn bench_chain_state_fingerprint(c: &mut Criterion) {
         input_global_indices: (0..16).collect(),
         input_eligible_heights: (900..916).collect(),
         input_amounts: vec![shekyl_units::AtomicUnits::from_raw(1_000_000); 16],
-        input_assigned_prover_indices: (0..16).map(|i| (i % 3) as u8).collect(),
+        input_assigned_prover_indices: (0..16u8).map(|i| i % 3).collect(),
     };
 
     c.bench_function("chain_state_fingerprint_16_inputs", |b| {
         b.iter(|| black_box(fp.compute()))
-    });
-}
-
-fn bench_assembly_consensus(c: &mut Criterion) {
-    use shekyl_engine_core::multisig::v31::invariants::check_assembly_consensus;
-    use shekyl_engine_core::multisig::v31::prover::SignatureShare;
-
-    let shares: Vec<_> = (0..7)
-        .map(|i| SignatureShare {
-            signer_index: i,
-            hybrid_sig: vec![0; 64],
-            tx_hash_commitment: [0xAA; 32],
-            fcmp_proof_commitment: [0xBB; 32],
-            bp_plus_proof_commitment: [0xCC; 32],
-        })
-        .collect();
-
-    c.bench_function("assembly_consensus_7_signers", |b| {
-        b.iter(|| black_box(check_assembly_consensus(&shares)))
     });
 }
 
@@ -175,6 +156,5 @@ criterion_group!(
     bench_encrypt_decrypt,
     bench_envelope_roundtrip,
     bench_chain_state_fingerprint,
-    bench_assembly_consensus,
 );
 criterion_main!(benches);

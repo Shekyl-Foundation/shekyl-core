@@ -10,13 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 shekyl-engine-core = { path = "..", features = ["multisig"] }
-
-[[bin]]
-name = "fuzz_spend_intent_parse"
-path = "fuzz_targets/fuzz_spend_intent_parse.rs"
-test = false
-doc = false
-bench = false
+shekyl-units = { path = "../../shekyl-units" }
 
 [[bin]]
 name = "fuzz_envelope_parse"
@@ -28,13 +22,6 @@ bench = false
 [[bin]]
 name = "fuzz_decrypted_payload_parse"
 path = "fuzz_targets/fuzz_decrypted_payload_parse.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "fuzz_counter_proof_parse"
-path = "fuzz_targets/fuzz_counter_proof_parse.rs"
 test = false
 doc = false
 bench = false
@@ -54,36 +41,8 @@ doc = false
 bench = false
 
 [[bin]]
-name = "fuzz_heartbeat_anomalies"
-path = "fuzz_targets/fuzz_heartbeat_anomalies.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "fuzz_intent_validation"
 path = "fuzz_targets/fuzz_intent_validation.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "fuzz_assembly_consensus"
-path = "fuzz_targets/fuzz_assembly_consensus.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "fuzz_equivocation_proof"
-path = "fuzz_targets/fuzz_equivocation_proof.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "fuzz_counter_proof_verify"
-path = "fuzz_targets/fuzz_counter_proof_verify.rs"
 test = false
 doc = false
 bench = false

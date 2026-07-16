@@ -81,6 +81,9 @@ pub enum SpendIntentError {
     #[error("wrong version: expected {SPEND_INTENT_VERSION}, got {0}")]
     WrongVersion(u8),
 
+    #[error("field '{0}' too long to serialize (length exceeds u32 wire prefix)")]
+    FieldTooLong(&'static str),
+
     #[error("group_id mismatch")]
     GroupIdMismatch,
 
@@ -178,78 +181,111 @@ pub struct SpendIntent {
 
 impl SpendIntent {
     /// Compute `intent_hash = cn_fast_hash(canonical_serialize(SpendIntent))` (SS9.4).
-    pub fn intent_hash(&self) -> [u8; 32] {
-        let canonical = self.to_canonical_bytes();
-        shekyl_crypto_hash::cn_fast_hash(&canonical)
+    ///
+    /// Fallible because canonical serialization is: a field whose length
+    /// exceeds the u32 wire prefix has no well-defined canonical encoding
+    /// (silently truncating the prefix would collide distinct intents), so
+    /// it has no well-defined hash-identity either. `validate_structural`
+    /// bounds every length well below `u32::MAX`, so this only fires on an
+    /// unvalidated, pathologically-large intent.
+    pub fn intent_hash(&self) -> Result<[u8; 32], SpendIntentError> {
+        let canonical = self.to_canonical_bytes()?;
+        Ok(shekyl_crypto_hash::cn_fast_hash(&canonical))
+    }
+
+    /// Append a `u32`-LE length taken from `len`, failing with
+    /// `FieldTooLong(field)` if it overflows the u32 wire prefix.
+    fn push_u32_len(
+        buf: &mut Vec<u8>,
+        len: usize,
+        field: &'static str,
+    ) -> Result<(), SpendIntentError> {
+        let n = u32::try_from(len).map_err(|_| SpendIntentError::FieldTooLong(field))?;
+        buf.extend_from_slice(&n.to_le_bytes());
+        Ok(())
+    }
+
+    /// Append a `u32`-LE length prefix followed by `bytes` (see `push_u32_len`).
+    fn push_len_prefixed(
+        buf: &mut Vec<u8>,
+        bytes: &[u8],
+        field: &'static str,
+    ) -> Result<(), SpendIntentError> {
+        Self::push_u32_len(buf, bytes.len(), field)?;
+        buf.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    /// Append the fixed header shared by both serializations: version,
+    /// `intent_id`, `group_id`, `proposer_index`. The canonical form
+    /// follows this with the length-prefixed proposer signature;
+    /// `signable_bytes` omits the signature it is about to produce.
+    fn push_header(&self, buf: &mut Vec<u8>) {
+        buf.push(self.version);
+        buf.extend_from_slice(&self.intent_id);
+        buf.extend_from_slice(&self.group_id);
+        buf.push(self.proposer_index);
+    }
+
+    /// Append everything the two serializations share after the optional
+    /// proposer signature: temporal fields, reference block, recipients,
+    /// fee, inputs, and the two trailing 32-byte seeds.
+    ///
+    /// This is the single source of truth for the signed/hashed body:
+    /// keeping it in one place makes it impossible for `signable_bytes`
+    /// (what the proposer signs) and `to_canonical_bytes` (what gets
+    /// hashed) to silently desync on a future wire-layout change — a
+    /// missed mirror would otherwise yield a signature over a different
+    /// byte string than the one identified by `intent_hash`.
+    fn push_body(&self, buf: &mut Vec<u8>) -> Result<(), SpendIntentError> {
+        buf.extend_from_slice(&self.created_at.to_le_bytes());
+        buf.extend_from_slice(&self.expires_at.to_le_bytes());
+        buf.extend_from_slice(&self.tx_counter.to_le_bytes());
+        buf.extend_from_slice(&self.reference_block_height.to_le_bytes());
+        buf.extend_from_slice(&self.reference_block_hash);
+
+        Self::push_u32_len(buf, self.recipients.len(), "recipients")?;
+        for r in &self.recipients {
+            Self::push_len_prefixed(buf, &r.address, "recipient address")?;
+            buf.extend_from_slice(&r.amount.to_raw().to_le_bytes());
+        }
+
+        buf.extend_from_slice(&self.fee.to_raw().to_le_bytes());
+
+        Self::push_u32_len(buf, self.input_global_indices.len(), "input_global_indices")?;
+        for idx in &self.input_global_indices {
+            buf.extend_from_slice(&idx.to_le_bytes());
+        }
+
+        buf.extend_from_slice(&self.kem_randomness_seed);
+        buf.extend_from_slice(&self.chain_state_fingerprint);
+        Ok(())
     }
 
     /// Canonical serialization for hashing and signing.
     ///
-    /// Layout: all fixed fields in declaration order, then variable-length
-    /// recipients and inputs with length prefixes (u32 LE).
-    pub fn to_canonical_bytes(&self) -> Vec<u8> {
+    /// Layout: the fixed header, then the length-prefixed proposer
+    /// signature, then the shared body (see `push_body`). Fails with
+    /// `FieldTooLong` rather than truncating a length that overflows u32.
+    pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, SpendIntentError> {
         let mut buf = Vec::with_capacity(256);
-        buf.push(self.version);
-        buf.extend_from_slice(&self.intent_id);
-        buf.extend_from_slice(&self.group_id);
-        buf.push(self.proposer_index);
-        buf.extend_from_slice(&(self.proposer_sig.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&self.proposer_sig);
-        buf.extend_from_slice(&self.created_at.to_le_bytes());
-        buf.extend_from_slice(&self.expires_at.to_le_bytes());
-        buf.extend_from_slice(&self.tx_counter.to_le_bytes());
-        buf.extend_from_slice(&self.reference_block_height.to_le_bytes());
-        buf.extend_from_slice(&self.reference_block_hash);
-
-        buf.extend_from_slice(&(self.recipients.len() as u32).to_le_bytes());
-        for r in &self.recipients {
-            buf.extend_from_slice(&(r.address.len() as u32).to_le_bytes());
-            buf.extend_from_slice(&r.address);
-            buf.extend_from_slice(&r.amount.to_raw().to_le_bytes());
-        }
-
-        buf.extend_from_slice(&self.fee.to_raw().to_le_bytes());
-
-        buf.extend_from_slice(&(self.input_global_indices.len() as u32).to_le_bytes());
-        for idx in &self.input_global_indices {
-            buf.extend_from_slice(&idx.to_le_bytes());
-        }
-
-        buf.extend_from_slice(&self.kem_randomness_seed);
-        buf.extend_from_slice(&self.chain_state_fingerprint);
-        buf
+        self.push_header(&mut buf);
+        Self::push_len_prefixed(&mut buf, &self.proposer_sig, "proposer_sig")?;
+        self.push_body(&mut buf)?;
+        Ok(buf)
     }
 
-    /// Compute the bytes that the proposer signs (everything except proposer_sig).
-    pub fn signable_bytes(&self) -> Vec<u8> {
+    /// Compute the bytes that the proposer signs — identical to
+    /// `to_canonical_bytes` except it omits the `proposer_sig` field it
+    /// is about to fill.
+    ///
+    /// Fails with `FieldTooLong` rather than truncating a length that
+    /// overflows the u32 wire prefix (see `to_canonical_bytes`).
+    pub fn signable_bytes(&self) -> Result<Vec<u8>, SpendIntentError> {
         let mut buf = Vec::with_capacity(256);
-        buf.push(self.version);
-        buf.extend_from_slice(&self.intent_id);
-        buf.extend_from_slice(&self.group_id);
-        buf.push(self.proposer_index);
-        buf.extend_from_slice(&self.created_at.to_le_bytes());
-        buf.extend_from_slice(&self.expires_at.to_le_bytes());
-        buf.extend_from_slice(&self.tx_counter.to_le_bytes());
-        buf.extend_from_slice(&self.reference_block_height.to_le_bytes());
-        buf.extend_from_slice(&self.reference_block_hash);
-
-        buf.extend_from_slice(&(self.recipients.len() as u32).to_le_bytes());
-        for r in &self.recipients {
-            buf.extend_from_slice(&(r.address.len() as u32).to_le_bytes());
-            buf.extend_from_slice(&r.address);
-            buf.extend_from_slice(&r.amount.to_raw().to_le_bytes());
-        }
-
-        buf.extend_from_slice(&self.fee.to_raw().to_le_bytes());
-
-        buf.extend_from_slice(&(self.input_global_indices.len() as u32).to_le_bytes());
-        for idx in &self.input_global_indices {
-            buf.extend_from_slice(&idx.to_le_bytes());
-        }
-
-        buf.extend_from_slice(&self.kem_randomness_seed);
-        buf.extend_from_slice(&self.chain_state_fingerprint);
-        buf
+        self.push_header(&mut buf);
+        self.push_body(&mut buf)?;
+        Ok(buf)
     }
 
     /// Validate structural invariants that don't require external state
@@ -308,7 +344,7 @@ impl SpendIntent {
 
         if chain_tip_height
             .checked_sub(self.reference_block_height)
-            .map_or(true, |age| age < FCMP_REFERENCE_BLOCK_MIN_AGE)
+            .is_none_or(|age| age < FCMP_REFERENCE_BLOCK_MIN_AGE)
         {
             return Err(SpendIntentError::RefBlockTooFresh {
                 height: self.reference_block_height,
@@ -318,7 +354,7 @@ impl SpendIntent {
 
         if chain_tip_height
             .checked_sub(self.reference_block_height)
-            .map_or(true, |age| age > FCMP_REFERENCE_BLOCK_MAX_AGE)
+            .is_none_or(|age| age > FCMP_REFERENCE_BLOCK_MAX_AGE)
         {
             return Err(SpendIntentError::RefBlockTooStale {
                 height: self.reference_block_height,
@@ -448,8 +484,8 @@ mod tests {
     #[test]
     fn intent_hash_deterministic() {
         let intent = make_test_intent();
-        let h1 = intent.intent_hash();
-        let h2 = intent.intent_hash();
+        let h1 = intent.intent_hash().unwrap();
+        let h2 = intent.intent_hash().unwrap();
         assert_eq!(h1, h2);
         assert_ne!(h1, [0; 32]);
     }
@@ -459,14 +495,40 @@ mod tests {
         let i1 = make_test_intent();
         let mut i2 = make_test_intent();
         i2.fee = AtomicUnits::from_raw(20);
-        assert_ne!(i1.intent_hash(), i2.intent_hash());
+        assert_ne!(i1.intent_hash().unwrap(), i2.intent_hash().unwrap());
     }
 
     #[test]
     fn canonical_bytes_roundtrip_length() {
         let intent = make_test_intent();
-        let bytes = intent.to_canonical_bytes();
+        let bytes = intent.to_canonical_bytes().unwrap();
         assert!(bytes.len() > 200);
+    }
+
+    #[test]
+    fn signable_and_canonical_share_header_and_body() {
+        // Guards the shared-helper refactor: to_canonical_bytes and
+        // signable_bytes must differ ONLY by the length-prefixed
+        // proposer_sig, sandwiched between the 66-byte fixed header
+        // (version[1] + intent_id[32] + group_id[32] + proposer_index[1])
+        // and the shared body. If push_header/push_body ever desynced
+        // the two, this fails — the signed bytes would no longer match
+        // the hashed bytes.
+        const HEADER_LEN: usize = 1 + 32 + 32 + 1;
+        let intent = make_test_intent();
+        let canonical = intent.to_canonical_bytes().unwrap();
+        let signable = intent.signable_bytes().unwrap();
+        let sig_field_len = 4 + intent.proposer_sig.len();
+
+        // Same fixed header on both.
+        assert_eq!(canonical[..HEADER_LEN], signable[..HEADER_LEN]);
+        // Canonical is exactly the signable bytes plus the sig field.
+        assert_eq!(canonical.len(), signable.len() + sig_field_len);
+        // Shared body is byte-identical on both sides of the sig field.
+        assert_eq!(
+            canonical[HEADER_LEN + sig_field_len..],
+            signable[HEADER_LEN..]
+        );
     }
 
     #[test]
