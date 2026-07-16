@@ -1790,6 +1790,17 @@ narrow, correct pin below.
 `PROOF_VALIDITY_HORIZON` / `REBUILD_AT` semantics (`reference.rs:85-106`) are the anchor for any
 future reasoning about how long a claim can be held; do not re-derive them from the name.
 
+**Method note 2 (added 2026-07-16, from the F-D4 round-4 premise audit — the same lesson one
+level up): a channel's meaning is its observable.** Four rounds of prose review on the F-D4
+exit window audited the arithmetic and never the existential — "principal-side re-appearance"
+survived as a phrase for four rounds because prose never has to populate its nouns. The §8
+sweep harness did: the observer, written as code, had to declare a variable for the event it
+correlates against, and "what populates this?" became unavoidable — the channel was found
+empty (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §2.1/§15, F-W7/F-W8). Standing requirement
+proposed there and adopted as this doc's method posture: **every graded seam pre-registers
+its observer as executable code before any row runs.** A methods paragraph can quantify over
+a phantom indefinitely; an executable observer cannot.
+
 ---
 
 ## 12. Round 4 — output + bond-funding hygiene: the drain-event firewall (OPEN — drafted 2026-07-11)
