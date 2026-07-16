@@ -38,7 +38,14 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention", features = 
 # `provisional-exit-gap-window`: DEFAULT_EXIT_GAP_WINDOW unsealed-sentinel
 # acknowledgment (ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md §5.4) — delete at the
 # Phase 7.7 seal.
-shekyl-standoff = { path = "../shekyl-standoff", features = ["gf7-hooks", "provisional-exit-gap-window"] }
+# `exit-window-kat`: the F-D4 §8 sweep (`--exit-standoff`, exit_standoff.rs)
+# must parameterize `ExitGapWindow` per swept row while the window is the
+# provisional sentinel — the measurement harness is a named approved consumer
+# of `kat_inject` (the feature's own comment in shekyl-standoff/Cargo.toml
+# carries the same pin). This binary is layer 2 of the no-emit guard: no
+# production crate depends on it, so the constructor stays out of every
+# wallet/consensus graph.
+shekyl-standoff = { path = "../shekyl-standoff", features = ["gf7-hooks", "provisional-exit-gap-window", "exit-window-kat"] }
 
 # The `conformance` feature (float grading + self-cert harness) stays dev-only:
 # it backs the smoke test that the sim's `SplitMix64` conforms through the

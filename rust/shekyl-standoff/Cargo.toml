@@ -35,7 +35,11 @@ provisional-exit-gap-window = []
 # Exit-window KAT-injection constructor (`ExitGapWindow::kat_inject`) for tests
 # and conformance arms. PERMANENT (unlike provisional-exit-gap-window): the
 # fixtures must survive the §5.4 seal, so this feature does not ride the
-# provisional flag. Dev-dependencies only; never enable from production code.
+# provisional flag. Approved consumers: dev-dependencies, and the
+# `shekyl-staking-sim` measurement harness (the F-D4 §8 sweep parameterizes
+# the window per swept row; the sim is a standalone binary outside every
+# production graph — layer 2 of the no-emit guard). Never enable from a
+# wallet or consensus crate.
 exit-window-kat = []
 
 [dependencies]

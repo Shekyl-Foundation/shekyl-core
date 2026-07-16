@@ -199,7 +199,9 @@ impl SplitMix64 {
 
     /// Poisson draw. Knuth for small means; normal approximation for large means
     /// (where exp(-λ) underflows and Knuth's loop is slow).
-    fn poisson(&mut self, mean: f64) -> u64 {
+    /// `pub(crate)`: the exit-seam sweep (`exit_standoff`) draws its background
+    /// exit-class events from the same reproducible stream.
+    pub(crate) fn poisson(&mut self, mean: f64) -> u64 {
         if mean <= 0.0 {
             return 0;
         }

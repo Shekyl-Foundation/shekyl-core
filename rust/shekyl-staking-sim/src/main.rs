@@ -19,7 +19,10 @@
 //! ARCHIVAL_FAILURE_CONFIRMATION_PIN.md); `--gf7-timeline` (the GF-7 graded
 //! measurement round — joint three-axis correlator + three arms + validity
 //! controls, graded against the a-priori `r < 2` bound per
-//! ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4); `--partition-adversary` (the §14.4
+//! ARCHIVAL_BOND_WI4_MEASUREMENT.md; WI-4); `--exit-standoff` (the F-D4 §8
+//! pre-registered exit-seam sweep — X-1/X-2/X-3 arms + negative control +
+//! §5.3 lever-vs-queue costing, per ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md);
+//! `--partition-adversary` (the §14.4
 //! founder-cover partition-adversary arm — gating lemma + witness-typed
 //! controls, per the same doc's §14/§17 launch-posture round).
 
@@ -29,6 +32,7 @@ mod budget_throttle;
 mod clustering;
 mod cover;
 mod curve;
+mod exit_standoff;
 mod failure_confirmation;
 mod fingerprint;
 mod gf7_timeline;
@@ -624,6 +628,112 @@ fn print_standoff_report() {
     match serde_json::to_string_pretty(&report) {
         Ok(json) => println!("{json}"),
         Err(e) => eprintln!("error serializing standoff report: {e}"),
+    }
+}
+
+fn print_exit_standoff_report() {
+    let report = exit_standoff::run_full_report();
+    eprintln!(
+        "shekyl-staking-sim — exit-seam standoff sweep (ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md §8)"
+    );
+    eprintln!(
+        "Pre-registered X-1/X-2/X-3 arms; every graded row against the committed r < {:.1}",
+        report.ratio_bound
+    );
+    eprintln!("  (WI-4 bar, one home). ρ_x/σ_L/N_x are SWEPT pre-testnet assumptions, not");
+    eprintln!("  measurements — the Phase 7.7 stressnet read runs through this instrument and the");
+    eprintln!(
+        "  §5.4 frozen rule (exit_standoff::frozen_rule_window) to seal DEFAULT_EXIT_GAP_WINDOW."
+    );
+    eprintln!("Observer: support-gated exact Bayes under L ~ U[0, σ_L] — delivered X-1 cover is");
+    eprintln!(
+        "  ρ_x·σ_L (latency-gated), not the nominal ρ_x·W; both are reported per row and the"
+    );
+    eprintln!("  required σ_L feeds the §5.3 lever-vs-queue costing. Failed rows are redesign");
+    eprintln!("  signals, never move-the-bar signals (GF7 §5.1).");
+    eprintln!();
+    eprintln!("X-1 (steady-state lone exit; W from the frozen rule at each swept N):");
+    eprintln!(
+        "{:>28} {:>9} {:>3} {:>7} {:>7} {:>8} {:>8} {:>7} {:>6} {:>9}",
+        "row", "rho_x", "N", "sig_L", "W", "nom_cov", "del_cov", "p_link", "r", "req_sigL",
+    );
+    for r in &report.x1 {
+        eprintln!(
+            "{:>28} {:>9.2e} {:>3} {:>7} {:>7} {:>8.2} {:>8.2} {:>7.3} {:>6.2}{} {:>8}",
+            r.name,
+            r.rho_x,
+            r.n,
+            r.sigma_l,
+            r.window,
+            r.nominal_window_cover,
+            r.delivered_support_mean,
+            r.p_link,
+            r.ratio,
+            if r.clears_bound { " " } else { "*" },
+            r.required_sigma_l,
+        );
+    }
+    eprintln!("  (* = fails the bar)");
+    eprintln!();
+    eprintln!("X-2 (crisis cohort; 1a/2a = one/two-anchor; X-3 overlap graded on 2a rows):");
+    eprintln!(
+        "{:>26} {:>7} {:>3} {:>7} {:>8} {:>6} {:>9} {:>9} {:>9} {:>8}",
+        "row", "W", "N_x", "sig_L", "p_asgn", "r", "ovl_meas", "ovl_pred", "x_anchor", "clust",
+    );
+    for r in &report.x2 {
+        eprintln!(
+            "{:>26} {:>7} {:>3} {:>7} {:>8.3} {:>5.2}{} {:>9.3} {:>9.3} {:>9.3} {:>8.3}",
+            r.name,
+            r.window,
+            r.n_x,
+            r.sigma_l,
+            r.p_assign,
+            r.ratio,
+            if r.clears_bound { " " } else { "*" },
+            r.measured_overlap_frac,
+            r.predicted_overlap_frac,
+            r.cross_anchor_confusion,
+            r.max_same_height_share,
+        );
+    }
+    eprintln!();
+    let nc = &report.negative_control;
+    eprintln!(
+        "Negative control (§8.3): drawn clust={:.3}, skipped clust={:.3}, caught={} (assignment",
+        nc.drawn_max_same_height_share, nc.skipped_max_same_height_share, nc.caught
+    );
+    eprintln!(
+        "  r on the skipped world = {:.2} — blind, which is why the control keys on clustering).",
+        nc.skipped_assignment_ratio
+    );
+    eprintln!();
+    eprintln!("§5.3 lever-vs-queue costing (shared capital-idle axis; lever paid by exiters");
+    eprintln!("  only, queue paid by every exit):");
+    eprintln!(
+        "{:>9} {:>3} {:>7} {:>10} {:>10} {:>4} {:>10} {:>10}",
+        "rho_x", "N_x", "W", "lever_spc", "req_sigL", "k", "lever_cost", "queue_cost",
+    );
+    for row in &report.lever_queue_costing {
+        eprintln!(
+            "{:>9.2e} {:>3} {:>7} {:>10} {:>10} {:>4} {:>10} {:>10}",
+            row.rho_x,
+            row.n_x,
+            row.window,
+            row.lever_sigma_l_spacing,
+            row.required_sigma_l_x1,
+            row.queue_k,
+            row.lever_cost_mean_blocks,
+            row.queue_cost_mean_blocks,
+        );
+    }
+    eprintln!();
+    eprintln!(
+        "Worst graded row (WI-4 regime-splitting — the reported number): {} r={:.2}",
+        report.worst_row_name, report.worst_row_ratio
+    );
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("error serializing exit-standoff report: {e}"),
     }
 }
 
@@ -1621,6 +1731,11 @@ fn main() {
 
     if std::env::args().any(|a| a == "--standoff") {
         print_standoff_report();
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--exit-standoff") {
+        print_exit_standoff_report();
         return;
     }
 
