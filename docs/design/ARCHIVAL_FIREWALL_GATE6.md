@@ -1963,12 +1963,18 @@ release-queue. F-W3/F-W4/F-W5 (round 2, superseding round 1's re-picked candidat
 bound is a **~19× planning box**, so no pre-measurement value is derivable;
 `DEFAULT_EXIT_GAP_WINDOW` adopts the **`K_COVER` provisional-sentinel pattern** (M1 §9.3:
 sentinel `0`, compile-time refusal in non-test builds) with the **decision rule frozen**
-(smallest `SEB` multiple ≥ the X-1 bound at the committed 10th percentile of the joint
-`(N_P, c)` stressnet read, exit-derived `N_t` per F-W5) and the value **sealed by the
-Phase 7.7 stressnet rate read** (`RELEASE_CHECKLIST.md` entry beside `K_COVER`/PF-9). Lemma,
-X-1 shape, X-2 form, the one-window pin, and `2 × SEB`'s structural (not X-1) argument
-survived review. **`draw_exit_gap` is unblocked, written against the sentinel** — compiles
-for testnet under explicit arming, refuses to ship unsealed.
+(smallest `SEB` multiple ≥ `max(` X-1 bound at the committed 10th percentile of the joint
+`(N_P, c)` stressnet read with exit-derived `N_t` per F-W5, `2 × SEB` `)`) and the value
+**sealed by the Phase 7.7 stressnet rate read** (`RELEASE_CHECKLIST.md` entry beside
+`K_COVER`/PF-9). F-W6 (round 3) — the `2 × SEB` structural argument made precise as **X-3**,
+a rate-independent anchor-merge lower bound derived from the quantization lemma (cohort
+windows overlap iff `W > SEB`; at `1 × SEB` the adversary partitions the crisis cohort by
+exit height, invisible to X-1), folded into the rule with its cost stated: the queue
+predicate's LHS acquires a hard `20_000` floor, making the F-W2 lever-vs-queue costing
+load-bearing in every measured world. Mixes-at-all, never "merged" (`50 %` mixed fraction at
+the cliff). Lemma, X-1 shape, X-2 form, and the one-window pin survived all rounds.
+**`draw_exit_gap` is unblocked, written against the sentinel** — compiles for testnet under
+explicit arming, refuses to ship unsealed.
 
 ### 12.7 F-D5 (routed out) and F-D6 (anti-drift pin)
 
@@ -2027,6 +2033,22 @@ for testnet under explicit arming, refuses to ship unsealed.
 ---
 
 ## Revision history
+
+- **2026-07-15 (F-D4 review round 3 — F-W6, X-3 anchor-merge bound):** Round 3 graded round
+  2's disposition of the `2 × SEB` structural argument: refusing a preference-shaped
+  `max(2 × SEB, …)` floor was correct (F-W1's error through the back door), but parking the
+  argument as tiebreak narrative was not — made precise it is a **derived bound**, from the
+  anchor-quantization lemma with no rate input: adjacent anchors sit `SEB` apart, cohort
+  windows overlap iff `W > SEB` (measure-zero at equality), so at `1 × SEB` the adversary
+  reads cohort membership off the exit height — a clean partition of the crisis cohort that
+  X-1 (background cover, not cohort integrity) never sees. Minted **X-3**
+  (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §5.2a) and folded into the §5.4 rule:
+  `W := smallest SEB multiple ≥ max((N_t − 1)/ρ_x, 2 × SEB)`. Carried with it: the coverage
+  boundary (2 × SEB *opens* the split — 50 % mixed fraction, continuous improvement, no
+  second cliff; the sweep's two-anchor arm grades the actual fraction) and the cost, stated
+  beside the benefit: the queue predicate's LHS gains a hard `20_000` floor in every
+  measured world, so the F-W2 lever-vs-queue costing no longer evaporates on a dense `ρ_x`
+  read. Sentinel, F-W4 percentile, F-W5 `N_t` obligation untouched.
 
 - **2026-07-15 (F-D4 review round 2 — F-W3/F-W4/F-W5, sentinel reshape):** Round 2 reviewed
   the round-1 amendment and found its `3 × SEB` fix repeated the category error: the X-1

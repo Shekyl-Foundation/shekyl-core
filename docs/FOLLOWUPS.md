@@ -1318,8 +1318,11 @@ sustainability is unaffected by the recalibration.
     cohort concentrated)
     ([`design/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`](./design/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md)
     §3 anchor-quantization lemma). The release-queue question is likewise
-    pre-committed as the §5.3 predicate `(N_t − 1)/ρ_x ≤ N_x·σ_L` — per
-    review round 1 (F-W2, doc §10) a **joint constraint over `(W, σ_L)`**,
+    pre-committed as the §5.3 predicate `max((N_t − 1)/ρ_x, 2 × SEB) ≤ N_x·σ_L`
+    (the X-3 anchor-merge floor, review round 3 F-W6, makes its LHS
+    rate-independent below `20_000` — the lever-vs-queue costing runs in
+    every measured world) — per review round 1 (F-W2, doc §10) a
+    **joint constraint over `(W, σ_L)`**,
     satisfiable either by the `σ_L` wallet-discipline lever or by the W8
     queue redesign; both are priced on the shared capital-idle axis before
     either commits (a decorrelation redesign, never a moved bar, per

@@ -1,10 +1,12 @@
 # F-D4 — the a-priori exit-window derivation (Gate-6 §12.6)
 
 **Status: committed a-priori 2026-07-15 — before any `draw_exit_gap` code exists and before any
-exit sweep runs. Review rounds 1–2 run same day (§10–§11): F-W2 reclassified `σ_L` as a design
+exit sweep runs. Review rounds 1–3 run same day (§10–§12): F-W2 reclassified `σ_L` as a design
 lever; F-W3 converted the genesis value to a `K_COVER`-pattern provisional sentinel with the
 decision rule frozen (§5.4) — the value is sealed by the Phase 7.7 stressnet rate read, not
-committed here.** This is the artifact Gate-6 §12.6 requires first in the F-D3/F-D4 build
+committed here; F-W6 folded the rate-independent X-3 anchor-merge bound (`W ≥ 2 × SEB`,
+§5.2a) into the frozen rule with its cost stated.** This is the artifact Gate-6 §12.6
+requires first in the F-D3/F-D4 build
 sequence, in the GF7_HOOKS §5.1 ordering: (a) derive the threshold and the window model from a
 stated adversary-advantage claim, (b) adversarial review of the rate model against the
 correlated-unbond adversary, (c) only then does the sweep run. A failed sweep is a
@@ -18,11 +20,12 @@ per-shard anchor) and `:627` (`Unbond`, whole-record anchor); landed with the bo
 **What this doc does and does not decide.** It commits: the anchor formula, the threshold, the
 regime split, the two-sided window model with its driving rates, the smear-or-delay answer as an
 a-priori lemma, the queue predicate that converts the swan-2/W8 open question into a decidable
-condition, and — per review round 2 (F-W3) — the **decision rule and conservatism percentile**
-that convert the Phase 7.7 stressnet rate read into the genesis window, with a provisional
-sentinel shipping in the interim. It does **not** commit a window value (not derivable
-pre-measurement, §5.4/§11) and it does **not** grade anything (grading is the R4 joint sweep,
-Gate-6 §12.8). `draw_exit_gap` is written against the sentinel (§9 step 2).
+condition, and — per review rounds 2–3 (F-W3/F-W6) — the **decision rule, its rate-independent
+X-3 floor, and the conservatism percentile** that convert the Phase 7.7 stressnet rate read
+into the genesis window, with a provisional sentinel shipping in the interim. It does **not**
+commit a window value (not derivable pre-measurement, §5.4/§11) and it does **not** grade
+anything (grading is the R4 joint sweep, Gate-6 §12.8). `draw_exit_gap` is written against the
+sentinel (§9 step 2).
 
 ---
 
@@ -187,8 +190,9 @@ undershoot, with the same disease (the number being steered). The conservatism l
 committed a-priori as a **percentile of the joint read** (§5.4), not as hand-picked marginals.
 
 An SEB-scale window has a second, structural benefit: it **smears the epoch-boundary
-quantization spike** (§3) across a full epoch and overlaps adjacent-epoch release populations,
-merging the `E`/`E − 1` two-anchor split into one mixed pool.
+quantization spike** (§3) across a full epoch. Whether it also *overlaps* adjacent-epoch
+release populations is a separate, sharper question with a rate-independent answer — X-3
+(§5.2a): overlap requires `W > SEB` at all, and even then coverage is partial, not merged.
 
 ### 5.2 X-2 upper bound (anti-isolation within the cohort)
 
@@ -210,13 +214,61 @@ L17-shaped trough cohort: bonded population 9–25, 30 % class-correlated exit �
 With `N_x = 5` and `σ_L` at a generous days-scale (`σ_L ≈ 2_000` blocks ≈ 2.8 days),
 `W ≲ 10_000`. With an hours-scale `σ_L` (`≈ 100` blocks), `W ≲ 500`.
 
-### 5.3 The queue predicate (the swan-2/W8 question, made decidable)
+### 5.2a X-3 — anchor-merge lower bound (rate-independent; review round 3)
 
-A single window satisfies both regimes iff
+*(Inserted by review round 3 as `5.2a`: §5.3/§5.4 are externally cited — Gate-6 §12.6,
+`RELEASE_CHECKLIST.md`, FOLLOWUPS — and do not renumber.)*
+
+The §3 lemma already contains a second lower bound, derivable with **no rate input at all**.
+Adjacent anchors sit exactly `SEB` apart (`H_close(E+2)`, `H_close(E+3)`, …). A cohort at
+anchor `A` occupies `[A, A + W]`; the next occupies `[A + SEB, A + SEB + W]`. They overlap iff
 
 ```
-(N_t − 1) / ρ_x   ≤   N_x × σ_L
+W > SEB
 ```
+
+At `W = 1 × SEB` the overlap is a single point — measure zero, **exactly disjoint**. The
+adversary then reads cohort membership straight off the exit height: every exit in
+`[A₁, A₁ + SEB)` is cohort `E − 1`, every exit after is cohort `E` — a clean partition of the
+crisis cohort, halving its anonymity set. **X-1 never sees this**, because X-1 grades
+steady-state background cover, not cohort integrity; a dense `ρ_x` read could satisfy X-1 at
+`1 × SEB` while cleanly splitting every straddling cohort. The smallest `SEB` multiple with
+`W > SEB` is `2 × SEB` — a cliff at exactly one place, geometric, not aesthetic:
+
+```
+X-3 (anchor-merge, rate-independent):   W ≥ 2 × SETTLEMENT_EPOCH_BLOCKS
+```
+
+**The coverage boundary — 2 × SEB opens the split, it does not close it.** At `W = 2 × SEB`
+the mixed fraction is `(W − SEB) / W = 50 %`: a cohort member landing in the first `SEB` of
+its range still has zero cross-anchor neighbours. Mixing improves continuously after the
+cliff (`(W − SEB) / W`), with no second cliff. X-3 is a **mixes-at-all** bound, never a
+*merged* bound — the §8 arm 2 two-anchor-split runs grade the actual mixed fraction at the
+straddle, and no sentence in this doc or its consumers may lean on "2 × SEB merges the
+split."
+
+**X-3's cost (the strongest argument against it, stated beside the argument for).** X-3
+tightens the §5.3 queue predicate: the LHS acquires a hard floor of `2 × SEB = 20_000`
+**regardless of measured rate**. At `N_x = 5` that demands `σ_L ≥ 4_000` blocks (≈ 5.6 days)
+even at the dense corner where X-1 alone would have been satisfied by `1 × SEB`. Before X-3,
+a dense `ρ_x` read could make the predicate pass and the whole `σ_L`/queue question
+evaporate; after X-3 it cannot — **the F-W2 lever-vs-queue costing is load-bearing in every
+measured world**, not only the thin ones. Weighed and accepted: a rate-independent partition
+of the crisis cohort is precisely the harm this mechanism exists to prevent, and discovering
+at seal time that `1 × SEB` cleared X-1 while splitting every straddling cohort would be the
+worse outcome. X-3 therefore enters the §5.4 decision rule as a derived bound — not a floor
+preferred by narrative.
+
+A single window satisfies all regimes iff both lower bounds (X-1 rate-driven, X-3
+anchor-merge) fit under the X-2 upper bound:
+
+```
+max( (N_t − 1) / ρ_x ,  2 × SEB )   ≤   N_x × σ_L
+```
+
+The X-3 term puts a hard floor of `20_000` on the LHS in every measured world (§5.2a cost
+paragraph) — the predicate can no longer evaporate on a dense `ρ_x` read, so the costing
+below runs unconditionally.
 
 **This is a joint constraint over `(W, σ_L)`, not a test the world passes or fails** (F-W2).
 `ρ_x`, `N_t`, `N_x` are measured (or wargame-read); `W` and `σ_L` are both *chosen* — `W` here,
@@ -276,13 +328,21 @@ prerequisite).
 **The decision rule, frozen a-priori (cheap today, expensive after the sweep):**
 
 1. **The rule:** given the measured `(ρ_x, N_x, σ_L)`,
-   `W := the smallest multiple of SETTLEMENT_EPOCH_BLOCKS ≥ (N_t − 1) / ρ_x` — keeps F-D6's
-   derive-from-named-consts and the §5.1 epoch-spanning/two-anchor-merging property. The
-   `2 × SEB` **structural** argument survives independently of X-1 (it merges the `E`/`E − 1`
-   split, pools adjacent-epoch cohorts, and is the natural `k = 2` if the queue fires): if the
-   measured bound lands at or below `2 × SEB`, `2 × SEB` wins on structure plus a real
-   measurement; if not, a larger multiple or the queue wins. Either way the number arrives
-   from the rate — never the rate at the number.
+
+   ```
+   W := the smallest multiple of SETTLEMENT_EPOCH_BLOCKS
+        ≥ max( (N_t − 1) / ρ_x ,  2 × SEB )
+   ```
+
+   The first term is the X-1 rate-driven bound (§5.1); the second is the X-3 anchor-merge
+   bound (§5.2a) — **derived** from the §3 lemma with no rate input, folded into the rule by
+   review round 3 (F-W6) rather than parked as a preference the seal could quietly invoke or
+   quietly drop. Keeps F-D6's derive-from-named-consts. Round 2 had held the `2 × SEB`
+   structural argument outside the rule as a tiebreak narrative; round 3 made it precise
+   (overlap iff `W > SEB`; measure-zero at equality) and a derived bound belongs in the rule
+   with its cost stated (§5.2a), not in the narrative. The rate still decides everything
+   above the geometric floor — the number arrives from the rate, never the rate at the
+   number.
 2. **The conservatism level (F-W4):** the bound is evaluated at a **committed percentile of
    the joint `(N_P, c)` read** — the **10th percentile of measured `ρ_x`** (the window clears
    the bound in ≥ 90 % of jointly-plausible scenarios). Not stacked marginal worst cases: the
@@ -357,7 +417,10 @@ partition event and takes a design round of its own.**
 2. **X-2 arm (the L17/W8 wargame — one obligation with this doc):** synchronized cohort
    (`N_x ∈ {3, 5, 8}`, both one-anchor and two-anchor splits per §3), swept `σ_L`; grade
    intra-cohort assignment advantage. This arm empirically answers smear-vs-delay and supplies
-   the measured inputs for the §5.3 joint-constraint costing (lever vs queue).
+   the measured inputs for the §5.3 joint-constraint costing (lever vs queue). The two-anchor
+   runs additionally grade the **X-3 coverage boundary**: measured cross-anchor mixing at the
+   straddle against the predicted mixed fraction `(W − SEB) / W` (§5.2a) — the arm certifies
+   *mixes-at-all* and reports the fraction; it never certifies "merged".
 3. **Shared-trigger negative control (§12.5 pin):** a cohort with the draw *disabled* (or
    window collapsed) must be **caught** as clustered — clustering-detection, not the entry's
    inversion-detection; a harness that cannot fail this control certifies nothing.
@@ -370,8 +433,8 @@ partition event and takes a design round of its own.**
 ## 9. Build order after this doc
 
 1. Adversarial review of §5's rate model against the correlated-unbond adversary (the step
-   gating any code). **Round 1 run 2026-07-15 (F-W1/F-W2); round 2 run same day (F-W3/F-W4/
-   F-W5) — resolved by the §5.4 sentinel + frozen-rule reshape (§10).**
+   gating any code). **Rounds 1–3 run 2026-07-15 (F-W1/F-W2; F-W3/F-W4/F-W5; F-W6) —
+   resolved by the §5.4 sentinel + frozen-rule reshape and the §5.2a X-3 fold-in (§10–§12).**
 2. `draw_exit_gap` in `shekyl-standoff`, **written against the provisional sentinel** (§5.4):
    one-sided `bounded_uniform`, typed `ExitGap`, golden vector on the aarch64 lane,
    F-D6-derived anchor, conformance + §8.3 negative control; compile-refusal wiring per the
@@ -452,6 +515,43 @@ corrected a point *within* the same mistake. Three findings, resolved by the §5
 **`draw_exit_gap` is unblocked** — written against the sentinel per §5.4, compiling for
 testnet under explicit arming, refusing to ship until the read seals the value. F-D3's
 mechanism lands now; the one thing that genuinely cannot be known yet stays honestly unknown.
+
+## 12. Review round 3 (2026-07-15) — the structural argument is a derived bound, not narrative
+
+Round 3 reviewed the round-2 disposition that parked the `2 × SEB` structural argument
+outside the rule as a tiebreak narrative. Both halves of that disposition were graded: the
+**refusal** to bolt a `max(2 × SEB, …)` floor onto the rule as a preference was correct —
+that would have been F-W1's error re-imported (a number we like, wearing the rule's clothes).
+The **parking** was not: made precise, the structural argument needs no preference because it
+is **derivable** — from the §3 lemma alone, with no rate input (F-W6).
+
+- **F-W6 (resolved — X-3 minted and folded in):** adjacent anchors sit exactly `SEB` apart;
+  cohort windows overlap iff `W > SEB`; at `W = 1 × SEB` the overlap is measure-zero and the
+  adversary reads cohort membership straight off the exit height — a clean partition of the
+  crisis cohort that **X-1 never sees** (X-1 grades background cover, not cohort integrity).
+  The smallest `SEB` multiple past the cliff is `2 × SEB`. Registered as **X-3** (§5.2a) and
+  folded into the §5.4 rule as `max((N_t − 1)/ρ_x, 2 × SEB)` — in the rule with its cost
+  stated, not in the narrative where it could be quietly invoked or quietly dropped. Two
+  precision pins carried with it:
+  - **Mixes-at-all, never merged:** at `W = 2 × SEB` the mixed fraction is only
+    `(W − SEB)/W = 50 %`, improving continuously with no second cliff; the §8 arm 2
+    two-anchor runs grade the actual fraction at the straddle.
+  - **The cost, recorded beside the benefit:** the §5.3 predicate's LHS acquires a hard
+    `20_000` floor in every measured world — a dense `ρ_x` read can no longer make the
+    `σ_L`/queue question evaporate, so the F-W2 costing is unavoidable. This is the
+    strongest argument against X-3; it was weighed and accepted because a rate-independent
+    partition of the crisis cohort is precisely the harm the mechanism exists to prevent,
+    and discovering the split at seal time would be the worse outcome.
+- **Round-2 residue swept:** §5.1's "merging the two-anchor split into one mixed pool"
+  overclaim corrected to the §5.2a mixes-at-all form; §5.4 rule 1 rewritten from
+  narrative-tiebreak to the two-term `max`; the §11 "survives round 2" characterization of
+  the structural argument ("may win at the seal on structure plus measurement") is
+  superseded by this round — the bound now participates in every seal, not only favorable
+  ones.
+
+The sentinel, the F-W4 percentile commitment, and the F-W5 `N_t` obligation are untouched by
+this round. `draw_exit_gap` remains unblocked; the seal rule it refuses against is now the
+two-term form.
 
 ## Related documents
 

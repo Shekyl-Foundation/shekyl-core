@@ -4,6 +4,28 @@
 
 ### Added
 
+- **docs: F-D4 review round 3 — F-W6: X-3 anchor-merge bound folded into
+  the frozen rule (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §5.2a/§12).**
+  Round 2 had parked the `2 × SEB` structural argument as a tiebreak
+  narrative; round 3 made it precise — it is a **derived bound**, from
+  the §3 quantization lemma with no rate input: adjacent anchors sit
+  `SEB` apart, cohort windows overlap iff `W > SEB` (measure-zero at
+  equality), so at `1 × SEB` the adversary partitions a straddling
+  crisis cohort by exit height — invisible to X-1, which grades
+  background cover, not cohort integrity. Minted X-3
+  (`W ≥ 2 × SETTLEMENT_EPOCH_BLOCKS`); the §5.4 rule is now
+  `W := smallest SEB multiple ≥ max((N_t − 1)/ρ_x, 2 × SEB)`. Carried
+  with it: the coverage boundary (2 × SEB *opens* the split — 50 %
+  mixed fraction at the cliff, continuous improvement, no second cliff;
+  the §8 two-anchor arm grades the actual fraction; nothing may claim
+  "merged") and the cost stated beside the benefit (the §5.3 queue
+  predicate gains a hard `20_000` LHS floor in every measured world, so
+  the F-W2 lever-vs-queue costing no longer evaporates on a dense `ρ_x`
+  read). A preference-shaped `max()` floor was refused; the derived
+  bound is what earned rule entry. Gate-6 §12.6, `RELEASE_CHECKLIST.md`
+  seal entry, index X-/F-W/Round-N rows, and FOLLOWUPS swan-2/W8 swept
+  to the two-term form.
+
 - **docs: F-D4 review round 2 — F-W3/F-W4/F-W5: the window value is not
   derivable pre-measurement; sentinel + frozen decision rule
   (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §5.4/§11).** F-W3 (blocking):
