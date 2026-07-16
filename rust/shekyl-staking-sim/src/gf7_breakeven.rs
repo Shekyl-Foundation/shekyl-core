@@ -68,7 +68,7 @@
 
 use serde::Serialize;
 
-use crate::gf7_timeline::{grade, ArmResult, SynthParams, RATIO_BOUND};
+use crate::gf7_timeline::{grade, ArmResult, SynthParams, NOMINAL_COVER_N, RATIO_BOUND};
 use crate::standoff::SplitMix64;
 
 /// Positive-control pass floor (same bar as the measurement round §5).
@@ -77,8 +77,10 @@ const POSITIVE_CONTROL_MIN: f64 = 0.80;
 /// Negative-control tolerance (same bar as the measurement round §5).
 const NEGATIVE_CONTROL_TOL: f64 = 0.05;
 
-/// The swept cover levels. `10` is the nominal gate point (the `1.86` row);
-/// the sweep brackets it both ways so the direction of `r(N)` is measured,
+/// The swept cover levels. `NOMINAL_COVER_N` (10) is the nominal gate point
+/// (the `1.86` row) and must appear in the sweep — `run_breakeven` asserts it,
+/// since the parity identity and the WI-4 continuity claim both anchor there.
+/// The sweep brackets it both ways so the direction of `r(N)` is measured,
 /// never assumed — the ratio's small-`N` cap means degradation may express as
 /// rising absolute linkage rather than rising ratio.
 const COVER_LEVELS: [usize; 12] = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16];
@@ -108,8 +110,9 @@ pub struct BreakevenRow {
 pub struct BreakevenReport {
     pub ratio_bound: f64,
     pub trials: u32,
-    /// The nominal gate point (`n = 10`) restated from this run, for
-    /// continuity with the WI-4 verdict row.
+    /// The nominal gate point (`NOMINAL_COVER_N`, shared with the measurement
+    /// round's `RunConfig`) restated from this run, for continuity with the
+    /// WI-4 verdict row.
     pub nominal_n: usize,
     /// The ratio bar evaluated at nominal cover: `RATIO_BOUND / nominal_n`
     /// (= `0.2` at `N = 10`). **Back-derived arithmetic, not a committed
@@ -179,6 +182,11 @@ fn controls_valid_at(n: usize, trials: u32, rng: &mut SplitMix64) -> bool {
 const SPLITMIX_GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
 
 fn run_breakeven(trials: u32, seed: u64) -> BreakevenReport {
+    assert!(
+        COVER_LEVELS.contains(&NOMINAL_COVER_N),
+        "COVER_LEVELS must include the nominal gate point (NOMINAL_COVER_N = \
+         {NOMINAL_COVER_N}) — the parity identity and the WI-4 continuity claim anchor there",
+    );
     let posture = SynthParams::posture();
 
     let rows: Vec<BreakevenRow> = COVER_LEVELS
@@ -222,8 +230,7 @@ fn run_breakeven(trials: u32, seed: u64) -> BreakevenReport {
         .filter(|r| r.controls_valid && r.clears_bound)
         .min_by_key(|r| r.n);
 
-    let nominal_n = 10usize;
-    let nominal_exposure_identity = RATIO_BOUND / nominal_n as f64;
+    let nominal_exposure_identity = RATIO_BOUND / NOMINAL_COVER_N as f64;
     let nominal_parity = rows
         .iter()
         .filter(|r| r.controls_valid && r.worst_p_link <= nominal_exposure_identity)
@@ -232,7 +239,7 @@ fn run_breakeven(trials: u32, seed: u64) -> BreakevenReport {
     BreakevenReport {
         ratio_bound: RATIO_BOUND,
         trials,
-        nominal_n,
+        nominal_n: NOMINAL_COVER_N,
         nominal_exposure_identity,
         ratio_threshold_n: ratio_threshold.map(|r| r.n),
         nominal_parity: nominal_parity.map(|r| ParityPoint {
