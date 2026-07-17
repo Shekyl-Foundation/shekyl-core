@@ -24,7 +24,9 @@ deletion is a separate PR whose reviewer-map is §15.4 item 1.**
 the principal↔user crossing (WI-4 §18.13); the four-axis joint grade dissolves by axis
 attrition; the §16.4 funding default is accepted (F-D2-class); the harness fork resolves
 to deleted (never landed, not resurrected). The mechanism-deletion PR is unblocked at
-§15.4 item 1's reviewer-map scope. This doc is closed as an archival record. RATIFIED
+§15.4 item 1's reviewer-map scope — **LANDED 2026-07-17** (inventory at the §15.4
+item 1 landing update; the tripwire and re-run template stand unchanged). This doc is
+closed as an archival record. RATIFIED
 (same day, night) with one amendment: the dissolution's fourth axis — output-count — had
 been silently omitted from the draft's walk and was added at ratification as F-W10,
 phantom on the same grounds as `T` (under FCMP++ the drain is not an identifiable
@@ -1043,6 +1045,21 @@ harness fork resolves to **deleted, not re-parameterized** (the re-homed seam's 
 is the S-2 ledger, and a rate model over counterparty arrivals fails the §15.8 filter —
 Gate-6 §12.9 decision 5); "not resurrected" is now the final state, and the
 mechanism-deletion PR is unblocked at item 1's reviewer-map scope.
+**UPDATE 2026-07-17: the mechanism-deletion PR LANDED at item 1's reviewer-map scope.**
+Removed: `shekyl-standoff/src/exit.rs` wholesale (`draw_exit_gap`, `ExitGap`,
+`ExitGapWindow`, `DEFAULT_EXIT_GAP_WINDOW` sentinel + tripwire), both features
+(`provisional-exit-gap-window`, `exit-window-kat`) with every consumer acknowledgment
+line (`shekyl-engine-core`, `shekyl-staking-sim`, the crate's own dev-graph line), the
+exit arms in `conformance.rs` (`grade_exit_sample` / `certify_exit_draw` /
+`exit_release_population` / `ExitCertifyReport`), and the golden-vector/seal-tripwire
+tests (`tests/exit_golden_vector.rs` + the five exit arms in `conformance_grading.rs`).
+Out-of-scope confirmations: `release_cooldown_anchor_height` (F-D6) and
+`release_cooldown_elapsed` (enforced consensus) untouched — the F-D6 anchor's doc
+comment re-anchored on its own anti-drift/slashability grounds, no longer naming the
+deleted consumer. The §15.4 tripwire (this section) and the archived re-run template
+are unchanged, as decision 5 requires. The sentinel was deleted having **never shipped
+a value** — the full `K_COVER`-pattern vindication (§15.7) is now complete through the
+deletion arm.
 
 ### 15.5 The gate question (HANDED FORWARD to Gate-6 R4, audit attached — 2026-07-16)
 

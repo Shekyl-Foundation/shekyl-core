@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **standoff: F-D4 exit-standoff mechanism deleted at Gate-6 §12.9
+  decision 5's scope** (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §15.4
+  item 1 reviewer-map). The round-4 premise audit found the channel the
+  mechanism decorrelates against unpopulated (F-W7: no on-chain
+  principal-side re-appearance observable), and the R4 decision round
+  re-homed the exit seam to the off-chain principal↔user crossing, whose
+  instrument is the S-2 ledger — so the apparatus guards nothing and is
+  audit surface (rule 15). Removed: `shekyl-standoff/src/exit.rs`
+  wholesale (`draw_exit_gap`, `ExitGap`, `ExitGapWindow`, the
+  `DEFAULT_EXIT_GAP_WINDOW` sentinel + compile-refusal + seal tripwire),
+  the `provisional-exit-gap-window` and `exit-window-kat` features with
+  every consumer acknowledgment line (`shekyl-engine-core`,
+  `shekyl-staking-sim`, the crate's own dev-graph line), the exit arms in
+  `conformance.rs` (`grade_exit_sample`, `certify_exit_draw`,
+  `exit_release_population`, `ExitCertifyReport`), and the exit tests
+  (`tests/exit_golden_vector.rs`; five arms in
+  `conformance_grading.rs`). Out of scope, untouched:
+  `release_cooldown_anchor_height` (F-D6 — anti-drift/slashability,
+  predates the audit; its doc comment re-anchored on its own grounds)
+  and `release_cooldown_elapsed` (enforced consensus). The F-D4 §15.4
+  tripwire and archived re-run template are unchanged; the sentinel was
+  deleted having never shipped a value (the `K_COVER` pattern's
+  vindication, F-D4 §15.7, now complete through the deletion arm). R4's
+  re-formed close condition (iii) is satisfied.
+
 ### Added
 
 - **docs: Gate-6 method note 5 extended — the generative pattern named

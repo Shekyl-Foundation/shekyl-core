@@ -45,9 +45,10 @@
   CryptoNote-lineage carry never re-walked across the crypto change) — and GF-10 grades
   standalone (decision 3); the F-D4 §16.4 funding
   default is **accepted** as F-D2-class (self-fund default, loud override routed through the entry
-  standoff); the exit-standoff mechanism deletion PR is scoped (decision 5 — `exit.rs` wholesale;
-  F-D6 and `release_cooldown_elapsed` out of scope). R4's re-formed close: F-D1 + F-D2 (incl. the
-  funding default) + the deletion PR + F-D5's §14.4 disposition.
+standoff); the exit-standoff mechanism deletion PR is scoped (decision 5 — `exit.rs` wholesale;
+F-D6 and `release_cooldown_elapsed` out of scope) — **landed 2026-07-17** (close condition (iii)
+satisfied). R4's re-formed close: F-D1 + F-D2 (incl. the
+funding default) + ~~the deletion PR~~ *(landed)* + F-D5's §14.4 disposition.
 - **Round 5 planned** — the cross-layer soundness sign-off for Stage 3 (S-2 exposure ledger + S-3
   exit/value-seam adversary sim, §10.12).
 
@@ -455,7 +456,7 @@ carried; R2 the same).
 | **1** | HKDF/`P_id` wire + crypto layer hooks | **Closed (2026-06-13)** — §9 GF-1 dual-key verifier contract resolved; GF-2 dual-scan enforcement made architectural; reviewer sign-off (§9.8). **Carry discharged (2026-07-11 reconciliation):** `ARCHIVAL_P_DERIVE_V1` KAT + `archival_p` module **landed** (Bond-PR 0 #152; `archival_p.rs` + `kat_archival_p_derive_v1.rs`, seven §9.3 labels incl. `bond_spend_*` verified at source). C-1 emission vin ML-DSA equality check **landed** (#277). §7 checklist reconciled to landed state. |
 | **2** | Network + transport (L16 → production shape) | **Closed (2026-07-11) — §10; closure disposition §10.13.** Rendezvous path specified; seeding relaxation bounded. **Entry gates (all dispositioned):** challenge-response Levin class → anonymity-routable set (GF-3, §10.4); pre-join backing-presentation transport (GF-5, §10.5); Arti HS-hosting capability confirmed, at-source pin carried (GF-12, §10.3); `P`-tx wire-size fingerprint characterization + dummy/fragmentation policy (GF-6, §10.6); HS key lifecycle `p_slot`-bound + seed-derived (GF-9, §10.7). **Exit dispositions (§10.11, passes 1–4):** bonded-verifier challenges, broadcast announce, `P`↔principal circuit/guard isolation (§10.9), pure-rendezvous + I2P-closed. **Carries (§10.13, rule-21):** at-source Arti pin → transport PR; dummy/frag tuned ratio → testnet; **GF-9 HS-id HKDF label → §9.3 amendment (armed: not yet in derivation; dot-vs-hyphen format flag)**; announce↔anchor + cadence timing → R3. Transport code partial-landed (2d-2: SP-T1 #204/#209, SP-T4a #254 — inert). |
 | **3** | Timing + rotation + `W` / epoch-length joint pin | **Designed + adversarial pass run (2026-07-11) — §11; closes on the R4/GF-4 joint grade (§11.7).** **GF-10** pinned as *mechanism + structural window* (uniform-independent claim-broadcast-height draw via audited `bounded_uniform`; floor = `h_close + reorg_depth(720)`, ceiling = `(E_oldest+W)·SEB − submit_guard`; a-priori `S_min ≥ SEB`); **numeric width routed to R4/GF-4 CB-3 joint grade** (not standalone — per-axis error avoided). Draw + scheduler **unbuilt** (verified) → pinned pre-code, M1-armed. Rotation leg ratified (T-A1 timeline non-channel; network leg §10.7/§10.9); R2 timing hand-forwards resolved (announce↔anchor = entry standoff; emission-cadence = GF-10). Adversarial pass (§11.8) found no break — four findings folded as re-pins, one retraction (max-age misread). Two frame/pass assumptions overturned at source (epoch-crossing §11.4; max-age semantics §11.8). UPDATE 2026-07-16 (§12.9 decision 3): the R4 joint grade **dissolved by axis attrition** — GF-10's width now grades **standalone** against the §11.5 pre-committed advantage claim (mechanism-class, method note 3); R3 closes when that grade runs. |
-| **4** | Output + bond-funding hygiene (**recurring** — rebond/unbond at genesis) | **Drafted (2026-07-11) — §12, the drain-event firewall.** **GF-7 (funding-in) built + graded PROVISIONAL-PASS** (`r = 1.86`, local-daemon; standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) provisional) — not an open design question. **GF-4 (value-out) drafted:** the drain is one event, three co-triggered channels graded jointly (§12.1). **F-D1** drain-amount taint-carve — complete pre-code pin ((a)+strip; strip `{lineage,epoch,height}` + aggregate-scalar amount stage; §12.3); **F-D2** UI-default (§12.4); **F-D3/F-D4** one-sided cooldown-anchored exit standoff — **FSM gate FIRED 2026-07-15** (§12.5–12.6; `bond_post.rs:369`/`:627`); **F-D5** quantization → §14.4; **F-D6** anti-drift derive-don't-hardcode (§12.7). GF-10 (R3) folds into the joint grade. UPDATE 2026-07-15: both former blockers discharged — the rebond/unbond FSM landed (PR #303 `HoldingsUpdate`/`Unbond` + Pin-4/Pin-5 closure 2026-07-14; PR #307 `Rebond`) and the age-stratified sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18). F-D3/F-D4 open for build: F-D4 a-priori window derivation first (committed before any sweep runs, §12.6), then `draw_exit_gap` (§12.5) with the F-D6 derived anchor. UPDATE 2026-07-16: derivation committed + reviewed (rounds 1–3, sentinel + frozen rule); **`draw_exit_gap` BUILT** against the sentinel with the F-D6 anchor derived (`release_cooldown_anchor_height`) — F-W5 `N_t` re-derivation, sweep, and Phase 7.7 seal remain. UPDATE 2026-07-16 (later): round-4 premise audit RATIFIED deletion-with-tripwire (F-D4 §15.4 — the timing channel's observable is phantom, F-W7/F-W8; the seal obligation is removed, the sentinel never shipped a value); F-W9 bounded the repetition premise (F-D4 §16). **R4 decision round run + RATIFIED (§12.9):** exit seam **re-homed** to the principal↔user crossing (WI-4 §18.13); joint grade **dissolved by four-axis attrition** (ratification added the fourth row: **F-W10 — output-count phantom**, the drain is not an identifiable transaction under FCMP++; §2.4's CryptoNote-lineage pin retired, method note 5); §16.4 funding default **accepted** (F-D2-class); deletion PR scoped (`exit.rs` wholesale; F-D6 + consensus predicate out of scope). Re-formed close: F-D1 + F-D2 (incl. funding default) + deletion PR + F-D5 §14.4 disposition. |
+| **4** | Output + bond-funding hygiene (**recurring** — rebond/unbond at genesis) | **Drafted (2026-07-11) — §12, the drain-event firewall.** **GF-7 (funding-in) built + graded PROVISIONAL-PASS** (`r = 1.86`, local-daemon; standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) provisional) — not an open design question. **GF-4 (value-out) drafted:** the drain is one event, three co-triggered channels graded jointly (§12.1). **F-D1** drain-amount taint-carve — complete pre-code pin ((a)+strip; strip `{lineage,epoch,height}` + aggregate-scalar amount stage; §12.3); **F-D2** UI-default (§12.4); **F-D3/F-D4** one-sided cooldown-anchored exit standoff — **FSM gate FIRED 2026-07-15** (§12.5–12.6; `bond_post.rs:369`/`:627`); **F-D5** quantization → §14.4; **F-D6** anti-drift derive-don't-hardcode (§12.7). GF-10 (R3) folds into the joint grade. UPDATE 2026-07-15: both former blockers discharged — the rebond/unbond FSM landed (PR #303 `HoldingsUpdate`/`Unbond` + Pin-4/Pin-5 closure 2026-07-14; PR #307 `Rebond`) and the age-stratified sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18). F-D3/F-D4 open for build: F-D4 a-priori window derivation first (committed before any sweep runs, §12.6), then `draw_exit_gap` (§12.5) with the F-D6 derived anchor. UPDATE 2026-07-16: derivation committed + reviewed (rounds 1–3, sentinel + frozen rule); **`draw_exit_gap` BUILT** against the sentinel with the F-D6 anchor derived (`release_cooldown_anchor_height`) — F-W5 `N_t` re-derivation, sweep, and Phase 7.7 seal remain. UPDATE 2026-07-16 (later): round-4 premise audit RATIFIED deletion-with-tripwire (F-D4 §15.4 — the timing channel's observable is phantom, F-W7/F-W8; the seal obligation is removed, the sentinel never shipped a value); F-W9 bounded the repetition premise (F-D4 §16). **R4 decision round run + RATIFIED (§12.9):** exit seam **re-homed** to the principal↔user crossing (WI-4 §18.13); joint grade **dissolved by four-axis attrition** (ratification added the fourth row: **F-W10 — output-count phantom**, the drain is not an identifiable transaction under FCMP++; §2.4's CryptoNote-lineage pin retired, method note 5); §16.4 funding default **accepted** (F-D2-class); deletion PR scoped (`exit.rs` wholesale; F-D6 + consensus predicate out of scope). Re-formed close: F-D1 + F-D2 (incl. funding default) + deletion PR + F-D5 §14.4 disposition. UPDATE 2026-07-17: the **deletion PR landed** at decision 5's scope — close condition (iii) satisfied; remaining: F-D1, F-D2 (incl. funding default), F-D5 §14.4 disposition. |
 | **5** | Cross-layer adversarial pass | **Planned.** Soundness-depth sign-off for Stage 3. Build the S-2 fused exposure ledger (first) + the S-3 exit/value-seam adversary sim (§10.12), then sign off. |
 
 **Parallel (not gated on gate-6 closure):** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
@@ -1663,7 +1664,9 @@ symbol** anywhere under `rust/`, and `ARCHIVAL_TIMING_CONSTANTS.md` §7 still li
 before the identifier exists (the M1 discipline; [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)).
 (UPDATE 2026-07-16: `draw_exit_gap` now exists — F-D3, §12.5, `shekyl-standoff/src/exit.rs` —
 but it is the *exit-seam* draw, not GF-10's claim jitter; the claim-jitter symbol remains absent
-and this pin's status is unchanged.)
+and this pin's status is unchanged. UPDATE 2026-07-17: `draw_exit_gap` deleted with the F-D4
+exit mechanism — §12.9 decision 5 — so the 2026-07-11 source read is true again verbatim:
+`shekyl-standoff` exposes `draw_entry_gap` only. This pin's status remains unchanged.)
 
 **Mechanism (pinned):**
 
@@ -2174,6 +2177,12 @@ trigger is catastrophic, `16→1.01`."
   stand on slashability/anti-drift reasons). The seal entry is removed from
   `RELEASE_CHECKLIST.md`; nothing was ever shipped — the F-W3 sentinel held the system frozen
   in the correct state by construction (F-D4 §15.7).
+- **UPDATE 2026-07-17 — DELETED (the decision-5 PR landed).** Everything the BUILT update
+  above describes is removed at the §12.9 decision-5 scope: `exit.rs` wholesale, both
+  features with every consumer acknowledgment line, the conformance exit arms, and the
+  golden-vector/seal-tripwire tests (inventory at F-D4 §15.4 item 1's landing update). The
+  F-D6 anchor and `release_cooldown_elapsed` stand, out of scope. This section is archival
+  from here.
 
 ### 12.6 F-D4 — a-priori exit window (activation FIRED with F-D3, 2026-07-15)
 
@@ -2512,12 +2521,15 @@ shared-trigger conformance arm — plus its exports and conformance references
 (reviewer-map: F-D4 §15.4 item 1). **Out of scope:** `release_cooldown_anchor_height`
 (F-D6 — anti-drift/slashability, predates the audit), `release_cooldown_elapsed`
 (enforced consensus), everything entry-side. The F-D4 §15.4 tripwire and its archived
-re-run template are unchanged.
+re-run template are unchanged. **UPDATE 2026-07-17: LANDED at exactly this scope**
+(deletion inventory recorded at F-D4 §15.4 item 1's landing update; both features and
+every consumer acknowledgment line went with the mechanism, and the F-D6 anchor's doc
+comment was re-anchored on its own grounds).
 
 **The re-formed close condition (supersedes the §12.8 line):** R4 closes when (i) F-D1
 lands with both arms, (ii) F-D2 lands with the §12.9-decision-4 funding default folded
-in, (iii) the deletion PR lands at decision 5's scope, and (iv) F-D5's §14.4 disposition
-is recorded (unchanged). The S-2 build is **R5's opening item**, not an R4 close
+in, (iii) the deletion PR lands at decision 5's scope (**satisfied 2026-07-17**), and
+(iv) F-D5's §14.4 disposition is recorded (unchanged). The S-2 build is **R5's opening item**, not an R4 close
 condition — but R5 inherits it with F-W9's finite domain and the §16.3 re-formed
 cross-persona job (linking-key search, pre-registered as code). GF-7's PROVISIONAL-PASS
 and its five standing conditionals are untouched by this round.
@@ -2539,6 +2551,15 @@ and its five standing conditionals are untouched by this round.
 
 ## Revision history
 
+- **2026-07-17 (decision-5 mechanism-deletion PR landed):** the F-D4 exit-standoff
+  mechanism removed at exactly the §12.9 decision-5 scope — `shekyl-standoff/src/exit.rs`
+  wholesale, the `provisional-exit-gap-window` + `exit-window-kat` features with every
+  consumer acknowledgment line, the conformance exit arms, and the exit tests; F-D6
+  anchor + `release_cooldown_elapsed` untouched (out of scope), the F-D6 anchor's doc
+  comment re-anchored on its own anti-drift/slashability grounds. R4's re-formed close
+  condition (iii) satisfied (§12.9); §12.5 marked archival; the GF-10 source-read
+  parenthetical (§11.5) updated — `shekyl-standoff` exposes `draw_entry_gap` only,
+  again verbatim. Inventory at F-D4 §15.4 item 1's landing update.
 - **2026-07-16 (night — method note 5 extended: the generative pattern + first
   application; §2.4's other two carries re-walked):** F-W10 was recognized at
   ratification review as the **fifth instance of one failure** — phantom `T` (F-W7),
