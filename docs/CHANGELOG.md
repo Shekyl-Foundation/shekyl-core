@@ -25,6 +25,13 @@
   recorded plainly. The lifetime-aggregate band registers as an R5 S-2
   ledger row either way. Every propagation site carries a dated
   annotation (Gate-6 header/§11.7/§12/§12.7/§12.8/§12.9, index rows).
+  The failure shape got its own record — **Gate-6 §11.8 method note 6**:
+  the referent was minted by summarization (WI-4 never wrote it; the
+  index row and Gate-6 prose joined two true routings into a false one
+  that survives verification-by-grep because both halves check out
+  separately). Distinct from method note 5's five instances; the rule:
+  summary-cited routing targets verify against the source document's own
+  words, and a summary that joins two source claims is a new claim.
 
 ### Removed
 

@@ -2001,6 +2001,24 @@ tail retires with F-W10). The §2.1 crypto-layer carry ("carry from V3 / PHASE_2
 checked in passing: its content is key derivation and scan separation — creation-side
 mechanisms with no graph presupposition — and stands without amendment.
 
+**Method note 6 (adopted 2026-07-17, from the F-D5 "§14.4 economics" finding — a failure
+shape distinct from note 5's five instances): a referent can be minted by summarization.**
+"GF-4/§14.4 economics" was not an inherited pin, not a phantom observable, not a stale
+row — at source, everyone wrote something right. WI-4 routed *quantization* to a GF-4-round
+design candidate (§18.10 R-3) and routed its *strata + lifetime* riders to the §14.4
+partition arm (discharged with that arm, PR #291). Both referents were real. The fusion
+happened at the summary layer: the index's WI-4 row and this doc's §11.7/§12 prose
+concatenated the two into "GF-4/§14.4 economics" — a round that never existed — and three
+documents then cited it as authoritative; R4's close condition (iv) was ratified against
+it (found undischargeable 2026-07-17, §12.7 charter). The shape is dangerous precisely
+because it survives verification-by-grep: **both halves check out if you grep them
+separately** — the grep confirms the parts and never tests the join. The check is
+source-first over summaries, stated as a rule: a routing target cited from a summary
+surface (an index row, a status cell, a close-condition clause, a §-header digest)
+verifies against the source document's own words before anything is dispositioned
+against it — and a summary that joins two source claims into one is a **new claim**,
+carrying a new claim's burden of proof.
+
 ---
 
 ## 12. Round 4 — output + bond-funding hygiene: the drain-event firewall (OPEN — drafted 2026-07-11)
@@ -2265,7 +2283,13 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   #291) — while WI-4 routed *quantization* to "a GF-4-round design candidate" (§18.10 R-3, grid
   width a-priori derived). The fusion "GF-4/§14.4 economics" first appears in the index's WI-4
   row summary and this doc's §11.7/§12 prose, and propagated into R4's close condition as though
-  it named a real round. Close condition (iv) as ratified was undischargeable.
+  it named a real round. Close condition (iv) as ratified was undischargeable. Note the shape:
+  **not a dangling pointer at source — WI-4 never wrote it** — but a referent minted at the
+  summary layer by joining two true routings into a false one, which then read as authoritative
+  because both halves check out if grepped separately. Distinct from method note 5's five
+  instances (no inherited pin, no phantom observable); recorded as **§11.8 method note 6**:
+  summary-cited routing targets verify against the source document's own words, and a summary
+  that joins two source claims is a new claim.
 
   **F-D5 survives the substance filters that killed the rest of this track.** Its observer is the
   off-chain counterparty who receives a drain payment (real, not phantom — F-W7's failure mode
