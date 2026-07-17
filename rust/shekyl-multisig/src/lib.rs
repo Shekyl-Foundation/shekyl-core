@@ -31,12 +31,17 @@
 //! typestates — lands in this crate under MS-5; the format modules below are its
 //! substrate.
 
+pub mod ceremony;
 pub mod encryption;
 pub mod group_descriptor;
 pub mod intent;
 pub mod invariants;
 pub mod messages;
 
+pub use ceremony::{
+    CeremonyError, ConsumedNonce, FrostCeremony, NonceCounterError, NonceCounterSink, SpendRequest,
+    SpendResponse,
+};
 pub use encryption::{decrypt_payload, encrypt_payload, EncryptionError};
 pub use group_descriptor::{GroupDescriptor, GroupDescriptorError};
 pub use intent::{
