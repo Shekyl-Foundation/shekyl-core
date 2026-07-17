@@ -11,8 +11,6 @@
 pub mod attribution;
 pub mod consensus_constants;
 pub mod engine;
-#[cfg(feature = "multisig")]
-pub mod multisig;
 pub mod outbound_label;
 pub mod scan;
 

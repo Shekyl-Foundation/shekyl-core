@@ -11,13 +11,6 @@ use serde::{Deserialize, Serialize};
 /// File format version.
 pub const GROUP_DESCRIPTOR_VERSION: u8 = 1;
 
-/// A relay entry in the group descriptor.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RelayEntry {
-    pub url: String,
-    pub operator_id: String,
-}
-
 /// Group descriptor: everything needed to restore a multisig group.
 ///
 /// This is the "descriptor" file — one file, importable into any
@@ -31,7 +24,6 @@ pub struct GroupDescriptor {
     pub spend_auth_version: u8,
     pub participant_pubkeys: Vec<String>,
     pub address_fingerprint: String,
-    pub relays: Vec<RelayEntry>,
     pub created_at: u64,
     pub notes: Option<String>,
 }
@@ -53,7 +45,6 @@ impl GroupDescriptor {
             spend_auth_version,
             participant_pubkeys,
             address_fingerprint,
-            relays: Vec::new(),
             created_at: 0,
             notes: None,
         }
@@ -125,16 +116,6 @@ mod tests {
             spend_auth_version: 2,
             participant_pubkeys: vec!["pk1".into(), "pk2".into(), "pk3".into()],
             address_fingerprint: "deadbeef".into(),
-            relays: vec![
-                RelayEntry {
-                    url: "wss://relay1.example.com".into(),
-                    operator_id: "op1".into(),
-                },
-                RelayEntry {
-                    url: "wss://relay2.example.com".into(),
-                    operator_id: "op2".into(),
-                },
-            ],
             created_at: 1713000000,
             notes: Some("Test group".into()),
         }
@@ -149,7 +130,6 @@ mod tests {
         assert_eq!(parsed.m_required, 2);
         assert_eq!(parsed.n_total, 3);
         assert_eq!(parsed.participant_pubkeys.len(), 3);
-        assert_eq!(parsed.relays.len(), 2);
     }
 
     #[test]

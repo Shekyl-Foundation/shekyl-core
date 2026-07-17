@@ -6,8 +6,11 @@
 # F-6 — V3.1 multisig Round 1.
 #
 # Positive CI for `--features multisig` on engine-core, engine-rpc, and
-# ffi (the packages named in V3_1_MULTISIG_RUST_ENGINE.md R1-F-6). Until
-# this lane is green, every Track B claim about gated code is untested.
+# ffi (the packages named in V3_1_MULTISIG_RUST_ENGINE.md R1-F-6), plus the
+# `shekyl-multisig` crate that now owns the ceremony / format code (MS-5;
+# always-compiled, no feature of its own — `--features multisig` applies only
+# to the packages that define it). Until this lane is green, every Track B
+# claim about gated code is untested.
 #
 # The P0-n doc-literal gate lives in its own workflow
 # (`multisig-doc-literals.yml`) so a docs-only change no longer drags a
@@ -35,6 +38,12 @@ on:
       - "rust/shekyl-engine-core/**"
       - "rust/shekyl-engine-rpc/**"
       - "rust/shekyl-ffi/**"
+      # The multisig ceremony crate itself (MS-5): the FSM, blob format, and
+      # nonce typestates now live here, not in engine-core. It is a tested
+      # package below (`-p shekyl-multisig`); without this trigger a
+      # crate-only change would not run the lane built to compile it — exactly
+      # the C-1 "armed gate with no trigger" failure this header warns about.
+      - "rust/shekyl-multisig/**"
       - "rust/shekyl-fcmp/**"
       - "rust/shekyl-fcmp-proofs/**"
       # C-1: crates that own a multisig constant consumed by the tested
@@ -82,12 +91,13 @@ jobs:
         with:
           workspaces: rust -> target
 
-      - name: cargo check (engine-core + engine-rpc + ffi, --features multisig)
+      - name: cargo check (engine-core + engine-rpc + ffi + shekyl-multisig, --features multisig)
         run: >
           cargo check --locked
           -p shekyl-engine-core
           -p shekyl-engine-rpc
           -p shekyl-ffi
+          -p shekyl-multisig
           --features multisig
 
       - name: cargo clippy -D warnings (same packages, all targets)
@@ -98,6 +108,7 @@ jobs:
           -p shekyl-engine-core
           -p shekyl-engine-rpc
           -p shekyl-ffi
+          -p shekyl-multisig
           --features multisig
           --all-targets
           --keep-going
@@ -109,4 +120,5 @@ jobs:
           -p shekyl-engine-core
           -p shekyl-engine-rpc
           -p shekyl-ffi
+          -p shekyl-multisig
           --features multisig

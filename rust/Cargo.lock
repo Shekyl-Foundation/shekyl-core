@@ -3929,7 +3929,6 @@ name = "shekyl-engine-core"
 version = "2.0.0"
 dependencies = [
  "blake2",
- "chacha20poly1305",
  "ciphersuite",
  "criterion",
  "curve25519-dalek",
@@ -3940,7 +3939,6 @@ dependencies = [
  "hex",
  "hkdf",
  "kameo",
- "modular-frost",
  "multiexp",
  "proptest",
  "rand_chacha 0.3.1",
@@ -3964,6 +3962,7 @@ dependencies = [
  "shekyl-engine-state",
  "shekyl-fcmp",
  "shekyl-fcmp-proofs",
+ "shekyl-multisig",
  "shekyl-p-transport",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
@@ -4172,6 +4171,23 @@ dependencies = [
  "tracing-core",
  "tracing-subscriber",
  "trybuild",
+]
+
+[[package]]
+name = "shekyl-multisig"
+version = "3.1.0"
+dependencies = [
+ "chacha20poly1305",
+ "criterion",
+ "hkdf",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shekyl-crypto-hash",
+ "shekyl-units",
+ "shekyl-wire",
+ "thiserror",
+ "zeroize",
 ]
 
 [[package]]

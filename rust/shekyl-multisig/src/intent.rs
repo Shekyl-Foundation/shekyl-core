@@ -411,7 +411,6 @@ pub struct ChainStateFingerprint {
     pub input_global_indices: Vec<u64>,
     pub input_eligible_heights: Vec<u64>,
     pub input_amounts: Vec<AtomicUnits>,
-    pub input_assigned_prover_indices: Vec<u8>,
 }
 
 impl ChainStateFingerprint {
@@ -436,12 +435,6 @@ impl ChainStateFingerprint {
         sorted_amounts.sort();
         for a in &sorted_amounts {
             preimage.extend_from_slice(&a.to_raw().to_le_bytes());
-        }
-
-        let mut sorted_provers = self.input_assigned_prover_indices.clone();
-        sorted_provers.sort();
-        for p in &sorted_provers {
-            preimage.push(*p);
         }
 
         shekyl_crypto_hash::cn_fast_hash(&preimage)
@@ -723,32 +716,9 @@ mod tests {
             input_global_indices: vec![42, 99],
             input_eligible_heights: vec![800, 850],
             input_amounts: vec![AtomicUnits::from_raw(100), AtomicUnits::from_raw(200)],
-            input_assigned_prover_indices: vec![0, 1],
         };
         let h1 = fp.compute();
         let h2 = fp.compute();
         assert_eq!(h1, h2);
-    }
-
-    #[test]
-    fn chain_state_fingerprint_changes_with_prover() {
-        let fp1 = ChainStateFingerprint {
-            reference_block_hash: [0xAA; 32],
-            input_global_indices: vec![42],
-            input_eligible_heights: vec![800],
-            input_amounts: vec![AtomicUnits::from_raw(100)],
-            input_assigned_prover_indices: vec![0],
-        };
-        let fp2 = ChainStateFingerprint {
-            input_assigned_prover_indices: vec![1],
-            ..ChainStateFingerprint {
-                reference_block_hash: fp1.reference_block_hash,
-                input_global_indices: fp1.input_global_indices.clone(),
-                input_eligible_heights: fp1.input_eligible_heights.clone(),
-                input_amounts: fp1.input_amounts.clone(),
-                input_assigned_prover_indices: vec![1],
-            }
-        };
-        assert_ne!(fp1.compute(), fp2.compute());
     }
 }

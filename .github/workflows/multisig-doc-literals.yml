@@ -34,6 +34,12 @@ on:
       - "rust/shekyl-crypto-pq/**"
       - "rust/shekyl-wire/**"
       - "rust/shekyl-address/**"
+      # The multisig ceremony crate (MS-5). It does not own the cap/fee
+      # constants today (those stay in crypto-pq — referenced, never restated),
+      # but it is where multisig-specific bounds and ceremony prose will live;
+      # a constant or a doc-literal landing here must re-scan the docs. Same
+      # C-1 symmetry as the constant-owning crates above.
+      - "rust/shekyl-multisig/**"
       - "src/cryptonote_config.h"
   push:
     branches: [dev]

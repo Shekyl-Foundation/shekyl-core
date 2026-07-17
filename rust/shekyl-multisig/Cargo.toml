@@ -1,0 +1,54 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-multisig"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shekyl V3.1 multisig (Option E′): the FROST spend-ceremony FSM, blob format, and nonce typestates. Pure logic — no ledger, no I/O, no transport."
+build = "build.rs"
+
+# The dependency list IS the "no transport" ban (MS-1(a), the crate that lets the
+# ban be structural rather than a review catch). This crate owns the multisig
+# spend ceremony precisely so a future transport is a *build failure*: there is
+# no `tor` / `tokio` (net) / `reqwest` edge here, and one must never be added.
+# It takes an intent + outputs and returns bytes; engine-core wires the bytes to
+# the ledger. Same discipline as `shekyl-wire`'s deliberately minimal runtime
+# surface. If a slice ever needs to move bytes, that belongs above this crate.
+[dependencies]
+shekyl-units = { path = "../shekyl-units" }
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+serde = { workspace = true }
+serde_json = "1"
+thiserror = { workspace = true }
+zeroize = { workspace = true }
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+
+[build-dependencies]
+# Generate the FCMP reference-block age bounds + CT type from the JSON authority
+# `config/consensus_constants.json` (the same source the C++ header and
+# engine-core's build.rs read), so `intent.rs` never hardcodes them. See build.rs.
+serde_json = "1"
+
+[dev-dependencies]
+# Test-only: `intent.rs`'s canonical-bytes test cross-checks against
+# `shekyl_wire::transaction::CT_TYPE_FCMP`. A dev-dependency edge (cargo permits
+# dev-dep cycles), so it never enters the runtime dependency surface the ban covers.
+shekyl-wire = { path = "../shekyl-wire" }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Wall-clock micro-benchmarks for the format-module operations (moved here with
+# the code they measure — the crate and its bench are one validation surface).
+[[bench]]
+name = "multisig_v31"
+harness = false
+
+[lints]
+workspace = true
