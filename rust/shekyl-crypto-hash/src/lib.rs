@@ -186,6 +186,30 @@ mod tests {
     }
 
     #[test]
+    fn cshake256_nist_sp800_185_kat() {
+        // Known-answer test pinned to an *external* authority — NIST SP 800-185
+        // cSHAKE256 Sample #3 (not a value regenerated from our own output). This
+        // is what fixes customization handling, cSHAKE padding, and XOF extraction
+        // to the standard so any independent implementer computes the same bytes.
+        //
+        //   function name N = "" (empty), customization S = "Email Signature",
+        //   input X = 00 01 02 03, requested output = 512 bits.
+        //
+        // `cshake256_32` takes the first 32 bytes of that XOF stream (our N is
+        // always empty — CShake256Core::new maps its arg to S), so we pin the
+        // leading 32 bytes of the published 64-byte sample output.
+        let digest = cshake256_32(b"Email Signature", &[0x00, 0x01, 0x02, 0x03]);
+        assert_eq!(
+            digest,
+            [
+                0xd0, 0x08, 0x82, 0x8e, 0x2b, 0x80, 0xac, 0x9d, 0x22, 0x18, 0xff, 0xee, 0x1d, 0x07,
+                0x0c, 0x48, 0xb8, 0xe4, 0xc8, 0x7b, 0xff, 0x32, 0xc9, 0x69, 0x9d, 0x5b, 0x68, 0x96,
+                0xee, 0xe0, 0xed, 0xd1,
+            ],
+        );
+    }
+
+    #[test]
     fn cshake256_domain_separation() {
         // The whole point of the customization string: identical input under two
         // different domains must not collide.

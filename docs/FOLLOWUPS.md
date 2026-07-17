@@ -4873,6 +4873,26 @@ sustainability is unaffected by the recalibration.
   sequenced behind it.** Closed when both batteries land and the
   tripwire is promoted.
 
+- **Single-sig address decode enforces the Bech32m variant**
+  (added 2026-07-17, PR #323 Copilot round). `bech32m_decode` in
+  [`rust/shekyl-address/src/address.rs`](../rust/shekyl-address/src/address.rs)
+  calls variant-agnostic `bech32::decode`, which accepts *either* a Bech32
+  or a Bech32m checksum (see the fallback at `bech32-0.11.1` `lib.rs:211`).
+  Every address we emit is encoded as Bech32m, so a string carrying a plain
+  Bech32 checksum is not one we produced — but the decoder still accepts it,
+  weakening the error-detection guarantee the format claims. The multisig
+  *fingerprint* decoder was tightened in this PR to
+  `CheckedHrpstring::new::<Bech32m>()`; the three single-sig segment decodes
+  (`decode_full`, classical + pqc_a + pqc_b) still ride the lax path. This is
+  a genesis-frozen surface (`.cursor/rules/65-address-format-discipline.mdc`):
+  the set of strings a wallet will accept as a valid address is locked at
+  genesis, so the variant discipline should be pinned before external
+  implementers and users encode against it. Fix: route the three decodes
+  through a strict Bech32m decode, with a plain-Bech32-rejection test per
+  segment mirroring `fingerprint_bech32m_rejects_plain_bech32`. **Target:
+  V3.0 pre-genesis.** Closed when single-sig decode rejects a Bech32-checksum
+  address string and the per-segment tests land.
+
 ---
 
 ## V3.1 — audit response and stressnet gates
