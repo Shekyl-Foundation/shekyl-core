@@ -7739,6 +7739,27 @@ one place to confirm each item's relationship to the wallet stack.
 
 ## V3.2 — Rust cutover and cleanup
 
+- **Legacy spend-graph analysis utilities: audit against FCMP++, then delete
+  the dead ones.** `src/blockchain_utilities/` still builds
+  `blockchain_ancestry` ("trace the input ancestry of a transaction"),
+  `blockchain_depth` (minimum chain depth for an output/tx),
+  `blockchain_usage` (output amount-reference histogram), and
+  `blockchain_prune_known_spent_data` ("provably spent" outputs). All four
+  are CryptoNote-lineage tools whose substrate is a visible spend graph:
+  under FCMP++ a spend never reveals which output it consumes, so
+  ancestry/depth tracing and "provably spent" identification have nothing to
+  read on post-genesis transactions (Gate-6 §11.7 method note 5 — inherited
+  pins re-walk against what FCMP++ actually emits; the
+  `shekyl-blockchain-mark-spent-outputs` USER_GUIDE/EXECUTABLES entries
+  documenting an already-deleted binary were swept 2026-07-17). **Work:**
+  confirm each tool
+  has no FCMP++-era function (coinbase-only edge cases included); delete the
+  dead ones and their USER_GUIDE rows per rule 15. **Target:** V3.2 (cleanup
+  wave). **Reopen when:** a tool is shown to compute something real over
+  FCMP++ data (e.g. pure output-set statistics rather than spend-graph
+  traversal) — then it is renamed/re-documented to the real function instead
+  of deleted.
+
 - **P-scan pruned-fetch bandwidth option over Tor (rejected at V3.0).** The
   P-scan's block source fetches **full** transaction bodies because the SP-6
   exhaustiveness gate recomputes each body's committed hash from received

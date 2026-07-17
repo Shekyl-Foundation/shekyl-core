@@ -6,7 +6,7 @@ when a feature is ready -- not on a fixed calendar.
 ## Rationale
 
 Much of Shekyl's roadmap depends on post-quantum cryptographic standards
-(lattice-based ring signatures, PQ zero-knowledge proofs, threshold
+(lattice-based membership proofs, PQ zero-knowledge proofs, threshold
 schemes) that are still in active research and NIST standardization. Locking
 to a fixed schedule (e.g. "every 6 months") would force one of two bad
 outcomes:
@@ -38,7 +38,7 @@ A feature-driven cadence avoids both.
 
 | Version | Working Name | Status | Key Features |
 |---|---|---|---|
-| HF2 | V4 Privacy | Research | Lattice-based ring signatures, PQ stealth address derivation, compact threshold signatures. Ships when underlying standards mature. |
+| HF2 | V4 Privacy | Research | Lattice-only privacy stack: a post-quantum membership-proof primitive succeeding FCMP++'s classical-curve component (the "lattice-based ring signature survey" is retired — FCMP++ is the anonymity primitive from genesis, see `POST_QUANTUM_CRYPTOGRAPHY.md`), PQ stealth address derivation, compact threshold signatures. Ships when underlying standards mature. |
 
 ## Emergency Forks
 

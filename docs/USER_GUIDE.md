@@ -74,7 +74,6 @@ Use the CLI tools when you want to:
 | `shekyl-blockchain-export` | Export blockchain to a file |
 | `shekyl-blockchain-prune` | Prune or copy-prune a blockchain database |
 | `shekyl-blockchain-stats` | Print blockchain statistics |
-| `shekyl-blockchain-mark-spent-outputs` | Build a database of known-spent outputs |
 | `shekyl-blockchain-ancestry` | Trace transaction ancestry chains |
 | `shekyl-blockchain-depth` | Compute minimum chain depth for outputs |
 | `shekyl-blockchain-usage` | Analyse blockchain storage usage |
@@ -809,7 +808,7 @@ building applications on top of Shekyl.
 | `--restricted-rpc` | Limit to read-only and transfer operations |
 | `--rpc-ssl <mode>` | Enable SSL (`enabled`, `disabled`, `autodetect`) |
 | `--daemon-address <addr>` | Connect to a specific daemon |
-| `--trusted-daemon` | Disable privacy-preserving request splitting |
+| `--trusted-daemon` | Enable commands that rely on a trusted daemon (your own node) |
 
 ### Method categories
 
@@ -887,7 +886,6 @@ Additional flags: `--with-inputs`, `--with-outputs`, `--with-hours`.
 
 | Tool | Purpose |
 |------|---------|
-| `shekyl-blockchain-mark-spent-outputs` | Build a database of provably-spent outputs for privacy analysis |
 | `shekyl-blockchain-ancestry` | Trace the input ancestry of a transaction |
 | `shekyl-blockchain-depth` | Compute minimum chain depth for an output or transaction |
 | `shekyl-blockchain-usage` | Analyse storage usage across the blockchain |
@@ -895,6 +893,12 @@ Additional flags: `--with-inputs`, `--with-outputs`, `--with-hours`.
 
 All tools accept `--data-dir`, `--testnet`, `--stagenet`, and
 `--log-level` flags.
+
+> **Note:** the ancestry, depth, and known-spent tools analyze spend-graph
+> relationships that FCMP++ transactions do not reveal (a spend never
+> discloses which output it consumes). They have no substrate on Shekyl
+> chain data and are scheduled for a deletion audit (see `docs/EXECUTABLES.md`
+> and `docs/FOLLOWUPS.md`).
 
 ---
 

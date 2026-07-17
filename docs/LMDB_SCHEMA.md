@@ -137,7 +137,7 @@ PQC authentication data for v3+ transactions (second unprunable segment, between
 
 ### `txs_prunable`
 
-Prunable suffix of serialized transactions (ring signatures, FCMP++ proofs, range proofs).
+Prunable suffix of serialized transactions (`rctSigPrunable`: Bulletproof+ range proofs, pseudo-outs, and the opaque FCMP++ membership-proof blob).
 
 | Property | Value |
 |---|---|
