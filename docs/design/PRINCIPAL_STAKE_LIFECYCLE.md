@@ -366,7 +366,12 @@ consensus-pinned. The §"Decision", "Second and third dependencies", "Axes R4 mu
 decide", and "Round-1 lean" paragraphs below are retained as history of a question that
 dissolved, not as open work — in particular, "bodies stay `unimplemented!()` until GF-4
 is pinned" no longer holds (GF-4's count rule is retired); the surviving implementation
-gates are the emission output shape and F3 alone. (The rotation
+gates are the emission output shape and F3 alone. **The gate lifts to F-D1/F-D2 as the
+drain's spec, not to no constraint:** the amount computation strips
+`{lineage, epoch, height}` and runs as an aggregate-scalar stage (F-D1, complete pre-code
+pin — gate-6 §12.3), with the non-round-sum UI default (F-D2, §12.4) — those pins were
+landed pre-code precisely so `drain()` arrives correct rather than gets fixed. What
+retired is the output-*count* rule; the drain's privacy spec stands. (The rotation
 co-trigger from §5.1 item 2 survives independently — it is the network-layer seam, not
 the output-count seam.)
 
