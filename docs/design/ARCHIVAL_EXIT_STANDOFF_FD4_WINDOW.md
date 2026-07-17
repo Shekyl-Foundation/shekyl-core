@@ -563,6 +563,9 @@ partition event and takes a design round of its own.**
    `RELEASE_COOLDOWN_EPOCHS × SETTLEMENT_EPOCH_BLOCKS`, boundary-tested against
    `release_cooldown_elapsed` so the wallet's schedule and the consensus predicate cannot
    disagree; the `20_000` doc fossil in `shekyl-staking-sim/src/standoff.rs` is purged.
+   *(The anchor helper was itself deleted 2026-07-17 as a consequence of the mechanism
+   deletion — see the §15.4 landing update's follow-up; the named-const derivation and the
+   boundary agreement are preserved in git history as the re-derivation reference.)*
 3. The exit-seam `N_t` re-derivation (F-W5) — before the sweep grades and before the seal.
    **UPDATE 2026-07-16: done (§13) — `N_t(exit) = 10`, derived a-priori; rule and box
    unchanged; the repetition asymmetry routed to `σ_L`/S-2 as a named residual** (routing
@@ -993,7 +996,9 @@ item 1.** Rule-21 shape:
    audit surface (rule 15); git history and this doc are the archive — the doc retains every
    number so the record survives the code. The F-D6 anchor derivation
    (`release_cooldown_anchor_height`) and the cooldown itself are **not** in scope: they
-   exist for slashability/backlog-claim reasons and predate this analysis. The deletion-scope
+   exist for slashability/backlog-claim reasons and predate this analysis. *(The anchor's
+   exclusion proved consumer-relative — see the landing update's 2026-07-17 follow-up
+   below.)* The deletion-scope
    enumeration above is the reviewer-map for the deletion PR; anything it misses is a
    map-failure, not a license.
 
@@ -1060,6 +1065,20 @@ deleted consumer. The §15.4 tripwire (this section) and the archived re-run tem
 are unchanged, as decision 5 requires. The sentinel was deleted having **never shipped
 a value** — the full `K_COVER`-pattern vindication (§15.7) is now complete through the
 deletion arm.
+**Follow-up (2026-07-17, same day): the F-D6 anchor helper is deleted too.** The
+out-of-scope confirmation above was consumer-relative and the landing is what falsified
+it: with `draw_exit_gap` gone, `release_cooldown_anchor_height` had no production call
+site — tests, a re-export, and the staking-sim doc-comment only. That is the
+armed-primitive-with-no-trigger pattern this round's audit was built to catch, and the
+orphaning is a consequence of the deletion rather than a pre-existing exclusion, so it
+received its own rule-15 decision (maintainer): delete, with the keep-as-derivation-home
+branch declined as speculative generality. A future caller needing an earliest-spend
+*height* re-derives `(last_served + RELEASE_COOLDOWN_EPOCHS) × SEB` from the named
+consts at its own site and boundary-tests against `release_cooldown_elapsed` (the
+reopen note lives at `release_cooldown.rs`; git history holds the reference
+implementation and its boundary tests). `release_cooldown_elapsed` — the enforced
+consensus predicate — remains untouched; F-D6's named-const half stands. Disposition
+recorded at Gate-6 §12.7.
 
 ### 15.5 The gate question (HANDED FORWARD to Gate-6 R4, audit attached — 2026-07-16)
 
