@@ -4,8 +4,9 @@
 F-3 DELETE (Option A fossil) + F-6 CI (`--features multisig` green,
 PR #310, merged 2026-07-15) + F-7 (`EngineSignerKind::SigningCeremony`,
 PR #317). Track B (MS-1…MS-7) advances to Round 2 / MS-5 (Option E′) on
-explicit go-ahead; the one pre-MS-5 gate no CI can turn green is the
-`MultisigSigner` `N`/`K` decision (§ "MS-1 under coexistence").
+explicit go-ahead. The one pre-MS-5 gate no CI could turn green — the
+`MultisigSigner` `N`/`K` decision — is **made (2026-07-16): no const
+generics; `<N, K>` retired** (§ "MS-1 under coexistence").
 Protocol crypto: [`PQC_MULTISIG.md`](../PQC_MULTISIG.md) (DRAFT v1.1).
 
 ---
@@ -511,10 +512,10 @@ historically out of scope was the **inversion**; this pin corrects it.
 ### MS-1 under coexistence
 
 `Engine<S: EngineSignerKind>` must hold **solo + two multisig stacks**
-simultaneously forever. `signer.rs` names `MultisigSigner<N, K>` and never
-defines either parameter. **Round-2 load-bearing — resolve before MS-5, and say
-the answer where the name is** (`signer.rs`; the module doc now carries a
-placeholder caveat, not an answer):
+simultaneously forever. The old `signer.rs` `MultisigSigner<N, K>` notation left
+both parameters undefined. **Decided (2026-07-16), recorded at the name in
+`signer.rs`: the multisig kind takes NO const generics — `<N, K>` is retired.**
+The reasoning:
 
 - **The `<N, K>` notation lies by convention.** Every reader — the next agent
   included — parses `<N, K>` as *K-of-N threshold*. If `K` is instead the
@@ -526,16 +527,20 @@ placeholder caveat, not an answer):
   `m_required: u8` on `MultisigAddressPayload` / `MultisigKeyContainer`) — you
   cannot const-generic a value read from the payload. So `N` (participants) /
   `M` (threshold) are not const-generic candidates at all.
-- **A version const-generic has a monomorphization cost.** If `K` = version is a
-  const generic, `MultisigSigner<5, 2>`-style types are distinct per
-  configuration, multiplying `Engine<S>` method monomorphization. Whether the
-  coexistence axis is a const generic, an associated type/const, or runtime
-  dispatch is part of this decision.
+- **A version const-generic has a monomorphization cost, and can't be
+  compile-time anyway.** A `MultisigSigner<5, 2>`-style type would be distinct
+  per configuration, multiplying `Engine<S>` method monomorphization — and the
+  version is itself read from the wire, so it is not a compile-time constant. The
+  coexistence axis is therefore **not** a const generic.
 
-MS-1 is not picking a shape for V3.1 alone; it is picking the shape that holds
-two multisig implementations at once. **This is the last unrecorded reason in
-the multisig surface** — record what `N`/`K` are (or that there are none) before
-MS-5 opens.
+So `N`/`M` are runtime fields, and the coexistence axis (version byte) is a
+**type / dispatch** distinction — per-version `EngineSignerKind` markers, or a
+runtime version field. Which of those two coexistence shapes MS-1 picks is still
+its trait-identity call (it must hold two multisig implementations at once), but
+it is now **bounded: no const generics, and the multisig kind takes no type
+parameters** (one type with a runtime version, or a per-version family — MS-1's
+call). The last unrecorded reason in the multisig surface is recorded — at the
+name (`signer.rs`) and here.
 
 | Candidate | Under coexist |
 | --- | --- |
@@ -874,12 +879,14 @@ Criteria unchanged. Status reflects adversarial review.
 **Lean MS-1(a)/(c)** — cuttable seam for solo + **future** second
 multisig stack (V4 coexist). **MS-1(b) rejected.** Lineage question
 **closed**: only v31 Option D ships under `multisig`; Option A FROST
-fossil **DELETE** (R1-F-3). Round-2 still names `K` on
-`MultisigSigner<N, K>` (threshold vs spend_auth / scheme version for
-the *future* coexist axis — not "which fossil"). **The `<N, K>` notation
-misleads (reads as K-of-N threshold) and `N`/`M` are runtime payload values,
-not const generics — see "MS-1 under coexistence" above; resolve and record the
-answer at the type before MS-5.**
+fossil **DELETE** (R1-F-3). **`N`/`K` DECIDED (2026-07-16): the multisig kind
+takes no const generics** — `N`/`M` are runtime payload values, the coexistence
+axis (version byte) is type/dispatch not a const generic, and
+`MultisigSigner<N, K>` is retired (no type parameters — one type with a runtime
+version, or a per-version family; MS-1's call). Recorded at the name
+(`signer.rs`) and in "MS-1 under coexistence" above. MS-1's remaining
+call is only the coexistence *shape* (per-version markers vs a runtime version
+field), bounded by that decision.
 
 R1-F-7 SoloSigner associated-item amend **landed** (`EngineSignerKind::SigningCeremony`,
 `SoloSigner = Infallible`, #317). F-6 CI landed (#310, merged 2026-07-15) —
@@ -1138,3 +1145,4 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-15 | **Copilot on #308:** label MAX=5 as decided/unenforced until MSW-1 (reject cutting the constant in a docs PR); drop superseded MSW-G=8 CHANGELOG bullet; F-10→F-11 consistency; §16.7 flags = planned sketch not live Cargo. |
 | 2026-07-15 | **P0-n + F-6 CI:** draft lane + fossil sweeps prepared; **CI files split out** to a follow-on PR so this docs carrier lands alone. Operator/protocol fossils swept here (`USER_GUIDE` / `MULTISIG_OPERATIONS` / `POST_QUANTUM` / `DESIGN_CONCEPTS` / `ANONYMITY` / `LEVIN` / `RELEASE_CHECKLIST`). |
 | 2026-07-16 | **Round 1 CLOSED.** All blockers discharged: F-3 DELETE (Option A fossil) + F-6 CI (`--features multisig` green) in **#310** (merged 2026-07-15); F-7 (`EngineSignerKind::SigningCeremony`) in **#317**. Track B (MS-1…MS-7) → Round 2 / MS-5 (Option E′) on explicit go-ahead. Pre-MS-5 gate no CI can turn green: the `MultisigSigner` `N`/`K` decision (see "MS-1 under coexistence"). |
+| 2026-07-16 | **MS-1 `N`/`K` DECIDED:** the multisig kind takes **no const generics**. `N` (participants) / `M` (threshold) are runtime payload values (`n_total`/`m_required`); the coexistence axis (version byte) is type/dispatch, not a const generic (and not compile-time — the version is read from the wire). `MultisigSigner<N, K>` retired; the multisig kind takes no type parameters (one type with a runtime version, or a per-version family — MS-1's call). Recorded at the name (`signer.rs`) + "MS-1 under coexistence". MS-1's remaining call is only the coexistence *shape* (per-version markers vs runtime version field), bounded by this. |

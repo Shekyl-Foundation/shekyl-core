@@ -9,22 +9,27 @@
 //!
 //! The Phase 1 plan locks the wallet's solo / multisig dispatch into the
 //! type system: `Engine<S: EngineSignerKind>`, with `S` ranging over
-//! [`SoloSigner`] (V3.0 default) and the multisig kind — working name
-//! `MultisigSigner` (V3.1, lands behind the `multisig` Cargo feature).
+//! [`SoloSigner`] (V3.0 default) and the multisig kind(s) — `MultisigSigner`,
+//! one type or a per-version family (V3.1, behind the `multisig` Cargo feature;
+//! MS-1 fixes which).
 //! Choosing the dispatch axis at compile time means the V3.1 enablement is
 //! a feature flip on call sites, not a refactor.
 //!
-//! **Open MS-1 question — do not read the placeholder `MultisigSigner<N, K>`
-//! notation as K-of-N threshold.** It is unresolved and must not be taken at
-//! face value: participant count and threshold (`n_total`, `m_required`) are
-//! *runtime* values the address payload hands over, so they cannot be const
-//! generics at all. If a const-generic parameter exists it is more likely the
-//! coexistence axis (scheme / `spend_auth` version — MS-1 must hold two
-//! multisig stacks at once), which the conventional `<N, K>` reading hides —
-//! and a version const-generic multiplies monomorphization across every
-//! `Engine<S>` method. What the parameters are, and whether there are any at
-//! all, is a Round-2 decision for MS-1 (`V3_1_MULTISIG_RUST_ENGINE.md`, MS-1
-//! section); this doc must not prejudge it.
+//! **Decided (MS-1): the multisig kind takes no const generics.** The earlier
+//! `MultisigSigner<N, K>` notation is retired — it read as K-of-N threshold, but
+//! participant count and threshold (`n_total`, `m_required`) are *runtime*
+//! values the address payload hands over: you cannot const-generic a value read
+//! from the wire, so `N`/`M` are runtime fields, never type parameters. The
+//! coexistence axis — the two multisig stacks (E′ now, a lattice-only V4 later)
+//! that one `Engine` must hold at once, discriminated by the `spend_auth` /
+//! scheme version byte — is not a const generic either: the version is read at
+//! runtime, and a version const-generic would multiply `Engine<S>`
+//! monomorphization per config for no benefit. Coexistence is a **type /
+//! dispatch** matter (per-version `EngineSignerKind` markers, or a runtime
+//! version field — MS-1's trait-identity design settles which), never a
+//! `<N, K>` parameterization. So the multisig kind takes no type parameters;
+//! whether it is one type with a runtime version or a per-version family is
+//! MS-1's call.
 //!
 //! [`EngineSignerKind`] is sealed: only this crate may add variants.
 //! Downstream code parameterizes `Engine<S>` with `SoloSigner` (or, in
@@ -86,9 +91,8 @@ pub trait EngineSignerKind: private::Sealed + 'static {
     /// path that would consume a `SoloSigner::SigningCeremony` is statically
     /// dead — "a solo wallet ran a multisig ceremony" is unrepresentable, the
     /// same compile-forced guarantee as the `!Clone` archival keys. The
-    /// multisig signer kind (working name `MultisigSigner`; its parameters are
-    /// an open MS-1 question — see the module docs, *not* K-of-N threshold)
-    /// will set this to its two-round FROST ceremony type (MS-5).
+    /// multisig signer kind (`MultisigSigner`; no const generics — see the
+    /// module docs) will set this to its two-round FROST ceremony type (MS-5).
     type SigningCeremony;
 }
 
