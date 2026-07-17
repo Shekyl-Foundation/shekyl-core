@@ -1167,9 +1167,9 @@ remained was entry-side repetition, and it was never walked against the state ma
 Walked against the landed FSM (`bond_post.rs`, all four `post_kind`s — there is no fifth;
 Gate-6 §10.6's "top-up" is prose for the `HoldingsUpdate`-add *direction*, not a kind):
 
-| Lifecycle event | Occurrence | Principal-side observable? |
+| Lifecycle event | Occurrence | Principal-side observable? † |
 |---|---|---|
-| `JoinMarket` | **Mandatory, one per bonded life** (`verify_join_market_bond_post` rejects an existing record, `bond_post.rs:540`) | **Yes** — funding inputs are public key-image spends: the GF-7 seam |
+| `JoinMarket` | **Mandatory, one per bonded life** (`verify_join_market_bond_post` rejects an existing record, `bond_post.rs:540`) | **Yes — as an event, not an entity**: the funding spend's *existence and timing* are public (key-image spends: the GF-7 seam); its **source is FCMP++-hidden** and carries no identity |
 | `HoldingsUpdate`-add | Optional | **Yes** — fresh `bond_credit == FLOOR` (`:257`), funded like a join |
 | `Rebond`, standing-only (the common case) | Post-slash | **No** — `bond_credit == 0` by Pin 2 (`:418-420`): the slash burned the FLOOR and removed the shard atomically, so *no value moves at all* |
 | `Rebond`, growth / terminal reinstatement | Optional, rare | **Yes** — carries credit; the same funding seam as add |
@@ -1178,6 +1178,14 @@ Gate-6 §10.6's "top-up" is prose for the `HoldingsUpdate`-add *direction*, not 
 | `Unbond` (voluntary) | Optional | **No** — same in-tx hidden refund; observably silent |
 | Terminal slash | — | **No transaction exists** (`NothingToUnbond`, `:586-588`; collateral burned, nothing returns) |
 | Rejoin (new `JoinMarket` after the `Unbond` pop) | Representable | Unmodeled — **self-harm class**: slot-indexed derivation (`archival_p.rs:299`, `(master_seed_64, network, format, p_slot)`) makes fresh-`P` the wallet's structure, and consensus does not gate self-harm (the add-shard precedent, `bond_post.rs:237-240`) |
+
+> **† Every "Yes" in this column names an observable *event*, never an entity.** What is
+> public is the funding spend's existence and timing; its source is FCMP++-hidden and
+> carries no identity. GF-7's `P(link) ≈ 0.186` is accordingly the chance of linking `P`
+> to one **anonymous** transaction — it becomes identity-bearing only if the far end was
+> already attributed off-chain (the T-4 crossing, §15.5). Reading a "Yes" as "a
+> principal-side *referent* is visible" reconstructs the phantom this track deleted
+> (F-W7): the column has events in it, not entities.
 
 **The enumeration: mandatory observable crossings = 1 (`JoinMarket`). Optional crossing
 classes = 2 (`HoldingsUpdate`-add; credit-bearing `Rebond`). Observable exits = 0, on both
