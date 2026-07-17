@@ -5,7 +5,8 @@
 ### Added
 
 - **docs: Gate-6 R4 decision round (§12.9) — the F-D4 §15.5 hand-forward
-  answered: the exit seam re-homes, the joint grade dissolves.** Four
+  answered and RATIFIED: the exit seam re-homes, the joint grade
+  dissolves by four-axis attrition (F-W10 added at ratification).** Four
   decisions recorded with the F-D4 §2.1/§15 audit and the F-W9 premise
   correction as inputs. (1) **Seam re-homed** to the principal↔user
   crossing (WI-4 §18.13): the timing half is phantom (F-W7/F-W9 — zero
@@ -14,12 +15,26 @@
   boundary class 3, which F-D1/F-D2 close — they re-label, build and arms
   unchanged. After this round the on-chain `P`↔principal surface is the
   entry seam alone (GF-7). (2) **Joint grade dissolved by axis
-  attrition** (exit-timing deleted; amount structural-armed pass/fail;
-  holdings a public posture fact): CB-3's joint-grading obligation is
-  discharged — one live axis cannot multiply — so **GF-10's width grades
+  attrition.** Ratification rejected the draft's walk (three of §12.8's
+  four named axes; output-count silently absent, mis-disposed as an
+  F-D1-sibling arm — F-D1 governs the amount computation's *inputs*,
+  output-count shapes the drain's *outputs*) and added the fourth row:
+  **F-W10 — output-count is phantom.** Under FCMP++ the drain is not an
+  identifiable transaction (no spend graph; spend set unenumerable;
+  reward-output spends carry no `P`-typing on the wire), so its output
+  count is not an observable; the Gate-6 §2.4 lump-sweep discipline is
+  retired as a CryptoNote/ring-signature-lineage carry never re-walked
+  across the crypto change — §2.4's own goal ("beyond what a disciplined
+  user already avoids on ordinary transfers") is met by construction.
+  With all four axes attrited (exit-timing phantom; amount
+  structural-armed pass/fail; holdings a public posture fact;
+  output-count phantom), CB-3's joint-grading obligation is
+  discharged — nothing left to multiply — so **GF-10's width grades
   standalone** against its §11.5 pre-committed advantage claim and R3's
   close re-forms accordingly; the correlated-trigger obligation relocates
-  to the crossing as an S-2 row. (3) **F-D4 §16.4 funding default
+  to the crossing as an S-2 row. Method note 5 adopted (*a pin carried
+  across a substrate change re-walks at carry time; "carry from X" is a
+  re-walk trigger, not an exemption*). (3) **F-D4 §16.4 funding default
   ACCEPTED** as F-D2-class: self-funding via the GF-4b lineage machinery
   is the honest-wallet default, external growth-funding is a loud
   override routed through the entry-standoff draw; growth-gating cost
@@ -30,9 +45,14 @@
   `release_cooldown_elapsed` out of scope). Re-formed R4 close: F-D1 +
   F-D2 (incl. the funding default) + the deletion PR + F-D5's §14.4
   disposition; S-2 opens R5 with F-W9's finite domain. Swept: Gate-6
-  header/round-table/§11/§12.8/revision history, F-D4 status banners +
-  §15.4/§15.5/§16.4, WI-4 §18.13, FOLLOWUPS L17-wargame rider, index
-  rows 95/97/98.
+  header/round-table/§2.4/§11.8/§12.1/§12.3/§12.8/§14.4/revision
+  history, F-D4 status banners + §15.4/§15.5/§16.4, WI-4 §18.13,
+  FOLLOWUPS L17-wargame rider, index rows 95/97/98; the retired
+  output-count discipline's downstream consumers updated in place
+  (`PRINCIPAL_STAKE_LIFECYCLE.md` — DQ3 closes without a count rule,
+  `drain()` shape constraint lifted; `F1_TA3_TA7_LIFETIME_WINDOW.md`
+  T-A5 residual; `V3_STAKER_ARCHIVAL.md` output-layer bullet;
+  `PHASE_2B_STAKE_LIFECYCLE.md` carry-over row).
 
 - **docs: F-W9 — F-D4 §13.3's repetition premise corrected by walking
   the lifecycle; `m` is a bounded count, not a growth variable; Gate-6

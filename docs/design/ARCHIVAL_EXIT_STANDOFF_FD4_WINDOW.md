@@ -24,7 +24,12 @@ deletion is a separate PR whose reviewer-map is §15.4 item 1.**
 the principal↔user crossing (WI-4 §18.13); the four-axis joint grade dissolves by axis
 attrition; the §16.4 funding default is accepted (F-D2-class); the harness fork resolves
 to deleted (never landed, not resurrected). The mechanism-deletion PR is unblocked at
-§15.4 item 1's reviewer-map scope. This doc is closed as an archival record.**
+§15.4 item 1's reviewer-map scope. This doc is closed as an archival record. RATIFIED
+(same day, night) with one amendment: the dissolution's fourth axis — output-count — had
+been silently omitted from the draft's walk and was added at ratification as F-W10,
+phantom on the same grounds as `T` (under FCMP++ the drain is not an identifiable
+transaction, so its output count is not an observable; Gate-6 §12.9 decision 2, method
+note 5).**
 
 This is the artifact Gate-6 §12.6 requires first in the F-D3/F-D4 build
 sequence, in the GF7_HOOKS §5.1 ordering: (a) derive the threshold and the window model from a
@@ -1062,10 +1067,17 @@ premise is corrected before R4 takes the question — `m` is a bounded lifecycle
 the on-chain composition a re-homed grade would inherit is finite and GF-7-shaped, and the
 §16.4 wallet-default proposal (with its growth-gating cost) is part of what R4 receives.
 
-**ANSWERED 2026-07-16 (Gate-6 §12.9, the R4 decision round).** Both halves reduce; the
+**ANSWERED 2026-07-16 (Gate-6 §12.9, the R4 decision round; RATIFIED same day with the
+F-W10 amendment).** Both halves reduce; the
 seam **re-homes** to the principal↔user crossing (WI-4 §18.13) with F-D1/F-D2 re-labeled
 as that seam's class-3 mistake-set closure (build and arms unchanged). The four-axis
-joint grade **dissolves by axis attrition** — no grade re-forms over the crossing (its
+joint grade **dissolves by axis attrition** — ratification added the fourth row the
+draft had silently omitted: **output-count is phantom (F-W10)**, because under FCMP++
+the drain is not an identifiable transaction (spend set unenumerable; this doc's §16.1
+table already recorded that reward-output spends carry no `P`-typing on the wire), so
+its output count is not an observable — the same failure shape as `T`, this time
+inherited from the CryptoNote/ring-signature lineage across the crypto change without a
+re-walk. No grade re-forms over the crossing (its
 instrument is the S-2 ledger; a rate model there fails the §15.8 filter); GF-10 grades
 standalone against its own pre-committed claim. The §16.4 proposal is **accepted** as an
 F-D2-class wallet default (self-fund default; external growth-funding is a loud override

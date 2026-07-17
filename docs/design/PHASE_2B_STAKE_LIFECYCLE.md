@@ -447,7 +447,7 @@ are archival-internal (interface only).
 | Piece | Role post-rebase (§2.4) |
 |-------|-------------------------|
 | Principal→`P` stake-in / `P`→principal unstake-out | Ordinary FCMP++ main-tree transfers; firewall = base privacy |
-| Terminal unstake spend | Full SAL + `x·Hp(O)` **only** when draining `P`→principal (decorrelated, not lump sweep) |
+| Terminal unstake spend | Full SAL + `x·Hp(O)` **only** when draining `P`→principal *(the "decorrelated, not lump sweep" discipline was retired 2026-07-16 as phantom under FCMP++ — F-W10, gate-6 §12.9)* |
 | `P` HKDF sub-wallet | Independent keypair from seed; dual scan (principal + `P`) |
 | FCMP++ membership + **membership-only control** on reward leg | Backing at emission; **no** key image; **no** published dedup tag |
 | Per-`P` claimed-epoch bitmap on bond record | Reward double-claim dedup (`EpochSet` class, §3.3.2 — relocated to bond state) |
