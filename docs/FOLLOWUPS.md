@@ -6087,11 +6087,22 @@ sustainability is unaffected by the recalibration.
     the guardrail was — the armed-gate/no-trigger shape, one layer up.
     *Blocker:* **MS-5** coin-selection surface (E′). *Target:* **E′ ship
     gate — blocks MS-5 DoD (Track B).**
-  - **`cryptonote_tx_utils.cpp:671` mis-classification.** The
-    `multisig_preassembled` heuristic reads `pqc_auths[0].scheme_id`
-    only; a mixed tx whose input 0 is the scheme-1 vin mis-classifies.
-    Wallet **construction** (Rust-tx-builder territory), not consensus.
-    *Blocker:* MS-5 tx construction. *Target:* V3.1.
+  - **`cryptonote_tx_utils.cpp:670` — MSW-6 broke this.** *Not* a
+    pre-existing mis-classification, and the row must not read as one.
+    Before MSW-6, the tx-wide `scheme_id` agreement made
+    `pqc_auths[0].scheme_id` **authoritative for the whole transaction**,
+    so the `multisig_preassembled` heuristic was correct *by
+    construction*. MSW-6 withdrew that rule (per-input validation kept,
+    cross-input agreement removed) and the heuristic's premise died with
+    it — but the correction landed in `tx_pqc_verify.{h,cpp}` /
+    `verifier.rs`, where it was *argued*, not here, where the rule was
+    *consumed*. Consequence: a bond-post tx (scheme-1 vin at index 0,
+    scheme-2 funding after it) — **exactly the transaction MSW-6 exists to
+    enable** — now classifies as not-multisig, so its pre-assembled
+    `pqc_auths` are not preserved. Latent (wallet2 C++, retiring; multisig
+    unshipped) but live on `dev`. Wallet **construction** (Rust-tx-builder
+    territory), not consensus. *Blocker:* MS-5 tx construction. *Target:*
+    V3.1.
   - **Structural pqc-auth verify → Rust port slice.** The C++
     `tx_pqc_verify.cpp` per-input structural checks are largely redundant
     with `shekyl_pqc_verify` (which already validates scheme + deserializes
