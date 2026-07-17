@@ -447,7 +447,9 @@ prerequisite).
    **RESOLVED 2026-07-16 (§13): `N_t(exit) = 10`** — equal by derivation, not inheritance;
    every seam-variant fact lands on `W`, a graded arm, or its own regime row, and the one
    real asymmetry (repetition keyed to the public `P_id`) cannot be priced into a per-event
-   anchor (§13.3 — routed to `σ_L` and the S-2 exposure ledger).
+   anchor (§13.3 — routed to `σ_L` and the S-2 exposure ledger; premise since corrected by
+   F-W9, §16: `m` is a bounded lifecycle count, the `σ_L` half of the routing is dead, and
+   the S-2 half survives narrowed).
 4. **The §5.3 joint-constraint costing**, already committed: the `σ_L` lever priced against
    the queue on the shared capital-idle axis; the cheaper satisfier wins.
 
@@ -550,7 +552,8 @@ partition event and takes a design round of its own.**
    disagree; the `20_000` doc fossil in `shekyl-staking-sim/src/standoff.rs` is purged.
 3. The exit-seam `N_t` re-derivation (F-W5) — before the sweep grades and before the seal.
    **UPDATE 2026-07-16: done (§13) — `N_t(exit) = 10`, derived a-priori; rule and box
-   unchanged; the repetition asymmetry routed to `σ_L`/S-2 as a named residual.**
+   unchanged; the repetition asymmetry routed to `σ_L`/S-2 as a named residual** (routing
+   since corrected by F-W9, §16 — `m` bounded, `σ_L` half dead, S-2 half narrowed).
 4. The X-1/X-2 sweep per §8; grading folds into the R4 joint grade (Gate-6 §12.8) — never
    per-axis. **UPDATE 2026-07-16: the instrument was built and run** —
    `shekyl-staking-sim --exit-standoff` (`src/exit_standoff.rs`), all five §8 items built to
@@ -743,6 +746,15 @@ derivation — not "the entry had 10," but "each candidate mover was examined an
 the anchor."
 
 ### 13.3 The one real asymmetry — repetition — and why it cannot be priced into `N_t`
+
+> **UPDATE 2026-07-16 (F-W9, §16): the premise below is corrected — `m` is a bounded
+> lifecycle count, not a growth variable.** Post-round-4, two of the three listed
+> observations (the drop, the terminal drain) had already lost their principal-side
+> observable with `T` (F-W7); §16 counts what remains against the landed FSM: **one**
+> mandatory observable crossing (`JoinMarket`), two wallet-default-closeable optional
+> classes, zero observable exits, rejoin unmodeled. The geometric-collapse clause and the
+> `σ_L` half of the routing below do not survive the count; the S-2 half survives,
+> narrowed (§16.3). Retained as filed per the additive-update discipline.
 
 The exit seam observes the binding **repeatedly, keyed to the public `P_id`**: each
 recurring `HoldingsUpdate`-drop, the terminal drain, and (for the binding as a whole) the
@@ -1034,7 +1046,10 @@ grade is not "run it with one fewer term" — it is a **different grade over a d
 with a different posture** (widen-not-close, graded by the S-2 ledger rather than a rate
 model). That is Gate-6 R4's structural decision. This audit travels with the hand-forward
 (Gate-6 §12.8 carries the receiving item); the harness's deletion is sequenced behind the
-answer per §15.4 item 1.
+answer per §15.4 item 1. **F-W9 (§16) rides the same hand-forward:** the §13.3 repetition
+premise is corrected before R4 takes the question — `m` is a bounded lifecycle count, so
+the on-chain composition a re-homed grade would inherit is finite and GF-7-shaped, and the
+§16.4 wallet-default proposal (with its growth-gating cost) is part of what R4 receives.
 
 ### 15.6 The methodological finding — observer-as-code (the asset this track produced)
 
@@ -1132,6 +1147,128 @@ nominal-cover assumption restated by identity; full reading WI-4 §13.5, whose i
 for the conditional is the S-2 lifetime ledger).
 `DEFAULT_EXIT_GAP_WINDOW` never would have passed this filter — and absent round 4, that
 would have been discovered at the stressnet, after building the harness, instead of now.
+
+## 16. F-W9 (2026-07-16) — the repetition premise re-walked: `m` is a lifecycle count, not a growth variable
+
+> **Scope note.** §13 is stamped conditional-on-round-4 and the mechanism's deletion is
+> ratified (§15.4); this section reopens neither. It corrects §13.3's **premise** — a
+> correction Gate-6 R4 needs in hand when it answers §15.5, because it changes what the
+> re-homed seam would even be composing. Homed here so the audit trail stays in one
+> document; travels with the §15.5 hand-forward (Gate-6 §12.8 carries the receiving item).
+
+### 16.1 The finding — nobody counted the exponent
+
+§13.3's intersection argument quantifies over `m`, the number of times the adversary
+observes the `P`↔principal binding, and inherited `m` as "grows" (its observation list:
+"each recurring `HoldingsUpdate`-drop, the terminal drain, and the entry event itself").
+Round 4 had already emptied two of those three: the drop and the terminal drain carry only
+a `P`-side timestamp — their principal-side observable was `T`, found phantom (F-W7). What
+remained was entry-side repetition, and it was never walked against the state machine.
+Walked against the landed FSM (`bond_post.rs`, all four `post_kind`s — there is no fifth;
+Gate-6 §10.6's "top-up" is prose for the `HoldingsUpdate`-add *direction*, not a kind):
+
+| Lifecycle event | Occurrence | Principal-side observable? † |
+|---|---|---|
+| `JoinMarket` | **Mandatory, one per bonded life** (`verify_join_market_bond_post` rejects an existing record, `bond_post.rs:540`) | **Yes — as an event, not an entity**: the funding spend's *existence and timing* are public (key-image spends: the GF-7 seam); its **source is FCMP++-hidden** and carries no identity |
+| `HoldingsUpdate`-add | Optional | **Yes** — fresh `bond_credit == FLOOR` (`:257`), funded like a join |
+| `Rebond`, standing-only (the common case) | Post-slash | **No** — `bond_credit == 0` by Pin 2 (`:418-420`): the slash burned the FLOOR and removed the shard atomically, so *no value moves at all* |
+| `Rebond`, growth / terminal reinstatement | Optional, rare | **Yes** — carries credit; the same funding seam as add |
+| Reward emission claim | Recurring | **No** — `P`-side only; reward-output spends carry no `P`-typing on the wire (Gate-6 §10 tx-type table) |
+| `HoldingsUpdate`-drop | Optional | **No** — the refund is the in-tx `bond_debit` source term, CT-hidden (§15.1, T-2) |
+| `Unbond` (voluntary) | Optional | **No** — same in-tx hidden refund; observably silent |
+| Terminal slash | — | **No transaction exists** (`NothingToUnbond`, `:586-588`; collateral burned, nothing returns) |
+| Rejoin (new `JoinMarket` after the `Unbond` pop) | Representable | Unmodeled — **self-harm class**: slot-indexed derivation (`archival_p.rs:299`, `(master_seed_64, network, format, p_slot)`) makes fresh-`P` the wallet's structure, and consensus does not gate self-harm (the add-shard precedent, `bond_post.rs:237-240`) |
+
+> **† Every "Yes" in this column names an observable *event*, never an entity.** What is
+> public is the funding spend's existence and timing; its source is FCMP++-hidden and
+> carries no identity. GF-7's `P(link) ≈ 0.186` is accordingly the chance of linking `P`
+> to one **anonymous** transaction — it becomes identity-bearing only if the far end was
+> already attributed off-chain (the T-4 crossing, §15.5). Reading a "Yes" as "a
+> principal-side *referent* is visible" reconstructs the phantom this track deleted
+> (F-W7): the column has events in it, not entities.
+
+**The enumeration: mandatory observable crossings = 1 (`JoinMarket`). Optional crossing
+classes = 2 (`HoldingsUpdate`-add; credit-bearing `Rebond`). Observable exits = 0, on both
+branches — the voluntary branch is CT-hidden inside the posting tx, the slash branch emits
+nothing.** Note the amount channel stays empty across all rows: `bond_credit` is
+`bond_floor(holdings)` — FLOOR × shard count for `ShardSetCompact`, a flat FLOOR for
+`CompleteTree` (`bond_floor.rs:28-38`) — a pure function of the public holdings
+descriptor, so it carries zero grouping signal beyond the wire itself.
+
+### 16.2 What falls in §13.3
+
+- **The geometric-collapse clause needs a growing `m`.** Its own words: "holding any fixed
+  lifetime floor against growing `m` … no finite `N_t` delivers it." With `m` a bounded
+  count, `N_pop × q^m` is computable per enumerated case; at the mandatory `m = 1` it is
+  `N_pop × q` — **GF-7's per-event grade *is* the on-chain lifetime grade**, per persona,
+  per observer class, at nominal cover (the cover qualifier is WI-4 §13.5's fifth
+  conditional, unchanged by this section).
+- **The `E[m]` objection dissolves.** §13.3 rejected union-bound anchor inflation because
+  `E[m]` was "per-persona lifetime exit-event count, a pre-testnet unknown" — economics.
+  But the *mandatory* count is not economics; it is the lifecycle, readable from the state
+  machine — a mechanism-class fact under §15.8's filter. The optional-event *rate* is
+  economics, but the optional events are wallet-default-closeable (§16.4), so the
+  exponent's bound is a design choice, not a market outcome.
+- **The `σ_L` half of the residual's routing was already dead** (§15.4 deleted the lever);
+  F-W9 removes the residual's last claim on it. The S-2 half survives, narrowed (§16.3).
+
+### 16.3 The near-miss, recorded — cross-persona intersection, raised and withdrawn
+
+During this correction's own drafting, "the collapse relocates to `k`" was proposed: a
+principal running `k` personas makes `k` `JoinMarket` fundings from one wallet —
+intersect across them. **Withdrawn for want of a linking key, before ratification.**
+§13.3's intersection works because its observations carry a public linking key — "keyed
+to the public `P_id`" — telling the adversary *which candidate sets to intersect*. Across
+personas no such key exists: funding sources are FCMP++-hidden (spends don't reveal
+sources); the amount is publicly determined by the wire (§16.1), zero grouping signal;
+entry timing is decorrelated by the per-event independent draw (the shared-trigger case
+is the entry standoff's graded arm); network position is spent as §10.9 conditioning.
+Absent the key, composing `q^k` presupposes the grouping — which is precisely the
+protected secret. Clustering over an unknown partition is a categorically weaker problem
+than intersection over a known key, and conflating them is F-W7's shape again: a
+mechanism presupposing an observable nobody named. Caught at draft this time, one turn
+after the lesson was written — §16.5's check demonstrating on its own author.
+
+What survives is narrower and already owned: **(a)** shared-trigger clustering of
+same-principal fundings — not a new seam; the entry standoff's existing graded case,
+plus funding-batch spacing as wallet discipline (F-D2's class); **(b)** the off-chain
+counterparty (T-4), whose *own books are the linking key* — its cross-persona view is a
+sub-case of the §15.5/§18.13 row, not a second row. S-2's cross-persona job re-forms
+accordingly: **search for unnamed public linking keys** (e.g. cross-persona portfolio
+correlations — shard `s` dropped by `P1` and added by `P2` at nearby heights; probably
+weak, since shards are non-exclusive, but exactly the class the search covers),
+pre-registered as code per method note 2 — never compose an intersection that was
+assumed.
+
+### 16.4 The proposal handed forward — close the optional crossings at the wallet (R4's call)
+
+The GF-4b lineage filter already classifies output lineage and structurally drops
+`ExternalTransfer` from emission backing
+([`ARCHIVAL_GF4B_BACKING_LINEAGE.md`](ARCHIVAL_GF4B_BACKING_LINEAGE.md); possession of a
+`BackingSet` is proof). Aiming the same filter at the two optional-crossing funding paths
+(`HoldingsUpdate`-add, credit-bearing `Rebond`) makes **self-funding the only thing an
+honest wallet can build** — converting the optional crossings into named deviations and
+the exponent's bound from behaviour into the honest-wallet default. Two constraints
+stated with the proposal, not after it:
+
+1. **It is a wallet default, not a consensus invariant.** Consensus cannot classify
+   FCMP++-hidden funding inputs, and in-circuit lineage is the exact opposite of F-D1's
+   strip direction. "Unrepresentable" holds at the honest-builder layer only.
+2. **Its cost:** self-funded growth gates portfolio expansion on accumulated rewards
+   ≥ FLOOR — a young persona cannot add a shard before its rewards cover one. "Costs a
+   rational operator nothing" is true only past that accumulation threshold.
+
+Whether the price is right is the R4 decision this proposal rides to, with §15.5.
+
+### 16.5 The lesson — before grading a composition, enumerate the events that compose
+
+Four rounds of increasing precision on `q`; `m` — the exponent, which dominates — was
+inherited as "grows" and never counted. The near-miss in §16.3 is the same lesson
+catching its own author one turn after it was named. Recorded beside observer-as-code
+(§15.6 / Gate-6 §11.8 method note 2) and the measurement filter (§15.8 / note 3) as
+**Gate-6 §11.8 method note 4**. Corollary for R5: with the events enumerable, S-2's
+composition question is **finite** — a tractable instrument, not a research project
+(relevant to the standing of the S-2 item, "build first" and unbuilt since round 0).
 
 ## Related documents
 

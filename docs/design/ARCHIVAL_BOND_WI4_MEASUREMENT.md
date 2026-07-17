@@ -910,9 +910,14 @@ preserve:
   serve as one — the ratio is cover-blind, and the absolute figure is
   the assumption restated. Nor would a per-event monitor bound the
   thing the aspiration cares about even at face value: the
-  `P`↔principal binding is observed repeatedly, and intersection
-  collapses geometrically (F-D4 §13.3 / F-W5), so no finite per-event
-  anchor holds a lifetime floor. The conditional's honest instrument
+  aspiration's quantity is per-observer, whole-life exposure, and its
+  live channel is the off-chain counterparty crossing — outside any
+  on-chain per-event number's reach. (Citation corrected 2026-07-16:
+  this clause originally cited F-D4 §13.3's geometric intersection
+  collapse; F-W9 — F-D4 §16 — bounded `m` to a lifecycle count (one
+  mandatory observable crossing, `JoinMarket`), so the collapse does
+  not occur on-chain. The conclusion stands on the narrower ground
+  just stated.) The conditional's honest instrument
   is the **S-2 fused whole-life exposure ledger** — the aspiration's
   quantity measured directly — and the sweep's lasting outputs are the
   scale-invariance result plus this negative. The no-cross-subsidy
@@ -999,7 +1004,10 @@ cheapest, highest leverage," still unbuilt). An aspiration with no
 instrument decays into a slogan invoked when a gate feels
 inconvenient; S-2 is what stops that. And the ledger records one more
 standing fact: every track this cycle — the fifth conditional, the
-F-W5 §13.3 repetition residual, this sweep's negative — has terminated
+F-W5 §13.3 repetition residual (premise since corrected by F-D4
+§16/F-W9 — `m` is a bounded lifecycle count — narrowing S-2's domain
+without changing the terminus, and making its composition question
+finite), this sweep's negative — has terminated
 at "S-2 is the instrument," while S-2 has remained unbuilt since the
 round-0 scoping named it cheapest and highest-leverage. **The
 cheapest highest-leverage item being permanently deferred is itself a

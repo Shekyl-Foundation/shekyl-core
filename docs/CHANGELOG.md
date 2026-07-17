@@ -4,6 +4,48 @@
 
 ### Added
 
+- **docs: F-W9 — F-D4 §13.3's repetition premise corrected by walking
+  the lifecycle; `m` is a bounded count, not a growth variable; Gate-6
+  method note 4 adopted (*enumerate the events that compose*).**
+  §13.3's intersection argument quantified over a growing observation
+  count `m` that was never counted against the state machine — four
+  review rounds sharpened the base (`q`) while the exponent was
+  inherited as "grows." F-D4 §16 counts it against the landed FSM
+  (`bond_post.rs`, all four `post_kind`s): **one** mandatory
+  observable principal↔`P` crossing per bonded life (`JoinMarket`;
+  one-per-life enforced at `:540`), **two** optional
+  wallet-default-closeable crossing classes (`HoldingsUpdate`-add;
+  credit-bearing `Rebond` — the common standing-only `Rebond` moves no
+  value by Pin 2), **zero** observable exits (voluntary refund
+  CT-hidden in-tx; terminal slash emits no transaction at all), rejoin
+  unmodeled (self-harm class; slot-indexed persona derivation). The
+  amount channel carries no grouping signal on any row (`bond_credit`
+  is a pure function of the public holdings descriptor). Consequences:
+  the geometric-collapse clause falls (at the
+  mandatory `m = 1`, GF-7's per-event grade *is* the on-chain lifetime
+  grade per persona per observer class, at nominal cover); the
+  `E[m]`-is-economics objection dissolves (the mandatory count is
+  mechanism-class — readable from the state machine); the residual's
+  dead `σ_L` routing loses its last claim; the S-2 routing survives
+  **narrowed and finite**. A near-miss is recorded in the same section
+  (§16.3): cross-persona intersection (`q^k` over a principal's `k`
+  personas) was raised and **withdrawn for want of a linking key** —
+  funding sources FCMP++-hidden, amounts publicly determined, entry
+  timing per-event decorrelated, network isolated; clustering over an
+  unknown partition is not intersection over a known key (F-W7's
+  phantom-observable shape, caught at draft). Surviving composition
+  surfaces: the T-4 off-chain counterparty ledger (its own books are
+  the key) and shared-trigger funding clusters (the entry standoff's
+  existing graded case). The §16.4 proposal rides the §15.5
+  hand-forward to Gate-6 R4: aim the GF-4b lineage filter at the
+  optional-crossing funding paths (honest-wallet default, not
+  consensus; cost stated — growth gated on accumulated rewards
+  ≥ FLOOR). Swept: F-D4 §13.3 banner + new §16, Gate-6 §12.8
+  hand-forward + §11.8 method note 4 + revision history, WI-4 §13.5
+  and FOLLOWUPS carry-4 geometric-collapse citations (conclusion
+  unchanged, ground narrowed), index rows 97/98 (family extended
+  F-W1…F-W9).
+
 - **F-7 (R1-F-7): first `EngineSignerKind` associated item —
   `SigningCeremony`.** The sealed signer-kind marker was a zero-associated-item
   trait; adding the first item was a Round-1 closure prerequisite (associated
