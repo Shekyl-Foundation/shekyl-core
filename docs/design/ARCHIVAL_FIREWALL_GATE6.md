@@ -2279,7 +2279,7 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   routing — ~~→ §14.4 economics, not this round~~ — was a summary-minted referent (the dated
   UPDATE below is the finding), and its original reopen clause — ~~graded in the GF-4/§14.4
   economics round~~ — is superseded by the charter's rule-21 clause (post-genesis reopening
-  requires a hard fork per `00-mission.mdc` + an S-2 ledger row showing the band exploited in
+  requires a hard fork per [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) + an S-2 ledger row showing the band exploited in
   practice). What the original bullet got right stands unrevised: Layer-2 CT-severing breaks the
   off-chain sequence surface first (§18.10/§18.11), so the grid's threat model is the
   **lifetime-aggregate band only** — a consensus economics change (grid width interacts with
@@ -2349,7 +2349,7 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
 
   **Reopen (rule-21, superseding the entry's original clause):** the disposition round's outcome
   (grid ships / no grid) is recorded here; post-genesis reopening requires a hard fork reviewed
-  per `00-mission.mdc` and an S-2 ledger row showing the band is exploited in practice.
+  per [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) and an S-2 ledger row showing the band is exploited in practice.
 
   **OUTCOME 2026-07-17 — the structural attempt ran and failed at source: width does not
   derive; NO GRID ships at genesis.** The round executed in the ratified order — harm first,
@@ -2738,7 +2738,9 @@ note). Decision 5's scope stands as written — this is a consequent deletion, n
 **The re-formed close condition (supersedes the §12.8 line):** R4 closes when (i) F-D1
 lands with both arms, (ii) F-D2 lands with the §12.9-decision-4 funding default folded
 in, (iii) the deletion PR lands at decision 5's scope (**satisfied 2026-07-17**), and
-(iv) F-D5's §14.4 disposition is recorded (unchanged). The S-2 build is **R5's opening item**, not an R4 close
+(iv) the F-D5 disposition round is recorded (**re-worded and discharged 2026-07-17** — the
+original "§14.4 disposition" phrasing was a dangling pointer; see the amendment below and
+§12.7's OUTCOME: width does not derive, no grid at genesis). The S-2 build is **R5's opening item**, not an R4 close
 condition — but R5 inherits it with F-W9's finite domain and the §16.3 re-formed
 cross-persona job (linking-key search, pre-registered as code). GF-7's PROVISIONAL-PASS
 and its five standing conditionals are untouched by this round.
