@@ -849,8 +849,15 @@ mod tests {
         // `spend_auth_version` yields a different group_id — no silent
         // cross-version reinterpretation (§5.3). (0x02 is now the E′ default, so
         // poke a still-reserved 0x03 to keep the axis-sensitivity meaningful.)
+        // The compile-time guard fails the build if the default ever bumps onto
+        // 0x03, which would quietly degrade this into "the default round-trips".
+        const POKED_SPEND_AUTH_VERSION: u8 = 0x03;
+        const _: () = assert!(
+            POKED_SPEND_AUTH_VERSION != shekyl_address::multisig_address::SPEND_AUTH_VERSION,
+            "axis-sensitivity canary must poke a version the reader does not produce by default"
+        );
         let mut payload_v3 = payload.clone();
-        payload_v3.spend_auth_version = 0x03;
+        payload_v3.spend_auth_version = POKED_SPEND_AUTH_VERSION;
         assert_ne!(
             multisig_group_id_from_address(&kc, &payload_v3).unwrap(),
             from_addr

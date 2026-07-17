@@ -43,7 +43,8 @@
 //! computed a per-output hash under a per-group name. See [`address_fingerprint`]
 //! for why cSHAKE256 and not the consensus `cn_fast_hash`.
 
-use crate::network::{multisig_hrp, Network};
+use crate::network::{multisig_hrp, network_and_kind_from_hrp, AddressKind, Network};
+use bech32::primitives::decode::CheckedHrpstring;
 use bech32::{Bech32m, ByteIterExt, Fe32IterExt, Hrp};
 
 /// X25519 (32) + ML-KEM-768 (1184).
@@ -342,14 +343,20 @@ impl MultisigAddressPayload {
     pub fn parse_fingerprint_bech32m(
         encoded: &str,
     ) -> Result<(Network, [u8; 32]), MultisigAddressError> {
-        let (hrp, data) =
-            bech32::decode(encoded).map_err(|e| MultisigAddressError::Encoding(e.to_string()))?;
-        let hrp_str = hrp.to_string();
-        // Reverse-map the multisig HRP → network (the Network enum's full domain).
-        let network = [Network::Mainnet, Network::Testnet, Network::Stagenet]
-            .into_iter()
-            .find(|&n| multisig_hrp(n) == hrp_str)
-            .ok_or(MultisigAddressError::WrongHrp { hrp: hrp_str })?;
+        // Enforce the Bech32m variant specifically: `bech32::decode` accepts either
+        // Bech32 or Bech32m, but the fingerprint is *encoded* as Bech32m
+        // ([`Self::fingerprint_bech32m`]), so a plain-Bech32 string with the same
+        // HRP and data is not a fingerprint we produced and must not decode.
+        let checked = CheckedHrpstring::new::<Bech32m>(encoded)
+            .map_err(|e| MultisigAddressError::Encoding(e.to_string()))?;
+        let hrp_str = checked.hrp().to_string();
+        // Reverse-map the HRP → (network, kind) via the single ALL_HRPS registry
+        // (case-insensitive, and kept in sync with the single-sig HRPs), then
+        // require the multisig kind — a single-sig HRP is the wrong HRP here.
+        let Some((network, AddressKind::Multisig)) = network_and_kind_from_hrp(&hrp_str) else {
+            return Err(MultisigAddressError::WrongHrp { hrp: hrp_str });
+        };
+        let data: Vec<u8> = checked.byte_iter().collect();
         let fingerprint: [u8; 32] = data.as_slice().try_into().map_err(|_| {
             MultisigAddressError::Encoding(format!("expected 32 bytes, got {}", data.len()))
         })?;
@@ -676,9 +683,15 @@ mod tests {
 
     #[test]
     fn address_fingerprint_kat() {
-        // Fixed payload → fixed cSHAKE256 fingerprint. A change to the canonical
-        // layout, the customization string, or the hash function moves this and
-        // must be a deliberate re-pin, not a silent drift. Regenerated on failure.
+        // Fixed payload → fixed cSHAKE256 fingerprint. This vector *defines* the
+        // fingerprint bytes every independent implementer (payer wallet, scanner,
+        // exchange, light client) must reproduce, so it is a consensus artifact:
+        // the code is tested against it, never it against the code (rule 30). If
+        // this fails, the canonical payload preimage, the customization string, or
+        // the hash changed — do NOT regenerate the constant to make it pass; that
+        // silently moves the identity all implementers rely on. Either revert the
+        // change or, if the move is deliberate, bump the customization to `-v2`
+        // (a new domain) and re-pin under that version with a recorded rationale.
         let payload = make_test_payload(2, 2);
         let fp = address_fingerprint(&payload);
         assert_eq!(
@@ -720,6 +733,32 @@ mod tests {
         let s = make_test_payload(2, 2).fingerprint_bech32m().unwrap();
         let mangled = s.replacen("shekyl1m1", "shekyl1", 1);
         assert!(MultisigAddressPayload::parse_fingerprint_bech32m(&mangled).is_err());
+    }
+
+    #[test]
+    fn fingerprint_bech32m_accepts_uppercase() {
+        // Bech32m is case-insensitive (an all-uppercase encoding is valid and
+        // carries the same HRP/data). The HRP reverse-map lowercases before
+        // matching, so a validly upper-cased fingerprint must still decode —
+        // regression guard for the previous case-sensitive open-coded lookup.
+        let payload = make_test_payload(2, 2);
+        let s = payload.fingerprint_bech32m().unwrap();
+        let upper = s.to_uppercase();
+        let (net, fp) = MultisigAddressPayload::parse_fingerprint_bech32m(&upper).unwrap();
+        assert_eq!(net, Network::Mainnet);
+        assert_eq!(fp, address_fingerprint(&payload));
+    }
+
+    #[test]
+    fn fingerprint_bech32m_rejects_plain_bech32() {
+        // The fingerprint is encoded as Bech32m; a same-HRP, same-data string
+        // carrying a plain-Bech32 checksum is not a fingerprint we produced and
+        // must be rejected (bech32::decode would have accepted either variant).
+        use bech32::Bech32;
+        let fp = address_fingerprint(&make_test_payload(2, 2));
+        let hrp = Hrp::parse(multisig_hrp(Network::Mainnet)).unwrap();
+        let as_bech32 = bech32::encode::<Bech32>(hrp, &fp).unwrap();
+        assert!(MultisigAddressPayload::parse_fingerprint_bech32m(&as_bech32).is_err());
     }
 
     #[test]

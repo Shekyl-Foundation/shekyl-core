@@ -66,12 +66,28 @@ pub fn cn_fast_hash(data: &[u8]) -> Hash {
 /// `shekyl/archival-bond-post-v1`, `shekyl/receive-label-hash-v1`); version it, so
 /// a preimage change is a new domain rather than a silent reinterpretation.
 ///
+/// # Panics
+///
+/// Panics if `customization` is empty: cSHAKE with an empty function-name and
+/// empty customization is defined to be plain SHAKE256, which would silently drop
+/// the domain separation this primitive exists to provide.
+///
 /// This is the canonical home for the primitive. Two open-coded copies predate it
 /// — `shekyl-archival-retention::hash` and `shekyl-crypto-pq::label` — and are
 /// tracked for collapse onto this one (FOLLOWUPS), mirroring the one-audited-keccak
 /// consolidation described above.
 #[must_use]
 pub fn cshake256_32(customization: &[u8], input: &[u8]) -> Hash {
+    // cSHAKE with an empty function-name AND empty customization is defined to be
+    // plain SHAKE256 (SP 800-185 §3.3; RustCrypto special-cases it back to SHAKE
+    // padding). That would silently strip the domain separation this primitive
+    // exists to provide, so an empty customization is a caller bug, not a valid
+    // "no domain" request — reject it loudly rather than degrade in release.
+    assert!(
+        !customization.is_empty(),
+        "cshake256_32 requires a non-empty customization string \
+         (empty customization degrades to plain SHAKE256, defeating domain separation)"
+    );
     let core = CShake256Core::new(customization);
     let mut hasher: CShake256 = CoreWrapper::from_core(core);
     hasher.update(input);
@@ -167,6 +183,28 @@ mod tests {
         let h = cn_fast_hash(b"Shekyl");
         assert_eq!(h.len(), HASH_SIZE);
         assert_ne!(h, [0u8; 32]);
+    }
+
+    #[test]
+    fn cshake256_domain_separation() {
+        // The whole point of the customization string: identical input under two
+        // different domains must not collide.
+        let input = b"same bytes, different domain";
+        let a = cshake256_32(b"shekyl/domain-a-v1", input);
+        let b = cshake256_32(b"shekyl/domain-b-v1", input);
+        assert_ne!(
+            a, b,
+            "distinct customizations must not collide on same input"
+        );
+        assert_eq!(a.len(), HASH_SIZE);
+    }
+
+    #[test]
+    #[should_panic(expected = "non-empty customization")]
+    fn cshake256_rejects_empty_customization() {
+        // An empty customization silently degrades to plain SHAKE256 (no domain
+        // separation); the guard must reject it rather than return a SHAKE digest.
+        let _hash = cshake256_32(b"", b"anything");
     }
 
     #[test]
