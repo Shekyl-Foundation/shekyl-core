@@ -215,16 +215,21 @@ triggered**. Wallet disclosure draft: [`F1_TA3_TA7_LIFETIME_WINDOW.md`](F1_TA3_T
 between `P` and principal beyond what a disciplined user already avoids on ordinary
 transfers.
 
-**Genesis pin (carry from PHASE_2B §2.4):**
+**Genesis pin (carry from PHASE_2B §2.4)** — *bullets preserved as carried; per-bullet
+dispositions from the 2026-07-16 re-walk below are marked inline:*
 
 - Rewards → **stealth outputs `P` controls** (loud amounts; privacy is firewall not
-  hiding reward size).
-- Terminal unstake = **decorrelated drain** `P`→principal — not a lump sweep that
-  ties reward history to a single principal output cluster in one block.
-- **Unbond refund** ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §2.4): release
+  hiding reward size). *(HOLDS, re-anchored — see re-walk.)*
+- ~~Terminal unstake = **decorrelated drain** `P`→principal — not a lump sweep that
+  ties reward history to a single principal output cluster in one block.~~ *(RETIRED as
+  phantom — F-W10, §12.9 decision 2; see GF-4 status below.)*
+- **Unbond refund** ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §2.4): ~~release
   creates a P-attributed output at public `bond_floor` amount; mixes in the FCMP++ set like
   any output — same decorrelated-drain discipline as reward receipts (amount is public;
-  spend anonymity is tree membership).
+  spend anonymity is tree membership).~~ *(HALF-PHANTOM, corrected — the tx is
+  `P`-attributed and the amount publicly derivable, but the refund is ordinary hidden
+  vouts; no identifiable refund output exists. See re-walk; gate-4 §2.4 corrected at
+  source.)*
 
 **Method-note-5 re-walk (2026-07-16, night) — the other two carries, asked the same
 question.** F-W10 retired the middle bullet at ratification; per §11.8 method note 5 the

@@ -142,12 +142,14 @@ that owns it (§4a PR map) — no signature churn between "surface" and "impleme
 
 ## 3. Firewall discipline this surface must enforce (load-bearing)
 
-- **GF-4 — decorrelated-drain output-count discipline.** The delay floor is pinned
+- **GF-4 — drain delay floor** *(formerly "decorrelated-drain output-count discipline";
+  the output-count half was retired 2026-07-16 — F-W10, see UPDATE below)*. The delay
+  floor is pinned
   (`≥ RELEASE_COOLDOWN_EPOCHS × SETTLEMENT_EPOCH_BLOCKS` ≈ 28 days,
-  [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §7); the **open** piece
-  is the output-count rule — *a single lump sweep re-links reward history to one
+  [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §7); the piece that was
+  open was the output-count rule — *a single lump sweep re-links reward history to one
   principal cluster even with the delay satisfied* (gate-6 §2.4). **Recurring** exit
-  (terminal drain **and** `HoldingsUpdate`), gate-6 Round 4. Blocks `drain()`/`unbond()`
+  (terminal drain **and** `HoldingsUpdate`), gate-6 Round 4. Blocked `drain()`/`unbond()`
   — DQ3. **UPDATE 2026-07-16 (F-W10 — gate-6 §12.9 decision 2): the output-count rule is
   retired as phantom.** Under FCMP++ the drain is not an identifiable transaction (no
   spend graph; spend set unenumerable; reward-output spends carry no `P`-typing), so its

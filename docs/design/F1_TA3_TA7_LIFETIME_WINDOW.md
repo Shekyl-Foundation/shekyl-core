@@ -360,7 +360,7 @@ RingCT transfer class if decorrelation default holds. Portfolio public identity 
 collapse output-graph anonymity — amounts and membership are already the public/leaky parts;
 the firewall claim is **no extra** principal↔`P` edge beyond transfer hygiene. |
 | **Residual** | Pin min-delay / output-count between last emission and terminal drain
-(gate-6 §2.4 round-open). Wallet must loud-fail on lump-sweep UX. **UPDATE 2026-07-16
+(gate-6 §2.4 round-open). ~~Wallet must loud-fail on lump-sweep UX.~~ **UPDATE 2026-07-16
 (F-W10 — gate-6 §12.9): the output-count half of this residual is retired as phantom** —
 under FCMP++ the drain is not an identifiable transaction (no spend graph; spend set
 unenumerable; no `P`-typing on reward-output spends), so no output-count rule is owed
