@@ -733,6 +733,34 @@ RELEASE_MIN/MAX ◄── tx volume ──────┤
 
 ## 14) Research Appendix: Reward-Driven Privacy Enhancement
 
+> **Re-walk note (2026-07-17, per Gate-6 §11.7 method note 5 — inherited
+> privacy intuitions re-verify against what FCMP++ actually emits):** this
+> appendix predates that discipline and carries ring-decoy-era framing.
+> Corrected reading, mechanism by mechanism:
+>
+> - **The hypothesis's "mixing layer / clean coins" framing is
+>   ring-era.** "No spending history" confers an advantage only where an
+>   observer can trace spending history — i.e., on a visible spend graph
+>   where decoy selection samples outputs. Under FCMP++ every output enters
+>   the full-chain anonymity set identically; a fresh coinbase output adds
+>   exactly what any other output adds.
+> - **Mechanism A's harm model presupposes an observable FCMP++ does not
+>   emit.** "Temporal correlation between *block mined at H* and *coinbase
+>   output spent at H+N*" requires observing **when a specific output is
+>   spent** — an FCMP++ spend never reveals which output it consumes, so
+>   N is unobservable and there is nothing to decorrelate. Do not build
+>   this.
+> - **Mechanism B's observable is real.** Staker claims are P-attributed
+>   and carry loud plain amounts on the wire (`REWARD_EMISSION_LEG.md`),
+>   so claim frequency/timing is genuinely public; batching addresses an
+>   observable that actually exists. This is the only mechanism here with
+>   a live substrate.
+> - **Mechanism C's gain reduces to "+K outputs in the set."** True but
+>   marginal, and its stated benefit ("UTXO set diversity") is the
+>   ring-era intuition restated.
+>
+> The hard-constraints list and the gate below remain sound as written.
+
 ### Hypothesis
 
 Block rewards (both PoW and staker emission) create fresh UTXOs with no
