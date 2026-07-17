@@ -4,6 +4,29 @@
 
 ### Removed
 
+- **archival-retention: `release_cooldown_anchor_height` deleted (rule 15
+  — the F-D4 mechanism deletion orphaned it).** The decision-5 PR below
+  removed `draw_exit_gap`, the anchor helper's only production consumer;
+  post-landing every call site was a unit test, the `lib.rs` re-export,
+  or the staking-sim `standoff.rs` doc-comment — an armed primitive with
+  no trigger. Its F-D6 anti-drift job was also discharged: the `20_000`
+  doc fossil it was minted to purge is gone, and keeping a production
+  function alive so a sim comment can cite it is speculative generality.
+  Decided as its own rule-15 disposition (the decision-5 out-of-scope
+  call was consumer-relative, and the deletion is what falsified it),
+  with the keep-as-derivation-home branch declined: a future caller
+  needing an earliest-spend height re-derives
+  `(last_served + RELEASE_COOLDOWN_EPOCHS) × SEB` from the named consts
+  at its own site and boundary-tests against `release_cooldown_elapsed`
+  (reopen note at `release_cooldown.rs`; git history holds the reference
+  implementation and boundary tests). Removed: the function, its four
+  unit tests, the re-export; the `standoff.rs` exit-seam paragraph
+  rewritten to cite the consensus predicate and the F-D4 deletion
+  instead of the deleted symbol. F-D6's named-const half stands
+  (config-generated `RELEASE_COOLDOWN_EPOCHS`, no restated integer
+  anywhere); `release_cooldown_elapsed` — enforced consensus with two
+  live verify consumers — is untouched. Disposition at Gate-6 §12.7.
+
 - **standoff: F-D4 exit-standoff mechanism deleted at Gate-6 §12.9
   decision 5's scope** (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §15.4
   item 1 reviewer-map). The round-4 premise audit found the channel the

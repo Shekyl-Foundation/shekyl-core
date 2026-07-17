@@ -2182,7 +2182,10 @@ trigger is catastrophic, `16→1.01`."
   features with every consumer acknowledgment line, the conformance exit arms, and the
   golden-vector/seal-tripwire tests (inventory at F-D4 §15.4 item 1's landing update). The
   F-D6 anchor and `release_cooldown_elapsed` stand, out of scope. This section is archival
-  from here.
+  from here. *(Post-landing follow-up, same day: the anchor's out-of-scope status did not
+  survive the landing — the deletion removed its only production consumer, and it was deleted
+  by its own decision per rule 15; §12.7 and §12.9 decision 5's landing update carry the
+  disposition. `release_cooldown_elapsed` stands.)*
 
 ### 12.6 F-D4 — a-priori exit window (activation FIRED with F-D3, 2026-07-15)
 
@@ -2245,7 +2248,8 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   dust/budget conservation, a-priori-derived per §18.7). A **defense-in-depth candidate**, not R4's
   structural work. **Reopen (rule-21):** graded in the GF-4/§14.4 economics round, not folded into the
   wallet pin.
-- **F-D6 — single-source + derive (anti-drift). DONE 2026-07-16.** UPDATE 2026-07-15: the FSM
+- **F-D6 — single-source + derive (anti-drift). Named-const half STANDS; anchor helper
+  DELETED 2026-07-17 (rule 15).** UPDATE 2026-07-15: the FSM
   landed and the named const half is **done** — `RELEASE_COOLDOWN_EPOCHS` is config-generated
   (`config/consensus_constants.json` `release_cooldown_epochs: 2` → `shekyl-archival-retention`
   `build.rs` → `bond_floor`), consumed by `release_cooldown.rs`. What remained of F-D6 was the
@@ -2256,7 +2260,17 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   `release_cooldown_anchor_height` (`release_cooldown.rs`) is the derivation's single home,
   boundary-tested against `release_cooldown_elapsed` (the two cannot disagree at `H_cd`), and the
   `20_000` doc-comment integer in staking-sim `standoff.rs` — the named drift vector — is purged,
-  pointing at the derivation instead.
+  pointing at the derivation instead. UPDATE 2026-07-17: **the anchor helper is deleted.**
+  Decision 5 executing orphaned it — `draw_exit_gap` was its only production consumer, and
+  post-deletion every call site was a test, a re-export, or a doc-comment: the armed-primitive-
+  with-no-trigger pattern this track opened on. The drift vector F-D6 was minted against is also
+  gone (the `standoff.rs` fossil was the fossil; post-purge the sim comment pointed at the anchor,
+  so the anchor survived only to be citable). Deleted per rule 15 rather than kept as speculative
+  generality; the maintainer declined the keep-and-document branch — a future caller needing an
+  earliest-spend height re-derives from the named consts at its own site and boundary-tests
+  against `release_cooldown_elapsed` (reopen note at `release_cooldown.rs`; git history is the
+  reference). What F-D6 permanently delivered stands: the config-generated constant and the
+  derive-don't-hardcode rule, now enforced by the absence of any restated integer.
 
 ### 12.8 Round 4 status, joint-grading obligation, and what closes it
 
@@ -2524,7 +2538,14 @@ shared-trigger conformance arm — plus its exports and conformance references
 re-run template are unchanged. **UPDATE 2026-07-17: LANDED at exactly this scope**
 (deletion inventory recorded at F-D4 §15.4 item 1's landing update; both features and
 every consumer acknowledgment line went with the mechanism, and the F-D6 anchor's doc
-comment was re-anchored on its own grounds).
+comment was re-anchored on its own grounds). **Follow-up decision (2026-07-17, post-landing):
+the out-of-scope call on `release_cooldown_anchor_height` was consumer-relative, and decision
+5 executing is what removed the consumer** — post-landing the anchor had no production call
+site (tests, a re-export, and a sim doc-comment only). That is a consequence of the deletion,
+not a pre-existing exclusion, so it got its own decision rather than inheriting this one: the
+anchor is **deleted** (rule 15; §12.7's F-D6 entry carries the disposition and the reopen
+note). Decision 5's scope stands as written — this is a consequent deletion, not scope creep.
+`release_cooldown_elapsed` remains enforced consensus, untouched.
 
 **The re-formed close condition (supersedes the §12.8 line):** R4 closes when (i) F-D1
 lands with both arms, (ii) F-D2 lands with the §12.9-decision-4 funding default folded
@@ -2551,6 +2572,21 @@ and its five standing conditionals are untouched by this round.
 
 ## Revision history
 
+- **2026-07-17 (consequent deletion — F-D6 anchor helper removed, rule 15):** decision 5
+  executing orphaned `release_cooldown_anchor_height`: `draw_exit_gap` was its only
+  production consumer, and post-landing every call site was a test, the crate re-export, or
+  the staking-sim doc-comment — the armed-primitive-with-no-trigger pattern this track
+  opened on. The out-of-scope call was consumer-relative, so the orphaning got its own
+  decision rather than inheriting the exclusion (maintainer, 2026-07-17): **deleted**, with
+  the keep-as-derivation-home branch declined as speculative generality — a future
+  earliest-spend-height caller re-derives from the named consts at its own site and
+  boundary-tests against `release_cooldown_elapsed`. Removed: the function, its four unit
+  tests, the `lib.rs` re-export; the staking-sim `standoff.rs` exit-seam paragraph rewritten
+  to cite the consensus predicate and the F-D4 deletion instead of the deleted symbol (and
+  to stop describing the exit standoff as a live separate mechanism). F-D6's named-const
+  half stands (config-generated `RELEASE_COOLDOWN_EPOCHS`; no restated integer anywhere).
+  Statuses swept: §12.5 archival note, §12.7 F-D6 entry, §12.9 decision-5 landing update,
+  index row 95, F-D4 §15.4 landing update, CHANGELOG.
 - **2026-07-17 (decision-5 mechanism-deletion PR landed):** the F-D4 exit-standoff
   mechanism removed at exactly the §12.9 decision-5 scope — `shekyl-standoff/src/exit.rs`
   wholesale, the `provisional-exit-gap-window` + `exit-window-kat` features with every
