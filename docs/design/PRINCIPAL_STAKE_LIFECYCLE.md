@@ -301,7 +301,7 @@ disfavoured (four independent legs, any one sufficient):**
    from normal transfers on-chain"; gate-6 §9.6 invariant 1). A `C_stake` artifact is a
    *distinguisher* that fingerprints stake-in, converting a private funding transfer
    into a labelled one. The amount is already hidden by the transfer's own output
-   commitment (base FCMP++/RingCT amount privacy) — `C_stake` is redundant *and*
+   commitment (base FCMP++ CT amount privacy) — `C_stake` is redundant *and*
    harmful.
 4. **It is spec-only debt.** `C_stake` has **no C++ symbol** (REWARD_EMISSION_VIN_PLAN
    §5; gate-6 §1 "Entitlement / `C_stake` / 3C subtree — Deleted"). Retiring it deletes
@@ -381,9 +381,11 @@ the output-count seam.)
 hard exit** (gate-6 §6). This is a firewall-**design** gate, **not** an FSM or sim gate:
 the rebond/unbond FSM design is pinned (P2B-1..7) and the R-3 age-stratified
 bond-mobility sim that gated the seal is **CLOSED** (sealed 2026-06-16, zero parameter
-change, [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §L18) — see §5. `drain()`/
+change, [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §L18) — see §5. ~~`drain()`/
 `unbond()` bodies stay `unimplemented!()` until GF-4 is pinned (shipping a lump sweep
-before GF-4 ships a correlation beacon, gate-6 §2.4).
+before GF-4 ships a correlation beacon, gate-6 §2.4).~~ *(Superseded — see the
+2026-07-16 F-W10 update above: the count rule is retired; the surviving implementation
+gates are the emission output shape and F3, with F-D1/F-D2 as the drain's spec.)*
 
 **Second and third dependencies — the emission output shape *and* its wire freeze (F3).**
 DQ3's *concrete count rule* is also co-sequenced with the reward-emission leg (§5 gate 3):

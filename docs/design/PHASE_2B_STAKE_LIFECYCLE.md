@@ -426,7 +426,7 @@ backstop, the wallet must not rely on it to mask a local accounting bug.
 **Timeframes:** **Now** (HF1+ confidential claim-based staking). **Mining era**
 (emission-share decay rides the public rate schedule). **V4** — lattice-only crypto
 does not change the FSM shape; amount-hiding remains DL-computational (Pedersen),
-the same post-quantum caveat as all FCMP++/RingCT amount privacy, and is stated in
+the same post-quantum caveat as all FCMP++ CT amount privacy, and is stated in
 the consensus design, not here.
 
 ---
@@ -564,7 +564,7 @@ Authoritative staking **shape** for genesis. Full pin history: revision note
 
 | Leg | Tx shape | Consensus role |
 |-----|----------|----------------|
-| Stake-in | Ordinary FCMP++ transfer (principal → `P`) | Value move; privacy = base RingCT |
+| Stake-in | Ordinary FCMP++ transfer (principal → `P`) | Value move; privacy = base FCMP++ CT |
 | join-Market / re-bond / unbond | `txin_archival_bond_post` (gate 4) | Join creates record; re-bond after slash; **Unbond** returns collateral after cooldown |
 | Bond slash | Gate 4 consensus mutation | Involuntary unbond; `good_standing` interval log |
 | Reward emission | **Special** — mint + membership-only backing + work payload | Paying claim only; record must exist; dedup on bond record |

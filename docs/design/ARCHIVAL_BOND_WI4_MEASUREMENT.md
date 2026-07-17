@@ -267,7 +267,7 @@ The correlator models the S-3 observer (GATE6 §10.1/§10.12): it
 - **sees** public chain events (bond-post arrival blocks, any public
   principal-lifecycle chain footprint) and network-observable arrival times
   of `P`'s broadcasts;
-- **does not see** FCMP++/RingCT-hidden funding sources or amounts, or
+- **does not see** FCMP++ CT-hidden funding sources or amounts, or
   circuit interiors — §10.9 client/circuit isolation is a **conditioning
   assumption** inherited from the standoff harness's caveat 2: the numbers
   are `P(link | isolation holds)`. The hooks measure the **post-isolation

@@ -1451,7 +1451,7 @@ entirely**. Two refinements: (i) the one residual that *looks* like steady-state
 **cross-`P` sybil correlation** (one principal, several `P`s), but its signature is funding/exit
 *timing and pattern*, not magnitude — so it resolves to **seam protection too**, making banding
 *doubly* misdirected (useless single-`P`, weak multi-`P`); (ii) at the seam, amount-correlation is
-already blunted by **FCMP++/RingCT** on the principal side (the funding inputs and drain outputs are
+already blunted by **FCMP++ CT** on the principal side (the funding inputs and drain outputs are
 commitment-hidden), so the public seam leak is **timing + origin** — exactly and only what
 standoff + inversion targets. **Principle: obscuring the conceded earning-function is trilemma-costly
 and misdirected; hiding the principal-linkage is trilemma-free and load-bearing.**
