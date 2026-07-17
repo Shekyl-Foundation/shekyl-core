@@ -944,7 +944,7 @@ as everywhere else in the privacy design. Three layers must hold:
   the drain is not an identifiable transaction (no spend graph, spend set
   unenumerable), so the earlier "decorrelated drains, no lump sweep" wallet
   discipline is retired as a ring-signature-era carry with no substrate here. The
-  consensus delay floor (`RELEASE_COOLDOWN`) stands.
+  consensus delay floor (`RELEASE_COOLDOWN_EPOCHS`) stands.
 - **Bond funding.** Bond is `P`'s central collateral; lump principal→`P` bond
   funding is a correlation channel — weigh fund-from-earnings ramp vs lump initial
   bond in wallet hygiene.

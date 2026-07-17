@@ -94,7 +94,7 @@ Per [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4 tx-legs t
 | **Stake-in** | ordinary FCMP++ transfer, principal → `P` stealth outputs (main tree) | privacy = base FCMP++; **no minimum** (DQ1); GF-7 funding shape/timing discipline applies |
 | **join-Market / re-bond / holdings-update / unbond** | `txin_archival_bond_post` (gate 4, the only consensus-special `P`-identity leg) | `post_kind` table in [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.2 |
 | **Reward emission** | special mint leg (membership-only backing + work payload) | **not a principal action** — consensus mints to `P`; see [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) |
-| **Reward sweep / terminal drain** | ordinary FCMP++ transfer(s) `P` → principal | delay-floored by consensus (`RELEASE_COOLDOWN`); the output-count discipline was retired 2026-07-16 as phantom (F-W10, gate-6 §12.9 — see §3/DQ3 updates); bond returns via gate-4 `Unbond`, **not** the drain |
+| **Reward sweep / terminal drain** | ordinary FCMP++ transfer(s) `P` → principal | delay-floored by consensus (`RELEASE_COOLDOWN_EPOCHS`); the output-count discipline was retired 2026-07-16 as phantom (F-W10, gate-6 §12.9 — see §3/DQ3 updates); bond returns via gate-4 `Unbond`, **not** the drain |
 
 ## 2. Method surface (Round-1 — signatures frozen per A1, bodies gated)
 

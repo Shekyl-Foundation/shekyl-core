@@ -290,7 +290,7 @@ cargo run -p shekyl-staking-sim -- --timing-cluster
 | Archival reorg refresh | `ARCHIVAL_REORG_DEPTH_BLOCKS` | P2B-5 |
 | Min spacing join-Market ↔ principal spend | ≥ 1 settlement epoch | gate-6 R4 |
 | Emission claim jitter | uniform-independent broadcast-height draw, floor `S_min ≥ SEB` (supersedes the earlier "± fraction of `SEB`" — jitter finer than one epoch adds nothing over F1's epoch-granularity fingerprint); wallet-local, consensus-unenforceable | gate-6 R3 **designed + adversarial pass run 2026-07-11** ([`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §11.3–11.5, pass folded §11.8); width R4/GF-4-graded |
-| Drain min delay | ≥ `RELEASE_COOLDOWN × SEB` from last emission *(the delay floor stands, consensus-pinned; the "decorrelated drain" output discipline it once served was retired 2026-07-16 as phantom under FCMP++ — F-W10, [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §12.9)* | gate-6 R4 (closed) |
+| Drain min delay | ≥ `RELEASE_COOLDOWN_EPOCHS × SEB` from last emission *(the delay floor stands, consensus-pinned; the "decorrelated drain" output discipline it once served was retired 2026-07-16 as phantom under FCMP++ — F-W10, [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §12.9)* | gate-6 R4 (closed) |
 | Fund-from-earnings ramp | ≥ 2 settlement epochs of `P`-local earnings | gate-6 R4 (T-A6) |
 
 ---

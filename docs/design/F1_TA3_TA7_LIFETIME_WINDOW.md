@@ -358,7 +358,7 @@ loud `bond_floor` into the public set — same discipline.~~ *(Struck 2026-07-16
 drain is not an identifiable transaction, so there is no lump sweep to avoid; and the refund
 is ordinary hidden vouts against a public `bond_debit` source term, not a loud output — gate-6
 §2.4 re-walk.)* Over lifetime: many emissions and drains increase graph **attempt**
-surface, but each leg is indistinguishable from ordinary RingCT transfer class
+surface, but each leg is indistinguishable from ordinary FCMP++ transfer class
 ~~if decorrelation default holds~~ *(unconditionally — the indistinguishability is what
 FCMP++ provides structurally, F-W10)*. Portfolio public identity does not collapse
 output-graph anonymity — amounts and membership are already the public/leaky parts;
@@ -369,7 +369,7 @@ the firewall claim is **no extra** principal↔`P` edge beyond transfer hygiene.
 under FCMP++ the drain is not an identifiable transaction (no spend graph; spend set
 unenumerable; no `P`-typing on reward-output spends), so no output-count rule is owed
 and no lump-sweep loud-fail has anything to detect. The min-delay half stands,
-consensus-pinned (`RELEASE_COOLDOWN`). |
+consensus-pinned (`RELEASE_COOLDOWN_EPOCHS`). |
 | **Disposition** | **PASS (qualitative)** — ~~FCMP++ membership + decorrelated-drain default
 sufficient for `T_obs`; numeric drain spacing pins with gate-6 Round 4~~. **UPDATE
 2026-07-16: strengthened to pass-by-construction on the output leg** (F-W10 — the
