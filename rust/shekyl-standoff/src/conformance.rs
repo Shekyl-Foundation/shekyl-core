@@ -15,12 +15,6 @@
 //!   draw property (uniform spread, fair order, serial independence), not just
 //!   the reference. The anchor-independence demonstration stays a separate,
 //!   consumer-side instrument because the anchor is consensus-unenforceable.
-//! - **Exit-seam instruments** ([`grade_exit_sample`] / [`certify_exit_draw`]
-//!   / [`exit_release_population`]) — the one-sided analogues for
-//!   `draw_exit_gap` (F-D4 §8): two-property grading (no order axis exists at
-//!   that seam) plus the shared-trigger **clustering** negative control the
-//!   exit sweep pre-registers (§8.3) — detection of a cohort that skipped the
-//!   draw, not the entry seam's inversion-detection.
 //!
 //! Grading uses a strict alpha (1e-6, via [`shekyl_stats::Z_ALPHA_1E6`]): a
 //! correct draw never false-fails, and the gross deviations these instruments
@@ -42,7 +36,6 @@ use std::collections::HashMap;
 use shekyl_stats::{chi_square_counts_expected, chi_square_upper_crit, lag1_autocorr, Z_ALPHA_1E6};
 
 use crate::draw::{bounded_uniform, draw_entry_gap, GapRng};
-use crate::exit::{draw_exit_gap, ExitGapWindow};
 
 /// Fixed bin count for the spread-uniformity grade (clamped to the number of
 /// distinct outcomes when `window` is small).
@@ -445,140 +438,4 @@ pub const CERTIFY_SAMPLE_N: usize = 200_000;
 pub fn certify_draw<R: GapRng + ?Sized>(rng: &mut R, window: u64, n: usize) -> CertifyReport {
     let samples: Vec<(u64, bool)> = (0..n).map(|_| draw_entry_gap(window, rng)).collect();
     grade_sample(&samples, window)
-}
-
-// ---------------------------------------------------------------------------
-// Exit-seam instruments (F-D4 §8; Gate-6 §12.5 F-D3)
-// ---------------------------------------------------------------------------
-
-/// Grade of a realized **exit** draw. The exit seam is one-sided (no order
-/// coin — `ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §1), so the grade has two
-/// properties, not three: spread uniformity and serial independence. There is
-/// no order axis to balance and none is reported — a report shape that carried
-/// a vestigial `order_balanced` would invite asserting on a property this
-/// draw cannot have.
-#[derive(Debug, Clone)]
-pub struct ExitCertifyReport {
-    pub n: usize,
-    pub window: u64,
-    /// Discrete-uniform chi-square of the gap and its critical value.
-    pub chi_square: f64,
-    pub chi_square_crit: f64,
-    pub uniform_ok: bool,
-    /// Lag-1 autocorrelation of the gap sequence; independent ⇒ ~0. The
-    /// exit-seam stake: a persona's recurring `HoldingsUpdate`-drop draws are
-    /// serially linkable if correlated, exactly the entry-seam concern.
-    pub lag1: f64,
-    pub serial_independent: bool,
-}
-
-impl ExitCertifyReport {
-    /// Overall verdict: both properties hold.
-    #[must_use]
-    pub fn passed(&self) -> bool {
-        self.uniform_ok && self.serial_independent
-    }
-}
-
-/// Grade a realized exit-gap sample produced by **any** source against
-/// gap-uniformity (discrete chi-square at alpha = 1e-6) and serial
-/// independence (lag-1). The one-sided analogue of [`grade_sample`]; the same
-/// empty/single-sample honesty guards apply (no data cannot claim a
-/// distribution shape). A gap **outside `[0, window]`** is a draw that
-/// escaped its claimed window — no binning can grade it, so the uniformity
-/// axis fails closed (`chi_square = NaN`, the same fail-closed convention as
-/// [`chi_square_uniform`]'s zero-width-bin arm) rather than panicking on the
-/// bin index or clamping the escape back into range.
-#[must_use]
-pub fn grade_exit_sample(gaps: &[u64], window: u64) -> ExitCertifyReport {
-    let n = gaps.len();
-    // Same bin-count derivation as `grade_sample` — see the comment there for
-    // the u64-domain reasoning.
-    let n_bins = (UNIFORM_BINS as u64).min(window.saturating_add(1)).max(1) as usize;
-
-    let mut counts = vec![0u64; n_bins];
-    let mut out_of_range = false;
-    let mut series = Vec::with_capacity(n);
-    for &g in gaps {
-        if g > window {
-            out_of_range = true;
-        } else {
-            counts[uniform_bin_index(g, window, n_bins)] += 1;
-        }
-        series.push(g as f64);
-    }
-
-    let chi_square = if out_of_range {
-        f64::NAN
-    } else {
-        chi_square_counts_expected(&counts, &uniform_bin_expected(n, window, n_bins))
-    };
-    let chi_square_crit = chi_square_upper_crit((n_bins as f64 - 1.0).max(1.0), Z_ALPHA_1E6);
-    let uniform_ok = n >= 2 && n_bins >= 2 && chi_square < chi_square_crit;
-
-    let lag1 = lag1_autocorr(&series);
-    let serial_independent = n >= 2 && lag1.abs() < tolerance(n);
-
-    ExitCertifyReport {
-        n,
-        window,
-        chi_square,
-        chi_square_crit,
-        uniform_ok,
-        lag1,
-        serial_independent,
-    }
-}
-
-/// Draw `n` exit gaps from the caller's RNG via the reference
-/// [`draw_exit_gap`] and [`grade_exit_sample`] them. A wallet self-certifies
-/// its CSPRNG for the exit seam by passing it here and checking
-/// [`ExitCertifyReport::passed`].
-#[must_use]
-pub fn certify_exit_draw<R: GapRng + ?Sized>(
-    rng: &mut R,
-    window: ExitGapWindow,
-    n: usize,
-) -> ExitCertifyReport {
-    let gaps: Vec<u64> = (0..n)
-        .map(|_| draw_exit_gap(window, rng).blocks())
-        .collect();
-    grade_exit_sample(&gaps, window.get())
-}
-
-/// The **shared-trigger negative control** for the exit seam (F-D4 §8.3;
-/// Gate-6 §12.5 pin): a cohort of realized release heights at a **shared,
-/// public anchor** — the anchor-quantization lemma's setting (a synchronized
-/// cohort's cooldown expiries collapse onto a common `H_0`, F-D4 §3), so
-/// unlike the entry-seam control ([`shared_anchor_population`]) there is no
-/// independent-anchor arm to compare against: the anchor is shared *by
-/// construction* and the draw is the only dispersal.
-///
-/// `drawn = false` models the failure the control must catch — a cohort whose
-/// wallets skip the draw (or whose window is collapsed): every release lands
-/// exactly at `anchor`, and [`max_bin_share`] reads → 1 (clustered).
-/// `drawn = true` is the conforming cohort: per-member independent draws over
-/// `[0, window]` disperse the releases and the share stays small. This is
-/// **clustering-detection**, not the entry seam's inversion-detection — a
-/// harness that cannot fail this control certifies nothing (F-D4 §8.3).
-#[must_use]
-pub fn exit_release_population<R: GapRng + ?Sized>(
-    rng: &mut R,
-    window: ExitGapWindow,
-    anchor: u64,
-    drawn: bool,
-    n: usize,
-) -> Vec<u64> {
-    (0..n)
-        .map(|_| {
-            let gap = if drawn {
-                draw_exit_gap(window, rng).blocks()
-            } else {
-                0
-            };
-            // Saturating: a KAT anchor near u64::MAX must not panic the
-            // diagnostic; production heights are nowhere near the boundary.
-            anchor.saturating_add(gap)
-        })
-        .collect()
 }

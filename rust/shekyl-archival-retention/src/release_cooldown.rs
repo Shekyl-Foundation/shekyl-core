@@ -90,12 +90,12 @@ pub fn release_cooldown_elapsed(
 /// given anchor — `H_cd(P)` in the F-D4 derivation
 /// (`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §1.1), the **F-D6 anchor**: derived from
 /// the named consts `RELEASE_COOLDOWN_EPOCHS × SETTLEMENT_EPOCH_BLOCKS`, never a
-/// hardcoded `20_000`. This function is that derivation's single home; it exists so
-/// the exit-standoff consumer (the wallet's `draw_exit_gap` scheduling, Gate-6
-/// §12.5 F-D3) anchors on the same arithmetic the consensus predicate enforces —
-/// the wallet posts at `H_0 + s` where
-/// `H_0 = max(H_cd, first height slashes_settled_through holds)`; the second term
-/// is runtime scheduler state, consumer-composed, not derivable here.
+/// hardcoded `20_000`. This function is that derivation's single home: any consumer
+/// scheduling against the release boundary anchors on the same arithmetic the
+/// consensus predicate enforces. (The original exit-standoff consumer — the wallet's
+/// `draw_exit_gap` scheduling — was deleted with the F-D4 exit mechanism at Gate-6
+/// §12.9 decision 5; this anchor predates the audit and stands on its own
+/// anti-drift/slashability grounds, named out-of-scope by the same decision.)
 ///
 /// The cooldown elapses at the first height of epoch
 /// `last_served_epoch + RELEASE_COOLDOWN_EPOCHS`, i.e.

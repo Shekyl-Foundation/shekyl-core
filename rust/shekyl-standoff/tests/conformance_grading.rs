@@ -22,18 +22,12 @@ mod common;
 
 use common::SplitMix64;
 use shekyl_standoff::conformance::{
-    certify_draw, certify_exit_draw, chi_square_uniform, correlated_walk,
-    draw_entry_gap_double_jitter_trap, exit_release_population, grade_exit_sample, grade_sample,
-    lag1_autocorr_u64, max_bin_share, shared_anchor_population, summarize_gaps, CERTIFY_SAMPLE_N,
+    certify_draw, chi_square_uniform, correlated_walk, draw_entry_gap_double_jitter_trap,
+    grade_sample, lag1_autocorr_u64, max_bin_share, shared_anchor_population, summarize_gaps,
+    CERTIFY_SAMPLE_N,
 };
-use shekyl_standoff::{draw_entry_gap, ExitGapWindow};
+use shekyl_standoff::draw_entry_gap;
 use shekyl_stats::{chi_square_upper_crit, Z_ALPHA_1E6};
-
-/// Exit-arm KAT window — same deliberately-synthetic value as
-/// `exit_golden_vector.rs` (prime, not an SEB multiple, not a candidate from
-/// the F-D4 §5.1 planning box) so no conformance figure can be misread as a
-/// window commitment.
-const EXIT_KAT_WINDOW: u64 = 10_007;
 
 #[test]
 fn correct_draw_is_well_distributed() {
@@ -275,119 +269,6 @@ fn empty_sample_summary_does_not_manufacture_a_shape() {
     assert_eq!(
         st.max_decile_dev, 0.0,
         "empty sample must not report a non-zero decile deviation"
-    );
-}
-
-#[test]
-fn exit_reference_draw_self_certifies() {
-    // The one-sided exit draw passes its two-property grade (uniform gap,
-    // serial independence) — there is no order axis at this seam, so none is
-    // graded (F-D4 §1: one-sidedness is forced by the cooldown).
-    let mut rng = SplitMix64(0x90DE_4242_7777_0003);
-    let report = certify_exit_draw(
-        &mut rng,
-        ExitGapWindow::kat_inject(EXIT_KAT_WINDOW),
-        CERTIFY_SAMPLE_N,
-    );
-    assert!(report.uniform_ok, "exit uniform grade failed: {report:?}");
-    assert!(
-        report.serial_independent,
-        "exit serial grade failed: {report:?}"
-    );
-    assert!(report.passed(), "exit self-cert failed: {report:?}");
-}
-
-#[test]
-fn exit_shared_trigger_control_catches_a_cohort_that_skipped_the_draw() {
-    // The §8.3 negative control (clustering-detection, NOT the entry seam's
-    // inversion-detection): a synchronized cohort's anchors collapse onto a
-    // common H_0 by the anchor-quantization lemma (F-D4 §3), so the draw is
-    // the only dispersal. A cohort with the draw disabled piles every release
-    // onto the anchor block — max_bin_share must read it as clustered, and a
-    // harness that cannot fail this control certifies nothing.
-    let window = ExitGapWindow::kat_inject(EXIT_KAT_WINDOW);
-    let anchor = 120_000u64;
-    let bin = 1_000u64; // ~10 bins across the window: drawn cohorts disperse
-    let n = 5_000usize;
-    let mut rng = SplitMix64(0xA11C_E5B0_1234_5679);
-    let drawn = exit_release_population(&mut rng, window, anchor, true, n);
-    let skipped = exit_release_population(&mut rng, window, anchor, false, n);
-    let share_drawn = max_bin_share(&drawn, bin);
-    let share_skipped = max_bin_share(&skipped, bin);
-    assert!(
-        share_drawn < 0.2,
-        "conforming cohort should disperse across the window, got {share_drawn}"
-    );
-    assert!(
-        share_skipped > 0.99,
-        "draw-skipping cohort must be caught as clustered, got {share_skipped}"
-    );
-}
-
-#[test]
-fn exit_correlated_walk_fails_the_serial_grade() {
-    // A persona's recurring HoldingsUpdate-drop draws are serially linkable
-    // if correlated — the exit-seam form of the weak-PRNG failure a marginal
-    // goodness-of-fit cannot see. The exit grader's lag-1 probe must bite.
-    let mut rng = SplitMix64(0x5E11_A1B2_C3D4_E5F7);
-    let walk = correlated_walk(&mut rng, EXIT_KAT_WINDOW, 20_000);
-    let report = grade_exit_sample(&walk, EXIT_KAT_WINDOW);
-    assert!(
-        !report.serial_independent,
-        "correlated exit gaps should fail serial: {report:?}"
-    );
-    assert!(
-        !report.passed(),
-        "correlated exit gaps should not self-certify: {report:?}"
-    );
-}
-
-#[test]
-fn exit_no_observations_cannot_claim_uniformity() {
-    // Same honesty guard as the entry grader: no data cannot evidence a
-    // distribution shape, so neither the empty nor the single-gap sample may
-    // claim uniformity or pass.
-    let empty = grade_exit_sample(&[], EXIT_KAT_WINDOW);
-    assert!(
-        !empty.uniform_ok,
-        "empty exit sample must not claim uniformity: {empty:?}"
-    );
-    assert!(
-        !empty.passed(),
-        "empty exit sample must not pass: {empty:?}"
-    );
-
-    let single = grade_exit_sample(&[123u64], EXIT_KAT_WINDOW);
-    assert!(
-        !single.uniform_ok,
-        "a single exit gap cannot evidence a shape: {single:?}"
-    );
-    assert!(
-        !single.passed(),
-        "single-gap sample must not self-certify: {single:?}"
-    );
-}
-
-#[test]
-fn exit_out_of_range_gap_fails_closed_instead_of_panicking() {
-    // A gap above the window is a draw that escaped its claimed window — a
-    // worse defect than non-uniformity, and one no binning can grade. The
-    // grader must fail the uniformity axis closed (NaN chi-square), never
-    // panic on the bin index or clamp the escape back into range.
-    let mut gaps: Vec<u64> = (0..1_000).map(|i| i % (EXIT_KAT_WINDOW + 1)).collect();
-    gaps.push(EXIT_KAT_WINDOW + 1);
-    let report = grade_exit_sample(&gaps, EXIT_KAT_WINDOW);
-    assert!(
-        report.chi_square.is_nan(),
-        "out-of-range gap must NaN the chi-square: {report:?}"
-    );
-    assert!(
-        !report.uniform_ok,
-        "out-of-range gap must not claim uniformity: {report:?}"
-    );
-    assert!(
-        !report.passed(),
-        "a sample that escaped its window must not self-certify: {report:?}"
     );
 }
 

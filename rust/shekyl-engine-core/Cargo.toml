@@ -40,10 +40,7 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention", features = 
 # `SignBond` handler draws the entry-gap via `draw_entry_gap` / `GapRng`
 # (S4/S5 — conformance-correct, float-free). Default build (no `conformance`
 # feature) is dependency-free; `conformance` is dev/test-only.
-# `provisional-exit-gap-window`: DEFAULT_EXIT_GAP_WINDOW unsealed-sentinel
-# acknowledgment (ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md §5.4) — delete this
-# feature at the Phase 7.7 seal.
-shekyl-standoff = { path = "../shekyl-standoff", features = ["provisional-exit-gap-window"] }
+shekyl-standoff = { path = "../shekyl-standoff" }
 # `EconomicsEngine` / `LocalEconomics` (PR 7 §2.7) compose the
 # `shekyl-economics` C2 primitives directly (`base_emission_at`,
 # `calc_burn_pct_from_activity`, `params_digest`) and re-export its
