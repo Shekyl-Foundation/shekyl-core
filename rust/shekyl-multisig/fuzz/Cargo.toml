@@ -1,5 +1,5 @@
 [package]
-name = "shekyl-engine-core-fuzz"
+name = "shekyl-multisig-fuzz"
 version = "0.0.0"
 edition = "2021"
 publish = false
@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-shekyl-engine-core = { path = "..", features = ["multisig"] }
+shekyl-multisig = { path = ".." }
 shekyl-units = { path = "../../shekyl-units" }
 
 [[bin]]
@@ -29,13 +29,6 @@ bench = false
 [[bin]]
 name = "fuzz_encrypt_decrypt_roundtrip"
 path = "fuzz_targets/fuzz_encrypt_decrypt_roundtrip.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "fuzz_state_transitions"
-path = "fuzz_targets/fuzz_state_transitions.rs"
 test = false
 doc = false
 bench = false

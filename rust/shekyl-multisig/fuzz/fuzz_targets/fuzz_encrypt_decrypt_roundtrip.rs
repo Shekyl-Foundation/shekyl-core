@@ -5,8 +5,8 @@ fuzz_target!(|data: &[u8]| {
     if data.len() < 65 {
         return;
     }
-    use shekyl_engine_core::multisig::v31::encryption::{decrypt_payload, encrypt_payload};
-    use shekyl_engine_core::multisig::v31::messages::MessageType;
+    use shekyl_multisig::encryption::{decrypt_payload, encrypt_payload};
+    use shekyl_multisig::messages::MessageType;
 
     let key: [u8; 32] = data[..32].try_into().unwrap();
     let intent_hash: [u8; 32] = data[32..64].try_into().unwrap();

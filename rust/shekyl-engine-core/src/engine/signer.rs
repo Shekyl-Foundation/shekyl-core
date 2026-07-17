@@ -90,9 +90,12 @@ pub trait EngineSignerKind: private::Sealed + 'static {
     /// **no** multisig ceremony. Because the type has no values, every code
     /// path that would consume a `SoloSigner::SigningCeremony` is statically
     /// dead — "a solo wallet ran a multisig ceremony" is unrepresentable, the
-    /// same compile-forced guarantee as the `!Clone` archival keys. The
-    /// multisig signer kind (`MultisigSigner`; no const generics — see the
-    /// module docs) will set this to its two-round FROST ceremony type (MS-5).
+    /// same compile-forced guarantee as the `!Clone` archival keys. The multisig
+    /// signer kind is a per-version family (MS-1, no const generics):
+    /// `MultisigSignerV2` (spend-auth version `0x02`, Option E′) sets this to
+    /// `shekyl_multisig::FrostCeremony`, its four-blob two-round-trip FROST
+    /// ceremony; a future V4 marker gets its own type, so "a V4 wallet ran an E′
+    /// ceremony" is a compile error.
     type SigningCeremony;
 }
 
@@ -128,6 +131,70 @@ const _: () = {
     // definition, and thus the empty-match check, is not elided as unused.
     let _ = solo_ceremony_is_uninhabited;
 };
+
+// ----------------------------------------------------------------------------
+// MS-5 — the multisig signer kind. MS-1 settled two questions: it takes no const
+// generics, and it is a per-version *family* (not one type with a runtime version
+// field). See docs/design/V3_1_MULTISIG_RUST_ENGINE.md MS-1.
+// ----------------------------------------------------------------------------
+
+/// The V3.1 multisig signer kind for spend-auth version `0x02` (Option E′).
+///
+/// Per-version family (MS-1): each multisig protocol version is its own marker,
+/// so `Engine<MultisigSignerV2>` and a future `Engine<MultisigSignerV4>` cannot
+/// be confused — "a V4 wallet ran an E′ ceremony" is a compile error, the same
+/// compile-forced guarantee as `SoloSigner`'s uninhabited ceremony. The
+/// reconciliation of the monomorphization objection (a per-version marker
+/// monomorphizes `Engine<S>` per version, like a version const-generic would):
+/// today the cost is zero (`SoloSigner` + `MultisigSignerV2` = two, identical to
+/// the one-type world) and V4 is years out, whereas one type would need a
+/// one-variant `SigningCeremony` enum *now* — coexistence machinery before
+/// coexistence. §15.5 (a group *is* its version; one Engine = one group = one
+/// version) makes the family shape what the version discipline already asserts.
+///
+/// Zero-sized; the group's key material never lives on the marker.
+#[cfg(feature = "multisig")]
+#[derive(Debug, Clone, Copy, Default)]
+#[allow(dead_code)] // constructed as `Engine<MultisigSignerV2>` in MS-5 S2
+pub struct MultisigSignerV2;
+
+#[cfg(feature = "multisig")]
+impl private::Sealed for MultisigSignerV2 {}
+
+#[cfg(feature = "multisig")]
+impl EngineSignerKind for MultisigSignerV2 {
+    /// The four-blob, two-round-trip, pqc-last FROST ceremony (`shekyl-multisig`).
+    type SigningCeremony = shekyl_multisig::FrostCeremony;
+}
+
+/// engine-core's durable impl of the ceremony's persist-before-use capability
+/// ([`shekyl_multisig::NonceCounterSink`]).
+///
+/// The proposer's held FROST nonce is released to the share-producing path only
+/// after this sink durably advances the monotonic nonce counter (the ceremony
+/// then mints a `ConsumedNonce`). engine-core owns the ledger, so it — not
+/// `shekyl-multisig`, which owns no I/O — carries the durable write. S2 wires the
+/// body to the wallet ledger's crash-atomic `save_state` path (the
+/// `persist_bond_record` discipline); here it is the compile-time proof that the
+/// cross-crate capability is impl-able from the ledger side.
+#[cfg(feature = "multisig")]
+#[allow(dead_code)] // constructed + wired to the ceremony in MS-5 S2
+pub(crate) struct MultisigNonceSink {
+    _private: (),
+}
+
+#[cfg(feature = "multisig")]
+impl shekyl_multisig::NonceCounterSink for MultisigNonceSink {
+    fn persist_nonce_counter(
+        &mut self,
+        _intent_hash: [u8; 32],
+        _counter: u64,
+    ) -> Result<(), shekyl_multisig::NonceCounterError> {
+        Err(shekyl_multisig::NonceCounterError(
+            "durable nonce-counter persist not yet wired to the ledger (MS-5 S2)".to_string(),
+        ))
+    }
+}
 
 // ----------------------------------------------------------------------------
 // PR 5 — `Signer` trait surface (R11 (b), Phase 0h)

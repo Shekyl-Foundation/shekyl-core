@@ -4,29 +4,12 @@
 //! Functional test matrix: happy-path and edge-case coverage for
 //! the V3.1 multisig protocol flow.
 
-use crate::multisig::v31::{
+use crate::{
     encryption::{decrypt_payload, encrypt_payload},
     intent::{ChainStateFingerprint, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION},
     messages::{DecryptedPayload, MessageType, MultisigEnvelope, ENVELOPE_VERSION},
-    state::{IntentState, TrackedIntent, TxCounterTracker},
 };
 use shekyl_units::AtomicUnits;
-
-#[test]
-fn full_happy_path_state_transitions() {
-    let mut ti = TrackedIntent::new([0xAA; 32], 0, 1000, 2000, 1, 2);
-
-    ti.transition(IntentState::Verified).unwrap();
-    ti.transition(IntentState::ProverReady).unwrap();
-    ti.transition(IntentState::Signed).unwrap();
-    assert!(!ti.record_signature());
-    assert!(ti.record_signature());
-
-    ti.transition(IntentState::Assembled).unwrap();
-    ti.transition(IntentState::Broadcast).unwrap();
-    assert!(ti.state.is_terminal());
-    assert!(!ti.state.is_active());
-}
 
 #[test]
 fn intent_roundtrip_through_encryption() {
@@ -94,7 +77,7 @@ fn envelope_wraps_encrypted_payload() {
     let ct = encrypt_payload(
         &group_secret,
         &intent_hash,
-        MessageType::ProverOutput,
+        MessageType::SignatureShare,
         1,
         0,
         plaintext,
@@ -117,24 +100,13 @@ fn envelope_wraps_encrypted_payload() {
     let pt = decrypt_payload(
         &group_secret,
         &intent_hash,
-        MessageType::ProverOutput,
+        MessageType::SignatureShare,
         1,
         0,
         &parsed.encrypted_payload,
     )
     .unwrap();
     assert_eq!(pt, plaintext);
-}
-
-#[test]
-fn tx_counter_only_advances_forward() {
-    let mut tc = TxCounterTracker::new(0, 3);
-    assert_eq!(tc.advance_to(1), Some(1));
-    assert_eq!(tc.advance_to(1), None);
-    assert_eq!(tc.advance_to(0), None);
-    assert_eq!(tc.advance_to(5), Some(5));
-    assert_eq!(tc.advance_to(3), None);
-    assert_eq!(tc.current, 5);
 }
 
 #[test]
@@ -148,7 +120,6 @@ fn chain_state_fingerprint_includes_all_fields() {
             AtomicUnits::from_raw(20),
             AtomicUnits::from_raw(30),
         ],
-        input_assigned_prover_indices: vec![0, 1, 2],
     };
 
     let h1 = fp1.compute();
@@ -164,7 +135,6 @@ fn chain_state_fingerprint_includes_all_fields() {
                 AtomicUnits::from_raw(20),
                 AtomicUnits::from_raw(30),
             ],
-            input_assigned_prover_indices: vec![0, 1, 2],
         }
     };
     assert_ne!(h1, fp2.compute());
@@ -178,7 +148,6 @@ fn chain_state_fingerprint_includes_all_fields() {
             AtomicUnits::from_raw(20),
             AtomicUnits::from_raw(30),
         ],
-        input_assigned_prover_indices: vec![0, 1, 2],
     };
     assert_ne!(h1, fp3.compute());
 }

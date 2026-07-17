@@ -6,8 +6,11 @@
 # F-6 — V3.1 multisig Round 1.
 #
 # Positive CI for `--features multisig` on engine-core, engine-rpc, and
-# ffi (the packages named in V3_1_MULTISIG_RUST_ENGINE.md R1-F-6). Until
-# this lane is green, every Track B claim about gated code is untested.
+# ffi (the packages named in V3_1_MULTISIG_RUST_ENGINE.md R1-F-6), plus the
+# `shekyl-multisig` crate that now owns the ceremony / format code (MS-5) and
+# is always compiled, with no feature of its own. Until this lane is green,
+# every Track B claim about gated code is untested. Each stage runs the feature
+# packages and the crate as separate invocations — see the note above the steps.
 #
 # The P0-n doc-literal gate lives in its own workflow
 # (`multisig-doc-literals.yml`) so a docs-only change no longer drags a
@@ -35,6 +38,12 @@ on:
       - "rust/shekyl-engine-core/**"
       - "rust/shekyl-engine-rpc/**"
       - "rust/shekyl-ffi/**"
+      # The multisig ceremony crate itself (MS-5): the FSM, blob format, and
+      # nonce typestates now live here, not in engine-core. It is a tested
+      # package below (`-p shekyl-multisig`); without this trigger a
+      # crate-only change would not run the lane built to compile it — exactly
+      # the C-1 "armed gate with no trigger" failure this header warns about.
+      - "rust/shekyl-multisig/**"
       - "rust/shekyl-fcmp/**"
       - "rust/shekyl-fcmp-proofs/**"
       # C-1: crates that own a multisig constant consumed by the tested
@@ -82,6 +91,16 @@ jobs:
         with:
           workspaces: rust -> target
 
+      # Each stage is TWO invocations, not one. `--features multisig` belongs only
+      # to the packages that DEFINE it (engine-core / engine-rpc / ffi, where it
+      # gates `dep:shekyl-multisig`). `shekyl-multisig` owns the ceremony
+      # unconditionally and has no feature of its own, so it gets its own plain
+      # invocation. A combined `-p` list does work — cargo applies a feature only
+      # to the selected packages that define it, erroring only if none do — but it
+      # reads as a bug, and the tempting "fix" is a vestigial no-op `multisig`
+      # feature on the crate. That fake feature is what this split exists to
+      # prevent: the crate is always fully compiled, and the argv says so.
+
       - name: cargo check (engine-core + engine-rpc + ffi, --features multisig)
         run: >
           cargo check --locked
@@ -90,7 +109,10 @@ jobs:
           -p shekyl-ffi
           --features multisig
 
-      - name: cargo clippy -D warnings (same packages, all targets)
+      - name: cargo check (shekyl-multisig — always compiled, no feature)
+        run: cargo check --locked -p shekyl-multisig
+
+      - name: cargo clippy -D warnings (feature packages, all targets)
         # Mirror build.yml: deny on clippy argv only. Do not set
         # RUSTFLAGS=-D warnings (path-dep rustc warnings ≠ clippy debt).
         run: >
@@ -103,10 +125,21 @@ jobs:
           --keep-going
           -- -D warnings
 
-      - name: cargo test (same packages, --features multisig)
+      - name: cargo clippy -D warnings (shekyl-multisig, all targets)
+        run: >
+          cargo clippy --locked
+          -p shekyl-multisig
+          --all-targets
+          --keep-going
+          -- -D warnings
+
+      - name: cargo test (engine-core + engine-rpc + ffi, --features multisig)
         run: >
           cargo test --locked
           -p shekyl-engine-core
           -p shekyl-engine-rpc
           -p shekyl-ffi
           --features multisig
+
+      - name: cargo test (shekyl-multisig — always compiled, no feature)
+        run: cargo test --locked -p shekyl-multisig

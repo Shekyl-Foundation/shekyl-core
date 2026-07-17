@@ -1913,35 +1913,45 @@ stack forever.
 
 ## 16. Implementation Plan
 
-### 16.1 New Rust modules
+### 16.1 Rust modules — **E′ / MS-5 (the `shekyl-multisig` crate)**
+
+The multisig ceremony lives in its own crate `shekyl-multisig` (MS-1(a)); its
+dependency list *is* the "no transport" ban. The Option-D modules the earlier plan
+listed — `prover.rs` (rotating prover), `signing.rs`, `transport/*` (nostr / p2p /
+relay directory), `heartbeat.rs`, `counter_proof.rs`, `construction.rs`, and the
+per-intent `state.rs` FSM — are **deleted**: E′ has no prover, no heartbeat, no
+counter-proof, and the wallet owns **no transport** (it emits/consumes a
+self-authenticating blob over a bring-your-own channel; MS-5 S1 landed this).
 
 ```
-shekyl-engine-core/src/multisig/v31/
+rust/shekyl-multisig/src/
+├── lib.rs                 — crate root + re-exports
+├── ceremony.rs            — FrostCeremony FSM (four-blob / two-round-trip /
+│                            pqc-last); both nonce shapes; the ConsumedNonce
+│                            persist-before-use typestate; NonceCounterSink;
+│                            SpendRequest / SpendResponse blob newtypes
 ├── intent.rs              — SpendIntent type, canonical serialization
-├── construction.rs        — canonical_construct() deterministic function
-├── prover.rs              — ProverOutput; rotating prover assignment
-├── signing.rs             — non-interactive scheme_id=2 signing
-├── messages.rs            — envelope + message types
+├── messages.rs            — envelope + E′ message types (Option-D discriminants excised)
 ├── encryption.rs          — group_shared_secret + AEAD
-├── invariants.rs          — §2.7 honest-signer invariant checks
-├── transport/
-│   ├── mod.rs
-│   ├── nostr.rs
-│   ├── p2p.rs
-│   ├── file.rs            — opaque filenames + encrypted manifest
-│   └── relay_directory.rs — operator uniqueness enforcement
-├── state.rs               — per-intent state machine
-├── heartbeat.rs
-├── counter_proof.rs
-└── tx_counter.rs
+├── invariants.rs          — honest-signer invariant checks
+├── group_descriptor.rs    — group backup format (the `relays` field excised)
+└── build.rs               — FCMP reference-block consts from config JSON
 
-shekyl-crypto-pq/src/multisig_receiving.rs
+rust/shekyl-engine-core/src/engine/signer.rs
+├── MultisigSignerV2        — EngineSignerKind marker (spend_auth 0x02);
+│                             SigningCeremony = shekyl_multisig::FrostCeremony
+└── MultisigNonceSink       — engine-core's durable NonceCounterSink impl (body: S2)
+
+rust/shekyl-crypto-pq/src/multisig_receiving.rs
 ├── construct_multisig_output_for_sender
 ├── scan_multisig_output_for_participant
 ├── validate_multisig_output_at_receive  — §8.3
-├── derive_spend_auth_pubkey               — versioned §7.2
-└── rotating_prover_index                  — sender-computable §11.1
+└── derive_spend_auth_pubkey               — versioned §7.2
 ```
+
+> `shekyl-crypto-pq`'s `multisig_receiving.rs` still carries a
+> `rotating_prover_index` (Option-D, sender-computable) that E′ does not use — a
+> separate crypto-pq residue cleanup, out of scope for the MS-5 crate move.
 
 ### 16.2 New tx_extra tags
 

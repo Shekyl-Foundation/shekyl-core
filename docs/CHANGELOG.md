@@ -60,6 +60,31 @@
   separately). Distinct from method note 5's five instances; the rule:
   summary-cited routing targets verify against the source document's own
   words, and a summary that joins two source claims is a new claim.
+- **docs: ring-signature/decoy legacy sweep across the user-facing corpus
+  (Gate-6 §11.7 method note 5 applied to documentation — inherited privacy
+  prose re-walked against what FCMP++ actually emits).** Contrastive
+  mentions ("unlike ring signatures…") were left alone; five stale claims
+  fixed: (1) `LMDB_SCHEMA.md` — `txs_prunable` described as containing
+  "ring signatures"; corrected to the actual `rctSigPrunable` contents
+  (Bulletproof+ range proofs, pseudo-outs, FCMP++ proof blob).
+  (2) `V3_ENGINE_TRAIT_BOUNDARIES.md` — `PendingTxEngine::build` "picks
+  fresh decoys"; corrected to fresh FCMP++ membership-witness assembly.
+  (3) `UPGRADE_POLICY.md` — HF2 planned "lattice-based ring signatures",
+  contradicting `POST_QUANTUM_CRYPTOGRAPHY.md`'s retirement of that
+  survey; re-worded to the lattice-only membership-proof successor.
+  (4) `USER_GUIDE.md` + `EXECUTABLES.md` — documented
+  `shekyl-blockchain-mark-spent-outputs`, a binary with no source and no
+  CMake target (rows and section deleted); `--trusted-daemon` described
+  with Monero decoy-fanout prose ("privacy-preserving request
+  splitting"), corrected to the code's actual meaning; the surviving
+  ancestry/depth/usage/known-spent tools annotated as having no
+  spend-graph substrate under FCMP++ and queued for a V3.2 deletion
+  audit (new `FOLLOWUPS.md` entry). (5) `DESIGN_CONCEPTS.md` §14 research
+  appendix — dated re-walk note added: the "clean coins as mixing layer"
+  hypothesis is ring-decoy-era framing, and Mechanism A's harm model
+  ("when a coinbase output is spent") presupposes an observable FCMP++
+  does not emit; Mechanism B (claim batching) is the only one with a
+  live substrate (claims are P-attributed with loud amounts).
 
 ### Removed
 

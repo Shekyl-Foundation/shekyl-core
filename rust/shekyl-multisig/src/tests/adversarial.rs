@@ -3,11 +3,10 @@
 
 //! Adversarial test matrix: tests for attack vectors against V3.1 multisig.
 
-use crate::multisig::v31::{
+use crate::{
     encryption::{decrypt_payload, encrypt_payload},
     intent::{IntentRecipient, SpendIntent, SpendIntentError, SPEND_INTENT_VERSION},
     messages::MessageType,
-    state::{IntentState, TrackedIntent},
 };
 use shekyl_units::AtomicUnits;
 
@@ -99,19 +98,6 @@ fn tampered_ciphertext_detected() {
         1,
         &ct,
     );
-    assert!(result.is_err());
-}
-
-#[test]
-fn expired_intent_cannot_be_signed() {
-    let mut ti = TrackedIntent::new([0xAA; 32], 0, 1000, 2000, 1, 2);
-    ti.transition(IntentState::Verified).unwrap();
-
-    let expired = ti.check_expiry(3000);
-    assert!(expired);
-    assert_eq!(ti.state, IntentState::TimedOut);
-
-    let result = ti.transition(IntentState::ProverReady);
     assert!(result.is_err());
 }
 

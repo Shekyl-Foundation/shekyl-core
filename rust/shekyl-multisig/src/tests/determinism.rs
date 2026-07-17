@@ -8,7 +8,7 @@
 //! protocol would produce incompatible results across platforms —
 //! a consensus-breaking bug.
 
-use crate::multisig::v31::{
+use crate::{
     encryption::derive_message_key,
     intent::{ChainStateFingerprint, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION},
     messages::MessageType,
@@ -58,14 +58,16 @@ fn chain_state_fingerprint_canary() {
             AtomicUnits::from_raw(2_000_000),
             AtomicUnits::from_raw(3_000_000),
         ],
-        input_assigned_prover_indices: vec![0, 1, 2],
     };
 
     let hash = fp.compute();
 
+    // Regenerated under MS-5: the `input_assigned_prover_indices` term was
+    // excised from the fingerprint preimage with the Option-D prover lineage,
+    // so the pinned prefix changed from the pre-E′ value.
     assert_eq!(
         &hash[..4],
-        &[0xef, 0x08, 0x09, 0x46],
+        &[0x65, 0x09, 0xdc, 0x17],
         "chain_state_fingerprint prefix diverged — cross-platform determinism broken"
     );
 }

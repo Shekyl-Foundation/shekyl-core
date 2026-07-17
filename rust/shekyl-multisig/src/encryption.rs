@@ -188,8 +188,15 @@ mod tests {
         let plaintext = b"test";
         let ct1 =
             encrypt_payload(&SECRET, &INTENT, MessageType::SpendIntent, 0, 1, plaintext).unwrap();
-        let ct2 =
-            encrypt_payload(&SECRET, &INTENT, MessageType::ProverOutput, 0, 1, plaintext).unwrap();
+        let ct2 = encrypt_payload(
+            &SECRET,
+            &INTENT,
+            MessageType::SignatureShare,
+            0,
+            1,
+            plaintext,
+        )
+        .unwrap();
         assert_ne!(ct1, ct2);
     }
 
@@ -230,8 +237,8 @@ mod tests {
 
     #[test]
     fn message_key_deterministic() {
-        let k1 = derive_message_key(&SECRET, &INTENT, MessageType::Heartbeat, 2).unwrap();
-        let k2 = derive_message_key(&SECRET, &INTENT, MessageType::Heartbeat, 2).unwrap();
+        let k1 = derive_message_key(&SECRET, &INTENT, MessageType::SignatureShare, 2).unwrap();
+        let k2 = derive_message_key(&SECRET, &INTENT, MessageType::SignatureShare, 2).unwrap();
         assert_eq!(k1, k2);
         assert_ne!(k1, [0; 32]);
     }

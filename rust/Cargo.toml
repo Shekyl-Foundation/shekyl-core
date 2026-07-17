@@ -2,6 +2,13 @@
 members = [
     "shekyl-ffi",
     "shekyl-fcmp",
+
+    # V3.1 multisig — Option E′ (MS-5). The FROST spend-ceremony FSM, blob
+    # format, and nonce typestates. Pure logic; its dependency list is the
+    # structural "no transport" ban (docs/design/V3_1_MULTISIG_RUST_ENGINE.md,
+    # MS-1). Wired to the wallet ledger by shekyl-engine-core.
+    "shekyl-multisig",
+
     "shekyl-chacha",
     "shekyl-crypto-pq",
     "shekyl-crypto-hash",

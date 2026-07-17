@@ -385,11 +385,16 @@ only moment a ceremony belongs — spending.**
 | griefing scores, R-F storage question | — |
 | much of `v31/invariants.rs` | ~491 |
 
-**Survives:** `messages.rs`, `encryption.rs`, `group_descriptor.rs`
-(transport), `intent.rs`, `state.rs` (still agree on what to spend).
+**Survives (moved into `shekyl-multisig`, MS-5 S1):** `messages.rs`,
+`encryption.rs`, `group_descriptor.rs`, `intent.rs`, `invariants.rs` — as *format*
+substrate, with the Option-D residue excised. **`state.rs` is DELETED** (the
+Option-D `IntentState` FSM; E′ rewrites the ceremony, it does not inherit it).
 
-**Adds:** `frost_sal.rs` (852, in-tree; `y≠0` gate open) + **nonce
-discipline** (F-9: make reuse unrepresentable by type, not by review).
+**Adds:** the `FrostCeremony` FSM (four-blob / two-round-trip / pqc-last) +
+`frost_sal.rs` (kept, for S2's live rounds) + the **corrected nonce discipline** —
+*not* "reuse unrepresentable by type" (the old F-9 framing), but two shapes: B's
+ephemeral `!Clone` nonce, and A's held nonce under containment + a `ConsumedNonce`
+persist-before-use typestate + intent-binding (`!Serialize` dropped as unprovable).
 
 ### What it does *not* buy
 
@@ -535,12 +540,15 @@ The reasoning:
 
 So `N`/`M` are runtime fields, and the coexistence axis (version byte) is a
 **type / dispatch** distinction — per-version `EngineSignerKind` markers, or a
-runtime version field. Which of those two coexistence shapes MS-1 picks is still
-its trait-identity call (it must hold two multisig implementations at once), but
-it is now **bounded: no const generics, and the multisig kind takes no type
-parameters** (one type with a runtime version, or a per-version family — MS-1's
-call). The last unrecorded reason in the multisig surface is recorded — at the
-name (`signer.rs`) and here.
+runtime version field. **Decided (2026-07-17): a per-version family** —
+`MultisigSignerV2`, and a future `MultisigSignerV4`, each its own marker with its
+own `SigningCeremony` type. The runtime-version-field alternative would need a
+one-variant `SigningCeremony` *enum* today (coexistence machinery before
+coexistence), and the per-version monomorphization objection reconciles because
+the cost is zero until V4 (`SoloSigner` + `MultisigSignerV2` = two, identical to
+the one-type world) and §15.5 makes one Engine = one group = one version — so the
+family shape is what the version discipline already asserts. Recorded at the name
+(`signer.rs`) and here.
 
 | Candidate | Under coexist |
 | --- | --- |
@@ -874,25 +882,45 @@ Deferred to Round 2 after MS-1 **and** F-3 lineage fate.
 
 Criteria unchanged. Status reflects adversarial review.
 
-### MS-1 — Trait identity — **OPEN (F-3 lineage CLOSED → v31 only; lean §0.4)**
+### MS-1 — Trait identity — **DECIDED (2026-07-17)**
 
-**Lean MS-1(a)/(c)** — cuttable seam for solo + **future** second
-multisig stack (V4 coexist). **MS-1(b) rejected.** Lineage question
-**closed**: only v31 Option D ships under `multisig`; Option A FROST
-fossil **DELETE** (R1-F-3). **`N`/`K` DECIDED (2026-07-16): the multisig kind
-takes no const generics** — `N`/`M` are runtime payload values, the coexistence
-axis (version byte) is type/dispatch not a const generic, and
-`MultisigSigner<N, K>` is retired (no type parameters — one type with a runtime
-version, or a per-version family; MS-1's call). Recorded at the name
-(`signer.rs`) and in "MS-1 under coexistence" above. MS-1's remaining
-call is only the coexistence *shape* (per-version markers vs a runtime version
-field), bounded by that decision.
+Two questions, both settled by the MS-5 design pass.
+
+**Where multisig lives — a standalone `shekyl-multisig` crate (MS-1(a)).** The
+ceremony, blob format, FSM, and nonce typestates live in their own crate whose
+dependency list *is* the structural "no transport" ban: deps are
+`shekyl-units` / `shekyl-crypto-hash` / serde / … — **no tor, no tokio-net, no
+reqwest** — so a future transport is a *build failure*, not a review catch (the
+`shekyl-wire` minimal-runtime-surface precedent; `shekyl-archival-retention`'s
+pure-logic-in/verdict-out precedent). engine-core wires the returned bytes to the
+ledger; the crate never imports engine-core → no cycle. Module scope was
+rejected: engine-core already links Tor (SP-T2 `PTorClient`), so a module-scoped
+ban is only a grep or a comment (tier 2/3) — a crate boundary is the only place
+cargo can enforce it.
+
+**Marker shape — a per-version family, `MultisigSignerV2` (spend-auth `0x02`).**
+`N`/`K` decided 2026-07-16 (no const generics; `MultisigSigner<N, K>` retired).
+The remaining shape question is now closed too: **not** one type with a runtime
+version field, but a per-version family — each multisig protocol version is its
+own `EngineSignerKind` marker, so `Engine<MultisigSignerV2>` and a future
+`Engine<MultisigSignerV4>` cannot be confused — "a V4 wallet ran an E′ ceremony"
+is a compile error, the SoloSigner uninhabited-ceremony guarantee generalized.
+Reconciliation of the monomorphization objection (a per-version marker
+monomorphizes `Engine<S>` per version, like a version const-generic would): the
+cost is **zero today** (`SoloSigner` + `MultisigSignerV2` = two, identical to the
+one-type world) and V4 is years out, whereas one type would need a **one-variant
+`SigningCeremony` enum now** — coexistence machinery before coexistence. §15.5 (a
+group *is* its version; one Engine = one group = one version) makes the family
+shape what the version discipline already asserts. `MultisigSignerV2:
+EngineSignerKind`, `SigningCeremony = shekyl_multisig::FrostCeremony`
+(`signer.rs`).
 
 R1-F-7 SoloSigner associated-item amend **landed** (`EngineSignerKind::SigningCeremony`,
 `SoloSigner = Infallible`, #317). F-6 CI landed (#310, merged 2026-07-15) —
 **Round 1 CLOSED 2026-07-16.**
 
-**Reopen.** Only if coexistence premise withdrawn (§15.5 amended).
+**Reopen.** Only if the coexistence premise is withdrawn (§15.5 amended), or the
+monomorphization cost stops being zero before V4 (which §15.5 forecloses).
 
 ### MS-2 — C++ / Rust boundary — **OPEN (lean holds; substrate corrected)**
 
@@ -941,25 +969,74 @@ Placement lean MS-4(a) (Refresh/scanner arm) still holds; the
 machinery dropped). (Round 1 closed 2026-07-16 on the F-* blockers; MS-4's
 E′-restated contents are Round-2 work, not a Round-1 gate.)
 
-### MS-5 — Spend path — **OPEN — restated under E′ (2026-07-15)**
+### MS-5 — Spend path — **S1 LANDED (2026-07-17); restated under E′ (2026-07-15)**
 
 **Prior lean (Option D):** `intent → canonical construction → prover →
 signature shares → assembly`. Gaps: no v31 `construction.rs`; F-7
 `EngineSignerKind` ceremony associated type.
 
-**Under E′ the question changed.** Spend path is a **two-round FROST
-ceremony over `y_group`** (with public `y_kem` tweak), plus M hybrid
-`scheme_id=2` sigs from per-participant KEM-derived keys — **not** a
-prover handoff.
+**Under E′ the question changed.** Spend path is a **FROST ceremony over
+`y_group`** (with public `y_kem` tweak), plus M hybrid `scheme_id=2` sigs from
+per-participant KEM-derived keys — **not** a prover handoff.
 
-1. Agree intent / construction (survives: `intent.rs`, `state.rs`).
-2. FROST SAL on `y_group` with **nonce discipline unrepresentable by
-   type** (F-9 footgun; `frost_sal.rs` kept, Option A wrapper deleted).
-3. Assemble `scheme_id=2` auth blob (unchanged wire size vs D).
-4. No `rotating_prover_index`, heartbeat, counter_proof, veto.
+**Four blobs, two round-trips, pqc-last (recorded decision — a reviewer will ask
+why not two).** E′'s one structural win over Monero is **no balance dance**:
+`b_group` is group-plaintext, `compute_output_key_image` takes no ceremony, every
+wallet scans alone — the dance happens only on spend. But the spend went from the
+**two blobs** of the April file-based spec (a coordinator-held *classical* key
+meant leg 1 was already done when the request went out — one round-trip) to
+**four**, because FROST needs commitments before shares *and* pqc-last needs the
+aggregate before the hybrid sigs. E′ *could* reclaim Monero's one-round-trip shape
+(B pre-shares a nonce commitment; A computes both shares; one blob out) — **but
+the price is a nonce on the safe key's disk between visits**, exactly where the
+containment rule forbids it. So **four blobs is the price of not putting a nonce
+in the safe**, declined on the containment asymmetry. (Honestly: on *on-chain
+invisibility* E′ is worse than Monero — `scheme_id=2` + N KEM ciphertexts are
+permanently marked in `tx_extra`; that is the PQC layer, not multisig, and the
+compensation is post-quantum authorization + FROST instead of Monero's homebrew
+2-of-N.) The blobs: RT1 A→B commitment, B→A commitment+share; RT2 A→B SAL context,
+B→A hybrid sig; A assembles.
 
-Lean MS-5(a)/(c) for trait placement still applies; **"unblocked on
-lineage" is not "prover path ready."** Restate before Round 1 close.
+**(D) two-leg binding — no new primitive.** The FROST SAL leg and the M hybrid
+`scheme_id=2` legs are *already* welded bidirectionally in the solo path: the pqc
+signed payload embeds the SAL via `prunable_hash` (`tx_pqc_verify.cpp:92`, the
+anti-substitution binding), and the curve-tree leaf `h_pqc = H(pqc_pk)` binds the
+SAL to the key (`blockchain.cpp:4190`), with the multisig key *container* hashing
+to that leaf (`multisig_pqc_leaf_hash`). MS-5 extends this unchanged; it only
+forces the **pqc-last** order above (a hybrid sig signs over the finished SAL).
+
+**The nonce rule (corrected — the load-bearing security part).** Two shapes,
+because the danger is scoped to one role — **not** "nonces unrepresentable /
+non-persistable by type" (the earlier F-9 framing), **not** `!Serialize` (which is
+unprovable — a foreign `derive` lands in six months), and **not** "restart
+forfeits the round" (incompatible with the walk to the safe, which the transport
+decision made mandatory):
+1. **B's nonce (the safe key): ephemeral `!Clone`** — born, used, and dropped in
+   one call, never persisted. B is protected by the *ceremony's shape*.
+2. **A's nonce (online): held across RT1, under three guards** — (a) **containment**
+   (reachable only from inside the same protected container as A's `y_group`
+   share; a nonce disclosure then costs the same breach as a share disclosure, and
+   disclosure alone leaks the share via `x = (s − k)/e`); (b) **consume-once** via
+   a `ConsumedNonce` persist-before-use typestate minted only after the durable
+   monotonic counter commits — stops the two-signature share extraction (**key
+   theft**); (c) **intent-binding** — the token is bound to one `intent_hash` —
+   stops a cosigner inducing A to sign one nonce against two challenges (**fund
+   theft**). Distinct halves; neither covers the other.
+
+**What S1 shipped (`shekyl-multisig`, this PR — mechanical then behavior).**
+`state.rs` (the Option-D `IntentState` FSM) is **deleted, not inherited**; the
+surviving format modules (`intent`, `messages`, `encryption`, `invariants`,
+`group_descriptor`) moved into the crate with the Option-D residue excised
+(`relays`; the prover / heartbeat / counter-proof / veto / rotation `MessageType`
+discriminants; `input_assigned_prover_indices`); the `FrostCeremony` FSM in the
+four-blob / two-round-trip / pqc-last order with both nonce shapes, the
+`ConsumedNonce` typestate + `NonceCounterSink` capability, and the
+`SpendRequest`/`SpendResponse` blob newtypes. **No live crypto** — the FROST
+rounds, SAL aggregation (`frost_sal.rs`), `y_kem` tweak, and hybrid sigs are
+S2/S3; the clean build is the proof (the `!Clone` guards + the share-releasing
+path gated on `ConsumedNonce`). `MultisigSignerV2: EngineSignerKind` in
+engine-core. S2 (live nonce + FROST rounds + tweak), S3 (assembly), S4 (dealer
+split + address), and S5 (the DoD gate below) each return as their own slices.
 
 **DoD gate (inherited from MSW-6, non-negotiable).** MSW-6 dropped the
 *consensus* rule that forbade co-spending a solo (scheme-1) and a multisig
@@ -1018,11 +1095,11 @@ not a quiet reopen of MS-8.
 
 | ID | Status | Notes |
 | --- | --- | --- |
-| MS-1 | **OPEN** | Lean **(a)/(c)**; **(b) rejected**; name `K`; F-3 lineage **CLOSED** (v31 only) |
+| MS-1 | **DECIDED** | `shekyl-multisig` crate (MS-1(a), the "no transport" ban is the dep list); per-version family `MultisigSignerV2`; no const generics; F-3 lineage **CLOSED** (v31 only) |
 | MS-2 | **OPEN** | Lean holds |
 | MS-3 | **OPEN** | Amended: positive CI (F-6); F-3 = delete fossil before flip |
 | MS-4 | **OPEN — restated E′** | No I7 / prover; local KI via `b`; KEM fan-out + `O` verify |
-| MS-5 | **OPEN — restated E′** | FROST-on-`y` + nonce types; not prover handoff; F-7 still |
+| MS-5 | **S1 LANDED** | `shekyl-multisig` crate + `FrostCeremony` FSM (four-blob/two-round-trip/pqc-last) + both nonce shapes + `ConsumedNonce` typestate; no live crypto (S2/S3); DoD gate = S5 |
 | MS-6 | **OPEN** | Lean holds |
 | MS-7 | **OPEN** | R6 vs **v31** persist only; versioned discriminator (R1-F-11) |
 | MS-8 | **RETIRED** | redundancy; leaf change not required |
@@ -1146,3 +1223,4 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-15 | **P0-n + F-6 CI:** draft lane + fossil sweeps prepared; **CI files split out** to a follow-on PR so this docs carrier lands alone. Operator/protocol fossils swept here (`USER_GUIDE` / `MULTISIG_OPERATIONS` / `POST_QUANTUM` / `DESIGN_CONCEPTS` / `ANONYMITY` / `LEVIN` / `RELEASE_CHECKLIST`). |
 | 2026-07-16 | **Round 1 CLOSED.** All blockers discharged: F-3 DELETE (Option A fossil) + F-6 CI (`--features multisig` green) in **#310** (merged 2026-07-15); F-7 (`EngineSignerKind::SigningCeremony`) in **#317**. Track B (MS-1…MS-7) → Round 2 / MS-5 (Option E′) on explicit go-ahead. Pre-MS-5 gate no CI can turn green: the `MultisigSigner` `N`/`K` decision (see "MS-1 under coexistence"). |
 | 2026-07-16 | **MS-1 `N`/`K` DECIDED:** the multisig kind takes **no const generics**. `N` (participants) / `M` (threshold) are runtime payload values (`n_total`/`m_required`); the coexistence axis (version byte) is type/dispatch, not a const generic (and not compile-time — the version is read from the wire). `MultisigSigner<N, K>` retired; the multisig kind takes no type parameters (one type with a runtime version, or a per-version family — MS-1's call). Recorded at the name (`signer.rs`) + "MS-1 under coexistence". MS-1's remaining call is only the coexistence *shape* (per-version markers vs runtime version field), bounded by this. |
+| 2026-07-17 | **MS-1 shape DECIDED + MS-5 S1 LANDED.** MS-1(a): multisig lives in a standalone `shekyl-multisig` crate whose dep list *is* the "no transport" ban (no tor/tokio-net/reqwest; module scope was rejected because engine-core already links Tor via SP-T2). Marker shape: per-version family `MultisigSignerV2` (not a runtime version field — one type would need a one-variant `SigningCeremony` enum now; the monomorphization cost is zero until V4 per §15.5). MS-5 S1: `state.rs` **deleted, not inherited**; format modules moved into the crate with Option-D residue excised; the `FrostCeremony` FSM (four-blob / two-round-trip / **pqc-last** — the (D) binding is the existing solo bidirectional weld, no new primitive), both nonce shapes (B ephemeral `!Clone`; A held under containment + `ConsumedNonce` persist-before-use + intent-binding — `!Serialize`/restart-forfeits dropped as unprovable/incompatible), and the `SpendRequest`/`SpendResponse` blobs. **No live crypto** (S2/S3); the clean build is the proof. |
