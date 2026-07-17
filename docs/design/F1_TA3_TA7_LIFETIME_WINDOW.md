@@ -207,6 +207,11 @@ sufficient, or pinned min-delay / output-count discipline needed for `T_obs`?
 **Pass:** output layer holds for lifetime observation.
 **Fail:** graph links compound with public portfolio identity.
 
+*(UPDATE 2026-07-16 — F-W10, gate-6 §12.9: the second Demonstrate row's method dissolved —
+there is no "decorrelated drain pattern vs lump sweep" to compare, because under FCMP++ the
+drain is not an identifiable transaction and its output shape is not an observable. The
+question's answer is at §9.3's T-A5 rows: pass-by-construction on the output leg.)*
+
 ---
 
 ### T-A6 — Firewall: bond funding
@@ -327,7 +332,9 @@ between principal graph and `P` activity. **Mitigations (designed, not all numer
 pinned):** settlement-epoch batching (not per-epoch drip); `MAX_SETTLEMENT_EPOCHS_PER_EMISSION
 = 15`; fund-from-earnings ramp spacing join-Market from principal funding
 ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §6); wallet-local emission jitter;
-decorrelated drains (T-A5). `W` governs forfeiture, not `T_obs` shortening. **Gap:** jitter
+~~decorrelated drains (T-A5)~~ *(retired 2026-07-16 — F-W10: drain-side timing has no
+observable event to decorrelate; the mitigation list loses nothing, the channel is closed
+by construction)*. `W` governs forfeiture, not `T_obs` shortening. **Gap:** jitter
 magnitude, min spacing join-Market↔principal spend, drain spacing defaults — need timing-cluster
 pin. |
 | **Residual** | Quantitative pass/fail thresholds; daemon-assisted vs wallet-local jitter
@@ -345,17 +352,31 @@ triggered. |
 | **Question** | Do reward receipts + drains link `P` to principal over `T_obs` beyond
 ordinary FCMP++ transfer hygiene? |
 | **Analysis** | Rewards land in `P`-controlled stealth outputs (loud amounts; privacy is
-firewall not amount hiding). Principal return uses **decorrelated** FCMP++ spends — not lump
+firewall not amount hiding). ~~Principal return uses **decorrelated** FCMP++ spends — not lump
 sweeps tying full reward history to one principal cluster in a single block. Unbond refund is
-loud `bond_floor` into the public set — same discipline. Over lifetime: many emissions and
-drains increase graph **attempt** surface, but each leg is indistinguishable from ordinary
-RingCT transfer class if decorrelation default holds. Portfolio public identity does not
-collapse output-graph anonymity — amounts and membership are already the public/leaky parts;
+loud `bond_floor` into the public set — same discipline.~~ *(Struck 2026-07-16 — F-W10: the
+drain is not an identifiable transaction, so there is no lump sweep to avoid; and the refund
+is ordinary hidden vouts against a public `bond_debit` source term, not a loud output — gate-6
+§2.4 re-walk.)* Over lifetime: many emissions and drains increase graph **attempt**
+surface, but each leg is indistinguishable from ordinary FCMP++ transfer class
+~~if decorrelation default holds~~ *(unconditionally — the indistinguishability is what
+FCMP++ provides structurally, F-W10)*. Portfolio public identity does not collapse
+output-graph anonymity — amounts and membership are already the public/leaky parts;
 the firewall claim is **no extra** principal↔`P` edge beyond transfer hygiene. |
 | **Residual** | Pin min-delay / output-count between last emission and terminal drain
-(gate-6 §2.4 round-open). Wallet must loud-fail on lump-sweep UX. |
-| **Disposition** | **PASS (qualitative)** — FCMP++ membership + decorrelated-drain default
-sufficient for `T_obs`; numeric drain spacing pins with gate-6 Round 4. |
+(gate-6 §2.4 round-open). ~~Wallet must loud-fail on lump-sweep UX.~~ **UPDATE 2026-07-16
+(F-W10 — gate-6 §12.9): the output-count half of this residual is retired as phantom** —
+under FCMP++ the drain is not an identifiable transaction (no spend graph; spend set
+unenumerable; no `P`-typing on reward-output spends), so no output-count rule is owed
+and no lump-sweep loud-fail has anything to detect. The min-delay half stands,
+consensus-pinned (`RELEASE_COOLDOWN_EPOCHS`). |
+| **Disposition** | **PASS (qualitative)** — ~~FCMP++ membership + decorrelated-drain default
+sufficient for `T_obs`; numeric drain spacing pins with gate-6 Round 4~~. **UPDATE
+2026-07-16: strengthened to pass-by-construction on the output leg** (F-W10 — the
+analysis row's own "each leg is indistinguishable from ordinary transfer class" was
+already the whole claim; the decorrelation *default* it conditioned on turns out to be
+what FCMP++ provides structurally). No numeric drain-spacing pin arrives from gate-6 R4;
+the round retired the question. |
 
 ### 9.4 T-A6 — Bond funding
 

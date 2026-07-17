@@ -138,16 +138,20 @@ later within `W`.
 "Joined but not yet paid" = `Bonded` with empty `claimed_settlement_epochs` — **not** a
 fifth state.
 
-**Exit vs bond (G4-1):** decorrelated **drain** (PHASE_2B §2.4) spends `P`'s ordinary
-FCMP++ outputs only. **Bond collateral is a consensus balance**, not a spendable UTXO —
-clean exit requires **`BondPostKind::Unbond`**, not drain.
+**Exit vs bond (G4-1):** the **drain** (PHASE_2B §2.4) spends `P`'s ordinary
+FCMP++ outputs only *(the "decorrelated" qualifier was retired 2026-07-16 as phantom under
+FCMP++ — F-W10, gate-6 §12.9)*. **Bond collateral is a consensus balance**, not a spendable
+UTXO — clean exit requires **`BondPostKind::Unbond`**, not drain.
 
-**Release refund (gate-6):** Unbond creates a **P-attributed** refund output whose amount
-equals public `bond_debit == bonded_total == bond_floor(holdings_current)` — the record's **current**
-holdings being fully released (distinct from the vin's post-connect `holdings` field, which is empty on
-`Unbond`; §3.5 debit-path note). FCMP++ tree membership
-is value-agnostic (output mixes normally); gate-6 §2.4 decorrelated-drain discipline applies
-to this output like reward outputs.
+**Release refund (gate-6):** the `Unbond` **transaction** is `P`-attributed and its refund
+amount is publicly derivable — `bond_debit == bonded_total == bond_floor(holdings_current)` —
+the record's **current** holdings being fully released (distinct from the vin's post-connect
+`holdings` field, which is empty on `Unbond`; §3.5 debit-path note). The refund itself enters
+as **ordinary hidden vouts** CT-balanced against that public source term (§3.5 release fold):
+no identifiable "refund output" exists on the wire. *(Corrected 2026-07-16 — gate-6 §2.4
+method-note-5 re-walk: the earlier "P-attributed refund output" phrasing named an output no
+observer can identify, and the "decorrelated-drain discipline applies" tail retired with
+F-W10.)* FCMP++ tree membership is value-agnostic (the vouts mix normally).
 
 ---
 
@@ -347,7 +351,8 @@ shards take `E_rebond` (Pin 7).
 
 **Unbond path (G4-1):** clean release of bonded balance when:
 
-1. `P` has initiated exit (decorrelated drain confirmed) **or** is in `Exited` posture, and
+1. `P` has initiated exit (drain confirmed — the "decorrelated" qualifier was retired
+   2026-07-16 as phantom under FCMP++, F-W10 / gate-6 §12.9) **or** is in `Exited` posture, and
 2. **Release cooldown** elapsed: grace window past `P`'s last served settlement epoch
    (gate-4; **shorter than `W`**), **and**
 3. **Slash settlement** reached the anchor: the slash scheduler's settled watermark

@@ -938,9 +938,13 @@ as everywhere else in the privacy design. Three layers must hold:
   the right post-V3 strengthening.
 - **Timing.** Stake-in (principal → `P`) and first emission pair if immediate.
   Decouple with a randomized delay/window so the pairing is ambiguous.
-- **Output.** Rewards land in **stealth outputs `P` controls**; **decorrelated
-  drains** on unstake-out (no lump sweep when a public `P` goes quiet). No
-  linkable consolidation back to principal.
+- **Output.** Rewards land in **stealth outputs `P` controls**. No linkable
+  consolidation back to principal — and per the 2026-07-16 re-walk (F-W10,
+  `ARCHIVAL_FIREWALL_GATE6.md` §12.9) this holds **by construction** under FCMP++:
+  the drain is not an identifiable transaction (no spend graph, spend set
+  unenumerable), so the earlier "decorrelated drains, no lump sweep" wallet
+  discipline is retired as a ring-signature-era carry with no substrate here. The
+  consensus delay floor (`RELEASE_COOLDOWN_EPOCHS`) stands.
 - **Bond funding.** Bond is `P`'s central collateral; lump principal→`P` bond
   funding is a correlation channel — weigh fund-from-earnings ramp vs lump initial
   bond in wallet hygiene.

@@ -267,7 +267,7 @@ The correlator models the S-3 observer (GATE6 §10.1/§10.12): it
 - **sees** public chain events (bond-post arrival blocks, any public
   principal-lifecycle chain footprint) and network-observable arrival times
   of `P`'s broadcasts;
-- **does not see** FCMP++/RingCT-hidden funding sources or amounts, or
+- **does not see** FCMP++ CT-hidden funding sources or amounts, or
   circuit interiors — §10.9 client/circuit isolation is a **conditioning
   assumption** inherited from the standoff harness's caveat 2: the numbers
   are `P(link | isolation holds)`. The hooks measure the **post-isolation
@@ -910,9 +910,14 @@ preserve:
   serve as one — the ratio is cover-blind, and the absolute figure is
   the assumption restated. Nor would a per-event monitor bound the
   thing the aspiration cares about even at face value: the
-  `P`↔principal binding is observed repeatedly, and intersection
-  collapses geometrically (F-D4 §13.3 / F-W5), so no finite per-event
-  anchor holds a lifetime floor. The conditional's honest instrument
+  aspiration's quantity is per-observer, whole-life exposure, and its
+  live channel is the off-chain counterparty crossing — outside any
+  on-chain per-event number's reach. (Citation corrected 2026-07-16:
+  this clause originally cited F-D4 §13.3's geometric intersection
+  collapse; F-W9 — F-D4 §16 — bounded `m` to a lifecycle count (one
+  mandatory observable crossing, `JoinMarket`), so the collapse does
+  not occur on-chain. The conclusion stands on the narrower ground
+  just stated.) The conditional's honest instrument
   is the **S-2 fused whole-life exposure ledger** — the aspiration's
   quantity measured directly — and the sweep's lasting outputs are the
   scale-invariance result plus this negative. The no-cross-subsidy
@@ -999,7 +1004,10 @@ cheapest, highest leverage," still unbuilt). An aspiration with no
 instrument decays into a slogan invoked when a gate feels
 inconvenient; S-2 is what stops that. And the ledger records one more
 standing fact: every track this cycle — the fifth conditional, the
-F-W5 §13.3 repetition residual, this sweep's negative — has terminated
+F-W5 §13.3 repetition residual (premise since corrected by F-D4
+§16/F-W9 — `m` is a bounded lifecycle count — narrowing S-2's domain
+without changing the terminus, and making its composition question
+finite), this sweep's negative — has terminated
 at "S-2 is the instrument," while S-2 has remained unbuilt since the
 round-0 scoping named it cheapest and highest-leverage. **The
 cheapest highest-leverage item being permanently deferred is itself a
@@ -3684,6 +3692,19 @@ both outside the protocol's power, which is the definition of closed
 to its floor. Caveat carried: under default-on, the opt-out set
 remains a distinguishable minority; acceptable (informed choice),
 but the opt-out must be explicit and loud, never ambient.
+
+> **UPDATE 2026-07-16 (Gate-6 §12.9 — GF-4's exit seam re-homed here).** The F-D4
+> premise audit (F-D4 §2.1/§15, F-W7–F-W9) found the on-chain `P`↔principal
+> exit-timing channel phantom and the amount channel closed by construction; Gate-6's
+> R4 decision round re-homed GF-4's exit seam to **this seam**. Consequences for this
+> section's inventory: the exit's timing exposure is the **T-4 counterparty crossing**
+> (deposit arrival vs the public unbond/claim record — an S-2 ledger row, not a rate
+> model); F-D1/F-D2 are the boundary-class-3 mistake-set closure named above (drain
+> subsums — "closed by safe-by-default coverage, template: the §18.12 input-level
+> pin"), building exactly as pinned at Gate-6 §12.3–§12.4; cohort-arrival compression
+> after a mass-unbond event is likewise an S-2 row (the counterparty's books are the
+> linking key — F-D4 §16.3). No new boundary class is minted: the three named above
+> are still the whole set.
 
 ## 19. Addendum (2026-07-11): leg-(b) wall-clock sweep-phase arm — spec and a-priori bound
 
