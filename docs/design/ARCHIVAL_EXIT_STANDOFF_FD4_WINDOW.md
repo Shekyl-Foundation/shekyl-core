@@ -20,6 +20,12 @@ forward to Gate-6 R4 with this audit attached — the re-homing call is R4's, no
 The `RELEASE_CHECKLIST.md` seal entry is removed by the ratification commit; the mechanism
 deletion is a separate PR whose reviewer-map is §15.4 item 1.**
 
+**UPDATE 2026-07-16 (evening) — §15.5 ANSWERED by Gate-6 R4 (§12.9): the seam RE-HOMES to
+the principal↔user crossing (WI-4 §18.13); the four-axis joint grade dissolves by axis
+attrition; the §16.4 funding default is accepted (F-D2-class); the harness fork resolves
+to deleted (never landed, not resurrected). The mechanism-deletion PR is unblocked at
+§15.4 item 1's reviewer-map scope. This doc is closed as an archival record.**
+
 This is the artifact Gate-6 §12.6 requires first in the F-D3/F-D4 build
 sequence, in the GF7_HOOKS §5.1 ordering: (a) derive the threshold and the window model from a
 stated adversary-advantage claim, (b) adversarial review of the rate model against the
@@ -1027,6 +1033,11 @@ them, rule-21/rule-94 shape). **DISCHARGED 2026-07-16: the ratification commit c
 four sweeps** (Gate-6 §12.5/§12.6/§12.8 + revision history + §11.8 method note 2; index rows
 95–98; FOLLOWUPS swan-2/W8 closed as posed; the checklist seal entry removed). What remains
 owed: the mechanism-deletion PR (item 1's reviewer-map) and the Gate-6 R4 answer to §15.5.
+**UPDATE 2026-07-16 (evening): §15.5 ANSWERED — Gate-6 §12.9.** The seam re-homes; the
+harness fork resolves to **deleted, not re-parameterized** (the re-homed seam's instrument
+is the S-2 ledger, and a rate model over counterparty arrivals fails the §15.8 filter —
+Gate-6 §12.9 decision 5); "not resurrected" is now the final state, and the
+mechanism-deletion PR is unblocked at item 1's reviewer-map scope.
 
 ### 15.5 The gate question (HANDED FORWARD to Gate-6 R4, audit attached — 2026-07-16)
 
@@ -1050,6 +1061,18 @@ answer per §15.4 item 1. **F-W9 (§16) rides the same hand-forward:** the §13.
 premise is corrected before R4 takes the question — `m` is a bounded lifecycle count, so
 the on-chain composition a re-homed grade would inherit is finite and GF-7-shaped, and the
 §16.4 wallet-default proposal (with its growth-gating cost) is part of what R4 receives.
+
+**ANSWERED 2026-07-16 (Gate-6 §12.9, the R4 decision round).** Both halves reduce; the
+seam **re-homes** to the principal↔user crossing (WI-4 §18.13) with F-D1/F-D2 re-labeled
+as that seam's class-3 mistake-set closure (build and arms unchanged). The four-axis
+joint grade **dissolves by axis attrition** — no grade re-forms over the crossing (its
+instrument is the S-2 ledger; a rate model there fails the §15.8 filter); GF-10 grades
+standalone against its own pre-committed claim. The §16.4 proposal is **accepted** as an
+F-D2-class wallet default (self-fund default; external growth-funding is a loud override
+routed through the entry standoff). The harness fork of §15.4 item 1 resolves to
+**deleted** (never landed; not resurrected), and the mechanism-deletion PR is scoped at
+Gate-6 §12.9 decision 5. After this answer the on-chain `P`↔principal surface is the
+entry seam alone (GF-7), per F-W9's mandatory `m = 1`.
 
 ### 15.6 The methodological finding — observer-as-code (the asset this track produced)
 
@@ -1259,6 +1282,10 @@ stated with the proposal, not after it:
    rational operator nothing" is true only past that accumulation threshold.
 
 Whether the price is right is the R4 decision this proposal rides to, with §15.5.
+**ACCEPTED 2026-07-16 (Gate-6 §12.9 decision 4)** — as an F-D2-class wallet default:
+self-funding is the default build path; external growth-funding is a loud, explicit
+override treated as a `JoinMarket`-class crossing and routed through the entry-standoff
+draw. Both constraints above were accepted with the proposal, not weakened.
 
 ### 16.5 The lesson — before grading a composition, enumerate the events that compose
 

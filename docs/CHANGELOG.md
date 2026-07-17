@@ -4,6 +4,36 @@
 
 ### Added
 
+- **docs: Gate-6 R4 decision round (§12.9) — the F-D4 §15.5 hand-forward
+  answered: the exit seam re-homes, the joint grade dissolves.** Four
+  decisions recorded with the F-D4 §2.1/§15 audit and the F-W9 premise
+  correction as inputs. (1) **Seam re-homed** to the principal↔user
+  crossing (WI-4 §18.13): the timing half is phantom (F-W7/F-W9 — zero
+  observable exits on either branch), the amount half was closed on-chain
+  by construction and its surviving off-chain subsum match is that seam's
+  boundary class 3, which F-D1/F-D2 close — they re-label, build and arms
+  unchanged. After this round the on-chain `P`↔principal surface is the
+  entry seam alone (GF-7). (2) **Joint grade dissolved by axis
+  attrition** (exit-timing deleted; amount structural-armed pass/fail;
+  holdings a public posture fact): CB-3's joint-grading obligation is
+  discharged — one live axis cannot multiply — so **GF-10's width grades
+  standalone** against its §11.5 pre-committed advantage claim and R3's
+  close re-forms accordingly; the correlated-trigger obligation relocates
+  to the crossing as an S-2 row. (3) **F-D4 §16.4 funding default
+  ACCEPTED** as F-D2-class: self-funding via the GF-4b lineage machinery
+  is the honest-wallet default, external growth-funding is a loud
+  override routed through the entry-standoff draw; growth-gating cost
+  accepted, consensus enforcement stays rejected. (4) **Harness deleted,
+  not re-parameterized** (a rate model over counterparty arrivals fails
+  method note 3; archived-unlanded is final) and the mechanism-deletion
+  PR is scoped (`shekyl-standoff/src/exit.rs` wholesale; F-D6 anchor +
+  `release_cooldown_elapsed` out of scope). Re-formed R4 close: F-D1 +
+  F-D2 (incl. the funding default) + the deletion PR + F-D5's §14.4
+  disposition; S-2 opens R5 with F-W9's finite domain. Swept: Gate-6
+  header/round-table/§11/§12.8/revision history, F-D4 status banners +
+  §15.4/§15.5/§16.4, WI-4 §18.13, FOLLOWUPS L17-wargame rider, index
+  rows 95/97/98.
+
 - **docs: F-W9 — F-D4 §13.3's repetition premise corrected by walking
   the lifecycle; `m` is a bounded count, not a growth variable; Gate-6
   method note 4 adopted (*enumerate the events that compose*).**

@@ -24,6 +24,9 @@
   claim-jitter draw + scheduler are unbuilt (verified) — pinned pre-code, M1-armed. The adversarial
   pass (§11.8) found no break; its four findings are folded as re-pins into §11.3–11.5. Remaining for
   close: fold GF-10 into the R4/GF-4 joint grade and clear the pre-committed advantage claim (§11.7).
+  **UPDATE 2026-07-16 (§12.9 decision 3):** the joint grade dissolved by axis attrition; GF-10's
+  width now grades **standalone** against its §11.5 pre-committed advantage claim — R3 closes when
+  that single-axis grade runs.
 - **Round 4 drafted (2026-07-11, §12) — the drain-event firewall.** GF-7 (funding-in) already built +
   graded PROVISIONAL-PASS (`r = 1.86`); GF-4 (value-out) drafted as one event with three co-triggered
   channels graded jointly: **F-D1** drain-amount taint-carve (complete pre-code pin — (a)+strip),
@@ -32,6 +35,14 @@
   against the F-D4 sentinel — `draw_exit_gap`, F-D6-derived anchor; sealing owed at Phase 7.7),
   **F-D5** → §14.4, **F-D6** anti-drift (**DONE 2026-07-16**, §12.7). GF-10 (R3) folds into
   the joint grade. The rebond/unbond FSM blocker is discharged (landed PR #303/#307).
+  **UPDATE 2026-07-16 (R4 decision round — §12.9):** the F-D4 §15.5 hand-forward is **answered**:
+  the exit seam **re-homes** to the principal↔user crossing (WI-4 §18.13; both halves reduce —
+  timing phantom per F-W7/F-W9, amount already class-3 of that seam); the four-axis joint grade
+  **dissolves by axis attrition** (GF-10 grades standalone, decision 3); the F-D4 §16.4 funding
+  default is **accepted** as F-D2-class (self-fund default, loud override routed through the entry
+  standoff); the exit-standoff mechanism deletion PR is scoped (decision 5 — `exit.rs` wholesale;
+  F-D6 and `release_cooldown_elapsed` out of scope). R4's re-formed close: F-D1 + F-D2 (incl. the
+  funding default) + the deletion PR + F-D5's §14.4 disposition.
 - **Round 5 planned** — the cross-layer soundness sign-off for Stage 3 (S-2 exposure ledger + S-3
   exit/value-seam adversary sim, §10.12).
 
@@ -381,8 +392,8 @@ carried; R2 the same).
 | **0** | Scaffold + invariant frame + consumer map | **Done** |
 | **1** | HKDF/`P_id` wire + crypto layer hooks | **Closed (2026-06-13)** — §9 GF-1 dual-key verifier contract resolved; GF-2 dual-scan enforcement made architectural; reviewer sign-off (§9.8). **Carry discharged (2026-07-11 reconciliation):** `ARCHIVAL_P_DERIVE_V1` KAT + `archival_p` module **landed** (Bond-PR 0 #152; `archival_p.rs` + `kat_archival_p_derive_v1.rs`, seven §9.3 labels incl. `bond_spend_*` verified at source). C-1 emission vin ML-DSA equality check **landed** (#277). §7 checklist reconciled to landed state. |
 | **2** | Network + transport (L16 → production shape) | **Closed (2026-07-11) — §10; closure disposition §10.13.** Rendezvous path specified; seeding relaxation bounded. **Entry gates (all dispositioned):** challenge-response Levin class → anonymity-routable set (GF-3, §10.4); pre-join backing-presentation transport (GF-5, §10.5); Arti HS-hosting capability confirmed, at-source pin carried (GF-12, §10.3); `P`-tx wire-size fingerprint characterization + dummy/fragmentation policy (GF-6, §10.6); HS key lifecycle `p_slot`-bound + seed-derived (GF-9, §10.7). **Exit dispositions (§10.11, passes 1–4):** bonded-verifier challenges, broadcast announce, `P`↔principal circuit/guard isolation (§10.9), pure-rendezvous + I2P-closed. **Carries (§10.13, rule-21):** at-source Arti pin → transport PR; dummy/frag tuned ratio → testnet; **GF-9 HS-id HKDF label → §9.3 amendment (armed: not yet in derivation; dot-vs-hyphen format flag)**; announce↔anchor + cadence timing → R3. Transport code partial-landed (2d-2: SP-T1 #204/#209, SP-T4a #254 — inert). |
-| **3** | Timing + rotation + `W` / epoch-length joint pin | **Designed + adversarial pass run (2026-07-11) — §11; closes on the R4/GF-4 joint grade (§11.7).** **GF-10** pinned as *mechanism + structural window* (uniform-independent claim-broadcast-height draw via audited `bounded_uniform`; floor = `h_close + reorg_depth(720)`, ceiling = `(E_oldest+W)·SEB − submit_guard`; a-priori `S_min ≥ SEB`); **numeric width routed to R4/GF-4 CB-3 joint grade** (not standalone — per-axis error avoided). Draw + scheduler **unbuilt** (verified) → pinned pre-code, M1-armed. Rotation leg ratified (T-A1 timeline non-channel; network leg §10.7/§10.9); R2 timing hand-forwards resolved (announce↔anchor = entry standoff; emission-cadence = GF-10). Adversarial pass (§11.8) found no break — four findings folded as re-pins, one retraction (max-age misread). Two frame/pass assumptions overturned at source (epoch-crossing §11.4; max-age semantics §11.8). |
-| **4** | Output + bond-funding hygiene (**recurring** — rebond/unbond at genesis) | **Drafted (2026-07-11) — §12, the drain-event firewall.** **GF-7 (funding-in) built + graded PROVISIONAL-PASS** (`r = 1.86`, local-daemon; standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) provisional) — not an open design question. **GF-4 (value-out) drafted:** the drain is one event, three co-triggered channels graded jointly (§12.1). **F-D1** drain-amount taint-carve — complete pre-code pin ((a)+strip; strip `{lineage,epoch,height}` + aggregate-scalar amount stage; §12.3); **F-D2** UI-default (§12.4); **F-D3/F-D4** one-sided cooldown-anchored exit standoff — **FSM gate FIRED 2026-07-15** (§12.5–12.6; `bond_post.rs:369`/`:627`); **F-D5** quantization → §14.4; **F-D6** anti-drift derive-don't-hardcode (§12.7). GF-10 (R3) folds into the joint grade. UPDATE 2026-07-15: both former blockers discharged — the rebond/unbond FSM landed (PR #303 `HoldingsUpdate`/`Unbond` + Pin-4/Pin-5 closure 2026-07-14; PR #307 `Rebond`) and the age-stratified sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18). F-D3/F-D4 open for build: F-D4 a-priori window derivation first (committed before any sweep runs, §12.6), then `draw_exit_gap` (§12.5) with the F-D6 derived anchor. UPDATE 2026-07-16: derivation committed + reviewed (rounds 1–3, sentinel + frozen rule); **`draw_exit_gap` BUILT** against the sentinel with the F-D6 anchor derived (`release_cooldown_anchor_height`) — F-W5 `N_t` re-derivation, sweep, and Phase 7.7 seal remain. |
+| **3** | Timing + rotation + `W` / epoch-length joint pin | **Designed + adversarial pass run (2026-07-11) — §11; closes on the R4/GF-4 joint grade (§11.7).** **GF-10** pinned as *mechanism + structural window* (uniform-independent claim-broadcast-height draw via audited `bounded_uniform`; floor = `h_close + reorg_depth(720)`, ceiling = `(E_oldest+W)·SEB − submit_guard`; a-priori `S_min ≥ SEB`); **numeric width routed to R4/GF-4 CB-3 joint grade** (not standalone — per-axis error avoided). Draw + scheduler **unbuilt** (verified) → pinned pre-code, M1-armed. Rotation leg ratified (T-A1 timeline non-channel; network leg §10.7/§10.9); R2 timing hand-forwards resolved (announce↔anchor = entry standoff; emission-cadence = GF-10). Adversarial pass (§11.8) found no break — four findings folded as re-pins, one retraction (max-age misread). Two frame/pass assumptions overturned at source (epoch-crossing §11.4; max-age semantics §11.8). UPDATE 2026-07-16 (§12.9 decision 3): the R4 joint grade **dissolved by axis attrition** — GF-10's width now grades **standalone** against the §11.5 pre-committed advantage claim (mechanism-class, method note 3); R3 closes when that grade runs. |
+| **4** | Output + bond-funding hygiene (**recurring** — rebond/unbond at genesis) | **Drafted (2026-07-11) — §12, the drain-event firewall.** **GF-7 (funding-in) built + graded PROVISIONAL-PASS** (`r = 1.86`, local-daemon; standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) provisional) — not an open design question. **GF-4 (value-out) drafted:** the drain is one event, three co-triggered channels graded jointly (§12.1). **F-D1** drain-amount taint-carve — complete pre-code pin ((a)+strip; strip `{lineage,epoch,height}` + aggregate-scalar amount stage; §12.3); **F-D2** UI-default (§12.4); **F-D3/F-D4** one-sided cooldown-anchored exit standoff — **FSM gate FIRED 2026-07-15** (§12.5–12.6; `bond_post.rs:369`/`:627`); **F-D5** quantization → §14.4; **F-D6** anti-drift derive-don't-hardcode (§12.7). GF-10 (R3) folds into the joint grade. UPDATE 2026-07-15: both former blockers discharged — the rebond/unbond FSM landed (PR #303 `HoldingsUpdate`/`Unbond` + Pin-4/Pin-5 closure 2026-07-14; PR #307 `Rebond`) and the age-stratified sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18). F-D3/F-D4 open for build: F-D4 a-priori window derivation first (committed before any sweep runs, §12.6), then `draw_exit_gap` (§12.5) with the F-D6 derived anchor. UPDATE 2026-07-16: derivation committed + reviewed (rounds 1–3, sentinel + frozen rule); **`draw_exit_gap` BUILT** against the sentinel with the F-D6 anchor derived (`release_cooldown_anchor_height`) — F-W5 `N_t` re-derivation, sweep, and Phase 7.7 seal remain. UPDATE 2026-07-16 (later): round-4 premise audit RATIFIED deletion-with-tripwire (F-D4 §15.4 — the timing channel's observable is phantom, F-W7/F-W8; the seal obligation is removed, the sentinel never shipped a value); F-W9 bounded the repetition premise (F-D4 §16). **R4 decision round run (§12.9):** exit seam **re-homed** to the principal↔user crossing (WI-4 §18.13); joint grade **dissolved by axis attrition**; §16.4 funding default **accepted** (F-D2-class); deletion PR scoped (`exit.rs` wholesale; F-D6 + consensus predicate out of scope). Re-formed close: F-D1 + F-D2 (incl. funding default) + deletion PR + F-D5 §14.4 disposition. |
 | **5** | Cross-layer adversarial pass | **Planned.** Soundness-depth sign-off for Stage 3. Build the S-2 fused exposure ledger (first) + the S-3 exit/value-seam adversary sim (§10.12), then sign off. |
 
 **Parallel (not gated on gate-6 closure):** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
@@ -1738,7 +1749,10 @@ timing hand-forwards (§11.6).
 
 - **GF-10 numeric width** above `S_min` → R4/GF-4 CB-3 joint grade (jointly with amount + holdings +
   exit-timing). Reopen the mechanism only if the joint grade cannot meet the pre-committed advantage
-  claim at any structurally-admissible width.
+  claim at any structurally-admissible width. **UPDATE 2026-07-16 (§12.9 decision 3): the joint
+  grade dissolved by axis attrition — the width now grades standalone against the same §11.5
+  pre-committed claim; the reopen clause carries over with "joint grade" read as "single-axis
+  grade."**
 - **Extension to bond ops** — GF-10 reused for partial-unbond / rebond-topup claim timing in R4 (§6);
   the mechanism is pinned so the extension is mechanical.
 - **Build** — the `ClaimJitterGap` draw + the claim scheduler/dispatch seam (CB-3) are unbuilt. Land
@@ -2245,7 +2259,113 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   2026-07-16: the F-D3/F-D4 clause is discharged by deletion, not by grading — the a-priori
   window was derived, audited through four rounds, and its premise found empty (F-D4 §15);
   what replaces "pass the joint grade on the timing axis" is the hand-forward decision
-  above. Until then R4 is **drafted, not closed**.
+  above. Until then R4 is **drafted, not closed**. UPDATE 2026-07-16 (evening): the
+  hand-forward is **answered — §12.9**; the close condition re-forms per §12.9's decision 5.
+
+### 12.9 R4 decision round (2026-07-16) — the §15.5 answer: the seam re-homes, the joint grade dissolves
+
+**Status: DRAFTED 2026-07-16, decisions proposed for ratification at review-at-source;
+the inputs — the F-D4 §2.1/§15 audit and the F-W9 premise correction (F-D4 §16) — are
+both already ratified.** The hand-forward's question was structural, and the answer is
+structural: four decisions and a re-formed close condition. The downstream sweeps land
+with this draft so the review sees the full blast radius; if ratification amends a
+decision, the amending edit re-sweeps the same sites (they are enumerated in the
+revision-history entry for this round).
+
+**Decision 1 — the exit seam re-homes to the principal↔user crossing (WI-4 §18.13).**
+The hand-forward's own test: do both halves of GF-4's exit seam reduce to the off-chain
+crossing? Walked with F-W9 in hand:
+
+- *Timing half.* The on-chain `P`↔principal exit-timing channel does not exist — F-W7
+  found the principal-side observable phantom, and the F-W9 enumeration counts **zero
+  observable exits on either branch** (voluntary refund CT-hidden in-tx; terminal slash
+  emits no transaction). What the chain shows is the `P`-side `Unbond` post — a public,
+  `P`-attributed *event with no principal-side counterpart to correlate against*. Exit
+  timing's only live harm surface is a counterparty's own books (deposit arrival vs the
+  public unbond/claim record) — T-4, §18.13's seam.
+- *Amount half.* Closed on-chain by construction (CT at first spend — WI-4 §18.11; the
+  refund is the in-tx `bond_debit` source term). F-D1's forbidden read — the reward-subsum
+  match — realizes **only at a counterparty**, and WI-4 §18.13 already files drain subsums
+  as **boundary class 3 of the principal↔user seam**, "closed by safe-by-default coverage,
+  template: the §18.12 input-level pin." F-D1/F-D2 *are* that closure.
+
+Both halves reduce. **GF-4's exit seam is a principal↔user finding; posture *widen, not
+close*; instrument the S-2 per-observer ledger.** F-D1/F-D2 remain GF-4's buildable
+content, correctly re-labeled as the class-3 mistake-set closure they always were —
+nothing about their build or arms changes. The corollary is worth stating plainly: **after
+this round, the on-chain `P`↔principal surface is the entry seam alone (GF-7)** — one
+seam, already measured (`r = 1.86` at nominal cover, five standing conditionals), and per
+F-W9's mandatory `m = 1`, its per-event grade is the on-chain lifetime grade.
+
+**Decision 2 — the four-axis joint grade dissolves; no grade re-forms in its place.**
+Axis by axis: **exit-timing** — phantom, deleted (F-D4 §15.4). **Amount-band** — closed by
+construction on-chain; the off-chain match is closed by F-D1/F-D2's *structural arms*
+(import-check, signature check, UI default — pass/fail CI facts, not graded rates).
+**Holdings-stratum** — public by design (T-A1: the portfolio is `P`'s public identity); a
+posture fact, not a leak to grade. **Output-count** — an F-D1-sibling wallet discipline,
+same structural-arm shape. A joint grade needs a seam with an observer and a rate; the
+re-homed seam's observer is off-chain and its instrument is a **ledger**. Running a rate
+model over counterparty arrival mixing would be an economics measurement a testnet cannot
+produce (§11.8 method note 3 refuses it pre-genesis). The correlated-trigger obligation
+(§18.10 R-4 + CB-3) does not dissolve with it — it **relocates**: on-chain, a mass-unbond
+cohort is a set of public `P`-side events with no principal side to link to; at the
+crossing, cohort-arrival compression is an S-2 row (the counterparty sees the cohort; its
+books are the linking key — F-D4 §16.3's surviving surface (b)).
+
+**Decision 3 — the CB-3 joint-grading obligation is discharged by axis attrition;
+GF-10's grade un-blocks as a single-axis grade.** CB-3's rule-21 obligation (§11.5)
+forbade grading claim timing standalone *because* three graded quantities were co-present
+on one persona and per-axis grades multiply as if independent. After this round the
+co-axes are no longer graded quantities: exit-timing is deleted (phantom), the amount
+axis is closed by structural arms (pass/fail, not a rate), the holdings stratum is a
+public posture fact. A "joint" grade over one live axis **is** that axis's grade — the
+per-axis-multiplication error needs a second axis to multiply by. GF-10's numeric width
+therefore grades **standalone against its own pre-committed advantage claim** (§11.5 —
+no-better-than-epoch-prior alignment), mechanism-class under method note 3 (a property
+of the draw and the model, no economics input), with the GF-7 measurement round's
+instrument discipline (a-priori bound committed before grading code; §11.5's
+redesign-not-move-the-bar clause carries over verbatim). **R3's close condition re-forms
+accordingly** (§11.7's defer list pointed at a joint grade that no longer exists): R3
+closes when the GF-10 single-axis grade runs and clears the advantage claim.
+
+**Decision 4 — the F-D4 §16.4 proposal is ACCEPTED as an F-D2-class wallet default.**
+The honest-wallet builder self-funds `HoldingsUpdate`-add and credit-bearing `Rebond`
+from reward-lineage outputs — the GF-4b `BackingSet` machinery already classifies exactly
+this. External funding for growth is never silently built: it is an explicit, **loud**
+override treated as what it is — a `JoinMarket`-class principal crossing — and routed
+through the entry-standoff draw (`draw_entry_gap`), inheriting GF-7's per-event
+treatment. Cost accepted with eyes open (F-D4 §16.4 constraint 2): default-path portfolio
+growth is gated on accumulated rewards ≥ FLOOR; the young persona that cannot wait uses
+the loud override and gets standoff treatment for it. Under this default the honest-path
+enumeration is **`m = 1` exactly**, and every deviation is named, loud, and
+standoff-treated — F-D2's "default safe, opt-out explicit and loud" pattern applied to
+funding lineage. (Consensus-layer enforcement remains rejected per §16.4 constraint 1:
+consensus cannot classify FCMP++-hidden funding inputs, and in-circuit lineage is the
+opposite of F-D1's strip direction.)
+
+**Decision 5 — the harness is deleted, not re-parameterized; the deletion PR's scope is
+pinned here.** §15.4 item 1's fork read "if re-homed, it re-parameterizes on the crossing
+observer" — but the crossing observer's instrument is the S-2 ledger, and a rate harness
+over counterparty arrivals fails the method-note-3 filter. **Re-homed AND deleted** is
+the consistent answer: the fork's re-parameterize branch assumed the re-homed seam would
+still want a rate model, and it does not. The harness never landed on `dev`
+(`archive/feat/fd4-exit-sweep-2026-07-16` stands; "deleted" = not resurrected). The one
+deletion PR at this round's scope removes the landed mechanism:
+`shekyl-standoff/src/exit.rs` wholesale — `draw_exit_gap`, `ExitGap`, `ExitGapWindow`,
+the `DEFAULT_EXIT_GAP_WINDOW` sentinel, the golden vector + seal tripwire, the
+shared-trigger conformance arm — plus its exports and conformance references
+(reviewer-map: F-D4 §15.4 item 1). **Out of scope:** `release_cooldown_anchor_height`
+(F-D6 — anti-drift/slashability, predates the audit), `release_cooldown_elapsed`
+(enforced consensus), everything entry-side. The F-D4 §15.4 tripwire and its archived
+re-run template are unchanged.
+
+**The re-formed close condition (supersedes the §12.8 line):** R4 closes when (i) F-D1
+lands with both arms, (ii) F-D2 lands with the §12.9-decision-4 funding default folded
+in, (iii) the deletion PR lands at decision 5's scope, and (iv) F-D5's §14.4 disposition
+is recorded (unchanged). The S-2 build is **R5's opening item**, not an R4 close
+condition — but R5 inherits it with F-W9's finite domain and the §16.3 re-formed
+cross-persona job (linking-key search, pre-registered as code). GF-7's PROVISIONAL-PASS
+and its five standing conditionals are untouched by this round.
 
 ---
 
@@ -2263,6 +2383,35 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
 ---
 
 ## Revision history
+
+- **2026-07-16 (R4 decision round — §12.9: the F-D4 §15.5 hand-forward answered):**
+  Four decisions and a re-formed close condition. **(1) The exit seam re-homes** to the
+  principal↔user crossing (WI-4 §18.13): the timing half is phantom (F-W7; F-W9 counts
+  zero observable exits on either branch), the amount half is closed on-chain by
+  construction with the surviving off-chain match already filed as that seam's boundary
+  class 3 — F-D1/F-D2 *are* the class-3 closure, re-labeled, build and arms unchanged.
+  Corollary recorded: the on-chain `P`↔principal surface is the entry seam alone (GF-7;
+  per F-W9's mandatory `m = 1` its per-event grade is the on-chain lifetime grade).
+  **(2) The four-axis joint grade dissolves by axis attrition** — exit-timing deleted,
+  amount structural-armed (pass/fail), holdings a public posture fact — so CB-3's
+  joint-grading obligation is discharged (nothing left to multiply) and **GF-10 grades
+  standalone** against its §11.5 pre-committed advantage claim (mechanism-class, method
+  note 3); R3's close re-forms to "the single-axis grade runs and clears the claim." The
+  correlated-trigger obligation relocates to the crossing as an S-2 row (the
+  counterparty's books are the linking key). **(3) The F-D4 §16.4 funding default is
+  ACCEPTED as F-D2-class:** self-funding via GF-4b lineage is the honest-wallet default;
+  external growth-funding is a loud override treated as a `JoinMarket`-class crossing and
+  routed through the entry-standoff draw; the growth-gating cost accepted with eyes open;
+  consensus enforcement stays rejected (FCMP++-hidden inputs unclassifiable). **(4) The
+  harness is deleted, not re-parameterized** (a rate model over counterparty arrivals
+  fails method note 3; never landed, not resurrected) and the mechanism-deletion PR is
+  scoped: `shekyl-standoff/src/exit.rs` wholesale + exports/conformance references;
+  F-D6's anchor derivation and `release_cooldown_elapsed` out of scope. **Re-formed R4
+  close:** F-D1 + F-D2 (incl. the funding default) + the deletion PR + F-D5's §14.4
+  disposition; the S-2 build is R5's opening item, inheriting F-W9's finite domain.
+  Swept: header + §4 round-table rows 3–4, §11 R3-close pointers, §12.8 close line, F-D4
+  §15.4/§15.5/§16.4 ANSWERED banners, WI-4 §18.13 re-homing note, FOLLOWUPS L17-wargame
+  closure rider, index rows 95/97/98.
 
 - **2026-07-16 (F-W9 — F-D4 §13.3's repetition premise corrected; method note 4
   adopted):** The exit-track premise audit's last clause re-walked: §13.3 quantified over
