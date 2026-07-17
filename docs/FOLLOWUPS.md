@@ -1364,6 +1364,13 @@ sustainability is unaffected by the recalibration.
     on `dev` — preserved at `archive/feat/fd4-exit-sweep-2026-07-16`
     (F-D4 §15.4's landing disposition), recoverable for a re-homed
     wargame.
+  - **UPDATE 2026-07-16 (night) — the §15.5 answer landed (Gate-6
+    §12.9): no re-homed wargame replaces it.** The seam re-homed to the
+    principal↔user crossing, whose instrument is the **S-2 ledger**, not
+    a rate model — a crossing wargame over counterparty arrivals is an
+    economics measurement the method-note-3 filter refuses pre-genesis.
+    The harness stays archived-unlanded (final); the tripwire above is
+    the sole reopen path.
 
 - **Foundation treasury diversification — floor capacity must not be
   pro-cyclical (swan-2/W4, 2026-06-11; re-scoped swan-3/W12–W13; re-anchored

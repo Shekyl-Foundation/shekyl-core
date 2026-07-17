@@ -94,7 +94,7 @@ Per [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4 tx-legs t
 | **Stake-in** | ordinary FCMP++ transfer, principal → `P` stealth outputs (main tree) | privacy = base FCMP++; **no minimum** (DQ1); GF-7 funding shape/timing discipline applies |
 | **join-Market / re-bond / holdings-update / unbond** | `txin_archival_bond_post` (gate 4, the only consensus-special `P`-identity leg) | `post_kind` table in [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.2 |
 | **Reward emission** | special mint leg (membership-only backing + work payload) | **not a principal action** — consensus mints to `P`; see [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) |
-| **Reward sweep / terminal drain** | ordinary FCMP++ transfer(s) `P` → principal | **decorrelated, output-count-disciplined** (GF-4, DQ3); bond returns via gate-4 `Unbond`, **not** the drain |
+| **Reward sweep / terminal drain** | ordinary FCMP++ transfer(s) `P` → principal | delay-floored by consensus (`RELEASE_COOLDOWN_EPOCHS`); the output-count discipline was retired 2026-07-16 as phantom (F-W10, gate-6 §12.9 — see §3/DQ3 updates); bond returns via gate-4 `Unbond`, **not** the drain |
 
 ## 2. Method surface (Round-1 — signatures frozen per A1, bodies gated)
 
@@ -127,9 +127,12 @@ that owns it (§4a PR map) — no signature churn between "surface" and "impleme
 - **`unbond() -> PendingTx`** — terminal collateral return (gate-4 `post_kind = 2`),
   only from `Exited` post-cooldown; refund at `bond_floor`. **NEW** `StakeEngine`
   bond-debit op (signs `bond_spend_sk`).
-- **`drain(to_principal) -> Vec<PendingTx>`** — the decorrelated `P` → principal exit.
-  **Not a single tx** — multiple outputs / txs under GF-4 output-count discipline
-  (DQ3). Consumes `P`'s **non-escrowed** outputs only. **NEW** `StakeEngine` `P`-spend
+- **`drain(to_principal) -> Vec<PendingTx>`** — the `P` → principal exit. *(The
+  "multiple outputs / txs under GF-4 output-count discipline" shape constraint was
+  retired 2026-07-16 — F-W10, gate-6 §12.9; the drain is an ordinary FCMP++ transfer,
+  its tx/output shape unconstrained by firewall design. The `Vec` return stands for
+  ordinary coin-selection reasons, not discipline.)* Consumes `P`'s **non-escrowed**
+  outputs only. **NEW** `StakeEngine` `P`-spend
   op (uses `view_sk`/per-output spend from the `ScanStep` identification) feeding
   `PendingTxEngine`.
 - **Query surface** — owner-grade, secret-free projections returning **View** structs:
@@ -139,13 +142,21 @@ that owns it (§4a PR map) — no signature churn between "surface" and "impleme
 
 ## 3. Firewall discipline this surface must enforce (load-bearing)
 
-- **GF-4 — decorrelated-drain output-count discipline.** The delay floor is pinned
+- **GF-4 — drain delay floor** *(formerly "decorrelated-drain output-count discipline";
+  the output-count half was retired 2026-07-16 — F-W10, see UPDATE below)*. The delay
+  floor is pinned
   (`≥ RELEASE_COOLDOWN_EPOCHS × SETTLEMENT_EPOCH_BLOCKS` ≈ 28 days,
-  [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §7); the **open** piece
-  is the output-count rule — *a single lump sweep re-links reward history to one
+  [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §7); the piece that was
+  open was the output-count rule — *a single lump sweep re-links reward history to one
   principal cluster even with the delay satisfied* (gate-6 §2.4). **Recurring** exit
-  (terminal drain **and** `HoldingsUpdate`), gate-6 Round 4. Blocks `drain()`/`unbond()`
-  — DQ3.
+  (terminal drain **and** `HoldingsUpdate`), gate-6 Round 4. Blocked `drain()`/`unbond()`
+  — DQ3. **UPDATE 2026-07-16 (F-W10 — gate-6 §12.9 decision 2): the output-count rule is
+  retired as phantom.** Under FCMP++ the drain is not an identifiable transaction (no
+  spend graph; spend set unenumerable; reward-output spends carry no `P`-typing), so its
+  output count is not an observable; the lump-sweep attack this rule defended against is
+  a CryptoNote/ring-signature-lineage carry with no substrate on this chain. The delay
+  floor (consensus, already pinned) stands; no count rule is owed, and GF-4 no longer
+  blocks `drain()`/`unbond()` — see DQ3's update below for what still does.
 - **GF-4b — emission backing-lineage sweep (mandatory; the `pqc_pk`-reveal fix).** The emission
   vin reveals the backing output's `pqc_pk`, deterministically identifying that one output
   ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §7.3; gate-6 §2.4 GF-4b ladder). Safe **iff**
@@ -290,7 +301,7 @@ disfavoured (four independent legs, any one sufficient):**
    from normal transfers on-chain"; gate-6 §9.6 invariant 1). A `C_stake` artifact is a
    *distinguisher* that fingerprints stake-in, converting a private funding transfer
    into a labelled one. The amount is already hidden by the transfer's own output
-   commitment (base FCMP++/RingCT amount privacy) — `C_stake` is redundant *and*
+   commitment (base FCMP++ CT amount privacy) — `C_stake` is redundant *and*
    harmful.
 4. **It is spec-only debt.** `C_stake` has **no C++ symbol** (REWARD_EMISSION_VIN_PLAN
    §5; gate-6 §1 "Entitlement / `C_stake` / 3C subtree — Deleted"). Retiring it deletes
@@ -345,13 +356,36 @@ priority-1 (security): compromise of the orchestrator reveals no `P` key; compro
 
 ### DQ3 — drain output-count discipline (GF-4). **RE-GATED to gate-6 Round 4.**
 
+**UPDATE 2026-07-16 (F-W10 — gate-6 §12.9 decision 2): the count rule DQ3 waited on is
+retired as phantom; DQ3 closes without one.** The drain is not an identifiable
+transaction under FCMP++ (no spend graph, spend set unenumerable, no `P`-typing on
+reward-output spends), so no observer can count its outputs — the numeric/shape pin this
+question deferred to R4 has nothing to pin against, and the three-way deferral below
+(R4 × emission shape × F3) loses its R4 leg. What remains for `drain()`/`unbond()` is
+sequencing, not firewall design: the emission output shape and the F3 wire freeze still
+gate *implementation* (the drain consumes emission outputs), and the delay floor stays
+consensus-pinned. The §"Decision", "Second and third dependencies", "Axes R4 must
+decide", and "Round-1 lean" paragraphs below are retained as history of a question that
+dissolved, not as open work — in particular, "bodies stay `unimplemented!()` until GF-4
+is pinned" no longer holds (GF-4's count rule is retired); the surviving implementation
+gates are the emission output shape and F3 alone. **The gate lifts to F-D1/F-D2 as the
+drain's spec, not to no constraint:** the amount computation strips
+`{lineage, epoch, height}` and runs as an aggregate-scalar stage (F-D1, complete pre-code
+pin — gate-6 §12.3), with the non-round-sum UI default (F-D2, §12.4) — those pins were
+landed pre-code precisely so `drain()` arrives correct rather than gets fixed. What
+retired is the output-*count* rule; the drain's privacy spec stands. (The rotation
+co-trigger from §5.1 item 2 survives independently — it is the network-layer seam, not
+the output-count seam.)
+
 **Decision.** Cannot close at Round 1 — the numeric/shape pin is a **gate-6 Round-4
 hard exit** (gate-6 §6). This is a firewall-**design** gate, **not** an FSM or sim gate:
 the rebond/unbond FSM design is pinned (P2B-1..7) and the R-3 age-stratified
 bond-mobility sim that gated the seal is **CLOSED** (sealed 2026-06-16, zero parameter
-change, [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §L18) — see §5. `drain()`/
+change, [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §L18) — see §5. ~~`drain()`/
 `unbond()` bodies stay `unimplemented!()` until GF-4 is pinned (shipping a lump sweep
-before GF-4 ships a correlation beacon, gate-6 §2.4).
+before GF-4 ships a correlation beacon, gate-6 §2.4).~~ *(Superseded — see the
+2026-07-16 F-W10 update above: the count rule is retired; the surviving implementation
+gates are the emission output shape and F3, with F-D1/F-D2 as the drain's spec.)*
 
 **Second and third dependencies — the emission output shape *and* its wire freeze (F3).**
 DQ3's *concrete count rule* is also co-sequenced with the reward-emission leg (§5 gate 3):
@@ -545,7 +579,11 @@ gates, ordered:
    them at every mid-life adjustment, not once); GF-10 jitter bounds is the Round-3 exit.
    These — **not** the FSM — block **DQ3** (drain output-count) and **DQ4** (bond-funding
    shape). Authority: [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) §2.4/§2.5,
-   §6 R4.
+   §6 R4. **UPDATE 2026-07-16 (gate-6 §12.9 RATIFIED):** the R4 decision round ran — the
+   output-count discipline is **retired as phantom** (F-W10; DQ3 closes without a count
+   rule, see §DQ3's update) and the exit seam re-homed to the principal↔user crossing;
+   this item no longer gates the drain. GF-7's conditionals and the gate-6 R4 close items
+   (F-D1/F-D2/deletion PR/F-D5) live at gate-6 §12.9.
 2. **V3.0 connect-path CODE (not design).** Today only **JoinMarket** is implemented — the
    `BondPostKind` enum + wire codec round-trip all four, but
    [`bond_post.rs`](../../rust/shekyl-archival-retention/src/bond_post.rs) **rejects** any

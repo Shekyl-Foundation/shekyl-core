@@ -267,7 +267,7 @@ The correlator models the S-3 observer (GATE6 §10.1/§10.12): it
 - **sees** public chain events (bond-post arrival blocks, any public
   principal-lifecycle chain footprint) and network-observable arrival times
   of `P`'s broadcasts;
-- **does not see** FCMP++/RingCT-hidden funding sources or amounts, or
+- **does not see** FCMP++ CT-hidden funding sources or amounts, or
   circuit interiors — §10.9 client/circuit isolation is a **conditioning
   assumption** inherited from the standoff harness's caveat 2: the numbers
   are `P(link | isolation holds)`. The hooks measure the **post-isolation
@@ -3692,6 +3692,19 @@ both outside the protocol's power, which is the definition of closed
 to its floor. Caveat carried: under default-on, the opt-out set
 remains a distinguishable minority; acceptable (informed choice),
 but the opt-out must be explicit and loud, never ambient.
+
+> **UPDATE 2026-07-16 (Gate-6 §12.9 — GF-4's exit seam re-homed here).** The F-D4
+> premise audit (F-D4 §2.1/§15, F-W7–F-W9) found the on-chain `P`↔principal
+> exit-timing channel phantom and the amount channel closed by construction; Gate-6's
+> R4 decision round re-homed GF-4's exit seam to **this seam**. Consequences for this
+> section's inventory: the exit's timing exposure is the **T-4 counterparty crossing**
+> (deposit arrival vs the public unbond/claim record — an S-2 ledger row, not a rate
+> model); F-D1/F-D2 are the boundary-class-3 mistake-set closure named above (drain
+> subsums — "closed by safe-by-default coverage, template: the §18.12 input-level
+> pin"), building exactly as pinned at Gate-6 §12.3–§12.4; cohort-arrival compression
+> after a mass-unbond event is likewise an S-2 row (the counterparty's books are the
+> linking key — F-D4 §16.3). No new boundary class is minted: the three named above
+> are still the whole set.
 
 ## 19. Addendum (2026-07-11): leg-(b) wall-clock sweep-phase arm — spec and a-priori bound
 

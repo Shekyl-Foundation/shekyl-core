@@ -1168,7 +1168,7 @@ A clean split, consistent with the project's existing stance:
   membership, the commitment-to-zero equality) ride the **discrete-log** system
   (curve-trees / Bulletproofs). These are **computationally hiding under DL — not
   post-quantum.** A future quantum adversary could unblind committed amounts; this is
-  the *same* caveat as all FCMP++/RingCT amount privacy and is stated, not hidden.
+  the *same* caveat as all FCMP++ CT amount privacy and is stated, not hidden.
 - **Nullifier derivation & claim authorization** ride the **hybrid PQC** layer
   (spend secret `x` is PQ-protected via the output's hybrid KEM derivation; claim tags
   `N_S = x·G_S` are distinct from principal key images `x·Hp(O)`; spend authority via
