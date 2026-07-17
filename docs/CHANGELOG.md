@@ -4,6 +4,34 @@
 
 ### Changed
 
+- **docs: F-D5 disposition round RAN — the structural-derivation attempt
+  failed at source; NO GRID ships at genesis; Gate-6 R4 close condition
+  (iv) discharged** (outcome record at Gate-6 §12.7 OUTCOME). Executed in
+  the ratified order and the halves resolved oppositely — the inverse of
+  X-3 (correct geometry, empty harm): the harm survives F-D1 in one
+  sentence (the grid protects §18.12's lifetime-aggregate drain-all
+  floor, not the subsum match F-D1 closes — a real `P`→user bridge), but
+  the width derivation fails at three ineliminable, source-anchored
+  population entry points: (1) no population-free lattice exists below
+  the `Curve`'s shape constants (`scarcity_milli` divides by `r_market`,
+  the shard's live replication count); (2) the atomic-value spacing is
+  `budget(E)/Σwork(E)` — fees + release-scaled emission over the live
+  cohort's work, a quotient X-3's block-height-space derivation never
+  had in its path; (3) the strongest variant (a rate-adaptive relative
+  grid, `K` curve-derivable work buckets, consensus-deterministic and
+  zero-tolerance-compatible) delivers reachable-collision, not cover —
+  epoch sets are published per claim and every `reward_P(E)` is a loud
+  `P`-attributed mint vout, so collisions among *published sums* are
+  population occupancy (the GF-7 nominal-vs-effective finding again).
+  Sharpest form: the grid's cost side is derivable today (dust + the
+  pass-4-priced contribution→reward distortion), its benefit side is
+  derivable by nobody pre-genesis — an inequality with one computable
+  side cannot be optimized structurally. All three charter preconditions
+  discharged: the genesis-frozen consequence is spent knowingly (any
+  future grid is a hard fork), pass-4 is reconciled (different target
+  linkage; its cost half transfers intact), and the attempt's failure is
+  derived, not defaulted. The lifetime-aggregate band registers as the
+  first R5 S-2 ledger row; R4 remains open on F-D1 + F-D2 only.
 - **docs: Gate-6 R4 close condition (iv) re-worded — F-D5's "→ §14.4
   economics" routing was a dangling pointer** (dated amendment at Gate-6
   §12.9; disposition-round charter at §12.7). WI-4's §14.4 is the
