@@ -1851,6 +1851,24 @@ design-away exit (§14 refuses to enter the regime rather than measure it); G-10
 dormancy-backlog residual is mechanism-shaped (correlates with the public liveness gap);
 the GF-9 label freeze and Arti at-source pin are acts, not measurements.
 
+**Method note 4 (adopted 2026-07-16, from F-D4 §16 / F-W9 — the compositional half of
+note 2): before grading a composition, enumerate the events that compose.** F-D4 §13.3's
+intersection argument carried its exponent — `m`, the observation count — as "grows"
+through four review rounds while those rounds sharpened the *base* (`q`); the exponent
+dominates, and nobody counted it. Walked against the landed FSM, `m` is a lifecycle
+**count**: one mandatory observable crossing (`JoinMarket`), two wallet-default-closeable
+optional classes, zero observable exits (F-D4 §16). Two corollaries. First, an event
+enumeration is mechanism-class under note 3 — readable from the state machine, no
+economics input — so "the count is a pre-testnet unknown" never excuses an uncounted
+exponent (`E[m]` being economics does not make the *mandatory floor* of `m` economics).
+Second, the same check catches compositions whose **linking key** is unnamed: intersecting
+observations requires knowing which observations share a cause (§13.3's key was the public
+`P_id`), and a composition asserted across a partition the adversary cannot know
+(cross-persona `q^k`, raised and withdrawn at F-D4 §16.3 for want of a key) is note 2's
+phantom-observable failure wearing composition clothes. The near-miss was caught at draft,
+one turn after the lesson was named — the check works on its own authors, which is the
+property that earns it a standing note.
+
 ---
 
 ## 12. Round 4 — output + bond-funding hygiene: the drain-event firewall (OPEN — drafted 2026-07-11)
@@ -2062,7 +2080,9 @@ sentinel `0`, compile-time refusal absent explicit acknowledgment) with the **de
 equal to the entry anchor by derivation, not inheritance (every seam-variant fact lands on
 `W`, a graded arm, or its own regime row; the repetition asymmetry — the binding observed
 repeatedly, keyed to the public `P_id` — cannot be priced into a per-event anchor and routes
-to the `σ_L` discipline and the S-2 exposure ledger as a named residual). F-W6 (round 3) — the `2 × SEB` structural argument made precise as **X-3**,
+to the `σ_L` discipline and the S-2 exposure ledger as a named residual; routing since
+corrected by **F-W9**, F-D4 §16 — `m` is a bounded lifecycle count, the `σ_L` half is dead,
+the S-2 half survives narrowed). F-W6 (round 3) — the `2 × SEB` structural argument made precise as **X-3**,
 a rate-independent anchor-merge lower bound derived from the quantization lemma (cohort
 windows overlap iff `W > SEB`; at `1 × SEB` the adversary partitions the crisis cohort by
 exit height, invisible to X-1), folded into the rule with its cost stated: the queue
@@ -2145,8 +2165,12 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   `r` the parity point sits at `N ≈ nominal · r/bound` *by identity*, the run's parity
   row landing at `P = 0.199`/`N = 9` vs `0.179`/`N = 10`), and pinning it as an absolute bar would
   commit a bound backwards from the number it must certify — refused. Per-event
-  `P(link)` also does not bound the aspiration's quantity at all (the binding is observed
-  repeatedly; intersection collapses geometrically, F-D4 §13.3/F-W5): the conditional's
+  `P(link)` also does not bound the aspiration's quantity — the aspiration is per-observer
+  whole-life exposure whose live channel is the off-chain counterparty crossing, outside
+  any on-chain per-event number's reach (citation corrected 2026-07-16: originally
+  "intersection collapses geometrically, F-D4 §13.3/F-W5"; F-W9 — F-D4 §16 — bounded `m`
+  to a lifecycle count, so the collapse does not occur on-chain; conclusion unchanged on
+  the narrower ground): the conditional's
   instrument is the **S-2 lifetime exposure ledger**, not any per-event number.
   Explicitly rejected as a reading of the measurement: "only a state actor sees
   post-isolation timing, and they have KYC anyway" — a scope decision that could be made
@@ -2187,7 +2211,21 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   on `dev`** — the round-4 record shipped docs-only, and the instrument is preserved at
   `archive/feat/fd4-exit-sweep-2026-07-16`; "deleted" reduces to "not resurrected." The
   mechanism (`exit.rs`, PR #313) *did* land and its deletion PR is real work (reviewer-map
-  F-D4 §15.4 item 1).
+  F-D4 §15.4 item 1). **UPDATE 2026-07-16 (F-W9 rides this hand-forward — F-D4 §16):**
+  §13.3's repetition premise is corrected before R4 takes the question: `m` is a bounded
+  lifecycle count (one mandatory observable crossing — `JoinMarket`, GF-7's seam; two
+  wallet-default-closeable optional classes — `HoldingsUpdate`-add and credit-bearing
+  `Rebond`; zero observable exits on either branch), so the on-chain composition a
+  re-homed grade would inherit is **finite and GF-7-shaped**, not an open-ended
+  intersection — at the mandatory `m = 1`, GF-7's per-event grade *is* the on-chain
+  lifetime grade per persona per observer class, at nominal cover. Cross-persona
+  intersection was raised and withdrawn (no linking key exists across `P_id`s — F-D4
+  §16.3); the surviving composition surfaces are the T-4 counterparty ledger (its own
+  books are the key; subsumes that observer's cross-persona view) and shared-trigger
+  funding clusters (the entry standoff's existing graded case). R4 also receives the
+  §16.4 proposal: aim the GF-4b lineage filter at the optional-crossing funding paths —
+  an honest-wallet default, not a consensus invariant, with its growth-gating cost
+  (portfolio expansion gated on accumulated rewards ≥ FLOOR) stated up front.
 - **Joint grade (the round's exit bar, per §18.10 R-4 + CB-3):** the drain event is graded on
   **{amount-band ∧ claim/exit-timing ∧ holdings-stratum ∧ output-count}** jointly, correlated-trigger
   modeled on — never per-axis-multiplied. GF-10's claim-jitter mechanism (§11) folds in here; **R3
@@ -2225,6 +2263,27 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
 ---
 
 ## Revision history
+
+- **2026-07-16 (F-W9 — F-D4 §13.3's repetition premise corrected; method note 4
+  adopted):** The exit-track premise audit's last clause re-walked: §13.3 quantified over
+  a growing `m` (observation count) that was never counted against the state machine.
+  F-D4 §16 counts it: **one** mandatory observable principal↔`P` crossing per bonded life
+  (`JoinMarket` — `verify_join_market_bond_post` rejects an existing record), two optional
+  wallet-default-closeable crossing classes (`HoldingsUpdate`-add, credit-bearing
+  `Rebond`; the common standing-only `Rebond` moves no value by Pin 2), **zero**
+  observable exits (voluntary refund CT-hidden in-tx; terminal slash emits no transaction),
+  rejoin unmodeled (self-harm class, slot-indexed derivation). The geometric-collapse
+  clause and §13.3's `σ_L` routing do not survive; the S-2 routing survives narrowed. A
+  near-miss is recorded in the same section (§16.3): cross-persona intersection (`q^k`)
+  was raised and withdrawn for want of a linking key — funding sources FCMP++-hidden,
+  amounts publicly determined by the wire, timing per-event decorrelated, network
+  isolated — clustering over an unknown partition, not intersection; F-W7's shape caught
+  at draft. §12.8's hand-forward extended (the re-homed composition is finite and
+  GF-7-shaped; the §16.4 GF-4b-filter proposal rides with its growth-gating cost);
+  **§11.8 method note 4** adopted (*enumerate the events that compose*); WI-4 §13.5 and
+  FOLLOWUPS carry-4 geometric-collapse citations swept to the narrower surviving ground
+  (the aspiration's quantity is per-observer and off-chain, not geometrically collapsing
+  on-chain). F-W family extended F-W1…F-W8 → F-W9 (index row 97).
 
 - **2026-07-16 (GF-7 fifth conditional: kind sharpened, sensitivity sweep run —
   `--gf7-breakeven`; reading corrected same day, per review):** Follow-through on the

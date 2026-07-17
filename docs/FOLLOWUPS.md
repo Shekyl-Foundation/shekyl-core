@@ -1620,8 +1620,12 @@ sustainability is unaffected by the recalibration.
   `N = 10`), restating the
   nominal-cover assumption with no independent content; pinning it as
   an absolute bar is refused. Per-event `P(link)` also does not bound
-  the aspiration's quantity (repetition + geometric intersection
-  collapse, F-D4 §13.3/F-W5): the conditional's instrument is the
+  the aspiration's quantity — it is per-observer whole-life exposure
+  whose live channel is the off-chain counterparty crossing (citation
+  corrected 2026-07-16: originally "geometric intersection collapse,
+  F-D4 §13.3/F-W5"; F-W9 — F-D4 §16 — bounded `m` to a lifecycle
+  count, so the collapse does not occur on-chain and the conclusion
+  stands on the narrower ground): the conditional's instrument is the
   **S-2 lifetime exposure ledger** (Gate-6 R5, unbuilt), not any
   per-event number.
 
