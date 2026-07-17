@@ -7743,7 +7743,8 @@ one place to confirm each item's relationship to the wallet stack.
   the dead ones.** `src/blockchain_utilities/` still builds
   `blockchain_ancestry` ("trace the input ancestry of a transaction"),
   `blockchain_depth` (minimum chain depth for an output/tx),
-  `blockchain_usage` (output amount-reference histogram), and
+  `blockchain_usage` (histogram of output reuse as ring members in tx
+  inputs), and
   `blockchain_prune_known_spent_data` ("provably spent" outputs). All four
   are CryptoNote-lineage tools whose substrate is a visible spend graph:
   under FCMP++ a spend never reveals which output it consumes, so

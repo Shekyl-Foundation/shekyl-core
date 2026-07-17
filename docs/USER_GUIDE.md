@@ -76,7 +76,7 @@ Use the CLI tools when you want to:
 | `shekyl-blockchain-stats` | Print blockchain statistics |
 | `shekyl-blockchain-ancestry` | Trace transaction ancestry chains |
 | `shekyl-blockchain-depth` | Compute minimum chain depth for outputs |
-| `shekyl-blockchain-usage` | Analyse blockchain storage usage |
+| `shekyl-blockchain-usage` | Histogram of output reuse as ring members (legacy) |
 | `shekyl-blockchain-prune-known-spent-data` | Remove provably-spent prunable data |
 
 ### Getting the binaries
@@ -888,17 +888,19 @@ Additional flags: `--with-inputs`, `--with-outputs`, `--with-hours`.
 |------|---------|
 | `shekyl-blockchain-ancestry` | Trace the input ancestry of a transaction |
 | `shekyl-blockchain-depth` | Compute minimum chain depth for an output or transaction |
-| `shekyl-blockchain-usage` | Analyse storage usage across the blockchain |
+| `shekyl-blockchain-usage` | Histogram of output reuse as ring members (legacy) |
 | `shekyl-blockchain-prune-known-spent-data` | Remove prunable data for outputs that are provably spent |
 
 All tools accept `--data-dir`, `--testnet`, `--stagenet`, and
 `--log-level` flags.
 
-> **Note:** the ancestry, depth, and known-spent tools analyze spend-graph
-> relationships that FCMP++ transactions do not reveal (a spend never
-> discloses which output it consumes). They have no substrate on Shekyl
-> chain data and are scheduled for a deletion audit (see `docs/EXECUTABLES.md`
-> and `docs/FOLLOWUPS.md`).
+> **Note:** `shekyl-blockchain-ancestry`, `shekyl-blockchain-depth`,
+> `shekyl-blockchain-usage`, and `shekyl-blockchain-prune-known-spent-data`
+> all analyze spend-graph relationships that FCMP++ transactions do not
+> reveal (a spend never discloses which output it consumes, and inputs carry
+> no ring-member references). They have no substrate on Shekyl chain data
+> and are scheduled for a deletion audit (see `docs/EXECUTABLES.md` and
+> `docs/FOLLOWUPS.md`).
 
 ---
 

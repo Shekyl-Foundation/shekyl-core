@@ -458,9 +458,11 @@ Key options: `--output-file`, `--data-dir`, `--block-start`, `--block-stop`,
 
 ### `shekyl-blockchain-usage`
 
-Prints a histogram of output amount references. Ring-based analysis is not
-applicable to FCMP++ transactions; this tool is a deletion-audit candidate
-(`docs/FOLLOWUPS.md`, V3.2 legacy spend-graph utilities entry).
+Prints a histogram of output reuse — how many times each output appears as a
+ring member in transaction inputs. FCMP++ inputs carry no ring-member
+references, so this tool has no substrate on post-genesis data; it is a
+deletion-audit candidate (`docs/FOLLOWUPS.md`, V3.2 legacy spend-graph
+utilities entry).
 
 ```bash
 shekyl-blockchain-usage ~/.shekyl/lmdb
