@@ -31,7 +31,7 @@
   graded PROVISIONAL-PASS (`r = 1.86`); GF-4 (value-out) drafted as one event with three co-triggered
   channels graded jointly: **F-D1** drain-amount taint-carve (complete pre-code pin — (a)+strip),
   **F-D2** UI-default, **F-D3/F-D4** one-sided cooldown-anchored exit standoff (**FSM gate FIRED
-2026-07-15** — §12.5; F-D4 derivation committed + reviewed rounds 1–3; **F-D3 BUILT 2026-07-16**
+  2026-07-15** — §12.5; F-D4 derivation committed + reviewed rounds 1–3; **F-D3 BUILT 2026-07-16**
   against the F-D4 sentinel — `draw_exit_gap`, F-D6-derived anchor; sealing owed at Phase 7.7),
   **F-D5** → ~~§14.4~~ *(dangling — re-pointed 2026-07-17 to the §12.7-chartered disposition
   round)*, **F-D6** anti-drift (**DONE 2026-07-16**, §12.7). GF-10 (R3) folds into
@@ -46,17 +46,17 @@
   CryptoNote-lineage carry never re-walked across the crypto change) — and GF-10 grades
   standalone (decision 3); the F-D4 §16.4 funding
   default is **accepted** as F-D2-class (self-fund default, loud override routed through the entry
-standoff); the exit-standoff mechanism deletion PR is scoped (decision 5 — `exit.rs` wholesale;
-F-D6 and `release_cooldown_elapsed` out of scope) — **landed 2026-07-17** (close condition (iii)
-satisfied). R4's re-formed close: F-D1 + F-D2 (incl. the
-funding default) + ~~the deletion PR~~ *(landed)* + ~~F-D5's §14.4 disposition~~ *(the §14.4
-target was dangling — condition (iv) re-worded 2026-07-17: the F-D5 disposition round runs its
-structural-derivation attempt and records grid-ships / no-grid, band registered as an S-2 ledger
-row either way; charter at §12.7, amendment at §12.9)*. **UPDATE 2026-07-17 (same day): the
-F-D5 disposition round RAN — the structural attempt failed at source (no population-free
-lattice below the `Curve`'s shape constants; the value spacing is `budget(E)/Σwork(E)`;
-reachable-collision ≠ delivered cover), so NO GRID ships at genesis and condition (iv) is
-discharged (§12.7 OUTCOME). R4 is open on F-D1 + F-D2 only.**
+  standoff); the exit-standoff mechanism deletion PR is scoped (decision 5 — `exit.rs` wholesale;
+  F-D6 and `release_cooldown_elapsed` out of scope) — **landed 2026-07-17** (close condition (iii)
+  satisfied). R4's re-formed close: F-D1 + F-D2 (incl. the
+  funding default) + ~~the deletion PR~~ *(landed)* + ~~F-D5's §14.4 disposition~~ *(the §14.4
+  target was dangling — condition (iv) re-worded 2026-07-17: the F-D5 disposition round runs its
+  structural-derivation attempt and records grid-ships / no-grid, band registered as an S-2 ledger
+  row either way; charter at §12.7, amendment at §12.9)*. **UPDATE 2026-07-17 (same day): the
+  F-D5 disposition round RAN — the structural attempt failed at source (no population-free
+  lattice below the `Curve`'s shape constants; the value spacing is `budget(E)/Σwork(E)`;
+  reachable-collision ≠ delivered cover), so NO GRID ships at genesis and condition (iv) is
+  discharged (§12.7 OUTCOME). R4 is open on F-D1 + F-D2 only.**
 - **Round 5 planned** — the cross-layer soundness sign-off for Stage 3 (S-2 exposure ledger + S-3
   exit/value-seam adversary sim, §10.12). First registered S-2 ledger row: the
   lifetime-aggregate (drain-all) band at the §18.13 crossing (F-D5 disposition, 2026-07-17;
@@ -2035,7 +2035,9 @@ channel) is a **complete pre-code pin**, buildable now; **F-D2** (UI-default) bu
 **F-D3/F-D4** (exit-timing) were FSM-gated spec-stubs whose activation criterion **fired 2026-07-15**
 (§12.5 — the cooldown is now an enforced spendability gate, `bond_post.rs:369`/`:627`), so both are
 **open for build**; **F-D5** (quantization) is routed out to ~~§14.4 economics~~ *(dangling —
-re-pointed 2026-07-17 to the disposition round chartered at §12.7)*;
+re-pointed 2026-07-17 to the disposition round chartered at §12.7, which **ran the same day**:
+width does not derive, no grid at genesis, band registered as an R5 S-2 ledger row — §12.7
+OUTCOME)*;
 **F-D6** is the anti-drift pin. R4's other half — **GF-7 (funding-in)** — is already built + graded
 PROVISIONAL-PASS (`r = 1.86`; §6 R4 cell); this section is the **value-out (GF-4)**. The channels are
 **graded jointly, not per-axis** (§18.10 R-4 + CB-3).
@@ -2270,14 +2272,18 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
 §13 `N_t`, and the §14 sweep numbers survive as the archived re-run template for the F-D4
 §15.4 tripwire. No value is sealed; the checklist entry is removed.**
 
-### 12.7 F-D5 (routed out) and F-D6 (anti-drift pin)
+### 12.7 F-D5 (disposition round — RAN 2026-07-17, no grid at genesis) and F-D6 (anti-drift pin)
 
-- **F-D5 — reward-magnitude quantization → §14.4 economics, not this round.** Layer-2 CT-severing
-  breaks the off-chain sequence surface first (§18.10/§18.11), so the grid's threat model is the
+- **F-D5 — reward-magnitude quantization: disposition round chartered and RUN here (2026-07-17)
+  — width does not derive, NO GRID at genesis; see the OUTCOME below.** The entry's original
+  routing — ~~→ §14.4 economics, not this round~~ — was a summary-minted referent (the dated
+  UPDATE below is the finding), and its original reopen clause — ~~graded in the GF-4/§14.4
+  economics round~~ — is superseded by the charter's rule-21 clause (post-genesis reopening
+  requires a hard fork per `00-mission.mdc` + an S-2 ledger row showing the band exploited in
+  practice). What the original bullet got right stands unrevised: Layer-2 CT-severing breaks the
+  off-chain sequence surface first (§18.10/§18.11), so the grid's threat model is the
   **lifetime-aggregate band only** — a consensus economics change (grid width interacts with
-  dust/budget conservation, a-priori-derived per §18.7). A **defense-in-depth candidate**, not R4's
-  structural work. **Reopen (rule-21):** graded in the GF-4/§14.4 economics round, not folded into the
-  wallet pin.
+  dust/budget conservation) and a **defense-in-depth candidate**, not R4's structural work.
 
   **UPDATE 2026-07-17 — the "§14.4" routing target was dangling; re-pointed to a named F-D5
   disposition round (this entry is its charter).** The finding first: **"→ §14.4 economics" named
