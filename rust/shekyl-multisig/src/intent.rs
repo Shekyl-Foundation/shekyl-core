@@ -84,8 +84,8 @@ pub enum SpendIntentError {
     #[error("field '{0}' too long to serialize (length exceeds u32 wire prefix)")]
     FieldTooLong(&'static str),
 
-    #[error("group_id mismatch")]
-    GroupIdMismatch,
+    #[error("address_fingerprint mismatch")]
+    AddressFingerprintMismatch,
 
     #[error("proposer_index {0} >= n_total")]
     ProposerOutOfRange(u8),
@@ -160,7 +160,15 @@ pub struct SpendIntent {
     pub version: u8,
     pub intent_id: [u8; 32],
 
-    pub group_id: [u8; 32],
+    /// The group's identity, signed into the canonical bytes and enforced by
+    /// invariant I1. This is the address fingerprint —
+    /// `shekyl_address::address_fingerprint` over the group's
+    /// `MultisigAddressPayload` — computed by the wallet and passed in; this
+    /// crate carries and enforces agreement on it but does not compute it (it
+    /// holds no address dependency). It replaces the former `group_id`, an
+    /// identity nothing produced: the wallet enforces that the value corresponds
+    /// to the address, the ceremony enforces that all participants agree on it.
+    pub address_fingerprint: [u8; 32],
 
     pub proposer_index: u8,
     pub proposer_sig: Vec<u8>,
@@ -217,13 +225,13 @@ impl SpendIntent {
     }
 
     /// Append the fixed header shared by both serializations: version,
-    /// `intent_id`, `group_id`, `proposer_index`. The canonical form
+    /// `intent_id`, `address_fingerprint`, `proposer_index`. The canonical form
     /// follows this with the length-prefixed proposer signature;
     /// `signable_bytes` omits the signature it is about to produce.
     fn push_header(&self, buf: &mut Vec<u8>) {
         buf.push(self.version);
         buf.extend_from_slice(&self.intent_id);
-        buf.extend_from_slice(&self.group_id);
+        buf.extend_from_slice(&self.address_fingerprint);
         buf.push(self.proposer_index);
     }
 
@@ -449,7 +457,7 @@ mod tests {
         SpendIntent {
             version: SPEND_INTENT_VERSION,
             intent_id: [0xAA; 32],
-            group_id: [0xBB; 32],
+            address_fingerprint: [0xBB; 32],
             proposer_index: 0,
             proposer_sig: vec![0; 64],
             created_at: 1000,
@@ -503,7 +511,7 @@ mod tests {
         // Guards the shared-helper refactor: to_canonical_bytes and
         // signable_bytes must differ ONLY by the length-prefixed
         // proposer_sig, sandwiched between the 66-byte fixed header
-        // (version[1] + intent_id[32] + group_id[32] + proposer_index[1])
+        // (version[1] + intent_id[32] + address_fingerprint[32] + proposer_index[1])
         // and the shared body. If push_header/push_body ever desynced
         // the two, this fails — the signed bytes would no longer match
         // the hashed bytes.

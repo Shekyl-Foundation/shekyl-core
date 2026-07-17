@@ -45,13 +45,16 @@ impl MessageType {
 /// MultisigEnvelope: the common wrapper for all inter-participant messages
 /// (SS12.1).
 ///
-/// Cleartext fields: version, group_id, intent_hash, sender_index,
+/// Cleartext fields: version, address_fingerprint, intent_hash, sender_index,
 /// sender_sig, encrypted payload. The message_type is inside the
 /// encrypted payload to prevent role-pattern leakage (SS12.5).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MultisigEnvelope {
     pub version: u8,
-    pub group_id: [u8; 32],
+    /// The group's identity (see `SpendIntent::address_fingerprint`): the
+    /// `shekyl_address::address_fingerprint` value, signed into the envelope
+    /// header. Carried, not computed, here.
+    pub address_fingerprint: [u8; 32],
     pub intent_hash: [u8; 32],
     pub sender_index: u8,
     pub sender_sig: Vec<u8>,
@@ -59,7 +62,7 @@ pub struct MultisigEnvelope {
 }
 
 impl MultisigEnvelope {
-    /// Bytes that the sender signs: version || group_id || intent_hash ||
+    /// Bytes that the sender signs: version || address_fingerprint || intent_hash ||
     /// sender_index || payload_len || encrypted_payload.
     ///
     /// payload_len is included to prevent framing attacks where an attacker
@@ -68,7 +71,7 @@ impl MultisigEnvelope {
     pub fn signable_header(&self) -> Result<Vec<u8>, EnvelopeError> {
         let mut buf = Vec::with_capacity(70 + self.encrypted_payload.len());
         buf.push(self.version);
-        buf.extend_from_slice(&self.group_id);
+        buf.extend_from_slice(&self.address_fingerprint);
         buf.extend_from_slice(&self.intent_hash);
         buf.push(self.sender_index);
         let payload_len = u32::try_from(self.encrypted_payload.len())
@@ -85,7 +88,7 @@ impl MultisigEnvelope {
     pub fn to_bytes(&self) -> Result<Vec<u8>, EnvelopeError> {
         let mut buf = Vec::with_capacity(128 + self.encrypted_payload.len());
         buf.push(self.version);
-        buf.extend_from_slice(&self.group_id);
+        buf.extend_from_slice(&self.address_fingerprint);
         buf.extend_from_slice(&self.intent_hash);
         buf.push(self.sender_index);
         let sig_len = u32::try_from(self.sender_sig.len())
@@ -110,7 +113,7 @@ impl MultisigEnvelope {
             return Err(EnvelopeError::UnsupportedVersion(version));
         }
 
-        let group_id: [u8; 32] = data[1..33]
+        let address_fingerprint: [u8; 32] = data[1..33]
             .try_into()
             .map_err(|_| EnvelopeError::TooShort)?;
         let intent_hash: [u8; 32] = data[33..65]
@@ -150,7 +153,7 @@ impl MultisigEnvelope {
 
         Ok(MultisigEnvelope {
             version,
-            group_id,
+            address_fingerprint,
             intent_hash,
             sender_index,
             sender_sig,
@@ -231,7 +234,7 @@ mod tests {
     fn envelope_roundtrip() {
         let env = MultisigEnvelope {
             version: ENVELOPE_VERSION,
-            group_id: [0xAA; 32],
+            address_fingerprint: [0xAA; 32],
             intent_hash: [0xBB; 32],
             sender_index: 2,
             sender_sig: vec![0xCC; 64],
@@ -240,7 +243,7 @@ mod tests {
         let bytes = env.to_bytes().unwrap();
         let parsed = MultisigEnvelope::from_bytes(&bytes).unwrap();
         assert_eq!(parsed.version, ENVELOPE_VERSION);
-        assert_eq!(parsed.group_id, [0xAA; 32]);
+        assert_eq!(parsed.address_fingerprint, [0xAA; 32]);
         assert_eq!(parsed.intent_hash, [0xBB; 32]);
         assert_eq!(parsed.sender_index, 2);
         assert_eq!(parsed.sender_sig, vec![0xCC; 64]);

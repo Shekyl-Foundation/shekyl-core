@@ -1,12 +1,33 @@
-//! Keccak-256 hashing for Shekyl's `cn_fast_hash` primitive.
+//! Shekyl's hash primitives, both backed by the audited RustCrypto `sha3` crate.
 //!
-//! Backed by the audited RustCrypto `sha3` crate (`Keccak256`) — original Keccak
-//! padding (0x01), NOT NIST SHA3 padding (0x06). This is consensus-critical: the
-//! output must be byte-identical to the C `src/crypto/keccak.c` (the empty-input KAT
-//! in `tests` pins exactly that). The byte-identity, not the implementation crate, is
-//! what is genesis-locked — `sha3` and the prior `tiny-keccak` both compute the same
-//! original-Keccak-256, and standardizing on the RustCrypto crate collapses the
-//! codebase onto one audited keccak (shekyl-oxide already uses `sha3`).
+//! Two primitives, two jobs, and the split is the point:
+//!
+//! - [`cn_fast_hash`] / [`tree_hash`] — **Keccak-256, for consensus parity only.**
+//!   Use these *iff* the output must be byte-identical to the Monero-descended C++
+//!   daemon: `prefix_hash`, `tree_hash`, block IDs, `pqc_signing_payload_hashes`,
+//!   `multisig_pqc_leaf_hash`. They are un-domained because the thing they must
+//!   match is un-domained.
+//! - [`cshake256_32`] — **cSHAKE256 (SP 800-185), for everything new.** A new
+//!   artifact on no consensus path takes this, with a customization string, so
+//!   domain separation is structural rather than definitional.
+//!
+//! # Why Keccak-256 is not the default
+//!
+//! "Keccak-256" does not identify a function. Original Keccak (0x01 padding, what
+//! this crate computes, and what Ethereum's `keccak256` is) and NIST FIPS 202
+//! SHA3-256 (0x06) share a permutation and a rate and differ in one byte — so an
+//! independent implementer reading "Keccak-256" has a coin-flip, and the failure is
+//! silent: a different digest, no diagnostic. That ambiguity is tolerable exactly
+//! where a KAT and a C++ twin pin it, and nowhere else. `cSHAKE256` has one meaning.
+//!
+//! # Keccak-256 (consensus)
+//!
+//! Original Keccak padding (0x01), NOT NIST SHA3 padding (0x06). Consensus-critical:
+//! the output must be byte-identical to the C `src/crypto/keccak.c` (the empty-input
+//! KAT in `tests` pins exactly that). The byte-identity, not the implementation
+//! crate, is what is genesis-locked — `sha3` and the prior `tiny-keccak` both compute
+//! the same original-Keccak-256, and standardizing on the RustCrypto crate collapses
+//! the codebase onto one audited keccak (shekyl-oxide already uses `sha3`).
 //!
 //! The `cn_fast_hash` *name* is the inherited CryptoNote consensus-primitive name
 //! ("cn" = CryptoNote; the *fast* hash vs. the slow PoW hash), kept for 1:1 source
@@ -15,7 +36,9 @@
 
 #![deny(unsafe_code)]
 
-use sha3::{Digest, Keccak256};
+use sha3::digest::core_api::CoreWrapper;
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use sha3::{CShake256, CShake256Core, Digest, Keccak256};
 
 pub const HASH_SIZE: usize = 32;
 
@@ -30,6 +53,32 @@ pub type Hash = [u8; HASH_SIZE];
 /// spend hash KATs in shekyl-wire.
 pub fn cn_fast_hash(data: &[u8]) -> Hash {
     Keccak256::digest(data).into()
+}
+
+/// cSHAKE256 (SP 800-185) with a customization string, 32-byte output.
+///
+/// **The default for any new hashed artifact.** The customization string makes
+/// domain separation structural: two contexts cannot collide even over identical
+/// input bytes, without anyone having to remember a convention. Use
+/// [`cn_fast_hash`] only where byte-identity with the C++ daemon is required.
+///
+/// `customization` follows the house convention `b"shekyl/<domain>-v1"` (see
+/// `shekyl/archival-bond-post-v1`, `shekyl/receive-label-hash-v1`); version it, so
+/// a preimage change is a new domain rather than a silent reinterpretation.
+///
+/// This is the canonical home for the primitive. Two open-coded copies predate it
+/// — `shekyl-archival-retention::hash` and `shekyl-crypto-pq::label` — and are
+/// tracked for collapse onto this one (FOLLOWUPS), mirroring the one-audited-keccak
+/// consolidation described above.
+#[must_use]
+pub fn cshake256_32(customization: &[u8], input: &[u8]) -> Hash {
+    let core = CShake256Core::new(customization);
+    let mut hasher: CShake256 = CoreWrapper::from_core(core);
+    hasher.update(input);
+    let mut reader = hasher.finalize_xof();
+    let mut out = [0u8; HASH_SIZE];
+    reader.read(&mut out);
+    out
 }
 
 /// Compute `tree_hash_cnt`: largest power of 2 strictly less than count.

@@ -5,16 +5,46 @@
 
 //! Multisig address encoding, fingerprint, and provenance (PQC_MULTISIG.md SS6).
 //!
-//! Multisig addresses use the `shekyl1m` / `shekyltest1m` / `sshekyl1m` HRP
-//! family. Due to their size, they are file-based: the canonical payload
-//! (`HEADER_LEN + N * PER_PARTICIPANT_LEN` = 6 + N * 1216 bytes) is written to a
-//! file and transferred via an authenticated channel. Integrity is the
-//! fingerprint (below), not a stored checksum; a Bech32m string form appends
-//! the HRP + checksum at encode time, which are not part of this payload.
+//! Multisig addresses are **file-based**: the canonical payload
+//! (`HEADER_LEN + 2 * GROUP_POINT_LEN + N * PER_PARTICIPANT_LEN` = 70 + N * 1216
+//! bytes) is written to a file and transferred via an authenticated channel. It
+//! is not a Bech32m string — at E′ sizes (~4019 chars for a 2-of-N) it exceeds
+//! Bech32m's ~1023-char checksum-validity limit and would not round-trip. What
+//! *is* Bech32m-encoded, under the `shekyl1m` / `shekyltest1m` / `sshekyl1m` HRP
+//! family, is the fixed-size **fingerprint** (32 B → 67 chars, QR-able): the
+//! short, human-verifiable, shareable group identifier. Integrity rides that
+//! fingerprint, not a full-address string or a stored checksum.
 //!
-//! The fingerprint is `cn_fast_hash(canonical(MultisigAddressPayload))`.
+//! # Option E′: the address carries the group's two points
+//!
+//! Under E′ a payer constructs `O = ho·G + B_group + y_out·T`
+//! (`shekyl-crypto-pq::output`), so the address **must** carry `B_group` and
+//! `Y_group` or an output cannot be built at all. Option D never needed them —
+//! it derived `O` from `spend_auth_pubkeys[assigned]`, per-output — which is why
+//! the D-era payload has neither. They are the group's **long-term** public
+//! state, unlike the per-output KEM-derived leaf keys the address deliberately
+//! does not carry (MSW-8).
+//!
+//! `b_group` / `y_group` are opaque 32-byte compressed Edwards points here.
+//! Their validity (decompress, non-identity, torsion-free) is checked where they
+//! are *used*, by the output constructor in `shekyl-crypto-pq::output` — this
+//! crate carries no curve dependency, and stating who validates is the point:
+//! an address field with an unstated job is one every independent implementer
+//! decides for itself.
+//!
+//! # The fingerprint is the group's identity
+//!
+//! `cSHAKE256(canonical(MultisigAddressPayload), "shekyl/multisig-address-v1")` —
+//! per-group, computable by every participant from the address alone, and (with
+//! `B`/`Y` in the payload) covering the whole of the group's public state: both
+//! points, the KEM pubkeys, the versions, and `m`/`n`. This is the artifact the
+//! §5.5 setup ritual wanted ("did we all derive the same group?"), and it
+//! replaces the deleted `multisig_group_id`, which had no consumer under E′ and
+//! computed a per-output hash under a per-group name. See [`address_fingerprint`]
+//! for why cSHAKE256 and not the consensus `cn_fast_hash`.
 
-use crate::network::Network;
+use crate::network::{multisig_hrp, Network};
+use bech32::{Bech32m, ByteIterExt, Fe32IterExt, Hrp};
 
 /// X25519 (32) + ML-KEM-768 (1184).
 pub const HYBRID_KEM_PUBKEY_LEN: usize = 1216;
@@ -35,16 +65,33 @@ pub const PER_PARTICIPANT_LEN: usize = HYBRID_KEM_PUBKEY_LEN;
 pub const MAX_MULTISIG_PARTICIPANTS: u8 = 5;
 
 /// Header: version + group_version + spend_auth_version + network + n_total + m_required.
+///
+/// The E′ group points (`B_group`, `Y_group`) follow the header rather than
+/// joining it: the header is the payload's scalar preamble, the points are keys.
 const HEADER_LEN: usize = 6;
 
+/// A compressed Edwards point (`B_group` / `Y_group`). Two ride in every E′
+/// payload, immediately after the header.
+pub const GROUP_POINT_LEN: usize = 32;
+
 /// Current multisig address payload version.
+///
+/// Stays `0x01` across the E′ B/Y addition, on MSW-8's reasoning: nothing is
+/// deployed, so the layout is corrected in place rather than versioned. The
+/// parser's version check is strict equality, so a `0x01` payload is an E′
+/// payload — there is no D-era address to remain compatible with.
 pub const MULTISIG_ADDRESS_VERSION: u8 = 0x01;
 
 /// Current group protocol version.
 pub const GROUP_VERSION: u8 = 0x01;
 
-/// Current spend-auth version (Ed25519).
-pub const SPEND_AUTH_VERSION: u8 = 0x01;
+/// Current spend-auth version: `0x02` = Option E′ (PQC_MULTISIG.md §6.2).
+///
+/// `0x01` was the Option-D mandatory-prover scaffold and was **never issued**;
+/// E′ is the shipping design, so the constant names it. An address carrying
+/// `B_group`/`Y_group` *is* an E′ address — stamping it `0x01` would make the
+/// payload lie about its own design.
+pub const SPEND_AUTH_VERSION: u8 = 0x02;
 
 /// Errors specific to multisig address operations.
 #[derive(Debug, thiserror::Error)]
@@ -73,6 +120,12 @@ pub enum MultisigAddressError {
     #[error("unknown network byte 0x{byte:02x}")]
     UnknownNetwork { byte: u8 },
 
+    #[error("bech32m error: {0}")]
+    Encoding(String),
+
+    #[error("HRP '{hrp}' is not a multisig address HRP")]
+    WrongHrp { hrp: String },
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -86,6 +139,15 @@ pub struct MultisigAddressPayload {
     pub network: Network,
     pub n_total: u8,
     pub m_required: u8,
+    /// `B_group` — the group's plaintext view/link key point (`B = b·G`). The
+    /// `b` behind it is group-plaintext: every participant holds it, so scan,
+    /// balance, and key-image are local and need no ceremony. A payer adds this
+    /// point directly into `O = ho·G + B_group + y_out·T`.
+    pub b_group: [u8; 32],
+    /// `Y_group` — the FROST M-of-N group spend key point (`Y = y·T`). No
+    /// participant holds `y`; a spend is a threshold ceremony over it. A payer
+    /// needs it to derive the per-output tweak `y_out = y_group + y_kem`.
+    pub y_group: [u8; 32],
     pub hybrid_kem_pubkeys: Vec<Vec<u8>>,
 }
 
@@ -95,6 +157,8 @@ impl MultisigAddressPayload {
         network: Network,
         n_total: u8,
         m_required: u8,
+        b_group: [u8; 32],
+        y_group: [u8; 32],
         hybrid_kem_pubkeys: Vec<Vec<u8>>,
     ) -> Result<Self, MultisigAddressError> {
         if n_total == 0 || n_total > MAX_MULTISIG_PARTICIPANTS {
@@ -128,20 +192,26 @@ impl MultisigAddressPayload {
             network,
             n_total,
             m_required,
+            b_group,
+            y_group,
             hybrid_kem_pubkeys,
         })
     }
 
     /// Expected canonical byte length for this payload.
     pub fn canonical_len(&self) -> usize {
-        HEADER_LEN + (self.n_total as usize) * PER_PARTICIPANT_LEN
+        HEADER_LEN + 2 * GROUP_POINT_LEN + (self.n_total as usize) * PER_PARTICIPANT_LEN
     }
 
     /// Serialize to canonical bytes.
     ///
     /// Layout: `version(1) || group_version(1) || spend_auth_version(1) ||
     ///          network(1) || n_total(1) || m_required(1) ||
+    ///          b_group(32) || y_group(32) ||
     ///          kem_pk[0] || ... || kem_pk[N-1]`
+    ///
+    /// The points sit after the 6-byte header and before the variable-length KEM
+    /// array, so every header offset is unchanged from the D-era layout.
     pub fn to_canonical_bytes(&self) -> Vec<u8> {
         let len = self.canonical_len();
         let mut buf = Vec::with_capacity(len);
@@ -151,6 +221,8 @@ impl MultisigAddressPayload {
         buf.push(self.network.as_u8());
         buf.push(self.n_total);
         buf.push(self.m_required);
+        buf.extend_from_slice(&self.b_group);
+        buf.extend_from_slice(&self.y_group);
         for pk in &self.hybrid_kem_pubkeys {
             buf.extend_from_slice(pk);
         }
@@ -188,7 +260,8 @@ impl MultisigAddressPayload {
             });
         }
 
-        let expected_len = HEADER_LEN + (n_total as usize) * PER_PARTICIPANT_LEN;
+        let expected_len =
+            HEADER_LEN + 2 * GROUP_POINT_LEN + (n_total as usize) * PER_PARTICIPANT_LEN;
         if data.len() != expected_len {
             return Err(MultisigAddressError::PayloadLengthMismatch {
                 expected: expected_len,
@@ -196,7 +269,18 @@ impl MultisigAddressPayload {
             });
         }
 
+        // The exact-length check above is what makes these fixed-offset reads
+        // sound; every slice below is within `expected_len`.
         let mut offset = HEADER_LEN;
+        let b_group: [u8; 32] = data[offset..offset + GROUP_POINT_LEN]
+            .try_into()
+            .expect("GROUP_POINT_LEN slice is 32 bytes");
+        offset += GROUP_POINT_LEN;
+        let y_group: [u8; 32] = data[offset..offset + GROUP_POINT_LEN]
+            .try_into()
+            .expect("GROUP_POINT_LEN slice is 32 bytes");
+        offset += GROUP_POINT_LEN;
+
         let mut hybrid_kem_pubkeys = Vec::with_capacity(n_total as usize);
         for _ in 0..n_total {
             hybrid_kem_pubkeys.push(data[offset..offset + HYBRID_KEM_PUBKEY_LEN].to_vec());
@@ -211,6 +295,8 @@ impl MultisigAddressPayload {
             network,
             n_total,
             m_required,
+            b_group,
+            y_group,
             hybrid_kem_pubkeys,
         })
     }
@@ -226,14 +312,92 @@ impl MultisigAddressPayload {
         let data = std::fs::read(path)?;
         Self::from_canonical_bytes(&data)
     }
+
+    /// Bech32m-encode the **fingerprint** as the shareable, QR-able group
+    /// identifier under the network's multisig HRP (`shekyl1m1…`, ~67 chars).
+    ///
+    /// The full canonical payload is **not** a Bech32m string: at E′ sizes it is
+    /// ~4019 chars for a 2-of-N, past Bech32m's ~1023-char BCH-checksum validity
+    /// limit — encode/decode do not round-trip, which is *why* the full address is
+    /// file-based and integrity rides the fingerprint (§6.3), not a full-address
+    /// string. So `multisig_hrp` names the **fingerprint**: participants exchange
+    /// the payload file and compare these short strings (string equality — both
+    /// sides encode the same fingerprint bytes under the same HRP).
+    pub fn fingerprint_bech32m(&self) -> Result<String, MultisigAddressError> {
+        let hrp = Hrp::parse(multisig_hrp(self.network))
+            .map_err(|e| MultisigAddressError::Encoding(e.to_string()))?;
+        Ok(address_fingerprint(self)
+            .iter()
+            .copied()
+            .bytes_to_fes()
+            .with_checksum::<Bech32m>(&hrp)
+            .chars()
+            .collect())
+    }
+
+    /// Decode a shareable fingerprint string back to `(network, fingerprint)`,
+    /// verifying the HRP is a multisig HRP and the data is exactly 32 bytes. For
+    /// robustness (e.g. extracting the bytes); the ritual's equality check needs
+    /// only [`Self::fingerprint_bech32m`] string comparison.
+    pub fn parse_fingerprint_bech32m(
+        encoded: &str,
+    ) -> Result<(Network, [u8; 32]), MultisigAddressError> {
+        let (hrp, data) =
+            bech32::decode(encoded).map_err(|e| MultisigAddressError::Encoding(e.to_string()))?;
+        let hrp_str = hrp.to_string();
+        // Reverse-map the multisig HRP → network (the Network enum's full domain).
+        let network = [Network::Mainnet, Network::Testnet, Network::Stagenet]
+            .into_iter()
+            .find(|&n| multisig_hrp(n) == hrp_str)
+            .ok_or(MultisigAddressError::WrongHrp { hrp: hrp_str })?;
+        let fingerprint: [u8; 32] = data.as_slice().try_into().map_err(|_| {
+            MultisigAddressError::Encoding(format!("expected 32 bytes, got {}", data.len()))
+        })?;
+        Ok((network, fingerprint))
+    }
 }
 
-/// Compute the 32-byte address fingerprint: `cn_fast_hash(canonical payload)`.
+/// cSHAKE256 customization for [`address_fingerprint`] (SP 800-185).
 ///
-/// This is the primary human-verifiable identifier for a multisig group
-/// address (PQC_MULTISIG.md SS6.3).
+/// Versioned: a change to the canonical payload's preimage takes `-v2`, so it
+/// becomes a new domain rather than a silent reinterpretation of the old one.
+pub const MULTISIG_ADDRESS_FINGERPRINT_CUSTOMIZATION: &[u8] = b"shekyl/multisig-address-v1";
+
+/// Compute the 32-byte address fingerprint:
+/// `cSHAKE256(canonical payload, "shekyl/multisig-address-v1")`.
+///
+/// This is the primary human-verifiable identifier for a multisig group address
+/// (PQC_MULTISIG.md SS6.3) **and, under E′, the group's identity** — the artifact
+/// the §5.5 setup ritual actually wanted: every participant computes it from the
+/// address alone and compares, or the group is not the same group. It covers the
+/// group's whole public state: `B_group`, `Y_group`, the N KEM pubkeys, both
+/// version axes, and `m`/`n`.
+///
+/// It supersedes the deleted `multisig_group_id`, which could not do this job: its
+/// preimage was the `MultisigKeyContainer`, whose leaf keys are derived per-output
+/// from KEM shared secrets — so it produced a different value for every output
+/// while being named for the group, had no consumer under E′, and its only
+/// long-term caller (`wallet2::create_pqc_multisig_group`) never executed
+/// successfully.
+///
+/// # Why cSHAKE256 and not `cn_fast_hash`
+///
+/// The address is on **no consensus path** — no C++ mirror, no FFI, no leaf — so
+/// nothing requires byte-identity with the Monero-descended daemon, which is
+/// `cn_fast_hash`'s only reason to exist. What the address *does* have is four
+/// independent implementers (payer wallet, scanner, exchange, light client), and
+/// for them "Keccak-256" is not a function: original Keccak (0x01) and SHA3-256
+/// (0x06) differ by one padding byte and fail *silently* — a different fingerprint,
+/// no diagnostic. cSHAKE256 has one meaning, and its customization string makes the
+/// domain separation structural instead of definitional. This matches the house
+/// pattern for every new domain-separated artifact (`shekyl/archival-bond-post-v1`,
+/// `shekyl/receive-label-hash-v1`); `cn_fast_hash` keeps exactly the consumers that
+/// require parity.
 pub fn address_fingerprint(payload: &MultisigAddressPayload) -> [u8; 32] {
-    shekyl_crypto_hash::cn_fast_hash(&payload.to_canonical_bytes())
+    shekyl_crypto_hash::cshake256_32(
+        MULTISIG_ADDRESS_FINGERPRINT_CUSTOMIZATION,
+        &payload.to_canonical_bytes(),
+    )
 }
 
 /// Format a fingerprint as grouped hex (4-char blocks separated by spaces).
@@ -282,6 +446,8 @@ mod tests {
             Network::Mainnet,
             n,
             m,
+            [0xB1; 32],
+            [0x71; 32],
             (0..n).map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN]).collect(),
         )
         .unwrap()
@@ -291,7 +457,10 @@ mod tests {
     fn canonical_roundtrip_2_of_3() {
         let payload = make_test_payload(3, 2);
         let bytes = payload.to_canonical_bytes();
-        assert_eq!(bytes.len(), HEADER_LEN + 3 * PER_PARTICIPANT_LEN);
+        assert_eq!(
+            bytes.len(),
+            HEADER_LEN + 2 * GROUP_POINT_LEN + 3 * PER_PARTICIPANT_LEN
+        );
         let decoded = MultisigAddressPayload::from_canonical_bytes(&bytes).unwrap();
         assert_eq!(payload, decoded);
     }
@@ -300,7 +469,10 @@ mod tests {
     fn canonical_roundtrip_1_of_1() {
         let payload = make_test_payload(1, 1);
         let bytes = payload.to_canonical_bytes();
-        assert_eq!(bytes.len(), HEADER_LEN + PER_PARTICIPANT_LEN);
+        assert_eq!(
+            bytes.len(),
+            HEADER_LEN + 2 * GROUP_POINT_LEN + PER_PARTICIPANT_LEN
+        );
         let decoded = MultisigAddressPayload::from_canonical_bytes(&bytes).unwrap();
         assert_eq!(payload, decoded);
     }
@@ -311,7 +483,9 @@ mod tests {
         let bytes = payload.to_canonical_bytes();
         assert_eq!(
             bytes.len(),
-            HEADER_LEN + (MAX_MULTISIG_PARTICIPANTS as usize) * PER_PARTICIPANT_LEN
+            HEADER_LEN
+                + 2 * GROUP_POINT_LEN
+                + (MAX_MULTISIG_PARTICIPANTS as usize) * PER_PARTICIPANT_LEN
         );
         let decoded = MultisigAddressPayload::from_canonical_bytes(&bytes).unwrap();
         assert_eq!(payload, decoded);
@@ -319,7 +493,15 @@ mod tests {
 
     #[test]
     fn rejects_n_zero() {
-        assert!(MultisigAddressPayload::new(Network::Mainnet, 0, 0, vec![]).is_err());
+        assert!(MultisigAddressPayload::new(
+            Network::Mainnet,
+            0,
+            0,
+            [0xB1; 32],
+            [0x71; 32],
+            vec![]
+        )
+        .is_err());
     }
 
     #[test]
@@ -331,6 +513,8 @@ mod tests {
             Network::Mainnet,
             n,
             3,
+            [0xB1; 32],
+            [0x71; 32],
             (0..n).map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN]).collect(),
         )
         .is_err());
@@ -342,6 +526,8 @@ mod tests {
             Network::Mainnet,
             2,
             3,
+            [0xB1; 32],
+            [0x71; 32],
             vec![vec![0; HYBRID_KEM_PUBKEY_LEN]; 2],
         )
         .is_err());
@@ -353,6 +539,8 @@ mod tests {
             Network::Mainnet,
             2,
             2,
+            [0xB1; 32],
+            [0x71; 32],
             vec![vec![0; 100], vec![0; HYBRID_KEM_PUBKEY_LEN]],
         )
         .is_err());
@@ -375,13 +563,26 @@ mod tests {
     #[test]
     fn reserved_spend_auth_version_is_carried() {
         // MSW-5: address carrier disposition (A). The payload transports
-        // `spend_auth_version` opaquely — a reserved value (0x02, the Option E′
-        // marker; §6.2) must round-trip unchanged, never be normalized or
-        // rejected, so forward-compatible readers (§8.2) can dispatch on it.
+        // `spend_auth_version` opaquely — a *reserved* value must round-trip
+        // unchanged, never be normalized or rejected, so forward-compatible
+        // readers (§8.2) can dispatch on it.
+        //
+        // This deliberately pokes a value that is NOT `SPEND_AUTH_VERSION`. The
+        // canary originally used 0x02 because 0x02 was then the reserved Option-E′
+        // marker; E′ shipping made 0x02 the default, at which point poking it would
+        // have quietly degraded this test into "the default round-trips" — which
+        // proves nothing about opaque carriage. 0x03 is unassigned, so the property
+        // under test (an unknown version survives a round trip) is preserved.
+        const RESERVED_FUTURE_VERSION: u8 = 0x03;
+        const _: () = assert!(
+            RESERVED_FUTURE_VERSION != SPEND_AUTH_VERSION,
+            "the canary must poke a version the reader does not already produce, or it tests nothing"
+        );
+
         let mut bytes = make_test_payload(2, 2).to_canonical_bytes();
-        bytes[2] = 0x02;
+        bytes[2] = RESERVED_FUTURE_VERSION;
         let decoded = MultisigAddressPayload::from_canonical_bytes(&bytes).unwrap();
-        assert_eq!(decoded.spend_auth_version, 0x02);
+        assert_eq!(decoded.spend_auth_version, RESERVED_FUTURE_VERSION);
         assert_eq!(decoded.to_canonical_bytes(), bytes);
     }
 
@@ -415,7 +616,11 @@ mod tests {
     fn fingerprint_badge_format() {
         let p = make_test_payload(3, 2);
         let badge = fingerprint_badge(&p);
-        assert_eq!(badge, "2-of-3, spend_auth v1, group v1");
+        // Literal, not constant-derived: this is the string a user reads off the
+        // badge, so it pins both the format and the version it advertises. `v2` is
+        // Option E′ — a bump must re-edit this line deliberately rather than track
+        // the constant silently.
+        assert_eq!(badge, "2-of-3, spend_auth v2, group v1");
     }
 
     #[test]
@@ -452,12 +657,79 @@ mod tests {
         assert_eq!(payload, loaded);
     }
 
+    // ── KATs: pin the canonical payload for a second implementer ──────────────
+    // The address is the one artifact with independent implementers (payer
+    // wallet, scanner, exchange, light client). These fix its size, its
+    // fingerprint bytes, and its string form so any of them computes the same
+    // value or fails a diff — the anti-drift gate for a payload no compiler spans.
+
+    #[test]
+    fn canonical_length_kat() {
+        // E′ payload = HEADER_LEN(6) + 2·GROUP_POINT_LEN(64) + N·PER_PARTICIPANT_LEN(1216)
+        //            = 70 + N·1216.
+        for (n, expected) in [(1u8, 1286usize), (2, 2502), (3, 3718), (5, 6150)] {
+            let bytes = make_test_payload(n, 1).to_canonical_bytes();
+            assert_eq!(bytes.len(), expected, "canonical length for n={n}");
+            assert_eq!(bytes.len(), 70 + (n as usize) * 1216);
+        }
+    }
+
+    #[test]
+    fn address_fingerprint_kat() {
+        // Fixed payload → fixed cSHAKE256 fingerprint. A change to the canonical
+        // layout, the customization string, or the hash function moves this and
+        // must be a deliberate re-pin, not a silent drift. Regenerated on failure.
+        let payload = make_test_payload(2, 2);
+        let fp = address_fingerprint(&payload);
+        assert_eq!(
+            fp,
+            [
+                0xed, 0x49, 0xa8, 0x39, 0xc9, 0xef, 0x73, 0x91, 0x17, 0x70, 0xac, 0x15, 0xcd, 0x5b,
+                0x11, 0x10, 0xd0, 0x8b, 0xeb, 0xf6, 0xb3, 0xe7, 0xd9, 0xd6, 0xf2, 0xed, 0x3a, 0xc9,
+                0x66, 0x1f, 0x6f, 0x2e,
+            ],
+        );
+    }
+
+    #[test]
+    fn fingerprint_bech32m_roundtrip() {
+        // The fingerprint (32 B → 67 chars) IS Bech32m-encodable and is the
+        // shareable / QR-able group identifier. The full payload is NOT: at ~4019
+        // chars a 2-of-N exceeds Bech32m's ~1023-char BCH-checksum validity limit
+        // and does not round-trip — hence file-based address + fingerprint string.
+        let payload = make_test_payload(2, 2);
+        let s = payload.fingerprint_bech32m().unwrap();
+        assert!(
+            s.starts_with("shekyl1m1"),
+            "mainnet multisig HRP + separator"
+        );
+        assert_eq!(s.chars().count(), 67, "32-byte fingerprint bech32m length");
+
+        let (net, fp) = MultisigAddressPayload::parse_fingerprint_bech32m(&s).unwrap();
+        assert_eq!(net, Network::Mainnet);
+        assert_eq!(fp, address_fingerprint(&payload));
+
+        // The ritual's equality check is plain string comparison — same bytes,
+        // same HRP, same string — needing no decode.
+        assert_eq!(s, make_test_payload(2, 2).fingerprint_bech32m().unwrap());
+    }
+
+    #[test]
+    fn fingerprint_bech32m_rejects_non_multisig_hrp() {
+        // A single-sig / unknown HRP must not parse as a multisig fingerprint.
+        let s = make_test_payload(2, 2).fingerprint_bech32m().unwrap();
+        let mangled = s.replacen("shekyl1m1", "shekyl1", 1);
+        assert!(MultisigAddressPayload::parse_fingerprint_bech32m(&mangled).is_err());
+    }
+
     #[test]
     fn different_networks_different_payloads() {
         let p_main = MultisigAddressPayload::new(
             Network::Mainnet,
             2,
             2,
+            [0xB1; 32],
+            [0x71; 32],
             vec![vec![0; HYBRID_KEM_PUBKEY_LEN]; 2],
         )
         .unwrap();
@@ -465,6 +737,8 @@ mod tests {
             Network::Testnet,
             2,
             2,
+            [0xB1; 32],
+            [0x71; 32],
             vec![vec![0; HYBRID_KEM_PUBKEY_LEN]; 2],
         )
         .unwrap();
