@@ -362,8 +362,11 @@ question deferred to R4 has nothing to pin against, and the three-way deferral b
 (R4 × emission shape × F3) loses its R4 leg. What remains for `drain()`/`unbond()` is
 sequencing, not firewall design: the emission output shape and the F3 wire freeze still
 gate *implementation* (the drain consumes emission outputs), and the delay floor stays
-consensus-pinned. The §"Axes R4 must decide" and "Round-1 lean" paragraphs below are
-retained as history of a question that dissolved, not as open work. (The rotation
+consensus-pinned. The §"Decision", "Second and third dependencies", "Axes R4 must
+decide", and "Round-1 lean" paragraphs below are retained as history of a question that
+dissolved, not as open work — in particular, "bodies stay `unimplemented!()` until GF-4
+is pinned" no longer holds (GF-4's count rule is retired); the surviving implementation
+gates are the emission output shape and F3 alone. (The rotation
 co-trigger from §5.1 item 2 survives independently — it is the network-layer seam, not
 the output-count seam.)
 

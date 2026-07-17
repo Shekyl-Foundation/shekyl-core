@@ -315,7 +315,7 @@ on the wire matches the function decomposition. Re-bond needs (b) regardless.
 | `Bonded` | Partial slash (shard dropped; bond > 0) | `Bonded` |
 | `Bonded` | Terminal slash (`bonded_total → 0`) | `Slashed` |
 | `Slashed` | Standalone re-bond (gate-4) | `Bonded` |
-| `Bonded` / `Slashed` | Decorrelated drain confirms | `Exited` |
+| `Bonded` / `Slashed` | Drain confirms *("decorrelated" qualifier retired 2026-07-16 — F-W10, gate-6 §12.9)* | `Exited` |
 | `Exited` | Release cooldown elapsed | **Unbond** (collateral returned) |
 | `Exited` | Bond released ∧ backlog exhausted/lapsed (`W`) | Terminal (`p_slot` burn) |
 | `Bonded` | Reorg disconnects **join-Market** block (§8.2) | `AdmissionPending` |

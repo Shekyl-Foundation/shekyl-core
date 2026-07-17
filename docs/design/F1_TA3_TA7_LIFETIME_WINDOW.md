@@ -207,6 +207,11 @@ sufficient, or pinned min-delay / output-count discipline needed for `T_obs`?
 **Pass:** output layer holds for lifetime observation.
 **Fail:** graph links compound with public portfolio identity.
 
+*(UPDATE 2026-07-16 — F-W10, gate-6 §12.9: the second Demonstrate row's method dissolved —
+there is no "decorrelated drain pattern vs lump sweep" to compare, because under FCMP++ the
+drain is not an identifiable transaction and its output shape is not an observable. The
+question's answer is at §9.3's T-A5 rows: pass-by-construction on the output leg.)*
+
 ---
 
 ### T-A6 — Firewall: bond funding
@@ -327,7 +332,9 @@ between principal graph and `P` activity. **Mitigations (designed, not all numer
 pinned):** settlement-epoch batching (not per-epoch drip); `MAX_SETTLEMENT_EPOCHS_PER_EMISSION
 = 15`; fund-from-earnings ramp spacing join-Market from principal funding
 ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §6); wallet-local emission jitter;
-decorrelated drains (T-A5). `W` governs forfeiture, not `T_obs` shortening. **Gap:** jitter
+~~decorrelated drains (T-A5)~~ *(retired 2026-07-16 — F-W10: drain-side timing has no
+observable event to decorrelate; the mitigation list loses nothing, the channel is closed
+by construction)*. `W` governs forfeiture, not `T_obs` shortening. **Gap:** jitter
 magnitude, min spacing join-Market↔principal spend, drain spacing defaults — need timing-cluster
 pin. |
 | **Residual** | Quantitative pass/fail thresholds; daemon-assisted vs wallet-local jitter

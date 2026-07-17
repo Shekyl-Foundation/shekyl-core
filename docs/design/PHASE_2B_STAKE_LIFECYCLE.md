@@ -568,8 +568,8 @@ Authoritative staking **shape** for genesis. Full pin history: revision note
 | join-Market / re-bond / unbond | `txin_archival_bond_post` (gate 4) | Join creates record; re-bond after slash; **Unbond** returns collateral after cooldown |
 | Bond slash | Gate 4 consensus mutation | Involuntary unbond; `good_standing` interval log |
 | Reward emission | **Special** — mint + membership-only backing + work payload | Paying claim only; record must exist; dedup on bond record |
-| Reward sweep / principal return | Ordinary FCMP++ transfer (`P` → principal or fresh stealth) | Decorrelated drains — no lump correlation beacon |
-| Terminal drain | Ordinary FCMP++ spend(s) draining `P`'s **non-escrowed** outputs | Decorrelated exit; **bond** returns via gate-4 `Unbond`, not drain |
+| Reward sweep / principal return | Ordinary FCMP++ transfer (`P` → principal or fresh stealth) | ~~Decorrelated drains — no lump correlation beacon~~ *(retired 2026-07-16 as phantom under FCMP++ — F-W10, gate-6 §12.9: the drain is not an identifiable transaction)* |
+| Terminal drain | Ordinary FCMP++ spend(s) draining `P`'s **non-escrowed** outputs | ~~Decorrelated exit~~ *(retired with the row above — F-W10)*; **bond** returns via gate-4 `Unbond`, not drain |
 
 #### Two irreducible special surfaces
 
@@ -670,7 +670,7 @@ pub enum ArchivalPState {
     /// Terminal slash only: bonded_total == 0; out of Market until re-bond.
     /// Partial slash (one shard) stays Bonded — gate-4 §4.2.
     Slashed,
-    /// Decorrelated drain confirmed; emit-backlog and/or bond cooldown may persist.
+    /// Drain confirmed; emit-backlog and/or bond cooldown may persist.
     Exited {
         /// Until release cooldown elapses — collateral not yet Unbond-able (gate-4 §4.3).
         collateral_in_cooldown: bool,
@@ -711,7 +711,7 @@ pub enum ArchivalPState {
 | `Bonded` | **Partial** slash (shard dropped; `bonded_total > 0`) | `Bonded` (holdings reduced) |
 | `Bonded` | **Terminal** slash (`bonded_total → 0`) | `Slashed` |
 | `Slashed` | Re-bond confirm | `Bonded` |
-| `Bonded` / `Slashed` | Decorrelated drain confirm | `Exited { collateral_in_cooldown: true }` |
+| `Bonded` / `Slashed` | Drain confirm | `Exited { collateral_in_cooldown: true }` |
 | `Exited` | Release cooldown elapsed + **Unbond** confirm | `Exited { collateral_in_cooldown: false }` |
 | `Exited` | Bond released ∧ backlog done/lapsed | Terminal (`p_slot` retired) |
 | `Bonded` | Reorg disconnects **join-Market** block | `AdmissionPending` |
@@ -1480,11 +1480,11 @@ Three mechanisms — same as §0 status block; do not shorthand as "P solves pri
 |--------|----------------|
 | **F1 — gate-3 holdings publicity through rotation** | Form-C holdings consensus-public. T-A1: portfolio ≈ identity at lean eq; lifetime `T_obs`. **Provisionally accepted; finally accepted iff T-A3–T-A7 pass.** |
 | **A6 — challenge grief** | T-A16; `CHALLENGE_RESOLUTION_BLOCKS` + L16 + consensus-witnessed delivery |
-| **`P`↔principal correlation** | Gate 6 four layers + bond-funding; Tor/onion (L16); decorrelated drains |
+| **`P`↔principal correlation** | Gate 6 four layers + bond-funding; Tor/onion (L16); ~~decorrelated drains~~ *(drain discipline retired 2026-07-16 — F-W10, gate-6 §12.9; the exit leg is closed by construction)* |
 | **Cross-pseudonym intersection** | Per-`P` path, emission batching, rotation; bonds do not make multi-`P` free |
 | **Emission timing tell** | Batch ≤ `MAX_SETTLEMENT_EPOCHS_PER_EMISSION`; wallet jitter / Dandelion++ (open) |
 | **Bond-funding correlation** | Admission transfers must not become standing linkage (gate 6 §2.5) |
-| **Unbond refund linkage** | Loud `bond_floor` refund — same decorrelation as rewards (gate 6 §2.4) |
+| **Unbond refund linkage** | **Structurally unrepresentable** *(corrected 2026-07-16 — gate-6 §2.4 method-note-5 re-walk)*: the loud term is the `bond_debit` **source term**; the refund itself enters as ordinary hidden vouts inside the `Unbond` tx (gate-4 §2.4) — no identifiable refund output exists to link. The former "same decorrelation as rewards" pin retired with F-W10 |
 | **Silent inflation (emission)** | Loud vin; verifier recomputes `reward_P(E)`; wallet G11-E1 |
 | **Silent inflation (bond)** | `bond_credit`/`bond_debit` in RCT balance equation; conservation law; G11-E2/E3 |
 | **Double emission** | `claimed_settlement_epochs` on bond record (P2B-2) |

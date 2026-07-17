@@ -127,7 +127,12 @@ spend keys — not algebraic offsets, not shared nonce streams, not shared scan 
   principal + `P`).
 - Principal→`P` stake-in, `P`→principal unstake drain, reward sweeps = **ordinary
   `CTTypeFcmpPlusPlusPqc` transfers** on the main tree; base FCMP++ privacy is necessary
-  but **not sufficient** (timing/output still leak).
+  but **not sufficient** (timing/output still leak). *(UPDATE 2026-07-16 — method-note-5
+  re-walk, §11.8: the "not sufficient" residue is now scoped to the **entry leg only** —
+  the funding spend's existence and timing, the GF-7 seam (F-D4 §16.1). On the exit leg
+  both named leaks were found phantom: exit timing has no observable event (F-W7/F-W9)
+  and the drain's output shape is not an observable (F-W10). Base FCMP++ privacy is
+  sufficient for the exit leg by construction.)*
 - Reward emission = **membership-only control** on `P`'s backing UTXOs — no published
   dedup tag; no stake-keyed nullifier on the emission path.
 
@@ -220,6 +225,44 @@ transfers.
   creates a P-attributed output at public `bond_floor` amount; mixes in the FCMP++ set like
   any output — same decorrelated-drain discipline as reward receipts (amount is public;
   spend anonymity is tree membership).
+
+**Method-note-5 re-walk (2026-07-16, night) — the other two carries, asked the same
+question.** F-W10 retired the middle bullet at ratification; per §11.8 method note 5 the
+remaining two carries of this pin were re-walked against what FCMP++ actually emits in the
+same sitting, instead of waiting to be caught one at a time:
+
+- **Rewards → stealth outputs `P` controls: HOLDS — but the load-bearing property is
+  §2.1's, not this layer's.** What the bullet actually delivers is key/scan-boundary
+  independence: rewards are scannable and spendable only under `P`'s HKDF-independent
+  keypair, so disclosure of either wallet's scan capability reaches nothing of the
+  other's income. That is a *creation-side* mechanism — whose keys the mint pays — and
+  it is substrate-independent, true under both lineages. The graph-side half of its
+  lineage-era justification ("stealth so the reward can't be traced onward to the
+  principal") is met by construction under FCMP++ on F-W10's grounds: reward-output
+  spends are unenumerable and carry no `P`-typing on the wire
+  ([`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`](ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md) §16.1).
+  **Re-anchored, not retired** — the bullet survives because its mechanism never needed
+  the graph.
+- **Unbond refund: HALF-PHANTOM — the factual phrasing is the visible-graph intuition
+  written down, and the discipline tail retires with F-W10.** "Release creates a
+  P-attributed **output** at public `bond_floor` amount" is wrong at the output layer:
+  the *transaction* is `P`-attributed and the *debit amount* is public, but the refund
+  enters as **ordinary hidden vouts**, CT-balanced against the public `bond_debit`
+  source term ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §2.4 release-refund
+  note, §3.5 connect semantics) — there is no identifiable "refund output" for any
+  observer to follow, which is why F-D4 §2.1's T-2 graded the watch-the-refund channel
+  **structurally unrepresentable** before this re-walk reached the bullet. A phrasing
+  that names an output an observer could track presupposes the graph that would let
+  them track it. The tail — "same decorrelated-drain discipline as reward receipts" —
+  cites the discipline F-W10 retired and **retires with it**. What survives is what the
+  wire actually emits: the `Unbond` post itself, `P`-side public by design, an exit
+  event with no principal-side referent (F-D4 §16.1 lifecycle table). No wallet output
+  rule is owed here either.
+
+Scorecard for the pin as a whole: one bullet retired (F-W10), one re-anchored to its
+real mechanism, one corrected to the wire and stripped of its retired tail. The layer's
+goal statement stands — met by construction on the graph side, by §2.1 key independence
+on the creation side.
 
 **Round-open:** minimum delay / output-count discipline between last emission and
 drain; change-output handling on bond-funding transfers.
@@ -1899,11 +1942,12 @@ one turn after the lesson was named — the check works on its own authors, whic
 property that earns it a standing note.
 
 **Method note 5 (adopted 2026-07-16, from F-W10 — §12.9 decision 2's ratification
-amendment): a pin carried across a substrate change re-walks against the new substrate
-at carry time; a provenance line reading "carry from X" is a re-walk trigger, not an
-exemption.** The GF-4 output-count discipline (§2.4) defended against the lump-sweep
-attack — real and well-documented in the CryptoNote/ring-signature lineage, where the
-spend graph is partially visible. The pin was carried forward across the ring-signature →
+amendment; extended same night with the generative pattern and first application): a pin
+carried across a substrate change re-walks against the new substrate at carry time; a
+provenance line reading "carry from X" is a re-walk trigger, not an exemption.** The
+GF-4 output-count discipline (§2.4) defended against the lump-sweep attack — real and
+well-documented in the CryptoNote/ring-signature lineage, where the spend graph is
+partially visible. The pin was carried forward across the ring-signature →
 FCMP++ cutover, under which the attack has no substrate (the drain is not an identifiable
 transaction; the spend set is unenumerable), and four Gate-6 rounds inherited it without
 re-walking it — it survived the F-W7 audit precisely because it *looked* on-chain and
@@ -1912,6 +1956,37 @@ for every "carry from" pin, name the observable it presupposes and verify the cu
 chain still emits it. This is `16-architectural-inheritance.mdc`'s inherited-architecture
 rule applied to *threat-model* inheritance: an inherited defense presupposing an
 observable the chain no longer emits is inherited drift, not inherited protection.
+
+**The generative pattern (named at ratification review): F-W10 is the fifth instance of
+one failure, and the note above is the pattern behind all five.** Phantom `T` (F-W7 —
+the principal-side re-appearance nobody could name), the cross-persona k-collapse
+(F-D4 §16.3, raised and withdrawn — an intersection re-homed without its linking key),
+X-3's harm model (F-W8 — a partition harm whose assignment step was `T` again), `σ_L`
+(a spread parameter for a distribution over events that don't exist), and now
+output-count (F-W10) — **each is a privacy intuition imported from a chain with a
+visible spend graph into a chain that doesn't have one.** Output-count is the cleanest
+specimen because its provenance is written in the document: a Monero-lineage pin,
+inherited verbatim, defending against a graph FCMP++ deleted. The other four were the
+same import at one remove — mechanisms whose observables (a traceable re-appearance, a
+followable refund, a linkable persona set) are spend-graph observables that this chain
+structurally does not emit. An inherited pin is a claim about the chain it was written
+for; re-walk every CryptoNote-lineage carry against what FCMP++ actually emits, the
+same way a constant re-walks against its consumer (note 2's neighborhood), an observer
+against its code (note 3), and a composition against its enumerated events (note 4).
+
+**First application (2026-07-16, night):** §2.4's other two pin bullets — the only
+other "carry from PHASE_2B §2.4" content in the same paragraph as the retired
+discipline — were re-walked immediately rather than left for the sixth and seventh
+instances to surface adversarially. Verdicts recorded at §2.4: rewards→stealth-outputs
+**holds, re-anchored** (its real mechanism is §2.1 key/scan-boundary independence,
+creation-side and substrate-independent; the graph-side half of its old justification
+is by-construction under FCMP++); the Unbond-refund bullet is **half-phantom** (the
+"P-attributed output at public amount" phrasing named an output no observer can
+identify — the refund is ordinary hidden vouts against a public `bond_debit` source
+term, T-2's structural-unrepresentability; the "same decorrelated-drain discipline"
+tail retires with F-W10). The §2.1 crypto-layer carry ("carry from V3 / PHASE_2B") was
+checked in passing: its content is key derivation and scan separation — creation-side
+mechanisms with no graph presupposition — and stands without amendment.
 
 ---
 
@@ -2458,6 +2533,27 @@ and its five standing conditionals are untouched by this round.
 ---
 
 ## Revision history
+
+- **2026-07-16 (night — method note 5 extended: the generative pattern + first
+  application; §2.4's other two carries re-walked):** F-W10 was recognized at
+  ratification review as the **fifth instance of one failure** — phantom `T` (F-W7),
+  the cross-persona k-collapse near-miss (F-D4 §16.3), X-3's harm model (F-W8), `σ_L`,
+  and output-count (F-W10) are each a privacy intuition imported from a
+  visible-spend-graph chain into a chain without one; output-count is the cleanest
+  specimen because its provenance is written in the document. §11.8 method note 5
+  extended with the pattern and applied immediately to the two remaining
+  PHASE_2B-§2.4 carries sitting in the same §2.4 paragraph: **rewards→stealth-outputs
+  holds, re-anchored** (real mechanism is §2.1 key/scan-boundary independence,
+  creation-side; the graph-side justification half is by-construction);
+  **Unbond-refund is half-phantom** (the "P-attributed output at public amount"
+  phrasing named an output no observer can identify — the refund is ordinary hidden
+  vouts against a public `bond_debit` source term, F-D4 T-2's
+  structural-unrepresentability — and the "same decorrelated-drain discipline" tail
+  retires with F-W10). §2.1's transfer-leg pin scoped: "timing/output still leak" now
+  reads entry-leg-only. `PHASE_2B_STAKE_LIFECYCLE.md` §2.4 tx-leg rows and the
+  §7 Unbond-refund threat row corrected at source. No new F-W tokens minted — both
+  verdicts are dispositions of existing pin prose under an adopted method note, not
+  blocking findings.
 
 - **2026-07-16 (night — §12.9 RATIFIED; F-W10 added at ratification; method note 5):**
   Review-at-source ratified decisions 1, 4, 5 as drafted and **rejected the dissolution
