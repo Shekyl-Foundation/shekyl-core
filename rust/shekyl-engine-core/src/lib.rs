@@ -11,13 +11,14 @@
 pub mod attribution;
 pub mod consensus_constants;
 pub mod engine;
-#[cfg(feature = "multisig")]
-pub mod multisig;
 pub mod outbound_label;
 pub mod scan;
 
 pub use consensus_constants::ARCHIVAL_BOND_FLOOR_ATOMIC;
 pub use engine::payment_requests::{NewPaymentRequest, PaymentRequestFilter};
+/// The MS-5 multisig signer marker — only present under `--features multisig`.
+#[cfg(feature = "multisig")]
+pub use engine::MultisigSignerV2;
 pub use engine::{
     Capability, CapabilityInput, ChangePasswordError, Credentials, DaemonClient, DaemonOp,
     DiagnosticSink, Engine, EngineCreateParams, EngineSignerKind, FeePriority, IoError, KeyError,

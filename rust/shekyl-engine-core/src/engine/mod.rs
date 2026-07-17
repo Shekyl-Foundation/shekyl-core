@@ -379,6 +379,9 @@ pub use refresh::{
     RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
 };
 pub use sealing_keys::StateWrapKey;
+/// The MS-5 multisig signer marker — only present under `--features multisig`.
+#[cfg(feature = "multisig")]
+pub use signer::MultisigSignerV2;
 pub use signer::{
     EngineSignerKind, LocalSigner, SignedTransfer, Signer, SoloSigner, TransferSigningContext,
 };

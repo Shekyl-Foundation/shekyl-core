@@ -5,7 +5,7 @@ fuzz_target!(|data: &[u8]| {
     if data.len() < 100 {
         return;
     }
-    use shekyl_engine_core::multisig::v31::intent::{IntentRecipient, SpendIntent};
+    use shekyl_multisig::intent::{IntentRecipient, SpendIntent};
     use shekyl_units::AtomicUnits;
 
     let intent = SpendIntent {

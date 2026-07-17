@@ -106,11 +106,14 @@ multiexp = "0.4"
 rand_core = { version = "0.6", features = ["std"] }
 dalek-ff-group = "0.5"
 ciphersuite = "0.4"
-modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
-chacha20poly1305 = { version = "0.10", optional = true }
-hkdf = { version = "0.12", optional = true }
-sha2 = { version = "0.10", optional = true }
-serde = { version = "1", features = ["derive"], optional = true }
+# The multisig spend ceremony (Option E′) lives in its own crate,
+# `shekyl-multisig` (MS-1(a)): the dependency list *there* is the structural "no
+# transport" ban. This optional edge is all engine-core needs to wire the
+# ceremony to the ledger. The former inline optional deps (modular-frost,
+# chacha20poly1305, hkdf, sha2, serde) moved with the module and are no longer
+# engine-core's — the runtime graph shrinks by five crates under `--features
+# multisig` (hkdf/sha2/serde remain as dev-deps for the `#[cfg(test)]` substrate).
+shekyl-multisig = { path = "../shekyl-multisig", optional = true }
 # The daemon JSON-RPC send path (`DaemonClient::get_fee_estimates` /
 # `submit_transaction`, `engine/daemon.rs`) is always-compiled production
 # code that builds `get_fee_estimate` params and parses the response as
@@ -313,11 +316,6 @@ dalek-ff-group = "0.5"
 rand_core = "0.6"
 
 [[bench]]
-name = "multisig_v31"
-harness = false
-required-features = ["multisig"]
-
-[[bench]]
 name = "refresh_snapshot"
 harness = false
 required-features = ["bench-internals"]
@@ -435,7 +433,7 @@ required-features = ["bench-internals"]
 
 [features]
 default = []
-multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "chacha20poly1305", "hkdf", "sha2"]
+multisig = ["dep:shekyl-multisig"]
 # Internal feature (S6): enables the StakeEngine session RNG self-cert. Wires
 # `shekyl-standoff`'s `conformance` grader (`certify_draw`) into
 # `StakeEngine::on_start` over the production `OsRngGapAdapter`, fail-stopping the

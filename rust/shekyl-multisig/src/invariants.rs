@@ -169,16 +169,15 @@ pub fn check_pre_signing_invariants(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::multisig::v31::intent::{IntentRecipient, SpendIntent, SPEND_INTENT_VERSION};
+    use crate::intent::{IntentRecipient, SpendIntent, SPEND_INTENT_VERSION};
     use std::collections::HashSet;
 
     fn test_intent() -> SpendIntent {
-        let fp = super::super::intent::ChainStateFingerprint {
+        let fp = crate::intent::ChainStateFingerprint {
             reference_block_hash: [0xCC; 32],
             input_global_indices: vec![42],
             input_eligible_heights: vec![800],
             input_amounts: vec![AtomicUnits::from_raw(310)],
-            input_assigned_prover_indices: vec![0],
         };
         let chain_fp = fp.compute();
 
@@ -205,12 +204,11 @@ mod tests {
     }
 
     fn test_input(intent: &SpendIntent) -> InvariantCheckInput<'static> {
-        let fp = super::super::intent::ChainStateFingerprint {
+        let fp = crate::intent::ChainStateFingerprint {
             reference_block_hash: [0xCC; 32],
             input_global_indices: vec![42],
             input_eligible_heights: vec![800],
             input_amounts: vec![AtomicUnits::from_raw(310)],
-            input_assigned_prover_indices: vec![0],
         };
         let chain_fp = fp.compute();
 

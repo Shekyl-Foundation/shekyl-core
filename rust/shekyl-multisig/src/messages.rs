@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026, The Shekyl Foundation
 // All rights reserved. BSD-3-Clause
 
-//! MultisigEnvelope and the 11 message types (PQC_MULTISIG.md SS12.1–SS12.2).
+//! MultisigEnvelope and the E′ message types (PQC_MULTISIG.md SS12.1–SS12.2).
 //!
 //! The envelope wraps all inter-participant communication. The `message_type`
 //! is encrypted inside the payload to prevent role-pattern leakage.
@@ -16,38 +16,29 @@ pub const ENVELOPE_VERSION: u8 = 1;
 #[repr(u8)]
 pub enum MessageType {
     SpendIntent = 0x01,
-    ProverOutput = 0x02,
     SignatureShare = 0x03,
-    Veto = 0x04,
-    ProverReceipt = 0x05,
-    Heartbeat = 0x06,
-    CounterProof = 0x07,
     GroupStateSummary = 0x08,
     InvariantViolation = 0x09,
-    RotationIntent = 0x0A,
     EquivocationProof = 0x0B,
+    // Discriminants 0x02/0x04/0x05/0x06/0x07/0x0A were the Option-D
+    // prover-output / veto / prover-receipt / heartbeat / counter-proof /
+    // rotation-intent types. Excised under MS-5: Option E′ has no prover,
+    // veto, heartbeat, counter-proof, or rotation. Surviving discriminant
+    // values are left unchanged (a deletion, not a renumbering); the E′
+    // FROST-round and hybrid-sig message types are assigned when the ceremony
+    // lands.
 }
 
 impl MessageType {
     pub fn from_u8(v: u8) -> Option<Self> {
         match v {
             0x01 => Some(Self::SpendIntent),
-            0x02 => Some(Self::ProverOutput),
             0x03 => Some(Self::SignatureShare),
-            0x04 => Some(Self::Veto),
-            0x05 => Some(Self::ProverReceipt),
-            0x06 => Some(Self::Heartbeat),
-            0x07 => Some(Self::CounterProof),
             0x08 => Some(Self::GroupStateSummary),
             0x09 => Some(Self::InvariantViolation),
-            0x0A => Some(Self::RotationIntent),
             0x0B => Some(Self::EquivocationProof),
             _ => None,
         }
-    }
-
-    pub fn is_reserved(&self) -> bool {
-        matches!(self, Self::RotationIntent)
     }
 }
 
@@ -225,18 +216,15 @@ mod tests {
 
     #[test]
     fn message_type_roundtrip() {
-        for byte in 0x01..=0x0Bu8 {
+        // The E′ surviving discriminants round-trip; the six excised Option-D
+        // discriminants and out-of-range bytes decode to None.
+        for byte in [0x01, 0x03, 0x08, 0x09, 0x0Bu8] {
             let mt = MessageType::from_u8(byte).unwrap();
             assert_eq!(mt as u8, byte);
         }
-        assert!(MessageType::from_u8(0x00).is_none());
-        assert!(MessageType::from_u8(0x0C).is_none());
-    }
-
-    #[test]
-    fn rotation_intent_is_reserved() {
-        assert!(MessageType::RotationIntent.is_reserved());
-        assert!(!MessageType::SpendIntent.is_reserved());
+        for excised in [0x00, 0x02, 0x04, 0x05, 0x06, 0x07, 0x0A, 0x0Cu8] {
+            assert!(MessageType::from_u8(excised).is_none());
+        }
     }
 
     #[test]
@@ -277,13 +265,13 @@ mod tests {
     #[test]
     fn decrypted_payload_roundtrip() {
         let dp = DecryptedPayload {
-            message_type: MessageType::ProverOutput,
+            message_type: MessageType::SignatureShare,
             body: vec![1, 2, 3, 4],
         };
         let encoded = dp.encode();
-        assert_eq!(encoded[0], 0x02);
+        assert_eq!(encoded[0], 0x03);
         let decoded = DecryptedPayload::decode(&encoded).unwrap();
-        assert_eq!(decoded.message_type, MessageType::ProverOutput);
+        assert_eq!(decoded.message_type, MessageType::SignatureShare);
         assert_eq!(decoded.body, vec![1, 2, 3, 4]);
     }
 

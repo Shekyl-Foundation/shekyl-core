@@ -6,9 +6,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn bench_intent_hash(c: &mut Criterion) {
-    use shekyl_engine_core::multisig::v31::intent::{
-        IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
-    };
+    use shekyl_multisig::intent::{IntentRecipient, SpendIntent, SPEND_INTENT_VERSION};
 
     let intent = SpendIntent {
         version: SPEND_INTENT_VERSION,
@@ -37,9 +35,7 @@ fn bench_intent_hash(c: &mut Criterion) {
 }
 
 fn bench_intent_serialization(c: &mut Criterion) {
-    use shekyl_engine_core::multisig::v31::intent::{
-        IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
-    };
+    use shekyl_multisig::intent::{IntentRecipient, SpendIntent, SPEND_INTENT_VERSION};
 
     let intent = SpendIntent {
         version: SPEND_INTENT_VERSION,
@@ -68,8 +64,8 @@ fn bench_intent_serialization(c: &mut Criterion) {
 }
 
 fn bench_encrypt_decrypt(c: &mut Criterion) {
-    use shekyl_engine_core::multisig::v31::encryption::{decrypt_payload, encrypt_payload};
-    use shekyl_engine_core::multisig::v31::messages::MessageType;
+    use shekyl_multisig::encryption::{decrypt_payload, encrypt_payload};
+    use shekyl_multisig::messages::MessageType;
 
     let key = [0x42; 32];
     let intent_hash = [0xAA; 32];
@@ -111,7 +107,7 @@ fn bench_encrypt_decrypt(c: &mut Criterion) {
 }
 
 fn bench_envelope_roundtrip(c: &mut Criterion) {
-    use shekyl_engine_core::multisig::v31::messages::{MultisigEnvelope, ENVELOPE_VERSION};
+    use shekyl_multisig::messages::{MultisigEnvelope, ENVELOPE_VERSION};
 
     let envelope = MultisigEnvelope {
         version: ENVELOPE_VERSION,
@@ -134,14 +130,13 @@ fn bench_envelope_roundtrip(c: &mut Criterion) {
 }
 
 fn bench_chain_state_fingerprint(c: &mut Criterion) {
-    use shekyl_engine_core::multisig::v31::intent::ChainStateFingerprint;
+    use shekyl_multisig::intent::ChainStateFingerprint;
 
     let fp = ChainStateFingerprint {
         reference_block_hash: [0xAA; 32],
         input_global_indices: (0..16).collect(),
         input_eligible_heights: (900..916).collect(),
         input_amounts: vec![shekyl_units::AtomicUnits::from_raw(1_000_000); 16],
-        input_assigned_prover_indices: (0..16u8).map(|i| i % 3).collect(),
     };
 
     c.bench_function("chain_state_fingerprint_16_inputs", |b| {
