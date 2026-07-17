@@ -5,13 +5,11 @@
 //! `cover`) — *when* `P` funds/enters and *how much* it sends on top of the
 //! public `bond_floor`. Both are pure-integer, golden-vector-pinned, and
 //! imported by the simulator, the conformance vector, and the wallet alike.
-//! The **exit seam** carries its own draw, [`draw_exit_gap`] (`exit`):
-//! one-sided (no order coin — collateral is not spendable before the release
-//! cooldown), anchored at the cooldown-pinned earliest-spend height, and
-//! written against the F-D4 **provisional sentinel** window
-//! ([`DEFAULT_EXIT_GAP_WINDOW`]) whose value is sealed only by the Phase 7.7
-//! stressnet read (see the `exit` module docs for the sentinel mechanics and
-//! the compile-time refusal).
+//! (The exit seam carries **no draw**: the F-D4 premise audit found the
+//! principal-side re-appearance it would decorrelate against has no on-chain
+//! observable, and Gate-6 §12.9 re-homed the seam to the off-chain crossing —
+//! the exit mechanism was deleted at decision 5's scope,
+//! `docs/design/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md` §15.4/§15.5.)
 //! The timing draw's single-sourced **consumer** is [`plan_entry_seam`]
 //! (`plan`): the one conversion from the drawn `(spread, bond_first)` pair to
 //! the relative placement of the two seam events, shared by wallet and sim so
@@ -64,7 +62,6 @@
 
 pub mod cover;
 pub mod draw;
-pub mod exit;
 pub mod plan;
 
 pub use cover::{
@@ -72,10 +69,6 @@ pub use cover::{
     COVER_SPAN_CAP_ATOMIC, COVER_TAIL_COUNT,
 };
 pub use draw::{bounded_uniform, draw_entry_gap, GapRng, DEFAULT_ENTRY_GAP_WINDOW};
-pub use exit::{
-    draw_exit_gap, ExitGap, ExitGapWindow, DEFAULT_EXIT_GAP_WINDOW,
-    DEFAULT_EXIT_GAP_WINDOW_PROVISIONAL,
-};
 pub use plan::{plan_entry_seam, EntrySeamPlan};
 
 #[cfg(feature = "conformance")]

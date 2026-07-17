@@ -4329,7 +4329,6 @@ dependencies = [
 name = "shekyl-standoff"
 version = "3.1.0"
 dependencies = [
- "shekyl-standoff",
  "shekyl-stats",
 ]
 
