@@ -329,14 +329,18 @@ Concrete steps for participants forming a new group:
 Multisig addresses use a new Bech32m human-readable prefix:
 
 ```
-single-sig:     shekyl1:<version 0x01><classical>/<pqc>
-single-sig tn:  shekyltest1:<...>
-multisig:       shekyl1m:<version 0x01><group_metadata>
-multisig tn:    shekyltest1m:<...>
+single-sig:     shekyl1<classical+tag>/<pqc_a>/<pqc_b>   (full string; POST_QUANTUM_CRYPTOGRAPHY.md §Address Format)
+single-sig tn:  tshekyl1<...>/<...>/<...>                (classical HRP `tshekyl`; PQC `tskpq`/`tskpq2`)
+multisig:       shekyl1m1<fingerprint 32B>               (names the fingerprint, not the payload; §6.2)
+multisig tn:    shekyltest1m1<fingerprint 32B>
 ```
 
-The visible `m` suffix prevents wallet confusion. Wallets MUST
-type-check the HRP at parse time.
+The single-sig address is a three-segment full string (each segment under
+Bech32m's 1023-char bound; the classical segment carries the `ek_bind_tag`).
+The multisig payload is far past that bound and is **file-based** — so the
+`shekyl1m` HRP encodes the fixed 32-byte **fingerprint** (67 chars, §6.2/§6.3),
+never the group payload. The visible `m` suffix prevents wallet confusion.
+Wallets MUST type-check the HRP at parse time.
 
 **Reserved:** `shekyl1n...` (rotated-key multisig, V3.2+). Do not issue.
 
