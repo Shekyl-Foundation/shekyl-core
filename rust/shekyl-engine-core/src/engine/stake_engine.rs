@@ -2568,7 +2568,7 @@ impl Message<ScanStep> for StakeEngine {
             mut result,
             trailing_key_images,
         } = tokio::task::spawn_blocking(move || {
-            run_dual_extractor(scanners, &known_personas, range, &blocks, watch)
+            run_dual_extractor(scanners, &known_personas, range, &blocks, &watch)
         })
         .await??;
         // Close arm (c)'s in-step blind spot: derive this step's discoveries
@@ -2576,15 +2576,28 @@ impl Message<ScanStep> for StakeEngine {
         // the closure collected — an output discovered at height `h` can be
         // spent at `h' > h` within the same step, and only the actor can
         // derive its key image. Merged hits prune exactly like watch hits.
+        // The trailing set is indexed once (key image → spend height) so a
+        // catch-up step with an early discovery and many subsequent spends
+        // costs O((spends + discoveries)·log spends) on the actor path, not
+        // a discoveries × spends nested scan. First insert wins: a key image
+        // appears at most once on a consensus-valid chain (double-spends are
+        // rejected), and if a malformed source repeats one, the earliest
+        // spend height is the conservative record — the prune is by gindex
+        // and idempotent either way.
+        let trailing_by_key_image: BTreeMap<[u8; 32], shekyl_types::BlockHeight> = {
+            let mut index = BTreeMap::new();
+            for (key_image, height) in trailing_key_images {
+                index.entry(key_image).or_insert(height);
+            }
+            index
+        };
         for m in &result.funding_outputs {
             if let Some(key_image) = self.derive_watch_key_image(m)? {
-                for (observed, height) in &trailing_key_images {
-                    if observed == &key_image {
-                        result.spent_funding.push(SpentFundingMatch {
-                            gindex: m.gindex,
-                            height: *height,
-                        });
-                    }
+                if let Some(height) = trailing_by_key_image.get(&key_image) {
+                    result.spent_funding.push(SpentFundingMatch {
+                        gindex: m.gindex,
+                        height: *height,
+                    });
                 }
                 self.watch_cache.insert(key_image, m.gindex);
             }

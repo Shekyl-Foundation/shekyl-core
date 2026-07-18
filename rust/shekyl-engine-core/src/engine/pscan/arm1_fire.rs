@@ -93,7 +93,11 @@ fn funding_block(keys: &ArchivalPKeys) -> ScannableBlock {
 /// checks for real.
 fn chain(mut block: ScannableBlock, previous: [u8; 32]) -> ScannableBlock {
     block.block.header.previous = previous;
-    block.block.transaction_hashes = block.transactions.iter().map(|tx| tx.hash()).collect();
+    block.block.transaction_hashes = block
+        .transactions
+        .iter()
+        .map(shekyl_wire::transaction::Transaction::hash)
+        .collect();
     block
 }
 

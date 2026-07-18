@@ -634,7 +634,7 @@ pub(crate) fn run_dual_extractor(
     known_personas: &BTreeMap<PCanonicalId, u32>,
     range: BlockRange,
     blocks: &[ScannableBlock],
-    watch: KeyImageWatchSet,
+    watch: &KeyImageWatchSet,
 ) -> Result<DualExtractOutput, DualExtractError> {
     // Enforce DQ6's bound first, rather than trust the caller (the actor mailbox
     // is blocked for the step's duration); then check the range↔block alignment.
@@ -964,7 +964,7 @@ mod tests {
             &BTreeMap::new(),
             range(20_001, 20_002),
             &[funding_block(&p)],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -991,7 +991,7 @@ mod tests {
             &BTreeMap::new(),
             range(20_001, 20_002),
             &[funding_block(&p)],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -1037,7 +1037,7 @@ mod tests {
             &BTreeMap::new(),
             range(20_001, 20_002),
             &[funding_block(&p)],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -1071,7 +1071,7 @@ mod tests {
             &known,
             range(5, 6),
             &[block],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -1117,7 +1117,7 @@ mod tests {
             &known,
             range(5, 6),
             &[block],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -1145,7 +1145,7 @@ mod tests {
             &known,
             range(7, 8),
             &[block],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -1164,7 +1164,7 @@ mod tests {
             &BTreeMap::new(),
             range(0, 3),
             &[funding_block(&p)],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect_err("mismatch must fail closed");
         assert!(matches!(
@@ -1185,7 +1185,7 @@ mod tests {
             &BTreeMap::new(),
             range(0, MAX_SCAN_STEP_BLOCKS + 1),
             &[],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect_err("an oversized step must fail closed");
         assert!(matches!(
@@ -1215,7 +1215,7 @@ mod tests {
             &known,
             range(5, 6),
             &[block],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -1235,7 +1235,7 @@ mod tests {
             &BTreeMap::new(),
             range(5, 6),
             &[funding_block(&p)],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -1265,7 +1265,7 @@ mod tests {
             &known,
             range(5, 6),
             &[block],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -1307,7 +1307,7 @@ mod tests {
             &known,
             range(5, 6),
             &[block],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -1336,7 +1336,7 @@ mod tests {
             &known,
             range(5, 6),
             &[block],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -1370,7 +1370,7 @@ mod tests {
             &known,
             range(5, 6),
             &[block],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -1408,7 +1408,7 @@ mod tests {
             &known,
             range(5, 6),
             &[block],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -1435,7 +1435,7 @@ mod tests {
             &known,
             range(5, 6),
             &[block],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -1470,7 +1470,7 @@ mod tests {
             &known,
             range(5, 6),
             &[block],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -1509,7 +1509,7 @@ mod tests {
             &known,
             range(5, 6),
             &[block],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -1574,7 +1574,7 @@ mod tests {
             &BTreeMap::new(),
             range(20_001, 20_002),
             &[funding_block(&p)],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -1607,7 +1607,7 @@ mod tests {
             &BTreeMap::new(),
             range(20_001, 20_002),
             &[block],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -1640,7 +1640,7 @@ mod tests {
             &known,
             range(20_001, 20_002),
             &[block],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract")
         .result;
@@ -1678,7 +1678,7 @@ mod tests {
             &BTreeMap::new(),
             range(20_001, 20_002),
             std::slice::from_ref(&block),
-            watch,
+            &watch,
         )
         .expect("extract");
         assert_eq!(out.result.spent_funding.len(), 1, "watched spend matches");
@@ -1698,7 +1698,7 @@ mod tests {
             &BTreeMap::new(),
             range(20_001, 20_002),
             std::slice::from_ref(&block),
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract");
         assert!(
@@ -1734,7 +1734,7 @@ mod tests {
             &BTreeMap::new(),
             range(20_001, 20_003),
             &[discovery, later],
-            KeyImageWatchSet::new(),
+            &KeyImageWatchSet::new(),
         )
         .expect("extract");
         assert_eq!(out.result.funding_outputs.len(), 1, "one discovery");
@@ -1785,9 +1785,21 @@ mod tests {
             !derive_line.contains("Serialize") && !derive_line.contains("Deserialize"),
             "KeyImageWatchSet's derive list must never include serde (DQ-A)"
         );
+        // The Debug impl must stay hand-written-and-redacting. Assert the
+        // invariants (a manual impl exists; it emits the redaction constant;
+        // the derive list gains no Debug), not the exact formatting — rustfmt
+        // churn must not fail a live tripwire.
         assert!(
-            src.contains("fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n        f.write_str(\"KeyImageWatchSet(<redacted live-utxo-fingerprint>)\")"),
-            "KeyImageWatchSet's redacting Debug must stay hand-written"
+            src.contains(&format!("impl std::fmt::Debug for {ty}")),
+            "KeyImageWatchSet's Debug must stay a hand-written impl"
+        );
+        assert!(
+            src.contains("KeyImageWatchSet(<redacted live-utxo-fingerprint>)"),
+            "KeyImageWatchSet's Debug must emit the redaction constant"
+        );
+        assert!(
+            !derive_line.contains("Debug"),
+            "KeyImageWatchSet must never derive Debug (the redaction would be lost)"
         );
     }
 }
