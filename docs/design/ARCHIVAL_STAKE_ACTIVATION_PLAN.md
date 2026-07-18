@@ -69,20 +69,50 @@ drives it — sign + `persist_bond_record` + the reopen handshake — reachable 
 
 ## 2. Round-0 questions (to work in subsequent rounds)
 
-- **SA-DQ-1 — the RPC surface.** What method(s) drive first-stake (a `stake`/`bond` RPC), and
-  how does the reopen handshake surface to the embedder (the WI-1 `Tenant` lifecycle)? Ties to
-  `81-no-protocol-knowledge` (the user asks to stake; the protocol dance is hidden).
-- **SA-DQ-2 — the bootstrap derive boundary.** Deriving the first persona **before**
-  `staking_enabled` widens the seed's live window by one sign; verify it stays inside the Model-D
-  seed-lifetime discipline (transient, dropped at function end) and does not hand the seed to the
-  actor.
-- **SA-DQ-3 — crash atomicity across the reopen.** A crash between sign and `persist_bond_record`,
-  or between persist and reopen, must not strand a phantom `bonded_slots` — this is precisely
-  arm #3's phantom domain (SP-R0 DQ-C); co-design the atomic step so #3 has a well-defined
-  phantom set to GC.
-- **SA-DQ-4 — funding the first bond.** First-stake needs funding P; how the principal funds the
-  cold-start persona (the cover / `C_min` path) intersects SP-7 and the drain (#328) — scope the
-  seam, do not re-solve it here.
+Two are **named genesis gates** this round must own (SA-DQ-4, SA-DQ-5); the rest shape the
+mechanism.
+
+- **SA-DQ-1 — the RPC surface + two hooks.** What method(s) drive first-stake (a `stake`/`bond`
+  RPC), and how does the reopen handshake surface to the embedder (the WI-1 `Tenant` lifecycle)?
+  Ties to `81-no-protocol-knowledge` (the user asks to stake; the protocol dance is hidden). The
+  method **moves funds and creates a durable commitment**, so it (a) lands on the
+  **restricted-method list** (`DAEMON_RPC_RUST.md` restricted mode — admin-only, rejected pre-C++
+  in `--restricted-rpc`), and (b) needs an **idempotency guard**: a second `stake` call while
+  `staking_enabled` is already true must not mint a second first-stake.
+- **SA-DQ-2 — bootstrap derive *equivalence* (the real risk).** The bootstrap derive (outside the
+  `staking_enabled` gate) and the normal derive (`spawn_stake_engine_if_staker`, inside it) must
+  produce the **same persona** for the same seed + slot — else the wallet stakes under persona-A
+  and then scans/operates under persona-B, and the bond is attributed to a persona it never
+  watches → **lost**. Enforce by sharing the **one** derivation primitive (`derive_archival_p_keys`),
+  never reimplementing — a make-bad-states-unrepresentable candidate. (The seed's live window
+  widening by one sign is real but secondary; keep it inside the Model-D transient-seed
+  discipline, never handed to the actor.)
+- **SA-DQ-3 — the durable phantom window is persist↔broadcast-confirmation, not persist↔reopen.**
+  Reopen is local and fast; the window that strands a phantom `bonded_slots` is the **network
+  gap** — persisted-as-staker, first bond never confirmed on-chain. Name that window. **Synergy:**
+  arm #3's SP-R0 **DQ-F fire fixture *is* an activation-induced persist-then-no-broadcast crash** —
+  the two rounds **co-design that one fixture** rather than each inventing one; it closes arm #3's
+  CI fire condition naturally.
+- **SA-DQ-4 — own GF4b-2: the first bond's funding-input-count discipline (genesis gate).** This
+  round **is** the `stake_in` site, so it **owns** how many inputs the first bond post reveals —
+  a **priority-1 genesis gate** (`ARCHIVAL_GF4B_BACKING_LINEAGE.md:390-422`, `FOLLOWUPS:158-169`:
+  "until `stake_in` lands, every bond post exposes the raw funding-input count"). The common-case
+  first bond must consume **one** structured funding input (or an equivalent input-count
+  discipline). This is **distinct** from *where the funds come from* (the cover / `C_min` /
+  SP-7 / drain seam), which stays deferred — SA-DQ-4 owns the **count**, not the source; do not
+  scope-and-punt the count.
+- **SA-DQ-5 — GF-7: first-stake is the worst-case principal↔`P` linkage (genesis gate).** GF-7 is
+  the load-bearing unlinkability gate — "genesis cannot ship until `P(link | T_obs)` under
+  threshold" (`ARCHIVAL_BOND_2C_GF7_HOOKS.md:54/65`, GATE6 §10.12 S-1). First-stake is the **one
+  moment principal and persona co-occur in a single operation** (the operator issues an RPC and a
+  persona's first bond debuts on-chain), so its RPC→broadcast timing is exactly a `T_obs` the
+  GF-7 model measures — plausibly the strongest linkage in the system. **The fork:** the GF-7
+  decorrelation lives in the 2c-2b scheduler, which exists only **after** the engine spawns (i.e.
+  after reopen; `2C_GF7_HOOKS.md:35`). So **broadcast-before-reopen** (no scheduler →
+  GF-7-exposed debut) vs **broadcast-after-reopen** (routes through the scheduler → GF-7-preserved,
+  but the signed bond must be **held across the reopen**). The answer is almost certainly *hold
+  across reopen, broadcast through the scheduler*; ratify it as a Round-0 pin, since getting it
+  wrong breaks GF-7 at the persona's debut.
 
 ---
 
@@ -95,3 +125,16 @@ drives it — sign + `persist_bond_record` + the reopen handshake — reachable 
   consumers (SP-R0 arm #1 retires `(a)`).
 - Consumes the WI-1 (`#329`) scan driver and the persona-derivation driver
   (`spawn_stake_engine_if_staker`) — turns both from dormant to live.
+
+---
+
+## 4. Round-0 exit
+
+The spine (the constellation front + the first-stake reopen break) is sound. The question set
+now carries the **two named genesis gates** first-stake sits on — SA-DQ-4 (GF4b-2 input-count
+discipline, owned not deferred) and SA-DQ-5 (the GF-7 broadcast-before/after-reopen fork) —
+plus the three mechanism refinements (SA-DQ-1 restricted-method + idempotency; SA-DQ-2 derive-
+equivalence; SA-DQ-3 the persist↔broadcast-confirmation phantom window co-designed with SP-R0
+arm #3's DQ-F fixture). With those in the set, the round is **Round-1-ready** — the design pass
+resolves the SA-DQ-5 fork and the SA-DQ-4 count discipline, both of which have a strong
+proposed answer to ratify rather than an open space to explore.
