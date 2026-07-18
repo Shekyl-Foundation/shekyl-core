@@ -317,6 +317,19 @@ window, and a resume keeps a crashed first-stake progressing without a live GC. 
 persist ordering from §5.6 is what makes W3 the common outcome and W2 recoverable; the typestate is what makes
 W2 exist at all.)
 
+**W2 resume is seed-gated (the genesis-window behavior, stated not inferred).** Re-signing needs the spend
+key → the **seed**, so resume is a **credentialed path**: it fires on a `stake` **re-invoke** (seed present,
+`first_stake_intent` set), **not** on a plain reopen. A credentialed reopen that does *not* re-invoke `stake`
+therefore does not auto-complete a W2 crash — the advisory `bonded_slots[S]` persists until a `stake`
+re-invoke or (post-genesis) arm #3. This is **benign by the `StakingBlock` design**, not a new hazard:
+`bonded_slots` is a *derive-time hint, not truth* (`staking_block.rs:47-63`), and a "`bonded_slots` entry
+with no corresponding bond" is exactly the case it anticipates (`:51-54`); no aggregator treats it as
+authoritative (`:62`). The only effects are local — persona `S` re-derived/scanned each open "for nothing"
+(`:53-54`) and slot `S` burned from the monotone cursor (`:75`, preserving the no-reuse invariant) — never
+an external observable. (An **open-time auto-resume** — the seed is live in every `assemble()` — is the
+alternative if that window is later judged worth closing before arm #3; deferred here to avoid a surprise
+on-chain broadcast on a plain open.)
+
 **Two flags folded:** (1) §5.2's KAT citation corrected — the **fixed-vector** KAT
 (`kat_archival_p_derive_v1_vectors`, corpus-hash-pinned, CI-run) already exists, so the genesis
 freeze-the-frozen-primitive obligation is **met**, not outstanding. (2) §5.5's "DispatchDriver" read as the
