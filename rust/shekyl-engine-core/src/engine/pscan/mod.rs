@@ -24,8 +24,11 @@
 //! event and broadcast/GC nothing.
 //!
 //! The full SP-3/SP-5 layer — extractor, accrual, cadence, driving task, and the
-//! `Engine::start_pscan` wiring — landed with PR-B; the lifecycle call sites
-//! (`Engine::start_pscan` / `start_pscan_if_staker`, WI-1) made the chain live.
+//! `Engine::start_pscan` wiring — landed with PR-B. The lifecycle entry points
+//! (`Engine::start_pscan` / `start_pscan_if_staker`, WI-1) are defined in
+//! [`start`]; the chain goes live only at the embedder's call site (wallet-rpc,
+//! the WI-1 wiring), which lives outside this crate — nothing in this module
+//! calls them.
 //! Remaining transient `#[allow(dead_code)]` marks items whose consumer is a
 //! *later* slice (2d-2 posture selector, SP-7 `C_min` sizing, SP-R0 reconcile GC,
 //! cold-start cover discovery), each annotated with its named consumer.
