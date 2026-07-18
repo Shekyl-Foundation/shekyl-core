@@ -43,8 +43,11 @@ Source verification at `dev = 40805d7d0` changed the shape:
 2. **`funding_outputs` is append-only.** `PScanAccrual::ingest` only `extend`s; nothing
    removes on confirmed spend — the poison the witness guards (GF4b §3.2).
 3. **SP-6 is built.** `PReconcileSet` (`reconcile.rs:67`) + `VerifiedRange`
-   (`exhaustiveness.rs:64`) exist on `dev`. The FOLLOWUPS "SP-6 unbuilt, 0 files,
-   2026-06-28" note (`FOLLOWUPS.md:8338`) is **stale** — correct it.
+   (`exhaustiveness.rs:64`) exist on `dev`. The FOLLOWUPS note that read "SP-6
+   unbuilt, 0 files, 2026-06-28" was **stale** — anchor by that phrase, not a
+   line number (it sat at `:8338` when first found and had already drifted to
+   `:8366` by PR #327 — the grep-not-hardcode rule). **Corrected on this branch**
+   (`d605f07b5`: the entry now reads gate CLEARED, re-keyed as arm #2).
 4. **The key-image primitive is built, and the scan-step is same-process.** `stake_engine.rs:1876`
    (`biased_hash_to_point(output_key) * x_scalar`) /
    `shekyl-crypto-pq/src/output.rs:1245` (`compute_output_key_image`). And the
@@ -137,6 +140,17 @@ principal's balance (funding-side analog at `cover_discovery.rs:123`). So arm #1
 canonicity token** and does not consume SP-6; the token (`min(claimed_tip, verified_frontier +
 reorg_depth)`) is an **arm-#2-only** concern.
 
+**Consumer registration (rule 21; pre-merge fold 2026-07-18).** The safety argument above
+makes arm #1's prune-permanence a **consumer of `ARCHIVAL_REORG_DEPTH_BLOCKS` — the
+constant's *semantics*, not just its identifier** (the M1 §11.8 method; the
+`fcmp_reference_block_max_age` / `retention_horizon_blocks` failure class): prune-at-ingest
+is reorg-safe *only because* the ingest ceiling trails tip by this depth. **Lowering the
+constant reopens arm #1's prune-at-ingest safety** — a smaller ceiling prunes funding
+records before they are reorg-safe, silently, with the wallet's durable state as the blast
+radius. The coupling is registered at the definition site too
+(`config/consensus_constants.json`, `_comment_archival_timing`), so a faster-finality
+retune meets the warning where the retune happens.
+
 ---
 
 ## 5. Design questions — ratified dispositions (2026-07-18)
@@ -202,7 +216,10 @@ round owns; carried to [`ARCHIVAL_STAKE_ACTIVATION_PLAN.md`](ARCHIVAL_STAKE_ACTI
 D: per-arm canonicity — arm #1 no token (720 ceiling); arm #2 the token, as **corroboration**
 (records-driven), sourced from the 2d-2 sweep-corroborated tip clamp; arm #3 inherited. Do
 **not** generalize the clamp across arms. E: `anchor_t0` is assemble-time → **arm #2's** tip
-clamp, not arm #1.
+clamp, not arm #1. **Reopen (rule-21 parity, added 2026-07-18):** DQ-D's arm-#2 token
+sourcing rides the 2d-2 sweep-corroborated tip clamp as designed there — if the clamp's
+semantics change (the 2d-2 remote/untrusted-daemon reopen family, WI-3 R2-1 / D-B6), the
+sourcing decision reopens with it.
 
 ### DQ-F — fires-in-prod, CI-asserted; split the claim (RATIFIED + precisified 2026-07-18)
 
@@ -250,9 +267,12 @@ Specify the CI wiring (the observer + the non-zero assertion) in each arm's land
   SP-R0 arm is inert. Cross-linked both ways (that round references this doc's DQ-F).
 - **[close on landing — with the DQ-F CI fire condition]** FOLLOWUPS "2d-1 WI-2 durable removal
   of SPENT funding outputs" (#1), "2d-2 SP-R0 reconcile GC" (#2), "2d full-scan reconciliation
-  of bonded_slots/p_slot" (#3, V3.0 `FOLLOWUPS.md:2013`).
-- **[correct now]** the stale "SP-6 unbuilt, 0 files, 2026-06-28" note (`FOLLOWUPS.md:8338`, and
-  its V3.x home) and the `IMPLEMENTATION_INDEX.md` SP-R0 status lines.
+  of bonded_slots/p_slot" (#3 — the V3.0 `StakingBlock`-frozen item; grep FOLLOWUPS for the
+  phrase, line refs drift).
+- **[corrected — `d605f07b5`, this branch]** the stale "SP-6 unbuilt, 0 files, 2026-06-28"
+  note (content-anchored — grep `docs/FOLLOWUPS.md` for the phrase; the hardcoded `:8338` this
+  task originally carried had already drifted before the sweep ran) and its V3.x home, plus
+  the `IMPLEMENTATION_INDEX.md` SP-R0 status lines.
 - **[carry]** GF4b §5 item 4 (witness zero-production-constructors → arm #1 adds the one) and
   item 5 (assemble change-split / tx-size bound); the GF4b-5 structural gate closes when arm #1
   mints the witness.
