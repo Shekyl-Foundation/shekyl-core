@@ -81,21 +81,28 @@ as `PScanCursor` not being passable where `BlockchainTip` is expected.
 The 2d-1 plan *designed* these seams; only some are **code on dev**. The rest are
 design-level names (do not cite them as landed surfaces — the read-the-code rule). 2d-1's
 SP-3/SP-5 (PR-A, **#201**) landed the dual-extractor scan-step; **PR-B is in progress** (the
-driving task + SP-4 finalize + the cadence); SP-6/SP-7 are future.
+driving task + SP-4 finalize + the cadence); SP-6/SP-7 are future. **[Table corrected
+2026-07-18 — this intro and three rows below were written pre-PR-B and went stale when it
+landed: PR-B (#205) is complete, and SP-6/SP-7 are code on dev (`pscan/reconcile.rs` /
+`exhaustiveness.rs` / `cover_discovery.rs` / `cadence.rs`, landed 2026-06-29). The §12
+SP-R0 row was corrected by PR #333; this table is the same correction at the §2 seam
+layer.]**
 
 | Seam | State on dev | What 2d-2 does with it |
 | --- | --- | --- |
 | `BlockSource` (SP-0) — per-`P`, fetch-everything | **landed** | Provide the Tor-backed impl underneath the unchanged trait |
 | `ScanStep` / `run_dual_extractor` (SP-3/SP-5) | **landed (PR-A #201)** — the task owns the `BlockSource`; bond-posts are *"collected for SP-6 reconcile"* | The Tor `BlockSource` feeds it; reconcile consumes its public bond-post matches |
-| Scan **cadence** (SP-5 / TM-6) — "no hardwired timer" | **not built** — the driving task is **PR-B, in progress**; pinned as a *design* constraint, not yet a `ScanSchedule` type | Drive it constant-rate/jittered over the per-`P` circuit — **gated on PR-B exposing an injectable cadence** |
-| `VerifiedRange` / `PReconcileSet` (SP-6) | **0 files — design-level, future** | Consume for half (B); **gated on SP-6 being built** (PR-A only *collects* the inputs) |
-| `CoverDiscovery` (SP-7) — re-fund takes `AbsentVerified` only | **0 files — design-level, future** | Honor it once built; no auto-escalation of `Incomplete` |
+| Scan **cadence** (SP-5 / TM-6) — "no hardwired timer" | **landed with PR-B (#205)** — injectable cadence (`pscan/cadence.rs`) driving `run_pscan_task` *(row corrected 2026-07-18; previously "not built, PR-B in progress")* | Drive it constant-rate/jittered over the per-`P` circuit — the injectable seam exists |
+| `VerifiedRange` / `PReconcileSet` (SP-6) | **landed 2026-06-29** (`pscan/reconcile.rs:67` / `exhaustiveness.rs:64`; `82870235b` + PR #211 review) *(row corrected 2026-07-18; previously "0 files — design-level, future")* | Consume for half (B) — **gate CLEARED**; the consumer is SP-R0 **arm #2** ([`ARCHIVAL_BOND_SP_R0_PLAN.md`](ARCHIVAL_BOND_SP_R0_PLAN.md)) |
+| `CoverDiscovery` (SP-7) — re-fund takes `AbsentVerified` only | **landed with the 2d-1 slices** (`pscan/cover_discovery.rs`) *(row corrected 2026-07-18; previously "0 files")* | Honor it; no auto-escalation of `Incomplete` |
 | `tip_height()` = "this source's *claimed* tip" (TM-3) | concept (in the plan) | Resolved by **posture**, not multi-source machinery (§4) |
 | `spread` / `bond_first` broadcast placement | **drawn AND consumed** (2c-2b PR #255): `plan_entry_seam` turns the draw into an `EntrySeamPlan` (block offsets for both events), carried in the `SignBond` reply (`SignedBondPost`); the write-side *seam* it will feed is built (SP-T4a `PTransactionSubmitter` + `BroadcastPosture`), but the plan is **not** yet wired into any broadcast | Carry the `EntrySeamPlan` to the wire over the per-`P` circuit (§5) — gated on the 2c-2a assemble / 2d dispatch wiring, not the seam or the plan |
 
-**Implication for 2d-2 half (B):** the reconcile is **blocked** until SP-6 (`PReconcileSet`)
-and the PR-B driving task exist; only half (A) transport can proceed now. The doc treats (B)
-as a forward-dependency, not a present build.
+**Implication for 2d-2 half (B) (corrected 2026-07-18):** the reconcile's SP-6 and
+driving-task gates are **both cleared** (see the corrected rows above and the §12 SP-R0
+row). Half (B) is unblocked as SP-R0 arm #2, sequenced per the SP-R0 round's DQ-C/DQ-F
+split ([`ARCHIVAL_BOND_SP_R0_PLAN.md`](ARCHIVAL_BOND_SP_R0_PLAN.md) §5) — no longer a
+forward-dependency of this doc.
 
 ---
 
@@ -398,7 +405,7 @@ non-empty** (§13(b)) — and leaves principal-side isolation to its own ticket,
 
 | SP | Deliverable | Gated on |
 | --- | --- | --- |
-| **SP-R0** | **Reconcile GC over the per-`P` transport** — consume SP-6's `PReconcileSet`; GC phantom `bonded_slots`/`p_slot` **only** on confirmed-absence within `covered`. | **SP-6** (`PReconcileSet`, not built — downstream of PR-B) |
+| **SP-R0** | **Reconcile GC over the per-`P` transport** — consume SP-6's `PReconcileSet`; GC phantom `bonded_slots`/`p_slot` **only** on confirmed-absence within `covered`. | **SP-6 — CLEARED 2026-06-29** (`PReconcileSet` landed: `pscan/reconcile.rs:67`, SP-6 part 2 `82870235b` + PR #211 review commits). **SP-R0 is unblocked**; carried pins in §15. *(Row updated 2026-07-18 — it read "not built" for 19 days after SP-6 landed.)* |
 
 **Out of this round (separate ticket):** principal-side `IsolateSOCKSAuth` — wiring the principal's
 two `DaemonClient`s to non-empty usernames. Kept out to protect the firewall round's collision
@@ -560,7 +567,8 @@ isolate).
 
 **SP-R0 — reconcile GC (gated).** On SP-6's `PReconcileSet`, GC phantom `bonded_slots`/`p_slot`
 **only** on confirmed-absence within `covered` (the SP-6 rule); never on absence-from-one-source.
-Designed here, built after SP-6. **Frame the removal around the slot ledger** (2d-1 records-driven
+Designed here, built after SP-6 (which landed 2026-06-29, `82870235b` + PR #211 — SP-R0 has been
+buildable since; gate row in §12 updated 2026-07-18). **Frame the removal around the slot ledger** (2d-1 records-driven
 retirement): the done-side record is *authoritative*, the live `bonded_slots` is *advisory*, and
 no-reuse is already enforced by `StakingBlock::monotone_current_slot` (`staking_block.rs:75`) — so
 SP-R0's job is the *removal*, not the trigger, and `covered` *corroborates* the presence-events the

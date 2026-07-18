@@ -688,12 +688,18 @@ multisig surfaces). Disposition: **confirm / sharpen / push back**.
   (`blockchain.cpp:4251-4253`) is imprecise — the leaf binds **bytes**;
   scheme is enforced by how those bytes parse under `scheme_id`.
 
-### MS-8 retirement — **CONFIRMED**
+### MS-8 retirement — **DONE (group_id deleted)**
 
-`verify_multisig` check 9 recomputes `multisig_group_id(container)`
-from the same blob the leaf already commits. Optional
-`expected_group_id` cannot add binding the leaf lacks. Redundancy
-argument does **not** depend on changing the leaf.
+`verify_multisig`'s check 9 recomputed `multisig_group_id(container)` from the
+same blob the leaf already commits — a self-referential tautology; optional
+`expected_group_id` could add no binding the leaf lacks. **Deleted:** check 9,
+the `expected_group_id` parameter, `multisig_group_id` (×3 + `DOMAIN_SEP_V31`),
+`verify_fcmp_multisig_partials`, the Option-D receive unit (`rotating_prover_index`,
+`construct_multisig_output_for_sender`, `validate_multisig_output_at_receive`),
+and the FFI `shekyl_pqc_verify_with_group_id` / `shekyl_pqc_multisig_group_id`.
+FFI error code 9 is retired (10/11 unchanged); the verify pipeline is now 9
+checks. Group identity is the **address fingerprint** (`shekyl-address`), not a
+per-output container hash.
 
 ### Reward-zone / `MAX=7` — **MATH CONFIRMED; rhetoric trim**
 
@@ -716,12 +722,22 @@ argument does **not** depend on changing the leaf.
   age** constants, **not** this 128 — so 128 is real drift, not a
   synced authority.
 
-### `wallet2` PQC multisig surface — **CONFIRMED**
+### `wallet2` PQC multisig surface — **DELETED (was a non-functional fossil)**
 
-`create_pqc_multisig_group` / `m_pqc_multisig_*` at
-`wallet2.cpp:9828-9852` uses `shekyl_pqc_multisig_group_id` (correct
-derivation). MS-2 "don't thicken" stands; §2.3 must not claim C++ has
-no multisig surface.
+**Correction (this matters more than the deletion):** earlier revisions called
+`wallet2.cpp`'s `create_pqc_multisig_group` the "correct
+`shekyl_pqc_multisig_group_id` caller" and counted it a "third group_id
+consumer." It was neither. It built a **2-byte** `n_total‖m_required` header
+where the Rust `MultisigKeyContainer` parser requires a 3-byte `version‖n‖m`
+header (and N×32 trailing spend-auth keys it never appended), so the FFI
+rejected it and the function **threw on every input** — it never once produced a
+group_id. A pattern existing in wallet2 was never evidence the pattern is
+correct: Monero-descended code leaving with the Rust wallet, no compat to
+preserve (rule 16). **Deleted wholesale:** `create_pqc_multisig_group`,
+`get_pqc_multisig_info`, the four `m_pqc_multisig_*` fields (+ their
+serialization — safe: the on-disk cache uses the epee archive, which never wrote
+them), and the two `wallet2_ffi` dispatchers/registrations. Any group-create the
+Rust wallet needs is Rust-side (`shekyl-engine-*`), never re-authored in C++.
 
 ### R1-F-6 CI + F-7 — F-6 **lane landed**; F-7 still open; F-3…F-5/F-9 dispositioned DELETE
 
@@ -809,7 +825,7 @@ unchanged across the 9-commit archival drift.
 | `DOMAIN_PQC_LEAF` | dual def fcmp + crypto-pq; hygiene debt, not Track A blocking | note |
 | Daemon `tx_pqc_verify.cpp` | `scheme_id=2`; misattribution `"output committed="` | **MSW-3** |
 | **`shekyl-daemon-rpc/.../verifier.rs`** | second verify site; header shadow | **MSW-1 lockstep** |
-| **`wallet2.cpp:9828-9852`** | **existing** `create_pqc_multisig_group` / `m_pqc_multisig_*` / correct `shekyl_pqc_multisig_group_id` | **MS-2:** don't thicken; third group_id consumer (vs F-4 DKG) |
+| ~~`wallet2.cpp` `create_pqc_multisig_group` / `m_pqc_multisig_*`~~ | **DELETED** — non-functional fossil (2-byte header the Rust parser rejects; threw on every input). *Not* a "correct caller" or a group_id consumer. | group_id retired; deletion slice |
 | `MultisigGroup` (engine) | Serialize hex secrets; claims "wallet file encrypted" | **R1-F-5** |
 | `tx_fee_model::pqc_auth_weight` | scheme-1 lengths only | **Track B R-B** |
 | `v31/intent.rs MAX_INPUTS` | 128 vs consensus `FCMP_MAX_INPUTS_PER_TX=8` | **Track B R-C** |
@@ -924,13 +940,14 @@ monomorphization cost stops being zero before V4 (which §15.5 forecloses).
 
 ### MS-2 — C++ / Rust boundary — **OPEN (lean holds; substrate corrected)**
 
-New wallet multisig logic: Rust-only. C++: LMDB + verify FFI.
-**Do not claim C++ has no multisig surface** — `wallet2.cpp:9828-9852`
-already has group create / `m_pqc_multisig_*` using the **correct**
-`shekyl_pqc_multisig_group_id` (contrast F-4 DKG caller-supplied id).
-MS-2 forbids thickening that surface; migration/deletion is rewrite /
-Phase 5. Track A bound fixes are consensus ceiling corrections, not
-wallet logic.
+New wallet multisig logic: Rust-only. C++: LMDB + verify FFI. The former
+`wallet2.cpp` group-create / `m_pqc_multisig_*` surface — once wrongly cited
+here as the "**correct** `shekyl_pqc_multisig_group_id`" caller — is **deleted**:
+it was a non-functional fossil (threw on every input) and group_id is retired.
+MS-2's "migration/deletion is rewrite/Phase-5" applied and this took the
+deletion path. The remaining C++ multisig surface is the LMDB store + the verify
+FFI (`shekyl_pqc_verify`), nothing wallet-side. Track A bound fixes are consensus
+ceiling corrections, not wallet logic.
 
 ### MS-3 — Feature gate — **OPEN (lean amended)**
 
@@ -1224,3 +1241,4 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-16 | **Round 1 CLOSED.** All blockers discharged: F-3 DELETE (Option A fossil) + F-6 CI (`--features multisig` green) in **#310** (merged 2026-07-15); F-7 (`EngineSignerKind::SigningCeremony`) in **#317**. Track B (MS-1…MS-7) → Round 2 / MS-5 (Option E′) on explicit go-ahead. Pre-MS-5 gate no CI can turn green: the `MultisigSigner` `N`/`K` decision (see "MS-1 under coexistence"). |
 | 2026-07-16 | **MS-1 `N`/`K` DECIDED:** the multisig kind takes **no const generics**. `N` (participants) / `M` (threshold) are runtime payload values (`n_total`/`m_required`); the coexistence axis (version byte) is type/dispatch, not a const generic (and not compile-time — the version is read from the wire). `MultisigSigner<N, K>` retired; the multisig kind takes no type parameters (one type with a runtime version, or a per-version family — MS-1's call). Recorded at the name (`signer.rs`) + "MS-1 under coexistence". MS-1's remaining call is only the coexistence *shape* (per-version markers vs runtime version field), bounded by this. |
 | 2026-07-17 | **MS-1 shape DECIDED + MS-5 S1 LANDED.** MS-1(a): multisig lives in a standalone `shekyl-multisig` crate whose dep list *is* the "no transport" ban (no tor/tokio-net/reqwest; module scope was rejected because engine-core already links Tor via SP-T2). Marker shape: per-version family `MultisigSignerV2` (not a runtime version field — one type would need a one-variant `SigningCeremony` enum now; the monomorphization cost is zero until V4 per §15.5). MS-5 S1: `state.rs` **deleted, not inherited**; format modules moved into the crate with Option-D residue excised; the `FrostCeremony` FSM (four-blob / two-round-trip / **pqc-last** — the (D) binding is the existing solo bidirectional weld, no new primitive), both nonce shapes (B ephemeral `!Clone`; A held under containment + `ConsumedNonce` persist-before-use + intent-binding — `!Serialize`/restart-forfeits dropped as unprovable/incompatible), and the `SpendRequest`/`SpendResponse` blobs. **No live crypto** (S2/S3); the clean build is the proof. |
+| 2026-07-18 | **E′ address (PR #323 merged) + group_id / Option-D deletion.** Address: `MultisigAddressPayload` carries `B_group`/`Y_group`; `spend_auth_version = 0x02`; fingerprint = `cSHAKE256(canonical, "shekyl/multisig-address-v1")` (domained, not `cn_fast_hash`); full address is file-based (bech32m can't hold ~4019 chars > 1023-char limit), the fingerprint (67 chars) is the shareable id. Deletion: `multisig_group_id` had **no consumer** under E′, computed a **per-output** container hash under a per-group name, and its one long-term caller (`wallet2::create_pqc_multisig_group`) **threw on every input** — deleted with its FFI (`shekyl_pqc_multisig_group_id`, `_verify_with_group_id`), `verify_multisig` check 9 + `expected_group_id`, the Option-D receive unit (`rotating_prover_index` + construct + validate + griefing/persisted residue), tag-0x05 unchanged (deferred), and the wallet2 C++ surface (safe: epee cache never wrote the fields). Group identity = address fingerprint. FFI code 9 retired (gap; 10/11 fixed). Consequence recorded: **no multisig output constructor exists until S2/S4 writes the E′ two-component one** (better than one building unspendable outputs). Container-lifetime ambiguity (`MultisigKeyContainer` per-output in Rust vs long-term in wallet2/KAT) filed as an S2-blocking slice. |

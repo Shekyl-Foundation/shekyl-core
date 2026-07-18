@@ -557,63 +557,94 @@ mod tests {
         // The on-chain pre-filter tag was derived from the OTHER wallet's
         // ML-KEM SS; after universal decap with the bench wallet's DK the
         // tag compare fails and scan_output_recover returns Err before X25519.
+        // `make_bench_wallet` draws keys from `OsRng`, and the on-chain
+        // view-tag pre-filter is a single byte, so a foreign output's tag
+        // collides with the scanning wallet's derived tag ~1/256 of the time.
+        // On a collision the scan slips PAST the pre-filter and exits later at
+        // the amount-tag stage — a draw that is not the "typical case" this
+        // fixture exists to measure. Resample the foreign output until the
+        // intended view-tag rejection is observed; the probability of needing N
+        // extra draws is 256^-N, so the cap below is never approached. Only the
+        // amount-tag collision is a tolerated resample signal — any other
+        // disposition is real drift and fails hard (below).
         let wallet = make_bench_wallet();
-        let other = make_bench_wallet();
-        let out = first_output_data(&other.wallet_kem_pk);
 
-        let result = scan_output_recover(
-            wallet.view_pair.x25519_sk(),
-            wallet.view_pair.ml_kem_dk(),
-            &out.kem_ciphertext_x25519,
-            &out.kem_ciphertext_ml_kem,
-            &out.output_key,
-            &out.commitment,
-            &out.enc_amount,
-            out.amount_tag,
-            &out.enc_label,
-            out.label_tag,
-            out.view_tag_prefilter,
-            /* output_index */ 0,
-        );
+        // Bounded so a genuine regression (the pre-filter path stops firing)
+        // surfaces as a loud failure instead of an infinite loop.
+        const MAX_RESAMPLES: usize = 64;
+        for _ in 0..MAX_RESAMPLES {
+            let other = make_bench_wallet();
+            let out = first_output_data(&other.wallet_kem_pk);
 
-        let err = result.expect_err(
-            "typical-case fixture must produce a fast-path-rejected output \
-             (view-tag mismatch); a success here means the typical-case \
-             bench would silently measure full-slow-path cost",
-        );
-
-        // Pin BOTH the error variant and the inner message: the
-        // variant check catches drift to a non-`DecapsulationFailed`
-        // early-exit (e.g., a `LowOrderPoint` rejection that would
-        // also satisfy `expect_err`), and the inner-message check
-        // catches drift WITHIN `DecapsulationFailed` to a sibling
-        // reason (`scan_output_recover` constructs several
-        // `DecapsulationFailed(String)` instances — "invalid
-        // ML-KEM ciphertext length", "invalid decap key: ...",
-        // ML-KEM decap rejection — all of which would pass the
-        // variant check on their own; only the view-tag-mismatch
-        // path is the typical-case fixture's intended classifier).
-        //
-        // The let-else binds `msg` from the variant's inner
-        // `String` rather than formatting via `format!("{err:?}")`,
-        // which makes the assertion robust to Debug-format
-        // changes (re-derivation, additional context fields,
-        // verbose vs. terse variants) while still pinning the
-        // intended early-exit path. Closes the substring-vs-
-        // structural test discipline question raised on PR #60.
-        let CryptoError::DecapsulationFailed(msg) = &err else {
-            panic!(
-                "typical-case fixture must surface the view-tag-mismatch \
-                 fast-path rejection as CryptoError::DecapsulationFailed; \
-                 got a different variant: {err:?}"
+            let result = scan_output_recover(
+                wallet.view_pair.x25519_sk(),
+                wallet.view_pair.ml_kem_dk(),
+                &out.kem_ciphertext_x25519,
+                &out.kem_ciphertext_ml_kem,
+                &out.output_key,
+                &out.commitment,
+                &out.enc_amount,
+                out.amount_tag,
+                &out.enc_label,
+                out.label_tag,
+                out.view_tag_prefilter,
+                /* output_index */ 0,
             );
-        };
-        assert!(
-            msg.contains("view tag pre-filter mismatch"),
-            "expected pre-filter mismatch in DecapsulationFailed inner message; \
-             got {msg:?} — if this is a sibling DecapsulationFailed reason \
-             (invalid ML-KEM ciphertext length, invalid decap key, ML-KEM \
-             decap rejection) the typical-case fixture is mis-classified"
+
+            let err = result.expect_err(
+                "typical-case fixture must produce a fast-path-rejected output \
+                 (view-tag mismatch); a success here means the typical-case \
+                 bench would silently measure full-slow-path cost",
+            );
+
+            // Pin BOTH the error variant and the inner message: the variant
+            // check catches drift to a non-`DecapsulationFailed` early-exit
+            // (e.g., a `LowOrderPoint` rejection that would also satisfy
+            // `expect_err`), and the inner-message check catches drift WITHIN
+            // `DecapsulationFailed` to a sibling reason (`scan_output_recover`
+            // constructs several `DecapsulationFailed(String)` instances —
+            // "invalid ML-KEM ciphertext length", "invalid decap key: ...",
+            // ML-KEM decap rejection — all of which would pass the variant
+            // check on their own; only the view-tag-mismatch path is the
+            // typical-case fixture's intended classifier).
+            //
+            // The let-else binds `msg` from the variant's inner `String`
+            // rather than formatting via `format!("{err:?}")`, which makes the
+            // assertion robust to Debug-format changes (re-derivation,
+            // additional context fields, verbose vs. terse variants) while
+            // still pinning the intended early-exit path. Closes the
+            // substring-vs-structural test discipline question raised on PR #60.
+            let CryptoError::DecapsulationFailed(msg) = &err else {
+                panic!(
+                    "typical-case fixture must surface the view-tag-mismatch \
+                     fast-path rejection as CryptoError::DecapsulationFailed; \
+                     got a different variant: {err:?}"
+                );
+            };
+
+            if msg.contains("view tag pre-filter mismatch") {
+                return; // intended typical-case classification observed
+            }
+
+            // The one tolerated non-view-tag outcome is the ~1/256 accidental
+            // view-tag collision, which then fails deterministically at the
+            // amount-tag stage (decap uses ML-KEM implicit rejection, so it does
+            // not error). Any OTHER sibling reason is a mis-classified fixture.
+            assert!(
+                msg.contains("amount_tag mismatch"),
+                "expected the view-tag pre-filter mismatch (typical case) or the \
+                 rare amount-tag collision; got {msg:?} — a sibling \
+                 DecapsulationFailed reason (invalid ML-KEM ciphertext length, \
+                 invalid decap key, ML-KEM decap rejection) means the fixture is \
+                 mis-classified"
+            );
+        }
+
+        panic!(
+            "view-tag pre-filter mismatch not observed in {MAX_RESAMPLES} \
+             resamples; a 1-byte view tag should collide only ~1/256 of the \
+             time, so this indicates the fixture no longer exercises the \
+             pre-filter path"
         );
     }
 

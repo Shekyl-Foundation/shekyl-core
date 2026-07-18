@@ -2,8 +2,97 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **multisig: `group_id` deleted — group identity is the address
+  fingerprint (MS-5 PR-B).** `multisig_group_id` was a per-output
+  `cn_fast_hash` over the leaf `MultisigKeyContainer` (whose keys are
+  derived per-output from KEM shared secrets), so it produced a *different*
+  value for every output while being named for the group; it had **no
+  consumer** under Option E′; and its one long-term caller
+  (`wallet2::create_pqc_multisig_group`) threw on every input. Deleted, both
+  languages: the Rust `multisig_group_id{,_with_versions,_from_address}`,
+  `DOMAIN_SEP_V31`, `rotating_prover_index`, `verify_fcmp_multisig_partials`,
+  and the Option-D receive-construction unit
+  (`construct_multisig_output_for_sender` / `validate_multisig_output_at_receive`
+  / `MultisigOutputConstruction` / `PersistedMultisigOutput` / `GriefingTracker`);
+  `verify_multisig`'s `expected_group_id` parameter and **check 9**
+  (`GroupIdMismatch`, FFI error code 9 — now a **9-check** pipeline, codes
+  10/11 unchanged, discriminant 9 retired not renumbered); the FFI
+  `shekyl_pqc_multisig_group_id` / `shekyl_pqc_verify_with_group_id` and their
+  C headers; the C++ `wallet2` PQC-multisig surface
+  (`create_pqc_multisig_group`, `get_pqc_multisig_info`, the four
+  `m_pqc_multisig_*` fields + accessors + boost-serialize lines — the on-disk
+  epee cache never emitted them, so this is a clean drop with no version gate);
+  and the `fuzz_group_id` harness (+ its inventory smoke-gate row).
+  Group identity is now the **address fingerprint**
+  (`cSHAKE256(canonical(MultisigAddressPayload), "shekyl/multisig-address-v1")`,
+  PR #323): per-group, independently derivable, version-binding via the
+  canonical payload. **Chosen consequence:** with the Option-D receive
+  constructor deleted, there is **no multisig output constructor at all** until
+  S2/S4 writes E′'s two-component `O = ho·G + B_group + y_out·T`. The
+  `MultisigKeyContainer` per-output-vs-long-term lifetime ambiguity is filed as
+  its own S2-blocking slice.
+
+### Added
+
+- **fcmp: F-D1 drain-amount taint-carve BUILT (`ARCHIVAL_FIREWALL_GATE6.md`
+  §12.3) + F-D2 core-side aggregate-only surface (§12.4).** The `P`→principal
+  value-out (drain) path lands in `shekyl-engine-core/src/engine/` as three
+  modules mirroring the three stages of the (a)+strip encoding:
+  `drain_orchestrator.rs` is the **single trust boundary** — the only drain-path
+  site that names/holds `PFundingOutputRecord` (which carries `MintLineageOutput`);
+  it projects the funding records into an aggregate spendable scalar
+  (`DrainBalance`, the F-D2 core-side surface) and a stripped
+  `{output_id, amount, spendable_height}` candidate vector, dropping
+  `{lineage, epoch, height}` so no reward-sequence decomposition survives.
+  `drain_amount.rs` consults the scalar for an **affordability check only**
+  (`target ≤ affordable`), never as a computation input, so core code cannot
+  *derive* a reward-shaped amount from the per-output decomposition — the vector
+  never reaches the stage. (Steering the returned value away from any subsum is
+  the F-D2 round-number / random-split UI default, not built here.)
+  `drain_select.rs` does lineage-blind largest-first coin selection over the
+  stripped vector. `plan_drain` composes the three; it takes a single scalar
+  `target`, so a UI on this surface structurally cannot pre-fill a reward-shaped
+  decomposition. The **M1 import-check arm** was landed on a skeleton first, a
+  deliberately-wrong `MintLineageOutput` import was proven to fail it (exit 101)
+  and reverted, then the real logic went in against the armed gate — the arm now
+  runs as `fd1_arm_*` unit tests (CI-enforced) that grep each guarded module's
+  own source and refuse if it names a forbidden type.
+  `plan_drain` lands as a correctly-carved planner with **no data source and no
+  consumer yet** — reachable API, not yet load-bearing. **F-D2's remaining half is
+  NOT a pending UI default and NOT gated on RPC**: the GUI (`shekyl-gui-wallet`) is
+  a Tauri app that links the engine crates in-process and would call `plan_drain`
+  directly from a `#[tauri::command]` handler; `shekyl-engine-rpc` is an FFI
+  library, not a wallet-RPC server. What is unbuilt is a whole `P`-value-out
+  (drain-send) subsystem — a `P`-scan data source (`PScanState.funding_outputs`)
+  feeding the planner, a drain tx assemble→sign→broadcast path, and the
+  round-number/random-split default on top. F-D2 is not recorded as landed until
+  that subsystem exists; Gate-6 R4 stays open on it.
+
 ### Changed
 
+- **wallet-rpc: WI-1 — wire the 2d-1 `P`-scan task into the wallet
+  lifecycle (embedder-held handle).** The P-scan driving task
+  (`Engine::start_pscan`) had no production caller: `start_pscan` /
+  `start_pscan_if_staker` were `pub`, which *disarmed* the `dead_code`
+  lint rather than satisfying it, so the "unwired" gap read as closed
+  from a source-first check. `shekyl-wallet-rpc`'s `Tenant` now holds the
+  `PScanHandle` — `create`/`open_wallet` auto-start it for a staker (a
+  non-staker parks `None`), and `close_wallet` `PScanHandle::shutdown().await`s
+  the task **before** `Arc::try_unwrap`: the task holds its own clone of
+  the engine arc, so a live handle would fail the close "still in use"
+  (the prior Drop-based "close-stops-task by ownership" framing was
+  insufficient — `shutdown` is the step that makes the unwrap possible).
+  A staker whose sealed P-scan state cannot load fails the open **closed**
+  (`00-mission` priority 2 — privacy is not a degraded mode); a close that
+  cannot complete re-arms the scan on restore (logged, never silent).
+  Closure is a behavioral test
+  (`staker_open_parks_a_pscan_handle_and_close_shuts_it_down`), not the
+  lint a `pub` item cannot trip. Enabler: engine-core
+  `__test_helpers::make_staker_for_test` (feature-gated) — the first
+  `test-helpers` downstream consumer, the rule-21 public-re-export reopen
+  the feature reserved for its first named caller.
 - **docs: F-D5 disposition round RAN — the structural-derivation attempt
   failed at source; NO GRID ships at genesis; Gate-6 R4 close condition
   (iv) discharged** (outcome record at Gate-6 §12.7 OUTCOME). Executed in

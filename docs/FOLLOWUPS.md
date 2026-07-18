@@ -47,6 +47,34 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Solo address registry: decide (a registration tx type is genesis-only)**
+  (added 2026-07-17, solo `ek_bind` PR). A solo address is a ~2,055-char
+  three-segment Bech32m string. It cannot be shortened by any encoding — no
+  post-quantum address is a Bech32m string, because Bech32m's BCH checksum is
+  proven only to ~639 B of payload and the ML-KEM-768 `ek` alone is 1,184 B
+  (the multisig side reached the same wall in PR #323 and went file-based +
+  fingerprint). The only way to a short (~67-char) pasteable solo address is a
+  **name = `cSHAKE256`(payload) + a registry that stores the payload**, fetched
+  and re-verified against the name (content-addressed, so a hostile registry
+  cannot forge — only observe). Under the recommended posture (light wallet →
+  **your own** daemon), the registry is the chain you already sync and the
+  lookup is a local read, not an observable network event — so the metadata
+  objection dissolves *for that posture*. **Blocker (why this is deferred, not
+  built):** it is a new genesis-frozen consensus object — (1) permanent,
+  monotonic, **unprunable** consensus state (a floor that only rises with the
+  user count; ~1.25 KB × users, bounded by users since there are no
+  subaddresses per `SUBADDRESS_UNDER_PQC.md` §5.7, and accounts are
+  seed-derived, not registered), and (2) an anti-griefing **fee model** (a
+  genesis parameter) that must deter permanent junk registrations without
+  taxing the one address every honest user needs. The `x25519_pk` payload
+  reconciliation that gated the size is **resolved**: x25519 is derived from
+  the view key, not carried, so the payload is 1,249 B (POST_QUANTUM §Address
+  Format). **This is a genesis-consensus decision — a registration tx type
+  cannot be added post-genesis — so it must be decided (even if the decision is
+  "no registry; solo stays a full string") before genesis cut, but it is not a
+  code task and does not block the `ek_bind` splice fix, which ships
+  independently.** *Target: V3.0 (decision only).*
+
 - **Unbond verify: record-floor belt (the `RebondRecordFloorBroken` twin)**
   (added 2026-07-14, Rebond review round, PR #307 commit 9b0ab6e68). The
   Rebond verify now checks the record floor invariant
@@ -2010,6 +2038,18 @@ sustainability is unaffected by the recalibration.
     are deliberately chosen so this GC needs **no second `STAKING_BLOCK_VERSION`
     bump**. **Reopen when** persona scanning lands (the reconcile needs personas
     derived first — chicken-and-egg forces it post-derive, hence 2d not 2c-2).
+    **Reopen-trigger corrected (2026-07-18, SP-R0 §0 F-1):** "persona scanning lands" is
+    now true only in the code-exists sense — nothing in production sets `staking_enabled`,
+    so a GC landed on that trigger would freeze non-firing. This item is **SP-R0 arm #3**
+    ([`ARCHIVAL_BOND_SP_R0_PLAN.md`](design/ARCHIVAL_BOND_SP_R0_PLAN.md) §3; its phantom
+    domain includes activation-time crashes, DQ-C), sequenced **right behind** the
+    staker-activation round
+    ([`ARCHIVAL_STAKE_ACTIVATION_PLAN.md`](design/ARCHIVAL_STAKE_ACTIVATION_PLAN.md)) and
+    closed per the DQ-F split (precisified 2026-07-18): **logic-discharge** via the CI
+    fire harness on the production code path (CI observes a real phantom collected — the
+    fixture is the activation-induced persist-then-no-broadcast crash, co-designed with
+    SA-DQ-3); **production-firing** gated on the activation round (#332). A bare
+    "discharged" is forbidden (DQ-F Guard 2).
     **Target: V3.0** (must land before genesis freezes the absence of GC).
   - **Broadcast / re-anchor wiring activates the CT-5d persona-pin.** The CT-5d
     finding (persona signature binds `tx_prefix_hash`, not the proof, so a
@@ -6123,6 +6163,29 @@ sustainability is unaffected by the recalibration.
     unshipped) but live on `dev`. Wallet **construction** (Rust-tx-builder
     territory), not consensus. *Blocker:* MS-5 tx construction. *Target:*
     V3.1.
+  - **`MultisigKeyContainer` is one type over two populations — S2-blocking.**
+    In the Rust production receive path (`multisig_receiving.rs`) the
+    container's leaf keys are derived **per-output** from KEM shared secrets;
+    in `fcmp.cpp:633` / the (now-deleted) wallet2 surface it was treated as a
+    **long-term group** object. One type, two lifetimes, **no compile error
+    possible** — this is exactly what let `multisig_group_id` hash per-output
+    material under a per-group name (deleted, MS-5 PR-B; group identity is now
+    the address fingerprint). Before S2 writes E′'s two-component output
+    constructor (`O = ho·G + B_group + y_out·T`), the container must be split
+    into distinct per-output vs group-long-term types (or a typestate marker),
+    so the ambiguity cannot re-enter through the new constructor. **Chosen
+    consequence recorded (MS-5 PR-B):** with the Option-D receive constructor
+    deleted, there is **no multisig output constructor at all** until S2/S4 —
+    the right state, not a gap to paper over. *Blocker:* container-type split.
+    *Target:* **MS-5 S2 (blocks the E′ output constructor).**
+  - **`tx_extra` tag `0x05` — reserve-vs-free decision, own consensus-wire
+    slice.** MS-5 PR-B deleted the Option-D reader/writer that was the only
+    (dead) code touching tag `0x05`. Whether `0x05` is reserved for E′'s per-output
+    KEM fan-out or freed is a **genesis-frozen consensus wire discriminant**
+    with no reserve precedent in the codebase — it is **not** bundled into the
+    wallet/FFI deletion (rule 19 validation-surface, rule 07 consensus-atomic
+    cutover). *Blocker:* E′ receive-wire design (which fields land in `tx_extra`
+    under E′). *Target:* **its own consensus-wire slice, before genesis freeze.**
   - **Structural pqc-auth verify → Rust port slice.** The C++
     `tx_pqc_verify.cpp` per-input structural checks are largely redundant
     with `shekyl_pqc_verify` (which already validates scheme + deserializes
@@ -6266,9 +6329,10 @@ sustainability is unaffected by the recalibration.
   (2026-07-15 overhaul) — plus Track A MSW-1…MSW-6 (DoS ceiling +
   disjointness KAT + misattribution + version plumbing + scheme_id
   relax) — **not** a leaf-preimage change (F-2 retraction 2026-07-14).
-  Historical note: FFI
-  `shekyl_pqc_verify_with_group_id` still exists; do not schedule
-  daemon wiring as a V3.1 ship-gate.
+  **CLOSED 2026-07-18 (MS-5 PR-B):** the FFI
+  `shekyl_pqc_verify_with_group_id` and `group_id` itself are now
+  **deleted** — group identity is the address fingerprint (§5.3), so there
+  is no symbol left to wire and nothing to schedule.
 
 - **Historical tree path assembly uses current LMDB state.**
   `assemble_tree_path_for_output` (in both `chaingen.cpp` and
@@ -8332,18 +8396,34 @@ one place to confirm each item's relationship to the wallet stack.
   invariant is *principal = empty, `P` = non-empty*. **Target:** V3.x (with the 2d-2 transport
   build). See [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md)
   §11 / §13(b).
-- **2d-2 SP-R0 — reconcile GC of phantom `bonded_slots`/`p_slot` over the per-`P` transport (gated
-  on SP-6).** Half (B) of 2d-2: consume the `P`-scan reconcile set to garbage-collect archival
-  state no longer on chain. **Gate:** cannot land until 2d-1 **SP-6** (`PReconcileSet`) exists —
-  downstream of PR-B; SP-6 is unbuilt (0 files on dev, 2026-06-28). **Rule (load-bearing — travels
+- **2d-2 SP-R0 — reconcile GC of phantom `bonded_slots`/`p_slot` over the per-`P` transport
+  (SP-R0 arm #2; SP-6 gate CLEARED).** Half (B) of 2d-2: consume the `P`-scan reconcile set to
+  garbage-collect archival state no longer on chain. **Gate update (2026-07-18):** the "SP-6 is
+  unbuilt (0 files on dev, 2026-06-28)" clause went stale the next day — SP-6 landed 2026-06-29
+  (`PReconcileSet`, `pscan/reconcile.rs:67`; `82870235b` + PR #211). SP-R0 **Round 0 is ratified**
+  (2026-07-18, [`ARCHIVAL_BOND_SP_R0_PLAN.md`](design/ARCHIVAL_BOND_SP_R0_PLAN.md), DQ-A…F): this
+  item is **arm #2** (needs the canonicity token as corroboration, DQ-D), sequenced behind the
+  staker-activation round
+  ([`ARCHIVAL_STAKE_ACTIVATION_PLAN.md`](design/ARCHIVAL_STAKE_ACTIVATION_PLAN.md)) per DQ-C, and
+  closes per the DQ-F split (precisified 2026-07-18): **logic-discharge** via the CI fire
+  harness on the production code path (CI observes the GC fire — a real phantom collected);
+  **production-firing** gated on the activation round (#332). A bare "discharged" is
+  forbidden (DQ-F Guard 2).
+  **Rule (load-bearing — travels
   with the item):** GC **only** on *confirmed-absence within `covered`* (the range the reconcile set
   can vouch for), **never** on absence-from-one-source — the SP-6 "absence ≠ unscanned" discipline;
-  an over-eager GC against a partial/withholding source drops live state. **Target:** V3.x (after
-  SP-6). See [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §12
+  an over-eager GC against a partial/withholding source drops live state. **Target:** V3.x. See
+  [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §12
   (SP-R0) / §16 and [`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](design/ARCHIVAL_BOND_2D1_PSCAN_PLAN.md)
   SP-6/SP-7.
 - **2d-1 WI-2 — durable removal of SPENT funding outputs from `PScanState::funding_outputs`
-  (SP-R0-adjacent, gated on SP-6).** `PScanAccrual::ingest` only ever *extends* `funding_outputs`;
+  (SP-R0 **arm #1** — ratified 2026-07-18, not SP-6-gated: the ratified detection is a
+  key-image watch pruning at ingest, no `PReconcileSet` consumption and no state-version
+  bump; disposition D-1(a) durable prune, D-2 watch mechanism, DQ-A containment —
+  [`ARCHIVAL_BOND_SP_R0_PLAN.md`](design/ARCHIVAL_BOND_SP_R0_PLAN.md) §4/§5; may land
+  **logic-discharged** in parallel with the activation round per the DQ-F split — CI fire
+  harness on the production code path, no `for_test()` on the path under test (Guard 1);
+  **production-firing** gated on #332; status lines state which discharge (Guard 2)).** `PScanAccrual::ingest` only ever *extends* `funding_outputs`;
   nothing removes an output once a confirmed bond post spends it. `select_funding_outputs` excludes
   only the *transiently-reserved* set (a live pending post's `funding_gindexes`), so once a post
   confirms and its pending record clears, the spent output is un-reserved **and** still present — a
@@ -12508,10 +12588,11 @@ Retained for citation in review; each links to the canonical record.
   shekyl-core CI will catch it before the GUI wallet release workflow
   does.
 
-- **PQC Multisig V3.1: FFI returns typed error codes.** All three
-  verification FFI functions (`shekyl_pqc_verify`,
-  `shekyl_pqc_verify_with_group_id`, `shekyl_fcmp_verify`) now return
+- **PQC Multisig V3.1: FFI returns typed error codes.** The verification
+  FFI functions (`shekyl_pqc_verify`, `shekyl_fcmp_verify`) now return
   `u8` error codes: 0 = success, nonzero = typed error discriminant.
+  (`shekyl_pqc_verify_with_group_id` was a third such function; it is
+  **deleted** as of MS-5 PR-B — group_id retired, §5.3.)
   The debug-only `shekyl_pqc_verify_debug` was deleted. C++ callers
   log error codes in all build modes. Per
   `.cursor/rules/30-ffi-discipline.mdc`.

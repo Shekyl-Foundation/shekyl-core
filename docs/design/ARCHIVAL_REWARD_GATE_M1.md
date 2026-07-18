@@ -10,7 +10,11 @@ condition is satisfied: the segment-freeze pipeline design round
 OPENED 2026-07-06
 ([`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md),
 round 1 draft carrying the O-1..O-3 discharge arguments in its §3).
-`K_COVER` sealing remains gated on the §14.4 partition run (§4).** Per
+`K_COVER` sealing was gated on the §14.4 partition run; that run is
+RATIFIED — PARTITION-PASS, no pins (2026-07-11, PR #291, WI-4 §14.4
+RATIFIED block) — and its verdict is one seal input of four, so
+sealing now gates on the three remaining inputs named in the §4
+UPDATE (2026-07-18).** Per
 `05-system-thinking.mdc` (specification first) and
 `26-sub-pr-design-discipline.mdc` (cited: consensus-critical sub-PR
 with design rounds before implementation; the pre-flight pass applies
@@ -484,6 +488,39 @@ overoptimistic cover model — the gate calibrated too loose. Therefore:
    sensitivity, gate-open cohort dynamics).
 3. The two reviews **must not** be conducted independently with one
    silently assuming the other passed.
+
+**UPDATE (2026-07-18) — the §14.4 gate above is cleared, and the seal
+condition is wider than this section stated.** The §14.4
+partition-adversary run graded **PARTITION-PASS, no pins**, RATIFIED
+2026-07-11 (decision-anchored: PR #291; record: WI-4 §14.4 RATIFIED
+block). Its verdict is a gradeable sealing input — necessary, not
+sufficient. This document previously named §14.4 as the only sealing
+gate (header + item 2 above); that was only the slice this spec's
+constant derivation depends on, never the whole seal condition. The
+remaining `K_COVER` seal inputs (authoritative tracking:
+`IMPLEMENTATION_INDEX.md` WI-4 row, which has carried this list since
+the ratification):
+
+1. **GF-7 leg-(b) sealing form** — the WI-4 §19.1 receipt-timestamped
+   live-driver re-run (harness-timestamp form graded PROVISIONAL-PASS
+   2026-07-11; the seal input is the re-run, not the emission's
+   existence).
+2. **GF-4 exit-seam / value-channel rounds** — narrowed to
+   **F-D1 + F-D2** (Gate-6 §12 re-formed R4 close; conditions (iii)
+   and (iv) both discharged 2026-07-17). *Merged-state refresh
+   (2026-07-18, PR #328): F-D1 is BUILT (M1 arm proven-to-bite then
+   armed) and F-D2's core aggregate-only surface LANDED; R4's last
+   open item is the unbuilt drain-send subsystem in
+   `shekyl-gui-wallet` (Gate-6 §12.3/§12.4 build notes).*
+3. **§17.9 Gate-7 calibration** — adversarial-max-attrition margin +
+   per-channel thickness-reachability.
+
+The PF-9 stressnet-entry pin below is unchanged: seal precedes Phase
+7.7 entry, so each open input above extends the genesis date
+one-for-one (`docs/RELEASE_CHECKLIST.md` 4-week clock starts only
+after seal). Process note: the §14.4-clearing PR (#291) did not sweep
+this document's gate lines — a cleared gate's sweep belongs to the PR
+that clears it; this update is that sweep, executed late.
 
 **Placement.** `k_cover` enters `config/consensus_constants.json`
 (the single source of truth for consensus constants whose C++/Rust
@@ -1433,7 +1470,9 @@ rounds' dispositions; none touches the design's shape):
 the segment-freeze pipeline design round **opens** (§1.3 condition;
 `docs/FOLLOWUPS.md` entry); `K_COVER` sealing remains gated on the
 WI-4 §14.4 partition run and is not blocked by (and does not block)
-the PR itself — the compile refusal holds the seam.
+the PR itself — the compile refusal holds the seam. *[Dated record;
+superseded 2026-07-11: the §14.4 run is RATIFIED (PR #291) and three
+seal inputs remain — see the §4 UPDATE (2026-07-18).]*
 
 ### 11.11 Operand mechanism swap: O(N) walk → persisted counter (2026-07-07)
 

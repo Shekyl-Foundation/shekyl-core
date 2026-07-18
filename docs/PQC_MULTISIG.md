@@ -167,11 +167,11 @@ consensus-layer fix would require a chain-anchored group registry
 
 | Attack | Mitigation |
 |---|---|
-| Scheme downgrade (output committed scheme_id=2, spent as scheme_id=1) | §7.5 indirect binding via leaf hash + `pqc_auth` size check; wired `expected_scheme_id` and `expected_group_id` for defense in depth |
+| Scheme downgrade (output committed scheme_id=2, spent as scheme_id=1) | §7.5 indirect binding via leaf hash + `pqc_auth` size check; `expected_scheme_id` for defense in depth (the `expected_group_id` leg is deleted — §5.3) |
 | Key substitution within a group | Existing `verify_multisig` Check 8 (key uniqueness) |
 | Signer index manipulation | Existing `verify_multisig` Checks 6 and 7 (range, ascending) |
 | Blob truncation/padding | Strict size checks in `tx_pqc_verify.cpp` |
-| Replay across groups | `group_id` binding in canonical signing payload |
+| Replay across groups | **address-fingerprint** binding in the canonical signing intent (I1; §5.3 — replaces the retired `group_id`) |
 | Replay within group | `intent_id` + `tx_counter` + `expires_at` + `reference_block_hash` + `kem_randomness_seed` freshness |
 
 ---
@@ -256,36 +256,27 @@ When that mode exists:
 *(Older prose requiring DKG for every V3.1 group applied to mandatory-
 prover Option D and is withdrawn for the E′ product path.)*
 
-### 5.3 group_id derivation
+### 5.3 Group identity — **the address fingerprint** (`group_id` retired)
 
-The 32-byte `group_id` binds the group's identity. The code hashes the
-**leaf** `MultisigKeyContainer` (ephemeral hybrid keys + spend-auth pubkeys)
-for its key material — not address key fields — while sourcing the three
-version axes from the group's address payload
-(`multisig_group_id_from_address`, MSW-4; the bare `multisig_group_id`
-convenience form fabricates them from constants and is tests/fuzz-only):
+The group's identity is the **address fingerprint** (§6.3):
+`cSHAKE256(canonical(MultisigAddressPayload), "shekyl/multisig-address-v1")`.
+It is per-group, computable by every participant from the address alone, and
+covers the group's whole public state (`B_group`, `Y_group`, the N KEM pubkeys,
+both version axes, `m`/`n`). Four independent implementers exchange the address
+file and compare the 67-char fingerprint string: same bytes → same fingerprint,
+or the address is wrong.
 
-```
-group_id = cn_fast_hash(
-    DOMAIN_SEP_V31 ||
-    group_version ||
-    scheme_id (= 2) ||
-    spend_auth_version ||
-    n_total ||
-    m_required ||
-    concat(container.keys) ||
-    concat(container.spend_auth_pubkeys)   # layout per multisig.rs
-)
-```
-
-> **Honesty pin:** older prose claimed address `hybrid_signing_pubkeys`
-> define group identity. That field is vestigial (**MSW-8**) and was
-> never a `group_id` input in code. E′ will rebind `group_id` to
-> `(spend_auth_version, B, Y_group, KEMs, m, n)` (exact preimage in
-> the E′ address freeze) — Track A MSW-4/5 keep the version bytes real.
-
-`spend_auth_version` is included so that a future ceremony/mode produces
-a new `group_id`, preventing silent reinterpretation across stacks.
+The former `multisig_group_id` — `cn_fast_hash` over the leaf
+`MultisigKeyContainer` — is **deleted**. It had **no consumer** under E′; it
+hashed the container's *per-output* KEM-derived keys, so it produced a different
+value for every output while being named for the group; and its one long-term
+caller (`wallet2::create_pqc_multisig_group`) threw on every input. Deleted with
+it: `verify_multisig`'s check 9 + the `expected_group_id` parameter, the FFI
+`shekyl_pqc_multisig_group_id` / `shekyl_pqc_verify_with_group_id`, and
+`DOMAIN_SEP_V31`. Verify is now a **9-check** pipeline (FFI error code 9 retired,
+10/11 unchanged). Version-axis binding survives *in the fingerprint*: the
+canonical payload includes `spend_auth_version`, so a version change still yields
+a distinct identity.
 
 ### 5.4 1/N permanent-loss acknowledgment — **withdrawn for E′**
 
@@ -307,8 +298,8 @@ Concrete steps for participants forming a new group:
    authenticated out-of-band channels (cryptographic verification: each
    participant signs a setup attestation with their hybrid signing key
    over the canonical encoding of all participants' public keys).
-3. Each participant independently computes `group_id` and verifies all
-   others derived the same value.
+3. Each participant independently computes the **address fingerprint**
+   (§5.3 / §6.3) and verifies all others derived the same 67-char string.
 4. Participants jointly run the DKG ceremony for `group_shared_secret`.
 5. Each participant constructs the full multisig address locally; all
    should produce byte-identical addresses.
@@ -316,9 +307,9 @@ Concrete steps for participants forming a new group:
 7. Address is exported as a file (too large for QR/clipboard at most N
    values).
 8. Participants store group state: their own keypairs, the N pubkeys of
-   others, group_id, group_version, spend_auth_version, threshold
-   parameters, DKG-derived shared secret, acknowledgments, and an
-   initial `tx_counter = 0`.
+   others, the **address fingerprint** (§5.3), group_version,
+   spend_auth_version, threshold parameters, DKG-derived shared secret,
+   acknowledgments, and an initial `tx_counter = 0`.
 
 ---
 
@@ -329,14 +320,18 @@ Concrete steps for participants forming a new group:
 Multisig addresses use a new Bech32m human-readable prefix:
 
 ```
-single-sig:     shekyl1:<version 0x01><classical>/<pqc>
-single-sig tn:  shekyltest1:<...>
-multisig:       shekyl1m:<version 0x01><group_metadata>
-multisig tn:    shekyltest1m:<...>
+single-sig:     shekyl1<classical+tag>/<pqc_a>/<pqc_b>   (full string; POST_QUANTUM_CRYPTOGRAPHY.md §Address Format)
+single-sig tn:  tshekyl1<...>/<...>/<...>                (classical HRP `tshekyl`; PQC `tskpq`/`tskpq2`)
+multisig:       shekyl1m1<fingerprint 32B>               (names the fingerprint, not the payload; §6.2)
+multisig tn:    shekyltest1m1<fingerprint 32B>
 ```
 
-The visible `m` suffix prevents wallet confusion. Wallets MUST
-type-check the HRP at parse time.
+The single-sig address is a three-segment full string (each segment under
+Bech32m's 1023-char bound; the classical segment carries the `ek_bind_tag`).
+The multisig payload is far past that bound and is **file-based** — so the
+`shekyl1m` HRP encodes the fixed 32-byte **fingerprint** (67 chars, §6.2/§6.3),
+never the group payload. The visible `m` suffix prevents wallet confusion.
+Wallets MUST type-check the HRP at parse time.
 
 **Reserved:** `shekyl1n...` (rotated-key multisig, V3.2+). Do not issue.
 
@@ -539,9 +534,13 @@ def construct_multisig_output(
             HKDF_Expand(ss_i, b"shekyl-v31-view-tag", 1)[0]
         )
 
-    # Determine assigned prover using SENDER-COMPUTABLE rule (§11.1)
+    # NOTE (Option E′): the assigned-prover computation below is DELETED
+    # machinery (§11.1 banner) — E′ has no mandatory prover, and
+    # `rotating_prover_index` / `group_id` no longer exist in code. Retained
+    # only as historical spec of the Option-D receive flow; a full E′ rewrite
+    # of §7/§8 is S2/S4 scope.
     tx_secret_key_hash = cn_fast_hash(sender_tx_secret_key)
-    assigned_prover = rotating_prover_index(
+    assigned_prover = rotating_prover_index(   # DELETED — see note above
         recipient_address.group_id,
         output_index_in_tx,
         tx_secret_key_hash,
@@ -676,8 +675,10 @@ enforcement of rules already implicitly guaranteed):
 
 - `blockchain.cpp:3768` SHOULD pass `expected_scheme_id` derived from
   the output's `tx_extra_pqc_ownership` to `verify_transaction_pqc_auth`
-- `rust/shekyl-ffi/src/lib.rs:343` SHOULD pass `expected_group_id` to
-  `verify_multisig` when `scheme_id == 2`
+- ~~`rust/shekyl-ffi/src/lib.rs` SHOULD pass `expected_group_id` to
+  `verify_multisig` when `scheme_id == 2`~~ — **retired (§5.3):** the
+  `expected_group_id` parameter and check 9 are deleted; group identity
+  is the address fingerprint, not a per-verify argument.
 
 ### 7.6 Wallet-side filtering and griefing resource limits
 
@@ -904,8 +905,8 @@ SpendIntent {
     version:                  u8 (= 1)
     intent_id:                [u8; 32]   // random per intent
 
-    // Group binding
-    group_id:                 [u8; 32]
+    // Group binding — the address fingerprint (§5.3; was `group_id`)
+    address_fingerprint:      [u8; 32]
 
     // Proposer
     proposer_index:           u8
@@ -936,7 +937,7 @@ SpendIntent {
 ### 9.2 Invariants (verified before any signer signs; honest-signer invariant I1)
 
 1. `version == 1`
-2. `group_id` matches the verifier's group
+2. `address_fingerprint` matches the verifier's group (§5.3)
 3. `proposer_index < n_total`
 4. `proposer_sig` verifies against `hybrid_signing_pubkeys[proposer_index]`
 5. `created_at ≤ now ≤ expires_at`
@@ -1715,8 +1716,19 @@ stream**, not as "same privacy as solo at small volume."
 | `TX_EXTRA_TAG_MULTISIG_MIGRATION (0x08)` | V3.2 migration transactions |
 | Message type `0x0A` (RotationIntent) | V3.2 full rotation protocol |
 
-**Honesty pin (2026-07-14 — P0-k / R1-F-11).** These rows are
-*intent*, not substrate. Today:
+> **Superseded by group_id deletion (2026-07-18, MS-5 PR-B).** Items 1–3
+> below analyze how `multisig_group_id` bound the version bytes into its
+> preimage. `multisig_group_id` is now **deleted** (§5.3): group identity
+> is the **address fingerprint** — `cSHAKE256(canonical(MultisigAddressPayload),
+> …)` — whose canonical payload carries `group_version` and
+> `spend_auth_version` as real wire fields. The version-binding *goal* of
+> MSW-4/5 is met by the fingerprint's preimage, not by a `group_id` hash;
+> the `group_id`-preimage mechanics below are historical.
+
+**Honesty pin (2026-07-14 — P0-k / R1-F-11; historical — see the
+supersession note above).** *When written*, these rows were *intent*, not
+substrate. The `multisig_group_id` mechanics described below are now deleted
+(§5.3); items 1–3 are retained only as the reasoning record for MSW-4/5:
 
 1. **`group_version` is fused with `MULTISIG_CONTAINER_VERSION`.**
    `multisig_group_id` passes the compile-time constant as
@@ -1808,7 +1820,8 @@ and the phrase "pure-PQC spend-auth" is ambiguous (pin below).
 
 #### Posture first — multisig is already PQ for authorization
 
-Scheme_id=2 verify check 10 is `M × Ed25519 + M × ML-DSA`
+Scheme_id=2 verify check 9 (the final, crypto check — see §5.3; returns
+`CryptoVerifyFailed` = FFI code 10) is `M × Ed25519 + M × ML-DSA`
 (`shekyl-crypto-pq` multisig). The key container is hybrid by
 construction (`SINGLE_KEY_CANONICAL_LEN = 1996`). Forging an M-of-N
 spend requires breaking ML-DSA-65 M times. **Threshold authorization
@@ -1816,7 +1829,8 @@ is quantum-resistant today.**
 
 Classical exposure lives in the **FCMP++ layer**, not in multisig:
 
-- SAL / membership: Ed25519 (`SPEND_AUTH_VERSION_ED25519 = 0x01`;
+- SAL / membership: Ed25519 (`SPEND_AUTH_VERSION_ED25519 = 0x02`; `0x01`
+  never issued — the never-shipped Option-D scaffold value;
   `SpendAuthAndLinkability` in `shekyl-fcmp`, compiled unconditionally).
 - Leaf `{O.x, I.x, C.x, H(pqc_pk)}` for every output on the chain.
 - **Solo has the identical posture** — classical membership/SAL +
@@ -2161,6 +2175,16 @@ fuzz_receive_time_validation
 *Normative.* Implementations MUST produce byte-identical output to these
 vectors for the input conditions specified. Any implementation that
 cannot is non-conforming.
+
+> **Option-D residue (2026-07-18, MS-5 PR-B).** Several vectors below are
+> shaped for the withdrawn Option-D flow and name machinery that is now
+> **deleted**: `group_id` (A.1 — identity is the address fingerprint, §5.3),
+> `construct_multisig_output` / `assigned_prover_index` (A.2 — no constructor
+> and no mandatory prover under E′; the two-component `O = ho·G + B_group +
+> y_out·T` constructor lands in S2/S4), and the CounterProof vector (A.5 —
+> §11 deleted machinery). `spend_auth_version` is **`0x02`**, not `1`. These
+> specs are rewritten to E′ shape as S2/S4 lands the live crypto; treat the
+> Option-D-named outputs here as historical until then.
 
 Test vectors are maintained in a separate file `test_vectors/v3.1/`
 alongside the implementation. This appendix enumerates required vectors
