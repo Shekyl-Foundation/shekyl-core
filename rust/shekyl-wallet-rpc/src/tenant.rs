@@ -39,7 +39,8 @@ pub struct Tenant {
     /// A **staker** open/create spawns the driving P-scan task via
     /// [`Engine::start_pscan_if_staker`] and parks its handle here for the
     /// wallet's whole open lifetime; a non-staker parks `None`. The task holds
-    /// its own clone of the engine arc, so [`close_wallet`](crate::lifecycle)
+    /// its own clone of the engine arc, so
+    /// [`close_wallet`](crate::lifecycle::close_wallet)
     /// must [`PScanHandle::shutdown`] this handle (awaiting the task's exit and
     /// the release of that clone) **before** `Arc::try_unwrap` — a live handle
     /// otherwise blocks the unwrap and the close would fail-loud as "still in
@@ -152,8 +153,8 @@ impl Tenant {
     /// engine handle before close. Shutting the task down first is what lets the
     /// unwrap succeed — the task holds its own clone of the engine arc. If other
     /// clones still exist afterward (e.g. an in-flight refresh), the caller must
-    /// [`restore_open`](Self::restore_open) the pair and fail loud rather than
-    /// evicting the still-live wallet.
+    /// [`restore_open`](Self::restore_open) all three — name, engine, and P-scan
+    /// handle — and fail loud rather than evicting the still-live wallet.
     pub fn take_open(&mut self) -> Option<(String, SharedEngine, Option<PScanHandle>)> {
         match (self.open_name.take(), self.engine.take()) {
             (Some(name), Some(engine)) => {
@@ -177,9 +178,10 @@ impl Tenant {
         }
     }
 
-    /// Re-install a pair previously removed by [`take_open`](Self::take_open)
-    /// when the close attempt could not proceed (another task still holds a
-    /// clone, or reservations are outstanding). Inverse of `take_open`.
+    /// Re-install the (name, engine, P-scan handle) triple previously removed by
+    /// [`take_open`](Self::take_open) when the close attempt could not proceed
+    /// (another task still holds a clone, or reservations are outstanding).
+    /// Inverse of `take_open`.
     ///
     /// The caller passes a **freshly restarted** P-scan handle (or `None` for a
     /// non-staker): the one `take_open` yielded was already shut down before the

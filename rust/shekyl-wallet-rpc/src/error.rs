@@ -297,8 +297,14 @@ impl From<PScanStartError> for WalletRpcError {
             // (or `.wallet.pending`) seal. Fail the staker's open closed — a
             // staker whose firewall scan cannot start must not open into a state
             // where it silently is not scanning (privacy is not a degraded mode).
-            PScanStartError::LoadFailed(source) => {
-                Self::InternalError(format!("p-scan sealed state load failed: {source}"))
+            //
+            // The client message is deliberately stable and detail-free: the
+            // boxed cause can carry a local filesystem path or internal schema
+            // detail, and this string is returned over JSON-RPC. The detailed
+            // cause is logged server-side at the reachable call site
+            // (`lifecycle::wrap_and_start_pscan`), not handed to the client.
+            PScanStartError::LoadFailed(_source) => {
+                Self::InternalError("p-scan sealed state failed to load".into())
             }
         }
     }

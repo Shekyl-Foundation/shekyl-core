@@ -446,7 +446,21 @@ async fn wrap_and_start_pscan(
     engine: Engine<SoloSigner>,
 ) -> Result<(SharedEngine, Option<PScanHandle>), WalletRpcError> {
     let shared: SharedEngine = Arc::new(RwLock::new(engine));
-    let pscan = Engine::start_pscan_if_staker(shared.clone()).await?;
+    let pscan = match Engine::start_pscan_if_staker(shared.clone()).await {
+        Ok(handle) => handle,
+        Err(e) => {
+            // Log the detailed cause server-side — the boxed error can carry a
+            // local path / internal schema detail that the stable client-facing
+            // `WalletRpcError` deliberately withholds. Same discipline as
+            // `restart_pscan`, and the fail-closed reason is spelled here.
+            tracing::warn!(
+                error = %e,
+                "a staker's sealed P-scan state failed to load; aborting the open \
+                 (fail-closed — a staker must not open with its firewall scan dark)"
+            );
+            return Err(e.into());
+        }
+    };
     Ok((shared, pscan))
 }
 
