@@ -467,28 +467,27 @@ bench-internals = []
 # gated AT THE DEFINITION SITE; the feature flag is the external
 # half of that gate (the `test` cfg is the internal half).
 #
-# Symmetric with `bench-internals` (above) in name and shape, but
-# NOT in re-export posture: `bench-internals` actually re-exports
-# its `pub(crate)` types under a `__bench_internals` module
-# (`pub use` gated on the feature) so external Criterion harnesses
-# can name them; `test-helpers` does NOT currently re-export
-# anything. These surfaces remain `pub(crate)` even with the
-# feature enabled — downstream crates cannot reach them through
-# the public API regardless of feature posture.
+# Symmetric with `bench-internals` (above) in name and shape: both
+# re-export otherwise-`pub(crate)` surfaces under a `__…internals` /
+# `__test_helpers` module (gated on the feature) so external harnesses
+# can name them. The four failure-injection surfaces (`FaultInjecting*`,
+# `replace_refresh`, `from_test_blocks`) remain `pub(crate)` — no
+# downstream test needs them yet — while the `__test_helpers` module
+# (lib.rs) now re-exports one staker-construction helper for its first
+# consumer.
 #
-# Why no public re-exports yet (`21-reversion-clause-discipline.mdc`):
-# pre-genesis no downstream consumer crate exists; speculative re-
-# exports without a named caller would be the "pre-provisioning
-# for hypothetical consumers" anti-pattern the discipline rejects.
-# The current shape (compile-gate-only) is the minimum surface
-# that lets the test substrate exist; the public-re-export half
-# lands when the first downstream consumer emerges, at which point
-# the disposition is reopened via a focused PR adding
-# `#[cfg(feature = "test-helpers")] pub use ...` re-exports under
-# a `__test_helpers` module (matching the `__bench_internals`
-# precedent), the V3.0-targeted FOLLOWUPS item naming that
-# downstream crate, and an `AUDIT_SCOPE.md` amendment if the
-# crate exposes any production-surface implications.
+# Re-export posture (`21-reversion-clause-discipline.mdc`): the public-
+# re-export half was held back pre-genesis (speculative re-exports
+# without a named caller are the "pre-provisioning for hypothetical
+# consumers" anti-pattern the discipline rejects) and now lands with
+# its first downstream consumer — `shekyl-wallet-rpc`, whose WI-1
+# P-scan lifecycle test needs a *staker* wallet
+# (`__test_helpers::make_staker_for_test` over `persist_bond_record`,
+# the only route to `staking_enabled` while no RPC staking entry
+# exists). The helper is test-only (feature-gated, never in a default
+# production build), so it carries no production-surface implication
+# and needs no `AUDIT_SCOPE.md` amendment; the remaining `pub(crate)`
+# surfaces still wait for their own named callers.
 #
 # Production-build safety property (the load-bearing claim): the
 # `#[cfg(any(test, feature = "test-helpers"))]` gating at the

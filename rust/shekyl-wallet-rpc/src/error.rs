@@ -10,8 +10,8 @@ use serde_json::{json, Value};
 use shekyl_engine_core::engine::error::{RetryableRejectCause, TerminalErrorKind};
 use shekyl_engine_core::engine::SubmitError;
 use shekyl_engine_core::{
-    ChangePasswordError, IoError, OpenError, PendingTxError, PersistenceError, RefreshError,
-    SendError,
+    ChangePasswordError, IoError, OpenError, PScanStartError, PendingTxError, PersistenceError,
+    RefreshError, SendError,
 };
 use shekyl_engine_file::WalletFileError;
 use shekyl_rpc_client::{RejectCause, SubmitVerdict};
@@ -275,6 +275,30 @@ impl From<RefreshError> for WalletRpcError {
             }
             RefreshError::CurveTreeIngest { context, .. } => {
                 Self::InternalError(format!("curve-tree ingest: {context}"))
+            }
+        }
+    }
+}
+
+impl From<PScanStartError> for WalletRpcError {
+    fn from(err: PScanStartError) -> Self {
+        match err {
+            // The auto-start (`start_pscan_if_staker`) guards on the stake engine
+            // before spawning, and a fresh open holds a fresh single-flight slot,
+            // so neither of these is reachable on the lifecycle path. Map them
+            // defensively rather than panicking if a future caller hits them.
+            PScanStartError::NoStakeEngine => {
+                Self::InternalError("p-scan start: no stake engine".into())
+            }
+            PScanStartError::AlreadyRunning => {
+                Self::InternalError("p-scan start: task already running".into())
+            }
+            // The reachable one: a corrupt / version-mismatched `.wallet.pscan`
+            // (or `.wallet.pending`) seal. Fail the staker's open closed — a
+            // staker whose firewall scan cannot start must not open into a state
+            // where it silently is not scanning (privacy is not a degraded mode).
+            PScanStartError::LoadFailed(source) => {
+                Self::InternalError(format!("p-scan sealed state load failed: {source}"))
             }
         }
     }

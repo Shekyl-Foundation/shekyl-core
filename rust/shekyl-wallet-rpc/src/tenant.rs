@@ -13,7 +13,7 @@
 //! read lock. Multi-tenant `--wallet-dir` exchanges extend this seam
 //! later (`WALLET_REWRITE_PLAN.md`).
 
-use shekyl_engine_core::{Engine, SoloSigner};
+use shekyl_engine_core::{Engine, PScanHandle, SoloSigner};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -24,12 +24,29 @@ use crate::error::WalletRpcError;
 pub type SharedEngine = Arc<RwLock<Engine<SoloSigner>>>;
 
 /// One wallet-bearing tenant inside the RPC process.
-#[derive(Debug, Default)]
+///
+/// `Debug` is hand-written rather than derived because [`PScanHandle`] is not
+/// `Debug` (a live task handle renders nothing useful); the manual impl reports
+/// only whether a P-scan task is parked, not its internals.
+#[derive(Default)]
 pub struct Tenant {
     /// Wallet file stem currently open, if any.
     open_name: Option<String>,
     /// Open Engine handle (FULL capability, SoloSigner).
     engine: Option<SharedEngine>,
+    /// Embedder-held P-scan task handle for the open wallet (WI-1).
+    ///
+    /// A **staker** open/create spawns the driving P-scan task via
+    /// [`Engine::start_pscan_if_staker`] and parks its handle here for the
+    /// wallet's whole open lifetime; a non-staker parks `None`. The task holds
+    /// its own clone of the engine arc, so [`close_wallet`](crate::lifecycle)
+    /// must [`PScanHandle::shutdown`] this handle (awaiting the task's exit and
+    /// the release of that clone) **before** `Arc::try_unwrap` — a live handle
+    /// otherwise blocks the unwrap and the close would fail-loud as "still in
+    /// use." The handle is carried atomically with the engine through
+    /// [`take_open`](Self::take_open) / [`restore_open`](Self::restore_open) so
+    /// no lifecycle transition can strand one without the other.
+    pscan: Option<PScanHandle>,
     /// True while `create_wallet` / `open_wallet` is doing slow work
     /// (daemon connect, Argon2) *outside* the tenant mutex. Prevents a
     /// concurrent create/open from racing past `is_open` while the first
@@ -87,13 +104,24 @@ impl Tenant {
         self.engine.clone()
     }
 
-    /// Install a freshly created / opened engine as the open wallet.
+    /// Install a freshly created / opened engine (already wrapped in its
+    /// [`SharedEngine`] arc) and its P-scan handle as the open wallet.
+    ///
+    /// The caller wraps the engine and starts the P-scan task
+    /// ([`Engine::start_pscan_if_staker`]) *before* this call, so the
+    /// arc-and-handle land together and a staker's scan is live the moment the
+    /// wallet is reachable. `pscan` is `None` for a non-staker.
     ///
     /// # Panics
     ///
     /// Panics if a wallet is already open — callers must check
     /// [`Self::is_open`] and return `-29000` first.
-    pub fn set_open(&mut self, name: impl Into<String>, engine: Engine<SoloSigner>) {
+    pub fn set_open(
+        &mut self,
+        name: impl Into<String>,
+        engine: SharedEngine,
+        pscan: Option<PScanHandle>,
+    ) {
         assert!(
             self.engine.is_none(),
             "set_open called while a wallet is already open"
@@ -101,7 +129,8 @@ impl Tenant {
         self.opening = false;
         self.closing = false;
         self.open_name = Some(name.into());
-        self.engine = Some(Arc::new(RwLock::new(engine)));
+        self.engine = Some(engine);
+        self.pscan = pscan;
     }
 
     /// Take the open engine (for [`Engine::close`]), clearing the tenant slot.
@@ -118,15 +147,20 @@ impl Tenant {
     /// (which clear it), and the success path calls
     /// [`clear_closing`](Self::clear_closing).
     ///
-    /// The caller should [`Arc::try_unwrap`](std::sync::Arc::try_unwrap) the
-    /// returned handle before close. If other clones still exist (e.g. an
-    /// in-flight refresh), the caller must [`restore_open`](Self::restore_open)
-    /// the handle and fail loud rather than evicting the still-live wallet.
-    pub fn take_open(&mut self) -> Option<(String, SharedEngine)> {
+    /// The caller should [`PScanHandle::shutdown`] the returned P-scan handle
+    /// (if any) and then [`Arc::try_unwrap`](std::sync::Arc::try_unwrap) the
+    /// engine handle before close. Shutting the task down first is what lets the
+    /// unwrap succeed — the task holds its own clone of the engine arc. If other
+    /// clones still exist afterward (e.g. an in-flight refresh), the caller must
+    /// [`restore_open`](Self::restore_open) the pair and fail loud rather than
+    /// evicting the still-live wallet.
+    pub fn take_open(&mut self) -> Option<(String, SharedEngine, Option<PScanHandle>)> {
         match (self.open_name.take(), self.engine.take()) {
             (Some(name), Some(engine)) => {
                 self.closing = true;
-                Some((name, engine))
+                // The P-scan handle rides out with the engine so the two never
+                // separate across a lifecycle transition.
+                Some((name, engine, self.pscan.take()))
             }
             (None, None) => None,
             (name, engine) => {
@@ -143,15 +177,21 @@ impl Tenant {
         }
     }
 
-    /// Re-install a handle previously removed by [`take_open`](Self::take_open)
+    /// Re-install a pair previously removed by [`take_open`](Self::take_open)
     /// when the close attempt could not proceed (another task still holds a
     /// clone, or reservations are outstanding). Inverse of `take_open`.
+    ///
+    /// The caller passes a **freshly restarted** P-scan handle (or `None` for a
+    /// non-staker): the one `take_open` yielded was already shut down before the
+    /// abandoned `Arc::try_unwrap`, so leaving a still-open staker wallet without
+    /// re-arming its scan would silently go dark. Re-arming here keeps the
+    /// wallet's post-restore state indistinguishable from never-closed.
     ///
     /// # Panics
     ///
     /// Panics if a wallet is already open — the slot must be empty, which it is
     /// on the close path that just called `take_open`.
-    pub fn restore_open(&mut self, name: String, engine: SharedEngine) {
+    pub fn restore_open(&mut self, name: String, engine: SharedEngine, pscan: Option<PScanHandle>) {
         assert!(
             self.engine.is_none(),
             "restore_open called while a wallet is already open"
@@ -159,6 +199,7 @@ impl Tenant {
         self.closing = false;
         self.open_name = Some(name);
         self.engine = Some(engine);
+        self.pscan = pscan;
     }
 
     /// Clear the in-flight close reservation after the engine has been
@@ -167,6 +208,27 @@ impl Tenant {
     /// [`set_open`](Self::set_open) / [`restore_open`](Self::restore_open).
     pub fn clear_closing(&mut self) {
         self.closing = false;
+    }
+
+    /// Whether a P-scan task is parked for the open wallet. Test-only: the WI-1
+    /// lifecycle test asserts a staker open parks a handle and a non-staker open
+    /// does not — the check that survives `pub` (a live embedder call site,
+    /// observed by behavior, not a `dead_code` lint a `pub` item can't trip).
+    #[cfg(test)]
+    pub(crate) fn has_pscan(&self) -> bool {
+        self.pscan.is_some()
+    }
+}
+
+impl std::fmt::Debug for Tenant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tenant")
+            .field("open_name", &self.open_name)
+            .field("engine", &self.engine.as_ref().map(|_| "<engine>"))
+            .field("pscan", &self.pscan.as_ref().map(|_| "<pscan-task>"))
+            .field("opening", &self.opening)
+            .field("closing", &self.closing)
+            .finish()
     }
 }
 

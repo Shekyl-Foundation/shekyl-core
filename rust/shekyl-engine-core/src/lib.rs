@@ -55,3 +55,40 @@ pub mod __bench_internals {
         MergeProjectionBenchFixture, MERGE_BENCH_OUTPUT_COUNT,
     };
 }
+
+/// **Not part of the public API.** The external half of the `test-helpers`
+/// feature (`Cargo.toml` `[features]` note): a narrow, feature-gated surface a
+/// downstream crate's tests can use to construct engine states that its own
+/// production API cannot yet reach.
+///
+/// First (and currently sole) consumer: **`shekyl-wallet-rpc`**, whose WI-1
+/// P-scan lifecycle test needs a *staker* wallet to prove the embedder wires
+/// [`Engine::start_pscan_if_staker`] into open/close. No RPC staking entry
+/// exists yet (it is a separate, still-unbuilt work item), so the only way to
+/// reach `staking_enabled` from the RPC crate's tests is
+/// [`Engine::persist_bond_record`] — exposed here behind the feature rather than
+/// widened to `pub`, so no production-visible surface changes. This is the
+/// "public-re-export half lands with its first downstream consumer" step the
+/// `test-helpers` feature doc reserved (rule 21): a named consumer, not
+/// speculative pre-provisioning.
+#[cfg(any(test, feature = "test-helpers"))]
+#[doc(hidden)]
+pub mod __test_helpers {
+    use crate::engine::{Engine, SoloSigner};
+    use shekyl_types::PSlot;
+
+    /// Turn an open [`Engine`] into a staker: persist a bond record for `slot`,
+    /// which sets `staking_enabled` durably, so a subsequent reopen spawns the
+    /// [`StakeEngine`](crate::engine::stake_engine::StakeEngine) and the
+    /// embedder's P-scan auto-start has a persona to scan as. The bond ticket is
+    /// discarded (the test only needs the staking-enabled side effect); errors
+    /// are flattened to a `String` so no `pub(crate)` error type leaks.
+    ///
+    /// Test-only (feature-gated); never compiled into a default production build.
+    pub fn make_staker_for_test(engine: &Engine<SoloSigner>, slot: u32) -> Result<(), String> {
+        engine
+            .persist_bond_record(PSlot::from_raw(slot))
+            .map(|_ticket| ())
+            .map_err(|e| e.to_string())
+    }
+}
