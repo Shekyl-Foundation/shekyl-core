@@ -4,6 +4,62 @@
 
 ### Changed
 
+- **docs: F-D5 disposition round RAN — the structural-derivation attempt
+  failed at source; NO GRID ships at genesis; Gate-6 R4 close condition
+  (iv) discharged** (outcome record at Gate-6 §12.7 OUTCOME). Executed in
+  the ratified order and the halves resolved oppositely — the inverse of
+  X-3 (correct geometry, empty harm): the harm survives F-D1 in one
+  sentence (the grid protects §18.12's lifetime-aggregate drain-all
+  floor, not the subsum match F-D1 closes — a real `P`→user bridge), but
+  the width derivation fails at three ineliminable, source-anchored
+  population entry points: (1) no population-free lattice exists below
+  the `Curve`'s shape constants (`scarcity_milli` divides by `r_market`,
+  the shard's live replication count); (2) the atomic-value spacing is
+  `budget(E)/Σwork(E)` — fees + release-scaled emission over the live
+  cohort's work, a quotient X-3's block-height-space derivation never
+  had in its path; (3) the strongest variant (a rate-adaptive relative
+  grid, `K` curve-derivable work buckets, consensus-deterministic and
+  zero-tolerance-compatible) delivers reachable-collision, not cover —
+  epoch sets are published per claim and every `reward_P(E)` is a loud
+  `P`-attributed mint vout, so collisions among *published sums* are
+  population occupancy (the GF-7 nominal-vs-effective finding again).
+  Sharpest form: the grid's cost side is derivable today (dust + the
+  pass-4-priced contribution→reward distortion), its benefit side is
+  derivable by nobody pre-genesis — an inequality with one computable
+  side cannot be optimized structurally. All three charter preconditions
+  discharged: the genesis-frozen consequence is spent knowingly (any
+  future grid is a hard fork), pass-4 is reconciled (different target
+  linkage; its cost half transfers intact), and the attempt's failure is
+  derived, not defaulted. The lifetime-aggregate band registers as the
+  first R5 S-2 ledger row; R4 remains open on F-D1 + F-D2 only.
+- **docs: Gate-6 R4 close condition (iv) re-worded — F-D5's "→ §14.4
+  economics" routing was a dangling pointer** (dated amendment at Gate-6
+  §12.9; disposition-round charter at §12.7). WI-4's §14.4 is the
+  partition-adversary arm (RATIFIED PR #291, closed — no quantization or
+  economics agenda); the pointer was a summary-layer conflation of WI-4's
+  discharged strata/lifetime riders with its quantization
+  GF-4-candidate routing (WI-4 §18.10 R-3), propagated through Gate-6 and
+  the index as though it named a real round. F-D5 itself survives the
+  substance filters (real off-chain observer, no spend graph in the path
+  — method note 5 does not dissolve it). A fresh measurement round was
+  refused (the grid's privacy benefit is behavioral,
+  testnet-unproducible — method note 3). The chartered round: (1) names
+  the genesis-frozen consequence (deferral to a post-genesis S-2 read
+  means no grid at genesis; a hard fork if ever wanted); (2) reconciles
+  the §10.12 pass-4 banding rejection explicitly; (3) runs the
+  **structural-derivation attempt first** (grid width from reward-curve
+  structure, rate-independent, X-3-shaped) — width derives ⇒ grid ships
+  at genesis with S-2 grading the residual; width doesn't ⇒ no grid,
+  recorded plainly. The lifetime-aggregate band registers as an R5 S-2
+  ledger row either way. Every propagation site carries a dated
+  annotation (Gate-6 header/§11.7/§12/§12.7/§12.8/§12.9, index rows).
+  The failure shape got its own record — **Gate-6 §11.8 method note 6**:
+  the referent was minted by summarization (WI-4 never wrote it; the
+  index row and Gate-6 prose joined two true routings into a false one
+  that survives verification-by-grep because both halves check out
+  separately). Distinct from method note 5's five instances; the rule:
+  summary-cited routing targets verify against the source document's own
+  words, and a summary that joins two source claims is a new claim.
 - **docs: ring-signature/decoy legacy sweep across the user-facing corpus
   (Gate-6 §11.7 method note 5 applied to documentation — inherited privacy
   prose re-walked against what FCMP++ actually emits).** Contrastive

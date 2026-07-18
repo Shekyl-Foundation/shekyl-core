@@ -31,9 +31,10 @@
   graded PROVISIONAL-PASS (`r = 1.86`); GF-4 (value-out) drafted as one event with three co-triggered
   channels graded jointly: **F-D1** drain-amount taint-carve (complete pre-code pin — (a)+strip),
   **F-D2** UI-default, **F-D3/F-D4** one-sided cooldown-anchored exit standoff (**FSM gate FIRED
-2026-07-15** — §12.5; F-D4 derivation committed + reviewed rounds 1–3; **F-D3 BUILT 2026-07-16**
+  2026-07-15** — §12.5; F-D4 derivation committed + reviewed rounds 1–3; **F-D3 BUILT 2026-07-16**
   against the F-D4 sentinel — `draw_exit_gap`, F-D6-derived anchor; sealing owed at Phase 7.7),
-  **F-D5** → §14.4, **F-D6** anti-drift (**DONE 2026-07-16**, §12.7). GF-10 (R3) folds into
+  **F-D5** → ~~§14.4~~ *(dangling — re-pointed 2026-07-17 to the §12.7-chartered disposition
+  round)*, **F-D6** anti-drift (**DONE 2026-07-16**, §12.7). GF-10 (R3) folds into
   the joint grade. The rebond/unbond FSM blocker is discharged (landed PR #303/#307).
   **UPDATE 2026-07-16 (R4 decision round — §12.9, RATIFIED at review-at-source):** the F-D4 §15.5
   hand-forward is **answered**:
@@ -45,12 +46,21 @@
   CryptoNote-lineage carry never re-walked across the crypto change) — and GF-10 grades
   standalone (decision 3); the F-D4 §16.4 funding
   default is **accepted** as F-D2-class (self-fund default, loud override routed through the entry
-standoff); the exit-standoff mechanism deletion PR is scoped (decision 5 — `exit.rs` wholesale;
-F-D6 and `release_cooldown_elapsed` out of scope) — **landed 2026-07-17** (close condition (iii)
-satisfied). R4's re-formed close: F-D1 + F-D2 (incl. the
-funding default) + ~~the deletion PR~~ *(landed)* + F-D5's §14.4 disposition.
+  standoff); the exit-standoff mechanism deletion PR is scoped (decision 5 — `exit.rs` wholesale;
+  F-D6 and `release_cooldown_elapsed` out of scope) — **landed 2026-07-17** (close condition (iii)
+  satisfied). R4's re-formed close: F-D1 + F-D2 (incl. the
+  funding default) + ~~the deletion PR~~ *(landed)* + ~~F-D5's §14.4 disposition~~ *(the §14.4
+  target was dangling — condition (iv) re-worded 2026-07-17: the F-D5 disposition round runs its
+  structural-derivation attempt and records grid-ships / no-grid, band registered as an S-2 ledger
+  row either way; charter at §12.7, amendment at §12.9)*. **UPDATE 2026-07-17 (same day): the
+  F-D5 disposition round RAN — the structural attempt failed at source (no population-free
+  lattice below the `Curve`'s shape constants; the value spacing is `budget(E)/Σwork(E)`;
+  reachable-collision ≠ delivered cover), so NO GRID ships at genesis and condition (iv) is
+  discharged (§12.7 OUTCOME). R4 is open on F-D1 + F-D2 only.**
 - **Round 5 planned** — the cross-layer soundness sign-off for Stage 3 (S-2 exposure ledger + S-3
-  exit/value-seam adversary sim, §10.12).
+  exit/value-seam adversary sim, §10.12). First registered S-2 ledger row: the
+  lifetime-aggregate (drain-all) band at the §18.13 crossing (F-D5 disposition, 2026-07-17;
+  §12.7 OUTCOME).
 
 **GF-1-carve resolved (2026-06-16):** bond-debit authority is a dedicated `bond_spend_pk` (gate-4
 §3.5 step 5 / §4.1 / §3.4.1; §9.3 labels), not the account identity key. Per
@@ -456,8 +466,8 @@ carried; R2 the same).
 | **1** | HKDF/`P_id` wire + crypto layer hooks | **Closed (2026-06-13)** — §9 GF-1 dual-key verifier contract resolved; GF-2 dual-scan enforcement made architectural; reviewer sign-off (§9.8). **Carry discharged (2026-07-11 reconciliation):** `ARCHIVAL_P_DERIVE_V1` KAT + `archival_p` module **landed** (Bond-PR 0 #152; `archival_p.rs` + `kat_archival_p_derive_v1.rs`, seven §9.3 labels incl. `bond_spend_*` verified at source). C-1 emission vin ML-DSA equality check **landed** (#277). §7 checklist reconciled to landed state. |
 | **2** | Network + transport (L16 → production shape) | **Closed (2026-07-11) — §10; closure disposition §10.13.** Rendezvous path specified; seeding relaxation bounded. **Entry gates (all dispositioned):** challenge-response Levin class → anonymity-routable set (GF-3, §10.4); pre-join backing-presentation transport (GF-5, §10.5); Arti HS-hosting capability confirmed, at-source pin carried (GF-12, §10.3); `P`-tx wire-size fingerprint characterization + dummy/fragmentation policy (GF-6, §10.6); HS key lifecycle `p_slot`-bound + seed-derived (GF-9, §10.7). **Exit dispositions (§10.11, passes 1–4):** bonded-verifier challenges, broadcast announce, `P`↔principal circuit/guard isolation (§10.9), pure-rendezvous + I2P-closed. **Carries (§10.13, rule-21):** at-source Arti pin → transport PR; dummy/frag tuned ratio → testnet; **GF-9 HS-id HKDF label → §9.3 amendment (armed: not yet in derivation; dot-vs-hyphen format flag)**; announce↔anchor + cadence timing → R3. Transport code partial-landed (2d-2: SP-T1 #204/#209, SP-T4a #254 — inert). |
 | **3** | Timing + rotation + `W` / epoch-length joint pin | **Designed + adversarial pass run (2026-07-11) — §11; closes on the R4/GF-4 joint grade (§11.7).** **GF-10** pinned as *mechanism + structural window* (uniform-independent claim-broadcast-height draw via audited `bounded_uniform`; floor = `h_close + reorg_depth(720)`, ceiling = `(E_oldest+W)·SEB − submit_guard`; a-priori `S_min ≥ SEB`); **numeric width routed to R4/GF-4 CB-3 joint grade** (not standalone — per-axis error avoided). Draw + scheduler **unbuilt** (verified) → pinned pre-code, M1-armed. Rotation leg ratified (T-A1 timeline non-channel; network leg §10.7/§10.9); R2 timing hand-forwards resolved (announce↔anchor = entry standoff; emission-cadence = GF-10). Adversarial pass (§11.8) found no break — four findings folded as re-pins, one retraction (max-age misread). Two frame/pass assumptions overturned at source (epoch-crossing §11.4; max-age semantics §11.8). UPDATE 2026-07-16 (§12.9 decision 3): the R4 joint grade **dissolved by axis attrition** — GF-10's width now grades **standalone** against the §11.5 pre-committed advantage claim (mechanism-class, method note 3); R3 closes when that grade runs. |
-| **4** | Output + bond-funding hygiene (**recurring** — rebond/unbond at genesis) | **Drafted (2026-07-11) — §12, the drain-event firewall.** **GF-7 (funding-in) built + graded PROVISIONAL-PASS** (`r = 1.86`, local-daemon; standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) provisional) — not an open design question. **GF-4 (value-out) drafted:** the drain is one event, three co-triggered channels graded jointly (§12.1). **F-D1** drain-amount taint-carve — complete pre-code pin ((a)+strip; strip `{lineage,epoch,height}` + aggregate-scalar amount stage; §12.3); **F-D2** UI-default (§12.4); **F-D3/F-D4** one-sided cooldown-anchored exit standoff — **FSM gate FIRED 2026-07-15** (§12.5–12.6; `bond_post.rs:369`/`:627`); **F-D5** quantization → §14.4; **F-D6** anti-drift derive-don't-hardcode (§12.7). GF-10 (R3) folds into the joint grade. UPDATE 2026-07-15: both former blockers discharged — the rebond/unbond FSM landed (PR #303 `HoldingsUpdate`/`Unbond` + Pin-4/Pin-5 closure 2026-07-14; PR #307 `Rebond`) and the age-stratified sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18). F-D3/F-D4 open for build: F-D4 a-priori window derivation first (committed before any sweep runs, §12.6), then `draw_exit_gap` (§12.5) with the F-D6 derived anchor. UPDATE 2026-07-16: derivation committed + reviewed (rounds 1–3, sentinel + frozen rule); **`draw_exit_gap` BUILT** against the sentinel with the F-D6 anchor derived (`release_cooldown_anchor_height`) — F-W5 `N_t` re-derivation, sweep, and Phase 7.7 seal remain. UPDATE 2026-07-16 (later): round-4 premise audit RATIFIED deletion-with-tripwire (F-D4 §15.4 — the timing channel's observable is phantom, F-W7/F-W8; the seal obligation is removed, the sentinel never shipped a value); F-W9 bounded the repetition premise (F-D4 §16). **R4 decision round run + RATIFIED (§12.9):** exit seam **re-homed** to the principal↔user crossing (WI-4 §18.13); joint grade **dissolved by four-axis attrition** (ratification added the fourth row: **F-W10 — output-count phantom**, the drain is not an identifiable transaction under FCMP++; §2.4's CryptoNote-lineage pin retired, method note 5); §16.4 funding default **accepted** (F-D2-class); deletion PR scoped (`exit.rs` wholesale; F-D6 + consensus predicate out of scope). Re-formed close: F-D1 + F-D2 (incl. funding default) + deletion PR + F-D5 §14.4 disposition. UPDATE 2026-07-17: the **deletion PR landed** at decision 5's scope — close condition (iii) satisfied; remaining: F-D1, F-D2 (incl. funding default), F-D5 §14.4 disposition. |
-| **5** | Cross-layer adversarial pass | **Planned.** Soundness-depth sign-off for Stage 3. Build the S-2 fused exposure ledger (first) + the S-3 exit/value-seam adversary sim (§10.12), then sign off. |
+| **4** | Output + bond-funding hygiene (**recurring** — rebond/unbond at genesis) | **Drafted (2026-07-11) — §12, the drain-event firewall.** **GF-7 (funding-in) built + graded PROVISIONAL-PASS** (`r = 1.86`, local-daemon; standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) provisional) — not an open design question. **GF-4 (value-out) drafted:** the drain is one event, three co-triggered channels graded jointly (§12.1). **F-D1** drain-amount taint-carve — complete pre-code pin ((a)+strip; strip `{lineage,epoch,height}` + aggregate-scalar amount stage; §12.3); **F-D2** UI-default (§12.4); **F-D3/F-D4** one-sided cooldown-anchored exit standoff — **FSM gate FIRED 2026-07-15** (§12.5–12.6; `bond_post.rs:369`/`:627`); **F-D5** quantization → §14.4; **F-D6** anti-drift derive-don't-hardcode (§12.7). GF-10 (R3) folds into the joint grade. UPDATE 2026-07-15: both former blockers discharged — the rebond/unbond FSM landed (PR #303 `HoldingsUpdate`/`Unbond` + Pin-4/Pin-5 closure 2026-07-14; PR #307 `Rebond`) and the age-stratified sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18). F-D3/F-D4 open for build: F-D4 a-priori window derivation first (committed before any sweep runs, §12.6), then `draw_exit_gap` (§12.5) with the F-D6 derived anchor. UPDATE 2026-07-16: derivation committed + reviewed (rounds 1–3, sentinel + frozen rule); **`draw_exit_gap` BUILT** against the sentinel with the F-D6 anchor derived (`release_cooldown_anchor_height`) — F-W5 `N_t` re-derivation, sweep, and Phase 7.7 seal remain. UPDATE 2026-07-16 (later): round-4 premise audit RATIFIED deletion-with-tripwire (F-D4 §15.4 — the timing channel's observable is phantom, F-W7/F-W8; the seal obligation is removed, the sentinel never shipped a value); F-W9 bounded the repetition premise (F-D4 §16). **R4 decision round run + RATIFIED (§12.9):** exit seam **re-homed** to the principal↔user crossing (WI-4 §18.13); joint grade **dissolved by four-axis attrition** (ratification added the fourth row: **F-W10 — output-count phantom**, the drain is not an identifiable transaction under FCMP++; §2.4's CryptoNote-lineage pin retired, method note 5); §16.4 funding default **accepted** (F-D2-class); deletion PR scoped (`exit.rs` wholesale; F-D6 + consensus predicate out of scope). Re-formed close: F-D1 + F-D2 (incl. funding default) + deletion PR + F-D5 §14.4 disposition. UPDATE 2026-07-17: the **deletion PR landed** at decision 5's scope — close condition (iii) satisfied; remaining: F-D1, F-D2 (incl. funding default), F-D5 §14.4 disposition. UPDATE 2026-07-17 (later): **F-D5's "→ §14.4" was dangling** (WI-4 §14.4 is the closed partition arm, no economics agenda) — close condition (iv) re-worded by dated amendment (§12.9): the **F-D5 disposition round** (charter at §12.7) runs a **structural-derivation attempt first** (grid width from reward-curve structure, X-3-shaped, mechanism-class) — width derives ⇒ grid ships at genesis + S-2 grades the residual; width doesn't ⇒ **no grid at genesis** (genesis-frozen consequence named, pass-4 banding rejection reconciled); the lifetime-aggregate band registers as an R5 S-2 ledger row either way. UPDATE 2026-07-17 (same day): **the F-D5 disposition round RAN — width does not derive, NO GRID at genesis** (harm survives F-D1 — the grid targeted §18.12's drain-all floor — but the derivation fails at three source-anchored population entry points: `r_market` inside `scarcity_milli`, the `budget(E)/Σwork(E)` value spacing, and reachable-collision ≠ delivered cover; the grid's cost side is derivable, its benefit side is not; §12.7 OUTCOME). Close condition (iv) **discharged**; R4 open on **F-D1 + F-D2 only**. |
+| **5** | Cross-layer adversarial pass | **Planned.** Soundness-depth sign-off for Stage 3. Build the S-2 fused exposure ledger (first) + the S-3 exit/value-seam adversary sim (§10.12), then sign off. **Registered S-2 ledger rows so far:** the lifetime-aggregate (drain-all) band at the §18.13 crossing (from the F-D5 disposition round, 2026-07-17 — per-observer, off-chain, graded against measured post-genesis exposure; §12.7 OUTCOME); R5 also inherits F-W9's finite domain and the §16.3 re-formed cross-persona job (linking-key search, pre-registered as code). |
 
 **Parallel (not gated on gate-6 closure):** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
 schema implementation; PHASE_2B §3–§7 FSM retool off rebased §2.4.
@@ -1830,7 +1840,8 @@ timing hand-forwards (§11.6).
 
 **Out of scope (do not fold in):** the L17 synchronized-exit wargame (crisis cadence blows through
 jitter windows) is the **exit seam** — R4/GF-4 ([`FOLLOWUPS.md`](../FOLLOWUPS.md) swan-2/W8). R-3
-reward-magnitude quantization is R4 / §14.4 economics.
+reward-magnitude quantization is R4 / ~~§14.4 economics~~ *(the §14.4 target was dangling —
+re-pointed 2026-07-17 to the F-D5 disposition round chartered at §12.7)*.
 
 **Reopen (rule-21):** the GF-10 window reopens on any change to `SEB`, `W`,
 `ARCHIVAL_REORG_DEPTH_BLOCKS`, or `MAX_SETTLEMENT_EPOCHS_PER_EMISSION`; the mechanism reopens if the
@@ -1996,6 +2007,24 @@ tail retires with F-W10). The §2.1 crypto-layer carry ("carry from V3 / PHASE_2
 checked in passing: its content is key derivation and scan separation — creation-side
 mechanisms with no graph presupposition — and stands without amendment.
 
+**Method note 6 (adopted 2026-07-17, from the F-D5 "§14.4 economics" finding — a failure
+shape distinct from note 5's five instances): a referent can be minted by summarization.**
+"GF-4/§14.4 economics" was not an inherited pin, not a phantom observable, not a stale
+row — at source, everyone wrote something right. WI-4 routed *quantization* to a GF-4-round
+design candidate (§18.10 R-3) and routed its *strata + lifetime* riders to the §14.4
+partition arm (discharged with that arm, PR #291). Both referents were real. The fusion
+happened at the summary layer: the index's WI-4 row and this doc's §11.7/§12 prose
+concatenated the two into "GF-4/§14.4 economics" — a round that never existed — and three
+documents then cited it as authoritative; R4's close condition (iv) was ratified against
+it (found undischargeable 2026-07-17, §12.7 charter). The shape is dangerous precisely
+because it survives verification-by-grep: **both halves check out if you grep them
+separately** — the grep confirms the parts and never tests the join. The check is
+source-first over summaries, stated as a rule: a routing target cited from a summary
+surface (an index row, a status cell, a close-condition clause, a §-header digest)
+verifies against the source document's own words before anything is dispositioned
+against it — and a summary that joins two source claims into one is a **new claim**,
+carrying a new claim's burden of proof.
+
 ---
 
 ## 12. Round 4 — output + bond-funding hygiene: the drain-event firewall (OPEN — drafted 2026-07-11)
@@ -2005,7 +2034,10 @@ drain-event findings (F-D1…F-D6) pinned, source-grounded at `dev` `75c3cae1d`.
 channel) is a **complete pre-code pin**, buildable now; **F-D2** (UI-default) buildable now;
 **F-D3/F-D4** (exit-timing) were FSM-gated spec-stubs whose activation criterion **fired 2026-07-15**
 (§12.5 — the cooldown is now an enforced spendability gate, `bond_post.rs:369`/`:627`), so both are
-**open for build**; **F-D5** (quantization) is routed out to §14.4 economics;
+**open for build**; **F-D5** (quantization) is routed out to ~~§14.4 economics~~ *(dangling —
+re-pointed 2026-07-17 to the disposition round chartered at §12.7, which **ran the same day**:
+width does not derive, no grid at genesis, band registered as an R5 S-2 ledger row — §12.7
+OUTCOME)*;
 **F-D6** is the anti-drift pin. R4's other half — **GF-7 (funding-in)** — is already built + graded
 PROVISIONAL-PASS (`r = 1.86`; §6 R4 cell); this section is the **value-out (GF-4)**. The channels are
 **graded jointly, not per-axis** (§18.10 R-4 + CB-3).
@@ -2240,14 +2272,165 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
 §13 `N_t`, and the §14 sweep numbers survive as the archived re-run template for the F-D4
 §15.4 tripwire. No value is sealed; the checklist entry is removed.**
 
-### 12.7 F-D5 (routed out) and F-D6 (anti-drift pin)
+### 12.7 F-D5 (disposition round — RAN 2026-07-17, no grid at genesis) and F-D6 (anti-drift pin)
 
-- **F-D5 — reward-magnitude quantization → §14.4 economics, not this round.** Layer-2 CT-severing
-  breaks the off-chain sequence surface first (§18.10/§18.11), so the grid's threat model is the
+- **F-D5 — reward-magnitude quantization: disposition round chartered and RUN here (2026-07-17)
+  — width does not derive, NO GRID at genesis; see the OUTCOME below.** The entry's original
+  routing — ~~→ §14.4 economics, not this round~~ — was a summary-minted referent (the dated
+  UPDATE below is the finding), and its original reopen clause — ~~graded in the GF-4/§14.4
+  economics round~~ — is superseded by the charter's rule-21 clause (post-genesis reopening
+  requires a hard fork per [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) + an S-2 ledger row showing the band exploited in
+  practice). What the original bullet got right stands unrevised: Layer-2 CT-severing breaks the
+  off-chain sequence surface first (§18.10/§18.11), so the grid's threat model is the
   **lifetime-aggregate band only** — a consensus economics change (grid width interacts with
-  dust/budget conservation, a-priori-derived per §18.7). A **defense-in-depth candidate**, not R4's
-  structural work. **Reopen (rule-21):** graded in the GF-4/§14.4 economics round, not folded into the
-  wallet pin.
+  dust/budget conservation) and a **defense-in-depth candidate**, not R4's structural work.
+
+  **UPDATE 2026-07-17 — the "§14.4" routing target was dangling; re-pointed to a named F-D5
+  disposition round (this entry is its charter).** The finding first: **"→ §14.4 economics" named
+  no real round.** WI-4's §14.4 is the partition-adversary arm — a mechanism measurement spec,
+  implemented, graded PARTITION-PASS, and RATIFIED via PR #291 on 2026-07-11; it never carried a
+  quantization or economics agenda and it is closed. The provenance is a **summary-layer
+  conflation of two distinct WI-4 routings**: WI-4 §18's scope pin routed *strata + lifetime* to
+  the §14.4 round — real, and **discharged** (those riders landed with the partition arm, PR
+  #291) — while WI-4 routed *quantization* to "a GF-4-round design candidate" (§18.10 R-3, grid
+  width a-priori derived). The fusion "GF-4/§14.4 economics" first appears in the index's WI-4
+  row summary and this doc's §11.7/§12 prose, and propagated into R4's close condition as though
+  it named a real round. Close condition (iv) as ratified was undischargeable. Note the shape:
+  **not a dangling pointer at source — WI-4 never wrote it** — but a referent minted at the
+  summary layer by joining two true routings into a false one, which then read as authoritative
+  because both halves check out if grepped separately. Distinct from method note 5's five
+  instances (no inherited pin, no phantom observable); recorded as **§11.8 method note 6**:
+  summary-cited routing targets verify against the source document's own words, and a summary
+  that joins two source claims is a new claim.
+
+  **F-D5 survives the substance filters that killed the rest of this track.** Its observer is the
+  off-chain counterparty who receives a drain payment (real, not phantom — F-W7's failure mode
+  does not apply); its observable is the received amount matched against `reward_P(E)`, which is
+  publicly derivable ex ante from public state (verified at source in the WI-4 §18.10 round); and
+  the leak does not route through a spend graph, so the method-note-5 FCMP++ re-walk does not
+  dissolve it. The rare premise on this track that holds.
+
+  **Refused: a fresh economics/measurement round (the "(b)" option).** Its central number — the
+  grid's privacy benefit — is a behavioral quantity a testnet cannot produce in principle (method
+  note 3). Building that round is `DEFAULT_EXIT_GAP_WINDOW` with a new name: build the harness,
+  discover at the stressnet that the read measures the load generator. §14.4 being dead is not
+  the problem with (b); (b)'s replacement would be dead on arrival.
+
+  **Adopted: the band routes to R5's S-2 ledger, and the F-D5 disposition round opens here, under
+  three pre-conditions:**
+
+  1. **The genesis-frozen consequence is named, not implied.** The grid is a consensus economics
+     change (width interacts with dust + budget conservation), therefore genesis-frozen; S-2's
+     exposure read is post-genesis. So "graded at R5 against a measured exposure" resolves to
+     **the grid does not ship at genesis and becomes a hard fork if ever wanted** — method note
+     3's third exit, which for a genesis-frozen constant means *don't ship*. Legitimate as a
+     decision; not legitimate as an implication. The pre-genesis discount cuts against deferral
+     (right now the grid is free; after genesis it's a fork) — whoever ratifies the deferral is
+     spending that window, not deferring the bill.
+  2. **Pass-4 is reconciled first, or this is the fossil shape one class over.** The pass-4
+     organizing principle (§10.12, landed 2026-06-13) graded reward-magnitude banding "*doubly*
+     misdirected" and trilemma-costly. F-D5 targets a different linkage (the off-chain
+     lifetime-aggregate band at the §18.13 crossing, not `P`↔its-own-rewards) — but the **cost
+     argument transfers intact**: the grid distorts the contribution→reward map regardless of
+     which linkage it's bought for. A dispositioned mitigation re-entering a later round without
+     citing its rejection is exactly what method note 5 was written for. The round opens by
+     quoting pass-4 and stating what's different, or it repeats it.
+  3. **The structural derivation is attempted before "unmeasurable" is accepted** (method note
+     3's first honest exit). Because `reward_P(E)` is publicly derivable ex ante, the band's
+     shape is a **property of the reward curve, not of behavior**. If the grid's width can be
+     derived from the curve's own structure the way X-3 derived from anchor geometry —
+     rate-independent, no testnet, mechanism-class — the grid is decidable today, at the free
+     end of the window. X-3 is the precedent: the structural derivation was the right instinct
+     even when its harm model turned out empty. **The round's first act is this attempt, not the
+     S-2 hand-off.** Width derives ⇒ the grid ships at genesis and S-2 grades the residual.
+     Width doesn't derive ⇒ no grid ships, recorded plainly as a pre-genesis window spent on a
+     mitigation whose benefit couldn't be established — which, given pass-4 already rejected it
+     on cost, is probably the right answer anyway.
+
+  **Reopen (rule-21, superseding the entry's original clause):** the disposition round's outcome
+  (grid ships / no grid) is recorded here; post-genesis reopening requires a hard fork reviewed
+  per [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) and an S-2 ledger row showing the band is exploited in practice.
+
+  **OUTCOME 2026-07-17 — the structural attempt ran and failed at source: width does not
+  derive; NO GRID ships at genesis.** The round executed in the ratified order — harm first,
+  width second — and the two halves resolved oppositely, which is the X-3 lesson applied in
+  the right order this time (X-3 was correct geometry over an empty harm; F-D5 is a real harm
+  over an underivable width).
+
+  **Act 1 — the harm survives F-D1, in one sentence:** *the grid protects the
+  lifetime-aggregate (drain-all) band — §18.12's floor, which F-D1's coverage boundary names
+  as untouched ("drain-all reveals the lifetime total, irreducible") — not the subsum match
+  F-D1 closes.* The sentence writes cleanly; the target is precisely the residual F-D1 leaves
+  open by design, at a counterparty that already knows the user (a `P`→user bridge). The round
+  proceeded.
+
+  **Act 2 — the derivation attempt, walked bottom-up through the landed pipeline**
+  (`reward_arithmetic.rs`, `consensus_state.rs`, `emission_verify.rs`,
+  `ARCHIVAL_BUDGET_SCHEDULE.md` §1):
+
+  ```text
+  reward_P(E) = floor( budget(E) · Curve(work_P(E)) / Σwork(E) )   // Form C, gate-1 pin
+  work_P(E)   = Σ_shards  g(age) / r_market                        // scarcity_milli
+  budget(E)   = staker_emission (release-scaled, weight-penalized) + fee share
+  ```
+
+  Three independent failure points, each ineliminable:
+
+  1. **There is no population-free lattice anywhere below the `Curve`'s shape constants.**
+     `scarcity_milli` divides by `r_market` — the shard's live replication count — so even
+     the *work-space* value set is population-valued before the divide. The curve's fixed
+     geometry (breakpoints, slopes, plateau) maps work→credited-work with both endpoints
+     population-dependent.
+  2. **The atomic-value spacing is a quotient of two economics quantities.** Adjacent
+     reachable rewards are separated by `budget(E)/Σwork(E)` per credited-work-milli;
+     `budget(E)` floats with fees and the release multiplier (`ARCHIVAL_BUDGET_SCHEDULE.md`
+     §1 — the fee share is "not recomputable from schedule alone"), and `Σwork(E)` is the
+     live cohort's sum. Contrast the X-3 precedent this attempt was shaped on: X-3's bound
+     lived entirely in block-height space, where `SEB` and reorg depth are consensus
+     constants — no population quotient in the path. Here rate-independence dies at the
+     divide.
+  3. **Even granting a width, reachable-collision is not delivered cover.** The strongest
+     variant considered — a rate-*adaptive* relative grid (quantize `Curve(work_P)` into `K`
+     buckets before the divide; consensus-deterministic from public close rows,
+     zero-tolerance-compatible, `K` genuinely derivable from the curve alone) — delivers
+     "≤ `K` distinct rewards per epoch," but lifetime aggregates collide only for personas
+     with identical epoch sets *and* identical bucket trajectories. The epoch set is
+     published per claim (`settlement_epochs`, WI-4 §18.7), and every `reward_P(E)` is a
+     loud `P`-attributed mint vout (WI-4 §18.11) — the grid can only try to make
+     *already-published sums* equal, and whether any two live personas' sums coincide under
+     a width is **occupancy of the actual population**: the pre-named failure mode, and the
+     GF-7 nominal-vs-effective finding again (the derivable quantity is nominal cover; the
+     protective quantity is effective cover).
+
+  **The sharpest form of the failure: the grid's cost side is derivable and its benefit side
+  is not.** Cost: dust ≤ Δ−1 atomic per claim (the §4-pinned burn-the-dust interaction) plus
+  the contribution→reward distortion pass-4 priced — computable from the curve today.
+  Benefit: the delivered anonymity-set enlargement — population occupancy, computable by
+  nobody at genesis. A decision inequality with one computable side cannot be optimized
+  structurally. The attempt also pinned the distinction that let F-D5's premise pass the
+  filters while its width fails: `reward_P(E)` is derivable **by the observer at match time**
+  (public close rows — why the observable is real, F-W7 does not apply), but the
+  **distribution over its values** is derivable by nobody pre-genesis (why the width is
+  economics under method note 3). Observer-real, width-underivable.
+
+  **Precondition discharge.** (1) The genesis-frozen consequence is spent knowingly: no grid
+  at genesis; any future grid is a hard fork per the reopen clause above. Stated plainly per
+  the charter: the pre-genesis window was spent on a mitigation whose benefit could not be
+  established. (2) Pass-4 reconciled: §10.12 (landed 2026-06-13) graded reward-magnitude
+  banding "*doubly* misdirected" for the `P`↔its-own-rewards linkage; F-D5 targeted a
+  *different* linkage (the §18.13 crossing — which is why it wasn't dismissed on pass-4's
+  authority alone), but pass-4's **cost half transfers intact** (the grid distorts the
+  conceded contribution→reward map regardless of which linkage it's bought for) — with the
+  benefit now shown underivable and the cost standing, no-grid is the answer pass-4's prior
+  already predicted. (3) The structural attempt ran first and its failure is *derived*, not
+  defaulted: the population term enters at three named, source-anchored points, not "we
+  didn't find a derivation."
+
+  **Hand-off:** the lifetime-aggregate (drain-all) band registers as an **R5 S-2 ledger
+  row** — per-observer, off-chain, graded against measured post-genesis exposure; F-D2's
+  aggregate-drain default remains the wallet-layer mitigation of the drain-all mistake
+  class. R4 close condition (iv) is **discharged** (§12.9 amendment); R4 remains open on
+  F-D1 + F-D2 only.
 - **F-D6 — single-source + derive (anti-drift). Named-const half STANDS; anchor helper
   DELETED 2026-07-17 (rule 15).** UPDATE 2026-07-15: the FSM
   landed and the named const half is **done** — `RELEASE_COOLDOWN_EPOCHS` is config-generated
@@ -2404,6 +2587,11 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   what replaces "pass the joint grade on the timing axis" is the hand-forward decision
   above. Until then R4 is **drafted, not closed**. UPDATE 2026-07-16 (evening): the
   hand-forward is **answered — §12.9**; the close condition re-forms per §12.9's decision 5.
+  UPDATE 2026-07-17: the F-D5 clause's "§14.4" was **dangling** — re-worded by the §12.9
+  dated amendment (disposition round chartered at §12.7; structural attempt first, band to
+  the R5 S-2 ledger either way). UPDATE 2026-07-17 (same day): the F-D5 clause is
+  **discharged** — the attempt ran, width does not derive, **no grid at genesis** (§12.7
+  OUTCOME); what remains of the close is F-D1 + F-D2.
 
 ### 12.9 R4 decision round (2026-07-16) — the §15.5 answer: the seam re-homes, the joint grade dissolves
 
@@ -2550,10 +2738,33 @@ note). Decision 5's scope stands as written — this is a consequent deletion, n
 **The re-formed close condition (supersedes the §12.8 line):** R4 closes when (i) F-D1
 lands with both arms, (ii) F-D2 lands with the §12.9-decision-4 funding default folded
 in, (iii) the deletion PR lands at decision 5's scope (**satisfied 2026-07-17**), and
-(iv) F-D5's §14.4 disposition is recorded (unchanged). The S-2 build is **R5's opening item**, not an R4 close
+(iv) the F-D5 disposition round is recorded (**re-worded and discharged 2026-07-17** — the
+original "§14.4 disposition" phrasing was a dangling pointer; see the amendment below and
+§12.7's OUTCOME: width does not derive, no grid at genesis). The S-2 build is **R5's opening item**, not an R4 close
 condition — but R5 inherits it with F-W9's finite domain and the §16.3 re-formed
 cross-persona job (linking-key search, pre-registered as code). GF-7's PROVISIONAL-PASS
 and its five standing conditionals are untouched by this round.
+
+**Amendment (2026-07-17) — condition (iv) re-worded; "→ §14.4 economics" was a dangling
+pointer.** The round-4 close as ratified pointed F-D5's disposition at a "GF-4/§14.4
+economics round" that does not exist: WI-4's §14.4 is the partition-adversary arm
+(RATIFIED PR #291, 2026-07-11, closed — no quantization or economics agenda). The pointer
+is a summary-layer conflation of two distinct WI-4 routings (strata/lifetime → §14.4
+riders, discharged with the arm; quantization → "a GF-4-round design candidate", §18.10
+R-3) that propagated through the index's WI-4 row and this doc's §11.7/§12 prose as
+though it named something — this amendment is dated rather than silent for exactly that
+reason. **Condition (iv) now
+reads:** *the F-D5 disposition round (chartered at §12.7's 2026-07-17 UPDATE) has run
+its structural-derivation attempt and recorded its outcome — grid ships at genesis, or
+no grid, stated plainly — with the lifetime-aggregate band registered as an S-2 ledger
+row for R5 either way.* A fresh measurement round was refused (the grid's privacy
+benefit is a behavioral quantity a testnet cannot produce — method note 3); the
+disposition round opens by reconciling the §10.12 pass-4 banding rejection and naming
+the genesis-frozen consequence of any deferral. Conditions (i)–(iii) are unchanged;
+decisions 1–5 stand as ratified. **UPDATE 2026-07-17 (same day): condition (iv) is
+DISCHARGED** — the structural attempt ran and failed at source (three named population
+entry points; §12.7 OUTCOME), so **no grid ships at genesis**; the band is registered as
+an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 and F-D2.
 
 ---
 
@@ -2572,6 +2783,47 @@ and its five standing conditionals are untouched by this round.
 
 ## Revision history
 
+- **2026-07-17 (F-D5 disposition round RAN — width does not derive; NO GRID at genesis;
+  close condition (iv) discharged):** executed in the ratified order and the halves
+  resolved oppositely — the harm survives F-D1 in one sentence (the grid protects §18.12's
+  lifetime-aggregate drain-all floor, not the subsum match F-D1 closes; a real `P`→user
+  bridge), but the width derivation fails at source at three ineliminable population entry
+  points: (1) no population-free lattice exists below the `Curve`'s shape constants
+  (`scarcity_milli` divides by `r_market`, the shard's live replication count); (2) the
+  atomic-value spacing is `budget(E)/Σwork(E)` — a quotient of two economics quantities
+  (fees + release-scaled emission over the live cohort's work; X-3's derivation had no such
+  quotient in its path); (3) even a rate-adaptive relative grid (quantize `Curve(work_P)`
+  into `K` curve-derivable buckets — the strongest variant, consensus-deterministic and
+  zero-tolerance-compatible) delivers reachable-collision, not cover: epoch sets are
+  published per claim and every `reward_P(E)` is a loud `P`-attributed mint vout, so
+  collisions among *published sums* are population occupancy — nominal-vs-effective cover
+  again. Sharpest form: the grid's cost side is derivable today (dust + the pass-4-priced
+  distortion), its benefit side is derivable by nobody pre-genesis; an inequality with one
+  computable side cannot be optimized structurally. Preconditions discharged: genesis-frozen
+  consequence spent knowingly (any future grid is a hard fork); pass-4 reconciled (different
+  target linkage, but the cost half transfers intact — no-grid is the answer its prior
+  predicted); the attempt's failure is derived, not defaulted. The band registers as the
+  first R5 S-2 ledger row. Full record at §12.7 OUTCOME; R4 open on F-D1 + F-D2 only.
+- **2026-07-17 (F-D5 re-pointed — the "§14.4 economics" routing target was dangling):**
+  close condition (iv) re-worded by dated amendment (§12.9), the disposition round
+  chartered at §12.7's UPDATE. The finding: WI-4's §14.4 is the partition-adversary arm
+  (RATIFIED PR #291 2026-07-11, closed, no quantization agenda); "→ §14.4 economics" is a
+  summary-layer conflation of two distinct WI-4 routings (strata/lifetime → §14.4 riders,
+  discharged with the arm; quantization → "a GF-4-round design candidate", WI-4 §18.10
+  R-3) that propagated through this doc (§11.7/§12/§12.7/§12.8) and the index as though
+  it named something — every propagation site now carries a dated annotation.
+  F-D5 itself **survives the substance filters** (observer: the off-chain counterparty;
+  observable: received amount vs publicly-derivable `reward_P(E)`; no spend graph in the
+  path — method note 5 does not dissolve it). A fresh measurement round was **refused**
+  (the grid's privacy benefit is behavioral, testnet-unproducible — method note 3;
+  `DEFAULT_EXIT_GAP_WINDOW` with a new name). The chartered round's pre-conditions:
+  (1) the genesis-frozen consequence named — deferral to a post-genesis S-2 read means
+  no grid at genesis, a hard fork if ever wanted; (2) the §10.12 pass-4 banding rejection
+  reconciled explicitly, not re-entered silently; (3) **the structural-derivation attempt
+  runs first** (grid width from reward-curve structure, rate-independent, X-3-shaped) —
+  width derives ⇒ grid ships at genesis + S-2 grades the residual; width doesn't ⇒ no
+  grid, recorded plainly. The lifetime-aggregate band registers as an R5 S-2 ledger row
+  either way.
 - **2026-07-17 (consequent deletion — F-D6 anchor helper removed, rule 15):** decision 5
   executing orphaned `release_cooldown_anchor_height`: `draw_exit_gap` was its only
   production consumer, and post-landing every call site was a test, the crate re-export, or
