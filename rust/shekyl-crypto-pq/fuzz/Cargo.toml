@@ -33,13 +33,6 @@ doc = false
 bench = false
 
 [[bin]]
-name = "fuzz_group_id"
-path = "fuzz_targets/fuzz_group_id.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "fuzz_bech32m_address_decode"
 path = "fuzz_targets/fuzz_bech32m_address_decode.rs"
 test = false

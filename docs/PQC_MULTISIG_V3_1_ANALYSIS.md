@@ -259,7 +259,7 @@ attack, and the mitigation's location in v1.1.
 | A07 | Scheme downgrade (scheme_id=2 output spent as =1) | Spender | Leaf hash + size check; wired expected_scheme_id | §7.5 |
 | A08 | Key substitution within group | Group member | verify_multisig Check 8 (key uniqueness) | §3.4 |
 | A09 | Signer index manipulation | Signer | verify_multisig Checks 6-7 | §3.4 |
-| A10 | Replay across groups | External | group_id in canonical signing payload | §3.4 |
+| A10 | Replay across groups | External | address-fingerprint binding in the canonical signing intent (§5.3; replaces retired `group_id`) | §3.4 |
 | A11 | Replay within group (same intent) | External | intent_id + tx_counter + expires_at + kem_randomness_seed | §3.4 |
 | A12 | Griefing via malformed output | Malicious sender | §7.6 per-sender griefing scores + hard caps; §8.3 receive-time validation (I7) | §7.6, §8.3 |
 | A13 | Time-bomb output (decaps but binds wrong Y) | Malicious sender | §8.3 receive-time validation catches before balance | §8.3, §2.7 |
@@ -275,7 +275,7 @@ attack, and the mitigation's location in v1.1.
 | A23 | Simple-mode shared-secret compromise | Malicious setup participant | §5.2 DKG mandatory; simple-mode excluded from release builds | §5.2 |
 | A24 | Intent spam via proposer_index multi-indexing | Malicious member | §11.7 rate limit by signing pubkey, not index | §11.7 |
 | A25 | Unknown spend_auth_version confusion | Malicious sender | §8.2 silent skip; no error emission | §8.2 |
-| A26 | Silent scheme reinterpretation across versions | Future-version attack | §5.3 spend_auth_version in group_id; §15.5 no implicit upgrades | §5.3, §15.5 |
+| A26 | Silent scheme reinterpretation across versions | Future-version attack | §5.3 spend_auth_version in the address-fingerprint canonical payload; §15.5 no implicit upgrades | §5.3, §15.5 |
 | A27 | Filesystem metadata leakage via filenames | Forensic / accidental exposure | §12.6 opaque filenames + encrypted manifest | §12.6 |
 | A28 | Scanner CPU exhaustion via sustained griefing | Sender with budget | §7.6 7-day cooldowns + per-sender scores + 10k cap | §7.6 |
 | A29 | Honest-signer invariant bypass via flag | Malicious or coerced signer | §2.7 no unsafe flags in supported builds; mechanical enforcement | §2.7 |
@@ -425,9 +425,9 @@ V3.1 instead ships:
 
 - **Reserved namespace** (spend_auth_version byte, tag 0x08, message
   0x0A) so that V3.2 can slot in cleanly
-- **Forward-compatible primitives** (KDF labels per version; §5.3
-  group_id binds version; §15.5 no implicit upgrades) so that rotation
-  semantics remain unambiguous when V3.2 arrives
+- **Forward-compatible primitives** (KDF labels per version; §5.3 the
+  address fingerprint binds version; §15.5 no implicit upgrades) so that
+  rotation semantics remain unambiguous when V3.2 arrives
 - **An explicit public commitment** that rotation will surface flaws
   through actual use, and V3.2 will address them rather than predict them
 

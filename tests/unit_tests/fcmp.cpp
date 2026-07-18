@@ -394,7 +394,6 @@ TEST(fcmp, multisig_signing_request_json_v2_fields)
   auto& a = doc.GetAllocator();
 
   doc.AddMember("version", 2, a);
-  doc.AddMember("group_id", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", a);
   doc.AddMember("n_total", 3, a);
   doc.AddMember("m_required", 2, a);
   doc.AddMember("payload_hash", "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", a);

@@ -159,10 +159,13 @@ ShekylPqcSignatureResult shekyl_pqc_sign(
 /// Verify a hybrid PQC signature.
 ///
 /// Returns 0 on success, or a nonzero PqcVerifyError discriminant on failure:
-///   1  = SchemeMismatch         5  = ThresholdMismatch     9  = GroupIdMismatch
+///   1  = SchemeMismatch         5  = ThresholdMismatch     (9 retired — see below)
 ///   2  = ParameterBounds        6  = IndexOutOfRange       10 = CryptoVerifyFailed
 ///   3  = KeyBlobLength          7  = IndicesNotAscending   11 = DeserializationFailed
 ///   4  = SigBlobLength          8  = DuplicateKeys
+/// Discriminant 9 (formerly GroupIdMismatch, "check 9") is retired: Option E′
+/// deleted group_id, so verify is a 9-check pipeline. 9 is left as a gap; 10/11
+/// keep their values (not renumbered).
 /// For scheme_id 1 (single-signer), only codes 10 and 11 apply.
 /// See rust/shekyl-crypto-pq/src/error.rs PqcVerifyError for canonical definitions.
 uint8_t shekyl_pqc_verify(
@@ -175,28 +178,6 @@ uint8_t shekyl_pqc_verify(
     size_t message_len);
 
 /// Verify a hybrid PQC signature with optional group ID binding.
-/// Same error codes as shekyl_pqc_verify (0=success, 1-11=PqcVerifyError).
-/// For scheme_id=2, passes expected_group_id to verify_multisig for
-/// defense-in-depth group binding (PQC_MULTISIG.md SS16.3).
-/// expected_group_id: 32 bytes, or NULL to skip group ID check.
-uint8_t shekyl_pqc_verify_with_group_id(
-    uint8_t scheme_id,
-    const uint8_t* pubkey_blob,
-    size_t pubkey_len,
-    const uint8_t* sig_blob,
-    size_t sig_len,
-    const uint8_t* message,
-    size_t message_len,
-    const uint8_t* expected_group_id);
-
-/// Compute a deterministic group ID from a sorted set of participant keys.
-/// keys_ptr: concatenated public key blobs, keys_len total bytes.
-/// out_ptr: 32 writable bytes for the group ID hash.
-bool shekyl_pqc_multisig_group_id(
-    const uint8_t* keys_ptr,
-    size_t keys_len,
-    uint8_t* out_ptr);
-
 /// Compute Keccak-256 hash of data_ptr[0..data_len].
 /// out_ptr: 32 writable bytes for the hash output.
 bool shekyl_cn_fast_hash(

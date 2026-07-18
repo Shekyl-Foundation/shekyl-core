@@ -9,7 +9,7 @@ use shekyl_crypto_pq::multisig::verify_multisig;
 
 fuzz_target!(|data: &[u8]| {
     if data.is_empty() {
-        let _ = verify_multisig(0, &[], &[], &[], None);
+        let _ = verify_multisig(0, &[], &[], &[]);
         return;
     }
 
@@ -17,7 +17,7 @@ fuzz_target!(|data: &[u8]| {
     let mut i = 1usize;
 
     if data.len() < i + 2 {
-        let _ = verify_multisig(scheme_id, &[], &[], &data[i..], None);
+        let _ = verify_multisig(scheme_id, &[], &[], &data[i..]);
         return;
     }
 
@@ -30,7 +30,7 @@ fuzz_target!(|data: &[u8]| {
     i += key_take;
 
     if data.len() < i + 2 {
-        let _ = verify_multisig(scheme_id, key_blob, &[], &data[i..], None);
+        let _ = verify_multisig(scheme_id, key_blob, &[], &data[i..]);
         return;
     }
 
@@ -42,15 +42,6 @@ fuzz_target!(|data: &[u8]| {
     let sig_blob = &data[i..i + sig_take];
     i += sig_take;
 
-    let tail = &data[i..];
-
-    if tail.len() >= 32 {
-        let msg_len = tail.len() - 32;
-        let message = &tail[..msg_len];
-        let mut group_id = [0u8; 32];
-        group_id.copy_from_slice(&tail[msg_len..]);
-        let _ = verify_multisig(scheme_id, key_blob, sig_blob, message, Some(&group_id));
-    } else {
-        let _ = verify_multisig(scheme_id, key_blob, sig_blob, tail, None);
-    }
+    let message = &data[i..];
+    let _ = verify_multisig(scheme_id, key_blob, sig_blob, message);
 });

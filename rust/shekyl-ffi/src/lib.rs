@@ -443,19 +443,20 @@ pub extern "C" fn shekyl_pqc_canonical_lens() -> ShekylPqcCanonicalLens {
 
 /// Verify a PQC-authenticated message.
 ///
-/// Returns 0 on success, or a nonzero `PqcVerifyError` discriminant (1-11) on failure:
+/// Returns 0 on success, or a nonzero `PqcVerifyError` discriminant on failure:
 ///   1=SchemeMismatch, 2=ParameterBounds, 3=KeyBlobLength, 4=SigBlobLength,
 ///   5=ThresholdMismatch, 6=IndexOutOfRange, 7=IndicesNotAscending, 8=DuplicateKeys,
-///   9=GroupIdMismatch, 10=CryptoVerifyFailed, 11=DeserializationFailed
+///   10=CryptoVerifyFailed, 11=DeserializationFailed
+///   (code 9 is retired — the group_id check was removed under E′.)
 ///
 /// `scheme_id = 1`: single-signer hybrid Ed25519 + ML-DSA-65.
 /// `scheme_id = 2`: M-of-N multisig over hybrid keys.
 ///
 /// For scheme_id 1, `pubkey_blob` and `sig_blob` are single canonical encodings.
 /// For scheme_id 2, `pubkey_blob` is a MultisigKeyContainer and `sig_blob` is a
-/// MultisigSigContainer in canonical encoding. Group ID is not checked here;
-/// callers performing consensus verification should compute it separately via
-/// `shekyl_pqc_multisig_group_id` and compare against the expected value.
+/// MultisigSigContainer in canonical encoding. Group ID is **not** checked: under
+/// E′ the group's identity is the address fingerprint (`shekyl-address`), not a
+/// per-output container hash, so there is nothing sound for the daemon to compare.
 #[no_mangle]
 pub extern "C" fn shekyl_pqc_verify(
     scheme_id: u8,
@@ -492,107 +493,13 @@ pub extern "C" fn shekyl_pqc_verify(
         }
         2 => {
             use shekyl_crypto_pq::multisig::verify_multisig;
-            match verify_multisig(scheme_id, pk_bytes, sig_bytes, msg, None) {
+            match verify_multisig(scheme_id, pk_bytes, sig_bytes, msg) {
                 Ok(true) => 0,
                 Ok(false) => 10, // CryptoVerifyFailed
                 Err(e) => e as u8,
             }
         }
         _ => 1, // SchemeMismatch
-    }
-}
-
-/// Verify a PQC-authenticated message with optional group ID binding.
-///
-/// Same error codes as `shekyl_pqc_verify` (0=success, 1-11=PqcVerifyError).
-/// For `scheme_id = 2`, passes `expected_group_id` to `verify_multisig` for
-/// defense-in-depth group binding (PQC_MULTISIG.md SS16.3).
-///
-/// `expected_group_id_ptr`: pointer to 32 bytes of expected group ID, or null to skip.
-#[no_mangle]
-pub extern "C" fn shekyl_pqc_verify_with_group_id(
-    scheme_id: u8,
-    pubkey_blob: *const u8,
-    pubkey_len: usize,
-    sig_blob: *const u8,
-    sig_len: usize,
-    message: *const u8,
-    message_len: usize,
-    expected_group_id_ptr: *const u8,
-) -> u8 {
-    let Some(pk_bytes) = (unsafe { slice_from_ptr(pubkey_blob, pubkey_len) }) else {
-        return 11; // DeserializationFailed
-    };
-    let Some(msg) = (unsafe { slice_from_ptr(message, message_len) }) else {
-        return 11;
-    };
-    let Some(sig_bytes) = (unsafe { slice_from_ptr(sig_blob, sig_len) }) else {
-        return 11;
-    };
-
-    match scheme_id {
-        1 => {
-            let scheme = HybridEd25519MlDsa;
-            let Ok(pk) = HybridPublicKey::from_canonical_bytes(pk_bytes) else {
-                return 11;
-            };
-            let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
-                return 11;
-            };
-            match scheme.verify(&pk, msg, &sig) {
-                Ok(true) => 0,
-                Ok(false) | Err(_) => 10, // CryptoVerifyFailed
-            }
-        }
-        2 => {
-            use shekyl_crypto_pq::multisig::verify_multisig;
-            let group_id: Option<&[u8; 32]> = if expected_group_id_ptr.is_null() {
-                None
-            } else {
-                unsafe { slice_from_ptr(expected_group_id_ptr, 32) }
-                    .and_then(|s| <&[u8; 32]>::try_from(s).ok())
-            };
-            match verify_multisig(scheme_id, pk_bytes, sig_bytes, msg, group_id) {
-                Ok(true) => 0,
-                Ok(false) => 10, // CryptoVerifyFailed
-                Err(e) => e as u8,
-            }
-        }
-        _ => 1, // SchemeMismatch
-    }
-}
-
-/// Compute the deterministic group_id for a MultisigKeyContainer blob.
-///
-/// Writes 32 bytes to `out_ptr`. Returns true on success.
-///
-/// # Safety
-/// Caller must ensure all pointer arguments are valid or null.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_pqc_multisig_group_id(
-    keys_ptr: *const u8,
-    keys_len: usize,
-    out_ptr: *mut u8,
-) -> bool {
-    if out_ptr.is_null() {
-        return false;
-    }
-    let Some(keys_bytes) = (unsafe { slice_from_ptr(keys_ptr, keys_len) }) else {
-        return false;
-    };
-
-    use shekyl_crypto_pq::multisig::{multisig_group_id, MultisigKeyContainer};
-
-    let Ok(container) = MultisigKeyContainer::from_canonical_bytes(keys_bytes) else {
-        return false;
-    };
-
-    match multisig_group_id(&container) {
-        Ok(id) => {
-            std::ptr::copy_nonoverlapping(id.as_ptr(), out_ptr, 32);
-            true
-        }
-        Err(_) => false,
     }
 }
 
