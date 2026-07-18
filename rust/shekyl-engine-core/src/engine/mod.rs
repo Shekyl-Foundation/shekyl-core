@@ -219,6 +219,22 @@ pub(crate) mod claim_dispatch;
 pub(crate) mod claim_orchestrator;
 pub mod daemon;
 pub(crate) mod diagnostics;
+/// F-D1 amount stage (`ARCHIVAL_FIREWALL_GATE6.md` §12.3): the drain amount
+/// is chosen from `{user target, cadence, RNG}` and an aggregate-scalar
+/// affordability check only — a guarded module the M1 import-check arm keeps
+/// blind to the per-output reward vector.
+pub(crate) mod drain_amount;
+/// F-D1 projection / drain trust boundary (`ARCHIVAL_FIREWALL_GATE6.md`
+/// §12.3): the sole drain-path site holding `PScanState.funding_outputs`,
+/// projecting the records into the aggregate scalar + stripped candidate
+/// operands the guarded stages consume. Carries the F-D2 core-side
+/// aggregate-only balance surface.
+pub(crate) mod drain_orchestrator;
+/// F-D1 select stage (`ARCHIVAL_FIREWALL_GATE6.md` §12.3): lineage-blind coin
+/// selection over the stripped `{output_id, amount, spendable_height}`
+/// vector — a guarded module the M1 import-check arm keeps blind to the
+/// lineage tag and the persisted funding record.
+pub(crate) mod drain_select;
 /// SP-T2 (DQ-T2.3): daemon-posture selection — the no-silent-③ invariant (a
 /// posture is named, never defaulted; no-choice + local-unreachable *refuses*,
 /// never falls back to a remote/third-party node). §2b build invariant 3.
