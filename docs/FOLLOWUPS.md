@@ -2038,6 +2038,18 @@ sustainability is unaffected by the recalibration.
     are deliberately chosen so this GC needs **no second `STAKING_BLOCK_VERSION`
     bump**. **Reopen when** persona scanning lands (the reconcile needs personas
     derived first — chicken-and-egg forces it post-derive, hence 2d not 2c-2).
+    **Reopen-trigger corrected (2026-07-18, SP-R0 §0 F-1):** "persona scanning lands" is
+    now true only in the code-exists sense — nothing in production sets `staking_enabled`,
+    so a GC landed on that trigger would freeze non-firing. This item is **SP-R0 arm #3**
+    ([`ARCHIVAL_BOND_SP_R0_PLAN.md`](design/ARCHIVAL_BOND_SP_R0_PLAN.md) §3; its phantom
+    domain includes activation-time crashes, DQ-C), sequenced **right behind** the
+    staker-activation round
+    ([`ARCHIVAL_STAKE_ACTIVATION_PLAN.md`](design/ARCHIVAL_STAKE_ACTIVATION_PLAN.md)) and
+    closed per the DQ-F split (precisified 2026-07-18): **logic-discharge** via the CI
+    fire harness on the production code path (CI observes a real phantom collected — the
+    fixture is the activation-induced persist-then-no-broadcast crash, co-designed with
+    SA-DQ-3); **production-firing** gated on the activation round (#332). A bare
+    "discharged" is forbidden (DQ-F Guard 2).
     **Target: V3.0** (must land before genesis freezes the absence of GC).
   - **Broadcast / re-anchor wiring activates the CT-5d persona-pin.** The CT-5d
     finding (persona signature binds `tx_prefix_hash`, not the proof, so a
@@ -8384,18 +8396,34 @@ one place to confirm each item's relationship to the wallet stack.
   invariant is *principal = empty, `P` = non-empty*. **Target:** V3.x (with the 2d-2 transport
   build). See [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md)
   §11 / §13(b).
-- **2d-2 SP-R0 — reconcile GC of phantom `bonded_slots`/`p_slot` over the per-`P` transport (gated
-  on SP-6).** Half (B) of 2d-2: consume the `P`-scan reconcile set to garbage-collect archival
-  state no longer on chain. **Gate:** cannot land until 2d-1 **SP-6** (`PReconcileSet`) exists —
-  downstream of PR-B; SP-6 is unbuilt (0 files on dev, 2026-06-28). **Rule (load-bearing — travels
+- **2d-2 SP-R0 — reconcile GC of phantom `bonded_slots`/`p_slot` over the per-`P` transport
+  (SP-R0 arm #2; SP-6 gate CLEARED).** Half (B) of 2d-2: consume the `P`-scan reconcile set to
+  garbage-collect archival state no longer on chain. **Gate update (2026-07-18):** the "SP-6 is
+  unbuilt (0 files on dev, 2026-06-28)" clause went stale the next day — SP-6 landed 2026-06-29
+  (`PReconcileSet`, `pscan/reconcile.rs:67`; `82870235b` + PR #211). SP-R0 **Round 0 is ratified**
+  (2026-07-18, [`ARCHIVAL_BOND_SP_R0_PLAN.md`](design/ARCHIVAL_BOND_SP_R0_PLAN.md), DQ-A…F): this
+  item is **arm #2** (needs the canonicity token as corroboration, DQ-D), sequenced behind the
+  staker-activation round
+  ([`ARCHIVAL_STAKE_ACTIVATION_PLAN.md`](design/ARCHIVAL_STAKE_ACTIVATION_PLAN.md)) per DQ-C, and
+  closes per the DQ-F split (precisified 2026-07-18): **logic-discharge** via the CI fire
+  harness on the production code path (CI observes the GC fire — a real phantom collected);
+  **production-firing** gated on the activation round (#332). A bare "discharged" is
+  forbidden (DQ-F Guard 2).
+  **Rule (load-bearing — travels
   with the item):** GC **only** on *confirmed-absence within `covered`* (the range the reconcile set
   can vouch for), **never** on absence-from-one-source — the SP-6 "absence ≠ unscanned" discipline;
-  an over-eager GC against a partial/withholding source drops live state. **Target:** V3.x (after
-  SP-6). See [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §12
+  an over-eager GC against a partial/withholding source drops live state. **Target:** V3.x. See
+  [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md) §12
   (SP-R0) / §16 and [`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`](design/ARCHIVAL_BOND_2D1_PSCAN_PLAN.md)
   SP-6/SP-7.
 - **2d-1 WI-2 — durable removal of SPENT funding outputs from `PScanState::funding_outputs`
-  (SP-R0-adjacent, gated on SP-6).** `PScanAccrual::ingest` only ever *extends* `funding_outputs`;
+  (SP-R0 **arm #1** — ratified 2026-07-18, not SP-6-gated: the ratified detection is a
+  key-image watch pruning at ingest, no `PReconcileSet` consumption and no state-version
+  bump; disposition D-1(a) durable prune, D-2 watch mechanism, DQ-A containment —
+  [`ARCHIVAL_BOND_SP_R0_PLAN.md`](design/ARCHIVAL_BOND_SP_R0_PLAN.md) §4/§5; may land
+  **logic-discharged** in parallel with the activation round per the DQ-F split — CI fire
+  harness on the production code path, no `for_test()` on the path under test (Guard 1);
+  **production-firing** gated on #332; status lines state which discharge (Guard 2)).** `PScanAccrual::ingest` only ever *extends* `funding_outputs`;
   nothing removes an output once a confirmed bond post spends it. `select_funding_outputs` excludes
   only the *transiently-reserved* set (a live pending post's `funding_gindexes`), so once a post
   confirms and its pending record clears, the spent output is un-reserved **and** still present — a
