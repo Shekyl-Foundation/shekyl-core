@@ -45,13 +45,35 @@ use crate::network::{self, Network};
 /// Current address version byte.
 pub const ADDRESS_VERSION_V1: u8 = 0x01;
 
+/// Ed25519 public key size; the classical payload carries a spend key and a
+/// view key back to back.
+const PUBKEY_LEN: usize = 32;
+
 /// Ed25519 spend + view key total size.
-pub const CLASSICAL_PAYLOAD_LEN: usize = 64;
+pub const CLASSICAL_PAYLOAD_LEN: usize = 2 * PUBKEY_LEN;
 
 /// Length of the ek-binding tag carried in the full-address classical segment
 /// (a domain-separated cSHAKE256 commitment to the ML-KEM encapsulation key,
 /// truncated). See the module docs for the threat model and why 16 bytes.
 pub const EK_BIND_TAG_LEN: usize = 16;
+
+// Classical-segment byte layout: `version || spend || view || [ek_bind_tag]`.
+// Every offset and segment length is derived from the field sizes, so decode
+// slicing never hard-codes a literal offset that could drift if the layout
+// changes again.
+/// Address version prefix length (one byte, `ADDRESS_VERSION_V1`).
+const VERSION_LEN: usize = 1;
+/// Offset of the spend key (immediately after the version prefix).
+const SPEND_OFFSET: usize = VERSION_LEN;
+/// Offset of the view key.
+const VIEW_OFFSET: usize = SPEND_OFFSET + PUBKEY_LEN;
+/// Length of the display/view-only classical segment (`version || spend ||
+/// view`); also the offset at which the `ek_bind_tag` begins in the full form.
+const CLASSICAL_SEGMENT_LEN: usize = VIEW_OFFSET + PUBKEY_LEN;
+/// Length of the full-address classical segment (adds the `ek_bind_tag`).
+const CLASSICAL_BOUND_SEGMENT_LEN: usize = CLASSICAL_SEGMENT_LEN + EK_BIND_TAG_LEN;
+/// The offset-derived layout must agree with the exported payload length.
+const _: () = assert!(CLASSICAL_SEGMENT_LEN == VERSION_LEN + CLASSICAL_PAYLOAD_LEN);
 
 /// Domain separator for the ek-binding tag. Genesis-frozen: a preimage change
 /// is a new domain (`-v2`), never a silent reinterpretation. Not a consensus
@@ -84,12 +106,7 @@ const MAX_CLASSICAL_HRP_LEN: usize = 7;
 // past what its segment can safely carry — the wall a KAT would otherwise find.
 const _: () = assert!(bech32m_char_len(PQC_SPLIT, MAX_PQC_HRP_LEN) < 1023);
 const _: () = assert!(bech32m_char_len(PQC_PAYLOAD_LEN - PQC_SPLIT, MAX_PQC_HRP_LEN) < 1023);
-const _: () = assert!(
-    bech32m_char_len(
-        1 + CLASSICAL_PAYLOAD_LEN + EK_BIND_TAG_LEN,
-        MAX_CLASSICAL_HRP_LEN
-    ) < 1023
-);
+const _: () = assert!(bech32m_char_len(CLASSICAL_BOUND_SEGMENT_LEN, MAX_CLASSICAL_HRP_LEN) < 1023);
 
 /// Separator between segments.
 pub const SEGMENT_SEPARATOR: char = '/';
@@ -221,7 +238,7 @@ impl ShekylAddress {
 
     fn encode_classical(&self) -> Result<String, AddressError> {
         let hrp = parse_hrp(network::classical_hrp(self.network))?;
-        let mut payload = Vec::with_capacity(1 + CLASSICAL_PAYLOAD_LEN);
+        let mut payload = Vec::with_capacity(CLASSICAL_SEGMENT_LEN);
         payload.push(self.version);
         payload.extend_from_slice(&self.spend_key);
         payload.extend_from_slice(&self.view_key);
@@ -232,7 +249,7 @@ impl ShekylAddress {
     /// ek_bind_tag`. Caller must have validated `ml_kem_encap_key`'s length.
     fn encode_classical_bound(&self) -> Result<String, AddressError> {
         let hrp = parse_hrp(network::classical_hrp(self.network))?;
-        let mut payload = Vec::with_capacity(1 + CLASSICAL_PAYLOAD_LEN + EK_BIND_TAG_LEN);
+        let mut payload = Vec::with_capacity(CLASSICAL_BOUND_SEGMENT_LEN);
         payload.push(self.version);
         payload.extend_from_slice(&self.spend_key);
         payload.extend_from_slice(&self.view_key);
@@ -291,11 +308,10 @@ impl ShekylAddress {
         }
 
         // Full-address classical segment is `version || spend || view || tag`.
-        let expected_classical_len = 1 + CLASSICAL_PAYLOAD_LEN + EK_BIND_TAG_LEN;
-        if c_data.len() != expected_classical_len {
+        if c_data.len() != CLASSICAL_BOUND_SEGMENT_LEN {
             return Err(AddressError::BadLength {
                 segment: "classical",
-                expected: expected_classical_len,
+                expected: CLASSICAL_BOUND_SEGMENT_LEN,
                 got: c_data.len(),
             });
         }
@@ -305,11 +321,11 @@ impl ShekylAddress {
             return Err(AddressError::UnsupportedVersion { version });
         }
 
-        let mut spend_key = [0u8; 32];
-        let mut view_key = [0u8; 32];
-        spend_key.copy_from_slice(&c_data[1..33]);
-        view_key.copy_from_slice(&c_data[33..65]);
-        let carried_tag = &c_data[65..65 + EK_BIND_TAG_LEN];
+        let mut spend_key = [0u8; PUBKEY_LEN];
+        let mut view_key = [0u8; PUBKEY_LEN];
+        spend_key.copy_from_slice(&c_data[SPEND_OFFSET..VIEW_OFFSET]);
+        view_key.copy_from_slice(&c_data[VIEW_OFFSET..CLASSICAL_SEGMENT_LEN]);
+        let carried_tag = &c_data[CLASSICAL_SEGMENT_LEN..CLASSICAL_BOUND_SEGMENT_LEN];
 
         let mut ml_kem_encap_key = Vec::with_capacity(PQC_PAYLOAD_LEN);
         ml_kem_encap_key.extend_from_slice(&a_data);
@@ -345,11 +361,10 @@ impl ShekylAddress {
         let net = network::network_from_hrp(&c_hrp.to_string())
             .ok_or_else(|| AddressError::UnknownHrp(c_hrp.to_string()))?;
 
-        let expected_len = 1 + CLASSICAL_PAYLOAD_LEN;
-        if c_data.len() != expected_len {
+        if c_data.len() != CLASSICAL_SEGMENT_LEN {
             return Err(AddressError::BadLength {
                 segment: "classical",
-                expected: expected_len,
+                expected: CLASSICAL_SEGMENT_LEN,
                 got: c_data.len(),
             });
         }
@@ -359,10 +374,10 @@ impl ShekylAddress {
             return Err(AddressError::UnsupportedVersion { version });
         }
 
-        let mut spend_key = [0u8; 32];
-        let mut view_key = [0u8; 32];
-        spend_key.copy_from_slice(&c_data[1..33]);
-        view_key.copy_from_slice(&c_data[33..65]);
+        let mut spend_key = [0u8; PUBKEY_LEN];
+        let mut view_key = [0u8; PUBKEY_LEN];
+        spend_key.copy_from_slice(&c_data[SPEND_OFFSET..VIEW_OFFSET]);
+        view_key.copy_from_slice(&c_data[VIEW_OFFSET..CLASSICAL_SEGMENT_LEN]);
 
         Ok(ShekylAddress {
             network: net,
