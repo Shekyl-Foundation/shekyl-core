@@ -65,8 +65,11 @@ pub(crate) enum DrainAmountError {
 /// Choose the drain amount from the request and the aggregate scalar.
 ///
 /// `affordable` is the **aggregate spendable total** (one scalar); it is read
-/// for the affordability check only. Skeleton (F-D1 M1 arm lands first — real
-/// logic in the next commit).
+/// for the affordability check (`target <= affordable`) **only**, never as a
+/// computation input — so the returned amount is provably not any subsum of
+/// the reward sequence (§12.3). The `{cadence, RNG}` shaping the pin lists
+/// alongside the target is the F-D2 round-number / random-split UI default
+/// that *produces* `target`; it lives in `shekyl-gui-wallet`, not here.
 pub(crate) fn choose_drain_amount(
     request: DrainRequest,
     affordable: AtomicUnits,
@@ -125,7 +128,7 @@ mod tests {
     }
 
     #[test]
-    fn skeleton_affordability_and_empty_guards() {
+    fn amount_stage_affordability_and_empty_guards() {
         let ten = shekyl_units::AtomicUnits::from_raw(10);
         let zero = shekyl_units::AtomicUnits::from_raw(0);
         assert_eq!(

@@ -79,23 +79,68 @@ pub(crate) enum DrainSelectError {
 /// Select a lineage-blind set of mature candidates whose amounts cover
 /// `amount`.
 ///
-/// Skeleton (F-D1 M1 arm lands first — real logic in the next commit).
+/// Selection reads only `{amount, spendable_height}` off each candidate:
+/// mature candidates (`spendable_height <= reference_height`) are taken
+/// largest-first — a deterministic, lineage-blind policy that minimises the
+/// input count — until their running total reaches the drain amount. The
+/// maturity filter is defensive: the projection already hands in the mature
+/// subset, but re-checking keeps this stage correct for any candidate slice.
 pub(crate) fn select_for_drain(
-    _candidates: &[DrainCandidate],
-    _amount: DrainAmount,
-    _reference_height: BlockHeight,
+    candidates: &[DrainCandidate],
+    amount: DrainAmount,
+    reference_height: BlockHeight,
 ) -> Result<DrainSelection, DrainSelectError> {
-    Err(DrainSelectError::Insufficient)
+    let target = amount.get().to_raw();
+
+    let mut mature: Vec<&DrainCandidate> = candidates
+        .iter()
+        .filter(|c| c.spendable_height <= reference_height)
+        .collect();
+    // Largest-first: deterministic and lineage-blind (orders on amount only),
+    // and minimises the number of inputs the drain consumes.
+    mature.sort_by(|a, b| b.amount.to_raw().cmp(&a.amount.to_raw()));
+
+    let mut chosen = Vec::new();
+    let mut input_total = AtomicUnits::from_raw(0);
+    for candidate in mature {
+        if input_total.to_raw() >= target {
+            break;
+        }
+        chosen.push(candidate.output_id);
+        input_total = input_total
+            .checked_add(candidate.amount)
+            .ok_or(DrainSelectError::Overflow)?;
+    }
+
+    if input_total.to_raw() < target {
+        return Err(DrainSelectError::Insufficient);
+    }
+
+    Ok(DrainSelection {
+        chosen,
+        input_total,
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::engine::drain_amount::{choose_drain_amount, DrainRequest};
+
+    fn candidate(output_id: u64, amount: u64, spendable_height: u64) -> DrainCandidate {
+        DrainCandidate {
+            output_id: GlobalOutputIndex::from_raw(output_id),
+            amount: AtomicUnits::from_raw(amount),
+            spendable_height: BlockHeight::from_raw(spendable_height),
+        }
+    }
+
     /// F-D1 M1 arm (import-check). The guarded select stage must never name
     /// the persisted funding-output record or its mint-lineage rung tag: the
-    /// stripped [`super::DrainCandidate`] is the only per-output view it may
-    /// read. A reappearance of either type identifier reopens the
-    /// decomposition surface §12.3 closes. The forbidden identifiers are
-    /// assembled with `concat!` so this assertion never self-matches.
+    /// stripped [`DrainCandidate`] is the only per-output view it may read. A
+    /// reappearance of either type identifier reopens the decomposition
+    /// surface §12.3 closes. The forbidden identifiers are assembled with
+    /// `concat!` so this assertion never self-matches.
     #[test]
     fn fd1_arm_select_stage_names_no_lineage_type() {
         let src = include_str!("drain_select.rs")
@@ -114,5 +159,60 @@ mod tests {
             "F-D1 carve breached: select stage names the mint-lineage rung tag \
              (drain selection is lineage-blind; §12.3)"
         );
+    }
+
+    fn amount(raw: u64, affordable: u64) -> DrainAmount {
+        choose_drain_amount(
+            DrainRequest {
+                target: AtomicUnits::from_raw(raw),
+            },
+            AtomicUnits::from_raw(affordable),
+        )
+        .expect("affordable")
+    }
+
+    #[test]
+    fn single_largest_output_covers() {
+        let candidates = [
+            candidate(1, 5, 10),
+            candidate(2, 100, 10),
+            candidate(3, 7, 10),
+        ];
+        let sel = select_for_drain(&candidates, amount(90, 112), BlockHeight::from_raw(10))
+            .expect("covers");
+        assert_eq!(sel.chosen, vec![GlobalOutputIndex::from_raw(2)]);
+        assert_eq!(sel.input_total, AtomicUnits::from_raw(100));
+    }
+
+    #[test]
+    fn accumulates_largest_first_until_covered() {
+        let candidates = [
+            candidate(1, 40, 10),
+            candidate(2, 40, 10),
+            candidate(3, 40, 10),
+        ];
+        let sel = select_for_drain(&candidates, amount(70, 120), BlockHeight::from_raw(10))
+            .expect("covers");
+        // Two 40s cover 70; the third is not consumed.
+        assert_eq!(sel.chosen.len(), 2);
+        assert_eq!(sel.input_total, AtomicUnits::from_raw(80));
+    }
+
+    #[test]
+    fn immature_outputs_are_not_selected() {
+        // Only the immature output could cover; selection must refuse.
+        let candidates = [candidate(1, 10, 10), candidate(2, 1000, 999)];
+        let err = select_for_drain(&candidates, amount(500, 1010), BlockHeight::from_raw(10))
+            .expect_err("immature excluded");
+        assert_eq!(err, DrainSelectError::Insufficient);
+    }
+
+    #[test]
+    fn insufficient_mature_total_refuses() {
+        let candidates = [candidate(1, 10, 10), candidate(2, 20, 10)];
+        let err = select_for_drain(&candidates, amount(31, 31), BlockHeight::from_raw(10));
+        // 31 > affordable 31? affordable is 31, target 31 ok at amount stage,
+        // but mature total is 30 < 31 → select refuses.
+        assert_eq!(err, Err(DrainSelectError::Insufficient));
     }
 }

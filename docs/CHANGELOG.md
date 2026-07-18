@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+### Added
+
+- **fcmp: F-D1 drain-amount taint-carve BUILT (`ARCHIVAL_FIREWALL_GATE6.md`
+  §12.3) + F-D2 core-side aggregate-only surface (§12.4).** The `P`→principal
+  value-out (drain) path lands in `shekyl-engine-core/src/engine/` as three
+  modules mirroring the three stages of the (a)+strip encoding:
+  `drain_orchestrator.rs` is the **single trust boundary** — the only drain-path
+  site that names `PFundingOutputRecord` / reads `MintLineageOutput`; it projects
+  the funding records into an aggregate spendable scalar (`DrainBalance`, the
+  F-D2 core-side surface) and a stripped `{output_id, amount, spendable_height}`
+  candidate vector, dropping `{lineage, epoch, height}` so no reward-sequence
+  decomposition survives. `drain_amount.rs` consults the scalar for an
+  **affordability check only** (`target ≤ affordable`), never as a computation
+  input, so the chosen amount is provably not any reward subsum.
+  `drain_select.rs` does lineage-blind largest-first coin selection over the
+  stripped vector. `plan_drain` composes the three; it takes a single scalar
+  `target`, so a UI on this surface structurally cannot pre-fill a reward-shaped
+  decomposition. The **M1 import-check arm** was landed on a skeleton first, a
+  deliberately-wrong `MintLineageOutput` import was proven to fail it (exit 101)
+  and reverted, then the real logic went in against the armed gate — the arm now
+  runs as `fd1_arm_*` unit tests (CI-enforced) that grep each guarded module's
+  own source and refuse if it names a forbidden type.
+  **F-D2's `shekyl-gui-wallet` round-number/random-split default is a second repo
+  and is NOT landed** — F-D2 is not recorded as landed until that flow is built;
+  Gate-6 R4 stays open on the F-D2 GUI default only.
+
 ### Changed
 
 - **docs: F-D5 disposition round RAN — the structural-derivation attempt

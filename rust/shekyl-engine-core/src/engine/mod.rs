@@ -225,11 +225,13 @@ pub(crate) mod diagnostics;
 /// blind to the per-output reward vector.
 pub(crate) mod drain_amount;
 /// F-D1 projection / drain trust boundary (`ARCHIVAL_FIREWALL_GATE6.md`
-/// §12.3): the sole drain-path site holding `PScanState.funding_outputs`,
-/// projecting the records into the aggregate scalar + stripped candidate
-/// operands the guarded stages consume. Carries the F-D2 core-side
-/// aggregate-only balance surface.
-pub(crate) mod drain_orchestrator;
+/// §12.3): the sole drain-path site holding the funding records, projecting
+/// them into the aggregate scalar + stripped candidate operands the guarded
+/// stages consume, and composing the three stages ([`drain_orchestrator::plan_drain`]).
+/// Carries the F-D2 core-side aggregate-only balance surface
+/// ([`drain_orchestrator::DrainBalance`]). Public: the drain planner is the
+/// API the eventual drain command/actor calls.
+pub mod drain_orchestrator;
 /// F-D1 select stage (`ARCHIVAL_FIREWALL_GATE6.md` §12.3): lineage-blind coin
 /// selection over the stripped `{output_id, amount, spendable_height}`
 /// vector — a guarded module the M1 import-check arm keeps blind to the
