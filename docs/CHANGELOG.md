@@ -24,9 +24,16 @@
   and reverted, then the real logic went in against the armed gate — the arm now
   runs as `fd1_arm_*` unit tests (CI-enforced) that grep each guarded module's
   own source and refuse if it names a forbidden type.
-  **F-D2's `shekyl-gui-wallet` round-number/random-split default is a second repo
-  and is NOT landed** — F-D2 is not recorded as landed until that flow is built;
-  Gate-6 R4 stays open on the F-D2 GUI default only.
+  `plan_drain` lands as a correctly-carved planner with **no data source and no
+  consumer yet** — reachable API, not yet load-bearing. **F-D2's remaining half is
+  NOT a pending UI default and NOT gated on RPC**: the GUI (`shekyl-gui-wallet`) is
+  a Tauri app that links the engine crates in-process and would call `plan_drain`
+  directly from a `#[tauri::command]` handler; `shekyl-engine-rpc` is an FFI
+  library, not a wallet-RPC server. What is unbuilt is a whole `P`-value-out
+  (drain-send) subsystem — a `P`-scan data source (`PScanState.funding_outputs`)
+  feeding the planner, a drain tx assemble→sign→broadcast path, and the
+  round-number/random-split default on top. F-D2 is not recorded as landed until
+  that subsystem exists; Gate-6 R4 stays open on it.
 
 ### Changed
 
