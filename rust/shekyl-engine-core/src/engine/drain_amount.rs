@@ -104,10 +104,15 @@ mod tests {
     /// never self-matches.
     #[test]
     fn fd1_arm_amount_stage_reads_scalar_not_vector() {
-        let src = include_str!("drain_amount.rs")
-            .split("\n#[cfg(test)]\nmod tests {")
-            .next()
-            .expect("drain_amount.rs has a production section");
+        // Split on the `#[cfg(test)]` boundary only — not the full
+        // `mod tests {` line — so a reformat of the test-module declaration
+        // (extra attributes, a `mod tests;` file split, whitespace) can't
+        // silently fold the test section into the scanned text. `split_once` +
+        // `expect` fails loudly if that boundary is ever absent, rather than
+        // the old `.split(..).next()` defaulting to the whole file.
+        let (src, _tests) = include_str!("drain_amount.rs")
+            .split_once("\n#[cfg(test)]")
+            .expect("drain_amount.rs has a #[cfg(test)] section to exclude from the scan");
         // Assert the scalar carve on the `choose_drain_amount` *signature*, not
         // merely somewhere in the file: the module doc also names `affordable:
         // AtomicUnits`, so a whole-file `contains` would still pass if the real

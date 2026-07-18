@@ -165,10 +165,15 @@ mod tests {
     /// `concat!` so this assertion never self-matches.
     #[test]
     fn fd1_arm_select_stage_names_no_lineage_type() {
-        let src = include_str!("drain_select.rs")
-            .split("\n#[cfg(test)]\nmod tests {")
-            .next()
-            .expect("drain_select.rs has a production section");
+        // Split on the `#[cfg(test)]` boundary only — not the full
+        // `mod tests {` line — so a reformat of the test-module declaration
+        // (extra attributes, a `mod tests;` file split, whitespace) can't
+        // silently fold the test section into the scanned text. `split_once` +
+        // `expect` fails loudly if that boundary is ever absent, rather than
+        // the old `.split(..).next()` defaulting to the whole file.
+        let (src, _tests) = include_str!("drain_select.rs")
+            .split_once("\n#[cfg(test)]")
+            .expect("drain_select.rs has a #[cfg(test)] section to exclude from the scan");
         let record = concat!("PFundingOutput", "Record");
         let lineage = concat!("MintLineage", "Output");
         assert!(

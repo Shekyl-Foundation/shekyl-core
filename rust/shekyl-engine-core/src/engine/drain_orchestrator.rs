@@ -107,11 +107,18 @@ impl std::fmt::Debug for DrainPlan {
 }
 
 /// Why the drain planner could not produce a plan.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Public API (returned by [`plan_drain`] / [`drain_balance`]), so it carries
+/// `Display` + `std::error::Error` via `thiserror` — the same discipline as the
+/// other public engine errors (`PScanStartError`) — to compose with `?` and
+/// surface a human-readable reason up through a UI/logging boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum DrainError {
     /// The requested target was zero.
+    #[error("the requested drain amount is zero")]
     EmptyRequest,
     /// The requested target exceeds the aggregate spendable scalar.
+    #[error("the requested drain amount exceeds the spendable balance")]
     Unaffordable,
     /// The stripped candidate set could not cover the drain amount. **Not
     /// reachable through [`plan_drain`]**: the amount stage proves `target <=
@@ -120,10 +127,12 @@ pub enum DrainError {
     /// guarantees coverage. This variant exists for the standalone
     /// [`select_for_drain`] contract (a direct caller can hand it an amount
     /// exceeding its candidate sum); [`plan_drain`] maps it for totality only.
+    #[error("the spendable outputs cannot cover the drain amount")]
     InsufficientSpendable,
     /// Atomic-unit arithmetic overflowed while aggregating or computing
     /// change (structurally unreachable under the supply cap; a corrupt state
     /// otherwise).
+    #[error("atomic-unit arithmetic overflowed while planning the drain")]
     AmountOverflow,
 }
 
