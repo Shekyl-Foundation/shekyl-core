@@ -1131,7 +1131,7 @@ impl StakeEngine {
 /// `P`'s cleartext canonical id from its keys — `cSHAKE256` over the canonical
 /// `hybrid_bond_id` bytes, the same value an on-chain bond-post carries. `Err` if
 /// the hybrid key does not canonically encode (a corrupted resident key).
-fn persona_canonical_id(
+pub(crate) fn persona_canonical_id(
     keys: &ArchivalPKeys,
 ) -> Result<PCanonicalId, shekyl_crypto_pq::CryptoError> {
     let hybrid = keys.hybrid_bond_id().to_canonical_bytes()?;

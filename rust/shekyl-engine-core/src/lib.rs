@@ -82,7 +82,9 @@ pub mod __test_helpers {
     /// `not(test)`: the harness only exists in compilations where
     /// `#[cfg(test)]` constructors do not (Guard 1, structural).
     #[cfg(not(test))]
-    pub use crate::engine::pscan::arm1_fire::{run_arm1_fire, Arm1FireReport};
+    pub use crate::engine::pscan::arm1_fire::{
+        run_arm1_fire, run_arm3_fire, Arm1FireReport, Arm3FireReport,
+    };
 
     /// Turn an open [`Engine`] into a staker: persist a bond record for `slot`,
     /// which sets `staking_enabled` durably, so a subsequent reopen spawns the

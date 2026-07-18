@@ -358,7 +358,7 @@ impl<'a> EngineCreateParams<'a> {
 /// from a wallet file's network byte. Wallets that need Fakechain
 /// keys must construct their `AllKeysBlob` outside the lifecycle
 /// methods.
-fn network_to_derivation(network: Network) -> DerivationNetwork {
+pub(crate) fn network_to_derivation(network: Network) -> DerivationNetwork {
     match network {
         Network::Mainnet => DerivationNetwork::Mainnet,
         Network::Testnet => DerivationNetwork::Testnet,
@@ -733,7 +733,7 @@ impl Engine<SoloSigner> {
         keys: AllKeysBlob,
         master_seed: &[u8; MASTER_SEED_BYTES],
         seed_format: SeedFormat,
-        ledger: WalletLedger,
+        mut ledger: WalletLedger,
         indexes: LedgerIndexes,
         prefs: WalletPrefs,
         daemon: DaemonClient,
@@ -742,6 +742,86 @@ impl Engine<SoloSigner> {
         first_stake_intent: Option<PSlot>,
     ) -> Result<Self, OpenError> {
         let state_wrap_key = super::sealing_keys::state_wrap_key_from_wallet_file(&file);
+
+        // SP-R0 arm #3 — open-time phantom `bonded_slots` GC, BEFORE the
+        // persona derive (the `StakingBlock` hint design's own locus: the
+        // hint is reconciled where it is consumed). A phantom slot — durable
+        // record, no pending post, persona confirmed-absent over the sealed
+        // scan evidence — is dropped here, so a crashed activation (the
+        // SA-DQ-3 window, un-resumed) reopens as a clean non-staker instead
+        // of deriving and scanning a persona "for nothing". The drop is
+        // in-memory (persisted by the normal save discipline; a lost drop
+        // re-GCs at the next open — idempotent). Wrongful-GC safety rests on
+        // the pending-record bridge; see `reconcile_phantom_bonded_slots`.
+        if !ledger.staking.bonded_slots.is_empty() {
+            let sealed = file
+                .open_pscan_state(state_wrap_key.as_bytes())
+                .map_err(|e| {
+                    OpenError::Io(IoError::Scanner {
+                        detail: format!("arm-3 phantom GC: pscan seal read failed: {e}"),
+                    })
+                })?;
+            if let Some(bytes) = sealed {
+                let state =
+                    shekyl_engine_state::pscan_state::PScanState::from_postcard_bytes(&bytes)
+                        .map_err(|e| {
+                            OpenError::Io(IoError::Scanner {
+                                detail: format!("arm-3 phantom GC: pscan seal decode failed: {e}"),
+                            })
+                        })?;
+                let evidence =
+                    super::pscan::accrual::PScanAccrual::from_state(&state).reconcile_set();
+                let pending_slots: std::collections::BTreeSet<u32> = match file
+                    .open_pending_posts(state_wrap_key.as_bytes())
+                    .map_err(|e| OpenError::Io(IoError::Scanner {
+                        detail: format!("arm-3 phantom GC: pending seal read failed: {e}"),
+                    }))? {
+                    Some(bytes) => {
+                        shekyl_engine_state::pending_post_block::PendingPostBlock::from_postcard_bytes(&bytes)
+                            .map_err(|e| OpenError::Io(IoError::Scanner {
+                                detail: format!("arm-3 phantom GC: pending seal decode failed: {e}"),
+                            }))?
+                            .posts()
+                            .iter()
+                            .map(|p| p.p_slot.to_raw())
+                            .collect()
+                    }
+                    None => std::collections::BTreeSet::new(),
+                };
+                let derivation_network = network_to_derivation(network);
+                let sweep = super::stake_persist::reconcile_phantom_bonded_slots(
+                    &mut ledger.staking,
+                    &evidence,
+                    &pending_slots,
+                    |slot| -> Result<_, OpenError> {
+                        let keys = derive_archival_p_keys(
+                            master_seed,
+                            derivation_network,
+                            seed_format,
+                            slot,
+                        )
+                        .map_err(|e| {
+                            OpenError::Key(KeyError::Primitive {
+                                detail: rederivation_failure_detail(&e),
+                            })
+                        })?;
+                        super::stake_engine::persona_canonical_id(&keys).map_err(|_| {
+                            OpenError::Key(KeyError::Primitive {
+                                detail: "persona canonical id encode failed",
+                            })
+                        })
+                    },
+                )?;
+                if !sweep.dropped.is_empty() {
+                    tracing::info!(
+                        dropped = sweep.dropped.len(),
+                        staking_disabled = sweep.staking_disabled,
+                        "SP-R0 arm #3: phantom bonded_slots collected at open"
+                    );
+                }
+            }
+        }
+
         let prefs_hmac_key = shekyl_engine_prefs::PrefsHmacKey::derive(
             &file.opened_keys().file_kek,
             file.expected_classical_address(),

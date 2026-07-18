@@ -44,6 +44,9 @@
 //! consumer, so the producer carries `#[allow(dead_code)]`.
 
 use shekyl_engine_state::StakingBlock;
+use shekyl_types::{BlockHeight, PCanonicalId};
+
+use super::pscan::reconcile::PReconcileSet;
 
 use super::error::PersistenceError;
 use super::lifecycle::drive_persistence;
@@ -164,6 +167,83 @@ impl<
 
         Ok(PersistedBondTicket { p_slot: slot })
     }
+}
+
+/// What one open-time phantom sweep did (SP-R0 **arm #3**).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PhantomSlotSweep {
+    /// Slots dropped from `bonded_slots` (confirmed-absent, no pending post).
+    pub(crate) dropped: Vec<u32>,
+    /// Whether the sweep emptied `bonded_slots` and flipped
+    /// `staking_enabled` off (the wallet reverts to a non-staker).
+    pub(crate) staking_disabled: bool,
+}
+
+/// SP-R0 **arm #3** — the open-time phantom `bonded_slots` GC
+/// (`ARCHIVAL_BOND_SP_R0_PLAN.md` §3; FOLLOWUPS "2d full-scan reconciliation
+/// of `bonded_slots` / `p_slot`"). Runs at the derive-time locus the
+/// `StakingBlock` hint design anticipated: **before** the persona derive, so
+/// a phantom staker reopens as a clean non-staker (no actor, no scan, no
+/// derivation "for nothing").
+///
+/// A slot is phantom **iff** it has **no pending post** AND its persona is
+/// [`ReconcileVerdict::AbsentWithinCovered`] over the sealed scan evidence.
+/// The two conditions are jointly airtight against wrongful GC of a *real*
+/// bond (the stuck-funds failure this design forbids):
+///
+/// - pre-broadcast and pre-confirmation, the signed post sits durably in
+///   `.wallet.pending` — the pending guard skips it (W3);
+/// - post-confirmation but pre-scan-coverage, the pending record **still
+///   exists** — dispatch releases it only on the scan's own reorg-deep
+///   `BondPostMatch` (never on a daemon claim), so the pending record is the
+///   bridge across the scan lag; once released, the match is in the evidence
+///   and the verdict is `Present`.
+///
+/// `OutsideCovered` (nothing scanned / frontier at zero) keeps every slot —
+/// absence-≠-unscanned is [`PReconcileSet`]'s type-level gate. The `p_slot`
+/// cursor is **never lowered**: a dropped slot stays burned (the monotone
+/// no-reuse invariant, `StakingBlock::monotone_current_slot`).
+pub(crate) fn reconcile_phantom_bonded_slots<E>(
+    staking: &mut StakingBlock,
+    evidence: &PReconcileSet,
+    pending_slots: &std::collections::BTreeSet<u32>,
+    mut id_of_slot: impl FnMut(u32) -> Result<PCanonicalId, E>,
+) -> Result<PhantomSlotSweep, E> {
+    let covered_high = evidence.covered().high().to_raw();
+    if covered_high == 0 {
+        // Nothing exhaustively scanned: every verdict would be
+        // `OutsideCovered`; skip the walk entirely.
+        return Ok(PhantomSlotSweep {
+            dropped: Vec::new(),
+            staking_disabled: false,
+        });
+    }
+    let evidence_height = BlockHeight::from_raw(covered_high - 1);
+
+    let mut dropped = Vec::new();
+    for &slot in &staking.bonded_slots {
+        if pending_slots.contains(&slot) {
+            continue; // W3 / scan-lag bridge: a pending post is never phantom.
+        }
+        let id = id_of_slot(slot)?;
+        if matches!(
+            evidence.reconcile(id, evidence_height),
+            crate::engine::pscan::reconcile::ReconcileVerdict::AbsentWithinCovered
+        ) {
+            dropped.push(slot);
+        }
+    }
+    if !dropped.is_empty() {
+        staking.bonded_slots.retain(|s| !dropped.contains(s));
+    }
+    let staking_disabled = staking.bonded_slots.is_empty() && !dropped.is_empty();
+    if staking_disabled {
+        staking.staking_enabled = false;
+    }
+    Ok(PhantomSlotSweep {
+        dropped,
+        staking_disabled,
+    })
 }
 
 #[cfg(test)]
