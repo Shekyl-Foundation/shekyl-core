@@ -5,8 +5,9 @@
 the production path by which a wallet **becomes a staker**. It is the **genesis front** for the
 entire archival-`P` subsystem: nothing downstream runs in production until it lands.
 
-**Status:** ROUND 0 (scoping) + **ROUND 1 (per-SA-DQ design, §5 — source-grounded 2026-07-18)**
-— for review; no code. Rounds accrete in this one doc. **Process rule:**
+**Status:** ROUND 0 (scoping) + **ROUND 1 (per-SA-DQ design, §5 — source-grounded; SA-R1-a/c/d
+ratified, SA-R1-b ratified-with-crash-taxonomy, §5.7, 2026-07-18)** — for review; no code. Rounds
+accrete in this one doc. **Process rule:**
 [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) (the
 first-stake bootstrap derives persona key material — getting the derive boundary wrong is a
 privacy break, so the boundary is decided first). **Target: V3.0 pre-genesis** — it gates every
@@ -200,8 +201,11 @@ with the seed live**, in this order:
 ### 5.2 SA-DQ-2 — derive-equivalence (already structural)
 
 `derive_archival_p_keys` (`archival_p.rs:369`) is a **pure function** of `(seed, net, fmt, slot)`
-— no RNG/time/IO — **KAT-pinned byte-for-byte** (`ARCHIVAL_P_DERIVE_V1`; equality-across-calls
-asserted `kat_archival_p_derive_v1.rs:198`), and `spawn_stake_engine_if_staker` (`lifecycle.rs:934`)
+— no RNG/time/IO — **fixed-vector KAT-pinned** (`kat_archival_p_derive_v1_vectors`,
+`tests/kat_archival_p_derive_v1.rs:330`, a CI-run `#[test]`: derived output asserted `==`
+`expected.out_hex` per `(seed,net,fmt,slot)` at `:180`, over a corpus-hash-pinned `vectors.json`
+`:338-342`, with a `--ignored` regenerator — a real input→output KAT that catches an algorithm
+change, not just a determinism/property test), and `spawn_stake_engine_if_staker` (`lifecycle.rs:934`)
 is its **sole production caller**. So bootstrap-derive ≡ post-reopen-derive is guaranteed by
 construction. **Enforcement-point-with-the-type:** the bootstrap calls this one primitive (never a
 second derivation); the equivalence is the KAT plus a one-site grep guard. The seed's window widens
@@ -239,9 +243,10 @@ assert arm #3 collects the phantom `bonded_slots[S]` — through the real produc
 
 ### 5.5 SA-DQ-5 — GF-7 preserved by construction (hold-across-reopen already built)
 
-Broadcast exists **only** in the running `DispatchDriver` (`pscan/dispatch.rs:584`); `SignBond`
-does not broadcast (`stake_engine.rs:1318`), and the broadcast seam is private to `start_pscan`
-(`start.rs:595`). The GF-7 entry-gap **offset is drawn at sign** (`stake_engine.rs:806`) but
+Bond broadcast exists **only** in the running **bond** dispatch driver (`pscan/dispatch.rs:584`;
+read as the bond path specifically — `claim_dispatch.rs:14` is a *separate* reward-claim broadcast,
+not on the first-stake path); `SignBond` does not broadcast (`stake_engine.rs:1318`), and the
+broadcast seam is private to `start_pscan` (`start.rs:595`). The GF-7 entry-gap **offset is drawn at sign** (`stake_engine.rs:806`) but
 **realized** — due-block gating + dispersal jitter — only by the post-reopen scheduler
 (`dispatch.rs:259-263,556`). So the fork resolves to **hold-across-reopen, broadcast through the
 scheduler**, and the mechanism is **already built**: assemble persists to the durable
@@ -269,3 +274,51 @@ uses `AssembleBond`→pending-store (never a bespoke send).
 - **SA-R1-d — the credentialed-`stake`-RPC shape** (§5.1): first-stake takes the password and drives a
   first-stake-intent (re)open. Confirm this over a create-time-only first-stake (which would forbid
   staking an existing wallet — likely too restrictive).
+
+### 5.7 Ratifications + pins (maintainer review, 2026-07-18)
+
+**SA-R1-a — RATIFIED, with a pin.** Equivalence is stronger than §5.2 stated: `derive_archival_p_keys`
+has *one* production caller (`lifecycle.rs:934`); the others are `#[cfg(test)]`. So the gate relaxation
+routes first-stake through the **same call site** as reopen-derive — one path, not one-primitive-two-callers.
+**Pin (firewall gate):** `first_stake_intent(S)` must be **transient** (never persisted; the gate decides
+whether personas derive *at all*, so a sticky intent would derive personas for a non-staker). It is set
+**only** by the credentialed `stake` RPC's open-with-intent parameter and is `false` in every other open;
+an **aborted first-stake** (spawn without persist) leaves **only transient** derivation (dropped at
+open-scope end), **no persistent persona** — the durable staker state is exactly what `persist_bond_record`
+writes, nothing sooner.
+
+**SA-R1-c — RATIFIED as framed.** `stake_in:108` is an ordinary FCMP++ transfer to P's stealth address
+(touches no P secret; P is a public recipient), so the source-linkage break is the base membership proof —
+correctly deferred. "Common-case one-input" is the right characterization, not an under-sell: GF4b-2 is
+**self-privacy**, so a **wallet-local default** is the correct discharge (consensus cannot force one-input
+without breaking legitimate multi-input bonds), and the first bond is the strongest slice because it is
+one-input **by construction** of the clean path (P holds exactly the one `stake_in` output at first-stake).
+
+**SA-R1-d — RATIFIED, with two pins.** (1) the re-materialized seed stays **transient** — dropped at the
+reopen function's end, never handed to the actor (SA-DQ-2's own rule); (2) the `stake` RPC is
+**local-transport + `Capability::Full`** (`types.rs:211`), so the password crosses only a local boundary.
+
+**SA-R1-b — RATIFIED the ordering; the crash taxonomy is the one real gap (resolved below, in-doc, not a
+Round 2).** The typestate forces **sweep → `persist_bond_record` → sign → assemble-persist(`.wallet.pending`)
+→ dispatch** (sign needs the persist-produced ticket; the pending seal is written *after* assemble/sign —
+`bond_orchestrator.rs:283`, over `assembled.bound_tx`). That is **three** crash windows, only the last cleanly
+held-across-reopen. "Crash-after-persist yields the SA-DQ-3 phantom" is a *sub-case of the middle window*; the
+three, against the typestate order, with recovery each:
+
+| # | Window | Persisted state at crash | Recovery |
+|---|--------|--------------------------|----------|
+| **W1** | after sweep, before `persist_bond_record` | **none** — the sweep is in-memory; `.wallet.pending` is written only post-sign, so there is **no orphaned pending entry** (this corrects the Round-0 "unsigned sweep in `.wallet.pending`" framing); `funding_outputs` intact; `staking_enabled` **false** → non-staker | **retry.** The idempotency read (§5.1) sees `staking_enabled=false` and allows a fresh first-stake; the earlier sweep left nothing to reconcile. Clean. |
+| **W2** | after `persist_bond_record`, before sign/assemble-persist | `staking_enabled=true` + `bonded_slots[S]` durable; **no** pending post (assemble never completed); the in-memory ticket is lost | **resume-first-stake, arm-#3-independent.** On reopen the wallet is a staker (persona `S` derives); the reopen path detects `bonded_slots[S]` with no pending/confirmed post for `S` and **re-mints the ticket** — `persist_bond_record` is **re-entrant** (slot-set push is idempotent, `stake_persist.rs:117-119/149-151`, and it returns a fresh ticket for the slot regardless) — then re-signs (a fresh GF-7 offset draw is fine) and re-assembles. This does **not** depend on arm #3 (which lands after activation per the DQ-F split); arm #3 is the **backstop** only for a truly-abandoned slot (user never resumes). |
+| **W3** | after sign/assemble-persist, before dispatch | signed post durable in `.wallet.pending`; `staking_enabled`+`bonded_slots[S]` | **held-across-reopen (existing).** `start_pscan` reloads the seal and the bond dispatch driver sends it at its GF-7 offset. Clean. |
+
+The **load-bearing recovery decision** is W2: **re-entrant `persist_bond_record` + resume-first-stake on
+reopen**, *not* "arm #3 GCs and the user re-stakes" — because arm #3 is not live at first-stake's genesis
+window, and a resume keeps a crashed first-stake progressing without a live GC. (SA-R1-b's assemble-before-
+persist ordering from §5.6 is what makes W3 the common outcome and W2 recoverable; the typestate is what makes
+W2 exist at all.)
+
+**Two flags folded:** (1) §5.2's KAT citation corrected — the **fixed-vector** KAT
+(`kat_archival_p_derive_v1_vectors`, corpus-hash-pinned, CI-run) already exists, so the genesis
+freeze-the-frozen-primitive obligation is **met**, not outstanding. (2) §5.5's "DispatchDriver" read as the
+**bond** dispatch driver specifically (`claim_dispatch.rs:14` is a separate reward-claim broadcast); the
+no-inline-broadcast-from-first-stake property that GF-7 rests on is unaffected.
