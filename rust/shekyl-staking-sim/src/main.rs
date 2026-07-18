@@ -23,7 +23,10 @@
 //! effective-cover sensitivity sweep — `r(N)`/`P(link)` at the gate posture,
 //! the WI-4 §13.5 fifth conditional's measured shape; not a gate, and its
 //! parity line is an arithmetic identity, not a threshold);
-//! `--partition-adversary` (the §14.4
+//! `--gf7-seal=<artifact>` (the §19.8 leg-(b) SEALING form — grades the
+//! receipts artifact the `shekyl-engine-core` `gf7_sealing_run` harness wrote
+//! from a live-driver run, same circular statistic and `r < 2` bound;
+//! K_COVER seal input #2); `--partition-adversary` (the §14.4
 //! founder-cover partition-adversary arm — gating lemma + witness-typed
 //! controls, per the same doc's §14/§17 launch-posture round).
 
@@ -36,6 +39,7 @@ mod curve;
 mod failure_confirmation;
 mod fingerprint;
 mod gf7_breakeven;
+mod gf7_seal;
 mod gf7_timeline;
 mod metrics;
 mod model;
@@ -1727,6 +1731,14 @@ fn main() {
 
     if std::env::args().any(|a| a == "--gf7-breakeven") {
         print_gf7_breakeven_report();
+        return;
+    }
+
+    if let Some(artifact) =
+        std::env::args().find_map(|a| a.strip_prefix("--gf7-seal=").map(str::to_string))
+    {
+        let report = gf7_seal::run(&artifact);
+        gf7_seal::print_report(&report);
         return;
     }
 
