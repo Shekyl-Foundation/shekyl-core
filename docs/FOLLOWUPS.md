@@ -2045,8 +2045,11 @@ sustainability is unaffected by the recalibration.
     domain includes activation-time crashes, DQ-C), sequenced **right behind** the
     staker-activation round
     ([`ARCHIVAL_STAKE_ACTIVATION_PLAN.md`](design/ARCHIVAL_STAKE_ACTIVATION_PLAN.md)) and
-    closed only on the DQ-F fire condition (CI observes a real phantom collected through
-    the activation driver).
+    closed per the DQ-F split (precisified 2026-07-18): **logic-discharge** via the CI
+    fire harness on the production code path (CI observes a real phantom collected — the
+    fixture is the activation-induced persist-then-no-broadcast crash, co-designed with
+    SA-DQ-3); **production-firing** gated on the activation round (#332). A bare
+    "discharged" is forbidden (DQ-F Guard 2).
     **Target: V3.0** (must land before genesis freezes the absence of GC).
   - **Broadcast / re-anchor wiring activates the CT-5d persona-pin.** The CT-5d
     finding (persona signature binds `tx_prefix_hash`, not the proof, so a
@@ -8378,7 +8381,10 @@ one place to confirm each item's relationship to the wallet stack.
   item is **arm #2** (needs the canonicity token as corroboration, DQ-D), sequenced behind the
   staker-activation round
   ([`ARCHIVAL_STAKE_ACTIVATION_PLAN.md`](design/ARCHIVAL_STAKE_ACTIVATION_PLAN.md)) per DQ-C, and
-  closes only on the DQ-F fire condition (CI observes the GC fire through the activation driver).
+  closes per the DQ-F split (precisified 2026-07-18): **logic-discharge** via the CI fire
+  harness on the production code path (CI observes the GC fire — a real phantom collected);
+  **production-firing** gated on the activation round (#332). A bare "discharged" is
+  forbidden (DQ-F Guard 2).
   **Rule (load-bearing — travels
   with the item):** GC **only** on *confirmed-absence within `covered`* (the range the reconcile set
   can vouch for), **never** on absence-from-one-source — the SP-6 "absence ≠ unscanned" discipline;
@@ -8390,9 +8396,10 @@ one place to confirm each item's relationship to the wallet stack.
   (SP-R0 **arm #1** — ratified 2026-07-18, not SP-6-gated: the ratified detection is a
   key-image watch pruning at ingest, no `PReconcileSet` consumption and no state-version
   bump; disposition D-1(a) durable prune, D-2 watch mechanism, DQ-A containment —
-  [`ARCHIVAL_BOND_SP_R0_PLAN.md`](design/ARCHIVAL_BOND_SP_R0_PLAN.md) §4/§5; sequences
-  behind the staker-activation round per DQ-C; closes on the DQ-F fire
-  condition).** `PScanAccrual::ingest` only ever *extends* `funding_outputs`;
+  [`ARCHIVAL_BOND_SP_R0_PLAN.md`](design/ARCHIVAL_BOND_SP_R0_PLAN.md) §4/§5; may land
+  **logic-discharged** in parallel with the activation round per the DQ-F split — CI fire
+  harness on the production code path, no `for_test()` on the path under test (Guard 1);
+  **production-firing** gated on #332; status lines state which discharge (Guard 2)).** `PScanAccrual::ingest` only ever *extends* `funding_outputs`;
   nothing removes an output once a confirmed bond post spends it. `select_funding_outputs` excludes
   only the *transiently-reserved* set (a live pending post's `funding_gindexes`), so once a post
   confirms and its pending record clears, the spent output is un-reserved **and** still present — a

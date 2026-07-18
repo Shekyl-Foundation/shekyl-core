@@ -15,7 +15,8 @@ funding prune) and the build order.
 **The genesis front is NOT in this doc.** SP-R0's arms are all production-inert until the
 **production staker-activation path** lands (§0 F-1); that path is its own round —
 [`ARCHIVAL_STAKE_ACTIVATION_PLAN.md`](ARCHIVAL_STAKE_ACTIVATION_PLAN.md) — and SP-R0's
-arm-landing sequences behind it via the DQ-F fire condition.
+arms land **logic-proven** behind the DQ-F fire harness, while their **production
+behavior** lands behind that round (the DQ-F split, precisified 2026-07-18 — §5 DQ-F).
 
 **Status:** ROUND 0 — DQ-A…DQ-F **ratified 2026-07-18** (dispositions inline in §5).
 Round-0 exit tasks in §7. **Process rule:**
@@ -182,7 +183,9 @@ Front = the production staker-activation path (its own round), **not** an SP-R0 
 lands all three arms are production-inert. Order: **activation round first**; then arm #1
 (funding prune + witness — unblocks assemble); then arms #2/#3 — each landing only when it can
 be shown to **fire** in a prod-representative path (DQ-F). Arm #3's "buildable now, land first"
-is retracted.
+is retracted. **Precisified 2026-07-18 (DQ-F split):** "activation round first" binds the
+**production discharge**, not the landing — arms may land **logic-discharged** in parallel with
+#332 under CI-observed fire (DQ-F guards 1–2); production behavior still lands behind #332.
 
 **Sub-question resolved:** `persist_bond_record` (`stake_persist.rs:145-154`) sets
 `staking_enabled` **and** writes the `bonded_slots` entry under one write guard + one
@@ -200,15 +203,42 @@ D: per-arm canonicity — arm #1 no token (720 ceiling); arm #2 the token, as **
 **not** generalize the clamp across arms. E: `anchor_t0` is assemble-time → **arm #2's** tip
 clamp, not arm #1.
 
-### DQ-F — fires-in-prod, CI-asserted (RATIFIED, recursion closed)
+### DQ-F — fires-in-prod, CI-asserted; split the claim (RATIFIED + precisified 2026-07-18)
 
-Each arm's FOLLOWUPS reopen line closes **only** when a prod-representative integration lane
-drives the arm **through the activation driver** and **CI asserts the GC fired** — a
-fire-counter / observer the lane asserts non-zero (a real phantom collected / a real spent
-record pruned). Not "a reviewer confirms a firing test exists" (that is the reviewer-discipline
-layer DQ-F exists to escape) and not mere test-existence: the reopen line cannot be marked
-closed until **CI has watched the arm fire**. Specify the CI wiring (the observer + the
-non-zero assertion) in each arm's landing PR.
+The pscan/mod.rs:28 fossil bundled two claims — *the GC fires* (logic) and *production
+drives it* (wiring) — asserting both when neither held. The fix is claim exactly what
+is proven, so DQ-F splits:
+
+- **Logic-discharged** — a CI fire harness drives the arm on the production code path and
+  CI asserts the GC fired (fire-counter/observer, non-zero: a real phantom collected /
+  spent record pruned). The harness's only stand-in is staker creation at the top
+  (`make_staker_for_test`) — which IS #332; everything downstream (real derive primitive,
+  key-image match, prune, witness mint) is production code. So logic-discharged = proven
+  from staker-exists downward, and the sole stand-in is the exact gate being deferred.
+  This is what WI-4 §19.1 licenses ("harness exercises production code without the
+  embedder") and no more.
+- **Production-discharged** — the #332 RPC path drives the arm. The F-1 answer at the
+  production edge; gated on #332.
+
+Arms may land logic-discharged in parallel with #332 under CI-observed fire — not
+strictly behind the front. Two guards:
+
+- **Guard 1 — no `for_test()` on the path under test.** The harness drives the real
+  `persist_bond_record`, the real `derive_archival_p_keys` (SA-DQ-2 derive-equivalence
+  bites), and the real production `SpentRecordsDurablyPruned` constructor — never
+  `for_test()`. Checkable: the harness runs where `for_test()` is `#[cfg(test)]`-unavailable,
+  so only the production constructor satisfies it. Tell — delete `for_test()`; still
+  passes ⇒ real, breaks ⇒ proving nothing.
+- **Guard 2 — the split travels with the status.** Every reopen line / index row states
+  which discharge: "logic-discharged (CI harness, production code path);
+  production-firing gated on #332." A bare "discharged" is forbidden.
+
+**Genesis-safety (checked):** landing arm #1 ahead of #332 mints the production witness and
+lifts the assemble compile-block — safe, because assemble stays unreachable in
+production without a staker (`staking_enabled`-gated; #332 sets it). Reachable-in-
+principle, unreachable-in-practice until #332; the witness stays sound. Genesis-safe.
+
+Specify the CI wiring (the observer + the non-zero assertion) in each arm's landing PR.
 
 ---
 
@@ -243,6 +273,7 @@ condition); SP-R0 + arm rows and the activation-round row registered in
 ([`ARCHIVAL_STAKE_ACTIVATION_PLAN.md`](ARCHIVAL_STAKE_ACTIVATION_PLAN.md), Round-0 with
 SA-DQ-1…5, carrying the two named genesis gates SA-DQ-4 (GF4b-2 funding-input-count
 discipline) and SA-DQ-5 (the GF-7 broadcast-before/after-reopen fork)).
-Implementation sequences **behind the activation round**, each arm gated on the DQ-F CI fire
+Implementation lands **logic-proven behind the DQ-F fire harness** (arms may land in
+parallel with #332; production behavior lands behind #332 — the DQ-F split), each arm gated on the DQ-F CI fire
 condition; the DQ-A watch-set lands with its redacting-`Debug`/no-`Serialize` containment from
 the first commit.
