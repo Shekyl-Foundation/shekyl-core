@@ -342,3 +342,47 @@ on-chain broadcast on a plain open.)
 freeze-the-frozen-primitive obligation is **met**, not outstanding. (2) §5.5's "DispatchDriver" read as the
 **bond** dispatch driver specifically (`claim_dispatch.rs:14` is a separate reward-claim broadcast); the
 no-inline-broadcast-from-first-stake property that GF-7 rests on is unaffected.
+
+### 5.8 BUILD RECORD — first implementation (2026-07-18, `feat/stake-activation-entry`)
+
+Landed exactly as ratified, plus one composition fact §5.0 left implicit:
+
+- **SA-R1-a:** `Engine::open_full_with_first_stake_intent` → `assemble` →
+  `spawn_stake_engine_if_staker(…, first_stake_intent)`; the gate is
+  `staking_enabled || intent`, the intent slot rides the derive set and is tagged
+  bonded-ELECT (actor-local — scannability + rotation-wipe-proofing; durable bondedness
+  remains solely `persist_bond_record`'s write). The intent is a call parameter on this one
+  entry; every other open passes `None`. Pin executable:
+  `first_stake_intent_spawns_transiently_and_aborts_clean` (an aborted intent leaves
+  nothing durable).
+- **Composition fact (implicit in §5.0, forced by the substrate):** the preflight sweep
+  reads the **sealed pscan state**, so the `stake_in` funding must be scan-discovered
+  before it validates — the entry therefore starts the **on-demand** P-scan under intent
+  (`Engine::start_pscan`; `start_pscan_if_staker` would park `None` pre-persist). A
+  fresh `stake` call before the scan catches up refuses `-29500` (W1-clean) and the
+  user retries; the scan keeps running.
+- **The continuation** (`Engine::first_stake`, `bond_orchestrator.rs`): idempotency/W2
+  split (pending post → `-29501`; confirmed post via the new
+  `persona_canonical_id` projection against pscan `bond_post_matches` → `-29502`;
+  durable-but-postless slot → resume) → preflight sweep with the production witness
+  (W1) → re-entrant `persist_bond_record` → `mint_handle` → `assemble_bond_post` →
+  `.wallet.pending` seal. No broadcast anywhere on the path (SA-DQ-5 structural).
+- **SA-R1-c:** the count gate landed in `assemble_bond_post` post-sweep —
+  `tracing::warn!` on `swept_inputs > 1` (consciously-logged, never a refusal). The
+  principal-side `stake_in` funding-shape remains homed in
+  `PRINCIPAL_STAKE_LIFECYCLE.md` (co-gating, pre-genesis).
+- **SA-R1-d:** wallet-rpc `stake { password }` — `Capability::Full`-gated
+  (`-29005` otherwise), password consumed into `Zeroizing` and crossing only the local
+  transport; drives the close→reopen-with-intent Tenant dance; refusal taxonomy
+  `-29500 StakeNotReady` (W1-clean) / `-29501 StakeInFlight` (W3) / `-29502
+  AlreadyStaked`, mid-flow failures name the W2 resume in their message (rule 82).
+- **Retired:** the GF4b rule-21 dead-code half **(b)** on all five witness consumers
+  (and the arm-#1 witness constructor's own allow) — the entry chain is their
+  production caller; the compiler re-adjudicated every site.
+
+**Still open after this landing (Guard-2 language):** SP-R0 arm #1 remains
+**logic-discharged**; its **production-discharge** needs the DQ-F lane driven through
+THIS entry (a CI lane staking a wallet via the production `stake` path and asserting
+the GC fire) — the entry makes that lane drivable, it does not constitute it. The
+`stake_in` principal-side funding shape and the reopen-friction polish
+(`FOLLOWUPS` V3.x) stay with their own homes.

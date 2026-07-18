@@ -1577,7 +1577,6 @@ impl Message<SignBond> for StakeEngine {
 /// SP-R0/2d-1 pruning **and** the RPC stake entry (rule-21 — neither alone;
 /// half (a) landed 2026-07-18 with SP-R0 arm #1, logic-discharged — half (b)
 /// is the remaining retirement, the staker-activation round).
-#[allow(dead_code)] // rule-21: (a) SP-R0 arm #1 pruning DONE 2026-07-18 (logic-discharged); retires with (b) the RPC stake entry (#332)
 pub(crate) struct AssembleBond {
     /// Operation-scoped capability proving the slot is currently held (typed
     /// contract #2). Must match `ticket.p_slot()`.
@@ -2772,6 +2771,34 @@ impl Message<ScanStep> for StakeEngine {
     }
 }
 
+/// Project the **public** canonical id of a held persona (SA-DQ-3 / first-stake
+/// W2-resume: the engine needs to ask "does a confirmed bond post exist for
+/// slot S?" against the pscan evidence, which is keyed by canonical id). Same
+/// public projection `bonded_scan_inputs` computes per scan; no secret
+/// crosses the boundary.
+pub(crate) struct ProjectPersonaCanonicalId {
+    pub p_slot: PSlot,
+}
+
+impl Message<ProjectPersonaCanonicalId> for StakeEngine {
+    type Reply = Result<PCanonicalId, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: ProjectPersonaCanonicalId,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let held = self
+            .held
+            .get(&msg.p_slot)
+            .ok_or(StakeEngineError::LookaheadExhausted {
+                requested: msg.p_slot,
+            })?;
+        persona_canonical_id(held.keys())
+            .map_err(|e| StakeEngineError::ScanSetup(ScanSetupError::CanonicalId(e)))
+    }
+}
+
 /// Retire a now-terminal bonded persona from the scan union (2d-1 DQ8), wiping its
 /// key. Carries the [`RetirementWitness`] — the positive-confirmation evidence
 /// that gates the wipe (the actor cannot re-verify). Sent by the SP-5 scan task
@@ -2976,6 +3003,19 @@ impl StakeEngineHandle {
             .map_err(collapse_send_error)
     }
 
+    /// Project the public canonical id of held slot `p_slot` (no activation,
+    /// no rotation side effects — an identity read for the first-stake
+    /// W2/confirmed split and reconcile lookups).
+    pub(crate) async fn persona_canonical_id(
+        &self,
+        p_slot: PSlot,
+    ) -> Result<PCanonicalId, StakeEngineError> {
+        self.actor
+            .ask(ProjectPersonaCanonicalId { p_slot })
+            .await
+            .map_err(collapse_send_error)
+    }
+
     /// Activate the persona named by `handle` and return its public identity.
     /// Rotation (with ephemeral-only wipe) when a different slot is active.
     pub(crate) async fn activate_persona(
@@ -3069,7 +3109,6 @@ impl StakeEngineHandle {
     /// (WI-2 §3.3). Dead_code allow retires only when **both** SP-R0 / 2d-1
     /// pruning **and** the RPC stake entry land — neither alone (half (a)
     /// landed 2026-07-18 with SP-R0 arm #1; half (b) remains).
-    #[allow(dead_code)] // rule-21: (a) SP-R0 arm #1 pruning DONE 2026-07-18 (logic-discharged); retires with (b) the RPC stake entry (#332)
     pub(crate) async fn assemble_bond(
         &self,
         handle: PersonaHandle,

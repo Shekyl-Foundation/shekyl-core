@@ -4,6 +4,26 @@
 
 ### Added
 
+- **wallet: the staker-activation entry — first-stake goes production
+  (`ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.8).** New wallet-rpc `stake`
+  method (`Capability::Full`-gated; refusals `-29500 StakeNotReady` /
+  `-29501 StakeInFlight` / `-29502 AlreadyStaked`; password crosses only
+  the local transport into `Zeroizing`). SA-R1-a: `Engine::
+  open_full_with_first_stake_intent` spawns the StakeEngine for a
+  non-staker under a **transient** intent (never persisted; an aborted
+  first-stake leaves nothing durable — pin test included), with the
+  on-demand P-scan started under intent so `stake_in` funding can
+  scan-discover. `Engine::first_stake` composes the ratified order:
+  idempotency/W2 split (new `persona_canonical_id` actor projection) →
+  preflight sweep (W1-clean, production witness) → re-entrant
+  `persist_bond_record` → sign/assemble → the `.wallet.pending` seal; no
+  broadcast on the path (GF-7 preserved structurally — the bond dispatch
+  driver sends at its offset). SA-R1-c: multi-input bond posts are now a
+  consciously-logged exception (`tracing::warn!` at assemble). Retires
+  the GF4b rule-21 dead-code half (b) on all five witness consumers.
+  Guard-2: SP-R0 arm #1 remains logic-discharged — production-discharge
+  awaits the DQ-F CI lane through this entry.
+
 - **wallet: SP-R0 arm #1 — spent-funding-record prune via key-image watch
   (logic-discharged).** The `P`-scan dual extractor gains arm (c): each
   scanned tx's FCMP++ `ToKey` key images are matched against an in-actor

@@ -203,6 +203,13 @@ sustainability is unaffected by the recalibration.
   already-public holdings descriptor); re-evaluation shape: gate-6 round
   entry plus closure of this item citing it. *Target: V3.0 (pre-genesis).*
 
+  **UPDATE 2026-07-18 (`feat/stake-activation-entry`): the enforcement half landed** —
+  SA-R1-c count gate at `assemble_bond_post` (post-sweep `tracing::warn!` on
+  `swept_inputs > 1`; consciously-logged exception, never a refusal — GF4b-2 is
+  self-privacy). The common-case one-input first bond is one-input by construction of
+  the clean path (P holds exactly the one `stake_in` output). The **funding-shape half**
+  (principal-side `stake_in` emitting one structured `bond_floor + cover` output) stays
+  homed in `PRINCIPAL_STAKE_LIFECYCLE.md` — co-gating, pre-genesis.
 - **[Done] Domain-newtype the residual raw fields on `PFundingOutputRecord` and
   the WI-2 sweep amounts (spawned GF-4b audit sweep, 2026-07-08; closed
   2026-07-11 on `feat/wi2-bond-orchestrator`).** Landed with the WI-2

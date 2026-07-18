@@ -22,8 +22,8 @@ use shekyl_crypto_pq::account::{
 use shekyl_crypto_pq::bip39::{mnemonic_from_entropy, SHEKYL_BIP39_ENTROPY_BYTES};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::{
-    CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams, Network, OpenedEngine,
-    PScanHandle, SoloSigner,
+    Capability, CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams, Network,
+    OpenedEngine, PScanHandle, SoloSigner,
 };
 use shekyl_engine_file::paths::keys_path_from;
 use shekyl_engine_file::SafetyOverrides;
@@ -470,6 +470,217 @@ async fn wrap_and_start_pscan(
 /// fail and re-strand the engine, and the primary error the caller returns is
 /// the close failure, not this. The failure is logged (never silent), and the
 /// dark-scan window lasts only until the next successful close / reopen.
+/// Params for `stake` (the wallet-level first-stake entry,
+/// `ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.1 SA-DQ-1/SA-R1-d).
+#[derive(serde::Deserialize)]
+struct StakeParams {
+    /// Wallet password — load-bearing, not UX: a mid-session wallet holds no
+    /// seed (dropped at open), and only a credentialed reopen re-materializes
+    /// it for the bootstrap persona derivation. Crosses a local transport
+    /// only (SA-R1-d pin 2).
+    password: String,
+}
+
+/// `stake` — make the open wallet a staker (the #332 activation entry).
+///
+/// The user asks to stake; the protocol dance is hidden (rule 81). What
+/// actually runs (`ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.0, SA-R1-b order):
+///
+/// 1. Idempotency fast-path reads + `Capability::Full` gate (SA-DQ-1).
+/// 2. If no StakeEngine is resident (fresh first-stake): a credentialed
+///    close → reopen **with the transient first-stake intent** (SA-R1-a) so
+///    the actor spawns pre-persist, then the on-demand P-scan starts (the
+///    `stake_in` funding must be scan-discovered before it can validate).
+/// 3. The engine-side continuation (`Engine::first_stake`): preflight sweep
+///    (W1-clean) → `persist_bond_record` → sign/assemble → the durable
+///    `.wallet.pending` seal. **No broadcast** — the bond dispatch driver
+///    sends at its GF-7 offset (SA-DQ-5, hold-across-reopen).
+///
+/// A refusal (`-29500..-29502`) leaves the wallet open and, for `-29500`,
+/// wrote nothing durable — fund/sync and call `stake` again. A mid-flow
+/// failure after the durable point is the W2 window; re-invoking `stake`
+/// resumes it (the engine detects the durable-but-postless slot).
+pub(crate) async fn stake(
+    tenants: &tokio::sync::Mutex<TenantState>,
+    params: &Value,
+) -> Result<Value, WalletRpcError> {
+    let p: StakeParams = parse_required_object(params, "stake")?;
+
+    // Phase 1 — inspect the open tenant: capability gate, idempotency reads,
+    // slot choice (the engine's monotone cursor for a fresh stake; the
+    // recorded bonded slot for a W2 resume — the user never names a slot,
+    // rule 81). The arc clone drops before any reopen (its liveness would
+    // fail the close's sole-ownership reclaim).
+    let (needs_intent_open, slot) = {
+        let shared = require_open_engine(tenants).await?;
+        let g = shared.read().await;
+        let capability = g.capability();
+        if capability != Capability::Full {
+            return Err(WalletRpcError::CapabilityForbids {
+                capability: capability_mode_str(capability).to_owned(),
+            });
+        }
+        let ledger = g.ledger();
+        let staking = &ledger.staking;
+        let slot = if staking.staking_enabled {
+            staking
+                .bonded_slots
+                .first()
+                .copied()
+                .unwrap_or_else(|| staking.monotone_current_slot_from_record())
+        } else {
+            staking.monotone_current_slot_from_record()
+        };
+        (!g.has_stake_engine(), slot)
+    };
+
+    if needs_intent_open {
+        reopen_with_first_stake_intent(tenants, p.password, slot).await?;
+    }
+
+    let shared = require_open_engine(tenants).await?;
+    let outcome = Engine::first_stake(shared, slot).await.map_err(|e| {
+        use shekyl_engine_core::FirstStakeError as E;
+        match e {
+            E::BondInFlight => WalletRpcError::StakeInFlight,
+            E::AlreadyStaked => WalletRpcError::AlreadyStaked,
+            E::Funding(detail) => WalletRpcError::StakeNotReady { detail },
+            E::NoStakeEngine => {
+                WalletRpcError::InternalError("stake: no stake engine after intent open".into())
+            }
+            // W2: durable slot may exist without a post — a `stake` re-invoke
+            // resumes. Say so in the operator-facing text (rule 82).
+            E::Persist(d) | E::Engine(d) => WalletRpcError::InternalError(format!(
+                "stake failed mid-flow ({d}); call stake again to resume"
+            )),
+        }
+    })?;
+
+    Ok(json!({
+        "slot": outcome.p_slot,
+        "swept_inputs": outcome.swept_inputs,
+        "resumed": outcome.resumed,
+        "state": "pending_dispatch",
+    }))
+}
+
+/// The SA-R1-a credentialed reopen: close the open tenant (the full
+/// `close_wallet` discipline — scan shutdown, sole-ownership reclaim,
+/// persist-for-close) and reopen it carrying the **transient** first-stake
+/// intent, then start the on-demand P-scan (the intent-spawned actor makes
+/// the persona scannable; `start_pscan_if_staker` would park `None` since
+/// `staking_enabled` is still false).
+async fn reopen_with_first_stake_intent(
+    tenants: &tokio::sync::Mutex<TenantState>,
+    password: String,
+    slot: u32,
+) -> Result<(), WalletRpcError> {
+    let password = Zeroizing::new(password.into_bytes());
+
+    // Close (mirrors `close_wallet`, minus params plumbing).
+    let (name, shared, pscan, base, network, daemon_address) = {
+        let mut state = tenants.lock().await;
+        let (name, shared, pscan) = state
+            .tenant
+            .take_open()
+            .ok_or(WalletRpcError::WalletNotOpen)?;
+        let base = wallet_base(&state.wallet_dir, &name);
+        (
+            name,
+            shared,
+            pscan,
+            base,
+            state.network,
+            state.daemon_address.clone(),
+        )
+    };
+    if let Some(handle) = pscan {
+        handle.shutdown().await;
+    }
+    let lock = match Arc::try_unwrap(shared) {
+        Ok(lock) => lock,
+        Err(shared) => {
+            let pscan = restart_pscan(&shared).await;
+            tenants
+                .lock()
+                .await
+                .tenant
+                .restore_open(name, shared, pscan);
+            return Err(WalletRpcError::InternalError(
+                "cannot stake: wallet engine still in use by another task".into(),
+            ));
+        }
+    };
+    let engine = lock.into_inner();
+    if let Err(e) = tokio::task::block_in_place(|| engine.persist_for_close()) {
+        let shared: SharedEngine = Arc::new(RwLock::new(engine));
+        let pscan = restart_pscan(&shared).await;
+        tenants.lock().await.tenant.set_open(name, shared, pscan);
+        return Err(WalletRpcError::from(e));
+    }
+    drop(engine);
+    {
+        let mut state = tenants.lock().await;
+        state.tenant.clear_closing();
+        state.tenant.begin_opening();
+    }
+
+    // Reopen with the intent (the transient SA-R1-a parameter — it exists
+    // only on this call path and is `None` in every other open).
+    let reopened: Result<Engine<SoloSigner>, WalletRpcError> = async {
+        let daemon = make_daemon(&daemon_address).await?;
+        let creds = Credentials::password_only(password.as_slice());
+        let opened = tokio::task::block_in_place(|| {
+            Engine::<SoloSigner>::open_full_with_first_stake_intent(
+                &base,
+                &creds,
+                network,
+                daemon,
+                SafetyOverrides::none(),
+                slot,
+            )
+        })
+        .map_err(WalletRpcError::from)?;
+        Ok(match opened {
+            OpenedEngine::Loaded(w) => w,
+            OpenedEngine::Restored { wallet, .. } => wallet,
+        })
+    }
+    .await;
+    let engine = match reopened {
+        Ok(v) => v,
+        Err(e) => {
+            tenants.lock().await.tenant.clear_opening();
+            return Err(e);
+        }
+    };
+
+    // On-demand P-scan under intent (fail-closed: without the scan the
+    // `stake_in` funding can never validate, so a dark scan here is a
+    // guaranteed-stuck stake, not a degraded one).
+    let shared: SharedEngine = Arc::new(RwLock::new(engine));
+    match Engine::start_pscan(shared.clone()).await {
+        Ok(handle) => {
+            tenants
+                .lock()
+                .await
+                .tenant
+                .set_open(name, shared, Some(handle));
+            Ok(())
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "first-stake intent reopen: on-demand P-scan failed to start"
+            );
+            tenants.lock().await.tenant.set_open(name, shared, None);
+            Err(WalletRpcError::InternalError(format!(
+                "stake: persona scan failed to start ({e}); wallet remains open"
+            )))
+        }
+    }
+}
+
 async fn restart_pscan(shared: &SharedEngine) -> Option<PScanHandle> {
     match Engine::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,

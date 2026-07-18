@@ -14,7 +14,8 @@
 
 use std::sync::Arc;
 
-use shekyl_archival_retention::{bond_floor, HoldingsDescriptor};
+use super::local_ledger::LocalLedger;
+use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
 use shekyl_curve_tree::{
     select_reference_height, should_reanchor, AssembleInput, BlockHeight as CtBlockHeight, Gindex,
     ReferenceBlock,
@@ -22,7 +23,7 @@ use shekyl_curve_tree::{
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{PendingBondPost, PendingPostState};
 use shekyl_tx_builder::{LeafEntry, TreeContext};
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHeight, PSlot};
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
@@ -34,6 +35,65 @@ use super::bond_assembly::{
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::start::{load_pscan_state_for_engine, pending_post_store_for_engine};
+
+/// Size ceiling for the first-stake bond-fee derivation: the single-input
+/// bond post is far under this, so a fee baked at assembly over this weight
+/// clears the daemon's per-byte floor even as estimates move (overpaying is a
+/// miner transfer, never a conservation term). Promoted from the PR-4 regtest
+/// harness to the production seam the WI-2 addendum reserved for the stake
+/// entry.
+const BOND_SIZE_CEILING_BYTES: usize = 32 * 1024;
+
+/// What a completed first-stake reports back to the stake entry (public
+/// identity only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FirstStakeOutcome {
+    /// The persona slot the first bond was posted for (raw — the pub
+    /// boundary follows the `make_staker_for_test` precedent: no
+    /// crate-internal newtype leaks to embedders).
+    pub p_slot: u32,
+    /// How many funding inputs the sweep consumed (SA-DQ-4: the common case
+    /// is exactly 1 — the structured `stake_in` output).
+    pub swept_inputs: usize,
+    /// Whether this call resumed a W2 crash (durable slot, no post) rather
+    /// than starting fresh.
+    pub resumed: bool,
+}
+
+/// First-stake refusal/failure taxonomy (rule 82;
+/// `ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.1/§5.7). Refusals are
+/// caller-recoverable states with user-meaning; `Engine`/`Persist` arms are
+/// mid-flow failures whose recovery is a `stake` re-invoke (W2).
+#[derive(Debug, thiserror::Error)]
+pub enum FirstStakeError {
+    /// No StakeEngine is resident — first-stake must enter through the
+    /// credentialed open-with-intent (SA-R1-a). An internal sequencing
+    /// defect at the caller, not a user refusal.
+    #[error("no stake engine resident: first-stake requires the open-with-intent path")]
+    NoStakeEngine,
+    /// A signed bond post is already sealed and awaiting dispatch (W3): the
+    /// stake is in flight; the dispatch driver will broadcast it.
+    #[error("a signed bond post is already awaiting dispatch")]
+    BondInFlight,
+    /// A confirmed bond post exists on-chain for the persona: the wallet is
+    /// already staking; a second call must not mint a second first-stake
+    /// (SA-DQ-1 idempotency).
+    #[error("already staking: a confirmed bond post exists for the persona")]
+    AlreadyStaked,
+    /// Funding validation failed **before** any durable staker state was
+    /// written (W1-clean): fund the persona (`stake_in`) and/or let the
+    /// P-scan catch up, then retry.
+    #[error("first-stake funding not ready: {0}")]
+    Funding(String),
+    /// The durable staker record could not be written.
+    #[error("persisting the bond record failed: {0}")]
+    Persist(String),
+    /// The actor/assembly path failed. If this surfaced after the durable
+    /// point it is the W2 window — re-invoke `stake` to resume.
+    #[error("stake engine failed: {0}")]
+    Engine(String),
+}
+
 use super::signer::EngineSignerKind;
 use super::stake_engine::{AssembledBondPost, PersonaHandle, StakeEngineError};
 use super::stake_persist::PersistedBondTicket;
@@ -105,7 +165,6 @@ where
     /// be handled there, not assumed from a witness gap). Tests pass
     /// [`SpentRecordsDurablyPruned::for_test`]. Dead_code allow retires with
     /// the RPC stake entry (`docs/FOLLOWUPS.md`).
-    #[allow(dead_code)] // rule-21: (a) SP-R0 arm #1 pruning DONE 2026-07-18 (logic-discharged); retires with (b) the RPC stake entry (#332)
     pub(crate) async fn assemble_bond_post(
         self_arc: Arc<RwLock<Self>>,
         handle: PersonaHandle,
@@ -197,6 +256,19 @@ where
             required,
             reference_height,
         )?;
+        // SA-R1-c (GF4b-2, owned by the activation round): the common-case
+        // bond consumes exactly ONE structured funding input; the on-chain
+        // input count is self-privacy, so multi-tranche is a consciously
+        // LOGGED exception, never a silent one (and never a consensus
+        // refusal — legitimate multi-input bonds exist).
+        if selection.records.len() > 1 {
+            tracing::warn!(
+                swept_inputs = selection.records.len(),
+                "multi-input bond post: the common case is one structured stake_in \
+                 output; this post reveals its funding-input count on-chain (GF4b-2 \
+                 / SA-R1-c consciously-logged exception)"
+            );
+        }
         // `FundingSelection` is non-empty by construction (the sweep refuses a
         // zero-record consume), so `selection.records` carries ≥1 record and
         // the length-checked `paths[0]` below cannot index an empty vec — this
@@ -295,6 +367,176 @@ where
         }
 
         Ok(assembled)
+    }
+}
+
+#[allow(private_bounds)]
+impl<
+        S: EngineSignerKind + Send + Sync + 'static,
+        D: DaemonEngine,
+        E: EconomicsEngine,
+        P: PendingTxEngine,
+    > Engine<S, D, LocalLedger, E, super::LocalRefresh, P, WalletFile>
+where
+    Self: Send + Sync,
+{
+    /// The first-stake continuation (`ARCHIVAL_STAKE_ACTIVATION_PLAN.md`
+    /// §5.0 steps 4–6, SA-R1-b typestate-forced order): idempotency/W2 split
+    /// → **preflight sweep** (funding validated before any durable staker
+    /// state — a failure here is W1-clean, nothing to reconcile) →
+    /// `persist_bond_record` (the durable point: mints the ticket, flips
+    /// `staking_enabled`, writes `bonded_slots[slot]`) → sign + assemble →
+    /// the `.wallet.pending` seal. **No broadcast** (SA-DQ-5): the post-open
+    /// bond dispatch driver sends the sealed post at its GF-7 offset (W3 is
+    /// held-across-reopen by the pending seal).
+    ///
+    /// Entry precondition: a StakeEngine is resident — either the wallet is
+    /// already a staker (W2 resume) or this open carried the transient
+    /// first-stake intent (SA-R1-a). The caller is the credentialed `stake`
+    /// RPC (or an in-process embedder like the GUI).
+    ///
+    /// A failure **after** `persist_bond_record` is the W2 window: durable
+    /// `bonded_slots[slot]` with no pending post. Recovery is re-invoking
+    /// `stake` (this function detects the resume case and re-mints the
+    /// ticket — `persist_bond_record` is re-entrant); the un-resumed slot is
+    /// benign by the `StakingBlock` hint design and, post-genesis, arm #3's
+    /// backstop.
+    pub async fn first_stake(
+        self_arc: Arc<RwLock<Self>>,
+        slot: u32,
+    ) -> Result<FirstStakeOutcome, FirstStakeError> {
+        let slot = PSlot::from_raw(slot);
+        let (
+            daemon,
+            stake,
+            curve_tree,
+            pending_write_lock,
+            chain_tip,
+            tip_hash_at,
+            staking_enabled,
+        ) = {
+            let g = self_arc.read().await;
+            let stake = g.stake_handle().ok_or(FirstStakeError::NoStakeEngine)?;
+            let snap = g.ledger.snapshot();
+            let chain_tip = g.ledger.synced_height();
+            let tip_hash_at = move |h: u64| snap.block_hash_at(h);
+            let staking_enabled = g.ledger.read().ledger.staking.staking_enabled;
+            (
+                g.daemon().clone(),
+                stake,
+                g.curve_tree.clone(),
+                g.pending_write_lock.clone(),
+                chain_tip,
+                tip_hash_at,
+                staking_enabled,
+            )
+        };
+        let store = pending_post_store_for_engine(self_arc.clone(), pending_write_lock);
+
+        // Idempotency / W2 split (§5.1 + §5.7 W2). A signed post awaiting
+        // dispatch is W3 — refuse; a confirmed on-chain post makes this
+        // wallet an active staker — refuse (a second call must not mint a
+        // second first-stake); a durable slot with NEITHER is the W2 phantom
+        // — resume.
+        let pending_for_slot = store
+            .read(|block| block.posts().iter().any(|p| p.p_slot == slot))
+            .await
+            .map_err(|e| FirstStakeError::Funding(format!("pending read: {e}")))?;
+        if pending_for_slot {
+            return Err(FirstStakeError::BondInFlight);
+        }
+        let resumed = if staking_enabled {
+            let id = stake
+                .persona_canonical_id(slot)
+                .await
+                .map_err(|e| FirstStakeError::Engine(e.to_string()))?;
+            let confirmed = load_pscan_state_for_engine(self_arc.clone())
+                .await
+                .map_err(|e| FirstStakeError::Funding(format!("pscan state load: {e}")))?
+                .map(|s| s.bond_post_matches().iter().any(|m| m.p_canonical_id == id))
+                .unwrap_or(false);
+            if confirmed {
+                return Err(FirstStakeError::AlreadyStaked);
+            }
+            true
+        } else {
+            false
+        };
+
+        // Genesis posture: JoinMarket CompleteTree holdings; the bond fee is
+        // derived from the daemon's live estimate over the bond size ceiling
+        // (the seam the WI-2 addendum reserved for this entry — overpaying is
+        // a miner transfer, never a conservation term).
+        let holdings = HoldingsDescriptor {
+            kind: HoldingsKind::CompleteTree,
+            shard_ids: ShardSet::empty(),
+        };
+        let fee = {
+            let estimates = daemon
+                .get_fee_estimates()
+                .await
+                .map_err(|e| FirstStakeError::Funding(format!("fee estimate: {}", e.into())))?;
+            AtomicUnits::from_raw(
+                estimates
+                    .economy
+                    .calculate_fee_from_weight(BOND_SIZE_CEILING_BYTES),
+            )
+        };
+
+        // W1 preflight sweep (SA-R1-b, sweep-before-persist): the same
+        // inputs the assemble path will use, run BEFORE the durable point so
+        // an insufficient-funding first-stake fails closed as a non-staker.
+        let witness = SpentRecordsDurablyPruned::arm1_watch_pruning_live();
+        {
+            let funding_records = load_pscan_state_for_engine(self_arc.clone())
+                .await
+                .map_err(|e| FirstStakeError::Funding(format!("pscan state load: {e}")))?
+                .map(|s| s.funding_outputs().to_vec())
+                .unwrap_or_default();
+            let reserved = store
+                .read(shekyl_engine_state::PendingPostBlock::reserved_gindexes)
+                .await
+                .map_err(|e| FirstStakeError::Funding(format!("reserved gindexes: {e}")))?;
+            let floor = AtomicUnits::from_raw(bond_floor(&holdings));
+            let required = floor
+                .checked_add(fee)
+                .ok_or_else(|| FirstStakeError::Funding("floor + fee overflow".to_owned()))?;
+            let reference = anchored_reference_block(&curve_tree, chain_tip, tip_hash_at)
+                .await
+                .map_err(|e| FirstStakeError::Funding(e.to_string()))?;
+            sweep_funding_outputs(
+                &witness,
+                &funding_records,
+                slot,
+                &reserved,
+                required,
+                BlockHeight::from_raw(reference.height.0),
+            )
+            .map_err(|e| FirstStakeError::Funding(e.to_string()))?;
+        }
+
+        // The durable point (W1 above it, W2 below it). Re-entrant for the
+        // resume path: the slot-set push is idempotent and a fresh ticket is
+        // minted regardless (§5.7 W2).
+        let ticket = {
+            let g = self_arc.read().await;
+            g.persist_bond_record(slot)
+                .map_err(|e| FirstStakeError::Persist(e.to_string()))?
+        };
+        let handle = stake
+            .mint_handle(slot)
+            .await
+            .map_err(|e| FirstStakeError::Engine(e.to_string()))?;
+        let assembled =
+            Self::assemble_bond_post(self_arc.clone(), handle, ticket, holdings, fee, &witness)
+                .await
+                .map_err(|e| FirstStakeError::Engine(e.to_string()))?;
+
+        Ok(FirstStakeOutcome {
+            p_slot: slot.to_raw(),
+            swept_inputs: assembled.funding_gindexes.len(),
+            resumed,
+        })
     }
 }
 

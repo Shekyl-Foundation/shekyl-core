@@ -21,13 +21,14 @@ pub use engine::payment_requests::{NewPaymentRequest, PaymentRequestFilter};
 pub use engine::MultisigSignerV2;
 pub use engine::{
     Capability, CapabilityInput, ChangePasswordError, Credentials, DaemonClient, DaemonOp,
-    DiagnosticSink, Engine, EngineCreateParams, EngineSignerKind, FeePriority, IoError, KeyError,
-    LocalRefresh, MalformedKind, Network, NoopDiagnosticSink, OpenError, OpenedEngine, PScanHandle,
-    PScanStartError, PendingTx, PendingTxError, PersistenceError, ProtocolErrorKind,
-    RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress,
-    RefreshReorgEvent, RefreshSummary, ReservationId, ScannableBlock, SendError, SoloSigner,
-    StateWrapKey, SuppressedClass, TracingDiagnosticSink, TxError, TxHash, TxRecipient,
-    TxRecipientSummary, TxRequest, ViewMaterial,
+    DiagnosticSink, Engine, EngineCreateParams, EngineSignerKind, FeePriority, FirstStakeError,
+    FirstStakeOutcome, IoError, KeyError, LocalRefresh, MalformedKind, Network, NoopDiagnosticSink,
+    OpenError, OpenedEngine, PScanHandle, PScanStartError, PendingTx, PendingTxError,
+    PersistenceError, ProtocolErrorKind, RefreshDiagnostic, RefreshError, RefreshHandle,
+    RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
+    ReservationId, ScannableBlock, SendError, SoloSigner, StateWrapKey, SuppressedClass,
+    TracingDiagnosticSink, TxError, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
+    ViewMaterial,
 };
 pub use outbound_label::label_plaintext_for_payment_uri;
 pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult};

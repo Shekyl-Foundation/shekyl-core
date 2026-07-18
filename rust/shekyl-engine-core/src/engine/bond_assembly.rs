@@ -303,11 +303,6 @@ impl SpentRecordsDurablyPruned {
     /// pre-genesis fresh-sync). Callers are the production assemble/dispatch
     /// paths (bond orchestrator, claim orchestrator, claim-dispatch seam) via
     /// the activation round's entry.
-    // rule-21: the in-crate production caller is the #332 activation entry
-    // (retires with dead-code half (b)); until then the non-test consumer is
-    // the DQ-F fire harness (`test-helpers` + not(test)), which the cfg(test)
-    // lint unit cannot see.
-    #[allow(dead_code)]
     pub(crate) fn arm1_watch_pruning_live() -> Self {
         Self { _sealed: () }
     }
