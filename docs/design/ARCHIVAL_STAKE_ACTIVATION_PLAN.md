@@ -382,7 +382,14 @@ Landed exactly as ratified, plus one composition fact §5.0 left implicit:
 
 **Still open after this landing (Guard-2 language):** SP-R0 arm #1 remains
 **logic-discharged**; its **production-discharge** needs the DQ-F lane driven through
-THIS entry (a CI lane staking a wallet via the production `stake` path and asserting
-the GC fire) — the entry makes that lane drivable, it does not constitute it. The
+THIS entry (staking a wallet via the production `stake` path and asserting the GC
+fire). **Named blocker, discovered at implementation:** the loop's confirmation half
+is gated on the **PR-4b daemon submit-legs battery** — the regtest bond post today
+terminates at the pinned Phase-C unimplemented-arm refusal, so no bond can confirm
+on-chain for the scan to observe. The regtest tripwire's promotion note now names the
+production-discharge leg explicitly (convert the harness to `Engine::first_stake`
+and assert the sealed-state prune when PR-4b lands). Arm #3 landed in this same PR
+(open-time phantom GC, logic-discharged by the co-designed SA-DQ-3 crash fixture;
+its production-discharge rides the same PR-4b-gated lane). The
 `stake_in` principal-side funding shape and the reopen-friction polish
 (`FOLLOWUPS` V3.x) stay with their own homes.

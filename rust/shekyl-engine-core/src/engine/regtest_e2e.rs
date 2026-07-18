@@ -1631,7 +1631,12 @@ async fn e2e_staker_bond_post_reaches_the_daemon_submit_gap() {
             "daemon ACCEPTED the bond post ({success:?}): the PR-4b bond-post battery \
              has landed — promote this tripwire into the accepted-and-applied leg \
              (mine past the scan horizon; assert a bond-post match + a BondPostChange \
-             funding output beyond the {discovered} discovered pre-post)"
+             funding output beyond the {discovered} discovered pre-post) AND the \
+             SP-R0 arm-#1 PRODUCTION-DISCHARGE leg (drive the flow through \
+             Engine::first_stake / the stake RPC instead of this harness's direct \
+             persist+assemble, then assert the swept funding records are PRUNED \
+             from the sealed state once the scan covers the confirmed post — the \
+             DQ-F production fire)"
         ),
         Err(other) => panic!(
             "bond post must reach the Phase-C unimplemented-arm refusal, \

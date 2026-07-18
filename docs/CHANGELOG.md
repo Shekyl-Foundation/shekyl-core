@@ -21,8 +21,13 @@
   driver sends at its offset). SA-R1-c: multi-input bond posts are now a
   consciously-logged exception (`tracing::warn!` at assemble). Retires
   the GF4b rule-21 dead-code half (b) on all five witness consumers.
-  Guard-2: SP-R0 arm #1 remains logic-discharged — production-discharge
-  awaits the DQ-F CI lane through this entry.
+  Same PR: **SP-R0 arm #3** (open-time phantom `bonded_slots` GC at the
+  derive-time locus, phantom ⟺ no-pending ∧ absent-within-covered with
+  the pending-record bridge as the wrongful-GC argument; logic-discharged
+  by the SA-DQ-3 co-designed crash-fixture lane). Guard-2: arms #1/#3
+  production-discharge is **blocked on the PR-4b daemon submit-legs
+  battery** (named; the regtest tripwire's promotion note carries the
+  conversion instruction).
 
 - **wallet: SP-R0 arm #1 — spent-funding-record prune via key-image watch
   (logic-discharged).** The `P`-scan dual extractor gains arm (c): each
