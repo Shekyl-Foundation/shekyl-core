@@ -59,12 +59,25 @@ impl std::fmt::Debug for DrainCandidate {
 
 /// The outcome of the select stage: the output identities that fund the drain
 /// and the exact input total they contribute (change is computed downstream).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct DrainSelection {
     /// The selected outputs' global indices, in selection order.
     pub(crate) chosen: Vec<GlobalOutputIndex>,
     /// The sum of the chosen outputs' amounts (`>= drain amount`).
     pub(crate) input_total: AtomicUnits,
+}
+
+impl std::fmt::Debug for DrainSelection {
+    /// Redacted: `chosen` is the set of leaf positions `P` is about to drain
+    /// together — a slice of `P`'s spend set, which the firewall keeps
+    /// unenumerable, same discipline as [`DrainCandidate`]. The aggregate
+    /// `input_total` is a public scalar and renders.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DrainSelection")
+            .field("chosen", &"<redacted spend-set>")
+            .field("input_total", &self.input_total)
+            .finish()
+    }
 }
 
 /// Why the select stage could not assemble the requested drain amount.
@@ -79,12 +92,13 @@ pub(crate) enum DrainSelectError {
 /// Select a lineage-blind set of mature candidates whose amounts cover
 /// `amount`.
 ///
-/// Selection reads only `{amount, spendable_height}` off each candidate:
-/// mature candidates (`spendable_height <= reference_height`) are taken
-/// largest-first — a deterministic, lineage-blind policy that minimises the
-/// input count — until their running total reaches the drain amount. The
-/// maturity filter is defensive: the projection already hands in the mature
-/// subset, but re-checking keeps this stage correct for any candidate slice.
+/// Selection reads only `{amount, spendable_height, output_id}` off each
+/// candidate: mature candidates (`spendable_height <= reference_height`) are
+/// taken largest-first (ties broken by output id ascending) — a fully
+/// deterministic, lineage-blind policy that minimises the input count — until
+/// their running total reaches the drain amount. The maturity filter is
+/// defensive: the projection already hands in the mature subset, but
+/// re-checking keeps this stage correct for any candidate slice.
 pub(crate) fn select_for_drain(
     candidates: &[DrainCandidate],
     amount: DrainAmount,
@@ -96,9 +110,18 @@ pub(crate) fn select_for_drain(
         .iter()
         .filter(|c| c.spendable_height <= reference_height)
         .collect();
-    // Largest-first: deterministic and lineage-blind (orders on amount only),
-    // and minimises the number of inputs the drain consumes.
-    mature.sort_by(|a, b| b.amount.to_raw().cmp(&a.amount.to_raw()));
+    // Largest-first, ties broken by output id ascending — the engine's
+    // established selection order (`output_selector.rs`). Amount-only would
+    // leave equal-amount ties to `sort_by`'s unstable order, making the chosen
+    // set toolchain-dependent; the id tiebreak makes selection fully
+    // deterministic. Lineage-blind (never orders on lineage/epoch/height), and
+    // minimises the number of inputs the drain consumes.
+    mature.sort_by(|a, b| {
+        b.amount
+            .to_raw()
+            .cmp(&a.amount.to_raw())
+            .then(a.output_id.to_raw().cmp(&b.output_id.to_raw()))
+    });
 
     let mut chosen = Vec::new();
     let mut input_total = AtomicUnits::from_raw(0);
@@ -205,6 +228,21 @@ mod tests {
         let err = select_for_drain(&candidates, amount(500, 1010), BlockHeight::from_raw(10))
             .expect_err("immature excluded");
         assert_eq!(err, DrainSelectError::Insufficient);
+    }
+
+    #[test]
+    fn equal_amounts_break_ties_by_output_id_ascending() {
+        // Three equal-amount candidates, presented out of id order. The drain
+        // needs exactly one; the id tiebreak must pick the lowest id
+        // deterministically, independent of input order or toolchain.
+        let candidates = [
+            candidate(9, 50, 10),
+            candidate(2, 50, 10),
+            candidate(5, 50, 10),
+        ];
+        let sel = select_for_drain(&candidates, amount(40, 150), BlockHeight::from_raw(10))
+            .expect("covers");
+        assert_eq!(sel.chosen, vec![GlobalOutputIndex::from_raw(2)]);
     }
 
     #[test]

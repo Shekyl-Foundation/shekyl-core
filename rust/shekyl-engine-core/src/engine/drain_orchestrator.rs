@@ -69,8 +69,8 @@ pub struct DrainBalance {
 }
 
 /// The output of the drain planner: the selected input identities, the drain
-/// amount, and the change — all public, none reward-decomposed.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// amount, and the change — none reward-decomposed.
+#[derive(Clone, PartialEq, Eq)]
 pub struct DrainPlan {
     /// The amount to move (proven affordable against the aggregate scalar,
     /// never a reward subsum).
@@ -82,6 +82,22 @@ pub struct DrainPlan {
     pub input_total: AtomicUnits,
     /// `input_total - amount`; the change the assembly returns to `P`.
     pub change: AtomicUnits,
+}
+
+impl std::fmt::Debug for DrainPlan {
+    /// Redacted: `inputs` is the set of leaf positions `P` is about to drain
+    /// together — a slice of `P`'s spend set, which the firewall keeps
+    /// unenumerable, same discipline as the stripped candidates it came from.
+    /// The aggregate scalars (`amount`, `input_total`, `change`) are public and
+    /// render.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DrainPlan")
+            .field("amount", &self.amount)
+            .field("inputs", &"<redacted spend-set>")
+            .field("input_total", &self.input_total)
+            .field("change", &self.change)
+            .finish()
+    }
 }
 
 /// Why the drain planner could not produce a plan.
