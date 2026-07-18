@@ -6317,9 +6317,10 @@ sustainability is unaffected by the recalibration.
   (2026-07-15 overhaul) — plus Track A MSW-1…MSW-6 (DoS ceiling +
   disjointness KAT + misattribution + version plumbing + scheme_id
   relax) — **not** a leaf-preimage change (F-2 retraction 2026-07-14).
-  Historical note: FFI
-  `shekyl_pqc_verify_with_group_id` still exists; do not schedule
-  daemon wiring as a V3.1 ship-gate.
+  **CLOSED 2026-07-18 (MS-5 PR-B):** the FFI
+  `shekyl_pqc_verify_with_group_id` and `group_id` itself are now
+  **deleted** — group identity is the address fingerprint (§5.3), so there
+  is no symbol left to wire and nothing to schedule.
 
 - **Historical tree path assembly uses current LMDB state.**
   `assemble_tree_path_for_output` (in both `chaingen.cpp` and
@@ -12559,10 +12560,11 @@ Retained for citation in review; each links to the canonical record.
   shekyl-core CI will catch it before the GUI wallet release workflow
   does.
 
-- **PQC Multisig V3.1: FFI returns typed error codes.** All three
-  verification FFI functions (`shekyl_pqc_verify`,
-  `shekyl_pqc_verify_with_group_id`, `shekyl_fcmp_verify`) now return
+- **PQC Multisig V3.1: FFI returns typed error codes.** The verification
+  FFI functions (`shekyl_pqc_verify`, `shekyl_fcmp_verify`) now return
   `u8` error codes: 0 = success, nonzero = typed error discriminant.
+  (`shekyl_pqc_verify_with_group_id` was a third such function; it is
+  **deleted** as of MS-5 PR-B — group_id retired, §5.3.)
   The debug-only `shekyl_pqc_verify_debug` was deleted. C++ callers
   log error codes in all build modes. Per
   `.cursor/rules/30-ffi-discipline.mdc`.

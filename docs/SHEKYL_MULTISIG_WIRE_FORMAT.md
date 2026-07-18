@@ -1,6 +1,11 @@
 # Shekyl Multisig Wire Format v1
 
-> **Status:** Normative for V3.1 conformance
+> **Status:** **Historical Option-D transport record — pending E′ rewrite.**
+> Was normative for V3.1 Option-D conformance; under Option E′ the `group_id`
+> field is retired (identity is the address fingerprint) and the wallet owns no
+> transport, so the envelope/relay framing below is not yet a conforming E′
+> spec. See the "Option-D residue" note under §1. A conforming E′ wire spec
+> lands with the transport slice.
 >
 > **Spec version:** 1
 >
@@ -21,9 +26,10 @@ stated otherwise.
 > **address fingerprint** (`PQC_MULTISIG.md` §5.3), and (2) under Option E′
 > the wallet **owns no transport** — the engine emits/consumes a
 > self-authenticating blob and this envelope/relay framing is not a wallet
-> responsibility ([[eprime-transport-blob-not-pipe]]). The offset tables
-> below are retained as the Option-D transport record; a conforming E′ wire
-> spec lands with the transport slice, not here.
+> responsibility (the E′ "no wallet transport" decision; see
+> `design/V3_1_MULTISIG_RUST_ENGINE.md`). The offset tables below are
+> retained as the Option-D transport record; a conforming E′ wire spec
+> lands with the transport slice, not here.
 
 ---
 

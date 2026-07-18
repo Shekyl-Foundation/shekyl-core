@@ -1725,8 +1725,10 @@ stream**, not as "same privacy as solo at small volume."
 > MSW-4/5 is met by the fingerprint's preimage, not by a `group_id` hash;
 > the `group_id`-preimage mechanics below are historical.
 
-**Honesty pin (2026-07-14 — P0-k / R1-F-11).** These rows are
-*intent*, not substrate. Today:
+**Honesty pin (2026-07-14 — P0-k / R1-F-11; historical — see the
+supersession note above).** *When written*, these rows were *intent*, not
+substrate. The `multisig_group_id` mechanics described below are now deleted
+(§5.3); items 1–3 are retained only as the reasoning record for MSW-4/5:
 
 1. **`group_version` is fused with `MULTISIG_CONTAINER_VERSION`.**
    `multisig_group_id` passes the compile-time constant as
@@ -1818,7 +1820,8 @@ and the phrase "pure-PQC spend-auth" is ambiguous (pin below).
 
 #### Posture first — multisig is already PQ for authorization
 
-Scheme_id=2 verify check 10 is `M × Ed25519 + M × ML-DSA`
+Scheme_id=2 verify check 9 (the final, crypto check — see §5.3; returns
+`CryptoVerifyFailed` = FFI code 10) is `M × Ed25519 + M × ML-DSA`
 (`shekyl-crypto-pq` multisig). The key container is hybrid by
 construction (`SINGLE_KEY_CANONICAL_LEN = 1996`). Forging an M-of-N
 spend requires breaking ML-DSA-65 M times. **Threshold authorization
@@ -1826,7 +1829,8 @@ is quantum-resistant today.**
 
 Classical exposure lives in the **FCMP++ layer**, not in multisig:
 
-- SAL / membership: Ed25519 (`SPEND_AUTH_VERSION_ED25519 = 0x01`;
+- SAL / membership: Ed25519 (`SPEND_AUTH_VERSION_ED25519 = 0x02`; `0x01`
+  never issued — the never-shipped Option-D scaffold value;
   `SpendAuthAndLinkability` in `shekyl-fcmp`, compiled unconditionally).
 - Leaf `{O.x, I.x, C.x, H(pqc_pk)}` for every output on the chain.
 - **Solo has the identical posture** — classical membership/SAL +
