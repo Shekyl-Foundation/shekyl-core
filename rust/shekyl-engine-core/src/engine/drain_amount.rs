@@ -9,13 +9,17 @@
 //!
 //! This is a **guarded module** (F-D1 M1 arm). The forbidden read is the
 //! reward-sequence decomposition: per-output amounts are the reward *values*,
-//! so an amount stage that could see the per-output vector could produce a
+//! so an amount stage that could see the per-output vector could compute a
 //! drain amount equal to a reward subsum, off-chain-matchable against the
 //! publicly-derivable `reward_P(E)` (§18.10). The carve is structural: the
 //! only balance input this stage takes is a single [`AtomicUnits`] scalar —
 //! the aggregate spendable total — consulted for `amount <= affordable`
-//! **only**, never as a computation input. The chosen amount is therefore
-//! provably not any subsum of the reward sequence.
+//! **only**, never as a computation input. Core code therefore **cannot
+//! derive** a reward-shaped amount from the decomposition — the per-output
+//! vector never reaches this stage. Whether the returned value *coincides*
+//! with some subsum depends on the `target` handed in; shaping `target` away
+//! from reward values is the F-D2 round-number / random-split UI default
+//! (`shekyl-gui-wallet`), not this stage.
 //!
 //! The amount-stage signature check ([`tests`]) pins that carve: the entry
 //! point takes `affordable: AtomicUnits`, and this file never names the
@@ -66,10 +70,12 @@ pub(crate) enum DrainAmountError {
 ///
 /// `affordable` is the **aggregate spendable total** (one scalar); it is read
 /// for the affordability check (`target <= affordable`) **only**, never as a
-/// computation input — so the returned amount is provably not any subsum of
-/// the reward sequence (§12.3). The `{cadence, RNG}` shaping the pin lists
-/// alongside the target is the F-D2 round-number / random-split UI default
-/// that *produces* `target`; it lives in `shekyl-gui-wallet`, not here.
+/// computation input. The per-output reward vector never reaches this stage,
+/// so core code cannot *derive* a reward-shaped amount here; the returned
+/// amount is the validated `target` verbatim (§12.3). The `{cadence, RNG}`
+/// shaping the pin lists alongside the target — which steers `target` away
+/// from any reward subsum — is the F-D2 round-number / random-split UI default
+/// that *produces* it; it lives in `shekyl-gui-wallet`, not here.
 pub(crate) fn choose_drain_amount(
     request: DrainRequest,
     affordable: AtomicUnits,

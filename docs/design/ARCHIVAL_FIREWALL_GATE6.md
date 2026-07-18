@@ -2143,9 +2143,11 @@ channels are both phantom — timing per F-W7, output-count per F-W10 — so "do
 `shekyl-engine-core/src/engine/`, three modules mirroring the three stages:
 
 - `drain_orchestrator.rs` — the single trust boundary. The **only** drain-path
-  site that names `PFundingOutputRecord` / reads `MintLineageOutput`;
-  `project_drain_operands` drops `{lineage, epoch, height}`, keeps the mature
-  subset, and reduces to the aggregate scalar (`DrainBalance`) + the stripped
+  site that names/holds `PFundingOutputRecord` (which carries `MintLineageOutput`)
+  — so the only site *permitted to observe* `{lineage, epoch, height}`;
+  `project_drain_operands` drops all three (it reads only `spendable_height` to
+  filter and copies `gindex`/`amount`), keeps the mature subset, and reduces to
+  the aggregate scalar (`DrainBalance`) + the stripped
   `{output_id, amount, spendable_height}` vector. `plan_drain` composes the
   three stages; it is the public API the eventual drain command calls.
 - `drain_amount.rs` — the amount stage. `choose_drain_amount(request,

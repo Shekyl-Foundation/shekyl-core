@@ -11,20 +11,23 @@
 //!
 //! - **Amount** ([`super::drain_amount::choose_drain_amount`]): `{user
 //!   target, cadence, RNG}` + the aggregate scalar (affordability check
-//!   only) → a drain amount that is provably not any reward subsum.
+//!   only). The per-output reward vector is never in scope, so core code
+//!   cannot *compute* a reward-shaped subsum from it.
 //! - **Select** ([`super::drain_select::select_for_drain`]): lineage-blind
 //!   coin selection over the stripped `{output_id, amount, spendable_height}`
 //!   vector.
 //! - **Project** (this module): the single trust boundary. It is the **only**
 //!   drain-path site that holds the persisted funding-output records (the
-//!   `PScanState.funding_outputs` set the caller loads) and reads their
-//!   mint-lineage tag, arrival epoch, and arrival height. It projects those
-//!   records into the two operands the guarded stages consume — the aggregate
-//!   spendable scalar and the stripped candidate vector — mirroring the
-//!   established "orchestrator prepares operands, downstream receives prepared
-//!   values" seam (`claim_orchestrator.rs`). The amount and select modules
-//!   never name the record or the lineage tag; this module does, and is
-//!   deliberately excluded from the F-D1 M1 import-check arm.
+//!   `PScanState.funding_outputs` set the caller loads) — so it is the only
+//!   site *permitted to observe* their mint-lineage tag, arrival epoch, and
+//!   arrival height, and it drops all three by projecting only `{output_id,
+//!   amount, spendable_height}`. It reduces the records into the two operands
+//!   the guarded stages consume — the aggregate spendable scalar and the
+//!   stripped candidate vector — mirroring the established "orchestrator
+//!   prepares operands, downstream receives prepared values" seam
+//!   (`claim_orchestrator.rs`). The amount and select modules never name the
+//!   record or the lineage tag; this module does, and is deliberately
+//!   excluded from the F-D1 M1 import-check arm.
 //!
 //! [`plan_drain`] composes the three stages on an already-loaded record set:
 //! the caller (the eventual drain actor/command) loads
@@ -201,8 +204,10 @@ pub fn drain_balance(
 /// ([`choose_drain_amount`], affordability against the aggregate scalar only)
 /// → select ([`select_for_drain`], lineage-blind over the stripped vector).
 /// `target` is a single scalar (F-D2 core-side contract): the caller cannot
-/// hand in a reward decomposition, and the amount the planner returns is
-/// provably not any reward subsum.
+/// hand in a reward decomposition, and the per-output reward vector never
+/// reaches the amount stage — so core code cannot *compute* a reward-shaped
+/// amount. Steering the returned value away from a subsum is the F-D2 UI
+/// default (round-number / random-split), not built here.
 pub fn plan_drain(
     records: &[PFundingOutputRecord],
     reference_height: BlockHeight,

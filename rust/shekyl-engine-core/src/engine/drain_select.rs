@@ -111,11 +111,12 @@ pub(crate) fn select_for_drain(
         .filter(|c| c.spendable_height <= reference_height)
         .collect();
     // Largest-first, ties broken by output id ascending — the engine's
-    // established selection order (`output_selector.rs`). Amount-only would
-    // leave equal-amount ties to `sort_by`'s unstable order, making the chosen
-    // set toolchain-dependent; the id tiebreak makes selection fully
-    // deterministic. Lineage-blind (never orders on lineage/epoch/height), and
-    // minimises the number of inputs the drain consumes.
+    // established selection order (`output_selector.rs`). `sort_by` is stable,
+    // so amount-only ties would preserve the caller's candidate order, making
+    // the chosen set depend on how the record slice was built; the id tiebreak
+    // makes selection independent of input order and fully deterministic.
+    // Lineage-blind (never orders on lineage/epoch/height), and minimises the
+    // number of inputs the drain consumes.
     mature.sort_by(|a, b| {
         b.amount
             .to_raw()

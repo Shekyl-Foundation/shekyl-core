@@ -9,13 +9,16 @@
   value-out (drain) path lands in `shekyl-engine-core/src/engine/` as three
   modules mirroring the three stages of the (a)+strip encoding:
   `drain_orchestrator.rs` is the **single trust boundary** — the only drain-path
-  site that names `PFundingOutputRecord` / reads `MintLineageOutput`; it projects
-  the funding records into an aggregate spendable scalar (`DrainBalance`, the
-  F-D2 core-side surface) and a stripped `{output_id, amount, spendable_height}`
-  candidate vector, dropping `{lineage, epoch, height}` so no reward-sequence
-  decomposition survives. `drain_amount.rs` consults the scalar for an
-  **affordability check only** (`target ≤ affordable`), never as a computation
-  input, so the chosen amount is provably not any reward subsum.
+  site that names/holds `PFundingOutputRecord` (which carries `MintLineageOutput`);
+  it projects the funding records into an aggregate spendable scalar
+  (`DrainBalance`, the F-D2 core-side surface) and a stripped
+  `{output_id, amount, spendable_height}` candidate vector, dropping
+  `{lineage, epoch, height}` so no reward-sequence decomposition survives.
+  `drain_amount.rs` consults the scalar for an **affordability check only**
+  (`target ≤ affordable`), never as a computation input, so core code cannot
+  *derive* a reward-shaped amount from the per-output decomposition — the vector
+  never reaches the stage. (Steering the returned value away from any subsum is
+  the F-D2 round-number / random-split UI default, not built here.)
   `drain_select.rs` does lineage-blind largest-first coin selection over the
   stripped vector. `plan_drain` composes the three; it takes a single scalar
   `target`, so a UI on this surface structurally cannot pre-fill a reward-shaped
