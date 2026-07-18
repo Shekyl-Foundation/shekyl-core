@@ -807,7 +807,7 @@ async fn open_during_inflight_close_is_refused_busy() {
 
     // Freeze the close at its mid-flight point: slot taken, tenant mutex
     // released, engine not yet persisted/dropped.
-    let (name, shared) = {
+    let (name, shared, pscan) = {
         let mut ts = state.tenants.lock().await;
         ts.tenant.take_open().expect("wallet open")
     };
@@ -827,7 +827,14 @@ async fn open_during_inflight_close_is_refused_busy() {
     assert_eq!(racer["error"]["code"], -29000, "{racer}");
 
     // The close's failure path can therefore restore into a still-empty slot.
-    state.tenants.lock().await.tenant.restore_open(name, shared);
+    // This "closer" wallet is a non-staker, so `pscan` is `None` (no P-scan task
+    // to re-arm); thread it back through faithfully.
+    state
+        .tenants
+        .lock()
+        .await
+        .tenant
+        .restore_open(name, shared, pscan);
     let bal = rpc(
         state.clone(),
         json!({ "jsonrpc": "2.0", "id": 3, "method": "get_balance", "params": {} }),

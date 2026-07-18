@@ -4467,4 +4467,53 @@ tradeoff), but fail-closed is the cheaper and more honest default here.
 
 ---
 
+## 2026-07-17 — Solo address `ek_bind_tag`: bind the PQC segments to the classical segment
+
+**Decision.** The full solo address's classical segment carries a 16-byte
+`ek_bind_tag = cSHAKE256("shekyl/ek-bind-v1", ml_kem_ek)[..16]`. Decode
+reconstructs `ml_kem_ek` from the two PQC segments and rejects
+(`AddressError::EkBindMismatch`) when the recomputed tag does not match. This is
+a pre-genesis amendment to the solo address format: the classical payload grows
+`1 + 64 → 1 + 64 + 16 = 81` bytes (`CLASSICAL_PAYLOAD_LEN` unchanged; new
+`EK_BIND_TAG_LEN`), and the address grows ~2,030 → ~2,055 chars. The short
+display/view-only form (65 B, no tag) is unchanged — it is a non-payable label
+with no PQC segments to bind. A pinned KAT (`ek_bind_tag_kat`) freezes the
+preimage; `const _` asserts pin every segment under Bech32m's 1023-char bound at
+compile time.
+
+**Rationale.** Each of the three Bech32m segments carries an independent
+checksum that detects corruption *within* a segment but binds nothing *across*
+them. A spliced address — classical from one party, PQC segments from another —
+decoded clean, and a payer built an output encapsulating to a mismatched
+`ml_kem_ek`: the recipient cannot recover the KEM shared secret, so the output
+is unrecognizable and effectively burned, with no diagnostic. That is a live
+funds-loss path on any copy-paste/transcription splice (rule 82: failure modes
+are first-class). One hash over `ml_kem_ek`, committed in each legitimate
+classical segment, makes the mismatch a decode error in either splice direction.
+A hash — not a signature — because the binding is a PQ-critical integrity gate
+and a hash is the only compact PQ-secure primitive: any signature would drag a
+>1 KB PQ verification key into the address (the same wall). The tag is spec'd as
+a splice/transcription detector, **not** a cryptographic binding against a
+preimage adversary (16 bytes: 2^128 classical, 2^64 Grover), because an
+adversary who can rewrite half the pasted string can substitute the whole
+address for free — the compromised-origin limit no tag closes.
+
+**Alternative rejected.** (1) *Unify solo onto the multisig file+fingerprint
+model* (name = hash, payload filed). Rejected for V3.0: it makes solo
+unpasteable and reintroduces a payment-time metadata channel via any external
+registry fetch; solo is under the Bech32m wall and stays a full pasteable
+string. The multisig side (over the wall) correctly went file+fingerprint in PR
+#323 — two models, both correct, by validation surface, not symmetry. (2)
+*Widen the tag to `cSHAKE256(spend ‖ view ‖ ek)`* to also catch a deliberate
+classical-substitution-with-kept-ek. Rejected: spend/view corruption is already
+caught by the classical segment's own Bech32m checksum, and the deliberate
+splice is a burn (not theft) dominated by "hand over your own valid address,"
+so the extra preimage buys nothing over the accident-detection the tag is for.
+
+**Reference.** Solo `ek_bind` PR; `rust/shekyl-address/src/address.rs`;
+POST_QUANTUM_CRYPTOGRAPHY.md §Address Format; follows the multisig cSHAKE
+fingerprint precedent (PR #323).
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->
