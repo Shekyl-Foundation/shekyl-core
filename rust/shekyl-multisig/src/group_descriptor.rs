@@ -18,11 +18,15 @@ pub const GROUP_DESCRIPTOR_VERSION: u8 = 1;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GroupDescriptor {
     pub version: u8,
-    pub group_id: String,
     pub m_required: u8,
     pub n_total: u8,
     pub spend_auth_version: u8,
     pub participant_pubkeys: Vec<String>,
+    /// The group's identity: the hex of `shekyl_address::address_fingerprint`
+    /// over the group's `MultisigAddressPayload`. This is the single group
+    /// identifier — it replaces the former opaque `group_id: String`, which was
+    /// carried but never produced by anything (the synthesis: one value, one
+    /// producer, independently derivable by every participant from the address).
     pub address_fingerprint: String,
     pub created_at: u64,
     pub notes: Option<String>,
@@ -30,7 +34,6 @@ pub struct GroupDescriptor {
 
 impl GroupDescriptor {
     pub fn new(
-        group_id: String,
         m_required: u8,
         n_total: u8,
         spend_auth_version: u8,
@@ -39,7 +42,6 @@ impl GroupDescriptor {
     ) -> Self {
         Self {
             version: GROUP_DESCRIPTOR_VERSION,
-            group_id,
             m_required,
             n_total,
             spend_auth_version,
@@ -76,9 +78,6 @@ impl GroupDescriptor {
                 got: u8::try_from(desc.participant_pubkeys.len()).unwrap_or(u8::MAX),
             });
         }
-        if desc.group_id.is_empty() {
-            return Err(GroupDescriptorError::MissingGroupId);
-        }
         if desc.address_fingerprint.is_empty() {
             return Err(GroupDescriptorError::MissingFingerprint);
         }
@@ -97,8 +96,6 @@ pub enum GroupDescriptorError {
     InvalidThreshold { m: u8, n: u8 },
     #[error("pubkey count mismatch: expected {expected}, got {got}")]
     PubkeyCountMismatch { expected: u8, got: u8 },
-    #[error("group_id is required")]
-    MissingGroupId,
     #[error("address_fingerprint is required")]
     MissingFingerprint,
 }
@@ -110,7 +107,6 @@ mod tests {
     fn make_test_descriptor() -> GroupDescriptor {
         GroupDescriptor {
             version: GROUP_DESCRIPTOR_VERSION,
-            group_id: "abcd1234".into(),
             m_required: 2,
             n_total: 3,
             spend_auth_version: 2,
@@ -126,7 +122,7 @@ mod tests {
         let desc = make_test_descriptor();
         let json = desc.to_json().unwrap();
         let parsed = GroupDescriptor::from_json(&json).unwrap();
-        assert_eq!(parsed.group_id, desc.group_id);
+        assert_eq!(parsed.address_fingerprint, desc.address_fingerprint);
         assert_eq!(parsed.m_required, 2);
         assert_eq!(parsed.n_total, 3);
         assert_eq!(parsed.participant_pubkeys.len(), 3);
@@ -166,13 +162,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_group_id() {
+    fn rejects_empty_address_fingerprint() {
         let mut desc = make_test_descriptor();
-        desc.group_id = String::new();
+        desc.address_fingerprint = String::new();
         let json = serde_json::to_string(&desc).unwrap();
         assert!(matches!(
             GroupDescriptor::from_json(&json),
-            Err(GroupDescriptorError::MissingGroupId)
+            Err(GroupDescriptorError::MissingFingerprint)
         ));
     }
 }

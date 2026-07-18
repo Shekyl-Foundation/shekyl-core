@@ -11,7 +11,7 @@ fuzz_target!(|data: &[u8]| {
     let intent = SpendIntent {
         version: data[0],
         intent_id: data[1..33].try_into().unwrap_or([0; 32]),
-        group_id: data[33..65].try_into().unwrap_or([0; 32]),
+        address_fingerprint: data[33..65].try_into().unwrap_or([0; 32]),
         proposer_index: data[65],
         proposer_sig: vec![0; 64],
         created_at: u64::from_le_bytes(data[66..74].try_into().unwrap_or([0; 8])),

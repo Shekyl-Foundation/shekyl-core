@@ -15,7 +15,7 @@ fn replay_detection_via_kem_seed() {
     let intent1 = SpendIntent {
         version: SPEND_INTENT_VERSION,
         intent_id: [0x11; 32],
-        group_id: [0xBB; 32],
+        address_fingerprint: [0xBB; 32],
         proposer_index: 0,
         proposer_sig: vec![0; 64],
         created_at: 1000,
@@ -106,7 +106,7 @@ fn structural_validation_rejects_all_bad_inputs() {
     let base = SpendIntent {
         version: SPEND_INTENT_VERSION,
         intent_id: [0; 32],
-        group_id: [0; 32],
+        address_fingerprint: [0; 32],
         proposer_index: 0,
         proposer_sig: vec![0; 64],
         created_at: 1000,

@@ -77,8 +77,8 @@ pub enum InvariantCheckResult {
 /// The caller provides all locally-derived values; the invariant checks
 /// compare them against the proposed intent.
 pub struct InvariantCheckInput<'a> {
-    /// Our group_id.
-    pub our_group_id: &'a [u8; 32],
+    /// Our address_fingerprint.
+    pub our_address_fingerprint: &'a [u8; 32],
     /// n_total from group metadata.
     pub n_total: u8,
     /// Current time (unix seconds).
@@ -112,10 +112,10 @@ pub fn check_pre_signing_invariants(
     input: &InvariantCheckInput<'_>,
 ) -> InvariantCheckResult {
     // I1: SpendIntent structural + group binding (§9.2)
-    if intent.group_id != *input.our_group_id {
+    if intent.address_fingerprint != *input.our_address_fingerprint {
         return InvariantCheckResult::Fail {
             invariant: InvariantId::I1SpendIntentValidation,
-            evidence: intent.group_id.to_vec(),
+            evidence: intent.address_fingerprint.to_vec(),
         };
     }
     if let Err(e) = intent.validate_structural(input.n_total, input.now_secs) {
@@ -184,7 +184,7 @@ mod tests {
         SpendIntent {
             version: SPEND_INTENT_VERSION,
             intent_id: [0xAA; 32],
-            group_id: [0xBB; 32],
+            address_fingerprint: [0xBB; 32],
             proposer_index: 0,
             proposer_sig: vec![0; 64],
             created_at: 1000,
@@ -215,7 +215,7 @@ mod tests {
         let _ = intent;
 
         // We leak the boxed values so they live for 'static in tests.
-        let group_id = Box::leak(Box::new([0xBB; 32]));
+        let address_fingerprint = Box::leak(Box::new([0xBB; 32]));
         let ref_hash = Box::leak(Box::new([0xCC; 32]));
         let chain_fp_ref = Box::leak(Box::new(chain_fp));
         let amounts: &'static [AtomicUnits] =
@@ -224,7 +224,7 @@ mod tests {
         let bp_bytes: &'static [u8] = Box::leak(vec![0x11u8; 50].into_boxed_slice());
 
         InvariantCheckInput {
-            our_group_id: group_id,
+            our_address_fingerprint: address_fingerprint,
             n_total: 3,
             now_secs: 1500,
             expected_tx_counter: 5,
@@ -249,9 +249,9 @@ mod tests {
     }
 
     #[test]
-    fn i1_fails_on_group_id_mismatch() {
+    fn i1_fails_on_address_fingerprint_mismatch() {
         let mut intent = test_intent();
-        intent.group_id = [0xFF; 32];
+        intent.address_fingerprint = [0xFF; 32];
         let input = test_input(&intent);
         match check_pre_signing_invariants(&intent, &input) {
             InvariantCheckResult::Fail { invariant, .. } => {

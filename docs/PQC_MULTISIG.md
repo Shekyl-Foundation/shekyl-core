@@ -351,16 +351,22 @@ MultisigAddressPayload {
     n_total:             u8   (1..=MAX_MULTISIG_PARTICIPANTS)
     m_required:          u8   (1..=n_total)
 
+    b_group:             [u8; 32]   // Option E′: group plaintext view/link key B = b·G
+    y_group:             [u8; 32]   // Option E′: FROST M-of-N group spend key Y = y·T
+
     hybrid_kem_pubkeys:  [HybridKemPubkey; n_total]
     // Each: X25519 (32 B) + ML-KEM-768 (1184 B) = 1216 B
     // Canonically ordered by participant_index (0..n_total)
 
-    // Option E′ additionally carries group B and Y_group (layout TBD
-    // in E′ address freeze). Not shown in the D-era struct below.
+    // Wire order: 6-byte header || b_group(32) || y_group(32) || KEM array.
+    // The points sit after the header and before the variable-length array, so
+    // every D-era header offset is unchanged. A payer needs B and Y to build
+    // O = ho·G + b_group + y_out·T (y_out = y_group + y_kem); without them an
+    // output cannot be constructed at all. The points are opaque compressed
+    // Edwards points in the address; their validity is checked by the output
+    // constructor (crypto-pq::output), not the address parser.
 
-    // No stored checksum: integrity is the fingerprint (§6.3). A Bech32m
-    // string encoding (§6.1) appends the HRP + checksum at encode time; the
-    // checksum is derived from the data, never a payload field.
+    // No stored checksum: integrity is the fingerprint (§6.3).
 }
 ```
 
@@ -370,16 +376,26 @@ MultisigAddressPayload {
 > from KEM shared secrets). `PER_PARTICIPANT_LEN` collapses 3200 → 1216.
 > Free pre-genesis. Applies to D and E′ identically.
 
-Canonical payload after MSW-8: `6 + N × 1216` bytes
-(`HEADER_LEN + N × PER_PARTICIPANT_LEN`, plus E′ `B`/`Y` when those fields
-land). This is the fingerprint preimage and the file contents; the Bech32m
-string form (§6.1) adds the HRP + checksum on top, which are not stored here.
+Canonical payload (E′): `70 + N × 1216` bytes
+(`HEADER_LEN(6) + 2 × GROUP_POINT_LEN(32) + N × PER_PARTICIPANT_LEN(1216)`). This
+is the fingerprint preimage and the file contents.
 
-| N | After MSW-8 (bech32m chars, approx) |
-|---|---|
-| 2 | ~3,900 ← QR-able |
-| 3 | ~5,850 |
-| 5 | ~9,740 |
+**The full address is file-based, not a Bech32m string.** At E′ sizes the address
+is ~4019 chars for a 2-of-N — past Bech32m's ~1023-char BCH-checksum validity limit,
+so encode/decode do not round-trip (measured, not estimated; the length KAT
+surfaced it). The Bech32m string form (§6.1) therefore encodes the **fingerprint**
+(32 B → 67 chars), not the payload — that is the short, QR-able, shareable
+identifier participants compare. Integrity rides the fingerprint (§6.3), never a
+full-address string or a stored checksum.
+
+| N | Canonical bytes | Full address (file-based) |
+|---|---|---|
+| 2 | 2,502 B | 4,019 bech32-equivalent chars — file only |
+| 3 | 3,718 B | file only |
+| 5 | 6,150 B | file only |
+
+The fingerprint's own Bech32m string is 67 chars at every N (fixed 32-byte input) —
+QR-able, and the thing users actually exchange and verify.
 
 ### 6.3 Address handling, fingerprint UX, and provenance
 
@@ -391,8 +407,20 @@ channel, imported at recipient end.
 send confirmation:
 
 ```
-address_fingerprint = cn_fast_hash(canonical(MultisigAddressPayload))
+address_fingerprint = cSHAKE256(canonical(MultisigAddressPayload),
+                                customization = "shekyl/multisig-address-v1")
 ```
+
+The address is on **no consensus path** (no C++ mirror, no FFI, no leaf), so
+nothing requires byte-identity with the daemon — the only reason `cn_fast_hash`
+(original Keccak-256) exists. The address instead has multiple independent
+implementers, for whom "Keccak-256" is ambiguous (original `0x01` vs SHA3 `0x06`
+padding fail silently); cSHAKE256 has one meaning and its customization string
+makes domain separation structural. This fingerprint is also the group's
+**identity** — it retires `multisig_group_id` (which has no consumer under E′ and
+hashes a per-output container under a per-group name; the code removal is the
+cross-language follow-up slice). With `B`/`Y` in the payload it covers the group's
+whole public state.
 
 The fingerprint MUST be displayed in **three parallel representations**:
 

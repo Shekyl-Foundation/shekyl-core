@@ -16,7 +16,7 @@ fn intent_roundtrip_through_encryption() {
     let intent = SpendIntent {
         version: SPEND_INTENT_VERSION,
         intent_id: [0x11; 32],
-        group_id: [0x22; 32],
+        address_fingerprint: [0x22; 32],
         proposer_index: 0,
         proposer_sig: vec![0xAA; 64],
         created_at: 1000,
@@ -86,7 +86,7 @@ fn envelope_wraps_encrypted_payload() {
 
     let envelope = MultisigEnvelope {
         version: ENVELOPE_VERSION,
-        group_id: [0xAA; 32],
+        address_fingerprint: [0xAA; 32],
         intent_hash,
         sender_index: 1,
         sender_sig: vec![0; 64],
