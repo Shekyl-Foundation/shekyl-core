@@ -47,6 +47,34 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Solo address registry: decide (a registration tx type is genesis-only)**
+  (added 2026-07-17, solo `ek_bind` PR). A solo address is a ~2,055-char
+  three-segment Bech32m string. It cannot be shortened by any encoding — no
+  post-quantum address is a Bech32m string, because Bech32m's BCH checksum is
+  proven only to ~639 B of payload and the ML-KEM-768 `ek` alone is 1,184 B
+  (the multisig side reached the same wall in PR #323 and went file-based +
+  fingerprint). The only way to a short (~67-char) pasteable solo address is a
+  **name = `cSHAKE256`(payload) + a registry that stores the payload**, fetched
+  and re-verified against the name (content-addressed, so a hostile registry
+  cannot forge — only observe). Under the recommended posture (light wallet →
+  **your own** daemon), the registry is the chain you already sync and the
+  lookup is a local read, not an observable network event — so the metadata
+  objection dissolves *for that posture*. **Blocker (why this is deferred, not
+  built):** it is a new genesis-frozen consensus object — (1) permanent,
+  monotonic, **unprunable** consensus state (a floor that only rises with the
+  user count; ~1.25 KB × users, bounded by users since there are no
+  subaddresses per `SUBADDRESS_UNDER_PQC.md` §5.7, and accounts are
+  seed-derived, not registered), and (2) an anti-griefing **fee model** (a
+  genesis parameter) that must deter permanent junk registrations without
+  taxing the one address every honest user needs. The `x25519_pk` payload
+  reconciliation that gated the size is **resolved**: x25519 is derived from
+  the view key, not carried, so the payload is 1,249 B (POST_QUANTUM §Address
+  Format). **This is a genesis-consensus decision — a registration tx type
+  cannot be added post-genesis — so it must be decided (even if the decision is
+  "no registry; solo stays a full string") before genesis cut, but it is not a
+  code task and does not block the `ek_bind` splice fix, which ships
+  independently.** *Target: V3.0 (decision only).*
+
 - **Unbond verify: record-floor belt (the `RebondRecordFloorBroken` twin)**
   (added 2026-07-14, Rebond review round, PR #307 commit 9b0ab6e68). The
   Rebond verify now checks the record floor invariant
