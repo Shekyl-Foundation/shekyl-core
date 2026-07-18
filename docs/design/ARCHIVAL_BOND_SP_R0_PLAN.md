@@ -46,7 +46,8 @@ Source verification at `dev = 40805d7d0` changed the shape:
    (`exhaustiveness.rs:64`) exist on `dev`. The FOLLOWUPS "SP-6 unbuilt, 0 files,
    2026-06-28" note (`FOLLOWUPS.md:8338`) is **stale** — correct it.
 4. **The key-image primitive is built, and the scan-step is same-process.** `stake_engine.rs:1876`
-   (`biased_hash_to_point(output_key) * x_scalar`) / `crypto-pq/output.rs:1245`. And the
+   (`biased_hash_to_point(output_key) * x_scalar`) /
+   `shekyl-crypto-pq/src/output.rs:1245` (`compute_output_key_image`). And the
    "offloaded scan-step" is `run_dual_extractor` on `spawn_blocking` — a **same-process
    compute offload**, not a cross-process boundary — whose closure **already holds `view_sk`**
    (funding scanners live inside it, drop at its end; `scan_step.rs:23-28`). Both facts feed
@@ -55,7 +56,7 @@ Source verification at `dev = 40805d7d0` changed the shape:
 ### F-1 (spine) — the persona stack is production-inert at genesis; the front is the activation driver
 
 `start_pscan`/`start_pscan_if_staker` (scan driver) and `spawn_stake_engine_if_staker`
-(`lifecycle.rs:779`, derivation driver, wired into prod open) are **staker-gated**, and at
+(`engine/lifecycle.rs:779`, derivation driver, wired into prod open) are **staker-gated**, and at
 source **nothing in production sets `staking_enabled`**: `persist_bond_record`
 (`stake_persist.rs:147`, the sole setter) has **zero production callers** (all
 `#[cfg(test)]`/`regtest_e2e`), and **no stake/bond RPC exists**. Verified at `dev` **and every
@@ -192,7 +193,7 @@ is retracted. **Precisified 2026-07-18 (DQ-F split):** "activation round first" 
 crash-atomic `save_state` — becoming a staker *is* persisting the first bond. So arm #3's
 phantom domain includes **activation-time** crashes, and #3 sequences **right behind the
 front**, not behind assemble. (That same fact — `staking_enabled` gates
-`spawn_stake_engine_if_staker` at `lifecycle.rs:894`, yet is only set by a persist that needs a
+`spawn_stake_engine_if_staker` at `engine/lifecycle.rs:894`, yet is only set by a persist that needs a
 derived persona that needs the engine — is the first-stake **chicken-and-egg** the activation
 round owns; carried to [`ARCHIVAL_STAKE_ACTIVATION_PLAN.md`](ARCHIVAL_STAKE_ACTIVATION_PLAN.md).)
 
