@@ -5,7 +5,8 @@
 the production path by which a wallet **becomes a staker**. It is the **genesis front** for the
 entire archival-`P` subsystem: nothing downstream runs in production until it lands.
 
-**Status:** ROUND 0 (scoping) — for review; no code. **Process rule:**
+**Status:** ROUND 0 (scoping) + **ROUND 1 (per-SA-DQ design, §5 — source-grounded 2026-07-18)**
+— for review; no code. Rounds accrete in this one doc. **Process rule:**
 [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) (the
 first-stake bootstrap derives persona key material — getting the derive boundary wrong is a
 privacy break, so the boundary is decided first). **Target: V3.0 pre-genesis** — it gates every
@@ -138,3 +139,133 @@ equivalence; SA-DQ-3 the persist↔broadcast-confirmation phantom window co-desi
 arm #3's DQ-F fixture). With those in the set, the round is **Round-1-ready** — the design pass
 resolves the SA-DQ-5 fork and the SA-DQ-4 count discipline, both of which have a strong
 proposed answer to ratify rather than an open space to explore.
+
+---
+
+## 5. Round 1 — per-SA-DQ design (source-grounded; enforcement-point-with-the-type)
+
+Grounded at `dev` (three source sweeps, 2026-07-18). **Headline: most of the machinery already
+exists** — the transient-seed discipline, the pure derivation primitive, the durable
+`.wallet.pending` hold-across-reopen store, the GF-7 dispatch scheduler, and the phantom-vs-
+confirmed reconcile verdict are all built. Round 1 is chiefly **composing them in the one safe
+order**, plus two genuine new decisions (SA-R1-a spawn-gate, SA-R1-c ownership split).
+
+### 5.0 The first-stake bootstrap, end to end (what the SA-DQs compose into)
+
+The knot in §1 is tighter than "derive outside the gate, sign, persist, reopen": `sign`/
+`assemble` live on the **actor** (need a spawned StakeEngine + `PersonaHandle`), `persist_bond_record`
+needs the assembled **Engine**, and the seed is **transient** (borrowed in `assemble()`, dropped
+at open-scope end — `lifecycle.rs:869-874`, confirmed). Sign-before-persist is *unrepresentable*
+(the persist-before-use typestate has no ticket to sign against — `stake_persist.rs:70`,
+consumed by value). So the bootstrap must run **inside a credentialed (re)open's `assemble()`
+with the seed live**, in this order:
+
+1. **`stake` RPC** (FULL wallet) arrives with the password + funding reference. The password is
+   load-bearing, not UX: a mid-session wallet holds **no seed** (dropped at open), and only a
+   credentialed open re-materializes it — this is why `stake_engine.rs:26-28` pins first-stake to
+   **reopen**. Idempotency-guarded up front (SA-DQ-1).
+2. Inside that (re)open's `assemble()` (`lifecycle.rs:689`, seed live): derive persona for slot
+   `S` via the **one** primitive `derive_archival_p_keys` (`archival_p.rs:369`) — SA-DQ-2.
+3. **Spawn the StakeEngine for `{S} ∪ lookahead`** *even though `staking_enabled` is still false*
+   (SA-R1-a, the one gate change), so a `PersonaHandle` exists to assemble against.
+4. **Assemble** the first bond (`AssembleBond`) — it **sweeps the one `stake_in` funding output
+   → one input** (SA-DQ-4) — and **persists it to the durable `.wallet.pending` store**
+   (`bond_orchestrator.rs:283-289`); it does **not** broadcast (SA-DQ-5).
+5. `persist_bond_record(S)` (`stake_persist.rs:138`) → flips `staking_enabled` + writes
+   `bonded_slots[S]` atomically, crash-safe. The slot is **durable-but-phantom** until confirmed
+   (SA-DQ-3).
+6. `start_pscan` (already in the open path once staking) → the `DispatchDriver` loads the pending
+   post and **broadcasts it at its GF-7 offset** (`pscan/dispatch.rs:259-263,556`). No reopen #2
+   needed: the whole bootstrap completes inside the credentialed open.
+
+### 5.1 SA-DQ-1 — RPC surface, seed re-materialization, idempotency
+
+- **Surface.** One arm in the flat `handlers::dispatch` match (`handlers.rs:24-52`); no
+  `stake`/`bond` method exists today. It mirrors `send::build_pending_tx`: `require_open_engine`
+  → engine call. **No wallet-rpc restricted-mode exists** (that mechanism is the *daemon* RPC,
+  `DAEMON_RPC_RUST.md:76-115`, a separate process); wallet-rpc gates fund-moving methods by
+  **`Capability::Full`** (`engine.capability()`, `mod.rs:943`; wallet-rpc opens FULL only,
+  `lifecycle.rs:143`). So `stake` is FULL-gated + an explicit `CapabilityForbids` (-29005) check,
+  **not** an allowlist. *(Round-0's "restricted-method list" pin is corrected here: the analog is
+  capability-gating, since wallet-rpc has no restricted map.)*
+- **Seed re-materialization = the reopen.** The method takes the **password** because first-stake
+  needs the transient seed; it drives a credentialed (re)open carrying a first-stake intent, reusing
+  the WI-1 `Tenant` lifecycle (close → open-with-intent). The reopen-friction removal is the V3.x
+  polish (`FOLLOWUPS:2026`), not this front.
+- **Idempotency (checkable).** `staking_enabled` is readable at the handler
+  (`engine.ledger().staking.staking_enabled`, `mod.rs:1314` / `staking_block.rs:117`); a second
+  `stake` reads it and refuses (`-29xxx`), and `persist_bond_record` is already slot-set-idempotent
+  (`stake_persist.rs:117-119`). Enforcement: read-and-reject on the flag before any derive.
+
+### 5.2 SA-DQ-2 — derive-equivalence (already structural)
+
+`derive_archival_p_keys` (`archival_p.rs:369`) is a **pure function** of `(seed, net, fmt, slot)`
+— no RNG/time/IO — **KAT-pinned byte-for-byte** (`ARCHIVAL_P_DERIVE_V1`; equality-across-calls
+asserted `kat_archival_p_derive_v1.rs:198`), and `spawn_stake_engine_if_staker` (`lifecycle.rs:934`)
+is its **sole production caller**. So bootstrap-derive ≡ post-reopen-derive is guaranteed by
+construction. **Enforcement-point-with-the-type:** the bootstrap calls this one primitive (never a
+second derivation); the equivalence is the KAT plus a one-site grep guard. The seed's window widens
+by one derive, staying inside the same `&master_seed` borrow (no new lifetime; the actor never gets
+the seed — `stake_engine.rs:2600` takes no seed).
+
+### 5.3 SA-DQ-3 — phantom window + arm #3 fixture (co-designed, evidence already exists)
+
+The window is `persist_bond_record` → the pscan's own **reorg-deep** `BondPostMatch` confirmation
+(`accrual.rs:416`; released never on a daemon claim — `dispatch.rs:596-607`). Un-confirmed within
+an exhaustively-scanned range = `ReconcileVerdict::AbsentWithinCovered` (`reconcile.rs:50`) = the
+exact GC-eligible phantom SP-R0 arm #2/#3 consume. **The DQ-F fire fixture writes itself:** drive
+first-stake to `persist_bond_record`, skip/crash the dispatch, advance the scan past `covered`,
+assert arm #3 collects the phantom `bonded_slots[S]` — through the real production path, no
+`for_test()` (SP-R0 DQ-F Guard 1). This is the *one* fixture both rounds share.
+
+### 5.4 SA-DQ-4 — the input-count invariant (owned here) realized by `stake_in`'s shape
+
+- **Ground truth:** the bond post **sweeps the entire eligible funding set** (`sweep_funding_outputs`,
+  `bond_assembly.rs:363-384`, no subset), so the first bond's input count = the number of
+  `PFundingOutputRecord`s P holds. To reveal **one** input, the funding must arrive as **one** output.
+- **`stake_in` is the realization, and it is a *distinct* surface** (a **precisification** of the
+  Round-0 "#332 *is* the stake_in site"). `stake_in` is an **unbuilt principal-orchestrator wallet
+  method** — `stake_in(amount) -> PendingTx`, an ordinary FCMP++ transfer principal→persona
+  (`PRINCIPAL_STAKE_LIFECYCLE.md:108/336`), whose *design* funds each admission as **one structured
+  `bond_floor + cover` output** (`ARCHIVAL_GF4B_BACKING_LINEAGE.md:388-391`); that `cover` output **is**
+  the SP-7 cold-start cover ("one design across two surfaces", `PRINCIPAL_STAKE_LIFECYCLE.md:226-227`).
+- **Ownership split (SA-R1-c):** this round owns the **invariant** — *the common-case first bond
+  consumes exactly one funding input* (the checkable GF4b-2 criterion, `FOLLOWUPS:168-172`) — and the
+  **enforcement** (a debug-assert / gate at assemble that the swept count is 1 in the common case,
+  multi-tranche a **consciously-logged** exception, `GF4B:421-422`). The principal-side `stake_in`
+  **funding-shape** (emit one structured output) is a co-gating method homed in
+  `PRINCIPAL_STAKE_LIFECYCLE.md`; **both land pre-genesis** (`GF4B:406-414`) and cross-reference. The
+  round does not defer the count — it enforces the invariant and points at `stake_in` for the shape.
+
+### 5.5 SA-DQ-5 — GF-7 preserved by construction (hold-across-reopen already built)
+
+Broadcast exists **only** in the running `DispatchDriver` (`pscan/dispatch.rs:584`); `SignBond`
+does not broadcast (`stake_engine.rs:1318`), and the broadcast seam is private to `start_pscan`
+(`start.rs:595`). The GF-7 entry-gap **offset is drawn at sign** (`stake_engine.rs:806`) but
+**realized** — due-block gating + dispersal jitter — only by the post-reopen scheduler
+(`dispatch.rs:259-263,556`). So the fork resolves to **hold-across-reopen, broadcast through the
+scheduler**, and the mechanism is **already built**: assemble persists to the durable
+`.wallet.pending` seal (`bond_orchestrator.rs:283-289`), which survives reopen and is dispatched at
+its offset. **Enforcement-point-with-the-type:** there is *no inline broadcast path to misuse* — a
+pre-reopen/inline send is not expressible, so GF-7 is structurally preserved as long as first-stake
+uses `AssembleBond`→pending-store (never a bespoke send).
+
+### 5.6 Round-1 decisions to ratify
+
+- **SA-R1-a — the spawn-gate relaxation (the one genuine code change).** `spawn_stake_engine_if_staker`
+  gates on `staking_enabled` (`lifecycle.rs:894`). First-stake needs a spawned StakeEngine + handle to
+  assemble against **before** persist flips the flag. **Proposed:** relax the gate to
+  `staking_enabled || first_stake_intent(S)`, and derive `{S} ∪ lookahead` for the intent so the
+  bootstrap spawn **is** the real spawn (no throwaway bootstrap actor). The intent is a transient
+  parameter to `assemble()`, never persisted (persistence is `persist_bond_record`'s job). Confirm
+  this over the alternative (a distinct short-lived bootstrap StakeEngine for `{S}`).
+- **SA-R1-b — assemble-before-persist ordering.** The bootstrap **assembles into `.wallet.pending`
+  then persists** (steps 4→5), so a crash after persist/before dispatch yields exactly the SA-DQ-3
+  phantom (safe, GC-collected). Confirm this over persist-first (which would widen the phantom window
+  with no assembled post to show for it).
+- **SA-R1-c — the SA-DQ-4 ownership split** (§5.4): invariant + enforcement here; funding-shape in
+  `stake_in`. Confirm both are pre-genesis and cross-referenced, and that a debug-assert-on-count at
+  assemble is the right enforcement locus (vs. only shaping `stake_in`).
+- **SA-R1-d — the credentialed-`stake`-RPC shape** (§5.1): first-stake takes the password and drives a
+  first-stake-intent (re)open. Confirm this over a create-time-only first-stake (which would forbid
+  staking an existing wallet — likely too restrictive).
