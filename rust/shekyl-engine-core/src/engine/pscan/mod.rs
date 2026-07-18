@@ -24,14 +24,15 @@
 //! event and broadcast/GC nothing.
 //!
 //! The full SP-3/SP-5 layer — extractor, accrual, cadence, driving task, and the
-//! `Engine::start_pscan` wiring — landed with PR-B. The lifecycle entry points
-//! (`Engine::start_pscan` / `start_pscan_if_staker`, WI-1) are defined in
-//! [`start`]; the chain goes live only at the embedder's call site (wallet-rpc,
-//! the WI-1 wiring), which lives outside this crate — nothing in this module
-//! calls them.
-//! Remaining transient `#[allow(dead_code)]` marks items whose consumer is a
-//! *later* slice (2d-2 posture selector, SP-7 `C_min` sizing, SP-R0 reconcile GC,
-//! cold-start cover discovery), each annotated with its named consumer.
+//! `Engine::start_pscan` wiring — landed with PR-B. WI-1 then made the chain
+//! live **from the embedder**: the P-scan handle is embedder-held (there is no
+//! in-`engine` call site), so `shekyl-wallet-rpc`'s wallet lifecycle is the
+//! production caller — it auto-starts `Engine::start_pscan_if_staker` on a
+//! staker open and `PScanHandle::shutdown`s the task on close (before the
+//! `Arc::try_unwrap` that `Engine::close` needs). Remaining transient
+//! `#[allow(dead_code)]` marks items whose consumer is a *later* slice (2d-2
+//! posture selector, SP-7 `C_min` sizing, SP-R0 reconcile GC, cold-start cover
+//! discovery), each annotated with its named consumer.
 
 pub(crate) mod accrual;
 pub(crate) mod block_source;

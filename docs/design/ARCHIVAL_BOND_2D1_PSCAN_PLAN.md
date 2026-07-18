@@ -734,10 +734,12 @@ motivated the split); `PFundingInflow` finalization at epoch-close; `Engine::sta
 wiring; and the DQ8 retirement/union-shrink reading consensus `W`. `block_source` and `inflow`
 keep their transient `#[allow(dead_code)]` until that task wires them.
 
-**WI-1 (engine half landed 2026-07-05; the embedder call site is the wallet-rpc wiring, in
-review as PR #329 — note dated 2026-07-18) — the lifecycle entry points, completing SP-5.**
-"Call sites" below was written loosely: what landed are the *entry points*; at `dev` tip they
-have zero production callers, and the chain goes live at the embedder's call, not here. Two `pub` entry
+**WI-1 (engine half landed 2026-07-05; the embedder call site landed with the wallet-rpc
+wiring, PR #329, merged 2026-07-18 — note dated same day) — the lifecycle entry points,
+completing SP-5.** "Call sites" below was written loosely: what this slice landed are the
+*entry points*; the production caller is `shekyl-wallet-rpc`'s wallet lifecycle
+(auto-start on staker open; `PScanHandle::shutdown().await` before the `Arc::try_unwrap`
+that `Engine::close` needs). Two `pub` entry
 points on the file-backed engine (`engine/pscan/start.rs`): `Engine::start_pscan_if_staker`
 (the auto-start lifecycle call — a staker gets its P-scan at production settings, a non-staker
 gets `Ok(None)`) and `Engine::start_pscan` (the on-demand entry, mirroring `start_refresh`;
@@ -1069,8 +1071,9 @@ independent gates that the `pending_unbonds` precedent only *looked* fused:
 
 - *Migration code* is gated on **forward-persistence** — and there is none. The `.wallet.pscan`
   writer (`start_pscan` / the scan task) was dead-code-unwired at decision time (WI-1's engine
-  entry points landed 2026-07-05, after this bump; the production call site rides the wallet-rpc
-  wiring, PR #329 — the forward-persistence argument is unchanged either way); no deployed
+  entry points landed 2026-07-05, after this bump; the production call site landed with the
+  wallet-rpc wiring, PR #329, 2026-07-18 — both after the bump, so the forward-persistence
+  argument is unchanged); no deployed
   wallet (RC tags included) has ever persisted
   a v1 `.wallet.pscan`, so nothing reads v1 forward → **no migration code**.
 - *The version number* is gated on **rule-42's snapshot guard** — a post-merge `.snap` diff forces

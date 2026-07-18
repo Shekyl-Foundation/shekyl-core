@@ -23,17 +23,18 @@ use shekyl_crypto_pq::bip39::{mnemonic_from_entropy, SHEKYL_BIP39_ENTROPY_BYTES}
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::{
     CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams, Network, OpenedEngine,
-    SoloSigner,
+    PScanHandle, SoloSigner,
 };
 use shekyl_engine_file::paths::keys_path_from;
 use shekyl_engine_file::SafetyOverrides;
 use shekyl_engine_prefs::WalletPrefs;
 use shekyl_rpc_transport::SimpleRequestRpc;
+use tokio::sync::RwLock;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_required_object, require_empty_object};
-use crate::tenant::{require_open_engine, TenantState};
+use crate::tenant::{require_open_engine, SharedEngine, TenantState};
 use crate::types::{capability_mode_str, WalletHandle};
 
 /// Params for `create_wallet`.
@@ -104,7 +105,17 @@ pub(crate) async fn create_wallet(
     };
 
     let handle = wallet_handle(&p.name, &engine, None);
-    tenants.lock().await.tenant.set_open(p.name, engine);
+    // A freshly created wallet is a non-staker (no bond record), so
+    // `start_pscan_if_staker` parks `None` here; the call is unconditional so
+    // the embedder never branches on staking state (`81-no-protocol-knowledge`).
+    let (shared, pscan) = match wrap_and_start_pscan(engine).await {
+        Ok(v) => v,
+        Err(e) => {
+            tenants.lock().await.tenant.clear_opening();
+            return Err(e);
+        }
+    };
+    tenants.lock().await.tenant.set_open(p.name, shared, pscan);
 
     let mut result = json!({ "wallet": handle });
     match backup {
@@ -196,7 +207,17 @@ pub(crate) async fn open_wallet(
     };
 
     let handle = wallet_handle(&p.name, &engine, restore_hint);
-    tenants.lock().await.tenant.set_open(p.name, engine);
+    // Auto-start the P-scan task for a staker (WI-1); a non-staker parks `None`.
+    // A corrupt sealed P-scan state fails the open closed (see
+    // `wrap_and_start_pscan`).
+    let (shared, pscan) = match wrap_and_start_pscan(engine).await {
+        Ok(v) => v,
+        Err(e) => {
+            tenants.lock().await.tenant.clear_opening();
+            return Err(e);
+        }
+    };
+    tenants.lock().await.tenant.set_open(p.name, shared, pscan);
     Ok(json!({ "wallet": handle }))
 }
 
@@ -243,7 +264,7 @@ pub(crate) async fn close_wallet(
     // set_open (whose empty-slot asserts would panic if a new wallet had
     // slipped in). Restore under a fresh lock if close cannot proceed; clear
     // the reservation on success.
-    let (name, shared) = {
+    let (name, shared, pscan) = {
         let mut state = tenants.lock().await;
         state
             .tenant
@@ -251,13 +272,31 @@ pub(crate) async fn close_wallet(
             .ok_or(WalletRpcError::WalletNotOpen)?
     };
 
+    // Stop the P-scan task (if any) and await its exit BEFORE reclaiming sole
+    // ownership. The task holds its own clone of the engine arc, so a live
+    // handle would make the `Arc::try_unwrap` below fail spuriously;
+    // `PScanHandle::shutdown` deterministically observes the task's exit and the
+    // release of that clone (start.rs "the step that makes a subsequent
+    // Arc::try_unwrap → Engine::close possible").
+    if let Some(handle) = pscan {
+        handle.shutdown().await;
+    }
+
     // Reclaim sole ownership before closing. If another task still holds a
     // clone (e.g. an in-flight refresh), restore the slot and fail loud rather
     // than evicting a still-live wallet we cannot actually close.
     let lock = match Arc::try_unwrap(shared) {
         Ok(lock) => lock,
         Err(shared) => {
-            tenants.lock().await.tenant.restore_open(name, shared);
+            // The wallet stays open, so re-arm the scan we just shut down —
+            // leaving a still-open staker unscanned is a silent privacy
+            // regression (see `restart_pscan`) — then restore and fail loud.
+            let pscan = restart_pscan(&shared).await;
+            tenants
+                .lock()
+                .await
+                .tenant
+                .restore_open(name, shared, pscan);
             return Err(WalletRpcError::InternalError(
                 "cannot close: wallet engine still in use by another task".into(),
             ));
@@ -270,7 +309,11 @@ pub(crate) async fn close_wallet(
     // transient I/O failure with no password available to reopen. Flush
     // first; restore the tenant slot on failure; only drop on success.
     if let Err(e) = tokio::task::block_in_place(|| engine.persist_for_close()) {
-        tenants.lock().await.tenant.set_open(name, engine);
+        // Keep the wallet open: re-wrap and re-arm the scan (same must-not-fail
+        // posture as the try_unwrap restore above).
+        let shared: SharedEngine = Arc::new(RwLock::new(engine));
+        let pscan = restart_pscan(&shared).await;
+        tenants.lock().await.tenant.set_open(name, shared, pscan);
         return Err(WalletRpcError::from(e));
     }
     drop(engine);
@@ -387,4 +430,192 @@ async fn make_daemon(daemon_address: &str) -> Result<DaemonClient, WalletRpcErro
         .await
         .map_err(|_e| WalletRpcError::DaemonUnreachable)?;
     Ok(DaemonClient::new(rpc))
+}
+
+/// Wrap a freshly opened / created engine in its shared arc and, for a staker,
+/// spawn the driving P-scan task (WI-1) — the **sole production call site** for
+/// [`Engine::start_pscan_if_staker`]. Returns the arc plus the embedder-held
+/// [`PScanHandle`] (`None` for a non-staker), which the tenant parks for the
+/// wallet's open lifetime and [`close_wallet`] shuts down.
+///
+/// A staker whose sealed P-scan state cannot load fails **closed** here
+/// (`PScanStartError::LoadFailed` → the caller aborts the open): a staker must
+/// not open into a state where its firewall scan is silently not running
+/// (`00-mission` priority 2 — privacy is not a degraded mode).
+async fn wrap_and_start_pscan(
+    engine: Engine<SoloSigner>,
+) -> Result<(SharedEngine, Option<PScanHandle>), WalletRpcError> {
+    let shared: SharedEngine = Arc::new(RwLock::new(engine));
+    let pscan = match Engine::start_pscan_if_staker(shared.clone()).await {
+        Ok(handle) => handle,
+        Err(e) => {
+            // Log the detailed cause server-side — the boxed error can carry a
+            // local path / internal schema detail that the stable client-facing
+            // `WalletRpcError` deliberately withholds. Same discipline as
+            // `restart_pscan`, and the fail-closed reason is spelled here.
+            tracing::warn!(
+                error = %e,
+                "a staker's sealed P-scan state failed to load; aborting the open \
+                 (fail-closed — a staker must not open with its firewall scan dark)"
+            );
+            return Err(e.into());
+        }
+    };
+    Ok((shared, pscan))
+}
+
+/// Re-arm the P-scan task on a restore path (a close that could not complete
+/// leaves the wallet open). Unlike [`wrap_and_start_pscan`], a start failure
+/// here degrades to `None` rather than propagating: the restore must not itself
+/// fail and re-strand the engine, and the primary error the caller returns is
+/// the close failure, not this. The failure is logged (never silent), and the
+/// dark-scan window lasts only until the next successful close / reopen.
+async fn restart_pscan(shared: &SharedEngine) -> Option<PScanHandle> {
+    match Engine::start_pscan_if_staker(shared.clone()).await {
+        Ok(handle) => handle,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "failed to re-arm the P-scan task while restoring an open wallet after a \
+                 non-completing close; the wallet stays open but its firewall scan is not \
+                 running until the next close/reopen"
+            );
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{close_wallet, create_wallet, open_wallet};
+    use crate::tenant::TenantState;
+
+    use serde_json::json;
+    use shekyl_crypto_pq::wallet_envelope::KdfParams;
+    use shekyl_engine_core::Network;
+    use shekyl_engine_core::__test_helpers::make_staker_for_test;
+    use tokio::sync::Mutex;
+
+    /// The fastest valid Argon2 profile (`m_log2` lower bound 8, `t`/`p` = 1) —
+    /// the wallet-envelope validator documents this loose lower bound precisely
+    /// so fixtures need not pay the production KDF cost.
+    fn fast_kdf() -> KdfParams {
+        KdfParams {
+            m_log2: 8,
+            t: 1,
+            p: 1,
+        }
+    }
+
+    fn tenants_in(dir: &std::path::Path) -> Mutex<TenantState> {
+        Mutex::new(TenantState::new(
+            dir.to_path_buf(),
+            Network::Testnet,
+            // A never-connecting daemon: create/open issue no eager RPC (the
+            // engine tolerates an unreachable daemon; the P-scan task's first
+            // tip fetch fails-and-retries inside the spawned loop), so the
+            // lifecycle wiring is exercised without a live node.
+            "http://127.0.0.1:1".to_string(),
+        ))
+    }
+
+    async fn assert_pscan(tenants: &Mutex<TenantState>, expected: bool, ctx: &str) {
+        assert_eq!(tenants.lock().await.tenant.has_pscan(), expected, "{ctx}");
+    }
+
+    /// Non-staker lifecycle: neither create nor open parks a P-scan handle, and
+    /// both close cleanly. The unconditional `start_pscan_if_staker` call is the
+    /// quiet `Ok(None)` path here (the embedder never branches on staking state).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn non_staker_open_parks_no_pscan_handle() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tenants = tenants_in(dir.path());
+
+        create_wallet(
+            &tenants,
+            &json!({"name": "plain", "password": "pw"}),
+            fast_kdf(),
+        )
+        .await
+        .expect("create");
+        assert_pscan(&tenants, false, "a fresh non-staker create parks no handle").await;
+
+        close_wallet(&tenants, &json!({}))
+            .await
+            .expect("close after create");
+
+        open_wallet(&tenants, &json!({"name": "plain", "password": "pw"}))
+            .await
+            .expect("reopen");
+        assert_pscan(&tenants, false, "a non-staker reopen parks no handle").await;
+
+        close_wallet(&tenants, &json!({}))
+            .await
+            .expect("close after reopen");
+    }
+
+    /// Staker lifecycle — **the check that survives `pub`.** Once the wallet is a
+    /// staker, `open_wallet` spawns the StakeEngine and the embedder auto-starts
+    /// the P-scan task (a parked handle), and `close_wallet` shuts that task down
+    /// before reclaiming the engine arc. Deleting the start wiring makes the
+    /// staker reopen park no handle (first assert fails); deleting the
+    /// shutdown-before-`try_unwrap` wiring makes the final close fail-loud as
+    /// "still in use" (last step fails). A `pub` fn in a lib crate cannot be
+    /// caught by `dead_code`, so this behavioral gate is what keeps the call
+    /// site live.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn staker_open_parks_a_pscan_handle_and_close_shuts_it_down() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tenants = tenants_in(dir.path());
+
+        // Create (non-staker), then make the wallet a staker by persisting a bond
+        // record on the open engine — the only route to `staking_enabled` with no
+        // RPC staking entry yet — and reopen so the open path spawns the
+        // StakeEngine.
+        create_wallet(
+            &tenants,
+            &json!({"name": "staker", "password": "pw"}),
+            fast_kdf(),
+        )
+        .await
+        .expect("create");
+        assert_pscan(
+            &tenants,
+            false,
+            "the staker wallet is still a non-staker at create time",
+        )
+        .await;
+
+        {
+            let shared = tenants
+                .lock()
+                .await
+                .tenant
+                .engine()
+                .expect("engine open after create");
+            let engine = shared.read().await;
+            make_staker_for_test(&engine, 3).expect("persist bond record → staking_enabled");
+        }
+
+        close_wallet(&tenants, &json!({}))
+            .await
+            .expect("close after becoming a staker");
+
+        open_wallet(&tenants, &json!({"name": "staker", "password": "pw"}))
+            .await
+            .expect("reopen staker");
+        assert_pscan(
+            &tenants,
+            true,
+            "a staker reopen auto-starts the P-scan task (start wiring)",
+        )
+        .await;
+
+        // shutdown-before-try_unwrap: a live task's clone of the engine arc would
+        // make `Arc::try_unwrap` fail and surface as the "still in use" error.
+        close_wallet(&tenants, &json!({}))
+            .await
+            .expect("close shuts the P-scan task down and succeeds (shutdown wiring)");
+        assert_pscan(&tenants, false, "close clears the parked handle").await;
+    }
 }

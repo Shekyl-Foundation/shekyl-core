@@ -507,7 +507,11 @@ the ratification):
    existence).
 2. **GF-4 exit-seam / value-channel rounds** — narrowed to
    **F-D1 + F-D2** (Gate-6 §12 re-formed R4 close; conditions (iii)
-   and (iv) both discharged 2026-07-17).
+   and (iv) both discharged 2026-07-17). *Merged-state refresh
+   (2026-07-18, PR #328): F-D1 is BUILT (M1 arm proven-to-bite then
+   armed) and F-D2's core aggregate-only surface LANDED; R4's last
+   open item is the unbuilt drain-send subsystem in
+   `shekyl-gui-wallet` (Gate-6 §12.3/§12.4 build notes).*
 3. **§17.9 Gate-7 calibration** — adversarial-max-attrition margin +
    per-channel thickness-reachability.
 
