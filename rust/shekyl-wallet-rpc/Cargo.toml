@@ -54,3 +54,9 @@ tokio = { version = "1", features = ["full", "test-util"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tempfile = "3"
+# Enable the engine-core `test-helpers` surface for this crate's tests only
+# (the `__test_helpers::make_staker_for_test` staker constructor the WI-1 P-scan
+# lifecycle test needs). Dev-dep self-referencing the same path dep so the
+# feature is on for `cargo test`/`cargo clippy --all-targets` but never for the
+# production dependency edge above (mirrors the shekyl-scanner precedent).
+shekyl-engine-core = { path = "../shekyl-engine-core", features = ["test-helpers"] }

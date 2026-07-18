@@ -40,6 +40,27 @@
 
 ### Changed
 
+- **wallet-rpc: WI-1 — wire the 2d-1 `P`-scan task into the wallet
+  lifecycle (embedder-held handle).** The P-scan driving task
+  (`Engine::start_pscan`) had no production caller: `start_pscan` /
+  `start_pscan_if_staker` were `pub`, which *disarmed* the `dead_code`
+  lint rather than satisfying it, so the "unwired" gap read as closed
+  from a source-first check. `shekyl-wallet-rpc`'s `Tenant` now holds the
+  `PScanHandle` — `create`/`open_wallet` auto-start it for a staker (a
+  non-staker parks `None`), and `close_wallet` `PScanHandle::shutdown().await`s
+  the task **before** `Arc::try_unwrap`: the task holds its own clone of
+  the engine arc, so a live handle would fail the close "still in use"
+  (the prior Drop-based "close-stops-task by ownership" framing was
+  insufficient — `shutdown` is the step that makes the unwrap possible).
+  A staker whose sealed P-scan state cannot load fails the open **closed**
+  (`00-mission` priority 2 — privacy is not a degraded mode); a close that
+  cannot complete re-arms the scan on restore (logged, never silent).
+  Closure is a behavioral test
+  (`staker_open_parks_a_pscan_handle_and_close_shuts_it_down`), not the
+  lint a `pub` item cannot trip. Enabler: engine-core
+  `__test_helpers::make_staker_for_test` (feature-gated) — the first
+  `test-helpers` downstream consumer, the rule-21 public-re-export reopen
+  the feature reserved for its first named caller.
 - **docs: F-D5 disposition round RAN — the structural-derivation attempt
   failed at source; NO GRID ships at genesis; Gate-6 R4 close condition
   (iv) discharged** (outcome record at Gate-6 §12.7 OUTCOME). Executed in
