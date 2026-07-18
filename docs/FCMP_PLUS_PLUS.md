@@ -1356,7 +1356,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 
 ### Fuzz Targets
 
-Eleven `cargo-fuzz` targets exercise the critical parsing, crypto, multisig, and staking boundaries:
+Ten `cargo-fuzz` targets exercise the critical parsing, crypto, multisig, and staking boundaries:
 
 | Target | Crate | What it tests |
 |--------|-------|---------------|
@@ -1365,7 +1365,7 @@ Eleven `cargo-fuzz` targets exercise the critical parsing, crypto, multisig, and
 | `fuzz_block_header_tree_root` | `shekyl-fcmp` | Mismatched `curve_tree_root` between prove and verify |
 | `fuzz_bech32m_address_decode` | `shekyl-crypto-pq` | Random strings through Bech32m decoder, wrong HRPs, bad checksums |
 | `fuzz_kem_decapsulate` | `shekyl-crypto-pq` | Corrupted ML-KEM ciphertexts, wrong-length keys and ciphertexts |
-| `fuzz_multisig_verify` | `shekyl-crypto-pq` | Multisig verify path with malformed group IDs, signatures, and payloads |
+| `fuzz_multisig_verify` | `shekyl-crypto-pq` | Multisig verify path with malformed key blobs, signatures, and payloads |
 | `fuzz_multisig_key_blob` | `shekyl-crypto-pq` | Randomized multisig key-blob decode and bounds checks |
 | `fuzz_multisig_sig_blob` | `shekyl-crypto-pq` | Randomized multisig signature-blob decode and validation |
 | `fuzz_claim_reward` | `shekyl-staking` | Random accrual records; reward overflow, monotonicity, and bound invariants |

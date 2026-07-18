@@ -1222,7 +1222,7 @@ All Phase-1 (single-signer) and Phase-2 (multisig) items are implemented. This t
 | 8 | FFI scheme dispatch + multisig | Done | `rust/shekyl-ffi/src/lib.rs` (`shekyl_pqc_verify` returning typed `u8` error codes) |
 | 9 | Consensus verification + scheme downgrade | Done | `src/cryptonote_core/tx_pqc_verify.cpp` (size-format checks), FCMP++ `h_pqc` leaf binding (see `PQC_MULTISIG.md` Attack 1) |
 | 10 | Wallet multisig coordination | Rust rewrite (S2–S5) | Option-D `wallet2.cpp` group-creation fossil **deleted** (MS-5 PR-B; it threw on every input); E′ coordination lives in `rust/shekyl-multisig` + `shekyl-engine-core` |
-| 11 | Fuzz testing (4 targets, 10M each) | Done | `rust/shekyl-crypto-pq/fuzz/fuzz_targets/`, `docs/PQC_TEST_VECTOR_002_MULTISIG.json` |
+| 11 | Fuzz testing (10 targets, 10M each) | Done | `rust/shekyl-crypto-pq/fuzz/fuzz_targets/`, `docs/PQC_TEST_VECTOR_002_MULTISIG.json` |
 | 12 | FCMP++ FFI (prove/verify) | Done | `rust/shekyl-fcmp/`, `rust/shekyl-ffi/src/lib.rs` |
 | 13 | Curve tree DB (grow/trim/root/path) | Done | `src/blockchain_db/`, `rust/shekyl-fcmp/` |
 | 14 | Per-output KEM derivation | Done | `rust/shekyl-crypto-pq/src/kem.rs`, `rust/shekyl-crypto-pq/src/output.rs`, `rust/shekyl-crypto-pq/src/montgomery.rs`; wallet scanning via `shekyl_scan_and_recover` FFI, construction via `shekyl_construct_output` FFI; X25519 derived from Ed25519 view key via Edwards→Montgomery map |
