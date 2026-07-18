@@ -398,7 +398,7 @@ non-empty** (§13(b)) — and leaves principal-side isolation to its own ticket,
 
 | SP | Deliverable | Gated on |
 | --- | --- | --- |
-| **SP-R0** | **Reconcile GC over the per-`P` transport** — consume SP-6's `PReconcileSet`; GC phantom `bonded_slots`/`p_slot` **only** on confirmed-absence within `covered`. | **SP-6** (`PReconcileSet`, not built — downstream of PR-B) |
+| **SP-R0** | **Reconcile GC over the per-`P` transport** — consume SP-6's `PReconcileSet`; GC phantom `bonded_slots`/`p_slot` **only** on confirmed-absence within `covered`. | **SP-6 — CLEARED 2026-06-29** (`PReconcileSet` landed: `pscan/reconcile.rs:67`, SP-6 part 2 `82870235b` + PR #211 review commits). **SP-R0 is unblocked**; carried pins in §15. *(Row updated 2026-07-18 — it read "not built" for 19 days after SP-6 landed.)* |
 
 **Out of this round (separate ticket):** principal-side `IsolateSOCKSAuth` — wiring the principal's
 two `DaemonClient`s to non-empty usernames. Kept out to protect the firewall round's collision
@@ -560,7 +560,8 @@ isolate).
 
 **SP-R0 — reconcile GC (gated).** On SP-6's `PReconcileSet`, GC phantom `bonded_slots`/`p_slot`
 **only** on confirmed-absence within `covered` (the SP-6 rule); never on absence-from-one-source.
-Designed here, built after SP-6. **Frame the removal around the slot ledger** (2d-1 records-driven
+Designed here, built after SP-6 (which landed 2026-06-29, `82870235b` + PR #211 — SP-R0 has been
+buildable since; gate row in §12 updated 2026-07-18). **Frame the removal around the slot ledger** (2d-1 records-driven
 retirement): the done-side record is *authoritative*, the live `bonded_slots` is *advisory*, and
 no-reuse is already enforced by `StakingBlock::monotone_current_slot` (`staking_block.rs:75`) — so
 SP-R0's job is the *removal*, not the trigger, and `covered` *corroborates* the presence-events the
