@@ -235,6 +235,14 @@ non-zero assertion) in each arm's landing PR.
 
 DQ-A…DQ-F ratified. Remaining Round-0 tasks: correct the stale status lines (§6), register the
 three arms as index rows (rule 94; SP-R0 identifier exists), and open the activation round.
+**Executed 2026-07-18 (this branch + companion PR):** the three stale FOLLOWUPS entries
+corrected (the "SP-6 unbuilt" gate — stale since 2026-06-29 — plus the arm-#1 gate header
+and arm #3's "persona scanning lands" reopen trigger, re-pointed at the DQ-F fire
+condition); SP-R0 + arm rows and the activation-round row registered in
+`IMPLEMENTATION_INDEX.md`; the activation round is **open as its own round** — PR #332
+([`ARCHIVAL_STAKE_ACTIVATION_PLAN.md`](ARCHIVAL_STAKE_ACTIVATION_PLAN.md), Round-0 with
+SA-DQ-1…5, carrying the two named genesis gates SA-DQ-4 (GF4b-2 funding-input-count
+discipline) and SA-DQ-5 (the GF-7 broadcast-before/after-reopen fork)).
 Implementation sequences **behind the activation round**, each arm gated on the DQ-F CI fire
 condition; the DQ-A watch-set lands with its redacting-`Debug`/no-`Serialize` containment from
 the first commit.
