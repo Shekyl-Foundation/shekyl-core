@@ -305,6 +305,12 @@ pub const SPEND_AUTH_VERSION_ED25519: u8 = 0x02;
 
 // ---------------------------------------------------------------------------
 // 9-check verification pipeline
+//
+// "Check N" is the pipeline *position*, not the error discriminant. Checks 1-8
+// happen to return `PqcVerifyError` discriminants 1-8, but check 9 (crypto)
+// returns `CryptoVerifyFailed` = discriminant **10**: discriminant 9 (the former
+// GroupIdMismatch "check 9") is a retired gap kept so the FFI codes 10/11 do not
+// shift under existing C++ consumers (see `error.rs`). Ordinal 9 ≠ code 9.
 // ---------------------------------------------------------------------------
 
 /// Verify an M-of-N PQC multisig against the 9-check adversarial pipeline.
@@ -357,7 +363,8 @@ pub fn verify_multisig(
         return Err(PqcVerifyError::DuplicateKeys);
     }
 
-    // Check 9: cryptographic verification (M x Ed25519 + M x ML-DSA)
+    // Check 9 (final): cryptographic verification (M x Ed25519 + M x ML-DSA).
+    // Returns `CryptoVerifyFailed` = discriminant 10, NOT code 9 (retired gap).
     let scheme = HybridEd25519MlDsa;
     for (sig, &idx) in sig_container
         .sigs
