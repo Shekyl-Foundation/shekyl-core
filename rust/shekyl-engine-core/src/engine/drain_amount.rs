@@ -80,10 +80,10 @@ pub(crate) fn choose_drain_amount(
     request: DrainRequest,
     affordable: AtomicUnits,
 ) -> Result<DrainAmount, DrainAmountError> {
-    if request.target == AtomicUnits::from_raw(0) {
+    if request.target.is_zero() {
         return Err(DrainAmountError::Empty);
     }
-    if request.target.to_raw() > affordable.to_raw() {
+    if request.target > affordable {
         return Err(DrainAmountError::Unaffordable);
     }
     Ok(DrainAmount(request.target))
@@ -108,8 +108,20 @@ mod tests {
             .split("\n#[cfg(test)]\nmod tests {")
             .next()
             .expect("drain_amount.rs has a production section");
+        // Assert the scalar carve on the `choose_drain_amount` *signature*, not
+        // merely somewhere in the file: the module doc also names `affordable:
+        // AtomicUnits`, so a whole-file `contains` would still pass if the real
+        // parameter were changed to a non-scalar (per-output) shape. Slice from
+        // the `fn` keyword to its opening brace so only the signature is checked.
+        let sig_start = src
+            .find("fn choose_drain_amount")
+            .expect("choose_drain_amount is defined in the production section");
+        let signature = &src[sig_start..];
+        let signature = &signature[..signature
+            .find('{')
+            .expect("choose_drain_amount signature has an opening brace")];
         assert!(
-            src.contains("affordable: AtomicUnits"),
+            signature.contains("affordable: AtomicUnits"),
             "F-D1 carve breached: amount stage must take the aggregate scalar \
              `affordable: AtomicUnits` (§12.3)"
         );

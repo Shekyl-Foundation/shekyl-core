@@ -35,8 +35,11 @@
 //! the records in; assembling the selected outputs into a signed, broadcast
 //! transaction is the downstream follow-on (the claim-assembly analog), not
 //! this module. What lands here is the enforced carve: the projection is the
-//! only path from records to operands, and the guarded stages are armed
-//! against ever reading the decomposition.
+//! only path from records to the *guarded stages'* operands (the amount scalar
+//! and the stripped candidate vector), and those stages are armed against ever
+//! reading the decomposition. The aggregate balance read ([`drain_balance`]) is
+//! a lineage-blind scalar sum that observes the same carve without building the
+//! candidate vector.
 //!
 //! ## F-D2 (core-side half)
 //!
@@ -154,6 +157,17 @@ struct DrainOperands {
     candidates: Vec<DrainCandidate>,
 }
 
+/// The maturity predicate the projection and the balance surface share: a
+/// record is provable (spendable) once its leaf is in the curve tree at the
+/// reference height — the `spendable_height <= reference_height` rule the
+/// backing/claim paths apply (a record whose leaf is not yet in the tree has no
+/// membership path and cannot be spent). Reads only `spendable_height`, a
+/// maturity axis and never a reward-sequence coordinate, so applying it outside
+/// the projection discloses nothing the aggregate scalar doesn't already.
+fn is_mature(record: &PFundingOutputRecord, reference_height: BlockHeight) -> bool {
+    record.spendable_height <= reference_height
+}
+
 /// Project `P`'s persisted funding records into the drain operands: drop
 /// `{lineage, epoch, height}`, keep only the provable (mature) subset, and
 /// reduce to the aggregate scalar + the stripped candidate vector.
@@ -164,13 +178,9 @@ fn project_drain_operands(
     records: &[PFundingOutputRecord],
     reference_height: BlockHeight,
 ) -> Result<DrainOperands, DrainError> {
-    // Mature/provable subset only: a record whose leaf is not yet in the tree
-    // at the reference height cannot be spent (no membership path), exactly
-    // the `spendable_height <= reference_height` rule the backing/claim paths
-    // apply.
     let candidates: Vec<DrainCandidate> = records
         .iter()
-        .filter(|r| r.spendable_height <= reference_height)
+        .filter(|r| is_mature(r, reference_height))
         .map(|r| DrainCandidate {
             output_id: r.gindex,
             amount: r.amount,
@@ -188,13 +198,26 @@ fn project_drain_operands(
 }
 
 /// F-D2 core-side surface: the aggregate spendable `P` balance at a reference
-/// height. Reads the same projection [`plan_drain`] does, and exposes only
-/// the scalar — no decomposition reaches the caller.
+/// height. Exposes only the scalar — no decomposition reaches the caller.
+///
+/// A balance read needs only the aggregate, so it sums the mature amounts
+/// directly rather than routing through [`project_drain_operands`], which
+/// materialises the stripped candidate vector the *select* stage consumes — a
+/// heap allocation a poll-frequency query has no use for. It observes the same
+/// carve: only `amount`, gated by the shared [`is_mature`] predicate, never a
+/// reward-sequence coordinate.
 pub fn drain_balance(
     records: &[PFundingOutputRecord],
     reference_height: BlockHeight,
 ) -> Result<DrainBalance, DrainError> {
-    Ok(project_drain_operands(records, reference_height)?.balance)
+    let spendable = AtomicUnits::checked_sum(
+        records
+            .iter()
+            .filter(|r| is_mature(r, reference_height))
+            .map(|r| r.amount),
+    )
+    .ok_or(DrainError::AmountOverflow)?;
+    Ok(DrainBalance { spendable })
 }
 
 /// Plan a drain of `target` atomic units out of `P`'s spendable funding

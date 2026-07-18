@@ -61,7 +61,10 @@ impl std::fmt::Debug for DrainCandidate {
 /// and the exact input total they contribute (change is computed downstream).
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct DrainSelection {
-    /// The selected outputs' global indices, in selection order.
+    /// The selected outputs' global indices, in selection order — largest-first
+    /// with ties broken by output id ascending (see [`select_for_drain`]).
+    /// Deterministic and *not* re-sorted; a downstream consumer that needs a
+    /// different order sorts explicitly rather than depending on this one.
     pub(crate) chosen: Vec<GlobalOutputIndex>,
     /// The sum of the chosen outputs' amounts (`>= drain amount`).
     pub(crate) input_total: AtomicUnits,
@@ -104,7 +107,7 @@ pub(crate) fn select_for_drain(
     amount: DrainAmount,
     reference_height: BlockHeight,
 ) -> Result<DrainSelection, DrainSelectError> {
-    let target = amount.get().to_raw();
+    let target = amount.get();
 
     let mut mature: Vec<&DrainCandidate> = candidates
         .iter()
@@ -117,17 +120,12 @@ pub(crate) fn select_for_drain(
     // makes selection independent of input order and fully deterministic.
     // Lineage-blind (never orders on lineage/epoch/height), and minimises the
     // number of inputs the drain consumes.
-    mature.sort_by(|a, b| {
-        b.amount
-            .to_raw()
-            .cmp(&a.amount.to_raw())
-            .then(a.output_id.to_raw().cmp(&b.output_id.to_raw()))
-    });
+    mature.sort_by(|a, b| b.amount.cmp(&a.amount).then(a.output_id.cmp(&b.output_id)));
 
     let mut chosen = Vec::new();
-    let mut input_total = AtomicUnits::from_raw(0);
+    let mut input_total = AtomicUnits::ZERO;
     for candidate in mature {
-        if input_total.to_raw() >= target {
+        if input_total >= target {
             break;
         }
         chosen.push(candidate.output_id);
@@ -136,7 +134,7 @@ pub(crate) fn select_for_drain(
             .ok_or(DrainSelectError::Overflow)?;
     }
 
-    if input_total.to_raw() < target {
+    if input_total < target {
         return Err(DrainSelectError::Insufficient);
     }
 
